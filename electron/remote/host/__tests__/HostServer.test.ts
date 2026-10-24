@@ -5,7 +5,12 @@ import net from "node:net";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { encodeFrame, FrameDecoder, Lane, type LinkFrame } from "../../link/frames.js";
-import { ControlKind, frameToMessage, messageToFrame } from "../../link/messages.js";
+import {
+  ControlKind,
+  frameToMessage,
+  messageToFrame,
+  type LinkMessage,
+} from "../../link/messages.js";
 import { LinkClient, type LinkClientState } from "../../client/LinkClient.js";
 import { createDirectTransport } from "../../client/transport.js";
 import { HostServer, MAX_PENDING_HANDSHAKES, type HostSessionContext } from "../HostServer.js";
@@ -516,6 +521,23 @@ describe("HostServer authentication", () => {
 });
 
 describe("HostServer session resume", () => {
+  it("resumes the session a link that died in a sleep held, when it is redialled on wake (#14365)", async () => {
+    const server = await startServer({ resumeGraceMs: 60_000 });
+    const seen: HostSessionContext[] = [];
+    server.onSession((ctx) => seen.push(ctx));
+    const client = startClient(server, { wakeProbeMs: 30 });
+    await waitFor(() => seen.length === 1 && client.getState().status === "connected");
+    // The host still reads but never answers, as the far end of a link lost
+    // while the Shell slept: whatever the Shell says on the way out reaches it.
+    const stale = seen[0]!.session as unknown as { post: (message: LinkMessage) => string };
+    const post = stale.post.bind(stale);
+    stale.post = (message) =>
+      message.lane === Lane.CONTROL && message.kind === ControlKind.PONG ? "queued" : post(message);
+    client.noteSystemResumed();
+    await waitFor(() => seen.length === 2 && client.getState().status === "connected");
+    expect(seen[1]).toMatchObject({ sessionId: seen[0]!.sessionId, resumed: true });
+  });
+
   it("lets a Shell on another build in, and logs both builds with the session", async () => {
     const server = await startServer();
     const seen: HostSessionContext[] = [];
