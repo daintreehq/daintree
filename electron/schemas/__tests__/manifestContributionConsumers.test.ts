@@ -1653,7 +1653,7 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
           symbol: "createContextReferenceChipTooltip",
         },
         {
-          file: "src/components/Settings/ProjectPluginsTab.tsx",
+          file: "src/components/Settings/ContextProvidersSection.tsx",
           symbol: "ContextProvidersSection",
         },
       ],
