@@ -38,7 +38,6 @@ export class PluginDevWorkerProcessFacet {
   readonly api: ProcessHostApi;
   private readonly rpc: PluginDevWorkerRpc;
   private readonly pluginId: string;
-  private readonly assertActivationOpen: (name: string) => void;
   /** Task progress waiting for the next `tasks.report`, the latest per task id (#13819). */
   private readonly pendingTaskReports = new Map<string, PluginTaskProgress>();
   private taskReportTimer: ReturnType<typeof setTimeout> | null = null;
@@ -46,7 +45,6 @@ export class PluginDevWorkerProcessFacet {
   constructor(deps: HostProxyFacetDeps) {
     this.rpc = deps.rpc;
     this.pluginId = deps.pluginId;
-    this.assertActivationOpen = deps.assertActivationOpen;
     this.api = this.buildApi();
   }
 
