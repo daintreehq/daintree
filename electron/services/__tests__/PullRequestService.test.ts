@@ -3864,7 +3864,8 @@ describe("PullRequestService", () => {
       // state, so the next lifecycle isn't born inside a stale throttle window.
       pullRequestService.reset();
       expect(
-        (pullRequestService as unknown as { lastFocusCiCheckAt: number }).lastFocusCiCheckAt
+        (pullRequestService as unknown as { ciTracker: { lastFocusCiCheckAt: number } }).ciTracker
+          .lastFocusCiCheckAt
       ).toBe(Number.NEGATIVE_INFINITY);
 
       pullRequestService.destroy();
