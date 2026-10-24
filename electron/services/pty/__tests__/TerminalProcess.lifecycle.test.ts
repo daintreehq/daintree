@@ -22,6 +22,16 @@ vi.mock("../terminalSessionPersistence.js", async (importOriginal) => {
   };
 });
 
+// Mock ptys carry made-up PIDs (123, 456) that belong to real processes on the
+// machine running the suite; the kill paths below must never reach them (#14418).
+let processKillSpy: ReturnType<typeof vi.spyOn<typeof process, "kill">>;
+beforeEach(() => {
+  processKillSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+});
+afterEach(() => {
+  processKillSpy.mockRestore();
+});
+
 type DataCb = (data: string) => void;
 type ExitCb = (e: { exitCode: number; signal?: number }) => void;
 
@@ -1490,6 +1500,7 @@ describe("TerminalProcess exit status and spawn args", () => {
 
       const state = terminal.getPublicState();
       expect(state.exitCode).toBeUndefined();
+      expect(processKillSpy).toHaveBeenCalledWith(456, "SIGCONT");
     });
   });
 

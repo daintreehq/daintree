@@ -82,6 +82,16 @@ type PipelineInternals = {
   };
 };
 
+// Mock ptys carry made-up PIDs that belong to real processes on the machine
+// running the suite; the kill paths below must never reach them (#14418).
+let processKillSpy: ReturnType<typeof vi.spyOn<typeof process, "kill">>;
+beforeEach(() => {
+  processKillSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+});
+afterEach(() => {
+  processKillSpy.mockRestore();
+});
+
 describe("TerminalProcess output pipeline ordering and throttling", () => {
   beforeEach(() => {
     vi.useFakeTimers();

@@ -1607,18 +1607,32 @@ describe("WorkspaceService.runResourceAction — concurrency", () => {
     const deferred = makeDeferredSpawnChild();
     const childProcessModule = await import("child_process");
     vi.mocked(childProcessModule.spawn).mockImplementation(deferred.factory);
+    // The abort signals the mock child's made-up process group, and its SIGKILL
+    // escalation lands 5s later; both must reach the stub, never a real group.
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    vi.useFakeTimers();
 
-    // Start an action that will be held open
-    const actionPromise = service.runResourceAction("req-abort", "/test/worktree", "provision");
+    try {
+      // Start an action that will be held open
+      const actionPromise = service.runResourceAction("req-abort", "/test/worktree", "provision");
 
-    // Give it time to start
-    await new Promise((r) => setTimeout(r, 20));
+      // Give it time to start
+      await vi.advanceTimersByTimeAsync(20);
 
-    // Simulate worktree removal — triggers cleanupResourceActionState
-    service.resourceActionExecutor["cleanupResourceActionState"]("/test/worktree");
+      // Simulate worktree removal — triggers cleanupResourceActionState
+      service.resourceActionExecutor["cleanupResourceActionState"]("/test/worktree");
 
-    deferred.resolveChild();
-    await actionPromise;
+      deferred.resolveChild();
+      await actionPromise;
+      await vi.advanceTimersByTimeAsync(5_000);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    if (process.platform !== "win32") {
+      expect(killSpy).toHaveBeenCalledWith(-99, "SIGTERM");
+      expect(killSpy).toHaveBeenCalledWith(-99, "SIGKILL");
+    }
 
     // Queue and controller should be cleaned up
     expect(service.resourceActionExecutor["resourceActionQueues"].has("/test/worktree")).toBe(

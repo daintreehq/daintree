@@ -114,6 +114,16 @@ function createTerminal(
   );
 }
 
+// Mock ptys carry made-up PIDs that belong to real processes on the machine
+// running the suite; the kill paths below must never reach them (#14418).
+let processKillSpy: ReturnType<typeof vi.spyOn<typeof process, "kill">>;
+beforeEach(() => {
+  processKillSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+});
+afterEach(() => {
+  processKillSpy.mockRestore();
+});
+
 describe("TerminalProcess.kill — agent state event", () => {
   it("emits kill event (not error) for agent terminals", () => {
     const updateAgentStateSpy = vi.fn();
@@ -250,17 +260,13 @@ describe("TerminalProcess.kill — session persistence", () => {
 });
 
 describe.skipIf(process.platform === "win32")("TerminalProcess.kill — process tree cleanup", () => {
-  let processKillSpy: ReturnType<typeof vi.spyOn>;
-
   beforeEach(() => {
     vi.useFakeTimers();
     persistSyncMock.mockReset();
-    processKillSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
   });
 
   afterEach(() => {
     vi.useRealTimers();
-    processKillSpy.mockRestore();
   });
 
   it("sends SIGTERM to descendants bottom-up before killing shell", () => {

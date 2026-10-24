@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { adoptProcessForKill } from "../../../../scripts/lib/testProcessKillGuard.js";
 
 // Builds the real supervisor and drives it against real process trees, so the
 // reparenting and PID-identity behaviour is proven against the kernel rather
@@ -130,6 +131,9 @@ describe.skipIf(!canRun)("daintree_pty_supervisor (#8769, #13176)", { timeout: 3
       .split(" ")
       .map((v) => Number.parseInt(v, 10));
     strays.push(grandchild);
+    // Orphaned to init on purpose, so the unit-test kill guard no longer sees it
+    // as ours; afterEach still has to be able to end it.
+    adoptProcessForKill(grandchild);
     return { root, intermediate, grandchild };
   }
 

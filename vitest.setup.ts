@@ -6,11 +6,29 @@
 
 import os from "node:os";
 import path from "node:path";
-import { vi } from "vitest";
+import { afterAll, afterEach, vi } from "vitest";
 import { markIpcSecurityReady } from "./electron/ipc/ipcGuard.js";
 import { installTestLocale } from "./scripts/lib/testLocale.js";
+import {
+  formatProcessKillViolations,
+  installProcessKillGuard,
+  takeProcessKillViolations,
+} from "./scripts/lib/testProcessKillGuard.js";
 
 markIpcSecurityReady();
+
+// Mock ptys carry made-up PIDs, and a real ProcessTreeKiller signals whatever
+// owns them: one test SIGKILLed the developer's running Daintree at pid 456
+// (#14418). Only this worker and its own children can be signalled; anything
+// else is refused, and because kill paths swallow errors, the refusal fails
+// the test from here.
+installProcessKillGuard();
+const failOnProcessKillViolations = () => {
+  const violations = takeProcessKillViolations();
+  if (violations.length > 0) throw new Error(formatProcessKillViolations(violations));
+};
+afterEach(failOnProcessKillViolations);
+afterAll(failOnProcessKillViolations);
 
 // vitest.config.ts pins LANG/LC_ALL so en-US formatting holds on any machine,
 // but Node on Windows takes ICU's default from the user's regional settings and
