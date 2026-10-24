@@ -1,3 +1,4 @@
+// eager-import-allow: reads hidden launcher groups via store.get so toggling one plugin preserves the other groups and projects
 import { store } from "../../store.js";
 
 /**

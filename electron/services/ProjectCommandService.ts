@@ -1,3 +1,4 @@
+// eager-import-allow: reads the global command environment via store.get only during a requested project command, after dynamically importing the store
 /**
  * Runs one non-interactive shell command in a project root or one of its
  * worktrees and reports its exit code, output and timing (#13495) — the shell a

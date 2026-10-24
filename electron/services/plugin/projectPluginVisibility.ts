@@ -1,3 +1,4 @@
+// eager-import-allow: hydrates plugin visibility via store.get before synchronous menu and contribution filtering so the first projection honors saved overrides
 import { store } from "../../store.js";
 import { isProjectWorkspaceId } from "../../../shared/utils/workspaceIds.js";
 import type { ProjectPluginVisibility } from "../../../shared/types/plugin.js";

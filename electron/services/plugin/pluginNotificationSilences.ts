@@ -1,3 +1,4 @@
+// eager-import-allow: reads notification silences via store.get at dispatch so a newly silenced plugin is suppressed after pending policy reads
 import { store } from "../../store.js";
 import { isSafePluginInstanceId } from "./projectPluginIdentity.js";
 

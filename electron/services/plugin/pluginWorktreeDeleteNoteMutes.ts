@@ -1,3 +1,4 @@
+// eager-import-allow: reads delete-note mutes via store.get synchronously before selecting plugins for a worktree deletion confirmation
 import { store } from "../../store.js";
 import { isSafePluginInstanceId } from "./projectPluginIdentity.js";
 

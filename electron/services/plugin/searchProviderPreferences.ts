@@ -1,3 +1,4 @@
+// eager-import-allow: reads hidden search providers via store.get for the synchronous search-provider filter without activating provider plugins
 import { store } from "../../store.js";
 import { projectIdFromPluginInstanceKey } from "../../../shared/types/plugin.js";
 

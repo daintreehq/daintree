@@ -1,3 +1,4 @@
+// eager-import-allow: prepares and atomically replaces the relaunch command via sync fs, since shutdown can terminate the process before async work settles
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";

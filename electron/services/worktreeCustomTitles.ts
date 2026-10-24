@@ -1,3 +1,4 @@
+// eager-import-allow: reads custom titles via store.get with revisioned updates so title replies and plugin snapshots see the latest saved titles
 import { store } from "../store.js";
 import { isProjectWorkspaceId, isScratchWorkspaceId } from "../../shared/utils/workspaceIds.js";
 import {

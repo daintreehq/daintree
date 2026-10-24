@@ -1,3 +1,4 @@
+// eager-import-allow: creates and secures the app-owned hooks directory via sync fs, once and cached, before hardened git config can spawn git
 import { execFile } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";

@@ -1,3 +1,4 @@
+// eager-import-allow: reads presentation profiles via store.get for settings snapshots and updates that preserve other projects' answers
 import { store } from "../../store.js";
 import { isProjectWorkspaceId } from "../../../shared/utils/workspaceIds.js";
 import {

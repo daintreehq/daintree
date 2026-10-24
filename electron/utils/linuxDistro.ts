@@ -1,3 +1,4 @@
+// eager-import-allow: reads os-release via sync fs on the first distro lookup and caches it for synchronous prerequisite and install-hint builders
 import fs from "fs";
 
 /**

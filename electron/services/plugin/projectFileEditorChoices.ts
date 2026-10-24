@@ -1,3 +1,4 @@
+// eager-import-allow: reads project file-editor choices via store.get so changing one file-type answer preserves every other saved choice
 import { store } from "../../store.js";
 import {
   isFileEditorChoice,

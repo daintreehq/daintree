@@ -1,3 +1,4 @@
+// eager-import-allow: reads disabled context providers via store.get when PluginService arbitrates providers synchronously and settings updates merge the list
 import { store } from "../../store.js";
 
 /**

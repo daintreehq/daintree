@@ -1,3 +1,4 @@
+// eager-import-allow: detaches unopened cache and partition directories via sync rename right after the liveness check, so no session opens in between
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";

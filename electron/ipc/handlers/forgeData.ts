@@ -1,5 +1,4 @@
 import fs from "fs/promises";
-import { existsSync } from "fs";
 import path from "path";
 import { CHANNELS } from "../channels.js";
 import { broadcastToRenderer, checkRateLimit, typedHandle } from "../utils.js";
@@ -502,7 +501,11 @@ async function handleForgeGetRepoStats(payload: {
   // Nothing is persisted here: a dead path yields no observation, and writing
   // this zero would overwrite the counts that let the toolbar hold its pill
   // widths if the directory comes back (issue #11078).
-  if (!existsSync(cwd)) {
+  const cwdExists = await fs.access(cwd).then(
+    () => true,
+    () => false
+  );
+  if (!cwdExists) {
     return buildForgeRepositoryStats(0, { issueCount: null, prCount: null });
   }
   let resolved: ResolvedForgeContext;

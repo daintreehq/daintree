@@ -1,3 +1,4 @@
+// eager-import-allow: reads Canopy mode via store.get for hydration and idle snapshots without constructing the optional Canopy service
 import { CANOPY_MODES, type CanopyMode } from "../../../shared/types/ipc/canopy.js";
 import { store } from "../../store.js";
 

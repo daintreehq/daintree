@@ -1,3 +1,4 @@
+// eager-import-allow: reads the version first-run record via store.get for boot-time recording and the diagnostics export boundary
 import { app } from "electron";
 import { store } from "../store.js";
 import type { VersionFirstRunBoundary } from "../../shared/types/ipc/system.js";

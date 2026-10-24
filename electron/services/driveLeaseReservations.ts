@@ -1,3 +1,4 @@
+// eager-import-allow: restores remote drive reservations via sync fs during lease-service construction, before competing drive requests can be admitted
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { OWNER_RW_FILE_MODE, resilientAtomicWriteFileSync } from "../utils/fs.js";

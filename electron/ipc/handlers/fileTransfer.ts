@@ -1,3 +1,4 @@
+// eager-import-allow: reads upload preferences via store.get synchronously for IPC replies and the preference read-modify-write
 import { CHANNELS } from "../channels.js";
 import { defineIpcNamespace, op } from "../define.js";
 import { onWithContext } from "../utils.js";
