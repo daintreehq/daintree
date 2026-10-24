@@ -36,7 +36,7 @@ const RETIRED_ALLOWED: Record<string, string> = {
   // review-required marks.
   "plugins/builtin/github/renderer/components/GitHubListItem.tsx": "Changes requested verdict",
   // The kit's forge-neutral pull request row, which draws the same verdict.
-  "src/components/PluginKit/PluginKitGit.tsx": "Changes requested verdict",
+  "src/components/PluginKit/PluginKitGitForge.tsx": "Changes requested verdict",
 };
 
 /** Every Lucide glyph that has ever stood for a severity on a banner or callout. */
