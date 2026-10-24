@@ -282,7 +282,23 @@ describe("buildCrashReportUrl", () => {
     expect(external).toContain("deferred because main reported memory pressure");
     expect(plain).not.toContain("deferred because");
     const causeLine = (body: string) => body.split("\n").find((l) => l.includes("**Cause**"));
-    expect(causeLine(external)).not.toBe(causeLine(plain));
+    const reasons = [
+      "unresponsive",
+      "unresponsive-under-pressure",
+      "no-progress-under-external-pressure",
+    ] as const;
+    const lines = reasons.map((reason) =>
+      causeLine(
+        decodeBody(
+          buildCrashReportUrl(baseEntry({ cause: "watchdog-deadlock", watchdogKillReason: reason }))
+            .url
+        )
+      )
+    );
+    expect(new Set(lines).size).toBe(reasons.length);
+    expect(lines).not.toContain(
+      causeLine(decodeBody(buildCrashReportUrl(baseEntry({ cause: "watchdog-deadlock" })).url))
+    );
   });
 
   it("does not throw on a future-schema crashCause value (defensive normalization)", () => {

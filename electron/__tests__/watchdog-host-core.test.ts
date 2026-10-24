@@ -755,7 +755,11 @@ describe("external memory pressure (#14367)", () => {
         wd.tick();
       }
     };
-    return { wd, killMain, logs, ticks, mainProgress, write: () => (changed = true) };
+    const tickAfter = (ms: number) => {
+      now += ms;
+      wd.tick();
+    };
+    return { wd, killMain, logs, ticks, tickAfter, mainProgress, write: () => (changed = true) };
   }
 
   it("outlasts the pressure grace and kills only after the no-progress deadline", () => {
@@ -795,9 +799,60 @@ describe("external memory pressure (#14367)", () => {
     expect(killMain).not.toHaveBeenCalled();
     ticks(1);
     expect(killMain).toHaveBeenCalledTimes(1);
-    expect(killMain.mock.calls[0]![0].missedBeats).toBe(
-      240 + MAX_NO_PROGRESS_UNDER_EXTERNAL_PRESSURE
-    );
+    expect(killMain.mock.calls[0]![0]).toMatchObject({
+      missedBeats: 240 + MAX_NO_PROGRESS_UNDER_EXTERNAL_PRESSURE,
+      beatsSinceProgress: MAX_NO_PROGRESS_UNDER_EXTERNAL_PRESSURE,
+    });
+  });
+
+  it("gives the deadline after a write its own beat of late-tick slack", () => {
+    const { wd, killMain, ticks, write, tickAfter } = makeWatchdog();
+    wd.handleMessage({ type: "ping", memoryPressure: true, externalPressure: true });
+    ticks(MAX_NO_PROGRESS_UNDER_EXTERNAL_PRESSURE - 1);
+    tickAfter(LATE_TICK_GAP_MS);
+    expect(killMain).not.toHaveBeenCalled();
+    write();
+    ticks(1);
+    expect(wd.state.beatsSinceProgress).toBe(0);
+
+    ticks(MAX_NO_PROGRESS_UNDER_EXTERNAL_PRESSURE - 1);
+    tickAfter(LATE_TICK_GAP_MS);
+    expect(killMain).not.toHaveBeenCalled();
+    ticks(1);
+    expect(killMain).toHaveBeenCalledTimes(1);
+  });
+
+  it("holds the kill for a beat when reading main's files stalled the watchdog", () => {
+    const killMain = vi.fn();
+    let now = 0;
+    let statCostMs = 0;
+    const wd = createWatchdog({
+      killMain,
+      logError: () => {},
+      now: () => now,
+      mainProgress: {
+        observe: () => {
+          now += statCostMs;
+          return false;
+        },
+        reset: () => {},
+      },
+    });
+    const tick = () => {
+      now += HEARTBEAT_INTERVAL_MS;
+      wd.tick();
+    };
+    wd.handleMessage({ type: "ping", memoryPressure: true, externalPressure: true });
+    for (let i = 0; i < MAX_NO_PROGRESS_UNDER_EXTERNAL_PRESSURE - 1; i++) tick();
+    statCostMs = HEARTBEAT_INTERVAL_MS;
+    tick();
+    expect(killMain).not.toHaveBeenCalled();
+    // Main's ping, queued behind the stalled read, lands before the next tick.
+    wd.handleMessage({ type: "ping", memoryPressure: true, externalPressure: true });
+    statCostMs = 0;
+    tick();
+    expect(killMain).not.toHaveBeenCalled();
+    expect(wd.state.missedBeats).toBe(1);
   });
 
   it("ignores main's files when the pressure isn't external", () => {

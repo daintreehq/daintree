@@ -202,7 +202,7 @@ describe("MainProcessWatchdogClient", () => {
 
       swap.recordSwapPressure(true);
       vi.advanceTimersByTime(5000);
-      expect(pingExternal().at(-1)).toBe(false);
+      expect(pingExternal()).toEqual([false, false]);
       expect(shared.appMock.getAppMetrics).not.toHaveBeenCalled();
     });
 
@@ -211,6 +211,7 @@ describe("MainProcessWatchdogClient", () => {
       const snapshot = await import("../../utils/appMetricsSnapshot.js");
       const processMemory = await import("../../utils/processMemory.js");
       const os = await import("node:os");
+      // Each process alone is under the share; together they are over it.
       let footprintBytes = 512 * 1024 * 1024;
       processMemory.setPhysFootprintReaderForTesting({
         readPhysFootprints: (pids) => pids.map(() => footprintBytes),
@@ -218,8 +219,10 @@ describe("MainProcessWatchdogClient", () => {
         getLoadError: () => null,
       });
       shared.appMock.getAppMetrics.mockReturnValue([
-        { pid: 10, type: "Browser", memory: { workingSetSize: 1024 } } as Electron.ProcessMetric,
-      ]);
+        { pid: 10, type: "Browser", memory: { workingSetSize: 1024 } },
+        { pid: 11, type: "GPU", memory: { workingSetSize: 1024 } },
+        { pid: 12, type: "Tab", memory: { workingSetSize: 1024 } },
+      ] as Electron.ProcessMetric[]);
       try {
         snapshot.refreshAppMetricsSnapshot();
         swap.recordSwapPressure(true);
@@ -227,11 +230,49 @@ describe("MainProcessWatchdogClient", () => {
         expect(pingExternal()).toEqual([true]);
         expect(shared.appMock.getAppMetrics).toHaveBeenCalledTimes(1);
 
-        footprintBytes = os.totalmem();
+        footprintBytes = Math.ceil(os.totalmem() / 10);
         snapshot.refreshAppMetricsSnapshot();
         vi.advanceTimersByTime(5000);
         expect(pingExternal().at(-1)).toBe(false);
       } finally {
+        processMemory.resetPhysFootprintReaderForTesting();
+        shared.appMock.getAppMetrics.mockReset();
+        shared.appMock.getAppMetrics.mockReturnValue([]);
+      }
+    });
+
+    it("on macOS, takes a sweep missing any footprint as no figure at all", async () => {
+      const swap = await import("../systemSwapPressure.js");
+      const snapshot = await import("../../utils/appMetricsSnapshot.js");
+      const processMemory = await import("../../utils/processMemory.js");
+      const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+      Object.defineProperty(process, "platform", { value: "darwin" });
+      let readable = (_pid: number) => true;
+      processMemory.setPhysFootprintReaderForTesting({
+        readPhysFootprints: (pids) => pids.map((pid) => (readable(pid) ? 64 * 1024 * 1024 : null)),
+        isAvailable: () => true,
+        getLoadError: () => null,
+      });
+      // Every sweep yields fresh metric objects, as Electron's does.
+      shared.appMock.getAppMetrics.mockImplementation(
+        () =>
+          [
+            { pid: 10, type: "Browser", memory: { workingSetSize: 1024 } },
+            { pid: 11, type: "Tab", memory: { workingSetSize: 1024 } },
+          ] as Electron.ProcessMetric[]
+      );
+      try {
+        snapshot.refreshAppMetricsSnapshot();
+        swap.recordSwapPressure(true);
+        new WatchdogClient({ mainPid: 1 });
+        expect(pingExternal()).toEqual([true]);
+
+        readable = (pid) => pid !== 11;
+        snapshot.refreshAppMetricsSnapshot();
+        vi.advanceTimersByTime(5000);
+        expect(pingExternal().at(-1)).toBe(false);
+      } finally {
+        Object.defineProperty(process, "platform", platform);
         processMemory.resetPhysFootprintReaderForTesting();
         shared.appMock.getAppMetrics.mockReset();
         shared.appMock.getAppMetrics.mockReturnValue([]);

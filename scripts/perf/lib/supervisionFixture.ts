@@ -12,6 +12,7 @@ import {
   parseMainPid,
   writeWatchdogKillFlag,
   WATCHDOG_KILL_FLAG_NAME,
+  type WatchdogKillDecision,
 } from "../../../electron/watchdog-host-core";
 import type { CrashType } from "../../../shared/types/pty-host";
 
@@ -413,11 +414,13 @@ export function runWatchdogLadder(rounds: number): WatchdogLadderResult {
     let kills = 0;
     let killedAtClock = -1;
     let missedBeatsAtKill = -1;
+    const atKill: { decision: WatchdogKillDecision | null } = { decision: null };
     const watchdog = createWatchdog({
-      killMain: () => {
+      killMain: (decision) => {
         kills += 1;
         killedAtClock = clock;
-        missedBeatsAtKill = watchdog.state.missedBeats;
+        missedBeatsAtKill = decision.missedBeats;
+        atKill.decision = decision;
       },
       logError: () => {},
       now: () => clock,
@@ -479,12 +482,14 @@ export function runWatchdogLadder(rounds: number): WatchdogLadderResult {
       // watchdog killed it" on the next launch, so a kill that writes nothing
       // has recovered the machine and lost the reason.
       let written: string | null = null;
-      const wrote = writeWatchdogKillFlag("/perf-user-data", missedBeatsAtKill, 4242, {
-        writeFileSync: (_path, data) => {
-          written = data;
-        },
-        joinPath: (userData, name) => `${userData}/${name}`,
-      });
+      const wrote =
+        atKill.decision !== null &&
+        writeWatchdogKillFlag("/perf-user-data", atKill.decision, 4242, {
+          writeFileSync: (_path, data) => {
+            written = data;
+          },
+          joinPath: (userData, name) => `${userData}/${name}`,
+        });
       const payload = written === null ? null : (JSON.parse(written) as Record<string, unknown>);
       if (
         !wrote ||

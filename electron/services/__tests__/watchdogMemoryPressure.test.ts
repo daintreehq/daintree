@@ -28,6 +28,19 @@ describe("isMemoryPressureExternal (#14367)", () => {
     expect(isMemoryPressureExternal(own(atLimit - 1), TOTAL_MB, NOW)).toBe(true);
   });
 
+  it("trusts a footprint figure up to the freshness boundary", () => {
+    recordSwapPressure(true, NOW);
+    expect(isMemoryPressureExternal(own(512, NOW - 60_000), TOTAL_MB, NOW)).toBe(true);
+    expect(
+      isMemoryPressureExternal(own(512, NOW - WATCHDOG_PRESSURE_STALE_MS), TOTAL_MB, NOW)
+    ).toBe(true);
+  });
+
+  it("stays confirmed across the deep power level's five-minute sampling gap", () => {
+    recordSwapPressure(true, NOW);
+    expect(isMemoryPressureExternal(own(512, NOW), TOTAL_MB, NOW + 300_000)).toBe(true);
+  });
+
   it("never reads the footprint without confirmed pressure", () => {
     const read = vi.fn(own(512));
     expect(isMemoryPressureExternal(read, TOTAL_MB, NOW)).toBe(false);
@@ -41,6 +54,9 @@ describe("isMemoryPressureExternal (#14367)", () => {
       isMemoryPressureExternal(own(512, NOW - WATCHDOG_PRESSURE_STALE_MS - 1), TOTAL_MB, NOW)
     ).toBe(false);
     expect(isMemoryPressureExternal(own(512, NOW + 1), TOTAL_MB, NOW)).toBe(false);
+    expect(isMemoryPressureExternal(own(-1), TOTAL_MB, NOW)).toBe(false);
+    expect(isMemoryPressureExternal(own(Number.POSITIVE_INFINITY), TOTAL_MB, NOW)).toBe(false);
+    expect(isMemoryPressureExternal(own(512), Number.NaN, NOW)).toBe(false);
     expect(isMemoryPressureExternal(own(Number.NaN), TOTAL_MB, NOW)).toBe(false);
     expect(isMemoryPressureExternal(own(512), 0, NOW)).toBe(false);
   });

@@ -1,7 +1,10 @@
-import { describe, it, expect } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, it, expect } from "vitest";
 import {
   createMainProgressObserver,
-  MAIN_PROGRESS_FILES,
+  createMainProgressObserverForUserData,
   type FileFingerprint,
 } from "../watchdog-main-progress.js";
 
@@ -39,6 +42,8 @@ describe("createMainProgressObserver", () => {
     expect(observer.observe()).toBe(true);
     touch("a", { size: 11 });
     expect(observer.observe()).toBe(true);
+    touch("a", { ctimeMs: 400 });
+    expect(observer.observe()).toBe(true);
   });
 
   it("credits nothing for a file that appears, disappears, or whose clock steps back", () => {
@@ -61,8 +66,35 @@ describe("createMainProgressObserver", () => {
     observer.reset();
     expect(observer.observe()).toBe(false);
   });
+});
 
-  it("never watches the log file the utility hosts also write", () => {
-    expect(MAIN_PROGRESS_FILES.some((f) => f.includes("daintree.log"))).toBe(false);
+describe("createMainProgressObserverForUserData", () => {
+  let userData: string | null = null;
+  afterEach(() => {
+    if (userData) fs.rmSync(userData, { recursive: true, force: true });
+    userData = null;
+  });
+
+  it("credits main's crash marker and session backup, never the shared log", () => {
+    userData = fs.mkdtempSync(path.join(os.tmpdir(), "watchdog-progress-"));
+    fs.mkdirSync(path.join(userData, "backups"));
+    fs.mkdirSync(path.join(userData, "logs"));
+    const marker = path.join(userData, "running.lock");
+    const backup = path.join(userData, "backups", "session-state.json");
+    const log = path.join(userData, "logs", "daintree.log");
+    for (const file of [marker, backup, log]) fs.writeFileSync(file, "{}");
+    const observer = createMainProgressObserverForUserData(userData);
+    expect(observer.observe()).toBe(false);
+
+    fs.appendFileSync(log, "a line from the pty host\n");
+    expect(observer.observe()).toBe(false);
+
+    fs.writeFileSync(marker, JSON.stringify({ lastHeartbeatMs: 1 }));
+    expect(observer.observe()).toBe(true);
+
+    // The backup is replaced atomically: a new file renamed over the old one.
+    fs.writeFileSync(`${backup}.tmp`, JSON.stringify({ panels: [] }));
+    fs.renameSync(`${backup}.tmp`, backup);
+    expect(observer.observe()).toBe(true);
   });
 });

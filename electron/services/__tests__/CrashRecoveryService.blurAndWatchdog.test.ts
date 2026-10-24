@@ -329,7 +329,7 @@ describe("CrashRecoveryService", () => {
           mainPid: 4242,
           reason: "gremlins",
           beatsSinceProgress: -1,
-          pressureEvidence: "x".repeat(5000),
+          pressureEvidence: `${"x".repeat(199)}\u{1F600}${"y".repeat(5000)}`,
         },
         killedAt
       );
@@ -342,7 +342,7 @@ describe("CrashRecoveryService", () => {
       expect(entry.watchdogMissedBeats).toBe(3);
       expect(entry.watchdogKillReason).toBeUndefined();
       expect(entry.watchdogBeatsSinceProgress).toBeUndefined();
-      expect(entry.watchdogPressureEvidence!.length).toBeLessThan(5000);
+      expect(entry.watchdogPressureEvidence).toBe(`${"x".repeat(199)}y`);
     });
 
     it("consumes (unlinks) the flag regardless of attribution outcome", () => {

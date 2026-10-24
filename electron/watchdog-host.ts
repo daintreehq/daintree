@@ -33,7 +33,7 @@ import {
   MAX_NO_PROGRESS_UNDER_EXTERNAL_PRESSURE,
   type WatchdogMessage,
 } from "./watchdog-host-core.js";
-import { createMainProgressObserver, MAIN_PROGRESS_FILES } from "./watchdog-main-progress.js";
+import { createMainProgressObserverForUserData } from "./watchdog-main-progress.js";
 
 const STDIO_DEAD_CODES = new Set(["EPIPE", "EIO", "EBADF", "ECONNRESET"]);
 for (const stream of [process.stdout, process.stderr]) {
@@ -95,21 +95,7 @@ function readAvailableMemoryRatio(): number | null {
   );
 }
 
-const mainProgress = userDataPath
-  ? createMainProgressObserver({
-      paths: MAIN_PROGRESS_FILES.map((name) => path.join(userDataPath, name)),
-      stat: (p) => {
-        try {
-          const st = fs.statSync(p, { throwIfNoEntry: false });
-          return st
-            ? { ino: st.ino, size: st.size, mtimeMs: st.mtimeMs, ctimeMs: st.ctimeMs }
-            : null;
-        } catch {
-          return null;
-        }
-      },
-    })
-  : undefined;
+const mainProgress = userDataPath ? createMainProgressObserverForUserData(userDataPath) : undefined;
 
 const watchdog = createWatchdog({
   readAvailableMemoryRatio: process.platform === "darwin" ? undefined : readAvailableMemoryRatio,

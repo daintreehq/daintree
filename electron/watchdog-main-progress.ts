@@ -1,4 +1,6 @@
 // eager-import-allow: stats main's own files via sync fs in the watchdog host
+import fs from "node:fs";
+import path from "node:path";
 import type { MainProgressObserver } from "./watchdog-host-core.js";
 
 /**
@@ -51,4 +53,21 @@ export function createMainProgressObserver(deps: MainProgressObserverDeps): Main
       baseline = null;
     },
   };
+}
+
+/** A metadata read and nothing more: no open, no spawn. */
+export function statFileFingerprint(filePath: string): FileFingerprint | null {
+  try {
+    const st = fs.statSync(filePath, { throwIfNoEntry: false });
+    return st ? { ino: st.ino, size: st.size, mtimeMs: st.mtimeMs, ctimeMs: st.ctimeMs } : null;
+  } catch {
+    return null;
+  }
+}
+
+export function createMainProgressObserverForUserData(userData: string): MainProgressObserver {
+  return createMainProgressObserver({
+    paths: MAIN_PROGRESS_FILES.map((name) => path.join(userData, name)),
+    stat: statFileFingerprint,
+  });
 }

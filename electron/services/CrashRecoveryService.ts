@@ -132,8 +132,9 @@ const WATCHDOG_KILL_REASONS: ReadonlySet<WatchdogKillReason> = new Set<WatchdogK
   "no-progress-under-external-pressure",
 ]);
 
-// The evidence is one of a few fixed phrases the watchdog writes; the cap only
-// keeps a corrupted flag from bloating the crash log and report.
+// The evidence is one of a few fixed ASCII phrases the watchdog writes; the
+// filter and cap keep a corrupted flag from bloating the crash log or leaving a
+// lone surrogate that would make the report's URL encoding throw.
 const MAX_WATCHDOG_EVIDENCE_LENGTH = 200;
 
 export class CrashRecoveryService {
@@ -1079,12 +1080,13 @@ export class CrashRecoveryService {
           ) {
             annotation.beatsSinceProgress = parsed.beatsSinceProgress;
           }
-          if (typeof parsed.pressureEvidence === "string" && parsed.pressureEvidence.length > 0) {
-            annotation.pressureEvidence = parsed.pressureEvidence.slice(
-              0,
-              MAX_WATCHDOG_EVIDENCE_LENGTH
-            );
-          }
+          const evidence =
+            typeof parsed.pressureEvidence === "string"
+              ? parsed.pressureEvidence
+                  .replace(/[^\x20-\x7e]/g, "")
+                  .slice(0, MAX_WATCHDOG_EVIDENCE_LENGTH)
+              : "";
+          if (evidence.length > 0) annotation.pressureEvidence = evidence;
         } else {
           console.warn("[CrashRecovery] Malformed watchdog kill flag, ignoring");
         }

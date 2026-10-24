@@ -235,12 +235,25 @@ export function createWatchdog(deps: WatchdogDeps): Watchdog {
       return;
     }
 
-    const late = gapMs >= LATE_TICK_GAP_MS;
+    let late = gapMs >= LATE_TICK_GAP_MS;
     if (late) state.lastLateTickAt = t;
 
     state.missedBeats += 1;
     state.beatsSinceProgress += 1;
-    if (state.mainExternalPressure && observeProgress()) state.beatsSinceProgress = 0;
+    if (state.mainExternalPressure) {
+      if (observeProgress()) {
+        state.beatsSinceProgress = 0;
+        // A fresh deadline gets its own beat of slack.
+        killHeld = false;
+      }
+      // The stats can block under I/O pressure, and a ping that landed
+      // meanwhile is still queued behind this tick, so a read that stalled
+      // for a beat counts as the watchdog itself stalling.
+      if (now() - t >= HEARTBEAT_INTERVAL_MS) {
+        late = true;
+        state.lastLateTickAt = t;
+      }
+    }
     if (state.missedBeats < MAX_MISSED) return;
 
     if (!state.killDeferred) {
