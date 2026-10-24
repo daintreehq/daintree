@@ -4,7 +4,7 @@ import type {
   SearchableProject,
   SearchableScratch,
   WorkspaceRowStatusFields,
-} from "@/hooks/useProjectSwitcherPalette";
+} from "@/hooks/projectSwitcher/types";
 
 const NAME_WEIGHT = 4;
 
