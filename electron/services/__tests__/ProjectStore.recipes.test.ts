@@ -352,7 +352,7 @@ describe("ProjectStore recipe reconciliation", () => {
       expect(result).toEqual([{ title: "Service C", env: { API_KEY: "" } }]);
     });
 
-    it("a step whose command was edited keeps its values when its title still identifies it", async () => {
+    it("a step whose command changed under the same title is not treated as the same step", async () => {
       const result = await reconcileWith(
         [
           { ...stepA, env: { API_KEY: "A-local" } },
@@ -360,16 +360,55 @@ describe("ProjectStore recipe reconciliation", () => {
         ],
         [
           { ...stepB, env: { API_KEY: "x" } },
-          { ...stepA, command: "run-a --verbose", env: { API_KEY: "x" } },
+          { ...stepA, command: "run-a --production", env: { API_KEY: "x" } },
         ]
       );
       expect(result).toEqual([
         { title: "Service B", env: { API_KEY: "B-local" } },
-        { title: "Service A", env: { API_KEY: "A-local" } },
+        { title: "Service A", env: { API_KEY: "" } },
       ]);
     });
 
-    it("identical-looking steps keep their values while their count is unchanged", async () => {
+    it("agent steps that differ only by args keep their own values across a reorder", async () => {
+      const agent = { type: "claude" as const, title: "Agent" };
+      const result = await reconcileWith(
+        [
+          { ...agent, args: "--model a", env: { API_KEY: "A-local" } },
+          { ...agent, args: "--model b", env: { API_KEY: "B-local" } },
+        ],
+        [
+          { ...agent, args: "--model b", env: { API_KEY: "x" } },
+          { ...agent, args: "--model a", env: { API_KEY: "x" } },
+        ]
+      );
+      expect(result).toEqual([
+        { title: "Agent", env: { API_KEY: "B-local" } },
+        { title: "Agent", env: { API_KEY: "A-local" } },
+      ]);
+    });
+
+    it("identical-looking steps keep their values when the step sequence is unchanged", async () => {
+      const result = await reconcileWith(
+        [
+          { ...stepA, env: { PORT: "3000" } },
+          { ...stepB, env: { API_KEY: "B-local" } },
+          { ...stepA, env: { PORT: "3001" } },
+        ],
+        [
+          { ...stepA, env: { PORT: "x", NEW_KEY: "x" } },
+          { ...stepB, env: { API_KEY: "x" } },
+          { ...stepA, env: { PORT: "x" } },
+        ]
+      );
+      expect(result).toEqual([
+        { title: "Service A", env: { PORT: "3000", NEW_KEY: "" } },
+        { title: "Service B", env: { API_KEY: "B-local" } },
+        { title: "Service A", env: { PORT: "3001" } },
+      ]);
+    });
+
+    it("identical-looking steps with different values are ambiguous once the sequence moves", async () => {
+      // [A1, B, A2] → [B, A, A]: either A could be the one that moved.
       const result = await reconcileWith(
         [
           { ...stepA, env: { PORT: "3000" } },
@@ -384,8 +423,28 @@ describe("ProjectStore recipe reconciliation", () => {
       );
       expect(result).toEqual([
         { title: "Service B", env: { API_KEY: "B-local" } },
+        { title: "Service A", env: { PORT: "" } },
+        { title: "Service A", env: { PORT: "" } },
+      ]);
+    });
+
+    it("identical-looking steps with the same values keep them when the sequence moves", async () => {
+      const result = await reconcileWith(
+        [
+          { ...stepA, env: { PORT: "3000" } },
+          { ...stepB, env: { API_KEY: "B-local" } },
+          { ...stepA, env: { PORT: "3000" } },
+        ],
+        [
+          { ...stepB, env: { API_KEY: "x" } },
+          { ...stepA, env: { PORT: "x" } },
+          { ...stepA, env: { PORT: "x" } },
+        ]
+      );
+      expect(result).toEqual([
+        { title: "Service B", env: { API_KEY: "B-local" } },
         { title: "Service A", env: { PORT: "3000" } },
-        { title: "Service A", env: { PORT: "3001" } },
+        { title: "Service A", env: { PORT: "3000" } },
       ]);
     });
 
