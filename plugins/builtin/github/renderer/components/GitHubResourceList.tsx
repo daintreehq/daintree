@@ -49,6 +49,10 @@ import {
   GitHubResourceRowsSkeleton,
   MAX_SKELETON_ITEMS,
   RESOURCE_ITEM_HEIGHT_PX,
+  RESOURCE_LIST_GUTTER,
+  RESOURCE_PANEL_FOOTER,
+  RESOURCE_PANEL_HEADER,
+  RESOURCE_SEARCH_FIELD,
 } from "./GitHubDropdownSkeletons";
 import { LiveTimeAgo } from "@/components/Worktree/LiveTimeAgo";
 import { LiveRateLimitCountdown } from "@/components/Layout/RateLimitDetails";
@@ -1128,13 +1132,13 @@ export function GitHubResourceList({
 
   return (
     <div ref={rootRef} className={cn("relative flex flex-col", FORGE_DROPDOWN_PANEL_SIZE)}>
-      <div className="p-3 border-b border-[var(--border-divider)] space-y-2 shrink-0">
+      <div className={RESOURCE_PANEL_HEADER}>
         <div className="flex items-center gap-2">
           <SearchField
             size="compact"
             // Keeps the dropdown header's 32px, text-sm field rather than the
             // rail's 28px, matching the commits dropdown beside it.
-            className="h-8 text-sm flex-1"
+            className={RESOURCE_SEARCH_FIELD}
             ref={inputRef}
             placeholder={`Search ${type === "issue" ? "issues" : "pull requests"}…`}
             value={searchQuery}
@@ -1454,7 +1458,7 @@ export function GitHubResourceList({
             leaving stale DOM trees with stale closures. See BulkActionBar. */}
         {loading && !data.length ? (
           <div key="github-skeleton" className="flex-1 min-h-0 flex flex-col">
-            <div className="flex-1 min-h-0 overflow-hidden">
+            <div className={cn("flex-1 min-h-0 overflow-hidden", RESOURCE_LIST_GUTTER)}>
               <GitHubResourceRowsSkeleton
                 count={initialCount && initialCount > 0 ? initialCount : MAX_SKELETON_ITEMS}
                 type={type}
@@ -1540,6 +1544,7 @@ export function GitHubResourceList({
                 data={data}
                 context={footerContext}
                 style={{ height: "100%" }}
+                className={RESOURCE_LIST_GUTTER}
                 fixedItemHeight={RESOURCE_ITEM_HEIGHT_PX}
                 computeItemKey={(_, item) => item.number}
                 increaseViewportBy={{ top: 0, bottom: 200 }}
@@ -1673,12 +1678,7 @@ export function GitHubResourceList({
           Hidden entirely while a selection is live: `BulkActionBar` takes over
           this band at the same height, so the panel never grows a second
           bottom bar or loses a row of list to one. */}
-      <div
-        className={cn(
-          "px-2 h-10 border-t border-[var(--border-divider)] grid grid-cols-[1fr_auto_1fr] items-center shrink-0",
-          selection.selectedItems.size > 0 && "hidden"
-        )}
-      >
+      <div className={cn(RESOURCE_PANEL_FOOTER, selection.selectedItems.size > 0 && "hidden")}>
         <Button
           variant="ghost"
           size="sm"

@@ -256,6 +256,7 @@ vi.mock("@/components/Worktree/LiveTimeAgo", () => ({
 }));
 
 import { GitHubResourceList } from "../components/GitHubResourceList";
+import { GitHubResourceListSkeleton } from "../components/GitHubDropdownSkeletons";
 
 const makeIssue = (n: number): Issue => ({
   number: n,
@@ -4016,5 +4017,124 @@ describe("GitHubResourceList — only a cursor move scrolls the list (#14067)", 
     rerender(<Harness mode="visible" />);
 
     expect(revealedIndexes()).toEqual([0, 0]);
+  });
+});
+
+describe("cold panel skeleton parity (#14415)", () => {
+  // The panel skeleton is swapped for this list while the list is still
+  // loading, so the first frame it has to match is the loading one: same
+  // chrome, same persisted header state, same controls at the same sizes.
+  const FOOTER_GEOMETRY = [
+    "h-7",
+    "px-3",
+    "gap-1.5",
+    "text-xs",
+    "font-medium",
+    "justify-self-start",
+    "justify-self-end",
+  ];
+  const SEGMENT_GEOMETRY = ["flex-1", "min-w-0", "px-2.5", "py-1", "text-xs", "font-medium"];
+  const TRACK_GEOMETRY = ["flex", "w-full", "p-0.5", "bg-surface-inset"];
+
+  const pick = (el: Element, tokens: string[]) => tokens.filter((t) => el.classList.contains(t));
+  const geometryOf = (el: Element, tokens: string[]) => ({
+    text: el.textContent,
+    geometry: pick(el, tokens),
+  });
+
+  function readLive(container: HTMLElement) {
+    const track = container.querySelector('[role="radiogroup"]')!;
+    const footer = container.querySelector(".border-t.h-10")!;
+    const field = container.querySelector(".search-field")!;
+    const input = field.querySelector("input")!;
+    return {
+      headerClass: track.parentElement!.className,
+      search: {
+        size: field.getAttribute("data-size"),
+        text: input.value || input.placeholder,
+        clear: field.querySelector(".search-field-clear") !== null,
+      },
+      track: pick(track, TRACK_GEOMETRY),
+      segments: Array.from(track.querySelectorAll('[role="radio"]')).map((el) =>
+        geometryOf(el, SEGMENT_GEOMETRY)
+      ),
+      checked: track.querySelector('[role="radio"][aria-checked="true"]')?.textContent,
+      sortLifted: screen
+        .getByRole("button", { name: /^Sort issues/ })
+        .classList.contains("bg-overlay-soft"),
+      selectDimmed: (screen.getByRole("button", { name: "Select issues" }) as HTMLButtonElement)
+        .disabled,
+      footerClass: footer.className.replace(/\s*hidden\b/, ""),
+      footerColumns: Array.from(footer.children).map((el) =>
+        el.tagName === "BUTTON" ? geometryOf(el, FOOTER_GEOMETRY) : "spacer"
+      ),
+    };
+  }
+
+  function readSkeleton(container: HTMLElement) {
+    const field = container.querySelector("[data-search-field]")!;
+    const track = container.querySelector("[data-segment]")!.parentElement!;
+    const footer = container.querySelector("[data-panel-footer]")!;
+    return {
+      headerClass: field.parentElement!.parentElement!.className,
+      search: {
+        size: field.getAttribute("data-size"),
+        text: field.textContent,
+        clear: field.querySelector(".search-field-clear") !== null,
+      },
+      track: pick(track, TRACK_GEOMETRY),
+      segments: Array.from(track.querySelectorAll("[data-segment]")).map((el) =>
+        geometryOf(el, SEGMENT_GEOMETRY)
+      ),
+      checked: container.querySelector("[data-skeleton-thumb]")?.closest("[data-segment]")
+        ?.textContent,
+      sortLifted: container
+        .querySelector('[data-header-slot="sort"]')!
+        .classList.contains("bg-overlay-soft"),
+      selectDimmed: container
+        .querySelector('[data-header-slot="select"]')!
+        .classList.contains("opacity-50"),
+      footerClass: footer.className,
+      footerColumns: Array.from(footer.children).map((el) =>
+        el.textContent ? geometryOf(el, FOOTER_GEOMETRY) : "spacer"
+      ),
+    };
+  }
+
+  async function compare(state: Partial<ReturnType<typeof useGitHubFilterStore.getState>>) {
+    mockListIssues.mockReturnValue(new Promise(() => {}));
+    useGitHubFilterStore.setState(state);
+
+    const live = render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+    await waitFor(() => {
+      expect(screen.getByTestId("skeleton")).toBeTruthy();
+    });
+    const liveShape = readLive(live.container);
+    live.unmount();
+
+    const skeleton = render(<GitHubResourceListSkeleton type="issue" />);
+    expect(readSkeleton(skeleton.container)).toEqual(liveShape);
+    skeleton.unmount();
+    return liveShape;
+  }
+
+  it("matches the loading list at its defaults", async () => {
+    const shape = await compare({});
+    expect(shape.checked).toBe("Open");
+    expect(shape.sortLifted).toBe(false);
+    expect(shape.search.clear).toBe(false);
+    expect(shape.selectDimmed).toBe(true);
+    expect(shape.footerColumns).toHaveLength(3);
+  });
+
+  it("matches the loading list's persisted filter, sort and query", async () => {
+    const shape = await compare({
+      issueFilter: "closed",
+      issueSortOrder: "updated",
+      issueSearchQuery: "skeleton",
+    });
+    expect(shape.checked).toBe("Closed");
+    expect(shape.sortLifted).toBe(true);
+    expect(shape.search).toMatchObject({ text: "skeleton", clear: true });
   });
 });
