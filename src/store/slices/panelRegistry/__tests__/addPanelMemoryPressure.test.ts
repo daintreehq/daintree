@@ -8,14 +8,19 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
 
 const isMemoryPressureCriticalMock = vi.hoisted(() => vi.fn<() => Promise<boolean>>());
-const requestAdmissionMock = vi.hoisted(() => vi.fn());
-const observeAdmissionMock = vi.hoisted(() => vi.fn());
 vi.mock("@/clients/systemClient", () => ({
-  systemClient: {
-    isMemoryPressureCritical: isMemoryPressureCriticalMock,
-    requestAgentLaunchAdmission: requestAdmissionMock,
-    observeAgentLaunchAdmission: observeAdmissionMock,
-  },
+  systemClient: { isMemoryPressureCritical: isMemoryPressureCriticalMock },
+}));
+
+const noteVisibleAgentLaunchMock = vi.hoisted(() => vi.fn());
+const selection = vi.hoisted(() => ({ activeWorktreeId: null as string | null }));
+vi.mock("@/store/storeAccessors", async () => {
+  const actual =
+    await vi.importActual<typeof import("@/store/storeAccessors")>("@/store/storeAccessors");
+  return { ...actual, getWorktreeSelectionSnapshot: () => selection };
+});
+vi.mock("@/services/systemMemoryLaunchNotice", () => ({
+  noteVisibleAgentLaunch: noteVisibleAgentLaunchMock,
 }));
 
 vi.mock("@/clients", () => ({
@@ -140,11 +145,6 @@ describe("agent launches at critical memory pressure (#13530)", () => {
     terminalClient.kill.mockClear();
     isMemoryPressureCriticalMock.mockReset();
     isMemoryPressureCriticalMock.mockResolvedValue(true);
-    // A host that can't count its agents: the kernel reading decides alone.
-    requestAdmissionMock.mockReset();
-    requestAdmissionMock.mockRejectedValue(new Error("no handler"));
-    observeAdmissionMock.mockReset();
-    observeAdmissionMock.mockRejectedValue(new Error("no handler"));
   });
 
   afterEach(() => {
@@ -358,112 +358,57 @@ describe("agent launches at critical memory pressure (#13530)", () => {
     expect(spawnedIds()).toEqual(["free-1"]);
     expect(isHeld("free-1")).toBe(false);
   });
-});
 
-describe("agent launches at the host's agent limit (#14221)", () => {
-  const full = {
-    kernelCritical: false,
-    runningAgents: 8,
-    startingAgents: 0,
-    agentLaunchLimit: 8,
-    memoryTotalBytes: 36 * 1024 ** 3,
-  };
-  // The host's own count: a place is taken by each launch it admits.
-  let places = 0;
-
-  beforeEach(async () => {
-    await usePanelStore.getState().reset();
-    resetMemoryPressureHoldsForTesting();
-    terminalClient.spawn.mockReset();
-    terminalClient.spawn.mockImplementation(async ({ id }) => id ?? "spawn-id");
-    isMemoryPressureCriticalMock.mockReset();
+  // #14221 held the ninth agent on a 36 GB host; how many agents run is never a reason to wait (#14309).
+  it("starts every agent past the old per-host limit at once", async () => {
     isMemoryPressureCriticalMock.mockResolvedValue(false);
-    places = 0;
-    requestAdmissionMock.mockReset();
-    requestAdmissionMock.mockImplementation(async () => {
-      if (places > 0) {
-        places -= 1;
-        return { holdReason: null, observation: { ...full, runningAgents: 7 } };
-      }
-      return { holdReason: "agent-capacity", observation: full };
-    });
-    observeAdmissionMock.mockReset();
-    observeAdmissionMock.mockImplementation(async () => ({
-      ...full,
-      runningAgents: full.agentLaunchLimit - places,
-    }));
+    const ids = Array.from({ length: 12 }, (_, i) => `many-${i}`);
+    for (const id of ids) await launchAgent(id);
+    await drainMicrotasks(400);
+
+    expect(spawnedIds()).toEqual(ids);
+    expect(ids.filter(isHeld)).toEqual([]);
+    expect(ids.map((id) => getPtyPanel(id)?.spawnStatus)).toEqual(ids.map(() => "ready"));
   });
 
-  afterEach(() => {
-    resetMemoryPressureHoldsForTesting();
-    vi.useRealTimers();
+  it("notes a fresh visible agent launch for the memory notice, never a restore", async () => {
+    isMemoryPressureCriticalMock.mockResolvedValue(false);
+    noteVisibleAgentLaunchMock.mockClear();
+    await launchAgent("seen-grid");
+    await launchAgent("seen-dock", { location: "dock" });
+    await launchAgent("restored", { restore: true });
+    await launchAgent("assistant", { location: "overlay" });
+    await drainMicrotasks();
+
+    expect(noteVisibleAgentLaunchMock).toHaveBeenCalledTimes(2);
+    expect(spawnedIds()).toEqual(["seen-grid", "seen-dock", "restored", "assistant"]);
   });
 
-  const detailOf = (id: string) => useMemoryPressureWaitStore.getState().holdDetails[id];
+  it("doesn't note a launch into a worktree the user isn't looking at", async () => {
+    isMemoryPressureCriticalMock.mockResolvedValue(false);
+    noteVisibleAgentLaunchMock.mockClear();
+    selection.activeWorktreeId = "wt-a";
+    try {
+      await launchAgent("elsewhere", { worktreeId: "wt-b" });
+      await launchAgent("here", { worktreeId: "wt-a" });
+      // A worktree-less dock panel shows in every worktree's dock.
+      await launchAgent("global-dock", { location: "dock" });
+      await drainMicrotasks();
+    } finally {
+      selection.activeWorktreeId = null;
+    }
 
-  it("holds a launch on a full host, with what the host reported", async () => {
-    await launchAgent("full-1");
-    await drainMicrotasks();
-
-    expect(requestAdmissionMock).toHaveBeenCalledWith("full-1");
-    expect(terminalClient.spawn).not.toHaveBeenCalled();
-    expect(isHeld("full-1")).toBe(true);
-    expect(detailOf("full-1")).toEqual({ reason: "agent-capacity", observation: full });
+    expect(noteVisibleAgentLaunchMock).toHaveBeenCalledTimes(2);
+    expect(spawnedIds()).toEqual(expect.arrayContaining(["elsewhere", "here", "global-dock"]));
   });
 
-  it("starts as many held launches as places open, and keeps the rest waiting", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    await launchAgent("held-a");
-    await launchAgent("held-b");
+  it("doesn't note a worktree's launch while the selection hasn't hydrated", async () => {
+    isMemoryPressureCriticalMock.mockResolvedValue(false);
+    noteVisibleAgentLaunchMock.mockClear();
+    await launchAgent("scoped-early", { worktreeId: "wt-a" });
     await drainMicrotasks();
 
-    places = 1;
-    await vi.advanceTimersByTimeAsync(MEMORY_PRESSURE_POLL_MS);
-    await drainMicrotasks();
-
-    expect(spawnedIds()).toEqual(["held-a"]);
-    expect(isHeld("held-b")).toBe(true);
-    expect(detailOf("held-b")?.reason).toBe("agent-capacity");
-  });
-
-  it("holds a released launch again when another view took the place first", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    await launchAgent("late-1");
-    await drainMicrotasks();
-
-    // The poll sees a place; by the time this launch asks, it has gone.
-    observeAdmissionMock.mockResolvedValueOnce({ ...full, runningAgents: 7 });
-    await vi.advanceTimersByTimeAsync(MEMORY_PRESSURE_POLL_MS);
-    await drainMicrotasks();
-
-    expect(terminalClient.spawn).not.toHaveBeenCalled();
-    expect(isHeld("late-1")).toBe(true);
-  });
-
-  it("launches anyway without asking the host", async () => {
-    await launchAgent("anyway-1");
-    await drainMicrotasks();
-    requestAdmissionMock.mockClear();
-
-    launchDespiteMemoryPressure(panelHoldKey("anyway-1"));
-    await drainMicrotasks();
-
-    expect(requestAdmissionMock).not.toHaveBeenCalled();
-    expect(spawnedIds()).toEqual(["anyway-1"]);
-    expect(isHeld("anyway-1")).toBe(false);
-  });
-
-  it("never asks about a plain shell or the assistant", async () => {
-    await usePanelStore.getState().addPanel({
-      kind: "terminal",
-      requestedId: "shell-1",
-      cwd: "/",
-      bypassLimits: true,
-    });
-    await launchAgent("assistant-1", { location: "overlay" });
-    await drainMicrotasks();
-
-    expect(requestAdmissionMock).not.toHaveBeenCalled();
-    expect(spawnedIds()).toEqual(["shell-1", "assistant-1"]);
+    expect(noteVisibleAgentLaunchMock).not.toHaveBeenCalled();
+    expect(spawnedIds()).toEqual(["scoped-early"]);
   });
 });

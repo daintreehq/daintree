@@ -7,6 +7,7 @@ import { pluralize } from "@/lib/pluralize";
 import { actionService } from "@/services/ActionService";
 import type { NotificationAction } from "@/store/notificationStore";
 import { useSystemMemoryNoticeStore } from "@/store/systemMemoryNoticeStore";
+import { setSystemMemoryEpisode } from "@/services/systemMemoryLaunchNotice";
 
 const SUPERSEDE_KEY = "system-memory-pressure";
 
@@ -104,6 +105,7 @@ function buildMemoryUseAction(): NotificationAction {
 
 export function handleSystemMemoryPressure(payload: SystemMemoryPressurePayload): void {
   if (payload.status === "normal") {
+    setSystemMemoryEpisode(null);
     // Recovery reaches every view; only the one that raised the notice answers.
     if (!noticeRaised) return;
     noticeRaised = false;
@@ -127,6 +129,7 @@ export function handleSystemMemoryPressure(payload: SystemMemoryPressurePayload)
   const reading = describeSystemMemoryReadings(payload);
   const readingMessage = formatSystemMemoryPressureMessage(payload, isMac());
   if (!reading || !readingMessage) return;
+  setSystemMemoryEpisode({ reading, workloads: payload.workloads });
   // Main publishes when the episode opens and again each time it worsens, and
   // delivery dedupes per view, so a degraded payload for a raised notice is
   // always newer and replaces it rather than being dropped (#13529).

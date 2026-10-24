@@ -10,7 +10,6 @@ import { sameFilesystemEntry } from "../../helpers/resource-lifecycle";
 import {
   fakeAgentEnv,
   installFakeAgent,
-  launchHeldFakeAgents,
   listFakeAgentLaunches,
   ptyWrite,
   readFakeAgentLaunchLog,
@@ -213,8 +212,7 @@ async function nextLaunch(start: () => Promise<void>): Promise<FakeAgentLaunch> 
   let found: FakeAgentLaunch | undefined;
   await expect
     .poll(
-      async () => {
-        await launchHeldFakeAgents(ctx.window);
+      () => {
         found = listFakeAgentLaunches(binDir).find((launch) => !before.has(launch.paneId));
         return found !== undefined;
       },
@@ -505,13 +503,7 @@ test.describe.serial("MCP: terminal notices reach the pane that asked", () => {
     expect(mainTree && featureTree, JSON.stringify(worktrees)).toBeTruthy();
 
     // One worker per worktree, launched by the orchestrator over its own bearer.
-    const workers: Array<{
-      id: string;
-      label: string;
-      path: string;
-      worktreeId: string;
-      summary: string;
-    }> = [];
+    const workers: Array<{ id: string; label: string; path: string; summary: string }> = [];
     for (const [label, tree] of [
       ["alpha", mainTree],
       ["beta", featureTree],
@@ -527,35 +519,17 @@ test.describe.serial("MCP: terminal notices reach the pane that asked", () => {
       expect(launched.results[0]).toMatchObject({ target: "claude", ok: true });
       const id = launched.results[0].result.terminalId as string;
       expect(id).toBeTruthy();
-      workers.push({
-        id,
-        label,
-        path: tree.path,
-        worktreeId: tree.id,
-        summary: `${label} survey: 3 files need tests`,
-      });
+      workers.push({ id, label, path: tree.path, summary: `${label} survey: 3 files need tests` });
     }
     const workerIds = workers.map((worker) => worker.id);
     expect(new Set([...workerIds, orchestratorId, bystanderId]).size).toBe(4);
 
     for (const worker of workers) {
-      // A held worker's override lives in its own worktree's pane.
-      const selected = await dispatchAction(
-        view,
-        "worktree.select",
-        { worktreeId: worker.worktreeId },
-        { source: "test" }
-      );
-      expect(selected.ok, JSON.stringify(selected)).toBe(true);
       // The CLI really started in its worktree with the launch prompt.
       await expect
-        .poll(
-          async () => {
-            await launchHeldFakeAgents(view);
-            return readFakeAgentLaunchLog(binDir).find((launch) => launch.paneId === worker.id);
-          },
-          { timeout: T_LONG * 2 }
-        )
+        .poll(() => readFakeAgentLaunchLog(binDir).find((launch) => launch.paneId === worker.id), {
+          timeout: T_LONG * 2,
+        })
         .toBeTruthy();
       const record = readFakeAgentLaunchLog(binDir).find((launch) => launch.paneId === worker.id)!;
       expect(sameFilesystemEntry(record.cwd, worker.path), `${record.cwd} vs ${worker.path}`).toBe(

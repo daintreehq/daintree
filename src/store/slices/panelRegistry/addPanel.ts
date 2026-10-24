@@ -34,6 +34,7 @@ import { getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { usePanelLimitStore, buildPanelLimitSnapshot } from "@/store/panelLimitStore";
 import { notify } from "@/lib/notify";
+import { noteVisibleAgentLaunch } from "@/services/systemMemoryLaunchNotice";
 import { saveNormalized } from "./persistence";
 import {
   getDefaultTitle,
@@ -62,11 +63,10 @@ import {
 } from "./worktreeIndex";
 import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
 import {
-  type AgentLaunchHoldDetail,
   clearPanelMemoryPressureMark,
   holdForMemoryPressure,
+  isMemoryPressureCritical,
   panelHoldKey,
-  requestAgentLaunchAdmission,
 } from "@/store/memoryPressureWaitStore";
 import {
   cancelDriveLeaseHold,
@@ -1431,12 +1431,30 @@ export const createAddPanelActions = (
       return id;
     }
 
+    // A fresh agent the user will see, during an open memory episode, raises the
+    // episode's figures above the grid once (#14309). Never waited on: it is a
+    // reading beside the launch, not a gate in front of it. Visibility is read
+    // now, not from the selection captured before the awaits above.
+    if (launchAgentId && options.restore !== true && !isRecoveryHold) {
+      const launched = get().panelsById[id];
+      if (
+        launched &&
+        (launched.location === "grid" || launched.location === "dock") &&
+        panelMatchesWorktreeScope(
+          launched.worktreeId,
+          getWorktreeSelectionSnapshot()?.activeWorktreeId ?? null,
+          launched.location
+        )
+      ) {
+        noteVisibleAgentLaunch();
+      }
+    }
+
     const shouldWaitForVisibleAttach = location === "grid" && isInActiveWorktree;
     // An agent pane waits out critical kernel memory pressure before it spawns
-    // (#13530), and waits while the host already runs as many agents as its
-    // memory allows (#14221), launches and restores alike. Not the assistant:
-    // it renders in its own surface, and asking it about memory is what the
-    // memory notice offers.
+    // (#13530), launches and restores alike. Not the assistant: it renders in
+    // its own surface, and asking it about memory is what the memory notice
+    // offers.
     const holdsForMemoryPressure =
       Boolean(launchAgentId) && location !== "overlay" && location !== "dialog";
     // Any pane waits for control of its project (#13913), save the assistant
@@ -1510,13 +1528,12 @@ export const createAddPanelActions = (
             clearPanelDriveLeaseMark(id);
           }
         };
-        const waitOutMemoryPressure = (detail?: AgentLaunchHoldDetail): void => {
+        const waitOutMemoryPressure = (): void => {
           // A launch control released keeps its mark through the memory wait:
           // a restart stays off it until its spawn has an answer.
           if (controlArrived) handedOn = true;
           holdForMemoryPressure(panelHoldKey(id), {
             panelId: id,
-            detail,
             resume: (anyway) =>
               terminalStartupQueue.enqueue(() => startPty(anyway, true, controlArrived)),
             isStale: () => !isStillStarting(),
@@ -1611,13 +1628,12 @@ export const createAddPanelActions = (
 
         try {
           // Asked as each launch reaches the front, not when it was queued, so
-          // a restore that tips the machine into critical, or fills it, holds
-          // the rest of itself. Started before the env await so the round
-          // trips overlap.
-          const admissionCheck =
-            holdsForMemoryPressure && !launchAnyway ? requestAgentLaunchAdmission(id) : null;
+          // a restore that tips the machine into critical holds the rest of
+          // itself. Started before the env await so the round trips overlap.
+          const pressureCheck =
+            holdsForMemoryPressure && !launchAnyway ? isMemoryPressureCritical() : null;
           const mergedEnv = await spawnEnvPromise;
-          const admission = admissionCheck !== null ? await admissionCheck : null;
+          const pressureCritical = pressureCheck !== null && (await pressureCheck);
 
           markRendererPerformance("agentlaunch.env-ready", { id });
           const _p1 = get().panelsById[id];
@@ -1632,14 +1648,7 @@ export const createAddPanelActions = (
             // queued behind it from starting. A released hold queues one at a
             // time, whatever its batch: pressure has only just eased. One that
             // was closed while its release queued goes back to waiting.
-            if (admission?.holdReason) {
-              waitOutMemoryPressure({
-                reason: admission.holdReason,
-                observation: admission.observation,
-              });
-              return;
-            }
-            if (resumed && _p1.location === "trash") {
+            if (pressureCritical || (resumed && _p1.location === "trash")) {
               waitOutMemoryPressure();
               return;
             }

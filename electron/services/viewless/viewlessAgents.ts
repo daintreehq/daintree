@@ -94,7 +94,7 @@ const PANEL_LAUNCH_IDS: ReadonlySet<string> = new Set(["browser", "dev-preview"]
 
 /** A launch that started nothing, in the shape the action's output schema requires. */
 function declined(
-  spawnStatus: "missing-cli" | "panel-limit" | "spawn-failed" | "host-memory",
+  spawnStatus: "missing-cli" | "panel-limit" | "spawn-failed",
   panelLimit: ReturnType<typeof buildPanelLimitSnapshot> | null = null,
   identity?: ReturnType<typeof buildLaunchIdentity>
 ): ActionDispatchResult {
@@ -384,14 +384,6 @@ export async function runAgentLaunch(
           focusedTerminalTitle: plan.title,
         }
       : undefined;
-
-  // A view holds a launch on a full host in its pane until there's room
-  // (#14221). With no pane to wait in, the caller hears why nothing started and
-  // can try later or another host. A failed ask never holds a launch.
-  if (launchAgentId !== undefined && deps.admitAgentLaunch) {
-    const admission = await deps.admitAgentLaunch(id).catch(() => null);
-    if (admission?.holdReason) return declined("host-memory", null, identity);
-  }
 
   try {
     await deps.invoke<string>(project.id, CHANNELS.TERMINAL_SPAWN, [

@@ -23,7 +23,6 @@ import type {
 import type { WorktreeChanges } from "../../../shared/types/git.js";
 import type { SubmoduleDeleteRisk } from "../../../shared/types/submodule.js";
 import type { WorktreeDeleteNotesReport } from "../../../shared/types/plugin.js";
-import type { AgentLaunchAdmission } from "../../../shared/types/agentLaunchAdmission.js";
 import { getDefaultPanelTitle, panelKindHasPty } from "../../../shared/config/panelKindRegistry.js";
 import {
   readDispatchTerminalCommand,
@@ -208,8 +207,6 @@ export interface ViewlessDeps {
   /** The pty-host `terminal.getStatus` answer main already serves with no view. */
   readTerminalStatus(args: unknown, projectId: string): Promise<TerminalStatusResult>;
   hostPlatform: ViewlessHostPlatform;
-  /** Ask this host to start one agent launch (#14221); absent, nothing is held. */
-  admitAgentLaunch?(terminalId: string): Promise<AgentLaunchAdmission>;
   /** Pacing for key presses and readiness polls; real timers outside tests. */
   sleep(ms: number): Promise<void>;
   /** The plugins' notes on a worktree about to be deleted, each bounded by its deadline (#13805). */

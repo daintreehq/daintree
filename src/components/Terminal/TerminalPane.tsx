@@ -582,7 +582,6 @@ function TerminalPaneComponent({
   const isHeldForMemoryPressure = useMemoryPressureWaitStore(
     (state) => state.heldPanelIds[id] === true
   );
-  const memoryHoldDetail = useMemoryPressureWaitStore((state) => state.holdDetails[id]);
   const isMarkedWaitingForControl = useDriveLeaseWaitStore(
     (state) => state.heldPanelIds[id] === true
   );
@@ -1717,7 +1716,6 @@ function TerminalPaneComponent({
             <MemoryPressureGate
               containerRef={recoveryGateRef}
               agentId={agentId}
-              detail={memoryHoldDetail}
               onLaunchAnyway={() => launchDespiteMemoryPressure(panelHoldKey(id))}
               onCancel={() => onClose(true)}
             />

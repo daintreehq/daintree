@@ -198,17 +198,10 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       terminalId: z.string().nullable(),
       location: z.enum(["grid", "dock", "background"]).nullable(),
       spawnStatus: z
-        .enum([
-          "missing-cli",
-          "panel-limit",
-          "already-launching",
-          "spawn-failed",
-          "unavailable",
-          "host-memory",
-        ])
+        .enum(["missing-cli", "panel-limit", "already-launching", "spawn-failed", "unavailable"])
         .nullable()
         .describe(
-          "Null if launched. panel-limit: see panelLimit; already-launching, host-memory: retry; missing-cli: setup opened."
+          "Null on a launch, else why not: panel-limit (see panelLimit), already-launching (retry), missing-cli (setup panel opened)."
         ),
       worktreeId: z.string().nullable(),
       worktreePath: z.string().nullable(),

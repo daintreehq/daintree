@@ -123,6 +123,8 @@ describe("describeSystemMemoryWorkloads", () => {
           { projectId: "b", projectName: null, terminalCount: 1, memoryMb: 640 },
           { projectId: null, projectName: null, terminalCount: 2, memoryMb: 2048 },
         ],
+        agentsRunning: 5,
+        memoryTotalMb: 36864,
       })
     ).toBe(
       "App's terminals (4 terminals) use 13 GB. A project's terminals (1 terminal) use 640 MB. Terminals outside any project (2 terminals) use 2.0 GB. Daintree itself uses 1.8 GB."
@@ -132,7 +134,14 @@ describe("describeSystemMemoryWorkloads", () => {
   it("returns null when nothing was measured", async () => {
     const { describeSystemMemoryWorkloads } = await load();
     expect(describeSystemMemoryWorkloads(null)).toBeNull();
-    expect(describeSystemMemoryWorkloads({ appMemoryMb: null, projects: [] })).toBeNull();
+    expect(
+      describeSystemMemoryWorkloads({
+        appMemoryMb: null,
+        projects: [],
+        agentsRunning: null,
+        memoryTotalMb: null,
+      })
+    ).toBeNull();
   });
 });
 
@@ -211,6 +220,8 @@ describe("useSystemMemoryPressureNotice", () => {
         workloads: {
           appMemoryMb: 1024,
           projects: [{ projectId: "a", projectName: "App", terminalCount: 3, memoryMb: 9216 }],
+          agentsRunning: 2,
+          memoryTotalMb: 36864,
         },
       })
     );

@@ -37,6 +37,7 @@ import {
   SWAP_PRESSURE_CONFIRM_SAMPLES,
   SWAP_PRESSURE_MIN_USED_MB,
   SWAP_USED_PERCENT_THRESHOLD,
+  countLiveAgentTerminals,
   summarizeSystemMemoryWorkloads,
   WORKLOADS_READ_TIMEOUT_MS,
 } from "../SystemMemoryPressureMonitor.js";
@@ -660,6 +661,8 @@ describe("createSystemMemoryPressureMonitor", () => {
       const workloads: SystemMemoryWorkloads = {
         appMemoryMb: 1800,
         projects: [{ projectId: "p1", projectName: "App", terminalCount: 4, memoryMb: 9000 }],
+        agentsRunning: 3,
+        memoryTotalMb: 36864,
       };
       const readWorkloads = vi.fn(async () => workloads);
       let level: KernelPressureLevel = 2;
@@ -1406,6 +1409,8 @@ describe("summarizeSystemMemoryWorkloads", () => {
         { projectId: "d", projectName: "Delta", terminalCount: 1, memoryMb: 2500 },
         { projectId: null, projectName: null, terminalCount: 1, memoryMb: 400 },
       ],
+      agentsRunning: null,
+      memoryTotalMb: null,
     });
   });
 
@@ -1416,15 +1421,54 @@ describe("summarizeSystemMemoryWorkloads", () => {
         snapshot({ terminalsAvailable: false, byProject: projects }),
         resolve
       )
-    ).toEqual({ appMemoryMb: 1500, projects: [] });
+    ).toEqual({ appMemoryMb: 1500, projects: [], agentsRunning: null, memoryTotalMb: null });
     expect(
       summarizeSystemMemoryWorkloads(snapshot({ stale: true, byProject: projects }), resolve)
-    ).toEqual({ appMemoryMb: 1500, projects: [] });
+    ).toEqual({ appMemoryMb: 1500, projects: [], agentsRunning: null, memoryTotalMb: null });
     expect(
       summarizeSystemMemoryWorkloads(
         snapshot({ electronAvailable: false, terminalsAvailable: false }),
         resolve
       )
     ).toBeNull();
+  });
+
+  it("carries the host's agent count and memory, even when every other slice failed", () => {
+    expect(
+      summarizeSystemMemoryWorkloads(
+        snapshot({ electronAvailable: false, terminalsAvailable: false }),
+        resolve,
+        { agentsRunning: 9, memoryTotalMb: 36864 }
+      )
+    ).toEqual({ appMemoryMb: null, projects: [], agentsRunning: 9, memoryTotalMb: 36864 });
+  });
+});
+
+describe("countLiveAgentTerminals", () => {
+  it("counts agents still there, idle ones included, and nothing else", () => {
+    expect(
+      countLiveAgentTerminals({
+        degraded: false,
+        terminals: [
+          { launchAgentId: "claude", agentState: "working" },
+          { launchAgentId: "codex", agentState: "idle" },
+          { launchAgentId: "claude", agentState: "exited" },
+          { launchAgentId: "claude", isExited: true },
+          { launchAgentId: "claude", hasPty: false },
+          { launchAgentId: "claude", isAssistantTerminal: true },
+          // Started by hand in a plain terminal, and a launched agent that has since quit to its shell.
+          { detectedAgentId: "codex", agentState: "working" },
+          { launchAgentId: "claude", everDetectedAgent: true },
+          {},
+        ],
+      })
+    ).toBe(3);
+  });
+
+  it("gives no count rather than a low one when a shard didn't answer", () => {
+    expect(
+      countLiveAgentTerminals({ degraded: true, terminals: [{ launchAgentId: "claude" }] })
+    ).toBeNull();
+    expect(countLiveAgentTerminals(null)).toBeNull();
   });
 });
