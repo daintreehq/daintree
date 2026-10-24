@@ -943,10 +943,12 @@ describe("SidebarContent disconnected project — issue #12576", () => {
     expect(zeroWorktreeBranch()).toContain("{worktreeLoadErrorBanner}");
   });
 
-  it("offers Retry once a lost port has stalled past any restart (#13748)", () => {
+  it("offers Retry once a lost port has stalled and automatic recovery gave up (#13748, #14313)", () => {
     // Last in the chain: a reported failure or a missing connection says more.
+    // Gated on the recovery phase too, so the banner never shows while the
+    // view is still retrying on its own.
     expect(source).toMatch(
-      /WORKTREE_DISCONNECTED_MESSAGE\s*:\s*null\) \?\?\s*\(isReconnectStalled\(\{ isReconnecting, reconnectingAt \}\)\s*\?\s*WORKTREE_RECONNECT_STALLED_MESSAGE\s*:\s*null\);/
+      /WORKTREE_DISCONNECTED_MESSAGE\s*:\s*null\) \?\?\s*\(needsReconnectRetry\(\{ isReconnecting, reconnectingAt, reconnectRecovery \}\)\s*\?\s*WORKTREE_RECONNECT_STALLED_MESSAGE\s*:\s*null\);/
     );
   });
 

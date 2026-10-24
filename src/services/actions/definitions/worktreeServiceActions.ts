@@ -8,7 +8,7 @@ import { notify } from "@/lib/notify";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { isClientBrokerError } from "@/utils/clientBrokerError";
 import { logWarn } from "@/utils/logger";
-import { isReconnectStalled } from "@/lib/worktreeReconnect";
+import { needsReconnectRetry } from "@/lib/worktreeReconnect";
 
 /**
  * A load failure worth retrying: one main or the port watchdog reported, an
@@ -16,7 +16,8 @@ import { isReconnectStalled } from "@/lib/worktreeReconnect";
  * or a port lost for longer than a host restart takes to put it back. The
  * second has no error of its own to show, which is why it used to read as an
  * empty repository instead of a connection failure (#12576); the third left a
- * view stuck on "Reconnecting…" with nothing to offer (#13748). A workspace
+ * view stuck on "Reconnecting…" with nothing to offer (#13748), and is offered
+ * once automatic recovery has stopped working on it (#14313). A workspace
  * service error is excluded — a crashed host needs `worktree.restartService`,
  * which Retry's reload can't stand in for.
  */
@@ -28,7 +29,7 @@ function hasRetryableWorktreeLoadFailure(): boolean {
   if (hasServiceError()) return false;
   if (worktreeLoadError !== null) return true;
   if (!currentProject || viewState === undefined) return false;
-  if (isReconnectStalled(viewState)) return true;
+  if (needsReconnectRetry(viewState)) return true;
   return !viewState.isInitialized && !viewState.isLoading;
 }
 

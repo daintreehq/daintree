@@ -3,6 +3,7 @@ import { useShallow } from "zustand/react/shallow";
 import type { WorktreeSnapshot, WorktreeState } from "@shared/types";
 import { compareWorktreeNames } from "@/lib/worktreeFilters";
 import { isValidPastTimestamp } from "@/utils/timestamps";
+import type { ReconnectRecoveryPhase } from "@/store/createWorktreeStore";
 import { useWorktreeStore } from "./useWorktreeStore";
 
 export interface UseWorktreesReturn {
@@ -13,6 +14,7 @@ export interface UseWorktreesReturn {
   isInitialized: boolean;
   isReconnecting: boolean;
   reconnectingAt: number | null;
+  reconnectRecovery: ReconnectRecoveryPhase;
   error: string | null;
   refresh: () => Promise<void>;
   setActive: (id: string) => void;
@@ -105,6 +107,7 @@ export function useWorktrees(options?: { enabled?: boolean }): UseWorktreesRetur
   const isInitialized = useWorktreeStore((state) => state.isInitialized);
   const isReconnecting = useWorktreeStore((state) => state.isReconnecting);
   const reconnectingAt = useWorktreeStore((state) => state.reconnectingAt);
+  const reconnectRecovery = useWorktreeStore((state) => state.reconnectRecovery);
   const error = useWorktreeStore((state) => state.error);
 
   const refresh = useCallback(async () => {
@@ -125,6 +128,7 @@ export function useWorktrees(options?: { enabled?: boolean }): UseWorktreesRetur
     isInitialized,
     isReconnecting,
     reconnectingAt,
+    reconnectRecovery,
     error,
     refresh,
     setActive,

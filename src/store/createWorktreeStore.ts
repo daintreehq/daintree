@@ -363,6 +363,8 @@ function mergeChangedDirs(
   return next;
 }
 
+export type ReconnectRecoveryPhase = "idle" | "recovering" | "exhausted";
+
 export interface WorktreeViewState {
   worktrees: Map<string, WorktreeSnapshot>;
   /**
@@ -446,6 +448,11 @@ export interface WorktreeViewState {
   isInitialized: boolean;
   isReconnecting: boolean;
   reconnectingAt: number | null;
+  /**
+   * Where the automatic Retry of a stalled reconnect stands (#14313). Owned by
+   * `startWorktreeReconnectRecovery`; the stalled banner waits for `exhausted`.
+   */
+  reconnectRecovery: ReconnectRecoveryPhase;
   /**
    * True while this project's recursive file watcher is degraded to the
    * polling/git-only fallback (ENOSPC/EMFILE). Drives the persistent
@@ -541,6 +548,7 @@ export interface WorktreeViewActions {
   setError(error: string | null): void;
   setFatalError(message: string): void;
   setReconnecting(reconnecting: boolean): void;
+  setReconnectRecovery(phase: ReconnectRecoveryPhase): void;
   setWatcherDegraded(degraded: boolean): void;
   setTopologyWatcherDark(dark: boolean): void;
 }
@@ -568,6 +576,7 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
     isInitialized: false,
     isReconnecting: false,
     reconnectingAt: null,
+    reconnectRecovery: "idle",
     watcherDegraded: false,
     topologyWatcherDark: false,
 
@@ -1435,6 +1444,10 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
             : Date.now()
           : null,
       });
+    },
+
+    setReconnectRecovery(phase: ReconnectRecoveryPhase) {
+      set({ reconnectRecovery: phase });
     },
 
     setWatcherDegraded(degraded: boolean) {

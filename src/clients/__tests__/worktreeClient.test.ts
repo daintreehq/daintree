@@ -88,3 +88,31 @@ describe("worktreeCreateResultFromOutcome", () => {
     expect(() => worktreeCreateResultFromOutcome({ branch: "b" })).toThrow();
   });
 });
+
+describe("worktreeClient.retryProjectLoad (#14313)", () => {
+  it("shares one reload between the banner's Retry and the automatic one", async () => {
+    let finish: () => void = () => {};
+    const retryProjectLoad = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        })
+    );
+    Object.defineProperty(window, "electron", {
+      value: { worktree: { retryProjectLoad } },
+      writable: true,
+      configurable: true,
+    });
+
+    const manual = worktreeClient.retryProjectLoad();
+    const automatic = worktreeClient.retryProjectLoad();
+    expect(retryProjectLoad).toHaveBeenCalledTimes(1);
+    finish();
+    await Promise.all([manual, automatic]);
+
+    // Settled, so the next Retry is a new reload.
+    void worktreeClient.retryProjectLoad();
+    expect(retryProjectLoad).toHaveBeenCalledTimes(2);
+    finish();
+  });
+});
