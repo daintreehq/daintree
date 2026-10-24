@@ -17,6 +17,7 @@ import {
 } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { useHostConnectionStore } from "@/store/hostConnectionStore";
 import { isPtyPanel, type PanelInstance, type PtyPanelData } from "@shared/types/panel";
 
 const findSessions = vi.hoisted(() => vi.fn());
@@ -40,6 +41,11 @@ const bulkOutcomes = vi.hoisted(() => {
 });
 
 const viewObservable = vi.hoisted(() => ({ value: true }));
+const remoteWindow = vi.hoisted(() => ({ value: false }));
+vi.mock("@/hooks/useHostPlatform", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/useHostPlatform")>()),
+  isRemoteWindow: () => remoteWindow.value,
+}));
 vi.mock("@/lib/viewCacheState", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/viewCacheState")>()),
   isProjectViewObservable: () => viewObservable.value,
@@ -601,6 +607,26 @@ describe("RestoreRecoveryGate — held after an unclean end (#14382)", () => {
         sessionId: "sess-p-1",
       })
     );
+  });
+
+  it("names the host whose Daintree its watchdog stopped, in a remote window (#14368)", () => {
+    remoteWindow.value = true;
+    useHostConnectionStore.getState().bindHost("h-3", "studio-03");
+    try {
+      seed(
+        hostHeld("p-1", { cause: "watchdog-deadlock", at: Date.now() - 120_000 }),
+        hostHeld("p-2", { cause: "external-kill", at: Date.now() - 120_000 })
+      );
+
+      const { unmount } = render(<RestoreRecoveryGate panelId="p-1" />);
+      expect(screen.getByText(/studio-03's watchdog stopped Daintree 2 minutes ago/)).toBeTruthy();
+      unmount();
+      render(<RestoreRecoveryGate panelId="p-2" />);
+      expect(screen.getByText(/Daintree on studio-03 was last seen running 2 minutes ago/)).toBeTruthy();
+    } finally {
+      remoteWindow.value = false;
+      useHostConnectionStore.setState({ hostId: null, hostName: null });
+    }
   });
 
   it("names an external kill as such", () => {

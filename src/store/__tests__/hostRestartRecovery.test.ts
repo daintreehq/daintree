@@ -298,13 +298,71 @@ describe("relaunchTerminalsLostToHostRestart", () => {
       return { restoreTasks: [], savedIdToRestoredId: new Map(), ghostedWorktreeIds: new Set() };
     });
 
-    const left = await relaunchTerminalsLostToHostRestart("proj-1", lost, {
+    const outcome = await relaunchTerminalsLostToHostRestart("proj-1", lost, {
       isCurrent: () => true,
       drives: () => false,
     });
 
-    expect([...left]).toEqual([["t-agent", 2]]);
+    expect([...outcome.deferred]).toEqual([["t-agent", 2]]);
+    expect(outcome).toMatchObject({ relaunched: 0, held: 0 });
     expect(addPanel).not.toHaveBeenCalled();
+  });
+
+  it("counts the agents it relaunched apart from those it put back held, and leaves plain shells out", async () => {
+    hydrate.mockResolvedValue({
+      ...savedState(),
+      appState: {
+        activeWorktreeId: "wt-main",
+        terminals: [
+          { id: "t-agent", kind: "terminal", launchAgentId: "claude" },
+          { id: "t-held", kind: "terminal", launchAgentId: "claude" },
+          { id: "t-shell", kind: "terminal" },
+        ],
+      },
+    });
+    restorePanelsPhase.mockImplementationOnce(async (_saved, ctx) => {
+      await ctx.addPanel({ kind: "terminal", requestedId: "t-agent", launchAgentId: "claude" });
+      await ctx.addPanel({
+        kind: "terminal",
+        requestedId: "t-held",
+        launchAgentId: "claude",
+        restoreRecovery: {
+          reason: "host-ended-uncleanly",
+          hostEnd: { cause: "watchdog-deadlock", at: 1 },
+        },
+      });
+      await ctx.addPanel({ kind: "terminal", requestedId: "t-shell" });
+      return { restoreTasks: [], savedIdToRestoredId: new Map(), ghostedWorktreeIds: new Set() };
+    });
+
+    const outcome = await relaunchTerminalsLostToHostRestart(
+      "proj-1",
+      new Map([
+        ["t-agent", 0],
+        ["t-held", 0],
+        ["t-shell", 0],
+      ]),
+      { isCurrent: () => true, drives: () => true }
+    );
+
+    expect(addPanel).toHaveBeenCalledTimes(3);
+    expect(outcome).toMatchObject({ relaunched: 1, held: 1 });
+    expect(outcome.deferred.size).toBe(0);
+  });
+
+  it("counts nothing the store declined to launch", async () => {
+    addPanel.mockResolvedValueOnce(null);
+    restorePanelsPhase.mockImplementationOnce(async (_saved, ctx) => {
+      await ctx.addPanel({ kind: "terminal", requestedId: "t-agent", launchAgentId: "claude" });
+      return { restoreTasks: [], savedIdToRestoredId: new Map(), ghostedWorktreeIds: new Set() };
+    });
+
+    const outcome = await relaunchTerminalsLostToHostRestart("proj-1", lost, {
+      isCurrent: () => true,
+      drives: () => true,
+    });
+
+    expect(outcome).toMatchObject({ relaunched: 0, held: 0 });
   });
 
   it("launches nothing once the view no longer drives the project", async () => {

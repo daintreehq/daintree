@@ -782,6 +782,41 @@ describe("HostServer session resume", () => {
     );
   });
 
+  it("tells a Shell how its previous process ended only when it restarted (#14368)", async () => {
+    const previousEnd = {
+      crashCause: "external-kill" as const,
+      cause: "watchdog-deadlock" as const,
+      watchdogKillReason: "unresponsive-under-pressure" as const,
+      missedBeats: 12,
+      at: 1_000,
+    };
+    // The process this Shell first meets recorded an unclean end before it:
+    // nothing ended under this Shell, so it says nothing of it.
+    let server = await startServer({ launchId: "first", previousEnd });
+    const client = startClient(server);
+    const ends: Array<{ restarted: boolean; previousEnd: unknown }> = [];
+    client.onSession(({ hostRestarted, previousEnd: end }) =>
+      ends.push({ restarted: hostRestarted, previousEnd: end })
+    );
+    await waitFor(() => ends.length === 1);
+
+    // Killed, and the next process recorded how.
+    await server.close();
+    server = await startServer({ launchId: "second", previousEnd });
+    await waitFor(() => ends.length === 2);
+
+    // A planned restart leaves no record.
+    await server.close();
+    await startServer({ launchId: "third" });
+    await waitFor(() => ends.length === 3);
+
+    expect(ends).toEqual([
+      { restarted: false, previousEnd: undefined },
+      { restarted: true, previousEnd },
+      { restarted: true, previousEnd: undefined },
+    ]);
+  });
+
   it("does not resume a session for a different client id", async () => {
     const server = await startServer();
     const seen: HostSessionContext[] = [];
