@@ -34,7 +34,11 @@ import { scheduleRevealTextReraster } from "@/utils/revealTextReraster";
 import { notify } from "@/lib/notify";
 import { actionService } from "@/services/ActionService";
 import { attachSwitchStatusTimingStore } from "@/services/projectSwitchStatusTiming";
-import { logDebug } from "@/utils/logger";
+import { logDebug, logWarn } from "@/utils/logger";
+import { startWorktreeReconnectRecovery } from "@/store/worktreeReconnectRecovery";
+import { isHostLinkUp, useHostConnectionStore } from "@/store/hostConnectionStore";
+import { isProjectViewObservable, subscribeProjectViewObservability } from "@/lib/viewCacheState";
+import { LOCAL_HOST_ID } from "@shared/types/remoteHosts";
 import {
   RENDERER_ACTIVATION_ORIGIN,
   latestActivationRequest,
@@ -76,6 +80,12 @@ interface WorktreeTickEvent {
   tick: WorktreeTick;
   epoch: string;
   seq: number;
+}
+
+/** Whether this view runs on another machine, reached over a host link. */
+function isRemoteView(): boolean {
+  const id = typeof window === "undefined" ? undefined : window.__DAINTREE_HOST_ID__?.id;
+  return typeof id === "string" && id !== LOCAL_HOST_ID;
 }
 
 function readFetchAuthFailureTarget(data: unknown): { repoName: string; remote: string } {
@@ -411,6 +421,12 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
           if (!isWake) {
             store.getState().setError(err.message);
             store.getState().setLoading(false);
+          } else if (isRemoteView()) {
+            // A port the view confirmed that can't answer is a lost connection,
+            // not a quiet one: the far end has no workspace host behind it.
+            // Reconnecting puts it in front of the user and of recovery (#14313).
+            logWarn("Worktree snapshot failed on a delivered port", { error: err.message });
+            store.getState().setReconnecting(true);
           }
         });
       trackWorktreeSnapshot(snapshot);
@@ -1116,6 +1132,23 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
         store.getState().setReconnecting(true);
       })
     );
+
+    // A remote view's port can stay lost past any restart (its view was cached
+    // while the host let the project go), and Retry has always brought it back,
+    // so the view runs it on its own before offering it (#14313).
+    if (isRemoteView()) {
+      cleanups.push(
+        startWorktreeReconnectRecovery({
+          store,
+          retry: () => worktreeClient.retryProjectLoad(),
+          hasProject: () => useProjectStore.getState().currentProject !== null,
+          isObserved: isProjectViewObservable,
+          subscribeObserved: subscribeProjectViewObservability,
+          isLinkUp: () => isHostLinkUp(useHostConnectionStore.getState()),
+          subscribeLink: (listener) => useHostConnectionStore.subscribe(listener),
+        })
+      );
+    }
 
     // If the host exhausts its restart budget, no replacement port will
     // arrive — transition to a terminal error state instead of leaving the

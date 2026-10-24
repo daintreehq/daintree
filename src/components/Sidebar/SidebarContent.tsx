@@ -127,7 +127,7 @@ import type { UseAgentLauncherReturn } from "@/hooks/useAgentLauncher";
 import type { WorktreeActions } from "@/hooks/useWorktreeActions";
 import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { CountBadge } from "@/components/ui/badge";
-import { isReconnectStalled } from "@/lib/worktreeReconnect";
+import { needsReconnectRetry } from "@/lib/worktreeReconnect";
 
 const SIDEBAR_DEFER_FILTER_MIN_WORKTREES = 60;
 
@@ -509,6 +509,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     isInitialized,
     isReconnecting,
     reconnectingAt,
+    reconnectRecovery,
     error,
   } = useWorktrees();
   const [bannerDismissed, setBannerDismissed] = useState(false);
@@ -1623,13 +1624,14 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // and takes the same banner. It yields to any service error, shown or
   // dismissed: a crashed host needs Restart, and Retry offers a fix that
   // cannot work. A lost port that no restart brought back takes it too, under
-  // the cached list: nothing else on its way will reconnect it (#13748).
+  // the cached list (#13748), once automatic recovery has given up on it
+  // (#14313).
   const loadFailure =
     worktreeLoadError ??
     (isProjectDisconnected && !isLoading && error === null
       ? WORKTREE_DISCONNECTED_MESSAGE
       : null) ??
-    (isReconnectStalled({ isReconnecting, reconnectingAt })
+    (needsReconnectRetry({ isReconnecting, reconnectingAt, reconnectRecovery })
       ? WORKTREE_RECONNECT_STALLED_MESSAGE
       : null);
 

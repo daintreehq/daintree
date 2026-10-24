@@ -24,6 +24,7 @@ let viewState: {
   error: string | null;
   isReconnecting?: boolean;
   reconnectingAt?: number | null;
+  reconnectRecovery?: "idle" | "recovering" | "exhausted";
 } | null = null;
 
 vi.mock("@/clients", () => ({
@@ -349,6 +350,22 @@ describe("worktree.retryProjectLoad (#8400)", () => {
 
     viewState = { ...base, isReconnecting: false, reconnectingAt: null };
     expect(getAction().isEnabled({})).toBe(false);
+  });
+
+  it("waits for automatic recovery of a stalled port to give up (#14313)", () => {
+    currentProject = { id: "p1" };
+    const stalled = {
+      isInitialized: true,
+      isLoading: false,
+      error: null,
+      isReconnecting: true,
+      reconnectingAt: Date.now() - 120_000,
+    };
+    viewState = { ...stalled, reconnectRecovery: "recovering" };
+    expect(getAction().isEnabled({})).toBe(false);
+
+    viewState = { ...stalled, reconnectRecovery: "exhausted" };
+    expect(getAction().isEnabled({})).toBe(true);
   });
 
   it("leaves a crashed workspace service to Restart service", () => {
