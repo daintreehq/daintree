@@ -12,6 +12,8 @@ const CRITICAL_THEME_FILES = [
   "src/components/DevPreview/ConsoleDrawer.tsx",
   "src/components/DevPreview/DevPreviewPane.tsx",
   "src/components/Layout/Toolbar.tsx",
+  "src/components/Layout/ToolbarOverflowMenu.tsx",
+  "src/components/Layout/useToolbarProjectPill.tsx",
   "src/components/Project/QuickRun.tsx",
   "src/components/Settings/GeneralTab.tsx",
   "src/components/Terminal/HybridInputBar.tsx",

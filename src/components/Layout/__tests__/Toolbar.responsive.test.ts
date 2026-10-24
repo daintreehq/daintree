@@ -3,12 +3,7 @@ import fs from "fs/promises";
 import path from "path";
 import { readToolbarCss } from "@/__tests__/support/cssManifest";
 import { extractAtRuleBlocks } from "./cssBlocks";
-
-const TOOLBAR_PATH = path.resolve(__dirname, "../Toolbar.tsx");
-// The pill's markup lives in its own component; the toolbar and the pill are read as one surface.
-const PILL_PATH = path.resolve(__dirname, "../ToolbarProjectPill.tsx");
-const readToolbarSource = async () =>
-  (await fs.readFile(TOOLBAR_PATH, "utf-8")) + (await fs.readFile(PILL_PATH, "utf-8"));
+import { readToolbarSource } from "./toolbarSource";
 
 describe("Toolbar responsive design — issue #4133", () => {
   let source: string;
@@ -408,10 +403,7 @@ describe("Toolbar overflow menu state preservation — issue #9821", () => {
   let css: string;
 
   beforeEach(async () => {
-    [source, css] = await Promise.all([
-      fs.readFile(TOOLBAR_PATH, "utf-8"),
-      Promise.resolve(readToolbarCss()),
-    ]);
+    [source, css] = await Promise.all([readToolbarSource(), Promise.resolve(readToolbarCss())]);
   });
 
   describe("per-item counts", () => {

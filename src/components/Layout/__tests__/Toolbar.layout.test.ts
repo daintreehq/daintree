@@ -2,12 +2,8 @@ import { describe, it, expect, beforeEach } from "vitest";
 import fs from "fs/promises";
 import path from "path";
 import { readToolbarCss } from "@/__tests__/support/cssManifest";
+import { readToolbarSource } from "./toolbarSource";
 
-const TOOLBAR_PATH = path.resolve(__dirname, "../Toolbar.tsx");
-// The pill's markup lives in its own component; the toolbar and the pill are read as one surface.
-const PILL_PATH = path.resolve(__dirname, "../ToolbarProjectPill.tsx");
-const readToolbarSource = async () =>
-  (await fs.readFile(TOOLBAR_PATH, "utf-8")) + (await fs.readFile(PILL_PATH, "utf-8"));
 const BUTTON_PATH = path.resolve(__dirname, "../../ui/button.tsx");
 
 describe("Toolbar layout — issue #2584 project switcher collision", () => {

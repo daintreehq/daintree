@@ -10,13 +10,9 @@ import {
 import type React from "react";
 import { Button } from "@/components/ui/button";
 import {
-  GitCommit,
-  GitPullRequest,
-  CircleDot,
   PanelLeftOpen,
   PanelLeftClose,
   MonitorPlay,
-  Ellipsis,
   Pencil,
   Pin,
   PinOff,
@@ -27,59 +23,22 @@ import {
   Check,
 } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
-import { BrandSurface, FolderTree, Folders, GitBranch } from "@/components/icons";
+import { BrandSurface, FolderTree, Folders } from "@/components/icons";
 import { buildPluginToolbarMeta } from "./pluginToolbarMeta";
-import {
-  TOOLBAR_BUTTON_METADATA,
-  getToolbarButtonGroup,
-  isToolbarButtonVisible,
-} from "./toolbarButtonMetadata";
-import { getToolbarDividerAfterIds, orderToolbarButtonsByGroup } from "./toolbarButtonGrouping";
+import { getToolbarDividerAfterIds } from "./toolbarButtonGrouping";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
-import {
-  ToolbarButtonsContextMenu,
-  type ProjectToolbarMenuState,
-} from "./ToolbarButtonsContextMenu";
-import {
-  buildToolbarVisibilityMenuRows,
-  canListToolbarButton,
-  resolveToolbarButtonMetadata,
-  type ToolbarSide,
-  type ToolbarVisibilityMenuRow,
-} from "./toolbarVisibilityMenu";
-import {
-  isToolbarButtonOnToolbar,
-  setToolbarButtonOnToolbar,
-  type ToolbarButtonPlacementState,
-} from "@/lib/toolbarVisibilityDispatch";
+import { ToolbarButtonsContextMenu } from "./ToolbarButtonsContextMenu";
 import { cn } from "@/lib/utils";
-import { formatCountExact } from "@/lib/formatCount";
 import { isMac, isLinux, isWindows } from "@/lib/platform";
 import { WINDOWS_CAPTION_WIDTH_PX } from "@shared/config/windowChrome";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { AgentButton } from "./AgentButton";
 import {
-  PluginOverflowItem,
   PluginToolbarButton,
   PluginTrayButton,
   groupPluginToolbarButtons,
-  type PluginTrayGroup,
 } from "./PluginTrayButton";
-import {
-  PluginToolbarPopover,
-  closePluginToolbarPopoverIfHidden,
-  focusToolbarControl,
-  pluginCommandFocusTarget,
-} from "./PluginToolbarPopover";
-import { PopoverAnchor } from "@/components/ui/popover";
-import { usePluginToolbarPopoverStore } from "@/store/pluginToolbarPopoverStore";
-import {
-  maxOverflowSeverity,
-  overflowedPluginBadges,
-  pluginBadgeOverflowSeverity,
-} from "./pluginToolbarBadge";
-import { usePluginToolbarBadgeStore } from "@/store/pluginToolbarBadgeStore";
-import { LAUNCHER_PANEL_ITEMS, type LauncherPanelItem } from "./launcherPanelItems";
+import { LAUNCHER_PANEL_ITEMS } from "./launcherPanelItems";
 import { deriveAgentAttentionStates } from "@/lib/agentAttentionStates";
 import { useHandBackRunIds } from "@/hooks/useRunHandBackState";
 import { DockLaunchButton } from "./DockLaunchButton";
@@ -94,32 +53,11 @@ import {
 import { buildLauncherToolbarMeta, useLauncherToolbarCatalog } from "./launcherToolbarCatalog";
 import { LauncherToolbarButton } from "./LauncherToolbarButton";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
-import {
-  pluginManifestIdFromInstanceKey,
-  projectIdFromPluginInstanceKey,
-} from "@shared/types/plugin";
-import {
-  MAX_PROMOTED_PLUGIN_BUTTONS,
-  PRESENTATION_FEATURE_BY_TOOLBAR_BUTTON,
-  presentationFeatureForToolbarButton,
-} from "@shared/config/presentationProfile";
-import { isPluginToolbarButtonIdShape } from "@shared/types/toolbar";
+import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
 import { useProjectPresentationStore } from "@/store/projectPresentationStore";
-import { copyWithToast } from "@/lib/copyWithToast";
 import { ProjectPluginMenuItems } from "@/components/Plugin/ProjectPluginMenuItems";
-import { saveProjectToolbar } from "./saveProjectToolbar";
-import type { ToolbarButtonConfig } from "@shared/config/toolbarButtonRegistry";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuGroup,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuMeta,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -134,14 +72,12 @@ import {
   useAriaKeyshortcuts,
   useDohertyGate,
   useEffectiveCombo,
-  useKeepMounted,
   useShortcutHintHover,
 } from "@/hooks";
 import type { UseProjectSwitcherPaletteReturn } from "@/hooks";
-import type { SearchableProject } from "@/hooks/useProjectSwitcherPalette";
 import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
-import { activeWorkspaceIdentity, branchChipState } from "@/lib/workspaceIdentity";
+import { activeWorkspaceIdentity } from "@/lib/workspaceIdentity";
 import { usePreferencesStore, useToolbarPreferencesStore, useVoiceRecordingStore } from "@/store";
 import { useProjectStatsStore } from "@/store/projectStatsStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
@@ -154,32 +90,19 @@ import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useShallow } from "zustand/react/shallow";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
-import {
-  agentStateDotColor,
-  STATE_LABELS,
-  type AttentionAgentState,
-} from "@/components/Worktree/terminalStateConfig";
 import { notify } from "@/lib/notify";
 import type { CliAvailability, AgentSettings } from "@shared/types";
-import { isGitBackedProject } from "@shared/types";
-import type { ForgeRepositoryStats } from "@shared/types/ipc/forge";
-import { isAgentPinned, isAgentToolbarVisible } from "../../../shared/utils/agentPinned";
+import { isAgentToolbarVisible } from "../../../shared/utils/agentPinned";
 import { isAgentLaunchable } from "../../../shared/utils/agentAvailability";
 import { projectClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
 import { isPanelLimitError } from "@/services/actions/definitions/panelLimitError";
-import {
-  LazyProjectIdentityEditor,
-  LazyProjectSwitcherPalette,
-  preloadProjectIdentityEditor,
-} from "@/lazyPanels";
+import { LazyProjectIdentityEditor, LazyProjectSwitcherPalette } from "@/lazyPanels";
 import { VoiceRecordingToolbarButton } from "./VoiceRecordingToolbarButton";
-import { ToolbarProjectPill, ToolbarProjectPillTooltipBody } from "./ToolbarProjectPill";
+import { ToolbarProjectPillTooltipBody } from "./ToolbarProjectPill";
 import { HostChip } from "@/components/Hosts/HostChip";
 import { AttachedMachinesIndicator } from "@/components/Hosts/AttachedMachinesIndicator";
 import { getViewHostId } from "@/hooks/useHostConnection";
-import { shortSha } from "@/utils/textParsing";
-import { useUIStore } from "@/store/uiStore";
 import { ForgeStatsToolbarButton, type ForgeStatsHandle } from "./ForgeStatsToolbarButton";
 import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
 import { NotificationCenterToolbarButton } from "./NotificationCenterToolbarButton";
@@ -194,18 +117,13 @@ import { HostMemoryPauseIndicator } from "./HostMemoryPauseIndicator";
 import { useHostMemoryPauseStore } from "@/store/hostMemoryPauseStore";
 import { ToolbarPortalButton } from "./ToolbarPortalButton";
 import { ToolbarAssistantButton } from "./ToolbarAssistantButton";
-import {
-  useOverflowAgentObservations,
-  useOverflowBadgeSeverity,
-  type OverflowBadgeSeverity,
-} from "./useOverflowBadgeSeverity";
+import { type OverflowBadgeSeverity } from "./useOverflowBadgeSeverity";
 import { CopyTreeMenuContent } from "@/components/CopyTree/CopyTreeRecentsPanel";
 import { useCopyTreeCompletionNotice } from "@/hooks/useCopyTreeCompletionNotice";
 import { useCopyTreeRunStore } from "@/store/copyTreeRunStore";
 import type { CopyTreeHistoryRecord } from "@shared/types";
 
-import { BUILT_IN_AGENT_IDS, isBuiltInAgentId, type BuiltInAgentId } from "@shared/config/agentIds";
-import { pluralize } from "@/lib/pluralize";
+import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { toolbarIconButtonClass } from "./toolbarItemClasses";
 import {
   OVERFLOW_KEYBINDING_BY_ID,
@@ -213,24 +131,13 @@ import {
   type OverflowMenuProps,
 } from "./ToolbarOverflowMenu";
 
+import { PROJECT_SCOPED_TOOLBAR_IDS, useToolbarItemPlacement } from "./useToolbarItemPlacement";
+import { useToolbarOverflowStatus } from "./useToolbarOverflowStatus";
+import { useToolbarOverflowEviction } from "./useToolbarOverflowEviction";
+import { useToolbarCustomization } from "./useToolbarCustomization";
+import { useToolbarProjectPill } from "./useToolbarProjectPill";
+
 export { OVERFLOW_MENU_META } from "./ToolbarOverflowMenu";
-
-// These controls are project-only visually, but their no-drag rectangles must
-// exist on first paint so secondary windows don't cache them as titlebar drag.
-const PROJECT_SCOPED_TOOLBAR_IDS = new Set<AnyToolbarButtonId>(["dev-server", "forge-stats"]);
-
-// Hardware-privacy indicators stay out of the overflow dropdown while their
-// signal is active — collapsing them under `…` would hide the only visual
-// cue that the host is recording. Voice recording joins this set only when
-// the user is actively recording (see `pinnedRightIds` derivation below);
-// future mic/camera/screen-share indicators that follow the same principle
-// should be added here.
-const VOICE_RECORDING_PINNED: ReadonlySet<AnyToolbarButtonId> = new Set(["voice-recording"]);
-const NO_PINNED_IDS: ReadonlySet<AnyToolbarButtonId> = new Set();
-
-// Buttons this project's presentation profile demotes (#13771). Stable so the
-// overflow hook's recalculate callback doesn't re-fire on every render.
-const NO_DEMOTED_IDS: ReadonlySet<AnyToolbarButtonId> = new Set();
 
 function ForgeStatsPlaceholder() {
   return (
@@ -252,7 +159,6 @@ function DevServerPlaceholder() {
     />
   );
 }
-
 
 interface ToolbarProps {
   onLaunchAgent: (type: string) => void;
@@ -299,11 +205,6 @@ export function Toolbar({
   const toolbarOverlay = useProjectToolbarOverlay();
   const projectToolbarMode = currentProject !== null && toolbarOverlay.active;
   const profileLevels = useProjectPresentationStore((s) => s.levels);
-  const setPresentationLevel = useProjectPresentationStore((s) => s.setLevel);
-  const setProjectToolbarEnabled = useProjectPresentationStore((s) => s.setToolbarEnabled);
-  const setProjectPluginButtonPromoted = useProjectPresentationStore(
-    (s) => s.setPluginButtonPromoted
-  );
   const branchChipDemoted = currentProject !== null && presentation.branchChip === "demoted";
   // The dev preview is the project's to show or hide on every surface (#14069),
   // whatever "Use this project's toolbar" says. Hidden drops the button and its
@@ -399,25 +300,12 @@ export function Toolbar({
   const canopyHidden = useCanopyStore((s) => s.mode === "hidden");
   const toolbarLayout = useToolbarPreferencesStore((state) => state.layout);
   const positionAgentButton = useToolbarPreferencesStore((state) => state.positionAgentButton);
-  const toggleButtonVisibility = useToolbarPreferencesStore(
-    (state) => state.toggleButtonVisibility
-  );
-  const setPluginButtonPromoted = useToolbarPreferencesStore(
-    (state) => state.setPluginButtonPromoted
-  );
-  const setPanelButtonOnToolbar = useToolbarPreferencesStore(
-    (state) => state.setPanelButtonOnToolbar
-  );
-  const setLauncherItemOnToolbar = useToolbarPreferencesStore(
-    (state) => state.setLauncherItemOnToolbar
-  );
   // Live subscription so pin/unpin toggles from the launcher immediately
   // update per-agent toolbar button visibility. The `agentSettings` prop is
   // sourced from `useAgentLauncher()`'s local useState which does not react to
   // store mutations, so we prefer the store value when available.
   const liveAgentSettings = useAgentSettingsStore((s) => s.settings);
   const effectiveAgentSettings = liveAgentSettings ?? agentSettings;
-  const setAgentPinned = useAgentSettingsStore((s) => s.setAgentPinned);
 
   const [isFullscreen, setIsFullscreen] = useState(false);
   // Store-derived rather than local click state so every clipboard copy spins
@@ -556,69 +444,42 @@ export function Toolbar({
     []
   );
 
-  const handleOpenProjectSettings = useCallback(() => {
-    projectSwitcher.close();
-    void actionService.dispatch("project.settings.open", undefined, { source: "user" });
-  }, [projectSwitcher]);
-
-  const handleStopProject = useCallback(
-    (projectId: string) => {
-      void projectSwitcher.stopProject(projectId);
-    },
-    [projectSwitcher]
-  );
-
-  const handleCloseProject = useCallback(
-    (projectId: string) => {
-      void projectSwitcher.removeProject(projectId);
-    },
-    [projectSwitcher]
-  );
-
-  const handleSleepProject = useCallback(
-    (projectId: string) => {
-      void projectSwitcher.sleepProject(projectId);
-    },
-    [projectSwitcher]
-  );
-
-  const handleRestartProject = useCallback(
-    (projectId: string) => {
-      projectSwitcher.restartProject(projectId);
-    },
-    [projectSwitcher]
-  );
-
-  const handleLocateProject = useCallback(
-    (projectId: string) => {
-      projectSwitcher.locateProject(projectId);
-    },
-    [projectSwitcher]
-  );
-
-  const handleMoveOrRenameProject = useCallback(
-    (projectId: string) => {
-      projectSwitcher.moveOrRenameProject(projectId);
-    },
-    [projectSwitcher]
-  );
-
-  const handleRemoveConfirmClose = useCallback(() => {
-    projectSwitcher.setRemoveConfirmProject(null);
-  }, [projectSwitcher]);
-
-  const handleSelectNewWindow = useCallback(
-    (project: SearchableProject) => {
-      if (project.isMissing) return;
-      projectSwitcher.close();
-      void actionService.dispatch(
-        "app.newWindow",
-        { projectPath: project.path },
-        { source: "user" }
-      );
-    },
-    [projectSwitcher]
-  );
+  const {
+    handleOpenProjectSettings,
+    handleStopProject,
+    handleCloseProject,
+    handleSleepProject,
+    handleRestartProject,
+    handleLocateProject,
+    handleMoveOrRenameProject,
+    handleRemoveConfirmClose,
+    handleSelectNewWindow,
+    isDropdownOpen,
+    shouldMountProjectSwitcherDropdown,
+    pillTooltipOpen,
+    handlePillTooltipOpenChange,
+    suppressPillTooltipForFocusRestore,
+    handlePillDropdownClose,
+    activeSearchableProject,
+    pillBranchLabel,
+    branchOverflowRow,
+    handleCopyProjectPath,
+    handlePillTogglePin,
+    isIdentityEditorOpen,
+    shouldMountIdentityEditor,
+    handleEditProjectIdentity,
+    handlePillContextMenuOpenChange,
+    handlePillContextMenuCloseAutoFocus,
+    handleIdentityEditorOpenChange,
+    projectSwitcherTrigger,
+  } = useToolbarProjectPill({
+    projectSwitcher,
+    currentProject,
+    workspaceIdentity,
+    activeWorktree,
+    branchName,
+    branchChipDemoted,
+  });
 
   useEffect(() => {
     return window.electron.window.onFullscreenChange(setIsFullscreen);
@@ -1374,290 +1235,39 @@ export function Toolbar({
     ]
   );
 
-  const appPinnedButtons = toolbarLayout.pinnedButtons;
-  // The app-wide pins with this project's toolbar laid over them. Only ever
-  // read: every write still goes to the app-wide store or the profile.
-  const pinnedButtons = useMemo(() => {
-    if (!projectToolbarMode) {
-      return devPreviewPlaced ? { ...appPinnedButtons, "dev-server": true } : appPinnedButtons;
-    }
-    const next = { ...appPinnedButtons };
-    for (const [buttonId, feature] of PRESENTATION_FEATURE_BY_TOOLBAR_BUTTON) {
-      // Demoted counts too: the button has to stay mounted to be folded into
-      // `…`, even where it is off app-wide.
-      const level = profileLevels[feature];
-      if (level === "shown" || level === "demoted") next[buttonId] = true;
-    }
-    if (devPreviewPlaced) next["dev-server"] = true;
-    for (const id of toolbarOverlay.promotedPluginButtons) {
-      // Plugin button ids are `{instanceKey}.{id}`; main only stores those.
-      if (isPluginToolbarButtonIdShape(id)) next[id] = true;
-    }
-    return next;
-  }, [
-    projectToolbarMode,
+  const {
     appPinnedButtons,
-    profileLevels,
-    toolbarOverlay.promotedPluginButtons,
-    devPreviewPlaced,
-  ]);
-
-  // An agent the user explicitly pinned but that sits in neither side array
-  // still has to render (#11680). Two ways to get here, and neither can be
-  // repaired in the store's `merge()` — the pin lives in `agentSettingsStore`,
-  // which loads asynchronously over IPC and isn't readable at toolbar-store
-  // hydration:
-  //   - a genuinely fresh profile, where `buildInitialAgentPinUpdates` stamps
-  //     `pinned: true` for the first few installed agents before the user has
-  //     ever touched the toolbar;
-  //   - a stale sibling project view overwriting the orderings, which reconcile
-  //     last-writer-wins and so drop a position another view just wrote (the
-  //     same window `restorePromotedPanelButtons` covers for panels).
-  // `isAgentPinned`, not `isAgentToolbarVisible`: only an explicit `true` earns
-  // a slot here. Reading the tri-state's installed-means-visible fall-through
-  // would put every installed CLI back on the toolbar, which is the crowding
-  // this issue removed.
-  const unpositionedAgentPins = useMemo(() => {
-    const onEitherSide = new Set([...toolbarLayout.leftButtons, ...toolbarLayout.rightButtons]);
-    return BUILT_IN_AGENT_IDS.filter(
-      (id) => !onEitherSide.has(id) && isAgentPinned(effectiveAgentSettings?.agents?.[id])
-    );
-  }, [toolbarLayout.leftButtons, toolbarLayout.rightButtons, effectiveAgentSettings]);
-
-  // Materialize those positions once they're knowable, so the repair is a
-  // one-frame bridge rather than a permanent ghost. A rendered-but-unpositioned
-  // button is absent from Settings → Toolbar's sortable columns and inert to
-  // `moveButton`, which reads the arrays — the first-run seeding above would
-  // otherwise leave up to five agents that can never be reordered. The action
-  // no-ops when the id already holds a position, writes nothing to
-  // `pinnedButtons`, and converges under a concurrent sibling view. One batched
-  // call, not a call per id: every insert lands at the same index, so repairing
-  // the first-run seeding one agent at a time would persist them reversed
-  // against the order they just rendered in.
-  useEffect(() => {
-    if (unpositionedAgentPins.length > 0) positionAgentButton(unpositionedAgentPins);
-  }, [unpositionedAgentPins, positionAgentButton]);
-
-  // Whichever side the launcher is on — that is where the things pinned out of
-  // it belong. Splicing unconditionally into the left would strand them away
-  // from a launcher the user moved right.
-  const launcherOnRight =
-    toolbarLayout.rightButtons.includes("launcher") &&
-    !toolbarLayout.leftButtons.includes("launcher");
-
-  // The same repair as `unpositionedAgentPins`, for the same window, over the
-  // ids a launcher item pins under (#12217). Only entries in the live catalog:
-  // a pin whose recipe belongs to another project has nothing to position, and
-  // giving it a slot here would put a dead id in the arrays every project
-  // switch.
-  const unpositionedLauncherItemPins = useMemo(() => {
-    const onEitherSide = new Set([...toolbarLayout.leftButtons, ...toolbarLayout.rightButtons]);
-    return [...launcherCatalog.keys()].filter(
-      (id) => !onEitherSide.has(id) && pinnedButtons[id] === true
-    );
-  }, [toolbarLayout.leftButtons, toolbarLayout.rightButtons, launcherCatalog, pinnedButtons]);
-
-  // Materialized for the same reason the agent repair above is: a
-  // rendered-but-unpositioned button is inert to `moveButton`, which reads the
-  // arrays, so leaving it as a render-time ghost would make a pinned recipe
-  // permanently un-reorderable. `positionAgentButton` is generic over button
-  // ids despite its name — it no-ops on an id that already holds a position and
-  // writes nothing to `pinnedButtons`.
-  useEffect(() => {
-    if (unpositionedLauncherItemPins.length > 0) {
-      positionAgentButton(unpositionedLauncherItemPins);
-    }
-  }, [unpositionedLauncherItemPins, positionAgentButton]);
-
-  // A slot for the dev preview's button in a project that shows it explicitly
-  // but whose app-wide layout holds none (#14069). Render-only, like the
-  // pins above: never positioned, so the layout stays what the user made it.
-  const unpositionedDevPreview = useMemo<AnyToolbarButtonId[]>(
-    () =>
-      devPreviewPlaced &&
-      !toolbarLayout.leftButtons.includes("dev-server") &&
-      !toolbarLayout.rightButtons.includes("dev-server")
-        ? ["dev-server"]
-        : [],
-    [devPreviewPlaced, toolbarLayout.leftButtons, toolbarLayout.rightButtons]
-  );
-
-  // Declared group per button, resolved against the live plugin registry so a
-  // contribution is classified by membership rather than by parsing its id.
-  const resolveToolbarGroup = useCallback(
-    (id: AnyToolbarButtonId) => getToolbarButtonGroup(id, pluginConfigs.has(id)),
-    [pluginConfigs]
-  );
-
-  // Every button holding a slot on each side, hidden or not. The toolbar draws
-  // the visible subset; its empty-space menu (#12355) lists the whole set, since
-  // hiding never takes a button's position away.
-  const positionedLeftButtons = useMemo(() => {
-    // Dedupe defensively so a persisted list holding a repeated id never
-    // renders duplicate pills (#10937) — the store also heals this, this is
-    // belt-and-suspenders at the render boundary.
-    const positioned = Array.from(new Set(toolbarLayout.leftButtons));
-
-    const unpositionedLeftPins = launcherOnRight
-      ? []
-      : [...unpositionedAgentPins, ...unpositionedLauncherItemPins, ...unpositionedDevPreview];
-    if (unpositionedLeftPins.length > 0) {
-      // Right after the launcher they were pinned out of, so they lead the
-      // agent run in registry order rather than trailing the positioned ones.
-      // Grouping below is what keeps the brand marks contiguous; this only
-      // decides their order within that group.
-      const launcherIndex = positioned.indexOf("launcher");
-      positioned.splice(
-        launcherIndex === -1 ? positioned.length : launcherIndex + 1,
-        0,
-        ...unpositionedLeftPins
-      );
-    }
-
-    // Grouped, not persisted order (#11681): the divider marks a group
-    // boundary, so the groups have to actually be contiguous. Ordering here
-    // rather than at the render loop means overflow, keyboard roving, and the
-    // DOM all see the same canonical sequence.
-    return orderToolbarButtonsByGroup(positioned, resolveToolbarGroup);
-  }, [
-    toolbarLayout.leftButtons,
-    launcherOnRight,
-    unpositionedAgentPins,
-    unpositionedLauncherItemPins,
-    unpositionedDevPreview,
-    resolveToolbarGroup,
-  ]);
-
-  const isButtonShownOnToolbar = useCallback(
-    (id: AnyToolbarButtonId) =>
-      // A profile overlay, applied here at the render boundary and never
-      // written into the app-wide layout (#10938): the pin survives, so
-      // showing the pill again puts it back where it was.
-      !(forgeStatsHidden && id === "forge-stats") &&
-      !(devPreviewHidden && id === "dev-server") &&
-      isToolbarButtonVisible(
-        id,
-        pinnedButtons,
-        effectiveAgentSettings,
-        agentAvailability,
-        pluginConfigs.has(id)
-      ),
-    [
-      forgeStatsHidden,
-      devPreviewHidden,
-      pinnedButtons,
-      effectiveAgentSettings,
-      agentAvailability,
-      pluginConfigs,
-    ]
-  );
-
-  // Filtering the grouped list yields the same sequence as grouping the filtered
-  // one — grouping is a stable partition.
-  const effectiveLeftButtons = useMemo(
-    () => positionedLeftButtons.filter(isButtonShownOnToolbar),
-    [positionedLeftButtons, isButtonShownOnToolbar]
-  );
-
-  const positionedRightButtons = useMemo(() => {
-    // Dedupe the persisted base before appending plugin extras, so duplicate
-    // ids (e.g. repeated `forge-stats`, #10937) can't render twice.
-    const base = Array.from(new Set(toolbarLayout.rightButtons));
-    if (
-      launcherOnRight &&
-      (unpositionedAgentPins.length > 0 ||
-        unpositionedLauncherItemPins.length > 0 ||
-        unpositionedDevPreview.length > 0)
-    ) {
-      const launcherIndex = base.indexOf("launcher");
-      base.splice(
-        launcherIndex === -1 ? base.length : launcherIndex + 1,
-        0,
-        ...unpositionedAgentPins,
-        ...unpositionedLauncherItemPins,
-        ...unpositionedDevPreview
-      );
-    }
-    const positioned = new Set([...base, ...toolbarLayout.leftButtons]);
-    // Only *promoted* contributions append — plugin buttons reach the user
-    // through the tray by default now (#11304), so the pre-tray behavior of
-    // appending every registered id would resurrect the crowding this
-    // replaced. Buttons the user already dragged into a side list keep that
-    // position and are filtered on promotion below like any other id.
-    const extra = pluginButtonIds.filter((id) => !positioned.has(id) && pinnedButtons[id] === true);
-    // Grouped like the left (#11681): the default right set is all utilities,
-    // so this changes nothing until a user moves a panel or agent across the
-    // centre — at which point the divider rules have to mean the same thing
-    // on both sides.
-    return orderToolbarButtonsByGroup([...base, ...extra], resolveToolbarGroup);
-  }, [
-    toolbarLayout.rightButtons,
-    toolbarLayout.leftButtons,
-    launcherOnRight,
-    unpositionedAgentPins,
-    unpositionedLauncherItemPins,
-    unpositionedDevPreview,
-    pluginButtonIds,
     pinnedButtons,
     resolveToolbarGroup,
-  ]);
-
-  const effectiveRightButtons = useMemo(
-    () => positionedRightButtons.filter(isButtonShownOnToolbar),
-    [positionedRightButtons, isButtonShownOnToolbar]
-  );
-
-  const availableLeftIds = useMemo(
-    () =>
-      effectiveLeftButtons.filter(
-        (id) => buttonRegistry[id]?.isAvailable || PROJECT_SCOPED_TOOLBAR_IDS.has(id)
-      ),
-    [effectiveLeftButtons, buttonRegistry]
-  );
-
-  const availableRightIds = useMemo(
-    () =>
-      effectiveRightButtons.filter(
-        (id) => buttonRegistry[id]?.isAvailable || PROJECT_SCOPED_TOOLBAR_IDS.has(id)
-      ),
-    [effectiveRightButtons, buttonRegistry]
-  );
-
-  // Pin the voice-recording indicator out of overflow while a recording is
-  // active so the user never loses sight of the live mic signal. Applies to
-  // whichever side the user has placed the button — overflow honors the
-  // pin regardless of left/right placement. The set reference is stabilized
-  // so the overflow hook's recalculate callback doesn't re-fire on every
-  // render.
-  const pinnedIds = hasActiveVoiceRecording ? VOICE_RECORDING_PINNED : NO_PINNED_IDS;
-
-  // Demoted by this project's profile: kept out of the width budget, so the
-  // row sizes as if the button weren't there, and always in the `…` menu. It
-  // stays mounted like any evicted button — the menu's forge rows open the
-  // pill's dropdowns through its ref.
-  // Keyed on a string so the set only changes when what is demoted does.
-  const demotedKey =
-    currentProject === null
-      ? ""
-      : [...PRESENTATION_FEATURE_BY_TOOLBAR_BUTTON]
-          .filter(([, feature]) => presentation[feature] === "demoted")
-          .map(([buttonId]) => buttonId)
-          .join(" ");
-  const demotedIds = useMemo<ReadonlySet<AnyToolbarButtonId>>(() => {
-    if (demotedKey === "") return NO_DEMOTED_IDS;
-    const demoted = new Set(demotedKey.split(" "));
-    return new Set(
-      [...PRESENTATION_FEATURE_BY_TOOLBAR_BUTTON.keys()].filter((id) => demoted.has(id))
-    );
-  }, [demotedKey]);
-  const measuredLeftIds = useMemo(
-    () => availableLeftIds.filter((id) => !demotedIds.has(id)),
-    [availableLeftIds, demotedIds]
-  );
-  const measuredRightIds = useMemo(
-    () => availableRightIds.filter((id) => !demotedIds.has(id)),
-    [availableRightIds, demotedIds]
-  );
+    positionedLeftButtons,
+    positionedRightButtons,
+    effectiveLeftButtons,
+    effectiveRightButtons,
+    availableLeftIds,
+    availableRightIds,
+    pinnedIds,
+    demotedIds,
+    measuredLeftIds,
+    measuredRightIds,
+  } = useToolbarItemPlacement({
+    toolbarLayout,
+    positionAgentButton,
+    projectToolbarMode,
+    profileLevels,
+    promotedPluginButtons: toolbarOverlay.promotedPluginButtons,
+    presentation,
+    hasProject: currentProject !== null,
+    devPreviewPlaced,
+    devPreviewHidden,
+    forgeStatsHidden,
+    effectiveAgentSettings,
+    agentAvailability,
+    launcherCatalog,
+    pluginButtonIds,
+    pluginConfigs,
+    buttonRegistry,
+    hasActiveVoiceRecording,
+  });
 
   const {
     leftVisible,
@@ -1681,81 +1291,22 @@ export function Toolbar({
     [availableRightIds, measuredRightOverflow, demotedIds]
   );
 
-  // Voice recording reserves layout via an always-available slot but should
-  // not pollute the overflow badge or dropdown when no session is active —
-  // an inactive placeholder pushed into overflow would otherwise count as a
-  // hidden item and trigger the warning severity in useOverflowBadgeSeverity.
-  const visibleLeftOverflow = useMemo(
-    () =>
-      hasActiveVoiceRecording
-        ? leftOverflow
-        : leftOverflow.filter((id) => id !== "voice-recording"),
-    [leftOverflow, hasActiveVoiceRecording]
-  );
-  const visibleRightOverflow = useMemo(
-    () =>
-      hasActiveVoiceRecording
-        ? rightOverflow
-        : rightOverflow.filter((id) => id !== "voice-recording"),
-    [rightOverflow, hasActiveVoiceRecording]
-  );
-
-  const leftOverflowSeverity = useOverflowBadgeSeverity(
+  const {
     visibleLeftOverflow,
-    errorCount,
-    canopyUrgentCount
-  );
-  const rightOverflowSeverity = useOverflowBadgeSeverity(
     visibleRightOverflow,
+    leftMenuSeverity,
+    rightMenuSeverity,
+    leftObservations,
+    rightObservations,
+  } = useToolbarOverflowStatus({
+    leftOverflow,
+    rightOverflow,
+    hasActiveVoiceRecording,
     errorCount,
-    canopyUrgentCount
-  );
-  const leftAgentObservations = useOverflowAgentObservations(visibleLeftOverflow);
-  const rightAgentObservations = useOverflowAgentObservations(visibleRightOverflow);
-
-  // Plugin badges folded into each `…` menu light its dot and join its name,
-  // as the built-in buttons' signals do (#9821, #13503).
-  // Derived inside the selector so a badge change that moves neither menu (a
-  // visible button's count, a tooltip) doesn't re-render the whole toolbar.
-  const [leftPluginBadgeCount, leftPluginSeverity, rightPluginBadgeCount, rightPluginSeverity] =
-    usePluginToolbarBadgeStore(
-      useShallow((s) => {
-        const left = overflowedPluginBadges(
-          visibleLeftOverflow,
-          pluginConfigs,
-          pinnedButtons,
-          s.badgesByPlugin
-        );
-        const right = overflowedPluginBadges(
-          visibleRightOverflow,
-          pluginConfigs,
-          pinnedButtons,
-          s.badgesByPlugin
-        );
-        return [
-          left.length,
-          pluginBadgeOverflowSeverity(left),
-          right.length,
-          pluginBadgeOverflowSeverity(right),
-        ] as const;
-      })
-    );
-  const leftMenuSeverity = maxOverflowSeverity(leftOverflowSeverity, leftPluginSeverity);
-  const rightMenuSeverity = maxOverflowSeverity(rightOverflowSeverity, rightPluginSeverity);
-  const leftObservations = useMemo(
-    () =>
-      leftPluginBadgeCount > 0
-        ? [...leftAgentObservations, pluralize(leftPluginBadgeCount, "plugin badge")]
-        : leftAgentObservations,
-    [leftAgentObservations, leftPluginBadgeCount]
-  );
-  const rightObservations = useMemo(
-    () =>
-      rightPluginBadgeCount > 0
-        ? [...rightAgentObservations, pluralize(rightPluginBadgeCount, "plugin badge")]
-        : rightAgentObservations,
-    [rightAgentObservations, rightPluginBadgeCount]
-  );
+    canopyUrgentCount,
+    pluginConfigs,
+    pinnedButtons,
+  });
 
   // Read from the side lists, not measured overflow: a demoted button never
   // reaches the overflow hook.
@@ -1764,69 +1315,16 @@ export function Toolbar({
   const leftVisibleSet = useMemo(() => new Set<AnyToolbarButtonId>(leftVisible), [leftVisible]);
   const rightVisibleSet = useMemo(() => new Set<AnyToolbarButtonId>(rightVisible), [rightVisible]);
 
-  // Close open dropdowns when their buttons move into overflow. Keyed on the
-  // overflow hook's own results and the demoted set, not the merged lists:
-  // those are rebuilt whenever the button registry is (a problem count, the
-  // copy-tree hover), and re-running on each would shut a forge dropdown the
-  // user just opened from the `…` menu of a project that demotes the pill.
-  useEffect(() => {
-    const overflowSet = new Set<AnyToolbarButtonId>([
-      ...measuredLeftOverflow,
-      ...measuredRightOverflow,
-      ...demotedIds,
-    ]);
-    if (overflowSet.has("forge-stats")) {
-      forgeStatsRef.current?.closeAll();
-    }
-    if (overflowSet.has("notification-center")) {
-      useUIStore.getState().closeNotificationCenter();
-    }
-    // The panel is portaled to document.body, so the wrapper's `invisible
-    // absolute` eviction styles never reach it — an open panel would strand on
-    // screen and then re-anchor to the hidden button's rect on the next resize.
-    if (overflowSet.has("copy-tree")) {
-      // The menu portals out of the toolbar, so "is focus inside it?" is a
-      // closest() against the content's marker, not a DOM-ancestor check
-      // from the trigger.
-      const focusWasInPanel =
-        document.activeElement instanceof HTMLElement &&
-        document.activeElement.closest("[data-copy-tree-panel]") !== null;
-      // The anchor is on its way to being hidden, so it can't take focus back.
-      // The overflow trigger is where the command now lives, which makes it the
-      // honest destination — otherwise a keyboard user is dropped onto <body>.
-      // It has to be the trigger on the side that swallowed the button: the
-      // other one renders display:none and untabbable when its own side has no
-      // overflow, so focusing it would be the silent no-op this prevents.
-      //
-      // Recorded, not focused here: the menu is a modal Radix menu and its
-      // FocusScope is still trapping while it is open, so a synchronous
-      // `.focus()` at this point is bounced straight back inside. The move
-      // happens in the menu's own onCloseAutoFocus, once the trap has let go.
-      if (focusWasInPanel) {
-        const side = copyTreeOnRight ? "right" : "left";
-        copyTreeEvictionFocusRef.current =
-          toolbarRef.current?.querySelector<HTMLElement>(
-            `[data-toolbar-overflow-trigger][data-toolbar-overflow-side="${side}"][data-visible="true"]`
-          ) ?? null;
-      }
-      setCopyTreeOpen(false);
-    }
-    // A plugin popover is portaled too. It hangs off a promoted button or the
-    // tray, so it closes with whichever one moved, and focus goes where the
-    // command lives now: the `…` trigger on the side that took it (see the
-    // copy-tree note above for why that side).
-    const hiddenIds: ReadonlySet<string> = overflowSet;
-    const rightHiddenIds: readonly string[] = measuredRightOverflow;
-    closePluginToolbarPopoverIfHidden(
-      (opening) =>
-        (opening.origin === "button" && hiddenIds.has(opening.buttonId)) ||
-        (opening.origin === "tray" && hiddenIds.has("plugin-tray")),
-      (opening) =>
-        rightHiddenIds.includes(opening.origin === "tray" ? "plugin-tray" : opening.buttonId)
-          ? "right"
-          : "left"
-    );
-  }, [measuredLeftOverflow, measuredRightOverflow, demotedIds, copyTreeOnRight]);
+  useToolbarOverflowEviction({
+    measuredLeftOverflow,
+    measuredRightOverflow,
+    demotedIds,
+    copyTreeOnRight,
+    toolbarRef,
+    forgeStatsRef,
+    copyTreeEvictionFocusRef,
+    setCopyTreeOpen,
+  });
 
   const renderGroupedButtons = (
     buttonIds: AnyToolbarButtonId[],
@@ -1889,200 +1387,25 @@ export function Toolbar({
     [pluginButtonIds, pluginConfigs, launcherCatalog]
   );
 
-  // The same bundle Settings → Toolbar hands the placement resolvers, so the
-  // empty-space menu's checkmarks and toggles route exactly as that page does.
-  const toolbarPlacementState = useMemo<ToolbarButtonPlacementState>(
-    () => ({
-      pinnedButtons,
-      leftButtons: toolbarLayout.leftButtons,
-      rightButtons: toolbarLayout.rightButtons,
-      agentSettings: effectiveAgentSettings,
-      agentAvailability,
-      isPluginContribution: (id) => pluginConfigs.has(id),
-    }),
-    [
-      pinnedButtons,
-      toolbarLayout.leftButtons,
-      toolbarLayout.rightButtons,
-      effectiveAgentSettings,
-      agentAvailability,
-      pluginConfigs,
-    ]
-  );
-
-  // This project's own plugin buttons (#13783). Installed plugins have no say
-  // over placement (#11304), so only these can be promoted by the profile.
-  const overlayProjectId = toolbarOverlay.projectId;
-  const ownProjectPluginButtonIds = useMemo(
-    () =>
-      overlayProjectId === null
-        ? []
-        : pluginButtonIds.filter(
-            (id) =>
-              projectIdFromPluginInstanceKey(pluginConfigs.get(id)?.pluginId ?? "") ===
-              overlayProjectId
-          ),
-    [overlayProjectId, pluginButtonIds, pluginConfigs]
-  );
-
-  // In project mode the menu also offers this project's own plugin buttons
-  // that are only in the tray, so one can be promoted from here.
-  const menuRightButtons = useMemo(() => {
-    if (!projectToolbarMode) return positionedRightButtons;
-    const listed = new Set<AnyToolbarButtonId>([
-      ...positionedLeftButtons,
-      ...positionedRightButtons,
-    ]);
-    const trayOnly = ownProjectPluginButtonIds.filter((id) => !listed.has(id));
-    return trayOnly.length === 0
-      ? positionedRightButtons
-      : [...positionedRightButtons, ...trayOnly];
-  }, [
+  const { toolbarMenuRows, handleToolbarMenuToggle, projectToolbarMenu } = useToolbarCustomization({
+    hasProject: currentProject !== null,
     projectToolbarMode,
+    toolbarOverlay,
+    presentation,
+    explicitDevPreviewLevel,
+    appPinnedButtons,
+    pinnedButtons,
+    toolbarLayout,
+    positionAgentButton,
+    effectiveAgentSettings,
+    agentAvailability,
+    pluginButtonIds,
+    pluginConfigs,
     positionedLeftButtons,
     positionedRightButtons,
-    ownProjectPluginButtonIds,
-  ]);
-
-  // Rows for the empty-space menu (#12355), built from the side lists before
-  // the visibility filter so a hidden button still has one.
-  const appToolbarMenuRows = useMemo(
-    () =>
-      buildToolbarVisibilityMenuRows(positionedLeftButtons, menuRightButtons, {
-        resolveMetadata: (id) =>
-          resolveToolbarButtonMetadata(id, TOOLBAR_BUTTON_METADATA, dynamicOverflowMeta),
-        canList: (id) =>
-          canListToolbarButton(
-            id,
-            buttonRegistry,
-            PROJECT_SCOPED_TOOLBAR_IDS,
-            effectiveAgentSettings,
-            agentAvailability
-          ),
-        isOnToolbar: (id) => isToolbarButtonOnToolbar(id, toolbarPlacementState),
-      }),
-    [
-      positionedLeftButtons,
-      menuRightButtons,
-      dynamicOverflowMeta,
-      buttonRegistry,
-      effectiveAgentSettings,
-      agentAvailability,
-      toolbarPlacementState,
-    ]
-  );
-
-  const projectPromotedCount = toolbarOverlay.promotedPluginButtons.length;
-  // In project mode a row is the profile's to change only for the closed list
-  // of demotable built-ins and this project's own plugin buttons. Every other
-  // row stays listed with its app-wide state, but can't be changed from here:
-  // this menu writes nothing app-wide while the project's toolbar is in use.
-  const toolbarMenuRows = useMemo(() => {
-    // The dev preview's row follows this project's level whichever toolbar is
-    // in use (#14069): hidden or demoted here it isn't on the toolbar, and
-    // shown explicitly it is, slot or no slot in the app-wide layout.
-    const toDevPreviewRow = (row: ToolbarVisibilityMenuRow): ToolbarVisibilityMenuRow => {
-      if (row.id !== "dev-server" || currentProject === null) return row;
-      const shown = presentation.devServer === "shown";
-      return {
-        ...row,
-        checked: explicitDevPreviewLevel !== undefined ? shown : row.checked && shown,
-      };
-    };
-    if (!projectToolbarMode) {
-      return {
-        left: appToolbarMenuRows.left.map(toDevPreviewRow),
-        right: appToolbarMenuRows.right.map(toDevPreviewRow),
-      };
-    }
-    const ownPlugins = new Set<string>(ownProjectPluginButtonIds);
-    const promoted = new Set(toolbarOverlay.promotedPluginButtons);
-    const toProjectRow = (row: ToolbarVisibilityMenuRow): ToolbarVisibilityMenuRow => {
-      if (row.id === "dev-server") return toDevPreviewRow(row);
-      const feature = presentationFeatureForToolbarButton(row.id);
-      if (feature !== undefined) {
-        const level = presentation[feature];
-        return { ...row, checked: row.checked && level !== "demoted" && level !== "hidden" };
-      }
-      if (ownPlugins.has(row.id)) {
-        // An app-wide pin isn't the profile's to take away.
-        const appPinned = appPinnedButtons[row.id] === true;
-        const atCap = !promoted.has(row.id) && projectPromotedCount >= MAX_PROMOTED_PLUGIN_BUTTONS;
-        return { ...row, disabled: appPinned || (atCap && !row.checked) };
-      }
-      return { ...row, disabled: true };
-    };
-    return {
-      left: appToolbarMenuRows.left.map(toProjectRow),
-      right: appToolbarMenuRows.right.map(toProjectRow),
-    };
-  }, [
-    currentProject,
-    explicitDevPreviewLevel,
-    projectToolbarMode,
-    appToolbarMenuRows,
-    ownProjectPluginButtonIds,
-    toolbarOverlay.promotedPluginButtons,
-    projectPromotedCount,
-    presentation,
-    appPinnedButtons,
-  ]);
-
-  const handleToolbarMenuToggle = useCallback(
-    (buttonId: AnyToolbarButtonId, side: ToolbarSide, onToolbar: boolean) => {
-      // A level this project set for the dev preview stays its to change: an
-      // app-wide write would land in every other project and change nothing here.
-      // So does showing one this project hides by default (#14069): the layout
-      // may already hold its slot, and only the project's level can draw it.
-      if (
-        buttonId === "dev-server" &&
-        currentProject !== null &&
-        (explicitDevPreviewLevel !== undefined ||
-          (onToolbar && presentation.devServer === "hidden"))
-      ) {
-        saveProjectToolbar(() =>
-          setPresentationLevel("devServer", onToolbar ? "shown" : "demoted")
-        );
-        return;
-      }
-      if (projectToolbarMode) {
-        // Never falls through to an app-wide setter below.
-        const feature = presentationFeatureForToolbarButton(buttonId);
-        if (feature !== undefined) {
-          // An explicit "shown" keeps the button on this project's toolbar
-          // even where it is off app-wide.
-          saveProjectToolbar(() => setPresentationLevel(feature, onToolbar ? "shown" : "demoted"));
-        } else if ((ownProjectPluginButtonIds as readonly string[]).includes(buttonId)) {
-          saveProjectToolbar(() => setProjectPluginButtonPromoted(buttonId, onToolbar));
-        }
-        return;
-      }
-      setToolbarButtonOnToolbar(buttonId, side, onToolbar, toolbarPlacementState, {
-        setAgentPinned,
-        toggleButtonVisibility,
-        positionAgentButton,
-        setPluginButtonPromoted,
-        setPanelButtonOnToolbar,
-        setLauncherItemOnToolbar,
-      });
-    },
-    [
-      currentProject,
-      explicitDevPreviewLevel,
-      presentation.devServer,
-      projectToolbarMode,
-      setPresentationLevel,
-      ownProjectPluginButtonIds,
-      setProjectPluginButtonPromoted,
-      toolbarPlacementState,
-      setAgentPinned,
-      toggleButtonVisibility,
-      positionAgentButton,
-      setPluginButtonPromoted,
-      setPanelButtonOnToolbar,
-      setLauncherItemOnToolbar,
-    ]
-  );
+    dynamicOverflowMeta,
+    buttonRegistry,
+  });
 
   const overflowActions = useMemo<Partial<Record<AnyToolbarButtonId, () => void>>>(
     () => ({
@@ -2203,180 +1526,6 @@ export function Toolbar({
       branchRow={branchRow}
     />
   );
-
-  const isDropdownOpen = projectSwitcher.isOpen && projectSwitcher.mode === "dropdown";
-  const shouldMountProjectSwitcherDropdown = useKeepMounted(isDropdownOpen);
-  const handleDropdownClose = useCallback(() => {
-    if (projectSwitcher.mode !== "dropdown") return;
-    projectSwitcher.close();
-  }, [projectSwitcher]);
-
-  // Project pill: Radix Tooltip reopens on focus restoration after the popover
-  // or context menu closes. Controlled state + a suppression ref (set in the
-  // popover/context-menu close handlers, cleared on the next pointer enter)
-  // mirrors the AgentButton pattern so the tooltip doesn't pop on top of a
-  // freshly-opened destination surface.
-  const [pillTooltipOpen, setPillTooltipOpen] = useState(false);
-  const isRestoringFocusPillRef = useRef(false);
-  const handlePillTooltipOpenChange = useCallback((open: boolean) => {
-    if (open && isRestoringFocusPillRef.current) return;
-    setPillTooltipOpen(open);
-  }, []);
-  const suppressPillTooltipForFocusRestore = useCallback(() => {
-    setPillTooltipOpen(false);
-    isRestoringFocusPillRef.current = true;
-  }, []);
-  const handlePillPointerEnter = useCallback(() => {
-    isRestoringFocusPillRef.current = false;
-    void preloadProjectIdentityEditor().catch(() => {});
-  }, []);
-  const handlePillDropdownClose = useCallback(() => {
-    suppressPillTooltipForFocusRestore();
-    handleDropdownClose();
-  }, [handleDropdownClose, suppressPillTooltipForFocusRestore]);
-
-  const activeSearchableProject = projectSwitcher.activeProject;
-  const headSha = activeWorktree?.isDetached ? activeWorktree.head : undefined;
-  const chipState = branchChipState(
-    workspaceIdentity.kind,
-    branchName,
-    isGitBackedProject(currentProject),
-    activeWorktree?.isDetached ?? false
-  );
-  const pillBranchLabel =
-    chipState === "visible"
-      ? branchName
-      : chipState === "detached"
-        ? `detached at ${shortSha(headSha) ?? "unknown commit"}`
-        : undefined;
-  // Beside the pill, in the left `…`, while this project demotes the chip.
-  const branchOverflowRow: OverflowMenuProps["branchRow"] = !branchChipDemoted
-    ? null
-    : chipState === "visible" && branchName
-      ? { label: branchName, copyLabel: "Branch name", copyValue: branchName }
-      : chipState === "detached" && headSha
-        ? { label: pillBranchLabel ?? headSha, copyLabel: "Commit hash", copyValue: headSha }
-        : null;
-  // Routed through the switcher row's copy so the two "Copy path" rows confirm
-  // the same way; the menu closes on select, leaving nothing else to show it.
-  const handleCopyProjectPath = useCallback(() => {
-    if (!currentProject) return;
-    projectSwitcher.copyPath(currentProject.path);
-  }, [currentProject, projectSwitcher]);
-  const handlePillTogglePin = useCallback(() => {
-    if (!currentProject) return;
-    void projectSwitcher.togglePinProject(currentProject.id);
-  }, [currentProject, projectSwitcher]);
-
-  // Which project's identity editor is open, rather than a bare boolean: a flag
-  // would outlive the project it belongs to and reopen the popover over
-  // whichever project came next.
-  const [identityEditorProjectId, setIdentityEditorProjectId] = useState<string | null>(null);
-  // Dropped rather than merely ignored when the project underneath it goes:
-  // a controlled Radix popover is not told its `open` prop fell to false, so a
-  // stale id would sit here and raise the editor again the next time that
-  // project came back. Adjusted during render for the same reason the editor's
-  // own draft re-seed is — an effect would opt this component out of the
-  // React Compiler.
-  if (identityEditorProjectId !== null && identityEditorProjectId !== currentProject?.id) {
-    setIdentityEditorProjectId(null);
-  }
-  const isIdentityEditorOpen = identityEditorProjectId !== null;
-  const shouldMountIdentityEditor = useKeepMounted(isIdentityEditorOpen);
-  // Selecting the item records the intent; the menu's own close hook spends it.
-  // Opening straight from `onSelect` would raise the popover inside the menu's
-  // teardown, where Radix still holds the focus trap and the outside-pointer
-  // lock — so the release that closed the menu can dismiss the popover it just
-  // opened. `onCloseAutoFocus` fires once the menu is actually gone.
-  // Carries WHICH project was right-clicked, not just that something was: the
-  // intent outlives the menu by an exit animation, and the project can change
-  // underneath it in that time.
-  const pendingIdentityEditRef = useRef<string | null>(null);
-  const handleEditProjectIdentity = useCallback(() => {
-    pendingIdentityEditRef.current = currentProject?.id ?? null;
-  }, [currentProject?.id]);
-  // Radix keeps the content mounted through its 120ms exit, so a menu reopened
-  // inside that window never unmounts and never reaches the close hook below.
-  // Dropping the intent on every open means the worst case is one edit request
-  // the user has visibly superseded, rather than a popover that springs open on
-  // some later, unrelated close.
-  const handlePillContextMenuOpenChange = useCallback((open: boolean) => {
-    if (!open) return;
-    pendingIdentityEditRef.current = null;
-    // Keyboard-opened menus never see the pill's hover preload.
-    void preloadProjectIdentityEditor().catch(() => {});
-  }, []);
-  const handlePillContextMenuCloseAutoFocus = useCallback(
-    (event: Event) => {
-      suppressPillTooltipForFocusRestore();
-      const pendingProjectId = pendingIdentityEditRef.current;
-      pendingIdentityEditRef.current = null;
-      // A project swapped in during the exit animation is a different project
-      // than the one the user right-clicked; drop the request rather than
-      // opening the editor over it. Every other close keeps the shared
-      // restore policy, so a keyboard dismissal lands back on the pill.
-      if (pendingProjectId === null || pendingProjectId !== currentProject?.id) return;
-      if (LazyProjectIdentityEditor.isLoaded()) {
-        event.preventDefault();
-        setIdentityEditorProjectId(pendingProjectId);
-        return;
-      }
-      // Chunk still in flight: nothing would take focus in the meantime, so let
-      // the menu restore it to the pill, and open only if the user hasn't moved
-      // on by the time it lands — a late popover must not steal focus.
-      void preloadProjectIdentityEditor().then(
-        () => {
-          const active = document.activeElement;
-          const pill = document.querySelector('[data-testid="project-switcher-trigger"]');
-          if (active !== pill && active !== document.body) return;
-          setIdentityEditorProjectId(pendingProjectId);
-        },
-        () => {}
-      );
-    },
-    [currentProject?.id, suppressPillTooltipForFocusRestore]
-  );
-  const handleIdentityEditorOpenChange = useCallback(
-    (next: boolean) => {
-      setIdentityEditorProjectId(next ? (currentProject?.id ?? null) : null);
-    },
-    [currentProject?.id]
-  );
-
-  const projectSwitcherTrigger = (
-    <ContextMenuTrigger asChild>
-      <TooltipTrigger asChild>
-        <ToolbarProjectPill
-          workspaceIdentity={workspaceIdentity}
-          emoji={currentProject?.emoji}
-          chipState={branchChipDemoted ? "hidden" : chipState}
-          branchName={branchName}
-          headSha={headSha}
-          isDropdownOpen={isDropdownOpen}
-          onClick={() => projectSwitcher.open("dropdown")}
-          onPointerEnter={handlePillPointerEnter}
-        />
-      </TooltipTrigger>
-    </ContextMenuTrigger>
-  );
-
-  const projectToolbarMenu: ProjectToolbarMenuState | null =
-    toolbarOverlay.available && currentProject !== null
-      ? {
-          active: toolbarOverlay.active,
-          onToggle: (active) => saveProjectToolbar(() => setProjectToolbarEnabled(active)),
-          branchChip:
-            toolbarOverlay.active && presentation.branchChip !== "hidden"
-              ? {
-                  checked: presentation.branchChip === "shown",
-                  onToggle: (shown) =>
-                    saveProjectToolbar(() =>
-                      setPresentationLevel("branchChip", shown ? "shown" : "demoted")
-                    ),
-                }
-              : null,
-        }
-      : null;
 
   // Static per view: a project view is bound to one host for its life.
   const remoteWindow = getViewHostId() !== null;
