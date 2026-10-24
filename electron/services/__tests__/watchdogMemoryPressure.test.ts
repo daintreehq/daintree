@@ -12,7 +12,9 @@ const NOW = 1_000_000;
 describe("isMemoryPressureExternal (#14367)", () => {
   afterEach(() => recordSwapPressure(false));
 
-  const own = (ownMb: number, sampledAt = NOW) => () => ({ ownMb, sampledAt });
+  const own =
+    (ownMb: number, sampledAt = NOW) =>
+    () => ({ ownMb, sampledAt });
 
   it("is true under confirmed pressure while Daintree holds a small share", () => {
     recordSwapPressure(true, NOW);

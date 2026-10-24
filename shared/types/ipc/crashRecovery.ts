@@ -110,9 +110,7 @@ export interface CrashLogEntry {
  *   for, and showed no sign of progress for the longest deadline.
  */
 export type WatchdogKillReason =
-  | "unresponsive"
-  | "unresponsive-under-pressure"
-  | "no-progress-under-external-pressure";
+  "unresponsive" | "unresponsive-under-pressure" | "no-progress-under-external-pressure";
 
 /**
  * Why a panel was flagged `isSuspect`. `crash-window` = created within

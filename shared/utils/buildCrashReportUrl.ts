@@ -14,8 +14,7 @@ import {
 const WATCHDOG_KILL_REASON_LABELS: Record<WatchdogKillReason, string> = {
   unresponsive: "no memory pressure seen",
   "unresponsive-under-pressure": "past the memory-pressure grace",
-  "no-progress-under-external-pressure":
-    "no progress under memory pressure from outside Daintree",
+  "no-progress-under-external-pressure": "no progress under memory pressure from outside Daintree",
 };
 
 export interface CrashReportResult {

@@ -795,7 +795,9 @@ describe("external memory pressure (#14367)", () => {
     expect(killMain).not.toHaveBeenCalled();
     ticks(1);
     expect(killMain).toHaveBeenCalledTimes(1);
-    expect(killMain.mock.calls[0]![0].missedBeats).toBe(240 + MAX_NO_PROGRESS_UNDER_EXTERNAL_PRESSURE);
+    expect(killMain.mock.calls[0]![0].missedBeats).toBe(
+      240 + MAX_NO_PROGRESS_UNDER_EXTERNAL_PRESSURE
+    );
   });
 
   it("ignores main's files when the pressure isn't external", () => {

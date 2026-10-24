@@ -273,8 +273,9 @@ describe("buildCrashReportUrl", () => {
       ).url
     );
     const plain = decodeBody(
-      buildCrashReportUrl(baseEntry({ cause: "watchdog-deadlock", watchdogKillReason: "unresponsive" }))
-        .url
+      buildCrashReportUrl(
+        baseEntry({ cause: "watchdog-deadlock", watchdogKillReason: "unresponsive" })
+      ).url
     );
     expect(external).toContain("**Cause**: Watchdog deadlock (SIGKILL)");
     expect(external).toContain("120 heartbeats with no sign of main");

@@ -101,7 +101,9 @@ const mainProgress = userDataPath
       stat: (p) => {
         try {
           const st = fs.statSync(p, { throwIfNoEntry: false });
-          return st ? { ino: st.ino, size: st.size, mtimeMs: st.mtimeMs, ctimeMs: st.ctimeMs } : null;
+          return st
+            ? { ino: st.ino, size: st.size, mtimeMs: st.mtimeMs, ctimeMs: st.ctimeMs }
+            : null;
         } catch {
           return null;
         }
