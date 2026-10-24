@@ -277,11 +277,19 @@ export function GitHubResourceListSkeleton({
               {/* The thumb as the live control draws it: its own layer under the
                   label, so its border adds nothing to the segment's height. The
                   live thumb spans the segment's whole border box, so it reaches
-                  out over the border the contrast modes add. */}
+                  out over the border the contrast modes add. Not the primitive's
+                  thumb slot, which only `SegmentedRadioGroup` may draw, so the
+                  two contrast treatments that slot gets from the host styles
+                  are restated here: a hairline outline under increased contrast
+                  and a 2px ButtonText border under forced colours. */}
               {tab.id === filterState && (
                 <span
-                  data-slot="segmented-thumb"
-                  className="absolute inset-0 contrast-more:-inset-0.5 forced-colors:-inset-px rounded-[var(--radius-sm)] bg-overlay-medium border border-text-secondary shadow-[var(--theme-shadow-ambient)]"
+                  data-skeleton-thumb=""
+                  className={cn(
+                    "absolute inset-0 rounded-[var(--radius-sm)] bg-overlay-medium border border-text-secondary shadow-[var(--theme-shadow-ambient)]",
+                    "contrast-more:-inset-0.5 contrast-more:outline contrast-more:outline-1 contrast-more:-outline-offset-1 contrast-more:outline-border-strong",
+                    "forced-colors:-inset-px forced-colors:border-2 forced-colors:border-[ButtonText]"
+                  )}
                 />
               )}
               <span className="relative block truncate">{tab.label}</span>

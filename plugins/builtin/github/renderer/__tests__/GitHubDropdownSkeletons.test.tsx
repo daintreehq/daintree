@@ -110,8 +110,8 @@ describe("GitHubResourceListSkeleton header state", () => {
   // Where the thumb actually sits, not just which segment is marked.
   const thumbs = (type: "issue" | "pr") => {
     const { container, unmount } = render(<GitHubResourceListSkeleton type={type} />);
-    const owners = Array.from(container.querySelectorAll('[data-slot="segmented-thumb"]')).map(
-      (thumb) => thumb.closest("[data-segment]")?.getAttribute("data-segment")
+    const owners = Array.from(container.querySelectorAll("[data-skeleton-thumb]")).map((thumb) =>
+      thumb.closest("[data-segment]")?.getAttribute("data-segment")
     );
     unmount();
     return owners;

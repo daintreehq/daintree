@@ -4086,7 +4086,7 @@ describe("cold panel skeleton parity (#14415)", () => {
       segments: Array.from(track.querySelectorAll("[data-segment]")).map((el) =>
         geometryOf(el, SEGMENT_GEOMETRY)
       ),
-      checked: container.querySelector('[data-slot="segmented-thumb"]')?.closest("[data-segment]")
+      checked: container.querySelector("[data-skeleton-thumb]")?.closest("[data-segment]")
         ?.textContent,
       sortLifted: container
         .querySelector('[data-header-slot="sort"]')!
