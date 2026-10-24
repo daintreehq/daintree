@@ -123,7 +123,10 @@ describe("TerminalAttachRecoveryController", () => {
     instances.clear();
   });
 
-  it("leaves a terminal destroyed mid-drain untouched", async () => {
+  it.each([
+    ["destroyed", (id: string) => instances.delete(id)],
+    ["replaced", (id: string) => instances.set(id, makeManaged(id))],
+  ])("leaves a terminal %s mid-drain untouched", async (_label, unseat) => {
     const managed = makeManaged("drain");
     managed.pendingWrites = 1;
     let releaseDrain: (() => void) | undefined;
@@ -141,10 +144,12 @@ describe("TerminalAttachRecoveryController", () => {
 
     const recovery = controller.recoverPoisonedTerminal("drain", { manual: true });
     await vi.waitFor(() => expect(releaseDrain).toBeDefined());
-    instances.delete("drain");
+    unseat("drain");
     releaseDrain?.();
 
     await expect(recovery).resolves.toBe(false);
+    // One attempt: the loop must not go back for a terminal it no longer owns.
+    expect(original.write).toHaveBeenCalledTimes(1);
     expect(deps.cancelAttachReveal).not.toHaveBeenCalled();
     expect(deps.onWebGLTerminalDestroyed).not.toHaveBeenCalled();
     expect(original.dispose).not.toHaveBeenCalled();
@@ -155,7 +160,7 @@ describe("TerminalAttachRecoveryController", () => {
 
   it("drops the replacement when the terminal is replaced while its addons load", async () => {
     const managed = makeManaged("addons");
-    const original = managed.terminal;
+    const original = managed.terminal as unknown as { write: ReturnType<typeof vi.fn> };
     instances.set("addons", managed);
     harness.addons.hold = true;
 
@@ -165,9 +170,10 @@ describe("TerminalAttachRecoveryController", () => {
     harness.addons.release?.();
 
     await expect(recovery).resolves.toBe(false);
+    expect(original.write).toHaveBeenCalledTimes(1);
     expect(harness.constructed).toHaveLength(1);
     expect(harness.constructed[0]!.dispose).toHaveBeenCalled();
-    expect(managed.terminal).toBe(original);
+    expect(managed.terminal).toBe(original as unknown as ManagedTerminal["terminal"]);
     expect(deps.makeListenerInstallDeps).not.toHaveBeenCalled();
     expect(installTerminalBoundListeners).not.toHaveBeenCalled();
     expect(deps.ensureOpened).not.toHaveBeenCalled();
