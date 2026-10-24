@@ -427,6 +427,10 @@ export class LinkClient {
   private heardShutdown(): void {
     if (this.shutdownHeardAt !== null) return;
     this.shutdownHeardAt = this.now();
+    // Said now, not after a release that can take as long as a stalled transport.
+    if (this.state.status === "connecting" && !this.state.restarting) {
+      this.setState(this.connecting(this.state.attempt));
+    }
     // A dial under way when the grace runs out would otherwise keep saying
     // restarting until it finishes, which a stalled transport makes 30 s.
     this.restartExpiry = setTimeout(() => {

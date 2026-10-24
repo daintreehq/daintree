@@ -36,6 +36,12 @@ function seed(connection: HostConnectionState | null, extra: Record<string, unkn
   });
 }
 
+/** The severity the banner's glyph (or the spinner in its place) is coloured with. */
+function glyphSeverity(container: HTMLElement): string | null {
+  const style = container.querySelector('[style*="--color-status-"]')?.getAttribute("style") ?? "";
+  return /--color-status-(\w+)/.exec(style)?.[1] ?? null;
+}
+
 beforeAll(() => {
   Object.defineProperty(window, "matchMedia", {
     writable: true,
@@ -127,6 +133,8 @@ describe("HostConnectionBanner", () => {
     });
     expect(screen.getByText("Connection to studio-01 lost. Reconnecting…")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    // Stalled past the settle window: an error with its recovery, like unreachable.
+    expect(glyphSeverity(container)).toBe("error");
   });
 
   it("never shows a drop that recovers inside the settle window, however often it backs off", () => {
@@ -192,6 +200,8 @@ describe("HostConnectionBanner", () => {
     expect([...titles].every((text) => text.includes("studio-01 is restarting…"))).toBe(true);
     expect(titles.size).toBeGreaterThan(0);
     expect(container.textContent).not.toMatch(/lost|unreachable/);
+    // Calm: the host's own word that it is coming back.
+    expect(glyphSeverity(container)).toBe("warning");
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(connect).toHaveBeenCalledWith({ hostId: "studio-01", restart: true });
   });
