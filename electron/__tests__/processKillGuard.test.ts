@@ -78,7 +78,9 @@ describe("unit-test process.kill guard (#14418)", () => {
     children.push(child);
 
     expect(process.kill(child.pid!, "SIGKILL")).toBe(true);
-    expect(await exitOf(child)).toBe("SIGKILL");
+    // Windows reports TerminateProcess as an exit code rather than a POSIX signal.
+    expect(await exitOf(child)).toBe(process.platform === "win32" ? null : "SIGKILL");
+    if (process.platform === "win32") expect(child.exitCode).toBe(1);
     expect(takeProcessKillViolations()).toEqual([]);
   });
 
