@@ -300,25 +300,17 @@ describe("HostChip", () => {
   });
 
   it("keeps a long submenu name on one line, clipped beside its state", async () => {
-    const previous = useProjectStore.getState().currentProject;
-    useProjectStore.setState({ currentProject: { id: "proj-1" } as Project });
-    try {
-      const longName = "build-runner-eu-west-07.ci.internal";
-      await renderWithHosts([host("h1", longName)]);
-      const menu = await openMenu();
-      fireEvent.keyDown(within(menu).getByText("Continue this branch on…"), {
-        key: "ArrowRight",
-      });
-      const name = await screen.findByTitle(longName);
-      const item = name.closest("[data-continue-host-id]")!;
-      expect(item).not.toBeNull();
-      expect(item.querySelector(".flex-wrap")).toBeNull();
-      expect(item.querySelector(".break-words")).toBeNull();
-      expect(name.textContent).toBe(longName);
-      expect(name.querySelector(".truncate")).not.toBeNull();
-    } finally {
-      useProjectStore.setState({ currentProject: previous });
-    }
+    const longName = "build-runner-eu-west-07.ci.internal";
+    await renderWithHosts([host("h1", longName)]);
+    const menu = await openMenu();
+    fireEvent.keyDown(within(menu).getByText("Open in new window"), { key: "ArrowRight" });
+    const name = await screen.findByTitle(longName);
+    const item = name.closest("[data-new-window-host-id]")!;
+    expect(item).not.toBeNull();
+    expect(item.querySelector(".flex-wrap")).toBeNull();
+    expect(item.querySelector(".break-words")).toBeNull();
+    expect(name.textContent).toBe(longName);
+    expect(name.querySelector(".truncate")).not.toBeNull();
   });
 
   it("uses Ctrl-click for a new window off macOS", async () => {
