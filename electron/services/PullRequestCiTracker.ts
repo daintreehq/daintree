@@ -2,7 +2,7 @@ import { logDebug } from "../utils/logger.js";
 import type { BatchLoader } from "../workspace-host/batchLoader.js";
 import type { DaintreeEventMap } from "./events.js";
 import type { InternalLinkedPR } from "./pullRequestEntry.js";
-import type { CIStatus, CIStatusState, RepoRef } from "../../shared/types/forge.js";
+import type { CIStatus, CIStatusState, PRSnapshot, RepoRef } from "../../shared/types/forge.js";
 
 // Same floor as the service's detection catch-up, on its own clock: the two
 // fetch different things, so a recent detection poll must not suppress this.
@@ -110,11 +110,7 @@ export function upstreamNamesPRHead(ref: string, headRef: string): boolean {
 // the old head's cross over the new one keeps the CI-failed alarm up for a push
 // that has not run yet. Nothing replaces it until the new head reports checks —
 // not even `pending`, which only the forge gets to say.
-export function applyHeadMove(
-  pr: InternalLinkedPR,
-  displaced: string | undefined,
-  now: number
-): void {
+function applyHeadMove(pr: InternalLinkedPR, displaced: string | undefined, now: number): void {
   const hadCi = pr.ciSeen === true || reportsChecks(pr._ciStatus);
   if (displaced !== undefined) pr.displacedHeadSha = displaced;
   pr.ciStatus = undefined;
@@ -124,6 +120,59 @@ export function applyHeadMove(
     pr.ciSeen = true;
     pr.ciGraceUntil = now + CI_HEAD_MOVE_GRACE_MS;
   }
+}
+
+// Which PR numbers the probe's changed snapshots show on a new head, judged
+// against every entry for the number before any of them advances.
+export function findMovedHeadNumbers(
+  entries: ReadonlyMap<string, InternalLinkedPR>,
+  changedSnapshotByNumber: ReadonlyMap<number, PRSnapshot>
+): Set<number> {
+  const movedHeadNumbers = new Set<number>();
+  for (const [prNumber, snap] of changedSnapshotByNumber) {
+    if (!snap.headSha) continue;
+    for (const entry of entries.values()) {
+      if (entry.number !== prNumber) continue;
+      if (entry.localHeadSha !== undefined) {
+        if (isKnownHeadDuringLocalMove(entry, snap.headSha)) continue;
+        movedHeadNumbers.add(prNumber);
+        break;
+      }
+      const ciHead = entry._ciStatus?.headSha;
+      if (
+        (entry.headSha !== undefined && entry.headSha !== snap.headSha) ||
+        (ciHead !== undefined && ciHead !== snap.headSha)
+      ) {
+        movedHeadNumbers.add(prNumber);
+        break;
+      }
+    }
+  }
+  return movedHeadNumbers;
+}
+
+// The probe moved this entry's head to `snapHead`: drop the old head's rollup
+// and any local move it superseded.
+export function applyProbeHeadMove(
+  pr: InternalLinkedPR,
+  snapHead: string | null | undefined,
+  now: number
+): void {
+  const displaced = pr.localHeadSha ?? pr.headSha ?? pr._ciStatus?.headSha;
+  applyHeadMove(pr, displaced !== snapHead ? displaced : undefined, now);
+  clearLocalHeadMove(pr);
+}
+
+// Carry the post-push guards from the entry a re-detection replaces.
+export function inheritCiTracking(next: InternalLinkedPR, prior: InternalLinkedPR): void {
+  next.headSha = prior.headSha;
+  next.localHeadSha = prior.localHeadSha;
+  next.localHeadAt = prior.localHeadAt;
+  next.localMoveBaseSha = prior.localMoveBaseSha;
+  next.displacedByLocalMove = prior.displacedByLocalMove;
+  next.displacedHeadSha = prior.displacedHeadSha;
+  next.ciSeen = prior.ciSeen;
+  if (next.state === "open") next.ciGraceUntil = prior.ciGraceUntil;
 }
 
 export interface PullRequestCiTrackerDeps {

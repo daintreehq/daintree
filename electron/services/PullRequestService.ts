@@ -9,8 +9,10 @@ import { getForgeBridge } from "../workspace-host/forgeBridge.js";
 import { BatchLoader } from "../workspace-host/batchLoader.js";
 import {
   PullRequestCiTracker,
-  applyHeadMove,
+  applyProbeHeadMove,
   clearLocalHeadMove,
+  findMovedHeadNumbers,
+  inheritCiTracking,
   isGraceOpen,
   isKnownHeadDuringLocalMove,
   upstreamNamesPRHead,
@@ -1465,27 +1467,8 @@ class PullRequestService {
       // otherwise hide the move from the rest. The stored rollup's own commit
       // counts too, which catches a push seen on the very first probe, before
       // any head marker was seeded.
-      const movedHeadNumbers = new Set<number>();
+      const movedHeadNumbers = findMovedHeadNumbers(this.detectedPRs, changedSnapshotByNumber);
       const headMoveApplied = new Set<InternalLinkedPR>();
-      for (const [prNumber, snap] of changedSnapshotByNumber) {
-        if (!snap.headSha) continue;
-        for (const entry of this.detectedPRs.values()) {
-          if (entry.number !== prNumber) continue;
-          if (entry.localHeadSha !== undefined) {
-            if (isKnownHeadDuringLocalMove(entry, snap.headSha)) continue;
-            movedHeadNumbers.add(prNumber);
-            break;
-          }
-          const ciHead = entry._ciStatus?.headSha;
-          if (
-            (entry.headSha !== undefined && entry.headSha !== snap.headSha) ||
-            (ciHead !== undefined && ciHead !== snap.headSha)
-          ) {
-            movedHeadNumbers.add(prNumber);
-            break;
-          }
-        }
-      }
 
       for (const { prNumber, pr, error } of results) {
         // Skip transient errors — a single flaky API call must not wipe PR state.
@@ -1551,14 +1534,7 @@ class PullRequestService {
             isKnownHeadDuringLocalMove(detectedPR, snap.headSha);
           if (headMoved && !movedLocally && !headMoveApplied.has(detectedPR)) {
             headMoveApplied.add(detectedPR);
-            const displaced =
-              detectedPR.localHeadSha ?? detectedPR.headSha ?? detectedPR._ciStatus?.headSha;
-            applyHeadMove(
-              detectedPR,
-              displaced !== snap?.headSha ? displaced : undefined,
-              Date.now()
-            );
-            clearLocalHeadMove(detectedPR);
+            applyProbeHeadMove(detectedPR, snap?.headSha, Date.now());
           }
 
           if (prChanged) {
@@ -1978,14 +1954,7 @@ class PullRequestService {
         for (const worktreeId of worktreeIds) {
           const prior = this.detectedPRs.get(worktreeId);
           if (prior?.number !== internalPR.number || prior.providerId !== providerId) continue;
-          internalPR.headSha = prior.headSha;
-          internalPR.localHeadSha = prior.localHeadSha;
-          internalPR.localHeadAt = prior.localHeadAt;
-          internalPR.localMoveBaseSha = prior.localMoveBaseSha;
-          internalPR.displacedByLocalMove = prior.displacedByLocalMove;
-          internalPR.displacedHeadSha = prior.displacedHeadSha;
-          internalPR.ciSeen = prior.ciSeen;
-          if (internalPR.state === "open") internalPR.ciGraceUntil = prior.ciGraceUntil;
+          inheritCiTracking(internalPR, prior);
           break;
         }
 
