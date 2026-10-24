@@ -834,6 +834,42 @@ export class TerminalNotifyService {
     if (!owner.disposed) this.publish(owner);
   }
 
+  /**
+   * The pane is replacing `targetId`'s process itself (#14369), and the user
+   * may yet refuse. Its pending notice is held rather than dropped, so the old
+   * process's exit is held with it; {@link settleTargetHold} then drops both or
+   * gives the notice back. A notice another call's wait already holds is left
+   * to that wait.
+   */
+  holdTarget(pane: OwnPane, targetId: string, hold: NoticeHold): void {
+    const notice = this.existingOwner(pane)?.notices.get(targetId);
+    if (notice === undefined) return;
+    if (notice.heldBy !== undefined && notice.heldBy.settled !== true) return;
+    notice.heldBy = hold;
+  }
+
+  /**
+   * End a {@link holdTarget} hold. A replaced process's notice goes, follow-up
+   * included, with anything it fired while held: it was about a conversation
+   * that no longer exists. A refused restart releases it unchanged.
+   */
+  settleTargetHold(pane: OwnPane, hold: NoticeHold, replaced: boolean): void {
+    if (!replaced) {
+      this.releaseHold(pane, hold, false);
+      return;
+    }
+    hold.settled = true;
+    const owner = this.existingOwner(pane);
+    if (owner === undefined) return;
+    for (const notice of [...owner.notices.values()]) {
+      if (notice.heldBy === hold) this.removeNotice(owner, notice);
+    }
+    owner.fired = owner.fired.filter((entry) => entry.heldBy !== hold);
+    this.schedule(owner);
+    this.maybeDispose(owner);
+    if (!owner.disposed) this.publish(owner);
+  }
+
   /** The chrome state for a pane, or null when it has nothing pending. */
   /**
    * Queue a lane wake on `pane`'s notice line. The caller has just checked the
@@ -2435,10 +2471,14 @@ export function relayCallArmsNotice(tool: string, args: Record<string, unknown>)
 export const NOTIFY_CLOSE_TOOLS: ReadonlySet<string> = new Set([
   "terminal.close",
   "terminal.closeOwned",
-  // The process the notice watched is replaced, and its exit would otherwise
-  // read as the agent finishing (#14369).
-  "terminal.restartOnPresetOwned",
 ]);
+
+/**
+ * The restarts that replace a target's process in place (#14369). The pane's
+ * notice for it is held across the call rather than dropped, since the user
+ * can refuse the restart and the agent then carries on.
+ */
+export const NOTIFY_RESTART_TOOLS: ReadonlySet<string> = new Set(["terminal.restartOnPresetOwned"]);
 
 /** The key paths that take `notify: true`. */
 export const NOTIFY_KEY_TOOLS: ReadonlySet<string> = new Set([
@@ -2469,6 +2509,8 @@ export type TerminalNotifyHandlers = Pick<
   | "prepareLaunch"
   | "prepareKeys"
   | "forgetTarget"
+  | "holdTarget"
+  | "settleTargetHold"
   | "supersede"
   | "releaseHold"
 >;

@@ -164,6 +164,7 @@ import {
   NOTIFY_NOT_ELIGIBLE,
   NOTIFY_CLOSE_TOOLS,
   NOTIFY_KEY_TOOLS,
+  NOTIFY_RESTART_TOOLS,
   NOTIFY_PROMPT_TOOLS,
   NOTIFY_SEND_TOOLS,
   NOTIFY_VALIDATION_ERROR,
@@ -2099,6 +2100,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // wait runs, since the wait answers the caller itself when it can; this
     // settles it once the wait ends.
     let releaseNotice: ReleaseNotice | undefined;
+    // A restart's hold on the pane's own notice for its target (#14369), ended
+    // by the dispatch's outcome or, on any other way out, released unchanged.
+    let settleRestartHold: ((replaced: boolean) => void) | undefined;
 
     // Set once the ownership gate inside the IIFE has cleared, and read by the
     // delegated dispatch and the post-cleanup release. Undefined for every
@@ -3644,6 +3648,18 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           const targetId = ownedResourceId ?? readStringArg(args, "terminalId");
           if (pane !== null && targetId !== undefined) terminalNotify.forgetTarget(pane, targetId);
         }
+        if (
+          NOTIFY_RESTART_TOOLS.has(actionId) &&
+          terminalNotify !== undefined &&
+          ownedResourceId !== undefined
+        ) {
+          const pane = tier === "external" ? null : ownPane();
+          if (pane !== null) {
+            const hold = createNoticeHold();
+            terminalNotify.holdTarget(pane, ownedResourceId, hold);
+            settleRestartHold = (replaced) => terminalNotify.settleTargetHold(pane, hold, replaced);
+          }
+        }
 
         // Short-circuit: terminal.waitUntilIdle runs in the main process. The
         // action manifest entry handles schema, tier, and audit registration; the
@@ -4468,6 +4484,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           // — "this session created it" is a fact about the session, not about
           // its privileges.
           recordDispatchOwnership(envelope);
+          settleRestartHold?.(envelope.result.ok);
+          settleRestartHold = undefined;
           // Hand the notice what the action reported: the send's submission
           // token or the launch's terminal id. A failed dispatch drops it —
           // the caller already has the error.
@@ -4655,6 +4673,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       } finally {
         pendingNotify?.cancel();
         pendingNotify = undefined;
+        settleRestartHold?.(false);
+        settleRestartHold = undefined;
         const settledOutcome = outcome ?? { kind: "throw" as const, error: new Error("unknown") };
         // Compute the duration once so the audit record and the live strip
         // report the same wall-clock, not two reads a few µs apart (#9759).

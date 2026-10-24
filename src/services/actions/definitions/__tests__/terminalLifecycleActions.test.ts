@@ -445,6 +445,7 @@ type AgentPanel = {
   launchAgentId?: string;
   agentState?: string;
   worktreeId?: string;
+  agentPresetId?: string;
 };
 
 function setRichPanelState(options: { focusedId?: string | null; panels: AgentPanel[] }) {
@@ -934,9 +935,18 @@ describe("terminal.restartOnPreset (#13746)", () => {
   // The MCP owned tool never forwards `confirmed` (#14369): the host's prompt
   // or grant is the approval, and the caller learns its brief is gone.
   it("restarts on a host-attested confirm and says the conversation was cleared", async () => {
-    const { restartTerminalOnPreset } = setRichPanelState({
-      focusedId: "p1",
-      panels: [{ id: "p1", location: "grid", detectedAgentId: "codex", agentState: "waiting" }],
+    const pane: AgentPanel = {
+      id: "p1",
+      location: "grid",
+      detectedAgentId: "codex",
+      agentState: "waiting",
+      agentPresetId: "personal",
+    };
+    const { restartTerminalOnPreset } = setRichPanelState({ focusedId: "p1", panels: [pane] });
+    // The receipt reports what the store recorded, not the id the caller sent.
+    restartTerminalOnPreset.mockImplementation(async () => {
+      pane.agentPresetId = "work-resolved";
+      return { success: true };
     });
     const run = setupActions();
 
@@ -949,7 +959,7 @@ describe("terminal.restartOnPreset (#13746)", () => {
     expect(restartTerminalOnPreset).toHaveBeenCalledWith("p1", "work");
     expect(result).toEqual({
       terminalId: "p1",
-      agentPresetId: "work",
+      agentPresetId: "work-resolved",
       agentSessionIdCleared: true,
     });
   });

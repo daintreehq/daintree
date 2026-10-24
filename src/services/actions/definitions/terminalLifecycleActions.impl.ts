@@ -311,9 +311,12 @@ export const terminalLifecycleActionRuns = {
     if (observedBefore !== undefined) {
       useRateLimitObservationStore.getState().clearObservation(targetId, observedBefore);
     }
+    // Read back rather than echoed: the store records the preset it resolved.
+    const restarted = usePanelStore.getState().panelsById[targetId];
     return {
       terminalId: targetId,
-      agentPresetId: usePanelStore.getState().panelsById[targetId]?.agentPresetId ?? presetId,
+      agentPresetId:
+        (restarted && isPtyPanel(restarted) ? restarted.agentPresetId : undefined) ?? presetId,
       agentSessionIdCleared: true as const,
     };
   },

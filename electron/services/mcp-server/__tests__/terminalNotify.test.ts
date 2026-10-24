@@ -622,6 +622,39 @@ describe("TerminalNotifyService", () => {
       expect(h.client.submitted).toEqual([]);
       expect(h.service.getPaneState(OWN)).toBeNull();
     });
+
+    // #14369: the pane replaced the process itself, so the old one's exit is
+    // not the agent finishing and the notice was about a conversation that is gone.
+    it("says nothing about a terminal the pane restarted on another preset", async () => {
+      const h = setup();
+      await h.service.whenIdle(PANE, { terminalId: "t-a" });
+      const hold = createNoticeHold();
+
+      h.service.holdTarget(PANE, "t-a", hold);
+      h.kill("t-a");
+      await flushNotice();
+      h.service.settleTargetHold(PANE, hold, true);
+      await flushNotice();
+
+      expect(h.client.submitted).toEqual([]);
+      expect(h.service.getPaneState(OWN)).toBeNull();
+    });
+
+    // The user refused the restart, so the agent carries on and the pane still
+    // needs to hear when it stops.
+    it("gives the notice back when the restart was refused", async () => {
+      const h = setup();
+      await h.service.whenIdle(PANE, { terminalId: "t-a" });
+      const hold = createNoticeHold();
+
+      h.service.holdTarget(PANE, "t-a", hold);
+      h.service.settleTargetHold(PANE, hold, false);
+      h.settle("t-a");
+      await flushNotice();
+
+      expect(h.client.submitted).toHaveLength(1);
+      expect(h.client.submitted[0].text).toContain("t-a stopped working");
+    });
   });
 
   describe("prompt delivery", () => {

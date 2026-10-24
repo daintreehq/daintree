@@ -186,6 +186,8 @@ describe("a relayed session (#13493)", () => {
         prepareLaunch: vi.fn().mockResolvedValue(pending),
         prepareKeys: vi.fn().mockResolvedValue(pending),
         forgetTarget: vi.fn(),
+        holdTarget: vi.fn(),
+        settleTargetHold: vi.fn(),
         supersede: vi.fn(),
         releaseHold: vi.fn(),
       } satisfies TerminalNotifyHandlers;

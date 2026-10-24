@@ -895,6 +895,8 @@ describe("terminal notices", () => {
       prepareLaunch: vi.fn().mockResolvedValue(pending),
       prepareKeys: vi.fn().mockResolvedValue(pending),
       forgetTarget: vi.fn(),
+      holdTarget: vi.fn(),
+      settleTargetHold: vi.fn(),
       supersede: vi.fn(),
       releaseHold: vi.fn(),
     };
@@ -1547,6 +1549,46 @@ describe("terminal notices", () => {
       await callTool(server, { name: "terminal.close", arguments: { terminalId: "t-a" } });
 
       expect(terminalNotify.forgetTarget).toHaveBeenCalledWith(OWN_PANE, "t-a");
+    });
+
+    // #14369: held, not dropped, because the user may refuse the restart.
+    it("holds the pane's own notice across a restart and drops it once the restart lands", async () => {
+      const { deps, terminalNotify, start } = notifyDeps({ origin: "help" });
+      deps.sessionStore.resourceOwnership.record("session-restart-holds", [
+        { kind: "terminal", id: "t-a" },
+      ]);
+      const server = await start("session-restart-holds");
+
+      await callTool(server, {
+        name: "terminal.restartOnPresetOwned",
+        arguments: { terminalId: "t-a", presetId: "work" },
+      });
+
+      expect(terminalNotify.forgetTarget).not.toHaveBeenCalled();
+      const hold = terminalNotify.holdTarget.mock.calls[0]?.[2];
+      expect(terminalNotify.holdTarget).toHaveBeenCalledWith(OWN_PANE, "t-a", hold);
+      expect(terminalNotify.settleTargetHold).toHaveBeenCalledWith(OWN_PANE, hold, true);
+    });
+
+    it("gives the notice back when the restart is refused", async () => {
+      const { deps, terminalNotify, dispatchAction, start } = notifyDeps({ origin: "help" });
+      dispatchAction.mockResolvedValue({
+        result: { ok: false, error: { code: "CONFIRMATION_DENIED", message: "declined" } },
+      });
+      deps.sessionStore.resourceOwnership.record("session-restart-refused", [
+        { kind: "terminal", id: "t-a" },
+      ]);
+      const server = await start("session-restart-refused");
+
+      await callTool(server, {
+        name: "terminal.restartOnPresetOwned",
+        arguments: { terminalId: "t-a", presetId: "work" },
+      });
+
+      const hold = terminalNotify.holdTarget.mock.calls[0]?.[2];
+      expect(hold).toBeDefined();
+      expect(terminalNotify.settleTargetHold).toHaveBeenCalledTimes(1);
+      expect(terminalNotify.settleTargetHold).toHaveBeenCalledWith(OWN_PANE, hold, false);
     });
 
     it("leaves a send without the flag alone", async () => {
