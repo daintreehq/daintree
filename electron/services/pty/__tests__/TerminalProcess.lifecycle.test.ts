@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { stubProcessKillForFile } from "../../../__tests__/helpers/processKillGuard.js";
 import type { IPty } from "node-pty";
 import { TerminalProcess } from "../TerminalProcess.js";
 import type { InThreadAnalysisBackend } from "../analysis/InThreadAnalysisBackend.js";
@@ -7,6 +8,12 @@ import { events } from "../../events.js";
 import { AGENT_OUTPUT_ACTIVITY_LINE_COUNT } from "../AgentActivityTemperature.js";
 import { measureVisibleContentDelta } from "../SustainedChangeTracker.js";
 import type { PanelTitleMode } from "../../../../shared/types/panel.js";
+
+vi.mock("../../../utils/windowsTreeKill.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../utils/windowsTreeKill.js")>()),
+  killWindowsProcessTrees: vi.fn(async () => []),
+  killWindowsProcessTreesSync: vi.fn(() => []),
+}));
 
 vi.mock("node-pty", () => {
   return { spawn: vi.fn() };
@@ -22,15 +29,10 @@ vi.mock("../terminalSessionPersistence.js", async (importOriginal) => {
   };
 });
 
-// Mock ptys carry made-up PIDs (123, 456) that belong to real processes on the
-// machine running the suite; the kill paths below must never reach them (#14418).
-let processKillSpy: ReturnType<typeof vi.spyOn<typeof process, "kill">>;
-beforeEach(() => {
-  processKillSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
-});
-afterEach(() => {
-  processKillSpy.mockRestore();
-});
+// Mock ptys carry made-up PIDs that belong to real processes on the machine
+// running the suite; every kill path below must land on a stub (#14418). The
+// stub outlives ProcessTreeKiller's 500ms SIGKILL escalation.
+const killSpy = stubProcessKillForFile(600);
 
 type DataCb = (data: string) => void;
 type ExitCb = (e: { exitCode: number; signal?: number }) => void;
@@ -1500,7 +1502,10 @@ describe("TerminalProcess exit status and spawn args", () => {
 
       const state = terminal.getPublicState();
       expect(state.exitCode).toBeUndefined();
-      expect(processKillSpy).toHaveBeenCalledWith(456, "SIGCONT");
+      // Windows ends the tree through the (mocked) helper instead of signals.
+      if (process.platform !== "win32") {
+        expect(killSpy()).toHaveBeenCalledWith(456, "SIGCONT");
+      }
     });
   });
 

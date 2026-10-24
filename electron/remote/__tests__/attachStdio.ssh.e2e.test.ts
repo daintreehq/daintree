@@ -6,7 +6,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 // ssh daemonises its masters away from this worker, so the unit-test kill
 // guard needs to be told they are ours before they can be signalled.
-import { adoptProcessForKill } from "../../../scripts/lib/testProcessKillGuard.js";
+import { adoptProcessForKill } from "../../__tests__/helpers/processKillGuard.js";
 
 vi.mock("electron", async () => (await import("./harness/fakeElectron.js")).electronMock);
 

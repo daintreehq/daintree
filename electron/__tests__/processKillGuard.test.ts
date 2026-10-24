@@ -1,10 +1,11 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   adoptProcessForKill,
   formatProcessKillViolations,
+  stubProcessKillForFile,
   takeProcessKillViolations,
-} from "../lib/testProcessKillGuard.js";
+} from "./helpers/processKillGuard.js";
 
 // vitest.setup.ts installs the guard; these tests drive the installed one.
 
@@ -41,6 +42,15 @@ describe("unit-test process.kill guard (#14418)", () => {
     const violations = takeProcessKillViolations();
     expect(violations).toEqual([expect.objectContaining({ pid: process.ppid, signal: "SIGCONT" })]);
     expect(formatProcessKillViolations(violations)).toContain(`process.kill(${process.ppid}`);
+  });
+
+  it("judges a numeric-string pid as the number Node would signal", () => {
+    const err = refusalOf(() => process.kill(String(process.ppid) as unknown as number, "SIGCONT"));
+
+    expect(err?.code).toBe("EPERM");
+    expect(takeProcessKillViolations()).toEqual([
+      expect.objectContaining({ pid: process.ppid, signal: "SIGCONT" }),
+    ]);
   });
 
   it("refuses the whole-group and every-process forms", () => {
@@ -144,4 +154,19 @@ describe("unit-test process.kill guard (#14418)", () => {
       }
     }
   );
+});
+
+describe("stubProcessKillForFile", () => {
+  const killSpy = stubProcessKillForFile();
+
+  it("stubs every signal for the file", () => {
+    expect(process.kill(process.ppid, "SIGKILL")).toBe(true);
+    expect(killSpy()).toHaveBeenCalledWith(process.ppid, "SIGKILL");
+    vi.restoreAllMocks();
+  });
+
+  it("is back in place after a test restored every mock", () => {
+    expect(vi.isMockFunction(process.kill)).toBe(true);
+    expect(killSpy()).not.toHaveBeenCalled();
+  });
 });

@@ -13,7 +13,7 @@ import {
   formatProcessKillViolations,
   installProcessKillGuard,
   takeProcessKillViolations,
-} from "./scripts/lib/testProcessKillGuard.js";
+} from "./electron/__tests__/helpers/processKillGuard.js";
 
 markIpcSecurityReady();
 

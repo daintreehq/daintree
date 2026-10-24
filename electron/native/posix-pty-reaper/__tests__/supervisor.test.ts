@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { adoptProcessForKill } from "../../../../scripts/lib/testProcessKillGuard.js";
+import { adoptProcessForKill } from "../../../__tests__/helpers/processKillGuard.js";
 
 // Builds the real supervisor and drives it against real process trees, so the
 // reparenting and PID-identity behaviour is proven against the kernel rather

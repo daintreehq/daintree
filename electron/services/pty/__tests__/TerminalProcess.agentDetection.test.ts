@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { stubProcessKillForFile } from "../../../__tests__/helpers/processKillGuard.js";
 import type { IPty } from "node-pty";
 import { TerminalProcess } from "../TerminalProcess.js";
 import type { SpawnContext } from "../terminalSpawn.js";
@@ -8,6 +9,12 @@ import { makeAgentResult, makeNoAgentResult } from "../../ProcessDetector.js";
 import { events } from "../../events.js";
 import { DEFAULT_SCROLLBACK } from "../types.js";
 import { PLAIN_SHELL_SCROLLBACK_MAX } from "../../../../shared/config/scrollback.js";
+
+vi.mock("../../../utils/windowsTreeKill.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../utils/windowsTreeKill.js")>()),
+  killWindowsProcessTrees: vi.fn(async () => []),
+  killWindowsProcessTreesSync: vi.fn(() => []),
+}));
 
 vi.mock("node-pty", () => {
   return { spawn: vi.fn() };
@@ -314,14 +321,9 @@ function getMockPty(terminal: TerminalProcess): MockPty {
 }
 
 // Mock ptys carry made-up PIDs that belong to real processes on the machine
-// running the suite; the kill paths below must never reach them (#14418).
-let processKillSpy: ReturnType<typeof vi.spyOn<typeof process, "kill">>;
-beforeEach(() => {
-  processKillSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
-});
-afterEach(() => {
-  processKillSpy.mockRestore();
-});
+// running the suite; every kill path below must land on a stub (#14418). The
+// stub outlives ProcessTreeKiller's 500ms SIGKILL escalation.
+stubProcessKillForFile(600);
 
 describe("TerminalProcess.handleAgentDetection — disposes ActivityMonitor on agent exit", () => {
   let terminal: TerminalProcess;

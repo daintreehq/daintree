@@ -1,4 +1,5 @@
 import type { ChildProcess, execFileSync as ExecFileSync } from "node:child_process";
+import { afterAll, beforeAll, beforeEach, vi, type MockInstance } from "vitest";
 
 export interface ProcessKillViolation {
   pid: number;
@@ -97,15 +98,21 @@ function isSelfOrDescendant(rows: Map<number, PsRow>, pid: number): boolean {
   return false;
 }
 
-/** Why this signal may not be sent, or null when the target is this worker's own. */
-function refusal(s: GuardState, pid: number): string | null {
-  if (!Number.isInteger(pid)) return null;
+// No process holds the PID: the guard answers ESRCH itself rather than
+// forwarding the signal, since the PID could be handed out in between.
+const ABSENT = Symbol("absent");
+
+/**
+ * Why this signal may not be sent, ABSENT when nothing holds the PID, or null
+ * when the target is this worker's own.
+ */
+function refusal(s: GuardState, pid: number): string | typeof ABSENT | null {
   if (pid === 0 || pid === -1) return "it addresses a whole process group or every process";
   if (pid === process.pid || isLiveChild(s, pid)) return null;
   const adopted = s.adopted.get(pid);
   if (adopted !== undefined) {
     if (identity(s, pid) === adopted) return null;
-    if (!exists(s, pid)) return null;
+    if (!exists(s, pid)) return ABSENT;
     return "the PID it adopted now belongs to a different process";
   }
 
@@ -126,10 +133,9 @@ function refusal(s: GuardState, pid: number): string | null {
     }
   }
 
-  // Not in the table (or no table: Windows, or ps failed). Only a target that
-  // is gone right now is safe to pass through, since the real call then just
-  // reports ESRCH; one that appeared since the snapshot is refused.
-  if (!exists(s, pid)) return null;
+  // Not in the table (or no table: Windows, or ps failed). A target that is
+  // gone right now gets ESRCH; one that appeared since the snapshot is refused.
+  if (!exists(s, pid)) return ABSENT;
   return "it is a live process this test worker did not spawn";
 }
 
@@ -164,28 +170,38 @@ export function installProcessKillGuard(): void {
     violations,
   };
 
-  const originalSpawn = childProcess.ChildProcess.prototype.spawn;
-  childProcess.ChildProcess.prototype.spawn = function guardedSpawn(
-    this: ChildProcess,
-    ...args: Parameters<typeof originalSpawn>
-  ) {
+  // Every spawn, fork and exec goes through this internal method, which the
+  // public typings leave out.
+  const proto = childProcess.ChildProcess.prototype as unknown as {
+    spawn(this: ChildProcess, ...args: unknown[]): unknown;
+  };
+  const originalSpawn = proto.spawn;
+  proto.spawn = function guardedSpawn(this: ChildProcess, ...args: unknown[]) {
     const result = originalSpawn.apply(this, args);
     if (typeof this.pid === "number") children.set(this.pid, new WeakRef(this));
     return result;
-  } as typeof originalSpawn;
+  };
+
+  const fail = (code: "EPERM" | "ESRCH", message: string): never => {
+    const err = new Error(`kill ${code}: ${message}`) as NodeJS.ErrnoException;
+    err.code = code;
+    err.errno = code === "EPERM" ? -1 : -3;
+    err.syscall = "kill";
+    throw err;
+  };
 
   s.guard = function guardedKill(pid: number, signal?: string | number): true {
-    if (signal !== 0) {
-      const reason = refusal(s, pid);
-      if (reason) {
+    // Node takes numeric strings too, so "456" must be judged as 456.
+    const target = typeof pid === "string" ? Number(pid) : pid;
+    if (signal !== 0 && Number.isInteger(target)) {
+      const verdict = refusal(s, target);
+      if (verdict === ABSENT) fail("ESRCH", `no process holds pid ${target}`);
+      if (typeof verdict === "string") {
         const sig = signal ?? "SIGTERM";
-        const message = `kill EPERM: the unit-test guard refused process.kill(${pid}, ${String(sig)}) because ${reason}`;
-        const err = new Error(message) as NodeJS.ErrnoException;
-        err.code = "EPERM";
-        err.errno = -1;
-        err.syscall = "kill";
-        violations.push({ pid, signal: sig, reason, stack: err.stack ?? message });
-        throw err;
+        const message = `the unit-test guard refused process.kill(${target}, ${String(sig)}) because ${verdict}`;
+        const stack = new Error(message).stack ?? message;
+        violations.push({ pid: target, signal: sig, reason: verdict, stack });
+        fail("EPERM", message);
       }
     }
     return original.call(process, pid, signal);
@@ -226,4 +242,32 @@ export function formatProcessKillViolations(violations: ProcessKillViolation[]):
       (v) => `\nprocess.kill(${v.pid}, ${String(v.signal)}): ${v.reason}\n${v.stack}`
     ),
   ].join("\n");
+}
+
+/**
+ * Stub `process.kill` for every test in the calling file, for suites that hand
+ * mock PIDs to a real kill path. The stub stays in place across tests and
+ * outlives the last one by `settleMs`, so a SIGKILL escalation a test armed
+ * with real timers lands on the stub rather than on the guard in a later test
+ * or file. Returns a getter for the current spy, cleared before each test.
+ */
+export function stubProcessKillForFile(settleMs = 0): () => MockInstance<typeof process.kill> {
+  let spy: MockInstance<typeof process.kill> | null = null;
+  const install = () => {
+    spy = vi.spyOn(process, "kill").mockImplementation(() => true);
+  };
+  beforeAll(install);
+  beforeEach(() => {
+    // A test's vi.restoreAllMocks() takes the stub down with its own spies.
+    if (!spy || !vi.isMockFunction(process.kill)) install();
+    else spy.mockClear();
+  });
+  afterAll(async () => {
+    if (settleMs > 0) {
+      vi.useRealTimers();
+      await new Promise((resolve) => setTimeout(resolve, settleMs));
+    }
+    spy?.mockRestore();
+  });
+  return () => spy!;
 }
