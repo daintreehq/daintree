@@ -1,5 +1,5 @@
 // The runtime of `@daintreehq/plugin-ui`, served to plugin views through the
-// host import map. Every export here is public contract: vite.config.ts pins
+// host import map. Every export here is public contract: the host build pins
 // the names in HOST_FACADE_REQUIRED_EXPORTS and the SDK declares their types in
 // packages/plugin-sdk/plugin-ui.d.ts. Nothing here may import app code
 // statically; the host components load through `fromKit`.

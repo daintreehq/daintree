@@ -100,7 +100,9 @@ const problems = validateKitBundle({
     readFileSync(path.join(ROOT, "packages/plugin-vite/src/hostImportMap.ts"), "utf-8"),
     "HOST_IMPORTMAP_SPECIFIERS"
   ),
-  requiredExports: facadeRequiredExports(readFileSync(path.join(ROOT, "vite.config.ts"), "utf-8")),
+  requiredExports: facadeRequiredExports(
+    readFileSync(path.join(ROOT, "scripts/lib/host-facade-exports.ts"), "utf-8")
+  ),
 });
 if (problems.length > 0) {
   console.error(`[build-plugin-ui-browser] the kit cannot ship:\n  ${problems.join("\n  ")}`);

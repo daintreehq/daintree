@@ -109,7 +109,7 @@ function readFirstRenderSeeds() {
   if (!existsSync(SEEDS_FILE)) {
     console.error(`::error::first-render seeds not found at ${path.relative(ROOT, SEEDS_FILE)}`);
     console.error(
-      "   Run `vite build` first (seeds artifact emitted by firstRenderSeedsPlugin in vite.config.ts)."
+      "   Run `vite build` first (seeds artifact emitted by firstRenderSeedsPlugin in scripts/lib/vite-build-diagnostics.ts)."
     );
     process.exit(1);
   }

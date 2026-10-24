@@ -32,7 +32,7 @@ const __filename = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(__filename), "..");
 const DIST = path.join(ROOT, "dist");
 const MANIFEST_FILE = path.join(DIST, ".vite", "manifest.json");
-// Sidecar emitted by chunkModulesPlugin in vite.config.ts: chunk name -> sorted
+// Sidecar emitted by chunkModulesPlugin in scripts/lib/vite-build-diagnostics.ts: chunk name -> sorted
 // repo-relative module IDs. Absent on check-only runs that don't rebuild — the
 // module-set gate stays inactive in that case (see compareReport).
 const CHUNK_MODULES_FILE = path.join(DIST, "chunk-modules.json");

@@ -63,11 +63,11 @@ const ROOT = path.resolve(__dirname, "../../..");
 
 /**
  * The `@daintreehq/plugin-ui` entry of `HOST_FACADE_REQUIRED_EXPORTS`, read
- * from source: the config is not importable from a test, and the host build
+ * from source (scripts/lib/host-facade-exports.ts), since the host build
  * holds the facade to this list exactly.
  */
 function facadeRequiredExports(): string[] {
-  const config = readFileSync(path.join(ROOT, "vite.config.ts"), "utf-8");
+  const config = readFileSync(path.join(ROOT, "scripts/lib/host-facade-exports.ts"), "utf-8");
   const table = config.slice(config.indexOf("const HOST_FACADE_REQUIRED_EXPORTS"));
   const entry = /"@daintreehq\/plugin-ui":\s*\[([^\]]*)\]/.exec(table);
   if (!entry) throw new Error("no @daintreehq/plugin-ui entry in HOST_FACADE_REQUIRED_EXPORTS");
