@@ -5,6 +5,9 @@ import type net from "node:net";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+// ssh daemonises its masters away from this worker, so the unit-test kill
+// guard needs to be told they are ours before they can be signalled.
+import { adoptProcessForKill } from "../../../scripts/lib/testProcessKillGuard.js";
 
 vi.mock("electron", async () => (await import("./harness/fakeElectron.js")).electronMock);
 
@@ -246,6 +249,7 @@ async function killEverything(): Promise<void> {
   for (const row of await listProcesses().catch(() => [])) {
     if (row.command.includes(root) && row.pid !== process.pid) {
       try {
+        adoptProcessForKill(row.pid);
         process.kill(row.pid, "SIGKILL");
       } catch {
         // Already gone.
@@ -504,6 +508,7 @@ describe.skipIf(!ENABLED)(
 
         for (let i = 0; i < 50; i++) say(`b${i};`);
         const killedAt = performance.now();
+        adoptProcessForKill(before!);
         process.kill(before!, "SIGKILL");
         for (let i = 0; i < 50; i++) say(`c${i};`);
         await waitUntil(() => !r.isConnected(), "the Shell to notice the master died", 15_000);
@@ -595,6 +600,7 @@ describe.skipIf(!ENABLED)(
         // in between is observable rather than a race with the redial.
         sshRouting.blocked = true;
         try {
+          adoptProcessForKill(master!);
           process.kill(master!, "SIGKILL");
           await waitUntil(() => !r.isConnected(), "the Shell to notice the master died", 15_000);
           await waitUntil(() => ports.list().length === 0, "the forward to be retired");

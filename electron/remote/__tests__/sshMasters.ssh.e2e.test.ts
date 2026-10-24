@@ -1,6 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+// ssh daemonises its masters away from this worker, so the unit-test kill
+// guard needs to be told they are ours before they can be signalled.
+import { adoptProcessForKill } from "../../../scripts/lib/testProcessKillGuard.js";
 import {
   closeSshMaster,
   closeSshMasters,
@@ -81,6 +84,7 @@ describe.skipIf(!ENABLED)(
         for (const row of await listProcesses().catch(() => [])) {
           if (row.command.includes(root) && row.pid !== process.pid) {
             try {
+              adoptProcessForKill(row.pid);
               process.kill(row.pid, "SIGKILL");
             } catch {
               // Already gone.

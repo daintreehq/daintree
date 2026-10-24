@@ -88,12 +88,59 @@ describe("unit-test process.kill guard (#14418)", () => {
     expect(takeProcessKillViolations()).toEqual([]);
   });
 
-  it("allows an adopted pid until the test's violations are taken", () => {
-    adoptProcessForKill(process.ppid);
-    expect(process.kill(process.ppid, "SIGCONT")).toBe(true);
+  it.skipIf(process.platform === "win32")("signals a detached child's whole group", async () => {
+    const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], {
+      detached: true,
+      stdio: "ignore",
+    });
+    children.push(child);
 
-    takeProcessKillViolations();
-    expect(refusalOf(() => process.kill(process.ppid, "SIGCONT"))?.code).toBe("EPERM");
-    expect(takeProcessKillViolations()).toHaveLength(1);
+    expect(process.kill(-child.pid!, "SIGKILL")).toBe(true);
+    expect(await exitOf(child)).toBe("SIGKILL");
+    expect(takeProcessKillViolations()).toEqual([]);
   });
+
+  it("never lets an adoption widen to the group or broadcast forms", () => {
+    adoptProcessForKill(0);
+    adoptProcessForKill(-1);
+
+    expect(refusalOf(() => process.kill(0, "SIGCONT"))?.code).toBe("EPERM");
+    expect(refusalOf(() => process.kill(-1, "SIGCONT"))?.code).toBe("EPERM");
+    expect(takeProcessKillViolations()).toHaveLength(2);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "refuses an orphan the test created until it is adopted, and only for that test",
+    async () => {
+      // The shell exits straight away, leaving its sleep reparented to init.
+      const shell = spawn("sh", ["-c", "sleep 30 >/dev/null 2>&1 & echo $!"], {
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      let out = "";
+      shell.stdout!.on("data", (chunk: Buffer) => (out += String(chunk)));
+      await new Promise((resolve) => shell.once("close", resolve));
+      const orphan = Number.parseInt(out, 10);
+
+      try {
+        expect(refusalOf(() => process.kill(orphan, "SIGKILL"))?.code).toBe("EPERM");
+        expect(takeProcessKillViolations()).toEqual([expect.objectContaining({ pid: orphan })]);
+
+        adoptProcessForKill(orphan);
+        takeProcessKillViolations();
+        expect(refusalOf(() => process.kill(orphan, "SIGKILL"))?.code).toBe("EPERM");
+        takeProcessKillViolations();
+
+        adoptProcessForKill(orphan);
+        expect(process.kill(orphan, "SIGKILL")).toBe(true);
+        expect(takeProcessKillViolations()).toEqual([]);
+      } finally {
+        adoptProcessForKill(orphan);
+        try {
+          process.kill(orphan, "SIGKILL");
+        } catch {
+          // Already gone.
+        }
+      }
+    }
+  );
 });

@@ -53,8 +53,12 @@ function createMockPty(): { pty: IPty; emitLive: (data: string) => void } {
 describe("PtyManager.spawn — pooled-shell prelude reaches the data event", () => {
   let manager: InstanceType<typeof PtyManager>;
   let dataEvents: Array<[string, string]>;
+  let processKillSpy: ReturnType<typeof vi.spyOn<typeof process, "kill">>;
 
   beforeEach(() => {
+    // The mock pty's PID 4242 is made up; disposing a real TerminalProcess
+    // signals it, so the stub has to outlive manager.dispose() (#14418).
+    processKillSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
     manager = new PtyManager();
     dataEvents = [];
     manager.on("data", (id: string, data: string | Uint8Array) => {
@@ -64,6 +68,7 @@ describe("PtyManager.spawn — pooled-shell prelude reaches the data event", () 
 
   afterEach(() => {
     manager.dispose();
+    processKillSpy.mockRestore();
   });
 
   it("emits the prelude synchronously during spawn with no redraw", () => {

@@ -4,6 +4,9 @@ import http from "node:http";
 import type net from "node:net";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+// ssh daemonises its masters away from this worker, so the unit-test kill
+// guard needs to be told they are ours before they can be signalled.
+import { adoptProcessForKill } from "../../../scripts/lib/testProcessKillGuard.js";
 
 vi.mock("electron", async () => (await import("./harness/fakeElectron.js")).electronMock);
 
@@ -269,6 +272,7 @@ describe.skipIf(!ENABLED)(
       for (const row of await listProcesses().catch(() => [])) {
         if (root && row.command.includes(root) && row.pid !== process.pid) {
           try {
+            adoptProcessForKill(row.pid);
             process.kill(row.pid, "SIGKILL");
           } catch {
             // Already gone.
@@ -358,6 +362,7 @@ describe.skipIf(!ENABLED)(
         const expected = [view.text("t1")];
         const before = await masterPid();
         expect(before).not.toBeNull();
+        adoptProcessForKill(before!);
         process.kill(before!, "SIGKILL");
         await waitUntil(() => !r.isConnected(), "the Shell to notice the master died", 15_000);
         for (let i = 0; i < 20; i++) {
