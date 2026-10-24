@@ -957,7 +957,8 @@ export class RemoteHostsClient {
         request,
         failure: {
           code: error.code,
-          message: error.userMessage ?? "Couldn't reach this host. Check that it is on and try again.",
+          message:
+            error.userMessage ?? "Couldn't reach this host. Check that it is on and try again.",
         },
       });
       return new AppError({

@@ -11,9 +11,9 @@ import { STILL_WORKING_MS, pendingHostSwitchTitle } from "./pendingHostSwitchFee
 const SIDEBAR_CARDS = 4;
 
 function cancel(pending: PendingHostSwitch): void {
-  void window.electron?.remoteHosts?.cancelPendingSwitch?.({ switchId: pending.switchId })?.catch(
-    () => {}
-  );
+  void window.electron?.remoteHosts
+    ?.cancelPendingSwitch?.({ switchId: pending.switchId })
+    ?.catch(() => {});
 }
 
 /**
@@ -123,7 +123,10 @@ export function HostSwitchScreen({ pending }: { pending: PendingHostSwitch }) {
         <SkeletonBone immediate className="h-4 w-4" />
       </div>
       <div className="flex min-h-0 flex-1">
-        <div aria-hidden="true" className="flex w-[300px] shrink-0 flex-col gap-4 bg-surface-sidebar p-4">
+        <div
+          aria-hidden="true"
+          className="flex w-[300px] shrink-0 flex-col gap-4 bg-surface-sidebar p-4"
+        >
           <SkeletonBone immediate className="h-8 w-full rounded-[var(--radius-md)]" />
           {Array.from({ length: SIDEBAR_CARDS }, (_, index) => (
             <div key={index} className="flex flex-col gap-2">
@@ -133,7 +136,10 @@ export function HostSwitchScreen({ pending }: { pending: PendingHostSwitch }) {
           ))}
         </div>
         <div className="flex min-w-0 flex-1 flex-col items-center justify-center gap-5 p-8">
-          <div role={failed ? "alert" : "status"} className="flex max-w-md flex-col items-center gap-2 text-center">
+          <div
+            role={failed ? "alert" : "status"}
+            className="flex max-w-md flex-col items-center gap-2 text-center"
+          >
             <h2 id={titleId} className="text-lg font-semibold text-text-primary">
               {pendingHostSwitchTitle(pending)}
             </h2>
