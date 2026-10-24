@@ -1034,8 +1034,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     }
   );
 
-  const resolveManifest = createManifestResolver(session);
-  registerListToolsHandler(server, session, resolveManifest);
+  const resolveManifest = createManifestResolver(deps);
+  registerListToolsHandler(server, session, deps, resolveManifest);
 
   // Named so a batch tool can run each item through this same gate.
   const handleCallTool = async (
@@ -4135,8 +4135,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
   };
   server.setRequestHandler(CallToolRequestSchema, handleCallTool);
 
-  registerResourceHandlers(server, session);
-  registerPromptHandlers(server, session);
+  registerResourceHandlers(server, session, deps);
+  registerPromptHandlers(server, session, deps);
 
   return server;
 }

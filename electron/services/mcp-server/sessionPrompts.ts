@@ -11,8 +11,12 @@ import type { SessionContext } from "./sessionContext.js";
 import { sessionGoneError } from "./sessionRouteErrors.js";
 import type { SessionServerDeps } from "./sessionServerDepsContract.js";
 
-export function registerPromptHandlers(server: Server, session: SessionContext): void {
-  const { sessionId, deps, mayNameTerminal } = session;
+export function registerPromptHandlers(
+  server: Server,
+  session: SessionContext,
+  deps: Pick<SessionServerDeps, "sessionStore" | "dispatchAction">
+): void {
+  const { sessionId, mayNameTerminal } = session;
   const { sessionStore, dispatchAction } = deps;
 
   server.setRequestHandler(ListPromptsRequestSchema, async () => {

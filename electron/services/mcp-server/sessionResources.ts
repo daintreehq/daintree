@@ -33,8 +33,15 @@ import type { SessionContext } from "./sessionContext.js";
 import { routeBindingMcpError, sessionGoneError } from "./sessionRouteErrors.js";
 import type { SessionServerDeps } from "./sessionServerDepsContract.js";
 
-export function registerResourceHandlers(server: Server, session: SessionContext): void {
-  const { sessionId, deps, mayNameTerminal } = session;
+export function registerResourceHandlers(
+  server: Server,
+  session: SessionContext,
+  deps: Pick<
+    SessionServerDeps,
+    "sessionStore" | "dispatchAction" | "workspaceBinding" | "preferredWebContentsId"
+  >
+): void {
+  const { sessionId, mayNameTerminal } = session;
   const { sessionStore, dispatchAction, workspaceBinding } = deps;
 
   // Each resource handler resolves the tier once at entry and threads it down
@@ -135,7 +142,7 @@ export function registerResourceHandlers(server: Server, session: SessionContext
 
 async function listConcreteResources(
   tier: McpTier,
-  deps: SessionServerDeps
+  deps: Pick<SessionServerDeps, "dispatchAction">
 ): Promise<Array<{ uri: string; name: string; mimeType: string; description?: string }>> {
   const resources: Array<{ uri: string; name: string; mimeType: string; description?: string }> =
     [];

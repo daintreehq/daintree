@@ -11,7 +11,6 @@ import type { SessionServerDeps } from "./sessionServerDepsContract.js";
  */
 export interface SessionContext {
   readonly sessionId: string;
-  readonly deps: SessionServerDeps;
   readonly sessionSurface: Readonly<SessionSurfacePolicy>;
   readonly isGlobalSession: () => boolean;
   readonly hostCallOffered: () => boolean;
@@ -67,7 +66,6 @@ export function createSessionContext(sessionId: string, deps: SessionServerDeps)
 
   return {
     sessionId,
-    deps,
     sessionSurface,
     isGlobalSession,
     hostCallOffered,
