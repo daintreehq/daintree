@@ -1058,6 +1058,12 @@ describe("McpServerService", () => {
         description: "Stop the turn an agent this MCP session created is running",
       }),
       createManifestEntry({
+        id: "terminal.restartOnPresetOwned" as ActionId,
+        title: "Restart Owned Agent on Preset",
+        description: "Respawn an agent this MCP session created on another preset",
+        danger: "confirm",
+      }),
+      createManifestEntry({
         id: "terminal.sendKeysOwned" as ActionId,
         title: "Press Keys in Owned Terminal",
         description: "Answer a dialog in a terminal this MCP session created",

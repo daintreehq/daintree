@@ -188,6 +188,13 @@ export const MCP_EXTERNAL_TIER_TOOLS = [
   // one-way, so the result says the keystrokes were handed over and stops
   // there.
   "terminal.interruptOwned",
+  // Moving a pane this session launched to another preset of its agent, for a
+  // worker that hit a plan limit (#14369). Close and relaunch was the only other
+  // route, and it loses the pane's place and title and leaves its saved launch
+  // env on the old preset. Owned-only like the close, and refused on a pane the
+  // user handed over. `danger: "confirm"`, so the user approves each restart,
+  // and `isWithheldFromBoundSession` withholds it where nobody would see that.
+  "terminal.restartOnPresetOwned",
   // What a launched agent last said (#12479). The surface could see that an
   // agent was `waiting` and not what it was waiting on: a scrollback tail fits a
   // shell, and cuts an agent's structured hand-off — a review verdict, a

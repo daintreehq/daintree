@@ -431,6 +431,7 @@ export const BUILT_IN_ACTION_IDS = [
   // -- terminalLifecycleActions --
   "terminal.restart",
   "terminal.restartOnPreset",
+  "terminal.restartOnPresetOwned",
   "terminal.redraw",
   "terminal.forceResume",
   "terminal.toggleInputLock",
@@ -674,6 +675,8 @@ export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   "terminal.closeMany",
   "agent.launchMany",
   "terminal.readLastMessageOwned",
+  // Main checks ownership before dispatching it; nothing in its `run()` does.
+  "terminal.restartOnPresetOwned",
   // Main-process only, keyed on the caller's MCP credential: a plugin dispatch
   // has no pane to notify.
   "terminal.notifyWhenIdle",

@@ -336,7 +336,12 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // 8_300 → 8_500 for #13662's `terminal.placeOwned`, a 166 B description: the
   // surface had no headroom, and the prose has to say it never takes focus,
   // since that is the whole difference from `terminal.revealOwned`.
-  const MAX_EXTERNAL_TOTAL_BYTES = 8_500;
+  // 8_500 → 8_700 for #14369's `terminal.restartOnPresetOwned`, measured at
+  // 8_687 B: a 223 B description against 36 B of headroom. It has to say the
+  // conversation ends, that the user confirms, and that a handed-over pane is
+  // refused — a caller missing the first sends the next step to an agent that
+  // no longer has the brief.
+  const MAX_EXTERNAL_TOTAL_BYTES = 8_700;
 
   // Raised from 48_000 by #11908, which put seven tools on the in-app surface
   // (a deterministic session resume, the four bookmark mutations, and the two
@@ -535,7 +540,10 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // ticket, that an apply asks the person to approve exactly that preview
   // before writing it, and that this machine's own settings are never reached.
   // In-app only, off the external surface.
-  const MAX_COHORT_TOTAL_BYTES = 21_900;
+  // 21_900 → 22_150 for #14369's `terminal.restartOnPresetOwned`, measured at
+  // 22_103 B. Its 223 B is the whole of the increase, carried in-app for the
+  // external⊆in-app subset invariant.
+  const MAX_COHORT_TOTAL_BYTES = 22_150;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 
@@ -1073,6 +1081,7 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   "terminal.killAll",
   "terminal.restart",
   "terminal.restartOnPreset",
+  "terminal.restartOnPresetOwned",
   "terminal.restartAll",
   "terminal.arm",
   "worktree.delete",
@@ -1212,6 +1221,9 @@ const BYPASS_WIRED: ReadonlyArray<ActionId> = [
   // process checks session ownership and then delegates to `worktree.delete`,
   // so the modal a user answers is wired under that id, above.
   "worktree.deleteOwned",
+  // Same shape (#14369): main checks the session launched the pane, then
+  // delegates to `terminal.restartOnPreset`, whose confirm is wired above.
+  "terminal.restartOnPresetOwned",
   // Agent/MCP-only confirm gate (#11346): arming reroutes the user's next
   // keystrokes to every armed terminal, so an external caller must pass the
   // host confirm dialog. Palette-hidden, and user-side arming goes through the
@@ -1529,6 +1541,7 @@ describe("plugin-dispatch injection guard (#10558)", () => {
       "terminal.sendKeys": { terminalId: "t-placeholder", keys: ["Enter"] },
       "terminal.sendKeysOwned": { terminalId: "t-placeholder", keys: ["Enter"] },
       "terminal.placeOwned": { terminalId: "t-placeholder", location: "dock" },
+      "terminal.restartOnPresetOwned": { terminalId: "t-placeholder", presetId: "p-placeholder" },
       "agent.launchMany": { agentIds: ["claude"], prompt: "p" },
       "terminal.sendCommandMany": { sends: [{ terminalId: "t-placeholder", command: "c" }] },
       "terminal.closeMany": { terminalIds: ["t-placeholder"] },

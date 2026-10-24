@@ -300,7 +300,7 @@ export const terminalLifecycleActionRuns = {
     }
     const state = usePanelStore.getState();
     const targetId = terminalId ?? focusedAtDispatch;
-    if (!targetId) return;
+    if (!targetId) throw new Error("No terminal to restart on that preset");
     const observedBefore = useRateLimitObservationStore.getState().observedAtByTerminalId[targetId];
     const result = await state.restartTerminalOnPreset(targetId, presetId);
     if (!result.success) {
@@ -311,6 +311,14 @@ export const terminalLifecycleActionRuns = {
     if (observedBefore !== undefined) {
       useRateLimitObservationStore.getState().clearObservation(targetId, observedBefore);
     }
+    // Read back rather than echoed: the store records the preset it resolved.
+    const restarted = usePanelStore.getState().panelsById[targetId];
+    return {
+      terminalId: targetId,
+      agentPresetId:
+        (restarted && isPtyPanel(restarted) ? restarted.agentPresetId : undefined) ?? presetId,
+      agentSessionIdCleared: true as const,
+    };
   },
   "terminal.redraw": async (
     args: unknown,

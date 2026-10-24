@@ -445,6 +445,7 @@ type AgentPanel = {
   launchAgentId?: string;
   agentState?: string;
   worktreeId?: string;
+  agentPresetId?: string;
 };
 
 function setRichPanelState(options: { focusedId?: string | null; panels: AgentPanel[] }) {
@@ -929,6 +930,46 @@ describe("terminal.restartOnPreset (#13746)", () => {
     await run("terminal.restartOnPreset", { terminalId: "p1", presetId: "work", confirmed: true });
 
     expect(useRateLimitObservationStore.getState().observedAtByTerminalId.p1).toBe(2_000);
+  });
+
+  // The MCP owned tool never forwards `confirmed` (#14369): the host's prompt
+  // or grant is the approval, and the caller learns its brief is gone.
+  it("restarts on a host-attested confirm and says the conversation was cleared", async () => {
+    const pane: AgentPanel = {
+      id: "p1",
+      location: "grid",
+      detectedAgentId: "codex",
+      agentState: "waiting",
+      agentPresetId: "personal",
+    };
+    const { restartTerminalOnPreset } = setRichPanelState({ focusedId: "p1", panels: [pane] });
+    // The receipt reports what the store recorded, not the id the caller sent.
+    restartTerminalOnPreset.mockImplementation(async () => {
+      pane.agentPresetId = "work-resolved";
+      return { success: true };
+    });
+    const run = setupActions();
+
+    const result = await run(
+      "terminal.restartOnPreset",
+      { terminalId: "p1", presetId: "work" },
+      { dispatchSource: "agent", hostConfirmed: true }
+    );
+
+    expect(restartTerminalOnPreset).toHaveBeenCalledWith("p1", "work");
+    expect(result).toEqual({
+      terminalId: "p1",
+      agentPresetId: "work-resolved",
+      agentSessionIdCleared: true,
+    });
+  });
+
+  it("refuses the owned twin outside the MCP main-process path", async () => {
+    const run = setupActions();
+
+    await expect(
+      run("terminal.restartOnPresetOwned", { terminalId: "p1", presetId: "work" })
+    ).rejects.toThrow(/MCP main-process path/);
   });
 
   it("reports a respawn that failed instead of claiming success", async () => {

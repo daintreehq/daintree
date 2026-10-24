@@ -2284,6 +2284,60 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     title: "Read owned agent's last message",
   },
   {
+    band: "destructive-local",
+    category: "terminal",
+    danger: "confirm",
+    dangerRationale:
+      "Ends the agent's conversation and respawns it on another preset. Scrollback is lost.",
+    description:
+      "Respawn an agent panel this session launched on another preset of its agent, in place, after the user confirms: for an agent that hit a plan limit. Its conversation and scrollback are lost. Panels it was handed are refused.",
+    enabled: true,
+    id: "terminal.restartOnPresetOwned",
+    inputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        terminalId: {
+          type: "string",
+          minLength: 1,
+          description: "Panel `id` this session got when launching it. Required.",
+        },
+        presetId: {
+          type: "string",
+          minLength: 1,
+          description: "A preset `id` of the panel's own agent.",
+        },
+      },
+      required: ["terminalId", "presetId"],
+    },
+    keywords: ["preset", "account", "rate limit", "owned"],
+    kind: "command",
+    name: "terminal.restartOnPresetOwned",
+    outputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        terminalId: {
+          type: "string",
+          description: "The pane, respawned in place.",
+        },
+        agentPresetId: {
+          type: "string",
+          description: "Preset it now runs on.",
+        },
+        agentSessionIdCleared: {
+          type: "boolean",
+          const: true,
+          description: "A new conversation started: re-send anything the agent still needs.",
+        },
+      },
+      required: ["terminalId", "agentPresetId", "agentSessionIdCleared"],
+      additionalProperties: false,
+    },
+    requiresArgs: true,
+    title: "Move owned agent to another preset",
+  },
+  {
     band: "reversible",
     category: "terminal",
     danger: "safe",

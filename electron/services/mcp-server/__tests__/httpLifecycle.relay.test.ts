@@ -258,6 +258,8 @@ describe("HttpLifecycle.openRelaySession (#13493)", () => {
         prepareLaunch: vi.fn(),
         prepareKeys: vi.fn(),
         forgetTarget: vi.fn(),
+        holdTarget: vi.fn(),
+        settleTargetHold: vi.fn(),
         supersede: vi.fn(),
         releaseHold: vi.fn(),
       },
