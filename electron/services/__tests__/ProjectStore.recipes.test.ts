@@ -268,6 +268,146 @@ describe("ProjectStore recipe reconciliation", () => {
     expect(fs2[0]!.usageHistory).toEqual([999]);
   });
 
+  describe("env values follow their step across canonical edits (#14360)", () => {
+    const stepA = { type: "terminal" as const, title: "Service A", command: "run-a" };
+    const stepB = { type: "terminal" as const, title: "Service B", command: "run-b" };
+    const stepC = { type: "terminal" as const, title: "Service C", command: "run-c" };
+
+    async function reconcileWith(
+      local: TerminalRecipe["terminals"],
+      canonical: TerminalRecipe["terminals"]
+    ) {
+      const id = stableInRepoId("Services");
+      await seedInRepo(makeRecipe({ id, name: "Services", terminals: canonical }));
+      await seedFileStore([
+        makeRecipe({ id, name: "Services", terminals: local, lastUsedAt: 7, usageHistory: [7] }),
+      ]);
+      await store.reconcileProjectRecipes(projectPath, projectId);
+      const fs2 = await readFileStore();
+      expect(fs2).toHaveLength(1);
+      expect(fs2[0]!.lastUsedAt).toBe(7);
+      expect(fs2[0]!.usageHistory).toEqual([7]);
+      return fs2[0]!.terminals.map((t) => ({ title: t.title, env: t.env }));
+    }
+
+    it("reorder keeps each step's own values", async () => {
+      const result = await reconcileWith(
+        [
+          { ...stepA, env: { API_KEY: "A-local" } },
+          { ...stepB, env: { API_KEY: "B-local" } },
+        ],
+        [
+          { ...stepB, env: { API_KEY: "x" } },
+          { ...stepA, env: { API_KEY: "x" } },
+        ]
+      );
+      expect(result).toEqual([
+        { title: "Service B", env: { API_KEY: "B-local" } },
+        { title: "Service A", env: { API_KEY: "A-local" } },
+      ]);
+    });
+
+    it("insertion leaves the new step blank and the shifted steps their own values", async () => {
+      const result = await reconcileWith(
+        [
+          { ...stepA, env: { API_KEY: "A-local" } },
+          { ...stepB, env: { API_KEY: "B-local" } },
+        ],
+        [
+          { ...stepC, env: { API_KEY: "x" } },
+          { ...stepA, env: { API_KEY: "x" } },
+          { ...stepB, env: { API_KEY: "x" } },
+        ]
+      );
+      expect(result).toEqual([
+        { title: "Service C", env: { API_KEY: "" } },
+        { title: "Service A", env: { API_KEY: "A-local" } },
+        { title: "Service B", env: { API_KEY: "B-local" } },
+      ]);
+    });
+
+    it("deletion does not hand the removed step's values to its successor", async () => {
+      const result = await reconcileWith(
+        [
+          { ...stepA, env: { API_KEY: "A-local" } },
+          { ...stepB, env: { API_KEY: "B-local" } },
+          { ...stepC, env: { API_KEY: "C-local" } },
+        ],
+        [
+          { ...stepB, env: { API_KEY: "x" } },
+          { ...stepC, env: { API_KEY: "x" } },
+        ]
+      );
+      expect(result).toEqual([
+        { title: "Service B", env: { API_KEY: "B-local" } },
+        { title: "Service C", env: { API_KEY: "C-local" } },
+      ]);
+    });
+
+    it("a replaced step at the same index does not inherit the old step's values", async () => {
+      const result = await reconcileWith(
+        [{ ...stepA, env: { API_KEY: "A-local" } }],
+        [{ ...stepC, env: { API_KEY: "x" } }]
+      );
+      expect(result).toEqual([{ title: "Service C", env: { API_KEY: "" } }]);
+    });
+
+    it("a step whose command was edited keeps its values when its title still identifies it", async () => {
+      const result = await reconcileWith(
+        [
+          { ...stepA, env: { API_KEY: "A-local" } },
+          { ...stepB, env: { API_KEY: "B-local" } },
+        ],
+        [
+          { ...stepB, env: { API_KEY: "x" } },
+          { ...stepA, command: "run-a --verbose", env: { API_KEY: "x" } },
+        ]
+      );
+      expect(result).toEqual([
+        { title: "Service B", env: { API_KEY: "B-local" } },
+        { title: "Service A", env: { API_KEY: "A-local" } },
+      ]);
+    });
+
+    it("identical-looking steps keep their values while their count is unchanged", async () => {
+      const result = await reconcileWith(
+        [
+          { ...stepA, env: { PORT: "3000" } },
+          { ...stepB, env: { API_KEY: "B-local" } },
+          { ...stepA, env: { PORT: "3001" } },
+        ],
+        [
+          { ...stepB, env: { API_KEY: "x" } },
+          { ...stepA, env: { PORT: "x" } },
+          { ...stepA, env: { PORT: "x" } },
+        ]
+      );
+      expect(result).toEqual([
+        { title: "Service B", env: { API_KEY: "B-local" } },
+        { title: "Service A", env: { PORT: "3000" } },
+        { title: "Service A", env: { PORT: "3001" } },
+      ]);
+    });
+
+    it("identical-looking steps whose count changed are ambiguous and must be configured again", async () => {
+      const result = await reconcileWith(
+        [
+          { ...stepA, env: { PORT: "3000" } },
+          { ...stepA, env: { PORT: "3001" } },
+          { ...stepB, env: { API_KEY: "B-local" } },
+        ],
+        [
+          { ...stepA, env: { PORT: "x" } },
+          { ...stepB, env: { API_KEY: "x" } },
+        ]
+      );
+      expect(result).toEqual([
+        { title: "Service A", env: { PORT: "" } },
+        { title: "Service B", env: { API_KEY: "B-local" } },
+      ]);
+    });
+  });
+
   it("does not prune a mirror when a recipe file can't be read mid-scan (#11347)", async () => {
     // readdir lists the file, but reading it fails (e.g. a checkout unlinks it
     // between readdir and read). The snapshot is non-authoritative, so the mirror
