@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   isSecretPrompt,
   joinWrappedRows,
+  onScreen,
+  optionsInScreenOrder,
   prepareScreen,
   sameScreenTail,
   scrolledSince,
@@ -341,5 +343,33 @@ describe("joinWrappedRows", () => {
   it("joins nothing without the pane's width", () => {
     const rows = ["a long row that may well have wrapped at the edge of", "  the pane"];
     expect(joinWrappedRows(rows, undefined)).toEqual(rows);
+  });
+});
+
+describe("onScreen", () => {
+  const screen = "Edited 3 files\n❯ Apply these changes? (y)";
+
+  it("keeps a quote drawn on the screen, its key hint allowed to differ", () => {
+    expect(onScreen("Apply these changes? (esc)", screen)).toBe("Apply these changes? (esc)");
+  });
+
+  it("rejects a quote the screen does not show", () => {
+    expect(onScreen("Delete the branch?", screen)).toBeNull();
+    expect(onScreen("", screen)).toBeNull();
+  });
+});
+
+describe("optionsInScreenOrder", () => {
+  it("drops options not on the screen and keeps the order the CLI draws them", () => {
+    const screen = [
+      "No files changed",
+      "Do you want to proceed?",
+      "❯ 1. Yes",
+      "  2. Yes, and don't ask again",
+      "  3. No",
+    ].join("\n");
+    expect(
+      optionsInScreenOrder(["No", "Maybe", "Yes, and don't ask again", "Yes"], screen)
+    ).toEqual(["Yes", "Yes, and don't ask again", "No"]);
   });
 });
