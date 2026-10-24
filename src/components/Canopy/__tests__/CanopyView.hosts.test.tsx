@@ -212,7 +212,7 @@ function installElectron() {
     setScope: vi.fn(async () => {}),
     setShown: vi.fn(async () => {}),
     setRead: vi.fn(async () => null),
-    archive: vi.fn(async () => null),
+    archive: vi.fn(async (): Promise<unknown> => null),
     unarchive: vi.fn(async () => {}),
     markSeen: vi.fn(async () => {}),
     runBranch: vi.fn(async () => "main"),
