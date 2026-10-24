@@ -41,7 +41,11 @@ function RichScroller({
   return <div {...props} ref={ref} tabIndex={-1} />;
 }
 
-export function RichTableElement({ context, style, children }: TableProps & { context: RichContext }) {
+export function RichTableElement({
+  context,
+  style,
+  children,
+}: TableProps & { context: RichContext }) {
   return (
     <table
       {...context.tableProps}
