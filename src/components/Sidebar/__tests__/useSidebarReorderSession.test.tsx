@@ -88,6 +88,14 @@ function renderSession(props: Partial<SessionProps> = {}) {
   });
 }
 
+// Block body: an expression body returns the timer API, which picks act()'s
+// async overload and leaves a promise floating.
+function advance(ms: number) {
+  act(() => {
+    vi.advanceTimersByTime(ms);
+  });
+}
+
 function politeAnnouncement(): string | undefined {
   return useAnnouncerStore.getState().polite?.msg;
 }
@@ -110,32 +118,42 @@ describe("useSidebarReorderSession — keyboard reorder", () => {
     const { result, rerender } = renderSession();
 
     act(() => result.current.handleKeyboardReorder("a", 1));
+    advance(100);
     rerender({ ...INITIAL_PROPS, dragStartOrder: ["b", "a", "c"] });
     act(() => result.current.handleKeyboardReorder("a", 1));
 
     const filterState = useWorktreeFilterStore.getState();
     expect(filterState.manualOrder).toEqual(["b", "c", "a"]);
     expect(filterState.orderBy).toBe("manual");
-    // Key-repeat must not queue an announcement per intermediate slot.
+    // Past the first move's deadline: key-repeat must not speak the slot it
+    // passed through on the way.
+    advance(100);
     expect(result.current.keyboardReorderAnnouncement).toBe("");
 
-    act(() => vi.advanceTimersByTime(150));
+    advance(50);
     expect(result.current.keyboardReorderAnnouncement).toBe(
       "Moved 'Fix the login race' to position 3 of 3"
     );
   });
 
-  it("keeps one callback identity while moving within the latest order", () => {
+  it("keeps one callback identity that reads the latest order, labels and sort state", () => {
     const { result, rerender } = renderSession();
     const firstCallback = result.current.handleKeyboardReorder;
 
-    rerender({ ...INITIAL_PROPS, dragStartOrder: ["c", "b", "a"] });
+    rerender({ ...INITIAL_PROPS, isGroupedByType: true });
+    act(() => result.current.handleKeyboardReorder("a", 1));
+    expect(useWorktreeFilterStore.getState().manualOrder).toEqual([]);
+
+    const renamed = WORKTREES.map((w) => (w.id === "b" ? { ...w, branch: "feature/renamed" } : w));
+    rerender({ ...INITIAL_PROPS, worktrees: renamed, dragStartOrder: ["c", "b", "a"] });
     expect(result.current.handleKeyboardReorder).toBe(firstCallback);
 
     act(() => result.current.handleKeyboardReorder("b", -1));
     expect(useWorktreeFilterStore.getState().manualOrder).toEqual(["b", "c", "a"]);
-    act(() => vi.advanceTimersByTime(150));
-    expect(result.current.keyboardReorderAnnouncement).toBe("Moved 'feature/b' to position 1 of 3");
+    advance(150);
+    expect(result.current.keyboardReorderAnnouncement).toBe(
+      "Moved 'feature/renamed' to position 1 of 3"
+    );
   });
 
   it("ignores a move past either end of the list", () => {
@@ -143,7 +161,7 @@ describe("useSidebarReorderSession — keyboard reorder", () => {
 
     act(() => result.current.handleKeyboardReorder("a", -1));
     act(() => result.current.handleKeyboardReorder("c", 1));
-    act(() => vi.advanceTimersByTime(150));
+    advance(150);
 
     expect(useWorktreeFilterStore.getState().manualOrder).toEqual([]);
     expect(result.current.keyboardReorderAnnouncement).toBe("");
@@ -188,7 +206,7 @@ describe("useSidebarReorderSession — reorder availability", () => {
 
     rerender({ ...INITIAL_PROPS });
     expect(result.current.keyboardReorderAnnouncement).toBe("");
-    act(() => vi.advanceTimersByTime(150));
+    advance(150);
 
     expect(result.current.keyboardReorderAnnouncement).toBe("Manual reorder available");
   });
@@ -213,7 +231,7 @@ describe("useSidebarReorderSession — drag cancel", () => {
 
     act(() => result.current.handleKeyboardReorder("b", 1));
     cancelDrag({ type: "worktree-sort", worktreeId: "a" });
-    act(() => vi.advanceTimersByTime(150));
+    advance(150);
 
     expect(result.current.keyboardReorderAnnouncement).toBe("");
     expect(result.current.keyboardCancelAnnouncement).toBe(
@@ -225,14 +243,14 @@ describe("useSidebarReorderSession — drag cancel", () => {
     const { result } = renderSession();
 
     cancelDrag({ type: "worktree-sort", worktreeId: "c" });
-    act(() => vi.advanceTimersByTime(50));
+    advance(50);
     expect(result.current.keyboardCancelAnnouncement).toBe(
       "Drag cancelled. c returned to its original position"
     );
 
     cancelDrag({ type: "worktree-sort", worktreeId: "c" });
     expect(result.current.keyboardCancelAnnouncement).toBe("");
-    act(() => vi.advanceTimersByTime(50));
+    advance(50);
     expect(result.current.keyboardCancelAnnouncement).toBe(
       "Drag cancelled. c returned to its original position"
     );
@@ -243,7 +261,7 @@ describe("useSidebarReorderSession — drag cancel", () => {
 
     cancelDrag({ type: "worktree-sort", worktreeId: "a" });
     startDrag();
-    act(() => vi.advanceTimersByTime(50));
+    advance(50);
 
     expect(result.current.keyboardCancelAnnouncement).toBe("");
   });
@@ -252,7 +270,7 @@ describe("useSidebarReorderSession — drag cancel", () => {
     const { result } = renderSession();
 
     cancelDrag({ type: "terminal", terminalId: "t1" });
-    act(() => vi.advanceTimersByTime(50));
+    advance(50);
 
     expect(result.current.keyboardCancelAnnouncement).toBe("");
   });

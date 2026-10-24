@@ -88,6 +88,7 @@ import { needsReconnectRetry } from "@/lib/worktreeReconnect";
 import type { SidebarFlatItem } from "./sidebarWorktreeModel";
 import { useSidebarWorktreeModel } from "./useSidebarWorktreeModel";
 import { useSidebarReorderSession } from "./useSidebarReorderSession";
+import { useRenderTime } from "./useRenderTime";
 
 const NO_MATCH_QUERY_MAX = 40;
 
@@ -327,10 +328,12 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     1000,
     isReconnecting && reconnectingAt != null
   );
+  // Handed to every check that ages. A helper that reads the clock itself is
+  // cached against its other inputs once compiled, so a reconnect that only
+  // gets older would never escalate or surface Retry.
+  const now = useRenderTime();
   const showReconnectingEscalated =
-    isReconnecting &&
-    reconnectingAt !== null &&
-    Date.now() - reconnectingAt >= RECONNECT_ESCALATE_MS;
+    isReconnecting && reconnectingAt !== null && now - reconnectingAt >= RECONNECT_ESCALATE_MS;
   const [isRefreshPending, startRefreshTransition] = useTransition();
   // A refresh dispatched from anywhere but the button (palette, shortcut, the
   // sidebar's context menu) never enters the transition above.
@@ -722,7 +725,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     (isProjectDisconnected && !isLoading && error === null
       ? WORKTREE_DISCONNECTED_MESSAGE
       : null) ??
-    (needsReconnectRetry({ isReconnecting, reconnectingAt, reconnectRecovery })
+    (needsReconnectRetry({ isReconnecting, reconnectingAt, reconnectRecovery }, now)
       ? WORKTREE_RECONNECT_STALLED_MESSAGE
       : null);
 

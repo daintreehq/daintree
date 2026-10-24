@@ -113,20 +113,26 @@ describe("filterSidebarWorktrees — quick-state counterfactual", () => {
     expect(result.hasResultsWithoutQuickState).toBe(false);
   });
 
-  it("does not compute the counterfactual while the quick state is 'all'", () => {
-    const result = filterSidebarWorktrees(filterInput([alpha, beta], { deferredQuery: "zzz" }));
+  it("leaves the counterfactual false under 'all', even with every row visible", () => {
+    const result = filterSidebarWorktrees(filterInput([alpha, beta]));
 
-    expect(result.filteredWorktrees).toEqual([]);
+    expect(ids(result.filteredWorktrees)).toEqual(["alpha", "beta"]);
     expect(result.hasResultsWithoutQuickState).toBe(false);
   });
 
-  it("keeps the quick-state matches and counts every non-main worktree in the total", () => {
-    const result = filterSidebarWorktrees(
-      filterInput([alpha, beta], {
+  it("filters and counts the non-main population, never the whole list", () => {
+    const main = makeWorktree("main", { isMainWorktree: true });
+    const result = filterSidebarWorktrees({
+      ...filterInput([alpha, beta], {
         quickStateFilter: "working",
-        derivedMetaMap: new Map([["beta", WORKING_META]]),
-      })
-    );
+        derivedMetaMap: new Map([
+          ["main", WORKING_META],
+          ["beta", WORKING_META],
+        ]),
+      }),
+      deferredWorktrees: [main, alpha, beta],
+      manualOrder: ["main", "alpha", "beta"],
+    });
 
     expect(ids(result.filteredWorktrees)).toEqual(["beta"]);
     expect(result.totalCount).toBe(2);
@@ -180,8 +186,55 @@ describe("filterSidebarWorktrees — always-show bypasses", () => {
     );
 
     expect(result.filteredWorktrees).toEqual([]);
-    // The counterfactual honours the same bypasses, so it still reads a match.
-    expect(result.hasResultsWithoutQuickState).toBe(true);
+  });
+
+  // The counterfactual asks whether "all" would show anything, so it applies
+  // each bypass under the same query and facet gates the real pass uses. One
+  // bypass at a time, so neither can stand in for the other.
+  const onlyActive: Partial<SidebarWorktreeFilterInput> = {
+    ...bypassing,
+    alwaysShowWaiting: false,
+  };
+  const onlyWaiting: Partial<SidebarWorktreeFilterInput> = {
+    ...bypassing,
+    alwaysShowActive: false,
+  };
+
+  describe.each([
+    ["active", onlyActive],
+    ["waiting", onlyWaiting],
+  ])("the %s bypass in the counterfactual", (_label, bypass) => {
+    const narrowed: Partial<SidebarWorktreeFilterInput> = {
+      ...bypass,
+      quickStateFilter: "working",
+    };
+
+    it("reads a match the quick state is hiding", () => {
+      const result = filterSidebarWorktrees(filterInput(worktrees, narrowed));
+
+      expect(result.filteredWorktrees).toEqual([]);
+      expect(result.hasResultsWithoutQuickState).toBe(true);
+    });
+
+    it("reads no match once a real query is typed", () => {
+      const result = filterSidebarWorktrees(
+        filterInput(worktrees, { ...narrowed, deferredQuery: "zzz" })
+      );
+
+      expect(result.hasResultsWithoutQuickState).toBe(false);
+    });
+
+    it("reads no match while a facet filter is active", () => {
+      const result = filterSidebarWorktrees(
+        filterInput(worktrees, {
+          ...narrowed,
+          statusFilters: new Set<StatusFilter>(["active"]),
+          hasFacetFiltersActive: true,
+        })
+      );
+
+      expect(result.hasResultsWithoutQuickState).toBe(false);
+    });
   });
 });
 
@@ -251,15 +304,16 @@ describe("buildSidebarFlatItems", () => {
       deletedWorktrees: new Map(),
     });
 
-    const rows = items.filter((item) => item.kind === "row");
-    for (const row of rows) {
-      expect(row.rowIndex).toBe(order.indexOf(row.worktreeId));
-      expect(row.mode).toBe("static");
-    }
-    expect(items.map((item) => item.ariaRowIndex)).toEqual(items.map((_item, i) => i + 2));
-    expect(items.filter((item) => item.kind === "header")).toHaveLength(
-      groupedSections?.length ?? -1
+    const sections = groupedSections ?? [];
+    expect(sections.length).toBeGreaterThan(1);
+    expect(items.map((item) => item.id)).toEqual(
+      sections.flatMap((s) => [`header-${s.type}`, ...s.worktrees.map((w) => `row-${w.id}`)])
     );
+    const rows = items.filter((item) => item.kind === "row");
+    expect(rows.map((row) => [row.worktreeId, row.rowIndex, row.mode])).toEqual(
+      sections.flatMap((s) => s.worktrees.map((w) => [w.id, order.indexOf(w.id), "static"]))
+    );
+    expect(items.map((item) => item.ariaRowIndex)).toEqual(items.map((_item, i) => i + 2));
   });
 
   it("inserts a deleted worktree before the live row it was anchored to", () => {
@@ -279,6 +333,12 @@ describe("buildSidebarFlatItems", () => {
       { id: "row-bugfix-b", rowIndex: 1, ariaRowIndex: 3 },
       { id: "row-feature-c", rowIndex: 2, ariaRowIndex: 4 },
     ]);
+    // Flat rows are the sortable ones dnd-kit wraps.
+    expect(items.flatMap((item) => (item.kind === "row" ? [item.mode] : []))).toEqual([
+      "sortable",
+      "sortable",
+      "sortable",
+    ]);
   });
 
   it("trails deleted worktrees after the sections in grouped mode", () => {
@@ -295,7 +355,11 @@ describe("buildSidebarFlatItems", () => {
       deletedWorktrees: new Map([["gone", deleted]]),
     });
 
-    expect(items.at(-1)?.id).toBe("deleted-gone");
+    const sections = groupedSections ?? [];
+    expect(items.map((item) => item.id)).toEqual([
+      ...sections.flatMap((s) => [`header-${s.type}`, ...s.worktrees.map((w) => `row-${w.id}`)]),
+      "deleted-gone",
+    ]);
   });
 
   it("does not mark an external worktree pinned for a leftover pin entry", () => {

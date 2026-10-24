@@ -39,6 +39,7 @@ import {
   filterSidebarWorktrees,
   type SidebarFlatItem,
 } from "./sidebarWorktreeModel";
+import { useRenderTime } from "./useRenderTime";
 import type { SidebarKeyboardItem } from "./useWorktreeSidebarKeyboard";
 
 const SIDEBAR_DEFER_FILTER_MIN_WORKTREES = 60;
@@ -491,6 +492,9 @@ export function useSidebarWorktreeModel({
     customTitles: worktreeCustomTitles,
   };
 
+  // The activity facets measure against the clock. Left to `matchesFilters`'
+  // own read, the compiled check would be cached and main would never age out.
+  const now = useRenderTime();
   const mainMatchesQueryPre = mainWorktree && worktreeMatchesQueryPre(mainWorktree);
   const mainMatchesFacetsPre =
     !hasFacetFiltersActive ||
@@ -510,7 +514,8 @@ export function useSidebarWorktreeModel({
           chipState: null,
         },
         mainWorktree.id === activeWorktreeId,
-        devServerSessions
+        devServerSessions,
+        now
       ));
   const mainVisible = mainMatchesQueryPre && mainMatchesFacetsPre;
 

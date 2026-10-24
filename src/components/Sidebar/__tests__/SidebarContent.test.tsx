@@ -181,6 +181,7 @@ describe("SidebarContent filter scope and sort status — issue #8391", () => {
       /deferredWorktrees\.length > SIDEBAR_DEFER_FILTER_MIN_WORKTREES \? laggedQuery : liveQuery/
     );
     expect(modelHookSource).toMatch(/query:\s*deferredQuery/);
+    expect(rowModelSource).toMatch(/query:\s*deferredQuery/);
   });
 });
 
@@ -973,7 +974,7 @@ describe("SidebarContent disconnected project — issue #12576", () => {
     // Gated on the recovery phase too, so the banner never shows while the
     // view is still retrying on its own.
     expect(source).toMatch(
-      /WORKTREE_DISCONNECTED_MESSAGE\s*:\s*null\) \?\?\s*\(needsReconnectRetry\(\{ isReconnecting, reconnectingAt, reconnectRecovery \}\)\s*\?\s*WORKTREE_RECONNECT_STALLED_MESSAGE\s*:\s*null\);/
+      /WORKTREE_DISCONNECTED_MESSAGE\s*:\s*null\) \?\?\s*\(needsReconnectRetry\(\{ isReconnecting, reconnectingAt, reconnectRecovery \}, now\)\s*\?\s*WORKTREE_RECONNECT_STALLED_MESSAGE\s*:\s*null\);/
     );
   });
 
@@ -2062,5 +2063,30 @@ describe("SidebarContent Virtuoso reset wiring — issue #12094", () => {
 
   it("measures the shrink against the rendered item array", () => {
     expect(source).toMatch(/itemCount:\s*sidebarItems\.length/);
+  });
+});
+
+describe("SidebarContent clock reads under React Compiler (#14351)", () => {
+  // Vitest does not run the compiler, so these are the guard: compiled, a bare
+  // `Date.now()` is cached with whichever memo block reads it, and a check
+  // that only ages (reconnect escalation, the stalled-reconnect Retry, the main
+  // row's activity window) would keep its first answer.
+  it.each([
+    ["SidebarContent", SIDEBAR_CONTENT_PATH],
+    ["the row model hook", MODEL_HOOK_PATH],
+  ])("%s reads the clock through useRenderTime, never Date.now()", async (_label, file) => {
+    const owner = await fs.readFile(file, "utf-8");
+    expect(owner).toContain("const now = useRenderTime();");
+    expect(owner).not.toMatch(/Date\.now\(\)/);
+  });
+
+  it("hands that clock to every check that ages", async () => {
+    const source = await fs.readFile(SIDEBAR_CONTENT_PATH, "utf-8");
+    const modelHookSource = await fs.readFile(MODEL_HOOK_PATH, "utf-8");
+    expect(source).toMatch(/now - reconnectingAt >= RECONNECT_ESCALATE_MS/);
+    expect(source).toMatch(/needsReconnectRetry\([^)]*\}, now\)/);
+    expect(modelHookSource).toMatch(
+      /mainWorktree\.id === activeWorktreeId,\s*devServerSessions,\s*now\s*\)/
+    );
   });
 });

@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorktreeState } from "@/types";
 import type { DeletedWorktree } from "@/store/worktreeStore";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
+import { getWorktreeSortDragId } from "@/components/DragDrop/SortableWorktreeCard";
 import { useSidebarWorktreeModel } from "../useSidebarWorktreeModel";
 
 // The live worktree-id set comes from the view's worktree store context; the
@@ -60,6 +61,8 @@ beforeEach(() => {
   store.setManualOrder([]);
   store.setOrderBy("manual");
   store.setGroupByType(false);
+  store.setAlwaysShowActive(false);
+  store.setAlwaysShowWaiting(false);
   for (const id of store.pinnedWorktrees) store.unpinWorktree(id);
   liveWorktreeIds.clear();
   for (const w of snapshot()) liveWorktreeIds.add(w.id);
@@ -88,10 +91,11 @@ describe("useSidebarWorktreeModel — stale preference pruning", () => {
 });
 
 describe("useSidebarWorktreeModel — rows", () => {
-  it("keeps the drag order and sortable ids when a snapshot carries the same order", () => {
+  it("keeps the drag order and sortable ids across a snapshot until the order changes", () => {
     const { result, rerender } = renderModel();
     const { dragStartOrder, sortableIds } = result.current;
     expect(dragStartOrder).toEqual(["a", "b"]);
+    expect(sortableIds).toEqual(["a", "b"].map(getWorktreeSortDragId));
 
     rerender({
       worktrees: snapshot(),
@@ -99,9 +103,40 @@ describe("useSidebarWorktreeModel — rows", () => {
       deletedWorktrees: new Map(),
       canPruneWorktreeIds: true,
     });
-
     expect(result.current.dragStartOrder).toBe(dragStartOrder);
     expect(result.current.sortableIds).toBe(sortableIds);
+
+    act(() => useWorktreeFilterStore.getState().setManualOrder(["b", "a"]));
+    expect(result.current.dragStartOrder).toEqual(["b", "a"]);
+    expect(result.current.dragStartOrder).not.toBe(dragStartOrder);
+    expect(result.current.sortableIds).toEqual(["b", "a"].map(getWorktreeSortDragId));
+    expect(result.current.sortableIds).not.toBe(sortableIds);
+  });
+
+  it("places a deleted worktree's row among the live ones and counts it", () => {
+    const deleted: DeletedWorktree = {
+      id: "gone",
+      title: "gone",
+      path: "/repo/gone",
+      deletedAt: 1,
+      expiresAt: null,
+      holdReason: null,
+      pinnedBeforeWorktreeId: "b",
+    };
+    const { result } = renderModel({ deletedWorktrees: new Map([["gone", deleted]]) });
+
+    expect(result.current.sidebarItems.map((item) => item.id)).toEqual([
+      "row-a",
+      "deleted-gone",
+      "row-b",
+    ]);
+    expect(result.current.ariaRowCount).toBe(4);
+    expect(result.current.keyboardItems).toEqual([
+      { kind: "row", worktreeId: "main", isPinned: true },
+      { kind: "row", worktreeId: "a" },
+      { kind: "header" },
+      { kind: "row", worktreeId: "b" },
+    ]);
   });
 
   it("pins the main worktree ahead of the virtualized rows in keyboard order", () => {
@@ -139,5 +174,20 @@ describe("useSidebarWorktreeModel — rows", () => {
 
     act(() => useWorktreeFilterStore.getState().toggleStatusFilter("dirty"));
     expect(result.current.hasFacetFiltersActive).toBe(false);
+  });
+
+  it("switches the active-row bypass off once a facet filter applies", () => {
+    // A query of spaces hides every row by score but does not count as a
+    // search, so the active worktree is held on screen by the bypass alone.
+    const { result } = renderModel({ activeWorktreeId: "a" });
+    act(() => {
+      const store = useWorktreeFilterStore.getState();
+      store.setAlwaysShowActive(true);
+      store.setLiveQuery("   ");
+    });
+    expect(result.current.filteredWorktrees.map((w) => w.id)).toEqual(["a"]);
+
+    act(() => useWorktreeFilterStore.getState().toggleStatusFilter("dirty"));
+    expect(result.current.filteredWorktrees).toEqual([]);
   });
 });
