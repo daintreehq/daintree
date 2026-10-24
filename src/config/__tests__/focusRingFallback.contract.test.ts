@@ -554,7 +554,7 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
       "Status ribbon — focus delegated to child controls (Exit button, count chip, selection-menu trigger); ribbon container uses tabIndex=-1 to receive programmatic focus only",
   },
   {
-    file: "src/components/Notifications/NotificationCenter.tsx",
+    file: "src/components/Notifications/NotificationCenterSections.tsx",
     fragment: "bg-overlay-raised outline-hidden",
     reason:
       "'New since last looked' chip — non-interactive label; mark-read button inside has its own focus styling. Was /50 until #12061 raised it to /70 (at /50 this measured 4.4:1, under the 4.5:1 floor for normal text), and #12065 retired the ramp underneath it",
