@@ -50,6 +50,7 @@ import { splitHostName } from "@/components/Hosts/hostModel";
 import { Button } from "@/components/ui/button";
 import { SIDEBAR_HEADER_ACTION, SIDEBAR_HEADER_ROW } from "./sidebarHeader";
 import { useDispatchedSidebarRefresh } from "./useDispatchedSidebarRefresh";
+import { useSettledSidebarFailure, type SidebarFailure } from "./useSettledSidebarFailure";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { useDndMonitor } from "@dnd-kit/core";
 import {
@@ -1614,6 +1615,41 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // nudge — the state Retry used to leave behind (#12576).
   const isProjectDisconnected = currentProject !== null && !isInitialized;
 
+  // Hoisted before the early returns so the failed-switch banner (#8400)
+  // surfaces regardless of which empty/populated branch the sidebar is in —
+  // when a switch's worktree load throws, the store stays empty so every
+  // other branch would otherwise show no trace of the failure. An open project
+  // with no snapshot once loading has settled is a connection failure (#12576)
+  // and takes the same banner. It yields to any service error, shown or
+  // dismissed: a crashed host needs Restart, and Retry offers a fix that
+  // cannot work. A lost port that no restart brought back takes it too, under
+  // the cached list: nothing else on its way will reconnect it (#13748).
+  const loadFailure =
+    worktreeLoadError ??
+    (isProjectDisconnected && !isLoading && error === null
+      ? WORKTREE_DISCONNECTED_MESSAGE
+      : null) ??
+    (isReconnectStalled({ isReconnecting, reconnectingAt })
+      ? WORKTREE_RECONNECT_STALLED_MESSAGE
+      : null);
+
+  // Both banners wait out a settle window before they show: a switch to a slow
+  // remote host passes through states that read as failures on the way to
+  // connecting, and a banner that flashes past unread is worse than none
+  // (#14311). An empty sidebar keeps its skeleton through the window instead.
+  const sidebarFailure: SidebarFailure | null =
+    error !== null
+      ? { kind: "service-error", message: error }
+      : loadFailure !== null
+        ? { kind: "load-error", message: loadFailure }
+        : null;
+  const isFailureSettled = useSettledSidebarFailure(sidebarFailure);
+  const isFailureSettling = sidebarFailure !== null && !isFailureSettled;
+  const worktreeLoadErrorBanner =
+    loadFailure !== null && error === null && isFailureSettled ? (
+      <WorktreeLoadErrorBanner error={loadFailure} />
+    ) : null;
+
   // Workspace-service error banner overlays cached data so the user can keep
   // working through transient poll failures. Hoisted before the early returns
   // so a `setFatalError` that fires before the first snapshot is still
@@ -1622,7 +1658,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // is also the only explanation on screen, so it can't be dismissed there.
   const canDismissErrorBanner = worktrees.length > 0 || !isProjectDisconnected;
   const errorBanner =
-    error !== null && (!bannerDismissed || !canDismissErrorBanner) ? (
+    error !== null && isFailureSettled && (!bannerDismissed || !canDismissErrorBanner) ? (
       <InlineStatusBanner
         title="Workspace service unavailable"
         // A wrapping description, not the one-line mono context line: the
@@ -1644,26 +1680,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         ]}
       />
     ) : null;
-
-  // Hoisted before the early returns so the failed-switch banner (#8400)
-  // surfaces regardless of which empty/populated branch the sidebar is in —
-  // when a switch's worktree load throws, the store stays empty so every
-  // other branch would otherwise show no trace of the failure. An open project
-  // with no snapshot once loading has settled is a connection failure (#12576)
-  // and takes the same banner. It yields to any service error, shown or
-  // dismissed: a crashed host needs Restart, and Retry offers a fix that
-  // cannot work. A lost port that no restart brought back takes it too, under
-  // the cached list: nothing else on its way will reconnect it (#13748).
-  const loadFailure =
-    worktreeLoadError ??
-    (isProjectDisconnected && !isLoading && error === null
-      ? WORKTREE_DISCONNECTED_MESSAGE
-      : null) ??
-    (isReconnectStalled({ isReconnecting, reconnectingAt })
-      ? WORKTREE_RECONNECT_STALLED_MESSAGE
-      : null);
-  const worktreeLoadErrorBanner =
-    loadFailure !== null && error === null ? <WorktreeLoadErrorBanner error={loadFailure} /> : null;
 
   // Mounted in both the zero-worktree early return and the main return path so
   // the errorBanner's "Restart Service" action stays reachable when
@@ -1703,7 +1719,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     );
   }
 
-  if (isLoading && worktrees.length === 0) {
+  if ((isLoading || isFailureSettling) && worktrees.length === 0) {
     return (
       <div className="flex flex-col h-full">
         <div className={cn(SIDEBAR_HEADER_ROW, "border-b border-divider")}>

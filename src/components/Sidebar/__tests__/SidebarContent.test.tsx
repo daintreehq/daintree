@@ -753,7 +753,9 @@ describe("SidebarContent initial loading skeleton — issues #7215, #8804", () =
   });
 
   it("renders the Skeleton primitive in the initial-loading branch with a context-specific label", () => {
-    const branchStart = source.indexOf("if (isLoading && worktrees.length === 0)");
+    const branchStart = source.indexOf(
+      "if ((isLoading || isFailureSettling) && worktrees.length === 0)"
+    );
     const branchEnd = source.indexOf("if (worktrees.length === 0)", branchStart);
     expect(branchStart).toBeGreaterThan(0);
     expect(branchEnd).toBeGreaterThan(branchStart);
@@ -763,7 +765,9 @@ describe("SidebarContent initial loading skeleton — issues #7215, #8804", () =
   });
 
   it("preserves the Worktrees header in the loading branch to avoid layout shift on reveal", () => {
-    const branchStart = source.indexOf("if (isLoading && worktrees.length === 0)");
+    const branchStart = source.indexOf(
+      "if ((isLoading || isFailureSettling) && worktrees.length === 0)"
+    );
     const branchEnd = source.indexOf("if (worktrees.length === 0)", branchStart);
     const branch = source.slice(branchStart, branchEnd);
     // The shared heading draws the same `<h2>` (or the view switcher inside
@@ -780,7 +784,9 @@ describe("SidebarContent initial loading skeleton — issues #7215, #8804", () =
   });
 
   it("uses SkeletonBone with shimmer and no immediate prop (400ms Doherty gate) — #8804", () => {
-    const branchStart = source.indexOf("if (isLoading && worktrees.length === 0)");
+    const branchStart = source.indexOf(
+      "if ((isLoading || isFailureSettling) && worktrees.length === 0)"
+    );
     const branchEnd = source.indexOf("if (worktrees.length === 0)", branchStart);
     const branch = source.slice(branchStart, branchEnd);
     expect(branch).toContain("<SkeletonBone");
@@ -789,14 +795,18 @@ describe("SidebarContent initial loading skeleton — issues #7215, #8804", () =
   });
 
   it("marks each card wrapper aria-hidden so the Skeleton primitive owns the live region", () => {
-    const branchStart = source.indexOf("if (isLoading && worktrees.length === 0)");
+    const branchStart = source.indexOf(
+      "if ((isLoading || isFailureSettling) && worktrees.length === 0)"
+    );
     const branchEnd = source.indexOf("if (worktrees.length === 0)", branchStart);
     const branch = source.slice(branchStart, branchEnd);
     expect(branch).toContain('aria-hidden="true"');
   });
 
   it("renders the loading branch via WORKTREE_SKELETON_CARDS.map with no row borders — #8804", () => {
-    const branchStart = source.indexOf("if (isLoading && worktrees.length === 0)");
+    const branchStart = source.indexOf(
+      "if ((isLoading || isFailureSettling) && worktrees.length === 0)"
+    );
     const branchEnd = source.indexOf("if (worktrees.length === 0)", branchStart);
     const branch = source.slice(branchStart, branchEnd);
     expect(branch).toContain("WORKTREE_SKELETON_CARDS.map");
@@ -813,7 +823,9 @@ describe("SidebarContent initial loading skeleton — issues #7215, #8804", () =
 
   it("renders SkeletonHint as sibling of Skeleton, not nested inside", () => {
     expect(source).toContain("<SkeletonHint");
-    const branchStart = source.indexOf("if (isLoading && worktrees.length === 0)");
+    const branchStart = source.indexOf(
+      "if ((isLoading || isFailureSettling) && worktrees.length === 0)"
+    );
     const branchEnd = source.indexOf("if (worktrees.length === 0)", branchStart);
     const branch = source.slice(branchStart, branchEnd);
     expect(branch).toMatch(/<\/Skeleton>[\s\S]*?<SkeletonHint/);
@@ -961,7 +973,9 @@ describe("SidebarContent disconnected project — issue #12576", () => {
     expect(derivation![1]).toContain("worktreeLoadError === null");
     expect(derivation![1]).toContain("error === null");
     expect(source.match(/\bisStoreLoading\b/g)).toHaveLength(2);
-    const branchStart = source.indexOf("if (isLoading && worktrees.length === 0)");
+    const branchStart = source.indexOf(
+      "if ((isLoading || isFailureSettling) && worktrees.length === 0)"
+    );
     const branch = source.slice(branchStart, source.indexOf("if (worktrees.length === 0) {"));
     expect(branch).toContain("<Skeleton");
     expect(branch).not.toMatch(/worktreeLoadErrorBanner|<WorktreeLoadErrorBanner|\{errorBanner\}/);
@@ -971,7 +985,7 @@ describe("SidebarContent disconnected project — issue #12576", () => {
     // Retry cannot bring back a crashed host, so any service error — its
     // banner shown or dismissed — keeps Retry off screen.
     expect(source).toMatch(
-      /const worktreeLoadErrorBanner =\s*loadFailure !== null && error === null \?/
+      /const worktreeLoadErrorBanner =\s*loadFailure !== null && error === null && isFailureSettled \?/
     );
   });
 
@@ -999,13 +1013,32 @@ describe("SidebarContent disconnected project — issue #12576", () => {
     expect(source).toContain(
       "const canDismissErrorBanner = worktrees.length > 0 || !isProjectDisconnected;"
     );
-    expect(source).toMatch(/error !== null && \(!bannerDismissed \|\| !canDismissErrorBanner\) \?/);
+    expect(source).toMatch(
+      /error !== null && isFailureSettled && \(!bannerDismissed \|\| !canDismissErrorBanner\) \?/
+    );
+  });
+
+  it("holds every failure banner behind one settle window, with the skeleton standing in (#14311)", () => {
+    // One window covers both banners, fed by whichever failure would show, so
+    // a hand-over from one to the other cannot restart it.
+    expect(source).toMatch(
+      /const sidebarFailure: SidebarFailure \| null =\s*error !== null\s*\?\s*\{ kind: "service-error", message: error \}\s*:\s*loadFailure !== null\s*\?\s*\{ kind: "load-error", message: loadFailure \}\s*:\s*null;/
+    );
+    expect(source).toContain("const isFailureSettled = useSettledSidebarFailure(sidebarFailure);");
+    expect(source).toContain(
+      "const isFailureSettling = sidebarFailure !== null && !isFailureSettled;"
+    );
+    // Without the skeleton an empty sidebar would sit as a bare header for the
+    // length of the window.
+    expect(source).toContain("if ((isLoading || isFailureSettling) && worktrees.length === 0)");
   });
 
   it("keeps the loading skeleton ahead of the disconnected fallback", () => {
     // `isInitialized` is false for every cold start, so the fallback may only
     // claim the state once loading has settled.
-    const skeletonIdx = source.indexOf("if (isLoading && worktrees.length === 0)");
+    const skeletonIdx = source.indexOf(
+      "if ((isLoading || isFailureSettling) && worktrees.length === 0)"
+    );
     const zeroIdx = source.indexOf("if (worktrees.length === 0) {");
     expect(skeletonIdx).toBeGreaterThan(0);
     expect(skeletonIdx).toBeLessThan(zeroIdx);
@@ -1739,7 +1772,9 @@ describe("SidebarContent — workspace with no worktrees (#11405, #11499)", () =
 
   it("answers before the loading skeleton, which would otherwise never resolve", () => {
     const gate = source.indexOf("!workspaceRoot.isGitBacked");
-    const skeleton = source.indexOf("if (isLoading && worktrees.length === 0)");
+    const skeleton = source.indexOf(
+      "if ((isLoading || isFailureSettling) && worktrees.length === 0)"
+    );
     expect(gate).toBeGreaterThan(-1);
     expect(skeleton).toBeGreaterThan(-1);
     expect(gate).toBeLessThan(skeleton);

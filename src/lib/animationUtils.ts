@@ -75,6 +75,15 @@ export const UI_DOHERTY_THRESHOLD = 400;
  *  Performance mode collapses this to 0 via `getPerformanceModeFloor`. */
 export const LOCAL_ERROR_SETTLE_MS = UI_DOHERTY_THRESHOLD;
 
+/** How long the worktree sidebar holds a failure off screen before its banner
+ *  shows (#14311). A project switch to a slow remote host passes through
+ *  states that read as failures for a fraction of a second on the way to
+ *  connecting, and a banner that flashes past unread says something broke
+ *  with no way to find out what. A failure still standing after this window is
+ *  a real one. Deliberately not collapsed in performance mode: the flash it
+ *  suppresses is not an animation. */
+export const UI_FAILURE_SETTLE_MS = 2_000;
+
 /** UX anti-flicker gate for palette typed-input stale dimming. Shorter than
  *  Doherty's 400ms because keystrokes arrive every ~200ms at normal typing
  *  speed — a 400ms gate would almost never fire before being reset by the next
