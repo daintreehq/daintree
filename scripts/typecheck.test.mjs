@@ -14,7 +14,7 @@ const projects = [
 ];
 const list = (config) => programs[config] ?? null;
 const names = (selected) => selected.map(({ project }) => project.name);
-const edit = (path) => ({ path, removed: false });
+const edit = (path) => ({ path, removed: false, added: false });
 
 describe("selectProjects", () => {
   it("selects only the projects whose program contains a changed file", () => {
@@ -50,9 +50,18 @@ describe("selectProjects", () => {
       edit("electron/tsconfig.preload.json"),
       { path: "shared/gone.ts", removed: true },
       { path: "src/data.json", removed: true },
+      { path: "src/old.js", removed: true },
+      { path: "src/hooks.js", removed: false, added: true },
+      edit("packages/svelte-source-model/src/types.ts"),
     ]) {
       expect(names(selectProjects([change], list, projects))).toEqual(["a", "b", "c"]);
     }
+  });
+
+  it("treats an added TypeScript file like any other edit", () => {
+    expect(
+      names(selectProjects([{ path: "src/a.ts", removed: false, added: true }], list, projects))
+    ).toEqual(["a"]);
   });
 
   it("ignores deletions of files no compiler reads", () => {
@@ -79,18 +88,18 @@ describe("parseNameStatus", () => {
       "",
     ].join("\0");
     expect(parseNameStatus(output)).toEqual([
-      { path: "src/a.ts", removed: false },
-      { path: "src/new.ts", removed: false },
-      { path: "src/old.ts", removed: true },
-      { path: "src/from.ts", removed: true },
-      { path: "src/to.ts", removed: false },
-      { path: "src/copy.ts", removed: false },
+      { path: "src/a.ts", removed: false, added: false },
+      { path: "src/new.ts", removed: false, added: true },
+      { path: "src/old.ts", removed: true, added: false },
+      { path: "src/from.ts", removed: true, added: false },
+      { path: "src/to.ts", removed: false, added: true },
+      { path: "src/copy.ts", removed: false, added: true },
     ]);
   });
 
   it("keeps paths containing spaces and tabs intact", () => {
     expect(parseNameStatus("M\0src/a b\tc.ts\0")).toEqual([
-      { path: "src/a b\tc.ts", removed: false },
+      { path: "src/a b\tc.ts", removed: false, added: false },
     ]);
   });
 });

@@ -11,8 +11,11 @@
 // A project is selected when its own program (`tsc --listFilesOnly`) contains a
 // file changed since the merge base with origin/develop, committed or not. That
 // list is exact, so an import from an unexpected folder cannot slip past it.
-// What a program list cannot show (manifests, tsconfigs, deleted or renamed
-// sources whose importers may now break) selects everything.
+// What a program list cannot show selects everything: manifests, tsconfigs,
+// workspace packages (consumers read their built `dist`, which git never sees),
+// deleted or renamed sources whose importers may now break, and added or
+// removed JavaScript, which can shadow a module resolution without ever
+// entering a program (`allowJs` is off).
 
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -50,15 +53,18 @@ export const PROJECTS = [
   ].map(([name, config]) => ({ name, steps: [["--noEmit", "-p", config]], configs: [config] })),
 ];
 
-const DELETION_SENSITIVE = /\.(?:[cm]?tsx?|json)$/;
+const DELETION_SENSITIVE = /\.(?:[cm]?[jt]sx?|json)$/;
+const RESOLUTION_ONLY = /\.(?:[cm]?jsx?)$/;
 
 export function runAllReason(change) {
   const base = path.posix.basename(change.path);
   if (base === "package.json" || base === "package-lock.json") return `${change.path} changed`;
   if (/^tsconfig.*\.json$/.test(base)) return `${change.path} changed`;
+  if (change.path.startsWith("packages/")) return `workspace package ${change.path} changed`;
   if (change.removed && DELETION_SENSITIVE.test(change.path)) {
     return `${change.path} was deleted or renamed`;
   }
+  if (change.added && RESOLUTION_ONLY.test(change.path)) return `${change.path} was added`;
   return null;
 }
 
@@ -101,12 +107,15 @@ export function parseNameStatus(output) {
   for (let i = 0; i < tokens.length && tokens[i];) {
     const status = tokens[i++];
     if (status.startsWith("R")) {
-      changes.push({ path: tokens[i++], removed: true }, { path: tokens[i++], removed: false });
+      changes.push(
+        { path: tokens[i++], removed: true, added: false },
+        { path: tokens[i++], removed: false, added: true }
+      );
     } else if (status.startsWith("C")) {
       i++;
-      changes.push({ path: tokens[i++], removed: false });
+      changes.push({ path: tokens[i++], removed: false, added: true });
     } else {
-      changes.push({ path: tokens[i++], removed: status === "D" });
+      changes.push({ path: tokens[i++], removed: status === "D", added: status === "A" });
     }
   }
   return changes;
@@ -137,7 +146,7 @@ function changedFiles(base) {
   const untracked = git(["ls-files", "--others", "--exclude-standard", "-z"])
     .split("\0")
     .filter(Boolean)
-    .map((file) => ({ path: file, removed: false }));
+    .map((file) => ({ path: file, removed: false, added: true }));
   return [...tracked, ...untracked];
 }
 
@@ -150,8 +159,9 @@ function listProgramFiles(config) {
       maxBuffer: 256 * 1024 * 1024,
       stdio: ["ignore", "pipe", "ignore"],
     });
-  } catch (error) {
-    output = typeof error.stdout === "string" ? error.stdout : "";
+  } catch {
+    // Partial output from a failed listing could omit the changed file.
+    return null;
   }
   const files = output
     .split(/\r?\n/)
