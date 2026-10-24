@@ -1,8 +1,5 @@
-import { createHash } from "node:crypto";
 import type { FleetRunRow, RunCanopyRefinement } from "../../../shared/types/ipc/fleet.js";
 import {
-  CANOPY_ATTENTION_THRESHOLD,
-  CANOPY_URGENT_PRIORITY,
   type CanopyCard,
   type CanopyCategory,
   type CanopyDisposition,
@@ -19,7 +16,11 @@ import {
 } from "../../../shared/types/ipc/canopy.js";
 import {
   isSecretPrompt,
+  normalizeScreenText,
+  onScreen,
+  optionsInScreenOrder,
   prepareScreen,
+  promptKey,
   sameScreenTail,
   scrolledSince,
   type PreparedScreen,
@@ -41,7 +42,6 @@ import type { TerminalAnswer } from "../../../shared/utils/terminalSubmission.js
 import { EMPTY_GLANCE, glanceScreen } from "./canopyGlance.js";
 import { CANOPY_REFLOW_MS, reflowPrint, sameAfterReflow } from "./canopyReflow.js";
 import { observedCaughtUp } from "../../../shared/utils/canopyObservedKind.js";
-import { isHandBackStop } from "../../../shared/utils/runHandBack.js";
 import { heldCanopyPriority } from "../../../shared/utils/canopyPriorityTier.js";
 import {
   CANOPY_READ_DWELL_MS,
@@ -61,6 +61,22 @@ import {
   restoreRead,
   type ReadTrack,
 } from "./canopyReads.js";
+import {
+  blockedOn,
+  busyCategory,
+  classifierPriority,
+  isBusy,
+  needsAttention,
+  observedKey,
+  readingFloor,
+  readingIgnoresState,
+  refinementOf,
+  returnsToInbox,
+  verdictOf,
+  type CanopyEvidence,
+} from "./canopyVerdict.js";
+
+export { CANOPY_BLOCKED_SCALE, CANOPY_CLASSIFIER_ANCHORS } from "./canopyVerdict.js";
 
 /** Screen rows read per run — the tail the cards are written from. */
 export const CANOPY_SCREEN_LINES = 50;
@@ -156,36 +172,6 @@ export const CANOPY_TRANSIENT_GRACE_MS = 60_000;
  * covers one and its grace, and a service that never comes up is reported.
  */
 export const CANOPY_COLD_START_GRACE_MS = 180_000;
-/**
- * The priority each classifier reading gives, before any words are written:
- * the describer's own anchors for the same situations, so a run keeps its
- * place when the words land. The classifier can't tell a finished turn with
- * loose ends (55) from a clean one (40), so it sits between them.
- */
-export const CANOPY_CLASSIFIER_ANCHORS = {
-  approval: 92,
-  question: 86,
-  stuck: 70,
-  error: 70,
-  finished: 50,
-  notable: 30,
-  idle: 20,
-  busy: 5,
-} as const;
-/**
- * How an ask's priority follows the classifier's probability that the agent
- * is blocked on a person: the finished anchor at `from` or below, the ask's
- * own anchor at `to` or above, and a straight line between. Measured on the
- * gold set, real approvals and questions read 0.91–0.98 and finished turns
- * 0.30 at most, so only a confident ask reaches the urgent band.
- */
-export const CANOPY_BLOCKED_SCALE = { from: 0.5, to: 0.9 } as const;
-/** Below this category confidence the classifier's approval or question is not taken as one. */
-const ASK_CONFIDENCE = 0.5;
-/** A busy run the classifier gives at least this attention probability is read as stuck. */
-const STUCK_ATTENTION = 0.8;
-/** A busy run the classifier gives at least this notable probability is worth a look. */
-const NOTABLE_PROBABILITY = 0.5;
 const BROADCAST_DEBOUNCE_MS = 40;
 
 export interface CanopyServiceDeps {
@@ -426,14 +412,7 @@ interface RunEntry {
    * once the screen it was of has gone. A failed read leaves it as it was, so
    * the turn tells a reading of this stop from one of the stop before.
    */
-  evidence: {
-    turn: number;
-    /** The screen it was read from (`contentHash`) and what Daintree observed then (`observedKey`). */
-    hash: string | null;
-    state: string;
-    question: string | null;
-    status: string | null;
-  } | null;
+  evidence: CanopyEvidence | null;
   /** The screen now showing is blank: nothing on it to quote, whatever the card last said. */
   cleared: boolean;
 }
@@ -2866,7 +2845,7 @@ function noteFor(entry: RunEntry, now: number): CanopyNote | null {
 function latestRequest(digest: CanopyDigest | null): string | null {
   if (digest?.requests == null) return null;
   for (let i = digest.requests.length - 1; i >= 0; i--) {
-    const request = normalize(digest.requests[i]!);
+    const request = normalizeScreenText(digest.requests[i]!);
     if (!isFollowUp(request)) return request;
   }
   return null;
@@ -2931,39 +2910,6 @@ function previousReading(
   };
 }
 
-/**
- * Whether a run the user put aside has something new to say, the way a new
- * reply brings a thread back into a mail inbox. Its screen must have changed
- * and now need the user — and either the agent worked in between (so this is
- * a new stop, not the one the user saw), or it is asking a different question.
- * A screen that only scrolled, an echoed reply, or the same prompt still
- * drawn never brings it back.
- */
-function returnsToInbox(
-  disposition: Disposition,
-  contentHash: string,
-  question: string | null
-): boolean {
-  if (contentHash === disposition.contentHash) return false;
-  if (disposition.sawWork) return true;
-  return question !== null && promptKey(question) !== disposition.question;
-}
-
-function busyCategory(category: CanopyCategory | null): boolean {
-  return category === "working" || category === "running";
-}
-
-/**
- * What a reading made of a screen, as far as its words go: its state, whether
- * it needs the user, and whether a busy run looks stuck. Not the finer score:
- * on a screen that has not moved, how notable it reads drifts as it ages, and
- * that is no reason to write its words again.
- */
-function verdictOf(classified: ClassifierResult, run: FleetRunRow): string {
-  const stuck = busyCategory(classified.category) && classified.attention >= STUCK_ATTENTION;
-  return `${classified.category}:${needsAttention(classified.attention)}:${stuck}:${blockedOn(classified, run) !== null}`;
-}
-
 /** Daintree now sees the run as the card read it, where at the read it still saw otherwise. */
 function stateCaughtUp(card: CanopyCard, run: FleetRunRow): boolean {
   const then = card.observedWhenRead;
@@ -3015,154 +2961,6 @@ function onlyRedrawn(before: readonly string[] | null, after: readonly string[])
   return true;
 }
 
-/** What Daintree observes of a run, as far as reading it goes: its state and why it waits. */
-function observedKey(run: FleetRunRow): string {
-  return `${run.agentState ?? ""}:${run.waitingReason ?? ""}`;
-}
-
-/** An `observedKey` taken while the run was at work. */
-const BUSY_READ_STATE = /^(working|directing):/;
-
-/**
- * What a run's reading refines of where it lands, or null when it refines
- * nothing. The classifier's category is the verdict and its verbatim words the
- * evidence; no score or priority places a run, so a finished turn with loose
- * ends — which can score high — stays where the free rules put it.
- */
-function refinementOf(
-  entry: RunEntry,
-  run: FleetRunRow,
-  stalledSince: number | null,
-  now: number
-): RunCanopyRefinement | null {
-  if (run.agentState === undefined) return null;
-  if (isBusy(run)) {
-    const quote = (entry.card?.activity ?? entry.card?.glance.doing ?? "").trim();
-    if (stalledSince === null || entry.cleared || !quote) return null;
-    return { kind: "stalled", quote, readAt: now, stalledSince };
-  }
-  const classified = entry.classified;
-  const evidence = entry.evidence;
-  // Only a reading of this turn speaks for it: one kept through a failed read
-  // is about the stop before, and a pass under way is about a newer screen.
-  // A reading that landed while the turn was still being held speaks for the
-  // turn it then became, as long as the screen and the observed state are the
-  // ones it read: an unchanged screen is never sent to be read again.
-  const sameRead =
-    evidence !== null && evidence.hash === entry.contentHash && evidence.state === observedKey(run);
-  if (classified === null || evidence === null) return null;
-  if (evidence.turn !== entry.reads.turn && !sameRead) return null;
-  if (entry.pending || classified.confidence < ASK_CONFIDENCE) return null;
-  if (isHandBackStop(run.agentState, run.waitingReason)) {
-    // Read while stopped: a reading of the run at work says nothing of what it stopped on.
-    if (classified.category !== "question" || BUSY_READ_STATE.test(entry.readState)) return null;
-    const quote = evidence.question?.trim();
-    return quote ? { kind: "asked", quote, readAt: entry.readAt } : null;
-  }
-  if (run.agentState === "waiting" && run.waitingReason === "question") {
-    // Only a reading of this very wait can say it asks nothing.
-    if (entry.readState !== observedKey(run)) return null;
-    if (classified.category !== "finished" && classified.category !== "idle") return null;
-    if (classified.question !== null && classified.question.trim() !== "") return null;
-    const quote = (evidence.status ?? entry.card?.activity ?? "").trim();
-    return quote
-      ? { kind: "not-asking", quote, readAt: entry.readAt, seen: !isUnread(entry.reads) }
-      : null;
-  }
-  return null;
-}
-
-function isBusy(run: FleetRunRow): boolean {
-  return run.agentState === "working" || run.agentState === "directing";
-}
-
-/**
- * The priority of an approval or a question the classifier read, scaled by
- * how sure it is the agent is blocked on a person; null for any other
- * reading. Daintree's own state seeing the same approval counts as sure.
- */
-function askScore(classified: ClassifierResult, run: FleetRunRow): number | null {
-  const category = classified.category;
-  if (category !== "approval" && category !== "question") return null;
-  if (!needsAttention(classified.attention) || classified.confidence < ASK_CONFIDENCE) return null;
-  const blocked =
-    category === "approval" && run.waitingReason === "approval"
-      ? Math.max(classified.blocked, CANOPY_BLOCKED_SCALE.to)
-      : classified.blocked;
-  const { from, to } = CANOPY_BLOCKED_SCALE;
-  const scale = Math.min(1, Math.max(0, (blocked - from) / (to - from)));
-  const low = CANOPY_CLASSIFIER_ANCHORS.finished;
-  return Math.round(low + (CANOPY_CLASSIFIER_ANCHORS[category] - low) * scale);
-}
-
-/**
- * Whether what the classifier concluded from a screen holds whatever Daintree
- * observes of the run: everything but an approval it was unsure blocks the
- * agent, which `askScore` raises once Daintree sees the agent waiting on one.
- */
-function readingIgnoresState(classified: ClassifierResult): boolean {
-  return classified.category !== "approval" || classified.blocked >= CANOPY_BLOCKED_SCALE.to;
-}
-
-/** What the agent is blocked on, when the classifier's reading of it is urgent; null otherwise. */
-function blockedOn(classified: ClassifierResult, run: FleetRunRow): "approval" | "question" | null {
-  const score = askScore(classified, run);
-  if (score === null || score < CANOPY_URGENT_PRIORITY) return null;
-  return classified.category as "approval" | "question";
-}
-
-/**
- * A run's priority from the classifier alone: fixed by what it read and how
- * sure it is, so the same reading always ranks the same.
- */
-function classifierPriority(classified: ClassifierResult, run: FleetRunRow): number {
-  const anchors = CANOPY_CLASSIFIER_ANCHORS;
-  const ask = askScore(classified, run);
-  if (ask !== null) return ask;
-  const needs = needsAttention(classified.attention);
-  switch (classified.category) {
-    case "approval":
-    case "question":
-    case "finished":
-      return needs ? anchors.finished : anchors.idle;
-    case "error":
-      return needs ? anchors.error : anchors.finished;
-    case "idle":
-      return anchors.idle;
-    case "working":
-    case "running":
-      if (classified.attention >= STUCK_ATTENTION) return anchors.stuck;
-      return (classified.notable ?? 0) >= NOTABLE_PROBABILITY ? anchors.notable : anchors.busy;
-  }
-}
-
-/**
- * The lowest priority a described run can have: an urgent ask the classifier
- * read keeps its place whatever the describer scores, and the describer's
- * score stands above it.
- */
-function askFloor(classified: ClassifierResult, run: FleetRunRow): number {
-  return blockedOn(classified, run) === null ? 0 : (askScore(classified, run) ?? 0);
-}
-
-/**
- * The lowest a described run ranks, by what the classifier read: an ask keeps
- * its place, and a busy agent showing something notable keeps the notable
- * band, whatever lower score the describer gives it.
- */
-function readingFloor(classified: ClassifierResult, run: FleetRunRow): number {
-  const busy = classified.category === "working" || classified.category === "running";
-  const notable =
-    busy && (classified.notable ?? 0) >= NOTABLE_PROBABILITY
-      ? CANOPY_CLASSIFIER_ANCHORS.notable
-      : 0;
-  return Math.max(askFloor(classified, run), notable);
-}
-
-function needsAttention(probability: number): boolean {
-  return probability >= CANOPY_ATTENTION_THRESHOLD;
-}
-
 /**
  * A failed read in words for the user: what happened, never the provider's
  * own terms — no stage names, status codes or stream codes.
@@ -3188,71 +2986,6 @@ export function failureMessage(error: unknown): string {
   if (/^HTTP 5\d\d/.test(message)) return "Canopy's service ran into a problem.";
   if (/^HTTP 4\d\d/.test(message)) return "Canopy's service turned the request down.";
   return "Canopy's service sent back an answer it couldn't use.";
-}
-
-/**
- * A prompt as kept past its screen — to tell the same ask from a new one — by
- * fingerprint only, so no prompt text outlives the reading it came from.
- */
-function promptKey(text: string): string {
-  return createHash("sha1").update(normalize(text)).digest("hex");
-}
-
-function normalize(text: string): string {
-  return text
-    .replace(/[❯›>▶●⏺•✦]\s*/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
-}
-
-/**
- * `text` when it is on the screen, else null — the describer may only quote.
- * A trailing key hint like "(esc)" or "(y)" is allowed to differ.
- */
-function onScreen(text: string | null | undefined, screen: string): string | null {
-  if (text == null) return null;
-  const wanted = normalize(text.replace(/\s*\((?:esc|[a-z])\)\s*$/i, ""));
-  if (wanted.length === 0) return null;
-  return normalize(screen).includes(wanted) ? text : null;
-}
-
-/**
- * The options that are really on screen, in the order the CLI draws them — the
- * panel numbers its buttons, and a "1" that isn't the CLI's own 1 misleads.
- */
-function optionsInScreenOrder(options: readonly string[], screen: string): string[] {
-  // Each option is placed by the row that draws it, found from the bottom —
-  // where a dialog's choices are — so "No" is placed by its own row, not by
-  // "No files changed" in the output above it. A row that is the option itself
-  // wins over one that only starts with it ("Yes" over "Yes, and don't ask
-  // again"), an option wrapped over rows is placed by the row it starts on,
-  // and choices drawn inline on one row keep their order within it.
-  const rows = screen.split("\n").map((row) =>
-    normalize(row)
-      .replace(/^\d+[.)]\s*/, "")
-      .replace(/\s*\((?:esc|[a-z])\)$/, "")
-  );
-  const lastRow = (test: (row: string) => boolean) => {
-    for (let i = rows.length - 1; i >= 0; i--) if (test(rows[i]!)) return i;
-    return -1;
-  };
-  return options
-    .map((option) => {
-      if (onScreen(option, screen) === null) return { option, row: -1, at: -1 };
-      const wanted = normalize(option.replace(/\s*\((?:esc|[a-z])\)\s*$/i, ""));
-      let row = lastRow((candidate) => candidate === wanted);
-      if (row < 0) row = lastRow((candidate) => candidate.startsWith(wanted));
-      if (row < 0) row = lastRow((candidate) => candidate.includes(wanted));
-      if (row < 0) {
-        row = lastRow((candidate) => candidate.length >= 3 && wanted.startsWith(candidate));
-      }
-      const at = row < 0 ? -1 : Math.max(0, rows[row]!.indexOf(wanted));
-      return { option, row, at };
-    })
-    .filter((entry) => entry.row >= 0)
-    .sort((a, b) => a.row - b.row || a.at - b.at)
-    .map((entry) => entry.option);
 }
 
 /** The longest a failing run waits before it is tried again. */
