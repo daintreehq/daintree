@@ -7504,6 +7504,7 @@ interface PluginFileDocument {
     /** Subscribe to changes made outside the view. Returns the unsubscribe. */
     onDidChange(listener: (change: PluginFileDocumentChange) => void): () => void;
 }
+
 /**
  * The live state of one panel `toolbar` button, set by the view with
  * `setToolbarItemState`. Every field is optional; an omitted field is the

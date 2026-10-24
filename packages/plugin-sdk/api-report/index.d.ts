@@ -2609,6 +2609,125 @@ interface PluginFileDocument {
     /** Subscribe to changes made outside the view. Returns the unsubscribe. */
     onDidChange(listener: (change: PluginFileDocumentChange) => void): () => void;
 }
+
+/** A surface slot claim naming one of the plugin's own `contributes.views`. */
+interface SurfaceViewSlot {
+    viewId: string;
+}
+/** The `contributes.surfaces` block of a project plugin's manifest. */
+interface SurfaceContributions {
+    emptyCanvas?: SurfaceViewSlot;
+    projectHome?: SurfaceViewSlot;
+    worktreeCreate?: SurfaceViewSlot;
+    /**
+     * A `contributes.layouts[].id` of this plugin, opened once on the project's
+     * first open on this machine while the grid and dock are still empty. Its
+     * recipes wait as click-to-start entries rather than starting.
+     */
+    defaultLayout?: string;
+}
+
+/** Where a project application opens: its claimed Home, or the host's grid. */
+declare const PLUGIN_APPLICATION_DESTINATIONS: readonly ["home", "grid"];
+type PluginApplicationDestination = (typeof PLUGIN_APPLICATION_DESTINATIONS)[number];
+/**
+ * How a Home destination shares the main area (#14107): `full` gives the Home
+ * the whole area, `beside-grid` draws it beside the host's own panels so agents
+ * launched, chosen and focused there never hide it.
+ */
+declare const PLUGIN_APPLICATION_ARRANGEMENTS: readonly ["full", "beside-grid"];
+type PluginApplicationArrangement = (typeof PLUGIN_APPLICATION_ARRANGEMENTS)[number];
+/** The welcome tour a project application starts from, and which revision of it. */
+interface PluginApplicationTourRef {
+    /** A `contributes.tours[].id` of this plugin, not scoped to a panel kind. */
+    id: string;
+    /**
+     * The tour's welcome revision, a positive integer. Raised when the tour
+     * changes enough to be worth offering again; the tour itself is unchanged.
+     */
+    version: number;
+}
+/**
+ * One declared parameter of a section. Values are identifiers, not content:
+ * a string holds only the manifest id vocabulary (`[A-Za-z0-9._-]`), so a
+ * free-text field, a URL or a token can't be expressed. Only a parameter
+ * marked `persist` is written to disk; the rest live as long as the project's renderer.
+ */
+type PluginApplicationNavigationParam = {
+    type: "string";
+    required?: boolean;
+    persist?: boolean;
+    maxLength?: number;
+} | {
+    type: "integer";
+    required?: boolean;
+    persist?: boolean;
+} | {
+    type: "boolean";
+    required?: boolean;
+    persist?: boolean;
+};
+/** A named destination of the application: a section, and the record parameters it takes. */
+interface PluginApplicationSection {
+    id: string;
+    title: string;
+    params?: Record<string, PluginApplicationNavigationParam>;
+}
+/**
+ * `application.navigation` (#14108): the destinations the application's
+ * views navigate between. The host keeps one location and history per project
+ * for them, shared by every view of the application.
+ */
+interface PluginApplicationNavigation {
+    /**
+     * The navigation schema's revision. Raising it drops the saved location and
+     * history, so a renamed parameter never restores with its old meaning.
+     */
+    version: number;
+    /** Where the application starts, and where a location that no longer resolves lands. */
+    defaultSectionId: string;
+    sections: PluginApplicationSection[];
+}
+/**
+ * The top-level `application` block of a project plugin's manifest (#14097).
+ *
+ * Declarative only: it names the application and points at contributions the
+ * same manifest already declares, by their bare ids, and implements none of
+ * them. The owner is the plugin whose manifest carries it. Cooperating plugins
+ * contribute their own parts and are disclosed through `worksWith`; at most one
+ * plugin in a project may declare an application, and a second makes both
+ * unavailable rather than picking a winner.
+ *
+ * Defaults it names (destination, presentation levels) never outrank an
+ * answer the user gave, and while the application is anything but active the
+ * project shows the standard workspace. See {@link ProjectApplicationState}.
+ */
+interface PluginApplicationDescriptor {
+    /** The application's name, as the host shows it. */
+    name: string;
+    /** Same vocabulary as a sidebar view's `iconId`. */
+    iconId?: string;
+    /** `"home"` requires `contributes.surfaces.projectHome`. */
+    destination: PluginApplicationDestination;
+    /**
+     * The arrangement a `"home"` destination opens in; omitted means `"full"`.
+     * A default only: the user's own Home, Split or Grid choice always wins.
+     */
+    arrangement?: PluginApplicationArrangement;
+    /** A `contributes.views[].id` with `location: "sidebar"`. */
+    sidebarViewId?: string;
+    /** A `contributes.views[].id` with `location: "settings"`: the application's settings home. */
+    settingsViewId?: string;
+    welcomeTour?: PluginApplicationTourRef;
+    /** The bare id of a `contributes.commands` entry of kind `"command"`. */
+    firstWorkflow?: string;
+    /** `contributes.agentMcp[].id` endpoints the application's agents need. */
+    requiredTools?: string[];
+    /** Suggested presentation levels, in the host's closed vocabulary. */
+    presentation?: Partial<Record<string, "shown" | "demoted" | "hidden">>;
+    navigation?: PluginApplicationNavigation;
+}
+
 interface PanelContribution {
     id: string;
     name: string;
@@ -3240,122 +3359,6 @@ interface ViewContribution {
     title?: string;
     description?: string;
     pages?: PluginSettingsPageContribution[];
-}
-/** A surface slot claim naming one of the plugin's own `contributes.views`. */
-interface SurfaceViewSlot {
-    viewId: string;
-}
-/** The `contributes.surfaces` block of a project plugin's manifest. */
-interface SurfaceContributions {
-    emptyCanvas?: SurfaceViewSlot;
-    projectHome?: SurfaceViewSlot;
-    worktreeCreate?: SurfaceViewSlot;
-    /**
-     * A `contributes.layouts[].id` of this plugin, opened once on the project's
-     * first open on this machine while the grid and dock are still empty. Its
-     * recipes wait as click-to-start entries rather than starting.
-     */
-    defaultLayout?: string;
-}
-/** Where a project application opens: its claimed Home, or the host's grid. */
-declare const PLUGIN_APPLICATION_DESTINATIONS: readonly ["home", "grid"];
-type PluginApplicationDestination = (typeof PLUGIN_APPLICATION_DESTINATIONS)[number];
-/**
- * How a Home destination shares the main area (#14107): `full` gives the Home
- * the whole area, `beside-grid` draws it beside the host's own panels so agents
- * launched, chosen and focused there never hide it.
- */
-declare const PLUGIN_APPLICATION_ARRANGEMENTS: readonly ["full", "beside-grid"];
-type PluginApplicationArrangement = (typeof PLUGIN_APPLICATION_ARRANGEMENTS)[number];
-/** The welcome tour a project application starts from, and which revision of it. */
-interface PluginApplicationTourRef {
-    /** A `contributes.tours[].id` of this plugin, not scoped to a panel kind. */
-    id: string;
-    /**
-     * The tour's welcome revision, a positive integer. Raised when the tour
-     * changes enough to be worth offering again; the tour itself is unchanged.
-     */
-    version: number;
-}
-/**
- * One declared parameter of a section. Values are identifiers, not content:
- * a string holds only the manifest id vocabulary (`[A-Za-z0-9._-]`), so a
- * free-text field, a URL or a token can't be expressed. Only a parameter
- * marked `persist` is written to disk; the rest live as long as the project's renderer.
- */
-type PluginApplicationNavigationParam = {
-    type: "string";
-    required?: boolean;
-    persist?: boolean;
-    maxLength?: number;
-} | {
-    type: "integer";
-    required?: boolean;
-    persist?: boolean;
-} | {
-    type: "boolean";
-    required?: boolean;
-    persist?: boolean;
-};
-/** A named destination of the application: a section, and the record parameters it takes. */
-interface PluginApplicationSection {
-    id: string;
-    title: string;
-    params?: Record<string, PluginApplicationNavigationParam>;
-}
-/**
- * `application.navigation` (#14108): the destinations the application's
- * views navigate between. The host keeps one location and history per project
- * for them, shared by every view of the application.
- */
-interface PluginApplicationNavigation {
-    /**
-     * The navigation schema's revision. Raising it drops the saved location and
-     * history, so a renamed parameter never restores with its old meaning.
-     */
-    version: number;
-    /** Where the application starts, and where a location that no longer resolves lands. */
-    defaultSectionId: string;
-    sections: PluginApplicationSection[];
-}
-/**
- * The top-level `application` block of a project plugin's manifest (#14097).
- *
- * Declarative only: it names the application and points at contributions the
- * same manifest already declares, by their bare ids, and implements none of
- * them. The owner is the plugin whose manifest carries it. Cooperating plugins
- * contribute their own parts and are disclosed through `worksWith`; at most one
- * plugin in a project may declare an application, and a second makes both
- * unavailable rather than picking a winner.
- *
- * Defaults it names (destination, presentation levels) never outrank an
- * answer the user gave, and while the application is anything but active the
- * project shows the standard workspace. See {@link ProjectApplicationState}.
- */
-interface PluginApplicationDescriptor {
-    /** The application's name, as the host shows it. */
-    name: string;
-    /** Same vocabulary as a sidebar view's `iconId`. */
-    iconId?: string;
-    /** `"home"` requires `contributes.surfaces.projectHome`. */
-    destination: PluginApplicationDestination;
-    /**
-     * The arrangement a `"home"` destination opens in; omitted means `"full"`.
-     * A default only: the user's own Home, Split or Grid choice always wins.
-     */
-    arrangement?: PluginApplicationArrangement;
-    /** A `contributes.views[].id` with `location: "sidebar"`. */
-    sidebarViewId?: string;
-    /** A `contributes.views[].id` with `location: "settings"`: the application's settings home. */
-    settingsViewId?: string;
-    welcomeTour?: PluginApplicationTourRef;
-    /** The bare id of a `contributes.commands` entry of kind `"command"`. */
-    firstWorkflow?: string;
-    /** `contributes.agentMcp[].id` endpoints the application's agents need. */
-    requiredTools?: string[];
-    /** Suggested presentation levels, in the host's closed vocabulary. */
-    presentation?: Partial<Record<string, "shown" | "demoted" | "hidden">>;
-    navigation?: PluginApplicationNavigation;
 }
 /**
  * The attribute the host stamps on the element a plugin view renders into, and
