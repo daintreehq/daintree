@@ -352,20 +352,6 @@ export async function handlePanelKindsGet(ctx: IpcContext): Promise<PanelKindCon
   return selectContributionsForProject(getPluginPanelKinds(), (c) => c.extensionId, ctx.projectId);
 }
 
-/**
- * The slot state of the SENDER's project (§7.8): the arbitrated claims, the
- * refusals and the user's answers, in one read with one revision.
- *
- * The project comes from the sender's own view registration, never from an
- * argument — the same rule the contribution broadcaster follows, and for the
- * same reason: a renderer that could name the project could read another one's
- * slots.
- *
- * `null` for a sender with no project binding: a relaunch restores the last
- * project before its view is registered, and an empty snapshot in that window
- * would read as "never answered" and ask the user again. The renderer re-reads
- * on the next push.
- */
 /** The SENDER's project's "Edit with…" answers (#13809); empty for a view with no project. */
 export async function handleFileEditorChoicesGet(ctx: IpcContext): Promise<FileEditorChoices> {
   if (!ctx.projectId) return {};

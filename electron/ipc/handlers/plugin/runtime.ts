@@ -136,6 +136,25 @@ export async function handleArtifactSourceRelease(ctx: IpcContext, url: string):
   return (await getPluginService()).revokeArtifactSource(url, ctx.webContentsId);
 }
 
+/**
+ * Implicit activation for contributed panel views (#10523): force the plugin
+ * owning `panelKindId` to `activate()` before the renderer imports its
+ * `plugin://` module, so handlers bound during `activate()` are live when the
+ * view first renders. `activatePlugin` never rejects, but the service reports the
+ * outcome via {@link PluginActivationResult}; on failure this handler throws an
+ * {@link AppError} (#6020 — IPC handlers throw instead of returning an `{ ok }`
+ * envelope) so the IPC call rejects and `PluginViewHost` surfaces the real
+ * activation cause through its ErrorBoundary BEFORE importing the module (#10618),
+ * instead of failing later with a generic import timeout. Resolves once the
+ * owning plugin is already activated, or when the kind id is unknown.
+ *
+ * `requestRecoveryPath` asks main to mint a replacement `plugin://` URL on a
+ * fresh view generation, for the case where the renderer's previous import of
+ * this view already failed (#11728) — that specifier is permanently poisoned in
+ * the module map, so recovery needs a URL V8 has never seen. Returns the
+ * main-built path, or `undefined` when none applies (no recovery requested,
+ * unknown kind, PTY panel, or no matching view contribution).
+ */
 export async function handleActivateForView(
   ctx: IpcContext,
   panelKindId: string,

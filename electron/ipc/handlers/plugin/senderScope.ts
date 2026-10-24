@@ -31,25 +31,6 @@ export function assertSenderOwnsPluginInstance(ctx: IpcContext, pluginId: string
 }
 
 /**
- * Implicit activation for contributed panel views (#10523): force the plugin
- * owning `panelKindId` to `activate()` before the renderer imports its
- * `plugin://` module, so handlers bound during `activate()` are live when the
- * view first renders. `activatePlugin` never rejects, but the service reports the
- * outcome via {@link PluginActivationResult}; on failure this handler throws an
- * {@link AppError} (#6020 — IPC handlers throw instead of returning an `{ ok }`
- * envelope) so the IPC call rejects and `PluginViewHost` surfaces the real
- * activation cause through its ErrorBoundary BEFORE importing the module (#10618),
- * instead of failing later with a generic import timeout. Resolves once the
- * owning plugin is already activated, or when the kind id is unknown.
- *
- * `requestRecoveryPath` asks main to mint a replacement `plugin://` URL on a
- * fresh view generation, for the case where the renderer's previous import of
- * this view already failed (#11728) — that specifier is permanently poisoned in
- * the module map, so recovery needs a URL V8 has never seen. Returns the
- * main-built path, or `undefined` when none applies (no recovery requested,
- * unknown kind, PTY panel, or no matching view contribution).
- */
-/**
  * A call that arrived over a link from a window on another machine. Read from
  * the context's own fields so a local call never builds its endpoint.
  */
