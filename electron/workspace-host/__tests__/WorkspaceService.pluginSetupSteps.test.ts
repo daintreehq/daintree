@@ -406,14 +406,18 @@ describe("WorkspaceService plugin worktree setup steps (#13807)", () => {
     vi.mocked(service["lifecycleService"].pendingPluginSteps).mockResolvedValue([ACME_DB]);
     const worktreeId = await create("approve-resume");
     expect(statusOf(worktreeId)?.state).toBe("needs-approval");
-    expect(service["setupAwaitingApproval"].has(service["monitors"].get(worktreeId)!)).toBe(true);
+    expect(
+      service["setupCoordinator"]["setupAwaitingApproval"].has(service["monitors"].get(worktreeId)!)
+    ).toBe(true);
 
     vi.mocked(service["lifecycleService"].pendingPluginSteps).mockResolvedValue([]);
     await service.retryLifecycleSetup(worktreeId);
 
     expect(bridge.runStep).toHaveBeenCalledTimes(1);
     expect(statusOf(worktreeId)?.state).toBe("ready");
-    expect(service["setupAwaitingApproval"].has(service["monitors"].get(worktreeId)!)).toBe(false);
+    expect(
+      service["setupCoordinator"]["setupAwaitingApproval"].has(service["monitors"].get(worktreeId)!)
+    ).toBe(false);
   });
 
   it("records a step whose plugin is gone by the retry as skipped, never as ready", async () => {
@@ -480,6 +484,28 @@ describe("WorkspaceService plugin worktree setup steps (#13807)", () => {
     expect(bridge.runStep).not.toHaveBeenCalled();
   });
 
+  it("cancels a running step when the service is disposed", async () => {
+    let stepSignal: AbortSignal | undefined;
+    bridge.listSteps.mockResolvedValue([ACME_DB]);
+    bridge.runStep.mockImplementation(
+      (_s: WorktreeSetupStepDescriptor, _t: unknown, signal: AbortSignal) => {
+        stepSignal = signal;
+        return new Promise(() => {});
+      }
+    );
+    await service.createWorktree("req-disposed", "/test/root", {
+      baseBranch: "main",
+      newBranch: "feature/disposed",
+      path: "/test/disposed",
+    });
+    await vi.waitFor(() => expect(stepSignal).toBeDefined());
+    expect(stepSignal!.aborted).toBe(false);
+
+    service.dispose();
+
+    expect(stepSignal!.aborted).toBe(true);
+  });
+
   it("settles the card's slot when a running step is cancelled but the worktree stays", async () => {
     bridge.listSteps.mockResolvedValue([ACME_DB]);
     bridge.runStep.mockImplementation(
@@ -498,13 +524,13 @@ describe("WorkspaceService plugin worktree setup steps (#13807)", () => {
     const monitor = service["monitors"].get(worktreeId)!;
 
     // What teardown does first, before a delete that then fails to remove it.
-    service["cancelPluginSetup"](monitor);
+    service["setupCoordinator"].cancelPluginSetup(monitor);
 
     await vi.waitFor(() => expect(statusOf(worktreeId)?.state).toBe("failed"));
     expect(monitor.lifecycleStatus?.state).toBe("failed");
     // Nothing is left reading as in flight.
     expect(statusOf(worktreeId)?.pluginSteps?.map((s) => s.state)).toEqual(["failed"]);
-    expect(service["setupAwaitingApproval"].has(monitor)).toBe(false);
+    expect(service["setupCoordinator"]["setupAwaitingApproval"].has(monitor)).toBe(false);
     bridge.runStep.mockResolvedValue({ state: "succeeded" });
     await expect(service.retryLifecycleSetup(worktreeId)).resolves.toBeUndefined();
   });

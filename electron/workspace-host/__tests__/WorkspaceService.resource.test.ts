@@ -1237,7 +1237,11 @@ describe("WorkspaceService.runLifecycleSetup — resource config caching", () =>
     const childProcessModule = await import("child_process");
     vi.mocked(childProcessModule.spawn).mockImplementation(makeSpawnChild(0));
 
-    await service["runLifecycleSetup"]("/test/worktree", "/test/worktree", "/test/root");
+    await service["setupCoordinator"].runLifecycleSetup(
+      "/test/worktree",
+      "/test/worktree",
+      "/test/root"
+    );
 
     expect(monitor.hasResourceConfig).toBe(true);
     expect(monitor.resourceConnectCommand).toBe("ssh user@host");
@@ -1258,7 +1262,11 @@ describe("WorkspaceService.runLifecycleSetup — resource config caching", () =>
     const childProcessModule = await import("child_process");
     vi.mocked(childProcessModule.spawn).mockImplementation(makeSpawnChild(0));
 
-    await service["runLifecycleSetup"]("/test/worktree", "/test/worktree", "/test/root");
+    await service["setupCoordinator"].runLifecycleSetup(
+      "/test/worktree",
+      "/test/worktree",
+      "/test/root"
+    );
 
     expect(monitor.hasResourceConfig).toBe(false);
     expect(monitor.resourceConnectCommand).toBeUndefined();
@@ -1281,7 +1289,11 @@ describe("WorkspaceService.runLifecycleSetup — resource config caching", () =>
     const childProcessModule = await import("child_process");
     const mockSpawn = vi.mocked(childProcessModule.spawn);
 
-    await service["runLifecycleSetup"]("/test/worktree", "/test/worktree", "/test/root");
+    await service["setupCoordinator"].runLifecycleSetup(
+      "/test/worktree",
+      "/test/worktree",
+      "/test/root"
+    );
 
     expect(mockSpawn).not.toHaveBeenCalled();
     // Resource config IS cached even without setup commands (early-return path)
@@ -1299,7 +1311,12 @@ describe("WorkspaceService.runLifecycleSetup — resource config caching", () =>
       .spyOn(service, "runResourceAction")
       .mockResolvedValue({ success: true });
 
-    await service["runLifecycleSetup"]("/test/worktree", "/test/worktree", "/test/root", true);
+    await service["setupCoordinator"].runLifecycleSetup(
+      "/test/worktree",
+      "/test/worktree",
+      "/test/root",
+      true
+    );
 
     expect(lifecycleSetupSpy).toHaveBeenCalledTimes(1);
     expect(runResourceActionSpy).toHaveBeenCalledTimes(1);
@@ -1324,7 +1341,7 @@ describe("WorkspaceService.runLifecycleSetup — resource config caching", () =>
       error: LIFECYCLE_COMMANDS_NEED_APPROVAL_ERROR,
     });
 
-    const outcome = await service["runLifecycleSetup"](
+    const outcome = await service["setupCoordinator"].runLifecycleSetup(
       "/test/worktree",
       "/test/worktree",
       "/test/root",
@@ -1333,7 +1350,9 @@ describe("WorkspaceService.runLifecycleSetup — resource config caching", () =>
 
     expect(outcome).toEqual({ ok: false, needsApproval: true });
     const monitor = service["monitors"].get("/test/worktree")!;
-    expect(service["setupAwaitingApproval"].get(monitor)).toEqual({ provisionResource: true });
+    expect(service["setupCoordinator"]["setupAwaitingApproval"].get(monitor)).toEqual({
+      provisionResource: true,
+    });
   });
 
   it("does not record a pending setup against a worktree recreated during the run", async () => {
@@ -1344,12 +1363,17 @@ describe("WorkspaceService.runLifecycleSetup — resource config caching", () =>
       return { shouldProvision: false, needsApproval: true };
     });
 
-    await service["runLifecycleSetup"]("/test/worktree", "/test/worktree", "/test/root", true);
+    await service["setupCoordinator"].runLifecycleSetup(
+      "/test/worktree",
+      "/test/worktree",
+      "/test/root",
+      true
+    );
 
     const replacement = service["monitors"].get("/test/worktree")!;
     expect(replacement).not.toBe(original);
-    expect(service["setupAwaitingApproval"].has(replacement)).toBe(false);
-    expect(service["setupAwaitingApproval"].has(original)).toBe(false);
+    expect(service["setupCoordinator"]["setupAwaitingApproval"].has(replacement)).toBe(false);
+    expect(service["setupCoordinator"]["setupAwaitingApproval"].has(original)).toBe(false);
   });
 
   it("does not invoke runResourceAction when lifecycle setup reports shouldProvision=false", async () => {
@@ -1363,7 +1387,12 @@ describe("WorkspaceService.runLifecycleSetup — resource config caching", () =>
       .spyOn(service, "runResourceAction")
       .mockResolvedValue({ success: true });
 
-    await service["runLifecycleSetup"]("/test/worktree", "/test/worktree", "/test/root", true);
+    await service["setupCoordinator"].runLifecycleSetup(
+      "/test/worktree",
+      "/test/worktree",
+      "/test/root",
+      true
+    );
 
     expect(runResourceActionSpy).not.toHaveBeenCalled();
   });
@@ -1914,7 +1943,7 @@ describe("WorkspaceService — repository command approval", () => {
       .spyOn(service, "runResourceAction")
       .mockResolvedValue({ success: true });
 
-    const outcome = await service["runLifecycleSetup"](
+    const outcome = await service["setupCoordinator"].runLifecycleSetup(
       "/test/worktree",
       "/test/worktree",
       "/test/root",
@@ -1928,7 +1957,7 @@ describe("WorkspaceService — repository command approval", () => {
       "Setup",
       "Resource provision",
     ]);
-    const retrySpy = vi.spyOn(service, "retryLifecycleSetup");
+    const retrySpy = vi.spyOn(service["setupCoordinator"], "retryLifecycleSetup");
     await service.approveLifecycleCommands("/test/worktree", review!.fingerprint);
 
     expect(retrySpy).toHaveBeenCalledWith("/test/worktree");
@@ -1966,13 +1995,19 @@ describe("WorkspaceService — repository command approval", () => {
   it("waits for an in-flight resource action before resuming the approved setup", async () => {
     const monitor = createAndRegisterMonitor();
     await setupConfig({ setup: ["npm install"] });
-    await service["runLifecycleSetup"]("/test/worktree", "/test/worktree", "/test/root");
+    await service["setupCoordinator"].runLifecycleSetup(
+      "/test/worktree",
+      "/test/worktree",
+      "/test/root"
+    );
     let releaseAction!: () => void;
     const inFlight = new Promise<void>((resolve) => {
       releaseAction = resolve;
     });
     vi.spyOn(service.resourceActionExecutor, "whenIdle").mockReturnValue(inFlight);
-    const retrySpy = vi.spyOn(service, "retryLifecycleSetup").mockResolvedValue(undefined);
+    const retrySpy = vi
+      .spyOn(service["setupCoordinator"], "retryLifecycleSetup")
+      .mockResolvedValue(undefined);
 
     const review = await service.getLifecycleCommandReview("/test/worktree");
     await service.approveLifecycleCommands("/test/worktree", review!.fingerprint);
@@ -1987,13 +2022,19 @@ describe("WorkspaceService — repository command approval", () => {
   it("resumes an approved setup once, however many approvals arrive", async () => {
     createAndRegisterMonitor();
     await setupConfig({ setup: ["npm install"] });
-    await service["runLifecycleSetup"]("/test/worktree", "/test/worktree", "/test/root");
+    await service["setupCoordinator"].runLifecycleSetup(
+      "/test/worktree",
+      "/test/worktree",
+      "/test/root"
+    );
     let releaseAction!: () => void;
     const inFlight = new Promise<void>((resolve) => {
       releaseAction = resolve;
     });
     vi.spyOn(service.resourceActionExecutor, "whenIdle").mockReturnValue(inFlight);
-    const retrySpy = vi.spyOn(service, "retryLifecycleSetup").mockResolvedValue(undefined);
+    const retrySpy = vi
+      .spyOn(service["setupCoordinator"], "retryLifecycleSetup")
+      .mockResolvedValue(undefined);
 
     const review = await service.getLifecycleCommandReview("/test/worktree");
     await service.approveLifecycleCommands("/test/worktree", review!.fingerprint);
