@@ -76,6 +76,8 @@ export interface HostPreviousEnd {
   watchdogKillReason?: WatchdogKillReason;
   /** Heartbeats the watchdog missed before it killed the app. */
   missedBeats?: number;
+  /** What earned the kill a longer deadline, in the watchdog's own words, when something did. */
+  pressureEvidence?: string;
   /** When it ended, as the record dates it (epoch ms). */
   at: number;
 }

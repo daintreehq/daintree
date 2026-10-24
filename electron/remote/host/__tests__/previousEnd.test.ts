@@ -33,6 +33,7 @@ describe("readHostPreviousEnd", () => {
           watchdogKilledAt: 4_200,
           watchdogKillReason: "unresponsive-under-pressure",
           watchdogMissedBeats: 12,
+          watchdogPressureEvidence: "  main had no memory-pressure reading ",
         })
       )
     ).toEqual({
@@ -40,8 +41,21 @@ describe("readHostPreviousEnd", () => {
       cause: "watchdog-deadlock",
       watchdogKillReason: "unresponsive-under-pressure",
       missedBeats: 12,
+      pressureEvidence: "main had no memory-pressure reading",
       at: 4_200,
     });
+  });
+
+  it("takes a watchdog kill with no heuristic cause as an external kill, and cuts a long note to the schema's bound", () => {
+    const end = readHostPreviousEnd(
+      pending({ cause: "watchdog-deadlock", watchdogPressureEvidence: "x".repeat(400) })
+    );
+    expect(end?.crashCause).toBe("external-kill");
+    expect(end?.pressureEvidence).toHaveLength(256);
+  });
+
+  it("says nothing it can't date", () => {
+    expect(readHostPreviousEnd(pending({ timestamp: Number.NaN }))).toBeUndefined();
   });
 
   it("reports an end the hold policy doesn't hold for, so a crash never reads as a planned restart", () => {

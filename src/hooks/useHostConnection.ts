@@ -94,16 +94,20 @@ let resyncProjectStateOwed = false;
  * restart. `previousEnd` is how the host recorded its previous process
  * ending, absent for a planned restart; `relaunched` and `held` count what
  * a relaunch cut short already brought back, so the notice once it is done
- * counts it all. Null when no restart is owed that.
+ * counts it all. `restart` names the restart they are about. Null when no
+ * restart is owed that.
  */
 interface RestartRecovery {
   lost: Map<string, number>;
   gathering: boolean;
+  restart: number;
   previousEnd?: HostPreviousEnd;
   relaunched: number;
   held: number;
 }
 let restartRecovery: RestartRecovery | null = null;
+/** Bumped by every host restart: only the latest one says how the host ended. */
+let restartCount = 0;
 /**
  * Bumped by teardown and when this view gives a restart's panes up: a
  * relaunch under way outlives the resyncs after it, which only re-read what
@@ -248,9 +252,11 @@ function armRestartRecovery(previousEnd: HostPreviousEnd | undefined): void {
   const projectId = getViewWorkspaceId();
   const before = leaseBeforeGap ?? getDriveLeaseSnapshot();
   if (projectId && before?.projectId === projectId && !before.drivingHere) return;
-  restartRecovery ??= { lost: new Map(), gathering: true, relaunched: 0, held: 0 };
+  restartCount += 1;
+  restartRecovery ??= { lost: new Map(), gathering: true, restart: 0, relaunched: 0, held: 0 };
   restartRecovery.gathering = true;
   // This restart's word on the last end, and its own count of what came back.
+  restartRecovery.restart = restartCount;
   restartRecovery.previousEnd = previousEnd;
   restartRecovery.relaunched = 0;
   restartRecovery.held = 0;
@@ -259,17 +265,16 @@ function armRestartRecovery(previousEnd: HostPreviousEnd | undefined): void {
 /** Said once a restart's relaunch has settled, and only when the host recorded an unclean end. */
 function noticeRestart(projectId: string, recovery: RestartRecovery): void {
   const previousEnd = recovery.previousEnd;
-  if (!previousEnd) return;
+  // A restart since has its own word, which this one's would replace.
+  if (!previousEnd || recovery.restart !== restartCount) return;
   const { relaunched, held } = recovery;
+  const host = { hostId: useHostConnectionStore.getState().hostId, hostName: hostLabel() };
+  const generation = restartRecoveryGeneration;
   void import("@/store/hostRestartNotice")
     .then(({ noticeUncleanHostRestart }) => {
+      if (generation !== restartRecoveryGeneration || recovery.restart !== restartCount) return;
       if (getViewWorkspaceId() !== projectId) return;
-      noticeUncleanHostRestart(
-        { hostId: useHostConnectionStore.getState().hostId, hostName: hostLabel() },
-        projectId,
-        previousEnd,
-        { relaunched, held }
-      );
+      noticeUncleanHostRestart(host, projectId, previousEnd, { relaunched, held });
     })
     .catch((error: unknown) => {
       logWarn("[HostConnection] Couldn't say how the host's restart went", { error });
@@ -316,7 +321,6 @@ function settleRestartRecovery(): void {
     (async () => {
       // All of them, should the relaunch not get as far as saying.
       let left: ReadonlyMap<string, number> = recovery.lost;
-      let settled = false;
       try {
         const { relaunchTerminalsLostToHostRestart } = await import("@/store/hostRestartRecovery");
         const outcome = await relaunchTerminalsLostToHostRestart(projectId, recovery.lost, {
@@ -326,26 +330,28 @@ function settleRestartRecovery(): void {
         left = outcome.deferred;
         recovery.relaunched += outcome.relaunched;
         recovery.held += outcome.held;
-        settled = true;
       } finally {
         // Cut short by the link, or this view stopped driving on the way: the
         // host's next word settles what is left. One relaunched meanwhile no
         // longer shows its loss and is skipped then.
         if (left.size > 0 && isCurrent()) {
           // A restart since has its own word and count; otherwise this one's carry over.
+          const latest = recovery.restart === restartCount;
           const pending = (restartRecovery ??= {
             lost: new Map(),
             gathering: false,
-            ...(recovery.previousEnd && { previousEnd: recovery.previousEnd }),
-            relaunched: recovery.relaunched,
-            held: recovery.held,
+            restart: recovery.restart,
+            ...(latest && recovery.previousEnd && { previousEnd: recovery.previousEnd }),
+            relaunched: latest ? recovery.relaunched : 0,
+            held: latest ? recovery.held : 0,
           });
           for (const [id, restartKey] of left) {
             if (!pending.lost.has(id)) pending.lost.set(id, restartKey);
           }
         }
       }
-      if (settled && left.size === 0 && isCurrent()) noticeRestart(projectId, recovery);
+      // Reached only when the relaunch answered: one cut short tries again first.
+      if (left.size === 0 && isCurrent()) noticeRestart(projectId, recovery);
     })(),
     { context: "Relaunching the terminals a host restart ended" }
   );

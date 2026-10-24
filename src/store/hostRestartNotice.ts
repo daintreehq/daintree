@@ -7,20 +7,22 @@ export interface HostRestartOutcome {
   held: number;
 }
 
-/** What the host's crash record observed about how its Daintree ended, quoted rather than explained. */
+/**
+ * What the host's crash record observed about how its Daintree ended, quoted
+ * rather than explained. The watchdog's kill reason alone never says memory
+ * pressure: it waits longer for other evidence too, even a missing reading,
+ * so only its own note on what made it wait is repeated.
+ */
 export function describeHostPreviousEnd(end: HostPreviousEnd): string {
   if (end.cause === "watchdog-deadlock") {
-    const pressure =
-      end.watchdogKillReason === "unresponsive-under-pressure"
-        ? " under memory pressure"
-        : end.watchdogKillReason === "no-progress-under-external-pressure"
-          ? " under memory pressure from outside Daintree"
-          : "";
     const beats =
       end.missedBeats !== undefined
         ? ` after ${pluralize(end.missedBeats, "missed heartbeat")}`
         : "";
-    return `Its watchdog stopped Daintree${pressure}${beats}.`;
+    const waited = end.pressureEvidence
+      ? ` It had waited longer because ${end.pressureEvidence}.`
+      : "";
+    return `Its watchdog stopped Daintree${beats}.${waited}`;
   }
   switch (end.crashCause) {
     case "uncaught-exception":

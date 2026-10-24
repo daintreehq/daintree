@@ -233,9 +233,17 @@ describe("link messages", () => {
       cause: "watchdog-deadlock",
       watchdogKillReason: "no-progress-under-external-pressure",
       missedBeats: 30,
+      pressureEvidence: "main reported memory pressure",
       at: 1_000,
     };
     expect(welcome({ previousEnd }).previousEnd).toEqual(previousEnd);
+    // Undated, it is dropped whole; an out-of-bounds detail drops only that detail.
+    expect(welcome({ previousEnd: { ...previousEnd, at: "soon" } }).previousEnd).toBeUndefined();
+    expect(
+      welcome({
+        previousEnd: { ...previousEnd, missedBeats: 0, pressureEvidence: "x".repeat(300) },
+      }).previousEnd
+    ).toEqual({ ...previousEnd, missedBeats: undefined, pressureEvidence: undefined });
     expect(welcome({}).previousEnd).toBeUndefined();
     // A cause a newer host knows and this Shell doesn't.
     expect(welcome({ previousEnd: { crashCause: "eaten-by-grue", at: 1 } }).previousEnd).toBe(

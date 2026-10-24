@@ -83,6 +83,7 @@ const WelcomeSchema = z.object({
         .optional()
         .catch(undefined),
       missedBeats: z.number().int().min(1).max(1_000_000).optional().catch(undefined),
+      pressureEvidence: z.string().max(256).optional().catch(undefined),
       at: epochMs,
     })
     .optional()

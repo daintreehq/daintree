@@ -2183,10 +2183,10 @@ describe("host restart", () => {
     hostHasNone(electron);
     relaunchLost.mockResolvedValueOnce({
       deferred: new Map([["t-other", 2]]),
-      relaunched: 0,
+      relaunched: 3,
       held: 1,
     });
-    relaunchLost.mockResolvedValueOnce({ deferred: new Map(), relaunched: 0, held: 1 });
+    relaunchLost.mockResolvedValueOnce({ deferred: new Map(), relaunched: 1, held: 1 });
 
     emitHost({
       type: "resync-required",
@@ -2202,7 +2202,44 @@ describe("host restart", () => {
 
     await vi.waitFor(() => expect(noticeUnclean).toHaveBeenCalledTimes(1));
     expect(relaunchLost).toHaveBeenCalledTimes(2);
-    expect(noticeUnclean.mock.calls[0]![3]).toEqual({ relaunched: 0, held: 2 });
+    expect(noticeUnclean.mock.calls[0]![3]).toEqual({ relaunched: 4, held: 2 });
+    stop();
+  });
+
+  it("lets a relaunch a newer restart overtook say nothing, so the newer word stands", async () => {
+    noticeUnclean.mockClear();
+    const { electron, emitHost, stop } = await drivingView();
+    runningAgent("t-agent");
+    hostHasNone(electron);
+    type Outcome = { deferred: ReadonlyMap<string, number>; relaunched: number; held: number };
+    let finishFirst!: (outcome: Outcome) => void;
+    relaunchLost.mockImplementationOnce(
+      () => new Promise<Outcome>((resolve) => (finishFirst = resolve))
+    );
+    relaunchLost.mockResolvedValueOnce({ deferred: new Map(), relaunched: 0, held: 1 });
+    const newerEnd = { ...watchdogEnd, at: 2_000 };
+
+    emitHost({
+      type: "resync-required",
+      hostId: "studio-01",
+      reason: "host-restarted",
+      previousEnd: watchdogEnd,
+    });
+    await vi.waitFor(() => expect(relaunchLost).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+    emitHost({
+      type: "resync-required",
+      hostId: "studio-01",
+      reason: "host-restarted",
+      previousEnd: newerEnd,
+    });
+    await vi.waitFor(() => expect(noticeUnclean).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+
+    finishFirst({ deferred: new Map(), relaunched: 5, held: 0 });
+    for (let i = 0; i < 10; i += 1) await flush();
+
+    expect(noticeUnclean).toHaveBeenCalledTimes(1);
+    expect(noticeUnclean.mock.calls[0]![2]).toEqual(newerEnd);
+    expect(noticeUnclean.mock.calls[0]![3]).toEqual({ relaunched: 0, held: 1 });
     stop();
   });
 

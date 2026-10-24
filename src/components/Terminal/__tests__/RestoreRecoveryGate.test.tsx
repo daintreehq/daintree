@@ -621,10 +621,15 @@ describe("RestoreRecoveryGate — held after an unclean end (#14382)", () => {
       const { unmount } = render(<RestoreRecoveryGate panelId="p-1" />);
       expect(screen.getByText(/studio-03's watchdog stopped Daintree 2 minutes ago/)).toBeTruthy();
       unmount();
-      render(<RestoreRecoveryGate panelId="p-2" />);
+      const remote = render(<RestoreRecoveryGate panelId="p-2" />);
       expect(
         screen.getByText(/Daintree on studio-03 was last seen running 2 minutes ago/)
       ).toBeTruthy();
+      remote.unmount();
+      // This machine's own window keeps its own words, whatever host the store last named.
+      remoteWindow.value = false;
+      render(<RestoreRecoveryGate panelId="p-1" />);
+      expect(screen.getByText(/Daintree's watchdog stopped the app 2 minutes ago/)).toBeTruthy();
     } finally {
       remoteWindow.value = false;
       useHostConnectionStore.setState({ hostId: null, hostName: null });
