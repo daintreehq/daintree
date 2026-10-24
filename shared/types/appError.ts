@@ -6,7 +6,16 @@ import type { RequiredPluginToolsError } from "./ipc/pluginAgentMcp.js";
  * the packaged-build sanitiser (unlike `context`, which is stripped). Keep
  * every member small and free of paths, secrets and user content.
  */
-export type AppErrorDetails = PluginHostError | RequiredPluginToolsError;
+export type AppErrorDetails = PluginHostError | RequiredPluginToolsError | HostSwitchOnScreenError;
+
+/**
+ * A host switch that failed and is showing why on the window's own switch
+ * screen: whoever asked for it says nothing more, so the failure reads once.
+ */
+export interface HostSwitchOnScreenError {
+  code: "HOST_SWITCH_ON_SCREEN";
+  switchId: string;
+}
 
 /**
  * Discriminated codes carried by `AppError` (main process) and

@@ -73,6 +73,7 @@ import { useTypeAnywhere } from "./hooks/useTypeAnywhere";
 import { useResumeAgentSession } from "./hooks/useResumeAgentSession";
 import { VoiceRecordingAnnouncer } from "./components/Terminal/VoiceRecordingAnnouncer";
 import { usePendingHostSwitchSync } from "./hooks/usePendingHostSwitchSync";
+import { HostSwitchScreenHost } from "./components/HostSwitch/HostSwitchScreenHost";
 import { AccessibilityAnnouncer } from "./components/Accessibility/AccessibilityAnnouncer";
 import { CopyFlash } from "./components/ui/CopyFlash";
 import { TooltipProvider } from "./components/ui/tooltip";
@@ -435,8 +436,8 @@ function AppInner() {
   useCloudSyncWarning(homeDir);
   useRosettaWarning(bootResult);
   useAccessibilityAnnouncements();
-  // A switch to another host that is taking a while says so, can be cancelled,
-  // and holds typing back until it lands.
+  // A switch to another host shows its screen from the start, can be
+  // cancelled, and holds typing back until it lands.
   usePendingHostSwitchSync();
 
   useEffect(() => {
@@ -514,6 +515,7 @@ function AppInner() {
                   projectSwitcherPalette={projectSwitcherPalette}
                 />
               </DndProvider>
+              <HostSwitchScreenHost />
             </TooltipProvider>
           </ErrorBoundary>
         </MotionConfig>
@@ -572,6 +574,7 @@ function AppInner() {
                 </AppLayout>
               </Profiler>
             </DndProvider>
+            <HostSwitchScreenHost />
 
             <Suspense fallback={null}>
               <LazyModalHostLayer

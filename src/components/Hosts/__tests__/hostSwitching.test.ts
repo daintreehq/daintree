@@ -268,6 +268,24 @@ describe("switchToHost", () => {
     expect(onStayed).toHaveBeenCalledTimes(2);
   });
 
+  it("adds nothing for a failure the window's switch screen is already showing", async () => {
+    const onStayed = vi.fn();
+    const onScreen = new ClientAppError(
+      "HOST_DISCONNECTED",
+      "Host h1 did not connect (timeout)",
+      "Couldn't reach this host. Check that it is on and try again.",
+      { code: "HOST_SWITCH_ON_SCREEN", switchId: "1:1:x" }
+    );
+    m.switchWindowHost.mockRejectedValueOnce(onScreen);
+    await switchToHost("h1", false, "p", { onStayed });
+
+    // The window is on the switch's screen, not where it was.
+    expect(m.notify).not.toHaveBeenCalled();
+    expect(onStayed).not.toHaveBeenCalled();
+    notifyHostSwitchFailure("h1", onScreen, () => {});
+    expect(m.notify).not.toHaveBeenCalled();
+  });
+
   it("offers a retry, not the project list, for a host that is no longer listed", async () => {
     m.hosts = [];
     m.switchWindowHost.mockRejectedValue(new ClientAppError("NOT_FOUND", "Unknown host h1"));
