@@ -5,30 +5,19 @@ import {
   useState,
   type CSSProperties,
   type FocusEvent,
-  type HTMLAttributes,
   type KeyboardEvent,
   type MouseEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
-  type Ref,
 } from "react";
 import { Columns3, Pencil } from "lucide-react";
-import {
-  TableVirtuoso,
-  type ItemProps,
-  type ListRange,
-  type ScrollerProps,
-  type TableBodyProps,
-  type TableProps,
-  type TableVirtuosoHandle,
-} from "react-virtuoso";
+import { TableVirtuoso, type ListRange, type TableVirtuosoHandle } from "react-virtuoso";
 import type { PluginDataTableProps } from "@shared/types/plugin-sdk-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox, CheckboxGlyph } from "@/components/ui/checkbox";
 import {
   ContextMenu,
   ContextMenuContent,
-  ContextMenuTrigger,
   stopContextMenuPropagation,
 } from "@/components/ui/context-menu-base";
 import {
@@ -38,22 +27,7 @@ import {
   DropdownMenuLabel,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu-base";
-import { Input } from "@/components/ui/input";
-import { ResizeHandle } from "@/components/ui/ResizeHandle";
-import { useSplitterKeys } from "@/hooks/useSplitterKeys";
-import {
-  LIST_ROW_HOVER_CLASS,
-  PALETTE_ROW_CLASS,
-  ROW_MENU_TARGET_CLASS,
-} from "@/components/ui/paletteRowStyles";
 import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { isMac } from "@/lib/platform";
 import { cn } from "@/lib/utils";
@@ -74,21 +48,17 @@ import {
 import { CONTEXT_MENU_PARTS, isMenuKey, renderMenuEntries } from "./kitMenu";
 import { useKitOverlayZClass } from "./kitScope";
 import {
-  ALIGN_CLASS,
   activeMounted,
   bodyCellClass,
   cellValue,
   DEFAULT_OVERSCAN_ROWS,
   DENSITY_ROW_PX,
-  DENSITY_TEXT_CLASS,
   fromCellControl,
-  GRID_FOCUS_RING,
   headerCellClass,
   IN_CELL_CONTROL_SELECTOR,
   layoutColumns,
   pluginKitLists,
   reactKey,
-  readColumns,
   readDensity,
   readSort,
   rowRuleClass,
@@ -97,7 +67,6 @@ import {
   totalContent,
   TOTALS_CELL_CLASS,
   totalsLabelFor,
-  type TableColumn,
   type TableDensity,
 } from "./PluginKitLists";
 import {
@@ -126,52 +95,40 @@ import { severityGlyph } from "./PluginKitPatterns";
 import { pluginKitTreeView } from "./PluginKitTreeView";
 import { pluginKitObjectInspector } from "./PluginKitObjectInspector";
 import "./kitDataTable.css";
-import { guardCallbacks, isThenable } from "./kitDiagnostics";
+import { isThenable } from "./kitDiagnostics";
+import {
+  attempt,
+  CHECK_COLUMN_PX,
+  isRowKey,
+  keyList,
+  MENU_COLUMN_PX,
+  omitKey,
+  readRichColumns,
+  stringList,
+  UNSIZED_MIN_PX,
+  widthRecord,
+  type RichColumn,
+} from "./kitDataTableColumns";
+import { ColumnResizeHandle } from "./kitDataTableResize";
+import {
+  CellEditor,
+  revealEditCell,
+  startValue,
+  type CellEdit,
+  type CellMove,
+} from "./kitDataTableEditing";
+import {
+  PlainTableSections,
+  RICH_COMPONENTS,
+  RichTableElement,
+  type RichContext,
+} from "./kitDataTableRows";
 
 const BasicDataTable = pluginKitLists.DataTable;
-
-// A plugin callback that throws must not take the table down with it.
-const attempt = guardCallbacks("DataTable");
-
-function isRowKey(value: unknown): value is RowKey {
-  return typeof value === "string" || (typeof value === "number" && Number.isFinite(value));
-}
-
-function keyList(value: unknown): RowKey[] | undefined {
-  return Array.isArray(value) ? value.filter(isRowKey) : undefined;
-}
-
-function stringList(value: unknown): string[] | undefined {
-  return Array.isArray(value) ? value.filter((entry) => typeof entry === "string") : undefined;
-}
-
-function omitKey<V>(record: Record<string, V>, key: string): Record<string, V> {
-  const out = { ...record };
-  delete out[key];
-  return out;
-}
 
 function isRecord(value: unknown): value is object {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-
-function widthRecord(value: unknown): Record<string, number> | undefined {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
-  const out: Record<string, number> = {};
-  for (const [key, width] of Object.entries(value)) {
-    if (typeof width === "number" && Number.isFinite(width) && width > 0) out[key] = width;
-  }
-  return out;
-}
-
-const DEFAULT_MIN_WIDTH = 48;
-const DEFAULT_MAX_WIDTH = 1200;
-/** What an unsized column counts as when the table works out whether it must scroll sideways. */
-const UNSIZED_MIN_PX = 120;
-const CHECK_COLUMN_PX = 32;
-const MENU_COLUMN_PX = 32;
-const RESIZE_STEP_PX = 8;
-const RESIZE_BIG_STEP_PX = 32;
 
 /** A group header or loading row, as tall as a data row at the same density. */
 const DENSITY_BAND_CLASS: Record<TableDensity, string> = {
@@ -197,107 +154,6 @@ const HORIZONTAL_KEY_STEP_PX = 40;
 
 const EDIT_CUE_GLYPH_CLASS =
   "kit-dt-edit-glyph pointer-events-none absolute end-0.5 top-1/2 h-2.5 w-2.5 -translate-y-1/2 text-text-secondary opacity-0 transition-opacity duration-150 ease-out motion-reduce:transition-none";
-
-type EditorKind = "text" | "number" | "select";
-
-interface RichColumn extends TableColumn {
-  resizable: boolean;
-  minWidth: number;
-  maxWidth: number;
-  hideable: boolean;
-  menuLabel: string;
-  editable: ((row: unknown) => boolean) | null;
-  editor: EditorKind;
-  editOptions: { value: string; label: string; disabled: boolean }[];
-  editValue: ((row: unknown) => string) | undefined;
-  validate: ((value: string, row: unknown) => string | undefined) | undefined;
-}
-
-function readOptions(value: unknown): RichColumn["editOptions"] {
-  if (!Array.isArray(value)) return [];
-  const seen = new Set<string>();
-  const out: RichColumn["editOptions"] = [];
-  for (const entry of value) {
-    if (typeof entry !== "object" || entry === null) continue;
-    const optionValue = nonEmpty(field(entry, "value"));
-    if (!optionValue || seen.has(optionValue)) continue;
-    seen.add(optionValue);
-    out.push({
-      value: optionValue,
-      label: str(field(entry, "label")) ?? optionValue,
-      disabled: field(entry, "disabled") === true,
-    });
-  }
-  return out;
-}
-
-function readRichColumns(columns: unknown): RichColumn[] {
-  const base = readColumns(columns);
-  const raw = new Map<string, object>();
-  if (Array.isArray(columns)) {
-    for (const entry of columns) {
-      if (typeof entry !== "object" || entry === null) continue;
-      const id = nonEmpty(field(entry, "id"));
-      if (id !== undefined && !raw.has(id)) raw.set(id, entry);
-    }
-  }
-  return base.map((column) => {
-    const entry = raw.get(column.id) ?? {};
-    const min = positive(field(entry, "minWidth"), 10_000) ?? DEFAULT_MIN_WIDTH;
-    const max = Math.max(min, positive(field(entry, "maxWidth"), 10_000) ?? DEFAULT_MAX_WIDTH);
-    const editable = field(entry, "editable");
-    const editValue = field(entry, "editValue");
-    const validate = field(entry, "validate");
-    const header = field(entry, "header");
-    return {
-      ...column,
-      resizable: field(entry, "resizable") === true,
-      minWidth: min,
-      maxWidth: max,
-      hideable: field(entry, "hideable") !== false,
-      menuLabel:
-        nonEmpty(field(entry, "menuLabel")) ??
-        (typeof header === "string" && header !== "" ? header : column.id),
-      editable:
-        editable === true
-          ? () => true
-          : typeof editable === "function"
-            ? (row: unknown) =>
-                attempt(() => Reflect.apply(editable, undefined, [row]) === true, false)
-            : null,
-      editor: oneOf(field(entry, "editor"), ["text", "number", "select"] as const) ?? "text",
-      editOptions: readOptions(field(entry, "editOptions")),
-      editValue:
-        typeof editValue === "function"
-          ? (row: unknown) => {
-              const text: unknown = attempt(
-                () => Reflect.apply(editValue, undefined, [row]),
-                undefined
-              );
-              return typeof text === "string" ? text : "";
-            }
-          : undefined,
-      validate:
-        typeof validate === "function"
-          ? (value: string, row: unknown) => {
-              // A check that throws refuses the draft rather than letting it through.
-              const message: unknown = attempt(
-                () => Reflect.apply(validate, undefined, [value, row]),
-                "Couldn't check this value"
-              );
-              return nonEmpty(message);
-            }
-          : undefined,
-    };
-  });
-}
-
-function startValue(column: RichColumn, row: unknown): string {
-  if (column.editValue) return column.editValue(row);
-  if (typeof row !== "object" || row === null) return "";
-  const value = field(row, column.id);
-  return typeof value === "string" || typeof value === "number" ? String(value) : "";
-}
 
 /**
  * Whether a table needs anything past the basic DataTable. Exported for tests.
@@ -348,205 +204,6 @@ export function usesRichDataTable(props: object): boolean {
   );
 }
 
-interface CellEdit {
-  key: RowKey;
-  columnId: string;
-  draft: string;
-  error: string | undefined;
-}
-
-type CellMove = "next" | "previous" | null;
-
-interface RichContext {
-  items: readonly DrawnItem[];
-  columns: readonly RichColumn[];
-  interactive: boolean;
-  selectable: boolean;
-  activeIndex: number;
-  isSelected: (row: DrawnRow) => boolean;
-  rowId: (index: number) => string;
-  tableProps: Record<string, unknown>;
-  tableStyle: CSSProperties;
-  scrolledX: boolean;
-  /** Rows carry levels and positions only in a treegrid. */
-  treegrid: boolean;
-  /** A group's selection, with a checkbox column; null without one. */
-  groupSelected: (group: DrawnGroup) => boolean | null;
-  onRowClick: (index: number, event: MouseEvent<HTMLTableRowElement>) => void;
-  menuIndex: number;
-  openRowMenu: ((event: MouseEvent<HTMLElement>) => void) | undefined;
-  density: TableDensity;
-  striped: boolean;
-}
-
-function RichScroller({
-  context: _context,
-  ref,
-  ...props
-}: ScrollerProps & { context: RichContext; ref?: Ref<HTMLDivElement> }) {
-  return <div {...props} ref={ref} tabIndex={-1} />;
-}
-
-function RichTableElement({ context, style, children }: TableProps & { context: RichContext }) {
-  return (
-    <table
-      {...context.tableProps}
-      data-scrolled-x={context.scrolledX ? "" : undefined}
-      style={{ ...style, ...context.tableStyle }}
-      className={cn(DENSITY_TEXT_CLASS[context.density], context.interactive && GRID_FOCUS_RING)}
-    >
-      {children}
-    </table>
-  );
-}
-
-function RichTableBody({
-  context,
-  ref,
-  ...props
-}: TableBodyProps & { context: RichContext; ref?: Ref<HTMLTableSectionElement> }) {
-  if (!context.openRowMenu) return <tbody {...props} ref={ref} />;
-  return (
-    <ContextMenuTrigger asChild onContextMenu={context.openRowMenu}>
-      <tbody {...props} ref={ref} />
-    </ContextMenuTrigger>
-  );
-}
-
-type RowAttributes = HTMLAttributes<HTMLTableRowElement> & {
-  [attribute: `data-${string}`]: string | undefined;
-};
-
-/** A drawn item's row attributes, whether the virtualiser or the plain table draws it. */
-function richRowProps(context: RichContext, index: number): RowAttributes {
-  const item = context.items[index];
-  if (!item) return {};
-  const active = context.interactive && index === context.activeIndex;
-  const common: RowAttributes = {
-    id: context.interactive ? context.rowId(index) : undefined,
-    "aria-rowindex": index + 2,
-    "data-active": active ? "true" : undefined,
-    onClick: (event: MouseEvent<HTMLTableRowElement>) => context.onRowClick(index, event),
-  };
-  const tree = context.treegrid;
-  if (item.kind === "group") {
-    return {
-      ...common,
-      "aria-level": 1,
-      "aria-expanded": !item.collapsed,
-      "aria-selected": context.groupSelected(item) ?? undefined,
-      "aria-posinset": item.posInSet,
-      "aria-setsize": item.setSize,
-      "data-group-row": item.groupKey,
-      className: "cursor-pointer",
-    };
-  }
-  if (item.kind === "status") {
-    return {
-      ...common,
-      "aria-level": tree ? item.level : undefined,
-      "aria-posinset": tree ? 1 : undefined,
-      "aria-setsize": tree ? 1 : undefined,
-      "data-status-row": item.status,
-    };
-  }
-  const selected = context.isSelected(item);
-  return {
-    ...common,
-    "aria-level": tree ? item.level : undefined,
-    "aria-posinset": tree ? item.posInSet : undefined,
-    "aria-setsize": tree ? item.setSize : undefined,
-    "aria-expanded": tree && item.expandable ? item.expanded : undefined,
-    "aria-selected": context.interactive ? selected : undefined,
-    "data-selected": !context.interactive && selected ? "true" : undefined,
-    "data-hoverable": context.interactive ? "" : undefined,
-    // Pinned cells repeat the row's fills over their own; this tells them to stripe.
-    "data-striped": context.striped && index % 2 === 1 ? "" : undefined,
-    "data-state": index === context.menuIndex ? "open" : undefined,
-    className: cn(
-      PALETTE_ROW_CLASS,
-      context.interactive && [LIST_ROW_HOVER_CLASS, "cursor-pointer"],
-      context.openRowMenu && ROW_MENU_TARGET_CLASS
-    ),
-  };
-}
-
-function RichTableRow({
-  context,
-  item: _item,
-  ...props
-}: ItemProps<DrawnItem> & { context: RichContext }) {
-  return <tr {...props} {...richRowProps(context, props["data-index"])} />;
-}
-
-const RICH_COMPONENTS = {
-  Scroller: RichScroller,
-  Table: RichTableElement,
-  TableBody: RichTableBody,
-  TableRow: RichTableRow,
-};
-
-// Pinned as the virtualiser pins its own, so a plain table given a height
-// keeps its header and totals in view while its rows scroll.
-const PLAIN_HEAD_STYLE: CSSProperties = { position: "sticky", top: 0, zIndex: 2 };
-const PLAIN_FOOT_STYLE: CSSProperties = { position: "sticky", bottom: 0, zIndex: 1 };
-
-/** The plain table's sections: every drawn item at once, in the virtualiser's rows and cells. */
-function PlainTableSections({
-  context,
-  header,
-  footer,
-  renderItem,
-}: {
-  context: RichContext;
-  header: () => ReactNode;
-  footer: (() => ReactNode) | undefined;
-  renderItem: (index: number) => ReactNode;
-}) {
-  const body = (
-    <tbody>
-      {context.items.map((item, index) => (
-        <tr key={item.id} data-index={index} {...richRowProps(context, index)}>
-          {renderItem(index)}
-        </tr>
-      ))}
-    </tbody>
-  );
-  return (
-    <>
-      <thead style={PLAIN_HEAD_STYLE}>{header()}</thead>
-      {context.openRowMenu ? (
-        <ContextMenuTrigger asChild onContextMenu={context.openRowMenu}>
-          {body}
-        </ContextMenuTrigger>
-      ) : (
-        body
-      )}
-      {footer ? <tfoot style={PLAIN_FOOT_STYLE}>{footer()}</tfoot> : null}
-    </>
-  );
-}
-
-/**
- * Scrolls the cell being edited out from under the pinned column on the left
- * and the Columns rail on the right. Native focus scrolling ignores both.
- */
-function revealEditCell(scroller: HTMLElement, rail: number): void {
-  const cell = scroller.querySelector<HTMLElement>("td[data-edit-cell]");
-  if (!cell) return;
-  const view = scroller.getBoundingClientRect();
-  const box = cell.getBoundingClientRect();
-  let pinned = 0;
-  for (const stuck of scroller.querySelectorAll<HTMLElement>("thead th.kit-dt-sticky")) {
-    const rect = stuck.getBoundingClientRect();
-    if (rect.left < view.left + view.width / 2) pinned = Math.max(pinned, rect.right - view.left);
-  }
-  const left = view.left + pinned;
-  const right = view.right - rail;
-  if (box.left < left) scroller.scrollLeft -= left - box.left;
-  else if (box.right > right) scroller.scrollLeft += Math.min(box.right - right, box.left - left);
-}
-
 function focusVisible(element: Element): boolean {
   try {
     return element.matches(":focus-visible");
@@ -572,230 +229,6 @@ function useControllable<T>(
     onChange?.(next);
   };
   return [value, set];
-}
-
-function CellEditor({
-  column,
-  edit,
-  label,
-  density,
-  onDraft,
-  onCommit,
-  onCancel,
-}: {
-  column: RichColumn;
-  edit: CellEdit;
-  label: string;
-  /** The field stays 24px tall; its type follows the table's. */
-  density: TableDensity;
-  onDraft: (draft: string) => void;
-  /** False when the draft was refused and the editor stays open. */
-  onCommit: (draft: string, move: CellMove) => boolean;
-  onCancel: () => void;
-}) {
-  const overlayZ = useKitOverlayZClass();
-  const owner = useKitOwnerAttributes();
-  // Enter, Tab and Escape settle the edit themselves; the blur that follows
-  // as focus goes back to the grid must not commit it a second time.
-  const settled = useRef(false);
-  const settle = (run: () => boolean | void) => {
-    if (settled.current) return;
-    settled.current = true;
-    if (run() === false) settled.current = false;
-  };
-  const invalid = edit.error !== undefined;
-  // The open tooltip is the description: Radix appends its content id to the
-  // trigger's aria-describedby, so a second copy of the message here would be
-  // announced twice.
-  const described = invalid ? { "aria-invalid": true } : {};
-
-  // A select commits as soon as a choice is made; a refused choice keeps the
-  // list open (Radix closes it after every choice) with the message showing.
-  const [open, setOpen] = useState(true);
-  const refused = useRef(false);
-  const control =
-    column.editor === "select" ? (
-      <Select
-        open={open}
-        value={edit.draft === "" ? undefined : edit.draft}
-        onValueChange={(value) => {
-          onDraft(value);
-          settle(() => {
-            const accepted = onCommit(value, null);
-            refused.current = !accepted;
-            return accepted;
-          });
-        }}
-        onOpenChange={(next) => {
-          if (next) {
-            setOpen(true);
-            return;
-          }
-          if (refused.current) {
-            refused.current = false;
-            return;
-          }
-          setOpen(false);
-          settle(onCancel);
-        }}
-      >
-        <SelectTrigger
-          aria-label={label}
-          density="compact"
-          {...described}
-          className={cn("h-6 w-full min-w-0", DENSITY_TEXT_CLASS[density])}
-        >
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent
-          {...owner}
-          className={overlayZ}
-          onKeyDown={(event) => {
-            // The list holds focus while open; Tab still moves to the next cell.
-            if (event.key !== "Tab") return;
-            event.preventDefault();
-            event.stopPropagation();
-            settle(() => onCommit(edit.draft, event.shiftKey ? "previous" : "next"));
-          }}
-        >
-          {column.editOptions.map((option) => (
-            <SelectItem key={option.value} value={option.value} disabled={option.disabled}>
-              {option.label}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    ) : (
-      <Input
-        autoFocus
-        density="compact"
-        type={column.editor === "number" ? "number" : "text"}
-        aria-label={label}
-        invalid={invalid}
-        {...described}
-        value={edit.draft}
-        onChange={(event) => onDraft(event.target.value)}
-        onFocus={(event) => event.currentTarget.select()}
-        onKeyDown={(event) => {
-          event.stopPropagation();
-          if (event.key === "Enter") {
-            event.preventDefault();
-            settle(() => onCommit(event.currentTarget.value, null));
-          } else if (event.key === "Escape") {
-            event.preventDefault();
-            settle(onCancel);
-          } else if (event.key === "Tab") {
-            event.preventDefault();
-            settle(() => onCommit(event.currentTarget.value, event.shiftKey ? "previous" : "next"));
-          }
-        }}
-        onBlur={(event) => settle(() => onCommit(event.currentTarget.value, null))}
-        // The draft sits where the value did, so an end-aligned figure does not jump.
-        className={cn(
-          "h-6 w-full min-w-0 px-1.5 focus-visible:-outline-offset-2",
-          DENSITY_TEXT_CLASS[density],
-          ALIGN_CLASS[column.align],
-          column.numeric && "tabular-nums"
-        )}
-      />
-    );
-  // One structure whether or not there is an error, so the field is never
-  // remounted (and blurred) when a refusal arrives.
-  return (
-    <Tooltip open={invalid}>
-      <TooltipTrigger asChild>{control}</TooltipTrigger>
-      <TooltipContent side="bottom" align="start" className={overlayZ}>
-        {edit.error}
-      </TooltipContent>
-    </Tooltip>
-  );
-}
-
-function ColumnResizeHandle({
-  column,
-  width,
-  onResize,
-  onReset,
-}: {
-  column: RichColumn;
-  width: number | undefined;
-  onResize: (px: number, final: boolean) => void;
-  onReset: () => void;
-}) {
-  const [dragging, setDragging] = useState(false);
-  // An unsized column has no width of its own until it is measured.
-  const [measured, setMeasured] = useState<number | null>(null);
-  const [handle, setHandle] = useState<HTMLDivElement | null>(null);
-  useEffect(() => {
-    const cell = handle?.parentElement;
-    if (!cell || typeof ResizeObserver === "undefined") return;
-    const measure = () => setMeasured(cell.getBoundingClientRect().width || null);
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(cell);
-    return () => observer.disconnect();
-  }, [handle]);
-  const value = clampWidth(width ?? measured ?? column.minWidth, column.minWidth, column.maxWidth);
-  const onKeyDown = useSplitterKeys({
-    growKey: "ArrowRight",
-    value,
-    min: column.minWidth,
-    max: column.maxWidth,
-    step: RESIZE_STEP_PX,
-    largeStep: RESIZE_BIG_STEP_PX,
-    onChange: (next) => onResize(clampWidth(next, column.minWidth, column.maxWidth), true),
-    onReset,
-  });
-  const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0) return;
-    event.preventDefault();
-    event.stopPropagation();
-    const target = event.currentTarget;
-    const startX = event.clientX;
-    const startWidth = width ?? target.parentElement?.getBoundingClientRect().width ?? value;
-    // RTL drags grow the column to the left.
-    const direction = getComputedStyle(target).direction === "rtl" ? -1 : 1;
-    target.setPointerCapture?.(event.pointerId);
-    setDragging(true);
-    let last = startWidth;
-    const move = (moveEvent: PointerEvent) => {
-      last = clampWidth(
-        startWidth + (moveEvent.clientX - startX) * direction,
-        column.minWidth,
-        column.maxWidth
-      );
-      onResize(last, false);
-    };
-    const end = () => {
-      target.removeEventListener("pointermove", move);
-      target.removeEventListener("pointerup", end);
-      target.removeEventListener("pointercancel", end);
-      setDragging(false);
-      onResize(last, true);
-    };
-    target.addEventListener("pointermove", move);
-    target.addEventListener("pointerup", end);
-    target.addEventListener("pointercancel", end);
-  };
-  return (
-    <ResizeHandle
-      ref={setHandle}
-      growKey="ArrowRight"
-      edge="right"
-      label={`Resize ${column.menuLabel}`}
-      value={value}
-      min={column.minWidth}
-      max={column.maxWidth}
-      isResizing={dragging}
-      onReset={onReset}
-      onPointerDown={onPointerDown}
-      onKeyDown={(event) => {
-        if (onKeyDown(event)) event.stopPropagation();
-      }}
-      onClick={(event) => event.stopPropagation()}
-      className="z-[4] touch-none"
-    />
-  );
 }
 
 function RichDataTable(props: PluginDataTableProps) {
