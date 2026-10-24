@@ -335,16 +335,22 @@ function settleRestartRecovery(): void {
         // host's next word settles what is left. One relaunched meanwhile no
         // longer shows its loss and is skipped then.
         if (left.size > 0 && isCurrent()) {
-          // A restart since has its own word and count; otherwise this one's carry over.
-          const latest = recovery.restart === restartCount;
-          const pending = (restartRecovery ??= {
+          // A restart since has its own word and count; otherwise this one's carry
+          // over, onto a fresh record or one an older restart's relaunch left.
+          restartRecovery ??= {
             lost: new Map(),
             gathering: false,
-            restart: recovery.restart,
-            ...(latest && recovery.previousEnd && { previousEnd: recovery.previousEnd }),
-            relaunched: latest ? recovery.relaunched : 0,
-            held: latest ? recovery.held : 0,
-          });
+            restart: 0,
+            relaunched: 0,
+            held: 0,
+          };
+          const pending = restartRecovery;
+          if (recovery.restart === restartCount && pending.restart !== restartCount) {
+            pending.restart = recovery.restart;
+            pending.previousEnd = recovery.previousEnd;
+            pending.relaunched = recovery.relaunched;
+            pending.held = recovery.held;
+          }
           for (const [id, restartKey] of left) {
             if (!pending.lost.has(id)) pending.lost.set(id, restartKey);
           }

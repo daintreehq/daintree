@@ -2243,6 +2243,53 @@ describe("host restart", () => {
     stop();
   });
 
+  it("keeps the newer restart's word when an overtaken relaunch leaves work behind first", async () => {
+    noticeUnclean.mockClear();
+    const { electron, emitHost, emitLease, stop } = await drivingView();
+    runningAgent("t-agent");
+    hostHasNone(electron);
+    type Outcome = { deferred: ReadonlyMap<string, number>; relaunched: number; held: number };
+    let finishFirst!: (outcome: Outcome) => void;
+    let finishSecond!: (outcome: Outcome) => void;
+    relaunchLost.mockImplementationOnce(
+      () => new Promise<Outcome>((resolve) => (finishFirst = resolve))
+    );
+    relaunchLost.mockImplementationOnce(
+      () => new Promise<Outcome>((resolve) => (finishSecond = resolve))
+    );
+    relaunchLost.mockResolvedValueOnce({ deferred: new Map(), relaunched: 0, held: 1 });
+    const newerEnd = { ...watchdogEnd, at: 2_000 };
+
+    emitHost({
+      type: "resync-required",
+      hostId: "studio-01",
+      reason: "host-restarted",
+      previousEnd: watchdogEnd,
+    });
+    await vi.waitFor(() => expect(relaunchLost).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+    emitHost({
+      type: "resync-required",
+      hostId: "studio-01",
+      reason: "host-restarted",
+      previousEnd: newerEnd,
+    });
+    await vi.waitFor(() => expect(relaunchLost).toHaveBeenCalledTimes(2), { timeout: 5_000 });
+
+    // The overtaken run leaves a pane for later, then the newer one does too.
+    finishFirst({ deferred: new Map([["t-agent", 2]]), relaunched: 0, held: 0 });
+    for (let i = 0; i < 5; i += 1) await flush();
+    finishSecond({ deferred: new Map([["t-agent", 2]]), relaunched: 2, held: 0 });
+    for (let i = 0; i < 5; i += 1) await flush();
+    expect(noticeUnclean).not.toHaveBeenCalled();
+
+    emitLease({ type: "changed", state: leaseView(null, true) });
+
+    await vi.waitFor(() => expect(noticeUnclean).toHaveBeenCalledTimes(1));
+    expect(noticeUnclean.mock.calls[0]![2]).toEqual(newerEnd);
+    expect(noticeUnclean.mock.calls[0]![3]).toEqual({ relaunched: 2, held: 1 });
+    stop();
+  });
+
   it("tries again on the host's next word when the relaunch was cut short", async () => {
     const { electron, emitHost, emitLease, stop } = await drivingView();
     runningAgent("t-agent");
