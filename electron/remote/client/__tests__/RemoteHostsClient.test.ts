@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { AppError } from "../../../utils/errorTypes.js";
 import {
   toHostScopedKey,
   type HostDescriptor,
@@ -685,19 +686,153 @@ describe("RemoteHostsClient", () => {
         projectId: "proj-1",
       });
 
+      // The host was up already: nothing was waited on, so nothing said "connecting".
       const seen = pendingEvents();
       expect(seen.map((pending) => pending?.phase ?? null)).toEqual([
-        "connecting",
         "opening",
         "opening",
         "opening",
         null,
       ]);
-      expect(seen[2]).toMatchObject({ hostName: "studio-01", projectName: "proj-1" });
+      expect(seen[1]).toMatchObject({ hostName: "studio-01", projectName: "proj-1" });
       // Committed, and still pending until the new view shows.
-      expect(seen[3]).toMatchObject({ switchId: seen[2]!.switchId, committed: true });
-      expect(seen[2]!.committed).toBeUndefined();
+      expect(seen[2]).toMatchObject({ switchId: seen[1]!.switchId, committed: true });
+      expect(seen[1]!.committed).toBeUndefined();
       expect(client.getPendingSwitch(ctxFor(5, 1))).toBeNull();
+    });
+
+    it("says it is connecting from the start when the host isn't up yet", async () => {
+      let release!: (value: string) => void;
+      manager
+        .connect("studio-01")
+        .whenReady.mockImplementationOnce(() => new Promise<string>((r) => (release = r)));
+      const switching = client.switchWindowHost(ctxFor(5, 1), {
+        hostId: "studio-01",
+        newWindow: false,
+        projectId: "proj-1",
+      });
+      await vi.waitFor(() => expect(pendingEvents()).toHaveLength(1));
+      expect(pendingEvents()[0]).toMatchObject({
+        phase: "connecting",
+        request: { projectId: "proj-1" },
+      });
+      release("ready");
+      await expect(switching).resolves.toMatchObject({ outcome: "switched" });
+      expect(pendingEvents().at(-1)).toBeNull();
+    });
+
+    describe("a switch that fails", () => {
+      async function failedSwitch(
+        options?: Parameters<RemoteHostsClient["switchWindowHost"]>[2]
+      ): Promise<unknown> {
+        manager.connect("studio-01").whenReady.mockResolvedValueOnce("timeout");
+        return client
+          .switchWindowHost(
+            ctxFor(5, 1),
+            { hostId: "studio-01", newWindow: false, projectId: "proj-1" },
+            options
+          )
+          .then(
+            () => null,
+            (error: unknown) => error
+          );
+      }
+
+      it("stays on the window's screen, saying why, and tells the caller it is shown there", async () => {
+        const error = await failedSwitch();
+
+        const pending = client.getPendingSwitch(ctxFor(5, 1));
+        expect(pending).toMatchObject({
+          hostId: "studio-01",
+          phase: "failed",
+          request: { projectId: "proj-1" },
+          failure: { code: "HOST_DISCONNECTED" },
+        });
+        expect(pending!.failure!.message).toMatch(/Couldn't reach this host/);
+        expect(pendingEvents().at(-1)).toEqual(pending);
+        expect(error).toBeInstanceOf(AppError);
+        expect((error as AppError).details).toEqual({
+          code: "HOST_SWITCH_ON_SCREEN",
+          switchId: pending!.switchId,
+        });
+        // Nothing moves the window later: the host coming back changes nothing.
+        client.refreshPendingSwitches("studio-01");
+        expect(client.getPendingSwitch(ctxFor(5, 1))).toEqual(pending);
+        expect(windows.openRemoteProject).not.toHaveBeenCalled();
+      });
+
+      it("goes when the person cancels it", async () => {
+        await failedSwitch();
+        const { switchId } = client.getPendingSwitch(ctxFor(5, 1))!;
+
+        expect(client.cancelPendingSwitch(ctxFor(5, 1), { switchId })).toBe(true);
+        expect(client.getPendingSwitch(ctxFor(5, 1))).toBeNull();
+        expect(pendingEvents().at(-1)).toBeNull();
+        expect(bindings.get(1)).toBe("local");
+      });
+
+      it("goes when the window navigates anywhere else", async () => {
+        await failedSwitch();
+        client.supersedePendingSwitch(1);
+        expect(client.getPendingSwitch(ctxFor(5, 1))).toBeNull();
+
+        await failedSwitch();
+        await client.switchWindowHost(ctxFor(5, 1), {
+          hostId: "local",
+          newWindow: false,
+          projectId: "proj-local",
+        });
+        expect(client.getPendingSwitch(ctxFor(5, 1))).toBeNull();
+      });
+
+      it("is replaced by a Retry that lands", async () => {
+        await failedSwitch();
+        await expect(
+          client.switchWindowHost(ctxFor(5, 1), {
+            hostId: "studio-01",
+            newWindow: false,
+            projectId: "proj-1",
+          })
+        ).resolves.toMatchObject({ outcome: "switched" });
+        expect(client.getPendingSwitch(ctxFor(5, 1))).toBeNull();
+      });
+
+      it("goes when its host is removed, so a Retry never asks a host that is gone", async () => {
+        await failedSwitch();
+        await client.forget({ hostId: "studio-01" });
+        expect(client.getPendingSwitch(ctxFor(5, 1))).toBeNull();
+      });
+
+      it("keeps typing held for an earlier switch still opening when its screen is left", async () => {
+        registry.add({ name: "studio-02", connection: { kind: "ssh", target: "studio2.example" } });
+        let releaseOpen!: () => void;
+        vi.mocked(windows.openRemoteProject).mockImplementationOnce(
+          () => new Promise<void>((resolve) => (releaseOpen = resolve))
+        );
+        const first = client.switchWindowHost(ctxFor(5, 1), {
+          hostId: "studio-02",
+          newWindow: false,
+          projectId: "proj-2",
+        });
+        await vi.waitFor(() => expect(windows.openRemoteProject).toHaveBeenCalled());
+        const committed = client.getPendingSwitch(ctxFor(5, 1))!;
+        expect(committed.committed).toBe(true);
+
+        await failedSwitch();
+        const { switchId } = client.getPendingSwitch(ctxFor(5, 1))!;
+        expect(client.cancelPendingSwitch(ctxFor(5, 1), { switchId })).toBe(true);
+        expect(client.getPendingSwitch(ctxFor(5, 1))).toEqual(committed);
+
+        releaseOpen();
+        await first;
+        expect(client.getPendingSwitch(ctxFor(5, 1))).toBeNull();
+      });
+
+      it("is left to the caller for a view's own switch to another of its host's projects", async () => {
+        const error = await failedSwitch({ failureOnScreen: false });
+        expect(client.getPendingSwitch(ctxFor(5, 1))).toBeNull();
+        expect((error as AppError).details).toBeUndefined();
+      });
     });
 
     it("says Daintree is being started on the host while it is", async () => {

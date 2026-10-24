@@ -494,7 +494,8 @@ describe("project activation", () => {
     expect(listener).not.toHaveBeenCalled();
     expect(mocks.client.switchWindowHost).toHaveBeenCalledWith(
       expect.objectContaining({ webContentsId: REMOTE_SENDER }),
-      { hostId: "studio", projectId: "p2", newWindow: false }
+      { hostId: "studio", projectId: "p2", newWindow: false },
+      { failureOnScreen: false }
     );
   });
 
@@ -622,7 +623,7 @@ describe("scratch switch", () => {
       expect.objectContaining({ webContentsId: REMOTE_SENDER }),
       { hostId: "studio", projectId: "s1", newWindow: false },
       // Its callers word a failure themselves, so main keeps the report.
-      { requesterReports: false }
+      { requesterReports: false, failureOnScreen: false }
     );
     expect(mocks.viewSend).toHaveBeenCalledWith(CHANNELS.SCRATCH_ON_SWITCH, {
       scratch,

@@ -9,9 +9,17 @@ interface EscapeEntry {
 
 const stack: EscapeEntry[] = [];
 
-export function registerEscape(handler: EscapeHandler): { id: symbol; unregister: () => void } {
+export function registerEscape(
+  handler: EscapeHandler,
+  /**
+   * `bottom` for a surface painted beneath every dialog and palette whenever
+   * it opened: one already open when it registers still closes first.
+   */
+  { position = "top" }: { position?: "top" | "bottom" } = {}
+): { id: symbol; unregister: () => void } {
   const id = Symbol("escape");
-  stack.push({ id, handler });
+  if (position === "bottom") stack.unshift({ id, handler });
+  else stack.push({ id, handler });
   return {
     id,
     unregister: () => {

@@ -13,6 +13,7 @@ import type {
   OperationProgress,
 } from "../remoteHosts.js";
 import type { ProjectFocusOnActivateIntent } from "./project.js";
+import type { AppErrorCode } from "../appError.js";
 
 export interface AddHostPayload {
   name: string;
@@ -85,9 +86,15 @@ export interface PendingHostSwitch {
   projectName: string | null;
   /**
    * `connecting` while the link comes up, `starting` while Daintree is being
-   * started on the host, `opening` once the host is answering.
+   * started on the host, `opening` once the host is answering, `failed` once
+   * it gave up: the window stays on the switch's screen, saying why, until
+   * the person retries or cancels.
    */
-  phase: "connecting" | "starting" | "opening";
+  phase: "connecting" | "starting" | "opening" | "failed";
+  /** What the switch asked for, so a Retry from its screen asks for the same thing. */
+  request?: { projectId?: string; focusIntent?: ProjectFocusOnActivateIntent };
+  /** Set with `phase: "failed"`: the error as the host or link reported it. */
+  failure?: { code: AppErrorCode; message: string };
   /**
    * Past the point of no return: the window is moving and can no longer be
    * cancelled, but its new view isn't showing yet. Typing stays held until

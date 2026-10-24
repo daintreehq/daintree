@@ -258,6 +258,9 @@ const DEFAULT_FORGET_SWITCH_WAIT_MS = 5_000;
 
 const MAX_PROJECT_ID_LENGTH = 256;
 
+/** A readiness probe's answer when the host hasn't settled yet. */
+const NOT_SETTLED = Symbol("not-settled");
+
 /** What a wait resolves to once its switch was abandoned for a newer navigation or Cancel. */
 const ABANDONED = Symbol("abandoned");
 
@@ -487,6 +490,10 @@ export class RemoteHostsClient {
   private retire(descriptor: HostDescriptor): void {
     this.retiring.set(descriptor.id, descriptor.connection);
     this.epochs.set(descriptor.id, (this.epochs.get(descriptor.id) ?? 0) + 1);
+    // A failed switch's Retry would ask the old machine, or a host now gone.
+    for (const [windowId, pending] of [...this.pendingSwitches]) {
+      if (pending.hostId === descriptor.id) this.clearFailedSwitch(windowId);
+    }
   }
 
   private async returnWindowsHome(
@@ -802,12 +809,24 @@ export class RemoteHostsClient {
   switchWindowHost(
     ctx: IpcContext,
     payload: SwitchWindowHostPayload,
-    { requesterReports = true }: { requesterReports?: boolean } = {}
+    {
+      requesterReports = true,
+      failureOnScreen = true,
+    }: {
+      requesterReports?: boolean;
+      /**
+       * Whether a failure stays on the window's switch screen. A view's own
+       * switch to another of its host's projects or scratches words its
+       * failure itself, as a local one does.
+       */
+      failureOnScreen?: boolean;
+    } = {}
   ): Promise<SwitchWindowHostResult> {
     // The asking renderer shows a failure's own words, so main can stay quiet
     // about a cancelled switch that rolled back to it.
     return this.switchWindow(this.windowOf(ctx), payload, undefined, {
       requesterWebContentsId: requesterReports ? ctx.webContentsId : undefined,
+      failureOnScreen,
     });
   }
 
@@ -823,7 +842,8 @@ export class RemoteHostsClient {
     {
       exempt = false,
       requesterWebContentsId,
-    }: { exempt?: boolean; requesterWebContentsId?: number } = {}
+      failureOnScreen = false,
+    }: { exempt?: boolean; requesterWebContentsId?: number; failureOnScreen?: boolean } = {}
   ): Promise<SwitchWindowHostResult> {
     const hostId = hostIdOf(payload);
     const newWindow = payload.newWindow === true;
@@ -866,7 +886,16 @@ export class RemoteHostsClient {
     // one moving to a host waits on anything worth saying, and a new window
     // has no view yet to say it in.
     const pendingWindowId = remote && ticket !== null ? sourceWindowId : null;
+    // A failed switch's screen is gone the moment the window navigates again;
+    // a switch to a host replaces it with its own instead.
+    if (pendingWindowId === null && sourceWindowId !== null) this.clearFailedSwitch(sourceWindowId);
+    const request: PendingHostSwitch["request"] = {
+      ...(projectId === undefined ? {} : { projectId }),
+      ...(focusIntent === undefined ? {} : { focusIntent }),
+    };
     let pendingProjectName: string | null = null;
+    /** Set once a failure is kept on the window's screen: nothing clears it but the person. */
+    let keptFailure = false;
     const announce = (phase: PendingHostSwitch["phase"]): void => {
       if (pendingWindowId === null || ticket === null || !ticket.isCurrent()) return;
       const current = this.pendingSwitches.get(pendingWindowId);
@@ -884,6 +913,7 @@ export class RemoteHostsClient {
         hostName: this.options.registry.get(hostId)?.name ?? hostId,
         projectName: pendingProjectName,
         phase,
+        request,
       });
     };
     const settlePending = (): void => {
@@ -891,13 +921,59 @@ export class RemoteHostsClient {
       if (this.committedSwitches.get(pendingWindowId)?.switchId === ticket.id) {
         this.committedSwitches.delete(pendingWindowId);
       }
-      if (this.pendingSwitches.get(pendingWindowId)?.switchId === ticket.id) {
+      if (keptFailure) return;
+      const current = this.pendingSwitches.get(pendingWindowId);
+      // An earlier failure's screen this switch never got as far as replacing.
+      if (current?.phase === "failed" && current.switchId !== ticket.id && ticket.isCurrent()) {
+        this.clearFailedSwitch(pendingWindowId);
+        return;
+      }
+      if (current?.switchId === ticket.id) {
         // An earlier switch still opening keeps typing held until it lands.
         this.publishPendingSwitch(
           pendingWindowId,
           this.committedSwitches.get(pendingWindowId) ?? null
         );
       }
+    };
+    // The window went to this switch's screen when it started, so that is where
+    // it says the switch failed, with a Retry: never a toast over a window that
+    // didn't move. Only the window's newest switch, and only one a person made.
+    const keepFailureOnScreen = (error: unknown): unknown => {
+      if (
+        !failureOnScreen ||
+        pendingWindowId === null ||
+        ticket === null ||
+        !ticket.isCurrent() ||
+        !(error instanceof AppError) ||
+        error.details !== undefined
+      ) {
+        return error;
+      }
+      keptFailure = true;
+      if (this.committedSwitches.get(pendingWindowId)?.switchId === ticket.id) {
+        this.committedSwitches.delete(pendingWindowId);
+      }
+      this.publishPendingSwitch(pendingWindowId, {
+        switchId: ticket.id,
+        hostId,
+        hostName: this.options.registry.get(hostId)?.name ?? hostId,
+        projectName: pendingProjectName,
+        phase: "failed",
+        request,
+        failure: {
+          code: error.code,
+          message:
+            error.userMessage ?? "Couldn't reach this host. Check that it is on and try again.",
+        },
+      });
+      return new AppError({
+        code: error.code,
+        message: error.message,
+        userMessage: error.userMessage,
+        details: { code: "HOST_SWITCH_ON_SCREEN", switchId: ticket.id },
+        cause: error,
+      });
     };
     // No longer on offer to cancel, but still pending until the window's new
     // view is showing: until then the old one is on screen, and what is typed
@@ -937,6 +1013,8 @@ export class RemoteHostsClient {
         }
       }
       return result;
+    } catch (error) {
+      throw keepFailureOnScreen(error);
     } finally {
       settlePending();
     }
@@ -1334,6 +1412,17 @@ export class RemoteHostsClient {
    */
   supersedePendingSwitch(windowId: number): void {
     if (this.switchTickets.has(windowId)) this.takeSwitchTicket(windowId);
+    this.clearFailedSwitch(windowId);
+  }
+
+  /**
+   * The window has left a failed switch's screen: nothing is left of that
+   * switch. An earlier one still opening keeps typing held until it lands.
+   */
+  private clearFailedSwitch(windowId: number): void {
+    if (this.pendingSwitches.get(windowId)?.phase === "failed") {
+      this.publishPendingSwitch(windowId, this.committedSwitches.get(windowId) ?? null);
+    }
   }
 
   /**
@@ -1347,6 +1436,7 @@ export class RemoteHostsClient {
         pending.hostId !== hostId ||
         pending.committed ||
         pending.phase === "opening" ||
+        pending.phase === "failed" ||
         pending.phase === phase
       ) {
         continue;
@@ -1367,10 +1457,11 @@ export class RemoteHostsClient {
   }
 
   /**
-   * Give up the asking window's switch to a host while it is still on its way.
-   * It resolves as superseded straight away, wherever it was waiting, and the
-   * window stays as it is. False when there is none left to cancel: it has
-   * already committed, or another one replaced it.
+   * Give up the asking window's switch to a host while it is still on its way,
+   * or leave the screen of one that failed. It resolves as superseded straight
+   * away, wherever it was waiting, and the window is back where it was. False
+   * when there is none left to cancel: it has already committed, or another
+   * one replaced it.
    */
   cancelPendingSwitch(ctx: IpcContext, payload: CancelPendingSwitchPayload): boolean {
     const windowId = this.windowOf(ctx);
@@ -1551,8 +1642,12 @@ export class RemoteHostsClient {
   ): Promise<HostReadiness> {
     const timeoutMs = this.options.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS;
     const deadline = Date.now() + STARTING_TIMEOUT_MS;
-    onWait?.();
-    let readiness = await connection.whenReady(timeoutMs);
+    const first = connection.whenReady(timeoutMs);
+    // A host that is up already answers at once: there is nothing to wait on,
+    // so nothing to announce, and a warm switch never flashes its screen.
+    const settled = await Promise.race([first, Promise.resolve(NOT_SETTLED)]);
+    if (settled === NOT_SETTLED) onWait?.();
+    let readiness = settled === NOT_SETTLED ? await first : settled;
     while (readiness === "timeout" && this.options.isStarting?.(hostId)) {
       const left = deadline - Date.now();
       if (left <= 0) break;

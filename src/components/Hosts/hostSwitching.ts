@@ -10,6 +10,7 @@ import {
   openHostsSettingsTab,
   requestHostSettings,
 } from "@/components/Settings/Hosts/hostSettingsRequests";
+import { usePendingHostSwitchStore } from "@/store/pendingHostSwitchStore";
 import { getHostListSnapshot } from "./hostList";
 import { clientPlatform, localHostLabel } from "./hostModel";
 import { hostUpdateOffer, runHostUpdate } from "./hostUpdate";
@@ -52,19 +53,51 @@ export function followSwitchResult(result: SwitchWindowHostResult | null | undef
   });
 }
 
+/** The one recovery a failed switch to a host offers. */
+export interface HostSwitchRecovery {
+  label: string;
+  run: () => void;
+}
+
 /**
- * The one way a failed switch to another host reads, whichever control started
- * it: the host's own words for what went wrong (never the IPC wire prefix), and
- * the one recovery that gets that host back — an update for a host on another
- * build, setting up Host mode on a host never reached, the host's details
- * where ssh couldn't log in, otherwise trying the same switch again.
+ * Whether main kept this failure on the window's switch screen, which says it
+ * already: the caller adds nothing.
  */
-export function notifyHostSwitchFailure(
+export function isFailureOnSwitchScreen(error: unknown): boolean {
+  return isClientAppError(error) && error.details?.code === "HOST_SWITCH_ON_SCREEN";
+}
+
+/**
+ * Run `callback` once the failed switch's screen goes with nothing in its
+ * place: Cancel took the window back to where it was. A Retry or any other
+ * switch that takes the screen over ends the watch without it.
+ */
+function whenSwitchScreenCancelled(error: unknown, callback: () => void): void {
+  const switchId = isClientAppError(error)
+    ? error.details?.code === "HOST_SWITCH_ON_SCREEN" && error.details.switchId
+    : null;
+  if (!switchId) return;
+  const store = usePendingHostSwitchStore;
+  const stop = store.subscribe((state) => {
+    if (state.pending?.switchId === switchId) return;
+    stop();
+    // After the screen has gone, so focus put back lands on the project.
+    if (state.pending === null) setTimeout(callback, 0);
+  });
+}
+
+/**
+ * The one recovery that gets that host back, whichever control started the
+ * switch and wherever its failure shows: an update for a host on another
+ * build, setting up Host mode on a host never reached, the host's details
+ * where ssh couldn't log in, another project where the host says this one is
+ * gone, otherwise trying the same switch again.
+ */
+export function hostSwitchRecovery(
   hostId: HostId,
   error: unknown,
-  retry: () => void,
-  options?: { title?: string }
-): void {
+  retry: () => void
+): HostSwitchRecovery {
   // Refused for its build: the update is what gets this host back, so it is
   // offered right here as well as in the host menu.
   const entry =
@@ -79,50 +112,58 @@ export function notifyHostSwitchFailure(
     : isClientAppError(error) && error.code === "HOST_MODE_OFF" && neverReached(hostId)
       ? { hostId, target: "host" as const, label: "Set up…" }
       : null;
-  // The host said the project is gone: trying again can't help, picking another
-  // can. A host that is itself gone from the list is a different miss.
+  if (update) {
+    return { label: update.label, run: () => runHostUpdate(update.target, update.hostId) };
+  }
   // ssh couldn't log in: fixed outside Daintree, and the host's details show
   // everything ssh said. Retrying first would only fail the same way.
-  const accessDenied = isClientAppError(error) && error.code === "HOST_SSH_ACCESS_DENIED";
-  const missing =
-    !update &&
-    !accessDenied &&
+  if (isClientAppError(error) && error.code === "HOST_SSH_ACCESS_DENIED") {
+    return {
+      label: "Settings…",
+      run: () => {
+        requestHostSettings({ kind: "detail", hostId });
+        openHostsSettingsTab();
+      },
+    };
+  }
+  // The host said the project is gone: trying again can't help, picking another
+  // can. A host that is itself gone from the list is a different miss.
+  if (
     isClientAppError(error) &&
     error.code === "NOT_FOUND" &&
-    getHostListSnapshot().hosts.some((candidate) => candidate.descriptor.id === hostId);
+    getHostListSnapshot().hosts.some((candidate) => candidate.descriptor.id === hostId)
+  ) {
+    return { label: "Choose project…", run: () => void requestHostProjectPicker(hostId) };
+  }
+  return { label: "Retry", run: retry };
+}
+
+/**
+ * The one way a failed switch to another host reads, whichever control started
+ * it: the host's own words for what went wrong (never the IPC wire prefix), and
+ * the one recovery {@link hostSwitchRecovery} picks. Silent for a failure the
+ * window's switch screen is already showing.
+ */
+export function notifyHostSwitchFailure(
+  hostId: HostId,
+  error: unknown,
+  retry: () => void,
+  options?: { title?: string }
+): void {
+  if (isFailureOnSwitchScreen(error)) return;
+  const recovery = hostSwitchRecovery(hostId, error, retry);
   notify({
     type: "error",
     context: { eventKind: "connectivity" },
     title: options?.title ?? `Couldn't switch to ${hostName(hostId)}`,
     message: clientErrorText(error, "The window stayed on its current host."),
-    actions: update
-      ? [
-          {
-            label: update.label,
-            variant: "primary",
-            onClick: () => runHostUpdate(update.target, update.hostId),
-          },
-        ]
-      : accessDenied
-        ? [
-            {
-              label: "Settings…",
-              variant: "primary",
-              onClick: () => {
-                requestHostSettings({ kind: "detail", hostId });
-                openHostsSettingsTab();
-              },
-            },
-          ]
-        : missing
-          ? [
-              {
-                label: "Choose project…",
-                variant: "primary",
-                onClick: () => void requestHostProjectPicker(hostId),
-              },
-            ]
-          : [{ label: "Retry", variant: "primary", onClick: retry }],
+    actions: [
+      {
+        label: recovery.label,
+        variant: "primary",
+        onClick: recovery.run,
+      },
+    ],
   });
 }
 
@@ -162,6 +203,13 @@ export async function switchToHost(
     }
     followSwitchResult(result);
   } catch (error) {
+    // The window is on the switch's screen, saying why: it stays only once
+    // the person cancels there, and then whoever asked hears so.
+    if (isFailureOnSwitchScreen(error)) {
+      const onStayed = options?.onStayed;
+      if (onStayed) whenSwitchScreenCancelled(error, onStayed);
+      return;
+    }
     options?.onStayed?.();
     // The retry is the same switch, heard by the same caller.
     notifyHostSwitchFailure(

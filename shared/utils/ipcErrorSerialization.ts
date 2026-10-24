@@ -207,6 +207,10 @@ export function pickAppErrorDetails(value: unknown): AppErrorDetails | undefined
     const tools = pickRequiredPluginTools(raw.tools);
     return tools === undefined ? undefined : { code: "REQUIRED_PLUGIN_TOOLS_UNAVAILABLE", tools };
   }
+  if (raw.code === "HOST_SWITCH_ON_SCREEN") {
+    const switchId = pickDetailString(raw.switchId);
+    return switchId === undefined ? undefined : { code: "HOST_SWITCH_ON_SCREEN", switchId };
+  }
   const pluginId = pickDetailString(raw.pluginId);
   const hostId = pickDetailString(raw.hostId);
   if (pluginId === undefined || hostId === undefined) return undefined;
