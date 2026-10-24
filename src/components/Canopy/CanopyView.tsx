@@ -91,6 +91,7 @@ import {
 import { CanopyHostOffer } from "./CanopyHostOffer";
 import { useCanopyInboxData } from "./useCanopyInboxData";
 import { useCanopyInboxOrder } from "./useCanopyInboxOrder";
+import { useCanopyInboxSearch } from "./useCanopyInboxSearch";
 import { CanopyAssistantPane, CanopyAssistantRow } from "./CanopyAssistantList";
 import {
   CANOPY_ROLE_FILTERS,
@@ -161,13 +162,6 @@ interface HostIssue {
   action: string | null;
   act: (() => void) | null;
 }
-
-/** How long the search waits on the typing before reading terminals for it. */
-const SCREEN_SEARCH_DEBOUNCE_MS = 150;
-/** The most runs, words and word length one search asks of the terminals: main's own caps. */
-const SCREEN_SEARCH_MAX_RUNS = 500;
-const SCREEN_SEARCH_MAX_TERMS = 16;
-const SCREEN_SEARCH_MAX_TERM_LENGTH = 200;
 
 /** "3m ago", or "just now" — never "just now ago". */
 function agoPhrase(sinceMs: number, nowMs: number): string {
@@ -716,73 +710,9 @@ function CanopyInbox({
     menuOpenChanged,
     requestRank,
   } = useCanopyInboxOrder({ isOpen, hostId, otherHost, scope, canopy, baseItems, nowMs });
-  // The search the panel opens on: the runs whose names, words or terminal
-  // hold every word of it. Typed straight into, it never reaches a row's keys.
-  const [query, setQuery] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
-  const appliedQuery = useDeferredValue(query);
-  const terms = useMemo(() => searchTerms(appliedQuery), [appliedQuery]);
-  const searching = terms.length > 0;
-  const searchKey = `${hostId ?? ""}|${terms.join(" ")}`;
-  // The words each run's names and words leave unfound, asked of its terminal
-  // on the host it runs on: only ids come back. A run with more words left
-  // than main takes is not asked, rather than the whole ask refused.
-  const screenTargets = useMemo(() => {
-    const targets: CanopyScreenSearchTarget[] = [];
-    if (terms.length === 0) return targets;
-    for (const item of items) {
-      const left = unmatchedTerms(item, terms);
-      if (
-        left.length === 0 ||
-        left.length > SCREEN_SEARCH_MAX_TERMS ||
-        left.some((term) => term.length > SCREEN_SEARCH_MAX_TERM_LENGTH)
-      ) {
-        continue;
-      }
-      targets.push({ runId: item.runId, spawnedAt: item.row.run.spawnedAt, terms: left });
-      if (targets.length === SCREEN_SEARCH_MAX_RUNS) break;
-    }
-    return targets;
-  }, [items, terms]);
-  // The ask as a value: a terminal's matches stand only for the very runs,
-  // incarnations and words they were found for, on the host that found them.
-  const screenAsk = useMemo(
-    () => (screenTargets.length === 0 ? null : `${hostId ?? ""}|${JSON.stringify(screenTargets)}`),
-    [screenTargets, hostId]
-  );
-  const screenTargetsRef = useRef(screenTargets);
-  useEffect(() => {
-    screenTargetsRef.current = screenTargets;
-  });
-  const [screenHits, setScreenHits] = useState<{
-    ask: string;
-    runIds: ReadonlySet<string>;
-  } | null>(null);
-  // Asked again as screens are read anew, since a terminal's words move on.
-  useEffect(() => {
-    if (!isOpen || screenAsk === null) return;
-    let live = true;
-    const timer = setTimeout(() => {
-      api.searchScreens(screenTargetsRef.current).then(
-        (runIds) => {
-          if (live) setScreenHits({ ask: screenAsk, runIds: new Set(runIds) });
-        },
-        // A host that can't search its screens still matches what the panel
-        // holds, and its search has still settled.
-        () => {
-          if (!live) return;
-          setScreenHits((hits) =>
-            hits?.ask === screenAsk ? hits : { ask: screenAsk, runIds: new Set() }
-          );
-        }
-      );
-    }, SCREEN_SEARCH_DEBOUNCE_MS);
-    return () => {
-      live = false;
-      clearTimeout(timer);
-    };
-  }, [isOpen, screenAsk, api, refreshedAt]);
-  const onScreen = screenHits !== null && screenHits.ask === screenAsk ? screenHits.runIds : null;
+  const { query, setQuery, appliedQuery, terms, searching, searchKey, screenAsk, onScreen } =
+    useCanopyInboxSearch({ isOpen, hostId, items, api, refreshedAt });
   // Workers, Daintree Assistants or both. A role the filter hides keeps its
   // asks: nothing hidden is marked seen, and the Assistants choice counts them.
   const roleFilter = useCanopyStore((s) => s.roleFilter);
