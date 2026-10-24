@@ -300,7 +300,7 @@ export const terminalLifecycleActionRuns = {
     }
     const state = usePanelStore.getState();
     const targetId = terminalId ?? focusedAtDispatch;
-    if (!targetId) return;
+    if (!targetId) throw new Error("No terminal to restart on that preset");
     const observedBefore = useRateLimitObservationStore.getState().observedAtByTerminalId[targetId];
     const result = await state.restartTerminalOnPreset(targetId, presetId);
     if (!result.success) {
