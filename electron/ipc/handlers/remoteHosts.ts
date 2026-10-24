@@ -1,3 +1,4 @@
+// eager-import-allow: reads configured hosts and Host mode via store.get for the synchronous remote-host usage probe without starting remote services
 import { defineIpcNamespace, op } from "../define.js";
 import type { IpcContext } from "../types.js";
 import os from "node:os";

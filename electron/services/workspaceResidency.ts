@@ -1,3 +1,4 @@
+// eager-import-allow: reads residency grants via store.get during synchronous eviction and host residency decisions, before a workspace can be unloaded
 /**
  * Workspace residency: the user's "keep this one loaded" grant, the record of
  * views eviction has taken, and the authoritative read a bound MCP session uses

@@ -1,3 +1,4 @@
+// eager-import-allow: loads park and snooze records via store.get before the stats and fleet services start observing agent transitions
 import { CHANNELS } from "../../channels.js";
 import { checkRateLimit, typedHandle } from "../../utils.js";
 import type { HandlerDependencies } from "../../types.js";

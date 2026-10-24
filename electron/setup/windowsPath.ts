@@ -1,3 +1,4 @@
+// eager-import-allow: checks fallback executable directories via sync fs while startup environment setup augments PATH before services initialize
 // Windows PATH resolution, read straight from the registry.
 //
 // Kept separate from the heavy `environment.ts` (which runs `app.getPath`/

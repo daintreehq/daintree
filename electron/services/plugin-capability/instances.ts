@@ -1,3 +1,4 @@
+// eager-import-allow: reads capability grants via store.get for lazy consent-store hydration and grant merges used by plugin permission checks
 import { store } from "../../store.js";
 import { PluginCapabilityConsentService } from "./PluginCapabilityConsentService.js";
 import { PluginCapabilityConsentStore } from "./PluginCapabilityConsentStore.js";

@@ -1,3 +1,4 @@
+// eager-import-allow: reads project welcome answers via store.get so recording one tour preserves other projects and earlier answers
 import { store } from "../../store.js";
 import { isProjectWorkspaceId } from "../../../shared/utils/workspaceIds.js";
 import type { ProjectWelcomeRecord, ProjectWelcomeStatus } from "../../../shared/types/plugin.js";

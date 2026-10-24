@@ -1,3 +1,4 @@
+// eager-import-allow: probes AppRun via sync fs while building spawn environments so extracted AppImage paths are stripped before a child launches
 import fs from "node:fs";
 import path from "node:path";
 import { stripAppDirPathLists } from "../../utils/appImage.js";

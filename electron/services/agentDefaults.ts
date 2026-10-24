@@ -1,3 +1,4 @@
+// eager-import-allow: reads host agent defaults via store.get synchronously so hydration and migration cannot interleave checking and filling absent leaves
 import { store } from "../store.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { broadcastToRenderer } from "../ipc/utils.js";

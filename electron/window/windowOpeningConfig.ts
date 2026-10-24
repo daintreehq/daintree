@@ -1,3 +1,4 @@
+// eager-import-allow: reads the window-opening preference via store.get for each folder-open routing decision so the next open honors settings changes
 import { store } from "../store.js";
 import type { WindowOpeningConfig } from "../../shared/types/ipc/windowOpening.js";
 import {

@@ -1,3 +1,4 @@
+// eager-import-allow: checks the saved enablement setting via store.get before dynamically loading the device-answer listener during deferred startup
 import { store } from "../../store.js";
 import type { DeviceAnswerService } from "./DeviceAnswerService.js";
 

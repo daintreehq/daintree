@@ -1,3 +1,4 @@
+// eager-import-allow: reads the selected app theme via store.get while reconciling plugin removal and publishing the replacement window theme
 import { isDeepStrictEqual } from "node:util";
 import { nativeTheme } from "electron";
 import { store } from "../store.js";

@@ -1,3 +1,4 @@
+// eager-import-allow: reads project theme choices via store.get for preference updates and immediate publication of matching window chrome
 import { isDeepStrictEqual } from "node:util";
 import { store } from "../store.js";
 import { CHANNELS } from "../ipc/channels.js";

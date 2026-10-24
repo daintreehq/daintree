@@ -1,3 +1,4 @@
+// eager-import-allow: reads the session-restore preference via store.get so settings replies use the same default-on rule as startup
 import { store } from "../../store.js";
 import { getWindowForWebContents } from "../../window/webContentsRegistry.js";
 import type { SessionRestoreConfig } from "../../../shared/types/ipc/sessionRestore.js";

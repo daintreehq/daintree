@@ -1,3 +1,4 @@
+// eager-import-allow: reads layout-seed records via store.get alongside capture and claim transitions so concurrent views cannot apply the same seed
 import { store } from "../../store.js";
 import { isProjectWorkspaceId } from "../../../shared/utils/workspaceIds.js";
 import type {

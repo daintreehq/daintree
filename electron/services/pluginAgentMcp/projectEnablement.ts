@@ -1,3 +1,4 @@
+// eager-import-allow: reads project and assistant MCP access via store.get for launch-scope calculation and request-time grant validation
 import { store } from "../../store.js";
 import { isProjectWorkspaceId } from "../../../shared/utils/workspaceIds.js";
 import { projectIdFromPluginInstanceKey } from "../../../shared/types/plugin.js";

@@ -1,3 +1,4 @@
+// eager-import-allow: reads saved user-stopped previews only when the session service is created on demand, after its dynamic imports
 import { lstat } from "node:fs/promises";
 import { app } from "electron";
 import { z } from "zod";
