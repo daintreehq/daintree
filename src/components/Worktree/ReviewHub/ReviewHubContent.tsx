@@ -247,7 +247,6 @@ export function ReviewHubContent({
   const [selectedBaseBranchFile, setSelectedBaseBranchFile] = useState<CrossWorktreeFile | null>(
     null
   );
-  // Diff panels opened by this hub. The selection state above stays the record
   const mainBranch = useWorktreeStore(
     (state) =>
       Array.from(state.worktrees.values()).find((wt) => wt.isMainWorktree)?.branch ?? "main"
@@ -265,6 +264,7 @@ export function ReviewHubContent({
     currentBranch: status?.currentBranch,
     setSelectedBaseBranchFile,
   });
+  // Diff panels opened by this hub. The selection state above stays the record
   // of "a diff is open" (the hub clears it on commit, worktree switch, and
   // conflict-mode entry), but the panel itself owns stepping between files once
   // open — so these effects only handle open, close, and keeping the change set

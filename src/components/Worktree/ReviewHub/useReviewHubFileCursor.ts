@@ -117,8 +117,6 @@ export function useReviewHubFileCursor({
   // An ABSENT row only the virtualizer can place, and `scrollToIndex` is the
   // right call there precisely because it skips that visibility check — the
   // destination it computes is in parent coordinates and is correct.
-  const revealCursor = useEffectEvent(() => revealRow(focusedIndex));
-
   const revealRow = useCallback(
     (index: number) => {
       const row = fileListRef.current?.querySelector<HTMLElement>(`[data-row-index="${index}"]`);
@@ -141,6 +139,8 @@ export function useReviewHubFileCursor({
     },
     [workingTreeVirtualized, stagedCount]
   );
+
+  const revealCursor = useEffectEvent(() => revealRow(focusedIndex));
 
   // Reveal when the cursor lands on a DIFFERENT FILE — never merely because its
   // index moved. Reconciliation renumbers every row below a stage, an unstage

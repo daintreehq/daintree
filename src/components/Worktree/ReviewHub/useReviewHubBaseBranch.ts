@@ -6,7 +6,7 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 interface UseReviewHubBaseBranchArgs {
   worktreePath: string;
   mainBranch: string;
-  currentBranch: string | undefined;
+  currentBranch: string | null | undefined;
   setSelectedBaseBranchFile: Dispatch<SetStateAction<CrossWorktreeFile | null>>;
 }
 
