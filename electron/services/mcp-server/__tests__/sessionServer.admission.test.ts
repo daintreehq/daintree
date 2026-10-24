@@ -9,7 +9,7 @@ vi.mock("electron", () => ({
 import { createSessionServer } from "../sessionServer.js";
 import type { SessionStore } from "../sessionStore.js";
 import { SessionStore as RealSessionStore } from "../sessionStore.js";
-import { TIER_NOT_PERMITTED_CODE, SESSION_GONE, TIER_ALLOWLISTS } from "../shared.js";
+import { TIER_NOT_PERMITTED_CODE, TIER_ALLOWLISTS } from "../shared.js";
 import {
   OWNED_TWIN_TOOLS,
   RENDERER_OWNED_ORIGIN_ONLY_TOOLS,
