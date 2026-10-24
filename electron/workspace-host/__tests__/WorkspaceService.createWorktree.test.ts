@@ -728,10 +728,7 @@ describe("WorkspaceService.createWorktree", () => {
       "initWorktreeSubmodules"
     ).mockResolvedValue({ ok: false, error: "Submodule initialization failed" });
     const setupSpy = vi
-      .spyOn(
-        service as unknown as { runLifecycleSetup: (...args: unknown[]) => Promise<unknown> },
-        "runLifecycleSetup"
-      )
+      .spyOn(service["setupCoordinator"], "runLifecycleSetup")
       .mockResolvedValue({ ok: true });
 
     await service.createWorktree("req-submodule-continue", "/test/root", {
@@ -2352,7 +2349,9 @@ describe("WorkspaceService.createWorktree submodule init", () => {
       if (args[0] === "submodule") throw new Error("fatal: could not read from remote repository");
       return undefined;
     });
-    const setupSpy = vi.spyOn(service as any, "runLifecycleSetup").mockResolvedValue({ ok: true });
+    const setupSpy = vi
+      .spyOn(service["setupCoordinator"], "runLifecycleSetup")
+      .mockResolvedValue({ ok: true });
 
     await create({ submoduleInit: "all" });
 
@@ -2397,9 +2396,11 @@ describe("WorkspaceService.createWorktree submodule init", () => {
       return undefined;
     });
 
-    const setupSpy = vi.spyOn(service as any, "runLifecycleSetup").mockImplementation(async () => {
-      order.push("lifecycle-setup");
-    });
+    const setupSpy = vi
+      .spyOn(service["setupCoordinator"], "runLifecycleSetup")
+      .mockImplementation(async () => {
+        order.push("lifecycle-setup");
+      });
 
     await service.createWorktree("req-order", "/test/root", {
       baseBranch: "main",
