@@ -2335,7 +2335,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       additionalProperties: false,
     },
     requiresArgs: true,
-    title: "Restart owned agent on preset",
+    title: "Move owned agent to another preset",
   },
   {
     band: "reversible",

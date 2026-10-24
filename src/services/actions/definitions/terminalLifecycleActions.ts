@@ -408,7 +408,7 @@ export function registerTerminalLifecycleActions(
   // `danger: "confirm"` matches the delegate: the conversation ends either way.
   actions.set("terminal.restartOnPresetOwned", () => ({
     id: "terminal.restartOnPresetOwned",
-    title: "Restart owned agent on preset",
+    title: "Move owned agent to another preset",
     description:
       "Respawn an agent panel this session launched on another preset of its agent, in place, after the user confirms: for an agent that hit a plan limit. Its conversation and scrollback are lost. Panels it was handed are refused.",
     category: "terminal",

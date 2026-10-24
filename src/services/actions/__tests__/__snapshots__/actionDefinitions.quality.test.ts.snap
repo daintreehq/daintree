@@ -6006,7 +6006,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": true,
-    "title": "Restart owned agent on preset",
+    "title": "Move owned agent to another preset",
   },
   {
     "category": "terminal",
