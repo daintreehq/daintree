@@ -444,17 +444,24 @@ describe("DataTable, rich", () => {
     );
     const handle = screen.getByRole("separator", { name: /^Resize Name/ });
     const header = () => screen.getByRole("columnheader", { name: "Name" });
+    // The drag's listeners live on this node, so it must survive every frame.
+    const sameHandle = () =>
+      expect(screen.getByRole("separator", { name: /^Resize Name/ })).toBe(handle);
     fireEvent.pointerDown(handle, { button: 0, pointerId: 1, clientX: 100 });
     fireEvent.pointerMove(handle, { pointerId: 1, clientX: 140 });
     expect(header().style.width).toBe("160px");
+    sameHandle();
     fireEvent.pointerMove(handle, { pointerId: 1, clientX: 400 });
     expect(header().style.width).toBe("200px");
+    sameHandle();
     expect(onWidths).not.toHaveBeenCalled();
     fireEvent.pointerUp(handle, { pointerId: 1, clientX: 400 });
     expect(onWidths).toHaveBeenCalledTimes(1);
     expect(onWidths).toHaveBeenLastCalledWith({ name: 200 });
-    // The drag is over: a stray move neither reports nor resizes.
+    // The drag is over: a stray move, release or cancel neither reports nor resizes.
     fireEvent.pointerMove(handle, { pointerId: 1, clientX: 100 });
+    fireEvent.pointerUp(handle, { pointerId: 1, clientX: 100 });
+    fireEvent.pointerCancel(handle, { pointerId: 1 });
     expect(onWidths).toHaveBeenCalledTimes(1);
     expect(header().style.width).toBe("200px");
   });
