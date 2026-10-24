@@ -87,9 +87,11 @@ export async function handleFallbackTriggered(data: {
   // can't agree to for them. Nothing is said otherwise, or once the chain runs
   // out, because the pane's rate-limit chip already shows the limit.
   if (reason === "rate-limit") {
-    const optedIn = (entry.customPresets ?? []).some(
-      (p) => p.id === originalPresetId && p.fallbackOnRateLimit === true
-    );
+    // Resolved like any other preset (sanitized, first id wins), from the
+    // user's own presets alone.
+    const optedIn =
+      getMergedPresets(agentId, entry.customPresets, [], []).find((p) => p.id === originalPresetId)
+        ?.fallbackOnRateLimit === true;
     if (!optedIn || !nextPresetId) {
       fallbackInFlight.delete(terminalId);
       return;

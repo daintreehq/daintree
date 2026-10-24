@@ -453,6 +453,31 @@ describe("handleFallbackTriggered — rate limits (#14370)", () => {
     expect(notify).not.toHaveBeenCalled();
   });
 
+  it("ignores an opt-in on a custom entry the preset merge rejected", async () => {
+    const activate = setupChain({});
+    useProjectPresetsStore.setState({
+      presetsByAgent: {
+        testAgent: [{ id: "preset-1", name: "Shared", fallbacks: ["preset-2"] }],
+      },
+    });
+    useAgentSettingsStore.setState({
+      settings: {
+        agents: {
+          testAgent: {
+            customPresets: [
+              { id: "preset-1", name: "  ", fallbackOnRateLimit: true },
+              { id: "preset-2", name: "Second account" },
+            ],
+          },
+        },
+      },
+    });
+
+    await trigger();
+
+    expect(activate).not.toHaveBeenCalled();
+  });
+
   it("does not hold the in-flight guard after declining", async () => {
     setupChain({});
     await trigger();

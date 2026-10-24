@@ -530,6 +530,20 @@ describe("TerminalProcess rate-limit fallback offer (#14370)", () => {
     terminal.dispose();
   });
 
+  it("never offers once another agent has taken over the pane", async () => {
+    const seen = collect();
+    const terminal = createTerminal(preset);
+    const info = (terminal as unknown as { terminalInfo: { detectedAgentId?: string } })
+      .terminalInfo;
+
+    info.detectedAgentId = "codex";
+    ptyOnDataCallback!(banner);
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS * 2);
+    expect(seen).toHaveLength(0);
+
+    terminal.dispose();
+  });
+
   it("never offers for a pane launched without a preset", async () => {
     const seen = collect();
     const terminal = createTerminal({ launchAgentId: "claude" });
