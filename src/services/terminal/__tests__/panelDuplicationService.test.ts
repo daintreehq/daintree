@@ -770,7 +770,7 @@ describe("inherited worktree cwd resolution (#11854)", () => {
     panel: PanelInstance,
     location: "grid" | "dock"
   ) => Promise<AddPanelOptions>;
-  let indexReads: number;
+  let indexReads = 0;
 
   beforeEach(async () => {
     vi.clearAllMocks();
