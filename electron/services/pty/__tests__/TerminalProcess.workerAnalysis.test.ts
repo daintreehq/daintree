@@ -78,6 +78,18 @@ function createWorkerModeTerminal() {
 }
 
 describe("TerminalProcess worker-mode analysis events", () => {
+  it("allocates no local mirror and reads the visible screen as empty", () => {
+    const { terminal } = createWorkerModeTerminal();
+    const internals = terminal as unknown as { analysis: { kind: string } };
+
+    expect(internals.analysis.kind).toBe("worker");
+    expect(terminal.getInfo().headlessTerminal).toBeUndefined();
+    expect(terminal.getInfo().serializeAddon).toBeUndefined();
+    expect(terminal.getVisibleActivityLines(10)).toEqual([]);
+    expect(terminal.getVisibleActivitySnapshot(10)).toMatchObject({ length: 0 });
+    terminal.dispose();
+  });
+
   it("rejects a stale waiting-timeout from an old monitor generation", () => {
     const { terminal, worker, agentStateService } = createWorkerModeTerminal();
     const spawnedAt = terminal.getInfo().spawnedAt;
