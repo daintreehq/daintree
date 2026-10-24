@@ -347,4 +347,16 @@ describe("agent launches at critical memory pressure (#13530)", () => {
     expect(spawnedIds()).toEqual(["free-1"]);
     expect(isHeld("free-1")).toBe(false);
   });
+
+  // #14221 held the ninth agent on a 36 GB host; how many agents run is never a reason to wait (#14309).
+  it("starts every agent past the old per-host limit at once", async () => {
+    isMemoryPressureCriticalMock.mockResolvedValue(false);
+    const ids = Array.from({ length: 12 }, (_, i) => `many-${i}`);
+    for (const id of ids) await launchAgent(id);
+    await drainMicrotasks(400);
+
+    expect(spawnedIds()).toEqual(ids);
+    expect(ids.filter(isHeld)).toEqual([]);
+    expect(ids.map((id) => getPtyPanel(id)?.spawnStatus)).toEqual(ids.map(() => "ready"));
+  });
 });
