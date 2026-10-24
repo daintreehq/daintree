@@ -847,6 +847,8 @@ describe("external memory pressure (#14367)", () => {
     statCostMs = HEARTBEAT_INTERVAL_MS;
     tick();
     expect(killMain).not.toHaveBeenCalled();
+    // Stamped at the start of the read, which is when the watchdog stalled.
+    expect(wd.state.lastLateTickAt).toBe(now - HEARTBEAT_INTERVAL_MS);
     // Main's ping, queued behind the stalled read, lands before the next tick.
     wd.handleMessage({ type: "ping", memoryPressure: true, externalPressure: true });
     statCostMs = 0;
