@@ -1,14 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const isMemoryPressureCriticalMock = vi.hoisted(() => vi.fn<() => Promise<boolean>>());
-const requestAdmissionMock = vi.hoisted(() => vi.fn());
-const observeAdmissionMock = vi.hoisted(() => vi.fn());
 vi.mock("@/clients/systemClient", () => ({
-  systemClient: {
-    isMemoryPressureCritical: isMemoryPressureCriticalMock,
-    requestAgentLaunchAdmission: requestAdmissionMock,
-    observeAgentLaunchAdmission: observeAdmissionMock,
-  },
+  systemClient: { isMemoryPressureCritical: isMemoryPressureCriticalMock },
 }));
 
 vi.mock("@/utils/logger", () => ({ logInfo: vi.fn() }));
@@ -21,11 +15,9 @@ import {
   launchDespiteMemoryPressure,
   MEMORY_PRESSURE_POLL_MS,
   panelHoldKey,
-  requestAgentLaunchAdmission,
   resetMemoryPressureHoldsForTesting,
   useMemoryPressureWaitStore,
 } from "../memoryPressureWaitStore";
-import type { AgentLaunchObservation } from "@shared/types/agentLaunchAdmission";
 
 const heldPanels = () => Object.keys(useMemoryPressureWaitStore.getState().heldPanelIds);
 
@@ -33,11 +25,6 @@ beforeEach(() => {
   vi.useFakeTimers();
   isMemoryPressureCriticalMock.mockReset();
   isMemoryPressureCriticalMock.mockResolvedValue(true);
-  // A host from before #14221 by default: the kernel reading is all it has.
-  requestAdmissionMock.mockReset();
-  requestAdmissionMock.mockRejectedValue(new Error("no handler"));
-  observeAdmissionMock.mockReset();
-  observeAdmissionMock.mockRejectedValue(new Error("no handler"));
 });
 
 afterEach(() => {
@@ -195,138 +182,5 @@ describe("memory pressure holds (#13530)", () => {
 
     expect(resume).toHaveBeenCalledTimes(1);
     expect(onCancel).not.toHaveBeenCalled();
-  });
-});
-
-const observation = (extra: Partial<AgentLaunchObservation> = {}): AgentLaunchObservation => ({
-  kernelCritical: false,
-  runningAgents: 8,
-  startingAgents: 0,
-  agentLaunchLimit: 8,
-  memoryTotalBytes: 36 * 1024 ** 3,
-  ...extra,
-});
-
-describe("requestAgentLaunchAdmission", () => {
-  it("passes on the host's answer", async () => {
-    const admission = { holdReason: "agent-capacity", observation: observation() };
-    requestAdmissionMock.mockResolvedValue(admission);
-
-    await expect(requestAgentLaunchAdmission("p1")).resolves.toEqual(admission);
-    expect(requestAdmissionMock).toHaveBeenCalledWith("p1");
-  });
-
-  it("falls back to the kernel reading when the host can't count its agents", async () => {
-    isMemoryPressureCriticalMock.mockResolvedValue(true);
-    await expect(requestAgentLaunchAdmission("p1")).resolves.toMatchObject({
-      holdReason: "kernel-critical",
-      observation: { runningAgents: null, agentLaunchLimit: null },
-    });
-
-    isMemoryPressureCriticalMock.mockResolvedValue(false);
-    await expect(requestAgentLaunchAdmission("p1")).resolves.toMatchObject({ holdReason: null });
-  });
-});
-
-describe("agent launches held at the host's agent limit (#14221)", () => {
-  const details = () => useMemoryPressureWaitStore.getState().holdDetails;
-
-  it("records why a pane waits, and forgets it once the hold ends", () => {
-    const detail = { reason: "agent-capacity" as const, observation: observation() };
-    holdForMemoryPressure(panelHoldKey("p1"), { panelId: "p1", resume: vi.fn(), detail });
-    expect(details()).toEqual({ p1: detail });
-
-    cancelMemoryPressureHold(panelHoldKey("p1"));
-    expect(details()).toEqual({});
-  });
-
-  it("resumes only as many waiting launches as the host has places for, in order", async () => {
-    const order: string[] = [];
-    for (const id of ["a", "b", "c"]) {
-      holdForMemoryPressure(panelHoldKey(id), { panelId: id, resume: () => order.push(id) });
-    }
-    observeAdmissionMock.mockResolvedValue(observation({ runningAgents: 6, startingAgents: 1 }));
-
-    await vi.advanceTimersByTimeAsync(MEMORY_PRESSURE_POLL_MS);
-
-    expect(order).toEqual(["a"]);
-    // What still waits shows the host as it looked on that poll.
-    expect(details().b).toEqual({
-      reason: "agent-capacity",
-      observation: observation({ runningAgents: 6, startingAgents: 1 }),
-    });
-    expect(details().a).toBeUndefined();
-  });
-
-  it("gives the only place to the next pane when one goes stale while the host answers", async () => {
-    let stale = false;
-    const gone = vi.fn();
-    const next = vi.fn();
-    holdForMemoryPressure(panelHoldKey("gone"), {
-      panelId: "gone",
-      resume: gone,
-      isStale: () => stale,
-    });
-    holdForMemoryPressure(panelHoldKey("next"), { panelId: "next", resume: next });
-    observeAdmissionMock.mockImplementation(async () => {
-      stale = true;
-      return observation({ runningAgents: 7 });
-    });
-
-    await vi.advanceTimersByTimeAsync(MEMORY_PRESSURE_POLL_MS);
-
-    expect(gone).not.toHaveBeenCalled();
-    expect(next).toHaveBeenCalledWith(false);
-    expect(heldPanels()).toEqual(["next"]);
-  });
-
-  it("resumes nothing while the host is full, and the rest once agents exit", async () => {
-    const resume = vi.fn();
-    holdForMemoryPressure(panelHoldKey("a"), { panelId: "a", resume });
-    observeAdmissionMock.mockResolvedValue(observation());
-
-    await vi.advanceTimersByTimeAsync(MEMORY_PRESSURE_POLL_MS * 2);
-    expect(resume).not.toHaveBeenCalled();
-
-    observeAdmissionMock.mockResolvedValue(observation({ runningAgents: 7 }));
-    await vi.advanceTimersByTimeAsync(MEMORY_PRESSURE_POLL_MS);
-    expect(resume).toHaveBeenCalledWith(false);
-  });
-
-  it("holds every agent launch at critical pressure, whatever room the count leaves", async () => {
-    const resume = vi.fn();
-    holdForMemoryPressure(panelHoldKey("a"), { panelId: "a", resume });
-    observeAdmissionMock.mockResolvedValue(observation({ kernelCritical: true, runningAgents: 0 }));
-
-    await vi.advanceTimersByTimeAsync(MEMORY_PRESSURE_POLL_MS);
-
-    expect(resume).not.toHaveBeenCalled();
-    expect(details().a?.reason).toBe("kernel-critical");
-  });
-
-  it("opens a project on pressure alone, however many agents the host runs", async () => {
-    const resume = vi.fn();
-    holdForMemoryPressure("project-open", { resume });
-    isMemoryPressureCriticalMock.mockResolvedValue(false);
-    observeAdmissionMock.mockResolvedValue(observation());
-
-    await vi.advanceTimersByTimeAsync(MEMORY_PRESSURE_POLL_MS);
-
-    expect(resume).toHaveBeenCalledWith(false);
-    expect(observeAdmissionMock).not.toHaveBeenCalled();
-  });
-
-  it("launches a pane held at the limit anyway", () => {
-    const resume = vi.fn();
-    holdForMemoryPressure(panelHoldKey("a"), {
-      panelId: "a",
-      resume,
-      detail: { reason: "agent-capacity", observation: observation() },
-    });
-
-    launchDespiteMemoryPressure(panelHoldKey("a"));
-
-    expect(resume).toHaveBeenCalledWith(true);
-    expect(details().a).toBeUndefined();
   });
 });

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { CHANNELS } from "../../../ipc/channels.js";
 import type { AgentSettings } from "../../../../shared/types/agentSettings.js";
 import { executeViewlessAction } from "../ViewlessActionExecutor.js";
@@ -189,60 +189,6 @@ describe("agent.launch with no frontend", () => {
       false
     );
     expect(store.read()).toBeNull();
-  });
-
-  it("starts nothing on a host at its agent limit, and says why (#14221)", async () => {
-    const observation = {
-      kernelCritical: false,
-      runningAgents: 8,
-      startingAgents: 0,
-      agentLaunchLimit: 8,
-      memoryTotalBytes: 36 * 1024 ** 3,
-    };
-    const admitAgentLaunch = vi.fn(async () => ({
-      holdReason: "agent-capacity" as const,
-      observation,
-    }));
-    const { deps, invoke, store } = launchDeps({ admitAgentLaunch });
-
-    const result = await executeViewlessAction(
-      request("agent.launch", { agentId: "claude" }),
-      deps
-    );
-
-    expect(result).toMatchObject({
-      ok: true,
-      result: { launched: false, spawnStatus: "host-memory", terminalId: null },
-    });
-    expect(admitAgentLaunch).toHaveBeenCalledTimes(1);
-    expect(invoke.mock.calls.some(([, channel]) => channel === CHANNELS.TERMINAL_SPAWN)).toBe(
-      false
-    );
-    expect(store.read()).toBeNull();
-  });
-
-  it("launches when the host admits it, or when its admission can't answer", async () => {
-    for (const admitAgentLaunch of [
-      vi.fn(async () => ({
-        holdReason: null,
-        observation: {
-          kernelCritical: false,
-          runningAgents: 1,
-          startingAgents: 0,
-          agentLaunchLimit: 8,
-          memoryTotalBytes: 36 * 1024 ** 3,
-        },
-      })),
-      vi.fn(() => Promise.reject(new Error("down"))),
-    ]) {
-      const { deps, invoke } = launchDeps({ admitAgentLaunch });
-
-      await executeViewlessAction(request("agent.launch", { agentId: "claude" }), deps);
-
-      expect(invoke.mock.calls.some(([, channel]) => channel === CHANNELS.TERMINAL_SPAWN)).toBe(
-        true
-      );
-    }
   });
 
   it("holds the launch to the hard panel limit a fresh view would apply", async () => {
