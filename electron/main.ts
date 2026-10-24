@@ -200,7 +200,7 @@ protocol.registerSchemesAsPrivileged([
     // range requests — electron#51442). It only makes the scheme *eligible*
     // for cross-origin fetch: reads still require the handler to echo
     // Access-Control-Allow-Origin, which it does solely for trusted app
-    // origins (see trustedAppCorsOrigin in setup/protocols.ts), so browser
+    // origins (see trustedAppCorsOrigin in setup/protocols/appCors.ts), so browser
     // panels hosting remote sites gain no access.
     scheme: "daintree-file",
     privileges: {
@@ -235,7 +235,7 @@ protocol.registerSchemesAsPrivileged([
     // `stream` is the documented privilege for serving media bodies.
     // Deliberately no supportFetchAPI/corsEnabled: tag loads are
     // no-cors and never consult CORS, so the fetch surface would be dead weight
-    // (see trustedAppCorsOrigin in setup/protocols.ts). Kept off daintree-file://
+    // (see trustedAppCorsOrigin in setup/protocols/appCors.ts). Kept off daintree-file://
     // on purpose — adding `standard` there would change URL parsing and origin
     // semantics for markdown images, WebAudio and the file viewer all at once.
     scheme: "daintree-media",
