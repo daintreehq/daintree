@@ -130,7 +130,7 @@ That is the end of it, because passing requires matching a multi-character lexic
 
 ## Type checking
 
-`scripts/perf` is covered by `tsconfig.perf.json`, wired into `typecheck:projects`, so `npm run typecheck` checks the harness and everything it reaches in `src/` and `electron/`.
+`scripts/perf` is covered by `tsconfig.perf.json`, listed in `scripts/typecheck.mjs`, so `npm run typecheck` checks the harness and everything it reaches in `src/` and `electron/`.
 
 It needs its own project because the harness spans both halves of the app. It uses bundler resolution and the renderer path aliases (its relative imports are extensionless or carry `.ts`, which the NodeNext configs would reject), and it leaves `noUncheckedIndexedAccess` off to match `electron/` and `shared/`, which supply most of the transitive graph — turning it on fails ~250 product files their own configs pass.
 
