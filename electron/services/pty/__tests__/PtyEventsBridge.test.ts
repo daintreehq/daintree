@@ -48,6 +48,35 @@ describe("bridgePtyEvent", () => {
     expect(payloads).toEqual([{ terminalId: "term-1", observedAt: 1_000, timestamp: 1_000 }]);
   });
 
+  it("forwards a fallback offer from the host, and drops one with an unknown reason (#14370)", () => {
+    const payloads: unknown[] = [];
+    events.on("agent:fallback-triggered", (payload) => payloads.push(payload));
+    const base = {
+      terminalId: "term-1",
+      agentId: "claude",
+      fromPresetId: "work",
+      originalPresetId: "home",
+      timestamp: 1_000,
+    };
+
+    expect(
+      bridgePtyEvent({ type: "agent-fallback-triggered", payload: { ...base, reason: "rate-limit" } })
+    ).toBe(true);
+    bridgePtyEvent({
+      type: "agent-fallback-triggered",
+      payload: { ...base, reason: "auth", exitCode: 1 },
+    });
+    bridgePtyEvent({
+      type: "agent-fallback-triggered",
+      payload: { ...base, reason: "user-error" as never, exitCode: 1 },
+    });
+
+    expect(payloads).toEqual([
+      { ...base, reason: "rate-limit" },
+      { ...base, reason: "auth", exitCode: 1 },
+    ]);
+  });
+
   it("forwards a handback with its code, and drops a code of the wrong shape", () => {
     const codes: Array<string | undefined> = [];
     events.on("agent:handback-observed", (payload) => codes.push(payload.code));

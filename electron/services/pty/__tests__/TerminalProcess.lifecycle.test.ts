@@ -750,6 +750,32 @@ describe("TerminalProcess — observer-driven exit handlers", () => {
     }
   });
 
+  it("offers the chain on a natural exit at a rate limit, for the renderer to gate (#14370)", () => {
+    const pty = createControllablePty();
+    const fallbackListener = vi.fn();
+    const off = events.on("agent:fallback-triggered", fallbackListener);
+
+    try {
+      createTerminal(
+        pty,
+        { kind: "terminal", launchAgentId: "claude", agentPresetId: "claude-default" },
+        undefined,
+        "t-rate-limit"
+      );
+
+      pty.emitData("API Error: Rate limit reached\n");
+      pty.emitExit(1);
+
+      const calls = fallbackListener.mock.calls.filter(
+        (c: unknown[]) => (c[0] as { terminalId: string }).terminalId === "t-rate-limit"
+      );
+      expect(calls).toHaveLength(1);
+      expect(calls[0]![0]).toMatchObject({ reason: "rate-limit", exitCode: 1 });
+    } finally {
+      off();
+    }
+  });
+
   it("does NOT fire fallback when terminal was killed before exit", () => {
     const pty = createControllablePty();
     const fallbackListener = vi.fn();

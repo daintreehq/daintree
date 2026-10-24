@@ -338,6 +338,114 @@ describe("handleFallbackTriggered — activation failure", () => {
   });
 });
 
+describe("handleFallbackTriggered — rate limits (#14370)", () => {
+  const original = usePanelStore.getState().activateFallbackPreset;
+  afterEach(() => {
+    usePanelStore.setState({ activateFallbackPreset: original });
+  });
+
+  function setupChain(primary: Record<string, unknown>, fallbackChainIndex = 0): ReturnType<typeof vi.fn> {
+    useAgentSettingsStore.setState({
+      settings: {
+        agents: {
+          testAgent: {
+            customPresets: [
+              { id: "preset-1", name: "Primary", fallbacks: ["preset-2"], ...primary },
+              { id: "preset-2", name: "Second account" },
+            ],
+          },
+        },
+      },
+    });
+    setupPanel({ agentPresetId: fallbackChainIndex ? "preset-2" : "preset-1", fallbackChainIndex });
+    const activate = vi.fn().mockResolvedValue({ success: true });
+    usePanelStore.setState({ activateFallbackPreset: activate });
+    return activate;
+  }
+
+  it("hops without asking when the original preset opted in", async () => {
+    const activate = setupChain({ fallbackOnRateLimit: true });
+
+    await handleFallbackTriggered({
+      terminalId: "term-1",
+      agentId: "testAgent",
+      fromPresetId: "preset-1",
+      reason: "rate-limit",
+    });
+
+    expect(activate).toHaveBeenCalledWith("term-1", "preset-2", "preset-1");
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Switched to fallback preset",
+        message: expect.stringContaining("usage limit"),
+        supersedeKey: "terminal.term-1.fallback",
+      })
+    );
+  });
+
+  it("leaves a pane whose preset did not opt in alone, and says nothing", async () => {
+    const activate = setupChain({});
+
+    await handleFallbackTriggered({
+      terminalId: "term-1",
+      agentId: "testAgent",
+      fromPresetId: "preset-1",
+      reason: "rate-limit",
+    });
+
+    expect(activate).not.toHaveBeenCalled();
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("says nothing for an opted-in preset with no chain to walk", async () => {
+    const activate = setupChain({ fallbackOnRateLimit: true, fallbacks: undefined });
+
+    await handleFallbackTriggered({
+      terminalId: "term-1",
+      agentId: "testAgent",
+      fromPresetId: "preset-1",
+      reason: "rate-limit",
+    });
+
+    expect(activate).not.toHaveBeenCalled();
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("reads the opt-in from the original preset once the pane is on a fallback", async () => {
+    setupChain({ fallbackOnRateLimit: true }, 1);
+
+    await handleFallbackTriggered({
+      terminalId: "term-1",
+      agentId: "testAgent",
+      fromPresetId: "preset-2",
+      reason: "rate-limit",
+    });
+
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Fallback chain exhausted" })
+    );
+  });
+
+  it("does not hold the in-flight guard after declining", async () => {
+    setupChain({});
+    await handleFallbackTriggered({
+      terminalId: "term-1",
+      agentId: "testAgent",
+      fromPresetId: "preset-1",
+      reason: "rate-limit",
+    });
+
+    const activate = setupChain({ fallbackOnRateLimit: true });
+    await handleFallbackTriggered({
+      terminalId: "term-1",
+      agentId: "testAgent",
+      fromPresetId: "preset-1",
+      reason: "rate-limit",
+    });
+    expect(activate).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("handleFallbackTriggered — guard clauses", () => {
   it("returns early when panel is not found", async () => {
     await handleFallbackTriggered({
