@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import type net from "node:net";
 import { encodeValue } from "../encoding.js";
@@ -315,6 +315,93 @@ describe("LinkSession liveness", () => {
     const closed = await closedPromise(session);
     expect(closed.reason).toBe("idle timeout");
     b.destroy();
+  });
+
+  it("reads what the peer sent while this side's own loop was stalled before judging silence", async () => {
+    const { a, b } = await socketPair(dir);
+    const session = new LinkSession(a, { role: "host", pingIntervalMs: 0, idleTimeoutMs: 80 });
+    sessions.push(session);
+    session.open();
+    let closed = false;
+    void closedPromise(session).then(() => (closed = true));
+    const ping = encodeFrame(
+      messageToFrame({ lane: Lane.CONTROL, kind: ControlKind.PING, body: { sentAt: 1 } }),
+      1024
+    );
+    // The peer spoke, but this loop is blocked past the idle window before it can read it.
+    b.write(ping);
+    const stalledUntil = Date.now() + 250;
+    while (Date.now() < stalledUntil) {
+      // a stalled main loop
+    }
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(closed).toBe(false);
+    expect(session.isOpen).toBe(true);
+    b.destroy();
+  });
+
+  it("gives up on a silent peer without a GOODBYE, so a stalled one wakes to a dropped stream it can resume", async () => {
+    const { a, b } = await socketPair(dir);
+    const frames = recordFrames(b);
+    const session = new LinkSession(a, { role: "host", pingIntervalMs: 0, idleTimeoutMs: 40 });
+    sessions.push(session);
+    session.open();
+    const closed = await closedPromise(session);
+    expect(closed).toEqual({ reason: "idle timeout", by: "local" });
+    await new Promise<void>((resolve) => (b.destroyed ? resolve() : b.once("close", resolve)));
+    expect(frames.map((frame) => frameToMessage(frame).kind)).not.toContain(ControlKind.GOODBYE);
+  });
+
+  it("keeps a peer that has been silent for longer than a stall it can recover from", async () => {
+    const { a, b } = await socketPair(dir);
+    vi.useFakeTimers();
+    try {
+      let now = 0;
+      const session = new LinkSession(a, { role: "client", pingIntervalMs: 0, now: () => now });
+      sessions.push(session);
+      session.open();
+      for (let elapsed = 0; elapsed < 60_000; elapsed += 1_000) {
+        now += 1_000;
+        vi.advanceTimersByTime(1_000);
+      }
+      expect(session.isOpen).toBe(true);
+      // A peer stuck for good is still given up on in the end.
+      for (let elapsed = 0; elapsed < 10 * 60_000 && session.isOpen; elapsed += 1_000) {
+        now += 1_000;
+        vi.advanceTimersByTime(1_000);
+      }
+      expect(session.closedWith).toEqual({ reason: "idle timeout", by: "local" });
+      b.destroy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("judges silence on the check after a late one, not the late one itself", async () => {
+    const { a, b } = await socketPair(dir);
+    vi.useFakeTimers();
+    try {
+      let now = 0;
+      const session = new LinkSession(a, {
+        role: "host",
+        pingIntervalMs: 0,
+        idleTimeoutMs: 400,
+        now: () => now,
+      });
+      sessions.push(session);
+      session.open();
+      // The loop stalls: the clock jumps well past the window before the next check runs.
+      now += 1_000;
+      vi.advanceTimersByTime(100);
+      expect(session.isOpen).toBe(true);
+      // Still nothing heard by the next, punctual check: silence is real.
+      now += 100;
+      vi.advanceTimersByTime(100);
+      expect(session.closedWith).toEqual({ reason: "idle timeout", by: "local" });
+      b.destroy();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("ends with a GOODBYE the peer sees as a remote close", async () => {

@@ -55,9 +55,9 @@ const COMMON = [
   "-o",
   "ConnectTimeout=10",
   "-o",
-  "ServerAliveInterval=15",
+  "ServerAliveInterval=5",
   "-o",
-  "ServerAliveCountMax=3",
+  "ServerAliveCountMax=4",
   "-o",
   "ForwardAgent=no",
   "-o",
@@ -161,9 +161,9 @@ describe("ssh argument construction", () => {
       "-o",
       "ConnectTimeout=10",
       "-o",
-      "ServerAliveInterval=15",
+      "ServerAliveInterval=5",
       "-o",
-      "ServerAliveCountMax=3",
+      "ServerAliveCountMax=4",
       "-o",
       "ControlPath=none",
       "-o",
@@ -219,13 +219,13 @@ describe("ssh argument construction", () => {
     expect(() => new SshTransport({ target: "-x", clientDir: "/tmp/x" })).toThrow(TransportError);
   });
 
-  it("uses cm2-%C when it fits and a short hash when it would not", () => {
+  it("uses cm3-%C when it fits and a short hash when it would not", () => {
     expect(controlPathFor("/Users/g/.config/Daintree/ssh", "studio", "darwin")).toBe(
-      "/Users/g/.config/Daintree/ssh/cm2-%C"
+      "/Users/g/.config/Daintree/ssh/cm3-%C"
     );
     const long = "/Users/somebody/Library/Application Support/Daintree/ssh";
     const hashed = controlPathFor(long, "studio", "darwin");
-    expect(hashed).toMatch(/\/cm2-[0-9a-f]{16}$/);
+    expect(hashed).toMatch(/\/cm3-[0-9a-f]{16}$/);
     expect(controlPathFor(long, "studio", "darwin")).toBe(hashed);
     expect(controlPathFor(long, "other", "darwin")).not.toBe(hashed);
   });

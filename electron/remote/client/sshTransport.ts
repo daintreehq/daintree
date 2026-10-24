@@ -183,12 +183,13 @@ function targetHash(target: string): string {
  * Changes whenever the options a master starts with change, so a master an
  * older build left running (one that may still forward the agent, say) is
  * never picked up as this build's. 1: no agent, X11 or config forwards.
- * 2: keepalives, so a master whose connection died is noticed.
+ * 2: keepalives, so a master whose connection died is noticed. 3: faster
+ * keepalives, now that they are what tells a link its host is gone.
  */
-const CONTROL_PATH_PREFIX = "cm2-";
+const CONTROL_PATH_PREFIX = "cm3-";
 
 /**
- * `cm2-%C` when it fits the platform's socket path limit; otherwise a short
+ * `cm3-%C` when it fits the platform's socket path limit; otherwise a short
  * per-target hash (%C alone is 40 characters, and ssh adds a temporary
  * suffix while binding).
  */
@@ -232,9 +233,12 @@ const NO_FORWARDING = [
  * one is reused (ControlMaster=auto) and every command through it hangs until
  * the kernel gives up on the TCP connection. They only act on the process
  * that owns the connection, which is whichever of these calls becomes the
- * master, so every call carries them.
+ * master, so every call carries them. They are also how a link learns its
+ * host is gone: the link itself waits out a host whose main loop is stalled,
+ * and sshd answers these while it is, so a dead connection still ends the
+ * link in about 20 s.
  */
-const KEEPALIVE = ["-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"];
+const KEEPALIVE = ["-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=4"];
 
 /**
  * Every call here names its own command, so a `RemoteCommand` in the user's

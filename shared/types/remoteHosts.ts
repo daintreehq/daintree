@@ -318,8 +318,9 @@ export type HostConnectionState =
       buildMismatch?: HandshakeMismatch;
       /**
        * When the host was last heard from, present only once nothing has
-       * arrived for several seconds. Observed silence, never a cause: the link
-       * stays connected until its idle timeout gives up on it.
+       * arrived for several seconds. Observed silence, never a cause: a slow
+       * host stays connected until its transport closes or the idle ceiling
+       * gives up on it.
        */
       quietSince?: number;
     }
