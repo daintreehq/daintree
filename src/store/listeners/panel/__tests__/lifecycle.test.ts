@@ -344,7 +344,10 @@ describe("handleFallbackTriggered — rate limits (#14370)", () => {
     usePanelStore.setState({ activateFallbackPreset: original });
   });
 
-  function setupChain(primary: Record<string, unknown>, fallbackChainIndex = 0): ReturnType<typeof vi.fn> {
+  function setupChain(
+    primary: Record<string, unknown>,
+    fallbackChainIndex = 0
+  ): ReturnType<typeof vi.fn> {
     useAgentSettingsStore.setState({
       settings: {
         agents: {

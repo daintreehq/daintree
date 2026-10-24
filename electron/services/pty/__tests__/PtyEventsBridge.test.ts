@@ -60,7 +60,10 @@ describe("bridgePtyEvent", () => {
     };
 
     expect(
-      bridgePtyEvent({ type: "agent-fallback-triggered", payload: { ...base, reason: "rate-limit" } })
+      bridgePtyEvent({
+        type: "agent-fallback-triggered",
+        payload: { ...base, reason: "rate-limit" },
+      })
     ).toBe(true);
     bridgePtyEvent({
       type: "agent-fallback-triggered",
