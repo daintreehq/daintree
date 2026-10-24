@@ -1,8 +1,9 @@
-import { Search, ExternalLink, Plus, ArrowUpDown, RefreshCw } from "lucide-react";
+import { Search, ExternalLink, Plus, ArrowUpDown, RefreshCw, X } from "lucide-react";
 import { ListChecks } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { useSkeletonGate } from "@/hooks/useDeferredLoading";
 import { FORGE_DROPDOWN_PANEL_SIZE } from "@/components/Layout/forgeStatsDropdownContract";
+import { useGitHubFilterStore } from "../stores/githubFilterStore";
 
 /**
  * The virtualized row height, in px, and the only definition of it. This used
@@ -82,6 +83,37 @@ export const RESOURCE_STATE_BONE = {
 } as const;
 
 /**
+ * The panel's chrome, shared with `GitHubResourceList` for the same reason as
+ * the row constants above: the loading panel's header and footer had drifted
+ * from the ones that replace them, so the swap moved the footer's labels and
+ * re-laid its actions. The header frame holds the search row and the filter.
+ */
+export const RESOURCE_PANEL_HEADER =
+  "p-3 border-b border-[var(--border-divider)] space-y-2 shrink-0";
+
+/** The dropdown's 32px, text-sm search field, taking the search row's spare width. */
+export const RESOURCE_SEARCH_FIELD = "h-8 text-sm flex-1";
+
+/**
+ * Three columns, so the freshness line the loaded footer can show in the middle
+ * never pushes either action off its edge.
+ */
+export const RESOURCE_PANEL_FOOTER =
+  "px-2 h-10 border-t border-[var(--border-divider)] grid grid-cols-[1fr_auto_1fr] items-center shrink-0";
+
+/** A header icon slot: the `IconButton` at its default 32px size. */
+const HEADER_ICON_SLOT =
+  "flex items-center justify-center w-8 h-8 rounded-[var(--radius-md)] shrink-0 text-text-secondary";
+
+/**
+ * A footer action at rest: the ghost `sm` `Button` the loaded footer draws,
+ * weight included. The labels were regular weight here, so they thickened and
+ * widened the moment the list landed.
+ */
+const FOOTER_ACTION =
+  "inline-flex items-center justify-center whitespace-nowrap h-7 px-3 gap-1.5 text-xs font-medium rounded-[var(--radius-md)] text-text-secondary [&_svg]:size-3.5 [&_svg]:shrink-0";
+
+/**
  * The geometry of `IssueSelector`'s option row, shared with its skeleton. The
  * transparent border comes from `PALETTE_ROW_CLASS` on the loaded row; the
  * skeleton takes it from here rather than the whole interactive class.
@@ -122,6 +154,16 @@ export function GitHubResourceListSkeleton({
 }: ResourceListSkeletonProps) {
   const renderCount = normalizeCount(count);
   const showImmediate = useSkeletonGate(Boolean(immediate));
+  // The loaded header draws the filter, sort and query the panel was last left
+  // on, so this does too. Drawing the defaults moved the filter's thumb and
+  // changed the field's text whenever the panel reopened somewhere else.
+  const filterState = useGitHubFilterStore((s) => (type === "issue" ? s.issueFilter : s.prFilter));
+  const sortOrder = useGitHubFilterStore((s) =>
+    type === "issue" ? s.issueSortOrder : s.prSortOrder
+  );
+  const searchQuery = useGitHubFilterStore((s) =>
+    type === "issue" ? s.issueSearchQuery : s.prSearchQuery
+  );
 
   const stateTabs =
     type === "pr"
@@ -145,26 +187,51 @@ export function GitHubResourceListSkeleton({
       <span className="sr-only">Loading GitHub results</span>
 
       {/* Header — matches GitHubResourceList */}
-      <div className="p-3 border-b border-[var(--border-divider)] space-y-2 shrink-0">
+      <div className={RESOURCE_PANEL_HEADER}>
         <div className="flex items-center gap-2">
           {/* The shared field's own classes, not a copy of its look: the live
               header renders SearchField, so drawing the same CSS here keeps the
               swap from loading to loaded seamless. */}
-          <div className="search-field h-8 text-sm flex-1 cursor-default" data-size="compact">
+          <div
+            data-search-field=""
+            className={cn("search-field cursor-default", RESOURCE_SEARCH_FIELD)}
+            data-size="compact"
+          >
             <Search className="search-field-icon" aria-hidden="true" />
-            <span className="flex-1 min-w-0 truncate text-text-secondary select-none">
-              Search {type === "issue" ? "issues" : "pull requests"}…
-            </span>
+            {searchQuery ? (
+              <>
+                <span className="flex-1 min-w-0 truncate whitespace-pre select-none">
+                  {searchQuery}
+                </span>
+                {/* The clear button the loaded field shows whenever it holds text. */}
+                <span className="search-field-clear">
+                  <X className="h-3 w-3" aria-hidden="true" />
+                </span>
+              </>
+            ) : (
+              <span className="flex-1 min-w-0 truncate text-text-secondary select-none">
+                Search {type === "issue" ? "issues" : "pull requests"}…
+              </span>
+            )}
           </div>
           {/* Every icon slot, or the search field jumps narrower the moment
               real content replaces this. */}
-          <div className="flex items-center justify-center w-8 h-8 rounded-[var(--radius-md)] shrink-0 text-text-secondary">
+          <div data-header-slot="refresh" className={HEADER_ICON_SLOT}>
             <RefreshCw className="w-3.5 h-3.5" />
           </div>
-          <div className="flex items-center justify-center w-8 h-8 rounded-[var(--radius-md)] shrink-0 text-text-secondary">
+          {/* Lifted under a non-default sort, as the loaded trigger is. */}
+          <div
+            data-header-slot="sort"
+            className={cn(
+              HEADER_ICON_SLOT,
+              sortOrder !== "created" && "bg-overlay-soft text-text-primary"
+            )}
+          >
             <ArrowUpDown className="w-3.5 h-3.5" />
           </div>
-          <div className="flex items-center justify-center w-8 h-8 rounded-[var(--radius-md)] shrink-0 text-text-secondary">
+          {/* Dimmed: the loaded trigger is disabled until rows arrive, so it
+              would otherwise dim and come back the moment the list mounted. */}
+          <div data-header-slot="select" className={cn(HEADER_ICON_SLOT, "opacity-50")}>
             <ListChecks className="w-3.5 h-3.5" />
           </div>
         </div>
@@ -178,17 +245,22 @@ export function GitHubResourceListSkeleton({
           {stateTabs.map((tab) => (
             <div
               key={tab.id}
+              data-segment={tab.id}
+              data-checked={tab.id === filterState ? "" : undefined}
               className={cn(
-                // The boundary is an inset shadow, not a border: the live thumb's
-                // border sits on an absolutely positioned layer, so a border here
-                // would make the skeleton 2px taller than what replaces it.
-                "flex-1 px-2.5 py-1 text-xs font-medium rounded-[var(--radius-sm)] text-center",
-                tab.id === "open"
-                  ? "bg-overlay-medium text-text-primary shadow-[inset_0_0_0_1px_var(--color-text-secondary)]"
-                  : "text-text-secondary"
+                "relative flex-1 min-w-0 px-2.5 py-1 text-xs font-medium rounded-[var(--radius-sm)] text-center",
+                tab.id === filterState ? "text-text-primary" : "text-text-secondary"
               )}
             >
-              {tab.label}
+              {/* The thumb as the live control draws it: its own layer under the
+                  label, so its border adds nothing to the segment's height. */}
+              {tab.id === filterState && (
+                <span
+                  data-slot="segmented-thumb"
+                  className="absolute inset-0 rounded-[var(--radius-sm)] bg-overlay-medium border border-text-secondary shadow-[var(--theme-shadow-ambient)]"
+                />
+              )}
+              <span className="relative block truncate">{tab.label}</span>
             </div>
           ))}
         </div>
@@ -206,13 +278,14 @@ export function GitHubResourceListSkeleton({
       </div>
 
       {/* Footer — matches GitHubResourceList */}
-      <div className="px-2 h-10 border-t border-[var(--border-divider)] flex items-center justify-between shrink-0">
-        <div className="flex items-center gap-1.5 px-3 h-7 text-xs text-text-secondary">
-          <ExternalLink className="h-3.5 w-3.5" />
+      <div data-panel-footer="" className={RESOURCE_PANEL_FOOTER}>
+        <div className={cn(FOOTER_ACTION, "justify-self-start")}>
+          <ExternalLink />
           View on GitHub
         </div>
-        <div className="flex items-center gap-1.5 px-3 h-7 text-xs text-text-secondary">
-          <Plus className="h-3.5 w-3.5" />
+        <span aria-hidden="true" />
+        <div className={cn(FOOTER_ACTION, "justify-self-end")}>
+          <Plus />
           {type === "issue" ? "New issue" : "New pull request"}
         </div>
       </div>

@@ -256,6 +256,7 @@ vi.mock("@/components/Worktree/LiveTimeAgo", () => ({
 }));
 
 import { GitHubResourceList } from "../components/GitHubResourceList";
+import { GitHubResourceListSkeleton } from "../components/GitHubDropdownSkeletons";
 
 const makeIssue = (n: number): Issue => ({
   number: n,
@@ -4016,5 +4017,73 @@ describe("GitHubResourceList — only a cursor move scrolls the list (#14067)", 
     rerender(<Harness mode="visible" />);
 
     expect(revealedIndexes()).toEqual([0, 0]);
+  });
+});
+
+describe("cold panel skeleton parity (#14415)", () => {
+  // The panel skeleton is swapped for this list while the list is still
+  // loading, so the first frame it has to match is the loading one: same
+  // chrome, same persisted header state, same footer actions.
+  const FOOTER_GEOMETRY = ["h-7", "px-3", "gap-1.5", "text-xs", "font-medium"];
+
+  function readLive(container: HTMLElement) {
+    const header = container.querySelector('[role="radiogroup"]')!.parentElement!;
+    const footer = container.querySelector(".border-t.h-10")!;
+    return {
+      headerClass: header.className,
+      footerClass: footer.className.replace(/\s*hidden\b/, ""),
+      checked: container.querySelector('[role="radio"][aria-checked="true"]')?.textContent,
+      sortLifted: screen
+        .getByRole("button", { name: /^Sort issues/ })
+        .classList.contains("bg-overlay-soft"),
+      selectDimmed: (screen.getByRole("button", { name: "Select issues" }) as HTMLButtonElement)
+        .disabled,
+      footerActions: Array.from(footer.querySelectorAll("button")).map((b) => ({
+        text: b.textContent,
+        geometry: FOOTER_GEOMETRY.filter((t) => b.classList.contains(t)),
+      })),
+    };
+  }
+
+  function readSkeleton(container: HTMLElement) {
+    const footer = container.querySelector("[data-panel-footer]")!;
+    return {
+      headerClass:
+        container.querySelector("[data-search-field]")!.parentElement!.parentElement!.className,
+      footerClass: footer.className,
+      checked: container.querySelector("[data-segment][data-checked]")?.textContent,
+      sortLifted: container
+        .querySelector('[data-header-slot="sort"]')!
+        .classList.contains("bg-overlay-soft"),
+      selectDimmed: container
+        .querySelector('[data-header-slot="select"]')!
+        .classList.contains("opacity-50"),
+      footerActions: Array.from(footer.children)
+        .filter((el) => el.textContent)
+        .map((el) => ({
+          text: el.textContent,
+          geometry: FOOTER_GEOMETRY.filter((t) => el.classList.contains(t)),
+        })),
+    };
+  }
+
+  it("draws the chrome and persisted header state the loading list replaces it with", async () => {
+    mockListIssues.mockReturnValue(new Promise(() => {}));
+    const filterStore = useGitHubFilterStore.getState();
+    filterStore.setIssueFilter("closed");
+    filterStore.setIssueSortOrder("updated");
+
+    const live = render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+    await waitFor(() => {
+      expect(screen.getByTestId("skeleton")).toBeTruthy();
+    });
+    const liveShape = readLive(live.container);
+    live.unmount();
+
+    const skeleton = render(<GitHubResourceListSkeleton type="issue" />);
+    expect(readSkeleton(skeleton.container)).toEqual(liveShape);
+    expect(liveShape.checked).toBe("Closed");
+    expect(liveShape.sortLifted).toBe(true);
+    expect(liveShape.selectDimmed).toBe(true);
   });
 });
