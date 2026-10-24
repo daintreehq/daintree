@@ -50,18 +50,18 @@ describe("createEventBus", () => {
     expect(received).toEqual([]);
   });
 
-  it("keeps delivering to surviving subscribers when one unsubscribes mid-dispatch", () => {
+  it("dispatches each push to the subscribers present when it arrived", () => {
     const received: string[] = [];
-    let disposeFirst = (): void => {};
-    disposeFirst = bus.on("window:fullscreen-change", () => {
+    let disposeSecond = (): void => {};
+    bus.on("window:fullscreen-change", () => {
       received.push("first");
-      disposeFirst();
+      disposeSecond();
+      bus.on("window:fullscreen-change", () => received.push("late"));
     });
-    bus.on("window:fullscreen-change", () => received.push("second"));
+    disposeSecond = bus.on("window:fullscreen-change", () => received.push("second"));
 
     push(ipc, "window:fullscreen-change", true);
-    push(ipc, "window:fullscreen-change", false);
-    expect(received).toEqual(["first", "second", "second"]);
+    expect(received).toEqual(["first", "second"]);
   });
 
   it("gives each bus instance its own subscribers and buffer", () => {
@@ -72,5 +72,10 @@ describe("createEventBus", () => {
     const received: unknown[] = [];
     other.on("plugin:deep-link", (payload) => received.push(payload));
     expect(received).toEqual([]);
+
+    const mine = vi.fn();
+    bus.on("window:fullscreen-change", mine);
+    push(otherIpc, "window:fullscreen-change", true);
+    expect(mine).not.toHaveBeenCalled();
   });
 });

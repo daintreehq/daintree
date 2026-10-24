@@ -5,7 +5,9 @@ import { FakeIpcRenderer } from "./fakeIpcRenderer.js";
 class FakePort {
   onmessage: ((msg: { data: unknown }) => void) | null = null;
   postMessage = vi.fn();
-  close = vi.fn();
+  // A local close fires the port's own close event, once.
+  close = vi.fn(() => this.fireClose());
+  private closed = false;
   private closeListeners: Array<() => void> = [];
 
   addEventListener(type: string, listener: () => void): void {
@@ -13,6 +15,8 @@ class FakePort {
   }
 
   fireClose(): void {
+    if (this.closed) return;
+    this.closed = true;
     for (const listener of this.closeListeners) listener();
   }
 
@@ -42,15 +46,22 @@ describe("WorktreePortClient", () => {
     const port = new FakePort();
     client.attach(asPort(port));
 
-    const pending = client.request("get-all-states");
-    const [{ id, action }] = port.postMessage.mock.calls[0] as [{ id: string; action: string }];
-    expect(action).toBe("get-all-states");
-    port.reply({ id, result: ["state"] });
-    await expect(pending).resolves.toEqual(["state"]);
+    const first = client.request("get-all-states");
+    const second = client.request("get-all-states");
+    const [[a], [b]] = port.postMessage.mock.calls as Array<[{ id: string; action: string }]>;
+    expect(a!.action).toBe("get-all-states");
+    expect(a!.id).not.toBe(b!.id);
+    port.reply({ id: b!.id, result: ["second"] });
+    port.reply({ id: a!.id, result: ["first"] });
+    await expect(first).resolves.toEqual(["first"]);
+    await expect(second).resolves.toEqual(["second"]);
 
     const listener = vi.fn();
+    const other = vi.fn();
     const dispose = client.onEvent("worktree-update", listener);
+    client.onEvent("worktree-removed", other);
     port.reply({ type: "event", event: { type: "worktree-update", id: "w" } });
+    expect(other).not.toHaveBeenCalled();
     dispose();
     port.reply({ type: "event", event: { type: "worktree-update", id: "w2" } });
     expect(listener.mock.calls).toEqual([[{ type: "worktree-update", id: "w" }]]);
@@ -67,13 +78,17 @@ describe("WorktreePortClient", () => {
 
     const newPort = new FakePort();
     client.attach(asPort(newPort));
+    expect(oldPort.close).toHaveBeenCalled();
     await expect(pending).rejects.toThrow("[BrokerError|HOST_EXITED] Worktree port replaced");
     oldPort.fireClose();
     expect(client.isReady()).toBe(true);
     expect(disconnected).not.toHaveBeenCalled();
 
+    const current = client.request("get-all-states");
     newPort.fireClose();
+    await expect(current).rejects.toThrow("[BrokerError|HOST_EXITED] Worktree port disconnected");
     expect(client.isReady()).toBe(false);
+    client._handlePortClose(2);
     expect(disconnected).toHaveBeenCalledTimes(1);
   });
 });
@@ -83,11 +98,13 @@ describe("connectWorktreePortClient", () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
     const ipc = new FakeIpcRenderer();
     const client = connectWorktreePortClient(ipc.asPreloadIpc());
-    const ready = vi.fn();
+    const order: string[] = [];
+    const ready = vi.fn(() => order.push("ready"));
     client.onReady(ready);
+    ipc.send.mockImplementation(() => order.push("ack"));
 
     ipc.emit("worktree-port", { ports: [asPort(new FakePort())] }, { token: 7 });
-    expect(ready).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(["ready", "ack"]);
     expect(ipc.send).toHaveBeenCalledWith("worktree:port-ack", { token: 7 });
 
     ipc.send.mockClear();
