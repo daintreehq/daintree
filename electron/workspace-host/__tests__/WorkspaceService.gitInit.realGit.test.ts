@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -71,9 +72,10 @@ describe("WorkspaceService enumeration across git init (#14178)", () => {
     writeFileSync(path.join(root, "README.md"), "hello\n");
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     for (const service of services.splice(0)) service.dispose();
-    rmSync(root, { recursive: true, force: true });
+    // Disposed monitors can still have exiting git processes holding the cwd on Windows.
+    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   it("keeps a pre-init host's empty verdict, and a fresh host enumerates the main worktree", async () => {
