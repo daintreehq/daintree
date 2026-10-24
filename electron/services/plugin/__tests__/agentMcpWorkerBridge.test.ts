@@ -635,7 +635,7 @@ describe("worker-side host.mcp", () => {
     proxy.handleMessage({ type: "invoke-cancel", requestId: "i1" });
 
     expect(seen?.aborted).toBe(true);
-    expect((proxy as any).mcpInvokeAborts.size).toBe(0);
+    expect((proxy as any).contributions.mcpInvokeAborts.size).toBe(0);
     expect(sent.some((m) => m.type === "invoke-result")).toBe(false);
   });
 
