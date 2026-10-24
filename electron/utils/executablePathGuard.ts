@@ -9,7 +9,7 @@ import { AppError } from "./errorTypes.js";
 // primitive. Selected per-platform at module init.
 //
 // Lives in electron/utils rather than beside the system IPC handler because
-// both the handler and the plugin host (`PluginHostFactory.buildSystemApi`)
+// both the handler and the plugin host (`buildSystemApi` in `pluginHostSystemApi.ts`)
 // need the identical deny-list, and the plugin host must not import an
 // IPC-handler module to get it.
 const DENIED_EXTENSIONS_BY_PLATFORM: Record<string, readonly string[]> = {
