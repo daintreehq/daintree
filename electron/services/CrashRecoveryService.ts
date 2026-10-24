@@ -30,6 +30,7 @@ import { markCrashRecoveryInspectionComplete } from "../utils/crashDumpRetention
 import { stateFilePath } from "./projectStorePaths.js";
 import { PROJECT_STATE_SCHEMA_VERSION } from "./ProjectStateManager.js";
 import { logError, logInfo, logWarn } from "../utils/logger.js";
+import { holdTerminalsEndedByHost, readHostEnd } from "./hostEndHoldPolicy.js";
 
 const MAX_CRASH_LOGS = 10;
 const CRASH_LOG_PREFIX = "crash-";
@@ -164,6 +165,9 @@ export class CrashRecoveryService {
   // files are deleted, rotated, or overwritten between marker consumption and
   // the user resolving the recovery dialog.
   private cachedBackupSnapshot: SessionSnapshot | null = null;
+  // When the crashed session began, so a backup an older session left behind
+  // is never read as what this one was running.
+  private crashedSessionStartMs: number | null = null;
   // Memoized crash-recovery config — store.get re-reads and re-parses the
   // whole config.json on every call, which is sync main-thread work inside
   // the boot IPC handler. setConfig keeps the memo in sync with writes.
@@ -199,6 +203,19 @@ export class CrashRecoveryService {
 
   getPendingCrash(): PendingCrash | null {
     return this.pendingCrash;
+  }
+
+  /**
+   * The workspaces that were live when the previous session's last backup was
+   * taken, or null when no backup survived the crash to say.
+   */
+  getCrashedLiveWorkspaceIds(): string[] | null {
+    const snapshot = this.cachedBackupSnapshot;
+    if (!snapshot || this.crashedSessionStartMs === null) return null;
+    // The rotated previous generation can be an older session's.
+    if (!(snapshot.capturedAt >= this.crashedSessionStartMs)) return null;
+    const layouts = snapshot.projectLayouts;
+    return isPlainObject(layouts) ? Object.keys(layouts) : null;
   }
 
   // Drop the in-memory pending-crash record once the user has resolved the
@@ -666,6 +683,23 @@ export class CrashRecoveryService {
         return false;
       }
 
+      // The panes go back as they were before the crash, so agents an unclean
+      // end cut short come back held, as the saved per-project ones do.
+      const hostEnd = readHostEnd(this.pendingCrash);
+      if (
+        hostEnd &&
+        isPlainObject(snapshot.appState) &&
+        Array.isArray(snapshot.appState.terminals)
+      ) {
+        snapshot = {
+          ...snapshot,
+          appState: {
+            ...snapshot.appState,
+            terminals: holdTerminalsEndedByHost(snapshot.appState.terminals, hostEnd).terminals,
+          },
+        };
+      }
+
       this.applySessionSnapshot(snapshot);
       this.unlinkCrashedBackup();
       console.log(
@@ -740,6 +774,7 @@ export class CrashRecoveryService {
         this.deleteMarker();
         return null;
       }
+      this.crashedSessionStartMs = marker.sessionStartMs;
 
       // Read the watchdog kill flag BEFORE the dev-mode discard branch — even
       // an orphaned dev marker may have a fresh flag (real watchdog kill in

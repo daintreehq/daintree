@@ -1,4 +1,4 @@
-import { useEffect, useState, type PointerEvent, type Ref } from "react";
+import { useEffect, useState, useSyncExternalStore, type PointerEvent, type Ref } from "react";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { useShallow } from "zustand/react/shallow";
 import { FolderClock, Play, RotateCcw } from "lucide-react";
@@ -10,17 +10,39 @@ import { usePanelStore } from "@/store/panelStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { isProjectViewObservable, subscribeProjectViewObservability } from "@/lib/viewCacheState";
 import {
+  clearBulkResumeOutcome,
+  getBulkResumeOutcome,
+  heldForHostEndIds,
   launchFromRestoreRecovery,
+  resumeAllHeldForHostEnd,
+  subscribeBulkResumeOutcomes,
   type RestoreRecoveryChoice,
   type RestoreRecoveryLaunchResult,
 } from "@/services/terminal/restoreRecoveryLaunch";
-import { isPtyPanel, type RestoreRecoveryReason } from "@shared/types/panel";
+import { isPtyPanel, type PanelHostEnd, type RestoreRecoveryReason } from "@shared/types/panel";
 import { resolveResumeOnRestart } from "@shared/types/agentSettings";
 import { resolveConversationSearchCwd } from "@/utils/restoreRecovery";
+import { formatRelativeTime } from "@/lib/formatRelativeTime";
+import { pluralize } from "@/lib/pluralize";
 
 interface RecoveryCopy {
   title: string;
   description: string;
+}
+
+const HOST_END_HOLD_SENTENCE =
+  "Agents it stopped wait here instead of all resuming at once. Resume its conversation or start a new one.";
+
+/** What the crash record saw, quoted rather than explained (#14382). */
+function describeHostEnd(hostEnd: PanelHostEnd, now: number): string {
+  const when = formatRelativeTime(hostEnd.at, now);
+  const seen =
+    hostEnd.cause === "watchdog-deadlock"
+      ? hostEnd.missedBeats !== undefined
+        ? `Daintree's watchdog stopped the app ${when} after ${pluralize(hostEnd.missedBeats, "missed heartbeat")}, while this agent was running.`
+        : `Daintree's watchdog stopped the app ${when}, while this agent was running.`
+      : `Daintree was last seen running ${when} and ended without shutting down, while this agent was running.`;
+  return `${seen} ${HOST_END_HOLD_SENTENCE}`;
 }
 
 // Says what restore saw and what is left to choose. Never "lost": the
@@ -54,6 +76,10 @@ const REASON_COPY: Record<RestoreRecoveryReason, RecoveryCopy> = {
     title: "Not resumed after restart",
     description:
       "The plugin that started this agent asked for it to wait after a restart. Resume its conversation or start a new one.",
+  },
+  "host-ended-uncleanly": {
+    title: "Not resumed after Daintree was stopped",
+    description: `Daintree was stopped while this agent was running. ${HOST_END_HOLD_SENTENCE}`,
   },
 };
 
@@ -147,8 +173,16 @@ export function RestoreRecoveryGate({
     })
   );
   const confirmDestination = usePanelStore((state) => state.confirmRestoreRecoveryDestination);
+  // Every pane in this view the same unclean end held, so they can be resumed
+  // together from any one of them.
+  const hostEndHeldCount = usePanelStore(
+    (state) => heldForHostEndIds(state.panelsById, state.panelIds).length
+  );
   const [isLaunching, setIsLaunching] = useState(false);
   const [outcome, setOutcome] = useState<RestoreRecoveryLaunchResult | null>(null);
+  const bulkOutcome = useSyncExternalStore(subscribeBulkResumeOutcomes, () =>
+    getBulkResumeOutcome(panelId)
+  );
   // Unknown until the settings load, and unknown never resumes anything.
   const resumePolicy = useAgentSettingsStore((state) =>
     state.isInitialized ? resolveResumeOnRestart(state.settings) : undefined
@@ -209,12 +243,19 @@ export function RestoreRecoveryGate({
     ? AWAITING_DESTINATION_COPY
     : armed && resumesOnFocusId !== undefined
       ? RESUMES_ON_FOCUS_COPY
-      : REASON_COPY[recovery.reason];
-  const outcomeMessage = outcome ? OUTCOME_MESSAGES[outcome] : undefined;
+      : recovery.reason === "host-ended-uncleanly" && recovery.hostEnd
+        ? {
+            ...REASON_COPY[recovery.reason],
+            description: describeHostEnd(recovery.hostEnd, Date.now()),
+          }
+        : REASON_COPY[recovery.reason];
+  const shownOutcome = outcome ?? bulkOutcome;
+  const outcomeMessage = shownOutcome ? OUTCOME_MESSAGES[shownOutcome] : undefined;
 
   const launch = (choice: RestoreRecoveryChoice): Promise<RestoreRecoveryLaunchResult> => {
     setIsLaunching(true);
     setOutcome(null);
+    clearBulkResumeOutcome(panelId);
     return launchFromRestoreRecovery(panelId, choice)
       .then((result) => {
         if (result !== "launched") setOutcome(result);
@@ -254,6 +295,7 @@ export function RestoreRecoveryGate({
         <dl className="space-y-1">
           <FolderRow label="Conversation folder" path={originCwd} />
           {!awaitingDestination && <FolderRow label="Runs in" path={cwd} />}
+          {recovery.hostEnd && <FolderRow label="Recorded cause" path={recovery.hostEnd.cause} />}
         </dl>
 
         {outcomeMessage && (
@@ -278,6 +320,23 @@ export function RestoreRecoveryGate({
             </Button>
           ) : (
             <>
+              {recovery.reason === "host-ended-uncleanly" &&
+                recovery.sessionId !== undefined &&
+                hostEndHeldCount > 1 && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={isLaunching}
+                    onClick={() => {
+                      setIsLaunching(true);
+                      setOutcome(null);
+                      void resumeAllHeldForHostEnd().finally(() => setIsLaunching(false));
+                    }}
+                  >
+                    <RotateCcw aria-hidden="true" />
+                    {`Resume all ${hostEndHeldCount.toLocaleString()}`}
+                  </Button>
+                )}
               <FindCodexSessionAction
                 panelId={panelId}
                 onOpenSession={(sessionId) => launch({ kind: "resume", sessionId })}

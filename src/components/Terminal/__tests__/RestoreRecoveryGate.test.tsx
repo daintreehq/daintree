@@ -21,6 +21,23 @@ import { isPtyPanel, type PanelInstance, type PtyPanelData } from "@shared/types
 
 const findSessions = vi.hoisted(() => vi.fn());
 const launchFromRestoreRecovery = vi.hoisted(() => vi.fn());
+const resumeAllHeldForHostEnd = vi.hoisted(() => vi.fn());
+const bulkOutcomes = vi.hoisted(() => {
+  const outcomes = new Map<string, string>();
+  const listeners = new Set<() => void>();
+  return {
+    outcomes,
+    get: (panelId: string) => outcomes.get(panelId),
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    set: (panelId: string, outcome: string) => {
+      outcomes.set(panelId, outcome);
+      for (const listener of listeners) listener();
+    },
+  };
+});
 
 const viewObservable = vi.hoisted(() => ({ value: true }));
 vi.mock("@/lib/viewCacheState", async (importOriginal) => ({
@@ -35,6 +52,9 @@ vi.mock("@/clients/codexClient", () => ({
 vi.mock("@/services/terminal/restoreRecoveryLaunch", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/services/terminal/restoreRecoveryLaunch")>()),
   launchFromRestoreRecovery,
+  resumeAllHeldForHostEnd,
+  getBulkResumeOutcome: bulkOutcomes.get,
+  subscribeBulkResumeOutcomes: bulkOutcomes.subscribe,
 }));
 
 vi.mock("@/clients", () => ({
@@ -124,6 +144,9 @@ beforeEach(() => {
   findSessions.mockReset();
   launchFromRestoreRecovery.mockReset();
   launchFromRestoreRecovery.mockResolvedValue("launched");
+  resumeAllHeldForHostEnd.mockReset();
+  resumeAllHeldForHostEnd.mockResolvedValue([]);
+  bulkOutcomes.outcomes.clear();
   usePanelStore.setState({ panelsById: {}, panelIds: [] });
 });
 
@@ -521,5 +544,108 @@ describe("RestoreRecoveryGate — held by the resume setting (#13509)", () => {
 
     expect(screen.queryByRole("heading", { name: "Resumes when you focus this pane" })).toBeNull();
     expect(launchFromRestoreRecovery).not.toHaveBeenCalled();
+  });
+});
+
+describe("RestoreRecoveryGate — held after an unclean end (#14382)", () => {
+  beforeEach(() => {
+    viewObservable.value = true;
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    __resetRestoreRecoveryAutoResumeForTests();
+    // The setting that would resume a deferred pane the moment it is selected.
+    useAgentSettingsStore.setState({
+      settings: { agents: {}, resumeOnRestart: "on-focus" },
+      isInitialized: true,
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    useAgentSettingsStore.setState({ settings: null, isInitialized: false });
+  });
+
+  const hostHeld = (id: string, hostEnd: NonNullable<PtyPanelData["restoreRecovery"]>["hostEnd"]) =>
+    heldPanel(id, {
+      cwd: "/repo",
+      conversationCwd: undefined,
+      restoreRecovery: { reason: "host-ended-uncleanly", sessionId: `sess-${id}`, hostEnd },
+    });
+
+  it("quotes what the watchdog recorded and keeps resuming one click away", async () => {
+    seed(
+      hostHeld("p-1", {
+        cause: "watchdog-deadlock",
+        at: Date.now() - 3 * 3_600_000,
+        missedBeats: 3,
+      })
+    );
+
+    render(<RestoreRecoveryGate panelId="p-1" isFocused />);
+    await act(async () => {});
+
+    expect(
+      screen.getByRole("heading", { name: "Not resumed after Daintree was stopped" })
+    ).toBeTruthy();
+    expect(
+      screen.getByText(/watchdog stopped the app 3 hours ago after 3 missed heartbeats/)
+    ).toBeTruthy();
+    expect(screen.getByText("watchdog-deadlock")).toBeTruthy();
+    // Selecting the pane starts nothing on its own.
+    expect(launchFromRestoreRecovery).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: /Resume all/ })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Resume session" }));
+    await waitFor(() =>
+      expect(launchFromRestoreRecovery).toHaveBeenCalledWith("p-1", {
+        kind: "resume",
+        sessionId: "sess-p-1",
+      })
+    );
+  });
+
+  it("names an external kill as such", () => {
+    seed(hostHeld("p-1", { cause: "external-kill", at: Date.now() - 120_000 }));
+
+    render(<RestoreRecoveryGate panelId="p-1" />);
+
+    expect(
+      screen.getByText(
+        /Daintree was last seen running 2 minutes ago and ended without shutting down/
+      )
+    ).toBeTruthy();
+    expect(screen.getByText("external-kill")).toBeTruthy();
+  });
+
+  it("offers to resume every pane the same end held", async () => {
+    const hostEnd = { cause: "external-kill" as const, at: Date.now() };
+    seed(hostHeld("p-1", hostEnd), hostHeld("p-2", hostEnd), heldPanel("p-3"));
+
+    render(<RestoreRecoveryGate panelId="p-1" />);
+
+    let finish: (results: unknown[]) => void = () => {};
+    resumeAllHeldForHostEnd.mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve;
+      })
+    );
+    const resumeButton = () =>
+      screen.getByRole("button", { name: "Resume session" }) as HTMLButtonElement;
+    fireEvent.click(screen.getByRole("button", { name: "Resume all 2" }));
+    expect(resumeAllHeldForHostEnd).toHaveBeenCalledTimes(1);
+    expect(resumeButton().disabled).toBe(true);
+    expect(launchFromRestoreRecovery).not.toHaveBeenCalled();
+
+    await act(async () => finish([]));
+    expect(resumeButton().disabled).toBe(false);
+  });
+
+  it("says why on a pane Resume all couldn't start", () => {
+    seed(hostHeld("p-2", { cause: "external-kill", at: Date.now() }));
+    render(<RestoreRecoveryGate panelId="p-2" />);
+    expect(screen.queryByText("Conversation already open")).toBeNull();
+
+    act(() => bulkOutcomes.set("p-2", "held-elsewhere"));
+
+    expect(screen.getByText("Conversation already open")).toBeTruthy();
   });
 });

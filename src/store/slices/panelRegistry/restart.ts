@@ -1227,8 +1227,12 @@ export const createRestartActions = (
       if (!t.restoreRecovery.awaitingDestination && (cwd === undefined || cwd === t.cwd)) {
         return state;
       }
-      const { reason, sessionId } = t.restoreRecovery;
-      const recovery = sessionId !== undefined ? { reason, sessionId } : { reason };
+      const { reason, sessionId, hostEnd } = t.restoreRecovery;
+      const recovery = {
+        reason,
+        ...(sessionId !== undefined && { sessionId }),
+        ...(hostEnd !== undefined && { hostEnd }),
+      };
       const nextCwd = cwd ?? t.cwd;
       const newById = {
         ...state.panelsById,

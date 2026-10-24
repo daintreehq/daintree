@@ -231,3 +231,87 @@ async function resolveLaunchBaseCommand(agentId: string): Promise<string | undef
     return undefined;
   }
 }
+
+/**
+ * Panes held because an unclean end of the app cut their run short (#14382)
+ * that can be resumed without a choice: each carries its conversation and a
+ * place to run. In the view's own order, so a bulk resume starts them as laid out.
+ */
+export function heldForHostEndIds(
+  panelsById: Record<string, PanelInstance>,
+  panelIds: readonly string[]
+): string[] {
+  const ids: string[] = [];
+  for (const id of panelIds) {
+    const panel = panelsById[id];
+    if (!panel || !isPtyPanel(panel) || !panel.launchAgentId) continue;
+    if (panel.location !== "grid" && panel.location !== "dock") continue;
+    const recovery = panel.restoreRecovery;
+    if (recovery?.reason !== "host-ended-uncleanly") continue;
+    if (recovery.awaitingDestination || recovery.sessionId === undefined) continue;
+    ids.push(id);
+  }
+  return ids;
+}
+
+/**
+ * Resume every pane {@link heldForHostEndIds} names, one launch after another,
+ * on the user's say-so. Each goes through the same checks a single resume does,
+ * so a conversation another pane opened meanwhile is left alone.
+ */
+let resumingAllHeldForHostEnd = false;
+
+// What "Resume all" left behind on each pane it couldn't start, shown on that
+// pane's own gate: the one pressed has usually been replaced by then.
+const bulkOutcomes = new Map<string, RestoreRecoveryLaunchResult>();
+const bulkOutcomeListeners = new Set<() => void>();
+
+function setBulkOutcome(panelId: string, result: RestoreRecoveryLaunchResult | undefined): void {
+  if (bulkOutcomes.get(panelId) === result) return;
+  if (result === undefined) bulkOutcomes.delete(panelId);
+  else bulkOutcomes.set(panelId, result);
+  for (const listener of bulkOutcomeListeners) listener();
+}
+
+export function getBulkResumeOutcome(panelId: string): RestoreRecoveryLaunchResult | undefined {
+  return bulkOutcomes.get(panelId);
+}
+
+export function subscribeBulkResumeOutcomes(listener: () => void): () => void {
+  bulkOutcomeListeners.add(listener);
+  return () => bulkOutcomeListeners.delete(listener);
+}
+
+export function clearBulkResumeOutcome(panelId: string): void {
+  setBulkOutcome(panelId, undefined);
+}
+
+export async function resumeAllHeldForHostEnd(): Promise<RestoreRecoveryLaunchResult[]> {
+  // Offered on every held pane, so a press on a second one joins nothing.
+  if (resumingAllHeldForHostEnd) return [];
+  resumingAllHeldForHostEnd = true;
+  try {
+    return await resumeEachHeldForHostEnd();
+  } finally {
+    resumingAllHeldForHostEnd = false;
+  }
+}
+
+async function resumeEachHeldForHostEnd(): Promise<RestoreRecoveryLaunchResult[]> {
+  const { panelsById, panelIds } = usePanelStore.getState();
+  const results: RestoreRecoveryLaunchResult[] = [];
+  for (const id of heldForHostEndIds(panelsById, panelIds)) {
+    // Read again per pane: the previous launch replaced its own pane, and the
+    // user may have resumed or closed this one in the meantime.
+    const panel = usePanelStore.getState().panelsById[id];
+    const sessionId =
+      panel && isPtyPanel(panel) && panel.restoreRecovery?.reason === "host-ended-uncleanly"
+        ? panel.restoreRecovery.sessionId
+        : undefined;
+    if (sessionId === undefined) continue;
+    const result = await launchFromRestoreRecovery(id, { kind: "resume", sessionId });
+    setBulkOutcome(id, result === "launched" ? undefined : result);
+    results.push(result);
+  }
+  return results;
+}

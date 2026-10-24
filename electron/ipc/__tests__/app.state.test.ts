@@ -476,6 +476,126 @@ describe("app:boot handler", () => {
     expect(result.quarantinedPanels.map((p) => p.id)).toEqual(["other-project-bad"]);
   });
 
+  describe("agents an unclean end cut short (#14382)", () => {
+    const project = { id: "proj-a", name: "A", path: "/projects/a" };
+    const HOST_END = { cause: "watchdog-deadlock", at: 5_000, missedBeats: 3 };
+    let saved: Record<string, unknown>;
+    let events: unknown;
+
+    beforeEach(async () => {
+      vi.mocked(projectStore.getCurrentProject).mockReturnValue(
+        project as unknown as ReturnType<typeof projectStore.getCurrentProject>
+      );
+      vi.mocked(projectStore.getProjectById).mockReturnValue(
+        project as unknown as ReturnType<typeof projectStore.getProjectById>
+      );
+      saved = {
+        projectId: project.id,
+        sidebarWidth: 350,
+        terminals: [
+          {
+            id: "agent",
+            kind: "terminal",
+            launchAgentId: "claude",
+            agentSessionId: "sess-1",
+            title: "Claude",
+            location: "grid",
+            cwd: "/projects/a",
+          },
+        ],
+      };
+      // The save lands a tick later, as a queued write does.
+      vi.mocked(projectStore.enqueueProjectStateUpdate).mockImplementation(async (_id, updater) => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        const next = await updater(saved as never);
+        if (next) saved = next as unknown as Record<string, unknown>;
+      });
+      vi.mocked(projectStore.getProjectStateWithRecovery).mockImplementation(async () => ({
+        state: structuredClone(saved) as never,
+        quarantinedPath: undefined,
+      }));
+      events = [{ crashId: "c1", ...HOST_END, workspaceIds: [project.id] }];
+      const storeModule = await import("../../store.js");
+      vi.mocked(storeModule.store.get).mockImplementation(((key: string) =>
+        key === "hostEndRestoreHolds"
+          ? events
+          : defaultStoreGet(key)) as typeof storeModule.store.get);
+      vi.mocked(storeModule.store.set).mockImplementation(((key: string, value: unknown) => {
+        if (key === "hostEndRestoreHolds") events = value;
+        else defaultStoreSet(key, value);
+      }) as typeof storeModule.store.set);
+      vi.mocked(storeModule.store.delete).mockImplementation(((key: string) => {
+        if (key === "hostEndRestoreHolds") events = undefined;
+      }) as typeof storeModule.store.delete);
+    });
+
+    type Hydrated = { appState: { terminals: Array<{ id: string; restoreRecovery?: unknown }> } };
+
+    it("hands them back held, and a pane resumed afterwards stays resumed", async () => {
+      const result = (await invokeBoot()) as Hydrated;
+
+      expect(result.appState.terminals[0].restoreRecovery).toEqual({
+        reason: "host-ended-uncleanly",
+        sessionId: "sess-1",
+        hostEnd: HOST_END,
+      });
+      expect((saved.terminals as Array<{ restoreRecovery?: unknown }>)[0].restoreRecovery).toEqual(
+        result.appState.terminals[0].restoreRecovery
+      );
+      expect(events).toBeUndefined();
+
+      // The user resumes it; the next restore leaves it to resume as usual.
+      (saved.terminals as Array<Record<string, unknown>>)[0].restoreRecovery = undefined;
+      const next = (await invokeBoot()) as Hydrated;
+      expect(next.appState.terminals[0].restoreRecovery).toBeUndefined();
+    });
+
+    it("still hands them back held when saving the hold fails, and stays due", async () => {
+      vi.mocked(projectStore.enqueueProjectStateUpdate).mockRejectedValueOnce(new Error("disk"));
+
+      const result = (await invokeBoot()) as Hydrated;
+
+      expect(result.appState.terminals[0].restoreRecovery).toMatchObject({
+        reason: "host-ended-uncleanly",
+        hostEnd: HOST_END,
+      });
+      expect(events).toEqual([expect.objectContaining({ workspaceIds: [project.id] })]);
+    });
+
+    it("saves held the legacy terminals a first open migrates", async () => {
+      legacyOwnerRef.current = project.id;
+      globalAppStateRef.current = {
+        ...globalAppStateRef.current,
+        terminals: (saved.terminals as unknown[]).map((t) => ({ ...(t as object) })),
+      };
+      saved = {};
+      vi.mocked(projectStore.getProjectStateWithRecovery).mockResolvedValue({
+        state: null,
+        quarantinedPath: undefined,
+      });
+
+      await invokeBoot();
+
+      expect(
+        (saved.terminals as Array<{ restoreRecovery?: unknown }>)[0].restoreRecovery
+      ).toMatchObject({
+        reason: "host-ended-uncleanly",
+      });
+    });
+
+    it("never serves a cached payload built before the hold", async () => {
+      legacyOwnerRef.current = project.id;
+      vi.mocked(consumePrefetchedHydrateResult).mockReturnValue({
+        appState: { terminals: [{ id: "agent" }] },
+      } as never);
+
+      const result = (await invokeBoot()) as Hydrated;
+
+      expect(consumePrefetchedHydrateResult).not.toHaveBeenCalled();
+      expect(result.appState.terminals[0].restoreRecovery).toBeDefined();
+    });
+  });
+
   it("does not consult the ledger filter outside of safe mode", async () => {
     crashGuard.isSafeMode.mockReturnValue(false);
     panelSuspectLedger.getQuarantinedPanelIds.mockReturnValue(new Set(["a"]));

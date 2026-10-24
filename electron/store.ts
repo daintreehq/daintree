@@ -247,6 +247,20 @@ export interface StoreSchema {
    * main-process migration bookkeeping, not renderer state.
    */
   legacyWorkspaceStateOwnerId?: string;
+  /**
+   * Unclean ends of the app that cut agents short (#14382), each kept until
+   * every workspace that was live when it happened has had its saved agent
+   * panes held for it. Top-level for the reason `legacyWorkspaceStateOwnerId`
+   * is: a crash restore replaces `appState` wholesale.
+   */
+  hostEndRestoreHolds?: Array<{
+    crashId: string;
+    cause: "watchdog-deadlock" | "external-kill" | "unknown";
+    at: number;
+    missedBeats?: number;
+    /** Workspaces still to be held. */
+    workspaceIds: string[];
+  }>;
   userConfig: {
     githubToken?: string;
   };

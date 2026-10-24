@@ -5,6 +5,7 @@ import { store } from "../store.js";
 import { readCanopyMode } from "./canopy/canopyMode.js";
 import { readAgentDefaults } from "./agentDefaults.js";
 import { projectStore } from "./ProjectStore.js";
+import { applyHostEndHold, holdTerminalsForHostEnds } from "./hostEndRestoreHold.js";
 import { filterRestorableTerminalSnapshots } from "./projectStateRestore.js";
 import {
   getGpuFeatureStatus,
@@ -85,6 +86,9 @@ export async function buildSwitchHydrateResult(projectId: string): Promise<Hydra
   // so a switch can't serve the previous project's order (#9922).
   let mruListToUse = canInheritLegacyWorkspaceState ? globalAppState.mruList : undefined;
 
+  // The one write this path makes, and only once after an unclean end: a switch
+  // restores straight from this payload, so it must already carry the holds.
+  const hostEnds = await applyHostEndHold(projectId);
   const { state: projectState, quarantinedPath: projectStateQuarantinedPath } =
     await projectStore.getProjectStateWithRecovery(projectId);
 
@@ -122,6 +126,10 @@ export async function buildSwitchHydrateResult(projectId: string): Promise<Hydra
   const inSafeMode = getCrashLoopGuard().isSafeMode();
   if (inSafeMode) {
     terminalsToUse = [];
+  }
+  // Held in the payload too, so a hold whose save failed still starts nothing.
+  if (hostEnds.length > 0) {
+    terminalsToUse = holdTerminalsForHostEnds(terminalsToUse, hostEnds, projectId).terminals;
   }
 
   const appState = {
