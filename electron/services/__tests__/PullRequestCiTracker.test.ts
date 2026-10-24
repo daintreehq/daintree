@@ -20,7 +20,7 @@ function entry(overrides: Partial<InternalLinkedPR> = {}): InternalLinkedPR {
 }
 
 function ci(state: CIStatus["state"], headSha?: string): CIStatus {
-  return { state, total: 1, passed: 0, failed: 0, pending: 0, headSha };
+  return { state, total: 1, passed: 0, failed: 0, pending: 0, headSha, rawData: null };
 }
 
 function harness(entries: Array<[string, InternalLinkedPR]>) {
