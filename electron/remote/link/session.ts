@@ -325,17 +325,18 @@ export class LinkSession {
     const idleMs = this.opts.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
     if (idleMs > 0) {
       const awakeSince = this.opts.awakeSince ?? ((since: number) => this.now() - since);
-      const checkMs = Math.max(10, Math.floor(idleMs / 4));
-      let checkedAt = this.now();
-      this.idleTimer = setInterval(() => {
-        const now = this.now();
-        const late = now - checkedAt > checkMs * 2;
-        checkedAt = now;
-        // A check this late means our own loop was stalled, and what the peer
-        // sent meanwhile may still be unread: judge silence on the next one.
-        if (late) return;
-        if (awakeSince(this._lastReceivedAt) > idleMs) this.drop("idle timeout");
-      }, checkMs);
+      this.idleTimer = setInterval(
+        // Judged after the loop's next poll for input: when our own loop was
+        // the one stalled, what the peer sent meanwhile is still unread, and
+        // its silence is only ours.
+        () =>
+          setImmediate(() => {
+            if (this.state === "open" && awakeSince(this._lastReceivedAt) > idleMs) {
+              this.drop("idle timeout");
+            }
+          }),
+        Math.max(10, Math.floor(idleMs / 4))
+      );
       this.idleTimer.unref?.();
     }
   }

@@ -228,7 +228,7 @@ describe("LinkSession liveness", () => {
     b.destroy();
   });
 
-  it("ends an idle link without a GOODBYE, so the peer can hold the session for a resume", async () => {
+  it("ends an idle link without a GOODBYE, so a peer that was only stalled can still resume the session", async () => {
     const { a, b } = await socketPair(dir);
     const frames = recordFrames(b);
     const session = new LinkSession(a, { role: "client", pingIntervalMs: 0, idleTimeoutMs: 40 });
@@ -340,18 +340,6 @@ describe("LinkSession liveness", () => {
     b.destroy();
   });
 
-  it("gives up on a silent peer without a GOODBYE, so a stalled one wakes to a dropped stream it can resume", async () => {
-    const { a, b } = await socketPair(dir);
-    const frames = recordFrames(b);
-    const session = new LinkSession(a, { role: "host", pingIntervalMs: 0, idleTimeoutMs: 40 });
-    sessions.push(session);
-    session.open();
-    const closed = await closedPromise(session);
-    expect(closed).toEqual({ reason: "idle timeout", by: "local" });
-    await new Promise<void>((resolve) => (b.destroyed ? resolve() : b.once("close", resolve)));
-    expect(frames.map((frame) => frameToMessage(frame).kind)).not.toContain(ControlKind.GOODBYE);
-  });
-
   it("keeps a peer that has been silent for longer than a stall it can recover from", async () => {
     const { a, b } = await socketPair(dir);
     vi.useFakeTimers();
@@ -360,43 +348,17 @@ describe("LinkSession liveness", () => {
       const session = new LinkSession(a, { role: "client", pingIntervalMs: 0, now: () => now });
       sessions.push(session);
       session.open();
-      for (let elapsed = 0; elapsed < 60_000; elapsed += 1_000) {
-        now += 1_000;
-        vi.advanceTimersByTime(1_000);
-      }
+      const advance = (ms: number) => {
+        for (let elapsed = 0; elapsed < ms; elapsed += 1_000) {
+          now += 1_000;
+          vi.advanceTimersByTime(1_000);
+        }
+      };
+      // Two minutes of nothing: far longer than a host paging under pressure stalls.
+      advance(120_000);
       expect(session.isOpen).toBe(true);
-      // A peer stuck for good is still given up on in the end.
-      for (let elapsed = 0; elapsed < 10 * 60_000 && session.isOpen; elapsed += 1_000) {
-        now += 1_000;
-        vi.advanceTimersByTime(1_000);
-      }
-      expect(session.closedWith).toEqual({ reason: "idle timeout", by: "local" });
-      b.destroy();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("judges silence on the check after a late one, not the late one itself", async () => {
-    const { a, b } = await socketPair(dir);
-    vi.useFakeTimers();
-    try {
-      let now = 0;
-      const session = new LinkSession(a, {
-        role: "host",
-        pingIntervalMs: 0,
-        idleTimeoutMs: 400,
-        now: () => now,
-      });
-      sessions.push(session);
-      session.open();
-      // The loop stalls: the clock jumps well past the window before the next check runs.
-      now += 1_000;
-      vi.advanceTimersByTime(100);
-      expect(session.isOpen).toBe(true);
-      // Still nothing heard by the next, punctual check: silence is real.
-      now += 100;
-      vi.advanceTimersByTime(100);
+      // A peer stuck for good is still given up on, on the next check after that.
+      advance(31_000);
       expect(session.closedWith).toEqual({ reason: "idle timeout", by: "local" });
       b.destroy();
     } finally {
