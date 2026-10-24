@@ -54,6 +54,7 @@ const MIGRATED_FILES = [
   "src/components/Project/ProjectSwitcherBands.tsx",
   "src/components/Project/ProjectSwitcherScratchSection.tsx",
   "src/components/Project/ProjectSwitcherConfirmDialogs.tsx",
+  "src/components/Project/paletteTiles.tsx",
   "src/panels/dev-preview/element-picker/InspectorNotice.tsx",
 ];
 

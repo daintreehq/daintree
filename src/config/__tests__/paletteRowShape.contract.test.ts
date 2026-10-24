@@ -170,6 +170,7 @@ const POPOVER_SIBLING_FILES = [
   "src/components/Project/ProjectSwitcherBands.tsx",
   "src/components/Project/ProjectSwitcherScratchSection.tsx",
   "src/components/Project/ProjectSwitcherConfirmDialogs.tsx",
+  "src/components/Project/paletteTiles.tsx",
 ];
 
 /** Full-screen palettes: the `AppPaletteDialog` / `SearchablePalette` shell. */
