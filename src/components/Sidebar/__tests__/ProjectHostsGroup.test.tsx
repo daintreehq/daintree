@@ -287,7 +287,7 @@ describe("ProjectHostsGroup", () => {
       { hostId: "none", projects: [] },
       { hostId: "failed", projects: null },
     ];
-    const { container } = render(<ProjectHostsGroup projectId={PROJECT} />);
+    render(<ProjectHostsGroup projectId={PROJECT} />);
     await waitFor(() =>
       expect(locate).toHaveBeenCalledWith({
         fromHostId: "local",
@@ -296,7 +296,7 @@ describe("ProjectHostsGroup", () => {
       })
     );
     await act(async () => {});
-    expect(container.textContent).toBe("");
+    expect(section()).toBeNull();
   });
 
   it("says what the host listed in place of counts: no agents, how many agents, no worktrees", async () => {
@@ -410,7 +410,7 @@ describe("ProjectHostsGroup", () => {
 
     locate.mockImplementationOnce(() => new Promise<HostProjectPresence[]>(() => {}));
     rerender(<ProjectHostsGroup projectId={"b".repeat(64)} />);
-    expect(hasRow("linux")).toBe(false);
+    expect(section()).toBeNull();
   });
 
   it("forgets a host's copy once a connected answer says it's gone, keeping its row while in use", async () => {
@@ -450,10 +450,33 @@ describe("ProjectHostsGroup", () => {
       emit({ type: "worktrees", hostId: "linux" });
     });
     await waitFor(() => expect(rowFor("linux").textContent).toContain("Not added"));
+    expect(document.activeElement).toBe(rowFor("linux"));
     expect(hostOrder()).toEqual(["local", "linux", "other"]);
 
     act(() => rowFor("linux").blur());
     expect(hostOrder()).toEqual(["local", "other"]);
+  });
+
+  it("reads focus afresh when the section is drawn again, so a focus it lost unseen holds nothing", async () => {
+    const { rerender } = render(<ProjectHostsGroup projectId={PROJECT} />);
+    await waitFor(() => expect(count(rowFor("linux"), "running")).toBe("2"));
+    rowFor("linux").focus();
+
+    // The host is removed: the section goes with focus in it, and no blur fires.
+    hostList.hosts = [host("away", false)];
+    rerender(<ProjectHostsGroup projectId={PROJECT} />);
+    expect(section()).toBeNull();
+
+    hostList.hosts = [host("linux"), host("away", false)];
+    rerender(<ProjectHostsGroup projectId={PROJECT} />);
+    await waitFor(() => expect(count(rowFor("linux"), "running")).toBe("2"));
+
+    lists.linux = [];
+    presence = [{ hostId: "linux", projects: [] }];
+    await act(async () => {
+      emit({ type: "worktrees", hostId: "linux" });
+    });
+    await waitFor(() => expect(section()).toBeNull());
   });
 
   it("keeps a matched host whose lookup later fails, still opening the copy it matched", async () => {
@@ -604,7 +627,7 @@ describe("ProjectHostsGroup", () => {
     });
 
     it("hands the order on screen to the window a click opens", async () => {
-      fleet({ b: [working("b1")], c: [finished("c1")] });
+      fleet({ b: [working("b1")], c: [finished("c1")], d: "none" });
       render(<ProjectHostsGroup projectId={PROJECT} />);
       await waitFor(() => expect(count(rowFor("b"), "running")).toBe("1"));
       fireEvent.click(rowFor("c"));
@@ -641,7 +664,7 @@ describe("ProjectHostsGroup", () => {
       expect(hostOrder()).toEqual(["local", "n", "b", "c"]);
     });
 
-    it("orders without a host that never answers once it has waited long enough", async () => {
+    it("orders without a host whose read never lands once it has waited long enough", async () => {
       vi.useFakeTimers({ shouldAdvanceTime: true });
       fleet({ b: [working("b1")], c: [finished("c1")], slow: [] });
       // slow has the project but never answers a read of it.
