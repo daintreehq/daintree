@@ -55,6 +55,10 @@ export interface SystemMemoryWorkloads {
   appMemoryMb: number | null;
   /** Heaviest first, at most a handful; empty when the terminal sweep failed. */
   projects: SystemMemoryWorkload[];
+  /** Live agent terminals across every project on this host; null when not every shard answered. */
+  agentsRunning: number | null;
+  /** This host's physical memory; null when it couldn't be read. */
+  memoryTotalMb: number | null;
 }
 
 /**

@@ -12,6 +12,11 @@ vi.mock("@/clients/systemClient", () => ({
   systemClient: { isMemoryPressureCritical: isMemoryPressureCriticalMock },
 }));
 
+const noteVisibleAgentLaunchMock = vi.hoisted(() => vi.fn());
+vi.mock("@/services/systemMemoryLaunchNotice", () => ({
+  noteVisibleAgentLaunch: noteVisibleAgentLaunchMock,
+}));
+
 vi.mock("@/clients", () => ({
   terminalClient: {
     spawn: vi.fn(),
@@ -358,5 +363,18 @@ describe("agent launches at critical memory pressure (#13530)", () => {
     expect(spawnedIds()).toEqual(ids);
     expect(ids.filter(isHeld)).toEqual([]);
     expect(ids.map((id) => getPtyPanel(id)?.spawnStatus)).toEqual(ids.map(() => "ready"));
+  });
+
+  it("notes a fresh visible agent launch for the memory notice, never a restore", async () => {
+    isMemoryPressureCriticalMock.mockResolvedValue(false);
+    noteVisibleAgentLaunchMock.mockClear();
+    await launchAgent("seen-grid");
+    await launchAgent("seen-dock", { location: "dock" });
+    await launchAgent("restored", { restore: true });
+    await launchAgent("assistant", { location: "overlay" });
+    await drainMicrotasks();
+
+    expect(noteVisibleAgentLaunchMock).toHaveBeenCalledTimes(2);
+    expect(spawnedIds()).toEqual(["seen-grid", "seen-dock", "restored", "assistant"]);
   });
 });

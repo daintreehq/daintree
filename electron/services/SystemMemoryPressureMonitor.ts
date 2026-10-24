@@ -578,7 +578,11 @@ export function checkKernelPressureCritical(
  */
 export function summarizeSystemMemoryWorkloads(
   snapshot: CompositeMemorySnapshot,
-  resolveProjectName: (projectId: string) => string | null
+  resolveProjectName: (projectId: string) => string | null,
+  host: Pick<SystemMemoryWorkloads, "agentsRunning" | "memoryTotalMb"> = {
+    agentsRunning: null,
+    memoryTotalMb: null,
+  }
 ): SystemMemoryWorkloads | null {
   const appMemoryMb = snapshot.electron.available ? snapshot.electron.totalWorkingSetMb : null;
   const terminals = snapshot.terminalWorkloads;
@@ -595,8 +599,47 @@ export function summarizeSystemMemoryWorkloads(
             memoryMb: p.memoryMb,
           }))
       : [];
-  if (appMemoryMb === null && projects.length === 0) return null;
-  return { appMemoryMb, projects };
+  if (
+    appMemoryMb === null &&
+    projects.length === 0 &&
+    host.agentsRunning === null &&
+    host.memoryTotalMb === null
+  ) {
+    return null;
+  }
+  return { appMemoryMb, projects, ...host };
+}
+
+/** The fields of a terminal record that say whether its agent is still there. */
+export interface AgentCountableTerminal {
+  launchAgentId?: string;
+  hasPty?: boolean;
+  isExited?: boolean;
+  isAssistantTerminal?: boolean;
+  agentState?: string;
+}
+
+/**
+ * Terminals an agent was launched into whose agent is still there, idle ones
+ * included. Null for a read missing a shard: a partial count would read low.
+ */
+export function countLiveAgentTerminals(
+  snapshot: { terminals: readonly AgentCountableTerminal[]; degraded: boolean } | null
+): number | null {
+  if (!snapshot || snapshot.degraded) return null;
+  let count = 0;
+  for (const terminal of snapshot.terminals) {
+    if (
+      terminal.launchAgentId &&
+      terminal.hasPty !== false &&
+      terminal.isExited !== true &&
+      terminal.agentState !== "exited" &&
+      terminal.isAssistantTerminal !== true
+    ) {
+      count += 1;
+    }
+  }
+  return count;
 }
 
 /**

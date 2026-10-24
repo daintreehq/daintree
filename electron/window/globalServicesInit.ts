@@ -1,4 +1,5 @@
 // eager-import-allow: reads boot config via store.get synchronously while wiring global services
+import os from "node:os";
 import { app, dialog, ipcMain, powerMonitor } from "electron";
 import {
   LATEST_SCHEMA_VERSION,
@@ -37,11 +38,13 @@ import {
   hasSustainedRendererSaturation,
 } from "../services/ProcessMemoryMonitor.js";
 import {
+  countLiveAgentTerminals,
   createDefaultSystemMemoryPressureMonitor,
   summarizeSystemMemoryWorkloads,
   readDarwinKernelPressureLevel,
 } from "../services/SystemMemoryPressureMonitor.js";
 import { publishSystemMemoryPressure } from "./systemMemoryPressureDelivery.js";
+import { getSharedTerminalSnapshot } from "../services/sharedTerminalSnapshot.js";
 
 import { startDiskSpaceMonitor } from "../services/DiskSpaceMonitor.js";
 import { runScratchCleanup } from "../services/ScratchCleanupService.js";
@@ -781,11 +784,25 @@ export async function initGlobalServices(
                 windowRegistry ? windowRegistry.all().map((wCtx) => wCtx.browserWindow) : []
               );
             },
-            async () =>
-              summarizeSystemMemoryWorkloads(
-                await getCompositeMemorySnapshot(getPtyClient()),
-                (projectId) => projectStore.getProjectById(projectId)?.name?.trim() || null
-              )
+            async () => {
+              const pty = getPtyClient();
+              const [snapshot, terminals] = await Promise.all([
+                getCompositeMemorySnapshot(pty),
+                pty ? getSharedTerminalSnapshot(pty).catch(() => null) : null,
+              ]);
+              const totalMemoryBytes = os.totalmem();
+              return summarizeSystemMemoryWorkloads(
+                snapshot,
+                (projectId) => projectStore.getProjectById(projectId)?.name?.trim() || null,
+                {
+                  agentsRunning: countLiveAgentTerminals(terminals),
+                  memoryTotalMb:
+                    Number.isFinite(totalMemoryBytes) && totalMemoryBytes > 0
+                      ? Math.round(totalMemoryBytes / (1024 * 1024))
+                      : null,
+                }
+              );
+            }
           );
       setStopAppMetricsMonitor(
         startAppMetricsMonitor({

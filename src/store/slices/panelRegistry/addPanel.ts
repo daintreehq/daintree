@@ -34,6 +34,7 @@ import { getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { usePanelLimitStore, buildPanelLimitSnapshot } from "@/store/panelLimitStore";
 import { notify } from "@/lib/notify";
+import { noteVisibleAgentLaunch } from "@/services/systemMemoryLaunchNotice";
 import { saveNormalized } from "./persistence";
 import {
   getDefaultTitle,
@@ -1428,6 +1429,18 @@ export const createAddPanelActions = (
       // Reconnect path does not spawn; the panel is already "ready".
       logDebug("[TerminalStore] Reconnecting to existing terminal", { id });
       return id;
+    }
+
+    // A fresh agent the user will see, during an open memory episode, raises the
+    // episode's figures above the grid once (#14309). Never waited on: it is a
+    // reading beside the launch, not a gate in front of it.
+    if (
+      launchAgentId &&
+      options.restore !== true &&
+      !isRecoveryHold &&
+      (location === "grid" || location === "dock")
+    ) {
+      noteVisibleAgentLaunch();
     }
 
     const shouldWaitForVisibleAttach = location === "grid" && isInActiveWorktree;
