@@ -51,8 +51,6 @@ A consumer that preventDefaults `onCloseAutoFocus` itself keeps ownership of the
 
 Sanctioned survivors, because launching or switching moves focus away from the control entirely: `AgentButton.tsx`, `PluginTrayButton.tsx`, `DockLaunchButton.tsx` (controlled tooltip + `isRestoringFocusRef`), and `Toolbar.tsx`'s overflow menu (`isRestoringFocusPillRef`).
 
-`ProjectSwitcher.tsx` also carries `isRestoringFocusRef` and is **not** on the sanctioned list — treat it as unreviewed rather than as precedent.
-
 Anything else hand-rolling the pattern is a violation, not a survivor.
 
 ## Related
