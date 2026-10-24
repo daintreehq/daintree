@@ -255,7 +255,7 @@ export interface StoreSchema {
    */
   hostEndRestoreHolds?: Array<{
     crashId: string;
-    cause: "watchdog-deadlock" | "external-kill";
+    cause: "watchdog-deadlock" | "external-kill" | "unknown";
     at: number;
     missedBeats?: number;
     /** Workspaces still to be held. */

@@ -74,10 +74,18 @@ describe("sanitizeRestoreRecovery host end (#14382)", () => {
     });
   });
 
+  it.each(["external-kill", "unknown"])("keeps a %s record", (cause) => {
+    expect(
+      sanitizeRestoreRecovery({ reason: "host-ended-uncleanly", hostEnd: { cause, at: 5_000 } })
+    ).toEqual({ reason: "host-ended-uncleanly", hostEnd: { cause, at: 5_000 } });
+  });
+
   it("drops an unreadable record but keeps the hold", () => {
     for (const hostEnd of [
       { cause: "power-loss", at: 5_000 },
       { cause: "external-kill", at: -1 },
+      { cause: "external-kill", at: Number.POSITIVE_INFINITY },
+      { cause: "external-kill", at: "5000" },
       { cause: "external-kill" },
       "external-kill",
     ]) {
@@ -87,11 +95,11 @@ describe("sanitizeRestoreRecovery host end (#14382)", () => {
     }
   });
 
-  it("drops a bad heartbeat count but keeps the cause", () => {
+  it.each([1.5, 0, -2, "3"])("drops a heartbeat count of %s but keeps the cause", (missedBeats) => {
     expect(
       sanitizeRestoreRecovery({
         reason: "host-ended-uncleanly",
-        hostEnd: { cause: "watchdog-deadlock", at: 5_000, missedBeats: 1.5 },
+        hostEnd: { cause: "watchdog-deadlock", at: 5_000, missedBeats },
       })?.hostEnd
     ).toEqual({ cause: "watchdog-deadlock", at: 5_000 });
   });

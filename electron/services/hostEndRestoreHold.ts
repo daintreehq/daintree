@@ -6,9 +6,6 @@ import { holdTerminalsEndedByHost, readHostEnd } from "./hostEndHoldPolicy.js";
 
 export type HostEndEvent = NonNullable<StoreSchema["hostEndRestoreHolds"]>[number];
 
-/** Ends still waiting on a workspace nobody has opened since; the oldest go first. */
-const MAX_EVENTS = 16;
-
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -21,7 +18,13 @@ function readEvents(): HostEndEvent[] {
     for (const item of value) {
       if (!isPlainObject(item)) continue;
       if (typeof item.crashId !== "string") continue;
-      if (item.cause !== "watchdog-deadlock" && item.cause !== "external-kill") continue;
+      if (
+        item.cause !== "watchdog-deadlock" &&
+        item.cause !== "external-kill" &&
+        item.cause !== "unknown"
+      ) {
+        continue;
+      }
       if (typeof item.at !== "number" || !Number.isFinite(item.at)) continue;
       if (!Array.isArray(item.workspaceIds)) continue;
       const workspaceIds = item.workspaceIds.filter((id): id is string => typeof id === "string");
@@ -40,8 +43,10 @@ function readEvents(): HostEndEvent[] {
   }
 }
 
+// Never trimmed for size: each workspace owes at most one event (recordHostEnd
+// leaves out one an older end still holds), so the list is bounded by them.
 function writeEvents(events: HostEndEvent[]): void {
-  const pending = events.filter((event) => event.workspaceIds.length > 0).slice(-MAX_EVENTS);
+  const pending = events.filter((event) => event.workspaceIds.length > 0);
   if (pending.length === 0) store.delete("hostEndRestoreHolds");
   else store.set("hostEndRestoreHolds", pending);
 }
@@ -73,7 +78,10 @@ export function recordHostEnd(
     const events = readEvents();
     // Read again on a launch that died before it got further: same crash, same record.
     if (events.some((event) => event.crashId === crashId)) return;
-    events.push({ crashId, ...hostEnd, workspaceIds: [...new Set(liveWorkspaceIds)] });
+    // A workspace an older end still waits on is named by that one.
+    const owed = new Set(events.flatMap((event) => event.workspaceIds));
+    const workspaceIds = [...new Set(liveWorkspaceIds)].filter((id) => !owed.has(id));
+    events.push({ crashId, ...hostEnd, workspaceIds });
     writeEvents(events);
     console.log("[HostEndHold] Agents running when the app ended will wait to be resumed", {
       cause: hostEnd.cause,
@@ -93,35 +101,63 @@ function hostEndOf(event: HostEndEvent): PanelHostEnd {
 }
 
 /**
+ * `terminals` with each of `hostEnds` applied in turn, oldest first, so a pane
+ * two ends in a row cut short is named by the first. Pure.
+ */
+export function holdTerminalsForHostEnds<T>(
+  terminals: T[],
+  hostEnds: readonly PanelHostEnd[],
+  workspaceId?: string
+): { terminals: T[]; held: number } {
+  let held = 0;
+  for (const hostEnd of hostEnds) {
+    const result = holdTerminalsEndedByHost(terminals, hostEnd, workspaceId);
+    terminals = result.terminals;
+    held += result.held;
+  }
+  return { terminals, held };
+}
+
+const applying = new Map<string, Promise<PanelHostEnd[]>>();
+
+/**
  * Hold the saved agent panes of `workspaceId` that an unclean end cut short,
  * once per workspace per end. Awaited by every hydrate before it reads the
  * workspace's state, so each restore that reads it — this machine's own view
  * or a Shell relaunching onto this host — sees the hold. Resuming a pane is
  * what clears it, as for every other hold.
+ *
+ * Resolves with the ends that were due, which the hydrate also applies to the
+ * terminals it hands back: if the save failed, the payload is still held and
+ * the workspace stays due for the next hydrate to save. One application runs
+ * per workspace at a time, so a second hydrate never acknowledges a hold the
+ * first one has yet to save.
  */
-export async function applyHostEndHold(workspaceId: string | null): Promise<number> {
-  if (!workspaceId) return 0;
-  // Oldest first, so a pane two ends in a row cut short is named by the first.
+export function applyHostEndHold(workspaceId: string | null): Promise<PanelHostEnd[]> {
+  if (!workspaceId) return Promise.resolve([]);
+  const inFlight = applying.get(workspaceId);
+  if (inFlight) return inFlight;
+  const run = applyOnce(workspaceId).finally(() => applying.delete(workspaceId));
+  applying.set(workspaceId, run);
+  return run;
+}
+
+async function applyOnce(workspaceId: string): Promise<PanelHostEnd[]> {
   const due = readEvents().filter((event) => event.workspaceIds.includes(workspaceId));
-  if (due.length === 0) return 0;
+  if (due.length === 0) return [];
+  const hostEnds = due.map(hostEndOf);
   let held = 0;
   try {
     await projectStore.enqueueProjectStateUpdate(workspaceId, (existing) => {
       if (!existing || !Array.isArray(existing.terminals)) return null;
-      let terminals = existing.terminals;
-      let count = 0;
-      for (const event of due) {
-        const result = holdTerminalsEndedByHost(terminals, hostEndOf(event), workspaceId);
-        terminals = result.terminals;
-        count += result.held;
-      }
-      held = count;
-      return count > 0 ? { ...existing, terminals } : null;
+      const result = holdTerminalsForHostEnds(existing.terminals, hostEnds, workspaceId);
+      held = result.held;
+      return result.held > 0 ? { ...existing, terminals: result.terminals } : null;
     });
   } catch (error) {
-    // Left due, so the next hydrate tries again rather than resuming.
+    // Left due, so the next hydrate saves it; this one holds its payload.
     console.warn("[HostEndHold] Failed to hold the workspace's agents:", error);
-    return 0;
+    return hostEnds;
   }
   try {
     // Re-read: another end may have been recorded while the update ran.
@@ -142,5 +178,5 @@ export async function applyHostEndHold(workspaceId: string | null): Promise<numb
       count: held,
     });
   }
-  return held;
+  return hostEnds;
 }

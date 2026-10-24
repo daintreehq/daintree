@@ -443,11 +443,13 @@ export type RestoreRecoveryReason =
 
 /**
  * What the app recorded about the unclean end that cut a pane's run short
- * (#14382): the watchdog's own kill flag, or a heartbeat that stopped with no
- * reboot. Observations from the crash record, never a guess at why.
+ * (#14382): the watchdog's own kill flag, or a session that ended without
+ * shutting down and with no other cause recorded. Observations from the crash
+ * record, never a guess at why.
  */
 export interface PanelHostEnd {
-  cause: "watchdog-deadlock" | "external-kill";
+  /** The crash record's own token; "unknown" is a marker left with no other sign. */
+  cause: "watchdog-deadlock" | "external-kill" | "unknown";
   /** When the app died, as the crash record dates it (epoch ms). */
   at: number;
   /** Heartbeats the watchdog missed before it killed the app. */

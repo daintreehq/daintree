@@ -1,4 +1,4 @@
-import { useEffect, useState, type PointerEvent, type Ref } from "react";
+import { useEffect, useState, useSyncExternalStore, type PointerEvent, type Ref } from "react";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { useShallow } from "zustand/react/shallow";
 import { FolderClock, Play, RotateCcw } from "lucide-react";
@@ -10,9 +10,12 @@ import { usePanelStore } from "@/store/panelStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { isProjectViewObservable, subscribeProjectViewObservability } from "@/lib/viewCacheState";
 import {
+  clearBulkResumeOutcome,
+  getBulkResumeOutcome,
   heldForHostEndIds,
   launchFromRestoreRecovery,
   resumeAllHeldForHostEnd,
+  subscribeBulkResumeOutcomes,
   type RestoreRecoveryChoice,
   type RestoreRecoveryLaunchResult,
 } from "@/services/terminal/restoreRecoveryLaunch";
@@ -177,6 +180,9 @@ export function RestoreRecoveryGate({
   );
   const [isLaunching, setIsLaunching] = useState(false);
   const [outcome, setOutcome] = useState<RestoreRecoveryLaunchResult | null>(null);
+  const bulkOutcome = useSyncExternalStore(subscribeBulkResumeOutcomes, () =>
+    getBulkResumeOutcome(panelId)
+  );
   // Unknown until the settings load, and unknown never resumes anything.
   const resumePolicy = useAgentSettingsStore((state) =>
     state.isInitialized ? resolveResumeOnRestart(state.settings) : undefined
@@ -243,11 +249,13 @@ export function RestoreRecoveryGate({
             description: describeHostEnd(recovery.hostEnd, Date.now()),
           }
         : REASON_COPY[recovery.reason];
-  const outcomeMessage = outcome ? OUTCOME_MESSAGES[outcome] : undefined;
+  const shownOutcome = outcome ?? bulkOutcome;
+  const outcomeMessage = shownOutcome ? OUTCOME_MESSAGES[shownOutcome] : undefined;
 
   const launch = (choice: RestoreRecoveryChoice): Promise<RestoreRecoveryLaunchResult> => {
     setIsLaunching(true);
     setOutcome(null);
+    clearBulkResumeOutcome(panelId);
     return launchFromRestoreRecovery(panelId, choice)
       .then((result) => {
         if (result !== "launched") setOutcome(result);

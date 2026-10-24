@@ -12,10 +12,11 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * The unclean end a crash record shows (#14382): the watchdog's kill flag, or a
- * heartbeat that stopped with no reboot behind it. A crash the app recorded
- * itself, a power loss and a lost suspend are not this: none of them says the
- * agents' own load is what took the app down.
+ * The unclean end a crash record shows (#14382): the watchdog's kill flag, a
+ * heartbeat that stopped with no reboot behind it, or a marker left with no
+ * other sign at all, which is how a kill shortly after a heartbeat reads (an
+ * OOM kill among them). A crash the app recorded itself, a native crash, a
+ * power loss and a lost suspend are not this: each names another cause.
  */
 export function readHostEnd(pending: PendingCrash | null): PanelHostEnd | undefined {
   const entry = pending?.entry;
@@ -23,8 +24,8 @@ export function readHostEnd(pending: PendingCrash | null): PanelHostEnd | undefi
   const cause: PanelHostEnd["cause"] | undefined =
     entry.cause === "watchdog-deadlock"
       ? "watchdog-deadlock"
-      : entry.crashCause === "external-kill"
-        ? "external-kill"
+      : entry.crashCause === "external-kill" || entry.crashCause === "unknown"
+        ? entry.crashCause
         : undefined;
   if (cause === undefined) return undefined;
   const at =
@@ -51,8 +52,10 @@ function heldSessionId(value: unknown): string | undefined {
 /**
  * Whether a saved pane is an agent the unclean end cut short, identified the
  * way restore identifies the agent it respawns. A pane already held keeps its
- * own hold, as does one its plugin asked to hold; a pane whose agent was last
- * seen exiting had already ended on its own.
+ * own hold, as does one its plugin asked to hold. A pane is taken to have
+ * ended on its own only when everything saved about it says its agent exited:
+ * a restart keeps the previous run's last observation until the new run
+ * reports, so the observation alone can describe a run that is over.
  */
 function wasCutShort(terminal: TerminalSnapshot, workspaceId: string | undefined): boolean {
   if (!isPlainObject(terminal)) return false;
@@ -63,8 +66,9 @@ function wasCutShort(terminal: TerminalSnapshot, workspaceId: string | undefined
   if (isPlainObject(terminal.restoreRecovery)) return false;
   if (terminal.holdOnRestart === true) return false;
   const observed: unknown = terminal.lastAgentObservation;
-  const lastState = isPlainObject(observed) ? observed.agentState : terminal.agentState;
-  return lastState !== "exited";
+  const states = [isPlainObject(observed) ? observed.agentState : undefined, terminal.agentState];
+  const known = states.filter((state) => state !== undefined);
+  return known.length === 0 || known.some((state) => state !== "exited");
 }
 
 /** Hold every agent pane in `terminals` the unclean end cut short. Pure. */

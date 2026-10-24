@@ -18,6 +18,7 @@ const RESTORE_RECOVERY_REASONS: ReadonlySet<string> = new Set<RestoreRecoveryRea
 const HOST_END_CAUSES: ReadonlySet<string> = new Set<PanelHostEnd["cause"]>([
   "watchdog-deadlock",
   "external-kill",
+  "unknown",
 ]);
 
 // Control characters never belong in a path, and this one is later handed to

@@ -150,6 +150,9 @@ export class CrashRecoveryService {
   // files are deleted, rotated, or overwritten between marker consumption and
   // the user resolving the recovery dialog.
   private cachedBackupSnapshot: SessionSnapshot | null = null;
+  // When the crashed session began, so a backup an older session left behind
+  // is never read as what this one was running.
+  private crashedSessionStartMs: number | null = null;
   // Memoized crash-recovery config — store.get re-reads and re-parses the
   // whole config.json on every call, which is sync main-thread work inside
   // the boot IPC handler. setConfig keeps the memo in sync with writes.
@@ -192,7 +195,11 @@ export class CrashRecoveryService {
    * taken, or null when no backup survived the crash to say.
    */
   getCrashedLiveWorkspaceIds(): string[] | null {
-    const layouts = this.cachedBackupSnapshot?.projectLayouts;
+    const snapshot = this.cachedBackupSnapshot;
+    if (!snapshot || this.crashedSessionStartMs === null) return null;
+    // The rotated previous generation can be an older session's.
+    if (!(snapshot.capturedAt >= this.crashedSessionStartMs)) return null;
+    const layouts = snapshot.projectLayouts;
     return isPlainObject(layouts) ? Object.keys(layouts) : null;
   }
 
@@ -752,6 +759,7 @@ export class CrashRecoveryService {
         this.deleteMarker();
         return null;
       }
+      this.crashedSessionStartMs = marker.sessionStartMs;
 
       // Read the watchdog kill flag BEFORE the dev-mode discard branch — even
       // an orphaned dev marker may have a fresh flag (real watchdog kill in

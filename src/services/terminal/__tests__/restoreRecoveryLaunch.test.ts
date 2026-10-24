@@ -35,6 +35,7 @@ vi.mock("@/config/agents", () => ({
 
 const {
   buildRestoreRecoveryLaunchOptions,
+  getBulkResumeOutcome,
   heldForHostEndIds,
   launchFromRestoreRecovery,
   resumeAllHeldForHostEnd,
@@ -420,6 +421,41 @@ describe("resuming panes an unclean end held (#14382)", () => {
       { requestedId: "a", agentSessionId: "sess-a" },
       { requestedId: "b", agentSessionId: "sess-b" },
     ]);
+  });
+
+  it("waits for each launch before starting the next", async () => {
+    storeState.panelsById = { a: hostHeld("a"), b: hostHeld("b") };
+    storeState.panelIds = ["a", "b"];
+    let releaseA: () => void = () => {};
+    storeState.addPanel.mockImplementationOnce(
+      (options) =>
+        new Promise((resolve) => {
+          releaseA = () => resolve(options.requestedId ?? null);
+        })
+    );
+
+    const run = resumeAllHeldForHostEnd();
+    await vi.waitFor(() => expect(storeState.addPanel).toHaveBeenCalledTimes(1));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(storeState.addPanel).toHaveBeenCalledTimes(1);
+
+    releaseA();
+    await expect(run).resolves.toEqual(["launched", "launched"]);
+  });
+
+  it("leaves what it couldn't start on that pane, and clears it once it starts", async () => {
+    storeState.panelsById = {
+      a: hostHeld("a"),
+      live: livePane("live", "sess-a", "codex"),
+    };
+    storeState.panelIds = ["a"];
+
+    await expect(resumeAllHeldForHostEnd()).resolves.toEqual(["held-elsewhere"]);
+    expect(getBulkResumeOutcome("a")).toBe("held-elsewhere");
+
+    delete storeState.panelsById.live;
+    await resumeAllHeldForHostEnd();
+    expect(getBulkResumeOutcome("a")).toBeUndefined();
   });
 
   it("runs once at a time, however many panes offer it", async () => {

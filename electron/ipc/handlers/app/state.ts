@@ -14,7 +14,10 @@ import { APP_STATE_FIELD_OWNERSHIP } from "../../../storeOwnership.js";
 import { AppStateTerminalEntrySchema, filterValidTerminalEntries } from "../../../schemas/ipc.js";
 import { filterRestorableTerminalSnapshots } from "../../../services/projectStateRestore.js";
 import { getCrashRecoveryService } from "../../../services/CrashRecoveryService.js";
-import { applyHostEndHold } from "../../../services/hostEndRestoreHold.js";
+import {
+  applyHostEndHold,
+  holdTerminalsForHostEnds,
+} from "../../../services/hostEndRestoreHold.js";
 import {
   captureProjectLayoutSeed,
   getProjectLayoutSeed,
@@ -283,7 +286,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
     const { project: currentProject, workspaceId } = resolveWorkspaceForHydration(ctx);
     // Before any read of the saved panes, the prefetch cache included: agents an
     // unclean end cut short come back held, whichever screen restores them.
-    await applyHostEndHold(workspaceId);
+    const hostEnds = await applyHostEndHold(workspaceId);
     // A remote Shell merges only this machine's host half of the answer, so
     // nothing addressed to this machine's own windows may be consumed for it.
     const forRemoteShell = ctx?.endpoint?.kind === "remote-view";
@@ -342,7 +345,9 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       !crashPanelFilterWithheld &&
       !cacheInSafeMode &&
       persistedLegacyOwnerId !== undefined &&
-      !layoutSeedUndecided;
+      !layoutSeedUndecided &&
+      // A cached payload predates the holds; this read applies them again.
+      hostEnds.length === 0;
     const cached = cacheEligible ? consumePrefetchedHydrateResult(workspaceId!) : undefined;
     markPerformance(PERF_MARKS.APP_HYDRATE_PREFETCH, {
       hit: Boolean(cached),
@@ -790,6 +795,16 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
     // but we preserve saved terminals array for ordering metadata (IDs and locations).
     // The frontend uses this to restore panel order when reconnecting to running terminals.
     // activeWorktreeId is preserved so the frontend can validate it exists after worktrees load.
+    // Held here as well as on disk: whatever source the terminals came from,
+    // and even if saving the hold failed, none of them starts on its own.
+    if (hostEnds.length > 0) {
+      terminalsToUse = holdTerminalsForHostEnds(
+        terminalsToUse,
+        hostEnds,
+        workspaceId ?? undefined
+      ).terminals;
+    }
+
     const appState: StoreSchema["appState"] = {
       ...globalAppState,
       terminals: terminalsToUse,

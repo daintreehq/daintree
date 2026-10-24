@@ -261,6 +261,31 @@ export function heldForHostEndIds(
  */
 let resumingAllHeldForHostEnd = false;
 
+// What "Resume all" left behind on each pane it couldn't start, shown on that
+// pane's own gate: the one pressed has usually been replaced by then.
+const bulkOutcomes = new Map<string, RestoreRecoveryLaunchResult>();
+const bulkOutcomeListeners = new Set<() => void>();
+
+function setBulkOutcome(panelId: string, result: RestoreRecoveryLaunchResult | undefined): void {
+  if (bulkOutcomes.get(panelId) === result) return;
+  if (result === undefined) bulkOutcomes.delete(panelId);
+  else bulkOutcomes.set(panelId, result);
+  for (const listener of bulkOutcomeListeners) listener();
+}
+
+export function getBulkResumeOutcome(panelId: string): RestoreRecoveryLaunchResult | undefined {
+  return bulkOutcomes.get(panelId);
+}
+
+export function subscribeBulkResumeOutcomes(listener: () => void): () => void {
+  bulkOutcomeListeners.add(listener);
+  return () => bulkOutcomeListeners.delete(listener);
+}
+
+export function clearBulkResumeOutcome(panelId: string): void {
+  setBulkOutcome(panelId, undefined);
+}
+
 export async function resumeAllHeldForHostEnd(): Promise<RestoreRecoveryLaunchResult[]> {
   // Offered on every held pane, so a press on a second one joins nothing.
   if (resumingAllHeldForHostEnd) return [];
@@ -284,7 +309,9 @@ async function resumeEachHeldForHostEnd(): Promise<RestoreRecoveryLaunchResult[]
         ? panel.restoreRecovery.sessionId
         : undefined;
     if (sessionId === undefined) continue;
-    results.push(await launchFromRestoreRecovery(id, { kind: "resume", sessionId }));
+    const result = await launchFromRestoreRecovery(id, { kind: "resume", sessionId });
+    setBulkOutcome(id, result === "launched" ? undefined : result);
+    results.push(result);
   }
   return results;
 }

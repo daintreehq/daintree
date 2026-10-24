@@ -1344,6 +1344,14 @@ describe("CrashRecoveryService renderer deaths and per-project layouts (#12884)"
 
       expect(svc.getCrashedLiveWorkspaceIds()?.sort()).toEqual([PROJECT_A, PROJECT_B].sort());
     });
+
+    it("names nothing from a backup an older session left behind (#14382)", () => {
+      const svc = crashWithProjects();
+      const internals = svc as unknown as { cachedBackupSnapshot: { capturedAt: number } };
+      internals.cachedBackupSnapshot.capturedAt = 0;
+
+      expect(svc.getCrashedLiveWorkspaceIds()).toBeNull();
+    });
   });
 
   describe("restoring after a watchdog kill (#14382)", () => {
@@ -1376,7 +1384,9 @@ describe("CrashRecoveryService renderer deaths and per-project layouts (#12884)"
     }
 
     function restoredTerminals(): Array<Record<string, unknown>> {
-      const call = storeMock.set.mock.calls.findLast(([key]) => key === "appState");
+      const call = [...storeMock.set.mock.calls]
+        .reverse()
+        .find((args: unknown[]) => args[0] === "appState");
       return (call?.[1] as { terminals: Array<Record<string, unknown>> }).terminals;
     }
 
@@ -1392,9 +1402,21 @@ describe("CrashRecoveryService renderer deaths and per-project layouts (#12884)"
       });
     });
 
-    it("leaves agents as they were after any other crash", () => {
+    it("puts agents back held after a kill that left no other sign", () => {
       const svc = crashWithAgent(false);
-      expect(svc.getPendingCrash()?.entry.cause).toBeUndefined();
+      expect(svc.getPendingCrash()?.entry.crashCause).toBe("unknown");
+
+      expect(svc.restoreBackup()).toBe(true);
+      expect(restoredTerminals()[0].restoreRecovery).toMatchObject({
+        reason: "host-ended-uncleanly",
+        hostEnd: { cause: "unknown" },
+      });
+    });
+
+    it("leaves agents as they were after a crash that names another cause", () => {
+      const svc = crashWithAgent(false);
+      // Recorded by the app itself: the crash log names its own cause.
+      svc.getPendingCrash()!.entry.crashCause = "uncaught-exception";
 
       expect(svc.restoreBackup()).toBe(true);
       expect(restoredTerminals()[0].restoreRecovery).toBeUndefined();
