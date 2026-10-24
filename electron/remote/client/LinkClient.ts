@@ -108,6 +108,8 @@ export interface LinkClientOptions {
   now?: () => number;
   /** Silence from the host, in ms, before the link is reported quiet; 0 never reports it. */
   quietAfterMs?: number;
+  /** How long a session that outlived a sleep has to answer after the wake before it is redialled. */
+  wakeProbeMs?: number;
   /**
    * When the host was last heard from by any link before this one (the
    * registry's record), so a link made after a release or at launch still
@@ -141,6 +143,11 @@ const QUIET_AFTER_MS = 7_000;
 /** How long after a host was last heard from a "host mode off" still reads as a restart. */
 const HOST_RESTART_GRACE_MS = 2 * 60_000;
 const QUIET_CHECK_MS = 1_000;
+/**
+ * Long enough for a link that survived the sleep to answer a ping once the
+ * network is back; one that didn't is redialled well before the idle timeout.
+ */
+const WAKE_PROBE_MS = 5_000;
 /** Longest a stop waits for its GOODBYE to leave before letting go of the transport. */
 const GOODBYE_WAIT_MS = 2_000;
 
@@ -255,6 +262,20 @@ export class LinkClient {
     }
     this.clearRetry();
     void this.connect();
+  }
+
+  /**
+   * The machine just woke. A session that outlived the sleep has to answer
+   * within the wake probe or is redialled, asking to resume; a retry the
+   * backoff was holding goes now. An attempt under way is left to finish.
+   */
+  noteSystemResumed(): void {
+    if (!this.running) return;
+    if (this.current?.isOpen) {
+      this.current.probe(this.options.wakeProbeMs ?? WAKE_PROBE_MS, "no answer after wake");
+      return;
+    }
+    if (this.state.status === "unreachable" && this.state.retryAt !== null) this.retryNow();
   }
 
   async stop(): Promise<void> {
@@ -504,13 +525,15 @@ export class LinkClient {
     // A stalled link only closes at the idle timeout; until then it says
     // nothing has arrived, so a keystroke that goes nowhere isn't a mystery.
     const quietAfterMs = this.options.quietAfterMs ?? QUIET_AFTER_MS;
+    // Time asleep isn't the host going quiet.
+    const awakeSince = this.options.session?.awakeSince ?? ((since: number) => this.now() - since);
     const quietTimer =
       quietAfterMs > 0
         ? setInterval(
             () => {
               if (this.current !== session) return;
               const heard = session.lastReceivedAt;
-              const next = this.now() - heard > quietAfterMs ? heard : null;
+              const next = awakeSince(heard) > quietAfterMs ? heard : null;
               if (next === quietSince) return;
               quietSince = next;
               this.setState(connected());

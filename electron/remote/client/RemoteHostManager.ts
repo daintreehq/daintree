@@ -366,6 +366,11 @@ export class HostConnection {
     this.link.retryNow(options);
   }
 
+  /** {@link LinkClient.noteSystemResumed}. */
+  noteSystemResumed(): void {
+    this.link.noteSystemResumed();
+  }
+
   /**
    * Agents the host reports working while it refuses this build, asked
    * afresh (another handshake) unless the last refusal is recent enough. Null
@@ -1062,6 +1067,8 @@ export interface RemoteHostManagerOptions {
   now?: () => number;
   /** How long a connection nothing uses stays up before it is closed; 0 never closes one. */
   idleReleaseMs?: number;
+  /** How long this machine was awake since a moment `now` gave; time asleep isn't time unused. */
+  awakeSince?: (since: number) => number;
 }
 
 /** Long enough to cover a quick switch away and back, or a pause in the overview. */
@@ -1087,6 +1094,7 @@ export class RemoteHostManager {
   private readonly sessionListeners = new Set<(hostId: HostId, session: LinkSession) => void>();
   private readonly viewerEventListeners = new Set<(hostId: HostId, event: EventMessage) => void>();
   private readonly now: () => number;
+  private readonly awakeSince: (since: number) => number;
   /** When each connection was last asked for or found in use. */
   private readonly lastUsed = new Map<HostId, number>();
   private readonly useChecks = new Set<(hostId: HostId) => boolean>();
@@ -1096,6 +1104,7 @@ export class RemoteHostManager {
 
   constructor(private readonly options: RemoteHostManagerOptions) {
     this.now = options.now ?? Date.now;
+    this.awakeSince = options.awakeSince ?? ((since) => this.now() - since);
     const coordinator = new ResyncCoordinator({
       resync: (webContentsId, hostId, reason) =>
         this.options.views.resync(webContentsId, hostId, reason),
@@ -1168,7 +1177,8 @@ export class RemoteHostManager {
         this.lastUsed.set(hostId, now);
         continue;
       }
-      if (now - (this.lastUsed.get(hostId) ?? now) < releaseMs) continue;
+      const idleMs = this.awakeSince(this.lastUsed.get(hostId) ?? now);
+      if (idleMs < releaseMs) continue;
       // A link that stopped retrying (ssh can't log in, Host mode off, another
       // build) costs nothing, and closing it would forget why it stopped.
       const link = this.connections.get(hostId)?.linkState;
@@ -1177,7 +1187,7 @@ export class RemoteHostManager {
       const idle = {
         hostId,
         sessionId: this.connections.get(hostId)?.lastSessionId ?? null,
-        idleMs: now - (this.lastUsed.get(hostId) ?? now),
+        idleMs,
       };
       logger.info("Closing the unused connection to a remote host", idle);
       void this.disconnect(hostId).catch((error: unknown) => {
@@ -1193,6 +1203,11 @@ export class RemoteHostManager {
     if (this.sweepTimer || (this.options.idleReleaseMs ?? IDLE_RELEASE_MS) <= 0) return;
     this.sweepTimer = setInterval(() => this.sweepIdle(), IDLE_SWEEP_MS);
     this.sweepTimer.unref?.();
+  }
+
+  /** The machine just woke: every link checks itself now rather than at its next timer. */
+  systemResumed(): void {
+    for (const connection of this.connections.values()) connection.noteSystemResumed();
   }
 
   connectionState(hostId: HostId): HostConnectionState {

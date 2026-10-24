@@ -530,6 +530,124 @@ describe("LinkClient quiet link", () => {
   });
 });
 
+describe("LinkClient wake (#14365)", () => {
+  it("dials at once on wake instead of waiting out the backoff", async () => {
+    const transport = failingTransport("Network is unreachable");
+    client = new LinkClient({
+      transport,
+      handshake: TEST_HANDSHAKE,
+      client: { clientId: "c", clientName: "n", platform: "linux" },
+      backoff: { initialMs: 60_000, maxMs: 60_000, jitter: 0 },
+    });
+    client.start();
+    await waitFor(() => client!.getState().status === "unreachable");
+    expect(transport.opens).toBe(1);
+    client.noteSystemResumed();
+    await waitFor(() => transport.opens === 2);
+  });
+
+  it("redials a session that doesn't answer after the wake, asking to resume it, with no GOODBYE", async () => {
+    const dir = await makeTempDir();
+    const socketPath = path.join(dir, "w.sock");
+    const hellos: Array<{ resumeSessionId: string | null }> = [];
+    const kinds: number[] = [];
+    // Answers the handshake and nothing after it, as a link that died in the sleep.
+    const server = net.createServer((socket) => {
+      const decoder = new FrameDecoder();
+      socket.on("data", (chunk: Buffer) => {
+        for (const frame of decoder.push(chunk)) {
+          kinds.push(frame.kind);
+          if (frame.lane !== Lane.CONTROL || frame.kind !== ControlKind.HELLO) continue;
+          const hello = frameToMessage(frame) as Extract<
+            LinkMessage,
+            { lane: typeof Lane.CONTROL; kind: typeof ControlKind.HELLO }
+          >;
+          hellos.push({ resumeSessionId: hello.body.resumeSessionId });
+          const welcome: LinkMessage = {
+            lane: Lane.CONTROL,
+            kind: ControlKind.WELCOME,
+            body: {
+              handshake: TEST_HANDSHAKE,
+              hostName: "h",
+              sessionId: "s1",
+              resumed: hellos.length > 1,
+            },
+          };
+          socket.write(Buffer.from(encodeFrame(messageToFrame(welcome))));
+        }
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+    try {
+      client = new LinkClient({
+        transport: createDirectTransport({ socketPath, token: "t" }),
+        handshake: TEST_HANDSHAKE,
+        client: { clientId: "c", clientName: "n", platform: "linux" },
+        session: { pingIntervalMs: 0, idleTimeoutMs: 0 },
+        backoff: { initialMs: 1, maxMs: 1, jitter: 0 },
+        quietAfterMs: 0,
+        wakeProbeMs: 30,
+      });
+      client.start();
+      await waitFor(() => client!.getState().status === "connected");
+      client.noteSystemResumed();
+      await waitFor(() => hellos.length === 2);
+      expect(hellos[1]).toEqual({ resumeSessionId: "s1" });
+      expect(kinds).not.toContain(ControlKind.GOODBYE);
+    } finally {
+      await client?.stop();
+      client = null;
+      server.close();
+      await removeTempDir(dir);
+    }
+  });
+});
+
+describe("LinkClient quiet across a sleep (#14365)", () => {
+  it("doesn't report a link quiet for time the machine spent asleep", async () => {
+    const dir = await makeTempDir();
+    const socketPath = path.join(dir, "s.sock");
+    const server = net.createServer((socket) => {
+      const decoder = new FrameDecoder();
+      socket.on("data", (chunk: Buffer) => {
+        for (const frame of decoder.push(chunk)) {
+          if (frame.kind !== ControlKind.HELLO) continue;
+          const welcome: LinkMessage = {
+            lane: Lane.CONTROL,
+            kind: ControlKind.WELCOME,
+            body: { handshake: TEST_HANDSHAKE, hostName: "h", sessionId: "s1", resumed: false },
+          };
+          socket.write(Buffer.from(encodeFrame(messageToFrame(welcome))));
+        }
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+    try {
+      // Silent host, and every moment since its last frame was spent asleep.
+      client = new LinkClient({
+        transport: createDirectTransport({ socketPath, token: "t" }),
+        handshake: TEST_HANDSHAKE,
+        client: { clientId: "c", clientName: "n", platform: "linux" },
+        session: { pingIntervalMs: 0, idleTimeoutMs: 0, awakeSince: () => 0 },
+        quietAfterMs: 40,
+      });
+      const quietSince: Array<number | null> = [];
+      client.onStateChange((state) => {
+        if (state.status === "connected") quietSince.push(state.quietSince);
+      });
+      client.start();
+      await waitFor(() => client!.getState().status === "connected");
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(quietSince.every((at) => at === null)).toBe(true);
+    } finally {
+      await client?.stop();
+      client = null;
+      server.close();
+      await removeTempDir(dir);
+    }
+  });
+});
+
 describe("LinkClient session loss", () => {
   it("stops reading as connected the moment its session closes, before the old forward is released", async () => {
     const dir = await makeTempDir();
