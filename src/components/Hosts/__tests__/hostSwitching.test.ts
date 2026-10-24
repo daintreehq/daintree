@@ -305,6 +305,9 @@ describe("switchToHost", () => {
     usePendingHostSwitchStore.setState({ pending: failedPending("1:1:x") });
     expect(onStayed).not.toHaveBeenCalled();
     usePendingHostSwitchStore.setState({ pending: null });
+    // Heard once the screen has gone, so the focus it puts back sticks.
+    expect(onStayed).not.toHaveBeenCalled();
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(onStayed).toHaveBeenCalledTimes(1);
   });
 
@@ -322,6 +325,7 @@ describe("switchToHost", () => {
       pending: { ...failedPending("1:2:y"), phase: "connecting", failure: undefined },
     });
     usePendingHostSwitchStore.setState({ pending: null });
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(onStayed).not.toHaveBeenCalled();
   });
 

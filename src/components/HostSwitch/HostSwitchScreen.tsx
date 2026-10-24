@@ -37,7 +37,6 @@ export function HostSwitchScreen({ pending }: { pending: PendingHostSwitch }) {
   const screenRef = useRef<HTMLDivElement>(null);
   const primaryRef = useRef<HTMLButtonElement>(null);
   const restoreFocusRef = useRef<Element | null>(null);
-  const tookFocusRef = useRef(false);
   const cancellable = failed || !pending.committed;
   const escapeRef = useRef<() => void>(() => {});
 
@@ -65,24 +64,25 @@ export function HostSwitchScreen({ pending }: { pending: PendingHostSwitch }) {
       }
     };
   }, []);
-  // Later changes move focus only while the screen still has it: a palette
-  // opened over it keeps the focus it took.
+  // Focus moves only while nothing else has taken it since the switch began:
+  // a palette opened over the screen (even inside its loading gate) keeps it.
+  // With no control left (the window is moving), the screen itself holds it.
   useEffect(() => {
     if (!shown) return;
     const active = document.activeElement;
     const ownsFocus =
-      !tookFocusRef.current ||
       active === null ||
       active === document.body ||
+      active === restoreFocusRef.current ||
       screenRef.current?.contains(active) === true;
     if (!ownsFocus) return;
-    tookFocusRef.current = true;
-    primaryRef.current?.focus({ preventScroll: true });
+    if (primaryRef.current) primaryRef.current.focus({ preventScroll: true });
+    else screenRef.current?.focus({ preventScroll: true, focusVisible: false });
   }, [shown, pending.switchId, failed, pending.committed]);
 
   // On the escape stack for as long as it is up, so Escape and Cmd/Ctrl+W
-  // leave the screen rather than reach the project behind it. A palette
-  // opened over it stacks above and closes first. Once the window is moving
+  // leave the screen rather than reach the project behind it. It sits under
+  // every dialog and palette, open before it or after, and they close first. Once the window is moving
   // there is nothing to leave, and the keys still go nowhere.
   useEffect(() => {
     escapeRef.current = () => {
@@ -90,7 +90,7 @@ export function HostSwitchScreen({ pending }: { pending: PendingHostSwitch }) {
     };
   }, [cancellable, pending]);
   useEffect(() => {
-    const { unregister } = registerEscape(() => escapeRef.current());
+    const { unregister } = registerEscape(() => escapeRef.current(), { position: "bottom" });
     return unregister;
   }, []);
 
@@ -133,6 +133,7 @@ export function HostSwitchScreen({ pending }: { pending: PendingHostSwitch }) {
         !shown && "opacity-0"
       )}
       ref={screenRef}
+      tabIndex={-1}
       onKeyDown={(event) => {
         // Tab stays on the screen: the controls behind it are not there.
         if (event.key !== "Tab") return;

@@ -81,7 +81,8 @@ function whenSwitchScreenCancelled(error: unknown, callback: () => void): void {
   const stop = store.subscribe((state) => {
     if (state.pending?.switchId === switchId) return;
     stop();
-    if (state.pending === null) callback();
+    // After the screen has gone, so focus put back lands on the project.
+    if (state.pending === null) setTimeout(callback, 0);
   });
 }
 

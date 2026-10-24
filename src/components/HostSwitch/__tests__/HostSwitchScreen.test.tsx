@@ -93,6 +93,28 @@ describe("HostSwitchScreen", () => {
     input.remove();
   });
 
+  it("lets a dialog already open when the switch began close first", () => {
+    const closeDialog = vi.fn();
+    const dialog = registerEscape(closeDialog);
+    render(<HostSwitchScreen pending={pending()} />);
+    dispatchEscape();
+    expect(closeDialog).toHaveBeenCalled();
+    expect(m.cancelPendingSwitch).not.toHaveBeenCalled();
+    dialog.unregister();
+    dispatchEscape();
+    expect(m.cancelPendingSwitch).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves focus with a palette opened inside the loading gate", () => {
+    render(<HostSwitchScreen pending={pending({ phase: "opening" })} />);
+    const input = document.createElement("input");
+    document.body.append(input);
+    input.focus();
+    act(() => void vi.advanceTimersByTime(400));
+    expect(document.activeElement).toBe(input);
+    input.remove();
+  });
+
   it("keeps Tab on its own controls", () => {
     render(
       <HostSwitchScreen
@@ -134,6 +156,11 @@ describe("HostSwitchScreen", () => {
   it("can't be cancelled once the window is moving", () => {
     render(<HostSwitchScreen pending={pending({ phase: "opening", committed: true })} />);
     expect(button("Cancel")).toBeNull();
+    // With nothing left to press, the screen itself keeps focus, and Tab with it.
+    act(() => void vi.advanceTimersByTime(400));
+    expect(document.activeElement).toBe(screen());
+    fireEvent.keyDown(screen(), { key: "Tab" });
+    expect(document.activeElement).toBe(screen());
     // Still on the escape stack: the key goes nowhere rather than to the project behind.
     expect(dispatchEscape()).toBe(true);
     expect(m.cancelPendingSwitch).not.toHaveBeenCalled();
