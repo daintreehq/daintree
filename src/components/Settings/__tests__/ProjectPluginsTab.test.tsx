@@ -977,6 +977,35 @@ describe("ProjectPluginsTab settings deep link and lifecycle", () => {
     await waitFor(() => expect(usePluginManagerStore.getState().settingsRequest).toBeNull());
   });
 
+  it("hands a link to an installed plugin's field to that plugin's own form", async () => {
+    Element.prototype.scrollIntoView = vi.fn();
+    pluginApi.list.mockResolvedValue([
+      installed({
+        manifest: {
+          name: "acme.tools",
+          version: "2.0.0",
+          displayName: "Acme Tools",
+          contributes: {
+            ...EMPTY_CONTRIBUTES,
+            settings: [{ id: "token", type: "string", label: "Token", scope: "project" }],
+          },
+        },
+      }),
+    ]);
+    seed([]);
+    act(() =>
+      usePluginManagerStore
+        .getState()
+        .requestSettings({ pluginId: "acme.tools", key: "token", home: "project" })
+    );
+    render(<ProjectPluginsTab />);
+
+    const pane = await screen.findByTestId("installed-plugin-detail");
+    const field = await within(pane).findByLabelText("Token");
+    await waitFor(() => expect(document.activeElement).toBe(field));
+    await waitFor(() => expect(usePluginManagerStore.getState().settingsRequest).toBeNull());
+  });
+
   it("puts a key-less link on the plugin's Settings heading", async () => {
     pluginApi.list.mockResolvedValue([loadedProjectPlugin()]);
     seed([projectPlugin()]);
