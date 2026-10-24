@@ -131,6 +131,16 @@ import {
 const AGENT_OUTPUT_NOTE_MIN_INTERVAL_MS = 50;
 /** Minimum gap between two rate-limit observations from one pane (#12797). */
 const RATE_LIMIT_OBSERVATION_COOLDOWN_MS = 60_000;
+/**
+ * How long a rate-limit banner must sit unchanged, with no output at all,
+ * before the pane counts as stopped at it and may fall over (#14370).
+ */
+export const RATE_LIMIT_SETTLE_MS = 3_000;
+/**
+ * A banner that hasn't settled this long after it appeared is one the agent
+ * kept working past (a retry that went through), so it is never offered.
+ */
+export const RATE_LIMIT_SETTLE_DEADLINE_MS = 30_000;
 
 export interface TerminalProcessCallbacks {
   /**
@@ -272,6 +282,20 @@ export class TerminalProcess {
    */
   private rateLimitBannerVisible = false;
   private lastRateLimitObservedAt = Number.NEGATIVE_INFINITY;
+  /**
+   * The banner's screen as last read, so a repaint that changes nothing doesn't
+   * restart the settle while one that does (a countdown, more output) does.
+   */
+  private rateLimitSettleFingerprint: string | null = null;
+  private rateLimitSettleTimer: NodeJS.Timeout | null = null;
+  /** When this banner appeared, and when it was last read off the screen. */
+  private rateLimitBannerSince: number | null = null;
+  private rateLimitLastSampleAt = 0;
+  /**
+   * The banner was offered, or outlived its deadline: one decision per
+   * appearance, reset when the banner goes.
+   */
+  private rateLimitFallbackDecided = false;
   /** True only while the exit path settles the mirror's last frame. */
   private samplingFinalFrame = false;
 
@@ -1149,6 +1173,7 @@ export class TerminalProcess {
       clearTimeout(this.agentOutputNoteTimer);
       this.agentOutputNoteTimer = null;
     }
+    this.cancelRateLimitSettle();
 
     if (this.ptyDataDisposable) {
       try {
@@ -2275,6 +2300,89 @@ export class TerminalProcess {
       });
     }
     this.rateLimitBannerVisible = visible;
+    this.trackRateLimitSettle(visible, lines);
+  }
+
+  /**
+   * Offer the pane's fallback chain once its rate-limit banner has sat still
+   * (#14370). Kept apart from the chip's cooldown: a banner blanked by one
+   * repaint restarts the settle without waiting a minute for a new observation.
+   * Whether to act is the renderer's call, since only it reads the preset.
+   */
+  private trackRateLimitSettle(visible: boolean, lines: readonly string[]): void {
+    const t = this.terminalInfo;
+    // The exit path's last frame belongs to the exit classifier, not to this.
+    if (!visible || this.samplingFinalFrame || !t.launchAgentId || !t.agentPresetId) {
+      this.cancelRateLimitSettle();
+      if (!visible) {
+        this.rateLimitFallbackDecided = false;
+        this.rateLimitBannerSince = null;
+      }
+      return;
+    }
+    const now = Date.now();
+    this.rateLimitBannerSince ??= now;
+    this.rateLimitLastSampleAt = now;
+    if (this.rateLimitFallbackDecided) return;
+    const fingerprint = lines.join("\n");
+    if (fingerprint === this.rateLimitSettleFingerprint && this.rateLimitSettleTimer) return;
+    this.rateLimitSettleFingerprint = fingerprint;
+    this.armRateLimitSettle(RATE_LIMIT_SETTLE_MS);
+  }
+
+  private armRateLimitSettle(delayMs: number): void {
+    if (this.rateLimitSettleTimer) clearTimeout(this.rateLimitSettleTimer);
+    this.rateLimitSettleTimer = setTimeout(() => {
+      this.rateLimitSettleTimer = null;
+      this.settleRateLimit();
+    }, delayMs);
+    this.rateLimitSettleTimer.unref?.();
+  }
+
+  private cancelRateLimitSettle(): void {
+    if (this.rateLimitSettleTimer) {
+      clearTimeout(this.rateLimitSettleTimer);
+      this.rateLimitSettleTimer = null;
+    }
+    this.rateLimitSettleFingerprint = null;
+  }
+
+  private settleRateLimit(): void {
+    const t = this.terminalInfo;
+    if (!this.rateLimitBannerVisible || !this.isAgentLive || t.isExited) return;
+    const agentId = t.launchAgentId;
+    const presetId = t.agentPresetId;
+    // The preset belongs to the agent it launched; another CLI started in the
+    // shell afterwards is not that conversation.
+    if (!agentId || !presetId || getLiveAgentId(t) !== agentId) return;
+    const now = Date.now();
+    if (now - (this.rateLimitBannerSince ?? now) >= RATE_LIMIT_SETTLE_DEADLINE_MS) {
+      this.rateLimitFallbackDecided = true;
+      this.rateLimitSettleFingerprint = null;
+      return;
+    }
+    // Still drawing: a byte inside the window, a byte the last viewport read
+    // hasn't caught up with, or a turn the agent is still working through.
+    // Wait the window out again rather than end a conversation that moved on.
+    const quietFor = now - t.lastOutputTime;
+    if (quietFor < RATE_LIMIT_SETTLE_MS) {
+      this.armRateLimitSettle(RATE_LIMIT_SETTLE_MS - quietFor);
+      return;
+    }
+    if (t.lastOutputTime > this.rateLimitLastSampleAt || t.agentState === "working") {
+      this.armRateLimitSettle(RATE_LIMIT_SETTLE_MS);
+      return;
+    }
+    this.rateLimitFallbackDecided = true;
+    this.rateLimitSettleFingerprint = null;
+    events.emit("agent:fallback-triggered", {
+      terminalId: this.id,
+      agentId,
+      fromPresetId: presetId,
+      originalPresetId: t.originalAgentPresetId ?? presetId,
+      reason: "rate-limit",
+      timestamp: now,
+    });
   }
 
   // In-thread counterpart of the worker's viewport digest: one trailing read

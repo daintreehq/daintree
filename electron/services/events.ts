@@ -209,7 +209,7 @@ export const EVENT_META: Record<keyof DaintreeEventMap, EventMetadata> = {
     category: "agent",
     requiresContext: false,
     requiresTimestamp: true,
-    description: "Agent preset exited with a fallback-eligible error",
+    description: "Agent preset hit a fallback-eligible error or rate limit",
   },
   "agent:state-changed": {
     category: "agent",
@@ -811,16 +811,19 @@ export type DaintreeEventMap = {
 
   /**
    * Emitted when an agent PTY exits with output matching a fallback-eligible
-   * error class (connection failure or hard auth). The renderer consumes this
-   * to walk the preset's `fallbacks` chain and respawn.
+   * error class (connection failure or hard auth), or hits a rate limit (on
+   * exit, or live and settled at its banner). The renderer consumes this to
+   * walk the preset's `fallbacks` chain and respawn; a `rate-limit` hop only
+   * for a preset that opted in with `fallbackOnRateLimit`.
    */
   "agent:fallback-triggered": {
     terminalId: string;
     agentId: string;
     fromPresetId: string;
     originalPresetId?: string;
-    reason: "connection" | "auth";
-    exitCode: number;
+    reason: "connection" | "auth" | "rate-limit";
+    /** Absent when the pane is still running at a rate-limit banner. */
+    exitCode?: number;
     timestamp: number;
   };
 

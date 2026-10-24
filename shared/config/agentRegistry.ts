@@ -200,6 +200,12 @@ export interface AgentPreset {
    * `FALLBACK_CHAIN_MAX` entries.
    */
   fallbacks?: string[];
+  /**
+   * Also walk `fallbacks` when the agent hits a plan or rate limit (#14370).
+   * Off by default: a hop ends the running conversation and starts a fresh one
+   * on the next preset, so turning this on is the consent for that.
+   */
+  fallbackOnRateLimit?: boolean;
 }
 
 /** Max fallback presets that can be chained after the primary. */

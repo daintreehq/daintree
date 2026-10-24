@@ -3,12 +3,14 @@ import { stripAnsiCodes } from "../../../shared/utils/artifactParser.js";
 /**
  * Classification of why an agent PTY exited. Only `connection` and `auth`
  * indicate a fallback is warranted — `rate-limit` and `user-error` are the
- * provider/user's problem and the user should see/fix them directly.
+ * provider/user's problem and the user should see/fix them directly. The one
+ * exception is a preset that opted in with `fallbackOnRateLimit` (#14370),
+ * which the renderer decides, since only it reads the preset.
  */
 export type FallbackExitClass =
   | "connection" // 5xx, ECONNREFUSED, DNS, timeout
   | "auth" // 401/403-class, revoked tokens, "Not logged in"
-  | "rate-limit" // 429, quota, RESOURCE_EXHAUSTED — NEVER triggers fallback
+  | "rate-limit" // 429, quota, RESOURCE_EXHAUSTED — only for an opted-in preset
   | "user-error" // prompt too long, context overflow, tool rejection
   | "clean"; // no matching signal
 

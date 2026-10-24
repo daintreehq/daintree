@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IPty } from "node-pty";
-import { TerminalProcess } from "../TerminalProcess.js";
+import { RATE_LIMIT_SETTLE_MS, TerminalProcess } from "../TerminalProcess.js";
 import type { SpawnContext } from "../terminalSpawn.js";
 import { events } from "../../events.js";
 
@@ -377,6 +377,192 @@ describe("TerminalProcess rate-limit observation (#12797)", () => {
 
     ptyOnDataCallback!("HTTP 429 Too Many Requests\r\n");
     await vi.advanceTimersByTimeAsync(250);
+    expect(seen).toHaveLength(0);
+
+    terminal.dispose();
+  });
+});
+
+describe("TerminalProcess rate-limit fallback offer (#14370)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    ptyOnDataCallback = null;
+  });
+
+  const unsubscribers: Array<() => void> = [];
+
+  afterEach(() => {
+    unsubscribers.splice(0).forEach((unsubscribe) => unsubscribe());
+    vi.useRealTimers();
+    vi.clearAllTimers();
+  });
+
+  function collect() {
+    const seen: Array<Record<string, unknown>> = [];
+    unsubscribers.push(
+      events.on("agent:fallback-triggered", (payload) => seen.push({ ...payload }))
+    );
+    return seen;
+  }
+
+  const preset = {
+    launchAgentId: "claude",
+    agentPresetId: "claude-work",
+    originalAgentPresetId: "claude-home",
+  } as const;
+  const banner = "  ⎿  You’ve hit your weekly limit · resets Oct 2 at 9pm\r\n";
+
+  it("offers the chain once the banner has sat still, with no terminal text", async () => {
+    const seen = collect();
+    const terminal = createTerminal(preset);
+
+    ptyOnDataCallback!(banner);
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS - 100);
+    expect(seen).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(500);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toEqual({
+      terminalId: "t1",
+      agentId: "claude",
+      fromPresetId: "claude-work",
+      originalPresetId: "claude-home",
+      reason: "rate-limit",
+      timestamp: expect.any(Number),
+    });
+
+    // Sitting there longer, or redrawn, is the same banner, not a second offer.
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS * 4);
+    ptyOnDataCallback!("prompt\r\n");
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS * 4);
+    expect(seen).toHaveLength(1);
+
+    terminal.dispose();
+  });
+
+  it("waits while output is still arriving under the banner", async () => {
+    const seen = collect();
+    const terminal = createTerminal(preset);
+
+    ptyOnDataCallback!(banner);
+    for (let i = 0; i < 10; i++) {
+      await vi.advanceTimersByTimeAsync(1_000);
+      ptyOnDataCallback!(`retrying ${i}\r\n`);
+    }
+    expect(seen).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS + 500);
+    expect(seen).toHaveLength(1);
+
+    terminal.dispose();
+  });
+
+  it("waits while bytes keep arriving even when the screen doesn't change", async () => {
+    const seen = collect();
+    const terminal = createTerminal(preset);
+
+    ptyOnDataCallback!(banner);
+    for (let i = 0; i < 8; i++) {
+      await vi.advanceTimersByTimeAsync(1_000);
+      ptyOnDataCallback!("\x1b[?25h");
+    }
+    expect(seen).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS + 500);
+    expect(seen).toHaveLength(1);
+
+    terminal.dispose();
+  });
+
+  it("never offers a banner the agent kept working past", async () => {
+    const seen = collect();
+    const terminal = createTerminal(preset);
+
+    ptyOnDataCallback!(banner);
+    for (let i = 0; i < 40; i++) {
+      await vi.advanceTimersByTimeAsync(1_000);
+      ptyOnDataCallback!(`\rretrying ${i % 5}`);
+    }
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS * 4);
+    expect(seen).toHaveLength(0);
+
+    terminal.dispose();
+  });
+
+  it("waits while the agent is still working at the banner", async () => {
+    const seen = collect();
+    const terminal = createTerminal(preset);
+    const info = (terminal as unknown as { terminalInfo: { agentState?: string } }).terminalInfo;
+
+    info.agentState = "working";
+    ptyOnDataCallback!(banner);
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS * 3);
+    expect(seen).toHaveLength(0);
+
+    info.agentState = "waiting";
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS + 500);
+    expect(seen).toHaveLength(1);
+
+    terminal.dispose();
+  });
+
+  it("drops the offer when the banner goes before it settles, and offers again on a new one", async () => {
+    const seen = collect();
+    const terminal = createTerminal(preset);
+
+    ptyOnDataCallback!(banner);
+    await vi.advanceTimersByTimeAsync(1_000);
+    ptyOnDataCallback!("line\r\n".repeat(20));
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS * 2);
+    expect(seen).toHaveLength(0);
+
+    // Inside the chip's cooldown, but a fresh appearance all the same.
+    ptyOnDataCallback!(banner);
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS + 500);
+    expect(seen).toHaveLength(1);
+
+    ptyOnDataCallback!("line\r\n".repeat(20));
+    await vi.advanceTimersByTimeAsync(500);
+    ptyOnDataCallback!(banner);
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS + 500);
+    expect(seen).toHaveLength(2);
+
+    terminal.dispose();
+  });
+
+  it("never offers once another agent has taken over the pane", async () => {
+    const seen = collect();
+    const terminal = createTerminal(preset);
+    const info = (terminal as unknown as { terminalInfo: { detectedAgentId?: string } })
+      .terminalInfo;
+
+    info.detectedAgentId = "codex";
+    ptyOnDataCallback!(banner);
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS * 2);
+    expect(seen).toHaveLength(0);
+
+    terminal.dispose();
+  });
+
+  it("never offers for a pane launched without a preset", async () => {
+    const seen = collect();
+    const terminal = createTerminal({ launchAgentId: "claude" });
+
+    ptyOnDataCallback!(banner);
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS * 2);
+    expect(seen).toHaveLength(0);
+
+    terminal.dispose();
+  });
+
+  it("cancels a pending offer when the pane is killed", async () => {
+    const seen = collect();
+    const terminal = createTerminal(preset);
+
+    ptyOnDataCallback!(banner);
+    await vi.advanceTimersByTimeAsync(1_000);
+    terminal.kill("user");
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS * 2);
     expect(seen).toHaveLength(0);
 
     terminal.dispose();

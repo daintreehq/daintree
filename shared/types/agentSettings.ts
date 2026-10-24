@@ -146,6 +146,8 @@ export interface AgentSettingsEntry {
     color?: string;
     /** Ordered preset IDs to fall over to when provider is unreachable. */
     fallbacks?: string[];
+    /** Also fall over when the agent hits a plan or rate limit (#14370). */
+    fallbackOnRateLimit?: boolean;
   }>;
   /**
    * Environment variables applied to every launch of this agent, regardless of preset.

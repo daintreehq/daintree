@@ -34,6 +34,7 @@ import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { notify } from "@/lib/notify";
 import { actionService } from "@/services/ActionService";
+import type { AgentFallbackReason } from "@shared/types/ipc/agent";
 
 /**
  * Per-terminal reentrancy guard for fallback activations. A single slow exit
@@ -48,7 +49,7 @@ export async function handleFallbackTriggered(data: {
   agentId: string;
   fromPresetId: string;
   originalPresetId?: string;
-  reason: "connection" | "auth";
+  reason: AgentFallbackReason;
 }): Promise<void> {
   const { terminalId, agentId, fromPresetId, reason } = data;
   if (fallbackInFlight.has(terminalId)) return;
@@ -57,6 +58,8 @@ export async function handleFallbackTriggered(data: {
   if (!_panelRaw || !isPtyPanel(_panelRaw)) return;
   const panel = _panelRaw;
   if (panel.isRestarting) return;
+  // Held for recovery (#12434): nothing is running there to fall over from.
+  if (panel.restoreRecovery) return;
 
   // Drop stale duplicate events: if the panel has already advanced past the
   // preset this event refers to, the exit was from a now-replaced process
@@ -79,6 +82,21 @@ export async function handleFallbackTriggered(data: {
   const chain = originalPreset?.fallbacks ?? [];
   const currentIndex = panel.fallbackChainIndex ?? 0;
   const nextPresetId = chain[currentIndex];
+  // A rate limit is the user's to see unless they opted in on their own preset
+  // (#14370): a hop ends a live conversation, which a team-shared project file
+  // can't agree to for them. Nothing is said otherwise, or once the chain runs
+  // out, because the pane's rate-limit chip already shows the limit.
+  if (reason === "rate-limit") {
+    // Resolved like any other preset (sanitized, first id wins), from the
+    // user's own presets alone.
+    const optedIn =
+      getMergedPresets(agentId, entry.customPresets, [], []).find((p) => p.id === originalPresetId)
+        ?.fallbackOnRateLimit === true;
+    if (!optedIn || !nextPresetId) {
+      fallbackInFlight.delete(terminalId);
+      return;
+    }
+  }
 
   const fromPreset = mergedPresets.find((p) => p.id === fromPresetId);
   const fromName = fromPreset?.name ?? fromPresetId;
@@ -101,7 +119,9 @@ export async function handleFallbackTriggered(data: {
       title: isExhausted ? "Fallback chain exhausted" : `${fromName} unavailable`,
       message: isExhausted
         ? `All fallback presets were tried. Configure fallback presets or restart the terminal manually.`
-        : `${fromName} provider is unreachable. Configure fallbacks in Settings to auto-recover.`,
+        : reason === "auth"
+          ? `${fromName} couldn't sign in. Configure fallbacks in Settings to auto-recover.`
+          : `${fromName} provider is unreachable. Configure fallbacks in Settings to auto-recover.`,
       duration: 12000,
       supersedeKey: fallbackSupersedeKey,
       context: { ...fallbackAddress },
@@ -172,7 +192,9 @@ export async function handleFallbackTriggered(data: {
         message:
           reason === "auth"
             ? `${fromName} authentication failed — now running "${nextPreset.name}".`
-            : `${fromName} unreachable — now running "${nextPreset.name}".`,
+            : reason === "rate-limit"
+              ? `${fromName} hit its usage limit — now running "${nextPreset.name}" in a new conversation.`
+              : `${fromName} unreachable — now running "${nextPreset.name}".`,
         supersedeKey: fallbackSupersedeKey,
         context: { ...fallbackAddress },
       });

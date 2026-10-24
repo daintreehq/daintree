@@ -221,20 +221,28 @@ export interface AgentEndObservation {
 }
 
 /**
+ * Why a pane may move to its next fallback preset. `rate-limit` is only acted
+ * on for a preset that opted in with `fallbackOnRateLimit` (#14370).
+ */
+export type AgentFallbackReason = "connection" | "auth" | "rate-limit";
+
+/**
  * Emitted when an agent PTY exits with an error classified as fallback-eligible
- * (connection failure or hard auth). The renderer consumes this to walk the
- * preset's `fallbacks` chain and respawn the panel with the next preset.
+ * (connection failure or hard auth), or when it hit a rate limit: exited on one,
+ * or still running and sitting at its banner. The renderer consumes this to
+ * walk the preset's `fallbacks` chain and respawn the panel with the next preset.
  */
 export interface AgentFallbackTriggeredPayload {
   terminalId: string;
   agentId: string;
-  /** Preset that was active when the PTY exited. */
+  /** Preset that was active when the PTY exited or showed the banner. */
   fromPresetId: string;
   /** Original user-selected preset ID; unchanged across fallback hops. */
   originalPresetId?: string;
   /** Why the classifier decided this was a fallback-eligible exit. */
-  reason: "connection" | "auth";
-  exitCode: number;
+  reason: AgentFallbackReason;
+  /** Absent when the pane is still running at a rate-limit banner. */
+  exitCode?: number;
   timestamp: number;
 }
 

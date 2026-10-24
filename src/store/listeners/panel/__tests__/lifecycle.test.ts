@@ -338,6 +338,156 @@ describe("handleFallbackTriggered — activation failure", () => {
   });
 });
 
+describe("handleFallbackTriggered — rate limits (#14370)", () => {
+  const original = usePanelStore.getState().activateFallbackPreset;
+  afterEach(() => {
+    usePanelStore.setState({ activateFallbackPreset: original });
+  });
+
+  function setupChain(
+    primary: Record<string, unknown>,
+    panel: Record<string, unknown> = {}
+  ): ReturnType<typeof vi.fn> {
+    useAgentSettingsStore.setState({
+      settings: {
+        agents: {
+          testAgent: {
+            customPresets: [
+              { id: "preset-1", name: "Primary", fallbacks: ["preset-2", "preset-3"], ...primary },
+              { id: "preset-2", name: "Second account" },
+              { id: "preset-3", name: "Third account" },
+            ],
+          },
+        },
+      },
+    });
+    setupPanel({ agentPresetId: "preset-1", fallbackChainIndex: 0, ...panel });
+    const activate = vi.fn().mockResolvedValue({ success: true });
+    usePanelStore.setState({ activateFallbackPreset: activate });
+    return activate;
+  }
+
+  function trigger(fromPresetId = "preset-1") {
+    return handleFallbackTriggered({
+      terminalId: "term-1",
+      agentId: "testAgent",
+      fromPresetId,
+      reason: "rate-limit",
+    });
+  }
+
+  it("hops without asking when the original preset opted in", async () => {
+    const activate = setupChain({ fallbackOnRateLimit: true });
+
+    await trigger();
+
+    expect(activate).toHaveBeenCalledWith("term-1", "preset-2", "preset-1");
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Switched to fallback preset",
+        message: expect.stringContaining("usage limit"),
+        supersedeKey: "terminal.term-1.fallback",
+      })
+    );
+  });
+
+  it("leaves a pane whose preset did not opt in alone, and says nothing", async () => {
+    const activate = setupChain({});
+
+    await trigger();
+
+    expect(activate).not.toHaveBeenCalled();
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("says nothing for an opted-in preset with no chain to walk", async () => {
+    const activate = setupChain({ fallbackOnRateLimit: true, fallbacks: undefined });
+
+    await trigger();
+
+    expect(activate).not.toHaveBeenCalled();
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("walks on from where the pane is, reading the opt-in from the original preset", async () => {
+    const activate = setupChain(
+      { fallbackOnRateLimit: true },
+      { agentPresetId: "preset-2", fallbackChainIndex: 1 }
+    );
+
+    await trigger("preset-2");
+
+    expect(activate).toHaveBeenCalledWith("term-1", "preset-3", "preset-1");
+  });
+
+  it("stays quiet when the last fallback hits its limit too", async () => {
+    const activate = setupChain(
+      { fallbackOnRateLimit: true },
+      { agentPresetId: "preset-3", fallbackChainIndex: 2 }
+    );
+
+    await trigger("preset-3");
+
+    expect(activate).not.toHaveBeenCalled();
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("ignores an opt-in that came from a team-shared project preset", async () => {
+    const activate = setupChain({});
+    useProjectPresetsStore.setState({
+      presetsByAgent: {
+        testAgent: [
+          { id: "preset-1", name: "Shared", fallbacks: ["preset-2"], fallbackOnRateLimit: true },
+        ],
+      },
+    });
+    useAgentSettingsStore.setState({
+      settings: {
+        agents: { testAgent: { customPresets: [{ id: "preset-2", name: "Second account" }] } },
+      },
+    });
+
+    await trigger();
+
+    expect(activate).not.toHaveBeenCalled();
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("ignores an opt-in on a custom entry the preset merge rejected", async () => {
+    const activate = setupChain({});
+    useProjectPresetsStore.setState({
+      presetsByAgent: {
+        testAgent: [{ id: "preset-1", name: "Shared", fallbacks: ["preset-2"] }],
+      },
+    });
+    useAgentSettingsStore.setState({
+      settings: {
+        agents: {
+          testAgent: {
+            customPresets: [
+              { id: "preset-1", name: "  ", fallbackOnRateLimit: true },
+              { id: "preset-2", name: "Second account" },
+            ],
+          },
+        },
+      },
+    });
+
+    await trigger();
+
+    expect(activate).not.toHaveBeenCalled();
+  });
+
+  it("does not hold the in-flight guard after declining", async () => {
+    setupChain({});
+    await trigger();
+
+    const activate = setupChain({ fallbackOnRateLimit: true });
+    await trigger();
+    expect(activate).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("handleFallbackTriggered — guard clauses", () => {
   it("returns early when panel is not found", async () => {
     await handleFallbackTriggered({
@@ -352,6 +502,26 @@ describe("handleFallbackTriggered — guard clauses", () => {
 
   it("returns early when panel is restarting", async () => {
     setupPanel({ isRestarting: true });
+
+    await handleFallbackTriggered({
+      terminalId: "term-1",
+      agentId: "testAgent",
+      fromPresetId: "preset-1",
+      reason: "connection",
+    });
+
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("returns early when the panel is held for recovery", async () => {
+    useAgentSettingsStore.setState({
+      settings: {
+        agents: {
+          testAgent: { customPresets: [{ id: "preset-1", name: "Primary", fallbacks: ["gone"] }] },
+        },
+      },
+    });
+    setupPanel({ restoreRecovery: { reason: "sibling-owns-session-id" } });
 
     await handleFallbackTriggered({
       terminalId: "term-1",
