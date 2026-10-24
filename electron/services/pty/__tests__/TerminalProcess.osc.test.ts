@@ -313,7 +313,7 @@ describe("TerminalProcess OSC 9;4 progress signal wiring (Issue #8701)", () => {
 
   it("does not throw for plain (non-agent) terminals — the parser feeds but the callback no-ops", () => {
     // Plain terminals have no activity monitor at spawn (only after promotion).
-    // The optional-chaining guard in TerminalProcess.osc94Parser callbacks
+    // The optional-chaining guard in InThreadAnalysisBackend.osc94Parser callbacks
     // makes the OSC parse a safe no-op.
     createPlainTerminal();
     expect(() => ptyOnDataCallback!("\x1b]9;4;1;42\x07")).not.toThrow();

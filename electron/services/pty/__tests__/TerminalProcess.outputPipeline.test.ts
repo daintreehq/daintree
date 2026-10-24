@@ -80,7 +80,6 @@ type PipelineInternals = {
     agentState?: string;
     headlessTerminal?: { write: (data: string, cb?: () => void) => void };
   };
-  getAgentOutputContentSnapshot: () => unknown;
 };
 
 describe("TerminalProcess output pipeline ordering and throttling", () => {
@@ -129,7 +128,11 @@ describe("TerminalProcess output pipeline ordering and throttling", () => {
     const internals = terminal as unknown as PipelineInternals;
     internals.terminalInfo.agentState = "waiting";
     const snapshotSpy = vi.spyOn(
-      internals as unknown as Record<"getAgentOutputContentSnapshot", () => unknown>,
+      (
+        terminal as unknown as {
+          analysis: Record<"getAgentOutputContentSnapshot", () => unknown>;
+        }
+      ).analysis,
       "getAgentOutputContentSnapshot"
     );
 
@@ -182,7 +185,11 @@ describe("TerminalProcess output pipeline ordering and throttling", () => {
     const internals = terminal as unknown as PipelineInternals;
     internals.terminalInfo.agentState = "waiting";
     const snapshotSpy = vi.spyOn(
-      internals as unknown as Record<"getAgentOutputContentSnapshot", () => unknown>,
+      (
+        terminal as unknown as {
+          analysis: Record<"getAgentOutputContentSnapshot", () => unknown>;
+        }
+      ).analysis,
       "getAgentOutputContentSnapshot"
     );
 
@@ -191,8 +198,12 @@ describe("TerminalProcess output pipeline ordering and throttling", () => {
     await vi.advanceTimersByTimeAsync(1);
     ptyOnDataCallback!("\x1b[H\x1b[2Jframe b");
     await vi.advanceTimersByTimeAsync(1);
+    const analysis = (terminal as unknown as { analysis: { agentOutputNoteTimer: unknown } })
+      .analysis;
+    expect(analysis.agentOutputNoteTimer).not.toBeNull();
 
     terminal.dispose();
+    expect(analysis.agentOutputNoteTimer).toBeNull();
     const afterDispose = snapshotSpy.mock.calls.length;
     await vi.advanceTimersByTimeAsync(200);
     // A live trailing timer would fire another comparison after teardown.
@@ -286,7 +297,8 @@ describe("TerminalProcess output progress, in-thread (#12428)", () => {
     // A preserved exit drains its final output and then releases the mirror;
     // that frame must be observed before the mirror goes, not dropped with it.
     const terminal = createTerminal({ launchAgentId: "claude" });
-    const internals = terminal as unknown as { outputProgressTimer: unknown };
+    const internals = (terminal as unknown as { analysis: { outputProgressTimer: unknown } })
+      .analysis;
 
     ptyOnDataCallback!("the final answer\r\n");
     await vi.advanceTimersByTimeAsync(1);
@@ -665,8 +677,10 @@ describe("TerminalProcess agent:output coalescing", () => {
 // The OSC 9;4 tap runs per-chunk so the agent-state heartbeat never lags
 // (#8753). The parser is a private collaborator; spy on its `feed`.
 function osc94FeedSpy(terminal: TerminalProcess) {
-  const internal = terminal as unknown as { osc94Parser: { feed: (d: string, n: number) => void } };
-  return vi.spyOn(internal.osc94Parser, "feed");
+  const internal = terminal as unknown as {
+    analysis: { osc94Parser: { feed: (d: string, n: number) => void } };
+  };
+  return vi.spyOn(internal.analysis.osc94Parser, "feed");
 }
 
 // Hibernation removal: PTY output streams LIVE through the parse pipeline for

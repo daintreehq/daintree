@@ -188,8 +188,10 @@ describe("TerminalProcess.submit", () => {
   it("routes focus-in (CSI I) to activityMonitor.notifyFocus instead of onInput (#8865)", () => {
     const terminal = createTerminal({ kind: "terminal", launchAgentId: "claude" });
     const monitor = (
-      terminal as unknown as { activityMonitor: { notifyFocus: () => void; onInput: () => void } }
-    ).activityMonitor;
+      terminal as unknown as {
+        analysis: { activityMonitor: { notifyFocus: () => void; onInput: () => void } };
+      }
+    ).analysis.activityMonitor;
     expect(monitor).toBeTruthy();
     const notifyFocusSpy = vi.spyOn(monitor, "notifyFocus");
     const onInputSpy = vi.spyOn(monitor, "onInput");
@@ -206,8 +208,10 @@ describe("TerminalProcess.submit", () => {
   it("routes focus-out (CSI O) to activityMonitor.notifyFocus on write() too (#8865)", () => {
     const terminal = createTerminal({ kind: "terminal", launchAgentId: "claude" });
     const monitor = (
-      terminal as unknown as { activityMonitor: { notifyFocus: () => void; onInput: () => void } }
-    ).activityMonitor;
+      terminal as unknown as {
+        analysis: { activityMonitor: { notifyFocus: () => void; onInput: () => void } };
+      }
+    ).analysis.activityMonitor;
     const notifyFocusSpy = vi.spyOn(monitor, "notifyFocus");
     const onInputSpy = vi.spyOn(monitor, "onInput");
 
@@ -221,8 +225,10 @@ describe("TerminalProcess.submit", () => {
   it("normal keystrokes still go through onInput, not notifyFocus (#8865)", () => {
     const terminal = createTerminal({ kind: "terminal", launchAgentId: "claude" });
     const monitor = (
-      terminal as unknown as { activityMonitor: { notifyFocus: () => void; onInput: () => void } }
-    ).activityMonitor;
+      terminal as unknown as {
+        analysis: { activityMonitor: { notifyFocus: () => void; onInput: () => void } };
+      }
+    ).analysis.activityMonitor;
     const notifyFocusSpy = vi.spyOn(monitor, "notifyFocus");
     const onInputSpy = vi.spyOn(monitor, "onInput");
 
@@ -234,10 +240,14 @@ describe("TerminalProcess.submit", () => {
 
   it("focus event resets the agentOutputTemperature baseline (#8865)", () => {
     const terminal = createTerminal({ kind: "terminal", launchAgentId: "claude" });
-    const internals = terminal as unknown as {
-      agentOutputTemperature: { reset: () => void };
-      agentOutputContentSnapshot: unknown;
-    };
+    const internals = (
+      terminal as unknown as {
+        analysis: {
+          agentOutputTemperature: { reset: () => void };
+          agentOutputContentSnapshot: unknown;
+        };
+      }
+    ).analysis;
     const tempResetSpy = vi.spyOn(internals.agentOutputTemperature, "reset");
 
     terminal.tryWrite("\x1b[I");
@@ -268,15 +278,18 @@ describe("TerminalProcess.submit", () => {
       createMockPty()
     );
 
-    const internals = terminal as unknown as {
-      isAgentLive: boolean;
-      terminalInfo: { agentState: string };
-      activityMonitor: { onInput: (data: string) => void };
-      agentOutputTemperature: { observeDelta: (...args: unknown[]) => unknown };
-      agentOutputContentSnapshot: unknown;
-      noteAgentOutputActivity: (before: unknown) => void;
-      getAgentOutputContentSnapshot: () => unknown;
-    };
+    const internals = (
+      terminal as unknown as {
+        analysis: {
+          terminalInfo: { agentState: string };
+          activityMonitor: { onInput: (data: string) => void };
+          agentOutputTemperature: { observeDelta: (...args: unknown[]) => unknown };
+          agentOutputContentSnapshot: unknown;
+          noteAgentOutputActivity: (before: unknown) => void;
+          getAgentOutputContentSnapshot: () => unknown;
+        };
+      }
+    ).analysis;
 
     // Force a busy-promoting condition: agent live, state idle, baseline set,
     // visible delta after a mouse-report-driven redraw is non-trivial.
@@ -331,14 +344,18 @@ describe("TerminalProcess.submit", () => {
       createMockPty()
     );
 
-    const internals = terminal as unknown as {
-      terminalInfo: { agentState: string };
-      activityMonitor: { notifyExternalPromotion: (now?: number) => void };
-      agentOutputTemperature: { observeDelta: (...args: unknown[]) => unknown };
-      agentOutputContentSnapshot: unknown;
-      noteAgentOutputActivity: (before: unknown) => void;
-      getAgentOutputContentSnapshot: () => unknown;
-    };
+    const internals = (
+      terminal as unknown as {
+        analysis: {
+          terminalInfo: { agentState: string };
+          activityMonitor: { notifyExternalPromotion: (now?: number) => void };
+          agentOutputTemperature: { observeDelta: (...args: unknown[]) => unknown };
+          agentOutputContentSnapshot: unknown;
+          noteAgentOutputActivity: (before: unknown) => void;
+          getAgentOutputContentSnapshot: () => unknown;
+        };
+      }
+    ).analysis;
 
     Object.defineProperty(terminal, "isAgentLive", { value: true, configurable: true });
     internals.terminalInfo.agentState = "waiting";
@@ -390,17 +407,21 @@ describe("TerminalProcess.submit", () => {
       createMockPty()
     );
 
-    const internals = terminal as unknown as {
-      terminalInfo: { agentState: string };
-      activityMonitor: {
-        notifyFocus: (ms?: number) => void;
-        notifyExternalPromotion: (now?: number) => void;
-      };
-      agentOutputTemperature: { observeDelta: (...args: unknown[]) => unknown };
-      agentOutputContentSnapshot: unknown;
-      noteAgentOutputActivity: (before: unknown) => void;
-      getAgentOutputContentSnapshot: () => unknown;
-    };
+    const internals = (
+      terminal as unknown as {
+        analysis: {
+          terminalInfo: { agentState: string };
+          activityMonitor: {
+            notifyFocus: (ms?: number) => void;
+            notifyExternalPromotion: (now?: number) => void;
+          };
+          agentOutputTemperature: { observeDelta: (...args: unknown[]) => unknown };
+          agentOutputContentSnapshot: unknown;
+          noteAgentOutputActivity: (before: unknown) => void;
+          getAgentOutputContentSnapshot: () => unknown;
+        };
+      }
+    ).analysis;
 
     Object.defineProperty(terminal, "isAgentLive", { value: true, configurable: true });
     internals.terminalInfo.agentState = "waiting";
