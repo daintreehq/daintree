@@ -249,6 +249,274 @@ describe("LinkClient backoff", () => {
     }
   });
 
+  it("reads a host that said it was shutting down as restarting, and redials it quickly", async () => {
+    const dir = await makeTempDir();
+    const socketPath = path.join(dir, "r.sock");
+    let peer: net.Socket | null = null;
+    const server = net.createServer((socket) => {
+      peer = socket;
+      const decoder = new FrameDecoder();
+      socket.on("data", (chunk: Buffer) => {
+        for (const frame of decoder.push(chunk)) {
+          if (frame.kind !== ControlKind.HELLO) continue;
+          const welcome: LinkMessage = {
+            lane: Lane.CONTROL,
+            kind: ControlKind.WELCOME,
+            body: { handshake: TEST_HANDSHAKE, hostName: "h", sessionId: "s1", resumed: false },
+          };
+          socket.write(encodeFrame(messageToFrame(welcome)));
+        }
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+    const direct = createDirectTransport({ socketPath, token: "t" });
+    let down = false;
+    const transport: LinkTransport & { opens: number } = {
+      opens: 0,
+      async open(signal) {
+        transport.opens++;
+        if (down) {
+          throw new HostModeOffError("Daintree isn't running in Host mode there (no host.json).");
+        }
+        return direct.open(signal);
+      },
+    };
+    // The session stamps what it hears on the real clock.
+    const now = () => Date.now();
+    const states: { state: LinkClientState; at: number }[] = [];
+    try {
+      client = new LinkClient({
+        transport,
+        handshake: TEST_HANDSHAKE,
+        client: { clientId: "c", clientName: "n", platform: "linux" },
+        session: { pingIntervalMs: 0, idleTimeoutMs: 0 },
+        // Far longer than the restart's own cap, so the cap is what's seen.
+        backoff: { initialMs: 60_000, maxMs: 60_000, jitter: 0 },
+        random: () => 0,
+        now,
+        quietAfterMs: 0,
+      });
+      client.start();
+      await waitFor(() => client!.getState().status === "connected");
+      client.onStateChange((state) => states.push({ state, at: now() }));
+      down = true;
+      const goodbye: LinkMessage = {
+        lane: Lane.CONTROL,
+        kind: ControlKind.GOODBYE,
+        body: { reason: "shutting-down" },
+      };
+      peer!.write(encodeFrame(messageToFrame(goodbye)));
+      peer!.end();
+
+      const hostModeOff = () =>
+        states.find((s) => s.state.status === "unreachable" && s.state.hostModeOff);
+      await waitFor(() => hostModeOff() !== undefined);
+      // One variant throughout: every state on the way down says restarting.
+      expect(states.every((s) => s.state.status !== "connected")).toBe(true);
+      expect(states.filter((s) => !("restarting" in s.state))).toEqual([]);
+      const unreachable = hostModeOff()!;
+      expect(unreachable.state).toMatchObject({ restarting: true });
+      const retryAt = unreachable.state.status === "unreachable" ? unreachable.state.retryAt! : 0;
+      expect(retryAt - unreachable.at).toBeGreaterThan(900);
+      expect(retryAt - unreachable.at).toBeLessThanOrEqual(1_000);
+      expect(client.restartAnnounced).toBe(true);
+
+      // Back up: the next dial connects, and the restart is over.
+      down = false;
+      await waitFor(() => client!.getState().status === "connected", 5_000);
+      expect(client.restartAnnounced).toBe(false);
+    } finally {
+      await client?.stop();
+      client = null;
+      server.close();
+      await removeTempDir(dir);
+    }
+  });
+
+  it("reads a host refusing its first HELLO because it is shutting down as restarting, for one grace", async () => {
+    const dir = await makeTempDir();
+    const socketPath = path.join(dir, "s.sock");
+    let refusals = 0;
+    const server = net.createServer((socket) => {
+      const decoder = new FrameDecoder();
+      socket.on("data", (chunk: Buffer) => {
+        for (const frame of decoder.push(chunk)) {
+          if (frame.kind !== ControlKind.HELLO) continue;
+          refusals++;
+          const reject: LinkMessage = {
+            lane: Lane.CONTROL,
+            kind: ControlKind.REJECT,
+            body: { reason: "shutting-down", handshake: null, detail: null },
+          };
+          socket.write(encodeFrame(messageToFrame(reject)));
+        }
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+    let offset = 0;
+    const now = () => Date.now() + offset;
+    const restartingAfter = async (seen: number) => {
+      await waitFor(() => refusals > seen && client!.getState().status === "unreachable");
+      const state = client!.getState();
+      return state.status === "unreachable" && state.restarting === true;
+    };
+    try {
+      client = new LinkClient({
+        transport: createDirectTransport({ socketPath, token: "t" }),
+        handshake: TEST_HANDSHAKE,
+        client: { clientId: "c", clientName: "n", platform: "linux" },
+        session: { pingIntervalMs: 0, idleTimeoutMs: 0 },
+        backoff: { initialMs: 60_000, maxMs: 60_000, jitter: 0 },
+        now,
+      });
+      client.start();
+      expect(await restartingAfter(0)).toBe(true);
+      const state = client.getState();
+      expect(state.status === "unreachable" && state.retryAt! - now()).toBeLessThanOrEqual(1_000);
+
+      // Still refusing past the grace: the deadline ran from the first refusal.
+      offset = 2 * 60_000;
+      client.retryNow();
+      expect(await restartingAfter(refusals)).toBe(false);
+
+      // A stop ends the episode; the next run's refusal starts a new one.
+      await client.stop();
+      client.start();
+      expect(await restartingAfter(refusals)).toBe(true);
+    } finally {
+      await client?.stop();
+      client = null;
+      server.close();
+      await removeTempDir(dir);
+    }
+  });
+
+  it("hears a GOODBYE in place of the WELCOME and keeps retrying a fresh link through Host mode off", async () => {
+    const dir = await makeTempDir();
+    const socketPath = path.join(dir, "w.sock");
+    const server = net.createServer((socket) => {
+      const decoder = new FrameDecoder();
+      socket.on("data", (chunk: Buffer) => {
+        for (const frame of decoder.push(chunk)) {
+          if (frame.kind !== ControlKind.HELLO) continue;
+          const goodbye: LinkMessage = {
+            lane: Lane.CONTROL,
+            kind: ControlKind.GOODBYE,
+            body: { reason: "shutting-down" },
+          };
+          socket.end(encodeFrame(messageToFrame(goodbye)));
+        }
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+    const direct = createDirectTransport({ socketPath, token: "t" });
+    const transport: LinkTransport & { opens: number } = {
+      opens: 0,
+      async open(signal) {
+        transport.opens++;
+        if (transport.opens > 1) {
+          throw new HostModeOffError("Daintree isn't running in Host mode there (no host.json).");
+        }
+        return direct.open(signal);
+      },
+    };
+    try {
+      client = new LinkClient({
+        transport,
+        handshake: TEST_HANDSHAKE,
+        client: { clientId: "c", clientName: "n", platform: "linux" },
+        session: { pingIntervalMs: 0, idleTimeoutMs: 0 },
+        backoff: { initialMs: 60_000, maxMs: 60_000, jitter: 0 },
+      });
+      client.start();
+      await waitFor(() => {
+        const state = client!.getState();
+        return state.status === "unreachable" && state.hostModeOff === true;
+      }, 5_000);
+      // Never heard from before this link, so only the host's own word keeps it from parking.
+      expect(client.getState()).toMatchObject({ restarting: true, retryAt: expect.any(Number) });
+    } finally {
+      await client?.stop();
+      client = null;
+      server.close();
+      await removeTempDir(dir);
+    }
+  });
+
+  it("stops reading a shutdown as a restart once the host has been gone longer than one takes", async () => {
+    const dir = await makeTempDir();
+    const socketPath = path.join(dir, "g.sock");
+    let peer: net.Socket | null = null;
+    const server = net.createServer((socket) => {
+      peer = socket;
+      const decoder = new FrameDecoder();
+      socket.on("data", (chunk: Buffer) => {
+        for (const frame of decoder.push(chunk)) {
+          if (frame.kind !== ControlKind.HELLO) continue;
+          const welcome: LinkMessage = {
+            lane: Lane.CONTROL,
+            kind: ControlKind.WELCOME,
+            body: { handshake: TEST_HANDSHAKE, hostName: "h", sessionId: "s1", resumed: false },
+          };
+          socket.write(encodeFrame(messageToFrame(welcome)));
+        }
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+    const direct = createDirectTransport({ socketPath, token: "t" });
+    let down = false;
+    const transport: LinkTransport = {
+      async open(signal) {
+        if (down) throw new TransportError("unreachable", "Connection refused");
+        return direct.open(signal);
+      },
+    };
+    let offset = 0;
+    const now = () => Date.now() + offset;
+    try {
+      client = new LinkClient({
+        transport,
+        handshake: TEST_HANDSHAKE,
+        client: { clientId: "c", clientName: "n", platform: "linux" },
+        session: { pingIntervalMs: 0, idleTimeoutMs: 0 },
+        backoff: { initialMs: 60_000, maxMs: 60_000, jitter: 0 },
+        random: () => 0,
+        now,
+        quietAfterMs: 0,
+      });
+      client.start();
+      await waitFor(() => client!.getState().status === "connected");
+      down = true;
+      peer!.write(
+        encodeFrame(
+          messageToFrame({
+            lane: Lane.CONTROL,
+            kind: ControlKind.GOODBYE,
+            body: { reason: "shutting-down" },
+          })
+        )
+      );
+      peer!.end();
+      await waitFor(() => client!.getState().status === "unreachable");
+      expect(client.getState()).toMatchObject({ restarting: true });
+
+      offset = 2 * 60_000;
+      client.retryNow();
+      await waitFor(() => {
+        const state = client!.getState();
+        return state.status === "unreachable" && state.restarting === undefined;
+      });
+      const state = client.getState();
+      expect(state.status === "unreachable" && state.retryAt! - now()).toBeGreaterThan(50_000);
+      expect(client.restartAnnounced).toBe(false);
+    } finally {
+      await client?.stop();
+      client = null;
+      server.close();
+      await removeTempDir(dir);
+    }
+  });
+
   it("stops retrying when ssh can't log in, until asked to try again", async () => {
     const transport = {
       opens: 0,

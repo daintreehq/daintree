@@ -15,7 +15,7 @@ import {
   type RejectMessage,
   type WelcomeMessage,
 } from "../link/messages.js";
-import { LinkSession, type LinkSessionOptions } from "../link/session.js";
+import { LinkSession, type LinkCloseInfo, type LinkSessionOptions } from "../link/session.js";
 import {
   HostModeOffError,
   SshAccessError,
@@ -38,7 +38,12 @@ const logger = createLogger("main:LinkClient");
 
 export type LinkClientState =
   | { status: "disconnected" }
-  | { status: "connecting"; attempt: number }
+  | {
+      status: "connecting";
+      attempt: number;
+      /** See {@link LinkClient.restartAnnounced}. */
+      restarting?: true;
+    }
   | {
       status: "connected";
       rttMs: number | null;
@@ -62,6 +67,8 @@ export type LinkClientState =
       detail: string | null;
       /** ssh reached the host and found no Daintree listening there in Host mode. */
       hostModeOff?: true;
+      /** See {@link LinkClient.restartAnnounced}. */
+      restarting?: true;
       /**
        * Epoch ms of the next attempt; null when retrying can't help (ssh
        * couldn't log in, Host mode is off there) and the link waits for
@@ -142,6 +149,12 @@ function clipDetail(detail: string | null): string | null {
 const QUIET_AFTER_MS = 7_000;
 /** How long after a host was last heard from a "host mode off" still reads as a restart. */
 const HOST_RESTART_GRACE_MS = 2 * 60_000;
+/**
+ * Longest wait between dials while the host is restarting by its own say:
+ * short enough that it is picked back up within a couple of seconds of
+ * listening again, for no longer than the restart grace.
+ */
+const RESTART_RETRY_MS = 1_000;
 const QUIET_CHECK_MS = 1_000;
 /**
  * Long enough for a link that survived the sleep to answer a ping once the
@@ -188,6 +201,13 @@ export class LinkClient {
   private lastSeenAt: number | null = null;
   /** The last dial found no Host mode there while that still read as a restart. */
   private restartSeen = false;
+  /**
+   * When the host said it was shutting down (closing the last session, or
+   * refusing a HELLO) since the link was last up; null when it hasn't. Not
+   * moved by later refusals, so the restart it starts has one deadline.
+   */
+  private shutdownHeardAt: number | null = null;
+  private restartExpiry: ReturnType<typeof setTimeout> | null = null;
   /** What the last logged failure said, so a host down for hours logs once, not every retry. */
   private lastLoggedFailure: string | null = null;
   private generation = 0;
@@ -226,7 +246,18 @@ export class LinkClient {
    * looks like, though nothing here can say that it is one.
    */
   get restarting(): boolean {
-    return this.restartSeen;
+    return this.restartSeen || this.restartAnnounced;
+  }
+
+  /**
+   * The host said it was shutting down, within a restart's grace: its own
+   * word that it is going away, read as coming back for as long as that is
+   * plausible. Unlike {@link restarting}, never inferred.
+   */
+  get restartAnnounced(): boolean {
+    if (this.shutdownHeardAt === null) return false;
+    const since = this.now() - this.shutdownHeardAt;
+    return since >= 0 && since < HOST_RESTART_GRACE_MS;
   }
 
   onStateChange(listener: (state: LinkClientState) => void): () => void {
@@ -298,6 +329,7 @@ export class LinkClient {
     await Promise.all([...this.releasing]);
     this.failures = 0;
     this.restartSeen = false;
+    this.clearShutdown();
     this.setState({ status: "disconnected" });
   }
 
@@ -313,7 +345,7 @@ export class LinkClient {
     // Only the first dial of a run: the retries after it log only when what they see changes.
     if (this.attempt === 1) logger.info("Dialling remote host", dial);
     else logger.debug("Dialling remote host", dial);
-    this.setState({ status: "connecting", attempt: this.attempt });
+    this.setState(this.connecting(this.attempt));
     const abort = new AbortController();
     this.attemptAbort = abort;
 
@@ -331,7 +363,9 @@ export class LinkClient {
       const heard = this.lastHeard();
       const sinceHeard = heard === null ? null : this.now() - heard;
       const restarting =
-        hostModeOff && sinceHeard !== null && sinceHeard >= 0 && sinceHeard < HOST_RESTART_GRACE_MS;
+        hostModeOff &&
+        (this.restartAnnounced ||
+          (sinceHeard !== null && sinceHeard >= 0 && sinceHeard < HOST_RESTART_GRACE_MS));
       this.restartSeen = restarting;
       this.fail(err instanceof TransportError ? err.detail : formatErrorMessage(err, "failed"), {
         hostModeOff,
@@ -379,6 +413,14 @@ export class LinkClient {
       return;
     }
 
+    // Heard before the release, which can take as long as a stalled transport:
+    // the restart's grace runs from when the host said it.
+    if (outcome.kind === "reject") {
+      if (outcome.reject.reason === "shutting-down") this.heardShutdown();
+    } else if (session.closedWith) {
+      // A GOODBYE in place of the WELCOME, from a host already on its way down.
+      this.noteClose(session.closedWith);
+    }
     await this.release(connection);
     // Another attempt (a retryNow while this one was releasing) owns the link now.
     if (stale()) return;
@@ -397,6 +439,36 @@ export class LinkClient {
       return;
     }
     this.fail(outcome.reason);
+  }
+
+  private noteClose(info: LinkCloseInfo): void {
+    if (info.by === "remote" && info.reason === "shutting-down") this.heardShutdown();
+  }
+
+  private heardShutdown(): void {
+    if (this.shutdownHeardAt !== null) return;
+    this.shutdownHeardAt = this.now();
+    // Said now, not after a release that can take as long as a stalled transport.
+    if (this.state.status === "connecting" && !this.state.restarting) {
+      this.setState(this.connecting(this.state.attempt));
+    }
+    // A dial under way when the grace runs out would otherwise keep saying
+    // restarting until it finishes, which a stalled transport makes 30 s.
+    this.restartExpiry = setTimeout(() => {
+      this.restartExpiry = null;
+      const state = this.state;
+      if ((state.status === "connecting" || state.status === "unreachable") && state.restarting) {
+        const { restarting: _restarting, ...rest } = state;
+        this.setState(rest);
+      }
+    }, HOST_RESTART_GRACE_MS);
+    this.restartExpiry.unref?.();
+  }
+
+  private clearShutdown(): void {
+    this.shutdownHeardAt = null;
+    if (this.restartExpiry) clearTimeout(this.restartExpiry);
+    this.restartExpiry = null;
   }
 
   /** When the host was last heard from, by this link or by one before it. */
@@ -454,6 +526,7 @@ export class LinkClient {
     buildMismatch: HandshakeMismatch | null
   ): void {
     if (session.isClosed) {
+      if (session.closedWith) this.noteClose(session.closedWith);
       void this.release(connection);
       this.fail(session.closedWith?.reason ?? "closed");
       return;
@@ -490,6 +563,7 @@ export class LinkClient {
     }
     this.lastLoggedFailure = null;
     this.restartSeen = false;
+    this.clearShutdown();
     this.current = session;
     this.sessionId = welcome.sessionId;
     this.resumeSecret = welcome.resumeSecret ?? null;
@@ -555,9 +629,10 @@ export class LinkClient {
       this.current = null;
       // Before the state below: whoever hears it records when the host was last seen.
       this.lastSeenAt = Math.max(this.lastSeenAt ?? 0, session.lastReceivedAt);
+      this.noteClose(info);
       // Down from now: releasing the old forward can take as long as a stalled
       // transport does, and the link must not read as connected meanwhile.
-      this.setState({ status: "connecting", attempt: this.attempt + 1 });
+      this.setState(this.connecting(this.attempt + 1));
       const generation = this.generation;
       // Release the old forward before the next attempt sets up a new one.
       void this.release(connection).then(() => {
@@ -628,7 +703,11 @@ export class LinkClient {
   ): void {
     this.failures++;
     const { initialMs = 500, maxMs = 30_000, jitter = 0.3 } = this.options.backoff ?? {};
-    const base = Math.min(maxMs, initialMs * 2 ** Math.min(this.failures - 1, 30));
+    const announced = this.restartAnnounced;
+    const base = Math.min(
+      announced ? Math.min(maxMs, RESTART_RETRY_MS) : maxMs,
+      initialMs * 2 ** Math.min(this.failures - 1, 30)
+    );
     const delay = Math.max(0, Math.round(base * (1 - jitter * this.random())));
     const retry = options.parked ? "stopped" : "scheduled";
     const signature = [
@@ -649,6 +728,7 @@ export class LinkClient {
       lastSeenAt: this.lastSeenAt,
       detail,
       ...(options.hostModeOff ? { hostModeOff: true as const } : {}),
+      ...(announced && !options.parked ? { restarting: true as const } : {}),
       retryAt: options.parked ? null : this.now() + delay,
     });
     if (options.parked) return;
@@ -674,6 +754,14 @@ export class LinkClient {
     }
     this.lastLoggedFailure = signature;
     logger.info(message, line);
+  }
+
+  private connecting(attempt: number): LinkClientState {
+    return {
+      status: "connecting",
+      attempt,
+      ...(this.restartAnnounced ? { restarting: true as const } : {}),
+    };
   }
 
   private clearRetry(): void {

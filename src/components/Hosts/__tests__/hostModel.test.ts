@@ -13,6 +13,7 @@ import {
   hostChipStatus,
   hostChipStatusText,
   hostMenuNoteAge,
+  hostMenuRowHasTrouble,
   updateActionLabel,
   updateTargetFor,
 } from "../hostModel";
@@ -143,6 +144,26 @@ describe("describeHostRowStatus", () => {
     expect(text).toMatch(/^Unreachable · last seen /);
     expect(text).toContain("2 hours ago");
     expect(text).not.toMatch(/asleep|timeout/i);
+  });
+
+  it("says a host that announced its shutdown is restarting, through every dial", () => {
+    const restartDial: HostConnectionState = {
+      status: "unreachable",
+      lastSeenAt: 1,
+      detail: "Daintree isn't running in Host mode there (no host.json).",
+      restarting: true,
+    };
+    const [, failed] = rowsFor([entry("h1", "studio-03", restartDial, null, { lastSeenAt: 1 })]);
+    const [, dialling] = rowsFor([
+      entry("h1", "studio-03", { status: "connecting", attempt: 3, restarting: true }),
+    ]);
+    for (const row of [failed!, dialling!]) {
+      expect(describeHostRowStatus(row, now)).toBe("Restarting…");
+      expect(describeHostMenuState(row, now)).toEqual({ state: "Restarting…", note: null });
+      expect(hostMenuNoteAge(row)).toBeNull();
+      expect(hostMenuRowHasTrouble(row)).toBe(false);
+    }
+    expect(hostChipStatus(false, restartDial, null)).toBe("connecting");
   });
 
   it("says no Daintree is listening on a host that answered, rather than unreachable", () => {

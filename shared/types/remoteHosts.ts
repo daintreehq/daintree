@@ -294,7 +294,16 @@ export interface HostDescriptor {
 export type HostConnectionState =
   | { status: "local" }
   | { status: "disconnected" }
-  | { status: "connecting"; attempt: number }
+  | {
+      status: "connecting";
+      attempt: number;
+      /**
+       * The host said it was shutting down when the link closed, and was
+       * heard from recently enough that it is plausibly coming back. Its own
+       * word, never inferred from silence.
+       */
+      restarting?: true;
+    }
   | {
       status: "connected";
       rttMs: number | null;
@@ -321,6 +330,8 @@ export type HostConnectionState =
       detail: string | null;
       /** ssh reached the host and found no Daintree listening there in Host mode (no discovery file). */
       hostModeOff?: true;
+      /** As on `connecting`: the host said it was shutting down, and is still retried. */
+      restarting?: true;
       /**
        * Not retrying on its own: what was seen (ssh couldn't log in, Host mode
        * is off) doesn't change by trying again soon, so it waits for a

@@ -94,6 +94,7 @@ export function connectionLabel(state: HostConnectionState, now: number = Date.n
     case "disconnected":
       return "Not connected";
     case "connecting":
+      if (state.restarting) return "Restarting";
       return state.attempt > 1 ? `Connecting (attempt ${state.attempt})` : "Connecting";
     case "connected": {
       if (state.quietSince !== undefined) {
@@ -103,6 +104,7 @@ export function connectionLabel(state: HostConnectionState, now: number = Date.n
       return state.rttMs === null ? "Connected" : `Connected · ${Math.round(state.rttMs)} ms`;
     }
     case "unreachable":
+      if (state.restarting) return "Restarting";
       if (state.hostModeOff) {
         return `Daintree isn't listening there · ${formatSeen(state.lastSeenAt, now)}`;
       }

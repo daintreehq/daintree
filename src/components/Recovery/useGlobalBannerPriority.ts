@@ -75,9 +75,10 @@ export type GlobalBannerSlot =
 // host-connection sits above host-crash because in a remote window the host
 // runs the terminals, git and agents: with the link down, nothing below it is
 // reachable, and a local backend problem is not what the user can act on first.
-// It never claims the slot in a window that runs on this machine. Its
-// transient variants (reconnecting, checking) render nothing inside the 400ms
-// gate, which holds the slot exactly as host-crash's recovering variant does.
+// It never claims the slot in a window that runs on this machine. A link that
+// was up and is retrying on its own renders nothing for the 30s settle window,
+// and its other transient variants (a first connect, checking) for the 400ms
+// gate; either holds the slot, as host-crash's recovering variant does.
 //
 // drive-lease sits below both: with the link down or the backend gone, who
 // drives the project is moot. It sits above everything else because this

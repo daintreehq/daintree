@@ -47,6 +47,15 @@ describe("defaultHostName", () => {
 });
 
 describe("connectionLabel", () => {
+  it("says restarting, not unreachable, for a host that announced its shutdown", () => {
+    for (const state of [
+      { status: "connecting", attempt: 4, restarting: true },
+      { status: "unreachable", lastSeenAt: 1, detail: "no host.json", restarting: true },
+    ] as const) {
+      expect(connectionLabel(state)).toBe("Restarting");
+    }
+  });
+
   it("says when an unreachable host was last seen relative to now, as the rest of the app does", () => {
     const now = Date.UTC(2026, 0, 10, 12);
     expect(

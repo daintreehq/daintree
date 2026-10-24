@@ -132,8 +132,16 @@ export const useHostConnectionStore = create<HostConnectionStoreState>((set, get
   reset: () => set({ ...INITIAL }),
 }));
 
+/**
+ * How long a link that was up may be down, retrying on its own, before the
+ * banner says so: the auto-recovery tier's stall line. Until then the panes'
+ * own read-only strips are the whole of the signal.
+ */
+export const HOST_LINK_SETTLE_MS = 30_000;
+
 export type HostBannerVariant =
   | "reconnecting"
+  | "restarting"
   | "connecting"
   | "unreachable"
   | "host-mode-off"
@@ -157,8 +165,11 @@ export function selectHostBannerVariant(state: BannerInputs): HostBannerVariant 
     case "connected":
       return state.checking > 0 ? "checking" : null;
     case "connecting":
+      // The host said it was going away: one restart, through every dial.
+      if (state.connection.restarting) return "restarting";
       return state.everConnected ? "reconnecting" : "connecting";
     case "unreachable":
+      if (state.connection.restarting) return "restarting";
       // The machine answered in both: Daintree there isn't hosting, or ssh
       // couldn't log in. Neither is a host that can't be reached.
       if (state.connection.hostModeOff) return "host-mode-off";
