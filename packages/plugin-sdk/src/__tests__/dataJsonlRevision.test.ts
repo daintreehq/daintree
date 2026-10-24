@@ -53,7 +53,7 @@ describe("stringifyJsonlLine", () => {
 });
 
 describe("contentRevision", () => {
-  // The host's `sha256Hex` in PluginHostFactory: node:crypto over the bytes
+  // The host's `sha256Hex` in pluginHostFsApi: node:crypto over the bytes
   // written, with the text encoded as UTF-8.
   const hostRevision = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 

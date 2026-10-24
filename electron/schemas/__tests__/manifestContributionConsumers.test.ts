@@ -165,7 +165,9 @@ const LIFECYCLE_COMMAND_TRUST = "electron/workspace-host/lifecycleCommandTrust.t
 const PLUGIN_DATABASE = "electron/services/plugin/pluginDatabase.ts";
 const PLUGIN_DATABASE_HANDLE = "shared/utils/pluginDatabaseHandle.ts";
 const PROJECT_APPLICATION_PREFLIGHT = "electron/services/plugin/projectApplicationPreflight.ts";
-const PLUGIN_HOST_FACTORY = "electron/services/plugin/PluginHostFactory.ts";
+const PLUGIN_HOST_CONTRIBUTIONS = "electron/services/plugin/pluginHostContributionsApi.ts";
+const PLUGIN_HOST_NOTIFICATIONS = "electron/services/plugin/pluginHostNotificationsApi.ts";
+const PLUGIN_HOST_SETTINGS = "electron/services/plugin/pluginHostSettingsApi.ts";
 const PLUGIN_DATABASES_SECTION = "src/components/Plugin/PluginDatabasesSection.tsx";
 const DATABASE_ENDPOINT = "electron/services/pluginAgentMcp/databaseEndpoint.ts";
 const DECLARED_QUERIES = "electron/services/pluginAgentMcp/declaredQueries.ts";
@@ -610,7 +612,7 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
           symbol: "PluginContributionRegistrar (panels loop) → registerPanelKind",
         },
         {
-          file: "electron/services/plugin/PluginHostFactory.ts",
+          file: "electron/services/plugin/pluginHostPresentationApi.ts",
           symbol: "setPanelActivity (declaration and panel-kind gate)",
         },
         {
@@ -1056,7 +1058,7 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
           file: PLUGIN_CONTRIBUTION_REGISTRAR,
           symbol: "PluginContributionRegistrar → registerSearchProviders",
         },
-        { file: PLUGIN_HOST_FACTORY, symbol: "registerSearchProvider" },
+        { file: PLUGIN_HOST_CONTRIBUTIONS, symbol: "registerSearchProvider" },
       ],
       note: "Namespaced into the provider key `{pluginId}.{id}`, which a runtime binding must name and the user's switch is stored under.",
     },
@@ -1779,7 +1781,7 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
           symbol: "registerContextProviders",
         },
         {
-          file: "electron/services/plugin/PluginHostFactory.ts",
+          file: "electron/services/plugin/pluginHostContributionsApi.ts",
           symbol: "registerContextProvider (declared-id check)",
         },
       ],
@@ -1837,7 +1839,7 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       mode: "verbatim",
       consumers: [
         {
-          file: "electron/services/plugin/PluginHostFactory.ts",
+          file: "electron/services/plugin/pluginHostContributionsApi.ts",
           symbol: "registerWorktreeDeleteNotesProvider (declared-id check)",
         },
       ],
@@ -2098,7 +2100,10 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       mode: "verbatim",
       consumers: [
         { file: AGENT_MCP_DECLARED, symbol: "declaredPluginEndpointOf" },
-        { file: PLUGIN_HOST_FACTORY, symbol: "mcp.registerTools (validateAgentMcpTools groups)" },
+        {
+          file: PLUGIN_HOST_CONTRIBUTIONS,
+          symbol: "mcp.registerTools (validateAgentMcpTools groups)",
+        },
       ],
       note: "The groups the user allows one at a time, and what each registered tool must name.",
     },
@@ -2115,7 +2120,10 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
     id: {
       mode: "cross-reference",
       consumers: [
-        { file: PLUGIN_HOST_FACTORY, symbol: "mcp.registerTools (validateAgentMcpTools groups)" },
+        {
+          file: PLUGIN_HOST_CONTRIBUTIONS,
+          symbol: "mcp.registerTools (validateAgentMcpTools groups)",
+        },
         { file: AGENT_MCP_PROJECT_ENABLEMENT, symbol: "agentMcpScopeFor" },
       ],
       note: "What a tool's `group` names, and what the user's choice and a grant's scope are kept under.",
@@ -2301,7 +2309,7 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
   databases: {
     id: {
       mode: "verbatim",
-      consumers: [{ file: PLUGIN_HOST_FACTORY, symbol: "createHost resolveDatabase" }],
+      consumers: [{ file: PLUGIN_HOST_SETTINGS, symbol: "createHost resolveDatabase" }],
       note: "What host.db.open names; also the default file name under .daintree/data/<manifestId>/.",
     },
     description: {
@@ -2467,7 +2475,7 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       mode: "verbatim",
       consumers: [
         { file: RECIPE_REGISTRY, symbol: "toTerminalRecipe (TerminalRecipe.pluginVariables)" },
-        { file: PLUGIN_HOST_FACTORY, symbol: "validateRunRecipeCall" },
+        { file: PLUGIN_HOST_NOTIFICATIONS, symbol: "validateRunRecipeCall" },
       ],
       note: "The {{plugin.<name>}} names host.runRecipe may fill; any other name is refused.",
     },
@@ -2762,7 +2770,10 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       mode: "verbatim",
       consumers: [
         { file: SERVICE_BROKER, symbol: "PluginServiceBroker.resolve (provides lookup)" },
-        { file: PLUGIN_HOST_FACTORY, symbol: "createHost registerService (declared provides)" },
+        {
+          file: PLUGIN_HOST_CONTRIBUTIONS,
+          symbol: "createHost registerService (declared provides)",
+        },
       ],
       note: "The services an import can resolve to, and the only names host.registerService may bind.",
     },
@@ -2783,7 +2794,7 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
           symbol: "getPluginManifestSchema superRefine (service_name_foreign)",
         },
         { file: SERVICE_BROKER, symbol: "PluginServiceBroker.resolve (provides.find by name)" },
-        { file: PLUGIN_HOST_FACTORY, symbol: "createHost registerService (provides.find)" },
+        { file: PLUGIN_HOST_CONTRIBUTIONS, symbol: "createHost registerService (provides.find)" },
       ],
       note: "Must sit under the provider's own id; matched against imports and registrations.",
     },
@@ -2799,7 +2810,7 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       mode: "verbatim",
       consumers: [
         { file: SERVICE_BROKER, symbol: "PluginServiceBroker.call (method allowlist)" },
-        { file: PLUGIN_HOST_FACTORY, symbol: "serviceMethodTable (exact method set)" },
+        { file: PLUGIN_HOST_CONTRIBUTIONS, symbol: "serviceMethodTable (exact method set)" },
       ],
       note: "The only methods a call may name, and exactly the functions registerService binds.",
     },

@@ -3920,7 +3920,7 @@ export class PluginService {
 
   /**
    * Live deps object for {@link createHost} and the host-mediated fs/git/
-   * process/clipboard API builders (`electron/services/plugin/PluginHostFactory.ts`).
+   * process/clipboard API builders (`electron/services/plugin/pluginHost*.ts`).
    * Every Map/Set/collaborator field below is the actual live reference this
    * instance holds — never a snapshot — so the post-await liveness checks
    * inside the extracted host closures (`plugins.get(id) === boundPlugin`,

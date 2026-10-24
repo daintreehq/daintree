@@ -14,7 +14,6 @@ import {
 
 import type { PluginClipboardApi } from "../../../shared/types/plugin.js";
 import { type PluginHostFactoryDeps } from "./pluginHostDeps.js";
-import { buildGitApi } from "./pluginHostGitApi.js";
 
 /**
  * Host-mediated OS clipboard surface backing the `clipboard:read` /
@@ -22,7 +21,7 @@ import { buildGitApi } from "./pluginHostGitApi.js";
  * (#11299); every method runs here in the main
  * process because Electron's `clipboard` module is undefined inside the
  * dev-worker utility process (a worker-side call would silently no-op). Like
- * {@link buildGitApi} the liveness check precedes the capability check so a
+ * `buildGitApi` the liveness check precedes the capability check so a
  * torn-down plugin reports `PLUGIN_UNLOADED`, not `PERMISSION_REQUIRED`
  * (declaredCapabilities() also returns [] post-unload). Clipboard ops are
  * stateless — no watchers or handles — so there is nothing to tear down on

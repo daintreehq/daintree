@@ -238,8 +238,8 @@ interface ManagedProcess {
 }
 
 /**
- * Host-side handle {@link PluginProcessManager.spawn} returns. `PluginHostFactory`
- * wraps it with the plugin-liveness gates and narrows it to the mode-appropriate
+ * Host-side handle {@link PluginProcessManager.spawn} returns. `buildProcessApi`
+ * (`pluginHostProcessApi.ts`) wraps it with the plugin-liveness gates and narrows it to the mode-appropriate
  * public shape — `write`/`resize` are inert on a pipe-mode process.
  */
 export interface ManagedProcessHandle {

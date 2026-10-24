@@ -1,3 +1,4 @@
+import { isAppError } from "../../utils/errorTypes.js";
 import { getPluginCapabilityConsentService } from "../plugin-capability/instances.js";
 import type { PluginArtifactService } from "./PluginArtifactService.js";
 import { type HostGitFactory } from "./pluginHostGit.js";
@@ -294,7 +295,7 @@ export function trackPluginDisposer(
  * this answers "has the user agreed to it doing X now".
  */
 export async function ensureCapabilityConsent(
-  deps: PluginHostFactoryDeps,
+  deps: Pick<PluginHostFactoryDeps, "plugins">,
   pluginId: string,
   capability: BuiltInPluginCapability
 ): Promise<void> {
@@ -320,4 +321,14 @@ export async function ensureCapabilityConsent(
     plugin.manifest.capabilities ?? [],
     scopeKey
   );
+}
+
+/**
+ * Is this the frozen `PROJECT_VIEW_UNAVAILABLE` rejection a bound renderer
+ * round-trip raises? The read-only catalog surface is documented as resolving
+ * empty rather than throwing when no renderer is available, so it swallows
+ * exactly this failure — and nothing else, which would mask real bugs.
+ */
+export function isProjectViewUnavailable(error: unknown): boolean {
+  return isAppError(error) && error.code === "PROJECT_VIEW_UNAVAILABLE";
 }
