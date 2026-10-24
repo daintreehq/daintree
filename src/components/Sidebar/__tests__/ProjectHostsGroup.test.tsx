@@ -473,7 +473,9 @@ describe("ProjectHostsGroup", () => {
 
   it("says a host is being checked only once its first answer is slow to come", async () => {
     listWorktrees.mockImplementation(({ hostId }) =>
-      hostId === "linux" ? new Promise<HostWorktreeEntry[]>(() => {}) : Promise.resolve(lists[hostId] ?? [])
+      hostId === "linux"
+        ? new Promise<HostWorktreeEntry[]>(() => {})
+        : Promise.resolve(lists[hostId] ?? [])
     );
     render(<ProjectHostsGroup projectId={PROJECT} />);
     await waitFor(() => expect(count(rowFor("local"), "running")).toBe("1"));
