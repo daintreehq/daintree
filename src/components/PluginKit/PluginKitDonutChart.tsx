@@ -22,7 +22,6 @@ import {
   readoutText,
   useCursor,
   Swatch,
-  Legend,
   ChartLoading,
   ChartEmpty,
 } from "./kitChartFrame";

@@ -38,6 +38,7 @@ import {
   limitNote,
   summarise,
   cellTexts,
+  columnsOf,
   readoutRows,
   AxisChartFrame,
   ValueGrid,
