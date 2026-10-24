@@ -181,7 +181,7 @@ export type FileEditorChoice = ReturnType<typeof useFileEditorChoice>;
 
 export interface FileEditorPickerModel {
   label: string;
-  choiceKey: string;
+  choiceKey: ReturnType<typeof fileEditorChoiceKey>;
   value: string;
   options: FileEditorPickerOption[];
 }

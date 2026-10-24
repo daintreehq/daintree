@@ -33,7 +33,7 @@ import { usePanelStore } from "@/store/panelStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import type { ProjectSurfaceChoice } from "@shared/types/plugin";
 import { FileEditorPicker } from "./FileEditorPicker";
-import type { FileEditorPickerModel } from "./useFileEditorChoice";
+import type { FileEditorChoice, FileEditorPickerModel } from "./useFileEditorChoice";
 import { externalTargetCopy, type FileExternalOpen } from "./useFileExternalOpen";
 
 type FileEditorSlot = ComponentProps<typeof FileEditorDefaultNotice>["slot"];
@@ -51,7 +51,7 @@ export interface FilePaneToolbarProps {
   onViewModeChange: (mode: FileViewMode) => void;
   editorPicker: FileEditorPickerModel | null;
   pinnedEditor: string | undefined;
-  setEditorChoice: (key: string, choice: string) => Promise<void>;
+  setEditorChoice: FileEditorChoice["setEditorChoice"];
   effectiveDiffWrapLines: boolean;
   refreshing: boolean;
   onRefresh: () => void;
