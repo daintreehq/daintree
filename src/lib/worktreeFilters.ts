@@ -202,7 +202,8 @@ export function matchesFilters(
   filters: FilterState,
   derived: DerivedWorktreeMeta,
   isActive: boolean,
-  sessionsByWorktreeId?: Record<string, DevPreviewSessionState>
+  sessionsByWorktreeId?: Record<string, DevPreviewSessionState>,
+  now: number = Date.now()
 ): boolean {
   if (!matchesWorktreeQuery(worktree, filters.query, filters.customTitles?.[worktree.id])) {
     return false;
@@ -257,7 +258,6 @@ export function matchesFilters(
 
   // Activity filters (OR within category)
   if (filters.activityFilters.size > 0) {
-    const now = Date.now();
     const lastActivity = worktree.lastActivityTimestamp;
     let hasMatch = false;
 

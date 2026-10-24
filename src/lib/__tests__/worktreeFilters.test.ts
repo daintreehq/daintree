@@ -672,6 +672,20 @@ describe("matchesFilters", () => {
       expect(matchesFilters(worktree, filters, meta, false)).toBe(false);
     });
 
+    it("measures the window against an explicit clock when one is passed", () => {
+      const lastActivityTimestamp = Date.now() - 14 * 60 * 1000;
+      const worktree = createMockWorktree({ lastActivityTimestamp });
+      const filters = createEmptyFilters();
+      filters.activityFilters.add("last15m");
+      const meta = createEmptyMeta();
+      const twoMinutesLater = Date.now() + 2 * 60 * 1000;
+
+      expect(matchesFilters(worktree, filters, meta, false, undefined)).toBe(true);
+      expect(matchesFilters(worktree, filters, meta, false, undefined, twoMinutesLater)).toBe(
+        false
+      );
+    });
+
     it("does not treat a future timestamp as recent activity", () => {
       const worktree = createMockWorktree({
         lastActivityTimestamp: Date.now() + 60 * 60 * 1000,
