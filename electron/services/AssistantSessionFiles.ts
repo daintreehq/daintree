@@ -429,8 +429,8 @@ export interface PrepareSessionDirectoryInput {
   settings: AssistantSessionSettings;
   runbooksHeaders: Record<string, string>;
   runCheckpointKey: string;
-  /** Whether this session's confirm-gated Daintree calls skip their dialog. */
-  confirmationsSkipped: boolean;
+  /** Whether this session's confirm-gated Daintree calls skip their dialog, asked when the note is written. */
+  confirmationsSkipped: () => boolean;
   projectFacts: HelpSessionProjectFacts;
   pluginKnowledge: readonly AssistantPluginKnowledge[];
   /** Asked under the directory lock, where sibling sidecar retirement is decided. */
@@ -664,7 +664,7 @@ export class AssistantSessionFiles {
         await this.writeRunbooksAddendum(sessionPath, runbooksEnabled(settings), {
           global: input.global === true,
         });
-        await this.writeConfirmationsAddendum(sessionPath, input.confirmationsSkipped);
+        await this.writeConfirmationsAddendum(sessionPath, input.confirmationsSkipped());
         await this.stripMessagingAddendum(sessionPath);
         // Same unconditional placement, for the same reason: the facts change
         // independently of the template, and every lane shares these files, so

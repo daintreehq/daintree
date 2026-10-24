@@ -70,6 +70,18 @@ describe("AssistantSessionFiles owners lookup", () => {
     expect(Object.keys(await readServers(sessionPath))).toContain("daintree");
   });
 
+  it("judges a literal bearer by its token's presence, not its revoked flag", async () => {
+    const files = new AssistantSessionFiles(ownersFrom(byToken, byId));
+    byToken.set("tok", { revoked: true, agentId: "claude", sessionPath });
+    await writeMcpJson(sessionPath, "Bearer tok");
+    await files.stripStaleDaintreeMcpEntry(sessionPath);
+    expect(Object.keys(await readServers(sessionPath))).toContain("daintree");
+
+    byToken.delete("tok");
+    await files.stripStaleDaintreeMcpEntry(sessionPath);
+    expect(Object.keys(await readServers(sessionPath))).toEqual(["daintree-docs"]);
+  });
+
   it("strips a bearer no session owns, or one owned by another directory", async () => {
     const files = new AssistantSessionFiles(ownersFrom(byToken, byId));
     await writeMcpJson(sessionPath, "Bearer gone");
@@ -91,6 +103,35 @@ describe("AssistantSessionFiles owners lookup", () => {
 
     byToken.get("cp")!.revoked = true;
     await files.stripStaleDaintreeMcpEntry(sessionPath);
+    expect(Object.keys(await readServers(sessionPath))).toEqual(["daintree-docs"]);
+  });
+
+  it.each([
+    {
+      name: "an unknown literal bearer beside a live Copilot owner",
+      auth: "Bearer unknown",
+      owner: { agentId: "copilot", own: true },
+    },
+    {
+      name: "the placeholder when only a live Claude owns the directory",
+      auth: "Bearer $DAINTREE_MCP_TOKEN",
+      owner: { agentId: "claude", own: true },
+    },
+    {
+      name: "the placeholder when the live Copilot owns another directory",
+      auth: "Bearer $DAINTREE_MCP_TOKEN",
+      owner: { agentId: "copilot", own: false },
+    },
+  ])("strips $name", async ({ auth, owner }) => {
+    byToken.set("live", {
+      revoked: false,
+      agentId: owner.agentId,
+      sessionPath: owner.own ? sessionPath : otherPath,
+    });
+    await writeMcpJson(sessionPath, auth);
+    await new AssistantSessionFiles(ownersFrom(byToken, byId)).stripStaleDaintreeMcpEntry(
+      sessionPath
+    );
     expect(Object.keys(await readServers(sessionPath))).toEqual(["daintree-docs"]);
   });
 

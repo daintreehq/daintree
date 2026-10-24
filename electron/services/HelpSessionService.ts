@@ -1193,7 +1193,7 @@ export class HelpSessionService {
       settings,
       runbooksHeaders,
       runCheckpointKey: runCheckpointKeyFor(input.projectId),
-      confirmationsSkipped:
+      confirmationsSkipped: () =>
         settings.daintreeControl &&
         assistantSkipsDaintreeConfirmations(
           settings.daintreeConfirmations,
