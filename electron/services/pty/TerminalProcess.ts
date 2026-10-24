@@ -136,6 +136,11 @@ const RATE_LIMIT_OBSERVATION_COOLDOWN_MS = 60_000;
  * before the pane counts as stopped at it and may fall over (#14370).
  */
 export const RATE_LIMIT_SETTLE_MS = 3_000;
+/**
+ * A banner that hasn't settled this long after it appeared is one the agent
+ * kept working past (a retry that went through), so it is never offered.
+ */
+export const RATE_LIMIT_SETTLE_DEADLINE_MS = 30_000;
 
 export interface TerminalProcessCallbacks {
   /**
@@ -283,8 +288,14 @@ export class TerminalProcess {
    */
   private rateLimitSettleFingerprint: string | null = null;
   private rateLimitSettleTimer: NodeJS.Timeout | null = null;
-  /** One fallback offer per banner appearance; reset when the banner goes. */
-  private rateLimitFallbackOffered = false;
+  /** When this banner appeared, and when it was last read off the screen. */
+  private rateLimitBannerSince: number | null = null;
+  private rateLimitLastSampleAt = 0;
+  /**
+   * The banner was offered, or outlived its deadline: one decision per
+   * appearance, reset when the banner goes.
+   */
+  private rateLimitFallbackDecided = false;
   /** True only while the exit path settles the mirror's last frame. */
   private samplingFinalFrame = false;
 
@@ -2303,10 +2314,16 @@ export class TerminalProcess {
     // The exit path's last frame belongs to the exit classifier, not to this.
     if (!visible || this.samplingFinalFrame || !t.launchAgentId || !t.agentPresetId) {
       this.cancelRateLimitSettle();
-      if (!visible) this.rateLimitFallbackOffered = false;
+      if (!visible) {
+        this.rateLimitFallbackDecided = false;
+        this.rateLimitBannerSince = null;
+      }
       return;
     }
-    if (this.rateLimitFallbackOffered) return;
+    const now = Date.now();
+    this.rateLimitBannerSince ??= now;
+    this.rateLimitLastSampleAt = now;
+    if (this.rateLimitFallbackDecided) return;
     const fingerprint = lines.join("\n");
     if (fingerprint === this.rateLimitSettleFingerprint && this.rateLimitSettleTimer) return;
     this.rateLimitSettleFingerprint = fingerprint;
@@ -2335,16 +2352,28 @@ export class TerminalProcess {
     if (!this.rateLimitBannerVisible || !this.isAgentLive || t.isExited) return;
     const agentId = t.launchAgentId;
     const presetId = t.agentPresetId;
-    if (!agentId || !presetId) return;
-    // Viewport samples trail the bytes; any byte since then means the agent is
-    // still drawing, so wait out the rest of the window from that byte instead.
+    // The preset belongs to the agent it launched; another CLI started in the
+    // shell afterwards is not that conversation.
+    if (!agentId || !presetId || getLiveAgentId(t) !== agentId) return;
     const now = Date.now();
+    if (now - (this.rateLimitBannerSince ?? now) >= RATE_LIMIT_SETTLE_DEADLINE_MS) {
+      this.rateLimitFallbackDecided = true;
+      this.rateLimitSettleFingerprint = null;
+      return;
+    }
+    // Still drawing: a byte inside the window, a byte the last viewport read
+    // hasn't caught up with, or a turn the agent is still working through.
+    // Wait the window out again rather than end a conversation that moved on.
     const quietFor = now - t.lastOutputTime;
     if (quietFor < RATE_LIMIT_SETTLE_MS) {
       this.armRateLimitSettle(RATE_LIMIT_SETTLE_MS - quietFor);
       return;
     }
-    this.rateLimitFallbackOffered = true;
+    if (t.lastOutputTime > this.rateLimitLastSampleAt || t.agentState === "working") {
+      this.armRateLimitSettle(RATE_LIMIT_SETTLE_MS);
+      return;
+    }
+    this.rateLimitFallbackDecided = true;
     this.rateLimitSettleFingerprint = null;
     events.emit("agent:fallback-triggered", {
       terminalId: this.id,

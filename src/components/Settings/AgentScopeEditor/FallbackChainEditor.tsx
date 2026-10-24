@@ -220,7 +220,7 @@ export function FallbackChainEditor({
       {chain.length > 0 && (
         <SettingsRow
           label="Fall back on usage limits"
-          description="When the agent stops at a plan or rate limit, its conversation ends and a new one starts on the next fallback preset."
+          description="When the agent stops at a plan or rate limit, its conversation ends and a new one starts on the next fallback preset"
           control={({ labelId, descriptionId, disabled }) => (
             <SettingsSwitch
               checked={selectedPreset.fallbackOnRateLimit === true}

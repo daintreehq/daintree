@@ -431,7 +431,9 @@ describe("TerminalProcess rate-limit fallback offer (#14370)", () => {
       timestamp: expect.any(Number),
     });
 
-    // Sitting there longer is the same banner, not a second offer.
+    // Sitting there longer, or redrawn, is the same banner, not a second offer.
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS * 4);
+    ptyOnDataCallback!("prompt\r\n");
     await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS * 4);
     expect(seen).toHaveLength(1);
 
@@ -449,6 +451,55 @@ describe("TerminalProcess rate-limit fallback offer (#14370)", () => {
     }
     expect(seen).toHaveLength(0);
 
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS + 500);
+    expect(seen).toHaveLength(1);
+
+    terminal.dispose();
+  });
+
+  it("waits while bytes keep arriving even when the screen doesn't change", async () => {
+    const seen = collect();
+    const terminal = createTerminal(preset);
+
+    ptyOnDataCallback!(banner);
+    for (let i = 0; i < 8; i++) {
+      await vi.advanceTimersByTimeAsync(1_000);
+      ptyOnDataCallback!("\x1b[?25h");
+    }
+    expect(seen).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS + 500);
+    expect(seen).toHaveLength(1);
+
+    terminal.dispose();
+  });
+
+  it("never offers a banner the agent kept working past", async () => {
+    const seen = collect();
+    const terminal = createTerminal(preset);
+
+    ptyOnDataCallback!(banner);
+    for (let i = 0; i < 40; i++) {
+      await vi.advanceTimersByTimeAsync(1_000);
+      ptyOnDataCallback!(`\rretrying ${i % 5}`);
+    }
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS * 4);
+    expect(seen).toHaveLength(0);
+
+    terminal.dispose();
+  });
+
+  it("waits while the agent is still working at the banner", async () => {
+    const seen = collect();
+    const terminal = createTerminal(preset);
+    const info = (terminal as unknown as { terminalInfo: { agentState?: string } }).terminalInfo;
+
+    info.agentState = "working";
+    ptyOnDataCallback!(banner);
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS * 3);
+    expect(seen).toHaveLength(0);
+
+    info.agentState = "waiting";
     await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS + 500);
     expect(seen).toHaveLength(1);
 

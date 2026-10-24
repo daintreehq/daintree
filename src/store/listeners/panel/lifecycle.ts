@@ -58,6 +58,8 @@ export async function handleFallbackTriggered(data: {
   if (!_panelRaw || !isPtyPanel(_panelRaw)) return;
   const panel = _panelRaw;
   if (panel.isRestarting) return;
+  // Held for recovery (#12434): nothing is running there to fall over from.
+  if (panel.restoreRecovery) return;
 
   // Drop stale duplicate events: if the panel has already advanced past the
   // preset this event refers to, the exit was from a now-replaced process
@@ -78,14 +80,21 @@ export async function handleFallbackTriggered(data: {
   const originalPreset = mergedPresets.find((p) => p.id === originalPresetId);
 
   const chain = originalPreset?.fallbacks ?? [];
-  // A rate limit is the user's to see unless the preset opted in (#14370), and
-  // one that didn't hears nothing from here: the rate-limit chip already shows it.
-  if (reason === "rate-limit" && (originalPreset?.fallbackOnRateLimit !== true || !chain.length)) {
-    fallbackInFlight.delete(terminalId);
-    return;
-  }
   const currentIndex = panel.fallbackChainIndex ?? 0;
   const nextPresetId = chain[currentIndex];
+  // A rate limit is the user's to see unless they opted in on their own preset
+  // (#14370): a hop ends a live conversation, which a team-shared project file
+  // can't agree to for them. Nothing is said otherwise, or once the chain runs
+  // out, because the pane's rate-limit chip already shows the limit.
+  if (reason === "rate-limit") {
+    const optedIn = (entry.customPresets ?? []).some(
+      (p) => p.id === originalPresetId && p.fallbackOnRateLimit === true
+    );
+    if (!optedIn || !nextPresetId) {
+      fallbackInFlight.delete(terminalId);
+      return;
+    }
+  }
 
   const fromPreset = mergedPresets.find((p) => p.id === fromPresetId);
   const fromName = fromPreset?.name ?? fromPresetId;
@@ -108,7 +117,9 @@ export async function handleFallbackTriggered(data: {
       title: isExhausted ? "Fallback chain exhausted" : `${fromName} unavailable`,
       message: isExhausted
         ? `All fallback presets were tried. Configure fallback presets or restart the terminal manually.`
-        : `${fromName} provider is unreachable. Configure fallbacks in Settings to auto-recover.`,
+        : reason === "auth"
+          ? `${fromName} couldn't sign in. Configure fallbacks in Settings to auto-recover.`
+          : `${fromName} provider is unreachable. Configure fallbacks in Settings to auto-recover.`,
       duration: 12000,
       supersedeKey: fallbackSupersedeKey,
       context: { ...fallbackAddress },

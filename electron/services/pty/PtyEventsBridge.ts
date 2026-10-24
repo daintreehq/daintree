@@ -10,7 +10,10 @@ import { events } from "../events.js";
 import { HANDBACK_CODE_PATTERN } from "../../../shared/types/handback.js";
 import type { PtyHostEvent, TerminalFlowStatus } from "../../../shared/types/pty-host.js";
 import type { AgentStateChangeTrigger } from "../../types/index.js";
-import type { AgentFallbackReason } from "../../../shared/types/ipc/agent.js";
+import type {
+  AgentFallbackReason,
+  AgentFallbackTriggeredPayload,
+} from "../../../shared/types/ipc/agent.js";
 
 const FALLBACK_REASONS: ReadonlySet<AgentFallbackReason> = new Set([
   "connection",
@@ -151,12 +154,17 @@ export function bridgePtyEvent(event: PtyHostEvent, config?: PtyEventsBridgeConf
 
     case "agent-fallback-triggered": {
       // Crossed a process boundary, and the renderer may end a live pane on it.
-      const p = event.payload;
+      const p = event.payload as Partial<AgentFallbackTriggeredPayload> | null;
       if (
+        !p ||
+        typeof p !== "object" ||
+        !p.reason ||
         !FALLBACK_REASONS.has(p.reason) ||
         typeof p.terminalId !== "string" ||
         typeof p.agentId !== "string" ||
-        typeof p.fromPresetId !== "string"
+        typeof p.fromPresetId !== "string" ||
+        typeof p.timestamp !== "number" ||
+        !Number.isFinite(p.timestamp)
       ) {
         return true;
       }
@@ -166,7 +174,7 @@ export function bridgePtyEvent(event: PtyHostEvent, config?: PtyEventsBridgeConf
         fromPresetId: p.fromPresetId,
         ...(typeof p.originalPresetId === "string" ? { originalPresetId: p.originalPresetId } : {}),
         reason: p.reason,
-        ...(typeof p.exitCode === "number" ? { exitCode: p.exitCode } : {}),
+        ...(Number.isInteger(p.exitCode) ? { exitCode: p.exitCode } : {}),
         timestamp: p.timestamp,
       });
       return true;

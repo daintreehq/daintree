@@ -73,6 +73,11 @@ describe("bridgePtyEvent", () => {
       type: "agent-fallback-triggered",
       payload: { ...base, reason: "user-error" as never, exitCode: 1 },
     });
+    bridgePtyEvent({
+      type: "agent-fallback-triggered",
+      payload: { ...base, reason: "auth", timestamp: Number.NaN },
+    });
+    bridgePtyEvent({ type: "agent-fallback-triggered", payload: null as never });
 
     expect(payloads).toEqual([
       { ...base, reason: "rate-limit" },
