@@ -148,7 +148,9 @@ export type HelpSessionTerminalResolver = (helpSessionId: string) => string | nu
  * lane is in, which is all a local assistant caller may reach.
  */
 export interface AssistantControlBinding {
-  control: NonNullable<import("./sessionServerDepsContract.js").SessionServerDeps["assistantControl"]>;
+  control: NonNullable<
+    import("./sessionServerDepsContract.js").SessionServerDeps["assistantControl"]
+  >;
   sessionProject(helpSessionId: string): string | null;
   /** The agent the help session runs, so confirmations can follow its skip setting (#14141). */
   sessionAgent?(helpSessionId: string): string | null;
