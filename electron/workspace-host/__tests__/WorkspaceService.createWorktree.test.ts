@@ -2400,6 +2400,7 @@ describe("WorkspaceService.createWorktree submodule init", () => {
       .spyOn(service["setupCoordinator"], "runLifecycleSetup")
       .mockImplementation(async () => {
         order.push("lifecycle-setup");
+        return { ok: true };
       });
 
     await service.createWorktree("req-order", "/test/root", {

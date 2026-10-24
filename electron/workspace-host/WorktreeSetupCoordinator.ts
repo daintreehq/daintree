@@ -581,7 +581,8 @@ export class WorktreeSetupCoordinator {
     if (!monitor) {
       throw new Error(`Worktree not found: ${worktreeId}`);
     }
-    if (!this.host.getProjectRootPath()) {
+    const projectRootPath = this.host.getProjectRootPath();
+    if (!projectRootPath) {
       throw new Error("Cannot retry setup before a project is loaded");
     }
     if (monitor.lifecycleStatus?.state === "running" || monitor.setupStatus?.state === "running") {
@@ -631,7 +632,7 @@ export class WorktreeSetupCoordinator {
         : await this.runLifecycleSetup(
             worktreeId,
             monitor.path,
-            this.host.getProjectRootPath(),
+            projectRootPath,
             intent?.provisionResource ?? false,
             intent?.environmentId
           );
