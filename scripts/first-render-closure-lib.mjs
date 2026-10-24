@@ -4,7 +4,7 @@
 //   • scripts/check-first-render-chunk-budget.mjs walks the Vite MANIFEST,
 //     where nodes are keyed by source path and `imports[]` / `dynamicImports[]`
 //     reference other source-path keys.
-//   • the firstRenderModulePreloadPlugin in vite.config.ts walks the Rolldown
+//   • the firstRenderModulePreloadPlugin in scripts/lib/vite-boot-preload.ts walks the Rolldown
 //     OutputBundle, where chunks are keyed by hashed file name and `imports[]`
 //     / `dynamicImports[]` reference other file names.
 //
@@ -59,7 +59,7 @@ export function collectClosure(
 
 // Computes the set of output file names to inject as `<link rel="modulepreload">`
 // for the first-render seed chunks, given a Rolldown OutputBundle's chunks. This
-// is the pure core of the firstRenderModulePreloadPlugin (vite.config.ts),
+// is the pure core of the firstRenderModulePreloadPlugin (scripts/lib/vite-boot-preload.ts),
 // factored out so the seed-matching, entry-subtraction, and eager-only traversal
 // are unit-testable without the Vite build machinery.
 //

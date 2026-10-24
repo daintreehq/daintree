@@ -77,7 +77,7 @@ const baseConfig: KnipConfig = {
     "electron/services/pty/__tests__/passiveCaptureRestoreHarness.ts",
     "scripts/perf/__tests__/scenarioSmokeDriver.ts",
 
-    // why: bench-only classic script inlined by vite.config.ts via readFileSync
+    // why: bench-only classic script inlined by scripts/lib/vite-index-html.ts via readFileSync
     // when DAINTREE_RENDER_PROBE=1 (`npm run build:e2e:bench`). Knip cannot
     // follow filesystem reads, but e2e/perf/store-fanout-perf.spec.ts
     // consumes the global it installs.

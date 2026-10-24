@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // Compares dist/renderer-bundle-size-report.json (emitted by the
-// rendererBundleSizePlugin in vite.config.ts) against the checked-in
+// rendererBundleSizePlugin in scripts/lib/vite-build-diagnostics.ts) against the checked-in
 // renderer-bundle-size-baseline.json. Fails if any gated metric (entry chunk
 // gzip, total JS gzip, total CSS gzip) exceeds the baseline by more than the
 // configured threshold (default 5%).

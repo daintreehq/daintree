@@ -80,7 +80,9 @@ describe("the contracts it reads from source", () => {
   });
 
   it("finds the kit's entry among the facade contracts", () => {
-    const names = facadeRequiredExports(readFileSync(path.join(ROOT, "vite.config.ts"), "utf-8"));
+    const names = facadeRequiredExports(
+      readFileSync(path.join(ROOT, "scripts/lib/host-facade-exports.ts"), "utf-8")
+    );
     expect(names).toEqual(expect.arrayContaining(["PLUGIN_UI_VERSION", "whenPluginUiReady"]));
     expect(names).not.toContain("useState");
   });

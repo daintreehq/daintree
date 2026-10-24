@@ -1,5 +1,5 @@
 // React render-fanout probe, inlined into index.html as a classic <head>
-// script by renderFanoutProbePlugin (vite.config.ts) — ONLY when the build
+// script by renderFanoutProbePlugin (scripts/lib/vite-index-html.ts) — ONLY when the build
 // runs with DAINTREE_RENDER_PROBE=1 (`npm run build:e2e:bench`). Classic
 // inline scripts execute during HTML parse, before any deferred module
 // script, so the DevTools hook below is guaranteed to exist before react-dom
