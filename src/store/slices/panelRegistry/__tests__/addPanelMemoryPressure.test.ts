@@ -391,12 +391,24 @@ describe("agent launches at critical memory pressure (#13530)", () => {
     try {
       await launchAgent("elsewhere", { worktreeId: "wt-b" });
       await launchAgent("here", { worktreeId: "wt-a" });
+      // A worktree-less dock panel shows in every worktree's dock.
+      await launchAgent("global-dock", { location: "dock" });
       await drainMicrotasks();
     } finally {
       selection.activeWorktreeId = null;
     }
 
-    expect(noteVisibleAgentLaunchMock).toHaveBeenCalledTimes(1);
-    expect(spawnedIds()).toEqual(expect.arrayContaining(["elsewhere", "here"]));
+    expect(noteVisibleAgentLaunchMock).toHaveBeenCalledTimes(2);
+    expect(spawnedIds()).toEqual(expect.arrayContaining(["elsewhere", "here", "global-dock"]));
+  });
+
+  it("doesn't note a worktree's launch while the selection hasn't hydrated", async () => {
+    isMemoryPressureCriticalMock.mockResolvedValue(false);
+    noteVisibleAgentLaunchMock.mockClear();
+    await launchAgent("scoped-early", { worktreeId: "wt-a" });
+    await drainMicrotasks();
+
+    expect(noteVisibleAgentLaunchMock).not.toHaveBeenCalled();
+    expect(spawnedIds()).toEqual(["scoped-early"]);
   });
 });

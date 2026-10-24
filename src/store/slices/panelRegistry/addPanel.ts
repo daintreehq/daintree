@@ -1433,15 +1433,21 @@ export const createAddPanelActions = (
 
     // A fresh agent the user will see, during an open memory episode, raises the
     // episode's figures above the grid once (#14309). Never waited on: it is a
-    // reading beside the launch, not a gate in front of it.
-    if (
-      launchAgentId &&
-      options.restore !== true &&
-      !isRecoveryHold &&
-      isInActiveWorktree &&
-      (location === "grid" || location === "dock")
-    ) {
-      noteVisibleAgentLaunch();
+    // reading beside the launch, not a gate in front of it. Visibility is read
+    // now, not from the selection captured before the awaits above.
+    if (launchAgentId && options.restore !== true && !isRecoveryHold) {
+      const launched = get().panelsById[id];
+      if (
+        launched &&
+        (launched.location === "grid" || launched.location === "dock") &&
+        panelMatchesWorktreeScope(
+          launched.worktreeId,
+          getWorktreeSelectionSnapshot()?.activeWorktreeId ?? null,
+          launched.location
+        )
+      ) {
+        noteVisibleAgentLaunch();
+      }
     }
 
     const shouldWaitForVisibleAttach = location === "grid" && isInActiveWorktree;
