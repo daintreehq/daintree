@@ -46,7 +46,9 @@ describe("readHostPreviousEnd", () => {
 
   it("reports an end the hold policy doesn't hold for, so a crash never reads as a planned restart", () => {
     expect(
-      readHostPreviousEnd(pending({ crashCause: "native-crash", watchdogKillReason: "unresponsive" }))
+      readHostPreviousEnd(
+        pending({ crashCause: "native-crash", watchdogKillReason: "unresponsive" })
+      )
     ).toEqual({ crashCause: "native-crash", at: 5_000 });
     expect(readHostPreviousEnd(pending({}))).toEqual({ crashCause: "unknown", at: 5_000 });
   });
