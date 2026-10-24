@@ -81,12 +81,11 @@ import {
 import { useFleetRunMenuState } from "./contextMenu/useFleetRunMenuState";
 import { LayoutMenuItems, MoveToWorktreeSubmenu } from "./contextMenu/LayoutMenuItems";
 import {
-  BrowserMenuItems,
-  DevPreviewMenuItems,
   GenericPanelMenuItems,
   PluginOwnedMenuItems,
   ReviewMenuItems,
   TourMenuItem,
+  UrlPanelMenuItems,
 } from "./contextMenu/PanelKindMenuItems";
 import {
   TerminalFleetMenuItems,
@@ -743,29 +742,38 @@ function TerminalContextMenuBody({
     </ContextMenu>
   );
 
+  // The layout rows lead every built-in kind's own section from the same
+  // position, so a dock group switching its active tab between kinds keeps an
+  // open "Move to worktree" submenu open.
   if (isBrowser || isDevPreview) {
     const hasUrl = Boolean(terminal.browserUrl && isValidBrowserUrl(terminal.browserUrl));
-    const KindItems = isBrowser ? BrowserMenuItems : DevPreviewMenuItems;
     return renderMenu(
-      <KindItems
-        layoutItems={layoutItems}
-        kindOwnedItems={kindOwnedItems}
-        isBackgrounded={isBackgrounded}
-        hasUrl={hasUrl}
-        onAction={handleAction}
-      />,
+      <>
+        {layoutItems}
+        <ContextMenuSeparator />
+        <UrlPanelMenuItems
+          variant={isBrowser ? "browser" : "dev-preview"}
+          kindOwnedItems={kindOwnedItems}
+          isBackgrounded={isBackgrounded}
+          hasUrl={hasUrl}
+          onAction={handleAction}
+        />
+      </>,
       handleTriggerContextMenu
     );
   }
 
   if (isReview) {
     return renderMenu(
-      <ReviewMenuItems
-        layoutItems={layoutItems}
-        kindOwnedItems={kindOwnedItems}
-        isBackgrounded={isBackgrounded}
-        onAction={handleAction}
-      />,
+      <>
+        {layoutItems}
+        <ContextMenuSeparator />
+        <ReviewMenuItems
+          kindOwnedItems={kindOwnedItems}
+          isBackgrounded={isBackgrounded}
+          onAction={handleAction}
+        />
+      </>,
       handleTriggerContextMenu
     );
   }

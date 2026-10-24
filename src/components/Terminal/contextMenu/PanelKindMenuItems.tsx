@@ -76,27 +76,48 @@ export function PluginOwnedMenuItems({
 }
 
 interface KindMenuItemsProps {
-  layoutItems: React.ReactNode;
   /** The kind's tour and its plugin's own entries, drawn after Rename. */
   kindOwnedItems: React.ReactNode;
   isBackgrounded: boolean;
   onAction: MenuActionHandler;
 }
 
-export function BrowserMenuItems({
-  layoutItems,
+const URL_PANEL_COPY = {
+  browser: {
+    reload: "Reload page",
+    duplicate: "Duplicate browser",
+    rename: "Rename browser",
+    trash: "Trash browser",
+    kill: "Remove browser",
+    KillIcon: OctagonX,
+  },
+  "dev-preview": {
+    reload: "Reload preview",
+    duplicate: "Duplicate dev preview",
+    rename: "Rename dev preview",
+    trash: "Trash dev preview",
+    kill: "Stop dev server",
+    KillIcon: CircleStop,
+  },
+} as const;
+
+/**
+ * Browser and dev preview, one component for both so a dock group mixing the
+ * two keeps the menu's rows mounted when its active tab switches kind.
+ */
+export function UrlPanelMenuItems({
+  variant,
   kindOwnedItems,
   isBackgrounded,
   hasUrl,
   onAction,
-}: KindMenuItemsProps & { hasUrl: boolean }) {
+}: KindMenuItemsProps & { variant: keyof typeof URL_PANEL_COPY; hasUrl: boolean }) {
+  const copy = URL_PANEL_COPY[variant];
   return (
     <>
-      {layoutItems}
-      <ContextMenuSeparator />
       <ContextMenuItem onSelect={() => onAction("reload-browser")}>
         <RotateCw className={ICON_CLASS} aria-hidden="true" />
-        Reload page
+        {copy.reload}
       </ContextMenuItem>
       <ContextMenuItem disabled={!hasUrl} onSelect={() => onAction("open-external")}>
         <Globe className={ICON_CLASS} aria-hidden="true" />
@@ -109,11 +130,11 @@ export function BrowserMenuItems({
       <ContextMenuSeparator />
       <ContextMenuItem onSelect={() => onAction("duplicate")}>
         <CopyPlus className={ICON_CLASS} aria-hidden="true" />
-        Duplicate browser
+        {copy.duplicate}
       </ContextMenuItem>
       <ContextMenuItem onSelect={() => onAction("rename")}>
         <Pencil className={ICON_CLASS} aria-hidden="true" />
-        Rename browser
+        {copy.rename}
       </ContextMenuItem>
       {kindOwnedItems}
       <ContextMenuSeparator />
@@ -125,78 +146,19 @@ export function BrowserMenuItems({
       )}
       <ContextMenuItem onSelect={() => onAction("trash")}>
         <Trash2 className={ICON_CLASS} aria-hidden="true" />
-        Trash browser
+        {copy.trash}
       </ContextMenuItem>
       <ContextMenuItem destructive onSelect={() => onAction("kill")}>
-        <OctagonX className={ICON_CLASS} aria-hidden="true" />
-        Remove browser
+        <copy.KillIcon className={ICON_CLASS} aria-hidden="true" />
+        {copy.kill}
       </ContextMenuItem>
     </>
   );
 }
 
-export function DevPreviewMenuItems({
-  layoutItems,
-  kindOwnedItems,
-  isBackgrounded,
-  hasUrl,
-  onAction,
-}: KindMenuItemsProps & { hasUrl: boolean }) {
+export function ReviewMenuItems({ kindOwnedItems, isBackgrounded, onAction }: KindMenuItemsProps) {
   return (
     <>
-      {layoutItems}
-      <ContextMenuSeparator />
-      <ContextMenuItem onSelect={() => onAction("reload-browser")}>
-        <RotateCw className={ICON_CLASS} aria-hidden="true" />
-        Reload preview
-      </ContextMenuItem>
-      <ContextMenuItem disabled={!hasUrl} onSelect={() => onAction("open-external")}>
-        <Globe className={ICON_CLASS} aria-hidden="true" />
-        Open in external browser
-      </ContextMenuItem>
-      <ContextMenuItem disabled={!hasUrl} onSelect={() => onAction("copy-url")}>
-        <Copy className={ICON_CLASS} aria-hidden="true" />
-        Copy URL
-      </ContextMenuItem>
-      <ContextMenuSeparator />
-      <ContextMenuItem onSelect={() => onAction("duplicate")}>
-        <CopyPlus className={ICON_CLASS} aria-hidden="true" />
-        Duplicate dev preview
-      </ContextMenuItem>
-      <ContextMenuItem onSelect={() => onAction("rename")}>
-        <Pencil className={ICON_CLASS} aria-hidden="true" />
-        Rename dev preview
-      </ContextMenuItem>
-      {kindOwnedItems}
-      <ContextMenuSeparator />
-      {!isBackgrounded && (
-        <ContextMenuItem onSelect={() => onAction("background")}>
-          <ArrowDownFromLine className={ICON_CLASS} aria-hidden="true" />
-          Send to background
-        </ContextMenuItem>
-      )}
-      <ContextMenuItem onSelect={() => onAction("trash")}>
-        <Trash2 className={ICON_CLASS} aria-hidden="true" />
-        Trash dev preview
-      </ContextMenuItem>
-      <ContextMenuItem destructive onSelect={() => onAction("kill")}>
-        <CircleStop className={ICON_CLASS} aria-hidden="true" />
-        Stop dev server
-      </ContextMenuItem>
-    </>
-  );
-}
-
-export function ReviewMenuItems({
-  layoutItems,
-  kindOwnedItems,
-  isBackgrounded,
-  onAction,
-}: KindMenuItemsProps) {
-  return (
-    <>
-      {layoutItems}
-      <ContextMenuSeparator />
       <ContextMenuItem onSelect={() => onAction("duplicate")}>
         <CopyPlus className={ICON_CLASS} aria-hidden="true" />
         Duplicate review

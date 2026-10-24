@@ -690,6 +690,29 @@ describe("TerminalContextMenu — Move to worktree cap and picker handoff (#1244
     expect(dispatch).not.toHaveBeenCalled();
   });
 
+  // A dock tab group can mix these kinds, and its active tab can switch while
+  // the menu is open. The submenu staying mounted is what keeps it open.
+  it.each([
+    ["browser", "dev-preview"],
+    ["dev-preview", "browser"],
+    ["browser", "review"],
+    ["review", "dev-preview"],
+  ])("keeps the submenu mounted when a %s menu starts speaking for a %s", (from, to) => {
+    const fieldsFor = (kind: string) => MENU_BRANCHES.find(([label]) => label === kind)![1];
+    worktreesRef.current = manyWorktrees(3);
+    panelsById.current = {
+      "panel-1": { id: "panel-1", title: "One", worktreeId: "wt-main", ...fieldsFor(from) },
+      "panel-2": { id: "panel-2", title: "Two", worktreeId: "wt-main", ...fieldsFor(to) },
+    };
+    const { rerender } = render(renderPanel("panel-1"));
+    rightClickPane();
+    const submenu = subContent();
+
+    rerender(renderPanel("panel-2"));
+
+    expect(subContent()).toBe(submenu);
+  });
+
   it.each(MENU_BRANCHES)("hands off to the picker from the %s menu", (_label, fields) => {
     worktreesRef.current = manyWorktrees(12);
     panelsById.current = {
