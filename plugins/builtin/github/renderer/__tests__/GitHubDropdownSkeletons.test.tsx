@@ -107,59 +107,69 @@ describe("GitHubResourceListSkeleton header state", () => {
     resetGitHubFilterStore();
   });
 
-  const checkedSegments = (container: Element) =>
-    Array.from(container.querySelectorAll("[data-segment][data-checked]")).map((el) =>
-      el.getAttribute("data-segment")
+  // Where the thumb actually sits, not just which segment is marked.
+  const thumbs = (type: "issue" | "pr") => {
+    const { container, unmount } = render(<GitHubResourceListSkeleton type={type} />);
+    const owners = Array.from(container.querySelectorAll('[data-slot="segmented-thumb"]')).map(
+      (thumb) => thumb.closest("[data-segment]")?.getAttribute("data-segment")
     );
+    unmount();
+    return owners;
+  };
 
-  it("puts the filter thumb on the state the panel was left on, per type", () => {
+  const sortLifted = (type: "issue" | "pr") => {
+    const { container, unmount } = render(<GitHubResourceListSkeleton type={type} />);
+    const lifted = container
+      .querySelector('[data-header-slot="sort"]')!
+      .classList.contains("bg-overlay-soft");
+    unmount();
+    return lifted;
+  };
+
+  const field = (type: "issue" | "pr") => {
+    const { container, unmount } = render(<GitHubResourceListSkeleton type={type} />);
+    const el = container.querySelector("[data-search-field]")!;
+    const result = {
+      text: el.textContent,
+      clear: el.querySelector(".search-field-clear") !== null,
+    };
+    unmount();
+    return result;
+  };
+
+  it("puts one thumb on Open for both types by default", () => {
+    expect(thumbs("issue")).toEqual(["open"]);
+    expect(thumbs("pr")).toEqual(["open"]);
+  });
+
+  it("puts the thumb on the state each type's panel was left on", () => {
     // The loaded control reads the persisted filter, so a panel reopened on
     // Closed would otherwise slide its thumb the moment the list landed.
-    useGitHubFilterStore.setState({ issueFilter: "closed", prFilter: "merged" });
-    const issue = render(<GitHubResourceListSkeleton type="issue" />);
-    expect(checkedSegments(issue.container)).toEqual(["closed"]);
-    issue.unmount();
-    const pr = render(<GitHubResourceListSkeleton type="pr" />);
-    expect(checkedSegments(pr.container)).toEqual(["merged"]);
-    pr.unmount();
+    useGitHubFilterStore.setState({ issueFilter: "closed" });
+    expect(thumbs("issue")).toEqual(["closed"]);
+    expect(thumbs("pr")).toEqual(["open"]);
+    useGitHubFilterStore.setState({ issueFilter: "open", prFilter: "merged" });
+    expect(thumbs("issue")).toEqual(["open"]);
+    expect(thumbs("pr")).toEqual(["merged"]);
   });
 
-  it("draws one thumb, on Open, by default", () => {
-    const { container } = render(<GitHubResourceListSkeleton type="pr" />);
-    expect(checkedSegments(container)).toEqual(["open"]);
-    expect(container.querySelectorAll('[data-slot="segmented-thumb"]')).toHaveLength(1);
-  });
-
-  it("lifts the sort slot only under a non-default sort, for its own type", () => {
-    const sortLifted = (type: "issue" | "pr") => {
-      const { container, unmount } = render(<GitHubResourceListSkeleton type={type} />);
-      const lifted = container
-        .querySelector('[data-header-slot="sort"]')!
-        .classList.contains("bg-overlay-soft");
-      unmount();
-      return lifted;
-    };
-    expect(sortLifted("issue")).toBe(false);
+  it("lifts the sort slot only under its own type's non-default sort", () => {
+    expect([sortLifted("issue"), sortLifted("pr")]).toEqual([false, false]);
     useGitHubFilterStore.setState({ issueSortOrder: "updated" });
-    expect(sortLifted("issue")).toBe(true);
-    expect(sortLifted("pr")).toBe(false);
+    expect([sortLifted("issue"), sortLifted("pr")]).toEqual([true, false]);
+    useGitHubFilterStore.setState({ issueSortOrder: "created", prSortOrder: "updated" });
+    expect([sortLifted("issue"), sortLifted("pr")]).toEqual([false, true]);
   });
 
-  it("shows a persisted query and its clear button in place of the placeholder", () => {
-    const field = (type: "issue" | "pr") => {
-      const { container, unmount } = render(<GitHubResourceListSkeleton type={type} />);
-      const el = container.querySelector("[data-search-field]")!;
-      const result = {
-        text: el.textContent,
-        clear: el.querySelector(".search-field-clear") !== null,
-      };
-      unmount();
-      return result;
-    };
+  it("shows its own type's persisted query and clear button in place of the placeholder", () => {
     expect(field("issue")).toEqual({ text: "Search issues…", clear: false });
+    expect(field("pr")).toEqual({ text: "Search pull requests…", clear: false });
     useGitHubFilterStore.setState({ issueSearchQuery: "skeleton drift" });
     expect(field("issue")).toEqual({ text: "skeleton drift", clear: true });
     expect(field("pr")).toEqual({ text: "Search pull requests…", clear: false });
+    useGitHubFilterStore.setState({ issueSearchQuery: "", prSearchQuery: "head ref" });
+    expect(field("issue")).toEqual({ text: "Search issues…", clear: false });
+    expect(field("pr")).toEqual({ text: "head ref", clear: true });
   });
 });
 

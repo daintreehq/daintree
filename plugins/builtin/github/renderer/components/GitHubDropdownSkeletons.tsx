@@ -101,17 +101,37 @@ export const RESOURCE_SEARCH_FIELD = "h-8 text-sm flex-1";
 export const RESOURCE_PANEL_FOOTER =
   "px-2 h-10 border-t border-[var(--border-divider)] grid grid-cols-[1fr_auto_1fr] items-center shrink-0";
 
+/**
+ * The list body's scrollbar gutter, held open whether or not the rows overflow.
+ * The app draws classic scrollbars wherever the platform does, and a body that
+ * gained one only once the rows arrived moved the whole rail left by its width.
+ */
+export const RESOURCE_LIST_GUTTER = "[scrollbar-gutter:stable]";
+
+/**
+ * Every stand-in for a control that is a `button` in the loaded panel. Both
+ * contrast modes put a border on native buttons (`prefers-contrast.css`,
+ * `forced-colors.css`), so a plain box here came up 2-4px short of the segment
+ * or action that replaced it, and the rows below moved by the difference.
+ */
+const CONTROL_STAND_IN =
+  "contrast-more:border-2 forced-colors:border forced-colors:border-[ButtonText]";
+
 /** A header icon slot: the `IconButton` at its default 32px size. */
-const HEADER_ICON_SLOT =
-  "flex items-center justify-center w-8 h-8 rounded-[var(--radius-md)] shrink-0 text-text-secondary";
+const HEADER_ICON_SLOT = cn(
+  "flex items-center justify-center w-8 h-8 rounded-[var(--radius-md)] shrink-0 text-text-secondary",
+  CONTROL_STAND_IN
+);
 
 /**
  * A footer action at rest: the ghost `sm` `Button` the loaded footer draws,
  * weight included. The labels were regular weight here, so they thickened and
  * widened the moment the list landed.
  */
-const FOOTER_ACTION =
-  "inline-flex items-center justify-center whitespace-nowrap h-7 px-3 gap-1.5 text-xs font-medium rounded-[var(--radius-md)] text-text-secondary [&_svg]:size-3.5 [&_svg]:shrink-0";
+const FOOTER_ACTION = cn(
+  "inline-flex items-center justify-center whitespace-nowrap h-7 px-3 gap-1.5 text-xs font-medium rounded-[var(--radius-md)] text-text-secondary [&_svg]:size-3.5 [&_svg]:shrink-0",
+  CONTROL_STAND_IN
+);
 
 /**
  * The geometry of `IssueSelector`'s option row, shared with its skeleton. The
@@ -200,11 +220,12 @@ export function GitHubResourceListSkeleton({
             <Search className="search-field-icon" aria-hidden="true" />
             {searchQuery ? (
               <>
-                <span className="flex-1 min-w-0 truncate whitespace-pre select-none">
+                {/* Clipped, not ellipsized: the loaded input clips a long query. */}
+                <span className="flex-1 min-w-0 overflow-hidden whitespace-pre select-none">
                   {searchQuery}
                 </span>
                 {/* The clear button the loaded field shows whenever it holds text. */}
-                <span className="search-field-clear">
+                <span className={cn("search-field-clear", CONTROL_STAND_IN)}>
                   <X className="h-3 w-3" aria-hidden="true" />
                 </span>
               </>
@@ -249,6 +270,7 @@ export function GitHubResourceListSkeleton({
               data-checked={tab.id === filterState ? "" : undefined}
               className={cn(
                 "relative flex-1 min-w-0 px-2.5 py-1 text-xs font-medium rounded-[var(--radius-sm)] text-center",
+                CONTROL_STAND_IN,
                 tab.id === filterState ? "text-text-primary" : "text-text-secondary"
               )}
             >
@@ -267,7 +289,7 @@ export function GitHubResourceListSkeleton({
       </div>
 
       {/* List skeleton rows */}
-      <div className="relative overflow-hidden flex-1 min-h-0">
+      <div className={cn("relative overflow-hidden flex-1 min-h-0", RESOURCE_LIST_GUTTER)}>
         <GitHubResourceRowsSkeleton count={renderCount} immediate={showImmediate} type={type} />
         {/* Same fade the loaded list uses, so a skeleton row cut by the panel
             edge dissolves instead of being guillotined. */}

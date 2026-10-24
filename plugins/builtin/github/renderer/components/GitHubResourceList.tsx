@@ -49,6 +49,7 @@ import {
   GitHubResourceRowsSkeleton,
   MAX_SKELETON_ITEMS,
   RESOURCE_ITEM_HEIGHT_PX,
+  RESOURCE_LIST_GUTTER,
   RESOURCE_PANEL_FOOTER,
   RESOURCE_PANEL_HEADER,
   RESOURCE_SEARCH_FIELD,
@@ -1457,7 +1458,7 @@ export function GitHubResourceList({
             leaving stale DOM trees with stale closures. See BulkActionBar. */}
         {loading && !data.length ? (
           <div key="github-skeleton" className="flex-1 min-h-0 flex flex-col">
-            <div className="flex-1 min-h-0 overflow-hidden">
+            <div className={cn("flex-1 min-h-0 overflow-hidden", RESOURCE_LIST_GUTTER)}>
               <GitHubResourceRowsSkeleton
                 count={initialCount && initialCount > 0 ? initialCount : MAX_SKELETON_ITEMS}
                 type={type}
@@ -1543,6 +1544,7 @@ export function GitHubResourceList({
                 data={data}
                 context={footerContext}
                 style={{ height: "100%" }}
+                className={RESOURCE_LIST_GUTTER}
                 fixedItemHeight={RESOURCE_ITEM_HEIGHT_PX}
                 computeItemKey={(_, item) => item.number}
                 increaseViewportBy={{ top: 0, bottom: 200 }}
