@@ -2,7 +2,12 @@ import { GLOBAL_ASSISTANT_TOOL_IDS } from "../../../shared/config/globalAssistan
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { ListToolsRequestSchema, McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { MCP_EXTERNAL_OMITTED_ARGS } from "../../../shared/config/mcpExternalTierAllowlist.js";
-import { RemoteHostWindowOnlyError, WorkspaceBindingError } from "./rendererBridge.js";
+import {
+  RemoteHostWindowOnlyError,
+  WorkspaceBindingError,
+  McpRouteBindingError,
+  NoFrontendAttachedError,
+} from "./rendererBridge.js";
 import { getExternalBaseManifest } from "./baseManifest.js";
 import {
   shouldExposeTool,
@@ -12,7 +17,7 @@ import {
   buildToolOutputSchema,
 } from "./tierAuth.js";
 import type { SessionContext } from "./sessionContext.js";
-import type { SessionServerDeps } from "./sessionServerDeps.js";
+import type { SessionServerDeps } from "./sessionServerDepsContract.js";
 import { routeBindingMcpError, sessionGoneError } from "./sessionRouteErrors.js";
 
 export type ResolveManifest = (
@@ -171,4 +176,35 @@ export function registerListToolsHandler(
 
     return { tools };
   });
+}
+
+export async function lookupManifestEntry(
+  actionId: string,
+  getCachedManifest: () => import("../../../shared/types/actions.js").ActionManifestEntry[] | null,
+  requestManifest: () => Promise<import("../../../shared/types/actions.js").ActionManifestEntry[]>
+): Promise<import("../../../shared/types/actions.js").ActionManifestEntry | undefined> {
+  let manifest = getCachedManifest();
+  if (!manifest) {
+    try {
+      // Use the value returned directly — pinned sessions (#7002) deliberately
+      // skip the shared `cachedManifest` so a re-read here would always return
+      // null and silently drop host confirmation + structuredContent.
+      manifest = await requestManifest();
+    } catch (err) {
+      // No frontend is attached, which is not a route that went away: the
+      // dispatch can still run in main, or say it needs a frontend. The host's
+      // base surface describes the built-in actions it covers, so their danger
+      // and output schema stay known.
+      if (err instanceof NoFrontendAttachedError) {
+        return getExternalBaseManifest().find((e) => e.id === actionId);
+      }
+      // A route that is gone is not a manifest that is merely unavailable
+      // (#12082). Collapsing it to `undefined` here makes the bound-session
+      // guard below report a non-retriable `NOT_FOUND` — "no such action" — for
+      // a workspace the user is about to reopen.
+      if (err instanceof McpRouteBindingError) throw err;
+      return undefined;
+    }
+  }
+  return manifest.find((e) => e.id === actionId);
 }
