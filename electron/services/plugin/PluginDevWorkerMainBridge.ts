@@ -58,33 +58,28 @@ const logger = createLogger("main:PluginDevWorkerBridge");
 
 // Every method and kind the protocol allows has a route: one added to the
 // shared vocabulary without a handler fails typecheck here.
-type _HostCallsRouted = Expect<
+void ([true, true, true] satisfies [
   RoutesCover<
     PluginHostCallMethod,
     | keyof WorkspaceDomain["hostCalls"]
     | keyof DataDomain["hostCalls"]
     | keyof ResourcesDomain["hostCalls"]
-  >
->;
-type _HostNotifiesRouted = Expect<
+  >,
   RoutesCover<
     PluginHostNotifyMethod,
     | keyof WorkspaceDomain["notifications"]
     | keyof ContributionsDomain["notifications"]
     | keyof ResourcesDomain["notifications"]
     | "pushRejected"
-  >
->;
-type _SubscriptionsRouted = Expect<
+  >,
   RoutesCover<
     PluginWorkerSubscriptionKind,
     | keyof WorkspaceDomain["subscriptions"]
     | keyof DataDomain["subscriptions"]
     | keyof ContributionsDomain["subscriptions"]
     | keyof ResourcesDomain["subscriptions"]
-  >
->;
-type Expect<T extends true> = T;
+  >,
+]);
 
 /**
  * The provenance an `mcp-tool` invoke carries into the worker, copied field by
