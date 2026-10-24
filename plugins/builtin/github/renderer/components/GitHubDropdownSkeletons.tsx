@@ -275,11 +275,13 @@ export function GitHubResourceListSkeleton({
               )}
             >
               {/* The thumb as the live control draws it: its own layer under the
-                  label, so its border adds nothing to the segment's height. */}
+                  label, so its border adds nothing to the segment's height. The
+                  live thumb spans the segment's whole border box, so it reaches
+                  out over the border the contrast modes add. */}
               {tab.id === filterState && (
                 <span
                   data-slot="segmented-thumb"
-                  className="absolute inset-0 rounded-[var(--radius-sm)] bg-overlay-medium border border-text-secondary shadow-[var(--theme-shadow-ambient)]"
+                  className="absolute inset-0 contrast-more:-inset-0.5 forced-colors:-inset-px rounded-[var(--radius-sm)] bg-overlay-medium border border-text-secondary shadow-[var(--theme-shadow-ambient)]"
                 />
               )}
               <span className="relative block truncate">{tab.label}</span>
