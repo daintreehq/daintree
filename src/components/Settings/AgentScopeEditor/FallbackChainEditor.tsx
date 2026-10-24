@@ -14,6 +14,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { SETTINGS_CONTROL_WIDTH, SettingsDependents, SettingsRow } from "../SettingsGroup";
+import { SettingsSwitch } from "../SettingsSwitch";
 
 interface FallbackChainEditorProps {
   selectedPreset: AgentPreset;
@@ -104,7 +105,7 @@ export function FallbackChainEditor({
     <>
       <SettingsRow
         label="Fallback presets"
-        description="Tried in order if this preset's provider is unreachable. No retry for rate limits or prompt errors."
+        description="Tried in order if this preset's provider is unreachable. Never for prompt errors, and for usage limits only when turned on below."
         control={({ labelId, descriptionId, disabled }) =>
           canAdd ? (
             // Controlled at "" so the trigger shows its placeholder again after each
@@ -215,6 +216,25 @@ export function FallbackChainEditor({
             );
           })}
         </SettingsDependents>
+      )}
+      {chain.length > 0 && (
+        <SettingsRow
+          label="Fall back on usage limits"
+          description="When the agent stops at a plan or rate limit, its conversation ends and a new one starts on the next fallback preset."
+          control={({ labelId, descriptionId, disabled }) => (
+            <SettingsSwitch
+              checked={selectedPreset.fallbackOnRateLimit === true}
+              onCheckedChange={(checked) =>
+                onUpdatePreset(selectedPreset.id, {
+                  fallbackOnRateLimit: checked ? true : undefined,
+                })
+              }
+              disabled={disabled}
+              aria-labelledby={labelId}
+              aria-describedby={descriptionId}
+            />
+          )}
+        />
       )}
     </>
   );

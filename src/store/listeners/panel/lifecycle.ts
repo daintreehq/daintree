@@ -34,6 +34,7 @@ import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { notify } from "@/lib/notify";
 import { actionService } from "@/services/ActionService";
+import type { AgentFallbackReason } from "@shared/types/ipc/agent";
 
 /**
  * Per-terminal reentrancy guard for fallback activations. A single slow exit
@@ -48,7 +49,7 @@ export async function handleFallbackTriggered(data: {
   agentId: string;
   fromPresetId: string;
   originalPresetId?: string;
-  reason: "connection" | "auth";
+  reason: AgentFallbackReason;
 }): Promise<void> {
   const { terminalId, agentId, fromPresetId, reason } = data;
   if (fallbackInFlight.has(terminalId)) return;
@@ -77,6 +78,12 @@ export async function handleFallbackTriggered(data: {
   const originalPreset = mergedPresets.find((p) => p.id === originalPresetId);
 
   const chain = originalPreset?.fallbacks ?? [];
+  // A rate limit is the user's to see unless the preset opted in (#14370), and
+  // one that didn't hears nothing from here: the rate-limit chip already shows it.
+  if (reason === "rate-limit" && (originalPreset?.fallbackOnRateLimit !== true || !chain.length)) {
+    fallbackInFlight.delete(terminalId);
+    return;
+  }
   const currentIndex = panel.fallbackChainIndex ?? 0;
   const nextPresetId = chain[currentIndex];
 
@@ -172,7 +179,9 @@ export async function handleFallbackTriggered(data: {
         message:
           reason === "auth"
             ? `${fromName} authentication failed — now running "${nextPreset.name}".`
-            : `${fromName} unreachable — now running "${nextPreset.name}".`,
+            : reason === "rate-limit"
+              ? `${fromName} hit its usage limit — now running "${nextPreset.name}" in a new conversation.`
+              : `${fromName} unreachable — now running "${nextPreset.name}".`,
         supersedeKey: fallbackSupersedeKey,
         context: { ...fallbackAddress },
       });

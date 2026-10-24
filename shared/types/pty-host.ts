@@ -15,7 +15,7 @@ import type { PowerPolicyLevel } from "./powerPolicy.js";
 import type { BuiltInAgentId } from "../config/agentIds.js";
 import type { AgentConfig } from "../config/agentRegistry.js";
 import type { AgentSessionRecord } from "./ipc/agentSessionHistory.js";
-import type { AgentEndObservation } from "./ipc/agent.js";
+import type { AgentEndObservation, AgentFallbackTriggeredPayload } from "./ipc/agent.js";
 import type { RequiredPluginToolStatus } from "./ipc/pluginAgentMcp.js";
 import type { SemanticSearchMatch, TerminalInfoPayload } from "./ipc/terminal.js";
 import type { WorkerResourceSnapshot } from "./workerGovernance.js";
@@ -785,6 +785,11 @@ export type PtyHostEvent =
       terminalId: string;
       observedAt: number;
       timestamp: number;
+    }
+  | {
+      /** This pane may move to its next fallback preset (#14370). */
+      type: "agent-fallback-triggered";
+      payload: AgentFallbackTriggeredPayload;
     }
   | {
       type: "agent-detected";

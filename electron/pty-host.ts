@@ -1581,6 +1581,23 @@ events.on("agent:rate-limit-observed", (payload) => {
   });
 });
 
+events.on("agent:fallback-triggered", (payload) => {
+  sendEvent({
+    type: "agent-fallback-triggered",
+    payload: {
+      terminalId: payload.terminalId,
+      agentId: payload.agentId,
+      fromPresetId: payload.fromPresetId,
+      ...(payload.originalPresetId !== undefined
+        ? { originalPresetId: payload.originalPresetId }
+        : {}),
+      reason: payload.reason,
+      ...(payload.exitCode !== undefined ? { exitCode: payload.exitCode } : {}),
+      timestamp: payload.timestamp,
+    },
+  });
+});
+
 events.on("agent:detected", (payload) => {
   sendEvent({
     type: "agent-detected",

@@ -219,6 +219,7 @@ export const AGENT_PRESET_PORTABLE_FIELDS = [
   "inlineMode",
   "color",
   "fallbacks",
+  "fallbackOnRateLimit",
 ] as const;
 
 /** An agent's own permission-bypass fields. */

@@ -124,13 +124,15 @@ export class TerminalExitObservers {
           exitCode: payload.code,
           wasKilled: false,
         });
-        if (shouldTriggerFallback(cls)) {
+        // A rate limit goes out too: only the renderer can read whether the
+        // preset opted in to falling over on one (#14370).
+        if (shouldTriggerFallback(cls) || cls === "rate-limit") {
           events.emit("agent:fallback-triggered", {
             terminalId: this.host.id,
             agentId: payload.launchAgentId,
             fromPresetId: payload.agentPresetId,
             originalPresetId: payload.originalAgentPresetId ?? payload.agentPresetId,
-            reason: cls as "connection" | "auth",
+            reason: cls as "connection" | "auth" | "rate-limit",
             exitCode: payload.code,
             timestamp: Date.now(),
           });

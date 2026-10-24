@@ -10,6 +10,13 @@ import { events } from "../events.js";
 import { HANDBACK_CODE_PATTERN } from "../../../shared/types/handback.js";
 import type { PtyHostEvent, TerminalFlowStatus } from "../../../shared/types/pty-host.js";
 import type { AgentStateChangeTrigger } from "../../types/index.js";
+import type { AgentFallbackReason } from "../../../shared/types/ipc/agent.js";
+
+const FALLBACK_REASONS: ReadonlySet<AgentFallbackReason> = new Set([
+  "connection",
+  "auth",
+  "rate-limit",
+]);
 
 export interface PtyEventsBridgeConfig {
   /** Called when terminal status changes for flow control visibility */
@@ -141,6 +148,29 @@ export function bridgePtyEvent(event: PtyHostEvent, config?: PtyEventsBridgeConf
         timestamp: event.timestamp,
       });
       return true;
+
+    case "agent-fallback-triggered": {
+      // Crossed a process boundary, and the renderer may end a live pane on it.
+      const p = event.payload;
+      if (
+        !FALLBACK_REASONS.has(p.reason) ||
+        typeof p.terminalId !== "string" ||
+        typeof p.agentId !== "string" ||
+        typeof p.fromPresetId !== "string"
+      ) {
+        return true;
+      }
+      events.emit("agent:fallback-triggered", {
+        terminalId: p.terminalId,
+        agentId: p.agentId,
+        fromPresetId: p.fromPresetId,
+        ...(typeof p.originalPresetId === "string" ? { originalPresetId: p.originalPresetId } : {}),
+        reason: p.reason,
+        ...(typeof p.exitCode === "number" ? { exitCode: p.exitCode } : {}),
+        timestamp: p.timestamp,
+      });
+      return true;
+    }
 
     case "agent-detected":
       events.emit("agent:detected", {
