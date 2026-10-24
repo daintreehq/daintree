@@ -113,7 +113,9 @@ function refusal(s: GuardState, pid: number): string | null {
   if (rows) {
     if (pid > 0) {
       if (rows.has(pid)) {
-        return isSelfOrDescendant(rows, pid) ? null : "it is not a process this test worker spawned";
+        return isSelfOrDescendant(rows, pid)
+          ? null
+          : "it is not a process this test worker spawned";
       }
     } else {
       const members = [...rows].filter(([, row]) => row.pgid === -pid).map(([member]) => member);

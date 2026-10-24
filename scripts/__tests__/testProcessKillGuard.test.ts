@@ -39,9 +39,7 @@ describe("unit-test process.kill guard (#14418)", () => {
 
     expect(err?.code).toBe("EPERM");
     const violations = takeProcessKillViolations();
-    expect(violations).toEqual([
-      expect.objectContaining({ pid: process.ppid, signal: "SIGCONT" }),
-    ]);
+    expect(violations).toEqual([expect.objectContaining({ pid: process.ppid, signal: "SIGCONT" })]);
     expect(formatProcessKillViolations(violations)).toContain(`process.kill(${process.ppid}`);
   });
 
@@ -74,19 +72,22 @@ describe("unit-test process.kill guard (#14418)", () => {
     expect(takeProcessKillViolations()).toEqual([]);
   });
 
-  it.skipIf(process.platform === "win32")("signals a grandchild through the process table", async () => {
-    const child = spawn("sh", ["-c", "sleep 30 & echo $!; wait"], {
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    children.push(child);
-    const grandchild = await new Promise<number>((resolve) =>
-      child.stdout!.once("data", (chunk: Buffer) => resolve(Number.parseInt(String(chunk), 10)))
-    );
+  it.skipIf(process.platform === "win32")(
+    "signals a grandchild through the process table",
+    async () => {
+      const child = spawn("sh", ["-c", "sleep 30 & echo $!; wait"], {
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      children.push(child);
+      const grandchild = await new Promise<number>((resolve) =>
+        child.stdout!.once("data", (chunk: Buffer) => resolve(Number.parseInt(String(chunk), 10)))
+      );
 
-    expect(process.kill(grandchild, "SIGKILL")).toBe(true);
-    await exitOf(child);
-    expect(takeProcessKillViolations()).toEqual([]);
-  });
+      expect(process.kill(grandchild, "SIGKILL")).toBe(true);
+      await exitOf(child);
+      expect(takeProcessKillViolations()).toEqual([]);
+    }
+  );
 
   it.skipIf(process.platform === "win32")("signals a detached child's whole group", async () => {
     const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], {
