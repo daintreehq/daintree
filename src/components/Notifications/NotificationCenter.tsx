@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Archive,
   ArrowDown,
@@ -11,13 +11,8 @@ import {
   Trash2,
 } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
-import {
-  useNotificationHistoryStore,
-  type NotificationHistoryEntry,
-} from "@/store/slices/notificationHistorySlice";
-import { NotificationCenterEntry, formatSnoozeWake } from "./NotificationCenterEntry";
+import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
 import { useSnoozeExpiryTimer } from "./useSnoozeExpiryTimer";
-import { resolveSnoozeDuration, type SnoozeDurationOption } from "@shared/utils/snoozeTimestamps";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
@@ -35,19 +30,15 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { actionService } from "@/services/ActionService";
-import type { ActionId } from "@shared/types/actions";
 import {
   EVENT_KIND_TO_SETTING_KEY,
   muteForDuration,
   muteUntilNextMorning,
-  notify,
   setSessionQuietUntil,
   type NotificationEventKind,
 } from "@/lib/notify";
-import { UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
 import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
 import { useUIStore } from "@/store/uiStore";
-import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { isScheduledQuietNow, nextOccurrenceTimestamp } from "@shared/utils/quietHours";
 import {
@@ -56,7 +47,6 @@ import {
   UI_ENTER_EASING,
   UI_EXIT_EASING,
 } from "@/lib/animationUtils";
-import { getWorstSeverity, SEVERITY_WEIGHTS } from "@/lib/notificationSeverity";
 import {
   computeEffectiveNotificationState,
   heroLine,
@@ -64,35 +54,23 @@ import {
   selectKindOffKinds,
   KIND_SHORT_LABEL,
 } from "@/lib/notificationEffectiveState";
-import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
 import { useProjectStore } from "@/store/projectStore";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
-import {
-  APP_SOURCE_LABEL,
-  UNKNOWN_PROJECT_LABEL,
-  worktreeNameFromId,
-} from "@/lib/notificationSourceLabel";
-import { isMac } from "@/lib/platform";
-import { useIsWorktreeUnavailable } from "./notificationSource";
-import {
-  goToNotificationSource,
-  resolveLiveNotificationDestination,
-} from "./notificationNavigation";
 import {
   PANE_TOOLBAR_ICON_BUTTON_CLASS,
   PANE_TOOLBAR_ICON_CLASS,
   PANE_TOOLBAR_TEXT_BUTTON_CLASS,
 } from "@/components/ui/paneToolbarStyles";
-import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
-import { CountBadge } from "@/components/ui/badge";
 import { FilterChip } from "@/components/ui/FilterChip";
-import { pluralize } from "@/lib/pluralize";
-
-// Three, not five. Even as compact previews, five pinned rows took three
-// quarters of a laptop-height list, so the first screen held one row of what
-// had actually arrived. Overflow is still counted and still in the list below.
-const NEEDS_ATTENTION_CAP = 3;
-const CONTEXT_NONE_KEY = "__none__";
+import {
+  buildFlatRows,
+  deriveTriageView,
+  filterTriageEntries,
+  type NotificationFilter,
+} from "./notificationTriageModel";
+import { useNotificationRowActions } from "./useNotificationRowActions";
+import { useNotificationListKeyboard } from "./useNotificationListKeyboard";
+import { ChronoSection, NeedsAttentionSection } from "./NotificationCenterSections";
 
 const timeFormatter = new Intl.DateTimeFormat(undefined, {
   hour: "numeric",
@@ -116,149 +94,9 @@ const PROJECT_SILENCEABLE = [
   ["waitingEnabled", "Waiting"],
 ] as const;
 
-/**
- * Says what a row action did. Archive, restore and snooze take the row out of
- * the tab, and a read toggle changes nothing a screen reader is reading, so
- * without this the outcome was silent everywhere but the pixels.
- */
-function announceTriage(message: string): void {
-  useAnnouncerStore.getState().announce(message, "polite");
-}
-
-/**
- * Why Enter went nowhere. A pointer user sees a row that doesn't dress as a
- * link; from the keyboard the same row just swallowed the key.
- */
-function sourceUnreachableMessage(context: NotificationHistoryEntry["context"]): string {
-  const destination = resolveLiveNotificationDestination(context);
-  if (destination.kind !== "none") return "Couldn't open the source";
-  switch (destination.reason) {
-    case "other-project":
-      return "From another project. Switch to it to open the source";
-    case "panel-trashed":
-      return "Its panel is in the trash";
-    case "gone":
-      return "Its source is no longer available";
-    default:
-      return "No source to open";
-  }
-}
-
-function isUnreadGroup(group: ThreadGroup): boolean {
-  return group.entries.some((e) => !e.seenAsToast);
-}
-
-/** An agent asking for input outranks anything that has merely gone wrong. */
-function isAskingGroup(group: ThreadGroup): boolean {
-  return group.entries.some((e) => !e.seenAsToast && e.context?.eventKind === "waiting");
-}
-
-function getGroupContextKey(group: ThreadGroup): string {
-  // Another host's ids can collide with nothing here, but its rows still
-  // belong under that host's name, not this machine's projects.
-  const host = group.entries.find((e) => e.context?.hostName)?.context?.hostName;
-  const prefix = host ? `host:${host}\0` : "";
-  for (const e of group.entries) {
-    const wt = e.context?.worktreeId;
-    if (wt) return `${prefix}wt:${wt}`;
-    const proj = e.context?.projectId;
-    if (proj) return `${prefix}proj:${proj}`;
-  }
-  return host ? `${prefix}none` : CONTEXT_NONE_KEY;
-}
-
 interface NotificationCenterProps {
   open: boolean;
   onClose: () => void;
-}
-
-interface ThreadGroup {
-  correlationId: string | undefined;
-  entries: NotificationHistoryEntry[];
-  latestTimestamp: number;
-}
-
-interface ContextSection {
-  key: string;
-  worktreeId?: string;
-  projectId?: string;
-  hostName?: string;
-  groups: ThreadGroup[];
-}
-
-type NotificationAction = NonNullable<NotificationHistoryEntry["actions"]>[number];
-
-interface FlatRow {
-  key: string;
-  isThread: boolean;
-  correlationId: string | undefined;
-  entryId: string;
-  primaryAction: NotificationAction | undefined;
-  /** The displayed entry's address — what Enter goes to, like a click. */
-  context: NotificationHistoryEntry["context"];
-}
-
-function buildFlatRow(group: ThreadGroup): FlatRow {
-  const isThread = !!group.correlationId && group.entries.length > 1;
-  const latest = group.entries[0]!;
-  return {
-    key: group.correlationId ?? latest.id,
-    isThread,
-    correlationId: group.correlationId,
-    entryId: latest.id,
-    primaryAction: latest.actions?.[0],
-    context: latest.context,
-  };
-}
-
-function groupByCorrelationId(entries: NotificationHistoryEntry[]): ThreadGroup[] {
-  const groups = new Map<string, { entries: NotificationHistoryEntry[]; isSolo: boolean }>();
-  const order: string[] = [];
-
-  for (const entry of entries) {
-    if (entry.correlationId) {
-      if (!groups.has(entry.correlationId)) {
-        groups.set(entry.correlationId, { entries: [], isSolo: false });
-        order.push(entry.correlationId);
-      }
-      groups.get(entry.correlationId)!.entries.push(entry);
-    } else {
-      groups.set(entry.id, { entries: [entry], isSolo: true });
-      order.push(entry.id);
-    }
-  }
-
-  return order.map((key) => {
-    const { entries: groupEntries, isSolo } = groups.get(key)!;
-    return {
-      correlationId: isSolo ? undefined : key,
-      entries: groupEntries,
-      latestTimestamp: Math.max(...groupEntries.map((e) => e.timestamp)),
-    };
-  });
-}
-
-function partitionByContext(groups: ThreadGroup[]): ContextSection[] {
-  const sections = new Map<string, ContextSection>();
-  const order: string[] = [];
-
-  for (const g of groups) {
-    const key = getGroupContextKey(g);
-    if (!sections.has(key)) {
-      const first = g.entries.find((e) => e.context?.worktreeId || e.context?.projectId);
-      sections.set(key, {
-        key,
-        worktreeId: first?.context?.worktreeId,
-        projectId: first?.context?.projectId,
-        hostName: g.entries.find((e) => e.context?.hostName)?.context?.hostName,
-        groups: [],
-      });
-      order.push(key);
-    }
-    sections.get(key)!.groups.push(g);
-  }
-
-  return order.map((k) => sections.get(k)!);
 }
 
 export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
@@ -266,16 +104,8 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
   const unreadCount = useNotificationHistoryStore((s) => s.unreadCount);
   const snoozedThreads = useNotificationHistoryStore((s) => s.snoozedThreads);
   const clearAll = useNotificationHistoryStore((s) => s.clearAll);
-  const markIdsRead = useNotificationHistoryStore((s) => s.markIdsRead);
-  const markUnseenAsToast = useNotificationHistoryStore((s) => s.markUnseenAsToast);
   const dismissEntry = useNotificationHistoryStore((s) => s.dismissEntry);
   const dismissByCorrelationId = useNotificationHistoryStore((s) => s.dismissByCorrelationId);
-  const archiveEntry = useNotificationHistoryStore((s) => s.archiveEntry);
-  const archiveByCorrelationId = useNotificationHistoryStore((s) => s.archiveByCorrelationId);
-  const unarchiveEntry = useNotificationHistoryStore((s) => s.unarchiveEntry);
-  const unarchiveByCorrelationId = useNotificationHistoryStore((s) => s.unarchiveByCorrelationId);
-  const snoozeThread = useNotificationHistoryStore((s) => s.snoozeThread);
-  const clearSnooze = useNotificationHistoryStore((s) => s.clearSnooze);
   const clearExpiredSnoozes = useNotificationHistoryStore((s) => s.clearExpiredSnoozes);
 
   useSnoozeExpiryTimer(snoozedThreads, clearExpiredSnoozes);
@@ -337,11 +167,9 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
       .getState()
       .loadNotificationOverridesForProjects(inboxProjectKey.split(","));
   }, [open, inboxProjectKey]);
-  const resetLastClosedAt = useUIStore((s) => s.resetNotificationCenterLastClosedAt);
 
-  const [filter, setFilter] = useState<"all" | "unread" | "archived" | "snoozed">("all");
+  const [filter, setFilter] = useState<NotificationFilter>("all");
   const [clearAllConfirmOpen, setClearAllConfirmOpen] = useState(false);
-  const [snoozePendingIndex, setSnoozePendingIndex] = useState<number | null>(null);
   const [frozenUnreadIds, setFrozenUnreadIds] = useState<Set<string> | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -488,105 +316,23 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
     prevShowJumpPillRef.current = showJumpPill;
   }, [showJumpPill]);
 
-  const filteredEntries = useMemo(() => {
-    // Recompute "is snoozed?" per entry against the current snooze map.
-    // Inlining the check keeps callers from threading `now` everywhere — for
-    // the inbox-render path a single timestamp captured per render is fine
-    // (the expiry timer will re-render when a snooze actually expires).
-    const now = Date.now();
-    const isSnoozed = (e: NotificationHistoryEntry): boolean => {
-      if (!e.correlationId) return false;
-      const until = snoozedThreads[e.correlationId];
-      return typeof until === "number" && until > now;
-    };
-    if (filter === "snoozed") {
-      // Snoozed tab shows only actively-snoozed (non-archived) entries.
-      // Archived entries that happen to belong to a still-snoozed
-      // correlationId stay in Archived, not here — Snoozed is the "deferred
-      // commitment" surface, Archived is the "done" surface.
-      return entries.filter((e) => e.archivedAt === null && isSnoozed(e));
-    }
-    if (filter === "archived") {
-      return entries.filter((e) => e.archivedAt !== null);
-    }
-    if (filter === "all") {
-      // Archived entries belong to the Archived tab only — they're done.
-      // Snoozed threads are intentionally hidden until they un-snooze.
-      return entries.filter((e) => e.archivedAt === null && !isSnoozed(e));
-    }
-    if (frozenUnreadIds) {
-      return entries.filter(
-        (e) =>
-          e.archivedAt === null && !isSnoozed(e) && (!e.seenAsToast || frozenUnreadIds.has(e.id))
-      );
-    }
-    return entries.filter((e) => e.archivedAt === null && !e.seenAsToast && !isSnoozed(e));
-  }, [entries, filter, frozenUnreadIds, snoozedThreads]);
+  const filteredEntries = useMemo(
+    () => filterTriageEntries(entries, filter, frozenUnreadIds, snoozedThreads),
+    [entries, filter, frozenUnreadIds, snoozedThreads]
+  );
 
-  const { needsAttentionGroups, needsAttentionOverflow, chronoSections, dividerGroupId } =
-    useMemo(() => {
-      const now = Date.now();
-      const isSnoozedGroup = (g: ThreadGroup): boolean => {
-        if (!g.correlationId) return false;
-        const until = snoozedThreads[g.correlationId];
-        return typeof until === "number" && until > now;
-      };
-      // Pinned reflects the global unread severe-threads set so it stays the
-      // same in All and Unread filter views. Hidden in Archived and Snoozed —
-      // pinned is for active, attention-required items only. Snoozed threads
-      // are an explicit defer so they must drop out of the pinned rail.
-      const severeUnread =
-        filter === "archived" || filter === "snoozed"
-          ? []
-          : groupByCorrelationId(entries.filter((e) => e.archivedAt === null))
-              .filter((g) => {
-                if (isSnoozedGroup(g)) return false;
-                if (!isUnreadGroup(g)) return false;
-                const sev = getWorstSeverity(g.entries);
-                return sev === "error" || sev === "warning";
-              })
-              .sort((a, b) => {
-                // Asking first. The brief's first question is "is anything
-                // asking me for something", and a waiting agent is stalled
-                // until answered, where a failure has already happened. Sorting
-                // on severity alone put a 44-minute-old migration failure
-                // ahead of an agent that had been waiting six.
-                const askDiff = Number(isAskingGroup(b)) - Number(isAskingGroup(a));
-                if (askDiff !== 0) return askDiff;
-                const sevDiff =
-                  SEVERITY_WEIGHTS[getWorstSeverity(b.entries)] -
-                  SEVERITY_WEIGHTS[getWorstSeverity(a.entries)];
-                if (sevDiff !== 0) return sevDiff;
-                return b.latestTimestamp - a.latestTimestamp;
-              });
-      const pinned = severeUnread.slice(0, NEEDS_ATTENTION_CAP);
-
-      const chronoGroups = groupByCorrelationId(filteredEntries);
-      const sections: ContextSection[] = groupByContext
-        ? partitionByContext(chronoGroups)
-        : [{ key: "all", groups: chronoGroups }];
-
-      let divider: string | null = null;
-      // Ungrouped only. Grouped, the new rows are spread across sections, and
-      // one divider in whichever section held the newest row labelled that
-      // section alone while its action reset the watermark for all of them.
-      // Each section marks its own boundary instead (see ChronoSection).
-      if (!groupByContext && lastClosedAt > 0 && filter !== "archived" && filter !== "snoozed") {
-        for (const g of chronoGroups) {
-          if (g.latestTimestamp > lastClosedAt) {
-            divider = g.correlationId ?? g.entries[0]?.id ?? null;
-            break;
-          }
-        }
-      }
-
-      return {
-        needsAttentionGroups: pinned,
-        needsAttentionOverflow: severeUnread.length - pinned.length,
-        chronoSections: sections,
-        dividerGroupId: divider,
-      };
-    }, [entries, filteredEntries, groupByContext, lastClosedAt, filter, snoozedThreads]);
+  const { needsAttentionGroups, needsAttentionOverflow, chronoSections, dividerGroupId } = useMemo(
+    () =>
+      deriveTriageView({
+        entries,
+        filteredEntries,
+        filter,
+        groupByContext,
+        lastClosedAt,
+        snoozedThreads,
+      }),
+    [entries, filteredEntries, groupByContext, lastClosedAt, filter, snoozedThreads]
+  );
 
   const totalChronoGroups = chronoSections.reduce((sum, s) => sum + s.groups.length, 0);
 
@@ -601,370 +347,40 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
     }
   }
 
-  const markIdsReadWithUndo = (requestedIds: string[], options: { resetLastClosed: boolean }) => {
-    if (requestedIds.length === 0) return;
-    // Re-filter against live store state so a rapid second click on a stale
-    // closure doesn't fire a ghost toast for entries already marked read.
-    const liveEntries = useNotificationHistoryStore.getState().entries;
-    const liveById = new Map(liveEntries.map((e) => [e.id, e] as const));
-    const ids = requestedIds.filter((id) => {
-      const entry = liveById.get(id);
-      return entry !== undefined && !entry.seenAsToast;
-    });
-    if (ids.length === 0) return;
-    markIdsRead(ids);
-    const prevLastClosedAt = options.resetLastClosed
-      ? useUIStore.getState().lastNotificationCenterClosedAt
-      : undefined;
-    if (options.resetLastClosed) {
-      resetLastClosedAt();
-    }
-    // eslint-disable-next-line no-restricted-syntax -- transient confirmations omit context
-    notify({
-      type: "success",
-      message: `Marked ${ids.length} as read`,
-      // WCAG 2.2.1: the 5 s auto-dismiss is permitted under the "available
-      // elsewhere without a time limit" exception — the notification history
-      // inbox is always accessible as the recovery surface, and Undo provides
-      // a reversal mechanism within the time limit.
-      duration: UNDO_TOAST_DURATION_MS,
-      priority: "high",
-      // Time-bound undo — surface even during quiet hours so the user has a
-      // recovery path.
-      urgent: true,
-      // Confirmation toast only — no inbox entry. (Don't pair with `context`:
-      // notify warns and silently drops in DEV.)
-      transient: true,
-      action: {
-        label: "Undo",
-        onClick: () => {
-          for (const id of ids) {
-            markUnseenAsToast(id, { silent: true });
-          }
-          if (prevLastClosedAt !== undefined) {
-            useUIStore.setState({ lastNotificationCenterClosedAt: prevLastClosedAt });
-          }
-        },
-      },
-    });
-  };
+  const {
+    markIdsReadWithUndo,
+    dispatchPrimaryAction,
+    archiveRow,
+    restoreRow,
+    toggleReadForRow,
+    handleSnoozeForRow,
+    handleUnsnoozeForRow,
+  } = useNotificationRowActions(entries);
 
-  const flatRows = useMemo<FlatRow[]>(() => {
-    const rows: FlatRow[] = [];
-    for (const g of needsAttentionGroups) {
-      rows.push(buildFlatRow(g));
-    }
-    for (const section of chronoSections) {
-      for (const g of section.groups) {
-        rows.push(buildFlatRow(g));
-      }
-    }
-    return rows;
-  }, [needsAttentionGroups, chronoSections]);
-
+  const flatRows = useMemo(
+    () => buildFlatRows(needsAttentionGroups, chronoSections),
+    [needsAttentionGroups, chronoSections]
+  );
   const rowCount = flatRows.length;
-  const [focusedIndex, setFocusedIndex] = useState(0);
-  // Whether a row has held focus during this opening. Recovery below only runs
-  // for a user who was already in the list; it must never pull focus off the
-  // bell (or anywhere else) when the panel opens or when rows arrive.
-  const rowHadFocusRef = useRef(false);
-  const rowRefs = useRef<Map<number, HTMLDivElement>>(new Map());
-  const dropdownOpenCountRef = useRef(0);
-
-  const setRowRef = useCallback((index: number, el: HTMLDivElement | null) => {
-    if (el) {
-      rowRefs.current.set(index, el);
-    } else {
-      rowRefs.current.delete(index);
-    }
-  }, []);
-
-  const handleDropdownOpenChange = useCallback((open: boolean) => {
-    dropdownOpenCountRef.current = Math.max(0, dropdownOpenCountRef.current + (open ? 1 : -1));
-  }, []);
-
-  const handleRowFocus = useCallback((index: number) => {
-    rowHadFocusRef.current = true;
-    setFocusedIndex(index);
-  }, []);
-
-  useEffect(() => {
-    if (!open) rowHadFocusRef.current = false;
-  }, [open]);
-
-  // After the rows change, clamp focusedIndex; reset the dropdown counter (a
-  // row removed mid-menu may never fire onOpenChange(false)); and if focus has
-  // dropped to <body> because the focused row just unmounted, put it on the
-  // row now in that slot — or on the panel when nothing is left.
-  //
-  // Keyed on the rows, not their count. Marking a pinned row read with `u`
-  // takes it out of the rail and promotes the next severe thread into the
-  // same slot, so the count never moves while the focused element is replaced
-  // — and the old count gate left focus on <body>, where j/k do nothing.
-  useEffect(() => {
-    dropdownOpenCountRef.current = 0;
-    const clamped = rowCount === 0 ? 0 : Math.min(focusedIndex, rowCount - 1);
-    if (clamped !== focusedIndex) setFocusedIndex(clamped);
-
-    if (!rowHadFocusRef.current) return;
-    if (typeof document === "undefined") return;
-    const active = document.activeElement;
-    if (active && active !== document.body) return;
-    if (rowCount === 0) {
-      dialogRef.current?.focus({ preventScroll: true });
-      return;
-    }
-    rowRefs.current.get(clamped)?.focus();
-  }, [flatRows, rowCount, focusedIndex]);
-
-  const dispatchPrimaryAction = useCallback((row: FlatRow) => {
-    const action = row.primaryAction;
-    if (!action) return;
-    const manifest = actionService.get(action.actionId as ActionId);
-    if (!manifest || !manifest.enabled) return;
-    void actionService.dispatch(action.actionId as ActionId, action.actionArgs);
-  }, []);
-
-  const archiveRow = useCallback(
-    (row: FlatRow) => {
-      if (row.isThread && row.correlationId) {
-        archiveByCorrelationId(row.correlationId);
-      } else {
-        archiveEntry(row.entryId);
-      }
-      announceTriage(row.isThread ? "Thread archived" : "Notification archived");
-    },
-    [archiveByCorrelationId, archiveEntry]
-  );
-
-  const restoreRow = useCallback(
-    (row: FlatRow) => {
-      if (row.isThread && row.correlationId) {
-        unarchiveByCorrelationId(row.correlationId);
-      } else {
-        unarchiveEntry(row.entryId);
-      }
-      announceTriage("Moved to inbox");
-    },
-    [unarchiveByCorrelationId, unarchiveEntry]
-  );
-
-  // Build a fast index of unread entry IDs grouped by row, so the `u` toggle
-  // can flip read/unread for the focused row in one store call. Without this
-  // memo each keystroke would walk every entry looking for matches.
-  const flatRowEntryIds = useMemo(() => {
-    const map = new Map<string, string[]>();
-    for (const group of groupByCorrelationId(entries)) {
-      const key = group.correlationId ?? group.entries[0]!.id;
-      map.set(
-        key,
-        group.entries.filter((e) => !e.archivedAt).map((e) => e.id)
-      );
-    }
-    return map;
-  }, [entries]);
-
-  const toggleReadForRow = useCallback(
-    (row: FlatRow) => {
-      const ids = flatRowEntryIds.get(row.key) ?? [row.entryId];
-      const live = useNotificationHistoryStore.getState().entries;
-      const liveById = new Map(live.map((e) => [e.id, e] as const));
-      const unreadIds = ids.filter((id) => {
-        const e = liveById.get(id);
-        return e !== undefined && !e.seenAsToast;
-      });
-      if (unreadIds.length > 0) {
-        markIdsRead(unreadIds);
-        announceTriage("Marked as read");
-      } else {
-        // Whole row already read — flip the head entry back to unread so the
-        // dot reappears. Skip when the head entry no longer exists (a
-        // dismissal or prune raced the keystroke).
-        const head = liveById.get(row.entryId);
-        if (head && head.seenAsToast && !head.archivedAt) {
-          markUnseenAsToast(row.entryId, { silent: true });
-          announceTriage("Marked as unread");
-        }
-      }
-    },
-    [flatRowEntryIds, markIdsRead, markUnseenAsToast]
-  );
-
-  const moveFocusTo = useCallback((index: number) => {
-    const target = rowRefs.current.get(index);
-    if (target) {
-      target.focus();
-    }
-    setFocusedIndex(index);
-  }, []);
-
-  const handleListKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLDivElement>) => {
-      if (dropdownOpenCountRef.current > 0) return;
-      if (rowCount === 0) return;
-
-      const active = document.activeElement;
-      let activeIndex = -1;
-      for (const [idx, el] of rowRefs.current.entries()) {
-        if (el === active) {
-          activeIndex = idx;
-          break;
-        }
-      }
-      if (activeIndex === -1) return;
-
-      switch (e.key) {
-        case "j":
-        case "ArrowDown": {
-          e.preventDefault();
-          moveFocusTo(Math.min(activeIndex + 1, rowCount - 1));
-          return;
-        }
-        case "k":
-        case "ArrowUp": {
-          e.preventDefault();
-          moveFocusTo(Math.max(activeIndex - 1, 0));
-          return;
-        }
-        case "Home": {
-          e.preventDefault();
-          moveFocusTo(0);
-          return;
-        }
-        case "End": {
-          e.preventDefault();
-          moveFocusTo(rowCount - 1);
-          return;
-        }
-        case "e": {
-          if (e.shiftKey || e.metaKey || e.ctrlKey || e.altKey) return;
-          // Nothing in the Archived tab. `e` is learned as archive, and it used
-          // to turn into a permanent delete here, so the same key that filed
-          // something away destroyed it one tab over. The row's × is the
-          // deliberate delete.
-          if (filter === "archived") return;
-          const row = flatRows[activeIndex];
-          if (!row) return;
-          e.preventDefault();
-          archiveRow(row);
-          return;
-        }
-        case "u": {
-          // Linear-parity toggle: flip the focused row between read and
-          // unread. Lowercase only — uppercase `U` is reserved for a future
-          // bulk action and would conflict with Shift-modified navigation.
-          if (e.shiftKey || e.metaKey || e.ctrlKey || e.altKey) return;
-          // Archived rows are filed; the store won't unread them, so the key
-          // would do nothing while looking like it should.
-          if (filter === "archived") return;
-          e.preventDefault();
-          const row = flatRows[activeIndex];
-          if (!row) return;
-          toggleReadForRow(row);
-          return;
-        }
-        case "h": {
-          // Linear-parity snooze: open the snooze sub-menu on the focused
-          // row. Lowercase only and only for correlated rows (snooze is a
-          // thread-level concept). The dropdown-open guard at the top of
-          // this handler keeps subsequent j/k from double-navigating.
-          if (e.shiftKey || e.metaKey || e.ctrlKey || e.altKey) return;
-          // Filed rows don't snooze; the row menu doesn't offer it either.
-          if (filter === "archived") return;
-          const row = flatRows[activeIndex];
-          if (!row || !row.correlationId) return;
-          e.preventDefault();
-          setSnoozePendingIndex(activeIndex);
-          return;
-        }
-        case "Enter": {
-          const row = flatRows[activeIndex];
-          if (!row || e.repeat || e.shiftKey || e.altKey) return;
-          // Enter goes where a click goes. The primary action can be a side
-          // effect (Retry, Restore), so it moves to Mod+Enter rather than
-          // firing on the key everyone presses to open a list item.
-          const mod = isMac() ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
-          if (mod) {
-            if (!row.primaryAction) return;
-            e.preventDefault();
-            dispatchPrimaryAction(row);
-            return;
-          }
-          if (e.metaKey || e.ctrlKey) return;
-          e.preventDefault();
-          void goToNotificationSource(row.context).then((arrived) => {
-            if (!arrived) announceTriage(sourceUnreachableMessage(row.context));
-          });
-          return;
-        }
-        default:
-          return;
-      }
-    },
-    [rowCount, flatRows, moveFocusTo, archiveRow, dispatchPrimaryAction, filter, toggleReadForRow]
-  );
-
-  // Take focus into the panel when it opens. The bell keeps `aria-haspopup` and
-  // the panel is portalled to the end of `document.body`, so without this the
-  // next Tab walks the whole rest of the app instead of entering the surface
-  // the user just asked for — the rows are reachable in principle and not in
-  // practice. Deliberately the ROOT and not the first row: focusing a row on
-  // open is a separate, settled decision (see the row-count effect above) and
-  // this leaves it alone.
-  useEffect(() => {
-    if (!open) return;
-    dialogRef.current?.focus({ preventScroll: true });
-  }, [open]);
-
-  // The first arrow press hands off from the panel root into the list. The
-  // list's own handler bails unless `document.activeElement` is already a row,
-  // so without this bridge a keyboard user who has just opened the panel
-  // presses Down and nothing happens.
-  const handleDialogKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLDivElement>) => {
-      if (e.target !== e.currentTarget) return;
-      if (dropdownOpenCountRef.current > 0) return;
-      if (rowCount === 0) return;
-      switch (e.key) {
-        case "j":
-        case "ArrowDown":
-        case "Home":
-          e.preventDefault();
-          moveFocusTo(0);
-          return;
-        case "k":
-        case "ArrowUp":
-        case "End":
-          e.preventDefault();
-          moveFocusTo(rowCount - 1);
-          return;
-        default:
-          return;
-      }
-    },
-    [rowCount, moveFocusTo]
-  );
-
-  const handleSnoozeForRow = useCallback(
-    (row: FlatRow, option: SnoozeDurationOption) => {
-      if (!row.correlationId) return;
-      const until = resolveSnoozeDuration(option);
-      snoozeThread(row.correlationId, until);
-      announceTriage(`Snoozed until ${formatSnoozeWake(until)}`);
-    },
-    [snoozeThread]
-  );
-
-  const handleUnsnoozeForRow = useCallback(
-    (row: FlatRow) => {
-      if (!row.correlationId) return;
-      clearSnooze(row.correlationId);
-      announceTriage("Snooze cleared");
-    },
-    [clearSnooze]
-  );
-
-  const consumeSnoozePending = useCallback(() => setSnoozePendingIndex(null), []);
+  const {
+    focusedIndex,
+    setRowRef,
+    handleRowFocus,
+    handleDropdownOpenChange,
+    moveFocusTo,
+    handleListKeyDown,
+    handleDialogKeyDown,
+    snoozePendingIndex,
+    consumeSnoozePending,
+  } = useNotificationListKeyboard({
+    open,
+    filter,
+    flatRows,
+    dialogRef,
+    archiveRow,
+    toggleReadForRow,
+    dispatchPrimaryAction,
+  });
 
   const handleMarkAllRead = () => {
     // Archived entries are already done; they must never appear in the
@@ -1633,676 +1049,6 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
           setClearAllConfirmOpen(false);
           onClose();
         }}
-      />
-    </div>
-  );
-}
-
-interface RovingSectionProps {
-  indexOffset: number;
-  focusedIndex: number;
-  setRowRef: (index: number, el: HTMLDivElement | null) => void;
-  onRowFocus: (index: number) => void;
-  onDropdownOpenChange: (open: boolean) => void;
-}
-
-function NeedsAttentionSection({
-  groups,
-  overflowCount,
-  indexOffset,
-  focusedIndex,
-  setRowRef,
-  onRowFocus,
-  onDropdownOpenChange,
-  onDismiss,
-  onDismissThread,
-  snoozePendingIndex,
-  snoozedThreads,
-  snoozeRenderTime,
-  onConsumeSnoozePending,
-  onSnoozeRow,
-  onUnsnoozeRow,
-  onArchiveRow,
-  onToggleReadRow,
-  onRestoreRow,
-}: {
-  groups: ThreadGroup[];
-  /** Severe unread threads beyond the pinned cap — they remain in the chronological list below. */
-  overflowCount: number;
-  onDismiss: (id: string) => void;
-  onDismissThread: (correlationId: string) => void;
-  snoozePendingIndex: number | null;
-  snoozedThreads: Record<string, number>;
-  snoozeRenderTime: number;
-  onConsumeSnoozePending: () => void;
-  onSnoozeRow: (row: FlatRow, option: SnoozeDurationOption) => void;
-  onUnsnoozeRow: (row: FlatRow) => void;
-  onArchiveRow: ((row: FlatRow) => void) | undefined;
-  onToggleReadRow: ((row: FlatRow) => void) | undefined;
-  onRestoreRow: ((row: FlatRow) => void) | undefined;
-} & RovingSectionProps) {
-  return (
-    <div data-testid="needs-attention-section" className="border-b border-divider">
-      <div className={cn(LIST_LABEL_CLASS, "pl-4 pr-3 pt-2 pb-1")}>Needs attention</div>
-      <div role="group" aria-label="Needs attention">
-        {groups.map((group, idx) => {
-          const flatIndex = indexOffset + idx;
-          return renderGroup(
-            group,
-            onDismiss,
-            onDismissThread,
-            {
-              flatIndex,
-              focusedIndex,
-              setRowRef,
-              onRowFocus,
-              onDropdownOpenChange,
-              compact: true,
-              showSource: true,
-            },
-            buildSnoozeProps(
-              group,
-              flatIndex,
-              snoozePendingIndex,
-              snoozedThreads,
-              snoozeRenderTime,
-              {
-                onConsumeSnoozePending,
-                onSnooze: onSnoozeRow,
-                onUnsnooze: onUnsnoozeRow,
-                onArchive: onArchiveRow,
-                onToggleRead: onToggleReadRow,
-                onRestore: onRestoreRow,
-              }
-            )
-          );
-        })}
-      </div>
-      {overflowCount > 0 && (
-        <div
-          data-testid="needs-attention-overflow"
-          className="pl-4 pr-3 pb-2 text-3xs text-text-secondary"
-        >
-          +{overflowCount} more below
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ChronoSection({
-  section,
-  groupByContext,
-  dividerGroupId,
-  dividerRef,
-  lastClosedAt,
-  indexOffset,
-  focusedIndex,
-  setRowRef,
-  onRowFocus,
-  onDropdownOpenChange,
-  onDismiss,
-  onDismissThread,
-  onMarkIdsRead,
-  snoozePendingIndex,
-  snoozedThreads,
-  snoozeRenderTime,
-  onConsumeSnoozePending,
-  onSnoozeRow,
-  onUnsnoozeRow,
-  onArchiveRow,
-  onToggleReadRow,
-  onRestoreRow,
-  hasPinnedAbove,
-}: {
-  section: ContextSection;
-  groupByContext: boolean;
-  dividerGroupId: string | null;
-  dividerRef?: (el: HTMLDivElement | null) => void;
-  lastClosedAt: number;
-  onDismiss: (id: string) => void;
-  onDismissThread: (correlationId: string) => void;
-  onMarkIdsRead: (ids: string[], options: { resetLastClosed: boolean }) => void;
-  snoozePendingIndex: number | null;
-  snoozedThreads: Record<string, number>;
-  snoozeRenderTime: number;
-  onConsumeSnoozePending: () => void;
-  onSnoozeRow: (row: FlatRow, option: SnoozeDurationOption) => void;
-  onUnsnoozeRow: (row: FlatRow) => void;
-  onArchiveRow: ((row: FlatRow) => void) | undefined;
-  onToggleReadRow: ((row: FlatRow) => void) | undefined;
-  onRestoreRow: ((row: FlatRow) => void) | undefined;
-  /**
-   * Whether the "Needs attention" rail is rendering above this list. That rail
-   * is a preview, not a filter — a pinned entry still appears here — so with
-   * one notification in the app the same row was drawn twice with nothing
-   * between the two but a divider, and it read as a duplicate rather than as a
-   * summary of a list. The header is what tells them apart.
-   */
-  hasPinnedAbove?: boolean;
-} & RovingSectionProps) {
-  const sectionUnreadIds = section.groups.flatMap((g) =>
-    g.entries.filter((e) => !e.seenAsToast).map((e) => e.id)
-  );
-  const newSinceUnreadIds = section.groups
-    .filter((g) => g.latestTimestamp > lastClosedAt)
-    .flatMap((g) => g.entries.filter((e) => !e.seenAsToast).map((e) => e.id));
-  const sectionLabel = "All notifications";
-  // Grouped, the section's name is its header's — "Notifications for this
-  // context" named nothing a screen reader user could tell apart.
-  const headerLabelId = useId();
-  // Where "new" ends: the first group at or before the watermark, marked only
-  // when something newer sits above it in this same section — a section that
-  // is all new or all old has no boundary to draw. The divider at the top
-  // says where new begins; without this nothing said where it stopped.
-  const firstKey = section.groups[0]
-    ? (section.groups[0].correlationId ?? section.groups[0].entries[0]!.id)
-    : null;
-  const opensWithNew =
-    lastClosedAt > 0 && !!section.groups[0] && section.groups[0].latestTimestamp > lastClosedAt;
-  const earlierGroup = opensWithNew
-    ? section.groups.find((g) => g.latestTimestamp <= lastClosedAt)
-    : undefined;
-  const earlierKey = earlierGroup
-    ? (earlierGroup.correlationId ?? earlierGroup.entries[0]!.id)
-    : null;
-  // The divider already says what this list is, so it stands in for the
-  // "All notifications" label rather than stacking a second one on it.
-  const dividerLeads = dividerGroupId !== null && dividerGroupId === firstKey;
-  return (
-    <div data-testid="chrono-section">
-      {!groupByContext && hasPinnedAbove && !dividerLeads && (
-        <div className={cn(LIST_LABEL_CLASS, "pl-4 pr-3 pt-2 pb-1")}>{sectionLabel}</div>
-      )}
-      {groupByContext && (
-        <ContextSectionHeader
-          labelId={headerLabelId}
-          worktreeId={section.worktreeId}
-          projectId={section.projectId}
-          hostName={section.hostName}
-          count={section.groups.length}
-          newCount={
-            lastClosedAt > 0
-              ? section.groups.filter((g) => g.latestTimestamp > lastClosedAt).length
-              : 0
-          }
-          unreadIds={sectionUnreadIds}
-          onMarkRead={() => onMarkIdsRead(sectionUnreadIds, { resetLastClosed: false })}
-        />
-      )}
-      <div
-        role="group"
-        aria-label={groupByContext ? undefined : sectionLabel}
-        aria-labelledby={groupByContext ? headerLabelId : undefined}
-      >
-        {section.groups.map((group, idx) => {
-          const groupKey = group.correlationId ?? group.entries[0]!.id;
-          const isDivider = dividerGroupId !== null && groupKey === dividerGroupId;
-          const flatIndex = indexOffset + idx;
-          return (
-            <div
-              key={groupKey}
-              // This used to carry `content-visibility: auto` with
-              // `contain-intrinsic-size: auto 72px`. Rows here measure 44px to
-              // 123.5px, so the 72px placeholder was wrong by up to 71% for
-              // every row not yet scrolled into view: scrollHeight was a
-              // fiction, the thumb jumped as rows rendered for the first time,
-              // and the content below moved while you were scrolling toward it
-              // — during the one interaction this panel exists for. The skip
-              // was never worth that; the history is capped at 200 entries
-              // (MAX_ENTRIES, notificationHistorySlice) which group into fewer
-              // rows still, and that is a modest list for a plain container.
-              // If this ever profiles badly, the answer is measured virtualization
-              // (Virtuoso, as used elsewhere in the app), not a single guessed
-              // height standing in for rows that differ by a factor of three.
-            >
-              {isDivider && (
-                <NewSinceLastLookedDivider
-                  ref={dividerRef}
-                  unreadCount={newSinceUnreadIds.length}
-                  onMarkRead={() => onMarkIdsRead(newSinceUnreadIds, { resetLastClosed: true })}
-                />
-              )}
-              {groupKey === earlierKey && (
-                <div
-                  data-testid="notification-earlier-boundary"
-                  className={cn(LIST_LABEL_CLASS, "pl-4 pr-3 pt-2 pb-1")}
-                >
-                  Earlier
-                </div>
-              )}
-              {renderGroup(
-                group,
-                onDismiss,
-                onDismissThread,
-                {
-                  flatIndex,
-                  focusedIndex,
-                  setRowRef,
-                  onRowFocus,
-                  onDropdownOpenChange,
-                  compact: false,
-                  // The section header names the place; the row needn't.
-                  showSource: !groupByContext,
-                },
-                buildSnoozeProps(
-                  group,
-                  flatIndex,
-                  snoozePendingIndex,
-                  snoozedThreads,
-                  snoozeRenderTime,
-                  {
-                    onConsumeSnoozePending,
-                    onSnooze: onSnoozeRow,
-                    onUnsnooze: onUnsnoozeRow,
-                    onArchive: onArchiveRow,
-                    onToggleRead: onToggleReadRow,
-                    onRestore: onRestoreRow,
-                  }
-                )
-              )}
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-interface RowRovingProps {
-  flatIndex: number;
-  focusedIndex: number;
-  setRowRef: (index: number, el: HTMLDivElement | null) => void;
-  onRowFocus: (index: number) => void;
-  onDropdownOpenChange: (open: boolean) => void;
-  compact: boolean;
-  showSource: boolean;
-}
-
-interface SnoozeRowProps {
-  isSnoozePending: boolean;
-  isSnoozed: boolean;
-  snoozedUntil: number | undefined;
-  onConsumeSnoozePending: () => void;
-  onSnooze: (option: SnoozeDurationOption) => void;
-  onUnsnooze: () => void;
-  /** The pointer's route to what `e` and `u` do from the keyboard. */
-  onArchive: (() => void) | undefined;
-  onToggleRead: (() => void) | undefined;
-  /** Archive's inverse, offered only in the Archived tab. */
-  onRestore: (() => void) | undefined;
-}
-
-function renderGroup(
-  group: ThreadGroup,
-  onDismiss: (id: string) => void,
-  onDismissThread: (correlationId: string) => void,
-  roving: RowRovingProps,
-  snooze: SnoozeRowProps
-) {
-  const isFocused = roving.flatIndex === roving.focusedIndex;
-  const tabIndex = isFocused ? 0 : -1;
-  const rowRef = (el: HTMLDivElement | null) => roving.setRowRef(roving.flatIndex, el);
-  const handleFocus = () => roving.onRowFocus(roving.flatIndex);
-
-  if (group.correlationId && group.entries.length > 1) {
-    return (
-      <NotificationThread
-        key={group.correlationId}
-        group={group}
-        onDismiss={() => onDismissThread(group.correlationId!)}
-        rowRef={rowRef}
-        tabIndex={tabIndex}
-        onRowFocus={handleFocus}
-        onDropdownOpenChange={roving.onDropdownOpenChange}
-        isSnoozePending={snooze.isSnoozePending}
-        isSnoozed={snooze.isSnoozed}
-        snoozedUntil={snooze.snoozedUntil}
-        onConsumeSnoozePending={snooze.onConsumeSnoozePending}
-        onSnooze={snooze.onSnooze}
-        onUnsnooze={snooze.onUnsnooze}
-        onArchive={snooze.onArchive}
-        onToggleRead={snooze.onToggleRead}
-        onRestore={snooze.onRestore}
-        compact={roving.compact}
-        showSource={roving.showSource}
-      />
-    );
-  }
-  const entry = group.entries[0]!;
-  return (
-    <NotificationCenterEntry
-      key={entry.id}
-      entry={entry}
-      isNew={!entry.seenAsToast}
-      onDismiss={() => onDismiss(entry.id)}
-      rowRef={rowRef}
-      tabIndex={tabIndex}
-      role="listitem"
-      onFocus={handleFocus}
-      onDropdownOpenChange={roving.onDropdownOpenChange}
-      isSnoozePending={snooze.isSnoozePending}
-      isSnoozed={snooze.isSnoozed}
-      snoozedUntil={snooze.snoozedUntil}
-      onConsumeSnoozePending={snooze.onConsumeSnoozePending}
-      onSnooze={snooze.onSnooze}
-      onUnsnooze={snooze.onUnsnooze}
-      onArchive={snooze.onArchive}
-      onToggleRead={snooze.onToggleRead}
-      onRestore={snooze.onRestore}
-      compact={roving.compact}
-      showSource={roving.showSource}
-    />
-  );
-}
-
-function buildSnoozeProps(
-  group: ThreadGroup,
-  flatIndex: number,
-  snoozePendingIndex: number | null,
-  snoozedThreads: Record<string, number>,
-  now: number,
-  handlers: RowMenuHandlers
-): SnoozeRowProps {
-  const row = buildFlatRow(group);
-  const snoozedUntil = group.correlationId ? snoozedThreads[group.correlationId] : undefined;
-  const isSnoozed =
-    typeof snoozedUntil === "number" && Number.isFinite(snoozedUntil) && snoozedUntil > now;
-  return {
-    isSnoozePending: snoozePendingIndex === flatIndex && !!group.correlationId,
-    isSnoozed,
-    snoozedUntil: isSnoozed ? snoozedUntil : undefined,
-    onConsumeSnoozePending: handlers.onConsumeSnoozePending,
-    onSnooze: (option) => handlers.onSnooze(row, option),
-    onUnsnooze: () => handlers.onUnsnooze(row),
-    onArchive: handlers.onArchive ? () => handlers.onArchive?.(row) : undefined,
-    onToggleRead: handlers.onToggleRead ? () => handlers.onToggleRead?.(row) : undefined,
-    onRestore: handlers.onRestore ? () => handlers.onRestore?.(row) : undefined,
-  };
-}
-
-interface RowMenuHandlers {
-  onConsumeSnoozePending: () => void;
-  onSnooze: (row: FlatRow, option: SnoozeDurationOption) => void;
-  onUnsnooze: (row: FlatRow) => void;
-  /** Absent in the Archived tab, where there is nothing further to archive to. */
-  onArchive: ((row: FlatRow) => void) | undefined;
-  /** Absent in the Archived tab too: read state doesn't apply to filed rows. */
-  onToggleRead: ((row: FlatRow) => void) | undefined;
-  /** Present only in the Archived tab. */
-  onRestore: ((row: FlatRow) => void) | undefined;
-}
-
-function ContextSectionHeader({
-  worktreeId,
-  projectId,
-  hostName,
-  count,
-  newCount,
-  unreadIds,
-  onMarkRead,
-  labelId,
-}: {
-  /** The name's element id, which the section's group takes as its label. */
-  labelId: string;
-  worktreeId?: string;
-  projectId?: string;
-  /** The other host the section's rows came from, which then leads its name. */
-  hostName?: string;
-  count: number;
-  /**
-   * Rows here newer than the last look. Grouped, there's no single divider to
-   * say where new starts, so each place says how much of it is new, and its
-   * "Earlier" boundary says where that stops.
-   */
-  newCount: number;
-  unreadIds: string[];
-  onMarkRead: () => void;
-}) {
-  const worktreeName = useWorktreeStore((s) =>
-    worktreeId ? s.worktrees.get(worktreeId)?.name : undefined
-  );
-  const projectName = useProjectStore((s) =>
-    projectId ? s.projects.find((p) => p.id === projectId)?.name : undefined
-  );
-  // Names, never ids. A project id is a sha256 and a worktree id is a path, so
-  // the old `worktreeName ?? worktreeId ?? projectId` fallback printed a
-  // 64-character hash as the heading of any section from a project this view
-  // hasn't loaded.
-  const project = projectName ?? (projectId ? UNKNOWN_PROJECT_LABEL : undefined);
-  // A worktree this project view no longer has keeps its name, since the
-  // records under it stay readable, but is not passed off as a live one.
-  const worktreeUnavailable = useIsWorktreeUnavailable(worktreeId, projectId);
-  const resolvedWorktree = worktreeId
-    ? worktreeName?.trim() || worktreeNameFromId(worktreeId)
-    : undefined;
-  // A main worktree is named after its folder, usually the project's own name.
-  const worktree = resolvedWorktree && resolvedWorktree !== project ? resolvedWorktree : undefined;
-  const host = hostName?.trim() || undefined;
-  const label =
-    [host, project, worktree, worktreeUnavailable ? "unavailable" : undefined]
-      .filter(Boolean)
-      .join(" · ") || APP_SOURCE_LABEL;
-  const hasUnread = unreadIds.length > 0;
-  return (
-    // Sticky, so the place a row belongs to stays on screen while you read
-    // it: mid-section, the rows carry no source of their own. The solid layer
-    // underneath is what makes that work — `overlay-raised` is a tint, and
-    // alone it let the rows scroll visibly through the header. `z-20` puts it
-    // above ScrollShadow's `z-10` top fade, whose lower edge then falls just
-    // under the header as its shadow. The list's `scroll-py-8` already keeps
-    // keyboard-focused rows clear of it.
-    <div
-      data-testid="context-section-sticky"
-      className="sticky top-0 z-20 bg-[var(--overlay-surface-solid)]"
-    >
-      <div
-        data-testid="context-section-header"
-        // Sentence case, not the uppercase eyebrow the other labels use: this
-        // one is a name. Branch names are case-sensitive and uppercasing
-        // "feature/refine-inbox" misstates the thing it identifies.
-        className="flex items-center justify-between gap-2 pl-4 pr-3 py-1 bg-overlay-raised text-2xs font-medium text-text-secondary"
-      >
-        <span className="flex min-w-0 items-baseline gap-1.5">
-          {/* Two spans so the worktree survives a long project name. As one
-            string it truncated from the right, and the worktree — the part
-            that tells two sections of one project apart — went first. */}
-          <span
-            id={labelId}
-            className="flex min-w-0 items-baseline text-text-primary"
-            title={label}
-          >
-            {host ? <span className="shrink-0 truncate">{host}</span> : null}
-            {host && (project || worktree) ? (
-              <span aria-hidden="true" className="shrink-0 px-1 text-text-secondary">
-                ·
-              </span>
-            ) : null}
-            {/* Both names give way in proportion to their length, each kept to
-                a readable stub. With the worktree held whole, a long project
-                name went to "daintree-n…" — and a grouped row names neither, so
-                the header is the only place the project is said at all. */}
-            {project ? <span className="min-w-[5ch] truncate">{project}</span> : null}
-            {project && worktree ? (
-              <span aria-hidden="true" className="shrink-0 px-1 text-text-secondary">
-                ·
-              </span>
-            ) : null}
-            {worktree ? <span className="min-w-[5ch] truncate">{worktree}</span> : null}
-            {worktreeUnavailable ? (
-              <span
-                data-testid="context-section-unavailable"
-                className="shrink-0 pl-1 text-text-secondary"
-              >
-                · unavailable
-              </span>
-            ) : null}
-            {!host && !project && !worktree ? (
-              <span className="truncate">{APP_SOURCE_LABEL}</span>
-            ) : null}
-          </span>
-          {/* Beside the name it counts, not beside the button — at the far end
-            it read as part of "Mark read". */}
-          <CountBadge label={`${pluralize(count, "notification")}`}>{count}</CountBadge>
-          {newCount > 0 && (
-            <span data-testid="context-section-new" className="shrink-0 tabular-nums">
-              · {newCount} new
-            </span>
-          )}
-        </span>
-        {hasUnread && (
-          <Button
-            variant="subtle"
-            size="xs"
-            onClick={onMarkRead}
-            className="shrink-0 px-1.5 text-2xs focus-visible:-outline-offset-2"
-          >
-            Mark read
-          </Button>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function NewSinceLastLookedDivider({
-  ref,
-  unreadCount,
-  onMarkRead,
-}: {
-  ref?: (el: HTMLDivElement | null) => void;
-  unreadCount: number;
-  onMarkRead: () => void;
-}) {
-  return (
-    <div
-      ref={ref}
-      tabIndex={-1}
-      data-testid="new-since-last-looked"
-      className={cn(
-        LIST_LABEL_CLASS,
-        "flex items-center gap-2 pl-4 pr-3 py-1 bg-overlay-raised outline-hidden"
-      )}
-    >
-      <span>New since you last looked</span>
-      {unreadCount > 0 && (
-        <Button
-          variant="subtle"
-          size="xs"
-          onClick={onMarkRead}
-          // Bordered like Resume — the panel's one small-button shape. Bare, it
-          // was the same grey and size as the label beside it and read as more
-          // of the label.
-          className="ml-auto shrink-0 px-1.5 text-2xs normal-case tracking-normal focus-visible:-outline-offset-2"
-        >
-          {unreadCount === 1 ? "Mark this read" : `Mark these ${unreadCount} read`}
-        </Button>
-      )}
-    </div>
-  );
-}
-
-function NotificationThread({
-  group,
-  onDismiss,
-  rowRef,
-  tabIndex,
-  onRowFocus,
-  onDropdownOpenChange,
-  isSnoozePending,
-  isSnoozed,
-  snoozedUntil,
-  onConsumeSnoozePending,
-  onSnooze,
-  onUnsnooze,
-  onArchive,
-  onToggleRead,
-  onRestore,
-  compact = false,
-  showSource = true,
-}: {
-  group: ThreadGroup;
-  compact?: boolean;
-  showSource?: boolean;
-  onDismiss: () => void;
-  rowRef?: (el: HTMLDivElement | null) => void;
-  tabIndex?: number;
-  onRowFocus?: () => void;
-  onDropdownOpenChange?: (open: boolean) => void;
-  isSnoozePending?: boolean;
-  isSnoozed?: boolean;
-  snoozedUntil?: number;
-  onConsumeSnoozePending?: () => void;
-  onSnooze?: (option: SnoozeDurationOption) => void;
-  onUnsnooze?: () => void;
-  onArchive?: () => void;
-  onToggleRead?: () => void;
-  onRestore?: () => void;
-}) {
-  const latest = group.entries[0];
-  const isNew = group.entries.some((e) => !e.seenAsToast);
-
-  if (!latest) return null;
-
-  const displayType = getWorstSeverity(group.entries);
-
-  // When the worst-severity icon disagrees with the latest entry's type (e.g.
-  // an "error" thread whose newest entry is a "success" recovery), prefix the
-  // preview text so the icon/message divergence reads as intentional rather
-  // than a mismatch.
-  const displayEntry =
-    displayType !== latest.type && latest.message.length > 0
-      ? { ...latest, message: `Latest: ${latest.message}` }
-      : latest;
-
-  return (
-    <div
-      ref={rowRef}
-      tabIndex={tabIndex}
-      role="listitem"
-      onFocus={onRowFocus}
-      data-testid="notification-thread"
-      className={cn(
-        "group relative",
-        // Same treatment as a solo row (NotificationCenterEntry). Both are
-        // stops on the same roving-tabindex ring, so they must not focus
-        // differently — one outline, one box-shadow ring would read as two
-        // kinds of row.
-        tabIndex !== undefined && PALETTE_ROW_FOCUS_CLASS
-      )}
-    >
-      {/* The thread rail, out of flow on purpose. As a `border-l-2` it was part
-          of the box, so every threaded row's icon, unread dot and title sat 2px
-          right of every solo row's — the panel's left column visibly broke on
-          exactly the rows that carry the most weight. Absolute positioning
-          keeps the mark and drops the displacement.
-          `data-notification-thread-rail` is not styling: a background is forced
-          to Canvas under `forced-colors: active` and would vanish, where the old
-          border survived, so index.css repaints it the same way it repaints the
-          unread dot and the count chip. */}
-      <span
-        aria-hidden="true"
-        data-notification-thread-rail="true"
-        className="pointer-events-none absolute inset-y-0 left-0 w-0.5 bg-tint/15"
-      />
-      <NotificationCenterEntry
-        entry={displayEntry}
-        displayType={displayType}
-        threadCount={group.entries.length}
-        isNew={isNew}
-        onDismiss={onDismiss}
-        onDropdownOpenChange={onDropdownOpenChange}
-        isSnoozePending={isSnoozePending}
-        isSnoozed={isSnoozed}
-        snoozedUntil={snoozedUntil}
-        onConsumeSnoozePending={onConsumeSnoozePending}
-        onSnooze={onSnooze}
-        onUnsnooze={onUnsnooze}
-        onArchive={onArchive}
-        onToggleRead={onToggleRead}
-        onRestore={onRestore}
-        compact={compact}
-        showSource={showSource}
       />
     </div>
   );
