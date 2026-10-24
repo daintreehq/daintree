@@ -223,7 +223,7 @@ export function useCanopyInboxFocus({
       cancelAnimationFrame(outer);
       cancelAnimationFrame(inner);
     };
-  }, [isOpen, items, visible, focusCardNow]);
+  }, [isOpen, items, visible, focusCardNow, setQuery]);
 
   // The focused card left (trashed, answered into another section, exited):
   // put the keyboard on the card that took its place instead of dropping it on

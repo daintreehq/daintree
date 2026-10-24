@@ -1,47 +1,21 @@
-import {
-  useCallback,
-  useDeferredValue,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
-import type { KeyboardEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Keyboard, RefreshCw } from "lucide-react";
 import { formatWaitAge } from "@/lib/projectRowStatus";
 import { Telescope } from "@/components/icons";
 import { useCanopyStore } from "@/store/canopyStore";
-import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
-import { useProjectStore } from "@/store/projectStore";
-import { useScratchStore } from "@/store/scratchStore";
-import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { actionService } from "@/services/ActionService";
 import { notify } from "@/lib/notify";
 import { latestUndoOnly, UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
 import { pluralize } from "@/lib/pluralize";
-import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
-import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { isMac } from "@/lib/platform";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { clientErrorCode } from "@/utils/clientAppError";
-import {
-  CANOPY_URGENT_PRIORITY,
-  type CanopyReadMark,
-  type CanopyScreenSearchTarget,
-} from "@shared/types/ipc/canopy";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
-import { CANOPY_SEEN_HEARTBEAT_MS, canopyViewIsWatched, reportCanopySeen } from "@/lib/canopySeen";
-import {
-  isProjectViewCached,
-  subscribeProjectViewLifecycle,
-  subscribeProjectViewObservability,
-} from "@/lib/viewCacheState";
+import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
 import { useOverlayClaim } from "@/hooks/useOverlayState";
 import { useEffectiveCombo } from "@/hooks";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { AppDialog } from "@/components/ui/AppDialog";
-import { consumePaletteFocusRestoreSuppression } from "@/components/ui/paletteFocusRestore";
 import { Button } from "@/components/ui/button";
 import { KbdChord } from "@/components/ui/Kbd";
 import { SearchField } from "@/components/ui/SearchField";
@@ -53,41 +27,16 @@ import { systemClient } from "@/clients/systemClient";
 import { useFrozenBackdrop } from "./useFrozenBackdrop";
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { Callout } from "@/components/ui/Callout";
-import { buildPilotGroups, type PilotWorkspaceMeta } from "@/components/Pilot/pilotRows";
-import {
-  buildCanopyInbox,
-  itemArchived,
-  itemNeedsAttention,
-  itemPriority,
-  itemSubject,
-  repliedAt,
-  searchTerms,
-  splitInbox,
-  unmatchedTerms,
-  type CanopyItem,
-} from "./canopyModel";
-import { CANOPY_REVEAL_MS, nextCanopyOrder } from "./canopyOrder";
-import {
-  CanopyCard,
-  canopyCardDomId,
-  type CanopyCardHandle,
-  type CanopyCardHandlers,
-  type CanopyPaneFocus,
-} from "./CanopyCard";
+import { itemNeedsAttention, repliedAt, type CanopyItem } from "./canopyModel";
+import { CanopyCard, canopyCardDomId } from "./CanopyCard";
 import { CanopyRow } from "./CanopyRow";
-import { CanopyRowMenu, type CanopyRowMenuActions } from "./CanopyRowMenu";
+import { CanopyRowMenu } from "./CanopyRowMenu";
 import { SectionBar } from "./CanopySectionBar";
 import { CanopyStatusBar } from "./CanopyStatusBar";
 import { CanopyPlace } from "./CanopyPlace";
 import { CanopyPitch } from "./CanopyPitch";
 import { CANOPY_BETA_TERMS, CANOPY_TITLE, CANOPY_WAITLIST_URL } from "./canopyTerms";
-import { useListReorderMotion } from "./useListReorderMotion";
-import {
-  ALL_HOSTS_LABEL,
-  CanopyHeaderCenter,
-  CanopyHostPicker,
-  useCanopyHostRows,
-} from "./CanopyHostPicker";
+import { CanopyHeaderCenter, CanopyHostPicker, useCanopyHostRows } from "./CanopyHostPicker";
 import { CanopyHostOffer } from "./CanopyHostOffer";
 import { useCanopyInboxData } from "./useCanopyInboxData";
 import { useCanopyInboxOrder } from "./useCanopyInboxOrder";
@@ -99,47 +48,14 @@ import { useCanopyInboxActions } from "./useCanopyInboxActions";
 import { useCanopyInboxKeyboard } from "./useCanopyInboxKeyboard";
 import { placeOf } from "./canopyInboxPlace";
 import { CanopyAssistantPane, CanopyAssistantRow } from "./CanopyAssistantList";
-import {
-  CANOPY_ROLE_FILTERS,
-  assistantMatches,
-  canopyAssistantId,
-  buildAssistantItems,
-  type CanopyAssistantItem,
-  type CanopyRoleFilter,
-} from "./canopyAssistants";
-import { canopyAssistantDomId, openAssistantItem } from "./openAssistantItem";
-import {
-  hostsWithPartialWork,
-  isWorkOf,
-  workLinkLabel,
-  workLinkOf,
-  workLinksByRun,
-} from "./canopyRelationships";
-import { useAgentDirectory } from "@/hooks/useAgentDirectory";
-import { useAssistantWork } from "@/hooks/useAssistantWork";
+import { CANOPY_ROLE_FILTERS, type CanopyRoleFilter } from "./canopyAssistants";
 import { isFullAgentDirectory } from "@shared/types/agentDirectory";
 import { CanopyBulkEnableDialog } from "./CanopyBulkEnableDialog";
 import type { BulkTarget } from "@shared/utils/canopyBulkEnable";
-import {
-  canopyBulkTransport,
-  ownCanopyApi,
-  ownCanopyTerminalApi,
-  remoteCanopyApi,
-  remoteCanopyTerminalApi,
-  useRemoteCanopies,
-  useRemoteCanopy,
-} from "./canopyHostSource";
-import {
-  allHostsKey,
-  createAllHostsRoute,
-  mergeHostReadings,
-  parseAllHostsKey,
-  type HostReading,
-} from "./canopyAllHosts";
-import { ALL_HOSTS_ID, canopyOwnHostId, type CanopyScope } from "@/store/canopyStore";
-import { retryHostProjects, useHostProjectLists } from "@/components/Hosts/hostProjects";
+import { canopyBulkTransport } from "./canopyHostSource";
+import { ALL_HOSTS_ID, canopyOwnHostId } from "@/store/canopyStore";
 import { describeHostMenuState, type HostMenuRow } from "@/components/Hosts/hostModel";
-import { isNewWindowClick, switchToHost } from "@/components/Hosts/hostSwitching";
+import { isNewWindowClick } from "@/components/Hosts/hostSwitching";
 import type { HostId } from "@shared/types/remoteHosts";
 
 interface HostIssue {
