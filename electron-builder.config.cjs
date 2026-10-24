@@ -115,7 +115,7 @@ function baseFiles() {
     // binaries from carrying dead test fixtures.
     "!dist-electron/plugins/sample/**",
     // Build-report sidecars read only by the budget scripts. `dist/importmap-meta.json`
-    // is NOT one of these — protocols.ts reads it at runtime.
+    // is NOT one of these — setup/protocols/sessionCsp.ts reads it at runtime.
     "!dist/chunk-modules.json",
     "!dist/chunk-modules-by-file.json",
     "!dist/renderer-bundle-size-report.json",

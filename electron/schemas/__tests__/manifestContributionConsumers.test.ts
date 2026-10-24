@@ -2759,7 +2759,10 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
           file: PLUGIN_SCHEMA,
           symbol: "TourContributionSchema superRefine (tour_audio_host_undeclared)",
         },
-        { file: "electron/setup/protocols.ts", symbol: "proxyPluginTourAudio (isAllowedHost)" },
+        {
+          file: "electron/setup/protocols/plugin.ts",
+          symbol: "proxyPluginTourAudio (isAllowedHost)",
+        },
       ],
       note: "Every remote chapter audioUrl hostname must appear here, and every fetch hop must stay on it.",
     },

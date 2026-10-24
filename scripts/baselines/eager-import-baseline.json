@@ -1,6 +1,6 @@
 {
-  "count": 1290,
-  "moduleCount": 1290,
+  "count": 1301,
+  "moduleCount": 1301,
   "allowlist": [
     "electron/ipc/errorHandlers.ts",
     "electron/ipc/handlers/agentCapabilities.ts",
@@ -105,7 +105,7 @@
     "electron/services/worktreeIssueAssociations.ts",
     "electron/setup/devDiagnostics.ts",
     "electron/setup/environment.ts",
-    "electron/setup/protocols.ts",
+    "electron/setup/protocols/sessionCsp.ts",
     "electron/setup/windowsPath.ts",
     "electron/store.ts",
     "electron/utils/emergencyLog.ts",
@@ -1747,8 +1747,8 @@
       "pattern": "sync-fs"
     },
     {
-      "file": "electron/setup/protocols.ts",
-      "line": 2147,
+      "file": "electron/setup/protocols/sessionCsp.ts",
+      "line": 83,
       "pattern": "sync-fs"
     },
     {
@@ -2053,37 +2053,37 @@
     },
     {
       "file": "electron/window/globalServicesInit.ts",
-      "line": 297,
+      "line": 302,
       "pattern": "sync-store-get"
     },
     {
       "file": "electron/window/globalServicesInit.ts",
-      "line": 376,
+      "line": 381,
       "pattern": "sync-store-get"
     },
     {
       "file": "electron/window/globalServicesInit.ts",
-      "line": 565,
+      "line": 570,
       "pattern": "sync-store-get"
     },
     {
       "file": "electron/window/globalServicesInit.ts",
-      "line": 713,
+      "line": 718,
       "pattern": "sync-store-get"
     },
     {
       "file": "electron/window/globalServicesInit.ts",
-      "line": 964,
+      "line": 991,
       "pattern": "sync-store-get"
     },
     {
       "file": "electron/window/globalServicesInit.ts",
-      "line": 1306,
+      "line": 1333,
       "pattern": "sync-store-get"
     },
     {
       "file": "electron/window/globalServicesInit.ts",
-      "line": 1500,
+      "line": 1527,
       "pattern": "sync-store-get"
     },
     {
