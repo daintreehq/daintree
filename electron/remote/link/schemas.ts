@@ -61,6 +61,33 @@ const WelcomeSchema = z.object({
   resumed: z.boolean(),
   resumeSecret: z.string().max(256).optional(),
   hostLaunchId: id.optional(),
+  // One this side cannot read (a cause added after it) is dropped rather than
+  // failing the WELCOME: the session matters more than saying why the last one ended.
+  previousEnd: z
+    .object({
+      crashCause: z.enum([
+        "uncaught-exception",
+        "native-crash",
+        "suspended-then-lost",
+        "power-loss",
+        "external-kill",
+        "unknown",
+      ]),
+      cause: z.literal("watchdog-deadlock").optional(),
+      watchdogKillReason: z
+        .enum([
+          "unresponsive",
+          "unresponsive-under-pressure",
+          "no-progress-under-external-pressure",
+        ])
+        .optional()
+        .catch(undefined),
+      missedBeats: z.number().int().min(1).max(1_000_000).optional().catch(undefined),
+      pressureEvidence: z.string().max(256).optional().catch(undefined),
+      at: epochMs,
+    })
+    .optional()
+    .catch(undefined),
 });
 
 const RejectSchema = z.object({

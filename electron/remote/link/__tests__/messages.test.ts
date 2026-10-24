@@ -213,6 +213,50 @@ describe("link messages", () => {
     expect(() => welcome({ hostLaunchId: "" })).toThrow();
   });
 
+  it("carries how the host's previous process ended, and drops one it can't read rather than the session (#14368)", () => {
+    const welcome = (extra: object) =>
+      parseInboundFrame(
+        messageToFrame({
+          lane: Lane.CONTROL,
+          kind: ControlKind.WELCOME,
+          body: {
+            handshake: TEST_HANDSHAKE,
+            hostName: "h",
+            sessionId: "s1",
+            resumed: false,
+            ...extra,
+          },
+        } as never)
+      ).body as { previousEnd?: unknown };
+    const previousEnd = {
+      crashCause: "external-kill",
+      cause: "watchdog-deadlock",
+      watchdogKillReason: "no-progress-under-external-pressure",
+      missedBeats: 30,
+      pressureEvidence: "main reported memory pressure",
+      at: 1_000,
+    };
+    expect(welcome({ previousEnd }).previousEnd).toEqual(previousEnd);
+    // Undated, it is dropped whole; an out-of-bounds detail drops only that detail.
+    expect(welcome({ previousEnd: { ...previousEnd, at: "soon" } }).previousEnd).toBeUndefined();
+    expect(
+      welcome({
+        previousEnd: { ...previousEnd, missedBeats: 0, pressureEvidence: "x".repeat(300) },
+      }).previousEnd
+    ).toEqual({ ...previousEnd, missedBeats: undefined, pressureEvidence: undefined });
+    expect(welcome({}).previousEnd).toBeUndefined();
+    // A cause a newer host knows and this Shell doesn't.
+    expect(welcome({ previousEnd: { crashCause: "eaten-by-grue", at: 1 } }).previousEnd).toBe(
+      undefined
+    );
+    // A watchdog reason this Shell doesn't know keeps the rest.
+    expect(
+      welcome({
+        previousEnd: { ...previousEnd, watchdogKillReason: "something-newer" },
+      }).previousEnd
+    ).toEqual({ ...previousEnd, watchdogKillReason: undefined });
+  });
+
   it("lets a host that reads opens without openId take one that names it", () => {
     // Such a host reads OPEN with the shape REBIND still has.
     const frame = messageToFrame({

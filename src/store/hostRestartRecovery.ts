@@ -8,6 +8,15 @@ import { getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
 import type { PanelRestoreContext } from "@/utils/stateHydration/panelRestorePhase";
 import { logDebug, logInfo } from "@/utils/logger";
 
+export interface HostRestartRelaunch {
+  /** Those left for later because this view stopped driving on the way. */
+  deferred: ReadonlyMap<string, number>;
+  /** Agent panes whose relaunch was started. */
+  relaunched: number;
+  /** Agent panes put back held, waiting to be resumed (#14382 holds them after an unclean end). */
+  held: number;
+}
+
 export interface HostRestartRecoveryOptions {
   /** False once the view moved on or a newer resync took over. */
   isCurrent: () => boolean;
@@ -24,17 +33,19 @@ export interface HostRestartRecoveryOptions {
  * restart left: once it has been restarted or closed, it is the user's.
  *
  * `lost` maps each pane to the restart key it was lost under. Resolves with
- * those it left for later because this view stopped driving on the way.
+ * those it left for later because this view stopped driving on the way, and
+ * how many agents it relaunched or put back held.
  */
 export async function relaunchTerminalsLostToHostRestart(
   projectId: string,
   lost: ReadonlyMap<string, number>,
   options: HostRestartRecoveryOptions
-): Promise<ReadonlyMap<string, number>> {
+): Promise<HostRestartRelaunch> {
   const deferred = new Map<string, number>();
+  const outcome = { deferred, relaunched: 0, held: 0 };
   const hydrate: HydrateResult = await window.electron.app.hydrate();
-  if (!options.isCurrent()) return deferred;
-  if ((hydrate.workspaceId ?? hydrate.project?.id ?? null) !== projectId) return deferred;
+  if (!options.isCurrent()) return outcome;
+  if ((hydrate.workspaceId ?? hydrate.project?.id ?? null) !== projectId) return outcome;
   const entries = (hydrate.appState?.terminals ?? []).filter(
     (entry) =>
       entry !== undefined &&
@@ -44,7 +55,7 @@ export async function relaunchTerminalsLostToHostRestart(
       entry.location !== "trash"
   );
   const candidates = entries.filter((entry) => lost.has(entry.id)).slice(0, 256);
-  if (candidates.length === 0) return deferred;
+  if (candidates.length === 0) return outcome;
   // Asked again just before launching: one the host runs under that id after
   // all (another screen brought it back meanwhile) must not start twice, and
   // one it can't say about is left alone.
@@ -52,7 +63,7 @@ export async function relaunchTerminalsLostToHostRestart(
     window.electron.terminal.reconnectBulk(candidates.map((entry) => entry.id)),
     window.electron.terminal.getForProject(projectId),
   ]);
-  if (!options.isCurrent()) return deferred;
+  if (!options.isCurrent()) return outcome;
   // What the host runs under a saved id, including a pane restarted since it
   // was lost, takes part in who resumes which conversation, as it does on a
   // cold launch, and launches nothing: its reconnect is the resync's. Without
@@ -73,7 +84,7 @@ export async function relaunchTerminalsLostToHostRestart(
       })
       .map((entry) => entry.id)
   );
-  if (gone.size === 0) return deferred;
+  if (gone.size === 0) return outcome;
   const saved = entries.filter((entry) => gone.has(entry.id) || live.has(entry.id));
 
   const [{ restorePanelsPhase }, { usePanelStore }, { useResourceProfileStore }] =
@@ -82,7 +93,7 @@ export async function relaunchTerminalsLostToHostRestart(
       import("@/store/panelStore"),
       import("@/store/resourceProfileStore"),
     ]);
-  if (!options.isCurrent()) return deferred;
+  if (!options.isCurrent()) return outcome;
 
   const addPanel: PanelRestoreContext["addPanel"] = async (args) => {
     const id = args.requestedId;
@@ -119,6 +130,10 @@ export async function relaunchTerminalsLostToHostRestart(
       bypassLimits: true,
       focusPolicy: "preserve",
     });
+    if (launched) {
+      if (args.restoreRecovery !== undefined) outcome.held += 1;
+      else if (args.launchAgentId !== undefined) outcome.relaunched += 1;
+    }
     return launched ?? "";
   };
 
@@ -155,5 +170,5 @@ export async function relaunchTerminalsLostToHostRestart(
     resourceProfile: useResourceProfileStore.getState().profile,
     logHydrationInfo: (message, context) => logDebug(`[HostRestart] ${message}`, context),
   });
-  return deferred;
+  return outcome;
 }

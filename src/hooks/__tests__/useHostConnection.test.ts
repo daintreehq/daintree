@@ -38,7 +38,11 @@ const {
       _projectId: string,
       _lost: ReadonlyMap<string, number>,
       _options: { isCurrent: () => boolean; drives: () => boolean }
-    ): Promise<ReadonlyMap<string, number>> => new Map()
+    ): Promise<{ deferred: ReadonlyMap<string, number>; relaunched: number; held: number }> => ({
+      deferred: new Map(),
+      relaunched: 0,
+      held: 0,
+    })
   ),
   panels: {} as Record<string, unknown>,
 }));
@@ -77,6 +81,8 @@ vi.mock("@/services/TerminalInstanceService", () => {
 vi.mock("@/store/hostRestartRecovery", () => ({
   relaunchTerminalsLostToHostRestart: relaunchLost,
 }));
+const noticeUnclean = vi.hoisted(() => vi.fn());
+vi.mock("@/store/hostRestartNotice", () => ({ noticeUncleanHostRestart: noticeUnclean }));
 const refreshDrafts = vi.hoisted(() =>
   vi.fn(async (_projectId: string, _options: { isCurrent: () => boolean }) => undefined)
 );
@@ -2059,7 +2065,10 @@ describe("host restart", () => {
     hostHasNone(electron);
     let fail!: (error: Error) => void;
     relaunchLost.mockImplementationOnce(
-      () => new Promise<ReadonlyMap<string, number>>((_resolve, reject) => (fail = reject))
+      () =>
+        new Promise<{ deferred: ReadonlyMap<string, number>; relaunched: number; held: number }>(
+          (_resolve, reject) => (fail = reject)
+        )
     );
 
     emitHost({ type: "resync-required", hostId: "studio-01", reason: "host-restarted" });
@@ -2085,7 +2094,11 @@ describe("host restart", () => {
     runningAgent("t-agent");
     hostHasNone(electron);
     // The view stopped driving on the way, so the pane was left.
-    relaunchLost.mockResolvedValueOnce(new Map([["t-agent", 2]]));
+    relaunchLost.mockResolvedValueOnce({
+      deferred: new Map([["t-agent", 2]]),
+      relaunched: 0,
+      held: 0,
+    });
 
     emitHost({ type: "resync-required", hostId: "studio-01", reason: "host-restarted" });
     await vi.waitFor(() => expect(relaunchLost).toHaveBeenCalledTimes(1), { timeout: 5_000 });
@@ -2095,6 +2108,185 @@ describe("host restart", () => {
 
     await vi.waitFor(() => expect(relaunchLost).toHaveBeenCalledTimes(2));
     expect([...relaunchLost.mock.calls[1]![1]]).toEqual([["t-agent", 2]]);
+    stop();
+  });
+
+  const watchdogEnd = {
+    crashCause: "external-kill" as const,
+    cause: "watchdog-deadlock" as const,
+    watchdogKillReason: "unresponsive-under-pressure" as const,
+    at: 1_000,
+  };
+
+  it("says what ended the host and what came back, once the relaunch settles", async () => {
+    noticeUnclean.mockClear();
+    const { electron, emitHost, stop } = await drivingView();
+    runningAgent("t-agent");
+    hostHasNone(electron);
+    relaunchLost.mockResolvedValueOnce({ deferred: new Map(), relaunched: 1, held: 2 });
+
+    emitHost({
+      type: "resync-required",
+      hostId: "studio-01",
+      reason: "host-restarted",
+      previousEnd: watchdogEnd,
+    });
+
+    await vi.waitFor(() => expect(noticeUnclean).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+    expect(noticeUnclean).toHaveBeenCalledWith(
+      { hostId: "studio-01", hostName: "studio-01" },
+      "proj-1",
+      watchdogEnd,
+      { relaunched: 1, held: 2 }
+    );
+    stop();
+  });
+
+  it("stays quiet after a planned restart", async () => {
+    noticeUnclean.mockClear();
+    const { electron, emitHost, stop } = await drivingView();
+    runningAgent("t-agent");
+    hostHasNone(electron);
+    relaunchLost.mockResolvedValueOnce({ deferred: new Map(), relaunched: 1, held: 0 });
+
+    emitHost({ type: "resync-required", hostId: "studio-01", reason: "host-restarted" });
+
+    await vi.waitFor(() => expect(relaunchLost).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+    for (let i = 0; i < 5; i += 1) await flush();
+    expect(noticeUnclean).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it("still says what ended the host when nothing was running to bring back", async () => {
+    noticeUnclean.mockClear();
+    const { electron, emitHost, stop } = await drivingView();
+    hostHasNone(electron);
+
+    emitHost({
+      type: "resync-required",
+      hostId: "studio-01",
+      reason: "host-restarted",
+      previousEnd: watchdogEnd,
+    });
+
+    await vi.waitFor(() => expect(noticeUnclean).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+    expect(noticeUnclean.mock.calls[0]![3]).toEqual({ relaunched: 0, held: 0 });
+    expect(relaunchLost).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it("waits for what a relaunch had to leave, then counts both runs in one notice", async () => {
+    noticeUnclean.mockClear();
+    const { electron, emitHost, emitLease, stop } = await drivingView();
+    runningAgent("t-agent");
+    runningAgent("t-other");
+    hostHasNone(electron);
+    relaunchLost.mockResolvedValueOnce({
+      deferred: new Map([["t-other", 2]]),
+      relaunched: 3,
+      held: 1,
+    });
+    relaunchLost.mockResolvedValueOnce({ deferred: new Map(), relaunched: 1, held: 1 });
+
+    emitHost({
+      type: "resync-required",
+      hostId: "studio-01",
+      reason: "host-restarted",
+      previousEnd: watchdogEnd,
+    });
+    await vi.waitFor(() => expect(relaunchLost).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+    for (let i = 0; i < 5; i += 1) await flush();
+    expect(noticeUnclean).not.toHaveBeenCalled();
+
+    emitLease({ type: "changed", state: leaseView(null, true) });
+
+    await vi.waitFor(() => expect(noticeUnclean).toHaveBeenCalledTimes(1));
+    expect(relaunchLost).toHaveBeenCalledTimes(2);
+    expect(noticeUnclean.mock.calls[0]![3]).toEqual({ relaunched: 4, held: 2 });
+    stop();
+  });
+
+  it("lets a relaunch a newer restart overtook say nothing, so the newer word stands", async () => {
+    noticeUnclean.mockClear();
+    const { electron, emitHost, stop } = await drivingView();
+    runningAgent("t-agent");
+    hostHasNone(electron);
+    type Outcome = { deferred: ReadonlyMap<string, number>; relaunched: number; held: number };
+    let finishFirst!: (outcome: Outcome) => void;
+    relaunchLost.mockImplementationOnce(
+      () => new Promise<Outcome>((resolve) => (finishFirst = resolve))
+    );
+    relaunchLost.mockResolvedValueOnce({ deferred: new Map(), relaunched: 0, held: 1 });
+    const newerEnd = { ...watchdogEnd, at: 2_000 };
+
+    emitHost({
+      type: "resync-required",
+      hostId: "studio-01",
+      reason: "host-restarted",
+      previousEnd: watchdogEnd,
+    });
+    await vi.waitFor(() => expect(relaunchLost).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+    emitHost({
+      type: "resync-required",
+      hostId: "studio-01",
+      reason: "host-restarted",
+      previousEnd: newerEnd,
+    });
+    await vi.waitFor(() => expect(noticeUnclean).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+
+    finishFirst({ deferred: new Map(), relaunched: 5, held: 0 });
+    for (let i = 0; i < 10; i += 1) await flush();
+
+    expect(noticeUnclean).toHaveBeenCalledTimes(1);
+    expect(noticeUnclean.mock.calls[0]![2]).toEqual(newerEnd);
+    expect(noticeUnclean.mock.calls[0]![3]).toEqual({ relaunched: 0, held: 1 });
+    stop();
+  });
+
+  it("keeps the newer restart's word when an overtaken relaunch leaves work behind first", async () => {
+    noticeUnclean.mockClear();
+    const { electron, emitHost, emitLease, stop } = await drivingView();
+    runningAgent("t-agent");
+    hostHasNone(electron);
+    type Outcome = { deferred: ReadonlyMap<string, number>; relaunched: number; held: number };
+    let finishFirst!: (outcome: Outcome) => void;
+    let finishSecond!: (outcome: Outcome) => void;
+    relaunchLost.mockImplementationOnce(
+      () => new Promise<Outcome>((resolve) => (finishFirst = resolve))
+    );
+    relaunchLost.mockImplementationOnce(
+      () => new Promise<Outcome>((resolve) => (finishSecond = resolve))
+    );
+    relaunchLost.mockResolvedValueOnce({ deferred: new Map(), relaunched: 0, held: 1 });
+    const newerEnd = { ...watchdogEnd, at: 2_000 };
+
+    emitHost({
+      type: "resync-required",
+      hostId: "studio-01",
+      reason: "host-restarted",
+      previousEnd: watchdogEnd,
+    });
+    await vi.waitFor(() => expect(relaunchLost).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+    emitHost({
+      type: "resync-required",
+      hostId: "studio-01",
+      reason: "host-restarted",
+      previousEnd: newerEnd,
+    });
+    await vi.waitFor(() => expect(relaunchLost).toHaveBeenCalledTimes(2), { timeout: 5_000 });
+
+    // The overtaken run leaves a pane for later, then the newer one does too.
+    finishFirst({ deferred: new Map([["t-agent", 2]]), relaunched: 0, held: 0 });
+    for (let i = 0; i < 5; i += 1) await flush();
+    finishSecond({ deferred: new Map([["t-agent", 2]]), relaunched: 2, held: 0 });
+    for (let i = 0; i < 5; i += 1) await flush();
+    expect(noticeUnclean).not.toHaveBeenCalled();
+
+    emitLease({ type: "changed", state: leaseView(null, true) });
+
+    await vi.waitFor(() => expect(noticeUnclean).toHaveBeenCalledTimes(1));
+    expect(noticeUnclean.mock.calls[0]![2]).toEqual(newerEnd);
+    expect(noticeUnclean.mock.calls[0]![3]).toEqual({ relaunched: 2, held: 1 });
     stop();
   });
 

@@ -1,4 +1,4 @@
-import type { HostId } from "../../../../shared/types/remoteHosts.js";
+import type { HostId, HostPreviousEnd } from "../../../../shared/types/remoteHosts.js";
 
 /** A session came up on a host connection that had a session before it. */
 export interface SessionAttachedInfo {
@@ -16,13 +16,20 @@ export interface SessionAttachedInfo {
    * merely expired.
    */
   hostRestarted?: boolean;
+  /** How the restarted host's previous process ended, when it recorded an unclean end. */
+  previousEnd?: HostPreviousEnd;
 }
 
 export type ViewResyncReason = "reconnected" | "host-restarted";
 
 export interface ResyncCoordinatorOptions {
   /** Tell one local view to refetch what it shows from its host. */
-  resync(webContentsId: number, hostId: HostId, reason: ViewResyncReason): void;
+  resync(
+    webContentsId: number,
+    hostId: HostId,
+    reason: ViewResyncReason,
+    previousEnd?: HostPreviousEnd
+  ): void;
 }
 
 /**
@@ -41,9 +48,11 @@ export class ResyncCoordinator {
   onSessionAttached(hostId: HostId, info: SessionAttachedInfo): void {
     if (info.resumed) return;
     const reason: ViewResyncReason = info.hostRestarted ? "host-restarted" : "reconnected";
+    const previousEnd = info.hostRestarted ? info.previousEnd : undefined;
     for (const webContentsId of new Set(info.reopened)) {
       try {
-        this.options.resync(webContentsId, hostId, reason);
+        if (previousEnd) this.options.resync(webContentsId, hostId, reason, previousEnd);
+        else this.options.resync(webContentsId, hostId, reason);
       } catch (error) {
         console.error("[RemoteHosts] Resync after reconnect failed:", error);
       }

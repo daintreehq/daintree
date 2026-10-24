@@ -1,5 +1,10 @@
 import { useEffect, useSyncExternalStore } from "react";
-import { LOCAL_HOST_ID, type HostId, type OperationId } from "@shared/types/remoteHosts";
+import {
+  LOCAL_HOST_ID,
+  type HostId,
+  type HostPreviousEnd,
+  type OperationId,
+} from "@shared/types/remoteHosts";
 import type { RemoteHostsEvent } from "@shared/types/ipc/remoteHosts";
 import type {
   DriveLeaseEvent,
@@ -86,9 +91,23 @@ let resyncProjectStateOwed = false;
  * held until the host says whether this view drives: it relaunches them, or
  * leaves them to the driver. `gathering` until the first resync after the
  * restart has looked: what later ones find gone ended since, not with the
- * restart. Null when no restart is owed that.
+ * restart. `previousEnd` is how the host recorded its previous process
+ * ending, absent for a planned restart; `relaunched` and `held` count what
+ * a relaunch cut short already brought back, so the notice once it is done
+ * counts it all. `restart` names the restart they are about. Null when no
+ * restart is owed that.
  */
-let restartRecovery: { lost: Map<string, number>; gathering: boolean } | null = null;
+interface RestartRecovery {
+  lost: Map<string, number>;
+  gathering: boolean;
+  restart: number;
+  previousEnd?: HostPreviousEnd;
+  relaunched: number;
+  held: number;
+}
+let restartRecovery: RestartRecovery | null = null;
+/** Bumped by every host restart: only the latest one says how the host ended. */
+let restartCount = 0;
 /**
  * Bumped by teardown and when this view gives a restart's panes up: a
  * relaunch under way outlives the resyncs after it, which only re-read what
@@ -115,6 +134,8 @@ export interface ResyncFromHostOptions {
    * would, rather than leaving them exited.
    */
   hostRestarted?: boolean;
+  /** With `hostRestarted`: how the host recorded its previous process ending, when uncleanly. */
+  previousEnd?: HostPreviousEnd;
 }
 
 /**
@@ -126,7 +147,7 @@ export interface ResyncFromHostOptions {
 export function resyncFromHost(options: ResyncFromHostOptions = {}): Promise<void> {
   resyncGeneration += 1;
   if (options.freshSession) resyncProjectStateOwed = true;
-  if (options.hostRestarted) armRestartRecovery();
+  if (options.hostRestarted) armRestartRecovery(options.previousEnd);
   if (resyncRunning) {
     resyncAgain = true;
     return resyncRunning;
@@ -227,12 +248,37 @@ function recordRestartLoss(id: string, restartKey: number): void {
  * The host restarted under this view. One that watched the project then has
  * nothing of its own to bring back: what it showed were the driver's.
  */
-function armRestartRecovery(): void {
+function armRestartRecovery(previousEnd: HostPreviousEnd | undefined): void {
   const projectId = getViewWorkspaceId();
   const before = leaseBeforeGap ?? getDriveLeaseSnapshot();
   if (projectId && before?.projectId === projectId && !before.drivingHere) return;
-  restartRecovery ??= { lost: new Map(), gathering: true };
+  restartCount += 1;
+  restartRecovery ??= { lost: new Map(), gathering: true, restart: 0, relaunched: 0, held: 0 };
   restartRecovery.gathering = true;
+  // This restart's word on the last end, and its own count of what came back.
+  restartRecovery.restart = restartCount;
+  restartRecovery.previousEnd = previousEnd;
+  restartRecovery.relaunched = 0;
+  restartRecovery.held = 0;
+}
+
+/** Said once a restart's relaunch has settled, and only when the host recorded an unclean end. */
+function noticeRestart(projectId: string, recovery: RestartRecovery): void {
+  const previousEnd = recovery.previousEnd;
+  // A restart since has its own word, which this one's would replace.
+  if (!previousEnd || recovery.restart !== restartCount) return;
+  const { relaunched, held } = recovery;
+  const host = { hostId: useHostConnectionStore.getState().hostId, hostName: hostLabel() };
+  const generation = restartRecoveryGeneration;
+  void import("@/store/hostRestartNotice")
+    .then(({ noticeUncleanHostRestart }) => {
+      if (generation !== restartRecoveryGeneration || recovery.restart !== restartCount) return;
+      if (getViewWorkspaceId() !== projectId) return;
+      noticeUncleanHostRestart(host, projectId, previousEnd, { relaunched, held });
+    })
+    .catch((error: unknown) => {
+      logWarn("[HostConnection] Couldn't say how the host's restart went", { error });
+    });
 }
 
 /**
@@ -263,7 +309,11 @@ function settleRestartRecovery(): void {
   }
   if (!recovery || recovery.gathering || readBackOwed) return;
   restartRecovery = null;
-  if (recovery.lost.size === 0) return;
+  if (recovery.lost.size === 0) {
+    // Nothing to bring back still leaves the user owed what happened there.
+    noticeRestart(projectId, recovery);
+    return;
+  }
   const generation = restartRecoveryGeneration;
   const isCurrent = () =>
     generation === restartRecoveryGeneration && getViewWorkspaceId() === projectId;
@@ -273,21 +323,41 @@ function settleRestartRecovery(): void {
       let left: ReadonlyMap<string, number> = recovery.lost;
       try {
         const { relaunchTerminalsLostToHostRestart } = await import("@/store/hostRestartRecovery");
-        left = await relaunchTerminalsLostToHostRestart(projectId, recovery.lost, {
+        const outcome = await relaunchTerminalsLostToHostRestart(projectId, recovery.lost, {
           isCurrent,
           drives: () => drivesSinceGap(projectId),
         });
+        left = outcome.deferred;
+        recovery.relaunched += outcome.relaunched;
+        recovery.held += outcome.held;
       } finally {
         // Cut short by the link, or this view stopped driving on the way: the
         // host's next word settles what is left. One relaunched meanwhile no
         // longer shows its loss and is skipped then.
         if (left.size > 0 && isCurrent()) {
-          const pending = (restartRecovery ??= { lost: new Map(), gathering: false });
+          // A restart since has its own word and count; otherwise this one's carry
+          // over, onto a fresh record or one an older restart's relaunch left.
+          restartRecovery ??= {
+            lost: new Map(),
+            gathering: false,
+            restart: 0,
+            relaunched: 0,
+            held: 0,
+          };
+          const pending = restartRecovery;
+          if (recovery.restart === restartCount && pending.restart !== restartCount) {
+            pending.restart = recovery.restart;
+            pending.previousEnd = recovery.previousEnd;
+            pending.relaunched = recovery.relaunched;
+            pending.held = recovery.held;
+          }
           for (const [id, restartKey] of left) {
             if (!pending.lost.has(id)) pending.lost.set(id, restartKey);
           }
         }
       }
+      // Reached only when the relaunch answered: one cut short tries again first.
+      if (left.size === 0 && isCurrent()) noticeRestart(projectId, recovery);
     })(),
     { context: "Relaunching the terminals a host restart ended" }
   );
@@ -1197,6 +1267,8 @@ function beginSync(): () => void {
               void resyncFromHost({
                 freshSession: event.reason === "reconnected" || event.reason === "host-restarted",
                 hostRestarted: event.reason === "host-restarted",
+                ...(event.reason === "host-restarted" &&
+                  event.previousEnd && { previousEnd: event.previousEnd }),
               });
               // A dropped event may have been the driver's panels changing.
               if (projectId && watches(projectId)) void followHostPanels();

@@ -161,8 +161,13 @@ function createViewSink(hostOf: (webContentsId: number) => HostId | null): ViewS
       }
       return onWebContentsDestroyed(wc, onGone);
     },
-    resync(webContentsId, hostId, reason) {
-      const event: RemoteHostsEvent = { type: "resync-required", hostId, reason };
+    resync(webContentsId, hostId, reason, previousEnd) {
+      const event: RemoteHostsEvent = {
+        type: "resync-required",
+        hostId,
+        reason,
+        ...(reason === "host-restarted" && previousEnd && { previousEnd }),
+      };
       sink.send(webContentsId, CHANNELS.REMOTE_HOSTS_EVENT, [event]);
     },
     hostOf,

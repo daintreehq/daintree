@@ -34,6 +34,7 @@ import {
 } from "../terminal/hostAttach.js";
 import { attachWorktreePortBridge, detachWorktreePortBridge } from "../worktreePort/attach.js";
 import { HostServer } from "./HostServer.js";
+import { getHostPreviousEnd } from "../../services/hostPreviousEnd.js";
 import { hostLaunchCommand, hostLocation } from "./hostLocation.js";
 import type { HostSocketLocation } from "./hostSocketPath.js";
 import { initRemoteHostsHost } from "./initHost.js";
@@ -165,6 +166,7 @@ async function buildHostListener(
     hostName: os.hostname(),
     launchCommand: hostLaunchCommand(),
     observeWorkingAgents: async () => (await observeAgents())?.working ?? null,
+    previousEnd: getHostPreviousEnd(),
   });
   teardowns.push(() => server.close());
   teardowns.push(registerRemoteService("hostServer", server));

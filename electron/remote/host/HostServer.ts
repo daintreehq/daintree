@@ -6,6 +6,7 @@ import {
   isBlockingMismatch,
   type HandshakeMismatch,
   type HostHandshakeInfo,
+  type HostPreviousEnd,
 } from "../../../shared/types/remoteHosts.js";
 import { ControlKind, type HelloMessage, type LinkClientInfo } from "../link/messages.js";
 import { Lane } from "../link/frames.js";
@@ -79,6 +80,8 @@ export interface HostServerOptions {
   launchCommand?: string[];
   /** Names this host's process in every WELCOME; defaults to the one this process minted. */
   launchId?: string;
+  /** How the process before this one ended uncleanly, told in every WELCOME (#14368). */
+  previousEnd?: HostPreviousEnd;
 }
 
 /**
@@ -571,6 +574,7 @@ export class HostServer {
         resumed,
         resumeSecret,
         hostLaunchId: this.options.launchId ?? PROCESS_LAUNCH_ID,
+        ...(this.options.previousEnd && { previousEnd: this.options.previousEnd }),
       },
     });
     this.live.set(id, ctx);
