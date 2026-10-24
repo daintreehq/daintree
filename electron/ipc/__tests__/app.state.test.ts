@@ -562,6 +562,27 @@ describe("app:boot handler", () => {
       expect(events).toEqual([expect.objectContaining({ workspaceIds: [project.id] })]);
     });
 
+    it("saves held the legacy terminals a first open migrates", async () => {
+      legacyOwnerRef.current = project.id;
+      globalAppStateRef.current = {
+        ...globalAppStateRef.current,
+        terminals: (saved.terminals as unknown[]).map((t) => ({ ...(t as object) })),
+      };
+      saved = {};
+      vi.mocked(projectStore.getProjectStateWithRecovery).mockResolvedValue({
+        state: null,
+        quarantinedPath: undefined,
+      });
+
+      await invokeBoot();
+
+      expect(
+        (saved.terminals as Array<{ restoreRecovery?: unknown }>)[0].restoreRecovery
+      ).toMatchObject({
+        reason: "host-ended-uncleanly",
+      });
+    });
+
     it("never serves a cached payload built before the hold", async () => {
       legacyOwnerRef.current = project.id;
       vi.mocked(consumePrefetchedHydrateResult).mockReturnValue({

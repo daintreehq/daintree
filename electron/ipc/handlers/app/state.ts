@@ -590,14 +590,19 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
 
         // Migrate terminals to per-project state with kind inference
         if (terminalsToUse.length > 0) {
-          const migratedTerminals = terminalsToUse.map(
-            (t) =>
-              ({
-                ...t,
-                kind: inferKind(t, workspaceId),
-                cwd: t.cwd || currentProject?.path || "",
-              }) as import("../../../../shared/types/project.js").TerminalSnapshot
-          );
+          // Saved held: the hold above found no per-project panes to hold.
+          const migratedTerminals = holdTerminalsForHostEnds(
+            terminalsToUse.map(
+              (t) =>
+                ({
+                  ...t,
+                  kind: inferKind(t, workspaceId),
+                  cwd: t.cwd || currentProject?.path || "",
+                }) as import("../../../../shared/types/project.js").TerminalSnapshot
+            ),
+            hostEnds,
+            workspaceId
+          ).terminals;
 
           // Normalize legacy focusPanelState (may have logsOpen/eventInspectorOpen instead of diagnosticsOpen)
           const normalizedFocusPanelState = globalAppState.focusPanelState

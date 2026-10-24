@@ -1,6 +1,7 @@
 import type { PendingCrash } from "../../shared/types/ipc/crashRecovery.js";
 import type { PanelHostEnd, PanelRestoreRecovery } from "../../shared/types/panel.js";
 import type { TerminalSnapshot } from "../../shared/types/project.js";
+import { panelKindHasPty } from "../../shared/config/panelKindRegistry.js";
 import { inferKind } from "../../shared/utils/inferPanelKind.js";
 import { resolveRespawnAgentId } from "../../shared/utils/savedAgentIdentity.js";
 
@@ -61,7 +62,7 @@ function wasCutShort(terminal: TerminalSnapshot, workspaceId: string | undefined
   if (!isPlainObject(terminal)) return false;
   if (terminal.location === "trash") return false;
   const kind = inferKind(terminal, workspaceId);
-  if (kind !== "terminal") return false;
+  if (!panelKindHasPty(kind)) return false;
   if (resolveRespawnAgentId(terminal, kind) === undefined) return false;
   if (isPlainObject(terminal.restoreRecovery)) return false;
   if (terminal.holdOnRestart === true) return false;
