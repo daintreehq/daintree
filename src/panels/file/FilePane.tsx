@@ -1,124 +1,52 @@
-import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  Copy,
-  Download,
-  ExternalLink,
-  FileDiff as FileDiffIcon,
-  FileText,
-  Globe,
-  RefreshCw,
-  WrapText,
-  XCircle,
-} from "lucide-react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef } from "react";
+import { FileText } from "lucide-react";
 import type { FileViewMode } from "@shared/types/panel";
 import { isFilePanel } from "@shared/types/panel";
 import type { GitStatus } from "@shared/types/git";
 import { normalize, resolveWorktreePathScope, toWorktreeRelative } from "@shared/utils/path";
-import type { FileReadErrorCode, FileTextEncoding } from "@shared/types/ipc/files";
-import type { BuiltInRuntimeActionId } from "@shared/config/actionIds";
 import type { BasePanelProps } from "@/components/Panel/ContentPanel";
 import { ContentPanel } from "@/components/Panel/ContentPanel";
-import { Button } from "@/components/ui/button";
-import { FolderOpen, FolderTree } from "@/components/icons";
+import { FolderTree } from "@/components/icons";
 import type { TabInfo } from "@/components/Panel/TabButton";
 import { MarkdownViewer, type MarkdownViewerHandle } from "@/components/Markdown/MarkdownViewer";
 import { isMarkdownFilePath } from "@/components/Markdown/isMarkdownFile";
 import { isProseFilePath } from "@/components/FileViewer/isProseFile";
-import {
-  MarkdownTextSizeControl,
-  MarkdownTextSizeMenuItems,
-} from "@/components/Markdown/MarkdownTextSizeControl";
-import {
-  DropdownMenuCheckboxItem,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-} from "@/components/ui/dropdown-menu";
-import { getFileTypeIcon } from "@/panels/file-browser/fileTypeIcons";
-import {
-  FileUnavailableState,
-  refusalReason,
-  unavailableCopy,
-  type RemoteFileContext,
-  type UnavailableReason,
-} from "@/components/FileViewer/FileUnavailableState";
-import {
-  SaveHostFileButton,
-  TakeControlButton,
-  useRemoteFileContext,
-  useRetryOnControl,
-} from "@/components/FileViewer/hostFileActions";
-import type { MediaPreviewError } from "@/components/FileViewer/useMediaSourceUrl";
-import { saveHostFile, saveHostFileLabel } from "@/services/hostFileSave";
+import { useRemoteFileContext } from "@/components/FileViewer/hostFileActions";
+import { saveHostFile } from "@/services/hostFileSave";
 import { HtmlViewer } from "@/components/Html/HtmlViewer";
 import { isHtmlFilePath } from "@/components/Html/isHtmlFile";
 import { CodeViewer, type CodeViewerHandle } from "@/components/FileViewer/CodeViewer";
 import { FileSourceMetadataStrip } from "@/components/FileViewer/FileSourceMetadataStrip";
-import { FileViewerToolbar, TOOLBAR_ICON_CLASS } from "@/components/FileViewer/FileViewerToolbar";
-import { revealCopy, type RevealCopy } from "@/components/FileViewer/revealCopy";
+import { revealCopy } from "@/components/FileViewer/revealCopy";
 import { FileImagePreview } from "@/components/FileViewer/FileImagePreview";
 import { FileVideoPreview } from "@/components/FileViewer/FileVideoPreview";
 import { FileAudioPreview } from "@/components/FileViewer/FileAudioPreview";
 import { FilePdfPreview } from "@/components/FileViewer/FilePdfPreview";
-import {
-  isAudioFilePath,
-  isImageFilePath,
-  isPdfFilePath,
-  isSvgFilePath,
-  isUnsupportedAudioFilePath,
-  isUnsupportedVideoFilePath,
-  isVideoFilePath,
-  UNSUPPORTED_AUDIO_MESSAGE,
-  UNSUPPORTED_VIDEO_MESSAGE,
-} from "@/components/FileViewer/filePreviewKinds";
-import { sanitizeSvg } from "@shared/utils/svgSanitizer";
-import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { useDiffContent } from "@/panels/diff/useDiffContent";
 import type { DiffSubject } from "@/panels/diff/diffContentCache";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton, SkeletonBone, SkeletonHint, SkeletonText } from "@/components/ui/Skeleton";
-import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
-import { toFileReadErrorCode } from "@/components/FileViewer/fileReadErrors";
-import { filesClient } from "@/clients/filesClient";
-import { actionService } from "@/services/ActionService";
 import { usePanelStore } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
-import { useFileChangeCount } from "@/hooks/useFileChangeCount";
 import { NO_WATCHED_PATHS, useExternalChangeTick } from "@/hooks/useExternalChangeTick";
-import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { copyWithToast } from "@/lib/copyWithToast";
-import { isClientAppError } from "@/utils/clientAppError";
-import { logError } from "@/utils/logger";
 import { lookupLocalChangeStatus } from "./localChangeStatus";
 import { useHeightHold } from "./useHeightHold";
-import { useProjectViewRevealed } from "@/hooks/useProjectViewRevealed";
-import {
-  HOST_FILE_EDITOR_CHOICE,
-  fileEditorChoiceKey,
-  pickFileEditorChoice,
-  useFileEditor,
-  usePluginFileEditorCandidates,
-  type PluginFileEditorCandidate,
-} from "@/registry/fileEditorRegistry";
-import { useFileEditorDefault } from "@/registry/fileEditorDefaults";
-import { useFileEditorChoicesStore } from "@/store/fileEditorChoicesStore";
-import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
-import { FileEditorDefaultNotice } from "@/components/Plugin/FileEditorDefaultNotice";
 import type { ProjectSurfaceChoice } from "@shared/types/plugin";
-import { FileEditorPicker, type FileEditorPickerOption } from "./FileEditorPicker";
-import { FileEditorBanner } from "@/components/FileViewer/FileEditorBanner";
 import { useFileEditLock } from "@/hooks/useFileEditLock";
-import {
-  useFileDocumentDraftText,
-  useFileDocumentFlags,
-  useFileDocumentStore,
-} from "@/store/fileDocumentStore";
-import { isPluginFileDocumentIdentity } from "@/services/plugin/pluginFileDocumentIdentity";
+import { useFileDocumentDraftText, useFileDocumentFlags } from "@/store/fileDocumentStore";
 import { FilePanePicker } from "./FilePanePicker";
 import { useFileRowMenuItems } from "@/hooks/useFileRowMenuItems";
 import { FileContentContextMenu } from "@/components/FileViewer/FileContentContextMenu";
 import { ContextMenuItem, ContextMenuSeparator } from "@/components/ui/context-menu";
+import { previewErrorCode, useFileLoad } from "./useFileLoad";
+import { useFileRefresh } from "./useFileRefresh";
+import { useFileEditorChoice, useFileEditorPicker } from "./useFileEditorChoice";
+import { useFileExternalOpen } from "./useFileExternalOpen";
+import { FilePaneToolbar } from "./FilePaneToolbar";
+import { FilePaneUnavailable } from "./FilePaneUnavailable";
 
 export interface FilePaneProps extends BasePanelProps {
   tabs?: TabInfo[];
@@ -138,32 +66,6 @@ const LazyDiffViewer = lazy(() =>
 // A plugin's file editor (#13809) pulls the plugin view loader and the host
 // document controller; neither belongs on the first render of a plain file.
 const LazyPluginFileEditorHost = lazy(() => import("./PluginFileEditorHost"));
-
-/** Whether a loaded file fits an editor's ceiling; a file not loaded as text yet always does. */
-function fitsFile(maxBytes: number, loadedBytes: number | null): boolean {
-  return loadedBytes === null || loadedBytes <= maxBytes;
-}
-
-/** "Edit with…" option labels: the plugin's name, disambiguated when one plugin offers two. */
-function pickerOptions(
-  candidates: readonly PluginFileEditorCandidate[],
-  host: FileEditorPickerOption | null
-): FileEditorPickerOption[] {
-  const nameCounts = new Map<string, number>();
-  for (const candidate of candidates) {
-    nameCounts.set(candidate.pluginName, (nameCounts.get(candidate.pluginName) ?? 0) + 1);
-  }
-  return [
-    ...(host ? [host] : []),
-    ...candidates.map((candidate) => ({
-      value: candidate.choiceId,
-      label:
-        (nameCounts.get(candidate.pluginName) ?? 0) > 1
-          ? `${candidate.pluginName} (${candidate.editor.id})`
-          : candidate.pluginName,
-    })),
-  ];
-}
 
 const MODE_LABELS: Record<FileViewMode, string> = {
   source: "Source",
@@ -217,84 +119,6 @@ function isUnderRoot(filePath: string, rootPath: string): boolean {
   return toForwardSlashes(filePath).startsWith(root);
 }
 
-// "image", "svg", "video", "audio", and "pdf" are terminal preview states: an
-// image is handed to the `daintree-file://` protocol as an <img> src, an SVG is
-// read as text, sanitized, then inlined, video/audio are fetched from the same
-// protocol into a blob the media element plays, and a PDF is framed from
-// `daintree-pdf://` into Chromium's built-in viewer. None has readable text
-// content.
-type LoadState =
-  "idle" | "loading" | "loaded" | "error" | "image" | "svg" | "video" | "audio" | "pdf";
-
-// Why a read is happening, which decides two things a single boolean used to
-// conflate. `explicit` is a gesture aimed at this pane (open, toolbar Refresh,
-// Retry): it earns the loading skeleton and re-requests every rendered surface.
-// `ambient` is the filesystem talking (change tick, focus regain): it must not
-// flash the skeleton, and must not move a reload key an unrelated write would
-// otherwise use to reset playback. `revealed` is returning to this project:
-// silent like ambient, because nobody asked for a skeleton, but forcing the
-// reload key like explicit, because everything that happened while the view sat
-// cached is precisely what this pane cannot otherwise see — with one exception,
-// a player already running, whose position outranks bytes nobody asked for
-// (#12165).
-type FileLoadIntent = "explicit" | "ambient" | "revealed";
-
-// Which surface a toolbar action aims the current file at. `reveal` is always
-// offered; `browser`/`editor` is the mode-dependent open button; `file-browser`
-// is Daintree's own tree, offered only for a file inside a known worktree.
-// `default-app` is the PDF error state's way out — the same OS-default handoff
-// as `browser`, named for what it opens rather than for HTML.
-type ExternalTarget = "reveal" | "browser" | "editor" | "file-browser" | "default-app";
-
-const EXTERNAL_ACTIONS = {
-  reveal: "file.showItemInFolder",
-  browser: "file.openInBrowser",
-  editor: "file.openInEditor",
-  "file-browser": "worktree.openFileBrowser",
-  "default-app": "file.openInBrowser",
-} as const satisfies Record<ExternalTarget, BuiltInRuntimeActionId>;
-
-// Button label comes from `revealCopy()` (platform-named); the failure banner's
-// title, retry name and dismiss name are resolved together with it so the three
-// can't drift. Browser/editor wording is static — only reveal is platform-bound.
-function externalTargetCopy(
-  target: ExternalTarget,
-  reveal: RevealCopy
-): { errorTitle: string; retryAriaLabel: string; dismissAriaLabel: string } {
-  switch (target) {
-    case "reveal":
-      return {
-        errorTitle: reveal.errorTitle,
-        retryAriaLabel: reveal.retryAriaLabel,
-        dismissAriaLabel: "Dismiss file manager error",
-      };
-    case "browser":
-      return {
-        errorTitle: "Couldn't open in browser",
-        retryAriaLabel: "Retry opening in browser",
-        dismissAriaLabel: "Dismiss browser error",
-      };
-    case "editor":
-      return {
-        errorTitle: "Couldn't open in editor",
-        retryAriaLabel: "Retry opening in editor",
-        dismissAriaLabel: "Dismiss editor error",
-      };
-    case "file-browser":
-      return {
-        errorTitle: "Couldn't open file browser",
-        retryAriaLabel: "Retry opening file browser",
-        dismissAriaLabel: "Dismiss file browser error",
-      };
-    case "default-app":
-      return {
-        errorTitle: "Couldn't open in default app",
-        retryAriaLabel: "Retry opening in default app",
-        dismissAriaLabel: "Dismiss default app error",
-      };
-  }
-}
-
 export function FilePane({
   id,
   title,
@@ -326,18 +150,14 @@ export function FilePane({
   );
   const setFileViewMode = usePanelStore((state) => state.setFileViewMode);
   const setFilePanelPath = usePanelStore((state) => state.setFilePanelPath);
-  const setFileEditorChoice = usePanelStore((state) => state.setFileEditorChoice);
   const markdownWrapLines = usePreferencesStore((state) => state.markdownWrapLines);
-  const setMarkdownWrapLines = usePreferencesStore((state) => state.setMarkdownWrapLines);
   // Global, like wrap: a reading size that reset per panel or per file would
   // make paging through documents feel unstable (#12134).
   const markdownFontSize = usePreferencesStore((state) => state.markdownFontSize);
-  const setMarkdownFontSize = usePreferencesStore((state) => state.setMarkdownFontSize);
   // Shared with the diff panel so a user's split/unified and wrap choices carry
   // across every surface that shows a diff.
   const diffViewType = usePreferencesStore((state) => state.diffViewType);
   const diffWrapLines = usePreferencesStore((state) => state.diffWrapLines);
-  const setDiffWrapLines = usePreferencesStore((state) => state.setDiffWrapLines);
 
   const heightHold = useHeightHold();
 
@@ -494,12 +314,22 @@ export function FilePane({
       (diffWorktreePath !== "" && isUnderRoot(filePath, diffWorktreePath)) ||
       (projectPath !== "" && isUnderRoot(filePath, projectPath)));
 
-  const [content, setContent] = useState<string | null>(null);
-  const [loadState, setLoadState] = useState<LoadState>("idle");
+  const {
+    content,
+    sourceText,
+    loadState,
+    sanitizedSvg,
+    errorCode,
+    errorMessage,
+    htmlPreviewUrl,
+    reloadNonce,
+    byteFacts,
+    canonicalFilePath,
+    loadFile,
+    handleMediaPlayingChange,
+    failPreview,
+  } = useFileLoad(filePath, effectiveRootPath);
 
-  // The plugin-contributed editor for this file, resolved enable-aware: a
-  // disabled plugin drops Edit live, and the clamp below lands on Source.
-  const editor = useFileEditor(filePath);
   const contentBytes = useMemo(
     () => (content === null ? 0 : new TextEncoder().encode(content).byteLength),
     [content]
@@ -510,98 +340,18 @@ export function FilePane({
   const draftText = useFileDocumentDraftText(id);
   const { dirty: isDirty, conflict: hasConflict } = useFileDocumentFlags(id);
 
-  // Installed and project plugins' view-backed editors (#13809), from this
-  // project view's hosted-view snapshot — a project plugin's only reach its own
-  // project. Offered in the panel only, inside a governed root, like Edit.
-  // A plugin may fill Rendered only for a type the host can't render itself.
-  const pluginEditorsAllowed = location !== "dialog" && isInsideGovernedRoot;
-  const pluginEditCandidates = usePluginFileEditorCandidates(
-    filePath,
-    effectiveRootPath,
-    "edit",
-    pluginEditorsAllowed
-  );
-  const pluginViewCandidates = usePluginFileEditorCandidates(
-    filePath,
-    effectiveRootPath,
-    "view",
-    pluginEditorsAllowed && !isRenderable
-  );
-  // The default editor a project plugin set for this file (#13811). Opening
-  // with it is `file.openPanel`'s call; the pane asks the user about it.
-  const fileDefault = useFileEditorDefault(filePath, effectiveRootPath, pluginEditorsAllowed);
-  const initEditorChoices = useFileEditorChoicesStore((s) => s.init);
-  useEffect(() => {
-    initEditorChoices();
-  }, [initEditorChoices]);
-  const editorChoicesLoaded = useFileEditorChoicesStore((s) => s.loaded);
-  const editorChoices = useFileEditorChoicesStore((s) => s.choices);
-  const setEditorChoice = useFileEditorChoicesStore((s) => s.setChoice);
-  const builtinEditorName = usePluginRuntimeStore((s) =>
-    editor ? (s.pluginMetaById.get(editor.registration.pluginId)?.displayName ?? null) : null
-  );
-
-  // Which editor fills each mode. The remembered "Edit with…" answer wins when
-  // it is still on offer; otherwise the host's own editor where there is one,
-  // so an installed editor adds a choice rather than displacing the built-in.
-  // Until the answers have loaded only the built-in may open — a plugin the
-  // user has already turned away from must not flash in first. Once the file
-  // has loaded, an editor whose ceiling it exceeds is not on offer, so a
-  // remembered small editor never hides a capable one.
-  //
-  // A standing draft pins its owner: the built-in editor and the plugin
-  // document controller each keep their own, and handing Edit to the other
-  // would hide the draft from the dirty mark and the close prompt. The user
-  // saves or discards before switching.
-  const loadedBytes = loadState === "loaded" ? contentBytes : null;
-  const draftOwner = useFileDocumentStore((s) => {
-    const projection = s.byPanelId[id];
-    if (!projection?.dirty) return null;
-    return isPluginFileDocumentIdentity(projection.identityKey) ? "plugin" : "host";
-  });
-  const editOptions = useMemo(
-    () => [
-      ...(editor && draftOwner !== "plugin" && fitsFile(editor.registration.maxBytes, loadedBytes)
-        ? [HOST_FILE_EDITOR_CHOICE]
-        : []),
-      ...(draftOwner === "host"
-        ? []
-        : pluginEditCandidates
-            .filter((candidate) => fitsFile(candidate.editor.maxBytes, loadedBytes))
-            .map((candidate) => candidate.choiceId)),
-    ],
-    [editor, draftOwner, pluginEditCandidates, loadedBytes]
-  );
-  // An editor pinned to the panel — the one a default opened it with, or the
-  // one last picked in it — wins while it is on offer, ahead of the answer for
-  // the file's type: a default is about these paths, not every file like them.
   const pinnedEditor = panel?.fileEditorChoice;
-  const editChoice =
-    filePath === undefined
-      ? null
-      : pinnedEditor !== undefined && editOptions.includes(pinnedEditor)
-        ? pinnedEditor
-        : editorChoicesLoaded
-          ? pickFileEditorChoice(editOptions, editorChoices, fileEditorChoiceKey("edit", filePath))
-          : editOptions.includes(HOST_FILE_EDITOR_CHOICE)
-            ? HOST_FILE_EDITOR_CHOICE
-            : null;
-  const builtinEditor = editChoice === HOST_FILE_EDITOR_CHOICE ? editor : null;
-  const pluginEditor =
-    pluginEditCandidates.find((candidate) => candidate.choiceId === editChoice) ?? null;
-  const viewOptions = useMemo(
-    () =>
-      pluginViewCandidates
-        .filter((candidate) => fitsFile(candidate.editor.maxBytes, loadedBytes))
-        .map((candidate) => candidate.choiceId),
-    [pluginViewCandidates, loadedBytes]
-  );
-  const viewChoice =
-    filePath === undefined || !editorChoicesLoaded
-      ? null
-      : pickFileEditorChoice(viewOptions, editorChoices, fileEditorChoiceKey("view", filePath));
-  const pluginViewer =
-    pluginViewCandidates.find((candidate) => candidate.choiceId === viewChoice) ?? null;
+  const editorChoice = useFileEditorChoice({
+    panelId: id,
+    filePath,
+    effectiveRootPath,
+    pluginEditorsAllowed: location !== "dialog" && isInsideGovernedRoot,
+    isRenderable,
+    loadedBytes: loadState === "loaded" ? contentBytes : null,
+    pinnedEditor,
+  });
+  const { fileDefault, editOptions, builtinEditor, pluginEditor, pluginViewer, setEditorChoice } =
+    editorChoice;
 
   // Edit joins the toggle for a file an editor claims, inside a governed
   // root, and only in the panel (the file viewer dialog stays read-only).
@@ -644,48 +394,7 @@ export function FilePane({
   const viewMode: FileViewMode = availableModes.includes(requestedMode) ? requestedMode : "source";
   const showPluginViewer = viewMode === "rendered" && !isRenderable && pluginViewer !== null;
 
-  // "Edit with…" (#13809): offered in a mode more than one editor can fill,
-  // and remembered per project for the file's type.
-  const editorPicker = useMemo(() => {
-    if (filePath === undefined) return null;
-    if (viewMode === "edit" && editOptions.length > 1 && editChoice !== null) {
-      return {
-        label: "Edit with…",
-        choiceKey: fileEditorChoiceKey("edit", filePath),
-        value: editChoice,
-        options: pickerOptions(
-          pluginEditCandidates.filter((candidate) => editOptions.includes(candidate.choiceId)),
-          editor && editOptions.includes(HOST_FILE_EDITOR_CHOICE)
-            ? { value: HOST_FILE_EDITOR_CHOICE, label: builtinEditorName ?? "Built-in editor" }
-            : null
-        ),
-      };
-    }
-    if (showPluginViewer && viewOptions.length > 1 && viewChoice !== null) {
-      return {
-        label: "View with…",
-        choiceKey: fileEditorChoiceKey("view", filePath),
-        value: viewChoice,
-        options: pickerOptions(
-          pluginViewCandidates.filter((candidate) => viewOptions.includes(candidate.choiceId)),
-          null
-        ),
-      };
-    }
-    return null;
-  }, [
-    filePath,
-    viewMode,
-    editOptions,
-    editChoice,
-    pluginEditCandidates,
-    editor,
-    builtinEditorName,
-    showPluginViewer,
-    viewOptions,
-    viewChoice,
-    pluginViewCandidates,
-  ]);
+  const editorPicker = useFileEditorPicker(filePath, viewMode, showPluginViewer, editorChoice);
   // A mode a plugin fills carries the plugin's name, so it is never mistaken
   // for the host's own (#13809).
   const editPluginName = pluginEditor?.pluginName ?? null;
@@ -775,471 +484,37 @@ export function FilePane({
   // so the external signal only ever fills the gap where there is no worktree.
   const changeTick = worktreeChangeTick ?? externalChangeTick;
 
-  const [sanitizedSvg, setSanitizedSvg] = useState<string | null>(null);
-  const [errorCode, setErrorCode] = useState<FilePaneErrorCode | null>(null);
-  // Overrides the code-derived copy for failures that no `FileReadErrorCode`
-  // describes (a readable file whose SVG content the sanitizer rejects).
-  // Mirrors FileViewerModal's `displayErrorMessage`.
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  // Sandboxed-iframe preview URL for HTML files (#11191), minted by files:read.
-  const [htmlPreviewUrl, setHtmlPreviewUrl] = useState<string | null>(null);
-  // Reload generation for every surface whose content lives behind a URL rather
-  // than in React state: the sandboxed HTML preview frame, the media players,
-  // and the raster <img>. Their URLs are pure functions of path and root, so
-  // without a changing token a rewritten file is never re-requested. Bumped on
-  // every successful load, not just entry-file changes, so relative assets stay
-  // fresh too. Never a `loadFile` dependency — that would re-trigger the load.
-  const [reloadNonce, setReloadNonce] = useState(0);
-  // Whether the media preview on screen is mid-playback. A ref, not state: the
-  // only reader is `loadFile`, which runs as an event and would rather not be
-  // re-created (and re-run its effects) every time someone presses play. The
-  // preview takes its own `true` back on unmount or a source change, so a set
-  // flag always names the player currently on screen (#12165).
-  const mediaPlayingRef = useRef(false);
-  const handleMediaPlayingChange = useCallback((playing: boolean) => {
-    mediaPlayingRef.current = playing;
-  }, []);
-  // Which surface a toolbar Refresh press is currently spinning for (or null).
-  // The mode is captured at click so a mode switch mid-refresh doesn't settle
-  // the spin against the wrong signal. Drives the shared SpinningIcon.
-  const [refreshingMode, setRefreshingMode] = useState<FileViewMode | null>(null);
-
-  // What `files:read` observed about the bytes behind `content` — set with it,
-  // so the strip never pairs one read's text with another read's encoding.
-  const [byteFacts, setByteFacts] = useState<{
-    encoding?: FileTextEncoding;
-    byteLength?: number;
-  }>({});
-  // The strip names a BOM, so the source view needn't draw it: CodeMirror
-  // paints U+FEFF as a special-character dot ahead of the first token, the
-  // one mark the editor's own decode already strips. Display only — copying
-  // the file still copies its bytes.
-  const sourceText =
-    content !== null && byteFacts.encoding === "utf-8-bom" && content.charCodeAt(0) === 0xfeff
-      ? content.slice(1)
-      : content;
-  const requestRef = useRef(0);
   const markdownViewerRef = useRef<MarkdownViewerHandle>(null);
   const codeViewerRef = useRef<CodeViewerHandle>(null);
-  // The state the last good view of the *current* file settled into, or null if
-  // there has not been one. A silent refresh may only swallow a failure when
-  // there is good content to preserve, and swallowing has to restore this
-  // rather than merely return: the silent read may have superseded an explicit
-  // one that already switched the pane to its skeleton, and nothing else is
-  // left to settle it. Reset per identity — the previous file's content is not
-  // something worth keeping.
-  const lastGoodStateRef = useRef<LoadState | null>(null);
-  // The text currently on screen for the *current* identity, so a silent re-read
-  // can tell an actual rewrite from a tick that changed nothing. Reset per
-  // identity alongside the state above.
-  const lastContentRef = useRef<string | null>(null);
-  // The file whose last read came back through its own realpath — the only
-  // spelling the watcher's directories can be matched against.
-  const [canonicalFilePath, setCanonicalFilePath] = useState<string | null>(null);
-  useEffect(() => {
-    lastGoodStateRef.current = null;
-    lastContentRef.current = null;
-  }, [filePath, effectiveRootPath]);
-
-  const loadFile = useCallback(
-    (intent: FileLoadIntent) => {
-      // Two independent questions, and reveal answers them differently from
-      // either of the other intents. Whether to show the skeleton: only an
-      // explicit gesture earns one, because only then is someone waiting on a
-      // surface they just asked for. Whether to re-request the rendered
-      // surface: everything but an ambient pass, so returning to a project
-      // moves the reload key that a background tick deliberately leaves alone.
-      const silent = intent !== "explicit";
-      const forceSurfaceReload = intent !== "ambient";
-      // Reveal is the one intent that can arrive while someone is listening: it
-      // is not a request for fresh bytes, it is this pane catching up on a
-      // project it was away from. A track mid-play is worth more than a
-      // re-fetch, so it keeps its key and the next Refresh pulls the rewrite
-      // instead (#12165). Explicit gestures still outrank playback.
-      const keepMediaPlaying = intent === "revealed" && mediaPlayingRef.current;
-      if (!filePath) {
-        requestRef.current++;
-        setContent(null);
-        setLoadState("idle");
-        setErrorCode(null);
-        return;
-      }
-      const requestId = ++requestRef.current;
-      if (!silent) {
-        setLoadState("loading");
-        setErrorCode(null);
-        setErrorMessage(null);
-      }
-
-      // Raster images are served straight to an <img> by the protocol handler —
-      // reading them as text would just hit the binary-file guard.
-      if (isImageFilePath(filePath) && !isSvgFilePath(filePath)) {
-        setContent(null);
-        setSanitizedSvg(null);
-        // Unconditionally, unlike the media branches below: a still image has no
-        // playback or reader position to protect, so a silent background pass
-        // should show the new bytes rather than preserve the old ones. Without
-        // this the <img> URL never changes and even toolbar Refresh is inert.
-        setReloadNonce((nonce) => nonce + 1);
-        setLoadState("image");
-        setErrorCode(null);
-        setErrorMessage(null);
-        return;
-      }
-
-      // Videos stream from the protocol handler into a <video> element; the
-      // text path would reject them with a misleading size/binary error.
-      if (isVideoFilePath(filePath)) {
-        setContent(null);
-        setSanitizedSvg(null);
-        // Only a foreground load (open, toolbar Refresh, returning to this
-        // project) re-requests the media — an ambient background pass must not
-        // remount the player and reset playback while someone is watching, and
-        // neither may a reveal that finds the player already running.
-        if (forceSurfaceReload && !keepMediaPlaying) setReloadNonce((nonce) => nonce + 1);
-        setLoadState("video");
-        setErrorCode(null);
-        setErrorMessage(null);
-        return;
-      }
-
-      // Audio takes the same protocol-to-blob route as video — the text path
-      // would reject it with a misleading size/binary error.
-      if (isAudioFilePath(filePath)) {
-        setContent(null);
-        setSanitizedSvg(null);
-        // Only a foreground load (open, toolbar Refresh, returning to this
-        // project) re-requests the media — an ambient background pass must not
-        // remount the player and reset playback while someone is listening, and
-        // neither may a reveal that finds the player already running.
-        if (forceSurfaceReload && !keepMediaPlaying) setReloadNonce((nonce) => nonce + 1);
-        setLoadState("audio");
-        setErrorCode(null);
-        setErrorMessage(null);
-        return;
-      }
-
-      // PDFs are framed straight from the protocol handler into Chromium's
-      // built-in viewer; the text path would reject them as a binary file.
-      if (isPdfFilePath(filePath)) {
-        setContent(null);
-        setSanitizedSvg(null);
-        // Only a foreground load (open, toolbar Refresh, returning to this
-        // project) re-requests the document — an ambient background pass must
-        // not remount the frame and throw away the reader's page and zoom.
-        if (forceSurfaceReload) setReloadNonce((nonce) => nonce + 1);
-        setLoadState("pdf");
-        setErrorCode(null);
-        setErrorMessage(null);
-        return;
-      }
-
-      // Formats Chromium can't decode get a truthful "can't play" message
-      // instead of falling through to the text path's size cap.
-      const unsupportedMediaMessage = isUnsupportedVideoFilePath(filePath)
-        ? UNSUPPORTED_VIDEO_MESSAGE
-        : isUnsupportedAudioFilePath(filePath)
-          ? UNSUPPORTED_AUDIO_MESSAGE
-          : null;
-      if (unsupportedMediaMessage) {
-        setContent(null);
-        setSanitizedSvg(null);
-        setErrorCode("BINARY_FILE");
-        setErrorMessage(unsupportedMediaMessage);
-        setLoadState("error");
-        return;
-      }
-
-      // Nothing may skip a tick on the strength of a read that is still being
-      // repeated: the answer this one brings back is the one that counts.
-      setCanonicalFilePath(null);
-      filesClient
-        .read({
-          path: filePath,
-          rootPath: effectiveRootPath,
-          htmlPreview: isHtmlFilePath(filePath),
-        })
-        .then(
-          ({
-            content: fileContent,
-            htmlPreviewUrl: previewUrl,
-            pathIsCanonical,
-            encoding,
-            byteLength,
-          }) => {
-            if (requestRef.current !== requestId) return;
-            setCanonicalFilePath(pathIsCanonical === true ? filePath : null);
-            // SVG is text on disk but a picture on screen: sanitize before it can
-            // be inlined, and surface a sanitizer rejection as a load error
-            // rather than silently rendering nothing.
-            if (isSvgFilePath(filePath)) {
-              const sanitized = sanitizeSvg(fileContent);
-              if (sanitized.ok) {
-                setSanitizedSvg(sanitized.svg);
-                setContent(null);
-                setLoadState("svg");
-                setErrorCode(null);
-                setErrorMessage(null);
-                lastGoodStateRef.current = "svg";
-              } else if (silent && lastGoodStateRef.current !== null) {
-                // Still a failed read, however the pane looks: keep taking every
-                // tick until one lands.
-                setCanonicalFilePath(null);
-                // A background pass catching a half-written file mid-save reads
-                // as a sanitizer rejection, so keep the last good drawing rather
-                // than replacing it — the same bargain the text path's transient
-                // -failure guard below makes.
-                setLoadState(lastGoodStateRef.current);
-              } else {
-                // The file read fine; its contents just aren't safe to inline.
-                setErrorCode("INVALID_PATH");
-                setErrorMessage(sanitized.error);
-                setLoadState("error");
-              }
-              return;
-            }
-            setSanitizedSvg(null);
-            const bytesChanged = lastContentRef.current !== fileContent;
-            lastContentRef.current = fileContent;
-            setContent((previous) => (previous === fileContent ? previous : fileContent));
-            setByteFacts((previous) =>
-              previous.encoding === encoding && previous.byteLength === byteLength
-                ? previous
-                : { encoding, byteLength }
-            );
-            setHtmlPreviewUrl(previewUrl ?? null);
-            // Re-navigate the preview frame so a rewritten report — or an unchanged
-            // entry file whose relative asset changed — reflects the latest bytes.
-            // The nonce is the sandboxed frame's only src input, so an ambient
-            // pass only bumps it when the bytes actually moved: otherwise every
-            // worktree tick, most of them writes to unrelated files, would throw
-            // away the rendered page's scroll and in-page JS state. Foreground
-            // loads (open, toolbar Refresh, returning to this project) stay
-            // unconditional — an entry file whose relative asset was rewritten
-            // while the project sat cached reads as unchanged bytes, so the
-            // bytes-changed gate is exactly what would leave it stale.
-            // reloadNonce isn't a loadFile dep, so neither can re-trigger the
-            // load.
-            //
-            // Markdown opts out of the bytes-changed gate: an image embedded in the
-            // document is precisely the "unchanged file whose asset changed" case,
-            // and bytesChanged only ever sees the markdown text (#11587). Bumping
-            // freely is safe here because for a markdown file the nonce reaches
-            // nothing but MarkdownViewer's cacheBust — the frame this rule protects
-            // needs isHtml, and the media previews need their own loadStates — and
-            // a changed image src reloads in place rather than remounting, so there
-            // is no scroll or playback position to lose.
-            if (forceSurfaceReload || bytesChanged || isMarkdownFilePath(filePath)) {
-              setReloadNonce((nonce) => nonce + 1);
-            }
-            setLoadState("loaded");
-            setErrorCode(null);
-            setErrorMessage(null);
-            lastGoodStateRef.current = "loaded";
-          }
-        )
-        .catch((error: unknown) => {
-          if (requestRef.current !== requestId) return;
-          const code = isClientAppError(error) ? toFileReadErrorCode(error.code) : "INVALID_PATH";
-          // Silent background refreshes keep showing the last good content on
-          // transient failures, but a permanently-gone file (deleted, perms
-          // revoked) must surface rather than display stale text forever.
-          // Only worth swallowing when there is good content to keep — and it
-          // has to be restored rather than merely left alone: this read may
-          // have superseded an explicit one that already showed the skeleton,
-          // in which case nothing else would ever settle it.
-          const permanent =
-            code === "NOT_FOUND" || code === "PERMISSION" || code === "OUTSIDE_ROOT";
-          // A swallowed failure still leaves the reset canonical flag above
-          // cleared, so every tick keeps retrying while the last good content
-          // stays on screen.
-          if (silent && !permanent && lastGoodStateRef.current !== null) {
-            setLoadState(lastGoodStateRef.current);
-            return;
-          }
-          setErrorCode(code);
-          setErrorMessage(null);
-          setLoadState("error");
-        });
-    },
-    [filePath, effectiveRootPath]
-  );
 
   useEffect(() => {
     loadFile("explicit");
   }, [loadFile]);
 
-  const remoteFile = useRemoteFileContext();
-  // A preview the host refused to a watching window loads once this one has control.
-  useRetryOnControl(loadState === "error" && errorCode === "DRIVEN_ELSEWHERE", () =>
-    loadFile("explicit")
-  );
-
-  // Toolbar Refresh: spin the icon until the refreshed surface settles. Capture
-  // the mode at press time so switching source⇄diff mid-refresh can't clear the
-  // spin against the wrong signal. A synchronous branch (image/svg, or an
-  // already-loaded diff) settles the same tick — SpinningIcon still guarantees a
-  // full rotation from the single active render.
-  const handleToolbarRefresh = useCallback(() => {
-    setRefreshingMode(viewMode);
-    if (viewMode === "diff") retryDiff();
-    else loadFile("explicit");
-  }, [viewMode, retryDiff, loadFile]);
-
-  useEffect(() => {
-    if (refreshingMode === null) return;
-    // The refreshed surface is no longer on screen (mode switched, or diff mode
-    // clamped away when the change vanished) → the spin is moot, disarm it. This
-    // also covers an abandoned diff: `diffSubject` going null leaves diffContent
-    // `undefined` forever, which would otherwise strand the spin on "diff".
-    const settled =
-      refreshingMode !== viewMode ||
-      (refreshingMode === "diff"
-        ? diffSubject === null || diffContent !== undefined
-        : loadState !== "loading");
-    if (settled) setRefreshingMode(null);
-  }, [refreshingMode, viewMode, diffSubject, diffContent, loadState]);
-
-  // Leaving Diff — by choice or because the change vanished — lands on source
-  // cached before the edit that prompted the diff in the first place. Re-read it
-  // silently, so a file deleted mid-view can't keep reading as present.
-  const wasDiffModeRef = useRef(viewMode === "diff");
-  useEffect(() => {
-    if (wasDiffModeRef.current && viewMode !== "diff") loadFile("ambient");
-    wasDiffModeRef.current = viewMode === "diff";
-  }, [viewMode, loadFile]);
-
-  // Agents rewrite files while the user watches, and the pane stays focused the
-  // whole time — so focus regain alone can't be the only live signal. Re-read
-  // silently whenever the containing worktree reports a change.
-  //
-  // Identity travels with the tick so only a genuine disk write triggers this: a
-  // path or root switch changes the tick too, but already has its own explicit
-  // load, and firing here as well would read the same file twice.
-  //
-  // And only a tick that could have touched this file: every write anywhere in
-  // the worktree moves the tick, so without the changed-directory check each
-  // open pane re-reads on all of them. A failed read keeps taking every tick —
-  // that is how one that raced a half-written file recovers.
-  const fileChangeCount = useFileChangeCount(
-    changeTick,
-    useMemo(
-      () => ({ tick: worktreeChangeTick, gitTick: gitChangeTick, changedDirs }),
-      [worktreeChangeTick, gitChangeTick, changedDirs]
-    ),
-    relativeFilePath || null,
-    // Markdown opts out for the same reason it opts out of the bytes-changed
-    // gate: an embedded image elsewhere in the worktree is the change, and only
-    // a read bumps the cache token that refetches it.
-    !isMarkdown &&
-      canonicalFilePath !== null &&
-      canonicalFilePath === filePath &&
-      loadState !== "error"
-  );
-  const lastChangeSignalRef = useRef({
-    filePath,
-    readRoot: effectiveRootPath,
-    watchRoot: diffWorktreePath,
-    tick: fileChangeCount,
-    viewMode,
-  });
-  useEffect(() => {
-    const previous = lastChangeSignalRef.current;
-    lastChangeSignalRef.current = {
-      filePath,
-      readRoot: effectiveRootPath,
-      watchRoot: diffWorktreePath,
-      tick: fileChangeCount,
-      viewMode,
-    };
-    // Diff owns its own freshness — useDiffContent subscribes to the same store
-    // and raises a stale banner — and leaving Diff already re-reads source, so a
-    // tick on either side of that transition would only duplicate the work.
-    if (viewMode === "diff" || previous.viewMode === "diff") return;
-    // No `diffWorktreePath` requirement: a file outside every worktree now has
-    // a tick of its own, and demanding a containing worktree here is exactly
-    // what left those files frozen at whatever they read when opened (#11590).
-    if (!filePath || changeTick === undefined) return;
-    // What the pane reads, versus what it watches. Only a change to the former
-    // implies an explicit load already happened — `loadFile` is keyed on those
-    // two alone, so acquiring a watcher moves `watchRoot` while leaving the read
-    // identity untouched, and nothing else would re-read.
-    if (previous.filePath !== filePath || previous.readRoot !== effectiveRootPath) return;
-    // A newly resolved worktree counts as a signal in its own right: whatever
-    // happened to the file before anything was watching it is exactly what the
-    // pane cannot otherwise know about.
-    if (previous.watchRoot === diffWorktreePath && previous.tick === fileChangeCount) return;
-    loadFile("ambient");
-  }, [
+  const { refreshing, handleToolbarRefresh } = useFileRefresh({
+    panelId: id,
+    location,
+    isFocused,
     filePath,
     effectiveRootPath,
     diffWorktreePath,
-    changeTick,
-    fileChangeCount,
+    relativeFilePath,
+    isMarkdown,
     viewMode,
+    changeTick,
+    worktreeChangeTick,
+    gitChangeTick,
+    changedDirs,
+    loadState,
+    errorCode,
+    canonicalFilePath,
     loadFile,
-  ]);
+    diffSubject,
+    diffContent,
+    retryDiff,
+  });
 
-  // Which surfaces a background re-read may replace. Images and inlined SVG join
-  // "loaded" because both are cheap to re-request and show nothing but the file.
-  // Video, audio and PDF are deliberately absent: their reload key only moves on
-  // an explicit load, so a silent pass here would be inert for them anyway, and
-  // widening it would reset playback or a reader's page on an unrelated write.
-  const reloadsSilently = loadState === "loaded" || loadState === "image" || loadState === "svg";
-
-  // Focus regain also retries a failure. A background re-read that raced a
-  // half-written file lands on an error the ticks can no longer clear — the one
-  // that reported the last write of a burst is the one that failed — so without
-  // this the pane sits on "File not found" for a file that exists until someone
-  // presses Refresh. A file that is genuinely gone just re-errors immediately
-  // through the permanent-code branch.
-  const refetchesOnFocus = reloadsSilently || loadState === "error";
-
-  // Still worth re-reading on focus regain: a write that landed while no watcher
-  // covered the file (opened outside every known worktree) has no tick at all.
-  const wasFocusedRef = useRef(isFocused);
-  useEffect(() => {
-    if (isFocused && !wasFocusedRef.current && refetchesOnFocus) {
-      loadFile("ambient");
-    }
-    wasFocusedRef.current = isFocused;
-  }, [isFocused, refetchesOnFocus, loadFile]);
-
-  useEffect(() => {
-    if (!refetchesOnFocus) return;
-    const handleWindowFocus = () => loadFile("ambient");
-    window.addEventListener("focus", handleWindowFocus);
-    return () => window.removeEventListener("focus", handleWindowFocus);
-  }, [refetchesOnFocus, loadFile]);
-
-  // Coming back to a project the user left is the one moment nothing else
-  // covers. A view swap is not a page load and produces no window focus event,
-  // and `document.visibilityState` never moved — a cached child WebContentsView
-  // reports "visible" the whole time it is away (`viewCacheState`). So the
-  // worktree tick is the only live signal, and it deliberately cannot reach
-  // video, audio or PDF: their reload key stays put on an ambient pass so an
-  // unrelated write can't reset playback or a reader's page. Those are exactly
-  // the surfaces that come back stale.
-  //
-  // Deliberately its own trigger rather than a branch of the change-tick effect
-  // above: that one is gated on read-versus-watch root identity, which a reveal
-  // has no opinion about, and folding this in would let a watch-root quirk
-  // swallow it.
-  //
-  // No `reloadsSilently` gate either — that predicate exists to skip surfaces a
-  // background re-read would be inert for, which is the opposite of what this
-  // needs. Diff is skipped though: it owns its own freshness (`useDiffContent`
-  // raises a stale banner) and leaving it already re-reads source, so re-reading
-  // here would only replace review content nobody asked to move.
-  const isDockParked = usePanelStore(
-    useCallback((state) => location === "dock" && state.activeDockTerminalId !== id, [location, id])
-  );
-  useProjectViewRevealed(
-    () => {
-      if (viewMode !== "diff") loadFile("revealed");
-    },
-    { enabled: !isDockParked }
-  );
+  const remoteFile = useRemoteFileContext();
 
   // Route Cmd+F to the source view's find bar while this pane is focused
   // (no-op in rendered markdown, matching the dialog).
@@ -1257,96 +532,13 @@ export function FilePane({
   // Reveal is a third, always-present target that sits alongside this one.
   const openTarget: "browser" | "editor" = isHtml && viewMode === "rendered" ? "browser" : "editor";
 
-  // dispatch() resolves an ActionDispatchResult and never rejects, so a failed
-  // open used to vanish entirely (#11114). Surface it inline on the pane that
-  // owns the button rather than through a global toast. `target` rides along so
-  // Retry re-aims at what actually failed, even after a mode toggle.
-  const [externalError, setExternalError] = useState<{
-    message: string;
-    target: ExternalTarget;
-  } | null>(null);
-  // Tracked per target, not as one flag: revealing successfully says nothing
-  // about a missing editor, so the two must not clear or spin for each other.
-  const [pendingTargets, setPendingTargets] = useState<readonly ExternalTarget[]>([]);
-  // Bumped only by the reset below, so a still-running action is invalidated by
-  // the file changing under it — never by a sibling button starting.
-  const externalGenerationRef = useRef(0);
-  // Synchronous re-entry guard: state can't stop a double-click in one tick.
-  const externalInFlightRef = useRef<Set<ExternalTarget>>(new Set());
-
-  // A result that lands after the pane switched files (or panels) belongs to the
-  // old file: drop it, and clear any banner the old file left behind. Keyed on
-  // the file alone, never the resolved worktree: this resets *every* target at
-  // once, so folding topology churn in here would let a new nested worktree
-  // erase a pending editor launch and its failure banner.
-  useEffect(() => {
-    externalGenerationRef.current += 1;
-    externalInFlightRef.current.clear();
-    setExternalError(null);
-    setPendingTargets([]);
-  }, [id, filePath]);
-
-  const handleOpenExternal = useCallback(
-    async (target: ExternalTarget) => {
-      if (!filePath) return;
-      // File-browser carries worktree-scoped args and reveal opts into the
-      // guarded out-of-root fallback; browser/editor stay path-only. Built
-      // before the pending flip so a missing scope can't leave the button
-      // spinning on a dispatch that was never going to happen.
-      let args: unknown;
-      if (target === "file-browser") {
-        if (!revealWorktreeId) return;
-        args = {
-          worktreeId: revealWorktreeId,
-          // `toWorktreeRelative` hands back its input unchanged for a path that
-          // *is* the root (the only such case here — containment is already
-          // proven by revealWorktreeId), and the action would then trim
-          // "/repo" down to a bogus "repo" child. Undefined opens the root.
-          revealPath:
-            relativeFilePath && relativeFilePath !== filePath ? relativeFilePath : undefined,
-          revealKind: "file",
-        };
-      } else if (target === "reveal") {
-        // Sent on every reveal, in-root or not: `effectiveRootPath` already
-        // falls back to the file's own parent, so this pane deliberately
-        // displays files no project owns, and reveal was the last surface in it
-        // still asking the project registry for permission (#11934). The action
-        // decides whether the fallback is needed — a second copy of the
-        // containment rule has no business living in the renderer.
-        args = { path: filePath, allowOutsideRoots: true };
-      } else {
-        args = { path: filePath };
-      }
-      if (externalInFlightRef.current.has(target)) return;
-      externalInFlightRef.current.add(target);
-      const generation = externalGenerationRef.current;
-      setPendingTargets((current) => (current.includes(target) ? current : [...current, target]));
-      try {
-        const result = await actionService.dispatch(EXTERNAL_ACTIONS[target], args, {
-          source: "user",
-        });
-        // The file (or panel) changed while this was in flight: the result
-        // describes a file the pane no longer shows.
-        if (externalGenerationRef.current !== generation) return;
-        if (result.ok) {
-          // Clears only its own failure — a sibling's banner stands until that
-          // button's own retry succeeds.
-          setExternalError((current) => (current?.target === target ? null : current));
-          return;
-        }
-        logError(`[FilePane] ${EXTERNAL_ACTIONS[target]} failed`, result.error);
-        setExternalError({ message: result.error.message, target });
-      } finally {
-        // Releasing in `finally` keeps a rejection from wedging the button; the
-        // generation check leaves a reset's clean slate alone.
-        if (externalGenerationRef.current === generation) {
-          externalInFlightRef.current.delete(target);
-          setPendingTargets((current) => current.filter((t) => t !== target));
-        }
-      }
-    },
-    [filePath, relativeFilePath, revealWorktreeId]
-  );
+  const externalOpen = useFileExternalOpen({
+    panelId: id,
+    filePath,
+    relativeFilePath,
+    revealWorktreeId,
+  });
+  const { handleOpenExternal } = externalOpen;
 
   // A browser here can't open a page on an ssh host: a copy saved here stands in for it.
   const savesPageInstead = openTarget === "browser" && remoteFile?.saveTarget != null;
@@ -1357,12 +549,6 @@ export function FilePane({
     }
     void handleOpenExternal(openTarget);
   };
-
-  const isErrorTargetPending =
-    externalError !== null && pendingTargets.includes(externalError.target);
-  // Below the Doherty threshold a spinner is just a flash; `disabled` still
-  // blocks a double submit from the first millisecond.
-  const showRetrySpinner = useDohertyGate(isErrorTargetPending);
 
   const pickerRoot = worktreePath || projectPath;
 
@@ -1375,7 +561,6 @@ export function FilePane({
       ? toForwardSlashes(filePath).slice(toForwardSlashes(pickerRoot).replace(/\/$/, "").length + 1)
       : filePath && toForwardSlashes(filePath);
   const reveal = revealCopy();
-  const errorCopy = externalError ? externalTargetCopy(externalError.target, reveal) : null;
 
   // Leaving Edit unmounts the editor, and with it whatever had keyboard focus;
   // the mode toggle is the control the user is conceptually holding, so focus
@@ -1437,268 +622,51 @@ export function FilePane({
     />
   ) : undefined;
 
-  const showMarkdownWrap = (isMarkdown && viewMode === "source") || viewMode === "edit";
   const copyableContents = loadState === "loaded" ? content : null;
   const toolbar = filePath ? (
-    <>
-      <FileViewerToolbar.Root
-        label="File viewer controls"
-        // Where the secondary actions fold into "More actions" — the same
-        // priority rule as the file browser's viewer: the mode control and
-        // the file's name keep their room, the icon row gives way first. A
-        // row with a mode toggle folds earlier, because the toggle alone
-        // takes ~120px.
-        compactBelow={availableModes.length > 1 ? 500 : 360}
-      >
-        {availableModes.length > 1 && (
-          <div ref={modeToggleRef} className="contents">
-            <FileViewerToolbar.ModeControl<FileViewMode>
-              options={toggleOptions}
-              value={viewMode}
-              onChange={handleViewModeChange}
-            />
-          </div>
-        )}
-        {editorPicker && (
-          <FileEditorPicker
-            label={editorPicker.label}
-            options={editorPicker.options}
-            value={editorPicker.value}
-            onChange={(choice) => {
-              // A pinned panel follows its own pick; the answer for the type
-              // is remembered either way.
-              if (viewMode === "edit" && pinnedEditor !== undefined) {
-                setFileEditorChoice(id, choice);
-              }
-              void setEditorChoice(editorPicker.choiceKey, choice);
-            }}
-          />
-        )}
-        <FileViewerToolbar.Path
-          path={displayPath}
-          icon={getFileTypeIcon(fileName ?? filePath).Icon}
-          copyText={filePath || null}
-        />
-        <FileViewerToolbar.Actions>
-          <FileViewerToolbar.Responsive
-            wide={
-              <>
-                {/* The mirror of Wrap below it: each owns the slot in the mode
-                    it applies to, so rendered and source both carry exactly
-                    one markdown-specific control rather than a row that grows. */}
-                {isMarkdown && viewMode === "rendered" && (
-                  <MarkdownTextSizeControl
-                    value={markdownFontSize}
-                    onValueChange={setMarkdownFontSize}
-                    data-testid="file-pane-text-size"
-                  />
-                )}
-                {showMarkdownWrap && (
-                  <FileViewerToolbar.IconButton
-                    label="Wrap long lines"
-                    pressed={markdownWrapLines}
-                    onClick={() => setMarkdownWrapLines(!markdownWrapLines)}
-                  >
-                    <WrapText className={TOOLBAR_ICON_CLASS} />
-                  </FileViewerToolbar.IconButton>
-                )}
-                {/* Diff mode's own wrap, on the shared `diffWrapLines` the diff
-                    panel writes — not the markdown one above it, which only
-                    ever applied to Source view. Ungated by file type: the diff
-                    below renders as text for every file. */}
-                {viewMode === "diff" && (
-                  <FileViewerToolbar.IconButton
-                    label="Wrap long lines"
-                    pressed={effectiveDiffWrapLines}
-                    onClick={() => setDiffWrapLines(!effectiveDiffWrapLines)}
-                  >
-                    <WrapText className={TOOLBAR_ICON_CLASS} />
-                  </FileViewerToolbar.IconButton>
-                )}
-                {/* Refresh follows what's on screen — re-reading the file
-                    wouldn't refetch a diff, and vice versa. */}
-                <FileViewerToolbar.IconButton label="Refresh" onClick={handleToolbarRefresh}>
-                  <SpinningIcon
-                    icon={RefreshCw}
-                    active={refreshingMode !== null}
-                    className={TOOLBAR_ICON_CLASS}
-                  />
-                </FileViewerToolbar.IconButton>
-                {/* The raw file text, whichever view mode is showing: rendered
-                    markdown and the diff view both copy the source. `content`
-                    only ever holds a settled read, so the button is absent
-                    while one is in flight and for every state with no text.
-                    Keyed on the path so the confirmation resets when a file is
-                    swapped for one whose contents happen to be identical. */}
-                <FileViewerToolbar.CopyContentsButton key={filePath} contents={copyableContents} />
-                {/* The route back to the tree this file was opened from.
-                    Offered only when a live worktree contains the file. */}
-                {revealWorktreeId && (
-                  <FileViewerToolbar.IconButton
-                    label="Show in file browser"
-                    onClick={() => void handleOpenExternal("file-browser")}
-                  >
-                    <FolderTree className={TOOLBAR_ICON_CLASS} />
-                  </FileViewerToolbar.IconButton>
-                )}
-                {/* Reveal is always offered, even for a file the viewer can't
-                    render — the OS file manager is then the only way forward. */}
-                <FileViewerToolbar.IconButton
-                  label={reveal.label}
-                  onClick={() => void handleOpenExternal("reveal")}
-                >
-                  <FolderOpen className={TOOLBAR_ICON_CLASS} />
-                </FileViewerToolbar.IconButton>
-                <FileViewerToolbar.IconButton
-                  label={
-                    savesPageInstead
-                      ? saveHostFileLabel()
-                      : openTarget === "browser"
-                        ? "Open in browser"
-                        : "Open in editor"
-                  }
-                  onClick={runOpenTarget}
-                >
-                  {savesPageInstead ? (
-                    <Download className={TOOLBAR_ICON_CLASS} />
-                  ) : openTarget === "browser" ? (
-                    <Globe className={TOOLBAR_ICON_CLASS} />
-                  ) : (
-                    <ExternalLink className={TOOLBAR_ICON_CLASS} />
-                  )}
-                </FileViewerToolbar.IconButton>
-              </>
-            }
-            narrow={
-              <>
-                {/* Refresh stays out of the fold: its spinner is the only
-                  progress this pane shows, and a closed menu can't spin. */}
-                <FileViewerToolbar.IconButton label="Refresh" onClick={handleToolbarRefresh}>
-                  <SpinningIcon
-                    icon={RefreshCw}
-                    active={refreshingMode !== null}
-                    className={TOOLBAR_ICON_CLASS}
-                  />
-                </FileViewerToolbar.IconButton>
-                <FileViewerToolbar.MoreActions data-testid="file-pane-more-actions">
-                  {isMarkdown && viewMode === "rendered" && (
-                    <>
-                      <MarkdownTextSizeMenuItems
-                        value={markdownFontSize}
-                        onValueChange={setMarkdownFontSize}
-                      />
-                      <DropdownMenuSeparator />
-                    </>
-                  )}
-                  {(showMarkdownWrap || viewMode === "diff") && (
-                    <>
-                      <DropdownMenuCheckboxItem
-                        checked={viewMode === "diff" ? effectiveDiffWrapLines : markdownWrapLines}
-                        onCheckedChange={(checked) =>
-                          viewMode === "diff"
-                            ? setDiffWrapLines(checked)
-                            : setMarkdownWrapLines(checked)
-                        }
-                      >
-                        Wrap long lines
-                      </DropdownMenuCheckboxItem>
-                      <DropdownMenuSeparator />
-                    </>
-                  )}
-                  {copyableContents !== null && (
-                    <DropdownMenuItem
-                      onSelect={() => copyWithToast("File contents", copyableContents)}
-                    >
-                      <Copy className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
-                      Copy file contents
-                    </DropdownMenuItem>
-                  )}
-                  {revealWorktreeId && (
-                    <DropdownMenuItem onSelect={() => void handleOpenExternal("file-browser")}>
-                      <FolderTree className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
-                      Show in file browser
-                    </DropdownMenuItem>
-                  )}
-                  <DropdownMenuItem onSelect={() => void handleOpenExternal("reveal")}>
-                    <FolderOpen className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
-                    {reveal.label}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onSelect={runOpenTarget}>
-                    {savesPageInstead ? (
-                      <Download className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
-                    ) : openTarget === "browser" ? (
-                      <Globe className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
-                    ) : (
-                      <ExternalLink
-                        className="mr-2 h-3.5 w-3.5"
-                        aria-hidden="true"
-                        data-menu-icon
-                      />
-                    )}
-                    {savesPageInstead
-                      ? saveHostFileLabel()
-                      : openTarget === "browser"
-                        ? "Open in browser"
-                        : "Open in editor"}
-                  </DropdownMenuItem>
-                </FileViewerToolbar.MoreActions>
-              </>
-            }
-          />
-        </FileViewerToolbar.Actions>
-      </FileViewerToolbar.Root>
-      {/* Only where the default's editor is on offer for this file — not one
-          too large for it — so the one question lands in a pane that can show
-          what it asks about. */}
-      {fileDefault !== null &&
+    <FilePaneToolbar
+      panelId={id}
+      filePath={filePath}
+      fileName={fileName}
+      displayPath={displayPath || ""}
+      isMarkdown={isMarkdown}
+      viewMode={viewMode}
+      toggleOptions={toggleOptions}
+      modeToggleRef={modeToggleRef}
+      onViewModeChange={handleViewModeChange}
+      editorPicker={editorPicker}
+      pinnedEditor={pinnedEditor}
+      setEditorChoice={setEditorChoice}
+      effectiveDiffWrapLines={effectiveDiffWrapLines}
+      refreshing={refreshing}
+      onRefresh={handleToolbarRefresh}
+      copyableContents={copyableContents}
+      revealWorktreeId={revealWorktreeId}
+      reveal={reveal}
+      openTarget={openTarget}
+      savesPageInstead={savesPageInstead}
+      onRunOpenTarget={runOpenTarget}
+      externalOpen={externalOpen}
+      defaultNoticeSlot={
+        fileDefault !== null &&
         fileDefault.choice === null &&
-        editOptions.includes(fileDefault.choiceId) && (
-          <FileEditorDefaultNotice slot={fileDefault.slot} onAnswered={handleDefaultAnswered} />
-        )}
-      {location !== "dialog" &&
+        editOptions.includes(fileDefault.choiceId)
+          ? fileDefault.slot
+          : null
+      }
+      onDefaultAnswered={handleDefaultAnswered}
+      editorBannerContent={
+        location !== "dialog" &&
         isInsideGovernedRoot &&
         editLockedBy === null &&
         viewMode !== "edit" &&
-        loadState === "loaded" &&
-        content !== null && (
-          <FileEditorBanner
-            key={`${id}:${filePath}`}
-            filePath={filePath}
-            content={content}
-            onEdit={() => handleViewModeChange("edit")}
-          />
-        )}
-      {viewMode === "diff" && diffStale && diffContent !== undefined && (
-        <InlineStatusBanner
-          severity="info"
-          icon={FileDiffIcon}
-          title="File changed since this diff loaded"
-          role="status"
-          ariaLive="polite"
-          action={{ id: "refresh-diff", label: "Refresh", icon: RefreshCw, onClick: retryDiff }}
-        />
-      )}
-      {externalError && errorCopy && (
-        <InlineStatusBanner
-          icon={XCircle}
-          title={errorCopy.errorTitle}
-          description={externalError.message}
-          severity="error"
-          action={{
-            id: "retry-open-external",
-            label: "Retry",
-            icon: RefreshCw,
-            variant: "dangerFilled",
-            loading: showRetrySpinner,
-            disabled: isErrorTargetPending,
-            onClick: () => void handleOpenExternal(externalError.target),
-            ariaLabel: errorCopy.retryAriaLabel,
-          }}
-          onClose={() => setExternalError(null)}
-          closeAriaLabel={errorCopy.dismissAriaLabel}
-        />
-      )}
-    </>
+        loadState === "loaded"
+          ? content
+          : null
+      }
+      showDiffStale={viewMode === "diff" && diffStale && diffContent !== undefined}
+      onRetryDiff={retryDiff}
+    />
   ) : undefined;
 
   // The file's menu on its content (#13423) — the shared file-row core, scoped
@@ -1860,8 +828,8 @@ export function FilePane({
             loadState === "error" &&
             errorCode && (
               <FilePaneUnavailable
-                reason={toUnavailableReason(filePath, errorCode, errorMessage)}
-                message={errorMessage ?? ""}
+                errorCode={errorCode}
+                errorMessage={errorMessage}
                 filePath={filePath}
                 fileName={fileName ?? filePath}
                 revealLabel={reveal.label}
@@ -1884,8 +852,7 @@ export function FilePane({
                 sanitizedSvg={loadState === "svg" ? sanitizedSvg : null}
                 cacheBust={String(reloadNonce)}
                 onError={(error) => {
-                  setErrorCode(previewErrorCode(error, "NOT_FOUND"));
-                  setLoadState("error");
+                  failPreview(previewErrorCode(error, "NOT_FOUND"));
                 }}
                 maxHeightClassName="max-h-full"
               />
@@ -1901,9 +868,10 @@ export function FilePane({
               onError={(error) => {
                 // An allowlisted container can still hold a codec Chromium lacks;
                 // name that instead of implying the file is missing.
-                setErrorCode(previewErrorCode(error, "BINARY_FILE"));
-                setErrorMessage(error?.title ?? "This video couldn't be played");
-                setLoadState("error");
+                failPreview(
+                  previewErrorCode(error, "BINARY_FILE"),
+                  error?.title ?? "This video couldn't be played"
+                );
               }}
               maxHeightClassName="max-h-full"
             />
@@ -1919,9 +887,10 @@ export function FilePane({
               onError={(error) => {
                 // An allowlisted extension can still hold a codec Chromium lacks;
                 // name that instead of implying the file is missing.
-                setErrorCode(previewErrorCode(error, "BINARY_FILE"));
-                setErrorMessage(error?.title ?? "This audio file couldn't be played");
-                setLoadState("error");
+                failPreview(
+                  previewErrorCode(error, "BINARY_FILE"),
+                  error?.title ?? "This audio file couldn't be played"
+                );
               }}
             />
           )}
@@ -1933,9 +902,7 @@ export function FilePane({
               label={fileName ?? filePath}
               reloadKey={reloadNonce}
               onError={(error) => {
-                setErrorCode(previewErrorCode(error, "BINARY_FILE"));
-                setErrorMessage(error.title);
-                setLoadState("error");
+                failPreview(previewErrorCode(error, "BINARY_FILE"), error.title);
               }}
             />
           )}
@@ -2060,163 +1027,5 @@ export function FilePane({
         </div>
       </FileContentContextMenu>
     </ContentPanel>
-  );
-}
-
-/**
- * What the pane's error state keeps: a read's code, or a remote host's
- * refusal of a preview, which is about control or location and not the file.
- */
-type FilePaneErrorCode = FileReadErrorCode | "DRIVEN_ELSEWHERE" | "OUTSIDE_PROJECT";
-
-function previewErrorCode(
-  error: MediaPreviewError | undefined,
-  fallback: FileReadErrorCode
-): FilePaneErrorCode {
-  const refused = refusalReason(error);
-  if (refused === "DRIVEN_ELSEWHERE" || refused === "OUTSIDE_PROJECT") return refused;
-  return error?.code ?? fallback;
-}
-
-/**
- * The structured reason behind the pane's error state, recovered from the
- * code and message it already keeps. The pane stores a read-error code even
- * for failures no read produced — an image that won't decode, a codec the
- * player lacks — so the file's kind decides which of those it really was.
- */
-function toUnavailableReason(
-  filePath: string,
-  code: FilePaneErrorCode,
-  message: string | null
-): UnavailableReason {
-  // A host refusal is about control or location, never the file: it outranks
-  // whatever the file's kind would otherwise make of a failure.
-  if (code === "DRIVEN_ELSEWHERE" || code === "OUTSIDE_PROJECT") return code;
-  if (isUnsupportedVideoFilePath(filePath) || isUnsupportedAudioFilePath(filePath)) {
-    return "UNSUPPORTED_MEDIA";
-  }
-  // Previews before the size code: a PDF or a video refused as too large is a
-  // preview limit with the OS app as its way out, not text for the editor.
-  if (isPdfFilePath(filePath)) return "PDF_FAILED";
-  if (isVideoFilePath(filePath) || isAudioFilePath(filePath)) return "MEDIA_FAILED";
-  if (code === "FILE_TOO_LARGE") return "FILE_TOO_LARGE";
-  // An SVG is read like text, so its read failures keep their own codes; only
-  // a sanitizer rejection (a read that succeeded) is the SVG's own reason.
-  if (isSvgFilePath(filePath)) {
-    return code === "INVALID_PATH" && message !== null ? "SVG_REJECTED" : code;
-  }
-  // A raster image never goes through a read; its only failure is a decode.
-  if (isImageFilePath(filePath)) return "IMAGE_FAILED";
-  return code;
-}
-
-/**
- * Failures a second attempt can't change: a directory never becomes a file, an
- * unsupported container never becomes playable, and a binary never becomes
- * text. Everything else keeps Retry — a permission can clear, a decode can
- * succeed once a half-written file settles, a refused PDF can come back.
- */
-const NOT_RETRYABLE: ReadonlySet<UnavailableReason> = new Set<UnavailableReason>([
-  "NOT_A_FILE",
-  "UNSUPPORTED_MEDIA",
-  "BINARY_FILE",
-  "OUTSIDE_PROJECT",
-]);
-
-/**
- * The file panel's unavailable body: the same cause-first wording as the file
- * browser's (`FileUnavailableState`), wired to this pane's own handlers. The
- * cause's own way out comes first. "Open" follows the file's kind — the editor
- * for oversized text, the OS default app for media, images and PDFs, but only
- * inside a governed root where that open is contained; outside one, Reveal,
- * which carries a guarded out-of-root fallback, takes its place. A PDF always
- * keeps Reveal beside its open, since a link out of the root passes the lexical
- * check and fails the OS one. Retry follows for anything a retry can fix.
- */
-function FilePaneUnavailable({
-  reason,
-  message,
-  filePath,
-  fileName,
-  revealLabel,
-  openTarget,
-  canOpenInDefaultApp,
-  remote,
-  onRetry,
-  onExternal,
-}: {
-  reason: UnavailableReason;
-  message: string;
-  filePath: string;
-  fileName: string;
-  revealLabel: string;
-  openTarget: "browser" | "editor";
-  canOpenInDefaultApp: boolean;
-  remote: RemoteFileContext | null;
-  onRetry: () => void;
-  onExternal: (target: ExternalTarget) => void;
-}) {
-  const shared = unavailableCopy(reason, message, remote);
-  // Refreshing this pane can't turn a folder into something it can show; the
-  // file manager can.
-  const copy =
-    reason === "NOT_A_FILE"
-      ? { ...shared, description: "It can't be opened here. Reveal it to see what's inside." }
-      : shared;
-  const isPreviewLimit =
-    reason === "UNSUPPORTED_MEDIA" ||
-    reason === "MEDIA_FAILED" ||
-    reason === "IMAGE_FAILED" ||
-    reason === "PDF_FAILED";
-  const openVia: ExternalTarget | null =
-    copy.action !== "open"
-      ? null
-      : isPreviewLimit
-        ? canOpenInDefaultApp
-          ? "default-app"
-          : null
-        : openTarget;
-  const offersReveal =
-    copy.action === "reveal" ||
-    reason === "NOT_A_FILE" ||
-    reason === "PDF_FAILED" ||
-    (copy.action === "open" && openVia === null);
-  const offersRetry = !NOT_RETRYABLE.has(reason);
-
-  return (
-    <FileUnavailableState
-      icon={getFileTypeIcon(fileName).Icon}
-      title={copy.title}
-      description={copy.description}
-      data-testid="file-pane-unavailable"
-      action={
-        <div className="flex flex-wrap items-center justify-center gap-2">
-          {copy.action === "take-control" && <TakeControlButton />}
-          {copy.action === "save" && <SaveHostFileButton hostPath={filePath} />}
-          {openVia !== null && (
-            <Button variant="subtle" size="sm" onClick={() => onExternal(openVia)}>
-              {openVia === "browser" ? <Globe /> : <ExternalLink />}
-              {openVia === "default-app"
-                ? "Open in default app"
-                : openVia === "browser"
-                  ? "Open in browser"
-                  : "Open in editor"}
-            </Button>
-          )}
-          {offersReveal && (
-            <Button variant="subtle" size="sm" onClick={() => onExternal("reveal")}>
-              <FolderOpen />
-              {revealLabel}
-            </Button>
-          )}
-          {offersRetry && (
-            <Button variant="subtle" size="sm" onClick={onRetry}>
-              <RefreshCw />
-              Retry
-            </Button>
-          )}
-        </div>
-      }
-    />
   );
 }
