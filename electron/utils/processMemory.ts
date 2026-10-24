@@ -125,6 +125,11 @@ export function getMetricsMemorySource(metrics: readonly Electron.ProcessMetric[
   return footprintSweeps.has(metrics) ? "footprint" : "resident";
 }
 
+/** True when the sweep read a physical footprint for every one of its processes. */
+export function hasFootprintForEveryProcess(metrics: readonly Electron.ProcessMetric[]): boolean {
+  return metrics.length > 0 && metrics.every((metric) => footprintKbByMetric.has(metric));
+}
+
 export function setPhysFootprintReaderForTesting(next: PhysFootprintReader | null): void {
   reader = next;
 }

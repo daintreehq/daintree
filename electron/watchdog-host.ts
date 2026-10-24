@@ -7,7 +7,10 @@
  * after MAX_MISSED missed beats — MAX_MISSED_UNDER_PRESSURE when main last
  * reported memory pressure (or had no reading), main's pings were already
  * arriving late, the watchdog itself just stalled, or (off macOS) the
- * watchdog's own read finds memory nearly exhausted.
+ * watchdog's own read finds memory nearly exhausted. When main last reported
+ * pressure that Daintree's own processes don't account for, the kill waits for
+ * MAX_NO_PROGRESS_UNDER_EXTERNAL_PRESSURE beats with no ping and no write to a
+ * file only main writes.
  * CrashRecoveryService and CrashLoopGuard handle the relaunch + safe-mode path.
  *
  * Fail-open: if anything is malformed (no PID, no parentPort, watchdog
@@ -27,8 +30,10 @@ import {
   HEARTBEAT_INTERVAL_MS,
   MAX_MISSED,
   MAX_MISSED_UNDER_PRESSURE,
+  MAX_NO_PROGRESS_UNDER_EXTERNAL_PRESSURE,
   type WatchdogMessage,
 } from "./watchdog-host-core.js";
+import { createMainProgressObserverForUserData } from "./watchdog-main-progress.js";
 
 const STDIO_DEAD_CODES = new Set(["EPIPE", "EIO", "EBADF", "ECONNRESET"]);
 for (const stream of [process.stdout, process.stderr]) {
@@ -90,9 +95,12 @@ function readAvailableMemoryRatio(): number | null {
   );
 }
 
+const mainProgress = userDataPath ? createMainProgressObserverForUserData(userDataPath) : undefined;
+
 const watchdog = createWatchdog({
   readAvailableMemoryRatio: process.platform === "darwin" ? undefined : readAvailableMemoryRatio,
-  killMain: () => {
+  mainProgress,
+  killMain: (decision) => {
     if (mainPid === null) return;
     if (!isMainAlive(mainPid)) {
       console.error(
@@ -103,7 +111,7 @@ const watchdog = createWatchdog({
     console.error(`[WatchdogHost] Sending SIGKILL to main PID ${mainPid}`);
     // Annotation write is best-effort and must NEVER gate the kill. The
     // helper swallows all errors internally; SIGKILL fires unconditionally.
-    writeWatchdogKillFlag(userDataPath, watchdog.state.missedBeats, mainPid, killFlagDeps);
+    writeWatchdogKillFlag(userDataPath, decision, mainPid, killFlagDeps);
     try {
       process.kill(mainPid, "SIGKILL");
     } catch (err) {
@@ -143,5 +151,5 @@ port.on("message", (rawMsg: unknown) => {
 });
 
 console.log(
-  `[WatchdogHost] Started; main PID=${mainPid ?? "<missing>"}, interval=${HEARTBEAT_INTERVAL_MS}ms, threshold=${MAX_MISSED} (${MAX_MISSED_UNDER_PRESSURE} with evidence of memory pressure or a stall)`
+  `[WatchdogHost] Started; main PID=${mainPid ?? "<missing>"}, interval=${HEARTBEAT_INTERVAL_MS}ms, threshold=${MAX_MISSED} (${MAX_MISSED_UNDER_PRESSURE} with evidence of memory pressure or a stall, ${MAX_NO_PROGRESS_UNDER_EXTERNAL_PRESSURE} with no sign of main under external pressure)`
 );

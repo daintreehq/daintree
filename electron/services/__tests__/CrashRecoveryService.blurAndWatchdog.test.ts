@@ -292,6 +292,59 @@ describe("CrashRecoveryService", () => {
       expect(pending!.entry.watchdogMainPid).toBe(4242);
     });
 
+    it("records which watchdog deadline ran out, with its evidence (#14367)", () => {
+      const sessionStartMs = Date.now() - 900_000;
+      writeMarker(sessionStartMs);
+      const killedAt = sessionStartMs + 800_000;
+      writeWatchdogFlag(
+        {
+          killedAt,
+          missedBeats: 140,
+          mainPid: 4242,
+          reason: "no-progress-under-external-pressure",
+          beatsSinceProgress: 120,
+          pressureEvidence: "main reported memory pressure",
+        },
+        killedAt
+      );
+
+      const svc = makeService();
+      svc.initialize();
+
+      const entry = svc.getPendingCrash()!.entry;
+      expect(entry.cause).toBe("watchdog-deadlock");
+      expect(entry.watchdogKillReason).toBe("no-progress-under-external-pressure");
+      expect(entry.watchdogBeatsSinceProgress).toBe(120);
+      expect(entry.watchdogPressureEvidence).toBe("main reported memory pressure");
+    });
+
+    it("keeps the attribution when a diagnostic field is bad, dropping only that field", () => {
+      const sessionStartMs = Date.now() - 20_000;
+      writeMarker(sessionStartMs);
+      const killedAt = sessionStartMs + 16_000;
+      writeWatchdogFlag(
+        {
+          killedAt,
+          missedBeats: 3,
+          mainPid: 4242,
+          reason: "gremlins",
+          beatsSinceProgress: -1,
+          pressureEvidence: `${"x".repeat(199)}\u{1F600}${"y".repeat(5000)}`,
+        },
+        killedAt
+      );
+
+      const svc = makeService();
+      svc.initialize();
+
+      const entry = svc.getPendingCrash()!.entry;
+      expect(entry.cause).toBe("watchdog-deadlock");
+      expect(entry.watchdogMissedBeats).toBe(3);
+      expect(entry.watchdogKillReason).toBeUndefined();
+      expect(entry.watchdogBeatsSinceProgress).toBeUndefined();
+      expect(entry.watchdogPressureEvidence).toBe(`${"x".repeat(199)}y`);
+    });
+
     it("consumes (unlinks) the flag regardless of attribution outcome", () => {
       const sessionStartMs = Date.now() - 20_000;
       writeMarker(sessionStartMs);

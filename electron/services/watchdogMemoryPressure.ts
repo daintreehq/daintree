@@ -1,4 +1,4 @@
-import { SWAP_PRESSURE_STALE_MS } from "./systemSwapPressure.js";
+import { isSwapPressureConfirmed, SWAP_PRESSURE_STALE_MS } from "./systemSwapPressure.js";
 
 /**
  * Main's latest read of system memory pressure, carried on every watchdog ping
@@ -39,4 +39,38 @@ export function readWatchdogMemoryPressure(now: number = Date.now()): boolean | 
   if (ageMs >= 0 && ageMs <= WATCHDOG_PRESSURE_STALE_MS) return reading.elevated;
   reading = null;
   return null;
+}
+
+/**
+ * Below this share of physical memory, Daintree's own processes can't be what
+ * is pushing the machine into swap (#14367). On the incident host they held
+ * about 0.5 GB of 36 GB while agent tool trees held the rest.
+ */
+export const EXTERNAL_PRESSURE_MAX_OWN_MEMORY_RATIO = 0.25;
+
+export interface OwnMemoryReading {
+  ownMb: number;
+  /** Wall-clock time of the sweep the figure came from. */
+  sampledAt: number;
+}
+
+/**
+ * True when kernel-plus-swap pressure is confirmed and a fresh reading puts
+ * Daintree's own footprint under {@link EXTERNAL_PRESSURE_MAX_OWN_MEMORY_RATIO}
+ * of physical memory: pressure that nothing in the reclaim ladder can relieve.
+ * `readOwnMemory` is only called once pressure is confirmed, and returns null
+ * when there is no figure it trusts.
+ */
+export function isMemoryPressureExternal(
+  readOwnMemory: () => OwnMemoryReading | null,
+  totalMemoryMb: number,
+  now: number = Date.now()
+): boolean {
+  if (!isSwapPressureConfirmed(now)) return false;
+  if (!(totalMemoryMb > 0)) return false;
+  const own = readOwnMemory();
+  if (own === null || !Number.isFinite(own.ownMb) || own.ownMb < 0) return false;
+  const ageMs = now - own.sampledAt;
+  if (!(ageMs >= 0 && ageMs <= WATCHDOG_PRESSURE_STALE_MS)) return false;
+  return own.ownMb / totalMemoryMb < EXTERNAL_PRESSURE_MAX_OWN_MEMORY_RATIO;
 }
