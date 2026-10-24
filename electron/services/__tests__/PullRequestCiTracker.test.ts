@@ -61,12 +61,14 @@ describe("PullRequestCiTracker", () => {
     expect(b.lastCiCheckAt).toBeTypeOf("number");
   });
 
-  it("never lands a result on a distinct entry that moved off the read's commit", async () => {
+  it("carries a result to distinct entries for the PR, except one that moved off its commit", async () => {
     const source = entry({ ciStatus: "pending" });
     const pushed = entry({ displacedHeadSha: "old" });
+    const sibling = entry({ ciStatus: "pending" });
     const { tracker, deps, settle } = harness([
       ["wt-source", source],
       ["wt-pushed", pushed],
+      ["wt-sibling", sibling],
     ]);
 
     tracker.enrichPRWithCIStatus(source, repo);
@@ -75,16 +77,17 @@ describe("PullRequestCiTracker", () => {
     expect(source.ciStatus).toBe("failure");
     expect(pushed.ciStatus).toBeUndefined();
     expect(pushed._ciStatus).toBeUndefined();
-    expect(deps.publish).toHaveBeenCalledTimes(1);
-    expect(deps.publish.mock.calls[0][0]).toMatchObject({
-      worktreeId: "wt-source",
-      prCiStatus: "failure",
-    });
+    expect(sibling.ciStatus).toBe("failure");
+    expect(deps.publish.mock.calls.map(([p]) => [p.worktreeId, p.prCiStatus])).toEqual([
+      ["wt-source", "failure"],
+      ["wt-sibling", "failure"],
+    ]);
   });
 
   it("disabling sweeps only pending entries and drops a result still in flight", async () => {
-    const pending = entry({ number: 1, ciStatus: "pending" });
-    const green = entry({ number: 2, ciStatus: "success" });
+    // Same PR number, distinct objects: the sweep must not cross-clear.
+    const pending = entry({ ciStatus: "pending" });
+    const green = entry({ ciStatus: "success" });
     const { tracker, deps, settle } = harness([
       ["wt-pending", pending],
       ["wt-green", green],

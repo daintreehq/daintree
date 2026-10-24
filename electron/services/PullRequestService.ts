@@ -1026,7 +1026,7 @@ class PullRequestService {
     // before the unresolved-candidate gate below — that gate is false in the
     // common steady state (every worktree already has its PR), which is exactly
     // when the CI catch-up matters most (#11513).
-    if (this.isEnabled && this.repoRef) {
+    if (this.ciEnrichmentEnabled && this.isEnabled && this.repoRef) {
       this.ciTracker.recheckResolvedCIOnFocus(this.resolvedWorktrees, this.repoRef);
     }
 
