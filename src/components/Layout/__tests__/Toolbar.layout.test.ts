@@ -2,12 +2,8 @@ import { describe, it, expect, beforeEach } from "vitest";
 import fs from "fs/promises";
 import path from "path";
 import { readToolbarCss } from "@/__tests__/support/cssManifest";
+import { readToolbarSource } from "./toolbarSource";
 
-const TOOLBAR_PATH = path.resolve(__dirname, "../Toolbar.tsx");
-// The pill's markup lives in its own component; the toolbar and the pill are read as one surface.
-const PILL_PATH = path.resolve(__dirname, "../ToolbarProjectPill.tsx");
-const readToolbarSource = async () =>
-  (await fs.readFile(TOOLBAR_PATH, "utf-8")) + (await fs.readFile(PILL_PATH, "utf-8"));
 const BUTTON_PATH = path.resolve(__dirname, "../../ui/button.tsx");
 
 describe("Toolbar layout — issue #2584 project switcher collision", () => {
@@ -93,6 +89,31 @@ describe("Toolbar layout — issue #2584 project switcher collision", () => {
 
     it("divider element has aria-hidden for accessibility", () => {
       expect(source).toMatch(/group-divider[\s\S]{0,200}aria-hidden="true"/);
+    });
+  });
+
+  describe("Composition of the extracted modules — issue #14347", () => {
+    // Every guard here reads the toolbar's modules as one surface, so it would
+    // still pass on a hook nothing calls. Toolbar.tsx itself has to wire them.
+    it("calls each extracted hook and renders the overflow menu", async () => {
+      const shell = await fs.readFile(path.resolve(__dirname, "../Toolbar.tsx"), "utf-8");
+      for (const call of [
+        "useToolbarItemPlacement({",
+        "useToolbarOverflowStatus({",
+        "useToolbarOverflowEviction({",
+        "useToolbarCustomization({",
+        "useToolbarProjectPill({",
+        "<OverflowMenu",
+      ]) {
+        expect(shell).toContain(call);
+      }
+    });
+
+    it("keys eviction on measured overflow and the demoted set, not the merged lists", async () => {
+      const shell = await fs.readFile(path.resolve(__dirname, "../Toolbar.tsx"), "utf-8");
+      expect(shell).toMatch(
+        /useToolbarOverflowEviction\(\{\s*measuredLeftOverflow,\s*measuredRightOverflow,\s*demotedIds,/
+      );
     });
   });
 

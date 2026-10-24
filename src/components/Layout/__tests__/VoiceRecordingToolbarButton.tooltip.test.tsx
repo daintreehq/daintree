@@ -5,9 +5,9 @@ import path from "path";
 import { render, fireEvent } from "@testing-library/react";
 import { VoiceRecordingToolbarButton } from "../VoiceRecordingToolbarButton";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
+import { readToolbarSource } from "./toolbarSource";
 
 const BUTTON_PATH = path.resolve(__dirname, "../VoiceRecordingToolbarButton.tsx");
-const TOOLBAR_PATH = path.resolve(__dirname, "../Toolbar.tsx");
 
 const focusActiveTarget = vi.fn();
 let mockCombo: string | undefined;
@@ -149,10 +149,7 @@ describe("VoiceRecordingToolbarButton polish — issue #8176", () => {
   let toolbar: string;
 
   beforeEach(async () => {
-    [source, toolbar] = await Promise.all([
-      fs.readFile(BUTTON_PATH, "utf-8"),
-      fs.readFile(TOOLBAR_PATH, "utf-8"),
-    ]);
+    [source, toolbar] = await Promise.all([fs.readFile(BUTTON_PATH, "utf-8"), readToolbarSource()]);
   });
 
   describe("footprint reservation prevents layout shift", () => {
