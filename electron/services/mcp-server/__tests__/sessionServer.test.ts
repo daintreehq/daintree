@@ -8729,9 +8729,7 @@ describe("session-scoped resource ownership (#11909)", () => {
       });
 
       expect(closed.isError).toBeUndefined();
-      expect(store.resourceOwnership.owns("s-restart-keeps", "terminal", "terminal-1")).toBe(
-        false
-      );
+      expect(store.resourceOwnership.owns("s-restart-keeps", "terminal", "terminal-1")).toBe(false);
     });
 
     it("keeps ownership when the restart fails", async () => {

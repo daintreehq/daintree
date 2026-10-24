@@ -427,10 +427,7 @@ export function registerTerminalLifecycleActions(
         .string()
         .min(1)
         .describe("Panel `id` this session got when launching it. Required."),
-      presetId: z
-        .string()
-        .min(1)
-        .describe("A preset `id` of the panel's own agent."),
+      presetId: z.string().min(1).describe("A preset `id` of the panel's own agent."),
     }),
     resultSchema: RestartOnPresetResultSchema,
     mcpOutputSchema: true,
