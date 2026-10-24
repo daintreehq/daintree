@@ -1,57 +1,24 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { formatCountdown } from "@/utils/formatCountdown";
-import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
-import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
+import { useMemo, useState } from "react";
 import { Callout } from "@/components/ui/Callout";
 import type { ReactNode } from "react";
-import { XCircle, AlertTriangle, ChevronRight, FolderOpen } from "lucide-react";
-import * as semver from "semver";
+import { AlertTriangle, ChevronRight, FolderOpen } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Input } from "@/components/ui/input";
-import { useDeferredLoading, useHelpSessionLiveStatus } from "@/hooks";
-import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
 import { useMcpReadiness } from "@/hooks/useMcpReadiness";
 import { isRemoteHostSupported } from "@/lib/remoteHosts";
 import { actionService } from "@/services/ActionService";
 import { Button } from "@/components/ui/button";
-import { CopyButton } from "@/components/ui/CopyButton";
-import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { useRemoteHostName } from "@/hooks/useSettingsOwner";
-import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SettingsSection } from "./SettingsSection";
-import {
-  SETTINGS_CONTROL_WIDTH,
-  SettingsDependents,
-  SettingsGroup,
-  SettingsInlineError,
-  SettingsRow,
-} from "./SettingsGroup";
+import { SettingsDependents, SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { SettingsChoicebox } from "./SettingsChoicebox";
-import { SettingsPresetGroup } from "./SettingsPresetGroup";
 import { SettingsInput } from "./SettingsInput";
 import { SettingsSelect } from "./SettingsSelect";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
-import { McpAuditLogViewer } from "./McpAuditLogViewer";
-import { McpAuditLatencyTable } from "./McpAuditLatencyTable";
-import { TurnOutcomeDiagnostics } from "./TurnOutcomeDiagnostics";
-import { useSettingsTabValidation } from "./SettingsValidationRegistry";
-import { useSettingsTabFlush } from "./SettingsFlushRegistry";
-import { formatErrorMessage } from "@shared/utils/errorMessage";
-import { followModelUpgrades } from "@shared/utils/modelUpgrades";
-import { useDebounce } from "@/hooks/useDebounce";
-
-import { logError } from "@/utils/logger";
-import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { getAgentConfig, getAssistantSupportedAgentIds } from "@/config/agents";
 import { DEFAULT_DANGEROUS_ARGS } from "@shared/types/agentSettings";
-import { agentCapabilitiesClient } from "@/clients/agentCapabilitiesClient";
-import {
-  getSavedAssistantModelId,
-  resolveAssistantModelId,
-  type AgentModelConfig,
-} from "@shared/config/agentRegistry";
-import { useHelpPanelStore, selectActiveSlot } from "@/store/helpPanelStore";
+import { resolveAssistantModelId } from "@shared/config/agentRegistry";
+import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { DAINTREE_CONFIRMATION_OPTIONS } from "@/config/assistantDaintreeConfirmations";
 import {
@@ -59,159 +26,29 @@ import {
   isHelpAssistantDaintreeConfirmations,
   resolveAssistantAgentSkip,
 } from "@shared/utils/assistantDaintreeConfirmations";
-import type {
-  HelpAssistantIdleHibernateMinutes,
-  HelpAssistantSettings,
-  HelpAssistantTier,
-  HelpSessionActiveGrant,
-  McpAuditStats,
-  McpLogRecord,
-  AssistantTurnRecord,
-} from "@shared/types";
-import { isAuditRecord } from "@shared/types";
+import type { HelpAssistantIdleHibernateMinutes, HelpAssistantTier } from "@shared/types";
 import {
   HELP_TIER_CUMULATIVE,
   HELP_TIER_INCREMENTAL,
   HIGH_BLAST_RADIUS_TOOLS,
 } from "@shared/config/helpAssistantTierAllowlists";
-import { pluralNoun } from "@/lib/pluralize";
-
-const EXPORT_FEEDBACK_MS = 2000;
-const CUSTOM_ARGS_DEBOUNCE_MS = 500;
-
-type SaveGroup = "agent" | "launch" | "behavior" | "security" | "privacy" | "content";
-
-const SAVE_GROUP_BY_KEY: Record<keyof HelpAssistantSettings, SaveGroup> = {
-  modelIds: "agent",
-  customArgs: "launch",
-  docSearch: "behavior",
-  daintreeControl: "behavior",
-  runbookSearch: "behavior",
-  idleHibernateMinutes: "launch",
-  tier: "security",
-  bypassPermissions: "security",
-  daintreeConfirmations: "security",
-  auditRetention: "privacy",
-  loadGlobalHooksAndServers: "content",
-  acceptRemoteControl: "security",
-};
-
-const SETTING_KEYS: readonly (keyof HelpAssistantSettings)[] = [
-  "modelIds",
-  "customArgs",
-  "docSearch",
-  "daintreeControl",
-  "runbookSearch",
-  "idleHibernateMinutes",
-  "tier",
-  "bypassPermissions",
-  "daintreeConfirmations",
-  "auditRetention",
-  "loadGlobalHooksAndServers",
-  "acceptRemoteControl",
-];
-
-function patchedKeys(patch: Partial<HelpAssistantSettings>): (keyof HelpAssistantSettings)[] {
-  return SETTING_KEYS.filter((key) => key in patch);
-}
-
-function saveGroupOf(patch: Partial<HelpAssistantSettings>): SaveGroup {
-  const [first] = patchedKeys(patch);
-  return first ? SAVE_GROUP_BY_KEY[first] : "agent";
-}
-
-function copySetting<K extends keyof HelpAssistantSettings>(
-  target: HelpAssistantSettings,
-  source: HelpAssistantSettings,
-  key: K
-): void {
-  target[key] = source[key];
-}
-
-type ModelIdMap = HelpAssistantSettings["modelIds"];
-
-// A `modelIds` patch names only the agents it changes; `null` removes that
-// agent's entry, mirroring how main merges it.
-function mergeModelIds(current: ModelIdMap, patch: ModelIdMap): ModelIdMap {
-  const next = { ...current };
-  for (const [agentId, modelId] of Object.entries(patch)) {
-    if (modelId === null) delete next[agentId];
-    else next[agentId] = modelId;
-  }
-  return next;
-}
-
-function applySettingsPatch(
-  current: HelpAssistantSettings,
-  patch: Partial<HelpAssistantSettings>
-): HelpAssistantSettings {
-  const next = { ...current, ...patch };
-  if (patch.modelIds) next.modelIds = mergeModelIds(current.modelIds, patch.modelIds);
-  return next;
-}
-
-// Puts the attempted keys back, unless a later change has already moved them.
-// Model entries are restored per agent so a failed save for one agent never
-// touches another agent's choice.
-function revertSettingsPatch(
-  current: HelpAssistantSettings,
-  previous: HelpAssistantSettings,
-  patch: Partial<HelpAssistantSettings>
-): HelpAssistantSettings {
-  const reverted: HelpAssistantSettings = { ...current };
-  for (const key of patchedKeys(patch)) {
-    if (key === "modelIds") continue;
-    if (current[key] === patch[key]) copySetting(reverted, previous, key);
-  }
-  if (patch.modelIds) {
-    const restore: ModelIdMap = {};
-    for (const [agentId, attempted] of Object.entries(patch.modelIds)) {
-      if (getSavedAssistantModelId(current.modelIds, agentId) !== attempted) continue;
-      restore[agentId] = getSavedAssistantModelId(previous.modelIds, agentId);
-    }
-    reverted.modelIds = mergeModelIds(current.modelIds, restore);
-  }
-  return reverted;
-}
-
-const SETTING_LABEL: Record<keyof HelpAssistantSettings, string> = {
-  modelIds: "Model",
-  customArgs: "Custom CLI args",
-  docSearch: "Search documentation",
-  daintreeControl: "Daintree control",
-  runbookSearch: "Follow runbooks",
-  idleHibernateMinutes: "Hibernate after",
-  tier: "Tool set",
-  bypassPermissions: "Bypass",
-  auditRetention: "Audit log retention",
-  loadGlobalHooksAndServers: "Load my MCP servers and hooks",
-  daintreeConfirmations: "Daintree confirmations",
-  acceptRemoteControl: "Let other machines' assistants work here",
-};
-
-interface SaveFailure {
-  group: SaveGroup;
-  patch: Partial<HelpAssistantSettings>;
-}
-
-const DEFAULT_SETTINGS: HelpAssistantSettings = {
-  docSearch: true,
-  daintreeControl: true,
-  runbookSearch: true,
-  tier: "core",
-  bypassPermissions: false,
-  auditRetention: 7,
-  modelIds: {},
-  customArgs: "",
-  idleHibernateMinutes: 5,
-  loadGlobalHooksAndServers: false,
-  daintreeConfirmations: "inherit",
-  acceptRemoteControl: true,
-};
-
-// Radix Select rejects an empty-string item value, so the "use the CLI default"
-// choice carries a sentinel in the dropdown and maps back to "" on persist.
-const MODEL_DEFAULT_SENTINEL = "__default__";
+import { StatusLine } from "./Assistant/AssistantStatus";
+import { AssistantExternalClientsSection } from "./Assistant/AssistantExternalClientsSection";
+import { AssistantPrivacySection } from "./Assistant/AssistantPrivacySection";
+import { SessionLiveStatusCard } from "./Assistant/SessionLiveStatusCard";
+import {
+  DEFAULT_SETTINGS,
+  SETTING_LABEL,
+  patchedKeys,
+  type SaveGroup,
+} from "./Assistant/assistantSettingsModel";
+import { TIER_SHORT_LABEL } from "./Assistant/assistantTiers";
+import {
+  MODEL_DEFAULT_SENTINEL,
+  useAssistantModelCatalog,
+} from "./Assistant/useAssistantModelCatalog";
+import { useAssistantSettingsPersistence } from "./Assistant/useAssistantSettingsPersistence";
+import { useAssistantVersionWarning } from "./Assistant/useAssistantVersionWarning";
 
 // One sentence of consequence beside the select; the rest lives in the tool set's
 // disclosure with the action inventory, where it can be read in full.
@@ -232,16 +69,6 @@ const TIER_DETAILS: Record<HelpAssistantTier, string> = {
   full: "Adds recipes and project checks, starting work on an issue, forge PR, issue and CI reads, git activity, CopyTree context, managing worktree resources, and diagnostics. Teardowns ask you to confirm unless Daintree confirmations says otherwise. Git and forge writes and file edits aren't available in either tool set.",
 };
 
-const TIER_SHORT_LABEL: Record<HelpAssistantTier, string> = {
-  core: "Core",
-  full: "Full",
-};
-
-const TIER_RANK: Record<HelpAssistantTier, number> = {
-  core: 0,
-  full: 1,
-};
-
 function groupToolsByNamespace(tools: readonly string[]): Array<[string, string[]]> {
   const groups = new Map<string, string[]>();
   for (const tool of tools) {
@@ -256,18 +83,6 @@ function groupToolsByNamespace(tools: readonly string[]): Array<[string, string[
   }
   return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b));
 }
-
-interface McpStatusSnapshot {
-  enabled: boolean;
-  port: number | null;
-  apiKey: string;
-}
-
-const RETENTION_OPTIONS = [
-  { value: "7", label: "7 days" },
-  { value: "30", label: "30 days" },
-  { value: "0", label: "Off" },
-];
 
 const HIBERNATE_OPTIONS = [
   { value: "0", label: "Off" },
@@ -370,80 +185,32 @@ function getBypassCopy(
 }
 
 export function DaintreeAssistantSettingsTab() {
-  const [settings, setSettings] = useState<HelpAssistantSettings>(DEFAULT_SETTINGS);
-  const [mcpStatus, setMcpStatus] = useState<McpStatusSnapshot | null>(null);
-  // useMcpReadiness drives the 4-state Connection display reactively; the
-  // separate mcpStatus state still supplies apiKey for copy/rotate (not in
-  // the runtime snapshot). Keep both — they update independently (lesson #4958).
+  const {
+    settings,
+    loading,
+    loadError,
+    retryLoadSettings,
+    saveFailure,
+    persist,
+    displayedCustomArgs,
+    setPendingCustomArgs,
+    mcpStatus,
+    retryMcpStatus,
+    updateApiKey,
+  } = useAssistantSettingsPersistence();
+  // One readiness subscription for the page: Behavior's status row and the
+  // external-clients section both read it.
   const runtimeSnapshot = useMcpReadiness();
   // Only a machine that can be a host is reached by other machines' assistants.
   const remoteControlOffered = isRemoteHostSupported();
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  // Failures of one-off actions stay on the section they belong to, not at the page foot.
-  const [privacyError, setPrivacyError] = useState<{ message: string; retry?: () => void } | null>(
-    null
-  );
-  const [clearAuditError, setClearAuditError] = useState<string | null>(null);
-  const [connectionError, setConnectionError] = useState<string | null>(null);
-  const [rotateError, setRotateError] = useState<string | null>(null);
-  // A failed read must not pass for an empty history.
-  const [auditReadFailed, setAuditReadFailed] = useState(false);
-  // Unread, the recording switch would show its optimistic default as if it were fact.
-  const [auditConfigFailed, setAuditConfigFailed] = useState(false);
-  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
-  const [showRotateConfirm, setShowRotateConfirm] = useState(false);
-  const [isRotating, setIsRotating] = useState(false);
   const [showBlastRadius, setShowBlastRadius] = useState(false);
-  const [auditRecords, setAuditRecords] = useState<McpLogRecord[]>([]);
-  const [auditStats, setAuditStats] = useState<McpAuditStats | null>(null);
-  const [turnRecords, setTurnRecords] = useState<AssistantTurnRecord[]>([]);
-  const [auditLoading, setAuditLoading] = useState(true);
-  const [auditExported, setAuditExported] = useState(false);
-  const [isExportingAudit, setIsExportingAudit] = useState(false);
-  const [showClearAuditConfirm, setShowClearAuditConfirm] = useState(false);
-  const [isClearingAudit, setIsClearingAudit] = useState(false);
-  // Recording stays on by default — the audit trail is a privacy/safety feature.
-  // The authoritative value loads from getAuditConfig in the audit fetch effect.
-  const [auditEnabled, setAuditEnabled] = useState(true);
-  const [isTogglingAudit, setIsTogglingAudit] = useState(false);
-  // Diagnostics (audit viewer, latency table, turn outcomes) collapse by default
-  // so the Privacy section doesn't surface telemetry on load. Local-only state —
-  // no persistence precedent for section collapse in Settings.
-  const [advancedDiagnosticsOpen, setAdvancedDiagnosticsOpen] = useState(false);
-  const auditExportTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // customArgs is a free-form text input; persisting on every keystroke would
-  // spam IPC. We track a pending edit alongside the persisted value: when the
-  // pending value is null the input mirrors `settings.customArgs` directly
-  // (no extra render round-trip on initial load), and when non-null it holds
-  // the user's in-flight edit until the debounced persist catches up. A flush
-  // hook captures the pending value before dialog dismissal (#7260).
-  const [pendingCustomArgs, setPendingCustomArgs] = useState<string | null>(null);
-  const debouncedPendingCustomArgs = useDebounce(pendingCustomArgs, CUSTOM_ARGS_DEBOUNCE_MS);
-  const displayedCustomArgs = pendingCustomArgs ?? settings.customArgs;
-  const isCustomArgsDirty = pendingCustomArgs !== null && pendingCustomArgs !== settings.customArgs;
-  const pendingCustomArgsRef = useRef(pendingCustomArgs);
-  useEffect(() => {
-    pendingCustomArgsRef.current = pendingCustomArgs;
-  }, [pendingCustomArgs]);
-
-  useSettingsTabValidation("assistant", Boolean(loadError || saveFailure));
 
   const preferredAgentId = useHelpPanelStore((s) => s.preferredAgentId);
   const setPreferredAgent = useHelpPanelStore((s) => s.setPreferredAgent);
   const droppedPreferredAgentId = useHelpPanelStore((s) => s.droppedPreferredAgentId);
   const clearDroppedPreferredAgent = useHelpPanelStore((s) => s.clearDroppedPreferredAgent);
 
-  // Version gate at the configuration point: the launch path already blocks an
-  // outdated CLI (HelpPanelVersionGate), but the user can pick a too-old agent
-  // here with no warning. Probe the selected agent's version (12h cached in
-  // AgentVersionService, so cheap) and surface a non-blocking hint inline.
-  const [versionWarning, setVersionWarning] = useState<{
-    agentName: string;
-    installed: string;
-    required: string;
-  } | null>(null);
+  const versionWarning = useAssistantVersionWarning(preferredAgentId);
 
   const agentOptions = useMemo(() => {
     return getAssistantSupportedAgentIds().map((id) => ({
@@ -473,377 +240,15 @@ export function DaintreeAssistantSettingsTab() {
     [preferredAgentId, settings.tier, confirmationsSkipped]
   );
 
-  // Resolved model catalog for the currently-preferred agent. `null` means "not
-  // loaded / unavailable" (we render nothing); an empty array means "agent has
-  // no models", which shows the row only to keep a saved choice and its reset.
-  // Otherwise the picker appears once a non-empty catalog resolves for the
-  // selected agent. A failed read is not "this agent
-  // has no models": the row stays, with Retry. Tagged with the agent it was
-  // read for, so a switch never shows the previous agent's models, saved choice
-  // or failure for a render.
-  const [modelCatalog, setModelCatalog] = useState<{
-    agentId: string;
-    models: AgentModelConfig[];
-    modelUpgrades?: Record<string, string>;
-    failed: boolean;
-  } | null>(null);
-  const currentCatalog = modelCatalog?.agentId === preferredAgentId ? modelCatalog : null;
-  const resolvedModels = currentCatalog?.models ?? null;
-  const modelCatalogFailed = currentCatalog?.failed ?? false;
-  const [modelCatalogAttempt, setModelCatalogAttempt] = useState(0);
-
-  useEffect(() => {
-    if (!preferredAgentId) {
-      setModelCatalog(null);
-      return;
-    }
-    const agentId = preferredAgentId;
-    let cancelled = false;
-    setModelCatalog(null);
-    agentCapabilitiesClient
-      .getResolvedModelList(preferredAgentId)
-      .then((catalog) => {
-        if (cancelled) return;
-        setModelCatalog({
-          agentId,
-          models: catalog?.models ?? [],
-          modelUpgrades: catalog?.modelUpgrades,
-          failed: false,
-        });
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        setModelCatalog({ agentId, models: [], failed: true });
-        logError("Failed to load model catalog for assistant tab", err);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [preferredAgentId, modelCatalogAttempt]);
-
-  // Nothing saved means the CLI's own default model, matching what the launch
-  // path resolves.
-  // Only the selected agent's own entry — another agent's model never shows as
-  // selected here.
-  const savedModelId = preferredAgentId
-    ? getSavedAssistantModelId(settings.modelIds, preferredAgentId)
-    : null;
-  const catalogIds = useMemo(() => resolvedModels?.map((m) => m.id), [resolvedModels]);
-  // A saved model the CLI has retired shows as the successor it launches as,
-  // matching the launch path; the stored choice is untouched until the user
-  // picks again.
-  const effectiveModelId = followModelUpgrades(
-    preferredAgentId
-      ? resolveAssistantModelId(preferredAgentId, savedModelId, catalogIds)
-      : (savedModelId ?? ""),
-    currentCatalog?.modelUpgrades
-  );
-
-  const modelOptions = useMemo(() => {
-    const models = resolvedModels ?? [];
-    const options = [
-      { value: MODEL_DEFAULT_SENTINEL, label: "Default (CLI default)" },
-      ...models.map((m) => ({ value: m.id, label: m.name })),
-    ];
-    // This agent's persisted model that isn't in its catalog (custom CLI,
-    // renamed model), or the recommendation while the catalog read has failed,
-    // still needs a matching option or Radix shows a blank trigger.
-    if (effectiveModelId && !models.some((m) => m.id === effectiveModelId)) {
-      options.push({ value: effectiveModelId, label: effectiveModelId });
-    }
-    return options;
-  }, [resolvedModels, effectiveModelId]);
-
-  const modelSelectValue = effectiveModelId || MODEL_DEFAULT_SENTINEL;
-  // A saved choice keeps the row after an empty catalog (Codex without its CLI's
-  // model list), or the only way to clear it would disappear.
-  const showModelPicker =
-    Boolean(resolvedModels && resolvedModels.length > 0) ||
-    (modelCatalogFailed && Boolean(preferredAgentId)) ||
-    (resolvedModels !== null && savedModelId !== null);
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-
-    const refreshStatus = (): Promise<void> =>
-      window.electron.mcpServer
-        .getStatus()
-        .then((status) => {
-          if (cancelled) return;
-          setMcpStatus({
-            enabled: status.enabled,
-            port: status.port,
-            apiKey: status.apiKey,
-          });
-        })
-        .catch((err) => {
-          if (cancelled) return;
-          setMcpStatus(null);
-          logError("Failed to load MCP status for assistant tab", err);
-        });
-
-    const settingsLoad = window.electron.helpAssistant
-      .getSettings()
-      .then((s) => {
-        if (cancelled) return;
-        setSettings(s);
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        setLoadError(formatErrorMessage(err, "Couldn't load assistant settings"));
-        logError("Failed to load Daintree Assistant settings", err);
-      });
-
-    const mcpLoad = refreshStatus().catch((err) => {
-      if (cancelled) return;
-      logError("Failed initial MCP status load for assistant tab", err);
-    });
-
-    // Refetch the connection panel whenever the runtime state transitions.
-    // Without this, toggling Daintree control on triggers main-process
-    // auto-coupling (`helpAssistant.setSettings` calls `mcpServer.setEnabled`),
-    // but this tab still shows "MCP server is off" until the user reopens it.
-    const unsubscribe = window.electron.mcpServer.onRuntimeStateChanged(() => {
-      void refreshStatus();
-    });
-
-    void Promise.all([settingsLoad, mcpLoad]).finally(() => {
-      if (!cancelled) setLoading(false);
-    });
-
-    return () => {
-      cancelled = true;
-      unsubscribe();
-      if (auditExportTimeoutRef.current) clearTimeout(auditExportTimeoutRef.current);
-    };
-  }, []);
-
-  // Separate audit fetch effect — keeps the settings init effect's cancellation
-  // semantics simple (per past lesson #4958) while still letting the audit
-  // viewer hydrate independently of the settings + MCP status round-trips.
-  // `allSettled` so a stats failure doesn't silently blank the record list.
-  const refreshAuditRecords = async (): Promise<void> => {
-    const [recordsResult, statsResult, turnsResult, configResult] = await Promise.allSettled([
-      window.electron.mcpServer.getLogRecords(),
-      window.electron.mcpServer.getAuditStats(),
-      window.electron.mcpServer.getTurnOutcomeRecords(),
-      window.electron.mcpServer.getAuditConfig(),
-    ]);
-    setAuditReadFailed(recordsResult.status === "rejected" || turnsResult.status === "rejected");
-    if (configResult.status === "fulfilled") {
-      setAuditEnabled(configResult.value.enabled);
-      setAuditConfigFailed(false);
-    } else {
-      setAuditConfigFailed(true);
-      logError("Failed to load MCP audit config for assistant tab", configResult.reason);
-    }
-    if (recordsResult.status === "fulfilled") {
-      setAuditRecords(recordsResult.value);
-    } else {
-      logError("Failed to load MCP audit records for assistant tab", recordsResult.reason);
-    }
-    if (statsResult.status === "fulfilled") {
-      setAuditStats(statsResult.value);
-    } else {
-      logError("Failed to load MCP audit stats for assistant tab", statsResult.reason);
-    }
-    if (turnsResult.status === "fulfilled") {
-      setTurnRecords(turnsResult.value);
-    } else {
-      logError("Failed to load MCP turn outcomes for assistant tab", turnsResult.reason);
-    }
-  };
-
-  useEffect(() => {
-    let cancelled = false;
-    setAuditLoading(true);
-    safeFireAndForget(
-      Promise.allSettled([
-        window.electron.mcpServer.getLogRecords(),
-        window.electron.mcpServer.getAuditStats(),
-        window.electron.mcpServer.getTurnOutcomeRecords(),
-        window.electron.mcpServer.getAuditConfig(),
-      ])
-        .then(([recordsResult, statsResult, turnsResult, configResult]) => {
-          if (cancelled) return;
-          if (recordsResult.status === "fulfilled") {
-            setAuditRecords(recordsResult.value);
-          } else {
-            setAuditReadFailed(true);
-            logError("Failed initial audit load for assistant tab", recordsResult.reason);
-          }
-          if (statsResult.status === "fulfilled") {
-            setAuditStats(statsResult.value);
-          } else {
-            logError("Failed initial audit stats load for assistant tab", statsResult.reason);
-          }
-          if (turnsResult.status === "fulfilled") {
-            setTurnRecords(turnsResult.value);
-          } else {
-            setAuditReadFailed(true);
-            logError("Failed initial turn outcomes load for assistant tab", turnsResult.reason);
-          }
-          if (configResult.status === "fulfilled") {
-            setAuditEnabled(configResult.value.enabled);
-          } else {
-            setAuditConfigFailed(true);
-            logError("Failed initial audit config load for assistant tab", configResult.reason);
-          }
-        })
-        .finally(() => {
-          if (!cancelled) setAuditLoading(false);
-        }),
-      { context: "initial audit load for assistant tab" }
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  // Isolated version-probe effect (kept separate from the settings-init effect
-  // per past lesson #4958). Mirrors HelpSessionController.probeAssistantVersion:
-  // any non-definitive result (no minimum configured, no installed version, or
-  // a comparison error) clears the warning so we never block on a transient
-  // failure or show a stale hint after switching agents.
-  useEffect(() => {
-    let cancelled = false;
-    if (!preferredAgentId) {
-      setVersionWarning(null);
-      return;
-    }
-    const config = getAgentConfig(preferredAgentId);
-    const required = config?.assistantMinVersion;
-    if (!required) {
-      setVersionWarning(null);
-      return;
-    }
-    const agentName = config?.name ?? preferredAgentId;
-    // Drop any prior agent's warning up front so the banner never shows a stale
-    // name/version while this probe is in flight.
-    setVersionWarning(null);
-    window.electron.system
-      .getAgentVersion(preferredAgentId)
-      .then((info) => {
-        if (cancelled) return;
-        const installed = info?.installedVersion;
-        if (!installed) {
-          setVersionWarning(null);
-          return;
-        }
-        try {
-          setVersionWarning(
-            semver.lt(installed, required) ? { agentName, installed, required } : null
-          );
-        } catch (err) {
-          setVersionWarning(null);
-          logError("Failed to compare assistant CLI version in settings", err);
-        }
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        setVersionWarning(null);
-        logError("Failed to probe assistant CLI version in settings", err);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [preferredAgentId]);
-
-  // Proxies the same mcpServer.setAuditEnabled endpoint as the MCP Server tab's
-  // "Capture audit log" toggle. Server response is authoritative — no optimistic
-  // flip. The in-flight guard prevents a double-click from computing `next` twice
-  // off the same pre-await state. On failure, surface the error and leave the
-  // last known-good value (matches McpServerSettingsTab's toggle).
-  const handleAuditEnabledToggle = async () => {
-    if (isTogglingAudit) return;
-    setIsTogglingAudit(true);
-    try {
-      setPrivacyError(null);
-      const next = !auditEnabled;
-      const cfg = await window.electron.mcpServer.setAuditEnabled(next);
-      setAuditEnabled(cfg.enabled);
-    } catch (err) {
-      setPrivacyError({
-        message: formatErrorMessage(err, "Couldn't update audit recording"),
-        retry: () => void handleAuditEnabledToggle(),
-      });
-      logError("Failed to toggle MCP audit log from assistant tab", err);
-    } finally {
-      setIsTogglingAudit(false);
-    }
-  };
-
-  const handleExportAuditAsNdjson = async (records: McpLogRecord[]) => {
-    if (isExportingAudit) return;
-    setIsExportingAudit(true);
-    try {
-      setPrivacyError(null);
-      const written = await window.electron.mcpServer.exportAuditLog(records);
-      if (written) {
-        setAuditExported(true);
-        if (auditExportTimeoutRef.current) clearTimeout(auditExportTimeoutRef.current);
-        auditExportTimeoutRef.current = setTimeout(
-          () => setAuditExported(false),
-          EXPORT_FEEDBACK_MS
-        );
-      }
-    } catch (err) {
-      setAuditExported(false);
-      if (auditExportTimeoutRef.current) {
-        clearTimeout(auditExportTimeoutRef.current);
-        auditExportTimeoutRef.current = null;
-      }
-      setPrivacyError({
-        message: formatErrorMessage(err, "Couldn't export audit log"),
-        retry: () => void handleExportAuditAsNdjson(records),
-      });
-      logError("Failed to export MCP audit log from assistant tab", err);
-    } finally {
-      setIsExportingAudit(false);
-    }
-  };
-
-  const confirmClearAuditLog = async () => {
-    if (isClearingAudit) return;
-    setIsClearingAudit(true);
-    try {
-      setClearAuditError(null);
-      await window.electron.mcpServer.clearAuditLog();
-      setAuditRecords([]);
-      setShowClearAuditConfirm(false);
-    } catch (err) {
-      setClearAuditError(formatErrorMessage(err, "Couldn't clear audit log"));
-      logError("Failed to clear MCP audit log from assistant tab", err);
-    } finally {
-      setIsClearingAudit(false);
-    }
-  };
-
-  const handleCancelClearAudit = () => {
-    if (isClearingAudit) return;
-    setClearAuditError(null);
-    setShowClearAuditConfirm(false);
-  };
-
-  // Optimistic apply; a rejected save puts the attempted keys back (unless a later
-  // change has already moved them) and parks the failure on the group it belongs to.
-  const persist = useCallback(
-    async (patch: Partial<HelpAssistantSettings>) => {
-      const previous = settings;
-      const group = saveGroupOf(patch);
-      setSettings((current) => applySettingsPatch(current, patch));
-      try {
-        await window.electron.helpAssistant.setSettings(patch);
-        setSaveFailure((current) => (current?.group === group ? null : current));
-      } catch (err) {
-        setSettings((current) => revertSettingsPatch(current, previous, patch));
-        setSaveFailure({ group, patch });
-        logError("Failed to save Daintree Assistant settings", err);
-      }
-    },
-    [settings]
-  );
+  const {
+    modelCatalogFailed,
+    retryModelCatalog,
+    savedModelId,
+    catalogIds,
+    modelOptions,
+    modelSelectValue,
+    showModelPicker,
+  } = useAssistantModelCatalog(preferredAgentId, settings.modelIds);
 
   const saveError = (group: SaveGroup) =>
     saveFailure?.group === group ? (
@@ -888,12 +293,6 @@ export function DaintreeAssistantSettingsTab() {
     void persist({ loadGlobalHooksAndServers: !settings.loadGlobalHooksAndServers });
   };
 
-  const setRetention = (value: string) => {
-    const parsed = Number(value);
-    if (parsed !== 0 && parsed !== 7 && parsed !== 30) return;
-    void persist({ auditRetention: parsed as 0 | 7 | 30 });
-  };
-
   const setHibernateMinutes = (value: string) => {
     const parsed = Number(value);
     if (
@@ -931,74 +330,6 @@ export function DaintreeAssistantSettingsTab() {
   const handleCustomArgsChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     setPendingCustomArgs(event.target.value);
   };
-
-  // Persist the pending value once the debounce settles. Skipped when pending
-  // matches what's already persisted (e.g., user typed and undid, or the
-  // value just landed via the optimistic update inside `persist`).
-  // Each settled value is attempted once: a rejected save rolls settings.customArgs
-  // back, which would otherwise re-fire this effect and retry in a loop. Retry
-  // lives on the group's error banner instead.
-  const lastAttemptedCustomArgsRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (debouncedPendingCustomArgs === null) {
-      lastAttemptedCustomArgsRef.current = null;
-      return;
-    }
-    if (debouncedPendingCustomArgs === lastAttemptedCustomArgsRef.current) return;
-    if (debouncedPendingCustomArgs !== settings.customArgs) {
-      lastAttemptedCustomArgsRef.current = debouncedPendingCustomArgs;
-      void persist({ customArgs: debouncedPendingCustomArgs });
-    }
-  }, [debouncedPendingCustomArgs, settings.customArgs, persist]);
-
-  // Once the persisted value catches up, clear the pending flag so the input
-  // resumes mirroring `settings.customArgs` directly.
-  useEffect(() => {
-    if (pendingCustomArgs !== null && pendingCustomArgs === settings.customArgs) {
-      setPendingCustomArgs(null);
-    }
-  }, [pendingCustomArgs, settings.customArgs]);
-
-  // Pre-close flush bypasses the debounce so closing the dialog mid-edit
-  // still captures the in-flight value.
-  useSettingsTabFlush(
-    "assistant",
-    () => {
-      const pending = pendingCustomArgsRef.current;
-      if (pending === null) return;
-      return persist({ customArgs: pending });
-    },
-    isCustomArgsDirty
-  );
-
-  const confirmRotateKey = async () => {
-    if (isRotating) return;
-    setIsRotating(true);
-    try {
-      setRotateError(null);
-      const key = await window.electron.mcpServer.rotateApiKey();
-      setMcpStatus((prev) => (prev ? { ...prev, apiKey: key } : prev));
-      setShowRotateConfirm(false);
-    } catch (err) {
-      setRotateError(formatErrorMessage(err, "Couldn't rotate key"));
-      logError("Failed to rotate MCP API key", err);
-    } finally {
-      setIsRotating(false);
-    }
-  };
-
-  const handleCancelRotate = () => {
-    if (isRotating) return;
-    setRotateError(null);
-    setShowRotateConfirm(false);
-  };
-
-  const apiKeySuffix =
-    mcpStatus?.apiKey && mcpStatus.apiKey.length >= 8 ? mcpStatus.apiKey.slice(-4) : "";
-
-  // Past the Doherty threshold only, so a fast read never flashes bones — the
-  // bones' own delayed pulse is switched off in performance mode.
-  const showLoading = useDeferredLoading(loading, UI_DOHERTY_THRESHOLD);
 
   const handleGoToMcpSettings = () => {
     void actionService.dispatch("app.settings.openTab", { tab: "mcp" }, { source: "user" });
@@ -1073,45 +404,6 @@ export function DaintreeAssistantSettingsTab() {
   const remoteHostName = useRemoteHostName();
   const handleOpenCommandsFolder = () => {
     void actionService.dispatch("help.openCommandsFolder", undefined, { source: "user" });
-  };
-
-  // The band's Retry for a failed config copy. The button beside it is the
-  // everyday path; this re-runs the same read and write from the error.
-  const { copy: copyConfig } = useCopyWithFeedback({ announcement: "Config copied" });
-  const handleCopyConfig = async () => {
-    try {
-      const snippet = await window.electron.mcpServer.getConfigSnippet();
-      if (await copyConfig(snippet)) setConnectionError(null);
-      else setConnectionError("Couldn't copy config");
-    } catch (err) {
-      setConnectionError(formatErrorMessage(err, "Couldn't copy config"));
-      logError("Failed to copy MCP config", err);
-    }
-  };
-
-  const retryMcpStatus = () => {
-    window.electron.mcpServer
-      .getStatus()
-      .then((status) =>
-        setMcpStatus({ enabled: status.enabled, port: status.port, apiKey: status.apiKey })
-      )
-      .catch((err) => logError("Failed to reload MCP status for assistant tab", err));
-  };
-
-  // Controls stay inert for the whole retry and only unlock once real values land.
-  const retryLoadSettings = () => {
-    setLoading(true);
-    window.electron.helpAssistant
-      .getSettings()
-      .then((s) => {
-        setSettings(s);
-        setLoadError(null);
-      })
-      .catch((err) => {
-        setLoadError(formatErrorMessage(err, "Couldn't load assistant settings"));
-        logError("Failed to reload Daintree Assistant settings", err);
-      })
-      .finally(() => setLoading(false));
   };
 
   // Until the saved values arrive, the controls show defaults. They stay inert so a
@@ -1192,7 +484,7 @@ export function DaintreeAssistantSettingsTab() {
                   <>
                     Couldn&apos;t load this agent&apos;s models, so only the saved choice is listed
                     ·{" "}
-                    <Button variant="link" onClick={() => setModelCatalogAttempt((n) => n + 1)}>
+                    <Button variant="link" onClick={retryModelCatalog}>
                       Retry
                     </Button>
                   </>
@@ -1386,112 +678,13 @@ export function DaintreeAssistantSettingsTab() {
         <SessionLiveStatusCard configuredTier={settings.tier} />
       </SettingsSection>
 
-      <SettingsSection
-        title="Privacy"
-        description="Help-session activity is logged locally so you can review what the assistant did"
-      >
-        {saveError("privacy")}
-        {privacyError && <TabError onRetry={privacyError.retry}>{privacyError.message}</TabError>}
-        {(auditReadFailed || auditConfigFailed) && (
-          <TabError onRetry={() => void refreshAuditRecords()}>
-            {auditConfigFailed
-              ? "Couldn't read the audit settings, so recording is shown as unknown."
-              : "Couldn't read the audit log, so the diagnostics below may be incomplete."}
-          </TabError>
-        )}
-        <SettingsGroup>
-          <SettingsSwitchCard
-            title="Capture audit log"
-            subtitle={
-              auditConfigFailed
-                ? "Recording status unavailable"
-                : auditLoading
-                  ? "Checking…"
-                  : auditEnabled
-                    ? "Recording every dispatch"
-                    : "New dispatches will not be recorded"
-            }
-            isEnabled={auditEnabled}
-            onChange={handleAuditEnabledToggle}
-            ariaLabel="Capture audit log"
-            // Gate on auditLoading too: until getAuditConfig resolves, auditEnabled
-            // is still the optimistic default and a late fulfillment would clobber
-            // a user toggle made in that window.
-            disabled={loading || auditLoading || isTogglingAudit || auditConfigFailed}
-            disabledReason={
-              auditConfigFailed ? "Couldn't read whether recording is on. Retry above." : undefined
-            }
-          />
-          <SettingsPresetGroup
-            id="assistant-audit-retention"
-            label="Audit log retention"
-            description="How long audit records stay on this machine. Turn-outcome diagnostics are kept separately."
-            options={RETENTION_OPTIONS}
-            value={String(settings.auditRetention)}
-            onChange={setRetention}
-            disabled={settingsUnavailable}
-            isModified={settings.auditRetention !== DEFAULT_SETTINGS.auditRetention}
-            onReset={() => setRetention(String(DEFAULT_SETTINGS.auditRetention))}
-          />
-          <div>
-            <button
-              type="button"
-              onClick={() => setAdvancedDiagnosticsOpen((v) => !v)}
-              aria-expanded={advancedDiagnosticsOpen}
-              className={cn(
-                "w-full flex cursor-pointer items-center gap-2 px-4 py-3 text-sm font-medium",
-                "text-text-primary hover:bg-overlay-subtle transition-colors",
-                "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
-              )}
-            >
-              <ChevronRight
-                data-animated-chevron
-                className={cn(
-                  "w-3.5 h-3.5 text-text-secondary transition-transform duration-150 ease-out",
-                  advancedDiagnosticsOpen ? "rotate-90" : "rotate-0"
-                )}
-                aria-hidden="true"
-              />
-              Advanced diagnostics
-            </button>
-          </div>
-        </SettingsGroup>
-        {/* Each diagnostics view is its own settings group, so they follow the
-            disclosure as siblings rather than nesting cards inside its card. */}
-        {advancedDiagnosticsOpen && (
-          <>
-            <McpAuditLogViewer
-              records={auditRecords}
-              turnRecords={turnRecords}
-              loading={auditLoading}
-              onRefresh={refreshAuditRecords}
-              onClear={() => setShowClearAuditConfirm(true)}
-              // Privacy section hides external MCP traffic. Grant-lifecycle
-              // events stay visible — they're tied to this Daintree's own
-              // help-session bearers, not external API-key clients.
-              includeRecord={(record) => !isAuditRecord(record) || record.tier !== "external"}
-              onExport={handleExportAuditAsNdjson}
-              exportFlashActive={auditExported}
-            />
-            <McpAuditLatencyTable
-              records={auditRecords}
-              includeRecord={(record) => !isAuditRecord(record) || record.tier !== "external"}
-            />
-            <TurnOutcomeDiagnostics
-              auditRecords={auditRecords}
-              records={turnRecords}
-              onRefresh={refreshAuditRecords}
-            />
-            {auditStats && auditStats.auth401Count > 0 && (
-              <p className="text-xs text-text-secondary select-text">
-                <span className="font-mono text-text-primary">{auditStats.auth401Count}</span>{" "}
-                bearer {pluralNoun(auditStats.auth401Count, "rejection")} since last launch — an
-                external client is connecting with a stale or missing API key.
-              </p>
-            )}
-          </>
-        )}
-      </SettingsSection>
+      <AssistantPrivacySection
+        auditRetention={settings.auditRetention}
+        persist={persist}
+        saveError={saveError("privacy")}
+        settingsUnavailable={settingsUnavailable}
+        loading={loading}
+      />
 
       <SettingsSection
         title="Launch options"
@@ -1570,170 +763,16 @@ export function DaintreeAssistantSettingsTab() {
         </SettingsGroup>
       </SettingsSection>
 
-      <SettingsSection
-        id="assistant-mcp-status"
-        title="External clients"
-        description="Share the assistant's local MCP server with other clients, such as Claude Code or Cursor"
-      >
-        {connectionError && (
-          <TabError onRetry={() => void handleCopyConfig()}>{connectionError}</TabError>
-        )}
-        {loading ? (
-          showLoading ? (
-            <SettingsGroup>
-              <Skeleton label="Loading external client settings" className="space-y-3 px-4 py-3">
-                <SkeletonBone immediate className="h-5 w-2/3" />
-                <SkeletonBone immediate className="h-5 w-1/2" />
-              </Skeleton>
-            </SettingsGroup>
-          ) : null
-        ) : mcpState !== "ready" ? (
-          <SettingsGroup>
-            <SettingsRow
-              label="Client config"
-              description="Available while the MCP server is running. Its status is under Behavior."
-            />
-          </SettingsGroup>
-        ) : !mcpStatus ? (
-          <SettingsGroup>
-            <SettingsRow
-              label="MCP server"
-              description="Couldn't load MCP status."
-              control={
-                <Button variant="outline" size="sm" onClick={retryMcpStatus}>
-                  Retry
-                </Button>
-              }
-            />
-          </SettingsGroup>
-        ) : (
-          <>
-            <SettingsGroup>
-              <SettingsRow
-                label="Client config"
-                description={`Paste into an external MCP client to connect it to port ${runtimeSnapshot.port ?? mcpStatus.port ?? "—"}`}
-                control={
-                  <CopyButton
-                    label="Copy MCP config"
-                    variant="outline"
-                    size="sm"
-                    text={() => window.electron.mcpServer.getConfigSnippet()}
-                    announcement="Config copied"
-                    onCopied={() => setConnectionError(null)}
-                    onCopyError={(err) => {
-                      setConnectionError(formatErrorMessage(err, "Couldn't copy config"));
-                      logError("Failed to copy MCP config", err);
-                    }}
-                  />
-                }
-              />
-            </SettingsGroup>
-            {/* Rotating cuts off every client holding the key, so it sits in its own
-            group rather than beside the everyday copy action. */}
-            <SettingsGroup>
-              <SettingsRow
-                label="API key"
-                description={
-                  apiKeySuffix
-                    ? `Ends in ${apiKeySuffix}. Rotating it disconnects every client using the old key.`
-                    : "Rotating the key disconnects every client using the old one."
-                }
-                control={
-                  <Button
-                    variant="ghost-danger"
-                    size="sm"
-                    onClick={() => setShowRotateConfirm(true)}
-                    disabled={!apiKeySuffix}
-                    title={apiKeySuffix ? undefined : "Waiting for the MCP key to load…"}
-                  >
-                    Rotate MCP key…
-                  </Button>
-                }
-              />
-            </SettingsGroup>
-          </>
-        )}
-      </SettingsSection>
-
-      <ConfirmDialog
-        isOpen={showClearAuditConfirm}
-        onClose={handleCancelClearAudit}
-        title="Clear audit log?"
-        description="All recorded tool dispatches will be permanently deleted — including those from external MCP clients."
-        confirmLabel={clearAuditError ? "Try again" : "Clear audit log"}
-        cancelLabel="Cancel"
-        onConfirm={confirmClearAuditLog}
-        isConfirmLoading={isClearingAudit}
-        variant="destructive"
-        zIndex="nested"
-      >
-        {clearAuditError && <TabError>{clearAuditError}</TabError>}
-      </ConfirmDialog>
-
-      <ConfirmDialog
-        isOpen={showRotateConfirm}
-        onClose={handleCancelRotate}
-        title="Rotate API key?"
-        description="The current key will be invalidated immediately. External clients using this key will need to update their configuration."
-        confirmLabel={rotateError ? "Try again" : "Rotate key"}
-        cancelLabel="Cancel"
-        onConfirm={confirmRotateKey}
-        isConfirmLoading={isRotating}
-        variant="destructive"
-        zIndex="nested"
-      >
-        {rotateError && <TabError>{rotateError}</TabError>}
-      </ConfirmDialog>
+      <AssistantExternalClientsSection
+        runtimeSnapshot={runtimeSnapshot}
+        mcpStatus={mcpStatus}
+        loading={loading}
+        retryMcpStatus={retryMcpStatus}
+        updateApiKey={updateApiKey}
+      />
     </div>
   );
 }
-
-/** A status sentence with its mark: the colour sits on the dot, never on the words. */
-function StatusLine({
-  tone,
-  children,
-  live = false,
-}: {
-  tone: "ok" | "idle" | "error";
-  children: ReactNode;
-  live?: boolean;
-}) {
-  return (
-    <span role={live ? "status" : undefined} className="flex items-start gap-2">
-      {tone === "error" ? (
-        <XCircle className="w-3.5 h-3.5 mt-px shrink-0 text-status-error" aria-hidden="true" />
-      ) : (
-        <span
-          className={cn(
-            "status-mark mt-1 w-2 h-2 rounded-full shrink-0",
-            tone === "ok" ? "bg-activity-working" : "bg-text-secondary"
-          )}
-          aria-hidden="true"
-        />
-      )}
-      <span>{children}</span>
-    </span>
-  );
-}
-
-/** A failed load or save in this tab, said once when it happens, with its retry beside it. */
-function TabError({ children, onRetry }: { children: ReactNode; onRetry?: () => void }) {
-  return (
-    <SettingsInlineError
-      role="alert"
-      action={
-        onRetry && (
-          <Button variant="ghost" size="xs" onClick={onRetry} className="-my-1 shrink-0">
-            Retry
-          </Button>
-        )
-      }
-    >
-      {children}
-    </SettingsInlineError>
-  );
-}
-
 /** A notice about the chosen agent, directly under the group that chooses it. */
 function AgentNotice({
   testId,
@@ -1845,242 +884,5 @@ function BlastRadiusPreview({ tier, isOpen, onToggle }: BlastRadiusPreviewProps)
         </div>
       )}
     </div>
-  );
-}
-
-// Per-tool grant expiry countdown. Re-renders once a second — a semantic
-// countdown (the decay IS the signal), so it sits outside the motion tiers.
-// The push event (`grant.expired`) is authoritative for removal; this is only
-// the display, so reaching zero shows "expiring" until the row is pulled out.
-function GrantCountdown({ expiresAt }: { expiresAt: number }) {
-  const [now, setNow] = useState(() => Date.now());
-  // Per-second tick that pauses while the window is hidden (the canonical
-  // compliant timer wrapper — direct setInterval is lint-restricted).
-  useVisibilityAwareInterval(() => setNow(Date.now()), 1000);
-  const remainingMs = expiresAt - now;
-  return (
-    <span role="timer" className="font-mono text-text-secondary tabular-nums shrink-0">
-      {remainingMs <= 0 ? "expiring" : `${formatCountdown(remainingMs / 1000)} left`}
-    </span>
-  );
-}
-
-// Native session-scoped automation grants (#10648): approve a bounded set of
-// tools for a limited number of uses, then inspect and revoke them. Distinct
-// from the per-tool "Approve once" grants above — these authorize follow-up
-// automation across the session without a per-call modal. The grant lifecycle
-// (issue/use/exhaust/expire/revoke) is mirrored in the audit log below.
-function NativeGrantsSection({
-  helpSessionId,
-  grants,
-}: {
-  helpSessionId: string;
-  grants: HelpSessionActiveGrant[];
-}) {
-  const [toolsInput, setToolsInput] = useState("");
-  const [usesInput, setUsesInput] = useState("5");
-  const [issuing, setIssuing] = useState(false);
-  const [issueError, setIssueError] = useState<string | null>(null);
-
-  const approve = useCallback(() => {
-    const allowedTools = toolsInput
-      .split(/[\s,]+/)
-      .map((t) => t.trim())
-      .filter((t) => t.length > 0);
-    if (allowedTools.length === 0) {
-      setIssueError("Enter at least one tool id");
-      return;
-    }
-    const maxUses = Number.parseInt(usesInput, 10);
-    setIssuing(true);
-    setIssueError(null);
-    safeFireAndForget(
-      window.electron.mcpServer
-        .issueNativeGrant({
-          helpSessionId,
-          allowedTools,
-          maxUses: Number.isFinite(maxUses) ? maxUses : undefined,
-        })
-        .then(() => {
-          setToolsInput("");
-        })
-        .catch((err: unknown) => {
-          setIssueError(formatErrorMessage(err, "Couldn't approve grant"));
-        })
-        .finally(() => {
-          setIssuing(false);
-        }),
-      { context: "DaintreeAssistant:issueNativeGrant" }
-    );
-  }, [helpSessionId, toolsInput, usesInput]);
-
-  const revoke = useCallback((grantId: string) => {
-    setIssueError(null);
-    safeFireAndForget(
-      window.electron.mcpServer
-        .revokeNativeGrant({ grantId })
-        .then(() => undefined)
-        .catch((err: unknown) => {
-          setIssueError(formatErrorMessage(err, "Couldn't revoke grant"));
-          logError("DaintreeAssistant: revokeNativeGrant failed", err);
-        }),
-      { context: "DaintreeAssistant:revokeNativeGrant" }
-    );
-  }, []);
-
-  return (
-    <div className="space-y-2 pt-1">
-      <div className="text-xs text-text-secondary font-mono">
-        Automation grants{grants.length > 0 ? ` (${grants.length})` : ""}
-      </div>
-      {grants.length > 0 ? (
-        <div className="space-y-1.5">
-          {grants.map((grant) => (
-            <div
-              key={grant.grantId}
-              className="rounded-[var(--radius-sm)] border border-border-default bg-surface-canvas px-2 py-1.5 space-y-1"
-            >
-              <div className="flex items-center justify-between gap-2 text-2xs">
-                <span className="font-mono text-text-secondary break-all">
-                  {(grant.allowedTools ?? []).join(", ") || "no tools"}
-                </span>
-                <Button
-                  variant="ghost-danger"
-                  size="xs"
-                  className="shrink-0"
-                  onClick={() => grant.grantId && revoke(grant.grantId)}
-                >
-                  Revoke
-                </Button>
-              </div>
-              <div className="flex items-center justify-between gap-2 text-3xs text-text-secondary">
-                <span className="tabular-nums">
-                  {grant.remainingUses ?? 0} of {grant.maxUses ?? 0} uses left
-                </span>
-                <GrantCountdown expiresAt={grant.expiresAt} />
-              </div>
-            </div>
-          ))}
-        </div>
-      ) : (
-        <div className="text-2xs text-text-secondary">No automation grants active</div>
-      )}
-
-      <div className="flex flex-wrap items-end gap-2 pt-0.5">
-        <label className="grid min-w-0 flex-1 basis-56 gap-1 text-xs text-text-secondary">
-          Tools to approve
-          <Input
-            type="text"
-            value={toolsInput}
-            onChange={(e) => setToolsInput(e.target.value)}
-            placeholder="worktree.deleteOwned recipe.run"
-            className="min-w-0 font-mono"
-          />
-        </label>
-        <label className="grid gap-1 text-xs text-text-secondary">
-          Maximum uses
-          <Input
-            type="number"
-            min={1}
-            max={100}
-            value={usesInput}
-            onChange={(e) => setUsesInput(e.target.value)}
-            className={cn(SETTINGS_CONTROL_WIDTH.number, "tabular-nums")}
-          />
-        </label>
-        <Button variant="outline" size="sm" onClick={approve} disabled={issuing}>
-          Approve grant
-        </Button>
-      </div>
-      {issueError && <TabError>{issueError}</TabError>}
-    </div>
-  );
-}
-
-interface SessionLiveStatusCardProps {
-  configuredTier: HelpAssistantTier;
-}
-
-// Live status of the *currently pinned* help session — distinct from the
-// configured-default tier select above. Renders from safe `connected: false`
-// defaults immediately (no spinner, per the settings-tab loading rule) and
-// populates when the live-status bridge call resolves. Live-tier *change*
-// events while this is open aren't pushed (the grant-lifecycle push carries no
-// tier field — covered by #10027); the snapshot refreshes on mount and on any
-// grant-lifecycle event for this session.
-function SessionLiveStatusCard({ configuredTier }: SessionLiveStatusCardProps) {
-  const sessionId = useHelpPanelStore((s) => selectActiveSlot(s).sessionId);
-  const { connected, tier, activeGrants } = useHelpSessionLiveStatus(sessionId);
-  const perToolGrants = activeGrants.filter((g) => g.kind !== "native");
-  const nativeGrants = activeGrants.filter((g) => g.kind === "native");
-  // Three-way relation to the configured default: a renderer-approved elevation
-  // raises the live tier above it, but a session can also sit *below* it (e.g.
-  // a per-session choice or a decayed elevation) — both must read truthfully,
-  // not collapse to "matches".
-  const tierDelta = TIER_RANK[tier] - TIER_RANK[configuredTier];
-  const tierComparisonCopy =
-    tierDelta > 0
-      ? ` — elevated above the configured ${TIER_SHORT_LABEL[configuredTier].toLowerCase()} default`
-      : tierDelta < 0
-        ? ` — below the configured ${TIER_SHORT_LABEL[configuredTier].toLowerCase()} default`
-        : " — matches the configured default";
-
-  return (
-    <SettingsGroup>
-      <SettingsRow
-        label="Live session"
-        accessory={
-          connected ? (
-            <span className="px-1.5 py-0.5 rounded-[var(--radius-sm)] text-3xs font-mono bg-surface-canvas border border-border-default text-text-secondary">
-              {TIER_SHORT_LABEL[tier]}
-            </span>
-          ) : undefined
-        }
-        description={
-          connected ? (
-            <StatusLine tone="ok">
-              Running the{" "}
-              <span className="text-text-primary">{TIER_SHORT_LABEL[tier].toLowerCase()}</span> tool
-              set
-              {tierComparisonCopy}
-            </StatusLine>
-          ) : (
-            <StatusLine tone="idle">
-              None. Open the assistant to start one; its live tool set and grants show here.
-            </StatusLine>
-          )
-        }
-        layout={connected ? "stacked" : "inline"}
-        control={
-          connected ? (
-            <div className="space-y-2">
-              {perToolGrants.length > 0 ? (
-                <div className="space-y-1">
-                  <div className="text-xs text-text-secondary font-mono">
-                    Active grants ({perToolGrants.length})
-                  </div>
-                  <div className="space-y-1">
-                    {perToolGrants.map((grant) => (
-                      <div
-                        key={grant.toolId}
-                        className="flex items-center justify-between gap-2 text-2xs"
-                      >
-                        <span className="font-mono text-text-secondary break-all">
-                          {grant.toolId}
-                        </span>
-                        <GrantCountdown expiresAt={grant.expiresAt} />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ) : (
-                <div className="text-2xs text-text-secondary">No per-tool grants active</div>
-              )}
-              {sessionId && <NativeGrantsSection helpSessionId={sessionId} grants={nativeGrants} />}
-            </div>
-          ) : undefined
-        }
-      />
-    </SettingsGroup>
   );
 }
