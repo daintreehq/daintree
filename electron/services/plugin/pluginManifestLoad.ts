@@ -31,8 +31,14 @@ export interface PluginManifestRefusal {
   message: string;
 }
 
+/** The schema's output shape, which carries every defaulted contribution group. */
+export type ParsedPluginManifest = Extract<
+  ReturnType<typeof parsePluginManifestForLoad>["result"],
+  { success: true }
+>["data"];
+
 export type PluginManifestLoadResult =
-  { ok: true; manifest: PluginManifest } | { ok: false; refusal?: PluginManifestRefusal };
+  { ok: true; manifest: ParsedPluginManifest } | { ok: false; refusal?: PluginManifestRefusal };
 
 /**
  * Read, parse and validate `plugin.json` for one load. Touches no registry and

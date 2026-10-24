@@ -155,7 +155,7 @@ When a built-in plugin's `activate()` throws after partially registering listene
 
 ### Disposal
 
-`PluginService.unloadPlugin()` (`electron/services/PluginService.ts`) is a fixed forward sequence, not a LIFO stack. Each registry step runs inside its own `runUnloadStep`, which catches and logs a throw, so one failing step never strands the steps after it — a partial unload would otherwise resurface as duplicate-id errors on the next load. `src/utils/disposable.ts` (`DisposableStore`, `toDisposable`) is the renderer's LIFO disposable pattern; the unload cascade does not use it. Its `add()` takes an `IDisposable`, so a plain cleanup function is wrapped first:
+`PluginService.unloadPlugin()` (`electron/services/PluginService.ts`) is a fixed forward sequence, not a LIFO stack. The contribution-registry half of it lives in `PluginContributionRegistrar.unregister()` (`electron/services/plugin/PluginContributionRegistrar.ts`), beside the load-time registrations it reverses, and runs at the same point in the sequence. Each registry step runs inside its own `runUnloadStep`, which catches and logs a throw, so one failing step never strands the steps after it — a partial unload would otherwise resurface as duplicate-id errors on the next load. `src/utils/disposable.ts` (`DisposableStore`, `toDisposable`) is the renderer's LIFO disposable pattern; the unload cascade does not use it. Its `add()` takes an `IDisposable`, so a plain cleanup function is wrapped first:
 
 ```ts
 const store = new DisposableStore();
