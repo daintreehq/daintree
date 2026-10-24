@@ -1,4 +1,4 @@
-import type { RecipeTerminal } from "../types/index.js";
+import { isAgentRecipeType, type RecipeTerminal } from "../../shared/types/project.js";
 
 /**
  * Pairs each canonical (in-repo) recipe step with the local mirror step that is
@@ -30,7 +30,7 @@ export function matchRecipeSteps(
       !sequenceUnchanged &&
       !haveSameEnvValues(
         localIdx.map((i) => local[i]!),
-        canonical[canonicalIdx[0]!]!
+        canonicalIdx.map((i) => canonical[i]!)
       )
     ) {
       continue;
@@ -42,23 +42,35 @@ export function matchRecipeSteps(
   return matched;
 }
 
+// Mirrors the per-type projection `sanitizeRecipeTerminal` applies to the
+// canonical copy, so stray or untrimmed fields in the mirror don't break a match.
 function stepIdentity(step: RecipeTerminal): string {
+  const isAgent = isAgentRecipeType(step.type);
   return JSON.stringify([
     step.type,
     step.title ?? null,
-    step.command ?? null,
-    step.devCommand ?? null,
-    step.args ?? null,
-    step.initialPrompt ?? null,
-    step.panelKindId ?? null,
+    step.type === "terminal" ? trimmed(step.command) : null,
+    step.type === "dev-preview" ? trimmed(step.devCommand) : null,
+    isAgent ? trimmed(step.args) : null,
+    isAgent && typeof step.initialPrompt === "string"
+      ? step.initialPrompt.replace(/\r\n/g, "\n").trimEnd()
+      : null,
+    step.type === "plugin-panel" ? (step.panelKindId ?? null) : null,
   ]);
 }
 
-function haveSameEnvValues(steps: readonly RecipeTerminal[], canonical: RecipeTerminal): boolean {
-  const keys = Object.keys(canonical.env ?? {});
+function trimmed(value: string | undefined): string | null {
+  return typeof value === "string" ? value.trim() || null : null;
+}
+
+function haveSameEnvValues(
+  steps: readonly RecipeTerminal[],
+  canonicalGroup: readonly RecipeTerminal[]
+): boolean {
+  const keys = new Set(canonicalGroup.flatMap((step) => Object.keys(step.env ?? {})));
   const [first, ...rest] = steps;
   return rest.every((step) =>
-    keys.every((key) => (step.env?.[key] ?? "") === (first!.env?.[key] ?? ""))
+    [...keys].every((key) => (step.env?.[key] ?? "") === (first!.env?.[key] ?? ""))
   );
 }
 
