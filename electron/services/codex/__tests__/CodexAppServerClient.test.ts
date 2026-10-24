@@ -3,6 +3,7 @@ vi.mock("../../../utils/windowsCliSpawn.js", () => ({
 }));
 import { EventEmitter } from "events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { stubProcessKillForFile } from "../../../__tests__/helpers/processKillGuard.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 const treeKillMock = vi.hoisted(() =>
@@ -111,6 +112,10 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
+
+// The fake child's process group 4242 is made up, and session teardown
+// SIGKILLs it (#14418).
+stubProcessKillForFile();
 
 describe("runCodexAppServerSession", () => {
   it("handshakes with experimental capabilities before running the caller", async () => {

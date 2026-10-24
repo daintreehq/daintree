@@ -1,6 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { stubProcessKillForFile } from "../../__tests__/helpers/processKillGuard.js";
 import type { IPty } from "node-pty";
 import { BufferedPtyDataHandoff } from "../PtyPool.js";
+
+vi.mock("../../utils/windowsTreeKill.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../utils/windowsTreeKill.js")>()),
+  killWindowsProcessTrees: vi.fn(async () => []),
+  killWindowsProcessTreesSync: vi.fn(() => []),
+}));
 
 vi.mock("node-pty", () => {
   return { spawn: vi.fn() };
@@ -50,6 +57,10 @@ function createMockPty(): { pty: IPty; emitLive: (data: string) => void } {
 // Real TerminalProcess and real BufferedPtyDataHandoff: the prelude replay and
 // the handoff flush both run inside the constructor, before registration, which
 // is exactly the window #12753 dropped.
+// The mock pty's PID 4242 is made up, and disposing a real TerminalProcess
+// signals it (#14418). The stub outlives the 500ms SIGKILL escalation.
+stubProcessKillForFile(600);
+
 describe("PtyManager.spawn — pooled-shell prelude reaches the data event", () => {
   let manager: InstanceType<typeof PtyManager>;
   let dataEvents: Array<[string, string]>;

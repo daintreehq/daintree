@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { stubProcessKillForFile } from "../../../__tests__/helpers/processKillGuard.js";
 import type { IPty } from "node-pty";
 import { TerminalProcess } from "../TerminalProcess.js";
 import { events } from "../../events.js";
@@ -18,6 +19,12 @@ import { OUTPUT_PROGRESS_SAMPLE_MS } from "../OutputProgressTracker.js";
 
 let ptyWriteMock: ReturnType<typeof vi.fn<(data: string) => void>>;
 let ptyOnDataCallback: ((data: string) => void) | null = null;
+
+vi.mock("../../../utils/windowsTreeKill.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../utils/windowsTreeKill.js")>()),
+  killWindowsProcessTrees: vi.fn(async () => []),
+  killWindowsProcessTreesSync: vi.fn(() => []),
+}));
 
 vi.mock("node-pty", () => ({ spawn: vi.fn() }));
 
@@ -80,6 +87,11 @@ function acquireInputLock(terminal: TerminalProcess): () => void {
     terminal as unknown as { inputController: TerminalInputController }
   ).inputController.acquireShutdownInputLock();
 }
+
+// Mock ptys carry made-up PIDs that belong to real processes on the machine
+// running the suite; every kill path below must land on a stub (#14418). The
+// stub outlives ProcessTreeKiller's 500ms SIGKILL escalation.
+stubProcessKillForFile(600);
 
 describe("TerminalProcess submission tracking (#12337)", () => {
   beforeEach(() => {

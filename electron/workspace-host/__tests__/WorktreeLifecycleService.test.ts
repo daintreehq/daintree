@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { stubProcessKillForFile } from "../../__tests__/helpers/processKillGuard.js";
 import path from "path";
 
 /** Normalize a path to forward slashes for cross-platform mock matching */
@@ -1767,6 +1768,10 @@ describe("WorktreeLifecycleService", () => {
   });
 
   describe("signal capture and abort/timeout markers", () => {
+    // The manual child's process group 12345 is made up; the timeout and abort
+    // paths signal it, then escalate to SIGKILL after 5s (#14418).
+    const killSpy = stubProcessKillForFile();
+
     function makeManualChild(pid: number | undefined = 12345) {
       const listeners: Record<string, ((...args: unknown[]) => void)[]> = {};
       const child = {
@@ -1831,6 +1836,9 @@ describe("WorktreeLifecycleService", () => {
         expect(result.timedOut).toBe(true);
         expect(result.signalName).toBe("SIGKILL");
         expect(result.output).toContain("[Process timed out after 1000ms");
+        if (process.platform !== "win32") {
+          expect(killSpy()).toHaveBeenCalledWith(-12345, "SIGTERM");
+        }
       } finally {
         vi.useRealTimers();
       }
@@ -1841,19 +1849,30 @@ describe("WorktreeLifecycleService", () => {
       const { child, fireClose } = makeManualChild();
       mockSpawn.mockReturnValue(child as never);
 
-      const p = service.runCommands(["slow-cmd"], {
-        cwd: "/t",
-        env: {},
-        signal: ac.signal,
-        onProgress: vi.fn(),
-      });
-      await Promise.resolve();
-      ac.abort();
-      fireClose(null, "SIGTERM");
-      const result = await p;
+      vi.useFakeTimers();
+      let result: Awaited<ReturnType<typeof service.runCommands>>;
+      try {
+        const p = service.runCommands(["slow-cmd"], {
+          cwd: "/t",
+          env: {},
+          signal: ac.signal,
+          onProgress: vi.fn(),
+        });
+        await Promise.resolve();
+        ac.abort();
+        fireClose(null, "SIGTERM");
+        result = await p;
+        await vi.advanceTimersByTimeAsync(5_000);
+      } finally {
+        vi.useRealTimers();
+      }
 
       expect(result.aborted).toBe(true);
       expect(result.output).toContain("[Process aborted:");
+      if (process.platform !== "win32") {
+        expect(killSpy()).toHaveBeenCalledWith(-12345, "SIGTERM");
+        expect(killSpy()).toHaveBeenCalledWith(-12345, "SIGKILL");
+      }
     });
   });
 
