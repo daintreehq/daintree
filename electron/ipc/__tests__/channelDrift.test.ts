@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { CHANNELS } from "../channels.js";
@@ -11,6 +11,19 @@ const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
 const MAPS_TS = path.join(REPO_ROOT, "shared", "types", "ipc", "maps.ts");
 const GENERATED_TS = path.join(REPO_ROOT, "shared", "types", "ipc", "generated.ts");
 const PRELOAD_CTS = path.join(REPO_ROOT, "electron", "preload.cts");
+const PRELOAD_MODULES_DIR = path.join(REPO_ROOT, "electron", "preload");
+
+/** The preload entry point plus the transport modules it bundles from `electron/preload/`. */
+async function readPreloadSources(): Promise<string> {
+  const modules = (await readdir(PRELOAD_MODULES_DIR))
+    .filter((name) => name.endsWith(".ts"))
+    .sort();
+  const sources = await Promise.all([
+    readFile(PRELOAD_CTS, "utf8"),
+    ...modules.map((name) => readFile(path.join(PRELOAD_MODULES_DIR, name), "utf8")),
+  ]);
+  return sources.join("\n");
+}
 
 /**
  * IpcInvokeMap keys that intentionally do NOT correspond to a CHANNELS value.
@@ -508,7 +521,7 @@ describe("IPC channel drift guardrails", () => {
   });
 
   it("preload event subscriptions reference channels declared in IpcEventMap", async () => {
-    const preloadSrc = await readFile(PRELOAD_CTS, "utf8");
+    const preloadSrc = await readPreloadSources();
     const mapsSrc = await readFile(MAPS_TS, "utf8");
     const eventKeys = extractEventMapKeys(mapsSrc);
 
@@ -537,7 +550,7 @@ describe("IPC channel drift guardrails", () => {
   });
 
   it("preload invoke calls reference channels declared in IpcInvokeMap", async () => {
-    const preloadSrc = await readFile(PRELOAD_CTS, "utf8");
+    const preloadSrc = await readPreloadSources();
     const invokeKeys = await extractInvokeMapKeys();
 
     const matches = extractChannelCallSites(preloadSrc, [
@@ -573,7 +586,7 @@ describe("IPC channel drift guardrails", () => {
     // `CHANNELS.X` member access — they're outside the static drift scan
     // above. Guard against a typo silently subscribing to a ghost channel
     // by asserting the literal still equals the canonical CHANNELS value.
-    const preloadSrc = await readFile(PRELOAD_CTS, "utf8");
+    const preloadSrc = await readPreloadSources();
     const literalChecks: Array<{ literal: string; constant: string }> = [
       // worktree port disconnect — `WorkspaceHostPool.sendToEntryWindows`
       // pushes on this channel; the preload listener is the only consumer.
@@ -583,7 +596,7 @@ describe("IPC channel drift guardrails", () => {
     for (const { literal, constant } of literalChecks) {
       expect(
         preloadSrc.includes(literal),
-        `electron/preload.cts is expected to subscribe to the literal ${literal}, ` +
+        `the preload (electron/preload.cts or electron/preload/) is expected to subscribe to the literal ${literal}, ` +
           `which must equal CHANNELS value ${JSON.stringify(constant)}. If the channel ` +
           `string was renamed, update the preload literal — or, preferably, switch the ` +
           `listener to a CHANNELS.* reference so the regex scan catches future drift.`
