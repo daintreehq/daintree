@@ -3240,7 +3240,10 @@ describe("PluginDevWorkerHostProxy tasks (#13819)", () => {
       error: 'Plugin "acme.demo" tasks.start: already has 16 unfinished tasks',
     });
     await expect(started).rejects.toThrow(/unfinished tasks/);
-    const subscriptions = Reflect.get(proxy, "subscriptions") as Map<string, unknown>;
+    const subscriptions = Reflect.get(Reflect.get(proxy, "rpc"), "subscriptions") as Map<
+      string,
+      unknown
+    >;
     expect(subscriptions.has(call.params.subscriptionId)).toBe(false);
   });
 
