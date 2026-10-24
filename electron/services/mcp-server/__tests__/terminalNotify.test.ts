@@ -986,6 +986,44 @@ describe("TerminalNotifyService", () => {
   });
 
   describe("notify alongside a reply wait", () => {
+    // #14369: the restart takes the notice over, so a wait that runs out while
+    // the user is still deciding cannot release the replaced process's exit.
+    it("keeps a restart's notice held when the wait ran out mid-restart", async () => {
+      const h = setup();
+      const wait = createNoticeHold();
+      const pending = await h.service.prepareLaunch(PANE, { hold: wait });
+      pending.complete({ launched: true, terminalId: "t-a", spawnStatus: null });
+      const restart = createNoticeHold();
+
+      h.service.holdTarget(PANE, "t-a", restart);
+      h.service.releaseHold(PANE, wait, false);
+      h.kill("t-a");
+      await flushNotice();
+      h.service.settleTargetHold(PANE, restart, true);
+      await flushNotice();
+
+      expect(h.client.submitted).toEqual([]);
+      expect(h.service.getPaneState(OWN)).toBeNull();
+    });
+
+    it("hands a refused restart's notice back to the wait it took it from", async () => {
+      const h = setup();
+      const wait = createNoticeHold();
+      const pending = await h.service.prepareLaunch(PANE, { hold: wait });
+      pending.complete({ launched: true, terminalId: "t-a", spawnStatus: null });
+      const restart = createNoticeHold();
+
+      h.service.holdTarget(PANE, "t-a", restart);
+      h.service.settleTargetHold(PANE, restart, false);
+      h.handbackObserved("t-a", undefined, "gave a fact");
+      await flushNotice();
+      expect(h.client.submitted).toEqual([]);
+
+      h.service.releaseHold(PANE, wait, false);
+      await flushNotice();
+      expect(h.client.submitted).toHaveLength(1);
+    });
+
     it("drops the notice once the wait returned the answer", async () => {
       const h = setup();
       const hold = createNoticeHold();

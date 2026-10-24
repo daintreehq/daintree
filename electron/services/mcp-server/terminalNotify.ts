@@ -518,6 +518,8 @@ export class TerminalNotifyService {
   private readonly ownersByTerminal = new Map<string, PaneOwner>();
   /** Target terminal → the panes waiting on it. */
   private readonly watchersByTarget = new Map<string, Set<PaneOwner>>();
+  /** A restart's hold → the reply wait's hold it took over (#14369). */
+  private readonly restartTakeovers = new Map<NoticeHold, NoticeHold>();
   /** Terminal id → exit epoch and code, for exits that land while a call awaits. */
   private readonly exits = new Map<string, { epoch: number; exitCode?: number }>();
   /**
@@ -838,33 +840,43 @@ export class TerminalNotifyService {
    * The pane is replacing `targetId`'s process itself (#14369), and the user
    * may yet refuse. Its pending notice is held rather than dropped, so the old
    * process's exit is held with it; {@link settleTargetHold} then drops both or
-   * gives the notice back. A notice another call's wait already holds is left
-   * to that wait.
+   * gives the notice back. A reply wait already holding the notice is taken
+   * over and handed it back on a refusal: left to the wait, a wait that ran
+   * out mid-restart would release the old process's exit.
    */
   holdTarget(pane: OwnPane, targetId: string, hold: NoticeHold): void {
     const notice = this.existingOwner(pane)?.notices.get(targetId);
     if (notice === undefined) return;
-    if (notice.heldBy !== undefined && notice.heldBy.settled !== true) return;
+    if (notice.heldBy !== undefined && notice.heldBy.settled !== true) {
+      this.restartTakeovers.set(hold, notice.heldBy);
+    }
     notice.heldBy = hold;
   }
 
   /**
    * End a {@link holdTarget} hold. A replaced process's notice goes, follow-up
    * included, with anything it fired while held: it was about a conversation
-   * that no longer exists. A refused restart releases it unchanged.
+   * that no longer exists. A refused restart gives it back to the wait it took
+   * it from while that wait still runs, and otherwise releases it.
    */
   settleTargetHold(pane: OwnPane, hold: NoticeHold, replaced: boolean): void {
-    if (!replaced) {
-      this.releaseHold(pane, hold, false);
-      return;
-    }
     hold.settled = true;
+    const previous = this.restartTakeovers.get(hold);
+    this.restartTakeovers.delete(hold);
     const owner = this.existingOwner(pane);
     if (owner === undefined) return;
-    for (const notice of [...owner.notices.values()]) {
-      if (notice.heldBy === hold) this.removeNotice(owner, notice);
+    if (replaced) {
+      for (const notice of [...owner.notices.values()]) {
+        if (notice.heldBy === hold) this.removeNotice(owner, notice);
+      }
+      owner.fired = owner.fired.filter((entry) => entry.heldBy !== hold);
+    } else {
+      const restored = previous !== undefined && previous.settled !== true ? previous : undefined;
+      for (const notice of owner.notices.values()) {
+        if (notice.heldBy === hold) notice.heldBy = restored;
+      }
+      for (const entry of owner.fired) if (entry.heldBy === hold) entry.heldBy = restored;
     }
-    owner.fired = owner.fired.filter((entry) => entry.heldBy !== hold);
     this.schedule(owner);
     this.maybeDispose(owner);
     if (!owner.disposed) this.publish(owner);
