@@ -1,5 +1,4 @@
 import {
-  Fragment,
   lazy,
   Suspense,
   useCallback,
@@ -9,48 +8,21 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import { isMac } from "@/lib/platform";
-import { isRemoteWindow, isWslWindow } from "@/hooks/useHostPlatform";
-import { revealCopy } from "@/components/FileViewer/revealCopy";
 import type React from "react";
 import { type PanelLocation } from "@/types";
 import { usePanelStore } from "@/store";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
-
 import { useSidebarWorktreeOrder } from "@/hooks/useSidebarWorktreeOrder";
-import { getWorktreeHeadline } from "@/lib/worktreeHeadline";
-import {
-  collectEligibleIds,
-  useFleetArmingStore,
-  isFleetArmEligible,
-} from "@/store/fleetArmingStore";
-import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
-import { isHandBackUnseen } from "@shared/utils/runHandBack";
-import {
-  AGENT_SNOOZE_DURATION_OPTIONS,
-  AGENT_SNOOZE_LABEL,
-  type AgentSnoozeDurationOption,
-} from "@shared/utils/agentSnoozeDurations";
-import { safeFireAndForget } from "@/utils/safeFireAndForget";
-import { isValidBrowserUrl } from "@/components/Browser/browserUtils";
-import { actionService } from "@/services/ActionService";
+import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
 import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
 import {
   getPanelKindRegistrySnapshot,
   panelKindHasPty,
   subscribeToPanelKindRegistry,
 } from "@shared/config/panelKindRegistry";
-import type { ActionId } from "@shared/types/actions";
-import { comboToAriaKeyshortcuts } from "@/lib/kbdShortcut";
-import { terminalClipboardCombos } from "@/services/terminalReservedKeys";
 import { canDuplicatePanelKind } from "@/services/terminal/panelDuplicationService";
-import {
-  consultPanelCloseGuards,
-  hasPanelCloseGuard,
-  isPanelClosePending,
-} from "@/services/panelCloseGuard";
 import {
   isBrowserPanel,
   isDevPreviewPanel,
@@ -61,11 +33,11 @@ import {
   isReviewPanel,
 } from "@shared/types/panel";
 import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
-import { reportFileLinkFailure } from "@/services/terminal/FileLinksAddon";
 import { systemClient } from "@/clients/systemClient";
 import { resolveSelectedFilePath } from "@/services/terminal/filePathDetection";
 import { resolveWorktreePathScope } from "@shared/utils/path";
-import { SelectedFileMenuItems } from "./SelectedFileMenuItems";
+import { isValidBrowserUrl } from "@/components/Browser/browserUtils";
+import { actionService } from "@/services/ActionService";
 import { useIsHibernated } from "@/hooks/useIsHibernated";
 import { usePluginContextMenuItems } from "@/hooks/usePluginContextMenuItems";
 import { PluginContextMenuSection } from "@/components/Plugin/PluginContextMenuSection";
@@ -73,97 +45,25 @@ import type { WhenClauseContext } from "@shared/utils/whenClause";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import {
   RestartOnPresetConfirmDialog,
-  RestartOnPresetSubmenu,
   type RestartOnPresetRequest,
 } from "@/components/Terminal/RestartOnPreset";
-import { closeAndAnnounce } from "@/lib/accessibility";
-import { terminalHasRunningAgentSession } from "@/utils/destructiveSessionConfirm";
-import {
-  buildKillRunningAgentCopy,
-  buildRestartRunningAgentCopy,
-  DestructiveConsequence,
-  type DestructiveConfirmCopy,
-} from "@/components/Terminal/TerminalDestructiveActionConfirmDialog";
-import {
-  TerminalHandOverDialog,
-  TerminalHandOverMenuItems,
-  useOrchestratorCandidates,
-} from "./TerminalHandOver";
-
-// Loaded on first use: every pane and session row mounts this menu, and the
-// dialog pulls in Pilot's row and band modules that nothing else here needs.
-const LazyParkRunDialog = lazy(() =>
-  import("@/components/Fleet/ParkRunDialog").then((m) => ({ default: m.ParkRunDialog }))
-);
-import {
-  ArrowDownFromLine,
-  Bell,
-  BellOff,
-  CirclePlay,
-  CircleStop,
-  Clipboard,
-  Clock,
-  Copy,
-  CopyPlus,
-  DatabaseBackup,
-  ExternalLink,
-  Globe,
-  Info,
-  Lock,
-  Mail,
-  MailOpen,
-  Maximize2,
-  Mic,
-  MicOff,
-  Minimize2,
-  OctagonX,
-  Puzzle,
-  PanelBottomClose,
-  PanelTopClose,
-  Pencil,
-  Play,
-  Radio,
-  RadioTower,
-  RefreshCw,
-  RotateCcw,
-  RotateCw,
-  Send,
-  Settings,
-  Trash2,
-  Unlock,
-} from "lucide-react";
-import { CirclePause, FolderGit2, FolderOpen, FolderTree } from "@/components/icons";
+import { DestructiveConsequence } from "@/components/Terminal/TerminalDestructiveActionConfirmDialog";
+import { TerminalHandOverDialog, useOrchestratorCandidates } from "./TerminalHandOver";
 import {
   ContextMenu,
   ContextMenuContent,
-  ContextMenuItem,
   ContextMenuSeparator,
-  ContextMenuShortcut,
-  ContextMenuSub,
-  ContextMenuSubContent,
-  ContextMenuSubTrigger,
   stopContextMenuPropagation,
 } from "@/components/ui/context-menu";
 import { MenuActionSourceContext, type MenuActionSourceValue } from "@/components/ui/menu-source";
-import { AppPalettePopover } from "@/components/ui/AppPalettePopover";
-import { PopoverAnchor } from "@/components/ui/popover";
 import {
   getRegisteredTourIdsSnapshot,
   subscribeToTourRegistry,
 } from "@/components/Tour/tourRegistry";
-import { MoveToWorktreePicker } from "@/components/Panel/MoveToWorktreePicker";
 import { PanelContextMenuTriggerScope } from "./PanelContextMenuTrigger";
 import {
-  GENERIC_PANEL_RELOAD_ACTION_ID,
-  GENERIC_PANEL_TOUR_ACTION_ID,
-  GENERIC_PANEL_PLUGIN_SETTINGS_ACTION_ID,
-  GENERIC_PANEL_PLUGIN_BACKUP_ACTION_ID,
   canReloadPanelKind,
-  getGenericPanelMenuGroups,
   hasGenericPanelMenu,
-  isPluginMenuCommandId,
-  pluginMenuCommandActionId,
-  pluginMenuCommandId,
   readPanelKindMenuCapabilities,
   resolvePluginMenuItems,
 } from "@/components/Panel/genericPanelMenu";
@@ -172,13 +72,34 @@ import {
   subscribeToRegisteredPluginActions,
 } from "@/services/plugin/registeredPluginActions";
 import { usePanelViewMenuItems, usePanelWorkerMenus } from "@/store/pluginPanelMenuStore";
-import { copyWithToast } from "@/lib/copyWithToast";
+import type { MenuPanel, PendingMenuDispatch } from "./contextMenu/menuShared";
+import { useTerminalMenuCommands } from "./contextMenu/useTerminalMenuCommands";
+import {
+  MoveToWorktreeMenuPicker,
+  useMovePickerCoordination,
+} from "./contextMenu/useMovePickerCoordination";
+import { useFleetRunMenuState } from "./contextMenu/useFleetRunMenuState";
+import { LayoutMenuItems, MoveToWorktreeSubmenu } from "./contextMenu/LayoutMenuItems";
+import {
+  BrowserMenuItems,
+  DevPreviewMenuItems,
+  GenericPanelMenuItems,
+  PluginOwnedMenuItems,
+  ReviewMenuItems,
+  TourMenuItem,
+} from "./contextMenu/PanelKindMenuItems";
+import {
+  TerminalFleetMenuItems,
+  TerminalIdentityMenuItems,
+  TerminalSelectionMenuItems,
+  TerminalSessionMenuItems,
+} from "./contextMenu/TerminalMenuItems";
 
-const ICON_CLASS = "w-3.5 h-3.5 mr-2 shrink-0";
-
-// Main, the pins and the most recent few: what a hover submenu is good for.
-// Anything past that is found by searching the picker.
-const MOVE_TO_WORKTREE_SUBMENU_LIMIT = 10;
+// Loaded on first use: every pane and session row mounts this menu, and the
+// dialog pulls in Pilot's row and band modules that nothing else here needs.
+const LazyParkRunDialog = lazy(() =>
+  import("@/components/Fleet/ParkRunDialog").then((m) => ({ default: m.ParkRunDialog }))
+);
 
 /** A task turn after the close hook, which is where the menu primitive restores focus. */
 const AFTER_MENU_FOCUS_RESTORE_MS = 0;
@@ -188,12 +109,6 @@ interface HandOverRequest {
   id: number;
   terminalId: string;
   orchestratorPaneId: string;
-}
-
-/** A zero-size point the picker hangs off, tracking the pane it sits in. */
-interface MovePickerAnchor {
-  contextElement: HTMLElement;
-  getBoundingClientRect: () => DOMRect;
 }
 
 interface TerminalContextMenuProps {
@@ -240,8 +155,6 @@ function containPortalOrLongPress(event: React.PointerEvent) {
   if (event.pointerType !== "mouse") event.stopPropagation();
   else containPortalEvent(event);
 }
-
-type MenuPanel = ReturnType<typeof usePanelStore.getState>["panelsById"][string];
 
 /**
  * Every pane, tab, dock item and sidebar row keeps this menu mounted, so while
@@ -371,40 +284,9 @@ function TerminalContextMenuBody({
     getRegisteredPluginActionsSnapshot
   );
 
-  // Which panel the picker was opened for, not a bare flag: the dock's tab
-  // group hands this menu a new terminal when its active tab changes, and the
-  // picker must not quietly retarget. Dropped during render so switching back
-  // can't reopen it.
-  const [movePickerPanelId, setMovePickerPanelId] = useState<string | null>(null);
-  if (movePickerPanelId !== null && movePickerPanelId !== terminalId) {
-    setMovePickerPanelId(null);
-  }
-  const isMovePickerOpen = movePickerPanelId !== null;
-  // Mounted from the first opening on, not with the menu: every pane has one,
-  // and the content carries its own positioning observers. Kept after that so
-  // the picker still gets its exit animation.
-  const [hasOpenedMovePicker, setHasOpenedMovePicker] = useState(false);
-  const [movePickerAnchor, setMovePickerAnchor] = useState<MovePickerAnchor | null>(null);
-  // Selecting "More worktrees…" records the intent and the root content's
-  // close hook spends it — the only one that runs, since Radix pins the
-  // submenu's own. Opening straight from `onSelect` would raise the picker while
-  // the menu still holds the focus trap, and the menu's focus return would then
-  // land after the picker had focused its search field.
-  const pendingMovePickerRef = useRef<string | null>(null);
-  // Captured on every gesture that can open the menu. A context menu has no
-  // trigger to hang the picker off or hand a keyboard dismissal back to, so the
-  // pane stands in.
-  const capturedMovePickerAnchorRef = useRef<MovePickerAnchor | null>(null);
-  const movePickerReturnFocusRef = useRef<HTMLElement | null>(null);
-
-  const handleMovePickerOpenChange = useCallback(
-    (open: boolean) => setMovePickerPanelId(open ? terminalId : null),
-    [terminalId]
-  );
-
-  const handleMoveToWorktreeMore = useCallback(() => {
-    pendingMovePickerRef.current = terminalId;
-  }, [terminalId]);
+  const movePicker = useMovePickerCoordination(terminalId, proxy, triggerScope);
+  const { captureMovePickerAnchor, clearPendingMovePicker, spendPendingMovePicker } = movePicker;
+  const movePickerReturnFocusRef = movePicker.movePickerReturnFocusRef;
 
   const { candidateIds: orchestratorCandidateIds, refresh: refreshOrchestratorCandidates } =
     useOrchestratorCandidates(terminalId);
@@ -432,11 +314,7 @@ function TerminalContextMenuBody({
   // same way, after the menu has returned focus to the pane, so the settings
   // home, the save dialog or the plugin's own confirmation records the pane as
   // where to return it.
-  const pendingMenuDispatchRef = useRef<{
-    actionId: ActionId;
-    args: Record<string, unknown>;
-    source: MenuActionSourceValue;
-  } | null>(null);
+  const pendingMenuDispatchRef = useRef<PendingMenuDispatch | null>(null);
   const nextHandOverIdRef = useRef(0);
   const handleRequestHandOver = useCallback(
     (orchestratorPaneId: string) => {
@@ -467,7 +345,7 @@ function TerminalContextMenuBody({
         // Only when it changed: an unconditional set costs every open a render.
         const cachedHomeDir = systemClient.getCachedHomeDir();
         if (cachedHomeDir !== homeDir) setHomeDir(cachedHomeDir);
-        pendingMovePickerRef.current = null;
+        clearPendingMovePicker();
         pendingHandOverRef.current = null;
         pendingParkRef.current = null;
         pendingMenuDispatchRef.current = null;
@@ -477,52 +355,7 @@ function TerminalContextMenuBody({
         }
       }
     },
-    [homeDir, refreshOrchestratorCandidates, terminal]
-  );
-
-  const captureMovePickerAnchor = useCallback(
-    (event: React.MouseEvent<HTMLElement>) => {
-      // The trigger wrapper is `display: contents` and has no box of its own.
-      const pane = event.currentTarget.firstElementChild;
-      if (!(pane instanceof HTMLElement)) {
-        capturedMovePickerAnchorRef.current = null;
-        movePickerReturnFocusRef.current = null;
-        return;
-      }
-      // Where the menu opened, kept relative to the pane: the picker takes the
-      // menu's place. Hung off the pane's own rect, it would have to sit outside
-      // a box that usually fills the window's height, with no room either side.
-      const bounds = pane.getBoundingClientRect();
-      const offsetX = Math.min(Math.max(event.clientX - bounds.left, 0), bounds.width);
-      const offsetY = Math.min(Math.max(event.clientY - bounds.top, 0), bounds.height);
-      // A panel surface takes focus back itself. A proxy's first child is a
-      // row or tab wrapper, so return to the control that was right-clicked.
-      const FOCUSABLE = 'button, [tabindex]:not([tabindex="-1"]), [role="tab"]';
-      const hit =
-        proxy && event.target instanceof Element
-          ? event.target.closest<HTMLElement>(FOCUSABLE)
-          : null;
-      const focusable =
-        hit && pane.contains(hit) ? hit : proxy ? pane.querySelector<HTMLElement>(FOCUSABLE) : null;
-      // A header-scoped trigger wraps the title bar, not the surface that takes focus.
-      const panelRoot =
-        triggerScope === "header" ? pane.closest<HTMLElement>("[data-panel-id]") : null;
-      movePickerReturnFocusRef.current = focusable ?? panelRoot ?? pane;
-      capturedMovePickerAnchorRef.current = {
-        // Lets Floating UI follow the pane itself when it moves or resizes.
-        contextElement: pane,
-        getBoundingClientRect: () => {
-          const rect = pane.getBoundingClientRect();
-          return DOMRect.fromRect({
-            x: rect.left + Math.min(offsetX, rect.width),
-            y: rect.top + Math.min(offsetY, rect.height),
-            width: 0,
-            height: 0,
-          });
-        },
-      };
-    },
-    [proxy, triggerScope]
+    [homeDir, clearPendingMovePicker, refreshOrchestratorCandidates, terminal]
   );
 
   const handleTriggerContextMenu = useCallback(
@@ -566,83 +399,11 @@ function TerminalContextMenuBody({
   // don't get the option, matching the gesture-level rules in
   // `multiSelectGestures`.
   const fleetEligible = isFleetArmEligible(terminal);
-  // Snooze needs more than fleet eligibility: that only means "live PTY in a
-  // grid location", while `snoozeRun` rejects any id the fleet snapshot can't
-  // see. A plain shell terminal is eligible and never on the snapshot, so
-  // without this the menu would offer a Snooze that always failed — and the
-  // rejection is fire-and-forget, so the user would see nothing at all. Gate on
-  // the same set the handler validates against.
-  const isKnownRun = useFleetSnapshotStore(
-    (s) => isMenuLive && (s.snapshot?.runs.some((run) => run.runId === terminalId) ?? false)
-  );
-  // Main strips expired snoozes before a row ships, so presence on the snapshot
-  // IS "currently snoozed" — the menu needs no clock and never has to decide
-  // whether a wake time has passed.
-  const isSnoozed = useFleetSnapshotStore(
-    (s) =>
-      isMenuLive &&
-      (s.snapshot?.runs.some((run) => run.runId === terminalId && run.snooze !== undefined) ??
-        false)
-  );
-  // Whether main watched this run hand work back, and whether it has been seen
-  // since: only a run with a hand-back has anything to mark read or unread.
-  const handBackState = useFleetSnapshotStore((s): "none" | "unseen" | "seen" => {
-    if (!isMenuLive) return "none";
-    const handBack = s.snapshot?.runs.find((run) => run.runId === terminalId)?.handBack;
-    if (handBack === undefined) return "none";
-    return isHandBackUnseen(handBack) ? "unseen" : "seen";
-  });
+  const fleetRun = useFleetRunMenuState(terminalId, isMenuLive);
   const sourceRef = useRef<MenuActionSourceValue>("user");
-
-  const handleSnooze = useCallback(
-    (option: AgentSnoozeDurationOption) => {
-      safeFireAndForget(window.electron.fleet.snoozeRun(terminalId, option), {
-        context: "TerminalContextMenu snoozeRun",
-      });
-    },
-    [terminalId]
-  );
-
-  const handleToggleHandBackRead = useCallback(() => {
-    const markRead = handBackState === "unseen";
-    safeFireAndForget(
-      markRead
-        ? window.electron.fleet.markRunRead(terminalId)
-        : window.electron.fleet.markRunUnread(terminalId),
-      {
-        context: markRead ? "TerminalContextMenu markRunRead" : "TerminalContextMenu markRunUnread",
-      }
-    );
-  }, [handBackState, terminalId]);
-
-  // Presence on the snapshot IS "parked", exactly as for snoozes.
-  const isParked = useFleetSnapshotStore(
-    (s) =>
-      isMenuLive &&
-      (s.snapshot?.runs.some((run) => run.runId === terminalId && run.park !== undefined) ?? false)
-  );
-
-  // Main rejects a park over retained (degraded) data; Unpark needs no
-  // healthy snapshot, so only Park… waits for one.
-  const isFleetDegraded = useFleetSnapshotStore(
-    (s) => isMenuLive && (s.snapshot?.degraded ?? false)
-  );
-  const canPark = isKnownRun && !isFleetDegraded;
 
   const handleRequestPark = useCallback(() => {
     pendingParkRef.current = terminalId;
-  }, [terminalId]);
-
-  const handleUnpark = useCallback(() => {
-    safeFireAndForget(window.electron.fleet.unparkRun(terminalId), {
-      context: "TerminalContextMenu unparkRun",
-    });
-  }, [terminalId]);
-
-  const handleUnsnooze = useCallback(() => {
-    safeFireAndForget(window.electron.fleet.unsnoozeRun(terminalId), {
-      context: "TerminalContextMenu unsnoozeRun",
-    });
   }, [terminalId]);
 
   const panelKind = terminal?.kind;
@@ -669,13 +430,6 @@ function TerminalContextMenuBody({
   const [hoveredFileKind, setHoveredFileKind] = useState<"file" | "directory" | null>(null);
   const [selectedText, setSelectedText] = useState<string | null>(null);
   const suppressNextCloseAutoFocusRef = useRef(false);
-  // Local confirm dialog for single-terminal kill/restart when an agent
-  // session is mid-work. Bare PTY terminals skip this gate and run
-  // immediately (matches the action's run-body gate at
-  // `terminalLifecycleActions.ts`).
-  const [destructiveConfirm, setDestructiveConfirm] = useState<
-    ({ kind: "kill" | "restart" } & DestructiveConfirmCopy) | null
-  >(null);
   const [restartOnPresetRequest, setRestartOnPresetRequest] =
     useState<RestartOnPresetRequest | null>(null);
   const closeRestartOnPreset = useCallback(() => setRestartOnPresetRequest(null), []);
@@ -748,7 +502,6 @@ function TerminalContextMenuBody({
   );
 
   const terminalPty = terminal && isPtyPanel(terminal) ? terminal : undefined;
-  const terminalBrowser = terminal && isBrowserPanel(terminal) ? terminal : undefined;
 
   // A selection that resolves to a file path unlocks the "View file" / reveal
   // section. Relative paths resolve against the terminal's cwd;
@@ -785,372 +538,29 @@ function TerminalContextMenuBody({
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
   const isInActiveWorktree = (terminal?.worktreeId ?? null) === (activeWorktreeId ?? null);
 
-  const mac = isMac();
-  const clipboardCombos = terminalClipboardCombos(mac);
-
-  const handleAction = useCallback(
-    (actionId: string) => {
-      if (!terminal) return;
-
-      if (actionId === "open-link") {
-        void peekTerminalService()?.openHoveredLink(terminalId);
-        return;
-      }
-
-      // The URL was captured when the menu opened; the hover itself ends as
-      // soon as the pointer moves onto the menu.
-      if (actionId.startsWith("open-link-claimed:")) {
-        peekTerminalService()?.openLink(terminalId, actionId.slice("open-link-claimed:".length));
-        return;
-      }
-
-      if (actionId.startsWith("open-link-external:")) {
-        peekTerminalService()?.openLink(terminalId, actionId.slice("open-link-external:".length), {
-          external: true,
-        });
-        return;
-      }
-
-      if (isPluginMenuCommandId(actionId)) {
-        // The panel the menu was opened on, by id — see `pendingMenuDispatchRef`.
-        pendingMenuDispatchRef.current = {
-          actionId: pluginMenuCommandActionId(actionId),
-          args: { panelId: terminalId },
-          source: sourceRef.current,
-        };
-        return;
-      }
-
-      if (actionId.startsWith("copy-link:")) {
-        const url = actionId.slice("copy-link:".length);
-        void actionService.dispatch("terminal.copyLink", { url }, { source: sourceRef.current });
-        return;
-      }
-
-      if (actionId.startsWith("reveal-in-finder:")) {
-        const path = actionId.slice("reveal-in-finder:".length);
-        // The path is the host's; a remote host's file manager is on a screen
-        // nobody is looking at, so hand the path over instead. A WSL distro's
-        // files are on this PC, so those reveal in Explorer like local ones.
-        if (isRemoteWindow() && !isWslWindow()) {
-          copyWithToast("Host path", path);
-          return;
-        }
-        // Unlike copy-link, guard rejections (OUTSIDE_ROOT) and a since-deleted
-        // file (NOT_FOUND) are real, expected failure modes here — surface them
-        // rather than fire-and-forget. dispatch wraps the thrown error as
-        // EXECUTION_ERROR, so the original coded error lives on `.details`.
-        void actionService
-          .dispatch("file.showItemInFolder", { path }, { source: sourceRef.current })
-          .then((result) => {
-            if (!result.ok) {
-              reportFileLinkFailure("Failed to reveal in file manager", result.error.details, path);
-            }
-          });
-        return;
-      }
-
-      if (actionId.startsWith("move-to-worktree:")) {
-        const worktreeId = actionId.slice("move-to-worktree:".length);
-        void actionService.dispatch(
-          "terminal.moveToWorktree",
-          { terminalId, worktreeId },
-          { source: sourceRef.current }
-        );
-        return;
-      }
-
-      if (actionId.startsWith("recall-voice-target:")) {
-        const targetPanelId = actionId.slice("recall-voice-target:".length);
-        void actionService.dispatch(
-          "voiceInput.recallRecentTarget",
-          { panelId: targetPanelId },
-          { source: sourceRef.current }
-        );
-        return;
-      }
-
-      switch (actionId) {
-        case "fleet-toggle":
-          // Mirror the gesture rule from multiSelectGestures: a toggle on
-          // an empty fleet implicitly seeds the focused pane so the user
-          // ends up with a 2-pane fleet rather than a single armed peer.
-          if (
-            !useFleetArmingStore.getState().armedIds.has(terminalId) &&
-            useFleetArmingStore.getState().armedIds.size === 0
-          ) {
-            const focusedId = usePanelStore.getState().focusedId;
-            if (focusedId && focusedId !== terminalId) {
-              const focusedTerminal = usePanelStore.getState().panelsById[focusedId];
-              if (focusedTerminal && isFleetArmEligible(focusedTerminal)) {
-                useFleetArmingStore.getState().armId(focusedId);
-              }
-            }
-          }
-          useFleetArmingStore.getState().toggleId(terminalId);
-          break;
-        case "fleet-arm-worktree":
-          // This panel's worktree, which a sidebar row can offer while another
-          // worktree is active; `terminal.bulkCommand` arms the active one.
-          if (terminal?.worktreeId) {
-            useFleetArmingStore
-              .getState()
-              .armIds(collectEligibleIds("current", terminal.worktreeId));
-          } else {
-            void actionService.dispatch("terminal.bulkCommand", undefined, {
-              source: sourceRef.current,
-            });
-          }
-          break;
-        case "fleet-clear":
-          void actionService.dispatch("terminal.disarmAll", undefined, {
-            source: sourceRef.current,
-          });
-          break;
-        case "copy":
-          void actionService.dispatch(
-            "terminal.copy",
-            { terminalId },
-            { source: sourceRef.current }
-          );
-          break;
-        case "paste":
-          void actionService.dispatch(
-            "terminal.paste",
-            { terminalId },
-            { source: sourceRef.current }
-          );
-          break;
-        case "move-to-dock":
-          void actionService.dispatch(
-            "terminal.moveToDock",
-            { terminalId },
-            { source: sourceRef.current }
-          );
-          break;
-        case "move-to-grid":
-          void actionService.dispatch(
-            "terminal.moveToGrid",
-            { terminalId },
-            { source: sourceRef.current }
-          );
-          break;
-        case "toggle-maximize":
-          void actionService.dispatch(
-            "terminal.toggleMaximize",
-            { terminalId },
-            { source: sourceRef.current }
-          );
-          break;
-        case "redraw":
-          void actionService.dispatch(
-            "terminal.redraw",
-            { terminalId },
-            { source: sourceRef.current }
-          );
-          break;
-        case "restart":
-          if (terminalHasRunningAgentSession(terminal)) {
-            setDestructiveConfirm({
-              kind: "restart",
-              ...buildRestartRunningAgentCopy(terminal?.title),
-            });
-            return;
-          }
-          void actionService.dispatch(
-            "terminal.restart",
-            { terminalId },
-            { source: sourceRef.current }
-          );
-          break;
-        case "force-resume":
-          void actionService.dispatch(
-            "terminal.forceResume",
-            { terminalId },
-            { source: sourceRef.current }
-          );
-          break;
-        case "toggle-input-lock":
-          void actionService.dispatch(
-            "terminal.toggleInputLock",
-            { terminalId },
-            { source: sourceRef.current }
-          );
-          break;
-        case "voice-lock-target":
-          void actionService.dispatch(
-            "voiceInput.lockTarget",
-            { panelId: terminalId },
-            { source: sourceRef.current }
-          );
-          break;
-        case "voice-unlock-target":
-          void actionService.dispatch("voiceInput.unlockTarget", undefined, {
-            source: sourceRef.current,
-          });
-          break;
-        case "toggle-watch":
-          void actionService.dispatch(
-            "terminal.watch",
-            { terminalId },
-            { source: sourceRef.current }
-          );
-          break;
-        case "duplicate":
-          void actionService.dispatch(
-            "terminal.duplicate",
-            { terminalId },
-            { source: sourceRef.current }
-          );
-          break;
-        case "rename":
-          suppressNextCloseAutoFocusRef.current = true;
-          void actionService.dispatch(
-            "terminal.rename",
-            { terminalId },
-            { source: sourceRef.current }
-          );
-          break;
-        case "view-info":
-          void actionService.dispatch(
-            "terminal.viewInfo",
-            { terminalId },
-            { source: sourceRef.current }
-          );
-          break;
-        case "restore-from-background": {
-          // What the Background popover row's own Restore does: bring the
-          // pane back and take the user to it, worktree switch included.
-          const worktreeId = terminal?.worktreeId?.trim();
-          const selection = useWorktreeSelectionStore.getState();
-          if (worktreeId && worktreeId !== selection.activeWorktreeId) {
-            selection.trackTerminalFocus(worktreeId, terminalId);
-            selection.selectWorktree(worktreeId);
-          }
-          const panels = usePanelStore.getState();
-          panels.restoreBackgroundTerminal(terminalId);
-          panels.activateTerminal(terminalId);
-          panels.pingTerminal(terminalId);
-          break;
-        }
-        case "background":
-          void actionService.dispatch(
-            "terminal.background",
-            { terminalId },
-            { source: sourceRef.current }
-          );
-          break;
-        case "trash":
-          void actionService.dispatch(
-            "terminal.trash",
-            { terminalId },
-            { source: sourceRef.current }
-          );
-          break;
-        case "kill":
-          if (terminalHasRunningAgentSession(terminal)) {
-            setDestructiveConfirm({ kind: "kill", ...buildKillRunningAgentCopy(terminal?.title) });
-            return;
-          }
-          if (hasPanelCloseGuard(terminalId)) {
-            // Removing skips the trash, not the unsaved-work prompt (#12323). A
-            // second pick while that prompt is up waits on it; it must not
-            // queue a second removal behind the same answer.
-            if (isPanelClosePending(terminalId)) return;
-            const source = sourceRef.current;
-            void consultPanelCloseGuards([terminalId]).then((proceed) => {
-              if (!proceed) return;
-              void actionService.dispatch("terminal.kill", { terminalId }, { source });
-            });
-            return;
-          }
-          void actionService.dispatch(
-            "terminal.kill",
-            { terminalId },
-            { source: sourceRef.current }
-          );
-          break;
-        case "reload":
-          void actionService.dispatch(
-            GENERIC_PANEL_RELOAD_ACTION_ID,
-            { panelId: terminalId },
-            { source: sourceRef.current }
-          );
-          break;
-        case "tour": {
-          const tour = readPanelKindMenuCapabilities(
-            panelKindRegistry,
-            terminal.pluginPanelKindId ?? terminal.kind ?? "terminal",
-            registeredTourIds
-          ).tour;
-          if (!tour) break;
-          void actionService.dispatch(
-            GENERIC_PANEL_TOUR_ACTION_ID,
-            { tourId: tour.id },
-            { source: sourceRef.current }
-          );
-          break;
-        }
-        case "plugin-settings": {
-          const pluginId = readPanelKindMenuCapabilities(
-            panelKindRegistry,
-            terminal.pluginPanelKindId ?? terminal.kind ?? "terminal",
-            registeredTourIds
-          ).pluginSettingsId;
-          if (!pluginId) break;
-          // Spent by the close hook once focus is back on the pane — see
-          // `pendingMenuDispatchRef`.
-          pendingMenuDispatchRef.current = {
-            actionId: GENERIC_PANEL_PLUGIN_SETTINGS_ACTION_ID,
-            args: { pluginId },
-            source: sourceRef.current,
-          };
-          break;
-        }
-        case "plugin-backup": {
-          const pluginId = readPanelKindMenuCapabilities(
-            panelKindRegistry,
-            terminal.pluginPanelKindId ?? terminal.kind ?? "terminal",
-            registeredTourIds
-          ).pluginBackupId;
-          if (!pluginId) break;
-          pendingMenuDispatchRef.current = {
-            actionId: GENERIC_PANEL_PLUGIN_BACKUP_ACTION_ID,
-            args: { pluginId },
-            source: sourceRef.current,
-          };
-          break;
-        }
-        case "reload-browser":
-          void actionService.dispatch(
-            "browser.reload",
-            { terminalId },
-            { source: sourceRef.current }
-          );
-          break;
-        case "open-external":
-          if (terminalBrowser?.browserUrl && isValidBrowserUrl(terminalBrowser.browserUrl)) {
-            void actionService.dispatch(
-              "browser.openExternal",
-              { url: terminalBrowser.browserUrl },
-              { source: sourceRef.current }
-            );
-          }
-          break;
-        case "copy-url":
-          if (terminalBrowser?.browserUrl && isValidBrowserUrl(terminalBrowser.browserUrl)) {
-            const url = terminalBrowser.browserUrl;
-            const source = sourceRef.current;
-            copyWithToast("URL", url, {
-              write: async () =>
-                (await actionService.dispatch("browser.copyUrl", { url }, { source })).ok,
-            });
-          }
-          break;
-      }
-    },
-    [terminal, terminalId, terminalPty, terminalBrowser, panelKindRegistry, registeredTourIds]
-  );
+  const deferMenuDispatch = useCallback((dispatch: PendingMenuDispatch) => {
+    pendingMenuDispatchRef.current = dispatch;
+  }, []);
+  const suppressNextCloseAutoFocus = useCallback(() => {
+    suppressNextCloseAutoFocusRef.current = true;
+  }, []);
+  const {
+    handleAction,
+    handleSendToAgent,
+    handleMoveToNewWorktree,
+    handleOpenInFileBrowser,
+    destructiveConfirm,
+    handleDestructiveConfirm,
+    closeDestructiveConfirm,
+  } = useTerminalMenuCommands({
+    terminal,
+    terminalId,
+    panelKindRegistry,
+    registeredTourIds,
+    sourceRef,
+    deferMenuDispatch,
+    suppressNextCloseAutoFocus,
+  });
 
   const handleCloseAutoFocus = useCallback(
     (event: Event) => {
@@ -1192,37 +602,10 @@ function TerminalContextMenuBody({
         setHandOverRequest(pendingHandOver);
         return;
       }
-      const pendingPanelId = pendingMovePickerRef.current;
-      pendingMovePickerRef.current = null;
-      if (pendingPanelId === null || pendingPanelId !== terminalId) return;
-      const anchor = capturedMovePickerAnchorRef.current;
-      if (!anchor?.contextElement.isConnected) return;
-      // The picker takes focus into its search field; handing it back to the
-      // pane first would only flash a ring on the way.
-      event.preventDefault();
-      setMovePickerAnchor(anchor);
-      setHasOpenedMovePicker(true);
-      setMovePickerPanelId(terminalId);
+      spendPendingMovePicker(event);
     },
-    [terminalId]
+    [terminalId, spendPendingMovePicker]
   );
-
-  const handleDestructiveConfirm = useCallback(() => {
-    if (!destructiveConfirm) return;
-    const actionId = destructiveConfirm.kind === "kill" ? "terminal.kill" : "terminal.restart";
-    const announcement =
-      destructiveConfirm.kind === "kill" ? "Terminal killed" : "Terminal restarted";
-    void actionService.dispatch(
-      actionId,
-      { terminalId, confirmed: true },
-      { source: sourceRef.current }
-    );
-    closeAndAnnounce(() => setDestructiveConfirm(null), announcement);
-  }, [destructiveConfirm, terminalId]);
-
-  const closeDestructiveConfirm = useCallback(() => {
-    setDestructiveConfirm(null);
-  }, []);
 
   const destructiveConfirmDialog = destructiveConfirm ? (
     <ConfirmDialog
@@ -1279,342 +662,111 @@ function TerminalContextMenuBody({
   // kinds stay out: they render through TerminalPane and are genuine
   // terminals, so they keep copy/paste, redraw, restart and the rest.
   const hasGenericMenu = hasGenericPanelMenu(kind, hasPty);
-  // The generic list carries the tour as a command of its own; the built-in
-  // menus below draw this beside Rename, so a built-in kind that declares a
-  // tour gets it on right-click with no menu changes.
-  const tourMenuItem = kindCapabilities.tour ? (
-    <ContextMenuItem onSelect={() => handleAction("tour")}>
-      <CirclePlay className={ICON_CLASS} aria-hidden="true" />
-      {kindCapabilities.tour.label}
-    </ContextMenuItem>
-  ) : null;
-  // A PTY-backed plugin kind's plugin settings, beside its tour on the same
-  // terminal menus: the last of the plugin's own entries, with "Back up data…"
-  // just before it as on the generic list.
-  const pluginOwnedMenuItems =
-    kindCapabilities.pluginBackupId || kindCapabilities.pluginSettingsId ? (
-      <>
-        {kindCapabilities.pluginBackupId && (
-          <ContextMenuItem onSelect={() => handleAction("plugin-backup")}>
-            <DatabaseBackup className={ICON_CLASS} aria-hidden="true" />
-            Back up data…
-          </ContextMenuItem>
-        )}
-        {kindCapabilities.pluginSettingsId && (
-          <ContextMenuItem onSelect={() => handleAction("plugin-settings")}>
-            <Settings className={ICON_CLASS} aria-hidden="true" />
-            Plugin settings…
-          </ContextMenuItem>
-        )}
-      </>
-    ) : null;
-
-  const submenuWorktrees = worktrees.slice(0, MOVE_TO_WORKTREE_SUBMENU_LIMIT);
-  const hasMoreWorktrees = worktrees.length > submenuWorktrees.length;
+  const kindOwnedItems = (
+    <>
+      <TourMenuItem tour={kindCapabilities.tour} onAction={handleAction} />
+      <PluginOwnedMenuItems
+        pluginBackupId={kindCapabilities.pluginBackupId}
+        pluginSettingsId={kindCapabilities.pluginSettingsId}
+        onAction={handleAction}
+      />
+    </>
+  );
 
   // Somewhere other than the panel's own worktree, which may already be gone —
   // the header's overflow menu counts it the same way.
   const canMoveToWorktree =
     !isBackgrounded && worktrees.some((wt) => wt.id !== terminal.worktreeId);
   const renderMoveToWorktreeSubmenu = (label: string) => (
-    <ContextMenuSub>
-      <ContextMenuSubTrigger>
-        <FolderGit2 className={ICON_CLASS} />
-        {label}
-      </ContextMenuSubTrigger>
-      {/* No search field in here: Radix's typeahead claims printable keys
-          inside a submenu, so finding a worktree past the cap is the
-          picker's job. */}
-      <ContextMenuSubContent>
-        {submenuWorktrees.map((wt) => {
-          const isCurrent = wt.id === terminal.worktreeId;
-          return (
-            <ContextMenuItem
-              key={wt.id}
-              disabled={isCurrent}
-              onSelect={() => handleAction(`move-to-worktree:${wt.id}`)}
-            >
-              <FolderGit2 className={ICON_CLASS} />
-              {getWorktreeHeadline(wt, customTitles[wt.id]).label}
-            </ContextMenuItem>
-          );
-        })}
-        {hasMoreWorktrees && (
-          <>
-            <ContextMenuSeparator />
-            <ContextMenuItem aria-haspopup="dialog" onSelect={handleMoveToWorktreeMore}>
-              <FolderGit2 className={ICON_CLASS} />
-              More worktrees…
-            </ContextMenuItem>
-          </>
-        )}
-      </ContextMenuSubContent>
-    </ContextMenuSub>
+    <MoveToWorktreeSubmenu
+      label={label}
+      worktrees={worktrees}
+      currentWorktreeId={terminal.worktreeId}
+      customTitles={customTitles}
+      onAction={handleAction}
+      onMoreWorktrees={movePicker.handleMoveToWorktreeMore}
+    />
   );
 
-  const layoutSection = (
-    <>
-      {canMoveToWorktree && renderMoveToWorktreeSubmenu("Move to worktree")}
-      {terminalPty?.launchAgentId && !isBackgrounded && (
-        <ContextMenuItem
-          onSelect={() =>
-            void actionService.dispatch(
-              "terminal.moveToNewWorktree",
-              { terminalId },
-              { source: sourceRef.current }
-            )
-          }
-        >
-          <FolderGit2 className={ICON_CLASS} />
-          Move to new worktree…
-        </ContextMenuItem>
-      )}
-      {isBackgrounded ? (
-        <ContextMenuItem onSelect={() => handleAction("restore-from-background")}>
-          <RotateCcw className={ICON_CLASS} aria-hidden="true" />
-          Restore from background
-        </ContextMenuItem>
-      ) : (
-        <ContextMenuItem
-          // Move-to-grid is always safe; move-to-dock only for kinds the dock
-          // renders (PTY + dockable non-PTY like file panels).
-          disabled={currentLocation === "grid" && !structuralCapabilities.isDockable}
-          onSelect={() =>
-            handleAction(currentLocation === "grid" ? "move-to-dock" : "move-to-grid")
-          }
-        >
-          {currentLocation === "grid" ? (
-            <PanelBottomClose className={ICON_CLASS} />
-          ) : (
-            <PanelTopClose className={ICON_CLASS} />
-          )}
-          {currentLocation === "grid" ? "Move to dock" : "Move to grid"}
-        </ContextMenuItem>
-      )}
-      {currentLocation === "grid" && isInActiveWorktree && (
-        <ContextMenuItem
-          onSelect={() => handleAction("toggle-maximize")}
-          keybinding="terminal.maximize"
-        >
-          {isMaximized ? (
-            <Minimize2 className={ICON_CLASS} aria-hidden="true" />
-          ) : (
-            <Maximize2 className={ICON_CLASS} aria-hidden="true" />
-          )}
-          {isMaximized ? "Restore" : "Maximize"}
-        </ContextMenuItem>
-      )}
-    </>
+  const layoutItems = (
+    <LayoutMenuItems
+      moveToWorktreeSubmenu={canMoveToWorktree && renderMoveToWorktreeSubmenu("Move to worktree")}
+      canMoveToNewWorktree={Boolean(terminalPty?.launchAgentId) && !isBackgrounded}
+      isBackgrounded={isBackgrounded}
+      currentLocation={currentLocation}
+      isDockable={structuralCapabilities.isDockable}
+      isInActiveWorktree={isInActiveWorktree}
+      isMaximized={isMaximized}
+      onMoveToNewWorktree={handleMoveToNewWorktree}
+      onAction={handleAction}
+    />
   );
 
-  const movePicker = hasOpenedMovePicker && (
-    // Beside the trigger in every branch, never wrapped around `children`: in
-    // the dock those are the dock's own popover trigger, which the nearest
-    // popover root would claim.
-    <AppPalettePopover
-      isOpen={isMovePickerOpen}
-      onOpenChange={handleMovePickerOpenChange}
-      // Modal like the header's: Tab cycles inside, and the outside press that
-      // dismisses it doesn't also land on what it hit.
-      modal={true}
-    >
-      <PopoverAnchor virtualRef={{ current: movePickerAnchor }} />
-      <MoveToWorktreePicker
-        panelId={terminalId}
-        currentWorktreeId={terminal.worktreeId}
-        isOpen={isMovePickerOpen}
-        onOpenChange={handleMovePickerOpenChange}
-        returnFocusRef={movePickerReturnFocusRef}
-        // Opens from the point the way the menu did.
-        align="start"
-      />
-    </AppPalettePopover>
+  // Every branch draws the same menu around its own items.
+  const renderMenu = (
+    items: React.ReactNode,
+    onContextMenu: (event: React.MouseEvent<HTMLElement>) => void
+  ) => (
+    <ContextMenu onOpenChange={handleMenuOpenChange}>
+      <MenuActionSourceContext.Consumer>
+        {(value) => {
+          sourceRef.current = value ?? "user";
+          return null;
+        }}
+      </MenuActionSourceContext.Consumer>
+      <PanelContextMenuTriggerScope
+        terminalId={terminalId}
+        proxy={proxy}
+        scope={triggerScope}
+        onContextMenu={onContextMenu}
+        onPointerDown={captureMovePickerAnchorOnPress}
+      >
+        {children}
+      </PanelContextMenuTriggerScope>
+      <ContextMenuContent onCloseAutoFocus={handleCloseAutoFocus}>
+        <MenuContentMountSignal isLive={isMenuLive} onLiveChange={setIsMenuLive} />
+        {items}
+      </ContextMenuContent>
+      {/* Beside the trigger in every branch, never wrapped around `children`:
+          in the dock those are the dock's own popover trigger, which the
+          nearest popover root would claim. */}
+      {movePicker.hasOpenedMovePicker && (
+        <MoveToWorktreeMenuPicker
+          panelId={terminalId}
+          currentWorktreeId={terminal.worktreeId}
+          isOpen={movePicker.isMovePickerOpen}
+          anchor={movePicker.movePickerAnchor}
+          onOpenChange={movePicker.handleMovePickerOpenChange}
+          returnFocusRef={movePickerReturnFocusRef}
+        />
+      )}
+    </ContextMenu>
   );
 
-  if (isBrowser) {
+  if (isBrowser || isDevPreview) {
     const hasUrl = Boolean(terminal.browserUrl && isValidBrowserUrl(terminal.browserUrl));
-    return (
-      <ContextMenu onOpenChange={handleMenuOpenChange}>
-        <MenuActionSourceContext.Consumer>
-          {(value) => {
-            sourceRef.current = value ?? "user";
-            return null;
-          }}
-        </MenuActionSourceContext.Consumer>
-        <PanelContextMenuTriggerScope
-          terminalId={terminalId}
-          proxy={proxy}
-          scope={triggerScope}
-          onContextMenu={handleTriggerContextMenu}
-          onPointerDown={captureMovePickerAnchorOnPress}
-        >
-          {children}
-        </PanelContextMenuTriggerScope>
-        <ContextMenuContent onCloseAutoFocus={handleCloseAutoFocus}>
-          <MenuContentMountSignal isLive={isMenuLive} onLiveChange={setIsMenuLive} />
-          {layoutSection}
-          <ContextMenuSeparator />
-          <ContextMenuItem onSelect={() => handleAction("reload-browser")}>
-            <RotateCw className={ICON_CLASS} aria-hidden="true" />
-            Reload page
-          </ContextMenuItem>
-          <ContextMenuItem disabled={!hasUrl} onSelect={() => handleAction("open-external")}>
-            <Globe className={ICON_CLASS} aria-hidden="true" />
-            Open in external browser
-          </ContextMenuItem>
-          <ContextMenuItem disabled={!hasUrl} onSelect={() => handleAction("copy-url")}>
-            <Copy className={ICON_CLASS} aria-hidden="true" />
-            Copy URL
-          </ContextMenuItem>
-          <ContextMenuSeparator />
-          <ContextMenuItem onSelect={() => handleAction("duplicate")}>
-            <CopyPlus className={ICON_CLASS} aria-hidden="true" />
-            Duplicate browser
-          </ContextMenuItem>
-          <ContextMenuItem onSelect={() => handleAction("rename")}>
-            <Pencil className={ICON_CLASS} aria-hidden="true" />
-            Rename browser
-          </ContextMenuItem>
-          {tourMenuItem}
-          {pluginOwnedMenuItems}
-          <ContextMenuSeparator />
-          {!isBackgrounded && (
-            <ContextMenuItem onSelect={() => handleAction("background")}>
-              <ArrowDownFromLine className={ICON_CLASS} aria-hidden="true" />
-              Send to background
-            </ContextMenuItem>
-          )}
-          <ContextMenuItem onSelect={() => handleAction("trash")}>
-            <Trash2 className={ICON_CLASS} aria-hidden="true" />
-            Trash browser
-          </ContextMenuItem>
-          <ContextMenuItem destructive onSelect={() => handleAction("kill")}>
-            <OctagonX className={ICON_CLASS} aria-hidden="true" />
-            Remove browser
-          </ContextMenuItem>
-        </ContextMenuContent>
-        {movePicker}
-      </ContextMenu>
-    );
-  }
-
-  if (isDevPreview) {
-    const hasUrl = Boolean(terminal.browserUrl && isValidBrowserUrl(terminal.browserUrl));
-    return (
-      <ContextMenu onOpenChange={handleMenuOpenChange}>
-        <MenuActionSourceContext.Consumer>
-          {(value) => {
-            sourceRef.current = value ?? "user";
-            return null;
-          }}
-        </MenuActionSourceContext.Consumer>
-        <PanelContextMenuTriggerScope
-          terminalId={terminalId}
-          proxy={proxy}
-          scope={triggerScope}
-          onContextMenu={handleTriggerContextMenu}
-          onPointerDown={captureMovePickerAnchorOnPress}
-        >
-          {children}
-        </PanelContextMenuTriggerScope>
-        <ContextMenuContent onCloseAutoFocus={handleCloseAutoFocus}>
-          <MenuContentMountSignal isLive={isMenuLive} onLiveChange={setIsMenuLive} />
-          {layoutSection}
-          <ContextMenuSeparator />
-          <ContextMenuItem onSelect={() => handleAction("reload-browser")}>
-            <RotateCw className={ICON_CLASS} aria-hidden="true" />
-            Reload preview
-          </ContextMenuItem>
-          <ContextMenuItem disabled={!hasUrl} onSelect={() => handleAction("open-external")}>
-            <Globe className={ICON_CLASS} aria-hidden="true" />
-            Open in external browser
-          </ContextMenuItem>
-          <ContextMenuItem disabled={!hasUrl} onSelect={() => handleAction("copy-url")}>
-            <Copy className={ICON_CLASS} aria-hidden="true" />
-            Copy URL
-          </ContextMenuItem>
-          <ContextMenuSeparator />
-          <ContextMenuItem onSelect={() => handleAction("duplicate")}>
-            <CopyPlus className={ICON_CLASS} aria-hidden="true" />
-            Duplicate dev preview
-          </ContextMenuItem>
-          <ContextMenuItem onSelect={() => handleAction("rename")}>
-            <Pencil className={ICON_CLASS} aria-hidden="true" />
-            Rename dev preview
-          </ContextMenuItem>
-          {tourMenuItem}
-          {pluginOwnedMenuItems}
-          <ContextMenuSeparator />
-          {!isBackgrounded && (
-            <ContextMenuItem onSelect={() => handleAction("background")}>
-              <ArrowDownFromLine className={ICON_CLASS} aria-hidden="true" />
-              Send to background
-            </ContextMenuItem>
-          )}
-          <ContextMenuItem onSelect={() => handleAction("trash")}>
-            <Trash2 className={ICON_CLASS} aria-hidden="true" />
-            Trash dev preview
-          </ContextMenuItem>
-          <ContextMenuItem destructive onSelect={() => handleAction("kill")}>
-            <CircleStop className={ICON_CLASS} aria-hidden="true" />
-            Stop dev server
-          </ContextMenuItem>
-        </ContextMenuContent>
-        {movePicker}
-      </ContextMenu>
+    const KindItems = isBrowser ? BrowserMenuItems : DevPreviewMenuItems;
+    return renderMenu(
+      <KindItems
+        layoutItems={layoutItems}
+        kindOwnedItems={kindOwnedItems}
+        isBackgrounded={isBackgrounded}
+        hasUrl={hasUrl}
+        onAction={handleAction}
+      />,
+      handleTriggerContextMenu
     );
   }
 
   if (isReview) {
-    return (
-      <ContextMenu onOpenChange={handleMenuOpenChange}>
-        <MenuActionSourceContext.Consumer>
-          {(value) => {
-            sourceRef.current = value ?? "user";
-            return null;
-          }}
-        </MenuActionSourceContext.Consumer>
-        <PanelContextMenuTriggerScope
-          terminalId={terminalId}
-          proxy={proxy}
-          scope={triggerScope}
-          onContextMenu={handleTriggerContextMenu}
-          onPointerDown={captureMovePickerAnchorOnPress}
-        >
-          {children}
-        </PanelContextMenuTriggerScope>
-        <ContextMenuContent onCloseAutoFocus={handleCloseAutoFocus}>
-          <MenuContentMountSignal isLive={isMenuLive} onLiveChange={setIsMenuLive} />
-          {layoutSection}
-          <ContextMenuSeparator />
-          <ContextMenuItem onSelect={() => handleAction("duplicate")}>
-            <CopyPlus className={ICON_CLASS} aria-hidden="true" />
-            Duplicate review
-          </ContextMenuItem>
-          <ContextMenuItem onSelect={() => handleAction("rename")}>
-            <Pencil className={ICON_CLASS} aria-hidden="true" />
-            Rename review
-          </ContextMenuItem>
-          {tourMenuItem}
-          {pluginOwnedMenuItems}
-          <ContextMenuSeparator />
-          {!isBackgrounded && (
-            <ContextMenuItem onSelect={() => handleAction("background")}>
-              <ArrowDownFromLine className={ICON_CLASS} aria-hidden="true" />
-              Send to background
-            </ContextMenuItem>
-          )}
-          <ContextMenuItem onSelect={() => handleAction("trash")}>
-            <Trash2 className={ICON_CLASS} aria-hidden="true" />
-            Trash review
-          </ContextMenuItem>
-          <ContextMenuItem destructive onSelect={() => handleAction("kill")}>
-            <OctagonX className={ICON_CLASS} aria-hidden="true" />
-            Remove review
-          </ContextMenuItem>
-        </ContextMenuContent>
-        {movePicker}
-      </ContextMenu>
+    return renderMenu(
+      <ReviewMenuItems
+        layoutItems={layoutItems}
+        kindOwnedItems={kindOwnedItems}
+        isBackgrounded={isBackgrounded}
+        onAction={handleAction}
+      />,
+      handleTriggerContextMenu
     );
   }
 
@@ -1622,83 +774,25 @@ function TerminalContextMenuBody({
   // whose menu is the generic panel one. Without an early return here the PTY
   // menu below would narrow against DiffPanelData and lose `isInputLocked`.
   if (isFile || isFileBrowser || isDiff || hasGenericMenu) {
-    return (
-      <ContextMenu onOpenChange={handleMenuOpenChange}>
-        <MenuActionSourceContext.Consumer>
-          {(value) => {
-            sourceRef.current = value ?? "user";
-            return null;
-          }}
-        </MenuActionSourceContext.Consumer>
-        <PanelContextMenuTriggerScope
-          terminalId={terminalId}
-          proxy={proxy}
-          scope={triggerScope}
-          onContextMenu={handleTriggerContextMenu}
-          onPointerDown={captureMovePickerAnchorOnPress}
-        >
-          {children}
-        </PanelContextMenuTriggerScope>
-        <ContextMenuContent onCloseAutoFocus={handleCloseAutoFocus}>
-          <MenuContentMountSignal isLive={isMenuLive} onLiveChange={setIsMenuLive} />
-          {/* The header's overflow menu renders this same list (#12606). */}
-          {getGenericPanelMenuGroups({
-            location: currentLocation === "grid" ? "grid" : "dock",
-            isMaximized,
-            isDockable: structuralCapabilities.isDockable,
-            canMoveToWorktree,
-            canReload: canReloadPanelKind(kind),
-            tourLabel: kindCapabilities.tour?.label,
-            hasPluginSettings: kindCapabilities.pluginSettingsId !== null,
-            hasPluginDatabases: kindCapabilities.pluginBackupId !== null,
-            pluginMenuItems,
-          }).map((group, groupIndex) => (
-            <Fragment key={group[0]?.id ?? groupIndex}>
-              {groupIndex > 0 && <ContextMenuSeparator />}
-              {group.map((command) =>
-                command.id === "move-to-worktree" ? (
-                  <Fragment key={command.id}>{renderMoveToWorktreeSubmenu(command.label)}</Fragment>
-                ) : (
-                  <ContextMenuItem
-                    key={command.id}
-                    disabled={command.disabled}
-                    destructive={command.destructive}
-                    onSelect={() => handleAction(command.id)}
-                    keybinding={command.shortcutActionId}
-                  >
-                    <command.icon className={ICON_CLASS} aria-hidden="true" />
-                    {command.label}
-                  </ContextMenuItem>
-                )
-              )}
-            </Fragment>
-          ))}
-        </ContextMenuContent>
-        {movePicker}
-      </ContextMenu>
+    return renderMenu(
+      <GenericPanelMenuItems
+        menuInput={{
+          location: currentLocation === "grid" ? "grid" : "dock",
+          isMaximized,
+          isDockable: structuralCapabilities.isDockable,
+          canMoveToWorktree,
+          canReload: canReloadPanelKind(kind),
+          tourLabel: kindCapabilities.tour?.label,
+          hasPluginSettings: kindCapabilities.pluginSettingsId !== null,
+          hasPluginDatabases: kindCapabilities.pluginBackupId !== null,
+          pluginMenuItems,
+        }}
+        renderMoveToWorktreeSubmenu={renderMoveToWorktreeSubmenu}
+        onAction={handleAction}
+      />,
+      handleTriggerContextMenu
     );
   }
-
-  // One label whatever the state: the dialog's own title says whether it is a
-  // new park or an edit. Unpark sits beside it only once there is a park to
-  // lift — the discoverable inverse that lets parking skip a confirm.
-  const parkItems =
-    canPark || isParked ? (
-      <>
-        {canPark && (
-          <ContextMenuItem onSelect={handleRequestPark}>
-            <CirclePause className={ICON_CLASS} aria-hidden="true" />
-            Park…
-          </ContextMenuItem>
-        )}
-        {isParked && (
-          <ContextMenuItem onSelect={handleUnpark}>
-            <Bell className={ICON_CLASS} aria-hidden="true" />
-            Unpark
-          </ContextMenuItem>
-        )}
-      </>
-    ) : null;
 
   return (
     <>
@@ -1727,364 +821,60 @@ function TerminalContextMenuBody({
           />
         </Suspense>
       )}
-      <ContextMenu onOpenChange={handleMenuOpenChange}>
-        <MenuActionSourceContext.Consumer>
-          {(value) => {
-            sourceRef.current = value ?? "user";
-            return null;
-          }}
-        </MenuActionSourceContext.Consumer>
-        <PanelContextMenuTriggerScope
-          terminalId={terminalId}
-          proxy={proxy}
-          scope={triggerScope}
-          onContextMenu={handleContextMenu}
-          onPointerDown={captureMovePickerAnchorOnPress}
-        >
-          {children}
-        </PanelContextMenuTriggerScope>
-        <ContextMenuContent onCloseAutoFocus={handleCloseAutoFocus}>
-          <MenuContentMountSignal isLive={isMenuLive} onLiveChange={setIsMenuLive} />
+      {renderMenu(
+        <>
           {hasPty && (
-            <>
-              <ContextMenuItem
-                disabled={!hasSelection}
-                onSelect={() => handleAction("copy")}
-                aria-keyshortcuts={comboToAriaKeyshortcuts(clipboardCombos.copy, mac)}
-              >
-                <Copy className={ICON_CLASS} aria-hidden="true" />
-                Copy
-                <ContextMenuShortcut shortcut={clipboardCombos.copy} />
-              </ContextMenuItem>
-              <ContextMenuItem
-                onSelect={() => handleAction("paste")}
-                aria-keyshortcuts={comboToAriaKeyshortcuts(clipboardCombos.paste, mac)}
-              >
-                <Clipboard className={ICON_CLASS} aria-hidden="true" />
-                Paste
-                <ContextMenuShortcut shortcut={clipboardCombos.paste} />
-              </ContextMenuItem>
-              <ContextMenuItem
-                disabled={!hasSelection}
-                onSelect={() =>
-                  void actionService.dispatch(
-                    "terminal.sendToAgent",
-                    { terminalId },
-                    { source: sourceRef.current }
-                  )
-                }
-                keybinding="terminal.sendToAgent"
-              >
-                <Send className={ICON_CLASS} aria-hidden="true" />
-                Send to agent
-              </ContextMenuItem>
-              {hoveredUrl && (
-                <>
-                  <ContextMenuSeparator />
-                  {hoveredUrlPluginName ? (
-                    <>
-                      <ContextMenuItem
-                        onSelect={() => handleAction(`open-link-claimed:${hoveredUrl}`)}
-                      >
-                        <Puzzle className={ICON_CLASS} aria-hidden="true" />
-                        Open with {hoveredUrlPluginName}
-                      </ContextMenuItem>
-                      {/* A claimed URL still reaches the browser from here. */}
-                      <ContextMenuItem
-                        onSelect={() => handleAction(`open-link-external:${hoveredUrl}`)}
-                      >
-                        <Globe className={ICON_CLASS} aria-hidden="true" />
-                        Open in external browser
-                      </ContextMenuItem>
-                    </>
-                  ) : (
-                    <ContextMenuItem onSelect={() => handleAction("open-link")}>
-                      <ExternalLink className={ICON_CLASS} aria-hidden="true" />
-                      Open link
-                    </ContextMenuItem>
-                  )}
-                  <ContextMenuItem onSelect={() => handleAction(`copy-link:${hoveredUrl}`)}>
-                    <Copy className={ICON_CLASS} aria-hidden="true" />
-                    Copy link address
-                  </ContextMenuItem>
-                </>
-              )}
-              {hoveredFilePath && (
-                <>
-                  <ContextMenuSeparator />
-                  {hoveredFileScope && (
-                    <ContextMenuItem
-                      onSelect={() => {
-                        void actionService
-                          .dispatch(
-                            "worktree.openFileBrowser",
-                            {
-                              worktreeId: hoveredFileScope.worktreeId,
-                              revealPath: hoveredFileScope.relativePath || undefined,
-                              // Carried through rather than assumed: a
-                              // directory is expanded as well as selected, so
-                              // guessing "file" would leave a right-clicked
-                              // folder collapsed while left-clicking the same
-                              // link opens it.
-                              revealKind: hoveredFileKind ?? "file",
-                            },
-                            { source: sourceRef.current }
-                          )
-                          .then((result) => {
-                            if (!result.ok) {
-                              reportFileLinkFailure(
-                                "Failed to open file browser",
-                                result.error.details,
-                                hoveredFilePath,
-                                hoveredFileKind === "directory" ? "folder" : "file"
-                              );
-                            }
-                          });
-                      }}
-                    >
-                      <FolderTree className={ICON_CLASS} aria-hidden="true" />
-                      Open in file browser
-                    </ContextMenuItem>
-                  )}
-                  {/* Right-clicking a selected path usually hovers the same path,
-                      so its View file joins this group and one reveal serves both. */}
-                  {selectionFilePath === hoveredFilePath && (
-                    <SelectedFileMenuItems absolutePath={selectionFilePath} reveal={false} />
-                  )}
-                  <ContextMenuItem
-                    onSelect={() => handleAction(`reveal-in-finder:${hoveredFilePath}`)}
-                  >
-                    <FolderOpen className={ICON_CLASS} aria-hidden="true" />
-                    {revealCopy().label}
-                  </ContextMenuItem>
-                </>
-              )}
-              {selectionFilePath && selectionFilePath !== hoveredFilePath && (
-                <>
-                  <ContextMenuSeparator />
-                  <SelectedFileMenuItems absolutePath={selectionFilePath} />
-                </>
-              )}
-              <ContextMenuSeparator />
-            </>
-          )}
-          {/* Parking follows the snapshot, not broadcast eligibility: a docked
-              or exited agent can still be parked, and a parked one must
-              always offer its inverse. */}
-          {!fleetEligible && parkItems !== null && (
-            <>
-              {parkItems}
-              <ContextMenuSeparator />
-            </>
-          )}
-          {fleetEligible && (
-            <>
-              <ContextMenuItem onSelect={() => handleAction("fleet-toggle")}>
-                {isArmed ? (
-                  <Radio className={ICON_CLASS} aria-hidden="true" />
-                ) : (
-                  <RadioTower className={ICON_CLASS} aria-hidden="true" />
-                )}
-                {isArmed ? "Remove from fleet" : "Add to fleet"}
-              </ContextMenuItem>
-              <ContextMenuItem onSelect={() => handleAction("fleet-arm-worktree")}>
-                <RadioTower className={ICON_CLASS} aria-hidden="true" />
-                Arm all in this worktree
-              </ContextMenuItem>
-              {isArmed && fleetSize >= 2 && (
-                <ContextMenuItem onSelect={() => handleAction("fleet-clear")}>
-                  <Radio className={ICON_CLASS} aria-hidden="true" />
-                  Clear fleet
-                </ContextMenuItem>
-              )}
-              {isKnownRun && (
-                <ContextMenuSub>
-                  <ContextMenuSubTrigger>
-                    <Clock className={ICON_CLASS} aria-hidden="true" />
-                    Snooze
-                  </ContextMenuSubTrigger>
-                  <ContextMenuSubContent>
-                    {AGENT_SNOOZE_DURATION_OPTIONS.map((option) => (
-                      <ContextMenuItem key={option} onSelect={() => handleSnooze(option)}>
-                        <Clock className={ICON_CLASS} aria-hidden="true" />
-                        {AGENT_SNOOZE_LABEL[option]}
-                      </ContextMenuItem>
-                    ))}
-                    {/* Only once there is something to lift. An always-present
-                        "Wake now" would be a no-op the user has to read past on
-                        every run that was never snoozed. */}
-                    {isSnoozed && (
-                      <>
-                        <ContextMenuSeparator />
-                        <ContextMenuItem onSelect={handleUnsnooze}>
-                          <Bell className={ICON_CLASS} aria-hidden="true" />
-                          Wake now
-                        </ContextMenuItem>
-                      </>
-                    )}
-                  </ContextMenuSubContent>
-                </ContextMenuSub>
-              )}
-              {parkItems}
-              {handBackState !== "none" && (
-                <ContextMenuItem onSelect={handleToggleHandBackRead}>
-                  {handBackState === "unseen" ? (
-                    <MailOpen className={ICON_CLASS} aria-hidden="true" />
-                  ) : (
-                    <Mail className={ICON_CLASS} aria-hidden="true" />
-                  )}
-                  {handBackState === "unseen" ? "Mark as read" : "Mark as unread"}
-                </ContextMenuItem>
-              )}
-              <ContextMenuSeparator />
-            </>
-          )}
-          {layoutSection}
-          <ContextMenuSeparator />
-          {hasPty && (
-            <ContextMenuItem disabled={isHibernated} onSelect={() => handleAction("redraw")}>
-              <RefreshCw className={ICON_CLASS} aria-hidden="true" />
-              Redraw terminal
-            </ContextMenuItem>
-          )}
-          {hasPty && (
-            <ContextMenuItem onSelect={() => handleAction("restart")}>
-              <RotateCw className={ICON_CLASS} aria-hidden="true" />
-              Restart terminal
-            </ContextMenuItem>
-          )}
-          {terminalPty?.launchAgentId && !terminalPty.restoreRecovery && (
-            <RestartOnPresetSubmenu
-              agentId={terminalPty.launchAgentId}
-              currentPresetId={terminalPty.agentPresetId}
-              onPick={(preset) =>
-                setRestartOnPresetRequest({
-                  terminalId,
-                  terminalTitle: terminalPty.title,
-                  agentWorking: terminalHasRunningAgentSession(terminalPty),
-                  preset,
-                })
-              }
+            <TerminalSelectionMenuItems
+              hasSelection={hasSelection}
+              hoveredUrl={hoveredUrl}
+              hoveredUrlPluginName={hoveredUrlPluginName}
+              hoveredFilePath={hoveredFilePath}
+              hoveredFileKind={hoveredFileKind}
+              hoveredFileScope={hoveredFileScope}
+              selectionFilePath={selectionFilePath}
+              onSendToAgent={handleSendToAgent}
+              onOpenInFileBrowser={handleOpenInFileBrowser}
+              onAction={handleAction}
             />
           )}
-          {isPaused && (
-            <ContextMenuItem onSelect={() => handleAction("force-resume")}>
-              <Play className={ICON_CLASS} aria-hidden="true" />
-              Force resume (paused)
-            </ContextMenuItem>
-          )}
-          <ContextMenuItem onSelect={() => handleAction("toggle-input-lock")}>
-            {terminal.isInputLocked ? (
-              <Unlock className={ICON_CLASS} aria-hidden="true" />
-            ) : (
-              <Lock className={ICON_CLASS} aria-hidden="true" />
-            )}
-            {terminal.isInputLocked ? "Unlock input" : "Lock input"}
-          </ContextMenuItem>
-          {hasPty && (
-            <ContextMenuItem
-              onSelect={() =>
-                handleAction(isVoiceLockedHere ? "voice-unlock-target" : "voice-lock-target")
-              }
-            >
-              {isVoiceLockedHere ? (
-                <MicOff className={ICON_CLASS} aria-hidden="true" />
-              ) : (
-                <Mic className={ICON_CLASS} aria-hidden="true" />
-              )}
-              {isVoiceLockedHere ? "Unlock dictation" : "Lock dictation to this panel"}
-            </ContextMenuItem>
-          )}
-          {hasPty && liveRecentVoiceTargets.length > 0 && (
-            <ContextMenuSub>
-              <ContextMenuSubTrigger>
-                <Mic className={ICON_CLASS} aria-hidden="true" />
-                Recent dictation targets
-              </ContextMenuSubTrigger>
-              <ContextMenuSubContent>
-                {liveRecentVoiceTargets.map((target) => (
-                  <ContextMenuItem
-                    key={target.panelId}
-                    onSelect={() => handleAction(`recall-voice-target:${target.panelId}`)}
-                  >
-                    <Mic className={ICON_CLASS} aria-hidden="true" />
-                    {target.label}
-                  </ContextMenuItem>
-                ))}
-              </ContextMenuSubContent>
-            </ContextMenuSub>
-          )}
-          {terminal.detectedAgentId && (
-            <ContextMenuItem
-              onSelect={() => handleAction("toggle-watch")}
-              keybinding="terminal.watch"
-            >
-              {isWatched ? (
-                <BellOff className={ICON_CLASS} aria-hidden="true" />
-              ) : (
-                <Bell className={ICON_CLASS} aria-hidden="true" />
-              )}
-              {isWatched ? "Cancel watch" : "Watch terminal"}
-            </ContextMenuItem>
-          )}
-          {hasPty && (
-            <TerminalHandOverMenuItems
-              terminalId={terminalId}
-              candidateIds={orchestratorCandidateIds}
-              onRequestHandOver={handleRequestHandOver}
-            />
-          )}
+          <TerminalFleetMenuItems
+            fleetEligible={fleetEligible}
+            isArmed={isArmed}
+            fleetSize={fleetSize}
+            fleetRun={fleetRun}
+            onRequestPark={handleRequestPark}
+            onAction={handleAction}
+          />
+          {layoutItems}
           <ContextMenuSeparator />
-          {/* A PTY-backed plugin kind has no duplicate recipe. */}
-          {canDuplicatePanelKind(kind) && (
-            <ContextMenuItem onSelect={() => handleAction("duplicate")}>
-              <CopyPlus className={ICON_CLASS} aria-hidden="true" />
-              Duplicate terminal
-            </ContextMenuItem>
-          )}
-          <ContextMenuItem onSelect={() => handleAction("rename")}>
-            <Pencil className={ICON_CLASS} aria-hidden="true" />
-            Rename terminal
-          </ContextMenuItem>
-          <ContextMenuItem onSelect={() => handleAction("view-info")}>
-            <Info className={ICON_CLASS} aria-hidden="true" />
-            View terminal info
-          </ContextMenuItem>
-          {/* A PTY-backed plugin kind's own entries, above its tour and
-              settings as on the generic list (#13213). */}
-          {pluginMenuItems.map((item) => (
-            <ContextMenuItem
-              key={item.actionId}
-              onSelect={() => handleAction(pluginMenuCommandId(item.actionId))}
-            >
-              <Puzzle className={ICON_CLASS} aria-hidden="true" />
-              {item.label}
-            </ContextMenuItem>
-          ))}
-          {tourMenuItem}
-          {pluginOwnedMenuItems}
-          {!isBackgrounded && (
-            <>
-              <ContextMenuSeparator />
-              <ContextMenuItem onSelect={() => handleAction("background")}>
-                <ArrowDownFromLine className={ICON_CLASS} aria-hidden="true" />
-                Send to background
-              </ContextMenuItem>
-            </>
-          )}
+          <TerminalSessionMenuItems
+            terminalId={terminalId}
+            terminalPty={terminalPty}
+            hasPty={hasPty}
+            isHibernated={isHibernated}
+            isPaused={isPaused}
+            isInputLocked={terminal.isInputLocked}
+            isVoiceLockedHere={isVoiceLockedHere}
+            liveRecentVoiceTargets={liveRecentVoiceTargets}
+            detectedAgentId={terminal.detectedAgentId}
+            isWatched={isWatched}
+            orchestratorCandidateIds={orchestratorCandidateIds}
+            onRequestHandOver={handleRequestHandOver}
+            onRequestRestartOnPreset={setRestartOnPresetRequest}
+            onAction={handleAction}
+          />
           <ContextMenuSeparator />
-          <ContextMenuItem onSelect={() => handleAction("trash")}>
-            <Trash2 className={ICON_CLASS} aria-hidden="true" />
-            Trash terminal
-          </ContextMenuItem>
-          <ContextMenuItem destructive onSelect={() => handleAction("kill")}>
-            <OctagonX className={ICON_CLASS} aria-hidden="true" />
-            Kill terminal
-          </ContextMenuItem>
+          <TerminalIdentityMenuItems
+            canDuplicate={canDuplicatePanelKind(kind)}
+            pluginMenuItems={pluginMenuItems}
+            kindOwnedItems={kindOwnedItems}
+            isBackgrounded={isBackgrounded}
+            onAction={handleAction}
+          />
           <PluginContextMenuSection items={pluginItems} dispatchArgs={pluginDispatchArgs} />
-        </ContextMenuContent>
-        {movePicker}
-      </ContextMenu>
+        </>,
+        handleContextMenu
+      )}
     </>
   );
 }
