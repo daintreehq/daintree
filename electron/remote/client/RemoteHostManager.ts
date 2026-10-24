@@ -434,7 +434,11 @@ export class HostConnection {
       case "disconnected":
         return { status: "disconnected" };
       case "connecting":
-        return { status: "connecting", attempt: state.attempt };
+        return {
+          status: "connecting",
+          attempt: state.attempt,
+          ...(state.restarting ? { restarting: true as const } : {}),
+        };
       case "connected":
         return {
           status: "connected",
@@ -450,6 +454,7 @@ export class HostConnection {
           lastSeenAt: state.lastSeenAt ?? this.descriptor()?.lastSeenAt ?? null,
           detail: state.detail,
           ...(state.hostModeOff && state.retryAt === null ? { hostModeOff: true as const } : {}),
+          ...(state.restarting ? { restarting: true as const } : {}),
           ...(state.retryAt === null ? { stoppedRetrying: true as const } : {}),
         };
       case "version-mismatch":
