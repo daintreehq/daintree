@@ -480,7 +480,7 @@ export const STATUS_SUCCESS_INVENTORY = {
         "StateGlyph's success state: the severity success glyph for a named passed result, the same pairing SeverityIcon draws",
     },
   ],
-  "src/components/PluginKit/PluginKitGit.tsx": [
+  "src/components/PluginKit/PluginKitGitWorktree.tsx": [
     {
       category: "domain",
       signature: "text-status-success",
@@ -489,6 +489,8 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale:
         "WorktreeBadge's ahead-arrow count against the upstream, as UpstreamSyncBadge draws it",
     },
+  ],
+  "src/components/PluginKit/PluginKitGitForge.tsx": [
     {
       category: "outcome",
       signature: "text-status-success",
