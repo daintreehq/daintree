@@ -5,6 +5,10 @@
  * kill primitives.
  */
 
+import type { WatchdogKillReason } from "../shared/types/ipc/crashRecovery.js";
+
+export type { WatchdogKillReason };
+
 export const HEARTBEAT_INTERVAL_MS = 5000;
 
 // 3 misses × 5s = ~15s of unresponsiveness before kill. Conservative floor:
@@ -21,6 +25,15 @@ export const MAX_MISSED = 3;
 // watchdog stretches the deadline instead of firing it on the first tick the
 // watchdog gets, before it has read the pings queued behind its own stall.
 export const MAX_MISSED_UNDER_PRESSURE = 24;
+
+// 120 beats × 5s = ~10 min without any sign of main (#14367), once main's last
+// ping said the machine is under confirmed pressure that Daintree's own
+// processes don't account for. Agent tool trees can push a host deep into swap
+// that no reclaim of ours can relieve, and a main paging through that can stay
+// silent well past two minutes. Any change to a file only main writes counts
+// as a sign of it and restarts the count, so a main that keeps writing is
+// never killed, while one that goes completely silent still is.
+export const MAX_NO_PROGRESS_UNDER_EXTERNAL_PRESSURE = 120;
 
 // A tick this long after the previous one means the watchdog itself could not
 // run for a full interval: the machine stalled, not just main.
@@ -39,7 +52,7 @@ export interface WatchdogDeps {
   /** Send SIGKILL (or equivalent) to the main process. The watchdog never
    * calls this directly — it's injected so tests can observe and so the
    * runtime can layer in a PID-validity check before firing. */
-  killMain: () => void;
+  killMain: (decision: WatchdogKillDecision) => void;
   /** Optional log sink. Defaults to console.error in the runtime entry. */
   logError?: (msg: string) => void;
   /** Monotonic clock seam. Defaults to `performance.now`. Used to detect
@@ -56,6 +69,27 @@ export interface WatchdogDeps {
    * exists: on macOS the free count leaves out cached pages and reads low on
    * a healthy machine. Must not spawn — it runs on the kill decision path. */
   readAvailableMemoryRatio?: () => number | null;
+  /** Watches files only main writes, read once per beat while a silence runs
+   * under external pressure. Must not spawn and must never throw. */
+  mainProgress?: MainProgressObserver;
+}
+
+export interface MainProgressObserver {
+  /** True when a watched file changed since the previous call. The first call
+   * after a reset only takes a baseline. */
+  observe(): boolean;
+  /** Drop the baseline, so a write made while main was answering pings is not
+   * read as progress in the next silence. */
+  reset(): void;
+}
+
+export interface WatchdogKillDecision {
+  reason: WatchdogKillReason;
+  missedBeats: number;
+  /** Beats since main last pinged or wrote one of its files. */
+  beatsSinceProgress: number;
+  /** Why the kill was deferred, or null when it wasn't. */
+  pressureEvidence: string | null;
 }
 
 export interface WatchdogMessage {
@@ -66,6 +100,9 @@ export interface WatchdogMessage {
    * machine is given the benefit of the doubt. Absent or malformed reads as
    * clear. */
   memoryPressure?: boolean | null;
+  /** On a ping, true when main confirmed memory pressure that Daintree's own
+   * processes don't account for (#14367). Anything else reads as false. */
+  externalPressure?: boolean;
 }
 
 export interface WatchdogState {
@@ -91,6 +128,12 @@ export interface WatchdogState {
    * kill waits for MAX_MISSED_UNDER_PRESSURE. Latched until main is heard
    * from again, so evidence ageing out mid-stall can't pull the deadline in. */
   killDeferred: boolean;
+  /** The last ping's `externalPressure`. Like `mainPressure`, it stands
+   * through the silence that follows. */
+  mainExternalPressure: boolean;
+  /** Beats since main last pinged or, under external pressure, changed one of
+   * the files only it writes. */
+  beatsSinceProgress: number;
 }
 
 export interface Watchdog {
@@ -118,6 +161,8 @@ export function createWatchdog(deps: WatchdogDeps): Watchdog {
     lastLateTickAt: null,
     lastLatePingAt: null,
     killDeferred: false,
+    mainExternalPressure: false,
+    beatsSinceProgress: 0,
   };
   // The runtime starts its interval as it creates the watchdog. Updated on
   // every tick, armed or not, so the first tick after a pause isn't read as
@@ -127,6 +172,24 @@ export function createWatchdog(deps: WatchdogDeps): Watchdog {
   // Null whenever the gap to the next ping would span a disarmed or suspended
   // stretch, which says nothing about how main is keeping up.
   let lastPingAt: number | null = null;
+  let deferralEvidence: string | null = null;
+
+  function resetProgress(): void {
+    state.beatsSinceProgress = 0;
+    try {
+      deps.mainProgress?.reset();
+    } catch {
+      // A broken observer only costs the progress signal.
+    }
+  }
+
+  function observeProgress(): boolean {
+    try {
+      return deps.mainProgress?.observe() === true;
+    } catch {
+      return false;
+    }
+  }
 
   function lowAvailableMemory(): string | null {
     if (!deps.readAvailableMemoryRatio) return null;
@@ -142,6 +205,9 @@ export function createWatchdog(deps: WatchdogDeps): Watchdog {
   }
 
   function pressureEvidence(t: number): string | null {
+    if (state.mainExternalPressure) {
+      return "main reported memory pressure that Daintree's own processes don't account for";
+    }
     if (state.mainPressure === true) return "main reported memory pressure";
     if (state.mainPressure === null) return "main had no memory-pressure reading";
     if (state.lastLateTickAt !== null && t - state.lastLateTickAt <= STALL_EVIDENCE_MS) {
@@ -173,18 +239,29 @@ export function createWatchdog(deps: WatchdogDeps): Watchdog {
     if (late) state.lastLateTickAt = t;
 
     state.missedBeats += 1;
+    state.beatsSinceProgress += 1;
+    if (state.mainExternalPressure && observeProgress()) state.beatsSinceProgress = 0;
     if (state.missedBeats < MAX_MISSED) return;
 
     if (!state.killDeferred) {
       const evidence = pressureEvidence(t);
       if (evidence !== null) {
         state.killDeferred = true;
+        deferralEvidence = evidence;
         log(
-          `[WatchdogHost] Main process unresponsive for ${state.missedBeats} missed beats, but ${evidence}. Deferring kill until ${MAX_MISSED_UNDER_PRESSURE} missed beats.`
+          state.mainExternalPressure
+            ? `[WatchdogHost] Main process unresponsive for ${state.missedBeats} missed beats, but ${evidence}. Deferring kill until ${MAX_NO_PROGRESS_UNDER_EXTERNAL_PRESSURE} beats pass with no sign of main.`
+            : `[WatchdogHost] Main process unresponsive for ${state.missedBeats} missed beats, but ${evidence}. Deferring kill until ${MAX_MISSED_UNDER_PRESSURE} missed beats.`
         );
       }
     }
-    if (state.killDeferred && state.missedBeats < MAX_MISSED_UNDER_PRESSURE) return;
+    if (state.killDeferred) {
+      if (state.mainExternalPressure) {
+        if (state.beatsSinceProgress < MAX_NO_PROGRESS_UNDER_EXTERNAL_PRESSURE) return;
+      } else if (state.missedBeats < MAX_MISSED_UNDER_PRESSURE) {
+        return;
+      }
+    }
     // A late tick can run before the pings queued behind the watchdog's own
     // stall have been read, so it never fires the kill itself: the next tick
     // does if main is still silent. One beat of slack, never more.
@@ -193,11 +270,21 @@ export function createWatchdog(deps: WatchdogDeps): Watchdog {
       return;
     }
 
+    const decision: WatchdogKillDecision = {
+      reason: !state.killDeferred
+        ? "unresponsive"
+        : state.mainExternalPressure
+          ? "no-progress-under-external-pressure"
+          : "unresponsive-under-pressure",
+      missedBeats: state.missedBeats,
+      beatsSinceProgress: state.beatsSinceProgress,
+      pressureEvidence: state.killDeferred ? deferralEvidence : null,
+    };
     log(
-      `[WatchdogHost] Main process unresponsive for at least ${state.missedBeats * HEARTBEAT_INTERVAL_MS}ms (${state.missedBeats} missed beats). Firing kill.`
+      `[WatchdogHost] Main process unresponsive for at least ${state.missedBeats * HEARTBEAT_INTERVAL_MS}ms (${state.missedBeats} missed beats, ${state.beatsSinceProgress} with no sign of main). Firing kill (${decision.reason}).`
     );
     try {
-      deps.killMain();
+      deps.killMain(decision);
     } catch (err) {
       log(`[WatchdogHost] killMain threw: ${String(err)}`);
     }
@@ -206,10 +293,12 @@ export function createWatchdog(deps: WatchdogDeps): Watchdog {
     // explicitly re-arm us by sending a ping.
     state.missedBeats = 0;
     state.killDeferred = false;
+    deferralEvidence = null;
     killHeld = false;
     state.isArmed = false;
     lastPingAt = null;
     state.lastLatePingAt = null;
+    resetProgress();
   }
 
   function handleMessage(msg: WatchdogMessage | null | undefined): boolean {
@@ -227,9 +316,12 @@ export function createWatchdog(deps: WatchdogDeps): Watchdog {
         state.isArmed = true;
         state.missedBeats = 0;
         state.killDeferred = false;
+        deferralEvidence = null;
         killHeld = false;
         state.mainPressure =
           msg.memoryPressure === true ? true : msg.memoryPressure === null ? null : false;
+        state.mainExternalPressure = msg.externalPressure === true;
+        resetProgress();
         return true;
       }
       case "sleep":
@@ -237,13 +329,17 @@ export function createWatchdog(deps: WatchdogDeps): Watchdog {
         lastPingAt = null;
         state.missedBeats = 0;
         state.killDeferred = false;
+        deferralEvidence = null;
         killHeld = false;
+        resetProgress();
         return true;
       case "wake":
         state.isPaused = false;
         state.missedBeats = 0;
         state.killDeferred = false;
+        deferralEvidence = null;
         killHeld = false;
+        resetProgress();
         state.lastWakeTimestamp = now();
         // Neither the suspend gap nor a stall seen before it says anything
         // about the machine now.
@@ -298,6 +394,9 @@ export interface WatchdogKillPayload {
   killedAt: number;
   missedBeats: number;
   mainPid: number;
+  reason: WatchdogKillReason;
+  beatsSinceProgress: number;
+  pressureEvidence: string | null;
 }
 
 /** Pure builder for the flag-file payload. Extracted from watchdog-host.ts so
@@ -305,10 +404,17 @@ export interface WatchdogKillPayload {
  * runtime. The host wraps this in a try/catch synchronous write so the
  * fail-open guarantee on the SIGKILL path is preserved. */
 export function buildWatchdogKillPayload(
-  missedBeats: number,
+  decision: WatchdogKillDecision,
   mainPid: number
 ): WatchdogKillPayload {
-  return { killedAt: Date.now(), missedBeats, mainPid };
+  return {
+    killedAt: Date.now(),
+    missedBeats: decision.missedBeats,
+    mainPid,
+    reason: decision.reason,
+    beatsSinceProgress: decision.beatsSinceProgress,
+    pressureEvidence: decision.pressureEvidence,
+  };
 }
 
 export interface WriteWatchdogKillFlagDeps {
@@ -329,14 +435,14 @@ export interface WriteWatchdogKillFlagDeps {
  */
 export function writeWatchdogKillFlag(
   userData: string | null,
-  missedBeats: number,
+  decision: WatchdogKillDecision,
   mainPid: number,
   deps: WriteWatchdogKillFlagDeps
 ): boolean {
   if (!userData) return false;
   try {
     const flagPath = deps.joinPath(userData, WATCHDOG_KILL_FLAG_NAME);
-    const payload = buildWatchdogKillPayload(missedBeats, mainPid);
+    const payload = buildWatchdogKillPayload(decision, mainPid);
     deps.writeFileSync(flagPath, JSON.stringify(payload));
     return true;
   } catch {

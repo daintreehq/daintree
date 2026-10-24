@@ -1,4 +1,8 @@
-import type { ActionBreadcrumb, CrashLogEntry } from "../types/ipc/crashRecovery.js";
+import type {
+  ActionBreadcrumb,
+  CrashLogEntry,
+  WatchdogKillReason,
+} from "../types/ipc/crashRecovery.js";
 import { scrubReportText } from "./reportScrubbers.js";
 import { URL_BODY_BUDGET, capForBudget, makeUrl, truncateStackMiddle } from "./githubIssueUrl.js";
 import {
@@ -6,6 +10,13 @@ import {
   getCrashCauseTitle,
   normalizeCrashCause,
 } from "./crashCauseCopy.js";
+
+const WATCHDOG_KILL_REASON_LABELS: Record<WatchdogKillReason, string> = {
+  unresponsive: "no memory pressure seen",
+  "unresponsive-under-pressure": "past the memory-pressure grace",
+  "no-progress-under-external-pressure":
+    "no progress under memory pressure from outside Daintree",
+};
 
 export interface CrashReportResult {
   url: string;
@@ -141,6 +152,15 @@ function formatCrashBody(
     }
     if (e.watchdogMainPid !== undefined) {
       causeParts.push(`main PID ${e.watchdogMainPid}`);
+    }
+    if (e.watchdogKillReason !== undefined) {
+      causeParts.push(WATCHDOG_KILL_REASON_LABELS[e.watchdogKillReason]);
+    }
+    if (e.watchdogBeatsSinceProgress !== undefined) {
+      causeParts.push(`${e.watchdogBeatsSinceProgress} heartbeats with no sign of main`);
+    }
+    if (e.watchdogPressureEvidence !== undefined) {
+      causeParts.push(`deferred because ${e.watchdogPressureEvidence}`);
     }
     lines.push(`- ${causeParts.join(" — ")}`);
   } else if (

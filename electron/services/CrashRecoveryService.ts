@@ -10,6 +10,7 @@ import type {
   CrashTimestampSource,
   PanelSummary,
   PendingCrash,
+  WatchdogKillReason,
 } from "../../shared/types/ipc/crashRecovery.js";
 import { coerceAgentState } from "../../shared/types/agent.js";
 import { store, windowStatesStore } from "../store.js";
@@ -120,7 +121,20 @@ interface WatchdogKillAnnotation {
   killedAt: number;
   missedBeats: number;
   mainPid: number;
+  reason?: WatchdogKillReason;
+  beatsSinceProgress?: number;
+  pressureEvidence?: string;
 }
+
+const WATCHDOG_KILL_REASONS: ReadonlySet<WatchdogKillReason> = new Set<WatchdogKillReason>([
+  "unresponsive",
+  "unresponsive-under-pressure",
+  "no-progress-under-external-pressure",
+]);
+
+// The evidence is one of a few fixed phrases the watchdog writes; the cap only
+// keeps a corrupted flag from bloating the crash log and report.
+const MAX_WATCHDOG_EVIDENCE_LENGTH = 200;
 
 export class CrashRecoveryService {
   private userData: string;
@@ -832,6 +846,15 @@ export class CrashRecoveryService {
         entry.watchdogKilledAt = watchdogAnnotation.killedAt;
         entry.watchdogMissedBeats = watchdogAnnotation.missedBeats;
         entry.watchdogMainPid = watchdogAnnotation.mainPid;
+        if (watchdogAnnotation.reason !== undefined) {
+          entry.watchdogKillReason = watchdogAnnotation.reason;
+        }
+        if (watchdogAnnotation.beatsSinceProgress !== undefined) {
+          entry.watchdogBeatsSinceProgress = watchdogAnnotation.beatsSinceProgress;
+        }
+        if (watchdogAnnotation.pressureEvidence !== undefined) {
+          entry.watchdogPressureEvidence = watchdogAnnotation.pressureEvidence;
+        }
         // Persist the annotation onto the on-disk crash log too, so a user
         // who opens the JSON file directly (via the dialog's "open log file"
         // affordance, or for support) sees the watchdog attribution. Failure
@@ -1041,6 +1064,27 @@ export class CrashRecoveryService {
             missedBeats: parsed.missedBeats,
             mainPid: parsed.mainPid,
           };
+          // Diagnostics from #14367 are checked one by one: a flag from an
+          // older watchdog, or one with a bad field, still attributes the kill.
+          if (
+            typeof parsed.reason === "string" &&
+            WATCHDOG_KILL_REASONS.has(parsed.reason as WatchdogKillReason)
+          ) {
+            annotation.reason = parsed.reason;
+          }
+          if (
+            typeof parsed.beatsSinceProgress === "number" &&
+            Number.isFinite(parsed.beatsSinceProgress) &&
+            parsed.beatsSinceProgress >= 0
+          ) {
+            annotation.beatsSinceProgress = parsed.beatsSinceProgress;
+          }
+          if (typeof parsed.pressureEvidence === "string" && parsed.pressureEvidence.length > 0) {
+            annotation.pressureEvidence = parsed.pressureEvidence.slice(
+              0,
+              MAX_WATCHDOG_EVIDENCE_LENGTH
+            );
+          }
         } else {
           console.warn("[CrashRecovery] Malformed watchdog kill flag, ignoring");
         }
@@ -1289,6 +1333,9 @@ export class CrashRecoveryService {
         crashId: entry.id,
         crashCause: entry.crashCause,
         cause: entry.cause,
+        watchdogKillReason: entry.watchdogKillReason,
+        watchdogBeatsSinceProgress: entry.watchdogBeatsSinceProgress,
+        watchdogPressureEvidence: entry.watchdogPressureEvidence,
         endedAt: new Date(entry.timestamp).toISOString(),
         endedAtSource: entry.timestampSource ?? "recorded",
         sessionStartedAt: new Date(marker.sessionStartMs).toISOString(),

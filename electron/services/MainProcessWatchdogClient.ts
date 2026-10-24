@@ -14,13 +14,20 @@
  */
 
 import { app, utilityProcess, type UtilityProcess } from "electron";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { trackEvent } from "./TelemetryService.js";
 import { createLogger } from "../utils/logger.js";
 import { noteTerminationIntent } from "./processTerminationIntent.js";
 import { getActiveShutdown } from "../lifecycle/shutdownCoordinator.js";
-import { readWatchdogMemoryPressure } from "./watchdogMemoryPressure.js";
+import {
+  isMemoryPressureExternal,
+  readWatchdogMemoryPressure,
+  type OwnMemoryReading,
+} from "./watchdogMemoryPressure.js";
+import { peekAppMetricsSnapshot } from "../utils/appMetricsSnapshot.js";
+import { getProcessMemoryMb, hasFootprintForEveryProcess } from "../utils/processMemory.js";
 
 const logger = createLogger("main:Watchdog");
 
@@ -50,6 +57,23 @@ const STABILITY_TIMEOUT_MS = 300_000;
 const RESTART_FLOOR_MS = 250;
 const RESTART_CAP_BASE_MS = 1_500;
 const RESTART_CAP_MAX_MS = 5_000;
+
+/**
+ * Daintree's footprint from the last app-metrics sweep, never a fresh one: the
+ * sweep costs main-thread time every ping would pay. On macOS a sweep missing
+ * any physical footprint is no figure at all, since resident size drops the
+ * swapped pages that matter here.
+ */
+function readOwnMemoryFromCachedSweep(): OwnMemoryReading | null {
+  const snapshot = peekAppMetricsSnapshot();
+  if (snapshot === null) return null;
+  if (process.platform === "darwin" && !hasFootprintForEveryProcess(snapshot.metrics)) {
+    return null;
+  }
+  let ownMb = 0;
+  for (const metric of snapshot.metrics) ownMb += getProcessMemoryMb(metric);
+  return { ownMb, sampledAt: snapshot.sampledAt };
+}
 
 export interface WatchdogDisabledPayload {
   /** Number of restart attempts that completed before the cap kicked in. */
@@ -309,8 +333,15 @@ export class MainProcessWatchdogClient {
     if (!this.child) return;
     try {
       // The watchdog holds the last value it was sent, so a main that stalls
-      // under pressure has already said so (#13528).
-      this.child.postMessage({ type: "ping", memoryPressure: readWatchdogMemoryPressure() });
+      // under pressure has already said so (#13528, #14367).
+      this.child.postMessage({
+        type: "ping",
+        memoryPressure: readWatchdogMemoryPressure(),
+        externalPressure: isMemoryPressureExternal(
+          readOwnMemoryFromCachedSweep,
+          os.totalmem() / (1024 * 1024)
+        ),
+      });
     } catch (err) {
       // postMessage can throw if the child is between exit and our exit
       // handler (the channel is already torn down). Drop silently — the
