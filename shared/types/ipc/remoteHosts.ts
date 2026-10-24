@@ -8,6 +8,7 @@ import type {
   HostId,
   HostListEntry,
   HostPlatform,
+  HostPreviousEnd,
   OperationId,
   OperationOutcome,
   OperationProgress,
@@ -473,6 +474,11 @@ export type RemoteHostsEvent =
       type: "resync-required";
       hostId: HostId;
       reason: "overflow" | "reattached" | "reconnected" | "host-restarted";
+      /**
+       * With `host-restarted`: how the host's previous process ended, when
+       * the host recorded an unclean end. Absent for a planned restart.
+       */
+      previousEnd?: HostPreviousEnd;
     }
   /**
    * Sent to the view of a new window opened onto a host that had no project

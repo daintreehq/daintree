@@ -5,6 +5,7 @@ import type {
   HostHandshakeInfo,
   HostMetricsSummary,
   HostPlatform,
+  HostPreviousEnd,
 } from "../../../shared/types/remoteHosts.js";
 import { decodeValue, encodeValue, type EncodingLimits } from "./encoding.js";
 import { Lane, type LinkFrame } from "./frames.js";
@@ -107,6 +108,12 @@ export interface WelcomeMessage {
    * before it.
    */
   hostLaunchId?: string;
+  /**
+   * How the process before this one ended, when it ended uncleanly (#14368):
+   * what lets a Shell tell a crash from a planned restart. Absent from hosts
+   * before it.
+   */
+  previousEnd?: HostPreviousEnd;
 }
 
 export type RejectReason =

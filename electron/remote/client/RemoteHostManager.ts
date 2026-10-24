@@ -5,6 +5,7 @@ import type {
   HostDescriptor,
   HostHandshakeInfo,
   HostId,
+  HostPreviousEnd,
 } from "../../../shared/types/remoteHosts.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { createLogger } from "../../utils/logger.js";
@@ -81,7 +82,8 @@ export interface ViewSink {
   resync(
     webContentsId: number,
     hostId: HostId,
-    reason: EndpointResyncReason | ViewResyncReason
+    reason: EndpointResyncReason | ViewResyncReason,
+    previousEnd?: HostPreviousEnd
   ): void;
   /**
    * The host the view is authoritatively bound to (its project key, else its
@@ -228,8 +230,8 @@ export class HostConnection {
   ) {
     this.hostId = options.hostId;
     this.link = new LinkClient(options);
-    this.link.onSession(({ session, resumed, hostRestarted }) =>
-      this.attach(session, resumed, hostRestarted)
+    this.link.onSession(({ session, resumed, hostRestarted, previousEnd }) =>
+      this.attach(session, resumed, hostRestarted, previousEnd)
     );
     this.link.onStateChange(() => this.checkReady());
   }
@@ -657,7 +659,12 @@ export class HostConnection {
     return this.views.hostOf ? this.views.hostOf(webContentsId) === this.hostId : true;
   }
 
-  private attach(session: LinkSession, resumed: boolean, hostRestarted: boolean): void {
+  private attach(
+    session: LinkSession,
+    resumed: boolean,
+    hostRestarted: boolean,
+    previousEnd?: HostPreviousEnd
+  ): void {
     // A fresh session means the host dropped every endpoint of the old one,
     // including any still waiting to be closed.
     const reopen = resumed ? [] : [...this.endpoints];
@@ -805,7 +812,14 @@ export class HostConnection {
     }
     const isReconnect = this.hadSession;
     this.hadSession = true;
-    if (isReconnect) this.notifyAttached({ resumed, reopened, hostRestarted });
+    if (isReconnect) {
+      this.notifyAttached({
+        resumed,
+        reopened,
+        hostRestarted,
+        ...(hostRestarted && previousEnd && { previousEnd }),
+      });
+    }
     this.checkReady();
     void session.call(LinkMethod.HOST_INFO, null).then(
       (answer) => {
@@ -1111,8 +1125,8 @@ export class RemoteHostManager {
     this.now = options.now ?? Date.now;
     this.awakeSince = options.awakeSince ?? ((since) => this.now() - since);
     const coordinator = new ResyncCoordinator({
-      resync: (webContentsId, hostId, reason) =>
-        this.options.views.resync(webContentsId, hostId, reason),
+      resync: (webContentsId, hostId, reason, previousEnd) =>
+        this.options.views.resync(webContentsId, hostId, reason, previousEnd),
     });
     this.attachedListeners.add((hostId, info) => coordinator.onSessionAttached(hostId, info));
   }

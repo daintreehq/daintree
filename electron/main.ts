@@ -134,6 +134,7 @@ import { buildSwitchHydrateResult } from "./services/AppHydrationService.js";
 import { initializeCrashLoopGuard, getCrashLoopGuard } from "./services/CrashLoopGuardService.js";
 import { initializePanelSuspectLedger } from "./services/PanelSuspectLedgerService.js";
 import { recordHostEnd } from "./services/hostEndRestoreHold.js";
+import { captureHostPreviousEnd } from "./remote/host/previousEnd.js";
 import { initializeGpuCrashMonitor } from "./services/GpuCrashMonitorService.js";
 import { initializeProcessDeathLogger } from "./services/ProcessDeathLogger.js";
 import {
@@ -413,6 +414,8 @@ if (!gotTheLock) {
   // reads `getQuarantinedPanelIds()` to filter terminals out of the safe-mode
   // restore set; surfacing per-panel quarantine to the renderer.
   initializePanelSuspectLedger(getCrashRecoveryService().getPendingCrash());
+  // Every WELCOME this process sends tells a Shell how the one before it ended (#14368).
+  captureHostPreviousEnd(getCrashRecoveryService().getPendingCrash());
   // Before any window hydrates: agents a watchdog or external kill cut short
   // wait to be resumed rather than all coming back at once (#14382).
   recordHostEnd(

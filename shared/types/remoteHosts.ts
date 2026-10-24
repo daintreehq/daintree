@@ -1,3 +1,5 @@
+import type { CrashCause, WatchdogKillReason } from "./ipc/crashRecovery.js";
+
 /**
  * Remote Hosts: shared vocabulary for the Shell (the machine you sit at) and
  * the Host runtime (where projects, terminals, agents and plugins run).
@@ -58,6 +60,25 @@ export function parseHostScopedKey(key: HostScopedKey): { hostId: HostId; projec
 
 /** Wire protocol version. Bump on any incompatible change to link messages. */
 export const REMOTE_PROTOCOL_VERSION = 1;
+
+/**
+ * How a host's previous process ended, as the crash record the host consumed
+ * at launch observed it (#14368). Every WELCOME of the process that followed
+ * carries it. Absent when that process shut down, which a planned restart
+ * does, or when nothing was recorded: absence is not proof of a clean end.
+ * The record's own tokens, never a guess at why.
+ */
+export interface HostPreviousEnd {
+  crashCause: CrashCause;
+  /** The watchdog's own kill flag: it stopped the app after missed heartbeats. */
+  cause?: "watchdog-deadlock";
+  /** Which watchdog deadline ran out, when the watchdog said. */
+  watchdogKillReason?: WatchdogKillReason;
+  /** Heartbeats the watchdog missed before it killed the app. */
+  missedBeats?: number;
+  /** When it ended, as the record dates it (epoch ms). */
+  at: number;
+}
 
 /** Exchanged by both ends before anything else crosses the link. */
 export interface HostHandshakeInfo {

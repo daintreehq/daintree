@@ -4,6 +4,7 @@ import {
   isBlockingMismatch,
   type HandshakeMismatch,
   type HostHandshakeInfo,
+  type HostPreviousEnd,
 } from "../../../shared/types/remoteHosts.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { createLogger } from "../../utils/logger.js";
@@ -102,6 +103,12 @@ export interface LinkSessionEstablished {
    * whenever either WELCOME didn't say, as an older host's doesn't.
    */
   hostRestarted: boolean;
+  /**
+   * How the host's previous process ended, as the host recorded it, when it
+   * restarted and the record says it ended uncleanly. Absent for a planned
+   * restart, and from a host before it.
+   */
+  previousEnd?: HostPreviousEnd;
 }
 
 export interface LinkClientOptions {
@@ -552,6 +559,7 @@ export class LinkClient {
       logger.info("Remote host restarted; the previous session ended with it", {
         ...accepted,
         previousSessionId,
+        previousEnd: welcome.previousEnd ?? null,
       });
     } else if (previousSessionId !== null) {
       // The host gave up the session this Shell asked for: everything open on it is gone.
@@ -652,6 +660,7 @@ export class LinkClient {
       hostName: welcome.hostName,
       resumed: welcome.resumed,
       hostRestarted,
+      ...(hostRestarted && welcome.previousEnd && { previousEnd: welcome.previousEnd }),
     };
     for (const listener of this.sessionListeners) {
       try {

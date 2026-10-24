@@ -7,6 +7,8 @@ import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { FindCodexSessionAction } from "@/components/Terminal/FindCodexSessionAction";
 import { getAgentConfig } from "@/config/agents";
 import { usePanelStore } from "@/store/panelStore";
+import { useHostConnectionStore } from "@/store/hostConnectionStore";
+import { isRemoteWindow } from "@/hooks/useHostPlatform";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { isProjectViewObservable, subscribeProjectViewObservability } from "@/lib/viewCacheState";
 import {
@@ -33,15 +35,23 @@ interface RecoveryCopy {
 const HOST_END_HOLD_SENTENCE =
   "Agents it stopped wait here instead of all resuming at once. Resume its conversation or start a new one.";
 
-/** What the crash record saw, quoted rather than explained (#14382). */
-function describeHostEnd(hostEnd: PanelHostEnd, now: number): string {
+/**
+ * What the crash record saw, quoted rather than explained (#14382). In a
+ * remote window it was the host's Daintree that ended, not this machine's
+ * (#14368), so it says which.
+ */
+function describeHostEnd(hostEnd: PanelHostEnd, now: number, hostName?: string): string {
   const when = formatRelativeTime(hostEnd.at, now);
+  const beats =
+    hostEnd.missedBeats !== undefined
+      ? ` after ${pluralize(hostEnd.missedBeats, "missed heartbeat")}`
+      : "";
   const seen =
     hostEnd.cause === "watchdog-deadlock"
-      ? hostEnd.missedBeats !== undefined
-        ? `Daintree's watchdog stopped the app ${when} after ${pluralize(hostEnd.missedBeats, "missed heartbeat")}, while this agent was running.`
-        : `Daintree's watchdog stopped the app ${when}, while this agent was running.`
-      : `Daintree was last seen running ${when} and ended without shutting down, while this agent was running.`;
+      ? hostName
+        ? `${hostName}'s watchdog stopped Daintree ${when}${beats}, while this agent was running.`
+        : `Daintree's watchdog stopped the app ${when}${beats}, while this agent was running.`
+      : `${hostName ? `Daintree on ${hostName}` : "Daintree"} was last seen running ${when} and ended without shutting down, while this agent was running.`;
   return `${seen} ${HOST_END_HOLD_SENTENCE}`;
 }
 
@@ -175,6 +185,9 @@ export function RestoreRecoveryGate({
   const confirmDestination = usePanelStore((state) => state.confirmRestoreRecoveryDestination);
   // Every pane in this view the same unclean end held, so they can be resumed
   // together from any one of them.
+  const remoteHostName = useHostConnectionStore((state) =>
+    isRemoteWindow() ? (state.hostName ?? state.hostId ?? undefined) : undefined
+  );
   const hostEndHeldCount = usePanelStore(
     (state) => heldForHostEndIds(state.panelsById, state.panelIds).length
   );
@@ -246,7 +259,7 @@ export function RestoreRecoveryGate({
       : recovery.reason === "host-ended-uncleanly" && recovery.hostEnd
         ? {
             ...REASON_COPY[recovery.reason],
-            description: describeHostEnd(recovery.hostEnd, Date.now()),
+            description: describeHostEnd(recovery.hostEnd, Date.now(), remoteHostName),
           }
         : REASON_COPY[recovery.reason];
   const shownOutcome = outcome ?? bulkOutcome;
