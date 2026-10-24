@@ -27,7 +27,6 @@ import {
   ACTIONS_SEARCH_TOOL_ID,
   ACTIONS_GET_SCHEMA_TOOL_ID,
 } from "../tierAuth.js";
-import { events } from "../../events.js";
 import {
   toolErrorPayload,
   fakeSessionStore,

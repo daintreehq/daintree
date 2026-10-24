@@ -9,7 +9,6 @@ vi.mock("electron", () => ({
 import { createSessionServer } from "../sessionServer.js";
 import type { SessionServerDeps } from "../sessionServer.js";
 import { TIER_NOT_PERMITTED_CODE } from "../shared.js";
-import { buildToolInputSchema } from "../tierAuth.js";
 import { MCP_EXTERNAL_OMITTED_ARGS } from "../../../../shared/config/mcpExternalTierAllowlist.js";
 import {
   toolErrorPayload,

@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import { GLOBAL_ASSISTANT_ID } from "../../../../shared/config/globalAssistant.js";
-import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import type { ActionManifestEntry } from "../../../../shared/types/actions.js";
 
 vi.mock("electron", () => ({
