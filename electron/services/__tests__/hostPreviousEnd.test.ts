@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { CrashLogEntry, PendingCrash } from "../../../../shared/types/ipc/crashRecovery.js";
-import { captureHostPreviousEnd, getHostPreviousEnd, readHostPreviousEnd } from "../previousEnd.js";
+import type { CrashLogEntry, PendingCrash } from "../../../shared/types/ipc/crashRecovery.js";
+import {
+  captureHostPreviousEnd,
+  getHostPreviousEnd,
+  readHostPreviousEnd,
+} from "../hostPreviousEnd.js";
 
 function pending(entry: Partial<CrashLogEntry>): PendingCrash {
   return {

@@ -34,7 +34,7 @@ import {
 } from "../terminal/hostAttach.js";
 import { attachWorktreePortBridge, detachWorktreePortBridge } from "../worktreePort/attach.js";
 import { HostServer } from "./HostServer.js";
-import { getHostPreviousEnd } from "./previousEnd.js";
+import { getHostPreviousEnd } from "../../services/hostPreviousEnd.js";
 import { hostLaunchCommand, hostLocation } from "./hostLocation.js";
 import type { HostSocketLocation } from "./hostSocketPath.js";
 import { initRemoteHostsHost } from "./initHost.js";

@@ -134,7 +134,7 @@ import { buildSwitchHydrateResult } from "./services/AppHydrationService.js";
 import { initializeCrashLoopGuard, getCrashLoopGuard } from "./services/CrashLoopGuardService.js";
 import { initializePanelSuspectLedger } from "./services/PanelSuspectLedgerService.js";
 import { recordHostEnd } from "./services/hostEndRestoreHold.js";
-import { captureHostPreviousEnd } from "./remote/host/previousEnd.js";
+import { captureHostPreviousEnd } from "./services/hostPreviousEnd.js";
 import { initializeGpuCrashMonitor } from "./services/GpuCrashMonitorService.js";
 import { initializeProcessDeathLogger } from "./services/ProcessDeathLogger.js";
 import {

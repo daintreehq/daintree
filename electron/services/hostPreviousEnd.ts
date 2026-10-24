@@ -1,5 +1,5 @@
-import type { PendingCrash } from "../../../shared/types/ipc/crashRecovery.js";
-import type { HostPreviousEnd } from "../../../shared/types/remoteHosts.js";
+import type { PendingCrash } from "../../shared/types/ipc/crashRecovery.js";
+import type { HostPreviousEnd } from "../../shared/types/remoteHosts.js";
 
 /** The schema's bound, so a long note is cut here rather than dropped there. */
 const MAX_PRESSURE_EVIDENCE_CHARS = 256;
