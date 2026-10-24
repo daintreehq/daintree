@@ -245,7 +245,7 @@ The **idle reaper** is awake-time corrected (`SystemSleepService.getAwakeTimeSin
 Every session records an explicit `origin` — `"help" | "external"` — separate from how it routes. Before #11789, "is this one of Daintree's own surfaces" was inferred from presence in `sessionWebContentsMap`, which was safe only while external sessions were never pinned. They can be now, so the two questions are answered by different fields:
 
 - **Routing** reads `sessionWorkspaceMap` first, then `sessionWebContentsMap`, then falls back to focus order.
-- **Authorization** (`issueGrant`, `setSessionTier`), **notifications** (the five `wc.send` closures in `buildSessionServerDeps`) and **inventory** (`listExternalActiveClients`) read `origin` via `SessionStore.isRendererOwnedOrigin`.
+- **Authorization** (`issueGrant`, `setSessionTier`), **notifications** (the five `wc.send` closures in `createSessionNotifiers`, `sessionServerDeps.ts`) and **inventory** (`listExternalActiveClients`) read `origin` via `SessionStore.isRendererOwnedOrigin`.
 
 `getOrigin` defaults to `"external"` — the least-privileged answer — so a session whose handshake never recorded one, or one already half torn down, can never be mistaken for an assistant surface. `clearSessionBinding` drops route, context, origin, workspace and credential binding together; every teardown path calls it rather than deleting maps individually.
 
