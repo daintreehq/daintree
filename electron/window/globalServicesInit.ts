@@ -41,10 +41,12 @@ import {
   countLiveAgentTerminals,
   createDefaultSystemMemoryPressureMonitor,
   summarizeSystemMemoryWorkloads,
+  WORKLOADS_READ_TIMEOUT_MS,
   readDarwinKernelPressureLevel,
 } from "../services/SystemMemoryPressureMonitor.js";
 import { publishSystemMemoryPressure } from "./systemMemoryPressureDelivery.js";
 import { getSharedTerminalSnapshot } from "../services/sharedTerminalSnapshot.js";
+import { withTimeout } from "../utils/withTimeout.js";
 
 import { startDiskSpaceMonitor } from "../services/DiskSpaceMonitor.js";
 import { runScratchCleanup } from "../services/ScratchCleanupService.js";
@@ -788,7 +790,15 @@ export async function initGlobalServices(
               const pty = getPtyClient();
               const [snapshot, terminals] = await Promise.all([
                 getCompositeMemorySnapshot(pty),
-                pty ? getSharedTerminalSnapshot(pty).catch(() => null) : null,
+                // Inside the publish's own deadline, so a slow shard costs the
+                // count alone rather than every other figure with it.
+                pty
+                  ? withTimeout(
+                      getSharedTerminalSnapshot(pty),
+                      WORKLOADS_READ_TIMEOUT_MS / 2,
+                      "terminal snapshot for memory workloads"
+                    ).catch(() => null)
+                  : null,
               ]);
               const totalMemoryBytes = os.totalmem();
               return summarizeSystemMemoryWorkloads(

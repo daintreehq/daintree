@@ -13,6 +13,12 @@ vi.mock("@/clients/systemClient", () => ({
 }));
 
 const noteVisibleAgentLaunchMock = vi.hoisted(() => vi.fn());
+const selection = vi.hoisted(() => ({ activeWorktreeId: null as string | null }));
+vi.mock("@/store/storeAccessors", async () => {
+  const actual =
+    await vi.importActual<typeof import("@/store/storeAccessors")>("@/store/storeAccessors");
+  return { ...actual, getWorktreeSelectionSnapshot: () => selection };
+});
 vi.mock("@/services/systemMemoryLaunchNotice", () => ({
   noteVisibleAgentLaunch: noteVisibleAgentLaunchMock,
 }));
@@ -376,5 +382,21 @@ describe("agent launches at critical memory pressure (#13530)", () => {
 
     expect(noteVisibleAgentLaunchMock).toHaveBeenCalledTimes(2);
     expect(spawnedIds()).toEqual(["seen-grid", "seen-dock", "restored", "assistant"]);
+  });
+
+  it("doesn't note a launch into a worktree the user isn't looking at", async () => {
+    isMemoryPressureCriticalMock.mockResolvedValue(false);
+    noteVisibleAgentLaunchMock.mockClear();
+    selection.activeWorktreeId = "wt-a";
+    try {
+      await launchAgent("elsewhere", { worktreeId: "wt-b" });
+      await launchAgent("here", { worktreeId: "wt-a" });
+      await drainMicrotasks();
+    } finally {
+      selection.activeWorktreeId = null;
+    }
+
+    expect(noteVisibleAgentLaunchMock).toHaveBeenCalledTimes(1);
+    expect(spawnedIds()).toEqual(expect.arrayContaining(["elsewhere", "here"]));
   });
 });

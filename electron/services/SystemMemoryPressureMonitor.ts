@@ -612,7 +612,9 @@ export function summarizeSystemMemoryWorkloads(
 
 /** The fields of a terminal record that say whether its agent is still there. */
 export interface AgentCountableTerminal {
+  detectedAgentId?: string;
   launchAgentId?: string;
+  everDetectedAgent?: boolean;
   hasPty?: boolean;
   isExited?: boolean;
   isAssistantTerminal?: boolean;
@@ -620,8 +622,9 @@ export interface AgentCountableTerminal {
 }
 
 /**
- * Terminals an agent was launched into whose agent is still there, idle ones
- * included. Null for a read missing a shard: a partial count would read low.
+ * Terminals with an agent in them, idle ones included: its runtime identity,
+ * or its launch intent before detection has ever committed, as `classifyRun`
+ * counts them. Null for a read missing a shard: a partial count would read low.
  */
 export function countLiveAgentTerminals(
   snapshot: { terminals: readonly AgentCountableTerminal[]; degraded: boolean } | null
@@ -629,8 +632,11 @@ export function countLiveAgentTerminals(
   if (!snapshot || snapshot.degraded) return null;
   let count = 0;
   for (const terminal of snapshot.terminals) {
+    const hasAgent =
+      Boolean(terminal.detectedAgentId) ||
+      (Boolean(terminal.launchAgentId) && terminal.everDetectedAgent !== true);
     if (
-      terminal.launchAgentId &&
+      hasAgent &&
       terminal.hasPty !== false &&
       terminal.isExited !== true &&
       terminal.agentState !== "exited" &&

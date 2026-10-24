@@ -1438,6 +1438,7 @@ export const createAddPanelActions = (
       launchAgentId &&
       options.restore !== true &&
       !isRecoveryHold &&
+      isInActiveWorktree &&
       (location === "grid" || location === "dock")
     ) {
       noteVisibleAgentLaunch();

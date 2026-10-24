@@ -1456,10 +1456,13 @@ describe("countLiveAgentTerminals", () => {
           { launchAgentId: "claude", isExited: true },
           { launchAgentId: "claude", hasPty: false },
           { launchAgentId: "claude", isAssistantTerminal: true },
+          // Started by hand in a plain terminal, and a launched agent that has since quit to its shell.
+          { detectedAgentId: "codex", agentState: "working" },
+          { launchAgentId: "claude", everDetectedAgent: true },
           {},
         ],
       })
-    ).toBe(2);
+    ).toBe(3);
   });
 
   it("gives no count rather than a low one when a shard didn't answer", () => {

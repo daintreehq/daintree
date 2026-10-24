@@ -51,6 +51,16 @@ describe("systemMemoryLaunchNotice", () => {
     );
   });
 
+  it("tries again on the next launch when the notice was suppressed", () => {
+    setSystemMemoryEpisode({ reading: READING, workloads: workloads() });
+    notifyMock.mockReturnValueOnce("");
+    noteVisibleAgentLaunch();
+    noteVisibleAgentLaunch();
+    noteVisibleAgentLaunch();
+
+    expect(notifyMock).toHaveBeenCalledTimes(2);
+  });
+
   it("doesn't come back after a worsening publish in the same episode", () => {
     setSystemMemoryEpisode({ reading: READING, workloads: workloads() });
     noteVisibleAgentLaunch();

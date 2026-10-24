@@ -57,22 +57,24 @@ export function setSystemMemoryEpisode(next: OpenEpisode | null): void {
  */
 export function noteVisibleAgentLaunch(): void {
   if (episode === null || shownThisEpisode) return;
-  shownThisEpisode = true;
   const message = describeLaunchDuringMemoryEpisode(episode);
-  noticeId =
-    notify({
-      type: "warning",
-      placement: "grid-bar",
-      priority: "low",
-      urgent: false,
-      countable: false,
-      duration: 0,
-      title: "High system memory use",
-      message,
-      replaceKey: NOTICE_KEY,
-      supersedeKey: NOTICE_KEY,
-      context: { eventKind: "host" },
-    }) || null;
+  const id = notify({
+    type: "warning",
+    placement: "grid-bar",
+    priority: "low",
+    urgent: false,
+    countable: false,
+    duration: 0,
+    title: "High system memory use",
+    message,
+    replaceKey: NOTICE_KEY,
+    supersedeKey: NOTICE_KEY,
+    context: { eventKind: "host" },
+  });
+  // A notice the quiet period or a mute swallowed leaves the next launch to try.
+  if (!id) return;
+  shownThisEpisode = true;
+  noticeId = id;
 }
 
 export function resetSystemMemoryLaunchNoticeForTesting(): void {
