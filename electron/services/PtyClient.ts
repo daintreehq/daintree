@@ -53,7 +53,7 @@
  * - Multiple services need to interact (composition root in main.ts)
  */
 
-import { app, MessagePortMain } from "electron";
+import type { MessagePortMain } from "electron";
 import { EventEmitter } from "events";
 import os from "os";
 import path from "path";
@@ -69,8 +69,6 @@ import {
   reportWindowsTreeKillUnavailable,
 } from "./windowsTreeKillNotice.js";
 import { store } from "../store.js";
-import { stripAssignedSessionIdArgs } from "../../shared/types/agentSettings.js";
-import { buildCommandLaunchShell } from "../ipc/handlers/terminal/commandLaunch.js";
 import { getPluginAgentRegistry } from "../../shared/config/pluginAgentRegistry.js";
 import { getPluginProcessToolRegistry } from "../../shared/config/pluginProcessToolRegistry.js";
 
@@ -80,10 +78,8 @@ const logInfo = (msg: string, ctx?: Record<string, unknown>) =>
 const logWarn = (msg: string, ctx?: Record<string, unknown>) =>
   ctx ? logger.warn(msg, ctx) : logger.warn(msg);
 import { getTrashedPidTracker } from "./TrashedPidTracker.js";
-import { claimShardLineageFile, reapClaimedLineageFile } from "./TerminalLineageLedger.js";
 import { terminalCrashReapService } from "./TerminalCrashReapService.js";
 import { getLifecycleLedger, ledgerFactsFromSpawnOptions } from "./pty/lifecycleLedger.js";
-import { getEnvVar, hasEnvVar } from "./pty/EnvironmentFilter.js";
 import { BrokerError } from "./rpc/index.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { routeHostEvent, type PtyEventRouterDeps } from "./pty/PtyEventRouter.js";
@@ -93,6 +89,7 @@ import { mergeFlowControlSnapshots, mergeMemoryRollups } from "./pty/rollupMerge
 import { HostSignalAggregator, type HostMemoryWarningPayload } from "./pty/HostSignalAggregator.js";
 import { HostMemoryPauseTracker } from "./pty/HostMemoryPauseTracker.js";
 import { ShardPlacementRouter } from "./pty/ShardPlacementRouter.js";
+import { ShardRecoveryCoordinator } from "./pty/ShardRecoveryCoordinator.js";
 import { PtyShard } from "./pty/PtyShard.js";
 import {
   DEFAULT_SHARD_KEY,
@@ -109,7 +106,6 @@ import type {
   PtyHostSpawnOptions,
   PluginPtyHostSpawnOptions,
   PtyHostActivityTier,
-  CrashType,
   SpawnResult,
   FlowControlSnapshot,
   HostMemoryPauseSnapshot,
@@ -134,11 +130,7 @@ import type { AgentStateChangeTrigger } from "../types/index.js";
 import type { AgentState, AgentId, WaitingReason } from "../../shared/types/agent.js";
 import type { PanelKind, PanelTitleMode } from "../../shared/types/panel.js";
 import type { ResourceProfile } from "../../shared/types/resourceProfile.js";
-import {
-  deriveAgentObservationLevel,
-  type PowerPolicyLevel,
-} from "../../shared/types/powerPolicy.js";
-import { getPowerPolicy } from "../window/powerPolicy.js";
+import type { PowerPolicyLevel } from "../../shared/types/powerPolicy.js";
 import type {
   SerializeReadOptions,
   SerializedTerminalSnapshot,
@@ -332,38 +324,6 @@ function readPersistedOverrides(): Record<string, string> {
 }
 
 /**
- * Stamp main's current PATH onto a Windows spawn message.
- *
- * The pty-host is forked once with a snapshot of main's `process.env`
- * (`PtyHostLifecycle.start`) and lives for the rest of the session, so
- * `buildTerminalEnv` over there reads a PATH frozen at fork time. Nothing main
- * does to its own `process.env` afterwards crosses that boundary — which is why
- * installing a tool and opening a new pane surfaced nothing until the app was
- * restarted (#11773). The spawn message's `env` is the one channel that does
- * cross, and the host merges it over its stale base, so stamping the PATH here
- * is what actually delivers the refresh.
- *
- * Applied at send time rather than in `spawn()` so it never enters
- * `pendingSpawns`: every replay (pre-ready, crash respawn, crash-budget
- * migration) re-runs this and picks up main's PATH as of the replay instead of
- * resurrecting the value that was current when the terminal was first opened.
- *
- * A caller-supplied PATH always wins — project env settings may set it
- * deliberately, and an explicit empty value is a choice, not an absence. Returns
- * `options` unchanged off Windows and clones rather than mutating, so the
- * caller's object and the lifecycle ledger's env provenance are untouched.
- */
-function withCurrentWindowsPath(options: PtyHostSpawnOptions): PtyHostSpawnOptions {
-  if (process.platform !== "win32") return options;
-  if (options.env && hasEnvVar(options.env, "PATH")) return options;
-
-  const currentPath = getEnvVar(process.env as Record<string, string | undefined>, "PATH");
-  if (!currentPath) return options;
-
-  return { ...options, env: { ...(options.env ?? {}), PATH: currentPath } };
-}
-
-/**
  * Input that answered what a terminal's screen asked, whoever sent it: Return,
  * a submitted line, or a key that answers an approval menu by itself (see
  * `terminalAnswerOf`). Emitted as `"terminal-input"` with the terminal id, so a
@@ -394,6 +354,8 @@ export class PtyClient extends EventEmitter {
   private readonly defaultShard: PtyShard;
   /** Placement lookups over the maps below — constructed once `defaultShard` exists. */
   private readonly placementRouter: ShardPlacementRouter;
+  /** Ready/restart replay, crash cleanup and crash-budget migration over the maps below. */
+  private readonly recovery: ShardRecoveryCoordinator;
   /** Per-shard router deps, built once per shard (broker + emitter proxy are shard-scoped). */
   private readonly shardRouterDeps = new WeakMap<PtyShard, PtyEventRouterDeps>();
   private shardCallbacksCache: ConstructorParameters<typeof PtyShard>[1] | null = null;
@@ -580,6 +542,43 @@ export class PtyClient extends EventEmitter {
       ensureShard: (key) => this.ensureShard(key),
       logWarn,
     });
+    this.recovery = new ShardRecoveryCoordinator({
+      fabricEnabled: this.fabricEnabled,
+      shards: this.shards,
+      pendingSpawns: this.pendingSpawns,
+      displacedSpawns: this.displacedSpawns,
+      pendingKillCount: this.pendingKillCount,
+      terminalOwners: this.terminalOwners,
+      projectShardOverrides: this.projectShardOverrides,
+      windowPortShard: this.windowPortShard,
+      restartExitSuppression: this.restartExitSuppression,
+      ipcDataMirrorIds: this.ipcDataMirrorIds,
+      terminalPids: this.terminalPids,
+      terminalIdentities: this.terminalIdentities,
+      isDisposed: () => this.isDisposed,
+      healthChecksPaused: () => this.healthChecksPaused,
+      logLevelOverrides: () => this.logLevelOverridesCache,
+      globalConfig: () => ({
+        resourceMonitoringEnabled: this.resourceMonitoringEnabled,
+        sessionPersistSuppressed: this.sessionPersistSuppressed,
+        lastResourceProfile: this.lastResourceProfile,
+        lastProcessTreePollIntervalMs: this.lastProcessTreePollIntervalMs,
+        fallbackEligibleProjects: this.fallbackEligibleProjects,
+        driveLeases: this.driveLeases,
+      }),
+      hasPortRefreshConsumers: () => Boolean(this.onPortRefresh) || this.auxPortRefresh.size > 0,
+      ownerKey: (id) => this.ownerKey(id),
+      ensureShard: (key) => this.ensureShard(key),
+      cancelShardRetirement: (key) => this.cancelShardRetirement(key),
+      connectMessagePort: (windowId, port) => this.connectMessagePort(windowId, port),
+      notifyPortRefresh: (windowId) => this.notifyPortRefresh(windowId),
+      flushPendingMessagePortsForShard: (shard) => this.flushPendingMessagePortsForShard(shard),
+      syncProjectContextToShard: (shard, skipWindowIds) =>
+        this.syncProjectContextToShard(shard, skipWindowIds),
+      trackRetiringHost: (exit) => this.trackRetiringHost(exit),
+      dropShardSignals: (shardKey) => this.dropShardSignals(shardKey),
+      logWarn,
+    });
 
     if (!this.config.deferStart) {
       this.start();
@@ -636,7 +635,7 @@ export class PtyClient extends EventEmitter {
         if (this.isDisposed) {
           return;
         }
-        this.cleanupOrphanedPtysForShard(shard, fallbackCrashType);
+        this.recovery.cleanupOrphanedPtysForShard(shard, fallbackCrashType);
         shard.broker.clear(new BrokerError("HOST_EXITED", "Pty host exited"));
         shard.shouldResyncProjectContext = true;
         // The crashed shard's throttle/memory-warning holds are gone with the
@@ -649,7 +648,7 @@ export class PtyClient extends EventEmitter {
         }
       },
       onCrashClassified: (shard, { crashType, payload }) => {
-        this.cleanupOrphanedPtysForShard(shard, crashType);
+        this.recovery.cleanupOrphanedPtysForShard(shard, crashType);
         if (payload) {
           this.emitCrashDetailsForShard(shard, payload);
         }
@@ -659,7 +658,7 @@ export class PtyClient extends EventEmitter {
           this.emit("host-crash", code);
           return;
         }
-        this.migrateShardTerminalsToDefault(shard, code);
+        this.recovery.migrateShardTerminalsToDefault(shard, code);
       },
       onForkFailed: (shard) => {
         if (shard.key === DEFAULT_SHARD_KEY || !this.fabricEnabled) {
@@ -675,7 +674,7 @@ export class PtyClient extends EventEmitter {
         // showed a global backend-crashed banner.
         setImmediate(() => {
           if (this.isDisposed || shard.retired) return;
-          this.migrateShardTerminalsToDefault(shard, -1);
+          this.recovery.migrateShardTerminalsToDefault(shard, -1);
         });
       },
       emitCrashDetails: (shard, payload) => {
@@ -799,7 +798,7 @@ export class PtyClient extends EventEmitter {
         terminalPids: this.terminalPids,
       },
       callbacks: {
-        onReady: () => this.handleShardReady(shard),
+        onReady: () => this.recovery.handleShardReady(shard),
         onPong: () => shard.watchdog.recordPong(),
         onTerminalRemovedFromTrash: (id) => getTrashedPidTracker().removeTrashed(id),
         // #13176: every PTY joins the crash-safe tier (Job Object / POSIX
@@ -1046,393 +1045,6 @@ export class PtyClient extends EventEmitter {
     return this.placementRouter.fanOutShards();
   }
 
-  // ── Shard lifecycle ──────────────────────────────────────────────────────
-
-  private handleShardReady(shard: PtyShard): void {
-    if (!shard.lifecycle.markReady()) {
-      console.warn("[PtyClient] Ignoring late ready event - host is dead");
-      return;
-    }
-    if (shard.key === DEFAULT_SHARD_KEY) {
-      console.log("[PtyClient] Pty Host is ready");
-    } else {
-      console.log(`[PtyClient] Pty Host shard '${shard.key}' is ready`);
-    }
-    // Replay log-level overrides on every ready (initial spawn + restarts).
-    // The child's message listener isn't attached until after it receives
-    // "ready", so pushing on spawn would race.
-    shard.send({
-      type: "set-log-level-overrides",
-      overrides: this.logLevelOverridesCache,
-    });
-    // Mirror the current plugin-agent registry to the (re)started host before
-    // any spawn replay below, so respawned plugin-agent terminals resolve their
-    // detection patterns from the first tick (#10587). Reads the authoritative
-    // main-process snapshot directly — no cache needed, and a host restart
-    // re-syncs whatever plugins are loaded now.
-    shard.send({ type: "set-plugin-agent-registry", registry: getPluginAgentRegistry() });
-    // Same contract for plugin-contributed process detections (#11613): mirror
-    // before any spawn replay so a respawned terminal resolves its tab icon from
-    // the first process-tree poll rather than after the next plugin mutation.
-    shard.send({
-      type: "set-plugin-process-tool-registry",
-      registry: getPluginProcessToolRegistry(),
-    });
-    // Power policy on every ready — the default host's first one included,
-    // which gets no config replay, and a host whose client was created after
-    // the policy moved. Read live: main's policy is authoritative and a host
-    // boots at `active`, so only a saving level needs sending.
-    const powerSnapshot = getPowerPolicy();
-    const observationLevel = deriveAgentObservationLevel(powerSnapshot);
-    // A host boots at `active` on both counts, so only a narrowed state needs
-    // sending. `active` observation cannot coincide with a non-active level
-    // (battery and blur both narrow it), so the level test covers both.
-    if (powerSnapshot.level !== "active") {
-      shard.send({
-        type: "set-power-policy",
-        level: powerSnapshot.level,
-        observationLevel,
-      });
-    }
-    // A project shard forked mid-session missed every earlier config setter
-    // (resource profile, monitoring, persistence suppression) — those are
-    // host-process-wide, so replay the caches on its first ready. The default
-    // shard needs it too: with deferred start, a setter sent before its first
-    // ready (ResourceProfileService's startup push, #12513) was posted before
-    // the host's listener existed and dropped. Restart readies get the same
-    // replay from respawnPendingForShard below.
-    if (!shard.needsRespawn) {
-      this.replayGlobalConfigToShard(shard);
-    }
-    // Re-arm the watchdog on every successful ready — covers both the initial
-    // boot and every auto-restart cycle. The original code armed it inside
-    // startHost() before ready arrived, but the tick was a no-op until
-    // isInitialized=true anyway, so deferring to ready is equivalent and
-    // avoids a leaked timer when fork itself fails.
-    if (!this.healthChecksPaused && !shard.watchdog.isHealthCheckPaused) {
-      shard.watchdog.start();
-    }
-    if (shard.needsRespawn) {
-      shard.needsRespawn = false;
-      this.respawnPendingForShard(shard);
-    } else if (this.pendingSpawns.size > 0) {
-      // Initial host-ready replay (#8827). With deferred start the host forks
-      // only after the early PATH refresh, so any spawn requested during that
-      // window had its send() dropped — the host's message listener isn't
-      // attached until it emits "ready" (also true for the brief construct→
-      // ready window on the non-deferred path, and for a project shard forked
-      // by the spawn that is being replayed). Replay this shard's spawns now
-      // so a terminal launched before its host was ready isn't silently lost.
-      // Double-spawn-safe: on the first "ready" no spawn could have been
-      // delivered yet. The restart-only side effects (port refresh, stale-kill
-      // clearing) stay in respawnPendingForShard() above.
-      for (const [id, options] of this.pendingSpawns) {
-        if (this.ownerKey(id) !== shard.key) continue;
-        this.sendSpawnWithPostInput(shard, id, options);
-      }
-    }
-    const pendingPortWindowIds = new Set(shard.pendingMessagePorts.keys());
-    this.flushPendingMessagePortsForShard(shard);
-    if (shard.shouldResyncProjectContext) {
-      shard.shouldResyncProjectContext = false;
-      this.syncProjectContextToShard(shard, pendingPortWindowIds);
-    }
-  }
-
-  /**
-   * Send a spawn to a shard. For command launches on shells that couldn't host
-   * a startup wrapper, the launch command rides `options.postSpawnInput` in
-   * `pendingSpawns`, and the host's spawn handler injects it right after a
-   * successful spawn (#11339). Every replay path (initial pre-ready replay,
-   * crash respawn, crash-budget migration) funnels through here and re-sends the
-   * same options, so the terminal comes back running its command — including a
-   * resume — instead of a bare prompt. Delivery is bound to spawn success on the
-   * host: a rejected spawn (e.g. TERMINAL_ALREADY_LIVE, #11341) never injects
-   * the command into a pre-existing live PTY.
-   */
-  private sendSpawnWithPostInput(shard: PtyShard, id: string, options: PtyHostSpawnOptions): void {
-    // (see `withCurrentWindowsPath` for why the PATH is stamped at send time)
-    // Never deliver into a shard that isn't ready yet. A post-fork/pre-ready
-    // send is dropped here AND re-sent by the first-ready replay below, which
-    // for a command launch would run the command (and any resume) twice. The
-    // entry is already in `pendingSpawns`, so the first-ready replay (which runs
-    // after `markReady`, i.e. once this guard passes) delivers it exactly once.
-    // This makes the "double-spawn-safe" invariant explicit rather than relying
-    // on the pre-fork transport drop.
-    if (!shard.isRunning()) return;
-    shard.send({
-      type: "spawn",
-      id,
-      options: withCurrentWindowsPath(options),
-    });
-    this.disarmStoredSessionAssignment(id);
-    this.disarmStoredHandback(id);
-  }
-
-  /**
-   * Drop a launch's handback code from the STORED spawn entry once it has been
-   * delivered (#12488). A replay after a host crash re-runs the launch, but the
-   * request it carried belonged to the host that died, and a code may be
-   * observed at most once — so the replayed launch holds no request, the same
-   * as any other request lost with its host. Same delivery point as
-   * {@link disarmStoredSessionAssignment}, for the same reason.
-   */
-  private disarmStoredHandback(id: string): void {
-    const stored = this.pendingSpawns.get(id);
-    if (stored?.handbackCode === undefined) return;
-    const { handbackCode: _delivered, ...rest } = stored;
-    this.pendingSpawns.set(id, rest);
-  }
-
-  /**
-   * Strip a session-id assignment out of the STORED spawn entry once it has
-   * been delivered, so no replay can offer the CLI the same id twice (#11782).
-   *
-   * A `pendingSpawns` entry lives until the terminal is killed and is re-sent
-   * verbatim on every replay. Assignment is one-shot — the CLI rejects an id it
-   * has already issued — so replaying the assigning form brings the pane back
-   * dead rather than running. Disarming the stored copy, rather than tracking
-   * "already delivered" alongside it, means the entry is simply always safe to
-   * re-send and dropping the entry anywhere disposes of this state with it.
-   *
-   * The replayed launch is a new conversation, so the id is cleared from the
-   * options too: leaving it would stamp the terminal record with an id the
-   * replayed process doesn't own, and teardown would then hand that stale id to
-   * the next restore. Losing the conversation on a host crash matches the
-   * behaviour that was already there; recovering it would need proof the CLI
-   * got far enough to create the session, which "the spawn message was sent"
-   * is not.
-   *
-   * Runs AFTER the send and only past the `isRunning()` guard, so a dropped
-   * pre-ready send leaves the entry armed and the first-ready replay still
-   * counts as the first delivery.
-   */
-  private disarmStoredSessionAssignment(id: string): void {
-    const stored = this.pendingSpawns.get(id);
-    if (!stored?.command || !stored.launchAgentId) return;
-
-    const command = stripAssignedSessionIdArgs(stored.command, stored.launchAgentId);
-    if (command === stored.command) return;
-
-    const disarmed: PtyHostSpawnOptions = { ...stored, command, agentSessionId: undefined };
-    // The wrapper shells (zsh/bash/sh/pwsh/cmd) EXECUTE the command out of
-    // `args` — PowerShell base64-encodes it there — so disarming `command`
-    // alone would leave the spent flag running. Rebuild the carrier from the
-    // disarmed command using the same pure builder that produced it.
-    const relaunch = buildCommandLaunchShell(command, stored.shell);
-    if (relaunch) disarmed.args = relaunch.args;
-    if (stored.postSpawnInput) {
-      disarmed.postSpawnInput = stripAssignedSessionIdArgs(
-        stored.postSpawnInput,
-        stored.launchAgentId
-      );
-    }
-    this.pendingSpawns.set(id, disarmed);
-  }
-
-  private respawnPendingForShard(shard: PtyShard): void {
-    // Kills sent to the crashed shard will never receive "exit" events, so
-    // its pendingKillCount entries are permanently stale. Unlike pendingSpawns
-    // (replayed below to recreate terminals on the new host), they are
-    // cleared — the terminals those kills targeted died with the process.
-    for (const id of [...this.pendingKillCount.keys()]) {
-      if (this.ownerKey(id) === shard.key) {
-        this.pendingKillCount.delete(id);
-      }
-    }
-    // Owner entries without a pending spawn were awaiting an exit event that
-    // died with the shard — nothing will respawn them.
-    for (const [id, owner] of [...this.terminalOwners]) {
-      if (owner === shard.key && !this.pendingSpawns.has(id)) {
-        this.terminalOwners.delete(id);
-      }
-    }
-
-    // Notify that ports need refresh after the shard restart. Fabric mode
-    // targets only the windows whose port lived on this shard; the legacy
-    // single-host path keeps the refresh-everything behavior.
-    if (this.onPortRefresh || this.auxPortRefresh.size > 0) {
-      shard.closePendingPorts();
-      if (!this.fabricEnabled) {
-        this.notifyPortRefresh();
-      } else {
-        for (const [windowId, key] of [...this.windowPortShard]) {
-          if (key !== shard.key) continue;
-          this.windowPortShard.delete(windowId);
-          this.notifyPortRefresh(windowId);
-        }
-      }
-    }
-
-    // Respawn terminals that were active when the shard crashed. Each replay
-    // is a NEW incarnation — the previous PTY died with the host — so close
-    // the old generation and mint a fresh one. Without this, a session
-    // captured before the crash and one captured after would share a
-    // generation and the journal's exactly-once gate would drop the second
-    // record. (The initial host-ready replay in handleShardReady keeps its
-    // generation: nothing was ever delivered, so it is the same incarnation.)
-    const ledger = getLifecycleLedger();
-    for (const [id, options] of this.pendingSpawns) {
-      if (this.ownerKey(id) !== shard.key) continue;
-      console.log(`[PtyClient] Respawning terminal: ${id}`);
-      const previousGeneration = options.launchGeneration ?? ledger.currentGeneration(id);
-      if (previousGeneration !== undefined && ledger.currentGeneration(id) !== undefined) {
-        ledger.recordClose(id, previousGeneration, "pty-host-crash");
-      }
-      const generation = ledger.recordLaunch(id, ledgerFactsFromSpawnOptions(options));
-      this.restartExitSuppression.delete(id);
-      // Whatever a duplicate spawn displaced died with the host: the replay is
-      // the incarnation now, not the one a refusal would put back.
-      this.displacedSpawns.delete(id);
-      const stamped: PtyHostSpawnOptions = { ...options, launchGeneration: generation };
-      this.pendingSpawns.set(id, stamped);
-      this.sendSpawnWithPostInput(shard, id, stamped);
-    }
-
-    // Re-enable IPC data mirrors that were active before crash
-    for (const id of this.ipcDataMirrorIds) {
-      if (this.ownerKey(id) !== shard.key) continue;
-      shard.send({ type: "set-ipc-data-mirror", id, enabled: true });
-    }
-
-    this.replayGlobalConfigToShard(shard);
-  }
-
-  /**
-   * Replay the cached host-process-wide config to one shard: on restarts
-   * (the new process booted with defaults) and on every shard's first ready
-   * (any setter posted before it was dropped).
-   */
-  private replayGlobalConfigToShard(shard: PtyShard): void {
-    // Re-enable resource monitoring if it was active
-    if (this.resourceMonitoringEnabled) {
-      shard.send({ type: "set-resource-monitoring", enabled: true });
-    }
-
-    // Replay session persistence suppression if disk space was critical
-    if (this.sessionPersistSuppressed) {
-      shard.send({ type: "set-session-persist-suppressed", suppressed: true });
-    }
-
-    // Replay the resource profile so the new host's governor and process-tree
-    // cadence match what main believes is applied — ResourceProfileService only
-    // re-sends on transitions. The explicit poll interval (focus throttle)
-    // replays after the profile since it was the later writer when both are set.
-    if (this.lastResourceProfile !== null) {
-      shard.send({ type: "set-resource-profile", profile: this.lastResourceProfile });
-    }
-    if (this.lastProcessTreePollIntervalMs !== null) {
-      shard.send({
-        type: "set-process-tree-poll-interval",
-        ms: this.lastProcessTreePollIntervalMs,
-      });
-    }
-
-    // A shard that booted without this set would suppress the IPC fallback for
-    // every project whose only remaining consumer holds no port — the #12557
-    // starvation, reintroduced for exactly as long as the shard stays unaware.
-    if (this.fallbackEligibleProjects.length > 0) {
-      shard.send({
-        type: "set-fallback-eligible-projects",
-        projectIds: this.fallbackEligibleProjects,
-      });
-    }
-
-    // Without it a restarted shard lets any port type into or resize terminals
-    // another endpoint is driving.
-    if (this.driveLeases.length > 0) {
-      shard.send({ type: "set-drive-leases", leases: this.driveLeases });
-    }
-  }
-
-  /**
-   * A project shard exhausted its crash budget. Instead of declaring a global
-   * host crash (the singleton behavior — its terminals ARE gone, but every
-   * other project's are fine), pin the project to the default shard and
-   * respawn its terminals there: graceful degradation toward the singleton,
-   * never toward dropped terminals. The pin is session-sticky so a
-   * crash-looping project can't ping-pong between a fresh shard and the
-   * default.
-   */
-  private migrateShardTerminalsToDefault(shard: PtyShard, code: number | null): void {
-    const reap = shard.lineageReap;
-    if (reap) {
-      // Same barrier as an auto-restart: replaying on the default shard while
-      // the crashed host's survivors are still being reaped would run a fresh
-      // copy of each terminal's work beside the old one.
-      const migrate = () => {
-        if (this.isDisposed || shard.retired) return;
-        this.migrateShardTerminalsToDefault(shard, code);
-      };
-      void reap.then(migrate, migrate);
-      return;
-    }
-    logWarn(
-      `[PtyClient] PTY shard '${shard.key}' exceeded its crash budget (code ${code}); migrating its terminals to the default shard`
-    );
-    shard.retired = true;
-    this.shards.delete(shard.key);
-    this.cancelShardRetirement(shard.key);
-    this.projectShardOverrides.set(shard.key, DEFAULT_SHARD_KEY);
-
-    // Kills in flight against the dead shard are moot, and owner entries
-    // without a pending spawn have nothing left to migrate.
-    for (const id of [...this.pendingKillCount.keys()]) {
-      if (this.ownerKey(id) === shard.key) {
-        this.pendingKillCount.delete(id);
-      }
-    }
-    for (const [id, owner] of [...this.terminalOwners]) {
-      if (owner === shard.key && !this.pendingSpawns.has(id)) {
-        this.terminalOwners.delete(id);
-      }
-    }
-
-    // Respawn the shard's live terminals on the default shard — a NEW
-    // incarnation each, exactly like a crash respawn. If the default shard is
-    // itself mid-restart these sends drop and its own ready replay picks the
-    // (now default-owned) spawns up.
-    const target = this.ensureShard(DEFAULT_SHARD_KEY);
-    const ledger = getLifecycleLedger();
-    const migratedIds: string[] = [];
-    for (const [id, options] of this.pendingSpawns) {
-      if (this.ownerKey(id) !== shard.key) continue;
-      console.log(`[PtyClient] Migrating terminal to default shard: ${id}`);
-      const previousGeneration = options.launchGeneration ?? ledger.currentGeneration(id);
-      if (previousGeneration !== undefined && ledger.currentGeneration(id) !== undefined) {
-        ledger.recordClose(id, previousGeneration, "pty-host-crash");
-      }
-      const generation = ledger.recordLaunch(id, ledgerFactsFromSpawnOptions(options));
-      this.restartExitSuppression.delete(id);
-      const stamped: PtyHostSpawnOptions = { ...options, launchGeneration: generation };
-      this.pendingSpawns.set(id, stamped);
-      this.terminalOwners.set(id, DEFAULT_SHARD_KEY);
-      migratedIds.push(id);
-      this.sendSpawnWithPostInput(target, id, stamped);
-    }
-    for (const id of migratedIds) {
-      if (this.ipcDataMirrorIds.has(id)) {
-        target.send({ type: "set-ipc-data-mirror", id, enabled: true });
-      }
-    }
-
-    // Undelivered window ports re-route through the normal path (placement
-    // now resolves to the default shard); delivered ports get a targeted
-    // refresh so the renderer reconnects to the new owner.
-    for (const [windowId, port] of [...shard.pendingMessagePorts]) {
-      shard.pendingMessagePorts.delete(windowId);
-      this.connectMessagePort(windowId, port);
-    }
-    for (const [windowId, key] of [...this.windowPortShard]) {
-      if (key !== shard.key) continue;
-      this.windowPortShard.delete(windowId);
-      this.notifyPortRefresh(windowId);
-    }
-
-    this.trackRetiringHost(shard.dispose());
-    this.dropShardSignals(shard.key);
-  }
-
   // ── Idle shard retirement ────────────────────────────────────────────────
   // A project shard's process lives while its project has terminals or a
   // window; when the last reference drops it lingers briefly, then exits,
@@ -1512,144 +1124,6 @@ export class PtyClient extends EventEmitter {
       `[PtyClient] Rerouting window ${windowId} PTY port: shard '${currentKey}' → '${targetKey}'`
     );
     this.notifyPortRefresh(windowId);
-  }
-
-  private cleanupOrphanedPtysForShard(shard: PtyShard, crashType: CrashType): void {
-    if (crashType === "CLEAN_EXIT") {
-      return;
-    }
-    // A retired shard's late exit (the idle-retirement force-kill backstop)
-    // must not touch a same-key replacement: its ledger lives at the same path
-    // and its terminals share the owner key, so both the claim and the group
-    // kill below would land on healthy processes.
-    const current = this.shards.get(shard.key);
-    if (current && current !== shard) {
-      return;
-    }
-
-    // The crashed host's lineage ledger died with it, so its persisted lineage
-    // is the only remaining record of descendants the process-group kill below
-    // cannot reach: background jobs in their own groups, setsid'd agent work,
-    // and anything already reparented away (#12203, #13166). Runs before the
-    // terminalPids check, since those outlive whatever we still track.
-    //
-    // The claim is synchronous so a replacement host can never write the same
-    // path first; the reap itself is held on the shard so the restart and the
-    // replay it triggers wait for it.
-    const claimed = claimShardLineageFile(app.getPath("userData"), shard.serviceName);
-    if (claimed) {
-      const reap: Promise<void> = reapClaimedLineageFile(claimed)
-        .catch((err) => {
-          console.warn("[PtyClient] Lineage reap after host crash failed:", err);
-        })
-        .finally(() => {
-          if (shard.lineageReap === reap) shard.lineageReap = null;
-        });
-      shard.lineageReap = reap;
-    }
-
-    if (this.terminalPids.size === 0) {
-      return;
-    }
-
-    // Scope to the crashed shard's terminals — killing a sibling shard's
-    // healthy PTY trees would turn one project's crash into an app-wide one.
-    const ownedIds: string[] = [];
-    const uniquePids = new Set<number>();
-    for (const [id, pid] of this.terminalPids) {
-      if (this.ownerKey(id) !== shard.key) continue;
-      ownedIds.push(id);
-      uniquePids.add(pid);
-    }
-    if (uniquePids.size === 0) {
-      return;
-    }
-
-    console.warn(
-      `[PtyClient] Attempting to clean up ${uniquePids.size} orphaned PTY process(es) after host crash`
-    );
-
-    const killable = [...uniquePids].filter(
-      (pid) => Number.isFinite(pid) && pid > 0 && pid !== process.pid
-    );
-
-    if (process.platform === "win32") {
-      // One helper run for every tree, never `taskkill /T`, which can follow a
-      // reused parent PID into an unrelated program — and no bare-PID fallback
-      // either: the crashed host's handles no longer pin these PIDs. A shell
-      // whose identity the host reported goes with it, so a PID taken over
-      // since the crash is left alone. Not blocking: this is Main mid-session.
-      // The shard's restart waits for it through the same barrier as the
-      // lineage reap above.
-      const identityOf = new Map<number, number>();
-      for (const id of ownedIds) {
-        const identity = this.terminalIdentities.get(id);
-        if (identity && identity.pid === this.terminalPids.get(id)) {
-          identityOf.set(identity.pid, identity.startTime);
-        }
-      }
-      // A shell the host never identified (a crash within a second or so of
-      // its spawn) is not walked by bare PID: nothing proves the PID is still
-      // ours. Its pseudoconsole died with the host, which ends it, and the
-      // terminal Job Object holds whatever it started.
-      const identified = killable.filter((pid) => identityOf.has(pid));
-      if (identified.length < killable.length) {
-        console.warn(
-          `[PtyClient] Left ${killable.length - identified.length} unidentified orphaned PTY root(s) to the pseudoconsole close and Job Object`
-        );
-      }
-      const targets: WindowsTreeKillTarget[] = identified.map((pid) => ({
-        pid,
-        startTime: identityOf.get(pid) as number,
-      }));
-      const kill = killWindowsProcessTrees(targets, { timeoutMs: 3000 }).then(
-        (results) => {
-          results.forEach((result, index) => {
-            const problem = describeWindowsTreeKillProblem(result);
-            if (problem) {
-              console.warn(`[PtyClient] Orphaned PTY pid=${identified[index]}: ${problem}`);
-            }
-          });
-        },
-        (err: unknown) => {
-          console.warn("[PtyClient] Orphaned PTY tree kill after host crash failed:", err);
-        }
-      );
-      const barrier: Promise<void> = Promise.all([shard.lineageReap, kill])
-        .then(() => {})
-        .finally(() => {
-          if (shard.lineageReap === barrier) shard.lineageReap = null;
-        });
-      shard.lineageReap = barrier;
-    }
-
-    for (const pid of process.platform === "win32" ? [] : killable) {
-      let killed = false;
-      try {
-        process.kill(-pid, "SIGKILL");
-        killed = true;
-      } catch {
-        // ignore - fall back to direct kill
-      }
-
-      if (!killed) {
-        try {
-          process.kill(pid, "SIGKILL");
-        } catch (error) {
-          if (process.env.DAINTREE_VERBOSE) {
-            console.warn(`[PtyClient] Failed to kill orphaned PTY pid=${pid}:`, error);
-          }
-        }
-      }
-    }
-
-    for (const id of ownedIds) {
-      this.terminalPids.delete(id);
-      this.terminalIdentities.delete(id);
-      // Their exit events died with the host; release them here so the
-      // supervisor never holds a PID that is free to be recycled.
-      terminalCrashReapService.detachTerminal(id);
-    }
   }
 
   /**
@@ -2001,7 +1475,7 @@ export class PtyClient extends EventEmitter {
       this.displacedSpawns.delete(id);
     }
     this.pendingSpawns.set(id, resolvedOptions);
-    this.sendSpawnWithPostInput(shard, id, resolvedOptions);
+    this.recovery.sendSpawnWithPostInput(shard, id, resolvedOptions);
   }
 
   /**
