@@ -1,8 +1,3 @@
-import {
-  beginStagingStatusRead,
-  getCachedStagingStatus,
-  rememberStagingStatus,
-} from "./stagingStatusCache";
 import { DiffStat } from "@/components/ui/DiffStat";
 import {
   useCallback,
@@ -15,30 +10,18 @@ import {
   useState,
 } from "react";
 import type { RefObject } from "react";
-import type { StagingFileEntry, StagingStatus, GitStatus } from "@shared/types";
+import type { StagingFileEntry, GitStatus } from "@shared/types";
 import type { PanelLocation } from "@shared/types/panel";
 import type { CrossWorktreeFile } from "@shared/types/ipc/git";
-import type { PushProgressEvent } from "@shared/types/ipc/gitPush";
-import { isClientAppError } from "@/utils/clientAppError";
 import { cn } from "@/lib/utils";
 import {
   PANE_TOOLBAR_ICON_BUTTON_CLASS,
   PANE_TOOLBAR_ICON_CLASS,
 } from "@/components/ui/paneToolbarStyles";
-import {
-  EMPTY_MOUNTED_RANGE,
-  rangeCovers,
-  sameRange,
-  shouldVirtualizeFileList,
-  type MountedRange,
-} from "@/lib/fileListWindowing";
-import type { VirtuosoHandle } from "react-virtuoso";
 
 import { RefreshCw, CircleCheck, ArrowUpFromLine, ChevronRight, AlertTriangle } from "lucide-react";
 import { isProtectedBranch } from "@shared/utils/gitConstants";
 import { useUIStore } from "@/store/uiStore";
-import { useGitPushConfirmStore } from "@/store/gitPushConfirmStore";
-import { useGitPullRebaseConfirmStore } from "@/store/gitPullRebaseConfirmStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useDiffViewedStore, selectViewedSet } from "@/store/diffViewedStore";
@@ -49,13 +32,8 @@ import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
-import { keyBelongsToField, stepListboxCursor } from "@/hooks/useListboxCursor";
 import { basename, join } from "@shared/utils/path";
-import {
-  isFileRowMenuKey,
-  openFileRowMenuFromKeyboard,
-  useFileRowMenuItems,
-} from "@/hooks/useFileRowMenuItems";
+import { useFileRowMenuItems } from "@/hooks/useFileRowMenuItems";
 import { usePanelDialogStore } from "@/store/panelDialogStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeIdForPath } from "@/panels/diff/useWorktreeIdForPath";
@@ -68,10 +46,15 @@ import {
 } from "./useReviewHubStagingActions";
 import { PushErrorBanner } from "./PushErrorBanner";
 import { PrStatusChip } from "./PrStatusChip";
-import { PR_CHECKS_OPEN_ATTR } from "./PrChecksPopover";
 import { CommitPanel } from "./CommitPanel";
 import { ConflictPanel } from "./ConflictPanel";
 import { ReadinessRail } from "./ReadinessRail";
+import { useReviewHubStatus } from "./useReviewHubStatus";
+import { useReviewHubBaseBranch } from "./useReviewHubBaseBranch";
+import { useReviewHubCommitAndPush } from "./useReviewHubCommitAndPush";
+import { useReviewHubRowSelection } from "./useReviewHubRowSelection";
+import { useReviewHubFileCursor } from "./useReviewHubFileCursor";
+import { useReviewHubKeyboard } from "./useReviewHubKeyboard";
 import { PluginReadinessChecks, useWorktreeReviewPluginChecks } from "./PluginReadinessChecks";
 import {
   deriveReviewReadiness,
@@ -92,7 +75,6 @@ import {
   SURFACE_HEADER_FOCUS_LIFT_CLASS,
 } from "@/components/ui/SurfaceHeader";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { debounce } from "@/utils/debounce";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useFileDecorations } from "@/hooks/useFileDecorations";
 import {
@@ -102,23 +84,16 @@ import {
 import { useShallow } from "zustand/react/shallow";
 import { systemClient } from "@/clients/systemClient";
 import { announceOpenInEditorFallback } from "@/utils/openInEditorFallback";
-import { forgeClient } from "@/clients/forgeClient";
-import { mintRemoteOperationId } from "@/clients/operationsClient";
-import { runHostOperation } from "@/hooks/useHostConnection";
 import { actionService } from "@/services/ActionService";
-import { useGitForcePushStore } from "@/store/gitForcePushStore";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import { classifyGitError } from "@shared/utils/gitOperationErrors";
 import {
   type DiffMode,
-  type PushErrorState,
   type SectionViewState,
   DEFAULT_SECTION_STATE,
   matchesFilter,
   REVIEW_HUB_COUNT_CHIP,
   REVIEW_HUB_SECTION_BAND,
   REVIEW_HUB_STICKY_BAND,
-  readGitErrorFields,
   resolveBulkScope,
   sortFiles,
   sumChurn,
@@ -195,13 +170,6 @@ export interface ReviewHubContentProps {
 
 const selectNoProviderHealth = () => null;
 
-function isTextWidget(target: EventTarget | null): boolean {
-  return (
-    target instanceof HTMLElement &&
-    (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)
-  );
-}
-
 /**
  * Self-contained Review & Commit surface. All staging-status fetches,
  * subscriptions, push/pull-rebase IPC, and UI interaction state live in this
@@ -224,40 +192,41 @@ export function ReviewHubContent({
   autoStageOnOpen,
 }: ReviewHubContentProps) {
   const isDialog = location === "dialog";
-  const [status, setStatus] = useState<StagingStatus | null>(null);
-  // True once this open's own `getStagingStatus` has landed — false while the
-  // status on screen is the cached snapshot seeded at open. Auto-stage, commit
-  // and push wait for it; they act on the real index and branch, which the
-  // snapshot may no longer describe. Staging a clicked row does not: it is an
-  // explicit, reversible action on the path the user chose.
-  const [statusIsFresh, setStatusIsFresh] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [isBackgroundRefreshing, setIsBackgroundRefreshing] = useState(false);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const {
+    status,
+    statusIsFresh,
+    loading,
+    isBackgroundRefreshing,
+    loadError,
+    refresh,
+    debouncedBgRefreshRef,
+    beginOpen: beginStatusOpen,
+    reset: resetStatus,
+  } = useReviewHubStatus({ isOpen, worktreePath });
   const [actionError, setActionError] = useState<ReviewHubActionFailure | null>(null);
-  const [pushError, setPushError] = useState<PushErrorState | null>(null);
-  // Provider-classified push-error state, resolved async via the active forge
-  // provider (ForgeProviderImpl lives in main). `forgeErrorCode` is a stable,
-  // searchable code (e.g. `GH###`); `forgeProviderId` is the resolved
-  // provider's contribution id, used to route the settings CTA. Both null when
-  // no provider resolves or it doesn't recognize the stderr.
-  const [forgeErrorCode, setForgeErrorCode] = useState<string | undefined>(undefined);
-  const [forgeProviderId, setForgeProviderId] = useState<string | null>(null);
-  const [showPushDetails, setShowPushDetails] = useState(false);
-  // Dismissing the banner hides the presentation only. The failure itself stays
-  // in `pushError`, so readiness gating is unchanged and the rail takes the
-  // `push-failed` blocker back; the next failed attempt shows the banner again.
-  const [pushBannerDismissed, setPushBannerDismissed] = useState(false);
-  const showPushBanner = pushError !== null && !pushBannerDismissed;
-  const [pushProgress, setPushProgress] = useState<Map<string, PushProgressEvent>>(new Map());
-  const [pushTargetBranch, setPushTargetBranch] = useState<string | null>(null);
-  // A commit that empties the tree would otherwise unmount the composer before
-  // its push starts, taking the push target and progress with it.
-  const [isCommitPushInFlight, setIsCommitPushInFlight] = useState(false);
-  // Spoken once when a push lands. The composer that showed its progress may
-  // already be gone (a clean tree unmounts it), so the result lives here.
-  const [pushAnnouncement, setPushAnnouncement] = useState("");
-  const [isPushing, setIsPushing] = useState(false);
+  const {
+    pushError,
+    showPushBanner,
+    forgeErrorCode,
+    forgeProviderId,
+    showPushDetails,
+    setShowPushDetails,
+    setPushBannerDismissed,
+    pushProgress,
+    pushTargetBranch,
+    isCommitPushInFlight,
+    pushAnnouncement,
+    isPushing,
+    pullRebasing,
+    handleCommit,
+    handleCommitAndPush,
+    handleRetryPush,
+    handlePushClean,
+    confirmPullRebase,
+    handleForcePush,
+    clearPushError,
+    reset: resetPush,
+  } = useReviewHubCommitAndPush({ worktreePath, refresh, setActionError, debouncedBgRefreshRef });
   const [commitMessage, setCommitMessage] = useState("");
   const [selectedFile, setSelectedFile] = useState<{
     path: string;
@@ -275,14 +244,26 @@ export function ReviewHubContent({
   );
   const setStoreViewed = useDiffViewedStore((state) => state.setViewed);
   const [diffMode, setDiffMode] = useState<DiffMode>("working-tree");
-  const [pullRebasing, setPullRebasing] = useState(false);
-  const isPullRebasingRef = useRef(false);
-  const [baseBranchFiles, setBaseBranchFiles] = useState<CrossWorktreeFile[] | null>(null);
-  const [baseBranchLoading, setBaseBranchLoading] = useState(false);
-  const [baseBranchError, setBaseBranchError] = useState<string | null>(null);
   const [selectedBaseBranchFile, setSelectedBaseBranchFile] = useState<CrossWorktreeFile | null>(
     null
   );
+  const mainBranch = useWorktreeStore(
+    (state) =>
+      Array.from(state.worktrees.values()).find((wt) => wt.isMainWorktree)?.branch ?? "main"
+  );
+  const {
+    baseBranchFiles,
+    baseBranchLoading,
+    baseBranchError,
+    fetchBaseBranch,
+    invalidate: invalidateBaseBranch,
+    reset: resetBaseBranch,
+  } = useReviewHubBaseBranch({
+    worktreePath,
+    mainBranch,
+    currentBranch: status?.currentBranch,
+    setSelectedBaseBranchFile,
+  });
   // Diff panels opened by this hub. The selection state above stays the record
   // of "a diff is open" (the hub clears it on commit, worktree switch, and
   // conflict-mode entry), but the panel itself owns stepping between files once
@@ -333,48 +314,15 @@ export function ReviewHubContent({
     if (hasWorkingTreeSelection || hasBaseBranchSelection || !diffPanelId) return;
     usePanelDialogStore.getState().closePanelDialogById(diffPanelId);
   }, [hasWorkingTreeSelection, hasBaseBranchSelection, diffPanelId]);
-  const [selectedPaths, setSelectedPaths] = useState<Set<string>>(() => new Set());
-  const [selectionSection, setSelectionSection] = useState<FileStageRowSection | null>(null);
-  // Keyboard-navigation focus across the flat staged+unstaged file list. -1 means
-  // no row is keyboard-focused. Driven entirely by the capture-phase key handler;
-  // `fileListRef` scopes the listbox + scroll-into-view, and `focusedItemKeyRef`
-  // (a `section:path` key) preserves focus on the same file across list mutations.
-  const [focusedIndex, setFocusedIndex] = useState(-1);
-  const fileListRef = useRef<HTMLDivElement | null>(null);
+  const selection = useReviewHubRowSelection(status);
+  const {
+    selectedPaths,
+    setSelectedPaths,
+    selectionSection,
+    setSelectionSection,
+    selectionAnchorRef,
+  } = selection;
   const rootRef = useRef<HTMLDivElement | null>(null);
-  const movingListFocusRef = useRef(false);
-  // Reveal handles for the two windowed sections. Null on the static path,
-  // where the DOM query below still finds every row.
-  const stagedListRef = useRef<VirtuosoHandle | null>(null);
-  const unstagedListRef = useRef<VirtuosoHandle | null>(null);
-  // What each section currently has MOUNTED, in that section's OWN index space.
-  // Deliberately not converted to flat coordinates on the way in: the staged
-  // count shifts every unstaged row's flat index, and Virtuoso does not re-emit
-  // an unchanged local range, so a stored flat range would silently describe
-  // rows that had moved out from under it. `null` means no virtualizer has
-  // reported yet — read as "nothing mounted", never as "everything".
-  const [stagedRange, setStagedRange] = useState<MountedRange>(null);
-  const [unstagedRange, setUnstagedRange] = useState<MountedRange>(null);
-  // A row menu asked for on a row the window had scrolled past. Held until the
-  // reveal mounts the row, then replayed — see the effect near the key handler.
-  // Carries the file's identity as well as its index: a refresh can put a
-  // DIFFERENT file at the same index, and opening that file's menu is worse
-  // than dropping the key.
-  const [pendingMenu, setPendingMenu] = useState<{ index: number; key: string } | null>(null);
-  const focusedItemKeyRef = useRef<string | null>(null);
-  // The same `section:path` value as the ref above, mirrored into state so it
-  // can drive the reveal effect — a ref cannot. The ref stays the source of
-  // truth because the reconciler reads it synchronously, before the render that
-  // would publish new state. `writeCursorKey` keeps the two in step; nothing
-  // may write one without the other.
-  const [focusedCursorKey, setFocusedCursorKey] = useState<string | null>(null);
-  const writeCursorKey = useCallback((key: string | null) => {
-    focusedItemKeyRef.current = key;
-    setFocusedCursorKey(key);
-  }, []);
-  const refreshIdRef = useRef(0);
-  const bgRefreshIdRef = useRef(0);
-  const baseBranchRequestRef = useRef(0);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   // The same element as `scrollContainerRef`, held in STATE as well: Virtuoso
   // needs it as a prop, and a ref mutation does not re-render, so windowing
@@ -385,10 +333,8 @@ export function ReviewHubContent({
     setScrollParent(node);
   }, []);
   const savedScrollTop = useRef(0);
-  const debouncedBgRefreshRef = useRef<ReturnType<typeof debounce> | null>(null);
   const conflictSectionRef = useRef<HTMLDivElement>(null);
   const unstagedSectionRef = useRef<HTMLDivElement>(null);
-  const selectionAnchorRef = useRef<string | null>(null);
   // Row element that opened a diff modal; AppDialog falls back to it when the
   // trigger unmounted (e.g. the file left the list while the modal was open).
   const diffTriggerRef = useRef<HTMLElement | null>(null);
@@ -458,152 +404,28 @@ export function ReviewHubContent({
     [derivedStaged, derivedUnstaged]
   );
 
-  // Reconcile `focusedIndex` when the list mutates (filter, sort, stage/unstage,
-  // refresh). Preserve focus on the same file by `section:path`; if it left the
-  // list, clamp to the nearest valid index so focus never points off the end.
-  useEffect(() => {
-    if (navigableItems.length === 0) {
-      writeCursorKey(null);
-      setFocusedIndex((prev) => (prev === -1 ? prev : -1));
-      return;
-    }
-    const key = focusedItemKeyRef.current;
-    if (key === null) return;
-    const nextIdx = navigableItems.findIndex((item) => `${item.section}:${item.file.path}` === key);
-    if (nextIdx === -1) {
-      const clamped = Math.min(focusedIndex < 0 ? 0 : focusedIndex, navigableItems.length - 1);
-      const clampedItem = navigableItems[clamped];
-      writeCursorKey(clampedItem ? `${clampedItem.section}:${clampedItem.file.path}` : null);
-      setFocusedIndex(clamped);
-    } else if (nextIdx !== focusedIndex) {
-      setFocusedIndex(nextIdx);
-    }
-  }, [navigableItems, focusedIndex, writeCursorKey]);
-
-  // Whether the working-tree list windows. Decided across BOTH sections: they
-  // share one scroll container and one cursor, so windowing one and not the
-  // other would leave the cursor crossing a seam between two reveal mechanisms.
-  const workingTreeVirtualized = shouldVirtualizeFileList(navigableItems.length);
-
-  // Reveal, in two steps rather than one, because react-virtuoso cannot do the
-  // first one correctly here.
-  //
-  // A MOUNTED row is scrolled natively, exactly as this list always did. That
-  // is not a fallback: with `customScrollParent`, Virtuoso clamps its
-  // section-local scrollTop to zero while keeping the PARENT's full viewport
-  // height, so a section sitting below the fold believes its first rows are on
-  // screen. `scrollIntoView`'s already-visible check reads those numbers and
-  // no-ops on a row the user cannot see. The DOM knows the truth.
-  //
-  // An ABSENT row only the virtualizer can place, and `scrollToIndex` is the
-  // right call there precisely because it skips that visibility check — the
-  // destination it computes is in parent coordinates and is correct.
-  const revealCursor = useEffectEvent(() => revealRow(focusedIndex));
-
-  const revealRow = useEffectEvent((index: number) => {
-    const row = fileListRef.current?.querySelector<HTMLElement>(`[data-row-index="${index}"]`);
-    if (row) {
-      row.scrollIntoView({ behavior: "instant", block: "nearest" });
-      return;
-    }
-    if (!workingTreeVirtualized) return;
-    const stagedCount = derivedStaged.length;
-    const handle = index < stagedCount ? stagedListRef.current : unstagedListRef.current;
-    handle?.scrollToIndex({
-      index: index < stagedCount ? index : index - stagedCount,
-      // `start`, never `center`: centring subtracts half the viewport height,
-      // and the viewport height a `customScrollParent` list is given is
-      // `parentHeight - max(0, listTop - parentTop)` — which goes NEGATIVE for a
-      // section far below the fold and sends the scroll past the row entirely.
-      // Aligning to the top needs no viewport arithmetic at all.
-      align: "start",
-      behavior: "auto",
-    });
-  });
-
-  // Reveal when the cursor lands on a DIFFERENT FILE — never merely because its
-  // index moved. Reconciliation renumbers every row below a stage, an unstage
-  // or a re-sort, so a stationary cursor takes a new index constantly, and
-  // scrolling for that drags the view off whatever the user was looking at
-  // (#11684).
-  //
-  // `focusedCursorKey` is the same `section:path` value `focusedItemKeyRef`
-  // holds, mirrored into state because a ref cannot drive an effect. Keying on
-  // it rather than on `focusedIndex` + `navigableItems` also settles the
-  // ordering: a refresh swaps the list one commit before the reconcile effect
-  // below moves the index to follow the file, and an effect that read the new
-  // list at the old index would see a different file, reveal it, and reveal
-  // again on the way back. Both writers below set the key and the index
-  // together, so this only ever fires on a settled cursor.
-  useLayoutEffect(() => {
-    if (focusedCursorKey === null) return;
-    revealCursor();
-  }, [focusedCursorKey]);
-
-  // A row menu requested on a row the window had scrolled past. `revealRow`
-  // above has already asked for it; this fires on the commit that mounts it.
-  // Dropped rather than retried if the row leaves the list first — a filter, a
-  // stage or a refresh means the menu no longer names anything.
-  useEffect(() => {
-    if (pendingMenu === null) return;
-    const item = navigableItems[pendingMenu.index];
-    const key = item ? `${item.section}:${item.file.path}` : null;
-    // Everything that makes the request meaningless cancels it. An armed
-    // request that outlives its reason is the failure mode here: it would open
-    // a menu the user never asked for, on whatever file happens to occupy that
-    // index by the time a row mounts.
-    if (
-      pendingMenu.index !== focusedIndex ||
-      key !== pendingMenu.key ||
+  const cursor = useReviewHubFileCursor({
+    navigableItems,
+    stagedCount: derivedStaged.length,
+    menuReplayBlocked:
       !fileListExpanded ||
       diffMode === "base-branch" ||
       selectedFile !== null ||
-      selectedBaseBranchFile !== null
-    ) {
-      setPendingMenu(null);
-      return;
-    }
-    const row = fileListRef.current?.querySelector<HTMLElement>(
-      `[data-row-index="${pendingMenu.index}"]`
-    );
-    if (!row) return;
-    setPendingMenu(null);
-    openFileRowMenuFromKeyboard(row);
-  }, [
-    pendingMenu,
+      selectedBaseBranchFile !== null,
+  });
+  const {
     focusedIndex,
-    navigableItems,
-    fileListExpanded,
-    diffMode,
-    selectedFile,
-    selectedBaseBranchFile,
-    stagedRange,
-    unstagedRange,
-  ]);
-
-  // Guarded rather than set unconditionally: Virtuoso fires `rangeChanged` on
-  // every scroll frame, and re-rendering the hub at that cadence would cost far
-  // more than the attribute it feeds is worth. Stable identities, so a changing
-  // staged count cannot make Virtuoso resubscribe — it would not replay the
-  // current range if it did.
-  const handleStagedRangeChange = useCallback((range: MountedRange) => {
-    setStagedRange((current) => (sameRange(current, range) ? current : range));
-  }, []);
-  const handleUnstagedRangeChange = useCallback((range: MountedRange) => {
-    setUnstagedRange((current) => (sameRange(current, range) ? current : range));
-  }, []);
-
-  // Never point `aria-activedescendant` at a row that is not in the document.
-  // On the static path every row is mounted and the answer is always yes; the
-  // windowed path mounts a slice, so a cursor the user has scrolled away from
-  // has an index in `navigableItems` and no DOM node at all.
-  const focusedRowExists = focusedIndex >= 0 && focusedIndex < navigableItems.length;
-  const focusedRowIsMounted =
-    focusedRowExists &&
-    (!workingTreeVirtualized ||
-      (focusedIndex < derivedStaged.length
-        ? rangeCovers(stagedRange ?? EMPTY_MOUNTED_RANGE, focusedIndex)
-        : rangeCovers(unstagedRange ?? EMPTY_MOUNTED_RANGE, focusedIndex - derivedStaged.length)));
+    setFocusedIndex,
+    writeCursorKey,
+    fileListRef,
+    movingListFocusRef,
+    stagedListRef,
+    unstagedListRef,
+    handleStagedRangeChange,
+    handleUnstagedRangeChange,
+    workingTreeVirtualized,
+    focusedRowIsMounted,
+  } = cursor;
 
   const sortedBaseBranchFiles = useMemo(
     () =>
@@ -684,11 +506,6 @@ export function ReviewHubContent({
   useEffect(() => {
     if (selectedBaseBranchIndex !== null) lastBaseBranchIndexRef.current = selectedBaseBranchIndex;
   }, [selectedBaseBranchIndex]);
-
-  const mainBranch = useWorktreeStore(
-    (state) =>
-      Array.from(state.worktrees.values()).find((wt) => wt.isMainWorktree)?.branch ?? "main"
-  );
 
   // Both change sets are rebuilt on every poll, so the open effects below read
   // them through this ref instead of depending on them — otherwise a quiet poll
@@ -921,30 +738,6 @@ export function ReviewHubContent({
     };
   }, [readinessSummary, showPushBanner]);
 
-  const refresh = useCallback(async () => {
-    if (!worktreePath) return;
-    const requestId = ++refreshIdRef.current;
-    const readSeq = beginStagingStatusRead();
-    setLoading(true);
-    setLoadError(null);
-    try {
-      const result = await window.electron.git.getStagingStatus(worktreePath);
-      rememberStagingStatus(worktreePath, result, readSeq);
-      if (refreshIdRef.current === requestId) {
-        setStatusIsFresh(true);
-        setStatus(result);
-      }
-    } catch (err) {
-      if (refreshIdRef.current === requestId) {
-        setLoadError(formatErrorMessage(err, "Failed to load staging status"));
-      }
-    } finally {
-      if (refreshIdRef.current === requestId) {
-        setLoading(false);
-      }
-    }
-  }, [worktreePath]);
-
   const {
     handleStageAll,
     handleUnstageAll,
@@ -968,66 +761,6 @@ export function ReviewHubContent({
     debouncedBgRefreshRef,
   });
 
-  const backgroundRefresh = useCallback(async () => {
-    if (!worktreePath) return;
-    const requestId = ++bgRefreshIdRef.current;
-    const readSeq = beginStagingStatusRead();
-    setIsBackgroundRefreshing(true);
-    try {
-      const result = await window.electron.git.getStagingStatus(worktreePath);
-      rememberStagingStatus(worktreePath, result, readSeq);
-      if (bgRefreshIdRef.current === requestId) {
-        setStatusIsFresh(true);
-        setStatus(result);
-        setLoadError(null);
-      }
-    } catch {
-      // Keep existing data visible; silently drop background errors
-    } finally {
-      if (bgRefreshIdRef.current === requestId) {
-        setIsBackgroundRefreshing(false);
-      }
-    }
-  }, [worktreePath]);
-
-  const fetchBaseBranch = useCallback(async () => {
-    const currentBranch = status?.currentBranch;
-    if (!currentBranch || !worktreePath) return;
-    if (currentBranch === mainBranch) return;
-
-    const requestId = ++baseBranchRequestRef.current;
-    setBaseBranchLoading(true);
-    setBaseBranchError(null);
-    setBaseBranchFiles(null);
-    setSelectedBaseBranchFile(null);
-
-    try {
-      const res = await window.electron.git.compareWorktrees(
-        worktreePath,
-        mainBranch,
-        currentBranch,
-        undefined,
-        true
-      );
-      if (baseBranchRequestRef.current !== requestId) return;
-      if (typeof res === "string") {
-        setBaseBranchError("Unexpected result from comparison");
-        return;
-      }
-      setBaseBranchFiles(res.files);
-    } catch (err) {
-      if (baseBranchRequestRef.current !== requestId) return;
-      setBaseBranchError(formatErrorMessage(err, "Failed to load base branch diff"));
-    } finally {
-      if (baseBranchRequestRef.current === requestId) setBaseBranchLoading(false);
-    }
-  }, [worktreePath, mainBranch, status?.currentBranch]);
-
-  useEffect(() => {
-    setShowPushDetails(false);
-    setPushBannerDismissed(false);
-  }, [pushError]);
-
   // Read the latest initialCommitMessage without re-running the open/close
   // effect when the AI-note changes mid-session — protects user edits per #4220.
   const readInitialCommitMessage = useEffectEvent(() => initialCommitMessage ?? "");
@@ -1038,40 +771,26 @@ export function ReviewHubContent({
       // `refresh`'s identity): drop the previous worktree's staging status so
       // the file list and readiness rail never mix two worktrees' state. The
       // cache is keyed by worktree, so what it seeds is this worktree's.
-      setStatusIsFresh(false);
-      // A background read still in flight belongs to the previous worktree (or
-      // the previous opening); landing it would mark this one fresh.
-      bgRefreshIdRef.current++;
-      setStatus(worktreePath ? getCachedStagingStatus(worktreePath) : null);
+      beginStatusOpen();
       setActionError(null);
-      setPushError(null);
+      clearPushError();
       const seed = readInitialCommitMessage();
       if (seed) setCommitMessage(seed);
       void refresh();
     } else {
-      refreshIdRef.current++;
-      bgRefreshIdRef.current++;
-      baseBranchRequestRef.current++;
-      // Clear the loading flags too: their owning requests are abandoned above
-      // by bumping the request-id refs, so their `finally` blocks no longer fire
-      // the reset. Leaving these true strands `useDohertyGate` (skeleton flashes
-      // on reopen) and deadlocks base-branch (handleDiffModeChange refuses to
-      // refetch while baseBranchLoading is true).
-      setLoading(false);
-      setBaseBranchLoading(false);
-      setStatus(null);
-      setLoadError(null);
+      // Abandons every in-flight read by bumping its request generation, and
+      // clears the loading flags those reads' `finally` blocks no longer will:
+      // left true they strand `useDohertyGate` (skeleton flashes on reopen) and
+      // deadlock base-branch (handleDiffModeChange refuses to refetch while
+      // baseBranchLoading is true).
+      resetStatus();
+      resetBaseBranch();
+      resetPush();
       setActionError(null);
-      setPushError(null);
       setSelectedFile(null);
       setCommitMessage("");
-      setIsBackgroundRefreshing(false);
       setDiffMode("working-tree");
-      setBaseBranchFiles(null);
-      setBaseBranchError(null);
       setSelectedBaseBranchFile(null);
-      setPullRebasing(false);
-      isPullRebasingRef.current = false;
       // Viewed markers deliberately survive close/reopen (diffViewedStore).
       setSelectedPaths(new Set());
       setSelectionSection(null);
@@ -1089,7 +808,21 @@ export function ReviewHubContent({
       setStagedView(DEFAULT_SECTION_STATE);
       setChangesView(DEFAULT_SECTION_STATE);
     }
-  }, [isOpen, refresh, writeCursorKey, worktreePath]);
+  }, [
+    isOpen,
+    refresh,
+    writeCursorKey,
+    worktreePath,
+    beginStatusOpen,
+    clearPushError,
+    resetStatus,
+    resetBaseBranch,
+    resetPush,
+    setFocusedIndex,
+    setSelectedPaths,
+    setSelectionSection,
+    selectionAnchorRef,
+  ]);
 
   useEffect(() => {
     if (!isOpen || !autoStageOnOpen) return;
@@ -1123,134 +856,24 @@ export function ReviewHubContent({
         });
       }
     })();
-  }, [isOpen, autoStageOnOpen, status, statusIsFresh, refresh, worktreePath, handleStageAll]);
+  }, [
+    isOpen,
+    autoStageOnOpen,
+    status,
+    statusIsFresh,
+    refresh,
+    worktreePath,
+    handleStageAll,
+    debouncedBgRefreshRef,
+  ]);
 
   useEffect(() => {
     if (diffMode === "base-branch" && status?.currentBranch === mainBranch) {
-      baseBranchRequestRef.current++;
+      invalidateBaseBranch();
       setDiffMode("working-tree");
-      setBaseBranchFiles(null);
-      setBaseBranchError(null);
       setSelectedBaseBranchFile(null);
     }
-  }, [status?.currentBranch, mainBranch, diffMode]);
-
-  // Classify push failures via the active forge provider (lives in main).
-  // Provider-agnostic: surfaces a stable error code and the provider id used
-  // to route the settings CTA. Classification is best-effort — any failure
-  // leaves the banner in its generic state with the raw stderr.
-  useEffect(() => {
-    // Clear synchronously so a new failure never shows the previous error's
-    // code or routes its settings CTA to a stale provider while the new
-    // classification is in flight.
-    setForgeErrorCode(undefined);
-    setForgeProviderId(null);
-    if (!pushError || !worktreePath) {
-      return;
-    }
-    let cancelled = false;
-    void (async () => {
-      try {
-        const result = await forgeClient.classifyPushError(worktreePath, pushError.rawMessage);
-        if (cancelled) return;
-        setForgeProviderId(result?.providerId ?? null);
-        setForgeErrorCode(result?.classification?.code);
-      } catch {
-        if (cancelled) return;
-        setForgeProviderId(null);
-        setForgeErrorCode(undefined);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [pushError, worktreePath]);
-
-  useEffect(() => {
-    if (!status || !selectionSection) return;
-    const sectionFiles = selectionSection === "staged" ? status.staged : status.unstaged;
-    const validPaths = new Set(sectionFiles.map((f) => f.path));
-    setSelectedPaths((prev) => {
-      if (prev.size === 0) return prev;
-      let mutated = false;
-      const next = new Set<string>();
-      for (const p of prev) {
-        if (validPaths.has(p)) next.add(p);
-        else mutated = true;
-      }
-      if (!mutated) return prev;
-      if (next.size === 0) {
-        setSelectionSection(null);
-        selectionAnchorRef.current = null;
-      } else if (
-        selectionAnchorRef.current !== null &&
-        !validPaths.has(selectionAnchorRef.current)
-      ) {
-        // Anchor evicted but selection survives — reseat anchor on a remaining
-        // path so the next shift-click extends from it rather than falling
-        // through to plain-click (which would wipe the selection).
-        selectionAnchorRef.current = next.values().next().value ?? null;
-      }
-      return next;
-    });
-  }, [status, selectionSection]);
-
-  useEffect(() => {
-    if (!isOpen) return;
-
-    const debouncedBgRefresh = debounce(() => void backgroundRefresh(), 800);
-    debouncedBgRefreshRef.current = debouncedBgRefresh;
-
-    // Per-view worktree MessagePort — the same delivery the worktree store
-    // consumes. The main-relayed events:push copy of worktree-update was
-    // removed (this component was its only subscriber).
-    const unsubscribeUpdate = window.electron.worktreePort.onEvent("worktree-update", (data) => {
-      const event = data as { worktree?: { path?: string } };
-      if (event?.worktree?.path === worktreePath) {
-        debouncedBgRefresh();
-      }
-    });
-    // A stamp-only update (a watcher flush, a forced status pass) arrives as a
-    // tick; it still means the files on disk may have moved.
-    const unsubscribeTick = window.electron.worktreePort.onEvent("worktree-tick", (data) => {
-      const event = data as { tick?: { path?: string } };
-      if (event?.tick?.path === worktreePath) {
-        debouncedBgRefresh();
-      }
-    });
-
-    return () => {
-      unsubscribeUpdate();
-      unsubscribeTick();
-      debouncedBgRefresh.cancel();
-      debouncedBgRefreshRef.current = null;
-    };
-  }, [isOpen, worktreePath, backgroundRefresh]);
-
-  const handleCommit = useCallback(
-    async (message: string) => {
-      setActionError(null);
-      debouncedBgRefreshRef.current?.cancel();
-      try {
-        await window.electron.git.commit(worktreePath, message);
-        // A commit resets the review: anything still (or newly) changed after
-        // it is a new change, so stale viewed markers must not stick to it.
-        useDiffViewedStore.getState().clearWorktree(worktreePath);
-        await refresh();
-      } catch (err) {
-        // No Retry: the message is still in the composer and the Commit button
-        // is the retry — it owns the busy state, the in-flight guard and the
-        // draft clearing that a re-run from here would skip.
-        setActionError({
-          title: "Couldn't commit changes",
-          detail: formatErrorMessage(err, "Failed to commit changes"),
-        });
-        throw err;
-      }
-    },
-    [worktreePath, refresh]
-  );
-
+  }, [status?.currentBranch, mainBranch, diffMode, invalidateBaseBranch]);
   const handleAbortOperation = useCallback(async () => {
     setActionError(null);
     debouncedBgRefreshRef.current?.cancel();
@@ -1264,7 +887,7 @@ export function ReviewHubContent({
       });
       throw err;
     }
-  }, [worktreePath, refresh]);
+  }, [worktreePath, refresh, debouncedBgRefreshRef]);
 
   const handleContinueOperation = useCallback(
     async function continueOperation(): Promise<void> {
@@ -1282,7 +905,7 @@ export function ReviewHubContent({
         throw err;
       }
     },
-    [worktreePath, refresh]
+    [worktreePath, refresh, debouncedBgRefreshRef]
   );
 
   const handleOpenInEditor = useCallback(
@@ -1332,7 +955,7 @@ export function ReviewHubContent({
         throw err;
       }
     },
-    [worktreePath, refresh]
+    [worktreePath, refresh, debouncedBgRefreshRef]
   );
 
   // Same body as handleStageFile but rethrows so ConflictPanel can roll back
@@ -1354,129 +977,8 @@ export function ReviewHubContent({
         throw err;
       }
     },
-    [worktreePath, refresh]
+    [worktreePath, refresh, debouncedBgRefreshRef]
   );
-
-  const isPushingRef = useRef(false);
-
-  const runPush = useCallback(async () => {
-    if (isPushingRef.current) return;
-    isPushingRef.current = true;
-    setIsPushing(true);
-    setPushError(null);
-    setPushProgress(new Map());
-    setPushTargetBranch(null);
-    setPushAnnouncement("");
-    let announcedTarget: string | null = null;
-
-    const cleanup = window.electron.git.onPushProgress((event) => {
-      if (event.cwd !== worktreePath) return;
-      if (event.stage === "target") {
-        announcedTarget = event.targetBranch ?? null;
-        setPushTargetBranch(event.targetBranch ?? null);
-        return;
-      }
-      setPushProgress((prev) => {
-        const next = new Map(prev);
-        next.set(event.stage, event);
-        return next;
-      });
-    });
-
-    // Drop any lease captured by an earlier rejection before pushing again —
-    // the same order `git.push`'s action uses. Without it a push that fails for
-    // some OTHER reason (or succeeds) leaves the previous rejection's lease
-    // standing, and the worktree card goes on offering a recovery for a remote
-    // state nobody has observed since.
-    useGitForcePushStore.getState().clearRecovery(worktreePath);
-    try {
-      const opId = mintRemoteOperationId();
-      await runHostOperation(
-        opId,
-        () =>
-          opId
-            ? window.electron.git.push(worktreePath, undefined, opId)
-            : window.electron.git.push(worktreePath),
-        { fromResult: () => undefined }
-      );
-      setPushError(null);
-      setPushAnnouncement(announcedTarget ? `Pushed to ${announcedTarget}` : "Push complete");
-    } catch (err) {
-      // GitOperationError carries `gitReason` (auth-failed, push-rejected-*, etc.).
-      // AppError carries `code` from a different union (RATE_LIMITED, etc.) — fall
-      // back to "unknown" so getPushBannerConfig surfaces the raw message rather
-      // than rendering an unmapped reason.
-      const errFields = readGitErrorFields(err);
-      const isRateLimited =
-        isClientAppError(err) && (err as { code?: string }).code === "RATE_LIMITED";
-      const rawMessage = isRateLimited
-        ? "Too many push attempts in a short window — wait a moment and try again."
-        : formatErrorMessage(err, "Failed to push");
-      setPushError({
-        reason: errFields.gitReason ?? classifyGitError(rawMessage),
-        rawMessage,
-        leaseSha: errFields.leaseSha,
-        branchName: errFields.branchName,
-      });
-      // This pane pushes through the IPC directly rather than the `git.push`
-      // action, so the action's own capture never runs here. Publishing the
-      // lease to the shared store is what lets the worktree card offer the
-      // same recovery the banner below does — and keeps ONE lease per
-      // worktree, captured at one rejection, however the push was started.
-      useGitForcePushStore.getState().recordRejection({
-        cwd: worktreePath,
-        branchName: errFields.branchName,
-        leaseSha: errFields.leaseSha,
-      });
-    } finally {
-      cleanup();
-      setIsPushing(false);
-      isPushingRef.current = false;
-    }
-  }, [worktreePath]);
-
-  const handleCommitAndPush = useCallback(
-    async (message: string) => {
-      setActionError(null);
-      setPushError(null);
-      debouncedBgRefreshRef.current?.cancel();
-      setIsCommitPushInFlight(true);
-      try {
-        try {
-          await window.electron.git.commit(worktreePath, message);
-        } catch (err) {
-          setActionError({
-            title: "Couldn't commit changes",
-            detail: formatErrorMessage(err, "Failed to commit changes"),
-          });
-          throw err;
-        }
-        // Same review reset as handleCommit — the changeset starts over.
-        useDiffViewedStore.getState().clearWorktree(worktreePath);
-        await refresh();
-        await runPush();
-      } finally {
-        setIsCommitPushInFlight(false);
-      }
-    },
-    [worktreePath, refresh, runPush]
-  );
-
-  const handleRetryPush = useCallback(async () => {
-    setPushError(null);
-    debouncedBgRefreshRef.current?.cancel();
-    await runPush();
-  }, [runPush]);
-
-  // Push from the clean-tree state, where no CommitPanel (and thus no local
-  // push confirm) is mounted. Routes through the same D2 preview dialog the
-  // git.push action uses, then reuses runPush so progress and error banners
-  // stay on the hub's existing paths.
-  const handlePushClean = useCallback(async () => {
-    const confirmed = await useGitPushConfirmStore.getState().requestConfirmation(worktreePath);
-    if (!confirmed) return;
-    await runPush();
-  }, [worktreePath, runPush]);
 
   const handleFocusBlocker = useCallback(
     (blocker: "conflicts" | "staged-files") => {
@@ -1510,48 +1012,8 @@ export function ReviewHubContent({
         }
       });
     },
-    [fileListExpanded, setFileListExpanded, worktreePath]
+    [fileListExpanded, setFileListExpanded, worktreePath, fileListRef]
   );
-
-  const handlePullRebase = useCallback(async () => {
-    if (isPullRebasingRef.current) return;
-    isPullRebasingRef.current = true;
-    setPullRebasing(true);
-    debouncedBgRefreshRef.current?.cancel();
-    try {
-      await window.electron.git.pullRebase(worktreePath);
-      // Successful rebase may have changed the working tree; refresh staging
-      // status before clearing the banner so the user sees the new state.
-      await refresh();
-      setPushError(null);
-    } catch (err) {
-      // A rebase that halts on conflicts surfaces as `conflict-unresolved`;
-      // surface it through the same banner so the user sees the next step.
-      const errFields = readGitErrorFields(err);
-      const rawMessage = formatErrorMessage(err, "Failed to pull and rebase");
-      setPushError({
-        reason: errFields.gitReason ?? classifyGitError(rawMessage),
-        rawMessage,
-      });
-      // Refresh in case the rebase started and left files in conflict.
-      await refresh();
-    } finally {
-      isPullRebasingRef.current = false;
-      setPullRebasing(false);
-    }
-  }, [worktreePath, refresh]);
-
-  // Confirmed through the same dialog the `git.pullRebase` action uses, so the
-  // Review Hub CTA shows the upstream, the incoming commits and the replay set
-  // rather than two counts. It used to open its own count-only confirm, which
-  // made the same operation look different depending on where it was started.
-  const confirmPullRebase = useCallback(async () => {
-    const confirmed = await useGitPullRebaseConfirmStore
-      .getState()
-      .requestConfirmation(worktreePath);
-    if (!confirmed) return;
-    await handlePullRebase();
-  }, [worktreePath, handlePullRebase]);
 
   const handleReadinessCta = useCallback(
     (cta: ReviewReadinessCta) => {
@@ -1573,41 +1035,6 @@ export function ReviewHubContent({
     },
     [handleFocusBlocker, confirmPullRebase]
   );
-
-  /**
-   * The banner CTA dispatches the action rather than opening a dialog of its
-   * own. `git.forcePushWithLease` owns the confirm (globally mounted), the
-   * lease it was captured with, and the IPC — so this pane and the worktree
-   * card force push through exactly one path.
-   */
-  const handleForcePush = useCallback(async () => {
-    const result = await actionService.dispatch(
-      "git.forcePushWithLease",
-      { cwd: worktreePath },
-      { source: "user" }
-    );
-    if (result.ok) {
-      // A declined confirm succeeds with `forced: false`. Clearing the banner
-      // there would retract the recovery CTA the user just backed out of.
-      const forced =
-        typeof result.result === "object" &&
-        result.result !== null &&
-        "forced" in result.result &&
-        result.result.forced === true;
-      if (forced) {
-        setPushError(null);
-        void refresh();
-      }
-      return;
-    }
-    // Re-banner it: the old error described the rejected push, and this one
-    // describes why the recovery from it did not take.
-    const rawMessage = result.error.message || "Failed to force push";
-    setPushError({
-      reason: classifyGitError(rawMessage),
-      rawMessage,
-    });
-  }, [worktreePath, refresh]);
 
   useLayoutEffect(() => {
     if (scrollContainerRef.current && status) {
@@ -1636,7 +1063,7 @@ export function ReviewHubContent({
       diffTriggerRef.current = triggerEl;
       setSelectedFile({ path: filePath, status: fileStatus, section });
     },
-    []
+    [setSelectedPaths, setSelectionSection, selectionAnchorRef]
   );
 
   const handleOpenBaseBranchFile = useCallback((file: CrossWorktreeFile, trigger: HTMLElement) => {
@@ -1701,7 +1128,14 @@ export function ReviewHubContent({
         e.currentTarget instanceof HTMLElement ? e.currentTarget : null
       );
     },
-    [status, selectionSection, openFileDiff]
+    [
+      status,
+      selectionSection,
+      openFileDiff,
+      setSelectedPaths,
+      setSelectionSection,
+      selectionAnchorRef,
+    ]
   );
 
   const handleViewedChange = useCallback(
@@ -1755,192 +1189,25 @@ export function ReviewHubContent({
     [baseBranchFiles, baseBranchLoading, fetchBaseBranch]
   );
 
-  const handleKeyDown = useEffectEvent((e: KeyboardEvent) => {
-    if (e.key === "Escape") {
-      // Backstop. The checks disclosure claims Escape for itself on a
-      // window-capture listener, which runs ahead of this one — but this
-      // listener closes the entire hub, so it stands aside on the trigger's own
-      // open marker rather than relying on that ordering alone.
-      if (document.querySelector(`[${PR_CHECKS_OPEN_ATTR}="true"]`)) return;
-      const nothingTransient = !selectedFile && !selectedBaseBranchFile && selectedPaths.size === 0;
-      // A filter with text clears itself first (SearchField's own Escape);
-      // only an empty one gives Escape over to leaving the field.
-      if (nothingTransient && e.target instanceof HTMLInputElement && e.target.value !== "") {
-        return;
-      }
-      e.preventDefault();
-      e.stopPropagation();
-      if (selectedFile) {
-        setSelectedFile(null);
-      } else if (selectedBaseBranchFile) {
-        setSelectedBaseBranchFile(null);
-      } else if (selectedPaths.size > 0) {
-        setSelectedPaths(new Set());
-        setSelectionSection(null);
-        selectionAnchorRef.current = null;
-      } else if (isTextWidget(e.target)) {
-        // Leaving a text field is as far as Escape goes from inside one: the
-        // commit message lives only in this panel, so closing here would lose
-        // the draft to a key pressed to dismiss something smaller.
-        // With the file list collapsed there is nowhere steadier to go, so
-        // focus stays put rather than dropping to the document.
-        const list = fileListRef.current;
-        if (list && e.target instanceof HTMLElement) {
-          e.target.blur();
-          list.focus();
-        }
-      } else if (!e.repeat) {
-        // Never on auto-repeat: a held Escape that just left the commit box
-        // would otherwise run on into closing the panel and its draft.
-        onClose();
-      }
-      return;
-    }
-
-    // Navigation/action keys below only apply to the file list. Skip them when
-    // a text widget (filter inputs, commit textarea) or an open dropdown menu
-    // has focus so normal typing and menu navigation are unaffected.
-    const target = e.target instanceof HTMLElement ? e.target : null;
-    if (isTextWidget(target)) return;
-    if (document.activeElement?.closest('[role="menu"]')) return;
-    // A radiogroup (the diff mode switch) answers its own arrow keys, the way it
-    // does everywhere else; this capture listener would otherwise take Up/Down
-    // before the group ever sees them.
-    if (target?.closest('[role="radiogroup"]')) return;
-    // A diff overlay owns the keyboard while open; don't move the list beneath it.
-    if (selectedFile || selectedBaseBranchFile) return;
-    // The file list is collapsed — no rows are visible, so don't let keys mutate
-    // the index or fire stage/unstage/open-diff on rows the user can't see.
-    if (!fileListExpanded) return;
-    // The base-branch comparison swaps the working-tree list out; its rows are
-    // not on screen to step through, open or stage.
-    if (diffMode !== "working-tree") return;
-    if (navigableItems.length === 0) return;
-
-    // Shift+F10 / the ContextMenu key open the focused row's menu. The rows
-    // never take DOM focus (the listbox owns it and names the row through
-    // `aria-activedescendant`), so the menu is replayed as a synthetic
-    // contextmenu on that row's node — Radix's ContextMenu has no imperative
-    // open. Gated on the index resolving to a rendered row, not merely on a
-    // non-empty list: a filter change can leave `focusedIndex` naming a row
-    // that is no longer in the DOM.
-    if (isFileRowMenuKey(e)) {
-      const rowElement =
-        focusedIndex >= 0
-          ? (fileListRef.current?.querySelector<HTMLElement>(
-              `[data-row-index="${focusedIndex}"]`
-            ) ?? null)
-          : null;
-      if (openFileRowMenuFromKeyboard(rowElement)) {
-        // Also suppresses the browser's own contextmenu for the keypress, so
-        // the menu can't double-fire.
-        e.preventDefault();
-        e.stopPropagation();
-        return;
-      }
-      // No node for a cursor that DOES name a row: the windowed list has
-      // scrolled past it. Reveal it and replay the menu on the commit that
-      // mounts it, rather than dropping a key the user pressed on a row they
-      // can see the cursor on.
-      if (rowElement === null && focusedRowExists) {
-        e.preventDefault();
-        e.stopPropagation();
-        const item = navigableItems[focusedIndex];
-        if (!item) return;
-        revealRow(focusedIndex);
-        setPendingMenu({ index: focusedIndex, key: `${item.section}:${item.file.path}` });
-      }
-      return;
-    }
-
-    // Action keys (Enter/Space/v) carry side effects; never let them fire while a
-    // button or link has focus, or we'd hijack that control's native activation
-    // (e.g. Space on Refresh) and instead act on the last keyboard-focused row.
-    const targetIsControl = target?.tagName === "BUTTON" || target?.tagName === "A";
-
-    const moveFocus = (index: number) => {
-      const item = navigableItems[index];
-      if (!item) return;
-      setFocusedIndex(index);
-      writeCursorKey(`${item.section}:${item.file.path}`);
-      // Move DOM focus to the listbox so assistive tech announces the active
-      // option via aria-activedescendant. Scroll is handled by the layout effect.
-      // Flagged so the listbox's Tab-entry seeding, which would read the index
-      // from before this keypress, stands down for this focus.
-      movingListFocusRef.current = true;
-      fileListRef.current?.focus({ preventScroll: true });
-      movingListFocusRef.current = false;
-    };
-
-    // A persistent file list, so the arrows stop at its ends rather than wrap.
-    const next = keyBelongsToField(e)
-      ? null
-      : stepListboxCursor(e.key, focusedIndex, navigableItems.length, { wrap: false });
-    if (next !== null) {
-      e.preventDefault();
-      e.stopPropagation();
-      moveFocus(next);
-      return;
-    }
-
-    switch (e.key) {
-      case "Enter": {
-        if (targetIsControl || focusedIndex < 0) return;
-        const item = navigableItems[focusedIndex];
-        if (!item) return;
-        e.preventDefault();
-        e.stopPropagation();
-        openFileDiff(
-          item.section,
-          item.file.path,
-          item.file.status,
-          // Falls back to the listbox, which the windowed list makes routine
-          // rather than exceptional: a cursor the user has scrolled past has no
-          // row node to hand the dialog back to, and the listbox is the element
-          // that owns focus anyway.
-          fileListRef.current?.querySelector<HTMLElement>(`[data-row-index="${focusedIndex}"]`) ??
-            fileListRef.current
-        );
-        return;
-      }
-      case " ": {
-        if (targetIsControl || focusedIndex < 0) return;
-        const item = navigableItems[focusedIndex];
-        if (!item) return;
-        e.preventDefault();
-        e.stopPropagation();
-        if (item.section === "staged") {
-          handleToggleStaged(item.file.path);
-        } else {
-          handleToggleUnstaged(item.file.path);
-        }
-        return;
-      }
-      default: {
-        if (e.key.toLowerCase() === "v" && !e.metaKey && !e.ctrlKey && !e.altKey) {
-          if (targetIsControl || focusedIndex < 0) return;
-          const item = navigableItems[focusedIndex];
-          if (!item) return;
-          e.preventDefault();
-          e.stopPropagation();
-          const viewedKey = `${item.section}:${item.file.path}`;
-          handleViewedChange(viewedKey, !viewedFiles.has(viewedKey));
-        }
-        return;
-      }
-    }
+  useReviewHubKeyboard({
+    isOpen,
+    keyboardScope,
+    onClose,
+    cursor,
+    selection,
+    navigableItems,
+    selectedFile,
+    setSelectedFile,
+    selectedBaseBranchFile,
+    setSelectedBaseBranchFile,
+    fileListExpanded,
+    diffMode,
+    openFileDiff,
+    handleToggleStaged,
+    handleToggleUnstaged,
+    handleViewedChange,
+    viewedFiles,
   });
-
-  useEffect(() => {
-    if (!isOpen) return;
-    const scope = keyboardScope ?? document;
-    if (scope instanceof Document) {
-      scope.addEventListener("keydown", handleKeyDown, { capture: true });
-      return () => scope.removeEventListener("keydown", handleKeyDown, { capture: true });
-    }
-    scope.addEventListener("keydown", handleKeyDown, { capture: true });
-    return () => scope.removeEventListener("keydown", handleKeyDown, { capture: true });
-  }, [isOpen, keyboardScope]);
 
   // Shape-matched skeletons replace the old full-area spinners. Doherty-gate
   // both so sub-400ms loads render nothing (no flash); bones inside use
