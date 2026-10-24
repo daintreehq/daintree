@@ -1,20 +1,9 @@
-import {
-  GLOBAL_ASSISTANT_ID,
-  GLOBAL_ASSISTANT_TOOL_IDS,
-} from "../../../shared/config/globalAssistant.js";
+import { GLOBAL_ASSISTANT_TOOL_IDS } from "../../../shared/config/globalAssistant.js";
 import { randomBytes, randomUUID } from "node:crypto";
 import { app } from "electron";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import {
-  ListToolsRequestSchema,
   CallToolRequestSchema,
-  ListResourcesRequestSchema,
-  ListResourceTemplatesRequestSchema,
-  ReadResourceRequestSchema,
-  SubscribeRequestSchema,
-  UnsubscribeRequestSchema,
-  ListPromptsRequestSchema,
-  GetPromptRequestSchema,
   McpError,
   ErrorCode,
   type CallToolRequest,
@@ -30,70 +19,26 @@ import {
   type BatchItemOutcome,
   type TerminalCloseManyArgs,
 } from "../../../shared/types/mcpBatch.js";
-import {
-  ASSISTANT_CLOSE_CONFIRM_AGENT_STATES,
-  type AgentState,
-} from "../../../shared/types/agent.js";
-import type { TerminalHandback } from "../../../shared/types/handback.js";
-import { dispatchCarriesRecipeId } from "../../../shared/utils/dispatchRecipeId.js";
 import { resolveEffectiveActionDanger } from "../../../shared/utils/effectiveActionDanger.js";
-import {
-  readDispatchTerminalCommand,
-  readDispatchTerminalCwd,
-  TERMINAL_LAUNCH_ACTION_ID,
-} from "../../../shared/utils/dispatchTerminalCommand.js";
 import { isGenericNativeGrantEligible } from "../../../shared/config/nativeGrantUsePolicies.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
-import { OWNED_TWIN_TOOLS } from "../../../shared/config/helpAssistantTierAllowlists.js";
-import { MCP_EXTERNAL_OMITTED_ARGS } from "../../../shared/config/mcpExternalTierAllowlist.js";
-import { getAgentAvailabilityStore } from "../AgentAvailabilityStore.js";
-import { events } from "../events.js";
-import { onWorkspaceResidencyChanged, readWorkspaceBindingState } from "../workspaceResidency.js";
-import type { AuditOutcome } from "./auditLog.js";
 import type { McpDispatchAuthorization } from "../../../shared/types/ipc/mcpServer.js";
-import type {
-  HelpAssistantTier,
-  McpTier,
-  ParsedResourceUri,
-  PromptDefinition,
-  PromptRenderContext,
-  DispatchEnvelope,
-} from "./shared.js";
+import type { DispatchEnvelope } from "./shared.js";
 import {
-  PROMPT_DEFINITIONS,
-  PROMPT_TERMINAL_OUTPUT_MAX_CHARS,
-  RESOURCE_SCROLLBACK_TAIL_LINES,
-  parseResourceUri,
-  serializeResourcePayload,
-  unwrapDispatchResult,
-  truncateText,
-  truncateTextTail,
-  readStringField,
-  RESOURCE_BACKING_ACTIONS,
   MCP_ASSISTANT_SERVER_INSTRUCTIONS,
   MCP_SERVER_INSTRUCTIONS,
   TIER_NOT_PERMITTED_CODE,
   CONFIRMATION_REQUIRED_CODE,
   USER_REJECTED_CODE,
-  MCP_DEDUP_ALLOWLIST,
-  MCP_DEDUP_TTL_MS,
-  MCP_DEDUP_MAX_ENTRIES_PER_SESSION,
-  MCP_DEDUP_KEY_COLLISION_CODE,
-  MCP_SSE_IDLE_TIMEOUT_MS,
-  minimumPermittingTier,
   EXECUTION_ERROR_CODE,
-  SESSION_BINDING_GONE,
   SESSION_GONE,
   NO_FRONTEND_ATTACHED_CODE,
   INVALID_URL_CODE,
   RESOURCE_NOT_OWNED_CODE,
   buildToolError,
-  buildMcpErrorPayload,
   withResolvedWorkspace,
   WORKSPACE_BINDING_CAPABILITY_KEY,
   type DispatchedWorkspaceRef,
-  type McpWorkspaceBinding,
-  WORKSPACE_BINDING_RESOURCE_URI,
   RELAY_CALL_ID_META_KEY,
 } from "./shared.js";
 import {
@@ -106,59 +51,33 @@ import {
   NoFrontendAttachedError,
   RelayDrivenElsewhereError,
   RendererBridgeUnavailableError,
-  RemoteHostWindowOnlyError,
   WorkspaceBindingError,
 } from "./rendererBridge.js";
 import { getExternalBaseManifest } from "./baseManifest.js";
-import { createLogger } from "../../utils/logger.js";
-import { createKeyedLogLimiter } from "../../utils/keyedLogLimiter.js";
+import type { CallToolResultLike } from "./sessionDedup.js";
 import {
-  buildDedupKey,
-  canonicalArgsHash,
-  readDedupCache,
-  type CallToolResultLike,
-} from "./sessionDedup.js";
-import {
-  shouldExposeTool,
-  isWithheldFromBoundSession,
-  isWithheldFromRelaySession,
   mayControlAssistants,
   mayRunProjectCommand,
-  type SessionSurfacePolicy,
-  isTierPermitted,
-  isApprovalRequestable,
   isPaneAutoConfirmed,
-  buildToolInputSchema,
-  buildAnnotations,
-  buildToolOutputSchema,
   buildStructuredContent,
   parseToolArguments,
   filterIntrospectionResultForSession,
-  type TargetPolicySessionSnapshot,
-  getReachableActionIds,
   readSearchLimit,
   readListPaging,
-  readRequestedActionId,
   INTROSPECTION_TOOL_IDS,
   ACTIONS_LIST_TOOL_ID,
   ACTIONS_LIST_MAX_LIMIT,
   ACTIONS_SEARCH_TOOL_ID,
   ACTIONS_SEARCH_MAX_LIMIT,
-  ACTIONS_SEARCH_DEFAULT_LIMIT,
 } from "./tierAuth.js";
 import { buildToolCallResult } from "./toolCallResult.js";
 import { buildImageToolCallResult, isImageResultTool } from "./imageToolResult.js";
-import { safeSerializeToolResultCompact } from "../../utils/safeSerializeToolResult.js";
 import { buildSurfaceManifest, MCP_SURFACE_TOOL_ID } from "./surfaceManifest.js";
 import { viewlessStatusArgsAreAnswerable } from "./terminalStatus.js";
 import { viewlessActionDanger } from "../viewless/viewlessActionCatalog.js";
-import { parseLastMessageReadArgs, type LastMessageReadArgs } from "./lastMessageArgs.js";
+import { parseLastMessageReadArgs } from "./lastMessageArgs.js";
 import { LAST_MESSAGE_TEXT_MAX_BYTES } from "../../../shared/types/agentLastMessage.js";
-import {
-  extractOwnedResourcesFromDispatch,
-  type OwnedResourceKind,
-  type OwnedResourceRecord,
-} from "./resourceOwnership.js";
+import type { OwnedResourceRecord } from "./resourceOwnership.js";
 import type { TerminalAdoptionRecord } from "./terminalAdoption.js";
 import {
   NOTIFY_NOT_ELIGIBLE,
@@ -176,14 +95,13 @@ import {
   type NoticeHold,
   type OwnPane,
   type PendingNotify,
-  type TerminalNotifyHandlers,
 } from "./terminalNotify.js";
 import {
   NOTIFY_REPLY_LINES_DEFAULT,
   NotifyReplyLinesSchema,
 } from "../../../shared/types/terminalNotify.js";
 import { REPLY_WAIT_DEFAULT_SECONDS, WaitSecondsSchema } from "../../../shared/types/replyWait.js";
-import type { ReplyWait, ReplyWaiterService } from "./replyWaiter.js";
+import type { ReplyWait } from "./replyWaiter.js";
 import {
   AGENT_READ_QUOTA_TOOL,
   ASSISTANT_CONTROL_TOOL_IDS,
@@ -192,42 +110,74 @@ import {
   ASSISTANT_TARGET_REFUSALS,
   AssistantStartArgsSchema,
 } from "../../../shared/types/assistantControl.js";
-import type { CodexQuotaResult } from "../../../shared/types/ipc/agentQuota.js";
 import { HOST_CALL_TOOL, HOST_CONTROL_TOOL_IDS } from "../../../shared/types/hostControl.js";
-import {
-  auditCodeForHostControlRefusal,
-  runHostControlTool,
-  type HostControlAccess,
-} from "./hostControlTools.js";
+import { auditCodeForHostControlRefusal, runHostControlTool } from "./hostControlTools.js";
 import {
   AssistantTargetError,
   type AssistantCaller,
   type AssistantTarget,
-  type AssistantTerminalControl,
 } from "../assistants/AssistantTerminalControl.js";
+import type { SessionServerDeps } from "./sessionServerDepsContract.js";
+import { createSessionContext } from "./sessionContext.js";
+import {
+  createManifestResolver,
+  lookupManifestEntry,
+  registerListToolsHandler,
+} from "./sessionToolDiscovery.js";
+import { registerResourceHandlers } from "./sessionResources.js";
+import { registerPromptHandlers } from "./sessionPrompts.js";
+import { SESSION_GONE_MESSAGE, bindingGoneCode } from "./sessionRouteErrors.js";
 
-const bindingLogger = createLogger("main:McpSessionServer");
-const bindingGoneLogLimiter = createKeyedLogLimiter();
+export type {
+  OwnedMainExecutors,
+  SessionServerDeps,
+  TerminalCloseContext,
+} from "./sessionServerDepsContract.js";
+export { isHandedBackUntouched } from "./sessionServerDepsContract.js";
+export { cleanupResourceSubscriptions } from "./sessionResources.js";
+import {
+  TERMINAL_WAIT_UNTIL_IDLE_TOOL,
+  TERMINAL_WAIT_UNTIL_IDLE_BATCH_TOOL,
+  HELP_DISPLAY_IMAGE_TOOL,
+  SKILLS_SEARCH_TOOL,
+  SKILLS_LOAD_TOOL,
+  PROJECT_RUN_CHECK_TOOL,
+  PROJECT_RUN_COMMAND_TOOL,
+  TERMINAL_GET_STATUS_TOOL,
+  TERMINAL_READ_LAST_MESSAGE_OWNED_TOOL,
+} from "./sessionToolIds.js";
+import type { CallFacts, CallOutcome, CallerAdmission } from "./sessionCallFacts.js";
+import {
+  ASSISTANT_CONTROL_REFUSAL,
+  PROJECT_RUN_COMMAND_REFUSAL,
+  admitToolCall,
+  buildCallIntrospectionSurface,
+  chargeNativeGrant,
+  refuseCallerOnlyTool,
+  refuseConfirmGatedBoundCall,
+} from "./sessionCallAdmission.js";
+import {
+  HAND_OVER_GRANT_PATH,
+  HAND_OVER_HINT,
+  OWNED_RESOURCE_TOOLS,
+  SESSION_OWNERSHIP_NOTE,
+  createOwnershipAccess,
+  dispatchOwnedResource,
+  filterTerminalListToOwned,
+  prepareTerminalListDispatch,
+  readOwnedResourceId,
+  recordOwnershipFromDispatch,
+  type RendererOwnedResourceTool,
+} from "./sessionCallOwnership.js";
+import { lookupCallDedup, registerCallDedup } from "./sessionCallDedup.js";
+import { createCallApprovals } from "./sessionCallApproval.js";
+import { announceCallStarted, settleCall } from "./sessionCallSettlement.js";
 
 /**
  * Backstop on the `actions.list` page walk. The registry is a few hundred
  * actions, so this only bounds a renderer that never stops reporting `hasMore`.
  */
 const MAX_LIST_PAGE_WALK = 20;
-
-const TERMINAL_WAIT_UNTIL_IDLE_TOOL = "terminal.waitUntilIdle";
-const TERMINAL_WAIT_UNTIL_IDLE_BATCH_TOOL = "terminal.waitUntilIdleBatch";
-const HELP_DISPLAY_IMAGE_TOOL = "help.displayImage";
-const SKILLS_SEARCH_TOOL = "skills.search";
-const SKILLS_LOAD_TOOL = "skills.load";
-const PROJECT_RUN_CHECK_TOOL = "project.runCheck";
-const PROJECT_RUN_COMMAND_TOOL = "project.runCommand";
-
-const PROJECT_RUN_COMMAND_REFUSAL =
-  "project.runCommand is only available to Daintree's own assistant.";
-const ASSISTANT_CONTROL_REFUSAL = "Only a Daintree Assistant can find or start assistants.";
-const TERMINAL_GET_STATUS_TOOL = "terminal.getStatus";
-const TERMINAL_READ_LAST_MESSAGE_OWNED_TOOL = "terminal.readLastMessageOwned";
 
 /**
  * The tools whose execution never touches a renderer, and which are therefore
@@ -249,7 +199,7 @@ const TERMINAL_READ_LAST_MESSAGE_OWNED_TOOL = "terminal.readLastMessageOwned";
  * Kept beside the id constants the branches themselves match on, rather than
  * derived from tier metadata or MCP annotations: annotations are untrusted UX
  * hints, not an access-control boundary, and a second curated allowlist is the
- * drift this file has been bitten by before. `sessionServer.test.ts` walks this
+ * drift this file has been bitten by before. `sessionServer.workspaceBound.test.ts` walks this
  * set and proves every member both answers viewlessly and never reaches
  * `dispatchAction`, so a member that stops being main-process-only fails there.
  *
@@ -277,247 +227,6 @@ export const VIEWLESS_MAIN_PROCESS_TOOLS: ReadonlySet<string> = new Set([
   ASSISTANT_START_TOOL,
   AGENT_READ_QUOTA_TOOL,
 ]);
-/**
- * The main-process executors an owned tool can name. Kept apart from the rest
- * of {@link SessionServerDeps} so a registry entry can only point at one of
- * these, never at some unrelated dep.
- */
-export interface OwnedMainExecutors {
-  /**
-   * Read the last message the agent in an owned panel wrote to its own
-   * transcript (#12479). Given the checked id and the read options its entry's
-   * `readOptions` validated (#12496), and nothing else the caller sent.
-   */
-  handleTerminalReadLastMessageOwned: (
-    terminalId: string,
-    options: import("../../../shared/types/agentLastMessage.js").AgentLastMessageReadOptions,
-    signal: AbortSignal
-  ) => Promise<import("../../../shared/types/agentLastMessage.js").AgentLastMessageResult>;
-}
-
-/**
- * Appended to a pane's refusal from a tool that takes a hand-over (#12980), so
- * the agent can tell the user what to click. Fixed text: it must not vary with
- * the refused id — see RESOURCE_NOT_OWNED_CODE.
- */
-const HAND_OVER_HINT =
-  "If the user started that terminal, they can right-click it, choose 'Hand to orchestrator', " +
-  "and select this agent's pane.";
-const HAND_OVER_GRANT_PATH = "context-menu:hand-to-orchestrator";
-
-/**
- * Told to a caller no pane or help bearer bound (#12987) — an api-key client —
- * on an ownership refusal and alongside what it creates, since its records die
- * with its MCP session and nothing else would say so. Fixed text, for the same
- * reason as {@link HAND_OVER_HINT}.
- */
-const SESSION_OWNERSHIP_NOTE =
-  "This credential only owns what it creates in the current MCP session: a new session does not " +
-  `inherit it, and ${MCP_SSE_IDLE_TIMEOUT_MS / 60_000} minutes without MCP calls ends one. To keep ` +
-  "ownership across reconnects, turn on Agent integrations for the project and launch the " +
-  "orchestrator from Daintree; its credential owns what it creates until that pane exits or is " +
-  "relaunched.";
-
-type OwnedResourceTool = {
-  // `resourceKind`, not `kind`: this repo uses a bare `kind` for panel kinds
-  // and guards comparisons against it with a lint rule, and an ownership
-  // resource kind is a different taxonomy that would otherwise trip it.
-  resourceKind: OwnedResourceKind;
-  idArg: string;
-  releasesOwnership: boolean;
-  /**
-   * Whether a terminal the user handed to this pane (#12490) is enough, or
-   * only one the pane created will do. Declared on every entry rather than
-   * derived from `releasesOwnership`, so a new tool has to decide it: the
-   * cleanup tools say no, because handing over a conversation is not handing
-   * over the right to destroy it.
-   */
-  acceptsAdoption: boolean;
-} & (
-  | {
-      executor: "renderer";
-      delegateTo: string;
-      /**
-       * The delegate's own name for the id, where it differs from the public one.
-       * Arguments are rebuilt rather than forwarded, so without this the id
-       * simply would not reach an action that spells it differently.
-       */
-      delegateIdArg?: string;
-      /**
-       * Arguments beyond the id that reach the delegate, copied by name (#12407).
-       * Everything else the caller sent is dropped, and the checked id is written
-       * after these so no forwarded field can name a different target.
-       */
-      forwardArgs?: readonly string[];
-      /**
-       * Whether this tool's job is to bring the user to the resource. Only a
-       * reveal sets it, and only a reveal may: it is the single place on the
-       * external surface that deliberately moves the user, so it alone routes
-       * through the active view and raises that view's window.
-       */
-      reveals?: boolean;
-    }
-  | {
-      executor: "main";
-      handler: keyof OwnedMainExecutors;
-      /**
-       * The arguments beyond the id that reach the executor, validated and
-       * copied by name (#12496). Nothing else checks them — a main-executed call
-       * never passes through the action's schema parse — so a refusal here is a
-       * validation error returned before anything is read.
-       */
-      readOptions: (args: unknown) => LastMessageReadArgs;
-    }
-);
-
-type RendererOwnedResourceTool = Extract<OwnedResourceTool, { executor: "renderer" }>;
-
-/**
- * The session-scoped `*Owned` tools (#11909), and what each one runs once
- * ownership checks out.
- *
- * They run here rather than as ordinary renderer actions because the thing they
- * authorize against — which session created which resource — is main-process
- * state keyed by the MCP transport session id. The renderer never sees that id
- * and must not: handing it over would make "am I allowed to act on this?" a
- * question the caller's own dispatch could answer about itself.
- *
- * Delegation, not reimplementation. The check happens here; the close, the
- * delete and the reveal are the shipped actions, dispatched under their own ids
- * so `terminal.close`'s trash/recovery behaviour, `worktree.delete`'s D2
- * confirmation with its real file-count preview (`resolveMcpConfirmPreviewTarget`
- * in `useMcpBridge`, which matches on the literal action id) and
- * `pilot.openRun`'s switch-then-focus-intent sequence all apply unchanged.
- *
- * `releasesOwnership` splits the two things an owned tool can be. Cleanup ends
- * the resource, so the record goes with it; a reveal only navigates to one that
- * is still running, and dropping the record there would cost the session the
- * authority to reveal it a second time — or to clean it up at all.
- */
-const OWNED_RESOURCE_TOOLS: Record<string, OwnedResourceTool> = {
-  "terminal.closeOwned": {
-    resourceKind: "terminal",
-    executor: "renderer",
-    delegateTo: "terminal.close",
-    idArg: "terminalId",
-    releasesOwnership: true,
-    acceptsAdoption: false,
-  },
-  // Moves a pane this session launched to another preset of its agent
-  // (#14369). The pane survives, so the record stays; but the conversation
-  // ends as surely as on a close, so a handed-over pane is refused like one.
-  // Only the preset is forwarded: `confirmed` never is, so the approval is the
-  // host's and the model cannot supply its own.
-  "terminal.restartOnPresetOwned": {
-    resourceKind: "terminal",
-    executor: "renderer",
-    delegateTo: "terminal.restartOnPreset",
-    idArg: "terminalId",
-    forwardArgs: ["presetId"],
-    releasesOwnership: false,
-    acceptsAdoption: false,
-  },
-  "worktree.deleteOwned": {
-    resourceKind: "worktree",
-    executor: "renderer",
-    delegateTo: "worktree.delete",
-    idArg: "worktreeId",
-    releasesOwnership: true,
-    acceptsAdoption: false,
-  },
-  // The panel is still the session's after it has been revealed, so this is the
-  // one entry that keeps its record. `pilot.openRun` spells the id `runId`, and
-  // the workspace it should travel to is supplied from the ledger rather than
-  // left to default: the reveal runs in the view the user is looking at, which
-  // is rarely the one holding the panel (#12315).
-  "terminal.revealOwned": {
-    resourceKind: "terminal",
-    executor: "renderer",
-    delegateTo: "pilot.openRun",
-    idArg: "terminalId",
-    delegateIdArg: "runId",
-    releasesOwnership: false,
-    acceptsAdoption: true,
-    reveals: true,
-  },
-  // Where an owned panel sits, without moving the user (#13662). It delegates
-  // to itself: the renderer definition is the focus-free placement, and the
-  // generic placements it would otherwise wrap open the dock popover or take
-  // focus. Only the destination is forwarded. Placing is not a claim the panel
-  // stopped existing, so the record stays.
-  "terminal.placeOwned": {
-    resourceKind: "terminal",
-    executor: "renderer",
-    delegateTo: "terminal.placeOwned",
-    idArg: "terminalId",
-    forwardArgs: ["location"],
-    releasesOwnership: false,
-    acceptsAdoption: true,
-  },
-  // Keeps its record for the same reason the reveal above does: interrupting a
-  // turn is not a claim the panel stopped existing, and dropping the record
-  // would cost the session the authority to interrupt it again — or to close it
-  // afterwards, which is the whole point of having a non-destructive stop
-  // (#12338). Nothing beyond the id is forwarded, which is what keeps this from
-  // becoming the general signal-passing surface it was deliberately not.
-  "terminal.interruptOwned": {
-    resourceKind: "terminal",
-    executor: "renderer",
-    delegateTo: "terminal.interrupt",
-    idArg: "terminalId",
-    releasesOwnership: false,
-    acceptsAdoption: true,
-  },
-  // Terminal input, scoped to panels this session created (#12407). Neither
-  // keeps nor drops anything beyond the record an interrupt keeps: submitting to
-  // a panel is not a claim it stopped existing. The submission is the one entry
-  // that forwards more than the id — its text, and whether to ask for a
-  // handback (#12488) — while the injection forwards nothing, because the
-  // context it writes is the active worktree's and never the caller's.
-  "terminal.sendCommandOwned": {
-    resourceKind: "terminal",
-    executor: "renderer",
-    delegateTo: "terminal.sendCommand",
-    idArg: "terminalId",
-    forwardArgs: ["command", "handback"],
-    releasesOwnership: false,
-    acceptsAdoption: true,
-  },
-  "terminal.injectOwned": {
-    resourceKind: "terminal",
-    executor: "renderer",
-    delegateTo: "terminal.inject",
-    idArg: "terminalId",
-    releasesOwnership: false,
-    acceptsAdoption: true,
-  },
-  // Keys for a dialog in a panel this session launched — most often the trust
-  // screen a fresh worktree puts in front of an agent it just started. Only
-  // the key list is forwarded; the delegate validates it.
-  "terminal.sendKeysOwned": {
-    resourceKind: "terminal",
-    executor: "renderer",
-    delegateTo: "terminal.sendKeys",
-    idArg: "terminalId",
-    forwardArgs: ["choose", "keys"],
-    releasesOwnership: false,
-    acceptsAdoption: true,
-  },
-  // The one entry that runs in main rather than delegating (#12479). What it
-  // reads is a file the agent wrote, which the renderer cannot open, and the
-  // answer is built from host state — the pty-host record and the store the
-  // pane was spawned against — rather than anything the caller supplies.
-  // Reading is not a claim the panel stopped existing, so the record stays.
-  [TERMINAL_READ_LAST_MESSAGE_OWNED_TOOL]: {
-    resourceKind: "terminal",
-    executor: "main",
-    handler: "handleTerminalReadLastMessageOwned",
-    readOptions: parseLastMessageReadArgs,
-    idArg: "terminalId",
-    releasesOwnership: false,
-    acceptsAdoption: true,
-  },
-};
 
 /**
  * The agent messaging tools an assistant caller may point at another
@@ -615,43 +324,6 @@ export function shortAgentTerminalId(
     if (!isInUse(candidate)) return candidate;
   }
   return `${slug}-${randomUUID()}`;
-}
-
-/** The listing whose `owned` filter main resolves against the ledger (#12308). */
-const TERMINAL_LIST_TOOL = "terminal.list";
-
-/**
- * Split a `terminal.list` call's `owned` flag off the arguments the renderer
- * receives (#12308).
- *
- * The strip and the renderer's refusal are one mechanism rather than two
- * independent safeguards. Ownership is main-process state keyed by the MCP
- * session id, which the renderer never sees, so `terminal.list`'s `run()`
- * throws on any `owned` that reaches it — forwarding the flag would fail every
- * legitimate call. Dropping it without setting `ownedOnly` would do the
- * opposite and answer a narrowing question with the whole list. Reading both
- * out of one destructure is what stops those two halves drifting apart.
- *
- * Only an actual boolean is consumed. Anything else is left in place for the
- * renderer's own schema validation to reject, so a bad value comes back as the
- * validation error it is instead of being laundered into a legal request —
- * the same restraint `readSearchLimit` applies to an out-of-contract `limit`.
- */
-function prepareTerminalListDispatch(
-  actionId: string,
-  args: unknown
-): { dispatchArgs: unknown; ownedOnly: boolean } {
-  if (
-    actionId !== TERMINAL_LIST_TOOL ||
-    args === null ||
-    typeof args !== "object" ||
-    Array.isArray(args)
-  ) {
-    return { dispatchArgs: args, ownedOnly: false };
-  }
-  const { owned, ...rest } = args as Record<string, unknown>;
-  if (typeof owned !== "boolean") return { dispatchArgs: args, ownedOnly: false };
-  return { dispatchArgs: rest, ownedOnly: owned };
 }
 
 interface BatchItem {
@@ -867,90 +539,6 @@ function prepareNotifyDispatch(
 }
 
 /**
- * Intersect a `terminal.list` result with what this session created (#12308).
- *
- * The payload is rebuilt from the renderer's rows rather than spread, so no
- * field this function did not understand rides along.
- *
- * An unreadable payload fails the call rather than emptying it, which is where
- * this parts company with `filterIntrospectionResultForSession`: there an
- * empty list IS the denial, while here it is a substantive answer — "you
- * created none of these" is what a client acts on when it decides it has
- * nothing to clean up. Reporting that from a listing nothing could read would
- * be the wrong answer rather than a cautious one.
- *
- * Rows are kept, never manufactured: a ledger record with no matching row in
- * the listing yields nothing, because the listing is what says which panels
- * exist and the ledger only says who created them.
- */
-function filterTerminalListToOwned(
-  result: import("../../../shared/types/actions.js").ActionDispatchResult,
-  owns: (terminalId: string) => boolean
-): import("../../../shared/types/actions.js").ActionDispatchResult {
-  if (!result.ok) return result;
-  const payload = result.result as { terminals?: unknown; panelLimit?: unknown } | null | undefined;
-  if (!Array.isArray(payload?.terminals)) {
-    return {
-      ok: false,
-      error: {
-        code: "RESULT_VALIDATION_ERROR",
-        message:
-          "terminal.list returned a listing that could not be intersected with this session's ownership records.",
-      },
-    };
-  }
-  return {
-    ok: true,
-    result: {
-      // Rebuilt rather than spread so a field added to the listing later is
-      // reviewed here, not passed through unfiltered.
-      terminals: payload.terminals.filter((row) => {
-        const id = (row as { id?: unknown } | null | undefined)?.id;
-        return typeof id === "string" && owns(id);
-      }),
-      // The project-wide count the hard limit is judged on, never narrowed to
-      // this caller's own rows.
-      panelLimit: payload.panelLimit,
-    },
-  };
-}
-
-/**
- * Whether a `terminal.close` result reports the named panel as actually closed.
- *
- * Structural rather than trusting the action id: an empty `closedIds` is
- * `terminal.close`'s documented "nothing closed" answer, and the ownership
- * release must be able to tell that apart from a real close.
- */
-function closedIdsInclude(result: unknown, id: string): boolean {
-  if (typeof result !== "object" || result === null || Array.isArray(result)) return false;
-  const closedIds = (result as { closedIds?: unknown }).closedIds;
-  return Array.isArray(closedIds) && closedIds.includes(id);
-}
-
-/**
- * The resource id an `*Owned` call names, or `undefined` when the
- * argument is missing, the wrong type, or blank.
- *
- * Read here rather than trusting the renderer's schema validation, because the
- * ownership check runs before the dispatch that would perform it — and a
- * whitespace-only id must not reach a Map lookup that could only ever miss.
- */
-function readOwnedResourceId(args: unknown, key: string): string | undefined {
-  if (typeof args !== "object" || args === null || Array.isArray(args)) return undefined;
-  const value = (args as Record<string, unknown>)[key];
-  if (typeof value !== "string") return undefined;
-  // Blankness is judged on the trimmed form, but the ORIGINAL is returned: the
-  // ledger stores ids exactly as the creating action reported them, and
-  // `agent.launch`'s `requestedId` lets a caller create one with surrounding
-  // whitespace. Handing the trimmed form to the lookup would make that
-  // resource permanently uncleanable.
-  return value.trim().length === 0 ? undefined : value;
-}
-
-import type { SessionStore } from "./sessionStore.js";
-
-/**
  * Validate a `help.displayImage` URL (#9828). Only `https://daintree.org` and
  * its subdomains are accepted; `data:`/`blob:`/other-host URLs are rejected so
  * the assistant can't smuggle arbitrary content into the panel. The explicit
@@ -996,455 +584,6 @@ export function validateDisplayImageUrl(
     };
   }
   return { valid: true };
-}
-
-/** The pty-host's observations about one terminal that decide the assistant's close. */
-export interface TerminalCloseContext {
-  /** Absent for a terminal with no agent attached. */
-  agentState?: AgentState;
-  lastHandback?: Pick<TerminalHandback, "observedAt">;
-  lastTypedInputAt?: number;
-}
-
-/**
- * Whether the agent printed the handback it was asked for and nothing has been
- * typed into it since (#13128). A tie asks: a millisecond clock cannot order
- * the two.
- */
-export function isHandedBackUntouched(context: TerminalCloseContext): boolean {
-  const observedAt = context.lastHandback?.observedAt;
-  if (typeof observedAt !== "number" || !Number.isFinite(observedAt)) return false;
-  const typedAt = context.lastTypedInputAt;
-  return typedAt === undefined || typedAt < observedAt;
-}
-
-export interface SessionServerDeps extends OwnedMainExecutors {
-  sessionStore: SessionStore;
-  /**
-   * The workspace this session was bound to at handshake (#11789), echoed in
-   * the `initialize` result so a client can verify where its calls will land
-   * before issuing a mutation. Absent for unbound sessions.
-   */
-  workspaceBinding?: McpWorkspaceBinding;
-  /**
-   * An agent pane's launch view (#12486), which its route prefers while the
-   * view still shows the bound workspace. Read by the binding resource so it
-   * reports the route calls actually take. Absent for every other session.
-   */
-  preferredWebContentsId?: number;
-  requestManifest: () => Promise<import("../../../shared/types/actions.js").ActionManifestEntry[]>;
-  dispatchAction: (
-    actionId: string,
-    args: unknown,
-    confirmed?: boolean,
-    /**
-     * What pre-authorized a `confirmed` dispatch, passed only for the skip
-     * preference (#12874) — the one reason the renderer treats differently,
-     * since it alone also waives the typed-name gate on a force delete.
-     */
-    authorization?: McpDispatchAuthorization,
-    /**
-     * A relayed call's callId from its Shell (#13493), passed only for a
-     * relayed session, so an approval the call needs asks about this very
-     * call (#13501).
-     */
-    relayCallId?: string
-  ) => Promise<DispatchEnvelope>;
-  /**
-   * Take the user to a run, and bring the window it lands in with them
-   * (#12315), reporting whether that window actually came forward.
-   *
-   * `terminal.revealOwned` is the only caller, and it needs this rather than
-   * `dispatchAction` for a reason that is easy to get backwards. A bound
-   * session's dispatches land in its own workspace's view — exactly the view a
-   * reveal is trying to bring forward — so the reveal would ask a cached,
-   * detached renderer to switch to itself, and the visible view it replaced
-   * would be detached with nothing to persist its drafts. The bridge picks the
-   * view being replaced instead, in the window that already holds the
-   * destination, and raises that same window once the dispatch lands.
-   *
-   * Optional: without it a reveal falls back to the ordinary dispatch, which is
-   * the right target for every session except a bound one, and raises nothing.
-   */
-  revealOwnedRun?: (
-    workspaceId: string | undefined,
-    actionId: string,
-    args: unknown,
-    confirmed?: boolean
-  ) => Promise<{ envelope: DispatchEnvelope; raised: boolean }>;
-  /**
-   * Put a call to the user without running it (#12692). Supplied only for an
-   * agent pane, and its presence is what makes the session one: a pane's
-   * project tier is the line below which calls run without asking, and above
-   * which they ask here instead of being refused. Every other session's tier
-   * stays a hard ceiling.
-   *
-   * Resolves with the dialog's decision in `confirmationDecision` (and
-   * `approvalScope` when the user chose to keep allowing the tool); rejects
-   * exactly as `dispatchAction` does when the view cannot be reached.
-   */
-  requestApproval?: (actionId: string, args: unknown) => Promise<DispatchEnvelope>;
-  /**
-   * The pane's project "Skip confirmations" setting, captured at launch
-   * (#12876). Only read alongside {@link requestApproval}: a session that is
-   * not an agent pane never skips a confirmation on it.
-   */
-  paneSkipConfirmations?: boolean;
-  /**
-   * Put a close by Daintree's own assistant to the user without running it
-   * (#12881): one naming panels the session did not create, or whose agent
-   * was last seen working or waiting. Resolves with the dialog's decision and,
-   * once approved, the ids the user left checked in
-   * `result.result.selectedTargetIds`. Rejects when no window can ask, and the
-   * close is then refused. Consulted only for a renderer-owned origin.
-   */
-  requestCloseApproval?: (actionId: string, args: unknown) => Promise<DispatchEnvelope>;
-  handleWaitUntilIdle: (
-    rawArgs: unknown,
-    signal: AbortSignal,
-    options?: { maxTimeoutMs?: number; workspaceId?: string }
-  ) => Promise<import("./shared.js").WaitUntilIdleResult>;
-  handleWaitUntilIdleBatch: (
-    rawArgs: unknown,
-    signal: AbortSignal,
-    options?: { maxTimeoutMs?: number; workspaceId?: string }
-  ) => Promise<import("../../../shared/types/terminalWaitUntilIdle.js").WaitUntilIdleBatchResult>;
-  /**
-   * Execute `skills.search` in the main process (#10892). The renderer holds no
-   * skill data (parsed plugin markdown lives in the main-process registry), so
-   * this tool short-circuits renderer dispatch — same rationale as
-   * `handleWaitUntilIdle`. Throws {@link McpError} on invalid args.
-   */
-  handleSkillsSearch: (
-    rawArgs: unknown
-  ) => import("../../../shared/types/skills.js").SkillSearchResult;
-  /**
-   * Execute `skills.load` in the main process (#10892). Throws {@link McpError}
-   * on invalid args or an unknown skill id.
-   */
-  handleSkillsLoad: (rawArgs: unknown) => import("../../../shared/types/skills.js").SkillLoadResult;
-  /**
-   * Execute `project.runCheck` in the main process (#11548). A check spawns a
-   * real child process and reports its exit code, so it needs main-process
-   * access, a cancellable `AbortSignal` (which cannot cross IPC), and a wait
-   * far longer than the 30s renderer-dispatch wall. Throws {@link McpError} on
-   * invalid args; throws for any reason the check could not start, and resolves
-   * with `passed: false` when it ran and failed.
-   */
-  handleProjectRunCheck: (
-    rawArgs: unknown,
-    signal: AbortSignal,
-    /** Asked once more right before the spawn; throws to refuse (#13493). */
-    authorize?: () => void
-  ) => Promise<import("../../../shared/types/projectCheck.js").ProjectCheckRunResult>;
-  /**
-   * Execute `project.runCommand` in the main process (#13495), for the same
-   * reasons as `project.runCheck`. The caller restriction is applied before
-   * this is reached. Throws {@link McpError} on invalid args; throws for any
-   * reason the command could not start, and resolves when it ran, whatever
-   * its exit code.
-   */
-  handleProjectRunCommand: (
-    rawArgs: unknown,
-    signal: AbortSignal,
-    /** Asked once more right before the spawn; throws to refuse (#13493). */
-    authorize?: () => void
-  ) => Promise<import("../../../shared/types/projectCommand.js").ProjectCommandRunResult>;
-  /**
-   * Read `terminal.getStatus` off the pty-host for one workspace, with no
-   * renderer (#12316). Used only as a fallback when the bound workspace has no
-   * live view: the renderer answer is richer, and this one reports which fields
-   * it could not observe. Throws {@link McpError} on invalid args.
-   */
-  handleTerminalGetStatusViewless: (
-    rawArgs: unknown,
-    workspaceId: string,
-    /** Assistant terminals an assistant caller named and may read (#13496). */
-    admittedAssistants?: ReadonlySet<string>
-  ) => Promise<import("../../../shared/types/terminalStatus.js").TerminalStatusResult>;
-  /**
-   * Whether a terminal with this id is already live anywhere in the app, read
-   * off the pty-host's spawn tracking rather than any one view's panel store
-   * (#12407). A caller-chosen id that names one would be recorded as this
-   * session's creation while the original shell keeps running under it.
-   */
-  isTerminalIdInUse: (terminalId: string) => boolean;
-  /**
-   * What the pty-host itself observed about a terminal, for the assistant's
-   * close (#12881, #13128): `null` for an id it does not track, such as a
-   * browser panel. Rejects when the terminal cannot be read. Asked rather than
-   * the AgentAvailabilityStore mirror, which each window's startup replaces
-   * with an empty one, so a missing entry there says nothing about the agent.
-   * Absent, every close of a busy-capable panel asks.
-   */
-  readTerminalCloseContext?: (terminalId: string) => Promise<TerminalCloseContext | null>;
-  /**
-   * Whether a terminal belongs to the workspace of this session's pinned view,
-   * re-resolved on every call (#12883). What admits Daintree's own assistant to
-   * `terminal.readLastMessageOwned` for a pane it did not create: it already
-   * types into that view's panes, so reading what they ask is no wider. Must
-   * answer `false` whenever either side is unknown. Absent, every such read is
-   * refused.
-   */
-  isTerminalInPinnedWorkspace?: (terminalId: string) => Promise<boolean>;
-  /**
-   * Terminal notices. Optional so fixtures that never exercise them need not
-   * stub them; absent, `terminal.notifyWhenIdle` and `notify: true` answer
-   * not-eligible.
-   */
-  terminalNotify?: TerminalNotifyHandlers;
-  /**
-   * The assistant's reach to this Shell's hosts (#13493), bound to this
-   * session's help-session bearer. Absent for every other bearer; then
-   * `host.list` and `host.call` are neither listed nor run.
-   */
-  hostControl?: HostControlAccess;
-  /**
-   * The caller as an assistant (#13496): one of this machine's help sessions,
-   * or another machine's assistant reaching this one through its Shell, with
-   * the project it works in. Read per call from the session's own state;
-   * null for every other session, an agent pane or an api-key client. Absent,
-   * no session is.
-   */
-  assistantCaller?: () => AssistantCaller | null;
-  /** Main's side of one assistant addressing another (#13496); absent, none can. */
-  assistantControl?: Pick<
-    AssistantTerminalControl,
-    | "isAssistantTerminal"
-    | "resolve"
-    | "list"
-    | "start"
-    | "submit"
-    | "interrupt"
-    | "close"
-    | "readReply"
-  >;
-  /** This machine's Codex quota, as `agent.readQuota` reports it. */
-  readCodexQuota?: () => Promise<CodexQuotaResult>;
-  /** Blocking replies for `waitForReply`. Optional; absent, the flag is ignored. */
-  replyWaiter?: Pick<ReplyWaiterService, "wait">;
-  /**
-   * Set for a session another machine's assistant reaches through its Shell
-   * (#13493). It is then never offered a `host.*` tool or one of this
-   * machine's assistant-panel tools, whatever its tier or grants, so a relay
-   * never chains through here to another host.
-   */
-  relay?: {
-    shellName: string;
-    /**
-     * Asked right before a change this process makes itself rather than
-     * through a view: why it may not, or null while the requesting Shell's own
-     * view drives the bound project and `projectId`, when named, is that one.
-     */
-    refuseWrite(projectId: string | undefined): { code: string; message: string } | null;
-  };
-  /**
-   * Set for this host's own assistant running with no view (#13511), and asked
-   * as `relay.refuseWrite` is, right before a change this process makes
-   * itself: why it may not, or null while nobody drives its project and
-   * `projectId`, when named, is that one.
-   */
-  refuseWrite?: (projectId: string | undefined) => { code: string; message: string } | null;
-  /**
-   * The caller's own pane, from its credential: a pane bearer's terminal, or
-   * the terminal a help session is bound to. Null for everything else — an
-   * api-key client has no pane to notify.
-   */
-  resolveOwnPane?: () => OwnPane | null;
-  appendAuditRecord: (input: {
-    toolId: string;
-    sessionId: string;
-    tier: McpTier;
-    args: unknown;
-    durationMs: number;
-    /**
-     * The handler's dispatch-start snapshot (#12122), forwarded so the
-     * persisted record carries the same start the live strip's started event
-     * does. Required — the audit record's own `timestamp` is a later clock
-     * read, so a site that omitted this would leave its row unable to be
-     * ordered against its siblings. Every CallTool audit write has it in
-     * scope; making it mandatory here is what stops the next one from
-     * dropping it.
-     */
-    startedAt: number;
-    outcome: AuditOutcome;
-    confirmationDecision?: import("../../../shared/types/ipc/mcpServer.js").McpConfirmationDecision;
-    authorization?: McpDispatchAuthorization;
-    bannerSuppressed?: boolean;
-    /**
-     * Turn id snapshotted once at dispatch start (#10067). Forwarded so the
-     * audit record is stamped with the same turn the live activity strip's
-     * started/settled events carry — never re-read at write time, where an
-     * active→passive FSM transition could have cleared it and split one call
-     * across two groupings.
-     */
-    capturedTurnId?: string | null;
-    /** The caller's origin, so an unauthorized row's tier hint reads its own surface. */
-    rendererOwnedOrigin?: boolean;
-    /** A relayed call's callId from its Shell (#13493), so both records name one call. */
-    relayCallId?: string;
-  }) => void;
-  getCachedManifest: () => import("../../../shared/types/actions.js").ActionManifestEntry[] | null;
-  /**
-   * Optional renderer notifier fired when a help-session tool call is denied
-   * because the session tier doesn't permit it. Implemented by httpLifecycle
-   * for help-session bearers (pinned WebContents); absent for external/api-key
-   * sessions, which have no associated UI.
-   */
-  notifyTierMismatch?: (payload: {
-    sessionId: string;
-    toolId: string;
-    tier: McpTier;
-    /**
-     * Minimum tier that permits the denied tool, or `null` if no non-external
-     * help tier permits it — an unknown id, or a deliberately non-grantable
-     * one. The renderer's "Set project default" elevates to it
-     * via `setSessionTier`; its "Allow this tool" issues a per-tool grant for
-     * the denied tool without changing the session tier at all. A `null`
-     * withholds both affordances — the denial isn't actionable.
-     */
-    targetTier: HelpAssistantTier | null;
-  }) => void;
-  /**
-   * Feed a denial into the abuse policy — both 401s and tier-mismatches
-   * share the same per-session sliding-window counter. Returns
-   * `{ tripped: true }` when the threshold is exceeded. Implemented by
-   * httpLifecycle; absent in test fixtures that don't wire the policy.
-   */
-  recordDenial?: (sessionId: string, kind: "auth401" | "tierMismatch") => { tripped: boolean };
-  /**
-   * Optional renderer notifier fired when a session is revoked by the abuse
-   * policy. Follows the same pinned-WebContents pattern as
-   * `notifyTierMismatch` so only help-session bearers surface the
-   * notification. External / api-key sessions have no associated UI so the
-   * callback is a no-op.
-   */
-  notifySessionRevoked?: (payload: {
-    sessionId: string;
-    denialKind: string;
-    /** Saved before revokeSession clears the map, so the callback can route. */
-    pinnedWebContentsId?: number;
-    /**
-     * Whether this session is one of Daintree's own assistant surfaces, snapshot
-     * alongside the pin and for the same reason (#11789): `revokeSession` clears
-     * the origin too, so a callback re-reading it afterwards sees the
-     * fail-closed `external` default and drops a notification the renderer needs
-     * to show its recovery UI.
-     */
-    rendererOwned?: boolean;
-  }) => void;
-  /**
-   * Remove a session from the abuse policy state so a reconnected session
-   * doesn't inherit stale counters. Called after revokeSession and drain().
-   */
-  clearDenialState?: (sessionId: string) => void;
-  /**
-   * Resolve the help-session turn id live (#10067). Called exactly once per
-   * dispatch — at the top of the CallTool handler — so a single snapshot feeds
-   * the started event, the settled event, and the audit record. Returns `null`
-   * for sessions with no help binding (external/api-key) or no active turn.
-   * Implemented by httpLifecycle (it closes over the help-session id); absent
-   * in test fixtures that don't exercise turn correlation.
-   */
-  getCurrentTurnId?: () => string | null;
-  /**
-   * Whether the assistant's confirm-gated Daintree actions currently skip the
-   * host dialog (#12874) — the global "Skip permission prompts" unless the
-   * assistant is set to always ask. Read on every call so a change takes effect
-   * on the next one. Only consulted for `help` sessions; absent reads as false.
-   */
-  readAssistantConfirmationsSkipped?: () => boolean;
-  /**
-   * Optional renderer notifier fired when an MCP tool dispatch enters the call
-   * path (after tier/rate/dedup guards pass and the manifest entry resolves).
-   * Drives the Assistant panel's live activity strip (#9759). Implemented by
-   * httpLifecycle for help-session bearers (pinned WebContents) — it computes
-   * the redacted `argsSummary` and resolves the `turnId` before the targeted
-   * send. Absent for external/api-key sessions, which have no associated UI.
-   */
-  notifyToolCallStarted?: (payload: {
-    sessionId: string;
-    toolId: string;
-    args: unknown;
-    startedAt: number;
-    /** True when the resolved manifest entry is `danger: "confirm"`. */
-    danger: boolean;
-    /**
-     * True only when this call will put a dialog in front of the person. A
-     * confirm-gated call a grant, the pane's skip setting or an earlier
-     * approval already authorized is `danger` without asking anyone (#14165).
-     */
-    asks: boolean;
-    /** Turn id snapshotted at dispatch start (#10067); see {@link SessionServerDeps.getCurrentTurnId}. */
-    capturedTurnId: string | null;
-  }) => void;
-  /**
-   * Optional renderer notifier fired when a dispatch announced via
-   * {@link SessionServerDeps.notifyToolCallStarted} settles. Receives the same
-   * `AuditOutcome` the audit record is written from so the strip's result glyph
-   * and severity match the audit log exactly (#9759).
-   */
-  notifyToolCallSettled?: (payload: {
-    sessionId: string;
-    toolId: string;
-    /** The started event's own `startedAt`, so the two pair up exactly. */
-    startedAt: number;
-    /** The started event's own `danger`. */
-    danger: boolean;
-    /** The started event's own `asks`: whether this call announced a wait on the person. */
-    asks: boolean;
-    durationMs: number;
-    outcome: AuditOutcome;
-    /** Turn id snapshotted at dispatch start (#10067); matches the started event's value. */
-    capturedTurnId: string | null;
-  }) => void;
-  /**
-   * Optional renderer notifier fired when the assistant invokes
-   * `help.displayImage` (#9828). Pushes the validated image URL and the
-   * session-assigned figure number to the pinned WebContents so the Assistant
-   * panel can render the figure inline. Implemented by httpLifecycle for
-   * help-session bearers; absent for external/api-key sessions (which can't
-   * call the tool — it's outside their allowlist — so it never fires for them).
-   */
-  notifyDisplayImage?: (payload: {
-    sessionId: string;
-    imageId: string;
-    figureNumber: number;
-    figureLabel: string;
-    url: string;
-    caption?: string;
-    altText?: string;
-  }) => void;
-  /**
-   * Record where this session's `tools/list` is about to be answered from, so
-   * a later route change can tell the client its list moved (#13350). Returns
-   * whether the route has moved since. Wired for workspace-bound sessions only.
-   */
-  noteToolListRoute?: () => () => boolean;
-}
-
-/**
- * Refusal for a request whose session no longer exists (#11799). Static, and
- * names the only recovery there is: nothing about this session can be retried,
- * so a client must open a new one.
- */
-const SESSION_GONE_MESSAGE =
-  "This MCP session is no longer active. Reconnect to start a new session before retrying.";
-
-/**
- * The `McpError` form of {@link SESSION_GONE_MESSAGE}, for the request paths
- * that signal failure by throwing (discovery and resources) rather than by
- * returning an `isError` tool result. `InternalError` matches how the sibling
- * structural failure `SESSION_BINDING_GONE` is already raised on `tools/list`,
- * so a client reads one JSON-RPC shape for both — the `data.code` is what
- * separates them.
- */
-function sessionGoneError(): McpError {
-  return new McpError(
-    ErrorCode.InternalError,
-    SESSION_GONE_MESSAGE,
-    buildMcpErrorPayload({ code: SESSION_GONE, message: SESSION_GONE_MESSAGE })
-  );
 }
 
 /**
@@ -1508,48 +647,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     readTerminalCloseContext,
   } = deps;
 
-  /**
-   * Whether every call from this session routes to one bound workspace
-   * (#11789).
-   *
-   * Captured from the handshake binding, NOT read live off
-   * `sessionWorkspaceMap`. The binding is immutable for the session's life — it
-   * is written once at handshake and only ever deleted at teardown — so a live
-   * read buys nothing and costs correctness: routing captures the same value
-   * once (`boundWorkspaceId` in `buildSessionServerDeps`), so a live read here
-   * would let teardown strip the confirm-gated ceiling from a call whose
-   * dispatch closure still targets the bound workspace. The two must share one
-   * lifetime, and the handshake value is the one that cannot go stale.
-   */
-  const sessionSurface: SessionSurfacePolicy = {
-    workspaceBound: workspaceBinding !== undefined,
-    // Only an agent pane is handed an approval route (#12692).
-    paneApproval: requestApproval !== undefined,
-    paneSkipConfirmations: requestApproval !== undefined && deps.paneSkipConfirmations === true,
-    relay: deps.relay !== undefined,
-  };
-
-  // `host.list` and `host.call` (#13493): any of this machine's own
-  // assistants, from its start and whether or not a host exists yet. Read per
-  // listing, never cached.
-  const isGlobalSession = (): boolean =>
-    sessionStore.sessionViewlessHelpMap.get(sessionId) === GLOBAL_ASSISTANT_ID;
-  const hostCallOffered = (): boolean =>
-    hostControl !== undefined &&
-    sessionStore.sessionHelpIdMap.has(sessionId) &&
-    hostControl.isCallReachable();
-  // Whether this session is an assistant that may address another (#13496).
-  // Read per listing and per call, never cached: a help session's lane can
-  // end under it.
-  const assistantCallerNow = (): AssistantCaller | null =>
-    assistantControl !== undefined ? (deps.assistantCaller?.() ?? null) : null;
-  // Whether a read outside the tool calls' own gate may name this terminal
-  // (#13496): an assistant's only for an assistant caller it resolves for.
-  const mayNameTerminal = (tier: McpTier, terminalId: string): boolean => {
-    if (assistantControl?.isAssistantTerminal(terminalId) !== true) return true;
-    const caller = tier === "external" ? null : assistantCallerNow();
-    return caller !== null && assistantControl.resolve(caller, terminalId) !== null;
-  };
+  const session = createSessionContext(sessionId, deps);
+  const { sessionSurface, isGlobalSession, hostCallOffered, assistantCallerNow } = session;
 
   const server = new Server(
     { name: "Daintree", version: app.getVersion() },
@@ -1588,140 +687,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     }
   );
 
-  /**
-   * The action manifest this session's tool surface is built from.
-   *
-   * Prefer a live fetch so runtime action-set changes (plugin enable/disable)
-   * are reflected. On failure (renderer bridge unavailable / timed out /
-   * destroyed) fall back to the last-known cached manifest instead of failing
-   * the whole request (#9892). For pinned sessions (#7003) getCachedManifest
-   * always returns null, so they correctly fail closed rather than serve
-   * another window's tool surface. `=== null` (not `!manifest`) so an empty
-   * manifest — a valid zero-tool surface — is not misread as "unavailable".
-   *
-   * Snapshot the fallback BEFORE the await: getCachedManifest() reads the live
-   * session→WebContents map, and a pinned session can be torn down (map entry
-   * deleted) while requestManifest() is in flight. Reading it after the await
-   * would then see the session as unpinned and return the shared cache —
-   * another window's tool surface — defeating #7003. Taken synchronously here,
-   * the request is still in flight so the pin holds.
-   *
-   * Shared by `tools/list` and `mcp.surface` so the two cannot describe
-   * different manifests: a surface report built off a stale cache while the
-   * listing served a live fetch would be exactly the drift the report exists to
-   * detect (#11549). The one place they separate is a workspace-bound session
-   * with no reachable view (#12082) — `mcp.surface` is a tool call, so it meets
-   * the bound pre-dispatch guard and reports the unreachable route before ever
-   * arriving here, which is the honest answer for a report about what this
-   * session can reach.
-   */
-  const resolveManifest = async (
-    label: string
-  ): Promise<import("../../../shared/types/actions.js").ActionManifestEntry[]> => {
-    const cachedFallback = getCachedManifest();
-    try {
-      return await requestManifest();
-    } catch (err) {
-      // A workspace this session cannot currently reach is not a reason to have
-      // no tools (#12082). The workspace id outlives every view, so the route
-      // comes back the moment the user opens that workspace — and a client told
-      // "no tools" at discovery has no way to notice when it does. Answer from
-      // the host's own base surface instead, and let the per-call route report
-      // the truth about reachability.
-      //
-      // Emphatically NOT `cachedFallback`: that describes whichever other
-      // window last reported a manifest, which is the cross-workspace leak the
-      // bound path exists to prevent. The base surface is generated from the
-      // action registry at commit time and describes nobody's view.
-      if (err instanceof WorkspaceBindingError) {
-        return getExternalBaseManifest();
-      }
-      // Only windows on a remote host are open (#13285). This machine's tools
-      // are still this machine's: list them, and let each call name the host
-      // it refuses to reach into.
-      if (err instanceof RemoteHostWindowOnlyError) {
-        return getExternalBaseManifest();
-      }
-      // A dead *pin* still is a dead end (#11789). The session's identity is
-      // the destroyed WebContents, not a workspace it can re-resolve, so there
-      // is no later state in which this succeeds — and serving a cached
-      // manifest would answer `tools/list` from a view this session can no
-      // longer reach. Surface SESSION_BINDING_GONE in `data` so a client can
-      // tell "reconnect and rebind" from "retry in a moment".
-      const routed = routeBindingMcpError(err);
-      if (routed) throw routed;
-      if (cachedFallback === null) {
-        throw new McpError(ErrorCode.InternalError, "Action manifest unavailable");
-      }
-      console.warn(`[MCP] ${label} using cached manifest after live fetch failed:`, err);
-      return cachedFallback;
-    }
-  };
-
-  server.setRequestHandler(ListToolsRequestSchema, async () => {
-    // Resolve the tier before fetching anything (#11799). Two reasons to gate
-    // here rather than after the await: a dead session should not cost a
-    // manifest fetch, and `resolveManifest` can itself throw
-    // SESSION_BINDING_GONE — which would answer "your workspace went away" to a
-    // caller whose actual problem is that its session did.
-    const tier = sessionStore.getTier(sessionId);
-    // Throw rather than answer with an empty list: `{ tools: [] }` is a
-    // well-formed, cacheable "you have no tools", indistinguishable from a
-    // legitimately empty surface and carrying no hint that reconnecting is the
-    // fix.
-    if (tier === null) throw sessionGoneError();
-    // A route that moved while the fetch was out is fetched again from where it
-    // went (#13350): the old route's answer could land after the re-list the
-    // move's notice asks for, and the client keeps whichever list came last.
-    // Once only; a route still moving is left to the notice.
-    let manifest!: Awaited<ReturnType<typeof resolveManifest>>;
-    for (let attempt = 1; ; attempt++) {
-      const routeMoved = deps.noteToolListRoute?.();
-      try {
-        manifest = await resolveManifest("tools/list");
-      } catch (err) {
-        if (attempt === 1 && routeMoved?.()) continue;
-        throw err;
-      }
-      if (attempt === 1 && routeMoved?.()) continue;
-      break;
-    }
-    // Origin read once for the whole listing, and the same way the dispatch
-    // gate reads it, so a tool withheld here is refused there (#12407).
-    const listSurface: SessionSurfacePolicy = {
-      ...sessionSurface,
-      rendererOwnedOrigin: sessionStore.isRendererOwnedOrigin(sessionId),
-      hostCall: hostCallOffered(),
-      assistantCaller: assistantCallerNow() !== null,
-    };
-    const globalSession = isGlobalSession();
-    const tools = manifest
-      .filter(
-        (entry) =>
-          shouldExposeTool(entry, tier, listSurface) &&
-          (!globalSession || GLOBAL_ASSISTANT_TOOL_IDS.has(entry.id))
-      )
-      .map((entry) => {
-        const outputSchema = buildToolOutputSchema(entry);
-        const _meta =
-          entry.examples && entry.examples.length > 0 ? { examples: entry.examples } : undefined;
-        return {
-          name: entry.id,
-          description: entry.description,
-          // An api-key client is not shown arguments that need a pane of its
-          // own; it would be refused them anyway.
-          inputSchema: buildToolInputSchema(
-            entry,
-            tier === "external" ? MCP_EXTERNAL_OMITTED_ARGS[entry.id] : undefined
-          ),
-          annotations: buildAnnotations(entry),
-          ...(outputSchema ? { outputSchema } : {}),
-          ...(_meta ? { _meta } : {}),
-        };
-      });
-
-    return { tools };
-  });
+  const resolveManifest = createManifestResolver(deps);
+  registerListToolsHandler(server, session, deps, resolveManifest);
 
   // Named so a batch tool can run each item through this same gate.
   const handleCallTool = async (
@@ -1794,6 +761,16 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // Captured once so discovery, the tier gate and `mcp.surface` all describe
     // the same session (#12407).
     const rendererOwnedOrigin = sessionStore.isRendererOwnedOrigin(sessionId);
+    const facts: CallFacts = {
+      sessionId,
+      actionId,
+      args,
+      requestKey,
+      startedAt,
+      tier,
+      capturedTurnId,
+      rendererOwnedOrigin,
+    };
     // Who may run the command runner (#13495, #13501), asked once so its
     // listing, discovery and admission below agree.
     const commandRunnerCaller = mayRunProjectCommand(tier, {
@@ -1807,6 +784,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     const assistantControlCaller = mayControlAssistants(tier, {
       assistantCaller: assistantCaller !== null,
     });
+    const callers: CallerAdmission = { commandRunnerCaller, assistantControlCaller };
     // A change main makes itself for an assistant answers to the drive rule
     // (#13493): a relayed one as its Shell's view would, a host's own
     // assistant with no view as nobody's. Null while it may go ahead.
@@ -1881,96 +859,13 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // pane's session has an `external` origin too.
     const sessionScopedOwner = !sessionStore.resourceOwnership.isPrincipalOwner(ownershipOwner);
     const boundWorkspaceId = sessionStore.sessionWorkspaceMap.get(sessionId);
-    /**
-     * The record that gives this call authority over a resource it created,
-     * or `undefined`. Shared by the `*Owned` gate and an `owned` listing, so
-     * the listing reports exactly the terminals those tools accept (#12487) —
-     * together with {@link adoptedRecordFor} for the tools that also take a
-     * hand-over.
-     *
-     * The bound-workspace comparison is defence-in-depth only and fails OPEN
-     * when either side is unknown: panel ids carry a UUID and worktree ids are
-     * absolute paths, so a cross-workspace collision is not a live risk, and a
-     * strict check would strand a caller's own cleanup whenever the creating
-     * dispatch could not resolve its workspace.
-     */
-    const ownedRecordFor = (
-      kind: OwnedResourceKind,
-      resourceId: string
-    ): OwnedResourceRecord | undefined => {
-      const record = sessionStore.resourceOwnership.get(ownershipOwner, kind, resourceId);
-      if (record === undefined) return undefined;
-      const workspaceMismatch =
-        record.workspaceId !== undefined &&
-        boundWorkspaceId !== undefined &&
-        record.workspaceId !== boundWorkspaceId;
-      return workspaceMismatch ? undefined : record;
-    };
-    /**
-     * The record a user's hand-over gives this call over a terminal it did not
-     * create (#12490), shaped like an ownership record so the gate and a
-     * reveal read one type. Matched on the same owner the ledger reads, which
-     * is a bearer principal for a pane session and never anything an api-key
-     * client can be. The workspace comparison fails open exactly as
-     * {@link ownedRecordFor}'s does.
-     */
-    const adoptedRecordFor = (
-      resourceKind: OwnedResourceKind,
-      resourceId: string
-    ): OwnedResourceRecord | undefined => {
-      if (resourceKind !== "terminal") return undefined;
-      const adoption = sessionStore.terminalAdoption.get(ownershipOwner, resourceId);
-      if (adoption === undefined) return undefined;
-      if (
-        adoption.workspaceId !== undefined &&
-        boundWorkspaceId !== undefined &&
-        adoption.workspaceId !== boundWorkspaceId
-      ) {
-        return undefined;
-      }
-      return {
-        kind: resourceKind,
-        id: resourceId,
-        ...(adoption.workspaceId !== undefined ? { workspaceId: adoption.workspaceId } : {}),
-      };
-    };
-    /**
-     * Whether this call may drive a terminal: one it created, or one the user
-     * handed it. What an `owned` listing reports, because that listing is how
-     * an orchestrator finds the terminals it was given.
-     */
-    const drivesTerminal = (terminalId: string): boolean =>
-      ownedRecordFor("terminal", terminalId) !== undefined ||
-      adoptedRecordFor("terminal", terminalId) !== undefined;
-    /**
-     * Whether Daintree's own assistant must ask before closing this panel
-     * (#12881): this session did not create it, or its agent was last seen
-     * working or waiting. #12407 kept the unscoped close so the assistant can
-     * tidy up what it launched; closing what the user opened, or an agent
-     * still mid-task, is a different authority and needs the user.
-     *
-     * A hand-over does not count as creation: it lends the right to drive an
-     * agent, not to discard it. Anything unknown asks: no ownership record, or
-     * an agent state that could not be read.
-     *
-     * One `waiting` agent is finished rather than mid-conversation (#13128):
-     * it printed the handback this session asked for, and nothing has been
-     * typed into it since. The pty-host drops the handback when a later prompt
-     * is submitted, so one still present answers the latest submission.
-     */
-    const closeNeedsApproval = async (terminalId: string): Promise<boolean> => {
-      if (ownedRecordFor("terminal", terminalId) === undefined) return true;
-      if (readTerminalCloseContext === undefined) return true;
-      try {
-        const context = await readTerminalCloseContext(terminalId);
-        const state = context?.agentState;
-        if (context === null || state === undefined) return false;
-        if (!ASSISTANT_CLOSE_CONFIRM_AGENT_STATES.has(state)) return false;
-        return !(state === "waiting" && isHandedBackUntouched(context));
-      } catch {
-        return true;
-      }
-    };
+    const { ownedRecordFor, adoptedRecordFor, drivesTerminal, closeNeedsApproval } =
+      createOwnershipAccess(
+        sessionStore,
+        ownershipOwner,
+        boundWorkspaceId,
+        readTerminalCloseContext
+      );
 
     const searchLimit = actionId === ACTIONS_SEARCH_TOOL_ID ? readSearchLimit(args) : null;
     const listPaging = actionId === ACTIONS_LIST_TOOL_ID ? readListPaging(args) : null;
@@ -1988,76 +883,18 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // would delete expired entries and push spurious `grant.expired` lifecycle
     // events on every discovery call.
     const introspectionSurface = INTROSPECTION_TOOL_IDS.has(actionId)
-      ? (() => {
-          // Snapshotted once and reused for both the permitted set and the
-          // policy record (#11910), so the surface a lookup is filtered against
-          // and the authorization it reports can never describe two different
-          // instants.
-          const perToolGrantedActionIds = new Set<string>(
-            sessionStore.grantCache.getLiveGrants(sessionId).map((grant) => grant.toolId)
-          );
-          // Filtered to what the dispatch gate would actually honour: a grant
-          // listing a per-resolved-target tool buys nothing, because
-          // `peekNativeGrant` refuses it (#12121). Naming it here would produce
-          // the discoverable-but-uncallable state #11585 rejects — an agent
-          // would find `terminal.killAll` in `actions.search`, then be told
-          // TIER_NOT_PERMITTED when it called it.
-          const nativeGrantedActionIds = new Set<string>(
-            sessionStore.grantCache
-              .getLiveNativeGrants(sessionId)
-              .flatMap((grant) => [...grant.allowedTools])
-              .filter((toolId) => isGenericNativeGrantEligible(toolId))
-          );
-          const permittedActionIds = new Set<string>([
-            ...getReachableActionIds(
-              tier,
-              rendererOwnedOrigin,
-              sessionSurface.paneApproval === true
-            ),
-            ...perToolGrantedActionIds,
-            ...nativeGrantedActionIds,
-          ]);
-          // The host tools are offered only to this machine's own assistants (#13493),
-          // whatever its tier or grants; discovery agrees.
-          if (!hostCallOffered()) {
-            for (const id of HOST_CONTROL_TOOL_IDS) permittedActionIds.delete(id);
+      ? buildCallIntrospectionSurface(
+          sessionStore.grantCache,
+          sessionSurface,
+          hostCallOffered,
+          facts,
+          {
+            ...callers,
+            confirmationsSkipped,
+            searchLimit,
+            listPaging,
           }
-          // A grant never makes the command runner callable, so it never makes it findable;
-          // a relayed session that may run it finds it, whatever its tier list says.
-          if (commandRunnerCaller) permittedActionIds.add(PROJECT_RUN_COMMAND_TOOL);
-          else permittedActionIds.delete(PROJECT_RUN_COMMAND_TOOL);
-          // Likewise the assistant tools, for exactly the assistants that may call them (#13496).
-          for (const id of ASSISTANT_CONTROL_TOOL_IDS) {
-            if (assistantControlCaller) permittedActionIds.add(id);
-            else permittedActionIds.delete(id);
-          }
-          // A relayed session finds nothing it would be refused (#13493).
-          if (sessionSurface.relay === true) {
-            for (const id of [...permittedActionIds]) {
-              if (isWithheldFromRelaySession(id)) permittedActionIds.delete(id);
-            }
-          }
-          return {
-            permittedActionIds,
-            callerLimit: searchLimit ?? ACTIONS_SEARCH_DEFAULT_LIMIT,
-            requestedActionId: readRequestedActionId(args),
-            ...(listPaging ? { listPaging } : {}),
-            policySnapshot: {
-              tier,
-              // Grant issuance gates on the origin too, which is why the
-              // policy record carries it rather than re-deriving it.
-              rendererOwnedOrigin,
-              relay: sessionSurface.relay === true,
-              paneApproval: sessionSurface.paneApproval === true,
-              paneSkipConfirmations: sessionSurface.paneSkipConfirmations === true,
-              hostCall: hostCallOffered(),
-              assistantControl: assistantControlCaller,
-              perToolGrantedActionIds,
-              nativeGrantedActionIds,
-              confirmationsSkipped,
-            } satisfies TargetPolicySessionSnapshot,
-          };
-        })()
+        )
       : null;
     // `actions.search` ranks and slices in the renderer, before main can see
     // tier. Over-fetching the schema's maximum page makes that slice the
@@ -2123,336 +960,45 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // different from one sent the moment before the take-back.
     let admittedAdoption: TerminalAdoptionRecord | undefined;
 
-    /**
-     * Dispatch the real action an `*Owned` tool stands in for, with arguments
-     * rebuilt from scratch rather than forwarded (#11909).
-     *
-     * Rebuilding is the enforcement: the renderer validates against
-     * `worktree.delete`'s schema, which still accepts `force`, `deleteBranch`
-     * and `closeTerminals`, so anything the caller sent beyond the id would
-     * otherwise pass straight through the narrower tool that deliberately omits
-     * them. An entry that needs more than the id names each field in
-     * `forwardArgs`; the values are left for the delegate's own schema to
-     * validate. It is also what lets a delegate spell the id differently —
-     * `pilot.openRun` takes `runId` where the public tool takes `terminalId`.
-     *
-     * A reveal differs in both of the ways that matter (#12315). It carries the
-     * destination workspace, read from the ledger record main wrote when the
-     * panel was created — trusted state, never the caller's argument, and the
-     * only thing that says where an unbound session's panel actually lives. And
-     * it routes through the active view rather than this session's own, because
-     * the view that switches has to be the view on screen.
-     */
-    const dispatchOwnedResourceAction = async (
+    const dispatchOwnedResourceAction = (
       entry: RendererOwnedResourceTool,
       resourceId: string
-    ): Promise<{ envelope: DispatchEnvelope; raised: boolean }> => {
-      if (
-        admittedAdoption !== undefined &&
-        sessionStore.terminalAdoption.get(ownershipOwner, resourceId) !== admittedAdoption
-      ) {
-        return {
-          envelope: {
-            result: {
-              ok: false,
-              error: {
-                code: RESOURCE_NOT_OWNED_CODE,
-                message:
-                  `The user took ${entry.resourceKind} '${resourceId}' back from this pane before ` +
-                  `'${actionId}' reached it, so nothing was sent.`,
-              },
-            },
-          },
-          raised: true,
-        };
-      }
-      const delegateArgs: Record<string, unknown> = {};
-      if (entry.forwardArgs !== undefined && args !== null && typeof args === "object") {
-        const callerArgs = args as Record<string, unknown>;
-        for (const key of entry.forwardArgs) {
-          if (Object.hasOwn(callerArgs, key)) delegateArgs[key] = callerArgs[key];
-        }
-      }
-      delegateArgs[entry.delegateIdArg ?? entry.idArg] = resourceId;
-      if (entry.reveals !== true) {
-        return {
-          envelope: await dispatchToRenderer(entry.delegateTo, delegateArgs),
-          raised: true,
-        };
-      }
-      const revealWorkspaceId =
-        (
-          sessionStore.resourceOwnership.get(ownershipOwner, entry.resourceKind, resourceId) ??
-          adoptedRecordFor(entry.resourceKind, resourceId)
-        )?.workspaceId ?? sessionStore.sessionWorkspaceMap.get(sessionId);
-      // Omitted rather than guessed when neither is known: `pilot.openRun`
-      // falls back to the executing view's own workspace, which is where the
-      // panel is if the client never left it — the only honest default here.
-      if (revealWorkspaceId !== undefined) {
-        delegateArgs.workspaceId = revealWorkspaceId;
-      }
-      if (deps.revealOwnedRun === undefined) {
-        return {
-          envelope: await dispatchToRenderer(entry.delegateTo, delegateArgs),
-          raised: true,
-        };
-      }
-      return deps.revealOwnedRun(
-        revealWorkspaceId,
-        entry.delegateTo,
-        delegateArgs,
-        dispatchConfirmed
-      );
-    };
-
-    /**
-     * Fold a completed dispatch into the session's ownership ledger (#11909):
-     * record what it created, and release what it cleaned up.
-     *
-     * Both halves read the envelope the action returned — never the caller's
-     * arguments — which is what makes the ledger an authorization boundary
-     * rather than a claim the caller writes about itself.
-     *
-     * The release half is deliberately conditional on the resource actually
-     * being gone. `terminal.close` reports an empty `closedIds` when it found
-     * nothing to close, and dropping the record on that would let one no-op
-     * call revoke the session's authority over a panel that is still running.
-     * A non-releasing owned tool — a reveal — returns before any of that:
-     * navigating to a panel is not a claim that it stopped existing (#12315).
-     */
-    const recordDispatchOwnership = (envelope: DispatchEnvelope): void => {
-      if (ownedResource !== undefined) {
-        if (!ownedResource.releasesOwnership) return;
-        if (ownedResourceId === undefined || !envelope.result.ok) return;
-        if (
-          ownedResource.resourceKind === "terminal" &&
-          !closedIdsInclude(envelope.result.result, ownedResourceId)
-        ) {
-          return;
-        }
-        sessionStore.resourceOwnership.release(
-          ownershipOwner,
-          ownedResource.resourceKind,
-          ownedResourceId,
-          ownedResourceRecord
-        );
-        return;
-      }
-      const drafts = extractOwnedResourcesFromDispatch(actionId, envelope.result);
-      if (drafts.length === 0) return;
-      // Liveness guard, mirroring the dedup completion hook below: a creation
-      // admitted before the session was revoked can land after
-      // `clearSessionBinding` already dropped the ledger. Writing then would
-      // resurrect a dead session's authority — and, worse, claim the id away
-      // from whoever legitimately records it next. A pane bearer's principal
-      // outlives its sessions, so its creation still lands after a disconnect;
-      // `record` itself refuses one whose bearer was revoked (#12487).
-      if (
-        !sessionStore.resourceOwnership.isPrincipalOwner(ownershipOwner) &&
-        !sessionStore.hasLiveTransport(sessionId)
-      ) {
-        return;
-      }
-      const recorded = sessionStore.resourceOwnership.record(
-        ownershipOwner,
-        drafts,
-        envelope.dispatchedWorkspace?.workspaceId
-      );
-      // A creation under an id that was handed over names a new terminal, and
-      // the hand-over was of the old one (#12490). Left in place, the id would
-      // have two drivers: its creator and the pane it was handed to. Every
-      // recorded id is offered: only terminals are ever handed over, and a
-      // worktree id is an absolute path no panel id can equal.
-      for (const record of recorded) sessionStore.terminalAdoption.release(record.id);
-      // What was created, by whom, kept past the authority itself (#14166):
-      // from the trusted result, so a creation that landed after its creator's
-      // revocation still says who made it, while recording no authority.
-      sessionStore.workerCreations.noteDrafts(ownershipOwner, drafts);
-    };
-
-    // Layered authorization (#8442):
-    //   1. Static tier floor (`TIER_ALLOWLISTS`) — core/full membership
-    //      stays the default. The "Always allow" project setting
-    //      elevates the session tier so this check passes for everything
-    //      below the chosen tier.
-    //   2. Per-`(sessionId, toolId)` grant cache — the "Approve once" flow
-    //      mints time-bounded grants that authorise a single tool without
-    //      elevating the whole session. If the static check denies but a
-    //      live grant exists, the dispatch proceeds and the grant's TTL
-    //      is refreshed on success.
-    //
-    //   3. Native session-scoped automation grants (#10648) — the only layer
-    //      that both widens past the floor AND pre-authorises the
-    //      `danger: "confirm"` modal. Because that second job answers a
-    //      different question from "may this call run at all", the lookup is
-    //      independent of whichever layer admitted the call (#11878).
-    //
-    // The order means a session whose static tier already permits the action
-    // never consults the per-tool grant cache — those grants only widen the
-    // floor and never bypass confirmation, so they have nothing to add once
-    // the floor allows the call. Native grants are not ordered that way: see
-    // the peek below for why nesting them under any one admission source is
-    // what made them unreachable in the first place.
-    // A relayed session is refused what it is never listed (#13493), whatever
-    // its tier, and no grant stands in for that: it has none to consult.
-    const relayWithheld = sessionSurface.relay === true && isWithheldFromRelaySession(actionId);
-    const tierPermitted =
-      !relayWithheld &&
-      (actionId === PROJECT_RUN_COMMAND_TOOL
-        ? commandRunnerCaller
-        : ASSISTANT_CONTROL_TOOL_IDS.has(actionId)
-          ? assistantControlCaller
-          : isTierPermitted(tier, actionId, rendererOwnedOrigin));
-    // An agent pane's tier is an auto-approval line, not a ceiling (#12692).
-    const paneApproval = sessionSurface.paneApproval === true;
-    let grantIssuedAt: number | undefined;
-    // Set when a native session-scoped automation grant (#10648) authorized
-    // this call. Captured here so the post-dispatch path can refresh the
-    // grant's TTL window, and so the `danger: "confirm"` modal is bypassed —
-    // a native grant is an explicit user approval of the tool's scope.
-    let nativeGrantId: string | undefined;
-    // True once something OTHER than a native grant has admitted this call —
-    // the static floor, or a per-tool "Approve once" grant. It decides two
-    // things below: whether a missing native grant is fatal, and how a lost
-    // one is handled at the consume site.
-    let authorizedWithoutNativeGrant = tierPermitted;
-    // A pane's per-tool grant is minted only by the user's "Allow for this
-    // session", so beyond widening the floor it also stands in for the
-    // confirmation that approval replaced (#12692). That second job is why a
-    // pane consults it even for a tool its tier already permits — the
-    // `worktree.deleteOwned` a user has allowed for the session.
-    if ((!tierPermitted || paneApproval) && !relayWithheld) {
-      const grant = sessionStore.grantCache.check(sessionId, actionId);
-      if (grant.granted) {
-        // Grant authorised the call. Capture the `issuedAt` token so the
-        // post-dispatch refresh can verify the entry wasn't revoked and
-        // re-issued under us (race guard, lesson #2243).
-        grantIssuedAt = grant.issuedAt;
-        authorizedWithoutNativeGrant = true;
-      }
-    }
-    // A native automation grant does two jobs, and only the first is a floor
-    // concern: it widens past the floor, AND it pre-authorises the
-    // `danger: "confirm"` modal. The second is orthogonal to whatever admitted
-    // the call, so the peek cannot be nested under any one admission source
-    // (#11878). It used to sit inside the tier-denied branch, behind the
-    // per-tool check — which left the grant unreachable both for a tool the
-    // tier already permitted (`worktree.delete` is `danger: "confirm"` and sits
-    // in core) and for one a per-tool grant had just
-    // admitted.
-    // Either way the modal still fired on every call despite an explicit
-    // Settings pre-authorisation.
-    //
-    // The one exception: an introspection carrier is never confirm-gated, so
-    // once the call is already admitted a grant buys it nothing — peeking
-    // would only spend a use and evict entries on a discovery call. When the
-    // call is NOT otherwise admitted the peek still runs, because there the
-    // grant is doing its first job and is load-bearing for authorization.
-    if (
-      !relayWithheld &&
-      (!authorizedWithoutNativeGrant || !INTROSPECTION_TOOL_IDS.has(actionId))
-    ) {
-      // The use is NOT charged here: it is consumed only once the call is
-      // committed to dispatching (below), so an unauthorized call can't burn
-      // a use. The grant's allowlist gates which tools this authorizes.
-      const native = sessionStore.grantCache.peekNativeGrant(sessionId, actionId);
-      if (native.granted) {
-        nativeGrantId = native.grantId;
-      }
-    }
-    // A pane call above its tier asks the user instead of being refused
-    // (#12692) — so long as it is within what a pane can ever ask for. The ask
-    // happens inside the dispatch below, after every hard refusal has had its
-    // say, and a decline never reaches the denial accounting here: the agent
-    // asked through the front door, which is not a probe.
-    const approvalRequired =
-      !authorizedWithoutNativeGrant &&
-      nativeGrantId === undefined &&
-      isApprovalRequestable(tier, actionId, paneApproval);
-    if (!authorizedWithoutNativeGrant && nativeGrantId === undefined && !approvalRequired) {
-      // Increment first, then ask the cache whether to suppress. The
-      // post-increment count reflects "this denial counted"; the cache's
-      // threshold compares against that. With threshold=2 the 1st and
-      // 2nd denials fire the banner and the 3rd+ are suppressed.
-      sessionStore.grantCache.incrementDenial(sessionId, actionId);
-      const suppressBanner = sessionStore.grantCache.shouldSuppressBanner(sessionId, actionId);
-      try {
-        appendAuditRecord({
-          toolId: actionId,
+    ): Promise<{ envelope: DispatchEnvelope; raised: boolean }> =>
+      dispatchOwnedResource(
+        {
           sessionId,
-          tier,
+          actionId,
           args,
-          durationMs: Date.now() - startedAt,
-          startedAt,
-          outcome: { kind: "unauthorized" },
-          bannerSuppressed: suppressBanner ? true : undefined,
-          capturedTurnId,
-          rendererOwnedOrigin,
-        });
-      } catch (err) {
-        console.error("[MCP] Failed to append audit record:", err);
-      }
-      if (notifyTierMismatch && !suppressBanner) {
-        try {
-          notifyTierMismatch({
-            sessionId,
-            toolId: actionId,
-            tier,
-            targetTier: minimumPermittingTier(actionId, rendererOwnedOrigin),
-          });
-        } catch (err) {
-          console.error("[MCP] Failed to notify tier-mismatch:", err);
-        }
-      }
-      if (recordDenial) {
-        const result = recordDenial(sessionId, "tierMismatch");
-        if (result.tripped) {
-          const pinnedId = sessionStore.sessionWebContentsMap.get(sessionId);
-          // Snapshot ownership with the pin, before revocation clears both.
-          const rendererOwned = sessionStore.isRendererOwnedOrigin(sessionId);
-          sessionStore.revokeSession(sessionId);
-          clearDenialState?.(sessionId);
-          if (notifySessionRevoked) {
-            try {
-              notifySessionRevoked({
-                sessionId,
-                denialKind: "tierMismatch",
-                pinnedWebContentsId: pinnedId,
-                rendererOwned,
-              });
-            } catch (err) {
-              console.error("[MCP] Failed to notify session-revoked:", err);
-            }
-          }
-        }
-      }
-      // A tool the tier admits but the origin does not would otherwise be
-      // refused "for the 'full' tier" while the session holds exactly that
-      // tier — true of the gate, and useless to a caller deciding what to do
-      // next (#12407). An unscoped tool with an owned twin names the twin,
-      // which is the call that would have worked.
-      const withheldByOrigin =
-        !rendererOwnedOrigin && tier !== "external" && isTierPermitted(tier, actionId, true);
-      const ownedTwin = withheldByOrigin
-        ? (OWNED_TWIN_TOOLS as Readonly<Record<string, string>>)[actionId]
-        : undefined;
-      // A relayed caller is another machine's own assistant, so "reserved for
-      // Daintree's own assistant" would tell it it is something it isn't (#13493).
-      const relayed = sessionSurface.relay === true;
-      return buildToolError({
-        code: TIER_NOT_PERMITTED_CODE,
-        message:
-          ownedTwin !== undefined
-            ? relayed
-              ? `action '${actionId}' can reach any terminal or worktree on this host, so another machine's assistant uses '${ownedTwin}' here, which acts on what its calls created or started.`
-              : `action '${actionId}' can reach any terminal or worktree, so it is reserved for Daintree's own assistant. Use '${ownedTwin}', which acts on what this connection created.`
-            : withheldByOrigin
-              ? relayed
-                ? `action '${actionId}' can reach any terminal on this host, so another machine's assistant may only act on terminals its calls created or started here.`
-                : `action '${actionId}' can reach any terminal, so it is reserved for Daintree's own assistant. This connection may only act on terminals it created.`
-              : `action '${actionId}' is not permitted for the '${tier}' tier.`,
-      });
-    }
+          sessionStore,
+          ownershipOwner,
+          adoptedRecordFor,
+          admittedAdoption,
+          dispatchToRenderer,
+          dispatchConfirmed,
+          revealOwnedRun: deps.revealOwnedRun,
+        },
+        entry,
+        resourceId
+      );
+
+    const recordDispatchOwnership = (envelope: DispatchEnvelope): void =>
+      recordOwnershipFromDispatch(
+        { sessionId, actionId, sessionStore, ownershipOwner },
+        { ownedResource, ownedResourceId, ownedResourceRecord },
+        envelope
+      );
+
+    const admission = admitToolCall(
+      { sessionStore, notifyTierMismatch, recordDenial, clearDenialState, notifySessionRevoked },
+      sessionSurface,
+      facts,
+      callers,
+      appendAuditRecord
+    );
+    if (admission.kind === "return") return admission.result;
+    const { paneApproval, grantIssuedAt, authorizedWithoutNativeGrant, approvalRequired } =
+      admission.value;
+    let { nativeGrantId } = admission.value;
 
     // The workspace to answer `terminal.getStatus` for from the pty-host, set
     // when the bound workspace has no live view (#12316). Read off the binding
@@ -2571,286 +1117,36 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         }
       }
 
-      const withheldIds = new Set(
-        boundManifest
-          .filter((entry) => isWithheldFromBoundSession(entry, tier, sessionSurface))
-          .map((entry) => entry.id)
+      const boundRefusal = refuseConfirmGatedBoundCall(
+        facts,
+        workspaceBinding,
+        sessionSurface,
+        boundManifest,
+        viewlessStatusWorkspaceId,
+        introspectionSurface,
+        appendAuditRecord
       );
-
-      // Discovery must mirror dispatch authority (#11525): narrow the
-      // introspection surface by the same ceiling, after the grant union, so a
-      // grant can never make a withheld tool findable.
-      if (introspectionSurface) {
-        for (const withheldId of withheldIds) {
-          introspectionSurface.permittedActionIds.delete(withheldId);
-        }
-      }
-
-      // Which launch argument elevated a `terminal.new` dispatch, in the
-      // resolver's own precedence — a command is the stronger claim, so it wins
-      // when both are present. Scoped by action id for the reason the resolver
-      // is: `command` is an ordinary field name that other safe actions take
-      // without running anything.
-      const terminalLaunchArg =
-        actionId === TERMINAL_LAUNCH_ACTION_ID
-          ? readDispatchTerminalCommand(args) !== undefined
-            ? "command"
-            : readDispatchTerminalCwd(args) !== undefined
-              ? "cwd"
-              : undefined
-          : undefined;
-
-      // A dispatch can need confirmation for any of three reasons, and none of
-      // them is satisfiable here. The first is the manifest's own `danger:
-      // "confirm"`, collected into `withheldIds` above. The other two are
-      // args-conditional: the host elevates any agent-sourced dispatch carrying
-      // a `recipeId` to `"confirm"` (#11860), so a statically-`safe` composite
-      // like `worktree.createWithRecipe` clears the withheld set, and it
-      // elevates a `terminal.new` carrying `command` or `cwd` for the same
-      // reason (#12216) — both would then raise the very dialog this guard
-      // exists to avoid. Read through the same extraction points the elevation
-      // uses, so the refusal and the elevation can never disagree about which
-      // dispatches are gated.
-      const boundConfirmRefusal =
-        viewlessStatusWorkspaceId !== undefined
-          ? // The fallback runs in main and dispatches nothing, so none of the
-            // three reasons below can apply to it: there is no renderer call to
-            // elevate and no dialog to raise. Skipped explicitly rather than left
-            // to fall through the empty stand-in manifest, which would still let
-            // an args-conditional elevation refuse a read (#12316).
-            undefined
-          : withheldIds.has(actionId)
-            ? `Action '${actionId}' requires confirmation, and this MCP session is bound to workspace ` +
-              `'${workspaceBinding?.workspaceId}', which runs in the background with no one ` +
-              `watching it to approve the dialog. The action was not run. Confirm-gated actions are not part ` +
-              `of a workspace-bound session's tool surface — run this one from Daintree, or connect without a ` +
-              `workspace binding.`
-            : dispatchCarriesRecipeId(args)
-              ? `Action '${actionId}' was called with a 'recipeId', so it would start that recipe's ` +
-                `terminals and requires confirmation. This MCP session is bound to workspace ` +
-                `'${workspaceBinding?.workspaceId}', which runs in the background with no one watching it ` +
-                `to approve the dialog. The action was not run — call it without a 'recipeId', run the ` +
-                `recipe from Daintree, or connect without a workspace binding.`
-              : terminalLaunchArg !== undefined
-                ? `Action '${actionId}' was called with a '${terminalLaunchArg}', so it would start a shell and ` +
-                  `requires confirmation. This MCP session is bound to workspace ` +
-                  `'${workspaceBinding?.workspaceId}', which runs in the background with no one watching it ` +
-                  `to approve the dialog. The action was not run — call it without 'command' or 'cwd', open ` +
-                  `the terminal from Daintree, or connect without a workspace binding.`
-                : undefined;
-
-      if (boundConfirmRefusal !== undefined) {
-        const message = boundConfirmRefusal;
-        const value: import("../../../shared/types/actions.js").ActionDispatchResult = {
-          ok: false,
-          error: {
-            code: CONFIRMATION_REQUIRED_CODE,
-            message,
-            // Distinct from the `"unavailable"` a windowless host reports: that
-            // one clears when a window opens, so retrying is sane. This one is
-            // structural for the life of the session, so retrying never is.
-            details: { confirmationChannel: "workspace-bound" },
-          },
-        };
-        try {
-          appendAuditRecord({
-            toolId: actionId,
-            sessionId,
-            tier,
-            args,
-            durationMs: Date.now() - startedAt,
-            startedAt,
-            outcome: { kind: "result", value },
-            capturedTurnId,
-          });
-        } catch (err) {
-          console.error("[MCP] Failed to append audit record:", err);
-        }
-        return buildToolError({
-          code: CONFIRMATION_REQUIRED_CODE,
-          message,
-          details: { confirmationChannel: "workspace-bound" },
-        });
-      }
+      if (boundRefusal !== undefined) return boundRefusal;
     }
 
-    // Refused here, past the tier gate but before a grant's use is spent or a
-    // pane asks: a grant or a pane approval admits a call, and this one admits
-    // only its own caller.
-    if (
-      (actionId === PROJECT_RUN_COMMAND_TOOL && !commandRunnerCaller) ||
-      (ASSISTANT_CONTROL_TOOL_IDS.has(actionId) && !assistantControlCaller)
-    ) {
-      try {
-        appendAuditRecord({
-          toolId: actionId,
-          sessionId,
-          tier,
-          args,
-          durationMs: Date.now() - startedAt,
-          startedAt,
-          outcome: { kind: "unauthorized" },
-          capturedTurnId,
-          rendererOwnedOrigin,
-        });
-      } catch (err) {
-        console.error("[MCP] Failed to append audit record:", err);
-      }
-      return buildToolError({
-        code: TIER_NOT_PERMITTED_CODE,
-        message:
-          actionId === PROJECT_RUN_COMMAND_TOOL
-            ? PROJECT_RUN_COMMAND_REFUSAL
-            : ASSISTANT_CONTROL_REFUSAL,
-      });
-    }
+    const callerRefusal = refuseCallerOnlyTool(facts, callers, appendAuditRecord);
+    if (callerRefusal !== undefined) return callerRefusal;
 
-    // Charge the native automation grant's use now that the call has cleared
-    // the tier/grant check and is committed to proceeding (#10648). Doing it
-    // here — not at the peek above — means an unauthorized call never burns a
-    // use. A `false` return is purely defensive: the grant was live at the
-    // peek, so it can only have aged out or been revoked in between.
-    //
-    // How that failure lands depends on what else admitted the call (#11878).
-    // When the grant WAS the authorization, losing it fails closed. When the
-    // floor or a per-tool grant already admitted it, the grant only bought a
-    // confirmation bypass — so drop the bypass and let the normal modal
-    // decide. Refusing there would answer a tier-permitted `worktree.delete`
-    // with "not permitted for the 'core' tier", which is simply untrue.
-    //
-    // Accounting note: a matching call spends a use even when the tool is not
-    // confirm-gated, so the grant buys it nothing. Charging only where the
-    // bypass is actually needed would mean resolving effective danger — the
-    // async manifest plus args-conditional elevation — before this point,
-    // which is a far larger change than the bug warrants. Two consequences
-    // are worth knowing rather than assuming away: a matching call also
-    // slides the whole grant's TTL, so a harmless tool in a mixed grant can
-    // extend a confirm-gated sibling's bypass window (bounded by the hard
-    // lifetime ceiling), and because this site precedes dedup, a replayed
-    // duplicate spends a use without dispatching.
-    //
-    // One use is also the ONLY cost this site can express, which is why a tool
-    // that fans out across every target it resolves at dispatch time is barred
-    // from native grants entirely rather than charged here (#12121). Learning
-    // that count would mean reaching into the renderer before the charge — the
-    // async dependency the paragraph above rules out — so `peekNativeGrant`
-    // never hands one back a grant id and `nativeGrantId` stays undefined:
-    // no bypass, no use, and the confirm modal decides as it normally would.
-    if (nativeGrantId !== undefined) {
-      const consumed = sessionStore.grantCache.consumeNativeGrantUse(nativeGrantId, actionId);
-      if (!consumed) {
-        if (!authorizedWithoutNativeGrant) {
-          return buildToolError({
-            code: TIER_NOT_PERMITTED_CODE,
-            message: `action '${actionId}' is not permitted for the '${tier}' tier.`,
-          });
-        }
-        nativeGrantId = undefined;
-      }
-    }
+    const charge = chargeNativeGrant(
+      sessionStore.grantCache,
+      facts,
+      nativeGrantId,
+      authorizedWithoutNativeGrant
+    );
+    if (charge.kind === "return") return charge.result;
+    nativeGrantId = charge.value;
 
-    // Idempotency dedup for the creation-tool allowlist. Same-moment duplicates
-    // share the original Promise (singleflight); post-completion duplicates
-    // within MCP_DEDUP_TTL_MS return the cached result without redispatching.
-    // Keyed by `requestKey` if the caller supplied one, otherwise a hash of
-    // `(actionId, args)`. See #7531.
-    let dedupKey: string | undefined;
-    let argsHash: string | undefined;
-    if (MCP_DEDUP_ALLOWLIST.has(actionId)) {
-      dedupKey = buildDedupKey(actionId, requestKey, args);
-      argsHash = canonicalArgsHash(actionId, args);
+    const dedup = lookupCallDedup(sessionStore, facts, appendAuditRecord);
+    if (dedup.kind === "return") return dedup.result;
+    if (dedup.kind === "await") return await dedup.promise;
+    const { dedupKey, argsHash } = dedup.value;
 
-      const resultCache = sessionStore.dedupResultCache.get(sessionId);
-      if (resultCache) {
-        const cachedEntry = readDedupCache(resultCache, dedupKey, Date.now());
-        if (cachedEntry) {
-          if (cachedEntry.argsHash !== argsHash) {
-            try {
-              appendAuditRecord({
-                toolId: actionId,
-                sessionId,
-                tier,
-                args,
-                durationMs: Date.now() - startedAt,
-                startedAt,
-                outcome: { kind: "collision" },
-                capturedTurnId,
-              });
-            } catch (err) {
-              console.error("[MCP] Failed to append audit record:", err);
-            }
-            return buildToolError({
-              code: MCP_DEDUP_KEY_COLLISION_CODE,
-              message:
-                "Idempotency key collision: the same requestKey was used with different arguments.",
-              details: { actionId, requestKey },
-            });
-          }
-          try {
-            appendAuditRecord({
-              toolId: actionId,
-              sessionId,
-              tier,
-              args,
-              durationMs: Date.now() - startedAt,
-              startedAt,
-              outcome: { kind: "dedup" },
-              capturedTurnId,
-            });
-          } catch (err) {
-            console.error("[MCP] Failed to append audit record:", err);
-          }
-          return cachedEntry.result;
-        }
-      }
-
-      const inFlightForSession = sessionStore.dedupInFlight.get(sessionId);
-      const sharedEntry = inFlightForSession?.get(dedupKey);
-      if (sharedEntry) {
-        if (sharedEntry.argsHash !== argsHash) {
-          try {
-            appendAuditRecord({
-              toolId: actionId,
-              sessionId,
-              tier,
-              args,
-              durationMs: Date.now() - startedAt,
-              startedAt,
-              outcome: { kind: "collision" },
-              capturedTurnId,
-            });
-          } catch (err) {
-            console.error("[MCP] Failed to append audit record:", err);
-          }
-          return buildToolError({
-            code: MCP_DEDUP_KEY_COLLISION_CODE,
-            message:
-              "Idempotency key collision: the same requestKey was used with different arguments.",
-            details: { actionId, requestKey },
-          });
-        }
-        try {
-          appendAuditRecord({
-            toolId: actionId,
-            sessionId,
-            tier,
-            args,
-            durationMs: Date.now() - startedAt,
-            startedAt,
-            outcome: { kind: "dedup" },
-            capturedTurnId,
-          });
-        } catch (err) {
-          console.error("[MCP] Failed to append audit record:", err);
-        }
-        return await sharedEntry.promise;
-      }
-    }
-
-    let outcome:
-      | { kind: "result"; value: import("../../../shared/types/actions.js").ActionDispatchResult }
-      | { kind: "throw"; error: unknown }
-      | undefined;
+    let outcome: CallOutcome | undefined;
     let confirmationDecision:
       import("../../../shared/types/ipc/mcpServer.js").McpConfirmationDecision | undefined;
     // What pre-authorizes this dispatch's `danger: "confirm"` modal, if
@@ -2885,23 +1181,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     let toolCallStartedDanger = false;
     let toolCallStartedAsks = false;
     const emitToolCallStarted = (danger: boolean, asks: boolean): void => {
-      if (!notifyToolCallStarted) return;
-      try {
-        notifyToolCallStarted({
-          sessionId,
-          toolId: actionId,
-          args,
-          startedAt,
-          danger,
-          asks,
-          capturedTurnId,
-        });
-        toolCallStartedEmitted = true;
-        toolCallStartedDanger = danger;
-        toolCallStartedAsks = asks;
-      } catch (err) {
-        console.error("[MCP] Failed to notify tool-call-started:", err);
-      }
+      if (!announceCallStarted(notifyToolCallStarted, facts, danger, asks)) return;
+      toolCallStartedEmitted = true;
+      toolCallStartedDanger = danger;
+      toolCallStartedAsks = asks;
     };
 
     // Read at call time, not captured: the skip preference is settled once the
@@ -2919,194 +1202,23 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           ? dispatchAction(id, dispatchArgs, dispatchConfirmed, dispatchAuthorization)
           : dispatchAction(id, dispatchArgs, dispatchConfirmed);
 
-    /**
-     * Mint the per-tool grant behind "Allow for this session" (#12692), unless
-     * the session ended while the user was deciding — a grant written then
-     * would outlive the session it was meant for.
-     */
-    const mintSessionApproval = (): void => {
-      if (!sessionStore.hasLiveTransport(sessionId)) {
-        return;
+    const { askForApproval, askToClose, mintSessionApproval } = createCallApprovals(
+      { sessionStore, requestApproval, requestCloseApproval },
+      facts,
+      ownedResource,
+      {
+        recordOutcome: (next) => {
+          outcome = next;
+        },
+        recordConfirmationDecision: (decision) => {
+          confirmationDecision = decision;
+        },
+        preconfirm: (authorization) => {
+          dispatchConfirmed = true;
+          dispatchAuthorization = authorization;
+        },
       }
-      sessionStore.grantCache.issueGrant(sessionId, actionId);
-    };
-
-    /**
-     * Put an above-tier pane call to the user (#12692). Returns the tool error
-     * to hand back when the call must not run, or `undefined` once approved —
-     * having recorded that approval as the dispatch's confirmation, so the
-     * ordinary dialog is not raised a second time for the same call.
-     *
-     * A decline is `USER_REJECTED` and a missed dialog `CONFIRMATION_TIMEOUT`,
-     * the codes the ordinary dialog already uses: both final for this call, and
-     * neither counted toward revoking the session.
-     */
-    const askForApproval = async (): Promise<CallToolResultLike | undefined> => {
-      if (requestApproval === undefined) {
-        // Unreachable: `approvalRequired` implies a pane, and a pane always has
-        // the route. Refuse rather than run unasked.
-        const message = `action '${actionId}' is not permitted for the '${tier}' tier.`;
-        outcome = {
-          kind: "result",
-          value: { ok: false, error: { code: TIER_NOT_PERMITTED_CODE, message } },
-        };
-        return buildToolError({ code: TIER_NOT_PERMITTED_CODE, message });
-      }
-      let approval: DispatchEnvelope;
-      try {
-        approval = await requestApproval(actionId, args);
-      } catch (err) {
-        outcome = { kind: "throw", error: err };
-        if (err instanceof McpRouteBindingError) {
-          return buildToolError({
-            code: bindingGoneCode(err),
-            message: err.message,
-            retriable: err.retriable,
-          });
-        }
-        if (err instanceof RendererBridgeUnavailableError) {
-          const message =
-            `Action '${actionId}' is above this project's '${tier}' MCP tier, so it needs the user's ` +
-            `approval, but no Daintree window is open to ask them. The action was not run.`;
-          outcome = {
-            kind: "result",
-            value: {
-              ok: false,
-              error: {
-                code: CONFIRMATION_REQUIRED_CODE,
-                message,
-                details: { confirmationChannel: "unavailable" },
-              },
-            },
-          };
-          return buildToolError({
-            code: CONFIRMATION_REQUIRED_CODE,
-            message,
-            details: { confirmationChannel: "unavailable" },
-          });
-        }
-        return buildToolError({
-          code: EXECUTION_ERROR_CODE,
-          message: formatErrorMessage(err, `Could not ask for approval of '${actionId}'`),
-        });
-      }
-      confirmationDecision = approval.confirmationDecision;
-      if (approval.confirmationDecision !== "approved") {
-        // Anything short of an explicit approval is a refusal. The renderer's
-        // own error is kept when it sent one — it says whether the user
-        // declined or the dialog timed out.
-        const error: import("../../../shared/types/actions.js").ActionError = approval.result.ok
-          ? {
-              code: USER_REJECTED_CODE,
-              message: `The user did not approve '${actionId}'. The action was not run.`,
-            }
-          : approval.result.error;
-        outcome = { kind: "result", value: { ok: false, error } };
-        return buildToolError({
-          code: error.code,
-          message: error.message,
-          ...(error.details !== undefined ? { details: error.details } : {}),
-        });
-      }
-      if (sessionStore.getTier(sessionId) === null) throw sessionGoneError();
-      if (approval.approvalScope === "session") mintSessionApproval();
-      // The approval covers the ordinary confirmation too — one ask, not two —
-      // except where that dialog carries something this one could not. A
-      // target-picking tool still needs the pick. An owned tool was approved
-      // under its wrapper id, which the preview does not recognise, so the
-      // delegate's own dialog is the first to show what it destroys. And a
-      // recipe dispatch's dialog is what binds the run to the recipe the user
-      // read (#12263); preconfirming would drop that binding and run whatever
-      // the recipe says by then.
-      if (
-        isGenericNativeGrantEligible(actionId) &&
-        ownedResource === undefined &&
-        !dispatchCarriesRecipeId(args)
-      ) {
-        dispatchConfirmed = true;
-        dispatchAuthorization = "user";
-      }
-      return undefined;
-    };
-
-    /**
-     * Put a close by Daintree's own assistant to the user, once for every
-     * panel it names (#12881). Resolves with the ids the user left checked, or
-     * with the tool error to hand back when nothing may close: a decline, a
-     * missed dialog, or no window to ask in. A refusal is final for the call,
-     * so a batch that was turned down never falls back to asking per panel.
-     */
-    const askToClose = async (
-      terminalIds: readonly string[]
-    ): Promise<{ approved: ReadonlySet<string> } | { refusal: CallToolResultLike }> => {
-      const refuse = (
-        error: import("../../../shared/types/actions.js").ActionError
-      ): { refusal: CallToolResultLike } => {
-        outcome = { kind: "result", value: { ok: false, error } };
-        return {
-          refusal: buildToolError({
-            code: error.code,
-            message: error.message,
-            ...(error.details !== undefined ? { details: error.details } : {}),
-          }),
-        };
-      };
-      if (requestCloseApproval === undefined) {
-        return refuse({
-          code: CONFIRMATION_REQUIRED_CODE,
-          message: `Closing these panels needs the user's approval, and this session has no way to ask. Nothing was closed.`,
-          details: { confirmationChannel: "unavailable" },
-        });
-      }
-      let approval: DispatchEnvelope;
-      try {
-        approval = await requestCloseApproval(actionId, { terminalIds: [...terminalIds] });
-      } catch (err) {
-        if (err instanceof McpRouteBindingError) {
-          outcome = { kind: "throw", error: err };
-          return {
-            refusal: buildToolError({
-              code: bindingGoneCode(err),
-              message: err.message,
-              retriable: err.retriable,
-            }),
-          };
-        }
-        return refuse({
-          code: CONFIRMATION_REQUIRED_CODE,
-          message: formatErrorMessage(
-            err,
-            "Closing these panels needs the user's approval, and no Daintree window could ask"
-          ).concat(" Nothing was closed."),
-          details: { confirmationChannel: "unavailable" },
-        });
-      }
-      confirmationDecision = approval.confirmationDecision;
-      if (approval.confirmationDecision !== "approved") {
-        return refuse(
-          approval.result.ok
-            ? {
-                code: USER_REJECTED_CODE,
-                message: `The user did not approve closing these panels. Nothing was closed; do not retry them one at a time.`,
-              }
-            : approval.result.error
-        );
-      }
-      if (sessionStore.getTier(sessionId) === null) throw sessionGoneError();
-      // Only ids this call asked about. Anything else the renderer reported is
-      // not consent about this close; nothing reported means nothing approved.
-      const requested = new Set(terminalIds);
-      const selected = approval.result.ok
-        ? (approval.result.result as { selectedTargetIds?: unknown } | null | undefined)
-            ?.selectedTargetIds
-        : undefined;
-      const approved = new Set(
-        Array.isArray(selected)
-          ? selected.filter((id): id is string => typeof id === "string" && requested.has(id))
-          : []
-      );
-      return { approved };
-    };
+    );
 
     // Wrapped in an inner IIFE so the dedup guard below can register this
     // Promise in `dedupInFlight` (singleflight) and attach a `.then()` cache
@@ -4675,55 +2787,14 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         pendingNotify = undefined;
         settleRestartHold?.(false);
         settleRestartHold = undefined;
-        const settledOutcome = outcome ?? { kind: "throw" as const, error: new Error("unknown") };
-        // Compute the duration once so the audit record and the live strip
-        // report the same wall-clock, not two reads a few µs apart (#9759).
-        const durationMs = Date.now() - startedAt;
-        // A decision only comes back from a dialog that was raised, so a call
-        // stamped `skip-preference` that carries one was asked after all — by
-        // a remote Shell that keeps asking for a move of its window, or one
-        // too old to take the stamp (#13368). The decision says what happened.
-        const recordedAuthorization: McpDispatchAuthorization | undefined =
-          dispatchAuthorization === "skip-preference" && confirmationDecision !== undefined
-            ? undefined
-            : dispatchAuthorization;
-        try {
-          appendAuditRecord({
-            toolId: actionId,
-            sessionId,
-            tier,
-            args,
-            durationMs,
-            startedAt,
-            outcome: settledOutcome,
-            confirmationDecision,
-            ...(recordedAuthorization !== undefined
-              ? { authorization: recordedAuthorization }
-              : {}),
-            capturedTurnId,
-          });
-        } catch (err) {
-          console.error("[MCP] Failed to append audit record:", err);
-        }
-        // Settle the live activity strip for the matching started push. Guarded
-        // so a dispatch that never announced (pre-dispatch rejection, or a
-        // started-notify that threw) can't emit a dangling settle (#9759).
-        if (toolCallStartedEmitted && notifyToolCallSettled) {
-          try {
-            notifyToolCallSettled({
-              sessionId,
-              toolId: actionId,
-              startedAt,
-              danger: toolCallStartedDanger,
-              asks: toolCallStartedAsks,
-              durationMs,
-              outcome: settledOutcome,
-              capturedTurnId,
-            });
-          } catch (err) {
-            console.error("[MCP] Failed to notify tool-call-settled:", err);
-          }
-        }
+        settleCall({ appendAuditRecord, notifyToolCallSettled }, facts, {
+          outcome,
+          confirmationDecision,
+          dispatchAuthorization,
+          started: toolCallStartedEmitted
+            ? { danger: toolCallStartedDanger, asks: toolCallStartedAsks }
+            : undefined,
+        });
       }
     })();
 
@@ -4760,60 +2831,13 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       : repliedPromise;
 
     if (dedupKey !== undefined) {
-      let inFlight = sessionStore.dedupInFlight.get(sessionId);
-      if (!inFlight) {
-        inFlight = new Map();
-        sessionStore.dedupInFlight.set(sessionId, inFlight);
-      }
-      const ownedInFlight = inFlight;
-      const cleanupKey = dedupKey;
-      const ownedArgsHash = argsHash!;
-      ownedInFlight.set(cleanupKey, { promise: answerPromise, argsHash: ownedArgsHash });
-
-      answerPromise.then(
-        (result) => {
-          // Session-liveness guard: drain() clears `dedupInFlight` up-front,
-          // so a torn-down session leaves `liveInFlight` undefined and we
-          // skip both cleanup and caching. Same protection if the session
-          // was recreated under the same id (different Map identity).
-          const liveInFlight = sessionStore.dedupInFlight.get(sessionId);
-          if (liveInFlight !== ownedInFlight) return;
-
-          ownedInFlight.delete(cleanupKey);
-          if (ownedInFlight.size === 0) {
-            sessionStore.dedupInFlight.delete(sessionId);
-          }
-
-          // Cache only successful results — transient failures must retry.
-          if (outcome?.kind === "result" && outcome.value.ok) {
-            let cache = sessionStore.dedupResultCache.get(sessionId);
-            if (!cache) {
-              cache = new Map();
-              sessionStore.dedupResultCache.set(sessionId, cache);
-            }
-            cache.set(cleanupKey, {
-              result,
-              expiresAt: Date.now() + MCP_DEDUP_TTL_MS,
-              argsHash: ownedArgsHash,
-            });
-            // FIFO-evict the oldest entries when the per-session cap is
-            // exceeded. Map iteration is insertion-order, so the first key
-            // returned by `.keys()` is the oldest still-living entry.
-            while (cache.size > MCP_DEDUP_MAX_ENTRIES_PER_SESSION) {
-              const oldestKey = cache.keys().next().value;
-              if (oldestKey === undefined) break;
-              cache.delete(oldestKey);
-            }
-          }
-        },
-        () => {
-          const liveInFlight = sessionStore.dedupInFlight.get(sessionId);
-          if (liveInFlight !== ownedInFlight) return;
-          ownedInFlight.delete(cleanupKey);
-          if (ownedInFlight.size === 0) {
-            sessionStore.dedupInFlight.delete(sessionId);
-          }
-        }
+      registerCallDedup(
+        sessionStore,
+        sessionId,
+        dedupKey,
+        argsHash!,
+        answerPromise,
+        () => outcome?.kind === "result" && outcome.value.ok
       );
     }
 
@@ -4821,665 +2845,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
   };
   server.setRequestHandler(CallToolRequestSchema, handleCallTool);
 
-  // Each resource handler resolves the tier once at entry and threads it down
-  // (#11799). One capture per request: the listing helpers await dispatches
-  // mid-enumeration, and re-reading across those awaits would let one response
-  // mix two authorization lifetimes.
-  server.setRequestHandler(ListResourcesRequestSchema, async () => {
-    const tier = sessionStore.getTier(sessionId);
-    if (tier === null) throw sessionGoneError();
-    return { resources: await listConcreteResources(tier, deps) };
-  });
-
-  server.setRequestHandler(ListResourceTemplatesRequestSchema, async () => {
-    const tier = sessionStore.getTier(sessionId);
-    if (tier === null) throw sessionGoneError();
-    return { resourceTemplates: listResourceTemplates(tier) };
-  });
-
-  server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
-    const tier = sessionStore.getTier(sessionId);
-    if (tier === null) throw sessionGoneError();
-    const uri = request.params.uri;
-    const parsed = parseResourceUri(uri);
-    if (!parsed) {
-      throw new McpError(ErrorCode.InvalidRequest, `Unknown resource URI: ${uri}`);
-    }
-    if (!isResourcePermitted(tier, parsed.kind)) {
-      const message = `Resource '${uri}' is not permitted for the '${tier}' tier.`;
-      throw new McpError(
-        ErrorCode.InvalidRequest,
-        message,
-        buildMcpErrorPayload({ code: TIER_NOT_PERMITTED_CODE, message })
-      );
-    }
-    if (parsed.kind === "scrollback" && !mayNameTerminal(tier, parsed.id)) {
-      throw new McpError(ErrorCode.InvalidRequest, `Unknown resource URI: ${uri}`);
-    }
-    // `agentState` deliberately has no view-residency probe (#12316). It answers
-    // from the process-global `AgentAvailabilityStore` with no renderer
-    // involved, so requiring the bound workspace to hold a live view made an
-    // orchestrator's reach a function of the user's navigation — the whole
-    // complaint. The probe #12082 added closed only half of a gap it could not
-    // close: which workspace an agent belongs to is not checked here either
-    // way, because that needs an agent→workspace map this layer does not have,
-    // and a bound session with a live view could always read across it. Closing
-    // it properly is #11789's own scoping work, and it has to apply to both.
-    //
-    // `binding` never needed one: it dispatches nothing, so there is no route
-    // for a probe to be protecting. That is the whole point — it is the one
-    // read a session whose workspace is gone can still make (#12313).
-    try {
-      return {
-        contents: [
-          await readResourceContents(
-            uri,
-            parsed,
-            dispatchAction,
-            workspaceBinding?.workspaceId,
-            deps.preferredWebContentsId
-          ),
-        ],
-      };
-    } catch (err) {
-      const routed = routeBindingMcpError(err);
-      if (routed) throw routed;
-      throw err;
-    }
-  });
-
-  server.setRequestHandler(SubscribeRequestSchema, async (request) => {
-    // Gated before `subscribeResource` can install an event listener, so a
-    // revoked session never leaves a subscription behind for a transport that
-    // is already gone.
-    const tier = sessionStore.getTier(sessionId);
-    if (tier === null) throw sessionGoneError();
-    const uri = request.params.uri;
-    const parsed = parseResourceUri(uri);
-    if (!parsed) {
-      throw new McpError(ErrorCode.InvalidRequest, `Unknown resource URI: ${uri}`);
-    }
-    if (!isResourcePermitted(tier, parsed.kind)) {
-      const message = `Resource '${uri}' is not permitted for the '${tier}' tier.`;
-      throw new McpError(
-        ErrorCode.InvalidRequest,
-        message,
-        buildMcpErrorPayload({ code: TIER_NOT_PERMITTED_CODE, message })
-      );
-    }
-    subscribeResource(sessionId, server, uri, parsed, sessionStore, workspaceBinding?.workspaceId);
-    return {};
-  });
-
-  server.setRequestHandler(UnsubscribeRequestSchema, async (request) => {
-    unsubscribeResource(sessionId, request.params.uri, sessionStore);
-    return {};
-  });
-
-  server.setRequestHandler(ListPromptsRequestSchema, async () => {
-    if (sessionStore.getTier(sessionId) === null) throw sessionGoneError();
-    return {
-      prompts: PROMPT_DEFINITIONS.map((def) => ({
-        name: def.name,
-        description: def.description,
-        arguments: def.arguments,
-      })),
-    };
-  });
-
-  server.setRequestHandler(GetPromptRequestSchema, async (request) => {
-    // Prompts render from live IDE state: `collectPromptContext` dispatches
-    // `worktree.getCurrent`, and `triage_failed_agent` also reads terminal
-    // output. That is a renderer dispatch on behalf of the session, so it
-    // belongs behind the same liveness gate as `tools/call` — otherwise a
-    // revoked bearer still reads worktree and terminal data through the prompt
-    // surface, which is the leak this issue is about wearing a different hat.
-    const promptTier = sessionStore.getTier(sessionId);
-    if (promptTier === null) throw sessionGoneError();
-    const name = request.params.name;
-    const definition = PROMPT_DEFINITIONS.find((def) => def.name === name);
-    if (!definition) {
-      throw new McpError(ErrorCode.InvalidParams, `Unknown prompt: ${name}`);
-    }
-
-    const rawArgs = request.params.arguments ?? {};
-
-    if (typeof rawArgs !== "object" || rawArgs === null || Array.isArray(rawArgs)) {
-      throw new McpError(ErrorCode.InvalidParams, "Prompt arguments must be an object");
-    }
-
-    for (const [key, value] of Object.entries(rawArgs)) {
-      if (typeof value !== "string") {
-        throw new McpError(
-          ErrorCode.InvalidParams,
-          `Prompt argument '${key}' must be a string, got ${typeof value}`
-        );
-      }
-    }
-
-    const args = rawArgs as Record<string, string>;
-
-    for (const arg of definition.arguments) {
-      if (arg.required && !args[arg.name]?.trim()) {
-        throw new McpError(
-          ErrorCode.InvalidParams,
-          `Missing required argument for prompt '${name}': ${arg.name}`
-        );
-      }
-    }
-
-    // An assistant's output goes only to an assistant that may reach it (#13496).
-    const namedTerminal = args.terminal_id?.trim();
-    const context = await collectPromptContext(
-      definition,
-      namedTerminal && !mayNameTerminal(promptTier, namedTerminal)
-        ? { ...args, terminal_id: "" }
-        : args,
-      dispatchAction
-    );
-    const text = definition.render(args, context);
-
-    return {
-      description: definition.description,
-      messages: [
-        {
-          role: "user" as const,
-          content: { type: "text" as const, text },
-        },
-      ],
-    };
-  });
+  registerResourceHandlers(server, session, deps);
+  registerPromptHandlers(server, session, deps);
 
   return server;
-}
-
-// --- Resource helpers ---
-
-async function listConcreteResources(
-  tier: McpTier,
-  deps: SessionServerDeps
-): Promise<Array<{ uri: string; name: string; mimeType: string; description?: string }>> {
-  const resources: Array<{ uri: string; name: string; mimeType: string; description?: string }> =
-    [];
-  // First, and before anything that dispatches. A workspace-bound session whose
-  // view is gone cannot reach a renderer, so this is the only entry it is
-  // guaranteed to get — and it is what makes the degraded listing below honest
-  // rather than an authoritative "you have nothing" (#12313).
-  if (isResourcePermitted(tier, "binding")) {
-    resources.push({
-      uri: WORKSPACE_BINDING_RESOURCE_URI,
-      name: "This session — workspace binding",
-      mimeType: "application/json",
-      description:
-        "Whether this session's bound workspace has a live view, when eviction last took one, and whether the user asked to keep it resident.",
-    });
-  }
-  // Captured before the first await, so the decision below is a value this
-  // function already holds rather than a state read from inside a catch
-  // (lesson #10222). Its meaning is narrow: an unreachable workspace may only
-  // drop the categories that needed a renderer if the client is simultaneously
-  // being handed the resource that explains why they are missing.
-  const bindingListed = resources.length > 0;
-  if (isResourcePermitted(tier, "issues")) {
-    resources.push({
-      uri: "daintree://project/current/issues",
-      name: "Current project — open issues",
-      mimeType: "application/json",
-      description: "Open issues for the active project.",
-    });
-  }
-  if (isResourcePermitted(tier, "pulse")) {
-    const worktrees = await tryDispatchList("worktree.list", deps.dispatchAction, bindingListed);
-    for (const wt of worktrees) {
-      const id = readStringField(wt, ["id", "worktreeId"]);
-      const label = readStringField(wt, ["branch", "name", "path"]) ?? id;
-      if (!id) continue;
-      resources.push({
-        uri: `daintree://worktree/${encodeURIComponent(id)}/pulse`,
-        name: `Worktree pulse — ${label ?? id}`,
-        mimeType: "application/json",
-        description: "Git status summary, recent commits, and pull-request signal.",
-      });
-    }
-  }
-  if (isResourcePermitted(tier, "scrollback") || isResourcePermitted(tier, "agentState")) {
-    const terminals = await tryDispatchList("terminal.list", deps.dispatchAction, bindingListed);
-    // The agent-state URI is addressed by agent type, so terminals running the
-    // same type all name one resource; list it once.
-    const listedAgentIds = new Set<string>();
-    for (const term of terminals) {
-      const id = readStringField(term, ["id", "terminalId"]);
-      const label = readStringField(term, ["title", "name"]) ?? id;
-      if (id && isResourcePermitted(tier, "scrollback")) {
-        resources.push({
-          uri: `daintree://terminal/${encodeURIComponent(id)}/scrollback`,
-          name: `Terminal scrollback — ${label ?? id}`,
-          mimeType: "text/plain",
-          description: `Last ${RESOURCE_SCROLLBACK_TAIL_LINES} lines of terminal output.`,
-        });
-      }
-      const agentId = readStringField(term, ["agentId"]);
-      if (agentId && !listedAgentIds.has(agentId) && isResourcePermitted(tier, "agentState")) {
-        listedAgentIds.add(agentId);
-        resources.push({
-          uri: `daintree://agent/${encodeURIComponent(agentId)}/state`,
-          name: `Agent state — ${label ?? agentId}`,
-          mimeType: "application/json",
-          description: "Current agent state-machine value (idle, working, waiting, etc.).",
-        });
-      }
-    }
-  }
-  return resources;
-}
-
-function listResourceTemplates(
-  tier: McpTier
-): Array<{ uriTemplate: string; name: string; mimeType: string; description?: string }> {
-  const templates: Array<{
-    uriTemplate: string;
-    name: string;
-    mimeType: string;
-    description?: string;
-  }> = [];
-  if (isResourcePermitted(tier, "pulse")) {
-    templates.push({
-      uriTemplate: "daintree://worktree/{id}/pulse",
-      name: "Worktree pulse",
-      mimeType: "application/json",
-      description: "Git status summary, recent commits, and pull-request signal.",
-    });
-  }
-  if (isResourcePermitted(tier, "scrollback")) {
-    templates.push({
-      uriTemplate: "daintree://terminal/{id}/scrollback",
-      name: "Terminal scrollback",
-      mimeType: "text/plain",
-      description: `Last ${RESOURCE_SCROLLBACK_TAIL_LINES} lines of terminal output.`,
-    });
-  }
-  if (isResourcePermitted(tier, "agentState")) {
-    templates.push({
-      uriTemplate: "daintree://agent/{id}/state",
-      name: "Agent state",
-      mimeType: "application/json",
-      description: "Current agent state-machine value (idle, working, waiting, etc.).",
-    });
-  }
-  return templates;
-}
-
-async function readResourceContents(
-  uri: string,
-  parsed: ParsedResourceUri,
-  dispatchAction: SessionServerDeps["dispatchAction"],
-  boundWorkspaceId: string | undefined,
-  preferredWebContentsId: number | undefined
-): Promise<{ uri: string; mimeType: string; text: string }> {
-  if (parsed.kind === "binding") {
-    // Resolved fresh on every read, from the same registry routing consults, so
-    // "this says available" and "a call would route" cannot drift (#7003 — never
-    // a cache, and never another session's or window's state).
-    const state = readWorkspaceBindingState(boundWorkspaceId ?? null, preferredWebContentsId);
-    return { uri, mimeType: "application/json", text: JSON.stringify(state) };
-  }
-  if (parsed.kind === "pulse") {
-    const envelope = await dispatchAction("git.getProjectPulse", {
-      worktreeId: parsed.id,
-      rangeDays: 60,
-    });
-    const text = serializeResourcePayload(unwrapDispatchResult(envelope));
-    return { uri, mimeType: "application/json", text: truncateText(text) };
-  }
-  if (parsed.kind === "scrollback") {
-    const envelope = await dispatchAction("terminal.getOutput", {
-      terminalId: parsed.id,
-      maxLines: RESOURCE_SCROLLBACK_TAIL_LINES,
-      stripAnsi: true,
-    });
-    const value = unwrapDispatchResult(envelope);
-    if (typeof value === "string") {
-      return { uri, mimeType: "text/plain", text: truncateTextTail(value) };
-    }
-    // Compact, because `terminal.getOutput` fitted its tail to this same cap
-    // measured compact (#12450): indenting a full tail would push it back over
-    // and into the head-preserving cut, which leaves JSON that will not parse.
-    const text =
-      value === undefined || value === null ? "null" : safeSerializeToolResultCompact(value);
-    return { uri, mimeType: "text/plain", text: truncateText(text) };
-  }
-  if (parsed.kind === "agentState") {
-    // The URI names an agent type, not a terminal, so this reports the one
-    // terminal of that type we heard from most recently — all of its fields
-    // from that one terminal, and naming it, so a sibling's state is never
-    // passed off as this one's (#12494).
-    const snapshot = getAgentAvailabilityStore().getLatestSnapshotForAgent(parsed.id);
-    const state = snapshot?.state;
-    const waitingReason = state === "waiting" ? snapshot?.waitingReason : undefined;
-    // Exit metadata only after the agent has finished. exitCode may be null
-    // (signal kill), so gate on the agent being in a terminal state rather than
-    // on the value being truthy.
-    const hasExited = state === "completed" || state === "exited";
-    const exitCode = hasExited ? snapshot?.exitCode : undefined;
-    const exitSignal = hasExited ? snapshot?.exitSignal : undefined;
-    const spawnedAt = snapshot?.spawnedAt;
-    const lastTransitionAt = snapshot?.lastStateChange;
-    const text = JSON.stringify({
-      agentId: parsed.id,
-      ...(snapshot ? { terminalId: snapshot.terminalId } : {}),
-      state: state ?? null,
-      ...(waitingReason ? { waitingReason } : {}),
-      ...(exitCode !== undefined ? { exitCode } : {}),
-      ...(exitSignal !== undefined ? { exitSignal } : {}),
-      ...(spawnedAt !== undefined ? { spawnedAt } : {}),
-      ...(lastTransitionAt !== undefined ? { lastTransitionAt } : {}),
-    });
-    return { uri, mimeType: "application/json", text };
-  }
-  if (parsed.kind === "issues") {
-    // Explicit rather than riding the action's default: this resource is read
-    // whole and then truncated, so the compact projection is the point.
-    const envelope = await dispatchAction("forge.listIssues", { view: "summary" });
-    const text = serializeResourcePayload(unwrapDispatchResult(envelope));
-    return { uri, mimeType: "application/json", text: truncateText(text) };
-  }
-  throw new McpError(ErrorCode.InvalidRequest, `Unknown resource URI: ${uri}`);
-}
-
-async function tryDispatchList(
-  actionId: string,
-  dispatchAction: SessionServerDeps["dispatchAction"],
-  bindingResourceListed: boolean
-): Promise<unknown[]> {
-  try {
-    const envelope = await dispatchAction(actionId, {});
-    const value = unwrapDispatchResult(envelope);
-    if (Array.isArray(value)) return value;
-    if (value && typeof value === "object") {
-      for (const key of ["items", "results", "list", "terminals", "worktrees"]) {
-        const inner = (value as Record<string, unknown>)[key];
-        if (Array.isArray(inner)) return inner;
-      }
-    }
-    return [];
-  } catch (err) {
-    // An unreachable route is not an empty workspace (#12082). Swallowing it
-    // here would answer `resources/list` with an authoritative-looking "you
-    // have nothing" for a bound session whose workspace is simply not open —
-    // the same lie the terminal handshake used to tell, in a quieter place.
-    // Ordinary enumeration failures keep degrading to a partial listing.
-    //
-    // What changed in #12313 is that the listing can now say so. When the
-    // binding resource is in the response, dropping this category is not a
-    // claim about the workspace's contents — the client is holding a resource
-    // that reports the route is gone, when eviction took it, and that it will
-    // come back. Without that resource the old refusal is still the only honest
-    // answer, so the flag is checked rather than assumed.
-    //
-    // Narrowed to `WorkspaceBindingError` deliberately. A `SessionBindingError`
-    // is a dead WebContents pin: the session's identity is a destroyed view it
-    // can never re-resolve, so there is no later state in which the listing
-    // fills back in, and degrading it would promise a recovery that cannot
-    // happen. That one still refuses.
-    if (bindingResourceListed && err instanceof WorkspaceBindingError) return [];
-    const routed = routeBindingMcpError(err);
-    if (routed) throw routed;
-    console.error(`[MCP] Failed to enumerate resources via ${actionId}:`, err);
-    return [];
-  }
-}
-
-/**
- * Pure tier check — takes the tier its caller already resolved rather than
- * reading the store again (#11799). The resource handlers resolve liveness once
- * at entry, so this helper is only ever reached for a live session, and the
- * twelve call sites across the two listing helpers share that one capture
- * instead of racing the store twelve separate times.
- */
-function isResourcePermitted(tier: McpTier, kind: string): boolean {
-  return isTierPermitted(tier, (RESOURCE_BACKING_ACTIONS as Record<string, string>)[kind]);
-}
-
-function subscribeResource(
-  sessionId: string,
-  server: Server,
-  uri: string,
-  parsed: ParsedResourceUri,
-  sessionStore: SessionStore,
-  boundWorkspaceId: string | undefined
-): void {
-  if (parsed.kind !== "pulse" && parsed.kind !== "agentState" && parsed.kind !== "binding") {
-    throw new McpError(
-      ErrorCode.InvalidRequest,
-      `Subscriptions are not supported for resource '${uri}'.`
-    );
-  }
-  let bucket = sessionStore.resourceSubscriptions.get(sessionId);
-  if (!bucket) {
-    bucket = new Map();
-    sessionStore.resourceSubscriptions.set(sessionId, bucket);
-  }
-  if (bucket.has(uri)) return;
-
-  const fire = () => {
-    if (!sessionStore.hasLiveTransport(sessionId)) return;
-    server.sendResourceUpdated({ uri }).catch((err) => {
-      console.error(`[MCP] sendResourceUpdated failed for ${uri}:`, err);
-    });
-  };
-
-  let unsub: () => void;
-  if (parsed.kind === "binding") {
-    // Push is latency reduction, never the contract. The transport is built
-    // without an `eventStore` (`httpLifecycle.ts`), and the SDK's `send()`
-    // returns silently when no client is holding the standalone GET stream, so
-    // a notification can be dropped with no error anywhere — which is exactly
-    // why the read above is the authoritative half and this only says "read
-    // again" (#12313).
-    //
-    // An unbound session subscribing gets a live, permanently quiet
-    // subscription: it has no binding, so nothing can change about one. Cheaper
-    // and more predictable than refusing, and its read still answers `unbound`.
-    unsub =
-      boundWorkspaceId === undefined
-        ? () => {}
-        : onWorkspaceResidencyChanged(boundWorkspaceId, fire);
-  } else if (parsed.kind === "agentState") {
-    // A spawn resets a terminal, and a kill or a hand-started agent quitting
-    // to its shell drops it; any of them can change which terminal the read
-    // reports without a state change of its own — killing an already-idle
-    // agent emits none.
-    const offs = [
-      events.on("agent:state-changed", (payload) => {
-        if (payload.agentId === parsed.id) fire();
-      }),
-      events.on("agent:spawned", (payload) => {
-        if (payload.agentId === parsed.id) fire();
-      }),
-      events.on("agent:killed", (payload) => {
-        if (payload.agentId === parsed.id) fire();
-      }),
-      events.on("agent:exited", (payload) => {
-        if (payload.exitKind === "subcommand" && payload.agentType === parsed.id) fire();
-      }),
-    ];
-    unsub = () => {
-      for (const off of offs) off();
-    };
-  } else {
-    unsub = events.on("sys:worktree:update", (payload) => {
-      if (payload.worktreeId === parsed.id) fire();
-    });
-  }
-  bucket.set(uri, unsub);
-}
-
-function unsubscribeResource(sessionId: string, uri: string, sessionStore: SessionStore): void {
-  const bucket = sessionStore.resourceSubscriptions.get(sessionId);
-  if (!bucket) return;
-  const unsub = bucket.get(uri);
-  if (!unsub) return;
-  try {
-    unsub();
-  } catch (err) {
-    console.error(`[MCP] Failed to unsubscribe ${uri}:`, err);
-  }
-  bucket.delete(uri);
-  if (bucket.size === 0) {
-    sessionStore.resourceSubscriptions.delete(sessionId);
-  }
-}
-
-export function cleanupResourceSubscriptions(sessionId: string, sessionStore: SessionStore): void {
-  const bucket = sessionStore.resourceSubscriptions.get(sessionId);
-  if (!bucket) return;
-  for (const unsub of bucket.values()) {
-    try {
-      unsub();
-    } catch (err) {
-      console.error("[MCP] Resource subscription teardown failed:", err);
-    }
-  }
-  sessionStore.resourceSubscriptions.delete(sessionId);
-}
-
-// --- Prompt helpers ---
-
-async function collectPromptContext(
-  definition: PromptDefinition,
-  args: Record<string, string>,
-  dispatchAction: SessionServerDeps["dispatchAction"]
-): Promise<PromptRenderContext> {
-  const context: PromptRenderContext = {};
-
-  // triage_terminals is a static recipe — render() ignores context, so skip
-  // the worktree dispatch to avoid a 30s safeDispatch timeout penalty when the
-  // renderer is unavailable (startup, view teardown, project switch).
-  if (definition.name !== "triage_terminals") {
-    const worktree = await safeDispatch("worktree.getCurrent", undefined, dispatchAction);
-    if (worktree && typeof worktree === "object") {
-      const w = worktree as Record<string, unknown>;
-      if (typeof w.path === "string") context.worktreePath = w.path;
-      if (typeof w.branch === "string") context.worktreeBranch = w.branch;
-      if (typeof w.issueNumber === "number") context.worktreeIssueNumber = w.issueNumber;
-    }
-  }
-
-  if (definition.name === "triage_failed_agent") {
-    const terminalId = args.terminal_id?.trim();
-    if (terminalId) {
-      const result = await safeDispatch(
-        "terminal.getOutput",
-        {
-          terminalId,
-          maxLines: 100,
-          stripAnsi: true,
-        },
-        dispatchAction
-      );
-      if (result && typeof result === "object") {
-        const r = result as Record<string, unknown>;
-        if (typeof r.content === "string") {
-          const content = r.content;
-          if (content.length > PROMPT_TERMINAL_OUTPUT_MAX_CHARS) {
-            const tail = content.slice(-PROMPT_TERMINAL_OUTPUT_MAX_CHARS);
-            context.terminalOutput = `… [truncated to last ${PROMPT_TERMINAL_OUTPUT_MAX_CHARS} chars]\n${tail}`;
-          } else {
-            context.terminalOutput = content;
-          }
-        }
-      }
-    }
-  }
-
-  return context;
-}
-
-/**
- * The code a route-binding failure reaches the client as, noted in the log on
- * the way: the client's own transcript is otherwise the only place a refusal
- * like this shows. A session retrying one call logs it once a window.
- */
-function bindingGoneCode(err: McpRouteBindingError): typeof SESSION_BINDING_GONE {
-  const suppressedCount = bindingGoneLogLimiter.take(`${err.constructor.name}:${err.retriable}`);
-  if (suppressedCount !== null) {
-    bindingLogger.info("MCP session binding is gone", {
-      code: SESSION_BINDING_GONE,
-      kind: err.constructor.name,
-      retriable: err.retriable,
-      suppressedCount,
-    });
-  }
-  return SESSION_BINDING_GONE;
-}
-
-/**
- * The structured envelope a route-binding failure must reach the client as
- * (#12082).
- *
- * `McpRouteBindingError` is one of ours: it carries a string `code` and no
- * `data`, and the SDK only preserves numeric codes and explicit `error.data`,
- * so letting one escape a handler serializes it as a bare `-32603` with the
- * `SESSION_BINDING_GONE` reason and the `retriable` verdict both stripped. Every
- * surface that can raise one converts it here, so a client reads one shape
- * whichever request hit it.
- */
-function routeBindingMcpError(err: unknown): McpError | null {
-  if (!(err instanceof McpRouteBindingError)) return null;
-  return new McpError(
-    ErrorCode.InternalError,
-    err.message,
-    buildMcpErrorPayload({
-      code: bindingGoneCode(err),
-      message: err.message,
-      retriable: err.retriable,
-    })
-  );
-}
-
-async function safeDispatch(
-  actionId: string,
-  args: unknown,
-  dispatchAction: SessionServerDeps["dispatchAction"]
-): Promise<unknown> {
-  try {
-    const envelope = await dispatchAction(actionId, args);
-    if (envelope.result.ok) {
-      return envelope.result.result;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-async function lookupManifestEntry(
-  actionId: string,
-  getCachedManifest: () => import("../../../shared/types/actions.js").ActionManifestEntry[] | null,
-  requestManifest: () => Promise<import("../../../shared/types/actions.js").ActionManifestEntry[]>
-): Promise<import("../../../shared/types/actions.js").ActionManifestEntry | undefined> {
-  let manifest = getCachedManifest();
-  if (!manifest) {
-    try {
-      // Use the value returned directly — pinned sessions (#7002) deliberately
-      // skip the shared `cachedManifest` so a re-read here would always return
-      // null and silently drop host confirmation + structuredContent.
-      manifest = await requestManifest();
-    } catch (err) {
-      // No frontend is attached, which is not a route that went away: the
-      // dispatch can still run in main, or say it needs a frontend. The host's
-      // base surface describes the built-in actions it covers, so their danger
-      // and output schema stay known.
-      if (err instanceof NoFrontendAttachedError) {
-        return getExternalBaseManifest().find((e) => e.id === actionId);
-      }
-      // A route that is gone is not a manifest that is merely unavailable
-      // (#12082). Collapsing it to `undefined` here makes the bound-session
-      // guard below report a non-retriable `NOT_FOUND` — "no such action" — for
-      // a workspace the user is about to reopen.
-      if (err instanceof McpRouteBindingError) throw err;
-      return undefined;
-    }
-  }
-  return manifest.find((e) => e.id === actionId);
 }

@@ -40,7 +40,7 @@ const VIEWLESS_ARTIFACT_PATH = path.resolve(
 /**
  * The tools the session server runs in main whatever views are open: its
  * `VIEWLESS_MAIN_PROCESS_TOOLS`, which can't be imported into this renderer
- * test. `sessionServer.test.ts` holds the generated surface to that set, so a
+ * test. `sessionServer.workspaceBound.test.ts` holds the generated surface to that set, so a
  * tool added there and missed here fails.
  */
 const MAIN_PROCESS_TOOLS = [

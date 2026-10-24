@@ -985,7 +985,7 @@ describe("McpServerService", () => {
       // auto-accepts, but the server must NOT fall back to it to self-approve —
       // that fallback would be the exact self-approval vulnerability (#11342).
       // (The RendererBridgeUnavailableError no-window synthesis path itself is
-      // covered end-to-end in sessionServer.test.ts.)
+      // covered end-to-end in sessionServer.settlement.test.ts.)
       const dispatchMock = createDestructiveDispatchMock();
       const onElicit = vi.fn(async (): Promise<ElicitResult> => ({
         action: "accept",
