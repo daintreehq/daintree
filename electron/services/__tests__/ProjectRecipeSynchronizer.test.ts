@@ -3,6 +3,7 @@ import fs from "fs/promises";
 import path from "path";
 import os from "os";
 import type { TerminalRecipe } from "../../types/index.js";
+import type { ProjectFileStore } from "../ProjectFileStore.js";
 import { ProjectIdentityFiles } from "../ProjectIdentityFiles.js";
 import { ProjectRecipeSynchronizer } from "../ProjectRecipeSynchronizer.js";
 
@@ -22,7 +23,9 @@ describe("ProjectRecipeSynchronizer", () => {
   let projectPath: string;
   let siblingPath: string;
   let mirror: TerminalRecipe[];
-  let enqueueRecipesUpdate: ReturnType<typeof vi.fn>;
+  let inTurn: boolean;
+  let identityFiles: ProjectIdentityFiles;
+  let enqueueRecipesUpdate: ReturnType<typeof vi.fn<ProjectFileStore["enqueueRecipesUpdate"]>>;
   let sync: ProjectRecipeSynchronizer;
 
   beforeEach(async () => {
@@ -32,16 +35,23 @@ describe("ProjectRecipeSynchronizer", () => {
     // bare path instead of `${path}|` would wrongly drop this project's hashes.
     siblingPath = path.join(tmpDir, "repo-clone");
     mirror = [];
-    enqueueRecipesUpdate = vi.fn(
-      async (
-        _projectId: string,
-        updater: (read: () => Promise<TerminalRecipe[]>) => Promise<TerminalRecipe[] | null>
-      ) => {
-        const next = await updater(async () => mirror);
-        if (next) mirror = next;
+    inTurn = false;
+    identityFiles = new ProjectIdentityFiles();
+    enqueueRecipesUpdate = vi.fn<ProjectFileStore["enqueueRecipesUpdate"]>(
+      async (_projectId, updater) => {
+        // Enter the turn on a later tick, as the real queue does, so work done
+        // before or outside the updater is observably outside the turn.
+        await Promise.resolve();
+        inTurn = true;
+        try {
+          const next = await updater(async () => mirror);
+          if (next) mirror = next;
+        } finally {
+          inTurn = false;
+        }
       }
     );
-    sync = new ProjectRecipeSynchronizer(new ProjectIdentityFiles(), { enqueueRecipesUpdate });
+    sync = new ProjectRecipeSynchronizer(identityFiles, { enqueueRecipesUpdate });
   });
 
   afterEach(async () => {
@@ -72,16 +82,30 @@ describe("ProjectRecipeSynchronizer", () => {
   });
 
   it("reconciles inside one queued turn of the injected file store", async () => {
+    const canonical = makeRecipe({ id: "canonical-only", name: "Canonical Only" });
+    await new ProjectIdentityFiles().writeInRepoRecipe(projectPath, canonical);
     const local = makeRecipe({ id: "local-only", name: "Local Only" });
     mirror = [local];
+
+    const diskCallsInTurn: boolean[] = [];
+    const read = identityFiles.readInRepoRecipesWithHashes.bind(identityFiles);
+    const write = identityFiles.writeInRepoRecipe.bind(identityFiles);
+    vi.spyOn(identityFiles, "readInRepoRecipesWithHashes").mockImplementation(async (...args) => {
+      diskCallsInTurn.push(inTurn);
+      return read(...args);
+    });
+    vi.spyOn(identityFiles, "writeInRepoRecipe").mockImplementation(async (...args) => {
+      diskCallsInTurn.push(inTurn);
+      return write(...args);
+    });
 
     const collisions = await sync.reconcileProjectRecipes(projectPath, "a".repeat(64));
 
     expect(collisions).toEqual([]);
     expect(enqueueRecipesUpdate).toHaveBeenCalledTimes(1);
     expect(enqueueRecipesUpdate.mock.calls[0][0]).toBe("a".repeat(64));
-    const inRepo = await sync.readInRepoRecipes(projectPath);
-    expect(inRepo.map((r) => r.name)).toEqual(["Local Only"]);
-    expect(mirror.map((r) => r.id)).toEqual(inRepo.map((r) => r.id));
+    // One scan plus the promotion of the local-only recipe, both inside the turn.
+    expect(diskCallsInTurn).toEqual([true, true]);
+    expect(mirror.map((r) => r.id).sort()).toEqual(["canonical-only", "local-only"]);
   });
 });
