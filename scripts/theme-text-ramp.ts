@@ -132,7 +132,7 @@ export type KeepCategory =
 const OVERRIDES: { file: string; classString: string; category: KeepCategory; why: string }[] = [
   ...["truncate text-daintree-text/50", "truncate shrink text-daintree-text/50"].map(
     (classString) => ({
-      file: "src/components/Project/ProjectSwitcherPalette.tsx",
+      file: "src/components/Project/ProjectSwitcherRows.tsx",
       classString,
       category: "sibling-branch-pair" as KeepCategory,
       why: "the age and path fragments of a project row sit one step under the status sentence beside them (`ROW_TONE_CLASS` in src/lib/projectRowStatus.ts, at `/65`). Both bands land on text-text-secondary, and at equal weight `until 3:45 PM` reads as the headline and `1 snoozed` as its footnote — the hierarchy upside down, which is the tone map's own wording. Different files and different elements, so no rule reading one class root can see it",

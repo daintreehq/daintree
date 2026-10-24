@@ -50,6 +50,11 @@ const MIGRATED_FILES = [
   "src/components/Project/EnvironmentVariablesEditor.tsx",
   "src/components/Plugin/PluginMcpConfirmDialog.tsx",
   "src/components/Project/ProjectSwitcherPalette.tsx",
+  "src/components/Project/ProjectSwitcherRows.tsx",
+  "src/components/Project/ProjectSwitcherBands.tsx",
+  "src/components/Project/ProjectSwitcherScratchSection.tsx",
+  "src/components/Project/ProjectSwitcherConfirmDialogs.tsx",
+  "src/components/Project/paletteTiles.tsx",
   "src/panels/dev-preview/element-picker/InspectorNotice.tsx",
 ];
 
@@ -64,7 +69,7 @@ const EXEMPT: Record<string, string[]> = {
     "flex items-center gap-1.5 ml-auto text-2xs text-status-warning",
   ],
   // A destructive row button ("Delete all"), not a message.
-  "src/components/Project/ProjectSwitcherPalette.tsx": [
+  "src/components/Project/ProjectSwitcherScratchSection.tsx": [
     "text-xs font-medium text-status-error transition-colors hover:bg-status-error/10",
   ],
   // Raw setup output behind a "Show details" disclosure: a log, not a callout.

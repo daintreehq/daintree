@@ -114,7 +114,7 @@ const FAMILY_BOX: Record<Family, { radius: string; inset: string; heights: strin
  * the create button are denser than its ranked rows on purpose: they are a
  * secondary band under the project list. Documented in the recipe.
  */
-const DENSE_ROW_FILES = new Set(["src/components/Project/ProjectSwitcherPalette.tsx"]);
+const DENSE_ROW_FILES = new Set(["src/components/Project/ProjectSwitcherScratchSection.tsx"]);
 
 function boxViolations(rel: string, source: string, family: Family): string[] {
   const box = FAMILY_BOX[family];
@@ -157,7 +157,20 @@ const POPOVER_FILES = [
   "src/components/Settings/EnvVarEditor.tsx",
   "src/components/Panel/MoveToWorktreePicker.tsx",
   "src/components/Layout/DockLaunchButton.tsx",
+  "src/components/Project/ProjectSwitcherRows.tsx",
+];
+
+/**
+ * The rest of the project switcher. They compose no `PALETTE_ROW_CLASS` of
+ * their own (its rows live in `ProjectSwitcherRows.tsx`), but their focus rows
+ * and dividers sit in the same popover and answer to the same family.
+ */
+const POPOVER_SIBLING_FILES = [
   "src/components/Project/ProjectSwitcherPalette.tsx",
+  "src/components/Project/ProjectSwitcherBands.tsx",
+  "src/components/Project/ProjectSwitcherScratchSection.tsx",
+  "src/components/Project/ProjectSwitcherConfirmDialogs.tsx",
+  "src/components/Project/paletteTiles.tsx",
 ];
 
 /** Full-screen palettes: the `AppPaletteDialog` / `SearchablePalette` shell. */
@@ -290,6 +303,7 @@ describe("palette and picker row shape", () => {
     const offenders = [
       ...PALETTE_FILES,
       ...POPOVER_FILES,
+      ...POPOVER_SIBLING_FILES,
       "src/components/ui/PaletteOverflowNotice.tsx",
     ]
       .map((rel) => ({
@@ -346,6 +360,14 @@ describe("palette and picker row shape", () => {
         rowCalls(source, rel).filter((c) => c.kind === "row").length,
         `${rel} should compose PALETTE_ROW_CLASS`
       ).toBeGreaterThan(0);
+      expect(boxViolations(rel, source, "popover")).toEqual([]);
+    }
+  );
+
+  it.each(POPOVER_SIBLING_FILES)(
+    "draws focus rows in %s at radius-sm, px-2 py-1.5, like a menu row",
+    (rel) => {
+      const source = read(rel);
       expect(boxViolations(rel, source, "popover")).toEqual([]);
     }
   );

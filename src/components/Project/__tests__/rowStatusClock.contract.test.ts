@@ -26,7 +26,8 @@ import ts from "typescript";
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const SRC_ROOT = path.resolve(TEST_DIR, "../../..");
-const PALETTE_REL = "components/Project/ProjectSwitcherPalette.tsx";
+/** Where the ranked rows are rendered, and so where their clock is fed from. */
+const PALETTE_REL = "components/Project/ProjectSwitcherBands.tsx";
 const HELPERS_REL = "lib/projectRowStatus.ts";
 
 /** The status-helper family: `getProjectRowStatus`, `getScratchRowStatus`, and any sibling. */
