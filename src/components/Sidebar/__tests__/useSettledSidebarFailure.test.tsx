@@ -2,8 +2,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 
-const { logWarnMock } = vi.hoisted(() => ({ logWarnMock: vi.fn() }));
-vi.mock("@/utils/logger", () => ({ logWarn: logWarnMock }));
+const { logInfoMock, logWarnMock } = vi.hoisted(() => ({
+  logInfoMock: vi.fn(),
+  logWarnMock: vi.fn(),
+}));
+vi.mock("@/utils/logger", () => ({ logInfo: logInfoMock, logWarn: logWarnMock }));
 
 import { useSettledSidebarFailure, type SidebarFailure } from "../useSettledSidebarFailure";
 
@@ -23,12 +26,15 @@ function render(initial: SidebarFailure | null) {
 }
 
 function logged(message: string) {
-  return logWarnMock.mock.calls.filter(([m]) => m === message).map(([, context]) => context);
+  return [...logInfoMock.mock.calls, ...logWarnMock.mock.calls]
+    .filter(([m]) => m === message)
+    .map(([, context]) => context);
 }
 
 describe("useSettledSidebarFailure (#14311)", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    logInfoMock.mockClear();
     logWarnMock.mockClear();
   });
 
@@ -90,6 +96,29 @@ describe("useSettledSidebarFailure (#14311)", () => {
     expect(logged("Worktree sidebar failure banner shown")).toEqual([
       expect.objectContaining({ kind: "service-error", message: SERVICE.message }),
     ]);
+  });
+
+  it("logs a failure that replaces one already on screen as shown", () => {
+    const { result, rerender } = render(DISCONNECTED);
+    act(() => {
+      vi.advanceTimersByTime(SETTLE_MS);
+    });
+    rerender({ failure: SERVICE });
+
+    expect(result.current).toBe(true);
+    expect(logged("Worktree sidebar failure banner shown").map((c) => c?.kind)).toEqual([
+      "load-error",
+      "service-error",
+    ]);
+    expect(logged("Worktree sidebar failure pending")).toHaveLength(1);
+  });
+
+  it("keeps a transient that never shows below warn", () => {
+    const { rerender } = render(DISCONNECTED);
+    rerender({ failure: null });
+
+    expect(logWarnMock).not.toHaveBeenCalled();
+    expect(logInfoMock).toHaveBeenCalledTimes(2);
   });
 
   it("starts a fresh window for a failure that returns after clearing", () => {

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { UI_FAILURE_SETTLE_MS } from "@/lib/animationUtils";
-import { logWarn } from "@/utils/logger";
+import { logInfo, logWarn } from "@/utils/logger";
 
 export type SidebarFailureKind = "service-error" | "load-error";
 
@@ -22,7 +22,9 @@ interface TrackedFailure extends SidebarFailure {
  * states could hold a real outage off screen indefinitely.
  *
  * Every candidate is logged with its message whether or not it is shown, so a
- * banner that would have flashed can still be identified after the fact.
+ * banner that would have flashed can still be identified after the fact. Only
+ * a banner that reaches the screen logs at warn: a transient that clears in the
+ * window is routine on a slow host.
  */
 export function useSettledSidebarFailure(
   failure: SidebarFailure | null,
@@ -39,7 +41,7 @@ export function useSettledSidebarFailure(
     if (kind === null || message === null) {
       if (prev !== null) {
         trackedRef.current = null;
-        logWarn("Worktree sidebar failure cleared", {
+        logInfo("Worktree sidebar failure cleared", {
           kind: prev.kind,
           message: prev.message,
           elapsedMs: Date.now() - prev.since,
@@ -55,7 +57,9 @@ export function useSettledSidebarFailure(
       since: prev?.since ?? Date.now(),
       shown: prev?.shown ?? false,
     };
-    logWarn("Worktree sidebar failure pending", { kind, message, settleMs });
+    // A hand-over after the window shows at once, and the effect below logs it.
+    if (prev?.shown) return;
+    logInfo("Worktree sidebar failure pending", { kind, message, settleMs });
   }, [kind, message, settleMs]);
 
   useEffect(() => {
@@ -63,20 +67,25 @@ export function useSettledSidebarFailure(
       setSettled(false);
       return;
     }
-    const timer = setTimeout(() => {
-      setSettled(true);
-      const tracked = trackedRef.current;
-      if (tracked === null) return;
-      tracked.shown = true;
-      logWarn("Worktree sidebar failure banner shown", {
-        kind: tracked.kind,
-        message: tracked.message,
-        elapsedMs: Date.now() - tracked.since,
-      });
-    }, settleMs);
+    const timer = setTimeout(() => setSettled(true), settleMs);
     return () => clearTimeout(timer);
   }, [hasFailure, settleMs]);
 
   // `settled` resets a commit after the failure clears.
-  return hasFailure && settled;
+  const isSettled = hasFailure && settled;
+
+  // Logged from the commit, keyed on what is on screen, so a failure that
+  // replaces one already shown is recorded as shown too.
+  useEffect(() => {
+    const tracked = trackedRef.current;
+    if (!isSettled || tracked === null) return;
+    tracked.shown = true;
+    logWarn("Worktree sidebar failure banner shown", {
+      kind: tracked.kind,
+      message: tracked.message,
+      elapsedMs: Date.now() - tracked.since,
+    });
+  }, [isSettled, kind, message]);
+
+  return isSettled;
 }

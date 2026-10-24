@@ -1644,7 +1644,10 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         ? { kind: "load-error", message: loadFailure }
         : null;
   const isFailureSettled = useSettledSidebarFailure(sidebarFailure);
-  const isFailureSettling = sidebarFailure !== null && !isFailureSettled;
+  // A settled failure ends the skeleton even while the store still reads as
+  // loading: a stalled reconnect during the first hydration leaves `isLoading`
+  // up for good, and the skeleton would hide the only recovery.
+  const showSkeleton = (isLoading || sidebarFailure !== null) && !isFailureSettled;
   const worktreeLoadErrorBanner =
     loadFailure !== null && error === null && isFailureSettled ? (
       <WorktreeLoadErrorBanner error={loadFailure} />
@@ -1719,7 +1722,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     );
   }
 
-  if ((isLoading || isFailureSettling) && worktrees.length === 0) {
+  if (showSkeleton && worktrees.length === 0) {
     return (
       <div className="flex flex-col h-full">
         <div className={cn(SIDEBAR_HEADER_ROW, "border-b border-divider")}>
