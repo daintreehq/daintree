@@ -57,7 +57,8 @@ export type LinkClientState =
       /**
        * When the last frame from the host arrived, once nothing has for a
        * while (a ping and its answer are overdue); null while it answers. What
-       * we saw, not why: the link stays up until the idle timeout gives up.
+       * we saw, not why: a slow host reads quiet, and the link stays up until
+       * its transport closes or the idle ceiling gives up.
        */
       quietSince: number | null;
     }
@@ -145,7 +146,7 @@ function clipDetail(detail: string | null): string | null {
   return `${detail.slice(0, MAX_LOGGED_DETAIL_CHARS)}…`;
 }
 
-/** Past the 5 s ping and its answer: long enough that one is overdue, well short of the 20 s idle timeout. */
+/** Past the 5 s ping and its answer: long enough that one is overdue. */
 const QUIET_AFTER_MS = 7_000;
 /** How long after a host was last heard from a "host mode off" still reads as a restart. */
 const HOST_RESTART_GRACE_MS = 2 * 60_000;
@@ -596,8 +597,9 @@ export class LinkClient {
         this.setState(connected());
       }
     });
-    // A stalled link only closes at the idle timeout; until then it says
-    // nothing has arrived, so a keystroke that goes nowhere isn't a mystery.
+    // A stalled host keeps its link until the transport closes or the idle
+    // ceiling passes; meanwhile it says nothing has arrived, so a keystroke
+    // that goes nowhere isn't a mystery.
     const quietAfterMs = this.options.quietAfterMs ?? QUIET_AFTER_MS;
     // Time asleep isn't the host going quiet.
     const awakeSince = this.options.session?.awakeSince ?? ((since: number) => this.now() - since);

@@ -56,7 +56,12 @@ export interface LinkSessionOptions {
   encodingLimits?: EncodingLimits;
   /** Interval between pings once open; 0 disables. */
   pingIntervalMs?: number;
-  /** Close when nothing has been received for this long once open; 0 disables. */
+  /**
+   * Close when nothing has been received for this long once open; 0 disables.
+   * Silence only says the peer's loop hasn't answered, not that it is gone: a
+   * dead process or transport closes the stream itself. So this is a ceiling
+   * for a peer stuck for good, well past any stall it can recover from.
+   */
   idleTimeoutMs?: number;
   /**
    * How long this machine was awake since a moment `now` gave; all of it by
@@ -133,6 +138,8 @@ export const HANDSHAKE_MAX_FRAME_BYTES = 64 * 1024;
 
 const MAX_REQUEST_ID = 0xffffffff;
 const END_GRACE_MS = 2_000;
+/** A host paging under memory pressure can miss pings for a minute and still catch up. */
+const DEFAULT_IDLE_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_PENDING_REQUESTS = 4096;
 // Messages that follow WELCOME before the client has attached its handlers
 // are only the rest of the read that carried it; a peer filling this is broken.
@@ -315,13 +322,19 @@ export class LinkSession {
       this.pingTimer = setInterval(() => this.ping(), pingMs);
       this.pingTimer.unref?.();
     }
-    const idleMs = this.opts.idleTimeoutMs ?? 20_000;
+    const idleMs = this.opts.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
     if (idleMs > 0) {
       const awakeSince = this.opts.awakeSince ?? ((since: number) => this.now() - since);
       this.idleTimer = setInterval(
-        () => {
-          if (awakeSince(this._lastReceivedAt) > idleMs) this.drop("idle timeout");
-        },
+        // Judged after the loop's next poll for input: when our own loop was
+        // the one stalled, what the peer sent meanwhile is still unread, and
+        // its silence is only ours.
+        () =>
+          setImmediate(() => {
+            if (this.state === "open" && awakeSince(this._lastReceivedAt) > idleMs) {
+              this.drop("idle timeout");
+            }
+          }),
         Math.max(10, Math.floor(idleMs / 4))
       );
       this.idleTimer.unref?.();

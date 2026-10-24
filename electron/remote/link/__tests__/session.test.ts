@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import type net from "node:net";
 import { encodeValue } from "../encoding.js";
@@ -228,7 +228,7 @@ describe("LinkSession liveness", () => {
     b.destroy();
   });
 
-  it("ends an idle link without a GOODBYE, so the peer can hold the session for a resume", async () => {
+  it("ends an idle link without a GOODBYE, so a peer that was only stalled can still resume the session", async () => {
     const { a, b } = await socketPair(dir);
     const frames = recordFrames(b);
     const session = new LinkSession(a, { role: "client", pingIntervalMs: 0, idleTimeoutMs: 40 });
@@ -315,6 +315,55 @@ describe("LinkSession liveness", () => {
     const closed = await closedPromise(session);
     expect(closed.reason).toBe("idle timeout");
     b.destroy();
+  });
+
+  it("reads what the peer sent while this side's own loop was stalled before judging silence", async () => {
+    const { a, b } = await socketPair(dir);
+    const session = new LinkSession(a, { role: "host", pingIntervalMs: 0, idleTimeoutMs: 80 });
+    sessions.push(session);
+    session.open();
+    let closed = false;
+    void closedPromise(session).then(() => (closed = true));
+    const ping = encodeFrame(
+      messageToFrame({ lane: Lane.CONTROL, kind: ControlKind.PING, body: { sentAt: 1 } }),
+      1024
+    );
+    // The peer spoke, but this loop is blocked past the idle window before it can read it.
+    b.write(ping);
+    const stalledUntil = Date.now() + 250;
+    while (Date.now() < stalledUntil) {
+      // a stalled main loop
+    }
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(closed).toBe(false);
+    expect(session.isOpen).toBe(true);
+    b.destroy();
+  });
+
+  it("keeps a peer that has been silent for longer than a stall it can recover from", async () => {
+    const { a, b } = await socketPair(dir);
+    vi.useFakeTimers();
+    try {
+      let now = 0;
+      const session = new LinkSession(a, { role: "client", pingIntervalMs: 0, now: () => now });
+      sessions.push(session);
+      session.open();
+      const advance = (ms: number) => {
+        for (let elapsed = 0; elapsed < ms; elapsed += 1_000) {
+          now += 1_000;
+          vi.advanceTimersByTime(1_000);
+        }
+      };
+      // Two minutes of nothing: far longer than a host paging under pressure stalls.
+      advance(120_000);
+      expect(session.isOpen).toBe(true);
+      // A peer stuck for good is still given up on, on the next check after that.
+      advance(31_000);
+      expect(session.closedWith).toEqual({ reason: "idle timeout", by: "local" });
+      b.destroy();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("ends with a GOODBYE the peer sees as a remote close", async () => {
