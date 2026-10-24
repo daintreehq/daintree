@@ -498,7 +498,7 @@ describe("hash", () => {
 
 // Registration is not asserted here: mirroring the allowlist arrays would only
 // restate them. The real guard is that `tools/list` serves `mcp.surface` at
-// every tier, which sessionServer.test.ts checks against the live handler.
+// every tier, which sessionServer.discovery.test.ts checks against the live handler.
 
 describe("buildSurfaceManifest with a workspace-bound session (#11789)", () => {
   const BOUND = { workspaceBound: true };
