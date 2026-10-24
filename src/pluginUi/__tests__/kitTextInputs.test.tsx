@@ -830,6 +830,54 @@ describe("SecretInput", () => {
     expect(screen.getByRole("group", { name: "GitHub token" })).toBeTruthy();
   });
 
+  it("keeps its FormField's name and description while saved, replacing and cancelling", () => {
+    const field = (stored: boolean) => (
+      <kit.FormField label="API token" description="Used for requests">
+        <kit.SecretInput stored={stored} />
+      </kit.FormField>
+    );
+    const description = () => screen.getByText("Used for requests").id;
+    const { rerender } = render(field(false));
+    const input = screen.getByLabelText("API token");
+    expect(input.getAttribute("aria-describedby")).toContain(description());
+
+    rerender(field(true));
+    const group = screen.getByRole("group", { name: "API token" });
+    expect(group.getAttribute("aria-describedby")).toContain(description());
+
+    fireEvent.click(screen.getByRole("button", { name: "Replace" }));
+    const replacing = screen.getByLabelText("API token");
+    expect(document.activeElement).toBe(replacing);
+    expect(replacing.getAttribute("aria-describedby")).toContain(description());
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(
+      screen.getByRole("group", { name: "API token" }).getAttribute("aria-describedby")
+    ).toContain(description());
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Replace" }));
+  });
+
+  it("names a saved secret inside a FormField from the start, and lets explicit ARIA win", () => {
+    render(
+      <>
+        <kit.FormField label="API token" description="Used for requests">
+          <kit.SecretInput stored />
+        </kit.FormField>
+        <kit.FormField label="Webhook secret">
+          <kit.SecretInput stored aria-label="Signing secret" aria-describedby="extra" />
+        </kit.FormField>
+        <span id="extra">Rotates monthly</span>
+      </>
+    );
+    const token = screen.getByRole("group", { name: "API token" });
+    expect(token.getAttribute("aria-describedby")).toContain(
+      screen.getByText("Used for requests").id
+    );
+    const signing = screen.getByRole("group", { name: "Signing secret" });
+    expect(signing.getAttribute("aria-describedby")?.split(" ")).toContain("extra");
+    expect(screen.queryByRole("group", { name: "Webhook secret" })).toBeNull();
+  });
+
   it("hides a shown value when revealing is turned off", () => {
     const { rerender } = render(<kit.SecretInput aria-label="Key" defaultValue="k" />);
     fireEvent.click(screen.getByRole("button", { name: "Show value" }));

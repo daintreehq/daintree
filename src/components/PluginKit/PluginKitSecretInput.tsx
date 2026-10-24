@@ -74,6 +74,13 @@ export function KitSecretInput(props: PluginSecretInputProps) {
   const revealed = canReveal && shown;
   const label = str(props["aria-label"]);
   const { invalid: shownInvalid, controlProps } = useKitFieldControl(props, invalidProp(invalid));
+  // The saved state is a group, which a `<label for>` can't name, so it joins
+  // the field through `aria-labelledby` instead.
+  const { controlProps: storedControlProps } = useKitFieldControl(
+    props,
+    invalidProp(invalid),
+    false
+  );
 
   // A secret saved while the field was open (the save went through) shows as
   // saved again.
@@ -166,6 +173,7 @@ export function KitSecretInput(props: PluginSecretInputProps) {
         aria-label={label}
         aria-labelledby={str(props["aria-labelledby"])}
         aria-describedby={str(props["aria-describedby"])}
+        {...storedControlProps}
         className={cn("flex min-w-0 items-center gap-2", str(className))}
       >
         <div
