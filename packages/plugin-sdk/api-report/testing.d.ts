@@ -7164,6 +7164,7 @@ interface CreateMockHostOptions {
      */
     terminalScreens?: Record<string, PluginTerminalScreenResult>;
 }
+
 declare function createMockHost(options?: CreateMockHostOptions): PluginHostApi & MockHostState;
 
 export { type AgentInputRecord, type BroadcastRecord, type CreateMockHostOptions, type DispatchedActionRecord, type InvalidationRecord, type MockHostState, type MockTaskRecord, type NotificationRecord, type PluginActionManifestEntry, type PluginCanDispatchResult, type ReadScreenRecord, type RegisteredActionRecord, type RegisteredContextProviderRecord, type RegisteredFileDecorationProviderRecord, type RegisteredForgeProviderRecord, type RegisteredHandlerRecord, type RegisteredMcpToolsRecord, type RegisteredWorktreeSetupStepRecord, type RunRecipeRecord, type SentToAgentRecord, type ShowConfirmRecord, type ShowInputBoxRecord, type ShowQuickPickRecord, type ShownToastRecord, createMockHost };
