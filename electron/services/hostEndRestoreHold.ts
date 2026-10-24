@@ -1,194 +1,145 @@
 import { store, type StoreSchema } from "../store.js";
 import { projectStore } from "./ProjectStore.js";
 import type { PendingCrash } from "../../shared/types/ipc/crashRecovery.js";
-import type { PanelHostEnd, PanelRestoreRecovery } from "../../shared/types/panel.js";
-import type { TerminalSnapshot } from "../../shared/types/project.js";
+import type { PanelHostEnd } from "../../shared/types/panel.js";
+import { holdTerminalsEndedByHost, readHostEnd } from "./hostEndHoldPolicy.js";
 
-export type HostEndRestoreHold = NonNullable<StoreSchema["hostEndRestoreHold"]>;
+export type HostEndEvent = NonNullable<StoreSchema["hostEndRestoreHolds"]>[number];
 
-// eslint-disable-next-line no-control-regex
-const CONTROL_CHARS = /[\x00-\x1f\x7f]/;
+/** Ends still waiting on a workspace nobody has opened since; the oldest go first. */
+const MAX_EVENTS = 16;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-/**
- * The unclean end a crash record shows (#14382): the watchdog's kill flag, or a
- * heartbeat that stopped with no reboot behind it. A crash the app recorded
- * itself, a power loss and a lost suspend are not this: none of them says the
- * agents' own load is what took the app down.
- */
-export function readHostEnd(pending: PendingCrash | null): PanelHostEnd | undefined {
-  const entry = pending?.entry;
-  if (!entry) return undefined;
-  const cause: PanelHostEnd["cause"] | undefined =
-    entry.cause === "watchdog-deadlock"
-      ? "watchdog-deadlock"
-      : entry.crashCause === "external-kill"
-        ? "external-kill"
-        : undefined;
-  if (cause === undefined) return undefined;
-  const at =
-    cause === "watchdog-deadlock" && typeof entry.watchdogKilledAt === "number"
-      ? entry.watchdogKilledAt
-      : entry.timestamp;
-  const missedBeats = cause === "watchdog-deadlock" ? entry.watchdogMissedBeats : undefined;
-  return {
-    cause,
-    at,
-    ...(typeof missedBeats === "number" && missedBeats > 0 && { missedBeats }),
-  };
+function readEvents(): HostEndEvent[] {
+  try {
+    const value: unknown = store.get("hostEndRestoreHolds");
+    if (!Array.isArray(value)) return [];
+    const events: HostEndEvent[] = [];
+    for (const item of value) {
+      if (!isPlainObject(item)) continue;
+      if (typeof item.crashId !== "string") continue;
+      if (item.cause !== "watchdog-deadlock" && item.cause !== "external-kill") continue;
+      if (typeof item.at !== "number" || !Number.isFinite(item.at)) continue;
+      if (!Array.isArray(item.workspaceIds)) continue;
+      const workspaceIds = item.workspaceIds.filter((id): id is string => typeof id === "string");
+      if (workspaceIds.length === 0) continue;
+      events.push({
+        crashId: item.crashId,
+        cause: item.cause,
+        at: item.at,
+        ...(typeof item.missedBeats === "number" && { missedBeats: item.missedBeats }),
+        workspaceIds,
+      });
+    }
+    return events;
+  } catch {
+    return [];
+  }
+}
+
+function writeEvents(events: HostEndEvent[]): void {
+  const pending = events.filter((event) => event.workspaceIds.length > 0).slice(-MAX_EVENTS);
+  if (pending.length === 0) store.delete("hostEndRestoreHolds");
+  else store.set("hostEndRestoreHolds", pending);
 }
 
 /**
- * Remember an unclean end until every workspace's saved panes have heard of
- * it. The record outlives this session on purpose: a project nobody opens
- * until after a clean quit, or a reboot, still had its agents cut short by it.
- * A newer end replaces an older one.
+ * Remember an unclean end until each workspace that was live when it happened
+ * has had its saved agent panes held for it. The record outlives this session
+ * on purpose: a project nobody opens until after a clean quit, or a reboot,
+ * still had its agents cut short. A workspace that wasn't live, such as one put
+ * to sleep, had nothing running for the end to cut short.
+ *
+ * `liveWorkspaceIds` comes from the crashed session's last backup; without one
+ * there is no record of what was running, and nothing is held.
  */
-export function recordHostEnd(pending: PendingCrash | null): void {
+export function recordHostEnd(
+  pending: PendingCrash | null,
+  liveWorkspaceIds: readonly string[] | null
+): void {
   const hostEnd = readHostEnd(pending);
-  if (!hostEnd) return;
+  const crashId = pending?.entry.id;
+  if (!hostEnd || !crashId) return;
+  if (!liveWorkspaceIds || liveWorkspaceIds.length === 0) {
+    console.log("[HostEndHold] No record of what was running when the app ended; nothing held", {
+      cause: hostEnd.cause,
+    });
+    return;
+  }
   try {
-    store.set("hostEndRestoreHold", { ...hostEnd, appliedWorkspaceIds: [] });
+    const events = readEvents();
+    // Read again on a launch that died before it got further: same crash, same record.
+    if (events.some((event) => event.crashId === crashId)) return;
+    events.push({ crashId, ...hostEnd, workspaceIds: [...new Set(liveWorkspaceIds)] });
+    writeEvents(events);
     console.log("[HostEndHold] Agents running when the app ended will wait to be resumed", {
       cause: hostEnd.cause,
+      workspaces: liveWorkspaceIds.length,
     });
   } catch (error) {
     console.warn("[HostEndHold] Failed to record the unclean end:", error);
   }
 }
 
-function readLedger(): HostEndRestoreHold | undefined {
-  try {
-    const value: unknown = store.get("hostEndRestoreHold");
-    if (!isPlainObject(value)) return undefined;
-    if (value.cause !== "watchdog-deadlock" && value.cause !== "external-kill") return undefined;
-    if (typeof value.at !== "number" || !Number.isFinite(value.at)) return undefined;
-    const applied = Array.isArray(value.appliedWorkspaceIds)
-      ? value.appliedWorkspaceIds.filter((id): id is string => typeof id === "string")
-      : [];
-    return {
-      cause: value.cause,
-      at: value.at,
-      ...(typeof value.missedBeats === "number" && { missedBeats: value.missedBeats }),
-      appliedWorkspaceIds: applied,
-    };
-  } catch {
-    return undefined;
-  }
-}
-
-function heldSessionId(value: unknown): string | undefined {
-  return typeof value === "string" &&
-    value.length > 0 &&
-    !value.startsWith("-") &&
-    !CONTROL_CHARS.test(value)
-    ? value
-    : undefined;
-}
-
-/**
- * Whether a saved pane is an agent the unclean end cut short. A pane already
- * held keeps its own hold, as does one its plugin asked to hold; a pane whose
- * agent was last seen exiting had already ended on its own.
- */
-function wasCutShort(terminal: TerminalSnapshot): boolean {
-  if (!isPlainObject(terminal)) return false;
-  if (typeof terminal.launchAgentId !== "string" || terminal.launchAgentId === "") return false;
-  const kind: unknown = terminal.kind;
-  if (kind !== undefined && kind !== "terminal" && kind !== "agent") return false;
-  if (terminal.location === "trash") return false;
-  if (isPlainObject(terminal.restoreRecovery)) return false;
-  if (terminal.holdOnRestart === true) return false;
-  const observed: unknown = terminal.lastAgentObservation;
-  if (isPlainObject(observed) && observed.agentState === "exited") return false;
-  return true;
-}
-
-/** Hold every agent pane in `terminals` the unclean end cut short. Pure. */
-export function holdTerminalsEndedByHost(
-  terminals: readonly TerminalSnapshot[],
-  hostEnd: PanelHostEnd
-): { terminals: TerminalSnapshot[]; held: number } {
-  let held = 0;
-  const next = terminals.map((terminal) => {
-    if (!wasCutShort(terminal)) return terminal;
-    held++;
-    const sessionId = heldSessionId(terminal.agentSessionId);
-    const restoreRecovery: PanelRestoreRecovery = {
-      reason: "host-ended-uncleanly",
-      ...(sessionId !== undefined && { sessionId }),
-      hostEnd,
-    };
-    return { ...terminal, restoreRecovery };
-  });
-  return { terminals: held > 0 ? next : [...terminals], held };
-}
-
-function hostEndOf(ledger: HostEndRestoreHold): PanelHostEnd {
+function hostEndOf(event: HostEndEvent): PanelHostEnd {
   return {
-    cause: ledger.cause,
-    at: ledger.at,
-    ...(ledger.missedBeats !== undefined && { missedBeats: ledger.missedBeats }),
+    cause: event.cause,
+    at: event.at,
+    ...(event.missedBeats !== undefined && { missedBeats: event.missedBeats }),
   };
 }
 
 /**
- * `terminals` with the recorded unclean end applied, for a crash restore that
- * puts the pre-crash panes back on the global record. Unchanged when nothing
- * is recorded.
- */
-export function holdTerminalsForRecordedHostEnd<T>(terminals: T[]): T[] {
-  const ledger = readLedger();
-  if (!ledger) return terminals;
-  return holdTerminalsEndedByHost(terminals as TerminalSnapshot[], hostEndOf(ledger))
-    .terminals as T[];
-}
-
-/**
  * Hold the saved agent panes of `workspaceId` that an unclean end cut short,
- * once per workspace per end. Awaited by hydrate before it reads the
- * workspace's state, so every restore that reads it — this machine's own view
+ * once per workspace per end. Awaited by every hydrate before it reads the
+ * workspace's state, so each restore that reads it — this machine's own view
  * or a Shell relaunching onto this host — sees the hold. Resuming a pane is
  * what clears it, as for every other hold.
  */
 export async function applyHostEndHold(workspaceId: string | null): Promise<number> {
   if (!workspaceId) return 0;
-  const ledger = readLedger();
-  if (!ledger || ledger.appliedWorkspaceIds.includes(workspaceId)) return 0;
-  const hostEnd = hostEndOf(ledger);
+  // Oldest first, so a pane two ends in a row cut short is named by the first.
+  const due = readEvents().filter((event) => event.workspaceIds.includes(workspaceId));
+  if (due.length === 0) return 0;
   let held = 0;
   try {
     await projectStore.enqueueProjectStateUpdate(workspaceId, (existing) => {
       if (!existing || !Array.isArray(existing.terminals)) return null;
-      const result = holdTerminalsEndedByHost(existing.terminals, hostEnd);
-      held = result.held;
-      return result.held > 0 ? { ...existing, terminals: result.terminals } : null;
+      let terminals = existing.terminals;
+      let count = 0;
+      for (const event of due) {
+        const result = holdTerminalsEndedByHost(terminals, hostEndOf(event), workspaceId);
+        terminals = result.terminals;
+        count += result.held;
+      }
+      held = count;
+      return count > 0 ? { ...existing, terminals } : null;
     });
   } catch (error) {
-    // Left unapplied, so the next hydrate tries again rather than resuming.
+    // Left due, so the next hydrate tries again rather than resuming.
     console.warn("[HostEndHold] Failed to hold the workspace's agents:", error);
     return 0;
   }
-  // Re-read: a newer end may have replaced the record while the update ran.
-  const latest = readLedger();
-  if (latest && latest.at === ledger.at && !latest.appliedWorkspaceIds.includes(workspaceId)) {
-    try {
-      store.set("hostEndRestoreHold", {
-        ...latest,
-        appliedWorkspaceIds: [...latest.appliedWorkspaceIds, workspaceId],
-      });
-    } catch (error) {
-      console.warn("[HostEndHold] Failed to record the held workspace:", error);
-    }
+  try {
+    // Re-read: another end may have been recorded while the update ran.
+    const applied = new Set(due.map((event) => event.crashId));
+    writeEvents(
+      readEvents().map((event) =>
+        applied.has(event.crashId)
+          ? { ...event, workspaceIds: event.workspaceIds.filter((id) => id !== workspaceId) }
+          : event
+      )
+    );
+  } catch (error) {
+    console.warn("[HostEndHold] Failed to record the held workspace:", error);
   }
   if (held > 0) {
-    console.log("[HostEndHold] Held agents the unclean end cut short", {
+    console.log("[HostEndHold] Held agents an unclean end cut short", {
       workspaceId,
       count: held,
-      cause: hostEnd.cause,
     });
   }
   return held;

@@ -408,6 +408,19 @@ describe("resuming panes an unclean end held (#14382)", () => {
     ]);
   });
 
+  it("runs once at a time, however many panes offer it", async () => {
+    storeState.panelsById = { a: hostHeld("a") };
+    storeState.panelIds = ["a"];
+
+    const [first, second] = await Promise.all([
+      resumeAllHeldForHostEnd(),
+      resumeAllHeldForHostEnd(),
+    ]);
+    expect(first).toEqual(["launched"]);
+    expect(second).toEqual([]);
+    expect(storeState.addPanel).toHaveBeenCalledTimes(1);
+  });
+
   it("skips a pane resumed or closed while the others launched", async () => {
     storeState.panelsById = { a: hostHeld("a"), b: hostHeld("b") };
     storeState.panelIds = ["a", "b"];

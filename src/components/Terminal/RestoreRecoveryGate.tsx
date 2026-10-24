@@ -42,7 +42,7 @@ function describeHostEnd(hostEnd: PanelHostEnd, now: number): string {
       ? hostEnd.missedBeats !== undefined
         ? `Daintree's watchdog stopped the app ${when} after ${pluralize(hostEnd.missedBeats, "missed heartbeat")}, while this agent was running.`
         : `Daintree's watchdog stopped the app ${when}, while this agent was running.`
-      : `Daintree was killed ${when} without shutting down, while this agent was running.`;
+      : `Daintree was last seen running ${when} and ended without shutting down, while this agent was running.`;
   return `${seen} ${HOST_END_HOLD_SENTENCE}`;
 }
 

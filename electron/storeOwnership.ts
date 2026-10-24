@@ -35,7 +35,7 @@ export const STORE_KEY_OWNERSHIP = {
   pluginBackgroundUpdateCheck: "host",
   appState: "split",
   legacyWorkspaceStateOwnerId: "host",
-  hostEndRestoreHold: "host",
+  hostEndRestoreHolds: "host",
   userConfig: "host",
   worktreeConfig: "host",
   agentSettings: "host",

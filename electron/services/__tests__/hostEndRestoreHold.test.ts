@@ -8,6 +8,9 @@ const fakeStore = vi.hoisted(() => ({
   set: (key: string, value: unknown) => {
     storeData.set(key, structuredClone(value));
   },
+  delete: (key: string) => {
+    storeData.delete(key);
+  },
 }));
 vi.mock("../../store.js", () => ({ store: fakeStore }));
 
@@ -22,13 +25,8 @@ const projectStoreMock = vi.hoisted(() => ({
 }));
 vi.mock("../ProjectStore.js", () => ({ projectStore: projectStoreMock }));
 
-import {
-  applyHostEndHold,
-  holdTerminalsEndedByHost,
-  holdTerminalsForRecordedHostEnd,
-  readHostEnd,
-  recordHostEnd,
-} from "../hostEndRestoreHold.js";
+import { applyHostEndHold, recordHostEnd } from "../hostEndRestoreHold.js";
+import { holdTerminalsEndedByHost, readHostEnd } from "../hostEndHoldPolicy.js";
 
 function pending(entry: Partial<CrashLogEntry>): PendingCrash {
   return {
@@ -110,8 +108,20 @@ describe("holdTerminalsEndedByHost", () => {
     });
   });
 
+  it("holds a legacy agent pane identified the way restore identifies it", () => {
+    const legacy = {
+      id: "old",
+      kind: "agent",
+      type: "claude",
+      location: "dock",
+      cwd: "/repo",
+    } as unknown as TerminalSnapshot;
+    expect(holdTerminalsEndedByHost([legacy], WATCHDOG).held).toBe(1);
+  });
+
   it("leaves shells, trashed panes, existing holds, plugin holds and exited agents alone", () => {
     const input = [
+      agent("legacyExited", { lastAgentObservation: undefined, agentState: "exited" }),
       { id: "shell", kind: "terminal", location: "grid", cwd: "/repo" } as TerminalSnapshot,
       agent("trashed", { location: "trash" }),
       agent("held", { restoreRecovery: { reason: "resume-deferred" } }),
@@ -137,50 +147,87 @@ describe("holdTerminalsEndedByHost", () => {
 });
 
 describe("applyHostEndHold", () => {
+  const watchdogCrash = (id = "c1") =>
+    pending({ id, cause: "watchdog-deadlock", watchdogKilledAt: 5_000, watchdogMissedBeats: 3 });
+
   it("does nothing until an unclean end is recorded", async () => {
     projectStates.set("p1", { projectId: "p1", terminals: [agent("a")] } as ProjectState);
-    recordHostEnd(pending({ crashCause: "power-loss" }));
+    recordHostEnd(pending({ crashCause: "power-loss" }), ["p1"]);
     expect(await applyHostEndHold("p1")).toBe(0);
     expect(projectStoreMock.enqueueProjectStateUpdate).not.toHaveBeenCalled();
   });
 
-  it("holds each workspace once, even across later sessions", async () => {
-    recordHostEnd(
-      pending({ cause: "watchdog-deadlock", watchdogKilledAt: 5_000, watchdogMissedBeats: 3 })
-    );
+  it("holds nothing when no backup says what was running", async () => {
+    recordHostEnd(watchdogCrash(), null);
+    projectStates.set("p1", { projectId: "p1", terminals: [agent("a")] } as ProjectState);
+    expect(await applyHostEndHold("p1")).toBe(0);
+  });
+
+  it("holds each live workspace once, even one first opened in a later session", async () => {
+    recordHostEnd(watchdogCrash(), ["p1", "p2"]);
     projectStates.set("p1", { projectId: "p1", terminals: [agent("a")] } as ProjectState);
     projectStates.set("p2", { projectId: "p2", terminals: [agent("b")] } as ProjectState);
 
     expect(await applyHostEndHold("p1")).toBe(1);
-    expect(projectStates.get("p1")?.terminals[0].restoreRecovery?.reason).toBe(
-      "host-ended-uncleanly"
-    );
+    expect(projectStates.get("p1")?.terminals[0].restoreRecovery).toEqual({
+      reason: "host-ended-uncleanly",
+      sessionId: "sess-a",
+      hostEnd: WATCHDOG,
+    });
 
     // The user resumes the pane; the next hydrate of the same workspace keeps it.
     projectStates.set("p1", { projectId: "p1", terminals: [agent("a")] } as ProjectState);
     expect(await applyHostEndHold("p1")).toBe(0);
     expect(projectStates.get("p1")?.terminals[0].restoreRecovery).toBeUndefined();
 
-    // A workspace not opened until later still has its agents held.
+    // p2 is opened only after a clean quit and a reboot: still held.
     expect(await applyHostEndHold("p2")).toBe(1);
+    // Every workspace heard of it, so nothing is left to hold.
+    expect(storeData.has("hostEndRestoreHolds")).toBe(false);
   });
 
-  it("a newer unclean end holds again", async () => {
-    recordHostEnd(pending({ crashCause: "external-kill", timestamp: 1_000 }));
-    projectStates.set("p1", { projectId: "p1", terminals: [agent("a")] } as ProjectState);
-    await applyHostEndHold("p1");
+  it("leaves a workspace that wasn't live alone", async () => {
+    recordHostEnd(watchdogCrash(), ["p1"]);
+    projectStates.set("asleep", { projectId: "asleep", terminals: [agent("a")] } as ProjectState);
+    expect(await applyHostEndHold("asleep")).toBe(0);
+  });
+
+  it("records the same crash once, however often a launch reads it", () => {
+    recordHostEnd(watchdogCrash(), ["p1"]);
+    recordHostEnd(watchdogCrash(), ["p1", "p2"]);
+    expect(storeData.get("hostEndRestoreHolds")).toEqual([
+      expect.objectContaining({ crashId: "c1", workspaceIds: ["p1"] }),
+    ]);
+  });
+
+  it("keeps an older end's workspaces when a newer one is recorded, named by the first", async () => {
+    recordHostEnd(pending({ id: "c1", crashCause: "external-kill", timestamp: 1_000 }), ["p1"]);
+    recordHostEnd(pending({ id: "c2", crashCause: "external-kill", timestamp: 9_000 }), [
+      "p1",
+      "p2",
+    ]);
     projectStates.set("p1", { projectId: "p1", terminals: [agent("a")] } as ProjectState);
 
-    recordHostEnd(pending({ crashCause: "external-kill", timestamp: 9_000 }));
     expect(await applyHostEndHold("p1")).toBe(1);
     expect(projectStates.get("p1")?.terminals[0].restoreRecovery?.hostEnd).toEqual({
       cause: "external-kill",
-      at: 9_000,
+      at: 1_000,
     });
+    expect(storeData.get("hostEndRestoreHolds")).toEqual([
+      expect.objectContaining({ crashId: "c2", workspaceIds: ["p2"] }),
+    ]);
+  });
+
+  it("stays due when the save fails, so the next hydrate holds", async () => {
+    recordHostEnd(watchdogCrash(), ["p1"]);
+    projectStates.set("p1", { projectId: "p1", terminals: [agent("a")] } as ProjectState);
+    projectStoreMock.enqueueProjectStateUpdate.mockRejectedValueOnce(new Error("disk"));
+    expect(await applyHostEndHold("p1")).toBe(0);
+    expect(await applyHostEndHold("p1")).toBe(1);
   });
 
   it("writes nothing when no pane needs holding", async () => {
-    recordHostEnd(pending({ crashCause: "external-kill" }));
+    recordHostEnd(watchdogCrash(), ["p1"]);
     const state = { projectId: "p1", terminals: [] } as unknown as ProjectState;
     projectStates.set("p1", state);
     expect(await applyHostEndHold("p1")).toBe(0);
@@ -188,18 +235,7 @@ describe("applyHostEndHold", () => {
   });
 
   it("ignores a hydrate with no workspace", async () => {
-    recordHostEnd(pending({ crashCause: "external-kill" }));
+    recordHostEnd(watchdogCrash(), ["p1"]);
     expect(await applyHostEndHold(null)).toBe(0);
-  });
-});
-
-describe("holdTerminalsForRecordedHostEnd", () => {
-  it("holds a crash restore's panes only while an unclean end is recorded", () => {
-    const input = [agent("a")];
-    expect(holdTerminalsForRecordedHostEnd(input)).toBe(input);
-    recordHostEnd(pending({ crashCause: "external-kill" }));
-    expect(holdTerminalsForRecordedHostEnd(input)[0].restoreRecovery?.reason).toBe(
-      "host-ended-uncleanly"
-    );
   });
 });

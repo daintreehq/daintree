@@ -259,7 +259,20 @@ export function heldForHostEndIds(
  * on the user's say-so. Each goes through the same checks a single resume does,
  * so a conversation another pane opened meanwhile is left alone.
  */
+let resumingAllHeldForHostEnd = false;
+
 export async function resumeAllHeldForHostEnd(): Promise<RestoreRecoveryLaunchResult[]> {
+  // Offered on every held pane, so a press on a second one joins nothing.
+  if (resumingAllHeldForHostEnd) return [];
+  resumingAllHeldForHostEnd = true;
+  try {
+    return await resumeEachHeldForHostEnd();
+  } finally {
+    resumingAllHeldForHostEnd = false;
+  }
+}
+
+async function resumeEachHeldForHostEnd(): Promise<RestoreRecoveryLaunchResult[]> {
   const { panelsById, panelIds } = usePanelStore.getState();
   const results: RestoreRecoveryLaunchResult[] = [];
   for (const id of heldForHostEndIds(panelsById, panelIds)) {

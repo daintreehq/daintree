@@ -476,6 +476,61 @@ describe("app:boot handler", () => {
     expect(result.quarantinedPanels.map((p) => p.id)).toEqual(["other-project-bad"]);
   });
 
+  it("hands back held the agents an unclean end cut short, even sessions later (#14382)", async () => {
+    const project = { id: "proj-a", name: "A", path: "/projects/a" };
+    vi.mocked(projectStore.getCurrentProject).mockReturnValue(
+      project as unknown as ReturnType<typeof projectStore.getCurrentProject>
+    );
+    vi.mocked(projectStore.getProjectById).mockReturnValue(
+      project as unknown as ReturnType<typeof projectStore.getProjectById>
+    );
+    let saved: Record<string, unknown> = {
+      projectId: project.id,
+      sidebarWidth: 350,
+      terminals: [
+        {
+          id: "agent",
+          kind: "terminal",
+          launchAgentId: "claude",
+          agentSessionId: "sess-1",
+          title: "Claude",
+          location: "grid",
+          cwd: "/projects/a",
+        },
+      ],
+    };
+    vi.mocked(projectStore.enqueueProjectStateUpdate).mockImplementation(async (_id, updater) => {
+      const next = await updater(saved as never);
+      if (next) saved = next as unknown as Record<string, unknown>;
+    });
+    vi.mocked(projectStore.getProjectStateWithRecovery).mockImplementation(async () => ({
+      state: saved as never,
+      quarantinedPath: undefined,
+    }));
+    let events: unknown = [
+      { crashId: "c1", cause: "watchdog-deadlock", at: 5_000, missedBeats: 3, workspaceIds: ["proj-a"] },
+    ];
+    const storeModule = await import("../../store.js");
+    vi.mocked(storeModule.store.get).mockImplementation(((key: string) =>
+      key === "hostEndRestoreHolds" ? events : defaultStoreGet(key)) as typeof storeModule.store.get);
+    vi.mocked(storeModule.store.set).mockImplementation(((key: string, value: unknown) => {
+      if (key === "hostEndRestoreHolds") events = value;
+      else defaultStoreSet(key, value);
+    }) as typeof storeModule.store.set);
+
+    const result = (await invokeBoot()) as {
+      appState: { terminals: Array<{ id: string; restoreRecovery?: unknown }> };
+    };
+
+    expect(result.appState.terminals[0].restoreRecovery).toEqual({
+      reason: "host-ended-uncleanly",
+      sessionId: "sess-1",
+      hostEnd: { cause: "watchdog-deadlock", at: 5_000, missedBeats: 3 },
+    });
+    // Nothing is left to hold, so a resumed pane stays resumed next time.
+    expect(storeModule.store.delete).toHaveBeenCalledWith("hostEndRestoreHolds");
+  });
+
   it("does not consult the ledger filter outside of safe mode", async () => {
     crashGuard.isSafeMode.mockReturnValue(false);
     panelSuspectLedger.getQuarantinedPanelIds.mockReturnValue(new Set(["a"]));

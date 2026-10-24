@@ -248,17 +248,19 @@ export interface StoreSchema {
    */
   legacyWorkspaceStateOwnerId?: string;
   /**
-   * The last unclean end of the app that cut agents short (#14382), kept until
-   * each workspace's saved agent panes have been held for it. Top-level for the
-   * reason `legacyWorkspaceStateOwnerId` is: a crash restore replaces
-   * `appState` wholesale.
+   * Unclean ends of the app that cut agents short (#14382), each kept until
+   * every workspace that was live when it happened has had its saved agent
+   * panes held for it. Top-level for the reason `legacyWorkspaceStateOwnerId`
+   * is: a crash restore replaces `appState` wholesale.
    */
-  hostEndRestoreHold?: {
+  hostEndRestoreHolds?: Array<{
+    crashId: string;
     cause: "watchdog-deadlock" | "external-kill";
     at: number;
     missedBeats?: number;
-    appliedWorkspaceIds: string[];
-  };
+    /** Workspaces still to be held. */
+    workspaceIds: string[];
+  }>;
   userConfig: {
     githubToken?: string;
   };

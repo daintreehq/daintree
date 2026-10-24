@@ -415,7 +415,10 @@ if (!gotTheLock) {
   initializePanelSuspectLedger(getCrashRecoveryService().getPendingCrash());
   // Before any window hydrates: agents a watchdog or external kill cut short
   // wait to be resumed rather than all coming back at once (#14382).
-  recordHostEnd(getCrashRecoveryService().getPendingCrash());
+  recordHostEnd(
+    getCrashRecoveryService().getPendingCrash(),
+    getCrashRecoveryService().getCrashedLiveWorkspaceIds()
+  );
 
   // DatabaseMaintenance.initialize() runs the SQLite probe + recovery and MUST
   // complete before getSharedDb() opens the file. Dynamic import removes

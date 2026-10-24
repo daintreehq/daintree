@@ -29,7 +29,7 @@ import { markCrashRecoveryInspectionComplete } from "../utils/crashDumpRetention
 import { stateFilePath } from "./projectStorePaths.js";
 import { PROJECT_STATE_SCHEMA_VERSION } from "./ProjectStateManager.js";
 import { logError, logInfo, logWarn } from "../utils/logger.js";
-import { holdTerminalsForRecordedHostEnd } from "./hostEndRestoreHold.js";
+import { holdTerminalsEndedByHost, readHostEnd } from "./hostEndHoldPolicy.js";
 
 const MAX_CRASH_LOGS = 10;
 const CRASH_LOG_PREFIX = "crash-";
@@ -185,6 +185,15 @@ export class CrashRecoveryService {
 
   getPendingCrash(): PendingCrash | null {
     return this.pendingCrash;
+  }
+
+  /**
+   * The workspaces that were live when the previous session's last backup was
+   * taken, or null when no backup survived the crash to say.
+   */
+  getCrashedLiveWorkspaceIds(): string[] | null {
+    const layouts = this.cachedBackupSnapshot?.projectLayouts;
+    return isPlainObject(layouts) ? Object.keys(layouts) : null;
   }
 
   // Drop the in-memory pending-crash record once the user has resolved the
@@ -654,12 +663,17 @@ export class CrashRecoveryService {
 
       // The panes go back as they were before the crash, so agents an unclean
       // end cut short come back held, as the saved per-project ones do.
-      if (isPlainObject(snapshot.appState) && Array.isArray(snapshot.appState.terminals)) {
+      const hostEnd = readHostEnd(this.pendingCrash);
+      if (
+        hostEnd &&
+        isPlainObject(snapshot.appState) &&
+        Array.isArray(snapshot.appState.terminals)
+      ) {
         snapshot = {
           ...snapshot,
           appState: {
             ...snapshot.appState,
-            terminals: holdTerminalsForRecordedHostEnd(snapshot.appState.terminals),
+            terminals: holdTerminalsEndedByHost(snapshot.appState.terminals, hostEnd).terminals,
           },
         };
       }

@@ -562,7 +562,7 @@ describe("RestoreRecoveryGate — held after an unclean end (#14382)", () => {
 
     render(<RestoreRecoveryGate panelId="p-1" />);
 
-    expect(screen.getByText(/Daintree was killed 2 minutes ago without shutting down/)).toBeTruthy();
+    expect(screen.getByText(/Daintree was last seen running 2 minutes ago and ended without shutting down/)).toBeTruthy();
     expect(screen.getByText("external-kill")).toBeTruthy();
   });
 
