@@ -38,6 +38,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { notify } from "@/lib/notify";
 import { logWarn } from "@/utils/logger";
 import { PlatformGlyph } from "./PlatformGlyph";
+import { HostNameText } from "./HostNameText";
 import { isNewWindowClick, switchToHost } from "./hostSwitching";
 import { hostUpdateOffer, runHostUpdate, type HostUpdateOffer } from "./hostUpdate";
 import { hasRemoteHosts, useHostList } from "./hostList";
@@ -126,17 +127,17 @@ function HostSubmenuLabel({ row }: { row: HostMenuRow }) {
   const trouble = hostMenuRowHasTrouble(row);
   return (
     <>
-      <span className="mr-2 flex self-start">
+      <span className="mr-2 flex shrink-0">
         <HostMark row={row} />
       </span>
-      {/* Laid out like the host list: the name keeps the row, and its state
-          drops to a line of its own rather than squeezing the name's end. */}
-      <span className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-4">
-        <span className="max-w-full break-words">{row.name}</span>
+      {/* One line per destination so the state column lines up: a name too
+          long for the submenu clips (full name in its title), never the state. */}
+      <span className="flex min-w-0 flex-1 items-baseline gap-x-4">
+        <HostNameText name={row.name} className="flex-1" />
         {state && (
           <span
             className={cn(
-              "ml-auto shrink-0 text-2xs",
+              "shrink-0 whitespace-nowrap text-2xs",
               trouble ? "text-text-primary" : "text-text-secondary"
             )}
           >
@@ -452,7 +453,7 @@ export function HostChip() {
               <AppWindow data-menu-icon className={MENU_ICON_CLASS} aria-hidden="true" />
               Open in new window
             </DropdownMenuSubTrigger>
-            <DropdownMenuSubContent className="w-60">
+            <DropdownMenuSubContent className="w-72">
               {rows.map((row) => (
                 <DropdownMenuItem
                   key={row.hostId}
@@ -472,7 +473,7 @@ export function HostChip() {
                 <GitBranch data-menu-icon className={MENU_ICON_CLASS} aria-hidden="true" />
                 Continue this branch on…
               </DropdownMenuSubTrigger>
-              <DropdownMenuSubContent className="w-60">
+              <DropdownMenuSubContent className="w-72">
                 {otherHosts.map((row) => (
                   <DropdownMenuItem
                     key={row.hostId}
