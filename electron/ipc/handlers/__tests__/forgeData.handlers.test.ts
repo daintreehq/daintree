@@ -83,13 +83,14 @@ vi.mock("../forgeResolution.js", () => ({
       : page,
 }));
 
-// Default to "exists" so the existing stats tests reach the resolution path;
-// the #10663 missing-directory guard test flips this to false explicitly.
-const accessMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+// Default to an existing directory so the stats tests reach the resolution path
+// and the health tests see a directory; the #10663 missing-directory guard test
+// rejects explicitly.
+const statMock = vi.hoisted(() => vi.fn().mockResolvedValue({ isDirectory: () => true }));
 
 vi.mock("fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("fs/promises")>();
-  return { ...actual, default: { ...actual, access: accessMock }, access: accessMock };
+  return { ...actual, default: { ...actual, stat: statMock }, stat: statMock };
 });
 
 // The handlers transitively import the forge audit singleton, which imports
@@ -653,14 +654,14 @@ describe("registerForgeDataHandlers", () => {
     // The project directory was deleted/moved externally; the renderer keeps
     // polling this handler. The guard must return a commits-only zero snapshot
     // without ever touching git resolution — otherwise each poll spams WARN.
-    accessMock.mockRejectedValueOnce(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
+    statMock.mockRejectedValueOnce(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
     registerForgeDataHandlers();
 
     const result = await findHandler("forge:get-repo-stats")(null, { cwd: "/missing/path" });
 
     expect(resolveForCwdMock).not.toHaveBeenCalled();
     // The guard must check the cwd itself, not a parent or derived path.
-    expect(accessMock).toHaveBeenCalledWith("/missing/path");
+    expect(statMock).toHaveBeenCalledWith("/missing/path");
     expect(result).toMatchObject({
       commitCount: 0,
       issueCount: null,

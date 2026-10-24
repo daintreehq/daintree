@@ -501,7 +501,8 @@ async function handleForgeGetRepoStats(payload: {
   // Nothing is persisted here: a dead path yields no observation, and writing
   // this zero would overwrite the counts that let the toolbar hold its pill
   // widths if the directory comes back (issue #11078).
-  const cwdExists = await fs.access(cwd).then(
+  // stat, not access: access accepts a dangling symlink on Windows.
+  const cwdExists = await fs.stat(cwd).then(
     () => true,
     () => false
   );
