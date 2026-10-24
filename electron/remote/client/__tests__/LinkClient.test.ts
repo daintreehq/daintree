@@ -560,7 +560,7 @@ describe("LinkClient wake (#14365)", () => {
           if (frame.lane !== Lane.CONTROL || frame.kind !== ControlKind.HELLO) continue;
           const hello = frameToMessage(frame) as Extract<
             LinkMessage,
-            { kind: typeof ControlKind.HELLO }
+            { lane: typeof Lane.CONTROL; kind: typeof ControlKind.HELLO }
           >;
           hellos.push({ resumeSessionId: hello.body.resumeSessionId });
           const welcome: LinkMessage = {
@@ -594,6 +594,51 @@ describe("LinkClient wake (#14365)", () => {
       await waitFor(() => hellos.length === 2);
       expect(hellos[1]).toEqual({ resumeSessionId: "s1" });
       expect(kinds).not.toContain(ControlKind.GOODBYE);
+    } finally {
+      await client?.stop();
+      client = null;
+      server.close();
+      await removeTempDir(dir);
+    }
+  });
+});
+
+describe("LinkClient quiet across a sleep (#14365)", () => {
+  it("doesn't report a link quiet for time the machine spent asleep", async () => {
+    const dir = await makeTempDir();
+    const socketPath = path.join(dir, "s.sock");
+    const server = net.createServer((socket) => {
+      const decoder = new FrameDecoder();
+      socket.on("data", (chunk: Buffer) => {
+        for (const frame of decoder.push(chunk)) {
+          if (frame.kind !== ControlKind.HELLO) continue;
+          const welcome: LinkMessage = {
+            lane: Lane.CONTROL,
+            kind: ControlKind.WELCOME,
+            body: { handshake: TEST_HANDSHAKE, hostName: "h", sessionId: "s1", resumed: false },
+          };
+          socket.write(Buffer.from(encodeFrame(messageToFrame(welcome))));
+        }
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+    try {
+      // Silent host, and every moment since its last frame was spent asleep.
+      client = new LinkClient({
+        transport: createDirectTransport({ socketPath, token: "t" }),
+        handshake: TEST_HANDSHAKE,
+        client: { clientId: "c", clientName: "n", platform: "linux" },
+        session: { pingIntervalMs: 0, idleTimeoutMs: 0, awakeSince: () => 0 },
+        quietAfterMs: 40,
+      });
+      const quietSince: Array<number | null> = [];
+      client.onStateChange((state) => {
+        if (state.status === "connected") quietSince.push(state.quietSince);
+      });
+      client.start();
+      await waitFor(() => client!.getState().status === "connected");
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(quietSince.every((at) => at === null)).toBe(true);
     } finally {
       await client?.stop();
       client = null;

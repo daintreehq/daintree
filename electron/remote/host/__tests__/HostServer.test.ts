@@ -521,6 +521,20 @@ describe("HostServer authentication", () => {
 });
 
 describe("HostServer session resume", () => {
+  it("keeps a link that answers after a wake on the session it had (#14365)", async () => {
+    const server = await startServer({ resumeGraceMs: 60_000 });
+    const seen: HostSessionContext[] = [];
+    server.onSession((ctx) => seen.push(ctx));
+    const client = startClient(server, { wakeProbeMs: 200 });
+    await waitFor(() => seen.length === 1 && client.getState().status === "connected");
+    const session = client.session;
+    client.noteSystemResumed();
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(client.session).toBe(session);
+    expect(session?.isOpen).toBe(true);
+    expect(seen).toHaveLength(1);
+  });
+
   it("resumes the session a link that died in a sleep held, when it is redialled on wake (#14365)", async () => {
     const server = await startServer({ resumeGraceMs: 60_000 });
     const seen: HostSessionContext[] = [];

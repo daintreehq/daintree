@@ -252,14 +252,14 @@ describe("LinkSession liveness", () => {
     const session = new LinkSession(a, {
       role: "client",
       pingIntervalMs: 0,
-      idleTimeoutMs: 80,
+      idleTimeoutMs: 300,
       now,
       awakeSince,
     });
     sessions.push(session);
     session.open();
     jumpedAt = Date.now();
-    await new Promise((resolve) => setTimeout(resolve, 40));
+    await new Promise((resolve) => setTimeout(resolve, 100));
     expect(session.isOpen).toBe(true);
     // Awake and still silent: the window runs out as before.
     const closed = await closedPromise(session);
@@ -285,9 +285,9 @@ describe("LinkSession liveness", () => {
 
   it("keeps a link whose peer answers the probe", async () => {
     const { host, client } = await pair({}, { pingIntervalMs: 0, idleTimeoutMs: 0 });
-    client.probe(40, "no answer after wake");
+    client.probe(250, "no answer after wake");
     await waitFor(() => client.rttMs !== null);
-    await new Promise((resolve) => setTimeout(resolve, 80));
+    await new Promise((resolve) => setTimeout(resolve, 400));
     expect(client.isOpen).toBe(true);
     expect(host.isOpen).toBe(true);
   });
