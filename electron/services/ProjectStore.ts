@@ -42,6 +42,7 @@ import { ProjectSettingsManager } from "./ProjectSettingsManager.js";
 import { ProjectStateManager, type ProjectStateReadResult } from "./ProjectStateManager.js";
 import { invalidatePrefetchCache } from "./prefetchHydrateCache.js";
 import { ProjectFileStore } from "./ProjectFileStore.js";
+import { matchRecipeSteps } from "./recipeStepMatching.js";
 import type {
   CopyTreeHistoryAppendInput,
   CopyTreeHistoryRecord,
@@ -2089,8 +2090,9 @@ export class ProjectStore {
           continue;
         }
 
+        const localSteps = matchRecipeSteps(recipe.terminals, existing.terminals);
         const mergedTerminals = recipe.terminals.map((inRepoT, i) => {
-          const existingT = existing.terminals[i];
+          const existingT = localSteps[i];
           if (!existingT?.env || Object.keys(existingT.env).length === 0) return inRepoT;
           const env: Record<string, string> = {};
           for (const key of Object.keys(inRepoT.env ?? {})) {
