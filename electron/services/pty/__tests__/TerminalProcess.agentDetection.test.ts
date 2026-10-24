@@ -298,8 +298,11 @@ function callHandleAgentDetection(
 }
 
 function getActivityMonitor(terminal: TerminalProcess): { onInput: (s: string) => void } | null {
-  return (terminal as unknown as { activityMonitor: { onInput: (s: string) => void } | null })
-    .activityMonitor;
+  return (
+    terminal as unknown as {
+      analysis: { activityMonitor: { onInput: (s: string) => void } | null };
+    }
+  ).analysis.activityMonitor;
 }
 
 function getSpawnedAt(terminal: TerminalProcess): number {

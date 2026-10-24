@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IPty } from "node-pty";
 import { TerminalProcess } from "../TerminalProcess.js";
+import type { InThreadAnalysisBackend } from "../analysis/InThreadAnalysisBackend.js";
 import type { SpawnContext } from "../terminalSpawn.js";
 import { events } from "../../events.js";
 import { AGENT_OUTPUT_ACTIVITY_LINE_COUNT } from "../AgentActivityTemperature.js";
@@ -76,6 +77,10 @@ async function emitDataAndFlush(
 ): Promise<void> {
   pty.emitData(data);
   await vi.advanceTimersByTimeAsync(0);
+}
+
+function getInThreadAnalysis(terminal: TerminalProcess): InThreadAnalysisBackend {
+  return (terminal as unknown as { analysis: InThreadAnalysisBackend }).analysis;
 }
 
 function defaultSpawnContext(): SpawnContext {
@@ -261,7 +266,10 @@ describe("TerminalProcess — observer-driven exit handlers", () => {
     try {
       terminal.stopActivityMonitor();
       terminal.getInfo().agentState = "waiting";
-      const getVisibleActivitySnapshot = vi.spyOn(terminal, "getVisibleActivitySnapshot");
+      const getVisibleActivitySnapshot = vi.spyOn(
+        getInThreadAnalysis(terminal),
+        "getVisibleActivitySnapshot"
+      );
 
       await emitDataAndFlush(pty, "waiting");
 
@@ -927,7 +935,10 @@ describe("TerminalProcess — plain-terminal snapshot gate (#7004)", () => {
     const terminal = createTerminal(pty, { kind: "terminal" }, undefined, "t-plain-no-snapshot");
 
     try {
-      const getVisibleActivitySnapshot = vi.spyOn(terminal, "getVisibleActivitySnapshot");
+      const getVisibleActivitySnapshot = vi.spyOn(
+        getInThreadAnalysis(terminal),
+        "getVisibleActivitySnapshot"
+      );
 
       await emitDataAndFlush(pty, "build watcher: 12 files compiled\n");
       await emitDataAndFlush(pty, "[hmr] update applied\n");
@@ -996,7 +1007,10 @@ describe("TerminalProcess — plain-terminal snapshot gate (#7004)", () => {
     try {
       terminal.stopActivityMonitor();
       terminal.getInfo().agentState = "idle";
-      const getVisibleActivitySnapshot = vi.spyOn(terminal, "getVisibleActivitySnapshot");
+      const getVisibleActivitySnapshot = vi.spyOn(
+        getInThreadAnalysis(terminal),
+        "getVisibleActivitySnapshot"
+      );
 
       await emitDataAndFlush(pty, "claude > working…\n");
 
