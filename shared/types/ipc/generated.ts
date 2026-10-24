@@ -1412,7 +1412,7 @@ export interface GeneratedIpcInvokeMap {
   };
   "file-document:read": {
     args: [payload: { rootPath: string; filePath: string; maxBytes: number }];
-    result: import("../plugin.js").PluginFileDocumentReadResult;
+    result: import("../plugin/fileEditors.js").PluginFileDocumentReadResult;
   };
   "file-document:save": {
     args: [
@@ -1424,7 +1424,7 @@ export interface GeneratedIpcInvokeMap {
         expectedRevision: string;
       },
     ];
-    result: import("../plugin.js").PluginFileDocumentSaveResult;
+    result: import("../plugin/fileEditors.js").PluginFileDocumentSaveResult;
   };
   "file-transfer:answer-host-pick": {
     args: [payload: import("./fileTransfer.js").AnswerHostPickPayload];
@@ -2760,19 +2760,19 @@ export interface GeneratedIpcInvokeMap {
   };
   "plugin:project-surface-choice-set": {
     args: [
-      slot: import("../plugin.js").ProjectSurfaceSlotKey,
-      choice: import("../plugin.js").ProjectSurfaceChoice | null,
+      slot: import("../plugin/projectSurfaces.js").ProjectSurfaceSlotKey,
+      choice: import("../plugin/projectSurfaces.js").ProjectSurfaceChoice | null,
       optionId?: string | undefined,
     ];
-    result: import("../plugin.js").ProjectSurfacesSnapshot;
+    result: import("../plugin/projectSurfaces.js").ProjectSurfacesSnapshot;
   };
   "plugin:project-surface-choices-set": {
-    args: [updates: import("../plugin.js").ProjectSurfaceChoiceUpdate[]];
-    result: import("../plugin.js").ProjectSurfacesSnapshot;
+    args: [updates: import("../plugin/projectSurfaces.js").ProjectSurfaceChoiceUpdate[]];
+    result: import("../plugin/projectSurfaces.js").ProjectSurfacesSnapshot;
   };
   "plugin:project-surfaces-get": {
     args: [];
-    result: import("../plugin.js").ProjectSurfacesSnapshot | null;
+    result: import("../plugin/projectSurfaces.js").ProjectSurfacesSnapshot | null;
   };
   "plugin:project-template-preview": {
     args: [payload: { pluginId: string; templateId: string }];

@@ -1,18 +1,4 @@
 import { i as REQUEST_STATUSES, n as EVENTS, r as MAX_NOTES_CHARS, t as CHANNELS } from "./contracts-Bojho-XK.js";
-Object.freeze({
-	maxVersion: 1e6,
-	maxSections: 24,
-	maxIdLength: 64,
-	maxTitleLength: 64,
-	maxParamsPerSection: 8,
-	maxParamNameLength: 32,
-	defaultStringLength: 64,
-	maxStringLength: 128,
-	/** Serialized size of one location, as UTF-8 JSON. */
-	maxLocationBytes: 2048,
-	/** Entries in one project's history, the current one included. */
-	maxHistoryEntries: 30
-});
 var PLUGIN_TASK_MESSAGE_MAX = 2e3;
 var OPERATION_TERMINAL_STATES = [
 	"succeeded",

@@ -59,7 +59,7 @@ git tag -l 'sdk-v*' 'plugin-vite-v*' 'daintree-plugin-v*' 'create-daintree-plugi
 git log --oneline <last-tag-for-that-package>..HEAD -- packages/<dir>
 ```
 
-2. The SDK re-exports `shared/`, so its changes are not confined to its directory. Also inspect `git log <sdk-tag>..HEAD -- shared/types/plugin.ts shared/types/plugin-sdk.ts shared/types/plugin-sdk-react.ts shared/testing/createMockHost.ts shared/config/panelKindRegistry.ts`, and run `npm run check:api-surface`: a snapshot diff is by definition a public SDK change and rules out a patch.
+2. The SDK re-exports `shared/`, so its changes are not confined to its directory. Also inspect `git log <sdk-tag>..HEAD -- shared/types/plugin.ts shared/types/plugin/ shared/types/plugin-sdk.ts shared/types/plugin-sdk-react.ts shared/testing/createMockHost.ts shared/config/panelKindRegistry.ts`, and run `npm run check:api-surface`: a snapshot diff is by definition a public SDK change and rules out a patch.
 
 3. Classify each package as unchanged, patch, or minor, apply the cascade table, and present the proposal:
 
