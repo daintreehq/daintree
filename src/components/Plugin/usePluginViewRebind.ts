@@ -78,7 +78,7 @@ export function usePluginViewRebind({
     // as "Try again" does: remounting would re-import the specifier the module
     // map already holds as failed (#12996).
     replaceAttempt(boundaryShowingError.current && lastErrorWasImportStage.current);
-  }, [worker, replaceAttempt]);
+  }, [worker, replaceAttempt, boundaryShowingError, lastErrorWasImportStage]);
 
   return boundWorkerGeneration;
 }

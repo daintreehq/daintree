@@ -11,7 +11,6 @@ import {
 import type {
   PanelMenuItemContribution,
   PanelReloadResult,
-  PanelViewProps,
   PluginFileDocument,
   PluginPanelToolbarItemState,
   PluginSettingsViewContext,
@@ -836,7 +835,7 @@ export function makePluginViewContent(
         });
       },
       // `pluginId` is a factory-scope constant, not a reactive value.
-      [panelId, replaceAttempt, retireUnsavedOwner, clearToolbarState]
+      [panelId, replaceAttempt, retireUnsavedOwner, clearToolbarState, boundWorkerGeneration]
     );
 
     // One callback per attempt, so a view can safely list it as a dependency.
