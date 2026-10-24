@@ -113,6 +113,9 @@ export function getHostConnectionBannerCopy(
       };
     case "connecting":
       return { title: `Connecting to ${hostName}…`, description: HOST_READ_ONLY_DESCRIPTION };
+    case "restarting":
+      // The host said it was shutting down: its word, not a guess.
+      return { title: `${hostName} is restarting…`, description: HOST_READ_ONLY_DESCRIPTION };
     case "unreachable":
       return {
         title:

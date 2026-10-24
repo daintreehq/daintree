@@ -1,6 +1,7 @@
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import {
+  HOST_LINK_SETTLE_MS,
   selectHostBannerVariant,
   useHostConnectionStore,
   type HostBannerVariant,
@@ -12,7 +13,18 @@ import {
  * unreachable every few seconds, and all of that is one loss.
  */
 export type HostLinkEpisode =
-  "up" | "lost" | "host-mode-off" | "access-denied" | "version-mismatch" | "disconnected";
+  | "up"
+  | "lost"
+  | "restarting"
+  | "host-mode-off"
+  | "access-denied"
+  | "version-mismatch"
+  | "disconnected";
+
+/** A link down and retrying by itself: what the settle window holds back. */
+function isDrop(episode: HostLinkEpisode): boolean {
+  return episode === "lost" || episode === "restarting";
+}
 
 /**
  * The episode a banner variant belongs to, given the one the link is in; null
@@ -31,9 +43,11 @@ export function hostLinkEpisode(
     case "connecting":
       return null;
     case "reconnecting":
-      return current === "up" || current === "lost" ? "lost" : null;
+      return current === "up" || isDrop(current) ? "lost" : null;
     case "unreachable":
       return "lost";
+    case "restarting":
+      return "restarting";
     case "host-mode-off":
     case "access-denied":
     case "version-mismatch":
@@ -47,19 +61,21 @@ export function hostLinkAnnouncement(
   next: HostLinkEpisode,
   previous: HostLinkEpisode,
   hostName: string,
-  /** The link was up before the episode being left (or, for `lost`, before this one). */
+  /** The link was up before the episode being left (or, for a drop, before this one). */
   wasUp: boolean
 ): string | null {
   switch (next) {
     case "up":
       if (previous === "up") return null;
-      return previous === "lost" && wasUp
+      return isDrop(previous) && wasUp
         ? `Reconnected to ${hostName}`
         : `Connected to ${hostName}`;
     case "lost":
       return previous === "up" && wasUp
         ? `Connection to ${hostName} lost. Terminals are read-only until it reconnects.`
         : `${hostName} is unreachable. Terminals are read-only until it reconnects.`;
+    case "restarting":
+      return `${hostName} is restarting. Terminals are read-only until it reconnects.`;
     case "host-mode-off":
       return `Daintree isn't listening on ${hostName}.`;
     case "access-denied":
@@ -86,7 +102,9 @@ let said: { hostId: string | null; episode: HostLinkEpisode; lostFromUp: boolean
  * Say each change of this view's host link once, through the app's one
  * persistent announcer. The banner and the panes' strips stay silent: the
  * banner remounts across back-off cycles and every pane would repeat it. A
- * change that undoes itself inside the 400ms gate is never said.
+ * change that undoes itself inside the 400ms gate is never said, nor is a
+ * drop from a link that was up that recovers inside the banner's settle
+ * window, measured from when the link went down.
  */
 export function watchHostConnectionAnnouncements(hostId: string): () => void {
   const store = useHostConnectionStore;
@@ -100,18 +118,27 @@ export function watchHostConnectionAnnouncements(hostId: string): () => void {
       : hostLinkEpisode(selectHostBannerVariant(state), from);
   let current: HostLinkEpisode = episodeOf(store.getState(), said.episode) ?? said.episode;
   let timer: ReturnType<typeof setTimeout> | null = null;
+  let downSince: number | null = current === "up" ? null : Date.now();
 
   const settle = () => {
     if (timer) clearTimeout(timer);
     timer = null;
+    if (current === "up") downSince = null;
+    else downSince ??= Date.now();
     if (current === said.episode) return;
+    const dropFromUp =
+      isDrop(current) && said.episode === "up" && store.getState().everConnected;
+    const delay =
+      dropFromUp && downSince !== null
+        ? Math.max(UI_DOHERTY_THRESHOLD, HOST_LINK_SETTLE_MS - (Date.now() - downSince))
+        : UI_DOHERTY_THRESHOLD;
     timer = setTimeout(() => {
       timer = null;
       if (current === said.episode) return;
       const state = store.getState();
       const previous = said.episode;
       // Up before this loss: the link this view had, not one it never got.
-      const wasUp = current === "lost" ? state.everConnected : said.lostFromUp;
+      const wasUp = isDrop(current) ? state.everConnected : said.lostFromUp;
       const message = hostLinkAnnouncement(
         current,
         previous,
@@ -121,10 +148,12 @@ export function watchHostConnectionAnnouncements(hostId: string): () => void {
       said = {
         hostId,
         episode: current,
-        lostFromUp: current === "lost" ? previous === "up" && state.everConnected : false,
+        lostFromUp: isDrop(current)
+          ? (previous === "up" && state.everConnected) || (isDrop(previous) && said.lostFromUp)
+          : false,
       };
       if (message) useAnnouncerStore.getState().announce(message, "polite");
-    }, UI_DOHERTY_THRESHOLD);
+    }, delay);
   };
 
   settle();
