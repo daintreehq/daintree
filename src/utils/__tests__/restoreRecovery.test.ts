@@ -59,6 +59,53 @@ describe("sanitizeRestoreRecovery (#12434)", () => {
   });
 });
 
+describe("sanitizeRestoreRecovery host end (#14382)", () => {
+  it("keeps what the crash record observed", () => {
+    expect(
+      sanitizeRestoreRecovery({
+        reason: "host-ended-uncleanly",
+        sessionId: "sess-a",
+        hostEnd: { cause: "watchdog-deadlock", at: 5_000, missedBeats: 3 },
+      })
+    ).toEqual({
+      reason: "host-ended-uncleanly",
+      sessionId: "sess-a",
+      hostEnd: { cause: "watchdog-deadlock", at: 5_000, missedBeats: 3 },
+    });
+  });
+
+  it("drops an unreadable record but keeps the hold", () => {
+    for (const hostEnd of [
+      { cause: "power-loss", at: 5_000 },
+      { cause: "external-kill", at: -1 },
+      { cause: "external-kill" },
+      "external-kill",
+    ]) {
+      expect(sanitizeRestoreRecovery({ reason: "host-ended-uncleanly", hostEnd })).toEqual({
+        reason: "host-ended-uncleanly",
+      });
+    }
+  });
+
+  it("drops a bad heartbeat count but keeps the cause", () => {
+    expect(
+      sanitizeRestoreRecovery({
+        reason: "host-ended-uncleanly",
+        hostEnd: { cause: "watchdog-deadlock", at: 5_000, missedBeats: 1.5 },
+      })?.hostEnd
+    ).toEqual({ cause: "watchdog-deadlock", at: 5_000 });
+  });
+
+  it("quotes a host end only on its own hold", () => {
+    expect(
+      sanitizeRestoreRecovery({
+        reason: "resume-deferred",
+        hostEnd: { cause: "external-kill", at: 5_000 },
+      })
+    ).toEqual({ reason: "resume-deferred" });
+  });
+});
+
 describe("sanitizeConversationCwd (#12434)", () => {
   it("accepts a path and rejects blanks, non-strings and control characters", () => {
     expect(sanitizeConversationCwd("/repo")).toBe("/repo");

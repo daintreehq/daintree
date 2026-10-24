@@ -4284,6 +4284,27 @@ describe("restore provenance and the plugin hold (#14017)", () => {
     expect(result.holdOnRestart).toBe(true);
   });
 
+  it("keeps a pane an unclean end cut short held, with what was observed (#14382)", () => {
+    const hostEnd = { cause: "watchdog-deadlock", at: 4_000, missedBeats: 3 };
+    const result = respawn(
+      {
+        ...claudePane,
+        agentSessionId: "sess-c",
+        restoreRecovery: { reason: "host-ended-uncleanly", sessionId: "sess-c", hostEnd },
+      },
+      { resumeOnRestart: "always" }
+    );
+
+    expect(result.restoreRecovery).toEqual({
+      reason: "host-ended-uncleanly",
+      sessionId: "sess-c",
+      hostEnd,
+    });
+    expect(result.command).not.toContain("--resume");
+    expect(result.agentSessionId).toBeUndefined();
+    expect(result.restoreProvenance?.disposition).toBe("held");
+  });
+
   it("names the plugin's hold over the setting's", () => {
     const result = respawn(
       { ...claudePane, agentSessionId: "sess-c", holdOnRestart: true },

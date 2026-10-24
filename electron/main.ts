@@ -133,6 +133,7 @@ import { prefetchHydrateResult } from "./services/prefetchHydrateCache.js";
 import { buildSwitchHydrateResult } from "./services/AppHydrationService.js";
 import { initializeCrashLoopGuard, getCrashLoopGuard } from "./services/CrashLoopGuardService.js";
 import { initializePanelSuspectLedger } from "./services/PanelSuspectLedgerService.js";
+import { recordHostEnd } from "./services/hostEndRestoreHold.js";
 import { initializeGpuCrashMonitor } from "./services/GpuCrashMonitorService.js";
 import { initializeProcessDeathLogger } from "./services/ProcessDeathLogger.js";
 import {
@@ -412,6 +413,9 @@ if (!gotTheLock) {
   // reads `getQuarantinedPanelIds()` to filter terminals out of the safe-mode
   // restore set; surfacing per-panel quarantine to the renderer.
   initializePanelSuspectLedger(getCrashRecoveryService().getPendingCrash());
+  // Before any window hydrates: agents a watchdog or external kill cut short
+  // wait to be resumed rather than all coming back at once (#14382).
+  recordHostEnd(getCrashRecoveryService().getPendingCrash());
 
   // DatabaseMaintenance.initialize() runs the SQLite probe + recovery and MUST
   // complete before getSharedDb() opens the file. Dynamic import removes

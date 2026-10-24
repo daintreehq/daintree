@@ -4,6 +4,7 @@ import type { PanelInstance, PtyPanelData } from "@shared/types/panel";
 
 const storeState = vi.hoisted(() => ({
   panelsById: {} as Record<string, PanelInstance>,
+  panelIds: [] as string[],
   addPanel: vi.fn(async (_options: AddPanelOptions): Promise<string | null> => null),
 }));
 
@@ -32,8 +33,13 @@ vi.mock("@/config/agents", () => ({
   getAgentConfig: (id: string) => ({ command: id }),
 }));
 
-const { buildRestoreRecoveryLaunchOptions, launchFromRestoreRecovery, siblingHeldSessionIds } =
-  await import("../restoreRecoveryLaunch");
+const {
+  buildRestoreRecoveryLaunchOptions,
+  heldForHostEndIds,
+  launchFromRestoreRecovery,
+  resumeAllHeldForHostEnd,
+  siblingHeldSessionIds,
+} = await import("../restoreRecoveryLaunch");
 
 function heldPane(overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
@@ -78,6 +84,7 @@ beforeEach(() => {
   reconcileMovedPanel.mockReset();
   resolvedCli.path = undefined;
   storeState.panelsById = {};
+  storeState.panelIds = [];
   storeState.addPanel.mockReset();
   storeState.addPanel.mockImplementation(async (options) => options.requestedId ?? null);
 });
@@ -356,5 +363,60 @@ describe("launchFromRestoreRecovery (#12434)", () => {
       "unavailable"
     );
     expect(storeState.addPanel).not.toHaveBeenCalled();
+  });
+});
+
+describe("resuming panes an unclean end held (#14382)", () => {
+  const hostEnd = { cause: "external-kill" as const, at: 1_000 };
+  const hostHeld = (id: string, overrides: Partial<PtyPanelData> = {}) =>
+    heldPane({
+      id,
+      restoreRecovery: { reason: "host-ended-uncleanly", sessionId: `sess-${id}`, hostEnd },
+      ...overrides,
+    });
+
+  it("names only panes it can resume without a choice, in the view's order", () => {
+    const panels: Record<string, PanelInstance> = {
+      b: hostHeld("b"),
+      a: hostHeld("a"),
+      noSession: hostHeld("noSession", {
+        restoreRecovery: { reason: "host-ended-uncleanly", hostEnd },
+      }),
+      noDestination: hostHeld("noDestination", {
+        restoreRecovery: {
+          reason: "host-ended-uncleanly",
+          sessionId: "sess-x",
+          awaitingDestination: true,
+        },
+      }),
+      trashed: hostHeld("trashed", { location: "trash" }),
+      otherHold: heldPane({ id: "otherHold" }),
+      live: livePane("live", "sess-live"),
+    };
+
+    expect(heldForHostEndIds(panels, ["a", "noSession", "noDestination", "trashed", "otherHold", "live", "b"])).toEqual(["a", "b"]);
+  });
+
+  it("resumes each one into its own conversation, one after another", async () => {
+    storeState.panelsById = { a: hostHeld("a"), b: hostHeld("b"), other: heldPane({ id: "other" }) };
+    storeState.panelIds = ["a", "other", "b"];
+
+    await expect(resumeAllHeldForHostEnd()).resolves.toEqual(["launched", "launched"]);
+    expect(storeState.addPanel.mock.calls.map((call) => call[0])).toMatchObject([
+      { requestedId: "a", agentSessionId: "sess-a" },
+      { requestedId: "b", agentSessionId: "sess-b" },
+    ]);
+  });
+
+  it("skips a pane resumed or closed while the others launched", async () => {
+    storeState.panelsById = { a: hostHeld("a"), b: hostHeld("b") };
+    storeState.panelIds = ["a", "b"];
+    storeState.addPanel.mockImplementation(async (options) => {
+      delete storeState.panelsById.b;
+      return options.requestedId ?? null;
+    });
+
+    await expect(resumeAllHeldForHostEnd()).resolves.toEqual(["launched"]);
+    expect(storeState.addPanel).toHaveBeenCalledTimes(1);
   });
 });

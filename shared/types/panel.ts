@@ -423,8 +423,9 @@ export type SessionLostReason =
 /**
  * Why restore held a pane instead of launching it (#12434). The first two are
  * the resume election's losers ({@link SessionLostReason}); the next two only
- * occur for an agent that can resume across directories, and the last two for
- * any agent, by the user's own setting or by the plugin that launched it.
+ * occur for an agent that can resume across directories, the next two for
+ * any agent, by the user's own setting or by the plugin that launched it, and
+ * the last for any agent whose run an unclean end of the app cut short.
  */
 export type RestoreRecoveryReason =
   | "sibling-owns-session-id"
@@ -436,7 +437,22 @@ export type RestoreRecoveryReason =
   /** The "Resume agents after restart" setting held it (#13509), not anything restore saw. */
   | "resume-deferred"
   /** The plugin that launched the pane asked for it to be held (#14017). */
-  | "held-by-plugin";
+  | "held-by-plugin"
+  /** The app was killed with this pane's agent running (#14382); see {@link PanelRestoreRecovery.hostEnd}. */
+  | "host-ended-uncleanly";
+
+/**
+ * What the app recorded about the unclean end that cut a pane's run short
+ * (#14382): the watchdog's own kill flag, or a heartbeat that stopped with no
+ * reboot. Observations from the crash record, never a guess at why.
+ */
+export interface PanelHostEnd {
+  cause: "watchdog-deadlock" | "external-kill";
+  /** When the app died, as the crash record dates it (epoch ms). */
+  at: number;
+  /** Heartbeats the watchdog missed before it killed the app. */
+  missedBeats?: number;
+}
 
 /**
  * What restore did with a pane it rebuilt from its saved snapshot (#14017): ran
@@ -502,6 +518,8 @@ export interface PanelRestoreRecovery {
    * a worktree or by keeping the original folder — never by a guess.
    */
   awaitingDestination?: true;
+  /** Present for a "host-ended-uncleanly" hold: what the crash record observed. */
+  hostEnd?: PanelHostEnd;
 }
 
 export interface PtyPanelData extends BasePanelData {

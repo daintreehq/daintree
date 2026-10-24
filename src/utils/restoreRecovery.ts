@@ -1,4 +1,5 @@
 import type {
+  PanelHostEnd,
   PanelRestoreRecovery,
   PtyPanelData,
   RestoreRecoveryReason,
@@ -11,6 +12,12 @@ const RESTORE_RECOVERY_REASONS: ReadonlySet<string> = new Set<RestoreRecoveryRea
   "destination-unavailable",
   "resume-deferred",
   "held-by-plugin",
+  "host-ended-uncleanly",
+]);
+
+const HOST_END_CAUSES: ReadonlySet<string> = new Set<PanelHostEnd["cause"]>([
+  "watchdog-deadlock",
+  "external-kill",
 ]);
 
 // Control characters never belong in a path, and this one is later handed to
@@ -24,6 +31,26 @@ function isRestoreRecoveryReason(value: unknown): value is RestoreRecoveryReason
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function sanitizeHostEnd(value: unknown): PanelHostEnd | undefined {
+  if (!isPlainObject(value)) return undefined;
+  const cause = value.cause;
+  if (typeof cause !== "string" || !HOST_END_CAUSES.has(cause)) return undefined;
+  if (typeof value.at !== "number" || !Number.isFinite(value.at) || value.at <= 0) {
+    return undefined;
+  }
+  const missedBeats =
+    typeof value.missedBeats === "number" &&
+    Number.isInteger(value.missedBeats) &&
+    value.missedBeats > 0
+      ? value.missedBeats
+      : undefined;
+  return {
+    cause: cause as PanelHostEnd["cause"],
+    at: value.at,
+    ...(missedBeats !== undefined && { missedBeats }),
+  };
 }
 
 /**
@@ -45,10 +72,14 @@ export function sanitizeRestoreRecovery(value: unknown): PanelRestoreRecovery | 
     !CONTROL_CHARS.test(value.sessionId)
       ? value.sessionId
       : undefined;
+  // Only what it observed is quoted, so a record that doesn't parse is dropped
+  // while the hold itself stays.
+  const hostEnd = reason === "host-ended-uncleanly" ? sanitizeHostEnd(value.hostEnd) : undefined;
   return {
     reason,
     ...(sessionId !== undefined && { sessionId }),
     ...(value.awaitingDestination === true && { awaitingDestination: true as const }),
+    ...(hostEnd !== undefined && { hostEnd }),
   };
 }
 

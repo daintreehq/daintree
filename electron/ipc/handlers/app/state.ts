@@ -14,6 +14,7 @@ import { APP_STATE_FIELD_OWNERSHIP } from "../../../storeOwnership.js";
 import { AppStateTerminalEntrySchema, filterValidTerminalEntries } from "../../../schemas/ipc.js";
 import { filterRestorableTerminalSnapshots } from "../../../services/projectStateRestore.js";
 import { getCrashRecoveryService } from "../../../services/CrashRecoveryService.js";
+import { applyHostEndHold } from "../../../services/hostEndRestoreHold.js";
 import {
   captureProjectLayoutSeed,
   getProjectLayoutSeed,
@@ -280,6 +281,9 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
     // Only the first few hundred milliseconds of a session ever wait here.
     await whenGpuReported(GPU_REPORT_WAIT_MS);
     const { project: currentProject, workspaceId } = resolveWorkspaceForHydration(ctx);
+    // Before any read of the saved panes, the prefetch cache included: agents an
+    // unclean end cut short come back held, whichever screen restores them.
+    await applyHostEndHold(workspaceId);
     // A remote Shell merges only this machine's host half of the answer, so
     // nothing addressed to this machine's own windows may be consumed for it.
     const forRemoteShell = ctx?.endpoint?.kind === "remote-view";

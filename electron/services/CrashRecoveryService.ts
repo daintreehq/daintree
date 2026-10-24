@@ -29,6 +29,7 @@ import { markCrashRecoveryInspectionComplete } from "../utils/crashDumpRetention
 import { stateFilePath } from "./projectStorePaths.js";
 import { PROJECT_STATE_SCHEMA_VERSION } from "./ProjectStateManager.js";
 import { logError, logInfo, logWarn } from "../utils/logger.js";
+import { holdTerminalsForRecordedHostEnd } from "./hostEndRestoreHold.js";
 
 const MAX_CRASH_LOGS = 10;
 const CRASH_LOG_PREFIX = "crash-";
@@ -649,6 +650,18 @@ export class CrashRecoveryService {
 
       if (!hasRestorableSnapshotContent(snapshot)) {
         return false;
+      }
+
+      // The panes go back as they were before the crash, so agents an unclean
+      // end cut short come back held, as the saved per-project ones do.
+      if (isPlainObject(snapshot.appState) && Array.isArray(snapshot.appState.terminals)) {
+        snapshot = {
+          ...snapshot,
+          appState: {
+            ...snapshot.appState,
+            terminals: holdTerminalsForRecordedHostEnd(snapshot.appState.terminals),
+          },
+        };
       }
 
       this.applySessionSnapshot(snapshot);
