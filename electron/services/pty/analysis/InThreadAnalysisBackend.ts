@@ -112,7 +112,9 @@ export interface InThreadAnalysisDeps {
 export class InThreadAnalysisBackend implements AnalysisBackend {
   readonly kind = "in-thread" as const;
 
-  private readonly createdAt = Date.now();
+  // Stamped once the mirror is built and any session restore has replayed,
+  // so observation starts where the mirror actually begins reading.
+  private readonly createdAt: number;
   private readonly id: string;
   private readonly terminalInfo: TerminalInfo;
 
@@ -176,6 +178,7 @@ export class InThreadAnalysisBackend implements AnalysisBackend {
     this.terminalInfo.serializeAddon = serializeAddon;
     this.viewportSnapshotCache.attach(headlessTerminal);
     this.restoreSessionIfPresent(headlessTerminal);
+    this.createdAt = Date.now();
   }
 
   private restoreSessionIfPresent(headlessTerminal: HeadlessTerminalType): void {

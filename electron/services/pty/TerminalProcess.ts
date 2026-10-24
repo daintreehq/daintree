@@ -70,7 +70,10 @@ import { TerminalExitHandler } from "./TerminalExitHandler.js";
 import { gracefulShutdown as runGracefulShutdown } from "./TerminalGracefulShutdown.js";
 import { handleAgentDetection as runHandleAgentDetection } from "./TerminalAgentDetection.js";
 import { TerminalProcessLifecycle } from "./TerminalProcessLifecycle.js";
-import type { VisibleContentSnapshot } from "./SustainedChangeTracker.js";
+import {
+  createVisibleContentSnapshot,
+  type VisibleContentSnapshot,
+} from "./SustainedChangeTracker.js";
 
 /** Minimum gap between two rate-limit observations from one pane (#12797). */
 const RATE_LIMIT_OBSERVATION_COOLDOWN_MS = 60_000;
@@ -1438,7 +1441,10 @@ export class TerminalProcess {
   }
 
   getVisibleActivitySnapshot(n: number): VisibleContentSnapshot | undefined {
-    return this.inThreadAnalysis?.getVisibleActivitySnapshot(n);
+    // Worker mode has no local mirror, which reads as an empty screen.
+    return this.inThreadAnalysis
+      ? this.inThreadAnalysis.getVisibleActivitySnapshot(n)
+      : createVisibleContentSnapshot([]);
   }
 
   getCursorLine(): string | null {
