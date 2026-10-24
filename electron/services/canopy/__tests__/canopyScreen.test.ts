@@ -372,4 +372,13 @@ describe("optionsInScreenOrder", () => {
       optionsInScreenOrder(["No", "Maybe", "Yes, and don't ask again", "Yes"], screen)
     ).toEqual(["Yes", "Yes, and don't ask again", "No"]);
   });
+
+  it("places each option by the row nearest the bottom that draws it", () => {
+    const screen = ["No", "Yes", "Proceed?", "1. No", "2. Maybe later"].join("\n");
+    expect(optionsInScreenOrder(["Yes", "No"], screen)).toEqual(["Yes", "No"]);
+  });
+
+  it("rejects an option only part of which is on the screen", () => {
+    expect(optionsInScreenOrder(["Yes, permanently", "Yes"], "❯ 1. Yes")).toEqual(["Yes"]);
+  });
 });

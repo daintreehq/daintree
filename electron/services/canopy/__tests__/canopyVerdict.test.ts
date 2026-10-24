@@ -15,7 +15,15 @@ import {
 } from "../canopyVerdict.js";
 
 function run(overrides: Partial<FleetRunRow> = {}): FleetRunRow {
-  return { id: "a", agentState: "waiting", waitingReason: "question", ...overrides } as FleetRunRow;
+  return {
+    runId: "a",
+    workspaceId: "w",
+    spawnedAt: 0,
+    cwd: "/repo",
+    agentState: "waiting",
+    waitingReason: "question",
+    ...overrides,
+  };
 }
 
 function reading(overrides: Partial<ClassifierResult> = {}): ClassifierResult {
@@ -73,16 +81,79 @@ describe("refinementOf", () => {
     expect(refinementOf({ ...input, evidence }, observed, null, 2_000)).toBeNull();
   });
 
-  it("refines nothing from a reading of an earlier turn on another screen", () => {
+  describe("a reading taken in an earlier turn", () => {
     const observed = run({ agentState: "completed", waitingReason: undefined });
-    const input = entry(observed);
-    const evidence = { ...input.evidence!, turn: 1, hash: "older" };
-    expect(refinementOf({ ...input, evidence }, observed, null, 2_000)).toBeNull();
+    const input = entry(observed, { reads: { ...newReadTrack(), turn: 1 } });
+
+    it("refines nothing once the screen has moved", () => {
+      const evidence = { ...input.evidence!, hash: "older" };
+      expect(refinementOf({ ...input, evidence }, observed, null, 2_000)).toBeNull();
+    });
+
+    it("refines nothing once the observed state has moved", () => {
+      const evidence = { ...input.evidence!, state: "working:" };
+      expect(refinementOf({ ...input, evidence }, observed, null, 2_000)).toBeNull();
+    });
+
+    it("speaks for this turn while the screen and observed state are the ones it read", () => {
+      expect(refinementOf(input, observed, null, 2_000)).toMatchObject({ kind: "asked" });
+    });
   });
 
   it("refines nothing while a newer pass is in flight", () => {
     const observed = run({ agentState: "completed", waitingReason: undefined });
     expect(refinementOf(entry(observed, { pending: true }), observed, null, 2_000)).toBeNull();
+  });
+
+  describe("a question Daintree observed", () => {
+    const observed = run();
+    const finished = reading({ category: "finished", question: null });
+    const input = entry(observed, {
+      classified: finished,
+      evidence: { ...entry(observed).evidence!, question: null, status: "All tests pass." },
+    });
+
+    it("is read as asking nothing, quoting the screen, and keeps the observed state", () => {
+      const read = { ...newReadTrack(), turn: 1, readTurn: 1 };
+      expect(refinementOf({ ...input, reads: read }, observed, null, 2_000)).toEqual({
+        kind: "not-asking",
+        quote: "All tests pass.",
+        readAt: 1_000,
+        seen: true,
+      });
+      expect(observed).toMatchObject({ agentState: "waiting", waitingReason: "question" });
+    });
+
+    it("carries whether the user has seen the turn", () => {
+      const unread = { ...newReadTrack(), turn: 1, readTurn: 0 };
+      expect(refinementOf({ ...input, reads: unread }, observed, null, 2_000)).toMatchObject({
+        seen: false,
+      });
+    });
+
+    it("is left alone by a reading of another wait", () => {
+      expect(refinementOf({ ...input, readState: "completed:" }, observed, null, 2_000)).toBeNull();
+    });
+  });
+
+  describe("a busy run", () => {
+    const observed = run({ agentState: "working", waitingReason: undefined });
+    const card = { activity: "Running the test suite", glance: { doing: null } };
+    const input = entry(observed, { card } as Partial<RefinementInput>);
+
+    it("is read as stalled from when its screen stood still, quoting what it shows", () => {
+      expect(refinementOf(input, observed, 500, 2_000)).toEqual({
+        kind: "stalled",
+        quote: "Running the test suite",
+        readAt: 2_000,
+        stalledSince: 500,
+      });
+    });
+
+    it("is not stalled while its screen moves, or once it is blank", () => {
+      expect(refinementOf(input, observed, null, 2_000)).toBeNull();
+      expect(refinementOf({ ...input, cleared: true }, observed, 500, 2_000)).toBeNull();
+    });
   });
 });
 
@@ -94,9 +165,11 @@ describe("returnsToInbox", () => {
     expect(returnsToInbox(disposition, "same", prompt)).toBe(false);
   });
 
-  it("keeps a run aside when the same prompt is still drawn", () => {
+  it("keeps a run aside when the same prompt is still drawn, however it is redrawn", () => {
     const disposition = { contentHash: "before", question: promptKey(prompt), sawWork: false };
     expect(returnsToInbox(disposition, "after", prompt)).toBe(false);
+    expect(returnsToInbox(disposition, "after", "❯  OVERWRITE the   file?")).toBe(false);
+    expect(returnsToInbox(disposition, "after", null)).toBe(false);
   });
 
   it("brings a run back for a different question, or a stop after work", () => {
@@ -124,5 +197,11 @@ describe("classifier ranking", () => {
     expect(verdictOf(reading({ attention: 0.91 }), observed)).toBe(
       verdictOf(reading({ attention: 0.97 }), observed)
     );
+  });
+
+  it("gives a busy run a new verdict once it reads as stuck", () => {
+    const observed = run({ agentState: "working", waitingReason: undefined });
+    const busy = (attention: number) => reading({ category: "working", question: null, attention });
+    expect(verdictOf(busy(0.79), observed)).not.toBe(verdictOf(busy(0.81), observed));
   });
 });
