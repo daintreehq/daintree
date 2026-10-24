@@ -3,14 +3,12 @@ import {
   lazy,
   useCallback,
   useEffect,
-  useId,
   useMemo,
   useRef,
   useState,
   useSyncExternalStore,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { useSplitterKeys } from "@/hooks/useSplitterKeys";
 import { ExternalLink, History, MessageCircle, Settings2, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { reportCanopySent } from "@/lib/canopySeen";
@@ -19,13 +17,9 @@ import { ChoiceCard } from "@/components/ui/card";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { XtermAdapter } from "@/components/Terminal/XtermAdapter";
 import { MissingCliGate } from "@/components/Terminal/MissingCliGate";
-import {
-  getTerminalFocusTarget,
-  shouldShowHybridInputBar,
-} from "@/components/Terminal/terminalFocus";
+import { shouldShowHybridInputBar } from "@/components/Terminal/terminalFocus";
 import type { HybridInputBarHandle } from "@/components/Terminal/HybridInputBar";
 import {
-  peek as peekTerminalService,
   subscribeWhenReady as subscribeTerminalServiceWhenReady,
   with as withTerminalService,
 } from "@/services/terminal/terminalInstanceServiceAccessor";
@@ -36,36 +30,24 @@ import { isBuiltInAgentId } from "@shared/config/agentIds";
 import { HelpIntroBanner } from "./HelpIntroBanner";
 import { usePaletteStore } from "@/store/paletteStore";
 import { HelpPanelHeader } from "./HelpPanelHeader";
-import { HelpSessionTabs, helpSessionTabId, type HelpSessionTab } from "./HelpSessionTabs";
+import { HelpSessionTabs, helpSessionTabId } from "./HelpSessionTabs";
 import { HelpSessionLaneRuntime } from "./HelpSessionLaneRuntime";
 import {
   markHelpPanelRuntimeMounted,
   markHelpPanelRuntimeUnmounted,
 } from "@/lib/helpPanelRuntimeGate";
-import { trimSessionTabTitle } from "./sessionTabTitle";
-import { getTerminalTaskTitle } from "@/utils/terminalTitleDisplay";
-import {
-  acquireHelpSessionController,
-  releaseHelpSessionController,
-  useHelpSessionController,
-} from "@/controllers/helpSessionControllerRegistry";
+import { useHelpSessionController } from "@/controllers/helpSessionControllerRegistry";
 import { HelpPanelBanners } from "./HelpPanelBanners";
 import { HelpPanelVersionGate } from "./HelpPanelVersionGate";
 import { HelpAssistantAgentChooser } from "./HelpAssistantAgentChooser";
 import { HelpLaunchingState } from "./HelpLaunchingState";
 import { HelpPanelFooter } from "./HelpPanelFooter";
 import { HelpPanelResizeHandle } from "./HelpPanelResizeHandle";
+import { useHelpPanelResize } from "./useHelpPanelResize";
+import { useHelpPanelRevealFocus } from "./useHelpPanelRevealFocus";
+import { useHelpSessionLanes } from "./useHelpSessionLanes";
 import { FigureRail } from "./FigureRail";
-import {
-  useHelpPanelStore,
-  selectSlot,
-  selectOpenSlots,
-  selectHasRoomForSession,
-  HELP_PANEL_MIN_WIDTH,
-  HELP_PANEL_MAX_WIDTH,
-  HELP_PANEL_DEFAULT_WIDTH,
-} from "@/store/helpPanelStore";
-import { MAX_ASSISTANT_SLOTS, assistantSlotKey } from "@shared/config/assistantSlots";
+import { useHelpPanelStore, selectSlot } from "@/store/helpPanelStore";
 import {
   usePanelStore,
   getTerminalRefreshTier,
@@ -74,12 +56,11 @@ import {
   useWorktreeSelectionStore,
   useTerminalInputStore,
 } from "@/store";
-import { isAssistantFocused, useMacroFocusStore } from "@/store/macroFocusStore";
+import { useMacroFocusStore } from "@/store/macroFocusStore";
 // Leaf import, not the `@/store` barrel: the barrel is mocked wholesale (with a
 // hand-listed hook set) across the HelpPanel/controller suites, so pulling a new
 // hook through it would crash every one of them on an undefined destructure.
 import { useScratchStore } from "@/store/scratchStore";
-import { usePreferencesStore } from "@/store/preferencesStore";
 import { useFocusStore } from "@/store/focusStore";
 import { getAgentConfig } from "@/config/agents";
 import { buildResumeCommand } from "@shared/types/agentSettings";
@@ -87,13 +68,11 @@ import { actionService } from "@/services/ActionService";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { useAssistantAgentChoices } from "@/hooks/useAssistantAgentChoices";
 import { suppressSidebarResizes } from "@/lib/sidebarToggle";
-import { dismissAllTooltips } from "@/lib/tooltipDismissRegistry";
 import { TerminalRefreshTier } from "@/types";
 import { CLOSE_CONFIRM_AGENT_STATES } from "@shared/types/agent";
 import { isPtyPanel } from "@shared/types/panel";
 import type { PinnedActionContextSnapshot } from "@shared/types/ipc/help";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { TABBABLE_SELECTOR } from "@/lib/accessibility";
 
 // Loaded on first open: the picker reads the panel store and the agents'
 // history, none of which the panel needs until someone asks for it.
@@ -104,9 +83,6 @@ const LazyHelpPastSessionsPalette = lazy(() =>
 const LazyHybridInputBar = lazy(() =>
   import("@/components/Terminal/HybridInputBar").then((m) => ({ default: m.HybridInputBar }))
 );
-
-const RESIZE_STEP = 10;
-const RESIZE_STEP_LARGE = 50;
 
 const ASSISTANT_DOCS_URL = "https://daintree.org/docs/daintree-assistant";
 const ASSISTANT_INSTALLER_URL = "https://daintree.org/download";
@@ -169,31 +145,6 @@ export function HelpPanel({
 }: HelpPanelProps) {
   const panelRef = useRef<HTMLElement>(null);
   const inputBarRef = useRef<HybridInputBarHandle>(null);
-  // Element that owned focus when the panel last opened. We restore focus to
-  // it on close so keyboard users return to where they were rather than
-  // body. Mirrors the pattern in AppDialog/AppPaletteDialog.
-  const previousFocusRef = useRef<HTMLElement | null>(null);
-  // Invalidates any deferred reveal-focus frame whose authorizing effect run has
-  // already been torn down. Mirrors HybridInputBar's `focusGenerationRef`
-  // (#8487) — a frame that was already dequeued can't be stopped by
-  // `cancelAnimationFrame`, so it has to check that it still owns the grab.
-  const revealFocusGenerationRef = useRef(0);
-  // The last (isOpen, isVisible, focusRequest) tuple whose focus grab actually
-  // completed. Tracking *completion* rather than the previous effect setup is
-  // what makes the grab survive StrictMode: the first setup schedules a frame,
-  // the immediate cleanup cancels it, and the replayed setup must still see an
-  // outstanding request. A "previous setup" ref would mark it consumed and the
-  // panel would open unfocused (#11472).
-  const lastCompletedFocusTriggerRef = useRef<{
-    isOpen: boolean;
-    isVisible: boolean;
-    focusRequest: number;
-  } | null>(null);
-  // Idempotent teardown for an in-flight resize drag. Stored in a ref so an
-  // unmount (or window blur) mid-drag can run it and never leak the document
-  // listeners or the body userSelect/cursor overrides. Mirrors TwoPaneSplitDivider.
-  const resizeCleanupRef = useRef<(() => void) | null>(null);
-  const [isResizing, setIsResizing] = useState(false);
   const isMacroFocused = useMacroFocusStore((s) => s.focusedRegion === "assistant");
   // Ordinary DOM focus (click-to-focus, programmatic) inside the aside — the
   // macro-focus signal only fires on keyboard region cycling, so without this
@@ -207,25 +158,8 @@ export function HelpPanel({
   useEffect(() => {
     if (!isVisible) setHasDomFocus(false);
   }, [isVisible]);
-  // The lane a restart is waiting on confirmation for. The header's overflow item
-  // and every tab's own menu share it, so the lane that restarts is the one the
-  // request named rather than whichever is in front when the user confirms.
-  const [pendingRestartSlot, setPendingRestartSlot] = useState<number | null>(null);
-  // Where the restart confirm hands focus back: a tab menu's item is gone by the
-  // time the dialog closes, but the lane's tab survives a restart. A ref because
-  // the dialog resolves it after its exit animation, once the pending slot is
-  // already cleared.
-  const restartFocusSlotRef = useRef<number | null>(null);
   const [showEndSessionConfirm, setShowEndSessionConfirm] = useState(false);
   const [showAgentSwitchConfirm, setShowAgentSwitchConfirm] = useState(false);
-  // The lane a tab's close button is waiting on confirmation for (#12108).
-  // Null means no close is pending — closing is destructive (the conversation
-  // is discarded, not paused), so it takes the same gate the Stop control uses.
-  const [pendingCloseSlot, setPendingCloseSlot] = useState<number | null>(null);
-  // The lane focus should land on once a confirmed close removes a background
-  // lane: its neighbour, the following one first. Null when the lane being
-  // closed is the selected one — focus then follows the store's new selection.
-  const [pendingCloseSuccessor, setPendingCloseSuccessor] = useState<number | null>(null);
   // The switch request the effect last acted on, so one Settings pick drives at
   // most one switch attempt (the effect re-runs on unrelated dep changes while
   // the async launch settles).
@@ -298,7 +232,7 @@ export function HelpPanel({
 
   const terminal = usePanelStore((s) => (terminalId ? s.panelsById[terminalId] : undefined));
   const terminalPty = terminal && isPtyPanel(terminal) ? terminal : undefined;
-  // Narrow structural triggers for the reveal-focus effect below. A live
+  // Narrow structural triggers for the reveal-focus effect (useHelpPanelRevealFocus). A live
   // assistant replaces its whole panel object constantly — `updateAgentState`,
   // `updateLastObservedTitle` on every distinct OSC title, and the RAF-coalesced
   // activity buffer all swap the identity — so depending on `terminal` itself
@@ -765,207 +699,9 @@ export function HelpPanel({
     return () => useMacroFocusStore.getState().setRegionRef("assistant", null);
   }, []);
 
-  // Move keyboard focus into the panel on open and restore it on close.
-  // focusRequest re-triggers this effect so repeated Cmd+L presses can
-  // re-focus a blurred panel without closing it.
-  useEffect(() => {
-    const focusTrigger = { isOpen, isVisible, focusRequest };
-    const lastCompleted = lastCompletedFocusTriggerRef.current;
-    // Only opening, revealing and an explicit focusRequest authorize taking
-    // focus away from wherever the user is actually typing. Everything else
-    // that re-runs this effect is structural (the terminal appeared, finished
-    // spawning, was replaced, or the input bar came and went) and may only
-    // re-target focus the assistant already owns.
-    const hasNewFocusTrigger =
-      lastCompleted === null ||
-      lastCompleted.isOpen !== isOpen ||
-      lastCompleted.isVisible !== isVisible ||
-      lastCompleted.focusRequest !== focusRequest;
-
-    if (isOpen && isVisible) {
-      // Only remember a restore target when this run is actually authorized to
-      // move focus. A structural re-run that the ownership gate goes on to
-      // reject must not overwrite it with whatever unrelated pane the user
-      // happens to be typing in.
-      const active = document.activeElement;
-      if (
-        hasNewFocusTrigger &&
-        active instanceof HTMLElement &&
-        !panelRef.current?.contains(active)
-      ) {
-        previousFocusRef.current = active;
-      }
-
-      const generation = ++revealFocusGenerationRef.current;
-      let hybridCompletionRaf: number | null = null;
-      // The exact bar we handed a focus request to, so cleanup revokes that one
-      // rather than whatever `inputBarRef` happens to point at by then.
-      let pendingFocusBar: HybridInputBarHandle | null = null;
-
-      const raf = requestAnimationFrame(() => {
-        if (revealFocusGenerationRef.current !== generation) return;
-
-        const state = useHelpPanelStore.getState();
-        // The panel can close, or rebind to a different session, between this
-        // effect and the frame that runs it. A frame already dequeued when
-        // cleanup ran can't be cancelled, so re-read both.
-        if (!state.isOpen || selectSlot(state, state.activeSlot).terminalId !== terminalId) return;
-
-        // Ownership is re-checked here, on the final deferred frame, rather
-        // than in the effect body — focus can move during the frame boundary,
-        // and a decision made one frame ago is exactly the stale authorization
-        // that let a background agent-state update yank the caret out of
-        // another pane's editor (#11472).
-        if (!hasNewFocusTrigger && !isAssistantFocused()) return;
-
-        const completeFocusTrigger = () => {
-          if (hasNewFocusTrigger) lastCompletedFocusTriggerRef.current = focusTrigger;
-        };
-
-        const current = document.activeElement;
-        if (
-          (current?.closest?.(".xterm-helper-textarea") || current?.closest?.(".cm-editor")) &&
-          panelRef.current?.contains(current)
-        ) {
-          completeFocusTrigger();
-          return;
-        }
-
-        // Read the panel non-reactively at execution time. The effect no longer
-        // subscribes to the panel object, so this is both the freshest value
-        // and the only one that reflects a terminal removed or failed between
-        // the effect and this frame.
-        const currentTerminal = terminalId
-          ? usePanelStore.getState().panelsById[terminalId]
-          : undefined;
-        const currentTerminalPty =
-          currentTerminal && isPtyPanel(currentTerminal) ? currentTerminal : undefined;
-
-        // Ownership is settled by this point, so now — and only now — the
-        // remembered preference gets to pick which surface receives focus.
-        // Resolving it here rather than letting HybridInputBar's own
-        // `preferredTerminalFocusTarget` check veto the grab matters: that
-        // check aborts silently, which would leave an authorized open request
-        // marked complete with focus still in another pane.
-        const bar = inputBarRef.current;
-        const focusTarget = getTerminalFocusTarget({
-          preferredTarget: usePanelStore.getState().preferredTerminalFocusTarget,
-          hasHybridInputSurface: showHybridInputBar && bar !== null,
-          isInputDisabled: currentTerminalPty?.isInputLocked === true,
-          hybridInputEnabled: useTerminalInputStore.getState().hybridInputEnabled,
-        });
-
-        // When an agent terminal is running, focus the surface the preference
-        // resolved to, falling back to xterm when the editor can't take it.
-        //
-        // `focusWithCursorAtEnd()` schedules `view.focus()` inside its own
-        // requestAnimationFrame, so we cannot synchronously check
-        // `document.activeElement` after calling it. We trust the bar's
-        // internal rAF when it reports it scheduled the grab — no xterm
-        // fallback in that branch, otherwise CodeMirror would steal focus from
-        // xterm one frame later and produce a focus flicker. A `false` return
-        // means no editor was mounted (the lazy Suspense window) and nothing
-        // was scheduled, so falling through to xterm is safe and still focuses
-        // something on a cold open.
-        if (
-          terminalId &&
-          currentTerminal &&
-          currentTerminalPty?.spawnStatus !== "missing-cli" &&
-          currentTerminalPty?.spawnStatus !== "failed"
-        ) {
-          if (focusTarget === "hybridInput" && bar) {
-            // The bar defers the real `view.focus()` to a frame of its own,
-            // which is the LAST frame in this grab — so the last ownership
-            // check has to run inside it. We can't edit that shared component,
-            // but a frame queued here, before the bar schedules its own, is
-            // dequeued ahead of it: it gets to re-read ownership and revoke the
-            // grab via `cancelPendingFocus()` when the user has moved on in the
-            // gap. Without it a structural retry that was legitimate one frame
-            // ago still lands in the other pane's editor (#11472).
-            hybridCompletionRaf = requestAnimationFrame(() => {
-              if (revealFocusGenerationRef.current !== generation) return;
-              if (!hasNewFocusTrigger && !isAssistantFocused()) {
-                bar.cancelPendingFocus();
-                return;
-              }
-              completeFocusTrigger();
-            });
-            pendingFocusBar = bar;
-            if (bar.focusWithCursorAtEnd()) return;
-            // No editor was mounted, so nothing is pending to guard.
-            cancelAnimationFrame(hybridCompletionRaf);
-            hybridCompletionRaf = null;
-            pendingFocusBar = null;
-          }
-          peekTerminalService()?.focus(terminalId);
-          const after = document.activeElement;
-          if (after?.closest?.(".xterm-helper-textarea") && panelRef.current?.contains(after)) {
-            completeFocusTrigger();
-            return;
-          }
-        }
-
-        const candidates = panelRef.current?.querySelectorAll<HTMLElement>(TABBABLE_SELECTOR);
-        let first: HTMLElement | undefined;
-        for (const el of candidates ?? []) {
-          if (el.getAttribute("role") === "separator") continue;
-          first = el;
-          break;
-        }
-        if (first) {
-          first.focus();
-        } else {
-          panelRef.current?.focus();
-        }
-        completeFocusTrigger();
-      });
-
-      return () => {
-        cancelAnimationFrame(raf);
-        if (hybridCompletionRaf !== null) cancelAnimationFrame(hybridCompletionRaf);
-        // Invalidate any frame this run already handed out, including the one
-        // nested inside HybridInputBar — `cancelAnimationFrame` can't reach
-        // that one, and without this it lands after the panel closed (#11472).
-        revealFocusGenerationRef.current += 1;
-        pendingFocusBar?.cancelPendingFocus();
-      };
-    }
-
-    // Record the closed/hidden tuple so the next open or reveal reads as a new
-    // request rather than one already satisfied.
-    lastCompletedFocusTriggerRef.current = focusTrigger;
-
-    const el = previousFocusRef.current;
-    previousFocusRef.current = null;
-    // Hand focus back only if the assistant still had it. Closing a panel the
-    // user already left must not drag them out of wherever they went — that is
-    // the same steal this effect exists to prevent, just on the way out.
-    // `body`/null covers the panel tearing down its focused descendant, which
-    // is the normal close path.
-    const activeOnClose = document.activeElement;
-    const assistantStillOwnedFocus =
-      activeOnClose === null ||
-      activeOnClose === document.body ||
-      panelRef.current?.contains(activeOnClose) === true;
-    if (
-      el &&
-      assistantStillOwnedFocus &&
-      document.contains(el) &&
-      !panelRef.current?.contains(el)
-    ) {
-      // Radix opens tooltips on focus as well as hover, so handing focus back
-      // to a tooltip trigger — the toolbar assistant button is the usual opener
-      // — pops a tooltip nothing is hovering. Same failure the dialog
-      // primitives already arm against (#11030); the suppression window is
-      // honored by both the tooltip open path and useShortcutHintHover's focus
-      // branch, and any real pointerenter clears it, so genuine hovers still
-      // teach. Inside the guard on purpose: a restore we decline must not
-      // suppress a tooltip the user did ask for.
-      dismissAllTooltips();
-      el.focus();
-    }
-    return undefined;
-  }, [
+  useHelpPanelRevealFocus({
+    panelRef,
+    inputBarRef,
     isOpen,
     isVisible,
     focusRequest,
@@ -973,7 +709,7 @@ export function HelpPanel({
     terminalExists,
     terminalSpawnStatus,
     showHybridInputBar,
-  ]);
+  });
 
   // Pin the WebGL context to the assistant terminal while it owns focus (#10672).
   // The reveal effect above only calls `focus()` (xterm DOM focus); it never
@@ -994,74 +730,8 @@ export function HelpPanel({
     });
   }, [isOpen, isVisible, hasDomFocus, terminalId]);
 
-  // Resize via mouse drag
-  const handleResizeStart = useCallback(
-    (e: React.MouseEvent) => {
-      if (e.button !== 0) return;
-      e.preventDefault();
-      onResizeStart?.();
-      setIsResizing(true);
-      const startX = e.clientX;
-      const startWidth = width;
-
-      const onMouseMove = (moveEvent: MouseEvent) => {
-        const delta = startX - moveEvent.clientX;
-        const newWidth = Math.min(
-          Math.max(startWidth + delta, HELP_PANEL_MIN_WIDTH),
-          HELP_PANEL_MAX_WIDTH
-        );
-        setWidth(newWidth);
-      };
-
-      const prevUserSelect = document.body.style.userSelect;
-      const prevCursor = document.body.style.cursor;
-
-      // Idempotent: removing absent listeners and reassigning styles is a no-op,
-      // so unmount/blur/mouseup can all call this without double-restore hazards.
-      const cleanup = () => {
-        document.removeEventListener("mousemove", onMouseMove);
-        document.removeEventListener("mouseup", onMouseUp);
-        window.removeEventListener("blur", onWindowBlur);
-        document.body.style.userSelect = prevUserSelect;
-        document.body.style.cursor = prevCursor;
-        resizeCleanupRef.current = null;
-      };
-
-      const endResize = () => {
-        // Tear down listeners/styles before user callbacks so a throwing
-        // onResizeEnd can't leak the global userSelect/cursor overrides.
-        cleanup();
-        setIsResizing(false);
-        onResizeEnd?.();
-      };
-
-      const onMouseUp = () => endResize();
-      // Drag interrupted (alt-tab, OS gesture) — restore everything; no commit
-      // needed since width is applied live during the drag.
-      const onWindowBlur = () => endResize();
-
-      resizeCleanupRef.current = cleanup;
-
-      document.addEventListener("mousemove", onMouseMove);
-      document.addEventListener("mouseup", onMouseUp);
-      window.addEventListener("blur", onWindowBlur);
-      // Drop any live selection before the drag. userSelect:none below only
-      // stops NEW drag-selections from forming; a selection that already exists
-      // in the terminal still gets torn as the rows reflow, firing a document
-      // `selectionchange` that makes xterm's AccessibilityManager recompute an
-      // inverted (start >= end) range and throw "invalid range". Collapsing it
-      // up front leaves nothing to tear (the collapse itself is handled by the
-      // manager's isCollapsed early-return).
-      const selection = document.getSelection();
-      if (selection && !selection.isCollapsed) selection.removeAllRanges();
-      // Suppress text selection during the drag. Without this, a fast drag
-      // selects across the terminal rows while they reflow, and xterm's
-      // AccessibilityManager throws "invalid range" on the torn selection.
-      document.body.style.userSelect = "none";
-      document.body.style.cursor = "col-resize";
-    },
-    [width, setWidth, onResizeStart, onResizeEnd]
-  );
+  const { isResizing, handleResizeStart, handleResizeKeyDown, handleResetWidth } =
+    useHelpPanelResize({ width, setWidth, onResizeStart, onResizeEnd });
 
   // Child effects run before the parent's, so every lane runtime's
   // `controller.start()` has armed its listeners by the time this fires.
@@ -1069,28 +739,6 @@ export function HelpPanel({
     markHelpPanelRuntimeMounted();
     return markHelpPanelRuntimeUnmounted;
   }, []);
-
-  // Run any in-flight resize teardown if the panel unmounts mid-drag.
-  useEffect(() => {
-    return () => {
-      resizeCleanupRef.current?.();
-    };
-  }, []);
-
-  const handleResetWidth = useCallback(() => {
-    setWidth(HELP_PANEL_DEFAULT_WIDTH);
-  }, [setWidth]);
-
-  const handleResizeKeyDown = useSplitterKeys({
-    growKey: "ArrowLeft",
-    value: width,
-    min: HELP_PANEL_MIN_WIDTH,
-    max: HELP_PANEL_MAX_WIDTH,
-    step: RESIZE_STEP,
-    largeStep: RESIZE_STEP_LARGE,
-    onChange: setWidth,
-    onReset: handleResetWidth,
-  });
 
   // Hide the panel without tearing down the agent or conversation.
   const handleClose = useCallback(() => {
@@ -1105,291 +753,29 @@ export function HelpPanel({
       CLOSE_CONFIRM_AGENT_STATES.has(terminalPty.agentState)) ||
     conversationTouched;
 
-  // --- Parallel lanes (#12108) -------------------------------------------
-  // One base for the whole tablist/tabpanel relationship. Both ends have to name
-  // the same ids and neither can hold a ref to the other, so the panel owns the
-  // base and both sides derive from it.
-  const tabIdBase = useId();
-  const sessionBodyId = `${tabIdBase}-body`;
-  const openSlots = useHelpPanelStore(useShallow(selectOpenSlots));
-  const canOpenParallelSession = openSlots.length < MAX_ASSISTANT_SLOTS;
-  const canStartSessionWithAgent = useHelpPanelStore((s) =>
-    selectHasRoomForSession(s, activeWorkspaceId)
-  );
-
-  // Subscribed rather than read through `getState()` inside the panel-store selectors
-  // below: a background lane that binds a terminal changes only this, and without the
-  // subscription its tab kept the old terminal's state and name until something else
-  // happened to re-render the panel.
-  const laneTerminalIds = useHelpPanelStore(
-    useShallow((s) => openSlots.map((slot) => s.sessions[slot]?.terminalId ?? null))
-  );
-
-  // Each lane's agent, so a strip holding more than one can tell them apart. A
-  // tab restored for a captured conversation has no terminal yet; its capture
-  // names the agent it will resume with.
-  const laneAgentIds = useHelpPanelStore(
-    useShallow((s) =>
-      openSlots.map(
-        (slot) =>
-          s.sessions[slot]?.agentId ??
-          (activeWorkspaceId
-            ? s.hibernateSessions[assistantSlotKey(activeWorkspaceId, slot)]?.agentId
-            : undefined) ??
-          null
-      )
-    )
-  );
-
-  // The header's "Restart conversation" gate, per lane, so each tab's menu offers
-  // the same item exactly where the overflow menu would for that lane.
-  const laneCanRestart = useHelpPanelStore(
-    useShallow((s) =>
-      openSlots.map((slot) => {
-        const lane = selectSlot(s, slot);
-        return Boolean(lane.terminalId && lane.agentId);
-      })
-    )
-  );
-
-  const laneAgentStates = usePanelStore(
-    useShallow((s: ReturnType<typeof usePanelStore.getState>) =>
-      laneTerminalIds.map((laneTerminalId) => {
-        if (!laneTerminalId) return undefined;
-        const panel = s.panelsById[laneTerminalId];
-        return panel && isPtyPanel(panel) ? panel.agentState : undefined;
-      })
-    )
-  );
-
-  // The agent's own name for each lane, through the same composition every other
-  // title surface uses — identity echoes ("Claude Code"), user-locked titles and exited
-  // agents all come back null and fall through to `Session N`. Selected as strings so
-  // `useShallow` skips the render when an OSC update left every lane's task unchanged,
-  // which is most of them: the spinner glyphs that churn the raw title are already gone.
-  const showAgentTaskTitles = usePreferencesStore((s) => s.showAgentTaskTitles);
-  const laneTaskTitles = usePanelStore(
-    useShallow((s: ReturnType<typeof usePanelStore.getState>) =>
-      laneTerminalIds.map((laneTerminalId) => {
-        if (showAgentTaskTitles === false || !laneTerminalId) return null;
-        const panel = s.panelsById[laneTerminalId];
-        return panel && isPtyPanel(panel) ? getTerminalTaskTitle(panel) : null;
-      })
-    )
-  );
-
-  const sessionTabs = useMemo<HelpSessionTab[]>(
-    () =>
-      openSlots.map((slot, index) => {
-        const task = trimSessionTabTitle(laneTaskTitles[index]);
-        return {
-          slot,
-          // Numbered by SLOT, which is the lane's durable identity, rather than by
-          // position in the strip. Position renumbers: closing the first of three
-          // lanes used to rename the two behind it, so a conversation the user had
-          // been calling "Session 3" silently became "Session 2" and the name they
-          // navigated back to belonged to a different session. A gap at 2 is a much
-          // smaller cost than a label that lies, and the gap closes on its own —
-          // `openSlot` always takes the lowest free slot.
-          //
-          // A task title replaces the number rather than joining it: the strip is
-          // narrow, and the number was only ever standing in for a name.
-          label: task?.label ?? `Session ${slot + 1}`,
-          fullTitle: task?.fullTitle,
-          agentState: laneAgentStates[index],
-          agentId: laneAgentIds[index] ?? null,
-          canRestart: laneCanRestart[index],
-        };
-      }),
-    [openSlots, laneAgentStates, laneTaskTitles, laneAgentIds, laneCanRestart]
-  );
-
-  // Bring back the tabs for lanes whose conversations an eviction or crash
-  // captured (#12108). A cold view starts at slot 0 alone, so lanes 1+ — whose
-  // resume entries survived on disk — would have no tab to reach them from and
-  // their conversations would be stranded despite still being there. The
-  // listing is non-consuming, like the peeks: a recreated lane simply lands on
-  // its own "Resume assistant" empty state, and nothing launches (or bills)
-  // until the user asks. Background lanes report `isOpen: false` to their
-  // controller, so auto-launch can't fire behind the tab strip either.
-  //
-  // One-shot per workspace, and only while the view is genuinely cold — a
-  // single, unbound lane — so it can never fight the user's own tab edits.
-  const restoredLaneWorkspaceRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (!activeWorkspaceId || restoredLaneWorkspaceRef.current === activeWorkspaceId) return;
-    if (openSlots.length > 1 || terminalId) return;
-    // Optional-chained like the hibernation peeks: a missing binding degrades
-    // to the pre-lane behaviour rather than throwing.
-    const listing = window.electron.help.listPendingHibernationSlots?.(activeWorkspaceId);
-    if (!listing) return;
-    let cancelled = false;
-    void listing
-      .then((slots) => {
-        if (cancelled || restoredLaneWorkspaceRef.current === activeWorkspaceId) return;
-        restoredLaneWorkspaceRef.current = activeWorkspaceId;
-        const store = useHelpPanelStore.getState();
-        for (const slot of slots) store.ensureSlot(slot);
-      })
-      .catch((err) => {
-        logWarn("HelpPanel: failed to list pending hibernation lanes", err);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [activeWorkspaceId, openSlots.length, terminalId]);
-
-  const handleOpenParallelSession = useCallback(() => {
-    const slot = useHelpPanelStore.getState().openSlot();
-    if (slot === null) return;
-    useHelpPanelStore.getState().setOpen(true);
-    useHelpPanelStore.getState().requestFocus();
-  }, []);
-
-  // One session on a named agent (#13442); the default stays where it is.
-  const handleOpenSessionWithAgent = useCallback((pickedAgentId: string) => {
-    void actionService.dispatch(
-      "help.newSessionWithAgent",
-      { agentId: pickedAgentId },
-      { source: "user" }
-    );
-  }, []);
-
-  const handleSelectSlot = useCallback((slot: number) => {
-    useHelpPanelStore.getState().setActiveSlot(slot);
-    // A lane's xterm was hidden while it was in the background, so it has no
-    // trustworthy geometry until it is measured on screen. `requestFocus`
-    // drives HelpPanel's existing reveal path, which fits and repaints before
-    // handing it the caret — the same treatment a panel reveal gets.
-    useHelpPanelStore.getState().requestFocus();
-  }, []);
-
-  const closeSlotNow = useCallback(
-    (slot: number) => {
-      const state = useHelpPanelStore.getState();
-      const lane = state.sessions[slot];
-      // Revoke and kill BEFORE dropping the lane. `stop()` only disarms
-      // listeners — it deliberately does not end the session — so releasing the
-      // controller first would strand a live agent with nothing to shut it down.
-      if (lane?.terminalId || lane?.sessionId) {
-        // Whether the panel slides out is the controller's call, made in one
-        // place for every stop path: it stays on screen while any other lane is
-        // open, and closes only for the last one — where the close is
-        // load-bearing, because `closeSlot` recreates an empty slot 0 whose fresh
-        // controller would auto-launch straight back into a session the user just
-        // ended if the panel stayed open.
-        acquireHelpSessionController(slot).endSession();
-      } else if (activeWorkspaceId) {
-        // A dormant tab — one restored for a conversation nothing has resumed
-        // yet — has no session to end, but closing it is still the user
-        // discarding that conversation, so both of its pointers must go too:
-        // main's, and the renderer's own hibernate mirror, which a later launch
-        // into the reused slot would otherwise resume (#13205).
-        state.clearHibernateSession(activeWorkspaceId, slot);
-        const discarded = window.electron.help.discardConversation?.(activeWorkspaceId, slot);
-        if (discarded) safeFireAndForget(discarded, { context: "HelpPanel.closeSlot discard" });
-      }
-      // An unbound last lane — dormant, or closed mid-launch before anything
-      // bound — never reaches `endSession`'s slide-out, but the recreated slot 0
-      // still gets a fresh controller that would auto-launch into the open panel.
-      if (!selectOpenSlots(state).some((open) => open !== slot)) state.setOpen(false);
-      releaseHelpSessionController(slot);
-      state.closeSlot(slot);
-    },
-    [activeWorkspaceId]
-  );
-
-  // Same "something to lose" gate the Stop control uses, but evaluated against
-  // the lane BEING CLOSED OR RESTARTED rather than the one on screen — a
-  // background lane is exactly where a working agent goes unnoticed. Both
-  // discard the lane's conversation, so both take this one gate.
-  const laneNeedsDiscardConfirm = useCallback((slot: number) => {
-    const lane = selectSlot(useHelpPanelStore.getState(), slot);
-    if (lane.conversationTouched) return true;
-    if (!lane.terminalId) return false;
-    const panel = usePanelStore.getState().panelsById[lane.terminalId];
-    const agentState = panel && isPtyPanel(panel) ? panel.agentState : undefined;
-    return agentState !== undefined && CLOSE_CONFIRM_AGENT_STATES.has(agentState);
-  }, []);
-
-  const handleCloseSlot = useCallback(
-    (slot: number) => {
-      if (laneNeedsDiscardConfirm(slot)) {
-        const index = sessionTabs.findIndex((tab) => tab.slot === slot);
-        const successor =
-          slot === activeSlot
-            ? null
-            : (sessionTabs[index + 1]?.slot ?? sessionTabs[index - 1]?.slot ?? null);
-        setPendingCloseSuccessor(successor);
-        setPendingCloseSlot(slot);
-        return;
-      }
-      closeSlotNow(slot);
-    },
-    [laneNeedsDiscardConfirm, closeSlotNow, sessionTabs, activeSlot]
-  );
-
-  const handleConfirmCloseSlot = useCallback(() => {
-    const slot = pendingCloseSlot;
-    setPendingCloseSlot(null);
-    if (slot !== null) closeSlotNow(slot);
-  }, [pendingCloseSlot, closeSlotNow]);
-
-  const handleCancelCloseSlot = useCallback(() => {
-    setPendingCloseSlot(null);
-  }, []);
-
-  // A task title is free text, so it is quoted the way every confirm quotes the entity
-  // it names, and given whole: two tasks that share an opening would otherwise ask
-  // the same question. `Session N` is already a name and reads wrong in quotes.
-  const pendingCloseTab =
-    pendingCloseSlot === null
-      ? undefined
-      : sessionTabs.find((tab) => tab.slot === pendingCloseSlot);
-  const pendingCloseLabel = !pendingCloseTab
-    ? "this session"
-    : pendingCloseTab.fullTitle !== undefined
-      ? `'${pendingCloseTab.fullTitle}'`
-      : pendingCloseTab.label;
-
-  // Read at call time rather than from the render that offered the item: a
-  // confirm can outlive its lane, and acquiring a controller for a closed slot
-  // would mint one with nothing to run.
-  const restartSlotNow = useCallback((slot: number) => {
-    const lane = selectSlot(useHelpPanelStore.getState(), slot);
-    if (!lane.terminalId || !lane.agentId) return;
-    acquireHelpSessionController(slot).newSession();
-  }, []);
-
-  const handleRestartSlot = useCallback(
-    (slot: number) => {
-      const lane = selectSlot(useHelpPanelStore.getState(), slot);
-      if (!lane.terminalId || !lane.agentId) return;
-      if (laneNeedsDiscardConfirm(slot)) {
-        restartFocusSlotRef.current = slot;
-        setPendingRestartSlot(slot);
-        return;
-      }
-      restartSlotNow(slot);
-    },
-    [laneNeedsDiscardConfirm, restartSlotNow]
-  );
-
-  // The header's overflow item and the revoked-session banner act on the lane on screen.
-  const handleRestartActiveSlot = useCallback(
-    () => handleRestartSlot(activeSlot),
-    [handleRestartSlot, activeSlot]
-  );
-
-  const handleConfirmRestartSlot = useCallback(() => {
-    const slot = pendingRestartSlot;
-    setPendingRestartSlot(null);
-    if (slot !== null) restartSlotNow(slot);
-  }, [pendingRestartSlot, restartSlotNow]);
-
-  const handleCancelRestartSlot = useCallback(() => {
-    setPendingRestartSlot(null);
-  }, []);
+  const {
+    tabIdBase,
+    sessionBodyId,
+    openSlots,
+    canOpenParallelSession,
+    canStartSessionWithAgent,
+    sessionTabs,
+    handleOpenParallelSession,
+    handleOpenSessionWithAgent,
+    handleSelectSlot,
+    handleCloseSlot,
+    handleRestartSlot,
+    handleRestartActiveSlot,
+    pendingRestartSlot,
+    handleConfirmRestartSlot,
+    handleCancelRestartSlot,
+    resolveRestartFocusTarget,
+    pendingCloseSlot,
+    pendingCloseLabel,
+    handleConfirmCloseSlot,
+    handleCancelCloseSlot,
+    resolveCloseFocusTarget,
+  } = useHelpSessionLanes({ panelRef, activeSlot, activeWorkspaceId, terminalId });
 
   // Stop reuses the same "something to lose" gate as +New session — confirm
   // only when a working agent or an engaged conversation would be discarded.
@@ -2030,13 +1416,7 @@ export function HelpPanel({
         variant="destructive"
         // Used only when the opener cannot take focus back: the overflow trigger
         // still can, a tab menu's item cannot.
-        restoreFocusTo={() =>
-          restartFocusSlotRef.current === null
-            ? null
-            : (panelRef.current?.querySelector<HTMLElement>(
-                `[role="tab"][data-slot="${restartFocusSlotRef.current}"]`
-              ) ?? null)
-        }
+        restoreFocusTo={resolveRestartFocusTarget}
       />
       <ConfirmDialog
         isOpen={showEndSessionConfirm}
@@ -2059,19 +1439,7 @@ export function HelpPanel({
         // closed lane's neighbour, or the newly selected lane when the selected one
         // was closed — the same rule the strip's own Delete handoff follows. On
         // cancel the trigger still exists and the dialog restores to it directly.
-        restoreFocusTo={() => {
-          const panel = panelRef.current;
-          if (!panel) return null;
-          const successor =
-            pendingCloseSuccessor === null
-              ? null
-              : panel.querySelector<HTMLElement>(
-                  `[role="tab"][data-slot="${pendingCloseSuccessor}"]`
-                );
-          return (
-            successor ?? panel.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
-          );
-        }}
+        restoreFocusTo={resolveCloseFocusTarget}
       />
       <ConfirmDialog
         isOpen={showAgentSwitchConfirm}
