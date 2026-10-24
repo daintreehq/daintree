@@ -2067,10 +2067,11 @@ describe("SidebarContent Virtuoso reset wiring — issue #12094", () => {
 });
 
 describe("SidebarContent clock reads under React Compiler (#14351)", () => {
-  // Vitest does not run the compiler, so these are the guard: compiled, a bare
-  // `Date.now()` is cached with whichever memo block reads it, and a check
-  // that only ages (reconnect escalation, the stalled-reconnect Retry, the main
-  // row's activity window) would keep its first answer.
+  // Compiled, a bare `Date.now()` is cached with whichever memo block reads it,
+  // so a check that only ages (reconnect escalation, the stalled-reconnect
+  // Retry, the main row's activity window) would keep its first answer. Vitest
+  // runs uncompiled and cannot see that caching; these pin the shape that keeps
+  // the clock a dependency once compiled.
   it.each([
     ["SidebarContent", SIDEBAR_CONTENT_PATH],
     ["the row model hook", MODEL_HOOK_PATH],
