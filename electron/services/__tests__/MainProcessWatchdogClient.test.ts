@@ -7,6 +7,7 @@ const shared = vi.hoisted(() => {
   const appEmitter = new EventEmitter();
   const appMock = Object.assign(appEmitter, {
     getPath: vi.fn().mockReturnValue("/mock/user/data"),
+    getAppMetrics: vi.fn(() => [] as Electron.ProcessMetric[]),
   });
   return {
     forkMock: vi.fn(),
@@ -177,6 +178,64 @@ describe("MainProcessWatchdogClient", () => {
       pressure.recordWatchdogMemoryPressure(false);
       client.resume();
       expect(pingPressure()).toEqual([true, false]);
+    });
+  });
+
+  describe("external pressure on pings (#14367)", () => {
+    const pingExternal = () =>
+      mockChild.postMessage.mock.calls
+        .map(([msg]) => msg as { type?: string; externalPressure?: boolean })
+        .filter((msg) => msg.type === "ping")
+        .map((msg) => msg.externalPressure);
+
+    afterEach(async () => {
+      const swap = await import("../systemSwapPressure.js");
+      swap.recordSwapPressure(false);
+      const snapshot = await import("../../utils/appMetricsSnapshot.js");
+      snapshot.resetAppMetricsSnapshotForTesting();
+    });
+
+    it("says false until swap pressure is confirmed, and without a cached sweep never sweeps", async () => {
+      const swap = await import("../systemSwapPressure.js");
+      new WatchdogClient({ mainPid: 1 });
+      expect(pingExternal()).toEqual([false]);
+
+      swap.recordSwapPressure(true);
+      vi.advanceTimersByTime(5000);
+      expect(pingExternal().at(-1)).toBe(false);
+      expect(shared.appMock.getAppMetrics).not.toHaveBeenCalled();
+    });
+
+    it("weighs Daintree's footprint from the last sweep against physical memory", async () => {
+      const swap = await import("../systemSwapPressure.js");
+      const snapshot = await import("../../utils/appMetricsSnapshot.js");
+      const processMemory = await import("../../utils/processMemory.js");
+      const os = await import("node:os");
+      let footprintBytes = 512 * 1024 * 1024;
+      processMemory.setPhysFootprintReaderForTesting({
+        readPhysFootprints: (pids) => pids.map(() => footprintBytes),
+        isAvailable: () => true,
+        getLoadError: () => null,
+      });
+      shared.appMock.getAppMetrics.mockReturnValue([
+        { pid: 10, type: "Browser", memory: { workingSetSize: 1024 } } as Electron.ProcessMetric,
+      ]);
+      try {
+        snapshot.refreshAppMetricsSnapshot();
+        swap.recordSwapPressure(true);
+        new WatchdogClient({ mainPid: 1 });
+        expect(pingExternal()).toEqual([true]);
+        expect(shared.appMock.getAppMetrics).toHaveBeenCalledTimes(1);
+
+        footprintBytes = os.totalmem();
+        snapshot.refreshAppMetricsSnapshot();
+        vi.advanceTimersByTime(5000);
+        expect(pingExternal().at(-1)).toBe(false);
+      } finally {
+        processMemory.resetPhysFootprintReaderForTesting();
+        shared.appMock.getAppMetrics.mockReset();
+        shared.appMock.getAppMetrics.mockReturnValue([]);
+      }
     });
   });
 

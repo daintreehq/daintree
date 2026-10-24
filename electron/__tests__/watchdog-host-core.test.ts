@@ -10,9 +10,19 @@ import {
   LOW_AVAILABLE_MEMORY_RATIO,
   MAX_MISSED,
   MAX_MISSED_UNDER_PRESSURE,
+  MAX_NO_PROGRESS_UNDER_EXTERNAL_PRESSURE,
   STALL_EVIDENCE_MS,
   WATCHDOG_KILL_FLAG_NAME,
+  type WatchdogKillDecision,
 } from "../watchdog-host-core.js";
+
+const decision = (overrides: Partial<WatchdogKillDecision> = {}): WatchdogKillDecision => ({
+  reason: "unresponsive",
+  missedBeats: MAX_MISSED,
+  beatsSinceProgress: MAX_MISSED,
+  pressureEvidence: null,
+  ...overrides,
+});
 
 describe("parseMainPid", () => {
   it("extracts a valid pid from --main-pid=<pid>", () => {
@@ -719,6 +729,156 @@ describe("createWatchdog", () => {
   });
 });
 
+describe("external memory pressure (#14367)", () => {
+  function makeWatchdog() {
+    const killMain = vi.fn<(d: WatchdogKillDecision) => void>();
+    const logs: string[] = [];
+    let now = 1000;
+    let changed = false;
+    const mainProgress = {
+      observe: vi.fn(() => {
+        const result = changed;
+        changed = false;
+        return result;
+      }),
+      reset: vi.fn(),
+    };
+    const wd = createWatchdog({
+      killMain,
+      logError: (msg) => logs.push(msg),
+      now: () => now,
+      mainProgress,
+    });
+    const ticks = (count: number) => {
+      for (let i = 0; i < count; i++) {
+        now += HEARTBEAT_INTERVAL_MS;
+        wd.tick();
+      }
+    };
+    return { wd, killMain, logs, ticks, mainProgress, write: () => (changed = true) };
+  }
+
+  it("outlasts the pressure grace and kills only after the no-progress deadline", () => {
+    const { wd, killMain, logs, ticks } = makeWatchdog();
+    wd.handleMessage({ type: "ping", memoryPressure: true, externalPressure: true });
+
+    ticks(MAX_NO_PROGRESS_UNDER_EXTERNAL_PRESSURE - 1);
+    expect(MAX_NO_PROGRESS_UNDER_EXTERNAL_PRESSURE).toBeGreaterThan(MAX_MISSED_UNDER_PRESSURE);
+    expect(killMain).not.toHaveBeenCalled();
+    expect(logs.filter((l) => l.includes("Deferring kill"))).toHaveLength(1);
+
+    ticks(1);
+    expect(killMain).toHaveBeenCalledTimes(1);
+    expect(killMain.mock.calls[0]![0]).toEqual({
+      reason: "no-progress-under-external-pressure",
+      missedBeats: MAX_NO_PROGRESS_UNDER_EXTERNAL_PRESSURE,
+      beatsSinceProgress: MAX_NO_PROGRESS_UNDER_EXTERNAL_PRESSURE,
+      pressureEvidence: expect.stringContaining("Daintree's own processes don't account for"),
+    });
+  });
+
+  it("restarts the no-progress count on each write by main, without forgiving missed pings", () => {
+    const { wd, killMain, ticks, write } = makeWatchdog();
+    wd.handleMessage({ type: "ping", memoryPressure: true, externalPressure: true });
+
+    // A minute-cadence write keeps a silent main alive far past ten minutes.
+    for (let i = 0; i < 20; i++) {
+      ticks(11);
+      write();
+      ticks(1);
+      expect(wd.state.beatsSinceProgress).toBe(0);
+    }
+    expect(wd.state.missedBeats).toBe(240);
+    expect(killMain).not.toHaveBeenCalled();
+
+    ticks(MAX_NO_PROGRESS_UNDER_EXTERNAL_PRESSURE - 1);
+    expect(killMain).not.toHaveBeenCalled();
+    ticks(1);
+    expect(killMain).toHaveBeenCalledTimes(1);
+    expect(killMain.mock.calls[0]![0].missedBeats).toBe(240 + MAX_NO_PROGRESS_UNDER_EXTERNAL_PRESSURE);
+  });
+
+  it("ignores main's files when the pressure isn't external", () => {
+    const { wd, killMain, ticks, write, mainProgress } = makeWatchdog();
+    wd.handleMessage({ type: "ping", memoryPressure: true });
+
+    ticks(MAX_MISSED_UNDER_PRESSURE - 1);
+    write();
+    ticks(1);
+    expect(mainProgress.observe).not.toHaveBeenCalled();
+    expect(killMain).toHaveBeenCalledTimes(1);
+    expect(killMain.mock.calls[0]![0]).toMatchObject({
+      reason: "unresponsive-under-pressure",
+      pressureEvidence: "main reported memory pressure",
+    });
+  });
+
+  it("still kills a silent main on the normal deadline with no pressure at all", () => {
+    const { wd, killMain, ticks } = makeWatchdog();
+    wd.handleMessage({ type: "ping", memoryPressure: false, externalPressure: false });
+    ticks(MAX_MISSED);
+    expect(killMain.mock.calls[0]![0]).toEqual({
+      reason: "unresponsive",
+      missedBeats: MAX_MISSED,
+      beatsSinceProgress: MAX_MISSED,
+      pressureEvidence: null,
+    });
+  });
+
+  it("reads only a literal true as external pressure", () => {
+    const { wd, ticks, killMain } = makeWatchdog();
+    wd.handleMessage({
+      type: "ping",
+      memoryPressure: false,
+      externalPressure: "yes" as unknown as boolean,
+    });
+    expect(wd.state.mainExternalPressure).toBe(false);
+    ticks(MAX_MISSED);
+    expect(killMain).toHaveBeenCalledTimes(1);
+  });
+
+  it("takes the next ping's verdict, and drops the file baseline on every ping, sleep and wake", () => {
+    const { wd, killMain, ticks, mainProgress } = makeWatchdog();
+    wd.handleMessage({ type: "ping", memoryPressure: true, externalPressure: true });
+    expect(mainProgress.reset).toHaveBeenCalledTimes(1);
+    ticks(MAX_MISSED_UNDER_PRESSURE + 5);
+    wd.handleMessage({ type: "ping", memoryPressure: true, externalPressure: false });
+    expect(wd.state.beatsSinceProgress).toBe(0);
+    wd.handleMessage({ type: "sleep" });
+    wd.handleMessage({ type: "wake" });
+    expect(mainProgress.reset).toHaveBeenCalledTimes(4);
+
+    wd.handleMessage({ type: "ping", memoryPressure: true, externalPressure: false });
+    ticks(MAX_MISSED_UNDER_PRESSURE);
+    expect(killMain).toHaveBeenCalledTimes(1);
+    expect(killMain.mock.calls[0]![0].reason).toBe("unresponsive-under-pressure");
+  });
+
+  it("treats an observer that throws as no progress", () => {
+    const killMain = vi.fn();
+    let now = 0;
+    const wd = createWatchdog({
+      killMain,
+      logError: () => {},
+      now: () => now,
+      mainProgress: {
+        observe: () => {
+          throw new Error("EIO");
+        },
+        reset: () => {
+          throw new Error("EIO");
+        },
+      },
+    });
+    wd.handleMessage({ type: "ping", memoryPressure: true, externalPressure: true });
+    for (let i = 0; i < MAX_NO_PROGRESS_UNDER_EXTERNAL_PRESSURE; i++) {
+      now += HEARTBEAT_INTERVAL_MS;
+      wd.tick();
+    }
+    expect(killMain).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("availableMemoryRatio", () => {
   const GB = 1024 ** 3;
 
@@ -743,12 +903,23 @@ describe("availableMemoryRatio", () => {
 });
 
 describe("buildWatchdogKillPayload", () => {
-  it("captures missedBeats and mainPid plus a fresh killedAt timestamp", () => {
+  it("captures the decision and mainPid plus a fresh killedAt timestamp", () => {
     const before = Date.now();
-    const payload = buildWatchdogKillPayload(MAX_MISSED, 4242);
+    const payload = buildWatchdogKillPayload(
+      decision({
+        reason: "no-progress-under-external-pressure",
+        missedBeats: 130,
+        beatsSinceProgress: 120,
+        pressureEvidence: "main reported memory pressure",
+      }),
+      4242
+    );
     const after = Date.now();
 
-    expect(payload.missedBeats).toBe(MAX_MISSED);
+    expect(payload.missedBeats).toBe(130);
+    expect(payload.beatsSinceProgress).toBe(120);
+    expect(payload.reason).toBe("no-progress-under-external-pressure");
+    expect(payload.pressureEvidence).toBe("main reported memory pressure");
     expect(payload.mainPid).toBe(4242);
     expect(payload.killedAt).toBeGreaterThanOrEqual(before);
     expect(payload.killedAt).toBeLessThanOrEqual(after);
@@ -770,19 +941,20 @@ describe("writeWatchdogKillFlag", () => {
 
   it("writes the flag at <userData>/watchdog-kill.flag with the expected payload", () => {
     const { deps, writes } = makeDeps();
-    const ok = writeWatchdogKillFlag("/fake/userData", MAX_MISSED, 4242, deps);
+    const ok = writeWatchdogKillFlag("/fake/userData", decision(), 4242, deps);
     expect(ok).toBe(true);
     expect(writes).toHaveLength(1);
     expect(writes[0].path).toBe(`/fake/userData/${WATCHDOG_KILL_FLAG_NAME}`);
     const parsed = JSON.parse(writes[0].data);
     expect(parsed.missedBeats).toBe(MAX_MISSED);
+    expect(parsed.reason).toBe("unresponsive");
     expect(parsed.mainPid).toBe(4242);
     expect(typeof parsed.killedAt).toBe("number");
   });
 
   it("returns false and writes nothing when userData is null (env missing)", () => {
     const { deps, writes } = makeDeps();
-    const ok = writeWatchdogKillFlag(null, 3, 4242, deps);
+    const ok = writeWatchdogKillFlag(null, decision(), 4242, deps);
     expect(ok).toBe(false);
     expect(writes).toHaveLength(0);
     expect(deps.writeFileSync).not.toHaveBeenCalled();
@@ -792,7 +964,7 @@ describe("writeWatchdogKillFlag", () => {
     const { deps } = makeDeps({ throwOnWrite: true });
     // The contract is: writeWatchdogKillFlag must never propagate. The caller
     // immediately fires SIGKILL after this returns.
-    const ok = writeWatchdogKillFlag("/fake/userData", 3, 4242, deps);
+    const ok = writeWatchdogKillFlag("/fake/userData", decision(), 4242, deps);
     expect(ok).toBe(false);
     expect(deps.writeFileSync).toHaveBeenCalledTimes(1);
   });
