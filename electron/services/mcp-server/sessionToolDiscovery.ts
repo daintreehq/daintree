@@ -12,14 +12,17 @@ import {
   buildToolOutputSchema,
 } from "./tierAuth.js";
 import type { SessionContext } from "./sessionContext.js";
+import type { SessionServerDeps } from "./sessionServerDeps.js";
 import { routeBindingMcpError, sessionGoneError } from "./sessionRouteErrors.js";
 
 export type ResolveManifest = (
   label: string
 ) => Promise<import("../../../shared/types/actions.js").ActionManifestEntry[]>;
 
-export function createManifestResolver(session: SessionContext): ResolveManifest {
-  const { getCachedManifest, requestManifest } = session.deps;
+export function createManifestResolver(
+  deps: Pick<SessionServerDeps, "getCachedManifest" | "requestManifest">
+): ResolveManifest {
+  const { getCachedManifest, requestManifest } = deps;
 
   /**
    * The action manifest this session's tool surface is built from.
@@ -97,9 +100,10 @@ export function createManifestResolver(session: SessionContext): ResolveManifest
 export function registerListToolsHandler(
   server: Server,
   session: SessionContext,
+  deps: Pick<SessionServerDeps, "sessionStore" | "noteToolListRoute">,
   resolveManifest: ResolveManifest
 ): void {
-  const { sessionId, deps, sessionSurface, isGlobalSession, hostCallOffered, assistantCallerNow } =
+  const { sessionId, sessionSurface, isGlobalSession, hostCallOffered, assistantCallerNow } =
     session;
   const { sessionStore } = deps;
 
