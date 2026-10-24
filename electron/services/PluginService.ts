@@ -29,7 +29,6 @@ interface AjvInstance {
 }
 
 import {
-  DEPRECATED_CONTRIBUTION_ALIASES,
   describeManifestIssues,
   getPluginManifestSchema,
   isBuiltInActionId,
@@ -159,10 +158,8 @@ import {
   ProjectPluginController,
   type ProjectPluginControllerDeps,
 } from "./plugin/ProjectPluginController.js";
-import {
-  applicationPreflightKey,
-  preflightProjectApplication,
-} from "./plugin/projectApplicationPreflight.js";
+import { preflightProjectApplication } from "./plugin/projectApplicationPreflight.js";
+import { readPluginManifestForLoad } from "./plugin/pluginManifestLoad.js";
 import { discoverProjectPlugins } from "./plugin/projectPluginDiscovery.js";
 import { ProjectPluginWatcher } from "./plugin/ProjectPluginWatcher.js";
 import { PluginDevArtifactWatcher } from "./plugin/PluginDevArtifactWatcher.js";
@@ -435,7 +432,6 @@ import {
   type InvokePromptMark,
 } from "./plugin/PluginMetricsService.js";
 import { markPerformance } from "../utils/performance.js";
-import { deepFreeze } from "../utils/deepFreeze.js";
 import { CHANNELS } from "../ipc/channels.js";
 import type {
   LoadedPluginInfo,
@@ -2385,146 +2381,36 @@ export class PluginService {
     const isProject = origin === "project";
     const isUserInstalled = origin === "user";
     const pluginDir = path.join(root, dirName);
-    const manifestPath = path.join(pluginDir, "plugin.json");
-
-    let content: string;
-    try {
-      content = await fs.readFile(manifestPath, "utf-8");
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-        console.warn(`[PluginService] No plugin.json in ${dirName}, skipping`);
-        return null;
-      }
-      console.error(`[PluginService] Failed to read ${manifestPath}:`, err);
-      return null;
-    }
-
-    let json: unknown;
-    try {
-      json = JSON.parse(stripUtf8Bom(content));
-    } catch {
-      console.error(`[PluginService] Invalid JSON in ${manifestPath}`);
-      return null;
-    }
-
-    const { result: parseResult, droppedTourIssues } = parsePluginManifestForLoad(
-      opts.installedInstance ? "user" : origin,
-      json
-    );
-    if (droppedTourIssues.length > 0) {
-      console.warn(
-        `[PluginService] Skipping malformed contributes.tours entries in ${dirName}:`,
-        droppedTourIssues
-      );
-    }
-    if (!parseResult.success) {
-      const namespaceIssue = parseResult.error.issues.find(
-        (i) =>
-          i.code === "custom" &&
-          (i as unknown as { params?: { errorCode?: string } }).params?.errorCode ===
-            "namespace_reserved"
-      );
-      if (namespaceIssue) {
-        const inferredName = (json as Record<string, unknown>)?.name;
+    const prepared = await readPluginManifestForLoad(pluginDir, dirName, {
+      isBuiltin: opts.isBuiltin,
+      origin,
+      instanceKey: opts.instanceKey,
+      checkedManifest: opts.checkedManifest,
+      installedInstance: opts.installedInstance,
+    });
+    if (!prepared.ok) {
+      const { refusal } = prepared;
+      if (refusal?.reason === "reserved-namespace") {
         broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
           type: "error",
           title: "Plugin uses a reserved namespace",
-          message: `Plugin "${String(inferredName ?? dirName)}" uses the reserved "daintree.*" namespace, which is restricted to first-party plugins.`,
+          message: `Plugin "${refusal.pluginName}" uses the reserved "daintree.*" namespace, which is restricted to first-party plugins.`,
         });
-        if (isUserInstalled) {
-          this.records.upsertInstalledRecord(String(inferredName ?? dirName), {
-            loadError: { message: namespaceIssue.message, at: Date.now() },
-          });
-        }
       }
-      console.error(`[PluginService] Invalid manifest in ${dirName}:`, parseResult.error.issues);
+      if (refusal && isUserInstalled) {
+        this.records.upsertInstalledRecord(refusal.pluginName, {
+          loadError: { message: refusal.message, at: Date.now() },
+        });
+      }
       return null;
     }
-
-    const manifest = parseResult.data;
-    if (opts.installedInstance && manifest.instanceMode !== "project") {
-      console.error(
-        `[PluginService] ${dirName} was loaded as a project instance but does not declare instanceMode "project" — refusing to load`
-      );
-      return null;
-    }
+    const manifest = prepared.manifest;
     // The registry key for this instance. Identical to the manifest id for
     // installed and builtin plugins, so every existing key, path and id is
     // byte-for-byte what it was; distinct for a project plugin, which is what
     // keeps two projects' copies of the same id from sharing anything.
     const pluginId = opts.instanceKey ?? manifest.name;
     const binding = opts.binding ?? UNBOUND_PLUGIN_HOST_BINDING;
-
-    // A slot-backed `contributes.fileEditors` entry is built-in only (#12323):
-    // the slot resolves through the builtin view registry compiled into the
-    // host bundle, which an installed plugin's renderer never reaches, so
-    // accepting it would advertise an Edit mode that mounts nothing. The
-    // manifest schema refuses it too; this is the load-time backstop. A
-    // view-backed entry mounts the plugin's own view and is open to every
-    // origin (#13809).
-    if (!opts.isBuiltin && manifest.contributes.fileEditors.some((e) => e.slot !== undefined)) {
-      const message =
-        'contributes.fileEditors[].slot is only available to built-in plugins — the editor slot resolves through the host-bundled builtin view registry, which an installed plugin\'s renderer cannot register into. Use "view" instead.';
-      console.error(`[PluginService] Invalid manifest in ${dirName}: ${message}`);
-      if (isUserInstalled) {
-        this.records.upsertInstalledRecord(manifest.name, {
-          loadError: { message, at: Date.now() },
-        });
-      }
-      return null;
-    }
-
-    // Discovery validated one manifest; this is a second read of the same file.
-    // A rewrite in between — a rebase, an agent edit, a hostile swap — could
-    // hand a DIFFERENT plugin the identity the user already knows and trusts.
-    // Refuse rather than let a renamed manifest inherit a staged-or-known id.
-    if (opts.instanceKey !== undefined) {
-      const expected = parseProjectPluginInstanceKey(opts.instanceKey)?.manifestId;
-      if (expected !== manifest.name) {
-        console.error(
-          `[PluginService] Project plugin in ${dirName} declares "${manifest.name}" but was discovered as "${String(expected)}" — refusing to load`
-        );
-        return null;
-      }
-    }
-    // The same second read, for an application: a payload its preflight never
-    // saw does not register, so nothing of it is published to be taken back.
-    // Either side declaring one counts, so a rewrite that adds `application`
-    // is caught as well as one that changes it.
-    const checked = opts.checkedManifest;
-    if (
-      checked !== undefined &&
-      (checked.application !== undefined || manifest.application !== undefined) &&
-      applicationPreflightKey(manifest) !== applicationPreflightKey(checked)
-    ) {
-      console.warn(
-        `[PluginService] Project application in ${dirName} changed on disk while it was being checked (${checked.version} checked, ${manifest.version} found) — not loading it`
-      );
-      return null;
-    }
-    // Manifest-immutability invariant: the parsed manifest is stored on
-    // LoadedPlugin.manifest and read across the whole PluginService lifecycle
-    // (capability checks, contribution loops, host closures). Deep-freeze it so
-    // an accidental in-place mutation of a declared contribution can't poison the
-    // shared record. DEV-only (see deepFreeze) — the Readonly<PluginManifest>
-    // type below is the compile-time half of the same invariant.
-    deepFreeze(manifest);
-
-    // Deprecation surface for the 1.0 freeze: the schema migrates the old
-    // `experimental_*` contribution keys to their stable names before
-    // validation, so warn (once per alias) when an old manifest is still using
-    // them. Inspect the raw JSON because the migrated `manifest` no longer
-    // carries the deprecated keys.
-    const rawContributes = (json as { contributes?: Record<string, unknown> } | null)?.contributes;
-    if (rawContributes && typeof rawContributes === "object") {
-      for (const [deprecated, canonical] of Object.entries(DEPRECATED_CONTRIBUTION_ALIASES)) {
-        if (deprecated in rawContributes) {
-          console.warn(
-            `[PluginService] Plugin "${manifest.name}": contributes.${deprecated} is deprecated — rename it to contributes.${canonical}`
-          );
-        }
-      }
-    }
 
     // Kill-switch: refuse to load any plugin whose name + version matches the
     // remote blocklist (#10891). Checked before the disabled gate so a plugin
