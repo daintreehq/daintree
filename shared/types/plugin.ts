@@ -49,197 +49,102 @@ import type {
   PluginServicesContribution,
 } from "./pluginServices.js";
 import type { z } from "zod";
-
-/** Default byte ceiling when a `contributes.fileEditors` entry omits `maxBytes`. */
-export const DEFAULT_FILE_EDITOR_MAX_BYTES = 2 * 1024 * 1024;
-
-/**
- * One `contributes.fileEditors` entry (#12323, #13809): an editor the host
- * file panel offers for matching files. Exactly one of `slot` / `view`.
- *
- * A **view-backed** editor names one of the plugin's own `location:
- * "fileEditor"` views. `mode: "edit"` fills the file panel's Edit mode;
- * `mode: "view"` fills Rendered for a type the host cannot render itself. The
- * view receives a host-owned document as {@link PanelViewProps.fileDocument}.
- * Any plugin may declare one; the mode is labelled with the plugin's name, and
- * when several editors match the user picks with "Edit with…", remembered per
- * project.
- *
- * A **slot-backed** editor names a builtin view id the plugin's renderer entry
- * registers with `registerBuiltinView`. Built-in plugins only: that registry
- * is compiled into the host bundle, which no other plugin's renderer reaches.
- *
- * Matching is by `extensions` and, for a `"scope": "project"` plugin only, by
- * `paths` — globs relative to the project or worktree root.
- */
-export interface FileEditorContribution {
-  /** Namespaced at runtime as `{pluginId}.{id}`. */
-  id: string;
-  /** Builtin view id the plugin's renderer registers for the editor surface. Built-in plugins only. */
-  slot?: string;
-  /** Id of one of this plugin's `location: "fileEditor"` views. */
-  view?: string;
-  /** What a view-backed editor fills: the Edit mode, or Rendered for a type the host can't render. */
-  mode?: FileEditorMode;
-  /** Lower-case extensions without the dot (`["md", "markdown"]`), matched case-insensitively. */
-  extensions?: string[];
-  /** Project-relative globs, such as `content/entries/*.json`. Project plugins only. */
-  paths?: string[];
-  /**
-   * Make this editor what a file matching one of `paths` opens in (#13811):
-   * each pattern becomes a file editor slot in the project, arbitrated, asked
-   * about and reset like any other slot. A project plugin's `mode: "edit"`
-   * editor only, and never by extension — Source stays in the mode toggle.
-   */
-  default?: boolean;
-  /** Largest file the editor accepts, in bytes. Absent means the host's default cap. */
-  maxBytes?: number;
-}
-
-/** Which file panel mode a view-backed file editor fills. */
-export type FileEditorMode = "edit" | "view";
-
-/**
- * What an "Edit with…" answer is about (#13809): a mode and the file's
- * lower-case extension, or `*` for a file without one — `edit:csv`,
- * `view:*`. Remembered per project in Daintree's own settings.
- */
-export type FileEditorChoiceKey = `${FileEditorMode}:${string}`;
-
-/**
- * The editor an "Edit with…" answer picked: `"host"` for the host's own
- * (the built-in editor, or the host renderer for Rendered), else the plugin
- * editor's {@link fileEditorChoiceId}.
- */
-export type FileEditorChoice = string;
-
-/** One project's "Edit with…" answers. */
-export type FileEditorChoices = Readonly<Record<FileEditorChoiceKey, FileEditorChoice>>;
-
-/** The host's own editor or renderer, as an "Edit with…" answer. */
-export const HOST_FILE_EDITOR_CHOICE = "host";
-
-const FILE_EDITOR_CHOICE_KEY_PATTERN = /^(edit|view):([a-z0-9]{1,16}|\*)$/;
-
-export function isFileEditorChoiceKey(value: unknown): value is FileEditorChoiceKey {
-  return typeof value === "string" && FILE_EDITOR_CHOICE_KEY_PATTERN.test(value);
-}
-
-/**
- * A plugin file editor's stable identity as an answer: the plugin's runtime
- * instance key and the editor's bare id, so a project plugin and an installed
- * plugin sharing a manifest id stay distinct.
- */
-export function fileEditorChoiceId(pluginId: string, editorId: string): FileEditorChoice {
-  return `${pluginId}/${editorId}`;
-}
-
-export function isFileEditorChoice(value: unknown): value is FileEditorChoice {
-  return (
-    typeof value === "string" &&
-    value.length > 0 &&
-    value.length <= 512 &&
-    (value === HOST_FILE_EDITOR_CHOICE || /^[^/\0]+\/[a-zA-Z0-9._-]+$/.test(value))
-  );
-}
-
-/** What {@link PluginFileDocument.read} found on disk. */
-export type PluginFileDocumentReadResult =
-  | {
-      status: "ok";
-      /** The file's text: a UTF-8 BOM stripped, line endings as `\n`. */
-      text: string;
-      /** Opaque token for these exact bytes; pass it back to `save`. */
-      revision: string;
-    }
-  /** Gone, unreadable, or outside the project. */
-  | { status: "unavailable" }
-  /** Larger than the editor's `maxBytes`. */
-  | { status: "too-large" }
-  /** Not UTF-8 text. */
-  | { status: "not-text" };
-
-/** The outcome of {@link PluginFileDocument.save}. */
-export type PluginFileDocumentSaveResult =
-  | { status: "saved"; revision: string }
-  /**
-   * The file changed on disk since `expectedRevision`. Nothing was written,
-   * and the document is marked as in conflict until a later save lands or the
-   * draft is discarded. `revision` is what is on disk now, null when the file
-   * is gone.
-   */
-  | { status: "conflict"; revision: string | null }
-  | { status: "refused"; reason: "read-only" | "too-large" | "unavailable" }
-  | { status: "error"; message: string };
-
-/** Why a {@link PluginFileDocument} changed under the view. */
-export interface PluginFileDocumentChange {
-  /**
-   * `"disk"`: the file changed on disk — re-read it, or keep your draft and
-   * let the conflict stand. `"saved"`: the host saved the draft (the close
-   * prompt's Save). `"discarded"`: the host dropped the draft — re-read.
-   */
-  readonly reason: "disk" | "saved" | "discarded";
-  /**
-   * The revision now on disk; null when the file is gone, grew past the
-   * editor's `maxBytes`, or no longer reads as UTF-8 text.
-   */
-  readonly revision: string | null;
-}
-
-/**
- * The host-owned document a `location: "fileEditor"` view edits (#13809),
- * handed to it as {@link PanelViewProps.fileDocument}.
- *
- * The host reads and writes the file; the view never touches the filesystem
- * for it. A save names the revision it was based on and is refused, not
- * merged, when the file moved underneath — the same compare-and-replace the
- * built-in Markdown editor relies on, checked in the main process at write
- * time. A `mode: "view"` editor gets a read-only document.
- */
-export interface PluginFileDocument {
-  /** Absolute path of the file. */
-  readonly filePath: string;
-  /** Path relative to the project or worktree root, with forward slashes. */
-  readonly relativePath: string;
-  readonly fileName: string;
-  /** The mode this editor was opened in. */
-  readonly mode: FileEditorMode;
-  /** True for a `mode: "view"` editor: `save` and `setDraft` are refused. */
-  readonly readOnly: boolean;
-  /** Read the file as it is on disk now. */
-  read(): Promise<PluginFileDocumentReadResult>;
-  /** Write `text` if the file is still at `expectedRevision`. Clears the draft on success. */
-  save(text: string, options: { expectedRevision: string }): Promise<PluginFileDocumentSaveResult>;
-  /**
-   * The unsaved text the host holds for this panel, or null when clean — read
-   * it on mount to restore a draft from before the user switched modes.
-   */
-  getDraft(): string | null;
-  /** Report the unsaved text (null when clean). The host derives "dirty" from it. */
-  setDraft(text: string | null): void;
-  /**
-   * Report a conflict your editor detected itself. It can raise the host's
-   * conflict flag but never clear one the host observed on disk.
-   */
-  setConflict(conflict: boolean): void;
-  /** Subscribe to changes made outside the view. Returns the unsubscribe. */
-  onDidChange(listener: (change: PluginFileDocumentChange) => void): () => void;
-}
-
-/**
- * A view-backed file editor as main serves it with its hosted view (#13809):
- * the manifest entry with its defaults resolved.
- */
-export interface HostedFileEditorDescriptor {
-  /** The entry's bare id. */
-  id: string;
-  mode: FileEditorMode;
-  extensions: readonly string[];
-  /** Project-relative globs; always empty for an installed plugin. */
-  paths: readonly string[];
-  maxBytes: number;
-}
+import type {
+  FileEditorContribution,
+  PluginFileDocument,
+  HostedFileEditorDescriptor,
+} from "./plugin/fileEditors.js";
+export {
+  DEFAULT_FILE_EDITOR_MAX_BYTES,
+  HOST_FILE_EDITOR_CHOICE,
+  isFileEditorChoiceKey,
+  fileEditorChoiceId,
+  isFileEditorChoice,
+} from "./plugin/fileEditors.js";
+export type {
+  FileEditorContribution,
+  FileEditorMode,
+  FileEditorChoiceKey,
+  FileEditorChoice,
+  FileEditorChoices,
+  PluginFileDocumentReadResult,
+  PluginFileDocumentSaveResult,
+  PluginFileDocumentChange,
+  PluginFileDocument,
+  HostedFileEditorDescriptor,
+} from "./plugin/fileEditors.js";
+import type { SurfaceContributions } from "./plugin/projectSurfaces.js";
+export {
+  PROJECT_SURFACE_SLOT_CATALOGUE,
+  PROJECT_SURFACE_SLOTS,
+  isProjectSurfaceSlot,
+  fileEditorSlotKey,
+  isFileEditorSlotKey,
+  fileEditorSlotPattern,
+  isProjectSurfaceSlotKey,
+  MAX_PROJECT_SURFACE_UPDATES,
+  projectSurfaceSlotDescriptor,
+  orderedProjectSurfaceSlots,
+  fileEditorSlotClaimData,
+  projectSurfaceClaimFromState,
+  isProjectSurfaceChoice,
+  resolveProjectSurfaceSelection,
+} from "./plugin/projectSurfaces.js";
+export type {
+  ProjectSurfaceSlotMode,
+  ProjectSurfaceClaimKind,
+  ProjectSurfaceSlotDescriptor,
+  ProjectSurfaceSlot,
+  SurfaceViewSlot,
+  SurfaceContributions,
+  ProjectSurfaceClaim,
+  ProjectSurfaceSnapshot,
+  FileEditorSlotKey,
+  ProjectSurfaceSlotKey,
+  FileEditorSlotClaimData,
+  ProjectSurfaceClaimValue,
+  ProjectSurfaceSlotClaim,
+  ProjectSurfaceRefusalReason,
+  ProjectSurfaceRefusal,
+  ProjectSurfaceSlotState,
+  ProjectSurfacesSnapshot,
+  ProjectSurfacesChangedEvent,
+  ProjectSurfaceChoice,
+  ProjectSurfaceChoiceRecord,
+  ProjectSurfaceChoices,
+  ProjectSurfaceChoiceUpdate,
+} from "./plugin/projectSurfaces.js";
+import type {
+  PluginApplicationDescriptor,
+  ProjectApplicationState,
+} from "./plugin/projectApplication.js";
+export {
+  PLUGIN_APPLICATION_DESTINATIONS,
+  PLUGIN_APPLICATION_ARRANGEMENTS,
+  PLUGIN_APPLICATION_NAVIGATION_LIMITS,
+} from "./plugin/projectApplication.js";
+export type {
+  PluginApplicationDestination,
+  PluginApplicationArrangement,
+  PluginApplicationTourRef,
+  PluginApplicationNavigationParam,
+  PluginApplicationSection,
+  PluginApplicationNavigation,
+  PluginApplicationDescriptor,
+  ProjectApplicationStatus,
+  ProjectApplicationReason,
+  ProjectApplicationPreflightReason,
+  ProjectApplicationState,
+} from "./plugin/projectApplication.js";
+export {
+  PROJECT_PLUGIN_INSTANCE_PREFIX,
+  makeProjectPluginInstanceKey,
+  makeInstalledProjectInstanceKey,
+  isInstalledProjectInstanceKey,
+  parseProjectPluginInstanceKey,
+  pluginManifestIdFromInstanceKey,
+  projectIdFromPluginInstanceKey,
+} from "./plugin/instanceKeys.js";
 
 export interface PanelContribution {
   id: string;
@@ -1400,594 +1305,6 @@ export interface ViewContribution {
   title?: string;
   description?: string;
   pages?: PluginSettingsPageContribution[];
-}
-
-/**
- * How a slot arbitrates between the plugins that claim it.
- *
- * - `exclusive` — one plugin replaces the stock content. Project plugins only:
- *   an installed plugin is bound to no project, so letting it take one over
- *   would reshape every project at once.
- * - `selectable` — several plugins offer options and one is the default. An
- *   installed plugin may offer one, but only a project plugin can be the
- *   default; an installed option shows only once the user picks it.
- *
- * Stock is an option in every slot, whatever its mode.
- */
-export type ProjectSurfaceSlotMode = "exclusive" | "selectable";
-
-/** What a claim on a slot carries: a view to mount, or data the host applies. */
-export type ProjectSurfaceClaimKind = "view" | "data";
-
-/**
- * One host-declared slot: its arbitration mode, claim shape, and the words the
- * host's shared slot chrome uses for it. The frame, the consent notice and the
- * settings section read these, so every slot is switched, asked about and reset
- * the same way and the user learns it once.
- */
-export interface ProjectSurfaceSlotDescriptor {
-  mode: ProjectSurfaceSlotMode;
-  claim: ProjectSurfaceClaimKind;
-  /** Sentence-case name for the slot in settings, notices and diagnostics. */
-  label: string;
-  /** Sentence-case name of the host's own content, the switch's way back. */
-  stockLabel: string;
-  /** Lowercase word for what the slot shows, for use mid-sentence ("canvas"). */
-  noun: string;
-  /**
-   * Where the host's strip sits around a framed slot's region. Either way it is
-   * in flow and outside the plugin's box, so no plugin layout can cover it.
-   */
-  switchPlacement: "above" | "below";
-}
-
-/**
- * Every slot a plugin can claim in a project (§7.8). The host declares them
- * here, once, and every slot list — the manifest cross-checks, the registry,
- * the persisted answers — derives from this table, so a slot is a public id
- * the same way an action id is.
- *
- * `surfaces.defaultLayout` is deliberately not here: it replaces nothing the
- * host draws, so it has no stock content to switch back to and no answer to
- * remember. See {@link ProjectLayoutSeedStatus}.
- */
-export const PROJECT_SURFACE_SLOT_CATALOGUE = {
-  emptyCanvas: {
-    mode: "exclusive",
-    claim: "view",
-    label: "Empty canvas",
-    stockLabel: "Launcher",
-    noun: "canvas",
-    switchPlacement: "above",
-  },
-  // Below, because the main area's Home/Grid switch already sits above the
-  // view: the strip that says whose home this is stays clear of the one that
-  // says where the user is.
-  projectHome: {
-    mode: "exclusive",
-    claim: "view",
-    label: "Project home",
-    stockLabel: "No home",
-    noun: "home",
-    switchPlacement: "below",
-  },
-  // The plugin's view stands in for the New worktree dialog, so the strip sits
-  // above it like a dialog's own header, and "Standard dialog…" is the way back.
-  worktreeCreate: {
-    mode: "exclusive",
-    claim: "view",
-    label: "New worktree",
-    stockLabel: "Standard dialog",
-    noun: "dialog",
-    switchPlacement: "above",
-  },
-} as const satisfies Record<string, ProjectSurfaceSlotDescriptor>;
-
-export type ProjectSurfaceSlot = keyof typeof PROJECT_SURFACE_SLOT_CATALOGUE;
-
-export const PROJECT_SURFACE_SLOTS = Object.keys(
-  PROJECT_SURFACE_SLOT_CATALOGUE
-) as readonly ProjectSurfaceSlot[];
-
-/** A surface slot claim naming one of the plugin's own `contributes.views`. */
-export interface SurfaceViewSlot {
-  viewId: string;
-}
-
-/** The `contributes.surfaces` block of a project plugin's manifest. */
-export interface SurfaceContributions {
-  emptyCanvas?: SurfaceViewSlot;
-  projectHome?: SurfaceViewSlot;
-  worktreeCreate?: SurfaceViewSlot;
-  /**
-   * A `contributes.layouts[].id` of this plugin, opened once on the project's
-   * first open on this machine while the grid and dock are still empty. Its
-   * recipes wait as click-to-start entries rather than starting.
-   */
-  defaultLayout?: string;
-}
-
-/** Where a project application opens: its claimed Home, or the host's grid. */
-export const PLUGIN_APPLICATION_DESTINATIONS = ["home", "grid"] as const;
-
-export type PluginApplicationDestination = (typeof PLUGIN_APPLICATION_DESTINATIONS)[number];
-
-/**
- * How a Home destination shares the main area (#14107): `full` gives the Home
- * the whole area, `beside-grid` draws it beside the host's own panels so agents
- * launched, chosen and focused there never hide it.
- */
-export const PLUGIN_APPLICATION_ARRANGEMENTS = ["full", "beside-grid"] as const;
-
-export type PluginApplicationArrangement = (typeof PLUGIN_APPLICATION_ARRANGEMENTS)[number];
-
-/** The welcome tour a project application starts from, and which revision of it. */
-export interface PluginApplicationTourRef {
-  /** A `contributes.tours[].id` of this plugin, not scoped to a panel kind. */
-  id: string;
-  /**
-   * The tour's welcome revision, a positive integer. Raised when the tour
-   * changes enough to be worth offering again; the tour itself is unchanged.
-   */
-  version: number;
-}
-
-/**
- * Bounds on an application's navigation (#14108), shared by the manifest
- * schema and the runtime validator so a declaration the schema admits is one
- * the host can always hold.
- */
-export const PLUGIN_APPLICATION_NAVIGATION_LIMITS = Object.freeze({
-  maxVersion: 1_000_000,
-  maxSections: 24,
-  maxIdLength: 64,
-  maxTitleLength: 64,
-  maxParamsPerSection: 8,
-  maxParamNameLength: 32,
-  defaultStringLength: 64,
-  maxStringLength: 128,
-  /** Serialized size of one location, as UTF-8 JSON. */
-  maxLocationBytes: 2048,
-  /** Entries in one project's history, the current one included. */
-  maxHistoryEntries: 30,
-});
-
-/**
- * One declared parameter of a section. Values are identifiers, not content:
- * a string holds only the manifest id vocabulary (`[A-Za-z0-9._-]`), so a
- * free-text field, a URL or a token can't be expressed. Only a parameter
- * marked `persist` is written to disk; the rest live as long as the project's renderer.
- */
-export type PluginApplicationNavigationParam =
-  | { type: "string"; required?: boolean; persist?: boolean; maxLength?: number }
-  | { type: "integer"; required?: boolean; persist?: boolean }
-  | { type: "boolean"; required?: boolean; persist?: boolean };
-
-/** A named destination of the application: a section, and the record parameters it takes. */
-export interface PluginApplicationSection {
-  id: string;
-  title: string;
-  params?: Record<string, PluginApplicationNavigationParam>;
-}
-
-/**
- * `application.navigation` (#14108): the destinations the application's
- * views navigate between. The host keeps one location and history per project
- * for them, shared by every view of the application.
- */
-export interface PluginApplicationNavigation {
-  /**
-   * The navigation schema's revision. Raising it drops the saved location and
-   * history, so a renamed parameter never restores with its old meaning.
-   */
-  version: number;
-  /** Where the application starts, and where a location that no longer resolves lands. */
-  defaultSectionId: string;
-  sections: PluginApplicationSection[];
-}
-
-/**
- * The top-level `application` block of a project plugin's manifest (#14097).
- *
- * Declarative only: it names the application and points at contributions the
- * same manifest already declares, by their bare ids, and implements none of
- * them. The owner is the plugin whose manifest carries it. Cooperating plugins
- * contribute their own parts and are disclosed through `worksWith`; at most one
- * plugin in a project may declare an application, and a second makes both
- * unavailable rather than picking a winner.
- *
- * Defaults it names (destination, presentation levels) never outrank an
- * answer the user gave, and while the application is anything but active the
- * project shows the standard workspace. See {@link ProjectApplicationState}.
- */
-export interface PluginApplicationDescriptor {
-  /** The application's name, as the host shows it. */
-  name: string;
-  /** Same vocabulary as a sidebar view's `iconId`. */
-  iconId?: string;
-  /** `"home"` requires `contributes.surfaces.projectHome`. */
-  destination: PluginApplicationDestination;
-  /**
-   * The arrangement a `"home"` destination opens in; omitted means `"full"`.
-   * A default only: the user's own Home, Split or Grid choice always wins.
-   */
-  arrangement?: PluginApplicationArrangement;
-  /** A `contributes.views[].id` with `location: "sidebar"`. */
-  sidebarViewId?: string;
-  /** A `contributes.views[].id` with `location: "settings"`: the application's settings home. */
-  settingsViewId?: string;
-  welcomeTour?: PluginApplicationTourRef;
-  /** The bare id of a `contributes.commands` entry of kind `"command"`. */
-  firstWorkflow?: string;
-  /** `contributes.agentMcp[].id` endpoints the application's agents need. */
-  requiredTools?: string[];
-  /** Suggested presentation levels, in the host's closed vocabulary. */
-  presentation?: Partial<Record<string, "shown" | "demoted" | "hidden">>;
-  navigation?: PluginApplicationNavigation;
-}
-
-/**
- * Where a project's application stands (#14097).
- *
- * - `loading` — the owner is trusted and on its way in.
- * - `active` — the owner is loaded and the application is in force.
- * - `disabled` — the project's plugins are not trusted, or the owner is muted
- *   or waiting to be turned on.
- * - `unavailable` — the owner failed to load, needs another Daintree version,
- *   failed its preflight (a required file is missing, or a database it
- *   declares was written by a newer copy), or a second plugin also declares
- *   an application.
- * - `replaced` — the owner is loaded, but another plugin holds the project
- *   Home it lands on.
- *
- * Anything but `active` means the standard workspace.
- */
-export type ProjectApplicationStatus =
-  "loading" | "active" | "disabled" | "unavailable" | "replaced";
-
-export type ProjectApplicationReason =
-  | "untrusted"
-  | "muted"
-  | "staged"
-  | "load-failed"
-  | "engine-incompatible"
-  | "assets-missing"
-  | "schema-too-new"
-  | "owner-ambiguous";
-
-/** The preflight reasons: checked on disk before the owner's code is loaded (#14113). */
-export type ProjectApplicationPreflightReason = Extract<
-  ProjectApplicationReason,
-  "assets-missing" | "schema-too-new"
->;
-
-/** One project's application, resolved. `null` where no plugin declares one. */
-export interface ProjectApplicationState {
-  status: ProjectApplicationStatus;
-  /** Manifest id of the declaring plugin; the lowest one when ownership is ambiguous. */
-  ownerId: string;
-  /** The owner's manifest `version`: the payload this state describes. */
-  version: string;
-  /** The owner's instance key, once it is loaded. */
-  instanceId?: string;
-  application: PluginApplicationDescriptor;
-  /** Why a non-active application is not in force. */
-  reason?: ProjectApplicationReason;
-  /** For a preflight reason, what was found on disk, one line each. */
-  problems?: string[];
-  /** For `owner-ambiguous`, every declaring manifest id, sorted. */
-  candidates?: string[];
-  /** For `replaced`, the INSTANCE key of the plugin holding the project Home. */
-  heldBy?: string;
-  /** What the project shows instead: always the standard workspace unless active. */
-  fallback: "standard-workspace" | null;
-}
-
-/**
- * A resolved surface claim, as the renderer receives it.
- *
- * `panelKindId` is the RUNTIME, project-qualified panel-kind id the view
- * registered under, not the manifest's bare `viewId` — the renderer already
- * knows how to turn one of those into a mounted plugin view (icon, name, the
- * `plugin://` component path, the error boundary), so a surface reuses that
- * path wholesale instead of growing a second way to mount the same module.
- */
-export interface ProjectSurfaceClaim {
-  /** The owning plugin INSTANCE key, matching `PanelKindConfig.extensionId`. */
-  pluginId: string;
-  panelKindId: string;
-}
-
-/** Every surface claimed in one project, keyed by slot. */
-export type ProjectSurfaceSnapshot = Partial<Record<ProjectSurfaceSlot, ProjectSurfaceClaim>>;
-
-export function isProjectSurfaceSlot(value: unknown): value is ProjectSurfaceSlot {
-  return PROJECT_SURFACE_SLOTS.some((slot) => slot === value);
-}
-
-/**
- * A file editor slot (#13811): which editor files matching one path pattern
- * open in, in one project. A project plugin claims one per pattern of a
- * `contributes.fileEditors` entry marked `default`.
- *
- * Keyed by the exact pattern string, never a normalised or expanded form, so
- * two plugins naming the same pattern contend for one slot and overlapping
- * patterns each keep their own owner and their own answer.
- */
-export type FileEditorSlotKey = `fileEditor:${string}`;
-
-/** Every slot the registry arbitrates: one from the catalogue, or a file editor slot. */
-export type ProjectSurfaceSlotKey = ProjectSurfaceSlot | FileEditorSlotKey;
-
-const FILE_EDITOR_SLOT_PREFIX = "fileEditor:";
-
-/** Longest pattern a file editor slot carries — the manifest's own ceiling. */
-const FILE_EDITOR_SLOT_PATTERN_MAX = 256;
-
-export function fileEditorSlotKey(pattern: string): FileEditorSlotKey {
-  return `${FILE_EDITOR_SLOT_PREFIX}${pattern}`;
-}
-
-export function isFileEditorSlotKey(value: unknown): value is FileEditorSlotKey {
-  if (typeof value !== "string" || !value.startsWith(FILE_EDITOR_SLOT_PREFIX)) return false;
-  const pattern = value.slice(FILE_EDITOR_SLOT_PREFIX.length);
-  return (
-    pattern.length > 0 && pattern.length <= FILE_EDITOR_SLOT_PATTERN_MAX && !pattern.includes("\0")
-  );
-}
-
-/** The pattern a file editor slot is about. */
-export function fileEditorSlotPattern(slot: FileEditorSlotKey): string {
-  return slot.slice(FILE_EDITOR_SLOT_PREFIX.length);
-}
-
-export function isProjectSurfaceSlotKey(value: unknown): value is ProjectSurfaceSlotKey {
-  return isProjectSurfaceSlot(value) || isFileEditorSlotKey(value);
-}
-
-/**
- * Most slots one answer can name. A consent notice answers for every slot one
- * plugin set up: the catalogue's, plus a file editor slot per default pattern
- * (ten editors of twenty patterns at most), with room to spare.
- */
-export const MAX_PROJECT_SURFACE_UPDATES = 256;
-
-/**
- * The descriptor of any slot. A catalogue slot's is its declaration; a file
- * editor slot's is the family's, worded with its pattern. Exclusive, because a
- * pattern opens in one editor; a data claim, because nothing is framed — the
- * file panel applies it.
- */
-export function projectSurfaceSlotDescriptor(
-  slot: ProjectSurfaceSlotKey
-): ProjectSurfaceSlotDescriptor {
-  if (!isFileEditorSlotKey(slot)) return PROJECT_SURFACE_SLOT_CATALOGUE[slot];
-  return {
-    mode: "exclusive",
-    claim: "data",
-    label: `Editor for ${fileEditorSlotPattern(slot)}`,
-    stockLabel: "Source",
-    noun: "editor",
-    switchPlacement: "above",
-  };
-}
-
-/**
- * The slots in `slots`, in one fixed order: the catalogue's in catalogue order,
- * then file editor slots by pattern, ordinally — so every list of them reads
- * the same whatever order the claims arrived in.
- */
-export function orderedProjectSurfaceSlots(
-  slots: Partial<Record<ProjectSurfaceSlotKey, unknown>>
-): ProjectSurfaceSlotKey[] {
-  const fileEditorSlots = Object.keys(slots)
-    .filter(isFileEditorSlotKey)
-    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-  return [...PROJECT_SURFACE_SLOTS.filter((slot) => slots[slot] !== undefined), ...fileEditorSlots];
-}
-
-/** What a file editor slot's claim carries: the bare id of the claiming `fileEditors` entry. */
-export interface FileEditorSlotClaimData {
-  editorId: string;
-}
-
-/** The editor a file editor slot's claim names, or `null` for anything else. */
-export function fileEditorSlotClaimData(
-  value: ProjectSurfaceClaimValue
-): FileEditorSlotClaimData | null {
-  if (value.kind !== "data" || !value.data || typeof value.data !== "object") return null;
-  const { editorId } = value.data as Record<string, unknown>;
-  return typeof editorId === "string" && editorId.length > 0 ? { editorId } : null;
-}
-
-/**
- * What one claim carries, in the shape its slot declares.
- *
- * A view claim names the manifest view; `panelKindId` is set when the view
- * mounts through the plugin panel path, which is how every view slot mounts
- * today. A data claim carries a JSON value the slot's own consumer validates.
- */
-export type ProjectSurfaceClaimValue =
-  { kind: "view"; viewId: string; panelKindId?: string } | { kind: "data"; data: unknown };
-
-/** One plugin's claim on one slot, as the registry arbitrates it. */
-export interface ProjectSurfaceSlotClaim {
-  /** The claiming plugin INSTANCE key. */
-  pluginId: string;
-  /** Where the plugin came from. Host-derived, never declared by the plugin. */
-  scope: "project" | "installed";
-  value: ProjectSurfaceClaimValue;
-}
-
-/**
- * Why a plugin's claim on a slot is not in force.
- *
- * - `outranked` — another plugin holds the exclusive slot. Project plugins
- *   outrank installed ones, then the lower manifest id wins.
- * - `installed-exclusive` — an installed plugin claimed an exclusive slot.
- * - `claim-kind` — the claim carries a view where the slot takes data, or the
- *   reverse.
- * - `unresolved-view` — the claimed view registered nothing the host can mount.
- */
-export type ProjectSurfaceRefusalReason =
-  "outranked" | "installed-exclusive" | "claim-kind" | "unresolved-view";
-
-/** A claim the host did not apply, attributed so the user and author can see why. */
-export interface ProjectSurfaceRefusal {
-  slot: ProjectSurfaceSlotKey;
-  /** The refused plugin's INSTANCE key. */
-  pluginId: string;
-  reason: ProjectSurfaceRefusalReason;
-  /** For `outranked`, the instance key of the plugin holding the slot. */
-  heldBy?: string;
-}
-
-/**
- * One slot's arbitrated state in one project. Independent of the user's
- * answer — {@link resolveProjectSurfaceSelection} applies that.
- */
-export interface ProjectSurfaceSlotState {
-  mode: ProjectSurfaceSlotMode;
-  /**
-   * The plugin options, highest rank first. An exclusive slot has at most one
-   * (its owner); a selectable slot lists every claimant. Stock is always an
-   * option too and is never listed.
-   */
-  options: ProjectSurfaceSlotClaim[];
-  /** The option shown with no answer from the user; `null` is stock. */
-  defaultOptionId: string | null;
-  refused: ProjectSurfaceRefusal[];
-}
-
-/**
- * Everything a project's views know about its slots, in one read.
- *
- * `revision` is main's per-project counter, bumped on every change to a claim,
- * a refusal or an answer. A view adopts a snapshot only when its revision is at
- * least the last one it adopted, so a slow read can never roll back a newer
- * push or save.
- */
-export interface ProjectSurfacesSnapshot {
-  projectId: string;
-  revision: number;
-  slots: Partial<Record<ProjectSurfaceSlotKey, ProjectSurfaceSlotState>>;
-  /**
-   * The project's remembered answers, or `null` when main could not read them.
-   * Unreadable is not the same as unanswered: read as empty, it would show a
-   * canvas the user switched off and ask them again.
-   */
-  choices: ProjectSurfaceChoices | null;
-}
-
-/**
- * `plugin:project-surfaces-changed` — a project's slot state changed (a claim,
- * a release, a refusal or an answer). Signal-only: views re-read the snapshot.
- */
-export interface ProjectSurfacesChangedEvent {
-  projectId: string;
-  revision: number;
-}
-
-/**
- * The surface an exclusive slot's owner mounts, in the shape the renderer's
- * panel-backed surface path takes. `null` for a selectable slot, a data claim,
- * or a view that does not mount through a panel kind.
- */
-export function projectSurfaceClaimFromState(
-  state: ProjectSurfaceSlotState | undefined
-): ProjectSurfaceClaim | null {
-  if (state === undefined || state.mode !== "exclusive") return null;
-  const owner = state.options[0];
-  if (owner === undefined || owner.value.kind !== "view") return null;
-  const { panelKindId } = owner.value;
-  return panelKindId === undefined ? null : { pluginId: owner.pluginId, panelKindId };
-}
-
-/**
- * What the user wants a claimed slot to show: the plugin's surface, or the
- * host's own stock content in its place.
- */
-export type ProjectSurfaceChoice = "surface" | "stock";
-
-export function isProjectSurfaceChoice(value: unknown): value is ProjectSurfaceChoice {
-  return value === "surface" || value === "stock";
-}
-
-/**
- * One project's remembered answer about one surface slot. Machine-local, in
- * Daintree's own store: which canvas one person prefers is not a fact about the
- * repository.
- */
-export interface ProjectSurfaceChoiceRecord {
-  /**
-   * The MANIFEST id of the plugin the answer was about. A slot that has since
-   * passed to a different plugin is undecided again — agreeing to one plugin's
-   * canvas is not agreeing to whatever claims the slot next.
-   *
-   * On a selectable slot, the picked option's manifest id, or empty when the
-   * user picked stock: that answer is about the slot, not about any plugin.
-   */
-  pluginId: string;
-  choice: ProjectSurfaceChoice;
-  /** Epoch ms of the answer. */
-  decidedAt: number;
-  /**
-   * For a selectable slot, the INSTANCE key of the option the user picked —
-   * what tells a project plugin and an installed one sharing a manifest id
-   * apart. Absent on exclusive slots, whose one option is the owner.
-   */
-  optionId?: string;
-}
-
-/** Every remembered surface answer in one project, keyed by slot. */
-export type ProjectSurfaceChoices = Partial<
-  Record<ProjectSurfaceSlotKey, ProjectSurfaceChoiceRecord>
->;
-
-/**
- * One slot's part of an answer, as the renderer sends it: `null` forgets the
- * answer. Names no plugin — main records it against what the slot offers now.
- */
-export interface ProjectSurfaceChoiceUpdate {
-  slot: ProjectSurfaceSlotKey;
-  choice: ProjectSurfaceChoice | null;
-  /** For a selectable slot's `"surface"`, the INSTANCE key of the option picked. */
-  optionId?: string;
-  /**
-   * The INSTANCE key of the plugin the user was answering about. Main refuses
-   * the whole answer if the slot has passed to another plugin since: agreeing
-   * to one plugin is not agreeing to whatever holds the slot by the time the
-   * click arrives.
-   */
-  ownerId?: string;
-}
-
-/**
- * The option a slot shows once the user's answer is applied, or `null` for
- * stock.
- *
- * An exclusive answer counts only for the plugin it was about: a slot that has
- * passed to another plugin is undecided again, because agreeing to one
- * plugin's surface is not agreeing to whatever claims it next. A selectable
- * answer naming an option that is not on offer right now falls back to the
- * default without being forgotten, so the pick returns with its plugin.
- */
-export function resolveProjectSurfaceSelection(
-  state: ProjectSurfaceSlotState | undefined,
-  record: ProjectSurfaceChoiceRecord | undefined
-): ProjectSurfaceSlotClaim | null {
-  if (state === undefined) return null;
-  const byId = (id: string | null) =>
-    id === null ? null : (state.options.find((option) => option.pluginId === id) ?? null);
-  const fallback = byId(state.defaultOptionId);
-  if (record === undefined) return fallback;
-  if (state.mode === "exclusive") {
-    if (fallback === null) return null;
-    if (record.pluginId !== pluginManifestIdFromInstanceKey(fallback.pluginId)) return fallback;
-    return record.choice === "stock" ? null : fallback;
-  }
-  if (record.choice === "stock") return null;
-  return (record.optionId === undefined ? null : byId(record.optionId)) ?? fallback;
 }
 
 /**
@@ -8919,100 +8236,6 @@ export const UNBOUND_PLUGIN_HOST_BINDING: PluginHostBinding = {
   projectId: null,
   projectRoot: null,
 };
-
-/**
- * Prefix marking a plugin instance key as project-owned.
- *
- * A project plugin is keyed `project__{projectId}__{manifestId}` everywhere the
- * host indexes a plugin instance — `PluginService.plugins`, the contribution
- * registries' `pluginId`/`extensionId`, the `plugin://` authority map, the
- * capability-consent subject, the per-plugin settings/storage filename. That is
- * what keeps two projects shipping the same manifest id genuinely separate:
- * separate contributions, separate authority, separate grants, separate
- * teardown. Keying them by bare manifest id would give one project's revoke the
- * power to sweep the other's registrations, and one project's grant the power
- * to answer for both.
- *
- * The separator is `__` rather than `/` or `:` on purpose: an instance key is
- * joined onto a filesystem path for the user-scope settings and storage files,
- * and both of those characters are either a path separator or illegal on
- * Windows. A project id is 64 lowercase hex (`mintProjectId`) and a manifest id
- * is `publisher.name` in `[a-z0-9-]`, so neither half can contain `__` and the
- * parse below is unambiguous.
- */
-export const PROJECT_PLUGIN_INSTANCE_PREFIX = "project__";
-
-const PROJECT_PLUGIN_INSTANCE_SEPARATOR = "__";
-
-/**
- * Marks the manifest half of an installed `instanceMode: "project"` package's
- * per-project instance: `project__{projectId}__installed__{manifestId}`.
- *
- * The instance is project-bound like a repository plugin, so it keeps the
- * `project__` prefix and every project-ownership check reads it the same way.
- * It must never share a key with a repository plugin of the same manifest id in
- * the same project, though: the two have different trust principals, and grants,
- * user-scope settings, secrets, storage and revocation are all keyed by the
- * instance key. A manifest id is `[a-z0-9-]` around a dot, so no repository
- * plugin's key can ever contain this marker.
- */
-const INSTALLED_PROJECT_INSTANCE_MARKER = `installed${PROJECT_PLUGIN_INSTANCE_SEPARATOR}`;
-
-/** Build the instance key a project-owned plugin loads under. */
-export function makeProjectPluginInstanceKey(projectId: string, manifestId: string): string {
-  return `${PROJECT_PLUGIN_INSTANCE_PREFIX}${projectId}${PROJECT_PLUGIN_INSTANCE_SEPARATOR}${manifestId}`;
-}
-
-/** Build the instance key an installed package loads under in one project. */
-export function makeInstalledProjectInstanceKey(projectId: string, manifestId: string): string {
-  return makeProjectPluginInstanceKey(
-    projectId,
-    `${INSTALLED_PROJECT_INSTANCE_MARKER}${manifestId}`
-  );
-}
-
-/** Whether a key names an installed package's per-project instance. */
-export function isInstalledProjectInstanceKey(instanceKey: string): boolean {
-  return parseProjectPluginInstanceKey(instanceKey)?.installed === true;
-}
-
-/**
- * Split an instance key back into its project and manifest halves, or `null`
- * when the key is not a project instance key (an installed or builtin plugin
- * id, which is its own manifest id).
- */
-export function parseProjectPluginInstanceKey(
-  instanceKey: string
-): { projectId: string; manifestId: string; installed: boolean } | null {
-  if (!instanceKey.startsWith(PROJECT_PLUGIN_INSTANCE_PREFIX)) return null;
-  const rest = instanceKey.slice(PROJECT_PLUGIN_INSTANCE_PREFIX.length);
-  const cut = rest.indexOf(PROJECT_PLUGIN_INSTANCE_SEPARATOR);
-  if (cut <= 0) return null;
-  const projectId = rest.slice(0, cut);
-  let manifestId = rest.slice(cut + PROJECT_PLUGIN_INSTANCE_SEPARATOR.length);
-  const installed = manifestId.startsWith(INSTALLED_PROJECT_INSTANCE_MARKER);
-  if (installed) manifestId = manifestId.slice(INSTALLED_PROJECT_INSTANCE_MARKER.length);
-  if (projectId.length === 0 || manifestId.length === 0) return null;
-  return { projectId, manifestId, installed };
-}
-
-/**
- * The manifest id behind a plugin instance key. Identity for an installed or
- * builtin plugin; the bare `publisher.name` for a project instance.
- *
- * This is what belongs in anything the *repository* sees — the project-scope
- * settings and storage filenames under `<projectRoot>/.daintree/` are
- * git-tracked, so writing a machine-local project id into them would commit one
- * developer's identity into everyone's checkout.
- */
-export function pluginManifestIdFromInstanceKey(instanceKey: string): string {
-  return parseProjectPluginInstanceKey(instanceKey)?.manifestId ?? instanceKey;
-}
-
-/** The owning project of a plugin instance key, or null for an app-global one. */
-export function projectIdFromPluginInstanceKey(instanceKey: string): string | null {
-  return parseProjectPluginInstanceKey(instanceKey)?.projectId ?? null;
-}
 
 /**
  * What the user decided about a project's `.daintree/plugins/` folder.

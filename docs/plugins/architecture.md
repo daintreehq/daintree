@@ -653,7 +653,7 @@ Key source locations for contributors:
 
 - `electron/services/PluginService.ts` — discovery, load, activate, unload; the facade its collaborators hang off
 - `electron/schemas/plugin.ts` — the Zod schema that accepts or rejects a manifest, per origin
-- `shared/types/plugin.ts` — the type surface (`PluginManifest`, `PluginHostApi`, …); `shared/types/plugin-sdk.ts` is the public subset
+- `shared/types/plugin.ts` — the type surface (`PluginManifest`, `PluginHostApi`, …), re-exporting the domain modules under `shared/types/plugin/` (file editors, project surfaces, the project application, instance keys), which never import back through it; `shared/types/plugin-sdk.ts` is the public subset
 - `electron/ipc/handlers/plugin.ts` — IPC handlers for plugin-invoked methods
 
 **Collaborators (`electron/services/plugin/`)**

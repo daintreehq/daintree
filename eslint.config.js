@@ -1127,21 +1127,22 @@ export default tseslint.config(
     },
   },
 
-  // SDK boundary guard: forge.js imports in shared/types/plugin.ts must
+  // SDK boundary guard: forge.js imports in shared/types/plugin.ts (and the
+  // domain modules it re-exports from shared/types/plugin/) must
   // be classified in shared/types/plugin-sdk.ts. This is the single gate
   // that prevents forge-internal types from leaking into the public SDK
   // surface unclassified. Existing imports are grandfathered; new ones
   // must be accompanied by a corresponding re-export in plugin-sdk.ts.
   // See #9269, docs/plugins/architecture.md#sdk-surface.
   {
-    files: ["shared/types/plugin.ts"],
+    files: ["shared/types/plugin.ts", "shared/types/plugin/**/*.ts"],
     rules: {
       "no-restricted-imports": [
         "warn",
         {
           patterns: [
             {
-              group: ["./forge.js"],
+              group: ["./forge.js", "../forge.js"],
               message:
                 "Forge types imported here become part of the public SDK surface via PluginManifest/PluginHostApi. New forge imports must be classified and re-exported from shared/types/plugin-sdk.ts. See docs/plugins/architecture.md#sdk-surface and #9269.",
             },
