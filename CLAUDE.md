@@ -12,6 +12,7 @@ Electron IDE for orchestrating AI coding agents — many agent terminals running
 npm run dev            # Main + Renderer (Vite)
 npm test -- <path>     # the ONLY way to run unit tests locally: the files you changed
 npm test               # full vitest suite: CI only (6 shards). NEVER run it locally
+npm run typecheck:changed  # only the TS projects your branch touches: use this locally
 npm run check          # typecheck + codegen/guard checks + lint and e2e-wait ratchets + format:check
 npm run fix            # prettier --write + eslint --fix
 npm run build          # production build
@@ -20,7 +21,7 @@ npm run rebuild        # rebuild native modules after an install failure
 
 `npm install` for dev, `npm ci` for CI; `postinstall` rebuilds `node-pty` for Electron. Native-module errors → `npm run rebuild`.
 
-Use `npm run typecheck`, never a bare `tsc -b` — the project-reference graph emits build artifacts and phantom TS6305s outside the wrapper.
+Typecheck runs on the TypeScript 7 native compiler (`typescript7`; `typescript` stays on TS6 for typescript-eslint). Use `npm run typecheck` or `typecheck:changed`, never a bare `tsc -b` — the project-reference graph emits build artifacts and phantom TS6305s outside the wrapper.
 
 ## Architecture
 
