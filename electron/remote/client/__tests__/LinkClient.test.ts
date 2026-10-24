@@ -333,6 +333,47 @@ describe("LinkClient backoff", () => {
     }
   });
 
+  it("reads a host refusing its first HELLO because it is shutting down as restarting", async () => {
+    const dir = await makeTempDir();
+    const socketPath = path.join(dir, "s.sock");
+    const server = net.createServer((socket) => {
+      const decoder = new FrameDecoder();
+      socket.on("data", (chunk: Buffer) => {
+        for (const frame of decoder.push(chunk)) {
+          if (frame.kind !== ControlKind.HELLO) continue;
+          const reject: LinkMessage = {
+            lane: Lane.CONTROL,
+            kind: ControlKind.REJECT,
+            body: { reason: "shutting-down", handshake: null, detail: null },
+          };
+          socket.write(encodeFrame(messageToFrame(reject)));
+        }
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+    try {
+      client = new LinkClient({
+        transport: createDirectTransport({ socketPath, token: "t" }),
+        handshake: TEST_HANDSHAKE,
+        client: { clientId: "c", clientName: "n", platform: "linux" },
+        session: { pingIntervalMs: 0, idleTimeoutMs: 0 },
+        backoff: { initialMs: 60_000, maxMs: 60_000, jitter: 0 },
+      });
+      client.start();
+      await waitFor(() => client!.getState().status === "unreachable");
+      expect(client.getState()).toMatchObject({ restarting: true });
+      const state = client.getState();
+      expect(state.status === "unreachable" && state.retryAt! - Date.now()).toBeLessThanOrEqual(
+        1_000
+      );
+    } finally {
+      await client?.stop();
+      client = null;
+      server.close();
+      await removeTempDir(dir);
+    }
+  });
+
   it("stops reading a shutdown as a restart once the host has been gone longer than one takes", async () => {
     const dir = await makeTempDir();
     const socketPath = path.join(dir, "g.sock");

@@ -67,9 +67,7 @@ export function hostLinkAnnouncement(
   switch (next) {
     case "up":
       if (previous === "up") return null;
-      return isDrop(previous) && wasUp
-        ? `Reconnected to ${hostName}`
-        : `Connected to ${hostName}`;
+      return isDrop(previous) && wasUp ? `Reconnected to ${hostName}` : `Connected to ${hostName}`;
     case "lost":
       return previous === "up" && wasUp
         ? `Connection to ${hostName} lost. Terminals are read-only until it reconnects.`
@@ -126,8 +124,7 @@ export function watchHostConnectionAnnouncements(hostId: string): () => void {
     if (current === "up") downSince = null;
     else downSince ??= Date.now();
     if (current === said.episode) return;
-    const dropFromUp =
-      isDrop(current) && said.episode === "up" && store.getState().everConnected;
+    const dropFromUp = isDrop(current) && said.episode === "up" && store.getState().everConnected;
     const delay =
       dropFromUp && downSince !== null
         ? Math.max(UI_DOHERTY_THRESHOLD, HOST_LINK_SETTLE_MS - (Date.now() - downSince))

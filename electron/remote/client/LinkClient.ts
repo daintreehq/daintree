@@ -15,7 +15,7 @@ import {
   type RejectMessage,
   type WelcomeMessage,
 } from "../link/messages.js";
-import { LinkSession, type LinkSessionOptions } from "../link/session.js";
+import { LinkSession, type LinkCloseInfo, type LinkSessionOptions } from "../link/session.js";
 import {
   HostModeOffError,
   SshAccessError,
@@ -194,8 +194,12 @@ export class LinkClient {
   private lastSeenAt: number | null = null;
   /** The last dial found no Host mode there while that still read as a restart. */
   private restartSeen = false;
-  /** The host said it was shutting down, on the last session or a refused HELLO, and hasn't been connected to since. */
-  private shutdownHeard = false;
+  /**
+   * When the host said it was shutting down (closing the last session, or
+   * refusing a HELLO) since the link was last up; null when it hasn't. Not
+   * moved by later refusals, so the restart it starts has one deadline.
+   */
+  private shutdownHeardAt: number | null = null;
   /** What the last logged failure said, so a host down for hours logs once, not every retry. */
   private lastLoggedFailure: string | null = null;
   private generation = 0;
@@ -238,15 +242,14 @@ export class LinkClient {
   }
 
   /**
-   * The host said it was shutting down and was heard from within a restart's
-   * grace: its own word that it is going away, read as coming back for as long
-   * as that is plausible. Unlike {@link restarting}, never inferred.
+   * The host said it was shutting down, within a restart's grace: its own
+   * word that it is going away, read as coming back for as long as that is
+   * plausible. Unlike {@link restarting}, never inferred.
    */
   get restartAnnounced(): boolean {
-    if (!this.shutdownHeard) return false;
-    const heard = this.lastHeard();
-    const sinceHeard = heard === null ? null : this.now() - heard;
-    return sinceHeard !== null && sinceHeard >= 0 && sinceHeard < HOST_RESTART_GRACE_MS;
+    if (this.shutdownHeardAt === null) return false;
+    const since = this.now() - this.shutdownHeardAt;
+    return since >= 0 && since < HOST_RESTART_GRACE_MS;
   }
 
   onStateChange(listener: (state: LinkClientState) => void): () => void {
@@ -304,7 +307,7 @@ export class LinkClient {
     await Promise.all([...this.releasing]);
     this.failures = 0;
     this.restartSeen = false;
-    this.shutdownHeard = false;
+    this.shutdownHeardAt = null;
     this.setState({ status: "disconnected" });
   }
 
@@ -393,7 +396,7 @@ export class LinkClient {
     if (stale()) return;
     if (outcome.kind === "reject") {
       const { reject } = outcome;
-      if (reject.reason === "shutting-down") this.shutdownHeard = true;
+      if (reject.reason === "shutting-down") this.heardShutdown();
       const mismatch = reject.handshake
         ? compareHandshake(this.options.handshake, reject.handshake)
         : null;
@@ -406,7 +409,17 @@ export class LinkClient {
       );
       return;
     }
+    // A GOODBYE in place of the WELCOME, from a host already on its way down.
+    if (session.closedWith) this.noteClose(session.closedWith);
     this.fail(outcome.reason);
+  }
+
+  private noteClose(info: LinkCloseInfo): void {
+    if (info.by === "remote" && info.reason === "shutting-down") this.heardShutdown();
+  }
+
+  private heardShutdown(): void {
+    this.shutdownHeardAt ??= this.now();
   }
 
   /** When the host was last heard from, by this link or by one before it. */
@@ -464,6 +477,7 @@ export class LinkClient {
     buildMismatch: HandshakeMismatch | null
   ): void {
     if (session.isClosed) {
+      if (session.closedWith) this.noteClose(session.closedWith);
       void this.release(connection);
       this.fail(session.closedWith?.reason ?? "closed");
       return;
@@ -500,7 +514,7 @@ export class LinkClient {
     }
     this.lastLoggedFailure = null;
     this.restartSeen = false;
-    this.shutdownHeard = false;
+    this.shutdownHeardAt = null;
     this.current = session;
     this.sessionId = welcome.sessionId;
     this.resumeSecret = welcome.resumeSecret ?? null;
@@ -564,7 +578,7 @@ export class LinkClient {
       this.current = null;
       // Before the state below: whoever hears it records when the host was last seen.
       this.lastSeenAt = Math.max(this.lastSeenAt ?? 0, session.lastReceivedAt);
-      if (info.by === "remote" && info.reason === "shutting-down") this.shutdownHeard = true;
+      this.noteClose(info);
       // Down from now: releasing the old forward can take as long as a stalled
       // transport does, and the link must not read as connected meanwhile.
       this.setState(this.connecting(this.attempt + 1));
