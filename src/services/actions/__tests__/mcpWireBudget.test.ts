@@ -569,7 +569,11 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // there, a remote Shell's driving view included, which `hasLiveView` cannot
   // say. Output only; `slashCommands.list`'s description gave back the clause
   // its host-side form made untrue, and the field's own was trimmed first.
-  const MAX_EXTERNAL_PAYLOAD_BYTES = 56_210;
+  // 56_210 → 57_200 for #14369's `terminal.restartOnPresetOwned`, measured at
+  // 57_189 B (+984). Most of it is the tool's own contract rather than prose:
+  // two required ids and a three-field result, whose `agentSessionIdCleared`
+  // is what tells a caller the agent no longer has its brief.
+  const MAX_EXTERNAL_PAYLOAD_BYTES = 57_200;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
   // totals moved by the identical amount. Only this one needed the ratchet
@@ -852,7 +856,9 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // optional `newCallId`, the caller's own id for a first send, so a write
   // whose whole answer was lost can still be resent under it. Assistant-only,
   // so the external ceiling does not move.
-  const MAX_COHORT_PAYLOAD_BYTES = 142_350;
+  // 142_350 → 143_330 for the same tool, measured at 143_314 B, carried
+  // in-app for the external⊆in-app invariant.
+  const MAX_COHORT_PAYLOAD_BYTES = 143_330;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

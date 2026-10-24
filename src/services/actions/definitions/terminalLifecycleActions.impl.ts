@@ -311,6 +311,11 @@ export const terminalLifecycleActionRuns = {
     if (observedBefore !== undefined) {
       useRateLimitObservationStore.getState().clearObservation(targetId, observedBefore);
     }
+    return {
+      terminalId: targetId,
+      agentPresetId: usePanelStore.getState().panelsById[targetId]?.agentPresetId ?? presetId,
+      agentSessionIdCleared: true as const,
+    };
   },
   "terminal.redraw": async (
     args: unknown,

@@ -694,7 +694,12 @@ describe("external tool surface budget (#11585)", () => {
   // panel sat, and that takes the user there each time. The generic placements
   // take any id, so a session could hide panes it never opened; one owned tool
   // covers the background, dock and grid, and never moves focus.
-  const EXTERNAL_BUDGET_MAX = 35;
+  //
+  // 35 → 36 for #14369's `terminal.restartOnPresetOwned`. An orchestrator whose
+  // worker hit a plan limit could only close it and launch another, losing the
+  // pane's place and leaving its saved launch env on the old preset. Bounded
+  // like the close: a pane this session launched, and the user confirms it.
+  const EXTERNAL_BUDGET_MAX = 36;
 
   it(`advertises at most ${EXTERNAL_BUDGET_MAX} tools`, () => {
     expect(TIER_ALLOWLISTS.external.size).toBeLessThanOrEqual(EXTERNAL_BUDGET_MAX);
@@ -875,6 +880,20 @@ describe("external tool surface budget (#11585)", () => {
     const annotations = buildAnnotations(makeEntry({ id, kind: "query", danger: "safe" }));
     expect(annotations.readOnlyHint).toBe(true);
     expect(annotations.destructiveHint).toBe(false);
+  });
+
+  // Owned-only on every surface (#14369): the raw restart reaches any agent pane
+  // a listing returns, the user's own included, so it stays off every tier.
+  it("admits only the session-scoped preset restart", () => {
+    for (const id of ["terminal.restartOnPresetOwned", "terminal.restartOnPreset"]) {
+      expect(BUILT_IN_ACTION_IDS as readonly string[]).toContain(id);
+    }
+    expect(isTierPermitted("external", "terminal.restartOnPresetOwned")).toBe(true);
+    expect(isTierPermitted("core", "terminal.restartOnPresetOwned")).toBe(true);
+    for (const tier of ["external", "core", "full"] as const) {
+      expect(isTierPermitted(tier, "terminal.restartOnPreset", true)).toBe(false);
+      expect(isTierPermitted(tier, "terminal.restartOnPreset", false)).toBe(false);
+    }
   });
 
   // A cut PR that quietly widens is the failure #10710 documents, so assert the

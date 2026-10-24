@@ -121,6 +121,10 @@ export const CORE_TIER_TOOLS = [
   "terminal.close",
   // Several closes in one call, each run as the close above (owned for a pane).
   "terminal.closeMany",
+  // Moves a pane this session launched to another preset of its agent, after
+  // the user confirms (#14369). Owned for every origin: the unscoped
+  // `terminal.restartOnPreset` is on no tier.
+  "terminal.restartOnPresetOwned",
   "terminal.moveToWorktree",
   // Brings a panel this session created into view (#12315).
   "terminal.revealOwned",

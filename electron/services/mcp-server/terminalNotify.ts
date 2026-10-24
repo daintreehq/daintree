@@ -2435,6 +2435,9 @@ export function relayCallArmsNotice(tool: string, args: Record<string, unknown>)
 export const NOTIFY_CLOSE_TOOLS: ReadonlySet<string> = new Set([
   "terminal.close",
   "terminal.closeOwned",
+  // The process the notice watched is replaced, and its exit would otherwise
+  // read as the agent finishing (#14369).
+  "terminal.restartOnPresetOwned",
 ]);
 
 /** The key paths that take `notify: true`. */

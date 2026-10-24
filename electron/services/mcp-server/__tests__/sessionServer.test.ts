@@ -8128,6 +8128,11 @@ describe("session-scoped resource ownership (#11909)", () => {
         kind: "command",
         danger: "confirm" as const,
       },
+      {
+        ...makeManifestEntry("terminal.restartOnPresetOwned"),
+        kind: "command",
+        danger: "confirm" as const,
+      },
       makeManifestEntry("worktree.createWithRecipe"),
       makeManifestEntry("recipe.run"),
       makeManifestEntry("agent.launch"),
@@ -8668,6 +8673,101 @@ describe("session-scoped resource ownership (#11909)", () => {
 
       expect(result.isError).toBe(true);
       expect(errorText(result)).toContain("VALIDATION_ERROR");
+      expect(dispatchAction).not.toHaveBeenCalled();
+    });
+  });
+  describe("terminal.restartOnPresetOwned (#14369)", () => {
+    const RESTART_RESULT = {
+      terminalId: "terminal-1",
+      agentPresetId: "work",
+      agentSessionIdCleared: true,
+    };
+
+    function restartHarness(sessionId: string) {
+      const h = harness(sessionId, {
+        "terminal.restartOnPreset": { result: { ok: true, result: RESTART_RESULT } },
+        "terminal.close": { result: { ok: true, result: { closedIds: ["terminal-1"] } } },
+      });
+      h.store.resourceOwnership.record(sessionId, [{ kind: "terminal", id: "terminal-1" }]);
+      return h;
+    }
+
+    // `confirmed` is the one argument that must never cross: the delegate
+    // reads it as the user's approval, so forwarding it would let the model
+    // approve its own restart.
+    it("delegates with only the id and preset, unconfirmed", async () => {
+      const { server, dispatchAction } = restartHarness("s-restart");
+
+      const result = await callTool(server, {
+        name: "terminal.restartOnPresetOwned",
+        arguments: { terminalId: "terminal-1", presetId: "work", confirmed: true },
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(dispatchAction).toHaveBeenCalledWith(
+        "terminal.restartOnPreset",
+        { presetId: "work", terminalId: "terminal-1" },
+        false
+      );
+      expect(payloadOf<typeof RESTART_RESULT>(result)).toEqual(RESTART_RESULT);
+    });
+
+    // The pane survives a restart, so the session keeps the authority to brief
+    // it again and to close it afterwards.
+    it("keeps ownership, so the restarted panel can still be closed", async () => {
+      const { store, server } = restartHarness("s-restart-keeps");
+
+      await callTool(server, {
+        name: "terminal.restartOnPresetOwned",
+        arguments: { terminalId: "terminal-1", presetId: "work" },
+      });
+      expect(store.resourceOwnership.owns("s-restart-keeps", "terminal", "terminal-1")).toBe(true);
+
+      const closed = await callTool(server, {
+        name: "terminal.closeOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      expect(closed.isError).toBeUndefined();
+      expect(store.resourceOwnership.owns("s-restart-keeps", "terminal", "terminal-1")).toBe(
+        false
+      );
+    });
+
+    it("keeps ownership when the restart fails", async () => {
+      const { store, server } = harness("s-restart-failed", {
+        "terminal.restartOnPreset": {
+          result: {
+            ok: false,
+            error: { code: "EXECUTION_ERROR", message: "preset not found" },
+          },
+        },
+      });
+      store.resourceOwnership.record("s-restart-failed", [{ kind: "terminal", id: "terminal-1" }]);
+
+      const result = await callTool(server, {
+        name: "terminal.restartOnPresetOwned",
+        arguments: { terminalId: "terminal-1", presetId: "gone" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toContain("preset not found");
+      expect(store.resourceOwnership.owns("s-restart-failed", "terminal", "terminal-1")).toBe(true);
+    });
+
+    it("refuses a panel the session did not create, without dispatching", async () => {
+      const { store, server, dispatchAction } = restartHarness("s-restart-foreign");
+      store.resourceOwnership.record("other-session", [
+        { kind: "terminal", id: "terminal-theirs" },
+      ]);
+
+      const result = await callTool(server, {
+        name: "terminal.restartOnPresetOwned",
+        arguments: { terminalId: "terminal-theirs", presetId: "work" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toContain("RESOURCE_NOT_OWNED");
       expect(dispatchAction).not.toHaveBeenCalled();
     });
   });
@@ -10690,6 +10790,27 @@ describe("session-scoped resource ownership (#11909)", () => {
         "ws-a",
         "pilot.openRun",
         { runId: "terminal-handed", workspaceId: "ws-a" },
+        expect.anything()
+      );
+    });
+
+    // A restart ends the conversation as surely as a close does (#14369).
+    it("never restarts a handed-over terminal on another preset", async () => {
+      const store = makeStore();
+      const dispatchAction = listingDispatch();
+      const server = orchestratorSession(store, "s-orch", dispatchAction);
+      handOver(store, "terminal-handed");
+
+      const result = await callTool(server, {
+        name: "terminal.restartOnPresetOwned",
+        arguments: { terminalId: "terminal-handed", presetId: "work" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toContain("RESOURCE_NOT_OWNED");
+      expect(dispatchAction).not.toHaveBeenCalledWith(
+        "terminal.restartOnPreset",
+        expect.anything(),
         expect.anything()
       );
     });

@@ -23,6 +23,14 @@ const PanelCloseResultSchema = z.object({
     ),
 });
 
+const RestartOnPresetResultSchema = z.object({
+  terminalId: z.string().describe("The pane, respawned in place."),
+  agentPresetId: z.string().describe("Preset it now runs on."),
+  agentSessionIdCleared: z
+    .literal(true)
+    .describe("A new conversation started: re-send anything the agent still needs."),
+});
+
 /**
  * What one batch kill did, per target.
  *
@@ -388,8 +396,49 @@ export function registerTerminalLifecycleActions(
     // rate-limit chip carry their own picker and confirm.
     palette: { mode: "hidden" },
     argsSchema: RestartOnPresetArgsSchema,
+    resultSchema: RestartOnPresetResultSchema,
     run: (args: unknown, ctx: ActionContext) =>
       runTerminalLifecycleAction("terminal.restartOnPreset", args, ctx),
+  }));
+
+  // Manifest-only, executed in the MCP main process like `terminal.closeOwned`
+  // (#14369): main checks the session launched the pane, then dispatches
+  // `terminal.restartOnPreset` with the preset alone, never `confirmed`, so the
+  // approval is the host's prompt, grant or skip preference and not the model's.
+  // `danger: "confirm"` matches the delegate: the conversation ends either way.
+  actions.set("terminal.restartOnPresetOwned", () => ({
+    id: "terminal.restartOnPresetOwned",
+    title: "Restart owned agent on preset",
+    description:
+      "Respawn an agent panel this session launched on another preset of its agent, in place, after the user confirms: for an agent that hit a plan limit. Its conversation and scrollback are lost. Panels it was handed are refused.",
+    category: "terminal",
+    kind: "command",
+    danger: "confirm",
+    denyPluginDispatch: true,
+    scope: "renderer",
+    dangerRationale:
+      "Ends the agent's conversation and respawns it on another preset. Scrollback is lost.",
+    keywords: ["preset", "account", "rate limit", "owned"],
+    // Hidden for the same reason as `terminal.closeOwned`: only the MCP
+    // main-process path can reach it.
+    palette: { mode: "hidden" },
+    argsSchema: z.object({
+      terminalId: z
+        .string()
+        .min(1)
+        .describe("Panel `id` this session got when launching it. Required."),
+      presetId: z
+        .string()
+        .min(1)
+        .describe("A preset `id` of the panel's own agent."),
+    }),
+    resultSchema: RestartOnPresetResultSchema,
+    mcpOutputSchema: true,
+    run: async () => {
+      throw new Error(
+        "terminal.restartOnPresetOwned must be invoked through the MCP main-process path, not renderer dispatch."
+      );
+    },
   }));
 
   actions.set("terminal.redraw", () => ({

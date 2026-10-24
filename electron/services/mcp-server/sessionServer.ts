@@ -402,6 +402,20 @@ const OWNED_RESOURCE_TOOLS: Record<string, OwnedResourceTool> = {
     releasesOwnership: true,
     acceptsAdoption: false,
   },
+  // Moves a pane this session launched to another preset of its agent
+  // (#14369). The pane survives, so the record stays; but the conversation
+  // ends as surely as on a close, so a handed-over pane is refused like one.
+  // Only the preset is forwarded: `confirmed` never is, so the approval is the
+  // host's and the model cannot supply its own.
+  "terminal.restartOnPresetOwned": {
+    resourceKind: "terminal",
+    executor: "renderer",
+    delegateTo: "terminal.restartOnPreset",
+    idArg: "terminalId",
+    forwardArgs: ["presetId"],
+    releasesOwnership: false,
+    acceptsAdoption: false,
+  },
   "worktree.deleteOwned": {
     resourceKind: "worktree",
     executor: "renderer",
