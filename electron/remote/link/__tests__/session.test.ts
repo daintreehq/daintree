@@ -228,6 +228,70 @@ describe("LinkSession liveness", () => {
     b.destroy();
   });
 
+  it("ends an idle link without a GOODBYE, so the peer can hold the session for a resume", async () => {
+    const { a, b } = await socketPair(dir);
+    const frames = recordFrames(b);
+    const session = new LinkSession(a, { role: "client", pingIntervalMs: 0, idleTimeoutMs: 40 });
+    sessions.push(session);
+    session.open();
+    await expect(closedPromise(session)).resolves.toEqual({ reason: "idle timeout", by: "local" });
+    await new Promise<void>((resolve) => b.once("end", resolve));
+    expect(frames.filter((f) => f.kind === ControlKind.GOODBYE)).toEqual([]);
+    b.destroy();
+  });
+
+  it("doesn't count time asleep toward the idle timeout", async () => {
+    const { a, b } = await socketPair(dir);
+    // The wall clock jumps ten minutes, as it does across a sleep, while the
+    // process's own timers carry on from where they stopped.
+    let jumpedAt: number | null = null;
+    const slept = 600_000;
+    const now = () => Date.now() + (jumpedAt === null ? 0 : slept);
+    const awakeSince = (since: number) =>
+      now() - since - (jumpedAt !== null && since < jumpedAt + slept ? slept : 0);
+    const session = new LinkSession(a, {
+      role: "client",
+      pingIntervalMs: 0,
+      idleTimeoutMs: 80,
+      now,
+      awakeSince,
+    });
+    sessions.push(session);
+    session.open();
+    jumpedAt = Date.now();
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(session.isOpen).toBe(true);
+    // Awake and still silent: the window runs out as before.
+    const closed = await closedPromise(session);
+    expect(closed.reason).toBe("idle timeout");
+    b.destroy();
+  });
+
+  it("drops a link whose peer doesn't answer a probe in time, without a GOODBYE", async () => {
+    const { a, b } = await socketPair(dir);
+    const frames = recordFrames(b);
+    const session = new LinkSession(a, { role: "client", pingIntervalMs: 0, idleTimeoutMs: 0 });
+    sessions.push(session);
+    session.open();
+    session.probe(30, "no answer after wake");
+    await expect(closedPromise(session)).resolves.toEqual({
+      reason: "no answer after wake",
+      by: "local",
+    });
+    await new Promise<void>((resolve) => b.once("end", resolve));
+    expect(frames.map((f) => f.kind)).toEqual([ControlKind.PING]);
+    b.destroy();
+  });
+
+  it("keeps a link whose peer answers the probe", async () => {
+    const { host, client } = await pair({}, { pingIntervalMs: 0, idleTimeoutMs: 0 });
+    client.probe(40, "no answer after wake");
+    await waitFor(() => client.rttMs !== null);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(client.isOpen).toBe(true);
+    expect(host.isOpen).toBe(true);
+  });
+
   it("keeps hearing a peer whose frame arrives slower than the idle window, then gives up once it stops", async () => {
     const { a, b } = await socketPair(dir);
     const session = new LinkSession(a, { role: "host", pingIntervalMs: 0, idleTimeoutMs: 60 });

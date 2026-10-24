@@ -27,6 +27,7 @@ afterEach(async () => {
 
 function setup(transport: LinkTransport = unreachable) {
   let now = 0;
+  let slept = 0;
   const registry = new HostRegistry(memoryStore());
   const host = registry.add({ name: "studio", connection: { kind: "ssh", target: "studio" } });
   manager = new RemoteHostManager({
@@ -37,6 +38,8 @@ function setup(transport: LinkTransport = unreachable) {
     views: { send: () => true, watch: () => () => {}, resync: () => {} },
     backoff: { initialMs: 60_000, maxMs: 60_000, jitter: 0 },
     now: () => now,
+    // Every sleep in these tests starts after the connection was last used.
+    awakeSince: (since) => now - since - slept,
     idleReleaseMs: 1_000,
   });
   return {
@@ -45,6 +48,10 @@ function setup(transport: LinkTransport = unreachable) {
     hostId: host.id,
     advance(ms: number) {
       now += ms;
+    },
+    sleep(ms: number) {
+      now += ms;
+      slept += ms;
     },
   };
 }
@@ -142,5 +149,34 @@ describe("RemoteHostManager idle release", () => {
     h.advance(1_000);
     h.manager.sweepIdle();
     expect(h.manager.get(h.hostId)).toBeUndefined();
+  });
+});
+
+describe("RemoteHostManager across a sleep (#14365)", () => {
+  it("doesn't count time asleep as time unused", () => {
+    const h = setup();
+    h.manager.connect(h.hostId);
+    h.advance(500);
+    h.sleep(600_000);
+    h.manager.sweepIdle();
+    expect(h.manager.get(h.hostId)).toBeDefined();
+    h.advance(500);
+    h.manager.sweepIdle();
+    expect(h.manager.get(h.hostId)).toBeUndefined();
+  });
+
+  it("dials a link waiting out its backoff as soon as the machine wakes", async () => {
+    let opens = 0;
+    const h = setup({
+      async open() {
+        opens++;
+        throw new TransportError("unreachable", "Network is unreachable");
+      },
+    });
+    h.manager.connect(h.hostId);
+    await waitFor(() => h.manager.connectionState(h.hostId).status === "unreachable");
+    expect(opens).toBe(1);
+    h.manager.systemResumed();
+    await waitFor(() => opens === 2);
   });
 });

@@ -58,6 +58,12 @@ export interface LinkSessionOptions {
   pingIntervalMs?: number;
   /** Close when nothing has been received for this long once open; 0 disables. */
   idleTimeoutMs?: number;
+  /**
+   * How long this machine was awake since a moment `now` gave; all of it by
+   * default. Time asleep is not silence from the peer, so the idle timeout
+   * counts only this.
+   */
+  awakeSince?: (since: number) => number;
   /** Close when the handshake has not completed within this long; 0 disables. */
   handshakeTimeoutMs?: number;
   /** Default timeout for CALL and REVERSE_REQUEST; 0 disables. */
@@ -200,11 +206,14 @@ export class LinkSession {
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private idleTimer: ReturnType<typeof setInterval> | null = null;
   private handshakeTimer: ReturnType<typeof setTimeout> | null = null;
+  private probeTimer: ReturnType<typeof setTimeout> | null = null;
   private closeInfo: LinkCloseInfo | null = null;
 
   private _rttMs: number | null = null;
   private _lastReceivedAt: number;
   private _framesSinceOpen = 0;
+  /** Reads that brought bytes, so a probe can tell whether anything arrived after it. */
+  private reads = 0;
 
   constructor(
     private readonly socket: Duplex,
@@ -308,9 +317,10 @@ export class LinkSession {
     }
     const idleMs = this.opts.idleTimeoutMs ?? 20_000;
     if (idleMs > 0) {
+      const awakeSince = this.opts.awakeSince ?? ((since: number) => this.now() - since);
       this.idleTimer = setInterval(
         () => {
-          if (this.now() - this._lastReceivedAt > idleMs) this.close("idle timeout");
+          if (awakeSince(this._lastReceivedAt) > idleMs) this.drop("idle timeout");
         },
         Math.max(10, Math.floor(idleMs / 4))
       );
@@ -332,6 +342,23 @@ export class LinkSession {
   ping(): void {
     if (this.state !== "open") return;
     this.post({ lane: Lane.CONTROL, kind: ControlKind.PING, body: { sentAt: this.now() } });
+  }
+
+  /**
+   * Ping now, and drop the session if nothing at all arrives within
+   * `withinMs`: after a wake, a link that died while the machine slept is
+   * given up at once instead of at the idle timeout.
+   */
+  probe(withinMs: number, reason: string): void {
+    if (this.state !== "open") return;
+    const reads = this.reads;
+    this.ping();
+    if (this.probeTimer) clearTimeout(this.probeTimer);
+    this.probeTimer = setTimeout(() => {
+      this.probeTimer = null;
+      if (this.state === "open" && this.reads === reads) this.drop(reason);
+    }, withinMs);
+    this.probeTimer.unref?.();
   }
 
   onRtt(listener: (rttMs: number) => void): () => void {
@@ -491,6 +518,15 @@ export class LinkSession {
     this.shutdown({ reason, by: "local" }, true);
   }
 
+  /**
+   * End a link presumed dead without a GOODBYE: it would most likely go
+   * nowhere, and a peer it did reach would take it as leaving for good and
+   * give up a session that could still be resumed.
+   */
+  private drop(reason: string): void {
+    this.shutdown({ reason, by: "local" }, false);
+  }
+
   /** Send a REJECT and end the stream (host side of a failed handshake). */
   reject(message: Body<typeof Lane.CONTROL, typeof ControlKind.REJECT>): void {
     if (this.state === "closed") return;
@@ -620,6 +656,7 @@ export class LinkSession {
     // takes that long to arrive on a slow link, and it must not be cut off
     // (nor the link called quiet) halfway through.
     this._lastReceivedAt = this.now();
+    this.reads++;
     let frames: LinkFrame[];
     try {
       frames = this.decoder.push(chunk);
@@ -862,6 +899,8 @@ export class LinkSession {
     }
     this.closeInfo = info;
     this.clearHandshakeTimer();
+    if (this.probeTimer) clearTimeout(this.probeTimer);
+    this.probeTimer = null;
     if (this.pingTimer) clearInterval(this.pingTimer);
     if (this.idleTimer) clearInterval(this.idleTimer);
     this.pingTimer = this.idleTimer = null;

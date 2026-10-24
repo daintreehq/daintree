@@ -61,6 +61,7 @@ import {
 import { clearPendingRemoteRestoresForHost } from "../../window/openWindowsTracker.js";
 import { forgetRemoteRestoresForHost } from "../../window/remoteWindowRestore.js";
 import { clearHostPartitions } from "../../services/sessionCacheCleaner.js";
+import { getSystemSleepService } from "../../services/SystemSleepService.js";
 import { forgetHostState, type HostStateCleanup } from "./forgetHostState.js";
 import { HostRegistry, type RemoteHostsStore } from "./HostRegistry.js";
 import {
@@ -721,6 +722,8 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
   // Bound below: the sink needs the router's answer, the router needs the manager.
   let router: RemoteRouterImpl | null = null;
   const hostForView = (webContentsId: number) => router?.hostForSender(webContentsId) ?? null;
+  const sleep = getSystemSleepService();
+  const awakeSince = (since: number) => sleep.getAwakeTimeSince(since);
   const manager = new RemoteHostManager({
     registry,
     createTransport:
@@ -745,7 +748,10 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     },
     views: createViewSink(hostForView),
     reverseRequests: answerReverseRequest,
+    session: { awakeSince },
+    awakeSince,
   });
+  const stopWakeWatch = sleep.onWake(() => manager.systemResumed());
   const bindings = new WindowHostBinding();
   const remoteRouter = new RemoteRouterImpl(manager, bindings, senders);
   router = remoteRouter;
@@ -898,6 +904,7 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     emitLocal: broadcastLocal,
     registry,
     async dispose() {
+      stopWakeWatch();
       stopOwnedHostCleanup();
       unregister();
       unregisterWindowHosts();
