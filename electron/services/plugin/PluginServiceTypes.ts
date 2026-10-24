@@ -11,7 +11,7 @@ export interface ValidateFn {
 }
 
 export interface LoadedPlugin {
-  /** Deep-frozen at load (see `deepFreeze` call in `loadPlugin`); `Readonly` is the compile-time half of that invariant. */
+  /** Deep-frozen at load (see `deepFreeze` call in `readPluginManifestForLoad`); `Readonly` is the compile-time half of that invariant. */
   manifest: Readonly<PluginManifest>;
   dir: string;
   resolvedMain?: string;
