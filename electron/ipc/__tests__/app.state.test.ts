@@ -508,11 +508,19 @@ describe("app:boot handler", () => {
       quarantinedPath: undefined,
     }));
     let events: unknown = [
-      { crashId: "c1", cause: "watchdog-deadlock", at: 5_000, missedBeats: 3, workspaceIds: ["proj-a"] },
+      {
+        crashId: "c1",
+        cause: "watchdog-deadlock",
+        at: 5_000,
+        missedBeats: 3,
+        workspaceIds: ["proj-a"],
+      },
     ];
     const storeModule = await import("../../store.js");
     vi.mocked(storeModule.store.get).mockImplementation(((key: string) =>
-      key === "hostEndRestoreHolds" ? events : defaultStoreGet(key)) as typeof storeModule.store.get);
+      key === "hostEndRestoreHolds"
+        ? events
+        : defaultStoreGet(key)) as typeof storeModule.store.get);
     vi.mocked(storeModule.store.set).mockImplementation(((key: string, value: unknown) => {
       if (key === "hostEndRestoreHolds") events = value;
       else defaultStoreSet(key, value);

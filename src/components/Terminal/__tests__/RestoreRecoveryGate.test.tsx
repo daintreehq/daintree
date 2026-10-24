@@ -537,12 +537,22 @@ describe("RestoreRecoveryGate — held after an unclean end (#14382)", () => {
     });
 
   it("quotes what the watchdog recorded and keeps resuming one click away", async () => {
-    seed(hostHeld("p-1", { cause: "watchdog-deadlock", at: Date.now() - 3 * 3_600_000, missedBeats: 3 }));
+    seed(
+      hostHeld("p-1", {
+        cause: "watchdog-deadlock",
+        at: Date.now() - 3 * 3_600_000,
+        missedBeats: 3,
+      })
+    );
 
     render(<RestoreRecoveryGate panelId="p-1" isFocused />);
 
-    expect(screen.getByRole("heading", { name: "Not resumed after Daintree was stopped" })).toBeTruthy();
-    expect(screen.getByText(/watchdog stopped the app 3 hours ago after 3 missed heartbeats/)).toBeTruthy();
+    expect(
+      screen.getByRole("heading", { name: "Not resumed after Daintree was stopped" })
+    ).toBeTruthy();
+    expect(
+      screen.getByText(/watchdog stopped the app 3 hours ago after 3 missed heartbeats/)
+    ).toBeTruthy();
     expect(screen.getByText("watchdog-deadlock")).toBeTruthy();
     // Selecting the pane starts nothing on its own.
     expect(launchFromRestoreRecovery).not.toHaveBeenCalled();
@@ -562,7 +572,11 @@ describe("RestoreRecoveryGate — held after an unclean end (#14382)", () => {
 
     render(<RestoreRecoveryGate panelId="p-1" />);
 
-    expect(screen.getByText(/Daintree was last seen running 2 minutes ago and ended without shutting down/)).toBeTruthy();
+    expect(
+      screen.getByText(
+        /Daintree was last seen running 2 minutes ago and ended without shutting down/
+      )
+    ).toBeTruthy();
     expect(screen.getByText("external-kill")).toBeTruthy();
   });
 

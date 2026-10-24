@@ -394,11 +394,25 @@ describe("resuming panes an unclean end held (#14382)", () => {
       live: livePane("live", "sess-live"),
     };
 
-    expect(heldForHostEndIds(panels, ["a", "noSession", "noDestination", "trashed", "otherHold", "live", "b"])).toEqual(["a", "b"]);
+    expect(
+      heldForHostEndIds(panels, [
+        "a",
+        "noSession",
+        "noDestination",
+        "trashed",
+        "otherHold",
+        "live",
+        "b",
+      ])
+    ).toEqual(["a", "b"]);
   });
 
   it("resumes each one into its own conversation, one after another", async () => {
-    storeState.panelsById = { a: hostHeld("a"), b: hostHeld("b"), other: heldPane({ id: "other" }) };
+    storeState.panelsById = {
+      a: hostHeld("a"),
+      b: hostHeld("b"),
+      other: heldPane({ id: "other" }),
+    };
     storeState.panelIds = ["a", "other", "b"];
 
     await expect(resumeAllHeldForHostEnd()).resolves.toEqual(["launched", "launched"]);

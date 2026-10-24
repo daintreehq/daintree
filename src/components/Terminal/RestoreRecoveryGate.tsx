@@ -16,11 +16,7 @@ import {
   type RestoreRecoveryChoice,
   type RestoreRecoveryLaunchResult,
 } from "@/services/terminal/restoreRecoveryLaunch";
-import {
-  isPtyPanel,
-  type PanelHostEnd,
-  type RestoreRecoveryReason,
-} from "@shared/types/panel";
+import { isPtyPanel, type PanelHostEnd, type RestoreRecoveryReason } from "@shared/types/panel";
 import { resolveResumeOnRestart } from "@shared/types/agentSettings";
 import { resolveConversationSearchCwd } from "@/utils/restoreRecovery";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
@@ -242,7 +238,10 @@ export function RestoreRecoveryGate({
     : armed && resumesOnFocusId !== undefined
       ? RESUMES_ON_FOCUS_COPY
       : recovery.reason === "host-ended-uncleanly" && recovery.hostEnd
-        ? { ...REASON_COPY[recovery.reason], description: describeHostEnd(recovery.hostEnd, Date.now()) }
+        ? {
+            ...REASON_COPY[recovery.reason],
+            description: describeHostEnd(recovery.hostEnd, Date.now()),
+          }
         : REASON_COPY[recovery.reason];
   const outcomeMessage = outcome ? OUTCOME_MESSAGES[outcome] : undefined;
 
