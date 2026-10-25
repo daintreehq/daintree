@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { AgentDirectorySchema } from "./agentDirectory.js";
 import { HOST_SETTING_KEYS, HostSettingsPatchFieldsSchema } from "./hostSettings.js";
+import { HostThrowawayCallSchema } from "./hostThrowaway.js";
 
 /**
  * This Shell's reach into its Remote Hosts for its own assistants (#13493,
@@ -164,10 +165,23 @@ export type HostListEntry = z.infer<typeof HostListEntrySchema>;
 export const HostListResultSchema = z.object({ hosts: z.array(HostListEntrySchema) });
 export type HostListResult = z.infer<typeof HostListResultSchema>;
 
+/** A call names exactly one target: one of the host's projects, or a throwaway agent (#14444). */
+function namesOneTarget(args: { projectId?: string; throwaway?: true }): boolean {
+  return (args.projectId === undefined) !== (args.throwaway === undefined);
+}
+
 export const HostCallArgsSchema = z
   .object({
     hostId: hostIdSchema,
-    projectId: idSchema.describe("A projectId from the host list. The call runs there."),
+    projectId: idSchema
+      .optional()
+      .describe("A projectId from the host list. The call runs there. Never with throwaway."),
+    throwaway: z
+      .literal(true)
+      .optional()
+      .describe(
+        "Instead of projectId: a short-lived agent this session owns, in a host folder. Tools: throwaway.launch, .status, .output, .sendCommand, .sendKeys, .close."
+      ),
     tool: z
       .string()
       .min(1)
@@ -184,7 +198,14 @@ export const HostCallArgsSchema = z
       ),
   })
   // A caller-chosen id names a first send, a callId a resend: one call is never both (#14240).
-  .refine((args) => args.callId === undefined || args.newCallId === undefined);
+  .refine((args) => args.callId === undefined || args.newCallId === undefined)
+  .refine(namesOneTarget)
+  // A throwaway target takes only its own tools, with their own arguments.
+  .refine(
+    (args) =>
+      args.throwaway === undefined ||
+      HostThrowawayCallSchema.safeParse({ tool: args.tool, args: args.args ?? {} }).success
+  );
 export type HostCallArgs = z.infer<typeof HostCallArgsSchema>;
 
 /** A host tool's answer, as its own MCP result: structured when it has a schema, else its text. */

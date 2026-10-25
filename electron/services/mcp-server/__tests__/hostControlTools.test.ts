@@ -114,6 +114,38 @@ describe("runHostControlTool (#13493)", () => {
     expect(missing).toMatchObject({ ok: false, code: "INVALID_ARGS" });
   });
 
+  it("hands host.call exactly one target, and refuses both or neither at the boundary (#14444)", async () => {
+    const runtime = fakeRuntime();
+    const uninstall = setHostControlRuntime(runtime);
+    const access = bindHostControl(() => "hub");
+    const launch = { tool: "throwaway.launch", args: { agentId: "claude" } };
+    const send = (args: Record<string, unknown>) =>
+      runHostControlTool("host.call", { hostId: "h", ...args }, access, { tier: "core" });
+
+    const throwaway = await send({ throwaway: true, ...launch });
+    const project = await send({ projectId: "p", tool: "terminal.list" });
+    const refused = await Promise.all([
+      send({ projectId: "p", throwaway: true, ...launch }),
+      send(launch),
+      send({ throwaway: false, ...launch }),
+      // A throwaway target takes only its own tools, with only their own arguments.
+      send({ throwaway: true, tool: "terminal.list" }),
+      send({ throwaway: true, tool: "throwaway.launch", args: { agentId: "claude", cwd: "/" } }),
+      send({ throwaway: true, tool: "throwaway.close" }),
+    ]);
+    uninstall();
+    expect(throwaway).toMatchObject({ ok: true });
+    expect(project).toMatchObject({ ok: true });
+    expect(runtime.call).toHaveBeenCalledTimes(2);
+    expect(runtime.call).toHaveBeenNthCalledWith(
+      1,
+      "hub",
+      { hostId: "h", throwaway: true, ...launch },
+      { tier: "core" }
+    );
+    for (const result of refused) expect(result).toMatchObject({ ok: false, code: "INVALID_ARGS" });
+  });
+
   it("hands host.call the caller's own first-send id, and refuses one sent beside a callId (#14240)", async () => {
     const runtime = fakeRuntime();
     const uninstall = setHostControlRuntime(runtime);

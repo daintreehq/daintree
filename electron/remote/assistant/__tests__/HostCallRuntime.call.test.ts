@@ -210,6 +210,32 @@ describe("HostCallRuntime host.call (#13493)", () => {
     expect(relayCall).not.toHaveBeenCalled();
   });
 
+  it("answers a throwaway target unsupported, sending and remembering nothing (#14444)", async () => {
+    const { projectId: _project, ...rest } = CALL;
+    const throwaway = {
+      ...rest,
+      throwaway: true as const,
+      tool: "throwaway.launch",
+      args: { agentId: "claude" },
+      newCallId: "mine-1",
+    };
+    await expect(runtime.call("a", throwaway, { tier: "core" })).resolves.toEqual({
+      ok: true,
+      value: {
+        outcome: "unsupported",
+        detail: expect.any(String),
+        retryAfterMs: null,
+        callId: null,
+        result: null,
+      },
+    });
+    expect(relayCall).not.toHaveBeenCalled();
+
+    // The same id as a project call is still a first send: nothing kept it.
+    await runtime.call("a", { ...CALL, newCallId: "mine-1" }, { tier: "core" });
+    expect(relayCall.mock.calls[0]![1]).toMatchObject({ callId: "mine-1", resend: false });
+  });
+
   it("refuses arguments too large to send", async () => {
     const big = { text: "x".repeat(MAX_RELAY_ARGS_BYTES) };
     await expect(

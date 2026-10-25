@@ -1,5 +1,11 @@
 import { z } from "zod";
 import { EXCHANGE_STATES } from "../exchange/types.js";
+import {
+  HOST_THROWAWAY_FAILURES,
+  HOST_THROWAWAY_REFUSALS,
+  HostThrowawayCallSchema,
+  HostThrowawayToolResultSchema,
+} from "../../../shared/types/hostThrowaway.js";
 
 /**
  * Session-level methods between a Shell and a host for the Shell's
@@ -49,6 +55,12 @@ export const AssistantLinkMethod = {
    * UNSUPPORTED, which leaves the call refused as needing a view.
    */
   RELAY_APPROVE: "assistant.relay-approve",
+  /**
+   * Shell → Host: run one throwaway tool for one of the Shell's assistants
+   * (#14444), with no project. Its own method, so a host from before this
+   * answers UNSUPPORTED rather than failing MCP_CALL's payload check.
+   */
+  THROWAWAY_CALL: "assistant.throwaway-call",
 } as const;
 
 /** What a v0.44 Shell calls for the exchanges it sent, answered from retired records (#13496). */
@@ -204,6 +216,42 @@ export const McpCallAnswerSchema = z.discriminatedUnion("status", [
     .strip(),
 ]);
 export type McpCallAnswer = z.infer<typeof McpCallAnswerSchema>;
+
+export const ThrowawayCallPayloadSchema = z
+  .object({
+    /** With the sender the host authenticated, the only owner of what the call launches. */
+    helpSessionId: id,
+    tier: z.enum(["core", "full"]),
+    callId: id,
+    resend: z.boolean(),
+    call: HostThrowawayCallSchema,
+    /** How long this one call may run on the host; a run's own time limit is its launch's. */
+    runMs: z.number().int().min(1_000).max(MAX_RELAY_RUN_MS),
+  })
+  .strict();
+export type ThrowawayCallPayload = z.infer<typeof ThrowawayCallPayloadSchema>;
+
+export const ThrowawayCallAnswerSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("done"), result: HostThrowawayToolResultSchema }).strip(),
+  /** The tool ran and failed; `not-found` too for a run that isn't the caller's. */
+  z.object({ status: z.literal("failed"), reason: z.enum(HOST_THROWAWAY_FAILURES) }).strip(),
+  z.object({ status: z.literal("unknown") }).strip(),
+  z.object({ status: z.literal("conflict") }).strip(),
+  /** Refused before anything ran; a reason this Shell doesn't know reads as turned off. */
+  z
+    .object({
+      status: z.literal("refused"),
+      reason: z.union([
+        z.enum(HOST_THROWAWAY_REFUSALS),
+        z
+          .string()
+          .max(64)
+          .transform(() => "throwaway-off" as const),
+      ]),
+    })
+    .strip(),
+]);
+export type ThrowawayCallAnswer = z.infer<typeof ThrowawayCallAnswerSchema>;
 
 /** Notices one relay-notices call carries; the host sends the rest in the next. */
 export const MAX_RELAY_NOTICES_PER_CALL = 32;
