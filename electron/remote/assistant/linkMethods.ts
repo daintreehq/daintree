@@ -61,6 +61,13 @@ export const AssistantLinkMethod = {
    * answers UNSUPPORTED rather than failing MCP_CALL's payload check.
    */
   THROWAWAY_CALL: "assistant.throwaway-call",
+  /**
+   * Shell → Host: one of the Shell's help sessions ended, so the throwaway
+   * runs it launched there go now rather than at their time limits (#14447).
+   * The sender is the one the session proved. A host from before this answers
+   * UNSUPPORTED, and its runs end on their limits.
+   */
+  THROWAWAY_RELEASE: "assistant.throwaway-release",
 } as const;
 
 /** What a v0.44 Shell calls for the exchanges it sent, answered from retired records (#13496). */
@@ -252,6 +259,9 @@ export const ThrowawayCallAnswerSchema = z.discriminatedUnion("status", [
     .strip(),
 ]);
 export type ThrowawayCallAnswer = z.infer<typeof ThrowawayCallAnswerSchema>;
+
+export const ThrowawayReleasePayloadSchema = z.object({ helpSessionId: id }).strict();
+export type ThrowawayReleasePayload = z.infer<typeof ThrowawayReleasePayloadSchema>;
 
 /** Notices one relay-notices call carries; the host sends the rest in the next. */
 export const MAX_RELAY_NOTICES_PER_CALL = 32;

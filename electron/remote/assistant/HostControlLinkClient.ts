@@ -19,6 +19,7 @@ import {
   type RelayNoticesPayload,
   type ThrowawayCallAnswer,
   type ThrowawayCallPayload,
+  type ThrowawayReleasePayload,
 } from "./linkMethods.js";
 import { createLogger } from "../../utils/logger.js";
 
@@ -283,6 +284,13 @@ export class HostControlLinkClient {
     );
     if (!parsed.success) throw invalidAnswer(hostId, AssistantLinkMethod.THROWAWAY_CALL);
     return parsed.data;
+  }
+
+  /** Tells the host one of this Shell's help sessions ended, so its throwaway runs there go (#14447). */
+  async throwawayRelease(hostId: HostId, payload: ThrowawayReleasePayload): Promise<void> {
+    const session = await this.open(hostId);
+    await this.authenticate(hostId, session);
+    await this.call(hostId, session, AssistantLinkMethod.THROWAWAY_RELEASE, payload);
   }
 
   private async open(hostId: HostId): Promise<LinkSession> {

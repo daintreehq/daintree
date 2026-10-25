@@ -275,6 +275,7 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
   const offSessionEnded = helpSessionService.addSessionEndedListener(({ sessionId, reason }) => {
     if (reason === "relaunched") return;
     local.endHelpSession(sessionId);
+    runtime.endHelpSession(sessionId);
   });
   const unregisterRuntime = setHostControlRuntime(runtime);
   const unregisterCallRelay = registerRemoteService("hostCallRelayClient", runtime);

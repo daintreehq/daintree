@@ -47,7 +47,10 @@ export interface LocalMcpRelay {
   relayCall(payload: McpCallPayload): Promise<McpCallAnswer>;
   /** A throwaway tool on this machine (#14446), with no project, session or view. */
   throwawayCall(payload: ThrowawayCallPayload): Promise<ThrowawayCallAnswer>;
-  /** One of this machine's help sessions ended: its sessions and its hold on what it made go. */
+  /**
+   * One of this machine's help sessions ended: its sessions, its hold on what
+   * it made and its throwaway runs go.
+   */
   endHelpSession(helpSessionId: string): void;
   dispose(): void;
 }
@@ -122,6 +125,10 @@ export function createLocalMcpRelay(deps: LocalMcpRelayDeps): LocalMcpRelay {
     },
     endHelpSession: (helpSessionId) => {
       deps.releaseHandOvers?.(helpSessionId);
+      // Its throwaway runs go now, not at their time limits (#14447).
+      deps
+        .throwawayRuns?.()
+        ?.endOwner({ senderId: LOCAL_RELAY_SENDER_ID, helpSessionId }, "session-ended");
       executor.endPrincipal(LOCAL_RELAY_SENDER_ID, helpSessionId);
     },
     dispose: () => {

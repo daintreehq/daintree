@@ -10,14 +10,18 @@ import { MCP_RESPONSE_TEXT_MAX_BYTES } from "../../../shared/config/mcpLimits.js
 import { readTailSnapshot, tailCapturedOutput } from "../../../shared/utils/artifactParser.js";
 import { fitTerminalOutputResult } from "../../../shared/utils/terminalOutputBudget.js";
 import { registerRemoteService } from "../../remote/runtime.js";
+import { createLogger } from "../../utils/logger.js";
 import type { HostThrowawayExecutor } from "../../remote/assistant/throwawayRelay.js";
 import { HostThrowawayRuns, type HostThrowawayRunsDeps } from "./HostThrowawayRuns.js";
 
 export {
   HostThrowawayRuns,
+  type HostThrowawayCloseReason,
   type HostThrowawayOwner,
   type HostThrowawayRunEntry,
 } from "./HostThrowawayRuns.js";
+
+const logger = createLogger("main:HostThrowawayRuns");
 
 /** The one folder every throwaway run starts in. */
 export function hostThrowawayFolder(): string {
@@ -31,6 +35,23 @@ export function liveHostThrowawayDeps(): HostThrowawayRunsDeps {
     now: Date.now,
     newId: randomUUID,
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    schedule: (ms, fire) => {
+      const timer = setTimeout(fire, ms);
+      timer.unref();
+      return () => clearTimeout(timer);
+    },
+    // Ids and the reason only: never a screen, a command or a prompt.
+    logClosed: ({ runId, agentId, owner, reason, ageMs, state }) => {
+      logger.info("Closed a throwaway run", {
+        runId,
+        agentId,
+        senderId: owner.senderId,
+        helpSessionId: owner.helpSessionId,
+        reason,
+        ageMs,
+        state,
+      });
+    },
     isLaunchable: async (agentId) => {
       const [
         { isEffectivelyRegisteredAgent },
@@ -99,7 +120,11 @@ export function liveHostThrowawayDeps(): HostThrowawayRunsDeps {
       client.write(terminalId, data);
     },
     kill: (terminalId) => {
-      void pty().then((client) => client?.kill(terminalId, "throwaway-closed"));
+      void pty()
+        .then((client) => client?.kill(terminalId, "throwaway-closed"))
+        .catch((error: unknown) => {
+          logger.warn("Couldn't end a throwaway run's process", { terminalId, error });
+        });
     },
   };
 }
@@ -111,7 +136,11 @@ let creating: Promise<HostThrowawayRuns> | null = null;
 export function getHostThrowawayRuns(): Promise<HostThrowawayRuns> {
   creating ??= import("../../window/serviceRefs.js").then(({ getPtyClient }) => {
     const runs = new HostThrowawayRuns(liveHostThrowawayDeps());
-    getPtyClient()?.on("exit", (id: string) => runs.handleExit(id));
+    const client = getPtyClient();
+    client?.on("exit", (id: string) => runs.handleExit(id));
+    // A pty-host crash never brings a run back (#14447): its terminal is dropped, not replayed.
+    client?.on("terminal-lost", (id: string) => runs.handleLost(id));
+    client?.on("host-crash", () => runs.handleHostLost());
     instance = runs;
     return runs;
   });
@@ -136,6 +165,8 @@ export function registerHostThrowawayRuns(): () => void {
       if (!offered) return { status: "refused", reason: "throwaway-off" };
       return runs.run(owner, call, options);
     },
+    // Nothing to close before any call made the runs.
+    endOwner: (owner, reason) => instance?.endOwner(owner, reason),
   };
   const unregister = registerRemoteService("hostThrowawayRuns", executor);
   return () => {

@@ -6,6 +6,7 @@ import {
   McpCallPayloadSchema,
   RelayNoticeStatusPayloadSchema,
   ThrowawayCallPayloadSchema,
+  ThrowawayReleasePayloadSchema,
 } from "./linkMethods.js";
 import {
   createMcpRelayExecutor,
@@ -31,8 +32,16 @@ export interface HostMcpRelayDeps extends Omit<McpRelayExecutorDeps, "waitingNot
 }
 
 export interface HostMcpRelaySource extends MetricsSessionSource {
+  /** A session's link dropped; it may still resume within its grace window. */
+  onSessionDetached?(listener: (info: { sessionId: string }) => void): () => void;
   onSessionExpired(listener: (info: { sessionId: string }) => void): () => void;
 }
+
+/**
+ * How long a Shell's throwaway runs outlast its last link dropping (#14447):
+ * room for a quick resume, well inside a run's default time limit.
+ */
+export const THROWAWAY_SHELL_GONE_GRACE_MS = 30_000;
 
 function noSender(): AppError {
   return new AppError({
@@ -80,6 +89,28 @@ export function installHostMcpRelay(
   });
   const wired = new WeakSet<LinkSession>();
   let disposed = false;
+  // The sender each link made throwaway calls for, held here since the
+  // sender bindings forget a link as it expires, before this hears of it.
+  const throwawayLinks = new Map<string, string>();
+  const shellGoneTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+  const senderLinked = (senderId: string): boolean =>
+    server.sessions.some(
+      (ctx) =>
+        ctx.session.isOpen &&
+        (deps.senders()?.senderOf(ctx.session) === senderId ||
+          throwawayLinks.get(ctx.sessionId) === senderId)
+    );
+  const cancelShellGone = (senderId: string): void => {
+    clearTimeout(shellGoneTimers.get(senderId));
+    shellGoneTimers.delete(senderId);
+  };
+  // Nobody is left to close what a Shell with no link here launched, so its runs go.
+  const endShellGone = (senderId: string): void => {
+    cancelShellGone(senderId);
+    if (senderLinked(senderId)) return;
+    deps.throwawayRuns?.()?.endOwner({ senderId }, "shell-gone");
+  };
 
   const liveLink = (linkSessionId: string): LinkSession | null => {
     for (const ctx of server.sessions) {
@@ -127,7 +158,22 @@ export function installHostMcpRelay(
         const senderId = deps.senders()?.senderOf(session);
         if (!senderId) throw noSender();
         notices.flushSender(senderId);
+        throwawayLinks.set(sessionId, senderId);
+        cancelShellGone(senderId);
         return throwaway.call(senderId, payload);
+      }
+    );
+    session.registerCallHandler(
+      AssistantLinkMethod.THROWAWAY_RELEASE,
+      ThrowawayReleasePayloadSchema,
+      (payload) => {
+        if (disposed) throw noSender();
+        const senderId = deps.senders()?.senderOf(session);
+        if (!senderId) throw noSender();
+        deps
+          .throwawayRuns?.()
+          ?.endOwner({ senderId, helpSessionId: payload.helpSessionId }, "session-ended");
+        return {};
       }
     );
     session.registerCallHandler(
@@ -149,13 +195,32 @@ export function installHostMcpRelay(
   // own. A call still running finishes first, so a resend can still read its answer.
   // The notices its calls armed stay: they belong to its sender and help session,
   // which the Shell's next session proves again (#13930).
-  const offExpired = server.onSessionExpired(({ sessionId }) => runner.expireLink(sessionId));
+  const offDetached =
+    server.onSessionDetached?.(({ sessionId }) => {
+      const senderId = throwawayLinks.get(sessionId);
+      if (senderId === undefined || senderLinked(senderId) || shellGoneTimers.has(senderId)) {
+        return;
+      }
+      const timer = setTimeout(() => endShellGone(senderId), THROWAWAY_SHELL_GONE_GRACE_MS);
+      timer.unref?.();
+      shellGoneTimers.set(senderId, timer);
+    }) ?? (() => {});
+  const offExpired = server.onSessionExpired(({ sessionId }) => {
+    runner.expireLink(sessionId);
+    const senderId = throwawayLinks.get(sessionId);
+    throwawayLinks.delete(sessionId);
+    if (senderId !== undefined) endShellGone(senderId);
+  });
 
   return {
     dispose: () => {
       disposed = true;
       offSession();
+      offDetached();
       offExpired();
+      for (const timer of shellGoneTimers.values()) clearTimeout(timer);
+      shellGoneTimers.clear();
+      throwawayLinks.clear();
       notices.dispose();
       runner.dispose();
       throwaway.dispose();
