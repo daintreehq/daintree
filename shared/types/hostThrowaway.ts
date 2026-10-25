@@ -73,9 +73,7 @@ export const HostThrowawayCallSchema = z.discriminatedUnion("tool", [
         .strict(),
     })
     .strict(),
-  z
-    .object({ tool: z.literal(THROWAWAY_STATUS_TOOL), args: z.object(runArgs).strict() })
-    .strict(),
+  z.object({ tool: z.literal(THROWAWAY_STATUS_TOOL), args: z.object(runArgs).strict() }).strict(),
   z
     .object({
       tool: z.literal(THROWAWAY_OUTPUT_TOOL),
@@ -189,5 +187,9 @@ export type HostThrowawayFailure = (typeof HOST_THROWAWAY_FAILURES)[number];
  * a launch asking for a time limit the host can't keep yet. Both read as
  * `unsupported` to the caller, never as a failure.
  */
-export const HOST_THROWAWAY_REFUSALS = ["control-off", "throwaway-off", "expiry-unsupported"] as const;
+export const HOST_THROWAWAY_REFUSALS = [
+  "control-off",
+  "throwaway-off",
+  "expiry-unsupported",
+] as const;
 export type HostThrowawayRefusal = (typeof HOST_THROWAWAY_REFUSALS)[number];

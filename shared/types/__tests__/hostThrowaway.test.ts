@@ -37,7 +37,10 @@ describe("throwaway tools (#14444)", () => {
       { tool: "agent.launch", args: { agentId: "claude" } },
       { tool: "throwaway.launch", args: { agentId: "claude", cwd: "/repo" } },
       { tool: "throwaway.launch", args: { agentId: "claude", worktreeId: "w" } },
-      { tool: "throwaway.launch", args: { agentId: "claude", timeLimitMs: MAX_THROWAWAY_TIME_LIMIT_MS + 1 } },
+      {
+        tool: "throwaway.launch",
+        args: { agentId: "claude", timeLimitMs: MAX_THROWAWAY_TIME_LIMIT_MS + 1 },
+      },
       { tool: "throwaway.status", args: {} },
       { tool: "throwaway.status", args: { runId: "run-1", projectId: "p" } },
       { tool: "throwaway.sendCommand", args: { runId: "run-1", command: "" } },
@@ -54,7 +57,9 @@ describe("throwaway tools (#14444)", () => {
     expect(HostThrowawayRunSchema.safeParse(limited).success).toBe(true);
     expect(HostThrowawayRunSchema.safeParse(ended).success).toBe(true);
 
-    expect(HostThrowawayRunSchema.safeParse({ ...RUNNING, timeLimitMs: 60_000 }).success).toBe(false);
+    expect(HostThrowawayRunSchema.safeParse({ ...RUNNING, timeLimitMs: 60_000 }).success).toBe(
+      false
+    );
     expect(HostThrowawayRunSchema.safeParse({ ...RUNNING, expiresAt: 61_000 }).success).toBe(false);
     expect(HostThrowawayRunSchema.safeParse({ ...ended, endedAt: null }).success).toBe(false);
     expect(HostThrowawayRunSchema.safeParse({ ...RUNNING, endReason: "exit" }).success).toBe(false);
@@ -74,8 +79,11 @@ describe("throwaway tools (#14444)", () => {
       HostThrowawayToolResultSchema.safeParse({ tool: "throwaway.output", run: RUNNING }).success
     ).toBe(false);
     expect(
-      HostThrowawayToolResultSchema.safeParse({ tool: "throwaway.close", run: RUNNING, closed: false })
-        .success
+      HostThrowawayToolResultSchema.safeParse({
+        tool: "throwaway.close",
+        run: RUNNING,
+        closed: false,
+      }).success
     ).toBe(false);
   });
 });

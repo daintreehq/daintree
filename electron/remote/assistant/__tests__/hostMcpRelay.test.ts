@@ -819,8 +819,10 @@ describe("throwaway calls on a host that doesn't run them yet (#14444)", () => {
       ThrowawayCallPayloadSchema.safeParse({ ...THROWAWAY, projectId: "project-1" }).success
     ).toBe(false);
     expect(
-      ThrowawayCallPayloadSchema.safeParse({ ...THROWAWAY, call: { tool: "terminal.list", args: {} } })
-        .success
+      ThrowawayCallPayloadSchema.safeParse({
+        ...THROWAWAY,
+        call: { tool: "terminal.list", args: {} },
+      }).success
     ).toBe(false);
     expect(ThrowawayCallAnswerSchema.parse({ status: "refused", reason: "busy" })).toEqual({
       status: "refused",
