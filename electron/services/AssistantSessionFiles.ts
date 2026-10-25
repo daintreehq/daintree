@@ -705,12 +705,7 @@ export class AssistantSessionFiles {
             input.projectPath
           );
         } else if (input.agentId === "copilot") {
-          await this.writeCopilotMcpConfig(
-            sessionPath,
-            settings,
-            port,
-            userConfig.mcpServers
-          );
+          await this.writeCopilotMcpConfig(sessionPath, settings, port, userConfig.mcpServers);
         } else {
           // Codex and any other agent skip `writeMcpConfig`, so when the
           // template hash gate (#7525) also skips `fs.cp`, a `.mcp.json` from a
