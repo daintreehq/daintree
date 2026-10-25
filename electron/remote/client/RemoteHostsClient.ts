@@ -170,6 +170,8 @@ export interface WindowControl {
   replaceWithLocalWindow?(windowId: number): Promise<void>;
   /** Whether the view on screen in a window (or still leaving it) is one of this host's. */
   showsHost?(windowId: number, hostId: HostId): boolean;
+  /** Whether a view is on screen in a window (or still leaving it), not parked in its cache. */
+  showsView?(windowId: number, webContentsId: number): boolean;
   /**
    * Tell a window's view, if it is up, that it has a host's project list to
    * offer ({@link RemoteHostsClient.takeProjectOffer}). A view still loading
@@ -1453,7 +1455,12 @@ export class RemoteHostsClient {
   /** The asking window's switch to a host that is still on its way, or null. */
   getPendingSwitch(ctx: IpcContext): PendingHostSwitch | null {
     const windowId = this.windowOf(ctx);
-    return windowId === null ? null : (this.pendingSwitches.get(windowId) ?? null);
+    if (windowId === null) return null;
+    // Only the views on screen hear the switch settle. One loading in the
+    // background (a restore) would keep an answer it is never told is over;
+    // it asks again when it is shown.
+    if (this.options.windows.showsView?.(windowId, ctx.webContentsId) === false) return null;
+    return this.pendingSwitches.get(windowId) ?? null;
   }
 
   /**

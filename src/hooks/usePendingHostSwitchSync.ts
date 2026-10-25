@@ -18,6 +18,8 @@ export function usePendingHostSwitchSync(): void {
         stop = watchPendingHostSwitch(window.electron?.remoteHosts ?? {}, {
           onViewRevealed: (callback) =>
             window.electron?.app?.onViewRevealed?.(() => callback()) ?? (() => {}),
+          onViewCached: (callback) =>
+            window.electron?.app?.onViewCached?.(() => callback()) ?? (() => {}),
         });
       },
       () => {}

@@ -701,6 +701,28 @@ describe("RemoteHostsClient", () => {
       expect(client.getPendingSwitch(ctxFor(5, 1))).toBeNull();
     });
 
+    it("answers only the views the window is showing, not one loading in its cache", async () => {
+      let release!: (value: string) => void;
+      manager
+        .connect("studio-01")
+        .whenReady.mockImplementationOnce(() => new Promise<string>((r) => (release = r)));
+      windows.showsView = vi.fn((_windowId: number, webContentsId: number) => webContentsId === 5);
+      const switching = client.switchWindowHost(ctxFor(5, 1), {
+        hostId: "studio-01",
+        newWindow: false,
+        projectId: "proj-1",
+      });
+      await vi.waitFor(() => expect(pendingEvents()).toHaveLength(1));
+
+      expect(client.getPendingSwitch(ctxFor(5, 1))).toMatchObject({ phase: "connecting" });
+      // Never shown, so never told the switch is over: it asks again once revealed.
+      expect(client.getPendingSwitch(ctxFor(9, 1))).toBeNull();
+      expect(windows.showsView).toHaveBeenCalledWith(1, 9);
+
+      release("ready");
+      await expect(switching).resolves.toMatchObject({ outcome: "switched" });
+    });
+
     it("says it is connecting from the start when the host isn't up yet", async () => {
       let release!: (value: string) => void;
       manager
