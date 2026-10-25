@@ -4,12 +4,15 @@ import { senderIdForCredential } from "./hostSenders.js";
 import { relayCallArmsNotice } from "../../services/mcp-server/terminalNotify.js";
 import type { LinkSession } from "../link/session.js";
 import {
+  AgentsAnswerSchema,
   AssistantLinkMethod,
   McpCallAnswerSchema,
   RelayApprovePayloadSchema,
   RelayNoticeStatusAnswerSchema,
   RelayNoticesPayloadSchema,
   ThrowawayCallAnswerSchema,
+  type AgentsAnswer,
+  type AgentsPayload,
   type McpCallAnswer,
   type McpCallPayload,
   type RelayApproveAnswer,
@@ -291,6 +294,25 @@ export class HostControlLinkClient {
     const session = await this.open(hostId);
     await this.authenticate(hostId, session);
     await this.call(hostId, session, AssistantLinkMethod.THROWAWAY_RELEASE, payload);
+  }
+
+  /**
+   * The host's workers and assistants as its own directory reads them
+   * (#14455), for `host.list`. A host from before this answers UNSUPPORTED.
+   */
+  async agents(hostId: HostId, payload: AgentsPayload, timeoutMs?: number): Promise<AgentsAnswer> {
+    const session = await this.open(hostId);
+    try {
+      await this.authenticate(hostId, session);
+    } catch (error) {
+      if (isUnknownOutcome(error)) throw unreachable(hostId);
+      throw error;
+    }
+    const parsed = AgentsAnswerSchema.safeParse(
+      await this.call(hostId, session, AssistantLinkMethod.AGENTS, payload, timeoutMs)
+    );
+    if (!parsed.success) throw invalidAnswer(hostId, AssistantLinkMethod.AGENTS);
+    return parsed.data;
   }
 
   private async open(hostId: HostId): Promise<LinkSession> {

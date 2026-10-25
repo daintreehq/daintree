@@ -26,6 +26,8 @@ import {
 import { HostSettingsRequests, type HostSettingsRequestDeps } from "./HostSettingsRequests.js";
 import {
   AGENT_DIRECTORY_BYTES_MAX,
+  AGENT_DIRECTORY_ENTRIES_MAX,
+  agentDirectoryAs,
   fitAgentDirectory,
   unreadAgentDirectory,
   type AgentDirectory,
@@ -131,7 +133,7 @@ export interface HostCallRuntimeDeps {
   /** Read at each call: the client is installed with the database and may come later. */
   client():
     | (Pick<HostControlLinkClient, "relayCall" | "throwawayCall"> &
-        Partial<Pick<HostControlLinkClient, "throwawayRelease">>)
+        Partial<Pick<HostControlLinkClient, "throwawayRelease" | "agents">>)
     | null;
   /**
    * Whether a help session's assistant works through one of this machine's own
@@ -222,6 +224,10 @@ const MAX_PENDING_PROMPTS_PER_TERMINAL = 32;
 const PROJECTS_READ_MS = 5_000;
 /** How long `host.list` waits for a host it dials to connect. */
 const LIST_CONNECT_MS = 8_000;
+/** Hosts' directories kept by host and project filter, for a read that fails (#14455). */
+const LAST_AGENTS_MAX = 64;
+/** Room each directory keeps for its `omitted` count growing as it is cut. */
+const OMITTED_DIGITS_SLACK = 8;
 
 /** What the person at this Shell is asked about one of its relayed calls. */
 export interface RelayApprovalQuestion {
@@ -649,24 +655,63 @@ class RefusalError extends Error {
   }
 }
 
-/** Settles with `work`, or with `fallback` once `ms` pass; the timer never outlives it. */
 /**
- * Cuts a directory so the whole `host.list` answer, not the directory alone,
- * stays within the agent budget the MCP result is capped to.
+ * Cuts the hosts' directories so the whole `host.list` answer, not each
+ * directory alone, stays within the agent budget the MCP result is capped to.
+ * The room left by everything else is shared evenly, a directory that needs
+ * less giving the rest to the others, and what each loses is counted in its
+ * own `omitted`.
  */
-function fitToResponse(
-  agents: AgentDirectory,
-  entry: HostListEntry,
-  others: readonly HostListEntry[]
-): AgentDirectory {
-  const { agents: _agents, ...rest } = entry;
+function fitToResponse(hosts: HostListEntry[]): HostListEntry[] {
   const encoder = new TextEncoder();
-  const restBytes = encoder.encode(
-    JSON.stringify({ hosts: [rest, ...others], agents: null })
-  ).length;
-  return fitAgentDirectory(agents, Math.max(0, AGENT_DIRECTORY_BYTES_MAX - restBytes));
+  const bytes = (value: unknown): number => encoder.encode(JSON.stringify(value)).length;
+  const envelopes = hosts.map((host) => (host.agents ? bytes({ ...host.agents, entries: [] }) : 0));
+  // As fitAgentDirectory counts them: each entry with its separator.
+  const needs = hosts.map((host) =>
+    (host.agents?.entries ?? []).reduce((sum, entry) => sum + bytes(entry) + 1, 0)
+  );
+  const empty = hosts.map((host) =>
+    host.agents ? { ...host, agents: { ...host.agents, entries: [] } } : host
+  );
+  const fitting = hosts.flatMap((host, index) => (host.agents ? [index] : []));
+  let spare =
+    AGENT_DIRECTORY_BYTES_MAX - bytes({ hosts: empty }) - fitting.length * OMITTED_DIGITS_SLACK;
+  if (fitting.reduce((sum, index) => sum + needs[index]!, 0) <= spare) return hosts;
+  const given = new Map<number, number>();
+  const byNeed = [...fitting].sort((a, b) => needs[a]! - needs[b]!);
+  byNeed.forEach((index, position) => {
+    const share = Math.max(0, Math.floor(spare / (byNeed.length - position)));
+    const give = Math.min(needs[index]!, share);
+    given.set(index, give);
+    spare -= give;
+  });
+  return hosts.map((host, index) =>
+    host.agents
+      ? {
+          ...host,
+          agents: fitAgentDirectory(host.agents, envelopes[index]! + (given.get(index) ?? 0)),
+        }
+      : host
+  );
 }
 
+/** A host's directory held to the entry cap its own reads keep, whatever it sent. */
+function capEntries(directory: AgentDirectory): AgentDirectory {
+  const over = directory.entries.length - AGENT_DIRECTORY_ENTRIES_MAX;
+  return over <= 0
+    ? directory
+    : {
+        ...directory,
+        omitted: directory.omitted + over,
+        entries: directory.entries.slice(0, AGENT_DIRECTORY_ENTRIES_MAX),
+      };
+}
+
+function agentsKey(hostId: HostId, projectId: string | undefined): string {
+  return `${hostId}\u0000${projectId ?? ""}`;
+}
+
+/** Settles with `work`, or with `fallback` once `ms` pass; the timer never outlives it. */
 function withinMs<T>(work: Promise<T>, ms: number, fallback: T): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const late = new Promise<T>((resolve) => {
@@ -721,6 +766,8 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
   private readonly throwawayHosts = new Map<string, Set<HostId>>();
   private disposed = false;
   private readonly settingsRequests: HostSettingsRequests;
+  /** Each host's last directory read, by project filter, oldest first. */
+  private readonly lastAgents = new Map<string, AgentDirectory>();
 
   constructor(private readonly deps: HostCallRuntimeDeps) {
     this.now = deps.now ?? Date.now;
@@ -1150,6 +1197,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     this.settledPins.clear();
     this.seenNotices.clear();
     this.prompted.clear();
+    this.lastAgents.clear();
     this.settingsRequests.dispose();
   }
 
@@ -1565,12 +1613,18 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       // than it is when the answer goes out.
       const sampled = new Map<HostListEntry, HostMetricsSummary>();
       const here = local ? this.localEntry(local, caller, agentsOf, sampled) : null;
+      const observed = this.deps.hosts();
+      if (agentsOf) this.forgetRemovedHosts(observed);
       const hosts = await Promise.all(
-        this.deps.hosts().map(async (seen): Promise<HostListEntry> => {
+        observed.map(async (seen): Promise<HostListEntry> => {
           const host = await this.dialed(seen);
           const summary = host.summary;
           const connected = host.connection.status === "connected";
           const control = this.deps.controlEnabled?.(host.hostId) === true;
+          const [projects, agents] = await Promise.all([
+            connected && control ? this.hostProjects(host.hostId) : null,
+            agentsOf ? this.hostAgents(host, control, agentsOf) : null,
+          ]);
           const entry: HostListEntry = {
             hostId: host.hostId,
             name: host.name,
@@ -1584,10 +1638,9 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
             // A tally from before the link dropped is history, not what is running now.
             agentsObserved:
               connected && summary?.agentsObserved ? { ...summary.agentsObserved } : null,
-            projects: connected && control ? await this.hostProjects(host.hostId) : null,
+            projects,
             control,
-            // No link reads a host's agents yet: said so, never an empty inventory.
-            ...(agentsOf ? { agents: unreadAgentDirectory("unsupported") } : {}),
+            ...(agents ? { agents } : {}),
           };
           if (summary) sampled.set(entry, summary);
           return entry;
@@ -1606,9 +1659,8 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         };
       };
       const others = hosts.map(aged);
-      const first = settled ? aged(settled) : null;
-      if (first?.agents) first.agents = fitToResponse(first.agents, first, others);
-      return { hosts: first ? [first, ...others] : others };
+      const all = settled ? [aged(settled), ...others] : others;
+      return { hosts: agentsOf ? fitToResponse(all) : all };
     });
   }
 
@@ -1671,6 +1723,84 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       null
     );
     return directory === null ? unreadAgentDirectory("unreachable") : directory;
+  }
+
+  /**
+   * A host's workers and assistants as the host itself reads them (#14455),
+   * under both its control switch here and its own consent, addressed by this
+   * Shell's id for it. A read that fails answers with the last one of the same
+   * filter, marked stale and dated when it was seen; one that is refused, or
+   * that control here no longer allows, answers with nothing and forgets it.
+   */
+  private async hostAgents(
+    host: ObservedHost,
+    control: boolean,
+    options: { projectId?: string }
+  ): Promise<AgentDirectory> {
+    if (!control) {
+      this.forgetAgents(host.hostId);
+      return unreadAgentDirectory("unreachable");
+    }
+    const key = agentsKey(host.hostId, options.projectId);
+    const client = this.deps.client();
+    const read = client?.agents;
+    if (!client || !read || host.connection.status !== "connected") return this.lastAgentsOf(key);
+    const payload = options.projectId === undefined ? {} : { projectId: options.projectId };
+    const answer = await withinMs(
+      Promise.resolve()
+        .then(() => read.call(client, host.hostId, payload, PROJECTS_READ_MS))
+        .catch((error: unknown) => (codeOf(error) === "UNSUPPORTED" ? "unsupported" : null)),
+      PROJECTS_READ_MS,
+      null
+    );
+    if (answer === null) return this.lastAgentsOf(key);
+    if (answer === "unsupported" || answer.status === "refused") {
+      this.forgetAgents(host.hostId);
+      return unreadAgentDirectory(answer === "unsupported" ? "unsupported" : "unreachable");
+    }
+    // Control may have gone off while it was read: what came back isn't shown or kept.
+    if (this.deps.controlEnabled?.(host.hostId) !== true) {
+      this.forgetAgents(host.hostId);
+      return unreadAgentDirectory("unreachable");
+    }
+    const directory = agentDirectoryAs(
+      host.hostId,
+      fitAgentDirectory(capEntries(answer.directory))
+    );
+    if (directory.coverage === "unsupported") {
+      this.forgetAgents(host.hostId);
+      return directory;
+    }
+    // The host couldn't read itself and knew nothing: what was seen here before still holds.
+    if (directory.coverage === "unreachable") return this.lastAgentsOf(key);
+    this.lastAgents.delete(key);
+    this.lastAgents.set(key, directory);
+    if (this.lastAgents.size > LAST_AGENTS_MAX) {
+      this.lastAgents.delete(this.lastAgents.keys().next().value as string);
+    }
+    return directory;
+  }
+
+  private lastAgentsOf(key: string): AgentDirectory {
+    const previous = this.lastAgents.get(key);
+    return previous
+      ? { ...previous, coverage: "stale", complete: false }
+      : unreadAgentDirectory("unreachable");
+  }
+
+  private forgetAgents(hostId: HostId): void {
+    const prefix = agentsKey(hostId, undefined);
+    for (const key of [...this.lastAgents.keys()]) {
+      if (key.startsWith(prefix)) this.lastAgents.delete(key);
+    }
+  }
+
+  /** A host the person removed takes what was read of it along. */
+  private forgetRemovedHosts(observed: readonly ObservedHost[]): void {
+    const known = new Set(observed.map((host) => agentsKey(host.hostId, undefined)));
+    for (const key of [...this.lastAgents.keys()]) {
+      if (!known.has(key.slice(0, key.indexOf("\u0000") + 1))) this.lastAgents.delete(key);
+    }
   }
 
   /**

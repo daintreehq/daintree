@@ -16,9 +16,9 @@ import type {
 } from "../../../shared/types/ipc/canopy.js";
 import {
   AgentDirectorySubjectSchema,
+  agentDirectoryAs,
   unreadAgentDirectory,
   type AgentDirectory,
-  type AgentDirectoryEntry,
   type AgentDirectorySubject,
 } from "../../../shared/types/agentDirectory.js";
 import type { FleetSnapshot } from "../../../shared/types/ipc/fleet.js";
@@ -149,17 +149,6 @@ function deliveryUnknown(error: unknown): AppError {
 }
 
 /** The same entries as this Shell names the host: never the id the host gave itself. */
-function directoryAs(hostId: HostId, directory: AgentDirectory): AgentDirectory {
-  return {
-    ...directory,
-    entries: directory.entries.map((entry): AgentDirectoryEntry =>
-      entry.state === "live"
-        ? { ...entry, subject: { ...entry.subject, hostId } }
-        : { ...entry, hostId }
-    ),
-  };
-}
-
 function invalid(message: string): AppError {
   return new AppError({ code: "VALIDATION", message });
 }
@@ -321,7 +310,7 @@ export class CanopyHostsClient {
       return {
         hostId: LOCAL_HOST_ID,
         version: read ? ASSISTANT_VIEWER_VERSION : null,
-        directory: directoryAs(LOCAL_HOST_ID, assistantEntries(directory)),
+        directory: agentDirectoryAs(LOCAL_HOST_ID, assistantEntries(directory)),
       };
     }
     this.options.manager.touch(target);
@@ -346,7 +335,7 @@ export class CanopyHostsClient {
     return {
       hostId: target,
       version: answer.data.version,
-      directory: directoryAs(target, assistantEntries(answer.data.directory)),
+      directory: agentDirectoryAs(target, assistantEntries(answer.data.directory)),
     };
   }
 
