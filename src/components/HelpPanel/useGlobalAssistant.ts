@@ -90,10 +90,7 @@ export function useGlobalAssistant(active: boolean): GlobalAssistantHandle {
 
   const start = useCallback(
     () =>
-      run(
-        () => window.electron.help.ensureGlobalAssistant(),
-        "The global assistant didn't start."
-      ),
+      run(() => window.electron.help.ensureGlobalAssistant(), "The global assistant didn't start."),
     [run]
   );
 

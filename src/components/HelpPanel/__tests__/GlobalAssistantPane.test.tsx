@@ -111,7 +111,9 @@ function installHelp(initial: GlobalAssistantView, attachmentId = "a1") {
     attachGlobalAssistant: vi.fn(async () => ({ attachmentId, state: initial })),
     detachGlobalAssistant: vi.fn(async () => {}),
     ensureGlobalAssistant: vi.fn(async () => running({ inputOwner: attachmentId, inputEpoch: 1 })),
-    claimGlobalAssistantInput: vi.fn(async () => running({ inputOwner: attachmentId, inputEpoch: 5 })),
+    claimGlobalAssistantInput: vi.fn(async () =>
+      running({ inputOwner: attachmentId, inputEpoch: 5 })
+    ),
     restartGlobalAssistant: vi.fn(),
     discardGlobalAssistant: vi.fn(),
     onGlobalAssistantChanged: vi.fn((callback: (state: GlobalAssistantView) => void) => {

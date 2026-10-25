@@ -1090,11 +1090,7 @@ export const canopyNamespace = defineIpcNamespace({
         const viewId = ctx.webContentsId;
         const ticket = beginWatchRequest(viewId);
         watchView(ctx);
-        const binding = await resolveLiveAssistant(
-          subject,
-          await liveAssistantSources(),
-          stamp
-        );
+        const binding = await resolveLiveAssistant(subject, await liveAssistantSources(), stamp);
         if (!isCurrentWatchRequest(viewId, ticket)) return { watchId: null, snapshot: null };
         const ptyClient = requirePtyClient();
         const { terminalId } = binding.subject;
