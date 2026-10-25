@@ -519,7 +519,8 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
       const win = getWindowRegistry()?.getByWindowId(windowId)?.browserWindow;
       if (!win || win.isDestroyed()) return false;
       return (win.contentView?.children ?? []).some(
-        (child) => (child as { webContents?: Electron.WebContents }).webContents?.id === webContentsId
+        (child) =>
+          (child as { webContents?: Electron.WebContents }).webContents?.id === webContentsId
       );
     },
     async replaceWithLocalWindow(windowId) {
