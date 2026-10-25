@@ -32,6 +32,13 @@ interface WatchOptions {
    * mid-switch asks afresh rather than keep a switch that has since ended.
    */
   onViewRevealed?: (callback: () => void) => () => void;
+  /**
+   * Told when this view goes into the cache behind another. Main stops telling
+   * it about the window's switch from then on, so it lets go of the one it
+   * knew: the view a switch left behind would otherwise hold every send to its
+   * terminals, a host's MCP dispatches among them, after the switch landed.
+   */
+  onViewCached?: (callback: () => void) => () => void;
 }
 
 /**
@@ -64,11 +71,18 @@ export function watchPendingHostSwitch(
   };
   ask();
   const stopRevealed = options.onViewRevealed?.(ask);
+  const stopCached = options.onViewCached?.(() => {
+    if (disposed) return;
+    // Also outdates any answer still on its way.
+    heard += 1;
+    store.getState().setPending(null);
+  });
 
   return () => {
     disposed = true;
     stopEvents?.();
     stopRevealed?.();
+    stopCached?.();
     store.getState().setPending(null);
   };
 }

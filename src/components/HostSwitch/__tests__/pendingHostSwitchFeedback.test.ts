@@ -134,6 +134,46 @@ describe("watchPendingHostSwitch", () => {
     expect(revealed).toBeNull();
   });
 
+  it("lets go of the switch when the view is cached, so the view a switch left never blocks its sends", async () => {
+    let listener: ((event: RemoteHostsEvent) => void) | null = null;
+    let cached: (() => void) | null = null;
+    let revealed: (() => void) | null = null;
+    let answer!: (pending: PendingHostSwitch | null) => void;
+    const api = {
+      onEvent: vi.fn((callback: (event: RemoteHostsEvent) => void) => {
+        listener = callback;
+        return () => void (listener = null);
+      }),
+      getPendingSwitch: vi.fn(
+        () => new Promise<PendingHostSwitch | null>((resolve) => (answer = resolve))
+      ),
+    };
+    const stop = watchPendingHostSwitch(api, {
+      onViewRevealed: (callback) => {
+        revealed = callback;
+        return () => void (revealed = null);
+      },
+      onViewCached: (callback) => {
+        cached = callback;
+        return () => void (cached = null);
+      },
+    });
+    listener!({ type: "switch-pending", pending: pending({ hostName: "studio-03" }) });
+    expect(isHostSwitchPending()).toBe(true);
+
+    // Shown, asks, and is cached before the answer comes back.
+    revealed!();
+    cached!();
+    expect(usePendingHostSwitchStore.getState().pending).toBeNull();
+    expect(isHostSwitchPending()).toBe(false);
+    answer(pending({ hostName: "studio-03" }));
+    await flushMicrotasks();
+    expect(isHostSwitchPending()).toBe(false);
+
+    stop();
+    expect(cached).toBeNull();
+  });
+
   it("ignores a snapshot that answers after it was torn down", async () => {
     let answer!: (pending: PendingHostSwitch | null) => void;
     const api = {

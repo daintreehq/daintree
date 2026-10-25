@@ -515,6 +515,14 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
         (key) => key !== null && parseHostScopedKey(key).hostId === hostId
       );
     },
+    showsView(windowId, webContentsId) {
+      const win = getWindowRegistry()?.getByWindowId(windowId)?.browserWindow;
+      if (!win || win.isDestroyed()) return false;
+      return (win.contentView?.children ?? []).some(
+        (child) =>
+          (child as { webContents?: Electron.WebContents }).webContents?.id === webContentsId
+      );
+    },
     async replaceWithLocalWindow(windowId) {
       const old = getWindowRegistry()?.getByWindowId(windowId)?.browserWindow;
       if (!old || old.isDestroyed()) return;
