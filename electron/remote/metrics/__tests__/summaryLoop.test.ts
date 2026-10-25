@@ -6,6 +6,7 @@ import { SummaryLoop } from "../summaryLoop.js";
 describe("SummaryLoop sample age (#14462)", () => {
   it("dates a sample from when its read began, on this machine's clocks", async () => {
     let t = 1_000;
+    let mono = 1_000;
     let finish: ((summary: HostMetricsSummary) => void) | null = null;
     const loop = new SummaryLoop(
       {
@@ -15,21 +16,31 @@ describe("SummaryLoop sample age (#14462)", () => {
           }),
       },
       60_000,
-      () => ({ wall: t, mono: t })
+      () => ({ wall: t, mono })
     );
     const off = loop.subscribe(() => {});
     const sampled = { sampledAt: 5 } as HostMetricsSummary;
     // A slow read counts toward the age.
-    t = 3_000;
+    t = mono = 3_000;
     finish!(sampled);
     await waitFor(() => loop.latest() === sampled);
-    t = 4_000;
+    t = mono = 4_000;
     expect(loop.ageOf(sampled)).toBe(3_000);
+    t = mono = 6_000;
+    expect(loop.ageOf(sampled)).toBe(5_000);
+    // Asleep a minute: only the wall clock moved.
+    t = 66_000;
+    expect(loop.ageOf(sampled)).toBe(65_000);
+    // The wall clock stepped back: the monotonic clock still counts.
+    t = 0;
+    mono = 8_000;
+    expect(loop.ageOf(sampled)).toBe(7_000);
     expect(loop.receiptOf(sampled)).toEqual({
       receivedAt: 1_000,
       at: { wall: 1_000, mono: 1_000 },
       hostAgeMs: 0,
       maxAgeMs: 0,
+      timed: true,
     });
     // Only the summary it holds has an age here.
     expect(loop.ageOf({ ...sampled })).toBeNull();

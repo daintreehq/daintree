@@ -214,7 +214,7 @@ export const HostListEntrySchema = z.object({
         .enum(["age-limit", "clock-uncertain"])
         .nullable()
         .describe(
-          "age-limit: known too old. clock-uncertain: an older host's timestamp, far from this clock: old or clocks disagree. Null when fresh."
+          "age-limit: known too old. clock-uncertain: its age couldn't be bounded and its timestamp can't be placed on this clock. Null when fresh."
         ),
       platform: z.enum(["darwin", "linux"]),
       cpuPercent: z.number().nullable(),

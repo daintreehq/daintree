@@ -486,6 +486,47 @@ describe("HostMetricsClient", () => {
     h.client.dispose();
   });
 
+  it("bounds a frame after a reconnect or host restart by the new session's pings alone", async () => {
+    const h = harness([descriptor("studio-01")]);
+    h.client.start();
+    const longAgo = { wall: Date.now() - 3_600_000, mono: performance.now() - 3_600_000 };
+    const before = await openSessionPair(dir, {}, { clock: () => longAgo });
+    open.push(before.host, before.client);
+    h.openSession("studio-01", before.client);
+    before.client.ping();
+    await waitFor(() => before.host.peerPingNonce === 0);
+    before.host.post({
+      lane: Lane.CONTROL,
+      kind: ControlKind.HOST_SUMMARY,
+      body: { ...summary(500), timing: { sampleAgeMs: 0, afterPing: 0 } } as never,
+    });
+    await waitFor(() => h.emitted.length === 1);
+    const old = h.client.latest("studio-01")!;
+    before.client.close("reconnecting");
+
+    // The restarted host numbers from zero again, and its clock reads earlier.
+    const now = { wall: Date.now(), mono: performance.now() };
+    const after = await openSessionPair(dir, {}, { clock: () => now });
+    open.push(after.host, after.client);
+    h.openSession("studio-01", after.client);
+    after.client.ping();
+    await waitFor(() => after.host.peerPingNonce === 0);
+    after.host.post({
+      lane: Lane.CONTROL,
+      kind: ControlKind.HOST_SUMMARY,
+      body: { ...summary(1), timing: { sampleAgeMs: 50, afterPing: 0 } } as never,
+    });
+    await waitFor(() => h.emitted.length === 2);
+    const fresh = h.client.latest("studio-01")!;
+    expect(fresh.sampledAt).toBe(1);
+    const bound = h.client.receiptOf(fresh)!.maxAgeMs!;
+    expect(bound).toBeGreaterThanOrEqual(50);
+    expect(bound).toBeLessThan(3_600_000);
+    // The summary from before keeps the bound its own session gave it.
+    expect(h.client.receiptOf(old)!.maxAgeMs).toBeGreaterThanOrEqual(3_600_000);
+    h.client.dispose();
+  });
+
   it("presents attention only for hosts the user opted in to", async () => {
     const h = harness([descriptor("quiet"), descriptor("loud", true)]);
     h.client.start();

@@ -19,6 +19,8 @@ export interface SummaryReceipt {
   hostAgeMs: number | null;
   /** At most this old at receipt; null when the frame didn't let it be bounded. */
   maxAgeMs: number | null;
+  /** The frame carried timing: a host that can bound its age, so its timestamp is never the fallback. */
+  timed: boolean;
 }
 
 /**
@@ -38,6 +40,7 @@ export function receiveSummary(
     at,
     hostAgeMs,
     maxAgeMs: hostAgeMs !== null && ping ? hostAgeMs + elapsedSince(ping, at) : null,
+    timed: timing !== undefined,
   };
 }
 
@@ -54,10 +57,12 @@ export interface SampleFreshness {
 /**
  * Whether a sample can be trusted now. A bounded age decides it outright.
  * Without one, a sample the host or this Shell already knows is too old is
- * stale for its age; otherwise only the host's own timestamp is left, which
- * counts as fresh when it is near this Shell's clock, as an older host's
- * always did, and as clock-uncertain when it isn't: an old reading and two
- * clocks that disagree look the same from here.
+ * stale for its age. A host that times its frames but couldn't bound this
+ * one, as before any ping reached it or after a delay longer than the pings
+ * remembered, is clock-uncertain. Only an older host's timestamp is left as
+ * a fallback, fresh when it is near this Shell's clock as it always was, and
+ * clock-uncertain when it isn't: an old reading and two clocks that disagree
+ * look the same from here.
  */
 export function sampleFreshness(
   summary: HostMetricsSummary,
@@ -76,7 +81,11 @@ export function sampleFreshness(
     return { ageMs: null, stale: true, staleReason: "age-limit", receivedAt };
   }
   const wallAge = Number.isFinite(summary.sampledAt) ? now.wall - summary.sampledAt : Number.NaN;
-  if (Number.isFinite(wallAge) && Math.abs(wallAge) <= HOST_LOAD_STALE_MS) {
+  if (
+    receipt?.timed !== true &&
+    Number.isFinite(wallAge) &&
+    Math.abs(wallAge) <= HOST_LOAD_STALE_MS
+  ) {
     return {
       ageMs: Math.max(0, wallAge, atLeast),
       stale: false,

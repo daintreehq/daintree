@@ -227,11 +227,17 @@ describe("HostCallRuntime (#13493, #13496)", () => {
       };
 
       /** A frame that arrived at `at` with its age bounded then, as the metrics client records it. */
-      const receipt = (at: number, maxAgeMs: number | null, hostAgeMs = maxAgeMs) => ({
+      const receipt = (
+        at: number,
+        maxAgeMs: number | null,
+        hostAgeMs = maxAgeMs,
+        timed = true
+      ) => ({
         receivedAt: at,
         at: { wall: at, mono: at },
         hostAgeMs,
         maxAgeMs,
+        timed,
       });
 
       async function loadOf(
@@ -265,7 +271,9 @@ describe("HostCallRuntime (#13493, #13496)", () => {
 
       it("treats a timestamp far from this clock, with nothing to bound it, as clock-uncertain", async () => {
         for (const sampledAt of [1000 + 60_000, 1000 - 60_000]) {
-          expect(await loadOf({ ...fresh, sampledAt }, receipt(1000, null, null))).toMatchObject({
+          expect(
+            await loadOf({ ...fresh, sampledAt }, receipt(1000, null, null, false))
+          ).toMatchObject({
             stale: true,
             staleReason: "clock-uncertain",
             ageMs: null,
@@ -302,18 +310,24 @@ describe("HostCallRuntime (#13493, #13496)", () => {
         });
       });
 
-      it("ages a bounded sample by this Shell's clocks after it arrived", async () => {
+      it("ages a bounded sample by this Shell's clocks after it arrived, its CLIs with it", async () => {
+        const agentClis = [{ agentId: "claude", version: "2.1.0" }];
         hosts = [
           host({
             connection: CONNECTED,
-            summary: { ...fresh, sampledAt: 1e12 } as never,
+            summary: { ...fresh, sampledAt: 1e12, agentClis } as never,
             summaryReceipt: receipt(1000, 4000),
           }),
         ];
+        let listed = await runtime.list("a");
+        if (!listed.ok) throw new Error("refused");
+        expect(listed.value.hosts[0]?.load).toMatchObject({ stale: false, ageMs: 4000 });
+        expect(listed.value.hosts[0]?.agentClis.coverage).toBe("observed");
         clock += 12_000;
-        const listed = await runtime.list("a");
+        listed = await runtime.list("a");
         if (!listed.ok) throw new Error("refused");
         expect(listed.value.hosts[0]?.load).toMatchObject({ stale: true, ageMs: 16_000 });
+        expect(listed.value.hosts[0]?.agentClis.coverage).toBe("stale");
       });
 
       it("gives no used or available memory for an older host, and no cores it never reported", async () => {

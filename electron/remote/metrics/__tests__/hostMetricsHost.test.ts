@@ -208,6 +208,52 @@ describe("installHostMetricsHostWith", () => {
     dispose();
   });
 
+  it("stamps every live sample for each Shell with that Shell's own newest ping", async () => {
+    const server = new FakeServer();
+    let publish: ((summary: HostMetricsSummary) => void) | null = null;
+    let age = 10;
+    const dispose = installHostMetricsHostWith(
+      server,
+      deps({
+        loop: {
+          subscribe: (listener) => {
+            publish = listener;
+            return () => (publish = null);
+          },
+          latest: () => null,
+          ageOf: () => age,
+        },
+      })
+    );
+    const a = await pair();
+    const b = await pair();
+    const seenA: unknown[] = [];
+    const seenB: unknown[] = [];
+    a.client.on(Lane.CONTROL, ControlKind.HOST_SUMMARY, (body) => seenA.push(body.timing));
+    b.client.on(Lane.CONTROL, ControlKind.HOST_SUMMARY, (body) => seenB.push(body.timing));
+    a.client.ping();
+    for (let i = 0; i < 3; i += 1) b.client.ping();
+    await waitFor(() => a.host.peerPingNonce === 0 && b.host.peerPingNonce === 2);
+    server.attach(a.host, "a");
+    server.attach(b.host, "b");
+    publish!(summary(1));
+    await waitFor(() => seenA.length === 1 && seenB.length === 1);
+    a.client.ping();
+    await waitFor(() => a.host.peerPingNonce === 1);
+    age = 20;
+    publish!(summary(2));
+    await waitFor(() => seenA.length === 2 && seenB.length === 2);
+    expect(seenA).toEqual([
+      { sampleAgeMs: 10, afterPing: 0 },
+      { sampleAgeMs: 20, afterPing: 1 },
+    ]);
+    expect(seenB).toEqual([
+      { sampleAgeMs: 10, afterPing: 2 },
+      { sampleAgeMs: 20, afterPing: 2 },
+    ]);
+    dispose();
+  });
+
   it("names no ping before the Shell sent one, and no age from a loop that can't say", async () => {
     const server = new FakeServer();
     const dispose = installHostMetricsHostWith(

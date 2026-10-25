@@ -46,7 +46,7 @@ export class SummaryLoop {
   /** The latest summary as taken in hand when its read began, on this machine's own clocks. */
   receiptOf(summary: HostMetricsSummary): SummaryReceipt | null {
     const at = summary === this.last ? this.lastStartedAt : null;
-    return at ? { receivedAt: at.wall, at, hostAgeMs: 0, maxAgeMs: 0 } : null;
+    return at ? { receivedAt: at.wall, at, hostAgeMs: 0, maxAgeMs: 0, timed: true } : null;
   }
 
   subscribe(listener: Listener): () => void {

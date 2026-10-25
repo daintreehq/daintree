@@ -232,8 +232,9 @@ describe("LinkSession liveness", () => {
     // The answer to each still measures the round trip.
     await waitFor(() => client.rttMs !== null);
     for (let i = 0; i < 20; i += 1) client.ping();
-    expect(client.pingSentAt(0)).toBeNull();
-    expect(client.pingSentAt(21)).not.toBeNull();
+    // The newest 16 of the 22 sent.
+    for (let nonce = 0; nonce <= 5; nonce += 1) expect(client.pingSentAt(nonce)).toBeNull();
+    for (let nonce = 6; nonce <= 21; nonce += 1) expect(client.pingSentAt(nonce)).not.toBeNull();
     client.close("done");
     expect(client.pingSentAt(21)).toBeNull();
   });

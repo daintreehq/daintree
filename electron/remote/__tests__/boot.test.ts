@@ -630,6 +630,7 @@ describe("startRemoteHosts", () => {
         connection: { status: "disconnected" },
         lastSeenAt: 5,
         summary: null,
+        summaryReceipt: null,
         lastHandshake: handshake,
         disconnectedByPerson: true,
       },
@@ -656,6 +657,30 @@ describe("startRemoteHosts", () => {
     expect(offs.manager).toHaveBeenCalledTimes(1);
     expect(offs.metrics).toHaveBeenCalledTimes(1);
     offMetrics();
+    await stopRemoteHosts();
+  });
+
+  it("hands host control when each host's summary arrived, beside the summary itself (#14462)", async () => {
+    const summary = { sampledAt: 1 };
+    const receipt = {
+      receivedAt: 2,
+      at: { wall: 2, mono: 2 },
+      hostAgeMs: 0,
+      maxAgeMs: 0,
+      timed: true,
+    };
+    const receiptOf = vi.fn((held: object) => (held === summary ? receipt : null));
+    m.hostEntries.push({
+      descriptor: { id: "control-on", name: "studio-01", lastSeenAt: 5 },
+      connection: { status: "disconnected" },
+      summary,
+    } as never);
+    await startRemoteHosts({ hostMode: false });
+    registerRemoteService("hostMetrics", { receiptOf } as never);
+    const [deps] = control.installHostControl.mock.calls[0] as [
+      { observeHosts(): Array<Record<string, unknown>> },
+    ];
+    expect(deps.observeHosts()[0]).toMatchObject({ summary, summaryReceipt: receipt });
     await stopRemoteHosts();
   });
 

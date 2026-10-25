@@ -417,7 +417,7 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
                           },
                         ],
                         description:
-                          "age-limit: known too old. clock-uncertain: an older host's timestamp, far from this clock: old or clocks disagree. Null when fresh.",
+                          "age-limit: known too old. clock-uncertain: its age couldn't be bounded and its timestamp can't be placed on this clock. Null when fresh.",
                       },
                       platform: {
                         type: "string",
