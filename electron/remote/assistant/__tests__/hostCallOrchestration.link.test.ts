@@ -476,6 +476,35 @@ let loseNextAnswer: { value: boolean };
 let asked: string[];
 let shell: ReturnType<typeof startShell>;
 
+/** The host's own directory, as its entries name it: `local`. */
+const HOST_AGENTS = {
+  coverage: "ok" as const,
+  observedAt: 77,
+  complete: true,
+  omitted: 0,
+  entries: [
+    {
+      state: "live" as const,
+      role: "assistant" as const,
+      subject: {
+        hostId: "local",
+        scope: { kind: "project" as const, projectId: PROJECT },
+        terminalId: "t-host-help",
+        incarnation: 5,
+        lane: 0,
+      },
+      agentId: "claude",
+      agentState: "idle" as const,
+      waitingReason: null,
+      since: null,
+      label: null,
+      attached: true,
+      handback: null,
+    },
+  ],
+};
+const agentReads: Array<{ projectId?: string }> = [];
+
 /** Relayed calls as they arrive on the host, before its ledger or anything else sees them. */
 const arrivals = { mcpCalls: 0, projectReads: 0, sessionsOpened: 0 };
 
@@ -526,6 +555,10 @@ function installHost(): void {
       return destination.open(spec);
     },
     throwawayRuns: () => throwaways,
+    readAgents: async (options) => {
+      agentReads.push(options);
+      return HOST_AGENTS;
+    },
   });
 }
 
@@ -568,6 +601,7 @@ beforeEach(async () => {
   arrivals.mcpCalls = 0;
   arrivals.projectReads = 0;
   arrivals.sessionsOpened = 0;
+  agentReads.length = 0;
   installHost();
   runs = new Map([["help-a", RUN_A]]);
   control = new Set([HOST_ID]);
@@ -1084,5 +1118,38 @@ describe("host.call to a host's throwaway agents, with no window open there (#14
       settled(throwaway("throwaway.launch", { agentId: "claude" }))
     ).resolves.toMatchObject({ outcome: "opted_out", callId: null });
     expect(throwaways.effects).toEqual([]);
+  });
+});
+
+describe("host.list reading a host's agents over the link (#14455)", () => {
+  const list = async (projectId?: string) => {
+    const listed = await shell.runtime.list("help-a", { includeAgents: true, projectId });
+    if (!listed.ok) throw new Error("refused");
+    return listed.value.hosts[0]?.agents;
+  };
+
+  it("lists the host's assistants under this Shell's id for it, opening nothing there", async () => {
+    const agents = await list(PROJECT);
+    expect(agentReads).toEqual([{ projectId: PROJECT }]);
+    expect(agents).toMatchObject({ coverage: "ok", observedAt: 77, complete: true, omitted: 0 });
+    expect(agents?.entries).toEqual([
+      {
+        ...HOST_AGENTS.entries[0],
+        subject: { ...HOST_AGENTS.entries[0]!.subject, hostId: HOST_ID },
+      },
+    ]);
+    expect(arrivals.sessionsOpened).toBe(0);
+    expect(arrivals.mcpCalls).toBe(0);
+  });
+
+  it("reads nothing past either control gate, and keeps nothing it read before", async () => {
+    await list();
+    destination.accepts = false;
+    expect(await list()).toMatchObject({ coverage: "unreachable", entries: [] });
+    destination.accepts = true;
+    control.delete(HOST_ID);
+    expect(await list()).toMatchObject({ coverage: "unreachable", entries: [] });
+    // Only the first: the host refuses before reading, and the Shell asks nothing.
+    expect(agentReads).toHaveLength(1);
   });
 });

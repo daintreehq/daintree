@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { AGENT_DIRECTORY_BYTES_MAX } from "../../../../shared/types/agentDirectory.js";
 import type { LinkSession } from "../../link/session.js";
 import type { MetricsSessionContext } from "../../metrics/hostMetricsHost.js";
 import {
@@ -1096,5 +1097,133 @@ describe("throwaway runs of an owner that is gone (#14447)", () => {
     relay.dispose();
     await vi.advanceTimersByTimeAsync(THROWAWAY_SHELL_GONE_GRACE_MS);
     expect(endOwner).not.toHaveBeenCalled();
+  });
+});
+
+describe("a Shell listing this host's agents (#14455)", () => {
+  const DIRECTORY = {
+    coverage: "ok" as const,
+    observedAt: 7,
+    complete: true,
+    omitted: 0,
+    entries: [
+      {
+        state: "live" as const,
+        role: "worker" as const,
+        subject: {
+          hostId: "local",
+          scope: { kind: "project" as const, projectId: "project-1" },
+          terminalId: "t-1",
+          incarnation: 3,
+        },
+        agentId: "claude",
+        agentState: "idle" as const,
+        waitingReason: null,
+        since: null,
+        label: null,
+        attached: null,
+        handback: null,
+      },
+    ],
+  };
+
+  it("answers with its own directory, filtered by the project the Shell names", async () => {
+    const readAgents = vi.fn(async () => DIRECTORY);
+    const openSession = vi.fn();
+    const { links, relay } = harness([["link-1", "sender-a"]], { readAgents, openSession });
+    await expect(
+      links[0]!.ask(AssistantLinkMethod.AGENTS, { projectId: "project-1" })
+    ).resolves.toEqual({ status: "done", directory: DIRECTORY });
+    expect(readAgents).toHaveBeenCalledWith({ projectId: "project-1" });
+    // Listing opens no MCP session, and so takes no tier, grant or ownership.
+    expect(openSession).not.toHaveBeenCalled();
+    relay.dispose();
+  });
+
+  it("reads nothing for a session that proved no sender", async () => {
+    const readAgents = vi.fn(async () => DIRECTORY);
+    const { links, relay } = harness([["link-1", null]], { readAgents });
+    await expect(links[0]!.ask(AssistantLinkMethod.AGENTS, {})).rejects.toMatchObject({
+      code: "PERMISSION",
+    });
+    expect(readAgents).not.toHaveBeenCalled();
+    relay.dispose();
+  });
+
+  it("refuses without reading while this host's own setting is off, or once it goes off", async () => {
+    const readAgents = vi.fn(async () => DIRECTORY);
+    const off = harness([["link-1", "sender-a"]], {
+      readAgents,
+      acceptsRemoteControl: () => false,
+    });
+    await expect(off.links[0]!.ask(AssistantLinkMethod.AGENTS, {})).resolves.toEqual({
+      status: "refused",
+      reason: "control-off",
+    });
+    expect(readAgents).not.toHaveBeenCalled();
+    off.relay.dispose();
+
+    let accepts = true;
+    const revoked = harness([["link-1", "sender-a"]], {
+      acceptsRemoteControl: () => accepts,
+      readAgents: async () => {
+        accepts = false;
+        return DIRECTORY;
+      },
+    });
+    await expect(revoked.links[0]!.ask(AssistantLinkMethod.AGENTS, {})).resolves.toEqual({
+      status: "refused",
+      reason: "control-off",
+    });
+    revoked.relay.dispose();
+  });
+
+  it("is unsupported without a directory, and unreachable when its read throws", async () => {
+    const none = harness([["link-1", "sender-a"]]);
+    await expect(none.links[0]!.ask(AssistantLinkMethod.AGENTS, {})).rejects.toMatchObject({
+      code: "UNSUPPORTED",
+    });
+    none.relay.dispose();
+
+    const broken = harness([["link-1", "sender-a"]], {
+      readAgents: async () => {
+        throw new Error("boom");
+      },
+    });
+    await expect(broken.links[0]!.ask(AssistantLinkMethod.AGENTS, {})).resolves.toEqual({
+      status: "done",
+      directory: { coverage: "unreachable", observedAt: null, complete: false, omitted: 0, entries: [] },
+    });
+    broken.relay.dispose();
+  });
+
+  it("keeps a stale or partial read as it is, and cuts one too large to send", async () => {
+    const stale = { ...DIRECTORY, coverage: "stale" as const, complete: false, omitted: 2 };
+    const partial = harness([["link-1", "sender-a"]], { readAgents: async () => stale });
+    await expect(partial.links[0]!.ask(AssistantLinkMethod.AGENTS, {})).resolves.toEqual({
+      status: "done",
+      directory: stale,
+    });
+    partial.relay.dispose();
+
+    const entry = DIRECTORY.entries[0]!;
+    const many = {
+      ...DIRECTORY,
+      entries: Array.from({ length: 256 }, (_, index) => ({
+        ...entry,
+        subject: { ...entry.subject, terminalId: `t-${index}` },
+        label: "x".repeat(120),
+      })),
+    };
+    const big = harness([["link-1", "sender-a"]], { readAgents: async () => many });
+    const answer = (await big.links[0]!.ask(AssistantLinkMethod.AGENTS, {})) as {
+      directory: { omitted: number; entries: unknown[] };
+    };
+    expect(answer.directory.omitted).toBeGreaterThan(0);
+    expect(answer.directory.omitted + answer.directory.entries.length).toBe(256);
+    expect(new TextEncoder().encode(JSON.stringify(answer.directory)).length).toBeLessThanOrEqual(
+      AGENT_DIRECTORY_BYTES_MAX
+    );
+    big.relay.dispose();
   });
 });
