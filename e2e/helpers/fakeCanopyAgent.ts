@@ -171,7 +171,9 @@ export function installFakeCanopyAgent(repoDir: string, version = "9.9.9"): stri
   const dir = path.join(binDir, "scenes");
   mkdirSync(dir, { recursive: true });
   const config: Config = { dir, version };
-  const impl = path.join(binDir, "claude");
+  // Windows runs no shebang: a .js file beside a .cmd that names node.
+  const windows = process.platform === "win32";
+  const impl = path.join(binDir, windows ? "claude.js" : "claude");
   writeFileSync(
     impl,
     [
@@ -181,6 +183,12 @@ export function installFakeCanopyAgent(repoDir: string, version = "9.9.9"): stri
     ].join("\n")
   );
   chmodSync(impl, 0o755);
+  if (windows) {
+    writeFileSync(
+      path.join(binDir, "claude.cmd"),
+      ["@echo off", `"${process.execPath}" "%~dp0claude.js" %*`, ""].join("\r\n")
+    );
+  }
   return binDir;
 }
 
