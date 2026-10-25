@@ -154,6 +154,7 @@ export interface GeneratedIpcInvokeMap {
       channel:
         | "canopy:answer"
         | "canopy:archive"
+        | "canopy:get-models"
         | "canopy:get-snapshot"
         | "canopy:mark-all-read"
         | "canopy:mark-seen"
@@ -161,10 +162,12 @@ export interface GeneratedIpcInvokeMap {
         | "canopy:rename"
         | "canopy:reread"
         | "canopy:restore-reads"
+        | "canopy:retry-model"
         | "canopy:run-branch"
         | "canopy:search-screens"
         | "canopy:set-active"
         | "canopy:set-mode"
+        | "canopy:set-model"
         | "canopy:set-read"
         | "canopy:set-scope"
         | "canopy:set-shown"
@@ -189,6 +192,7 @@ export interface GeneratedIpcInvokeMap {
       | import("./canopy.js").CanopySnapshot
       | import("./canopy.js").CanopyReadMark[]
       | import("./fleet.js").FleetSnapshot
+      | import("./canopy.js").CanopyModelCatalogue
       | null;
   };
   "canopy-host:list-assistants": {
@@ -248,6 +252,10 @@ export interface GeneratedIpcInvokeMap {
   "canopy:capture-backdrop": {
     args: [];
     result: Uint8Array<ArrayBufferLike> | null;
+  };
+  "canopy:get-models": {
+    args: [refresh?: boolean | undefined];
+    result: import("./canopy.js").CanopyModelCatalogue;
   };
   "canopy:get-snapshot": {
     args: [];
@@ -330,6 +338,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: void;
   };
+  "canopy:remove-models": {
+    args: [];
+    result: import("./canopy.js").CanopySnapshot;
+  };
   "canopy:rename": {
     args: [runId: string, target: import("./canopy.js").CanopyTarget, title: string];
     result: void;
@@ -354,6 +366,10 @@ export interface GeneratedIpcInvokeMap {
     args: [restores: import("./canopy.js").CanopyReadRestore[]];
     result: void;
   };
+  "canopy:retry-model": {
+    args: [];
+    result: import("./canopy.js").CanopySnapshot;
+  };
   "canopy:run-branch": {
     args: [runId: string, target: import("./canopy.js").CanopyTarget];
     result: string | null;
@@ -372,6 +388,10 @@ export interface GeneratedIpcInvokeMap {
       expectRevision?: number | undefined,
       expectHostEpoch?: string | undefined,
     ];
+    result: import("./canopy.js").CanopySnapshot;
+  };
+  "canopy:set-model": {
+    args: [id: string];
     result: import("./canopy.js").CanopySnapshot;
   };
   "canopy:set-read": {

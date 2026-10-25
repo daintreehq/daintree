@@ -22,8 +22,6 @@ import { SearchField } from "@/components/ui/SearchField";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Badge } from "@/components/ui/badge";
-import { systemClient } from "@/clients/systemClient";
 import { useFrozenBackdrop } from "./useFrozenBackdrop";
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { Callout } from "@/components/ui/Callout";
@@ -32,10 +30,10 @@ import { CanopyCard, canopyCardDomId } from "./CanopyCard";
 import { CanopyRow } from "./CanopyRow";
 import { CanopyRowMenu } from "./CanopyRowMenu";
 import { SectionBar } from "./CanopySectionBar";
-import { CanopyStatusBar } from "./CanopyStatusBar";
+import { CanopyStatusBar, formatModelBytes } from "./CanopyStatusBar";
 import { CanopyPlace } from "./CanopyPlace";
 import { CanopyPitch } from "./CanopyPitch";
-import { CANOPY_BETA_TERMS, CANOPY_TITLE, CANOPY_WAITLIST_URL } from "./canopyTerms";
+import { CANOPY_TITLE } from "./canopyTerms";
 import { CanopyHeaderCenter, CanopyHostPicker, useCanopyHostRows } from "./CanopyHostPicker";
 import { CanopyHostOffer } from "./CanopyHostOffer";
 import { useCanopyInboxData } from "./useCanopyInboxData";
@@ -52,7 +50,7 @@ import { CANOPY_ROLE_FILTERS, type CanopyRoleFilter } from "./canopyAssistants";
 import { isFullAgentDirectory } from "@shared/types/agentDirectory";
 import { CanopyBulkEnableDialog } from "./CanopyBulkEnableDialog";
 import type { BulkTarget } from "@shared/utils/canopyBulkEnable";
-import { canopyBulkTransport } from "./canopyHostSource";
+import { canopyBulkTransport, ownCanopyApi, remoteCanopyApi } from "./canopyHostSource";
 import { ALL_HOSTS_ID, canopyOwnHostId } from "@/store/canopyStore";
 import { describeHostMenuState, type HostMenuRow } from "@/components/Hosts/hostModel";
 import { isNewWindowClick } from "@/components/Hosts/hostSwitching";
@@ -69,38 +67,6 @@ interface HostIssue {
 function agoPhrase(sinceMs: number, nowMs: number): string {
   const age = formatWaitAge(sinceMs, nowMs);
   return age === "just now" ? age : `${age} ago`;
-}
-
-const FEEDBACK_MAILTO = "mailto:greg@daintree.org?subject=Canopy%20beta%20feedback";
-
-/** The beta's standing terms, said every time the inbox is open. */
-function BetaNotice() {
-  return (
-    <div className="flex shrink-0 items-center gap-4 border-b border-border-default px-4 py-2">
-      <p className="flex min-w-0 flex-1 items-center gap-2 text-xs text-text-secondary">
-        <Badge tone="warning" size="sm">
-          Beta
-        </Badge>
-        <span className="min-w-0">{CANOPY_BETA_TERMS}</span>
-      </p>
-      <Button
-        variant="link"
-        size="xs"
-        className="shrink-0"
-        onClick={() => void systemClient.openExternal(FEEDBACK_MAILTO)}
-      >
-        Send feedback
-      </Button>
-      <Button
-        variant="outline"
-        size="xs"
-        className="shrink-0"
-        onClick={() => void systemClient.openExternal(CANOPY_WAITLIST_URL)}
-      >
-        Paid plan waitlist
-      </Button>
-    </div>
-  );
 }
 
 /**
@@ -855,6 +821,30 @@ function CanopyInbox({
           },
         ];
       }
+      // Its own model, downloaded on that host: until it is there, nothing there is read.
+      const model = reading.canopy.model;
+      if (model && model.status !== "ready") {
+        const where = remoteHost ? ` on ${name}` : "";
+        const hostApi = remoteHost ? remoteCanopyApi(reading.hostId) : ownCanopyApi;
+        return [
+          model.status === "failed"
+            ? {
+                hostId: reading.hostId,
+                text: `Couldn't download Canopy's model${where}`,
+                action: "Retry",
+                act: () => void hostApi.retryModel().catch(() => {}),
+              }
+            : {
+                hostId: reading.hostId,
+                text:
+                  model.status === "downloading"
+                    ? `Downloading Canopy's model${where}… ${formatModelBytes(model.received)} of ${formatModelBytes(model.total)}`
+                    : `Waiting for Canopy's model${where}…`,
+                action: null,
+                act: null,
+              },
+        ];
+      }
       const linkStatus = remoteHost && row?.isLocal === false ? row.connection?.status : undefined;
       if (linkStatus !== undefined && linkStatus !== "connected") {
         return [
@@ -1013,7 +1003,6 @@ function CanopyInbox({
         onKeyDownCapture={onAgentStepKeyDownCapture}
         onKeyDown={onNavigationKeyDown}
       >
-        {canopy?.tier === "free" && <BetaNotice />}
         {hostTrouble && (
           <div className="flex shrink-0 flex-col gap-2 border-b border-border-default p-3">
             <Callout
@@ -1366,7 +1355,13 @@ function CanopyInbox({
                   </>
                 )}
               </div>
-              <CanopyStatusBar link={canopy?.link} waiting={canopy?.waiting} />
+              <CanopyStatusBar
+                host={otherHost ? hostName : null}
+                onRetryModel={() => void api.retryModel().catch(() => {})}
+                reader={canopy?.reader}
+                model={canopy?.model}
+                waiting={canopy?.waiting}
+              />
             </div>
             {/* Inset on every side: the top one puts the place line level with the
                 search beside it, and the card's top with the Inbox bar's. */}

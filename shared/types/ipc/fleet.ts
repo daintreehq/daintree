@@ -233,7 +233,7 @@ export interface FleetRunRow {
    */
   quietSince?: number;
   /**
-   * Present iff Canopy is on, on the priority tier, and read something this
+   * Present iff Canopy is on with its model here, and read something this
    * turn that refines where the run lands. Whether it still applies to what
    * Daintree observes now is `canopyPlacement`'s to say, not presence alone:
    * the verdict is held for its turn while the observed state moves under it.

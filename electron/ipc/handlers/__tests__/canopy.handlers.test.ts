@@ -153,14 +153,26 @@ const gitBranch = vi.hoisted(() =>
   vi.fn(async (_path: string) => "feature/login" as string | null)
 );
 vi.mock("../../../utils/gitUtils.js", () => ({ getGitBranch: gitBranch }));
-const canopyBackend = vi.hoisted(() => ({
-  classifyWithCanopy: vi.fn(),
-  describeWithCanopy: vi.fn(),
-  wakeCanopy: vi.fn(),
-  canopyWaking: vi.fn(() => false),
-  canopyServiceUrl: vi.fn(() => "https://canopy.daintree.org"),
+const localReader = vi.hoisted(() => ({ read: vi.fn(), release: vi.fn() }));
+vi.mock("../../../services/canopy/canopyLocalReader.js", () => ({
+  CanopyLocalReader: vi.fn(function CanopyLocalReader() {
+    return localReader;
+  }),
 }));
-vi.mock("../../../services/canopy/canopyBackend.js", () => canopyBackend);
+const models = vi.hoisted(() => ({
+  ensure: vi.fn(async () => {}),
+  cancel: vi.fn(),
+  state: vi.fn((id: string) => ({ id, status: "ready" as const })),
+  list: vi.fn(async () => []),
+  installedDir: vi.fn(async () => "/tmp/canopy/models/canopy-reader-17m"),
+  removeAllBut: vi.fn(async () => {}),
+}));
+vi.mock("../../../services/canopy/canopyModels.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../services/canopy/canopyModels.js")>()),
+  CanopyModels: vi.fn(function CanopyModels() {
+    return models;
+  }),
+}));
 const broadcasts = vi.hoisted(() => vi.fn());
 const handBacks = vi.hoisted(() => ({ markRead: vi.fn(), markUnread: vi.fn() }));
 vi.mock("../../utils.js", async (importOriginal) => ({
@@ -294,10 +306,9 @@ describe("canopy IPC", () => {
     expect(vi.mocked(readPluginTerminalScreen).mock.calls.map((call) => call[1])).toEqual([
       "run-1",
     ]);
-    // Nothing read for a search goes to the Canopy service.
+    // Nothing read for a search goes anywhere, the reader included.
     expect(fetch).not.toHaveBeenCalled();
-    expect(canopyBackend.classifyWithCanopy).not.toHaveBeenCalled();
-    expect(canopyBackend.describeWithCanopy).not.toHaveBeenCalled();
+    expect(localReader.read).not.toHaveBeenCalled();
   });
 
   it("refuses a search with no words, or words past its bounds", async () => {
@@ -340,13 +351,11 @@ describe("canopy IPC", () => {
     expect(state.writes).toEqual([]);
 
     const turnedOn = (await invoke(CANOPY_METHOD_CHANNELS.setMode, sender, "on")) as {
-      data?: { activated: boolean; tier: string };
+      data?: { activated: boolean };
       activated?: boolean;
     };
     expect((turnedOn.data ?? turnedOn).activated).toBe(true);
     expect(state.mode).toBe("on");
-    // Free during the beta.
-    expect((turnedOn.data ?? (turnedOn as { tier: string })).tier).toBe("free");
     const after = await outcome(
       invoke(CANOPY_METHOD_CHANNELS.answer, sender, "run-1", { spawnedAt: 100 }, "Yes")
     );
@@ -729,15 +738,38 @@ describe("canopy IPC", () => {
     }
   );
 
-  it("wakes the service when a panel opens on Canopy turned on, and not before", async () => {
+  it("gets the model once Canopy is turned on, and lets the reader go when it is turned off", async () => {
     state.mode = "unset";
     const sender = fakeSender(9);
     await invoke(CANOPY_METHOD_CHANNELS.setActive, sender, true);
-    expect(canopyBackend.wakeCanopy).not.toHaveBeenCalled();
+    // Off, nothing is downloaded or started.
+    expect(models.ensure).not.toHaveBeenCalled();
     await invoke(CANOPY_METHOD_CHANNELS.setMode, sender, "on");
-    expect(canopyBackend.wakeCanopy).toHaveBeenCalledTimes(1);
-    await invoke(CANOPY_METHOD_CHANNELS.setActive, sender, true);
-    expect(canopyBackend.wakeCanopy).toHaveBeenCalledTimes(2);
+    expect(models.ensure).toHaveBeenCalledWith("daintreehq/canopy-reader-17m");
+    await invoke(CANOPY_METHOD_CHANNELS.setMode, sender, "unset");
+    // A download under way stops; no read was made, so no reader was ever started.
+    expect(models.cancel).toHaveBeenCalled();
+    expect(localReader.read).not.toHaveBeenCalled();
+  });
+
+  it("refuses a model id that isn't one of the publisher's readers", async () => {
+    const sender = fakeSender(9);
+    for (const id of ["evil/model", "daintreehq/other", "daintreehq/canopy-reader-17m/../x", 7]) {
+      const result = await outcome(invoke(CANOPY_METHOD_CHANNELS.setModel, sender, id));
+      expect(result.ok).toBe(false);
+    }
+    expect(models.ensure).not.toHaveBeenCalledWith("evil/model");
+  });
+
+  it("deletes the downloaded models only while Canopy is off", async () => {
+    state.mode = "on";
+    const sender = fakeSender(9);
+    const refused = await outcome(invoke(CANOPY_METHOD_CHANNELS.removeModels, sender));
+    expect(refused).toEqual({ ok: false, message: "Canopy is on" });
+    expect(models.removeAllBut).not.toHaveBeenCalled();
+    state.mode = "unset";
+    await invoke(CANOPY_METHOD_CHANNELS.removeModels, sender);
+    expect(models.removeAllBut).toHaveBeenCalledWith(null);
   });
 
   it("watches a view's lifecycle once however often the panel reopens", async () => {
@@ -1374,7 +1406,7 @@ describe("canopy IPC", () => {
       expect(state.submits).toEqual(["carry on"]);
       // Nothing about viewing an assistant reaches the Canopy reader.
       expect(fetch).not.toHaveBeenCalled();
-      expect(canopyBackend.classifyWithCanopy).not.toHaveBeenCalled();
+      expect(localReader.read).not.toHaveBeenCalled();
       expect(readPluginTerminalScreen).not.toHaveBeenCalled();
     });
 
@@ -1607,7 +1639,7 @@ describe("canopy IPC", () => {
       };
       expect((listed.data ?? listed) as { coverage: string }).toMatchObject({ coverage: "ok" });
       expect(directoryRead).toHaveBeenCalledWith({});
-      expect(canopyBackend.classifyWithCanopy).not.toHaveBeenCalled();
+      expect(localReader.read).not.toHaveBeenCalled();
       expect(readPluginTerminalScreen).not.toHaveBeenCalled();
       expect(ptyClient.acquireIpcDataMirror).not.toHaveBeenCalled();
     });

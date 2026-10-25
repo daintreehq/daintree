@@ -1,49 +1,28 @@
 /** The dialog's title, the same in every state it renders: the feature named in full. */
 export const CANOPY_TITLE = "Daintree Canopy";
 
-/** The beta's terms, word for word on the pitch, in the inbox notice and in Settings. */
-export const CANOPY_BETA_TERMS =
-  "Canopy is free and unlimited during the beta. It becomes a paid feature after that.";
+/** What turning Canopy on does: said the same way on the offer and in Settings. */
+export const CANOPY_LOCAL =
+  "Canopy reads your agents' screens on this computer, with a small model it downloads the first time. Nothing it reads leaves this computer.";
 
-/**
- * What turning Canopy on sends, and when: said the same way wherever the user
- * can turn it on — the offer and Settings — so consent given in either place
- * covers the same thing.
- */
-export const CANOPY_SENDS =
-  "To read them, Canopy sends your agents' terminal output to Daintree's servers: what's on screen, recent scrollback with the requests you typed, each terminal's title and state, and notes Canopy kept from earlier readings. It does this for agents in every project, and while it's closed too, so it can tell you when an agent is asking for you.";
+/** How to turn it off again. */
+export const CANOPY_STOP = "Turn it off at any time from Settings > Canopy.";
 
-/** What redaction does, without promising more than pattern matching can. */
-export const CANOPY_REDACTION =
-  "Common key and password patterns are removed before sending. This can miss some secrets.";
-
-/** How to take the consent back. */
-export const CANOPY_STOP = "Stop at any time from Settings > Canopy.";
-
-/** The policy that covers what Canopy sends. */
-export const CANOPY_PRIVACY_URL = "https://daintree.org/privacy";
-
-/** Where the waitlist for Canopy's paid plan lives. */
-export const CANOPY_WAITLIST_URL = "https://daintree.org/canopy";
-
-/**
- * What turning Canopy on sends from another host: the same consent as
- * `CANOPY_SENDS`, said of that host, whose own Canopy does the reading.
- */
-export function canopySendsFrom(hostName: string): string {
-  return `To read them, Canopy on ${hostName} sends its agents' terminal output to Daintree's servers: what's on screen, recent scrollback with the requests typed there, each terminal's title and state, and notes Canopy kept from earlier readings. It does this for agents in every project on ${hostName}, and while Canopy is closed too, so it can tell you when an agent is asking for you.`;
+/** What turning Canopy on does on another host, whose own Canopy does the reading. */
+export function canopyLocalOn(hostName: string): string {
+  return `Canopy on ${hostName} reads its agents' screens there, with a small model it downloads the first time. No screen is sent to any service.`;
 }
 
-/** How to take another host's consent back. */
+/** How to turn another host's Canopy off. */
 export function canopyStopOn(hostName: string): string {
-  return `Stop at any time from Settings > Canopy on ${hostName}.`;
+  return `Turn it off at any time from Settings > Canopy on ${hostName}.`;
 }
 
-/** The same consent said once for several hosts, each of which does its own reading. */
-export function canopySendsFromHosts(hostNames: readonly string[]): string {
+/** The same said once for several hosts, each of which does its own reading. */
+export function canopyLocalOnHosts(hostNames: readonly string[]): string {
   const names = hostNames.join(", ");
-  return `To read them, Canopy on each of these hosts (${names}) sends its own agents' terminal output to Daintree's servers: what's on screen, recent scrollback with the requests typed there, each terminal's title and state, and notes Canopy kept from earlier readings. Each does this for agents in every project on that host, and while Canopy is closed too, so it can tell you when an agent is asking for you.`;
+  return `Canopy on each of these hosts (${names}) reads its own agents' screens there, with a small model each downloads the first time. No screen is sent to any service.`;
 }
 
-/** How to take any of those hosts' consent back. */
-export const CANOPY_STOP_ON_EACH = "Stop at any time from Settings > Canopy on each host.";
+/** How to turn any of those hosts' Canopy off. */
+export const CANOPY_STOP_ON_EACH = "Turn it off at any time from Settings > Canopy on each host.";

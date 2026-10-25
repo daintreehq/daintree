@@ -349,12 +349,6 @@ export function isCanopyUnread(mark: CanopyReadMark | null | undefined): boolean
 }
 
 /**
- * Whether the user pays for Canopy. Screens are read alike on both: the tier
- * changes only what the panel tells them.
- */
-export type CanopyTier = "free" | "priority";
-
-/**
  * Where the user stands on Canopy. `unset`: never turned on, or turned off —
  * its ways in offer it, and nothing is read. `on`: screens are read. `hidden`:
  * the user doesn't want it — no way in but Settings, and nothing is read.
@@ -376,10 +370,55 @@ export interface CanopyPlan {
    * when the host restarts, so a revision means nothing without it.
    */
   hostEpoch?: string;
-  /** The user turned Canopy on, agreeing to send screens off the machine to be read: `mode` is `on`. */
+  /** The user turned Canopy on: `mode` is `on`. */
   activated: boolean;
-  tier: CanopyTier;
 }
+
+/** How a model did on real agent screens it was never trained on, as its publisher measured. */
+export interface CanopyModelBench {
+  /** Hand-checked screens from real sessions whose state it read right, of `gold`. */
+  goldCategory: number;
+  gold: number;
+  /** Researched screens across the agent CLIs whose state it read right, of `agents`. */
+  agentCategory: number;
+  agents: number;
+  /** 0-1: how often its headline was the line a careful reader picked. */
+  headline: number;
+  /** 0-1: how often it got an ask's options exactly right. */
+  options: number;
+  /** 0-1: headline and summary lines against a careful reader's, as F1. */
+  cardF1: number;
+  /** Median ms for one screen on one thread of the publisher's machine. */
+  msPerScreen: number;
+}
+
+/** One published model Canopy can read screens with. */
+export interface CanopyModelVariant {
+  /** Its Hugging Face repo, e.g. `daintreehq/canopy-reader-17m`. */
+  id: string;
+  /** What Settings calls it: Light, Best, or its size. */
+  name: string;
+  /** Everything a download fetches, in bytes. */
+  downloadBytes: number;
+  /** On this machine and checked. */
+  installed: boolean;
+  /** This version of Daintree can read with it. */
+  supported: boolean;
+  bench: CanopyModelBench | null;
+}
+
+/** The published models, and the one chosen on this machine. */
+export interface CanopyModelCatalogue {
+  selected: string;
+  variants: CanopyModelVariant[];
+}
+
+/** Where the chosen model stands on this machine. */
+export type CanopyModelState =
+  | { id: string; status: "missing" }
+  | { id: string; status: "downloading"; received: number; total: number }
+  | { id: string; status: "ready" }
+  | { id: string; status: "failed"; error: string };
 
 /** What a run's screen says at a glance, for a run the readers have not carded yet. */
 export interface CanopyRunGlance {
@@ -389,15 +428,13 @@ export interface CanopyRunGlance {
   glance: CanopyGlance;
 }
 
-/** Canopy's requests to its service, as the status bar shows them. */
-export interface CanopyLink {
-  /** The service's host, as the requests address it. */
-  host: string;
-  /** Requests to it under way now. */
+/** Canopy's local reader, as the status bar shows it. */
+export interface CanopyReaderLink {
+  /** The model's name, as Settings shows it. */
+  model: string;
+  /** Screens being read now. */
   inFlight: number;
-  /** The mean time of the latest classifier reads, in ms; null before the first. */
-  classifyMs: number | null;
-  /** The mean time of the latest summary reads, in ms; null before the first. */
+  /** The mean time of the latest reads, in ms; null before the first. */
   readMs: number | null;
 }
 
@@ -414,7 +451,8 @@ export interface CanopySnapshot {
   hostEpoch?: string;
   /** The user turned Canopy on; nothing is read until they do. */
   activated: boolean;
-  tier: CanopyTier;
+  /** The chosen model and whether it is here; absent while Canopy is off. */
+  model?: CanopyModelState;
   /** Runs the user archived or replied to and that have said nothing new since. */
   dispositions: CanopyDisposition[];
   /** When the user last looked at each run, for the runs looked at since Daintree started. */
@@ -442,17 +480,11 @@ export interface CanopySnapshot {
   failedRuns: string[];
   /**
    * Reads are held up for a reason that passes, not yet reported as a
-   * failure: the service is starting, or a read is waiting to be tried again.
-   * Absent while nothing is held up.
+   * failure: a read is waiting to be tried again. Absent while nothing is held up.
    */
-  waiting?: "waking" | "retrying";
-  /**
-   * Runs read with no panel open whose words the next open writes: their
-   * cards, and so their place in the list, are about to change.
-   */
-  wordsDue?: string[];
-  /** The requests to Canopy's service; absent while Canopy is off. */
-  link?: CanopyLink;
+  waiting?: "retrying";
+  /** The local reader; absent while Canopy is off. */
+  reader?: CanopyReaderLink;
 }
 
 /**

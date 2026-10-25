@@ -1,18 +1,11 @@
 import { useState } from "react";
-import { Send } from "lucide-react";
+import { HardDrive } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { systemClient } from "@/clients/systemClient";
-import {
-  CANOPY_BETA_TERMS,
-  CANOPY_PRIVACY_URL,
-  CANOPY_REDACTION,
-  canopySendsFrom,
-  canopyStopOn,
-} from "./canopyTerms";
+import { canopyLocalOn, canopyStopOn } from "./canopyTerms";
 
 /**
- * Canopy is off on the host the panel shows. Consent is that host's own: the
- * offer names it, says what turning it on sends from there, and turns it on
+ * Canopy is off on the host the panel shows. Turning it on is that host's own:
+ * the offer names it, says what turning it on does there, and turns it on
  * there alone. Nothing about the window's own host changes.
  */
 export function CanopyHostOffer({
@@ -55,21 +48,10 @@ export function CanopyHostOffer({
           </p>
         </div>
         <div className="flex gap-2 text-sm leading-6 text-text-secondary">
-          <Send className="mt-1.5 size-3.5 shrink-0" aria-hidden="true" />
-          <div className="flex flex-col gap-2">
-            <p>{canopySendsFrom(hostName)}</p>
-            <p>
-              {CANOPY_REDACTION} {canopyStopOn(hostName)}{" "}
-              <Button
-                variant="link"
-                size="xs"
-                className="h-auto p-0 text-sm"
-                onClick={() => void systemClient.openExternal(CANOPY_PRIVACY_URL)}
-              >
-                Privacy policy
-              </Button>
-            </p>
-          </div>
+          <HardDrive className="mt-1.5 size-3.5 shrink-0" aria-hidden="true" />
+          <p>
+            {canopyLocalOn(hostName)} {canopyStopOn(hostName)}
+          </p>
         </div>
         <div className="flex items-center gap-3">
           <Button variant="contrast" disabled={pending} onClick={turnOn}>
@@ -79,7 +61,6 @@ export function CanopyHostOffer({
             {failed ? `Couldn't turn on Canopy on ${hostName}. Try again.` : ""}
           </p>
         </div>
-        <p className="text-xs text-text-secondary">{CANOPY_BETA_TERMS}</p>
       </div>
     </section>
   );

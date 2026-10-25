@@ -59,6 +59,9 @@ export interface GeneratedElectronAPI {
     captureBackdrop(
       ...args: IpcInvokeMap["canopy:capture-backdrop"]["args"]
     ): Promise<IpcInvokeMap["canopy:capture-backdrop"]["result"]>;
+    getModels(
+      ...args: IpcInvokeMap["canopy:get-models"]["args"]
+    ): Promise<IpcInvokeMap["canopy:get-models"]["result"]>;
     getSnapshot(
       ...args: IpcInvokeMap["canopy:get-snapshot"]["args"]
     ): Promise<IpcInvokeMap["canopy:get-snapshot"]["result"]>;
@@ -80,6 +83,9 @@ export interface GeneratedElectronAPI {
     refresh(
       ...args: IpcInvokeMap["canopy:refresh"]["args"]
     ): Promise<IpcInvokeMap["canopy:refresh"]["result"]>;
+    removeModels(
+      ...args: IpcInvokeMap["canopy:remove-models"]["args"]
+    ): Promise<IpcInvokeMap["canopy:remove-models"]["result"]>;
     rename(
       ...args: IpcInvokeMap["canopy:rename"]["args"]
     ): Promise<IpcInvokeMap["canopy:rename"]["result"]>;
@@ -92,6 +98,9 @@ export interface GeneratedElectronAPI {
     restoreReads(
       ...args: IpcInvokeMap["canopy:restore-reads"]["args"]
     ): Promise<IpcInvokeMap["canopy:restore-reads"]["result"]>;
+    retryModel(
+      ...args: IpcInvokeMap["canopy:retry-model"]["args"]
+    ): Promise<IpcInvokeMap["canopy:retry-model"]["result"]>;
     runBranch(
       ...args: IpcInvokeMap["canopy:run-branch"]["args"]
     ): Promise<IpcInvokeMap["canopy:run-branch"]["result"]>;
@@ -104,6 +113,9 @@ export interface GeneratedElectronAPI {
     setMode(
       ...args: IpcInvokeMap["canopy:set-mode"]["args"]
     ): Promise<IpcInvokeMap["canopy:set-mode"]["result"]>;
+    setModel(
+      ...args: IpcInvokeMap["canopy:set-model"]["args"]
+    ): Promise<IpcInvokeMap["canopy:set-model"]["result"]>;
     setRead(
       ...args: IpcInvokeMap["canopy:set-read"]["args"]
     ): Promise<IpcInvokeMap["canopy:set-read"]["result"]>;

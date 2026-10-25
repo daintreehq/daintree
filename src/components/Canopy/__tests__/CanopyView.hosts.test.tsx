@@ -129,7 +129,6 @@ function canopySnapshot(overrides: Partial<CanopySnapshot> = {}): CanopySnapshot
   return {
     mode: "on",
     activated: true,
-    tier: "priority",
     dispositions: [],
     seen: [],
     reads: [],

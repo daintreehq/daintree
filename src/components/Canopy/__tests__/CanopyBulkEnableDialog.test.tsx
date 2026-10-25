@@ -17,7 +17,6 @@ const snap = (mode: CanopyMode, rev = 0): CanopySnapshot => ({
   modeRevision: rev,
   hostEpoch: "e",
   activated: mode === "on",
-  tier: "free",
   dispositions: [],
   seen: [],
   reads: [],

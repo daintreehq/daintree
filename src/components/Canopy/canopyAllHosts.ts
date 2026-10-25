@@ -94,7 +94,6 @@ export function mergeHostReadings(readings: readonly HostReading[]): {
   const canopy: CanopySnapshot = {
     mode: "on",
     activated: true,
-    tier: loadedCanopies[0]!.canopy!.tier,
     dispositions: loadedCanopies.flatMap(({ hostId, canopy: c }) =>
       c!.dispositions.map((item) => keyed(hostId, item))
     ),
@@ -117,9 +116,6 @@ export function mergeHostReadings(readings: readonly HostReading[]): {
     ),
     lastError: null,
     failedRuns,
-    wordsDue: loadedCanopies.flatMap(({ hostId, canopy: c }) =>
-      (c!.wordsDue ?? []).map((runId) => allHostsKey(hostId, runId))
-    ),
   };
   return { canopy, fleet };
 }
@@ -276,6 +272,17 @@ export function createAllHostsRoute(ownHostId: HostId, hostIds: readonly HostId[
     },
     refresh: async () => {
       answered(await Promise.allSettled(hostIds.map((hostId) => apiFor(hostId).refresh())));
+    },
+    // Each host's own download, tried again wherever it failed; the rest ignore it.
+    retryModel: async () => {
+      const settled = await Promise.allSettled(
+        hostIds.map((hostId) => apiFor(hostId).retryModel())
+      );
+      const first = settled.find(
+        (r): r is PromiseFulfilledResult<CanopySnapshot> => r.status === "fulfilled"
+      );
+      if (!first) throw new Error("No host answered");
+      return first.value;
     },
     searchScreens: async (targets: CanopyScreenSearchTarget[]) => {
       const groups = groupByHost(targets, (target) => target.runId);

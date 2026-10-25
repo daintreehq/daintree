@@ -1,13 +1,13 @@
 import type { FleetRunRow, RunCanopyRefinement } from "../../../shared/types/ipc/fleet.js";
 import {
   type CanopyCard,
-  type CanopyCategory,
   type CanopyDisposition,
   type CanopyGlance,
-  type CanopyLink,
+  type CanopyModelState,
   type CanopyLookPlace,
   type CanopyPlan,
   type CanopyReadMark,
+  type CanopyReaderLink,
   type CanopyReadRestore,
   type CanopyReadTarget,
   type CanopyRunGlance,
@@ -22,22 +22,19 @@ import {
   prepareScreen,
   promptKey,
   sameScreenTail,
-  scrolledSince,
   type PreparedScreen,
 } from "./canopyScreen.js";
 import { redactSecrets } from "../redactSecrets.js";
 import {
   CanopyProviderError,
   combinePriority,
-  type CanopyNote,
-  type CanopyPartialDescription,
-  type CanopyPreviousReading,
   type ClassifierResult,
   type DescriberResult,
   type CanopyScreenInput,
   type CanopyUserAction,
 } from "./canopyProviders.js";
 import { digestHistory, type CanopyDigest } from "./canopyDigest.js";
+import type { CanopyReading } from "./canopyLocalReader.js";
 import type { TerminalAnswer } from "../../../shared/utils/terminalSubmission.js";
 import { EMPTY_GLANCE, glanceScreen } from "./canopyGlance.js";
 import { CANOPY_REFLOW_MS, reflowPrint, sameAfterReflow } from "./canopyReflow.js";
@@ -108,7 +105,7 @@ export const CANOPY_REREAD_MS = 10_000;
 /**
  * How often an open panel re-reads every screen. Reading a screen is local and
  * cheap; only the ones whose tail changed since their card was written go on to
- * the providers, so a quiet or waiting fleet costs nothing between polls.
+ * the model, so a quiet or waiting fleet costs nothing between polls.
  */
 export const CANOPY_POLL_MS = 3_000;
 /**
@@ -118,18 +115,17 @@ export const CANOPY_POLL_MS = 3_000;
  */
 export const CANOPY_STATE_CHANGE_SCAN_MS = 400;
 /**
- * How often screens are read with no panel open. Only the classifier reads
- * them then — it is what tells the user an agent is asking something, lights
- * the toolbar, and has the inbox in priority order the moment the panel opens
- * — and only the ones that changed; the describer waits for the panel to open.
- * A classifier-only read is the service's light request (`/v1/classify`, its
- * own lane on the workers, ~50 ms of work).
+ * How often screens are read with no panel open, and only the ones that
+ * changed. Each reading carries the row whole — its place, its ask, its words —
+ * so the panel opens on every run already where it belongs; it is also what
+ * tells the user an agent is asking something and lights the toolbar. A
+ * reading is ~10 ms of one CPU core, and an unchanged screen costs none.
  * An observed state change still scans within a second, so this is the net
  * for the waits Daintree's own state misses. It is also each run's own pace:
  * a scan another run's state change set going sends a run no sooner than this
  * after its last read, unless Daintree saw that run change state too.
  */
-export const CANOPY_BACKGROUND_POLL_MS = 15_000;
+export const CANOPY_BACKGROUND_POLL_MS = 5_000;
 /**
  * How long after an agent stops every move of its screen is read: the stop
  * itself, the recap Claude Code draws a minute later, one dialog answered and
@@ -154,15 +150,17 @@ export const CANOPY_STALL_MS = 10 * 60_000;
 /** A screen still for less than this is not reported to the readers as still. */
 const SCREEN_STILL_REPORTED_MS = 60_000;
 /**
- * Reads in flight at once. Canopy's service batches on one worker and slows
- * for everyone past a handful at a time, so the rest wait here, where waiting
- * costs nothing, rather than there, where it times out.
+ * Readings in flight at once. The local model reads one screen at a time, so
+ * more only queue in its process; two keeps it busy without a backlog there
+ * that a closed panel or a moved screen could not take back.
  */
-const CONCURRENCY = { classifier: 8, describer: 6 } as const;
+const READ_CONCURRENCY = 2;
+/** Card jobs at once: each only reads the run's history, then sets its words. */
+const WORDS_CONCURRENCY = 6;
 const SCREEN_READ_CONCURRENCY = 8;
 /**
- * How long reads may keep failing for reasons that pass — a rate limit, a
- * worker waking, a timeout — before it is reported. Until then a run keeps
+ * How long reads may keep failing for reasons that pass — the model loading,
+ * a reader process restarting — before it is reported. Until then a run keeps
  * what it last said and is tried again on the next scan.
  */
 export const CANOPY_TRANSIENT_GRACE_MS = 60_000;
@@ -175,7 +173,7 @@ export const CANOPY_COLD_START_GRACE_MS = 180_000;
 const BROADCAST_DEBOUNCE_MS = 40;
 
 export interface CanopyServiceDeps {
-  /** Whether the user turned Canopy on, and on which tier; absent, on and priority. */
+  /** Whether the user turned Canopy on; absent, on. */
   plan?: CanopyPlan;
   /** The fleet's current runs, or null while the fleet is unknown. */
   getRuns: () => readonly FleetRunRow[] | null;
@@ -186,17 +184,18 @@ export interface CanopyServiceDeps {
   readScreen: (runId: string, lines: number) => Promise<ScreenRead | string | null>;
   /** The screen and `rows` of scrollback above it, or null; absent, no history is read. */
   readHistory?: (runId: string, rows: number) => Promise<string | null>;
-  classify: (input: CanopyScreenInput, signal: AbortSignal) => Promise<ClassifierResult>;
+  /** One reading of a screen by the local model: its verdict and its words together. */
+  read: (input: CanopyScreenInput, signal: AbortSignal) => Promise<CanopyReading>;
   /**
-   * The run's card. A describer that streams calls `onPartial` with what the
-   * card says so far, for the row to show before the card is finished.
+   * The model is on this machine and screens can be read. While it isn't —
+   * downloading, or not chosen yet — rows show the screen's own words and
+   * nothing is read. Absent, always.
    */
-  describe: (
-    input: CanopyScreenInput,
-    classifierSays: CanopyCategory,
-    signal: AbortSignal,
-    onPartial?: (partial: CanopyPartialDescription) => void
-  ) => Promise<DescriberResult>;
+  readerReady?: () => boolean;
+  /** The model's name, for the status bar. */
+  readerName?: () => string;
+  /** Where the chosen model stands, for Settings and the panel. */
+  modelState?: () => CanopyModelState | undefined;
   broadcast: (snapshot: CanopySnapshot) => void;
   now?: () => number;
   /** How long a close waits for a reopen before it abandons the scan; 0 closes at once. */
@@ -215,13 +214,6 @@ export interface CanopyServiceDeps {
    * again only after it stopped asking, or the agent worked in between.
    */
   onAsk?: (run: FleetRunRow, ask: CanopyAsk) => void;
-  /**
-   * The service is known to be starting from cold. Transient failures meanwhile
-   * are its start, not a fault, so the grace before one is reported waits for it.
-   */
-  serviceWaking?: () => boolean;
-  /** The host Canopy's service is reached at, for the status bar. */
-  serviceHost?: () => string;
   /** What `getRefinement` answers changed for at least one run, removals included. */
   onRefinementsChanged?: () => void;
 }
@@ -268,7 +260,8 @@ interface CardRead {
   classified: ClassifierResult;
   /** Words about a busy run's progress, not about a prompt. */
   progress: boolean;
-  earlier: CanopyPreviousReading | null;
+  /** The words the same reading gives. */
+  words: CanopyReading["words"];
 }
 
 interface RunEntry {
@@ -310,14 +303,10 @@ interface RunEntry {
   card: CanopyCard | null;
   /** A pass for this run is in flight. */
   pending: boolean;
-  /** A read whose words were due while no panel was open, for the open to write. */
-  wordsWaiting: CardRead | null;
   /** Aborts the card being written for this run, once a newer screen supersedes it. */
   cardAbort: AbortController | null;
   /** The card being written is about a busy run's progress, not a prompt. */
   cardProgress: boolean;
-  /** The card being written may show its words as they stream: the row had none. */
-  cardStreams: boolean;
   /** Failed passes in a row, for the backoff before the next try. */
   failures: number;
   /** No pass for this run starts before this (epoch ms): a failing service is not hammered. */
@@ -356,13 +345,6 @@ interface RunEntry {
    * since a name that is reworded on every read is never learned.
    */
   taskRequest: string | null;
-  /**
-   * The describer's private note on this terminal from its last reading, and
-   * when it was written: what has scrolled off the screen since — the user's
-   * goal and constraints, what was finished, failures that keep coming back.
-   * Handed back on every describe; it never reaches the renderer.
-   */
-  note: { text: string; at: number } | null;
   /**
    * The screen the last describe read, and the failure count it gave: where
    * the next one looks for what scrolled away since, and an unchanged screen
@@ -447,11 +429,10 @@ export class CanopyService {
   /** The next scan reads every changed screen, held or not: the user pressed Refresh. */
   private forceNextScan = false;
   private inFlight = 0;
-  /** Requests to the service under way, and the times of the latest that came back. */
+  /** Readings under way, and the times of the latest that came back. */
   private readonly link = {
     inFlight: 0,
-    classifier: [] as number[],
-    describer: [] as number[],
+    times: [] as number[],
   };
   private refreshedAt: number | null = null;
   private broadcastTimer: ReturnType<typeof setTimeout> | null = null;
@@ -475,8 +456,8 @@ export class CanopyService {
    * to the describer.
    */
   private epoch = 0;
-  private classifierSlots: Semaphore;
-  private describerSlots: Semaphore;
+  private readSlots: Semaphore;
+  private wordsSlots: Semaphore;
   /**
    * When each run's classifier or describer reads began failing for reasons
    * that pass, by `runId:stage`; cleared when that same read next succeeds,
@@ -505,10 +486,10 @@ export class CanopyService {
   constructor(private readonly deps: CanopyServiceDeps) {
     this.now = deps.now ?? Date.now;
     this.closeGraceMs = deps.closeGraceMs ?? CANOPY_CLOSE_GRACE_MS;
-    this.plan = deps.plan ?? { mode: "on", activated: true, tier: "priority" };
+    this.plan = deps.plan ?? { mode: "on", activated: true };
     this.stateChangeScanMs = deps.stateChangeScanMs ?? CANOPY_STATE_CHANGE_SCAN_MS;
-    this.classifierSlots = new Semaphore(CONCURRENCY.classifier);
-    this.describerSlots = new Semaphore(CONCURRENCY.describer);
+    this.readSlots = new Semaphore(READ_CONCURRENCY);
+    this.wordsSlots = new Semaphore(WORDS_CONCURRENCY);
     this.startPolling();
     if (this.watching) void this.scan();
   }
@@ -519,8 +500,6 @@ export class CanopyService {
     this.abort.abort();
     this.abort = new AbortController();
     for (const entry of this.entries.values()) {
-      // A read kept for the panel was made under what is now invalidated.
-      entry.wordsWaiting = null;
       if (!entry.pending) continue;
       // Its screen was never finished, so the next scan must look again.
       entry.pending = false;
@@ -563,8 +542,53 @@ export class CanopyService {
     return !this.disposed && this.isRunning && (this.active || this.backgroundPollMs > 0);
   }
 
+  /** The model can read: it is here. Until then rows show the screen's own words. */
+  private get readerReady(): boolean {
+    return this.deps.readerReady?.() ?? true;
+  }
+
   /**
-   * The user turned Canopy on or off, or changed tier. Turned off, nothing in
+   * The model came, went or changed: every reading made with the last one is
+   * let go, and once one is here every screen is read at once.
+   */
+  readerChanged(): void {
+    if (this.disposed) return;
+    this.invalidateInFlight();
+    for (const entry of this.entries.values()) {
+      // What one model read is never passed off as another's, nor kept once
+      // its model is gone: the verdict, its words and what was held from it
+      // all go. The screen's own words stay, as do what the user did to the
+      // run (archive, read marks).
+      entry.card = null;
+      entry.hash = null;
+      entry.readKey = null;
+      entry.taskRequest = null;
+      entry.lastDescribed = null;
+      entry.ask = null;
+      entry.asking = false;
+      entry.announced = null;
+      entry.classified = null;
+      entry.failure = null;
+      entry.failures = 0;
+      entry.retryAt = 0;
+      this.supersedeCard(entry);
+      entry.cardProgress = false;
+      entry.rereadOf = null;
+      entry.refinement = null;
+      entry.evidence = null;
+    }
+    this.transientSince.clear();
+    this.scheduleBroadcast();
+    if (this.watching && this.readerReady) void this.scan();
+  }
+
+  /** Where the model stands changed — a download moving on — with nothing read differently. */
+  modelChanged(): void {
+    if (!this.disposed) this.scheduleBroadcast();
+  }
+
+  /**
+   * The user turned Canopy on or off. Turned off, nothing in
    * flight lands and every card goes: they were read off screens the user has
    * since withdrawn.
    */
@@ -586,14 +610,12 @@ export class CanopyService {
         entry.print = null;
         entry.readLines = null;
         entry.glance = null;
-        entry.note = null;
         entry.taskRequest = null;
         entry.lastDescribed = null;
         entry.ask = null;
         entry.asking = false;
         entry.announced = null;
         entry.classified = null;
-        entry.wordsWaiting = null;
         entry.failure = null;
         entry.failures = 0;
         entry.retryAt = 0;
@@ -601,7 +623,6 @@ export class CanopyService {
         // once reading comes back on.
         this.supersedeCard(entry);
         entry.cardProgress = false;
-        entry.cardStreams = false;
         entry.rereadOf = null;
         entry.refinement = null;
         entry.evidence = null;
@@ -633,9 +654,7 @@ export class CanopyService {
     const seen: CanopySeen[] = [];
     const reads: CanopyReadMark[] = [];
     const glances: CanopyRunGlance[] = [];
-    const wordsDue: string[] = [];
     for (const [runId, entry] of this.entries) {
-      if (entry.wordsWaiting !== null) wordsDue.push(runId);
       if (entry.seenAt !== null) seen.push({ runId, spawnedAt: entry.spawnedAt, at: entry.seenAt });
       reads.push(readMarkOf(runId, entry.spawnedAt, entry.reads));
       if (entry.card === null && entry.glance !== null) {
@@ -656,7 +675,7 @@ export class CanopyService {
       modeRevision: this.plan.modeRevision ?? 0,
       ...(this.plan.hostEpoch === undefined ? {} : { hostEpoch: this.plan.hostEpoch }),
       activated: this.plan.activated,
-      tier: this.plan.tier,
+      ...this.modelState(),
       dispositions,
       seen,
       reads,
@@ -675,38 +694,44 @@ export class CanopyService {
         .filter(([, entry]) => entry.failure !== null)
         .map(([runId]) => runId),
       ...this.waitingState(),
-      ...(wordsDue.length > 0 ? { wordsDue } : {}),
       ...this.linkState(),
     };
   }
 
-  /** What the status bar says of the requests: only while Canopy reads at all. */
-  private linkState(): { link?: CanopyLink } {
-    if (!this.isRunning || !this.deps.serviceHost) return {};
-    const mean = (times: readonly number[]) =>
-      times.length === 0 ? null : Math.round(times.reduce((sum, ms) => sum + ms, 0) / times.length);
+  private modelState(): { model?: CanopyModelState } {
+    if (!this.isRunning) return {};
+    const model = this.deps.modelState?.();
+    return model === undefined ? {} : { model };
+  }
+
+  /** What the status bar says of the reader: only while Canopy reads at all. */
+  private linkState(): { reader?: CanopyReaderLink } {
+    if (!this.isRunning || !this.deps.readerName) return {};
+    const times = this.link.times;
     return {
-      link: {
-        host: this.deps.serviceHost(),
+      reader: {
+        model: this.deps.readerName(),
         inFlight: this.link.inFlight,
-        classifyMs: mean(this.link.classifier),
-        readMs: mean(this.link.describer),
+        readMs:
+          times.length === 0
+            ? null
+            : Math.round(times.reduce((sum, ms) => sum + ms, 0) / times.length),
       },
     };
   }
 
   /**
-   * One request to the service, counted while it is under way and timed when
-   * it comes back. A failed or abandoned one says nothing about how fast the
-   * service answers, so only answers are timed.
+   * One reading, counted while it is under way and timed when it comes back.
+   * A failed or abandoned one says nothing about how fast the model reads, so
+   * only answers are timed.
    */
-  private async timed<T>(kind: "classifier" | "describer", request: () => Promise<T>): Promise<T> {
+  private async timed<T>(request: () => Promise<T>): Promise<T> {
     const started = this.now();
     this.link.inFlight++;
     this.linkChanged();
     try {
       const result = await request();
-      const times = this.link[kind];
+      const times = this.link.times;
       times.push(this.now() - started);
       if (times.length > LINK_TIMES_KEPT) times.shift();
       return result;
@@ -741,9 +766,7 @@ export class CanopyService {
       }
       if (this.active) return;
       this.active = true;
-      this.wordsDueOnOpen();
-      // A background scan under way reads for the classifier alone; the open
-      // asks for a full one straight after it.
+      // The open reads at the panel's pace straight away.
       void this.scan();
       this.restartPolling();
       this.scheduleBroadcast();
@@ -768,63 +791,6 @@ export class CanopyService {
       this.closeTimer = null;
       this.deactivate();
     }, this.closeGraceMs);
-  }
-
-  /**
-   * Runs that need words the background watch did not write — the describer
-   * only reads with a panel open — get them now: an ask, or a busy agent whose
-   * progress went unwritten. One whose screen the watch already read is
-   * written from that read; the rest are read again. Their rows keep the old
-   * words meanwhile.
-   */
-  private wordsDueOnOpen(): void {
-    const runs = this.isRunning ? this.deps.getRuns() : null;
-    for (const [runId, entry] of this.entries) {
-      const card = entry.card;
-      if (entry.pending || entry.disposition?.kind === "archived") continue;
-      if (card !== null && card.stage === "described" && !card.wordsFromEarlierRead) continue;
-      // The run as the fleet shows it now: the read's own row may be older.
-      const run = runs?.find((row) => row.runId === runId && row.spawnedAt === entry.spawnedAt);
-      // Not shown by the panel that opened: left, cached read and all, for the
-      // watch or for a panel that shows it.
-      if (run !== undefined && this.scope !== null && run.workspaceId !== this.scope) continue;
-      const waiting = entry.wordsWaiting;
-      entry.wordsWaiting = null;
-      // Still the screen that read was of, read without failing since, and
-      // still owed words: a run answered or put aside since is owed only
-      // progress.
-      if (
-        waiting !== null &&
-        run !== undefined &&
-        card !== null &&
-        waiting.seq === entry.seq &&
-        entry.hash !== null &&
-        (entry.disposition === null || waiting.progress)
-      ) {
-        entry.pending = true;
-        entry.card = { ...card, describing: true };
-        // How long it has waited is as of now, not as of the read.
-        const read: CardRead = {
-          ...waiting,
-          run,
-          input: {
-            ...waiting.input,
-            observed: this.observed(run, entry),
-            userAction: this.userAction(entry, waiting.screen),
-          },
-          earlier: waiting.progress ? previousReading(card, entry.describedAt, this.now()) : null,
-        };
-        this.startCard(entry, read, this.epoch, this.abort.signal);
-        continue;
-      }
-      if (
-        card === null ||
-        needsAttention(card.attentionProbability) ||
-        busyCategory(card.category)
-      ) {
-        entry.hash = null;
-      }
-    }
   }
 
   private restartPolling(): void {
@@ -854,29 +820,16 @@ export class CanopyService {
     this.active = false;
     if (this.stateChangeTimer !== null) clearTimeout(this.stateChangeTimer);
     this.stateChangeTimer = null;
-    // Words are written for an open panel only: a spell of failing to write
-    // them ends with it, rather than greeting the next open as long overdue,
-    // and what it reported goes with it — the next open tries again.
-    for (const key of [...this.transientSince.keys()]) {
-      if (key.endsWith(":describer")) this.transientSince.delete(key);
-    }
-    for (const entry of this.entries.values()) {
-      if (entry.failure?.stage === "describer") entry.failure = null;
-    }
-    // Closing drops the work the panel queued, describer calls included; the
-    // background watch, if on, carries on reading for the classifier alone.
+    // Closing drops the work the panel queued; the background watch, if on,
+    // carries on reading at its own pace.
     this.invalidateInFlight();
     this.restartPolling();
     this.scheduleBroadcast();
   }
 
-  /**
-   * Reads are held up for a reason that passes: the service is starting, or
-   * failed reads are being tried again before any is reported.
-   */
-  private waitingState(): { waiting?: "waking" | "retrying" } {
+  /** Reads are held up for a reason that passes: failed reads are being tried again before any is reported. */
+  private waitingState(): { waiting?: "retrying" } {
     if (!this.isRunning) return {};
-    if (this.deps.serviceWaking?.()) return { waiting: "waking" };
     // Only a retry still to come: a failure kept quiet, its run waiting out
     // the backoff. One whose words are no longer due has nothing to wait for.
     const now = this.now();
@@ -1250,16 +1203,6 @@ export class CanopyService {
     if (entry.announced?.hash === before) {
       entry.announced = { ...entry.announced, hash: screen.hash };
     }
-    // Words owed on open from a read of the old drawing are written from the
-    // new one: the same screen, laid out as it is now.
-    const waiting = entry.wordsWaiting;
-    if (waiting !== null && waiting.screen.hash === before) {
-      entry.wordsWaiting = {
-        ...waiting,
-        screen,
-        input: { ...waiting.input, screen: screen.text, lines: screen.lines },
-      };
-    }
     // A redraw since is told from this drawing of the screen that was read.
     if (entry.hash?.startsWith(`${screen.hash}:`)) entry.readLines = screen.lines;
     entry.contentHash = screen.hash;
@@ -1275,21 +1218,6 @@ export class CanopyService {
   setScope(workspaceId: string | null): void {
     if (this.disposed || this.scope === workspaceId) return;
     this.scope = workspaceId;
-    // Words being written for a run the panel no longer shows are dropped: it
-    // is owed them only once a panel shows it, and its screen is read again
-    // under the background watch's terms meanwhile.
-    const runs = this.deps.getRuns() ?? [];
-    for (const [runId, entry] of this.entries) {
-      if (entry.cardAbort === null) continue;
-      const run = runs.find((row) => row.runId === runId && row.spawnedAt === entry.spawnedAt);
-      if (run === undefined || this.inScope(run)) continue;
-      this.supersedeCard(entry);
-      entry.pending = false;
-      entry.hash = null;
-      if (entry.card?.describing) entry.card = { ...entry.card, describing: false };
-    }
-    // Runs coming into view are owed the words the watch left them.
-    if (this.active && this.isRunning) this.wordsDueOnOpen();
     this.scheduleBroadcast();
     // A panel closing, inside its reopen grace, starts nothing new.
     if (this.watching && this.closeTimer === null) void this.scan();
@@ -1610,11 +1538,6 @@ export class CanopyService {
           // a glance is current meanwhile. Everything after Refresh is read.
           const waits = force || entry.card === null ? null : this.heldRead(run, entry, screen);
           if (waits !== null) {
-            // Words owed on open are written from the read they were owed for
-            // only while it is still the screen shown, a redraw aside.
-            if (waits === "held" && entry.wordsWaiting?.screen.hash !== screen.hash) {
-              entry.wordsWaiting = null;
-            }
             this.keepWhatShows(entry, screen);
             this.refreshActivity(entry, screen, run);
             return;
@@ -1794,19 +1717,12 @@ export class CanopyService {
    * `forWords`: the pass is writing the run's words, which only a panel
    * showing the run is owed; the classifier reads every project's runs.
    */
-  private stillWanted(
-    run: FleetRunRow,
-    entry: RunEntry,
-    seq: number,
-    epoch: number,
-    forWords = false
-  ): boolean {
+  private stillWanted(run: FleetRunRow, entry: RunEntry, seq: number, epoch: number): boolean {
     return (
       this.watching &&
       epoch === this.epoch &&
       entry.seq === seq &&
       this.entries.get(run.runId) === entry &&
-      (!forWords || this.inScope(run)) &&
       this.isLive(run)
     );
   }
@@ -1882,6 +1798,12 @@ export class CanopyService {
     screenReadAt: number,
     rejudge = false
   ): Promise<void> {
+    // No model here yet: the row keeps the screen's own words, and the screen
+    // is read once the model arrives (`readerChanged`).
+    if (!this.readerReady) {
+      entry.hash = null;
+      return Promise.resolve();
+    }
     const seq = entry.seq;
     return this.rebuild(run, entry, seq, epoch, screen, screenReadAt, rejudge).catch(
       (error: unknown) => this.recordFailure(run, entry, seq, epoch, error)
@@ -1901,21 +1823,13 @@ export class CanopyService {
     const input: CanopyScreenInput = {
       runId: run.runId,
       agent: run.agentId ?? run.launchAgentId ?? "terminal",
-      // Titles are agent-set (OSC) text, so they leave the machine redacted too.
+      // Agent-set (OSC) text, redacted like the screen.
       title: redactSecrets(run.lastObservedTitle ?? run.title ?? ""),
       screen: screen.text,
       lines: screen.lines,
       observed: this.observed(run, entry),
       userAction: this.userAction(entry, screen),
-      // The describer's private note, so the classifier reads the screen
-      // knowing what the user asked for and what already happened.
-      note: noteFor(entry, this.now()),
     };
-    // Taken before this pass replaces the card, for a working run's next words.
-    const earlier =
-      entry.card?.spawnedAt === run.spawnedAt
-        ? previousReading(entry.card, entry.describedAt, this.now())
-        : null;
     // A re-judged screen is the one the user may already have opened; it keeps
     // the time it was first read, so it neither reads as new nor as unread.
     // A retry of a screen the card was already read from keeps that time too:
@@ -1932,12 +1846,12 @@ export class CanopyService {
 
     entry.pending = true;
     this.inFlight++;
-    let classified: ClassifierResult;
+    let reading: CanopyReading;
     try {
-      classified = await this.classifierSlots.run(() => {
+      reading = await this.readSlots.run(() => {
         // Checked again once a slot frees up: the queue can outlast the panel.
         if (!this.stillWanted(run, entry, seq, epoch)) throw new StaleCanopyPass();
-        return this.timed("classifier", () => this.deps.classify(input, signal));
+        return this.timed(() => this.deps.read(input, signal));
       });
     } catch (error) {
       this.recordFailure(run, entry, seq, epoch, error);
@@ -1949,14 +1863,15 @@ export class CanopyService {
       this.abandon(entry, seq);
       return;
     }
+    const classified = reading.classifier;
     entry.readAt = this.now();
     entry.readState = observedKey(run);
     if (entry.failure?.stage === "classifier") entry.failure = null;
     this.transientSince.delete(`${run.runId}:classifier`);
 
-    // The classifier's probability is the gate: only a run likely to need the
-    // user is worth a describer call — and only one in the inbox. A run the
-    // user put aside is described again once it comes back.
+    // The reading's attention is the gate: a run likely to need the user takes
+    // the reading's words — but only one in the inbox. A run the user put
+    // aside keeps the words it had until it comes back.
     const needs = needsAttention(classified.attention);
     const disposition = entry.disposition;
     // Only a reading of a screen read after the user acted says anything about
@@ -2040,12 +1955,11 @@ export class CanopyService {
         : needs
           ? !aside
           : entry.disposition?.kind !== "archived" && progress && !progressFresh);
-    // Words are written for an open panel that shows the run only: the
-    // background watch is the service's light classifier read, leaves the
-    // words due, and the open — or the scope coming round to the run — writes
-    // them (`wordsDueOnOpen`).
+    // The words come with every reading, so they are written whether or not a
+    // panel shows the run: the background watch's rows are as full as the open
+    // panel's.
     const shown = this.active && this.inScope(run);
-    const describe = wordsDue && shown;
+    const describe = wordsDue;
     const handledAt = entry.disposition?.kind === "replied" ? entry.disposition.at : null;
     // A card whose screen moved keeps its old words until new ones land, so a
     // row never blanks between readings: they are replaced, not cleared. A run
@@ -2163,35 +2077,28 @@ export class CanopyService {
         entry.failure = null;
         this.transientSince.delete(`${run.runId}:describer`);
       }
-      // Words due with no panel open: the open writes them from this read
-      // rather than asking the classifier about the same screen again.
-      entry.wordsWaiting =
-        wordsDue && !shown ? { run, seq, screen, input, classified, progress, earlier } : null;
-      if (describe) entry.card = { ...entry.card, describing: false };
       return;
     }
 
-    entry.wordsWaiting = null;
     this.startCard(
       entry,
-      { run, seq, screen, input, classified, progress, earlier },
-      epoch,
-      signal
+      { run, seq, screen, input, classified, progress, words: reading.words },
+      epoch
     );
   }
 
   /**
-   * Writes a run's card from the pass that read its screen. Written apart from
-   * the scan: a slow card must not hold up the classifier's watch over every
-   * other terminal. A newer screen of this run aborts it (`supersedeCard`).
+   * Sets a run's words from the reading of its screen, once the history above
+   * the screen is read for the task and checklist. Apart from the scan: a slow
+   * history read must not hold up the watch over every other terminal. A newer
+   * screen of this run aborts it (`supersedeCard`).
    */
-  private startCard(entry: RunEntry, read: CardRead, epoch: number, signal: AbortSignal): void {
-    const { run, seq, screen, input, classified, progress, earlier } = read;
+  private startCard(entry: RunEntry, read: CardRead, epoch: number): void {
+    const read_ = read;
+    const { run, seq, screen, input, classified, progress } = read;
     const cardAbort = new AbortController();
     entry.cardAbort = cardAbort;
     entry.cardProgress = progress;
-    entry.cardStreams = entry.card?.headline == null;
-    const cardSignal = AbortSignal.any([signal, cardAbort.signal]);
     const job = (async (): Promise<void> => {
       this.inFlight++;
       let described: DescriberResult;
@@ -2199,15 +2106,15 @@ export class CanopyService {
       let digestRead = null as CanopyDigest | null;
       const last = entry.lastDescribed;
       try {
-        described = await this.describerSlots.run(() => {
-          if (!this.stillWanted(run, entry, seq, epoch, true) || !this.isRunning) {
+        described = await this.wordsSlots.run(() => {
+          if (!this.stillWanted(run, entry, seq, epoch) || !this.isRunning) {
             throw new StaleCanopyPass();
           }
           // A redraw at another size adopted since this screen was read: the
           // history ends in that drawing, not this one.
           const redrawn = entry.redrawnFrom === screen.hash ? entry.print : null;
           return this.readDigest(run.runId, input.agent, screen, redrawn).then((read) => {
-            if (!this.stillWanted(run, entry, seq, epoch, true)) throw new StaleCanopyPass();
+            if (!this.stillWanted(run, entry, seq, epoch)) throw new StaleCanopyPass();
             if (read === "moved") {
               // The terminal moved on while its history was read: what it shows
               // now is read afresh rather than described from mismatched parts.
@@ -2215,28 +2122,16 @@ export class CanopyService {
               this.scheduleStateChangeScan();
               throw new StaleCanopyPass();
             }
-            const digest = read?.digest ?? null;
-            digestRead = digest;
-            return this.timed("describer", () =>
-              this.deps.describe(
-                {
-                  ...input,
-                  ...(progress ? { previousReading: earlier } : {}),
-                  digest,
-                  currentTask: this.lockedTask(entry, digest),
-                  note: noteFor(entry, this.now()),
-                  sinceLastReading:
-                    last !== null && read !== null
-                      ? scrolledSince(last.lines, read.history, screen.lines)
-                      : null,
-                  failureRepeatsCap:
-                    last !== null && last.hash === screen.hash ? last.failureRepeats : null,
-                },
-                classified.category,
-                cardSignal,
-                (partial) => this.applyPartial(run, entry, seq, epoch, partial)
-              )
-            );
+            if (cardAbort.signal.aborted) throw new StaleCanopyPass();
+            digestRead = read?.digest ?? null;
+            // An unchanged screen shows no new failed run: the count cannot rise.
+            const cap = last !== null && last.hash === screen.hash ? last.failureRepeats : null;
+            return read_.words().then((words) => {
+              const repeats = Math.min(words.failureRepeats ?? 0, cap ?? Infinity);
+              return repeats === words.failureRepeats
+                ? words
+                : { ...words, failureRepeats: repeats };
+            });
           });
         });
       } catch (error) {
@@ -2245,7 +2140,7 @@ export class CanopyService {
       } finally {
         this.inFlight--;
       }
-      if (!this.stillWanted(run, entry, seq, epoch, true)) {
+      if (!this.stillWanted(run, entry, seq, epoch)) {
         this.abandon(entry, seq);
         return;
       }
@@ -2269,15 +2164,6 @@ export class CanopyService {
             ? optionsInScreenOrder(described.options, screen.text)
             : [],
       };
-      // A reading that wrote no note keeps the last one: losing the goal to one
-      // terse reply is worse than a note a reading old.
-      if (described.note) {
-        entry.note = {
-          text: redactSecrets(described.note),
-          at: entry.describedAt,
-        };
-      }
-
       // The pass set this run's card before the describer ran; it is still
       // that card, since a pass that lost it would no longer be wanted.
       const card = entry.card;
@@ -2339,42 +2225,6 @@ export class CanopyService {
         }
       });
     this.cardJobs.add(job);
-  }
-
-  /**
-   * What a card still being written already says, shown as it lands for a row
-   * with no words yet: its headline, then its summary. Its state and rank stay
-   * as they were until the card is finished — a score taken early moves once the facts it is held to
-   * arrive, and the row would jump. The card stays `describing` until then,
-   * and nothing that acts on a prompt is taken from a partial.
-   */
-  private applyPartial(
-    run: FleetRunRow,
-    entry: RunEntry,
-    seq: number,
-    epoch: number,
-    partial: CanopyPartialDescription
-  ): void {
-    const card = entry.card;
-    if (card === null || !card.describing || !this.stillWanted(run, entry, seq, epoch, true)) {
-      return;
-    }
-    // A row with words keeps them until the whole new card replaces them:
-    // streamed in, they changed headline, then summary, then everything again.
-    // Only a row with nothing to say yet shows words as they come.
-    if (!entry.cardStreams) return;
-    // Headline and summary land together, once the summary has begun: one
-    // change to the row rather than one per field.
-    if (partial.headline === undefined || partial.summary === undefined) return;
-    if (card.headline === partial.headline && card.summary === partial.summary) return;
-    entry.card = {
-      ...card,
-      headline: partial.headline,
-      summary: partial.summary,
-      wordsCategory: partial.category ?? card.wordsCategory,
-      wordsFromEarlierRead: false,
-    };
-    this.scheduleBroadcast();
   }
 
   /**
@@ -2489,15 +2339,6 @@ export class CanopyService {
     this.scheduleBroadcast();
   }
 
-  /** The task title the describer must keep: the one written for the request still current. */
-  private lockedTask(entry: RunEntry, digest: CanopyDigest | null): string | null {
-    const task = entry.card?.task ?? null;
-    if (task === null) return null;
-    return keepsTask(entry.taskRequest ?? latestRequest(digest), latestRequest(digest))
-      ? task
-      : null;
-  }
-
   /**
    * The row's name after a describe. Written once from the user's request and
    * kept — the describer is not allowed to reword it — until the user sends a
@@ -2582,15 +2423,10 @@ export class CanopyService {
     if (this.disposed) return;
     // Abandoned on purpose (panel closed, Canopy turned off, run left): not a
     // provider failure, and `invalidateInFlight` already reset the entry.
-    if (
-      error instanceof StaleCanopyPass ||
-      !this.stillWanted(run, entry, seq, epoch, stage === "describer")
-    ) {
+    if (error instanceof StaleCanopyPass || !this.stillWanted(run, entry, seq, epoch)) {
       this.abandon(entry, seq);
       return;
     }
-    // A read kept for the panel is older than this failure.
-    entry.wordsWaiting = null;
     // The screen moved on from the card's and no reading of the new one is
     // coming soon: its words say they are from before. Its priority stands.
     const card = entry.card;
@@ -2618,8 +2454,6 @@ export class CanopyService {
       // What the spell retired had reported is old news: this one reports anew.
       if (!current && entry.failure?.stage === error.provider) entry.failure = null;
       spell.lastAt = now;
-      // A cold start runs about as long as the grace, so the grace begins once it ends.
-      if (this.deps.serviceWaking?.()) spell.graceFrom = now;
       this.transientSince.set(key, spell);
       if (
         now - spell.graceFrom < CANOPY_TRANSIENT_GRACE_MS &&
@@ -2674,7 +2508,7 @@ export class CanopyService {
 
   /**
    * Canopy's refinement of where the run lands, for the incarnation given, or
-   * undefined when there is none: Canopy off or on the free tier, the user put
+   * undefined when there is none: Canopy off or its model not here, the user put
    * the run aside, or nothing this turn read as an ask, a false alarm or a
    * stall. Reads only what is held — it never reads a screen.
    */
@@ -2693,14 +2527,9 @@ export class CanopyService {
       : held.value;
   }
 
-  /** Readings refine attention only for a user who turned Canopy on and pays for it. */
+  /** Readings refine attention only for a user who turned Canopy on and has its model. */
   private get refines(): boolean {
-    return (
-      !this.disposed &&
-      this.plan.mode === "on" &&
-      this.plan.activated &&
-      this.plan.tier === "priority"
-    );
+    return !this.disposed && this.plan.mode === "on" && this.plan.activated && this.readerReady;
   }
 
   /**
@@ -2802,10 +2631,8 @@ function newEntry(spawnedAt: number, now: number): RunEntry {
     revision: 0,
     card: null,
     pending: false,
-    wordsWaiting: null,
     cardAbort: null,
     cardProgress: false,
-    cardStreams: false,
     failures: 0,
     retryAt: 0,
     readAt: 0,
@@ -2818,7 +2645,6 @@ function newEntry(spawnedAt: number, now: number): RunEntry {
     describedAt: 0,
     seenAt: null,
     taskRequest: null,
-    note: null,
     lastDescribed: null,
     ask: null,
     classified: null,
@@ -2830,14 +2656,6 @@ function newEntry(spawnedAt: number, now: number): RunEntry {
     refinement: null,
     evidence: null,
     cleared: false,
-  };
-}
-
-function noteFor(entry: RunEntry, now: number): CanopyNote | null {
-  if (entry.note === null) return null;
-  return {
-    text: entry.note.text,
-    secondsAgo: Math.max(0, Math.round((now - entry.note.at) / 1000)),
   };
 }
 
@@ -2887,27 +2705,6 @@ function progressOf(digest: CanopyDigest | null, described: DescriberResult): nu
   if (todo === null || todo.total === 0) return described.progress;
   const done = todo.done + (todo.current !== null ? 0.5 : 0);
   return Math.round(Math.min(100, (100 * done) / todo.total));
-}
-
-/**
- * What the describer last wrote about a working run, so its next words can say
- * what moved since rather than restate the task.
- */
-function previousReading(
-  card: CanopyCard | null,
-  describedAt: number,
-  now: number
-): CanopyPreviousReading | null {
-  if (card === null || card.wordsCategory === null || describedAt === 0) return null;
-  if (card.headline === null && card.summary === null) return null;
-  return {
-    // What the words were written about, which may be a state the run has left.
-    category: card.wordsCategory,
-    task: card.task,
-    headline: card.headline,
-    summary: card.summary,
-    secondsAgo: Math.max(0, Math.round((now - describedAt) / 1000)),
-  };
 }
 
 /** Daintree now sees the run as the card read it, where at the read it still saw otherwise. */
@@ -2968,24 +2765,13 @@ function onlyRedrawn(before: readonly string[] | null, after: readonly string[])
 export function failureMessage(error: unknown): string {
   if (!(error instanceof CanopyProviderError)) return "Canopy couldn't read some screens.";
   const message = error.message;
-  if (/HTTP 429|no_workers_available|worker_disconnected|rate_limited/.test(message)) {
-    return "Canopy's service is busy right now.";
+  if (/model not downloaded/.test(message)) return "Canopy's model isn't downloaded yet.";
+  if (/newer version/.test(message)) return "Canopy's model needs a newer version of Daintree.";
+  if (/keeps failing|stopped/.test(message)) {
+    return "Canopy's model stopped running. Turn Canopy off and on to try again.";
   }
-  if (/inference_failed/.test(message)) return "Canopy's service ran into a problem.";
-  if (/bad_request/.test(message)) return "Canopy's service turned the request down.";
-  if (/^stream failed$|stream ended early/.test(message)) {
-    return "Canopy's service stopped partway through a reading.";
-  }
-  if (/service waking/.test(message)) return "Canopy's service is still starting.";
-  if (/timed out|inference_timeout/.test(message)) {
-    return "Canopy's service took too long to answer.";
-  }
-  if (/^request failed$/.test(message)) {
-    return "Couldn't reach Canopy's service. Check your connection.";
-  }
-  if (/^HTTP 5\d\d/.test(message)) return "Canopy's service ran into a problem.";
-  if (/^HTTP 4\d\d/.test(message)) return "Canopy's service turned the request down.";
-  return "Canopy's service sent back an answer it couldn't use.";
+  if (/timed out|too long/.test(message)) return "Canopy's model took too long to read a screen.";
+  return "Canopy's model couldn't read some screens.";
 }
 
 /** The longest a failing run waits before it is tried again. */

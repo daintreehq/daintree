@@ -15,7 +15,6 @@ function snapshot(activated: boolean, extra: Partial<CanopySnapshot> = {}): Cano
   return {
     mode: activated ? "on" : "unset",
     activated,
-    tier: "free",
     dispositions: [],
     seen: [],
     reads: [],

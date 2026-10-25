@@ -1,8 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { AppDialog } from "@/components/ui/AppDialog";
-import { Button } from "@/components/ui/button";
 import type { CanopyMode } from "@shared/types/ipc/canopy";
-import { systemClient } from "@/clients/systemClient";
 import { pluralize } from "@/lib/pluralize";
 import {
   enableCanopyOnHosts,
@@ -15,13 +13,7 @@ import {
   type BulkSeen,
   type BulkTarget,
 } from "@shared/utils/canopyBulkEnable";
-import {
-  CANOPY_BETA_TERMS,
-  CANOPY_PRIVACY_URL,
-  CANOPY_REDACTION,
-  CANOPY_STOP_ON_EACH,
-  canopySendsFromHosts,
-} from "./canopyTerms";
+import { CANOPY_STOP_ON_EACH, canopyLocalOnHosts } from "./canopyTerms";
 
 const OUTCOME_LABEL: Record<BulkEnableOutcome, string> = {
   enabled: "Turned on",
@@ -134,19 +126,8 @@ export function CanopyBulkEnableDialog({
       <AppDialog.Body className="space-y-3">
         {phase === "review" && (
           <>
-            <AppDialog.Description>{canopySendsFromHosts(names)}</AppDialog.Description>
-            <p className="text-sm leading-6 text-text-secondary">
-              {CANOPY_REDACTION} {CANOPY_STOP_ON_EACH}{" "}
-              <Button
-                variant="link"
-                size="xs"
-                className="h-auto p-0 text-sm"
-                onClick={() => void systemClient.openExternal(CANOPY_PRIVACY_URL)}
-              >
-                Privacy policy
-              </Button>
-            </p>
-            <p className="text-xs text-text-secondary">{CANOPY_BETA_TERMS}</p>
+            <AppDialog.Description>{canopyLocalOnHosts(names)}</AppDialog.Description>
+            <p className="text-sm leading-6 text-text-secondary">{CANOPY_STOP_ON_EACH}</p>
           </>
         )}
         <ul className="flex flex-col gap-1 text-sm" data-bulk-enable-targets="">

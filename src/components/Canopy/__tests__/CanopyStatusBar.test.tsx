@@ -1,49 +1,90 @@
 // @vitest-environment jsdom
-import { render } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
-import { CanopyStatusBar, formatLinkMs } from "../CanopyStatusBar";
+import { fireEvent, render } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+import { CanopyStatusBar, formatLinkMs, formatModelBytes } from "../CanopyStatusBar";
 
-const LINK = { host: "canopy.daintree.org", inFlight: 2, classifyMs: 420, readMs: 2_140 };
+const READER = { model: "Light", inFlight: 2, readMs: 24 };
+const READY = { id: "daintreehq/canopy-reader-17m", status: "ready" as const };
 
 function bar(container: HTMLElement) {
   return container.querySelector<HTMLElement>("[data-canopy-status]")!;
 }
 
 describe("CanopyStatusBar", () => {
-  it("says where the requests go, how many are out, and how long they take", () => {
-    const { container } = render(<CanopyStatusBar link={LINK} waiting={undefined} />);
-    expect(bar(container).textContent).toBe(
-      "canopy.daintree.org2 in flight · classify 420 ms · summary 2.1 s"
+  it("says which model reads, on this computer, and how long a screen takes", () => {
+    const { container } = render(
+      <CanopyStatusBar reader={READER} model={READY} waiting={undefined} />
     );
+    expect(bar(container).textContent).toBe("Light model, on this computer24 ms a screen");
     expect(container.querySelector("[data-working]")?.getAttribute("data-working")).toBe("true");
   });
 
-  it("goes quiet once every request is back, and leaves out times it has none of", () => {
+  it("names the host that reads, when the panel shows another one", () => {
     const { container } = render(
-      <CanopyStatusBar link={{ ...LINK, inFlight: 0, readMs: null }} waiting={undefined} />
+      <CanopyStatusBar host="studio-01" reader={READER} model={READY} waiting={undefined} />
     );
-    expect(bar(container).textContent).toBe("canopy.daintree.org0 in flight · classify 420 ms");
+    expect(bar(container).textContent).toContain("Light model, on studio-01");
+    expect(bar(container).textContent).not.toContain("this computer");
+  });
+
+  it("goes quiet once every screen is read, and leaves out a time it has none of", () => {
+    const { container } = render(
+      <CanopyStatusBar
+        reader={{ ...READER, inFlight: 0, readMs: null }}
+        model={READY}
+        waiting={undefined}
+      />
+    );
+    expect(bar(container).textContent).toBe("Light model, on this computer");
     expect(container.querySelector("[data-working]")?.getAttribute("data-working")).toBe("false");
   });
 
-  it("puts a hold-up in the readings' place, and announces only that", () => {
-    const { container, rerender } = render(<CanopyStatusBar link={LINK} waiting="waking" />);
-    expect(bar(container).textContent).toContain("Starting Canopy's service…");
-    expect(bar(container).textContent).not.toContain("in flight");
-    expect(container.querySelector("[role=status]")?.textContent).toBe(
-      "Starting Canopy's service…"
+  it("puts the download in the readings' place, and announces only that", () => {
+    const downloading = {
+      id: READY.id,
+      status: "downloading" as const,
+      received: 8_200_000,
+      total: 20_900_000,
+    };
+    const { container, rerender } = render(
+      <CanopyStatusBar reader={READER} model={downloading} waiting={undefined} />
     );
+    const said = "Downloading the model… 8.2 MB of 21 MB";
+    expect(bar(container).textContent).toContain(said);
+    expect(bar(container).textContent).not.toContain("a screen");
+    expect(container.querySelector("[role=status]")?.textContent).toBe(said);
     // Read out by the status line alone, not once more as the bar's text.
     const shown = [...bar(container).querySelectorAll("span")].find(
-      (span) => span.textContent === "Starting Canopy's service…" && span.role !== "status"
+      (span) => span.textContent === said && span.role !== "status"
     );
     expect(shown?.getAttribute("aria-hidden")).toBe("true");
-    rerender(<CanopyStatusBar link={LINK} waiting={undefined} />);
+    rerender(<CanopyStatusBar reader={READER} model={READY} waiting={undefined} />);
     expect(container.querySelector("[role=status]")?.textContent).toBe("");
   });
 
+  it("offers to retry a failed download where it failed, and says a retry still to come", () => {
+    const retry = vi.fn();
+    const { container, rerender, getByRole } = render(
+      <CanopyStatusBar
+        host="studio-01"
+        onRetryModel={retry}
+        reader={READER}
+        model={{ id: READY.id, status: "failed", error: "HTTP 503" }}
+        waiting={undefined}
+      />
+    );
+    expect(bar(container).textContent).toContain("Couldn't download the model");
+    expect(bar(container).textContent).not.toContain("HTTP");
+    fireEvent.click(getByRole("button", { name: "Retry" }));
+    expect(retry).toHaveBeenCalledTimes(1);
+    rerender(<CanopyStatusBar reader={READER} model={READY} waiting="retrying" />);
+    expect(bar(container).textContent).toContain("Waiting to retry…");
+  });
+
   it("keeps its row while there is nothing to say yet", () => {
-    const { container } = render(<CanopyStatusBar link={undefined} waiting={undefined} />);
+    const { container } = render(
+      <CanopyStatusBar reader={undefined} model={undefined} waiting={undefined} />
+    );
     expect(bar(container)).not.toBeNull();
     expect(bar(container).textContent).toBe("");
   });
@@ -55,5 +96,13 @@ describe("CanopyStatusBar", () => {
       formatLinkMs(1_000),
       formatLinkMs(12_345),
     ]).toEqual(["48 ms", "999 ms", "1.0 s", "12.3 s"]);
+  });
+
+  it("writes sizes to a tenth of a megabyte under ten, and whole ones above", () => {
+    expect([
+      formatModelBytes(368),
+      formatModelBytes(3_583_228),
+      formatModelBytes(69_749_457),
+    ]).toEqual(["0.0 MB", "3.6 MB", "70 MB"]);
   });
 });

@@ -17,7 +17,6 @@ function snap(
     modeRevision,
     ...(hostEpoch === null ? {} : { hostEpoch }),
     activated: mode === "on",
-    tier: "free",
     dispositions: [],
     seen: [],
     reads: [],

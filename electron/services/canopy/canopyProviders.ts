@@ -1,7 +1,7 @@
 /**
- * What the canopy panel sends to be read, what comes back, and what is done
- * with the answers. Screens are read by Canopy's own service
- * (`canopyBackend.ts`); every card it writes goes through the checks here
+ * What the canopy panel hands the reader, what comes back, and what is done
+ * with the answers. Screens are read on this machine by the local model
+ * (`canopyLocalReader.ts`); every card it gives goes through the checks here
  * before it reaches a row.
  */
 import {

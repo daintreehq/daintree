@@ -10,7 +10,7 @@ import {
   type HostSettingsSnapshot,
   type HostSettingsUpdateResult,
 } from "@shared/types/hostSettings";
-import { CANOPY_REDACTION, canopySendsFrom, canopyStopOn } from "@/components/Canopy/canopyTerms";
+import { canopyLocalOn, canopyStopOn } from "@/components/Canopy/canopyTerms";
 import { clientErrorText } from "@/utils/clientAppError";
 import { SettingsSection } from "../SettingsSection";
 import { SettingsDependents, SettingsEmptyRow, SettingsGroup, SettingsRow } from "../SettingsGroup";
@@ -286,7 +286,7 @@ export function HostSettingsSection({ hostId, hostName, connected }: HostSetting
         onClose={() => setConfirmCanopy(false)}
         variant="default"
         title={`Turn Canopy on for '${hostName}'?`}
-        description={`${canopySendsFrom(hostName)} ${CANOPY_REDACTION} ${canopyStopOn(hostName)}`}
+        description={`${canopyLocalOn(hostName)} ${canopyStopOn(hostName)}`}
         confirmLabel="Turn Canopy on"
         onConfirm={() => {
           setConfirmCanopy(false);

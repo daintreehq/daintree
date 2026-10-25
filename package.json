@@ -175,6 +175,7 @@
     "check:keybindings": "tsx scripts/codegen/keyboard-shortcuts-doc.ts --check"
   },
   "dependencies": {
+    "@huggingface/tokenizers": "0.2.0",
     "@parcel/watcher": "2.6.0",
     "@radix-ui/react-select": "^2.4.1",
     "@xterm/addon-webgl": "0.20.0-beta.309",

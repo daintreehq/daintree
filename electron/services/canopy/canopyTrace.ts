@@ -4,9 +4,9 @@ import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 
 /**
  * Development only: with `DAINTREE_CANOPY_TRACE` set to a file path, every
- * provider call is appended to it as one JSON line — the exact input the model
- * saw, what it answered, and how long it took. It is the corpus the prompts are
- * tuned against and, later, what a custom model is trained on. Off unless the
+ * reading is appended to it as one JSON line — the exact input the model saw,
+ * what it answered, and how long it took: the corpus a model is checked and
+ * trained against. Off unless the
  * variable is set, never in a packaged build, and it never leaves the machine.
  */
 const TRACE_PATH = (!app.isPackaged && process.env.DAINTREE_CANOPY_TRACE?.trim()) || null;
@@ -16,7 +16,7 @@ export function canopyTraceEnabled(): boolean {
 }
 
 export async function traced<T>(
-  stage: "classifier" | "describer",
+  stage: "reader",
   input: unknown,
   call: () => Promise<T>
 ): Promise<T> {

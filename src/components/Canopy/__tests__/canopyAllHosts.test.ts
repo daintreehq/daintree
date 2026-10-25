@@ -46,7 +46,6 @@ function canopy(over: Partial<CanopySnapshot> = {}): CanopySnapshot {
   return {
     mode: "on",
     activated: true,
-    tier: "free",
     dispositions: [],
     seen: [],
     reads: [],

@@ -68,7 +68,6 @@ const SCREEN_SEARCH_SETTLE_MS = 250;
 const canopySnapshot: CanopySnapshot = {
   mode: "on",
   activated: true,
-  tier: "priority",
   dispositions: [],
   seen: [],
   reads: [],
