@@ -172,6 +172,15 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
           { projectId: "proj-2", name: "website", frontendAttached: null },
           { projectId: "proj-3", name: "api", frontendAttached: null },
         ],
+        // The caller's own project isn't counted: it isn't reached through here.
+        projectInventory: {
+          complete: true,
+          total: 2,
+          offset: 0,
+          omitted: 0,
+          nextCursor: null,
+          listChanged: false,
+        },
         control: true,
       });
       expect(listed.value.hosts[1]?.projects).toEqual([

@@ -53,8 +53,17 @@ export const HOST_CONTROL_TOOL_IDS: ReadonlySet<string> = new Set([
   HOST_SETTINGS_TOOL,
 ]);
 
-/** Most projects `host.list` names for one host. */
+/** Most projects `host.list` names for one host in one answer: a page. */
 export const HOST_LIST_PROJECTS_MAX = 50;
+/**
+ * Most bytes the project pages of one `host.list` answer take across every
+ * host; a page that would go over is cut short, and its cursor goes on from there.
+ */
+export const HOST_LIST_PROJECT_BYTES_MAX = 32 * 1024;
+/** Longest project name a page carries, so one project always fits a page. */
+export const HOST_LIST_PROJECT_NAME_MAX = 256;
+export const HOST_LIST_PROJECT_QUERY_MAX = 128;
+export const HOST_LIST_PROJECT_CURSOR_MAX = 1024;
 
 export const HOST_CONTROL_OUTCOMES = [
   "ok",
@@ -96,6 +105,19 @@ export const HostListArgsSchema = z.object({
     .describe(
       "With includeAgents, list only the agents of this project (a projectId from the list)."
     ),
+  hostId: hostIdSchema.optional().describe("List only this host."),
+  projectQuery: z
+    .string()
+    .min(1)
+    .max(HOST_LIST_PROJECT_QUERY_MAX)
+    .optional()
+    .describe("Only projects whose name contains this, any case."),
+  projectCursor: z
+    .string()
+    .min(1)
+    .max(HOST_LIST_PROJECT_CURSOR_MAX)
+    .optional()
+    .describe("A projectInventory.nextCursor: that host's next page, same query."),
 });
 export type HostListArgs = z.infer<typeof HostListArgsSchema>;
 
@@ -217,6 +239,24 @@ export const HostListEntrySchema = z.object({
           ),
       })
     )
+    .nullable(),
+  /** How much of the host's project list `projects` is; null exactly when `projects` is. */
+  projectInventory: z
+    .object({
+      complete: z
+        .boolean()
+        .describe(
+          "This answer names every match. With a total, pages walked to a null nextCursor name them all."
+        ),
+      total: z.number().nullable().describe("Null: past the host's own list limit."),
+      offset: z.number(),
+      omitted: z
+        .number()
+        .nullable()
+        .describe("Matching projects not named here, earlier pages too."),
+      nextCursor: z.string().nullable().describe("projectCursor for the next page."),
+      listChanged: z.boolean().describe("The list changed since the cursor: its first page again."),
+    })
     .nullable(),
   /** This Shell's "assistant control" switch for the host: whether `host.call` may reach it. */
   control: z.boolean(),
