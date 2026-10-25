@@ -63,6 +63,27 @@ const CLASS_HEADS = [
   "score",
 ] as const;
 
+/**
+ * Which weights file an install holds: the precision its manifest records, or
+ * failing that whichever file is there (a manifest lost or unreadable must
+ * not point a reader at INT8 weights that were never downloaded).
+ */
+export function chooseWeightsFile(manifest: unknown, files: readonly string[]): string | null {
+  const recorded =
+    typeof manifest === "object" && manifest !== null && "weights" in manifest
+      ? (manifest as { weights?: unknown }).weights
+      : undefined;
+  for (const precision of recorded === "fp32"
+    ? ["fp32", "int8"]
+    : recorded === "int8"
+      ? ["int8", "fp32"]
+      : ["fp32", "int8"]) {
+    const name = `model.${precision}.onnx`;
+    if (files.includes(name)) return name;
+  }
+  return null;
+}
+
 /** Whether a model's `reader.json` is one this build can read. */
 export function isReaderMeta(value: unknown): value is ReaderMeta {
   if (typeof value !== "object" || value === null) return false;

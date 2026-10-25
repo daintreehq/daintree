@@ -366,22 +366,67 @@ describe("canopyModels", () => {
     expect(existsSync(path.join(dir, "model.fp32.onnx"))).toBe(false);
   });
 
-  it("fetches a model again when what is installed read in the other precision", async () => {
-    const { fetchMock } = hub({ "daintreehq/canopy-reader-17m": repo("a") });
+  it("keeps an install in the precision it was made with, whatever the catalogue offers since", async () => {
+    const { fetchMock, requests } = hub({ "daintreehq/canopy-reader-17m": repo("a") });
     vi.stubGlobal("fetch", fetchMock);
-    // Installed by an ARM machine, or by a build from before the precision was chosen.
+    // Installed by an ARM machine: INT8 on disk.
     const arm = new CanopyModels(root, () => {}, ARM);
     await arm.list(true);
     await arm.ensure("daintreehq/canopy-reader-17m");
-    // The same folder on an x86 machine is not a ready model.
+    requests.length = 0;
+    // The same folder read by an x86 machine, whose catalogue offers FP32, is
+    // still a ready model: nothing is refetched and nothing is dropped on refresh.
     const x86 = new CanopyModels(root, () => {}, X86);
+    expect(await x86.installedDir("daintreehq/canopy-reader-17m")).not.toBeNull();
     await x86.list(true);
-    expect(await x86.installedDir("daintreehq/canopy-reader-17m")).toBeNull();
-    expect((await x86.list())[0]!.installed).toBe(false);
+    expect((await x86.list())[0]!.installed).toBe(true);
     await x86.ensure("daintreehq/canopy-reader-17m");
+    expect(requests.filter((r) => r.url.endsWith(".onnx"))).toEqual([]);
     const dir = (await x86.installedDir("daintreehq/canopy-reader-17m"))!;
+    expect(existsSync(path.join(dir, "model.int8.onnx"))).toBe(true);
+  });
+
+  it("treats 32-bit x86 as x86", async () => {
+    const { fetchMock } = hub({ "daintreehq/canopy-reader-17m": repo("a") });
+    vi.stubGlobal("fetch", fetchMock);
+    const models = new CanopyModels(root, () => {}, { arch: "ia32" });
+    await models.list(true);
+    await models.ensure("daintreehq/canopy-reader-17m");
+    const dir = (await models.installedDir("daintreehq/canopy-reader-17m"))!;
     expect(existsSync(path.join(dir, "model.fp32.onnx"))).toBe(true);
-    expect(existsSync(path.join(dir, "model.int8.onnx"))).toBe(false);
+  });
+
+  it("applies the real size cap to the models it was built with, offline", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("fetch failed");
+      })
+    );
+    // 67.7 MB of FP32 for Light, 274 MB for Best: only Light is worth fetching in FP32.
+    const x86 = await new CanopyModels(root, () => {}, X86).list(true);
+    expect(x86.map((v) => v.downloadBytes)).toEqual([
+      3_583_228 + 1_660 + 368 + 67_726_050,
+      3_583_228 + 1_660 + 368 + 69_749_457,
+    ]);
+    const arm = await new CanopyModels(root, () => {}, ARM).list(true);
+    expect(arm.map((v) => v.downloadBytes)).toEqual([
+      3_583_228 + 1_660 + 368 + 17_298_433,
+      3_583_228 + 1_660 + 368 + 69_749_457,
+    ]);
+  });
+
+  it("falls back to INT8 on x86 when the repo has no FP32 file", async () => {
+    const noFp32 = repo("a");
+    delete noFp32.files["model.fp32.onnx"];
+    delete noFp32.lfs!["model.fp32.onnx"];
+    const { fetchMock } = hub({ "daintreehq/canopy-reader-17m": noFp32 });
+    vi.stubGlobal("fetch", fetchMock);
+    const models = new CanopyModels(root, () => {}, X86);
+    await models.list(true);
+    await models.ensure("daintreehq/canopy-reader-17m");
+    const dir = (await models.installedDir("daintreehq/canopy-reader-17m"))!;
+    expect(existsSync(path.join(dir, "model.int8.onnx"))).toBe(true);
   });
 
   it("deletes every model but the one kept", async () => {

@@ -254,6 +254,11 @@ async function fetchCatalogue(): Promise<Variant[]> {
   return variants.filter((v): v is Variant => v !== null);
 }
 
+/** Windows holds a file open until its reader process has exited: retried for a few seconds. */
+function removeDir(dir: string): Promise<void> {
+  return rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
+}
+
 function totalBytes(v: Variant, weights: CanopyWeights): number {
   return v.files.reduce((sum, f) => sum + f.size, 0) + (v.weights[weights] ?? v.weights.int8).size;
 }
@@ -340,14 +345,15 @@ export class CanopyModels {
         revision?: unknown;
         weights?: unknown;
       };
-      // An install from before the precision was recorded read with INT8.
-      const weights: CanopyWeights = raw.weights === "fp32" ? "fp32" : "int8";
       if (raw.id !== id || typeof raw.revision !== "string") return;
-      // Weights the other precision was chosen for since (another CPU's disk, or a
-      // catalogue that now offers FP32): not this machine's reading, fetched again.
-      const variant = this.catalogue.find((v) => v.id === id);
-      if (variant !== undefined && weights !== this.weightsFor(variant)) return;
-      this.installed.set(id, { id, revision: raw.revision, weights });
+      // Valid as installed, in the precision it was made with: that was chosen
+      // once, at download, and a catalogue that offers something else since
+      // doesn't undo a model that reads right.
+      this.installed.set(id, {
+        id,
+        revision: raw.revision,
+        weights: raw.weights === "fp32" ? "fp32" : "int8",
+      });
     } catch {
       // Not installed, or a half-written install that is not one.
     }
@@ -361,12 +367,7 @@ export class CanopyModels {
         .then(async (variants) => {
           if (variants.length > 0) {
             this.catalogue = variants;
-            // What is installed is checked against the catalogue as it now stands: a
-            // model whose recorded precision isn't the one chosen here is fetched again.
-            for (const v of variants) {
-              this.installed.delete(v.id);
-              await this.readInstall(v.id);
-            }
+            for (const v of variants) if (!this.installed.has(v.id)) await this.readInstall(v.id);
           }
           this.fetchedAt = Date.now();
         })
@@ -459,13 +460,12 @@ export class CanopyModels {
     this.download = download;
     this.failure = null;
     this.onChange();
+    // Chosen once, for this download: what is fetched, recorded and marked
+    // installed all agree, whatever the catalogue becomes meanwhile.
+    const weights = this.weightsFor(variant);
     try {
-      await this.fetchInto(variant, download);
-      this.installed.set(id, {
-        id,
-        revision: variant.revision,
-        weights: this.weightsFor(variant),
-      });
+      await this.fetchInto(variant, download, weights);
+      this.installed.set(id, { id, revision: variant.revision, weights });
     } catch (error) {
       if (!download.abort.signal.aborted) {
         this.failure = { id, message: formatErrorMessage(error, "The download failed.") };
@@ -495,14 +495,14 @@ export class CanopyModels {
     for (const id of [...this.installed.keys()]) {
       if (id === keep) continue;
       this.installed.delete(id);
-      await rm(this.dirOf(id), { recursive: true, force: true });
+      await removeDir(this.dirOf(id));
     }
     const names = await readdir(this.root).catch(() => [] as string[]);
     const kept = keep === null ? null : path.basename(this.dirOf(keep));
     for (const name of names) {
       if (!name.endsWith(".download") || name === `${kept}.download`) continue;
       if (!isCanopyModelId(`${AUTHOR}/${name.slice(0, -".download".length)}`)) continue;
-      await rm(path.join(this.root, name), { recursive: true, force: true });
+      await removeDir(path.join(this.root, name));
     }
     this.onChange();
   }
@@ -520,12 +520,15 @@ export class CanopyModels {
    * the hash Hugging Face publishes, then the folder renamed into place: a
    * model is either all there and checked, or not there.
    */
-  private async fetchInto(variant: Variant, download: Download): Promise<void> {
+  private async fetchInto(
+    variant: Variant,
+    download: Download,
+    weights: CanopyWeights
+  ): Promise<void> {
     const dir = this.dirOf(variant.id);
     const staging = `${dir}.download`;
     await mkdir(staging, { recursive: true });
     const signal = download.abort.signal;
-    const weights = this.weightsFor(variant);
     for (const file of [...variant.files, variant.weights[weights] ?? variant.weights.int8]) {
       const target = path.join(staging, file.name);
       const part = `${target}.${variant.revision.slice(0, 12)}.part`;

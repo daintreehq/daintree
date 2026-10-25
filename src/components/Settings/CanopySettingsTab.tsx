@@ -66,7 +66,7 @@ export function modelComparison(variants: readonly CanopyModelVariant[]): string
   );
   const size = large.downloadBytes / small.downloadBytes;
   sentences.push(
-    `${large.name} is ${size < 1.15 ? "about the same download" : `${times(size)} the download`} and about ${times(b.msPerScreen / a.msPerScreen)} the work per screen`
+    `${large.name} is ${size > 0.87 && size < 1.15 ? "about the same download" : size <= 0.87 ? `${times(1 / size)} smaller to download` : `${times(size)} the download`} and about ${times(b.msPerScreen / a.msPerScreen)} the work per screen`
   );
   if (better) sentences.push(`For most people ${small.name} is enough`);
   return `${sentences.join(". ")}.`;

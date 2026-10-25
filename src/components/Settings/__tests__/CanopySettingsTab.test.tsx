@@ -270,5 +270,10 @@ describe("CanopySettingsTab", () => {
     // On x86 Light downloads its FP32 weights, about as big as Best's INT8.
     const heavy = { ...LIGHT, downloadBytes: BEST.downloadBytes - 2_000_000 };
     expect(modelComparison([heavy, BEST])!).toContain("about the same download");
+    // A larger model that downloads much less is not "about the same".
+    const big = { ...LIGHT, downloadBytes: BEST.downloadBytes * 2.5 };
+    const said2 = modelComparison([big, BEST])!;
+    expect(said2).toContain("2.5x smaller to download");
+    expect(said2).not.toContain("about the same download");
   });
 });

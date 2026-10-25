@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  chooseWeightsFile,
   decodeReading,
   displayText,
   encodeScreen,
@@ -221,5 +222,17 @@ describe("canopyReader", () => {
     expect(isReaderMeta({ ...META, max_len: 0 })).toBe(false);
     expect(isReaderMeta({ ...META, classes: { ...META.classes, score: [] } })).toBe(false);
     expect(isReaderMeta(null)).toBe(false);
+  });
+
+  it("loads the weights its install recorded, or whichever it holds when the record is lost", () => {
+    const both = ["model.int8.onnx", "model.fp32.onnx", "reader.json"];
+    expect(chooseWeightsFile({ weights: "fp32" }, both)).toBe("model.fp32.onnx");
+    expect(chooseWeightsFile({ weights: "int8" }, both)).toBe("model.int8.onnx");
+    // A manifest lost or unreadable: never INT8 that was not downloaded.
+    expect(chooseWeightsFile(null, ["model.fp32.onnx"])).toBe("model.fp32.onnx");
+    expect(chooseWeightsFile({}, ["model.int8.onnx"])).toBe("model.int8.onnx");
+    // Recorded precision missing on disk: the other, rather than nothing.
+    expect(chooseWeightsFile({ weights: "fp32" }, ["model.int8.onnx"])).toBe("model.int8.onnx");
+    expect(chooseWeightsFile({ weights: "fp32" }, ["reader.json"])).toBeNull();
   });
 });

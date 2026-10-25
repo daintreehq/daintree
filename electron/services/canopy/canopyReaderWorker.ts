@@ -4,11 +4,12 @@
  * here ends this child and never main; and so inference never stalls main's
  * event loop.
  */
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import type * as Ort from "onnxruntime-node";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import {
+  chooseWeightsFile,
   decodeReading,
   encodeScreen,
   isReaderMeta,
@@ -78,11 +79,12 @@ async function load(dir: string): Promise<void> {
     },
   };
   // The precision the download chose for this CPU, recorded beside the files.
-  const installed = await readFile(path.join(dir, "install.json"), "utf8")
-    .then((text) => JSON.parse(text) as { weights?: unknown })
-    .catch(() => ({}) as { weights?: unknown });
-  const weights = installed.weights === "fp32" ? "fp32" : "int8";
-  const session = await ort.InferenceSession.create(path.join(dir, `model.${weights}.onnx`), {
+  const manifest: unknown = await readFile(path.join(dir, "install.json"), "utf8")
+    .then((text) => JSON.parse(text) as unknown)
+    .catch(() => null);
+  const weights = chooseWeightsFile(manifest, await readdir(dir));
+  if (weights === null) throw new Error("The model's weights are missing");
+  const session = await ort.InferenceSession.create(path.join(dir, weights), {
     graphOptimizationLevel: "all",
     executionMode: "sequential",
     // Two threads: measured fastest on Apple silicon (Light 9 ms, Best 47 ms a
