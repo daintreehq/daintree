@@ -317,6 +317,43 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
       });
     });
 
+    it("lists this machine's CLIs as observed while its sample is fresh, stale after (#14461)", async () => {
+      const clis = [{ agentId: "claude", version: "2.1.0" }];
+      latestSummary = () =>
+        ({
+          sampledAt: 995,
+          platform: "darwin",
+          memoryPressure: null,
+          thermal: null,
+          agentClis: clis,
+        }) as unknown as HostMetricsSummary;
+      let listed = await runtime.list("a");
+      if (!listed.ok) throw new Error("refused");
+      expect(listed.value.hosts[0]?.agentClis).toEqual({
+        coverage: "observed",
+        sampledAt: 995,
+        installed: clis,
+        omitted: 0,
+      });
+
+      latestSummary = () =>
+        ({
+          sampledAt: -59_000,
+          platform: "darwin",
+          memoryPressure: null,
+          thermal: null,
+          agentClis: clis,
+        }) as unknown as HostMetricsSummary;
+      listed = await runtime.list("a");
+      if (!listed.ok) throw new Error("refused");
+      expect(listed.value.hosts[0]?.agentClis).toEqual({
+        coverage: "stale",
+        sampledAt: -59_000,
+        installed: clis,
+        omitted: 0,
+      });
+    });
+
     it("caps the projects it names, and names none when they can't be read", async () => {
       projects = Array.from({ length: HOST_LIST_PROJECTS_MAX + 5 }, (_, index) => ({
         id: `p-${index}`,

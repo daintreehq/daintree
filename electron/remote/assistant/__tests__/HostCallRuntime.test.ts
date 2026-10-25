@@ -291,6 +291,28 @@ describe("HostCallRuntime (#13493, #13496)", () => {
         });
       });
 
+      it("ages a sample's CLIs by the same clock as its load (#14461)", async () => {
+        const agentClis = [{ agentId: "claude", version: "2.1.0" }];
+        hosts = [
+          host({
+            connection: CONNECTED,
+            summary: { ...fresh, sampledAt: 1000 - 14_000, agentClis } as never,
+          }),
+        ];
+        listHostProjects.mockImplementation(async () => {
+          clock += 5000;
+          return [];
+        });
+        const listed = await runtime.list("a");
+        if (!listed.ok) throw new Error("refused");
+        expect(listed.value.hosts[0]?.agentClis).toEqual({
+          coverage: "stale",
+          sampledAt: 1000 - 14_000,
+          installed: agentClis,
+          omitted: 0,
+        });
+      });
+
       it("keeps a small positive load from rounding to idle-looking zero", async () => {
         expect(await loadOf({ ...fresh, cpuPercent: 0.4 })).toMatchObject({ cpuBusyCores: 0.03 });
       });
@@ -520,8 +542,24 @@ describe("HostCallRuntime (#13493, #13496)", () => {
 
       it("dials one with control on, and lists it as it is once connected", async () => {
         hosts = [host({ hostId: "studio" }), host({ hostId: "off", name: "laptop" })];
+        const agentClis = [{ agentId: "codex", version: "0.9.1" }];
         const connect = vi.fn(async (hostId: string) => {
-          hosts = hosts.map((h) => (h.hostId === hostId ? { ...h, connection: CONNECTED } : h));
+          hosts = hosts.map((h) =>
+            h.hostId === hostId
+              ? {
+                  ...h,
+                  connection: CONNECTED,
+                  summary: {
+                    // This runtime reads the real clock.
+                    sampledAt: Date.now(),
+                    platform: "linux",
+                    memoryPressure: null,
+                    thermal: null,
+                    agentClis,
+                  } as never,
+                }
+              : h
+          );
         });
         const listed = await dialing(connect).list("a");
         if (!listed.ok) throw new Error("refused");
@@ -529,6 +567,9 @@ describe("HostCallRuntime (#13493, #13496)", () => {
         expect(listed.value.hosts[0]).toMatchObject({
           hostId: "studio",
           connection: "connected",
+          link: { status: "connected" },
+          build: { source: "connected", handshake: CONNECTED.handshake },
+          agentClis: { coverage: "observed", installed: agentClis },
           projects: [
             { projectId: "proj-2", name: "website" },
             { projectId: "proj-3", name: "api" },

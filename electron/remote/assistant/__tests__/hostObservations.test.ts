@@ -111,6 +111,22 @@ describe("projectHostLink (#14461)", () => {
       false,
       { mismatch: { kind: "protocol", local: "12", remote: "11" } },
     ],
+    [
+      "driven elsewhere, naming nobody",
+      {
+        status: "driven-elsewhere",
+        driver: {
+          leaseId: 3,
+          endpointId: "e",
+          clientId: "c",
+          clientName: "greg-mbp",
+          isHostLocal: false,
+          acquiredAt: 1,
+        },
+      },
+      false,
+      {},
+    ],
   ];
 
   it.each(cases)("keeps what it saw: %s", (_name, state, byPerson, expected) => {
@@ -155,6 +171,55 @@ describe("projectHostLink (#14461)", () => {
 });
 
 describe("projectHostBuild (#14461)", () => {
+  const CACHED: HostHandshakeInfo = {
+    version: "0.8.0",
+    commit: "0ld0ld0",
+    protocolVersion: 10,
+    platform: "darwin",
+    arch: "arm64",
+  };
+
+  it("prefers the live or refused handshake over an older cached one", () => {
+    const current = { ...HANDSHAKE, platform: "darwin" as const, arch: "arm64" as const };
+    expect(projectHostBuild({ status: "connected", rttMs: 1, handshake: current }, CACHED)).toEqual(
+      { source: "connected", handshake: current }
+    );
+    expect(
+      projectHostBuild(
+        {
+          status: "version-mismatch",
+          mismatch: { kind: "protocol", local: 12, remote: 11 },
+          remote: { ...HANDSHAKE, protocolVersion: 11 },
+        },
+        CACHED
+      )
+    ).toEqual({ source: "rejected", handshake: { ...HANDSHAKE, protocolVersion: 11 } });
+    expect(projectHostBuild({ status: "connecting", attempt: 1 }, CACHED)).toEqual({
+      source: "last-seen",
+      handshake: CACHED,
+    });
+  });
+
+  it("clips build strings longer than a handshake may carry", () => {
+    const long = { ...HANDSHAKE, version: "v".repeat(100), commit: "c".repeat(100) };
+    const build = projectHostBuild({ status: "connected", rttMs: 1, handshake: long }, null);
+    expect(build.handshake).toMatchObject({ version: "v".repeat(64), commit: "c".repeat(64) });
+    const link = projectHostLink(
+      {
+        status: "connected",
+        rttMs: 1,
+        handshake: long,
+        buildMismatch: { kind: "version", local: "1".repeat(100), remote: "2".repeat(100) },
+      },
+      false
+    );
+    expect(link.mismatch).toEqual({
+      kind: "version",
+      local: "1".repeat(64),
+      remote: "2".repeat(64),
+    });
+  });
+
   it("names the build it is connected to", () => {
     const build = projectHostBuild({ status: "connected", rttMs: 1, handshake: HANDSHAKE }, null);
     expect(build).toEqual({ source: "connected", handshake: HANDSHAKE });
@@ -212,7 +277,15 @@ describe("projectHostAgentClis (#14461)", () => {
   });
 
   it("keeps an old sample's CLIs as stale", () => {
-    expect(projectHostAgentClis(summary(), true, 1001 + HOST_LOAD_STALE_MS).coverage).toBe("stale");
+    expect(projectHostAgentClis(summary(), true, 1001 + HOST_LOAD_STALE_MS)).toEqual({
+      coverage: "stale",
+      sampledAt: 1000,
+      installed: [
+        { agentId: "claude", version: "2.1.0" },
+        { agentId: "codex", version: null },
+      ],
+      omitted: 0,
+    });
   });
 
   it("keeps a sample from a host that is no longer connected as stale, however recent", () => {
@@ -239,6 +312,19 @@ describe("projectHostAgentClis (#14461)", () => {
       installed: [],
       omitted: 0,
     });
+  });
+
+  it("copies only an id and a version, each clipped", () => {
+    const clis = projectHostAgentClis(
+      summary({
+        agentClis: [
+          { agentId: "a".repeat(300), version: "1.0", path: "/opt/bin/claude", token: "s3cret" },
+        ] as never,
+      }),
+      true,
+      1000
+    );
+    expect(clis.installed).toEqual([{ agentId: "a".repeat(64), version: "1.0" }]);
   });
 
   it("caps the list and counts what it left out", () => {

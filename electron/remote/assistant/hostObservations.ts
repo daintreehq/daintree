@@ -14,7 +14,11 @@ import { HOST_LOAD_STALE_MS } from "./hostLoad.js";
 
 /** Longest build string a handshake carries on the wire. */
 const BUILD_FIELD_MAX = 64;
-const CLI_ID_MAX = 256;
+/**
+ * Agent ids are short registry keys; a host may send up to 256 characters,
+ * which across 32 CLIs and a few hosts would outgrow the MCP result cap.
+ */
+const CLI_ID_MAX = 64;
 
 const clip = (value: string, max: number): string =>
   value.length > max ? value.slice(0, max) : value;

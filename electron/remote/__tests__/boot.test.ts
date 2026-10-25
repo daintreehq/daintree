@@ -50,7 +50,11 @@ const m = vi.hoisted(() => {
     descriptor: { id: string; connection: { kind: "ssh"; target: string } };
   }> = [];
   const client = {
-    client: { connect: vi.fn(), list: vi.fn(() => hostEntries) },
+    client: {
+      connect: vi.fn(),
+      list: vi.fn(() => hostEntries),
+      isDisconnectedByPerson: vi.fn((hostId: string) => hostId === "control-on"),
+    },
     sessionFor: vi.fn((_hostId: string) => null as unknown),
     onEndpointOpened: vi.fn((l: (hostId: string, info: unknown) => void) => {
       clientOpenedListeners.add(l);
@@ -596,6 +600,37 @@ describe("startRemoteHosts", () => {
     expect(deps.hasHosts()).toBe(true);
     await stopRemoteHosts();
     expect(control.uninstall).toHaveBeenCalledTimes(1);
+  });
+
+  it("hands host control each host's last handshake and whether the person disconnected it (#14461)", async () => {
+    const handshake = {
+      version: "1.0.0",
+      commit: "abc1234",
+      protocolVersion: 12,
+      platform: "darwin",
+      arch: "arm64",
+    };
+    m.hostEntries.push({
+      descriptor: { id: "control-on", name: "studio-01", lastSeenAt: 5, lastHandshake: handshake },
+      connection: { status: "disconnected" },
+      summary: null,
+    } as never);
+    await startRemoteHosts({ hostMode: false });
+    const [deps] = control.installHostControl.mock.calls[0] as [
+      { observeHosts(): Array<Record<string, unknown>> },
+    ];
+    expect(deps.observeHosts()).toEqual([
+      {
+        hostId: "control-on",
+        name: "studio-01",
+        connection: { status: "disconnected" },
+        lastSeenAt: 5,
+        summary: null,
+        lastHandshake: handshake,
+        disconnectedByPerson: true,
+      },
+    ]);
+    await stopRemoteHosts();
   });
 
   it("proves this Shell's sender to hosts from start, and reaches only hosts it still knows", async () => {
