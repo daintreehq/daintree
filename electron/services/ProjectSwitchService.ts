@@ -16,7 +16,7 @@ import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { markPerformance, withPerformanceSpan } from "../utils/performance.js";
 import { buildSwitchHydrateResult } from "./AppHydrationService.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
-import { getProjectPresenceTracker } from "./ProjectPresenceTracker.js";
+import { notifyProjectPluginsOpened } from "../window/projectPluginLifecycle.js";
 
 export class ProjectSwitchService {
   private deps: HandlerDependencies;
@@ -334,8 +334,11 @@ export function activateProjectOnHost(
 ): Promise<void> {
   // Every activation is an open as plugins count it, the re-hold of a project
   // the view never left included: a project closed under a still-attached view
-  // is reopened by that same view switching back to it.
-  getProjectPresenceTracker().markOpened(project.id);
+  // is reopened by that same view switching back to it. The plugin open is the
+  // same one a local view sends: without it the project's plugins never load
+  // here, and every wait on them (a new worktree's setup-step listing, an
+  // agent launch's plugin tools) runs to its full timeout.
+  notifyProjectPluginsOpened(project.id, project.path);
   const current = hostResidency.get(residentId);
   if (current?.projectId === project.id && isResidencyHeld(workspace, residentId, current)) {
     return current.load;
