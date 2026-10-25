@@ -103,11 +103,9 @@ const running = (patch: Partial<GlobalAssistantView> = {}) =>
   });
 
 let listeners: Set<(state: GlobalAssistantView) => void>;
-let help: Record<string, ReturnType<typeof vi.fn>>;
 
-function installHelp(initial: GlobalAssistantView, attachmentId = "a1") {
-  listeners = new Set();
-  help = {
+function makeHelp(initial: GlobalAssistantView, attachmentId: string) {
+  return {
     attachGlobalAssistant: vi.fn(async () => ({ attachmentId, state: initial })),
     detachGlobalAssistant: vi.fn(async () => {}),
     ensureGlobalAssistant: vi.fn(async () => running({ inputOwner: attachmentId, inputEpoch: 1 })),
@@ -121,6 +119,13 @@ function installHelp(initial: GlobalAssistantView, attachmentId = "a1") {
       return () => listeners.delete(callback);
     }),
   };
+}
+
+let help: ReturnType<typeof makeHelp>;
+
+function installHelp(initial: GlobalAssistantView, attachmentId = "a1") {
+  listeners = new Set();
+  help = makeHelp(initial, attachmentId);
   Object.assign(window, { electron: { help } });
 }
 
@@ -190,7 +195,7 @@ describe("GlobalAssistantPane (#14454)", () => {
 
   it("lets go of an attachment that answers after the pane is gone", async () => {
     installHelp(running());
-    let answer!: (value: unknown) => void;
+    let answer!: (value: { attachmentId: string; state: GlobalAssistantView }) => void;
     help.attachGlobalAssistant.mockImplementationOnce(
       () => new Promise((resolve) => (answer = resolve))
     );
