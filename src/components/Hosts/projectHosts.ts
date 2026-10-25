@@ -69,6 +69,15 @@ export function isTalking(row: HostMenuRow): boolean {
   return !(row.connection?.status === "connected" && row.connection.quietSince !== undefined);
 }
 
+/**
+ * Whether the project is there to open on the host: the window's own, a host
+ * that matched it, or one that did before its link went quiet. A host that
+ * says it has no copy, or was never matched, isn't.
+ */
+export function isProjectThere(host: ProjectHost): boolean {
+  return host.presence === "has";
+}
+
 /** "hostId\tprojectId,projectId" per matched host, so an effect re-runs only when a match moves. */
 function matchKey(matches: ReadonlyMap<HostId, readonly string[]>): string {
   return [...matches].map(([hostId, ids]) => `${hostId}\t${ids.join(",")}`).join("\n");

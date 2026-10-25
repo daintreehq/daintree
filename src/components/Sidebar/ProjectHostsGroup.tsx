@@ -1,5 +1,5 @@
 import {
-  useEffect,
+  useCallback,
   useState,
   type FocusEvent,
   type KeyboardEvent,
@@ -17,7 +17,7 @@ import { HostNameText } from "@/components/Hosts/HostNameText";
 import { PlatformGlyph } from "@/components/Hosts/PlatformGlyph";
 import { openProjectOnHost } from "@/components/Hosts/OpenOnHostSubmenu";
 import { isNewWindowClick, switchToHost } from "@/components/Hosts/hostSwitching";
-import { useProjectHosts, type ProjectHost } from "@/components/Hosts/projectHosts";
+import { isProjectThere, useProjectHosts, type ProjectHost } from "@/components/Hosts/projectHosts";
 import {
   ROW_BANDS,
   summarizeHostProject,
@@ -59,6 +59,24 @@ export const VISIBLE_HOSTS = 5;
 const LIST_ID = "project-hosts-list";
 const TOTALS_ID = "project-hosts-totals";
 const FOLDED_ID = "project-hosts-folded";
+
+interface HeldMembers {
+  projectId: string | null;
+  hostIds: readonly HostId[];
+}
+
+/**
+ * The hosts with a row: the ones the project is on, and while the section is
+ * in use, every one that had a row too.
+ */
+function holdMembers(
+  held: readonly HostId[] | null,
+  there: readonly HostId[],
+  free: boolean
+): HostId[] {
+  if (free || held === null) return [...there];
+  return [...new Set([...held, ...there])];
+}
 
 interface ProjectHostsGroupProps {
   /** The project this view shows; its agents on every host are summarised. */
@@ -353,11 +371,13 @@ function HostRow({ host, summary, columns, newWindowKey: key, onOpen }: HostRowP
 }
 
 /**
- * This project on every host, the window's own included, one row per host: a
- * quick way to get to any of them. Each row shows how many of this project's
- * agents there it observed asking, quiet, unread and working, or the one
- * phrase that stands in for them (the link's words while it is down, "Not
- * added" where no project there shares the repository). Observation only:
+ * This project on every host it is on, the window's own included, one row per
+ * host: a quick way to get to any of them. A host that says it has no copy,
+ * or was never matched before its link dropped, has no row, and with no host
+ * but this one the section isn't drawn. Each row shows how many of this
+ * project's agents there it observed asking, quiet, unread and working, or
+ * the one phrase that stands in for them (the link's words while it is
+ * down). Observation only:
  * every count is the band that host's own fleet placed, never one decided
  * here. A row opens that host's project in this window, or a new one on
  * Cmd/Ctrl-click.
@@ -374,7 +394,6 @@ export function ProjectHostsGroup({ projectId }: ProjectHostsGroupProps) {
   const hosts = useProjectHosts(projectId);
   const projectName = useProjectStore((state) => state.currentProject?.name ?? null);
   const expanded = useProjectHostsExpanded();
-  const [section, setSection] = useState<HTMLElement | null>(null);
   // Unknown until the section is there to ask: a view opened by a click on
   // this section opens under a pointer that hasn't moved, and must not
   // reorder before it knows.
@@ -383,12 +402,31 @@ export function ProjectHostsGroup({ projectId }: ProjectHostsGroupProps) {
   const patient = useOrderPatience();
   const allShownPreference = useProjectHostsAllShown();
 
+  const there = hosts.filter(isProjectThere);
+  const free = (isOrderSettled(there) || !patient) && pointerIn === false && !focusIn;
+  // Who has a row is held like the order: a host that gains the project joins
+  // at once, but one that loses it keeps its row, saying so, until the
+  // section is out of use, so a row never vanishes under the pointer.
+  const [members, setMembers] = useState<HeldMembers | null>(null);
+  const memberIds = holdMembers(
+    members?.projectId === projectId ? members.hostIds : null,
+    there.map((host) => host.hostId),
+    free
+  );
+  if (members?.projectId !== projectId || members.hostIds.join("\n") !== memberIds.join("\n")) {
+    setMembers({ projectId, hostIds: memberIds });
+  }
+  const listed = hosts.filter((host) => memberIds.includes(host.hostId));
+
   const summaries = new Map<HostId, HostProjectSummary>();
   for (const host of hosts) {
     if (host.entries) summaries.set(host.hostId, summarizeHostProject(host.entries));
   }
-  const free = (isOrderSettled(hosts) || !patient) && pointerIn === false && !focusIn;
-  const order = useSteadyOrder(priorityOrder(hosts, summaries), free);
+  // Ordered over every host, so a handed-off order keeps a host whose lookup
+  // is still out, then cut to the ones with a row.
+  const order = useSteadyOrder(priorityOrder(hosts, summaries), free).filter((hostId) =>
+    memberIds.includes(hostId)
+  );
 
   // The fold is held like the order: a host joining, or another window
   // opening or closing the fold, waits until the section is out of use, so a
@@ -402,13 +440,17 @@ export function ProjectHostsGroup({ projectId }: ProjectHostsGroupProps) {
   const [allShown, setAllShown] = useState(allShownPreference);
   if (free && allShown !== allShownPreference) setAllShown(allShownPreference);
 
-  useEffect(() => {
-    if (section) setPointerIn(section.matches(":hover"));
-  }, [section]);
+  // The section comes and goes with its hosts, and leaving the tree fires no
+  // leave or blur: each time it is drawn, it reads pointer and focus afresh.
+  const bindSection = useCallback((node: HTMLElement | null) => {
+    setPointerIn(node ? node.matches(":hover") : null);
+    setFocusIn(node?.contains(document.activeElement) ?? false);
+  }, []);
 
-  if (hosts.length === 0) return null;
+  // One row under "across hosts" says nothing.
+  if (listed.length <= 1) return null;
 
-  const byId = new Map(hosts.map((host) => [host.hostId, host]));
+  const byId = new Map(listed.map((host) => [host.hostId, host]));
   const ordered = order.flatMap((hostId) => byId.get(hostId) ?? []);
   // Folding one host would spend a row to save a row.
   const folds = (heldFolds ?? foldsNow) && ordered.length > VISIBLE_HOSTS;
@@ -472,7 +514,7 @@ export function ProjectHostsGroup({ projectId }: ProjectHostsGroupProps) {
 
   return (
     <section
-      ref={setSection}
+      ref={bindSection}
       aria-label={`${title} across hosts`}
       // At most half the sidebar, so the local worktrees always keep the rest.
       // The footer's divider, so the stack under the worktree list reads as one family.

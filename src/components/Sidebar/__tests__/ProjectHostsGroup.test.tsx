@@ -170,6 +170,14 @@ function rows(): HTMLElement[] {
   return screen.queryAllByTestId("project-hosts-host-row");
 }
 
+function section(): HTMLElement | null {
+  return screen.queryByTestId("project-hosts-group");
+}
+
+function hasRow(hostId: string): boolean {
+  return document.querySelector(`[data-host-id="${hostId}"]`) !== null;
+}
+
 function rowFor(hostId: string): HTMLElement {
   const row = document.querySelector<HTMLElement>(
     `[data-host-id="${hostId}"] [data-testid="project-hosts-host-row"]`
@@ -194,16 +202,15 @@ function count(row: HTMLElement, band: string): string | undefined {
 }
 
 describe("ProjectHostsGroup", () => {
-  it("lists every host, this machine first and marked as this window, whatever each has", async () => {
+  it("lists only the hosts the project is on, this machine first and marked as this window", async () => {
     hostList.hosts = [host("zeta", false, "zeta"), host("linux", true, "alpha"), host("away")];
     presence = [has("linux"), { hostId: "away", projects: [] }];
     render(<ProjectHostsGroup projectId={PROJECT} />);
     await waitFor(() => expect(count(rowFor("linux"), "running")).toBe("2"));
-    expect(hostOrder()).toEqual(["local", "linux", "away", "zeta"]);
+    // No row for a host with no copy, nor for one not connected that was never matched.
+    expect(hostOrder()).toEqual(["local", "linux"]);
     expect(rowFor("local").getAttribute("aria-current")).toBe("true");
     expect(rowFor("linux").getAttribute("aria-current")).toBeNull();
-    expect(rowFor("away").textContent).toContain("Not added");
-    expect(rowFor("zeta").textContent).toContain("Not connected");
     // The window's own host is read like the rest, never asked whether it has its own project.
     expect(count(rowFor("local"), "running")).toBe("1");
     expect(listWorktrees).toHaveBeenCalledWith({ hostId: "local" });
@@ -225,7 +232,7 @@ describe("ProjectHostsGroup", () => {
       "name-linux: 1 waiting, 2 working, 1 finished (observed)"
     );
     // One row per host and nothing under it.
-    expect(document.querySelectorAll("[data-project-hosts-row]")).toHaveLength(3);
+    expect(document.querySelectorAll("[data-project-hosts-row]")).toHaveLength(2);
     expect(screen.getByTestId("project-hosts-group").textContent).not.toContain("feature/c");
     // Counts are right-aligned in shared columns: the working count ends both rows,
     // and this machine's row, with nothing asking, leaves that column to its name.
@@ -274,17 +281,22 @@ describe("ProjectHostsGroup", () => {
     expect(switchToHost).toHaveBeenCalledTimes(2);
   });
 
-  it("opens the switch dialog for a host with no copy, and dials one that isn't connected", async () => {
-    presence = [{ hostId: "linux", projects: [] }];
+  it("draws nothing for a project only on this machine, whatever the other hosts said", async () => {
+    hostList.hosts = [host("none"), host("failed"), host("pending"), host("away", false)];
+    presence = [
+      { hostId: "none", projects: [] },
+      { hostId: "failed", projects: null },
+    ];
     render(<ProjectHostsGroup projectId={PROJECT} />);
-    await waitFor(() => expect(rowFor("linux").textContent).toContain("Not added"));
-    fireEvent.click(rowFor("linux"));
-    expect(openProjectOnHost).toHaveBeenLastCalledWith("linux", PROJECT, false, "user");
-    expect(switchToHost).not.toHaveBeenCalled();
-
-    // Never matched this session: the switch lands on whatever that host last showed.
-    fireEvent.click(rowFor("away"));
-    expect(switchToHost).toHaveBeenLastCalledWith("away", false, undefined);
+    await waitFor(() =>
+      expect(locate).toHaveBeenCalledWith({
+        fromHostId: "local",
+        projectId: PROJECT,
+        toHostIds: ["failed", "none", "pending"],
+      })
+    );
+    await act(async () => {});
+    expect(section()).toBeNull();
   });
 
   it("says what the host listed in place of counts: no agents, how many agents, no worktrees", async () => {
@@ -322,10 +334,11 @@ describe("ProjectHostsGroup", () => {
     fireEvent.click(row);
     expect(switchToHost).toHaveBeenLastCalledWith("linux", false, "remote-p");
 
+    // Back, and saying it has no copy now: this machine is the only one left.
     presence = [{ hostId: "linux", projects: [] }];
     hostList.hosts = [host("linux"), host("away", false)];
     rerender(<ProjectHostsGroup projectId={PROJECT} />);
-    await waitFor(() => expect(rowFor("linux").textContent).toContain("Not added"));
+    await waitFor(() => expect(section()).toBeNull());
   });
 
   it("holds a silent link's counts back rather than show them as current", async () => {
@@ -359,13 +372,16 @@ describe("ProjectHostsGroup", () => {
   it("finds this project on a host that gains it later, when that host says its list changed", async () => {
     presence = [{ hostId: "linux", projects: [] }];
     render(<ProjectHostsGroup projectId={PROJECT} />);
-    await waitFor(() => expect(rowFor("linux").textContent).toContain("Not added"));
+    await waitFor(() => expect(locate).toHaveBeenCalledTimes(1));
+    await act(async () => {});
+    expect(section()).toBeNull();
 
     presence = [has("linux")];
     await act(async () => {
       emit({ type: "worktrees", hostId: "linux" });
     });
     await waitFor(() => expect(count(rowFor("linux"), "asking")).toBe("1"));
+    expect(hostOrder()).toEqual(["local", "linux"]);
     expect(locate).toHaveBeenCalledTimes(2);
   });
 
@@ -394,12 +410,13 @@ describe("ProjectHostsGroup", () => {
 
     locate.mockImplementationOnce(() => new Promise<HostProjectPresence[]>(() => {}));
     rerender(<ProjectHostsGroup projectId={"b".repeat(64)} />);
-    expect(countsShown(rowFor("linux"))).toBe("");
+    expect(section()).toBeNull();
   });
 
-  it("forgets a host's copy once a connected answer says it's gone, and offers to set one up", async () => {
+  it("forgets a host's copy once a connected answer says it's gone, keeping its row while in use", async () => {
     render(<ProjectHostsGroup projectId={PROJECT} />);
     await waitFor(() => expect(count(rowFor("linux"), "running")).toBe("2"));
+    fireEvent.pointerEnter(section()!);
 
     // The checkout is removed on the host: its list no longer has the project,
     // and asked again, it says so.
@@ -408,23 +425,81 @@ describe("ProjectHostsGroup", () => {
     await act(async () => {
       emit({ type: "worktrees", hostId: "linux" });
     });
+    // Under the pointer the row stays, saying so, and a click offers to set one up.
     await waitFor(() => expect(rowFor("linux").textContent).toContain("Not added"));
     expect(countsShown(rowFor("linux"))).toBe("");
     fireEvent.click(rowFor("linux"));
     expect(openProjectOnHost).toHaveBeenLastCalledWith("linux", PROJECT, false, "user");
     expect(switchToHost).not.toHaveBeenCalled();
+
+    // Out of use, it goes, and the section with it.
+    fireEvent.pointerLeave(section()!);
+    expect(section()).toBeNull();
   });
 
-  it("says it couldn't check a host whose lookup failed, and opens the switch dialog for it", async () => {
-    presence = [{ hostId: "linux", projects: null }];
+  it("keeps a row that loses the project while focus is in it, until focus leaves", async () => {
+    hostList.hosts = [host("linux"), host("other")];
+    presence = [has("linux"), has("other", "other-p")];
     render(<ProjectHostsGroup projectId={PROJECT} />);
-    await waitFor(() => expect(rowFor("linux").textContent).toContain("Couldn't check"));
+    await waitFor(() => expect(count(rowFor("linux"), "running")).toBe("2"));
+    rowFor("linux").focus();
+
+    lists.linux = [];
+    presence = [{ hostId: "linux", projects: [] }, has("other", "other-p")];
+    await act(async () => {
+      emit({ type: "worktrees", hostId: "linux" });
+    });
+    await waitFor(() => expect(rowFor("linux").textContent).toContain("Not added"));
+    expect(document.activeElement).toBe(rowFor("linux"));
+    expect(hostOrder()).toEqual(["local", "linux", "other"]);
+
+    act(() => rowFor("linux").blur());
+    expect(hostOrder()).toEqual(["local", "other"]);
+  });
+
+  it("reads focus afresh when the section is drawn again, so a focus it lost unseen holds nothing", async () => {
+    const { rerender } = render(<ProjectHostsGroup projectId={PROJECT} />);
+    await waitFor(() => expect(count(rowFor("linux"), "running")).toBe("2"));
+    rowFor("linux").focus();
+
+    // The host is removed: the section goes with focus in it, and no blur fires.
+    hostList.hosts = [host("away", false)];
+    rerender(<ProjectHostsGroup projectId={PROJECT} />);
+    expect(section()).toBeNull();
+
+    hostList.hosts = [host("linux"), host("away", false)];
+    rerender(<ProjectHostsGroup projectId={PROJECT} />);
+    await waitFor(() => expect(count(rowFor("linux"), "running")).toBe("2"));
+
+    lists.linux = [];
+    presence = [{ hostId: "linux", projects: [] }];
+    await act(async () => {
+      emit({ type: "worktrees", hostId: "linux" });
+    });
+    await waitFor(() => expect(section()).toBeNull());
+  });
+
+  it("keeps a matched host whose lookup later fails, still opening the copy it matched", async () => {
+    render(<ProjectHostsGroup projectId={PROJECT} />);
+    await waitFor(() => expect(count(rowFor("linux"), "running")).toBe("2"));
+
+    lists.linux = [];
+    presence = [{ hostId: "linux", projects: null }];
+    await act(async () => {
+      emit({ type: "worktrees", hostId: "linux" });
+    });
+    await waitFor(() => expect(locate).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(rowFor("linux").textContent).toContain("No worktrees"));
     fireEvent.click(rowFor("linux"), { metaKey: true });
-    expect(openProjectOnHost).toHaveBeenLastCalledWith("linux", PROJECT, true, "user");
+    expect(switchToHost).toHaveBeenLastCalledWith("linux", true, "remote-p");
   });
 
   it("says a host is being checked only once its first answer is slow to come", async () => {
-    locate.mockImplementationOnce(() => new Promise<HostProjectPresence[]>(() => {}));
+    listWorktrees.mockImplementation(({ hostId }) =>
+      hostId === "linux"
+        ? new Promise<HostWorktreeEntry[]>(() => {})
+        : Promise.resolve(lists[hostId] ?? [])
+    );
     render(<ProjectHostsGroup projectId={PROJECT} />);
     await waitFor(() => expect(count(rowFor("local"), "running")).toBe("1"));
     expect(rowFor("linux").dataset.status).toBe("checking");
@@ -437,11 +512,9 @@ describe("ProjectHostsGroup", () => {
     window.__DAINTREE_HOST_ID__ = { id: "linux" } as typeof window.__DAINTREE_HOST_ID__;
     hostList.hosts = [host("linux", false), host("away", false)];
     const { rerender } = render(<ProjectHostsGroup projectId={PROJECT} />);
-    expect(rowFor("linux").getAttribute("aria-current")).toBe("true");
-    expect(rowFor("linux").textContent).toContain("Not connected");
+    // Nothing asked, so nothing known to have it but the window's own host.
     expect(locate).not.toHaveBeenCalled();
-    fireEvent.click(rowFor("linux"));
-    expect(switchToHost).not.toHaveBeenCalled();
+    expect(section()).toBeNull();
 
     presence = [{ hostId: "local", projects: [{ projectId: "local-p", name: "h", path: "/p" }] }];
     lists.local = [worktree("local-p", "develop", [working("l1")])];
@@ -450,6 +523,7 @@ describe("ProjectHostsGroup", () => {
     rerender(<ProjectHostsGroup projectId={PROJECT} />);
     await waitFor(() => expect(count(rowFor("local"), "running")).toBe("1"));
     expect(count(rowFor("linux"), "running")).toBe("1");
+    expect(rowFor("linux").getAttribute("aria-current")).toBe("true");
     expect(locate).toHaveBeenCalledTimes(1);
   });
 
@@ -474,7 +548,7 @@ describe("ProjectHostsGroup", () => {
       }
     }
 
-    it("puts this machine first, then hosts asking, working, settled, without the project, away", async () => {
+    it("puts this machine first, then hosts asking, working, settled, leaving out the rest", async () => {
       fleet({
         a: [finished("a1")],
         b: [working("b1")],
@@ -483,7 +557,7 @@ describe("ProjectHostsGroup", () => {
         e: "away",
       });
       render(<ProjectHostsGroup projectId={PROJECT} />);
-      await waitFor(() => expect(hostOrder()).toEqual(["local", "c", "b", "a", "d", "e"]));
+      await waitFor(() => expect(hostOrder()).toEqual(["local", "c", "b", "a"]));
     });
 
     it("holds still while the pointer is over it, and moves once it leaves", async () => {
@@ -526,9 +600,13 @@ describe("ProjectHostsGroup", () => {
         PROJECT_HOSTS_HANDOFF_KEY,
         JSON.stringify({ order: ["local", "c", "c", "b"], at: Date.now() })
       );
-      locate.mockImplementationOnce(() => new Promise<HostProjectPresence[]>(() => {}));
+      // Their reads still out, so the order isn't settled and the handoff holds.
+      listWorktrees.mockImplementation(({ hostId }) =>
+        hostId === "local" ? Promise.resolve(lists.local ?? []) : new Promise(() => {})
+      );
       render(<ProjectHostsGroup projectId={PROJECT} />);
       await waitFor(() => expect(count(rowFor("local"), "running")).toBe("1"));
+      await waitFor(() => expect(hasRow("b")).toBe(true));
       // Each host once, however the handoff listed it.
       expect(hostOrder()).toEqual(["local", "c", "b"]);
     });
@@ -549,7 +627,7 @@ describe("ProjectHostsGroup", () => {
     });
 
     it("hands the order on screen to the window a click opens", async () => {
-      fleet({ b: [working("b1")], c: [finished("c1")] });
+      fleet({ b: [working("b1")], c: [finished("c1")], d: "none" });
       render(<ProjectHostsGroup projectId={PROJECT} />);
       await waitFor(() => expect(count(rowFor("b"), "running")).toBe("1"));
       fireEvent.click(rowFor("c"));
@@ -586,11 +664,13 @@ describe("ProjectHostsGroup", () => {
       expect(hostOrder()).toEqual(["local", "n", "b", "c"]);
     });
 
-    it("orders without a host that never answers once it has waited long enough", async () => {
+    it("orders without a host whose read never lands once it has waited long enough", async () => {
       vi.useFakeTimers({ shouldAdvanceTime: true });
       fleet({ b: [working("b1")], c: [finished("c1")], slow: [] });
-      // slow is connected but never says whether it has the project.
-      presence = presence.filter((answer) => answer.hostId !== "slow");
+      // slow has the project but never answers a read of it.
+      listWorktrees.mockImplementation(({ hostId }) =>
+        hostId === "slow" ? new Promise(() => {}) : Promise.resolve(lists[hostId] ?? [])
+      );
       lists.c = [worktree("c-p", "develop", [waiting("c1")])];
       render(<ProjectHostsGroup projectId={PROJECT} />);
       await waitFor(() => expect(count(rowFor("c"), "asking")).toBe("1"));
@@ -764,7 +844,7 @@ describe("ProjectHostsGroup", () => {
       window.dispatchEvent(new StorageEvent("storage", { key: PROJECT_HOSTS_EXPANDED_KEY }));
     });
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
-    expect(rows()).toHaveLength(3);
+    expect(rows()).toHaveLength(2);
   });
 
   it("marks the collapsed asking total blocked when another host has a blocked agent", async () => {
@@ -792,6 +872,8 @@ describe("ProjectHostsGroup", () => {
   });
 
   it("moves between the section's rows with the arrow keys", async () => {
+    hostList.hosts = [host("linux"), host("away")];
+    presence = [has("linux"), has("away", "away-p")];
     render(<ProjectHostsGroup projectId={PROJECT} />);
     await waitFor(() => expect(count(rowFor("linux"), "running")).toBe("2"));
     const toggle = screen.getByTestId("project-hosts-toggle");
