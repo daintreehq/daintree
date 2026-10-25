@@ -14,19 +14,24 @@ import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/p
 import path from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import type {
-  CanopyModelBench,
-  CanopyModelState,
-  CanopyModelVariant,
+import {
+  CANOPY_MODEL_AUTHOR,
+  CANOPY_MODEL_PREFIX,
+  DEFAULT_CANOPY_MODEL,
+  canopyModelName,
+  isCanopyModelId,
+  type CanopyModelBench,
+  type CanopyModelState,
+  type CanopyModelVariant,
 } from "../../../shared/types/ipc/canopy.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { isReaderMeta } from "./canopyReader.js";
 
 const HF = "https://huggingface.co";
-const AUTHOR = "daintreehq";
-const PREFIX = "canopy-reader-";
+const AUTHOR = CANOPY_MODEL_AUTHOR;
+const PREFIX = CANOPY_MODEL_PREFIX;
 const USER_AGENT = "Daintree-Canopy/1.0";
-export const DEFAULT_CANOPY_MODEL = `${AUTHOR}/${PREFIX}17m`;
+export { DEFAULT_CANOPY_MODEL, canopyModelName, isCanopyModelId };
 /** Every file a model needs, and nothing else: no FP32 weights, no reference code. */
 const MODEL_FILES = ["reader.json", "tokenizer.json", "tokenizer_config.json", "model.int8.onnx"];
 const CATALOGUE_TIMEOUT_MS = 10_000;
@@ -115,26 +120,6 @@ const BUNDLED: Variant[] = [
 ];
 
 /** The names the two first models go by; any other is named for its size. */
-const NAMES: Record<string, string> = {
-  [`${AUTHOR}/${PREFIX}17m`]: "Light",
-  [`${AUTHOR}/${PREFIX}68m`]: "Best",
-};
-
-export function canopyModelName(id: string): string {
-  if (NAMES[id]) return NAMES[id];
-  const size = id.slice(id.lastIndexOf("/") + 1).replace(PREFIX, "");
-  return size.toUpperCase();
-}
-
-/** A model id this build will fetch: one of the publisher's reader repos, nothing else. */
-export function isCanopyModelId(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    value.length <= 120 &&
-    new RegExp(`^${AUTHOR}/${PREFIX}[a-z0-9][a-z0-9._-]*$`).test(value)
-  );
-}
-
 /** Git's blob id: SHA-1 over `blob <size>\0` and the content. */
 function gitBlobId(content: Buffer): string {
   return createHash("sha1").update(`blob ${content.length}\0`).update(content).digest("hex");

@@ -254,19 +254,19 @@ export function CanopyRow({
 
   // Waiting on the user, and the screen shows it asking something: the
   // waiting ring takes a question mark. Only on a reading of the screen as it
-  // is now — the classifier's or the describer's, both tell a question from a
-  // finished turn — and only while Daintree itself sees the agent waiting.
+  // is now — the reader tells a question from a finished turn — and only while
+  // Daintree itself sees the agent waiting.
   const asking =
     item.kind === "question" &&
     card !== null &&
-    // The classifier's reading of the screen as it is now is enough: words
-    // still from an earlier one don't make the ask any less current.
+    // The reading of the screen as it is now is enough: words still from an
+    // earlier one don't make the ask any less current.
     !item.stale &&
-    // A screen that moved and has not been classified again yet.
+    // A screen that moved and has not been read again yet.
     !card.priorityFromEarlierRead &&
     // Never over the blocked mark: an observed error keeps its own shape. A
     // hand-back band is no bar: the passive classifier's fallback prompt is
-    // exactly the screen the describer can tell is a question.
+    // exactly the screen the reader can tell is a question.
     (row.band === "needs-you" || row.band === "review" || row.band === "done") &&
     row.run.agentState === "waiting";
 

@@ -428,7 +428,7 @@ export function normalizeScreenText(text: string): string {
 }
 
 /**
- * `text` when it is on the screen, else null — the describer may only quote.
+ * `text` when it is on the screen, else null — the reader may only quote.
  * A trailing key hint like "(esc)" or "(y)" is allowed to differ.
  */
 export function onScreen(text: string | null | undefined, screen: string): string | null {

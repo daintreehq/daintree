@@ -65,3 +65,63 @@ export function CanopyHostOffer({
     </section>
   );
 }
+
+/**
+ * The host the panel shows runs a Daintree from before Canopy read on the
+ * machine itself: its Canopy would send screens to a service that is gone.
+ * Nothing of it is shown or turned on from here until it is updated.
+ */
+export function CanopyHostOutdated({
+  hostName,
+  onTurnOff,
+}: {
+  hostName: string;
+  /** Present while Canopy is on there: still sending screens, it can be stopped from here. */
+  onTurnOff?: () => Promise<void>;
+}) {
+  const [pending, setPending] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const turnOff = () => {
+    if (!onTurnOff) return;
+    setPending(true);
+    setFailed(false);
+    onTurnOff().then(
+      () => setPending(false),
+      () => {
+        setPending(false);
+        setFailed(true);
+      }
+    );
+  };
+  return (
+    <section
+      aria-labelledby="canopy-host-outdated-title"
+      data-canopy-host-outdated=""
+      className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto p-10"
+    >
+      <div className="flex max-w-md flex-col gap-2">
+        <h2
+          id="canopy-host-outdated-title"
+          className="text-lg font-semibold tracking-tight text-text-primary"
+        >
+          Update Daintree on {hostName}
+        </h2>
+        <p className="text-sm leading-6 text-text-secondary">
+          {hostName} runs an older Daintree, whose Canopy reads screens with a service that has been
+          retired. Once it is updated, Canopy reads its agents on {hostName} itself, with a model it
+          downloads there.
+        </p>
+        {onTurnOff && (
+          <div className="flex items-center gap-3 pt-2">
+            <Button variant="outline" disabled={pending} onClick={turnOff}>
+              Turn off Canopy on {hostName}
+            </Button>
+            <p role="status" className="text-xs text-text-secondary">
+              {failed ? `Couldn't turn off Canopy on ${hostName}. Try again.` : ""}
+            </p>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}

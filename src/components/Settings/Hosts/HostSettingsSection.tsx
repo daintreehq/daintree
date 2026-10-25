@@ -11,6 +11,7 @@ import {
   type HostSettingsUpdateResult,
 } from "@shared/types/hostSettings";
 import { canopyLocalOn, canopyStopOn } from "@/components/Canopy/canopyTerms";
+import { canopyModelName } from "@shared/types/ipc/canopy";
 import { clientErrorText } from "@/utils/clientAppError";
 import { SettingsSection } from "../SettingsSection";
 import { SettingsDependents, SettingsEmptyRow, SettingsGroup, SettingsRow } from "../SettingsGroup";
@@ -25,6 +26,15 @@ interface HostSettingsSectionProps {
 }
 
 const NO_DEFAULT = "__none__";
+
+/** The models every host knows of; one published later shows by its size once a host picks it. */
+const KNOWN_MODELS = ["daintreehq/canopy-reader-17m", "daintreehq/canopy-reader-68m"];
+
+function modelOptions(current: string | null) {
+  const ids =
+    current && !KNOWN_MODELS.includes(current) ? [...KNOWN_MODELS, current] : KNOWN_MODELS;
+  return ids.map((id) => ({ value: id, label: canopyModelName(id) }));
+}
 
 const AGENT_OPTIONS = [
   { value: NO_DEFAULT, label: "None" },
@@ -150,6 +160,9 @@ export function HostSettingsSection({ hostId, hostName, connected }: HostSetting
   };
 
   const canopy = valueOf("canopyMode");
+  const canopyModel = valueOf("canopyModel");
+  // A host from before Canopy read locally has no model to name: it is updated before it is turned on.
+  const canopyLocal = snapshot?.settings.some((leaf) => leaf.key === "canopyModel") ?? false;
   const canopyHidden = canopy === "hidden";
   const canopyOn = canopy === "on";
 
@@ -212,10 +225,17 @@ export function HostSettingsSection({ hostId, hostName, connected }: HostSetting
                 />
               )}
             />
-            <SettingsDependents disabled={canopyHidden} reason="Show Canopy to turn it on">
+            <SettingsDependents
+              disabled={canopyHidden || (!canopyLocal && !canopyOn)}
+              reason={
+                canopyLocal
+                  ? "Show Canopy to turn it on"
+                  : `Update Daintree on ${hostName} to turn Canopy on there`
+              }
+            >
               <SettingsRow
                 label="Read agent terminals"
-                description={`When off, nothing leaves ${hostName} and Canopy deletes its readings there`}
+                description={`Downloads the model the first time. When off, Canopy lets the model go and deletes its readings there`}
                 disabled={busy}
                 control={({ labelId, descriptionId, disabled }) => (
                   <SettingsSwitch
@@ -229,6 +249,15 @@ export function HostSettingsSection({ hostId, hostName, connected }: HostSetting
                     aria-describedby={descriptionId}
                   />
                 )}
+              />
+              <SettingsSelect
+                label="Model"
+                description={`The model ${hostName} downloads and reads with. Light is enough for most; Best picks slightly better lines for about 5x the work`}
+                value={typeof canopyModel === "string" ? canopyModel : KNOWN_MODELS[0]!}
+                onValueChange={(next) => change("canopyModel", next)}
+                options={modelOptions(typeof canopyModel === "string" ? canopyModel : null)}
+                disabled={busy || !canopyLocal}
+                error={errorFor("canopyModel")}
               />
             </SettingsDependents>
             <SettingsSelect

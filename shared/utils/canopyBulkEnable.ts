@@ -1,4 +1,8 @@
-import type { CanopyMode, CanopySnapshot } from "../types/ipc/canopy.js";
+import {
+  readsWithHostedService,
+  type CanopyMode,
+  type CanopySnapshot,
+} from "../types/ipc/canopy.js";
 import type { HostId } from "../types/remoteHosts.js";
 import { decodeAppErrorWire } from "./appErrorWire.js";
 
@@ -122,6 +126,10 @@ async function enableOne(
     return "unsupported" in rest && rest.unsupported
       ? done(target, "unsupported", "This host's Daintree can't do this from here.", null)
       : done(target, "inaccessible", "Couldn't reach this host.", before);
+  }
+  // Never turned on where Canopy still sends screens to the retired hosted service.
+  if (readsWithHostedService(first)) {
+    return done(target, "unsupported", "Update Daintree on this host first.", null);
   }
   if (first.mode === "on") return done(target, "already-enabled", "Already on.", seenOf(first));
 

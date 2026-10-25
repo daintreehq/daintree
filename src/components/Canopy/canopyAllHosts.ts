@@ -7,12 +7,13 @@ import {
   type CanopyApi,
   type CanopyTerminalApi,
 } from "./canopyHostSource";
-import type {
-  CanopyReadMark,
-  CanopyScreenSearchTarget,
-  CanopySnapshot,
-  CanopyTerminalData,
-  CanopyTerminalView,
+import {
+  readsWithHostedService,
+  type CanopyReadMark,
+  type CanopyScreenSearchTarget,
+  type CanopySnapshot,
+  type CanopyTerminalData,
+  type CanopyTerminalView,
 } from "@shared/types/ipc/canopy";
 import type { FleetSnapshot } from "@shared/types/ipc/fleet";
 import type { HostId } from "@shared/types/remoteHosts";
@@ -58,16 +59,32 @@ export function mergeHostReadings(readings: readonly HostReading[]): {
   fleet: FleetSnapshot | null;
 } {
   const loadedFleets = readings.filter((reading) => reading.fleet !== null);
-  const loadedCanopies = readings.filter((reading) => reading.canopy !== null);
+  // A host still on the hosted service counts as off here: none of its readings
+  // are shown, in its cards or in the refinements its fleet rows carry.
+  const outdatedHosts = new Set(
+    readings
+      .filter((reading) => reading.canopy !== null && readsWithHostedService(reading.canopy))
+      .map((reading) => reading.hostId)
+  );
+  const loadedCanopies = readings
+    .filter((reading) => reading.canopy !== null)
+    .map((reading) =>
+      readsWithHostedService(reading.canopy!)
+        ? { ...reading, canopy: { ...reading.canopy!, activated: false } }
+        : reading
+    );
   const fleet: FleetSnapshot | null =
     loadedFleets.length === 0
       ? null
       : {
           runs: loadedFleets.flatMap(({ hostId, fleet: snapshot }) =>
-            snapshot!.runs.map((run) => ({
-              ...run,
-              runId: allHostsKey(hostId, run.runId),
-              workspaceId: allHostsKey(hostId, run.workspaceId),
+            snapshot!.runs.map(({ canopy: refinement, ...rest }) => ({
+              ...rest,
+              ...(refinement !== undefined && !outdatedHosts.has(hostId)
+                ? { canopy: refinement }
+                : {}),
+              runId: allHostsKey(hostId, rest.runId),
+              workspaceId: allHostsKey(hostId, rest.workspaceId),
             }))
           ),
           changedAt: Math.max(...loadedFleets.map(({ fleet: snapshot }) => snapshot!.changedAt)),
@@ -82,6 +99,7 @@ export function mergeHostReadings(readings: readonly HostReading[]): {
   const reading = loadedCanopies.filter(({ canopy }) => canopy!.activated);
   const failedRuns: string[] = [];
   for (const { hostId, canopy, fleet: hostFleet } of loadedCanopies) {
+    if (outdatedHosts.has(hostId)) continue;
     for (const runId of canopy!.failedRuns) failedRuns.push(allHostsKey(hostId, runId));
     // A provider failure on a host marks the runs it would have read.
     if (canopy!.lastError !== null) {

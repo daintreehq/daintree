@@ -110,7 +110,6 @@ describe("toCanopyReading", () => {
       options: ["1. Yes", "2. No"],
       action: "npm test",
       attentionScore: 92,
-      note: null,
       riskReason: null,
     });
     // A finished turn with work left uncommitted is never scored as cleanly done.

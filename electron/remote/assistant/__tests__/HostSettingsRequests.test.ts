@@ -18,6 +18,7 @@ type Values = Record<HostSettingKey, HostSettingValue>;
 function defaults(): Values {
   return {
     canopyMode: "unset",
+    canopyModel: "daintreehq/canopy-reader-17m",
     "agentDefaults.defaultAgent": "claude",
     "agentDefaults.assistantAgentId": null,
     "idleTerminalNotify.enabled": false,

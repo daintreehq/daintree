@@ -22,6 +22,7 @@ const HOST = "studio-01";
 function fakeHost() {
   const values: Record<HostSettingKey, HostSettingValue> = {
     canopyMode: "unset",
+    canopyModel: "daintreehq/canopy-reader-17m",
     "agentDefaults.defaultAgent": "claude",
     "agentDefaults.assistantAgentId": null,
     "idleTerminalNotify.enabled": false,

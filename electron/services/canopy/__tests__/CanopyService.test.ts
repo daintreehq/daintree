@@ -20,7 +20,6 @@ import {
 } from "../CanopyService.js";
 import {
   CanopyProviderError,
-  type CanopyPartialDescription,
   type ClassifierResult,
   type DescriberResult,
   type CanopyScreenInput,
@@ -58,11 +57,8 @@ interface Harness {
   snapshots: CanopySnapshot[];
 }
 
-type DescribeFn = (
-  input: CanopyScreenInput,
-  says: CanopyCategory,
-  onPartial?: (partial: CanopyPartialDescription) => void
-) => Promise<DescriberResult>;
+/** The words half of a reading, as each test wants it. */
+type DescribeFn = (input: CanopyScreenInput, says: CanopyCategory) => Promise<DescriberResult>;
 
 let harness: Harness | null = null;
 

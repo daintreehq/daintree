@@ -35,7 +35,7 @@ import { CanopyPlace } from "./CanopyPlace";
 import { CanopyPitch } from "./CanopyPitch";
 import { CANOPY_TITLE } from "./canopyTerms";
 import { CanopyHeaderCenter, CanopyHostPicker, useCanopyHostRows } from "./CanopyHostPicker";
-import { CanopyHostOffer } from "./CanopyHostOffer";
+import { CanopyHostOffer, CanopyHostOutdated } from "./CanopyHostOffer";
 import { useCanopyInboxData } from "./useCanopyInboxData";
 import { useCanopyInboxOrder } from "./useCanopyInboxOrder";
 import { useCanopyInboxSearch } from "./useCanopyInboxSearch";
@@ -55,6 +55,7 @@ import { ALL_HOSTS_ID, canopyOwnHostId } from "@/store/canopyStore";
 import { describeHostMenuState, type HostMenuRow } from "@/components/Hosts/hostModel";
 import { isNewWindowClick } from "@/components/Hosts/hostSwitching";
 import type { HostId } from "@shared/types/remoteHosts";
+import { readsWithHostedService } from "@shared/types/ipc/canopy";
 
 interface HostIssue {
   hostId: HostId;
@@ -170,6 +171,7 @@ function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow
   const isOpen = useCanopyStore((s) => s.isOpen);
   const close = useCanopyStore((s) => s.close);
   const activated = useCanopyStore((s) => s.snapshot?.activated ?? null);
+  const outdatedOwnHost = useCanopyStore((s) => s.outdatedHost);
   const applySnapshot = useCanopyStore((s) => s.applySnapshot);
   // Another host the panel shows, or null for the window's own.
   const hostId = useCanopyStore((s) => s.hostId);
@@ -320,6 +322,30 @@ function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow
             whatever opened it — a terminal behind the scrim would take the
             keys — and not on Close, where a reflexive Enter would dismiss it. */}
         <div ref={loadingRef} tabIndex={-1} className="flex-1" aria-busy="true" />
+      </AppDialog>
+    );
+  }
+
+  // The window's own host is on a Daintree from before Canopy read locally:
+  // nothing it read is shown, and Canopy isn't offered until it is updated.
+  if (outdatedOwnHost && !allHosts) {
+    return (
+      <AppDialog
+        isOpen={isOpen}
+        onClose={close}
+        size="workspace"
+        maxHeight="h-[min(90vh,1100px)]"
+        restoreFocusTo={restoreOnReplace}
+        preferRestoreFocusTo
+        backdrop={backdrop}
+        data-testid="canopy-dialog"
+      >
+        <AppDialog.Header>
+          <AppDialog.Title icon={<Telescope />}>{CANOPY_TITLE}</AppDialog.Title>
+          <CanopyHeaderCenter>{hostPicker}</CanopyHeaderCenter>
+          <AppDialog.CloseButton />
+        </AppDialog.Header>
+        <CanopyHostOutdated hostName="this host" />
       </AppDialog>
     );
   }
@@ -710,8 +736,14 @@ function CanopyInbox({
   // Connecting stays quiet only until there are rows: rows kept from before say they are old.
   const hostTrouble =
     otherHost && (remote.error !== null || linkDown) && !(connecting && fleet === null);
+  // That host runs a Daintree from before Canopy read locally, and still sends
+  // its screens to the former hosted service: none of it is shown here, nor is
+  // it offered to be turned on, until the host is updated.
+  const hostOutdated = otherHost && canopy != null && readsWithHostedService(canopy);
   // Canopy is off on that host: its own offer, for it alone.
-  const hostOffer = otherHost && canopy?.activated === false;
+  const hostOffer = otherHost && canopy?.activated === false && !hostOutdated;
+  // Either way the host's list is not shown.
+  const hostHeld = hostOffer || hostOutdated;
 
   const { onAssistantKeyDown, onAgentStepKeyDownCapture, onNavigationKeyDown, onSearchKeyDown } =
     useCanopyInboxKeyboard({
@@ -743,9 +775,11 @@ function CanopyInbox({
       ? `Can't reach ${hostName}`
       : otherHost && fleet === null && connecting
         ? `Connecting to ${hostName}…`
-        : hostOffer
-          ? `Canopy is off on ${hostName}`
-          : null;
+        : hostOutdated
+          ? `Update Daintree on ${hostName}`
+          : hostOffer
+            ? `Canopy is off on ${hostName}`
+            : null;
   const summaryLine =
     fleet === null
       ? "Reading agents…"
@@ -808,6 +842,16 @@ function CanopyInbox({
             text: remoteHost ? `Connecting to ${name}…` : `Reading ${name}…`,
             action: null,
             act: null,
+          },
+        ];
+      }
+      if (readsWithHostedService(reading.canopy)) {
+        return [
+          {
+            hostId: reading.hostId,
+            text: `Update Daintree on ${name} to read its agents`,
+            action: "Show",
+            act: () => useCanopyStore.getState().setHostId(reading.hostId),
           },
         ];
       }
@@ -964,7 +1008,7 @@ function CanopyInbox({
       // The panel lands on its first run itself, two frames in; the dialog's own
       // first-control focus would race it. With no rows to land on, the first
       // control takes focus instead of leaving it on whatever opened the panel.
-      initialFocus={items.length > 0 && !hostOffer ? "none" : "first"}
+      initialFocus={items.length > 0 && !hostHeld ? "none" : "first"}
       restoreFocusTo={() => focusAfterClose() ?? restoreOpener()}
       preferRestoreFocusTo
       backdrop={backdrop}
@@ -1049,6 +1093,19 @@ function CanopyInbox({
             Connecting to {hostName}…
           </p>
         )}
+        {hostOutdated && (
+          <CanopyHostOutdated
+            hostName={hostName}
+            {...(canopy?.mode === "on"
+              ? {
+                  onTurnOff: async () => {
+                    await api.setMode("unset");
+                    if (useCanopyStore.getState().hostId === hostId) remote.retry();
+                  },
+                }
+              : {})}
+          />
+        )}
         {hostOffer && (
           <CanopyHostOffer
             hostName={hostName}
@@ -1062,7 +1119,7 @@ function CanopyInbox({
             }}
           />
         )}
-        {!hostOffer && (fleet?.degraded === true || canopy?.lastError) && (
+        {!hostHeld && (fleet?.degraded === true || canopy?.lastError) && (
           <div className="flex shrink-0 flex-col gap-2 border-b border-border-default p-3">
             {/* Daintree can't see its agents right now: the rows are the last
                 it saw, and nothing is read until it can again. */}
@@ -1090,7 +1147,7 @@ function CanopyInbox({
             )}
           </div>
         )}
-        {!hostOffer && (items.length > 0 || listsAssistants) && (
+        {!hostHeld && (items.length > 0 || listsAssistants) && (
           // An inbox: what needs you down a sidebar, most urgent first, the rest
           // folded away beneath it, and the selected agent's own terminal beside
           // it, drawn as its pane.
@@ -1456,7 +1513,7 @@ function CanopyInbox({
             </div>
           </div>
         )}
-        {!hostOffer &&
+        {!hostHeld &&
           fleet !== null &&
           !fleet.degraded &&
           items.length === 0 &&

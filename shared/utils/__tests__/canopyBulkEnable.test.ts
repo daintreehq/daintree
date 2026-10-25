@@ -332,4 +332,12 @@ describe("previewCanopyModes", () => {
     expect(hidden.state.calls).toEqual([]);
     expect(hidden.state.released).toBe(1);
   });
+
+  it("never turns Canopy on where it still reads with the retired hosted service", async () => {
+    // A host from before #14448 says its tier in every snapshot.
+    const old = fakeHost(Object.assign(snap("unset", 0), { tier: "free" }));
+    const [result] = await run({ old: old.transport });
+    expect(result).toMatchObject({ outcome: "unsupported" });
+    expect(old.state.calls).toEqual([]);
+  });
 });

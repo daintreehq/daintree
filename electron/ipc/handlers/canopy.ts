@@ -132,6 +132,10 @@ function currentPlan(): CanopyPlan {
 }
 
 /** The model Canopy reads with, as chosen; the default until the user picks another. */
+export function selectedCanopyModel(): string {
+  return selectedModel();
+}
+
 function selectedModel(): string {
   const chosen: unknown = store.get("canopyModel");
   return isCanopyModelId(chosen) ? chosen : DEFAULT_CANOPY_MODEL;

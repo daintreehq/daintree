@@ -419,9 +419,8 @@ export function itemHandled(item: CanopyItem): boolean {
 }
 
 /**
- * The latest reading — the classifier's, or the describer's once it has
- * written the card — says the agent finished its task, and Daintree itself
- * sees it stopped rather than working. A reading only an LLM can make, offered
+ * The latest reading says the agent finished its task, and Daintree itself
+ * sees it stopped rather than working. A reading only a model can make, offered
  * as a suggestion: the panel suggests closing the terminal, it never does.
  */
 export function itemLooksDone(item: CanopyItem): boolean {
@@ -461,12 +460,11 @@ export function itemNeedsAttention(item: CanopyItem): boolean {
   // something left to check, decide or answer. A finished turn with nothing
   // left (40), an idle session (20) or work going normally (5) stays in the
   // list but is not counted: a count that includes what needs no action
-  // teaches the user to stop reading it. The quick classifier's probability
-  // leans towards "needs you" (it passed fresh, idle sessions at 0.55–0.72) —
-  // right for a gate, wrong for the count, and counting by it made a run flip
-  // in and out of the count as the classifier's and the describer's readings
-  // took turns. Its own priority (a finished turn at 50, an ask at 86–92)
-  // sits on the same bands as the describer's score.
+  // teaches the user to stop reading it. The attention probability leans
+  // towards "needs you" (it passes fresh, idle sessions) — right for a gate,
+  // wrong for the count, and counting by it made a run flip in and out of the
+  // count. Its priority (a finished turn at 50, an ask at 86–92) sits on the
+  // same bands as the words' score.
   return readPriority(item) >= NEEDS_YOU_FLOOR;
 }
 

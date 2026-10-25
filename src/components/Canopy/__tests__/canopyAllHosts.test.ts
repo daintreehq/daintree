@@ -133,6 +133,51 @@ describe("mergeHostReadings", () => {
     ]);
   });
 
+  it("shows nothing a host still on the retired hosted service read", () => {
+    const { canopy: merged } = mergeHostReadings([
+      {
+        hostId: "old",
+        // A host from before #14448 says its tier in every snapshot.
+        canopy: Object.assign(canopy({ cards: [cardFor("t1")] }), { tier: "free" }),
+        fleet: fleet([run("t1")]),
+        error: null,
+      },
+      {
+        hostId: "new",
+        canopy: canopy({ cards: [cardFor("t2")] }),
+        fleet: fleet([run("t2")]),
+        error: null,
+      },
+    ]);
+    expect(merged!.cards.map((card) => card.runId)).toEqual([allHostsKey("new", "t2")]);
+  });
+
+  it("drops the refinements and failures of a host still on the hosted service", () => {
+    const refined = {
+      ...run("t1"),
+      canopy: { kind: "not-asking" as const, readAt: 1, quote: null, seen: false },
+    } as unknown as FleetRunRow;
+    const readings: HostReading[] = [
+      {
+        hostId: "old",
+        canopy: Object.assign(canopy({ lastError: "boom", failedRuns: ["t1"] }), { tier: "free" }),
+        fleet: fleet([refined]),
+        error: null,
+      },
+      {
+        hostId: "new",
+        canopy: canopy(),
+        fleet: fleet([{ ...refined, runId: "t2" } as FleetRunRow]),
+        error: null,
+      },
+    ];
+    const { fleet: merged, canopy: snapshot } = mergeHostReadings(readings);
+    const byId = new Map(merged!.runs.map((r) => [r.runId, r]));
+    expect(byId.get(allHostsKey("old", "t1"))!.canopy).toBeUndefined();
+    expect(byId.get(allHostsKey("new", "t2"))!.canopy).toBeDefined();
+    expect(snapshot!.failedRuns).toEqual([]);
+  });
+
   it("keys cards by host and drops the screen readings of a host that is off", () => {
     const card = cardFor("t1");
     const { canopy: merged } = mergeHostReadings([

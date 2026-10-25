@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   HostSettingsSnapshot,
@@ -13,7 +13,11 @@ const api = {
   update: vi.fn<(payload: HostSettingsUpdatePayload) => Promise<HostSettingsUpdateResult>>(),
 };
 
-function snapshot(canopyMode = "unset", idle = false): HostSettingsSnapshot {
+function snapshot(
+  canopyMode = "unset",
+  idle = false,
+  { readsLocally = true }: { readsLocally?: boolean } = {}
+): HostSettingsSnapshot {
   return {
     hostId: "studio-01",
     hostName: "Studio",
@@ -21,6 +25,10 @@ function snapshot(canopyMode = "unset", idle = false): HostSettingsSnapshot {
     instanceId: "launch-1",
     settings: [
       { key: "canopyMode", value: canopyMode, revision: "3" },
+      // A host from before Canopy read locally has no model to report.
+      ...(readsLocally
+        ? [{ key: "canopyModel" as const, value: "daintreehq/canopy-reader-17m", revision: "r-m" }]
+        : []),
       { key: "agentDefaults.defaultAgent", value: "claude", revision: "r-agent" },
       { key: "agentDefaults.assistantAgentId", value: null, revision: "r-assist" },
       { key: "idleTerminalNotify.enabled", value: idle, revision: `r-idle-${idle}` },
@@ -97,6 +105,28 @@ describe("HostSettingsSection (#14167)", () => {
     expect(switchNamed("Show Canopy").getAttribute("aria-checked")).toBe("false");
     expect(switchNamed("Read agent terminals").hasAttribute("disabled")).toBe(true);
     expect(screen.getByText("Show Canopy to turn it on")).toBeTruthy();
+  });
+
+  it("shows the model the host reads with", async () => {
+    api.read.mockResolvedValue({
+      ...snapshot("on"),
+      settings: snapshot("on").settings.map((leaf) =>
+        leaf.key === "canopyModel" ? { ...leaf, value: "daintreehq/canopy-reader-68m" } : leaf
+      ),
+    });
+    await renderSection();
+    expect(screen.getByRole("combobox", { name: "Model" }).textContent).toContain("Best");
+  });
+
+  it("holds an older host's Canopy off until Daintree there is updated, but lets it be turned off", async () => {
+    api.read.mockResolvedValue(snapshot("unset", false, { readsLocally: false }));
+    await renderSection();
+    expect(switchNamed("Read agent terminals").hasAttribute("disabled")).toBe(true);
+    expect(screen.getByText("Update Daintree on Studio to turn Canopy on there")).toBeTruthy();
+    api.read.mockResolvedValue(snapshot("on", false, { readsLocally: false }));
+    cleanup();
+    await renderSection();
+    expect(switchNamed("Read agent terminals").hasAttribute("disabled")).toBe(false);
   });
 
   it("reports a change made on the host meanwhile instead of writing over it", async () => {

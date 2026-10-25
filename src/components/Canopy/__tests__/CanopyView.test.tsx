@@ -510,7 +510,6 @@ describe("CanopyView", () => {
       ...canopySnapshot,
       mode: "unset" as const,
       activated: false,
-      tier: "free" as const,
     };
     const canopy = installElectron(off);
     useCanopyStore.setState({ snapshot: off, mode: "unset" });
@@ -543,7 +542,6 @@ describe("CanopyView", () => {
       ...canopySnapshot,
       mode: "unset" as const,
       activated: false,
-      tier: "free" as const,
     };
     const canopy = installElectron(off);
     useCanopyStore.setState({ snapshot: off, mode: "unset" });
@@ -577,7 +575,6 @@ describe("CanopyView", () => {
       ...canopySnapshot,
       mode: "unset" as const,
       activated: false,
-      tier: "free" as const,
     };
     const canopy = installElectron(off);
     useCanopyStore.setState({ snapshot: off, mode: "unset" });
@@ -609,7 +606,6 @@ describe("CanopyView", () => {
       ...canopySnapshot,
       mode: "unset" as const,
       activated: false,
-      tier: "free" as const,
     };
     const canopy = installElectron(off);
     canopy.setMode.mockRejectedValueOnce(new Error("rate limited"));
