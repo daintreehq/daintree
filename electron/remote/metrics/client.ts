@@ -24,7 +24,8 @@ import {
 } from "../../../shared/types/remoteHosts.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { Lane } from "../link/frames.js";
-import { ControlKind } from "../link/messages.js";
+import { ControlKind, type HostSummaryFrame } from "../link/messages.js";
+import { stampNow, type ElapsedStamp } from "../link/elapsed.js";
 import type { LinkSession } from "../link/session.js";
 import type { FleetCaller } from "./hostOps.js";
 import {
@@ -38,6 +39,7 @@ import {
 } from "./linkMethods.js";
 import { boundProcessInventory } from "./processInventoryWire.js";
 import { HOST_METRICS_INTERVAL_MS } from "./sampler.js";
+import { receiveSummary, type SummaryReceipt } from "./summaryReceipt.js";
 import { WorktreeChangeWatch } from "./worktreeChanges.js";
 import { EmptyPayloadSchema } from "../host/linkMethods.js";
 import { connectionKey } from "../client/connection.js";
@@ -100,6 +102,8 @@ export interface HostMetricsClientOptions {
   worktreesChangedDelayMs?: number;
   /** How long a fleet submit whose answer was lost waits for its host to come back and say. */
   fleetReconcileMs?: number;
+  /** This machine's clocks, for when a summary arrived; real ones by default. */
+  clock?: () => ElapsedStamp;
 }
 
 /** Long enough for a dropped link's automatic reconnect; short enough not to hold a broadcast. */
@@ -207,6 +211,8 @@ function requireString(value: unknown, field: string, max: number): string {
  */
 export class HostMetricsClient {
   private readonly rings = new Map<HostId, HostMetricsSummary[]>();
+  /** When each held summary arrived and how old it could be then, kept beside it rather than in it. */
+  private readonly receipts = new WeakMap<HostMetricsSummary, SummaryReceipt>();
   /** Each known host's address: a new address is another machine, whose history starts empty. */
   private readonly known = new Map<HostId, string>();
   /** Hosts dialled for their notifications, so turning them on dials once, not on every change. */
@@ -254,6 +260,11 @@ export class HostMetricsClient {
 
   latest(hostId: HostId): HostMetricsSummary | null {
     return this.rings.get(hostId)?.[0] ?? null;
+  }
+
+  /** When a summary this client holds arrived, and what its frame proved about its age (#14462). */
+  receiptOf(summary: HostMetricsSummary): SummaryReceipt | null {
+    return this.receipts.get(summary) ?? null;
   }
 
   /** Agents a connected host last reported working and waiting; unknown while it isn't connected. */
@@ -423,9 +434,18 @@ export class HostMetricsClient {
     return { supported: true, inventory: displaySafeInventory(parsed.data) };
   }
 
-  /** Record a summary: the host's own id in it is replaced by the id this Shell knows it by. */
-  record(hostId: HostId, summary: HostMetricsSummary): void {
+  /**
+   * Record a summary: the host's own id in it is replaced by the id this Shell
+   * knows it by, and the frame's timing is kept beside it, never shown.
+   */
+  record(hostId: HostId, frame: HostSummaryFrame, session?: LinkSession): void {
+    const at = (this.options.clock ?? stampNow)();
+    const { timing, ...summary } = frame;
     const stamped: HostMetricsSummary = { ...summary, hostId };
+    this.receipts.set(
+      stamped,
+      receiveSummary(timing, (nonce) => session?.pingSentAt(nonce) ?? null, at)
+    );
     let ring = this.rings.get(hostId);
     if (!ring) {
       ring = [];
@@ -470,7 +490,9 @@ export class HostMetricsClient {
   }
 
   private wire(hostId: HostId, session: LinkSession): void {
-    session.on(Lane.CONTROL, ControlKind.HOST_SUMMARY, (summary) => this.record(hostId, summary));
+    session.on(Lane.CONTROL, ControlKind.HOST_SUMMARY, (frame) =>
+      this.record(hostId, frame, session)
+    );
     session.registerCallHandler(MetricsLinkMethod.ATTENTION, AttentionPayloadSchema, (payload) => {
       const descriptor = this.options.registry.get(hostId);
       // Opt-in per host, and off until the user turns it on.

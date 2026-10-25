@@ -218,6 +218,27 @@ describe("LinkSession liveness", () => {
     expect(host.isOpen).toBe(true);
   });
 
+  it("numbers its pings and tells the peer's newest one, for a summary to be dated by (#14462)", async () => {
+    let t = 500;
+    const { host, client } = await pair({}, { clock: () => ({ wall: t, mono: t }) });
+    expect(host.peerPingNonce).toBeNull();
+    client.ping();
+    t = 900;
+    client.ping();
+    await waitFor(() => host.peerPingNonce === 1);
+    expect(client.pingSentAt(0)).toEqual({ wall: 500, mono: 500 });
+    expect(client.pingSentAt(1)).toEqual({ wall: 900, mono: 900 });
+    expect(client.pingSentAt(2)).toBeNull();
+    // The answer to each still measures the round trip.
+    await waitFor(() => client.rttMs !== null);
+    for (let i = 0; i < 20; i += 1) client.ping();
+    // The newest 16 of the 22 sent.
+    for (let nonce = 0; nonce <= 5; nonce += 1) expect(client.pingSentAt(nonce)).toBeNull();
+    for (let nonce = 6; nonce <= 21; nonce += 1) expect(client.pingSentAt(nonce)).not.toBeNull();
+    client.close("done");
+    expect(client.pingSentAt(21)).toBeNull();
+  });
+
   it("closes a session that stops hearing from its peer", async () => {
     const { a, b } = await socketPair(dir);
     const session = new LinkSession(a, { role: "host", pingIntervalMs: 0, idleTimeoutMs: 40 });

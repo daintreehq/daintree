@@ -1,6 +1,8 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostMetricsSummary } from "../../../../shared/types/remoteHosts.js";
+import { SummaryLoop } from "../../metrics/summaryLoop.js";
+import type { SummaryReceipt } from "../../metrics/summaryReceipt.js";
 import type { LaneWake } from "../../../services/mcp-server/terminalNotify.js";
 import { AGENT_DIRECTORY_BYTES_MAX } from "../../../../shared/types/agentDirectory.js";
 import {
@@ -70,10 +72,12 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
   let ids: number;
   let local: LocalMcpRelay;
   let latestSummary: (() => HostMetricsSummary | null) | undefined;
+  let summaryReceipt: ((summary: HostMetricsSummary) => SummaryReceipt | null) | undefined;
   let runtime: HostCallRuntime;
 
   beforeEach(() => {
     latestSummary = undefined;
+    summaryReceipt = undefined;
     runs = new Map([["a", { ...RUN_A }]]);
     projects = [
       { id: "proj-1", name: "daintree", path: "/repos/daintree" },
@@ -129,6 +133,7 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
         name: () => "greg-mbp",
         projects: async () => projects,
         latestSummary: () => latestSummary?.() ?? null,
+        summaryReceipt: (summary) => summaryReceipt?.(summary) ?? null,
         relayCall: (payload) => local.relayCall(payload),
       },
       now: () => 1000,
@@ -324,6 +329,35 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
         memoryAvailableBytes: 26e9,
         thermal: null,
       });
+    });
+
+    it("ages this machine's sample from when it was read, whatever its wall clock did (#14462)", async () => {
+      const loop = new SummaryLoop({
+        sample: async () =>
+          ({
+            sampledAt: 1e12,
+            platform: "darwin",
+            cpuPercent: 25,
+            cpuLogicalCoreCount: 12,
+            memoryPressure: "normal",
+            memoryUsedBytes: 10e9,
+            memoryTotalBytes: 36e9,
+            thermal: null,
+          }) as HostMetricsSummary,
+      });
+      const off = loop.subscribe(() => {});
+      await vi.waitFor(() => expect(loop.latest()).not.toBeNull());
+      latestSummary = () => loop.latest();
+      summaryReceipt = (summary) => loop.receiptOf(summary);
+      const listed = await runtime.list("a");
+      if (!listed.ok) throw new Error("refused");
+      expect(listed.value.hosts[0]?.load).toMatchObject({
+        sampledAt: 1e12,
+        stale: false,
+        staleReason: null,
+        cpuBusyCores: 3,
+      });
+      off();
     });
 
     it("lists this machine's CLIs as observed while its sample is fresh, stale after (#14461)", async () => {

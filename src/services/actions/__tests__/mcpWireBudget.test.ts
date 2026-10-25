@@ -879,7 +879,12 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // notice delivery, and the host as observed (link, last seen, the sample's
   // time and the three figures a watch reads), so a notice is evidence rather
   // than a verdict. Assistant-only, so the external ceiling does not move.
-  const MAX_COHORT_PAYLOAD_BYTES = 151_050;
+  // 151_050 → 151_340 for #14462, measured at 151_316 B (+308): each host
+  // load's `receivedAt` and `staleReason`, and `ageMs` now nullable, so a
+  // sample's age is bounded without comparing clocks and an unbounded one
+  // says so. Output only, and `host.list` is assistant-only, so the external
+  // ceiling does not move.
+  const MAX_COHORT_PAYLOAD_BYTES = 151_340;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

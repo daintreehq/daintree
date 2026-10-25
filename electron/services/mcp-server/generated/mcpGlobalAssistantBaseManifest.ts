@@ -391,13 +391,30 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
                       sampledAt: {
                         type: "number",
                       },
+                      receivedAt: {
+                        type: ["number", "null"],
+                      },
                       ageMs: {
-                        type: "number",
+                        description: "At most this old. Null: unknown.",
+                        type: ["number", "null"],
                       },
                       stale: {
                         type: "boolean",
                         description:
                           "Too old to trust: the live figures below are null. Not a zero reading.",
+                      },
+                      staleReason: {
+                        anyOf: [
+                          {
+                            type: "string",
+                            enum: ["age-limit", "clock-uncertain"],
+                          },
+                          {
+                            type: "null",
+                          },
+                        ],
+                        description:
+                          "clock-uncertain: no age bound, and its timestamp is off this clock.",
                       },
                       platform: {
                         type: "string",
@@ -477,8 +494,10 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
                     },
                     required: [
                       "sampledAt",
+                      "receivedAt",
                       "ageMs",
                       "stale",
+                      "staleReason",
                       "platform",
                       "cpuPercent",
                       "cpuLogicalCores",

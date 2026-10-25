@@ -7,6 +7,7 @@ import {
   RpcKind,
   frameToMessage,
   messageToFrame,
+  type HostSummaryFrame,
 } from "../messages.js";
 import { parseInboundFrame } from "../schemas.js";
 import { TEST_HANDSHAKE } from "./linkTestUtils.js";
@@ -144,6 +145,29 @@ describe("link messages", () => {
     expect(() =>
       summary({ drivers: Array.from({ length: MAX_HOST_SUMMARY_DRIVERS + 1 }, () => driver) })
     ).toThrow();
+  });
+
+  it("carries a summary's timing, and one from a host that sends none (#14462)", () => {
+    const timed = hostSummary({ timing: { sampleAgeMs: 120, afterPing: 4 } }) as HostSummaryFrame;
+    expect(timed.timing).toEqual({ sampleAgeMs: 120, afterPing: 4 });
+    expect(hostSummary({})).not.toHaveProperty("timing");
+    for (const timing of [
+      { sampleAgeMs: -1, afterPing: 4 },
+      { sampleAgeMs: 1, afterPing: 1.5 },
+      { sampleAgeMs: 1 },
+    ]) {
+      expect(() => hostSummary({ timing })).toThrow();
+    }
+  });
+
+  it("carries a ping's nonce, and a ping from a peer that numbers none", () => {
+    const ping = (body: object) =>
+      parseInboundFrame(
+        messageToFrame({ lane: Lane.CONTROL, kind: ControlKind.PING, body } as never)
+      ).body;
+    expect(ping({ sentAt: 1, nonce: 3 })).toEqual({ sentAt: 1, nonce: 3 });
+    expect(ping({ sentAt: 1 })).toEqual({ sentAt: 1 });
+    expect(() => ping({ sentAt: 1, nonce: -1 })).toThrow();
   });
 
   it("round-trips a structured message through frame bytes", () => {

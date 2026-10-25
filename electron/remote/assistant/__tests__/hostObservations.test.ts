@@ -10,7 +10,6 @@ import type {
   HostHandshakeInfo,
   HostMetricsSummary,
 } from "../../../../shared/types/remoteHosts.js";
-import { HOST_LOAD_STALE_MS } from "../hostLoad.js";
 import { projectHostAgentClis, projectHostBuild, projectHostLink } from "../hostObservations.js";
 
 const HANDSHAKE: HostHandshakeInfo = {
@@ -263,7 +262,7 @@ describe("projectHostBuild (#14461)", () => {
 
 describe("projectHostAgentClis (#14461)", () => {
   it("lists a fresh sample from a live link as observed", () => {
-    const clis = projectHostAgentClis(summary(), true, 1000 + HOST_LOAD_STALE_MS);
+    const clis = projectHostAgentClis(summary(), true, true);
     expect(clis).toEqual({
       coverage: "observed",
       sampledAt: 1000,
@@ -277,7 +276,7 @@ describe("projectHostAgentClis (#14461)", () => {
   });
 
   it("keeps an old sample's CLIs as stale", () => {
-    expect(projectHostAgentClis(summary(), true, 1001 + HOST_LOAD_STALE_MS)).toEqual({
+    expect(projectHostAgentClis(summary(), true, false)).toEqual({
       coverage: "stale",
       sampledAt: 1000,
       installed: [
@@ -289,15 +288,11 @@ describe("projectHostAgentClis (#14461)", () => {
   });
 
   it("keeps a sample from a host that is no longer connected as stale, however recent", () => {
-    expect(projectHostAgentClis(summary(), false, 1000).coverage).toBe("stale");
-  });
-
-  it("treats a sample far ahead of this clock as stale", () => {
-    expect(projectHostAgentClis(summary({ sampledAt: 1e12 }), true, 1000).coverage).toBe("stale");
+    expect(projectHostAgentClis(summary(), false, true).coverage).toBe("stale");
   });
 
   it("is unknown with no summary", () => {
-    expect(projectHostAgentClis(null, true, 1000)).toEqual({
+    expect(projectHostAgentClis(null, true, true)).toEqual({
       coverage: "unknown",
       sampledAt: null,
       installed: [],
@@ -306,7 +301,7 @@ describe("projectHostAgentClis (#14461)", () => {
   });
 
   it("reads an empty list as unknown, not as nothing installed", () => {
-    expect(projectHostAgentClis(summary({ agentClis: [] }), true, 1000)).toEqual({
+    expect(projectHostAgentClis(summary({ agentClis: [] }), true, true)).toEqual({
       coverage: "unknown",
       sampledAt: 1000,
       installed: [],
@@ -322,7 +317,7 @@ describe("projectHostAgentClis (#14461)", () => {
         ] as never,
       }),
       true,
-      1000
+      true
     );
     expect(clis.installed).toEqual([{ agentId: "a".repeat(64), version: "1.0" }]);
   });
@@ -332,7 +327,7 @@ describe("projectHostAgentClis (#14461)", () => {
       agentId: `agent-${i}`,
       version: "1".repeat(200),
     }));
-    const clis = projectHostAgentClis(summary({ agentClis: many }), true, 1000);
+    const clis = projectHostAgentClis(summary({ agentClis: many }), true, true);
     expect(clis.installed).toHaveLength(HOST_LIST_CLIS_MAX);
     expect(clis.omitted).toBe(5);
     expect(clis.installed[0]!.version).toHaveLength(64);

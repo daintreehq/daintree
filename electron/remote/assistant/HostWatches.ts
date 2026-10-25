@@ -19,6 +19,8 @@ import { sanitizeNotifyNote } from "../../../shared/types/terminalNotify.js";
 import type { LaneWake, LaneWakeOutcome } from "../../services/mcp-server/terminalNotify.js";
 import type { HostWatchNotice } from "../../services/mcp-server/noticeFormat.js";
 import { createLogger } from "../../utils/logger.js";
+import type { ElapsedStamp } from "../link/elapsed.js";
+import { sampleFreshness } from "../metrics/summaryReceipt.js";
 import { projectHostLoad } from "./hostLoad.js";
 import { projectHostLink } from "./hostObservations.js";
 import type { ObservedHost, OpenRun } from "./HostCallRuntime.js";
@@ -48,6 +50,8 @@ export interface HostWatchesDeps {
     wake: LaneWake
   ): void;
   now(): number;
+  /** This machine's clocks, for how old a sample is; `now` and the monotonic clock by default. */
+  clock?(): ElapsedStamp;
   newId(): string;
 }
 
@@ -509,7 +513,13 @@ export class HostWatches {
 
   private observe(host: ObservedHost): HostWatchObserved {
     const now = this.deps.now();
-    const load = host.summary ? projectHostLoad(host.summary, now) : null;
+    const stamp = this.deps.clock?.() ?? { wall: now, mono: performance.now() };
+    const load = host.summary
+      ? projectHostLoad(
+          host.summary,
+          sampleFreshness(host.summary, host.summaryReceipt ?? null, stamp)
+        )
+      : null;
     return {
       observedAt: now,
       link: projectHostLink(host.connection, host.disconnectedByPerson === true).status,

@@ -245,6 +245,7 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
       // The sampler reads macOS and treats everything else as Linux, so a
       // Windows machine has no measurement to offer rather than a borrowed one.
       latestSummary: () => (process.platform === "win32" ? null : getLocalSummaryLoop().latest()),
+      summaryReceipt: (summary) => getLocalSummaryLoop().receiptOf(summary),
       relayCall: (payload) => local.relayCall(payload),
       throwawayCall: (payload) => local.throwawayCall(payload),
       agents: (options) => getLocalAgentDirectory().read(options),

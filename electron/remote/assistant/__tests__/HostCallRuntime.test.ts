@@ -61,6 +61,7 @@ describe("HostCallRuntime (#13493, #13496)", () => {
       client: () => null,
       hosts: () => hosts,
       now: () => clock,
+      clock: () => ({ wall: clock, mono: clock }),
       inLocalView: () => true,
       controlEnabled: (hostId) => control.has(hostId),
       listHostProjects,
@@ -143,8 +144,10 @@ describe("HostCallRuntime (#13493, #13496)", () => {
           lastSeenAt: 900,
           load: {
             sampledAt: 950,
+            receivedAt: null,
             ageMs: 50,
             stale: false,
+            staleReason: null,
             platform: "darwin",
             cpuPercent: 40,
             cpuLogicalCores: 14,
@@ -223,8 +226,25 @@ describe("HostCallRuntime (#13493, #13496)", () => {
         thermal: "fair",
       };
 
-      async function loadOf(summary: object) {
-        hosts = [host({ connection: CONNECTED, summary: summary as never })];
+      /** A frame that arrived at `at` with its age bounded then, as the metrics client records it. */
+      const receipt = (
+        at: number,
+        maxAgeMs: number | null,
+        hostAgeMs = maxAgeMs,
+        timed = true
+      ) => ({
+        receivedAt: at,
+        at: { wall: at, mono: at },
+        hostAgeMs,
+        maxAgeMs,
+        timed,
+      });
+
+      async function loadOf(
+        summary: object,
+        summaryReceipt: ReturnType<typeof receipt> | null = null
+      ) {
+        hosts = [host({ connection: CONNECTED, summary: summary as never, summaryReceipt })];
         const listed = await runtime.list("a");
         if (!listed.ok) throw new Error("refused");
         expect(HostListResultSchema.parse(listed.value)).toEqual(listed.value);
@@ -232,9 +252,10 @@ describe("HostCallRuntime (#13493, #13496)", () => {
       }
 
       it("nulls the live figures of a stale sample but keeps what hardware fixes", async () => {
-        const load = await loadOf({ ...fresh, sampledAt: 1000 - 16_000 });
+        const load = await loadOf({ ...fresh, sampledAt: 1000 - 16_000 }, receipt(1000, 16_000));
         expect(load).toMatchObject({
           stale: true,
+          staleReason: "age-limit",
           ageMs: 16_000,
           cpuLogicalCores: 8,
           memoryTotalBytes: 16e9,
@@ -248,11 +269,65 @@ describe("HostCallRuntime (#13493, #13496)", () => {
         });
       });
 
-      it("treats a timestamp from the future as unusable, not fresh", async () => {
-        expect(await loadOf({ ...fresh, sampledAt: 1000 + 60_000 })).toMatchObject({
+      it("treats a timestamp far from this clock, with nothing to bound it, as clock-uncertain", async () => {
+        for (const sampledAt of [1000 + 60_000, 1000 - 60_000]) {
+          expect(
+            await loadOf({ ...fresh, sampledAt }, receipt(1000, null, null, false))
+          ).toMatchObject({
+            stale: true,
+            staleReason: "clock-uncertain",
+            ageMs: null,
+            receivedAt: 1000,
+            cpuPercent: null,
+            memoryAvailableBytes: null,
+          });
+        }
+      });
+
+      it("trusts a bounded sample whatever the host's clock says (#14462)", async () => {
+        for (const sampledAt of [1000 + 60_000, 1000 - 60_000]) {
+          const load = await loadOf({ ...fresh, sampledAt }, receipt(1000, 2000));
+          expect(load).toMatchObject({
+            sampledAt,
+            receivedAt: 1000,
+            ageMs: 2000,
+            stale: false,
+            staleReason: null,
+            cpuPercent: 50,
+            memoryAvailableBytes: 12e9,
+            memoryPressure: "warn",
+          });
+        }
+      });
+
+      it("keeps a cached sample stale when it arrives now, however near its timestamp looks", async () => {
+        const load = await loadOf({ ...fresh, sampledAt: 990 }, receipt(1000, null, 600_000));
+        expect(load).toMatchObject({
           stale: true,
+          staleReason: "age-limit",
+          ageMs: null,
           cpuPercent: null,
         });
+      });
+
+      it("ages a bounded sample by this Shell's clocks after it arrived, its CLIs with it", async () => {
+        const agentClis = [{ agentId: "claude", version: "2.1.0" }];
+        hosts = [
+          host({
+            connection: CONNECTED,
+            summary: { ...fresh, sampledAt: 1e12, agentClis } as never,
+            summaryReceipt: receipt(1000, 4000),
+          }),
+        ];
+        let listed = await runtime.list("a");
+        if (!listed.ok) throw new Error("refused");
+        expect(listed.value.hosts[0]?.load).toMatchObject({ stale: false, ageMs: 4000 });
+        expect(listed.value.hosts[0]?.agentClis.coverage).toBe("observed");
+        clock += 12_000;
+        listed = await runtime.list("a");
+        if (!listed.ok) throw new Error("refused");
+        expect(listed.value.hosts[0]?.load).toMatchObject({ stale: true, ageMs: 16_000 });
+        expect(listed.value.hosts[0]?.agentClis.coverage).toBe("stale");
       });
 
       it("gives no used or available memory for an older host, and no cores it never reported", async () => {
@@ -285,7 +360,11 @@ describe("HostCallRuntime (#13493, #13496)", () => {
 
       it("ages a sample by the time the whole answer took, not the time it was read", async () => {
         hosts = [
-          host({ connection: CONNECTED, summary: { ...fresh, sampledAt: 1000 - 14_000 } as never }),
+          host({
+            connection: CONNECTED,
+            summary: { ...fresh, sampledAt: 1000 - 14_000 } as never,
+            summaryReceipt: receipt(1000, 14_000),
+          }),
         ];
         listHostProjects.mockImplementation(async () => {
           clock += 5000;
@@ -344,7 +423,9 @@ describe("HostCallRuntime (#13493, #13496)", () => {
           temperatureCelsius: 55,
           temperatureZone: "x86_pkg_temp (thermal_zone0)",
         });
-        expect(await loadOf({ ...linux, sampledAt: 1000 - 16_000 })).toMatchObject({
+        expect(
+          await loadOf({ ...linux, sampledAt: 1000 - 16_000 }, receipt(1000, 16_000))
+        ).toMatchObject({
           stale: true,
           metricsScope: "cgroup",
           memoryPressureSomeAvg10: null,

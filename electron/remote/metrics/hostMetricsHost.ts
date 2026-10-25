@@ -45,6 +45,8 @@ export interface MetricsHostDeps {
   loop: {
     subscribe(listener: (summary: HostMetricsSummary) => void): () => void;
     latest(): HostMetricsSummary | null;
+    /** How old a summary is by this host's own clocks; null when it can't say. */
+    ageOf?(summary: HostMetricsSummary): number | null;
   };
   listFleetTargets(): Promise<HostFleetTargetList>;
   submitFleet(
@@ -104,11 +106,21 @@ export function waitingPolicy(
 /** One reminder per agent per window: a flapping FSM must not page a Shell repeatedly. */
 export const ATTENTION_COOLDOWN_MS = 60_000;
 
-function postSummary(session: LinkSession, summary: HostMetricsSummary): void {
+function postSummary(
+  session: LinkSession,
+  summary: HostMetricsSummary,
+  loop: MetricsHostDeps["loop"]
+): void {
   if (!session.isOpen) return;
+  // Stamped as it is posted, so a cached sample handed to a new Shell carries its real age (#14462).
+  const timing = { sampleAgeMs: loop.ageOf?.(summary) ?? null, afterPing: session.peerPingNonce };
   try {
     // A full queue drops this frame; the next one follows in a few seconds.
-    session.post({ lane: Lane.CONTROL, kind: ControlKind.HOST_SUMMARY, body: summary });
+    session.post({
+      lane: Lane.CONTROL,
+      kind: ControlKind.HOST_SUMMARY,
+      body: { ...summary, timing },
+    });
   } catch (error) {
     const suppressedCount = logLimiter.take("post-summary");
     if (suppressedCount !== null) {
@@ -177,7 +189,7 @@ export function installHostMetricsHostWith(
       }
     );
     const latest = deps.loop.latest();
-    if (latest) postSummary(session, latest);
+    if (latest) postSummary(session, latest, deps.loop);
   };
 
   for (const ctx of server.sessions) wire(ctx);
@@ -216,7 +228,7 @@ export function installHostMetricsHostWith(
         stopLoop();
         return;
       }
-      for (const ctx of sessions) postSummary(ctx.session, summary);
+      for (const ctx of sessions) postSummary(ctx.session, summary, deps.loop);
       // A project closed or removed fires none of the worktree events; the
       // sample tick catches it, and the signature keeps it from saying more.
       worktrees.poke();
