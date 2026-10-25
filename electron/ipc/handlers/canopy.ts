@@ -59,6 +59,7 @@ import {
   stopWorkerTerminalWatches,
   resizeWatchedTerminal,
   stopTerminalWatch,
+  stopTerminalWatchById,
   watchTerminal,
   watchedTerminal,
 } from "./canopyTerminalWatch.js";
@@ -966,6 +967,22 @@ function requireActivatedUnlessAssistant(viewId: number, watchId: unknown): void
   if (!watched?.assistant) requireActivated();
 }
 
+/**
+ * A card answer presses keys with no input ownership behind it, so it never
+ * reaches the global assistant, whose input one window holds at a time (#14454).
+ */
+async function assertNotGlobalAssistant(runId: string): Promise<void> {
+  const { peekGlobalAssistantService } = await import("../../services/globalAssistant.js");
+  const state = peekGlobalAssistantService()?.getState();
+  if (state?.terminalId === runId) {
+    throw new AppError({
+      code: "PERMISSION",
+      message: "card answers don't reach the global assistant",
+      userMessage: "Answer the global assistant from the window that has its input.",
+    });
+  }
+}
+
 /** An assistant a person watches takes their keystrokes only while they may type to it. */
 function assertMayType(watched: { assistant: boolean; mayType: boolean }): void {
   if (watched.assistant && !watched.mayType) {
@@ -1201,8 +1218,13 @@ export const canopyNamespace = defineIpcNamespace({
 
     unwatchTerminal: op(
       CANOPY_METHOD_CHANNELS.unwatchTerminal,
-      async (ctx): Promise<void> => {
-        stopTerminalWatch(ctx.webContentsId);
+      async (ctx, watchId?: number): Promise<void> => {
+        if (watchId === undefined) {
+          stopTerminalWatch(ctx.webContentsId);
+          return;
+        }
+        if (!Number.isSafeInteger(watchId)) throw new Error("Invalid watch");
+        stopTerminalWatchById(ctx.webContentsId, watchId);
       },
       { withContext: true }
     ),
@@ -1508,6 +1530,7 @@ export const canopyNamespace = defineIpcNamespace({
         assertTarget(target);
         assertDrivesRun(ctx, runId);
         if (!isAnswerLabel(label)) throw new Error("Invalid option");
+        await assertNotGlobalAssistant(runId);
         await answerRunByLabel({
           pty: requirePtyClient(),
           runId,

@@ -173,6 +173,30 @@ describe("TerminalProcess submission tracking (#12337)", () => {
     vi.useRealTimers();
   });
 
+  it("drops a queued submit and an in-flight Enter when pending input is cancelled, and keeps input open (#14454)", async () => {
+    vi.useFakeTimers();
+    const terminal = createTerminal();
+
+    terminal.submit("first\n", "tok-1");
+    terminal.submit("second\n", "tok-2");
+    expect(ptyWriteMock).toHaveBeenCalledWith("first");
+
+    // Input moved to another window between the body and its Enter.
+    terminal.cancelPendingInput();
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(ptyWriteMock).not.toHaveBeenCalledWith("\r");
+    expect(ptyWriteMock).not.toHaveBeenCalledWith("second");
+    expect(terminal.getSubmission("tok-1")?.phase).toBe("cancelled");
+
+    // Unlike the shutdown lock, the new owner types straight away.
+    terminal.submit("third\n", "tok-3");
+    await vi.advanceTimersByTimeAsync(250);
+    expect(ptyWriteMock).toHaveBeenCalledWith("third");
+    expect(ptyWriteMock).toHaveBeenLastCalledWith("\r");
+    vi.useRealTimers();
+  });
+
   it("records cancelled for a submission refused because input is locked", () => {
     const terminal = createTerminal();
     acquireInputLock(terminal);

@@ -508,8 +508,13 @@ export function CanopyTerminal({
       // The pane re-measures only once main has handed the PTY back, so a size
       // it took meanwhile lands after the one main restores, not before it.
       const release = releasePane;
+      // Its own stream by id once it has one: another pane in this view may
+      // have opened a stream since, which this cleanup must leave alone.
+      const ownWatchId = view?.watchId ?? null;
       safeFireAndForget(
-        api.unwatchTerminal().finally(() => release?.()),
+        (ownWatchId !== null ? api.unwatchTerminal(ownWatchId) : api.unwatchTerminal()).finally(
+          () => release?.()
+        ),
         { context: "Ending the canopy terminal stream" }
       );
     };

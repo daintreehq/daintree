@@ -420,7 +420,7 @@ export interface GeneratedIpcInvokeMap {
     result: void;
   };
   "canopy:unwatch-terminal": {
-    args: [];
+    args: [watchId?: number | undefined];
     result: void;
   };
   "canopy:watch-assistant-terminal": {

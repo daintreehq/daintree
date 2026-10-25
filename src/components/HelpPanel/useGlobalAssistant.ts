@@ -21,8 +21,15 @@ export interface GlobalAssistantHandle {
 }
 
 function messageOf(error: unknown, fallback: string): string {
-  const user = (error as { userMessage?: unknown } | null)?.userMessage;
-  if (typeof user === "string" && user) return user;
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "userMessage" in error &&
+    typeof error.userMessage === "string" &&
+    error.userMessage
+  ) {
+    return error.userMessage;
+  }
   return fallback;
 }
 

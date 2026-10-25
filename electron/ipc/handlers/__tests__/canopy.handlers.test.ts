@@ -353,6 +353,23 @@ describe("canopy IPC", () => {
     expect(after.ok).toBe(true);
   });
 
+  it("never answers the global assistant's prompt from a card (#14454)", async () => {
+    state.mode = "on";
+    assistants.global = { terminalId: "run-1", generation: 5, owner: 5 };
+    try {
+      const refused = await outcome(
+        invoke(CANOPY_METHOD_CHANNELS.answer, fakeSender(5), "run-1", { spawnedAt: 100 }, "Yes")
+      );
+      expect(refused).toEqual({
+        ok: false,
+        message: expect.stringContaining("global assistant"),
+      });
+      expect(state.writes).toEqual([]);
+    } finally {
+      assistants.global = null;
+    }
+  });
+
   it.each([
     ["refresh", []],
     ["watchTerminal", ["run-1", { spawnedAt: 100 }]],
@@ -1215,6 +1232,20 @@ describe("canopy IPC", () => {
       expect(state.writes).toEqual(["y"]);
       expect(ptyClient.sendKey).toHaveBeenCalledWith("run-1", "escape");
       expect(state.submits).toEqual(["navy"]);
+    });
+
+    it("lets a late cleanup end only its own stream, never the one opened since (#14454)", async () => {
+      const first = await openStream();
+      const second = await openStream(first.sender);
+      expect(second.watchId).not.toBe(first.watchId);
+      await invoke(CANOPY_METHOD_CHANNELS.unwatchTerminal, first.sender, first.watchId);
+      await invoke(CANOPY_METHOD_CHANNELS.terminalInput, second.sender, second.watchId, "y");
+      expect(state.writes).toEqual(["y"]);
+      await invoke(CANOPY_METHOD_CHANNELS.unwatchTerminal, second.sender, second.watchId);
+      const typed = await outcome(
+        invoke(CANOPY_METHOD_CHANNELS.terminalInput, second.sender, second.watchId, "z")
+      );
+      expect(typed.ok).toBe(false);
     });
 
     it("refuses input for a stream the view no longer holds", async () => {

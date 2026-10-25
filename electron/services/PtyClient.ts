@@ -2402,6 +2402,14 @@ export class PtyClient extends EventEmitter {
   }
 
   /**
+   * Drop input queued for the terminal but not yet written to it. Bytes the
+   * PTY already took can't be recalled; everything still waiting is.
+   */
+  cancelPendingInput(id: string): void {
+    this.shardForTerminal(id).send({ type: "cancel-pending-input", id });
+  }
+
+  /**
    * Force resume a terminal that may be paused due to backpressure.
    * This is a user-initiated action to unblock a terminal when the
    * automatic flow control gets stuck.

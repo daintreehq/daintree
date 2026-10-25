@@ -607,7 +607,7 @@ describe("helpPanelStore persistence migration", () => {
       store.getState().openSlot();
       expect(store.getState().globalSelected).toBe(false);
       store.getState().selectGlobal(target);
-      const persisted = store.persist.getOptions().partialize?.(store.getState()) as object;
+      const persisted: unknown = store.persist.getOptions().partialize?.(store.getState());
       expect(persisted).not.toHaveProperty("globalSelected");
       expect(persisted).not.toHaveProperty("globalTarget");
     });

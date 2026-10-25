@@ -30,6 +30,10 @@ export function createTerminalIOHandlers(ctx: HostContext): HandlerMap {
       ptyManager.stage(msg.id, msg.text);
     },
 
+    "cancel-pending-input": (msg) => {
+      ptyManager.cancelPendingInput(msg.id);
+    },
+
     "withdraw-submission": (msg) => {
       if (typeof msg.submissionToken !== "string") return;
       ptyManager.withdrawGuardedSubmission(msg.id, msg.submissionToken);

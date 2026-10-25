@@ -88,9 +88,11 @@ export function GlobalAssistantPane({ isVisible }: { isVisible: boolean }) {
   const agentName = agentId ? (getAgentConfig(agentId)?.name ?? agentId) : null;
   const composerAgentId = agentId && isBuiltInAgentId(agentId) ? agentId : undefined;
 
-  // Opened from "Open in Assistant", the keyboard comes here; a person clicking
-  // the tab keeps theirs where they put it.
-  const handledFocusRef = useRef(target !== null ? -1 : focusRequest);
+  // Shown or asked for focus, the keyboard comes here, as a lane's tab hands it
+  // to its terminal: to the composer, else the terminal, else the pane's one
+  // action. The request may predate this lazily loaded pane, so none counts as
+  // handled before it has mounted.
+  const handledFocusRef = useRef(-1);
   useEffect(() => {
     if (!isVisible || !isOpen || handledFocusRef.current === focusRequest) return;
     let frame = 0;
@@ -107,9 +109,11 @@ export function GlobalAssistantPane({ isVisible }: { isVisible: boolean }) {
         handledFocusRef.current = focusRequest;
         return;
       }
-      const textarea = root.querySelector<HTMLElement>("[data-canopy-terminal] textarea");
-      if (textarea && tries > 30) {
-        textarea.focus({ preventScroll: true });
+      const fallback =
+        root.querySelector<HTMLElement>("[data-canopy-terminal] textarea") ??
+        root.querySelector<HTMLElement>("[data-global-focus-target]");
+      if (fallback && (tries > 30 || fallback.matches("[data-global-focus-target]"))) {
+        fallback.focus({ preventScroll: true });
         handledFocusRef.current = focusRequest;
         return;
       }
@@ -129,7 +133,9 @@ export function GlobalAssistantPane({ isVisible }: { isVisible: boolean }) {
     }
   };
 
-  const running = view?.phase === "running";
+  // Restart and stop act on the run this pane shows, never on a successor it
+  // is hiding behind "ended".
+  const controllable = view?.phase === "running" && shown !== null;
   const generation = view?.generation ?? 0;
 
   return (
@@ -142,7 +148,7 @@ export function GlobalAssistantPane({ isVisible }: { isVisible: boolean }) {
         <Globe className="h-3.5 w-3.5 shrink-0 text-text-secondary" aria-hidden="true" />
         <span className="min-w-0 shrink-0 font-medium text-text-primary">Global assistant</span>
         <span className="min-w-0 flex-1 truncate text-text-secondary">{agentName ?? ""}</span>
-        {running && shown && !holdsInput && (
+        {controllable && !holdsInput && (
           <Button
             variant="outline"
             size="xs"
@@ -153,7 +159,7 @@ export function GlobalAssistantPane({ isVisible }: { isVisible: boolean }) {
             Take input
           </Button>
         )}
-        {running && (
+        {controllable && (
           <DropdownMenu>
             <Tooltip>
               <TooltipTrigger asChild>
@@ -213,6 +219,7 @@ export function GlobalAssistantPane({ isVisible }: { isVisible: boolean }) {
             variant="outline"
             onClick={() => useHelpPanelStore.getState().selectGlobal(null)}
             data-testid="help-global-show-current"
+            data-global-focus-target=""
           >
             Show the global assistant
           </Button>
@@ -230,6 +237,7 @@ export function GlobalAssistantPane({ isVisible }: { isVisible: boolean }) {
             onClick={() => void handleStart()}
             disabled={starting}
             data-testid="help-global-start"
+            data-global-focus-target=""
           >
             <Globe aria-hidden="true" />
             Start global assistant
@@ -246,6 +254,9 @@ export function GlobalAssistantPane({ isVisible }: { isVisible: boolean }) {
         <p className="px-6 py-8 text-center text-xs text-text-secondary">
           Canopy is open in this window. Close it to see the global assistant here.
         </p>
+      ) : !active ? (
+        // Hidden or cached, nothing streams: the draft is in the composer's store.
+        <div className="flex-1" />
       ) : (
         <GlobalAssistantTerminal
           key={paneKey}
@@ -276,6 +287,8 @@ export function GlobalAssistantPane({ isVisible }: { isVisible: boolean }) {
           const pending = pendingConfirm;
           setPendingConfirm(null);
           if (!pending) return;
+          // Acting on the run on screen: whatever replaces it is the one to follow.
+          useHelpPanelStore.getState().selectGlobal(null);
           void (pending.kind === "discard"
             ? discard(pending.generation)
             : restart(pending.generation));

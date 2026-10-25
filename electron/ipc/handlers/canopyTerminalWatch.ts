@@ -371,6 +371,15 @@ export function stopTerminalWatch(webContentsId: number): void {
   stopWatch(webContentsId);
 }
 
+/**
+ * End one stream, and only if it is still the view's: a pane letting go late —
+ * one leaving with its dialog's exit animation — must not end, or cancel the
+ * request for, the stream another pane in the same view opened since.
+ */
+export function stopTerminalWatchById(webContentsId: number, watchId: number): void {
+  if (watches.get(webContentsId)?.watchId === watchId) stopWatch(webContentsId);
+}
+
 export function stopAllTerminalWatches(): void {
   requests.clear();
   for (const id of [...watches.keys()]) stopWatch(id);

@@ -1108,6 +1108,11 @@ export class TerminalProcess {
    * One tracked submission's correlation record, by the token its caller minted
    * (#12337). `undefined` means this incarnation holds no record for it.
    */
+  /** Drop input queued but not yet written, leaving input open (#14454). */
+  cancelPendingInput(): void {
+    this.inputController.cancelPendingInput();
+  }
+
   /** Withdraw a guarded submission this terminal holds (#12491). */
   withdrawGuardedSubmission(token: string): void {
     this.writeQueue.withdrawGuardedSubmission(token);

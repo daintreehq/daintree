@@ -52,8 +52,13 @@ function service(): GlobalAssistantService {
   const instance = getGlobalAssistantService();
   if (!published.has(instance)) {
     published.add(instance);
-    instance.onChange(() => {
+    const publish = () =>
       broadcastToRenderer(CHANNELS.HELP_GLOBAL_ASSISTANT_CHANGED, globalAssistantView(instance));
+    instance.onChange(publish);
+    // A PTY host recovery respawns the run's terminal under a new launch
+    // generation with no lifecycle change: the subject a view watches moves.
+    getPtyClient()?.on("spawn-result", (id: string) => {
+      if (id === instance.getState().terminalId) publish();
     });
   }
   return instance;

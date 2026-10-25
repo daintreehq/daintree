@@ -8,6 +8,7 @@ import {
 } from "../../shared/config/globalAssistant.js";
 import { GlobalAssistantService, type GlobalAssistantDeps } from "./GlobalAssistantService.js";
 import { onAgentDefaultsChanged } from "./agentDefaults.js";
+import type { PtyClient } from "./PtyClient.js";
 
 /** The deps the service runs with in the app, each service loaded on first use. */
 export function liveGlobalAssistantDeps(): GlobalAssistantDeps {
@@ -88,6 +89,26 @@ export function liveGlobalAssistantDeps(): GlobalAssistantDeps {
   };
 }
 
+/**
+ * Whenever input changes hands, drop whatever the PTY host still holds for the
+ * run: a submit queued, or the Enter of one in flight, was the previous
+ * owner's and must not land in the new owner's line (#14454). Main has already
+ * refused anything the old owner sends from here on.
+ */
+export function fenceInputOnOwnerChange(
+  service: GlobalAssistantService,
+  ptyClient: () => Promise<Pick<PtyClient, "cancelPendingInput"> | null>
+): void {
+  let epoch = service.getState().inputEpoch;
+  service.onChange((state) => {
+    if (state.inputEpoch === epoch) return;
+    epoch = state.inputEpoch;
+    const terminalId = state.terminalId;
+    if (!terminalId) return;
+    void ptyClient().then((pty) => pty?.cancelPendingInput(terminalId));
+  });
+}
+
 let instance: GlobalAssistantService | null = null;
 let shuttingDown = false;
 
@@ -103,6 +124,9 @@ export function getGlobalAssistantService(): GlobalAssistantService {
   void import("../window/serviceRefs.js").then(({ getPtyClient }) => {
     getPtyClient()?.on("exit", (id: string) => service.handleTerminalExit(id));
   });
+  fenceInputOnOwnerChange(service, () =>
+    import("../window/serviceRefs.js").then(({ getPtyClient }) => getPtyClient())
+  );
   return instance;
 }
 

@@ -249,6 +249,31 @@ describe("GlobalAssistantPane (#14454)", () => {
     expect(screen.getByTestId("global-terminal")).not.toBeNull();
   });
 
+  it("offers no restart, stop or input for a successor hidden behind an ended run", async () => {
+    useHelpPanelStore.setState({ globalTarget: { ...subject, incarnation: 1 } });
+    installHelp(running({ inputOwner: "b1", inputEpoch: 4 }));
+    renderPane();
+    await flush();
+    expect(screen.queryByTestId("help-global-more")).toBeNull();
+    expect(screen.queryByTestId("help-global-take-input")).toBeNull();
+  });
+
+  it("follows the replacement after an explicit restart of the chosen run", async () => {
+    useHelpPanelStore.setState({ globalTarget: subject });
+    installHelp(running({ generation: 7, inputOwner: "a1", inputEpoch: 3 }));
+    help.restartGlobalAssistant.mockResolvedValue(
+      running({ generation: 8, subject: { ...subject, terminalId: "g2" }, terminalId: "g2" })
+    );
+    renderPane();
+    await flush();
+    fireEvent.pointerDown(screen.getByTestId("help-global-more"), { button: 0, ctrlKey: false });
+    fireEvent.click(await screen.findByText("Restart conversation"));
+    fireEvent.click(await screen.findByRole("button", { name: "Restart conversation" }));
+    await flush();
+    expect(useHelpPanelStore.getState().globalTarget).toBeNull();
+    expect(screen.getByTestId("global-terminal").getAttribute("data-run")).toBe("g2");
+  });
+
   it("shows the chosen run when it is the one running", async () => {
     useHelpPanelStore.setState({ globalTarget: subject });
     installHelp(running());
