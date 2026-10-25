@@ -1,4 +1,7 @@
-import { GLOBAL_ASSISTANT_ID } from "../../../shared/config/globalAssistant.js";
+import {
+  GLOBAL_ASSISTANT_ID,
+  GLOBAL_ASSISTANT_READINESS_TOOL,
+} from "../../../shared/config/globalAssistant.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
 import os from "node:os";
@@ -62,7 +65,7 @@ const {
   },
   mockStoreGet: vi.fn<(key: string) => unknown>(),
   mockProbeMcpServer: vi.fn<(port: number, apiKey: string) => Promise<void>>(),
-  mockProbeMcpSseServer: vi.fn<(port: number, token: string) => Promise<void>>(),
+  mockProbeMcpSseServer: vi.fn<(port: number, token: string, options?: unknown) => Promise<void>>(),
   // Mocked so provision tests never read the developer's real
   // ~/.daintree/assistant folder; mirroring behavior has its own suite in
   // AssistantContentMirror.test.ts.
@@ -131,7 +134,10 @@ vi.mock("../McpServerService.js", () => ({
 
 vi.mock("../mcp-server/readinessProbe.js", () => ({
   probeMcpServer: (port: number, apiKey: string) => mockProbeMcpServer(port, apiKey),
-  probeMcpSseServer: (port: number, token: string) => mockProbeMcpSseServer(port, token),
+  probeMcpSseServer: (port: number, token: string, options?: unknown) =>
+    options === undefined
+      ? mockProbeMcpSseServer(port, token)
+      : mockProbeMcpSseServer(port, token, options),
 }));
 
 vi.mock("../../store.js", () => ({
@@ -726,6 +732,14 @@ describe("HelpSessionService", () => {
       windowId: NO_VIEW_HANDLE,
       projectViewWebContentsId: NO_VIEW_HANDLE,
       global: true as const,
+    });
+
+    it("probes its Claude lane for its own tool, not one its set never lists (#14483)", async () => {
+      const result = await service.provisionSession(globalInput());
+      if (!result) throw new Error("expected result");
+      expect(mockProbeMcpSseServer).toHaveBeenCalledWith(45454, result.token, {
+        readinessTool: GLOBAL_ASSISTANT_READINESS_TOOL,
+      });
     });
 
     it("keeps its run checkpoints in the reserved global bucket", async () => {
