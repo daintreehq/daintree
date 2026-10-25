@@ -53,7 +53,21 @@ describe("classifyWaitingReason", () => {
     it.each<[string, string[]]>([
       ["Claude", ["Which framework should I use?", "❯ 1. React", "  2. Vue", "  3. Svelte"]],
       ["Codex", ["Which framework?", "  1. React", "› 2. Vue"]],
-      ["a selector over prompt chrome", ["Pick one", "❯ 1. Keep it", "  2. Drop it", "❯ "]],
+      [
+        "described",
+        [
+          "Which framework?",
+          "❯ 1. React",
+          "     Keep the existing stack",
+          "  2. Vue",
+          "     Smaller bundle",
+          "Enter to select · Esc to cancel",
+        ],
+      ],
+      [
+        "boxed Gemini",
+        ["│ Which framework?    │", "│ ● 1. React          │", "│   2. Vue            │"],
+      ],
     ])("classifies a %s choice selector as approval, not question (#14475)", (_label, lines) => {
       expect(classifyWaitingReason(lines, true)).toBe("approval");
     });
@@ -61,8 +75,12 @@ describe("classifyWaitingReason", () => {
     it.each<[string, string[]]>([
       ["a lone cursor-marked numbered row", ["Should I go ahead?", "❯ 1. Fix it"]],
       [
-        "a bulleted numbered list in prose",
-        ["Which should I do first?", "● 1. Fix it", "  2. Test it"],
+        "a numbered list echoed above a newer composer",
+        ["› 1. Update the parser", "  2. Add coverage", "", "• Should I commit it?", "", "›"],
+      ],
+      [
+        "a numbered reply above the composer",
+        ["● 1. Fix it", "  2. Test it", "Which should I do first?", "────────", "❯ ", "────────"],
       ],
     ])("keeps %s a question", (_label, lines) => {
       expect(classifyWaitingReason(lines, false)).toBe("question");

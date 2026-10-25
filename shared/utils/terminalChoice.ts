@@ -151,7 +151,21 @@ function optionNumber(row: string): number | null {
  * - Two options with the same label can't be told apart, so neither is offered.
  */
 export function parseChoiceList(screen: string): ChoiceList | null {
-  const lines = screen.split("\n").map(unframe);
+  return readChoiceList(screen.split("\n"), true);
+}
+
+/**
+ * Whether the bottom of a screen is a numbered selection dialog by
+ * `parseChoiceList`'s structure, without its key hint: a short pane can crop
+ * the hint, and a classifier that only has to keep text out of a selector
+ * should not need it (#14475). Blank rows must be kept, as they bound the list.
+ */
+export function endsOnChoiceDialog(lines: readonly string[]): boolean {
+  return readChoiceList(lines, false) !== null;
+}
+
+function readChoiceList(rawLines: readonly string[], requireHint: boolean): ChoiceList | null {
+  const lines = rawLines.map(unframe);
   let cursor = -1;
   for (let i = lines.length - 1; i >= 0; i--) {
     if (HIGHLIGHT_MARKER.test(lines[i]!)) {
@@ -191,7 +205,7 @@ export function parseChoiceList(screen: string): ChoiceList | null {
   if (rows.length < 2) return null;
 
   const hinted = lines.slice(cursor + 1).some((row) => KEY_HINT.test(row) && HINT_VERB.test(row));
-  if (!hinted) return null;
+  if (requireHint && !hinted) return null;
 
   const labels = rows.map((i) => labelOf(lines[i]!));
   const folded = labels.map((label) => label.toLowerCase());
