@@ -434,6 +434,8 @@ describe("HostWatches (#14463)", () => {
     listener?.changed();
     advance(HOST_WATCH_CONNECTION_SETTLE_MS);
     const { wake } = queued[0];
+    // Held first by a busy pane, then reserved for typing.
+    wake.report({ kind: "held", reason: "working" });
     expect(wake.beforeType()).toBe(true);
     const cancel = watches.run(RUN, { operation: "cancel", watchId: watch.watchId });
     expect(cancel.detail).toMatch(/already being typed/);

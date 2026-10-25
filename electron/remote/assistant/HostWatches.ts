@@ -266,7 +266,10 @@ export class HostWatches {
       this.end(record, "cancelled");
       detail = CANCELLED_DETAIL;
       this.release();
-    } else if (record.typing === true && record.delivery === "queued") {
+    } else if (
+      record.typing === true &&
+      (record.delivery === "queued" || record.delivery === "held")
+    ) {
       detail = TYPING_DETAIL;
     } else if (record.delivery === "queued" || record.delivery === "held") {
       record.delivery = "withdrawn";
@@ -396,6 +399,8 @@ export class HostWatches {
       beforeType: () => {
         if (!live()) return false;
         record.typing = true;
+        // It is being typed now, whatever held it before.
+        record.delivery = "queued";
         return true;
       },
       report: (outcome: LaneWakeOutcome) => {
