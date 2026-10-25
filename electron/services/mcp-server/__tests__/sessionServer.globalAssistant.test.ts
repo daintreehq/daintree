@@ -21,7 +21,11 @@ import { setHostControlRuntime, type HostControlRuntimeHandle } from "../hostCon
 import { getViewlessHelpBaseManifest } from "../baseManifest.js";
 import { buildToolInputSchema, buildToolOutputSchema } from "../tierAuth.js";
 import type { AssistantControlBinding } from "../shared.js";
-import { fakeSessionStore, listTools, makeMockTransport } from "./helpers/sessionServerFixture.js";
+import {
+  fakeSessionStore,
+  listBaseTools,
+  makeMockTransport,
+} from "./helpers/sessionServerFixture.js";
 
 /**
  * The global assistant's discovery through the production composition
@@ -73,7 +77,7 @@ async function listFor(viewlessProjectId: string, tier: "core" | "full") {
   const deps = createSessionServerDeps(source, host, { sessionId: SESSION });
   const server = createSessionServer(SESSION, deps);
   await server.connect(makeMockTransport());
-  const { tools } = await listTools(server);
+  const tools = await listBaseTools(server);
   expect(source.requestManifest).not.toHaveBeenCalled();
   return tools;
 }
@@ -87,9 +91,8 @@ describe("the global assistant's tool discovery (#14453)", () => {
 
       expect(tools.map((tool) => tool.name).sort()).toEqual([...GLOBAL_ASSISTANT_TOOL_IDS].sort());
       for (const tool of tools) {
-        const inputSchema = tool.inputSchema as { type?: string; properties?: object };
-        expect(inputSchema.type).toBe("object");
-        expect(inputSchema.properties).toBeDefined();
+        expect((tool.inputSchema as { type?: string } | undefined)?.type).toBe("object");
+        expect(tool.inputSchema?.properties).toBeDefined();
         expect(tool.outputSchema).toBeDefined();
         expect(tool.description).toBeTruthy();
       }
