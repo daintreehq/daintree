@@ -246,7 +246,7 @@ export const HostListEntrySchema = z.object({
       complete: z
         .boolean()
         .describe(
-          "This answer names every match. Pages walked to a null nextCursor name them all."
+          "This answer names every match. With a total, pages walked to a null nextCursor name them all."
         ),
       total: z.number().nullable().describe("Null: past the host's own list limit."),
       offset: z.number(),

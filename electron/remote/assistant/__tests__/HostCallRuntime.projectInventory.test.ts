@@ -311,6 +311,12 @@ describe("HostCallRuntime project inventory (#14457)", () => {
     expect(new TextEncoder().encode(JSON.stringify({ hosts: listed })).length).toBeLessThanOrEqual(
       AGENT_DIRECTORY_BYTES_MAX
     );
+    // Every host's agent directory counts against the same cap.
+    const withAgents = await list({ includeAgents: true });
+    expect(withAgents.every((host) => host.agents !== undefined)).toBe(true);
+    expect(
+      new TextEncoder().encode(JSON.stringify({ hosts: withAgents })).length
+    ).toBeLessThanOrEqual(AGENT_DIRECTORY_BYTES_MAX);
     // A host cut to nothing still says it has more, and where to go on.
     for (const host of listed.filter((entry) => entry.hostId !== "local")) {
       expect(host.projectInventory).toMatchObject({ complete: false, total: 50 });
