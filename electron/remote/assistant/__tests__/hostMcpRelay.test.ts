@@ -828,5 +828,34 @@ describe("throwaway calls on a host that doesn't run them yet (#14444)", () => {
       status: "refused",
       reason: "throwaway-off",
     });
+    // Every reason this Shell knows keeps its own meaning.
+    for (const reason of ["control-off", "throwaway-off", "expiry-unsupported"]) {
+      expect(ThrowawayCallAnswerSchema.parse({ status: "refused", reason })).toEqual({
+        status: "refused",
+        reason,
+      });
+    }
+    const run = {
+      runId: "run-1",
+      agentId: "claude",
+      startedAt: 1_000,
+      ageMs: 0,
+      timeLimitMs: null,
+      expiresAt: null,
+      state: "running",
+      endedAt: null,
+      endReason: null,
+    };
+    for (const answer of [
+      { status: "done", result: { tool: "throwaway.launch", run } },
+      { status: "failed", reason: "not-found" },
+      { status: "unknown" },
+      { status: "conflict" },
+    ]) {
+      expect(ThrowawayCallAnswerSchema.parse(answer)).toEqual(answer);
+    }
+    expect(ThrowawayCallAnswerSchema.safeParse({ status: "failed", reason: "busy" }).success).toBe(
+      false
+    );
   });
 });

@@ -17,6 +17,7 @@ const RUNNING = {
   endedAt: null,
   endReason: null,
 };
+const CLOSED = { ...RUNNING, state: "closed", endedAt: 1_500, endReason: "close" };
 
 describe("throwaway tools (#14444)", () => {
   it("takes each tool with only its own arguments", () => {
@@ -52,38 +53,50 @@ describe("throwaway tools (#14444)", () => {
 
   it("carries a run's time limit and deadline together, and an end only once it has ended", () => {
     const limited = { ...RUNNING, timeLimitMs: 60_000, expiresAt: 61_000 };
-    const ended = { ...RUNNING, state: "closed", endedAt: 1_500, endReason: "close" };
     expect(HostThrowawayRunSchema.safeParse(RUNNING).success).toBe(true);
     expect(HostThrowawayRunSchema.safeParse(limited).success).toBe(true);
-    expect(HostThrowawayRunSchema.safeParse(ended).success).toBe(true);
+    expect(HostThrowawayRunSchema.safeParse(CLOSED).success).toBe(true);
 
-    expect(HostThrowawayRunSchema.safeParse({ ...RUNNING, timeLimitMs: 60_000 }).success).toBe(
-      false
-    );
-    expect(HostThrowawayRunSchema.safeParse({ ...RUNNING, expiresAt: 61_000 }).success).toBe(false);
-    expect(HostThrowawayRunSchema.safeParse({ ...ended, endedAt: null }).success).toBe(false);
-    expect(HostThrowawayRunSchema.safeParse({ ...RUNNING, endReason: "exit" }).success).toBe(false);
+    const invalid = [
+      { ...RUNNING, timeLimitMs: 60_000 },
+      { ...RUNNING, expiresAt: 61_000 },
+      // Each pair below agrees on its end, so only the state check can refuse it.
+      { ...CLOSED, endedAt: null, endReason: null },
+      { ...RUNNING, endedAt: 1_500, endReason: "exit" },
+      // And here the state agrees with one field, so only the end pair can.
+      { ...RUNNING, endReason: "exit" },
+      { ...CLOSED, endReason: null },
+    ];
+    for (const run of invalid) expect(HostThrowawayRunSchema.safeParse(run).success).toBe(false);
   });
 
   it("answers each tool in its own shape, around the run", () => {
-    expect(
-      HostThrowawayToolResultSchema.safeParse({
+    const valid = [
+      { tool: "throwaway.launch", run: RUNNING },
+      { tool: "throwaway.status", run: RUNNING },
+      {
         tool: "throwaway.output",
         run: RUNNING,
         content: "Current week: 12%",
         lineCount: 1,
         truncated: false,
-      }).success
-    ).toBe(true);
-    expect(
-      HostThrowawayToolResultSchema.safeParse({ tool: "throwaway.output", run: RUNNING }).success
-    ).toBe(false);
-    expect(
-      HostThrowawayToolResultSchema.safeParse({
-        tool: "throwaway.close",
-        run: RUNNING,
-        closed: false,
-      }).success
-    ).toBe(false);
+      },
+      { tool: "throwaway.sendCommand", run: RUNNING, accepted: true },
+      { tool: "throwaway.sendKeys", run: RUNNING, accepted: true },
+      { tool: "throwaway.close", run: CLOSED, closed: true },
+    ];
+    for (const result of valid) {
+      expect(HostThrowawayToolResultSchema.safeParse(result).success).toBe(true);
+    }
+    const invalid = [
+      { tool: "throwaway.output", run: RUNNING },
+      { tool: "throwaway.sendCommand", run: RUNNING },
+      { tool: "throwaway.close", run: CLOSED, closed: false },
+      // A close answers only once the process is gone.
+      { tool: "throwaway.close", run: RUNNING, closed: true },
+    ];
+    for (const result of invalid) {
+      expect(HostThrowawayToolResultSchema.safeParse(result).success).toBe(false);
+    }
   });
 });

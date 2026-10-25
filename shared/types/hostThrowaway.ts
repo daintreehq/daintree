@@ -157,14 +157,15 @@ export const HostThrowawayToolResultSchema = z.discriminatedUnion("tool", [
       accepted: z.literal(true),
     })
     .strip(),
-  /** Sent only once the process has ended and the run is gone. */
+  /** Sent only once the process has ended and the run is gone, so its run reads closed. */
   z
     .object({
       tool: z.literal(THROWAWAY_CLOSE_TOOL),
       run: HostThrowawayRunSchema,
       closed: z.literal(true),
     })
-    .strip(),
+    .strip()
+    .refine((result) => result.run.state === "closed"),
 ]);
 export type HostThrowawayToolResult = z.infer<typeof HostThrowawayToolResultSchema>;
 
