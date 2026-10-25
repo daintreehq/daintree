@@ -597,4 +597,152 @@ describe("HostCallRuntime notices from hosts (#13500)", () => {
     runs.delete("a");
     expect(runtime.awaitsNotices("studio")).toBe(false);
   });
+
+  describe("with many watches over time (#14459)", () => {
+    const watch = (terminalId: string) => ({
+      ...LAUNCH,
+      tool: "terminal.notifyWhenIdle",
+      args: { terminalId },
+    });
+
+    it("keeps a long watch through many short ones that came and settled", async () => {
+      await runtime.call("a", watch("host-t-long"), { tier: "core" });
+      for (let i = 0; i < 300; i += 1) {
+        const outcome = await runtime.call("a", watch(`host-t-${i}`), { tier: "core" });
+        const callId = outcome.ok ? outcome.value.callId! : "";
+        runtime.receiveNotices("studio", {
+          notices: [notice({ noticeId: `n-${i}`, callId, terminalId: `host-t-${i}` })],
+        });
+        runtime.receiveNoticeStatus("studio", {
+          calls: [{ helpSessionId: "a", callId, status: "settled" }],
+        });
+      }
+      expect(queued).toHaveLength(300);
+
+      expect(runtime.awaitsNotices("studio")).toBe(true);
+      expect(runtime.noticeCalls("studio")).toEqual([{ helpSessionId: "a", callId: "call-1" }]);
+      runtime.receiveNotices("studio", {
+        notices: [notice({ noticeId: "n-long", terminalId: "host-t-long" })],
+      });
+      expect(queued).toHaveLength(301);
+      expect(queued[300]!.wake.id).toBe("n-long");
+    });
+
+    const arm = async (sessionId: string, terminalId: string) => {
+      const outcome = await runtime.call(sessionId, watch(terminalId), { tier: "core" });
+      if (!outcome.ok) throw new Error("not eligible");
+      return outcome.value;
+    };
+    const fill = async (): Promise<Array<{ sessionId: string; callId: string }>> => {
+      runs.set("b", { ...RUN_A, sessionId: "b", terminalId: "t-b" });
+      const armed: Array<{ sessionId: string; callId: string }> = [];
+      for (let i = 0; i < 256; i += 1) {
+        const sessionId = i % 2 === 0 ? "a" : "b";
+        const { outcome, callId } = await arm(sessionId, `host-t-${i}`);
+        expect(outcome).toBe("ok");
+        armed.push({ sessionId, callId: callId! });
+      }
+      return armed;
+    };
+
+    it("refuses a watch past a full set, before sending, and forgets none it took", async () => {
+      const armed = await fill();
+      relayCall.mockClear();
+
+      for (const sessionId of ["a", "b"]) {
+        const refused = await arm(sessionId, "host-t-more");
+        expect(refused).toMatchObject({ outcome: "rate_limited", callId: null, retryAfterMs: 60_000 });
+      }
+      expect(relayCall).not.toHaveBeenCalled();
+      // A call asking for no notice still goes.
+      const listed = await runtime.call(
+        "a",
+        { ...LAUNCH, tool: "terminal.list", args: {} },
+        {
+          tier: "core",
+        }
+      );
+      expect(listed.ok && listed.value.outcome).toBe("ok");
+
+      expect(runtime.awaitsNotices("studio")).toBe(true);
+      expect(runtime.noticeCalls("studio")).toEqual(
+        armed.map(({ sessionId, callId }) => ({ helpSessionId: sessionId, callId }))
+      );
+      const first = armed[1]!;
+      runtime.receiveNotices("studio", {
+        notices: [notice({ noticeId: "n-b", helpSessionId: "b", callId: first.callId })],
+      });
+      expect(queued.map(({ lane }) => lane.helpSessionId)).toEqual(["b"]);
+    });
+
+    it("takes a watch again once one settles, and still lands the settled one's late notice", async () => {
+      const armed = await fill();
+      const settled = armed[1]!;
+      runtime.receiveNoticeStatus("studio", {
+        calls: [{ helpSessionId: "b", callId: settled.callId, status: "settled" }],
+      });
+
+      expect((await arm("a", "host-t-more")).outcome).toBe("ok");
+      expect((await arm("a", "host-t-most")).outcome).toBe("rate_limited");
+      runtime.receiveNotices("studio", {
+        notices: [notice({ noticeId: "n-late", helpSessionId: "b", callId: settled.callId })],
+      });
+      expect(queued.map(({ lane }) => lane.helpSessionId)).toEqual(["b"]);
+    });
+
+    it("makes room from watches that are over in all but name, and types none of their notices into a newer run", async () => {
+      const armed = await fill();
+      runs.set("b", { ...RUN_A, sessionId: "b", terminalId: "t-b", launchGeneration: 2 });
+
+      expect((await arm("a", "host-t-more")).outcome).toBe("ok");
+      expect(runtime.noticeCalls("studio")).toHaveLength(129);
+      runtime.receiveNotices("studio", {
+        notices: [notice({ noticeId: "n-b", helpSessionId: "b", callId: armed[1]!.callId })],
+      });
+      expect(queued).toEqual([]);
+    });
+
+    it("makes room from watches whose every notice already came, which no host may ever settle", async () => {
+      const armed = await fill();
+      armed.forEach(({ sessionId, callId }, i) =>
+        runtime.receiveNotices("studio", {
+          notices: [
+            notice({
+              noticeId: `n-${i}`,
+              helpSessionId: sessionId,
+              callId,
+              terminalId: `host-t-${i}`,
+            }),
+          ],
+        })
+      );
+      expect((await arm("a", "host-t-more")).outcome).toBe("ok");
+      expect(runtime.noticeCalls("studio")).toHaveLength(1);
+    });
+
+    it("keeps a settled call's id its own: resent by its session, refused to another", async () => {
+      await arm("a", "host-t-1");
+      runtime.receiveNoticeStatus("studio", {
+        calls: [{ helpSessionId: "a", callId: "call-1", status: "settled" }],
+      });
+      runs.set("b", { ...RUN_A, sessionId: "b", terminalId: "t-b" });
+
+      const taken = await runtime.call(
+        "b",
+        { ...watch("host-t-1"), newCallId: "call-1" },
+        {
+          tier: "core",
+        }
+      );
+      expect(taken.ok && taken.value).toMatchObject({ outcome: "conflict", callId: null });
+      relayCall.mockClear();
+      await runtime.call("a", { ...watch("host-t-1"), newCallId: "call-1" }, { tier: "core" });
+      expect(relayCall).toHaveBeenCalledWith(
+        "studio",
+        expect.objectContaining({ callId: "call-1", resend: true }),
+        expect.any(Number)
+      );
+      expect(runtime.awaitsNotices("studio")).toBe(false);
+    });
+  });
 });

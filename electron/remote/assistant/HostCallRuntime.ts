@@ -184,8 +184,18 @@ const ERROR_MESSAGE = "Hosts can't be reached right now.";
 const NOT_ELIGIBLE_MESSAGE =
   "Only a Daintree Assistant running on this machine can reach its hosts.";
 
-/** Calls whose notices this Shell still takes, the oldest forgotten first (#13500). */
+/**
+ * Calls whose notices this Shell still waits for (#13500). Past this a call
+ * asking for one is refused, never a watch already taken forgotten (#14459).
+ */
 const MAX_NOTICE_PINS = 256;
+/**
+ * Calls whose watch is over, the oldest forgotten first: a notice already on
+ * its way still lands, and their callIds still name them.
+ */
+const MAX_SETTLED_PINS = 256;
+/** What a call refused for want of room to follow its notices is told to wait. */
+const NOTICE_ROOM_RETRY_MS = 60_000;
 /**
  * How long a call's notices are taken, and keep its host's link open when
  * nothing else does: as long as its host holds what the call made.
@@ -281,8 +291,6 @@ interface NoticePin {
   noticed: Set<string>;
   /** The host answered it, so it holds a record of the call (#13930). */
   answered?: boolean;
-  /** The host has nothing more for it: its link need not stay open for it. */
-  settled?: boolean;
 }
 
 /**
@@ -535,6 +543,8 @@ const THROWAWAY_FAILURE_MESSAGES: Record<HostThrowawayFailure, string> = {
 const CALL_SENDER_REFUSED_DETAIL =
   "The host refused this Shell's identity on the current connection. Try again shortly.";
 const CALL_RATE_LIMITED_DETAIL = "Too many calls in a short time. Retry after retryAfterMs.";
+const CALL_NOTICES_FULL_DETAIL =
+  "This Shell already waits on notices from as many calls as it can follow. Nothing was sent. Retry after retryAfterMs, once some have come, or make the call without asking for a notice.";
 const ENSURE_LOCAL_DETAIL =
   "The project is already on this machine. Name a host from the host list to bring it to.";
 const ENSURE_UNAVAILABLE_DETAIL = "This Shell can't bring projects to its hosts right now.";
@@ -685,8 +695,10 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
   private readonly newId: () => string;
   /** Relayed calls out to each host right now, for the host's dialogs to be believed by. */
   private readonly callsOut = new Map<HostId, number>();
-  /** Calls that may arm notices on their host, by callId (#13500). */
+  /** Calls whose notices this Shell still waits for, by callId (#13500). */
   private readonly noticePins = new Map<string, NoticePin>();
+  /** Calls whose watch is over, by callId, kept apart so they never crowd out one still waited for (#14459). */
+  private readonly settledPins = new Map<string, NoticePin>();
   /** Relayed calls out right now, by callId, for a host's ask about one to be checked against (#13501). */
   private readonly callsInFlight = new Map<string, CallInFlight>();
   /** Notices already queued, by host and noticeId. */
@@ -758,12 +770,39 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
   private followedPins(hostId: HostId): Array<[string, NoticePin]> {
     const from = this.now() - NOTICE_PIN_TTL_MS;
     return [...this.noticePins].filter(
-      ([, pin]) =>
-        pin.hostId === hostId &&
-        pin.settled !== true &&
-        pin.armedAt >= from &&
-        this.stillRunning(pin.run)
+      ([, pin]) => pin.hostId === hostId && pin.armedAt >= from && this.stillRunning(pin.run)
     );
+  }
+
+  private pinOf(callId: string): NoticePin | undefined {
+    return this.noticePins.get(callId) ?? this.settledPins.get(callId);
+  }
+
+  /** Its watch is over: its notices are still taken for a while, but it holds nothing open. */
+  private settlePin(callId: string, pin: NoticePin): void {
+    this.noticePins.delete(callId);
+    remember(this.settledPins, callId, pin, MAX_SETTLED_PINS);
+  }
+
+  /**
+   * Whether another call's notices can be followed. When the watches are
+   * full, the ones over in all but name are settled first: past their time,
+   * from a run no longer running, or answered with every terminal's notice
+   * come, so nothing more can follow (a call on this machine is never told
+   * settled by a host).
+   */
+  private roomForPin(): boolean {
+    if (this.noticePins.size < MAX_NOTICE_PINS) return true;
+    const from = this.now() - NOTICE_PIN_TTL_MS;
+    for (const [callId, pin] of [...this.noticePins]) {
+      const done =
+        pin.answered === true &&
+        !this.callsInFlight.has(callId) &&
+        pin.terminalIds.length > 0 &&
+        pin.terminalIds.every((terminalId) => pin.noticed.has(terminalId));
+      if (done || pin.armedAt < from || !this.stillRunning(pin.run)) this.settlePin(callId, pin);
+    }
+    return this.noticePins.size < MAX_NOTICE_PINS;
   }
 
   /**
@@ -785,13 +824,18 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       }
       // A resend out now may change what the host holds: the next ask hears it.
       if (status === "watching" || this.callsInFlight.has(callId)) continue;
-      pin.settled = true;
       // One the host never answered may never have reached it: nothing was lost.
-      if (status !== "unknown" || pin.answered !== true) continue;
       // Nor was a notice that already came, with nothing to follow it. With
       // no terminals known, what came can't say nothing else was asked for.
       const missing = pin.terminalIds.filter((terminalId) => !pin.noticed.has(terminalId));
-      if (pin.terminalIds.length > 0 && missing.length === 0) continue;
+      if (
+        status !== "unknown" ||
+        pin.answered !== true ||
+        (pin.terminalIds.length > 0 && missing.length === 0)
+      ) {
+        this.settlePin(callId, pin);
+        continue;
+      }
       this.noticePins.delete(callId);
       if (!this.stillRunning(pin.run)) continue;
       const key = `${pin.run.sessionId}\u0000${pin.run.terminalId}\u0000${pin.run.launchGeneration}`;
@@ -895,7 +939,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     for (const notice of payload.notices) {
       const seenKey = `${hostId}\u0000${notice.noticeId}`;
       if (this.seenNotices.has(seenKey)) continue;
-      const pin = this.noticePins.get(notice.callId);
+      const pin = this.pinOf(notice.callId);
       if (
         pin === undefined ||
         pin.hostId !== hostId ||
@@ -1024,7 +1068,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         terminalIds: noticeTargets(tool, args),
         noticed: new Set(),
       };
-      remember(this.noticePins, callId, pin, MAX_NOTICE_PINS);
+      this.noticePins.set(callId, pin);
     }
     let settled = false;
     return {
@@ -1037,7 +1081,10 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       notRun: () => {
         if (settled) return;
         settled = true;
-        if (pinned) this.noticePins.delete(callId);
+        if (pin !== undefined) {
+          if (this.noticePins.get(callId) === pin) this.noticePins.delete(callId);
+          if (this.settledPins.get(callId) === pin) this.settledPins.delete(callId);
+        }
         for (const key of keys) {
           const left = (this.prompted.get(key) ?? []).filter((mark) => mark.callId !== callId);
           if (left.length > 0) this.prompted.set(key, left);
@@ -1051,7 +1098,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
   private knownCall(callId: string): { hostId: HostId; helpSessionId: string } | null {
     const out = this.callsInFlight.get(callId);
     if (out !== undefined) return { hostId: out.hostId, helpSessionId: out.helpSessionId };
-    const pin = this.noticePins.get(callId);
+    const pin = this.pinOf(callId);
     if (pin !== undefined) return { hostId: pin.hostId, helpSessionId: pin.run.sessionId };
     for (const [key, marks] of this.prompted) {
       const mark = marks.find((candidate) => candidate.callId === callId);
@@ -1087,6 +1134,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     this.callsOut.clear();
     this.callsInFlight.clear();
     this.noticePins.clear();
+    this.settledPins.clear();
     this.seenNotices.clear();
     this.prompted.clear();
     this.settingsRequests.dispose();
@@ -1159,6 +1207,13 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       if (Buffer.byteLength(JSON.stringify(toolArgs), "utf8") > MAX_RELAY_ARGS_BYTES) {
         return { ...this.outcomeWith("too_large", CALL_TOO_LARGE_DETAIL), ...unsent };
       }
+      // Decided in the same turn as the pin is taken, so calls at once can't overfill it.
+      if (!resend && relayCallArmsNotice(args.tool, toolArgs) && !this.roomForPin()) {
+        return {
+          ...this.outcomeWith("rate_limited", CALL_NOTICES_FULL_DETAIL, NOTICE_ROOM_RETRY_MS),
+          ...unsent,
+        };
+      }
       const runMs = relayRunMs(args.tool, toolArgs);
       const payload: McpCallPayload = {
         helpSessionId,
@@ -1200,7 +1255,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         case "done": {
           noted.ran(answer.result);
           // A resend that got the answer its first send lost: the host has the call.
-          const pin = resend ? this.noticePins.get(callId) : undefined;
+          const pin = resend ? this.pinOf(callId) : undefined;
           if (pin?.hostId === args.hostId && pin.run.sessionId === helpSessionId) {
             noteAnswered(pin, answer.result);
           }
