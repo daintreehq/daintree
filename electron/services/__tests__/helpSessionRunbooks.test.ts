@@ -4,25 +4,15 @@ import {
   RUNBOOKS_MCP_URL_ENV_VAR,
   buildConfirmationsAddendum,
   buildRunbooksAddendum,
-  buildRunbooksHostHeaders,
+  buildRunbooksHeaders,
   resolveRunbooksMcpUrl,
 } from "../helpSessionRunbooks.js";
 import { GLOBAL_ASSISTANT_TOOL_IDS } from "../../../shared/config/globalAssistant.js";
 
-describe("buildRunbooksHostHeaders (#13411, #13496)", () => {
-  it("names the host-control model even when the host state is unreported", () => {
-    expect(buildRunbooksHostHeaders(null)).toEqual({ "Daintree-Host-Control": "1" });
+describe("buildRunbooksHeaders (#13496, #14458)", () => {
+  it("names the host-control model and never a host state or lane", () => {
+    expect(buildRunbooksHeaders()).toEqual({ "Daintree-Host-Control": "1" });
   });
-
-  it.each(["none", "configured", "connected"] as const)(
-    "reports the hosts state %s beside the model, and never a lane",
-    (hosts) => {
-      expect(buildRunbooksHostHeaders(hosts)).toEqual({
-        "Daintree-Host-Control": "1",
-        "Daintree-Hosts": hosts,
-      });
-    }
-  );
 });
 
 describe("resolveRunbooksMcpUrl", () => {

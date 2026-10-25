@@ -22,6 +22,7 @@ import {
   RUNBOOKS_MCP_SERVER_NAME,
   buildConfirmationsAddendum,
   buildRunbooksAddendum,
+  buildRunbooksHeaders,
   resolveRunbooksMcpUrl,
 } from "./helpSessionRunbooks.js";
 import { agentSupportsAssistantContent, syncAssistantContent } from "./AssistantContentMirror.js";
@@ -109,12 +110,8 @@ export function runbooksEnabled(settings: {
 }
 
 /** The runbook server's entry in a Claude or Copilot MCP config: literal headers, never `${VAR}`. */
-function runbooksJsonEntry(headers: Record<string, string>): Record<string, unknown> {
-  return {
-    type: "http",
-    url: resolveRunbooksMcpUrl(),
-    ...(Object.keys(headers).length > 0 ? { headers } : {}),
-  };
+function runbooksJsonEntry(): Record<string, unknown> {
+  return { type: "http", url: resolveRunbooksMcpUrl(), headers: buildRunbooksHeaders() };
 }
 
 const SCRATCH_BLOCK_MARKERS = {
@@ -427,7 +424,6 @@ export interface PrepareSessionDirectoryInput {
   token: string;
   tier: HelpAssistantTier;
   settings: AssistantSessionSettings;
-  runbooksHeaders: Record<string, string>;
   runCheckpointKey: string;
   /** Whether this session's confirm-gated Daintree calls skip their dialog, asked when the note is written. */
   confirmationsSkipped: () => boolean;
@@ -493,7 +489,6 @@ export class AssistantSessionFiles {
       slot,
       tier,
       settings,
-      runbooksHeaders,
       projectFacts,
       pluginKnowledge,
     } = input;
@@ -700,8 +695,7 @@ export class AssistantSessionFiles {
             settings,
             port,
             token,
-            userConfig.mcpServers,
-            runbooksHeaders
+            userConfig.mcpServers
           );
           await this.writeClaudeSettings(
             sessionPath,
@@ -715,8 +709,7 @@ export class AssistantSessionFiles {
             sessionPath,
             settings,
             port,
-            userConfig.mcpServers,
-            runbooksHeaders
+            userConfig.mcpServers
           );
         } else {
           // Codex and any other agent skip `writeMcpConfig`, so when the
@@ -752,7 +745,7 @@ export class AssistantSessionFiles {
       input.agentId === "codex"
         ? [
             ...(await codexTrustArgs(sessionPath)),
-            ...this.buildCodexLaunchArgs(settings, port, runbooksHeaders),
+            ...this.buildCodexLaunchArgs(settings, port),
             ...toCodexMcpServerArgs(
               userConfig.mcpServers,
               userConfig.warnings,
@@ -790,8 +783,7 @@ export class AssistantSessionFiles {
    */
   private buildCodexLaunchArgs(
     settings: { daintreeControl: boolean; docSearch: boolean; runbookSearch: boolean },
-    port: number | null,
-    runbooksHeaders: Record<string, string> = {}
+    port: number | null
   ): string[] {
     const args: string[] = [];
     // Daintree's own servers skip Codex's per-call approval prompt, as the
@@ -834,12 +826,10 @@ export class AssistantSessionFiles {
         ...approve(RUNBOOKS_MCP_SERVER_NAME)
       );
       // An inline table: the header names' hyphens can't go in a dotted key.
-      if (Object.keys(runbooksHeaders).length > 0) {
-        args.push(
-          "-c",
-          `mcp_servers.${RUNBOOKS_MCP_SERVER_NAME}.http_headers=${tomlInlineTable(runbooksHeaders)}`
-        );
-      }
+      args.push(
+        "-c",
+        `mcp_servers.${RUNBOOKS_MCP_SERVER_NAME}.http_headers=${tomlInlineTable(buildRunbooksHeaders())}`
+      );
     }
     return args;
   }
@@ -864,8 +854,7 @@ export class AssistantSessionFiles {
     settings: { daintreeControl: boolean; docSearch: boolean; runbookSearch: boolean },
     port: number | null,
     token: string,
-    userServers: Record<string, AssistantUserMcpServer> = {},
-    runbooksHeaders: Record<string, string> = {}
+    userServers: Record<string, AssistantUserMcpServer> = {}
   ): Promise<string> {
     // User servers first; Daintree's names are reserved at parse time, so
     // nothing below can be shadowed by them.
@@ -880,7 +869,7 @@ export class AssistantSessionFiles {
       };
     }
     if (runbooksEnabled(settings)) {
-      mcpServers[RUNBOOKS_MCP_SERVER_NAME] = runbooksJsonEntry(runbooksHeaders);
+      mcpServers[RUNBOOKS_MCP_SERVER_NAME] = runbooksJsonEntry();
     }
     if (settings.daintreeControl && port) {
       // Bake the literal token into the file rather than `${DAINTREE_MCP_TOKEN}`
@@ -986,8 +975,7 @@ export class AssistantSessionFiles {
     sessionPath: string,
     settings: { daintreeControl: boolean; docSearch: boolean; runbookSearch: boolean },
     port: number | null,
-    userServers: Record<string, AssistantUserMcpServer> = {},
-    runbooksHeaders: Record<string, string> = {}
+    userServers: Record<string, AssistantUserMcpServer> = {}
   ): Promise<void> {
     const mcpServers: Record<string, unknown> = {};
     for (const [name, server] of Object.entries(userServers)) {
@@ -1000,7 +988,7 @@ export class AssistantSessionFiles {
       };
     }
     if (runbooksEnabled(settings)) {
-      mcpServers[RUNBOOKS_MCP_SERVER_NAME] = runbooksJsonEntry(runbooksHeaders);
+      mcpServers[RUNBOOKS_MCP_SERVER_NAME] = runbooksJsonEntry();
     }
     if (settings.daintreeControl && port) {
       mcpServers["daintree"] = {

@@ -6,7 +6,6 @@ import { getLocalAgentDirectory } from "../../services/assistants/localAgentDire
 import { helpSessionService } from "../../services/HelpSessionService.js";
 import { peekGlobalAssistantService } from "../../services/globalAssistant.js";
 import { isGlobalAssistantId } from "../../../shared/config/globalAssistant.js";
-import type { RunbooksHostsState } from "../../services/helpSessionRunbooks.js";
 import { setHostControlRuntime } from "../../services/mcp-server/hostControlTools.js";
 import type { LaneWake } from "../../services/mcp-server/terminalNotify.js";
 import { getSharedDb, getSharedSqlite } from "../../services/persistence/db.js";
@@ -40,35 +39,6 @@ declare module "../runtime.js" {
     >;
     hostControlLinkClient: HostControlLinkClient;
   }
-}
-
-const REACHABLE_STATUSES: ReadonlySet<ObservedHost["connection"]["status"]> = new Set([
-  "connected",
-  "connecting",
-  "disconnected",
-]);
-
-/**
- * This machine's hosts as runbook search is told them (#13411), from what
- * `host.list` reads: connected means a host this Shell's assistant controls
- * is connected, or holds no link that said why it is down. `host.list` and
- * `host.call` dial a host with no link, and the Shell lets an unused link go
- * after a few minutes, so a host with none is one the assistant reaches on
- * its next call. Hosts this Shell can't observe are unreported rather than
- * guessed down to "none connected".
- */
-export function observedRunbooksHostsState(
-  hasHosts: boolean,
-  observed: readonly ObservedHost[] | null,
-  controlEnabled: (hostId: HostId) => boolean
-): RunbooksHostsState | null {
-  if (!hasHosts) return "none";
-  if (observed === null) return null;
-  return observed.some(
-    (host) => controlEnabled(host.hostId) && REACHABLE_STATUSES.has(host.connection.status)
-  )
-    ? "connected"
-    : "configured";
 }
 
 /**
@@ -131,7 +101,6 @@ function queueOnNoticeLine(
 export interface HostControlInstallDeps {
   /** Every host this Shell knows, as last observed; what `host.list` reads. */
   observeHosts(): ObservedHost[];
-  hasHosts(): boolean;
   /** A connected host's projects, for `host.list` to name. */
   listHostProjects?(hostId: HostId): Promise<readonly HostProjectSummary[]>;
   /** Dials a host this Shell holds no link to, for `host.list` to observe it connected. */
@@ -279,12 +248,7 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
   });
   const unregisterRuntime = setHostControlRuntime(runtime);
   const unregisterCallRelay = registerRemoteService("hostCallRelayClient", runtime);
-  // Read at each provision and held for that session; a host that connects later counts from the next.
-  helpSessionService.setRunbooksHostState(() =>
-    observedRunbooksHostsState(deps.hasHosts(), deps.observeHosts(), deps.isHostControlEnabled)
-  );
   return () => {
-    helpSessionService.setRunbooksHostState(null);
     offSessionEnded();
     unregisterCallRelay();
     unregisterRuntime();

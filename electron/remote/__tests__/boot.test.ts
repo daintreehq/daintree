@@ -589,11 +589,10 @@ describe("startRemoteHosts", () => {
     await startRemoteHosts({ hostMode: false });
     expect(control.installHostControl).toHaveBeenCalledTimes(1);
     const [deps] = control.installHostControl.mock.calls[0] as [
-      { isHostControlEnabled(hostId: string): boolean; hasHosts(): boolean },
+      { isHostControlEnabled(hostId: string): boolean },
     ];
     expect(deps.isHostControlEnabled("control-on")).toBe(true);
     expect(deps.isHostControlEnabled("unknown-host")).toBe(false);
-    expect(deps.hasHosts()).toBe(true);
     await stopRemoteHosts();
     expect(control.uninstall).toHaveBeenCalledTimes(1);
   });
