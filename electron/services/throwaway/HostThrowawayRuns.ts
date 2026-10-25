@@ -6,12 +6,13 @@ import type {
 } from "../../../shared/types/hostThrowaway.js";
 import { HOST_THROWAWAY_TERMINAL_PREFIX } from "../../../shared/config/hostThrowaway.js";
 import { SEND_KEYS_GAP_MS, keySequence } from "../../../shared/utils/terminalKeys.js";
+import type {
+  HostThrowawayExecution,
+  HostThrowawayExecutor,
+  HostThrowawayOwner,
+} from "../../remote/assistant/throwawayRelay.js";
 
-/** Who launched a run: the Shell sender the host authenticated and its help session. */
-export interface HostThrowawayOwner {
-  senderId: string;
-  helpSessionId: string;
-}
+export type { HostThrowawayOwner };
 
 /** One run as the host holds it, for the `host.call` side and expiry to read. */
 export interface HostThrowawayRunEntry {
@@ -73,7 +74,7 @@ const sameOwner = (a: HostThrowawayOwner, b: HostThrowawayOwner): boolean =>
  * the pty-host's, and once a run is closed nothing of it is kept anywhere.
  * Every run is its owner's alone: any other caller reads it as not found.
  */
-export class HostThrowawayRuns {
+export class HostThrowawayRuns implements HostThrowawayExecutor {
   private readonly runs = new Map<string, Held>();
   private readonly byTerminal = new Map<string, string>();
   /** Moves on each endAll, so a launch that straddles one never survives it. */
@@ -100,7 +101,31 @@ export class HostThrowawayRuns {
     return this.byTerminal.has(terminalId);
   }
 
-  async call(owner: HostThrowawayOwner, call: HostThrowawayCall): Promise<HostThrowawayOutcome> {
+  /** One tool for the relay (#14446), which has checked consent and made it at most once. */
+  async run(
+    owner: HostThrowawayOwner,
+    call: HostThrowawayCall,
+    options: { callId: string; timeoutMs: number }
+  ): Promise<HostThrowawayExecution> {
+    // No run ends on time here yet (#14447), so a launch asking for that is refused, not ignored.
+    if (call.tool === "throwaway.launch" && call.args.timeLimitMs !== undefined) {
+      return { status: "refused", reason: "expiry-unsupported" };
+    }
+    const outcome = await this.call(
+      owner,
+      call,
+      Math.min(HOST_THROWAWAY_CLOSE_WAIT_MS, options.timeoutMs)
+    );
+    return outcome.ok
+      ? { status: "done", result: outcome.result }
+      : { status: "failed", reason: outcome.reason };
+  }
+
+  async call(
+    owner: HostThrowawayOwner,
+    call: HostThrowawayCall,
+    closeWaitMs = HOST_THROWAWAY_CLOSE_WAIT_MS
+  ): Promise<HostThrowawayOutcome> {
     this.prune();
     if (call.tool === "throwaway.launch") return this.launch(owner, call.args.agentId);
     const run = this.runs.get(call.args.runId);
@@ -146,7 +171,7 @@ export class HostThrowawayRuns {
         return { ok: true, result: { tool: call.tool, run: this.project(run), accepted: true } };
       }
       case "throwaway.close":
-        return this.close(run);
+        return this.close(run, closeWaitMs);
     }
   }
 
@@ -210,7 +235,7 @@ export class HostThrowawayRuns {
     return { ok: true, result: { tool: "throwaway.launch", run: this.project(run) } };
   }
 
-  private async close(run: Held): Promise<HostThrowawayOutcome> {
+  private async close(run: Held, waitMs: number): Promise<HostThrowawayOutcome> {
     if (run.state === "running") {
       run.closing = true;
       this.deps.kill(run.terminalId);
@@ -218,7 +243,7 @@ export class HostThrowawayRuns {
       const ended = await Promise.race([
         run.exited.then(() => true),
         new Promise<boolean>((resolve) => {
-          timer = setTimeout(() => resolve(false), HOST_THROWAWAY_CLOSE_WAIT_MS);
+          timer = setTimeout(() => resolve(false), waitMs);
         }),
       ]);
       clearTimeout(timer);

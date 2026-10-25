@@ -9,6 +9,8 @@ import {
 import { MCP_RESPONSE_TEXT_MAX_BYTES } from "../../../shared/config/mcpLimits.js";
 import { readTailSnapshot, tailCapturedOutput } from "../../../shared/utils/artifactParser.js";
 import { fitTerminalOutputResult } from "../../../shared/utils/terminalOutputBudget.js";
+import { registerRemoteService } from "../../remote/runtime.js";
+import type { HostThrowawayExecutor } from "../../remote/assistant/throwawayRelay.js";
 import { HostThrowawayRuns, type HostThrowawayRunsDeps } from "./HostThrowawayRuns.js";
 
 export {
@@ -119,4 +121,26 @@ export function getHostThrowawayRuns(): Promise<HostThrowawayRuns> {
 /** The runs, when any throwaway call created them; teardown must not create them just to end them. */
 export function peekHostThrowawayRuns(): HostThrowawayRuns | null {
   return instance;
+}
+
+/**
+ * Offers this machine's throwaway runs to the relays (#14446), loading them on
+ * the first call. The returned teardown ends every run, since no caller could
+ * reach one again, including a launch whose runs were still loading.
+ */
+export function registerHostThrowawayRuns(): () => void {
+  let offered = true;
+  const executor: HostThrowawayExecutor = {
+    run: async (owner, call, options) => {
+      const runs = await getHostThrowawayRuns();
+      if (!offered) return { status: "refused", reason: "throwaway-off" };
+      return runs.run(owner, call, options);
+    },
+  };
+  const unregister = registerRemoteService("hostThrowawayRuns", executor);
+  return () => {
+    offered = false;
+    unregister();
+    instance?.endAll();
+  };
 }

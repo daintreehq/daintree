@@ -108,6 +108,28 @@ describe("HostThrowawayRuns", () => {
     expect(HostThrowawayToolResultSchema.safeParse(status.ok && status.result).success).toBe(true);
   });
 
+  it("answers the relay as its executor, refusing a time limit it can't keep yet", async () => {
+    const { runs, spawned } = harness();
+    const options = { callId: "call-1", timeoutMs: 90_000 };
+    await expect(
+      runs.run(
+        OWNER,
+        { tool: "throwaway.launch", args: { agentId: "claude", timeLimitMs: 60_000 } },
+        options
+      )
+    ).resolves.toEqual({ status: "refused", reason: "expiry-unsupported" });
+    expect(spawned).toEqual([]);
+    const launched = await runs.run(
+      OWNER,
+      { tool: "throwaway.launch", args: { agentId: "claude" } },
+      options
+    );
+    expect(launched).toMatchObject({ status: "done", result: { tool: "throwaway.launch" } });
+    await expect(
+      runs.run(OWNER, { tool: "throwaway.status", args: { runId: "nobody" } }, options)
+    ).resolves.toEqual({ status: "failed", reason: "not-found" });
+  });
+
   it("refuses an agent the host can't launch, and one that doesn't start, keeping nothing", async () => {
     const { runs, killed } = harness({ spawn: async () => false });
     await expect(
