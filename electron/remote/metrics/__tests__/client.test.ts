@@ -449,6 +449,43 @@ describe("HostMetricsClient", () => {
     h.client.dispose();
   });
 
+  it("keeps a frame's timing beside its summary, bounded by the ping it followed (#14462)", async () => {
+    const h = harness([descriptor("studio-01")]);
+    h.client.start();
+    // This Shell's pings, dated an hour back on its own clocks.
+    const longAgo = { wall: Date.now() - 3_600_000, mono: performance.now() - 3_600_000 };
+    const p = await openSessionPair(dir, {}, { clock: () => longAgo });
+    open.push(p.host, p.client);
+    h.openSession("studio-01", p.client);
+    p.client.ping();
+    await waitFor(() => p.host.peerPingNonce === 0);
+    const post = (timing: object) =>
+      p.host.post({
+        lane: Lane.CONTROL,
+        kind: ControlKind.HOST_SUMMARY,
+        body: { ...summary(1), timing } as never,
+      });
+
+    post({ sampleAgeMs: 200, afterPing: 0 });
+    await waitFor(() => h.emitted.length === 1);
+    const held = h.client.latest("studio-01")!;
+    expect(held).not.toHaveProperty("timing");
+    expect(JSON.stringify(h.emitted)).not.toContain("timing");
+    // However quick the trip looked, the frame can be as old as the ping it followed.
+    const receipt = h.client.receiptOf(held)!;
+    expect(receipt.hostAgeMs).toBe(200);
+    expect(receipt.maxAgeMs).toBeGreaterThanOrEqual(3_600_200);
+
+    post({ sampleAgeMs: 200, afterPing: 7 });
+    await waitFor(() => h.emitted.length === 2);
+    expect(h.client.receiptOf(h.client.latest("studio-01")!)).toMatchObject({
+      hostAgeMs: 200,
+      maxAgeMs: null,
+    });
+    expect(h.client.receiptOf(summary(1))).toBeNull();
+    h.client.dispose();
+  });
+
   it("presents attention only for hosts the user opted in to", async () => {
     const h = harness([descriptor("quiet"), descriptor("loud", true)]);
     h.client.start();

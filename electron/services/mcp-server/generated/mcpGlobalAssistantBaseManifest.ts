@@ -390,14 +390,34 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
                     properties: {
                       sampledAt: {
                         type: "number",
+                        description: "The host's own clock: provenance, not an age.",
+                      },
+                      receivedAt: {
+                        description: "This machine's clock when the sample arrived.",
+                        type: ["number", "null"],
                       },
                       ageMs: {
-                        type: "number",
+                        description:
+                          "How old the sample is at most, never by comparing clocks. Null: unknown.",
+                        type: ["number", "null"],
                       },
                       stale: {
                         type: "boolean",
                         description:
                           "Too old to trust: the live figures below are null. Not a zero reading.",
+                      },
+                      staleReason: {
+                        anyOf: [
+                          {
+                            type: "string",
+                            enum: ["age-limit", "clock-uncertain"],
+                          },
+                          {
+                            type: "null",
+                          },
+                        ],
+                        description:
+                          "age-limit: known too old. clock-uncertain: an older host's timestamp, far from this clock: old or clocks disagree. Null when fresh.",
                       },
                       platform: {
                         type: "string",
@@ -477,8 +497,10 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
                     },
                     required: [
                       "sampledAt",
+                      "receivedAt",
                       "ageMs",
                       "stale",
+                      "staleReason",
                       "platform",
                       "cpuPercent",
                       "cpuLogicalCores",

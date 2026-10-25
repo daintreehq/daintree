@@ -187,6 +187,42 @@ describe("installHostMetricsHostWith", () => {
     dispose();
   });
 
+  it("stamps each frame with the sample's age and the newest ping it followed (#14462)", async () => {
+    const server = new FakeServer();
+    const latest = summary(42);
+    const ageOf = vi.fn((s: HostMetricsSummary) => (s === latest ? 600_000 : null));
+    const dispose = installHostMetricsHostWith(
+      server,
+      deps({ loop: { subscribe: () => () => {}, latest: () => latest, ageOf } })
+    );
+    const p = await pair();
+    const seen: unknown[] = [];
+    p.client.on(Lane.CONTROL, ControlKind.HOST_SUMMARY, (body) => seen.push(body.timing));
+    p.client.ping();
+    p.client.ping();
+    await waitFor(() => p.host.peerPingNonce === 1);
+    server.attach(p.host, "late");
+    await waitFor(() => seen.length === 1);
+    // A cached sample handed to a Shell that just attached carries its real age, not zero.
+    expect(seen).toEqual([{ sampleAgeMs: 600_000, afterPing: 1 }]);
+    dispose();
+  });
+
+  it("names no ping before the Shell sent one, and no age from a loop that can't say", async () => {
+    const server = new FakeServer();
+    const dispose = installHostMetricsHostWith(
+      server,
+      deps({ loop: { subscribe: () => () => {}, latest: () => summary(42) } })
+    );
+    const p = await pair();
+    const seen: unknown[] = [];
+    p.client.on(Lane.CONTROL, ControlKind.HOST_SUMMARY, (body) => seen.push(body.timing));
+    server.attach(p.host, "late");
+    await waitFor(() => seen.length === 1);
+    expect(seen).toEqual([{ sampleAgeMs: null, afterPing: null }]);
+    dispose();
+  });
+
   it("submits fleet prompts as the calling session, never the client id its HELLO claimed", async () => {
     const server = new FakeServer();
     const submitFleet = vi.fn(async () => {});
