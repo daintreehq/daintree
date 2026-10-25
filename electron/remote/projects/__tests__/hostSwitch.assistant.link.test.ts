@@ -246,6 +246,37 @@ describe("bringing a project to a host for an assistant (#14140)", () => {
     expect(r.studio.projects).toHaveLength(0);
   });
 
+  it("still takes a copy already in the host's default folder when the remote is a folder here", async () => {
+    const r = await rig();
+    const dir = path.join(root, `folder-default-${++counter}`);
+    git(root, ["clone", "-q", bare, dir]);
+    git(dir, ["remote", "add", "upstream", URL]);
+    const project = r.local.addProject(dir);
+    const source = await r.local.service.describeSource({
+      projectId: project.id,
+      worktreePath: null,
+      skipBranch: true,
+    });
+    const destination = await r.studio.service.suggestDestination({
+      homeRelativePath: source.homeRelativePath,
+      repoName: source.repoName,
+      remoteUrls: source.remotes.map((remote) => remote.url),
+    });
+    git(root, ["clone", "-q", URL, destination.path]);
+
+    // A new copy asked for still lands on the folder's own clone, which needs no remote here.
+    const answer = await r.service.ensureForAssistant(
+      request(project.id, { worktree: false, copy: "new" }),
+      WAIT
+    );
+
+    expect(answer).toMatchObject({
+      status: "ready",
+      project: { path: destination.path, how: "registered" },
+    });
+    expect(r.studio.clone).not.toHaveBeenCalled();
+  });
+
   it("uses the host's one registered copy, and asks when it has two", async () => {
     const r = await rig();
     const project = sourceProject(r.local, "copies");
