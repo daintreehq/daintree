@@ -969,6 +969,14 @@ describe("PtyClient projectId assignment", () => {
       expect(client.getLiveWorkspaceIds().has("project-a")).toBe(true);
     });
 
+    it("leaves out a host's throwaway runs, which are no workspace to reopen (#14445)", () => {
+      const client = createClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "daintree:host-throwaway" });
+      client.spawn("t2", { cwd: "/b", cols: 80, rows: 24, projectId: "project-b" });
+
+      expect(client.getLiveWorkspaceIds()).toEqual(new Set(["project-b"]));
+    });
+
     it("drops a workspace once its last terminal exits", () => {
       const client = createClient();
       client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });

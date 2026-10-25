@@ -33,6 +33,50 @@ describe("bridgePtyEvent", () => {
     });
   });
 
+  it("keeps a host throwaway run's agent observations off the bus (#14445)", () => {
+    const heard: unknown[] = [];
+    events.on("agent:state-changed", (payload) => heard.push(payload));
+    events.on("agent:detected", (payload) => heard.push(payload));
+    events.on("agent:spawned", (payload) => heard.push(payload));
+
+    const throwaway = "daintree-throwaway-1";
+    expect(
+      bridgePtyEvent({
+        type: "agent-state",
+        id: throwaway,
+        agentId: "claude",
+        state: "waiting",
+        previousState: "working",
+        timestamp: 1,
+        trigger: "activity",
+        confidence: 1,
+      } as never)
+    ).toBe(true);
+    expect(
+      bridgePtyEvent({
+        type: "agent-detected",
+        terminalId: throwaway,
+        agentType: "claude",
+        timestamp: 1,
+      } as never)
+    ).toBe(true);
+    expect(
+      bridgePtyEvent({
+        type: "agent-spawned",
+        payload: { agentId: "claude", terminalId: throwaway, type: "claude", timestamp: 1 },
+      } as never)
+    ).toBe(true);
+    expect(heard).toEqual([]);
+
+    bridgePtyEvent({
+      type: "agent-detected",
+      terminalId: "term-1",
+      agentType: "claude",
+      timestamp: 1,
+    } as never);
+    expect(heard).toHaveLength(1);
+  });
+
   it("forwards a rate-limit observation (#12797)", () => {
     const payloads: unknown[] = [];
     events.on("agent:rate-limit-observed", (payload) => payloads.push(payload));

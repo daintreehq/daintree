@@ -13,6 +13,7 @@
  * PtyClient.ts (#11007) — no behavior changes.
  */
 
+import { isHostThrowawayWorkspaceId } from "../../../shared/config/hostThrowaway.js";
 import { DEFAULT_SHARD_KEY } from "./fabricConfig.js";
 import type { PtyShard } from "./PtyShard.js";
 
@@ -58,7 +59,9 @@ export class ShardPlacementRouter {
 
   /** Pure placement lookup — never creates shards or records overrides. */
   peekPlacementKey(projectId: string | null | undefined): string {
-    if (!this.deps.fabricEnabled || !projectId) return DEFAULT_SHARD_KEY;
+    if (!this.deps.fabricEnabled || !projectId || isHostThrowawayWorkspaceId(projectId)) {
+      return DEFAULT_SHARD_KEY;
+    }
     return this.deps.projectShardOverrides.get(projectId) ?? projectId;
   }
 
@@ -69,7 +72,11 @@ export class ShardPlacementRouter {
    * shards while it has live terminals).
    */
   resolvePlacementKey(projectId: string | null | undefined): string {
-    if (!this.deps.fabricEnabled || !projectId) return DEFAULT_SHARD_KEY;
+    // A host's throwaway runs (#14445) are no project: they take no shard of
+    // their own, and the default one keeps routing to them once they exit.
+    if (!this.deps.fabricEnabled || !projectId || isHostThrowawayWorkspaceId(projectId)) {
+      return DEFAULT_SHARD_KEY;
+    }
     const override = this.deps.projectShardOverrides.get(projectId);
     if (override) return override;
     if (this.deps.shards.has(projectId)) return projectId;

@@ -239,6 +239,7 @@ import {
 import { windowsSystemTool } from "../../../utils/windowsExecutable.js";
 import { MAX_TERMINALS_PER_RECIPE_ADMISSION_BATCH } from "../../../../shared/utils/recipeSanitizer.js";
 import { buildCommandLaunchShell } from "./commandLaunch.js";
+import { isHostThrowawayWorkspaceId } from "../../../../shared/config/hostThrowaway.js";
 
 // Longest a Windows command launch waits for the default shell's PATH search,
 // matching the pty host's wait before it reports ready.
@@ -1226,7 +1227,12 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       const startupCommand = windowsAgentExecutable
         ? buildWindowsAgentLaunchScript(safeCommand, windowsAgentExecutable, windowsAgentEnv())
         : safeCommand;
-      const commandLaunchShell = buildCommandLaunchShell(startupCommand, quotingShell);
+      // A host's throwaway run (#14445) ends with its agent, so its exit is the agent's.
+      const commandLaunchShell = buildCommandLaunchShell(
+        startupCommand,
+        quotingShell,
+        isHostThrowawayWorkspaceId(projectId) ? "exit" : "keep-open"
+      );
       const resolvedArgs = commandLaunchShell ? commandLaunchShell.args : projectArgs;
       const spawnShell = commandLaunchShell
         ? commandLaunchShell.shell

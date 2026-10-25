@@ -650,6 +650,24 @@ describe("captured agent session persistence (#12433)", () => {
       expect((await savedPane())?.agentSessionId).toBe(SESSION_ID);
     });
 
+    it("takes nothing from a host's throwaway run (#14445)", async () => {
+      const generation = launch({ projectId: "daintree:host-throwaway" });
+      const enqueue = vi.spyOn(stateRef.manager!, "enqueueProjectStateUpdate");
+
+      acceptCapturedAgentSession(
+        capture(generation, { record: { projectId: "daintree:host-throwaway" } })
+      );
+
+      await expect(sealAndDrainCapturedSessionPersistence(5_000)).resolves.toEqual({
+        drained: true,
+        pending: 0,
+      });
+      // Turned away before either branch: no journal write tried, no project queue entered.
+      expect(persistAgentSession).not.toHaveBeenCalled();
+      expect(enqueue).not.toHaveBeenCalled();
+      expect(await readSessionHistory(userDataDir)).toEqual([]);
+    });
+
     it("refuses captures that arrive after it sealed", async () => {
       const generation = launch();
       await seed([pane()]);

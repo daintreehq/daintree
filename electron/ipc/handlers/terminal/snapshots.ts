@@ -18,6 +18,10 @@ import { PERF_MARKS } from "../../../../shared/perf/marks.js";
 import { getProjectIdFromSenderUrl } from "../../senderIdentity.js";
 import { defineIpcNamespace, op, opValidated } from "../../define.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
+import {
+  isHostThrowawayTerminalId,
+  isHostThrowawayWorkspaceId,
+} from "../../../../shared/config/hostThrowaway.js";
 import type {
   SerializeReadOptions,
   SerializedTerminalSnapshot,
@@ -58,6 +62,15 @@ function vouchForStreamOffsets(
 ): SerializedTerminalSnapshot | null {
   if (snapshot?.continuation?.streamOffset === undefined) return snapshot;
   return { ...snapshot, remoteStreamOffsets: true };
+}
+
+/**
+ * Whether a host-wide terminal listing shows this terminal: never a dev
+ * preview, and never a host's throwaway run (#14445), which only the Shell
+ * session that launched it reads.
+ */
+function isListedTerminal(terminal: { kind?: string; projectId?: string }): boolean {
+  return terminal.kind !== "dev-preview" && !isHostThrowawayWorkspaceId(terminal.projectId);
 }
 
 export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () => void {
@@ -233,7 +246,7 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
       const terminals = await ptyClient.getAvailableTerminalsAsync();
 
       const sanitized = terminals
-        .filter((t) => t.kind !== "dev-preview")
+        .filter((t) => isListedTerminal(t))
         .map((t) => ({
           id: t.id,
           projectId: t.projectId,
@@ -289,7 +302,7 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
       );
 
       const sanitized = terminals
-        .filter((t) => t.kind !== "dev-preview")
+        .filter((t) => isListedTerminal(t))
         .map((t) => ({
           id: t.id,
           projectId: t.projectId,
@@ -334,7 +347,7 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
       const terminals = await ptyClient.getAllTerminalsAsync();
 
       const sanitized = terminals
-        .filter((t) => t.kind !== "dev-preview")
+        .filter((t) => isListedTerminal(t))
         .map((t) => ({
           id: t.id,
           projectId: t.projectId,
@@ -389,7 +402,9 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
       return [];
     }
     try {
-      const matches = await ptyClient.searchSemanticBuffersAsync(query, isRegex);
+      const matches = (await ptyClient.searchSemanticBuffersAsync(query, isRegex)).filter(
+        (match) => !isHostThrowawayTerminalId(match.terminalId)
+      );
       // A window on another machine searches its own project's terminals only.
       if (ctx.endpoint?.kind !== "remote-view") return matches;
       const projectId = ctx.endpoint.projectId;

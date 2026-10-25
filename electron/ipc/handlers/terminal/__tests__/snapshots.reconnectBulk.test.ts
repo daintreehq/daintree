@@ -1106,6 +1106,27 @@ describe("terminal pool inspection handlers", () => {
       expect((result[0] as { id: string }).id).toBe("t-terminal");
     });
 
+    it("leaves out a host's throwaway runs (#14445)", async () => {
+      const ptyClient = {
+        getAllTerminalsAsync: vi.fn(async () => [
+          { id: "t-terminal", kind: "terminal", projectId: "project-a", cwd: "/tmp" },
+          {
+            id: "daintree-throwaway-1",
+            kind: "terminal",
+            projectId: "daintree:host-throwaway",
+            cwd: "/tmp",
+          },
+        ]),
+      };
+
+      registerTerminalSnapshotHandlers({ ptyClient } as unknown as HandlerDependencies);
+
+      const result = (await getHandler(CHANNELS.TERMINAL_GET_ALL)(undefined)) as Array<{
+        id: string;
+      }>;
+      expect(result.map((terminal) => terminal.id)).toEqual(["t-terminal"]);
+    });
+
     it("includes hasPty and activityTier fields", async () => {
       const ptyClient = {
         getAllTerminalsAsync: vi.fn(async () => [

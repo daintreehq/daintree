@@ -70,6 +70,7 @@ import {
 } from "./windowsTreeKillNotice.js";
 import { store } from "../store.js";
 import { getPluginAgentRegistry } from "../../shared/config/pluginAgentRegistry.js";
+import { isHostThrowawayWorkspaceId } from "../../shared/config/hostThrowaway.js";
 import { getPluginProcessToolRegistry } from "../../shared/config/pluginProcessToolRegistry.js";
 
 const logger = createLogger("main:PtyClient");
@@ -1790,7 +1791,14 @@ export class PtyClient extends EventEmitter {
     const ids = new Set<string>();
     for (const options of this.pendingSpawns.values()) {
       const projectId = options?.projectId;
-      if (typeof projectId === "string" && projectId.length > 0) ids.add(projectId);
+      // A throwaway run (#14445) is no workspace to bring back.
+      if (
+        typeof projectId === "string" &&
+        projectId.length > 0 &&
+        !isHostThrowawayWorkspaceId(projectId)
+      ) {
+        ids.add(projectId);
+      }
     }
     return ids;
   }

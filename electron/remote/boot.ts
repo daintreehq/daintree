@@ -384,6 +384,11 @@ export async function startRemoteHosts(options: StartRemoteHostsOptions): Promis
     );
     if (!started) return;
   }
+  // This machine's throwaway runs (#14445), for its own assistants and any
+  // Shell's; owned by the host role, so a Shell restarted alone keeps them.
+  const { registerHostThrowawayRuns } = await import("../services/throwaway/index.js");
+  if (!started) return;
+  ownedBy("host").push(registerHostThrowawayRuns());
   startClient(options);
   if (__DAINTREE_REMOTE_HOST_ROLE__ && isRemoteHostSupported()) {
     const { startHostRole } = await import("./hostBoot.js");

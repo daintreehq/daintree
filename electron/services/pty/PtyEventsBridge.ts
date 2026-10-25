@@ -7,6 +7,7 @@
  */
 
 import { events } from "../events.js";
+import { isHostThrowawayTerminalId } from "../../../shared/config/hostThrowaway.js";
 import { HANDBACK_CODE_PATTERN } from "../../../shared/types/handback.js";
 import type { PtyHostEvent, TerminalFlowStatus } from "../../../shared/types/pty-host.js";
 import type { AgentStateChangeTrigger } from "../../types/index.js";
@@ -70,11 +71,28 @@ function normalizeConfidence(confidence: number): number {
   return confidence;
 }
 
+/** The terminal an agent event is about, wherever its shape carries it. */
+function agentEventTerminalId(event: PtyHostEvent): string {
+  const fields = event as {
+    id?: unknown;
+    terminalId?: unknown;
+    payload?: { terminalId?: unknown };
+  };
+  const id = fields.id ?? fields.terminalId ?? fields.payload?.terminalId;
+  return typeof id === "string" ? id : "";
+}
+
 /**
  * Bridge PTY Host events to the internal event bus.
  * Returns true if the event was handled as a domain event.
  */
 export function bridgePtyEvent(event: PtyHostEvent, config?: PtyEventsBridgeConfig): boolean {
+  // A host's throwaway run (#14445) is its Shell session's alone: none of its
+  // agent's observations reach the bus, so no renderer, notification, sound or
+  // Shell notice ever hears of it.
+  if (event.type.startsWith("agent-") && isHostThrowawayTerminalId(agentEventTerminalId(event))) {
+    return true;
+  }
   switch (event.type) {
     case "agent-state":
       events.emit("agent:state-changed", {

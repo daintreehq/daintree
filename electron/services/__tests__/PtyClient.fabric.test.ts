@@ -298,6 +298,21 @@ describe("PtyClient fabric", () => {
       client.dispose();
     });
 
+    it("keeps a host's throwaway runs on the default shard, taking no project's slot (#14445)", () => {
+      const client = createFabricClient();
+      client.spawn("daintree-throwaway-1", {
+        cwd: "/tmp",
+        cols: 80,
+        rows: 24,
+        projectId: "daintree:host-throwaway",
+      });
+      expect(forks).toHaveLength(1);
+      expect(messagesOfType(defaultShard().child, "spawn").map((m) => m.id)).toEqual([
+        "daintree-throwaway-1",
+      ]);
+      client.dispose();
+    });
+
     it("groups fleet broadcast writes per owning shard", () => {
       const client = createFabricClient();
       client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
