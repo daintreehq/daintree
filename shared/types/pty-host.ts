@@ -1364,7 +1364,8 @@ export type TerminalSubmitStatusState = "slow" | "stalled" | "settled" | "failed
  *
  * `settled-prompt-strict` is the same check without mid-turn queueing, even
  * for a CLI that queues input while it works: a brief one assistant sends
- * another (#13496) is refused rather than taken in the middle of a turn.
+ * another (#13496) is refused rather than taken in the middle of a turn. A
+ * question the agent asked in prose still counts as its prompt (#14475).
  */
 export type TerminalSubmitGuard = "settled-prompt" | "settled-prompt-strict";
 

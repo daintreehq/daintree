@@ -1,5 +1,6 @@
 import type { WaitingReason } from "../../../shared/types/agent.js";
 import { stripAnsi } from "./AgentPatternDetector.js";
+import { endsOnChoiceDialog } from "../../../shared/utils/terminalChoice.js";
 import { UNIVERSAL_APPROVAL_HINT_PATTERNS } from "./terminalActivityPatterns.js";
 
 /**
@@ -210,6 +211,12 @@ export function classifyWaitingReason(
     if (APPROVAL_PATTERNS.some((p) => p.test(line))) {
       return "approval";
     }
+  }
+  // A choice selector whose options aren't yes/no ("Which framework?" over
+  // "❯ 1. React" / "  2. Vue") takes a specific choice, not free text, so it
+  // is an approval wait however its question reads (#14475).
+  if (endsOnChoiceDialog(strippedLines)) {
+    return "approval";
   }
 
   // Priority 2: the agent settled right after a blocking error.

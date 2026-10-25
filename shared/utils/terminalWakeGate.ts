@@ -37,7 +37,19 @@ export interface WakeGateOptions {
    * typed since its turn began may be typed into now.
    */
   acceptWorking?: boolean;
+  /**
+   * A question asked in prose (`waitingReason: "question"`) leaves the agent
+   * at its own prompt, where a typed answer is what it waits for. Approval
+   * selectors and errors are classified separately and still block.
+   */
+  acceptQuestion?: boolean;
 }
+
+/**
+ * The gate a send from one assistant to another asks (#13496): never
+ * mid-turn, and a question asked in prose is still its prompt (#14475).
+ */
+export const ASSISTANT_SEND_GATE: WakeGateOptions = { acceptWorking: false, acceptQuestion: true };
 
 /** The gate options for the agent running in a terminal. */
 export function wakeGateOptionsFor(agentId: string | undefined): WakeGateOptions {
@@ -83,7 +95,10 @@ export function evaluateWakeGate(
   if (snapshot.agentState !== "waiting") {
     return { kind: "blocked", reason: "not-at-prompt" };
   }
-  const reason = snapshot.waitingReason;
+  const reason =
+    snapshot.waitingReason === "question" && options.acceptQuestion === true
+      ? "prompt"
+      : snapshot.waitingReason;
   if (reason === "approval" || reason === "question" || reason === "error") {
     return { kind: "blocked", reason };
   }

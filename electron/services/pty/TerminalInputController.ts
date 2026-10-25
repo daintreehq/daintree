@@ -2,6 +2,7 @@ import { stat } from "fs/promises";
 import type { TerminalInfo } from "./types.js";
 import type { TerminalSubmitGuard } from "../../../shared/types/pty-host.js";
 import {
+  ASSISTANT_SEND_GATE,
   evaluateWakeGate,
   wakeGateOptionsFor,
   type WakeGateSnapshot,
@@ -383,7 +384,10 @@ export class TerminalInputController {
     this.host.writeQueue.submit(text, token, onPtyWritten, admit, imagePaths);
   }
 
-  /** Only at a prompt settled since the lane last wrote to it, and never mid-turn. */
+  /**
+   * Only at a prompt settled since the lane last wrote to it, and never
+   * mid-turn. A prose question is still that prompt (#14475).
+   */
   private admitStrict(): boolean {
     if (this.isInputLocked) return false;
     const terminal = this.host.terminalInfo;
@@ -393,7 +397,7 @@ export class TerminalInputController {
     ) {
       return false;
     }
-    return evaluateWakeGate(wakeGateSnapshot(terminal), { acceptWorking: false }).kind === "ready";
+    return evaluateWakeGate(wakeGateSnapshot(terminal), ASSISTANT_SEND_GATE).kind === "ready";
   }
 
   /**

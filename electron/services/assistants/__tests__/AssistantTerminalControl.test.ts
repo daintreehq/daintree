@@ -233,7 +233,8 @@ describe("AssistantTerminalControl (#13496)", () => {
     it.each([
       ["mid-turn, whatever its CLI queues", atPrompt({ agentState: "working" })],
       ["a draft typed since it settled", atPrompt({ lastTypedInputAt: 1_000 })],
-      ["a question only a person answers", atPrompt({ waitingReason: "approval" })],
+      ["a dialog only a person answers", atPrompt({ waitingReason: "approval" })],
+      ["stopped on an error", atPrompt({ waitingReason: "error" })],
       ["exited", atPrompt({ isExited: true })],
     ])("refuses with its state while %s, typing nothing", async (_label, record) => {
       byTerminal("t-one")!.record = record;
@@ -241,6 +242,25 @@ describe("AssistantTerminalControl (#13496)", () => {
       await expect(
         control.submit(LOCAL, target, { command: "x", generation: 3, handback: true })
       ).rejects.toMatchObject({ code: expect.stringMatching(/^ASSISTANT_BUSY$/) });
+      expect(mocks.submit).not.toHaveBeenCalled();
+    });
+
+    it("sends the answer to a question the assistant asked in prose (#14475)", async () => {
+      byTerminal("t-one")!.record = atPrompt({ waitingReason: "question" });
+      const target = control.require(LOCAL, "t-one");
+      await control.submit(LOCAL, target, { command: "toFixed", generation: 3, handback: false });
+      expect(mocks.submit).toHaveBeenCalledTimes(1);
+    });
+
+    it("refuses a question with a draft typed since it settled", async () => {
+      byTerminal("t-one")!.record = atPrompt({
+        waitingReason: "question",
+        lastTypedInputAt: 1_000,
+      });
+      const target = control.require(LOCAL, "t-one");
+      await expect(
+        control.submit(LOCAL, target, { command: "x", generation: 3, handback: false })
+      ).rejects.toMatchObject({ code: "ASSISTANT_BUSY" });
       expect(mocks.submit).not.toHaveBeenCalled();
     });
 
@@ -493,7 +513,6 @@ describe("AssistantTerminalControl (#13496)", () => {
 
       it.each([
         ["approval", "timed-out"],
-        ["question", "timed-out"],
         ["error", "agent-error"],
       ] as const)(
         "stops waiting at once on a %s on screen, reporting %s",
@@ -523,6 +542,20 @@ describe("AssistantTerminalControl (#13496)", () => {
           expect(slept).toEqual([]);
         }
       );
+
+      it("reports it ready at a question asked in prose, which a send answers (#14475)", async () => {
+        const read = deps.getTerminal;
+        deps.getTerminal = async (terminalId) => {
+          if (terminalId === "t-new") started.record = atPrompt({ waitingReason: "question" });
+          return read(terminalId);
+        };
+        control = new AssistantTerminalControl(deps);
+
+        const result = await control.start(RELAY, { agentId: "codex" });
+
+        expect(result).toMatchObject({ ready: true, notReadyReason: null });
+        expect(slept).toEqual([]);
+      });
 
       it("reads again after a read that fails", async () => {
         let reads = 0;

@@ -18,6 +18,7 @@ import { assessInterruptCandidate } from "../../../shared/utils/terminalInterrup
 import { buildTerminalSendCommandReceipt } from "../../../shared/utils/terminalSendCommandResult.js";
 import {
   evaluateWakeGate,
+  ASSISTANT_SEND_GATE,
   type WakeBlockReason,
   type WakeGateVerdict,
 } from "../../../shared/utils/terminalWakeGate.js";
@@ -114,7 +115,7 @@ export class AssistantTargetError extends Error {
 const START_SETTLE_WAIT_MS = 20_000;
 const START_SETTLE_POLL_MS = 250;
 /** What a started assistant's screen can show that no amount of waiting clears. */
-const WAITING_WONT_CLEAR: ReadonlySet<WakeBlockReason> = new Set(["approval", "question", "error"]);
+const WAITING_WONT_CLEAR: ReadonlySet<WakeBlockReason> = new Set(["approval", "error"]);
 
 /** A read that gives up, as unread, once `ms` pass; the timer never outlives it. */
 function readWithin<T>(read: Promise<T>, ms: number): Promise<T | null> {
@@ -187,7 +188,7 @@ function busyMessage(verdict: Exclude<WakeGateVerdict, { kind: "ready" }>): stri
       return "Someone has typed into the assistant's prompt since it settled. Nothing was sent, so their draft stays; send once it has settled again.";
     case "approval":
     case "question":
-      return "The assistant is waiting on a question only a person in its pane can answer. Nothing was sent.";
+      return "The assistant is waiting on a dialog in its pane that only a person can answer. Nothing was sent.";
     case "error":
       return "The assistant stopped on an error. Nothing was sent.";
     case "no-agent":
@@ -329,8 +330,8 @@ export class AssistantTerminalControl {
    * Ready by its screen is not yet where a send is admitted: the greeting's
    * turn can still be finishing under a prompt the CLI already draws, and a
    * send then is refused as busy. Waits, bounded, for the gate `submit` asks,
-   * so a send right after a start goes in. An approval, question or error on
-   * screen won't clear by waiting. Each read counts against the same bound.
+   * so a send right after a start goes in. An approval or error on screen
+   * won't clear by waiting. Each read counts against the same bound.
    */
   private async untilSendAdmitted(
     terminalId: string
@@ -343,7 +344,7 @@ export class AssistantTerminalControl {
       if (left <= 0) return "timed-out";
       const record = await readWithin(this.deps.getTerminal(terminalId), left);
       if (record) {
-        const verdict = evaluateWakeGate(record, { acceptWorking: false });
+        const verdict = evaluateWakeGate(record, ASSISTANT_SEND_GATE);
         if (verdict.kind === "ready") return "ready";
         if (verdict.kind === "blocked" && WAITING_WONT_CLEAR.has(verdict.reason)) {
           return verdict.reason === "error" ? "agent-error" : "timed-out";
@@ -376,7 +377,7 @@ export class AssistantTerminalControl {
         `Assistant terminal '${target.terminalId}' can't be read right now. Nothing was sent.`
       );
     }
-    const verdict = evaluateWakeGate(record, { acceptWorking: false });
+    const verdict = evaluateWakeGate(record, ASSISTANT_SEND_GATE);
     if (verdict.kind !== "ready") {
       throw new AssistantTargetError(
         ASSISTANT_TARGET_REFUSALS.busy,
