@@ -158,7 +158,7 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
     category: "help",
     danger: "safe",
     description:
-      "List the hosts this assistant reaches, this machine first as local, as observed: link flags, build, installed CLIs, load sample, agent counts and each connected host's projects, which calls name. Null means unmeasured.",
+      "List the hosts this assistant reaches, this machine first as local, as observed: link flags, build, installed CLIs, load sample, agent counts and a page of each connected host's projects, which calls name. Null means unmeasured.",
     enabled: true,
     id: "host.list",
     inputSchema: {
@@ -176,6 +176,24 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
           type: "string",
           minLength: 1,
           maxLength: 256,
+        },
+        hostId: {
+          description: "List only this host.",
+          type: "string",
+          minLength: 1,
+          maxLength: 64,
+        },
+        projectQuery: {
+          description: "Only projects whose name contains this, any case.",
+          type: "string",
+          minLength: 1,
+          maxLength: 128,
+        },
+        projectCursor: {
+          description: "A projectInventory.nextCursor: that host's next page, same query.",
+          type: "string",
+          minLength: 1,
+          maxLength: 1024,
         },
       },
     },
@@ -533,6 +551,51 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
                   },
                 ],
               },
+              projectInventory: {
+                anyOf: [
+                  {
+                    type: "object",
+                    properties: {
+                      complete: {
+                        type: "boolean",
+                        description:
+                          "This answer names every match. With a total, pages walked to a null nextCursor name them all.",
+                      },
+                      total: {
+                        description: "Null: past the host's own list limit.",
+                        type: ["number", "null"],
+                      },
+                      offset: {
+                        type: "number",
+                      },
+                      omitted: {
+                        description: "Matching projects not named here, earlier pages too.",
+                        type: ["number", "null"],
+                      },
+                      nextCursor: {
+                        description: "projectCursor for the next page.",
+                        type: ["string", "null"],
+                      },
+                      listChanged: {
+                        type: "boolean",
+                        description: "The list changed since the cursor: its first page again.",
+                      },
+                    },
+                    required: [
+                      "complete",
+                      "total",
+                      "offset",
+                      "omitted",
+                      "nextCursor",
+                      "listChanged",
+                    ],
+                    additionalProperties: false,
+                  },
+                  {
+                    type: "null",
+                  },
+                ],
+              },
               control: {
                 type: "boolean",
               },
@@ -844,6 +907,7 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
               "load",
               "agentsObserved",
               "projects",
+              "projectInventory",
               "control",
             ],
             additionalProperties: false,
