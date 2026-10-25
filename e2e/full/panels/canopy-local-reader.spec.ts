@@ -232,6 +232,15 @@ test.describe("Canopy on its local model", () => {
     expect(readers).toHaveLength(1);
     console.log(`Light reader process: ${readers[0]!.workingSetKb} KB working set`);
 
+    // TEMP-DIAG: what the pane itself shows for the approval agent.
+    console.log(
+      "DIAG pane text:\n" +
+        (await page
+          .locator(`[data-panel-id="${agents.approval}"] .xterm-rows`)
+          .first()
+          .evaluate((el) => (el as HTMLElement).innerText.slice(0, 600))
+          .catch((e: Error) => `no xterm rows: ${e.message}`))
+    );
     // TEMP-DIAG: what the reader was given for the approval agent.
     for (const read of traceReads().filter((r) => r.stage === "reader")) {
       const input = (read as unknown as { input?: { runId?: string; lines?: string[] } }).input;
