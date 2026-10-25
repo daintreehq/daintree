@@ -523,6 +523,8 @@ describe("LocalAgentDirectory last-known retention", () => {
       terminals: [terminal({ id: "w1", projectId: "p1", detectedAgentId: "claude", title })],
       degraded: false,
     });
+    const outstanding = (directory: LocalAgentDirectory) =>
+      (directory as unknown as { collecting: Map<string, unknown> }).collecting.size;
     const labels = (read: AgentDirectory) =>
       read.entries.map((entry) => (entry.state === "live" ? entry.label : null));
 
@@ -564,6 +566,7 @@ describe("LocalAgentDirectory last-known retention", () => {
         const stale = await c;
         expect(stale).toMatchObject({ coverage: "stale", observedAt: 300, complete: false });
         expect(labels(stale)).toEqual(["new snapshot"]);
+        expect(outstanding(directory)).toBe(0);
       } finally {
         vi.useRealTimers();
       }
@@ -591,6 +594,7 @@ describe("LocalAgentDirectory last-known retention", () => {
         await vi.advanceTimersByTimeAsync(0);
         reads.calls[1]!.resolve(snapshot("new snapshot"));
         expect(labels(await b)).toEqual(["new snapshot"]);
+        expect(outstanding(directory)).toBe(1);
 
         for (let i = 0; i < 64; i++) {
           const other = directory.read({ projectId: `other-${i}` });
@@ -607,6 +611,7 @@ describe("LocalAgentDirectory last-known retention", () => {
         reads.calls.at(-1)!.reject(new Error("no pty client"));
         expect(await c).toMatchObject({ coverage: "unreachable", observedAt: null, entries: [] });
         expect(vi.getTimerCount()).toBe(0);
+        expect(outstanding(directory)).toBe(0);
       } finally {
         vi.useRealTimers();
       }
