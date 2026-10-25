@@ -24,7 +24,17 @@ function host(overrides: Partial<ObservedHost> = {}): ObservedHost {
   };
 }
 
-const CONNECTED = { status: "connected", rttMs: 12, handshake: {} as never } as const;
+const CONNECTED = {
+  status: "connected",
+  rttMs: 12,
+  handshake: {
+    version: "1.0.0",
+    commit: "abc1234",
+    protocolVersion: 12,
+    platform: "linux",
+    arch: "x64",
+  },
+} as const;
 
 describe("HostCallRuntime (#13493, #13496)", () => {
   let hosts: ObservedHost[];
@@ -107,6 +117,28 @@ describe("HostCallRuntime (#13493, #13496)", () => {
           hostId: "studio",
           name: "studio-01",
           connection: "connected",
+          link: {
+            status: "connected",
+            attempt: null,
+            restarting: false,
+            hostModeOff: false,
+            stoppedRetrying: null,
+            disconnectedByPerson: false,
+            quietSince: null,
+            mismatch: null,
+          },
+          build: {
+            source: "connected",
+            handshake: {
+              version: "1.0.0",
+              commit: "abc1234",
+              protocolVersion: 12,
+              platform: "linux",
+              arch: "x64",
+            },
+          },
+          // The summary in this fixture names no CLIs: unknown, never "none installed".
+          agentClis: { coverage: "unknown", sampledAt: 950, installed: [], omitted: 0 },
           rttMs: 12,
           lastSeenAt: 900,
           load: {
@@ -137,6 +169,27 @@ describe("HostCallRuntime (#13493, #13496)", () => {
           hostId: "off",
           name: "laptop",
           connection: "connected",
+          link: {
+            status: "connected",
+            attempt: null,
+            restarting: false,
+            hostModeOff: false,
+            stoppedRetrying: null,
+            disconnectedByPerson: false,
+            quietSince: null,
+            mismatch: null,
+          },
+          build: {
+            source: "connected",
+            handshake: {
+              version: "1.0.0",
+              commit: "abc1234",
+              protocolVersion: 12,
+              platform: "linux",
+              arch: "x64",
+            },
+          },
+          agentClis: { coverage: "unknown", sampledAt: null, installed: [], omitted: 0 },
           rttMs: 12,
           lastSeenAt: null,
           load: null,
@@ -238,6 +291,28 @@ describe("HostCallRuntime (#13493, #13496)", () => {
         });
       });
 
+      it("ages a sample's CLIs by the same clock as its load (#14461)", async () => {
+        const agentClis = [{ agentId: "claude", version: "2.1.0" }];
+        hosts = [
+          host({
+            connection: CONNECTED,
+            summary: { ...fresh, sampledAt: 1000 - 14_000, agentClis } as never,
+          }),
+        ];
+        listHostProjects.mockImplementation(async () => {
+          clock += 5000;
+          return [];
+        });
+        const listed = await runtime.list("a");
+        if (!listed.ok) throw new Error("refused");
+        expect(listed.value.hosts[0]?.agentClis).toEqual({
+          coverage: "stale",
+          sampledAt: 1000 - 14_000,
+          installed: agentClis,
+          omitted: 0,
+        });
+      });
+
       it("keeps a small positive load from rounding to idle-looking zero", async () => {
         expect(await loadOf({ ...fresh, cpuPercent: 0.4 })).toMatchObject({ cpuBusyCores: 0.03 });
       });
@@ -297,6 +372,160 @@ describe("HostCallRuntime (#13493, #13496)", () => {
       expect(listHostProjects).not.toHaveBeenCalled();
     });
 
+    describe("observed link, build and CLIs (#14461)", () => {
+      const HANDSHAKE = CONNECTED.handshake;
+      const CLIS = [
+        { agentId: "claude", version: "2.1.0" },
+        { agentId: "gemini", version: null },
+      ];
+      const LIVE_SUMMARY = {
+        sampledAt: 990,
+        platform: "linux",
+        memoryPressure: null,
+        thermal: null,
+        agentClis: CLIS,
+      } as never;
+
+      it("tells apart the ways a host is down, carrying no transport text", async () => {
+        hosts = [
+          host({ hostId: "manual", disconnectedByPerson: true }),
+          host({
+            hostId: "mode-off",
+            connection: {
+              status: "unreachable",
+              lastSeenAt: 500,
+              detail: "no discovery file at /home/greg/.daintree/host.json",
+              hostModeOff: true,
+              stoppedRetrying: true,
+            },
+          }),
+          host({
+            hostId: "denied",
+            connection: {
+              status: "unreachable",
+              lastSeenAt: null,
+              detail: "Permission denied (publickey)",
+              stoppedRetrying: true,
+            },
+          }),
+          host({
+            hostId: "old",
+            connection: {
+              status: "version-mismatch",
+              mismatch: { kind: "protocol", local: 12, remote: 11 },
+              remote: { ...HANDSHAKE, protocolVersion: 11 },
+            },
+          }),
+        ];
+        control = new Set();
+        const listed = await runtime.list("a");
+        if (!listed.ok) throw new Error("refused");
+        expect(HostListResultSchema.parse(listed.value)).toEqual(listed.value);
+        // The old projection, still there for older readers, says the same of all four.
+        expect(new Set(listed.value.hosts.map((h) => h.connection))).toEqual(
+          new Set(["disconnected"])
+        );
+        const links = listed.value.hosts.map((h) => h.link);
+        expect(new Set(links.map((link) => JSON.stringify(link))).size).toBe(4);
+        expect(links[0]).toMatchObject({ status: "disconnected", disconnectedByPerson: true });
+        expect(links[1]).toMatchObject({ status: "unreachable", hostModeOff: true });
+        expect(links[2]).toMatchObject({
+          status: "unreachable",
+          hostModeOff: false,
+          stoppedRetrying: true,
+        });
+        expect(links[3]).toMatchObject({
+          status: "version-mismatch",
+          mismatch: { kind: "protocol", local: "12", remote: "11" },
+        });
+        expect(listed.value.hosts[3]?.build).toEqual({
+          source: "rejected",
+          handshake: { ...HANDSHAKE, protocolVersion: 11 },
+        });
+        const text = JSON.stringify(listed.value);
+        expect(text).not.toContain("publickey");
+        expect(text).not.toContain("discovery file");
+      });
+
+      it("keeps a connected host with another build connected, naming the difference", async () => {
+        hosts = [
+          host({
+            connection: {
+              ...CONNECTED,
+              buildMismatch: { kind: "version", local: "1.0.1", remote: "1.0.0" },
+            },
+          }),
+        ];
+        const listed = await runtime.list("a");
+        if (!listed.ok) throw new Error("refused");
+        expect(listed.value.hosts[0]).toMatchObject({
+          connection: "connected",
+          link: {
+            status: "connected",
+            mismatch: { kind: "version", local: "1.0.1", remote: "1.0.0" },
+          },
+          build: { source: "connected", handshake: HANDSHAKE },
+        });
+      });
+
+      it("lists a connected host's CLIs even when it has no projects registered", async () => {
+        listHostProjects.mockResolvedValueOnce([]);
+        hosts = [
+          host({
+            connection: CONNECTED,
+            summary: LIVE_SUMMARY,
+          }),
+        ];
+        const listed = await runtime.list("a");
+        if (!listed.ok) throw new Error("refused");
+        expect(HostListResultSchema.parse(listed.value)).toEqual(listed.value);
+        expect(listed.value.hosts[0]).toMatchObject({
+          projects: [],
+          agentClis: { coverage: "observed", sampledAt: 990, installed: CLIS, omitted: 0 },
+        });
+      });
+
+      it("keeps a disconnected host's CLIs as stale and its build as last seen", async () => {
+        hosts = [
+          host({
+            lastHandshake: HANDSHAKE,
+            summary: { sampledAt: 999, platform: "linux", agentClis: CLIS } as never,
+          }),
+          host({ hostId: "never", name: "new-box" }),
+        ];
+        control = new Set();
+        const listed = await runtime.list("a");
+        if (!listed.ok) throw new Error("refused");
+        expect(listed.value.hosts[0]).toMatchObject({
+          build: { source: "last-seen", handshake: HANDSHAKE },
+          agentClis: { coverage: "stale", installed: CLIS },
+        });
+        // No summary ever: unknown, never an empty inventory.
+        expect(listed.value.hosts[1]).toMatchObject({
+          build: { source: "unknown", handshake: null },
+          agentClis: { coverage: "unknown", sampledAt: null, installed: [] },
+        });
+      });
+
+      it("keeps a host's switch off: its CLIs are listed, nothing is read from it", async () => {
+        control = new Set();
+        hosts = [
+          host({
+            connection: CONNECTED,
+            summary: LIVE_SUMMARY,
+          }),
+        ];
+        const listed = await runtime.list("a");
+        if (!listed.ok) throw new Error("refused");
+        expect(listed.value.hosts[0]).toMatchObject({
+          control: false,
+          projects: null,
+          agentClis: { coverage: "observed" },
+        });
+        expect(listHostProjects).not.toHaveBeenCalled();
+      });
+    });
+
     describe("a host this Shell holds no link to", () => {
       function dialing(connect: (hostId: string) => Promise<unknown>): HostCallRuntime {
         return new HostCallRuntime({
@@ -313,8 +542,24 @@ describe("HostCallRuntime (#13493, #13496)", () => {
 
       it("dials one with control on, and lists it as it is once connected", async () => {
         hosts = [host({ hostId: "studio" }), host({ hostId: "off", name: "laptop" })];
+        const agentClis = [{ agentId: "codex", version: "0.9.1" }];
         const connect = vi.fn(async (hostId: string) => {
-          hosts = hosts.map((h) => (h.hostId === hostId ? { ...h, connection: CONNECTED } : h));
+          hosts = hosts.map((h) =>
+            h.hostId === hostId
+              ? {
+                  ...h,
+                  connection: CONNECTED,
+                  summary: {
+                    // This runtime reads the real clock.
+                    sampledAt: Date.now(),
+                    platform: "linux",
+                    memoryPressure: null,
+                    thermal: null,
+                    agentClis,
+                  } as never,
+                }
+              : h
+          );
         });
         const listed = await dialing(connect).list("a");
         if (!listed.ok) throw new Error("refused");
@@ -322,6 +567,9 @@ describe("HostCallRuntime (#13493, #13496)", () => {
         expect(listed.value.hosts[0]).toMatchObject({
           hostId: "studio",
           connection: "connected",
+          link: { status: "connected" },
+          build: { source: "connected", handshake: CONNECTED.handshake },
+          agentClis: { coverage: "observed", installed: agentClis },
           projects: [
             { projectId: "proj-2", name: "website" },
             { projectId: "proj-3", name: "api" },

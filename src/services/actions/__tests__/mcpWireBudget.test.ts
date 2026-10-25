@@ -862,7 +862,11 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // optional `throwaway` target, the second kind a call may name instead of a
   // projectId, with the six tools it takes. Assistant-only, so the external
   // ceiling does not move.
-  const MAX_COHORT_PAYLOAD_BYTES = 143_530;
+  // 143_530 → 145_830 for #14461, measured at 145_808 B (+2_296): each
+  // `host.list` entry's observed link flags, the build its handshake named and
+  // the CLIs its summary lists, so a host that is down says how. Output only,
+  // and `host.list` is assistant-only, so the external ceiling does not move.
+  const MAX_COHORT_PAYLOAD_BYTES = 145_830;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

@@ -99,10 +99,73 @@ export const HostListArgsSchema = z.object({
 });
 export type HostListArgs = z.infer<typeof HostListArgsSchema>;
 
+/** Most installed CLIs `host.list` names for one host; the rest are counted in `omitted`. */
+export const HOST_LIST_CLIS_MAX = 32;
+
+const HostListHandshakeSchema = z.object({
+  version: z.string(),
+  commit: z.string(),
+  protocolVersion: z.number(),
+  platform: z.enum(["darwin", "linux"]),
+  arch: z.enum(["x64", "arm64"]),
+});
+
+/** The link as this Shell observed it: flags it saw, never a cause it guessed. */
+export const HostListLinkSchema = z.object({
+  status: z.enum([
+    "local",
+    "disconnected",
+    "connecting",
+    "connected",
+    "unreachable",
+    "version-mismatch",
+    "driven-elsewhere",
+  ]),
+  attempt: z.number().nullable(),
+  restarting: z.boolean().describe("It said it was shutting down; still retried."),
+  hostModeOff: z.boolean().describe("ssh got in; no Daintree in Host mode there."),
+  stoppedRetrying: z
+    .boolean()
+    .nullable()
+    .describe("Waits for a Connect: login refused, Host mode off or unusable."),
+  disconnectedByPerson: z.boolean(),
+  quietSince: z.number().nullable().describe("Connected; silent since."),
+  mismatch: z
+    .object({
+      kind: z.enum(["protocol", "version", "commit"]),
+      local: z.string(),
+      remote: z.string(),
+    })
+    .nullable()
+    .describe("Builds differ; blocking only under version-mismatch."),
+});
+export type HostListLink = z.infer<typeof HostListLinkSchema>;
+
+export const HostListBuildSchema = z.object({
+  source: z.enum(["connected", "rejected", "last-seen", "unknown"]),
+  handshake: HostListHandshakeSchema.nullable(),
+});
+export type HostListBuild = z.infer<typeof HostListBuildSchema>;
+
+export const HostListAgentClisSchema = z
+  .object({
+    coverage: z.enum(["observed", "stale", "unknown"]),
+    sampledAt: z.number().nullable(),
+    installed: z
+      .array(z.object({ agentId: z.string(), version: z.string().nullable() }))
+      .max(HOST_LIST_CLIS_MAX),
+    omitted: z.number(),
+  })
+  .describe("Installed only: sign-in and quota unknown. Absence unproven.");
+export type HostListAgentClis = z.infer<typeof HostListAgentClisSchema>;
+
 export const HostListEntrySchema = z.object({
   hostId: z.string(),
   name: z.string(),
   connection: z.enum(["connected", "connecting", "disconnected"]),
+  link: HostListLinkSchema,
+  build: HostListBuildSchema,
+  agentClis: HostListAgentClisSchema,
   rttMs: z.number().nullable(),
   lastSeenAt: z.number().nullable(),
   load: z
