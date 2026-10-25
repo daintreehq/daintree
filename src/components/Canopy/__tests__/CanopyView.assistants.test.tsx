@@ -382,6 +382,22 @@ describe("CanopyView role filter", () => {
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 
+  it("opens the global assistant by its exact subject, as it opens a lane (#14454)", async () => {
+    const global = assistant(0, {
+      subject: { hostId: "local", scope: { kind: "global" }, terminalId: "g-1", incarnation: 4 },
+    });
+    directory.entries = [global];
+    useCanopyStore.setState({ roleFilter: "assistants" });
+    render(<CanopyView />);
+    await settle();
+    const open = [...document.querySelectorAll("button")].find(
+      (button) => button.textContent === "Open in Assistant"
+    )!;
+    await act(async () => fireEvent.click(open));
+    expect(openInAssistantMock).toHaveBeenCalledWith(global.subject);
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
   it("says nothing of supervision for an assistant that watches nothing", async () => {
     directory.entries = [assistant(0, { notices: null })];
     useCanopyStore.setState({ roleFilter: "assistants" });

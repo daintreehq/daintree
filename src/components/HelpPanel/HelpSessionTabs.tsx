@@ -161,7 +161,7 @@ export function helpSessionTabId(idBase: string, slot: number | typeof GLOBAL_TA
 }
 
 /** The global assistant's tab, which is no lane: it has no slot, no close and no menu. */
-export const GLOBAL_TAB_KEY = "global";
+export const GLOBAL_TAB_KEY = "global" as const;
 
 /**
  * The installation's one global assistant, beside this project's lanes (#14454).
@@ -187,6 +187,7 @@ function GlobalTabChip({
           data-slot={GLOBAL_TAB_KEY}
           data-document-tab=""
           data-testid="help-global-tab"
+          aria-label="Global assistant"
           aria-selected={isActive}
           aria-controls={panelId}
           tabIndex={isActive ? 0 : -1}

@@ -31,7 +31,6 @@ import { HelpIntroBanner } from "./HelpIntroBanner";
 import { usePaletteStore } from "@/store/paletteStore";
 import { HelpPanelHeader } from "./HelpPanelHeader";
 import { GLOBAL_TAB_KEY, HelpSessionTabs, helpSessionTabId } from "./HelpSessionTabs";
-import { GlobalAssistantPane } from "./GlobalAssistantPane";
 import { HelpSessionLaneRuntime } from "./HelpSessionLaneRuntime";
 import {
   markHelpPanelRuntimeMounted,
@@ -77,6 +76,10 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 
 // Loaded on first open: the picker reads the panel store and the agents'
 // history, none of which the panel needs until someone asks for it.
+// Loaded on first selecting the global tab: a view that never shows it pays nothing.
+const LazyGlobalAssistantPane = lazy(() =>
+  import("./GlobalAssistantPane").then((m) => ({ default: m.GlobalAssistantPane }))
+);
 const LazyHelpPastSessionsPalette = lazy(() =>
   import("./HelpPastSessionsPalette").then((m) => ({ default: m.HelpPastSessionsPalette }))
 );
@@ -1170,7 +1173,9 @@ export function HelpPanel({
           />
         )}
         {globalSelected ? (
-          <GlobalAssistantPane isVisible={isVisible} />
+          <Suspense fallback={null}>
+            <LazyGlobalAssistantPane isVisible={isVisible} />
+          </Suspense>
         ) : showTerminal ? (
           isMissingCli && agentId ? (
             <MissingCliGate

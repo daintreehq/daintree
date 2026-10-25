@@ -575,6 +575,44 @@ describe("helpPanelStore persistence migration", () => {
 
   // #12108. The lane axis the pre-lane cases above never had: they all describe
   // slot 0 and still pass unchanged, so these add what is genuinely new.
+  describe("global assistant selection (#14454)", () => {
+    const target = {
+      hostId: "local",
+      scope: { kind: "global" as const },
+      terminalId: "g1",
+      incarnation: 2,
+    };
+
+    it("shows the global run over the lanes and comes back to the lane it left", async () => {
+      installLocalStorage({});
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
+      store.getState().openSlot();
+      expect(store.getState().activeSlot).toBe(1);
+      store.getState().selectGlobal(target);
+      expect(store.getState()).toMatchObject({
+        globalSelected: true,
+        globalTarget: target,
+        activeSlot: 1,
+      });
+      // Choosing the lane already behind it still leaves the global tab.
+      store.getState().setActiveSlot(1);
+      expect(store.getState()).toMatchObject({ globalSelected: false, globalTarget: null });
+    });
+
+    it("leaves the global tab for a newly opened lane, and never persists the choice", async () => {
+      installLocalStorage({});
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
+      store.getState().selectGlobal();
+      expect(store.getState().globalTarget).toBeNull();
+      store.getState().openSlot();
+      expect(store.getState().globalSelected).toBe(false);
+      store.getState().selectGlobal(target);
+      const persisted = store.persist.getOptions().partialize?.(store.getState()) as object;
+      expect(persisted).not.toHaveProperty("globalSelected");
+      expect(persisted).not.toHaveProperty("globalTarget");
+    });
+  });
+
   describe("assistant lanes (#12108)", () => {
     it("openSlot takes the lowest free lane, focuses it, and refuses past the ceiling", async () => {
       installLocalStorage({});

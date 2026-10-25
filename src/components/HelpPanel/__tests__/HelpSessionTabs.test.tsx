@@ -468,6 +468,40 @@ describe("HelpSessionTabs", () => {
     expect(onSelect).toHaveBeenCalledWith(2);
   });
 
+  describe("the global assistant's tab (#14454)", () => {
+    const globalTabOf = (container: HTMLElement) =>
+      container.querySelector<HTMLElement>('[data-testid="help-global-tab"]')!;
+
+    it("takes the one selection mark and tab stop from the lanes while selected", () => {
+      const { container } = renderStrip({ globalTab: { selected: true, onSelect: vi.fn() } });
+      const global = globalTabOf(container);
+      expect(marked(container)).toEqual([global]);
+      expect(tabs(container).filter((t) => t.tabIndex === 0)).toEqual([global]);
+      expect(global.id).toBe(helpSessionTabId("strip", "global"));
+    });
+
+    it("leaves the active lane marked while not selected", () => {
+      const { container } = renderStrip({ globalTab: { selected: false, onSelect: vi.fn() } });
+      expect(marked(container)[0]!.getAttribute("aria-label")).toBe("Session 2");
+    });
+
+    it("is reached with the arrow keys and selected only on Enter, and never closes", () => {
+      const onSelect = vi.fn();
+      const onClose = vi.fn();
+      const { container } = renderStrip({ onClose, globalTab: { selected: false, onSelect } });
+      const list = container.querySelector('[role="tablist"]')!;
+      const [global, first] = tabs(container);
+      first!.focus();
+      fireEvent.keyDown(list, { key: "ArrowLeft" });
+      expect(document.activeElement).toBe(global!);
+      expect(onSelect).not.toHaveBeenCalled();
+      fireEvent.keyDown(list, { key: "Delete" });
+      expect(onClose).not.toHaveBeenCalled();
+      fireEvent.keyDown(global!, { key: "Enter" });
+      expect(onSelect).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("renders nothing at all when there are no lanes", () => {
     const { container } = renderStrip({ tabs: [], activeSlot: 0 });
     expect(container.querySelector('[role="tablist"]')).toBeNull();
