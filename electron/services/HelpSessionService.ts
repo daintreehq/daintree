@@ -42,7 +42,7 @@ import { agentSupportsAssistantContent } from "./AssistantContentMirror.js";
 import { resolveAssistantPluginKnowledge } from "./AssistantPluginKnowledge.js";
 import type { HelpSessionProjectFacts } from "./helpSessionProjectMetadata.js";
 import type { PendingHelpHibernationStore } from "./PendingHelpHibernationStore.js";
-import { AssistantSessionFiles, runbooksEnabled } from "./AssistantSessionFiles.js";
+import { AssistantSessionFiles } from "./AssistantSessionFiles.js";
 import { HelpSessionError } from "./helpSessionError.js";
 import {
   ASSISTANT_AGENT_DIR_KEY_MAX_LENGTH,

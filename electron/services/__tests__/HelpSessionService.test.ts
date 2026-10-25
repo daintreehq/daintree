@@ -5648,11 +5648,5 @@ describe("HelpSessionService", () => {
 
       expect(codexHeaders(service.getCodexLaunchArgs(result.token)!)).toEqual(HEADERS);
     });
-      if (!codex || !later) throw new Error("expected result");
-
-      expect(codexHeaders(service.getCodexLaunchArgs(codex.token)!)).toEqual(HEADERS);
-      expect(codexHeaders(service.getCodexLaunchArgs(later.token)!)).toEqual(HEADERS);
-    });
-  });
   });
 });
