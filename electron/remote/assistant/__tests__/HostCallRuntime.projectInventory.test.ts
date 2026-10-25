@@ -30,14 +30,11 @@ function connected(hostId: string): ObservedHost {
 }
 
 function numbered(count: number, prefix = "p", name = (index: number) => `Project ${index}`) {
-  return Array.from(
-    { length: count },
-    (_, index): HostProjectSummary => ({
-      id: `${prefix}-${index}`,
-      name: name(index),
-      path: `/repos/${prefix}/${index}`,
-    })
-  );
+  return Array.from({ length: count }, (_, index): HostProjectSummary => ({
+    id: `${prefix}-${index}`,
+    name: name(index),
+    path: `/repos/${prefix}/${index}`,
+  }));
 }
 
 describe("HostCallRuntime project inventory (#14457)", () => {
@@ -267,7 +264,8 @@ describe("HostCallRuntime project inventory (#14457)", () => {
         { projectCursor: cursor, projectQuery: "other" },
       ].map((args) => runtime.list("a", args))
     );
-    for (const refusal of refusals) expect(refusal).toMatchObject({ ok: false, code: "INVALID_ARGS" });
+    for (const refusal of refusals)
+      expect(refusal).toMatchObject({ ok: false, code: "INVALID_ARGS" });
     expect(await runtime.list("a", { projectCursor: cursor, hostId: "local" })).toMatchObject({
       ok: true,
     });

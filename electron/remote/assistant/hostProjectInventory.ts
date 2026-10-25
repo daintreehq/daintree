@@ -47,7 +47,10 @@ export function decodeProjectCursor(raw: string): ProjectCursor | null {
   const { v, h, q, o, r } = parsed as Record<string, unknown>;
   if (v !== CURSOR_VERSION) return null;
   if (typeof h !== "string" || h.length === 0 || h.length > 64) return null;
-  if (q !== null && (typeof q !== "string" || q.length === 0 || q.length > HOST_LIST_PROJECT_QUERY_MAX))
+  if (
+    q !== null &&
+    (typeof q !== "string" || q.length === 0 || q.length > HOST_LIST_PROJECT_QUERY_MAX)
+  )
     return null;
   if (typeof o !== "number" || !Number.isSafeInteger(o) || o < 0) return null;
   if (typeof r !== "string" || !/^[0-9a-f]{16}$/.test(r)) return null;
