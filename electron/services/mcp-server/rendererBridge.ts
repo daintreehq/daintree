@@ -1561,9 +1561,7 @@ export function createRendererBridge(
       args !== null &&
       typeof args === "object" &&
       (args as Record<string, unknown>).terminalIds !== undefined;
-    const missing = new Set(
-      started.filter((id) => !held.has(id) && (!named || notFound.has(id)))
-    );
+    const missing = new Set(started.filter((id) => !held.has(id) && (!named || notFound.has(id))));
     if (missing.size === 0) return envelope;
 
     let read: Awaited<ReturnType<typeof runViewlessAction>>;
