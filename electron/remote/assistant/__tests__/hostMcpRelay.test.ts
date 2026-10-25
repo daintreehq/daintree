@@ -5,6 +5,7 @@ import type { MetricsSessionContext } from "../../metrics/hostMetricsHost.js";
 import {
   installHostMcpRelay,
   projectRelayResult,
+  THROWAWAY_SHELL_GONE_GRACE_MS,
   type HostMcpRelayDeps,
   type RelayMcpSession,
   type RelayMcpSessionSpec,
@@ -19,6 +20,7 @@ import {
 } from "../linkMethods.js";
 import { MAX_RELAY_NOTICES_PER_SENDER } from "../relayNoticeOutbox.js";
 import { SenderSessions } from "../senderSessions.js";
+import type { HostThrowawayExecutor } from "../throwawayRelay.js";
 
 interface FakeLink {
   ctx: MetricsSessionContext;
@@ -89,6 +91,7 @@ function harness(
   });
   const opened: FakeMcpSession[] = [];
   let expire: (info: { sessionId: string }) => void = () => {};
+  let detach: (info: { sessionId: string }) => void = () => {};
   const sessions = fakes.map((link) => link.ctx);
   let onSession: (ctx: MetricsSessionContext) => void = () => {};
   const relay = installHostMcpRelay(
@@ -96,6 +99,10 @@ function harness(
       sessions,
       onSession: (listener) => {
         onSession = listener;
+        return () => {};
+      },
+      onSessionDetached: (listener) => {
+        detach = listener;
         return () => {};
       },
       onSessionExpired: (listener) => {
@@ -141,6 +148,12 @@ function harness(
     opened,
     links: fakes,
     attach,
+    // A dropped link leaves the server's sessions, though it may still resume.
+    detach: (sessionId: string) => {
+      const index = sessions.findIndex((ctx) => ctx.sessionId === sessionId);
+      if (index >= 0) sessions.splice(index, 1);
+      detach({ sessionId });
+    },
     // A link expires once its transport is long gone.
     expire: (sessionId: string) => {
       for (const link of fakes) {
@@ -889,7 +902,7 @@ describe("throwaway calls on a host that runs them (#14446)", () => {
     }));
     const { links, opened, relay } = harness([["link-1", "sender-a"]], {
       hasProject,
-      throwawayRuns: () => ({ run }),
+      throwawayRuns: () => ({ run, endOwner: vi.fn() }),
     });
     await expect(links[0]!.ask(AssistantLinkMethod.THROWAWAY_CALL, LAUNCH)).resolves.toEqual({
       status: "done",
@@ -911,7 +924,7 @@ describe("throwaway calls on a host that runs them (#14446)", () => {
       result: { tool: "throwaway.launch" as const, run: RUN },
     }));
     const { links, attach, relay } = harness([["link-1", "sender-a"]], {
-      throwawayRuns: () => ({ run }),
+      throwawayRuns: () => ({ run, endOwner: vi.fn() }),
     });
     const first = await links[0]!.ask(AssistantLinkMethod.THROWAWAY_CALL, LAUNCH);
     const next = attach("link-2", "sender-a");
@@ -946,5 +959,98 @@ describe("throwaway calls on a host that runs them (#14446)", () => {
     });
     expect(throwawayRuns).not.toHaveBeenCalled();
     relay.dispose();
+  });
+});
+
+describe("throwaway runs of an owner that is gone (#14447)", () => {
+  const LAUNCH = {
+    helpSessionId: "help-1",
+    tier: "core",
+    callId: "call-1",
+    resend: false,
+    call: { tool: "throwaway.launch", args: { agentId: "claude" } },
+    runMs: 90_000,
+  };
+
+  function withRuns(links: Array<[string, string | null]>) {
+    const endOwner = vi.fn<HostThrowawayExecutor["endOwner"]>();
+    const run = vi.fn<HostThrowawayExecutor["run"]>(async () => ({
+      status: "failed",
+      reason: "launch-failed",
+    }));
+    return { endOwner, ...harness(links, { throwawayRuns: () => ({ run, endOwner }) }) };
+  }
+
+  it("closes one help session's runs when its Shell says it ended, for the proven sender only", async () => {
+    const { links, endOwner, relay } = withRuns([
+      ["link-1", "sender-a"],
+      ["link-2", null],
+    ]);
+    await expect(
+      links[0]!.ask(AssistantLinkMethod.THROWAWAY_RELEASE, { helpSessionId: "help-1" })
+    ).resolves.toEqual({});
+    expect(endOwner).toHaveBeenCalledWith(
+      { senderId: "sender-a", helpSessionId: "help-1" },
+      "session-ended"
+    );
+    await expect(
+      links[1]!.ask(AssistantLinkMethod.THROWAWAY_RELEASE, { helpSessionId: "help-1" })
+    ).rejects.toMatchObject({ code: "PERMISSION" });
+    expect(endOwner).toHaveBeenCalledTimes(1);
+    relay.dispose();
+  });
+
+  it("closes a sender's runs once its last link has been gone past the grace", async () => {
+    vi.useFakeTimers();
+    const { links, endOwner, relay, detach } = withRuns([["link-1", "sender-a"]]);
+    await links[0]!.ask(AssistantLinkMethod.THROWAWAY_CALL, LAUNCH);
+    detach("link-1");
+    await vi.advanceTimersByTimeAsync(THROWAWAY_SHELL_GONE_GRACE_MS - 1);
+    expect(endOwner).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(endOwner).toHaveBeenCalledWith({ senderId: "sender-a" }, "shell-gone");
+    relay.dispose();
+  });
+
+  it("keeps a sender's runs while another of its links is open, or one comes back in time", async () => {
+    vi.useFakeTimers();
+    const { links, endOwner, relay, detach, attach } = withRuns([
+      ["link-1", "sender-a"],
+      ["link-2", "sender-a"],
+    ]);
+    await links[0]!.ask(AssistantLinkMethod.THROWAWAY_CALL, LAUNCH);
+    detach("link-1");
+    await vi.advanceTimersByTimeAsync(THROWAWAY_SHELL_GONE_GRACE_MS);
+    expect(endOwner).not.toHaveBeenCalled();
+
+    await links[1]!.ask(AssistantLinkMethod.THROWAWAY_CALL, { ...LAUNCH, callId: "call-2" });
+    detach("link-2");
+    attach("link-3", "sender-a");
+    await vi.advanceTimersByTimeAsync(THROWAWAY_SHELL_GONE_GRACE_MS);
+    expect(endOwner).not.toHaveBeenCalled();
+    relay.dispose();
+  });
+
+  it("closes them at once when the Shell's last link expires, even after its sender was forgotten", async () => {
+    const { links, endOwner, relay, expire } = withRuns([
+      ["link-1", "sender-a"],
+      ["link-2", "sender-b"],
+    ]);
+    await links[0]!.ask(AssistantLinkMethod.THROWAWAY_CALL, LAUNCH);
+    expire("link-2");
+    expect(endOwner).not.toHaveBeenCalled();
+    expire("link-1");
+    expect(endOwner).toHaveBeenCalledWith({ senderId: "sender-a" }, "shell-gone");
+    relay.dispose();
+  });
+
+  it("arms nothing once disposed", async () => {
+    vi.useFakeTimers();
+    const { links, endOwner, relay, detach } = withRuns([["link-1", "sender-a"]]);
+    await links[0]!.ask(AssistantLinkMethod.THROWAWAY_CALL, LAUNCH);
+    detach("link-1");
+    relay.dispose();
+    await vi.advanceTimersByTimeAsync(THROWAWAY_SHELL_GONE_GRACE_MS);
+    expect(endOwner).not.toHaveBeenCalled();
   });
 });

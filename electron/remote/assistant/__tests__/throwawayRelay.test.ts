@@ -35,7 +35,7 @@ function executor(
   })
 ) {
   const run = vi.fn<HostThrowawayExecutor["run"]>(answer);
-  return { run };
+  return { run, endOwner: vi.fn<HostThrowawayExecutor["endOwner"]>() };
 }
 
 describe("createThrowawayRelay (#14446)", () => {

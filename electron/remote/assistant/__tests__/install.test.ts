@@ -145,7 +145,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type Database from "better-sqlite3";
 import { openDb } from "../../../services/persistence/db.js";
-import { getRemoteService } from "../../runtime.js";
+import { getRemoteService, registerRemoteService } from "../../runtime.js";
 import { GLOBAL_ASSISTANT_ID } from "../../../../shared/config/globalAssistant.js";
 import type { HostCallRuntime, ObservedHost } from "../HostCallRuntime.js";
 import {
@@ -301,6 +301,11 @@ describe("installHostControl (#13493)", () => {
     // Runbook search still hears only of the hosts this Shell reaches over a link.
     expect(runbooksHostState.read?.()).toBe("connected");
 
+    // Its throwaway runs here and on hosts go with it too (#14447).
+    const endOwner = vi.fn();
+    const offRuns = registerRemoteService("hostThrowawayRuns", { run: vi.fn(), endOwner });
+    const endOnHosts = vi.spyOn(runtime, "endHelpSession");
+
     // Relaunched onto a new PTY it is the same assistant; ended, its hold goes.
     const end = (reason: "relaunched" | "revoked") => {
       for (const listener of ended)
@@ -310,7 +315,15 @@ describe("installHostControl (#13493)", () => {
     await vi.dynamicImportSettled();
     expect(mcp.retired).toEqual([]);
     expect(mcp.released).toEqual([]);
+    expect(endOwner).not.toHaveBeenCalled();
+    expect(endOnHosts).not.toHaveBeenCalled();
     end("revoked");
+    expect(endOwner).toHaveBeenCalledWith(
+      { senderId: "local", helpSessionId: "a" },
+      "session-ended"
+    );
+    expect(endOnHosts).toHaveBeenCalledWith("a");
+    offRuns();
     await vi.waitFor(() => expect(mcp.retired).toEqual([["local", "a"]]));
     // What was handed to it goes with it, whether or not a call retired its principal (#14161).
     await vi.waitFor(() => expect(mcp.released).toEqual([["local", "a"]]));

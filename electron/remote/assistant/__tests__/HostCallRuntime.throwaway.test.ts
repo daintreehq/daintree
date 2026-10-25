@@ -52,7 +52,10 @@ describe("HostCallRuntime host.call to a throwaway target (#14446)", () => {
   let control: Set<string>;
   let relayCall: ReturnType<typeof vi.fn>;
   let throwawayCall: ReturnType<typeof vi.fn<(...args: unknown[]) => Promise<ThrowawayCallAnswer>>>;
-  let executor: { run: ReturnType<typeof vi.fn<HostThrowawayExecutor["run"]>> } | null;
+  let executor: {
+    run: ReturnType<typeof vi.fn<HostThrowawayExecutor["run"]>>;
+    endOwner: ReturnType<typeof vi.fn<HostThrowawayExecutor["endOwner"]>>;
+  } | null;
   let ids: number;
   let runtime: HostCallRuntime;
 
@@ -61,7 +64,10 @@ describe("HostCallRuntime host.call to a throwaway target (#14446)", () => {
     control = new Set(["studio"]);
     relayCall = vi.fn();
     throwawayCall = vi.fn(async () => LAUNCHED);
-    executor = { run: vi.fn<HostThrowawayExecutor["run"]>(async () => LAUNCHED) };
+    executor = {
+      run: vi.fn<HostThrowawayExecutor["run"]>(async () => LAUNCHED),
+      endOwner: vi.fn<HostThrowawayExecutor["endOwner"]>(),
+    };
     ids = 0;
     const local = createLocalMcpRelay({
       machineName: () => "greg-mbp",
