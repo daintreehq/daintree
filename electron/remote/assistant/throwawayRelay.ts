@@ -82,6 +82,7 @@ export interface ThrowawayRelay {
 /** What an executor that threw reads as, for the tools whose throw says what failed. */
 const THROWN_FAILURES: Partial<Record<HostThrowawayTool, HostThrowawayFailure>> = {
   [THROWAWAY_LAUNCH_TOOL]: "launch-failed",
+  [THROWAWAY_OUTPUT_TOOL]: "output-unavailable",
   [THROWAWAY_SEND_COMMAND_TOOL]: "input-failed",
   [THROWAWAY_SEND_KEYS_TOOL]: "input-failed",
   [THROWAWAY_CLOSE_TOOL]: "close-failed",

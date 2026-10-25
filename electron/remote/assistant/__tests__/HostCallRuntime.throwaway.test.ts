@@ -246,6 +246,28 @@ describe("HostCallRuntime host.call to a throwaway target (#14446)", () => {
     });
   });
 
+  it("answers an unreadable screen as its own tool error, never a blank result (#14460)", async () => {
+    throwawayCall.mockResolvedValueOnce({ status: "failed", reason: "output-unavailable" });
+    const answer = await runtime.call(
+      "a",
+      { ...LAUNCH, tool: "throwaway.output", args: { runId: "run-1" } },
+      { tier: "core" }
+    );
+    expect(answer).toMatchObject({
+      ok: true,
+      value: {
+        outcome: "ok",
+        result: {
+          isError: true,
+          structured: { code: "output-unavailable", message: expect.any(String) },
+          text: null,
+        },
+      },
+    });
+    if (!answer.ok) throw new Error("expected an answer");
+    expect(answer.value).not.toHaveProperty("result.structured.content");
+  });
+
   it("refuses a project tool on the target, naming the throwaway tools", async () => {
     // Past the schema's own check, as a caller in process could send it.
     const answer = await runtime.call(

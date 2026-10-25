@@ -51,6 +51,7 @@ export interface HostThrowawayRunsDeps {
    * so a spawn still preparing starts nothing.
    */
   spawn(spec: { terminalId: string; agentId: string; cancelled(): boolean }): Promise<boolean>;
+  /** The terminal's tail; null, or a throw, when it couldn't be read. */
   readScreen(terminalId: string, maxLines: number): Promise<HostThrowawayScreen | null>;
   submit(terminalId: string, command: string): Promise<void>;
   write(terminalId: string, data: string): Promise<void>;
@@ -169,14 +170,9 @@ export class HostThrowawayRuns implements HostThrowawayExecutor {
         const screen = await this.deps.readScreen(run.terminalId, maxLines).catch(() => null);
         // Closed while the screen was read: its output is gone with it.
         if (!this.holds(run)) return { ok: false, reason: "not-found" };
-        return {
-          ok: true,
-          result: {
-            tool: call.tool,
-            run: this.project(run),
-            ...(screen ?? { content: "", lineCount: 0, truncated: false }),
-          },
-        };
+        // Unread is not blank: a check must not take a failed read for an empty screen.
+        if (screen === null) return { ok: false, reason: "output-unavailable" };
+        return { ok: true, result: { tool: call.tool, run: this.project(run), ...screen } };
       }
       case "throwaway.sendCommand": {
         if (run.state !== "running") return { ok: false, reason: "exited" };

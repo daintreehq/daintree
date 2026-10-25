@@ -150,6 +150,15 @@ describe("createThrowawayRelay (#14446)", () => {
       status: "failed",
       reason: "input-failed",
     });
+    const output = {
+      ...LAUNCH,
+      callId: "call-4",
+      call: { tool: "throwaway.output" as const, args: { runId: "run-1" } },
+    };
+    await expect(relay.call("sender-a", output)).resolves.toEqual({
+      status: "failed",
+      reason: "output-unavailable",
+    });
     const status = {
       ...LAUNCH,
       callId: "call-3",
@@ -160,7 +169,7 @@ describe("createThrowawayRelay (#14446)", () => {
     await expect(relay.call("sender-a", { ...status, resend: true })).rejects.toThrow(
       "pty-host gone"
     );
-    expect(runs.run).toHaveBeenCalledTimes(3);
+    expect(runs.run).toHaveBeenCalledTimes(4);
     relay.dispose();
   });
 
