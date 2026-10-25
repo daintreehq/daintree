@@ -219,9 +219,13 @@ describe("HostCallRuntime host.call to a throwaway target (#14446)", () => {
 
   it("refuses a project tool on the target, naming the throwaway tools", async () => {
     // Past the schema's own check, as a caller in process could send it.
-    const answer = await runtime.call("a", { ...LAUNCH, tool: "terminal.list", args: {} }, {
-      tier: "core",
-    });
+    const answer = await runtime.call(
+      "a",
+      { ...LAUNCH, tool: "terminal.list", args: {} },
+      {
+        tier: "core",
+      }
+    );
     expect(answer).toMatchObject({
       ok: true,
       value: {
