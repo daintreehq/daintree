@@ -186,7 +186,8 @@ export function installFakeCanopyAgent(repoDir: string, version = "9.9.9"): stri
   if (windows) {
     writeFileSync(
       path.join(binDir, "claude.cmd"),
-      ["@echo off", `"${process.execPath}" "%~dp0claude.js" %*`, ""].join("\r\n")
+      // UTF-8, or the box-drawing and bullet glyphs the scenes draw reach the PTY as "?".
+      ["@echo off", "chcp 65001 >nul", `"${process.execPath}" "%~dp0claude.js" %*`, ""].join("\r\n")
     );
   }
   return binDir;
