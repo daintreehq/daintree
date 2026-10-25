@@ -54,6 +54,8 @@ export interface BulkTransport {
     expectRevision: number,
     expectHostEpoch: string
   ): Promise<CanopySnapshot>;
+  /** Chooses the model the host downloads; set before Canopy is turned on there. */
+  setModel?(id: string): Promise<unknown>;
   /** Dials the host if it isn't up; false when it still isn't. Absent for the window's own host. */
   connect?(): Promise<boolean>;
   /** Hands back whatever the run opened on the host. Called once the target is done. */
@@ -62,6 +64,8 @@ export interface BulkTransport {
 
 export interface BulkEnableDeps {
   transportFor(target: BulkTarget): BulkTransport;
+  /** The model each host downloads, chosen by the person before anything is turned on. */
+  model?: string;
   concurrency?: number;
   signal?: AbortSignal;
 }
@@ -119,7 +123,8 @@ async function enableOne(
   target: BulkTarget,
   transport: BulkTransport,
   before: BulkSeen | null,
-  signal: AbortSignal | undefined
+  signal: AbortSignal | undefined,
+  model?: string
 ): Promise<BulkResult> {
   const { snapshot: first, ...rest } = await read(transport, signal);
   if (!first) {
@@ -153,6 +158,20 @@ async function enableOne(
     }
   }
 
+  // The model comes first: turned on, the host downloads the one chosen, never a default.
+  if (model !== undefined) {
+    if (!transport.setModel) {
+      return done(target, "unsupported", "This host can't take a model choice from here.", seen);
+    }
+    if (signal?.aborted) {
+      return done(target, "uncertain", "Stopped before this host was finished.", seen);
+    }
+    try {
+      await transport.setModel(model);
+    } catch {
+      return done(target, "refused", "The host wouldn't take that model.", seen);
+    }
+  }
   const steps: CanopyMode[] = first.mode === "hidden" ? ["unset", "on"] : ["on"];
   let revision = seen.modeRevision;
   let lastSeen = seen;
@@ -235,7 +254,13 @@ export async function enableCanopyOnHosts(
       try {
         result = deps.signal?.aborted
           ? done(target, "uncertain", "Stopped before this host was started.", null)
-          : await enableOne(target, transport, before.get(target.hostId) ?? null, deps.signal);
+          : await enableOne(
+              target,
+              transport,
+              before.get(target.hostId) ?? null,
+              deps.signal,
+              deps.model
+            );
       } catch {
         result = done(target, "uncertain", "Something went wrong on this host.", null);
       } finally {

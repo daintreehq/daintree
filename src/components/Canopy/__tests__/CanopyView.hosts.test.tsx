@@ -222,6 +222,8 @@ function installElectron() {
     rename: vi.fn(async () => {}),
     refresh: vi.fn(async () => {}),
     setMode: vi.fn(async () => canopySnapshot()),
+    setModel: vi.fn(async () => canopySnapshot()),
+    getModels: vi.fn(async () => ({ selected: "daintreehq/canopy-reader-17m", variants: [] })),
     captureBackdrop: vi.fn(async () => null),
     // No assistants: a full, empty directory of this machine.
     readAgentDirectory: vi.fn(async () => ({
@@ -286,6 +288,30 @@ beforeEach(() => {
   remoteFleet = fleet(["remote-run"]);
   state.invoke.mockImplementation(async (_hostId: string, channel: string) => {
     if (channel === "canopy:set-active") return remoteCanopy;
+    // That host's own models: Light downloaded there by default, Best on offer.
+    if (channel === "canopy:get-models") {
+      return {
+        selected: "daintreehq/canopy-reader-17m",
+        variants: [
+          {
+            id: "daintreehq/canopy-reader-17m",
+            name: "Light",
+            downloadBytes: 21_000_000,
+            installed: false,
+            supported: true,
+            bench: null,
+          },
+          {
+            id: "daintreehq/canopy-reader-68m",
+            name: "Best",
+            downloadBytes: 73_000_000,
+            installed: false,
+            supported: true,
+            bench: null,
+          },
+        ],
+      };
+    }
     if (channel === "fleet:get-snapshot") return remoteFleet;
     if (channel === "canopy:run-branch") return "remote-branch";
     if (channel === "canopy:trash") return 7;
@@ -691,10 +717,27 @@ describe("the Canopy host picker", () => {
     await settle();
     expect(document.body.textContent).toContain("Canopy is off on studio-01");
     expect(document.querySelector("[data-canopy-card]")).toBeNull();
+    // Nothing is turned on until a model is chosen for that host: it is named, sized and picked here.
+    expect(document.body.textContent).toContain("Model for studio-01");
+    fireEvent.click(screen.getByRole("radio", { name: /Best/ }));
+    state.invoke.mockClear();
     fireEvent.click(screen.getByRole("button", { name: "Turn on Canopy on studio-01" }));
     await settle();
+    // The chosen model is set on that host first, so it downloads that one and never its default.
+    expect(state.invoke).toHaveBeenCalledWith(
+      "studio",
+      "canopy:set-model",
+      "daintreehq/canopy-reader-68m"
+    );
     expect(state.invoke).toHaveBeenCalledWith("studio", "canopy:set-mode", "on");
+    const setModelAt = state.invoke.mock.calls.findIndex((call) => call[1] === "canopy:set-model");
+    const setModeAt = state.invoke.mock.calls.findIndex((call) => call[1] === "canopy:set-mode");
+    expect(setModelAt).toBeGreaterThanOrEqual(0);
+    expect(setModelAt).toBeLessThan(setModeAt);
+    // Everything sent while turning it on went to that host and none to another.
+    expect(state.invoke.mock.calls.every((call) => call[0] === "studio")).toBe(true);
     expect(own.setMode).not.toHaveBeenCalled();
+    expect(own.setModel).not.toHaveBeenCalled();
   });
 
   it("says why a host can't be reached, never showing another host's agents instead", async () => {

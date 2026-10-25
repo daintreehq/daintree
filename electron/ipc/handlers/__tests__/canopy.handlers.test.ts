@@ -760,14 +760,18 @@ describe("canopy IPC", () => {
     expect(models.ensure).not.toHaveBeenCalledWith("evil/model");
   });
 
-  it("deletes the downloaded models only while Canopy is off", async () => {
+  it("deletes the downloaded models at any time, turning Canopy off first when it is on", async () => {
     state.mode = "on";
     const sender = fakeSender(9);
-    const refused = await outcome(invoke(CANOPY_METHOD_CHANNELS.removeModels, sender));
-    expect(refused).toEqual({ ok: false, message: "Canopy is on" });
-    expect(models.removeAllBut).not.toHaveBeenCalled();
-    state.mode = "unset";
     await invoke(CANOPY_METHOD_CHANNELS.removeModels, sender);
+    // Off, through the guarded change: so every view is told, and a restart
+    // finds nothing to download again.
+    expect(state.mode).toBe("unset");
+    expect(models.removeAllBut).toHaveBeenCalledWith(null);
+    models.removeAllBut.mockClear();
+    // Already off: just the delete.
+    await invoke(CANOPY_METHOD_CHANNELS.removeModels, sender);
+    expect(state.mode).toBe("unset");
     expect(models.removeAllBut).toHaveBeenCalledWith(null);
   });
 

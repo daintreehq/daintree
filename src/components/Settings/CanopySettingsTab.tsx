@@ -1,76 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { CANOPY_LOCAL } from "@/components/Canopy/canopyTerms";
 import { formatModelBytes } from "@/components/Canopy/CanopyStatusBar";
+import { modelComparison, modelDescription } from "@/components/Canopy/canopyModelCopy";
 import { useCanopyStore } from "@/store/canopyStore";
-import type {
-  CanopyMode,
-  CanopyModelCatalogue,
-  CanopyModelVariant,
-} from "@shared/types/ipc/canopy";
+import type { CanopyMode, CanopyModelCatalogue } from "@shared/types/ipc/canopy";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsDependents, SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { SettingsChoicebox } from "./SettingsChoicebox";
 import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
-
-const percent = (x: number) => `${Math.round(x * 100)}%`;
-
-/** One model's own line: what it costs to have, and how fast it reads. */
-function modelDescription(variant: CanopyModelVariant): string {
-  const parts = [`${formatModelBytes(variant.downloadBytes)} download`];
-  if (variant.bench) parts.push(`about ${variant.bench.msPerScreen} ms a screen on a fast CPU`);
-  if (!variant.supported) parts.push("needs a newer version of Daintree");
-  return parts.join(" · ");
-}
-
-/** A ratio as the comparison says it: one decimal under ten, so 3.5x is never called 4x. */
-function times(ratio: number): string {
-  const rounded = ratio < 10 ? Math.round(ratio * 10) / 10 : Math.round(ratio);
-  return `${rounded}x`;
-}
-
-/** How two measured rates compare, said plainly, the larger model's first. */
-function against(large: number, small: number): string {
-  return `${percent(large)} against ${percent(small)}`;
-}
-
-/**
- * How the smallest and the largest model differ, in the publisher's own
- * numbers from real agent screens it never trained on. Says only what the
- * numbers say: a larger model that is no better is not called better.
- */
-export function modelComparison(variants: readonly CanopyModelVariant[]): string | null {
-  const measured = variants.filter((v) => v.bench !== null && v.supported);
-  if (measured.length < 2) return null;
-  const small = measured[0]!;
-  const large = measured[measured.length - 1]!;
-  const a = small.bench!;
-  const b = large.bench!;
-  const sentences: string[] = [];
-  if (a.agentCategory === b.agentCategory && a.agents === b.agents) {
-    sentences.push(
-      `Both read an agent's state equally well: ${a.agentCategory} of ${a.agents} real agent screens`
-    );
-  } else {
-    sentences.push(
-      `${small.name} reads an agent's state right on ${a.agentCategory} of ${a.agents} real agent screens, ${large.name} on ${b.agentCategory} of ${b.agents}`
-    );
-  }
-  const better = b.headline > a.headline && b.options > a.options;
-  sentences.push(
-    better
-      ? `${large.name} picks the line that says most a little more often (${against(b.headline, a.headline)}) and gets a menu's options right more often (${against(b.options, a.options)})`
-      : `Picking the line that says most: ${large.name} ${percent(b.headline)}, ${small.name} ${percent(a.headline)}. A menu's options: ${large.name} ${percent(b.options)}, ${small.name} ${percent(a.options)}`
-  );
-  const size = large.downloadBytes / small.downloadBytes;
-  sentences.push(
-    `${large.name} is ${size > 0.87 && size < 1.15 ? "about the same download" : size <= 0.87 ? `${times(1 / size)} smaller to download` : `${times(size)} the download`} and about ${times(b.msPerScreen / a.msPerScreen)} the work per screen`
-  );
-  if (better) sentences.push(`For most people ${small.name} is enough`);
-  return `${sentences.join(". ")}.`;
-}
 
 export function CanopySettingsTab() {
   const snapshot = useCanopyStore((s) => s.snapshot);
@@ -156,6 +97,9 @@ export function CanopySettingsTab() {
   const model = snapshot?.model;
   const comparison = modelComparison(variants);
   const installed = variants.filter((v) => v.installed);
+  const installedNames = installed.map((v) => v.name).join(", ");
+  const installedSize = formatModelBytes(installed.reduce((sum, v) => sum + v.downloadBytes, 0));
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   return (
     <div className="space-y-8">
@@ -254,15 +198,15 @@ export function CanopySettingsTab() {
         )}
       </SettingsSection>
 
-      {!activated && installed.length > 0 && (
+      {installed.length > 0 && (
         <SettingsSection title="Downloaded model" id="canopy-model-files">
           <SettingsGroup>
             <SettingsRow
               id="canopy-delete-model"
-              label={installed.map((v) => v.name).join(", ")}
-              description={`${formatModelBytes(installed.reduce((sum, v) => sum + v.downloadBytes, 0))} on this computer. Turning Canopy on again downloads it again.`}
+              label={installedNames}
+              description={`${installedSize} on this computer${activated ? "" : ". Turning Canopy on again downloads one"}`}
               control={
-                <Button variant="ghost-danger" size="sm" onClick={removeModels}>
+                <Button variant="ghost-danger" size="sm" onClick={() => setConfirmDelete(true)}>
                   Delete model
                 </Button>
               }
@@ -270,6 +214,23 @@ export function CanopySettingsTab() {
           </SettingsGroup>
         </SettingsSection>
       )}
+      <ConfirmDialog
+        isOpen={confirmDelete}
+        onClose={() => setConfirmDelete(false)}
+        variant="destructive"
+        title={`Delete '${installedNames}'?`}
+        description={
+          activated
+            ? `Frees ${installedSize}. Canopy turns off, and turning it on again asks you to choose a model and download it.`
+            : `Frees ${installedSize}. Turning Canopy on again downloads a model.`
+        }
+        confirmLabel="Delete model"
+        cancelLabel="Cancel"
+        onConfirm={() => {
+          setConfirmDelete(false);
+          removeModels();
+        }}
+      />
     </div>
   );
 }
