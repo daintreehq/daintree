@@ -23,7 +23,17 @@ function host(hostId: string, status: "connected" | "disconnected" = "connected"
     name: `${hostId}-name`,
     connection:
       status === "connected"
-        ? { status, rttMs: 12, handshake: {} as never }
+        ? {
+            status,
+            rttMs: 12,
+            handshake: {
+              version: "1.0.0",
+              commit: "abc1234",
+              protocolVersion: 12,
+              platform: "linux",
+              arch: "x64",
+            },
+          }
         : ({ status } as ObservedHost["connection"]),
     lastSeenAt: 900,
     summary: null,

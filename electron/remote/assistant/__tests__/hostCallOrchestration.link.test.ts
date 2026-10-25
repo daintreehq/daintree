@@ -82,7 +82,17 @@ const principal = (helpSessionId: string) =>
 const HOST: ObservedHost = {
   hostId: HOST_ID,
   name: "studio-01",
-  connection: { status: "connected" } as ObservedHost["connection"],
+  connection: {
+    status: "connected",
+    rttMs: 12,
+    handshake: {
+      version: "1.0.0",
+      commit: "abc1234",
+      protocolVersion: 12,
+      platform: "linux",
+      arch: "x64",
+    },
+  },
   lastSeenAt: null,
   summary: null,
 };
