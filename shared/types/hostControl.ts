@@ -173,14 +173,12 @@ function namesOneTarget(args: { projectId?: string; throwaway?: true }): boolean
 export const HostCallArgsSchema = z
   .object({
     hostId: hostIdSchema,
-    projectId: idSchema
-      .optional()
-      .describe("A projectId from the host list. The call runs there. Never with throwaway."),
+    projectId: idSchema.optional().describe("A projectId from the host list. The call runs there."),
     throwaway: z
       .literal(true)
       .optional()
       .describe(
-        "Instead of projectId: a short-lived agent this session owns, in a host folder. Tools: throwaway.launch, .status, .output, .sendCommand, .sendKeys, .close."
+        "Instead of projectId: a short-lived agent this session owns, in a host folder. Tools: throwaway.launch, status, output, sendCommand, sendKeys, close."
       ),
     tool: z
       .string()

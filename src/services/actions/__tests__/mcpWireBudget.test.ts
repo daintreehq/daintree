@@ -858,7 +858,11 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // so the external ceiling does not move.
   // 142_350 → 143_330 for the same tool, measured at 143_314 B, carried
   // in-app for the external⊆in-app invariant.
-  const MAX_COHORT_PAYLOAD_BYTES = 143_330;
+  // 143_330 → 143_530 for #14444, measured at 143_512 B (+198): `host.call`'s
+  // optional `throwaway` target, the second kind a call may name instead of a
+  // projectId, with the six tools it takes. Assistant-only, so the external
+  // ceiling does not move.
+  const MAX_COHORT_PAYLOAD_BYTES = 143_530;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 
