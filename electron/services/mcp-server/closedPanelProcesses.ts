@@ -17,12 +17,7 @@ export async function readClosedPanelProcess(
   terminalId: string,
   readRecord: (terminalId: string) => Promise<ClosedPanelProcessRecord | null>
 ): Promise<ClosedPanelProcess> {
-  let record: ClosedPanelProcessRecord | null = null;
-  try {
-    record = await readRecord(terminalId);
-  } catch {
-    record = null;
-  }
+  const record = await readRecord(terminalId).catch(() => null);
   return {
     terminalId,
     exited: typeof record?.isExited === "boolean" ? record.isExited : null,
