@@ -1,0 +1,363 @@
+import { Suspense, lazy, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { CircleStop, Ellipsis, Globe, RotateCw } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Callout } from "@/components/ui/Callout";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { CanopyTerminal, type CanopyStreamState } from "@/components/Canopy/CanopyTerminal";
+import { getAgentConfig } from "@/config/agents";
+import { getViewHostId } from "@/hooks/useHostConnection";
+import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
+import { assistantTerminalApi } from "@/services/assistantSubject";
+import { useCanopyStore } from "@/store/canopyStore";
+import { useHelpPanelStore } from "@/store/helpPanelStore";
+import { isBuiltInAgentId } from "@shared/config/agentIds";
+import type { AgentDirectorySubject } from "@shared/types/agentDirectory";
+import type { BuiltInAgentId } from "@shared/config/agentIds";
+import type { GlobalAssistantInputStamp } from "@shared/types/ipc/help";
+import { useGlobalAssistant } from "./useGlobalAssistant";
+
+const LazyHybridInputBar = lazy(() =>
+  import("@/components/Terminal/HybridInputBar").then((m) => ({ default: m.HybridInputBar }))
+);
+
+const NO_STREAM: CanopyStreamState = { watchId: null, ended: false, secretPrompt: false };
+
+function sameRun(a: AgentDirectorySubject | null, b: AgentDirectorySubject | null): boolean {
+  return (
+    a !== null && b !== null && a.terminalId === b.terminalId && a.incarnation === b.incarnation
+  );
+}
+
+function subscribeViewCache(onChange: () => void): () => void {
+  return subscribeProjectViewLifecycle(() => onChange());
+}
+
+/**
+ * The installation's one global Daintree Assistant, in the Assistant panel
+ * (#14454). Main owns its run; this view attaches to read it while the pane is
+ * on screen and lets go when it isn't, which never ends the run. Nothing here
+ * starts a session except the person pressing Start.
+ *
+ * Every window shows the same terminal. One holds its input at a time, and only
+ * by taking it: the pane types under the ownership it opened with, so once
+ * input moves — even away and back — its stream is reopened and anything still
+ * queued under the old ownership is refused by main. Each window's composer
+ * keeps its own draft through all of that.
+ */
+export function GlobalAssistantPane({ isVisible }: { isVisible: boolean }) {
+  const isOpen = useHelpPanelStore((s) => s.isOpen);
+  const target = useHelpPanelStore((s) => s.globalTarget);
+  const focusRequest = useHelpPanelStore((s) => s.focusRequest);
+  const canopyOpen = useCanopyStore((s) => s.isOpen);
+  const viewCached = useSyncExternalStore(subscribeViewCache, isProjectViewCached);
+  // A window bound to another host reaches that host's assistants, not this one's.
+  const boundElsewhere = getViewHostId() !== null;
+  const active = isOpen && isVisible && !viewCached && !boundElsewhere;
+  const { view, attachmentId, error, start, claimInput, restart, discard } =
+    useGlobalAssistant(active);
+  const [pendingConfirm, setPendingConfirm] = useState<{
+    kind: "restart" | "discard";
+    generation: number;
+  } | null>(null);
+  const [starting, setStarting] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  const subject = view?.phase === "running" ? (view.subject ?? null) : null;
+  // The run "Open in Assistant" chose, gone by now: said, and its successor
+  // never put in its place.
+  const targetEnded = target !== null && view !== null && !sameRun(subject, target);
+  const shown = targetEnded ? null : subject;
+  const holdsInput = attachmentId !== null && view?.inputOwner === attachmentId;
+  const stamp: GlobalAssistantInputStamp | null =
+    holdsInput && attachmentId !== null && view
+      ? { attachmentId, inputEpoch: view.inputEpoch }
+      : null;
+  const paneKey = shown
+    ? `${shown.terminalId}:${shown.incarnation}:${stamp ? stamp.inputEpoch : "read"}`
+    : null;
+
+  const agentId = view?.agentId ?? null;
+  const agentName = agentId ? (getAgentConfig(agentId)?.name ?? agentId) : null;
+  const composerAgentId = agentId && isBuiltInAgentId(agentId) ? agentId : undefined;
+
+  // Opened from "Open in Assistant", the keyboard comes here; a person clicking
+  // the tab keeps theirs where they put it.
+  const handledFocusRef = useRef(target !== null ? -1 : focusRequest);
+  useEffect(() => {
+    if (!isVisible || !isOpen || handledFocusRef.current === focusRequest) return;
+    let frame = 0;
+    const attempt = (tries: number) => {
+      const root = rootRef.current;
+      if (!root) return;
+      if (root.contains(document.activeElement)) {
+        handledFocusRef.current = focusRequest;
+        return;
+      }
+      const editor = root.querySelector<HTMLElement>(".cm-content");
+      if (editor) {
+        editor.focus({ preventScroll: true });
+        handledFocusRef.current = focusRequest;
+        return;
+      }
+      const textarea = root.querySelector<HTMLElement>("[data-canopy-terminal] textarea");
+      if (textarea && tries > 30) {
+        textarea.focus({ preventScroll: true });
+        handledFocusRef.current = focusRequest;
+        return;
+      }
+      if (tries < 120) frame = requestAnimationFrame(() => attempt(tries + 1));
+    };
+    frame = requestAnimationFrame(() => attempt(0));
+    return () => cancelAnimationFrame(frame);
+  }, [isVisible, isOpen, focusRequest, paneKey]);
+
+  const handleStart = async () => {
+    if (starting) return;
+    setStarting(true);
+    try {
+      await start();
+    } finally {
+      setStarting(false);
+    }
+  };
+
+  const running = view?.phase === "running";
+  const generation = view?.generation ?? 0;
+
+  return (
+    <div
+      ref={rootRef}
+      className="flex min-h-0 flex-1 flex-col"
+      data-testid="help-global-assistant-pane"
+    >
+      <div className="flex h-9 min-w-0 shrink-0 items-center gap-2 px-3 text-xs select-none">
+        <Globe className="h-3.5 w-3.5 shrink-0 text-text-secondary" aria-hidden="true" />
+        <span className="min-w-0 shrink-0 font-medium text-text-primary">Global assistant</span>
+        <span className="min-w-0 flex-1 truncate text-text-secondary">{agentName ?? ""}</span>
+        {running && shown && !holdsInput && (
+          <Button
+            variant="outline"
+            size="xs"
+            onClick={() => void claimInput()}
+            disabled={attachmentId === null}
+            data-testid="help-global-take-input"
+          >
+            Take input
+          </Button>
+        )}
+        {running && (
+          <DropdownMenu>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    aria-label="Global assistant actions"
+                    aria-haspopup="menu"
+                    data-testid="help-global-more"
+                  >
+                    <Ellipsis aria-hidden="true" />
+                  </Button>
+                </DropdownMenuTrigger>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">More actions</TooltipContent>
+            </Tooltip>
+            <DropdownMenuContent align="end" className="min-w-[180px]">
+              <DropdownMenuItem
+                destructive
+                onSelect={() => setPendingConfirm({ kind: "restart", generation })}
+              >
+                <RotateCw className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                Restart conversation
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                destructive
+                onSelect={() => setPendingConfirm({ kind: "discard", generation })}
+              >
+                <CircleStop className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                Stop global assistant
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+      </div>
+
+      {error !== null && (
+        <div className="shrink-0 px-3 pb-2">
+          <Callout severity="error" size="compact" title="Global assistant">
+            {error}
+          </Callout>
+        </div>
+      )}
+
+      {boundElsewhere ? (
+        <p className="px-6 py-8 text-center text-xs text-text-secondary">
+          This window runs on another host. Open the global assistant from a window on this machine.
+        </p>
+      ) : targetEnded ? (
+        <div className="flex flex-1 flex-col items-center justify-center gap-4 p-8 text-center">
+          <p className="max-w-[30ch] text-sm text-text-secondary">
+            The global assistant session you opened has ended
+          </p>
+          <Button
+            variant="outline"
+            onClick={() => useHelpPanelStore.getState().selectGlobal(null)}
+            data-testid="help-global-show-current"
+          >
+            Show the global assistant
+          </Button>
+        </div>
+      ) : view === null ? (
+        <div className="flex-1" aria-busy="true" />
+      ) : view.phase === "absent" ? (
+        <div className="flex flex-1 flex-col items-center justify-center gap-6 p-8 text-center">
+          <p className="max-w-[32ch] text-sm text-text-secondary">
+            One assistant for every project and window. It picks up its last conversation when there
+            is one.
+          </p>
+          <Button
+            type="button"
+            onClick={() => void handleStart()}
+            disabled={starting}
+            data-testid="help-global-start"
+          >
+            <Globe aria-hidden="true" />
+            Start global assistant
+          </Button>
+        </div>
+      ) : view.phase === "launching" || !shown || paneKey === null ? (
+        <p
+          role="status"
+          className="animate-pulse-delayed px-6 py-8 text-center text-xs text-text-secondary"
+        >
+          Starting the global assistant…
+        </p>
+      ) : canopyOpen ? (
+        <p className="px-6 py-8 text-center text-xs text-text-secondary">
+          Canopy is open in this window. Close it to see the global assistant here.
+        </p>
+      ) : (
+        <GlobalAssistantTerminal
+          key={paneKey}
+          subject={shown}
+          stamp={stamp}
+          agentId={composerAgentId}
+          inputOwner={view.inputOwner}
+        />
+      )}
+
+      <ConfirmDialog
+        isOpen={pendingConfirm !== null}
+        title={
+          pendingConfirm?.kind === "discard"
+            ? "Stop the global assistant?"
+            : "Restart the global assistant's conversation?"
+        }
+        description={
+          pendingConfirm?.kind === "discard"
+            ? "Its agent stops in every window and the conversation is discarded"
+            : "Its agent stops in every window and a new conversation starts"
+        }
+        confirmLabel={
+          pendingConfirm?.kind === "discard" ? "Stop global assistant" : "Restart conversation"
+        }
+        variant="destructive"
+        onConfirm={() => {
+          const pending = pendingConfirm;
+          setPendingConfirm(null);
+          if (!pending) return;
+          void (pending.kind === "discard"
+            ? discard(pending.generation)
+            : restart(pending.generation));
+        }}
+        onClose={() => setPendingConfirm(null)}
+      />
+    </div>
+  );
+}
+
+/**
+ * The live terminal and this window's composer for one run under one input
+ * ownership. Keyed by both, so taking or losing input opens a fresh stream:
+ * a send queued through the old one is refused by main, never re-sent here.
+ */
+function GlobalAssistantTerminal({
+  subject,
+  stamp,
+  agentId,
+  inputOwner,
+}: {
+  subject: AgentDirectorySubject;
+  stamp: GlobalAssistantInputStamp | null;
+  agentId: BuiltInAgentId | undefined;
+  inputOwner: string | null;
+}) {
+  const [api] = useState(() => assistantTerminalApi(subject, stamp ?? undefined));
+  useEffect(() => () => api.dispose(), [api]);
+  const [stream, setStream] = useState<CanopyStreamState>(NO_STREAM);
+
+  // The draft clears only once main took the text; a refused send leaves it.
+  const submit = async (text: string, imagePaths?: readonly string[]): Promise<boolean> => {
+    const watchId = stream.watchId;
+    if (watchId === null || !stamp) return false;
+    try {
+      await api.terminalSubmit(
+        watchId,
+        text,
+        imagePaths && imagePaths.length > 0 ? [...imagePaths] : undefined
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  return (
+    <div className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-surface-canvas">
+      <CanopyTerminal
+        runId={subject.terminalId}
+        spawnedAt={subject.incarnation}
+        api={api}
+        onStreamChange={setStream}
+      />
+      <div data-keybindings-isolated="" className="contents">
+        <Suspense fallback={null}>
+          <LazyHybridInputBar
+            isolated
+            terminalId={subject.terminalId}
+            cwd=""
+            agentId={agentId}
+            disabled={!stamp || stream.watchId === null || stream.secretPrompt}
+            onSend={({ text, imagePaths }) => void submit(text, imagePaths)}
+            submitText={submit}
+            onSendKey={(key) => {
+              const watchId = stream.watchId;
+              if (watchId === null || !stamp) return;
+              void api.terminalSendKey(watchId, key).catch(() => {});
+            }}
+          />
+        </Suspense>
+      </div>
+      {!stamp && (
+        <p
+          className="shrink-0 px-3.5 pb-2 text-xs text-text-secondary"
+          data-testid="help-global-input-elsewhere"
+        >
+          {inputOwner === null
+            ? "No window has this assistant's input. Take input to type here."
+            : "Another window has this assistant's input. Take input to type here."}
+        </p>
+      )}
+    </div>
+  );
+}

@@ -1,6 +1,6 @@
 import { useCallback, useId, useMemo, useRef } from "react";
 import { LayoutGroup } from "framer-motion";
-import { Plus, RotateCw, SquareTerminal, X } from "lucide-react";
+import { Globe, Plus, RotateCw, SquareTerminal, X } from "lucide-react";
 import { SpinnerCircle, HollowCircle, InteractingCircle } from "@/components/icons";
 import { BrandMark } from "@/components/icons/BrandMark";
 import { getAgentConfig } from "@/config/agents";
@@ -156,8 +156,58 @@ export interface HelpSessionTab {
  * does that without either side holding a ref to the other — and a ref crossing a
  * component boundary is also a silent React Compiler bailout in this repo.
  */
-export function helpSessionTabId(idBase: string, slot: number): string {
+export function helpSessionTabId(idBase: string, slot: number | typeof GLOBAL_TAB_KEY): string {
   return `${idBase}-tab-${slot}`;
+}
+
+/** The global assistant's tab, which is no lane: it has no slot, no close and no menu. */
+export const GLOBAL_TAB_KEY = "global";
+
+/**
+ * The installation's one global assistant, beside this project's lanes (#14454).
+ * Selecting it shows that session; it never starts one.
+ */
+function GlobalTabChip({
+  isActive,
+  tabId,
+  panelId,
+  onSelect,
+}: {
+  isActive: boolean;
+  tabId: string;
+  panelId: string;
+  onSelect: () => void;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <div
+          role="tab"
+          id={tabId}
+          data-slot={GLOBAL_TAB_KEY}
+          data-document-tab=""
+          data-testid="help-global-tab"
+          aria-selected={isActive}
+          aria-controls={panelId}
+          tabIndex={isActive ? 0 : -1}
+          onClick={onSelect}
+          onKeyDown={(e) => {
+            if (e.target !== e.currentTarget) return;
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              onSelect();
+            }
+          }}
+          className={cn(documentTabClassName(isActive), "shrink-0 px-2 py-1.5")}
+        >
+          {isActive && <DocumentTabIndicator />}
+          <Globe className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          <span className="truncate">Global</span>
+        </div>
+      </TooltipTrigger>
+      <TooltipContent side="bottom">One assistant for every project and window</TooltipContent>
+    </Tooltip>
+  );
 }
 
 interface SessionTabChipProps {
@@ -379,6 +429,8 @@ interface HelpSessionTabsProps {
   idBase: string;
   /** The id of the body this strip drives, for `aria-controls`. */
   panelId: string;
+  /** The global assistant's tab, leading the strip; absent where this view can't show it. */
+  globalTab?: { selected: boolean; onSelect: () => void };
 }
 
 /**
@@ -421,7 +473,9 @@ export function HelpSessionTabs({
   onOpenSessionWithAgent,
   idBase,
   panelId,
+  globalTab,
 }: HelpSessionTabsProps) {
+  const globalSelected = globalTab?.selected === true;
   const listRef = useRef<HTMLDivElement | null>(null);
   const layoutGroupId = useId();
   // Lanes on one agent look exactly as they always did; only a mix is marked.
@@ -432,7 +486,7 @@ export function HelpSessionTabs({
    * the container does the same job, and a ref handed down to a subcomponent as a prop is
    * a silent React Compiler bailout in this repo.
    */
-  const focusSlot = useCallback((slot: number) => {
+  const focusSlot = useCallback((slot: number | typeof GLOBAL_TAB_KEY) => {
     listRef.current?.querySelector<HTMLElement>(`[role="tab"][data-slot="${slot}"]`)?.focus();
   }, []);
 
@@ -480,14 +534,18 @@ export function HelpSessionTabs({
     (e: React.KeyboardEvent<HTMLDivElement>) => {
       // The focused lane, whichever element the key reached the list through.
       const focused = document.activeElement;
+      const order: Array<number | typeof GLOBAL_TAB_KEY> = [
+        ...(globalTab ? [GLOBAL_TAB_KEY] : []),
+        ...tabs.map((t) => t.slot),
+      ];
       const current =
         focused && listRef.current?.contains(focused)
-          ? tabs.findIndex((t) => focused.getAttribute("data-slot") === String(t.slot))
+          ? order.findIndex((id) => focused.getAttribute("data-slot") === String(id))
           : -1;
       if (current === -1) return;
       // Wrap, which is what the pattern specifies for a horizontal tablist.
       const focusAt = (index: number) => {
-        const slot = tabs[((index % tabs.length) + tabs.length) % tabs.length]?.slot;
+        const slot = order[((index % order.length) + order.length) % order.length];
         if (slot !== undefined) focusSlot(slot);
       };
 
@@ -506,11 +564,11 @@ export function HelpSessionTabs({
           break;
         case "End":
           e.preventDefault();
-          focusAt(tabs.length - 1);
+          focusAt(order.length - 1);
           break;
         default: {
           if (!isTabCloseKey(e.key)) break;
-          const tab = tabs[current];
+          const tab = tabs.find((t) => t.slot === order[current]);
           if (!tab) return;
           e.preventDefault();
           armKeyboardClose(tab.slot);
@@ -518,7 +576,7 @@ export function HelpSessionTabs({
         }
       }
     },
-    [tabs, onClose, focusSlot, armKeyboardClose]
+    [tabs, globalTab, onClose, focusSlot, armKeyboardClose]
   );
 
   if (tabs.length === 0) return null;
@@ -542,12 +600,20 @@ export function HelpSessionTabs({
         className="flex items-stretch min-w-0 overflow-x-auto [scrollbar-width:none]"
       >
         <LayoutGroup id={layoutGroupId}>
+          {globalTab && (
+            <GlobalTabChip
+              isActive={globalSelected}
+              tabId={helpSessionTabId(idBase, GLOBAL_TAB_KEY)}
+              panelId={panelId}
+              onSelect={globalTab.onSelect}
+            />
+          )}
           {tabs.map((tab) => (
             <SessionTabChip
               key={tab.slot}
               tab={tab}
               agentState={tab.agentState}
-              isActive={tab.slot === activeSlot}
+              isActive={!globalSelected && tab.slot === activeSlot}
               tabId={helpSessionTabId(idBase, tab.slot)}
               panelId={panelId}
               onSelect={onSelect}

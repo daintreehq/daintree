@@ -98,6 +98,8 @@ export function useHelpPanelRevealFocus({
         // effect and the frame that runs it. A frame already dequeued when
         // cleanup ran can't be cancelled, so re-read both.
         if (!state.isOpen || selectSlot(state, state.activeSlot).terminalId !== terminalId) return;
+        // The global assistant's pane takes the keyboard itself; its terminal is no lane's.
+        if (state.globalSelected) return;
 
         // Ownership is re-checked here, on the final deferred frame, rather
         // than in the effect body — focus can move during the frame boundary,

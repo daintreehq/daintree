@@ -30,7 +30,8 @@ import { isBuiltInAgentId } from "@shared/config/agentIds";
 import { HelpIntroBanner } from "./HelpIntroBanner";
 import { usePaletteStore } from "@/store/paletteStore";
 import { HelpPanelHeader } from "./HelpPanelHeader";
-import { HelpSessionTabs, helpSessionTabId } from "./HelpSessionTabs";
+import { GLOBAL_TAB_KEY, HelpSessionTabs, helpSessionTabId } from "./HelpSessionTabs";
+import { GlobalAssistantPane } from "./GlobalAssistantPane";
 import { HelpSessionLaneRuntime } from "./HelpSessionLaneRuntime";
 import {
   markHelpPanelRuntimeMounted,
@@ -174,6 +175,9 @@ export function HelpPanel({
   // screen keeps its launch phase, banners and IPC subscriptions intact. A
   // `useState` instance would be per-component and would die on tab switch.
   const activeSlot = useHelpPanelStore((s) => s.activeSlot);
+  // The global assistant replaces the lane body while its tab is selected
+  // (#14454); every lane keeps running behind it, as a background lane does.
+  const globalSelected = useHelpPanelStore((s) => s.globalSelected);
   const controller = useHelpSessionController(activeSlot);
 
   const session = useSyncExternalStore(controller.subscribe, controller.getSnapshot);
@@ -777,6 +781,11 @@ export function HelpPanel({
     resolveCloseFocusTarget,
   } = useHelpSessionLanes({ panelRef, activeSlot, activeWorkspaceId, terminalId });
 
+  // Shows the global run, whichever it is; never starts one.
+  const handleSelectGlobal = useCallback(() => {
+    useHelpPanelStore.getState().selectGlobal(null);
+  }, []);
+
   // Stop reuses the same "something to lose" gate as +New session — confirm
   // only when a working agent or an engaged conversation would be discarded.
   const handleEndSession = useCallback(() => {
@@ -1059,8 +1068,8 @@ export function HelpPanel({
 
       <HelpPanelHeader
         agentState={terminalPty?.agentState}
-        canRestartConversation={Boolean(terminalId && agentId)}
-        canEndSession={Boolean(terminalId && agentId)}
+        canRestartConversation={!globalSelected && Boolean(terminalId && agentId)}
+        canEndSession={!globalSelected && Boolean(terminalId && agentId)}
         onRestartConversation={handleRestartActiveSlot}
         onEndSession={handleEndSession}
         onResumePastSession={handleResumePastSession}
@@ -1094,6 +1103,7 @@ export function HelpPanel({
         onOpenSessionWithAgent={handleOpenSessionWithAgent}
         idBase={tabIdBase}
         panelId={sessionBodyId}
+        globalTab={{ selected: globalSelected, onSelect: handleSelectGlobal }}
       />
 
       {/* One runtime per open lane. Background lanes need theirs so a session
@@ -1104,7 +1114,7 @@ export function HelpPanel({
         <HelpSessionLaneRuntime
           key={slot}
           slot={slot}
-          isActive={slot === activeSlot}
+          isActive={!globalSelected && slot === activeSlot}
           isOpen={isOpen}
           isReadyToLaunch={isReadyToLaunch}
           currentProject={activeWorkspace}
@@ -1127,37 +1137,41 @@ export function HelpPanel({
       <div
         id={sessionBodyId}
         role="tabpanel"
-        aria-labelledby={helpSessionTabId(tabIdBase, activeSlot)}
+        aria-labelledby={helpSessionTabId(tabIdBase, globalSelected ? GLOBAL_TAB_KEY : activeSlot)}
         className="flex-1 flex flex-col min-h-0 relative"
       >
         {/* Banners render above every content state — the launch-error banner
             must stay visible in the empty state a failed launch falls back to.
             The other banners are null unless a session is live, so this mount
             position is behaviorally identical for them. */}
-        <HelpPanelBanners
-          showResumeBanner={session.showResumeBanner}
-          tierMismatch={session.tierMismatch}
-          launchError={session.launchError}
-          sessionRevoked={session.sessionRevoked}
-          isApprovingTier={session.isApprovingTier}
-          activeGrant={session.activeGrant}
-          grantEnded={session.grantEnded}
-          isRevokingGrant={session.isRevokingGrant}
-          onDismissResume={dismissResume}
-          onDismissTierMismatch={dismissTierMismatch}
-          onApproveOnce={approveTierOnce}
-          onAlwaysAllow={alwaysAllowTier}
-          onRevokeGrant={revokeGrant}
-          onDismissGrantEnded={dismissGrantEnded}
-          onRetryLaunch={retryLaunch}
-          onDismissLaunchError={dismissLaunchError}
-          onOpenAssistantSettings={handleOpenSettings}
-          onOpenLogs={handleOpenLogs}
-          onOpenInstallerPage={handleOpenInstallerPage}
-          onStartNewSession={handleRestartActiveSlot}
-          onDismissSessionRevoked={dismissSessionRevoked}
-        />
-        {showTerminal ? (
+        {!globalSelected && (
+          <HelpPanelBanners
+            showResumeBanner={session.showResumeBanner}
+            tierMismatch={session.tierMismatch}
+            launchError={session.launchError}
+            sessionRevoked={session.sessionRevoked}
+            isApprovingTier={session.isApprovingTier}
+            activeGrant={session.activeGrant}
+            grantEnded={session.grantEnded}
+            isRevokingGrant={session.isRevokingGrant}
+            onDismissResume={dismissResume}
+            onDismissTierMismatch={dismissTierMismatch}
+            onApproveOnce={approveTierOnce}
+            onAlwaysAllow={alwaysAllowTier}
+            onRevokeGrant={revokeGrant}
+            onDismissGrantEnded={dismissGrantEnded}
+            onRetryLaunch={retryLaunch}
+            onDismissLaunchError={dismissLaunchError}
+            onOpenAssistantSettings={handleOpenSettings}
+            onOpenLogs={handleOpenLogs}
+            onOpenInstallerPage={handleOpenInstallerPage}
+            onStartNewSession={handleRestartActiveSlot}
+            onDismissSessionRevoked={dismissSessionRevoked}
+          />
+        )}
+        {globalSelected ? (
+          <GlobalAssistantPane isVisible={isVisible} />
+        ) : showTerminal ? (
           isMissingCli && agentId ? (
             <MissingCliGate
               agentId={agentId}
@@ -1388,7 +1402,7 @@ export function HelpPanel({
         )}
       </div>
 
-      {showTerminal && agentConfig && agentId && !isMissingCli && (
+      {!globalSelected && showTerminal && agentConfig && agentId && !isMissingCli && (
         <HelpPanelFooter
           sessionId={sessionId}
           activity={session.mcpActivity}

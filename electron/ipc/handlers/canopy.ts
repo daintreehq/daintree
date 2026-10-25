@@ -72,8 +72,8 @@ import type { AssistantWorkReading } from "../../../shared/types/assistantWork.j
 import {
   parseGlobalAssistantInputStamp,
   resolveLiveAssistant,
-  type GlobalAssistantInputStamp,
 } from "../../services/assistants/liveAssistantSubject.js";
+import type { GlobalAssistantInputStamp } from "../../../shared/types/ipc/help.js";
 import { LOCAL_HOST_ID } from "../../../shared/types/remoteHosts.js";
 import { answerRunByLabel, isAnswerLabel } from "../../services/terminalAnswer.js";
 import { isCanopyViewerEndpointId } from "../endpoint.js";

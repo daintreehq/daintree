@@ -1,5 +1,6 @@
 import type { AgentDirectorySubject } from "@shared/types/agentDirectory";
 import type { AssistantOpenDestination } from "@shared/types/ipc/canopy";
+import type { GlobalAssistantInputStamp } from "@shared/types/ipc/help";
 import { LOCAL_HOST_ID, isLocalHostId, type HostId } from "@shared/types/remoteHosts";
 import type { CanopyTerminalApi } from "@/components/Canopy/canopyHostSource";
 import { canopyHostClient } from "@/clients/canopyHostClient";
@@ -50,12 +51,22 @@ const NO_CLEANUP = () => {};
  * It never sizes the terminal, and typing whose answer the link lost is said
  * as unknown rather than sent again.
  */
-export function assistantTerminalApi(subject: AgentDirectorySubject): AssistantTerminalApi {
+export function assistantTerminalApi(
+  subject: AgentDirectorySubject,
+  /**
+   * The global session's input ownership this pane types under. Without it the
+   * pane only reads; with it, input is refused once that ownership moves.
+   */
+  inputStamp?: GlobalAssistantInputStamp
+): AssistantTerminalApi {
   if (watchedHere(subject)) {
     const canopy = window.electron.canopy;
     return {
       holdsSize: true,
-      watchTerminal: () => canopy.watchAssistantTerminal(subject),
+      watchTerminal: () =>
+        inputStamp
+          ? canopy.watchAssistantTerminal(subject, inputStamp)
+          : canopy.watchAssistantTerminal(subject),
       unwatchTerminal: (...args) => canopy.unwatchTerminal(...args),
       terminalInput: (...args) => canopy.terminalInput(...args),
       terminalResize: (...args) => canopy.terminalResize(...args),
@@ -114,7 +125,8 @@ export type OpenInAssistantResult =
   /**
    * `ended`: the session stopped or was replaced, so there is nothing to open;
    * resuming or starting one is the person's own separate choice.
-   * `unsupported`: the global session has no panel in this view to land in.
+   * `unsupported`: the global session runs on another machine, or this window
+   * is bound to another host; it opens from a window on its own machine.
    * `not-attached`: it runs, but this view hasn't taken it over; the lane is
    * left as it was rather than opened empty, where it could start another.
    * `not-switched`: it runs on another host, and this window didn't move
@@ -133,7 +145,7 @@ export async function openInAssistant(
 ): Promise<OpenInAssistantResult> {
   const destination = await resolveDestination(subject);
   if (!destination) return { ok: false, reason: "ended" };
-  if (destination.scope === "global") return { ok: false, reason: "unsupported" };
+  if (destination.scope === "global") return showGlobalAssistant(subject, destination);
   const onThisHost = sameHost(destination.hostId, viewHost());
   if (onThisHost && destination.projectId === getViewWorkspaceId()) {
     return activateAssistantLane(subject);
@@ -157,6 +169,30 @@ export async function openInAssistant(
     : { ok: false, reason: "not-switched" };
 }
 
+/**
+ * Show the global session in this view's Assistant panel, pinned to the exact
+ * run main just confirmed: no project moves, nothing starts, and if that run is
+ * replaced before the pane reads it, the pane says it ended rather than showing
+ * its successor.
+ */
+function showGlobalAssistant(
+  subject: AgentDirectorySubject,
+  destination: Extract<AssistantOpenDestination, { scope: "global" }>
+): OpenInAssistantResult {
+  // Its input and lifecycle belong to windows of the machine it runs on.
+  if (!watchedHere(subject)) return { ok: false, reason: "unsupported" };
+  const panel = useHelpPanelStore.getState();
+  panel.selectGlobal({
+    hostId: destination.hostId,
+    scope: { kind: "global" },
+    terminalId: destination.terminalId,
+    incarnation: destination.incarnation,
+  });
+  panel.setOpen(true);
+  panel.requestFocus();
+  return { ok: true };
+}
+
 function sameHost(a: string, b: string): boolean {
   return (isLocalHostId(a) ? LOCAL_HOST_ID : a) === (isLocalHostId(b) ? LOCAL_HOST_ID : b);
 }
@@ -176,7 +212,7 @@ export async function activateAssistantLane(
 ): Promise<OpenInAssistantResult> {
   const destination = await resolveDestination(subject);
   if (!destination) return { ok: false, reason: "ended" };
-  if (destination.scope === "global") return { ok: false, reason: "unsupported" };
+  if (destination.scope === "global") return showGlobalAssistant(subject, destination);
   if (!sameHost(destination.hostId, viewHost()) || destination.projectId !== getViewWorkspaceId()) {
     return { ok: false, reason: "ended" };
   }

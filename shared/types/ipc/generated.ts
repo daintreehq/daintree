@@ -432,9 +432,7 @@ export interface GeneratedIpcInvokeMap {
         incarnation: number;
         lane?: number | undefined;
       },
-      inputStamp?:
-        | import("../../../electron/services/assistants/liveAssistantSubject.js").GlobalAssistantInputStamp
-        | undefined,
+      inputStamp?: import("./help.js").GlobalAssistantInputStamp | undefined,
     ];
     result: import("./canopy.js").CanopyTerminalView;
   };

@@ -3,7 +3,10 @@ import {
   AgentDirectorySubjectSchema,
   type AgentDirectorySubject,
 } from "../../../shared/types/agentDirectory.js";
-import type { GlobalAssistantState } from "../../../shared/types/ipc/help.js";
+import type {
+  GlobalAssistantInputStamp,
+  GlobalAssistantState,
+} from "../../../shared/types/ipc/help.js";
 import type { PtyClient } from "../PtyClient.js";
 import { GLOBAL_ASSISTANT_ID } from "../../../shared/config/globalAssistant.js";
 
@@ -32,17 +35,6 @@ export interface LiveAssistantSources {
     /** Whether this attachment still holds input at the epoch it was given. */
     canWrite(attachmentId: string, epoch: number): boolean;
   } | null;
-}
-
-/**
- * The input ownership a window held when it opened its view of the global
- * session. Input through that view is accepted only while the very same
- * ownership stands: once input moves, even back to this window, the view is
- * read-only and anything still queued through it is refused.
- */
-export interface GlobalAssistantInputStamp {
-  attachmentId: string;
-  inputEpoch: number;
 }
 
 export function parseGlobalAssistantInputStamp(value: unknown): GlobalAssistantInputStamp | null {

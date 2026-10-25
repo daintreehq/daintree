@@ -88,6 +88,17 @@ export interface GlobalAssistantView extends GlobalAssistantState {
   subject: AgentDirectorySubject | null;
 }
 
+/**
+ * The input ownership a window held when it opened its view of the global
+ * session. Input through that view is accepted only while the very same
+ * ownership stands: once input moves, even back to this window, the view is
+ * read-only and anything still queued through it is refused.
+ */
+export interface GlobalAssistantInputStamp {
+  attachmentId: string;
+  inputEpoch: number;
+}
+
 /** A window's reader on the global assistant, and the input epoch it holds. */
 export interface GlobalAssistantAttachment {
   attachmentId: string;
