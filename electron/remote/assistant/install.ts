@@ -116,7 +116,7 @@ export interface HostControlInstallDeps {
    * Hears what hosts already report, for `host.watch` (#14463): links, the
    * host list and summaries. Held only while a watch is armed.
    */
-  observeHosts?: HostCallRuntimeDeps["observeHosts"];
+  watchHosts?: HostCallRuntimeDeps["watchHosts"];
 }
 
 /**
@@ -200,7 +200,7 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
       return handle !== null && !isRemoteEndpointHandle(handle);
     },
     controlEnabled: (hostId) => deps.isHostControlEnabled(hostId),
-    ...(deps.observeHosts ? { observeHosts: deps.observeHosts } : {}),
+    ...(deps.watchHosts ? { watchHosts: deps.watchHosts } : {}),
     // A host's question about a call it would run itself goes to the person in
     // the window of the assistant that made the call (#13501), never the
     // focused one: an assistant a remote Shell's view runs here has none.

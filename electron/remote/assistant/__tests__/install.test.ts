@@ -263,6 +263,7 @@ describe("installHostControl (#13493)", () => {
     const endOwner = vi.fn();
     const offRuns = registerRemoteService("hostThrowawayRuns", { run: vi.fn(), endOwner });
     const endOnHosts = vi.spyOn(runtime, "endHelpSession");
+    const retireWatches = vi.spyOn(runtime, "retireWatches");
 
     // Relaunched onto a new PTY it is the same assistant; ended, its hold goes.
     const end = (reason: "relaunched" | "revoked") => {
@@ -275,6 +276,8 @@ describe("installHostControl (#13493)", () => {
     expect(mcp.released).toEqual([]);
     expect(endOwner).not.toHaveBeenCalled();
     expect(endOnHosts).not.toHaveBeenCalled();
+    // Its earlier run's host watches don't pass to the new one (#14463).
+    expect(retireWatches).toHaveBeenCalledWith("a");
     end("revoked");
     expect(endOwner).toHaveBeenCalledWith(
       { senderId: "local", helpSessionId: "a" },

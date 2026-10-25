@@ -193,12 +193,18 @@ const WATCH_STATUSES: ReadonlySet<string> = new Set(HOST_WATCH_STATUSES);
 const WATCH_LOST_REASONS: ReadonlySet<string> = new Set(HOST_WATCH_LOST_REASONS);
 const WATCH_DELIVERIES: ReadonlySet<string> = new Set(HOST_WATCH_DELIVERIES);
 
+const WATCH_ID_PATTERN = /^hw-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function auditWatchId(value: unknown): string | null {
+  return typeof value === "string" && WATCH_ID_PATTERN.test(value) ? value : null;
+}
+
 /** A watch's id, host, kind of condition and where it stands. */
 function projectHostWatch(value: unknown): Record<string, unknown> {
   const watch = asRecord(value);
   const condition = asRecord(watch?.condition);
   return {
-    watchId: auditId(watch?.watchId),
+    watchId: auditWatchId(watch?.watchId),
     hostId: auditHostId(watch?.hostId),
     on: condition === null ? null : condition.connection != null ? "connection" : "capacity",
     status: fromSet(watch?.status, WATCH_STATUSES),
@@ -332,7 +338,7 @@ const AUDIT_ARGS_PROJECTIONS: ReadonlyMap<string, (args: unknown) => unknown> = 
         memoryPressureAtMost: pressure === "normal" || pressure === "warn" ? pressure : null,
         expiresInSeconds: finiteNumber(record?.expiresInSeconds),
         noted: typeof record?.note === "string",
-        watchId: auditId(record?.watchId),
+        watchId: auditWatchId(record?.watchId),
       };
     },
   ],

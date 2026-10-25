@@ -201,7 +201,7 @@ export interface HostCallRuntimeDeps {
    * for `host.watch` (#14463); subscribed only while a watch is armed. It
    * never dials, holds or wakes a host. Absent, no watch is armed.
    */
-  observeHosts?(listener: HostWatchListener): () => void;
+  watchHosts?(listener: HostWatchListener): () => void;
   now?: () => number;
   newId?: () => string;
 }
@@ -856,7 +856,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       hosts: () => deps.hosts(),
       controlOn: (hostId) => this.controlOn(hostId),
       stillRunning: (run) => this.stillRunning(run),
-      ...(deps.observeHosts ? { observe: deps.observeHosts } : {}),
+      ...(deps.watchHosts ? { observe: deps.watchHosts } : {}),
       ...(deps.queueNotice ? { queueNotice: deps.queueNotice } : {}),
       now: () => this.now(),
       newId: () => this.newId(),

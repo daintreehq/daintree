@@ -567,7 +567,7 @@ describe("host.settings audit (#14167)", () => {
 describe("host.watch audit (#14463)", () => {
   it("records which watches and where each stands, never the note, name, detail or figures", () => {
     const watch = {
-      watchId: "hw-1",
+      watchId: "hw-0b7a1c2e-0000-4000-8000-000000000001",
       hostId: "studio-01",
       hostName: "NAME-SENTINEL",
       condition: {
@@ -604,7 +604,7 @@ describe("host.watch audit (#14463)", () => {
       outcome: "ok",
       armed: false,
       watches: [
-        { watchId: "hw-1", hostId: "studio-01", on: "capacity", status: "fired", delivery: "held" },
+        { watchId: "hw-0b7a1c2e-0000-4000-8000-000000000001", hostId: "studio-01", on: "capacity", status: "fired", delivery: "held" },
         { watchId: null, status: null },
       ],
     });

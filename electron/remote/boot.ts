@@ -326,7 +326,7 @@ function startClient(options: StartRemoteHostsOptions): void {
       isHostControlEnabled: (hostId) =>
         client.registry.get(hostId)?.assistantControlEnabled === true,
       // What `host.watch` hears (#14463): nothing a host isn't already sending.
-      observeHosts: (listener) => {
+      watchHosts: (listener) => {
         const offs = [
           client.registry.onChange(() => listener.changed()),
           client.manager.onStateChange(() => listener.changed()),
