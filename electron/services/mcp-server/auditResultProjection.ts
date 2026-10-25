@@ -360,6 +360,8 @@ function projectHostCallArgs(args: unknown): Record<string, unknown> {
     callId: auditId(record?.callId),
     newCallId: auditId(record?.newCallId),
   };
+  // Only a throwaway call (#14444) carries the key, so a project call's record is as it was.
+  if (record?.throwaway === true) out.throwaway = true;
   for (const [key, value] of Object.entries(withoutWrittenText(projected ?? {}))) {
     out[`args.${key}`] = value;
   }

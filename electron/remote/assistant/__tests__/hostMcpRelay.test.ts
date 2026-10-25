@@ -13,6 +13,8 @@ import {
   AssistantLinkMethod,
   MAX_RELAY_NOTICE_STATUS_CALLS,
   MAX_RELAY_RESULT_BYTES,
+  ThrowawayCallAnswerSchema,
+  ThrowawayCallPayloadSchema,
   type McpCallPayload,
 } from "../linkMethods.js";
 import { MAX_RELAY_NOTICES_PER_SENDER } from "../relayNoticeOutbox.js";
@@ -773,5 +775,87 @@ describe("installHostMcpRelay approvals (#13501)", () => {
       },
     ]);
     relay.dispose();
+  });
+});
+
+describe("throwaway calls on a host that doesn't run them yet (#14444)", () => {
+  const THROWAWAY = {
+    helpSessionId: "help-1",
+    tier: "core",
+    callId: "call-1",
+    resend: false,
+    call: { tool: "throwaway.launch", args: { agentId: "claude" } },
+    runMs: 90_000,
+  };
+
+  it("tells an authenticated sender they are off, touching no project or session", async () => {
+    const hasProject = vi.fn(async () => true);
+    const { links, opened, relay } = harness([["link-1", "sender-a"]], { hasProject });
+    await expect(links[0]!.ask(AssistantLinkMethod.THROWAWAY_CALL, THROWAWAY)).resolves.toEqual({
+      status: "refused",
+      reason: "throwaway-off",
+    });
+    expect(hasProject).not.toHaveBeenCalled();
+    expect(opened).toHaveLength(0);
+    relay.dispose();
+  });
+
+  it("answers control-off while the person refuses remote control, and nothing to a stranger", async () => {
+    const off = harness([["link-1", "sender-a"]], { acceptsRemoteControl: () => false });
+    await expect(off.links[0]!.ask(AssistantLinkMethod.THROWAWAY_CALL, THROWAWAY)).resolves.toEqual(
+      { status: "refused", reason: "control-off" }
+    );
+    off.relay.dispose();
+    const stranger = harness([["link-1", null]]);
+    await expect(
+      stranger.links[0]!.ask(AssistantLinkMethod.THROWAWAY_CALL, THROWAWAY)
+    ).rejects.toMatchObject({ code: "PERMISSION" });
+    stranger.relay.dispose();
+  });
+
+  it("carries no project, and a newer host's unknown refusal reads as turned off", () => {
+    expect(ThrowawayCallPayloadSchema.safeParse(THROWAWAY).success).toBe(true);
+    expect(
+      ThrowawayCallPayloadSchema.safeParse({ ...THROWAWAY, projectId: "project-1" }).success
+    ).toBe(false);
+    expect(
+      ThrowawayCallPayloadSchema.safeParse({
+        ...THROWAWAY,
+        call: { tool: "terminal.list", args: {} },
+      }).success
+    ).toBe(false);
+    expect(ThrowawayCallAnswerSchema.parse({ status: "refused", reason: "busy" })).toEqual({
+      status: "refused",
+      reason: "throwaway-off",
+    });
+    // Every reason this Shell knows keeps its own meaning.
+    for (const reason of ["control-off", "throwaway-off", "expiry-unsupported"]) {
+      expect(ThrowawayCallAnswerSchema.parse({ status: "refused", reason })).toEqual({
+        status: "refused",
+        reason,
+      });
+    }
+    const run = {
+      runId: "run-1",
+      agentId: "claude",
+      startedAt: 1_000,
+      ageMs: 0,
+      timeLimitMs: null,
+      expiresAt: null,
+      state: "running",
+      endedAt: null,
+      endReason: null,
+    };
+    for (const answer of [
+      { status: "done", result: { tool: "throwaway.launch", run } },
+      { status: "failed", reason: "not-found" },
+      { status: "unknown" },
+      { status: "conflict" },
+    ]) {
+      expect(ThrowawayCallAnswerSchema.parse(answer)).toEqual(answer);
+    }
+    expect(ThrowawayCallAnswerSchema.safeParse({ status: "failed", reason: "busy" }).success).toBe(
+      false
+    );
   });
 });

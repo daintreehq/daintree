@@ -345,6 +345,25 @@ describe("host.call audit projection (#13493)", () => {
     expect(projected).toMatchObject({ callId: null, newCallId: CALL_ID });
   });
 
+  it("marks a throwaway target, and keeps what it types to its length (#14444)", () => {
+    const projected = projectAuditArgs("host.call", {
+      hostId: "studio-01",
+      throwaway: true,
+      tool: "throwaway.sendCommand",
+      args: { runId: "run-1", command: "/usage" },
+    }) as Record<string, unknown>;
+
+    expect(projected).toMatchObject({
+      hostId: "studio-01",
+      projectId: null,
+      throwaway: true,
+      tool: "throwaway.sendCommand",
+      "args.runId": "run-1",
+      "args.command": "<string: 6 chars>",
+    });
+    expect(JSON.stringify(projected)).not.toContain("/usage");
+  });
+
   it("applies the relayed tool's own projection, and keeps what it names to its length", () => {
     const projected = projectAuditArgs("host.call", {
       hostId: "studio-01",

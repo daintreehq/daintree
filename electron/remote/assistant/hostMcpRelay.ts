@@ -5,6 +5,8 @@ import {
   AssistantLinkMethod,
   McpCallPayloadSchema,
   RelayNoticeStatusPayloadSchema,
+  ThrowawayCallPayloadSchema,
+  type ThrowawayCallAnswer,
 } from "./linkMethods.js";
 import {
   createMcpRelayExecutor,
@@ -107,6 +109,20 @@ export function installHostMcpRelay(
             }),
         };
         return runner.call(spec, payload);
+      }
+    );
+    // Throwaway agents (#14444) don't run here yet: an authenticated sender
+    // is told they are off, so its Shell reads unsupported, never a failure.
+    session.registerCallHandler(
+      AssistantLinkMethod.THROWAWAY_CALL,
+      ThrowawayCallPayloadSchema,
+      async (): Promise<ThrowawayCallAnswer> => {
+        if (disposed) throw noSender();
+        if (!deps.senders()?.senderOf(session)) throw noSender();
+        return {
+          status: "refused",
+          reason: deps.acceptsRemoteControl() ? "throwaway-off" : "control-off",
+        };
       }
     );
     session.registerCallHandler(

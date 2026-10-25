@@ -493,6 +493,8 @@ const CALL_CONFLICT_DETAIL =
 const CALL_ID_TAKEN_DETAIL =
   "That newCallId already names another call here. Nothing was sent; pick a fresh one.";
 const CALL_TOO_LARGE_DETAIL = "The call's arguments are too large to send. Nothing was sent.";
+const CALL_THROWAWAY_UNSUPPORTED_DETAIL =
+  "This Shell can't run throwaway agents on hosts yet, so nothing was sent. Name a projectId instead.";
 const CALL_SENDER_REFUSED_DETAIL =
   "The host refused this Shell's identity on the current connection. Try again shortly.";
 const CALL_RATE_LIMITED_DETAIL = "Too many calls in a short time. Retry after retryAfterMs.";
@@ -1054,6 +1056,16 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     context: { tier: "core" | "full" }
   ): Promise<HostControlOutcome<HostCallResult>> {
     return this.settle(helpSessionId, async (caller) => {
+      // Throwaway agents (#14444) aren't routed yet: refused before any
+      // callId, record or send, so nothing here remembers the call.
+      const projectId = args.projectId;
+      if (args.throwaway === true || projectId === undefined) {
+        return {
+          ...this.outcomeWith("unsupported", CALL_THROWAWAY_UNSUPPORTED_DETAIL),
+          callId: null,
+          result: null,
+        };
+      }
       const callId = args.callId ?? args.newCallId ?? this.newId();
       // The caller's own id for a first send (#14240) may already name a call
       // here: another session's or host's is never taken over, and one of its
@@ -1078,7 +1090,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         ? undefined
         : this.deps.hosts().find((candidate) => candidate.hostId === args.hostId);
       if (local) {
-        if (args.projectId === caller.projectId) {
+        if (projectId === caller.projectId) {
           return { ...this.outcomeWith("policy_rejected", CALL_OWN_PROJECT_DETAIL), ...unsent };
         }
       } else if (!host) {
@@ -1098,7 +1110,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       const runMs = relayRunMs(args.tool, toolArgs);
       const payload: McpCallPayload = {
         helpSessionId,
-        projectId: args.projectId,
+        projectId,
         tier: context.tier,
         callId,
         resend,
@@ -1121,7 +1133,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
           : {
               hostId: args.hostId,
               helpSessionId,
-              projectId: args.projectId,
+              projectId,
               tool: args.tool,
               args: toolArgs,
               run: caller,
