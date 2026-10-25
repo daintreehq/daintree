@@ -16,6 +16,7 @@ import {
   type DescriberResult,
 } from "./canopyProviders.js";
 import { cleanStatusLine } from "./canopyScreen.js";
+import { irreversibleReason } from "./canopyRisk.js";
 
 /**
  * One reading of one screen: the verdict at once, and the words that go with
@@ -25,6 +26,9 @@ export interface CanopyReading {
   classifier: ClassifierResult;
   words: () => Promise<DescriberResult>;
 }
+
+/** Rows above an approval's prompt that can hold the command it asks about. */
+const APPROVAL_LOOKBACK_ROWS = 8;
 
 /** Times a reader may die in a row before Canopy stops starting new ones until the model changes. */
 const MAX_CRASHES = 3;
@@ -92,6 +96,13 @@ export function toCanopyReading(reading: Reading, input: CanopyScreenInput): Can
   };
   const words = async (): Promise<DescriberResult> => {
     const card = readerCard(reading, lines);
+    // The command is on the dialog whether or not the reader picked its line:
+    // the rows around the prompt, down to the choices, are all read for it.
+    const around =
+      reading.question_line >= 0
+        ? lines.slice(Math.max(0, reading.question_line - APPROVAL_LOOKBACK_ROWS))
+        : lines.slice(-APPROVAL_LOOKBACK_ROWS);
+    const caution = irreversibleReason(card.action, card.headline, question, ...around);
     return toDescriberResult(
       {
         category,
@@ -100,7 +111,10 @@ export function toCanopyReading(reading: Reading, input: CanopyScreenInput): Can
         question: card.question,
         options: card.options,
         attention_score: Number(reading.score),
-        risk: reading.risk,
+        // Only a raise: a command known to be irreversible takes the second press
+        // whatever the reader said, and the reader's own caution is never lowered.
+        risk: category === "approval" && caution !== null ? "caution" : reading.risk,
+        risk_reason: category === "approval" ? caution : null,
         progress: reading.progress === "none" ? null : Number(reading.progress),
         tests: reading.tests,
         changes: reading.changes,

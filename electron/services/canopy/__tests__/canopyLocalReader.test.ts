@@ -120,6 +120,66 @@ describe("toCanopyReading", () => {
     expect(loose.attentionScore).toBeGreaterThanOrEqual(55);
   });
 
+  it("raises an approval for an irreversible command to caution whatever the reader said", async () => {
+    const screen = ["⏺ Bash(rm -rf dist)", "Do you want to proceed?", "1. Yes", "2. No"];
+    const risky = await toCanopyReading(
+      reading({ risk: "none", status_line: 0, question_line: 1, action_line: 0 }),
+      input({ lines: screen })
+    ).words();
+    expect(risky.risk).toBe("caution");
+    expect(risky.riskReason).toBe("Deletes files for good");
+    // A caution is the second press and the top of the list: scored with the approvals.
+    expect(risky.attentionScore).toBe(98);
+    // The command is found on the dialog even when the reader picked no line for it.
+    const unpicked = await toCanopyReading(
+      reading({ risk: "none", status_line: -1, question_line: 3, action_line: -1 }),
+      input({
+        lines: [
+          "⏺ Bash(git push --force)",
+          "",
+          "git push --force",
+          "Do you want to proceed?",
+          "1. Yes",
+        ],
+      })
+    ).words();
+    expect(unpicked.risk).toBe("caution");
+    // But not a command from far above the prompt, in history the approval isn't about.
+    const farAbove = await toCanopyReading(
+      reading({ risk: "none", status_line: -1, question_line: 12, action_line: -1 }),
+      input({
+        lines: [
+          "rm -rf dist",
+          ...Array.from({ length: 10 }, (_, i) => `step ${i}`),
+          "npm test",
+          "Do you want to proceed?",
+          "1. Yes",
+        ],
+      })
+    ).words();
+    expect(farAbove.risk).toBe("none");
+    // The same screen for a harmless command stays as the reader read it.
+    const calm = await toCanopyReading(
+      reading({ risk: "none", status_line: 0, question_line: 1, action_line: 0 }),
+      input({ lines: ["⏺ Bash(npm test)", ...screen.slice(1)] })
+    ).words();
+    expect(calm.risk).toBe("none");
+    expect(calm.riskReason).toBeNull();
+    // Never lowered: the reader's own caution stands for a command this doesn't know.
+    const kept = await toCanopyReading(
+      reading({ risk: "caution", status_line: 0, question_line: 1, action_line: 0 }),
+      input({ lines: ["⏺ Bash(custom-deploy --prod)", ...screen.slice(1)] })
+    ).words();
+    expect(kept.risk).toBe("caution");
+    // Only an approval is raised: a finished turn that mentions the command is not.
+    const finished = await toCanopyReading(
+      reading({ category: "finished", risk: "none", status_line: 0 }),
+      input({ lines: ["⏺ Ran rm -rf dist and it passed"] })
+    ).words();
+    expect(finished.risk).toBe("none");
+    expect(finished.riskReason).toBeNull();
+  });
+
   it("counts three or more repeats as three, capped where the screen hasn't moved", async () => {
     const many = await toCanopyReading(
       reading({ category: "working", failure_repeats: "3+" }),

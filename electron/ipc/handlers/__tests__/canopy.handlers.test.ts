@@ -256,8 +256,7 @@ describe("canopy IPC", () => {
     saved.state = null;
     // setMode is rate-limited across the file; each case starts with the window clear.
     _resetRateLimitQueuesForTest();
-    // No test reaches the real service, whatever the shell sets.
-    vi.stubEnv("DAINTREE_CANOPY_TIER", "");
+    // No test downloads a model or starts a reader.
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => {
