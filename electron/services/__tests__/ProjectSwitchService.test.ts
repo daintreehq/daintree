@@ -24,6 +24,9 @@ const gitServiceCacheMock = vi.hoisted(() => ({
 }));
 
 const sendToRendererMock = vi.hoisted(() => vi.fn());
+const pluginServiceMock = vi.hoisted(() => ({
+  onProjectOpened: vi.fn(async () => undefined),
+}));
 const randomUUIDMock = vi.hoisted(() => vi.fn(() => "switch-id-1"));
 
 const storeMock = vi.hoisted(() => ({
@@ -76,6 +79,10 @@ const buildSwitchHydrateResultMock = vi.hoisted(() =>
     projectStateRecovery: null,
   }))
 );
+
+vi.mock("../PluginService.js", () => ({
+  pluginService: pluginServiceMock,
+}));
 
 vi.mock("../AppHydrationService.js", () => ({
   buildSwitchHydrateResult: buildSwitchHydrateResultMock,
@@ -609,6 +616,19 @@ describe("Host activation for a remote view", () => {
     } finally {
       _setProjectPresenceTrackerForTests(null);
     }
+  });
+
+  it("opens the project's plugins on every activation, as a local view does", async () => {
+    const ws = workspace();
+    await activateProjectOnHost(ws, project, -4);
+    await vi.waitFor(() =>
+      expect(pluginServiceMock.onProjectOpened).toHaveBeenCalledWith("project-new", "/tmp/new")
+    );
+
+    await activateProjectOnHost(ws, project, -4);
+    await vi.waitFor(() => expect(pluginServiceMock.onProjectOpened).toHaveBeenCalledTimes(2));
+    expect(pluginServiceMock.onProjectOpened).toHaveBeenNthCalledWith(2, "project-new", "/tmp/new");
+    expect(ws.loadProject).toHaveBeenCalledTimes(1);
   });
 
   it("drops residency when the load fails so a retry starts over", async () => {
