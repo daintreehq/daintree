@@ -21,6 +21,7 @@ const baseConfig: KnipConfig = {
     "electron/services/persistence/dbMaintenanceWorker.ts",
     "electron/services/pluginAgentMcp/databaseQueryWorker.ts",
     "electron/services/voice/openaiVadWorker.ts",
+    "electron/services/canopy/canopyReaderWorker.ts",
     "electron/workspace-host/copytreeWorker.ts",
     // Picker utility-process and browser bundles are loaded by emitted path.
     "electron/services/elementPicker/host-bootstrap.ts",

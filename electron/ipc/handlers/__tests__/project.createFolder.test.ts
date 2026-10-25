@@ -52,6 +52,7 @@ vi.mock("../../../services/RunCommandDetector.js", () => ({
 vi.mock("../../../window/webContentsRegistry.js", () => ({
   getWindowForWebContents: vi.fn(() => null),
   getProjectForWebContents: vi.fn(() => null),
+  getAllAppWebContents: vi.fn(() => []),
 }));
 
 vi.mock("../../../window/portDistribution.js", () => ({

@@ -193,6 +193,7 @@
     "mermaid": "^12.2.0",
     "node-addon-api": "^8.9.2",
     "node-pty": "1.2.0-beta.14",
+    "onnxruntime-node": "1.30.0",
     "posix-pty-reaper": "file:electron/native/posix-pty-reaper",
     "proper-lockfile": "^4.1.2",
     "react-colorful": "^5.8.1",
