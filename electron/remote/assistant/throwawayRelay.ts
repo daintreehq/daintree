@@ -1,6 +1,7 @@
 import {
   THROWAWAY_CLOSE_TOOL,
   THROWAWAY_LAUNCH_TOOL,
+  THROWAWAY_OUTPUT_TOOL,
   THROWAWAY_SEND_COMMAND_TOOL,
   THROWAWAY_SEND_KEYS_TOOL,
   type HostThrowawayCall,
@@ -9,7 +10,13 @@ import {
   type HostThrowawayTool,
 } from "../../../shared/types/hostThrowaway.js";
 import { canonicalArgsHash } from "../../services/mcp-server/sessionDedup.js";
-import type { ThrowawayCallAnswer, ThrowawayCallPayload } from "./linkMethods.js";
+import { AppError } from "../../utils/errorTypes.js";
+import {
+  MAX_RELAY_RESULT_BYTES,
+  ThrowawayCallAnswerSchema,
+  type ThrowawayCallAnswer,
+  type ThrowawayCallPayload,
+} from "./linkMethods.js";
 import { RelayCallLedger } from "./relayCallLedger.js";
 
 declare module "../runtime.js" {
@@ -65,6 +72,54 @@ const THROWN_FAILURES: Partial<Record<HostThrowawayTool, HostThrowawayFailure>> 
   [THROWAWAY_CLOSE_TOOL]: "close-failed",
 };
 
+/** Room the answer's own fields take beside an output read's text. */
+const ANSWER_ENVELOPE_BYTES = 4 * 1024;
+
+function invalidExecution(): AppError {
+  // Thrown, never retried: what ran may already have changed something.
+  return new AppError({ code: "INTERNAL", message: "The throwaway executor's answer was invalid" });
+}
+
+/**
+ * What the executor answered, as the Shell's schema will read it, for the
+ * tool that was called. An output read too large to carry keeps its last
+ * lines, as a terminal's tail is what a check reads.
+ */
+function checkedAnswer(
+  call: HostThrowawayCall,
+  answer: HostThrowawayExecution
+): ThrowawayCallAnswer {
+  const parsed = ThrowawayCallAnswerSchema.safeParse(answer);
+  if (!parsed.success) throw invalidExecution();
+  const checked = parsed.data;
+  if (checked.status !== "done") return checked;
+  if (checked.result.tool !== call.tool) throw invalidExecution();
+  if (checked.result.tool !== THROWAWAY_OUTPUT_TOOL) return checked;
+  const budget = MAX_RELAY_RESULT_BYTES - ANSWER_ENVELOPE_BYTES;
+  const { content } = checked.result;
+  if (Buffer.byteLength(JSON.stringify(content), "utf8") <= budget) return checked;
+  const lines = content.split("\n");
+  let kept = 0;
+  let bytes = 2;
+  for (let index = lines.length - 1; index >= 0; index--) {
+    // Its escaped text and the escaped newline before it.
+    const size = Buffer.byteLength(JSON.stringify(lines[index]), "utf8");
+    if (bytes + size > budget) break;
+    bytes += size;
+    kept += 1;
+  }
+  const tail = lines.slice(lines.length - kept);
+  return {
+    status: "done",
+    result: {
+      ...checked.result,
+      content: tail.join("\n"),
+      lineCount: tail.length,
+      truncated: true,
+    },
+  };
+}
+
 /**
  * The relay's side of a throwaway call (#14446), whichever way it came: over
  * a Shell's link or from one of this machine's own assistants. It never
@@ -82,16 +137,22 @@ export function createThrowawayRelay(deps: ThrowawayRelayDeps): ThrowawayRelay {
     if (!deps.acceptsRemoteControl()) return { status: "refused", reason: "control-off" };
     const executor = deps.executor();
     if (executor === null) return { status: "refused", reason: "throwaway-off" };
+    let answer: HostThrowawayExecution;
     try {
-      return await executor.run({ senderId, helpSessionId: payload.helpSessionId }, payload.call, {
-        callId: payload.callId,
-        timeoutMs: payload.runMs,
-      });
+      answer = await executor.run(
+        { senderId, helpSessionId: payload.helpSessionId },
+        payload.call,
+        {
+          callId: payload.callId,
+          timeoutMs: payload.runMs,
+        }
+      );
     } catch (error) {
       const failure = THROWN_FAILURES[payload.call.tool];
       if (failure === undefined) throw error;
       return { status: "failed", reason: failure };
     }
+    return checkedAnswer(payload.call, answer);
   };
 
   return {

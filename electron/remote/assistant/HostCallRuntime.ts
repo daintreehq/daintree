@@ -18,7 +18,7 @@ import {
   type HostSettingsResult,
 } from "../../../shared/types/hostControl.js";
 import {
-  HOST_THROWAWAY_TOOLS,
+  HOST_THROWAWAY_TOOL_SIGNATURES,
   HostThrowawayCallSchema,
   type HostThrowawayFailure,
   type HostThrowawayRefusal,
@@ -504,7 +504,7 @@ const CALL_CONFLICT_DETAIL =
 const CALL_ID_TAKEN_DETAIL =
   "That newCallId already names another call here. Nothing was sent; pick a fresh one.";
 const CALL_TOO_LARGE_DETAIL = "The call's arguments are too large to send. Nothing was sent.";
-const THROWAWAY_TOOLS_DETAIL = `A throwaway target takes only ${HOST_THROWAWAY_TOOLS.join(", ")}, each with its own arguments. Nothing was sent; project tools need a projectId.`;
+const THROWAWAY_TOOLS_DETAIL = `A throwaway target takes only these tools, with these args: ${HOST_THROWAWAY_TOOL_SIGNATURES}. Nothing was sent; project tools need a projectId.`;
 const THROWAWAY_REFUSAL_DETAILS: Record<
   Exclude<HostThrowawayRefusal, "control-off">,
   { code: Exclude<HostControlOutcomeCode, "ok">; detail: string }

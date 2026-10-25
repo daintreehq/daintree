@@ -144,6 +144,13 @@ describe("runHostControlTool (#13493)", () => {
       { tier: "core" }
     );
     for (const result of refused) expect(result).toMatchObject({ ok: false, code: "INVALID_ARGS" });
+    // A throwaway call that doesn't parse names the tools it takes (#14446); others don't.
+    const [, neither, notTrue, projectTool] = refused;
+    expect(projectTool).toMatchObject({
+      message: expect.stringContaining("throwaway.close {runId}"),
+    });
+    expect(neither).not.toMatchObject({ message: expect.stringContaining("throwaway") });
+    expect(notTrue).not.toMatchObject({ message: expect.stringContaining("throwaway") });
   });
 
   it("hands host.call the caller's own first-send id, and refuses one sent beside a callId (#14240)", async () => {

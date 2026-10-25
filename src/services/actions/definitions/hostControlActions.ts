@@ -59,7 +59,7 @@ export function registerHostControlActions(actions: ActionRegistry): void {
     id: "host.call",
     title: "Run a tool on a host",
     description:
-      "Run a host's own Daintree tool in one of its projects (local reaches another project here) and get its result, such as starting its assistant. Changes are refused while another machine drives that project. ambiguous: resend under its callId, which never runs twice.",
+      "Run a host's own Daintree tool in one of its projects (local reaches another project here) and get its result, such as starting its assistant, or with throwaway instead, a short-lived agent of yours in no project. Changes are refused while another machine drives that project. ambiguous: resend under its callId, which never runs twice.",
     category: "help",
     kind: "command",
     danger: "safe",

@@ -1,5 +1,5 @@
 import type { ActionErrorCode } from "../../../shared/types/actions.js";
-import { HOST_THROWAWAY_TOOLS } from "../../../shared/types/hostThrowaway.js";
+import { HOST_THROWAWAY_TOOL_SIGNATURES } from "../../../shared/types/hostThrowaway.js";
 import {
   HOST_CALL_TOOL,
   HOST_ENSURE_PROJECT_TOOL,
@@ -71,7 +71,7 @@ export const HOST_CONTROL_NOT_ELIGIBLE_MESSAGE =
   "Only a Daintree Assistant running on this machine can reach its hosts.";
 const INVALID_ARGS_MESSAGE = "The arguments don't match this tool's schema.";
 /** Why a throwaway call didn't parse (#14446): only its own tools, named so the caller can pick one. */
-const INVALID_THROWAWAY_MESSAGE = `A throwaway call names no projectId and takes only ${HOST_THROWAWAY_TOOLS.join(", ")}, each with its own arguments. Project tools need a projectId instead.`;
+const INVALID_THROWAWAY_MESSAGE = `A throwaway call names no projectId and takes only these tools, with these args: ${HOST_THROWAWAY_TOOL_SIGNATURES}. Project tools need a projectId instead.`;
 
 /** One MCP session's view of the host-control runtime, keyed on the help session bound to it. */
 export interface HostControlAccess {
@@ -88,9 +88,11 @@ function notEligible(): { ok: false; code: "NOT_ELIGIBLE"; message: string } {
   return { ok: false, code: "NOT_ELIGIBLE", message: HOST_CONTROL_NOT_ELIGIBLE_MESSAGE };
 }
 
-function invalidArgs(
-  message = INVALID_ARGS_MESSAGE
-): { ok: false; code: "INVALID_ARGS"; message: string } {
+function invalidArgs(message = INVALID_ARGS_MESSAGE): {
+  ok: false;
+  code: "INVALID_ARGS";
+  message: string;
+} {
   return { ok: false, code: "INVALID_ARGS", message };
 }
 

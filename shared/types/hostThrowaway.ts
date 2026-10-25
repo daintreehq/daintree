@@ -39,6 +39,10 @@ export const HOST_THROWAWAY_TOOLS = [
 ] as const;
 export type HostThrowawayTool = (typeof HOST_THROWAWAY_TOOLS)[number];
 
+/** Each throwaway tool with its arguments, as a refusal names them for a caller to pick from. */
+export const HOST_THROWAWAY_TOOL_SIGNATURES =
+  "throwaway.launch {agentId, timeLimitMs?}, throwaway.status {runId}, throwaway.output {runId, maxLines?}, throwaway.sendCommand {runId, command}, throwaway.sendKeys {runId, keys}, throwaway.close {runId}";
+
 /** Longest time limit a launch may ask for. */
 export const MAX_THROWAWAY_TIME_LIMIT_MS = 15 * 60_000;
 /** Most lines one output read returns. */
