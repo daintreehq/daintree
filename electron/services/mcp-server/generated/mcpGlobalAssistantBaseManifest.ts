@@ -393,12 +393,13 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
                         description: "The host's own clock: provenance, not an age.",
                       },
                       receivedAt: {
-                        description: "This machine's clock when the sample arrived.",
+                        description:
+                          "This machine's clock when the sample arrived; its own, when the read began.",
                         type: ["number", "null"],
                       },
                       ageMs: {
                         description:
-                          "How old the sample is at most, never by comparing clocks. Null: unknown.",
+                          "How old the sample is at most. From an older host, read off its timestamp. Null: unknown.",
                         type: ["number", "null"],
                       },
                       stale: {
@@ -417,7 +418,7 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
                           },
                         ],
                         description:
-                          "age-limit: known too old. clock-uncertain: its age couldn't be bounded and its timestamp can't be placed on this clock. Null when fresh.",
+                          "age-limit: its age, or the most it could be, is past the limit. clock-uncertain: its age couldn't be bounded and its timestamp can't be placed on this clock. Null when fresh.",
                       },
                       platform: {
                         type: "string",

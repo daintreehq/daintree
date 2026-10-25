@@ -202,11 +202,16 @@ export const HostListEntrySchema = z.object({
   load: z
     .object({
       sampledAt: z.number().describe("The host's own clock: provenance, not an age."),
-      receivedAt: z.number().nullable().describe("This machine's clock when the sample arrived."),
+      receivedAt: z
+        .number()
+        .nullable()
+        .describe("This machine's clock when the sample arrived; its own, when the read began."),
       ageMs: z
         .number()
         .nullable()
-        .describe("How old the sample is at most, never by comparing clocks. Null: unknown."),
+        .describe(
+          "How old the sample is at most. From an older host, read off its timestamp. Null: unknown."
+        ),
       stale: z
         .boolean()
         .describe("Too old to trust: the live figures below are null. Not a zero reading."),
@@ -214,7 +219,7 @@ export const HostListEntrySchema = z.object({
         .enum(["age-limit", "clock-uncertain"])
         .nullable()
         .describe(
-          "age-limit: known too old. clock-uncertain: its age couldn't be bounded and its timestamp can't be placed on this clock. Null when fresh."
+          "age-limit: its age, or the most it could be, is past the limit. clock-uncertain: its age couldn't be bounded and its timestamp can't be placed on this clock. Null when fresh."
         ),
       platform: z.enum(["darwin", "linux"]),
       cpuPercent: z.number().nullable(),
