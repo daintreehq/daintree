@@ -3,8 +3,11 @@ import type { PanelSnapshot, ProjectState } from "../../../../shared/types/proje
 import { recordViewlessTerminal, type ProjectStateWriter } from "../projectStateAuthoring.js";
 import {
   _resetHostStartedTerminalsForTesting,
-  hostStartedTerminalIds,
+  hostStartedTerminals,
 } from "../hostStartedTerminals.js";
+import { forgetViewlessTerminal } from "../projectStateAuthoring.js";
+
+const startedIds = (projectId: string) => hostStartedTerminals(projectId).map((t) => t.id);
 
 function writerOver(initial: ProjectState | null) {
   let state = initial;
@@ -31,17 +34,38 @@ const SNAPSHOT: PanelSnapshot = {
 describe("recordViewlessTerminal", () => {
   afterEach(() => _resetHostStartedTerminalsForTesting());
 
-  it("notes the terminal as host-started even when the state write fails (#14473)", async () => {
+  it("notes the terminal as host-started, with its placement, before the state write (#14473)", async () => {
+    let notedBeforeWrite: string[] = [];
     const writer: ProjectStateWriter = {
       enqueueProjectStateUpdate: async () => {
+        notedBeforeWrite = startedIds("proj-1");
         throw new Error("disk full");
       },
     };
 
-    await expect(recordViewlessTerminal(writer, "proj-1", SNAPSHOT)).rejects.toThrow("disk full");
+    await expect(
+      recordViewlessTerminal(writer, "proj-1", {
+        ...SNAPSHOT,
+        location: "background",
+        worktreeId: "/repo",
+      })
+    ).rejects.toThrow("disk full");
 
-    expect(hostStartedTerminalIds("proj-1")).toEqual(["t-1"]);
-    expect(hostStartedTerminalIds("proj-2")).toEqual([]);
+    expect(notedBeforeWrite).toEqual(["t-1"]);
+    expect(hostStartedTerminals("proj-1")).toEqual([
+      { id: "t-1", location: "background", worktreeId: "/repo", heldBy: new Set() },
+    ]);
+    expect(startedIds("proj-2")).toEqual([]);
+  });
+
+  it("forgets a host-started terminal a viewless close takes out", async () => {
+    const { writer } = writerOver(null);
+    await recordViewlessTerminal(writer, "proj-1", SNAPSHOT);
+    await recordViewlessTerminal(writer, "proj-1", { ...SNAPSHOT, id: "t-2" });
+
+    await forgetViewlessTerminal(writer, "proj-1", "t-1");
+
+    expect(startedIds("proj-1")).toEqual(["t-2"]);
   });
 
   it("creates a project's first state around the terminal", async () => {

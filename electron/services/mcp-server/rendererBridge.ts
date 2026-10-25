@@ -19,8 +19,11 @@ import {
 } from "../viewless/index.js";
 import {
   forgetHostStartedTerminals,
-  hostStartedTerminalIds,
+  hostStartedTerminals,
+  noteHeldByView,
+  type HostStartedTerminal,
 } from "../viewless/hostStartedTerminals.js";
+import { getPtyClient } from "../../window/serviceRefs.js";
 import { getProjectViewManager } from "../../window/windowRef.js";
 import { getRemoteService } from "../../remote/runtime.js";
 import { isLocalHostId, parseHostScopedKey } from "../../../shared/types/remoteHosts.js";
@@ -159,6 +162,21 @@ export class NoFrontendAttachedError extends WorkspaceBindingError {
  */
 function isNotFoundEntry(row: { error?: unknown }): boolean {
   return typeof row.error === "string" && row.error.startsWith("Terminal not found");
+}
+
+/**
+ * Whether a pane no view holds belongs in a list or fleet read with these
+ * filters, by where its spawn placed it: the view's own default leaves the
+ * trash and the background out.
+ */
+function matchesFilters(terminal: HostStartedTerminal, filters: Record<string, unknown>): boolean {
+  if (typeof filters.terminalId === "string" && filters.terminalId !== terminal.id) return false;
+  if (typeof filters.worktreeId === "string" && filters.worktreeId !== terminal.worktreeId) {
+    return false;
+  }
+  return typeof filters.location === "string"
+    ? filters.location === terminal.location
+    : terminal.location !== "background";
 }
 
 /**
@@ -877,7 +895,49 @@ export function createRendererBridge(
     });
   }
 
-  function sendDispatchRequest(
+  /**
+   * A dispatch a local view answers. Its `terminal.list` and
+   * `terminal.getStatus` also read what main started for its project that it
+   * never adopted (#14473), whichever route reached it.
+   */
+  async function sendDispatchRequest(
+    resolveWebContents: () => Electron.WebContents,
+    actionId: string,
+    args: unknown,
+    confirmed: boolean,
+    sessionOrigin: McpSessionOrigin,
+    contextOverride?: ActionContext,
+    callerInfo?: McpBearerIdentity,
+    route?: BridgeRoute,
+    approval?: Pick<
+      WorkspaceDispatchOptions,
+      "offerSessionApproval" | "approvalOnly" | "approvalReason" | "authorization" | "hostPreview"
+    >
+  ): Promise<DispatchEnvelope> {
+    let viewId: number | undefined;
+    const envelope = await requestFromView(
+      () => {
+        const wc = resolveWebContents();
+        viewId = wc.id;
+        return wc;
+      },
+      actionId,
+      args,
+      confirmed,
+      sessionOrigin,
+      contextOverride,
+      callerInfo,
+      route,
+      approval
+    );
+    if (viewId === undefined || approval?.approvalOnly) return envelope;
+    if (actionId !== "terminal.list" && actionId !== "terminal.getStatus") return envelope;
+    const projectId = getProjectForWebContents(viewId);
+    if (projectId === null) return envelope;
+    return withHostStartedTerminals(projectId, viewId, actionId, args, sessionOrigin, envelope);
+  }
+
+  function requestFromView(
     resolveWebContents: () => Electron.WebContents,
     actionId: string,
     args: unknown,
@@ -1520,54 +1580,61 @@ export function createRendererBridge(
 
   /**
    * A local view's answer to `terminal.list` or `terminal.getStatus`, with the
-   * terminals main started for the workspace that the view never adopted
-   * (#14473). A relayed launch, or this host's own assistant with no view,
-   * spawns on the host even while a window here shows the project, and that
-   * window's panel store learns of it only when it next hydrates.
+   * terminals main started for its project that it never adopted (#14473). A
+   * relayed launch, or this host's own assistant with no view, spawns on the
+   * host even while a window here shows the project, and that window's panel
+   * store learns of it only when it next hydrates.
    *
-   * Read off the pty-host with the caller's own arguments, so its filters
-   * apply. A list gains the rows the view didn't give: a list row says nothing
-   * of where it was read. A status answer is one surface's reading
-   * throughout, so it is the pty-host's whole answer, `source: "pty"`, once
-   * any of these is in it, and the view's otherwise. A failed read keeps the
-   * view's answer.
+   * Read off the pty-host with the caller's own arguments, and only when one
+   * of them could be in the answer, so a poll that has none pays nothing. A
+   * list gains the rows the view didn't give: a list row says nothing of where
+   * it was read. A status answer is one surface's reading throughout, so it is
+   * the pty-host's, `source: "pty"`, once one of these is in it, kept to what
+   * the view showed plus these: a pane the view hides stays hidden. A failed
+   * read keeps the view's answer.
    */
   async function withHostStartedTerminals(
-    workspaceId: string,
-    actionId: string,
+    projectId: string,
+    viewId: number,
+    actionId: "terminal.list" | "terminal.getStatus",
     args: unknown,
     sessionOrigin: McpSessionOrigin,
-    options: WorkspaceDispatchOptions,
     envelope: DispatchEnvelope
   ): Promise<DispatchEnvelope> {
-    if (actionId !== "terminal.list" && actionId !== "terminal.getStatus") return envelope;
-    if (options.approvalOnly || !envelope.result.ok) return envelope;
-    const started = hostStartedTerminalIds(workspaceId);
+    if (!envelope.result.ok) return envelope;
+    const started = hostStartedTerminals(projectId);
     if (started.length === 0) return envelope;
     const answer = envelope.result.result as { terminals?: unknown } | undefined;
     if (!Array.isArray(answer?.terminals)) return envelope;
     const rows = answer.terminals as Array<{ id?: unknown; terminalId?: unknown; error?: unknown }>;
-    const held = new Set<string>();
+    const isList = actionId === "terminal.list";
+    const shown = new Set<string>();
     const notFound = new Set<string>();
     for (const row of rows) {
-      const id = actionId === "terminal.list" ? row.id : row.terminalId;
+      const id = isList ? row.id : row.terminalId;
       if (typeof id !== "string") continue;
-      if (actionId === "terminal.getStatus" && isNotFoundEntry(row)) notFound.add(id);
-      else held.add(id);
+      if (!isList && isNotFoundEntry(row)) notFound.add(id);
+      else shown.add(id);
     }
-    forgetHostStartedTerminals(workspaceId, held);
-    const named =
-      actionId === "terminal.getStatus" &&
-      args !== null &&
-      typeof args === "object" &&
-      (args as Record<string, unknown>).terminalIds !== undefined;
-    const missing = new Set(started.filter((id) => !held.has(id) && (!named || notFound.has(id))));
+    noteHeldByView(projectId, shown, viewId);
+    const filters = (args ?? {}) as Record<string, unknown>;
+    const named = !isList && filters.terminalIds !== undefined;
+    const missing = new Set(
+      started
+        .filter(
+          (terminal) =>
+            !terminal.heldBy.has(viewId) &&
+            !shown.has(terminal.id) &&
+            (named ? notFound.has(terminal.id) : matchesFilters(terminal, filters))
+        )
+        .map((terminal) => terminal.id)
+    );
     if (missing.size === 0) return envelope;
 
     let read: Awaited<ReturnType<typeof runViewlessAction>>;
     try {
       read = await runViewlessAction({
-        workspaceId,
+        workspaceId: projectId,
         actionId,
         args,
         confirmed: false,
@@ -1578,13 +1645,16 @@ export function createRendererBridge(
       return envelope;
     }
     if (!read?.ok) return envelope;
-    const readRows = (read.result as { terminals?: unknown } | undefined)?.terminals;
-    if (!Array.isArray(readRows)) return envelope;
+    const readAnswer = read.result as { terminals?: unknown } | undefined;
+    if (!Array.isArray(readAnswer?.terminals)) return envelope;
+    const readRows = readAnswer.terminals as Array<{
+      id?: unknown;
+      terminalId?: unknown;
+      error?: unknown;
+    }>;
 
-    if (actionId === "terminal.list") {
-      const added = (readRows as Array<{ id?: unknown }>).filter(
-        (row) => typeof row.id === "string" && missing.has(row.id)
-      );
+    if (isList) {
+      const added = readRows.filter((row) => typeof row.id === "string" && missing.has(row.id));
       if (added.length === 0) return envelope;
       return {
         ...envelope,
@@ -1592,18 +1662,41 @@ export function createRendererBridge(
       };
     }
 
-    const found = (readRows as Array<{ terminalId?: unknown; error?: unknown }>).filter(
+    const missingRows = readRows.filter(
       (row) => typeof row.terminalId === "string" && missing.has(row.terminalId)
     );
-    // Named and still not found: the pty-host doesn't hold it either.
-    if (named) {
+    // Gone only on two words: the pty-host's answer, which a failed read
+    // words the same way, and main's own spawn record.
+    const pty = getPtyClient();
+    if (pty) {
       forgetHostStartedTerminals(
-        workspaceId,
-        found.filter(isNotFoundEntry).map((row) => row.terminalId as string)
+        projectId,
+        missingRows
+          .filter(isNotFoundEntry)
+          .map((row) => row.terminalId as string)
+          .filter((id) => pty.getTerminalProjectId(id) === null)
       );
     }
-    if (found.every(isNotFoundEntry)) return envelope;
-    return { ...envelope, result: read };
+    if (missingRows.every(isNotFoundEntry)) return envelope;
+    const terminals = named
+      ? readRows.map((row) =>
+          typeof row.terminalId === "string" &&
+          !shown.has(row.terminalId) &&
+          !missing.has(row.terminalId)
+            ? {
+                terminalId: row.terminalId,
+                agentId: null,
+                agentState: null,
+                error: "Terminal not found",
+              }
+            : row
+        )
+      : readRows.filter(
+          (row) =>
+            typeof row.terminalId === "string" &&
+            (shown.has(row.terminalId) || missing.has(row.terminalId))
+        );
+    return { ...envelope, result: { ok: true, result: { ...readAnswer, terminals } } };
   }
 
   /**
@@ -1769,23 +1862,16 @@ export function createRendererBridge(
       );
     }
     if (driver === null) {
-      return withHostStartedTerminals(
-        workspaceId,
+      return sendDispatchRequest(
+        () => getWorkspaceWebContents(workspaceId, options.preferredWebContentsId),
         actionId,
         args,
+        confirmed,
         sessionOrigin,
-        options,
-        await sendDispatchRequest(
-          () => getWorkspaceWebContents(workspaceId, options.preferredWebContentsId),
-          actionId,
-          args,
-          confirmed,
-          sessionOrigin,
-          options.contextOverride,
-          undefined,
-          { kind: "workspace", workspaceId },
-          options
-        )
+        options.contextOverride,
+        undefined,
+        { kind: "workspace", workspaceId },
+        options
       );
     }
     if (driver.remote) {
@@ -1818,23 +1904,16 @@ export function createRendererBridge(
       }
       throw err;
     }
-    return withHostStartedTerminals(
-      workspaceId,
+    return sendDispatchRequest(
+      () => target,
       actionId,
       args,
+      confirmed,
       sessionOrigin,
-      options,
-      await sendDispatchRequest(
-        () => target,
-        actionId,
-        args,
-        confirmed,
-        sessionOrigin,
-        options.contextOverride,
-        undefined,
-        { kind: "workspace", workspaceId },
-        options
-      )
+      options.contextOverride,
+      undefined,
+      { kind: "workspace", workspaceId },
+      options
     );
   }
 

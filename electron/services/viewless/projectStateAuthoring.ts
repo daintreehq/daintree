@@ -1,5 +1,5 @@
 import type { PanelSnapshot, ProjectState } from "../../../shared/types/project.js";
-import { noteHostStartedTerminal } from "./hostStartedTerminals.js";
+import { forgetHostStartedTerminals, noteHostStartedTerminal } from "./hostStartedTerminals.js";
 
 /**
  * The slice of `ProjectStore` main-authored state writes need. Injected so the
@@ -39,7 +39,7 @@ export async function recordViewlessTerminal(
   projectId: string,
   snapshot: PanelSnapshot
 ): Promise<void> {
-  noteHostStartedTerminal(projectId, snapshot.id);
+  noteHostStartedTerminal(projectId, snapshot.id, snapshot);
   await writer.enqueueProjectStateUpdate(projectId, (existing) => {
     const state = existing ?? emptyProjectState(projectId);
     const terminals = Array.isArray(state.terminals) ? state.terminals : [];
@@ -87,6 +87,7 @@ export async function forgetViewlessTerminal(
   projectId: string,
   terminalId: string
 ): Promise<void> {
+  forgetHostStartedTerminals(projectId, [terminalId]);
   await writer.enqueueProjectStateUpdate(projectId, (existing) => {
     if (!existing || !Array.isArray(existing.terminals)) return null;
     if (!existing.terminals.some((terminal) => terminal.id === terminalId)) return null;
