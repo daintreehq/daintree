@@ -19,10 +19,9 @@ import {
 import type { McpConfirmationDecision } from "../../../shared/types/ipc/mcpServer.js";
 import { LOCAL_HOST_ID, type HostId } from "../../../shared/types/remoteHosts.js";
 import {
-  CANOPY_REDACTION,
   CANOPY_STOP_ON_EACH,
-  canopySendsFrom,
-  canopySendsFromHosts,
+  canopyLocalOn,
+  canopyLocalOnHosts,
   canopyStopOn,
 } from "../../../shared/config/canopyTerms.js";
 
@@ -322,7 +321,7 @@ export class HostSettingsRequests {
         lines.push(`${host.name}: Canopy is hidden there, and will be shown first`);
       }
     }
-    // The same consent Settings asks for before Canopy is turned on there.
+    // What Settings says before Canopy is turned on there.
     const reading = ticket.hosts
       .filter((host) =>
         host.leaves.some(
@@ -331,9 +330,9 @@ export class HostSettingsRequests {
       )
       .map((host) => host.name);
     if (reading.length === 1) {
-      lines.push(canopySendsFrom(reading[0]!), CANOPY_REDACTION, canopyStopOn(reading[0]!));
+      lines.push(canopyLocalOn(reading[0]!), canopyStopOn(reading[0]!));
     } else if (reading.length > 1) {
-      lines.push(canopySendsFromHosts(reading), CANOPY_REDACTION, CANOPY_STOP_ON_EACH);
+      lines.push(canopyLocalOnHosts(reading), CANOPY_STOP_ON_EACH);
     }
     return lines;
   }

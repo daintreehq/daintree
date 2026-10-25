@@ -1,7 +1,9 @@
+import path from "node:path";
 import { app } from "electron";
 import type {
   CanopyLookPlace,
   CanopyMode,
+  CanopyModelCatalogue,
   CanopyPlan,
   CanopyReadMark,
   CanopyReadRestore,
@@ -9,7 +11,6 @@ import type {
   CanopyScreenSearchTarget,
   CanopySnapshot,
   CanopyTarget,
-  CanopyTier,
   CanopyTerminalView,
   AssistantOpenDestination,
   CanopyRenameRequest,
@@ -28,13 +29,13 @@ import { readPluginTerminalScreen } from "../../services/plugin/pluginTerminalSc
 import { CANOPY_HISTORY_ROWS, CanopyService } from "../../services/canopy/CanopyService.js";
 import { searchScreens } from "../../services/canopy/canopyScreenSearch.js";
 import { isCanopyMode, readCanopyMode } from "../../services/canopy/canopyMode.js";
+import { CanopyLocalReader } from "../../services/canopy/canopyLocalReader.js";
 import {
-  canopyServiceUrl,
-  canopyWaking,
-  classifyWithCanopy,
-  describeWithCanopy,
-  wakeCanopy,
-} from "../../services/canopy/canopyBackend.js";
+  CanopyModels,
+  DEFAULT_CANOPY_MODEL,
+  canopyModelName,
+  isCanopyModelId,
+} from "../../services/canopy/canopyModels.js";
 import { store } from "../../store.js";
 import { hostInstanceId } from "../../services/hostInstance.js";
 import { traced } from "../../services/canopy/canopyTrace.js";
@@ -107,14 +108,6 @@ function requireActivated(): void {
 }
 
 /**
- * Free while Canopy is in beta: a development build can ask for the priority
- * tier to compare the two.
- */
-function currentTier(): CanopyTier {
-  return !app.isPackaged && process.env.DAINTREE_CANOPY_TIER === "priority" ? "priority" : "free";
-}
-
-/**
  * The background watch's pace in ms, when `DAINTREE_CANOPY_BACKGROUND_POLL_MS`
  * sets one; 0 turns the watch off. Read once, when the service is made.
  */
@@ -123,8 +116,8 @@ function backgroundPollOverride(): number | undefined {
   if (!raw) return undefined;
   const ms = Number(raw);
   if (!Number.isFinite(ms) || ms < 0) return undefined;
-  // A watch faster than once a second only spends the address's rate limit,
-  // and past a timer's 32-bit range Node fires it at once.
+  // A watch faster than once a second only keeps the reader busy, and past a
+  // timer's 32-bit range Node fires it at once.
   return ms === 0 ? 0 : Math.min(2_147_483_647, Math.max(1_000, ms));
 }
 
@@ -135,7 +128,67 @@ const hostEpoch = hostInstanceId;
 
 function currentPlan(): CanopyPlan {
   const mode = readCanopyMode();
-  return { mode, modeRevision, hostEpoch, activated: mode === "on", tier: currentTier() };
+  return { mode, modeRevision, hostEpoch, activated: mode === "on" };
+}
+
+/** The model Canopy reads with, as chosen; the default until the user picks another. */
+export function selectedCanopyModel(): string {
+  return selectedModel();
+}
+
+function selectedModel(): string {
+  const chosen: unknown = store.get("canopyModel");
+  return isCanopyModelId(chosen) ? chosen : DEFAULT_CANOPY_MODEL;
+}
+
+let models: CanopyModels | null = null;
+let reader: CanopyLocalReader | null = null;
+/** Whether the chosen model was ready when last told, so only a change wakes the service. */
+let modelWasReady = false;
+
+/** Made on first use: a user who never turns Canopy on never looks for a model. */
+function getModels(): CanopyModels {
+  models ??= new CanopyModels(
+    path.join(app.getPath("userData"), "canopy", "models"),
+    onModelsChanged
+  );
+  return models;
+}
+
+function getReader(): CanopyLocalReader {
+  reader ??= new CanopyLocalReader(() => getModels().installedDir(selectedModel()));
+  return reader;
+}
+
+function modelReady(): boolean {
+  return models?.state(selectedModel()).status === "ready";
+}
+
+function onModelsChanged(): void {
+  const ready = modelReady();
+  if (ready !== modelWasReady) {
+    modelWasReady = ready;
+    service?.readerChanged();
+  } else {
+    service?.modelChanged();
+  }
+}
+
+/**
+ * With Canopy on, gets the chosen model here if it isn't, and once it is,
+ * deletes any other: only the model in use is kept.
+ */
+function ensureModel(): void {
+  if (readCanopyMode() !== "on") return;
+  const id = selectedModel();
+  void getModels()
+    .ensure(id)
+    .then(async () => {
+      if (selectedModel() === id && models?.state(id).status === "ready") {
+        await models.removeAllBut(id);
+      }
+    })
+    .catch((error: unknown) => console.error("[Canopy] Model download failed:", error));
 }
 
 /**
@@ -233,7 +286,13 @@ export function changeCanopyMode(
   }
   const canopy = getService();
   canopy.setPlan(currentPlan());
-  wakeService();
+  if (mode === "on") {
+    ensureModel();
+  } else {
+    // Off lets the model go; a download under way stops, keeping what it fetched.
+    reader?.release();
+    models?.cancel();
+  }
   return canopy.getSnapshot();
 }
 
@@ -369,23 +428,10 @@ function getService(): CanopyService {
       );
       return result.status === "ok" ? result.text : null;
     },
-    classify: (input, signal) =>
-      traced("classifier", input, () => classifyWithCanopy(input, signal)),
-    describe: (input, classifierSays, signal, onPartial) =>
-      traced("describer", { ...input, classifierSays }, () =>
-        describeWithCanopy(input, classifierSays, signal, onPartial)
-      ),
-    serviceWaking: () => canopyWaking(),
-    serviceHost: () => {
-      // A mistyped DAINTREE_CANOPY_URL is a failed read for the reads, and
-      // shown as given here: never a throw out of a snapshot.
-      const url = canopyServiceUrl();
-      try {
-        return new URL(url).host;
-      } catch {
-        return url;
-      }
-    },
+    read: (input, signal) => traced("reader", input, () => getReader().read(input, signal)),
+    readerReady: modelReady,
+    readerName: () => canopyModelName(selectedModel()),
+    modelState: () => getModels().state(selectedModel()),
     broadcast: (snapshot) => publishSnapshot(snapshot),
     // The fleet and the project counts re-read their refinements: that is how
     // the sidebar hears of them with no panel open.
@@ -393,12 +439,36 @@ function getService(): CanopyService {
   });
   const made = service;
   setCanopyRefinementSource((runId, spawnedAt) => made.getRefinement(runId, spawnedAt));
+  ensureModel();
   return service;
 }
 
-/** Starts a worker waking as soon as reads are about to begin; see `wakeCanopy`. */
-function wakeService(): void {
-  if (currentPlan().activated) wakeCanopy();
+/**
+ * Chooses the model Canopy reads with. Downloaded at once while Canopy is on;
+ * every reading made with the last one is let go. Guarded like a mode change:
+ * a choice made against a revision or launch that isn't current changes
+ * nothing, so turning Canopy on elsewhere meanwhile keeps the model it chose.
+ */
+export function changeCanopyModel(
+  id: string,
+  expectRevision?: number,
+  expectHostEpoch?: string
+): CanopySnapshot {
+  if (
+    (expectRevision !== undefined && expectRevision !== modeRevision) ||
+    (expectHostEpoch !== undefined && expectHostEpoch !== hostEpoch)
+  ) {
+    return service ? service.getSnapshot() : hiddenOrIdleSnapshot();
+  }
+  if (id !== selectedModel()) {
+    store.set("canopyModel", id);
+    reader?.release();
+    models?.cancel();
+    modelWasReady = modelReady();
+    service?.readerChanged();
+  }
+  ensureModel();
+  return service ? service.getSnapshot() : hiddenOrIdleSnapshot();
 }
 
 function assertRunId(value: unknown): asserts value is string {
@@ -1021,7 +1091,6 @@ export const canopyNamespace = defineIpcNamespace({
         if (active) {
           activeViews.add(id);
           watchView(ctx);
-          wakeService();
         } else {
           activeViews.delete(id);
           // A closed panel shows nothing: the next open says afresh what it lists.
@@ -1263,6 +1332,60 @@ export const canopyNamespace = defineIpcNamespace({
         return changeCanopyMode(mode, expectRevision, expectHostEpoch);
       }
     ),
+
+    /** Every published model, with what this machine has; `refresh` asks Hugging Face again. */
+    getModels: op(
+      CANOPY_METHOD_CHANNELS.getModels,
+      async (refresh?: boolean): Promise<CanopyModelCatalogue> => {
+        if (refresh !== undefined && typeof refresh !== "boolean") {
+          throw new Error("Invalid refresh flag");
+        }
+        return { selected: selectedModel(), variants: await getModels().list(refresh === true) };
+      }
+    ),
+
+    /** Chooses the model Canopy reads with; downloaded at once while Canopy is on. */
+    setModel: op(
+      CANOPY_METHOD_CHANNELS.setModel,
+      async (
+        id: string,
+        expectRevision?: number,
+        expectHostEpoch?: string
+      ): Promise<CanopySnapshot> => {
+        if (!isCanopyModelId(id)) throw new Error("Invalid Canopy model");
+        if (expectRevision !== undefined && !Number.isSafeInteger(expectRevision)) {
+          throw new Error("Invalid Canopy mode revision");
+        }
+        if (expectHostEpoch !== undefined) {
+          if (typeof expectHostEpoch !== "string" || expectHostEpoch.length > 64) {
+            throw new Error("Invalid Canopy host epoch");
+          }
+          if (expectRevision === undefined) throw new Error("A host epoch needs a revision");
+        }
+        checkRateLimit(CANOPY_METHOD_CHANNELS.setModel, 10, 10_000);
+        return changeCanopyModel(id, expectRevision, expectHostEpoch);
+      }
+    ),
+
+    /** Tries a failed or stopped download again. */
+    retryModel: op(CANOPY_METHOD_CHANNELS.retryModel, async (): Promise<CanopySnapshot> => {
+      ensureModel();
+      return service ? service.getSnapshot() : hiddenOrIdleSnapshot();
+    }),
+
+    /**
+     * Deletes the downloaded models, at any time. With Canopy on that turns it
+     * off first, by the same guarded change as any other turn-off, so every view
+     * hears it and nothing downloads the model again on the next launch.
+     */
+    removeModels: op(CANOPY_METHOD_CHANNELS.removeModels, async (): Promise<CanopySnapshot> => {
+      checkRateLimit(CANOPY_METHOD_CHANNELS.removeModels, 10, 10_000);
+      if (readCanopyMode() === "on") changeCanopyMode("unset");
+      reader?.release();
+      models?.cancel();
+      await getModels().removeAllBut(null);
+      return service ? service.getSnapshot() : hiddenOrIdleSnapshot();
+    }),
 
     /**
      * A still of the view as it stands, for the panel to hold behind itself so
@@ -1781,5 +1904,9 @@ export function registerCanopyHandlers(): () => void {
     setCanopyRefinementSource(null);
     service?.dispose();
     service = null;
+    reader?.release();
+    reader = null;
+    models?.cancel();
+    models = null;
   };
 }

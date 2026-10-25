@@ -7,12 +7,13 @@ import {
   type CanopyApi,
   type CanopyTerminalApi,
 } from "./canopyHostSource";
-import type {
-  CanopyReadMark,
-  CanopyScreenSearchTarget,
-  CanopySnapshot,
-  CanopyTerminalData,
-  CanopyTerminalView,
+import {
+  readsWithHostedService,
+  type CanopyReadMark,
+  type CanopyScreenSearchTarget,
+  type CanopySnapshot,
+  type CanopyTerminalData,
+  type CanopyTerminalView,
 } from "@shared/types/ipc/canopy";
 import type { FleetSnapshot } from "@shared/types/ipc/fleet";
 import type { HostId } from "@shared/types/remoteHosts";
@@ -58,16 +59,32 @@ export function mergeHostReadings(readings: readonly HostReading[]): {
   fleet: FleetSnapshot | null;
 } {
   const loadedFleets = readings.filter((reading) => reading.fleet !== null);
-  const loadedCanopies = readings.filter((reading) => reading.canopy !== null);
+  // A host still on the hosted service counts as off here: none of its readings
+  // are shown, in its cards or in the refinements its fleet rows carry.
+  const outdatedHosts = new Set(
+    readings
+      .filter((reading) => reading.canopy !== null && readsWithHostedService(reading.canopy))
+      .map((reading) => reading.hostId)
+  );
+  const loadedCanopies = readings
+    .filter((reading) => reading.canopy !== null)
+    .map((reading) =>
+      readsWithHostedService(reading.canopy!)
+        ? { ...reading, canopy: { ...reading.canopy!, activated: false } }
+        : reading
+    );
   const fleet: FleetSnapshot | null =
     loadedFleets.length === 0
       ? null
       : {
           runs: loadedFleets.flatMap(({ hostId, fleet: snapshot }) =>
-            snapshot!.runs.map((run) => ({
-              ...run,
-              runId: allHostsKey(hostId, run.runId),
-              workspaceId: allHostsKey(hostId, run.workspaceId),
+            snapshot!.runs.map(({ canopy: refinement, ...rest }) => ({
+              ...rest,
+              ...(refinement !== undefined && !outdatedHosts.has(hostId)
+                ? { canopy: refinement }
+                : {}),
+              runId: allHostsKey(hostId, rest.runId),
+              workspaceId: allHostsKey(hostId, rest.workspaceId),
             }))
           ),
           changedAt: Math.max(...loadedFleets.map(({ fleet: snapshot }) => snapshot!.changedAt)),
@@ -82,6 +99,7 @@ export function mergeHostReadings(readings: readonly HostReading[]): {
   const reading = loadedCanopies.filter(({ canopy }) => canopy!.activated);
   const failedRuns: string[] = [];
   for (const { hostId, canopy, fleet: hostFleet } of loadedCanopies) {
+    if (outdatedHosts.has(hostId)) continue;
     for (const runId of canopy!.failedRuns) failedRuns.push(allHostsKey(hostId, runId));
     // A provider failure on a host marks the runs it would have read.
     if (canopy!.lastError !== null) {
@@ -94,7 +112,6 @@ export function mergeHostReadings(readings: readonly HostReading[]): {
   const canopy: CanopySnapshot = {
     mode: "on",
     activated: true,
-    tier: loadedCanopies[0]!.canopy!.tier,
     dispositions: loadedCanopies.flatMap(({ hostId, canopy: c }) =>
       c!.dispositions.map((item) => keyed(hostId, item))
     ),
@@ -117,9 +134,6 @@ export function mergeHostReadings(readings: readonly HostReading[]): {
     ),
     lastError: null,
     failedRuns,
-    wordsDue: loadedCanopies.flatMap(({ hostId, canopy: c }) =>
-      (c!.wordsDue ?? []).map((runId) => allHostsKey(hostId, runId))
-    ),
   };
   return { canopy, fleet };
 }
@@ -276,6 +290,23 @@ export function createAllHostsRoute(ownHostId: HostId, hostIds: readonly HostId[
     },
     refresh: async () => {
       answered(await Promise.allSettled(hostIds.map((hostId) => apiFor(hostId).refresh())));
+    },
+    // The model is each host's own choice, made on that host's panel: across
+    // hosts there is nothing to list and nothing to set.
+    getModels: async () => ({ selected: "", variants: [] }),
+    setModel: async () => {
+      throw new Error("Choose a model on one host at a time");
+    },
+    // Each host's own download, tried again wherever it failed; the rest ignore it.
+    retryModel: async () => {
+      const settled = await Promise.allSettled(
+        hostIds.map((hostId) => apiFor(hostId).retryModel())
+      );
+      const first = settled.find(
+        (r): r is PromiseFulfilledResult<CanopySnapshot> => r.status === "fulfilled"
+      );
+      if (!first) throw new Error("No host answered");
+      return first.value;
     },
     searchScreens: async (targets: CanopyScreenSearchTarget[]) => {
       const groups = groupByHost(targets, (target) => target.runId);

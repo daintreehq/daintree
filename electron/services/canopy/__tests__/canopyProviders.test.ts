@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  CANOPY_NOTE_MAX_CHARS,
   combinePriority,
   reconcileScore,
   toDescriberResult,
@@ -16,12 +15,12 @@ const INPUT: CanopyScreenInput = {
 };
 
 describe("combinePriority", () => {
-  it("ranks a described run by the describer's score alone", () => {
+  it("ranks a run with words by its reading's score alone", () => {
     expect(combinePriority(0.95, 30)).toBe(30);
     expect(combinePriority(0.95, 88)).toBe(88);
   });
 
-  it("takes the classifier's word alone for a run that was never described", () => {
+  it("takes the attention probability alone for a run without words", () => {
     expect(combinePriority(0.42, null)).toBe(42);
   });
 });
@@ -71,22 +70,17 @@ describe("toDescriberResult", () => {
   });
 });
 
-describe("the describer's note", () => {
-  const noted = (note: unknown, extra: Record<string, unknown> = {}) => ({
+describe("the reading's facts", () => {
+  const working = (extra: Record<string, unknown> = {}) => ({
     category: "working",
     headline: "Running the tests",
     summary: "Third run of the dates test.",
     attention_score: 5,
-    note,
     ...extra,
   });
 
-  it("reads the new note back, and a repeated failure as stuck", () => {
-    const result = toDescriberResult(
-      noted("Goal: fix dates.\nWatch: dates test failed 3 runs", { failure_repeats: 3 }),
-      { ...INPUT, note: { text: "Goal: fix dates.", secondsAgo: 40 } }
-    );
-    expect(result.note).toBe("Goal: fix dates.\nWatch: dates test failed 3 runs");
+  it("reads a repeated failure as stuck", () => {
+    const result = toDescriberResult(working({ failure_repeats: 3 }), INPUT);
     expect(result.failureRepeats).toBe(3);
     expect(result.attentionScore).toBe(70);
   });
@@ -101,7 +95,6 @@ describe("the describer's note", () => {
         risk: "none",
         risk_reason: "You said never run npm here",
         instruction: "asked",
-        note: "",
         failure_repeats: 0,
       },
       INPUT
@@ -111,23 +104,12 @@ describe("the describer's note", () => {
   });
 
   it("never raises the failure count on a screen that has not changed", () => {
-    const result = toDescriberResult(
-      noted("Watch: build fails TS2742: 4 runs", { failure_repeats: 4 }),
-      { ...INPUT, failureRepeatsCap: 2 }
-    );
+    const result = toDescriberResult(working({ failure_repeats: 4 }), {
+      ...INPUT,
+      failureRepeatsCap: 2,
+    });
     expect(result.failureRepeats).toBe(2);
     expect(result.attentionScore).toBe(5);
-  });
-
-  it("cuts an overlong note at a whole line", () => {
-    const line = "Done: " + "x".repeat(300);
-    const { note } = toDescriberResult(noted([line, line, line].join("\n")), INPUT);
-    expect(note!.length).toBeLessThanOrEqual(CANOPY_NOTE_MAX_CHARS);
-    expect(note).toBe([line, line].join("\n"));
-  });
-
-  it("reads a blank note as none", () => {
-    expect(toDescriberResult(noted("  "), INPUT).note).toBeNull();
   });
 });
 

@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { BellRing, ListChecks, Hourglass, Send } from "lucide-react";
+import { BellRing, ListChecks, Hourglass, HardDrive } from "lucide-react";
 import { Telescope } from "@/components/icons";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
-import { systemClient } from "@/clients/systemClient";
 import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
 import { CanopyRow } from "./CanopyRow";
 import { SectionBar } from "./CanopySectionBar";
@@ -11,14 +10,9 @@ import { CANOPY_DEMO_FRAME_COUNT, canopyDemoItems } from "./canopyDemo";
 import { itemNeedsAttention } from "./canopyModel";
 import { useListReorderMotion } from "./useListReorderMotion";
 import { CanopyHeaderCenter } from "./CanopyHostPicker";
-import {
-  CANOPY_BETA_TERMS,
-  CANOPY_PRIVACY_URL,
-  CANOPY_REDACTION,
-  CANOPY_SENDS,
-  CANOPY_STOP,
-  CANOPY_TITLE,
-} from "./canopyTerms";
+import type { CanopyModelCatalogue } from "@shared/types/ipc/canopy";
+import { CanopyModelChoice, useCanopyModelChoice } from "./CanopyModelChoice";
+import { CANOPY_LOCAL, CANOPY_STOP, CANOPY_TITLE } from "./canopyTerms";
 
 /** Long enough to read a row that just rose to the top. */
 const DEMO_FRAME_MS = 3_200;
@@ -45,8 +39,13 @@ interface CanopyPitchProps {
   isOpen: boolean;
   onClose: () => void;
   backdrop?: React.ReactNode;
-  /** The user agreed to send their agents' screens to be read. */
-  onTurnOn: () => Promise<void>;
+  /**
+   * The user turned Canopy on with the model they chose, which downloads now
+   * and reads screens on this computer. Null when the list couldn't be had.
+   */
+  onTurnOn: (modelId: string | null) => Promise<void>;
+  /** The models this computer can read with, for the choice made here. */
+  loadModels: () => Promise<CanopyModelCatalogue>;
   /** The user doesn't want Canopy: its ways in go, all but Settings. */
   onHide: () => Promise<void>;
   /** Where the keyboard goes when the offer closes: what had it when the panel opened. */
@@ -63,21 +62,23 @@ const FAILED: Record<"on" | "hide", string> = {
 /**
  * What Canopy shows until the user turns it on: what it does, beside its inbox
  * playing a made-up fleet through the moments it is for, and what turning it on
- * sends where. Nothing here reads a terminal; nothing is read until they agree.
+ * does. Nothing here reads a terminal; nothing is read until they turn it on.
  */
 export function CanopyPitch({
   isOpen,
   onClose,
   backdrop,
   onTurnOn,
+  loadModels,
   onHide,
   restoreFocusTo,
   hostPicker,
 }: CanopyPitchProps) {
+  const modelChoice = useCanopyModelChoice(loadModels, "own", isOpen);
   const [pending, setPending] = useState<"on" | "hide" | null>(null);
   const [failed, setFailed] = useState<"on" | "hide" | null>(null);
   // The keyboard lands on the offer's heading, not on Turn on: a reflexive
-  // Enter after the shortcut must not agree to sending anything. The dialog
+  // Enter after the shortcut must not start a download. The dialog
   // is told to place no focus of its own, so this is the only move.
   const headingRef = useRef<HTMLHeadingElement>(null);
   useEffect(() => {
@@ -148,32 +149,23 @@ export function CanopyPitch({
               ))}
             </ul>
             <div className="flex flex-col gap-3">
-              {/* What turning it on sends, at the same size as the rest of the
-                  offer: the one paragraph here the user is agreeing to. */}
+              {/* What turning it on does, at the same size as the rest of the offer. */}
               <div className="flex gap-2 text-sm leading-6 text-text-secondary">
-                <Send className="mt-1.5 size-3.5 shrink-0" aria-hidden="true" />
-                <div className="flex flex-col gap-2">
-                  <p>{CANOPY_SENDS}</p>
-                  <p>
-                    {CANOPY_REDACTION} {CANOPY_STOP}{" "}
-                    <Button
-                      variant="link"
-                      size="xs"
-                      className="h-auto p-0 text-sm"
-                      onClick={() => void systemClient.openExternal(CANOPY_PRIVACY_URL)}
-                    >
-                      Privacy policy
-                    </Button>
-                  </p>
-                </div>
+                <HardDrive className="mt-1.5 size-3.5 shrink-0" aria-hidden="true" />
+                <p>
+                  {CANOPY_LOCAL} {CANOPY_STOP}
+                </p>
               </div>
+              <CanopyModelChoice choice={modelChoice} name="canopy-pitch-model" />
               {/* Turning it on and not wanting it are the same size, side by
                   side: the close button is the "not now". */}
               <div className="flex items-center gap-3">
                 <Button
                   variant="contrast"
-                  disabled={pending !== null}
-                  onClick={() => choose("on", onTurnOn)}
+                  disabled={
+                    pending !== null || (modelChoice.chosen === null && modelChoice.error === null)
+                  }
+                  onClick={() => choose("on", () => onTurnOn(modelChoice.chosen))}
                 >
                   Turn on Canopy
                 </Button>
@@ -188,7 +180,6 @@ export function CanopyPitch({
                   {failed ? FAILED[failed] : ""}
                 </p>
               </div>
-              <p className="text-xs text-text-secondary">{CANOPY_BETA_TERMS}</p>
             </div>
           </div>
         </section>

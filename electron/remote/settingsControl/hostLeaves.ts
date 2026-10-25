@@ -22,7 +22,7 @@ function digest(value: HostSettingValue): string {
 
 /**
  * The named settings, through the setters this machine's own Settings uses:
- * Canopy's guarded mode change, the agent defaults, and the idle-terminal
+ * Canopy's guarded mode change and its model, the agent defaults, and the idle-terminal
  * service, each telling this machine's views as it always does. Loaded on
  * demand, so a host nobody edits pays nothing.
  */
@@ -40,6 +40,10 @@ export async function loadHostSettingsLeaves(): Promise<HostSettingsLeaves> {
         const state = canopy.canopyModeState();
         // Canopy counts its own changes; the digest alone can't see "on → unset → on".
         return { value: state.mode, revision: `${state.modeRevision}` };
+      }
+      case "canopyModel": {
+        const value = canopy.selectedCanopyModel();
+        return { value, revision: digest(value) };
       }
       case "agentDefaults.defaultAgent":
       case "agentDefaults.assistantAgentId": {
@@ -94,6 +98,10 @@ export async function loadHostSettingsLeaves(): Promise<HostSettingsLeaves> {
       const idleChanged = Object.keys(idlePatch).length > 0;
       if (idleChanged) idleService.updateConfig(idlePatch);
 
+      // The model before the mode: turned on with a new model, the host
+      // downloads that one, never the last one first.
+      const model = patch.canopyModel;
+      if (model !== undefined) canopy.changeCanopyModel(model);
       if (mode !== undefined) {
         const state = canopy.canopyModeState();
         canopy.changeCanopyMode(mode, state.modeRevision, state.hostEpoch);

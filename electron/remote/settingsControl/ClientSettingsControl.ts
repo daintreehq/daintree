@@ -153,7 +153,40 @@ export class ClientSettingsControl {
     return { hostId, hostName: this.deps.hostLabel(hostId), scope: "host", ...reading };
   }
 
+  /**
+   * As `readFromHost`, but a host from before Canopy read locally knows no
+   * `canopyModel` and refuses any read naming it: such a host is read without
+   * it, and its reading simply has no model (`readsCanopyLocally`).
+   */
   private async readFrom(
+    hostId: HostId,
+    keys: readonly HostSettingKey[]
+  ): Promise<HostSettingsReading> {
+    try {
+      return await this.readFromHost(hostId, keys);
+    } catch (error) {
+      // Only the host's own refusal of a key it doesn't know says it is older:
+      // a timeout, a disconnect or a rate limit says nothing of its version.
+      const without = keys.filter((key) => key !== "canopyModel");
+      if (errorCode(error) !== "VALIDATION" || without.length === keys.length) throw error;
+      if (without.length === 0) throw error;
+      return this.readFromHost(hostId, without);
+    }
+  }
+
+  /** Whether the host reads Canopy with its own model, rather than the retired hosted service. */
+  private async readsCanopyLocally(hostId: HostId): Promise<boolean> {
+    try {
+      const reading = await this.readFromHost(hostId, ["canopyModel"]);
+      return reading.settings.some((leaf) => leaf.key === "canopyModel");
+    } catch (error) {
+      // Refused as an unknown key: an older host. Anything else is a failure to ask.
+      if (errorCode(error) === "VALIDATION") return false;
+      throw error;
+    }
+  }
+
+  private async readFromHost(
     hostId: HostId,
     keys: readonly HostSettingKey[]
   ): Promise<HostSettingsReading> {
@@ -212,6 +245,15 @@ export class ClientSettingsControl {
       });
     }
     const patch = parsedPatch.data;
+    // Turned on, an older host's Canopy would send its screens to the retired
+    // hosted service: it is updated first.
+    if (patch.canopyMode === "on" && !(await this.readsCanopyLocally(hostId))) {
+      throw new AppError({
+        code: "PERMISSION",
+        message: "The host's Canopy still reads with the hosted service",
+        userMessage: `Update Daintree on ${this.deps.hostLabel(hostId)} before turning Canopy on there.`,
+      });
+    }
     const keys = HOST_SETTING_KEYS.filter((key) => Object.hasOwn(patch, key));
     const session = this.session(hostId);
     const base = { hostId, hostName: this.deps.hostLabel(hostId), scope: "host" as const };
@@ -266,6 +308,10 @@ export class ClientSettingsControl {
       instanceId: now.instanceId,
       settings,
     });
+    // A readback that couldn't cover every key changed can't say the change landed.
+    if (!keys.every((key) => now.settings.some((leaf) => leaf.key === key))) {
+      return { outcome: "unconfirmed", confirmedBy: null, instanceId: null, settings: [] };
+    }
     // A restart since the read: whatever stands there now isn't this change's doing.
     if (now.instanceId !== expect.instanceId) return result("conflict", now.settings);
     // Canopy counts its own changes, so its readback says whose change stands:

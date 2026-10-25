@@ -30,7 +30,6 @@ describe("mode", () => {
     ...(sequence !== undefined ? { sequence } : {}),
     mode,
     activated: mode === "on",
-    tier: "free",
     dispositions: [],
     seen: [],
     reads: [],
@@ -44,7 +43,22 @@ describe("mode", () => {
     failedRuns: [],
   });
 
-  afterEach(() => useCanopyStore.setState({ mode: "unset", snapshot: null, isOpen: false }));
+  afterEach(() =>
+    useCanopyStore.setState({ mode: "unset", snapshot: null, isOpen: false, outdatedHost: false })
+  );
+
+  it("holds a snapshot from a host on the hosted service inert, flagged, until it is updated", () => {
+    const hosted = Object.assign(base("on", 1), { tier: "free" });
+    const card = { runId: "a" } as CanopySnapshot["cards"][number];
+    useCanopyStore.getState().applySnapshot({ ...hosted, cards: [card], glances: [] });
+    const held = useCanopyStore.getState();
+    expect(held.outdatedHost).toBe(true);
+    expect(held.snapshot).toMatchObject({ activated: false, cards: [], glances: [] });
+    // The next snapshot, from a host that reads locally, clears the flag and is taken whole.
+    useCanopyStore.getState().applySnapshot({ ...base("on", 2), cards: [card] });
+    expect(useCanopyStore.getState().outdatedHost).toBe(false);
+    expect(useCanopyStore.getState().snapshot?.cards).toHaveLength(1);
+  });
 
   it("takes the hydrated mode only until main has answered", () => {
     useCanopyStore.getState().seedMode("hidden");
@@ -84,7 +98,6 @@ describe("applySnapshot", () => {
       refreshedAt,
       mode: "on",
       activated: true,
-      tier: "free",
       dispositions: [],
       seen: [],
       reads: [],

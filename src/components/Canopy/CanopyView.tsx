@@ -22,8 +22,6 @@ import { SearchField } from "@/components/ui/SearchField";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Badge } from "@/components/ui/badge";
-import { systemClient } from "@/clients/systemClient";
 import { useFrozenBackdrop } from "./useFrozenBackdrop";
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { Callout } from "@/components/ui/Callout";
@@ -32,12 +30,12 @@ import { CanopyCard, canopyCardDomId } from "./CanopyCard";
 import { CanopyRow } from "./CanopyRow";
 import { CanopyRowMenu } from "./CanopyRowMenu";
 import { SectionBar } from "./CanopySectionBar";
-import { CanopyStatusBar } from "./CanopyStatusBar";
+import { CanopyStatusBar, formatModelBytes } from "./CanopyStatusBar";
 import { CanopyPlace } from "./CanopyPlace";
 import { CanopyPitch } from "./CanopyPitch";
-import { CANOPY_BETA_TERMS, CANOPY_TITLE, CANOPY_WAITLIST_URL } from "./canopyTerms";
+import { CANOPY_TITLE } from "./canopyTerms";
 import { CanopyHeaderCenter, CanopyHostPicker, useCanopyHostRows } from "./CanopyHostPicker";
-import { CanopyHostOffer } from "./CanopyHostOffer";
+import { CanopyHostOffer, CanopyHostOutdated } from "./CanopyHostOffer";
 import { useCanopyInboxData } from "./useCanopyInboxData";
 import { useCanopyInboxOrder } from "./useCanopyInboxOrder";
 import { useCanopyInboxSearch } from "./useCanopyInboxSearch";
@@ -52,11 +50,12 @@ import { CANOPY_ROLE_FILTERS, type CanopyRoleFilter } from "./canopyAssistants";
 import { isFullAgentDirectory } from "@shared/types/agentDirectory";
 import { CanopyBulkEnableDialog } from "./CanopyBulkEnableDialog";
 import type { BulkTarget } from "@shared/utils/canopyBulkEnable";
-import { canopyBulkTransport } from "./canopyHostSource";
+import { canopyBulkTransport, ownCanopyApi, remoteCanopyApi } from "./canopyHostSource";
 import { ALL_HOSTS_ID, canopyOwnHostId } from "@/store/canopyStore";
 import { describeHostMenuState, type HostMenuRow } from "@/components/Hosts/hostModel";
 import { isNewWindowClick } from "@/components/Hosts/hostSwitching";
 import type { HostId } from "@shared/types/remoteHosts";
+import { readsWithHostedService } from "@shared/types/ipc/canopy";
 
 interface HostIssue {
   hostId: HostId;
@@ -69,38 +68,6 @@ interface HostIssue {
 function agoPhrase(sinceMs: number, nowMs: number): string {
   const age = formatWaitAge(sinceMs, nowMs);
   return age === "just now" ? age : `${age} ago`;
-}
-
-const FEEDBACK_MAILTO = "mailto:greg@daintree.org?subject=Canopy%20beta%20feedback";
-
-/** The beta's standing terms, said every time the inbox is open. */
-function BetaNotice() {
-  return (
-    <div className="flex shrink-0 items-center gap-4 border-b border-border-default px-4 py-2">
-      <p className="flex min-w-0 flex-1 items-center gap-2 text-xs text-text-secondary">
-        <Badge tone="warning" size="sm">
-          Beta
-        </Badge>
-        <span className="min-w-0">{CANOPY_BETA_TERMS}</span>
-      </p>
-      <Button
-        variant="link"
-        size="xs"
-        className="shrink-0"
-        onClick={() => void systemClient.openExternal(FEEDBACK_MAILTO)}
-      >
-        Send feedback
-      </Button>
-      <Button
-        variant="outline"
-        size="xs"
-        className="shrink-0"
-        onClick={() => void systemClient.openExternal(CANOPY_WAITLIST_URL)}
-      >
-        Paid plan waitlist
-      </Button>
-    </div>
-  );
 }
 
 /**
@@ -193,6 +160,7 @@ export function CanopyView() {
         onClose={() => setBulkTargets(null)}
         targets={bulkTargets ?? NO_BULK_TARGETS}
         deps={{ transportFor }}
+        loadModels={loadOwnModels}
       />
     </>
   );
@@ -200,10 +168,14 @@ export function CanopyView() {
 
 const NO_BULK_TARGETS: readonly BulkTarget[] = [];
 
+/** This computer's models, for the choice made where Canopy is turned on. */
+const loadOwnModels = () => window.electron.canopy.getModels();
+
 function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow[]) => void }) {
   const isOpen = useCanopyStore((s) => s.isOpen);
   const close = useCanopyStore((s) => s.close);
   const activated = useCanopyStore((s) => s.snapshot?.activated ?? null);
+  const outdatedOwnHost = useCanopyStore((s) => s.outdatedHost);
   const applySnapshot = useCanopyStore((s) => s.applySnapshot);
   // Another host the panel shows, or null for the window's own.
   const hostId = useCanopyStore((s) => s.hostId);
@@ -358,6 +330,30 @@ function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow
     );
   }
 
+  // The window's own host is on a Daintree from before Canopy read locally:
+  // nothing it read is shown, and Canopy isn't offered until it is updated.
+  if (outdatedOwnHost && !allHosts) {
+    return (
+      <AppDialog
+        isOpen={isOpen}
+        onClose={close}
+        size="workspace"
+        maxHeight="h-[min(90vh,1100px)]"
+        restoreFocusTo={restoreOnReplace}
+        preferRestoreFocusTo
+        backdrop={backdrop}
+        data-testid="canopy-dialog"
+      >
+        <AppDialog.Header>
+          <AppDialog.Title icon={<Telescope />}>{CANOPY_TITLE}</AppDialog.Title>
+          <CanopyHeaderCenter>{hostPicker}</CanopyHeaderCenter>
+          <AppDialog.CloseButton />
+        </AppDialog.Header>
+        <CanopyHostOutdated hostName="this host" />
+      </AppDialog>
+    );
+  }
+
   // Until the user turns it on, Canopy is offered, not run: no list, no
   // terminals, and nothing read.
   if (activated === false) {
@@ -366,7 +362,12 @@ function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow
         isOpen={isOpen}
         onClose={close}
         backdrop={backdrop}
-        onTurnOn={() => window.electron.canopy.setMode("on").then(applySnapshot)}
+        loadModels={loadOwnModels}
+        onTurnOn={async (modelId) => {
+          // The model first: turned on, Canopy downloads the one chosen, never a default.
+          if (modelId !== null) await window.electron.canopy.setModel(modelId);
+          applySnapshot(await window.electron.canopy.setMode("on"));
+        }}
         onHide={hideCanopy}
         restoreFocusTo={restoreOnReplace}
         hostPicker={hostPicker}
@@ -744,8 +745,14 @@ function CanopyInbox({
   // Connecting stays quiet only until there are rows: rows kept from before say they are old.
   const hostTrouble =
     otherHost && (remote.error !== null || linkDown) && !(connecting && fleet === null);
+  // That host runs a Daintree from before Canopy read locally, and still sends
+  // its screens to the former hosted service: none of it is shown here, nor is
+  // it offered to be turned on, until the host is updated.
+  const hostOutdated = otherHost && canopy != null && readsWithHostedService(canopy);
   // Canopy is off on that host: its own offer, for it alone.
-  const hostOffer = otherHost && canopy?.activated === false;
+  const hostOffer = otherHost && canopy?.activated === false && !hostOutdated;
+  // Either way the host's list is not shown.
+  const hostHeld = hostOffer || hostOutdated;
 
   const { onAssistantKeyDown, onAgentStepKeyDownCapture, onNavigationKeyDown, onSearchKeyDown } =
     useCanopyInboxKeyboard({
@@ -777,9 +784,11 @@ function CanopyInbox({
       ? `Can't reach ${hostName}`
       : otherHost && fleet === null && connecting
         ? `Connecting to ${hostName}…`
-        : hostOffer
-          ? `Canopy is off on ${hostName}`
-          : null;
+        : hostOutdated
+          ? `Update Daintree on ${hostName}`
+          : hostOffer
+            ? `Canopy is off on ${hostName}`
+            : null;
   const summaryLine =
     fleet === null
       ? "Reading agents…"
@@ -845,6 +854,16 @@ function CanopyInbox({
           },
         ];
       }
+      if (readsWithHostedService(reading.canopy)) {
+        return [
+          {
+            hostId: reading.hostId,
+            text: `Update Daintree on ${name} to read its agents`,
+            action: "Show",
+            act: () => useCanopyStore.getState().setHostId(reading.hostId),
+          },
+        ];
+      }
       if (!reading.canopy.activated) {
         return [
           {
@@ -853,6 +872,30 @@ function CanopyInbox({
             action: "Set up",
             act: () => useCanopyStore.getState().setHostId(reading.hostId),
           },
+        ];
+      }
+      // Its own model, downloaded on that host: until it is there, nothing there is read.
+      const model = reading.canopy.model;
+      if (model && model.status !== "ready") {
+        const where = remoteHost ? ` on ${name}` : "";
+        const hostApi = remoteHost ? remoteCanopyApi(reading.hostId) : ownCanopyApi;
+        return [
+          model.status === "failed"
+            ? {
+                hostId: reading.hostId,
+                text: `Couldn't download Canopy's model${where}`,
+                action: "Retry",
+                act: () => void hostApi.retryModel().catch(() => {}),
+              }
+            : {
+                hostId: reading.hostId,
+                text:
+                  model.status === "downloading"
+                    ? `Downloading Canopy's model${where}… ${formatModelBytes(model.received)} of ${formatModelBytes(model.total)}`
+                    : `Waiting for Canopy's model${where}…`,
+                action: null,
+                act: null,
+              },
         ];
       }
       const linkStatus = remoteHost && row?.isLocal === false ? row.connection?.status : undefined;
@@ -974,7 +1017,7 @@ function CanopyInbox({
       // The panel lands on its first run itself, two frames in; the dialog's own
       // first-control focus would race it. With no rows to land on, the first
       // control takes focus instead of leaving it on whatever opened the panel.
-      initialFocus={items.length > 0 && !hostOffer ? "none" : "first"}
+      initialFocus={items.length > 0 && !hostHeld ? "none" : "first"}
       restoreFocusTo={() => focusAfterClose() ?? restoreOpener()}
       preferRestoreFocusTo
       backdrop={backdrop}
@@ -1013,7 +1056,6 @@ function CanopyInbox({
         onKeyDownCapture={onAgentStepKeyDownCapture}
         onKeyDown={onNavigationKeyDown}
       >
-        {canopy?.tier === "free" && <BetaNotice />}
         {hostTrouble && (
           <div className="flex shrink-0 flex-col gap-2 border-b border-border-default p-3">
             <Callout
@@ -1060,10 +1102,27 @@ function CanopyInbox({
             Connecting to {hostName}…
           </p>
         )}
+        {hostOutdated && (
+          <CanopyHostOutdated
+            hostName={hostName}
+            {...(canopy?.mode === "on"
+              ? {
+                  onTurnOff: async () => {
+                    await api.setMode("unset");
+                    if (useCanopyStore.getState().hostId === hostId) remote.retry();
+                  },
+                }
+              : {})}
+          />
+        )}
         {hostOffer && (
           <CanopyHostOffer
             hostName={hostName}
-            onTurnOn={async () => {
+            loadModels={() => api.getModels()}
+            onTurnOn={async (modelId) => {
+              // The model first: it downloads to that host, and the one chosen is
+              // what is fetched, never that host's default.
+              if (modelId !== null) await api.setModel(modelId);
               // Hidden there, it can't be turned on until it is shown again:
               // the press here, on an offer naming the host, is the user's ask for both.
               if (canopy?.mode === "hidden") await api.setMode("unset");
@@ -1073,7 +1132,7 @@ function CanopyInbox({
             }}
           />
         )}
-        {!hostOffer && (fleet?.degraded === true || canopy?.lastError) && (
+        {!hostHeld && (fleet?.degraded === true || canopy?.lastError) && (
           <div className="flex shrink-0 flex-col gap-2 border-b border-border-default p-3">
             {/* Daintree can't see its agents right now: the rows are the last
                 it saw, and nothing is read until it can again. */}
@@ -1101,7 +1160,7 @@ function CanopyInbox({
             )}
           </div>
         )}
-        {!hostOffer && (items.length > 0 || listsAssistants) && (
+        {!hostHeld && (items.length > 0 || listsAssistants) && (
           // An inbox: what needs you down a sidebar, most urgent first, the rest
           // folded away beneath it, and the selected agent's own terminal beside
           // it, drawn as its pane.
@@ -1366,7 +1425,13 @@ function CanopyInbox({
                   </>
                 )}
               </div>
-              <CanopyStatusBar link={canopy?.link} waiting={canopy?.waiting} />
+              <CanopyStatusBar
+                host={otherHost ? hostName : null}
+                onRetryModel={() => void api.retryModel().catch(() => {})}
+                reader={canopy?.reader}
+                model={canopy?.model}
+                waiting={canopy?.waiting}
+              />
             </div>
             {/* Inset on every side: the top one puts the place line level with the
                 search beside it, and the card's top with the Inbox bar's. */}
@@ -1461,7 +1526,7 @@ function CanopyInbox({
             </div>
           </div>
         )}
-        {!hostOffer &&
+        {!hostHeld &&
           fleet !== null &&
           !fleet.degraded &&
           items.length === 0 &&

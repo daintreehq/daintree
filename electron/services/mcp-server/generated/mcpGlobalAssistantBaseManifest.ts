@@ -970,13 +970,14 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
           },
         },
         keys: {
-          description: "For read: which settings, up to 5. Default: all.",
-          maxItems: 5,
+          description: "For read: which settings, up to 6. Default: all.",
+          maxItems: 6,
           type: "array",
           items: {
             type: "string",
             enum: [
               "canopyMode",
+              "canopyModel",
               "agentDefaults.defaultAgent",
               "agentDefaults.assistantAgentId",
               "idleTerminalNotify.enabled",
@@ -991,6 +992,10 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
             canopyMode: {
               type: "string",
               enum: ["unset", "on", "hidden"],
+            },
+            canopyModel: {
+              type: "string",
+              maxLength: 120,
             },
             "agentDefaults.defaultAgent": {
               anyOf: [
@@ -1114,6 +1119,7 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
                       type: "string",
                       enum: [
                         "canopyMode",
+                        "canopyModel",
                         "agentDefaults.defaultAgent",
                         "agentDefaults.assistantAgentId",
                         "idleTerminalNotify.enabled",

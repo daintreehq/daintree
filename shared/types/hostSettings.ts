@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { isStorableAssistantAgentId, isStorableDefaultAgent } from "./ipc/agentDefaults.js";
+import { isCanopyModelId } from "./ipc/canopy.js";
 import type { HostId } from "./remoteHosts.js";
 
 /**
@@ -7,11 +8,13 @@ import type { HostId } from "./remoteHosts.js";
  * host, by name (#14167). A closed list of host-owned leaves: nothing here is
  * a credential, an environment, a preset or a store path, and nothing this
  * machine owns for itself (its look, its keys) is ever reached this way.
- * `canopyMode` is consent, so it is edited here, deliberately, on the host it
- * names, and never copied (`portableSettings.ts`).
+ * `canopyMode` is edited here, deliberately, on the host it names, and never
+ * copied (`portableSettings.ts`); so is `canopyModel`, the model that host
+ * downloads and reads with.
  */
 export const HOST_SETTING_KEYS = [
   "canopyMode",
+  "canopyModel",
   "agentDefaults.defaultAgent",
   "agentDefaults.assistantAgentId",
   "idleTerminalNotify.enabled",
@@ -28,6 +31,7 @@ export function isHostSettingKey(value: unknown): value is HostSettingKey {
 
 export const HOST_SETTING_LABELS: Record<HostSettingKey, string> = {
   canopyMode: "Canopy",
+  canopyModel: "Canopy model",
   "agentDefaults.defaultAgent": "Default agent",
   "agentDefaults.assistantAgentId": "Assistant agent",
   "idleTerminalNotify.enabled": "Alert about idle terminals",
@@ -46,6 +50,8 @@ export function hostSettingRefusal(key: HostSettingKey, value: unknown): string 
       return value === "unset" || value === "on" || value === "hidden"
         ? null
         : "Not a Canopy mode.";
+    case "canopyModel":
+      return isCanopyModelId(value) ? null : "Not one of Canopy's models.";
     case "agentDefaults.defaultAgent":
       return value === null || isStorableDefaultAgent(value)
         ? null
@@ -72,6 +78,7 @@ const agentId = z.string().min(1).max(128).nullable();
 export const HostSettingsPatchFieldsSchema = z
   .object({
     canopyMode: z.enum(["unset", "on", "hidden"]).optional(),
+    canopyModel: z.string().max(120).refine(isCanopyModelId).optional(),
     "agentDefaults.defaultAgent": agentId.optional(),
     "agentDefaults.assistantAgentId": agentId.optional(),
     "idleTerminalNotify.enabled": z.boolean().optional(),

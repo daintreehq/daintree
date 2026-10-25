@@ -42,7 +42,7 @@ Meanwhile the agent CLIs themselves now ship worktrees, subagents, session resum
 **Strategic Features** (significant, but not pillars):
 
 - **Daintree Assistant** — The user's own Claude Code or Codex, running in a terminal in the help panel, wired to Daintree's MCP tools, docs and runbooks. Orchestration context without a bespoke chat UI.
-- **Canopy** — An opt-in reader that ranks every agent by what it needs from you, quoting each screen as its evidence. The first hosted feature; see [Hosted Features](#hosted-features).
+- **Canopy** — An opt-in reader that ranks every agent by what it needs from you, quoting each screen as its evidence. Reads on the user's own machine with a small open model it downloads from Hugging Face (#14448).
 - **Voice Input** — Hands-free delegation while monitoring other agents.
 - **Portal** — A tabbed dock for web-based AI agent UIs alongside terminal agents.
 
@@ -177,7 +177,7 @@ Daintree runs on machines the user controls. A feature that sends terminal conte
 - **Attributed** — anything it concludes is labelled as coming from it, never presented as something Daintree observed.
 - **Optional** — the local product stays complete without it, and turning it off removes it entirely.
 
-Canopy is the first such feature: screens go to `canopy.daintree.org` only after consent, with common secret patterns redacted on the client first — best effort, and the consent text says so. Downloads (updates, tour audio, the plugin blocklist) and the user's own agents talking to their own model providers are not in scope of this rule.
+No feature does this today. Canopy did until #14448, which moved its reading onto the user's machine: a model is downloaded once (a download, so outside this rule) and no screen leaves the machine. Downloads (updates, tour audio, the plugin blocklist, Canopy's model) and the user's own agents talking to their own model providers are not in scope of this rule.
 
 ## Decision Log
 
@@ -194,7 +194,7 @@ Each row is a decision that was actually made, with the issue or PR behind it. W
 | Park, Snooze and Read Marks | **APPROVE** | The user's own triage marks. They change ordering, never what was observed. |
 | "Waiting for shell" as a separate state | **REJECT** | Useful but unreliable: it needs a per-agent matcher maintained forever across every CLI (#4871). |
 | Provider reachability probes | **REMOVED** | The one place Daintree reached around an agent CLI. Passive observation only (#11702). |
-| Canopy | **APPROVE (opt-in, bounded)** | An inbox ranked by a model's reading of each screen. Consent to turn on, every placement attributed and quoting the screen, never rewrites or hides observed state, gone entirely when off (#13220). |
+| Canopy | **APPROVE (opt-in, bounded)** | An inbox ranked by a model's reading of each screen. Off until turned on, every placement attributed and quoting the screen, never rewrites or hides observed state, gone entirely when off (#13220). Reads locally with an open model since #14448: no hosted service, no paid tier. |
 | Answer from another device | **APPROVE (opt-in, paired)** | Answer a waiting agent from a phone or laptop the user paired. Off until turned on, and pairing is the consent for the page. The device sees the observed screen, with common secret patterns redacted first (best effort), and sends back only an option label; Daintree re-reads the screen and plans the keys itself (#13684, #13701). Reaches every connected host through main, and each host reads, redacts and plans its own answers under its own drive lease (#13941). Free and local, with Canopy off. Web Push is planned as a second, explicit consent, and a push carries no screen. A native app is pending: it needs a push relay Daintree would run, a Hosted Features decision not yet made (#14023). |
 | Handback marker | **APPROVE** | An orchestrator opts in when it sends a prompt: Daintree appends an instruction carrying a `DAINTREE-DONE-<code>` marker pair it minted, and reports the agent's summary once the closing marker appears on screen. An observation only, and it changes nothing about how an agent is launched (#12488). |
 | System memory-pressure notice | **APPROVE** | Attribution: tells the user the slowdown is the machine, not the app. A quiet, dismissible notice (#12469). |

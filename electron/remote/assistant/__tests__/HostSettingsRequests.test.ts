@@ -10,7 +10,7 @@ import {
 } from "../../../../shared/types/hostSettings.js";
 import type { HostSettingsArgs } from "../../../../shared/types/hostControl.js";
 import { AppError } from "../../../utils/errorTypes.js";
-import { CANOPY_REDACTION, canopySendsFrom } from "../../../../shared/config/canopyTerms.js";
+import { canopyLocalOn, canopyStopOn } from "../../../../shared/config/canopyTerms.js";
 import { HostSettingsRequests, type HostSettingsRequestDeps } from "../HostSettingsRequests.js";
 
 type Values = Record<HostSettingKey, HostSettingValue>;
@@ -18,6 +18,7 @@ type Values = Record<HostSettingKey, HostSettingValue>;
 function defaults(): Values {
   return {
     canopyMode: "unset",
+    canopyModel: "daintreehq/canopy-reader-17m",
     "agentDefaults.defaultAgent": "claude",
     "agentDefaults.assistantAgentId": null,
     "idleTerminalNotify.enabled": false,
@@ -377,8 +378,8 @@ describe("host.settings (#14167)", () => {
     });
     await t.run({ operation: "apply", ticket: ticket! });
     const lines = t.askApproval.mock.calls[0]![0].lines;
-    expect(lines).toContain(canopySendsFrom("Alpha"));
-    expect(lines).toContain(CANOPY_REDACTION);
+    expect(lines).toContain(canopyLocalOn("Alpha"));
+    expect(lines).toContain(canopyStopOn("Alpha"));
   });
 
   it("leaves a host already set as asked untouched, and reports it as it is", async () => {

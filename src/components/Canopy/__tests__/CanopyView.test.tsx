@@ -59,7 +59,7 @@ vi.mock("@/lib/viewCacheState", async (importOriginal) => ({
 
 import { notify } from "@/lib/notify";
 import { CanopyView } from "../CanopyView";
-import { CANOPY_BETA_TERMS, CANOPY_TITLE, CANOPY_WAITLIST_URL } from "../canopyTerms";
+import { CANOPY_TITLE } from "../canopyTerms";
 import { useCanopyStore } from "@/store/canopyStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { useProjectStore } from "@/store/projectStore";
@@ -83,7 +83,6 @@ function run(runId: string, overrides: Partial<FleetSnapshot["runs"][number]> = 
 const canopySnapshot: CanopySnapshot = {
   mode: "on",
   activated: true,
-  tier: "priority",
   dispositions: [],
   seen: [],
   reads: [],
@@ -95,6 +94,28 @@ const canopySnapshot: CanopySnapshot = {
   lastError: null,
   failedRuns: [],
   glances: [],
+};
+
+const MODELS = {
+  selected: "daintreehq/canopy-reader-17m",
+  variants: [
+    {
+      id: "daintreehq/canopy-reader-17m",
+      name: "Light",
+      downloadBytes: 21_000_000,
+      installed: false,
+      supported: true,
+      bench: null,
+    },
+    {
+      id: "daintreehq/canopy-reader-68m",
+      name: "Best",
+      downloadBytes: 73_000_000,
+      installed: false,
+      supported: true,
+      bench: null,
+    },
+  ],
 };
 
 function installElectron(
@@ -162,6 +183,8 @@ function installElectron(
       entries: [],
     })),
     rename: vi.fn(async (_runId: string, _target: { spawnedAt: number }, _title: string) => {}),
+    getModels: vi.fn(async () => MODELS),
+    setModel: vi.fn(async (_id: string) => snapshot),
     setMode: vi.fn(async (mode: CanopySnapshot["mode"], _expectRevision?: number) => ({
       ...snapshot,
       mode,
@@ -475,26 +498,19 @@ describe("CanopyView search", () => {
 });
 
 describe("CanopyView", () => {
-  it("reads nothing until the user turns it on, showing a demo and what it sends", async () => {
-    const canopy = installElectron({ ...canopySnapshot, activated: false, tier: "free" });
-    useCanopyStore.setState({ snapshot: { ...canopySnapshot, activated: false, tier: "free" } });
+  it("reads nothing until the user turns it on, showing a demo and what turning it on does", async () => {
+    const canopy = installElectron({ ...canopySnapshot, activated: false });
+    useCanopyStore.setState({ snapshot: { ...canopySnapshot, activated: false } });
     render(<CanopyView />);
     await frames();
     const dialog = document.querySelector<HTMLElement>("[data-testid=canopy-dialog]")!;
-    expect(dialog.textContent).toContain(
-      "sends your agents' terminal output to Daintree's servers"
-    );
-    // What it sends, how far redaction goes, and how to stop, said where consent is given.
-    expect(dialog.textContent).toContain("recent scrollback");
-    expect(dialog.textContent).toContain("This can miss some secrets.");
+    // What turning it on does, and how to stop, said where it is turned on.
+    expect(dialog.textContent).toContain("Nothing it reads leaves this computer.");
     expect(dialog.textContent).toContain("Settings > Canopy");
+    expect(dialog.textContent).not.toMatch(/servers|paid|beta|privacy/i);
     expect(within(document.body).getByRole("dialog", { name: CANOPY_TITLE })).toBeTruthy();
     // The keyboard lands on the offer's heading: Enter alone agrees to nothing.
     expect(document.activeElement?.id).toBe("canopy-pitch-title");
-    fireEvent.click(screenButton(dialog, "Privacy policy"));
-    expect(window.electron.system.openExternal).toHaveBeenLastCalledWith(
-      "https://daintree.org/privacy"
-    );
     // The demo's made-up agents, never the user's own runs, and nothing streamed.
     const rows = [...dialog.querySelectorAll<HTMLElement>("[data-canopy-card]")];
     expect(rows.length).toBeGreaterThan(0);
@@ -513,12 +529,61 @@ describe("CanopyView", () => {
     expect(within(document.body).getByRole("dialog", { name: CANOPY_TITLE })).toBeTruthy();
   });
 
+  it("asks which model before anything is turned on, and downloads only the one chosen", async () => {
+    const canopy = installElectron({ ...canopySnapshot, activated: false });
+    useCanopyStore.setState({ snapshot: { ...canopySnapshot, activated: false } });
+    render(<CanopyView />);
+    await frames();
+    const dialog = document.querySelector<HTMLElement>("[data-testid=canopy-dialog]")!;
+    // Both models are offered with their sizes, Light picked as the one it would use.
+    expect(canopy.getModels).toHaveBeenCalledTimes(1);
+    expect((within(dialog).getByRole("radio", { name: /Light/ }) as HTMLInputElement).checked).toBe(
+      true
+    );
+    expect(
+      within(dialog).getByRole("radio", { name: /Best/ }).closest("label")?.textContent
+    ).toContain("73 MB");
+    // Looking at the choice turns nothing on and downloads nothing.
+    expect(canopy.setModel).not.toHaveBeenCalled();
+    expect(canopy.setMode).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialog).getByRole("radio", { name: /Best/ }));
+    await act(async () => {
+      fireEvent.click(screenButton(dialog, "Turn on Canopy"));
+    });
+    expect(canopy.setModel).toHaveBeenCalledWith("daintreehq/canopy-reader-68m");
+    expect(canopy.setMode).toHaveBeenCalledWith("on");
+    // The model is chosen first: turned on, it downloads that one and never the default.
+    expect(canopy.setModel.mock.invocationCallOrder[0]!).toBeLessThan(
+      canopy.setMode.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it("keeps Turn on off until the model list is in, and still turns on when it can't be had", async () => {
+    const canopy = installElectron({ ...canopySnapshot, activated: false });
+    useCanopyStore.setState({ snapshot: { ...canopySnapshot, activated: false } });
+    let fail!: (reason: Error) => void;
+    canopy.getModels.mockImplementationOnce(() => new Promise((_, reject) => (fail = reject)));
+    render(<CanopyView />);
+    await frames();
+    const dialog = document.querySelector<HTMLElement>("[data-testid=canopy-dialog]")!;
+    expect(screenButton(dialog, "Turn on Canopy").getAttribute("aria-disabled")).toBe("true");
+    await act(async () => {
+      fail(new Error("offline"));
+    });
+    expect(dialog.textContent).toContain("Canopy will use the one already chosen");
+    await act(async () => {
+      fireEvent.click(screenButton(dialog, "Turn on Canopy"));
+    });
+    // No list, no choice to carry: it turns on with the model it would use anyway.
+    expect(canopy.setModel).not.toHaveBeenCalled();
+    expect(canopy.setMode).toHaveBeenCalledWith("on");
+  });
   it("hides Canopy from its offer, closing it with a way back", async () => {
     const off = {
       ...canopySnapshot,
       mode: "unset" as const,
       activated: false,
-      tier: "free" as const,
     };
     const canopy = installElectron(off);
     useCanopyStore.setState({ snapshot: off, mode: "unset" });
@@ -551,7 +616,6 @@ describe("CanopyView", () => {
       ...canopySnapshot,
       mode: "unset" as const,
       activated: false,
-      tier: "free" as const,
     };
     const canopy = installElectron(off);
     useCanopyStore.setState({ snapshot: off, mode: "unset" });
@@ -585,7 +649,6 @@ describe("CanopyView", () => {
       ...canopySnapshot,
       mode: "unset" as const,
       activated: false,
-      tier: "free" as const,
     };
     const canopy = installElectron(off);
     useCanopyStore.setState({ snapshot: off, mode: "unset" });
@@ -617,7 +680,6 @@ describe("CanopyView", () => {
       ...canopySnapshot,
       mode: "unset" as const,
       activated: false,
-      tier: "free" as const,
     };
     const canopy = installElectron(off);
     canopy.setMode.mockRejectedValueOnce(new Error("rate limited"));
@@ -632,38 +694,6 @@ describe("CanopyView", () => {
     expect(useCanopyStore.getState().isOpen).toBe(true);
     expect(dialog.textContent).toContain("Couldn't hide Canopy. Try again.");
     expect(vi.mocked(notify)).not.toHaveBeenCalled();
-  });
-
-  it("tells a free user every time that the beta is free, and a paying one never", async () => {
-    installElectron({ ...canopySnapshot, tier: "free" });
-    useCanopyStore.setState({ snapshot: { ...canopySnapshot, tier: "free" } });
-    const free = render(<CanopyView />);
-    await frames();
-    const notice = CANOPY_BETA_TERMS;
-    const dialog = document.querySelector<HTMLElement>("[data-testid=canopy-dialog]")!;
-    expect(dialog.textContent).toContain(notice);
-    // No free tier promised past the beta.
-    expect(dialog.textContent).not.toContain("slower queue");
-    expect(dialog.textContent).not.toContain("$");
-    const openExternal = vi.mocked(window.electron.system.openExternal);
-    fireEvent.click(screenButton(dialog, "Send feedback"));
-    expect(openExternal).toHaveBeenLastCalledWith(
-      "mailto:greg@daintree.org?subject=Canopy%20beta%20feedback"
-    );
-    // The waitlist is a page on the website, opened in the browser.
-    fireEvent.click(screenButton(dialog, "Paid plan waitlist"));
-    expect(openExternal).toHaveBeenLastCalledWith(CANOPY_WAITLIST_URL);
-    expect(new URL(CANOPY_WAITLIST_URL).protocol).toBe("https:");
-    expect(screenButton(dialog, "Paid plan waitlist")).toBeTruthy();
-    free.unmount();
-
-    installElectron();
-    useCanopyStore.setState({ snapshot: canopySnapshot });
-    render(<CanopyView />);
-    await frames();
-    expect(document.querySelector("[data-testid=canopy-dialog]")?.textContent).not.toContain(
-      notice
-    );
   });
 
   it("shows a pressed refresh as busy until it is done", async () => {
@@ -1529,8 +1559,8 @@ describe("CanopyView", () => {
       },
     };
     useFleetSnapshotStore.setState(working);
-    // Opening, with words still owed for the working run.
-    const owed = { ...canopySnapshot, wordsDue: ["working"] };
+    // Opening, with the working run's first reading still under way.
+    const owed = { ...canopySnapshot, busy: true };
     useCanopyStore.setState({ snapshot: owed });
     installElectron(owed);
     const first = render(<CanopyView />);
@@ -1701,7 +1731,7 @@ describe("CanopyView", () => {
   });
 
   it("shows every run at once while the cards it is owed are written, and places each as it lands", async () => {
-    const owed = { ...canopySnapshot, wordsDue: ["working"] };
+    const owed = { ...canopySnapshot, busy: true };
     installElectron(owed);
     useCanopyStore.setState({ snapshot: owed });
     const { container } = render(<CanopyView />);
@@ -1729,7 +1759,7 @@ describe("CanopyView", () => {
   });
 
   it("stops revealing once the cards it was owed have landed, and holds still after", async () => {
-    const owed = { ...canopySnapshot, wordsDue: ["working"] };
+    const owed = { ...canopySnapshot, busy: true };
     installElectron(owed);
     useCanopyStore.setState({ snapshot: owed });
     const { container } = render(<CanopyView />);
@@ -1782,7 +1812,7 @@ describe("CanopyView", () => {
 
   it("holds still like always once the open's readings have had their time", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    const owed = { ...canopySnapshot, wordsDue: ["working"] };
+    const owed = { ...canopySnapshot, busy: true };
     installElectron(owed);
     useCanopyStore.setState({ snapshot: owed });
     const { container } = render(<CanopyView />);
@@ -1812,7 +1842,7 @@ describe("CanopyView", () => {
     const reading = {
       ...canopySnapshot,
       cards: [{ ...stuckCard("working"), describing: true }],
-      link: { host: "canopy.daintree.org", inFlight: 1, classifyMs: 380, readMs: null },
+      reader: { model: "Light", inFlight: 1, readMs: 9 },
     };
     installElectron(reading);
     useCanopyStore.setState({ snapshot: reading });
@@ -1821,7 +1851,7 @@ describe("CanopyView", () => {
     const heading = container.ownerDocument.querySelector("#canopy-inbox-label")!.parentElement!;
     expect(heading.textContent).not.toMatch(/Updating|Starting|retry/);
     const footer = container.ownerDocument.querySelector("[data-canopy-status]")!;
-    expect(footer.textContent).toBe("canopy.daintree.org1 in flight · classify 380 ms");
+    expect(footer.textContent).toBe("Light model, on this computer9 ms a screen");
     // Under the list, in the same column, not over the pane beside it.
     const column = container.ownerDocument.querySelector("[data-canopy-list]")!.parentElement!;
     expect(column.lastElementChild).toBe(footer);

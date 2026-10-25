@@ -461,7 +461,7 @@ export const HostSettingsArgsSchema = z.object({
     .array(z.enum(HOST_SETTING_KEYS))
     .max(HOST_SETTING_KEYS.length)
     .optional()
-    .describe("For read: which settings, up to 5. Default: all."),
+    .describe(`For read: which settings, up to ${HOST_SETTING_KEYS.length}. Default: all.`),
   patch: HostSettingsPatchFieldsSchema.optional().describe(
     "For preview: values to set on every host named."
   ),

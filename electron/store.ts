@@ -297,11 +297,12 @@ export interface StoreSchema {
   globalEnvironmentVariables: Record<string, string>;
   appAgentConfig: AppAgentConfig;
   /**
-   * Where the user stands on Canopy: `on` once they agree to send agent screens
-   * off the machine to be read, `hidden` when they don't want it at all. Nothing
-   * is read unless it is `on`.
+   * Where the user stands on Canopy: `on` once they turn it on, `hidden` when
+   * they don't want it at all. Nothing is read unless it is `on`.
    */
   canopyMode: CanopyMode;
+  /** The Hugging Face repo of the local model Canopy reads screens with. */
+  canopyModel: string;
   windowStates: Record<
     string,
     {
@@ -1031,6 +1032,7 @@ const storeOptions = {
     globalEnvironmentVariables: {},
     appAgentConfig: DEFAULT_APP_AGENT_CONFIG,
     canopyMode: "unset" as const,
+    canopyModel: "daintreehq/canopy-reader-17m",
     windowStates: {},
     worktreeIssueMap: {},
     wslGitByWorktree: {},

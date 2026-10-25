@@ -44,10 +44,10 @@ export interface InboxDisposition {
 }
 
 /**
- * The priority each classifier reading gives, before any words are written:
- * the describer's own anchors for the same situations, so a run keeps its
- * place when the words land. The classifier can't tell a finished turn with
- * loose ends (55) from a clean one (40), so it sits between them.
+ * The priority each reading gives before its words are set: the words' own
+ * anchors for the same situations, so a run keeps its place when they land.
+ * The verdict alone can't tell a finished turn with loose ends (55) from a
+ * clean one (40), so it sits between them.
  */
 export const CANOPY_CLASSIFIER_ANCHORS = {
   approval: 92,
@@ -232,18 +232,17 @@ export function classifierPriority(classified: ClassifierResult, run: FleetRunRo
 }
 
 /**
- * The lowest priority a described run can have: an urgent ask the classifier
- * read keeps its place whatever the describer scores, and the describer's
- * score stands above it.
+ * The lowest priority a described run can have: an urgent ask the reading saw
+ * keeps its place whatever score its words carry, and that score stands above it.
  */
 function askFloor(classified: ClassifierResult, run: FleetRunRow): number {
   return blockedOn(classified, run) === null ? 0 : (askScore(classified, run) ?? 0);
 }
 
 /**
- * The lowest a described run ranks, by what the classifier read: an ask keeps
- * its place, and a busy agent showing something notable keeps the notable
- * band, whatever lower score the describer gives it.
+ * The lowest a described run ranks, by what the reading saw: an ask keeps its
+ * place, and a busy agent showing something notable keeps the notable band,
+ * whatever lower score its words carry.
  */
 export function readingFloor(classified: ClassifierResult, run: FleetRunRow): number {
   const busy = classified.category === "working" || classified.category === "running";

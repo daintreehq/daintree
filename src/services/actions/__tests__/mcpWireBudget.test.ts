@@ -894,7 +894,10 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // `processes` field on `terminal.close`, `terminal.closeOwned` and
   // `terminal.closeAll`, which share one result schema, and a clause on
   // `terminal.closeMany` saying its results carry it.
-  const MAX_COHORT_PAYLOAD_BYTES = 152_850;
+  // 152_850 → 152_910 for #14448, measured at 152_899 B (+60): `canopyModel`
+  // joins the host settings an assistant may read and change, so its name sits
+  // in the keys it reads, the patch it previews and the settings it gets back.
+  const MAX_COHORT_PAYLOAD_BYTES = 152_910;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

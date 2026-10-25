@@ -27,7 +27,6 @@ function canopy(refreshedAt: number, sequence?: number): CanopySnapshot {
   return {
     mode: "on",
     activated: true,
-    tier: "priority",
     dispositions: [],
     seen: [],
     reads: [],

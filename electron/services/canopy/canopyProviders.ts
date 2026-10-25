@@ -1,7 +1,7 @@
 /**
- * What the canopy panel sends to be read, what comes back, and what is done
- * with the answers. Screens are read by Canopy's own service
- * (`canopyBackend.ts`); every card it writes goes through the checks here
+ * What the canopy panel hands the reader, what comes back, and what is done
+ * with the answers. Screens are read on this machine by the local model
+ * (`canopyLocalReader.ts`); every card it gives goes through the checks here
  * before it reaches a row.
  */
 import {
@@ -10,15 +10,14 @@ import {
   type CanopyChanges,
   type CanopyTests,
 } from "../../../shared/types/ipc/canopy.js";
-import type { CanopyDigest } from "./canopyDigest.js";
 
 export class CanopyProviderError extends Error {
   constructor(
     readonly provider: "classifier" | "describer",
     message: string,
     /**
-     * Worth trying again shortly rather than reporting: a rate limit, a worker
-     * still starting, a timeout or a dropped connection.
+     * Worth trying again shortly rather than reporting: the model still
+     * downloading, its process restarting, or a read that ran out of time.
      */
     readonly transient = false
   ) {
@@ -28,7 +27,7 @@ export class CanopyProviderError extends Error {
 }
 
 export interface CanopyScreenInput {
-  /** Which run this is, for main's own bookkeeping; never sent to the service. */
+  /** Which run this is, for main's own bookkeeping; never handed to the model. */
   runId?: string;
   agent: string;
   title: string;
@@ -39,33 +38,11 @@ export interface CanopyScreenInput {
   observed: CanopyObservedState;
   /** The user's last action on this run from the panel, if any. */
   userAction?: CanopyUserAction | null;
-  /** For a working run, what the describer wrote about it last time. */
-  previousReading?: CanopyPreviousReading | null;
-  /** What the history above the screen says: the user's requests, the agent's plan. */
-  digest?: CanopyDigest | null;
-  /** The title already given to this run's task, kept unless the user set a new one. */
-  currentTask?: string | null;
-  /** The describer's own notes on this run from its last reading; never shown to the user. */
-  note?: CanopyNote | null;
-  /** The output that scrolled out of view since the describer's last reading, oldest first. */
-  sinceLastReading?: string | null;
   /**
    * The failure count the last reading gave, when the screen has not changed
    * since: an unchanged screen shows no new run, so the count cannot rise.
    */
   failureRepeatsCap?: number | null;
-}
-
-/**
- * The describer's working memory for one terminal: written by it on every
- * reading and handed back on the next, so what scrolled off the screen — the
- * user's goal, decisions, milestones, a failure that keeps coming back — is
- * still known. Hidden from the user; it shapes the card, it is not part of it.
- */
-export interface CanopyNote {
-  text: string;
-  /** How long ago it was written. */
-  secondsAgo: number;
 }
 
 /**
@@ -81,19 +58,6 @@ export const CANOPY_INSTRUCTION_STATES = [
   "irreversible",
 ] as const;
 export type CanopyInstructionState = (typeof CANOPY_INSTRUCTION_STATES)[number];
-
-/** Longest note kept, in characters; a longer one is cut at a line. */
-export const CANOPY_NOTE_MAX_CHARS = 700;
-
-/** The describer's last words about a run, offered so its next ones say what moved. */
-export interface CanopyPreviousReading {
-  category: CanopyCategory;
-  task: string | null;
-  headline: string | null;
-  summary: string | null;
-  /** How long ago those words were written. */
-  secondsAgo: number;
-}
 
 export interface CanopyUserAction {
   kind: "archived" | "replied";
@@ -129,7 +93,7 @@ export interface ClassifierResult {
   /**
    * The line the classifier picked as saying most about the run at a glance —
    * the ask, the step, the agent's report or the error — verbatim; null when
-   * it picked none. Shown on the row until the describer has written its words.
+   * it picked none. Shown on the row until the reading's words are set.
    */
   status?: string | null;
   /**
@@ -157,9 +121,7 @@ export interface DescriberResult {
   progress: number | null;
   tests: CanopyTests;
   changes: CanopyChanges;
-  /** The describer's notes for its next reading of this run; absent or null when it wrote none. */
-  note?: string | null;
-  /** How many runs in a row the same failure has come back, as the note counts them; 0 when none. */
+  /** How many runs in a row the same failure has come back, as the reader counts them; 0 when none. */
   failureRepeats?: number;
   /** An explicit instruction from the user against what the agent did or asks to do. */
   instruction?: CanopyInstructionState;
@@ -177,7 +139,6 @@ export type RawCanopyCard = Partial<
     | "tests"
     | "changes"
     | "action"
-    | "note"
     | "failureRepeats"
     | "instruction"
   >
@@ -187,7 +148,6 @@ export type RawCanopyCard = Partial<
   tests?: unknown;
   changes?: unknown;
   attention_score?: unknown;
-  note?: unknown;
   failure_repeats?: unknown;
   instruction?: unknown;
   task?: unknown;
@@ -196,7 +156,7 @@ export type RawCanopyCard = Partial<
 };
 
 /**
- * A card the service wrote, checked and held to the score bands its own facts set.
+ * A card the reader gave, checked and held to the score bands its own facts set.
  */
 export function toDescriberResult(card: unknown, input: CanopyScreenInput): DescriberResult {
   if (typeof card !== "object" || card === null || Array.isArray(card)) {
@@ -247,34 +207,12 @@ export function toDescriberResult(card: unknown, input: CanopyScreenInput): Desc
     changes: CHANGES.includes(parsed.changes as CanopyChanges)
       ? (parsed.changes as CanopyChanges)
       : "unknown",
-    note: present(parsed.note) ? clipNote(parsed.note) : null,
     risk: risk === "caution" || risk === "none" ? risk : ("unknown" as const),
     riskReason:
       risk === "caution" && typeof parsed.risk_reason === "string" && parsed.risk_reason.trim()
         ? clip(parsed.risk_reason, 80)
         : null,
   };
-}
-
-/**
- * A card's words as they stream. No score: the card's score is held to facts
- * that arrive after it (risk, changes, tests, progress), so one taken early
- * moves once they land, and the run would jump in the list.
- */
-export interface CanopyPartialDescription {
-  category?: CanopyCategory;
-  headline?: string;
-  summary?: string;
-}
-
-export function toPartialDescription(card: RawCanopyCard): CanopyPartialDescription {
-  const partial: CanopyPartialDescription = {};
-  if (!CANOPY_CATEGORIES.includes(card.category as CanopyCategory)) return partial;
-  const category = card.category as CanopyCategory;
-  partial.category = category;
-  if (present(card.headline)) partial.headline = clip(card.headline, 120);
-  if (present(card.summary)) partial.summary = clip(card.summary, 300);
-  return partial;
 }
 
 const TESTS: readonly CanopyTests[] = ["passing", "failing", "not_run", "unknown"];
@@ -311,7 +249,7 @@ export function reconcileScore(
   }
   // A question blocks the agent on the user: no other reason pulls it lower.
   if (category === "question") return Math.max(score, QUESTION_SCORE);
-  // Busy, but going round in circles: the spinner says working, the note says
+  // Busy, but going round in circles: the spinner says working, the reading says
   // the same failure has come back run after run.
   if (busyCategoryOf(category) && failureRepeats >= STUCK_REPEATS) return Math.max(score, 70);
   if (category === "finished") {
@@ -361,23 +299,14 @@ function clampScore(value: unknown): number {
 }
 
 /**
- * The order the panel lists runs in. A described run takes the describer's
- * score: the classifier's probability already decided it was worth describing,
- * and it sits near 1 for nearly every waiting run, so averaging it in only
- * squeezed every score into the same band. A run that was only classified has
- * only the classifier's word for it.
+ * The order the panel lists runs in. A run with words takes its reading's
+ * score on the anchors: the attention probability already decided it was worth
+ * words, and it sits near 1 for nearly every waiting run, so averaging it in
+ * only squeezed every score into the same band. A run without words has only
+ * the attention probability to go by.
  */
 export function combinePriority(attention: number, attentionScore: number | null): number {
   return Math.round(attentionScore === null ? attention * 100 : attentionScore);
-}
-
-/** A note within `CANOPY_NOTE_MAX_CHARS`, cut at the last whole line that fits. */
-function clipNote(note: string): string {
-  const text = note.trim();
-  if (text.length <= CANOPY_NOTE_MAX_CHARS) return text;
-  const cut = text.slice(0, CANOPY_NOTE_MAX_CHARS);
-  const line = cut.lastIndexOf("\n");
-  return line > 0 ? cut.slice(0, line) : cut;
 }
 
 function clip(value: unknown, max: number): string {

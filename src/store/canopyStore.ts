@@ -10,6 +10,7 @@ import {
 } from "@/components/Canopy/canopyAssistants";
 import {
   CANOPY_URGENT_PRIORITY,
+  readsWithHostedService,
   type CanopyCard,
   type CanopyMode,
   type CanopySnapshot,
@@ -30,6 +31,12 @@ interface CanopyState {
   close: () => void;
   toggle: () => void;
   applySnapshot: (snapshot: CanopySnapshot) => void;
+  /**
+   * The window's own host runs a Daintree from before Canopy read locally: its
+   * snapshot is held inert (no cards, not on) and nothing it read is shown or
+   * turned on from here until it is updated.
+   */
+  outdatedHost: boolean;
   /**
    * The urgent prompt each run last showed while the panel was open, as
    * `spawnedAt:revision`. The toolbar badge counts only the urgent prompts not
@@ -469,8 +476,13 @@ export const useCanopyStore = create<CanopyState>((set) => ({
           ? state
           : { isOpen: true, hostId: state.hostId === ALL_HOSTS_ID ? ALL_HOSTS_ID : null }
     ),
-  applySnapshot: (snapshot) =>
+  outdatedHost: false,
+  applySnapshot: (received) =>
     set((state) => {
+      const outdated = readsWithHostedService(received);
+      const snapshot: CanopySnapshot = outdated
+        ? { ...received, activated: false, cards: [], glances: [] }
+        : received;
       // A pull answered after a newer push is older news.
       const held = state.snapshot?.sequence;
       if (held !== undefined && snapshot.sequence !== undefined && snapshot.sequence < held) {
@@ -478,8 +490,10 @@ export const useCanopyStore = create<CanopyState>((set) => ({
       }
       const mode = snapshot.mode;
       // Hidden from another view, or from Settings: a panel this view held open goes too.
-      if (mode === "hidden") return { snapshot, mode, isOpen: false, workOf: null };
-      return { snapshot, mode };
+      if (mode === "hidden") {
+        return { snapshot, mode, outdatedHost: outdated, isOpen: false, workOf: null };
+      }
+      return { snapshot, mode, outdatedHost: outdated };
     }),
 }));
 
