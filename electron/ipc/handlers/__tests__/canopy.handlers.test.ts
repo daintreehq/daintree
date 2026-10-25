@@ -65,7 +65,13 @@ const assistants = vi.hoisted(() => ({
   lane: null as { sessionId: string; terminalId: string } | null,
   ended: new Set<(event: { projectId: string; slot: number; sessionId: string }) => void>(),
   /** The global session, when one runs, and the view holding its input. */
-  global: null as null | { terminalId: string; generation: number; owner: number | null },
+  global: null as null | {
+    terminalId: string;
+    generation: number;
+    owner: number | null;
+    /** The attachment holding input, at the epoch it was given. */
+    holder?: { attachmentId: string; epoch: number };
+  },
 }));
 vi.mock("../../../services/HelpSessionService.js", () => ({
   helpSessionService: {
@@ -89,6 +95,9 @@ vi.mock("../../../services/globalAssistant.js", () => ({
       }),
       onChange: () => () => {},
       inputOwnerWebContentsId: () => assistants.global?.owner ?? null,
+      canWrite: (attachmentId: string, epoch: number) =>
+        assistants.global?.holder?.attachmentId === attachmentId &&
+        assistants.global.holder.epoch === epoch,
     },
 }));
 const saved = vi.hoisted(() => ({
@@ -1300,11 +1309,16 @@ describe("canopy IPC", () => {
       return { sender, sent };
     }
 
-    async function openAssistant(sender = fakeSender(4), chosen: unknown = subject) {
+    async function openAssistant(
+      sender = fakeSender(4),
+      chosen: unknown = subject,
+      ...stamp: unknown[]
+    ) {
       const view = (await invoke(
         CANOPY_METHOD_CHANNELS.watchAssistantTerminal,
         sender,
-        chosen
+        chosen,
+        ...stamp
       )) as { data?: { watchId: number | null }; watchId?: number | null };
       return { sender, watchId: (view.data ?? view).watchId ?? null };
     }
@@ -1373,15 +1387,27 @@ describe("canopy IPC", () => {
     });
 
     it("takes the global session's input only from the window holding it", async () => {
-      assistants.global = { terminalId: "global-1", generation: 5, owner: 7 };
+      assistants.global = {
+        terminalId: "global-1",
+        generation: 5,
+        owner: 7,
+        holder: { attachmentId: "a7", epoch: 2 },
+      };
       const globalSubject = {
         hostId: "local",
         scope: { kind: "global" },
         terminalId: "global-1",
         incarnation: 1,
       };
-      const reader = await openAssistant(fakeSender(4), globalSubject);
-      const owner = await openAssistant(fakeSender(7), globalSubject);
+      // The reader names an ownership it doesn't hold; that grants nothing.
+      const reader = await openAssistant(fakeSender(4), globalSubject, {
+        attachmentId: "a7",
+        inputEpoch: 2,
+      });
+      const owner = await openAssistant(fakeSender(7), globalSubject, {
+        attachmentId: "a7",
+        inputEpoch: 2,
+      });
       for (const [channel, args] of [
         [CANOPY_METHOD_CHANNELS.terminalInput, ["y"]],
         [CANOPY_METHOD_CHANNELS.terminalSendKey, ["enter"]],
@@ -1401,7 +1427,10 @@ describe("canopy IPC", () => {
 
       // Input moves to another window while a submit waits on the host.
       ptyClient.getTerminalAsync.mockImplementationOnce(async () => {
-        if (assistants.global) assistants.global.owner = 4;
+        if (assistants.global) {
+          assistants.global.owner = 4;
+          assistants.global.holder = { attachmentId: "a4", epoch: 3 };
+        }
         return state.record;
       });
       const moved = await outcome(
@@ -1409,6 +1438,41 @@ describe("canopy IPC", () => {
       );
       expect(moved.ok).toBe(false);
       expect(state.submits).toEqual([]);
+    });
+
+    it("refuses input queued under an ownership the window has since lost and regained", async () => {
+      assistants.global = {
+        terminalId: "global-1",
+        generation: 5,
+        owner: 7,
+        holder: { attachmentId: "a7", epoch: 2 },
+      };
+      const owner = await openAssistant(
+        fakeSender(7),
+        { hostId: "local", scope: { kind: "global" }, terminalId: "global-1", incarnation: 1 },
+        { attachmentId: "a7", inputEpoch: 2 }
+      );
+      await invoke(CANOPY_METHOD_CHANNELS.terminalInput, owner.sender, owner.watchId, "a");
+      // Another window takes input, then this one takes it back: a later epoch.
+      assistants.global.holder = { attachmentId: "a7", epoch: 4 };
+      const late = await outcome(
+        invoke(CANOPY_METHOD_CHANNELS.terminalInput, owner.sender, owner.watchId, "b")
+      );
+      expect(late.ok).toBe(false);
+      expect(state.writes).toEqual(["a"]);
+    });
+
+    it("refuses a malformed input stamp", async () => {
+      assistants.global = { terminalId: "global-1", generation: 5, owner: 7 };
+      const refused = await outcome(
+        invoke(
+          CANOPY_METHOD_CHANNELS.watchAssistantTerminal,
+          fakeSender(7),
+          { hostId: "local", scope: { kind: "global" }, terminalId: "global-1", incarnation: 1 },
+          { attachmentId: 5 }
+        )
+      );
+      expect(refused.ok).toBe(false);
     });
 
     it("refuses the global session named as a project lane", async () => {

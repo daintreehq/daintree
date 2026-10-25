@@ -330,6 +330,7 @@ export const CHANNEL_LEASE_POLICY = {
   "help:global-assistant-release-input": "free",
   "help:global-assistant-restart": "free",
   "help:global-assistant-discard": "free",
+  "help:global-assistant-changed": "free",
   "help:get-starter-prompts": "free",
   "help:list-past-sessions": "free",
   "help:list-pending-hibernation-slots": "free",

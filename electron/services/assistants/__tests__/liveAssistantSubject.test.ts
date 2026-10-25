@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { resolveLiveAssistant, type LiveAssistantSources } from "../liveAssistantSubject.js";
+import {
+  parseGlobalAssistantInputStamp,
+  resolveLiveAssistant,
+  type LiveAssistantSources,
+} from "../liveAssistantSubject.js";
 
 type Lane = { sessionId: string; terminalId: string } | null;
 
@@ -10,6 +14,7 @@ function sources(overrides: Partial<LiveAssistantSources> = {}) {
   const global = {
     state: { phase: "running" as const, generation: 7, terminalId: "g1" as string | null },
     owner: null as number | null,
+    holder: null as { attachmentId: string; epoch: number } | null,
     listeners: new Set<() => void>(),
   };
   const src: LiveAssistantSources = {
@@ -31,6 +36,8 @@ function sources(overrides: Partial<LiveAssistantSources> = {}) {
         return () => global.listeners.delete(listener);
       },
       inputOwnerWebContentsId: () => global.owner,
+      canWrite: (attachmentId, epoch) =>
+        global.holder?.attachmentId === attachmentId && global.holder.epoch === epoch,
     },
     ...overrides,
   };
@@ -138,7 +145,11 @@ describe("resolveLiveAssistant", () => {
 
   it("binds the global session by its run, and only its input owner may type", async () => {
     const { src, global } = sources();
-    const binding = await resolveLiveAssistant(globalSubject, src);
+    global.holder = { attachmentId: "a1", epoch: 2 };
+    const binding = await resolveLiveAssistant(globalSubject, src, {
+      attachmentId: "a1",
+      inputEpoch: 2,
+    });
     expect(binding.mayType(4)).toBe(false);
     global.owner = 4;
     expect(binding.mayType(4)).toBe(true);
@@ -153,6 +164,43 @@ describe("resolveLiveAssistant", () => {
     for (const listener of global.listeners) listener();
     expect(end).toHaveBeenCalledTimes(1);
     expect(binding.isBound()).toBe(false);
+  });
+
+  it("refuses input from an earlier ownership, even once the same window holds input again", async () => {
+    const { src, global } = sources();
+    global.owner = 4;
+    global.holder = { attachmentId: "a1", epoch: 2 };
+    const binding = await resolveLiveAssistant(globalSubject, src, {
+      attachmentId: "a1",
+      inputEpoch: 2,
+    });
+    expect(binding.mayType(4)).toBe(true);
+    // Another window claims, then this one claims back: a new epoch.
+    global.holder = { attachmentId: "b1", epoch: 3 };
+    global.owner = 5;
+    expect(binding.mayType(4)).toBe(false);
+    global.holder = { attachmentId: "a1", epoch: 4 };
+    global.owner = 4;
+    expect(binding.mayType(4)).toBe(false);
+  });
+
+  it("a view of the global session opened without an input stamp only reads", async () => {
+    const { src, global } = sources();
+    global.owner = 4;
+    global.holder = { attachmentId: "a1", epoch: 2 };
+    const binding = await resolveLiveAssistant(globalSubject, src);
+    expect(binding.mayType(4)).toBe(false);
+  });
+
+  it("refuses a malformed input stamp", () => {
+    expect(() => parseGlobalAssistantInputStamp({ attachmentId: "", inputEpoch: 1 })).toThrow();
+    expect(() => parseGlobalAssistantInputStamp({ attachmentId: "a", inputEpoch: 1.5 })).toThrow();
+    expect(() => parseGlobalAssistantInputStamp("a")).toThrow();
+    expect(parseGlobalAssistantInputStamp(undefined)).toBeNull();
+    expect(parseGlobalAssistantInputStamp({ attachmentId: "a", inputEpoch: 3 })).toEqual({
+      attachmentId: "a",
+      inputEpoch: 3,
+    });
   });
 
   it("refuses the global subject when no global session runs", async () => {

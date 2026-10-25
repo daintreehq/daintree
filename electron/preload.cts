@@ -3330,7 +3330,13 @@ function buildElectronApi(): ElectronAPI {
     },
 
     // Help workspace API
-    help: buildHelpPreloadBindings(_unwrappingInvoke),
+    help: {
+      ...buildHelpPreloadBindings(_unwrappingInvoke),
+
+      onGlobalAssistantChanged: (
+        callback: (state: import("../shared/types/ipc/help.js").GlobalAssistantView) => void
+      ) => _typedOn(CHANNELS.HELP_GLOBAL_ASSISTANT_CHANGED, callback),
+    },
 
     perf: {
       flushMarks: (payload: {

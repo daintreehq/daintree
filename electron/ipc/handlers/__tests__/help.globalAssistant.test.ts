@@ -6,6 +6,13 @@ vi.mock("../../../services/globalAssistant.js", () => ({
   getGlobalAssistantService: () => service,
 }));
 
+const pty = vi.hoisted(() => ({ generation: 3 as number | null }));
+vi.mock("../../../window/serviceRefs.js", () => ({
+  getPtyClient: () => ({ getLiveGeneration: () => pty.generation }),
+}));
+const broadcast = vi.hoisted(() => vi.fn());
+vi.mock("../../utils.js", () => ({ broadcastToRenderer: broadcast }));
+
 const handlers = await import("../helpGlobalAssistant.js");
 
 function makeService() {
@@ -30,6 +37,51 @@ const ctx = (webContentsId: number, windowId: number | null) =>
 describe("global assistant IPC handlers", () => {
   beforeEach(() => {
     service = makeService();
+    pty.generation = 3;
+    broadcast.mockClear();
+  });
+
+  it("names the running session by its exact terminal and PTY launch generation", async () => {
+    expect((await handlers.handleGetGlobalAssistantState()).subject).toBeNull();
+    const state = await handlers.handleEnsureGlobalAssistant(ctx(10, 1));
+    expect(state.subject).toEqual({
+      hostId: "local",
+      scope: { kind: "global" },
+      terminalId: state.terminalId,
+      incarnation: 3,
+    });
+    // A terminal the PTY host no longer knows names no subject to watch.
+    pty.generation = null;
+    expect((await handlers.handleGetGlobalAssistantState()).subject).toBeNull();
+  });
+
+  it("tells every window of each change, ownership included", async () => {
+    await handlers.handleGetGlobalAssistantState();
+    const a = await handlers.handleAttachGlobalAssistant(ctx(10, 1));
+    const b = await handlers.handleAttachGlobalAssistant(ctx(20, 2));
+    broadcast.mockClear();
+    await handlers.handleClaimGlobalAssistantInput(ctx(20, 2), b.attachmentId);
+    expect(broadcast).toHaveBeenCalledWith(
+      "help:global-assistant-changed",
+      expect.objectContaining({ inputOwner: b.attachmentId })
+    );
+    expect(a.attachmentId).not.toBe(b.attachmentId);
+    // One publisher per service, however many calls reach it.
+    broadcast.mockClear();
+    await handlers.handleReleaseGlobalAssistantInput(ctx(20, 2), b.attachmentId);
+    expect(broadcast).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a restart or discard confirmed against a run already replaced", async () => {
+    const first = await handlers.handleEnsureGlobalAssistant(ctx(10, 1));
+    const restarted = await handlers.handleRestartGlobalAssistant(ctx(10, 1), first.generation);
+    expect(restarted.terminalId).not.toBe(first.terminalId);
+    await expect(
+      handlers.handleDiscardGlobalAssistant(ctx(20, 2), first.generation)
+    ).rejects.toMatchObject({ code: "STALE_GENERATION" });
+    expect((await handlers.handleGetGlobalAssistantState()).phase).toBe("running");
+    const discarded = await handlers.handleDiscardGlobalAssistant(ctx(20, 2), restarted.generation);
+    expect(discarded.phase).toBe("absent");
   });
 
   it("returns state without the session's credentials", async () => {

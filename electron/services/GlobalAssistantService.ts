@@ -176,6 +176,8 @@ export class GlobalAssistantService {
       this.emit();
     });
     this.launch = launch;
+    // Every window shows the launch, not only the one that asked for it.
+    this.emit();
     return launch;
   }
 

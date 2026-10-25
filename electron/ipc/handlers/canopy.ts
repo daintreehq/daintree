@@ -69,7 +69,11 @@ import type {
   AgentDirectorySubject,
 } from "../../../shared/types/agentDirectory.js";
 import type { AssistantWorkReading } from "../../../shared/types/assistantWork.js";
-import { resolveLiveAssistant } from "../../services/assistants/liveAssistantSubject.js";
+import {
+  parseGlobalAssistantInputStamp,
+  resolveLiveAssistant,
+  type GlobalAssistantInputStamp,
+} from "../../services/assistants/liveAssistantSubject.js";
 import { LOCAL_HOST_ID } from "../../../shared/types/remoteHosts.js";
 import { answerRunByLabel, isAnswerLabel } from "../../services/terminalAnswer.js";
 import { isCanopyViewerEndpointId } from "../endpoint.js";
@@ -943,6 +947,7 @@ async function liveAssistantSources() {
           getState: () => global.getState(),
           onChange: (listener: () => void) => global.onChange(() => listener()),
           inputOwnerWebContentsId: () => global.inputOwnerWebContentsId(),
+          canWrite: (attachmentId: string, epoch: number) => global.canWrite(attachmentId, epoch),
         }
       : null,
   };
@@ -1073,13 +1078,23 @@ export const canopyNamespace = defineIpcNamespace({
      */
     watchAssistantTerminal: op(
       CANOPY_METHOD_CHANNELS.watchAssistantTerminal,
-      async (ctx, subject: AgentDirectorySubject): Promise<CanopyTerminalView> => {
+      async (
+        ctx,
+        subject: AgentDirectorySubject,
+        inputStamp?: GlobalAssistantInputStamp
+      ): Promise<CanopyTerminalView> => {
         checkRateLimit(CANOPY_METHOD_CHANNELS.watchAssistantTerminal, 120, 10_000);
         assertViewsThisMachine(ctx);
+        // A viewer serves another machine's reader, which never holds this one's input.
+        const stamp = isViewer(ctx) ? null : parseGlobalAssistantInputStamp(inputStamp);
         const viewId = ctx.webContentsId;
         const ticket = beginWatchRequest(viewId);
         watchView(ctx);
-        const binding = await resolveLiveAssistant(subject, await liveAssistantSources());
+        const binding = await resolveLiveAssistant(
+          subject,
+          await liveAssistantSources(),
+          stamp
+        );
         if (!isCurrentWatchRequest(viewId, ticket)) return { watchId: null, snapshot: null };
         const ptyClient = requirePtyClient();
         const { terminalId } = binding.subject;

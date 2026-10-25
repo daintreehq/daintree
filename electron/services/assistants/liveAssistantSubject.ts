@@ -29,7 +29,35 @@ export interface LiveAssistantSources {
     onChange(listener: () => void): () => void;
     /** The window view whose attachment holds input now; null when none does. */
     inputOwnerWebContentsId(): number | null;
+    /** Whether this attachment still holds input at the epoch it was given. */
+    canWrite(attachmentId: string, epoch: number): boolean;
   } | null;
+}
+
+/**
+ * The input ownership a window held when it opened its view of the global
+ * session. Input through that view is accepted only while the very same
+ * ownership stands: once input moves, even back to this window, the view is
+ * read-only and anything still queued through it is refused.
+ */
+export interface GlobalAssistantInputStamp {
+  attachmentId: string;
+  inputEpoch: number;
+}
+
+export function parseGlobalAssistantInputStamp(value: unknown): GlobalAssistantInputStamp | null {
+  if (value === undefined || value === null) return null;
+  const stamp = value as Partial<GlobalAssistantInputStamp>;
+  if (
+    typeof value !== "object" ||
+    typeof stamp.attachmentId !== "string" ||
+    stamp.attachmentId.length === 0 ||
+    stamp.attachmentId.length > 128 ||
+    !Number.isSafeInteger(stamp.inputEpoch)
+  ) {
+    throw refuse("VALIDATION", "Invalid input stamp");
+  }
+  return { attachmentId: stamp.attachmentId, inputEpoch: stamp.inputEpoch as number };
 }
 
 /** One live assistant run, as main bound it when the person's viewer opened. */
@@ -66,7 +94,8 @@ const GONE = "That assistant isn't running any more.";
  */
 export async function resolveLiveAssistant(
   rawSubject: unknown,
-  sources: LiveAssistantSources
+  sources: LiveAssistantSources,
+  inputStamp: GlobalAssistantInputStamp | null = null
 ): Promise<LiveAssistantBinding> {
   const parsed = AgentDirectorySubjectSchema.safeParse(rawSubject);
   if (!parsed.success) throw refuse("VALIDATION", "Invalid assistant subject");
@@ -130,7 +159,12 @@ export async function resolveLiveAssistant(
       global.onChange(() => {
         if (!isBound()) end();
       });
-    mayType = (webContentsId) => global.inputOwnerWebContentsId() === webContentsId;
+    // Typing needs the ownership the view was opened under, still unmoved;
+    // a view opened without one only reads.
+    mayType = (webContentsId) =>
+      inputStamp !== null &&
+      global.canWrite(inputStamp.attachmentId, inputStamp.inputEpoch) &&
+      global.inputOwnerWebContentsId() === webContentsId;
   }
 
   const launchGeneration = sources.ptyClient.getLiveGeneration(subject.terminalId);

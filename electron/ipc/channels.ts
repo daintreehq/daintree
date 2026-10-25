@@ -662,6 +662,7 @@ export const CHANNELS = {
   HELP_GLOBAL_ASSISTANT_RELEASE_INPUT: "help:global-assistant-release-input",
   HELP_GLOBAL_ASSISTANT_RESTART: "help:global-assistant-restart",
   HELP_GLOBAL_ASSISTANT_DISCARD: "help:global-assistant-discard",
+  HELP_GLOBAL_ASSISTANT_CHANGED: "help:global-assistant-changed",
 
   CLIPBOARD_SAVE_IMAGE: "clipboard:save-image",
   CLIPBOARD_THUMBNAIL_FROM_PATH: "clipboard:thumbnail-from-path",
