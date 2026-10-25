@@ -626,6 +626,14 @@ describe("HostCallRuntime notices from hosts (#13500)", () => {
       });
       expect(queued).toHaveLength(301);
       expect(queued[300]!.wake.id).toBe("n-long");
+
+      // Only the newest settled calls are kept for a notice still on its way.
+      for (const callId of ["call-2", "call-301"]) {
+        runtime.receiveNotices("studio", {
+          notices: [notice({ noticeId: `late-${callId}`, callId, terminalId: "host-t-late" })],
+        });
+      }
+      expect(queued.slice(301).map(({ wake }) => wake.id)).toEqual(["late-call-301"]);
     });
 
     const arm = async (sessionId: string, terminalId: string) => {
@@ -651,7 +659,11 @@ describe("HostCallRuntime notices from hosts (#13500)", () => {
 
       for (const sessionId of ["a", "b"]) {
         const refused = await arm(sessionId, "host-t-more");
-        expect(refused).toMatchObject({ outcome: "rate_limited", callId: null, retryAfterMs: 60_000 });
+        expect(refused).toMatchObject({
+          outcome: "rate_limited",
+          callId: null,
+          retryAfterMs: 60_000,
+        });
       }
       expect(relayCall).not.toHaveBeenCalled();
       // A call asking for no notice still goes.
@@ -718,6 +730,82 @@ describe("HostCallRuntime notices from hosts (#13500)", () => {
       );
       expect((await arm("a", "host-t-more")).outcome).toBe("ok");
       expect(runtime.noticeCalls("studio")).toHaveLength(1);
+    });
+
+    it("makes room from watches past their time, and only from those", async () => {
+      runs.set("b", { ...RUN_A, sessionId: "b", terminalId: "t-b" });
+      for (let i = 0; i < 128; i += 1) await arm("a", `host-t-a${i}`);
+      now += 12 * 60 * 60_000;
+      for (let i = 0; i < 128; i += 1) await arm("b", `host-t-b${i}`);
+      expect((await arm("a", "host-t-more")).outcome).toBe("rate_limited");
+
+      now += 12 * 60 * 60_000 + 1;
+      expect((await arm("a", "host-t-more")).outcome).toBe("ok");
+      const followed = runtime.noticeCalls("studio");
+      expect(followed).toHaveLength(129);
+      expect(followed.filter(({ helpSessionId }) => helpSessionId === "b")).toHaveLength(128);
+    });
+
+    it("makes room from calls that armed nothing", async () => {
+      relayCall.mockImplementation(
+        async (_hostId: string, payload: { args: { terminalId: string } }) => ({
+          status: "done",
+          result: {
+            isError: false,
+            structured: { armed: false, terminalId: payload.args.terminalId, state: "idle" },
+            text: null,
+          },
+        })
+      );
+      await fill();
+      relayCall.mockImplementation(async () => DONE);
+      expect((await arm("a", "host-t-more")).outcome).toBe("ok");
+      expect(runtime.noticeCalls("studio")).toHaveLength(1);
+    });
+
+    it("keeps every watch that may still owe a notice, however full", async () => {
+      runs.set("b", { ...RUN_A, sessionId: "b", terminalId: "t-b" });
+      const batch = (terminalIds: string[]) => ({
+        ...LAUNCH,
+        tool: "terminal.sendCommandMany",
+        args: {
+          sends: terminalIds.map((terminalId) => ({ terminalId, command: "go" })),
+          notify: true,
+        },
+      });
+      const partial = await runtime.call("a", batch(["host-x", "host-y"]), { tier: "core" });
+      const repeated = await runtime.call("a", batch(["host-z", "host-z"]), { tier: "core" });
+      relayCall.mockImplementationOnce(() => new Promise<McpCallAnswer>(() => {}));
+      void runtime.call("a", watch("host-w"), { tier: "core" });
+      await vi.waitFor(() => expect(relayCall).toHaveBeenCalledTimes(3));
+      const sent = [partial, repeated].map((outcome) => (outcome.ok ? outcome.value.callId! : ""));
+      runtime.receiveNotices("studio", {
+        notices: [
+          notice({ noticeId: "n-x", callId: sent[0]!, terminalId: "host-x" }),
+          notice({ noticeId: "n-z", callId: sent[1]!, terminalId: "host-z" }),
+          notice({ noticeId: "n-w", callId: "call-3", terminalId: "host-w" }),
+        ],
+      });
+      for (let i = 0; i < 253; i += 1) await arm(i % 2 === 0 ? "a" : "b", `host-t-${i}`);
+
+      expect((await arm("b", "host-t-more")).outcome).toBe("rate_limited");
+      expect(runtime.awaitsNotices("studio")).toBe(true);
+      expect(runtime.noticeCalls("studio").map(({ callId }) => callId)).toEqual(
+        expect.arrayContaining(sent)
+      );
+    });
+
+    it("resends a call it already follows, however full", async () => {
+      const armed = await fill();
+      relayCall.mockClear();
+      const first = armed[0]!;
+      await runtime.call("a", { ...watch("host-t-0"), callId: first.callId }, { tier: "core" });
+      await runtime.call("a", { ...watch("host-t-0"), newCallId: first.callId }, { tier: "core" });
+      expect(relayCall).toHaveBeenCalledTimes(2);
+      for (const [, payload] of relayCall.mock.calls) {
+        expect(payload).toMatchObject({ callId: first.callId, resend: true });
+      }
+      expect(runtime.noticeCalls("studio")).toHaveLength(256);
     });
 
     it("keeps a settled call's id its own: resent by its session, refused to another", async () => {

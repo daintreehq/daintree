@@ -287,7 +287,7 @@ interface NoticePin {
   note?: string;
   /** The host terminals it asked about: named by its arguments, or a launch's result. */
   terminalIds: string[];
-  /** Terminals whose notice has come, with nothing more to follow it. */
+  /** Terminals with nothing more to follow: their notice came, or none was armed. */
   noticed: Set<string>;
   /** The host answered it, so it holds a record of the call (#13930). */
   answered?: boolean;
@@ -309,6 +309,10 @@ function noteAnswered(
     }
   };
   learn(result.structured?.terminalId);
+  // `terminal.notifyWhenIdle` on a terminal not working answers now and arms nothing.
+  if (result.structured?.armed === false) {
+    for (const terminalId of pin.terminalIds) pin.noticed.add(terminalId);
+  }
   const items: unknown = result.structured?.results;
   if (!Array.isArray(items)) return;
   for (const item of items as unknown[]) {
@@ -787,9 +791,9 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
   /**
    * Whether another call's notices can be followed. When the watches are
    * full, the ones over in all but name are settled first: past their time,
-   * from a run no longer running, or answered with every terminal's notice
-   * come, so nothing more can follow (a call on this machine is never told
-   * settled by a host).
+   * from a run no longer running, or answered with nothing more to follow
+   * for any terminal (a call on this machine is never told settled by a
+   * host). A batch naming a terminal twice may owe it a second notice.
    */
   private roomForPin(): boolean {
     if (this.noticePins.size < MAX_NOTICE_PINS) return true;
@@ -799,6 +803,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         pin.answered === true &&
         !this.callsInFlight.has(callId) &&
         pin.terminalIds.length > 0 &&
+        new Set(pin.terminalIds).size === pin.terminalIds.length &&
         pin.terminalIds.every((terminalId) => pin.noticed.has(terminalId));
       if (done || pin.armedAt < from || !this.stillRunning(pin.run)) this.settlePin(callId, pin);
     }
