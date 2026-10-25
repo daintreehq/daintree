@@ -1747,6 +1747,8 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     if (!client || !read || host.connection.status !== "connected") return this.lastAgentsOf(key);
     const payload = options.projectId === undefined ? {} : { projectId: options.projectId };
     const epoch = this.agentsEpochs.get(host.hostId) ?? 0;
+    // Known from the start, so removing the host while this read runs is a forget it sees.
+    this.agentsEpochs.set(host.hostId, epoch);
     const answer = await withinMs(
       Promise.resolve()
         .then(() => read.call(client, host.hostId, payload, PROJECTS_READ_MS))
@@ -1813,8 +1815,11 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         .filter((host) => this.deps.controlEnabled?.(host.hostId) === true)
         .map((host) => agentsKey(host.hostId, undefined))
     );
-    for (const host of observed) {
-      if (!readable.has(agentsKey(host.hostId, undefined))) this.forgetAgents(host.hostId);
+    const gone = [...this.agentsEpochs.keys()].filter(
+      (hostId) => !observed.some((host) => host.hostId === hostId)
+    );
+    for (const hostId of [...observed.map((host) => host.hostId), ...gone]) {
+      if (!readable.has(agentsKey(hostId, undefined))) this.forgetAgents(hostId);
     }
     for (const key of [...this.lastAgents.keys()]) {
       if (!readable.has(key.slice(0, key.indexOf("\u0000") + 1))) this.lastAgents.delete(key);

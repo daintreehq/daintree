@@ -301,6 +301,24 @@ describe("HostCallRuntime listing hosts' agents (#14455)", () => {
     }
   });
 
+  it("keeps no read of a host removed while it ran", async () => {
+    let finish: ((answer: AgentsAnswer) => void) | undefined;
+    const { list, agents, runtime, setHosts } = setup({
+      agents: () => new Promise<AgentsAnswer>((resolve) => (finish = resolve)),
+    });
+    const first = list();
+    await vi.waitFor(() => expect(finish).toBeDefined());
+    setHosts([]);
+    await runtime.list("a");
+    setHosts([host("studio")]);
+    finish?.({ status: "done", directory: directory([worker("t-before")]) });
+    await first;
+    agents.mockRejectedValueOnce(new Error("lost"));
+    const [after] = await list();
+    expect(after?.agents).toMatchObject({ coverage: "unreachable", entries: [] });
+    runtime.dispose();
+  });
+
   it("forgets a removed host's directory", async () => {
     const { list, agents, runtime, setHosts } = setup({
       agents: async () => ({ status: "done", directory: directory([worker("t-1")]) }),
