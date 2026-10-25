@@ -11,7 +11,7 @@
 export interface HostStartedTerminal {
   id: string;
   /** Where the spawn placed it. Nothing moves a pane no view holds but a close, which forgets it. */
-  location: "grid" | "background";
+  location: "grid" | "dock" | "background";
   worktreeId?: string;
   /** The views seen holding it, which answer for it themselves. */
   heldBy: ReadonlySet<number>;
@@ -24,8 +24,10 @@ interface Entry {
 }
 
 /**
- * Per project; the oldest go first. Closed ones are forgotten as they close,
- * so this is a bound on live panes no view holds, not on launches.
+ * Per project. Closed ones are forgotten as main closes them, and nothing a
+ * read says is taken as a terminal being gone (a failed read and a missing
+ * terminal are worded alike), so past the bound the oldest a view already
+ * answers for go first, then the oldest of all.
  */
 const MAX_PER_PROJECT = 256;
 
@@ -43,11 +45,23 @@ export function noteHostStartedTerminal(
   }
   entries.delete(terminalId);
   entries.set(terminalId, {
-    location: placement.location === "background" ? "background" : "grid",
+    location:
+      placement.location === "background" || placement.location === "dock"
+        ? placement.location
+        : "grid",
     ...(placement.worktreeId !== undefined ? { worktreeId: placement.worktreeId } : {}),
     heldBy: new Set(),
   });
-  while (entries.size > MAX_PER_PROJECT) entries.delete(entries.keys().next().value!);
+  while (entries.size > MAX_PER_PROJECT) {
+    let evict = entries.keys().next().value!;
+    for (const [id, entry] of entries) {
+      if (entry.heldBy.size > 0) {
+        evict = id;
+        break;
+      }
+    }
+    entries.delete(evict);
+  }
 }
 
 export function hostStartedTerminals(projectId: string): HostStartedTerminal[] {
@@ -61,7 +75,7 @@ export function noteHeldByView(projectId: string, terminalIds: Iterable<string>,
   for (const id of terminalIds) entries.get(id)?.heldBy.add(viewId);
 }
 
-/** Closed, or gone from the pty-host: nothing is left to read for them here. */
+/** Closed by main: nothing is left to read for them here. */
 export function forgetHostStartedTerminals(projectId: string, terminalIds: Iterable<string>): void {
   const entries = started.get(projectId);
   if (!entries) return;

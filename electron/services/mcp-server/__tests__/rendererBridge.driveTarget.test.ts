@@ -2,44 +2,41 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CHANNELS } from "../../../ipc/channels.js";
 import type { ClientEndpoint } from "../../../ipc/endpoint.js";
 
-const { mockIpcMain, mockWebContentsRegistry, mockProjectViews, viewless, ptyRef } = vi.hoisted(
-  () => {
-    class IpcMainMock {
-      private listeners = new Map<string, Set<(...args: unknown[]) => void>>();
-      on(event: string, listener: (...args: unknown[]) => void): this {
-        const set = this.listeners.get(event) ?? new Set();
-        set.add(listener);
-        this.listeners.set(event, set);
-        return this;
-      }
-      removeListener(event: string, listener: (...args: unknown[]) => void): this {
-        this.listeners.get(event)?.delete(listener);
-        return this;
-      }
-      emit(event: string, ...args: unknown[]): boolean {
-        const set = this.listeners.get(event);
-        if (!set) return false;
-        for (const fn of set) fn(...args);
-        return set.size > 0;
-      }
-      removeAllListeners(): this {
-        this.listeners.clear();
-        return this;
-      }
+const { mockIpcMain, mockWebContentsRegistry, mockProjectViews, viewless } = vi.hoisted(() => {
+  class IpcMainMock {
+    private listeners = new Map<string, Set<(...args: unknown[]) => void>>();
+    on(event: string, listener: (...args: unknown[]) => void): this {
+      const set = this.listeners.get(event) ?? new Set();
+      set.add(listener);
+      this.listeners.set(event, set);
+      return this;
     }
-    return {
-      mockIpcMain: new IpcMainMock(),
-      mockWebContentsRegistry: new Map<number, unknown>(),
-      mockProjectViews: new Map<string, unknown[]>(),
-      viewless: {
-        runViewlessAction: vi.fn(),
-        describeViewlessWorkspace: vi.fn(),
-        hasViewlessImplementation: vi.fn(),
-      },
-      ptyRef: { current: null as { getTerminalProjectId: (id: string) => string | null } | null },
-    };
+    removeListener(event: string, listener: (...args: unknown[]) => void): this {
+      this.listeners.get(event)?.delete(listener);
+      return this;
+    }
+    emit(event: string, ...args: unknown[]): boolean {
+      const set = this.listeners.get(event);
+      if (!set) return false;
+      for (const fn of set) fn(...args);
+      return set.size > 0;
+    }
+    removeAllListeners(): this {
+      this.listeners.clear();
+      return this;
+    }
   }
-);
+  return {
+    mockIpcMain: new IpcMainMock(),
+    mockWebContentsRegistry: new Map<number, unknown>(),
+    mockProjectViews: new Map<string, unknown[]>(),
+    viewless: {
+      runViewlessAction: vi.fn(),
+      describeViewlessWorkspace: vi.fn(),
+      hasViewlessImplementation: vi.fn(),
+    },
+  };
+});
 
 vi.mock("electron", () => ({
   ipcMain: mockIpcMain,
@@ -68,10 +65,6 @@ vi.mock("../../../utils/webContentsLifecycle.js", () => ({
 }));
 
 vi.mock("../../viewless/index.js", () => viewless);
-
-vi.mock("../../../window/serviceRefs.js", () => ({
-  getPtyClient: () => ptyRef.current,
-}));
 
 import {
   createRendererBridge,
@@ -863,7 +856,6 @@ describe("rendererBridge — terminals the host started while a window shows the
     mockProjectViews.clear();
     _resetMcpDriveTargetResolverForTesting();
     _resetHostStartedTerminalsForTesting();
-    ptyRef.current = null;
     viewless.runViewlessAction.mockReset();
     viewless.describeViewlessWorkspace.mockReset().mockResolvedValue(undefined);
     viewless.hasViewlessImplementation.mockReset().mockReturnValue(true);
@@ -875,7 +867,6 @@ describe("rendererBridge — terminals the host started while a window shows the
   afterEach(() => {
     _resetMcpDriveTargetResolverForTesting();
     _resetHostStartedTerminalsForTesting();
-    ptyRef.current = null;
   });
 
   it.each([
@@ -1064,32 +1055,7 @@ describe("rendererBridge — terminals the host started while a window shows the
     expect(envelope.result).toEqual(fromPty);
   });
 
-  it("forgets a terminal only once main's own spawn record agrees it is gone", async () => {
-    noteHostStartedTerminal(WORKSPACE, "gone", {});
-    noteHostStartedTerminal(WORKSPACE, "unreadable", {});
-    noteHostStartedTerminal(WORKSPACE, "unasked", {});
-    ptyRef.current = {
-      getTerminalProjectId: (id: string) => (id === "unreadable" ? WORKSPACE : null),
-    };
-    viewAnswering(
-      viewStatus([
-        status("gone", null, "Terminal not found"),
-        status("unreadable", null, "Terminal not found"),
-      ])
-    );
-    const unavailable = "Terminal not found or status unavailable";
-    viewless.runViewlessAction.mockResolvedValue(
-      ptyStatus([status("gone", null, unavailable), status("unreadable", null, unavailable)])
-    );
-
-    await bridge.dispatchActionForWorkspace(WORKSPACE, "terminal.getStatus", {
-      terminalIds: ["gone", "unreadable"],
-    });
-
-    expect(startedIds()).toEqual(["unreadable", "unasked"]);
-  });
-
-  it("forgets nothing while main's spawn records can't be read", async () => {
+  it("never takes a read as a terminal being gone: a failed read is worded the same", async () => {
     noteHostStartedTerminal(WORKSPACE, "host-agent", {});
     viewAnswering(viewStatus([status("host-agent", null, "Terminal not found")]));
     viewless.runViewlessAction.mockResolvedValue(
@@ -1099,8 +1065,27 @@ describe("rendererBridge — terminals the host started while a window shows the
     await bridge.dispatchActionForWorkspace(WORKSPACE, "terminal.getStatus", {
       terminalIds: ["host-agent"],
     });
+    await bridge.dispatchActionForWorkspace(WORKSPACE, "terminal.getStatus", {});
 
     expect(startedIds()).toEqual(["host-agent"]);
+    expect(viewless.runViewlessAction).toHaveBeenCalledTimes(2);
+  });
+
+  it("finds a docked launch under a dock filter, and in the default fleet", async () => {
+    noteHostStartedTerminal(WORKSPACE, "docked", { location: "dock" });
+    viewAnswering(viewStatus([]));
+    const fromPty = ptyStatus([status("docked", "working")]);
+    viewless.runViewlessAction.mockResolvedValue(fromPty);
+
+    const filtered = await bridge.dispatchActionForWorkspace(WORKSPACE, "terminal.getStatus", {
+      location: "dock",
+    });
+    const fleet = await bridge.dispatchActionForWorkspace(WORKSPACE, "terminal.getStatus", {});
+    await bridge.dispatchActionForWorkspace(WORKSPACE, "terminal.getStatus", { location: "grid" });
+
+    expect(filtered.result).toEqual(fromPty);
+    expect(fleet.result).toEqual(fromPty);
+    expect(viewless.runViewlessAction).toHaveBeenCalledTimes(2);
   });
 
   it.each([

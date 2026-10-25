@@ -18,12 +18,10 @@ import {
   type ViewlessApprovalAsk,
 } from "../viewless/index.js";
 import {
-  forgetHostStartedTerminals,
   hostStartedTerminals,
   noteHeldByView,
   type HostStartedTerminal,
 } from "../viewless/hostStartedTerminals.js";
-import { getPtyClient } from "../../window/serviceRefs.js";
 import { getProjectViewManager } from "../../window/windowRef.js";
 import { getRemoteService } from "../../remote/runtime.js";
 import { isLocalHostId, parseHostScopedKey } from "../../../shared/types/remoteHosts.js";
@@ -1665,18 +1663,6 @@ export function createRendererBridge(
     const missingRows = readRows.filter(
       (row) => typeof row.terminalId === "string" && missing.has(row.terminalId)
     );
-    // Gone only on two words: the pty-host's answer, which a failed read
-    // words the same way, and main's own spawn record.
-    const pty = getPtyClient();
-    if (pty) {
-      forgetHostStartedTerminals(
-        projectId,
-        missingRows
-          .filter(isNotFoundEntry)
-          .map((row) => row.terminalId as string)
-          .filter((id) => pty.getTerminalProjectId(id) === null)
-      );
-    }
     if (missingRows.every(isNotFoundEntry)) return envelope;
     const terminals = named
       ? readRows.map((row) =>
