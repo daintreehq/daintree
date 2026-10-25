@@ -234,7 +234,12 @@ describe("runHostControlTool (#13493)", () => {
     const access = bindHostControl(() => "hub");
     const accepted = [
       { operation: "arm", hostId: "h", connection: "connected", note: "go", expiresInSeconds: 600 },
-      { operation: "arm", hostId: "h", memoryAvailableBytesAtLeast: 1, memoryPressureAtMost: "warn" },
+      {
+        operation: "arm",
+        hostId: "h",
+        memoryAvailableBytesAtLeast: 1,
+        memoryPressureAtMost: "warn",
+      },
       { operation: "cancel", watchId: "hw-1" },
       { operation: "list" },
       { operation: "list", hostId: "h" },

@@ -510,7 +510,9 @@ export const HOST_WATCH_NOTE_MAX = 160;
 export const HostWatchArgsSchema = z.object({
   operation: z
     .enum(["arm", "cancel", "list"])
-    .describe("arm: one notice when first observed. cancel: end one. list: yours, armed and ended."),
+    .describe(
+      "arm: one notice when first observed. cancel: end one. list: yours, armed and ended."
+    ),
   hostId: hostIdSchema.optional().describe("For arm: the host. For list: only that host."),
   connection: z
     .enum(["connected", "disconnected"])
@@ -612,11 +614,7 @@ export type HostWatchResult = z.infer<typeof HostWatchResultSchema>;
 export type HostControlRefusalCode = "NOT_ELIGIBLE" | "INVALID_ARGS" | "UNAVAILABLE";
 
 export type HostControlToolResult =
-  | HostListResult
-  | HostCallResult
-  | HostEnsureProjectResult
-  | HostSettingsResult
-  | HostWatchResult;
+  HostListResult | HostCallResult | HostEnsureProjectResult | HostSettingsResult | HostWatchResult;
 
 export type HostControlOutcome<T> =
   { ok: true; value: T } | { ok: false; code: HostControlRefusalCode; message: string };

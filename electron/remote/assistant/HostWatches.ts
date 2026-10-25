@@ -422,9 +422,7 @@ export class HostWatches {
 
   /** Armed, or ended with its notice still on the way: counted against the run's budget. */
   private holdsRoom(record: WatchRecord): boolean {
-    return (
-      record.status === "armed" || record.delivery === "queued" || record.delivery === "held"
-    );
+    return record.status === "armed" || record.delivery === "queued" || record.delivery === "held";
   }
 
   private armedCount(): number {

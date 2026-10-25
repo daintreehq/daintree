@@ -4,7 +4,10 @@ import {
   HOST_WATCH_CONNECTION_SETTLE_MS,
   type HostWatchArgs,
 } from "../../../../shared/types/hostControl.js";
-import type { HostConnectionState, HostMetricsSummary } from "../../../../shared/types/remoteHosts.js";
+import type {
+  HostConnectionState,
+  HostMetricsSummary,
+} from "../../../../shared/types/remoteHosts.js";
 import type { LaneWake } from "../../../services/mcp-server/terminalNotify.js";
 import { formatHostWatchLine } from "../../../services/mcp-server/noticeFormat.js";
 import type { ObservedHost, OpenRun } from "../HostCallRuntime.js";
@@ -90,9 +93,7 @@ describe("HostWatches (#14463)", () => {
               };
             },
           }),
-      ...(opts.queue === false
-        ? {}
-        : { queueNotice: (lane, wake) => queued.push({ lane, wake }) }),
+      ...(opts.queue === false ? {} : { queueNotice: (lane, wake) => queued.push({ lane, wake }) }),
       now: () => now,
       newId: () => `id-${++ids}`,
     });
@@ -146,7 +147,11 @@ describe("HostWatches (#14463)", () => {
       delivery: "none",
     });
     expect(result.detail).toMatch(/operation cancel/);
-    expect(result.observed).toMatchObject({ observedAt: now, link: "disconnected", sampledAt: null });
+    expect(result.observed).toMatchObject({
+      observedAt: now,
+      link: "disconnected",
+      sampledAt: null,
+    });
     expect(subscriptions).toBe(1);
   });
 

@@ -582,7 +582,12 @@ describe("host.watch audit (#14463)", () => {
       status: "fired",
       endedAt: 2,
       lostReason: null,
-      observed: { observedAt: 2, link: "connected", lastSeenAt: 2, load: { temperatureZone: "ZONE-SENTINEL" } },
+      observed: {
+        observedAt: 2,
+        link: "connected",
+        lastSeenAt: 2,
+        load: { temperatureZone: "ZONE-SENTINEL" },
+      },
       delivery: "held",
     };
     const result = projectAuditResult("host.watch", {
@@ -604,7 +609,13 @@ describe("host.watch audit (#14463)", () => {
       outcome: "ok",
       armed: false,
       watches: [
-        { watchId: "hw-0b7a1c2e-0000-4000-8000-000000000001", hostId: "studio-01", on: "capacity", status: "fired", delivery: "held" },
+        {
+          watchId: "hw-0b7a1c2e-0000-4000-8000-000000000001",
+          hostId: "studio-01",
+          on: "capacity",
+          status: "fired",
+          delivery: "held",
+        },
         { watchId: null, status: null },
       ],
     });
@@ -612,8 +623,8 @@ describe("host.watch audit (#14463)", () => {
     const audited = JSON.stringify([summarizeMcpResult(result), summarizeMcpArgs(args)]);
     expect(audited).not.toContain("SENTINEL");
     expect(projectAuditResult("host.watch", "nope")).toEqual({ status: "unrecognized" });
-    expect(JSON.stringify(projectAuditArgs("host.watch", { note: "NOTE-SENTINEL", operation: 5 }))).not.toContain(
-      "SENTINEL"
-    );
+    expect(
+      JSON.stringify(projectAuditArgs("host.watch", { note: "NOTE-SENTINEL", operation: 5 }))
+    ).not.toContain("SENTINEL");
   });
 });
