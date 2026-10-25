@@ -65,8 +65,7 @@ const {
   },
   mockStoreGet: vi.fn<(key: string) => unknown>(),
   mockProbeMcpServer: vi.fn<(port: number, apiKey: string) => Promise<void>>(),
-  mockProbeMcpSseServer:
-    vi.fn<(port: number, token: string, options?: unknown) => Promise<void>>(),
+  mockProbeMcpSseServer: vi.fn<(port: number, token: string, options?: unknown) => Promise<void>>(),
   // Mocked so provision tests never read the developer's real
   // ~/.daintree/assistant folder; mirroring behavior has its own suite in
   // AssistantContentMirror.test.ts.
