@@ -25,7 +25,17 @@ function connected(hostId: string): ObservedHost {
   return {
     hostId,
     name: `${hostId}-01`,
-    connection: { status: "connected", rttMs: 12, handshake: {} as never },
+    connection: {
+      status: "connected",
+      rttMs: 12,
+      handshake: {
+        version: "1.0.0",
+        commit: "abc1234",
+        protocolVersion: 12,
+        platform: "linux",
+        arch: "x64",
+      },
+    },
     lastSeenAt: 900,
     summary: null,
   };
@@ -297,8 +307,10 @@ describe("HostCallRuntime project inventory (#14457)", () => {
     }
   });
 
-  it("keeps the whole answer within its cap, however many hosts there are", async () => {
-    hosts = Array.from({ length: 60 }, (_, index) => connected(`${"h".repeat(48)}${index}`));
+  it("keeps the whole answer within its cap when the hosts' own fields leave less room", async () => {
+    // Enough hosts that their own fields and a full project budget together
+    // would pass the cap; host fields alone past it aren't paged (#14457).
+    hosts = Array.from({ length: 25 }, (_, index) => connected(`${"h".repeat(48)}${index}`));
     for (const host of hosts) {
       remote.set(
         host.hostId,

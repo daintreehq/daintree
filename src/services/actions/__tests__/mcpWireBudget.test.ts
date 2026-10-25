@@ -866,13 +866,13 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // `host.list` entry's observed link flags, the build its handshake named and
   // the CLIs its summary lists, so a host that is down says how. Output only,
   // and `host.list` is assistant-only, so the external ceiling does not move.
-  // 145_830 → 146_900 for #14457, measured at 146_900 B (+1_000): `host.list`'s
+  // 145_830 → 146_860 for #14457, measured at 146_841 B (+1_033): `host.list`'s
   // optional `hostId`, `projectQuery` and `projectCursor` arguments and each
   // host's `projectInventory` (whether its page is the whole list, the total,
   // offset and omitted count, the next cursor and whether the list changed), so
   // a page of 50 can no longer pass for a whole list. Assistant-only, so the
   // external ceiling does not move.
-  const MAX_COHORT_PAYLOAD_BYTES = 146_900;
+  const MAX_COHORT_PAYLOAD_BYTES = 146_860;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 
