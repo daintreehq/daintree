@@ -1,6 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import {
   HOST_LIST_PROJECT_BYTES_MAX,
+  HOST_LIST_PROJECT_NAME_MAX,
   HOST_LIST_PROJECTS_MAX,
   HostListResultSchema,
   type HostListArgs,
@@ -8,6 +9,7 @@ import {
 } from "../../../../shared/types/hostControl.js";
 import type { HostProjectSummary } from "../../../../shared/types/ipc/remoteHosts.js";
 import { MAX_LISTED_PROJECTS } from "../../host/linkMethods.js";
+import { AGENT_DIRECTORY_BYTES_MAX } from "../../../../shared/types/agentDirectory.js";
 import { HostCallRuntime, type ObservedHost, type OpenRun } from "../HostCallRuntime.js";
 import { decodeProjectCursor, encodeProjectCursor } from "../hostProjectInventory.js";
 
@@ -42,7 +44,7 @@ describe("HostCallRuntime project inventory (#14457)", () => {
   let remote: Map<string, HostProjectSummary[] | Error>;
   let hosts: ObservedHost[];
   let eligible: boolean;
-  let listHostProjects: ReturnType<typeof vi.fn>;
+  let listHostProjects: Mock<(hostId: string) => Promise<HostProjectSummary[]>>;
   let runtime: HostCallRuntime;
 
   beforeEach(() => {
@@ -99,8 +101,14 @@ describe("HostCallRuntime project inventory (#14457)", () => {
       expect(hostsListed).toHaveLength(1);
       const page = hostsListed[0]!;
       expect(page.hostId).toBe(first.hostId);
-      expect(page.projectInventory?.listChanged).toBe(false);
-      expect(page.projectInventory?.offset).toBe(ids.length);
+      expect(page.projectInventory).toMatchObject({
+        listChanged: false,
+        offset: ids.length,
+        // A later page never names every match, its own last one included.
+        complete: false,
+        total: first.projectInventory?.total,
+        omitted: (first.projectInventory?.total ?? 0) - (page.projects?.length ?? 0),
+      });
       ids.push(...(page.projects ?? []).map((project) => project.projectId));
       cursor = page.projectInventory?.nextCursor ?? null;
     }
@@ -141,8 +149,6 @@ describe("HostCallRuntime project inventory (#14457)", () => {
     expect(ids).toEqual(numbered(120).map((project) => project.id));
     // Continuing local's pages neither lists nor reads any other host.
     expect(listHostProjects).not.toHaveBeenCalled();
-    const last = await list({ projectCursor: first.projectInventory!.nextCursor! });
-    expect(last[0]?.projectInventory).toMatchObject({ complete: false, total: 120, omitted: 70 });
   });
 
   it("pages a remote host's projects the same way", async () => {
@@ -196,6 +202,32 @@ describe("HostCallRuntime project inventory (#14457)", () => {
     );
   });
 
+  it.each([
+    [
+      "one replaced",
+      (list: HostProjectSummary[]) => list.map((p, i) => (i === 3 ? { ...p, id: "swap" } : p)),
+    ],
+    ["two reordered", (list: HostProjectSummary[]) => [list[1]!, list[0]!, ...list.slice(2)]],
+  ])("starts again when the list keeps its length but has %s", async (_, change) => {
+    localProjects = numbered(60);
+    const first = await localEntry();
+    localProjects = change(numbered(60));
+
+    const again = await localEntry({ projectCursor: first.projectInventory!.nextCursor! });
+
+    expect(again.projectInventory).toMatchObject({ listChanged: true, offset: 0, total: 60 });
+  });
+
+  it("goes on past a change to a project the query doesn't match", async () => {
+    localProjects = numbered(300);
+    const first = await localEntry({ projectQuery: "1" });
+    localProjects = [{ id: "other", name: "unrelated", path: "/repos/other" }, ...numbered(300)];
+
+    const next = await localEntry({ projectCursor: first.projectInventory!.nextCursor! });
+
+    expect(next.projectInventory).toMatchObject({ listChanged: false, offset: 50 });
+  });
+
   it("tells a failed read from no projects", async () => {
     hosts = [connected("studio"), connected("gone")];
     remote.set("studio", []);
@@ -226,10 +258,22 @@ describe("HostCallRuntime project inventory (#14457)", () => {
 
     expect(studio.projectInventory).toMatchObject({ complete: false, total: null, omitted: null });
     expect(studio.projectInventory?.nextCursor).not.toBeNull();
+
+    // Even a search that finds nothing there can't prove the project isn't on it.
+    for (const projectQuery of ["no such project", "Project 1999"]) {
+      const searched = (await list({ hostId: "studio", projectQuery }))[0]!;
+      expect(searched.projectInventory).toMatchObject({
+        complete: false,
+        total: null,
+        omitted: null,
+        nextCursor: null,
+      });
+    }
   });
 
   it("keeps every host's projects within one answer's budget, and pages on past a cut", async () => {
-    const long = (index: number) => `${"n".repeat(1000)} ${index}`;
+    // Multibyte, so characters and bytes differ threefold.
+    const long = (index: number) => `${"界".repeat(250)} ${index}`;
     localProjects = numbered(50, "p", long);
     hosts = ["a", "b", "c"].map(connected);
     for (const hostId of ["a", "b", "c"]) remote.set(hostId, numbered(50, hostId, long));
@@ -253,13 +297,55 @@ describe("HostCallRuntime project inventory (#14457)", () => {
     }
   });
 
+  it("keeps the whole answer within its cap, however many hosts there are", async () => {
+    hosts = Array.from({ length: 60 }, (_, index) => connected(`${"h".repeat(48)}${index}`));
+    for (const host of hosts) {
+      remote.set(
+        host.hostId,
+        numbered(50, host.hostId, (index) => `${"x".repeat(200)} ${index}`)
+      );
+    }
+
+    const listed = await list();
+
+    expect(new TextEncoder().encode(JSON.stringify({ hosts: listed })).length).toBeLessThanOrEqual(
+      AGENT_DIRECTORY_BYTES_MAX
+    );
+    // A host cut to nothing still says it has more, and where to go on.
+    for (const host of listed.filter((entry) => entry.hostId !== "local")) {
+      expect(host.projectInventory).toMatchObject({ complete: false, total: 50 });
+      expect(host.projectInventory?.nextCursor).not.toBeNull();
+    }
+  });
+
+  it("always gets somewhere, however long one project's name is", async () => {
+    localProjects = [
+      { id: "huge", name: "界".repeat(40_000), path: "/repos/huge" },
+      ...numbered(2),
+    ];
+
+    const entry = await localEntry({ hostId: "local" });
+
+    expect(entry.projects?.[0]?.projectId).toBe("huge");
+    expect(Array.from(entry.projects![0]!.name)).toHaveLength(HOST_LIST_PROJECT_NAME_MAX);
+    expect(await drain(entry)).toEqual(["huge", "p-0", "p-1"]);
+  });
+
   it("refuses a cursor it didn't give, or one at odds with the call", async () => {
     localProjects = numbered(60);
     const cursor = (await localEntry()).projectInventory!.nextCursor!;
     const refusals = await Promise.all(
       [
         { projectCursor: "not-a-cursor" },
-        { projectCursor: Buffer.from('{"v":2}').toString("base64url") },
+        // Only its version differs from a cursor it would take.
+        {
+          projectCursor: Buffer.from(
+            JSON.stringify({
+              ...JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")),
+              v: 2,
+            })
+          ).toString("base64url"),
+        },
         { projectCursor: cursor, hostId: "studio" },
         { projectCursor: cursor, projectQuery: "other" },
       ].map((args) => runtime.list("a", args))

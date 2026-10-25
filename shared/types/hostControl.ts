@@ -60,6 +60,8 @@ export const HOST_LIST_PROJECTS_MAX = 50;
  * host; a page that would go over is cut short, and its cursor goes on from there.
  */
 export const HOST_LIST_PROJECT_BYTES_MAX = 32 * 1024;
+/** Longest project name a page carries, so one project always fits a page. */
+export const HOST_LIST_PROJECT_NAME_MAX = 256;
 export const HOST_LIST_PROJECT_QUERY_MAX = 128;
 export const HOST_LIST_PROJECT_CURSOR_MAX = 1024;
 
@@ -241,7 +243,11 @@ export const HostListEntrySchema = z.object({
   /** How much of the host's project list `projects` is; null exactly when `projects` is. */
   projectInventory: z
     .object({
-      complete: z.boolean().describe("False: more projects match; follow nextCursor."),
+      complete: z
+        .boolean()
+        .describe(
+          "This answer names every match. Pages walked to a null nextCursor name them all."
+        ),
       total: z.number().nullable().describe("Null: past the host's own list limit."),
       offset: z.number(),
       omitted: z

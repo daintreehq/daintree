@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import {
   HOST_LIST_PROJECT_BYTES_MAX,
   HOST_LIST_PROJECT_CURSOR_MAX,
+  HOST_LIST_PROJECT_NAME_MAX,
   HOST_LIST_PROJECT_QUERY_MAX,
   HOST_LIST_PROJECTS_MAX,
   type HostListEntry,
@@ -67,11 +68,20 @@ function matches(project: HostProjectSummary, query: string | null): boolean {
   return query === null || project.name.toLowerCase().includes(query.toLowerCase());
 }
 
+/** A name cut to its first code points, never through a surrogate pair. */
+function boundedName(name: string): string {
+  if (name.length <= HOST_LIST_PROJECT_NAME_MAX) return name;
+  const points = Array.from(name);
+  return points.length <= HOST_LIST_PROJECT_NAME_MAX
+    ? name
+    : `${points.slice(0, HOST_LIST_PROJECT_NAME_MAX - 1).join("")}…`;
+}
+
 /** A project as `host.list` names it, with whether a frontend is attached as its host said. */
 function listedProject(project: HostProjectSummary): ListedProject {
   return {
     projectId: project.id,
-    name: project.name,
+    name: boundedName(project.name),
     frontendAttached: project.frontendAttached ?? null,
   };
 }
@@ -146,7 +156,8 @@ function projectBytes(project: ListedProject): number {
 /**
  * Cuts the pages short until every host's projects fit in one answer's
  * budget, taking from the longest page first so no host's list is crowded out
- * by another's. A page cut to nothing still carries its cursor.
+ * by another's. A page cut to nothing still carries its cursor, and a lone
+ * page keeps one project, so following cursors always gets somewhere.
  */
 export function fitProjectPages(
   pages: readonly ProjectPage[],
@@ -163,6 +174,7 @@ export function fitProjectPages(
       }
     }
     if (longest < 0) return;
+    if (pages.length === 1 && pages[longest]!.projects.length === 1) return;
     pages[longest]!.projects.pop();
     total -= costs[longest]!.pop() ?? 0;
   }

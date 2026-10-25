@@ -277,6 +277,20 @@ const AUDIT_ARGS_PROJECTIONS: ReadonlyMap<string, (args: unknown) => unknown> = 
   (args: unknown) => unknown
 >([
   [
+    "host.list",
+    // Which host and whether it searched or paged, never the words searched for.
+    (args) => {
+      const record = asRecord(args);
+      return {
+        includeAgents: record?.includeAgents === true,
+        projectId: typeof record?.projectId === "string" ? record.projectId : null,
+        hostId: auditHostId(record?.hostId),
+        projectQuery: typeof record?.projectQuery === "string",
+        projectCursor: typeof record?.projectCursor === "string",
+      };
+    },
+  ],
+  [
     "host.settings",
     // The hosts and settings named, never the values proposed or the ticket.
     (args) => {

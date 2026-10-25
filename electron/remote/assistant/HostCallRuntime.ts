@@ -3,6 +3,7 @@ import { isGlobalAssistantId } from "../../../shared/config/globalAssistant.js";
 import { PROJECT_CHECK_DEFAULT_TIMEOUT_MS } from "../../../shared/types/projectCheck.js";
 import { REPLY_WAIT_DEFAULT_SECONDS } from "../../../shared/types/replyWait.js";
 import {
+  HOST_LIST_PROJECT_BYTES_MAX,
   type HostCallArgs,
   type HostCallResult,
   type HostControlOutcome,
@@ -716,6 +717,32 @@ function capEntries(directory: AgentDirectory): AgentDirectory {
 
 function agentsKey(hostId: HostId, projectId: string | undefined): string {
   return `${hostId}\u0000${projectId ?? ""}`;
+}
+
+/**
+ * What the project pages may take: their own budget, or less when the rest of
+ * the answer (every host's own fields, inventory and agents) leaves less under its cap.
+ */
+function projectBudget(
+  entries: readonly HostListEntry[],
+  paged: ReadonlyMap<HostListEntry, ProjectPage>
+): number {
+  const rest = entries.map((entry) => {
+    // Every host's directory is cut to fit after the pages (fitToResponse),
+    // so each counts here as its empty envelope.
+    const fields = entry.agents ? { ...entry, agents: { ...entry.agents, entries: [] } } : entry;
+    const page = paged.get(entry);
+    return page
+      ? { ...fields, projects: [], projectInventory: inventoryOf({ ...page, projects: [] }) }
+      : fields;
+  });
+  const restBytes = new TextEncoder().encode(JSON.stringify({ hosts: rest })).length;
+  // A cut page's cursor names a different offset: a few more bytes each.
+  const slack = 64 * paged.size;
+  return Math.max(
+    0,
+    Math.min(HOST_LIST_PROJECT_BYTES_MAX, AGENT_DIRECTORY_BYTES_MAX - restBytes - slack)
+  );
 }
 
 interface ProjectScope {
@@ -1692,25 +1719,21 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         })
       );
       const settled = here ? await here : null;
-      fitProjectPages([...paged.values()]);
+      const entries = settled ? [settled, ...hosts] : hosts;
+      const now = this.now();
+      for (const entry of entries) {
+        const summary = sampled.get(entry);
+        if (!summary) continue;
+        const live = entry.link.status === "connected" || entry.link.status === "local";
+        entry.load = projectHostLoad(summary, now);
+        entry.agentClis = projectHostAgentClis(summary, live, now);
+      }
+      fitProjectPages([...paged.values()], projectBudget(entries, paged));
       for (const [entry, page] of paged) {
         entry.projects = page.projects;
         entry.projectInventory = inventoryOf(page);
       }
-      const now = this.now();
-      const aged = (entry: HostListEntry): HostListEntry => {
-        const summary = sampled.get(entry);
-        if (!summary) return entry;
-        const live = entry.link.status === "connected" || entry.link.status === "local";
-        return {
-          ...entry,
-          load: projectHostLoad(summary, now),
-          agentClis: projectHostAgentClis(summary, live, now),
-        };
-      };
-      const others = hosts.map(aged);
-      const all = settled ? [aged(settled), ...others] : others;
-      return { hosts: agentsOf ? fitToResponse(all) : all };
+      return { hosts: agentsOf ? fitToResponse(entries) : entries };
     });
   }
 

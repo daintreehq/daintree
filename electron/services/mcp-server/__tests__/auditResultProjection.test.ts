@@ -209,16 +209,32 @@ describe("host.list audit projection (#13493)", () => {
           projectInventory: { complete: false, nextCursor: "CURSOR-SENTINEL" },
         },
         { hostId: "laptop", name: "laptop", projects: null, projectInventory: null },
+        { hostId: "mini", name: "mini", projects: [], projectInventory: { complete: true } },
       ],
     });
     expect(projected).toEqual({
-      hostCount: 2,
-      hostIds: ["studio", "laptop"],
-      projectCounts: [1, null],
-      projectsComplete: [false, null],
+      hostCount: 3,
+      hostIds: ["studio", "laptop", "mini"],
+      projectCounts: [1, null, 0],
+      projectsComplete: [false, null, true],
     });
     expect(JSON.stringify(projected)).not.toContain("PROJECT-SENTINEL");
     expect(JSON.stringify(projected)).not.toContain("CURSOR-SENTINEL");
+  });
+
+  it("records that a call searched or paged, never what it searched for (#14457)", () => {
+    const projected = projectAuditArgs("host.list", {
+      hostId: "studio",
+      projectQuery: "QUERY-SENTINEL",
+      projectCursor: "CURSOR-SENTINEL",
+    });
+    expect(projected).toEqual({
+      includeAgents: false,
+      projectId: null,
+      hostId: "studio",
+      projectQuery: true,
+      projectCursor: true,
+    });
   });
 });
 
