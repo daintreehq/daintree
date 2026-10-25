@@ -1045,6 +1045,19 @@ describe("throwaway runs of an owner that is gone (#14447)", () => {
     relay.dispose();
   });
 
+  it("still names the sender of a link whose resumed transport dropped before proving it", async () => {
+    vi.useFakeTimers();
+    const { links, endOwner, relay, detach, attach } = withRuns([["link-1", "sender-a"]]);
+    await links[0]!.ask(AssistantLinkMethod.THROWAWAY_CALL, LAUNCH);
+    // A new transport takes the link over, then both go before it authenticates.
+    attach("link-1", null);
+    detach("link-1");
+    detach("link-1");
+    await vi.advanceTimersByTimeAsync(THROWAWAY_SHELL_GONE_GRACE_MS);
+    expect(endOwner).toHaveBeenCalledWith({ senderId: "sender-a" }, "shell-gone");
+    relay.dispose();
+  });
+
   it("gives each last link gone the whole grace, however recently another went", async () => {
     vi.useFakeTimers();
     const { links, endOwner, relay, detach, attach } = withRuns([["link-1", "sender-a"]]);

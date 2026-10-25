@@ -170,15 +170,22 @@ export function registerHostThrowawayRuns(): () => void {
     run: async (owner, call, options) => {
       const waiting = { owner, ended: false };
       loading.add(waiting);
-      const runs = await getHostThrowawayRuns().finally(() => loading.delete(waiting));
-      if (!offered) return { status: "refused", reason: "throwaway-off" };
-      if (waiting.ended) {
-        return {
-          status: "failed",
-          reason: call.tool === "throwaway.launch" ? "launch-failed" : "not-found",
-        };
+      try {
+        const runs = await getHostThrowawayRuns();
+        if (!offered) return { status: "refused", reason: "throwaway-off" };
+        if (waiting.ended) {
+          return {
+            status: "failed",
+            reason: call.tool === "throwaway.launch" ? "launch-failed" : "not-found",
+          };
+        }
+        // Held until the runs have the call, so an end landing in between still reaches it.
+        const running = runs.run(owner, call, options);
+        loading.delete(waiting);
+        return await running;
+      } finally {
+        loading.delete(waiting);
       }
-      return runs.run(owner, call, options);
     },
     endOwner: (owner, reason) => {
       for (const waiting of loading) {

@@ -89,14 +89,22 @@ export function installHostMcpRelay(
   });
   const wired = new WeakSet<LinkSession>();
   let disposed = false;
-  // Each link by its session id, so the sender it proved can still be read
-  // once it has left the server's sessions, whether or not it made a throwaway call.
+  // Each link's latest transport, and the sender any of its transports proved,
+  // so a link that left the server's sessions, or resumed and dropped before
+  // proving it again, still names its sender, whether or not it made a throwaway call.
   const linkSessions = new Map<string, LinkSession>();
+  const linkSenders = new Map<string, string>();
   const shellGoneTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   const senderOfLink = (linkSessionId: string): string | undefined => {
     const session = linkSessions.get(linkSessionId);
-    return session === undefined ? undefined : deps.senders()?.senderOf(session);
+    const senders = deps.senders();
+    const senderId =
+      (session === undefined ? undefined : senders?.senderOf(session)) ??
+      senders?.senderOfSessionId(linkSessionId) ??
+      linkSenders.get(linkSessionId);
+    if (senderId !== undefined) linkSenders.set(linkSessionId, senderId);
+    return senderId;
   };
   const senderLinked = (senderId: string): boolean =>
     server.sessions.some(
@@ -160,6 +168,7 @@ export function installHostMcpRelay(
         const senderId = deps.senders()?.senderOf(session);
         if (!senderId) throw noSender();
         notices.flushSender(senderId);
+        linkSenders.set(sessionId, senderId);
         cancelShellGone(senderId);
         return throwaway.call(senderId, payload);
       }
@@ -211,6 +220,7 @@ export function installHostMcpRelay(
     runner.expireLink(sessionId);
     const senderId = senderOfLink(sessionId);
     linkSessions.delete(sessionId);
+    linkSenders.delete(sessionId);
     if (senderId !== undefined && !disposed) endShellGone(senderId);
   });
 
@@ -223,6 +233,7 @@ export function installHostMcpRelay(
       for (const timer of shellGoneTimers.values()) clearTimeout(timer);
       shellGoneTimers.clear();
       linkSessions.clear();
+      linkSenders.clear();
       notices.dispose();
       runner.dispose();
       throwaway.dispose();
