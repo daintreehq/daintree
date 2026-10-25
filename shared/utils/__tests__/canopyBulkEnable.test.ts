@@ -380,6 +380,21 @@ describe("previewCanopyModes", () => {
     ]);
   });
 
+  it("never switches the model of a host another window turned on meanwhile", async () => {
+    const host = fakeHost(snap("unset", 0));
+    let model = "daintreehq/canopy-reader-17m";
+    host.transport.setModel = async (id, rev, epoch) => {
+      // Between the read and the choice, another window turns Canopy on with Light.
+      host.state.snap = snap("on", 1);
+      // The host's own guard: only the revision and launch the choice was made against.
+      if (rev === host.state.snap.modeRevision && epoch === host.state.snap.hostEpoch) model = id;
+      return host.state.snap;
+    };
+    const [result] = await run({ x: host.transport }, { model: "daintreehq/canopy-reader-68m" });
+    expect(model).toBe("daintreehq/canopy-reader-17m");
+    expect(result!.outcome).not.toBe("enabled");
+  });
+
   it("leaves a host unchanged when it won't take the chosen model", async () => {
     const host = fakeHost(snap("unset", 0));
     host.transport.setModel = async () => {

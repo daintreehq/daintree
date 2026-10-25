@@ -445,9 +445,21 @@ function getService(): CanopyService {
 
 /**
  * Chooses the model Canopy reads with. Downloaded at once while Canopy is on;
- * every reading made with the last one is let go.
+ * every reading made with the last one is let go. Guarded like a mode change:
+ * a choice made against a revision or launch that isn't current changes
+ * nothing, so turning Canopy on elsewhere meanwhile keeps the model it chose.
  */
-export function changeCanopyModel(id: string): CanopySnapshot {
+export function changeCanopyModel(
+  id: string,
+  expectRevision?: number,
+  expectHostEpoch?: string
+): CanopySnapshot {
+  if (
+    (expectRevision !== undefined && expectRevision !== modeRevision) ||
+    (expectHostEpoch !== undefined && expectHostEpoch !== hostEpoch)
+  ) {
+    return service ? service.getSnapshot() : hiddenOrIdleSnapshot();
+  }
   if (id !== selectedModel()) {
     store.set("canopyModel", id);
     reader?.release();
@@ -1333,11 +1345,27 @@ export const canopyNamespace = defineIpcNamespace({
     ),
 
     /** Chooses the model Canopy reads with; downloaded at once while Canopy is on. */
-    setModel: op(CANOPY_METHOD_CHANNELS.setModel, async (id: string): Promise<CanopySnapshot> => {
-      if (!isCanopyModelId(id)) throw new Error("Invalid Canopy model");
-      checkRateLimit(CANOPY_METHOD_CHANNELS.setModel, 10, 10_000);
-      return changeCanopyModel(id);
-    }),
+    setModel: op(
+      CANOPY_METHOD_CHANNELS.setModel,
+      async (
+        id: string,
+        expectRevision?: number,
+        expectHostEpoch?: string
+      ): Promise<CanopySnapshot> => {
+        if (!isCanopyModelId(id)) throw new Error("Invalid Canopy model");
+        if (expectRevision !== undefined && !Number.isSafeInteger(expectRevision)) {
+          throw new Error("Invalid Canopy mode revision");
+        }
+        if (expectHostEpoch !== undefined) {
+          if (typeof expectHostEpoch !== "string" || expectHostEpoch.length > 64) {
+            throw new Error("Invalid Canopy host epoch");
+          }
+          if (expectRevision === undefined) throw new Error("A host epoch needs a revision");
+        }
+        checkRateLimit(CANOPY_METHOD_CHANNELS.setModel, 10, 10_000);
+        return changeCanopyModel(id, expectRevision, expectHostEpoch);
+      }
+    ),
 
     /** Tries a failed or stopped download again. */
     retryModel: op(CANOPY_METHOD_CHANNELS.retryModel, async (): Promise<CanopySnapshot> => {

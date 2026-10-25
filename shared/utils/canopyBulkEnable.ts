@@ -55,7 +55,8 @@ export interface BulkTransport {
     expectHostEpoch: string
   ): Promise<CanopySnapshot>;
   /** Chooses the model the host downloads; set before Canopy is turned on there. */
-  setModel?(id: string): Promise<unknown>;
+  /** Guarded like `setMode`: at another revision or launch it changes nothing. */
+  setModel?(id: string, expectRevision: number, expectHostEpoch: string): Promise<unknown>;
   /** Dials the host if it isn't up; false when it still isn't. Absent for the window's own host. */
   connect?(): Promise<boolean>;
   /** Hands back whatever the run opened on the host. Called once the target is done. */
@@ -166,10 +167,26 @@ async function enableOne(
     if (signal?.aborted) {
       return done(target, "uncertain", "Stopped before this host was finished.", seen);
     }
+    let answer: unknown;
     try {
-      await transport.setModel(model);
+      answer = await transport.setModel(model, seen.modeRevision, seen.hostEpoch);
     } catch {
       return done(target, "refused", "The host wouldn't take that model.", seen);
+    }
+    // A host that moved on since the read kept its own model; turning it on now
+    // would claim another window's change as this one.
+    const after = answer as Partial<CanopySnapshot> | null | undefined;
+    if (
+      after &&
+      typeof after.modeRevision === "number" &&
+      (after.modeRevision !== seen.modeRevision || after.hostEpoch !== seen.hostEpoch)
+    ) {
+      return done(
+        target,
+        "conflicted",
+        "Canopy was changed there meanwhile. Left as it is.",
+        seenOf(after as CanopySnapshot)
+      );
     }
   }
   const steps: CanopyMode[] = first.mode === "hidden" ? ["unset", "on"] : ["on"];

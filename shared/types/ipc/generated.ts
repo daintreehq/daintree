@@ -391,7 +391,7 @@ export interface GeneratedIpcInvokeMap {
     result: import("./canopy.js").CanopySnapshot;
   };
   "canopy:set-model": {
-    args: [id: string];
+    args: [id: string, expectRevision?: number | undefined, expectHostEpoch?: string | undefined];
     result: import("./canopy.js").CanopySnapshot;
   };
   "canopy:set-read": {

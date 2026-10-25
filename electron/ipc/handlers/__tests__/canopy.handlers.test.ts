@@ -760,6 +760,38 @@ describe("canopy IPC", () => {
     expect(models.ensure).not.toHaveBeenCalledWith("evil/model");
   });
 
+  it("keeps the model chosen elsewhere when a guarded choice was made against an older revision", async () => {
+    const { store } = await import("../../../store.js");
+    const sender = fakeSender(9);
+    const BEST = "daintreehq/canopy-reader-68m";
+    const read = (result: unknown) => {
+      const envelope = result as { data?: Record<string, unknown> };
+      return (envelope.data ?? result) as { modeRevision: number; hostEpoch: string };
+    };
+    const start = read(await invoke(CANOPY_METHOD_CHANNELS.setMode, sender, "unset"));
+    // Another window turns Canopy on meanwhile, at the next revision.
+    await invoke(CANOPY_METHOD_CHANNELS.setMode, sender, "on");
+    vi.mocked(store.set).mockClear();
+    await invoke(
+      CANOPY_METHOD_CHANNELS.setModel,
+      sender,
+      BEST,
+      start.modeRevision,
+      start.hostEpoch
+    );
+    expect(store.set).not.toHaveBeenCalledWith("canopyModel", BEST);
+
+    // At the current revision and launch it lands.
+    const now = read(await invoke(CANOPY_METHOD_CHANNELS.getSnapshot, sender));
+    await invoke(CANOPY_METHOD_CHANNELS.setModel, sender, BEST, now.modeRevision, now.hostEpoch);
+    expect(store.set).toHaveBeenCalledWith("canopyModel", BEST);
+
+    const noRevision = await outcome(
+      invoke(CANOPY_METHOD_CHANNELS.setModel, sender, BEST, undefined, now.hostEpoch)
+    );
+    expect(noRevision.ok).toBe(false);
+  });
+
   it("deletes the downloaded models at any time, turning Canopy off first when it is on", async () => {
     state.mode = "on";
     const sender = fakeSender(9);

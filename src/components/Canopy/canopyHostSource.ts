@@ -107,7 +107,8 @@ export function canopyBulkTransport(
       getSnapshot: () => window.electron.canopy.getSnapshot(),
       setMode: (mode, expectRevision, expectHostEpoch) =>
         window.electron.canopy.setMode(mode, expectRevision, expectHostEpoch),
-      setModel: (id) => window.electron.canopy.setModel(id),
+      setModel: (id, expectRevision, expectHostEpoch) =>
+        window.electron.canopy.setModel(id, expectRevision, expectHostEpoch),
       release: () => {},
     };
   }
@@ -127,9 +128,15 @@ export function canopyBulkTransport(
         expectHostEpoch
       );
     },
-    setModel: (id) => {
+    setModel: (id, expectRevision, expectHostEpoch) => {
       opened = true;
-      return canopyHostClient.invoke(hostId, "canopy:set-model", id);
+      return canopyHostClient.invoke(
+        hostId,
+        "canopy:set-model",
+        id,
+        expectRevision,
+        expectHostEpoch
+      );
     },
     ...(hostId === LOCAL_HOST_ID
       ? {}
