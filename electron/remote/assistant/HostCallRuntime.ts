@@ -17,6 +17,12 @@ import {
   type HostSettingsArgs,
   type HostSettingsResult,
 } from "../../../shared/types/hostControl.js";
+import {
+  HOST_THROWAWAY_TOOLS,
+  HostThrowawayCallSchema,
+  type HostThrowawayFailure,
+  type HostThrowawayRefusal,
+} from "../../../shared/types/hostThrowaway.js";
 import { HostSettingsRequests, type HostSettingsRequestDeps } from "./HostSettingsRequests.js";
 import {
   AGENT_DIRECTORY_BYTES_MAX,
@@ -58,6 +64,8 @@ import {
   type RelayNoticeStatusPayload,
   type RelayNoticesPayload,
   type RelayRefusal,
+  type ThrowawayCallAnswer,
+  type ThrowawayCallPayload,
 } from "./linkMethods.js";
 import { canonicalArgsHash } from "../../services/mcp-server/sessionDedup.js";
 import type { McpConfirmationDecision } from "../../../shared/types/ipc/mcpServer.js";
@@ -90,6 +98,8 @@ export interface LocalHostReach {
    */
   latestSummary?(): HostMetricsSummary | null;
   relayCall(payload: McpCallPayload): Promise<McpCallAnswer>;
+  /** A throwaway tool on this machine (#14446); absent, it runs none. */
+  throwawayCall?(payload: ThrowawayCallPayload): Promise<ThrowawayCallAnswer>;
   /** Its workers and assistants, as `host.list` shows them with `includeAgents` (#14160). */
   agents?(options: { projectId?: string }): Promise<AgentDirectory>;
 }
@@ -113,7 +123,7 @@ export interface HostCallRuntimeDeps {
    */
   callerRun(helpSessionId: string): OpenRun | null;
   /** Read at each call: the client is installed with the database and may come later. */
-  client(): Pick<HostControlLinkClient, "relayCall"> | null;
+  client(): Pick<HostControlLinkClient, "relayCall" | "throwawayCall"> | null;
   /**
    * Whether a help session's assistant works through one of this machine's own
    * views, from its provisioning, before its run is confirmed; false for one a
@@ -208,7 +218,8 @@ export interface RelayApprovalQuestion {
 interface CallInFlight {
   hostId: HostId;
   helpSessionId: string;
-  projectId: string;
+  /** Null for a throwaway call (#14446), which no host ever asks about. */
+  projectId: string | null;
   tool: string;
   args: Record<string, unknown>;
   run: OpenRun;
@@ -493,8 +504,30 @@ const CALL_CONFLICT_DETAIL =
 const CALL_ID_TAKEN_DETAIL =
   "That newCallId already names another call here. Nothing was sent; pick a fresh one.";
 const CALL_TOO_LARGE_DETAIL = "The call's arguments are too large to send. Nothing was sent.";
-const CALL_THROWAWAY_UNSUPPORTED_DETAIL =
-  "This Shell can't run throwaway agents on hosts yet, so nothing was sent. Name a projectId instead.";
+const THROWAWAY_TOOLS_DETAIL = `A throwaway target takes only ${HOST_THROWAWAY_TOOLS.join(", ")}, each with its own arguments. Nothing was sent; project tools need a projectId.`;
+const THROWAWAY_REFUSAL_DETAILS: Record<
+  Exclude<HostThrowawayRefusal, "control-off">,
+  { code: Exclude<HostControlOutcomeCode, "ok">; detail: string }
+> = {
+  "throwaway-off": {
+    code: "unsupported",
+    detail:
+      "That machine doesn't run throwaway agents: it has them off or can't run them yet. Nothing was run.",
+  },
+  "expiry-unsupported": {
+    code: "unsupported",
+    detail:
+      "That machine can't end a run on a time limit yet. Nothing was run; launch without timeLimitMs.",
+  },
+};
+/** A throwaway tool that ran and failed, as the tool error it reads like. */
+const THROWAWAY_FAILURE_MESSAGES: Record<HostThrowawayFailure, string> = {
+  "not-found": "No run of this assistant's has that runId. It may have been closed.",
+  exited: "The run's process has ended, so nothing was typed.",
+  "launch-failed": "The agent couldn't be launched.",
+  "input-failed": "The input couldn't be typed into the run.",
+  "close-failed": "The run couldn't be closed. Its process may still be running.",
+};
 const CALL_SENDER_REFUSED_DETAIL =
   "The host refused this Shell's identity on the current connection. Try again shortly.";
 const CALL_RATE_LIMITED_DETAIL = "Too many calls in a short time. Retry after retryAfterMs.";
@@ -1056,15 +1089,9 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     context: { tier: "core" | "full" }
   ): Promise<HostControlOutcome<HostCallResult>> {
     return this.settle(helpSessionId, async (caller) => {
-      // Throwaway agents (#14444) aren't routed yet: refused before any
-      // callId, record or send, so nothing here remembers the call.
       const projectId = args.projectId;
       if (args.throwaway === true || projectId === undefined) {
-        return {
-          ...this.outcomeWith("unsupported", CALL_THROWAWAY_UNSUPPORTED_DETAIL),
-          callId: null,
-          result: null,
-        };
+        return this.callThrowaway(helpSessionId, caller, args, context);
       }
       const callId = args.callId ?? args.newCallId ?? this.newId();
       // The caller's own id for a first send (#14240) may already name a call
@@ -1121,27 +1148,14 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       const noted = resend
         ? NOTHING_NOTED
         : this.noteCall(callId, args.hostId, caller, args.tool, toolArgs);
-      this.callsOut.set(args.hostId, (this.callsOut.get(args.hostId) ?? 0) + 1);
-      // A resend while its first send is still out is the same call: it shares
-      // that record, so an approval the host is asking for still counts.
-      const sharing = this.callsInFlight.get(callId);
-      const inFlight: CallInFlight =
-        sharing !== undefined &&
-        sharing.hostId === args.hostId &&
-        sharing.helpSessionId === helpSessionId
-          ? sharing
-          : {
-              hostId: args.hostId,
-              helpSessionId,
-              projectId,
-              tool: args.tool,
-              args: toolArgs,
-              run: caller,
-              asked: false,
-              sends: 0,
-            };
-      inFlight.sends += 1;
-      if (inFlight !== sharing) this.callsInFlight.set(callId, inFlight);
+      const sendDone = this.trackSend(callId, {
+        hostId: args.hostId,
+        helpSessionId,
+        projectId,
+        tool: args.tool,
+        args: toolArgs,
+        run: caller,
+      });
       let answer: McpCallAnswer;
       try {
         answer = local
@@ -1152,51 +1166,9 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
               runMs + RELAY_ANSWER_GRACE_MS
             );
       } catch (error) {
-        switch (codeOf(error)) {
-          case "OUTCOME_UNKNOWN":
-            noted.ran();
-            return { ...this.outcomeWith("ambiguous", CALL_AMBIGUOUS_DETAIL), ...sent };
-          // Never written to the link: a first send is simply not sent.
-          case "HOST_DISCONNECTED":
-            noted.notRun();
-            return resend
-              ? { ...this.outcomeWith("disconnected", CALL_RESEND_DISCONNECTED_DETAIL), ...sent }
-              : { ...this.outcomeWith("disconnected", CALL_NOT_SENT_DETAIL), ...unsent };
-          case "RATE_LIMITED":
-            noted.notRun();
-            return {
-              ...this.outcomeWith("rate_limited", CALL_RATE_LIMITED_DETAIL, 1_000),
-              ...unsent,
-            };
-          // Only a link answers it, so only for a host this Shell knows.
-          case "UNSUPPORTED":
-            noted.notRun();
-            return { ...this.outcomeWith("unsupported", unsupportedCallDetail(host!)), ...unsent };
-          case "PERMISSION":
-            noted.notRun();
-            return {
-              ...this.outcomeWith("policy_rejected", CALL_SENDER_REFUSED_DETAIL),
-              ...unsent,
-            };
-          default:
-            // No client to send it with: nothing went out.
-            if (error instanceof RefusalError) {
-              noted.notRun();
-              throw error;
-            }
-            // Sent, then something unreadable came back: it may have run.
-            noted.ran();
-            logger.warn("A relayed call ended without a known outcome", { error });
-            return { ...this.outcomeWith("ambiguous", CALL_AMBIGUOUS_DETAIL), ...sent };
-        }
+        return this.sendFailure(error, host, callId, resend, noted);
       } finally {
-        const left = (this.callsOut.get(args.hostId) ?? 1) - 1;
-        if (left > 0) this.callsOut.set(args.hostId, left);
-        else this.callsOut.delete(args.hostId);
-        inFlight.sends -= 1;
-        if (inFlight.sends === 0 && this.callsInFlight.get(callId) === inFlight) {
-          this.callsInFlight.delete(callId);
-        }
+        sendDone();
       }
       switch (answer.status) {
         // A tool error may still have run some of a batch before it failed.
@@ -1224,6 +1196,187 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         }
       }
     });
+  }
+
+  /**
+   * Counts one send out to its host until `done`: a resend while its first
+   * send is still out is the same call and shares that record, so an approval
+   * the host is asking for still counts.
+   */
+  private trackSend(callId: string, record: Omit<CallInFlight, "asked" | "sends">): () => void {
+    const { hostId, helpSessionId } = record;
+    this.callsOut.set(hostId, (this.callsOut.get(hostId) ?? 0) + 1);
+    const sharing = this.callsInFlight.get(callId);
+    const inFlight: CallInFlight =
+      sharing !== undefined && sharing.hostId === hostId && sharing.helpSessionId === helpSessionId
+        ? sharing
+        : { ...record, asked: false, sends: 0 };
+    inFlight.sends += 1;
+    if (inFlight !== sharing) this.callsInFlight.set(callId, inFlight);
+    return () => {
+      const left = (this.callsOut.get(hostId) ?? 1) - 1;
+      if (left > 0) this.callsOut.set(hostId, left);
+      else this.callsOut.delete(hostId);
+      inFlight.sends -= 1;
+      if (inFlight.sends === 0 && this.callsInFlight.get(callId) === inFlight) {
+        this.callsInFlight.delete(callId);
+      }
+    };
+  }
+
+  /** What a send that threw settles as: never sent, refused by the link, or maybe run. */
+  private sendFailure(
+    error: unknown,
+    host: ObservedHost | undefined,
+    callId: string,
+    resend: boolean,
+    noted: NotedCall
+  ): HostCallResult {
+    const sent = { callId, result: null };
+    const unsent = { callId: resend ? callId : null, result: null };
+    switch (codeOf(error)) {
+      case "OUTCOME_UNKNOWN":
+        noted.ran();
+        return { ...this.outcomeWith("ambiguous", CALL_AMBIGUOUS_DETAIL), ...sent };
+      // Never written to the link: a first send is simply not sent.
+      case "HOST_DISCONNECTED":
+        noted.notRun();
+        return resend
+          ? { ...this.outcomeWith("disconnected", CALL_RESEND_DISCONNECTED_DETAIL), ...sent }
+          : { ...this.outcomeWith("disconnected", CALL_NOT_SENT_DETAIL), ...unsent };
+      case "RATE_LIMITED":
+        noted.notRun();
+        return {
+          ...this.outcomeWith("rate_limited", CALL_RATE_LIMITED_DETAIL, 1_000),
+          ...unsent,
+        };
+      // Only a link answers it, so only for a host this Shell knows.
+      case "UNSUPPORTED":
+        noted.notRun();
+        return { ...this.outcomeWith("unsupported", unsupportedCallDetail(host!)), ...unsent };
+      case "PERMISSION":
+        noted.notRun();
+        return {
+          ...this.outcomeWith("policy_rejected", CALL_SENDER_REFUSED_DETAIL),
+          ...unsent,
+        };
+      default:
+        // No client to send it with: nothing went out.
+        if (error instanceof RefusalError) {
+          noted.notRun();
+          throw error;
+        }
+        // Sent, then something unreadable came back: it may have run.
+        noted.ran();
+        logger.warn("A relayed call ended without a known outcome", { error });
+        return { ...this.outcomeWith("ambiguous", CALL_AMBIGUOUS_DETAIL), ...sent };
+    }
+  }
+
+  /**
+   * A throwaway call (#14446): a short-lived agent of this session's own on a
+   * host, or on this machine, with no project. It goes to the host's own
+   * runs, never to a view or a project's MCP session, so a window that is
+   * stuck, switching or holding a lease there changes nothing. The same
+   * switches, callIds and outcomes as a project call; a resend never runs
+   * twice, so a launch never launches twice.
+   */
+  private async callThrowaway(
+    helpSessionId: string,
+    caller: OpenRun,
+    args: HostCallArgs,
+    context: { tier: "core" | "full" }
+  ): Promise<HostCallResult> {
+    const parsed = HostThrowawayCallSchema.safeParse({ tool: args.tool, args: args.args ?? {} });
+    if (!parsed.success) {
+      return {
+        ...this.outcomeWith("policy_rejected", THROWAWAY_TOOLS_DETAIL),
+        callId: null,
+        result: null,
+      };
+    }
+    const callId = args.callId ?? args.newCallId ?? this.newId();
+    const known = args.newCallId !== undefined ? this.knownCall(callId) : null;
+    if (known !== null && (known.hostId !== args.hostId || known.helpSessionId !== helpSessionId)) {
+      return { ...this.outcomeWith("conflict", CALL_ID_TAKEN_DETAIL), callId: null, result: null };
+    }
+    const resend = args.callId !== undefined || known !== null;
+    const sent = { callId, result: null };
+    const unsent = { callId: resend ? callId : null, result: null };
+    const local = args.hostId === LOCAL_HOST_ID ? this.deps.local : undefined;
+    const host = local
+      ? undefined
+      : this.deps.hosts().find((candidate) => candidate.hostId === args.hostId);
+    if (!local) {
+      if (!host) return { ...this.outcomeWith("not_found", CALL_NO_HOST_DETAIL), ...unsent };
+      if (this.deps.controlEnabled?.(args.hostId) !== true) {
+        return { ...this.outcomeWith("opted_out", CONTROL_OFF_DETAIL), ...unsent };
+      }
+    }
+    const runMs = relayRunMs(args.tool, parsed.data.args);
+    const payload: ThrowawayCallPayload = {
+      helpSessionId,
+      tier: context.tier,
+      callId,
+      resend,
+      call: parsed.data,
+      runMs,
+    };
+    const sendDone = this.trackSend(callId, {
+      hostId: args.hostId,
+      helpSessionId,
+      projectId: null,
+      tool: args.tool,
+      args: parsed.data.args,
+      run: caller,
+    });
+    let answer: ThrowawayCallAnswer;
+    try {
+      if (local) {
+        answer = local.throwawayCall
+          ? await local.throwawayCall(payload)
+          : { status: "refused", reason: "throwaway-off" };
+      } else {
+        answer = await this.requireClient().throwawayCall(
+          args.hostId,
+          payload,
+          runMs + RELAY_ANSWER_GRACE_MS
+        );
+      }
+    } catch (error) {
+      return this.sendFailure(error, host, callId, resend, NOTHING_NOTED);
+    } finally {
+      sendDone();
+    }
+    switch (answer.status) {
+      case "done":
+        return {
+          ...this.ok(),
+          callId,
+          result: { isError: false, structured: answer.result, text: null },
+        };
+      case "failed":
+        return {
+          ...this.ok(),
+          callId,
+          result: {
+            isError: true,
+            structured: { code: answer.reason, message: THROWAWAY_FAILURE_MESSAGES[answer.reason] },
+            text: null,
+          },
+        };
+      case "unknown":
+        return { ...this.outcomeWith("expired", CALL_UNKNOWN_DETAIL), ...sent };
+      case "conflict":
+        return { ...this.outcomeWith("conflict", CALL_CONFLICT_DETAIL), ...sent };
+      case "refused": {
+        const { code, detail } =
+          answer.reason === "control-off"
+            ? RELAY_REFUSAL_DETAILS["control-off"]
+            : THROWAWAY_REFUSAL_DETAILS[answer.reason];
+        return { ...this.outcomeWith(code, detail), ...sent };
+      }
+    }
   }
 
   /**

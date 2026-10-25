@@ -9,6 +9,7 @@ import {
   RelayApprovePayloadSchema,
   RelayNoticeStatusAnswerSchema,
   RelayNoticesPayloadSchema,
+  ThrowawayCallAnswerSchema,
   type McpCallAnswer,
   type McpCallPayload,
   type RelayApproveAnswer,
@@ -16,6 +17,8 @@ import {
   type RelayNoticeStatusAnswer,
   type RelayNoticeStatusPayload,
   type RelayNoticesPayload,
+  type ThrowawayCallAnswer,
+  type ThrowawayCallPayload,
 } from "./linkMethods.js";
 import { createLogger } from "../../utils/logger.js";
 
@@ -255,6 +258,30 @@ export class HostControlLinkClient {
     // A call can arm nothing, or have its notice answered by its own reply
     // wait, without a notice ever coming: ask, so its link need not wait on it.
     if (relayCallArmsNotice(payload.tool, payload.args)) this.followNoticesLater(hostId, session);
+    return parsed.data;
+  }
+
+  /**
+   * Run one throwaway tool on the host for one of this Shell's assistants
+   * (#14446), with no project. Recorded by callId there as `relayCall` is; a
+   * host from before throwaway agents answers UNSUPPORTED.
+   */
+  async throwawayCall(
+    hostId: HostId,
+    payload: ThrowawayCallPayload,
+    timeoutMs: number
+  ): Promise<ThrowawayCallAnswer> {
+    const session = await this.open(hostId);
+    try {
+      await this.authenticate(hostId, session);
+    } catch (error) {
+      if (isUnknownOutcome(error)) throw unreachable(hostId);
+      throw error;
+    }
+    const parsed = ThrowawayCallAnswerSchema.safeParse(
+      await this.call(hostId, session, AssistantLinkMethod.THROWAWAY_CALL, payload, timeoutMs)
+    );
+    if (!parsed.success) throw invalidAnswer(hostId, AssistantLinkMethod.THROWAWAY_CALL);
     return parsed.data;
   }
 

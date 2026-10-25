@@ -193,6 +193,7 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
     },
     receiveNotices: (payload) => runtime.receiveNotices(LOCAL_HOST_ID, payload),
     receiveApproval: (payload) => runtime.receiveApproval(LOCAL_HOST_ID, payload),
+    throwawayRuns: () => getRemoteService("hostThrowawayRuns") ?? null,
   });
   // The global assistant has no window of its own: it is asked in one that
   // shows it, never the focused one, and not at all while none does.
@@ -265,6 +266,7 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
       // Windows machine has no measurement to offer rather than a borrowed one.
       latestSummary: () => (process.platform === "win32" ? null : getLocalSummaryLoop().latest()),
       relayCall: (payload) => local.relayCall(payload),
+      throwawayCall: (payload) => local.throwawayCall(payload),
       agents: (options) => getLocalAgentDirectory().read(options),
     },
   });

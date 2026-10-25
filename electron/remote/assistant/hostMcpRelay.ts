@@ -6,7 +6,6 @@ import {
   McpCallPayloadSchema,
   RelayNoticeStatusPayloadSchema,
   ThrowawayCallPayloadSchema,
-  type ThrowawayCallAnswer,
 } from "./linkMethods.js";
 import {
   createMcpRelayExecutor,
@@ -16,6 +15,7 @@ import {
 import { RelayNoticeOutbox } from "./relayNoticeOutbox.js";
 import type { SenderSessions } from "./senderSessions.js";
 import { askShellApproval } from "./relayApprovals.js";
+import { createThrowawayRelay, type HostThrowawayExecutor } from "./throwawayRelay.js";
 
 export {
   projectRelayResult,
@@ -26,6 +26,8 @@ export {
 export interface HostMcpRelayDeps extends Omit<McpRelayExecutorDeps, "waitingNoticeCalls"> {
   /** Read at each call: the sender host registers it with the authenticate call. */
   senders(): Pick<SenderSessions, "senderOf" | "senderOfSessionId"> | undefined;
+  /** This host's throwaway runs (#14445), read at each call; absent or null, they are off. */
+  throwawayRuns?(): HostThrowawayExecutor | null;
 }
 
 export interface HostMcpRelaySource extends MetricsSessionSource {
@@ -70,6 +72,12 @@ export function installHostMcpRelay(
     ...deps,
     waitingNoticeCalls: (senderId, helpSessionId) => notices.waitingCalls(senderId, helpSessionId),
   });
+  // Throwaway runs belong to the host, not a project: no session, project or view is opened.
+  const throwaway = createThrowawayRelay({
+    acceptsRemoteControl: deps.acceptsRemoteControl,
+    executor: () => deps.throwawayRuns?.() ?? null,
+    ...(deps.now ? { now: deps.now } : {}),
+  });
   const wired = new WeakSet<LinkSession>();
   let disposed = false;
 
@@ -111,18 +119,15 @@ export function installHostMcpRelay(
         return runner.call(spec, payload);
       }
     );
-    // Throwaway agents (#14444) don't run here yet: an authenticated sender
-    // is told they are off, so its Shell reads unsupported, never a failure.
     session.registerCallHandler(
       AssistantLinkMethod.THROWAWAY_CALL,
       ThrowawayCallPayloadSchema,
-      async (): Promise<ThrowawayCallAnswer> => {
+      async (payload) => {
         if (disposed) throw noSender();
-        if (!deps.senders()?.senderOf(session)) throw noSender();
-        return {
-          status: "refused",
-          reason: deps.acceptsRemoteControl() ? "throwaway-off" : "control-off",
-        };
+        const senderId = deps.senders()?.senderOf(session);
+        if (!senderId) throw noSender();
+        notices.flushSender(senderId);
+        return throwaway.call(senderId, payload);
       }
     );
     session.registerCallHandler(
@@ -153,6 +158,7 @@ export function installHostMcpRelay(
       offExpired();
       notices.dispose();
       runner.dispose();
+      throwaway.dispose();
     },
   };
 }

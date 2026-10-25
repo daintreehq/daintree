@@ -1,4 +1,5 @@
 import type { ActionErrorCode } from "../../../shared/types/actions.js";
+import { HOST_THROWAWAY_TOOLS } from "../../../shared/types/hostThrowaway.js";
 import {
   HOST_CALL_TOOL,
   HOST_ENSURE_PROJECT_TOOL,
@@ -69,6 +70,8 @@ export function setHostControlRuntime(runtime: HostControlRuntimeHandle): () => 
 export const HOST_CONTROL_NOT_ELIGIBLE_MESSAGE =
   "Only a Daintree Assistant running on this machine can reach its hosts.";
 const INVALID_ARGS_MESSAGE = "The arguments don't match this tool's schema.";
+/** Why a throwaway call didn't parse (#14446): only its own tools, named so the caller can pick one. */
+const INVALID_THROWAWAY_MESSAGE = `A throwaway call names no projectId and takes only ${HOST_THROWAWAY_TOOLS.join(", ")}, each with its own arguments. Project tools need a projectId instead.`;
 
 /** One MCP session's view of the host-control runtime, keyed on the help session bound to it. */
 export interface HostControlAccess {
@@ -85,8 +88,10 @@ function notEligible(): { ok: false; code: "NOT_ELIGIBLE"; message: string } {
   return { ok: false, code: "NOT_ELIGIBLE", message: HOST_CONTROL_NOT_ELIGIBLE_MESSAGE };
 }
 
-function invalidArgs(): { ok: false; code: "INVALID_ARGS"; message: string } {
-  return { ok: false, code: "INVALID_ARGS", message: INVALID_ARGS_MESSAGE };
+function invalidArgs(
+  message = INVALID_ARGS_MESSAGE
+): { ok: false; code: "INVALID_ARGS"; message: string } {
+  return { ok: false, code: "INVALID_ARGS", message };
 }
 
 /** Each operation takes its own arguments and no other's, so an apply carries nothing but its ticket. */
@@ -135,7 +140,9 @@ async function dispatch(
       // A call with no tier from its session is no call this machine admitted.
       if (context === undefined) return notEligible();
       const parsed = HostCallArgsSchema.safeParse(raw);
-      return parsed.success ? runtime.call(helpSessionId, parsed.data, context) : invalidArgs();
+      if (parsed.success) return runtime.call(helpSessionId, parsed.data, context);
+      const throwaway = (raw as { throwaway?: unknown } | null)?.throwaway === true;
+      return invalidArgs(throwaway ? INVALID_THROWAWAY_MESSAGE : INVALID_ARGS_MESSAGE);
     }
     case HOST_ENSURE_PROJECT_TOOL: {
       const parsed = HostEnsureProjectArgsSchema.safeParse(raw);

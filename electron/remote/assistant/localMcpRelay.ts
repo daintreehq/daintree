@@ -7,6 +7,8 @@ import type {
   RelayApproveAnswer,
   RelayApprovePayload,
   RelayNoticesPayload,
+  ThrowawayCallAnswer,
+  ThrowawayCallPayload,
 } from "./linkMethods.js";
 import {
   createMcpRelayExecutor,
@@ -14,6 +16,7 @@ import {
   type RelayMcpSessionSpec,
 } from "./mcpRelayExecutor.js";
 import { askShellApproval } from "./relayApprovals.js";
+import { createThrowawayRelay, type HostThrowawayExecutor } from "./throwawayRelay.js";
 
 /**
  * The sender and link session a local call is admitted under. A remote
@@ -35,11 +38,15 @@ export interface LocalMcpRelayDeps extends Pick<
   releaseHandOvers?(helpSessionId: string): void;
   /** Puts one confirm-gated local call to the person, as a host's question would be. */
   receiveApproval(payload: RelayApprovePayload): Promise<RelayApproveAnswer>;
+  /** This machine's throwaway runs (#14445), read at each call; absent or null, they are off. */
+  throwawayRuns?(): HostThrowawayExecutor | null;
   newId?: () => string;
 }
 
 export interface LocalMcpRelay {
   relayCall(payload: McpCallPayload): Promise<McpCallAnswer>;
+  /** A throwaway tool on this machine (#14446), with no project, session or view. */
+  throwawayCall(payload: ThrowawayCallPayload): Promise<ThrowawayCallAnswer>;
   /** One of this machine's help sessions ended: its sessions and its hold on what it made go. */
   endHelpSession(helpSessionId: string): void;
   dispose(): void;
@@ -65,6 +72,11 @@ export function createLocalMcpRelay(deps: LocalMcpRelayDeps): LocalMcpRelay {
     ...(deps.retirePrincipal ? { retirePrincipal: deps.retirePrincipal } : {}),
     ...(deps.now ? { now: deps.now } : {}),
     ...(deps.idleMs !== undefined ? { idleMs: deps.idleMs } : {}),
+  });
+  const throwaway = createThrowawayRelay({
+    acceptsRemoteControl: () => true,
+    executor: () => deps.throwawayRuns?.() ?? null,
+    ...(deps.now ? { now: deps.now } : {}),
   });
   // What `askShellApproval` asks over a link, asked of this machine's runtime instead.
   const approvals: Pick<LinkSession, "call"> = {
@@ -104,6 +116,10 @@ export function createLocalMcpRelay(deps: LocalMcpRelayDeps): LocalMcpRelay {
       };
       return executor.call(spec, payload);
     },
+    throwawayCall: async (payload) => {
+      if (disposed) return { status: "refused", reason: "throwaway-off" };
+      return throwaway.call(LOCAL_RELAY_SENDER_ID, payload);
+    },
     endHelpSession: (helpSessionId) => {
       deps.releaseHandOvers?.(helpSessionId);
       executor.endPrincipal(LOCAL_RELAY_SENDER_ID, helpSessionId);
@@ -111,6 +127,7 @@ export function createLocalMcpRelay(deps: LocalMcpRelayDeps): LocalMcpRelay {
     dispose: () => {
       disposed = true;
       executor.dispose();
+      throwaway.dispose();
     },
   };
 }
