@@ -1,0 +1,364 @@
+{
+  "schema": 1,
+  "issue": 14249,
+  "date": "2026-10-25",
+  "harness": "e2e/perf/empty-project-view-memory-perf.spec.ts",
+  "note": "Re-run of the 2026-10-23 protocol after #14245, #14246 and #14247. Both arms built and run on the same machine the same day. Run under Playwright, whose Emulation.setFocusEmulationEnabled keeps every attached page visible: cc tile and GPU-process figures are pinned-visible readings (#14237).",
+  "versions": {
+    "electron": "42.11.18",
+    "chrome": "148.0.7778.280",
+    "v8": "14.8.178.38-electron.0"
+  },
+  "machine": {
+    "platform": "darwin",
+    "release": "24.6.0",
+    "cpus": "Apple M4 Max"
+  },
+  "config": {
+    "settleMs": 15000,
+    "footprintReadings": 5,
+    "terminals": 2,
+    "outputLinesPerTerminal": 5500,
+    "memoryInfra": true,
+    "heapSnapshots": false,
+    "windowSize": {
+      "width": 1600,
+      "height": 1000
+    },
+    "webgl": true
+  },
+  "arms": {
+    "before": {
+      "description": "develop at f1cfeef224, the #14243 merge that recorded the 2026-10-23 baseline",
+      "runs": 3,
+      "gitHead": "f1cfeef22492f487582eb377fc63a3b320a85938",
+      "phases": {
+        "empty": {
+          "rendererFootprintMb": {
+            "median": 160,
+            "readings": [160, 160, 159]
+          },
+          "gpuProcessFootprintMb": 496,
+          "jsHeapUsedMb": 43.9,
+          "domNodes": 1175,
+          "jsEventListeners": 477,
+          "visibilityState": "visible",
+          "memoryInfraMb": {
+            "blink_gc": 12.9,
+            "blink_objects": 5,
+            "cc": 17.8,
+            "gpu": 2.2,
+            "malloc": 72.4,
+            "partition_alloc": 35.7,
+            "shared_memory": 3.4,
+            "v8": 48,
+            "web_cache": 25
+          },
+          "vmmapDirtyMb": {
+            "Memory Tag 253": 93.4,
+            "Memory Tag 255": 58.9,
+            "libraries": 3.1,
+            "malloc": 0.7,
+            "page table in kernel": 1,
+            "shared memory": 0.5,
+            "stacks": 1.3
+          }
+        },
+        "cached": {
+          "rendererFootprintMb": {
+            "median": 140,
+            "readings": [140, 140, 137]
+          },
+          "gpuProcessFootprintMb": 607,
+          "jsHeapUsedMb": 44.4,
+          "domNodes": 1552,
+          "jsEventListeners": 710,
+          "visibilityState": "visible",
+          "memoryInfraMb": {
+            "blink_gc": 14.7,
+            "blink_objects": 4.9,
+            "cc": 29,
+            "gpu": 5.4,
+            "malloc": 52.4,
+            "partition_alloc": 21.3,
+            "shared_memory": 10.5,
+            "v8": 48.4
+          },
+          "vmmapDirtyMb": {
+            "Memory Tag 253": 68.8,
+            "Memory Tag 255": 59.3,
+            "libraries": 3.2,
+            "malloc": 0.9,
+            "page table in kernel": 1.1,
+            "shared memory": 1.6,
+            "stacks": 1.1
+          }
+        },
+        "afterSession": {
+          "rendererFootprintMb": {
+            "median": 134,
+            "readings": [134, 134, 131]
+          },
+          "gpuProcessFootprintMb": 203,
+          "jsHeapUsedMb": 42.6,
+          "domNodes": 1397,
+          "jsEventListeners": 575,
+          "visibilityState": "visible",
+          "memoryInfraMb": {
+            "blink_gc": 14.3,
+            "blink_objects": 4.5,
+            "cc": 15.2,
+            "gpu": 3.2,
+            "malloc": 50,
+            "partition_alloc": 18.5,
+            "shared_memory": 8.4,
+            "v8": 47.2
+          },
+          "vmmapDirtyMb": {
+            "Memory Tag 253": 64.2,
+            "Memory Tag 255": 56.4,
+            "libraries": 3.2,
+            "malloc": 0.9,
+            "page table in kernel": 1.1,
+            "shared memory": 5.6,
+            "stacks": 1.1
+          }
+        }
+      }
+    },
+    "after": {
+      "description": "develop at cab5687fd7, after #14245, #14246 and #14247",
+      "runs": 3,
+      "gitHead": "cab5687fd7d6f503526a8a646c9cf6f89362c5fb",
+      "phases": {
+        "empty": {
+          "rendererFootprintMb": {
+            "median": 157,
+            "readings": [153, 158, 157]
+          },
+          "gpuProcessFootprintMb": 511,
+          "jsHeapUsedMb": 42.1,
+          "domNodes": 1201,
+          "jsEventListeners": 469,
+          "visibilityState": "visible",
+          "memoryInfraMb": {
+            "blink_gc": 12.5,
+            "blink_objects": 5.1,
+            "cc": 17.8,
+            "gpu": 2.2,
+            "malloc": 73,
+            "partition_alloc": 33.2,
+            "shared_memory": 3.4,
+            "v8": 46.3,
+            "web_cache": 22.9
+          },
+          "vmmapDirtyMb": {
+            "Memory Tag 253": 92.6,
+            "Memory Tag 255": 56.8,
+            "libraries": 3.1,
+            "malloc": 0.7,
+            "page table in kernel": 1,
+            "shared memory": 0.5,
+            "stacks": 1.3
+          }
+        },
+        "cached": {
+          "rendererFootprintMb": {
+            "median": 143,
+            "readings": [145, 143, 143]
+          },
+          "gpuProcessFootprintMb": 602,
+          "jsHeapUsedMb": 50.3,
+          "domNodes": 1585,
+          "jsEventListeners": 709,
+          "visibilityState": "visible",
+          "memoryInfraMb": {
+            "blink_gc": 14.6,
+            "blink_objects": 5,
+            "cc": 29.8,
+            "gpu": 5.4,
+            "malloc": 51.7,
+            "partition_alloc": 21.5,
+            "shared_memory": 10.5,
+            "v8": 54.2
+          },
+          "vmmapDirtyMb": {
+            "Memory Tag 253": 67.5,
+            "Memory Tag 255": 66.2,
+            "libraries": 3.2,
+            "malloc": 0.8,
+            "page table in kernel": 1.1,
+            "shared memory": 1.5,
+            "stacks": 1.1
+          }
+        },
+        "afterSession": {
+          "rendererFootprintMb": {
+            "median": 132,
+            "readings": [136, 130, 132]
+          },
+          "gpuProcessFootprintMb": 203,
+          "jsHeapUsedMb": 42.5,
+          "domNodes": 1430,
+          "jsEventListeners": 576,
+          "visibilityState": "visible",
+          "memoryInfraMb": {
+            "blink_gc": 14.2,
+            "blink_objects": 4.4,
+            "cc": 15.3,
+            "gpu": 3.2,
+            "malloc": 49.7,
+            "partition_alloc": 18.6,
+            "shared_memory": 8.4,
+            "v8": 46.5
+          },
+          "vmmapDirtyMb": {
+            "Memory Tag 253": 63.9,
+            "Memory Tag 255": 55.7,
+            "libraries": 3.2,
+            "malloc": 0.8,
+            "page table in kernel": 1.1,
+            "shared memory": 5.5,
+            "stacks": 1.1
+          }
+        }
+      }
+    }
+  },
+  "experiments": {
+    "heapSnapshot": {
+      "before": {
+        "empty": {
+          "rendererFootprintMb": 157,
+          "jsHeapUsedMb": 43.8,
+          "byTypeMb": {
+            "code": 21.4,
+            "native": 9.1,
+            "object": 5.2,
+            "array": 5,
+            "closure": 4.3,
+            "string": 3.2,
+            "object shape": 2.4,
+            "hidden": 2.2,
+            "concatenated string": 0.3
+          }
+        },
+        "cached": {
+          "rendererFootprintMb": 224,
+          "jsHeapUsedMb": 44.5,
+          "byTypeMb": {
+            "code": 19.5,
+            "native": 11.5,
+            "object": 6.3,
+            "array": 5.5,
+            "closure": 4.6,
+            "string": 3.4,
+            "object shape": 2.6,
+            "hidden": 2.4,
+            "concatenated string": 0.3
+          }
+        },
+        "afterSession": {
+          "rendererFootprintMb": 226,
+          "jsHeapUsedMb": 42.4,
+          "byTypeMb": {
+            "code": 18.8,
+            "native": 10.1,
+            "object": 5.5,
+            "array": 5.2,
+            "closure": 4.4,
+            "string": 3.3,
+            "object shape": 2.5,
+            "hidden": 2.4,
+            "concatenated string": 0.3
+          }
+        }
+      },
+      "after": {
+        "empty": {
+          "rendererFootprintMb": 152,
+          "jsHeapUsedMb": 42.1,
+          "byTypeMb": {
+            "code": 20,
+            "native": 8.4,
+            "object": 5.1,
+            "array": 5,
+            "closure": 4.3,
+            "string": 3,
+            "object shape": 2.3,
+            "hidden": 2.1,
+            "concatenated string": 0.3
+          }
+        },
+        "cached": {
+          "rendererFootprintMb": 229,
+          "jsHeapUsedMb": 50.1,
+          "byTypeMb": {
+            "code": 24.6,
+            "native": 11.3,
+            "object": 6.2,
+            "array": 5.6,
+            "closure": 4.7,
+            "string": 3.7,
+            "object shape": 2.7,
+            "hidden": 2.4,
+            "concatenated string": 0.3
+          }
+        },
+        "afterSession": {
+          "rendererFootprintMb": 217,
+          "jsHeapUsedMb": 42.3,
+          "byTypeMb": {
+            "code": 18.5,
+            "native": 10,
+            "object": 5.5,
+            "array": 5.3,
+            "closure": 4.5,
+            "string": 3.3,
+            "object shape": 2.6,
+            "hidden": 2.4,
+            "concatenated string": 0.3
+          }
+        }
+      }
+    },
+    "settle60s": {
+      "before": {
+        "gitHead": "f1cfeef22492f487582eb377fc63a3b320a85938",
+        "settleMs": 60000,
+        "phases": {
+          "empty": {
+            "rendererFootprintMb": 148,
+            "jsHeapUsedMb": 44.3
+          },
+          "cached": {
+            "rendererFootprintMb": 123,
+            "jsHeapUsedMb": 43.8
+          },
+          "afterSession": {
+            "rendererFootprintMb": 127,
+            "jsHeapUsedMb": 42.7
+          }
+        }
+      },
+      "after": {
+        "gitHead": "cab5687fd7d6f503526a8a646c9cf6f89362c5fb",
+        "settleMs": 60000,
+        "phases": {
+          "empty": {
+            "rendererFootprintMb": 144,
+            "jsHeapUsedMb": 42.3
+          },
+          "cached": {
+            "rendererFootprintMb": 123,
+            "jsHeapUsedMb": 43.8
+          },
+          "afterSession": {
+            "rendererFootprintMb": 125,
+            "jsHeapUsedMb": 41.6
+          }
+        }
+      }
+    }
+  }
+}
