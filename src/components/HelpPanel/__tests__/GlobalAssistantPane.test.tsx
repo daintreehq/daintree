@@ -279,6 +279,14 @@ describe("GlobalAssistantPane (#14454)", () => {
     expect(screen.getByTestId("global-terminal").getAttribute("data-run")).toBe("g2");
   });
 
+  it("keeps restart and stop for a run whose terminal couldn't be brought back", async () => {
+    installHelp(running({ subject: null, inputOwner: "a1", inputEpoch: 3 }));
+    renderPane();
+    await flush();
+    expect(screen.queryByTestId("global-terminal")).toBeNull();
+    expect(screen.getByTestId("help-global-more")).not.toBeNull();
+  });
+
   it("shows the chosen run when it is the one running", async () => {
     useHelpPanelStore.setState({ globalTarget: subject });
     installHelp(running());

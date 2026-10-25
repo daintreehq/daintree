@@ -426,6 +426,17 @@ describe("createAllHostsRoute", () => {
     expect(reopened).toHaveBeenCalledTimes(1);
   });
 
+  it("releases one pane's own stream by id, on its host by that host's id (#14454)", async () => {
+    invoke.mockResolvedValue({ watchId: 3, snapshot: null });
+    const { terminalApi } = createAllHostsRoute("own", ["own", "remote"]);
+    const view = await terminalApi.watchTerminal(allHostsKey("remote", "t1"), { spawnedAt: 1 });
+    invoke.mockClear();
+    await terminalApi.unwatchTerminal(view.watchId! + 100);
+    expect(invoke).not.toHaveBeenCalled();
+    await terminalApi.unwatchTerminal(view.watchId!);
+    expect(invoke.mock.calls).toEqual([["remote", "canopy:unwatch-terminal", 3]]);
+  });
+
   it("releases every watched host on unwatch", async () => {
     invoke.mockResolvedValue({ watchId: 3, snapshot: null });
     const { terminalApi } = createAllHostsRoute("own", ["own", "remote"]);

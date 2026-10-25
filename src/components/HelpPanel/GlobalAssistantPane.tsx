@@ -135,7 +135,7 @@ export function GlobalAssistantPane({ isVisible }: { isVisible: boolean }) {
 
   // Restart and stop act on the run this pane shows, never on a successor it
   // is hiding behind "ended".
-  const controllable = view?.phase === "running" && shown !== null;
+  const controllable = view?.phase === "running" && !targetEnded;
   const generation = view?.generation ?? 0;
 
   return (
@@ -243,12 +243,19 @@ export function GlobalAssistantPane({ isVisible }: { isVisible: boolean }) {
             Start global assistant
           </Button>
         </div>
-      ) : view.phase === "launching" || !shown || paneKey === null ? (
+      ) : view.phase === "launching" ? (
         <p
           role="status"
           className="animate-pulse-delayed px-6 py-8 text-center text-xs text-text-secondary"
         >
           Starting the global assistant…
+        </p>
+      ) : !shown || paneKey === null ? (
+        // Running with no terminal to watch: its PTY is being brought back, or
+        // couldn't be. Restart stays in the menu above either way.
+        <p role="status" className="px-6 py-8 text-center text-xs text-text-secondary">
+          The global assistant's terminal isn't available. Restart it from the menu if it doesn't
+          come back.
         </p>
       ) : canopyOpen ? (
         <p className="px-6 py-8 text-center text-xs text-text-secondary">

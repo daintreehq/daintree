@@ -83,7 +83,8 @@ export function assistantTerminalApi(
   return {
     holdsSize: false,
     watchTerminal: () => host.watchAssistant(consumer, subject),
-    unwatchTerminal: () => host.assistantInvoke(consumer, "canopy:unwatch-terminal"),
+    unwatchTerminal: (...args) =>
+      host.assistantInvoke(consumer, "canopy:unwatch-terminal", ...args),
     terminalInput: (...args) => host.assistantInvoke(consumer, "canopy:terminal-input", ...args),
     // The window showing it on its own host sizes it; this pane reads at that size.
     terminalResize: () => Promise.resolve(),

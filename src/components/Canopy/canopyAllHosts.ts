@@ -411,7 +411,17 @@ export function createAllHostsRoute(ownHostId: HostId, hostIds: readonly HostId[
       }
       return { ...view, watchId: mine };
     },
-    unwatchTerminal: async () => {
+    unwatchTerminal: async (mine?: number) => {
+      // One pane's own stream: anything opened or opening since stays.
+      if (mine !== undefined) {
+        const watch = watches.get(mine);
+        if (!watch) return;
+        watches.delete(mine);
+        await terminalFor(watch.hostId)
+          .unwatchTerminal(watch.raw)
+          .catch(() => {});
+        return;
+      }
       generation += 1;
       wantedHost = null;
       const hosts = new Set([...watches.values()].map((watch) => watch.hostId));

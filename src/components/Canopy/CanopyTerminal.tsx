@@ -430,7 +430,15 @@ export function CanopyTerminal({
     };
     const offResync = api.onResync(() => reopen("reconnecting"));
     const onOpened = (opened: CanopyTerminalView) => {
-      if (disposed) return;
+      if (disposed) {
+        // Opened for a pane already gone: let that one stream go, and only it.
+        if (opened.watchId !== null) {
+          safeFireAndForget(api.unwatchTerminal(opened.watchId), {
+            context: "Ending a canopy terminal stream that opened too late",
+          });
+        }
+        return;
+      }
       if (opened.watchId === null || opened.snapshot === null) {
         setStatus("failed");
         return;
@@ -508,15 +516,18 @@ export function CanopyTerminal({
       // The pane re-measures only once main has handed the PTY back, so a size
       // it took meanwhile lands after the one main restores, not before it.
       const release = releasePane;
-      // Its own stream by id once it has one: another pane in this view may
-      // have opened a stream since, which this cleanup must leave alone.
+      // Only its own stream, by id: another pane in this view may have opened
+      // one since, which this cleanup must leave alone. A stream still opening
+      // is let go when its answer arrives, below.
       const ownWatchId = view?.watchId ?? null;
-      safeFireAndForget(
-        (ownWatchId !== null ? api.unwatchTerminal(ownWatchId) : api.unwatchTerminal()).finally(
-          () => release?.()
-        ),
-        { context: "Ending the canopy terminal stream" }
-      );
+      if (ownWatchId !== null) {
+        safeFireAndForget(
+          api.unwatchTerminal(ownWatchId).finally(() => release?.()),
+          { context: "Ending the canopy terminal stream" }
+        );
+      } else {
+        release?.();
+      }
     };
   }, [runId, spawnedAt, api, generation]);
 
