@@ -10,6 +10,8 @@ import {
   resolveAssistantAgentSkip,
 } from "../../../shared/utils/assistantDaintreeConfirmations.js";
 import { isStorableAssistantAgentId } from "../../../shared/types/ipc/agentDefaults.js";
+import type { ActionManifestEntry } from "../../../shared/types/actions.js";
+import { isGlobalAssistantId } from "../../../shared/config/globalAssistant.js";
 import { summarizeMcpArgs, summarizeMcpResult } from "../../../shared/utils/mcpArgsSummary.js";
 import { scrubSecrets } from "../../../shared/utils/secretScrubber.js";
 import { sanitizePath } from "../../utils/pathScrubber.js";
@@ -37,7 +39,7 @@ import {
   WorkspaceBindingError,
 } from "./rendererBridge.js";
 import { relayWriteStanding } from "./relayWriteRule.js";
-import { getViewlessHelpBaseManifest } from "./baseManifest.js";
+import { getGlobalAssistantBaseManifest, getViewlessHelpBaseManifest } from "./baseManifest.js";
 import { isRemoteEndpointHandle, NO_VIEW_HANDLE } from "../../ipc/endpoint.js";
 import { isProjectWorkspaceId } from "../../../shared/utils/workspaceIds.js";
 import type {
@@ -592,6 +594,11 @@ export function createSessionServerDeps(
   // a pin, snapshotted for the pin's reason: torn down mid-call, it keeps
   // failing closed to its own project rather than following focus.
   const viewlessProjectId = deps.sessionStore.sessionViewlessHelpMap.get(sessionId) ?? null;
+  // The global assistant is viewless too, but has no project's tools to describe (#14453).
+  const viewlessBaseManifest = (): ActionManifestEntry[] =>
+    viewlessProjectId !== null && isGlobalAssistantId(viewlessProjectId)
+      ? getGlobalAssistantBaseManifest()
+      : getViewlessHelpBaseManifest();
   const viewlessDispatch = deps.dispatchActionWithoutView;
   // Snapshotted for the same reason as the pin: `clearSessionBinding` deletes
   // the origin entry on teardown, and `getOrigin` fails closed to `external`
@@ -770,7 +777,7 @@ export function createSessionServerDeps(
     // run is still listed, and answers NO_FRONTEND_ATTACHED when called.
     if (viewlessProjectId !== null) {
       const gone = goneBinding();
-      return gone ? Promise.reject(gone) : Promise.resolve(getViewlessHelpBaseManifest());
+      return gone ? Promise.reject(gone) : Promise.resolve(viewlessBaseManifest());
     }
     const id = deps.sessionStore.sessionWebContentsMap.get(sessionId);
     if (id !== undefined && pinnedManifest) {
@@ -975,7 +982,7 @@ export function createSessionServerDeps(
       if (pinnedWebContentsId !== null) {
         return deps.getCachedManifestForWebContents?.(pinnedWebContentsId) ?? null;
       }
-      if (viewlessProjectId !== null) return getViewlessHelpBaseManifest();
+      if (viewlessProjectId !== null) return viewlessBaseManifest();
       return deps.getCachedManifest();
     };
 
