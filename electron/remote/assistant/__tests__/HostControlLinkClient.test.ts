@@ -20,6 +20,7 @@ import {
   type RelayApprovePayload,
   type RelayNoticeStatusAnswer,
   type RelayNoticesPayload,
+  type ThrowawayCallPayload,
 } from "../linkMethods.js";
 
 const CREDENTIAL = "C".repeat(43);
@@ -115,6 +116,67 @@ describe("HostControlLinkClient.relayCall (#13493)", () => {
       method === AssistantLinkMethod.MCP_CALL ? { status: "maybe" } : null
     );
     await expect(garbled.relay.relayCall("studio", PAYLOAD, 105_000)).rejects.toMatchObject({
+      code: "INTERNAL",
+    });
+  });
+});
+
+describe("HostControlLinkClient.throwawayCall (#14446)", () => {
+  const THROWAWAY: ThrowawayCallPayload = {
+    helpSessionId: "help-1",
+    tier: "core",
+    callId: "call-1",
+    resend: false,
+    call: { tool: "throwaway.status", args: { runId: "run-1" } },
+    runMs: 90_000,
+  };
+
+  it("proves the sender once, then sends the call over its own method with its own timeout", async () => {
+    const { relay, calls } = client((method) =>
+      method === AssistantLinkMethod.THROWAWAY_CALL
+        ? { status: "failed", reason: "not-found" }
+        : null
+    );
+    await expect(relay.throwawayCall("studio", THROWAWAY, 105_000)).resolves.toEqual({
+      status: "failed",
+      reason: "not-found",
+    });
+    await relay.throwawayCall("studio", { ...THROWAWAY, callId: "call-2" }, 105_000);
+    expect(calls.map((call) => call.method)).toEqual([
+      AssistantLinkMethod.AUTHENTICATE,
+      AssistantLinkMethod.THROWAWAY_CALL,
+      AssistantLinkMethod.THROWAWAY_CALL,
+    ]);
+    expect(calls[1]).toMatchObject({ payload: THROWAWAY, timeoutMs: 105_000 });
+  });
+
+  it("reports a proof that got no answer as never sent, sending nothing of the call", async () => {
+    const { relay, calls } = client((method) => {
+      if (method === AssistantLinkMethod.AUTHENTICATE) {
+        throw new AppError({ code: "OUTCOME_UNKNOWN", message: "no answer" });
+      }
+      return null;
+    });
+    await expect(relay.throwawayCall("studio", THROWAWAY, 105_000)).rejects.toMatchObject({
+      code: "HOST_DISCONNECTED",
+    });
+    expect(calls.map((call) => call.method)).toEqual([AssistantLinkMethod.AUTHENTICATE]);
+  });
+
+  it("names a host from before throwaway agents unsupported, and an unreadable answer invalid", async () => {
+    const old = client((method) => {
+      if (method === AssistantLinkMethod.THROWAWAY_CALL) {
+        throw new AppError({ code: "UNSUPPORTED", message: "Unknown method" });
+      }
+      return null;
+    });
+    await expect(old.relay.throwawayCall("studio", THROWAWAY, 105_000)).rejects.toMatchObject({
+      code: "UNSUPPORTED",
+    });
+    const garbled = client((method) =>
+      method === AssistantLinkMethod.THROWAWAY_CALL ? { status: "failed", reason: "busy" } : null
+    );
+    await expect(garbled.relay.throwawayCall("studio", THROWAWAY, 105_000)).rejects.toMatchObject({
       code: "INTERNAL",
     });
   });

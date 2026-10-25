@@ -215,4 +215,49 @@ describe("createThrowawayRelay (#14446)", () => {
     expect(kept).toEqual(lines.slice(lines.length - kept.length));
     relay.dispose();
   });
+
+  it("measures an output read as it is carried, escapes and multibyte text included", async () => {
+    const read = (content: string) =>
+      executor(async () => ({
+        status: "done",
+        result: { tool: "throwaway.output", run: RUN, content, lineCount: 1, truncated: false },
+      }));
+    const output = {
+      ...LAUNCH,
+      call: { tool: "throwaway.output" as const, args: { runId: "run-1" } },
+    };
+    // Each fits raw but not escaped, or not in bytes: both must be cut.
+    const quoted = Array.from({ length: 400 }, (_, index) => `${index}${'"'.repeat(300)}`);
+    const wide = Array.from(
+      { length: 400 },
+      (_, index) => `${index}${"\u00e9\u{1F600}".repeat(100)}`
+    );
+    for (const lines of [quoted, wide]) {
+      const relay = createThrowawayRelay({
+        acceptsRemoteControl: () => true,
+        executor: () => read(lines.join("\n")),
+      });
+      const answer = await relay.call("sender-a", output);
+      expect(Buffer.byteLength(JSON.stringify(answer), "utf8")).toBeLessThanOrEqual(
+        MAX_RELAY_RESULT_BYTES
+      );
+      if (answer.status !== "done" || answer.result.tool !== "throwaway.output") {
+        throw new Error("expected an output read");
+      }
+      const kept = answer.result.content.split("\n");
+      expect(answer.result.truncated).toBe(true);
+      expect(kept).toEqual(lines.slice(lines.length - kept.length));
+      relay.dispose();
+    }
+    // One line too long to carry at all leaves nothing of it.
+    const relay = createThrowawayRelay({
+      acceptsRemoteControl: () => true,
+      executor: () => read('"'.repeat(MAX_RELAY_RESULT_BYTES)),
+    });
+    await expect(relay.call("sender-a", output)).resolves.toMatchObject({
+      status: "done",
+      result: { content: "", lineCount: 0, truncated: true },
+    });
+    relay.dispose();
+  });
 });

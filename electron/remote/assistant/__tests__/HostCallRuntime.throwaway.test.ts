@@ -201,6 +201,29 @@ describe("HostCallRuntime host.call to a throwaway target (#14446)", () => {
     ).resolves.toMatchObject({ ok: true, value: { outcome: "expired", callId: "gone" } });
   });
 
+  it("lets go of the host once every send settles, whatever came back", async () => {
+    const gates: Array<() => void> = [];
+    throwawayCall.mockImplementation(
+      () =>
+        new Promise((_resolve, reject) => {
+          gates.push(() => reject(new AppError({ code: "OUTCOME_UNKNOWN", message: "lost" })));
+        })
+    );
+    const first = runtime.call("a", { ...LAUNCH, callId: "c-1" }, { tier: "core" });
+    const second = runtime.call("a", { ...LAUNCH, callId: "c-2" }, { tier: "core" });
+    await vi.waitFor(() => expect(gates).toHaveLength(2));
+    gates[0]!();
+    await first;
+    // The other send is still out: the host's link is still in use.
+    expect(runtime.hasCallInFlight("studio")).toBe(true);
+    gates[1]!();
+    await second;
+    expect(runtime.hasCallInFlight("studio")).toBe(false);
+    throwawayCall.mockRejectedValueOnce(new AppError({ code: "HOST_DISCONNECTED", message: "x" }));
+    await runtime.call("a", LAUNCH, { tier: "core" });
+    expect(runtime.hasCallInFlight("studio")).toBe(false);
+  });
+
   it("answers a tool that ran and failed as its tool error", async () => {
     throwawayCall.mockResolvedValueOnce({ status: "failed", reason: "not-found" });
     const answer = await runtime.call(

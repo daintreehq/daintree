@@ -918,10 +918,19 @@ describe("throwaway calls on a host that runs them (#14446)", () => {
     await expect(
       next.ask(AssistantLinkMethod.THROWAWAY_CALL, { ...LAUNCH, resend: true })
     ).resolves.toEqual(first);
-    // Another Shell's sender under the same id is its own call.
+    // Another Shell's sender under the same id is its own call: no record to resend.
     const other = attach("link-3", "sender-b");
-    await other.ask(AssistantLinkMethod.THROWAWAY_CALL, { ...LAUNCH, resend: true });
+    await expect(
+      other.ask(AssistantLinkMethod.THROWAWAY_CALL, { ...LAUNCH, resend: true })
+    ).resolves.toEqual({ status: "unknown" });
     expect(run).toHaveBeenCalledTimes(1);
+    await other.ask(AssistantLinkMethod.THROWAWAY_CALL, LAUNCH);
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run).toHaveBeenLastCalledWith(
+      { senderId: "sender-b", helpSessionId: "help-1" },
+      LAUNCH.call,
+      expect.anything()
+    );
     relay.dispose();
   });
 
