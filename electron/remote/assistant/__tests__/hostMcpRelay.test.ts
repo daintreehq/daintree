@@ -859,3 +859,92 @@ describe("throwaway calls on a host that doesn't run them yet (#14444)", () => {
     );
   });
 });
+
+describe("throwaway calls on a host that runs them (#14446)", () => {
+  const RUN = {
+    runId: "run-1",
+    agentId: "claude",
+    startedAt: 1_000,
+    ageMs: 0,
+    timeLimitMs: null,
+    expiresAt: null,
+    state: "running" as const,
+    endedAt: null,
+    endReason: null,
+  };
+  const LAUNCH = {
+    helpSessionId: "help-1",
+    tier: "core",
+    callId: "call-1",
+    resend: false,
+    call: { tool: "throwaway.launch", args: { agentId: "claude" } },
+    runMs: 90_000,
+  };
+
+  it("runs them for the proven sender and help session, opening no project session", async () => {
+    const hasProject = vi.fn(async () => true);
+    const run = vi.fn(async () => ({
+      status: "done" as const,
+      result: { tool: "throwaway.launch" as const, run: RUN },
+    }));
+    const { links, opened, relay } = harness([["link-1", "sender-a"]], {
+      hasProject,
+      throwawayRuns: () => ({ run }),
+    });
+    await expect(links[0]!.ask(AssistantLinkMethod.THROWAWAY_CALL, LAUNCH)).resolves.toEqual({
+      status: "done",
+      result: { tool: "throwaway.launch", run: RUN },
+    });
+    expect(run).toHaveBeenCalledWith(
+      { senderId: "sender-a", helpSessionId: "help-1" },
+      LAUNCH.call,
+      { callId: "call-1", timeoutMs: 90_000 }
+    );
+    expect(hasProject).not.toHaveBeenCalled();
+    expect(opened).toHaveLength(0);
+    relay.dispose();
+  });
+
+  it("answers a resend over the Shell's next session from the first send, launching once", async () => {
+    const run = vi.fn(async () => ({
+      status: "done" as const,
+      result: { tool: "throwaway.launch" as const, run: RUN },
+    }));
+    const { links, attach, relay } = harness([["link-1", "sender-a"]], {
+      throwawayRuns: () => ({ run }),
+    });
+    const first = await links[0]!.ask(AssistantLinkMethod.THROWAWAY_CALL, LAUNCH);
+    const next = attach("link-2", "sender-a");
+    await expect(
+      next.ask(AssistantLinkMethod.THROWAWAY_CALL, { ...LAUNCH, resend: true })
+    ).resolves.toEqual(first);
+    // Another Shell's sender under the same id is its own call: no record to resend.
+    const other = attach("link-3", "sender-b");
+    await expect(
+      other.ask(AssistantLinkMethod.THROWAWAY_CALL, { ...LAUNCH, resend: true })
+    ).resolves.toEqual({ status: "unknown" });
+    expect(run).toHaveBeenCalledTimes(1);
+    await other.ask(AssistantLinkMethod.THROWAWAY_CALL, LAUNCH);
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run).toHaveBeenLastCalledWith(
+      { senderId: "sender-b", helpSessionId: "help-1" },
+      LAUNCH.call,
+      expect.anything()
+    );
+    relay.dispose();
+  });
+
+  it("refuses them while the person refuses remote control, before the executor is read", async () => {
+    const throwawayRuns = vi.fn(() => ({ run: vi.fn() }));
+    const { links, relay } = harness([["link-1", "sender-a"]], {
+      acceptsRemoteControl: () => false,
+      throwawayRuns,
+    });
+    await expect(links[0]!.ask(AssistantLinkMethod.THROWAWAY_CALL, LAUNCH)).resolves.toEqual({
+      status: "refused",
+      reason: "control-off",
+    });
+    expect(throwawayRuns).not.toHaveBeenCalled();
+    relay.dispose();
+  });
+});

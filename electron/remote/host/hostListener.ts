@@ -193,6 +193,7 @@ async function buildHostListener(
     senders: () => getRemoteService("assistantSenderSessions"),
     acceptsRemoteControl: () => getHelpAssistantSettings().acceptRemoteControl,
     hasProject: async (projectId) => projectStore.getProjectById(projectId) !== null,
+    throwawayRuns: () => getRemoteService("hostThrowawayRuns") ?? null,
     openSession: async ({
       tier,
       projectId,

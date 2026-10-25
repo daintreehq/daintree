@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  HOST_THROWAWAY_TOOL_SIGNATURES,
   HostThrowawayCallSchema,
   HostThrowawayRunSchema,
   HostThrowawayToolResultSchema,
@@ -98,5 +99,18 @@ describe("throwaway tools (#14444)", () => {
     for (const result of invalid) {
       expect(HostThrowawayToolResultSchema.safeParse(result).success).toBe(false);
     }
+  });
+});
+
+describe("the throwaway tools as a refusal names them (#14446)", () => {
+  it("names each tool with exactly its schema's arguments", () => {
+    const named = HostThrowawayCallSchema.options.map((option) => {
+      const tool = option.shape.tool.value;
+      const args = Object.entries(option.shape.args.shape).map(([key, field]) =>
+        field.safeParse(undefined).success ? `${key}?` : key
+      );
+      return `${tool} {${args.join(", ")}}`;
+    });
+    expect(HOST_THROWAWAY_TOOL_SIGNATURES).toBe(named.join(", "));
   });
 });
