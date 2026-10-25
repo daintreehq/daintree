@@ -182,6 +182,80 @@ describe("HostControlLinkClient.throwawayCall (#14446)", () => {
   });
 });
 
+describe("HostControlLinkClient.agents (#14455)", () => {
+  const DIRECTORY = { coverage: "ok", observedAt: 7, complete: true, omitted: 0, entries: [] };
+
+  it("proves the sender, then asks for the host's agents with the filter and timeout given", async () => {
+    const { relay, calls } = client((method) =>
+      method === AssistantLinkMethod.AGENTS ? { status: "done", directory: DIRECTORY } : null
+    );
+
+    await expect(relay.agents("studio", { projectId: "p" }, 5_000)).resolves.toEqual({
+      status: "done",
+      directory: DIRECTORY,
+    });
+    expect(calls.map((call) => call.method)).toEqual([
+      AssistantLinkMethod.AUTHENTICATE,
+      AssistantLinkMethod.AGENTS,
+    ]);
+    expect(calls[1]).toMatchObject({ payload: { projectId: "p" }, timeoutMs: 5_000 });
+  });
+
+  it("asks nothing of the host until its sender is proven, nor when the proof fails", async () => {
+    let prove: (() => void) | undefined;
+    const pending = client((method) =>
+      method === AssistantLinkMethod.AUTHENTICATE
+        ? new Promise<null>((resolve) => (prove = () => resolve(null)))
+        : { status: "done", directory: DIRECTORY }
+    );
+    const read = pending.relay.agents("studio", {});
+    await vi.waitFor(() => expect(prove).toBeDefined());
+    expect(pending.calls.map((call) => call.method)).toEqual([AssistantLinkMethod.AUTHENTICATE]);
+    prove?.();
+    await read;
+    expect(pending.calls.map((call) => call.method)).toEqual([
+      AssistantLinkMethod.AUTHENTICATE,
+      AssistantLinkMethod.AGENTS,
+    ]);
+
+    const refused = client((method) => {
+      if (method === AssistantLinkMethod.AUTHENTICATE) {
+        throw new AppError({ code: "PERMISSION", message: "another sender" });
+      }
+      return { status: "done", directory: DIRECTORY };
+    });
+    await expect(refused.relay.agents("studio", {})).rejects.toMatchObject({ code: "PERMISSION" });
+    expect(refused.calls.map((call) => call.method)).toEqual([AssistantLinkMethod.AUTHENTICATE]);
+  });
+
+  it("reads a refusal it doesn't know as control off", async () => {
+    const { relay } = client((method) =>
+      method === AssistantLinkMethod.AGENTS ? { status: "refused", reason: "later" } : null
+    );
+    await expect(relay.agents("studio", {})).resolves.toEqual({
+      status: "refused",
+      reason: "control-off",
+    });
+  });
+
+  it("names a host from before it unsupported, and an unreadable answer invalid", async () => {
+    const old = client((method) => {
+      if (method === AssistantLinkMethod.AGENTS) {
+        throw new AppError({ code: "UNSUPPORTED", message: "Unknown method" });
+      }
+      return null;
+    });
+    await expect(old.relay.agents("studio", {})).rejects.toMatchObject({ code: "UNSUPPORTED" });
+
+    const garbled = client((method) =>
+      method === AssistantLinkMethod.AGENTS
+        ? { status: "done", directory: { ...DIRECTORY, coverage: "everything" } }
+        : null
+    );
+    await expect(garbled.relay.agents("studio", {})).rejects.toMatchObject({ code: "INTERNAL" });
+  });
+});
+
 describe("HostControlLinkClient relay notices (#13500)", () => {
   type Receiver = RelayNoticeReceiver;
 

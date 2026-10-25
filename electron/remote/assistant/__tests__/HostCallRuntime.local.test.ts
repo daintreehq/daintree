@@ -179,7 +179,7 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
       ]);
     });
 
-    it("adds the agent inventory only when asked, local read, remote hosts unsupported", async () => {
+    it("adds the agent inventory only when asked, local read, an unread remote host unreachable", async () => {
       const agents = vi.fn(async () => ({
         coverage: "ok" as const,
         observedAt: 42,
@@ -206,9 +206,9 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
       expect(HostListResultSchema.safeParse(listed.value).success).toBe(true);
       expect(agents).toHaveBeenCalledWith({ projectId: "proj-1" });
       expect(listed.value.hosts[0]?.agents).toMatchObject({ coverage: "ok", observedAt: 42 });
-      // A host this Shell can't read agents from is not an empty inventory.
+      // A host with no client to read it through is not an empty inventory.
       expect(listed.value.hosts[1]?.agents).toMatchObject({
-        coverage: "unsupported",
+        coverage: "unreachable",
         complete: false,
         entries: [],
       });

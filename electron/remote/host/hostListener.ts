@@ -194,6 +194,12 @@ async function buildHostListener(
     acceptsRemoteControl: () => getHelpAssistantSettings().acceptRemoteControl,
     hasProject: async (projectId) => projectStore.getProjectById(projectId) !== null,
     throwawayRuns: () => getRemoteService("hostThrowawayRuns") ?? null,
+    // Loaded on the first read: a host no Shell's assistant lists reads none.
+    readAgents: async (options) => {
+      const { getLocalAgentDirectory } =
+        await import("../../services/assistants/localAgentDirectory.js");
+      return getLocalAgentDirectory().read(options);
+    },
     openSession: async ({
       tier,
       projectId,

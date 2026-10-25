@@ -158,9 +158,11 @@ export type AgentDirectoryEntry = z.infer<typeof AgentDirectoryEntrySchema>;
  *
  * - `ok`: read now.
  * - `stale`: the read failed; the entries are the last known, from `observedAt`.
- * - `unreachable`: no link, and nothing known to show.
- * - `unsupported`: the host can't be read this way: too old, or this Shell
- *   doesn't read its agents yet.
+ * - `unreachable`: no link, nothing known to show, or reading it isn't
+ *   allowed now: this Shell's control switch for the host, or the host's own
+ *   consent, is off.
+ * - `unsupported`: the host can't be read this way: it runs a Daintree from
+ *   before agent directories could be read remotely.
  */
 export const AGENT_DIRECTORY_COVERAGE = ["ok", "stale", "unreachable", "unsupported"] as const;
 export type AgentDirectoryCoverage = (typeof AGENT_DIRECTORY_COVERAGE)[number];
@@ -189,6 +191,22 @@ export function isFullAgentDirectory(directory: AgentDirectory): boolean {
   return directory.coverage === "ok" && directory.complete && directory.omitted === 0;
 }
 
+/**
+ * A directory as the host it was read from is addressed here: its own entries
+ * name it `local`, and a Shell knows it by its own id for it. Scope, lane,
+ * terminal and incarnation are kept exactly.
+ */
+export function agentDirectoryAs(hostId: string, directory: AgentDirectory): AgentDirectory {
+  return {
+    ...directory,
+    entries: directory.entries.map((entry): AgentDirectoryEntry =>
+      entry.state === "live"
+        ? { ...entry, subject: { ...entry.subject, hostId } }
+        : { ...entry, hostId }
+    ),
+  };
+}
+
 export function cutAgentLabel(label: string | undefined | null): string | null {
   const text = label?.replace(/\s+/g, " ").trim();
   if (!text) return null;
@@ -199,21 +217,28 @@ export function cutAgentLabel(label: string | undefined | null): string | null {
 
 /**
  * Keeps the leading entries whose compact JSON fits `maxBytes`, counting the
- * rest in `omitted`; live entries lead, so resumable ones are cut first.
+ * rest in `omitted`; live entries lead, so resumable ones are cut first. The
+ * cut is measured with its `omitted` at the most it can grow to, so a count
+ * that gains digits never carries it past the budget.
  */
 export function fitAgentDirectory(
   directory: AgentDirectory,
   maxBytes: number = AGENT_DIRECTORY_BYTES_MAX
 ): AgentDirectory {
   const encoder = new TextEncoder();
-  let used = encoder.encode(JSON.stringify({ ...directory, entries: [] })).length;
+  const bytes = (value: unknown): number => encoder.encode(JSON.stringify(value)).length;
+  if (bytes(directory) <= maxBytes) return directory;
+  let used = bytes({
+    ...directory,
+    omitted: directory.omitted + directory.entries.length,
+    entries: [],
+  });
   let kept = 0;
   for (const entry of directory.entries) {
-    used += encoder.encode(JSON.stringify(entry)).length + 1;
+    used += bytes(entry) + (kept > 0 ? 1 : 0);
     if (used > maxBytes) break;
     kept += 1;
   }
-  if (kept === directory.entries.length) return directory;
   return {
     ...directory,
     omitted: directory.omitted + directory.entries.length - kept,

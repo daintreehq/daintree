@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { EXCHANGE_STATES } from "../exchange/types.js";
+import { AgentDirectorySchema } from "../../../shared/types/agentDirectory.js";
 import {
   HOST_THROWAWAY_FAILURES,
   HOST_THROWAWAY_REFUSALS,
@@ -68,6 +69,13 @@ export const AssistantLinkMethod = {
    * UNSUPPORTED, and its runs end on their limits.
    */
   THROWAWAY_RELEASE: "assistant.throwaway-release",
+  /**
+   * Shell → Host: this host's workers and assistants, as its own directory
+   * reads them, for `host.list` with `includeAgents` (#14455). Passive, and
+   * naming a run grants nothing over it. A host from before this answers
+   * UNSUPPORTED.
+   */
+  AGENTS: "assistant.agents",
 } as const;
 
 /** What a v0.44 Shell calls for the exchanges it sent, answered from retired records (#13496). */
@@ -262,6 +270,27 @@ export type ThrowawayCallAnswer = z.infer<typeof ThrowawayCallAnswerSchema>;
 
 export const ThrowawayReleasePayloadSchema = z.object({ helpSessionId: id }).strict();
 export type ThrowawayReleasePayload = z.infer<typeof ThrowawayReleasePayloadSchema>;
+
+export const AgentsPayloadSchema = z.object({ projectId: id.optional() }).strict();
+export type AgentsPayload = z.infer<typeof AgentsPayloadSchema>;
+
+export const AgentsAnswerSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("done"), directory: AgentDirectorySchema }).strip(),
+  /** This host doesn't take work from other machines' assistants; nothing was read. */
+  z
+    .object({
+      status: z.literal("refused"),
+      reason: z.union([
+        z.literal("control-off"),
+        z
+          .string()
+          .max(64)
+          .transform(() => "control-off" as const),
+      ]),
+    })
+    .strip(),
+]);
+export type AgentsAnswer = z.infer<typeof AgentsAnswerSchema>;
 
 /** Notices one relay-notices call carries; the host sends the rest in the next. */
 export const MAX_RELAY_NOTICES_PER_CALL = 32;

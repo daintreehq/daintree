@@ -2,8 +2,16 @@ import { AppError } from "../../utils/errorTypes.js";
 import type { LinkSession } from "../link/session.js";
 import type { MetricsSessionContext, MetricsSessionSource } from "../metrics/hostMetricsHost.js";
 import {
+  AGENT_DIRECTORY_BYTES_MAX,
+  fitAgentDirectory,
+  unreadAgentDirectory,
+  type AgentDirectory,
+} from "../../../shared/types/agentDirectory.js";
+import {
+  AgentsPayloadSchema,
   AssistantLinkMethod,
   McpCallPayloadSchema,
+  type AgentsAnswer,
   RelayNoticeStatusPayloadSchema,
   ThrowawayCallPayloadSchema,
   ThrowawayReleasePayloadSchema,
@@ -29,6 +37,11 @@ export interface HostMcpRelayDeps extends Omit<McpRelayExecutorDeps, "waitingNot
   senders(): Pick<SenderSessions, "senderOf" | "senderOfSessionId"> | undefined;
   /** This host's throwaway runs (#14445), read at each call; absent or null, they are off. */
   throwawayRuns?(): HostThrowawayExecutor | null;
+  /**
+   * This host's own agent directory (#14455), the one its own `host.list`
+   * reads; absent, a Shell asking for it is told this host can't say.
+   */
+  readAgents?(options: { projectId?: string }): Promise<AgentDirectory>;
 }
 
 export interface HostMcpRelaySource extends MetricsSessionSource {
@@ -184,6 +197,34 @@ export function installHostMcpRelay(
           .throwawayRuns?.()
           ?.endOwner({ senderId, helpSessionId: payload.helpSessionId }, "session-ended");
         return {};
+      }
+    );
+    session.registerCallHandler(
+      AssistantLinkMethod.AGENTS,
+      AgentsPayloadSchema,
+      async (payload): Promise<AgentsAnswer> => {
+        if (disposed) throw noSender();
+        const senderId = deps.senders()?.senderOf(session);
+        if (!senderId) throw noSender();
+        const read = deps.readAgents;
+        if (!read) {
+          throw new AppError({ code: "UNSUPPORTED", message: "This host doesn't list its agents" });
+        }
+        // The same consent its tools are run under: a host that takes no work
+        // from other machines' assistants doesn't show them its runs either.
+        if (!deps.acceptsRemoteControl()) return { status: "refused", reason: "control-off" };
+        const options = payload.projectId === undefined ? {} : { projectId: payload.projectId };
+        const directory = await Promise.resolve()
+          .then(() => read(options))
+          .catch(() => unreadAgentDirectory("unreachable"));
+        // Consent withdrawn while it was read: what was read isn't sent.
+        if (disposed || !deps.acceptsRemoteControl()) {
+          return { status: "refused", reason: "control-off" };
+        }
+        return {
+          status: "done",
+          directory: fitAgentDirectory(directory, AGENT_DIRECTORY_BYTES_MAX),
+        };
       }
     );
     session.registerCallHandler(
