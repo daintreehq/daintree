@@ -45,6 +45,8 @@ export const HOST_THROWAWAY_TOOL_SIGNATURES =
 
 /** Longest time limit a launch may ask for. */
 export const MAX_THROWAWAY_TIME_LIMIT_MS = 15 * 60_000;
+/** A launch's time limit when it asks for none (#14447): long enough for one check. */
+export const DEFAULT_THROWAWAY_TIME_LIMIT_MS = 5 * 60_000;
 /** Most lines one output read returns. */
 export const MAX_THROWAWAY_OUTPUT_LINES = 1_000;
 /** Longest command one send may type. */
@@ -71,7 +73,10 @@ export const HostThrowawayCallSchema = z.discriminatedUnion("tool", [
         .object({
           /** A launchable agent on the host, such as `claude`; the host checks it is there. */
           agentId: id,
-          /** Refused as `expiry-unsupported` by a host that can't end runs on time yet. */
+          /**
+           * Lowers the host's default limit, up to the ceiling. Refused as
+           * `expiry-unsupported` by a host from before time limits.
+           */
           timeLimitMs: timeLimit.optional(),
         })
         .strict(),
@@ -110,8 +115,10 @@ export type HostThrowawayCall = z.infer<typeof HostThrowawayCallSchema>;
 /**
  * A run as its host reads it at the moment it answers. `ageMs` stops growing
  * once the process ends. The time limit and its deadline are both null or
- * both set: null until the host ends runs on time (#14447), and once set,
- * `expiresAt` is `startedAt + timeLimitMs`, which nothing a caller does moves.
+ * both set: null only from a host from before time limits (#14447), and once
+ * set, `expiresAt` is `startedAt + timeLimitMs`, which nothing a caller does
+ * moves. Once it passes, the host ends the run whatever state it is in and
+ * the run reads as not found, as one closed.
  */
 export const HostThrowawayRunSchema = z
   .object({
@@ -189,8 +196,8 @@ export type HostThrowawayFailure = (typeof HOST_THROWAWAY_FAILURES)[number];
 /**
  * Why a host refused a throwaway call before anything ran. `throwaway-off`
  * is a host that has them turned off or can't run them, `expiry-unsupported`
- * a launch asking for a time limit the host can't keep yet. Both read as
- * `unsupported` to the caller, never as a failure.
+ * a launch asking for a time limit a host from before #14447 can't keep. Both
+ * read as `unsupported` to the caller, never as a failure.
  */
 export const HOST_THROWAWAY_REFUSALS = [
   "control-off",

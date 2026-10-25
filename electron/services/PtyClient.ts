@@ -578,6 +578,7 @@ export class PtyClient extends EventEmitter {
         this.syncProjectContextToShard(shard, skipWindowIds),
       trackRetiringHost: (exit) => this.trackRetiringHost(exit),
       dropShardSignals: (shardKey) => this.dropShardSignals(shardKey),
+      terminalLost: (id) => this.emit("terminal-lost", id),
       logWarn,
     });
 

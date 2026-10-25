@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { EventEmitter } from "events";
 import type { PtyHostSpawnOptions, SpawnResult } from "../../../shared/types/pty-host.js";
+import {
+  HOST_THROWAWAY_TERMINAL_PREFIX,
+  HOST_THROWAWAY_WORKSPACE_ID,
+} from "../../../shared/config/hostThrowaway.js";
 
 const shared = vi.hoisted(() => {
   // vi.hoisted runs before module imports resolve, so use require() to load
@@ -1015,6 +1019,29 @@ describe("PtyClient adversarial", () => {
 
     expect(client.hasTerminal("t-overflow")).toBe(false);
     // dispose to avoid leaking timers/listeners across tests
+    client.dispose();
+  });
+
+  it("RESPAWN_AFTER_CRASH_NEVER_BRINGS_BACK_A_THROWAWAY_RUN", () => {
+    const client = createReadyClient();
+    const restartedChild = createMockChild();
+    const lost: string[] = [];
+    client.on("terminal-lost", (id: string) => lost.push(id));
+    const throwawayId = `${HOST_THROWAWAY_TERMINAL_PREFIX}run-1`;
+    client.spawn("t-kept", baseSpawnOptions());
+    client.spawn(throwawayId, baseSpawnOptions({ projectId: HOST_THROWAWAY_WORKSPACE_ID }));
+
+    shared.forkMock.mockReturnValue(restartedChild);
+    mockChild.emit("exit", 1);
+    vi.advanceTimersByTime(2000);
+    restartedChild.emit("message", { type: "ready" });
+
+    const replayedIds = restartedChild.postMessage.mock.calls
+      .filter((call: unknown[]) => (call[0] as { type?: string })?.type === "spawn")
+      .map((call: unknown[]) => (call[0] as { id: string }).id);
+    expect(replayedIds).toEqual(["t-kept"]);
+    expect(client.hasTerminal(throwawayId)).toBe(false);
+    expect(lost).toEqual([throwawayId]);
     client.dispose();
   });
 

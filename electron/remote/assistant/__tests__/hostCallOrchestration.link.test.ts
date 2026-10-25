@@ -311,6 +311,22 @@ class ThrowawayRuns implements HostThrowawayExecutor {
     return this.runs.size;
   }
 
+  readonly ended: Array<{ owner: { senderId: string; helpSessionId?: string }; reason: string }> =
+    [];
+
+  endOwner(owner: { senderId: string; helpSessionId?: string }, reason: string): void {
+    this.ended.push({ owner, reason });
+    const prefix =
+      owner.helpSessionId === undefined
+        ? `${owner.senderId}\0`
+        : `${owner.senderId}\0${owner.helpSessionId}`;
+    for (const [runId, held] of [...this.runs]) {
+      const matches =
+        owner.helpSessionId === undefined ? held.owner.startsWith(prefix) : held.owner === prefix;
+      if (matches) this.runs.delete(runId);
+    }
+  }
+
   async run(owner: HostThrowawayOwner, call: HostThrowawayCall): Promise<HostThrowawayExecution> {
     const key = `${owner.senderId}\0${owner.helpSessionId}`;
     if (call.tool === "throwaway.launch") {
@@ -1001,6 +1017,27 @@ describe("host.call to a host's throwaway agents, with no window open there (#14
     });
   });
 
+  it("closes a help session's runs on the host when it ends here, leaving another's (#14447)", async () => {
+    runs.set("help-b", { ...RUN_A, sessionId: "help-b", slot: 1 });
+    await ran(throwaway("throwaway.launch", { agentId: "claude" }));
+    await ran(throwaway("throwaway.launch", { agentId: "claude" }, { helpSessionId: "help-b" }));
+    expect(throwaways.live).toBe(2);
+
+    shell.runtime.endHelpSession("help-a");
+    await vi.waitFor(() => expect(throwaways.ended).toHaveLength(1));
+    expect(throwaways.ended[0]).toEqual({
+      owner: { senderId: expect.any(String), helpSessionId: "help-a" },
+      reason: "session-ended",
+    });
+    expect(throwaways.live).toBe(1);
+    // Released once: a second end has nothing left to tell the host.
+    shell.runtime.endHelpSession("help-a");
+    // A session that launched nothing there sends nothing.
+    shell.runtime.endHelpSession("help-c");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(throwaways.ended).toHaveLength(1);
+  });
+
   it("launches once when the launch's answer is lost and it is resent by its callId", async () => {
     loseNextAnswer.value = true;
     const lost = await settled(throwaway("throwaway.launch", { agentId: "claude" }));
@@ -1013,6 +1050,15 @@ describe("host.call to a host's throwaway agents, with no window open there (#14
     expect(throwaways.count("throwaway.launch")).toBe(1);
     expect(throwaways.live).toBe(1);
     expect(resent.run.runId).toBe(throwaways.effects[0]!.runId);
+  });
+
+  it("releases a launch whose answer was lost when its session ends (#14447)", async () => {
+    loseNextAnswer.value = true;
+    const lost = await settled(throwaway("throwaway.launch", { agentId: "claude" }));
+    expect(lost).toMatchObject({ outcome: "ambiguous", result: null });
+    expect(throwaways.live).toBe(1);
+    shell.runtime.endHelpSession("help-a");
+    await vi.waitFor(() => expect(throwaways.live).toBe(0));
   });
 
   it("answers another help session's call on a run as not found", async () => {

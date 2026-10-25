@@ -32,6 +32,12 @@ export interface HostThrowawayOwner {
   helpSessionId: string;
 }
 
+/**
+ * Why a run's owner can make no more calls (#14447): its help session ended,
+ * or its Shell's last link to this host went.
+ */
+export type HostThrowawayOwnerGone = "session-ended" | "shell-gone";
+
 /** What the executor answers for one tool: it ran, it ran and failed, or it wouldn't run it. */
 export type HostThrowawayExecution =
   | Extract<ThrowawayCallAnswer, { status: "done" | "failed" }>
@@ -48,6 +54,15 @@ export interface HostThrowawayExecutor {
     call: HostThrowawayCall,
     options: { callId: string; timeoutMs: number }
   ): Promise<HostThrowawayExecution>;
+  /**
+   * Closes the runs of an owner that will make no more calls, without waiting
+   * out their time limits: one help session's, or with none named, every run
+   * of the sender.
+   */
+  endOwner(
+    owner: { senderId: string; helpSessionId?: string },
+    reason: HostThrowawayOwnerGone
+  ): void;
 }
 
 export interface ThrowawayRelayDeps {

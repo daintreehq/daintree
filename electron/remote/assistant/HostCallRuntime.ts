@@ -123,7 +123,10 @@ export interface HostCallRuntimeDeps {
    */
   callerRun(helpSessionId: string): OpenRun | null;
   /** Read at each call: the client is installed with the database and may come later. */
-  client(): Pick<HostControlLinkClient, "relayCall" | "throwawayCall"> | null;
+  client():
+    | (Pick<HostControlLinkClient, "relayCall" | "throwawayCall"> &
+        Partial<Pick<HostControlLinkClient, "throwawayRelease">>)
+    | null;
   /**
    * Whether a help session's assistant works through one of this machine's own
    * views, from its provisioning, before its run is confirmed; false for one a
@@ -517,12 +520,13 @@ const THROWAWAY_REFUSAL_DETAILS: Record<
   "expiry-unsupported": {
     code: "unsupported",
     detail:
-      "That machine can't end a run on a time limit yet. Nothing was run; launch without timeLimitMs.",
+      "That machine runs an older Daintree that can't end a run on a time limit. Nothing was run.",
   },
 };
 /** A throwaway tool that ran and failed, as the tool error it reads like. */
 const THROWAWAY_FAILURE_MESSAGES: Record<HostThrowawayFailure, string> = {
-  "not-found": "No run of this assistant's has that runId. It may have been closed.",
+  "not-found":
+    "No run of this assistant's has that runId. It may have been closed, or passed its time limit.",
   exited: "The run's process has ended, so nothing was typed.",
   "launch-failed": "The agent couldn't be launched.",
   "input-failed": "The input couldn't be typed into the run.",
@@ -689,6 +693,8 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
   private readonly seenNotices = new Map<string, true>();
   /** Recent prompts sent from here to each host terminal, by host and terminal. */
   private readonly prompted = new Map<string, PromptMark[]>();
+  /** The hosts each help session sent a throwaway launch to, to release them when it ends (#14447). */
+  private readonly throwawayHosts = new Map<string, Set<HostId>>();
   private disposed = false;
   private readonly settingsRequests: HostSettingsRequests;
 
@@ -1056,9 +1062,28 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     return null;
   }
 
+  /**
+   * One of this machine's help sessions ended: each host it launched a
+   * throwaway run on closes them now, not at their time limits. A host this
+   * can't reach still ends them on its own, when this Shell's link goes or the
+   * limits pass.
+   */
+  endHelpSession(helpSessionId: string): void {
+    const hosts = this.throwawayHosts.get(helpSessionId);
+    this.throwawayHosts.delete(helpSessionId);
+    const client = this.deps.client();
+    if (hosts === undefined || !client?.throwawayRelease) return;
+    for (const hostId of hosts) {
+      void client.throwawayRelease(hostId, { helpSessionId }).catch((error: unknown) => {
+        logger.debug("Couldn't release a host's throwaway runs", { hostId, error });
+      });
+    }
+  }
+
   /** Forgets every call and notice; calls on hosts are left as they are. */
   dispose(): void {
     this.disposed = true;
+    this.throwawayHosts.clear();
     this.callsOut.clear();
     this.callsInFlight.clear();
     this.noticePins.clear();
@@ -1337,6 +1362,12 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
           ? await local.throwawayCall(payload)
           : { status: "refused", reason: "throwaway-off" };
       } else {
+        // Before it is sent: a launch whose answer is lost may still have launched.
+        if (parsed.data.tool === "throwaway.launch") {
+          const hosts = this.throwawayHosts.get(helpSessionId) ?? new Set<HostId>();
+          hosts.add(args.hostId);
+          this.throwawayHosts.set(helpSessionId, hosts);
+        }
         answer = await this.requireClient().throwawayCall(
           args.hostId,
           payload,

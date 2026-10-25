@@ -36,6 +36,7 @@ import type {
 import type { ResourceProfile } from "../../../shared/types/resourceProfile.js";
 import { deriveAgentObservationLevel } from "../../../shared/types/powerPolicy.js";
 import { getPowerPolicy } from "../../window/powerPolicy.js";
+import { isHostThrowawayTerminalId } from "../../../shared/config/hostThrowaway.js";
 
 /**
  * Stamp main's current PATH onto a Windows spawn message.
@@ -114,6 +115,8 @@ export interface ShardRecoveryCoordinatorDeps {
   syncProjectContextToShard: (shard: PtyShard, skipWindowIds?: ReadonlySet<number>) => void;
   trackRetiringHost: (exit: Promise<boolean>) => void;
   dropShardSignals: (shardKey: string) => void;
+  /** A terminal that died with its shard and is not brought back. */
+  terminalLost: (id: string) => void;
   logWarn: (message: string) => void;
 }
 
@@ -302,7 +305,23 @@ export class ShardRecoveryCoordinator {
     this.deps.pendingSpawns.set(id, disarmed);
   }
 
+  /**
+   * A host's throwaway runs (#14447) never come back from a crash: a replay
+   * would start a fresh agent nobody launched. Dropped before any replay, and
+   * reported lost so their inventory lets them go.
+   */
+  private dropThrowawaySpawns(shard: PtyShard): void {
+    for (const id of [...this.deps.pendingSpawns.keys()]) {
+      if (!isHostThrowawayTerminalId(id) || this.deps.ownerKey(id) !== shard.key) continue;
+      this.deps.pendingSpawns.delete(id);
+      this.deps.displacedSpawns.delete(id);
+      this.deps.restartExitSuppression.delete(id);
+      this.deps.terminalLost(id);
+    }
+  }
+
   private respawnPendingForShard(shard: PtyShard): void {
+    this.dropThrowawaySpawns(shard);
     // Kills sent to the crashed shard will never receive "exit" events, so
     // its pendingKillCount entries are permanently stale. Unlike pendingSpawns
     // (replayed below to recreate terminals on the new host), they are
@@ -443,6 +462,8 @@ export class ShardRecoveryCoordinator {
     this.deps.logWarn(
       `[PtyClient] PTY shard '${shard.key}' exceeded its crash budget (code ${code}); migrating its terminals to the default shard`
     );
+    // Read before the shard is retired, while its terminals still route to it.
+    this.dropThrowawaySpawns(shard);
     shard.retired = true;
     this.deps.shards.delete(shard.key);
     this.deps.cancelShardRetirement(shard.key);
