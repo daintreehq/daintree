@@ -8,7 +8,6 @@ const running = vi.hoisted(
 const detached = vi.hoisted(() => new Set<string>());
 /** Which project each of this machine's views shows, by WebContents id. */
 const views = vi.hoisted(() => new Map<number, string>());
-const runbooksHostState = vi.hoisted(() => ({ read: null as (() => unknown) | null }));
 /** The host-control runtime install hands the MCP server. */
 const hostControl = vi.hoisted(() => ({ runtime: null as unknown }));
 /** Lines queued on assistants' notice lines. */
@@ -73,9 +72,6 @@ vi.mock("../../../services/HelpSessionService.js", () => ({
         (run) => run.sessionId === helpSessionId
       )?.projectViewWebContentsId;
       return handle === undefined || handle === 0 ? null : handle;
-    },
-    setRunbooksHostState: (read: (() => unknown) | null) => {
-      runbooksHostState.read = read;
     },
     addSessionEndedListener: (listener: Parameters<(typeof ended)["add"]>[0]) => {
       ended.add(listener);
@@ -148,11 +144,7 @@ import { openDb } from "../../../services/persistence/db.js";
 import { getRemoteService, registerRemoteService } from "../../runtime.js";
 import { GLOBAL_ASSISTANT_ID } from "../../../../shared/config/globalAssistant.js";
 import type { HostCallRuntime, ObservedHost } from "../HostCallRuntime.js";
-import {
-  installHostControl,
-  installRetiredSendsNotice,
-  observedRunbooksHostsState,
-} from "../install.js";
+import { installHostControl, installRetiredSendsNotice } from "../install.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const migrationsFolder = path.resolve(__dirname, "../../../services/persistence/migrations");
@@ -184,70 +176,30 @@ afterEach(() => {
   views.clear();
   generations.clear();
   queued.length = 0;
-  runbooksHostState.read = null;
   hostControl.runtime = null;
   mcp.opened.length = 0;
   mcp.retired.length = 0;
   mcp.released.length = 0;
 });
 
-describe("observedRunbooksHostsState (#13411, #13496)", () => {
-  const controlled = (hostId: string) => hostId === "studio";
-
-  it("names connected for a controlled host the assistant reaches now or on its next call", () => {
-    expect(observedRunbooksHostsState(false, null, controlled)).toBe("none");
-    expect(observedRunbooksHostsState(true, null, controlled)).toBeNull();
-    expect(observedRunbooksHostsState(true, [host("studio", "connected")], controlled)).toBe(
-      "connected"
-    );
-    // No link held, as after the idle release or before the first call: dialled on demand.
-    expect(observedRunbooksHostsState(true, [host("studio", "disconnected")], controlled)).toBe(
-      "connected"
-    );
-    const connecting: ObservedHost = {
-      ...host("studio", "disconnected"),
-      connection: { status: "connecting", attempt: 1 },
-    };
-    expect(observedRunbooksHostsState(true, [connecting], controlled)).toBe("connected");
-    // A host whose switch is off counts for nothing, whatever its link does.
-    expect(
-      observedRunbooksHostsState(true, [{ ...connecting, hostId: "laptop" }], controlled)
-    ).toBe("configured");
-  });
-
-  it("names configured when every controlled host's link said why it is down", () => {
-    const down: ObservedHost = {
-      ...host("studio", "disconnected"),
-      connection: { status: "unreachable", lastSeenAt: null, detail: "ssh: no route" },
-    };
-    expect(observedRunbooksHostsState(true, [down, host("laptop", "connected")], controlled)).toBe(
-      "configured"
-    );
-  });
-});
-
 describe("installHostControl (#13493)", () => {
-  it("installs the host tools' runtime and tells runbook search what it sees, until torn down", () => {
+  it("installs the host tools' runtime until torn down", () => {
     const hosts = [host("studio", "connected")];
     const off = installHostControl({
       observeHosts: () => hosts,
-      hasHosts: () => true,
       isHostControlEnabled: () => true,
     });
     expect(hostControl.runtime).not.toBeNull();
     expect(getRemoteService("hostCallRelayClient")).toBe(hostControl.runtime);
-    expect(runbooksHostState.read?.()).toBe("connected");
 
     off();
     expect(hostControl.runtime).toBeNull();
     expect(getRemoteService("hostCallRelayClient")).toBeUndefined();
-    expect(runbooksHostState.read).toBeNull();
   });
 
   it("offers the host tools only to an assistant in one of this machine's own views", () => {
     const off = installHostControl({
       observeHosts: () => [],
-      hasHosts: () => false,
       isHostControlEnabled: () => false,
     });
     runLocally("proj-1", 0, "local");
@@ -266,7 +218,6 @@ describe("installHostControl (#13493)", () => {
   it("reaches this machine's other projects as local, admitted as a local relay (#14024)", async () => {
     const off = installHostControl({
       observeHosts: () => [host("studio", "connected")],
-      hasHosts: () => true,
       isHostControlEnabled: () => true,
     });
     runLocally("proj-1", 0, "a");
@@ -298,9 +249,6 @@ describe("installHostControl (#13493)", () => {
         }),
       },
     ]);
-    // Runbook search still hears only of the hosts this Shell reaches over a link.
-    expect(runbooksHostState.read?.()).toBe("connected");
-
     // Its throwaway runs here and on hosts go with it too (#14447).
     const endOwner = vi.fn();
     const offRuns = registerRemoteService("hostThrowawayRuns", { run: vi.fn(), endOwner });
@@ -335,7 +283,6 @@ describe("installHostControl (#13493)", () => {
   it("reaches every project as local for the global assistant, which no view shows (#14161)", async () => {
     const off = installHostControl({
       observeHosts: () => [],
-      hasHosts: () => false,
       isHostControlEnabled: () => false,
     });
     running.set(`${GLOBAL_ASSISTANT_ID}:0`, {
@@ -403,7 +350,6 @@ describe("installHostControl (#13493)", () => {
   it("never treats a project lane with no view of its project as this machine's own", () => {
     const off = installHostControl({
       observeHosts: () => [],
-      hasHosts: () => false,
       isHostControlEnabled: () => false,
     });
     running.set("proj-1:0", {

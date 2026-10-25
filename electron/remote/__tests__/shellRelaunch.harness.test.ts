@@ -188,7 +188,6 @@ const assistants = vi.hoisted(() => {
     },
     addSessionEndedListener: () => () => {},
     addSessionReattachedListener: () => () => {},
-    setRunbooksHostState: () => {},
     getRunningLaneSession: () => null,
     getAssistantBackends: () => [],
   };

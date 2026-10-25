@@ -313,7 +313,6 @@ function startClient(options: StartRemoteHostsOptions): void {
   teardowns.push(
     installHostControl({
       observeHosts,
-      hasHosts: () => client.registry.list().length > 0,
       listHostProjects: (hostId) => client.client.listHostProjects({ hostId }),
       // Never one the person disconnected: listing it isn't a call to it.
       connect: async (hostId, timeoutMs) => {

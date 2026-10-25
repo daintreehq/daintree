@@ -38,12 +38,11 @@ import {
 } from "./AssistantRunCheckpointService.js";
 import { pluginMcpGrantRegistry } from "./pluginAgentMcp/grantRegistry.js";
 import { RESERVED_PLUGIN_SERVER_KEYS } from "./pluginAgentMcp/serverKeys.js";
-import { buildRunbooksHostHeaders, type RunbooksHostsState } from "./helpSessionRunbooks.js";
 import { agentSupportsAssistantContent } from "./AssistantContentMirror.js";
 import { resolveAssistantPluginKnowledge } from "./AssistantPluginKnowledge.js";
 import type { HelpSessionProjectFacts } from "./helpSessionProjectMetadata.js";
 import type { PendingHelpHibernationStore } from "./PendingHelpHibernationStore.js";
-import { AssistantSessionFiles, runbooksEnabled } from "./AssistantSessionFiles.js";
+import { AssistantSessionFiles } from "./AssistantSessionFiles.js";
 import { HelpSessionError } from "./helpSessionError.js";
 import {
   ASSISTANT_AGENT_DIR_KEY_MAX_LENGTH,
@@ -476,7 +475,6 @@ export class HelpSessionService {
   private onMcpSessionRepinnedFn: ((token: string) => void) | null = null;
   private disposed = false;
   private projectMetadataReader: ProjectMetadataReader | null = null;
-  private runbooksHostState: (() => RunbooksHostsState | null) | null = null;
   private sweepTimer: ReturnType<typeof setInterval> | null = null;
 
   setMcpRegistry(registry: WindowRegistry): void {
@@ -489,31 +487,6 @@ export class HelpSessionService {
 
   setProjectMetadataReader(reader: ProjectMetadataReader | null): void {
     this.projectMetadataReader = reader;
-  }
-
-  /** What runbook search is told about this machine's Remote Hosts (#13411); null where nothing is told. */
-  setRunbooksHostState(read: (() => RunbooksHostsState | null) | null): void {
-    this.runbooksHostState = read;
-  }
-
-  /**
-   * The runbook entry's headers: the host-control model this build speaks
-   * (#13496), and the host state, read once per provision so every entry the
-   * session gets reports one snapshot, held until it relaunches. A read that
-   * fails, or a build with no hosts at all, leaves the host state unreported:
-   * that caller searches the whole catalog of its model.
-   */
-  private readRunbooksHostHeaders(settings: {
-    daintreeControl: boolean;
-    runbookSearch: boolean;
-  }): Record<string, string> {
-    if (!runbooksEnabled(settings)) return {};
-    try {
-      return buildRunbooksHostHeaders(this.runbooksHostState?.() ?? null);
-    } catch (err) {
-      console.warn("[HelpSessionService] Couldn't read the Remote Host state for runbooks:", err);
-      return buildRunbooksHostHeaders(null);
-    }
   }
 
   /**
@@ -1095,7 +1068,6 @@ export class HelpSessionService {
     pathHash: string
   ): Promise<ProvisionResult | null> {
     const settings = this.readSettings();
-    const runbooksHeaders = this.readRunbooksHostHeaders(settings);
     // Every help agent — the Daintree Assistant included — provisions at the
     // tool set the user configured. Agent identity never widens the MCP
     // surface: `core` is the default, `full` is an explicit user choice, and
@@ -1191,7 +1163,6 @@ export class HelpSessionService {
       token,
       tier,
       settings,
-      runbooksHeaders,
       runCheckpointKey: runCheckpointKeyFor(input.projectId),
       confirmationsSkipped: () =>
         settings.daintreeControl &&

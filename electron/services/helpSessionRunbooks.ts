@@ -8,14 +8,6 @@ export const DAINTREE_RUNBOOKS_MCP_URL = "https://assistant.daintree.org/v1/dain
 export const RUNBOOKS_MCP_URL_ENV_VAR = "DAINTREE_RUNBOOKS_MCP_URL";
 
 /**
- * What this machine's Remote Hosts look like when an assistant launches (#13411):
- * none configured, some configured but none connected with control on, or at
- * least one connected with control on.
- */
-export type RunbooksHostsState = "none" | "configured" | "connected";
-
-export const RUNBOOKS_HOSTS_HEADER = "Daintree-Hosts";
-/**
  * Names the model this build drives its hosts with (#13496): direct control
  * through `host.call`, delegation as agent messaging, no inbox. The runbook
  * server picks its catalog by it (daintreehq/assistant-backend#159); absent,
@@ -26,15 +18,16 @@ export const RUNBOOKS_HOST_CONTROL_VERSION = "1";
 
 /**
  * The request headers runbook search reads, sent on every POST by the agent
- * CLI: always the host-control model, which is this build's whatever its
- * hosts, and the caller's host state when it is known. Unknown state leaves
- * its header out: the caller is unreported and searches the whole catalog.
+ * CLI: the host-control model, which is this build's whatever its hosts.
+ * The `Daintree-Hosts` state the server can also filter by is never sent
+ * (#14458). Each native CLI holds its headers from launch for the life of
+ * the process, so a reported state would go stale the moment a host is added,
+ * connected or let go, and hide the procedures for it until the assistant
+ * relaunched. Unreported, search keeps the whole catalog eligible; `host.list`
+ * and `host.call` report and check the live hosts.
  */
-export function buildRunbooksHostHeaders(hosts: RunbooksHostsState | null): Record<string, string> {
-  return {
-    [RUNBOOKS_HOST_CONTROL_HEADER]: RUNBOOKS_HOST_CONTROL_VERSION,
-    ...(hosts !== null ? { [RUNBOOKS_HOSTS_HEADER]: hosts } : {}),
-  };
+export function buildRunbooksHeaders(): Record<string, string> {
+  return { [RUNBOOKS_HOST_CONTROL_HEADER]: RUNBOOKS_HOST_CONTROL_VERSION };
 }
 
 export const RUNBOOKS_BLOCK_START = "<!-- DAINTREE_RUNBOOKS_START -->";
