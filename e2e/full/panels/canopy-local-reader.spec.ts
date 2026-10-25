@@ -232,6 +232,14 @@ test.describe("Canopy on its local model", () => {
     expect(readers).toHaveLength(1);
     console.log(`Light reader process: ${readers[0]!.workingSetKb} KB working set`);
 
+    // TEMP-DIAG: what the reader was given for the approval agent.
+    for (const read of traceReads().filter((r) => r.stage === "reader")) {
+      const input = (read as unknown as { input?: { runId?: string; lines?: string[] } }).input;
+      if (input?.runId === agents.approval) {
+        console.log("DIAG approval lines:\n" + JSON.stringify(input.lines, null, 1));
+        break;
+      }
+    }
     await expect(row(page, agents.approval)).toContainText("Do you want to proceed?", {
       timeout: 30_000,
     });
