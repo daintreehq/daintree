@@ -232,23 +232,20 @@ test.describe("Canopy on its local model", () => {
     expect(readers).toHaveLength(1);
     console.log(`Light reader process: ${readers[0]!.workingSetKb} KB working set`);
 
-    // TEMP-DIAG: what the pane itself shows for the approval agent.
+    // TEMP-DIAG: what the reader returned or failed with, per read.
     console.log(
-      "DIAG pane text:\n" +
-        (await page
-          .locator(`[data-panel-id="${agents.approval}"] .xterm-rows`)
-          .first()
-          .evaluate((el) => (el as HTMLElement).innerText.slice(0, 600))
-          .catch((e: Error) => `no xterm rows: ${e.message}`))
+      "DIAG reads: " +
+        JSON.stringify(
+          traceReads()
+            .filter((r) => r.stage === "reader")
+            .map((r) => {
+              const out = r.output as
+                | { classifier?: { category?: string; attention?: number; question?: string | null } }
+                | undefined;
+              return r.error ?? `${out?.classifier?.category}/${out?.classifier?.attention?.toFixed(2)}/${out?.classifier?.question ?? "-"}`;
+            })
+        )
     );
-    // TEMP-DIAG: what the reader was given for the approval agent.
-    for (const read of traceReads().filter((r) => r.stage === "reader")) {
-      const input = (read as unknown as { input?: { runId?: string; lines?: string[] } }).input;
-      if (input?.runId === agents.approval) {
-        console.log("DIAG approval lines:\n" + JSON.stringify(input.lines, null, 1));
-        break;
-      }
-    }
     await expect(row(page, agents.approval)).toContainText("Do you want to proceed?", {
       timeout: 30_000,
     });
