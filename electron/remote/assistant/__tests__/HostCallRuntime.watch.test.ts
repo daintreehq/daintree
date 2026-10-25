@@ -16,7 +16,7 @@ describe("HostCallRuntime host.watch (#14463)", () => {
   let hosts: ObservedHost[];
   let listener: HostWatchListener | null;
   let queued: LaneWake[];
-  let connect: ReturnType<typeof vi.fn>;
+  let connect: ReturnType<typeof vi.fn<(hostId: string, timeoutMs: number) => Promise<unknown>>>;
   let runtime: HostCallRuntime;
 
   beforeEach(() => {
@@ -33,7 +33,7 @@ describe("HostCallRuntime host.watch (#14463)", () => {
     ];
     listener = null;
     queued = [];
-    connect = vi.fn();
+    connect = vi.fn(async () => undefined);
     runtime = new HostCallRuntime({
       getSessionLane: (id) => (runs.has(id) ? { projectId: "proj-1", slot: 0 } : null),
       callerRun: (id) => runs.get(id) ?? null,
@@ -70,7 +70,7 @@ describe("HostCallRuntime host.watch (#14463)", () => {
   });
 
   it("never dials the host it watches", async () => {
-    await arm();
+    await expect(arm()).resolves.toMatchObject({ ok: true, value: { armed: true } });
     vi.advanceTimersByTime(60 * 60_000);
     expect(connect).not.toHaveBeenCalled();
   });
@@ -81,10 +81,12 @@ describe("HostCallRuntime host.watch (#14463)", () => {
     expect(listener).toBeNull();
 
     await arm();
+    expect(listener).not.toBeNull();
     runtime.retireWatches("a");
     expect(listener).toBeNull();
 
     await arm();
+    expect(listener).not.toBeNull();
     runtime.dispose();
     expect(listener).toBeNull();
     expect(queued).toEqual([]);

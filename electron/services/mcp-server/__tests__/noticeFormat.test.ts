@@ -200,4 +200,24 @@ describe("the host watch line (#14463)", () => {
       'Daintree: host "studio-01" watch hw-3 ended because the host was removed from this Shell, so no notice will come for its link connected.'
     );
   });
+
+  it("spells a time no Date can read as unreadable rather than throwing", () => {
+    const line = formatHostWatchLine({
+      hostName: "studio-01",
+      watchId: "hw-4",
+      event: "expired",
+      condition: { ...condition, connection: "connected" },
+      armedAt: 0,
+      observed: {
+        observedAt: 0,
+        link: "connected",
+        lastSeenAt: 1e20,
+        ...load,
+        sampledAt: 1e20,
+        stale: true,
+      },
+    });
+    expect(line).toContain("last seen an unreadable time");
+    expect(line).toContain("last sample taken an unreadable time");
+  });
 });

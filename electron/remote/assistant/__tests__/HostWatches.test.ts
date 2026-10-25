@@ -169,6 +169,7 @@ describe("HostWatches (#14463)", () => {
     expect(wake.recheck()).toEqual({ kind: "ready" });
     expect(watches.isActive()).toBe(false);
     expect(subscriptions).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
 
     const line = formatHostWatchLine(wake.hostWatch!);
     expect(line).toContain('host "studio-01" watch hw-id-1');
@@ -261,6 +262,17 @@ describe("HostWatches (#14463)", () => {
       setStudio({ summary: summary({ memoryUsedBytes: 2 * GIB, memoryPressure: "warn" }) });
       listener?.summary("studio");
       expect(queued).toHaveLength(0);
+      setStudio({ summary: summary({ memoryUsedBytes: 2 * GIB, memoryPressure: "normal" }) });
+      listener?.summary("studio");
+      expect(queued).toHaveLength(1);
+    });
+
+    it("arms nothing for capacity a fresh sample already shows", () => {
+      setStudio({ connection: CONNECTED, summary: summary({ memoryUsedBytes: 2 * GIB }) });
+      const result = arm(capacity);
+      expect(result).toMatchObject({ outcome: "ok", armed: false, watches: [] });
+      expect(result.observed?.memoryAvailableBytes).toBe(14 * GIB);
+      expect(subscriptions).toBe(0);
     });
 
     it("never fires for a sample from a host whose link is down", () => {
@@ -274,11 +286,15 @@ describe("HostWatches (#14463)", () => {
 
   it("says it expired, with the last thing it saw, then lets go", () => {
     arm({ expiresInSeconds: 60 });
-    setStudio({ connection: { status: "unreachable", lastSeenAt: now - 1000, detail: null } });
+    setStudio({
+      connection: { status: "unreachable", lastSeenAt: now - 1000, detail: null },
+      lastSeenAt: now - 1000,
+    });
     advance(60_000);
     expect(queued).toHaveLength(1);
     const notice = queued[0].wake.hostWatch!;
     expect(notice.event).toBe("expired");
+    expect(notice.observed).toMatchObject({ link: "unreachable", lastSeenAt: now - 61_000 });
     expect(formatHostWatchLine(notice)).toMatch(/expired without seeing its link connected/);
     expect(watches.isActive()).toBe(false);
     expect(watches.run(RUN, { operation: "list" }).watches[0]).toMatchObject({
@@ -355,6 +371,25 @@ describe("HostWatches (#14463)", () => {
     expect(after.watches[0]?.delivery).toBe("ambiguous");
   });
 
+  it("belongs to the run that armed it: another live run neither sees nor cancels it", () => {
+    const other: OpenRun = { ...RUN, sessionId: "b", terminalId: "t-b" };
+    running.add(runKey(other));
+    const mine = arm().watches[0]!;
+    expect(watches.run(other, { operation: "list" }).watches).toEqual([]);
+    expect(watches.run(other, { operation: "cancel", watchId: mine.watchId }).outcome).toBe(
+      "not_found"
+    );
+    // Its own arm of the same condition is its own watch.
+    expect(arm({}, other).watches[0]?.watchId).not.toBe(mine.watchId);
+    expect(watches.run(RUN, { operation: "list" }).watches.map((w) => w.watchId)).toEqual([
+      mine.watchId,
+    ]);
+    setStudio({ connection: CONNECTED });
+    listener?.changed();
+    advance(HOST_WATCH_CONNECTION_SETTLE_MS);
+    expect(queued.map((q) => q.lane.helpSessionId).sort()).toEqual(["a", "b"]);
+  });
+
   it("belongs to the run that armed it: a relaunch neither sees, cancels nor hears it", () => {
     const watch = arm().watches[0]!;
     const next: OpenRun = { ...RUN, launchGeneration: 2 };
@@ -380,11 +415,45 @@ describe("HostWatches (#14463)", () => {
   });
 
   it("forgets a session's watches when it ends, and lets go of the listener", () => {
+    const other: OpenRun = { ...RUN, sessionId: "b", terminalId: "t-b" };
+    running.add(runKey(other));
     arm();
+    arm({}, other);
     watches.endSession("a");
+    expect(watches.run(RUN, { operation: "list" }).watches).toEqual([]);
+    expect(watches.run(other, { operation: "list" }).watches).toHaveLength(1);
+    expect(subscriptions).toBe(1);
+    watches.endSession("b");
     expect(subscriptions).toBe(0);
     expect(watches.isActive()).toBe(false);
-    expect(watches.run(RUN, { operation: "list" }).watches).toEqual([]);
+  });
+
+  it("can't take back a notice already being typed, and says how it went", () => {
+    const watch = arm().watches[0]!;
+    setStudio({ connection: CONNECTED });
+    listener?.changed();
+    advance(HOST_WATCH_CONNECTION_SETTLE_MS);
+    const { wake } = queued[0];
+    expect(wake.beforeType()).toBe(true);
+    const cancel = watches.run(RUN, { operation: "cancel", watchId: watch.watchId });
+    expect(cancel.detail).toMatch(/already being typed/);
+    expect(cancel.watches[0]?.delivery).toBe("queued");
+    wake.report({ kind: "delivered" });
+    expect(watches.run(RUN, { operation: "list" }).watches[0].delivery).toBe("delivered");
+  });
+
+  it("keeps a bounded history of ended watches, never one whose notice is unsettled", () => {
+    let unsettled: LaneWake | undefined;
+    for (let i = 0; i < 20; i++) {
+      arm({ expiresInSeconds: 60 });
+      advance(60_000);
+      const { wake } = queued[queued.length - 1];
+      if (i === 0) unsettled = wake;
+      else wake.report({ kind: "delivered" });
+    }
+    const listed = watches.run(RUN, { operation: "list" }).watches;
+    expect(listed.length).toBeLessThanOrEqual(17);
+    expect(listed.some((w) => w.watchId === unsettled?.id)).toBe(true);
   });
 
   it("keeps one watch per condition, and a budget of armed plus unsettled notices", () => {
@@ -406,7 +475,27 @@ describe("HostWatches (#14463)", () => {
     }
     const over = arm({ connection: undefined, cpuIdleCoresAtLeast: 1 });
     expect(over.outcome).toBe("conflict");
-    expect(watches.run(RUN, { operation: "list" }).watches).toHaveLength(HOST_WATCHES_PER_RUN_MAX);
+
+    // One fires: its notice still on the way keeps its place in the budget.
+    setStudio({ connection: CONNECTED });
+    listener?.changed();
+    advance(HOST_WATCH_CONNECTION_SETTLE_MS);
+    expect(queued).toHaveLength(1);
+    expect(arm({ connection: undefined, cpuIdleCoresAtLeast: 1 }).outcome).toBe("conflict");
+    queued[0].wake.report({ kind: "delivered" });
+    expect(arm({ connection: undefined, cpuIdleCoresAtLeast: 1 }).armed).toBe(true);
+    expect(
+      watches.run(RUN, { operation: "list" }).watches.filter((w) => w.status === "armed")
+    ).toHaveLength(HOST_WATCHES_PER_RUN_MAX);
+  });
+
+  it("lets go of an armed watch's listener and timer on dispose", () => {
+    arm();
+    expect(vi.getTimerCount()).toBe(1);
+    watches.dispose();
+    expect(subscriptions).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(arm().outcome).toBe("unsupported");
   });
 
   it("forgets everything on dispose and holds nothing after", () => {

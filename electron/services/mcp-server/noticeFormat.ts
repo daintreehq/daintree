@@ -264,7 +264,11 @@ export interface HostWatchNotice {
   lostReason?: HostWatchLostReason;
 }
 
-const iso = (ms: number): string => new Date(ms).toISOString();
+/** A time as a line spells it. A host's own clock can send any number, which Date can't always read. */
+function iso(ms: number): string {
+  const date = new Date(ms);
+  return Number.isNaN(date.getTime()) ? "an unreadable time" : date.toISOString();
+}
 
 function gib(bytes: number): string {
   return `${(bytes / 1024 ** 3).toFixed(1)} GiB`;

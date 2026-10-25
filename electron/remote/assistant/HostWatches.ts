@@ -67,6 +67,8 @@ interface WatchRecord {
   delivery: HostWatchDelivery;
   /** A link watch: since when the watched state has held, by this Shell's clock. */
   holdingSince?: number;
+  /** Its notice's line was reserved for typing: past here a cancel can't take it back. */
+  typing?: true;
 }
 
 type Reply = Omit<HostWatchResult, "outcome" | "detail" | "retryAfterMs">;
@@ -86,6 +88,8 @@ const TOTAL_DETAIL = "This Shell's assistants hold as many watches as it keeps. 
 const NOT_FOUND_DETAIL = "This run holds no watch with that id.";
 const CANCELLED_DETAIL = "Cancelled. No notice will come for it.";
 const WITHDRAWN_DETAIL = "Its notice was not typed yet and now won't be.";
+const TYPING_DETAIL =
+  "Its notice was already being typed and can't be taken back; delivery says how it went.";
 const ENDED_DETAIL = "It had already ended; nothing changed.";
 
 function runKey(run: OpenRun): string {
@@ -262,6 +266,8 @@ export class HostWatches {
       this.end(record, "cancelled");
       detail = CANCELLED_DETAIL;
       this.release();
+    } else if (record.typing === true && record.delivery === "queued") {
+      detail = TYPING_DETAIL;
     } else if (record.delivery === "queued" || record.delivery === "held") {
       record.delivery = "withdrawn";
       detail = WITHDRAWN_DETAIL;
@@ -387,7 +393,11 @@ export class HostWatches {
         if (record.delivery === "withdrawn") return { kind: "unavailable", reason: "cancelled" };
         return live() ? { kind: "ready" } : { kind: "unavailable", reason: "relaunched" };
       },
-      beforeType: live,
+      beforeType: () => {
+        if (!live()) return false;
+        record.typing = true;
+        return true;
+      },
       report: (outcome: LaneWakeOutcome) => {
         if (record.delivery === "withdrawn") return;
         record.delivery = outcome.kind;
