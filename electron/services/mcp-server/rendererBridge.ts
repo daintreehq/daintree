@@ -17,6 +17,11 @@ import {
   runViewlessAction,
   type ViewlessApprovalAsk,
 } from "../viewless/index.js";
+import {
+  hostStartedTerminals,
+  noteHeldByView,
+  type HostStartedTerminal,
+} from "../viewless/hostStartedTerminals.js";
 import { getProjectViewManager } from "../../window/windowRef.js";
 import { getRemoteService } from "../../remote/runtime.js";
 import { isLocalHostId, parseHostScopedKey } from "../../../shared/types/remoteHosts.js";
@@ -145,6 +150,31 @@ export class NoFrontendAttachedError extends WorkspaceBindingError {
           `no form the host runs on its own, so it was not run. Tools the host runs itself, ` +
           `such as launching agents and driving terminals, can still run here.`;
   }
+}
+
+/**
+ * A status entry for a terminal the answering surface doesn't hold, as the
+ * renderer ("Terminal not found") and the pty-host ("Terminal not found or
+ * status unavailable") both word it. Any other error is about a terminal it
+ * does hold.
+ */
+function isNotFoundEntry(row: { error?: unknown }): boolean {
+  return typeof row.error === "string" && row.error.startsWith("Terminal not found");
+}
+
+/**
+ * Whether a pane no view holds belongs in a list or fleet read with these
+ * filters, by where its spawn placed it: the view's own default leaves the
+ * trash and the background out.
+ */
+function matchesFilters(terminal: HostStartedTerminal, filters: Record<string, unknown>): boolean {
+  if (typeof filters.terminalId === "string" && filters.terminalId !== terminal.id) return false;
+  if (typeof filters.worktreeId === "string" && filters.worktreeId !== terminal.worktreeId) {
+    return false;
+  }
+  return typeof filters.location === "string"
+    ? filters.location === terminal.location
+    : terminal.location !== "background";
 }
 
 /**
@@ -863,7 +893,49 @@ export function createRendererBridge(
     });
   }
 
-  function sendDispatchRequest(
+  /**
+   * A dispatch a local view answers. Its `terminal.list` and
+   * `terminal.getStatus` also read what main started for its project that it
+   * never adopted (#14473), whichever route reached it.
+   */
+  async function sendDispatchRequest(
+    resolveWebContents: () => Electron.WebContents,
+    actionId: string,
+    args: unknown,
+    confirmed: boolean,
+    sessionOrigin: McpSessionOrigin,
+    contextOverride?: ActionContext,
+    callerInfo?: McpBearerIdentity,
+    route?: BridgeRoute,
+    approval?: Pick<
+      WorkspaceDispatchOptions,
+      "offerSessionApproval" | "approvalOnly" | "approvalReason" | "authorization" | "hostPreview"
+    >
+  ): Promise<DispatchEnvelope> {
+    let viewId: number | undefined;
+    const envelope = await requestFromView(
+      () => {
+        const wc = resolveWebContents();
+        viewId = wc.id;
+        return wc;
+      },
+      actionId,
+      args,
+      confirmed,
+      sessionOrigin,
+      contextOverride,
+      callerInfo,
+      route,
+      approval
+    );
+    if (viewId === undefined || approval?.approvalOnly) return envelope;
+    if (actionId !== "terminal.list" && actionId !== "terminal.getStatus") return envelope;
+    const projectId = getProjectForWebContents(viewId);
+    if (projectId === null) return envelope;
+    return withHostStartedTerminals(projectId, viewId, actionId, args, sessionOrigin, envelope);
+  }
+
+  function requestFromView(
     resolveWebContents: () => Electron.WebContents,
     actionId: string,
     args: unknown,
@@ -1502,6 +1574,115 @@ export function createRendererBridge(
       ...(confirmationDecision !== undefined ? { confirmationDecision } : {}),
       ...(dispatchedWorkspace ? { dispatchedWorkspace } : {}),
     };
+  }
+
+  /**
+   * A local view's answer to `terminal.list` or `terminal.getStatus`, with the
+   * terminals main started for its project that it never adopted (#14473). A
+   * relayed launch, or this host's own assistant with no view, spawns on the
+   * host even while a window here shows the project, and that window's panel
+   * store learns of it only when it next hydrates.
+   *
+   * Read off the pty-host with the caller's own arguments, and only when one
+   * of them could be in the answer, so a poll that has none pays nothing. A
+   * list gains the rows the view didn't give: a list row says nothing of where
+   * it was read. A status answer is one surface's reading throughout, so it is
+   * the pty-host's, `source: "pty"`, once one of these is in it, kept to what
+   * the view showed plus these: a pane the view hides stays hidden. A failed
+   * read keeps the view's answer.
+   */
+  async function withHostStartedTerminals(
+    projectId: string,
+    viewId: number,
+    actionId: "terminal.list" | "terminal.getStatus",
+    args: unknown,
+    sessionOrigin: McpSessionOrigin,
+    envelope: DispatchEnvelope
+  ): Promise<DispatchEnvelope> {
+    if (!envelope.result.ok) return envelope;
+    const started = hostStartedTerminals(projectId);
+    if (started.length === 0) return envelope;
+    const answer = envelope.result.result as { terminals?: unknown } | undefined;
+    if (!Array.isArray(answer?.terminals)) return envelope;
+    const rows = answer.terminals as Array<{ id?: unknown; terminalId?: unknown; error?: unknown }>;
+    const isList = actionId === "terminal.list";
+    const shown = new Set<string>();
+    const notFound = new Set<string>();
+    for (const row of rows) {
+      const id = isList ? row.id : row.terminalId;
+      if (typeof id !== "string") continue;
+      if (!isList && isNotFoundEntry(row)) notFound.add(id);
+      else shown.add(id);
+    }
+    noteHeldByView(projectId, shown, viewId);
+    const filters = (args ?? {}) as Record<string, unknown>;
+    const named = !isList && filters.terminalIds !== undefined;
+    const missing = new Set(
+      started
+        .filter(
+          (terminal) =>
+            !terminal.heldBy.has(viewId) &&
+            !shown.has(terminal.id) &&
+            (named ? notFound.has(terminal.id) : matchesFilters(terminal, filters))
+        )
+        .map((terminal) => terminal.id)
+    );
+    if (missing.size === 0) return envelope;
+
+    let read: Awaited<ReturnType<typeof runViewlessAction>>;
+    try {
+      read = await runViewlessAction({
+        workspaceId: projectId,
+        actionId,
+        args,
+        confirmed: false,
+        sessionOrigin,
+      });
+    } catch (err) {
+      console.warn(`[MCP] Couldn't read host-started terminals for ${actionId}:`, err);
+      return envelope;
+    }
+    if (!read?.ok) return envelope;
+    const readAnswer = read.result as { terminals?: unknown } | undefined;
+    if (!Array.isArray(readAnswer?.terminals)) return envelope;
+    const readRows = readAnswer.terminals as Array<{
+      id?: unknown;
+      terminalId?: unknown;
+      error?: unknown;
+    }>;
+
+    if (isList) {
+      const added = readRows.filter((row) => typeof row.id === "string" && missing.has(row.id));
+      if (added.length === 0) return envelope;
+      return {
+        ...envelope,
+        result: { ok: true, result: { ...answer, terminals: [...rows, ...added] } },
+      };
+    }
+
+    const missingRows = readRows.filter(
+      (row) => typeof row.terminalId === "string" && missing.has(row.terminalId)
+    );
+    if (missingRows.every(isNotFoundEntry)) return envelope;
+    const terminals = named
+      ? readRows.map((row) =>
+          typeof row.terminalId === "string" &&
+          !shown.has(row.terminalId) &&
+          !missing.has(row.terminalId)
+            ? {
+                terminalId: row.terminalId,
+                agentId: null,
+                agentState: null,
+                error: "Terminal not found",
+              }
+            : row
+        )
+      : readRows.filter(
+          (row) =>
+            typeof row.terminalId === "string" &&
+            (shown.has(row.terminalId) || missing.has(row.terminalId))
+        );
+    return { ...envelope, result: { ok: true, result: { ...readAnswer, terminals } } };
   }
 
   /**
