@@ -5,7 +5,10 @@ import path from "node:path";
 import { app } from "electron";
 import type { WindowRegistry } from "../window/WindowRegistry.js";
 import { isRemoteEndpointHandle, NO_VIEW_HANDLE } from "../ipc/endpoint.js";
-import { isGlobalAssistantId } from "../../shared/config/globalAssistant.js";
+import {
+  GLOBAL_ASSISTANT_READINESS_TOOL,
+  isGlobalAssistantId,
+} from "../../shared/config/globalAssistant.js";
 import { store } from "../store.js";
 import { getHelpFolderPath } from "./HelpService.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
@@ -1250,8 +1253,13 @@ export class HelpSessionService {
         if (input.agentId === "claude") {
           // Claude Code reads SSE at /sse with a literal bearer baked into
           // its lane's `--mcp-config` file. Both probes warm the same
-          // in-memory MCP token map, so neither leaks across agents.
-          await probeMcpSseServer(port, token);
+          // in-memory MCP token map, so neither leaks across agents. The
+          // global assistant lists only the host tools (#14483).
+          await probeMcpSseServer(
+            port,
+            token,
+            input.global ? { readinessTool: GLOBAL_ASSISTANT_READINESS_TOOL } : undefined
+          );
         } else {
           // Codex and Copilot both speak Streamable HTTP at /mcp. Codex
           // reads the bearer from `DAINTREE_MCP_TOKEN` PTY env via

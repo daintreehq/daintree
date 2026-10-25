@@ -7,6 +7,10 @@ import {
   READINESS_PROBE_TOOL,
 } from "../readinessProbe.js";
 import { CORE_TIER_TOOLS } from "../../../../shared/config/helpAssistantTierAllowlists.js";
+import {
+  GLOBAL_ASSISTANT_READINESS_TOOL,
+  GLOBAL_ASSISTANT_TOOL_IDS,
+} from "../../../../shared/config/globalAssistant.js";
 
 interface CapturedRequest {
   method: string;
@@ -445,6 +449,83 @@ describe("probeMcpSseServer", () => {
         baseDelayMs: 10,
       })
     ).rejects.toThrow(/MCP SSE readiness probe failed/);
+  });
+});
+
+describe("probeMcpSseServer with a session's own readiness tool (#14483)", () => {
+  let fake: FakeServer | null = null;
+
+  afterEach(async () => {
+    if (fake) {
+      await fake.close();
+      fake = null;
+    }
+  });
+
+  // Answers the whole handshake, listing only the named tools.
+  const startListingServer = (toolNames: readonly string[]) => {
+    let sseRes: http.ServerResponse | null = null;
+    return startFakeServer((req, res, body) => {
+      if (req.method === "GET" && req.url === "/sse") {
+        sseRes = res;
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        res.write("event: endpoint\ndata: /messages?sessionId=s\n\n");
+        return;
+      }
+      if (req.method === "POST" && req.url === "/messages?sessionId=s") {
+        const parsed = JSON.parse(body);
+        res.writeHead(202);
+        res.end("Accepted");
+        const result =
+          parsed.method === "initialize"
+            ? { protocolVersion: PROBE_PROTOCOL_VERSION, capabilities: {} }
+            : {
+                tools: toolNames.map((name) => ({
+                  name,
+                  inputSchema: { type: "object", properties: {} },
+                })),
+              };
+        sseRes?.write(
+          `event: message\ndata: ${JSON.stringify({ jsonrpc: "2.0", id: parsed.id, result })}\n\n`
+        );
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+  };
+
+  it("passes a global session's listing when told to look for its tool", async () => {
+    fake = await startListingServer([...GLOBAL_ASSISTANT_TOOL_IDS]);
+    await expect(
+      probeMcpSseServer(fake.port, "global-token", {
+        readinessTool: GLOBAL_ASSISTANT_READINESS_TOOL,
+      })
+    ).resolves.toBeUndefined();
+  });
+
+  it("still fails that listing with the default tool", async () => {
+    fake = await startListingServer([...GLOBAL_ASSISTANT_TOOL_IDS]);
+    await expect(
+      probeMcpSseServer(fake.port, "global-token", { hardTimeoutMs: 500, baseDelayMs: 10 })
+    ).rejects.toThrow(`missing ${READINESS_PROBE_TOOL}`);
+  });
+
+  it("names the tool it looked for when the listing lacks it", async () => {
+    fake = await startListingServer([READINESS_PROBE_TOOL]);
+    await expect(
+      probeMcpSseServer(fake.port, "global-token", {
+        readinessTool: GLOBAL_ASSISTANT_READINESS_TOOL,
+        hardTimeoutMs: 500,
+        baseDelayMs: 10,
+      })
+    ).rejects.toThrow(`missing ${GLOBAL_ASSISTANT_READINESS_TOOL}`);
+  });
+});
+
+describe("GLOBAL_ASSISTANT_READINESS_TOOL", () => {
+  it("is a tool the global assistant's own set lists", () => {
+    expect(GLOBAL_ASSISTANT_TOOL_IDS.has(GLOBAL_ASSISTANT_READINESS_TOOL)).toBe(true);
   });
 });
 

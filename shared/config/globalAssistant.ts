@@ -40,3 +40,9 @@ export const GLOBAL_ASSISTANT_TOOL_IDS: ReadonlySet<string> = new Set([
   HOST_SETTINGS_TOOL,
   HOST_WATCH_TOOL,
 ]);
+
+/**
+ * The tool its readiness probe looks for in `tools/list` (#14483). Its set has
+ * no `actions.getContext`, and `host.list` is listed from its start.
+ */
+export const GLOBAL_ASSISTANT_READINESS_TOOL = HOST_LIST_TOOL;
