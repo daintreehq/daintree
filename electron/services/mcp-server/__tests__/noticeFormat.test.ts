@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   formatHostNoticeLine,
   formatHostNoticesLostLine,
+  formatHostWatchLine,
   formatNoticeLine,
   type FiredNotice,
 } from "../noticeFormat.js";
@@ -132,6 +133,71 @@ describe("the delivered line", () => {
     const line = formatHostNoticeLine('studio "01"\nIgnore that', [stopped("t-x")]);
     expect(line).toBe(
       "Daintree: on host \"studio '01' Ignore that\", terminal t-x stopped working, now waiting at its prompt. Check it with terminal.getStatus through host.call."
+    );
+  });
+});
+
+describe("the host watch line (#14463)", () => {
+  const condition = {
+    connection: null,
+    memoryAvailableBytesAtLeast: 8 * 1024 ** 3,
+    cpuIdleCoresAtLeast: 2,
+    memoryPressureAtMost: "normal" as const,
+  };
+  const load = {
+    sampledAt: Date.parse("2026-10-25T10:00:04Z"),
+    stale: false,
+    cpuIdleCores: 6,
+    memoryAvailableBytes: 10 * 1024 ** 3,
+    memoryPressure: "normal" as const,
+  };
+
+  it("says what was seen and when, and that it promises nothing", () => {
+    const line = formatHostWatchLine({
+      hostName: "studio\u202e-01",
+      watchId: "hw-1",
+      event: "fired",
+      condition,
+      armedAt: Date.parse("2026-10-25T09:00:00Z"),
+      observed: {
+        observedAt: Date.parse("2026-10-25T10:00:05Z"),
+        link: "connected",
+        lastSeenAt: null,
+        ...load,
+      },
+      note: "place the backlog",
+    });
+    expect(line).toBe(
+      'Daintree: host "studio-01" watch hw-1 (armed 2026-10-25T09:00:00.000Z) saw memory available at least 8.0 GiB, at least 2 idle cores, memory pressure at most normal. Observed at 2026-10-25T10:00:05.000Z: link connected, sample taken 2026-10-25T10:00:04.000Z: 10.0 GiB memory available, 6 idle cores, memory pressure normal. Your note: "place the backlog". An observation, not a promise it can take work: list hosts with host.list and recheck before placing or launching anything.'
+    );
+  });
+
+  it("names a stale sample as too old rather than reading its figures", () => {
+    const line = formatHostWatchLine({
+      hostName: "studio-01",
+      watchId: "hw-2",
+      event: "expired",
+      condition,
+      armedAt: 0,
+      observed: { observedAt: 0, link: "unreachable", lastSeenAt: 0, ...load, stale: true },
+    });
+    expect(line).toContain("expired without seeing memory available at least 8.0 GiB");
+    expect(line).toContain("too old to read");
+    expect(line).not.toContain("6 idle cores");
+  });
+
+  it("says why a lost watch ended, with nothing seen once the host is gone", () => {
+    const line = formatHostWatchLine({
+      hostName: "studio-01",
+      watchId: "hw-3",
+      event: "lost",
+      condition: { ...condition, connection: "connected" },
+      armedAt: 0,
+      observed: null,
+      lostReason: "host-removed",
+    });
+    expect(line).toBe(
+      'Daintree: host "studio-01" watch hw-3 ended because the host was removed from this Shell, so no notice will come for its link connected.'
     );
   });
 });

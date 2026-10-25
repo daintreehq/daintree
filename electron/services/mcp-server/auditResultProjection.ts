@@ -288,7 +288,6 @@ const AUDIT_RESULT_PROJECTIONS: ReadonlyMap<string, (result: unknown) => unknown
       return {
         outcome: fromSet(record.outcome, HOST_OUTCOMES),
         armed: record.armed === true,
-        watch: record.watch === null ? null : projectHostWatch(record.watch),
         watches: listed.map(projectHostWatch),
       };
     },

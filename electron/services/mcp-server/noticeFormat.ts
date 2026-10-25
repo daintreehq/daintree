@@ -288,19 +288,20 @@ function describeWatchCondition(condition: HostWatchCondition): string {
 function describeWatchObserved(observed: HostWatchObserved): string {
   const parts = [`link ${observed.link}`];
   if (observed.lastSeenAt !== null) parts.push(`last seen ${iso(observed.lastSeenAt)}`);
-  const load = observed.load;
-  if (load === null) {
+  if (observed.sampledAt === null) {
     parts.push("no load sample");
-  } else if (load.stale) {
-    parts.push(`last sample taken ${iso(load.sampledAt)}, too old to read`);
+  } else if (observed.stale) {
+    parts.push(`last sample taken ${iso(observed.sampledAt)}, too old to read`);
   } else {
     const figures = [
-      load.memoryAvailableBytes !== null ? `${gib(load.memoryAvailableBytes)} memory available` : null,
-      load.cpuIdleCores !== null ? `${load.cpuIdleCores} idle cores` : null,
-      load.memoryPressure !== null ? `memory pressure ${load.memoryPressure}` : null,
+      observed.memoryAvailableBytes !== null
+        ? `${gib(observed.memoryAvailableBytes)} memory available`
+        : null,
+      observed.cpuIdleCores !== null ? `${observed.cpuIdleCores} idle cores` : null,
+      observed.memoryPressure !== null ? `memory pressure ${observed.memoryPressure}` : null,
     ].filter((figure): figure is string => figure !== null);
     parts.push(
-      `sample taken ${iso(load.sampledAt)}${figures.length > 0 ? `: ${figures.join(", ")}` : ""}`
+      `sample taken ${iso(observed.sampledAt)}${figures.length > 0 ? `: ${figures.join(", ")}` : ""}`
     );
   }
   return parts.join(", ");

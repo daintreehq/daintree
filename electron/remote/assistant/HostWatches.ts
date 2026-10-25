@@ -122,20 +122,17 @@ const PRESSURE_RANK = { normal: 0, warn: 1, critical: 2 } as const;
 
 /** Every figure the caller named, read off a fresh sample; an unmeasured one never meets it. */
 function capacityHolds(observed: HostWatchObserved, condition: HostWatchCondition): boolean {
-  const load = observed.load;
-  if (observed.link !== "connected" || load === null || load.stale) return false;
+  if (observed.link !== "connected" || observed.sampledAt === null || observed.stale) return false;
   const memory = condition.memoryAvailableBytesAtLeast;
-  if (memory !== null && (load.memoryAvailableBytes === null || load.memoryAvailableBytes < memory))
-    return false;
+  const available = observed.memoryAvailableBytes;
+  if (memory !== null && (available === null || available < memory)) return false;
   const cores = condition.cpuIdleCoresAtLeast;
-  if (cores !== null && (load.cpuIdleCores === null || load.cpuIdleCores < cores)) return false;
-  const pressure = condition.memoryPressureAtMost;
-  if (
-    pressure !== null &&
-    (load.memoryPressure === null || PRESSURE_RANK[load.memoryPressure] > PRESSURE_RANK[pressure])
-  )
+  if (cores !== null && (observed.cpuIdleCores === null || observed.cpuIdleCores < cores)) {
     return false;
-  return true;
+  }
+  const pressure = condition.memoryPressureAtMost;
+  const seen = observed.memoryPressure;
+  return pressure === null || (seen !== null && PRESSURE_RANK[seen] <= PRESSURE_RANK[pressure]);
 }
 
 /**
@@ -209,8 +206,7 @@ export class HostWatches {
     if (duplicate !== undefined) {
       return this.answer("ok", DUPLICATE_DETAIL, {
         armed: true,
-        watch: this.view(duplicate),
-        watches: [],
+        watches: [this.view(duplicate)],
         observed: this.observe(host),
       });
     }
@@ -220,7 +216,7 @@ export class HostWatches {
         ? linkHolds(host, condition.connection)
         : capacityHolds(observed, condition);
     if (already) {
-      return this.answer("ok", ALREADY_DETAIL, { armed: false, watch: null, watches: [], observed });
+      return this.answer("ok", ALREADY_DETAIL, { armed: false, watches: [], observed });
     }
     if (mine.filter((record) => this.holdsRoom(record)).length >= HOST_WATCHES_PER_RUN_MAX) {
       return this.refuse("conflict", BUDGET_DETAIL, observed);
@@ -251,8 +247,7 @@ export class HostWatches {
     this.evaluate();
     return this.answer("ok", ARMED_DETAIL, {
       armed: record.status === "armed",
-      watch: this.view(record),
-      watches: [],
+      watches: [this.view(record)],
       observed,
     });
   }
@@ -273,8 +268,7 @@ export class HostWatches {
     }
     return this.answer("ok", detail, {
       armed: false,
-      watch: this.view(record),
-      watches: [],
+      watches: [this.view(record)],
       observed: null,
     });
   }
@@ -290,7 +284,6 @@ export class HostWatches {
       .sort((a, b) => (b.endedAt ?? 0) - (a.endedAt ?? 0));
     return this.answer("ok", null, {
       armed: armed.length > 0,
-      watch: null,
       watches: [...armed, ...ended].map((record) => this.view(record)),
       observed: null,
     });
@@ -503,11 +496,16 @@ export class HostWatches {
 
   private observe(host: ObservedHost): HostWatchObserved {
     const now = this.deps.now();
+    const load = host.summary ? projectHostLoad(host.summary, now) : null;
     return {
       observedAt: now,
       link: projectHostLink(host.connection, host.disconnectedByPerson === true).status,
       lastSeenAt: host.lastSeenAt,
-      load: host.summary ? projectHostLoad(host.summary, now) : null,
+      sampledAt: load?.sampledAt ?? null,
+      stale: load?.stale ?? false,
+      memoryAvailableBytes: load?.memoryAvailableBytes ?? null,
+      cpuIdleCores: load?.cpuIdleCores ?? null,
+      memoryPressure: load?.memoryPressure ?? null,
     };
   }
 
@@ -541,6 +539,6 @@ export class HostWatches {
     detail: string,
     observed: HostWatchObserved | null = null
   ): HostWatchResult {
-    return this.answer(outcome, detail, { armed: false, watch: null, watches: [], observed });
+    return this.answer(outcome, detail, { armed: false, watches: [], observed });
   }
 }

@@ -543,7 +543,12 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // 21_900 → 22_150 for #14369's `terminal.restartOnPresetOwned`, measured at
   // 22_103 B. Its 223 B is the whole of the increase, carried in-app for the
   // external⊆in-app subset invariant.
-  const MAX_COHORT_TOTAL_BYTES = 22_150;
+  // 22_150 → 22_400 for `host.watch` (#14463), measured at 22_353 B. What the
+  // prose has to carry is that one notice comes when a link or fresh sample is
+  // first seen meeting the condition, that it only observes and never dials,
+  // holds or acts, and that watches expire and can be cancelled or listed.
+  // In-app only, off the external surface.
+  const MAX_COHORT_TOTAL_BYTES = 22_400;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 
@@ -1552,6 +1557,7 @@ describe("plugin-dispatch injection guard (#10558)", () => {
       "host.call": { hostId: "h-placeholder", projectId: "p-placeholder", tool: "terminal.list" },
       "host.ensureProject": { hostId: "h-placeholder" },
       "host.settings": { operation: "read", hostIds: ["h-placeholder"] },
+      "host.watch": { operation: "list" },
     };
 
     const failures: string[] = [];

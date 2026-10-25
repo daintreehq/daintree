@@ -550,7 +550,13 @@ export const HostWatchObservedSchema = z.object({
   observedAt: z.number(),
   link: HostListLinkSchema.shape.status,
   lastSeenAt: z.number().nullable(),
-  load: HostListEntrySchema.shape.load,
+  /** The last sample's time, by the host's clock; null when none is held. */
+  sampledAt: z.number().nullable(),
+  /** Too old to trust: the figures below are null. */
+  stale: z.boolean(),
+  memoryAvailableBytes: z.number().nullable(),
+  cpuIdleCores: z.number().nullable(),
+  memoryPressure: z.enum(["normal", "warn", "critical"]).nullable(),
 });
 export type HostWatchObserved = z.infer<typeof HostWatchObservedSchema>;
 
@@ -595,9 +601,7 @@ export const HostWatchResultSchema = z.object({
   ...outcomeFields,
   /** An arm left a watch armed. False with `ok`: already observed, so none was armed. */
   armed: z.boolean(),
-  /** The watch armed, cancelled or found. */
-  watch: HostWatchSchema.nullable(),
-  /** list: this run's watches, armed first, then ended ones newest first. */
+  /** The watch armed or cancelled; for list, this run's, armed first, then ended newest first. */
   watches: z.array(HostWatchSchema),
   /** arm: the host as observed when it was asked. */
   observed: HostWatchObservedSchema.nullable(),
