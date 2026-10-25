@@ -35,7 +35,7 @@ export function registerHostControlActions(actions: ActionRegistry): void {
     id: "host.list",
     title: "List hosts",
     description:
-      "List the hosts this assistant reaches, this machine first as local, as observed: connection, load sample, agent counts and each connected host's projects, which calls name. Null means unmeasured.",
+      "List the hosts this assistant reaches, this machine first as local, as observed: link state and why it is down, build, installed CLIs, load sample, agent counts and each connected host's projects, which calls name. Null means unmeasured.",
     category: "help",
     kind: "query",
     danger: "safe",

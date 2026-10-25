@@ -32,7 +32,17 @@ const RUN_A: OpenRun = {
 const STUDIO: ObservedHost = {
   hostId: "studio",
   name: "studio-01",
-  connection: { status: "connected", rttMs: 12, handshake: {} as never },
+  connection: {
+    status: "connected",
+    rttMs: 12,
+    handshake: {
+      version: "1.0.0",
+      commit: "abc1234",
+      protocolVersion: 12,
+      platform: "linux",
+      arch: "x64",
+    },
+  },
   lastSeenAt: 900,
   summary: null,
 };
@@ -142,6 +152,19 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
         hostId: "local",
         name: "greg-mbp",
         connection: "connected",
+        link: {
+          status: "local",
+          attempt: null,
+          restarting: false,
+          hostModeOff: false,
+          stoppedRetrying: null,
+          disconnectedByPerson: false,
+          quietSince: null,
+          rttSampledAt: null,
+          mismatch: null,
+        },
+        build: { source: "unknown", handshake: null },
+        agentClis: { coverage: "unknown", sampledAt: null, installed: [], omitted: 0 },
         rttMs: null,
         lastSeenAt: null,
         load: null,

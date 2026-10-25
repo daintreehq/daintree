@@ -309,6 +309,8 @@ function startClient(options: StartRemoteHostsOptions): void {
       connection,
       lastSeenAt: descriptor.lastSeenAt,
       summary,
+      lastHandshake: descriptor.lastHandshake,
+      disconnectedByPerson: client.client.isDisconnectedByPerson(descriptor.id),
     }));
   teardowns.push(
     installHostControl({

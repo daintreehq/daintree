@@ -34,6 +34,7 @@ import type { HostProjectSummary } from "../../../shared/types/ipc/remoteHosts.j
 import {
   LOCAL_HOST_ID,
   type HostConnectionState,
+  type HostHandshakeInfo,
   type HostId,
   type HostMetricsSummary,
 } from "../../../shared/types/remoteHosts.js";
@@ -49,6 +50,7 @@ import {
 } from "../../services/mcp-server/terminalNotify.js";
 import { sanitizeNotifyNote } from "../../../shared/types/terminalNotify.js";
 import { projectHostLoad } from "./hostLoad.js";
+import { projectHostAgentClis, projectHostBuild, projectHostLink } from "./hostObservations.js";
 import type { HostControlLinkClient } from "./HostControlLinkClient.js";
 import type { AssistantEnsureRequest } from "../projects/HostSwitchService.js";
 import {
@@ -80,6 +82,10 @@ export interface ObservedHost {
   connection: HostConnectionState;
   lastSeenAt: number | null;
   summary: HostMetricsSummary | null;
+  /** The build its last handshake named, kept after the link goes. */
+  lastHandshake?: HostHandshakeInfo | null;
+  /** The person disconnected it and nothing has dialled it since. */
+  disconnectedByPerson?: boolean;
 }
 
 /**
@@ -1509,6 +1515,9 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
             hostId: host.hostId,
             name: host.name,
             connection: observedConnection(host.connection),
+            link: projectHostLink(host.connection, host.disconnectedByPerson === true),
+            build: projectHostBuild(host.connection, host.lastHandshake ?? null),
+            agentClis: projectHostAgentClis(null, false, 0),
             rttMs: host.connection.status === "connected" ? host.connection.rttMs : null,
             lastSeenAt: host.lastSeenAt,
             load: null,
@@ -1528,7 +1537,13 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       const now = this.now();
       const aged = (entry: HostListEntry): HostListEntry => {
         const summary = sampled.get(entry);
-        return summary ? { ...entry, load: projectHostLoad(summary, now) } : entry;
+        if (!summary) return entry;
+        const live = entry.link.status === "connected" || entry.link.status === "local";
+        return {
+          ...entry,
+          load: projectHostLoad(summary, now),
+          agentClis: projectHostAgentClis(summary, live, now),
+        };
       };
       const others = hosts.map(aged);
       const first = settled ? aged(settled) : null;
@@ -1560,6 +1575,10 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       hostId: LOCAL_HOST_ID,
       name: local.name(),
       connection: "connected",
+      link: projectHostLink({ status: "local" }, false),
+      // No handshake: this machine's own build isn't one it was told.
+      build: { source: "unknown", handshake: null },
+      agentClis: projectHostAgentClis(null, true, 0),
       rttMs: null,
       lastSeenAt: null,
       load: null,

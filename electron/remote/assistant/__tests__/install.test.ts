@@ -163,7 +163,17 @@ function host(hostId: string, status: "connected" | "disconnected"): ObservedHos
     name: hostId,
     connection:
       status === "connected"
-        ? { status, rttMs: 1, handshake: {} as never }
+        ? {
+            status,
+            rttMs: 1,
+            handshake: {
+              version: "1.0.0",
+              commit: "abc1234",
+              protocolVersion: 12,
+              platform: "linux",
+              arch: "x64",
+            },
+          }
         : { status: "disconnected" },
     lastSeenAt: null,
     summary: null,
