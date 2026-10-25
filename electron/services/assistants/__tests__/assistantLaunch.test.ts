@@ -241,6 +241,22 @@ describe("spawnAndConfirm (#13511)", () => {
     expect(pty.listenerCount("spawn-result")).toBe(0);
   });
 
+  it("reads no report in time as no start when the caller asks it to (#14445)", async () => {
+    vi.useFakeTimers();
+    try {
+      const pty = new EventEmitter();
+      const strict = spawnAndConfirm(pty as never, async () => true, "t-1", {
+        unreportedStarted: false,
+      });
+      const lenient = spawnAndConfirm(pty as never, async () => true, "t-2");
+      await vi.advanceTimersByTimeAsync(15_000);
+      await expect(strict).resolves.toBe(false);
+      await expect(lenient).resolves.toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("never waits on a spawn the handler refused outright", async () => {
     const pty = new EventEmitter();
     await expect(spawnAndConfirm(pty as never, async () => false, "t-1")).resolves.toBe(false);

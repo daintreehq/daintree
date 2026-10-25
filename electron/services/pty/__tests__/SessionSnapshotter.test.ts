@@ -249,6 +249,19 @@ describe("SessionSnapshotter", () => {
   });
 
   describe("flushEventDriven", () => {
+    it("never writes a throwaway run's screen to disk (#14445)", async () => {
+      const host = createHost({
+        id: "daintree-throwaway-1",
+        launchAgentId: "claude",
+      } as Partial<MutableHost>);
+      const snap = new SessionSnapshotter(host);
+
+      snap.flushEventDriven();
+      await flushMicrotasks();
+
+      expect(persistAsyncMock).not.toHaveBeenCalled();
+    });
+
     it("uses async serialization for the non-banner path", async () => {
       const host = createHost();
       const snap = new SessionSnapshotter(host);

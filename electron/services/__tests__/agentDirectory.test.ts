@@ -142,6 +142,29 @@ describe("collectAgentDirectory (#14160)", () => {
     expect(JSON.stringify(directory)).not.toContain("orphan");
   });
 
+  it("lists no host throwaway run, and still reads as complete (#14445)", async () => {
+    const base = sources();
+    const { terminals } = await base.readTerminals();
+    const directory = await collectAgentDirectory({
+      ...base,
+      readTerminals: async () => ({
+        terminals: [
+          ...terminals,
+          terminal({
+            id: "daintree-throwaway-1",
+            projectId: "daintree:host-throwaway",
+            detectedAgentId: "claude",
+            agentState: "waiting",
+          }),
+        ],
+        degraded: false,
+      }),
+    });
+
+    expect(directory.complete).toBe(true);
+    expect(JSON.stringify(directory)).not.toContain("throwaway");
+  });
+
   it("carries observations without terminal text, paths or handback messages", async () => {
     const directory = await collectAgentDirectory(sources());
     const worker = directory.entries.find(

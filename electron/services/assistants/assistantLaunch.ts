@@ -334,9 +334,12 @@ const SPAWN_RESULT_WAIT_MS = 15_000;
 export async function spawnAndConfirm(
   pty: Pick<PtyClient, "on" | "off"> | null,
   spawn: () => Promise<boolean>,
-  terminalId: string
+  terminalId: string,
+  /** What no report in time means; a caller with no readiness wait after it reads it as no start. */
+  options: { unreportedStarted?: boolean } = {}
 ): Promise<boolean> {
   if (!pty) return false;
+  const unreportedStarted = options.unreportedStarted ?? true;
   let settle: (started: boolean) => void = () => {};
   const reported = new Promise<boolean>((resolve) => {
     settle = resolve;
@@ -345,7 +348,7 @@ export async function spawnAndConfirm(
     if (id === terminalId) settle(result?.success === true);
   };
   pty.on("spawn-result", onResult);
-  const timer = setTimeout(() => settle(true), SPAWN_RESULT_WAIT_MS);
+  const timer = setTimeout(() => settle(unreportedStarted), SPAWN_RESULT_WAIT_MS);
   try {
     return (await spawn()) && (await reported);
   } finally {

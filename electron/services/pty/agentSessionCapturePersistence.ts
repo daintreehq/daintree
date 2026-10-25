@@ -1,3 +1,4 @@
+import { isHostThrowawayWorkspaceId } from "../../../shared/config/hostThrowaway.js";
 import { panelKindHasPty } from "../../../shared/config/panelKindRegistry.js";
 import type { ProjectState } from "../../../shared/types/project.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
@@ -396,6 +397,8 @@ export async function persistCapturedAgentSession(
  * this returns — and tracks it so a quit can wait for it.
  */
 export function acceptCapturedAgentSession(capture: CapturedAgentSession): void {
+  // A throwaway run (#14445) has no journal entry or saved pane to fill.
+  if (isHostThrowawayWorkspaceId(capture.record.projectId)) return;
   if (sealed) {
     logger.warn("Captured agent session arrived after quit sealed persistence", {
       terminalId: capture.terminalId,

@@ -4,6 +4,7 @@ import { getAgentSessionRetentionDays } from "./agentSessionRetention.js";
 import { getLifecycleLedger } from "./lifecycleLedger.js";
 import { events } from "../events.js";
 import { createLogger } from "../../utils/logger.js";
+import { isHostThrowawayWorkspaceId } from "../../../shared/config/hostThrowaway.js";
 
 const logger = createLogger("main:AgentSessionJournal");
 
@@ -58,6 +59,9 @@ export async function journalAgentSessionRecord(
   record: Omit<AgentSessionRecord, "savedAt">,
   ctx: JournalCloseContext
 ): Promise<AgentSessionRecord | null> {
+  // A throwaway host run (#14445) leaves nothing to resume, whichever close
+  // path reached it; refused before the ledger, so it claims nothing either.
+  if (isHostThrowawayWorkspaceId(record.projectId)) return null;
   const ledger = getLifecycleLedger();
   // A null generation is an explicit "frozen but unknown" — fail open without
   // consulting the current (possibly respawned) generation. Omitted falls back

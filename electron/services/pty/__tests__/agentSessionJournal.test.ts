@@ -97,6 +97,24 @@ describe("journalAgentSession", () => {
     expect(recordedEvents).toEqual([{ sessionId: "sess-1" }]);
   });
 
+  it("never journals a throwaway run, and claims nothing for it (#14445)", async () => {
+    const ledger = getLifecycleLedger();
+    const generation = ledger.recordLaunch("term-1", { launchAgentId: "claude" });
+
+    await expect(
+      journalAgentSession(makeRecord("sess-1", { projectId: "daintree:host-throwaway" }), {
+        terminalId: "term-1",
+        generation,
+      })
+    ).resolves.toBe(false);
+    expect(await readSessionHistory(userDataDir)).toEqual([]);
+    expect(recordedEvents).toEqual([]);
+    // The generation stays unclaimed: the throwaway refusal reserved nothing.
+    await expect(
+      journalAgentSession(makeRecord("sess-1"), { terminalId: "term-1", generation })
+    ).resolves.toBe(true);
+  });
+
   it("journals exactly once per terminal generation across overlapping close paths", async () => {
     const ledger = getLifecycleLedger();
     const generation = ledger.recordLaunch("term-1", { launchAgentId: "claude" });

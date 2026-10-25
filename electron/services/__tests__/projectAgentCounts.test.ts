@@ -42,6 +42,15 @@ describe("classifyRun", () => {
     expect(classifyRun(agent({ id: "help", isTrashed: true }), isHelp)).toBe("trashed");
   });
 
+  it("never counts a host's throwaway run as an agent of any project (#14445)", () => {
+    expect(
+      classifyRun(
+        agent({ projectId: "daintree:host-throwaway", detectedAgentId: "claude" }),
+        isHelp
+      )
+    ).toBe("throwaway");
+  });
+
   it("reports a live assistant as help so callers can net it back out", () => {
     expect(classifyRun(agent({ id: "help" }), isHelp)).toBe("help");
   });
