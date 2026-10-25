@@ -122,6 +122,17 @@ export class TerminalInputController {
    * pre-Enter delay when the lock engages abandons the Enter instead of
    * submitting whatever the shutdown signal left in the composer.
    */
+  /**
+   * Abandon everything Daintree has not yet written to the PTY — queued
+   * submits and the pending Enter of one in flight — without locking input.
+   * The global assistant's input moved to another window (#14454): what the
+   * previous owner sent must not land in the new owner's line.
+   */
+  cancelPendingInput(): void {
+    this.inputGeneration++;
+    this.host.writeQueue.cancelPendingInput();
+  }
+
   acquireShutdownInputLock(): () => void {
     this.shutdownLockDepth++;
     this.inputGeneration++;

@@ -457,6 +457,7 @@ export const CHANNEL_LOCALITY = {
   "help:global-assistant-release-input": "host",
   "help:global-assistant-restart": "host",
   "help:global-assistant-discard": "host",
+  "help:global-assistant-changed": "host",
   "help:get-starter-prompts": "host",
   "help:list-past-sessions": "host",
   "help:list-pending-hibernation-slots": "host",

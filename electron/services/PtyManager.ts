@@ -750,6 +750,10 @@ export class PtyManager extends EventEmitter {
    * surfaces already distinguish those, having resolved the terminal first.
    */
   /** Withdraw a guarded submission (#12491); a terminal that is gone has nothing to withdraw. */
+  cancelPendingInput(id: string): void {
+    this.registry.get(id)?.cancelPendingInput();
+  }
+
   withdrawGuardedSubmission(id: string, submissionToken: string): void {
     this.registry.get(id)?.withdrawGuardedSubmission(submissionToken);
   }

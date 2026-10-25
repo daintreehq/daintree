@@ -395,7 +395,16 @@ describe("CanopyTerminal", () => {
     unmount();
     await open({ watchId: 7, snapshot: { data: "", cols: 80, rows: 24 } });
     expect(pane.events).toEqual([]);
-    expect(window.electron.canopy.unwatchTerminal).toHaveBeenCalled();
+    // Only the stream it was answered with: never a view-wide release, which
+    // would end a stream another pane opened meanwhile (#14454).
+    expect(vi.mocked(window.electron.canopy.unwatchTerminal).mock.calls).toEqual([[7]]);
+  });
+
+  it("lets go of its own stream by id when it unmounts", async () => {
+    const { unmount } = mount();
+    await open({ watchId: 9, snapshot: { data: "", cols: 80, rows: 24 } });
+    unmount();
+    expect(vi.mocked(window.electron.canopy.unwatchTerminal).mock.calls).toEqual([[9]]);
   });
 
   it("says it couldn't show a terminal the host had no screen for, with the way to see it", async () => {

@@ -284,6 +284,8 @@ export type PtyHostRequest =
   | { type: "stage"; id: string; text: string }
   /** Take back a guarded submission before its Enter (#12491). Ordinary ones are unaffected. */
   | { type: "withdraw-submission"; id: string; submissionToken: string }
+  /** Drop input queued for the PTY but not yet written; input stays open. */
+  | { type: "cancel-pending-input"; id: string }
   | { type: "batch-double-escape"; ids: string[] }
   | { type: "kill"; id: string; reason?: string; escalationDelayMs?: number }
   | { type: "trash"; id: string }

@@ -2114,6 +2114,7 @@ export interface IpcEventMap {
 
   // Host-owned agent defaults changed (#13345)
   "agent-defaults:changed": AgentDefaultsSnapshot;
+  "help:global-assistant-changed": import("./help.js").GlobalAssistantView;
 
   // Plugin action registry events
   "plugin:actions-changed": {

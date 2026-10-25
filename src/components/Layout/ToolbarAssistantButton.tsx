@@ -285,6 +285,19 @@ export function ToolbarAssistantButton({
           >
             Find an assistant…
           </ContextMenuItem>
+          {/* Shows the global assistant's tab; starting it is that tab's own button. */}
+          <ContextMenuItem
+            onSelect={() => {
+              suppressSidebarResizes();
+              useFocusStore.getState().clearAssistantGesture();
+              const panel = useHelpPanelStore.getState();
+              panel.selectGlobal(null);
+              panel.setOpen(true);
+              panel.requestFocus();
+            }}
+          >
+            Open global assistant
+          </ContextMenuItem>
           {hasAgentChoice && <ContextMenuSeparator />}
           {hasAgentChoice &&
             agentChoices.map((agentId) => (

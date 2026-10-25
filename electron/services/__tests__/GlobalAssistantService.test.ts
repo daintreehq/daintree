@@ -55,6 +55,19 @@ describe("GlobalAssistantService", () => {
     expect(deps.provision).toHaveBeenCalledTimes(1);
   });
 
+  it("tells listeners a launch has begun before it settles, then that it runs", async () => {
+    const spawned = deferred<boolean>();
+    const { deps } = makeDeps({ spawn: vi.fn(() => spawned.promise) });
+    const service = new GlobalAssistantService(deps);
+    const phases: string[] = [];
+    service.onChange((state) => phases.push(state.phase));
+    const launch = service.ensureSession();
+    expect(phases).toEqual(["launching"]);
+    spawned.resolve(true);
+    await launch;
+    expect(phases.at(-1)).toBe("running");
+  });
+
   it("puts the bearer in the spawn env and not in the returned state", async () => {
     const { deps } = makeDeps();
     const service = new GlobalAssistantService(deps);

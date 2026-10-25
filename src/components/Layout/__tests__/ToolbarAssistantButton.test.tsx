@@ -585,7 +585,13 @@ describe("ToolbarAssistantButton — new session on a chosen agent", () => {
 
   beforeEach(() => {
     mcpReadinessMock.mockReturnValue({ enabled: true, state: "ready", port: 0, lastError: null });
-    useHelpPanelStore.setState({ isOpen: false, sessions: { 0: emptyLane() }, activeSlot: 0 });
+    useHelpPanelStore.setState({
+      isOpen: false,
+      sessions: { 0: emptyLane() },
+      activeSlot: 0,
+      globalSelected: false,
+      globalTarget: null,
+    });
     mockGestureAssistantHidden = false;
     dispatch.mockReset();
     dispatch.mockResolvedValue({ ok: true });
@@ -606,7 +612,12 @@ describe("ToolbarAssistantButton — new session on a chosen agent", () => {
       within(menu)
         .getAllByRole("menuitem")
         .map((item) => item.textContent)
-    ).toEqual(["Find an assistant…", "New session with Claude", "New session with Codex"]);
+    ).toEqual([
+      "Find an assistant…",
+      "Open global assistant",
+      "New session with Claude",
+      "New session with Codex",
+    ]);
     await act(async () => {
       fireEvent.click(within(menu).getByRole("menuitem", { name: "New session with Codex" }));
     });
@@ -620,7 +631,7 @@ describe("ToolbarAssistantButton — new session on a chosen agent", () => {
     expect(useHelpPanelStore.getState().isOpen).toBe(false);
   });
 
-  it("offers only finding an assistant with one agent to choose from", async () => {
+  it("offers only finding and the global assistant with one agent to choose from", async () => {
     const { container } = render(<ToolbarAssistantButton />);
 
     fireEvent.contextMenu(container.querySelector("button")!);
@@ -630,7 +641,31 @@ describe("ToolbarAssistantButton — new session on a chosen agent", () => {
       within(menu)
         .getAllByRole("menuitem")
         .map((item) => item.textContent)
-    ).toEqual(["Find an assistant…"]);
+    ).toEqual(["Find an assistant…", "Open global assistant"]);
+  });
+
+  it("opens the global assistant's tab without starting it (#14454)", async () => {
+    const ensureGlobalAssistant = vi.fn();
+    Object.defineProperty(window, "electron", {
+      value: { help: { ensureGlobalAssistant } },
+      configurable: true,
+      writable: true,
+    });
+    const { container } = render(<ToolbarAssistantButton />);
+
+    fireEvent.contextMenu(container.querySelector("button")!);
+    const menu = await screen.findByRole("menu");
+    await act(async () => {
+      fireEvent.click(within(menu).getByRole("menuitem", { name: "Open global assistant" }));
+    });
+
+    expect(useHelpPanelStore.getState()).toMatchObject({
+      isOpen: true,
+      globalSelected: true,
+      globalTarget: null,
+    });
+    expect(ensureGlobalAssistant).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
   });
 
   it("finds an assistant from the menu without starting one or opening the panel", async () => {
@@ -672,7 +707,7 @@ describe("ToolbarAssistantButton — new session on a chosen agent", () => {
       within(menu)
         .getAllByRole("menuitem")
         .map((item) => item.getAttribute("aria-disabled"))
-    ).toEqual([null, "true", "true"]);
+    ).toEqual([null, null, "true", "true"]);
     unmount();
 
     // An empty tab at the ceiling is still somewhere to start one.
@@ -684,7 +719,7 @@ describe("ToolbarAssistantButton — new session on a chosen agent", () => {
       within(menu)
         .getAllByRole("menuitem")
         .map((item) => item.getAttribute("aria-disabled"))
-    ).toEqual([null, null, null]);
+    ).toEqual([null, null, null, null]);
   });
 
   it("keeps the plain click a toggle and nothing more, whatever the choice", () => {

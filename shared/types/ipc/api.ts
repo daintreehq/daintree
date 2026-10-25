@@ -2253,7 +2253,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   // All help methods (incl. reportPanelOpen + peekPendingHibernation, which
   // surfaces `panelWasOpen` for cold switch-back auto-resume) come from
   // GeneratedElectronAPI (#10815).
-  help: GeneratedElectronAPI["help"];
+  help: GeneratedElectronAPI["help"] & {
+    /** The global assistant changed: its run, its readers or who holds its input (#14454). */
+    onGlobalAssistantChanged(
+      callback: (state: import("./help.js").GlobalAssistantView) => void
+    ): () => void;
+  };
   // helpAssistant is generated — see GeneratedElectronAPI.
   mcpBridge: {
     /** Listen for manifest requests from main process */

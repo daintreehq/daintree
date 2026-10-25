@@ -420,7 +420,7 @@ export interface GeneratedIpcInvokeMap {
     result: void;
   };
   "canopy:unwatch-terminal": {
-    args: [];
+    args: [watchId?: number | undefined];
     result: void;
   };
   "canopy:watch-assistant-terminal": {
@@ -432,6 +432,7 @@ export interface GeneratedIpcInvokeMap {
         incarnation: number;
         lane?: number | undefined;
       },
+      inputStamp?: import("./help.js").GlobalAssistantInputStamp | undefined,
     ];
     result: import("./canopy.js").CanopyTerminalView;
   };
@@ -1890,31 +1891,31 @@ export interface GeneratedIpcInvokeMap {
   };
   "help:global-assistant-claim-input": {
     args: [attachmentId: string];
-    result: import("./help.js").GlobalAssistantState;
+    result: import("./help.js").GlobalAssistantView;
   };
   "help:global-assistant-detach": {
     args: [attachmentId: string];
     result: void;
   };
   "help:global-assistant-discard": {
-    args: [];
-    result: import("./help.js").GlobalAssistantState;
+    args: [expectedGeneration?: number | undefined];
+    result: import("./help.js").GlobalAssistantView;
   };
   "help:global-assistant-ensure": {
     args: [];
-    result: import("./help.js").GlobalAssistantState;
+    result: import("./help.js").GlobalAssistantView;
   };
   "help:global-assistant-release-input": {
     args: [attachmentId: string];
-    result: import("./help.js").GlobalAssistantState;
+    result: import("./help.js").GlobalAssistantView;
   };
   "help:global-assistant-restart": {
-    args: [];
-    result: import("./help.js").GlobalAssistantState;
+    args: [expectedGeneration?: number | undefined];
+    result: import("./help.js").GlobalAssistantView;
   };
   "help:global-assistant-state": {
     args: [];
-    result: import("./help.js").GlobalAssistantState;
+    result: import("./help.js").GlobalAssistantView;
   };
   "help:list-past-sessions": {
     args: [projectId: string];

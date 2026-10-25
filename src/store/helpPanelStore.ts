@@ -8,6 +8,7 @@ import {
   type PersistWriteMergeContext,
 } from "./persistence/persistWriteMerge";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
+import type { AgentDirectorySubject } from "@shared/types/agentDirectory";
 import { legacyHelpPanelAgentId } from "./persistence/agentDefaultsLegacy";
 import { agentDefaultsClient } from "@/clients/agentDefaultsClient";
 import { logError } from "@/utils/logger";
@@ -225,6 +226,17 @@ interface HelpPanelState {
   hibernateSessions: Record<string, HelpHibernateSession>;
   /** Monotonic counter bumped by requestFocus() so repeated Cmd+L presses re-trigger the focus effect. */
   focusRequest: number;
+  /**
+   * The panel body shows the installation's global assistant instead of a
+   * project lane (#14454). `activeSlot` keeps the lane to come back to.
+   */
+  globalSelected: boolean;
+  /**
+   * The exact global run "Open in Assistant" chose, or null to show whichever
+   * runs. A chosen run that ended is said to have ended; its successor is
+   * never shown in its place.
+   */
+  globalTarget: AgentDirectorySubject | null;
 }
 
 interface HelpPanelActions {
@@ -256,6 +268,8 @@ interface HelpPanelActions {
   /** Drop a lane. Never removes the last one: the panel always has slot 0. */
   closeSlot: (slot: number) => void;
   setActiveSlot: (slot: number) => void;
+  /** Show the global assistant, pinned to one exact run or following whichever runs. */
+  selectGlobal: (target?: AgentDirectorySubject | null) => void;
   /**
    * A person choosing the assistant agent: shown at once, saved on the host,
    * and, unless `switchSession` is false, queued to replace this view's live
@@ -307,6 +321,8 @@ const initialState: HelpPanelState = {
   introDismissed: false,
   hibernateSessions: {},
   focusRequest: 0,
+  globalSelected: false,
+  globalTarget: null,
 };
 
 /**
@@ -522,7 +538,12 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
           for (let slot = 0; slot < MAX_ASSISTANT_SLOTS; slot += 1) {
             if (s.sessions[slot]) continue;
             taken = slot;
-            return { sessions: { ...s.sessions, [slot]: emptySlot() }, activeSlot: slot };
+            return {
+              sessions: { ...s.sessions, [slot]: emptySlot() },
+              activeSlot: slot,
+              globalSelected: false,
+              globalTarget: null,
+            };
           }
           return s;
         });
@@ -561,7 +582,13 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
         }),
 
       setActiveSlot: (slot) =>
-        set((s) => (s.sessions[slot] && s.activeSlot !== slot ? { activeSlot: slot } : s)),
+        set((s) =>
+          s.sessions[slot] && (s.activeSlot !== slot || s.globalSelected)
+            ? { activeSlot: slot, globalSelected: false, globalTarget: null }
+            : s
+        ),
+
+      selectGlobal: (target = null) => set({ globalSelected: true, globalTarget: target }),
 
       setPreferredAgent: (agentId, options) => {
         const epoch = ++assistantAgentWriteEpoch;

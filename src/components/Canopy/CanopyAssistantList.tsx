@@ -145,12 +145,9 @@ export function CanopyAssistantPane({
         <Button variant="outline" size="xs" pressed={showingWork} onClick={onShowWork}>
           Show its work
         </Button>
-        {/* The global session has no panel in a project view to land in. */}
-        {item.subject.scope.kind === "project" && (
-          <Button variant="outline" size="xs" onClick={onOpen}>
-            Open in Assistant
-          </Button>
-        )}
+        <Button variant="outline" size="xs" onClick={onOpen}>
+          Open in Assistant
+        </Button>
       </div>
       {item.ask === "confirm" && item.confirmation && (
         <div className="shrink-0 pb-2" data-canopy-assistant-confirmation="">

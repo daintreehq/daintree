@@ -19,6 +19,7 @@ const panel = vi.hoisted(() => {
     sessions: {} as Record<number, { terminalId: string | null }>,
     ensureSlot: vi.fn(),
     setActiveSlot: vi.fn(),
+    selectGlobal: vi.fn(),
     setOpen: vi.fn(),
     requestFocus: vi.fn(),
     listeners,
@@ -91,6 +92,13 @@ const destination = {
   incarnation: 3,
 };
 
+const globalSubject = {
+  hostId: "local",
+  scope: { kind: "global" as const },
+  terminalId: "g1",
+  incarnation: 2,
+};
+
 describe("assistant subject adapter", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -109,6 +117,50 @@ describe("assistant subject adapter", () => {
     expect(canopy.watchAssistantTerminal).toHaveBeenCalledWith(subject);
     expect(canopy.watchTerminal).not.toHaveBeenCalled();
     await expect(api.answer("t1", { spawnedAt: 1 }, "Yes")).rejects.toThrow();
+  });
+
+  it("types to the global session only under the input stamp it was opened with", async () => {
+    const stamp = { attachmentId: "a1", inputEpoch: 4 };
+    await assistantTerminalApi(globalSubject, stamp).watchTerminal("g1", { spawnedAt: 2 });
+    expect(canopy.watchAssistantTerminal).toHaveBeenLastCalledWith(globalSubject, stamp);
+    await assistantTerminalApi(globalSubject).watchTerminal("g1", { spawnedAt: 2 });
+    expect(canopy.watchAssistantTerminal).toHaveBeenLastCalledWith(globalSubject);
+  });
+
+  describe("the global session", () => {
+    const globalDestination = {
+      scope: "global" as const,
+      hostId: "local",
+      terminalId: "g1",
+      incarnation: 2,
+    };
+
+    it("opens in this view's Assistant panel, pinned to the exact run, moving nothing", async () => {
+      canopy.resolveAssistant.mockResolvedValue(globalDestination);
+      expect(await openInAssistant(globalSubject)).toEqual({ ok: true });
+      expect(panel.selectGlobal).toHaveBeenCalledWith(globalSubject);
+      expect(panel.setOpen).toHaveBeenCalledWith(true);
+      expect(panel.requestFocus).toHaveBeenCalled();
+      expect(switchProject).not.toHaveBeenCalled();
+      expect(remoteHosts.switchWindowHost).not.toHaveBeenCalled();
+      expect(panel.setActiveSlot).not.toHaveBeenCalled();
+    });
+
+    it("selects nothing for a run that ended, so its successor is never shown in its place", async () => {
+      canopy.resolveAssistant.mockResolvedValue(null);
+      expect(await openInAssistant(globalSubject)).toEqual({ ok: false, reason: "ended" });
+      expect(panel.selectGlobal).not.toHaveBeenCalled();
+      expect(panel.setOpen).not.toHaveBeenCalled();
+    });
+
+    it("refuses another machine's global session, which a window here can't hold", async () => {
+      canopyHost.resolveAssistant.mockResolvedValue({ ...globalDestination, hostId: "studio" });
+      expect(await openInAssistant({ ...globalSubject, hostId: "studio" })).toEqual({
+        ok: false,
+        reason: "unsupported",
+      });
+      expect(panel.selectGlobal).not.toHaveBeenCalled();
+    });
   });
 
   it("moves to another project only on Open, carrying the exact subject", async () => {
