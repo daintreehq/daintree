@@ -213,6 +213,13 @@ export interface SessionServerDeps extends OwnedMainExecutors {
    */
   readTerminalCloseContext?: (terminalId: string) => Promise<TerminalCloseContext | null>;
   /**
+   * What the pty-host reports of a closed panel's process, read after a close
+   * returns (#14474). Absent, a close answers with `closedIds` alone.
+   */
+  readClosedPanelProcess?: (
+    terminalId: string
+  ) => Promise<import("../../../shared/types/panelClose.js").ClosedPanelProcess>;
+  /**
    * Whether a terminal belongs to the workspace of this session's pinned view,
    * re-resolved on every call (#12883). What admits Daintree's own assistant to
    * `terminal.readLastMessageOwned` for a pane it did not create: it already

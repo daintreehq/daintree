@@ -76,6 +76,7 @@ import { buildSurfaceManifest, MCP_SURFACE_TOOL_ID } from "./surfaceManifest.js"
 import { viewlessStatusArgsAreAnswerable } from "./terminalStatus.js";
 import { viewlessActionDanger } from "../viewless/viewlessActionCatalog.js";
 import { parseLastMessageReadArgs } from "./lastMessageArgs.js";
+import { withClosedPanelProcesses } from "./closedPanelProcesses.js";
 import { LAST_MESSAGE_TEXT_MAX_BYTES } from "../../../shared/types/agentLastMessage.js";
 import type { OwnedResourceRecord } from "./resourceOwnership.js";
 import type { TerminalAdoptionRecord } from "./terminalAdoption.js";
@@ -242,6 +243,12 @@ const ASSISTANT_TARGET_TOOLS: ReadonlySet<string> = new Set([
   "terminal.close",
   "terminal.closeOwned",
   TERMINAL_READ_LAST_MESSAGE_OWNED_TOOL,
+]);
+/** The closes whose answer carries what the host saw of each closed panel's process (#14474). */
+const CLOSE_TOOLS: ReadonlySet<string> = new Set([
+  "terminal.close",
+  "terminal.closeOwned",
+  "terminal.closeAll",
 ]);
 const ASSISTANT_SEND_TOOLS: ReadonlySet<string> = new Set([
   "terminal.sendCommand",
@@ -645,6 +652,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     requestApproval,
     requestCloseApproval,
     readTerminalCloseContext,
+    readClosedPanelProcess,
   } = deps;
 
   const session = createSessionContext(sessionId, deps);
@@ -2555,7 +2563,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           // where the public tool takes `terminalId` (#12315).
           // `raised` answers the second half of a reveal — whether a window
           // actually came forward — and is vacuously true for everything else.
-          const { envelope, raised } = assistantEnvelope
+          const { envelope: dispatched, raised } = assistantEnvelope
             ? { envelope: assistantEnvelope, raised: true }
             : listPaging || ownedResource?.executor !== "renderer" || ownedResourceId === undefined
               ? {
@@ -2565,6 +2573,17 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                   raised: true,
                 }
               : await dispatchOwnedResourceAction(ownedResource, ownedResourceId);
+          // A close trashes the panel and its process runs on through the
+          // grace, so the answer says what the host saw of each one (#14474).
+          // Every route a close takes ends here: renderer, viewless, owned,
+          // an assistant's, and each item of `terminal.closeMany`.
+          const envelope: DispatchEnvelope =
+            readClosedPanelProcess !== undefined && CLOSE_TOOLS.has(actionId)
+              ? {
+                  ...dispatched,
+                  result: await withClosedPanelProcesses(dispatched.result, readClosedPanelProcess),
+                }
+              : dispatched;
           // Narrow renderer-computed results against this session before
           // anything downstream reads them: the effective action surface for
           // the registry-enumerating tools (#11525), and the ownership ledger

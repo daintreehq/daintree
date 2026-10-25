@@ -1202,6 +1202,28 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           description:
             "Panels closed. Empty means nothing closed (none to act on, already in the trash, or teardown failed): treat it as a failed close.",
         },
+        processes: {
+          description: "Each closed panel's process after the close: closed is not stopped.",
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              terminalId: {
+                type: "string",
+              },
+              exited: {
+                description: "The host saw it exit; false: not yet; null: unknown.",
+                type: ["boolean", "null"],
+              },
+              trashExpiresAt: {
+                description: "Unix ms the host starts stopping it unless restored; null: unknown.",
+                type: ["number", "null"],
+              },
+            },
+            required: ["terminalId", "exited", "trashExpiresAt"],
+            additionalProperties: false,
+          },
+        },
       },
       required: ["closedIds"],
       additionalProperties: false,

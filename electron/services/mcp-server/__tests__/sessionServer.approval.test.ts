@@ -488,7 +488,8 @@ describe("assistant close approval (#12881)", () => {
   function closeDeps(
     origin: string,
     requestCloseApproval: SessionServerDeps["requestCloseApproval"] | undefined,
-    agentStates: Record<string, AgentState | TerminalCloseContext> = {}
+    agentStates: Record<string, AgentState | TerminalCloseContext> = {},
+    overrides: Partial<SessionServerDeps> = {}
   ) {
     const sessionStore = fakeSessionStore("core");
     const readTerminalCloseContext = vi.fn(
@@ -509,6 +510,7 @@ describe("assistant close approval (#12881)", () => {
       dispatchAction,
       readTerminalCloseContext,
       ...(requestCloseApproval !== undefined ? { requestCloseApproval } : {}),
+      ...overrides,
     });
     const start = async (sessionId: string, owned: string[] = []) => {
       (sessionStore as unknown as { sessionOriginMap: Map<string, string> }).sessionOriginMap.set(
@@ -574,6 +576,28 @@ describe("assistant close approval (#12881)", () => {
 
     expect(requestCloseApproval).not.toHaveBeenCalled();
     expect(dispatchAction).toHaveBeenCalledWith("terminal.close", { terminalId: "t-own" }, false);
+  });
+
+  // #14474: the assistant's own close says its agent may still be running too.
+  it("answers a close with what the host saw of the closed panel's process", async () => {
+    const readClosedPanelProcess = vi.fn(async (terminalId: string) => ({
+      terminalId,
+      exited: false,
+      trashExpiresAt: 20_000,
+    }));
+    const { start } = closeDeps("help", vi.fn(), { "t-own": "idle" }, { readClosedPanelProcess });
+    const server = await start("s-close-own-processes", ["t-own"]);
+
+    const result = await callTool(server, {
+      name: "terminal.close",
+      arguments: { terminalId: "t-own" },
+    });
+
+    expect(readClosedPanelProcess).toHaveBeenCalledWith("t-own");
+    expect(JSON.parse((result.content as Array<{ text: string }>)[0]!.text)).toEqual({
+      closedIds: ["t-own"],
+      processes: [{ terminalId: "t-own", exited: false, trashExpiresAt: 20_000 }],
+    });
   });
 
   it.each(["working", "waiting"] as const)(

@@ -5119,7 +5119,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "terminal",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Close several terminals in one call, each as a single close (owned for an agent pane), to the trash. Results come back in order.",
+    "description": "Close several terminals in one call, each as a single close (owned for an agent pane), to the trash; results, in order, say if each process still runs.",
     "examples": undefined,
     "id": "terminal.closeMany",
     "keywords": [

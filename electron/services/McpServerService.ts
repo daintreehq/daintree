@@ -27,6 +27,7 @@ import type {
   TurnOutcomeClass,
 } from "../../shared/types/ipc/mcpServer.js";
 import { SessionStore } from "./mcp-server/sessionStore.js";
+import { readClosedPanelProcess } from "./mcp-server/closedPanelProcesses.js";
 import {
   helpOwnershipPrincipal,
   principalOwnerKey,
@@ -481,6 +482,13 @@ export class McpServerService {
             : {}),
         };
       },
+      // Strict, so a pty-host slow to answer reads as unknown, never as a
+      // process that is gone or still running.
+      readClosedPanelProcess: (terminalId) =>
+        readClosedPanelProcess(terminalId, async (id) => {
+          const client = getPtyClient();
+          return client ? client.getTerminalAsync(id, undefined, { strict: true }) : null;
+        }),
       isAgentPaneInWorkspace: (terminalId, workspaceId) =>
         isAgentPaneInWorkspace(getPtyClient(), terminalId, workspaceId),
       terminalNotify: this.terminalNotify,

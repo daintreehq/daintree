@@ -376,6 +376,93 @@ describe("session-scoped resource ownership (#11909)", () => {
       expect(store.resourceOwnership.owns("s-noop", "terminal", "terminal-1")).toBe(true);
     });
 
+    // #14474: a close trashes the panel and its agent runs on through the
+    // grace, so a caller reading `closedIds` must also be told the process is
+    // still there, item by item through `closeMany` as well.
+    it("says what the host saw of each closed panel's process, item by item in a closeMany", async () => {
+      const manifest: ActionManifestEntry[] = [
+        ...ownedManifest(),
+        { ...makeManifestEntry("terminal.closeMany"), kind: "command", danger: "safe" },
+      ];
+      const readClosedPanelProcess = vi.fn(async (terminalId: string) => ({
+        terminalId,
+        exited: false,
+        trashExpiresAt: 1_700_000_020_000,
+      }));
+      const { store, server } = harness(
+        "s-close-many",
+        {},
+        {
+          requestManifest: vi.fn().mockResolvedValue(manifest),
+          getCachedManifest: vi.fn(() => manifest),
+          readClosedPanelProcess,
+          dispatchAction: vi.fn(async (_id: string, args: unknown) => ({
+            result: {
+              ok: true as const,
+              result: { closedIds: [(args as { terminalId: string }).terminalId] },
+            },
+          })),
+        }
+      );
+      // `terminal.closeMany` sits above the `external` tier.
+      seedLiveSession(store, "s-close-many", "core");
+      store.resourceOwnership.record("s-close-many", [
+        { kind: "terminal", id: "terminal-1" },
+        { kind: "terminal", id: "terminal-2" },
+      ]);
+
+      const result = await callTool(server, {
+        name: "terminal.closeMany",
+        arguments: { terminalIds: ["terminal-1", "terminal-2"] },
+      });
+
+      expect(payloadOf(result)).toEqual({
+        results: [
+          {
+            target: "terminal-1",
+            ok: true,
+            result: {
+              closedIds: ["terminal-1"],
+              processes: [
+                { terminalId: "terminal-1", exited: false, trashExpiresAt: 1_700_000_020_000 },
+              ],
+            },
+          },
+          {
+            target: "terminal-2",
+            ok: true,
+            result: {
+              closedIds: ["terminal-2"],
+              processes: [
+                { terminalId: "terminal-2", exited: false, trashExpiresAt: 1_700_000_020_000 },
+              ],
+            },
+          },
+        ],
+      });
+      // Read after the close, never instead of it: ownership still follows the
+      // panel, so a closed one is released.
+      expect(store.resourceOwnership.owns("s-close-many", "terminal", "terminal-1")).toBe(false);
+    });
+
+    it("reads nothing for a close that closed nothing", async () => {
+      const readClosedPanelProcess = vi.fn();
+      const { store, server } = harness(
+        "s-noop-read",
+        { "terminal.close": { result: { ok: true, result: { closedIds: [] } } } },
+        { readClosedPanelProcess }
+      );
+      store.resourceOwnership.record("s-noop-read", [{ kind: "terminal", id: "terminal-1" }]);
+
+      const result = await callTool(server, {
+        name: "terminal.closeOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      expect(readClosedPanelProcess).not.toHaveBeenCalled();
+      expect(payloadOf<{ processes: unknown[] }>(result).processes).toEqual([]);
+    });
+
     it("refuses another session's terminal without dispatching", async () => {
       const { store, server, dispatchAction } = harness("session-b", {});
       store.resourceOwnership.record("session-a", [{ kind: "terminal", id: "terminal-a" }]);

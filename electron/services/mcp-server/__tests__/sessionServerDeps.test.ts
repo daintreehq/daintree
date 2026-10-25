@@ -114,6 +114,35 @@ describe("createSessionServerDeps", () => {
     expect(deps.isAgentPaneInWorkspace).toHaveBeenCalledWith("term-9", WS_A);
   });
 
+  // #14474: a close's answer says what the host saw of each closed panel's
+  // process only if every session, a host call's relay session included, is
+  // handed the reader.
+  it.each([
+    ["a direct session", {}],
+    [
+      "a host call's relay session",
+      {
+        relay: {
+          linkSessionId: "link-1",
+          senderId: "shell-1",
+          helpSessionId: "help-1",
+          shellName: "Shell",
+        },
+      },
+    ],
+  ])("hands %s the closed-process reader", (_label, capture) => {
+    const deps = fakeSource();
+    const readClosedPanelProcess = vi.fn();
+    (deps as { readClosedPanelProcess?: unknown }).readClosedPanelProcess = readClosedPanelProcess;
+
+    const sessionDeps = createSessionServerDeps(deps, mutableHost().host, {
+      sessionId: "s",
+      ...capture,
+    });
+
+    expect(sessionDeps.readClosedPanelProcess).toBe(readClosedPanelProcess);
+  });
+
   it("names the external client the host reports at dispatch time, not at build", async () => {
     const deps = fakeSource();
     const { state, host } = mutableHost();

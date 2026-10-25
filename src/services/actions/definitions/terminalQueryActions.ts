@@ -208,7 +208,7 @@ export function registerTerminalQueryActions(
     id: "terminal.closeMany",
     title: "Close several terminals",
     description:
-      "Close several terminals in one call, each as a single close (owned for an agent pane), to the trash. Results come back in order.",
+      "Close several terminals in one call, each as a single close (owned for an agent pane), to the trash; results, in order, say if each process still runs.",
     category: "terminal",
     kind: "command",
     danger: "safe",
