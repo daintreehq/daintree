@@ -875,6 +875,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       ...(deps.watchHosts ? { observe: deps.watchHosts } : {}),
       ...(deps.queueNotice ? { queueNotice: deps.queueNotice } : {}),
       now: () => this.now(),
+      clock: () => this.clock(),
       newId: () => this.newId(),
     });
   }
