@@ -50,6 +50,15 @@ import {
 import { installAssistantSenderHostWith, senderIdForCredential } from "../hostSenders.js";
 import { AssistantLinkMethod } from "../linkMethods.js";
 import { SenderSessions } from "../senderSessions.js";
+import type {
+  HostThrowawayExecution,
+  HostThrowawayExecutor,
+  HostThrowawayOwner,
+} from "../throwawayRelay.js";
+import type {
+  HostThrowawayCall,
+  HostThrowawayRun,
+} from "../../../../shared/types/hostThrowaway.js";
 
 /**
  * Acceptance evidence for #14169: a Shell assistant's `host.call` across a
@@ -281,6 +290,85 @@ class Destination {
   }
 }
 
+/**
+ * The host's own throwaway runs (#14445), in memory: what the relay reaches
+ * with no project, view or MCP session. Each launch, input and close lands in
+ * `effects`, and a run answers only its owner, as the contract says.
+ */
+class ThrowawayRuns implements HostThrowawayExecutor {
+  readonly effects: Array<{ tool: string; runId: string }> = [];
+  private readonly runs = new Map<
+    string,
+    { owner: string; run: HostThrowawayRun; screen: string[] }
+  >();
+  private next = 0;
+
+  count(tool: string): number {
+    return this.effects.filter((effect) => effect.tool === tool).length;
+  }
+
+  get live(): number {
+    return this.runs.size;
+  }
+
+  async run(owner: HostThrowawayOwner, call: HostThrowawayCall): Promise<HostThrowawayExecution> {
+    const key = `${owner.senderId}\0${owner.helpSessionId}`;
+    if (call.tool === "throwaway.launch") {
+      const runId = `run-${++this.next}`;
+      const run: HostThrowawayRun = {
+        runId,
+        agentId: call.args.agentId,
+        startedAt: 1_000,
+        ageMs: 0,
+        timeLimitMs: null,
+        expiresAt: null,
+        state: "running",
+        endedAt: null,
+        endReason: null,
+      };
+      this.runs.set(runId, { owner: key, run, screen: ["> "] });
+      this.effects.push({ tool: call.tool, runId });
+      return { status: "done", result: { tool: call.tool, run } };
+    }
+    const held = this.runs.get(call.args.runId);
+    if (held === undefined || held.owner !== key) return { status: "failed", reason: "not-found" };
+    const { run, screen } = held;
+    switch (call.tool) {
+      case "throwaway.status":
+        return { status: "done", result: { tool: call.tool, run } };
+      case "throwaway.output":
+        return {
+          status: "done",
+          result: {
+            tool: call.tool,
+            run,
+            content: screen.join("\n"),
+            lineCount: screen.length,
+            truncated: false,
+          },
+        };
+      case "throwaway.sendCommand":
+        this.effects.push({ tool: call.tool, runId: run.runId });
+        screen.push(`> ${call.args.command}`, "Weekly usage: 42%");
+        return { status: "done", result: { tool: call.tool, run, accepted: true } };
+      case "throwaway.sendKeys":
+        this.effects.push({ tool: call.tool, runId: run.runId });
+        return { status: "done", result: { tool: call.tool, run, accepted: true } };
+      case "throwaway.close": {
+        this.effects.push({ tool: call.tool, runId: run.runId });
+        this.runs.delete(run.runId);
+        const closed: HostThrowawayRun = {
+          ...run,
+          state: "closed",
+          endedAt: 2_000,
+          endReason: "close",
+        };
+        return { status: "done", result: { tool: call.tool, run: closed, closed: true } };
+      }
+    }
+  }
+}
+
 /** One Shell: its assistants' runtime and link client, reaching one host over a real link. */
 function startShell(
   link: LinkSession,
@@ -303,7 +391,9 @@ function startShell(
     registerCallHandler: link.registerCallHandler.bind(link),
     call: async (method: string, payload: unknown, callOptions?: { timeoutMs?: number }) => {
       const answer = await link.call(method as never, payload as never, callOptions as never);
-      if (method === AssistantLinkMethod.MCP_CALL && options.loseNextAnswer.value) {
+      const relayed =
+        method === AssistantLinkMethod.MCP_CALL || method === AssistantLinkMethod.THROWAWAY_CALL;
+      if (relayed && options.loseNextAnswer.value) {
         options.loseNextAnswer.value = false;
         throw new AppError({ code: "OUTCOME_UNKNOWN", message: "No reply" });
       }
@@ -360,6 +450,7 @@ const RUN_A: OpenRun = {
 let dir: string;
 let links: { host: LinkSession; client: LinkSession };
 let destination: Destination;
+let throwaways: ThrowawayRuns;
 let relay: { dispose(): void };
 let offSenders: () => void;
 let runs: Map<string, OpenRun>;
@@ -370,7 +461,7 @@ let asked: string[];
 let shell: ReturnType<typeof startShell>;
 
 /** Relayed calls as they arrive on the host, before its ledger or anything else sees them. */
-const arrivals = { mcpCalls: 0 };
+const arrivals = { mcpCalls: 0, projectReads: 0, sessionsOpened: 0 };
 
 function hostSource(link: LinkSession) {
   const session = new Proxy(link, {
@@ -410,8 +501,15 @@ function installHost(): void {
   relay = installHostMcpRelay(source, {
     senders: () => senders,
     acceptsRemoteControl: () => destination.accepts,
-    hasProject: async (projectId) => projectId === PROJECT,
-    openSession: (spec) => destination.open(spec),
+    hasProject: async (projectId) => {
+      arrivals.projectReads++;
+      return projectId === PROJECT;
+    },
+    openSession: (spec) => {
+      arrivals.sessionsOpened++;
+      return destination.open(spec);
+    },
+    throwawayRuns: () => throwaways,
   });
 }
 
@@ -450,6 +548,10 @@ beforeEach(async () => {
   userData.dir = dir;
   links = await openSessionPair(dir);
   destination = new Destination();
+  throwaways = new ThrowawayRuns();
+  arrivals.mcpCalls = 0;
+  arrivals.projectReads = 0;
+  arrivals.sessionsOpened = 0;
   installHost();
   runs = new Map([["help-a", RUN_A]]);
   control = new Set([HOST_ID]);
@@ -834,5 +936,107 @@ describe("restarting the coordinating Shell mid-workload (#14169)", () => {
     expect(destination.count("agent.launch")).toBe(2);
     expect([...destination.terminals].sort()).toEqual(["user-shell", "w-1", "w-2"]);
     expect(destination.submissions.get("w-1")).toHaveLength(1);
+  });
+});
+
+describe("host.call to a host's throwaway agents, with no window open there (#14446)", () => {
+  function throwaway(
+    tool: string,
+    args: Record<string, unknown>,
+    extra: { callId?: string; helpSessionId?: string; runtime?: HostCallRuntime } = {}
+  ) {
+    return (extra.runtime ?? shell.runtime).call(
+      extra.helpSessionId ?? "help-a",
+      {
+        hostId: HOST_ID,
+        throwaway: true,
+        tool,
+        args,
+        ...(extra.callId !== undefined ? { callId: extra.callId } : {}),
+      },
+      { tier: "core" }
+    );
+  }
+
+  async function ran(promise: ReturnType<typeof throwaway>) {
+    const result = await settled(promise);
+    expect(result).toMatchObject({ outcome: "ok", result: { isError: false } });
+    return result.result!.structured as Record<string, unknown> & { run: HostThrowawayRun };
+  }
+
+  it("launches, reads, sends to and closes a run, never touching a project or session", async () => {
+    const launched = await ran(throwaway("throwaway.launch", { agentId: "claude" }));
+    const { runId } = launched.run;
+    expect(launched.run).toMatchObject({ agentId: "claude", state: "running" });
+
+    await expect(ran(throwaway("throwaway.status", { runId }))).resolves.toMatchObject({
+      run: { runId, state: "running" },
+    });
+    await ran(throwaway("throwaway.sendCommand", { runId, command: "/usage" }));
+    await ran(throwaway("throwaway.sendKeys", { runId, keys: ["Escape"] }));
+    await expect(ran(throwaway("throwaway.output", { runId }))).resolves.toMatchObject({
+      content: expect.stringContaining("Weekly usage: 42%"),
+      truncated: false,
+    });
+    await expect(ran(throwaway("throwaway.close", { runId }))).resolves.toMatchObject({
+      run: { state: "closed", endReason: "close" },
+      closed: true,
+    });
+
+    expect(throwaways.effects.map((effect) => effect.tool)).toEqual([
+      "throwaway.launch",
+      "throwaway.sendCommand",
+      "throwaway.sendKeys",
+      "throwaway.close",
+    ]);
+    expect(throwaways.live).toBe(0);
+    // The project path never ran: no project read, no MCP session, no view's dispatch.
+    expect(arrivals).toMatchObject({ mcpCalls: 0, projectReads: 0, sessionsOpened: 0 });
+    expect(destination.effects).toEqual([]);
+
+    // Closed is gone: a fresh close finds nothing.
+    await expect(settled(throwaway("throwaway.close", { runId }))).resolves.toMatchObject({
+      outcome: "ok",
+      result: { isError: true, structured: { code: "not-found" } },
+    });
+  });
+
+  it("launches once when the launch's answer is lost and it is resent by its callId", async () => {
+    loseNextAnswer.value = true;
+    const lost = await settled(throwaway("throwaway.launch", { agentId: "claude" }));
+    expect(lost).toMatchObject({ outcome: "ambiguous", result: null });
+    expect(throwaways.count("throwaway.launch")).toBe(1);
+
+    const resent = await ran(
+      throwaway("throwaway.launch", { agentId: "claude" }, { callId: lost.callId! })
+    );
+    expect(throwaways.count("throwaway.launch")).toBe(1);
+    expect(throwaways.live).toBe(1);
+    expect(resent.run.runId).toBe(throwaways.effects[0]!.runId);
+  });
+
+  it("answers another help session's call on a run as not found", async () => {
+    runs.set("help-b", { ...RUN_A, sessionId: "help-b", slot: 1 });
+    const { run } = await ran(throwaway("throwaway.launch", { agentId: "claude" }));
+    for (const tool of ["throwaway.output", "throwaway.close"]) {
+      await expect(
+        settled(throwaway(tool, { runId: run.runId }, { helpSessionId: "help-b" }))
+      ).resolves.toMatchObject({ result: { isError: true, structured: { code: "not-found" } } });
+    }
+    expect(throwaways.live).toBe(1);
+    expect(throwaways.count("throwaway.close")).toBe(0);
+  });
+
+  it("answers the host's own refusal as a project call's, and runs nothing", async () => {
+    destination.accepts = false;
+    await expect(
+      settled(throwaway("throwaway.launch", { agentId: "claude" }))
+    ).resolves.toMatchObject({ outcome: "policy_rejected", result: null });
+    destination.accepts = true;
+    control.clear();
+    await expect(
+      settled(throwaway("throwaway.launch", { agentId: "claude" }))
+    ).resolves.toMatchObject({ outcome: "opted_out", callId: null });
+    expect(throwaways.effects).toEqual([]);
   });
 });
