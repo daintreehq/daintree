@@ -50,6 +50,24 @@ describe("classifyWaitingReason", () => {
       expect(classifyWaitingReason(lines, true)).toBe("approval");
     });
 
+    it.each<[string, string[]]>([
+      ["Claude", ["Which framework should I use?", "❯ 1. React", "  2. Vue", "  3. Svelte"]],
+      ["Codex", ["Which framework?", "  1. React", "› 2. Vue"]],
+      ["a selector over prompt chrome", ["Pick one", "❯ 1. Keep it", "  2. Drop it", "❯ "]],
+    ])("classifies a %s choice selector as approval, not question (#14475)", (_label, lines) => {
+      expect(classifyWaitingReason(lines, true)).toBe("approval");
+    });
+
+    it.each<[string, string[]]>([
+      ["a lone cursor-marked numbered row", ["Should I go ahead?", "❯ 1. Fix it"]],
+      [
+        "a bulleted numbered list in prose",
+        ["Which should I do first?", "● 1. Fix it", "  2. Test it"],
+      ],
+    ])("keeps %s a question", (_label, lines) => {
+      expect(classifyWaitingReason(lines, false)).toBe("question");
+    });
+
     it("approval beats question classification", () => {
       // Ends with "?" but the selector makes it an approval, not a free-form question.
       const lines = ["Do you want to run this command?", "(y/n)"];

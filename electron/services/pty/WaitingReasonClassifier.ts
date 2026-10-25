@@ -186,6 +186,23 @@ const PROMPT_CHROME_LINE = /^[\s>❯›⟩$%#│╭╰─╮╯]*$/;
 const APPROVAL_SCAN_LINES = 10;
 const ERROR_SCAN_LINES = 4;
 
+// A choice selector whose options aren't yes/no ("Which framework?" over
+// "❯ 1. React" / "  2. Vue"): the cursor sits on one numbered row and a plain
+// numbered option sits beside it. It takes a specific choice, not free text,
+// so it is an approval wait however its question reads (#14475). The cursor
+// glyph is required, as for yes/no rows, so a numbered list in prose never
+// qualifies; "●" is left out because agents bullet their prose with it.
+const CHOICE_CURSOR_ROW = /^\s*[❯›]\s*\d+[.)]\s+\S/;
+const CHOICE_OPTION_ROW = /^\s*\d+[.)]\s+\S/;
+
+function hasChoiceSelector(lines: string[]): boolean {
+  return lines.some(
+    (line, i) =>
+      CHOICE_CURSOR_ROW.test(line) &&
+      (CHOICE_OPTION_ROW.test(lines[i - 1] ?? "") || CHOICE_OPTION_ROW.test(lines[i + 1] ?? ""))
+  );
+}
+
 /**
  * Why an agent that went idle is waiting, from the bottom `rows` of its screen
  * once a trailing task checklist is set aside; `lines` may carry the checklist's
@@ -210,6 +227,9 @@ export function classifyWaitingReason(
     if (APPROVAL_PATTERNS.some((p) => p.test(line))) {
       return "approval";
     }
+  }
+  if (hasChoiceSelector(approvalCandidates)) {
+    return "approval";
   }
 
   // Priority 2: the agent settled right after a blocking error.
