@@ -148,6 +148,11 @@ function projectHostList(result: unknown): Record<string, unknown> {
       const projects = asRecord(host)?.projects;
       return Array.isArray(projects) ? projects.length : null;
     }),
+    // Whether each page was the whole list, never its cursor, which names the query.
+    projectsComplete: record.hosts.map((host) => {
+      const complete = asRecord(asRecord(host)?.projectInventory)?.complete;
+      return typeof complete === "boolean" ? complete : null;
+    }),
   };
 }
 

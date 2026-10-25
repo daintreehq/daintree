@@ -206,16 +206,19 @@ describe("host.list audit projection (#13493)", () => {
           hostId: "studio",
           name: "Greg's studio",
           projects: [{ projectId: "p-1", name: "PROJECT-SENTINEL" }],
+          projectInventory: { complete: false, nextCursor: "CURSOR-SENTINEL" },
         },
-        { hostId: "laptop", name: "laptop", projects: null },
+        { hostId: "laptop", name: "laptop", projects: null, projectInventory: null },
       ],
     });
     expect(projected).toEqual({
       hostCount: 2,
       hostIds: ["studio", "laptop"],
       projectCounts: [1, null],
+      projectsComplete: [false, null],
     });
     expect(JSON.stringify(projected)).not.toContain("PROJECT-SENTINEL");
+    expect(JSON.stringify(projected)).not.toContain("CURSOR-SENTINEL");
   });
 });
 

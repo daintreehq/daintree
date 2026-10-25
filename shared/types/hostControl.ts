@@ -109,15 +109,13 @@ export const HostListArgsSchema = z.object({
     .min(1)
     .max(HOST_LIST_PROJECT_QUERY_MAX)
     .optional()
-    .describe("Name only the projects whose name contains this, any case."),
+    .describe("Only projects whose name contains this, any case."),
   projectCursor: z
     .string()
     .min(1)
     .max(HOST_LIST_PROJECT_CURSOR_MAX)
     .optional()
-    .describe(
-      "A host's projectInventory.nextCursor: its next page of projects. It keeps that host and query."
-    ),
+    .describe("A projectInventory.nextCursor: that host's next page, same query."),
 });
 export type HostListArgs = z.infer<typeof HostListArgsSchema>;
 
@@ -243,27 +241,15 @@ export const HostListEntrySchema = z.object({
   /** How much of the host's project list `projects` is; null exactly when `projects` is. */
   projectInventory: z
     .object({
-      complete: z
-        .boolean()
-        .describe("projects names every project that matches. False: follow nextCursor."),
-      total: z
-        .number()
-        .nullable()
-        .describe("Projects that match. Null: the host's list was cut at its own limit."),
-      offset: z.number().describe("How many matching projects come before this page."),
+      complete: z.boolean().describe("False: more projects match; follow nextCursor."),
+      total: z.number().nullable().describe("Null: past the host's own list limit."),
+      offset: z.number(),
       omitted: z
         .number()
         .nullable()
-        .describe("Matching projects this answer doesn't name, earlier pages included."),
-      nextCursor: z
-        .string()
-        .nullable()
-        .describe("Pass as projectCursor for the next page. Null: this page is the last."),
-      listChanged: z
-        .boolean()
-        .describe(
-          "The list changed since the cursor: this is its first page again; drop earlier pages."
-        ),
+        .describe("Matching projects not named here, earlier pages too."),
+      nextCursor: z.string().nullable().describe("projectCursor for the next page."),
+      listChanged: z.boolean().describe("The list changed since the cursor: its first page again."),
     })
     .nullable(),
   /** This Shell's "assistant control" switch for the host: whether `host.call` may reach it. */
