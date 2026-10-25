@@ -188,7 +188,16 @@ test.describe.serial("Nightly: PTY process leak — project.sleepProject teardow
     // under A's id. Using more than one guards against a teardown that kills only
     // the first PTY (e.g. an early-exiting gracefulKillByProject loop).
     for (let i = 0; i < PROJECT_A_TERMINALS; i++) {
+      const idsBefore = await getGridPanelIds(ctx.window);
       await openTerminal(ctx.window);
+      await expect
+        .poll(() => getGridPanelCount(ctx.window), { timeout: T_LONG })
+        .toBe(idsBefore.length + 1);
+      const idsAfter = await getGridPanelIds(ctx.window);
+      const newId = idsAfter.find((id) => !idsBefore.includes(id));
+      expect(newId, "new project A terminal").toBeTruthy();
+      // The launch guard rejects another click until the current launch settles.
+      await waitForTerminalPty(ctx.window, getPanelById(ctx.window, newId!), T_LONG);
     }
     await expect
       .poll(() => getLivePtyCount(ctx.window, projectAId), { timeout: T_LONG })
