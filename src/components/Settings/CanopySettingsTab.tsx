@@ -64,8 +64,9 @@ export function modelComparison(variants: readonly CanopyModelVariant[]): string
       ? `${large.name} picks the line that says most a little more often (${against(b.headline, a.headline)}) and gets a menu's options right more often (${against(b.options, a.options)})`
       : `Picking the line that says most: ${large.name} ${percent(b.headline)}, ${small.name} ${percent(a.headline)}. A menu's options: ${large.name} ${percent(b.options)}, ${small.name} ${percent(a.options)}`
   );
+  const size = large.downloadBytes / small.downloadBytes;
   sentences.push(
-    `${large.name} is ${times(large.downloadBytes / small.downloadBytes)} the download and about ${times(b.msPerScreen / a.msPerScreen)} the work per screen`
+    `${large.name} is ${size < 1.15 ? "about the same download" : `${times(size)} the download`} and about ${times(b.msPerScreen / a.msPerScreen)} the work per screen`
   );
   if (better) sentences.push(`For most people ${small.name} is enough`);
   return `${sentences.join(". ")}.`;

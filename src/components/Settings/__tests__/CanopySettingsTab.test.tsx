@@ -267,5 +267,8 @@ describe("CanopySettingsTab", () => {
     expect(said).not.toContain("is enough");
     expect(said).toContain("150M 70%, Light 76%");
     expect(said).toContain("10x the download and about 12x the work");
+    // On x86 Light downloads its FP32 weights, about as big as Best's INT8.
+    const heavy = { ...LIGHT, downloadBytes: BEST.downloadBytes - 2_000_000 };
+    expect(modelComparison([heavy, BEST])!).toContain("about the same download");
   });
 });

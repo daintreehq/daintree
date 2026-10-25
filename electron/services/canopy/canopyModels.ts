@@ -32,8 +32,19 @@ const AUTHOR = CANOPY_MODEL_AUTHOR;
 const PREFIX = CANOPY_MODEL_PREFIX;
 const USER_AGENT = "Daintree-Canopy/1.0";
 export { DEFAULT_CANOPY_MODEL, canopyModelName, isCanopyModelId };
-/** Every file a model needs, and nothing else: no FP32 weights, no reference code. */
-const MODEL_FILES = ["reader.json", "tokenizer.json", "tokenizer_config.json", "model.int8.onnx"];
+/** What every model needs besides its weights: no reference code, nothing else. */
+const COMMON_FILES = ["reader.json", "tokenizer.json", "tokenizer_config.json"];
+/**
+ * Light's INT8 weights read about half the screens wrongly on an Intel x86 CPU
+ * (approvals and finished turns called "working") while its FP32 weights match
+ * the reference, so x86 reads with FP32 where the FP32 file is small enough to
+ * be worth it: Light's is 68 MB. Best is right in INT8 on x86, and its FP32 is
+ * 274 MB. Measured on an Intel Core 5 210H; ARM was measured on Apple silicon.
+ */
+const FP32_MAX_BYTES = 100_000_000;
+
+/** Which weights a model reads with here. */
+export type CanopyWeights = "int8" | "fp32";
 const CATALOGUE_TIMEOUT_MS = 10_000;
 /** How long a fetched catalogue is used before Hugging Face is asked again. */
 const CATALOGUE_TTL_MS = 10 * 60_000;
@@ -52,7 +63,10 @@ interface FileSpec {
 interface Variant {
   id: string;
   revision: string;
+  /** Everything but the weights, always fetched. */
   files: FileSpec[];
+  /** The weights, by precision; `fp32` is absent when the repo has none. */
+  weights: { int8: FileSpec; fp32?: FileSpec };
   bench: CanopyModelBench | null;
   supported: boolean;
 }
@@ -70,12 +84,19 @@ const BUNDLED: Variant[] = [
         size: 368,
         blobId: "e3ce044f1db95b6884796f4fdf7d3f78fb6b9df4",
       },
-      {
+    ],
+    weights: {
+      int8: {
         name: "model.int8.onnx",
         size: 17298433,
         sha256: "4dd453e0c1bd9b9ae276dc4b270111154f97f26f39abb2b447d62614147ae2c6",
       },
-    ],
+      fp32: {
+        name: "model.fp32.onnx",
+        size: 67726050,
+        sha256: "79440750a6e8754ac9c634325d98ee540253cc2b280dfcddfd6cf98fc02b94d2",
+      },
+    },
     bench: {
       goldCategory: 58,
       gold: 60,
@@ -99,12 +120,19 @@ const BUNDLED: Variant[] = [
         size: 368,
         blobId: "e3ce044f1db95b6884796f4fdf7d3f78fb6b9df4",
       },
-      {
+    ],
+    weights: {
+      int8: {
         name: "model.int8.onnx",
         size: 69749457,
         sha256: "f597ea748cc5f3e3e3522493637837d50ebcb9bc3a5977ef1af82b94aefe3702",
       },
-    ],
+      fp32: {
+        name: "model.fp32.onnx",
+        size: 274305518,
+        sha256: "5fa325de68298578c5ca7f9d7af45ec603010b21fe98a4d1ef4e9d91414934e9",
+      },
+    },
     bench: {
       goldCategory: 57,
       gold: 60,
@@ -176,19 +204,25 @@ async function fetchVariant(id: string, signal: AbortSignal): Promise<Variant | 
   if (detail.private || typeof detail.sha !== "string" || !Array.isArray(detail.siblings)) {
     return null;
   }
-  const files: FileSpec[] = [];
-  for (const name of MODEL_FILES) {
-    const sibling = detail.siblings.find((s) => s.rfilename === name);
+  const spec = (name: string, lfsOnly: boolean): FileSpec | null => {
+    const sibling = detail.siblings!.find((s) => s.rfilename === name);
     if (!sibling || typeof sibling.size !== "number") return null;
     const sha256 = sibling.lfs?.sha256;
-    if (name.endsWith(".onnx") && typeof sha256 !== "string") return null;
-    if (!sha256 && typeof sibling.blobId !== "string") return null;
-    files.push(
-      sha256
-        ? { name, size: sibling.size, sha256 }
-        : { name, size: sibling.size, blobId: sibling.blobId }
-    );
+    if (lfsOnly && typeof sha256 !== "string") return null;
+    if (sha256) return { name, size: sibling.size, sha256 };
+    return typeof sibling.blobId === "string"
+      ? { name, size: sibling.size, blobId: sibling.blobId }
+      : null;
+  };
+  const files: FileSpec[] = [];
+  for (const name of COMMON_FILES) {
+    const file = spec(name, false);
+    if (!file) return null;
+    files.push(file);
   }
+  const int8 = spec("model.int8.onnx", true);
+  if (!int8) return null;
+  const fp32 = spec("model.fp32.onnx", true);
   const at = `${HF}/${id}/resolve/${detail.sha}`;
   const [meta, bench] = await Promise.all([
     fetchJson(`${at}/reader.json`, signal).catch(() => null),
@@ -198,6 +232,7 @@ async function fetchVariant(id: string, signal: AbortSignal): Promise<Variant | 
     id,
     revision: detail.sha,
     files,
+    weights: fp32 ? { int8, fp32 } : { int8 },
     bench: benchOf(bench),
     supported: isReaderMeta(meta),
   };
@@ -219,8 +254,8 @@ async function fetchCatalogue(): Promise<Variant[]> {
   return variants.filter((v): v is Variant => v !== null);
 }
 
-function totalBytes(v: Variant): number {
-  return v.files.reduce((sum, f) => sum + f.size, 0);
+function totalBytes(v: Variant, weights: CanopyWeights): number {
+  return v.files.reduce((sum, f) => sum + f.size, 0) + (v.weights[weights] ?? v.weights.int8).size;
 }
 
 function paramsOf(id: string): number {
@@ -231,6 +266,7 @@ function paramsOf(id: string): number {
 interface Installed {
   id: string;
   revision: string;
+  weights: CanopyWeights;
 }
 
 interface Download {
@@ -260,8 +296,20 @@ export class CanopyModels {
 
   constructor(
     private readonly root: string,
-    private readonly onChange: () => void
+    private readonly onChange: () => void,
+    /** What this machine's CPU is, and the largest FP32 file worth fetching for it; tests set both. */
+    private readonly platform: { arch?: string; fp32MaxBytes?: number } = {}
   ) {}
+
+  /** The precision a model reads with here: FP32 on x86 where it is small, INT8 elsewhere. */
+  weightsFor(variant: Variant | undefined): CanopyWeights {
+    const arch = this.platform.arch ?? process.arch;
+    const fp32 = variant?.weights.fp32;
+    const x86 = arch === "x64" || arch === "ia32";
+    return x86 && fp32 !== undefined && fp32.size <= (this.platform.fp32MaxBytes ?? FP32_MAX_BYTES)
+      ? "fp32"
+      : "int8";
+  }
 
   private dirOf(id: string): string {
     return path.join(this.root, id.slice(id.indexOf("/") + 1));
@@ -290,10 +338,16 @@ export class CanopyModels {
       const raw = JSON.parse(await readFile(path.join(this.dirOf(id), "install.json"), "utf8")) as {
         id?: unknown;
         revision?: unknown;
+        weights?: unknown;
       };
-      if (raw.id === id && typeof raw.revision === "string") {
-        this.installed.set(id, { id, revision: raw.revision });
-      }
+      // An install from before the precision was recorded read with INT8.
+      const weights: CanopyWeights = raw.weights === "fp32" ? "fp32" : "int8";
+      if (raw.id !== id || typeof raw.revision !== "string") return;
+      // Weights the other precision was chosen for since (another CPU's disk, or a
+      // catalogue that now offers FP32): not this machine's reading, fetched again.
+      const variant = this.catalogue.find((v) => v.id === id);
+      if (variant !== undefined && weights !== this.weightsFor(variant)) return;
+      this.installed.set(id, { id, revision: raw.revision, weights });
     } catch {
       // Not installed, or a half-written install that is not one.
     }
@@ -307,7 +361,12 @@ export class CanopyModels {
         .then(async (variants) => {
           if (variants.length > 0) {
             this.catalogue = variants;
-            for (const v of variants) if (!this.installed.has(v.id)) await this.readInstall(v.id);
+            // What is installed is checked against the catalogue as it now stands: a
+            // model whose recorded precision isn't the one chosen here is fetched again.
+            for (const v of variants) {
+              this.installed.delete(v.id);
+              await this.readInstall(v.id);
+            }
           }
           this.fetchedAt = Date.now();
         })
@@ -324,7 +383,7 @@ export class CanopyModels {
       .map((v) => ({
         id: v.id,
         name: canopyModelName(v.id),
-        downloadBytes: totalBytes(v),
+        downloadBytes: totalBytes(v, this.weightsFor(v)),
         installed: this.installed.has(v.id),
         supported: v.supported,
         bench: v.bench,
@@ -393,7 +452,7 @@ export class CanopyModels {
     const download: Download = {
       id,
       received: 0,
-      total: totalBytes(variant),
+      total: totalBytes(variant, this.weightsFor(variant)),
       abort: new AbortController(),
     };
     signal.addEventListener("abort", () => download.abort.abort(), { once: true });
@@ -402,7 +461,11 @@ export class CanopyModels {
     this.onChange();
     try {
       await this.fetchInto(variant, download);
-      this.installed.set(id, { id, revision: variant.revision });
+      this.installed.set(id, {
+        id,
+        revision: variant.revision,
+        weights: this.weightsFor(variant),
+      });
     } catch (error) {
       if (!download.abort.signal.aborted) {
         this.failure = { id, message: formatErrorMessage(error, "The download failed.") };
@@ -462,7 +525,8 @@ export class CanopyModels {
     const staging = `${dir}.download`;
     await mkdir(staging, { recursive: true });
     const signal = download.abort.signal;
-    for (const file of variant.files) {
+    const weights = this.weightsFor(variant);
+    for (const file of [...variant.files, variant.weights[weights] ?? variant.weights.int8]) {
       const target = path.join(staging, file.name);
       const part = `${target}.${variant.revision.slice(0, 12)}.part`;
       if (await this.verified(target, file)) {
@@ -513,7 +577,7 @@ export class CanopyModels {
     if (signal.aborted) throw new Error("cancelled");
     await writeFile(
       path.join(staging, "install.json"),
-      JSON.stringify({ id: variant.id, revision: variant.revision }),
+      JSON.stringify({ id: variant.id, revision: variant.revision, weights }),
       "utf8"
     );
     await rm(dir, { recursive: true, force: true });

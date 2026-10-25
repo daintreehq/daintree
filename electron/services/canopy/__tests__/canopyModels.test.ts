@@ -103,6 +103,10 @@ function hub(repos: Record<string, Repo>, extraIds: string[] = []) {
   return { fetchMock, requests };
 }
 
+/** The CPU the existing tests run as: INT8 weights, whatever machine CI is on. */
+const ARM = { arch: "arm64" } as const;
+const X86 = { arch: "x64" } as const;
+
 const sha256 = (content: string) => createHash("sha256").update(content).digest("hex");
 
 function repo(sha: string, weights = "WEIGHTS-" + sha): Repo {
@@ -113,7 +117,7 @@ function repo(sha: string, weights = "WEIGHTS-" + sha): Repo {
       "tokenizer.json": '{"model":{}}',
       "tokenizer_config.json": "{}",
       "model.int8.onnx": weights,
-      "model.fp32.onnx": "never fetched",
+      "model.fp32.onnx": "FP32-" + weights,
       "bench.json": JSON.stringify({
         int8: {
           ms_median: 24.9,
@@ -125,7 +129,7 @@ function repo(sha: string, weights = "WEIGHTS-" + sha): Repo {
         },
       }),
     },
-    lfs: { "model.int8.onnx": sha256(weights) },
+    lfs: { "model.int8.onnx": sha256(weights), "model.fp32.onnx": sha256("FP32-" + weights) },
   };
 }
 
@@ -167,7 +171,7 @@ describe("canopyModels", () => {
       ["daintreehq/canopy-reader-training"]
     );
     vi.stubGlobal("fetch", fetchMock);
-    const models = new CanopyModels(root, () => {});
+    const models = new CanopyModels(root, () => {}, ARM);
     const list = await models.list();
     expect(list.map((v) => v.name)).toEqual(["Light", "150M"]);
     const light = list[0]!;
@@ -185,7 +189,7 @@ describe("canopyModels", () => {
         throw new TypeError("fetch failed");
       })
     );
-    const list = await new CanopyModels(root, () => {}).list(true);
+    const list = await new CanopyModels(root, () => {}, ARM).list(true);
     expect(list.map((v) => v.name)).toEqual(["Light", "Best"]);
     expect(list.every((v) => v.bench !== null && v.downloadBytes > 0)).toBe(true);
   });
@@ -194,7 +198,7 @@ describe("canopyModels", () => {
     const { fetchMock, requests } = hub({ "daintreehq/canopy-reader-17m": repo("a") });
     vi.stubGlobal("fetch", fetchMock);
     const changes = vi.fn();
-    const models = new CanopyModels(root, changes);
+    const models = new CanopyModels(root, changes, ARM);
     await models.list(true);
     await models.ensure("daintreehq/canopy-reader-17m");
     const dir = await models.installedDir("daintreehq/canopy-reader-17m");
@@ -213,7 +217,7 @@ describe("canopyModels", () => {
     expect(changes).toHaveBeenCalled();
     // Still there for the next launch.
     expect(
-      await new CanopyModels(root, () => {}).installedDir("daintreehq/canopy-reader-17m")
+      await new CanopyModels(root, () => {}, ARM).installedDir("daintreehq/canopy-reader-17m")
     ).toBe(dir);
   });
 
@@ -222,7 +226,7 @@ describe("canopyModels", () => {
     bad.lfs = { "model.int8.onnx": sha256("something else") };
     const { fetchMock } = hub({ "daintreehq/canopy-reader-17m": bad });
     vi.stubGlobal("fetch", fetchMock);
-    const models = new CanopyModels(root, () => {});
+    const models = new CanopyModels(root, () => {}, ARM);
     await models.list(true);
     await models.ensure("daintreehq/canopy-reader-17m");
     expect(await models.installedDir("daintreehq/canopy-reader-17m")).toBeNull();
@@ -239,7 +243,7 @@ describe("canopyModels", () => {
     const staging = path.join(root, "canopy-reader-17m.download");
     await mkdir(staging, { recursive: true });
     writeFileSync(path.join(staging, "model.int8.onnx.a.part"), weights.slice(0, 40));
-    const models = new CanopyModels(root, () => {});
+    const models = new CanopyModels(root, () => {}, ARM);
     await models.list(true);
     await models.ensure("daintreehq/canopy-reader-17m");
     const dir = (await models.installedDir("daintreehq/canopy-reader-17m"))!;
@@ -252,7 +256,7 @@ describe("canopyModels", () => {
     newer.files["reader.json"] = JSON.stringify({ max_len: 1024, outputs: ["something_new"] });
     const { fetchMock, requests } = hub({ "daintreehq/canopy-reader-17m": newer });
     vi.stubGlobal("fetch", fetchMock);
-    const models = new CanopyModels(root, () => {});
+    const models = new CanopyModels(root, () => {}, ARM);
     const list = await models.list(true);
     expect(list[0]!.supported).toBe(false);
     await models.ensure("daintreehq/canopy-reader-17m");
@@ -263,7 +267,7 @@ describe("canopyModels", () => {
   it("downloads a model once however many ask for it at the same time", async () => {
     const { fetchMock, requests } = hub({ "daintreehq/canopy-reader-17m": repo("a") });
     vi.stubGlobal("fetch", fetchMock);
-    const models = new CanopyModels(root, () => {});
+    const models = new CanopyModels(root, () => {}, ARM);
     await models.list(true);
     await Promise.all([
       models.ensure("daintreehq/canopy-reader-17m"),
@@ -276,7 +280,7 @@ describe("canopyModels", () => {
   it("starts nothing when cancelled before the download began", async () => {
     const { fetchMock, requests } = hub({ "daintreehq/canopy-reader-17m": repo("a") });
     vi.stubGlobal("fetch", fetchMock);
-    const models = new CanopyModels(root, () => {});
+    const models = new CanopyModels(root, () => {}, ARM);
     await models.list(true);
     const before = requests.length;
     // Still checking what is installed when Canopy goes off.
@@ -298,7 +302,7 @@ describe("canopyModels", () => {
       "fetch",
       vi.fn(async () => new Response("", { status: 503 }))
     );
-    const models = new CanopyModels(root, () => {});
+    const models = new CanopyModels(root, () => {}, ARM);
     await models.removeAllBut(null);
     expect(existsSync(staging)).toBe(false);
   });
@@ -306,7 +310,7 @@ describe("canopyModels", () => {
   it("finds a model installed after the build, offline", async () => {
     const { fetchMock } = hub({ "daintreehq/canopy-reader-150m": repo("c") });
     vi.stubGlobal("fetch", fetchMock);
-    const online = new CanopyModels(root, () => {});
+    const online = new CanopyModels(root, () => {}, ARM);
     await online.list(true);
     await online.ensure("daintreehq/canopy-reader-150m");
     vi.stubGlobal(
@@ -315,10 +319,69 @@ describe("canopyModels", () => {
         throw new TypeError("fetch failed");
       })
     );
-    const offline = new CanopyModels(root, () => {});
+    const offline = new CanopyModels(root, () => {}, ARM);
     expect(await offline.installedDir("daintreehq/canopy-reader-150m")).toBe(
       path.join(root, "canopy-reader-150m")
     );
+  });
+
+  it("reads with INT8 weights on ARM and fetches no FP32", async () => {
+    const { fetchMock, requests } = hub({ "daintreehq/canopy-reader-17m": repo("a") });
+    vi.stubGlobal("fetch", fetchMock);
+    const models = new CanopyModels(root, () => {}, ARM);
+    await models.list(true);
+    await models.ensure("daintreehq/canopy-reader-17m");
+    const dir = (await models.installedDir("daintreehq/canopy-reader-17m"))!;
+    expect(existsSync(path.join(dir, "model.int8.onnx"))).toBe(true);
+    expect(existsSync(path.join(dir, "model.fp32.onnx"))).toBe(false);
+    expect(JSON.parse(readFileSync(path.join(dir, "install.json"), "utf8")).weights).toBe("int8");
+    expect(requests.some((r) => r.url.endsWith("model.fp32.onnx"))).toBe(false);
+  });
+
+  it("reads with FP32 weights on x86, where Light's INT8 reads wrongly, and fetches no INT8", async () => {
+    const { fetchMock, requests } = hub({ "daintreehq/canopy-reader-17m": repo("a") });
+    vi.stubGlobal("fetch", fetchMock);
+    const models = new CanopyModels(root, () => {}, X86);
+    const list = await models.list(true);
+    // What is offered to download is what will be fetched: the FP32 file's size.
+    expect(list[0]!.downloadBytes).toBe(
+      Buffer.byteLength(META) + 12 + 2 + Buffer.byteLength("FP32-WEIGHTS-a")
+    );
+    await models.ensure("daintreehq/canopy-reader-17m");
+    const dir = (await models.installedDir("daintreehq/canopy-reader-17m"))!;
+    expect(readFileSync(path.join(dir, "model.fp32.onnx"), "utf8")).toBe("FP32-WEIGHTS-a");
+    expect(existsSync(path.join(dir, "model.int8.onnx"))).toBe(false);
+    expect(JSON.parse(readFileSync(path.join(dir, "install.json"), "utf8")).weights).toBe("fp32");
+    expect(requests.some((r) => r.url.endsWith("model.int8.onnx"))).toBe(false);
+  });
+
+  it("keeps INT8 on x86 for a model whose FP32 file is too big to be worth fetching", async () => {
+    const { fetchMock } = hub({ "daintreehq/canopy-reader-68m": repo("b") });
+    vi.stubGlobal("fetch", fetchMock);
+    const models = new CanopyModels(root, () => {}, { ...X86, fp32MaxBytes: 5 });
+    await models.list(true);
+    await models.ensure("daintreehq/canopy-reader-68m");
+    const dir = (await models.installedDir("daintreehq/canopy-reader-68m"))!;
+    expect(existsSync(path.join(dir, "model.int8.onnx"))).toBe(true);
+    expect(existsSync(path.join(dir, "model.fp32.onnx"))).toBe(false);
+  });
+
+  it("fetches a model again when what is installed read in the other precision", async () => {
+    const { fetchMock } = hub({ "daintreehq/canopy-reader-17m": repo("a") });
+    vi.stubGlobal("fetch", fetchMock);
+    // Installed by an ARM machine, or by a build from before the precision was chosen.
+    const arm = new CanopyModels(root, () => {}, ARM);
+    await arm.list(true);
+    await arm.ensure("daintreehq/canopy-reader-17m");
+    // The same folder on an x86 machine is not a ready model.
+    const x86 = new CanopyModels(root, () => {}, X86);
+    await x86.list(true);
+    expect(await x86.installedDir("daintreehq/canopy-reader-17m")).toBeNull();
+    expect((await x86.list())[0]!.installed).toBe(false);
+    await x86.ensure("daintreehq/canopy-reader-17m");
+    const dir = (await x86.installedDir("daintreehq/canopy-reader-17m"))!;
+    expect(existsSync(path.join(dir, "model.fp32.onnx"))).toBe(true);
+    expect(existsSync(path.join(dir, "model.int8.onnx"))).toBe(false);
   });
 
   it("deletes every model but the one kept", async () => {
@@ -327,7 +390,7 @@ describe("canopyModels", () => {
       "daintreehq/canopy-reader-68m": repo("b"),
     });
     vi.stubGlobal("fetch", fetchMock);
-    const models = new CanopyModels(root, () => {});
+    const models = new CanopyModels(root, () => {}, ARM);
     await models.list(true);
     await models.ensure("daintreehq/canopy-reader-17m");
     await models.ensure("daintreehq/canopy-reader-68m");

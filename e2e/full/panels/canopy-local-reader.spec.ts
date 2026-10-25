@@ -226,26 +226,14 @@ test.describe("Canopy on its local model", () => {
         { timeout: 120_000, intervals: [500] }
       )
       .toBe(true);
-    expect(existsSync(path.join(modelDir("canopy-reader-17m"), "model.int8.onnx"))).toBe(true);
+    // Light reads in INT8 on ARM and in FP32 on x86, where its INT8 reads wrongly.
+    const lightWeights = process.arch === "x64" ? "model.fp32.onnx" : "model.int8.onnx";
+    expect(existsSync(path.join(modelDir("canopy-reader-17m"), lightWeights))).toBe(true);
     expect(existsSync(modelDir("canopy-reader-68m"))).toBe(false);
     const readers = await readerProcesses();
     expect(readers).toHaveLength(1);
     console.log(`Light reader process: ${readers[0]!.workingSetKb} KB working set`);
 
-    // TEMP-DIAG: what the reader returned or failed with, per read.
-    console.log(
-      "DIAG reads: " +
-        JSON.stringify(
-          traceReads()
-            .filter((r) => r.stage === "reader")
-            .map((r) => {
-              const out = r.output as
-                | { classifier?: { category?: string; attention?: number; question?: string | null } }
-                | undefined;
-              return r.error ?? `${out?.classifier?.category}/${out?.classifier?.attention?.toFixed(2)}/${out?.classifier?.question ?? "-"}`;
-            })
-        )
-    );
     await expect(row(page, agents.approval)).toContainText("Do you want to proceed?", {
       timeout: 30_000,
     });
