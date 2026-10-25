@@ -102,21 +102,13 @@ export type HostListArgs = z.infer<typeof HostListArgsSchema>;
 /** Most installed CLIs `host.list` names for one host; the rest are counted in `omitted`. */
 export const HOST_LIST_CLIS_MAX = 32;
 
-const buildFieldSchema = z.string().max(64);
-
 const HostListHandshakeSchema = z.object({
-  version: buildFieldSchema,
-  commit: buildFieldSchema,
-  protocolVersion: z.number().int().min(0).max(0xffff),
+  version: z.string(),
+  commit: z.string(),
+  protocolVersion: z.number(),
   platform: z.enum(["darwin", "linux"]),
   arch: z.enum(["x64", "arm64"]),
 });
-
-const HostListMismatchSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("protocol"), local: z.number(), remote: z.number() }),
-  z.object({ kind: z.literal("version"), local: buildFieldSchema, remote: buildFieldSchema }),
-  z.object({ kind: z.literal("commit"), local: buildFieldSchema, remote: buildFieldSchema }),
-]);
 
 /** The link as this Shell observed it: flags it saw, never a cause it guessed. */
 export const HostListLinkSchema = z.object({
@@ -129,26 +121,28 @@ export const HostListLinkSchema = z.object({
     "version-mismatch",
     "driven-elsewhere",
   ]),
-  attempt: z.number().int().nonnegative().nullable(),
-  restarting: z.boolean().describe("The host said it was shutting down; still retried."),
-  hostModeOff: z.boolean().describe("ssh reached it; no Daintree listens there in Host mode."),
+  attempt: z.number().nullable(),
+  restarting: z.boolean().describe("It said it was shutting down; still retried."),
+  hostModeOff: z.boolean().describe("ssh got in; no Daintree in Host mode there."),
   stoppedRetrying: z
     .boolean()
     .nullable()
-    .describe("Unreachable only: waits for a Connect (login refused, Host mode off, or unusable)."),
+    .describe("Waits for a Connect: login refused, Host mode off or unusable."),
   disconnectedByPerson: z.boolean(),
-  quietSince: z.number().nullable().describe("Connected, but nothing heard since then."),
-  rttSampledAt: z.number().nullable(),
-  mismatch: HostListMismatchSchema.nullable().describe(
-    "Builds differ. Blocking under version-mismatch; connected anyway otherwise."
-  ),
+  quietSince: z.number().nullable().describe("Connected; silent since."),
+  mismatch: z
+    .object({
+      kind: z.enum(["protocol", "version", "commit"]),
+      local: z.string(),
+      remote: z.string(),
+    })
+    .nullable()
+    .describe("Builds differ; blocking only under version-mismatch."),
 });
 export type HostListLink = z.infer<typeof HostListLinkSchema>;
 
 export const HostListBuildSchema = z.object({
-  source: z
-    .enum(["connected", "rejected", "last-seen", "unknown"])
-    .describe("last-seen: from an earlier handshake, may be out of date."),
+  source: z.enum(["connected", "rejected", "last-seen", "unknown"]),
   handshake: HostListHandshakeSchema.nullable(),
 });
 export type HostListBuild = z.infer<typeof HostListBuildSchema>;
@@ -158,13 +152,11 @@ export const HostListAgentClisSchema = z
     coverage: z.enum(["observed", "stale", "unknown"]),
     sampledAt: z.number().nullable(),
     installed: z
-      .array(z.object({ agentId: z.string().max(256), version: z.string().max(64).nullable() }))
+      .array(z.object({ agentId: z.string(), version: z.string().nullable() }))
       .max(HOST_LIST_CLIS_MAX),
-    omitted: z.number().int().nonnegative(),
+    omitted: z.number(),
   })
-  .describe(
-    "Observed binary presence only; sign-in and quota are unknown. Missing entries do not prove absence."
-  );
+  .describe("Installed only: sign-in and quota unknown. Absence unproven.");
 export type HostListAgentClis = z.infer<typeof HostListAgentClisSchema>;
 
 export const HostListEntrySchema = z.object({

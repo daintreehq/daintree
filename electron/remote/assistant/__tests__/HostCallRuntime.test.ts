@@ -125,7 +125,6 @@ describe("HostCallRuntime (#13493, #13496)", () => {
             stoppedRetrying: null,
             disconnectedByPerson: false,
             quietSince: null,
-            rttSampledAt: null,
             mismatch: null,
           },
           build: {
@@ -178,7 +177,6 @@ describe("HostCallRuntime (#13493, #13496)", () => {
             stoppedRetrying: null,
             disconnectedByPerson: false,
             quietSince: null,
-            rttSampledAt: null,
             mismatch: null,
           },
           build: {
@@ -416,7 +414,7 @@ describe("HostCallRuntime (#13493, #13496)", () => {
         });
         expect(links[3]).toMatchObject({
           status: "version-mismatch",
-          mismatch: { kind: "protocol", local: 12, remote: 11 },
+          mismatch: { kind: "protocol", local: "12", remote: "11" },
         });
         expect(listed.value.hosts[3]?.build).toEqual({
           source: "rejected",

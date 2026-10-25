@@ -160,7 +160,6 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
           stoppedRetrying: null,
           disconnectedByPerson: false,
           quietSince: null,
-          rttSampledAt: null,
           mismatch: null,
         },
         build: { source: "unknown", handshake: null },

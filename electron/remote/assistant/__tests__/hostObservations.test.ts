@@ -28,7 +28,6 @@ const NONE = {
   stoppedRetrying: null,
   disconnectedByPerson: false,
   quietSince: null,
-  rttSampledAt: null,
   mismatch: null,
 };
 
@@ -70,7 +69,7 @@ describe("projectHostLink (#14461)", () => {
         quietSince: 950,
       },
       false,
-      { quietSince: 950, rttSampledAt: 900 },
+      { quietSince: 950 },
     ],
     [
       "unreachable, still retried",
@@ -110,7 +109,7 @@ describe("projectHostLink (#14461)", () => {
         remote: HANDSHAKE,
       },
       false,
-      { mismatch: { kind: "protocol", local: 12, remote: 11 } },
+      { mismatch: { kind: "protocol", local: "12", remote: "11" } },
     ],
   ];
 

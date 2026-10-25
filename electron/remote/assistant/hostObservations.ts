@@ -23,13 +23,10 @@ const stampOrNull = (value: number | undefined): number | null =>
   typeof value === "number" && Number.isFinite(value) ? value : null;
 
 function mismatchOf(mismatch: HandshakeMismatch): NonNullable<HostListLink["mismatch"]> {
-  if (mismatch.kind === "protocol") {
-    return { kind: "protocol", local: mismatch.local, remote: mismatch.remote };
-  }
   return {
     kind: mismatch.kind,
-    local: clip(mismatch.local, BUILD_FIELD_MAX),
-    remote: clip(mismatch.remote, BUILD_FIELD_MAX),
+    local: clip(String(mismatch.local), BUILD_FIELD_MAX),
+    remote: clip(String(mismatch.remote), BUILD_FIELD_MAX),
   };
 }
 
@@ -49,7 +46,6 @@ export function projectHostLink(
     stoppedRetrying: null,
     disconnectedByPerson: state.status === "disconnected" && disconnectedByPerson,
     quietSince: null,
-    rttSampledAt: null,
     mismatch: null,
   };
   switch (state.status) {
@@ -59,7 +55,6 @@ export function projectHostLink(
       return {
         ...link,
         quietSince: stampOrNull(state.quietSince),
-        rttSampledAt: stampOrNull(state.rttSampledAt),
         mismatch: state.buildMismatch ? mismatchOf(state.buildMismatch) : null,
       };
     case "unreachable":
