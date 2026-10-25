@@ -569,6 +569,95 @@ describe("LocalAgentDirectory last-known retention", () => {
       }
     });
 
+    it("does not bring an older snapshot back after the newer one is evicted", async () => {
+      vi.useFakeTimers();
+      try {
+        const reads = deferredReads();
+        const directory = new LocalAgentDirectory(
+          sources({
+            listRunningLanes: () => [],
+            getLiveGeneration: () => 1,
+            readTerminals: reads.readTerminals,
+          }),
+          20
+        );
+
+        const a = directory.read();
+        expect(directory.read()).toBe(a);
+        await vi.advanceTimersByTimeAsync(20);
+        expect(await a).toMatchObject({ coverage: "unreachable" });
+
+        const b = directory.read();
+        await vi.advanceTimersByTimeAsync(0);
+        reads.calls[1]!.resolve(snapshot("new snapshot"));
+        expect(labels(await b)).toEqual(["new snapshot"]);
+
+        for (let i = 0; i < 64; i++) {
+          const other = directory.read({ projectId: `other-${i}` });
+          await vi.advanceTimersByTimeAsync(0);
+          reads.calls.at(-1)!.resolve(snapshot("other snapshot"));
+          expect((await other).coverage).toBe("ok");
+        }
+
+        reads.calls[0]!.resolve(snapshot("old snapshot"));
+        await vi.advanceTimersByTimeAsync(0);
+
+        const c = directory.read();
+        await vi.advanceTimersByTimeAsync(0);
+        reads.calls.at(-1)!.reject(new Error("no pty client"));
+        expect(await c).toMatchObject({ coverage: "unreachable", observedAt: null, entries: [] });
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("lets a late complete read replace a snapshot a partial read fell back to", async () => {
+      vi.useFakeTimers();
+      try {
+        let clock = 100;
+        const reads = deferredReads();
+        const directory = new LocalAgentDirectory(
+          sources({
+            now: () => clock,
+            listRunningLanes: () => [],
+            getLiveGeneration: () => 1,
+            readTerminals: reads.readTerminals,
+          }),
+          20
+        );
+
+        const first = directory.read();
+        await vi.advanceTimersByTimeAsync(0);
+        reads.calls[0]!.resolve(snapshot("first snapshot"));
+        await first;
+
+        clock = 200;
+        const a = directory.read();
+        await vi.advanceTimersByTimeAsync(20);
+        expect(await a).toMatchObject({ coverage: "stale", observedAt: 100 });
+
+        clock = 300;
+        const partial = directory.read();
+        await vi.advanceTimersByTimeAsync(0);
+        reads.calls[2]!.resolve({ terminals: [], degraded: true });
+        expect(await partial).toMatchObject({ coverage: "stale", observedAt: 100 });
+
+        clock = 400;
+        reads.calls[1]!.resolve(snapshot("late snapshot"));
+        await vi.advanceTimersByTimeAsync(0);
+
+        const c = directory.read();
+        await vi.advanceTimersByTimeAsync(0);
+        reads.calls[3]!.reject(new Error("no pty client"));
+        const stale = await c;
+        expect(stale).toMatchObject({ coverage: "stale", observedAt: 400 });
+        expect(labels(stale)).toEqual(["late snapshot"]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("lets a late read refresh its scope when nothing newer landed, and keeps scopes apart", async () => {
       vi.useFakeTimers();
       try {

@@ -259,6 +259,8 @@ const LAST_KNOWN_SCOPES_MAX = 64;
 export class LocalAgentDirectory {
   private readonly last = new Map<string, { directory: AgentDirectory; started: number }>();
   private readonly inFlight = new Map<string, Promise<AgentDirectory>>();
+  // The newest write per scope, held while a collection is outstanding so eviction can't reorder it.
+  private readonly collecting = new Map<string, { written: number; count: number }>();
   private started = 0;
 
   constructor(
@@ -273,6 +275,12 @@ export class LocalAgentDirectory {
     // Reads are ordered by when they began: one that outlived its deadline
     // finishes after a newer read and must not move the last known one back.
     const started = ++this.started;
+    const order = this.collecting.get(key) ?? {
+      written: this.last.get(key)?.started ?? 0,
+      count: 0,
+    };
+    order.count++;
+    this.collecting.set(key, order);
     const keepLast = (): AgentDirectory => {
       const previous = this.last.get(key)?.directory;
       return previous
@@ -283,23 +291,31 @@ export class LocalAgentDirectory {
     const deadline = new Promise<AgentDirectory>((resolve) => {
       timer = setTimeout(() => resolve(keepLast()), this.deadlineMs);
     });
-    const read = collectAgentDirectory(this.sources, options).then(
-      (directory) => {
-        const previous = this.last.get(key);
-        if (previous && previous.started > started) return directory;
-        // A failed pty shard is not an inventory: it must not replace one that was read.
-        if (directory.coverage === "ok" && !directory.complete && previous?.directory.complete) {
-          return keepLast();
-        }
-        this.last.delete(key);
-        this.last.set(key, { directory, started });
-        if (this.last.size > LAST_KNOWN_SCOPES_MAX) {
-          this.last.delete(this.last.keys().next().value as string);
-        }
-        return directory;
-      },
-      () => keepLast()
-    );
+    const read = collectAgentDirectory(this.sources, options)
+      .then(
+        (directory) => {
+          // A failed pty shard is not an inventory: it must not replace one that was read.
+          if (
+            directory.coverage === "ok" &&
+            !directory.complete &&
+            this.last.get(key)?.directory.complete
+          ) {
+            return keepLast();
+          }
+          if (started <= order.written) return directory;
+          this.last.delete(key);
+          this.last.set(key, { directory, started });
+          order.written = started;
+          if (this.last.size > LAST_KNOWN_SCOPES_MAX) {
+            this.last.delete(this.last.keys().next().value as string);
+          }
+          return directory;
+        },
+        () => keepLast()
+      )
+      .finally(() => {
+        if (--order.count === 0) this.collecting.delete(key);
+      });
     const flight = Promise.race([read, deadline]).finally(() => {
       clearTimeout(timer);
       this.inFlight.delete(key);
