@@ -84,18 +84,6 @@ const APPROVAL = (command: string, why: string): FakeCanopyScene => ({
   ],
 });
 
-/** A question asked while the panel is closed, long enough to wrap at every width. */
-const QUESTION_WHILE_CLOSED: FakeCanopyScene = {
-  lines: [
-    ...HEADER,
-    "> Add a CHANGELOG entry for the units work, and ask me which date format to use first",
-    "",
-    "⏺ The release notes need a line for this. Should the changelog entry go under Fixed, since it corrects rounding, or under Changed, since amounts now differ slightly?",
-    "",
-    "✻ Worked for 3s · done",
-  ],
-};
-
 const QUESTION: FakeCanopyScene = {
   lines: [
     ...HEADER,
