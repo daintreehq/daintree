@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CANOPY_LOCAL } from "@/components/Canopy/canopyTerms";
-import { fireEvent, render, waitFor } from "@testing-library/react";
+import { fireEvent, render, waitFor, within } from "@testing-library/react";
 import type {
   CanopyMode,
   CanopyModelCatalogue,
@@ -9,7 +9,30 @@ import type {
   CanopySnapshot,
 } from "@shared/types/ipc/canopy";
 import { useCanopyStore } from "@/store/canopyStore";
-import { CanopySettingsTab, modelComparison } from "../CanopySettingsTab";
+import { CanopySettingsTab } from "../CanopySettingsTab";
+
+// The real dialog pulls in the app's icons and portals; what matters here is what it is given.
+vi.mock("@/components/ui/ConfirmDialog", () => ({
+  ConfirmDialog: (props: {
+    isOpen: boolean;
+    variant: string;
+    title: string;
+    description: string;
+    confirmLabel: string;
+    cancelLabel: string;
+    onClose: () => void;
+    onConfirm: () => void;
+  }) =>
+    props.isOpen ? (
+      <div role="dialog" data-variant={props.variant}>
+        <h2>{props.title}</h2>
+        <p>{props.description}</p>
+        <button onClick={props.onClose}>{props.cancelLabel}</button>
+        <button onClick={props.onConfirm}>{props.confirmLabel}</button>
+      </div>
+    ) : null,
+}));
+import { modelComparison } from "@/components/Canopy/canopyModelCopy";
 
 const LIGHT: CanopyModelVariant = {
   id: "daintreehq/canopy-reader-17m",
@@ -75,12 +98,13 @@ function install(mode: CanopyMode = "unset", overrides: Partial<CanopySnapshot> 
       return snapshot({ mode, activated: mode === "on" });
     }),
     retryModel: vi.fn(async () => snapshot({ mode, activated: mode === "on" })),
+    // Deleting while on turns Canopy off, as the real handler does.
     removeModels: vi.fn(async () => {
       catalogue = {
         ...catalogue,
         variants: catalogue.variants.map((v) => ({ ...v, installed: false })),
       };
-      return snapshot({ mode, activated: mode === "on" });
+      return mode === "on" ? snapshot({ mode: "unset", activated: false }) : snapshot({ mode });
     }),
   };
   Object.defineProperty(window, "electron", {
@@ -225,18 +249,34 @@ describe("CanopySettingsTab", () => {
     await waitFor(() => expect(api.retryModel).toHaveBeenCalled());
   });
 
-  it("offers to delete a downloaded model only while Canopy is off", async () => {
-    install("on");
-    const on = render(<CanopySettingsTab />);
-    await waitFor(() => expect(on.getByRole("radio", { name: /Light/ })).toBeTruthy());
-    expect(on.queryByRole("button", { name: "Delete model" })).toBeNull();
-    on.unmount();
-
-    const api = install("unset");
-    const { findByRole, queryByRole } = render(<CanopySettingsTab />);
-    fireEvent.click(await findByRole("button", { name: "Delete model" }));
-    await waitFor(() => expect(api.removeModels).toHaveBeenCalled());
-    await waitFor(() => expect(queryByRole("button", { name: "Delete model" })).toBeNull());
+  it("deletes a downloaded model only after a confirm that names it, whether Canopy is on or off", async () => {
+    for (const mode of ["unset", "on"] as const) {
+      const api = install(mode);
+      const { findByRole, getByRole, queryByRole, unmount } = render(<CanopySettingsTab />);
+      fireEvent.click(await findByRole("button", { name: "Delete model" }));
+      // Nothing is deleted by the first press: the dialog says what goes, and what happens to Canopy.
+      expect(api.removeModels).not.toHaveBeenCalled();
+      const dialog = await findByRole("dialog");
+      // Destructive, so the action is named and styled as one.
+      expect(dialog.getAttribute("data-variant")).toBe("destructive");
+      expect(dialog.textContent).toContain("Delete 'Light'?");
+      expect(dialog.textContent).toContain("Frees 21 MB");
+      expect(dialog.textContent).toContain(
+        mode === "on" ? "Canopy turns off" : "Turning Canopy on again downloads a model"
+      );
+      fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+      expect(api.removeModels).not.toHaveBeenCalled();
+      await waitFor(() => expect(queryByRole("dialog")).toBeNull());
+      fireEvent.click(getByRole("button", { name: "Delete model" }));
+      fireEvent.click(
+        within(await findByRole("dialog")).getByRole("button", { name: "Delete model" })
+      );
+      await waitFor(() => expect(api.removeModels).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(queryByRole("button", { name: "Delete model" })).toBeNull());
+      // Deleting while it was on is the one thing that turns it off, and the page shows it.
+      expect(useCanopyStore.getState().mode).toBe("unset");
+      unmount();
+    }
   });
 
   it("says plainly how little the models differ, in their own numbers", () => {

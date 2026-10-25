@@ -160,12 +160,16 @@ export function CanopyView() {
         onClose={() => setBulkTargets(null)}
         targets={bulkTargets ?? NO_BULK_TARGETS}
         deps={{ transportFor }}
+        loadModels={loadOwnModels}
       />
     </>
   );
 }
 
 const NO_BULK_TARGETS: readonly BulkTarget[] = [];
+
+/** This computer's models, for the choice made where Canopy is turned on. */
+const loadOwnModels = () => window.electron.canopy.getModels();
 
 function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow[]) => void }) {
   const isOpen = useCanopyStore((s) => s.isOpen);
@@ -358,7 +362,12 @@ function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow
         isOpen={isOpen}
         onClose={close}
         backdrop={backdrop}
-        onTurnOn={() => window.electron.canopy.setMode("on").then(applySnapshot)}
+        loadModels={loadOwnModels}
+        onTurnOn={async (modelId) => {
+          // The model first: turned on, Canopy downloads the one chosen, never a default.
+          if (modelId !== null) await window.electron.canopy.setModel(modelId);
+          applySnapshot(await window.electron.canopy.setMode("on"));
+        }}
         onHide={hideCanopy}
         restoreFocusTo={restoreOnReplace}
         hostPicker={hostPicker}
@@ -1109,7 +1118,11 @@ function CanopyInbox({
         {hostOffer && (
           <CanopyHostOffer
             hostName={hostName}
-            onTurnOn={async () => {
+            loadModels={() => api.getModels()}
+            onTurnOn={async (modelId) => {
+              // The model first: it downloads to that host, and the one chosen is
+              // what is fetched, never that host's default.
+              if (modelId !== null) await api.setModel(modelId);
               // Hidden there, it can't be turned on until it is shown again:
               // the press here, on an offer naming the host, is the user's ask for both.
               if (canopy?.mode === "hidden") await api.setMode("unset");

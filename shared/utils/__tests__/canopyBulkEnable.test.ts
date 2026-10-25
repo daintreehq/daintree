@@ -340,4 +340,93 @@ describe("previewCanopyModes", () => {
     expect(result).toMatchObject({ outcome: "unsupported" });
     expect(old.state.calls).toEqual([]);
   });
+
+  it("sets the chosen model on each host before turning Canopy on there", async () => {
+    const a = fakeHost(snap("unset", 0));
+    const b = fakeHost(snap("hidden", 1));
+    const order: string[] = [];
+    for (const [name, host] of [
+      ["a", a],
+      ["b", b],
+    ] as const) {
+      const setMode = host.transport.setMode;
+      host.transport.setMode = async (...args) => {
+        order.push(`${name}:mode:${args[0]}`);
+        return setMode(...args);
+      };
+      host.transport.setModel = async (id) => {
+        order.push(`${name}:model:${id}`);
+        // Slow to land: a mode step that doesn't wait for it runs first.
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        order.push(`${name}:model-done`);
+      };
+    }
+    const results = await run(
+      { a: a.transport, b: b.transport },
+      { model: "daintreehq/canopy-reader-68m" }
+    );
+    expect(results.map((r) => r.outcome)).toEqual(["enabled", "enabled"]);
+    // The model comes first on every host, including the one that has to be shown first.
+    expect(order.filter((o) => o.startsWith("a:"))).toEqual([
+      "a:model:daintreehq/canopy-reader-68m",
+      "a:model-done",
+      "a:mode:on",
+    ]);
+    expect(order.filter((o) => o.startsWith("b:"))).toEqual([
+      "b:model:daintreehq/canopy-reader-68m",
+      "b:model-done",
+      "b:mode:unset",
+      "b:mode:on",
+    ]);
+  });
+
+  it("leaves a host unchanged when it won't take the chosen model", async () => {
+    const host = fakeHost(snap("unset", 0));
+    host.transport.setModel = async () => {
+      throw new Error("refused");
+    };
+    const [result] = await run({ x: host.transport }, { model: "daintreehq/canopy-reader-68m" });
+    expect(result).toMatchObject({ outcome: "refused" });
+    // Never turned on with a model nobody chose.
+    expect(host.state.calls).toEqual([]);
+  });
+
+  it("asks for no model when none was chosen", async () => {
+    const host = fakeHost(snap("unset", 0));
+    const setModel = vi.fn(async () => {});
+    host.transport.setModel = setModel;
+    const [result] = await run({ x: host.transport });
+    expect(result).toMatchObject({ outcome: "enabled" });
+    expect(host.state.calls).toEqual([["on", 0, "e1"]]);
+    expect(setModel).not.toHaveBeenCalled();
+  });
+
+  it("won't turn a host on with its own model when it can't take the chosen one", async () => {
+    const host = fakeHost(snap("unset", 0));
+    const [result] = await run({ x: host.transport }, { model: "daintreehq/canopy-reader-68m" });
+    expect(result).toMatchObject({ outcome: "unsupported" });
+    expect(host.state.calls).toEqual([]);
+  });
+
+  it("changes nothing when cancelled while the host is still being read", async () => {
+    const host = fakeHost(snap("unset", 0));
+    const controller = new AbortController();
+    const setModel = vi.fn(async () => {});
+    const transport: BulkTransport = {
+      ...host.transport,
+      setModel,
+      getSnapshot: async () => {
+        const reply = await host.transport.getSnapshot();
+        controller.abort();
+        return reply;
+      },
+    };
+    const [result] = await run(
+      { x: transport },
+      { model: "daintreehq/canopy-reader-68m", signal: controller.signal }
+    );
+    expect(result!.outcome).not.toBe("enabled");
+    expect(setModel).not.toHaveBeenCalled();
+    expect(host.state.calls).toEqual([]);
+  });
 });

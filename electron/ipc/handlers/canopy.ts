@@ -1345,16 +1345,16 @@ export const canopyNamespace = defineIpcNamespace({
       return service ? service.getSnapshot() : hiddenOrIdleSnapshot();
     }),
 
-    /** Deletes the downloaded models. Only while Canopy is off: one in use stays. */
+    /**
+     * Deletes the downloaded models, at any time. With Canopy on that turns it
+     * off first, by the same guarded change as any other turn-off, so every view
+     * hears it and nothing downloads the model again on the next launch.
+     */
     removeModels: op(CANOPY_METHOD_CHANNELS.removeModels, async (): Promise<CanopySnapshot> => {
-      if (readCanopyMode() === "on") {
-        throw new AppError({
-          code: "PERMISSION",
-          message: "Canopy is on",
-          userMessage: "Turn Canopy off before deleting its model.",
-        });
-      }
+      checkRateLimit(CANOPY_METHOD_CHANNELS.removeModels, 10, 10_000);
+      if (readCanopyMode() === "on") changeCanopyMode("unset");
       reader?.release();
+      models?.cancel();
       await getModels().removeAllBut(null);
       return service ? service.getSnapshot() : hiddenOrIdleSnapshot();
     }),
