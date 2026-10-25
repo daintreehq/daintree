@@ -504,6 +504,18 @@ export class HostSwitchService {
 
     let target = chosen;
     if (target === null) {
+      // The host clones it itself, so a folder on this machine is no remote for it (#14476).
+      if (source.cloneUrl === null || !isSupportedCloneUrl(source.cloneUrl)) {
+        return {
+          status: "question",
+          questions: [
+            question(
+              "no_remote",
+              "This project's remote is a folder on this machine or another address the host can't clone from: a clone needs an HTTP(S) or SSH remote. Nothing is sent from this machine: the person can push it to one, or move it themselves."
+            ),
+          ],
+        };
+      }
       const destination = await to.suggestDestination({
         homeRelativePath: source.homeRelativePath,
         repoName: source.repoName,
@@ -513,7 +525,7 @@ export class HostSwitchService {
         // A copy registered there is named by its id, so the host checks who holds it.
         const known = candidates.find((c) => c.path === destination.path);
         target = { projectId: known?.projectId ?? null, path: destination.path };
-      } else if (destination.status !== "free" || source.cloneUrl === null) {
+      } else if (destination.status !== "free") {
         return {
           status: "question",
           questions: [

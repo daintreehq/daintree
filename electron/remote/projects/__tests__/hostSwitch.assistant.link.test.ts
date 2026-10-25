@@ -35,12 +35,13 @@ const URL = "https://example.test/daintreehq/ensure.git";
 const BRANCH = "feature/ensure";
 
 let root: string;
+let bare: string;
 let socketDir: string;
 let sessions: LinkSession[] = [];
 
 beforeAll(() => {
   root = tempRoot("pah-ensure-");
-  const bare = makeBare(root, "ensure-origin");
+  bare = makeBare(root, "ensure-origin");
   aliasRemote(URL, bare);
   const seed = makeRepo(root, "seed", URL);
   git(seed, ["push", "-q", "-u", "origin", "main"]);
@@ -221,6 +222,28 @@ describe("bringing a project to a host for an assistant (#14140)", () => {
       status: "ready",
       project: { how: "cloned", worktreePath: null, leftHere: { unpushedCommits: null } },
     });
+  });
+
+  it("asks instead of cloning when the project's remote is a folder on this machine", async () => {
+    const r = await rig();
+    const dir = path.join(root, `folder-origin-${++counter}`);
+    git(root, ["clone", "-q", bare, dir]);
+    commit(dir, "only here");
+    const project = r.local.addProject(dir);
+
+    const answer = await r.service.ensureForAssistant(
+      request(project.id, { worktree: false }),
+      WAIT
+    );
+
+    expect(answer).toMatchObject({
+      status: "question",
+      questions: [{ reason: "no_remote", accept: null }],
+    });
+    if (answer.status !== "question") return;
+    expect(answer.questions[0]!.detail).toContain("HTTP(S) or SSH");
+    expect(r.studio.clone).not.toHaveBeenCalled();
+    expect(r.studio.projects).toHaveLength(0);
   });
 
   it("uses the host's one registered copy, and asks when it has two", async () => {
