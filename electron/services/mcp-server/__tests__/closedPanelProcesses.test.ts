@@ -73,8 +73,10 @@ describe("withClosedPanelProcesses (#14474)", () => {
     read.mockClear();
     const failed = { ok: false as const, error: { code: "NOT_FOUND" as const, message: "x" } };
     expect(await withClosedPanelProcesses(failed, read)).toBe(failed);
-    const odd = { ok: true as const, result: null };
-    expect(await withClosedPanelProcesses(odd, read)).toBe(odd);
+    for (const answer of [null, {}, { closedIds: "t1" }]) {
+      const odd = { ok: true as const, result: answer };
+      expect(await withClosedPanelProcesses(odd, read)).toBe(odd);
+    }
     expect(read).not.toHaveBeenCalled();
   });
 });

@@ -48,6 +48,6 @@ export async function withClosedPanelProcesses(
     return result;
   }
   const ids = answer.closedIds.filter((id): id is string => typeof id === "string");
-  const processes = await Promise.all(ids.map(read));
+  const processes = await Promise.all(ids.map((id) => read(id)));
   return { ...result, result: { ...answer, processes } };
 }

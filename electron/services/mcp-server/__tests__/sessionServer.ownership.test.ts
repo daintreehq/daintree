@@ -378,11 +378,11 @@ describe("session-scoped resource ownership (#11909)", () => {
 
     // #14474: a close trashes the panel and its agent runs on through the
     // grace, so a caller reading `closedIds` must also be told the process is
-    // still there, through `closeMany` from a relayed host call as well.
+    // still there, item by item through `closeMany` as well.
     it("says what the host saw of each closed panel's process, item by item in a closeMany", async () => {
-      const manifest = [
+      const manifest: ActionManifestEntry[] = [
         ...ownedManifest(),
-        { ...makeManifestEntry("terminal.closeMany"), kind: "command", danger: "safe" as const },
+        { ...makeManifestEntry("terminal.closeMany"), kind: "command", danger: "safe" },
       ];
       const readClosedPanelProcess = vi.fn(async (terminalId: string) => ({
         terminalId,
