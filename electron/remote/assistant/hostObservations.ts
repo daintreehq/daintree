@@ -10,7 +10,6 @@ import type {
   HostHandshakeInfo,
   HostMetricsSummary,
 } from "../../../shared/types/remoteHosts.js";
-import { HOST_LOAD_STALE_MS } from "./hostLoad.js";
 
 /** Longest build string a handshake carries on the wire. */
 const BUILD_FIELD_MAX = 64;
@@ -110,12 +109,11 @@ export function projectHostBuild(
 export function projectHostAgentClis(
   summary: HostMetricsSummary | null,
   live: boolean,
-  now: number
+  fresh: boolean
 ): HostListAgentClis {
   const sampledAt = summary ? stampOrNull(summary.sampledAt) : null;
   const all = summary?.agentClis ?? [];
   if (all.length === 0) return { coverage: "unknown", sampledAt, installed: [], omitted: 0 };
-  const fresh = sampledAt !== null && Math.abs(now - sampledAt) <= HOST_LOAD_STALE_MS;
   return {
     coverage: live && fresh ? "observed" : "stale",
     sampledAt,

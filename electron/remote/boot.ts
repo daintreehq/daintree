@@ -310,6 +310,9 @@ function startClient(options: StartRemoteHostsOptions): void {
       connection,
       lastSeenAt: descriptor.lastSeenAt,
       summary,
+      summaryReceipt: summary
+        ? (getRemoteService("hostMetrics")?.receiptOf(summary) ?? null)
+        : null,
       lastHandshake: descriptor.lastHandshake,
       disconnectedByPerson: client.client.isDisconnectedByPerson(descriptor.id),
     }));

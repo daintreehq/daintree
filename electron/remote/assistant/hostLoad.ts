@@ -5,10 +5,9 @@ import {
   reportedCapacity,
   reportsMemoryCapacity,
 } from "../../../shared/utils/hostCapacity.js";
-import { HOST_METRICS_INTERVAL_MS } from "../metrics/sampler.js";
+import type { SampleFreshness } from "../metrics/summaryReceipt.js";
 
-/** Three missed samples; past this the figures describe a machine that may have changed. */
-export const HOST_LOAD_STALE_MS = 3 * HOST_METRICS_INTERVAL_MS;
+export { HOST_LOAD_STALE_MS } from "../metrics/summaryReceipt.js";
 
 type HostLoad = NonNullable<HostListEntry["load"]>;
 
@@ -21,21 +20,22 @@ const hundredths = (value: number): number => Math.round(value * 100) / 100;
  * What a host's summary says about its capacity, for the assistant: the
  * producer's own meanings (the overview's derivations), with anything
  * unmeasured, stale or from an older host left null rather than zero. Stale
- * samples keep only what hardware fixes; remote `sampledAt` is the remote
- * clock, so a timestamp far from ours counts as unusable, not as fresh.
+ * samples keep only what hardware fixes. `sampledAt` stays the host's own
+ * clock, for provenance; the age is the freshness verdict's.
  */
-export function projectHostLoad(summary: HostMetricsSummary, now: number): HostLoad {
-  const age = Number.isFinite(summary.sampledAt) ? now - summary.sampledAt : Number.NaN;
-  const usable = Number.isFinite(age) && Math.abs(age) <= HOST_LOAD_STALE_MS;
-  const stale = !usable;
+export function projectHostLoad(summary: HostMetricsSummary, freshness: SampleFreshness): HostLoad {
+  const { stale } = freshness;
+  const usable = !stale;
   const cores = finiteOrNull(summary.cpuLogicalCoreCount);
   const capacity = reportedCapacity(summary);
   const total = finiteOrNull(summary.memoryTotalBytes);
   const busy = usable ? busyCores(summary) : null;
   return {
     sampledAt: summary.sampledAt,
-    ageMs: Number.isFinite(age) ? Math.max(0, age) : 0,
+    receivedAt: freshness.receivedAt,
+    ageMs: freshness.ageMs,
     stale,
+    staleReason: freshness.staleReason,
     platform: summary.platform,
     cpuPercent: usable ? finiteOrNull(summary.cpuPercent) : null,
     cpuLogicalCores: cores !== null && cores > 0 ? cores : null,

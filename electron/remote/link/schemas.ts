@@ -99,7 +99,7 @@ const RejectSchema = z.object({
     .optional(),
 });
 
-const PingSchema = z.object({ sentAt: epochMs });
+const PingSchema = z.object({ sentAt: epochMs, nonce: z.number().int().min(0).optional() });
 
 const EndpointSchema = z.object({ endpointId: id, projectId: id.nullable() });
 // An older host reads OPEN with `EndpointSchema`, which strips `openId`.
@@ -166,6 +166,12 @@ const HostSummarySchema = z.object({
   driver: DriveLeaseHolderSchema.nullable(),
   drivers: z.array(DriverObservationSchema).max(MAX_HOST_SUMMARY_DRIVERS).nullable().optional(),
   agentClis: z.array(z.object({ agentId: id, version: z.string().max(256).nullable() })).max(256),
+  timing: z
+    .object({
+      sampleAgeMs: z.number().finite().min(0).nullable(),
+      afterPing: z.number().int().min(0).nullable(),
+    })
+    .optional(),
   forges: z
     .array(
       z.object({

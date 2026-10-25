@@ -2,6 +2,7 @@ import type { Duplex } from "node:stream";
 import type { z } from "zod";
 import type { IpcEnvelope } from "../../../shared/types/ipc/errors.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { stampNow, type ElapsedStamp } from "./elapsed.js";
 import type { EncodingLimits } from "./encoding.js";
 import {
   DEFAULT_MAX_FRAME_BYTES,
@@ -87,6 +88,8 @@ export interface LinkSessionOptions {
   maxInboundRequests?: number;
   transfers?: LinkTransfersOptions;
   now?: () => number;
+  /** This machine's clocks, for how long ago a ping went; real ones by default. */
+  clock?: () => ElapsedStamp;
 }
 
 export interface LinkCloseInfo {
@@ -141,6 +144,8 @@ const END_GRACE_MS = 2_000;
 /** A host paging under memory pressure can miss pings for a minute and still catch up. */
 const DEFAULT_IDLE_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_PENDING_REQUESTS = 4096;
+/** Over a minute of pings at the default cadence: a summary dated by an older one is too old anyway. */
+const MAX_REMEMBERED_PINGS = 16;
 // Messages that follow WELCOME before the client has attached its handlers
 // are only the rest of the read that carried it; a peer filling this is broken.
 const MAX_HELD_MESSAGES = 4096;
@@ -217,6 +222,10 @@ export class LinkSession {
   private closeInfo: LinkCloseInfo | null = null;
 
   private _rttMs: number | null = null;
+  private nextPingNonce = 0;
+  /** When each recent ping of ours went, by nonce: what a peer's answer can be dated by. */
+  private readonly sentPings = new Map<number, ElapsedStamp>();
+  private _peerPingNonce: number | null = null;
   private _lastReceivedAt: number;
   private _framesSinceOpen = 0;
   /** Reads that brought bytes, so a probe can tell whether anything arrived after it. */
@@ -282,6 +291,16 @@ export class LinkSession {
 
   get lastReceivedAt(): number {
     return this._lastReceivedAt;
+  }
+
+  /** The newest ping nonce the peer sent: anything posted now went after it was sent. */
+  get peerPingNonce(): number | null {
+    return this._peerPingNonce;
+  }
+
+  /** When one of this session's recent pings went; null for one it never sent or has forgotten. */
+  pingSentAt(nonce: number): ElapsedStamp | null {
+    return this.sentPings.get(nonce) ?? null;
   }
 
   /** Frames the peer has sent since the handshake succeeded. */
@@ -354,7 +373,12 @@ export class LinkSession {
 
   ping(): void {
     if (this.state !== "open") return;
-    this.post({ lane: Lane.CONTROL, kind: ControlKind.PING, body: { sentAt: this.now() } });
+    const nonce = this.nextPingNonce++;
+    this.sentPings.set(nonce, (this.opts.clock ?? stampNow)());
+    if (this.sentPings.size > MAX_REMEMBERED_PINGS) {
+      this.sentPings.delete(this.sentPings.keys().next().value!);
+    }
+    this.post({ lane: Lane.CONTROL, kind: ControlKind.PING, body: { sentAt: this.now(), nonce } });
   }
 
   /**
@@ -732,6 +756,7 @@ export class LinkSession {
       case Lane.CONTROL:
         switch (message.kind) {
           case ControlKind.PING:
+            if (message.body.nonce !== undefined) this._peerPingNonce = message.body.nonce;
             this.post({ lane: Lane.CONTROL, kind: ControlKind.PONG, body: message.body });
             return;
           case ControlKind.PONG: {
@@ -917,6 +942,7 @@ export class LinkSession {
     if (this.pingTimer) clearInterval(this.pingTimer);
     if (this.idleTimer) clearInterval(this.idleTimer);
     this.pingTimer = this.idleTimer = null;
+    this.sentPings.clear();
     this.scheduler.clear();
     this.tickListeners.clear();
     this.held = null;

@@ -201,11 +201,21 @@ export const HostListEntrySchema = z.object({
   lastSeenAt: z.number().nullable(),
   load: z
     .object({
-      sampledAt: z.number(),
-      ageMs: z.number(),
+      sampledAt: z.number().describe("The host's own clock: provenance, not an age."),
+      receivedAt: z.number().nullable().describe("This machine's clock when the sample arrived."),
+      ageMs: z
+        .number()
+        .nullable()
+        .describe("How old the sample is at most, never by comparing clocks. Null: unknown."),
       stale: z
         .boolean()
         .describe("Too old to trust: the live figures below are null. Not a zero reading."),
+      staleReason: z
+        .enum(["age-limit", "clock-uncertain"])
+        .nullable()
+        .describe(
+          "age-limit: known too old. clock-uncertain: an older host's timestamp, far from this clock: old or clocks disagree. Null when fresh."
+        ),
       platform: z.enum(["darwin", "linux"]),
       cpuPercent: z.number().nullable(),
       cpuLogicalCores: z.number().nullable(),

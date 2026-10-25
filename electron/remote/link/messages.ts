@@ -138,7 +138,21 @@ export interface RejectObservation {
 
 export interface PingMessage {
   sentAt: number;
+  /** Counts this session's pings, so a summary can name the last one it followed. Absent from older peers. */
+  nonce?: number;
 }
+
+/**
+ * What a host adds to a summary frame so a Shell can bound its age without
+ * comparing clocks (#14462): how old the sample was by the host's own clocks
+ * when it posted the frame, and the newest ping it had from that Shell then.
+ */
+export interface SummaryFrameTiming {
+  sampleAgeMs: number | null;
+  afterPing: number | null;
+}
+
+export type HostSummaryFrame = HostMetricsSummary & { timing?: SummaryFrameTiming };
 
 export interface EndpointOpenMessage {
   endpointId: string;
@@ -316,7 +330,7 @@ export type LinkMessage =
       kind: typeof ControlKind.ENDPOINT_CLOSE;
       body: EndpointCloseMessage;
     }
-  | { lane: typeof Lane.CONTROL; kind: typeof ControlKind.HOST_SUMMARY; body: HostMetricsSummary }
+  | { lane: typeof Lane.CONTROL; kind: typeof ControlKind.HOST_SUMMARY; body: HostSummaryFrame }
   | { lane: typeof Lane.CONTROL; kind: typeof ControlKind.LEASE_CHANGED; body: DriveLeaseState }
   | { lane: typeof Lane.CONTROL; kind: typeof ControlKind.GOODBYE; body: GoodbyeMessage }
   | { lane: typeof Lane.RPC; kind: typeof RpcKind.INVOKE; body: InvokeMessage }

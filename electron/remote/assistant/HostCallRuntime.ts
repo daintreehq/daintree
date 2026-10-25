@@ -55,6 +55,8 @@ import {
 } from "../../services/mcp-server/terminalNotify.js";
 import { sanitizeNotifyNote } from "../../../shared/types/terminalNotify.js";
 import { projectHostLoad } from "./hostLoad.js";
+import type { ElapsedStamp } from "../link/elapsed.js";
+import { sampleFreshness, type SummaryReceipt } from "../metrics/summaryReceipt.js";
 import { projectHostAgentClis, projectHostBuild, projectHostLink } from "./hostObservations.js";
 import {
   decodeProjectCursor,
@@ -89,6 +91,12 @@ import { createLogger } from "../../utils/logger.js";
 
 const logger = createLogger("main:HostCallRuntime");
 
+/** A summary as `host.list` holds it until every read settles. */
+interface Sampled {
+  summary: HostMetricsSummary;
+  receipt: SummaryReceipt | null;
+}
+
 /** One host as this Shell observes it: its registry entry, its link, its last summary. */
 export interface ObservedHost {
   hostId: HostId;
@@ -96,6 +104,8 @@ export interface ObservedHost {
   connection: HostConnectionState;
   lastSeenAt: number | null;
   summary: HostMetricsSummary | null;
+  /** When `summary` arrived and what its frame proved about its age; absent, only its timestamp says. */
+  summaryReceipt?: SummaryReceipt | null;
   /** The build its last handshake named, kept after the link goes. */
   lastHandshake?: HostHandshakeInfo | null;
   /** The person disconnected it and nothing has dialled it since. */
@@ -117,6 +127,8 @@ export interface LocalHostReach {
    * platform can't be measured. Reading it never starts sampling.
    */
   latestSummary?(): HostMetricsSummary | null;
+  /** When this machine took that sample, on its own clocks. */
+  summaryReceipt?(summary: HostMetricsSummary): SummaryReceipt | null;
   relayCall(payload: McpCallPayload): Promise<McpCallAnswer>;
   /** A throwaway tool on this machine (#14446); absent, it runs none. */
   throwawayCall?(payload: ThrowawayCallPayload): Promise<ThrowawayCallAnswer>;
@@ -203,6 +215,8 @@ export interface HostCallRuntimeDeps {
    */
   watchHosts?(listener: HostWatchListener): () => void;
   now?: () => number;
+  /** This machine's clocks, for how old a sample is; `now` and the monotonic clock by default. */
+  clock?: () => ElapsedStamp;
   newId?: () => string;
 }
 
@@ -818,6 +832,7 @@ function observedConnection(state: HostConnectionState): HostListEntry["connecti
  */
 export class HostCallRuntime implements HostControlRuntimeHandle {
   private readonly now: () => number;
+  private readonly clock: () => ElapsedStamp;
   private readonly newId: () => string;
   /** Relayed calls out to each host right now, for the host's dialogs to be believed by. */
   private readonly callsOut = new Map<HostId, number>();
@@ -843,6 +858,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
 
   constructor(private readonly deps: HostCallRuntimeDeps) {
     this.now = deps.now ?? Date.now;
+    this.clock = deps.clock ?? (() => ({ wall: this.now(), mono: performance.now() }));
     this.newId = deps.newId ?? randomUUID;
     this.settingsRequests = new HostSettingsRequests({
       client: () => deps.settingsClient?.() ?? null,
@@ -1713,7 +1729,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       // Each load is projected after every read below settles, against one clock
       // reading: a slow project read must not leave a sample looking fresher
       // than it is when the answer goes out.
-      const sampled = new Map<HostListEntry, HostMetricsSummary>();
+      const sampled = new Map<HostListEntry, Sampled>();
       // Pages are cut to fit once every host has answered, so one host's long
       // names can't take the whole answer's room.
       const paged = new Map<HostListEntry, ProjectPage>();
@@ -1738,7 +1754,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
             connection: observedConnection(host.connection),
             link: projectHostLink(host.connection, host.disconnectedByPerson === true),
             build: projectHostBuild(host.connection, host.lastHandshake ?? null),
-            agentClis: projectHostAgentClis(null, false, 0),
+            agentClis: projectHostAgentClis(null, false, false),
             rttMs: host.connection.status === "connected" ? host.connection.rttMs : null,
             lastSeenAt: host.lastSeenAt,
             load: null,
@@ -1750,20 +1766,21 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
             control,
             ...(agents ? { agents } : {}),
           };
-          if (summary) sampled.set(entry, summary);
+          if (summary) sampled.set(entry, { summary, receipt: host.summaryReceipt ?? null });
           if (page) paged.set(entry, page);
           return entry;
         })
       );
       const settled = here ? await here : null;
       const entries = settled ? [settled, ...hosts] : hosts;
-      const now = this.now();
+      const now = this.clock();
       for (const entry of entries) {
-        const summary = sampled.get(entry);
-        if (!summary) continue;
+        const held = sampled.get(entry);
+        if (!held) continue;
         const live = entry.link.status === "connected" || entry.link.status === "local";
-        entry.load = projectHostLoad(summary, now);
-        entry.agentClis = projectHostAgentClis(summary, live, now);
+        const freshness = sampleFreshness(held.summary, held.receipt, now);
+        entry.load = projectHostLoad(held.summary, freshness);
+        entry.agentClis = projectHostAgentClis(held.summary, live, !freshness.stale);
       }
       fitProjectPages([...paged.values()], projectBudget(entries, paged));
       for (const [entry, page] of paged) {
@@ -1783,11 +1800,12 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     local: LocalHostReach,
     caller: OpenRun,
     agentsOf: { projectId?: string } | null,
-    sampled: Map<HostListEntry, HostMetricsSummary>,
+    sampled: Map<HostListEntry, Sampled>,
     scope: ProjectScope,
     paged: Map<HostListEntry, ProjectPage>
   ): Promise<HostListEntry> {
     const summary = local.latestSummary?.() ?? null;
+    const receipt = summary ? (local.summaryReceipt?.(summary) ?? null) : null;
     const projects = await withinMs(
       Promise.resolve()
         .then(() => local.projects())
@@ -1802,7 +1820,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       link: projectHostLink({ status: "local" }, false),
       // No handshake: this machine's own build isn't one it was told.
       build: { source: "unknown", handshake: null },
-      agentClis: projectHostAgentClis(null, true, 0),
+      agentClis: projectHostAgentClis(null, true, false),
       rttMs: null,
       lastSeenAt: null,
       load: null,
@@ -1812,7 +1830,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       control: true,
       ...(agentsOf ? { agents: await this.localAgents(local, agentsOf) } : {}),
     };
-    if (summary) sampled.set(entry, summary);
+    if (summary) sampled.set(entry, { summary, receipt });
     if (projects !== null) {
       // The caller's own project is left out before paging, so its cursor's
       // revision is of the list this caller sees.
