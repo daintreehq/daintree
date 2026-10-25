@@ -1,19 +1,19 @@
 ---
 name: work-batch
-description: "Work this repository's issue backlog in batches. A Claude Code agent in the main worktree picks the batch with /next-batch, this machine and every host it reaches over SSH that holds the repository are brought up to date with origin's base branch, each issue gets its own worktree and a Claude Code agent running /work (here, or on worker hosts the user names), and a Claude Code agent in the main worktree runs /merge-prs whenever finished PRs are waiting (green, or red CI that /work gave up on). It runs as a flow: slots are refilled as agents finish and merges happen while others work, so nothing sits idle. Checks in every 10 minutes. One batch by default; with 'drain' it keeps refilling, working and merging until /next-batch finds nothing ready and everything has landed. Use when the user asks to run, work or drain the next batch of issues, not to only list what the next batch would be."
+description: "Work this repository's issue backlog in batches. A Claude Code agent in the main worktree picks the batch with /next-batch, this machine and every host it reaches over SSH that holds the repository are brought up to date with origin's base branch, each issue gets its own worktree and a Claude Code agent running /work on the model /next-batch gave it (Sonnet unless the issue needs Opus), here or on worker hosts the user names, and a Claude Code agent in the main worktree runs /merge-prs whenever finished PRs are waiting (green, or red CI that /work gave up on). It runs as a flow: slots are refilled as agents finish and merges happen while others work, so nothing sits idle. Checks in every 10 minutes. One batch by default; with 'drain' it keeps refilling, working and merging until /next-batch finds nothing ready and everything has landed. Use when the user asks to run, work or drain the next batch of issues, not to only list what the next batch would be."
 argument-hint: "[batch size, default 8] [drain] [worker hosts] [filters for /next-batch, e.g. only bugs]"
 ---
 
 # Work batch
 
-A run is a flow, not a sequence of rounds (see Flow). There are as many `/work` slots as the batch size, and you keep them full: whenever slots free up, pick more issues, bring every instance up to date with origin, and give each its own worktree and `/work` agent. Each agent's PR is checked for green CI as it finishes and its worktree is cleared then and there; `/merge-prs` runs whenever finished PRs are waiting and none is running, alongside the agents still working. A batch is just one pick's issues, which names their panes. You coordinate and verify; you never pick issues, implement, review or merge yourself. Every pane you start is a **Claude Code terminal** (`agentId: "claude"`), whatever agent you run on and whatever the user's default agent is: `/next-batch` and `/merge-prs` in the main worktree on this machine, `/work` in each issue's own worktree. Launch with no `model` and no `presetId`, so they run the user's saved Claude defaults like the user's own panes, unless the user sets a model or `choosing-models.md` applies.
+A run is a flow, not a sequence of rounds (see Flow). There are as many `/work` slots as the batch size, and you keep them full: whenever slots free up, pick more issues, bring every instance up to date with origin, and give each its own worktree and `/work` agent. Each agent's PR is checked for green CI as it finishes and its worktree is cleared then and there; `/merge-prs` runs whenever finished PRs are waiting and none is running, alongside the agents still working. A batch is just one pick's issues, which names their panes. You coordinate and verify; you never pick issues, implement, review or merge yourself. Every pane you start is a **Claude Code terminal** (`agentId: "claude"`), whatever agent you run on and whatever the user's default agent is: `/next-batch` and `/merge-prs` in the main worktree on this machine, `/work` in each issue's own worktree. Every `/work` launch carries its issue's model (see Models). The pick and the merge launch with no `model` and no `presetId`, so they run the user's saved Claude defaults like the user's own panes. No launch ever takes a `presetId`.
 
 Arguments: `$ARGUMENTS`
 
 - A number is the batch size, default **8**: the number of `/work` slots, and the concurrency ceiling. Never more than that many `/work` agents at once, never two picks or two `/merge-prs` panes at once, and never a second run for this repository while one is active.
 - `drain` (or "until drained", "keep going") keeps refilling slots until a pick comes back empty and everything has landed. Without it, the run is one batch: one pick, its agents, and the merges that land them, and Flow never starts another pick. A drain has no fixed end: issues filed while it runs are picked too.
 - `resume` continues a run from its checkpoint (see Resume). `status` only reports and changes nothing.
-- Hosts named to do the work, and requests about models, are covered by Optional parts.
+- Hosts named to do the work are covered by `workers.md`. Requests about models ("all on Opus", "at most 4 Opus") are covered by Models.
 - Anything else goes to `/next-batch` as its filters, unchanged.
 
 ## Optional parts
@@ -21,7 +21,6 @@ Arguments: `$ARGUMENTS`
 These files sit beside this one. Read one only when it applies; otherwise ignore it.
 
 - **`workers.md`**: the user names other hosts to run the `/work` agents ("put 8 on X and 10 on Y"), with or without caps or models. Read it before Preflight; it adds to Preflight, the pick, Start, the checks and Tidy.
-- **`choosing-models.md`**: the user asks for the right model for each job, or for lighter and stronger models by difficulty. Read it before the next pick.
 - **`estimating.md`**: the user asks how long the run or the drain will take.
 
 Note in the checkpoint which ones apply, so a resumed run reads them again.
@@ -33,7 +32,7 @@ The runbook that owns this work is `daintree.orchestration.work-in-waves` (merge
 **Runbooks by stage.** You can't open a runbook file: every runbook comes from the runbook backend, `get_runbook` with its id when you know it (the ids below), else `search_runbooks` with a sentence describing the situation. Fetch one when its stage first arrives, not up front; one delivery per session is enough, since its text stays in your context (re-fetch after a compaction). When the user asks you to load or follow a runbook, fetch it the same way and say which one came back.
 
 - Syncing instances before a create: `daintree.hosts.sync-with-origin`.
-- Choosing models (`choosing-models.md`): `daintree.agents.choose-agent-model`.
+- The first pick's models (see Models): `daintree.agents.choose-agent-model`.
 - Reading a host's or account's allowance, or a usage threshold the user set: `daintree.agents.check-usage-limits` (a pane launched with no `prompt`, then the usage command at its idle prompt).
 - Agents stopped on a usage limit that names its reset: `daintree.agents.resume-after-usage-limit`.
 - A worker under memory pressure, or one to take fewer agents: `daintree.hosts.rebalance-load`.
@@ -43,25 +42,38 @@ The runbook that owns this work is `daintree.orchestration.work-in-waves` (merge
 
 The user wrote this skill, and it records their decisions where those runbooks leave room or assume otherwise:
 
-- **The batch and its overlap policy are `/next-batch`'s.** It allows ordinary overlap and leaves it to `/merge-prs`, excluding only structural clashes: the user's policy, looser than a disjointness gate. Report its verdict as the gate's result; don't re-split, serialize or drop issues. The one exception is placement: `/next-batch` splits only into even counts, so with uneven worker caps or a model split, it returns one ranked list and this skill places each issue (`workers.md`, `choosing-models.md`).
+- **The batch and its overlap policy are `/next-batch`'s.** It allows ordinary overlap and leaves it to `/merge-prs`, excluding only structural clashes: the user's policy, looser than a disjointness gate. Report its verdict as the gate's result; don't re-split, serialize or drop issues. The one exception is placement: `/next-batch` splits only into even counts, so with uneven worker caps, models tied to workers or an Opus cap, it returns one ranked list and this skill places each issue (`workers.md`, Models).
 - **The cap is the batch size**, already approved.
 - **Nothing sits idle** (see Flow). A pick takes about 15 minutes and a merge an hour, so neither waits for the other, nor for a batch's last few agents: slots are refilled as they free, and merges run while agents work.
 - **CI is read before a PR is counted finished.** As each unit finishes, its PR's checks are read, and an agent whose PR is red is told to fix it, at most once and never after `/work` has ended its own fix loop. Red CI left for the merge finishes the unit, and its PR waits for a merge like a green one (see step 3).
 - **Every instance starts a batch on origin's base.** This machine and every host it reaches over SSH that holds this repository fetch origin and fast-forward to `origin/<base>` before each batch creates anything, whatever runbook drives the work (see Sync). Fast-forwards only: an instance is never switched, stashed, reset, cleaned or force-updated, and one that can't fast-forward holds new creates until the user fixes it or says to go on without it.
 - **Each unit's whole chain is one command, `/work <n>`**, sent unchanged with no brief.
+- **Every `/work` agent runs on the model `/next-batch` gave its issue**, Sonnet or Opus, as a launch `model`, even where it matches the default. Sonnet is the default and Opus needs a named trigger in the pick (see Models). That is the user's policy: save allowance on Sonnet, never skimp where Opus helps. Never re-tier an issue yourself, and never move an Opus issue to Sonnet to save allowance or fill a slot.
 - **No `handback` on `/work` or `/merge-prs`**, for `daintree.agents.run-agent-command`'s reason: Daintree appends its instruction to the prompt text, which would become the command's arguments. Both print their own end markers, read exactly with `terminal.readLastMessageOwned`. The pick is a sentence, so it takes `handback`.
 - **`/merge-prs` lands every eligible open PR in the repository**, not only this batch's.
 - **Teardown is total, per unit, and doesn't wait for the merge**: as each unit finishes (green CI, no-op, failed or skipped), its pane is closed and its worktree closed out through the Daintree MCP (`worktree.deleteOwned`), landed or not, so the worktree sidebar never fills with finished work. The branch is on origin, so the merge never needs the worktree. Branches and PRs stay, so nothing committed is lost. Any worktree left on disk is reported with its reason.
 - **A recurring cron replaces the per-turn `ScheduleWakeup` backstop.** A wakeup loop isn't restored on `claude --resume` (that stalled a `/work` wave for an hour on 2026-10-14) and ends at a maximum duration. The cron is still the one pacing mechanism.
 
+## Models
+
+Every `/work` unit runs on a model, and `/next-batch` chooses it: each issue in its report ends `· <size> · <model>`, `sonnet` or `opus`, and every `opus` names its trigger (an unknown root cause, concurrency or lifecycle, an open design or contract decision, data, auth or security, new cross-process behaviour, measured performance work, a failed earlier attempt). Everything else is Sonnet, which matches Opus on well-scoped work at half the cost. The aim is as much on Sonnet as the work allows, and Opus wherever its trigger is real.
+
+- **Read it from the report.** Each issue's model is the one on its report line; the `🟩 opus ·` and `🟩 sonnet ·` lines are the cross-check, and together hold the `🟩 all ·` line's issues. An issue with no model, or two, is an invalid pick (Pick, step 2). Still missing after the correction: run it on Opus and tell the user.
+- **Launch with it.** `"model": "sonnet"` or `"opus"`, the aliases `agent.listModels` lists for `claude`, on every `/work` launch and on any relaunch of that unit. Save it in the unit before the launch.
+- **Check it once per model per batch.** After the first launch of each model in a batch, `terminal.getOutput` (`maxLines: 200`) on that pane: Claude Code's banner names the model and effort (`Sonnet …`, `Opus … with xhigh effort`). A different model, or a start error naming the id, is reported, and that model's other launches wait for the user. Effort stays the user's saved default.
+- **Slots are shared.** Both models draw on the same slots and the same account allowance, so the batch size stays the one ceiling, and placement follows pick order whatever the model.
+- **The user's overrides** apply from the next pick, recorded with the time; units already launched keep theirs. "All on Opus" or "all on Sonnet" replaces the report's model for every unit; Sonnet-only also leaves Opus issues out (below) unless the user says to run them on Sonnet. "At most N on Opus" caps the Opus units working or queued at once. "Opus for #n" or "Sonnet for #n" sets one issue.
+- **Opus issues beyond a cap wait.** They are left out of the batch, never created, so they stay unassigned and come back in a later pick; they never drop to Sonnet. With a cap, ask the pick for no count (the pick prompt's first sentence becomes `Run /next-batch.`, with any filters): it reads every candidate's thread whatever the count, and the rule that a pick may not exceed `<size>` doesn't apply. Then walk the `🟩 all ·` line in order, taking each issue while the refill count has room, and an Opus one only while the cap does too, until the refill count is met. The rest are left out. Expect it to bite: on 2026-10-22, 36 of a ready frontier came out heavy.
+- **Report it.** Each unit's line names its model, and the final report gives the batch's split (`5 Sonnet, 3 Opus`).
+
 ## Preflight, once per run
 
 1. `worktree.list`: the main worktree is the row with `isMain: true`. Run `gh repo view --json nameWithOwner,defaultBranchRef` in its path for the repo and the base branch. Every later `gh` call takes `--repo <owner>/<repo>` and every `git` call `-C <path>`, because your own working directory is not the repository. A failed forge read is unknown, never an empty result.
-2. `slashCommands.list` with `agentId: "claude"` and the main path as `projectPath`: `/next-batch`, `/work` and `/merge-prs` must each be listed once. All three are skills now (`~/.claude/skills/`), and the list includes skills. Otherwise stop before launching anything, and say which; a `/prs:merge` listed instead of `/merge-prs` means that machine still has the old commands.
+2. `slashCommands.list` with `agentId: "claude"` and the main path as `projectPath`: `/next-batch`, `/work` and `/merge-prs` must each be listed once. All three are skills now (`~/.claude/skills/`), and the list includes skills. `agent.listModels` with `agentId: "claude"` must list `sonnet` and `opus`. Otherwise stop before launching anything, and say which; a `/prs:merge` listed instead of `/merge-prs` means that machine still has the old commands.
 3. A checkpoint for this repository that is neither `done` nor `cancelled` is an active run: resume it instead.
 4. **Find the instances.** This machine is one. `host.list` (it dials an idle controlled host first); for each host `connected` with `control: true`, find this repository among its `projects` with `host.call` `project.runCommand` and `git remote get-url origin`, the projects whose name matches the repository's first, stopping at the first URL that names `<owner>/<repo>` (https or ssh, `.git` or not). That host and project are an instance. A project answers only with outcome `ok`, `result.isError: false` and `result.structured.exitCode` 0; a non-zero exit means it isn't this repository. A host with no match, but `projects: null` or a call that didn't answer, is unresolved: it is held as Sync holds an instance. A tier refusal (`TIER_NOT_PERMITTED`) comes only from a host on an older build, where `project.runCommand` answered the **full** tier alone: that host can't be synced, so ask the user to update it or raise the assistant's tier, or to go on without it. Any other host is noted for the user. No `host.list` tool, or no hosts: this machine is the only instance.
 5. If the main checkout isn't clean and on the base, say so now: the merge step waits for it, and Sync holds one with uncommitted changes on the base.
-6. Tell the user in a few lines: batch size, one batch or drain, any filters, which hosts are brought up to date with origin before each batch and which can't be reached, that `/merge-prs` runs whenever finished PRs are waiting and lands every eligible PR, that every worktree the run creates is deleted as soon as its unit finishes (each delete may ask them to confirm), and that a question from any pane parks that pane until they answer it, while the rest of the run goes on.
+6. Tell the user in a few lines: batch size, one batch or drain, any filters, that each `/work` agent runs on the model the pick gives its issue (and any model override or Opus cap), which hosts are brought up to date with origin before each batch and which can't be reached, that `/merge-prs` runs whenever finished PRs are waiting and lands every eligible PR, that every worktree the run creates is deleted as soon as its unit finishes (each delete may ask them to confirm), and that a question from any pane parks that pane until they answer it, while the rest of the run goes on.
 7. Archive a finished checkpoint (`done` or `cancelled`) to `<owner>-<repo>.<its run id>.json`, write the new one, then create the cron.
 
 ## Pacing
@@ -72,17 +84,17 @@ Every read stays in your context for hours, so keep checks lean: one `terminal.g
 
 ## Run state
 
-Checkpoint: `~/.daintree/work-batch/<owner>-<repo>.json`, outside the repository and kept across restarts, written atomically (temp file, then `mv`). Record intent before acting (the branch before a create, the `requestedId` before a launch, `nudged` before a nudge), so a lost reply is reconciled, never replayed. It holds the run (id, repo, base, main worktree id and path, size, drain, filters, the optional parts in use, the user's mid-run decisions with times, `stopAfterRound`, `cancelled`, cron id and creation time, the latest batch number, phase `running`, `stopping` (admitting nothing new, see step 6) or `done`), the instances (host id and name, project id, the SHA each last synced to, why one is held or left out), each batch's target SHA and whether its sync is held, the pick and merge panes (at most one of each), the unit PRs open when the running merge started, each unit (issue, batch, branch, worktree id and path, `requestedId`, terminal id, status, PR, CI state, the PR's outcome: merged, closed, deferred, reverted or left for the user, `lastOutputChangeAt` and when it was counted, quiet checks, `nudged`, a reported question's id, worktree delete outcome), and one line per finished batch and per finished merge. A unit stays until it is tidied and its PR has merged or closed, or a completed merge has deferred or reverted it. Live state outranks it. Panes are named `Batch <k> · next-batch`, `Batch <k> · #<n>` and `Batch <k> · merge`.
+Checkpoint: `~/.daintree/work-batch/<owner>-<repo>.json`, outside the repository and kept across restarts, written atomically (temp file, then `mv`). Record intent before acting (the branch before a create, the `requestedId` before a launch, `nudged` before a nudge), so a lost reply is reconciled, never replayed. It holds the run (id, repo, base, main worktree id and path, size, drain, filters, the optional parts in use, the user's mid-run decisions with times, `stopAfterRound`, `cancelled`, cron id and creation time, the latest batch number, phase `running`, `stopping` (admitting nothing new, see step 6) or `done`), the instances (host id and name, project id, the SHA each last synced to, why one is held or left out), each batch's target SHA and whether its sync is held, the pick and merge panes (at most one of each), the unit PRs open when the running merge started, each unit (issue, batch, model and its trigger, branch, worktree id and path, `requestedId`, terminal id, status, PR, CI state, the PR's outcome: merged, closed, deferred, reverted or left for the user, `lastOutputChangeAt` and when it was counted, quiet checks, `nudged`, a reported question's id, worktree delete outcome), and one line per finished batch and per finished merge. A unit stays until it is tidied and its PR has merged or closed, or a completed merge has deferred or reverted it. Live state outranks it. Panes are named `Batch <k> · next-batch`, `Batch <k> · #<n>` and `Batch <k> · merge`.
 
 Unit statuses: `setting-up`, `queued` (ready, waiting for a slot), `dispatching`, `running`, `done` (finished with a PR), `no-op` (finished, nothing to change), `failed`, `blocked` (waiting on the user), `skipped`. A unit holds a slot from its launch until it is finished: `done` with its PR's checks green, the PR merged or closed, the PR handed to a running merge, or its red CI left for the merge (step 3), or `no-op`, `failed`, or `skipped` and no longer working. A finished unit is tidied at once (step 5).
 
 ## Every launch
 
 ```json tool=agent.launch
-{"agentId":"claude","worktreeId":"<worktree id>","name":"Batch <k> · #13401","prompt":"/work 13401","requestedId":"<fresh id, saved first>","notify":true,"replyLines":12,"focusPolicy":"preserve"}
+{"agentId":"claude","model":"<the unit's model>","worktreeId":"<worktree id>","name":"Batch <k> · #13401","prompt":"/work 13401","requestedId":"<fresh id, saved first>","notify":true,"replyLines":12,"focusPolicy":"preserve"}
 ```
 
-Claude launches go one at a time per machine. A good result has `launched: true` and the requested `worktreeId`. On a lost or ambiguous reply, `terminal.list` with `terminalId` set to the saved `requestedId` (it becomes the pane's `id`) and check its `title`, `agentId` and `worktreeId`; never launch on top of it. `launched: false` with a null `spawnStatus` is an unspecified failure (one cause: the hard open-panel ceiling): close this run's panes that tidy would close anyway and retry once. Still failing: fail that unit; for the pick or the merge pane stop early as in step 6, telling the user either way.
+The pick and merge launches leave out `model`. Claude launches go one at a time per machine. A good result has `launched: true` and the requested `worktreeId`. On a lost or ambiguous reply, `terminal.list` with `terminalId` set to the saved `requestedId` (it becomes the pane's `id`) and check its `title`, `agentId` and `worktreeId`; never launch on top of it. `launched: false` with a null `spawnStatus` is an unspecified failure (one cause: the hard open-panel ceiling): close this run's panes that tidy would close anyway and retry once. Still failing: fail that unit; for the pick or the merge pane stop early as in step 6, telling the user either way.
 
 ## Every check
 
@@ -129,10 +141,10 @@ git fetch --quiet origin "+refs/heads/<base>:refs/remotes/origin/<base>" || exit
 
 `<size>` is the slots free or about to be (see Flow): the batch size for the first pick. With filters, the first sentence becomes `Run /next-batch with a count of <size> and these filters: <filters>.` A pick takes 5 to 20 minutes, and can run while a merge does: it only reads. Its marker is the hand-back line. Nudge text: `Finish the /next-batch report and hand back the BATCH line.`
 
-1. **Read the batch.** It is the report's `🟩 all ·` line. Page a truncated reply with `message.nextCursor`, and earlier replies with `messageIndex` (never together with `cursor`). The `BATCH:` line is a cross-check: if it differs, use the `🟩` line and tell the user.
-2. **Handle an invalid pick.** No `🟩` line, duplicates, or more issues than `<size>` (when a count was given) gets one correction request (`notify`, `handback`). Never trim it yourself. Still invalid: stop early as in step 6.
+1. **Read the batch.** It is the report's `🟩 all ·` line, and each issue's model is on its report line (see Models). Page a truncated reply with `message.nextCursor`, and earlier replies with `messageIndex` (never together with `cursor`). The `BATCH:` line is a cross-check: if it differs, use the `🟩` line and tell the user.
+2. **Handle an invalid pick.** No `🟩 all ·` line, an issue without exactly one model, duplicates, or more issues than `<size>` (when a count was given) gets one correction request (`notify`, `handback`). Never trim it yourself. Still invalid: stop early as in step 6.
 3. **Re-check each issue.** `gh issue view <n> --repo <owner>/<repo> --json state,assignees,title,labels`: drop any that is no longer open, has gained an assignee, or is already a unit of this run (an assignment can fail), and say so.
-4. **Save, then close.** Write the batch and the report's strategy summary to the checkpoint, then close the pick pane.
+4. **Save, then close.** Write the batch, each issue's model and trigger, and the report's strategy summary to the checkpoint, then close the pick pane.
 
 `BATCH: none` means nothing is ready now. With units still unfinished or unit PRs still waiting for a merge, it isn't the end: their merges may unblock more, so the next pick waits (see Flow). With every unit finished and tidied, no merge running and no unit PR waiting for a merge, it ends the run as drained: relay the strategy summary and how many issues the report holds as waiting on a response, since those are what hold the backlog. A non-empty pick emptied by the re-check is not drained: with `drain`, pick again; a second such pick stops early as stuck (step 6).
 
@@ -155,7 +167,7 @@ echo "$prefix/issue-<n>-$slug"
 
 No recipe: it would make each create wait for the user's confirmation, with no notice. `assignToSelf` claims the issue at once so no later pick selects it; an `assignmentError` is only noted (`/work` assigns too). On a lost reply or a collision, look for the branch in `worktree.list`: this run's own create is adopted; any other existing branch fails the unit and is never reused.
 
-Launch only on `setupState: "ready"`. Wait with `worktree.waitUntilReady` (`timeoutMs: 25000`, at most two calls this turn); `timedOut` is the wait running out, not the setup. Not ready yet: stay `setting-up`, re-read with `timeoutMs: 0` on each check. Launch once it is ready and a slot is free; until a slot frees, it is `queued`. `needs-approval` makes it `blocked`; `failed`, `timed-out` or `unknown` fails it; tidy deletes its worktree with the rest. Then launch `/work <n>` per Every launch.
+Launch only on `setupState: "ready"`. Wait with `worktree.waitUntilReady` (`timeoutMs: 25000`, at most two calls this turn); `timedOut` is the wait running out, not the setup. Not ready yet: stay `setting-up`, re-read with `timeoutMs: 0` on each check. Launch once it is ready and a slot is free, on its model; until a slot frees, it is `queued`. `needs-approval` makes it `blocked`; `failed`, `timed-out` or `unknown` fails it; tidy deletes its worktree with the rest. Then launch `/work <n>` per Every launch, and check the banner on each model's first launch of the batch (Models).
 
 ## 3. Watch
 
@@ -185,7 +197,7 @@ Runs for each unit as soon as it is finished (see step 3), whatever its status: 
 
 ## 6. Report
 
-Report as things happen, in a line or two: a unit finished (its PR, CI and a sentence on what it did, plus anything it flagged for the user), a batch started (issues and where they run), a merge started or finished (what landed). Every few hours, or when asked, a fuller status: units working, PRs open and landed, what is blocked or pending, issues left. A check that changes nothing ends with one short line.
+Report as things happen, in a line or two: a unit finished (its model, PR, CI and a sentence on what it did, plus anything it flagged for the user), a batch started (issues, their models and where they run), a merge started or finished (what landed). Every few hours, or when asked, a fuller status: units working, PRs open and landed, what is blocked or pending, issues left. A check that changes nothing ends with one short line.
 
 The run ends normally only when a pick returns `BATCH: none` with every unit finished and tidied, no merge running and no unit PR waiting for a merge (without `drain`: when its one pick's units have finished and been tidied, no merge is running and none of their PRs is waiting for a merge, which holds at once when they opened none). It stops early, reported as stuck rather than drained, when:
 
@@ -214,7 +226,7 @@ Every check, and every finish, ends here. Keep the slots full and the merges flo
 - "stop now": set `cancelled`, delete the cron, launch and send nothing more, and leave running agents alone. Report what is still running.
 - "go on without <host>": leave that host out of the run's syncs from now on, and say so in each report.
 - "skip #n": takes it out of the run's required outcomes. A unit still working keeps its slot until it stops; interrupt it (`terminal.interruptOwned`) only if the user says so.
-- A new batch size, split or model: record it with the time and apply it from the next pick; agents already running keep theirs. Read any optional part it brings in.
+- A new batch size, split, model override or Opus cap: record it with the time and apply it from the next pick (Models); agents already running keep theirs. Read any optional part it brings in.
 - "drain" or "continue": set drain, clear `stopAfterRound`, and go back to phase `running` from `stopping`. After a `done` or `cancelled` run this starts a new run with a new id, from Preflight.
 
 ## Resume
@@ -227,7 +239,7 @@ With no checkpoint, never infer size, drain or filters. Report the `Batch` panes
 
 ## Final report
 
-- Batches run, and each issue with its PR and final state.
+- Batches run, and each issue with its model, PR and final state, plus the run's Sonnet/Opus split.
 - Hosts left out of a sync or still held, with why.
 - Failed, blocked, reverted and unlanded units, with their branch, PR and why they didn't land.
 - Issues this run assigned that have no landed PR. An assigned issue never reaches a later `/next-batch`, so the user may want to unassign them.
