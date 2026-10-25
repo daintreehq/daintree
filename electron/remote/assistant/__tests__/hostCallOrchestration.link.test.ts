@@ -1052,6 +1052,15 @@ describe("host.call to a host's throwaway agents, with no window open there (#14
     expect(resent.run.runId).toBe(throwaways.effects[0]!.runId);
   });
 
+  it("releases a launch whose answer was lost when its session ends (#14447)", async () => {
+    loseNextAnswer.value = true;
+    const lost = await settled(throwaway("throwaway.launch", { agentId: "claude" }));
+    expect(lost).toMatchObject({ outcome: "ambiguous", result: null });
+    expect(throwaways.live).toBe(1);
+    shell.runtime.endHelpSession("help-a");
+    await vi.waitFor(() => expect(throwaways.live).toBe(0));
+  });
+
   it("answers another help session's call on a run as not found", async () => {
     runs.set("help-b", { ...RUN_A, sessionId: "help-b", slot: 1 });
     const { run } = await ran(throwaway("throwaway.launch", { agentId: "claude" }));

@@ -11,7 +11,10 @@ import { readTailSnapshot, tailCapturedOutput } from "../../../shared/utils/arti
 import { fitTerminalOutputResult } from "../../../shared/utils/terminalOutputBudget.js";
 import { registerRemoteService } from "../../remote/runtime.js";
 import { createLogger } from "../../utils/logger.js";
-import type { HostThrowawayExecutor } from "../../remote/assistant/throwawayRelay.js";
+import type {
+  HostThrowawayExecutor,
+  HostThrowawayOwner,
+} from "../../remote/assistant/throwawayRelay.js";
 import { HostThrowawayRuns, type HostThrowawayRunsDeps } from "./HostThrowawayRuns.js";
 
 export {
@@ -68,7 +71,7 @@ export function liveHostThrowawayDeps(): HostThrowawayRunsDeps {
       const availability = service.getAvailability() ?? (await service.checkAvailability());
       return isAgentLaunchable(availability?.[agentId as keyof typeof availability] ?? undefined);
     },
-    spawn: async ({ terminalId, agentId }) => {
+    spawn: async ({ terminalId, agentId, cancelled }) => {
       const folder = hostThrowawayFolder();
       await mkdir(folder, { recursive: true });
       const [{ spawnAndConfirm }, { spawnHostAssistantLive }, client] = await Promise.all([
@@ -76,6 +79,8 @@ export function liveHostThrowawayDeps(): HostThrowawayRunsDeps {
         import("../viewless/index.js"),
         pty(),
       ]);
+      // Its time limit or owner may have ended it while this prepared.
+      if (cancelled()) return false;
       // Launched as the global assistant is, with no view, under an id that is
       // no project, so no project's settings, presets or MCP servers reach it.
       return spawnAndConfirm(
@@ -159,14 +164,33 @@ export function peekHostThrowawayRuns(): HostThrowawayRuns | null {
  */
 export function registerHostThrowawayRuns(): () => void {
   let offered = true;
+  // Calls waiting for the runs to load, so an owner that goes meanwhile launches nothing.
+  const loading = new Set<{ owner: HostThrowawayOwner; ended: boolean }>();
   const executor: HostThrowawayExecutor = {
     run: async (owner, call, options) => {
-      const runs = await getHostThrowawayRuns();
+      const waiting = { owner, ended: false };
+      loading.add(waiting);
+      const runs = await getHostThrowawayRuns().finally(() => loading.delete(waiting));
       if (!offered) return { status: "refused", reason: "throwaway-off" };
+      if (waiting.ended) {
+        return {
+          status: "failed",
+          reason: call.tool === "throwaway.launch" ? "launch-failed" : "not-found",
+        };
+      }
       return runs.run(owner, call, options);
     },
-    // Nothing to close before any call made the runs.
-    endOwner: (owner, reason) => instance?.endOwner(owner, reason),
+    endOwner: (owner, reason) => {
+      for (const waiting of loading) {
+        if (
+          waiting.owner.senderId === owner.senderId &&
+          (owner.helpSessionId === undefined || waiting.owner.helpSessionId === owner.helpSessionId)
+        ) {
+          waiting.ended = true;
+        }
+      }
+      instance?.endOwner(owner, reason);
+    },
   };
   const unregister = registerRemoteService("hostThrowawayRuns", executor);
   return () => {

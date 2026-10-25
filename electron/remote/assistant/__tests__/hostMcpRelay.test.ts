@@ -948,7 +948,7 @@ describe("throwaway calls on a host that runs them (#14446)", () => {
   });
 
   it("refuses them while the person refuses remote control, before the executor is read", async () => {
-    const throwawayRuns = vi.fn(() => ({ run: vi.fn() }));
+    const throwawayRuns = vi.fn(() => ({ run: vi.fn(), endOwner: vi.fn() }));
     const { links, relay } = harness([["link-1", "sender-a"]], {
       acceptsRemoteControl: () => false,
       throwawayRuns,
@@ -1031,6 +1031,37 @@ describe("throwaway runs of an owner that is gone (#14447)", () => {
     relay.dispose();
   });
 
+  it("counts a last link that never made a throwaway call", async () => {
+    vi.useFakeTimers();
+    const { links, endOwner, relay, detach } = withRuns([
+      ["link-1", "sender-a"],
+      ["link-2", "sender-a"],
+    ]);
+    await links[0]!.ask(AssistantLinkMethod.THROWAWAY_CALL, LAUNCH);
+    detach("link-1");
+    detach("link-2");
+    await vi.advanceTimersByTimeAsync(THROWAWAY_SHELL_GONE_GRACE_MS);
+    expect(endOwner).toHaveBeenCalledWith({ senderId: "sender-a" }, "shell-gone");
+    relay.dispose();
+  });
+
+  it("gives each last link gone the whole grace, however recently another went", async () => {
+    vi.useFakeTimers();
+    const { links, endOwner, relay, detach, attach } = withRuns([["link-1", "sender-a"]]);
+    await links[0]!.ask(AssistantLinkMethod.THROWAWAY_CALL, LAUNCH);
+    detach("link-1");
+    await vi.advanceTimersByTimeAsync(10_000);
+    // Back without a throwaway call, then gone again.
+    attach("link-2", "sender-a");
+    await vi.advanceTimersByTimeAsync(10_000);
+    detach("link-2");
+    await vi.advanceTimersByTimeAsync(THROWAWAY_SHELL_GONE_GRACE_MS - 1);
+    expect(endOwner).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(endOwner).toHaveBeenCalledTimes(1);
+    relay.dispose();
+  });
+
   it("closes them at once when the Shell's last link expires, even after its sender was forgotten", async () => {
     const { links, endOwner, relay, expire } = withRuns([
       ["link-1", "sender-a"],
@@ -1038,7 +1069,7 @@ describe("throwaway runs of an owner that is gone (#14447)", () => {
     ]);
     await links[0]!.ask(AssistantLinkMethod.THROWAWAY_CALL, LAUNCH);
     expire("link-2");
-    expect(endOwner).not.toHaveBeenCalled();
+    expect(endOwner).not.toHaveBeenCalledWith({ senderId: "sender-a" }, "shell-gone");
     expire("link-1");
     expect(endOwner).toHaveBeenCalledWith({ senderId: "sender-a" }, "shell-gone");
     relay.dispose();

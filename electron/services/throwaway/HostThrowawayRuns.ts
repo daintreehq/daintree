@@ -45,8 +45,12 @@ export interface HostThrowawayRunsDeps {
   logClosed(entry: HostThrowawayClosedEntry): void;
   /** Whether the host can launch this agent now. */
   isLaunchable(agentId: string): Promise<boolean>;
-  /** Starts the agent in the host's throwaway folder under this terminal id; false when it didn't start. */
-  spawn(spec: { terminalId: string; agentId: string }): Promise<boolean>;
+  /**
+   * Starts the agent in the host's throwaway folder under this terminal id;
+   * false when it didn't start. `cancelled` turns true once the run is gone,
+   * so a spawn still preparing starts nothing.
+   */
+  spawn(spec: { terminalId: string; agentId: string; cancelled(): boolean }): Promise<boolean>;
   readScreen(terminalId: string, maxLines: number): Promise<HostThrowawayScreen | null>;
   submit(terminalId: string, command: string): Promise<void>;
   write(terminalId: string, data: string): Promise<void>;
@@ -298,7 +302,11 @@ export class HostThrowawayRuns implements HostThrowawayExecutor {
     this.byTerminal.set(run.terminalId, run.runId);
     run.cancelExpiry = this.deps.schedule(timeLimitMs, () => this.closeUnasked(run, "expiry"));
     const started = await this.deps
-      .spawn({ terminalId: run.terminalId, agentId })
+      .spawn({
+        terminalId: run.terminalId,
+        agentId,
+        cancelled: () => epoch !== this.epoch || !this.holds(run),
+      })
       .catch(() => false);
     if (!started || epoch !== this.epoch || !this.holds(run)) {
       // A spawn that answered late may still have left a process behind.

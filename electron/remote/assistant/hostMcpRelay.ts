@@ -89,17 +89,18 @@ export function installHostMcpRelay(
   });
   const wired = new WeakSet<LinkSession>();
   let disposed = false;
-  // The sender each link made throwaway calls for, held here since the
-  // sender bindings forget a link as it expires, before this hears of it.
-  const throwawayLinks = new Map<string, string>();
+  // Each link by its session id, so the sender it proved can still be read
+  // once it has left the server's sessions, whether or not it made a throwaway call.
+  const linkSessions = new Map<string, LinkSession>();
   const shellGoneTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
+  const senderOfLink = (linkSessionId: string): string | undefined => {
+    const session = linkSessions.get(linkSessionId);
+    return session === undefined ? undefined : deps.senders()?.senderOf(session);
+  };
   const senderLinked = (senderId: string): boolean =>
     server.sessions.some(
-      (ctx) =>
-        ctx.session.isOpen &&
-        (deps.senders()?.senderOf(ctx.session) === senderId ||
-          throwawayLinks.get(ctx.sessionId) === senderId)
+      (ctx) => ctx.session.isOpen && deps.senders()?.senderOf(ctx.session) === senderId
     );
   const cancelShellGone = (senderId: string): void => {
     clearTimeout(shellGoneTimers.get(senderId));
@@ -120,6 +121,7 @@ export function installHostMcpRelay(
   };
 
   const wire = ({ session, sessionId, client }: MetricsSessionContext): void => {
+    linkSessions.set(sessionId, session);
     if (wired.has(session)) return;
     wired.add(session);
     session.registerCallHandler(
@@ -158,7 +160,6 @@ export function installHostMcpRelay(
         const senderId = deps.senders()?.senderOf(session);
         if (!senderId) throw noSender();
         notices.flushSender(senderId);
-        throwawayLinks.set(sessionId, senderId);
         cancelShellGone(senderId);
         return throwaway.call(senderId, payload);
       }
@@ -197,19 +198,20 @@ export function installHostMcpRelay(
   // which the Shell's next session proves again (#13930).
   const offDetached =
     server.onSessionDetached?.(({ sessionId }) => {
-      const senderId = throwawayLinks.get(sessionId);
-      if (senderId === undefined || senderLinked(senderId) || shellGoneTimers.has(senderId)) {
-        return;
-      }
+      if (disposed) return;
+      const senderId = senderOfLink(sessionId);
+      if (senderId === undefined || senderLinked(senderId)) return;
+      // Each last link gone gets the whole grace, however recently another went.
+      cancelShellGone(senderId);
       const timer = setTimeout(() => endShellGone(senderId), THROWAWAY_SHELL_GONE_GRACE_MS);
       timer.unref?.();
       shellGoneTimers.set(senderId, timer);
     }) ?? (() => {});
   const offExpired = server.onSessionExpired(({ sessionId }) => {
     runner.expireLink(sessionId);
-    const senderId = throwawayLinks.get(sessionId);
-    throwawayLinks.delete(sessionId);
-    if (senderId !== undefined) endShellGone(senderId);
+    const senderId = senderOfLink(sessionId);
+    linkSessions.delete(sessionId);
+    if (senderId !== undefined && !disposed) endShellGone(senderId);
   });
 
   return {
@@ -220,7 +222,7 @@ export function installHostMcpRelay(
       offExpired();
       for (const timer of shellGoneTimers.values()) clearTimeout(timer);
       shellGoneTimers.clear();
-      throwawayLinks.clear();
+      linkSessions.clear();
       notices.dispose();
       runner.dispose();
       throwaway.dispose();
