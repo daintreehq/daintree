@@ -16,6 +16,8 @@ import {
   type HostListResult,
   type HostSettingsArgs,
   type HostSettingsResult,
+  type HostWatchArgs,
+  type HostWatchResult,
 } from "../../../shared/types/hostControl.js";
 import {
   HOST_THROWAWAY_TOOL_SIGNATURES,
@@ -24,6 +26,7 @@ import {
   type HostThrowawayRefusal,
 } from "../../../shared/types/hostThrowaway.js";
 import { HostSettingsRequests, type HostSettingsRequestDeps } from "./HostSettingsRequests.js";
+import { HostWatches, type HostWatchListener } from "./HostWatches.js";
 import {
   AGENT_DIRECTORY_BYTES_MAX,
   AGENT_DIRECTORY_ENTRIES_MAX,
@@ -193,6 +196,12 @@ export interface HostCallRuntimeDeps {
    * window. Null when it couldn't be asked; absent, no change is ever applied.
    */
   askSettingsApproval?: HostSettingsRequestDeps["askApproval"];
+  /**
+   * Hears hosts' links, the host list and summaries as they already arrive,
+   * for `host.watch` (#14463); subscribed only while a watch is armed. It
+   * never dials, holds or wakes a host. Absent, no watch is armed.
+   */
+  observeHosts?(listener: HostWatchListener): () => void;
   now?: () => number;
   newId?: () => string;
 }
@@ -826,6 +835,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
   private readonly throwawayHosts = new Map<string, Set<HostId>>();
   private disposed = false;
   private readonly settingsRequests: HostSettingsRequests;
+  private readonly hostWatches: HostWatches;
   /** Each host's last directory read, by project filter, oldest first. */
   private readonly lastAgents = new Map<string, AgentDirectory>();
   /** Bumped each time a host's directories are forgotten, so a read begun before isn't kept. */
@@ -839,6 +849,15 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       hostName: (hostId) => deps.hosts().find((host) => host.hostId === hostId)?.name ?? null,
       controlOn: (hostId) => this.controlOn(hostId),
       ...(deps.askSettingsApproval ? { askApproval: deps.askSettingsApproval } : {}),
+      now: () => this.now(),
+      newId: () => this.newId(),
+    });
+    this.hostWatches = new HostWatches({
+      hosts: () => deps.hosts(),
+      controlOn: (hostId) => this.controlOn(hostId),
+      stillRunning: (run) => this.stillRunning(run),
+      ...(deps.observeHosts ? { observe: deps.observeHosts } : {}),
+      ...(deps.queueNotice ? { queueNotice: deps.queueNotice } : {}),
       now: () => this.now(),
       newId: () => this.newId(),
     });
@@ -1238,6 +1257,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
    * limits pass.
    */
   endHelpSession(helpSessionId: string): void {
+    this.hostWatches.endSession(helpSessionId);
     const hosts = this.throwawayHosts.get(helpSessionId);
     this.throwawayHosts.delete(helpSessionId);
     const client = this.deps.client();
@@ -1249,9 +1269,18 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     }
   }
 
+  /**
+   * A help session relaunched onto a new PTY: the same assistant, which keeps
+   * what it made, but its earlier run's watches don't pass to the new one.
+   */
+  retireWatches(helpSessionId: string): void {
+    this.hostWatches.endSession(helpSessionId);
+  }
+
   /** Forgets every call and notice; calls on hosts are left as they are. */
   dispose(): void {
     this.disposed = true;
+    this.hostWatches.dispose();
     this.throwawayHosts.clear();
     this.callsOut.clear();
     this.callsInFlight.clear();
@@ -1662,6 +1691,11 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     return this.settle(helpSessionId, (caller) =>
       this.settingsRequests.run(helpSessionId, () => this.stillRunning(caller), args)
     );
+  }
+
+  /** Arms, cancels or lists the calling run's own host watches (#14463). */
+  watch(helpSessionId: string, args: HostWatchArgs): Promise<HostControlOutcome<HostWatchResult>> {
+    return this.settle(helpSessionId, async (caller) => this.hostWatches.run(caller, args));
   }
 
   list(

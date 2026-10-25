@@ -160,6 +160,9 @@ export const CORE_TIER_TOOLS = [
   "host.ensureProject",
   // A host's own named settings, each change approved by the person here (#14167).
   "host.settings",
+  // One notice when a host's link or capacity is first seen meeting a
+  // condition (#14463): passive, and it acts on nothing when it fires.
+  "host.watch",
   // Logs meant for someone else go through the review the user trims and saves
   // themselves, not an archive the assistant builds from the raw log folder
   // (#12882). Reserved to the assistant below; off the external list.
@@ -307,6 +310,7 @@ export const RENDERER_OWNED_ORIGIN_ONLY_TOOLS = [
   "host.call",
   "host.ensureProject",
   "host.settings",
+  "host.watch",
   // A shell command is the assistant's to run, never a worker pane's (#13495).
   "project.runCommand",
 ] as const satisfies readonly BuiltInActionId[];

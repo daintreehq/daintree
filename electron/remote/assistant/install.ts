@@ -15,7 +15,12 @@ import { getProjectForWebContents } from "../../window/webContentsRegistry.js";
 import type { LinkSession } from "../link/session.js";
 import { getLocalSummaryLoop } from "../metrics/localLoop.js";
 import { getRemoteService, registerRemoteService } from "../runtime.js";
-import { HostCallRuntime, type ObservedHost, type OpenRun } from "./HostCallRuntime.js";
+import {
+  HostCallRuntime,
+  type HostCallRuntimeDeps,
+  type ObservedHost,
+  type OpenRun,
+} from "./HostCallRuntime.js";
 import { HostControlLinkClient } from "./HostControlLinkClient.js";
 import { createLocalMcpRelay, LOCAL_RELAY_SENDER_ID } from "./localMcpRelay.js";
 import { forgetRetiredSends, readRetiredSends } from "./retiredSends.js";
@@ -107,6 +112,11 @@ export interface HostControlInstallDeps {
   connect?(hostId: HostId, timeoutMs: number): Promise<unknown>;
   /** The person's "assistant control" switch for a host: whether its assistant reaches it (#13493). */
   isHostControlEnabled(hostId: HostId): boolean;
+  /**
+   * Hears what hosts already report, for `host.watch` (#14463): links, the
+   * host list and summaries. Held only while a watch is armed.
+   */
+  observeHosts?: HostCallRuntimeDeps["observeHosts"];
 }
 
 /**
@@ -190,6 +200,7 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
       return handle !== null && !isRemoteEndpointHandle(handle);
     },
     controlEnabled: (hostId) => deps.isHostControlEnabled(hostId),
+    ...(deps.observeHosts ? { observeHosts: deps.observeHosts } : {}),
     // A host's question about a call it would run itself goes to the person in
     // the window of the assistant that made the call (#13501), never the
     // focused one: an assistant a remote Shell's view runs here has none.
@@ -242,6 +253,8 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
   // A help session that won't run again holds nothing it made in another
   // project; one relaunched onto a new PTY is the same assistant and keeps it.
   const offSessionEnded = helpSessionService.addSessionEndedListener(({ sessionId, reason }) => {
+    // Its watches were the earlier run's, whichever way it ended (#14463).
+    runtime.retireWatches(sessionId);
     if (reason === "relaunched") return;
     local.endHelpSession(sessionId);
     runtime.endHelpSession(sessionId);

@@ -212,6 +212,8 @@ export class HostMetricsClient {
   /** Hosts dialled for their notifications, so turning them on dials once, not on every change. */
   private readonly dialledForNotifications = new Set<HostId>();
   private readonly disposers: Array<() => void> = [];
+  /** Told of every recorded summary; empty unless something in main asked (#14463). */
+  private readonly summaryListeners = new Set<(hostId: HostId) => void>();
   private stopLocal: (() => void) | null = null;
   private stopLocalWorktrees: (() => void) | null = null;
   private localWorktrees: WorktreeChangeWatch | null = null;
@@ -235,6 +237,15 @@ export class HostMetricsClient {
     this.stopLocal = null;
     this.stopLocalWorktrees?.();
     this.stopLocalWorktrees = null;
+    this.summaryListeners.clear();
+  }
+
+  /** Hears each summary as it is recorded; it never asks a host for one. */
+  onSummary(listener: (hostId: HostId) => void): () => void {
+    this.summaryListeners.add(listener);
+    return () => {
+      this.summaryListeners.delete(listener);
+    };
   }
 
   getSnapshots(): HostMetricsSnapshot[] {
@@ -423,6 +434,13 @@ export class HostMetricsClient {
     ring.unshift(stamped);
     if (ring.length > this.ringSize) ring.length = this.ringSize;
     this.options.emit({ type: "summary", summary: stamped });
+    for (const listener of [...this.summaryListeners]) {
+      try {
+        listener(hostId);
+      } catch (error) {
+        logger.warn("A summary listener threw", { error });
+      }
+    }
   }
 
   private hostIdOf(payload: unknown): HostId {

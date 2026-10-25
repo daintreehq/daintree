@@ -24,6 +24,8 @@ const WITHHELD_FROM_HOSTS: Record<string, string> = {
     "brings this machine's own project for its own assistants, never one a Shell's window runs on a host",
   "host.settings":
     "changes hosts' settings for this machine's own assistants, never one a Shell's window runs on a host",
+  "host.watch":
+    "watches hosts for this machine's own assistants, never one a Shell's window runs on a host",
 };
 
 const DEFAULT_SURFACE = [
