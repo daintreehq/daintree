@@ -158,7 +158,7 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
     category: "help",
     danger: "safe",
     description:
-      "List the hosts this assistant reaches, this machine first as local, as observed: connection, load sample, agent counts and each connected host's projects, which calls name. Null means unmeasured.",
+      "List the hosts this assistant reaches, this machine first as local, as observed: link flags, build, installed CLIs, load sample, agent counts and each connected host's projects, which calls name. Null means unmeasured.",
     enabled: true,
     id: "host.list",
     inputSchema: {
@@ -206,6 +206,158 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
               connection: {
                 type: "string",
                 enum: ["connected", "connecting", "disconnected"],
+              },
+              link: {
+                type: "object",
+                properties: {
+                  status: {
+                    type: "string",
+                    enum: [
+                      "local",
+                      "disconnected",
+                      "connecting",
+                      "connected",
+                      "unreachable",
+                      "version-mismatch",
+                      "driven-elsewhere",
+                    ],
+                  },
+                  attempt: {
+                    type: ["number", "null"],
+                  },
+                  restarting: {
+                    type: "boolean",
+                    description: "It said it was shutting down; still retried.",
+                  },
+                  hostModeOff: {
+                    type: "boolean",
+                    description: "ssh got in; no Daintree in Host mode there.",
+                  },
+                  stoppedRetrying: {
+                    description: "Waits for a Connect: login refused, Host mode off or unusable.",
+                    type: ["boolean", "null"],
+                  },
+                  disconnectedByPerson: {
+                    type: "boolean",
+                  },
+                  quietSince: {
+                    description: "Connected; silent since.",
+                    type: ["number", "null"],
+                  },
+                  mismatch: {
+                    anyOf: [
+                      {
+                        type: "object",
+                        properties: {
+                          kind: {
+                            type: "string",
+                            enum: ["protocol", "version", "commit"],
+                          },
+                          local: {
+                            type: "string",
+                          },
+                          remote: {
+                            type: "string",
+                          },
+                        },
+                        required: ["kind", "local", "remote"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "null",
+                      },
+                    ],
+                    description: "Builds differ; blocking only under version-mismatch.",
+                  },
+                },
+                required: [
+                  "status",
+                  "attempt",
+                  "restarting",
+                  "hostModeOff",
+                  "stoppedRetrying",
+                  "disconnectedByPerson",
+                  "quietSince",
+                  "mismatch",
+                ],
+                additionalProperties: false,
+              },
+              build: {
+                type: "object",
+                properties: {
+                  source: {
+                    type: "string",
+                    enum: ["connected", "rejected", "last-seen", "unknown"],
+                  },
+                  handshake: {
+                    anyOf: [
+                      {
+                        type: "object",
+                        properties: {
+                          version: {
+                            type: "string",
+                          },
+                          commit: {
+                            type: "string",
+                          },
+                          protocolVersion: {
+                            type: "number",
+                          },
+                          platform: {
+                            type: "string",
+                            enum: ["darwin", "linux"],
+                          },
+                          arch: {
+                            type: "string",
+                            enum: ["x64", "arm64"],
+                          },
+                        },
+                        required: ["version", "commit", "protocolVersion", "platform", "arch"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "null",
+                      },
+                    ],
+                  },
+                },
+                required: ["source", "handshake"],
+                additionalProperties: false,
+              },
+              agentClis: {
+                type: "object",
+                properties: {
+                  coverage: {
+                    type: "string",
+                    enum: ["observed", "stale", "unknown"],
+                  },
+                  sampledAt: {
+                    type: ["number", "null"],
+                  },
+                  installed: {
+                    maxItems: 32,
+                    type: "array",
+                    items: {
+                      type: "object",
+                      properties: {
+                        agentId: {
+                          type: "string",
+                        },
+                        version: {
+                          type: ["string", "null"],
+                        },
+                      },
+                      required: ["agentId", "version"],
+                      additionalProperties: false,
+                    },
+                  },
+                  omitted: {
+                    type: "number",
+                  },
+                },
+                required: ["coverage", "sampledAt", "installed", "omitted"],
+                additionalProperties: false,
+                description: "Installed only: sign-in and quota unknown. Absence unproven.",
               },
               rttMs: {
                 type: ["number", "null"],
@@ -684,6 +836,9 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
               "hostId",
               "name",
               "connection",
+              "link",
+              "build",
+              "agentClis",
               "rttMs",
               "lastSeenAt",
               "load",
