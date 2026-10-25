@@ -226,8 +226,6 @@ const PROJECTS_READ_MS = 5_000;
 const LIST_CONNECT_MS = 8_000;
 /** Hosts' directories kept by host and project filter, for a read that fails (#14455). */
 const LAST_AGENTS_MAX = 64;
-/** Room each directory keeps for its `omitted` count growing as it is cut. */
-const OMITTED_DIGITS_SLACK = 8;
 
 /** What the person at this Shell is asked about one of its relayed calls. */
 export interface RelayApprovalQuestion {
@@ -666,7 +664,7 @@ function fitToResponse(hosts: HostListEntry[]): HostListEntry[] {
   const encoder = new TextEncoder();
   const bytes = (value: unknown): number => encoder.encode(JSON.stringify(value)).length;
   const envelopes = hosts.map((host) => (host.agents ? bytes({ ...host.agents, entries: [] }) : 0));
-  // As fitAgentDirectory counts them: each entry with its separator.
+  // Each entry with a separator: a byte more than the entries take, never less.
   const needs = hosts.map((host) =>
     (host.agents?.entries ?? []).reduce((sum, entry) => sum + bytes(entry) + 1, 0)
   );
@@ -674,8 +672,7 @@ function fitToResponse(hosts: HostListEntry[]): HostListEntry[] {
     host.agents ? { ...host, agents: { ...host.agents, entries: [] } } : host
   );
   const fitting = hosts.flatMap((host, index) => (host.agents ? [index] : []));
-  let spare =
-    AGENT_DIRECTORY_BYTES_MAX - bytes({ hosts: empty }) - fitting.length * OMITTED_DIGITS_SLACK;
+  let spare = AGENT_DIRECTORY_BYTES_MAX - bytes({ hosts: empty });
   if (fitting.reduce((sum, index) => sum + needs[index]!, 0) <= spare) return hosts;
   const given = new Map<number, number>();
   const byNeed = [...fitting].sort((a, b) => needs[a]! - needs[b]!);
@@ -768,6 +765,8 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
   private readonly settingsRequests: HostSettingsRequests;
   /** Each host's last directory read, by project filter, oldest first. */
   private readonly lastAgents = new Map<string, AgentDirectory>();
+  /** Bumped each time a host's directories are forgotten, so a read begun before isn't kept. */
+  private readonly agentsEpochs = new Map<HostId, number>();
 
   constructor(private readonly deps: HostCallRuntimeDeps) {
     this.now = deps.now ?? Date.now;
@@ -1198,6 +1197,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     this.seenNotices.clear();
     this.prompted.clear();
     this.lastAgents.clear();
+    this.agentsEpochs.clear();
     this.settingsRequests.dispose();
   }
 
@@ -1614,7 +1614,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       const sampled = new Map<HostListEntry, HostMetricsSummary>();
       const here = local ? this.localEntry(local, caller, agentsOf, sampled) : null;
       const observed = this.deps.hosts();
-      if (agentsOf) this.forgetRemovedHosts(observed);
+      this.forgetUnreadableHosts(observed);
       const hosts = await Promise.all(
         observed.map(async (seen): Promise<HostListEntry> => {
           const host = await this.dialed(seen);
@@ -1746,6 +1746,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     const read = client?.agents;
     if (!client || !read || host.connection.status !== "connected") return this.lastAgentsOf(key);
     const payload = options.projectId === undefined ? {} : { projectId: options.projectId };
+    const epoch = this.agentsEpochs.get(host.hostId) ?? 0;
     const answer = await withinMs(
       Promise.resolve()
         .then(() => read.call(client, host.hostId, payload, PROJECTS_READ_MS))
@@ -1753,15 +1754,18 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       PROJECTS_READ_MS,
       null
     );
-    if (answer === null) return this.lastAgentsOf(key);
-    if (answer === "unsupported" || answer.status === "refused") {
-      this.forgetAgents(host.hostId);
-      return unreadAgentDirectory(answer === "unsupported" ? "unsupported" : "unreachable");
-    }
-    // Control may have gone off while it was read: what came back isn't shown or kept.
+    // Control may have gone off while it was read: nothing read now or before is shown or kept.
     if (this.deps.controlEnabled?.(host.hostId) !== true) {
       this.forgetAgents(host.hostId);
       return unreadAgentDirectory("unreachable");
+    }
+    // Forgotten while it was read, as by control going off and on again: it isn't kept.
+    const current = (this.agentsEpochs.get(host.hostId) ?? 0) === epoch;
+    if (answer === null)
+      return current ? this.lastAgentsOf(key) : unreadAgentDirectory("unreachable");
+    if (answer === "unsupported" || answer.status === "refused") {
+      this.forgetAgents(host.hostId);
+      return unreadAgentDirectory(answer === "unsupported" ? "unsupported" : "unreachable");
     }
     const directory = agentDirectoryAs(
       host.hostId,
@@ -1772,7 +1776,10 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       return directory;
     }
     // The host couldn't read itself and knew nothing: what was seen here before still holds.
-    if (directory.coverage === "unreachable") return this.lastAgentsOf(key);
+    if (directory.coverage === "unreachable") {
+      return current ? this.lastAgentsOf(key) : directory;
+    }
+    if (!current) return directory;
     this.lastAgents.delete(key);
     this.lastAgents.set(key, directory);
     if (this.lastAgents.size > LAST_AGENTS_MAX) {
@@ -1789,17 +1796,28 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
   }
 
   private forgetAgents(hostId: HostId): void {
+    this.agentsEpochs.set(hostId, (this.agentsEpochs.get(hostId) ?? 0) + 1);
     const prefix = agentsKey(hostId, undefined);
     for (const key of [...this.lastAgents.keys()]) {
       if (key.startsWith(prefix)) this.lastAgents.delete(key);
     }
   }
 
-  /** A host the person removed takes what was read of it along. */
-  private forgetRemovedHosts(observed: readonly ObservedHost[]): void {
-    const known = new Set(observed.map((host) => agentsKey(host.hostId, undefined)));
+  /**
+   * A host the person removed, or whose control is off here, takes what was
+   * read of it along, on any listing: turning control back on reads it afresh.
+   */
+  private forgetUnreadableHosts(observed: readonly ObservedHost[]): void {
+    const readable = new Set(
+      observed
+        .filter((host) => this.deps.controlEnabled?.(host.hostId) === true)
+        .map((host) => agentsKey(host.hostId, undefined))
+    );
+    for (const host of observed) {
+      if (!readable.has(agentsKey(host.hostId, undefined))) this.forgetAgents(host.hostId);
+    }
     for (const key of [...this.lastAgents.keys()]) {
-      if (!known.has(key.slice(0, key.indexOf("\u0000") + 1))) this.lastAgents.delete(key);
+      if (!readable.has(key.slice(0, key.indexOf("\u0000") + 1))) this.lastAgents.delete(key);
     }
   }
 

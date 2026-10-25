@@ -105,8 +105,7 @@ function setup(
   const runtime = new HostCallRuntime({
     getSessionLane: () => ({ projectId: "proj-1", slot: 0 }),
     callerRun: () => RUN_A,
-    client: () =>
-      options.client === false ? null : { relayCall, throwawayCall: vi.fn(), agents },
+    client: () => (options.client === false ? null : { relayCall, throwawayCall: vi.fn(), agents }),
     hosts: () => hosts,
     controlEnabled: options.control ?? (() => true),
     listHostProjects: async () => [],
@@ -140,7 +139,12 @@ describe("HostCallRuntime listing hosts' agents (#14455)", () => {
     expect(studio?.agents).toMatchObject({ coverage: "ok", observedAt: 42, complete: true });
     const entries = studio?.agents?.entries ?? [];
     expect(entries.map((entry) => (entry.state === "live" ? entry.subject : entry))).toEqual([
-      { hostId: "studio", scope: { kind: "project", projectId: "p" }, terminalId: "t-1", incarnation: 4 },
+      {
+        hostId: "studio",
+        scope: { kind: "project", projectId: "p" },
+        terminalId: "t-1",
+        incarnation: 4,
+      },
       {
         hostId: "studio",
         scope: { kind: "project", projectId: "p" },
@@ -251,9 +255,9 @@ describe("HostCallRuntime listing hosts' agents (#14455)", () => {
     agents.mockRejectedValueOnce(new Error("lost"));
     const [failed] = await list();
     expect(failed?.agents).toMatchObject({ coverage: "stale", observedAt: 40, complete: false });
-    expect(failed?.agents?.entries.map((entry) => entry.state === "live" && entry.subject)).toEqual([
-      expect.objectContaining({ hostId: "studio", terminalId: "t-all" }),
-    ]);
+    expect(failed?.agents?.entries.map((entry) => entry.state === "live" && entry.subject)).toEqual(
+      [expect.objectContaining({ hostId: "studio", terminalId: "t-all" })]
+    );
 
     setHosts([host("studio", "disconnected")]);
     const calls = agents.mock.calls.length;
@@ -271,17 +275,26 @@ describe("HostCallRuntime listing hosts' agents (#14455)", () => {
     try {
       let late: ((answer: AgentsAnswer) => void) | undefined;
       const { list, agents, runtime } = setup({
-        agents: () => new Promise<AgentsAnswer>((resolve) => (late = resolve)),
+        agents: async () => ({ status: "done", directory: directory([worker("t-first")]) }),
       });
+      await list();
+      agents.mockImplementationOnce(() => new Promise<AgentsAnswer>((resolve) => (late = resolve)));
       const listing = list();
       await vi.advanceTimersByTimeAsync(5_000);
       const [slow] = await listing;
-      expect(slow?.agents).toMatchObject({ coverage: "unreachable", entries: [] });
-      late?.({ status: "done", directory: directory([worker("t-late")]) });
+      expect(slow?.agents).toMatchObject({ coverage: "stale", observedAt: 42, complete: false });
+      expect(slow?.agents?.entries).toEqual([
+        expect.objectContaining({ subject: expect.objectContaining({ terminalId: "t-first" }) }),
+      ]);
+      late?.({ status: "done", directory: directory([worker("t-late")], { observedAt: 99 }) });
+      await vi.advanceTimersByTimeAsync(0);
 
       agents.mockRejectedValueOnce(new Error("lost"));
       const [after] = await list();
-      expect(after?.agents).toMatchObject({ coverage: "unreachable", entries: [] });
+      expect(after?.agents).toMatchObject({ coverage: "stale", observedAt: 42 });
+      expect(after?.agents?.entries).toEqual([
+        expect.objectContaining({ subject: expect.objectContaining({ terminalId: "t-first" }) }),
+      ]);
       runtime.dispose();
     } finally {
       vi.useRealTimers();
@@ -337,15 +350,94 @@ describe("HostCallRuntime listing hosts' agents (#14455)", () => {
   });
 
   it("holds a host to the entry cap whatever it sends", async () => {
+    // Compact enough that the byte budget alone would keep every one.
+    const compact = Array.from({ length: 300 }, (_, index): AgentDirectoryEntry => ({
+      ...RESUMABLE,
+      lane: 0,
+      capturedAt: index,
+    }));
     const { list, runtime } = setup({
-      agents: async () => ({
-        status: "done",
-        directory: directory(Array.from({ length: 300 }, (_, index) => worker(`t-${index}`))),
-      }),
+      agents: async () => ({ status: "done", directory: directory(compact) }),
     });
     const [studio] = await list();
-    expect((studio?.agents?.entries.length ?? 0) + (studio?.agents?.omitted ?? 0)).toBe(300);
-    expect(studio?.agents?.entries.length).toBeLessThanOrEqual(256);
+    expect(studio?.agents?.entries).toHaveLength(256);
+    expect(studio?.agents?.omitted).toBe(44);
+    runtime.dispose();
+  });
+
+  it("keeps each host's last read apart under the same filter", async () => {
+    const { list, agents, runtime } = setup({
+      hosts: [host("studio"), host("lab")],
+      agents: async (hostId) => ({ status: "done", directory: directory([worker(`t-${hostId}`)]) }),
+    });
+    await list({ projectId: "p" });
+    agents.mockRejectedValue(new Error("lost"));
+    const hosts = await list({ projectId: "p" });
+    expect(
+      hosts.map((entry) =>
+        entry.agents?.entries.map((e) => e.state === "live" && e.subject.terminalId)
+      )
+    ).toEqual([["t-studio"], ["t-lab"]]);
+    expect(hosts.every((entry) => entry.agents?.coverage === "stale")).toBe(true);
+    runtime.dispose();
+  });
+
+  it("shows nothing it held once control goes off during a read that then fails", async () => {
+    let control = true;
+    const { list, agents, runtime } = setup({
+      control: () => control,
+      agents: async () => ({ status: "done", directory: directory([worker("t-1")]) }),
+    });
+    await list();
+    agents.mockImplementationOnce(async () => {
+      control = false;
+      throw new Error("lost");
+    });
+    const [during] = await list();
+    expect(during?.agents).toMatchObject({ coverage: "unreachable", entries: [] });
+    control = true;
+    agents.mockRejectedValueOnce(new Error("lost"));
+    const [after] = await list();
+    expect(after?.agents).toMatchObject({ coverage: "unreachable", entries: [] });
+    runtime.dispose();
+  });
+
+  it("forgets a host whose control went off on a listing without agents too", async () => {
+    let control = true;
+    const { list, agents, runtime } = setup({
+      control: () => control,
+      agents: async () => ({ status: "done", directory: directory([worker("t-1")]) }),
+    });
+    await list();
+    control = false;
+    await runtime.list("a");
+    control = true;
+    agents.mockRejectedValueOnce(new Error("lost"));
+    const [after] = await list();
+    expect(after?.agents).toMatchObject({ coverage: "unreachable", entries: [] });
+    runtime.dispose();
+  });
+
+  it("keeps no read begun before its host's directories were forgotten", async () => {
+    let control = true;
+    let finish: ((answer: AgentsAnswer) => void) | undefined;
+    const { list, agents, runtime } = setup({
+      hosts: [host("studio")],
+      control: () => control,
+      agents: () => new Promise<AgentsAnswer>((resolve) => (finish = resolve)),
+    });
+    const first = list();
+    await vi.waitFor(() => expect(finish).toBeDefined());
+    // Forgotten mid-read by a listing that sees control off, then turned back on.
+    control = false;
+    await runtime.list("a");
+    control = true;
+    finish?.({ status: "done", directory: directory([worker("t-before")]) });
+    const [shown] = await first;
+    expect(shown?.agents?.entries).toHaveLength(1);
+    agents.mockRejectedValueOnce(new Error("lost"));
+    const [after] = await list();
+    expect(after?.agents).toMatchObject({ coverage: "unreachable", entries: [] });
     runtime.dispose();
   });
 });

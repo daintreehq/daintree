@@ -504,6 +504,7 @@ const HOST_AGENTS = {
   ],
 };
 const agentReads: Array<{ projectId?: string }> = [];
+const agentReadFails = { value: false };
 
 /** Relayed calls as they arrive on the host, before its ledger or anything else sees them. */
 const arrivals = { mcpCalls: 0, projectReads: 0, sessionsOpened: 0 };
@@ -557,6 +558,7 @@ function installHost(): void {
     throwawayRuns: () => throwaways,
     readAgents: async (options) => {
       agentReads.push(options);
+      if (agentReadFails.value) throw new Error("pty host down");
       return HOST_AGENTS;
     },
   });
@@ -602,6 +604,7 @@ beforeEach(async () => {
   arrivals.projectReads = 0;
   arrivals.sessionsOpened = 0;
   agentReads.length = 0;
+  agentReadFails.value = false;
   installHost();
   runs = new Map([["help-a", RUN_A]]);
   control = new Set([HOST_ID]);
@@ -1142,14 +1145,30 @@ describe("host.list reading a host's agents over the link (#14455)", () => {
     expect(arrivals.mcpCalls).toBe(0);
   });
 
-  it("reads nothing past either control gate, and keeps nothing it read before", async () => {
+  it("answers a read the host couldn't make with the last one, marked stale", async () => {
+    await list();
+    agentReadFails.value = true;
+    expect(await list()).toMatchObject({ coverage: "stale", observedAt: 77, complete: false });
+  });
+
+  it("reads nothing past the host's consent, and keeps nothing it read before", async () => {
     await list();
     destination.accepts = false;
     expect(await list()).toMatchObject({ coverage: "unreachable", entries: [] });
+    // The host refuses before reading.
+    expect(agentReads).toHaveLength(1);
     destination.accepts = true;
+    agentReadFails.value = true;
+    expect(await list()).toMatchObject({ coverage: "unreachable", entries: [] });
+  });
+
+  it("asks nothing past the Shell's control switch, and keeps nothing it read before", async () => {
+    await list();
     control.delete(HOST_ID);
     expect(await list()).toMatchObject({ coverage: "unreachable", entries: [] });
-    // Only the first: the host refuses before reading, and the Shell asks nothing.
     expect(agentReads).toHaveLength(1);
+    control.add(HOST_ID);
+    agentReadFails.value = true;
+    expect(await list()).toMatchObject({ coverage: "unreachable", entries: [] });
   });
 });

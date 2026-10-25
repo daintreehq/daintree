@@ -57,6 +57,37 @@ describe("fitAgentDirectory", () => {
     };
     expect(fitAgentDirectory(directory)).toBe(directory);
   });
+
+  it("stays within every budget as its omitted count gains digits", () => {
+    const bytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).length;
+    const directory: AgentDirectory = {
+      coverage: "ok",
+      observedAt: 1,
+      complete: true,
+      omitted: 9,
+      entries: Array.from({ length: 120 }, (_, index) => entry(index)),
+    };
+    for (let budget = 200; budget <= bytes(directory); budget += 37) {
+      const fitted = fitAgentDirectory(directory, budget);
+      expect(bytes(fitted)).toBeLessThanOrEqual(
+        Math.max(budget, bytes({ ...fitted, entries: [] }))
+      );
+      expect(fitted.entries.length + fitted.omitted).toBe(129);
+    }
+  });
+
+  it("keeps an entry that fits its budget exactly", () => {
+    const one: AgentDirectory = {
+      coverage: "ok",
+      observedAt: 1,
+      complete: true,
+      omitted: 0,
+      entries: [entry(0), entry(1)],
+    };
+    const first = { ...one, omitted: 1, entries: [entry(0)] };
+    const budget = new TextEncoder().encode(JSON.stringify(first)).length;
+    expect(fitAgentDirectory(one, budget)).toEqual(first);
+  });
 });
 
 describe("cutAgentLabel", () => {

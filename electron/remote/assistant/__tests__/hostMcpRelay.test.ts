@@ -1192,7 +1192,13 @@ describe("a Shell listing this host's agents (#14455)", () => {
     });
     await expect(broken.links[0]!.ask(AssistantLinkMethod.AGENTS, {})).resolves.toEqual({
       status: "done",
-      directory: { coverage: "unreachable", observedAt: null, complete: false, omitted: 0, entries: [] },
+      directory: {
+        coverage: "unreachable",
+        observedAt: null,
+        complete: false,
+        omitted: 0,
+        entries: [],
+      },
     });
     broken.relay.dispose();
   });

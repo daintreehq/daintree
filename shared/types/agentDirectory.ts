@@ -217,21 +217,28 @@ export function cutAgentLabel(label: string | undefined | null): string | null {
 
 /**
  * Keeps the leading entries whose compact JSON fits `maxBytes`, counting the
- * rest in `omitted`; live entries lead, so resumable ones are cut first.
+ * rest in `omitted`; live entries lead, so resumable ones are cut first. The
+ * cut is measured with its `omitted` at the most it can grow to, so a count
+ * that gains digits never carries it past the budget.
  */
 export function fitAgentDirectory(
   directory: AgentDirectory,
   maxBytes: number = AGENT_DIRECTORY_BYTES_MAX
 ): AgentDirectory {
   const encoder = new TextEncoder();
-  let used = encoder.encode(JSON.stringify({ ...directory, entries: [] })).length;
+  const bytes = (value: unknown): number => encoder.encode(JSON.stringify(value)).length;
+  if (bytes(directory) <= maxBytes) return directory;
+  let used = bytes({
+    ...directory,
+    omitted: directory.omitted + directory.entries.length,
+    entries: [],
+  });
   let kept = 0;
   for (const entry of directory.entries) {
-    used += encoder.encode(JSON.stringify(entry)).length + 1;
+    used += bytes(entry) + (kept > 0 ? 1 : 0);
     if (used > maxBytes) break;
     kept += 1;
   }
-  if (kept === directory.entries.length) return directory;
   return {
     ...directory,
     omitted: directory.omitted + directory.entries.length - kept,
