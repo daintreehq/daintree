@@ -80,6 +80,11 @@ import {
   getEndpointRegistry,
 } from "../../../ipc/endpointRegistry.js";
 import type { DispatchEnvelope, PendingRequest } from "../shared.js";
+import {
+  _resetHostStartedTerminalsForTesting,
+  hostStartedTerminalIds,
+  noteHostStartedTerminal,
+} from "../../viewless/hostStartedTerminals.js";
 import type { ActionManifestEntry } from "../../../../shared/types/actions.js";
 
 const WORKSPACE = "ws-1";
@@ -795,6 +800,210 @@ describe("rendererBridge — relayed calls (#13493)", () => {
     );
 
     expect(envelope.result).toEqual({ ok: true, result: { ran: true } });
+  });
+});
+
+describe("rendererBridge — terminals the host started while a window shows the project (#14473)", () => {
+  let bridge: ReturnType<typeof createRendererBridge>;
+  const read = { relay: { linkSessionId: "shell-a", readOnly: true } };
+
+  function viewAnswering(result: unknown) {
+    const wc = makeWebContents(7, (channel, payload) => {
+      if (channel !== CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST) return;
+      queueMicrotask(() =>
+        mockIpcMain.emit(
+          CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE,
+          { sender: { id: 7 } },
+          { requestId: payload.requestId, result: { ok: true, result } }
+        )
+      );
+    });
+    mockWebContentsRegistry.set(7, wc);
+    mockProjectViews.set(WORKSPACE, [wc]);
+  }
+
+  const panelLimit = { count: 1, softWarningLimit: 10 };
+  const viewRow = { id: "view-pane", kind: "terminal", location: "grid", isFocused: true };
+  const hostRow = { id: "host-agent", kind: "terminal", location: "grid", isFocused: false };
+  const ptyStatus = (entries: unknown[]) => ({
+    ok: true,
+    result: { terminals: entries, source: "pty", unavailableFields: ["armed"] },
+  });
+
+  beforeEach(() => {
+    mockIpcMain.removeAllListeners();
+    mockWebContentsRegistry.clear();
+    mockProjectViews.clear();
+    _resetMcpDriveTargetResolverForTesting();
+    _resetHostStartedTerminalsForTesting();
+    viewless.runViewlessAction.mockReset();
+    viewless.describeViewlessWorkspace.mockReset().mockResolvedValue(undefined);
+    viewless.hasViewlessImplementation.mockReset().mockReturnValue(true);
+    setMcpDriveTargetResolver(() => ({ state: "vacant" }));
+    bridge = createRendererBridge(new Map(), new Map(), () => null);
+    bridge.setupListeners([]);
+  });
+
+  afterEach(() => {
+    _resetMcpDriveTargetResolverForTesting();
+    _resetHostStartedTerminalsForTesting();
+  });
+
+  it("adds a host-started terminal the view's list leaves out, read with the caller's own filters", async () => {
+    noteHostStartedTerminal(WORKSPACE, "host-agent");
+    viewAnswering({ terminals: [viewRow], panelLimit });
+    viewless.runViewlessAction.mockResolvedValue({
+      ok: true,
+      result: { terminals: [{ ...viewRow, isFocused: false }, hostRow] },
+    });
+
+    const args = { worktreeId: "/repo" };
+    const envelope = await bridge.dispatchActionForWorkspace(
+      WORKSPACE,
+      "terminal.list",
+      args,
+      false,
+      "external",
+      read
+    );
+
+    expect(envelope.result).toEqual({
+      ok: true,
+      result: { terminals: [viewRow, hostRow], panelLimit },
+    });
+    expect(viewless.runViewlessAction).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceId: WORKSPACE, actionId: "terminal.list", args })
+    );
+  });
+
+  it("leaves the view's list alone when the filters exclude the host-started terminal", async () => {
+    noteHostStartedTerminal(WORKSPACE, "host-agent");
+    viewAnswering({ terminals: [viewRow], panelLimit });
+    viewless.runViewlessAction.mockResolvedValue({ ok: true, result: { terminals: [] } });
+
+    const envelope = await bridge.dispatchActionForWorkspace(WORKSPACE, "terminal.list", {});
+
+    expect(envelope.result).toEqual({ ok: true, result: { terminals: [viewRow], panelLimit } });
+  });
+
+  it("answers status from the pty-host, whole and labelled so, once a named terminal is only there", async () => {
+    noteHostStartedTerminal(WORKSPACE, "host-agent");
+    viewAnswering({
+      terminals: [
+        { terminalId: "view-pane", agentId: null, agentState: "idle", armed: true },
+        { terminalId: "host-agent", agentId: null, agentState: null, error: "Terminal not found" },
+      ],
+      source: "renderer",
+      unavailableFields: [],
+    });
+    const fromPty = ptyStatus([
+      { terminalId: "view-pane", agentId: null, agentState: "idle" },
+      { terminalId: "host-agent", agentId: "claude", agentState: "working" },
+    ]);
+    viewless.runViewlessAction.mockResolvedValue(fromPty);
+
+    const args = { terminalIds: ["view-pane", "host-agent"] };
+    const envelope = await bridge.dispatchActionForWorkspace(
+      WORKSPACE,
+      "terminal.getStatus",
+      args,
+      false,
+      "external",
+      read
+    );
+
+    expect(envelope.result).toEqual(fromPty);
+    expect(viewless.runViewlessAction).toHaveBeenCalledWith(
+      expect.objectContaining({ actionId: "terminal.getStatus", args })
+    );
+  });
+
+  it("keeps the view's status when it didn't name a host-started terminal", async () => {
+    noteHostStartedTerminal(WORKSPACE, "host-agent");
+    const fromView = {
+      terminals: [{ terminalId: "view-pane", agentId: null, agentState: "idle", armed: true }],
+      source: "renderer",
+      unavailableFields: [],
+    };
+    viewAnswering(fromView);
+
+    const envelope = await bridge.dispatchActionForWorkspace(WORKSPACE, "terminal.getStatus", {
+      terminalIds: ["view-pane"],
+    });
+
+    expect(envelope.result).toEqual({ ok: true, result: fromView });
+    expect(viewless.runViewlessAction).not.toHaveBeenCalled();
+  });
+
+  it("answers the fleet from the pty-host when a host-started terminal belongs in it", async () => {
+    noteHostStartedTerminal(WORKSPACE, "host-agent");
+    viewAnswering({
+      terminals: [{ terminalId: "view-pane", agentId: null, agentState: "idle" }],
+      source: "renderer",
+      unavailableFields: [],
+    });
+    const fromPty = ptyStatus([
+      { terminalId: "view-pane", agentId: null, agentState: "idle" },
+      { terminalId: "host-agent", agentId: "claude", agentState: "working" },
+    ]);
+    viewless.runViewlessAction.mockResolvedValue(fromPty);
+
+    const envelope = await bridge.dispatchActionForWorkspace(WORKSPACE, "terminal.getStatus", {});
+
+    expect(envelope.result).toEqual(fromPty);
+  });
+
+  it("forgets one the view now holds, and one the pty-host no longer has", async () => {
+    noteHostStartedTerminal(WORKSPACE, "adopted");
+    noteHostStartedTerminal(WORKSPACE, "gone");
+    viewAnswering({
+      terminals: [
+        { terminalId: "adopted", agentId: null, agentState: "idle" },
+        { terminalId: "gone", agentId: null, agentState: null, error: "Terminal not found" },
+      ],
+      source: "renderer",
+      unavailableFields: [],
+    });
+    viewless.runViewlessAction.mockResolvedValue(
+      ptyStatus([
+        { terminalId: "adopted", agentId: null, agentState: "idle" },
+        {
+          terminalId: "gone",
+          agentId: null,
+          agentState: null,
+          error: "Terminal not found or status unavailable",
+        },
+      ])
+    );
+
+    const envelope = await bridge.dispatchActionForWorkspace(WORKSPACE, "terminal.getStatus", {
+      terminalIds: ["adopted", "gone"],
+    });
+
+    expect(envelope.result.ok && (envelope.result.result as { source: string }).source).toBe(
+      "renderer"
+    );
+    expect(hostStartedTerminalIds(WORKSPACE)).toEqual([]);
+  });
+
+  it("keeps the view's answer when the pty-host read fails", async () => {
+    noteHostStartedTerminal(WORKSPACE, "host-agent");
+    viewAnswering({ terminals: [], panelLimit });
+    viewless.runViewlessAction.mockRejectedValue(new Error("shard down"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const envelope = await bridge.dispatchActionForWorkspace(WORKSPACE, "terminal.list", {});
+
+    expect(envelope.result).toEqual({ ok: true, result: { terminals: [], panelLimit } });
+    warn.mockRestore();
+  });
+
+  it("reads nothing more when the host started nothing", async () => {
+    viewAnswering({ terminals: [], panelLimit });
+
+    await bridge.dispatchActionForWorkspace(WORKSPACE, "terminal.list", {});
+
+    expect(viewless.runViewlessAction).not.toHaveBeenCalled();
   });
 });
 

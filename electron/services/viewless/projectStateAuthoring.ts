@@ -1,4 +1,5 @@
 import type { PanelSnapshot, ProjectState } from "../../../shared/types/project.js";
+import { noteHostStartedTerminal } from "./hostStartedTerminals.js";
 
 /**
  * The slice of `ProjectStore` main-authored state writes need. Injected so the
@@ -29,12 +30,16 @@ function emptyProjectState(projectId: string): ProjectState {
  * rewrite) must not lose this one. Appended, never inserted, and a snapshot for
  * an id already present is left alone — a renderer that recorded the panel
  * first knows more about it than this does.
+ *
+ * Noted as host-started before the write, which can fail while the PTY runs:
+ * a window already showing the project never adopts it either way (#14473).
  */
 export async function recordViewlessTerminal(
   writer: ProjectStateWriter,
   projectId: string,
   snapshot: PanelSnapshot
 ): Promise<void> {
+  noteHostStartedTerminal(projectId, snapshot.id);
   await writer.enqueueProjectStateUpdate(projectId, (existing) => {
     const state = existing ?? emptyProjectState(projectId);
     const terminals = Array.isArray(state.terminals) ? state.terminals : [];

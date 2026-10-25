@@ -1,6 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { PanelSnapshot, ProjectState } from "../../../../shared/types/project.js";
 import { recordViewlessTerminal, type ProjectStateWriter } from "../projectStateAuthoring.js";
+import {
+  _resetHostStartedTerminalsForTesting,
+  hostStartedTerminalIds,
+} from "../hostStartedTerminals.js";
 
 function writerOver(initial: ProjectState | null) {
   let state = initial;
@@ -25,6 +29,21 @@ const SNAPSHOT: PanelSnapshot = {
 };
 
 describe("recordViewlessTerminal", () => {
+  afterEach(() => _resetHostStartedTerminalsForTesting());
+
+  it("notes the terminal as host-started even when the state write fails (#14473)", async () => {
+    const writer: ProjectStateWriter = {
+      enqueueProjectStateUpdate: async () => {
+        throw new Error("disk full");
+      },
+    };
+
+    await expect(recordViewlessTerminal(writer, "proj-1", SNAPSHOT)).rejects.toThrow("disk full");
+
+    expect(hostStartedTerminalIds("proj-1")).toEqual(["t-1"]);
+    expect(hostStartedTerminalIds("proj-2")).toEqual([]);
+  });
+
   it("creates a project's first state around the terminal", async () => {
     const { writer, read } = writerOver(null);
 
