@@ -141,4 +141,18 @@ describe("HostCallRuntime.ensureProject (#14140)", () => {
     expect(JSON.stringify(result)).not.toContain("/secret/path");
     expect(JSON.stringify(logged.warn.mock.calls)).not.toContain("/secret/path");
   });
+
+  it.each(["VALIDATION", "NOT_FOUND"] as const)(
+    "logs a refused step's %s code, so which check refused it can be traced",
+    async (code) => {
+      const { runtime } = runtimeWith(async () => {
+        throw new AppError({ code, message: "/secret/path/on/host" });
+      });
+
+      logged.warn.mockClear();
+      await runtime.ensureProject("a", { hostId: "studio" });
+
+      expect(logged.warn).toHaveBeenCalledWith(expect.any(String), { code });
+    }
+  );
 });

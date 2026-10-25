@@ -1665,6 +1665,9 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
             return { ...this.outcomeWith("disconnected", ENSURE_DISCONNECTED_DETAIL), ...none };
           case "VALIDATION":
           case "NOT_FOUND":
+            logger.warn("A step of bringing a project to a host was refused", {
+              code: codeOf(error),
+            });
             return { ...this.outcomeWith("conflict", ENSURE_REFUSED_DETAIL), ...none };
           default:
             // Its code only: an error's message can name a folder on either machine.
