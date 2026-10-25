@@ -8,14 +8,11 @@ import { z } from "zod";
  */
 export const ClosedPanelProcessSchema = z.object({
   terminalId: z.string(),
-  exited: z
-    .boolean()
-    .nullable()
-    .describe("true: the host saw the process exit. false: not yet. null: no process record."),
+  exited: z.boolean().nullable().describe("The host saw it exit; false: not yet; null: unknown."),
   trashExpiresAt: z
     .number()
     .nullable()
-    .describe("When the trash grace ends and the host starts stopping it, unless restored (ms)."),
+    .describe("Unix ms the host starts stopping it unless restored; null: unknown."),
 });
 
 export type ClosedPanelProcess = z.infer<typeof ClosedPanelProcessSchema>;
@@ -29,7 +26,5 @@ export const PanelCloseResultSchema = z.object({
   processes: z
     .array(ClosedPanelProcessSchema)
     .optional()
-    .describe(
-      "Each closed panel's process as the host saw it after the close. A closed panel's process can still be running."
-    ),
+    .describe("Each closed panel's process after the close: closed is not stopped."),
 });

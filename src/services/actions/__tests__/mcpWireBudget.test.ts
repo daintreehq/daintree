@@ -573,7 +573,13 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // 57_189 B (+984). Most of it is the tool's own contract rather than prose:
   // two required ids and a three-field result, whose `agentSessionIdCleared`
   // is what tells a caller the agent no longer has its brief.
-  const MAX_EXTERNAL_PAYLOAD_BYTES = 57_200;
+  // 57_200 → 57_700 for #14474, measured at 57_689 B: `processes` on
+  // `terminal.closeOwned`'s result, what the host saw of each closed panel's
+  // process. A close trashes the panel and its agent runs on through the grace,
+  // so `closedIds` alone told a cancelling caller the work had stopped. The
+  // result schema is closed, so the field must be advertised or a client's
+  // validator refuses the answer; its descriptions were trimmed first.
+  const MAX_EXTERNAL_PAYLOAD_BYTES = 57_700;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
   // totals moved by the identical amount. Only this one needed the ratchet
@@ -884,7 +890,11 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // sample's age is bounded without comparing clocks and an unbounded one
   // says so. Output only, and `host.list` is assistant-only, so the external
   // ceiling does not move.
-  const MAX_COHORT_PAYLOAD_BYTES = 151_340;
+  // 151_340 → 152_850 for #14474, measured at 152_839 B: the same
+  // `processes` field on `terminal.close`, `terminal.closeOwned` and
+  // `terminal.closeAll`, which share one result schema, and a clause on
+  // `terminal.closeMany` saying its results carry it.
+  const MAX_COHORT_PAYLOAD_BYTES = 152_850;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 
