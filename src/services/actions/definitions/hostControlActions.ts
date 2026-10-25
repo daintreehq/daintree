@@ -8,6 +8,8 @@ import {
   HostListResultSchema,
   HostSettingsArgsSchema,
   HostSettingsResultSchema,
+  HostWatchArgsSchema,
+  HostWatchResultSchema,
 } from "@shared/types/hostControl";
 
 function mainProcessOnly(id: string): () => Promise<never> {
@@ -27,7 +29,8 @@ function mainProcessOnly(id: string): () => Promise<never> {
  * hosts over the link from main, and this machine's other projects in
  * process under its own id, `local` (#14024). Delegating to a host's assistant is agent
  * messaging run through `host.call` (#13496), and a host's own named settings
- * are read and changed through `host.settings` (#14167).
+ * are read and changed through `host.settings` (#14167), and `host.watch`
+ * wakes an assistant once a host's link or capacity is seen to change (#14463).
  * `run()` throws if the renderer ever invokes it directly.
  */
 export function registerHostControlActions(actions: ActionRegistry): void {
@@ -128,5 +131,30 @@ export function registerHostControlActions(actions: ActionRegistry): void {
       openWorldHint: true,
     },
     run: mainProcessOnly("host.settings"),
+  }));
+
+  actions.set("host.watch", () => ({
+    id: "host.watch",
+    title: "Watch a host",
+    description:
+      "One notice when a host's link, or a fresh load sample, is first seen meeting your condition, so you can end your turn. It only observes: never dials or holds the host, never acts. Watches expire; cancel or list yours.",
+    category: "help",
+    kind: "command",
+    danger: "safe",
+    denyPluginDispatch: true,
+    scope: "renderer",
+    keywords: ["host", "remote", "watch", "notify", "reconnect", "capacity", "wake"],
+    palette: { mode: "hidden" },
+    argsSchema: HostWatchArgsSchema,
+    resultSchema: HostWatchResultSchema,
+    mcpOutputSchema: true,
+    mcpAnnotations: {
+      readOnlyHint: false,
+      // A repeat finds a watch still armed, but arms anew once that one has ended.
+      idempotentHint: false,
+      destructiveHint: false,
+      openWorldHint: true,
+    },
+    run: mainProcessOnly("host.watch"),
   }));
 }

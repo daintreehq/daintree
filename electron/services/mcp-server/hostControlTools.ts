@@ -5,10 +5,12 @@ import {
   HOST_ENSURE_PROJECT_TOOL,
   HOST_LIST_TOOL,
   HOST_SETTINGS_TOOL,
+  HOST_WATCH_TOOL,
   HostCallArgsSchema,
   HostEnsureProjectArgsSchema,
   HostListArgsSchema,
   HostSettingsArgsSchema,
+  HostWatchArgsSchema,
   type HostCallArgs,
   type HostCallResult,
   type HostControlOutcome,
@@ -20,6 +22,8 @@ import {
   type HostListResult,
   type HostSettingsArgs,
   type HostSettingsResult,
+  type HostWatchArgs,
+  type HostWatchResult,
 } from "../../../shared/types/hostControl.js";
 
 /**
@@ -49,6 +53,8 @@ export interface HostControlRuntimeHandle {
     helpSessionId: string,
     args: HostSettingsArgs
   ): Promise<HostControlOutcome<HostSettingsResult>>;
+  /** Arms, cancels or lists the calling run's one-shot watches on a host's link or capacity (#14463). */
+  watch(helpSessionId: string, args: HostWatchArgs): Promise<HostControlOutcome<HostWatchResult>>;
 }
 
 /** What a `host.call` carries from the calling session beyond its arguments. */
@@ -124,6 +130,31 @@ function settingsArgsFit(args: HostSettingsArgs): boolean {
   }
 }
 
+/** An arm names a host and one kind of condition; cancel and list take only their own. */
+function watchArgsFit(args: HostWatchArgs): boolean {
+  const capacity =
+    args.memoryAvailableBytesAtLeast !== undefined ||
+    args.cpuIdleCoresAtLeast !== undefined ||
+    args.memoryPressureAtMost !== undefined;
+  const armOnly =
+    capacity ||
+    args.connection !== undefined ||
+    args.expiresInSeconds !== undefined ||
+    args.note !== undefined;
+  switch (args.operation) {
+    case "arm":
+      return (
+        args.hostId !== undefined &&
+        args.watchId === undefined &&
+        (args.connection !== undefined) !== capacity
+      );
+    case "cancel":
+      return args.watchId !== undefined && args.hostId === undefined && !armOnly;
+    case "list":
+      return args.watchId === undefined && !armOnly;
+  }
+}
+
 /**
  * Arguments are checked against the manifest schema here, since a
  * main-process tool never passes through renderer dispatch; a refusal is fixed
@@ -154,6 +185,12 @@ async function dispatch(
       const parsed = HostSettingsArgsSchema.safeParse(raw);
       return parsed.success && settingsArgsFit(parsed.data)
         ? runtime.settings(helpSessionId, parsed.data)
+        : invalidArgs();
+    }
+    case HOST_WATCH_TOOL: {
+      const parsed = HostWatchArgsSchema.safeParse(raw);
+      return parsed.success && watchArgsFit(parsed.data)
+        ? runtime.watch(helpSessionId, parsed.data)
         : invalidArgs();
     }
     case HOST_LIST_TOOL: {

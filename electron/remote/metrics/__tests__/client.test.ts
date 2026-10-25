@@ -717,6 +717,24 @@ describe("HostMetricsClient", () => {
     h.client.dispose();
   });
 
+  it("tells summary listeners of each recorded summary without dialling anything (#14463)", () => {
+    const h = harness([descriptor("studio-01")]);
+    h.client.start();
+    const heard: string[] = [];
+    const off = h.client.onSummary((hostId) => heard.push(hostId));
+    const offThrowing = h.client.onSummary(() => {
+      throw new Error("listener broke");
+    });
+    h.client.record("studio-01", summary(1));
+    offThrowing();
+    off();
+    h.client.record("studio-01", summary(2));
+    expect(heard).toEqual(["studio-01"]);
+    expect(h.client.latest("studio-01")?.sampledAt).toBe(2);
+    expect(h.connect).not.toHaveBeenCalled();
+    h.client.dispose();
+  });
+
   it("drops a host's history when its SSH target changes to another machine", () => {
     const h = harness([descriptor("studio-01")]);
     h.client.start();

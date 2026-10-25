@@ -1124,4 +1124,352 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
     requiresArgs: true,
     title: "Change a host's settings",
   },
+  {
+    band: "reversible",
+    category: "help",
+    danger: "safe",
+    description:
+      "One notice when a host's link, or a fresh load sample, is first seen meeting your condition, so you can end your turn. It only observes: never dials or holds the host, never acts. Watches expire; cancel or list yours.",
+    enabled: true,
+    id: "host.watch",
+    inputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        operation: {
+          type: "string",
+          enum: ["arm", "cancel", "list"],
+          description:
+            "arm: one notice when first observed. cancel: end one. list: yours, armed and ended.",
+        },
+        hostId: {
+          description: "For arm: the host. For list: only that host.",
+          type: "string",
+          minLength: 1,
+          maxLength: 64,
+        },
+        connection: {
+          description: "Arm on the link: fires once it is seen in this state for 5s.",
+          type: "string",
+          enum: ["connected", "disconnected"],
+        },
+        memoryAvailableBytesAtLeast: {
+          description: "Arm on capacity instead: all given figures met by a fresh sample.",
+          type: "integer",
+          minimum: 0,
+          maximum: 9007199254740991,
+        },
+        cpuIdleCoresAtLeast: {
+          type: "number",
+          minimum: 0,
+          maximum: 4096,
+        },
+        memoryPressureAtMost: {
+          type: "string",
+          enum: ["normal", "warn"],
+        },
+        expiresInSeconds: {
+          description: "Default 1800.",
+          type: "integer",
+          minimum: 60,
+          maximum: 21600,
+        },
+        note: {
+          description: "Echoed in the notice.",
+          type: "string",
+          maxLength: 160,
+        },
+        watchId: {
+          description: "For cancel.",
+          type: "string",
+          minLength: 1,
+          maxLength: 64,
+        },
+      },
+      required: ["operation"],
+    },
+    keywords: ["host", "remote", "watch", "notify", "reconnect", "capacity", "wake"],
+    kind: "command",
+    mcpAnnotations: {
+      readOnlyHint: false,
+      idempotentHint: false,
+      destructiveHint: false,
+      openWorldHint: true,
+    },
+    name: "host.watch",
+    outputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        outcome: {
+          type: "string",
+          enum: [
+            "ok",
+            "ambiguous",
+            "opted_out",
+            "disconnected",
+            "unsupported",
+            "policy_rejected",
+            "expired",
+            "not_found",
+            "rate_limited",
+            "too_large",
+            "conflict",
+          ],
+        },
+        detail: {
+          type: ["string", "null"],
+        },
+        retryAfterMs: {
+          type: ["number", "null"],
+        },
+        armed: {
+          type: "boolean",
+        },
+        watches: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              watchId: {
+                type: "string",
+              },
+              hostId: {
+                type: "string",
+              },
+              hostName: {
+                type: "string",
+              },
+              condition: {
+                type: "object",
+                properties: {
+                  connection: {
+                    anyOf: [
+                      {
+                        type: "string",
+                        enum: ["connected", "disconnected"],
+                      },
+                      {
+                        type: "null",
+                      },
+                    ],
+                  },
+                  memoryAvailableBytesAtLeast: {
+                    type: ["number", "null"],
+                  },
+                  cpuIdleCoresAtLeast: {
+                    type: ["number", "null"],
+                  },
+                  memoryPressureAtMost: {
+                    anyOf: [
+                      {
+                        type: "string",
+                        enum: ["normal", "warn"],
+                      },
+                      {
+                        type: "null",
+                      },
+                    ],
+                  },
+                },
+                required: [
+                  "connection",
+                  "memoryAvailableBytesAtLeast",
+                  "cpuIdleCoresAtLeast",
+                  "memoryPressureAtMost",
+                ],
+                additionalProperties: false,
+              },
+              note: {
+                type: ["string", "null"],
+              },
+              armedAt: {
+                type: "number",
+              },
+              expiresAt: {
+                type: "number",
+              },
+              status: {
+                type: "string",
+                enum: ["armed", "fired", "expired", "cancelled", "lost"],
+              },
+              endedAt: {
+                type: ["number", "null"],
+              },
+              lostReason: {
+                anyOf: [
+                  {
+                    type: "string",
+                    enum: ["host-removed", "control-off"],
+                  },
+                  {
+                    type: "null",
+                  },
+                ],
+              },
+              observed: {
+                anyOf: [
+                  {
+                    type: "object",
+                    properties: {
+                      observedAt: {
+                        type: "number",
+                      },
+                      link: {
+                        type: "string",
+                        enum: [
+                          "local",
+                          "disconnected",
+                          "connecting",
+                          "connected",
+                          "unreachable",
+                          "version-mismatch",
+                          "driven-elsewhere",
+                        ],
+                      },
+                      lastSeenAt: {
+                        type: ["number", "null"],
+                      },
+                      sampledAt: {
+                        type: ["number", "null"],
+                      },
+                      stale: {
+                        type: "boolean",
+                      },
+                      memoryAvailableBytes: {
+                        type: ["number", "null"],
+                      },
+                      cpuIdleCores: {
+                        type: ["number", "null"],
+                      },
+                      memoryPressure: {
+                        anyOf: [
+                          {
+                            type: "string",
+                            enum: ["normal", "warn", "critical"],
+                          },
+                          {
+                            type: "null",
+                          },
+                        ],
+                      },
+                    },
+                    required: [
+                      "observedAt",
+                      "link",
+                      "lastSeenAt",
+                      "sampledAt",
+                      "stale",
+                      "memoryAvailableBytes",
+                      "cpuIdleCores",
+                      "memoryPressure",
+                    ],
+                    additionalProperties: false,
+                  },
+                  {
+                    type: "null",
+                  },
+                ],
+              },
+              delivery: {
+                type: "string",
+                enum: [
+                  "none",
+                  "queued",
+                  "held",
+                  "delivered",
+                  "unavailable",
+                  "ambiguous",
+                  "withdrawn",
+                ],
+              },
+            },
+            required: [
+              "watchId",
+              "hostId",
+              "hostName",
+              "condition",
+              "note",
+              "armedAt",
+              "expiresAt",
+              "status",
+              "endedAt",
+              "lostReason",
+              "observed",
+              "delivery",
+            ],
+            additionalProperties: false,
+          },
+        },
+        observed: {
+          anyOf: [
+            {
+              type: "object",
+              properties: {
+                observedAt: {
+                  type: "number",
+                },
+                link: {
+                  type: "string",
+                  enum: [
+                    "local",
+                    "disconnected",
+                    "connecting",
+                    "connected",
+                    "unreachable",
+                    "version-mismatch",
+                    "driven-elsewhere",
+                  ],
+                },
+                lastSeenAt: {
+                  type: ["number", "null"],
+                },
+                sampledAt: {
+                  type: ["number", "null"],
+                },
+                stale: {
+                  type: "boolean",
+                },
+                memoryAvailableBytes: {
+                  type: ["number", "null"],
+                },
+                cpuIdleCores: {
+                  type: ["number", "null"],
+                },
+                memoryPressure: {
+                  anyOf: [
+                    {
+                      type: "string",
+                      enum: ["normal", "warn", "critical"],
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
+              },
+              required: [
+                "observedAt",
+                "link",
+                "lastSeenAt",
+                "sampledAt",
+                "stale",
+                "memoryAvailableBytes",
+                "cpuIdleCores",
+                "memoryPressure",
+              ],
+              additionalProperties: false,
+            },
+            {
+              type: "null",
+            },
+          ],
+        },
+      },
+      required: ["outcome", "detail", "retryAfterMs", "armed", "watches", "observed"],
+      additionalProperties: false,
+    },
+    requiresArgs: true,
+    title: "Watch a host",
+  },
 ];

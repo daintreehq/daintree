@@ -27,9 +27,11 @@ import { createLogger } from "../../utils/logger.js";
 import {
   formatHostNoticeLine,
   formatHostNoticesLostLine,
+  formatHostWatchLine,
   formatNoticeLine,
   formatRetiredExchangesLine,
   type FiredNotice,
+  type HostWatchNotice,
   type NoticeObservation,
 } from "./noticeFormat.js";
 import { REPLY_SEARCH_ROWS, extractReply, type ObservedMarker } from "./noticeReply.js";
@@ -37,9 +39,11 @@ import { REPLY_SEARCH_ROWS, extractReply, type ObservedMarker } from "./noticeRe
 export {
   formatHostNoticeLine,
   formatHostNoticesLostLine,
+  formatHostWatchLine,
   formatNoticeLine,
   formatRetiredExchangesLine,
   type FiredNotice,
+  type HostWatchNotice,
   type NoticeObservation,
 } from "./noticeFormat.js";
 export {
@@ -301,9 +305,11 @@ export interface LaneWake {
    * about (#13500), in {@link LaneWake.hostNotice}; `retired` says which
    * messages this Shell sent through the retired inbox will get no reply
    * (#13496), in {@link LaneWake.retired}; `lost` says a host no longer holds
-   * notices the run asked it for (#13930), in {@link LaneWake.lostNotices}.
+   * notices the run asked it for (#13930), in {@link LaneWake.lostNotices};
+   * `watch` says what became of a `host.watch` the run armed (#14463), in
+   * {@link LaneWake.hostWatch}.
    */
-  kind: "notice" | "retired" | "lost";
+  kind: "notice" | "retired" | "lost" | "watch";
   /**
    * A `notice`'s observation. Only the host's name as this Shell knows it and
    * the host's observations: the line is still Daintree's own wording.
@@ -313,6 +319,8 @@ export interface LaneWake {
   retired?: ReadonlyArray<{ hostName: string; count: number }>;
   /** A `lost` line's host, by the name this Shell knows it by, and the terminals its calls named. */
   lostNotices?: { hostName: string; terminalIds: readonly string[] };
+  /** A `watch` line's fixed facts. */
+  hostWatch?: HostWatchNotice;
   /** Asked synchronously immediately before the line is typed, and while it waits. */
   recheck(): LaneWakeCheck;
   /**
@@ -2163,6 +2171,11 @@ export class TerminalNotifyService {
       ...wakes.flatMap(({ wake }) =>
         wake.kind === "lost" && wake.lostNotices !== undefined
           ? [formatHostNoticesLostLine(wake.lostNotices.hostName, wake.lostNotices.terminalIds)]
+          : []
+      ),
+      ...wakes.flatMap(({ wake }) =>
+        wake.kind === "watch" && wake.hostWatch !== undefined
+          ? [formatHostWatchLine(wake.hostWatch)]
           : []
       ),
       ...(entries.length > 0

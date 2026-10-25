@@ -70,6 +70,7 @@ const m = vi.hoisted(() => {
       touch: vi.fn((_hostId: string) => {}),
       hold: vi.fn((_hostId: string) => () => {}),
       addUseCheck: vi.fn((_check: unknown) => () => {}),
+      onStateChange: vi.fn((_l: unknown) => () => {}),
     },
     registry: {
       get: vi.fn(
@@ -516,7 +517,11 @@ vi.mock("../host/hostModeDefaults.js", async () => {
 
 import { startRemoteHosts, stopRemoteHosts } from "../boot.js";
 import { notifyMcpDriveTargetChange } from "../../services/mcp-server/driveTarget.js";
-import { _resetRemoteServicesForTest, getRemoteService } from "../runtime.js";
+import {
+  _resetRemoteServicesForTest,
+  getRemoteService,
+  registerRemoteService,
+} from "../runtime.js";
 import { Lane } from "../link/frames.js";
 import { ControlKind } from "../link/messages.js";
 
@@ -629,6 +634,28 @@ describe("startRemoteHosts", () => {
         disconnectedByPerson: true,
       },
     ]);
+    await stopRemoteHosts();
+  });
+
+  it("hands host watches the link, host list and summaries, and lets all three go (#14463)", async () => {
+    const offs = { registry: vi.fn(), manager: vi.fn(), metrics: vi.fn() };
+    const onSummary = vi.fn((_l: unknown) => offs.metrics);
+    await startRemoteHosts({ hostMode: false });
+    m.client.registry.onChange.mockImplementationOnce(() => offs.registry);
+    m.client.manager.onStateChange.mockImplementationOnce(() => offs.manager);
+    const offMetrics = registerRemoteService("hostMetrics", { onSummary } as never);
+    const [deps] = control.installHostControl.mock.calls[0] as [
+      { watchHosts(listener: { changed(): void; summary(hostId: string): void }): () => void },
+    ];
+    // Only asked once something watches: starting up subscribes nothing for it.
+    expect(onSummary).not.toHaveBeenCalled();
+    const off = deps.watchHosts({ changed: vi.fn(), summary: vi.fn() });
+    expect(onSummary).toHaveBeenCalledTimes(1);
+    off();
+    expect(offs.registry).toHaveBeenCalledTimes(1);
+    expect(offs.manager).toHaveBeenCalledTimes(1);
+    expect(offs.metrics).toHaveBeenCalledTimes(1);
+    offMetrics();
     await stopRemoteHosts();
   });
 

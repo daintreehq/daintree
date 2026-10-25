@@ -46,11 +46,20 @@ export const HOST_ENSURE_PROJECT_TOOL = "host.ensureProject";
  */
 export const HOST_SETTINGS_TOOL = "host.settings";
 
+/**
+ * One notice when a host's link or capacity is first observed meeting a
+ * condition the caller named (#14463), so an assistant holding work for a host
+ * can end its turn. Passive: it reads the link and summaries this Shell already
+ * has, never dials, holds or wakes a host, and acts on nothing when it fires.
+ */
+export const HOST_WATCH_TOOL = "host.watch";
+
 export const HOST_CONTROL_TOOL_IDS: ReadonlySet<string> = new Set([
   HOST_LIST_TOOL,
   HOST_CALL_TOOL,
   HOST_ENSURE_PROJECT_TOOL,
   HOST_SETTINGS_TOOL,
+  HOST_WATCH_TOOL,
 ]);
 
 /** Most projects `host.list` names for one host in one answer: a page. */
@@ -483,11 +492,129 @@ export const HostSettingsResultSchema = z.object({
 });
 export type HostSettingsResult = z.infer<typeof HostSettingsResultSchema>;
 
+/** How long a watch stays armed when the caller doesn't say. */
+export const HOST_WATCH_EXPIRES_DEFAULT_S = 30 * 60;
+export const HOST_WATCH_EXPIRES_MIN_S = 60;
+export const HOST_WATCH_EXPIRES_MAX_S = 6 * 60 * 60;
+/** Watches one assistant run may hold at once: armed, or fired with the notice not yet settled. */
+export const HOST_WATCHES_PER_RUN_MAX = 8;
+/** Watches armed across every assistant on this Shell. */
+export const HOST_WATCHES_TOTAL_MAX = 64;
+/** Ended watches a run's `list` still shows, newest first. */
+export const HOST_WATCH_HISTORY_MAX = 16;
+/** How long a link must stay in the watched state before the watch fires, so a flap doesn't. */
+export const HOST_WATCH_CONNECTION_SETTLE_MS = 5_000;
+/** Longest note a watch echoes back. */
+export const HOST_WATCH_NOTE_MAX = 160;
+
+export const HostWatchArgsSchema = z.object({
+  operation: z
+    .enum(["arm", "cancel", "list"])
+    .describe(
+      "arm: one notice when first observed. cancel: end one. list: yours, armed and ended."
+    ),
+  hostId: hostIdSchema.optional().describe("For arm: the host. For list: only that host."),
+  connection: z
+    .enum(["connected", "disconnected"])
+    .optional()
+    .describe("Arm on the link: fires once it is seen in this state for 5s."),
+  memoryAvailableBytesAtLeast: z
+    .number()
+    .int()
+    .min(0)
+    .optional()
+    .describe("Arm on capacity instead: all given figures met by a fresh sample."),
+  cpuIdleCoresAtLeast: z.number().min(0).max(4096).optional(),
+  memoryPressureAtMost: z.enum(["normal", "warn"]).optional(),
+  expiresInSeconds: z
+    .number()
+    .int()
+    .min(HOST_WATCH_EXPIRES_MIN_S)
+    .max(HOST_WATCH_EXPIRES_MAX_S)
+    .optional()
+    .describe("Default 1800."),
+  note: z.string().max(HOST_WATCH_NOTE_MAX).optional().describe("Echoed in the notice."),
+  watchId: z.string().min(1).max(64).optional().describe("For cancel."),
+});
+export type HostWatchArgs = z.infer<typeof HostWatchArgsSchema>;
+
+const hostWatchConditionSchema = z.object({
+  connection: z.enum(["connected", "disconnected"]).nullable(),
+  memoryAvailableBytesAtLeast: z.number().nullable(),
+  cpuIdleCoresAtLeast: z.number().nullable(),
+  memoryPressureAtMost: z.enum(["normal", "warn"]).nullable(),
+});
+export type HostWatchCondition = z.infer<typeof hostWatchConditionSchema>;
+
+/** A host as this Shell saw it at one moment: observations, never a promise it can take work. */
+export const HostWatchObservedSchema = z.object({
+  /** When this Shell read it, by its own clock. */
+  observedAt: z.number(),
+  link: HostListLinkSchema.shape.status,
+  lastSeenAt: z.number().nullable(),
+  /** The last sample's time, by the host's clock; null when none is held. */
+  sampledAt: z.number().nullable(),
+  /** Too old to trust: the figures below are null. */
+  stale: z.boolean(),
+  memoryAvailableBytes: z.number().nullable(),
+  cpuIdleCores: z.number().nullable(),
+  memoryPressure: z.enum(["normal", "warn", "critical"]).nullable(),
+});
+export type HostWatchObserved = z.infer<typeof HostWatchObservedSchema>;
+
+export const HOST_WATCH_STATUSES = ["armed", "fired", "expired", "cancelled", "lost"] as const;
+export type HostWatchStatus = (typeof HOST_WATCH_STATUSES)[number];
+export const HOST_WATCH_LOST_REASONS = ["host-removed", "control-off"] as const;
+export type HostWatchLostReason = (typeof HOST_WATCH_LOST_REASONS)[number];
+/**
+ * Where the notice a watch ended with stands. `none`: it ended with no notice
+ * (armed, or cancelled). `withdrawn`: cancelled before it was typed.
+ * `ambiguous` is never typed again.
+ */
+export const HOST_WATCH_DELIVERIES = [
+  "none",
+  "queued",
+  "held",
+  "delivered",
+  "unavailable",
+  "ambiguous",
+  "withdrawn",
+] as const;
+export type HostWatchDelivery = (typeof HOST_WATCH_DELIVERIES)[number];
+
+export const HostWatchSchema = z.object({
+  watchId: z.string(),
+  hostId: z.string(),
+  hostName: z.string(),
+  condition: hostWatchConditionSchema,
+  note: z.string().nullable(),
+  armedAt: z.number(),
+  expiresAt: z.number(),
+  status: z.enum(HOST_WATCH_STATUSES),
+  endedAt: z.number().nullable(),
+  lostReason: z.enum(HOST_WATCH_LOST_REASONS).nullable(),
+  /** What it fired, expired or was lost on; null while armed or once cancelled. */
+  observed: HostWatchObservedSchema.nullable(),
+  delivery: z.enum(HOST_WATCH_DELIVERIES),
+});
+export type HostWatch = z.infer<typeof HostWatchSchema>;
+
+export const HostWatchResultSchema = z.object({
+  ...outcomeFields,
+  /** An arm left a watch armed. False with `ok`: already observed, so none was armed. */
+  armed: z.boolean(),
+  /** The watch armed or cancelled; for list, this run's, armed first, then ended newest first. */
+  watches: z.array(HostWatchSchema),
+  /** arm: the host as observed when it was asked. */
+  observed: HostWatchObservedSchema.nullable(),
+});
+export type HostWatchResult = z.infer<typeof HostWatchResultSchema>;
+
 /** Why a host tool refused outright: the caller isn't this machine's assistant, or its arguments don't parse. */
 export type HostControlRefusalCode = "NOT_ELIGIBLE" | "INVALID_ARGS" | "UNAVAILABLE";
 
 export type HostControlToolResult =
-  HostListResult | HostCallResult | HostEnsureProjectResult | HostSettingsResult;
+  HostListResult | HostCallResult | HostEnsureProjectResult | HostSettingsResult | HostWatchResult;
 
 export type HostControlOutcome<T> =
   { ok: true; value: T } | { ok: false; code: HostControlRefusalCode; message: string };

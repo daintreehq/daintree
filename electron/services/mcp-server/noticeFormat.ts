@@ -5,6 +5,11 @@ import {
   displayNoticeHostName,
   displayNoticeTerminalId,
 } from "../../../shared/types/terminalNotify.js";
+import type {
+  HostWatchCondition,
+  HostWatchLostReason,
+  HostWatchObserved,
+} from "../../../shared/types/hostControl.js";
 import { fenceFor } from "../../../shared/utils/quoteFence.js";
 import { cutToNewestChars, type NoticeReply } from "./noticeReply.js";
 
@@ -244,4 +249,93 @@ export function formatRetiredExchangesLine(
   const total = hosts.reduce((sum, { count }) => sum + count, 0);
   const noun = total === 1 ? "message" : "messages";
   return `Daintree: assistant messaging was retired in this update, so ${total} ${noun} sent to other hosts' assistants will get no reply and are no longer followed: ${named.join(", ")}. Their work may already have run. Check it there with host.call before asking again.`;
+}
+
+/** What became of a `host.watch` (#14463), as its run is told: observations only. */
+export interface HostWatchNotice {
+  hostName: string;
+  watchId: string;
+  event: "fired" | "expired" | "lost";
+  condition: HostWatchCondition;
+  armedAt: number;
+  /** The host as seen when it fired or ended; null once it is gone from this Shell. */
+  observed: HostWatchObserved | null;
+  note?: string;
+  lostReason?: HostWatchLostReason;
+}
+
+/** A time as a line spells it. A host's own clock can send any number, which Date can't always read. */
+function iso(ms: number): string {
+  const date = new Date(ms);
+  return Number.isNaN(date.getTime()) ? "an unreadable time" : date.toISOString();
+}
+
+function gib(bytes: number): string {
+  return `${(bytes / 1024 ** 3).toFixed(1)} GiB`;
+}
+
+function describeWatchCondition(condition: HostWatchCondition): string {
+  if (condition.connection !== null) return `its link ${condition.connection}`;
+  const parts: string[] = [];
+  if (condition.memoryAvailableBytesAtLeast !== null) {
+    parts.push(`memory available at least ${gib(condition.memoryAvailableBytesAtLeast)}`);
+  }
+  if (condition.cpuIdleCoresAtLeast !== null) {
+    parts.push(`at least ${condition.cpuIdleCoresAtLeast} idle cores`);
+  }
+  if (condition.memoryPressureAtMost !== null) {
+    parts.push(`memory pressure at most ${condition.memoryPressureAtMost}`);
+  }
+  return parts.join(", ");
+}
+
+function describeWatchObserved(observed: HostWatchObserved): string {
+  const parts = [`link ${observed.link}`];
+  if (observed.lastSeenAt !== null) parts.push(`last seen ${iso(observed.lastSeenAt)}`);
+  if (observed.sampledAt === null) {
+    parts.push("no load sample");
+  } else if (observed.stale) {
+    parts.push(`last sample taken ${iso(observed.sampledAt)}, too old to read`);
+  } else {
+    const figures = [
+      observed.memoryAvailableBytes !== null
+        ? `${gib(observed.memoryAvailableBytes)} memory available`
+        : null,
+      observed.cpuIdleCores !== null ? `${observed.cpuIdleCores} idle cores` : null,
+      observed.memoryPressure !== null ? `memory pressure ${observed.memoryPressure}` : null,
+    ].filter((figure): figure is string => figure !== null);
+    parts.push(
+      `sample taken ${iso(observed.sampledAt)}${figures.length > 0 ? `: ${figures.join(", ")}` : ""}`
+    );
+  }
+  return parts.join(", ");
+}
+
+/**
+ * The line for a watch that fired, expired or was lost (#14463): Daintree's
+ * own wording, the host's name as this Shell knows it, what was seen and when,
+ * and the caller's note. It says what was observed, never that the host can
+ * take the work, and sends the reader back to check before acting.
+ */
+export function formatHostWatchLine(notice: HostWatchNotice): string {
+  const where = `host "${displayNoticeHostName(notice.hostName)}" watch ${notice.watchId}`;
+  const wanted = describeWatchCondition(notice.condition);
+  const note = notice.note !== undefined ? ` Your note: "${notice.note}".` : "";
+  const seen =
+    notice.observed !== null
+      ? ` Observed at ${iso(notice.observed.observedAt)}: ${describeWatchObserved(notice.observed)}.`
+      : "";
+  switch (notice.event) {
+    case "fired":
+      return `Daintree: ${where} (armed ${iso(notice.armedAt)}) saw ${wanted}.${seen}${note} An observation, not a promise it can take work: list hosts with host.list and recheck before placing or launching anything.`;
+    case "expired":
+      return `Daintree: ${where} expired without seeing ${wanted}.${seen}${note} Arm it again if you still want to hear.`;
+    case "lost": {
+      const why =
+        notice.lostReason === "control-off"
+          ? "assistant control for that host was turned off"
+          : "the host was removed from this Shell";
+      return `Daintree: ${where} ended because ${why}, so no notice will come for ${wanted}.${seen}${note}`;
+    }
+  }
 }

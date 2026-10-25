@@ -1,6 +1,9 @@
 import {
   HOST_CONTROL_OUTCOMES,
   HOST_ENSURE_ACCEPTABLE,
+  HOST_WATCH_DELIVERIES,
+  HOST_WATCH_LOST_REASONS,
+  HOST_WATCH_STATUSES,
 } from "../../../shared/types/hostControl.js";
 import { isHostSettingKey } from "../../../shared/types/hostSettings.js";
 import {
@@ -186,6 +189,30 @@ function projectPanelCapture(result: unknown): Record<string, unknown> {
   };
 }
 
+const WATCH_STATUSES: ReadonlySet<string> = new Set(HOST_WATCH_STATUSES);
+const WATCH_LOST_REASONS: ReadonlySet<string> = new Set(HOST_WATCH_LOST_REASONS);
+const WATCH_DELIVERIES: ReadonlySet<string> = new Set(HOST_WATCH_DELIVERIES);
+
+const WATCH_ID_PATTERN = /^hw-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function auditWatchId(value: unknown): string | null {
+  return typeof value === "string" && WATCH_ID_PATTERN.test(value) ? value : null;
+}
+
+/** A watch's id, host, kind of condition and where it stands. */
+function projectHostWatch(value: unknown): Record<string, unknown> {
+  const watch = asRecord(value);
+  const condition = asRecord(watch?.condition);
+  return {
+    watchId: auditWatchId(watch?.watchId),
+    hostId: auditHostId(watch?.hostId),
+    on: condition === null ? null : condition.connection != null ? "connection" : "capacity",
+    status: fromSet(watch?.status, WATCH_STATUSES),
+    lostReason: fromSet(watch?.lostReason, WATCH_LOST_REASONS),
+    delivery: fromSet(watch?.delivery, WATCH_DELIVERIES),
+  };
+}
+
 const AUDIT_RESULT_PROJECTIONS: ReadonlyMap<string, (result: unknown) => unknown> = new Map<
   string,
   (result: unknown) => unknown
@@ -257,6 +284,20 @@ const AUDIT_RESULT_PROJECTIONS: ReadonlyMap<string, (result: unknown) => unknown
       };
     },
   ],
+  [
+    "host.watch",
+    // Which watches and where each stands, never the note or what the host's figures were (#14463).
+    (result) => {
+      const record = asRecord(result);
+      if (record === null) return { status: "unrecognized" };
+      const listed = Array.isArray(record.watches) ? record.watches : [];
+      return {
+        outcome: fromSet(record.outcome, HOST_OUTCOMES),
+        armed: record.armed === true,
+        watches: listed.map(projectHostWatch),
+      };
+    },
+  ],
   ["plugin.capturePanel", projectPanelCapture],
   ["project.runCommand", projectCommandRun],
 ]);
@@ -276,6 +317,31 @@ const AUDIT_ARGS_PROJECTIONS: ReadonlyMap<string, (args: unknown) => unknown> = 
   string,
   (args: unknown) => unknown
 >([
+  [
+    "host.watch",
+    // What was watched for and for how long, never the note.
+    (args) => {
+      const record = asRecord(args);
+      const connection = record?.connection;
+      const pressure = record?.memoryPressureAtMost;
+      return {
+        operation:
+          record?.operation === "arm" ||
+          record?.operation === "cancel" ||
+          record?.operation === "list"
+            ? record.operation
+            : null,
+        hostId: auditHostId(record?.hostId),
+        connection: connection === "connected" || connection === "disconnected" ? connection : null,
+        memoryAvailableBytesAtLeast: finiteNumber(record?.memoryAvailableBytesAtLeast),
+        cpuIdleCoresAtLeast: finiteNumber(record?.cpuIdleCoresAtLeast),
+        memoryPressureAtMost: pressure === "normal" || pressure === "warn" ? pressure : null,
+        expiresInSeconds: finiteNumber(record?.expiresInSeconds),
+        noted: typeof record?.note === "string",
+        watchId: auditWatchId(record?.watchId),
+      };
+    },
+  ],
   [
     "host.list",
     // Which host and whether it searched or paged, never the words searched for.

@@ -21,6 +21,7 @@ import { installHostMetricsClient } from "./metrics/clientInstall.js";
 import { installCanopyHostsClient } from "./canopy/clientInstall.js";
 import { installDeviceAnswerHostsClient } from "./deviceAnswer/clientInstall.js";
 import { installHostControl, installHostControlLinkClient } from "./assistant/install.js";
+import { getRemoteService } from "./runtime.js";
 import {
   acceptLocalPushForRemoteView,
   installHybridSplits,
@@ -324,6 +325,18 @@ function startClient(options: StartRemoteHostsOptions): void {
       },
       isHostControlEnabled: (hostId) =>
         client.registry.get(hostId)?.assistantControlEnabled === true,
+      // What `host.watch` hears (#14463): nothing a host isn't already sending.
+      watchHosts: (listener) => {
+        const offs = [
+          client.registry.onChange(() => listener.changed()),
+          client.manager.onStateChange(() => listener.changed()),
+          getRemoteService("hostMetrics")?.onSummary((hostId) => listener.summary(hostId)) ??
+            (() => {}),
+        ];
+        return () => {
+          for (const off of offs) off();
+        };
+      },
     })
   );
   // The sender each session proves to a host before a call is relayed there.

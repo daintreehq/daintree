@@ -563,3 +563,68 @@ describe("host.settings audit (#14167)", () => {
     expect(projectAuditResult("host.settings", "nope")).toEqual({ status: "unrecognized" });
   });
 });
+
+describe("host.watch audit (#14463)", () => {
+  it("records which watches and where each stands, never the note, name, detail or figures", () => {
+    const watch = {
+      watchId: "hw-0b7a1c2e-0000-4000-8000-000000000001",
+      hostId: "studio-01",
+      hostName: "NAME-SENTINEL",
+      condition: {
+        connection: null,
+        memoryAvailableBytesAtLeast: 1,
+        cpuIdleCoresAtLeast: null,
+        memoryPressureAtMost: null,
+      },
+      note: "NOTE-SENTINEL",
+      armedAt: 1,
+      expiresAt: 2,
+      status: "fired",
+      endedAt: 2,
+      lostReason: null,
+      observed: {
+        observedAt: 2,
+        link: "connected",
+        lastSeenAt: 2,
+        load: { temperatureZone: "ZONE-SENTINEL" },
+      },
+      delivery: "held",
+    };
+    const result = projectAuditResult("host.watch", {
+      outcome: "ok",
+      detail: "PROSE-SENTINEL",
+      retryAfterMs: null,
+      armed: false,
+      watches: [watch, { status: "STATUS-SENTINEL" }],
+      observed: { link: "connected", load: { temperatureZone: "ZONE-SENTINEL" } },
+    });
+    const args = projectAuditArgs("host.watch", {
+      operation: "arm",
+      hostId: "studio-01",
+      memoryAvailableBytesAtLeast: 1,
+      note: "NOTE-SENTINEL",
+    });
+
+    expect(result).toMatchObject({
+      outcome: "ok",
+      armed: false,
+      watches: [
+        {
+          watchId: "hw-0b7a1c2e-0000-4000-8000-000000000001",
+          hostId: "studio-01",
+          on: "capacity",
+          status: "fired",
+          delivery: "held",
+        },
+        { watchId: null, status: null },
+      ],
+    });
+    expect(args).toMatchObject({ operation: "arm", memoryAvailableBytesAtLeast: 1, noted: true });
+    const audited = JSON.stringify([summarizeMcpResult(result), summarizeMcpArgs(args)]);
+    expect(audited).not.toContain("SENTINEL");
+    expect(projectAuditResult("host.watch", "nope")).toEqual({ status: "unrecognized" });
+    expect(
+      JSON.stringify(projectAuditArgs("host.watch", { note: "NOTE-SENTINEL", operation: 5 }))
+    ).not.toContain("SENTINEL");
+  });
+});

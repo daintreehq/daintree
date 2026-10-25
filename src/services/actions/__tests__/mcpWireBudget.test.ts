@@ -872,7 +872,14 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // offset and omitted count, the next cursor and whether the list changed), so
   // a page of 50 can no longer pass for a whole list. Assistant-only, so the
   // external ceiling does not move.
-  const MAX_COHORT_PAYLOAD_BYTES = 146_860;
+  // 146_860 → 151_050 for `host.watch` (#14463), measured at 151_008 B
+  // (+4_167): its description, the operation, hostId, link and capacity
+  // conditions, expiry, note and watchId arguments, and an output schema of the
+  // shared outcome fields, each watch's condition, status, timestamps and
+  // notice delivery, and the host as observed (link, last seen, the sample's
+  // time and the three figures a watch reads), so a notice is evidence rather
+  // than a verdict. Assistant-only, so the external ceiling does not move.
+  const MAX_COHORT_PAYLOAD_BYTES = 151_050;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

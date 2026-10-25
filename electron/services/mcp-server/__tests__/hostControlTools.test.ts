@@ -20,6 +20,16 @@ function fakeRuntime() {
     settings: vi.fn(() =>
       ok({ outcome: "ok" as const, detail: null, retryAfterMs: null, ticket: null, hosts: [] })
     ),
+    watch: vi.fn(() =>
+      ok({
+        outcome: "ok" as const,
+        detail: null,
+        retryAfterMs: null,
+        armed: false,
+        watches: [],
+        observed: null,
+      })
+    ),
   } satisfies HostControlRuntimeHandle;
 }
 
@@ -215,6 +225,45 @@ describe("runHostControlTool (#13493)", () => {
     uninstall();
     expect(runtime.settings).toHaveBeenCalledTimes(2);
     expect(runtime.settings).toHaveBeenCalledWith("hub", preview);
+    for (const answer of refused) expect(answer).toMatchObject({ ok: false, code: "INVALID_ARGS" });
+  });
+
+  it("hands host.watch one kind of condition to arm, and each operation only its own arguments (#14463)", async () => {
+    const runtime = fakeRuntime();
+    const uninstall = setHostControlRuntime(runtime);
+    const access = bindHostControl(() => "hub");
+    const accepted = [
+      { operation: "arm", hostId: "h", connection: "connected", note: "go", expiresInSeconds: 600 },
+      {
+        operation: "arm",
+        hostId: "h",
+        memoryAvailableBytesAtLeast: 1,
+        memoryPressureAtMost: "warn",
+      },
+      { operation: "cancel", watchId: "hw-1" },
+      { operation: "list" },
+      { operation: "list", hostId: "h" },
+    ];
+    for (const args of accepted) await runHostControlTool("host.watch", args, access);
+    const refused = await Promise.all(
+      [
+        { operation: "arm", connection: "connected" },
+        { operation: "arm", hostId: "h" },
+        // A link watch and a capacity watch are two watches.
+        { operation: "arm", hostId: "h", connection: "connected", cpuIdleCoresAtLeast: 2 },
+        { operation: "arm", hostId: "h", connection: "connected", watchId: "hw-1" },
+        { operation: "arm", hostId: "h", connection: "connected", expiresInSeconds: 30 },
+        { operation: "arm", hostId: "h", memoryAvailableBytesAtLeast: -1 },
+        { operation: "cancel" },
+        { operation: "cancel", watchId: "hw-1", hostId: "h" },
+        { operation: "cancel", watchId: "hw-1", connection: "connected" },
+        { operation: "list", watchId: "hw-1" },
+        { operation: "list", note: "x" },
+      ].map((args) => runHostControlTool("host.watch", args, access))
+    );
+    uninstall();
+    expect(runtime.watch).toHaveBeenCalledTimes(accepted.length);
+    expect(runtime.watch).toHaveBeenCalledWith("hub", accepted[0]);
     for (const answer of refused) expect(answer).toMatchObject({ ok: false, code: "INVALID_ARGS" });
   });
 
