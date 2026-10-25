@@ -147,7 +147,7 @@ export const HostThrowawayToolResultSchema = z.discriminatedUnion("tool", [
     .object({
       tool: z.literal(THROWAWAY_OUTPUT_TOOL),
       run: HostThrowawayRunSchema,
-      /** The terminal's text as observed, last lines last. */
+      /** The terminal's text as observed, last lines last; empty only for a screen read blank. */
       content: z.string(),
       lineCount: count,
       truncated: z.boolean(),
@@ -182,7 +182,8 @@ export type HostThrowawayToolResult = z.infer<typeof HostThrowawayToolResultSche
 
 /**
  * A throwaway tool that ran and failed. `not-found` is also every run that
- * isn't the caller's own; `exited` is input sent to a run whose process ended.
+ * isn't the caller's own; `exited` is input sent to a run whose process ended;
+ * `output-unavailable` is a screen the host couldn't read, never a blank one.
  */
 export const HOST_THROWAWAY_FAILURES = [
   "not-found",
@@ -190,6 +191,7 @@ export const HOST_THROWAWAY_FAILURES = [
   "launch-failed",
   "input-failed",
   "close-failed",
+  "output-unavailable",
 ] as const;
 export type HostThrowawayFailure = (typeof HOST_THROWAWAY_FAILURES)[number];
 

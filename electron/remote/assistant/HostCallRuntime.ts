@@ -531,6 +531,8 @@ const THROWAWAY_FAILURE_MESSAGES: Record<HostThrowawayFailure, string> = {
   "launch-failed": "The agent couldn't be launched.",
   "input-failed": "The input couldn't be typed into the run.",
   "close-failed": "The run couldn't be closed. Its process may still be running.",
+  "output-unavailable":
+    "The run's screen couldn't be read, so its output wasn't checked; this is not an empty screen. Nothing was typed or relaunched. Read it again, or check its status.",
 };
 const CALL_SENDER_REFUSED_DETAIL =
   "The host refused this Shell's identity on the current connection. Try again shortly.";

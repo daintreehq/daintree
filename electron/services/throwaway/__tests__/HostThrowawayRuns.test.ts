@@ -320,6 +320,86 @@ describe("HostThrowawayRuns", () => {
     await expect(output).resolves.toEqual({ ok: false, reason: "not-found" });
   });
 
+  describe("output reads (#14460)", () => {
+    const unreadable = {
+      null: async () => null,
+      throw: async () => {
+        throw new Error("snapshot timed out");
+      },
+    } satisfies Record<string, HostThrowawayRunsDeps["readScreen"]>;
+
+    for (const [kind, readScreen] of Object.entries(unreadable)) {
+      it(`answers a read that came back ${kind} as unavailable, sending and launching nothing`, async () => {
+        const { runs, spawned, submitted, written, killed } = harness({ readScreen });
+        const run = await launch(runs);
+        await expect(
+          runs.call(OWNER, { tool: "throwaway.output", args: { runId: run.runId } })
+        ).resolves.toEqual({ ok: false, reason: "output-unavailable" });
+        expect(spawned).toHaveLength(1);
+        expect(submitted).toEqual([]);
+        expect(written).toEqual([]);
+        expect(killed).toEqual([]);
+        expect(runs.list()).toMatchObject([{ runId: run.runId, state: "running" }]);
+      });
+    }
+
+    it("keeps a blank screen that was read as an empty result", async () => {
+      const { runs } = harness({
+        readScreen: async () => ({ content: "", lineCount: 0, truncated: false }),
+      });
+      const run = await launch(runs);
+      const outcome = await runs.call(OWNER, {
+        tool: "throwaway.output",
+        args: { runId: run.runId },
+      });
+      expect(outcome).toMatchObject({
+        ok: true,
+        result: { tool: "throwaway.output", content: "", lineCount: 0, truncated: false },
+      });
+      if (!outcome.ok) throw new Error("expected a result");
+      expect(HostThrowawayToolResultSchema.safeParse(outcome.result).success).toBe(true);
+    });
+
+    it("passes a truncated screen through as read", async () => {
+      const { runs } = harness({
+        readScreen: async () => ({ content: "line 9\nline 10", lineCount: 2, truncated: true }),
+      });
+      const run = await launch(runs);
+      await expect(
+        runs.call(OWNER, { tool: "throwaway.output", args: { runId: run.runId, maxLines: 2 } })
+      ).resolves.toMatchObject({
+        ok: true,
+        result: { content: "line 9\nline 10", lineCount: 2, truncated: true },
+      });
+    });
+
+    it("answers an unreadable read across a close as not found", async () => {
+      let fail: () => void = () => {};
+      const { runs } = harness({
+        readScreen: () =>
+          new Promise((_, reject) => {
+            fail = () => reject(new Error("terminal gone"));
+          }),
+      });
+      const run = await launch(runs);
+      const output = runs.call(OWNER, { tool: "throwaway.output", args: { runId: run.runId } });
+      await runs.call(OWNER, { tool: "throwaway.close", args: { runId: run.runId } });
+      fail();
+      await expect(output).resolves.toEqual({ ok: false, reason: "not-found" });
+    });
+
+    it("answers a run past its time limit as not found without reading it", async () => {
+      const readScreen = vi.fn(async () => null);
+      const { runs, advance } = harness({ readScreen });
+      const run = await launch(runs);
+      advance(DEFAULT_THROWAWAY_TIME_LIMIT_MS);
+      await expect(
+        runs.call(OWNER, { tool: "throwaway.output", args: { runId: run.runId } })
+      ).resolves.toEqual({ ok: false, reason: "not-found" });
+      expect(readScreen).not.toHaveBeenCalled();
+    });
+  });
+
   it("reports a close whose process didn't end as failed, keeping the run", async () => {
     vi.useFakeTimers();
     const { runs } = harness({ kill: () => {} });
