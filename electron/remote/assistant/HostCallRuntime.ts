@@ -3,7 +3,6 @@ import { isGlobalAssistantId } from "../../../shared/config/globalAssistant.js";
 import { PROJECT_CHECK_DEFAULT_TIMEOUT_MS } from "../../../shared/types/projectCheck.js";
 import { REPLY_WAIT_DEFAULT_SECONDS } from "../../../shared/types/replyWait.js";
 import {
-  HOST_LIST_PROJECTS_MAX,
   type HostCallArgs,
   type HostCallResult,
   type HostControlOutcome,
@@ -53,6 +52,15 @@ import {
 import { sanitizeNotifyNote } from "../../../shared/types/terminalNotify.js";
 import { projectHostLoad } from "./hostLoad.js";
 import { projectHostAgentClis, projectHostBuild, projectHostLink } from "./hostObservations.js";
+import {
+  decodeProjectCursor,
+  fitProjectPages,
+  inventoryOf,
+  pageProjects,
+  type ProjectCursor,
+  type ProjectPage,
+} from "./hostProjectInventory.js";
+import { MAX_LISTED_PROJECTS } from "../host/linkMethods.js";
 import type { HostControlLinkClient } from "./HostControlLinkClient.js";
 import type { AssistantEnsureRequest } from "../projects/HostSwitchService.js";
 import {
@@ -645,6 +653,8 @@ function codeOf(error: unknown): string | null {
 const REFUSAL_MESSAGES = {
   NOT_ELIGIBLE: NOT_ELIGIBLE_MESSAGE,
   UNAVAILABLE: ERROR_MESSAGE,
+  INVALID_ARGS:
+    "That projectCursor isn't one host.list gave, or names another host or query than the call does.",
 } as const;
 
 class RefusalError extends Error {
@@ -708,6 +718,43 @@ function agentsKey(hostId: HostId, projectId: string | undefined): string {
   return `${hostId}\u0000${projectId ?? ""}`;
 }
 
+interface ProjectScope {
+  /** The one host listed, from the call or its cursor; null lists every host. */
+  hostId: string | null;
+  pageOptions(
+    hostId: string,
+    capped: boolean
+  ): { hostId: string; query: string | null; cursor: ProjectCursor | null; capped: boolean };
+}
+
+/**
+ * The host, query and page a `host.list` call asks for. A cursor keeps the
+ * host and query it was cut for; a call naming others alongside it is refused
+ * rather than read one way or the other.
+ */
+function projectScope(args: HostListArgs): ProjectScope {
+  const cursor = args.projectCursor === undefined ? null : decodeProjectCursor(args.projectCursor);
+  if (args.projectCursor !== undefined) {
+    if (
+      cursor === null ||
+      (args.hostId !== undefined && args.hostId !== cursor.hostId) ||
+      (args.projectQuery !== undefined && args.projectQuery !== cursor.query)
+    ) {
+      throw new RefusalError("INVALID_ARGS");
+    }
+  }
+  const query = cursor ? cursor.query : (args.projectQuery ?? null);
+  return {
+    hostId: cursor ? cursor.hostId : (args.hostId ?? null),
+    pageOptions: (hostId, capped) => ({
+      hostId,
+      query,
+      cursor: cursor?.hostId === hostId ? cursor : null,
+      capped,
+    }),
+  };
+}
+
 /** Settles with `work`, or with `fallback` once `ms` pass; the timer never outlives it. */
 function withinMs<T>(work: Promise<T>, ms: number, fallback: T): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -715,17 +762,6 @@ function withinMs<T>(work: Promise<T>, ms: number, fallback: T): Promise<T> {
     timer = setTimeout(() => resolve(fallback), ms);
   });
   return Promise.race([work, late]).finally(() => clearTimeout(timer));
-}
-
-/** A project as `host.list` names it, with whether a frontend is attached as its host said. */
-function listedProject(
-  project: HostProjectSummary
-): NonNullable<HostListEntry["projects"]>[number] {
-  return {
-    projectId: project.id,
-    name: project.name,
-    frontendAttached: project.frontendAttached ?? null,
-  };
 }
 
 function observedConnection(state: HostConnectionState): HostListEntry["connection"] {
@@ -1607,22 +1643,29 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
   ): Promise<HostControlOutcome<HostListResult>> {
     const agentsOf = args.includeAgents === true ? { projectId: args.projectId } : null;
     return this.settle(helpSessionId, async (caller) => {
-      const local = this.deps.local;
+      const scope = projectScope(args);
+      const wanted = (hostId: string) => scope.hostId === null || scope.hostId === hostId;
+      const local = wanted(LOCAL_HOST_ID) ? this.deps.local : undefined;
       // Each load is projected after every read below settles, against one clock
       // reading: a slow project read must not leave a sample looking fresher
       // than it is when the answer goes out.
       const sampled = new Map<HostListEntry, HostMetricsSummary>();
-      const here = local ? this.localEntry(local, caller, agentsOf, sampled) : null;
+      // Pages are cut to fit once every host has answered, so one host's long
+      // names can't take the whole answer's room.
+      const paged = new Map<HostListEntry, ProjectPage>();
+      const here = local ? this.localEntry(local, caller, agentsOf, sampled, scope, paged) : null;
       const observed = this.deps.hosts();
       this.forgetUnreadableHosts(observed);
+      // Cached reads are pruned against every host, not only the one listed.
+      const seenHosts = observed.filter((seen) => wanted(seen.hostId));
       const hosts = await Promise.all(
-        observed.map(async (seen): Promise<HostListEntry> => {
+        seenHosts.map(async (seen): Promise<HostListEntry> => {
           const host = await this.dialed(seen);
           const summary = host.summary;
           const connected = host.connection.status === "connected";
           const control = this.deps.controlEnabled?.(host.hostId) === true;
-          const [projects, agents] = await Promise.all([
-            connected && control ? this.hostProjects(host.hostId) : null,
+          const [page, agents] = await Promise.all([
+            connected && control ? this.hostProjects(host.hostId, scope) : null,
             agentsOf ? this.hostAgents(host, control, agentsOf) : null,
           ]);
           const entry: HostListEntry = {
@@ -1638,15 +1681,22 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
             // A tally from before the link dropped is history, not what is running now.
             agentsObserved:
               connected && summary?.agentsObserved ? { ...summary.agentsObserved } : null,
-            projects,
+            projects: null,
+            projectInventory: null,
             control,
             ...(agents ? { agents } : {}),
           };
           if (summary) sampled.set(entry, summary);
+          if (page) paged.set(entry, page);
           return entry;
         })
       );
       const settled = here ? await here : null;
+      fitProjectPages([...paged.values()]);
+      for (const [entry, page] of paged) {
+        entry.projects = page.projects;
+        entry.projectInventory = inventoryOf(page);
+      }
       const now = this.now();
       const aged = (entry: HostListEntry): HostListEntry => {
         const summary = sampled.get(entry);
@@ -1673,7 +1723,9 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     local: LocalHostReach,
     caller: OpenRun,
     agentsOf: { projectId?: string } | null,
-    sampled: Map<HostListEntry, HostMetricsSummary>
+    sampled: Map<HostListEntry, HostMetricsSummary>,
+    scope: ProjectScope,
+    paged: Map<HostListEntry, ProjectPage>
   ): Promise<HostListEntry> {
     const summary = local.latestSummary?.() ?? null;
     const projects = await withinMs(
@@ -1695,17 +1747,18 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       lastSeenAt: null,
       load: null,
       agentsObserved: null,
-      projects:
-        projects === null
-          ? null
-          : projects
-              .filter((project) => project.id !== caller.projectId)
-              .slice(0, HOST_LIST_PROJECTS_MAX)
-              .map(listedProject),
+      projects: null,
+      projectInventory: null,
       control: true,
       ...(agentsOf ? { agents: await this.localAgents(local, agentsOf) } : {}),
     };
     if (summary) sampled.set(entry, summary);
+    if (projects !== null) {
+      // The caller's own project is left out before paging, so its cursor's
+      // revision is of the list this caller sees.
+      const reachable = projects.filter((project) => project.id !== caller.projectId);
+      paged.set(entry, pageProjects(reachable, scope.pageOptions(LOCAL_HOST_ID, false)));
+    }
     return entry;
   }
 
@@ -1846,8 +1899,8 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     return this.deps.hosts().find((candidate) => candidate.hostId === host.hostId) ?? host;
   }
 
-  /** A connected host's projects, or null when it didn't say in time. */
-  private async hostProjects(hostId: HostId): Promise<HostListEntry["projects"]> {
+  /** A page of a connected host's projects, or null when it didn't say in time. */
+  private async hostProjects(hostId: HostId, scope: ProjectScope): Promise<ProjectPage | null> {
     const read = this.deps.listHostProjects;
     if (!read) return null;
     const projects = await withinMs(
@@ -1855,7 +1908,10 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       PROJECTS_READ_MS,
       null
     );
-    return projects === null ? null : projects.slice(0, HOST_LIST_PROJECTS_MAX).map(listedProject);
+    if (projects === null) return null;
+    // A host sends at most this many and says nothing of the rest.
+    const capped = projects.length >= MAX_LISTED_PROJECTS;
+    return pageProjects(projects, scope.pageOptions(hostId, capped));
   }
 
   private ok(): { outcome: "ok"; detail: null; retryAfterMs: null } {

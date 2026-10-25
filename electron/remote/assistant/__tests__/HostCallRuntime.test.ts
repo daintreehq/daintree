@@ -163,6 +163,14 @@ describe("HostCallRuntime (#13493, #13496)", () => {
             { projectId: "proj-2", name: "website", frontendAttached: false },
             { projectId: "proj-3", name: "api", frontendAttached: null },
           ],
+          projectInventory: {
+            complete: true,
+            total: 2,
+            offset: 0,
+            omitted: 0,
+            nextCursor: null,
+            listChanged: false,
+          },
           control: true,
         },
         {
@@ -196,6 +204,7 @@ describe("HostCallRuntime (#13493, #13496)", () => {
           agentsObserved: null,
           // Its switch is off, so nothing is read from it.
           projects: null,
+          projectInventory: null,
           control: false,
         },
       ]);
