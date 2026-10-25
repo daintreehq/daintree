@@ -259,6 +259,7 @@ export interface SessionServerDepsSource {
   readCodexQuota?: import("./sessionServer.js").SessionServerDeps["readCodexQuota"];
   isTerminalIdInUse: (terminalId: string) => boolean;
   readTerminalCloseContext?: import("./sessionServer.js").SessionServerDeps["readTerminalCloseContext"];
+  readClosedPanelProcess?: import("./sessionServer.js").SessionServerDeps["readClosedPanelProcess"];
   /**
    * Whether the pty-host's record places a terminal as an agent pane of this
    * workspace (#12883). `false` for anything it cannot place.
@@ -1022,6 +1023,9 @@ export function createSessionServerDeps(
     isTerminalIdInUse: deps.isTerminalIdInUse,
     ...(deps.readTerminalCloseContext !== undefined
       ? { readTerminalCloseContext: deps.readTerminalCloseContext }
+      : {}),
+    ...(deps.readClosedPanelProcess !== undefined
+      ? { readClosedPanelProcess: deps.readClosedPanelProcess }
       : {}),
     isTerminalInPinnedWorkspace,
     ...(deps.replyWaiter !== undefined ? { replyWaiter: deps.replyWaiter } : {}),

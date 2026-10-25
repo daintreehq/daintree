@@ -1,6 +1,7 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import type { ActionContext, ActionSource } from "@shared/types/actions";
 import { z } from "zod";
+import { PanelCloseResultSchema } from "@shared/types/panelClose";
 import { flushOptimisticCloses, requestPanelClose } from "@/services/terminal/optimisticPanelClose";
 import { usePanelStore } from "@/store/panelStore";
 import { isEphemeralPanel } from "@/store/slices/panelRegistry/panelCount";
@@ -14,14 +15,6 @@ import {
   TerminalKillBatchArgsSchema,
 } from "./terminalLifecycleActionArgs";
 import type { TerminalLifecycleActionRunId } from "./terminalLifecycleActions.impl";
-
-const PanelCloseResultSchema = z.object({
-  closedIds: z
-    .array(z.string())
-    .describe(
-      "Panels closed. Empty means nothing closed (none to act on, already in the trash, or teardown failed): treat it as a failed close."
-    ),
-});
 
 const RestartOnPresetResultSchema = z.object({
   terminalId: z.string().describe("The pane, respawned in place."),
