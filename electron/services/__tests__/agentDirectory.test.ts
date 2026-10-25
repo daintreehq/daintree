@@ -506,4 +506,115 @@ describe("LocalAgentDirectory last-known retention", () => {
     expect(read).toMatchObject({ coverage: "unreachable", observedAt: null, entries: [] });
     expect(isFullAgentDirectory(read)).toBe(false);
   });
+
+  describe("late reads (#14456)", () => {
+    type Read = Awaited<ReturnType<AgentDirectorySources["readTerminals"]>>;
+    function deferredReads() {
+      const calls: Array<{ resolve: (read: Read) => void; reject: (error: Error) => void }> = [];
+      return {
+        calls,
+        readTerminals: () =>
+          new Promise<Read>((resolve, reject) => {
+            calls.push({ resolve, reject });
+          }),
+      };
+    }
+    const snapshot = (title: string): Read => ({
+      terminals: [terminal({ id: "w1", projectId: "p1", detectedAgentId: "claude", title })],
+      degraded: false,
+    });
+    const labels = (read: AgentDirectory) =>
+      read.entries.map((entry) => (entry.state === "live" ? entry.label : null));
+
+    it("never lets a timed-out read replace a newer snapshot of its scope", async () => {
+      vi.useFakeTimers();
+      try {
+        let clock = 100;
+        const reads = deferredReads();
+        const directory = new LocalAgentDirectory(
+          sources({
+            now: () => clock,
+            listRunningLanes: () => [],
+            getLiveGeneration: () => 1,
+            readTerminals: reads.readTerminals,
+          }),
+          20
+        );
+
+        const a = directory.read();
+        await vi.advanceTimersByTimeAsync(20);
+        expect(await a).toMatchObject({ coverage: "unreachable" });
+
+        clock = 300;
+        const b = directory.read();
+        await vi.advanceTimersByTimeAsync(0);
+        reads.calls[1]!.resolve(snapshot("new snapshot"));
+        const fresh = await b;
+        expect(fresh).toMatchObject({ coverage: "ok", observedAt: 300 });
+        expect(labels(fresh)).toEqual(["new snapshot"]);
+
+        // A's collection was still running and read its sources before B did.
+        clock = 400;
+        reads.calls[0]!.resolve(snapshot("old snapshot"));
+        await vi.advanceTimersByTimeAsync(0);
+
+        const c = directory.read();
+        await vi.advanceTimersByTimeAsync(0);
+        reads.calls[2]!.reject(new Error("no pty client"));
+        const stale = await c;
+        expect(stale).toMatchObject({ coverage: "stale", observedAt: 300, complete: false });
+        expect(labels(stale)).toEqual(["new snapshot"]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("lets a late read refresh its scope when nothing newer landed, and keeps scopes apart", async () => {
+      vi.useFakeTimers();
+      try {
+        let clock = 100;
+        const reads = deferredReads();
+        const directory = new LocalAgentDirectory(
+          sources({
+            now: () => clock,
+            listRunningLanes: () => [],
+            getLiveGeneration: () => 1,
+            readTerminals: reads.readTerminals,
+          }),
+          20
+        );
+
+        const all = directory.read();
+        await vi.advanceTimersByTimeAsync(20);
+        expect(await all).toMatchObject({ coverage: "unreachable" });
+
+        // A newer read of another scope lands first; it must not order this one.
+        clock = 300;
+        const other = directory.read({ projectId: "p1" });
+        await vi.advanceTimersByTimeAsync(0);
+        reads.calls[1]!.resolve(snapshot("p1 snapshot"));
+        expect(labels(await other)).toEqual(["p1 snapshot"]);
+
+        clock = 400;
+        reads.calls[0]!.resolve(snapshot("late snapshot"));
+        await vi.advanceTimersByTimeAsync(0);
+
+        const next = directory.read();
+        await vi.advanceTimersByTimeAsync(0);
+        reads.calls[2]!.reject(new Error("no pty client"));
+        const stale = await next;
+        expect(stale).toMatchObject({ coverage: "stale", observedAt: 400 });
+        expect(labels(stale)).toEqual(["late snapshot"]);
+
+        const p1 = directory.read({ projectId: "p1" });
+        await vi.advanceTimersByTimeAsync(0);
+        reads.calls[3]!.reject(new Error("no pty client"));
+        const p1Stale = await p1;
+        expect(p1Stale).toMatchObject({ coverage: "stale", observedAt: 300 });
+        expect(labels(p1Stale)).toEqual(["p1 snapshot"]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
 });

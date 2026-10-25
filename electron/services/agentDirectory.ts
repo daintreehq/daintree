@@ -257,8 +257,9 @@ const LAST_KNOWN_SCOPES_MAX = 64;
  * and never as an empty inventory. Reads of one scope share a flight.
  */
 export class LocalAgentDirectory {
-  private readonly last = new Map<string, AgentDirectory>();
+  private readonly last = new Map<string, { directory: AgentDirectory; started: number }>();
   private readonly inFlight = new Map<string, Promise<AgentDirectory>>();
+  private started = 0;
 
   constructor(
     private readonly sources: AgentDirectorySources,
@@ -269,8 +270,11 @@ export class LocalAgentDirectory {
     const key = `${options.assistantsOnly ? "a" : "*"}:${options.projectId ?? ""}`;
     const pending = this.inFlight.get(key);
     if (pending) return pending;
+    // Reads are ordered by when they began: one that outlived its deadline
+    // finishes after a newer read and must not move the last known one back.
+    const started = ++this.started;
     const keepLast = (): AgentDirectory => {
-      const previous = this.last.get(key);
+      const previous = this.last.get(key)?.directory;
       return previous
         ? { ...previous, coverage: "stale", complete: false }
         : unreadAgentDirectory("unreachable");
@@ -281,13 +285,14 @@ export class LocalAgentDirectory {
     });
     const read = collectAgentDirectory(this.sources, options).then(
       (directory) => {
+        const previous = this.last.get(key);
+        if (previous && previous.started > started) return directory;
         // A failed pty shard is not an inventory: it must not replace one that was read.
-        if (directory.coverage === "ok" && !directory.complete && this.last.has(key)) {
-          const previous = this.last.get(key);
-          if (previous && previous.complete) return keepLast();
+        if (directory.coverage === "ok" && !directory.complete && previous?.directory.complete) {
+          return keepLast();
         }
         this.last.delete(key);
-        this.last.set(key, directory);
+        this.last.set(key, { directory, started });
         if (this.last.size > LAST_KNOWN_SCOPES_MAX) {
           this.last.delete(this.last.keys().next().value as string);
         }
