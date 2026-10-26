@@ -78,6 +78,7 @@ export function forgetHostLocalState(hostId: HostId): void {
         doomed.push(key);
       }
     }
+    // storage-key: daintree_cmd_history_ daintree_quickrun_autorestart_ daintree_quickrun_expanded_ daintree-sidebar-view:
     for (const key of doomed) localStorage.removeItem(key);
   } catch (error) {
     logWarn("Clearing a removed host's stored state failed", { error });

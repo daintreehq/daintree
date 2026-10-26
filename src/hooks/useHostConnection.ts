@@ -1443,6 +1443,7 @@ export function _restartLossesForTesting(): ReadonlyMap<string, number> | null {
 export function _resetHostConnectionSyncForTesting(): void {
   _reloadHostConnectionSyncForTesting();
   try {
+    // storage-key: daintree:host-open-claim:
     for (const key of Object.keys(window.sessionStorage)) {
       if (key.startsWith(OPEN_CLAIM_KEY_PREFIX)) window.sessionStorage.removeItem(key);
     }

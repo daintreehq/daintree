@@ -37,9 +37,13 @@ interface SplitSetting {
 
 export type SettingEntry = SettingDeclaration | SplitSetting;
 
-/** One file of settings: electron-store's, by its `name`. */
+/**
+ * One place settings are kept: an electron-store file by its `name`, or the
+ * renderer's web storage by key. A renderer key ending in `*` declares every
+ * key that starts with what precedes it.
+ */
 interface SettingStore {
-  readonly kind: "electron-store";
+  readonly kind: "electron-store" | "localStorage" | "sessionStorage";
   readonly entries: Readonly<Record<string, SettingEntry>>;
 }
 
@@ -48,6 +52,7 @@ const hostPerProject = { owner: "host", scope: "project" } as const;
 const hostGlobalOrProject = { owner: "host", scope: "global-or-project" } as const;
 const device = { owner: "device", scope: "global" } as const;
 const devicePerHost = { owner: "device", scope: "host" } as const;
+const devicePerProject = { owner: "device", scope: "project" } as const;
 const deviceGlobalOrProject = { owner: "device", scope: "global-or-project" } as const;
 
 export const SETTING_CATALOG = {
@@ -244,6 +249,63 @@ export const SETTING_CATALOG = {
       pluginMcpAuditLog: host,
     },
   },
+  // The renderer's own storage. Every project view shares the `persist:daintree`
+  // partition on this machine, so a remote window reads this Mac's value
+  // whichever host it is attached to: all of it is the device's, and the scope
+  // says how the value divides (#14695).
+  "renderer-local-storage": {
+    kind: "localStorage",
+    entries: {
+      "daintree-panel-limits": device,
+      "daintree-two-pane-split": deviceGlobalOrProject,
+      "daintree-preferences": device,
+      "daintree-toolbar-preferences": device,
+      "portal-storage": device,
+      "daintree-sidebar-view:*": devicePerHost,
+      "daintree-worktree-filters*": deviceGlobalOrProject,
+      "daintree-command-history": devicePerProject,
+      "daintree-url-history": devicePerProject,
+      "daintree-terminal-search-history": device,
+      "daintree-diff-notes": devicePerProject,
+      "daintree-project-home": devicePerProject,
+      "daintree-application-navigation": devicePerProject,
+      "daintree-notification-history": device,
+      "daintree-voice-recording": device,
+      "daintree-forge-token-callout": device,
+      "daintree-plugin-terminal-links": device,
+      "help-panel-storage": device,
+      "project-storage": device,
+      "daintree-canopy-scope": device,
+      "daintree-canopy-all-hosts": device,
+      "daintree-canopy-order": device,
+      "daintree-canopy-acknowledged": device,
+      "daintree-canopy-role": device,
+      "daintree-canopy-assistant-handbacks": device,
+      "daintree:cliAvailability:v3": device,
+      "daintree:fleet-selection-hint-dismissed": device,
+      "daintree:host-build-noticed:*": devicePerHost,
+      "daintree:plugin-view-state:*": deviceGlobalOrProject,
+      "daintree:repo-stats:obs:*": device,
+      "daintree:repo-stats:alias:*": devicePerHost,
+      "kit:viewState:*": deviceGlobalOrProject,
+      "daintree_cmd_history_*": devicePerProject,
+      "daintree_quickrun_autorestart_*": devicePerProject,
+      "daintree_quickrun_expanded_*": devicePerProject,
+      "daintree_project_hosts_expanded": device,
+      "daintree_project_hosts_all_shown": device,
+      "daintree_project_hosts_handoff": device,
+      // Keys earlier builds wrote that the app still reads once or cleans up.
+      "daintree-agent-preferences": device,
+      "project-groups-storage": device,
+    },
+  },
+  // Lives as long as the view does; one project's one-shot claim on open.
+  "renderer-session-storage": {
+    kind: "sessionStorage",
+    entries: {
+      "daintree:host-open-claim:*": devicePerProject,
+    },
+  },
 } as const satisfies Readonly<Record<string, SettingStore>>;
 
 type ConfigEntries = typeof SETTING_CATALOG.config.entries;
@@ -278,4 +340,29 @@ export function settingDeclaration(path: SettingPath): SettingDeclaration {
 
 export function settingOwner(path: SettingPath): SettingOwner {
   return settingDeclaration(path).owner;
+}
+
+const RENDERER_STORAGE = [
+  SETTING_CATALOG["renderer-local-storage"].entries,
+  SETTING_CATALOG["renderer-session-storage"].entries,
+] as const;
+
+/** The declaration covering a renderer storage key, exact or by `*` prefix. */
+export function rendererStorageDeclaration(key: string): SettingDeclaration | undefined {
+  for (const entries of RENDERER_STORAGE) {
+    const exact = own<SettingEntry>(entries, key);
+    if (exact && !("fields" in exact)) return exact;
+    for (const [declared, entry] of Object.entries(entries)) {
+      if (declared.endsWith("*") && key.startsWith(declared.slice(0, -1)) && !("fields" in entry)) {
+        return entry;
+      }
+    }
+  }
+  return undefined;
+}
+
+export function rendererStorageOwner(key: string): SettingOwner {
+  const declaration = rendererStorageDeclaration(key);
+  if (!declaration) throw new Error(`No renderer storage key is declared for "${key}"`);
+  return declaration.owner;
 }

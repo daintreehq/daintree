@@ -25,6 +25,7 @@ function devicePreference(key: string, fallback: boolean): DevicePreference {
     read() {
       if (unpersisted !== null) return unpersisted;
       try {
+        // storage-key: daintree_project_hosts_expanded daintree_project_hosts_all_shown
         const stored = localStorage.getItem(key);
         return stored === null ? fallback : stored === "true";
       } catch {
@@ -48,6 +49,7 @@ function devicePreference(key: string, fallback: boolean): DevicePreference {
     },
     set(value) {
       try {
+        // storage-key: daintree_project_hosts_expanded daintree_project_hosts_all_shown
         localStorage.setItem(key, String(value));
         unpersisted = null;
       } catch {

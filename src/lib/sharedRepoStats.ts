@@ -63,6 +63,7 @@ function aliasKey(hostId: string, projectPath: string): string {
 
 function readJson(key: string): unknown {
   try {
+    // storage-key: daintree:repo-stats:obs: daintree:repo-stats:alias:
     const raw = window.localStorage.getItem(key);
     if (raw === null) return null;
     const parsed: unknown = JSON.parse(raw);
@@ -74,6 +75,7 @@ function readJson(key: string): unknown {
 
 function writeJson(key: string, value: unknown): void {
   try {
+    // storage-key: daintree:repo-stats:obs: daintree:repo-stats:alias:
     window.localStorage.setItem(key, JSON.stringify(value));
   } catch {
     // Quota or blocked storage: the toolbar falls back to the host's own seed.
@@ -167,6 +169,7 @@ export function writeRepoAlias(hostId: string, projectPath: string, alias: Share
 /** Forget a project's repository, once its counts no longer come from one repo. */
 export function clearRepoAlias(hostId: string, projectPath: string): void {
   try {
+    // storage-key: daintree:repo-stats:obs: daintree:repo-stats:alias:
     window.localStorage.removeItem(aliasKey(hostId, projectPath));
   } catch {
     // Blocked storage holds no alias to clear.

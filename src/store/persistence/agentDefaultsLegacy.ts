@@ -37,8 +37,10 @@ function stateOf(blob: Blob | null): Record<string, unknown> | null {
 
 /** The live blob, or its last-good backup when the live one is corrupt. */
 function readBlob(name: string): { present: boolean; blob: Blob | null } {
+  // storage-key: help-panel-storage daintree-agent-preferences daintree-toolbar-preferences
   const raw = readLocalStorageItemSafely(name);
   if (raw === null) return { present: false, blob: null };
+  // storage-key: help-panel-storage daintree-agent-preferences daintree-toolbar-preferences
   return {
     present: true,
     blob: parseBlob(raw) ?? parseBlob(readLocalStorageItemSafely(backupKeyFor(name))),

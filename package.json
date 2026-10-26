@@ -127,7 +127,7 @@
     "e2e-durations": "node scripts/ci/e2e-durations.mjs",
     "test-ratio:pr": "node scripts/check-pr-test-ratio.mjs",
     "check": "npm run typecheck && npm run check:guards && npm run lint:ratchet && npm run format:check",
-    "check:guards": "npm run check:channels && npm run check:channel-locality && npm run check:crash-loop-constants && npm run check:node-version && npm run check:control-bytes && npm run check:ipc && npm run check:ipc-renderer && npm run check:ipc-handwritten && npm run check:assistant && npm run check:confirm-wiring && npm run check:keybindings && npm run check:plugin-manifests && npm run check:plugin-schema && npm run check:sample-views && npm run check:design-contract && npm run check:plugin-style-vocabulary && npm run check:plugin-kit-graph && npm run check:process-tools && npm run check:api-surface && npm run e2e-waits:check",
+    "check:guards": "npm run check:channels && npm run check:channel-locality && npm run check:crash-loop-constants && npm run check:node-version && npm run check:control-bytes && npm run check:ipc && npm run check:ipc-renderer && npm run check:ipc-handwritten && npm run check:assistant && npm run check:confirm-wiring && npm run check:keybindings && npm run check:plugin-manifests && npm run check:plugin-schema && npm run check:sample-views && npm run check:design-contract && npm run check:plugin-style-vocabulary && npm run check:plugin-kit-graph && npm run check:process-tools && npm run check:renderer-storage && npm run check:api-surface && npm run e2e-waits:check",
     "fix": "npm run format && npm run lint:fix",
     "test:smoke": "node scripts/run-smoke.mjs",
     "test:freeze-harness": "node scripts/run-freeze-harness.mjs",
@@ -172,7 +172,8 @@
     "codegen:plugin-actions": "tsx scripts/codegen/plugin-actions-doc.ts",
     "check:plugin-actions": "tsx scripts/codegen/plugin-actions-doc.ts --check",
     "check:plugin-schema": "tsx scripts/codegen/plugin-json-schema.ts --check",
-    "check:keybindings": "tsx scripts/codegen/keyboard-shortcuts-doc.ts --check"
+    "check:keybindings": "tsx scripts/codegen/keyboard-shortcuts-doc.ts --check",
+    "check:renderer-storage": "tsx scripts/ci/check-renderer-storage-owners.ts"
   },
   "dependencies": {
     "@huggingface/tokenizers": "0.2.0",
