@@ -49,13 +49,15 @@ export function useVoiceWaitSubmit({
   const activeAttemptRef = useRef<number | null>(null);
   const [voiceSubmitPhase, setVoiceSubmitPhase] = useState<VoiceSubmitPhase | null>(null);
 
-  // A composer that unmounts mid-wait can't send what it no longer shows. The
-  // draft, and any correction still on its way to it, stay in the store.
+  // A composer that unmounts, or moves to another terminal, mid-wait can't
+  // send what it no longer shows. The draft, and any correction still on its
+  // way to it, stay in the store.
   useEffect(() => {
     return () => {
       if (activeAttemptRef.current === null) return;
       activeAttemptRef.current = null;
       useTerminalInputStore.getState().setVoiceSubmitting(terminalId, false);
+      setVoiceSubmitPhase(null);
     };
   }, [terminalId]);
 

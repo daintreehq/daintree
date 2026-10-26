@@ -467,6 +467,23 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     expect(baseline("panel-1")).toBe("zoo stand");
   });
 
+  it("leaves a baseline seeded without correction to its own passage", async () => {
+    const { service, dictate, flush, baseline, voiceStore } = await setup();
+    const first = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(first.promise);
+
+    dictate("panel-1", "versel");
+    await service.stop();
+    voiceStore.getState().setCorrectionEnabled(false);
+    dictate("panel-1", "versel");
+    await service.stop();
+    expect(baseline("panel-1")).toBe("versel");
+
+    first.resolve({ action: "replace", correctedText: "Vercel" });
+    await flush();
+    expect(baseline("panel-1")).toBe("versel");
+  });
+
   it("clears the underline and drops pending corrections when the service is torn down", async () => {
     const { service, dictate, draft, flush, voiceStore } = await setup();
     const first = deferred<CorrectResult>();

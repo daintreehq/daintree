@@ -230,6 +230,31 @@ describe("useVoiceWaitSubmit", () => {
     expect(sendFromEditor).not.toHaveBeenCalled();
   });
 
+  it("clears its status when the composer moves to another terminal mid-wait", async () => {
+    hasPendingMock.mockReturnValue(true);
+    waitMock.mockImplementation(() => new Promise<boolean>(() => {}));
+
+    const { result, rerender } = renderHook(
+      ({ terminalId }: { terminalId: string }) =>
+        useVoiceWaitSubmit({
+          terminalId,
+          editorViewRef: { current: null },
+          editableCompartmentRef: { current: new Compartment() },
+          sendFromEditor,
+        }),
+      { initialProps: { terminalId: PANEL_ID } }
+    );
+    await act(async () => {
+      result.current.startVoiceWaitSubmit();
+    });
+    expect(result.current.voiceSubmitPhase).toBe("polishing");
+
+    rerender({ terminalId: "other-panel" });
+
+    expect(result.current.voiceSubmitPhase).toBeNull();
+    expect(useTerminalInputStore.getState().isVoiceSubmitting(PANEL_ID)).toBe(false);
+  });
+
   it("sends once, from the later attempt, after Escape and a second Enter", async () => {
     const stops: Array<() => void> = [];
     stopMock.mockImplementation(

@@ -1612,6 +1612,8 @@ class VoiceRecordingService {
           // span (finishSession leaves sessionDraftStart intact) so manual
           // corrections can still be detected at send time (#9749).
           const { panelId, projectId } = stoppedTarget;
+          // This passage's baseline isn't any earlier correction's to replace.
+          this.baselineOwners.delete(panelId);
           const buffer = useVoiceRecordingStore.getState().panelBuffers[panelId];
           const sessionStart = buffer?.sessionDraftStart ?? -1;
           if (sessionStart >= 0) {
