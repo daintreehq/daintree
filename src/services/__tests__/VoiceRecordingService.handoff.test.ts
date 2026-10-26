@@ -104,7 +104,17 @@ function deferred(): Deferred {
 }
 
 type DeltaPayload = { text: string; itemId?: string };
-type CompletePayload = { text: string; willCorrect: boolean; itemId?: string };
+type CompletePayload = {
+  text: string;
+  willCorrect: boolean;
+  itemId?: string;
+  transcriptId?: string;
+};
+type FileTokenPayload = {
+  sessionId: string;
+  transcriptId: string;
+  references: Array<{ description: string; path: string | null }>;
+};
 
 interface WorkletNodeStub {
   port: {
@@ -121,7 +131,7 @@ function stubEnvironment(recordingMode: "toggle" | "push-to-talk") {
     complete: ((payload: CompletePayload) => void) | null;
     status: ((status: string) => void) | null;
     boundary: ((payload: { rawText: string | null }) => void) | null;
-    fileToken: ((payload: { description: string; replacement: string }) => void) | null;
+    fileToken: ((payload: FileTokenPayload) => void) | null;
   } = { delta: null, complete: null, status: null, boundary: null, fileToken: null };
   const drains: Deferred[] = [];
   const workletNodes: WorkletNodeStub[] = [];
@@ -142,12 +152,10 @@ function stubEnvironment(recordingMode: "toggle" | "push-to-talk") {
       callbacks.boundary = cb;
       return () => {};
     }),
-    onFileTokenResolved: vi.fn(
-      (cb: (payload: { description: string; replacement: string }) => void) => {
-        callbacks.fileToken = cb;
-        return () => {};
-      }
-    ),
+    onFileTokenResolved: vi.fn((cb: (payload: FileTokenPayload) => void) => {
+      callbacks.fileToken = cb;
+      return () => {};
+    }),
     onError: vi.fn(() => () => {}),
     onStatus: vi.fn((cb: (payload: { sessionId: string; status: string }) => void) => {
       callbacks.status = (status) => cb({ sessionId: "", status });
@@ -270,8 +278,8 @@ async function setup(recordingMode: "toggle" | "push-to-talk" = "toggle") {
   await settle();
   const store = () => useVoiceRecordingStore.getState();
   const delta = (text: string, itemId?: string) => env.callbacks.delta!({ text, itemId });
-  const complete = (text: string, itemId?: string) =>
-    env.callbacks.complete!({ text, willCorrect: false, itemId });
+  const complete = (text: string, itemId?: string, transcriptId?: string) =>
+    env.callbacks.complete!({ text, willCorrect: false, itemId, transcriptId });
   // Resolves once the capture with this index is attached and taking audio.
   const attached = (captureIndex: number) =>
     vi.waitFor(() => expect(env.workletNodes[captureIndex]?.port.onmessage).toBeTypeOf("function"));
@@ -594,29 +602,40 @@ describe("VoiceRecordingService — starting while a session finishes (#14604)",
   });
 
   it("keeps identified items and file tokens in the old panel during a retarget", async () => {
-    const { voiceRecordingService, store, delta, complete, drains, callbacks } = await setup();
+    const { voiceRecordingService, voiceInput, store, delta, complete, drains, callbacks } =
+      await setup();
 
     await voiceRecordingService.toggle(PANEL_A);
     callbacks.status!("recording");
-    delta("open the", "item-1");
+    // References come back under the id main was started with.
+    const sessionId = store().panelBuffers["panel-a"]?.dictationSessionId ?? "";
+    expect(voiceInput.start).toHaveBeenNthCalledWith(1, sessionId, { terminalId: "panel-a" });
+    delta("link to the", "item-1");
     delta("then run", "item-2");
 
     const retarget = voiceRecordingService.toggle(PANEL_B);
     await vi.waitFor(() => expect(drains).toHaveLength(1));
-    runtime.drafts["panel-b"] = "the readme";
+    runtime.drafts["panel-b"] = "Link to the readme.";
 
-    complete("Open the readme.", "item-1");
+    complete("Link to the readme.", "item-1", "t1");
     expect(store().panelBuffers["panel-a"]?.liveText).toBe("then run");
-    callbacks.fileToken!({ description: "the readme", replacement: "README.md" });
+    callbacks.fileToken!({
+      sessionId,
+      transcriptId: "t1",
+      references: [{ description: "readme", path: "README.md" }],
+    });
     complete("Then run it.", "item-2");
 
-    expect(runtime.drafts["panel-a"]).toBe("Open README.md. Then run it.");
-    expect(runtime.drafts["panel-b"]).toBe("the readme");
+    expect(runtime.drafts["panel-a"]).toBe("@README.md. Then run it.");
+    expect(runtime.drafts["panel-b"]).toBe("Link to the readme.");
 
     drains[0]!.resolve();
     await retarget;
     expect(store().activeTarget?.panelId).toBe("panel-b");
     expect(store().panelBuffers["panel-b"]?.liveText).toBe("");
+    const nextSessionId = store().panelBuffers["panel-b"]?.dictationSessionId;
+    expect(nextSessionId).not.toBe(sessionId);
+    expect(voiceInput.start).toHaveBeenNthCalledWith(2, nextSessionId, { terminalId: "panel-b" });
   });
 
   it("resumes a stopped start when the next hold lands before its audio is sent", async () => {
