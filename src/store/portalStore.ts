@@ -118,7 +118,11 @@ const createPortalStore: StateCreator<PortalState & PortalActions> = (set, get) 
     // overlay-clear effect re-shows the active tab once the overlay closes.
     if (useUIStore.getState().overlayStack.length > 0) return;
 
-    window.electron.portal.show({ tabId, bounds });
+    // A tab main released while this view was cached comes back through
+    // PortalVisibilityController once it reads as uncreated (#14537).
+    void Promise.resolve(window.electron.portal.show({ tabId, bounds })).then((shown) => {
+      if (shown === false) get().unmarkTabCreated(tabId);
+    });
   };
 
   return {
