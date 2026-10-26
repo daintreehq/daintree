@@ -24,8 +24,8 @@ export const DICTATED_PROMPTS: readonly DictatedPromptCase[] = [
   },
   {
     name: "a self-correction with no wait",
-    raw: "Use the old API, no wait, the new one for the session refresh.",
-    expected: ["Use the new one for the session refresh."],
+    raw: "Bump the timeout in the old config, no wait, the shared one, and leave the retries alone.",
+    expected: ["Bump the timeout in the shared one, and leave the retries alone."],
   },
   {
     name: "a retracted sentence",
@@ -115,10 +115,7 @@ export const DICTATED_PROMPTS: readonly DictatedPromptCase[] = [
   {
     name: "actually used as an ordinary word",
     raw: "The test is actually passing locally, so I think it's a timing issue on CI.",
-    expected: [
-      "The test is actually passing locally, so I think it's a timing issue on CI.",
-      "The test is passing locally, so I think it's a timing issue on CI.",
-    ],
+    expected: ["The test is actually passing locally, so I think it's a timing issue on CI."],
   },
   {
     name: "references, code and flags around filler",

@@ -259,8 +259,18 @@ describe("validateCorrection on self-corrections and lists", () => {
     ],
     [
       "a list laid out with bullets",
-      "Check three things. First, the logs. Then, the traces. And finally, the metrics.",
-      "Check three things:\n- The logs.\n- The traces.\n- The metrics.",
+      "Check five things. First, the logs. Second, the traces. Third, the metrics. Fourth, the alerts. And finally, the dashboards.",
+      "Check five things:\n- The logs.\n- The traces.\n- The metrics.\n- The alerts.\n- The dashboards.",
+    ],
+    [
+      "a retraction with no repeated word, as long as its replacement",
+      "Set the theme to dark blue mode, no wait, light mode.",
+      "Set the theme to light mode.",
+    ],
+    [
+      "a retraction after a line break",
+      "Add a retry around the fetch call.\nScratch that. Add a timeout.",
+      "Add a timeout.",
     ],
     [
       "list items that keep their own numbers",
@@ -286,9 +296,69 @@ describe("validateCorrection on self-corrections and lists", () => {
     ],
     [
       "a negation inside the retracted words",
-      "Don't push to main, no wait, push to the release branch.",
-      "Push to the release branch.",
+      "Push to the release branch and don't tag it, no wait, push to main.",
+      "Push to main.",
       "negation",
+    ],
+    [
+      "a negation left governing the replacement",
+      "Do not delete backups, I mean switch to the new parser.",
+      "Do not switch to the new parser.",
+      "negation",
+    ],
+    [
+      "a negation across a clause break",
+      "Do not delete backups; use the old parser, I mean switch to the new parser for imports.",
+      "Do not switch to the new parser for imports.",
+      "negation",
+    ],
+    [
+      "a no wait that is a real prohibition",
+      "Ensure there is no wait, even under load.",
+      "Ensure there is a wait, even under load.",
+      "negation",
+    ],
+    [
+      "the retracted words kept and the replacement dropped",
+      "Use the old API, no wait, the new parser.",
+      "Use the old API.",
+      "negation",
+    ],
+    [
+      "a retracted value whose replacement was dropped too",
+      "Rename the theme to dark, no wait, light, and update the docs.",
+      "Rename the theme, and update the docs.",
+      "negation",
+    ],
+    [
+      "a restart matched in an earlier clause",
+      "Delete the logs, rebuild the cache, no wait, delete the temp files.",
+      "Delete the temp files.",
+      "edit_size",
+    ],
+    [
+      "a fallback reaching past its replacement's length",
+      "Keep backups and use the old parser, I mean switch to the new parser for imports.",
+      "Switch to the new parser for imports.",
+      "edit_size",
+    ],
+    [
+      "a correction phrase with nothing after it",
+      "Keep backups. Update the parser and run all tests, I mean.",
+      "Keep backups.",
+      "edit_size",
+    ],
+    [
+      "a literal scratch that",
+      "Keep the existing API and add a scratch that button.",
+      "Keep the existing API.",
+      "edit_size",
+    ],
+    [
+      "a retraction reaching past twelve words",
+      "Move the retry loop out of the request handler and into the shared client wrapper. Scratch that. Keep it.",
+      "Keep it.",
+      "edit_size",
     ],
     [
       "a number inside the retracted words",
@@ -328,9 +398,33 @@ describe("validateCorrection on self-corrections and lists", () => {
     ],
     [
       "list numbers that skip",
-      "One, add a test. Two, fix the bug.",
+      "First, add a test. Second, fix the bug.",
       "1. Add a test.\n3. Fix the bug.",
       "number",
+    ],
+    [
+      "a decimal read as an item number",
+      "Use timeout: 1.5 seconds. Retry twice.",
+      "1. Use timeout: 5 seconds.\n2. Retry twice.",
+      "number",
+    ],
+    [
+      "a counting word inside backticks funding another",
+      "Use `status: one, ready` and set retries to one.",
+      "1. Use `status: one, ready`.\n2. Set retries.",
+      "number",
+    ],
+    [
+      "a dictated line number dropped as layout",
+      "Return the value\n1. Preserve its type.",
+      "Return the value. Preserve its type.",
+      "number",
+    ],
+    [
+      "ordinals that are adjectives",
+      "First failures require logging. Second retries require approval. Third parties need authorization. Fourth attempts require escalation. Next releases require review.",
+      "- Failures require logging.\n- Retries require approval.\n- Parties need authorization.\n- Attempts require escalation.\n- Releases require review.",
+      "edit_size",
     ],
     [
       "a count turned into a list number",
@@ -357,16 +451,29 @@ describe("validateCorrection on self-corrections and lists", () => {
     const examples = [
       ...CORE_CORRECTION_PROMPT.matchAll(/- Target: "(.*)"\n {2}Corrected: "(.*?)"(?: \(|$)/gm),
     ];
-    expect(examples.length).toBeGreaterThan(10);
+    expect(examples.length).toBe(CORE_CORRECTION_PROMPT.match(/^- Target: /gm)?.length);
     for (const [, target, corrected] of examples) {
       expect(validateCorrection(unquote(target), unquote(corrected)), target).toEqual({ ok: true });
     }
   });
 
-  it("checks a long passage full of self-corrections quickly", () => {
-    const sentence = "Use the old cache, no wait, the new one, and log it. ";
-    const raw = sentence.repeat(220);
-    const corrected = "Use the new one, and log it. ".repeat(220);
+  it("aligns a passage near the alignment limit quickly", () => {
+    const raw = "Use the old cache, no wait, the new one, and log it. ".repeat(40);
+    const corrected = "Use the new one, and log it. ".repeat(40);
+    const started = performance.now();
+    expect(validateCorrection(raw, corrected)).toEqual({ ok: true });
+    expect(performance.now() - started).toBeLessThan(100);
+  });
+
+  it.each([
+    [
+      "self-corrections",
+      "Use the old cache, no wait, the new one, and log it. ".repeat(220),
+      "Use the new one, and log it. ".repeat(220),
+    ],
+    ["bullet lines", "- a\n".repeat(3000), "- a\n".repeat(2999)],
+    ["whitespace runs", `no${" ".repeat(12_000)}, sorry,`, "sorry,"],
+  ])("checks a 12,000-character passage of %s quickly", (_label, raw, corrected) => {
     const started = performance.now();
     validateCorrection(raw, corrected);
     expect(performance.now() - started).toBeLessThan(200);

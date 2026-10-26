@@ -149,16 +149,28 @@ const MIN_REMOVED_BUDGET = 4;
 const MIN_ADDED_BUDGET = 2;
 const EDIT_BUDGET_RATIO = 0.15;
 
-// Phrases a speaker uses to take back what they just said. "no wait" has to
-// end its phrase, so "no wait time" stays a negation, and a bare "no" or
-// "sorry" counts only between commas mid-sentence, where it can't be an answer.
+// What else a cleanup that resolved a self-correction or laid out a list may
+// drop besides the words those allowances cover: a stutter, not a clause.
+const MIN_ALLOWANCE_REMOVED_BUDGET = 2;
+
+// Phrases a speaker uses to take back what they just said. Each has to end its
+// phrase, so "no wait time" and "a scratch that button" stay ordinary words,
+// and a bare "no" or "sorry" counts only between commas, where it can't be an
+// answer. The bounded whitespace keeps the lookarounds linear.
 const RETRACTION_RE =
-  /\b(?:no,?\s+wait|wait,?\s+no)\b(?=\s*(?:[,.;:!?—–]|$))|\b(?:scratch|strike)\s+that\b|\bor\s+rather\b|\bi\s+mean\b|(?<=[,;—–]\s*)\b(?:no|sorry)\b(?=\s*[,.;:!?—–])/giu;
-// How far back a self-correction can reach: the rest of its own sentence, or
-// the sentence before when it opens one ("…the fetch call. Scratch that.").
+  /\b(?:no,?\s+wait|wait,?\s+no|scratch\s+that|strike\s+that)\b(?=\s{0,3}(?:[,.;:!?—–]|$))|\b(?:or\s+rather|i\s+mean)\b|(?<=,\s{0,3})\b(?:no|sorry)\b(?=\s{0,3},)/giu;
+// "Scratch that." on its own takes back the whole sentence before it.
+const SENTENCE_RETRACTION_RE = /^(?:scratch|strike)\s+that$/iu;
+// A mid-sentence correction reaches back no further than its own clause, and
+// starts at the last copy of the replacement's first word ("the old API, no
+// wait, the new one"). Without one it covers as many words as the
+// replacement, and no more than three.
 const RETRACTION_WORD_LIMIT = 12;
-const SENTENCE_BREAK_RE = /[.!?\n]/gu;
-const PHRASE_BREAK_RE = /[,.;:!?\n]/gu;
+const RETRACTION_FALLBACK_WORDS = 3;
+// How much of the replacement has to survive to show the correction was made.
+const REPLACEMENT_WORDS = 3;
+const SENTENCE_BREAK_RE = /[.!?\n。！？][\s.!?。！？]*/gu;
+const CLAUSE_BREAK_RE = /[,;:.!?\n—–，、；：。！？][\s,;:.!?—–，、；：。！？]*/gu;
 
 const CARDINAL_WORDS = [
   "one",
@@ -172,11 +184,12 @@ const CARDINAL_WORDS = [
   "nine",
   "ten",
 ];
-// A spoken item number that opens a clause: "first,", "and third", "step two",
-// "one," or "3)". A cardinal needs its comma or a step/number prefix, so
-// "one retry" stays a count.
+// A spoken item number that opens a clause: "First,", "and third,", "step
+// two", "one," or "3)". It needs its own punctuation or a step/number prefix,
+// so "first failures" and "one retry" stay words, and a digit followed by
+// more digits ("1.5") is a number, not an item.
 const ENUMERATOR_RE = new RegExp(
-  String.raw`(?<=^|[.!?;:,\n]\s*)(?:and\s+)?(?:then\s+)?(?<prefix>(?:number|step|item)\s+)?(?<word>(?:first|second|third)(?:ly)?|fourth|fifth|sixth|seventh|eighth|ninth|tenth|${CARDINAL_WORDS.join("|")}|\d{1,2}|next|then|finally|lastly)(?<after>\s*[,.:;)]|\s+(?=\p{L}))`,
+  String.raw`(?<=^|[.!?;:,\n]\s{0,3})(?:and\s+)?(?:then\s+)?(?<prefix>(?:number|step|item)\s+)?(?<word>(?:first|second|third)(?:ly)?|fourth|fifth|sixth|seventh|eighth|ninth|tenth|${CARDINAL_WORDS.join("|")}|\d{1,2}|next|then|finally|lastly)(?<after>\s{0,3}[,.:;)](?!\d)|\s+(?=\p{L}))`,
   "giu"
 );
 const LIST_MARKER_RE = /^([ \t]*)(?:(\d{1,2})[.)]|[-*•])(?=[ \t])/gm;
@@ -319,8 +332,9 @@ function numbersMatch(raw: string, corrected: string): boolean {
 }
 
 /**
- * Numbers stay exactly as spoken, except that a counting word which opened a
- * list item ("one, add…") may become that item's own number ("1. Add…").
+ * Numbers stay exactly as spoken, except that the counting words of a list
+ * ("one, add…", "step 2,") may become its item numbers ("1. Add…"), when they
+ * count out the same 1, 2, 3… as the list does.
  */
 function keepsNumbers(
   raw: string,
@@ -329,18 +343,21 @@ function keepsNumbers(
   markerValues: readonly number[]
 ): boolean {
   if (numbersMatch(raw, corrected)) return true;
-  const available = countBy(markerValues.map(String));
-  let spoken = raw;
-  let consumed = false;
-  for (const { value, valueStart, end } of enumerators) {
-    if (value === undefined) continue;
-    const left = available.get(String(value)) ?? 0;
-    if (left <= 0) continue;
-    available.set(String(value), left - 1);
-    spoken = blank(spoken, valueStart, end);
-    consumed = true;
+  const counted = enumerators.filter((enumerator) => enumerator.value !== undefined);
+  if (
+    counted.length === 0 ||
+    !sameSequence(
+      counted.map((enumerator) => String(enumerator.value)),
+      markerValues.map(String)
+    )
+  ) {
+    return false;
   }
-  return consumed && numbersMatch(spoken, corrected);
+  const spoken = blankRanges(
+    raw,
+    counted.map((enumerator) => ({ start: enumerator.valueStart, end: enumerator.end }))
+  );
+  return numbersMatch(spoken, corrected);
 }
 
 interface Range {
@@ -365,8 +382,22 @@ interface ListLayout {
   values: number[];
 }
 
-function blank(text: string, start: number, end: number): string {
-  return text.slice(0, start) + " ".repeat(end - start) + text.slice(end);
+interface Breaks {
+  /** Where each sentence starts, ascending, beginning with 0. */
+  sentences: number[];
+  clauses: number[];
+}
+
+/** `text` with each range, in order and not overlapping, replaced by spaces. */
+function blankRanges(text: string, ranges: readonly Range[]): string {
+  const pieces: string[] = [];
+  let last = 0;
+  for (const { start, end } of ranges) {
+    pieces.push(text.slice(last, start), " ".repeat(end - start));
+    last = end;
+  }
+  pieces.push(text.slice(last));
+  return pieces.join("");
 }
 
 /** Line-start list markers. A numbered list counts only when it runs 1, 2, 3… */
@@ -374,28 +405,55 @@ function readListLayout(text: string): ListLayout {
   const markers = [...text.matchAll(LIST_MARKER_RE)];
   const values = markers.flatMap((match) => (match[2] === undefined ? [] : [Number(match[2])]));
   const counted = values.every((value, index) => value === index + 1);
-  let blanked = text;
-  let items = 0;
-  for (const match of markers) {
-    if (match[2] !== undefined && !counted) continue;
-    blanked = blank(blanked, match.index + match[1].length, match.index + match[0].length);
-    items++;
-  }
-  return { text: blanked, items, values: counted ? values : [] };
+  const blanked = markers
+    .filter((match) => match[2] === undefined || counted)
+    .map((match) => ({
+      start: match.index + match[1].length,
+      end: match.index + match[0].length,
+    }));
+  return {
+    text: blankRanges(text, blanked),
+    items: blanked.length,
+    values: counted ? values : [],
+  };
 }
 
-function findEnumerators(text: string): Enumerator[] {
+/** Whether `range` overlaps any of `ranges`, which are in order and don't overlap. */
+function overlaps(ranges: readonly Range[], range: Range): boolean {
+  let low = 0;
+  let high = ranges.length;
+  while (low < high) {
+    const mid = (low + high) >> 1;
+    if (ranges[mid].end <= range.start) low = mid + 1;
+    else high = mid;
+  }
+  return low < ranges.length && ranges[low].start < range.end;
+}
+
+function findEnumerators(text: string, protectedRanges: readonly Range[]): Enumerator[] {
   const enumerators: Enumerator[] = [];
   for (const match of text.matchAll(ENUMERATOR_RE)) {
     const { prefix, word, after } = match.groups!;
-    const lower = word.toLowerCase();
-    const cardinal = CARDINAL_WORDS.indexOf(lower);
-    const value = cardinal >= 0 ? cardinal + 1 : /^\d+$/.test(word) ? Number(word) : undefined;
-    if (value !== undefined && prefix === undefined && !/^\s*[,.:;)]/.test(after)) continue;
+    if (prefix === undefined && !/[,.:;)]/.test(after)) continue;
     const end = match.index + match[0].length - after.length;
-    enumerators.push({ start: match.index, end, value, valueStart: end - word.length });
+    const range = { start: match.index, end };
+    if (overlaps(protectedRanges, range)) continue;
+    const cardinal = CARDINAL_WORDS.indexOf(word.toLowerCase());
+    const value = cardinal >= 0 ? cardinal + 1 : /^\d+$/.test(word) ? Number(word) : undefined;
+    enumerators.push({ ...range, value, valueStart: end - word.length });
   }
   return enumerators;
+}
+
+function findRetractions(text: string, protectedRanges: readonly Range[]): Range[] {
+  return Array.from(text.matchAll(RETRACTION_RE), (match) => ({
+    start: match.index,
+    end: match.index + match[0].length,
+  })).filter((marker) => !overlaps(protectedRanges, marker));
+}
+
+function breakStarts(text: string, pattern: RegExp): number[] {
+  return [0, ...Array.from(text.matchAll(pattern), (match) => match.index + match[0].length)];
 }
 
 function lastAtMost(sorted: readonly number[], value: number): number {
@@ -409,6 +467,17 @@ function lastAtMost(sorted: readonly number[], value: number): number {
   return sorted[low];
 }
 
+function firstAfter(sorted: readonly number[], value: number): number {
+  let low = 0;
+  let high = sorted.length;
+  while (low < high) {
+    const mid = (low + high) >> 1;
+    if (sorted[mid] <= value) low = mid + 1;
+    else high = mid;
+  }
+  return sorted[low] ?? Infinity;
+}
+
 function firstTokenFrom(tokens: readonly WordToken[], offset: number): number {
   let low = 0;
   let high = tokens.length;
@@ -420,56 +489,83 @@ function firstTokenFrom(tokens: readonly WordToken[], offset: number): number {
   return low;
 }
 
-function overlaps(ranges: readonly Range[], range: Range): boolean {
-  return ranges.some((other) => range.start < other.end && range.end > other.start);
-}
-
-function covers(ranges: readonly Range[], range: Range): boolean {
-  return ranges.some((other) => other.start <= range.start && range.end <= other.end);
+/** How many words the phrase starting at token `from` has, up to its clause break. */
+function phraseLength(tokens: readonly WordToken[], from: number, breaks: Breaks): number {
+  return firstTokenFrom(tokens, firstAfter(breaks.clauses, tokens[from].start)) - from;
 }
 
 /**
- * Each self-correction phrase, and the words before it that it can take back.
- * The replacement usually restarts the phrase it replaces ("the old API, no
- * wait, the new one"), so the retracted words start at the last copy of its
- * first word. Without one ("formatDate, I mean formatDateTime") they are as
- * many words as the replacement phrase has.
+ * Frees the words a self-correction took back, once the cleanup shows it
+ * resolved one: the correction phrase is gone, the start of its replacement
+ * survives, and the words dropped are the ones running up to the phrase. A
+ * negation among them is never freed.
  */
-function findRetractions(
+function freeRetraction(
   text: string,
   tokens: readonly WordToken[],
-  protectedRanges: readonly Range[]
-): { markers: Range[]; windows: Range[] } {
-  const markers: Range[] = [];
-  const windows: Range[] = [];
-  let breaks: number[] | null = null;
-  for (const match of text.matchAll(RETRACTION_RE)) {
-    const marker = { start: match.index, end: match.index + match[0].length };
-    if (overlaps(protectedRanges, marker)) continue;
-    markers.push(marker);
-    breaks ??= [0, ...Array.from(text.matchAll(SENTENCE_BREAK_RE), (m) => m.index + 1)];
-    const sentence = lastAtMost(breaks, marker.start);
-    const end = firstTokenFrom(tokens, marker.start);
-    let first = firstTokenFrom(tokens, sentence);
-    if (first >= end && sentence > 0) {
-      first = firstTokenFrom(tokens, lastAtMost(breaks, sentence - 1));
-    }
-    first = Math.max(first, end - RETRACTION_WORD_LIMIT);
-    const next = firstTokenFrom(tokens, marker.end);
-    if (next < tokens.length) {
-      let restart = end - 1;
-      while (restart >= first && tokens[restart].word !== tokens[next].word) restart--;
-      if (restart >= first) {
-        first = restart;
-      } else {
-        PHRASE_BREAK_RE.lastIndex = tokens[next].start;
-        const phraseEnd = PHRASE_BREAK_RE.exec(text)?.index ?? text.length;
-        first = Math.max(first, end - (firstTokenFrom(tokens, phraseEnd) - next));
-      }
-    }
-    if (first < end) windows.push({ start: tokens[first].start, end: marker.start });
+  kept: readonly boolean[],
+  marker: Range,
+  breaks: Breaks,
+  free: Uint8Array
+): void {
+  const markerStart = firstTokenFrom(tokens, marker.start);
+  const markerEnd = firstTokenFrom(tokens, marker.end);
+  if (markerStart === 0) return;
+  for (let i = markerStart; i < markerEnd; i++) if (kept[i]) return;
+
+  const sentence = lastAtMost(breaks.sentences, marker.start);
+  const nextSentence = firstAfter(breaks.sentences, marker.end);
+  const hasReplacement = markerEnd < tokens.length;
+  const replacementLength = hasReplacement ? phraseLength(tokens, markerEnd, breaks) : 0;
+  for (let i = markerEnd; i < markerEnd + Math.min(replacementLength, REPLACEMENT_WORDS); i++) {
+    if (!kept[i]) return;
   }
-  return { markers, windows };
+
+  let first: number;
+  const ownSentence =
+    SENTENCE_RETRACTION_RE.test(text.slice(marker.start, marker.end)) &&
+    firstTokenFrom(tokens, sentence) === markerStart &&
+    (!hasReplacement || nextSentence <= tokens[markerEnd].start);
+  if (ownSentence) {
+    first = firstTokenFrom(tokens, lastAtMost(breaks.sentences, sentence - 1));
+  } else {
+    if (!hasReplacement || nextSentence <= tokens[markerEnd].start) return;
+    first = firstTokenFrom(tokens, lastAtMost(breaks.clauses, tokens[markerStart - 1].start));
+    let restart = markerStart - 1;
+    while (restart >= first && tokens[restart].word !== tokens[markerEnd].word) restart--;
+    first =
+      restart >= first
+        ? restart
+        : Math.max(first, markerStart - Math.min(replacementLength, RETRACTION_FALLBACK_WORDS));
+  }
+  first = Math.max(first, markerStart - RETRACTION_WORD_LIMIT);
+
+  let run = markerStart;
+  while (run > first && !kept[run - 1]) run--;
+  if (run === markerStart) return;
+  for (let i = run; i < markerStart; i++) {
+    if (!NEGATION_WORDS.has(tokens[i].word)) free[i] = 1;
+  }
+  for (let i = markerStart; i < markerEnd; i++) free[i] = 1;
+}
+
+/** Frees the counting words of a list the cleanup laid out, one per line it wrote. */
+function freeEnumerators(
+  tokens: readonly WordToken[],
+  kept: readonly boolean[],
+  enumerators: readonly Enumerator[],
+  items: number,
+  free: Uint8Array
+): void {
+  let freed = 0;
+  for (const enumerator of enumerators) {
+    if (freed >= items) return;
+    const first = firstTokenFrom(tokens, enumerator.start);
+    const end = firstTokenFrom(tokens, enumerator.end);
+    if (first === end || kept.slice(first, end).some(Boolean)) continue;
+    free.fill(1, first, end);
+    freed++;
+  }
 }
 
 function normalizeWord(word: string): string {
@@ -632,27 +728,30 @@ function alignWords(raw: readonly string[], corrected: readonly string[]): boole
 }
 
 /**
- * The word checks again, with the words the allowances let go taken out of
- * the raw text first. Everything else the cleanup dropped or added, in order,
- * still counts against the budget.
+ * The word checks again, with the words the allowances freed taken out of the
+ * raw text first. Everything else the cleanup dropped or added, in order,
+ * still counts, against a tighter budget, and a negation that stayed has to
+ * keep the word it governed.
  */
 function compareRetainedWords(
   raw: readonly WordToken[],
   corrected: readonly string[],
-  isFree: (token: WordToken) => boolean
-): CorrectionGuardResult | null {
-  const kept = alignWords(
-    raw.map((token) => token.word),
-    corrected
-  );
-  if (!kept) return null;
-  const retained = raw.filter((token, index) => kept[index] || !isFree(token));
-  const retainedWords = retained.map((token) => token.word);
-  if (!sameSequence(negationAnchors(retainedWords), negationAnchors(corrected))) {
+  kept: readonly boolean[],
+  free: Uint8Array
+): CorrectionGuardResult {
+  for (let i = 0; i + 1 < raw.length; i++) {
+    if (NEGATION_WORDS.has(raw[i].word) && kept[i] && !kept[i + 1] && free[i + 1]) {
+      return { ok: false, reason: "negation" };
+    }
+  }
+  const retained = raw.filter((_, index) => kept[index] || !free[index]).map((t) => t.word);
+  if (!sameSequence(negationAnchors(retained), negationAnchors(corrected))) {
     return { ok: false, reason: "negation" };
   }
   const matched = kept.filter(Boolean).length;
-  return withinBudget(retained.length, retained.length - matched, corrected.length - matched)
+  const scaled = Math.ceil(retained.length * EDIT_BUDGET_RATIO);
+  return retained.length - matched <= Math.max(MIN_ALLOWANCE_REMOVED_BUDGET, scaled) &&
+    corrected.length - matched <= Math.max(MIN_ADDED_BUDGET, scaled)
     ? { ok: true }
     : { ok: false, reason: "edit_size" };
 }
@@ -661,27 +760,41 @@ function compareRetainedWords(
 export function validateCorrection(raw: string, corrected: string): CorrectionGuardResult {
   if (!keepsProtectedSpans(raw, corrected)) return { ok: false, reason: "protected_span" };
 
-  const rawLayout = readListLayout(raw);
+  // Raw list markers are set aside only when the cleanup kept the same ones,
+  // so a dictated "1." can't vanish as layout.
   const correctedLayout = readListLayout(corrected);
-  const enumerators = correctedLayout.items >= 2 ? findEnumerators(rawLayout.text) : [];
-  if (!keepsNumbers(rawLayout.text, correctedLayout.text, enumerators, correctedLayout.values)) {
+  const rawLayout = readListLayout(raw);
+  const rawText = sameSequence(rawLayout.values.map(String), correctedLayout.values.map(String))
+    ? rawLayout.text
+    : raw;
+  const protectedRanges = findProtectedRanges(raw);
+  const enumerators = correctedLayout.items >= 2 ? findEnumerators(rawText, protectedRanges) : [];
+  if (!keepsNumbers(rawText, correctedLayout.text, enumerators, correctedLayout.values)) {
     return { ok: false, reason: "number" };
   }
 
   const correctedWords = contentTokens(correctedLayout.text).map((token) => token.word);
-  const rawTokens = contentTokens(rawLayout.text);
-  const rawWords = mergeJoinedWords(rawTokens, correctedWords);
+  const rawTokens = mergeJoinedWords(contentTokens(rawText), correctedWords);
   const verdict = compareWords(
-    rawWords.map((token) => token.word),
+    rawTokens.map((token) => token.word),
     correctedWords
   );
   if (verdict.ok) return verdict;
 
-  const { markers, windows } = findRetractions(rawLayout.text, rawTokens, findProtectedRanges(raw));
-  if (markers.length === 0 && enumerators.length === 0) return verdict;
-  const isFree = (token: WordToken) =>
-    covers(markers, token) ||
-    covers(enumerators, token) ||
-    (covers(windows, token) && !NEGATION_WORDS.has(token.word));
-  return compareRetainedWords(rawWords, correctedWords, isFree) ?? verdict;
+  const retractions = findRetractions(rawText, protectedRanges);
+  if (retractions.length === 0 && enumerators.length === 0) return verdict;
+  const kept = alignWords(
+    rawTokens.map((token) => token.word),
+    correctedWords
+  );
+  if (!kept) return verdict;
+
+  const breaks: Breaks = {
+    sentences: breakStarts(rawText, SENTENCE_BREAK_RE),
+    clauses: breakStarts(rawText, CLAUSE_BREAK_RE),
+  };
+  const free = new Uint8Array(rawTokens.length);
+  for (const marker of retractions) freeRetraction(rawText, rawTokens, kept, marker, breaks, free);
+  freeEnumerators(rawTokens, kept, enumerators, correctedLayout.items, free);
+  return compareRetainedWords(rawTokens, correctedWords, kept, free);
 }

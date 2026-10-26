@@ -1147,6 +1147,11 @@ describe("MigrationRunner", () => {
       openaiApiKey: "sk-test",
       correctionEnabled: true,
     });
+
+    // Switching it off afterwards survives the next launch's runner.
+    (store.data.voiceInput as Record<string, unknown>).correctionEnabled = false;
+    await new MigrationRunner(store as never).runMigrations(migrations);
+    expect((store.data.voiceInput as Record<string, unknown>).correctionEnabled).toBe(false);
   });
 
   it("runs migration025 from v24 under the full barrel, upgrading the voice correction model (#11365)", async () => {
