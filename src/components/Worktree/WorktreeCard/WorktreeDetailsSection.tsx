@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/Spinner";
 import { Callout } from "@/components/ui/Callout";
 import { useForgeAuthorAvatar } from "@/hooks/useForgeAuthorAvatar";
+import { useReviewChangeHint } from "@/hooks/useReviewChangeHint";
 import {
   Activity,
   AlertTriangle,
@@ -155,6 +156,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
     cwd: worktree.path,
   });
 
+  const reviewChangeLine = useReviewChangeHint(worktree);
   const changedFileCount = worktree.worktreeChanges?.changedFileCount ?? 0;
   const countRef = useRef<HTMLSpanElement>(null);
   const prefersReducedMotion = useShouldSkipMotion();
@@ -468,16 +470,25 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                         insertions={worktree.worktreeChanges.insertions}
                         deletions={worktree.worktreeChanges.deletions}
                       />
+                      {reviewChangeLine && (
+                        <span className="truncate text-text-secondary">· {reviewChangeLine}</span>
+                      )}
                     </span>
                   ) : (
-                    <span
-                      className={cn(
-                        computedSubtitle.tone === "warning" && "text-status-warning",
-                        computedSubtitle.tone === "info" && "text-status-info",
-                        computedSubtitle.tone === "muted" && "text-text-muted"
+                    <span className={cn(reviewChangeLine && "flex items-center gap-1.5")}>
+                      <span
+                        className={cn(
+                          reviewChangeLine && "truncate",
+                          computedSubtitle.tone === "warning" && "text-status-warning",
+                          computedSubtitle.tone === "info" && "text-status-info",
+                          computedSubtitle.tone === "muted" && "text-text-muted"
+                        )}
+                      >
+                        {computedSubtitle.text}
+                      </span>
+                      {reviewChangeLine && (
+                        <span className="truncate text-text-secondary">· {reviewChangeLine}</span>
                       )}
-                    >
-                      {computedSubtitle.text}
                     </span>
                   )}
                 </span>
