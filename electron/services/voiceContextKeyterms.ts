@@ -397,7 +397,9 @@ export async function assembleKeyterms(opts: KeytermAssemblyOpts): Promise<strin
     withinBudget(Promise.resolve(opts.projectDictionary ?? []), [], "Project vocabulary read"),
     projectPath && isAbsolute(projectPath)
       ? withinBudget(
-          deriveRepoNames(projectPath).then((repo) => repo.names),
+          deriveRepoNames(projectPath, performance.now() + ASSEMBLY_TIMEOUT_MS).then(
+            (repo) => repo.names
+          ),
           [] as string[],
           "Repository name derivation"
         )

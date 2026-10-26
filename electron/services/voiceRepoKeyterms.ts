@@ -1,10 +1,14 @@
-import { readdir, readFile, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { readdir, readFile, realpath, stat } from "node:fs/promises";
+import { isAbsolute, join, relative, sep } from "node:path";
+import { stripUtf8Bom } from "../utils/stripUtf8Bom.js";
 import { holdsCredentialOrId } from "./voiceKeytermSecrets.js";
 
 // A manifest bigger than this is generated output, not something a person wrote.
 const MAX_MANIFEST_BYTES = 256 * 1024;
 const MAX_WORKSPACE_PACKAGES = 40;
+// A pattern whose parent is missing or empty adds no package, so the package cap
+// alone wouldn't stop a manifest listing thousands of them.
+export const MAX_WORKSPACE_PATTERNS = 20;
 const MAX_DEPENDENCIES = 60;
 const MAX_TOP_LEVEL_ENTRIES = 80;
 
@@ -40,11 +44,21 @@ interface Manifest {
   devDependencies?: unknown;
 }
 
-async function readManifest(dir: string): Promise<Manifest | null> {
+function isWithin(root: string, path: string): boolean {
+  const rel = relative(root, path);
+  return rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+}
+
+// Resolved before reading, so a symlinked manifest or package dir can't pull
+// names from outside the repo, and a FIFO or device (whose stat size is 0)
+// can't block the read or stream past the size cap.
+async function readManifest(realRoot: string, dir: string): Promise<Manifest | null> {
   try {
-    const path = join(dir, "package.json");
-    if ((await stat(path)).size > MAX_MANIFEST_BYTES) return null;
-    const parsed: unknown = JSON.parse(await readFile(path, "utf8"));
+    const path = await realpath(join(dir, "package.json"));
+    if (!isWithin(realRoot, path)) return null;
+    const info = await stat(path);
+    if (!info.isFile() || info.size > MAX_MANIFEST_BYTES) return null;
+    const parsed: unknown = JSON.parse(stripUtf8Bom(await readFile(path, "utf8")));
     return parsed && typeof parsed === "object" ? (parsed as Manifest) : null;
   } catch {
     return null;
@@ -60,28 +74,49 @@ function workspacePatterns(workspaces: unknown): string[] {
   return Array.isArray(list) ? list.filter((p): p is string => typeof p === "string") : [];
 }
 
+/**
+ * A workspace pattern's path segments, split on either separator because
+ * Windows reads `..\x` as a parent hop. Null for anything that could leave
+ * the root or needs a real glob.
+ */
+export function workspacePatternSegments(pattern: string): string[] | null {
+  const segments = pattern
+    .replace(/^\.[\\/]/, "")
+    .replace(/[\\/]+$/, "")
+    .split(/[\\/]/);
+  if (segments.some((s) => s === ".." || s === "**" || s === "" || s.includes(":"))) return null;
+  return segments;
+}
+
 // Only the common `dir/*` and literal `dir/pkg` forms; anything fancier is skipped
 // rather than globbed, because a hint isn't worth walking a monorepo for.
-async function workspaceDirs(root: string, patterns: string[]): Promise<string[]> {
+async function workspaceDirs(
+  realRoot: string,
+  patterns: string[],
+  spent: () => boolean
+): Promise<string[]> {
   const dirs: string[] = [];
-  for (const pattern of patterns) {
-    if (dirs.length >= MAX_WORKSPACE_PACKAGES) break;
-    const segments = pattern.replace(/^\.\//, "").replace(/\/+$/, "").split("/");
-    if (segments.some((s) => s === ".." || s === "**" || s === "")) continue;
+  for (const pattern of patterns.slice(0, MAX_WORKSPACE_PATTERNS)) {
+    if (dirs.length >= MAX_WORKSPACE_PACKAGES || spent()) break;
+    const segments = workspacePatternSegments(pattern);
+    if (!segments) continue;
     if (segments.length === 2 && segments[1] === "*") {
       try {
-        const entries = await readdir(join(root, segments[0]!), { withFileTypes: true });
+        const parent = await realpath(join(realRoot, segments[0]!));
+        if (!isWithin(realRoot, parent)) continue;
+        const entries = await readdir(parent, { withFileTypes: true });
         for (const entry of entries) {
           if (dirs.length >= MAX_WORKSPACE_PACKAGES) break;
           if (entry.isDirectory() && !entry.name.startsWith(".")) {
-            dirs.push(join(root, segments[0]!, entry.name));
+            dirs.push(join(parent, entry.name));
           }
         }
       } catch {
         // The glob's parent doesn't exist.
       }
     } else if (!segments.some((s) => s.includes("*"))) {
-      dirs.push(join(root, ...segments));
+      const dir = join(realRoot, ...segments);
+      if (isWithin(realRoot, dir)) dirs.push(dir);
     }
   }
   return dirs;
@@ -95,21 +130,33 @@ function objectKeys(value: unknown): string[] {
  * Names the repository itself carries: the package name, workspace package
  * names, top-level directories and dependency names. Read fresh per session and
  * never stored. Every read is a bounded one, so a large monorepo costs a
- * handful of small file reads at most.
+ * handful of small file reads at most, and none starts after `deadline`
+ * (a `performance.now()` time), since the caller has stopped waiting by then.
  */
-export async function deriveRepoNames(root: string): Promise<RepoNames> {
-  const manifest = await readManifest(root);
+export async function deriveRepoNames(root: string, deadline = Infinity): Promise<RepoNames> {
+  const spent = () => performance.now() >= deadline;
+  if (spent()) return { names: [] };
+  let realRoot: string;
+  try {
+    realRoot = await realpath(root);
+  } catch {
+    return { names: [] };
+  }
+
+  const manifest = spent() ? null : await readManifest(realRoot, realRoot);
   const names: string[] = [];
   if (typeof manifest?.name === "string") names.push(manifest.name);
 
-  const packageDirs = await workspaceDirs(root, workspacePatterns(manifest?.workspaces));
-  const workspaceManifests = await Promise.all(packageDirs.map((dir) => readManifest(dir)));
+  const packageDirs = await workspaceDirs(realRoot, workspacePatterns(manifest?.workspaces), spent);
+  const workspaceManifests = spent()
+    ? []
+    : await Promise.all(packageDirs.map((dir) => readManifest(realRoot, dir)));
   for (const m of workspaceManifests) {
     if (typeof m?.name === "string") names.push(m.name);
   }
 
   try {
-    const entries = await readdir(root, { withFileTypes: true });
+    const entries = spent() ? [] : await readdir(realRoot, { withFileTypes: true });
     for (const entry of entries.slice(0, MAX_TOP_LEVEL_ENTRIES)) {
       if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
       if (IGNORED_DIRECTORIES.has(entry.name.toLowerCase())) continue;

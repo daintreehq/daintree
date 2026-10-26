@@ -506,7 +506,9 @@ function getProjectInfo(projectId: string | null): { name?: string; path?: strin
 }
 
 // Automatic hints come only from the terminal being dictated into: its output,
-// its worktree's branch and its owning project's name. A terminal main doesn't
+// its worktree's branch, its owning project's name, and names read from that
+// project's repository (package, workspace, directory and dependency names).
+// All of them are sent to the transcription provider. A terminal main doesn't
 // track, or one another project owns than the view asking, contributes none.
 function resolveKeytermTarget(
   viewProjectId: string | null,
