@@ -67,9 +67,9 @@ describe("findBuiltInMic", () => {
   it("falls back to a Windows array mic only when nothing names itself built-in", () => {
     const array = { deviceId: "array", label: "Microphone Array (Realtek(R) Audio)" };
     const internal = { deviceId: "internal", label: "Internal Microphone" };
-    expect(findBuiltInMic([array, { deviceId: "bt", label: "Headset (Hands-Free AG Audio)" }])).toEqual(
-      array
-    );
+    expect(
+      findBuiltInMic([array, { deviceId: "bt", label: "Headset (Hands-Free AG Audio)" }])
+    ).toEqual(array);
     expect(findBuiltInMic([array, internal])).toEqual(internal);
   });
 

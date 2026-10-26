@@ -190,7 +190,10 @@ function setupGlobals(options: {
     requestAnimationFrame: vi.fn(),
     cancelAnimationFrame: vi.fn(),
   });
-  vi.stubGlobal("requestAnimationFrame", vi.fn(() => 1));
+  vi.stubGlobal(
+    "requestAnimationFrame",
+    vi.fn(() => 1)
+  );
   vi.stubGlobal("cancelAnimationFrame", vi.fn());
   vi.stubGlobal("document", {
     visibilityState: "visible",
