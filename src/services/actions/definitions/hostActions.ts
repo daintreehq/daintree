@@ -34,13 +34,13 @@ const switchArgsSchema = z
       .min(1)
       .max(256)
       .optional()
-      .describe("A project to open, by the host's own id. Needs hostId."),
+      .describe("Project to open, by the host's own id. Needs hostId."),
     terminalId: z
       .string()
       .min(1)
       .max(256)
       .optional()
-      .describe("A terminal to focus once it shows. Needs projectId."),
+      .describe("Terminal to focus once shown. Needs projectId."),
   })
   // Refused before any confirmation, never dropped: a caller naming a project
   // or a terminal means to land on it.
