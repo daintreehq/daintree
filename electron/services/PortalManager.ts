@@ -90,6 +90,9 @@ export class PortalManager {
   // A tab whose page refused a release isn't asked again before this.
   private releaseRetryAfter = new Map<string, number>();
   private releaseOps = new Map<string, ReleaseOperation>();
+  // A release whose close went unanswered past its deadline, logged if the
+  // view does go later.
+  private lateReleases = new WeakMap<WebContentsView, Record<string, unknown>>();
   private idleCheckTimer: NodeJS.Timeout | null = null;
   private idleCheckRunning = false;
   // Bumped by every show and hide, so a show that waited out a release only
@@ -163,6 +166,7 @@ export class PortalManager {
     this.releaseRetryAfter.delete(tabId);
     const releaseOp = this.releaseOps.get(tabId);
     if (releaseOp) releaseOp.superseded = true;
+    this.lateReleases.delete(view);
     this.releaseOps.delete(tabId);
     this.clearHidden(tabId);
 
@@ -343,7 +347,9 @@ export class PortalManager {
         // Not a refusal: the page may still close, and "destroyed" still
         // reports it. A show waiting on this goes ahead.
         wc.removeListener("will-prevent-unload", onRefused);
+        wc.removeListener("destroyed", onDestroyed);
         logWarn("portal.idle-release-no-verdict", { tabId, hiddenMs });
+        this.lateReleases.set(view, { tabId, hiddenMs, ...footprint });
         finish("unknown");
       }, RELEASE_VERDICT_DEADLINE_MS);
       const cleanup = () => {
@@ -529,8 +535,11 @@ export class PortalManager {
         // destroyView(), which reports its own: an idle release, or a close
         // whose verdict came too late. Every project view drops the tab.
         if (current === view && !this.disposed) {
+          const late = this.lateReleases.get(view);
+          if (late) logInfo("portal.idle-release", late);
           this.sendToWindowViews(CHANNELS.PORTAL_TAB_EVICTED, { tabId });
         }
+        this.lateReleases.delete(view);
       });
 
       view.webContents.on("before-input-event", (event, input) => {

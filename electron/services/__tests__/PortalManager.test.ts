@@ -1528,6 +1528,39 @@ describe("PortalManager idle release (#14538)", () => {
     manager.destroy();
   });
 
+  it("logs a release that lands after its deadline once, however often it was asked", async () => {
+    const { manager, parked } = await parkedBehindAnother();
+    vi.setSystemTime(Date.now() + HOUR);
+    void manager.releaseIdleTabs();
+    await vi.advanceTimersByTimeAsync(60_000);
+    vi.setSystemTime(Date.now() + HOUR);
+    void manager.releaseIdleTabs();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(parked.close).toHaveBeenCalledTimes(2);
+
+    emit(parked, "destroyed");
+
+    const releases = logMocks.logInfo.mock.calls.filter(([e]) => e === "portal.idle-release");
+    expect(releases).toEqual([
+      ["portal.idle-release", expect.objectContaining({ tabId: "tab-1" })],
+    ]);
+    expect(sentOn(cachedView, "portal:tab-evicted")).toEqual([{ tabId: "tab-1" }]);
+    manager.destroy();
+  });
+
+  it("doesn't log a user's close as an idle release after an unanswered one", async () => {
+    const { manager, parked } = await parkedBehindAnother();
+    vi.setSystemTime(Date.now() + HOUR);
+    void manager.releaseIdleTabs();
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    await manager.closeTab("tab-1");
+    emit(parked, "destroyed");
+
+    expect(logMocks.logInfo.mock.calls.some(([e]) => e === "portal.idle-release")).toBe(false);
+    manager.destroy();
+  });
+
   it("doesn't let a newer show be overtaken by one that waited out a release", async () => {
     const { manager, parked } = await parkedBehindAnother();
     vi.setSystemTime(Date.now() + HOUR);
