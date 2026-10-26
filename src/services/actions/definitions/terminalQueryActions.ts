@@ -24,6 +24,7 @@ import {
 } from "@shared/types/terminalWaitUntilIdle";
 import { NOTIFY_ARG_DESCRIPTION, NotifyReplyLinesSchema } from "@shared/types/terminalNotify";
 import { WaitForReplySchema, WaitSecondsSchema } from "@shared/types/replyWait";
+import { RunGenerationArgSchema } from "@shared/types/assistantControl";
 import {
   TerminalCloseManyArgsSchema,
   TerminalSendCommandManyArgsSchema,
@@ -40,18 +41,6 @@ const HANDBACK_ARG_SCHEMA = z
   .describe(
     "Ask the agent to end its reply with a Daintree marker, read back as `lastHandback`. Agent panes only."
   );
-
-/**
- * Which run of another assistant a send is for (#13496), shared by both submit
- * tools. Main consumes it; an assistant target refuses a send without it, or
- * with a run that has since been replaced.
- */
-const ASSISTANT_GENERATION_ARG_SCHEMA = z
-  .number()
-  .int()
-  .min(0)
-  .optional()
-  .describe("Sending to another assistant: its generation from the assistant listing.");
 
 /**
  * The `notify` argument, shared by both submit tools and `agent.launch`. Main
@@ -492,7 +481,7 @@ export function registerTerminalQueryActions(
           "A shell command or the agent's next prompt. Multi-line text goes in atomically with one Enter."
         ),
       handback: HANDBACK_ARG_SCHEMA,
-      generation: ASSISTANT_GENERATION_ARG_SCHEMA,
+      generation: RunGenerationArgSchema,
       notify: NOTIFY_ARG_SCHEMA,
       replyLines: NotifyReplyLinesSchema,
       waitForReply: WaitForReplySchema,
@@ -536,7 +525,7 @@ export function registerTerminalQueryActions(
         .min(1)
         .describe("Text to submit. Multi-line text goes in atomically with one Enter."),
       handback: HANDBACK_ARG_SCHEMA,
-      generation: ASSISTANT_GENERATION_ARG_SCHEMA,
+      generation: RunGenerationArgSchema,
       notify: NOTIFY_ARG_SCHEMA,
       replyLines: NotifyReplyLinesSchema,
       waitForReply: WaitForReplySchema,

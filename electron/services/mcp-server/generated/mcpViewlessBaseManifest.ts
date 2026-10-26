@@ -1744,7 +1744,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "boolean",
         },
         generation: {
-          description: "Sending to another assistant: its generation from the assistant listing.",
+          description: "Run you read: assistant-listing generation or host-listing incarnation.",
           type: "integer",
           minimum: 0,
           maximum: 9007199254740991,
@@ -1883,8 +1883,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           },
         },
         generation: {
-          description:
-            "Pressing keys in another assistant: its generation from the assistant listing.",
+          description: "Run you read: assistant-listing generation or host-listing incarnation.",
           type: "integer",
           minimum: 0,
           maximum: 9007199254740991,

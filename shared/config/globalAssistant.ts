@@ -28,7 +28,8 @@ export function isGlobalAssistantId(projectId: string): boolean {
  * Everything the global assistant may call directly (#14161). It names no
  * project, so every project tool reaches it only through `host.call`, where
  * the target host admits it as it would another machine's assistant: the owned
- * tools alone act, on what it launched there or was handed. `host.ensureProject`
+ * tools alone act, on what it launched there or was handed, save that a prompt,
+ * keys and an interrupt also reach an agent it didn't launch (#14551). `host.ensureProject`
  * acts on the caller's own project, which it has none of. `host.settings`
  * names hosts, never a project, and every change it makes the person approves.
  * `host.watch` names a host and only listens, so the coordinator that held
@@ -52,6 +53,10 @@ export const GLOBAL_ASSISTANT_READINESS_TOOL = HOST_LIST_TOOL;
  * allow-list, so a tool added to the relay surface later is refused until it
  * is placed here or in {@link GLOBAL_WITHHELD_TOOLS}: reads, launches of its
  * own, and the owned forms that reach only what it launched or was handed.
+ * The target widens `terminal.sendCommandOwned`, `terminal.sendKeysOwned` and
+ * `terminal.interruptOwned` to any agent worker for it (#14551), held to the
+ * run it names and never over a person's input; every other owned form keeps
+ * the ledger.
  * `worktree.resource.teardown` and `recipe.run` are here on purpose: both are
  * `danger: "confirm"`, so the person approves each run.
  */

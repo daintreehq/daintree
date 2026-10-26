@@ -111,6 +111,7 @@ import {
   ASSISTANT_START_TOOL,
   ASSISTANT_TARGET_REFUSALS,
   AssistantStartArgsSchema,
+  WORKER_STEER_REFUSALS,
 } from "../../../shared/types/assistantControl.js";
 import { HOST_CALL_TOOL, HOST_CONTROL_TOOL_IDS } from "../../../shared/types/hostControl.js";
 import { auditCodeForHostControlRefusal, runHostControlTool } from "./hostControlTools.js";
@@ -246,6 +247,16 @@ const ASSISTANT_TARGET_TOOLS: ReadonlySet<string> = new Set([
   "terminal.close",
   "terminal.closeOwned",
   TERMINAL_READ_LAST_MESSAGE_OWNED_TOOL,
+]);
+/**
+ * The input tools the global Assistant may point at a worker it neither
+ * launched nor was handed (#14551), and nothing else: closes, restarts and
+ * injections keep the ownership ledger.
+ */
+const GLOBAL_STEER_TOOLS: ReadonlySet<string> = new Set([
+  "terminal.sendCommandOwned",
+  "terminal.sendKeysOwned",
+  "terminal.interruptOwned",
 ]);
 /** The closes whose answer carries what the host saw of each closed panel's process (#14474). */
 const CLOSE_TOOLS: ReadonlySet<string> = new Set([
@@ -618,6 +629,7 @@ function auditCodeForAssistantRefusal(
     case EXECUTION_ERROR_CODE:
       return "EXECUTION_ERROR";
     case ASSISTANT_TARGET_REFUSALS.notFound:
+    case WORKER_STEER_REFUSALS.notFound:
       return "NOT_FOUND";
     default:
       return "RESTRICTED";
@@ -867,6 +879,66 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       }
       if (ASSISTANT_INTERRUPT_TOOLS.has(actionId)) return control.interrupt(target);
       return control.close(caller, target);
+    };
+    // The global Assistant steering a worker it didn't launch (#14551), in
+    // the project this session is bound to and no other. Every argument the
+    // delegate would have validated is validated here, since none reaches it.
+    const runGlobalSteer = async (terminalId: string): Promise<unknown> => {
+      const steer = deps.globalSteer!;
+      const projectId = sessionStore.sessionWorkspaceMap.get(sessionId);
+      if (projectId === undefined) {
+        throw new AssistantTargetError(
+          WORKER_STEER_REFUSALS.notFound,
+          "This call isn't bound to a project, so it can't reach a terminal. Nothing was sent."
+        );
+      }
+      const record =
+        typeof args === "object" && args !== null && !Array.isArray(args)
+          ? (args as Record<string, unknown>)
+          : {};
+      const generation =
+        typeof record.generation === "number" &&
+        Number.isInteger(record.generation) &&
+        record.generation >= 0
+          ? record.generation
+          : undefined;
+      const target = {
+        projectId,
+        terminalId,
+        generation,
+        authorize: () => {
+          if (sessionStore.getTier(sessionId) === null) {
+            throw new AssistantTargetError(SESSION_GONE, SESSION_GONE_MESSAGE);
+          }
+          const refusal = assistantWriteRefusal(projectId);
+          if (refusal) throw new AssistantTargetError(refusal.code, refusal.message);
+        },
+      };
+      if (actionId === "terminal.sendCommandOwned") {
+        const command = typeof record.command === "string" ? record.command : "";
+        if (command.trim().length === 0) {
+          throw new AssistantTargetError("VALIDATION_ERROR", "A send needs a non-empty `command`.");
+        }
+        return steer.prompt(target, {
+          command,
+          handback: record.handback === true,
+          machineName: deps.relay?.shellName ?? "another machine",
+        });
+      }
+      if (actionId === "terminal.sendKeysOwned") {
+        const parsed = SendKeysArgsSchema.safeParse(args);
+        if (!parsed.success) {
+          throw new AssistantTargetError(
+            "VALIDATION_ERROR",
+            `Invalid keys: ${parsed.error.issues.map((issue) => issue.message).join("; ")}. Nothing was pressed.`
+          );
+        }
+        return steer.keys(target, {
+          ...(parsed.data.keys !== undefined ? { keys: parsed.data.keys } : {}),
+          ...(parsed.data.choose !== undefined ? { choose: parsed.data.choose } : {}),
+        });
+      }
+      return steer.interrupt(target);
     };
     // Daintree's own assistant only (#12874): not agent panes, not api-key
     // clients. Read live per call, and a
@@ -1331,7 +1403,30 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         // that matters — before anything reaches a renderer, so a refused call
         // cannot have mutated a panel or a worktree.
         // An assistant target answers to its own rules below, not the ledger.
-        if (ownedResource !== undefined && assistantTarget === undefined) {
+        // A worker the global Assistant names that the ledger doesn't give it
+        // (#14551). Its own launches and hand-overs keep the owned path, so
+        // the strict checks below never change what it could already do.
+        // Keyed on the relay caller its Shell's runtime named, never on args.
+        const steerTerminalId =
+          deps.relay?.global === true &&
+          deps.globalSteer !== undefined &&
+          GLOBAL_STEER_TOOLS.has(actionId) &&
+          ownedResource !== undefined &&
+          assistantTarget === undefined
+            ? readOwnedResourceId(args, ownedResource.idArg)
+            : undefined;
+        const globalSteerTerminalId =
+          steerTerminalId !== undefined &&
+          ownedRecordFor(ownedResource!.resourceKind, steerTerminalId) === undefined &&
+          adoptedRecordFor(ownedResource!.resourceKind, steerTerminalId) === undefined
+            ? steerTerminalId
+            : undefined;
+
+        if (
+          ownedResource !== undefined &&
+          assistantTarget === undefined &&
+          globalSteerTerminalId === undefined
+        ) {
           const resourceId = readOwnedResourceId(args, ownedResource.idArg);
           if (resourceId === undefined) {
             const message =
@@ -2552,10 +2647,18 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         // An assistant target runs in main (#13496), with the notice and the
         // reply wait set up above around it like any send. Its refusals are
         // its own words, and a refused send cancels the notice in `finally`.
+        // A global steer runs the same way, so its notice and reply wait are set
+        // up around it, and nothing it refuses falls back to the renderer.
         let assistantEnvelope: DispatchEnvelope | undefined;
-        if (assistantTarget !== undefined && assistantCaller !== null && assistantControl) {
+        if (
+          (assistantTarget !== undefined && assistantCaller !== null && assistantControl) ||
+          globalSteerTerminalId !== undefined
+        ) {
           try {
-            const result = await runAssistantTarget(assistantTarget, assistantCaller);
+            const result =
+              globalSteerTerminalId !== undefined
+                ? await runGlobalSteer(globalSteerTerminalId)
+                : await runAssistantTarget(assistantTarget!, assistantCaller!);
             assistantEnvelope = { result: { ok: true, result } };
           } catch (err) {
             if (err instanceof AssistantTargetError) {

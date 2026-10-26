@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { RunGenerationArgSchema } from "../types/assistantControl.js";
 import { NotifyReplyLinesSchema } from "../types/terminalNotify.js";
 
 /**
@@ -54,12 +55,7 @@ export const SendKeysArgsSchema = z.object({
     .describe(
       "Or up to 16 of: Up, Down, Left, Right, Enter, Escape, Tab, Space, Backspace, a-z, 0-9."
     ),
-  generation: z
-    .number()
-    .int()
-    .min(0)
-    .optional()
-    .describe("Pressing keys in another assistant: its generation from the assistant listing."),
+  generation: RunGenerationArgSchema,
   // Acted on in main, like the send's: after answering a dialog, be told when
   // the agent finishes the turn it unblocked.
   notify: z

@@ -162,6 +162,92 @@ describe("createSessionServerDeps", () => {
     expect(sessionDeps.relay?.global).toBe(expected);
   });
 
+  // #14551: only a relay caller its Shell's runtime named global is handed the
+  // steer, from this machine's global Assistant or another's.
+  const RELAY = {
+    linkSessionId: "link-1",
+    senderId: "shell-1",
+    helpSessionId: "help-1",
+    shellName: "Shell",
+  };
+  it.each([
+    ["another machine's", RELAY],
+    ["this machine's", { ...RELAY, local: true as const }],
+  ])(
+    "hands %s global Assistant the steer, read from the binding at each call",
+    async (_l, relay) => {
+      const { state, host } = mutableHost();
+      const sessionDeps = createSessionServerDeps(fakeSource(), host, {
+        sessionId: "s",
+        relay: { ...relay, global: true },
+      });
+      expect(sessionDeps.relay?.global).toBe(true);
+      const target = {
+        projectId: "p",
+        terminalId: "t",
+        generation: 1,
+        authorize: () => {},
+      };
+
+      const refused = { code: "WORKER_NOT_FOUND" };
+      const steerOf = (tag: string) => ({
+        prompt: vi.fn(async () => `${tag}:prompt`),
+        keys: vi.fn(async () => `${tag}:keys`),
+        interrupt: vi.fn(async () => `${tag}:interrupt`),
+      });
+      const bind = (steer: ReturnType<typeof steerOf> | undefined) => {
+        state.binding = {
+          control: {} as AssistantControlBinding["control"],
+          sessionProject: () => null,
+          ...(steer ? { steer: steer as never } : {}),
+        };
+      };
+      const prompt = { command: "go", handback: false, machineName: "m" };
+      const keys = { keys: ["Enter"] };
+      const steer = sessionDeps.globalSteer!;
+      const callAll = () =>
+        Promise.all([
+          steer.prompt(target, prompt),
+          steer.keys(target, keys),
+          steer.interrupt(target),
+        ]);
+
+      // Unbound, every call is refused, never run some other way.
+      await expect(steer.prompt(target, prompt)).rejects.toMatchObject(refused);
+      await expect(steer.keys(target, keys)).rejects.toMatchObject(refused);
+      await expect(steer.interrupt(target)).rejects.toMatchObject(refused);
+
+      const first = steerOf("a");
+      bind(first);
+      await expect(callAll()).resolves.toEqual(["a:prompt", "a:keys", "a:interrupt"]);
+      expect(first.prompt).toHaveBeenCalledWith(target, prompt);
+      expect(first.keys).toHaveBeenCalledWith(target, keys);
+      expect(first.interrupt).toHaveBeenCalledWith(target);
+
+      // Replaced, then gone: each call reads the binding as it finds it.
+      bind(steerOf("b"));
+      await expect(callAll()).resolves.toEqual(["b:prompt", "b:keys", "b:interrupt"]);
+      bind(undefined);
+      await expect(steer.keys(target, keys)).rejects.toMatchObject(refused);
+    }
+  );
+
+  it.each([
+    ["a project assistant's relay session", { relay: RELAY }],
+    [
+      "this machine's project assistant reaching another project",
+      { relay: { ...RELAY, local: true as const } },
+    ],
+    ["a direct session", {}],
+  ])("hands %s no steer", (_label, capture) => {
+    const sessionDeps = createSessionServerDeps(fakeSource(), mutableHost().host, {
+      sessionId: "s",
+      ...capture,
+    });
+    expect(sessionDeps.globalSteer).toBeUndefined();
+    expect(sessionDeps.relay?.global).toBeUndefined();
+  });
+
   it("names the external client the host reports at dispatch time, not at build", async () => {
     const deps = fakeSource();
     const { state, host } = mutableHost();

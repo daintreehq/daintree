@@ -903,7 +903,10 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // 152_980 → 153_235 for #14548, measured at 153_225 B (+254 over #14550's
   // 152_971): `generation` joins `terminal.sendKeys` and its owned twin, so an
   // assistant can press keys in another assistant's run.
-  const MAX_COHORT_PAYLOAD_BYTES = 153_235;
+  // 153_235 → 153_350 for #14551, measured at 153_339 B (+114 over #14548's
+  // 153_225): `terminal.interruptOwned` takes `generation` too, so the global
+  // Assistant interrupts the run it read; the shared description got shorter.
+  const MAX_COHORT_PAYLOAD_BYTES = 153_350;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

@@ -121,3 +121,31 @@ export const ASSISTANT_TARGET_REFUSALS = {
   /** Starting one was refused: no project, no vacant slot, or it could not launch. */
   startRefused: "ASSISTANT_START_REFUSED",
 } as const;
+
+/**
+ * The run an input tool names (#13496, #14551): an assistant by the
+ * generation `assistant.list` gave, a worker the global Assistant didn't
+ * launch by the `incarnation` from `host.list`. Both are its launch generation.
+ */
+export const RunGenerationArgSchema = z
+  .number()
+  .int()
+  .min(0)
+  .optional()
+  .describe("Run you read: assistant-listing generation or host-listing incarnation.");
+
+/** Refusal codes the global Assistant's steer of a worker answers with (#14551). */
+export const WORKER_STEER_REFUSALS = {
+  /** No terminal of the call's project runs under that id, or it can't be read. */
+  notFound: "WORKER_NOT_FOUND",
+  /** A plain shell, an ended process, or an assistant: no worker agent to steer. */
+  notAgent: "WORKER_NOT_AGENT",
+  /** The run named by `generation` is not the one running now. */
+  restarted: "WORKER_RESTARTED",
+  /** Input since its agent settled, or a submission still going in: a person's turn. */
+  typing: "WORKER_TYPED_INPUT",
+  /** Not where a prompt is admitted, or another call is writing to it. */
+  busy: "WORKER_BUSY",
+  /** Some keys went in before a check stopped the rest. */
+  partial: "WORKER_KEYS_PARTIAL",
+} as const;

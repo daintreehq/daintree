@@ -442,7 +442,7 @@ const CALL_NO_HOST_DETAIL = "This Shell has no host with that id. List the hosts
 const CALL_OWN_PROJECT_DETAIL =
   "That is this assistant's own project, so nothing was run. Call its tools directly; local reaches this machine's other projects.";
 const CALL_GLOBAL_WITHHELD_DETAIL =
-  "The global assistant can't do that in a project: it acts only on what it launched there or the user handed it, so nothing was run. Ask the user to do it, or to hand you the terminal.";
+  "The global assistant can't do that in a project, so nothing was run. Beyond reads, it prompts, presses keys in and interrupts agents with the owned tools, and closes, restarts or deletes only what it launched there or the user handed it. Ask the user to do it.";
 const CALL_AMBIGUOUS_DETAIL =
   "No answer came back, so the call may have reached the host and run. Resend it under this callId, which never runs it twice.";
 const CALL_NOT_SENT_DETAIL =
