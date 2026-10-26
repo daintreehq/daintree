@@ -38,6 +38,7 @@ describe("stagingStatusCache", () => {
       stagingStatus: getCachedStagingStatus(worktreePath),
     }));
     const withStaged = (insertions: number): StagingStatus =>
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- only the sections the rule reads
       ({
         staged: [{ path: "a.ts", status: "modified", insertions, deletions: 0 }],
         unstaged: [],

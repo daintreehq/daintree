@@ -27,36 +27,48 @@ function nextV(): WorktreeEventVersion {
 const listeners = new Map<string, Set<(data: unknown) => void>>();
 
 const WT_PATH = "/repo/wt-1";
+const MAIN_PATH = "/repo";
+
+interface Shape {
+  entries?: Array<Partial<FileChangeDetail> & { path: string }>;
+  headOid?: string;
+}
 
 // The store keeps a snapshot's identity unless an aggregate moves, so these
 // are filled in the way the host computes them.
-function worktreeWith(entries: Array<Partial<FileChangeDetail> & { path: string }>) {
-  const changes: FileChangeDetail[] = entries.map((entry) => ({
+function snapshot(id: string, path: string, branch: string, shape: Shape) {
+  const changes: FileChangeDetail[] = (shape.entries ?? []).map((entry) => ({
     status: "modified",
     insertions: 1,
     deletions: 0,
     mtimeMs: 100,
     ...entry,
-    path: `${WT_PATH}/${entry.path}`,
+    path: `${path}/${entry.path}`,
   }));
   return {
-    id: "wt-1",
-    worktreeId: "wt-1",
-    path: WT_PATH,
-    name: "wt-1",
+    id,
+    worktreeId: id,
+    path,
+    name: id,
     isCurrent: false,
-    branch: "feature",
+    isMainWorktree: path === MAIN_PATH,
+    branch,
     worktreeChanges: {
-      worktreeId: "wt-1",
-      rootPath: WT_PATH,
+      worktreeId: id,
+      rootPath: path,
       changedFileCount: changes.length,
       changes,
       totalInsertions: changes.reduce((sum, change) => sum + (change.insertions ?? 0), 0),
       totalDeletions: changes.reduce((sum, change) => sum + (change.deletions ?? 0), 0),
       latestFileMtime: Math.max(0, ...changes.map((change) => change.mtimeMs ?? 0)),
+      headOid: shape.headOid ?? "head-1",
     },
   } as WorktreeSnapshot;
 }
+
+const feature = (shape: Shape) => snapshot("wt-1", WT_PATH, "feature", shape);
+const main = (shape: Shape = {}) =>
+  snapshot("main", MAIN_PATH, "main", { headOid: "base-1", ...shape });
 
 function emitUpdate(worktree: WorktreeSnapshot): void {
   act(() => {
@@ -126,30 +138,46 @@ async function renderProvider() {
 }
 
 describe("WorktreeStoreProvider — Viewed marks follow worktree polls (#14581)", () => {
-  it("lapses a mark once a poll shows its file changed, and keeps the rest", async () => {
+  async function seed(...worktrees: WorktreeSnapshot[]) {
     const store = await renderProvider();
     act(() => {
-      store.getState().applySnapshot([worktreeWith([{ path: "a.ts" }, { path: "b.ts" }])], nextV());
+      store.getState().applySnapshot(worktrees, nextV());
     });
-    useDiffViewedStore.getState().setViewed(WT_PATH, "modified:a.ts", true);
-    useDiffViewedStore.getState().setViewed(WT_PATH, "modified:b.ts", true);
+  }
 
-    emitUpdate(worktreeWith([{ path: "a.ts", mtimeMs: 200 }, { path: "b.ts" }]));
+  function mark(key: string) {
+    useDiffViewedStore.getState().setViewed(WT_PATH, key, true);
+    expect(viewed(key)).toBe(true);
+  }
+
+  it("lapses a mark once a poll shows its file changed, and keeps the rest", async () => {
+    await seed(main(), feature({ entries: [{ path: "a.ts" }, { path: "b.ts" }] }));
+    mark("modified:a.ts");
+    mark("modified:b.ts");
+
+    emitUpdate(feature({ entries: [{ path: "a.ts", mtimeMs: 200 }, { path: "b.ts" }] }));
 
     expect(viewed("modified:a.ts")).toBe(false);
     expect(viewed("modified:b.ts")).toBe(true);
   });
 
   it("lapses a mark when the agent's own commit takes the file out of the change list", async () => {
-    const store = await renderProvider();
-    act(() => {
-      store.getState().applySnapshot([worktreeWith([{ path: "a.ts" }])], nextV());
-    });
-    useDiffViewedStore.getState().setViewed(WT_PATH, "unstaged:a.ts", true);
+    await seed(main(), feature({ entries: [{ path: "a.ts" }] }));
+    mark("unstaged:a.ts");
 
-    emitUpdate(worktreeWith([]));
-    emitUpdate(worktreeWith([{ path: "a.ts" }]));
-
+    emitUpdate(feature({ entries: [], headOid: "head-2" }));
     expect(viewed("unstaged:a.ts")).toBe(false);
+
+    emitUpdate(feature({ entries: [{ path: "a.ts" }], headOid: "head-2" }));
+    expect(viewed("unstaged:a.ts")).toBe(false);
+  });
+
+  it("lapses a base-branch mark when only the main worktree's HEAD moves", async () => {
+    await seed(main(), feature({ entries: [{ path: "a.ts" }] }));
+    mark("base:a.ts");
+
+    emitUpdate(main({ headOid: "base-2" }));
+
+    expect(viewed("base:a.ts")).toBe(false);
   });
 });

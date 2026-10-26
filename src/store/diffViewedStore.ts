@@ -82,12 +82,13 @@ function baseComparisonSignal(
       break;
     }
   }
-  // Review Hub compares against the main worktree's branch, so its HEAD is the
-  // base side's commit.
+  // Review Hub compares the two branches, and a worktree's HEAD is its branch
+  // tip only while it is on one. A detached side would track the wrong commit,
+  // so it says nothing rather than lapse marks on moves the comparison ignores.
   const head = worktree?.worktreeChanges?.headOid;
   const baseHead = main?.worktreeChanges?.headOid;
-  if (!worktree || !main || !head || !baseHead) return undefined;
-  return `${main.branch ?? ""}@${baseHead}..${worktree.branch ?? ""}@${head}`;
+  if (!worktree?.branch || !main?.branch || !head || !baseHead) return undefined;
+  return `${main.branch}@${baseHead}..${worktree.branch}@${head}`;
 }
 
 function observe(

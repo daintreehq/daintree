@@ -89,14 +89,20 @@ describe("diffViewedStore", () => {
     const MAIN = "/repo";
     let sources: ViewedMarkSources;
 
-    const change = (path: string, overrides: Partial<FileChangeDetail> = {}): FileChangeDetail => ({
-      path: `${WT}/${path}`,
+    const changeIn = (
+      root: string,
+      path: string,
+      overrides: Partial<FileChangeDetail> = {}
+    ): FileChangeDetail => ({
+      path: `${root}/${path}`,
       status: "modified",
       insertions: 1,
       deletions: 0,
       mtimeMs: 100,
       ...overrides,
     });
+    const change = (path: string, overrides: Partial<FileChangeDetail> = {}) =>
+      changeIn(WT, path, overrides);
 
     const snapshot = (
       path: string,
@@ -123,10 +129,15 @@ describe("diffViewedStore", () => {
       } as WorktreeSnapshot;
     };
 
-    const observe = (
-      changes: FileChangeDetail[] | null,
-      heads: { wt?: string; main?: string; branch?: string } = {}
-    ) => {
+    interface Observation {
+      wt?: string;
+      main?: string;
+      branch?: string;
+      mainBranch?: string | null;
+      mainChanges?: FileChangeDetail[];
+    }
+
+    const observe = (changes: FileChangeDetail[] | null, at: Observation = {}) => {
       sources = {
         ...sources,
         worktrees: new Map([
@@ -134,39 +145,44 @@ describe("diffViewedStore", () => {
             MAIN,
             snapshot(MAIN, {
               isMainWorktree: true,
-              branch: "main",
-              changes: [],
-              headOid: heads.main ?? "base-1",
+              ...(at.mainBranch !== null && { branch: at.mainBranch ?? "main" }),
+              changes: at.mainChanges ?? [],
+              headOid: at.main ?? "base-1",
             }),
           ],
           [
             WT,
             snapshot(WT, {
-              branch: heads.branch ?? "feature",
+              branch: at.branch ?? "feature",
               changes,
-              headOid: heads.wt ?? "head-1",
+              headOid: at.wt ?? "head-1",
             }),
           ],
         ]),
       };
     };
 
-    const row = (path: string, insertions = 1): StagingFileEntry => ({
+    const row = (path: string, insertions = 1, deletions = 0): StagingFileEntry => ({
       path,
       status: "modified",
       insertions,
-      deletions: 0,
+      deletions,
     });
 
     const staging = (staged: StagingFileEntry[], unstaged: StagingFileEntry[]) => {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- only the sections the rule reads
       sources = { ...sources, stagingStatus: { staged, unstaged } as unknown as StagingStatus };
     };
 
-    const mark = (key: string, path = WT) =>
+    const mark = (key: string, path = WT) => {
       useDiffViewedStore.getState().setViewed(path, key, true);
+      expect(selectViewedSet(useDiffViewedStore.getState(), path).has(key)).toBe(true);
+    };
     const reconcile = (path?: string) => useDiffViewedStore.getState().reconcileViewed(path);
     const viewed = (key: string, path = WT) =>
       selectViewedSet(useDiffViewedStore.getState(), path).has(key);
+    const hasBaseline = (key: string, path = WT) =>
+      useDiffViewedStore.getState().baselinesByWorktree[path]?.has(key) ?? false;
 
     beforeEach(() => {
       sources = { worktrees: null, stagingStatus: null };
@@ -179,7 +195,8 @@ describe("diffViewedStore", () => {
 
     it.each([
       ["new content", change("a.ts", { mtimeMs: 200 })],
-      ["new churn with the same mtime", change("a.ts", { insertions: 5 })],
+      ["new insertions with the same mtime", change("a.ts", { insertions: 5 })],
+      ["new deletions with the same mtime", change("a.ts", { deletions: 5 })],
       ["a status change", change("a.ts", { status: "added" })],
     ])("lapses on %s", (_label, next) => {
       observe([change("a.ts")]);
@@ -189,6 +206,7 @@ describe("diffViewedStore", () => {
       reconcile();
 
       expect(viewed("modified:a.ts")).toBe(false);
+      expect(hasBaseline("modified:a.ts")).toBe(false);
     });
 
     it("lapses when the file leaves the change list, and stays unviewed when it comes back", () => {
@@ -205,17 +223,15 @@ describe("diffViewedStore", () => {
     });
 
     it("keeps marks, and the state itself, through a poll that changes nothing about them", () => {
-      observe([change("a.ts"), change("b.ts")]);
+      observe([change("a.ts"), change("b.ts")], { mainChanges: [changeIn(MAIN, "m.ts")] });
       mark("modified:a.ts");
-      mark("modified:b.ts", "/repo/other");
+      mark("modified:m.ts", MAIN);
       const before = useDiffViewedStore.getState();
 
-      observe([change("a.ts"), change("c.ts")]);
+      observe([change("a.ts"), change("c.ts")], { mainChanges: [changeIn(MAIN, "m.ts")] });
       reconcile();
 
-      const after = useDiffViewedStore.getState();
-      expect(after.viewedByWorktree).toBe(before.viewedByWorktree);
-      expect(after.baselinesByWorktree).toBe(before.baselinesByWorktree);
+      expect(useDiffViewedStore.getState()).toBe(before);
     });
 
     it("lapses only the file that changed", () => {
@@ -230,17 +246,33 @@ describe("diffViewedStore", () => {
       expect(viewed("modified:b.ts")).toBe(true);
     });
 
+    it("checks every worktree holding marks, or only the one it is asked about", () => {
+      const before = { mainChanges: [changeIn(MAIN, "m.ts")] };
+      const after = { mainChanges: [changeIn(MAIN, "m.ts", { mtimeMs: 200 })] };
+      observe([change("a.ts")], before);
+      mark("modified:a.ts");
+      mark("modified:m.ts", MAIN);
+
+      observe([change("a.ts", { mtimeMs: 200 })], after);
+      reconcile(WT);
+      expect(viewed("modified:a.ts")).toBe(false);
+      expect(viewed("modified:m.ts", MAIN)).toBe(true);
+
+      reconcile();
+      expect(viewed("modified:m.ts", MAIN)).toBe(false);
+    });
+
     it("matches the store's absolute change paths against the key's relative path", () => {
-      observe([change("src/deep/a.ts")]);
-      mark("unstaged:src/deep/a.ts");
+      observe([change("src/deep/a:b.ts")]);
+      mark("unstaged:src/deep/a:b.ts");
 
-      observe([change("src/deep/a.ts")]);
+      observe([change("src/deep/a:b.ts")]);
       reconcile();
-      expect(viewed("unstaged:src/deep/a.ts")).toBe(true);
+      expect(viewed("unstaged:src/deep/a:b.ts")).toBe(true);
 
-      observe([change("src/deep/a.ts", { mtimeMs: 200 })]);
+      observe([change("src/deep/a:b.ts", { mtimeMs: 200 })]);
       reconcile();
-      expect(viewed("unstaged:src/deep/a.ts")).toBe(false);
+      expect(viewed("unstaged:src/deep/a:b.ts")).toBe(false);
     });
 
     it("leaves marks alone while a source has nothing to say, then compares against the mark", () => {
@@ -274,45 +306,86 @@ describe("diffViewedStore", () => {
       expect(viewed("modified:a.ts")).toBe(false);
     });
 
+    it("keeps marks set before any source was registered until a source can be compared", () => {
+      resetStoreAccessorsForTesting();
+      mark("modified:a.ts");
+      reconcile();
+      expect(viewed("modified:a.ts")).toBe(true);
+
+      setViewedMarkSourcesAccessor(() => sources);
+      observe([change("a.ts")]);
+      reconcile();
+      expect(viewed("modified:a.ts")).toBe(true);
+
+      observe([change("a.ts", { mtimeMs: 200 })]);
+      reconcile();
+      expect(viewed("modified:a.ts")).toBe(false);
+    });
+
     it("re-marking after a lapse starts from what is observed then", () => {
       observe([change("a.ts")]);
       mark("modified:a.ts");
       observe([change("a.ts", { mtimeMs: 200 })]);
       reconcile();
+      expect(viewed("modified:a.ts")).toBe(false);
 
       mark("modified:a.ts");
       reconcile();
-
       expect(viewed("modified:a.ts")).toBe(true);
+
+      observe([change("a.ts", { mtimeMs: 300 })]);
+      reconcile();
+      expect(viewed("modified:a.ts")).toBe(false);
     });
 
-    it("forgets the baseline when a mark is cleared, so a later mark doesn't inherit it", () => {
+    it("forgets the baseline when a mark is cleared", () => {
       observe([change("a.ts")]);
       mark("modified:a.ts");
+      expect(hasBaseline("modified:a.ts")).toBe(true);
+
       useDiffViewedStore.getState().toggleViewed(WT, "modified:a.ts");
-      expect(useDiffViewedStore.getState().baselinesByWorktree[WT]?.has("modified:a.ts")).toBe(
-        false
-      );
+      expect(hasBaseline("modified:a.ts")).toBe(false);
 
       mark("modified:a.ts");
       useDiffViewedStore.getState().clearWorktree(WT);
       expect(WT in useDiffViewedStore.getState().baselinesByWorktree).toBe(false);
     });
 
-    it("lapses a staging-section mark when that section's row changes, not its sibling", () => {
+    it("lapses both staging-section marks when the file itself changes", () => {
       observe([change("a.ts")]);
       staging([row("a.ts", 1)], [row("a.ts", 2)]);
       mark("staged:a.ts");
       mark("unstaged:a.ts");
 
-      // Staging a hunk moves churn between the sections without touching the
-      // file on disk, so the worktree store sees nothing.
-      staging([row("a.ts", 3)], [row("a.ts", 2)]);
-      reconcile(WT);
+      // The rows read the same; only the worktree store saw the edit.
+      observe([change("a.ts", { mtimeMs: 200 })]);
+      reconcile();
 
       expect(viewed("staged:a.ts")).toBe(false);
-      expect(viewed("unstaged:a.ts")).toBe(true);
+      expect(viewed("unstaged:a.ts")).toBe(false);
     });
+
+    it.each([
+      ["staged", [row("a.ts", 3)], [row("a.ts", 2)]],
+      ["unstaged", [row("a.ts", 1)], [row("a.ts", 2, 4)]],
+    ] as const)(
+      "lapses the %s mark when only that section's row changes",
+      (section, staged, unstaged) => {
+        observe([change("a.ts")]);
+        staging([row("a.ts", 1)], [row("a.ts", 2)]);
+        mark("staged:a.ts");
+        mark("unstaged:a.ts");
+
+        // Staging a hunk moves churn between the sections without touching
+        // the file on disk, so the worktree store sees nothing.
+        staging([...staged], [...unstaged]);
+        reconcile(WT);
+
+        const other = section === "staged" ? "unstaged" : "staged";
+        expect(viewed(`${section}:a.ts`)).toBe(false);
+        expect(viewed(`${other}:a.ts`)).toBe(true);
+      }
+    );
 
     it("lapses a staging-section mark when its row leaves that section", () => {
       staging([], [row("a.ts")]);
@@ -320,9 +393,10 @@ describe("diffViewedStore", () => {
 
       staging([row("a.ts")], []);
       reconcile(WT);
+      expect(viewed("unstaged:a.ts")).toBe(false);
+
       staging([], [row("a.ts")]);
       reconcile(WT);
-
       expect(viewed("unstaged:a.ts")).toBe(false);
     });
 
@@ -330,11 +404,11 @@ describe("diffViewedStore", () => {
       ["the compared branch", { wt: "head-2" }],
       ["the base branch", { main: "base-2" }],
       ["a branch switch", { branch: "other" }],
-    ])("lapses base-branch marks when %s moves", (_label, heads) => {
+    ])("lapses base-branch marks when %s moves", (_label, at) => {
       observe([change("a.ts")]);
       mark("base:a.ts");
 
-      observe([change("a.ts")], heads);
+      observe([change("a.ts")], at);
       reconcile();
 
       expect(viewed("base:a.ts")).toBe(false);
@@ -345,6 +419,16 @@ describe("diffViewedStore", () => {
       mark("base:a.ts");
 
       observe([change("a.ts", { mtimeMs: 200 })]);
+      reconcile();
+
+      expect(viewed("base:a.ts")).toBe(true);
+    });
+
+    it("reads nothing into a detached main worktree's HEAD, which isn't the compared branch", () => {
+      observe([change("a.ts")], { mainBranch: null });
+      mark("base:a.ts");
+
+      observe([change("a.ts")], { mainBranch: null, main: "detached-2" });
       reconcile();
 
       expect(viewed("base:a.ts")).toBe(true);

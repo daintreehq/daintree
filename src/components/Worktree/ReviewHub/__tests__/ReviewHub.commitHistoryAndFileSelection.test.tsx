@@ -269,7 +269,7 @@ vi.mock("@/components/ui/EmptyState", () => ({
 import { ReviewHubContent } from "../ReviewHubContent";
 import { useUIStore } from "@/store/uiStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
-import { useDiffViewedStore } from "@/store/diffViewedStore";
+import { useDiffViewedStore, selectViewedSet } from "@/store/diffViewedStore";
 import { setViewedMarkSourcesAccessor } from "@/store/storeAccessors";
 import { getCachedStagingStatus, resetStagingStatusCacheForTests } from "../stagingStatusCache";
 
@@ -417,6 +417,7 @@ describe("ReviewHub", () => {
     // Production registers this in the store orchestrator, which these tests
     // don't boot: point it at the same fake worktree map and staging cache.
     setViewedMarkSourcesAccessor((worktreePath) => ({
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- the fake map holds the fields these tests read
       worktrees: worktreeStoreData.current as Map<string, WorktreeState>,
       stagingStatus: getCachedStagingStatus(worktreePath),
     }));
@@ -950,9 +951,14 @@ describe("ReviewHub", () => {
       await waitFor(() => screen.getByText("app.ts"));
 
       fireEvent.click(screen.getByRole("checkbox", { name: "Mark src/app.ts as viewed" }));
+      expect(viewedState("src/app.ts")).toBe("true");
 
       await poll(makeStatus({ unstaged: [] }));
       await waitFor(() => expect(screen.queryByText("app.ts")).toBeNull());
+      // The mark goes when the row does, not when it comes back.
+      expect(
+        selectViewedSet(useDiffViewedStore.getState(), WORKTREE_PATH).has("unstaged:src/app.ts")
+      ).toBe(false);
 
       await poll(makeStatus());
       await waitFor(() => screen.getByText("app.ts"));
