@@ -264,6 +264,33 @@ describe("VoiceTranscriptionService (coordinator)", () => {
     service.stop();
   });
 
+  it("makes only a Deepgram start wait for its keyterms before connecting", () => {
+    const service = new VoiceTranscriptionService();
+    expect(service.keytermsNeededToConnect(DEEPGRAM_SETTINGS)).toBe(true);
+    expect(service.keytermsNeededToConnect(OPENAI_SETTINGS)).toBe(false);
+  });
+
+  it("hands the OpenAI provider its pending keyterms", async () => {
+    const service = new VoiceTranscriptionService();
+    let resolveTerms!: (terms: string[]) => void;
+    const terms = new Promise<string[]>((r) => {
+      resolveTerms = r;
+    });
+    void service.start(OPENAI_SETTINGS, "session-1", { keyterms: terms });
+    await Promise.resolve();
+    const socket = latestInstance();
+    socket.simulateOpen();
+    expect(socket.sent).toHaveLength(0);
+
+    resolveTerms(["Daintree"]);
+    await terms;
+    const update = JSON.parse(String(socket.sent[0])) as {
+      session: { audio: { input: { transcription: { keywords?: string[] } } } };
+    };
+    expect(update.session.audio.input.transcription.keywords).toEqual(["Daintree"]);
+    service.stop();
+  });
+
   // ── Event forwarding ──────────────────────────────────────────────────────
 
   it("forwards provider status events to subscribers", async () => {

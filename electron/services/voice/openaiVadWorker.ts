@@ -20,6 +20,7 @@
  */
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import type { VadWorkerInbound, VadWorkerOutbound } from "./openaiVadWorkerProtocol.js";
+import { AUDIO_BUFFER_MAX_BYTES, AUDIO_BUFFER_MAX_CHUNKS } from "./TranscriptionProvider.js";
 
 interface VadParentPort {
   on(event: "message", listener: (event: { data: VadWorkerInbound }) => void): void;
@@ -85,11 +86,14 @@ function pcm16ToFloat32(pcm: ArrayBuffer): Float32Array {
 type RealTimeVADInstance = Awaited<ReturnType<RealTimeVADClass["new"]>>;
 
 let vad: RealTimeVADInstance | null = null;
-// Serializes processAudio() calls — avr-vad mutates an internal buffer per call,
-// so overlapping awaits would corrupt frame boundaries. Audio messages chain
-// onto this promise in arrival order.
-let processChain: Promise<void> = Promise.resolve();
 let destroyed = false;
+// Audio that arrived before the model finished loading. The provider starts
+// this process as its socket starts connecting and feeds it from the first
+// chunk, so the opening speech is analysed rather than dropped. The cap matches
+// the provider's own connect buffer; past it the load has hung, and a VAD with
+// a hole in what it heard is worse than none, so it reports an error and the
+// provider falls back to its backstop.
+const heldWhileLoading = { chunks: 0, bytes: 0, overflowed: false };
 
 async function init(): Promise<void> {
   try {
@@ -120,6 +124,12 @@ async function init(): Promise<void> {
   }
 }
 
+const initialization = init();
+// Serializes processAudio() calls — avr-vad mutates an internal buffer per call,
+// so overlapping awaits would corrupt frame boundaries. Audio messages chain
+// onto this promise in arrival order, behind the model load.
+let processChain: Promise<void> = initialization;
+
 port.on("message", ({ data: message }) => {
   if (message.type === "destroy") {
     if (destroyed) return;
@@ -147,14 +157,25 @@ port.on("message", ({ data: message }) => {
   }
 
   if (message.type === "audio") {
-    if (destroyed || !vad) return;
-    const frame = pcm16ToFloat32(message.pcm);
+    if (destroyed) return;
+    const pcm = message.pcm;
+    if (!vad) {
+      if (heldWhileLoading.overflowed) return;
+      if (
+        heldWhileLoading.chunks >= AUDIO_BUFFER_MAX_CHUNKS ||
+        heldWhileLoading.bytes + pcm.byteLength > AUDIO_BUFFER_MAX_BYTES
+      ) {
+        heldWhileLoading.overflowed = true;
+        post({ type: "error", message: "VAD model load fell behind the audio" });
+        return;
+      }
+      heldWhileLoading.chunks++;
+      heldWhileLoading.bytes += pcm.byteLength;
+    }
     processChain = processChain
-      .then(() => (!destroyed && vad ? vad.processAudio(frame) : undefined))
+      .then(() => (!destroyed && vad ? vad.processAudio(pcm16ToFloat32(pcm)) : undefined))
       .catch((err: unknown) => {
         post({ type: "error", message: formatErrorMessage(err, "VAD processing failed") });
       });
   }
 });
-
-const initialization = init();

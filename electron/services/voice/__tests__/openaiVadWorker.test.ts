@@ -23,7 +23,11 @@ function send(message: { type: "destroy" } | { type: "audio"; pcm: ArrayBuffer }
   mocks.on.mock.calls.find(([event]) => event === "message")![1]({ data: message });
 }
 function model() {
-  return { start: vi.fn(), processAudio: vi.fn(async () => {}), destroy: vi.fn(async () => {}) };
+  return {
+    start: vi.fn(),
+    processAudio: vi.fn(async (_frame: Float32Array) => {}),
+    destroy: vi.fn(async () => {}),
+  };
 }
 
 /**
@@ -131,6 +135,119 @@ describe("OpenAI VAD process shutdown", () => {
     await vi.waitFor(() => expect(exitSpy).toHaveBeenCalledWith(1));
     expect(mocks.postMessage).toHaveBeenCalledWith({ type: "error", message: "release failed" });
     expect(mocks.postMessage).not.toHaveBeenCalledWith({ type: "drained" });
+  });
+});
+
+describe("OpenAI VAD audio while the model loads", () => {
+  const pcm = (...samples: number[]) => new Int16Array(samples).buffer;
+  const firstSamples = (vad: ReturnType<typeof model>) =>
+    vad.processAudio.mock.calls.map(([frame]) => frame[0]);
+
+  async function loadingWorker() {
+    const vad = model();
+    const loading = deferred<typeof vad>();
+    mocks.create.mockReturnValue(loading.promise);
+    await loadWorker();
+    await vi.waitFor(() => expect(mocks.create).toHaveBeenCalledTimes(1));
+    return { vad, loaded: () => loading.resolve(vad) };
+  }
+
+  const errorPosts = () => mocks.postMessage.mock.calls.filter(([m]) => m.type === "error");
+
+  it("analyses audio that arrived during the load, in order, once the model is ready", async () => {
+    const { vad, loaded } = await loadingWorker();
+    send({ type: "audio", pcm: pcm(16384) });
+    send({ type: "audio", pcm: pcm(-16384) });
+    await Promise.resolve();
+    expect(vad.processAudio).not.toHaveBeenCalled();
+
+    loaded();
+    await vi.waitFor(() => expect(vad.processAudio).toHaveBeenCalledTimes(2));
+    expect(firstSamples(vad)).toEqual([0.5, -0.5]);
+    expect(vad.start.mock.invocationCallOrder[0]).toBeLessThan(
+      vad.processAudio.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it("runs held audio through the model one chunk at a time", async () => {
+    const { vad, loaded } = await loadingWorker();
+    const first = deferred<void>();
+    vad.processAudio.mockReturnValueOnce(first.promise);
+    send({ type: "audio", pcm: pcm(16384) });
+    send({ type: "audio", pcm: pcm(-16384) });
+    loaded();
+    await vi.waitFor(() => expect(vad.processAudio).toHaveBeenCalledTimes(1));
+    await Promise.resolve();
+    expect(vad.processAudio).toHaveBeenCalledTimes(1);
+
+    first.resolve();
+    await vi.waitFor(() => expect(vad.processAudio).toHaveBeenCalledTimes(2));
+    expect(firstSamples(vad)).toEqual([0.5, -0.5]);
+  });
+
+  it("drops the chunk past the connect buffer's chunk cap and reports it once", async () => {
+    const { AUDIO_BUFFER_MAX_CHUNKS } = await import("../TranscriptionProvider.js");
+    const { vad, loaded } = await loadingWorker();
+    for (let i = 0; i < AUDIO_BUFFER_MAX_CHUNKS; i++) send({ type: "audio", pcm: pcm(i) });
+    expect(errorPosts()).toHaveLength(0);
+    send({ type: "audio", pcm: pcm(-32768) });
+    expect(errorPosts()).toHaveLength(1);
+    send({ type: "audio", pcm: pcm(-32768) });
+    expect(errorPosts()).toHaveLength(1);
+
+    loaded();
+    await vi.waitFor(() => expect(vad.processAudio).toHaveBeenCalledTimes(AUDIO_BUFFER_MAX_CHUNKS));
+    await Promise.resolve();
+    expect(vad.processAudio).toHaveBeenCalledTimes(AUDIO_BUFFER_MAX_CHUNKS);
+    expect(firstSamples(vad)).not.toContain(-1);
+  });
+
+  it("drops the chunk past the connect buffer's byte cap", async () => {
+    const { AUDIO_BUFFER_MAX_BYTES } = await import("../TranscriptionProvider.js");
+    const { vad, loaded } = await loadingWorker();
+    const full = new Int16Array(AUDIO_BUFFER_MAX_BYTES / 2);
+    full[0] = 16384;
+    send({ type: "audio", pcm: full.buffer });
+    expect(errorPosts()).toHaveLength(0);
+    send({ type: "audio", pcm: pcm(-16384) });
+    expect(errorPosts()).toHaveLength(1);
+
+    loaded();
+    await vi.waitFor(() => expect(vad.processAudio).toHaveBeenCalledTimes(1));
+    await Promise.resolve();
+    expect(firstSamples(vad)).toEqual([0.5]);
+  });
+
+  it("never analyses held audio when destroy lands before the model loads", async () => {
+    const { vad, loaded } = await loadingWorker();
+    send({ type: "audio", pcm: new ArrayBuffer(1024) });
+    send({ type: "destroy" });
+    loaded();
+    await vi.waitFor(() => expect(exitSpy).toHaveBeenCalledWith(0));
+    expect(vad.processAudio).not.toHaveBeenCalled();
+    expect(vad.destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops held audio when the model fails to load, and still drains on destroy", async () => {
+    let fail!: (error: Error) => void;
+    mocks.create.mockReturnValue(
+      new Promise<never>((_, reject) => {
+        fail = reject;
+      })
+    );
+    await loadWorker();
+    await vi.waitFor(() => expect(mocks.create).toHaveBeenCalledTimes(1));
+    send({ type: "audio", pcm: pcm(16384) });
+    fail(new Error("session creation rejected"));
+    await vi.waitFor(() =>
+      expect(mocks.postMessage).toHaveBeenCalledWith({
+        type: "error",
+        message: "session creation rejected",
+      })
+    );
+    send({ type: "destroy" });
+    await vi.waitFor(() => expect(exitSpy).toHaveBeenCalledWith(0));
+    expect(mocks.postMessage).not.toHaveBeenCalledWith({ type: "ready" });
   });
 });
 

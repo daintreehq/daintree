@@ -39,6 +39,9 @@ const shared = vi.hoisted(() => ({
   startPromise: null as null | Promise<{ ok: boolean; error?: string }>,
   startError: null as null | Error,
   assembleKeyterms: null as null | (() => Promise<string[]>),
+  transcriptionProvider: "openai" as "openai" | "deepgram",
+  /** The start context svc.start() was last handed. */
+  startContext: undefined as undefined | { keyterms?: Promise<string[]> },
   /** The signal the correction service was last handed. */
   sessionSignal: null as AbortSignal | null,
   /** The session the fake provider was last started for; its events carry it. */
@@ -71,7 +74,15 @@ vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
         if (shared.eventCallback === forward) shared.eventCallback = null;
       };
     };
-    this.start = function (_settings: unknown, sessionId: string) {
+    this.keytermsNeededToConnect = function (settings: { transcriptionProvider?: string }) {
+      return settings.transcriptionProvider === "deepgram";
+    };
+    this.start = function (
+      _settings: unknown,
+      sessionId: string,
+      context?: { keyterms?: Promise<string[]> }
+    ) {
+      shared.startContext = context;
       shared.providerSessionId = sessionId;
       shared.calls.push("start");
       if (shared.startError) return Promise.reject(shared.startError);
@@ -134,7 +145,13 @@ vi.mock("../../../store.js", () => ({
   store: {
     get: vi.fn((key: string) =>
       key === "voiceInput"
-        ? { enabled: true, openaiApiKey: "sk-test", ...shared.voiceInput }
+        ? {
+            enabled: true,
+            openaiApiKey: "sk-test",
+            deepgramApiKey: "dg-test",
+            transcriptionProvider: shared.transcriptionProvider,
+            ...shared.voiceInput,
+          }
         : undefined
     ),
     set: vi.fn(),
@@ -243,7 +260,13 @@ function stop(sessionId = currentSessionId) {
   return getHandler("voice-input:stop")(fakeEvent, sessionId);
 }
 
+/**
+ * Holds keyterm assembly. Only Deepgram waits for it before its provider
+ * starts (the terms go on its socket URL), so this also switches to Deepgram,
+ * keeping the session in its starting phase until the terms land.
+ */
 function deferKeyterms() {
+  shared.transcriptionProvider = "deepgram";
   let resolve!: (terms: string[]) => void;
   const promise = new Promise<string[]>((r) => {
     resolve = r;
@@ -265,6 +288,8 @@ describe("voiceInput — audio sent before the provider starts", () => {
     shared.startPromise = null;
     shared.startError = null;
     shared.assembleKeyterms = null;
+    shared.transcriptionProvider = "openai";
+    shared.startContext = undefined;
     shared.sessionSignal = null;
     shared.providerSessionId = null;
     shared.drainPromise = null;
@@ -400,6 +425,48 @@ describe("voiceInput — audio sent before the provider starts", () => {
     expect(shared.calls).toEqual(["start", "chunk:2"]);
   });
 
+  it("starts OpenAI while keyterm assembly is still running, handing it the pending terms", async () => {
+    let resolveTerms!: (terms: string[]) => void;
+    shared.assembleKeyterms = () =>
+      new Promise<string[]>((r) => {
+        resolveTerms = r;
+      });
+    const pending = start();
+    sendChunk(1);
+    await expect(pending).resolves.toEqual({ ok: true });
+    expect(shared.calls).toEqual(["start", "chunk:1"]);
+    sendChunk(2);
+    expect(shared.calls).toEqual(["start", "chunk:1", "chunk:2"]);
+
+    resolveTerms(["alpha", "beta"]);
+    await expect(shared.startContext?.keyterms).resolves.toEqual(["alpha", "beta"]);
+  });
+
+  it("hands OpenAI an empty term list when assembly fails", async () => {
+    shared.assembleKeyterms = () => Promise.reject(new Error("git failed"));
+    await expect(start()).resolves.toEqual({ ok: true });
+    await expect(shared.startContext?.keyterms).resolves.toEqual([]);
+  });
+
+  it("drains an OpenAI session stopped while its keyterms are still assembling", async () => {
+    shared.assembleKeyterms = () => new Promise<string[]>(() => {});
+    let resolveStart!: (r: StartResult) => void;
+    shared.startPromise = new Promise((r) => {
+      resolveStart = r;
+    });
+    const pending = start();
+    sendChunk(1);
+    await vi.waitFor(() => expect(shared.calls).toContain("start"));
+
+    // The provider owns the session already, so the stop drains it directly.
+    const stopping = stop();
+    await vi.waitFor(() => expect(shared.calls).toContain("stopGracefully"));
+    expect(shared.calls).toEqual(["start", "chunk:1", "stopGracefully"]);
+    resolveStart({ ok: true });
+    await Promise.all([stopping, pending]);
+    expect(shared.calls).toEqual(["start", "chunk:1", "stopGracefully"]);
+  });
+
   it("flushes held audio before the provider finishes starting", async () => {
     let resolveStart!: (r: { ok: boolean }) => void;
     shared.startPromise = new Promise((r) => {
@@ -438,7 +505,8 @@ describe("voiceInput — audio sent before the provider starts", () => {
     const resolveKeyterms = deferKeyterms();
     const pending = start();
     sendChunk(1);
-    await vi.waitFor(() => expect(sender.onDestroyed).not.toBeNull());
+    await vi.waitFor(() => expect(assembleKeyterms).toHaveBeenCalled());
+    expect(sender.onDestroyed).not.toBeNull();
 
     sender.destroyed = true;
     sender.onDestroyed!();
@@ -633,6 +701,7 @@ describe("voiceInput — keyterm target", () => {
     vi.clearAllMocks();
     shared.calls = [];
     shared.assembleKeyterms = null;
+    shared.transcriptionProvider = "openai";
     shared.eventCallback = null;
     shared.viewProjectId = "proj-a";
     shared.voiceInput = {};

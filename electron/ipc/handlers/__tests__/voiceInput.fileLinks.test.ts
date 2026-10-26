@@ -56,6 +56,9 @@ vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
       shared.listeners.add(cb);
       return () => shared.listeners.delete(cb);
     };
+    this.keytermsNeededToConnect = function () {
+      return false;
+    };
     this.start = function (_settings: unknown, sessionId: string) {
       shared.providerSessionId = sessionId;
       return Promise.resolve({ ok: true });

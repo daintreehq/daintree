@@ -906,10 +906,10 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // Kick off keyterm assembly concurrently with the subscription/provider
     // setup below so leading speech isn't delayed waiting on git/terminal reads.
     // Both providers consume the result: Deepgram via repeated `keyterm=` params,
-    // OpenAI via the transcription prompt. The frozen list is awaited just before
-    // svc.start() and travels inside the settings snapshot, so both providers'
-    // reconnect paths reuse it unchanged. Assembly is capped internally (~500ms)
-    // and failures are non-fatal — we just start without keyterms.
+    // OpenAI via the transcription prompt. Each provider freezes the list for
+    // the session, so its reconnect path reuses it unchanged. Assembly is capped
+    // internally (~500ms) and failures are non-fatal — we just start without
+    // keyterms.
     const keytermsPromise = assembleKeyterms({
       customDictionary: dictionaryTerms(settings.dictionary),
       projectDictionary: readVocabulary(
@@ -917,6 +917,11 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       ).then(dictionaryTerms),
       ...resolveKeytermTarget(session.projectId, terminalId, deps.ptyClient),
       ptyClient: deps.ptyClient,
+    }).catch((err: unknown): string[] => {
+      logDebug("[VoiceInput] Keyterm assembly failed, starting without keyterms", {
+        ...voiceErrorLogFields(err),
+      });
+      return [];
     });
 
     const forwardEvent = (voiceEvent: VoiceSessionEvent) => {
@@ -1047,23 +1052,20 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       }
     });
 
-    // Freeze the assembled keyterms into the session settings snapshot. Assembly
-    // has its own internal timeouts, so this await is bounded and never blocks the
-    // session start indefinitely.
-    let keyterms: string[] = [];
+    // Deepgram needs the terms to open its socket, so it waits for them here,
+    // still starting. OpenAI opens its socket now and takes them as they land,
+    // since it only sends them once the socket is open. Assembly has its own
+    // internal timeouts, so this await is bounded.
+    let keyterms: string[] | null = null;
     const termsWaitStartedAt = performance.now();
-    try {
+    if (svc.keytermsNeededToConnect(settings)) {
       keyterms = await keytermsPromise;
-    } catch (err) {
-      logDebug("[VoiceInput] Keyterm assembly failed, starting without keyterms", {
-        ...voiceErrorLogFields(err),
-      });
+      // A stop, a newer start or the owner going away ended this session while
+      // assembly ran. Whatever ended it already released its subscription and
+      // watcher, so there is nothing of ours left to undo.
+      if (!isLive(session)) return SUPERSEDED;
     }
     const keytermsReadyAt = performance.now();
-    // A stop, a newer start or the owner going away ended this session while
-    // assembly ran (on either path). Whatever ended it already released its
-    // subscription and watcher, so there is nothing of ours left to undo.
-    if (!isLive(session)) return SUPERSEDED;
     // The session this one replaced is still draining the provider, and
     // starting now would destroy it mid-drain. This session's audio keeps
     // going to its own buffer meanwhile.
@@ -1091,7 +1093,9 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // pending-start state synchronously, so the held audio lands in the
     // provider's own connect buffer, ahead of any chunk that arrives next.
     session.phase = "active";
-    const startPromise = svc.start({ ...settings, keyterms }, session.id);
+    const startPromise = keyterms
+      ? svc.start({ ...settings, keyterms }, session.id)
+      : svc.start(settings, session.id, { keyterms: keytermsPromise });
     flushPreStartAudio(session, svc);
     session.markHandedOff();
     const result = await startPromise;
