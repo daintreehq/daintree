@@ -2487,10 +2487,14 @@ class VoiceRecordingService {
         // Every ending keeps its words, not only a clean stop: an error, a
         // closed panel or a sleep are exactly when they need recovering. Read
         // by the session this stop began with, which a start racing the
-        // teardown can't take the place of.
-        if (stoppedTarget) finished = takeFinishedTranscript(stoppedTarget, stoppedSessionId);
-        if (finished)
+        // teardown can't take the place of. A rewrite's spoken instruction
+        // was never meant for a draft, so it isn't one to recover.
+        if (stoppedTarget && !stoppedTarget.rewrite) {
+          finished = takeFinishedTranscript(stoppedTarget, stoppedSessionId);
+        }
+        if (finished) {
           keepRecentDictation({ ...finished, correctedText: null, endedAt: Date.now() });
+        }
         if (shouldAnnounce) {
           useVoiceRecordingStore.getState().announce(announcement);
         }

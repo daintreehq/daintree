@@ -362,4 +362,32 @@ describe("VoiceRecordingService — recent dictations (#14637)", () => {
     expect(voiceStore.getState().panelBuffers["panel-1"]).toBeUndefined();
     expect(kept()).toEqual([]);
   });
+
+  it("keeps no entry for a spoken rewrite instruction", async () => {
+    const { service, say, kept, voiceStore } = await setup();
+    const release = vi.fn();
+    voiceStore.getState().beginSession({
+      panelId: "panel-1",
+      rewrite: {
+        selection: {
+          text: "the selected text",
+          range: () => null,
+          onLost: () => {},
+          apply: () => false,
+          release,
+        },
+        instruction: [],
+        cancelled: false,
+      },
+    });
+    say("make this more formal");
+    await service.stop("Dictation stopped because the connection failed.", {
+      skipRemoteStop: true,
+      nextStatus: "error",
+      preserveLiveText: true,
+    });
+
+    expect(release).toHaveBeenCalled();
+    expect(kept()).toEqual([]);
+  });
 });
