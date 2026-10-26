@@ -10,6 +10,7 @@ import {
 } from "@/lib/animationUtils";
 import type { ReEntrySummaryState, SummaryRow } from "@/hooks/useReEntrySummary";
 import { navigateToNotificationSource } from "@/components/Notifications/notificationNavigation";
+import { useUIStore } from "@/store/uiStore";
 import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
 import type { ReactNode } from "react";
 
@@ -67,18 +68,22 @@ function makeState(overrides: Partial<ReEntrySummaryState> = {}): ReEntrySummary
     entries: [],
     rows: [],
     overflowCount: 0,
+    shownAt: Date.now(),
     dismiss: vi.fn(),
     ...overrides,
   };
 }
 
 describe("ReEntrySummary", () => {
+  const realOpenNotificationCenter = useUIStore.getState().openNotificationCenter;
+
   beforeEach(() => {
     vi.useFakeTimers();
     vi.mocked(navigateToNotificationSource).mockReset().mockResolvedValue(true);
   });
 
   afterEach(() => {
+    useUIStore.setState({ openNotificationCenter: realOpenNotificationCenter });
     vi.useRealTimers();
     delete document.body.dataset.performanceMode;
   });
@@ -114,6 +119,7 @@ describe("ReEntrySummary", () => {
           label: "feature-bar",
           type: "warning",
           highlightTitle: "Tests flaky",
+          highlight: { context: { worktreeId: "wt-2" } },
         }),
       ],
     });
@@ -167,45 +173,79 @@ describe("ReEntrySummary", () => {
     expect(dismiss).toHaveBeenCalledOnce();
   });
 
-  it("clicking a row dismisses and goes to its highlighted entry's source", async () => {
-    const { useUIStore } = await import("@/store/uiStore");
+  it("clicking a row dismisses, then goes to that row's highlighted entry", async () => {
     const openSpy = vi.fn();
     useUIStore.setState({ openNotificationCenter: openSpy });
-
     const dismiss = vi.fn();
+    let dismissedBeforeNavigating = false;
+    vi.mocked(navigateToNotificationSource).mockImplementation(() => {
+      dismissedBeforeNavigating = dismiss.mock.calls.length === 1;
+      return Promise.resolve(true);
+    });
+
     const context = { worktreeId: "wt-42", panelId: "panel-7" };
     render(
       <ReEntrySummary
         state={makeState({
           dismiss,
-          rows: [makeRow({ key: "worktree:wt-42", label: "fix-bug", highlight: { context } })],
+          rows: [
+            makeRow({ key: "worktree:wt-1", label: "feature-test" }),
+            makeRow({ key: "worktree:wt-42", label: "fix-bug", highlight: { context } }),
+          ],
         })}
       />
     );
     fireEvent.click(screen.getByText("fix-bug"));
-    expect(dismiss).toHaveBeenCalledOnce();
-    expect(navigateToNotificationSource).toHaveBeenCalledWith(context);
     await act(async () => {});
+
+    expect(dismissedBeforeNavigating).toBe(true);
+    expect(navigateToNotificationSource).toHaveBeenCalledOnce();
+    expect(navigateToNotificationSource).toHaveBeenCalledWith(context);
     expect(openSpy).not.toHaveBeenCalled();
   });
 
   it("opens the inbox when a row has nowhere live to land", async () => {
-    const { useUIStore } = await import("@/store/uiStore");
     const openSpy = vi.fn();
     useUIStore.setState({ openNotificationCenter: openSpy });
     vi.mocked(navigateToNotificationSource).mockResolvedValue(false);
+
+    const dismiss = vi.fn();
+    const context = { worktreeId: "wt-removed" };
+    render(
+      <ReEntrySummary
+        state={makeState({
+          dismiss,
+          rows: [
+            makeRow({ key: "worktree:wt-removed", label: "wt-removed", highlight: { context } }),
+          ],
+        })}
+      />
+    );
+    fireEvent.click(screen.getByText("wt-removed"));
+    await act(async () => {});
+
+    expect(navigateToNotificationSource).toHaveBeenCalledWith(context);
+    expect(dismiss).toHaveBeenCalledOnce();
+    expect(openSpy).toHaveBeenCalledOnce();
+  });
+
+  it("opens the inbox when navigation throws", async () => {
+    const openSpy = vi.fn();
+    useUIStore.setState({ openNotificationCenter: openSpy });
+    vi.mocked(navigateToNotificationSource).mockRejectedValue(new Error("refused"));
 
     const dismiss = vi.fn();
     render(
       <ReEntrySummary
         state={makeState({
           dismiss,
-          rows: [makeRow({ key: "app", label: "Daintree", highlight: { context: undefined } })],
+          rows: [makeRow({ label: "fix-bug", highlight: { context: { panelId: "panel-7" } } })],
         })}
       />
     );
-    fireEvent.click(screen.getByText("Daintree"));
+    fireEvent.click(screen.getByText("fix-bug"));
     await act(async () => {});
+
     expect(dismiss).toHaveBeenCalledOnce();
     expect(openSpy).toHaveBeenCalledOnce();
   });
@@ -220,10 +260,16 @@ describe("ReEntrySummary", () => {
         })}
       />
     );
-    const time = screen.getByRole("status").querySelector("time");
-    expect(time?.textContent).toBe("5m ago");
-    expect(time?.getAttribute("dateTime")).toBe(new Date(at).toISOString());
-    expect(time?.getAttribute("title")).toBe(new Date(at).toLocaleString());
+    const time = () => screen.getByRole("status").querySelector("time");
+    expect(time()?.textContent).toBe("5m ago");
+    expect(time()?.getAttribute("dateTime")).toBe(new Date(at).toISOString());
+    expect(time()?.getAttribute("title")).toBe(new Date(at).toLocaleString());
+
+    // Static inside a live region: the label must not tick on its own.
+    act(() => {
+      vi.advanceTimersByTime(3 * 60_000);
+    });
+    expect(time()?.textContent).toBe("5m ago");
   });
 
   it("overflow row opens notification center", async () => {

@@ -5,6 +5,7 @@ import {
 } from "@/store/slices/notificationHistorySlice";
 import { getCurrentViewStoreOrNull } from "@/store/createWorktreeStore";
 import { useProjectStore } from "@/store/projectStore";
+import { usePanelStore } from "@/store/panelStore";
 import { useScratchStore } from "@/store/scratchStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { SEVERITY_WEIGHTS } from "@/lib/notificationSeverity";
@@ -35,17 +36,31 @@ export interface ReEntrySummaryState {
   entries: NotificationHistoryEntry[];
   rows: SummaryRow[];
   overflowCount: number;
+  /** When the summary was built: every row's age is told against this, not a ticking clock. */
+  shownAt: number;
   dismiss: () => void;
 }
 
 /**
  * Every view hydrates the same notification history, so an entry can name a
  * project this view doesn't own or come from another host altogether. Neither
- * can be reached from here. A record with no project id is this view's own.
+ * can be reached from here. A record with no project id is this view's own,
+ * except one addressed only to a panel: an installed plugin's notice about one
+ * of its panels names no project and reaches every view, so only the view
+ * holding that panel can claim it.
  */
-function isFromThisView(entry: NotificationHistoryEntry, ownerId: string | undefined): boolean {
-  if (entry.context?.hostName) return false;
-  return !isOtherProjectContext(entry.context, ownerId);
+function isFromThisView(
+  entry: NotificationHistoryEntry,
+  ownerId: string | undefined,
+  panelsById: Readonly<Record<string, unknown>>
+): boolean {
+  const context = entry.context;
+  if (context?.hostName) return false;
+  if (isOtherProjectContext(context, ownerId)) return false;
+  if (context?.panelId && !context.projectId && !context.worktreeId) {
+    return panelsById[context.panelId] !== undefined;
+  }
+  return true;
 }
 
 function ownWorkspaceLabel(ownerId: string | undefined): string {
@@ -125,6 +140,7 @@ const EMPTY: ReEntrySummaryState = {
   entries: [],
   rows: [],
   overflowCount: 0,
+  shownAt: 0,
   dismiss: () => {},
 };
 
@@ -135,6 +151,7 @@ export function useReEntrySummary(): ReEntrySummaryState {
     entries: [],
     rows: [],
     overflowCount: 0,
+    shownAt: 0,
   });
 
   const dismiss = useCallback(() => {
@@ -147,15 +164,20 @@ export function useReEntrySummary(): ReEntrySummaryState {
 
       const blurTime = blurTimeRef.current;
       blurTimeRef.current = null;
-      if (blurTime === null || Date.now() - blurTime < MIN_BLUR_MS) return;
+      const now = Date.now();
+      if (blurTime === null || now - blurTime < MIN_BLUR_MS) return;
 
       const { entries, markSummarized } = useNotificationHistoryStore.getState();
       const ownerId = getViewWorkspaceId() ?? useProjectStore.getState().currentProject?.id;
+      const { panelsById } = usePanelStore.getState();
       // Only what this summary shows is marked: an entry from another project
       // or host is left as it was, for the inbox and its own view to report.
       const unseen = entries.filter(
         (e) =>
-          !e.seenAsToast && !e.summarized && e.timestamp >= blurTime && isFromThisView(e, ownerId)
+          !e.seenAsToast &&
+          !e.summarized &&
+          e.timestamp >= blurTime &&
+          isFromThisView(e, ownerId, panelsById)
       );
       if (unseen.length === 0) return;
 
@@ -167,6 +189,7 @@ export function useReEntrySummary(): ReEntrySummaryState {
         entries: unseen,
         rows: allRows.slice(0, 3),
         overflowCount: Math.max(0, allRows.length - 3),
+        shownAt: now,
       });
     };
 

@@ -6,6 +6,10 @@ import { useNotificationHistoryStore } from "@/store/slices/notificationHistoryS
 import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
+import { usePanelStore } from "@/store/panelStore";
+import type { Project } from "@shared/types";
+import type { Scratch } from "@shared/types/scratch";
+import type { TerminalInstance } from "@shared/types/panel";
 import { APP_SOURCE_LABEL } from "@/lib/notificationSourceLabel";
 
 vi.mock("@/store/createWorktreeStore", () => ({
@@ -22,7 +26,7 @@ function addEntry(
     message: string;
     title: string;
     seenAsToast: boolean;
-    context: { worktreeId?: string; projectId?: string; hostName?: string };
+    context: { worktreeId?: string; projectId?: string; hostName?: string; panelId?: string };
   }> = {}
 ) {
   useNotificationHistoryStore.getState().addEntry({
@@ -32,6 +36,18 @@ function addEntry(
     seenAsToast: overrides.seenAsToast,
     ...(overrides.context ? { context: overrides.context } : {}),
   });
+}
+
+function project(id: string, name: string): Project {
+  return { id, name, path: `/work/${name}`, emoji: "", lastOpened: 0 };
+}
+
+function scratch(id: string, name: string): Scratch {
+  return { id, name, path: `/scratches/${id}`, createdAt: 0, lastOpened: 0 };
+}
+
+function panel(id: string): TerminalInstance {
+  return { id, title: id, location: "grid", cwd: "/tmp", cols: 80, rows: 24, width: 0, height: 0 };
 }
 
 function focusAfter(ms: number) {
@@ -68,6 +84,7 @@ describe("useReEntrySummary", () => {
     useNotificationHistoryStore.setState({ entries: [], unreadCount: 0 });
     useProjectStore.setState({ projects: [], currentProject: null });
     useScratchStore.setState({ scratches: [] });
+    usePanelStore.setState({ panelsById: {} });
     vi.mocked(getViewWorkspaceId).mockReturnValue("proj-here");
     hasFocusSpy = vi.spyOn(document, "hasFocus").mockReturnValue(true);
     const { getCurrentViewStoreOrNull } = await import("@/store/createWorktreeStore");
@@ -356,6 +373,9 @@ describe("useReEntrySummary", () => {
 
     expect(result.current.rows).toHaveLength(3);
     expect(result.current.overflowCount).toBe(2);
+    // The overflow is part of the summary ("+2 more"), so its entries are marked too.
+    expect(result.current.entries).toHaveLength(5);
+    expect(useNotificationHistoryStore.getState().entries.every((e) => e.summarized)).toBe(true);
   });
 
   it("resolves worktree name from current view store", async () => {
@@ -492,9 +512,9 @@ describe("useReEntrySummary", () => {
 
   it("gives entries with no worktree a row for their project", () => {
     useProjectStore.setState({
-      projects: [{ id: "proj-here", name: "atlas-api" }],
-      currentProject: { id: "proj-here", name: "atlas-api" },
-    } as never);
+      projects: [project("proj-decoy", "decoy"), project("proj-here", "atlas-api")],
+      currentProject: project("proj-here", "atlas-api"),
+    });
     const { result } = renderHook(() => useReEntrySummary());
 
     act(() => {
@@ -538,10 +558,10 @@ describe("useReEntrySummary", () => {
 
   it("names a scratch workspace's row after the scratch this view was made for", () => {
     vi.mocked(getViewWorkspaceId).mockReturnValue("scratch-1");
-    useScratchStore.setState({ scratches: [{ id: "scratch-1", name: "Spike" }] } as never);
-    useProjectStore.setState({
-      currentProject: { id: "proj-elsewhere", name: "Elsewhere" },
-    } as never);
+    useScratchStore.setState({
+      scratches: [scratch("scratch-0", "Decoy"), scratch("scratch-1", "Spike")],
+    });
+    useProjectStore.setState({ currentProject: project("proj-elsewhere", "Elsewhere") });
     const { result } = renderHook(() => useReEntrySummary());
 
     act(() => {
@@ -559,9 +579,9 @@ describe("useReEntrySummary", () => {
   it("falls back to the current project when the view has no workspace id", () => {
     vi.mocked(getViewWorkspaceId).mockReturnValue(null);
     useProjectStore.setState({
-      projects: [{ id: "proj-a", name: "atlas" }],
-      currentProject: { id: "proj-a", name: "atlas" },
-    } as never);
+      projects: [project("proj-a", "atlas")],
+      currentProject: project("proj-a", "atlas"),
+    });
     const { result } = renderHook(() => useReEntrySummary());
 
     act(() => {
@@ -635,11 +655,37 @@ describe("useReEntrySummary", () => {
       window.dispatchEvent(new Event("blur"));
     });
     addEntry({ type: "info", message: "Agent waiting", context: { hostName: "build-box" } });
+    addEntry({ type: "success", message: "Here", context: { worktreeId: "wt-1" } });
 
     focusAfter(5000);
 
-    expect(result.current.visible).toBe(false);
-    expect(useNotificationHistoryStore.getState().entries[0]!.summarized).toBe(false);
+    expect(result.current.rows.map((r) => r.key)).toEqual(["worktree:wt-1"]);
+    expect(result.current.entries.map((e) => e.message)).toEqual(["Here"]);
+    const byMessage = new Map(
+      useNotificationHistoryStore.getState().entries.map((e) => [e.message, e.summarized])
+    );
+    expect(byMessage.get("Agent waiting")).toBe(false);
+    expect(byMessage.get("Here")).toBe(true);
+  });
+
+  it("claims a panel-only entry only when this view holds the panel", () => {
+    usePanelStore.setState({ panelsById: { "panel-here": panel("panel-here") } });
+    const { result } = renderHook(() => useReEntrySummary());
+
+    act(() => {
+      window.dispatchEvent(new Event("blur"));
+    });
+    addEntry({ type: "warning", message: "Mine", context: { panelId: "panel-here" } });
+    addEntry({ type: "warning", message: "Another view's", context: { panelId: "panel-there" } });
+
+    focusAfter(5000);
+
+    expect(result.current.entries.map((e) => e.message)).toEqual(["Mine"]);
+    const byMessage = new Map(
+      useNotificationHistoryStore.getState().entries.map((e) => [e.message, e.summarized])
+    );
+    expect(byMessage.get("Mine")).toBe(true);
+    expect(byMessage.get("Another view's")).toBe(false);
   });
 
   it("times a row by its highlighted entry, not its latest one", () => {
@@ -652,10 +698,18 @@ describe("useReEntrySummary", () => {
       window.dispatchEvent(new Event("blur"));
     });
     now += 1000;
-    addEntry({ type: "error", message: "Build failed", context: { worktreeId: "wt-1" } });
+    addEntry({
+      type: "error",
+      message: "Build failed",
+      context: { worktreeId: "wt-1", panelId: "panel-build" },
+    });
     const errorAt = now;
     now += 60_000;
-    addEntry({ type: "info", message: "Agent idle", context: { worktreeId: "wt-1" } });
+    addEntry({
+      type: "info",
+      message: "Agent idle",
+      context: { worktreeId: "wt-1", panelId: "panel-agent" },
+    });
     now += 5000;
     act(() => {
       window.dispatchEvent(new Event("focus"));
@@ -664,6 +718,42 @@ describe("useReEntrySummary", () => {
 
     expect(result.current.rows[0]!.highlightTitle).toBe("Build failed");
     expect(result.current.rows[0]!.highlight.timestamp).toBe(errorAt);
+    expect(result.current.rows[0]!.highlight.context?.panelId).toBe("panel-build");
+    expect(result.current.shownAt).toBe(now);
+  });
+
+  it("highlights the latest of equally severe entries, with its own time and address", () => {
+    const realNow = Date.now;
+    let now = 1_000_000;
+    Date.now = () => now;
+    const { result } = renderHook(() => useReEntrySummary());
+
+    act(() => {
+      window.dispatchEvent(new Event("blur"));
+    });
+    now += 1000;
+    addEntry({
+      type: "error",
+      message: "First failure",
+      context: { worktreeId: "wt-1", panelId: "panel-first" },
+    });
+    now += 60_000;
+    addEntry({
+      type: "error",
+      message: "Second failure",
+      context: { worktreeId: "wt-1", panelId: "panel-second" },
+    });
+    const secondAt = now;
+    now += 5000;
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    Date.now = realNow;
+
+    const row = result.current.rows[0]!;
+    expect(row.highlightTitle).toBe("Second failure");
+    expect(row.highlight.timestamp).toBe(secondAt);
+    expect(row.highlight.context?.panelId).toBe("panel-second");
   });
 
   it("only includes entries created during the blur period", () => {

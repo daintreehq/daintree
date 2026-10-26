@@ -30,7 +30,7 @@ const SEVERITY_CLASS: Record<NotificationHistoryEntry["type"], string> = {
 };
 
 export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
-  const { visible, dismiss, entries, rows, overflowCount } = state;
+  const { visible, dismiss, entries, rows, overflowCount, shownAt } = state;
   const { isVisible, shouldRender } = useAnimatedPresence({
     isOpen: visible,
     animationDuration: getUiTransitionDuration("exit"),
@@ -70,14 +70,23 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
   // bug ScrollIndicator solves for its count (#10316). State adjusted during
   // render, not a ref: React discards an abandoned concurrent render's state
   // update, so stale rows can't leak in.
-  const [content, setContent] = useState({ rows, overflowCount });
-  if (visible && (content.rows !== rows || content.overflowCount !== overflowCount)) {
-    setContent({ rows, overflowCount });
+  const [content, setContent] = useState({ rows, overflowCount, shownAt });
+  if (
+    visible &&
+    (content.rows !== rows ||
+      content.overflowCount !== overflowCount ||
+      content.shownAt !== shownAt)
+  ) {
+    setContent({ rows, overflowCount, shownAt });
   }
 
   if (!shouldRender) return null;
 
-  const { rows: displayRows, overflowCount: displayOverflowCount } = content;
+  const {
+    rows: displayRows,
+    overflowCount: displayOverflowCount,
+    shownAt: displayShownAt,
+  } = content;
   const hasUrgent = displayRows.some(
     (r) => r.highlight.type === "error" || r.highlight.type === "warning"
   );
@@ -200,10 +209,12 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
                   <span className="font-medium truncate min-w-0">{row.label}</span>
                   <span className="text-text-secondary truncate min-w-0">{row.highlightTitle}</span>
                   {/* The highlighted entry's own time, not the row's latest: the
-                      line it sits on is that entry's. Static, so the live
-                      region isn't re-announced by a ticking label. */}
+                      line it sits on is that entry's. Told against when the
+                      summary was built, so no re-render (a hover, a pin) can
+                      change the text inside this live region. */}
                   <TimeAgo
                     timestamp={row.highlight.timestamp}
+                    now={displayShownAt}
                     className="ml-auto shrink-0 pl-1 text-text-secondary"
                   />
                 </button>
