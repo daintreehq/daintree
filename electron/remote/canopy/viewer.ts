@@ -21,6 +21,8 @@ import { allocateRemoteHandle } from "../endpointHandles.js";
 export interface CanopyViewerParams {
   endpointId: string;
   clientId: string;
+  /** The link session of the Shell it serves; absent for this machine's own views reading it. */
+  linkSessionId?: string;
   /** A push the viewer's view should hear, already narrowed to Canopy's own. */
   onPush(channel: CanopyHostPushChannel, payload: unknown): void;
 }
@@ -58,6 +60,7 @@ export function createCanopyViewer(
     purpose,
     endpointId: params.endpointId,
     clientId: params.clientId,
+    ...(params.linkSessionId === undefined ? {} : { linkSessionId: params.linkSessionId }),
     projectId: null,
     // A link caller wherever it runs, This Mac included: the dispatcher holds
     // it to the drive lease and the remote scope, as it does a remote view.

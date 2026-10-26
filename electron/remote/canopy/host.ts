@@ -91,7 +91,7 @@ export function installCanopyHostWith(
   const timers = new Set<ReturnType<typeof setTimeout>>();
   let disposed = false;
 
-  const wire = ({ session, client }: CanopySessionContext): void => {
+  const wire = ({ session, client, sessionId }: CanopySessionContext): void => {
     if (wired.has(session)) return;
     wired.add(session);
     // Per link, not per host session: a resumed link starts its viewers afresh.
@@ -129,6 +129,7 @@ export function installCanopyHostWith(
       (viewerId: string, interactive: boolean | undefined) => (): CanopyViewerParams => ({
         endpointId: CANOPY_VIEWER_ENDPOINT_PREFIX + viewerId,
         clientId: client.clientId,
+        linkSessionId: sessionId,
         onPush: (pushed, payload) => {
           if (!session.isOpen) return;
           const endpointId = CANOPY_VIEWER_ENDPOINT_PREFIX + viewerId;

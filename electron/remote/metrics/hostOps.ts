@@ -10,13 +10,13 @@ import type { FleetRunRow } from "../../../shared/types/ipc/fleet.js";
 import { FLEET_BANDS, bandForRun } from "../../../shared/utils/fleetBands.js";
 import { getAgentConfig } from "../../../shared/config/agentRegistry.js";
 import { LOCAL_HOST_ID } from "../../../shared/types/remoteHosts.js";
+import { isSessionEndpoint } from "../../ipc/endpoint.js";
 import { getAgentAvailabilityStore } from "../../services/AgentAvailabilityStore.js";
 import { peekDriveLeaseService } from "../../services/DriveLeaseService.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import { events } from "../../services/events.js";
 import { classifyRun } from "../../services/projectAgentCounts.js";
 import { AppError } from "../../utils/errorTypes.js";
-import { isSessionEndpoint } from "../projects/hostInstall.js";
 import {
   getFleetSnapshotServiceRef,
   getPtyClient,

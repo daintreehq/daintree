@@ -63,6 +63,7 @@ function serve(session: LinkSession, deps: DeviceAnswerHostDeps): () => void {
         {
           session,
           client: { clientId: SHELL_CLIENT, clientName: "Greg's Mac", platform: "darwin" },
+          sessionId: "s1",
         },
       ],
       onSession: () => () => {},
@@ -193,6 +194,8 @@ describe("answering a connected host's agents from a device paired with the Shel
     expect(request).toMatchObject({ runId: "run-1", spawnedAt: 100, label: "No" });
     expect(request!.standing.clientId).toBe(SHELL_CLIENT);
     expect(request!.standing.endpointId).toMatch(/^device-answer:/);
+    // The host's own session id, never only the client id the Shell claimed (#14679).
+    expect(request!.standing.linkSessionId).toBe("s1");
     expect(request!.stillAllowed()).toBeNull();
     expect(hold).toHaveBeenCalledWith(HOST);
     expect(released).toHaveBeenCalledTimes(1);
@@ -300,6 +303,7 @@ describe("answering a connected host's agents from a device paired with the Shel
     listeners[0]!({
       session: late.host,
       client: { clientId: SHELL_CLIENT, clientName: "Greg's Mac", platform: "darwin" },
+      sessionId: "s2",
     });
     sessionByHost.set("studio-04", late.client);
     const listed = await client.listWaiting();

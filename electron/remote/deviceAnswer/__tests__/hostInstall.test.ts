@@ -8,7 +8,10 @@ const state = {
   generationChecks: 0,
   screen: DIALOG,
   onWrite: null as null | ((count: number) => void),
-  driving: (_projectId: string, _endpoint: { endpointId: string; clientId: string }) => true,
+  driving: (
+    _projectId: string,
+    _endpoint: { endpointId: string; clientId: string; linkSessionId?: string }
+  ) => true,
 };
 
 const pty = {
@@ -42,7 +45,10 @@ vi.mock("../../../services/ScratchStore.js", () => ({
 }));
 vi.mock("../../../services/DriveLeaseService.js", () => ({
   peekDriveLeaseService: () => ({
-    isDriving: (projectId: string, endpoint: { endpointId: string; clientId: string }) =>
+    isDriving: (
+      projectId: string,
+      endpoint: { endpointId: string; clientId: string; linkSessionId?: string }
+    ) =>
       state.driving(projectId, endpoint),
   }),
 }));
@@ -88,6 +94,7 @@ beforeEach(async () => {
       {
         session: sessions.host,
         client: { clientId: "shell-1", clientName: "Greg's Mac", platform: "darwin" },
+        sessionId: "s1",
       },
     ],
     onSession: () => () => {},
@@ -120,7 +127,7 @@ describe("a host answering for a device paired with its Shell", () => {
   });
 
   it("stands as the Shell's windows in its lease, and presses nothing where the Shell couldn't type", async () => {
-    const asked: Array<{ endpointId: string; clientId: string }> = [];
+    const asked: Array<{ endpointId: string; clientId: string; linkSessionId?: string }> = [];
     state.driving = (_projectId, endpoint) => {
       asked.push(endpoint);
       return false;
@@ -130,6 +137,7 @@ describe("a host answering for a device paired with its Shell", () => {
     });
     expect(asked[0]!.endpointId).toMatch(/^device-answer:/);
     expect(asked[0]!.clientId).toBe("shell-1");
+    expect(asked[0]!.linkSessionId).toBe("s1");
     expect(state.writes).toEqual([]);
   });
 

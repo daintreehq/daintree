@@ -5,6 +5,7 @@ import {
   LOCAL_CLIENT_ID,
   isCanopyViewerEndpointId,
   isDeviceAnswerEndpointId,
+  isSessionEndpoint,
 } from "../ipc/endpoint.js";
 import type { ClientEndpoint, ClientRef, EndpointRegistry } from "../ipc/endpoint.js";
 import { getEndpointRegistry } from "../ipc/endpointRegistry.js";
@@ -82,6 +83,13 @@ export const DRAFTS_CHANGED_DELAY_MS = 200;
 export const NAVIGATION_CHANGED_DELAY_MS = 50;
 
 type LeaseRegistry = Pick<EndpointRegistry, "get" | "getForProject" | "getRemote" | "onChange">;
+
+/**
+ * Who asks whether it drives: an endpoint, or a caller standing in for one. A
+ * Canopy viewer or a device answering through a Shell carries that Shell's
+ * link session, which the host assigned; its client id is only the Shell's word.
+ */
+export type DriveStanding = Pick<ClientEndpoint, "endpointId" | "clientId" | "linkSessionId">;
 
 export interface DriveLeaseServiceOptions {
   registry?: LeaseRegistry;
@@ -433,7 +441,7 @@ export class DriveLeaseService {
    * or it and the holder are both this machine's own windows. Terminal input
    * and resizes are gated on this.
    */
-  isDriving(projectId: string, endpoint: Pick<ClientEndpoint, "endpointId" | "clientId">): boolean {
+  isDriving(projectId: string, endpoint: DriveStanding): boolean {
     return drives(this.getHolder(projectId), endpoint);
   }
 
@@ -445,7 +453,7 @@ export class DriveLeaseService {
    */
   drivingLeaseId(
     projectId: string,
-    endpoint: Pick<ClientEndpoint, "endpointId" | "clientId">
+    endpoint: DriveStanding
   ): number | null | false {
     const holder = this.getHolder(projectId);
     if (!drives(holder, endpoint)) return false;
@@ -457,7 +465,7 @@ export class DriveLeaseService {
    * projects a call from it may not change.
    */
   projectsDrivenElsewhere(
-    endpoint: Pick<ClientEndpoint, "endpointId" | "clientId">
+    endpoint: DriveStanding
   ): Map<string, DriveLeaseHolder> {
     const out = new Map<string, DriveLeaseHolder>();
     const projects = new Set([...this.leases.keys(), ...this.attachedProjects()]);
@@ -949,19 +957,18 @@ export class DriveLeaseService {
   }
 }
 
-function drives(
-  holder: DriveLeaseHolder | null,
-  endpoint: Pick<ClientEndpoint, "endpointId" | "clientId">
-): boolean {
+function drives(holder: DriveLeaseHolder | null, endpoint: DriveStanding): boolean {
   if (holder === null || holder.endpointId === endpoint.endpointId) return true;
   // A Canopy panel reading this host from another machine, or a device paired
-  // with that machine, types as that machine's windows do: it drives where
-  // one of them holds the lease.
+  // with that machine, types as that machine's windows do: it drives where a
+  // view on its own link session holds the lease. The client id can't decide
+  // it, since any Shell may claim another's in its HELLO.
   if (
-    isCanopyViewerEndpointId(endpoint.endpointId) ||
-    isDeviceAnswerEndpointId(endpoint.endpointId)
+    endpoint.linkSessionId !== undefined &&
+    (isCanopyViewerEndpointId(endpoint.endpointId) ||
+      isDeviceAnswerEndpointId(endpoint.endpointId))
   ) {
-    return holder.clientId === endpoint.clientId;
+    return isSessionEndpoint(endpoint.linkSessionId, holder.endpointId);
   }
   return holder.clientId === LOCAL_CLIENT_ID && endpoint.clientId === LOCAL_CLIENT_ID;
 }
@@ -1083,7 +1090,7 @@ export function createDriveLeaseGate(
  */
 export function mayWriteProjectState(
   projectId: string,
-  getEndpoint: () => Pick<ClientEndpoint, "endpointId" | "clientId"> | null | undefined
+  getEndpoint: () => DriveStanding | null | undefined
 ): boolean {
   if (service === null) return true;
   const endpoint = getEndpoint();

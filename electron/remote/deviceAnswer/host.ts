@@ -16,6 +16,7 @@ export const HOST_ANSWER_BUDGET_MS = 5_000;
 export interface DeviceAnswerSessionContext {
   session: LinkSession;
   client: LinkClientInfo;
+  sessionId: string;
 }
 
 export interface DeviceAnswerSessionSource {
@@ -55,12 +56,13 @@ export function installDeviceAnswerHostWith(
   let nextSession = 0;
   let disposed = false;
 
-  const wire = ({ session, client }: DeviceAnswerSessionContext): void => {
+  const wire = ({ session, client, sessionId }: DeviceAnswerSessionContext): void => {
     if (disposed || wired.has(session)) return;
     wired.add(session);
     const standing: DeviceLeaseStanding = {
       endpointId: `${DEVICE_ANSWER_ENDPOINT_PREFIX}${++nextSession}`,
       clientId: client.clientId,
+      linkSessionId: sessionId,
     };
     const offs = [
       session.registerCallHandler(

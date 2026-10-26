@@ -42,6 +42,15 @@ export function isDeviceAnswerEndpointId(endpointId: string): boolean {
 }
 
 /**
+ * Whether `endpointId` is one of a link session's views. SessionHost names a
+ * remote endpoint `remote:<sessionId>:<clientEndpointId>`; the session id is
+ * the host's own, unlike the client id a HELLO merely claims.
+ */
+export function isSessionEndpoint(sessionId: string, endpointId: string): boolean {
+  return endpointId.startsWith(`remote:${sessionId}:`);
+}
+
+/**
  * What a Host pushes to one endpoint. Terminal bytes do not travel as frames;
  * they ride the terminal stream bridge on the interactive lane. Requests that
  * need an answer go through {@link ClientEndpoint.request}.
