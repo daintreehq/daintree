@@ -484,6 +484,19 @@ describe("voiceRecordingStore — identified items (#13109)", () => {
     expect(buffer().completedSegments).toEqual([]);
   });
 
+  it("dropping the last segment takes the breaks after it, and only that segment", () => {
+    const store = useVoiceRecordingStore.getState();
+    store.completeSegment("Keep.", "item-a");
+    store.resetParagraphState(PANEL_ID);
+    store.completeSegment("Scratched.", "item-b");
+    store.resetParagraphState(PANEL_ID);
+    store.dropLastCompletedSegment(PANEL_ID);
+    expect(buffer().completedSegments).toEqual(["Keep.", "\n"]);
+    store.dropLastCompletedSegment(PANEL_ID);
+    store.dropLastCompletedSegment(PANEL_ID);
+    expect(buffer().completedSegments).toEqual([]);
+  });
+
   it("a paragraph reset before any text records no break", () => {
     const store = useVoiceRecordingStore.getState();
     store.resetParagraphState(PANEL_ID);

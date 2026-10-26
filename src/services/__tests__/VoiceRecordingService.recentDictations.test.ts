@@ -295,6 +295,34 @@ describe("VoiceRecordingService — recent dictations (#14637)", () => {
     expect(cleanups()).toEqual([]);
   });
 
+  it("keeps scratched words out of the session, so its cleanup still counts", async () => {
+    const { service, begin, say, kept, cleanups, flush, inputStore } = await setup();
+    correct.mockResolvedValueOnce({ action: "replace", correctedText: "Keep this." });
+
+    begin("panel-1");
+    say("keep this");
+    say("not this");
+    say("scratch that");
+    expect(inputStore.getState().getDraftInput("panel-1")).toBe("keep this");
+    await service.stop();
+    await flush();
+
+    expect(kept().map((d) => d.rawText)).toEqual(["keep this"]);
+    expect(cleanups()).toEqual([{ id: kept()[0]!.id, correctedText: "Keep this." }]);
+  });
+
+  it("keeps nothing for a session scratched down to no words", async () => {
+    const { service, begin, say, kept, voiceStore } = await setup();
+    voiceStore.getState().setCorrectionEnabled(false);
+
+    begin("panel-1");
+    say("never mind");
+    say("scratch that");
+    await service.stop();
+
+    expect(kept()).toEqual([]);
+  });
+
   it("keeps nothing for a session that heard no words", async () => {
     const { service, begin, kept } = await setup();
 

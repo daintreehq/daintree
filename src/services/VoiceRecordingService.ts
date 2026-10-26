@@ -621,7 +621,11 @@ class VoiceRecordingService {
             // "Scratch that, send it" only scratches: the draft it leaves is one
             // the user hasn't seen, and a spoken send fires with no key press.
             if (spoken && isScratchCommand(spoken)) {
-              this.scratchLastUtterance(panelId, projectId, buffer?.dictationSessionId);
+              // Recent dictations keep what landed, so scratched words leave the
+              // session's transcript with the draft (#14637).
+              if (this.scratchLastUtterance(panelId, projectId, buffer?.dictationSessionId)) {
+                useVoiceRecordingStore.getState().dropLastCompletedSegment(panelId);
+              }
               useVoiceRecordingStore.getState().completeSegment("", itemId, { discard: true });
               return;
             }
@@ -3049,19 +3053,22 @@ class VoiceRecordingService {
     }
   }
 
-  /** Removes the session's latest dictated utterance from the draft; a no-op when there is none to remove. */
+  /**
+   * Removes the session's latest dictated utterance from the draft. Returns
+   * whether it did; there may be none left to remove, or only an edited one.
+   */
   private scratchLastUtterance(
     panelId: string,
     projectId: string | undefined,
     sessionId: string | null | undefined
-  ): void {
-    if (!sessionId) return;
+  ): boolean {
+    if (!sessionId) return false;
     const inputStore = useTerminalInputStore.getState();
     const draft = inputStore.getDraftInput(panelId, projectId);
     const span = useDictationRangeStore
       .getState()
       .takeLastUtterance({ sessionId, panelId, projectId }, draft);
-    if (!span) return;
+    if (!span) return false;
     const next = draft.slice(0, span.from) + draft.slice(span.to);
     // A caret that followed the words stays where they were. The composer's
     // own diff could slide it along a run the removal shares with the text
@@ -3082,6 +3089,7 @@ class VoiceRecordingService {
     recordScratchLanded(panelId, projectId, next);
     // Like the words it removes, it leaves the caret to the user.
     inputStore.bumpExternalDraftRevision({ keepsSelection: true });
+    return true;
   }
 
   /**

@@ -349,6 +349,11 @@ interface VoiceRecordingState {
    * command that acts on the draft rather than adding to it.
    */
   completeSegment: (text: string, itemId?: string, options?: { discard?: boolean }) => void;
+  /**
+   * Drops the latest committed utterance, and the paragraph breaks after it,
+   * once "scratch that" has taken those words back out of the draft.
+   */
+  dropLastCompletedSegment: (panelId: string) => void;
   setCorrectionRanges: (panelId: string, ranges: VoiceCorrectionRange[]) => void;
   /**
    * Moves the panel's draft offsets at or after `at` by `delta`, for an edit
@@ -617,6 +622,22 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
                 completedSegments: [...buffer.completedSegments, normalized],
                 transcriptPhase: "utterance_final" as VoiceTranscriptPhase,
               },
+            },
+          };
+        }),
+
+      dropLastCompletedSegment: (panelId) =>
+        set((state) => {
+          const buffer = state.panelBuffers[panelId];
+          if (!buffer) return state;
+          const segments = buffer.completedSegments;
+          let end = segments.length;
+          while (end > 0 && segments[end - 1] === VOICE_PARAGRAPH_BREAK) end--;
+          if (end === 0) return state;
+          return {
+            panelBuffers: {
+              ...state.panelBuffers,
+              [panelId]: { ...buffer, completedSegments: segments.slice(0, end - 1) },
             },
           };
         }),
