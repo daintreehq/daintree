@@ -465,7 +465,12 @@ export function registerTerminalLayoutActions(
     try {
       await appClient.setState({ panelGridConfig: { strategy } as any });
     } catch (error) {
-      state.setLayoutConfig(previous);
+      // Only this write's field goes back, and only if nothing has moved it
+      // since: the other may hold a newer change (#14700).
+      const current = useLayoutConfigStore.getState().layoutConfig;
+      if (current.strategy === strategy) {
+        state.setLayoutConfig({ ...current, strategy: previous.strategy });
+      }
       throw error;
     }
   };
@@ -481,7 +486,12 @@ export function registerTerminalLayoutActions(
     try {
       await appClient.setState({ panelGridConfig: { value } as any });
     } catch (error) {
-      state.setLayoutConfig(previous);
+      // Only this write's field goes back, and only if nothing has moved it
+      // since: the other may hold a newer change (#14700).
+      const current = useLayoutConfigStore.getState().layoutConfig;
+      if (current.value === value) {
+        state.setLayoutConfig({ ...current, value: previous.value });
+      }
       throw error;
     }
   };

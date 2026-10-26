@@ -684,6 +684,41 @@ describe("app:boot handler", () => {
     expect(result.crashConfig).toEqual({ autoRestoreOnCrash: false });
   });
 
+  it("answers the grid and agent settings saved since the hover on the cache-hit path", async () => {
+    vi.mocked(consumePrefetchedHydrateResult).mockReturnValue({
+      appState: { terminals: [], panelGridConfig: { strategy: "automatic", value: 3 } },
+      terminalConfig: { scrollbackLines: 3000, performanceMode: false },
+      project: null,
+      agentSettings: { agents: {}, globalSkipPermissions: false },
+      agentDefaults: { defaultAgent: "claude" },
+    } as unknown as ReturnType<typeof consumePrefetchedHydrateResult>);
+    vi.mocked(projectStore.getCurrentProject).mockReturnValue({
+      id: "p1",
+      name: "P",
+      path: "/p",
+    } as unknown as ReturnType<typeof projectStore.getCurrentProject>);
+    legacyOwnerRef.current = "p1";
+    const storeModule = await import("../../store.js");
+    vi.mocked(storeModule.store.get).mockImplementation(((key: string) => {
+      if (key === "appState.panelGridConfig") return { strategy: "fixed-rows", value: 2 };
+      if (key === "agentSettings") {
+        return { agents: {}, globalSkipPermissions: true, defaultAgent: "codex" };
+      }
+      return defaultStoreGet(key);
+    }) as typeof storeModule.store.get);
+
+    const result = (await invokeBoot()) as {
+      appState: Record<string, unknown>;
+      agentSettings: Record<string, unknown>;
+      agentDefaults: Record<string, unknown>;
+    };
+
+    expect(consumePrefetchedHydrateResult).toHaveBeenCalledWith("p1");
+    expect(result.appState.panelGridConfig).toEqual({ strategy: "fixed-rows", value: 2 });
+    expect(result.agentSettings).toMatchObject({ globalSkipPermissions: true });
+    expect(result.agentDefaults).toEqual({ defaultAgent: "codex" });
+  });
+
   it("surfaces the boot-time database recovery on the slow path", async () => {
     const recovery = { kind: "reset-to-fresh", quarantinedPath: "/u/daintree.db.corrupt-x" };
     consumeDatabaseRecovery.mockReturnValueOnce(recovery);
@@ -2317,5 +2352,73 @@ describe("app:set-state while another screen drives the view's project", () => {
       panelGridConfig: mixed.panelGridConfig,
       activeWorktreeId: "wt-stale",
     });
+  });
+});
+
+describe("app:set-state grid layout patch (#14700)", () => {
+  let storeModule: typeof import("../../store.js");
+  let stored: Record<string, unknown>;
+
+  async function invokeSetState(payload: unknown) {
+    ipcHandlers.clear();
+    const cleanup = registerAppStateHandlers();
+    const handler = ipcHandlers.get("app:set-state");
+    if (!handler) throw new Error("app:set-state handler not registered");
+    await handler(makeInvokeEvent(), payload);
+    cleanup();
+  }
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    storeModule = await import("../../store.js");
+    stored = { terminals: [], panelGridConfig: { strategy: "automatic", value: 4 } };
+    vi.mocked(storeModule.store.get).mockImplementation(((key: string) =>
+      key === "appState" ? stored : undefined) as never);
+    vi.mocked(storeModule.store.set).mockImplementation(((key: string, value: unknown) => {
+      if (key === "appState") stored = value as Record<string, unknown>;
+    }) as never);
+  });
+
+  afterEach(() => {
+    vi.mocked(projectStore.getCurrentProject).mockReturnValue(null);
+  });
+
+  it.each([0, -1, 11, 2.5])("refuses a count of %s", async (value) => {
+    await invokeSetState({ panelGridConfig: { value } });
+
+    expect(stored.panelGridConfig).toEqual({ strategy: "automatic", value: 4 });
+  });
+
+  it.each([1, 10])("keeps a count of %s", async (value) => {
+    await invokeSetState({ panelGridConfig: { value } });
+
+    expect(stored.panelGridConfig).toEqual({ strategy: "automatic", value });
+  });
+
+  it("merges over the count saved while the same write waited on its MRU save", async () => {
+    vi.mocked(projectStore.getCurrentProject).mockReturnValue({
+      id: "proj-1",
+      name: "p",
+      path: "/p",
+    } as never);
+    let release!: () => void;
+    vi.mocked(projectStore.enqueueProjectStateUpdate).mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }) as never
+    );
+
+    const pending = invokeSetState({
+      mruList: ["terminal:a"],
+      panelGridConfig: { strategy: "fixed-rows" },
+    });
+    await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+    // Another view changes the count while this write is parked.
+    stored = { ...stored, panelGridConfig: { strategy: "automatic", value: 7 } };
+    release();
+    await pending;
+
+    expect(stored.panelGridConfig).toEqual({ strategy: "fixed-rows", value: 7 });
   });
 });

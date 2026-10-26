@@ -368,8 +368,15 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
                   : "miss",
     });
     if (cached) {
+      // One leaf, not the whole appState the cached payload already carries.
+      const panelGridConfig = store.get("appState.panelGridConfig");
       return {
         ...cached,
+        // Settings saved after the hover must not boot this view with the old
+        // value (#14700).
+        appState: panelGridConfig ? { ...cached.appState, panelGridConfig } : cached.appState,
+        agentSettings: store.get("agentSettings"),
+        agentDefaults: readAgentDefaults(),
         // The live sender's identity always wins over whatever the prefetch
         // stamped — only ever a project today, but never assume that.
         workspaceId,
@@ -986,30 +993,6 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
         }
       }
 
-      if ("panelGridConfig" in partialState) {
-        // A patch may carry just one of the two fields; the other is read from the
-        // store here so a view with an old copy can't write its stale value back.
-        const gridConfig = partialState.panelGridConfig as Partial<PanelGridConfig> | undefined;
-        if (gridConfig && typeof gridConfig === "object") {
-          const current = store.get("appState")?.panelGridConfig;
-          const strategy = gridConfig.strategy ?? current?.strategy ?? "automatic";
-          const value = Number(gridConfig.value ?? current?.value ?? 3);
-          if (
-            (strategy === "automatic" ||
-              strategy === "fixed-columns" ||
-              strategy === "fixed-rows") &&
-            !isNaN(value) &&
-            value >= 1 &&
-            value <= 10
-          ) {
-            updates.panelGridConfig = {
-              strategy,
-              value,
-            };
-          }
-        }
-      }
-
       if ("mruList" in partialState && Array.isArray(partialState.mruList)) {
         // Sanitize: dense array, string items with valid prefix, per-item length cap, dedupe.
         // The id after the prefix is opaque: plugin panel ids carry `.`, `:` and `/`
@@ -1164,6 +1147,32 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
         const mode = partialState.fleetScopeMode;
         if (mode === "legacy" || mode === "scoped") {
           updates.fleetScopeMode = mode;
+        }
+      }
+
+      if ("panelGridConfig" in partialState) {
+        // A patch may carry just one of the two fields; the other is read from the
+        // store here so a view with an old copy can't write its stale value back.
+        // After every await above, so the read and the write below share a turn
+        // and an edit landing in between isn't overwritten either (#14700).
+        const gridConfig = partialState.panelGridConfig as Partial<PanelGridConfig> | undefined;
+        if (gridConfig && typeof gridConfig === "object") {
+          const current = store.get("appState")?.panelGridConfig;
+          const strategy = gridConfig.strategy ?? current?.strategy ?? "automatic";
+          const value = Number(gridConfig.value ?? current?.value ?? 3);
+          if (
+            (strategy === "automatic" ||
+              strategy === "fixed-columns" ||
+              strategy === "fixed-rows") &&
+            Number.isInteger(value) &&
+            value >= 1 &&
+            value <= 10
+          ) {
+            updates.panelGridConfig = {
+              strategy,
+              value,
+            };
+          }
         }
       }
 
