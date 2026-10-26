@@ -758,7 +758,14 @@ describe("the Canopy host picker", () => {
     );
     installElectron();
     useCanopyStore.setState({ hostId: "studio" });
-    render(<CanopyView />);
+    const { rerender } = render(<CanopyView />);
+    await settle();
+    expect(document.body.textContent).toContain("Connecting to studio-01…");
+    expect(document.body.textContent).not.toContain("Can't reach studio-01");
+
+    // The link is up a moment before the resync's reread lands.
+    state.hosts = [host("studio", "studio-01")];
+    rerender(<CanopyView />);
     await settle();
     expect(document.body.textContent).toContain("Connecting to studio-01…");
     expect(document.body.textContent).not.toContain("Can't reach studio-01");
@@ -829,6 +836,85 @@ describe("All hosts", () => {
     expect(document.body.textContent).toContain("Can't reach studio-01");
     expect(cardOf("local", "shared-run")).not.toBeNull();
     expect(cardOf("studio", "shared-run")).toBeNull();
+  });
+
+  it("reads a host dialled on open as connecting, through the gap before its reread lands", async () => {
+    installElectron();
+    state.hosts = [host("studio", "studio-01", { status: "disconnected" })];
+    state.invoke.mockRejectedValue(
+      new Error("[AppError|HOST_DISCONNECTED] Host studio is not connected")
+    );
+    const { rerender } = render(<CanopyView />);
+    await settle();
+    const quiet = () => {
+      expect(document.body.textContent).toContain("Connecting to studio-01…");
+      expect(document.body.textContent).not.toContain("Can't reach studio-01");
+      expect(document.body.textContent).not.toContain("Not every host");
+      expect(document.querySelector('[data-callout="warning"]')).toBeNull();
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    };
+    quiet();
+
+    state.hosts = [host("studio", "studio-01", { status: "connecting", attempt: 1 })];
+    rerender(<CanopyView />);
+    await settle();
+    quiet();
+
+    // The link is up before the resync's reread lands: the refusal is still the reading's.
+    state.hosts = [host("studio", "studio-01")];
+    rerender(<CanopyView />);
+    await settle();
+    quiet();
+
+    state.invoke.mockImplementation(async (_hostId: string, channel: string) => {
+      if (channel === "canopy:set-active") return remoteCanopy;
+      if (channel === "fleet:get-snapshot") return remoteFleet;
+      return null;
+    });
+    act(() => {
+      for (const listener of state.listeners) listener({ kind: "resync", hostId: "studio" });
+    });
+    await settle();
+    expect(cardOf("studio", "shared-run")).not.toBeNull();
+    expect(document.body.textContent).not.toContain("Connecting to studio-01");
+    expect(document.body.textContent).not.toContain("Not every host");
+  });
+
+  it("says a host whose link fails can't be reached, with Retry", async () => {
+    installElectron();
+    state.hosts = [
+      host("studio", "studio-01", { status: "unreachable", lastSeenAt: null, detail: null }),
+    ];
+    state.invoke.mockRejectedValue(
+      new Error("[AppError|HOST_DISCONNECTED] Host studio is not connected")
+    );
+    render(<CanopyView />);
+    await settle();
+    expect(document.body.textContent).toContain("Can't reach studio-01");
+    expect(document.body.textContent).toContain("Not every host is being read");
+    expect(document.querySelector('[data-callout="warning"]')).not.toBeNull();
+
+    state.invoke.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await settle();
+    expect(channelsCalled()).toContain("studio canopy:set-active");
+  });
+
+  it("says a host's agents are as last seen once its link drops after they were read", async () => {
+    installElectron();
+    const { rerender } = render(<CanopyView />);
+    await settle();
+    expect(cardOf("studio", "shared-run")).not.toBeNull();
+    state.hosts = [host("studio", "studio-01", { status: "disconnected" })];
+    state.invoke.mockRejectedValue(
+      new Error("[AppError|HOST_DISCONNECTED] Host studio is not connected")
+    );
+    rerender(<CanopyView />);
+    await settle();
+    expect(document.body.textContent).toContain(
+      "studio-01 isn't connected. Its agents are as last seen"
+    );
+    expect(screen.getByRole("button", { name: "Retry" })).not.toBeNull();
   });
 
   it("hands a host over to the single-host panel without releasing it after it is read again", async () => {
