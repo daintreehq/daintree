@@ -1,6 +1,7 @@
 import { useCallback, useSyncExternalStore } from "react";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logWarn } from "@/utils/logger";
+import { voiceErrorLogFields } from "@shared/utils/voiceLogFields";
 
 export interface AudioDevice {
   value: string;
@@ -66,7 +67,7 @@ async function refreshDevices(): Promise<void> {
     if (gen !== enumerationGen) return;
     cachedDevices = [{ value: SYSTEM_DEFAULT_VALUE, label: "System default" }];
     cachedError = `Could not enumerate audio devices: ${formatErrorMessage(err, "enumerate audio devices")}`;
-    logWarn("useAudioDevices enumerateDevices failed", { err });
+    logWarn("useAudioDevices enumerateDevices failed", voiceErrorLogFields(err));
   }
 
   if (gen !== enumerationGen) return;

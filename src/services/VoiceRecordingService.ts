@@ -873,7 +873,7 @@ class VoiceRecordingService {
         devices: audioTracks.map((track) => {
           const settings = typeof track.getSettings === "function" ? track.getSettings() : {};
           return {
-            label: track.label || "(no label)",
+            hasLabel: Boolean(track.label),
             enabled: track.enabled,
             muted: track.muted,
             readyState: track.readyState,

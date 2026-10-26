@@ -231,7 +231,7 @@ async function openMicSettings(): Promise<boolean> {
   const logOpenFailure = (err: unknown, command?: string) =>
     logDebug("[VoiceInput] Failed to open mic settings", {
       ...voiceErrorLogFields(err),
-      ...(command ? { command } : {}),
+      command,
     });
 
   if (process.platform === "darwin" || process.platform === "win32") {
