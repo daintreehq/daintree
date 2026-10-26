@@ -102,6 +102,12 @@ export interface TerminalInputState {
    *  transcription, prompt history, the type-anywhere rescue), so a mounted
    *  editor can detect the external mutation and sync its document. */
   externalDraftRevision: number;
+  /**
+   * The latest outside write that moves the composer's caret to the end of
+   * the draft. Writes that keep it (dictation lands where its anchor is, not
+   * where the user is typing) don't advance it.
+   */
+  caretMovingDraftRevision: number;
   lastTypedAgentTarget: LastTypedAgentTarget | null;
   commandHistory: Map<string, string[]>;
   historyIndex: Map<string, number>;
@@ -112,7 +118,7 @@ export interface TerminalInputState {
   setHybridInputAutoFocus: (enabled: boolean) => void;
   getDraftInput: (terminalId: string, projectId?: string) => string;
   setDraftInput: (terminalId: string, value: string, projectId?: string) => void;
-  bumpExternalDraftRevision: () => void;
+  bumpExternalDraftRevision: (options?: { keepsSelection?: boolean }) => void;
   recordLastTypedAgentTarget: (terminalId: string, workspaceId: string) => void;
   clearDraftInput: (terminalId: string, projectId?: string) => void;
   clearAllDraftInputs: () => void;
@@ -157,6 +163,7 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
   hybridInputAutoFocus: true,
   draftInputs: new Map(),
   externalDraftRevision: 0,
+  caretMovingDraftRevision: 0,
   lastTypedAgentTarget: null,
   commandHistory: new Map(),
   historyIndex: new Map(),
@@ -211,8 +218,13 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
       newDraftInputs.delete(key);
       return { draftInputs: newDraftInputs };
     }),
-  bumpExternalDraftRevision: () =>
-    set((state) => ({ externalDraftRevision: state.externalDraftRevision + 1 })),
+  bumpExternalDraftRevision: (options) =>
+    set((state) => {
+      const externalDraftRevision = state.externalDraftRevision + 1;
+      return options?.keepsSelection
+        ? { externalDraftRevision }
+        : { externalDraftRevision, caretMovingDraftRevision: externalDraftRevision };
+    }),
 
   recordLastTypedAgentTarget: (terminalId, workspaceId) =>
     set((state) => {

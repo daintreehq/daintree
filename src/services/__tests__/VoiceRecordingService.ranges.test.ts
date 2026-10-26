@@ -219,19 +219,19 @@ describe("VoiceRecordingService — dictation ranges (#14597)", () => {
     expect(record!.range.edited).toBe(false);
   });
 
-  it("records an unidentified final where its slice put it, past text typed mid-utterance", async () => {
+  it("keeps text typed at the anchor mid-utterance and lands the final after it (#14634)", async () => {
     const { draft, setDraft, records, textOf } = await setup("prefix");
 
     delta("fin");
-    // Typed while the utterance streamed. Today's slice at the segment start
-    // drops it; the range has to land on what was actually written.
+    // Typed at the dictation's own point while the utterance streamed: the
+    // anchor moves past it rather than slicing it away.
     setDraft("prefix typed");
     complete("Final.");
 
-    expect(draft()).toBe("prefix Final.");
+    expect(draft()).toBe("prefix typed Final.");
     const [record] = records();
-    expect(record!.utterances[0]!.range).toEqual({ from: 7, to: 13, edited: false });
-    expect(textOf(record!.range)).toBe("Final.");
+    expect(record!.utterances[0]!.range).toEqual({ from: 13, to: 19, edited: false });
+    expect(textOf(record!.range)).toBe(" Final.");
   });
 
   it("records nothing for a whitespace-only unidentified final", async () => {
@@ -331,16 +331,16 @@ describe("VoiceRecordingService — dictation ranges (#14597)", () => {
     expect(textOf(record!.utterances[0]!.range)).toBe("half a thought");
   });
 
-  it("records a stop flush where its slice put it", async () => {
+  it("flushes a stopped utterance at the anchor, past text typed meanwhile (#14634)", async () => {
     const { service, draft, setDraft, records, textOf } = await setup("prefix");
 
     delta("half");
     setDraft("prefix typed");
     await service.stop("Dictation stopped.", { skipRemoteStop: true, preserveLiveText: true });
 
-    expect(draft()).toBe("prefix half");
-    expect(records()[0]!.utterances[0]!.range).toEqual({ from: 7, to: 11, edited: false });
-    expect(textOf(records()[0]!.range)).toBe("half");
+    expect(draft()).toBe("prefix typed half");
+    expect(records()[0]!.utterances[0]!.range).toEqual({ from: 13, to: 17, edited: false });
+    expect(textOf(records()[0]!.range)).toBe(" half");
   });
 
   it("keeps the dictation findable through post-stop correction, which flags what it rewrote", async () => {
@@ -999,5 +999,230 @@ describe("VoiceRecordingService — spoken file references (#14616)", () => {
     fileReferences("t1", [{ description: "router", path: "src/router.ts" }]);
 
     expect(draft()).toBe("");
+  });
+});
+
+describe("VoiceRecordingService — dictating at the caret (#14634)", () => {
+  /** What the composer showed when dictation began: its draft and selection. */
+  async function showComposer(doc: string, anchor: number, head = anchor) {
+    const { EditorState } = await import("@codemirror/state");
+    const { recordComposerState } = await import("@/lib/composerCaret");
+    recordComposerState(
+      `${PROJECT}:${PANEL}`,
+      {},
+      EditorState.create({ doc, selection: { anchor, head } })
+    );
+  }
+  const takeCaret = async (draft: string) =>
+    (await import("@/lib/composerCaret")).takePendingComposerSelection(
+      `${PROJECT}:${PANEL}`,
+      draft
+    );
+
+  it("writes each utterance at the caret, one after another", async () => {
+    const { draft, records, textOf } = await setup("Fix the bug. Then test.");
+    await showComposer("Fix the bug. Then test.", 12);
+
+    delta("hel");
+    complete("Hello.");
+    expect(await takeCaret(draft())).toEqual({ from: 19, to: 19 });
+    delta("ag");
+    complete("Again.");
+
+    expect(draft()).toBe("Fix the bug. Hello. Again. Then test.");
+    const [record] = records();
+    expect(record!.utterances.map((u) => textOf(u.range))).toEqual(["Hello.", "Again."]);
+    expect(textOf(record!.range)).toBe(" Hello. Again.");
+    expect(record!.range.edited).toBe(false);
+  });
+
+  it("replaces the selection with what's said", async () => {
+    const { draft, records, textOf } = await setup("open the zoo stand store");
+    await showComposer("open the zoo stand store", 18, 9);
+
+    complete("Zustand");
+
+    expect(draft()).toBe("open the Zustand store");
+    expect(textOf(records()[0]!.utterances[0]!.range)).toBe("Zustand");
+  });
+
+  it("keeps dictating at its own spot while the user types elsewhere", async () => {
+    const { draft, setDraft, records, textOf } = await setup("A. B.");
+    await showComposer("A. B.", 2);
+
+    complete("one.");
+    setDraft("> " + draft());
+    complete("two.");
+
+    expect(draft()).toBe("> A. one. two. B.");
+    expect(records()[0]!.utterances.map((u) => textOf(u.range))).toEqual(["one.", "two."]);
+  });
+
+  it("leaves the caret alone when it was somewhere else", async () => {
+    const { draft } = await setup("A. B.");
+    await showComposer("A. B.", 2);
+    complete("one.");
+    await takeCaret(draft());
+    await showComposer(draft(), 0);
+
+    complete("two.");
+
+    expect(await takeCaret(draft())).toBeNull();
+  });
+
+  it("appends when the composer shows another draft than the store's", async () => {
+    const { draft } = await setup("hello world");
+    await showComposer("hello", 2);
+
+    complete("Bye.");
+
+    expect(draft()).toBe("hello world Bye.");
+  });
+
+  it("lands an identified item at its spot, past text typed there while it streamed", async () => {
+    const { draft, setDraft, records, textOf } = await setup("Intro. Outro.");
+    await showComposer("Intro. Outro.", 7);
+
+    delta("one", "item-a");
+    setDraft("Intro. typed Outro.");
+    complete("One.", "item-a");
+
+    expect(draft()).toBe("Intro. typed One. Outro.");
+    expect(textOf(records()[0]!.utterances[0]!.range)).toBe("One.");
+  });
+
+  it("flushes a stopped utterance at its spot mid-draft", async () => {
+    const { service, draft, records, textOf } = await setup("Intro. Outro.");
+    await showComposer("Intro. Outro.", 6);
+
+    delta("half a");
+    await service.stop("Dictation stopped.", { skipRemoteStop: true, preserveLiveText: true });
+
+    expect(draft()).toBe("Intro. half a Outro.");
+    expect(textOf(records()[0]!.utterances[0]!.range)).toBe("half a");
+  });
+
+  it("keeps the caret following the words through finals the composer hasn't shown yet", async () => {
+    const { draft } = await setup("hello world");
+    await showComposer("hello world", 5);
+
+    complete("big");
+    complete("red");
+
+    expect(draft()).toBe("hello big red world");
+    expect(await takeCaret(draft())).toEqual({ from: 13, to: 13 });
+  });
+
+  it("follows the words after a selection replaced by the same text", async () => {
+    const { draft } = await setup("hello world");
+    await showComposer("hello world", 6, 11);
+
+    complete("world");
+    complete("again");
+
+    expect(draft()).toBe("hello world again");
+    expect(await takeCaret(draft())).toEqual({ from: 17, to: 17 });
+  });
+
+  it("scratches words dictated mid-draft and puts the next ones in their place", async () => {
+    const { draft, records, textOf } = await setup("A. B.");
+    await showComposer("A. B.", 2);
+
+    complete("one.");
+    complete("scratch that");
+    expect(draft()).toBe("A. B.");
+    complete("two.");
+
+    expect(draft()).toBe("A. two. B.");
+    expect(records()[0]!.utterances.map((u) => textOf(u.range))).toContain("two.");
+  });
+
+  it("maps an earlier dictation onto its own copy of repeated text", async () => {
+    const { draft, records, textOf } = await setup("foo");
+    complete("foo");
+    expect(draft()).toBe("foo foo");
+    await showComposer("foo foo", 0);
+    const { useVoiceRecordingStore } = await import("@/store/voiceRecordingStore");
+    useVoiceRecordingStore
+      .getState()
+      .beginSession({ panelId: PANEL, projectId: PROJECT }, "session-2");
+
+    callbacks.complete!({ sessionId: "session-2", text: "foo", willCorrect: false });
+
+    expect(draft()).toBe("foo foo foo");
+    const [first, second] = records();
+    // The diff alone reads the write as an append and leaves the first range on 4-7.
+    expect(first!.utterances[0]!.range).toEqual({ from: 8, to: 11, edited: false });
+    expect(textOf(second!.utterances[0]!.range)).toBe("foo");
+    expect(second!.utterances[0]!.range.from).toBe(0);
+  });
+
+  it("breaks the paragraph at the dictation's spot", async () => {
+    const { draft, records, textOf } = await setup("Start. End.");
+    await showComposer("Start. End.", 6);
+
+    complete("One.");
+    callbacks.boundary!({ sessionId: SESSION_ID, rawText: null });
+    complete("Two.");
+
+    expect(draft()).toBe("Start. One.\nTwo. End.");
+    expect(records()[0]!.utterances.map((u) => textOf(u.range))).toEqual(["One.", "Two."]);
+    expect(records()[0]!.range.edited).toBe(false);
+  });
+
+  it("drops the anchor when the session stops, keeping its record", async () => {
+    const { service, records, sessionId } = await setup("abc");
+    const { useDictationRangeStore } = await import("@/store/dictationRangeStore");
+    const id = sessionId()!;
+
+    complete("Done.");
+    await service.stop("Dictation stopped.", { skipRemoteStop: true });
+
+    expect(
+      useDictationRangeStore
+        .getState()
+        .getAnchor({ sessionId: id, panelId: PANEL, projectId: PROJECT })
+    ).toBeNull();
+    expect(records()).toHaveLength(1);
+  });
+});
+
+describe("VoiceRecordingService — correction and file links at the caret (#14634)", () => {
+  async function showComposer(doc: string, anchor: number) {
+    const { EditorState } = await import("@codemirror/state");
+    const { recordComposerState } = await import("@/lib/composerCaret");
+    recordComposerState(
+      `${PROJECT}:${PANEL}`,
+      {},
+      EditorState.create({ doc, selection: { anchor } })
+    );
+  }
+
+  it("corrects only the words dictated into the middle of the draft", async () => {
+    const { service, voiceStore, draft } = await setup("Step one. Step three.");
+    await showComposer("Step one. Step three.", 9);
+    correct.fn.mockResolvedValue({ action: "replace", correctedText: "Step two." });
+    voiceStore.getState().setCorrectionEnabled(true);
+
+    complete("step two");
+    await service.stop("Dictation stopped.");
+
+    expect(correct.fn).toHaveBeenCalledWith({
+      rawText: "step two",
+      recentContext: ["Step one."],
+      terminalId: "panel-1",
+    });
+    await vi.waitFor(() => expect(draft()).toBe("Step one. Step two. Step three."));
+    expect(voiceStore.getState().panelBuffers[PANEL]!.sessionDraftStart).toBe(10);
+  });
+
+  it("links a file named in words dictated into the middle of the draft, and only there", async () => {
+    const { draft } = await setup("Link to the readme file. Then");
+    await showComposer("Link to the readme file. Then", 24);
+
+    complete("link to the readme file", "item-a", "t1");
+    fileReferences("t1", [{ description: "readme file", path: "README.md" }]);
+
+    expect(draft()).toBe("Link to the readme file. @README.md Then");
   });
 });

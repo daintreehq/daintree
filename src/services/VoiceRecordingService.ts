@@ -8,9 +8,19 @@ import { shouldShowHybridInputBar } from "@/components/Terminal/terminalFocus";
 import { useHelpPanelStore, selectActiveSlot } from "@/store/helpPanelStore";
 import { isAssistantFocused } from "@/store/macroFocusStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
+import {
+  useDictationRangeStore,
+  type DictationDraftTarget,
+  type DictationRecord,
+} from "@/store/dictationRangeStore";
+import { minimalDocChange, type TrackedTextRange } from "@/lib/textRangeMapping";
+import {
+  peekPendingComposerSelection,
+  readComposerSelection,
+  setPendingComposerSelection,
+} from "@/lib/composerCaret";
 import { makeDraftKey } from "@/lib/draftKey";
-import { minimalDocChange } from "@/lib/textRangeMapping";
-import { useDictationRangeStore, type DictationRecord } from "@/store/dictationRangeStore";
+import { planVoiceBreak, planVoiceWords, type VoiceInsertPlan } from "./voiceInsertion";
 import {
   isVoiceMicPending,
   useVoiceRecordingStore,
@@ -97,37 +107,104 @@ function formatTargetLabel(target: VoiceRecordingTarget): string {
   return "current panel";
 }
 
-function getVoiceInsertMetadata(draft: string): { separator: string; insertStart: number } {
-  const separator = draft && !draft.endsWith(" ") && !draft.endsWith("\n") ? " " : "";
-  return {
-    separator,
-    insertStart: draft.length + separator.length,
-  };
+/**
+ * Where the session's next words go in this draft: its anchor, or else the
+ * caret (or the selection) the composer last showed in this exact draft, or
+ * else the end. Without a session nothing is tracked and the words append.
+ */
+function resolveVoiceAnchor(
+  panelId: string,
+  projectId: string | undefined,
+  sessionId: string | null | undefined,
+  draft: string
+): TrackedTextRange | null {
+  if (!sessionId) return null;
+  const target = { sessionId, panelId, projectId };
+  const store = useDictationRangeStore.getState();
+  const existing = store.getAnchor(target);
+  if (existing) return existing;
+  store.setAnchor(
+    target,
+    readComposerSelection(makeDraftKey(panelId, projectId), draft) ?? {
+      from: draft.length,
+      to: draft.length,
+    }
+  );
+  return useDictationRangeStore.getState().getAnchor(target);
 }
 
 /**
- * Records where a session's committed words just landed in the draft: `text`
- * was written at `base + separator`. Call it straight after the write, once
- * the range store has mapped the session's earlier text through that write.
+ * Writes one voice plan into the draft and records it: the range store maps
+ * the session's earlier text through the write first, then takes the new
+ * span, and the anchor moves to just after what was written.
  */
-function trackDictatedText(
-  sessionId: string | null | undefined,
+function commitVoicePlan(
   panelId: string,
   projectId: string | undefined,
-  base: string,
-  separator: string,
-  text: string,
-  transcriptId?: string
+  sessionId: string | null | undefined,
+  plan: VoiceInsertPlan,
+  record: (target: DictationDraftTarget, plan: VoiceInsertPlan) => void
 ): void {
-  if (!sessionId) return;
-  const from = base.length + separator.length;
-  const to = from + text.length;
+  const inputStore = useTerminalInputStore.getState();
+  const draftKey = makeDraftKey(panelId, projectId);
+  const draft = inputStore.getDraftInput(panelId, projectId);
+  // A caret sitting where the words go follows them; one anywhere else stays
+  // where the user left it. Until the composer has caught up with an earlier
+  // write, its caret is the one that write asked for: the sync takes the hint,
+  // so one still waiting is newer than anything the composer showed.
+  const caret =
+    peekPendingComposerSelection(draftKey, draft) ?? readComposerSelection(draftKey, draft);
+  if (caret && caret.from === plan.at.from && caret.to === plan.at.to) {
+    setPendingComposerSelection(draftKey, plan.next, plan.anchor);
+  }
   useDictationRangeStore
     .getState()
-    .recordUtterance(
-      { sessionId, panelId, projectId },
-      { insertion: { from: base.length, to }, words: { from, to }, transcriptId }
-    );
+    .expectDraftChange(panelId, projectId, draft, plan.next, plan.change);
+  inputStore.setDraftInput(panelId, plan.next, projectId);
+  if (sessionId) {
+    const target = { sessionId, panelId, projectId };
+    record(target, plan);
+    useDictationRangeStore.getState().setAnchor(target, plan.anchor);
+  }
+  inputStore.bumpExternalDraftRevision({ keepsSelection: true });
+}
+
+/**
+ * Drops the anchors of the session about to finish. Its records stay, so
+ * correction and late file references still find its text; anything it writes
+ * after this would need a new session anyway.
+ */
+function releaseActiveVoiceAnchors(): void {
+  const { activeTarget, panelBuffers } = useVoiceRecordingStore.getState();
+  const sessionId = activeTarget ? panelBuffers[activeTarget.panelId]?.dictationSessionId : null;
+  if (sessionId) useDictationRangeStore.getState().releaseAnchors(sessionId);
+}
+
+/** Writes dictated words at the session's anchor; returns where they landed. */
+function writeVoiceWords(
+  panelId: string,
+  projectId: string | undefined,
+  sessionId: string | null | undefined,
+  text: string,
+  transcriptId?: string
+): VoiceInsertPlan {
+  const draft = useTerminalInputStore.getState().getDraftInput(panelId, projectId);
+  const plan = planVoiceWords(
+    draft,
+    resolveVoiceAnchor(panelId, projectId, sessionId, draft),
+    text
+  );
+  commitVoicePlan(
+    panelId,
+    projectId,
+    sessionId,
+    plan,
+    (target, { insertion, words, separatorAfter }) =>
+      useDictationRangeStore
+        .getState()
+        .recordUtterance(target, { insertion, words, separatorAfter, transcriptId })
+  );
+  return plan;
 }
 
 // A chosen device of "" (system default) or one of Chromium's alias entries
@@ -392,23 +469,12 @@ class VoiceRecordingService {
           // An empty revision retracts a preview; it never starts an utterance.
           const isFirstDelta = delta !== "" && (!buffer || buffer.liveText === "");
           if (isFirstDelta) {
+            // The preview shows where the words will go, so the session's
+            // first utterance takes its anchor from the caret as it starts.
             const draft = useTerminalInputStore
               .getState()
               .getDraftInput(target.panelId, target.projectId);
-            const { insertStart } = getVoiceInsertMetadata(draft);
-            useVoiceRecordingStore.getState().setSessionDraftStart(target.panelId, insertStart);
-            // Snapshot where dictated text will begin once the final commit runs,
-            // including any leading separator inserted between existing draft and
-            // the first dictated token. Stable for the lifetime of the utterance.
-            // Identified items skip it: the provider releases their completions
-            // in commit order, so each one appends to the current draft.
-            if (!itemId) {
-              useVoiceRecordingStore
-                .getState()
-                .setDraftLengthAtSegmentStart(target.panelId, insertStart);
-            }
-            // Track paragraph start for the first utterance in a new paragraph.
-            useVoiceRecordingStore.getState().setActiveParagraphStart(target.panelId, insertStart);
+            resolveVoiceAnchor(target.panelId, target.projectId, buffer?.dictationSessionId, draft);
           }
           // Interim deltas accumulate in liveText only — the ghost-widget
           // decoration renders them outside the doc model so the editor's
@@ -433,7 +499,6 @@ class VoiceRecordingService {
         const projectId = voiceState.activeTarget?.projectId;
         if (panelId) {
           const buffer = voiceState.panelBuffers[panelId];
-          const segmentStart = itemId ? -1 : (buffer?.draftLengthAtSegmentStart ?? -1);
           const finalText = text.trim();
           // "Scratch that, send it" only scratches: the draft it leaves is one
           // the user hasn't seen, and a spoken send fires with no key press.
@@ -443,30 +508,19 @@ class VoiceRecordingService {
             return;
           }
           if (finalText) {
-            const inputStore = useTerminalInputStore.getState();
-            const draft = inputStore.getDraftInput(panelId, projectId);
-            // Slice back to where this segment started and replace with final transcript.
-            // In the new flow the doc carries no interim text, so the slice is a no-op
-            // when nothing has been written — the separator still re-fixes spacing.
-            const base = segmentStart >= 0 ? draft.slice(0, segmentStart) : draft;
-            const { separator, insertStart } = getVoiceInsertMetadata(base);
-            // A Deepgram span can finalise without any interim, so the session's
-            // first text may arrive here rather than in a delta.
-            useVoiceRecordingStore.getState().setSessionDraftStart(panelId, insertStart);
-            if ((buffer?.activeParagraphStart ?? -1) < 0) {
-              useVoiceRecordingStore.getState().setActiveParagraphStart(panelId, insertStart);
-            }
-            inputStore.setDraftInput(panelId, base + separator + finalText, projectId);
-            trackDictatedText(
-              buffer?.dictationSessionId,
+            const { words } = writeVoiceWords(
               panelId,
               projectId,
-              base,
-              separator,
+              buffer?.dictationSessionId,
               finalText,
               transcriptId
             );
-            inputStore.bumpExternalDraftRevision();
+            // A Deepgram span can finalise without any interim, so the session's
+            // first text may arrive here rather than in a delta.
+            useVoiceRecordingStore.getState().setSessionDraftStart(panelId, words.from);
+            if ((buffer?.activeParagraphStart ?? -1) < 0) {
+              useVoiceRecordingStore.getState().setActiveParagraphStart(panelId, words.from);
+            }
           }
         }
         useVoiceRecordingStore.getState().completeSegment(text, itemId);
@@ -509,7 +563,7 @@ class VoiceRecordingService {
           voiceStore.shiftDraftOffsets(panelId, edit.to, edit.text.length - (edit.to - edit.from));
         }
         this.writeShiftedDraft(panelId, applyDraftEdits(draft, edits), projectId);
-        inputStore.bumpExternalDraftRevision();
+        inputStore.bumpExternalDraftRevision({ keepsSelection: true });
       })
     );
 
@@ -524,20 +578,15 @@ class VoiceRecordingService {
         const buffer = voiceState.panelBuffers[panelId];
         if (!buffer) return;
 
-        const inputStore = useTerminalInputStore.getState();
-        const draft = inputStore.getDraftInput(panelId, projectId);
-
-        // Insert a newline to visually separate paragraphs and reset paragraph state.
-        inputStore.setDraftInput(panelId, draft + "\n", projectId);
-        if (buffer.dictationSessionId) {
-          useDictationRangeStore
-            .getState()
-            .recordParagraphBreak(
-              { sessionId: buffer.dictationSessionId, panelId, projectId },
-              { from: draft.length, to: draft.length + 1 }
-            );
-        }
-        inputStore.bumpExternalDraftRevision();
+        const sessionId = buffer.dictationSessionId;
+        const draft = useTerminalInputStore.getState().getDraftInput(panelId, projectId);
+        const plan = planVoiceBreak(
+          draft,
+          resolveVoiceAnchor(panelId, projectId, sessionId, draft)
+        );
+        commitVoicePlan(panelId, projectId, sessionId, plan, (target, { insertion }) =>
+          useDictationRangeStore.getState().recordParagraphBreak(target, insertion)
+        );
 
         voiceState.resetParagraphState(panelId);
       })
@@ -973,6 +1022,7 @@ class VoiceRecordingService {
     // A start queued behind a session that is still finishing leaves that
     // session's target and status to its own stop.
     if (useVoiceRecordingStore.getState().status === "arming") {
+      releaseActiveVoiceAnchors();
       useVoiceRecordingStore.getState().finishSession({ nextStatus: "idle" });
     }
   }
@@ -1148,6 +1198,7 @@ class VoiceRecordingService {
     // A stop still draining would otherwise finish afterwards and overwrite
     // the error with "idle".
     if (this.stopPromise) await this.stopPromise;
+    releaseActiveVoiceAnchors();
     useVoiceRecordingStore.getState().finishSession({ nextStatus: "error" });
   }
 
@@ -1791,6 +1842,7 @@ class VoiceRecordingService {
       useVoiceRecordingStore
         .getState()
         .setLastError({ severity: "fatal", code: "backend_start_failed", message: result.error });
+      releaseActiveVoiceAnchors();
       useVoiceRecordingStore.getState().finishSession({ nextStatus: "error" });
       useVoiceRecordingStore.getState().announce("Voice dictation failed to start.");
       this.reportStartFailure("Dictation didn't start", result.error, this.settingsAction());
@@ -1971,25 +2023,20 @@ class VoiceRecordingService {
             const { panelId, projectId } = currentTarget;
             const buffer = useVoiceRecordingStore.getState().panelBuffers[panelId];
             const remaining = buffer?.liveText?.trim();
-            const segmentStart = buffer?.draftLengthAtSegmentStart ?? -1;
             if (remaining) {
-              const inputStore = useTerminalInputStore.getState();
-              const draft = inputStore.getDraftInput(panelId, projectId);
-              const base = segmentStart >= 0 ? draft.slice(0, segmentStart) : draft;
-              const { separator } = getVoiceInsertMetadata(base);
-              inputStore.setDraftInput(panelId, base + separator + remaining, projectId);
-              trackDictatedText(
-                buffer?.dictationSessionId,
+              const { words } = writeVoiceWords(
                 panelId,
                 projectId,
-                base,
-                separator,
+                buffer?.dictationSessionId,
                 remaining
               );
-              inputStore.bumpExternalDraftRevision();
+              // A session stopped mid-utterance may have no final; its learning
+              // baseline still needs a start to follow.
+              useVoiceRecordingStore.getState().setSessionDraftStart(panelId, words.from);
             }
           }
         }
+        releaseActiveVoiceAnchors();
         useVoiceRecordingStore.getState().finishSession({ preserveLiveText, nextStatus });
         if (shouldAnnounce) {
           useVoiceRecordingStore.getState().announce(announcement);
@@ -2100,7 +2147,7 @@ class VoiceRecordingService {
 
     // Show the dotted-underline "correcting" decoration over each passage.
     this.syncCorrectionRange(panelId);
-    inputStore.bumpExternalDraftRevision();
+    inputStore.bumpExternalDraftRevision({ keepsSelection: true });
 
     void this.requestCorrection(correction);
   }
@@ -2189,7 +2236,7 @@ class VoiceRecordingService {
     }
 
     this.syncCorrectionRange(panelId);
-    inputStore.bumpExternalDraftRevision();
+    inputStore.bumpExternalDraftRevision({ keepsSelection: true });
   }
 
   /** The cleaned text for one passage, or null to keep it as dictated. */
@@ -2445,10 +2492,25 @@ class VoiceRecordingService {
       .takeLastUtterance({ sessionId, panelId, projectId }, draft);
     if (!span) return;
     const next = draft.slice(0, span.from) + draft.slice(span.to);
+    // A caret that followed the words stays where they were. The composer's
+    // own diff could slide it along a run the removal shares with the text
+    // after it, as the ranges below would be without the change spelled out.
+    const draftKey = makeDraftKey(panelId, projectId);
+    const caret =
+      peekPendingComposerSelection(draftKey, draft) ?? readComposerSelection(draftKey, draft);
+    if (caret && caret.from >= span.from && caret.to <= span.to) {
+      setPendingComposerSelection(draftKey, next, { from: span.from, to: span.from });
+    }
     useVoiceRecordingStore.getState().shiftDraftOffsets(panelId, span.to, -(span.to - span.from));
+    // The anchor and earlier ranges follow the words actually removed, not a
+    // repeat of them the diff might pick.
+    useDictationRangeStore
+      .getState()
+      .expectDraftChange(panelId, projectId, draft, next, { ...span, insert: "" });
     inputStore.setDraftInput(panelId, next, projectId);
     recordScratchLanded(panelId, projectId, next);
-    inputStore.bumpExternalDraftRevision();
+    // Like the words it removes, it leaves the caret to the user.
+    inputStore.bumpExternalDraftRevision({ keepsSelection: true });
   }
 
   /**

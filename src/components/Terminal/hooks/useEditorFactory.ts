@@ -27,6 +27,7 @@ import {
   contextReferenceChipField,
   createContextReferenceChipTooltip,
   interimWidgetField,
+  createCaretTracker,
   pendingAIField,
   voiceRewriteTracker,
   createAutoSize,
@@ -47,6 +48,8 @@ import { recordBuiltCompartmentConfig } from "./useCompartmentDriver";
 
 interface UseEditorFactoryParams {
   terminalId: string;
+  /** The draft key (`makeDraftKey`) of the draft this composer edits. */
+  draftKeyRef: React.RefObject<string>;
   editorHostRef: React.RefObject<HTMLDivElement | null>;
   editorViewRef: React.RefObject<EditorView | null>;
   value: string;
@@ -95,6 +98,7 @@ interface UseEditorFactoryParams {
 
 export function useEditorFactory({
   terminalId,
+  draftKeyRef,
   editorHostRef,
   editorViewRef,
   value,
@@ -171,6 +175,7 @@ export function useEditorFactory({
           !disabled ? createContextReferenceChipTooltip() : []
         ),
         interimWidgetField,
+        createCaretTracker(() => draftKeyRef.current),
         pendingAIField,
         voiceRewriteTracker,
         createCorrectionReview({

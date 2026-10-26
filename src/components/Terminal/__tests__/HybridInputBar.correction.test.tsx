@@ -234,7 +234,7 @@ describe("HybridInputBar after a spoken scratch", () => {
       const inputs = useTerminalInputStore.getState();
       inputs.setDraftInput("term-1", "");
       recordScratchLanded("term-1", undefined, "");
-      inputs.bumpExternalDraftRevision();
+      inputs.bumpExternalDraftRevision({ keepsSelection: true });
     });
     expect(view.state.doc.toString()).toBe("");
 

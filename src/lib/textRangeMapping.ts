@@ -65,3 +65,22 @@ export function mapTextRange(range: TrackedTextRange, change: TextChange): Track
     edited: range.edited || range.from < range.to,
   };
 }
+
+/**
+ * Carries a span through `change`, keeping every edit that reaches its text:
+ * where `mapTextRange` trims to what survives, this grows over whatever the
+ * change wrote, so a word retyped at either end stays inside. Text inserted at
+ * either boundary still stays outside.
+ */
+export function mapSpanKeepingEdits(
+  span: { from: number; to: number },
+  change: TextChange
+): { from: number; to: number } {
+  const delta = change.insert.length - (change.to - change.from);
+  if (change.to <= span.from) return { from: span.from + delta, to: span.to + delta };
+  if (change.from >= span.to) return span;
+  return {
+    from: Math.min(span.from, change.from),
+    to: Math.max(span.to + delta, change.from + change.insert.length),
+  };
+}

@@ -16,7 +16,8 @@ export {
   removeChipRange,
 } from "./base";
 export { minimalDocChange } from "@/lib/textRangeMapping";
-export type { AutoSizeConfig, ComboboxAttributes } from "./base";
+export { createCaretTracker } from "./caretTracker";
+export type { AutoSizeConfig, ComboboxAttributes, InterimPreview } from "./base";
 
 export {
   createSlashChipField,
@@ -58,7 +59,12 @@ export {
 } from "./chipBackspace";
 export type { ChipPendingDelete } from "./chipBackspace";
 export { createCursorBlink } from "./cursorBlink";
-export { createComposerHistory, clearComposerHistory, outsideDraftWrite } from "./composerHistory";
+export {
+  createComposerHistory,
+  clearComposerHistory,
+  outsideDraftWrite,
+  selectionAfterOutsideWrite,
+} from "./composerHistory";
 export {
   correctionLanded,
   createCorrectionReview,

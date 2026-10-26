@@ -256,8 +256,10 @@ function mount(initial: Partial<LiveProps> = {}) {
       viewRef = editorViewRef;
       const contextUpdateRef = useRef<(u: ViewUpdate) => void>(() => {});
       const keymapHandlersRef = useRef(null);
+      const draftKeyRef = useRef(terminalId);
       useEditorFactory({
         terminalId,
+        draftKeyRef,
         editorHostRef,
         editorViewRef,
         value: "",

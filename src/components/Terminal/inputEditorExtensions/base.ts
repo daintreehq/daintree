@@ -368,35 +368,59 @@ class InterimGhostWidget extends WidgetType {
   }
 }
 
-export const setInterimText = StateEffect.define<string>();
+/**
+ * The dictation preview: its text, and where it shows. A null position puts
+ * it at the end of the draft; any other follows edits around it until the next
+ * preview replaces it.
+ */
+export interface InterimPreview {
+  text: string;
+  pos: number | null;
+}
 
-export const interimWidgetField = StateField.define<string>({
+const NO_PREVIEW: InterimPreview = { text: "", pos: null };
+
+export const setInterimText = StateEffect.define<string | InterimPreview>();
+
+export const interimWidgetField = StateField.define<InterimPreview>({
   create() {
-    return "";
+    return NO_PREVIEW;
   },
   update(value, tr) {
+    let next = value;
+    if (tr.docChanged && next.pos !== null) {
+      const pos = tr.changes.mapPos(next.pos, 1);
+      if (pos !== next.pos) next = { ...next, pos };
+    }
     for (const effect of tr.effects) {
       if (effect.is(setInterimText)) {
-        return effect.value;
+        const preview =
+          typeof effect.value === "string" ? { text: effect.value, pos: null } : effect.value;
+        next =
+          preview.text === next.text && preview.pos === next.pos
+            ? next
+            : preview.text
+              ? preview
+              : NO_PREVIEW;
       }
     }
-    return value;
+    return next;
   },
   provide: (f) => [
-    EditorView.decorations.from(f, (text) => (view) => {
+    EditorView.decorations.from(f, ({ text, pos }) => (view) => {
       // Suppress the ghost during IME composition so it can't displace the
       // composition overlay (mirrors the xterm guard added for #4379).
       if (!text || view.composing) return Decoration.none;
-      const pos = view.state.doc.length;
+      const at = pos === null ? view.state.doc.length : Math.min(pos, view.state.doc.length);
       return Decoration.set([
-        Decoration.widget({ widget: new InterimGhostWidget(text), side: 1 }).range(pos),
+        Decoration.widget({ widget: new InterimGhostWidget(text), side: 1 }).range(at),
       ]);
     }),
     // The doc stays empty while dictation is interim, so CodeMirror's own
     // placeholder is still mounted and the ghost renders right after it
     // ("Ask Claude" followed by the transcript). Flag the content element so
     // the placeholder can be hidden for as long as ghost text is showing.
-    EditorView.contentAttributes.from(f, (text): Record<string, string> =>
+    EditorView.contentAttributes.from(f, ({ text }): Record<string, string> =>
       text ? { class: "cm-voice-interim-active" } : {}
     ),
     EditorView.baseTheme({
@@ -498,7 +522,8 @@ export function createAutoSize(config: AutoSizeConfig = {}) {
               : LINE_HEIGHT_PX;
         // Interim dictation renders as a widget while the doc stays empty; it
         // hides the placeholder and has real height, so it counts as content.
-        const isEmpty = view.state.doc.length === 0 && !view.state.field(interimWidgetField, false);
+        const isEmpty =
+          view.state.doc.length === 0 && !view.state.field(interimWidgetField, false)?.text;
         return computeAutoSize(view.contentHeight, lineHeight, maxHeightPx, isEmpty);
       },
       write(measured) {

@@ -5,7 +5,10 @@ import { peek as peekTerminalService } from "@/services/terminal/terminalInstanc
 import { buildTerminalSendPayload } from "@/lib/terminalInput";
 import { useCommandHistoryStore } from "@/store/commandHistoryStore";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
+import { useDictationRangeStore } from "@/store/dictationRangeStore";
+import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useDictionaryLearnPromptStore } from "@/store/dictionaryLearnPromptStore";
+import { mapSpanKeepingEdits, minimalDocChange } from "@/lib/textRangeMapping";
 import {
   getAllAtContextReferences,
   getAllAtTerminalTokens,
@@ -50,15 +53,37 @@ interface CorrectionSnapshot {
   /** The draft before the passage. */
   preceding: string;
   /** The session that wrote the baseline; a newer one owns whatever replaced it. */
-  sessionId: string | null;
+  sessionId: string;
 }
 
 /**
- * Pairs the panel's learning baseline with the draft being sent. Taken before
- * the send awaits anything: a dictation that finishes meanwhile writes a newer
- * baseline, and this draft must not be diffed against it. A draft under
- * another key (an isolated composer on the same terminal) isn't the one the
- * passage was dictated into.
+ * Where the session's dictated words sit in the text being sent: its record's
+ * learning span, which follows every edit, carried onto `text` when the
+ * composer is a keystroke ahead of the stored draft. Text typed before, after
+ * or around the dictation stays out of it.
+ */
+function locateDictatedText(
+  panelId: string,
+  projectId: string | undefined,
+  sessionId: string,
+  text: string
+): { from: number; to: number } | null {
+  const span = useDictationRangeStore
+    .getState()
+    .listDictations(panelId, projectId)
+    .find((record) => record.sessionId === sessionId)?.learningSpan;
+  if (!span) return null;
+  const draft = useTerminalInputStore.getState().getDraftInput(panelId, projectId);
+  const change = minimalDocChange(draft, text);
+  return change ? mapSpanKeepingEdits(span, change) : span;
+}
+
+/**
+ * Pairs the panel's learning baseline with the dictated words in the draft
+ * being sent. Taken before the send awaits anything: a dictation that finishes
+ * meanwhile writes a newer baseline, and this draft must not be diffed against
+ * it. A draft under another key (an isolated composer on the same terminal)
+ * isn't the one the passage was dictated into.
  */
 function takeCorrectionSnapshot(
   panelId: string,
@@ -68,13 +93,15 @@ function takeCorrectionSnapshot(
   try {
     const buffer = useVoiceRecordingStore.getState().panelBuffers[panelId];
     const baseline = buffer?.sessionCorrectedText;
-    const sessionStart = buffer?.sessionDraftStart ?? -1;
-    if (!baseline || sessionStart < 0 || buffer.projectId !== projectId) return null;
+    const sessionId = buffer?.dictationSessionId;
+    if (!baseline || !sessionId || buffer.projectId !== projectId) return null;
+    const span = locateDictatedText(panelId, projectId, sessionId, text);
+    if (!span) return null;
     return {
       baseline,
-      edited: text.slice(sessionStart),
-      preceding: text.slice(0, sessionStart),
-      sessionId: buffer.dictationSessionId,
+      edited: text.slice(span.from, span.to),
+      preceding: text.slice(0, span.from),
+      sessionId,
     };
   } catch {
     return null;

@@ -3,6 +3,7 @@ import {
   Prec,
   type ChangeDesc,
   type ChangeSpec,
+  type EditorState,
   type Extension,
   type StateEffectType,
   type StateField,
@@ -64,20 +65,40 @@ export function createComposerHistory(): Extension {
  * An outside write to the draft (a dictated utterance, a correction or
  * file-link swap, a handoff) as one undo step of its own: typing next to it
  * within the grouping delay would otherwise merge into it. A correction that
- * landed in it rides along, so undo and redo carry the correction too.
+ * landed in it rides along, so undo and redo carry the correction too. The
+ * caret goes to the end of the draft unless `selection` places it.
  */
 export function outsideDraftWrite(
   change: ChangeSpec,
   draft: string,
-  landed: CorrectionReview | null
+  landed: CorrectionReview | null,
+  selection: { anchor: number; head?: number } = { anchor: draft.length }
 ): TransactionSpec {
   return {
     changes: change,
-    selection: { anchor: draft.length },
+    selection,
     scrollIntoView: true,
     effects: landed ? correctionLanded.of(landed) : [],
     annotations: isolateHistory.of("full"),
   };
+}
+
+/**
+ * The selection for an outside write that leaves the caret to the user: the
+ * one the writer asked for, else the current one carried through the write.
+ * A composer without focus has no caret the user is working at, so its caret
+ * goes to the end as it does for any other write.
+ */
+export function selectionAfterOutsideWrite(
+  state: EditorState,
+  hasFocus: boolean,
+  change: ChangeSpec,
+  pending: { from: number; to: number } | null
+): { anchor: number; head: number } | undefined {
+  if (pending) return { anchor: pending.from, head: pending.to };
+  if (!hasFocus) return undefined;
+  const { anchor, head } = state.selection.main.map(state.changes(change), 1);
+  return { anchor, head };
 }
 
 /**

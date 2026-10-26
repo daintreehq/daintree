@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import {
+  mapSpanKeepingEdits,
   mapTextRange,
   minimalDocChange,
   type TextChange,
@@ -19,6 +20,13 @@ export interface DictationUtterance {
   range: TrackedTextRange;
   /** Everything the utterance put in the draft: its leading separator and its words. */
   insertion: TrackedTextRange;
+  /**
+   * The space the write put after the words when they landed against text.
+   * It stays outside `insertion`, so the next utterance goes in ahead of it;
+   * scratching the utterance takes it too while it is untouched and still
+   * right after what's removed.
+   */
+  separatorAfter?: TrackedTextRange;
   /**
    * Main's id for the transcript the words came from, set when spoken file
    * references in it may still arrive. One transcript can span several
@@ -51,6 +59,14 @@ export interface DictationRecord {
    */
   range: TrackedTextRange;
   utterances: DictationUtterance[];
+  /**
+   * From the session's first dictated word to its last, for learning to diff
+   * what is sent against what was heard. Unlike `range`, an edit that reaches
+   * its text joins it whole, so a misheard word retyped at either end stays in
+   * it; text typed at either edge stays out. Absent until the session writes
+   * words.
+   */
+  learningSpan?: DictationTextSpan;
 }
 
 export interface DictationDraftTarget {
@@ -59,20 +75,38 @@ export interface DictationDraftTarget {
   projectId?: string;
 }
 
+/**
+ * Where a session's next words go in one draft. It starts as the caret, or the
+ * selection the first words will replace, and becomes a point after the words
+ * once any are written. It follows draft edits like a record does, so typing
+ * elsewhere never pulls the dictation along with it.
+ */
+export interface DictationAnchor {
+  sessionId: string;
+  range: TrackedTextRange;
+}
+
 interface DictationRangeState {
   /** Records per draft key (`makeDraftKey`), oldest first. Runtime-only. */
   drafts: Record<string, DictationRecord[]>;
+  /** Insertion anchors per draft key (`makeDraftKey`), one per session. Runtime-only. */
+  anchors: Record<string, DictationAnchor[]>;
   /** Records an utterance the session just wrote into the draft. */
   recordUtterance: (
     target: DictationDraftTarget,
-    span: { insertion: DictationTextSpan; words: DictationTextSpan; transcriptId?: string }
+    span: {
+      insertion: DictationTextSpan;
+      words: DictationTextSpan;
+      separatorAfter?: DictationTextSpan;
+      transcriptId?: string;
+    }
   ) => void;
   /** Records a paragraph break the session just wrote into the draft. */
   recordParagraphBreak: (target: DictationDraftTarget, insertion: DictationTextSpan) => void;
   /**
    * Takes the session's latest utterance out of its record and returns the
-   * draft span that held it, trailing paragraph breaks included, for the caller
-   * to delete. Null when the session has no utterance left in this draft or the
+   * draft span that held it, trailing paragraph breaks and the space it was
+   * given ahead of the text after it included, for the caller to delete. Null when the session has no utterance left in this draft or the
    * latest one was edited since, so typed text is never removed.
    */
   takeLastUtterance: (target: DictationDraftTarget, draft: string) => DictationTextSpan | null;
@@ -82,11 +116,28 @@ interface DictationRangeState {
    * its records.
    */
   mapDrafts: (previous: Map<string, string>, next: Map<string, string>) => void;
+  /**
+   * Tells the next mapping of this draft what the write it's about to see
+   * actually changed. A diff of the two strings can't say which of two
+   * identical runs was written, so a writer that knows passes it here.
+   */
+  expectDraftChange: (
+    panelId: string,
+    projectId: string | undefined,
+    before: string,
+    after: string,
+    change: TextChange
+  ) => void;
   getDictation: (id: string) => DictationRecord | null;
   listDictations: (panelId: string, projectId?: string) => DictationRecord[];
   /** Every live record the voice session wrote, in any draft. */
   listSessionDictations: (sessionId: string) => DictationRecord[];
   releaseDictation: (id: string) => void;
+  /** Places the session's insertion anchor in the target's draft. */
+  setAnchor: (target: DictationDraftTarget, span: DictationTextSpan) => void;
+  getAnchor: (target: DictationDraftTarget) => TrackedTextRange | null;
+  /** Drops the session's anchors in every draft; its records stay. */
+  releaseAnchors: (sessionId: string) => void;
   clear: () => void;
 }
 
@@ -100,26 +151,46 @@ function sameRange(a: TrackedTextRange, b: TrackedTextRange): boolean {
   return a.from === b.from && a.to === b.to && a.edited === b.edited;
 }
 
+function sameSpan(a: DictationTextSpan | undefined, b: DictationTextSpan | undefined): boolean {
+  return a === b || (!!a && !!b && a.from === b.from && a.to === b.to);
+}
+
 function mapRecord(record: DictationRecord, change: TextChange): DictationRecord {
   const range = mapTextRange(record.range, change);
+  const learningSpan = record.learningSpan && mapSpanKeepingEdits(record.learningSpan, change);
   let utterancesChanged = false;
   const utterances = record.utterances.map((utterance) => {
+    const separatorAfter =
+      utterance.separatorAfter && mapTextRange(utterance.separatorAfter, change);
     const mapped = {
       ...utterance,
       range: mapTextRange(utterance.range, change),
       insertion: mapTextRange(utterance.insertion, change),
+      ...(separatorAfter ? { separatorAfter } : {}),
     };
     if (
       sameRange(mapped.range, utterance.range) &&
-      sameRange(mapped.insertion, utterance.insertion)
+      sameRange(mapped.insertion, utterance.insertion) &&
+      (!separatorAfter || sameRange(separatorAfter, utterance.separatorAfter!))
     ) {
       return utterance;
     }
     utterancesChanged = true;
     return mapped;
   });
-  if (!utterancesChanged && sameRange(range, record.range)) return record;
-  return { ...record, range, utterances: utterancesChanged ? utterances : record.utterances };
+  if (
+    !utterancesChanged &&
+    sameRange(range, record.range) &&
+    sameSpan(learningSpan, record.learningSpan)
+  ) {
+    return record;
+  }
+  return {
+    ...record,
+    range,
+    utterances: utterancesChanged ? utterances : record.utterances,
+    ...(learningSpan ? { learningSpan } : {}),
+  };
 }
 
 /**
@@ -138,6 +209,7 @@ function withInsertion(
   const records = drafts[key] ?? [];
   const index = records.findIndex((record) => record.sessionId === target.sessionId);
   const utterances = utterance ? [utterance] : [];
+  const words = utterance ? { from: utterance.range.from, to: utterance.range.to } : undefined;
 
   if (index < 0) {
     const record: DictationRecord = {
@@ -147,12 +219,20 @@ function withInsertion(
       projectId: target.projectId,
       range: unedited(insertion),
       utterances,
+      ...(words ? { learningSpan: words } : {}),
     };
     return { ...drafts, [key]: [...records, record] };
   }
 
   const existing = records[index]!;
   const contiguous = insertion.from === existing.range.to;
+  const learningSpan =
+    words && existing.learningSpan
+      ? {
+          from: Math.min(existing.learningSpan.from, words.from),
+          to: Math.max(existing.learningSpan.to, words.to),
+        }
+      : (words ?? existing.learningSpan);
   const record: DictationRecord = {
     ...existing,
     range: {
@@ -161,19 +241,56 @@ function withInsertion(
       edited: existing.range.edited || !contiguous,
     },
     utterances: [...existing.utterances, ...utterances],
+    ...(learningSpan ? { learningSpan } : {}),
   };
   return { ...drafts, [key]: records.map((r, i) => (i === index ? record : r)) };
 }
 
+// One-shot and keyed by draft: a write that never lands as expected (another
+// write got there first) is simply diffed, as every other write is.
+const expectedChanges = new Map<string, { before: string; after: string; change: TextChange }>();
+
+function changeFor(key: string, before: string, after: string): TextChange {
+  const expected = expectedChanges.get(key);
+  if (expected?.before === before && expected.after === after) return expected.change;
+  return minimalDocChange(before, after)!;
+}
+
+function mapAnchors(
+  anchors: Record<string, DictationAnchor[]>,
+  previous: Map<string, string>,
+  next: Map<string, string>
+): Record<string, DictationAnchor[]> | null {
+  let nextAnchors: Record<string, DictationAnchor[]> | null = null;
+  for (const [key, list] of Object.entries(anchors)) {
+    const after = next.get(key) ?? "";
+    const before = previous.get(key) ?? "";
+    if (after === before) continue;
+    nextAnchors ??= { ...anchors };
+    if (after === "") {
+      delete nextAnchors[key];
+      continue;
+    }
+    const change = changeFor(key, before, after);
+    nextAnchors[key] = list.map((anchor) => ({
+      ...anchor,
+      range: mapTextRange(anchor.range, change),
+    }));
+  }
+  return nextAnchors;
+}
+
 export const useDictationRangeStore = create<DictationRangeState>()((set, get) => ({
   drafts: {},
+  anchors: {},
 
-  recordUtterance: (target, { insertion, words, transcriptId }) =>
+  recordUtterance: (target, { insertion, words, separatorAfter, transcriptId }) =>
     set((state) => ({
       drafts: withInsertion(state.drafts, target, insertion, {
         id: crypto.randomUUID(),
         range: unedited(words),
         insertion: unedited(insertion),
+        ...(separatorAfter ? { separatorAfter: unedited(separatorAfter) } : {}),
         ...(transcriptId ? { transcriptId } : {}),
       }),
     })),
@@ -200,6 +317,17 @@ export const useDictationRangeStore = create<DictationRangeState>()((set, get) =
         : last.insertion.to;
     const from = last.insertion.from;
     if (to > draft.length) return null;
+    // The space the words were given ahead of the text after them goes with
+    // them, so that text is left as it was before they landed.
+    const separator = last.separatorAfter;
+    const end =
+      separator &&
+      !separator.edited &&
+      separator.from === to &&
+      separator.to <= draft.length &&
+      draft.slice(separator.from, separator.to).trim() === ""
+        ? separator.to
+        : to;
     const trimmed: DictationRecord = {
       ...record,
       // Taking the text off the envelope's end keeps a clean envelope clean.
@@ -212,11 +340,13 @@ export const useDictationRangeStore = create<DictationRangeState>()((set, get) =
     set((state) => ({
       drafts: { ...state.drafts, [key]: records.map((r, i) => (i === index ? trimmed : r)) },
     }));
-    return { from, to };
+    return { from, to: end };
   },
 
   mapDrafts: (previous, next) => {
-    const { drafts } = get();
+    const { drafts, anchors } = get();
+    const nextAnchors = mapAnchors(anchors, previous, next);
+    if (nextAnchors) set({ anchors: nextAnchors });
     let nextDrafts: Record<string, DictationRecord[]> | null = null;
     for (const [key, records] of Object.entries(drafts)) {
       const after = next.get(key) ?? "";
@@ -227,10 +357,15 @@ export const useDictationRangeStore = create<DictationRangeState>()((set, get) =
         delete nextDrafts[key];
         continue;
       }
-      const change = minimalDocChange(before, after)!;
+      const change = changeFor(key, before, after);
       nextDrafts[key] = records.map((record) => mapRecord(record, change));
     }
+    expectedChanges.clear();
     if (nextDrafts) set({ drafts: nextDrafts });
+  },
+
+  expectDraftChange: (panelId, projectId, before, after, change) => {
+    expectedChanges.set(makeDraftKey(panelId, projectId), { before, after, change });
   },
 
   getDictation: (id) => {
@@ -261,7 +396,44 @@ export const useDictationRangeStore = create<DictationRangeState>()((set, get) =
       return state;
     }),
 
-  clear: () => set((state) => (Object.keys(state.drafts).length === 0 ? state : { drafts: {} })),
+  setAnchor: (target, span) =>
+    set((state) => {
+      const key = makeDraftKey(target.panelId, target.projectId);
+      const others = (state.anchors[key] ?? []).filter((a) => a.sessionId !== target.sessionId);
+      return {
+        anchors: {
+          ...state.anchors,
+          [key]: [...others, { sessionId: target.sessionId, range: unedited(span) }],
+        },
+      };
+    }),
+
+  getAnchor: (target) =>
+    get().anchors[makeDraftKey(target.panelId, target.projectId)]?.find(
+      (anchor) => anchor.sessionId === target.sessionId
+    )?.range ?? null,
+
+  releaseAnchors: (sessionId) =>
+    set((state) => {
+      let anchors: Record<string, DictationAnchor[]> | null = null;
+      for (const [key, list] of Object.entries(state.anchors)) {
+        if (!list.some((a) => a.sessionId === sessionId)) continue;
+        anchors ??= { ...state.anchors };
+        const remaining = list.filter((a) => a.sessionId !== sessionId);
+        if (remaining.length > 0) anchors[key] = remaining;
+        else delete anchors[key];
+      }
+      return anchors ? { anchors } : state;
+    }),
+
+  clear: () => {
+    expectedChanges.clear();
+    set((state) =>
+      Object.keys(state.drafts).length === 0 && Object.keys(state.anchors).length === 0
+        ? state
+        : { drafts: {}, anchors: {} }
+    );
+  },
 }));
 
 /**
