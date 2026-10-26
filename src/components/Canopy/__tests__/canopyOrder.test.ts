@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   CANOPY_RANK_IDLE_MS,
   CANOPY_RANK_SPACING_MS,
+  canopyReorderWaiting,
   nextCanopyOrder,
   type CanopyOrder,
   type CanopyRankInput,
@@ -208,10 +209,10 @@ describe("nextCanopyOrder", () => {
     ]);
   });
 
-  it("places each score as it lands while revealing, under the pointer and before the scan ends", () => {
+  it("places each score as it lands while revealing, before the scan ends", () => {
     const step = nextCanopyOrder(
       order(["b", "a"], { rankedFor: 2 }),
-      input({ a: 90, b: 40 }, { revealing: true, pointerInList: true })
+      input({ a: 90, b: 40 }, { revealing: true })
     );
     expect(idsOf(step)).toEqual(["a", "b"]);
     expect(
@@ -226,5 +227,35 @@ describe("nextCanopyOrder", () => {
         input({ a: 90, b: 40 }, { revealing: true, pressing: true })
       )
     ).toEqual({ kind: "hold" });
+  });
+
+  it("holds a revealing list under the pointer, but still places an ask newly urgent", () => {
+    expect(
+      nextCanopyOrder(
+        order(["b", "a"], { rankedFor: 2 }),
+        input({ a: 90, b: 40 }, { revealing: true, pointerInList: true })
+      )
+    ).toEqual({ kind: "hold" });
+    expect(
+      idsOf(
+        nextCanopyOrder(
+          order(["b", "a"], { rankedFor: 2 }),
+          input({ a: 95, b: 40 }, { revealing: true, pointerInList: true, urgent: ["a"] })
+        )
+      )
+    ).toEqual(["a", "b"]);
+  });
+
+  it("offers a held reorder only once a scan has read one that clears the margin", () => {
+    // A scan landed since the rank, and the run it read clearly passes another.
+    expect(canopyReorderWaiting(order(["b", "a"]), input({ a: 90, b: 40 }))).toBe(true);
+    // Nothing read since the rank: the clock alone never offers a move.
+    expect(canopyReorderWaiting(order(["b", "a"], { rankedFor: 2 }), input({ a: 90, b: 40 }))).toBe(
+      false
+    );
+    // Read, but within the margin: noise, not a move.
+    expect(canopyReorderWaiting(order(["b", "a"]), input({ a: 45, b: 40 }))).toBe(false);
+    expect(canopyReorderWaiting(order(["a", "b"]), input({ a: 90, b: 40 }))).toBe(false);
+    expect(canopyReorderWaiting(null, input({ a: 90, b: 40 }))).toBe(false);
   });
 });

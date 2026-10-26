@@ -40,7 +40,8 @@ export interface CanopyRankInput {
   /**
    * Just opened, and readings it set off are still landing: the list shows
    * every run at once in its last known order and moves each to its place as
-   * its score arrives, rather than holding still for a pause.
+   * its score arrives, rather than holding still for a pause — unless the
+   * pointer is over the list.
    */
   revealing?: boolean;
   /** The user pressed Refresh since the last rank. */
@@ -121,8 +122,9 @@ export function nextCanopyOrder(order: CanopyOrder | null, input: CanopyRankInpu
   if (input.pressing) return { kind: "hold" };
   // Revealing, every score that lands moves its run at once — a classification
   // lands well before the scan that asked for it ends, so this goes by the
-  // priorities themselves rather than the scan's mark.
-  if (input.revealing) {
+  // priorities themselves rather than the scan's mark. The pointer over the
+  // list holds it even then: the user is reading where things are.
+  if (input.revealing && !input.pointerInList) {
     return sameIds(ranked.ids, order.ids) && !stale
       ? { kind: "hold" }
       : { kind: "set", order: ranked, ranked: true };
@@ -133,6 +135,19 @@ export function nextCanopyOrder(order: CanopyOrder | null, input: CanopyRankInpu
     input.lastRankAt + CANOPY_RANK_SPACING_MS - input.now
   );
   return wait <= 0 ? { kind: "set", order: ranked, ranked: true } : { kind: "wait", ms: wait };
+}
+
+/**
+ * A scan read something new since the list was ranked and placing it would
+ * move rows, but the list is holding still: the reorder the user can apply now.
+ * The clock alone never makes one, and neither does a score within the margin.
+ */
+export function canopyReorderWaiting(
+  order: CanopyOrder | null,
+  input: Pick<CanopyRankInput, "fresh" | "priorities" | "refreshedAt">
+): boolean {
+  if (order === null || order.rankedFor === input.refreshedAt) return false;
+  return !sameIds(rerank(order.ids, input.fresh, input.priorities), order.ids);
 }
 
 function sameIds(a: readonly string[], b: readonly string[]): boolean {

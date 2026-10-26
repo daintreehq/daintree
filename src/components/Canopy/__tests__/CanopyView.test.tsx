@@ -61,6 +61,7 @@ import { notify } from "@/lib/notify";
 import { CanopyView } from "../CanopyView";
 import { CANOPY_TITLE } from "../canopyTerms";
 import { useCanopyStore } from "@/store/canopyStore";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { useProjectStore } from "@/store/projectStore";
 import { __resetCanopySeenForTests } from "@/lib/canopySeen";
@@ -1874,9 +1875,6 @@ describe("CanopyView", () => {
     await frames();
     const order = () => cards(container).map((card) => card.id.replace("canopy-card-", ""));
     expect(order()).toEqual(["waiting", "asking", "working"]);
-    // Placing runs as their scores land is what the open is for: the pointer
-    // resting on the list doesn't hold it.
-    fireEvent.pointerEnter(container.ownerDocument.querySelector<HTMLElement>("[role=listbox]")!);
     act(() =>
       useCanopyStore.setState({
         snapshot: {
@@ -1892,6 +1890,85 @@ describe("CanopyView", () => {
     );
     await frames();
     expect(order()).toEqual(["waiting", "working", "asking"]);
+  });
+
+  it("ends the reveal when the pointer comes into the list, and offers the order it holds back", async () => {
+    const owed = { ...canopySnapshot, busy: true };
+    installElectron(owed);
+    useCanopyStore.setState({ snapshot: owed });
+    const said: string[] = [];
+    const unsubscribe = useAnnouncerStore.subscribe((state, before) => {
+      if (state.polite && state.polite !== before.polite) said.push(state.polite.msg);
+    });
+    const { container } = render(<CanopyView />);
+    await frames();
+    const doc = container.ownerDocument;
+    const order = () => cards(container).map((card) => card.id.replace("canopy-card-", ""));
+    const revealing = () => doc.querySelector("[data-canopy-list][data-revealing]") !== null;
+    const sortNow = () =>
+      Array.from(doc.querySelectorAll<HTMLButtonElement>("button")).find(
+        (button) => button.textContent === "Sort now"
+      );
+    expect(revealing()).toBe(true);
+    fireEvent.pointerEnter(doc.querySelector<HTMLElement>("[role=listbox]")!);
+    expect(revealing()).toBe(false);
+    expect(sortNow()).toBeUndefined();
+    const land = (refreshedAt: number, priority: number) =>
+      act(() =>
+        useCanopyStore.setState({
+          snapshot: {
+            ...owed,
+            refreshedAt,
+            // Far enough above the quiet question to pass it, were the list not held.
+            cards: [
+              { ...stuckCard("working"), priority, attentionScore: priority },
+              quietQuestion("asking"),
+            ],
+          },
+        })
+      );
+    land(NOW + 10_000, 84);
+    await frames();
+    expect(order()).toEqual(["waiting", "asking", "working"]);
+    expect(sortNow()).toBeDefined();
+    land(NOW + 20_000, 83);
+    await frames();
+    const offers = said.filter((msg) => msg.includes("Sort now"));
+    unsubscribe();
+    expect(offers).toHaveLength(1);
+
+    fireEvent.click(sortNow()!);
+    await frames();
+    expect(order()).toEqual(["waiting", "working", "asking"]);
+    expect(sortNow()).toBeUndefined();
+  });
+
+  it("ends the reveal when the user moves the selection", async () => {
+    const owed = { ...canopySnapshot, busy: true };
+    installElectron(owed);
+    useCanopyStore.setState({ snapshot: owed });
+    const { container } = render(<CanopyView />);
+    await frames();
+    const doc = container.ownerDocument;
+    const order = () => cards(container).map((card) => card.id.replace("canopy-card-", ""));
+    expect(doc.querySelector("[data-canopy-list][data-revealing]")).not.toBeNull();
+    fireEvent.keyDown(doc.querySelector<HTMLElement>("[role=listbox]")!, { key: "ArrowDown" });
+    expect(doc.querySelector("[data-canopy-list][data-revealing]")).toBeNull();
+    // The user has just moved: the score waits for the pause, as always.
+    act(() =>
+      useCanopyStore.setState({
+        snapshot: {
+          ...owed,
+          refreshedAt: NOW + 10_000,
+          cards: [
+            { ...stuckCard("working"), priority: 84, attentionScore: 84 },
+            quietQuestion("asking"),
+          ],
+        },
+      })
+    );
+    await frames();
+    expect(order()).toEqual(["waiting", "asking", "working"]);
   });
 
   it("stops revealing once the cards it was owed have landed, and holds still after", async () => {

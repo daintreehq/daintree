@@ -15,6 +15,7 @@ import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCa
 import { useOverlayClaim } from "@/hooks/useOverlayState";
 import { useEffectiveCombo } from "@/hooks";
 import { usePreferencesStore } from "@/store/preferencesStore";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
 import { KbdChord } from "@/components/ui/Kbd";
@@ -596,6 +597,7 @@ function CanopyInbox({
     inbox,
     owedOnOpen,
     revealed,
+    reorderWaiting,
     refreshedAt,
     bodyRef,
     enterList,
@@ -712,6 +714,24 @@ function CanopyInbox({
     if (openedRunId !== null) acknowledgeOpened(openedRunId);
   }, [openedRunId, acknowledgeOpened]);
   const { reserveUndo, undoReads, undoLine } = useCanopyInboxUndo({ hostId, api });
+
+  // A held reorder is said once, not row by row as its scores land.
+  const sortShown = workersShown && reorderWaiting;
+  useEffect(() => {
+    if (sortShown) {
+      useAnnouncerStore
+        .getState()
+        .announce("The inbox has a new order. Sort now applies it", "polite");
+    }
+  }, [sortShown]);
+  // Sort now leaves once the order is applied, by the user or a pause: the
+  // keyboard on it stays in the panel, on the search.
+  const sortFocusedRef = useRef(false);
+  useLayoutEffect(() => {
+    if (sortShown || !sortFocusedRef.current) return;
+    sortFocusedRef.current = false;
+    searchRef.current?.focus({ preventScroll: true });
+  }, [sortShown, searchRef]);
   const {
     readNow,
     handlers,
@@ -1311,6 +1331,21 @@ function CanopyInbox({
                         // The last button's padding hangs into the bar's own, so its
                         // words end on the field's right edge and the rows' meters.
                         <span className="-mr-2.5 flex items-center gap-1">
+                          {sortShown && (
+                            <Button
+                              variant="ghost"
+                              size="xs"
+                              onFocus={() => {
+                                sortFocusedRef.current = true;
+                              }}
+                              onBlur={() => {
+                                sortFocusedRef.current = false;
+                              }}
+                              onClick={requestRank}
+                            >
+                              Sort now
+                            </Button>
+                          )}
                           <Button
                             variant="ghost"
                             size="xs"
