@@ -27,6 +27,17 @@ function fakeHost() {
     "agentDefaults.assistantAgentId": null,
     "idleTerminalNotify.enabled": false,
     "idleTerminalNotify.thresholdMinutes": 60,
+    "agentSettings.resumeOnRestart": "always",
+    "agentSettings.globalUseAltScreen": false,
+    globalEnvironmentVariables: { LANG: "en_US.UTF-8" },
+    "terminalConfig.resourceMonitoringEnabled": false,
+    "terminalConfig.memoryLeakDetectionEnabled": false,
+    "terminalConfig.memoryLeakAutoRestartThresholdMb": 8192,
+    "sessionRestore.enabled": true,
+    "idleBackgroundAutoClose.enabled": false,
+    "idleBackgroundAutoClose.thresholdMinutes": 60,
+    "idleBackgroundAutoClose.includeIdleShells": false,
+    "idleBackgroundAutoClose.idleShellThresholdMinutes": 120,
   };
   const box = { instanceId: "launch-1", canopyRevision: 0, writes: 0 };
   const leaves = (): HostSettingsLeaves => ({
@@ -267,6 +278,96 @@ describe("host settings over a link, with no project or window on the host", () 
     await expect(offline.read({ hostId: HOST })).rejects.toMatchObject({
       code: "HOST_DISCONNECTED",
     });
+  });
+
+  describe("a host from before describe (#14706)", () => {
+    /** Forwards everything but `describe`, which an older host doesn't know. */
+    function olderHost(): SettingsControlSession {
+      return {
+        get isOpen() {
+          return sessions.client.isOpen;
+        },
+        call: async (method, payload, options) => {
+          if (method === SettingsControlLinkMethod.DESCRIBE) {
+            throw new AppError({ code: "UNSUPPORTED", message: "Unknown method" });
+          }
+          return sessions.client.call(method, payload, options);
+        },
+      };
+    }
+
+    it("reads the six it knows and names the rest as unavailable there", async () => {
+      const snapshot = await clientOver(olderHost).read({ hostId: HOST });
+      expect(snapshot.settings.map(({ key }) => key)).toEqual([
+        "canopyMode",
+        "canopyModel",
+        "agentDefaults.defaultAgent",
+        "agentDefaults.assistantAgentId",
+        "idleTerminalNotify.enabled",
+        "idleTerminalNotify.thresholdMinutes",
+      ]);
+      expect(snapshot.unavailable).toContain("globalEnvironmentVariables");
+      expect(snapshot.unavailable).toContain("terminalConfig.resourceMonitoringEnabled");
+      expect(snapshot.unavailable).not.toContain("canopyMode");
+    });
+
+    it("refuses a change to a key it lacks before sending it, and writes nothing", async () => {
+      const writes = state.box.writes;
+      await expect(
+        clientOver(olderHost).update({
+          hostId: HOST,
+          patch: { "sessionRestore.enabled": false },
+          expect: { instanceId: "launch-1", revisions: { "sessionRestore.enabled": "v:true" } },
+        })
+      ).rejects.toMatchObject({
+        code: "UNSUPPORTED",
+        userMessage: expect.stringContaining("too old"),
+      });
+      expect(state.box.writes).toBe(writes);
+    });
+  });
+
+  it("reads every key from a host that describes itself, with none unavailable", async () => {
+    const snapshot = await client.read({ hostId: HOST });
+    expect(snapshot.unavailable).toEqual([]);
+    expect(snapshot.settings).toHaveLength(Object.keys(state.values).length);
+  });
+
+  it("changes the host's environment as a whole, and refuses a stale set", async () => {
+    const before = await client.read({ hostId: HOST, keys: ["globalEnvironmentVariables"] });
+    const leaf = before.settings[0]!;
+    const expectNow = {
+      instanceId: before.instanceId,
+      revisions: { globalEnvironmentVariables: leaf.revision },
+    };
+    const applied = await client.update({
+      hostId: HOST,
+      patch: { globalEnvironmentVariables: { LANG: "C", NO_COLOR: "1" } },
+      expect: expectNow,
+    });
+    expect(applied.outcome).toBe("applied");
+    expect(state.values.globalEnvironmentVariables).toEqual({ LANG: "C", NO_COLOR: "1" });
+
+    // A second Shell still holding the first reading can't write its set over this one.
+    const stale = await clientOver(() => sessions.client).update({
+      hostId: HOST,
+      patch: { globalEnvironmentVariables: {} },
+      expect: expectNow,
+    });
+    expect(stale.outcome).toBe("conflict");
+    expect(state.values.globalEnvironmentVariables).toEqual({ LANG: "C", NO_COLOR: "1" });
+  });
+
+  it("refuses an environment the host wouldn't store before it leaves this machine", async () => {
+    const call = vi.fn(async () => ({}));
+    await expect(
+      clientOver(() => ({ isOpen: true, call })).update({
+        hostId: HOST,
+        patch: { globalEnvironmentVariables: { "A=B": "x" } },
+        expect: { instanceId: "launch-1", revisions: { globalEnvironmentVariables: "r" } },
+      })
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+    expect(call).not.toHaveBeenCalled();
   });
 
   describe("a reply that never comes", () => {

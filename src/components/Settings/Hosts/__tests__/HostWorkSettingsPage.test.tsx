@@ -2,11 +2,12 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+  HostSettingKey,
   HostSettingsSnapshot,
   HostSettingsUpdatePayload,
   HostSettingsUpdateResult,
 } from "@shared/types/hostSettings";
-import { HostSettingsSection } from "../HostSettingsSection";
+import { HostWorkSettingsPage } from "../HostWorkSettingsPage";
 
 const api = {
   read: vi.fn<(payload: { hostId: string }) => Promise<HostSettingsSnapshot>>(),
@@ -16,13 +17,17 @@ const api = {
 function snapshot(
   canopyMode = "unset",
   idle = false,
-  { readsLocally = true }: { readsLocally?: boolean } = {}
+  {
+    readsLocally = true,
+    unavailable = [],
+  }: { readsLocally?: boolean; unavailable?: HostSettingKey[] } = {}
 ): HostSettingsSnapshot {
   return {
     hostId: "studio-01",
     hostName: "Studio",
     scope: "host",
     instanceId: "launch-1",
+    unavailable,
     settings: [
       { key: "canopyMode", value: canopyMode, revision: "3" },
       // A host from before Canopy read locally has no model to report.
@@ -33,6 +38,16 @@ function snapshot(
       { key: "agentDefaults.assistantAgentId", value: null, revision: "r-assist" },
       { key: "idleTerminalNotify.enabled", value: idle, revision: `r-idle-${idle}` },
       { key: "idleTerminalNotify.thresholdMinutes", value: 60, revision: "r-60" },
+      ...(unavailable.includes("globalEnvironmentVariables")
+        ? []
+        : [
+            {
+              key: "globalEnvironmentVariables" as const,
+              value: { LANG: "C" },
+              revision: "r-env",
+            },
+            { key: "sessionRestore.enabled" as const, value: true, revision: "r-restore" },
+          ]),
     ],
   };
 }
@@ -52,11 +67,18 @@ beforeEach(() => {
 
 async function renderSection(connected = true) {
   await act(async () => {
-    render(<HostSettingsSection hostId="studio-01" hostName="Studio" connected={connected} />);
+    render(
+      <HostWorkSettingsPage
+        hostId="studio-01"
+        hostName="Studio"
+        connected={connected}
+        shellVersion="0.47.0"
+      />
+    );
   });
 }
 
-describe("HostSettingsSection (#14167)", () => {
+describe("HostWorkSettingsPage (#14167, #14706)", () => {
   it("reads nothing and offers no controls while the host isn't connected", async () => {
     await renderSection(false);
     expect(api.read).not.toHaveBeenCalled();
@@ -168,5 +190,48 @@ describe("HostSettingsSection (#14167)", () => {
       fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     });
     expect(switchNamed("Show Canopy")).toBeTruthy();
+  });
+
+  it("holds a setting the host's Daintree lacks, naming the update it needs", async () => {
+    api.read.mockResolvedValue(
+      snapshot("unset", false, {
+        unavailable: ["globalEnvironmentVariables", "sessionRestore.enabled"],
+      })
+    );
+    await renderSection();
+    expect(switchNamed("Restore live projects").hasAttribute("disabled")).toBe(true);
+    expect(
+      screen.getAllByText(/Update Daintree on Studio to 0\.47\.0 or later/).length
+    ).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "Save" }).hasAttribute("disabled")).toBe(true);
+    // What it does know stays editable.
+    expect(switchNamed("Alert about idle terminals").hasAttribute("disabled")).toBe(false);
+  });
+
+  it("saves the host's environment as a whole, against the set it read", async () => {
+    api.update.mockResolvedValue({
+      hostId: "studio-01",
+      hostName: "Studio",
+      scope: "host",
+      outcome: "applied",
+      confirmedBy: "reply",
+      instanceId: "launch-1",
+      settings: [{ key: "globalEnvironmentVariables", value: { LANG: "C.UTF-8" }, revision: "r-2" }],
+    });
+    await renderSection();
+    const save = screen.getByRole("button", { name: "Save" });
+    expect(save.hasAttribute("disabled")).toBe(true);
+    fireEvent.change(screen.getByRole("textbox", { name: "Environment variable value" }), {
+      target: { value: "C.UTF-8" },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    });
+    expect(api.update).toHaveBeenCalledWith({
+      hostId: "studio-01",
+      patch: { globalEnvironmentVariables: { LANG: "C.UTF-8" } },
+      expect: { instanceId: "launch-1", revisions: { globalEnvironmentVariables: "r-env" } },
+    });
+    expect(screen.getByRole("button", { name: "Save" }).hasAttribute("disabled")).toBe(true);
   });
 });

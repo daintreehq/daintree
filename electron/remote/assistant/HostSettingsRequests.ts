@@ -9,8 +9,10 @@ import {
   ASSISTANT_HOST_SETTING_KEYS,
   HOST_SETTING_LABELS,
   hostSettingRefusal,
+  isAssistantHostSettingKey,
+  type AssistantHostSettingKey,
   type HostSettingKey,
-  type HostSettingValue,
+  type HostSettingLeaf,
   type HostSettingsPatch,
   type HostSettingsSnapshot,
   type HostSettingsUpdatePayload,
@@ -26,6 +28,22 @@ import {
 } from "../../../shared/config/canopyTerms.js";
 
 type HostRow = HostSettingsResult["hosts"][number];
+type AssistantValue = string | number | boolean | null;
+interface AssistantLeaf {
+  key: AssistantHostSettingKey;
+  value: AssistantValue;
+  revision: string;
+}
+type AssistantSnapshot = Omit<HostSettingsSnapshot, "settings"> & { settings: AssistantLeaf[] };
+
+/** Only the leaves an assistant may see, whatever else a host's answer carries. */
+function assistantLeaves(settings: readonly HostSettingLeaf[]): AssistantLeaf[] {
+  return settings.flatMap(({ key, value, revision }) =>
+    isAssistantHostSettingKey(key) && (typeof value !== "object" || value === null)
+      ? [{ key, value, revision }]
+      : []
+  );
+}
 type Detail = { outcome: HostControlOutcomeCode; detail: string | null; retryAfterMs: null };
 
 export interface HostSettingsRequestDeps {
@@ -96,9 +114,9 @@ interface FrozenHost {
   name: string;
   instanceId: string;
   leaves: Array<{
-    key: HostSettingKey;
-    from: HostSettingValue;
-    to: HostSettingValue;
+    key: AssistantHostSettingKey;
+    from: AssistantValue;
+    to: AssistantValue;
     revision: string;
   }>;
 }
@@ -116,11 +134,11 @@ function codeOf(error: unknown): string | null {
   return typeof code === "string" ? code : null;
 }
 
-function patchKeys(patch: HostSettingsPatch): HostSettingKey[] {
+function patchKeys(patch: HostSettingsPatch): AssistantHostSettingKey[] {
   return ASSISTANT_HOST_SETTING_KEYS.filter((key) => Object.hasOwn(patch, key));
 }
 
-function shown(key: HostSettingKey, value: HostSettingValue): string {
+function shown(key: HostSettingKey, value: AssistantValue): string {
   if (value === null) return "not set";
   if (key === "canopyMode") return value === "unset" ? "off" : String(value);
   if (typeof value === "boolean") return value ? "on" : "off";
@@ -196,7 +214,7 @@ export class HostSettingsRequests {
   private async readHost(
     hostId: HostId,
     keys: HostSettingKey[]
-  ): Promise<{ row: HostRow; snapshot: HostSettingsSnapshot | null }> {
+  ): Promise<{ row: HostRow; snapshot: AssistantSnapshot | null }> {
     const name = hostId === LOCAL_HOST_ID ? "This machine" : this.deps.hostName(hostId);
     const refuse = (outcome: HostControlOutcomeCode, detail: string) => ({
       row: this.refusedRow(hostId, name ?? hostId, { outcome, detail, retryAfterMs: null }),
@@ -208,7 +226,8 @@ export class HostSettingsRequests {
     const client = this.deps.client();
     if (!client) return refuse("unsupported", UNSUPPORTED_DETAIL);
     try {
-      const snapshot = await client.read({ hostId, keys });
+      const read = await client.read({ hostId, keys });
+      const snapshot: AssistantSnapshot = { ...read, settings: assistantLeaves(read.settings) };
       return {
         row: {
           hostId,
@@ -259,7 +278,7 @@ export class HostSettingsRequests {
       const leaves = snapshot.settings.map((leaf) => ({
         key: leaf.key,
         from: leaf.value,
-        to: patch[leaf.key] as HostSettingValue,
+        to: patch[leaf.key] as AssistantValue,
         revision: leaf.revision,
       }));
       frozen.push({ hostId: row.hostId, name: row.name, instanceId: snapshot.instanceId, leaves });
@@ -415,7 +434,7 @@ export class HostSettingsRequests {
    * own answers, never what the preview assumed.
    */
   private async applyHost(host: FrozenHost, authorized: () => boolean): Promise<HostRow> {
-    const settings = new Map<HostSettingKey, HostSettingValue>(
+    const settings = new Map<AssistantHostSettingKey, AssistantValue>(
       host.leaves.map((leaf) => [leaf.key, leaf.from])
     );
     const row = (outcome: HostControlOutcomeCode, detail: string | null): HostRow => ({
@@ -454,7 +473,7 @@ export class HostSettingsRequests {
           landed ? `${PARTIAL_PREFIX}${refusal.detail ?? ""}` : refusal.detail
         );
       }
-      for (const leaf of result.settings) {
+      for (const leaf of assistantLeaves(result.settings)) {
         settings.set(leaf.key, leaf.value);
         reported.set(leaf.key, leaf.revision);
       }
@@ -471,7 +490,7 @@ export class HostSettingsRequests {
           return row("ambiguous", READBACK_CONFLICT_DETAIL);
         case "unconfirmed":
           // What the preview read is no longer known to stand: left out, not repeated.
-          for (const key of Object.keys(patch) as HostSettingKey[]) settings.delete(key);
+          for (const key of Object.keys(patch) as AssistantHostSettingKey[]) settings.delete(key);
           return row("ambiguous", UNCONFIRMED_DETAIL);
       }
     };

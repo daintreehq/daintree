@@ -31,6 +31,28 @@ vi.mock("../../../services/IdleTerminalNotificationService.js", () => ({
   }),
 }));
 vi.mock("../../../services/hostInstance.js", () => ({ hostInstanceId: "this-launch" }));
+const stored = vi.hoisted(() => ({
+  values: {} as Record<string, unknown>,
+  set: vi.fn(),
+}));
+vi.mock("../../../store.js", () => ({
+  store: {
+    get: (key: string) => stored.values[key],
+    set: stored.set,
+  },
+}));
+const pty = vi.hoisted(() => ({ setResourceMonitoring: vi.fn() }));
+vi.mock("../../../window/serviceRefs.js", () => ({ getPtyClient: () => pty }));
+const sleep = vi.hoisted(() => ({
+  config: { enabled: false, thresholdMinutes: 60, includeIdleShells: false, idleShellThresholdMinutes: 120 },
+  updateConfig: vi.fn(),
+}));
+vi.mock("../../../services/IdleBackgroundAutoCloseService.js", () => ({
+  getIdleBackgroundAutoCloseService: () => ({
+    getConfig: () => ({ ...sleep.config }),
+    updateConfig: sleep.updateConfig,
+  }),
+}));
 
 import { loadHostSettingsLeaves } from "../hostLeaves.js";
 
@@ -40,6 +62,10 @@ beforeEach(() => {
   canopy.checkCanopyModeRate.mockReset();
   defaults.setAgentDefaults.mockReset();
   idle.updateConfig.mockReset();
+  stored.values = {};
+  stored.set.mockReset();
+  pty.setResourceMonitoring.mockReset();
+  sleep.updateConfig.mockReset();
 });
 
 describe("the host's own setters for named settings (#14167)", () => {
@@ -90,5 +116,43 @@ describe("the host's own setters for named settings (#14167)", () => {
     );
     expect(idle.updateConfig).not.toHaveBeenCalled();
     expect(canopy.changeCanopyMode).not.toHaveBeenCalled();
+  });
+
+  it("reads stored work settings as this host's views read them, defaults included (#14706)", async () => {
+    const leaves = await loadHostSettingsLeaves();
+    expect(leaves.read("sessionRestore.enabled").value).toBe(true);
+    expect(leaves.read("agentSettings.resumeOnRestart").value).toBe("always");
+    expect(leaves.read("terminalConfig.memoryLeakAutoRestartThresholdMb").value).toBe(8192);
+    // Leak detection follows resource monitoring until it is set on its own.
+    stored.values.terminalConfig = { resourceMonitoringEnabled: true };
+    expect(leaves.read("terminalConfig.memoryLeakDetectionEnabled").value).toBe(true);
+    expect(leaves.read("globalEnvironmentVariables").value).toEqual({});
+  });
+
+  it("gives an environment the same revision whatever order its variables were stored in", async () => {
+    const leaves = await loadHostSettingsLeaves();
+    stored.values.globalEnvironmentVariables = { B: "2", A: "1" };
+    const first = leaves.read("globalEnvironmentVariables");
+    stored.values.globalEnvironmentVariables = { A: "1", B: "2" };
+    expect(leaves.read("globalEnvironmentVariables").revision).toBe(first.revision);
+    stored.values.globalEnvironmentVariables = { A: "1", B: "3" };
+    expect(leaves.read("globalEnvironmentVariables").revision).not.toBe(first.revision);
+  });
+
+  it("writes stored work settings one leaf at a time, tells the pty host, and asks for a refresh", async () => {
+    const leaves = await loadHostSettingsLeaves();
+    const written = leaves.write({
+      "terminalConfig.resourceMonitoringEnabled": true,
+      "sessionRestore.enabled": false,
+      globalEnvironmentVariables: { B: "2", A: "1" },
+      "idleBackgroundAutoClose.idleShellThresholdMinutes": 240,
+    });
+    expect(stored.set).toHaveBeenCalledWith("terminalConfig.resourceMonitoringEnabled", true);
+    expect(pty.setResourceMonitoring).toHaveBeenCalledWith(true);
+    expect(stored.set).toHaveBeenCalledWith("sessionRestore", { enabled: false });
+    expect(stored.set).toHaveBeenCalledWith("globalEnvironmentVariables", { A: "1", B: "2" });
+    expect(sleep.updateConfig).toHaveBeenCalledWith({ idleShellThresholdMinutes: 240 });
+    expect(stored.set).not.toHaveBeenCalledWith("agentSettings", expect.anything());
+    expect(written.reconcile).toBe(true);
   });
 });

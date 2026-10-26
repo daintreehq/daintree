@@ -585,7 +585,7 @@ function SettingsDialogInner({
   const shownSubpage = subpage && subpage.tab === activeTab && !isSearching ? subpage : null;
 
   const [panelSettled, markPanelInteracted] = usePanelSettled(
-    `${isOpen}|${isSearching}|${activeTab}|${activeSubtabs[activeTab] ?? ""}`
+    `${isOpen}|${isSearching}|${showHostPage ? `host:${target?.hostId}` : activeTab}|${activeSubtabs[activeTab] ?? ""}`
   );
 
   // What a gated result depends on, held until its landing reports whether the setting
@@ -1115,22 +1115,20 @@ function SettingsDialogInner({
                 is a role="tab" whose aria-controls points at one of these panels, and a
                 tab pointing at an id that is not in the document is a broken reference
                 for assistive tech — the panels have to outlive the search overlay. */}
-              {editingOther && target && (
-                <div
-                  role="tabpanel"
-                  id={HOST_WORK_PANEL_ID}
-                  aria-labelledby="settings-tab-host-work"
-                  tabIndex={0}
-                  className={showHostPage && !isSearching ? SETTINGS_PANEL_CLASS : "hidden"}
+              {editingOther && target?.hostId && (
+                <HostWorkPanel
+                  isActive={showHostPage && !isSearching}
+                  panelSettled={panelSettled}
+                  onInteract={markPanelInteracted}
                 >
                   <HostWorkSettingsPage
                     key={target.hostId}
-                    hostId={target.hostId ?? ""}
+                    hostId={target.hostId}
                     hostName={target.name}
                     connected={target.connected}
                     shellVersion={appVersion || undefined}
                   />
-                </div>
+                </HostWorkPanel>
               )}
               <div
                 className={panelsHidden ? "hidden" : undefined}
@@ -1900,6 +1898,33 @@ export function NavItem({
 }
 
 const HOST_WORK_PANEL_ID = "settings-panel-host-work";
+
+function HostWorkPanel({
+  isActive,
+  panelSettled,
+  onInteract,
+  children,
+}: {
+  isActive: boolean;
+  panelSettled: boolean;
+  onInteract: (event: { target: EventTarget }) => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      role="tabpanel"
+      id={HOST_WORK_PANEL_ID}
+      aria-labelledby="settings-tab-host-work"
+      tabIndex={0}
+      className={isActive ? SETTINGS_PANEL_CLASS : "hidden"}
+      data-settings-settling={isActive && panelSettled ? undefined : ""}
+      onPointerDownCapture={onInteract}
+      onKeyDownCapture={onInteract}
+    >
+      {children}
+    </div>
+  );
+}
 
 /**
  * The picked machine's work settings, one page outside the tab registry: it
