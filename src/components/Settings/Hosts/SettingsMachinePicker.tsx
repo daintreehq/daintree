@@ -1,5 +1,5 @@
 import { ChevronDown } from "lucide-react";
-import { LOCAL_HOST_ID, type HostId, type HostListEntry } from "@shared/types/remoteHosts";
+import { LOCAL_HOST_ID, type HostConnectionState, type HostId } from "@shared/types/remoteHosts";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -27,7 +27,10 @@ export interface SettingsMachineOption {
  * machine when the window works on a host, then each other paired host.
  */
 export function settingsMachineOptions(
-  hosts: readonly HostListEntry[],
+  hosts: readonly {
+    descriptor: { id: HostId; name: string };
+    connection: { status: HostConnectionState["status"] };
+  }[],
   ownHostId: HostId,
   ownHostName: string | null
 ): SettingsMachineOption[] {

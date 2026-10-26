@@ -13,8 +13,11 @@ import {
   type HostSettingsSnapshot,
   type HostSettingsUpdateResult,
 } from "@shared/types/hostSettings";
-import type { ResumeOnRestart } from "@shared/types/agentSettings";
-import type { IdleShellThresholdMinutes } from "@shared/types/ipc/idleBackgroundAutoClose";
+import { isResumeOnRestart, type ResumeOnRestart } from "@shared/types/agentSettings";
+import {
+  isIdleShellThresholdMinutes,
+  type IdleShellThresholdMinutes,
+} from "@shared/types/ipc/idleBackgroundAutoClose";
 import { isSensitiveEnvKey } from "@shared/utils/envVars";
 import { canopyLocalOn, canopyStopOn } from "@/components/Canopy/canopyTerms";
 import { clientErrorText } from "@/utils/clientAppError";
@@ -336,7 +339,7 @@ export function HostWorkSettingsPage({
             label="Resume agents after restart"
             description={`What agent panes on ${hostName} do when Daintree there restarts`}
             options={RESUME_OPTIONS}
-            value={typeof resume === "string" ? (resume as ResumeOnRestart) : null}
+            value={isResumeOnRestart(resume) ? resume : null}
             onChange={(next) => void change("agentSettings.resumeOnRestart", next)}
             disabled={lockedFor("agentSettings.resumeOnRestart")}
             disabledReason={reasonFor("agentSettings.resumeOnRestart")}
@@ -539,17 +542,19 @@ export function HostWorkSettingsPage({
                 label="Sleep after"
                 description="How long a project with terminals stays off screen with no terminal input or output"
                 options={IDLE_SHELL_OPTIONS}
-                value={
-                  typeof shellThreshold === "number"
-                    ? (shellThreshold as IdleShellThresholdMinutes)
-                    : null
-                }
+                value={isIdleShellThresholdMinutes(shellThreshold) ? shellThreshold : null}
                 onChange={(next) =>
                   void change("idleBackgroundAutoClose.idleShellThresholdMinutes", next)
                 }
                 disabled={lockedFor("idleBackgroundAutoClose.idleShellThresholdMinutes")}
                 disabledReason={reasonFor("idleBackgroundAutoClose.idleShellThresholdMinutes")}
               />
+              {errorFor("idleBackgroundAutoClose.idleShellThresholdMinutes") && (
+                <SettingsRow
+                  label="Couldn't change when idle terminals sleep"
+                  error={errorFor("idleBackgroundAutoClose.idleShellThresholdMinutes")}
+                />
+              )}
             </SettingsDependents>
           </SettingsDependents>
         </SettingsGroup>
@@ -720,6 +725,7 @@ function HostEnvironmentSection({
               }
               onDelete={() => setRows((prev) => prev.filter((_, i) => i !== index))}
               valuePlaceholder="e.g. /usr/local/bin"
+              disabled={busy}
             />
           ))
         )}

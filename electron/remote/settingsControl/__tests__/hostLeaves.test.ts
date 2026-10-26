@@ -132,6 +132,29 @@ describe("the host's own setters for named settings (#14167)", () => {
     stored.values.terminalConfig = { resourceMonitoringEnabled: true };
     expect(leaves.read("terminalConfig.memoryLeakDetectionEnabled").value).toBe(true);
     expect(leaves.read("globalEnvironmentVariables").value).toEqual({});
+    // And what is stored, once set.
+    stored.values.sessionRestore = { enabled: false };
+    stored.values.agentSettings = { resumeOnRestart: "never", globalUseAltScreen: true };
+    stored.values.terminalConfig = {
+      resourceMonitoringEnabled: true,
+      memoryLeakDetectionEnabled: false,
+      memoryLeakAutoRestartThresholdMb: 4096,
+    };
+    expect(leaves.read("sessionRestore.enabled").value).toBe(false);
+    expect(leaves.read("agentSettings.resumeOnRestart").value).toBe("never");
+    expect(leaves.read("agentSettings.globalUseAltScreen").value).toBe(true);
+    expect(leaves.read("terminalConfig.memoryLeakDetectionEnabled").value).toBe(false);
+    expect(leaves.read("terminalConfig.memoryLeakAutoRestartThresholdMb").value).toBe(4096);
+    sleep.config.thresholdMinutes = 90;
+    expect(leaves.read("idleBackgroundAutoClose.thresholdMinutes").value).toBe(90);
+    sleep.config.thresholdMinutes = 60;
+  });
+
+  it("asks for a refresh after an idle-project change alone, which has no broadcast of its own", async () => {
+    const leaves = await loadHostSettingsLeaves();
+    expect(leaves.write({ "idleBackgroundAutoClose.enabled": true }).reconcile).toBe(true);
+    expect(stored.set).not.toHaveBeenCalled();
+    expect(sleep.updateConfig).toHaveBeenCalledWith({ enabled: true });
   });
 
   it("gives an environment the same revision whatever order its variables were stored in", async () => {

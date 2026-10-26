@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import type { HostListEntry } from "@shared/types/remoteHosts";
 
 vi.mock("@/lib/platform", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/platform")>()),
@@ -8,14 +7,11 @@ vi.mock("@/lib/platform", async (importOriginal) => ({
 
 import { settingsMachineOptions } from "../SettingsMachinePicker";
 
-function host(id: string, name: string, connected: boolean): HostListEntry {
+function host(id: string, name: string, connected: boolean) {
   return {
     descriptor: { id, name },
-    connection: connected
-      ? ({ status: "connected" } as HostListEntry["connection"])
-      : { status: "disconnected" },
-    summary: null,
-  } as HostListEntry;
+    connection: { status: connected ? ("connected" as const) : ("disconnected" as const) },
+  };
 }
 
 describe("settingsMachineOptions (#14706)", () => {

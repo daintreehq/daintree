@@ -275,8 +275,8 @@ function SettingsDialogInner({
   const target =
     machineOptions.find((option) => option.hostId !== null && option.hostId === targetHostId) ??
     null;
-  // A device page opened while another machine is picked; picking again shows its work settings.
-  const [deviceTabFor, setDeviceTabFor] = useState<HostId | null>(null);
+  const showingDevicePage = useSettingsTargetStore((s) => s.showingDevicePage);
+  const setShowingDevicePage = useSettingsTargetStore((s) => s.setShowingDevicePage);
   // Another machine's work settings own the page; this machine's device pages stay listed.
   const editingOther = target !== null && activeScope === "global";
 
@@ -336,10 +336,7 @@ function SettingsDialogInner({
   // activeTab is read non-reactively via useEffectEvent to avoid re-running
   // this reset-on-open effect when the user changes tabs mid-session.
   const handleOpenChange = useEffectEvent(() => {
-    if (isOpen) {
-      setTargetHostId(null);
-      setDeviceTabFor(null);
-    }
+    if (isOpen) setTargetHostId(null);
     if (isOpen && defaultTab) {
       markTabVisited(defaultTab);
       if (defaultTab !== activeTab) {
@@ -588,7 +585,10 @@ function SettingsDialogInner({
   const matchCounts = useMemo(() => countMatchesPerTab(searchResults), [searchResults]);
 
   const isSearching = searchQuery.trim().length > 0;
-  const showHostPage = editingOther && deviceTabFor !== target.hostId;
+  // Only this machine's own pages ever show under another machine's pick: anything
+  // else (a page remembered from project scope) gives way to the picked machine's.
+  const showHostPage =
+    editingOther && (!showingDevicePage || ownerForTab(activeTab) !== "device");
   const panelsHidden = isSearching || showHostPage;
   const shownSubpage = subpage && subpage.tab === activeTab && !isSearching ? subpage : null;
 
@@ -638,7 +638,7 @@ function SettingsDialogInner({
       return;
     }
     markTabVisited(tab);
-    if (target) setDeviceTabFor(target.hostId);
+    if (editingOther && ownerForTab(tab) === "device") setShowingDevicePage(true);
     setSearchQuery("");
     setHiddenSettingBanner(null);
     pendingRequirementRef.current = requiresEnabled ?? null;
@@ -707,7 +707,7 @@ function SettingsDialogInner({
 
   const handleNavSelect = (tab: SettingsTab) => {
     setFocusedNavTab(null);
-    if (target) setDeviceTabFor(target.hostId);
+    if (editingOther && ownerForTab(tab) === "device") setShowingDevicePage(true);
     const cannotSuspend = visitedTabs.has(tab) || isSettingsTabLoaded(tab);
     markTabVisited(tab);
     setSearchQuery("");
@@ -724,7 +724,7 @@ function SettingsDialogInner({
 
   const handleHostPageSelect = () => {
     setFocusedNavTab(null);
-    setDeviceTabFor(null);
+    setShowingDevicePage(false);
     setSearchQuery("");
     setScrollToSection(null);
     setHiddenSettingBanner(null);
@@ -732,7 +732,6 @@ function SettingsDialogInner({
 
   const handleMachineChange = (hostId: HostId | null) => {
     setTargetHostId(hostId);
-    setDeviceTabFor(null);
     setSearchQuery("");
     setHiddenSettingBanner(null);
   };
@@ -757,7 +756,9 @@ function SettingsDialogInner({
   // Manual activation: the arrow keys move focus without selecting, so the one tab
   // stop has to follow focus rather than stay on the selected tab. Null means "the
   // selected tab", which is also where it returns once focus leaves the list.
-  const [focusedNavTab, setFocusedNavTab] = useState<SettingsTab | null>(null);
+  const [focusedNavTab, setFocusedNavTab] = useState<SettingsTab | typeof HOST_WORK_TAB | null>(
+    null
+  );
 
   // A deep link or search hit can land on a tab below the nav's fold — MCP, Plugins,
   // Run history — leaving the page with no visible "you are here". Keep the active
@@ -817,7 +818,9 @@ function SettingsDialogInner({
     // covers activation without an explicit keydown branch here.
     const next = tabs[nextIndex]!;
     const nextTab = next.dataset.tab;
-    setFocusedNavTab(nextTab && isSettingsTab(nextTab) ? nextTab : null);
+    setFocusedNavTab(
+      nextTab === HOST_WORK_TAB ? HOST_WORK_TAB : nextTab && isSettingsTab(nextTab) ? nextTab : null
+    );
     next.focus();
   };
 
@@ -941,7 +944,7 @@ function SettingsDialogInner({
               <NavGroup label={target.name}>
                 <HostWorkNavItem
                   selected={showHostPage}
-                  tabStop={focusedNavTab === null && showHostPage}
+                  tabStop={(focusedNavTab ?? (showHostPage ? HOST_WORK_TAB : null)) === HOST_WORK_TAB}
                   isSearching={isSearching}
                   onSelect={handleHostPageSelect}
                 />
@@ -1907,6 +1910,7 @@ export function NavItem({
   );
 }
 
+const HOST_WORK_TAB = "host-work";
 const HOST_WORK_PANEL_ID = "settings-panel-host-work";
 
 function HostWorkPanel({
@@ -1956,6 +1960,7 @@ function HostWorkNavItem({
     <button
       role="tab"
       id="settings-tab-host-work"
+      data-tab={HOST_WORK_TAB}
       aria-selected={selected}
       aria-controls={HOST_WORK_PANEL_ID}
       tabIndex={tabStop ? 0 : -1}

@@ -179,6 +179,21 @@ export function hostSettingRefusal(key: HostSettingKey, value: unknown): string 
   }
 }
 
+/**
+ * Whether a value a host reports can stand as its reading. The same as what it
+ * would store, except the environment: one saved there before these limits
+ * (the host's own Settings sets none) still reads, so it never blocks the rest.
+ */
+export function hostSettingReadable(key: HostSettingKey, value: unknown): boolean {
+  if (key !== "globalEnvironmentVariables") return hostSettingRefusal(key, value) === null;
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.values(value).every((text) => typeof text === "string")
+  );
+}
+
 const agentId = z.string().min(1).max(128).nullable();
 const idleMinutes = z
   .number()

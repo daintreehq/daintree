@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   hostSettingRefusal,
@@ -44,7 +45,12 @@ function fakeHost() {
     instanceId: box.instanceId,
     read: (key) => ({
       value: values[key],
-      revision: key === "canopyMode" ? `${box.canopyRevision}` : `v:${JSON.stringify(values[key])}`,
+      revision:
+        key === "canopyMode"
+          ? `${box.canopyRevision}`
+          : key === "globalEnvironmentVariables"
+            ? `e:${createHash("sha256").update(JSON.stringify(values[key])).digest("hex").slice(0, 32)}`
+            : `v:${JSON.stringify(values[key])}`,
     }),
     refusal: hostSettingRefusal,
     write: (patch: HostSettingsPatch) => {
@@ -59,7 +65,11 @@ function fakeHost() {
         [HostSettingKey, HostSettingValue]
       >) {
         if (key === "canopyMode" && value !== values.canopyMode) box.canopyRevision++;
-        values[key] = value;
+        // Like the real host, an environment is stored in name order.
+        values[key] =
+          key === "globalEnvironmentVariables" && typeof value === "object" && value !== null
+            ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)))
+            : value;
         box.writes++;
       }
       return { reconcile: Object.keys(patch).some((key) => key.startsWith("idleTerminalNotify.")) };
@@ -356,6 +366,38 @@ describe("host settings over a link, with no project or window on the host", () 
     });
     expect(stale.outcome).toBe("conflict");
     expect(state.values.globalEnvironmentVariables).toEqual({ LANG: "C", NO_COLOR: "1" });
+  });
+
+  it("reads a host whose environment is past the write limits, and its other settings with it", async () => {
+    state.values.globalEnvironmentVariables = { BIG: "x".repeat(40_000) };
+    const snapshot = await client.read({ hostId: HOST });
+    expect(snapshot.settings.some((leaf) => leaf.key === "sessionRestore.enabled")).toBe(true);
+  });
+
+  it("confirms a lost environment change from a readback that lists the variables in another order", async () => {
+    const before = await client.read({ hostId: HOST, keys: ["globalEnvironmentVariables"] });
+    // The host stores (and reports) its variables in name order.
+    const losing = clientOver(() => ({
+      get isOpen() {
+        return sessions.client.isOpen;
+      },
+      call: async (method, payload, options) => {
+        const answer = await sessions.client.call(method, payload, options);
+        if (method === SettingsControlLinkMethod.UPDATE) {
+          throw new AppError({ code: "INTERNAL", message: "No reply" });
+        }
+        return answer;
+      },
+    }));
+    const result = await losing.update({
+      hostId: HOST,
+      patch: { globalEnvironmentVariables: { ZED: "1", ALPHA: "2" } },
+      expect: {
+        instanceId: before.instanceId,
+        revisions: { globalEnvironmentVariables: before.settings[0]!.revision },
+      },
+    });
+    expect(result).toMatchObject({ outcome: "applied", confirmedBy: "readback" });
   });
 
   it("refuses an environment the host wouldn't store before it leaves this machine", async () => {

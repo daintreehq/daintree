@@ -2,7 +2,7 @@ import {
   HOST_SETTING_KEYS,
   HostSettingsDescriptionSchema,
   LEGACY_HOST_SETTING_KEYS,
-  hostSettingRefusal,
+  hostSettingReadable,
   HostSettingsPatchSchema,
   HostSettingsReadingSchema,
   HostSettingsUpdateReplySchema,
@@ -62,7 +62,7 @@ function coversExactly(settings: readonly HostSettingLeaf[], keys: readonly Host
   const seen = new Set<HostSettingKey>();
   for (const leaf of settings) {
     if (!keys.includes(leaf.key) || seen.has(leaf.key)) return false;
-    if (hostSettingRefusal(leaf.key, leaf.value) !== null) return false;
+    if (!hostSettingReadable(leaf.key, leaf.value)) return false;
     seen.add(leaf.key);
   }
   return true;

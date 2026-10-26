@@ -26,22 +26,48 @@ describe("hostSettings canopyModel", () => {
 describe("work settings on a host (#14706)", () => {
   it("keeps every key past the original six out of an assistant's reach", async () => {
     const { HostSettingsArgsSchema } = await import("../hostControl.js");
-    const { ASSISTANT_HOST_SETTING_KEYS, HOST_SETTING_KEYS } = await import("../hostSettings.js");
-    const extra = HOST_SETTING_KEYS.filter(
-      (key) => !(ASSISTANT_HOST_SETTING_KEYS as readonly string[]).includes(key)
-    );
-    expect(extra).toContain("globalEnvironmentVariables");
+    const { HOST_SETTING_KEYS } = await import("../hostSettings.js");
+    // Named here, not derived from the allowlist under test.
+    const original = [
+      "canopyMode",
+      "canopyModel",
+      "agentDefaults.defaultAgent",
+      "agentDefaults.assistantAgentId",
+      "idleTerminalNotify.enabled",
+      "idleTerminalNotify.thresholdMinutes",
+    ];
+    const extra = HOST_SETTING_KEYS.filter((key) => !original.includes(key));
+    expect(extra.length).toBeGreaterThan(0);
     for (const key of extra) {
       expect(HostSettingsArgsSchema.safeParse({ operation: "read", keys: [key] }).success).toBe(
         false
       );
     }
-    expect(
-      HostSettingsArgsSchema.safeParse({
-        operation: "preview",
-        patch: { globalEnvironmentVariables: { A: "1" } },
-      }).success
-    ).toBe(false);
+    for (const key of original) {
+      expect(HostSettingsArgsSchema.safeParse({ operation: "read", keys: [key] }).success).toBe(
+        true
+      );
+    }
+    const patches: Record<string, unknown> = {
+      globalEnvironmentVariables: { A: "1" },
+      "agentSettings.globalUseAltScreen": true,
+      "sessionRestore.enabled": false,
+      "terminalConfig.resourceMonitoringEnabled": true,
+    };
+    for (const [key, value] of Object.entries(patches)) {
+      expect(
+        HostSettingsArgsSchema.safeParse({ operation: "preview", patch: { [key]: value } }).success,
+        key
+      ).toBe(false);
+    }
+  });
+
+  it("reads an environment saved before these limits, without letting one be written", async () => {
+    const { hostSettingReadable } = await import("../hostSettings.js");
+    const long = { BIG: "x".repeat(40_000) };
+    expect(hostSettingReadable("globalEnvironmentVariables", long)).toBe(true);
+    expect(hostSettingRefusal("globalEnvironmentVariables", long)).not.toBeNull();
+    expect(hostSettingReadable("globalEnvironmentVariables", { A: 1 })).toBe(false);
   });
 
   it("takes an environment a host would store, and refuses one it wouldn't", () => {
