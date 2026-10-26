@@ -120,6 +120,7 @@ function parseEnvelope(raw: string): Stored | null {
 function readStored(store: Storage, key: string): Stored {
   let raw: string | null;
   try {
+    // storage-key: daintree:plugin-view-state:
     raw = store.getItem(key);
   } catch {
     return { kind: "empty" };
@@ -129,6 +130,7 @@ function readStored(store: Storage, key: string): Stored {
   if (stored) return stored;
   // Unreadable bytes help nobody and would block every later write.
   try {
+    // storage-key: daintree:plugin-view-state:
     store.removeItem(key);
   } catch {
     // Nothing to do: the next read will try again.
@@ -150,6 +152,7 @@ function keysOldestFirst(store: Storage): string[] {
 
 function readStoredQuietly(store: Storage, key: string): number {
   try {
+    // storage-key: daintree:plugin-view-state:
     const raw = store.getItem(key);
     const stored = raw === null ? null : parseEnvelope(raw);
     return stored?.kind === "ok" || stored?.kind === "future" ? stored.savedAt : 0;
@@ -160,6 +163,7 @@ function readStoredQuietly(store: Storage, key: string): number {
 
 function removeQuietly(store: Storage, key: string): boolean {
   try {
+    // storage-key: daintree:plugin-view-state:
     store.removeItem(key);
     return true;
   } catch {
@@ -185,6 +189,7 @@ function pruneTo(store: Storage, limit: number, keep: string): void {
 function writeWithRoom(store: Storage, key: string, value: string): boolean {
   for (;;) {
     try {
+      // storage-key: daintree:plugin-view-state:
       store.setItem(key, value);
       return true;
     } catch {

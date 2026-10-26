@@ -287,7 +287,6 @@ export const SETTING_CATALOG = {
       "daintree:plugin-view-state:*": deviceGlobalOrProject,
       "daintree:repo-stats:obs:*": device,
       "daintree:repo-stats:alias:*": devicePerHost,
-      "kit:viewState:*": deviceGlobalOrProject,
       "daintree_cmd_history_*": devicePerProject,
       "daintree_quickrun_autorestart_*": devicePerProject,
       "daintree_quickrun_expanded_*": devicePerProject,

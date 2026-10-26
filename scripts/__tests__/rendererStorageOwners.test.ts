@@ -38,6 +38,119 @@ localStorage.getItem(K);`,
     );
     expect(use?.keys).toEqual(["one-key", "two-key"]);
   });
+
+  it("reads storage reached through a parameter typed Storage", () => {
+    const [use] = scanSources(
+      src({
+        "a.ts": `function write(store: Storage, key: string) {
+  store.setItem(key, "1");
+}`,
+      })
+    );
+    expect(use).toMatchObject({ how: "storage-call", keys: [] });
+    expect(use?.reason).toMatch(/`key`/);
+  });
+
+  it("reads storage reached through a function declared to return Storage", () => {
+    const uses = scanSources(
+      src({
+        "a.ts": `function storage(): Storage | null {
+  return globalThis.localStorage ?? null;
+}
+const s = storage();
+s?.setItem("x", "1");
+storage()!.removeItem("y");`,
+      })
+    );
+    expect(uses.map((u) => u.keys)).toEqual([["x"], ["y"]]);
+  });
+
+  it("leaves zustand's StateStorage alone", () => {
+    expect(
+      scanSources(
+        src({ "a.ts": `function read(store: StateStorage) { return store.getItem("z"); }` })
+      )
+    ).toEqual([]);
+  });
+
+  it("reads each name through the declaration in its own scope", () => {
+    const files = {
+      "a.ts": `function a() {
+  const key = "daintree-undeclared";
+  localStorage.setItem(key, "1");
+}
+function b() {
+  const key = "daintree-declared";
+  localStorage.setItem(key, "1");
+}`,
+    };
+    expect(scanSources(src(files)).map((u) => u.keys)).toEqual([
+      ["daintree-undeclared"],
+      ["daintree-declared"],
+    ]);
+    expect(checkRendererStorage(src(files), ["daintree-declared"]).map((p) => p.message)).toEqual([
+      expect.stringMatching(/"daintree-undeclared" has no declared owner/),
+    ]);
+  });
+
+  it("never reads a parameter, loop variable or let as a same-named constant", () => {
+    const uses = scanSources(
+      src({
+        "a.ts": `const storageKey = "daintree-declared";
+localStorage.getItem(storageKey);
+function write(storageKey: string) {
+  localStorage.setItem(storageKey, "1");
+}
+for (const storageKey of list) localStorage.removeItem(storageKey);
+function later() {
+  let storageKey = "daintree-declared";
+  localStorage.getItem(storageKey);
+}`,
+      })
+    );
+    expect(uses.map((u) => u.keys)).toEqual([["daintree-declared"], [], [], []]);
+  });
+
+  it("reads an imported constant only from a module inside the scanned tree", () => {
+    const files = {
+      "src/keys.ts": `export const MY_KEY = "daintree-mine";`,
+      "src/a.ts": `import { MY_KEY } from "./keys";\nlocalStorage.getItem(MY_KEY);`,
+      "src/b.ts": `import { MY_KEY } from "@/keys";\nlocalStorage.getItem(MY_KEY);`,
+      "src/c.ts": `import { MY_KEY } from "@shared/keys";\nlocalStorage.getItem(MY_KEY);`,
+      "src/d.ts": `import { MY_KEY } from "../shared/keys";\nlocalStorage.getItem(MY_KEY);`,
+    };
+    const keysByFile = Object.fromEntries(scanSources(src(files)).map((u) => [u.file, u.keys]));
+    expect(keysByFile).toEqual({
+      "src/a.ts": ["daintree-mine"],
+      "src/b.ts": ["daintree-mine"],
+      "src/c.ts": [],
+      "src/d.ts": [],
+    });
+  });
+
+  it("reads a persist store called through a namespace import", () => {
+    const uses = scanSources(
+      src({
+        "a.ts": `import * as mw from "zustand/middleware";
+create(mw.persist(() => ({}), { name: "ns-store" }));
+other.persist(() => ({}), { name: "not-zustand" });`,
+      })
+    );
+    expect(uses).toEqual([expect.objectContaining({ how: "persist-name", keys: ["ns-store"] })]);
+  });
+
+  it("skips a key-named constant marked declared-elsewhere, and any not valued like ours", () => {
+    const uses = scanSources(
+      src({
+        "a.ts": `// storage-key: declared-elsewhere
+export const FIELD_KEY = "daintree-field";
+export const VIEW_KEY_PREFIX = "kit:viewState:";
+export const OTHER_KEY = "daintree-other";
+writeStorage(FIELD_KEY);`,
+      })
+    );
+    expect(uses.map((u) => u.keys)).toEqual([["daintree-other"]]);
+  });
 });
 
 describe("renderer storage check", () => {
