@@ -8,6 +8,13 @@ import type { HostId } from "@shared/types/remoteHosts";
 /** An ask that pages the user: placed in the list at once, whatever is held. */
 function isUrgentItem(item: CanopyItem): boolean {
   const card = item.card;
+  // Observed alone, an approval dialog is the ask that pages.
+  if (card === null) {
+    const run = item.row.run;
+    return (
+      run.agentState === "waiting" && run.waitingReason === "approval" && item.disposition === null
+    );
+  }
   return (
     card !== null &&
     !itemPutAside(item) &&
@@ -31,6 +38,7 @@ export function useCanopyInboxOrder({
   canopy,
   baseItems,
   nowMs,
+  observedAt = null,
 }: {
   isOpen: boolean;
   /** The other host the panel shows, or null for the window's own. */
@@ -40,6 +48,8 @@ export function useCanopyInboxOrder({
   canopy: CanopySnapshot | null;
   baseItems: CanopyItem[];
   nowMs: number;
+  /** With the reader off, no scan marks a re-rank: when Daintree's own view of the fleet last moved. */
+  observedAt?: number | null;
 }) {
   // Every run shows the moment the panel opens, in the order it was left — or,
   // the first time, by what Daintree observes of each — and moves to its place
@@ -50,12 +60,13 @@ export function useCanopyInboxOrder({
   const owedOnOpen = useMemo(() => {
     // Main hasn't answered the open yet: the snapshot in hand is from before
     // it, and says nothing about what the open will read.
+    if (canopy?.activated === false) return false;
     if (canopy?.active !== true) return true;
     const reading = canopy.busy;
     return baseItems.some(
       (item) =>
         item.card?.describing === true ||
-        (reading && item.card === null && item.disposition === null)
+        (reading && item.pending && item.card === null && item.disposition === null)
     );
   }, [baseItems, canopy]);
   const openedAtRef = useRef<number | null>(null);
@@ -90,7 +101,7 @@ export function useCanopyInboxOrder({
 
   // The list moves only at moments the user can expect it to; see `nextCanopyOrder`.
   // Each host keeps its own order: the same run ids mean other runs elsewhere.
-  const refreshedAt = canopy?.refreshedAt ?? null;
+  const refreshedAt = observedAt ?? canopy?.refreshedAt ?? null;
   const ownOrder = useCanopyStore((s) => s.orders[scope]);
   const hostOrder = useCanopyStore((s) => (hostId === null ? undefined : s.hostOrders[hostId]));
   const order = (otherHost ? hostOrder : ownOrder) ?? null;

@@ -689,6 +689,10 @@ describe("the Canopy host picker", () => {
     useCanopyStore.setState({ hostId: "studio" });
     render(<CanopyView />);
     await settle();
+    // Its agents stay listed as it observed them, with the offer one press away.
+    expect(document.body.textContent).not.toContain("Canopy is off on studio-01");
+    fireEvent.click(screen.getByRole("button", { name: "Turn on reading" }));
+    await settle();
     expect(document.body.textContent).toContain("Canopy is off on studio-01");
     expect(document.querySelector("[data-canopy-card]")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Turn on Canopy on studio-01" }));

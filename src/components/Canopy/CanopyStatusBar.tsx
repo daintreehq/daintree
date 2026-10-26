@@ -41,6 +41,7 @@ export function CanopyStatusBar({
   reader,
   model,
   waiting,
+  offer,
 }: {
   /** The other host whose reader this is; null for this computer's own. */
   host?: string | null;
@@ -49,6 +50,8 @@ export function CanopyStatusBar({
   reader: CanopySnapshot["reader"];
   model: CanopySnapshot["model"];
   waiting: CanopySnapshot["waiting"];
+  /** With the reader off: the way to turn it on, offered once and quietly. */
+  offer?: (() => void) | null;
 }) {
   const holdUp = canopyModelHoldUp(model) ?? (waiting === "retrying" ? "Waiting to retry…" : null);
   const working = (reader?.inFlight ?? 0) > 0;
@@ -58,6 +61,14 @@ export function CanopyStatusBar({
       data-canopy-status=""
       className="flex h-7 shrink-0 items-center gap-2 border-t border-divider px-3 text-2xs font-medium tabular-nums text-text-secondary"
     >
+      {offer && (
+        <>
+          <span className="min-w-0 truncate">Agents as Daintree sees them</span>
+          <Button variant="link" size="xs" className="ml-auto h-auto shrink-0 p-0" onClick={offer}>
+            Turn on reading
+          </Button>
+        </>
+      )}
       {reader && (
         <>
           <span className="flex h-3 w-3 shrink-0 items-center justify-center" aria-hidden="true">
@@ -77,9 +88,14 @@ export function CanopyStatusBar({
         </>
       )}
       {/* A hold-up is read out by the status line below: once is enough. */}
-      <span className="ml-auto shrink-0 whitespace-nowrap" aria-hidden={holdUp ? true : undefined}>
-        {holdUp ?? (reader?.readMs != null ? `${formatLinkMs(reader.readMs)} a screen` : null)}
-      </span>
+      {!offer && (
+        <span
+          className="ml-auto shrink-0 whitespace-nowrap"
+          aria-hidden={holdUp ? true : undefined}
+        >
+          {holdUp ?? (reader?.readMs != null ? `${formatLinkMs(reader.readMs)} a screen` : null)}
+        </span>
+      )}
       {model?.status === "failed" && onRetryModel && (
         <Button variant="link" size="xs" className="h-auto shrink-0 p-0" onClick={onRetryModel}>
           Retry

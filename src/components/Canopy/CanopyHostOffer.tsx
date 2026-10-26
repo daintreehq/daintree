@@ -11,9 +11,12 @@ import { canopyLocalOn, canopyStopOn } from "./canopyTerms";
 export function CanopyHostOffer({
   hostName,
   onTurnOn,
+  onBack,
 }: {
   hostName: string;
   onTurnOn: () => Promise<void>;
+  /** Back to the host's agents, which stay listed as it observed them. */
+  onBack?: () => void;
 }) {
   const [pending, setPending] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -57,6 +60,11 @@ export function CanopyHostOffer({
           <Button variant="contrast" disabled={pending} onClick={turnOn}>
             Turn on Canopy on {hostName}
           </Button>
+          {onBack && (
+            <Button variant="outline" disabled={pending} onClick={onBack}>
+              Back to agents
+            </Button>
+          )}
           <p role="status" className="text-xs text-text-secondary">
             {failed ? `Couldn't turn on Canopy on ${hostName}. Try again.` : ""}
           </p>

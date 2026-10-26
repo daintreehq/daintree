@@ -343,14 +343,9 @@ describe("canopy IPC", () => {
     expect(vi.mocked(readPluginTerminalScreen)).not.toHaveBeenCalled();
   });
 
-  it("reads no branch while Canopy is off, or for an id that isn't one", async () => {
+  it("reads no branch for an id that isn't one", async () => {
     state.runs = [{ runId: "run-1", spawnedAt: 100, cwd: "/repo" }];
     const sender = fakeSender(5);
-    state.mode = "unset";
-    expect(
-      (await outcome(invoke(CANOPY_METHOD_CHANNELS.runBranch, sender, "run-1", { spawnedAt: 100 })))
-        .ok
-    ).toBe(false);
     state.mode = "on";
     expect(
       (await outcome(invoke(CANOPY_METHOD_CHANNELS.runBranch, sender, "", { spawnedAt: 100 }))).ok
@@ -398,23 +393,8 @@ describe("canopy IPC", () => {
 
   it.each([
     ["refresh", []],
-    ["watchTerminal", ["run-1", { spawnedAt: 100 }]],
-    ["terminalInput", [1, "y"]],
-    ["terminalResize", [1, 80, 24]],
-    ["terminalSendKey", [1, "enter"]],
-    ["terminalSubmit", [1, "hi"]],
-    ["trash", ["run-1", { spawnedAt: 100 }]],
     ["reread", ["run-1", { spawnedAt: 100 }]],
-    ["rename", ["run-1", { spawnedAt: 100 }, "Login fix"]],
-    ["archive", ["run-1", { spawnedAt: 100 }]],
     ["answer", ["run-1", { spawnedAt: 100 }, "Yes"]],
-    ["unarchive", ["run-1", { spawnedAt: 100 }]],
-    ["markSeen", ["run-1", true, "pane"]],
-    ["setRead", ["run-1", { spawnedAt: 100 }, true]],
-    ["markAllRead", [[{ runId: "run-1", spawnedAt: 100, turn: 0 }]]],
-    ["restoreReads", [[]]],
-    ["runBranch", ["run-1", { spawnedAt: 100 }]],
-    ["searchScreens", [[{ runId: "run-1", spawnedAt: 100, terms: ["error"] }]]],
   ] as const)("refuses %s until Canopy is turned on, touching nothing", async (name, args) => {
     state.mode = "unset";
     const channel = CANOPY_METHOD_CHANNELS[name as keyof typeof CANOPY_METHOD_CHANNELS];
@@ -687,7 +667,7 @@ describe("canopy IPC", () => {
       expect(answered).toBe(true);
     });
 
-    it("refuses a respawned terminal, a title that isn't one, and Canopy off", async () => {
+    it("refuses a respawned terminal, and a title that isn't one", async () => {
       renameView();
       const sender = fakeSender(5);
       const respawned = await outcome(
@@ -703,11 +683,6 @@ describe("canopy IPC", () => {
           ).ok
         ).toBe(false);
       }
-      state.mode = "unset";
-      const off = await outcome(
-        invoke(CANOPY_METHOD_CHANNELS.rename, sender, "run-1", { spawnedAt: 100 }, "x")
-      );
-      expect(off.ok).toBe(false);
       expect(ptyClient.updateTitle).not.toHaveBeenCalled();
     });
   });
@@ -1331,24 +1306,6 @@ describe("canopy IPC", () => {
       );
       expect(result.ok).toBe(false);
       expect(state.submits).toEqual([]);
-    });
-
-    it("starts no worker stream when Canopy is turned off while it is checked", async () => {
-      const sender = fakeSender(6);
-      let release: (value: { spawnedAt: number }) => void = () => {};
-      ptyClient.getTerminalAsync.mockImplementationOnce(
-        () => new Promise((resolve) => (release = resolve))
-      );
-      const pending = outcome(
-        invoke(CANOPY_METHOD_CHANNELS.watchTerminal, sender, "run-1", { spawnedAt: 100 })
-      );
-      await invoke(CANOPY_METHOD_CHANNELS.setMode, fakeSender(9), "unset");
-      release({ spawnedAt: 100 });
-      expect(await pending).toEqual({
-        ok: false,
-        message: expect.stringContaining("isn't turned on"),
-      });
-      expect(ptyClient.acquireIpcDataMirror).not.toHaveBeenCalled();
     });
 
     it("starts no stream for a request cancelled while it was being checked", async () => {
