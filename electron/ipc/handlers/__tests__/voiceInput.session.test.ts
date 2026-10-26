@@ -404,6 +404,25 @@ describe("voiceInput — session identity", () => {
     });
   });
 
+  it("lets a spoken rewrite instruction take the slot, marked as one", async () => {
+    const getLastTerms = () => getHandler(CHANNELS.VOICE_INPUT_GET_LAST_TERMS)({});
+    shared.assembleKeyterms = async () => ["alpha"];
+    await start(ownerA, "a");
+    expect(await getLastTerms()).not.toHaveProperty("rewrite");
+    await stop(ownerA, "a");
+
+    shared.assembleKeyterms = async () => ["beta"];
+    owners.set("b", ownerB);
+    await getHandler(CHANNELS.VOICE_INPUT_START)({ sender: ownerB }, "b", { intent: "rewrite" });
+    await shared.startContext!.keyterms!;
+    emit({ type: "terms_sent", terms: ["beta"] });
+    expect(await getLastTerms()).toMatchObject({
+      sessionId: "b",
+      rewrite: true,
+      sent: [{ term: "beta", source: "dictionary" }],
+    });
+  });
+
   it("records Deepgram's terms before its provider starts", async () => {
     const getLastTerms = () => getHandler(CHANNELS.VOICE_INPUT_GET_LAST_TERMS)({});
     shared.transcriptionProvider = "deepgram";

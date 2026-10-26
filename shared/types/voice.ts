@@ -77,6 +77,8 @@ export interface LastDictationTerms {
   sent: VoiceSentTerm[] | null;
   keytermAttempt?: "full" | "trimmed" | "none";
   endedBeforeSending?: true;
+  /** The session dictated an instruction to rewrite selected text, not prompt text. */
+  rewrite?: true;
   startedAt: number;
 }
 

@@ -1291,6 +1291,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // recorded before the provider is handed them, so the provider's report of
     // what it sent always finds them. OpenAI's land after the start, through the
     // promise it waits on; until then nothing has been sent, so `sent` is null.
+    // A spoken rewrite instruction is a provider request too, so it takes the
+    // slot, marked as one.
     lastTermSources = new Map();
     lastDictationTerms = {
       sessionId: session.id,
@@ -1298,6 +1300,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       assembledCount: 0,
       sent: null,
       startedAt: Date.now(),
+      ...(session.intent === "rewrite" ? { rewrite: true as const } : {}),
     };
     const recordAssembledTerms = (tagged: VoiceSentTerm[]): string[] => {
       if (lastDictationTerms?.sessionId === session.id) {

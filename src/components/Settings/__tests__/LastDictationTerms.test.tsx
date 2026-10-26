@@ -60,6 +60,13 @@ describe("LastDictationTermsSection", () => {
     expect(screen.getByText("zod, mySecretTerm")).toBeTruthy();
   });
 
+  it("names a spoken rewrite instruction as what sent the terms", async () => {
+    mockApi(async () => snapshot({ provider: "openai", rewrite: true }));
+    render(<LastDictationTermsSection />);
+    expect(await screen.findByText("Rewrite instruction sent to OpenAI")).toBeTruthy();
+    expect(screen.queryByText("Sent to OpenAI")).toBeNull();
+  });
+
   it("says when a Deepgram retry dropped terms", async () => {
     mockApi(async () => snapshot({ assembledCount: 30, keytermAttempt: "trimmed" }));
     render(<LastDictationTermsSection />);

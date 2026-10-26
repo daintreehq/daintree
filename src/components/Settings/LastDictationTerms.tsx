@@ -101,7 +101,7 @@ export function LastDictationTermsSection() {
         ) : (
           <>
             <SettingsRow
-              label={`Sent to ${PROVIDER_NAME[last.provider]}`}
+              label={`${last.rewrite ? "Rewrite instruction sent" : "Sent"} to ${PROVIDER_NAME[last.provider]}`}
               description={summarize(last)}
             />
             {SOURCES.map(({ source, label }) => (
