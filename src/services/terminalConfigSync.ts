@@ -270,6 +270,10 @@ export function initTerminalConfigSync(): () => void {
   if (!bridge || typeof bridge.onChanged !== "function") return () => {};
 
   let disposed = false;
+  // Claimed now, so a sync disposed before boot answers still leaves the
+  // next one to read.
+  const seedFromBoot = !bootSeeded;
+  bootSeeded = true;
   const offChange = terminalConfigClient.onChanged((change) => {
     if (!disposed) receiveChange(change);
   });
@@ -296,13 +300,9 @@ export function initTerminalConfigSync(): () => void {
   void (async () => {
     const boot = await getSafeBootPromise();
     if (disposed) return;
-    const config = boot.ok && !bootSeeded ? boot.result.terminalConfig : undefined;
-    if (config) {
-      bootSeeded = true;
-      applyBootTerminalConfig(config);
-    } else {
-      await refetch();
-    }
+    const config = boot.ok && seedFromBoot ? boot.result.terminalConfig : undefined;
+    if (config) applyBootTerminalConfig(config);
+    else await refetch();
   })();
 
   return () => {

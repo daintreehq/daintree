@@ -200,6 +200,21 @@ describe("terminalConfigSync (#14699)", () => {
     expect(snapshot()).toMatchObject({ scrollbackLines: 2500, resourceMonitoring: true });
   });
 
+  it("reads rather than reusing the boot payload when restarted before boot answered", async () => {
+    const pendingBoot = deferred<unknown>();
+    bootMock.getSafeBootPromise.mockReturnValue(pendingBoot.promise);
+    dispose = initTerminalConfigSync();
+    dispose();
+    client.get.mockResolvedValue({ fontSize: 20 });
+
+    dispose = initTerminalConfigSync();
+    pendingBoot.resolve({ ok: true, result: { terminalConfig: { fontSize: 13 } } });
+    await settle();
+
+    expect(client.get).toHaveBeenCalledTimes(1);
+    expect(useTerminalFontStore.getState().fontSize).toBe(20);
+  });
+
   it("reads rather than reusing the boot payload when started again", async () => {
     boot({ fontSize: 13 });
     dispose = initTerminalConfigSync();

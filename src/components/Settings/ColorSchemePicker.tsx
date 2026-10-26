@@ -109,6 +109,9 @@ async function selectScheme(id: string, onError: (error: ColorSchemeError | null
   onError(null);
   store.setSelectedSchemeId(id);
   store.setPreviewSchemeId(null);
+  // Taken now: a change saved in another view can replace the store's list
+  // while the scheme saves.
+  const recentSchemeIds = useTerminalColorSchemeStore.getState().recentSchemeIds;
   try {
     await terminalConfigClient.setColorScheme(id);
     confirmedSchemeId = id;
@@ -124,9 +127,7 @@ async function selectScheme(id: string, onError: (error: ColorSchemeError | null
     return;
   }
   try {
-    await terminalConfigClient.setRecentSchemeIds(
-      useTerminalColorSchemeStore.getState().recentSchemeIds
-    );
+    await terminalConfigClient.setRecentSchemeIds(recentSchemeIds);
   } catch (error) {
     logError("Failed to persist recent color schemes", error);
   }
