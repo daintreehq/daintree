@@ -295,6 +295,31 @@ Three families cover the parts of the app every other family runs _through_: the
 
 `npm run perf vanilla-plugins -- --panels 20 --window-seconds 60` (or `--panels 100`) launches the built app on a fresh profile with the shipped built-ins and no installed plugin, opens a fixture project, adds that many terminals, and reports CPU, working set, utility process count and idle wakeups over the window. It is a `diagnostic`: it refuses to report when the fixture is not vanilla (wrong panel count, an installed or project plugin), it does not read first interactive frame or per-channel plugin IPC, and `idleWakeupsPerSecond` is always 0 on Windows. The gates for the same concern are deterministic and live in unit tests and `check:vanilla-plugin-bundles`; see `docs/plugins/architecture.md`.
 
+## Dictation replay against the real providers (`voice-replay`, #14624)
+
+`OPENAI_API_KEY=… DEEPGRAM_API_KEY=… npm run perf voice-replay` plays each fixture clip as the microphone (Chromium's fake capture device, `%noloop`) into a fake Claude pane's composer through the toggle chord, against the real OpenAI and Deepgram sockets, and scores what the pipeline emitted. It costs money, needs keys, and never runs in CI: the spec skips when `CI` is set, and refuses to start while `DAINTREE_REALTIME_WS_URL` or `DAINTREE_DEEPGRAM_WS_URL` points a provider at a mock. Keys reach the app through `WHISPER_API_KEY` and `DEEPGRAM_API_KEY`, never through a config file; a config whose key is missing is skipped and recorded as skipped.
+
+The corpus is 18 dictated agent prompts in `e2e/helpers/voiceReplayFixtures.ts`, each with what the synthesiser says, the written prompt it means, and the project terms it must keep. Clips are synthesised on demand with macOS `say` at 24 kHz mono s16le, trimmed so speech starts on the first sample and ends on the last, and cached under `.tmp/voice-replay/clips/`. The stop is pressed when the clip runs out, so every clip is a start and a stop case; two hold a single utterance over 8 s, and four carry pauses. Real recordings replace synthesis clip by clip: put `<id>.wav` (mono 16-bit PCM) in `VOICE_REPLAY_RECORDINGS_DIR`; they play untrimmed, and off macOS every selected clip needs one.
+
+Per configuration it reports pooled and mean WER over normalised words, term recall, how often the first and last reference words aligned as exact matches, sessions that errored or never ended, and median and p95 session timings (mic open, `recording`, first delta, first final, stop to last final, stop to `session-ended`). Normalisation splits camelCase, lowercases, drops punctuation and dictated symbols ("dash", "slash", "dot"), maps number words up to twenty to digits, and merges spelled-out letters ("N P M" → `npm`), so a provider is scored on the words it heard rather than how it formatted them. Term recall forgives spacing only: "use effect" recalls `useEffect`, "use affect" doesn't. Every session runs on a fresh app with correction, file-link resolution, spoken paragraph commands and learning off; the project, branch and terminal context hints still apply, so the default configs are "without a custom dictionary", not "without hints".
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `VOICE_REPLAY_CONFIGS` | `openai,deepgram` | Presets to run; `openai+terms` and `deepgram+terms` also add every fixture term to the dictionary |
+| `VOICE_REPLAY_CONFIG_FILE` | unset | JSON array of `{ id, provider, settings?, dictionary? }`; `settings` may only change `language` |
+| `VOICE_REPLAY_CLIPS` | all | Comma-separated clip ids |
+| `VOICE_REPLAY_REPEATS` | `1` | Passes over every clip and config |
+| `VOICE_REPLAY_STOP_TAIL_MS` | `0` | Extra time between the clip ending and the stop press |
+| `VOICE_REPLAY_VOICE` | system | A `say -v` voice |
+| `VOICE_REPLAY_RECORDINGS_DIR` | unset | Real recordings that replace synthesis |
+| `VOICE_REPLAY_LABEL` | `run` | Prefix of the result file |
+
+The OpenAI `delay` tier, the 8 s forced commit and microphone processing are constants in the app today, so a config can't vary them and one that tries is refused rather than run unchanged; #14625 adds those knobs.
+
+Results land in `.tmp/perf-results/voice-replay/<label>-<timestamp>.json`, rewritten after every session with `complete: false` until the run finishes. Each session keeps its transcript, the composer draft, every status and error, and the end reason; a harness failure (a launch that threw) goes to `failures` and stays out of every score. `npm run perf voice-replay-compare -- --save [run.json]` makes a complete run the baseline, and `npm run perf voice-replay-compare [-- run.json] [--baseline other.json]` compares a run (default: the newest complete one) config by config over the sessions both runs have, leaving out clips whose reference or audio changed and flagging a config whose settings moved.
+
+What the numbers can't claim: the audio is synthetic or pre-recorded through a fake device, so this is not microphone or room quality; mic open is when `getUserMedia` resolved, an approximation of the first sample played; `session-ended: stopped` means the drain finished, not that every word arrived; and with one repeat, p95 is the slowest session.
+
 ## Recovery and session scenarios (PERF-260..264, 280..285)
 
 The last two families cover what the rest of the harness explicitly left out. PERF-046 and PERF-224 both measure how fast a killed host comes back and say plainly that the supervisor is not in the loop; PERF-203 measures the MCP tool-surface projection and says plainly that no server is. These close both halves.

@@ -417,6 +417,19 @@ export const REGISTRY: Record<string, Command> = {
     gate: "RUN_PERF_MEMORY_PRESSURE",
     build: "build:e2e:bench",
   }),
+  "voice-replay": playwrightBench({
+    summary:
+      "Fixture clips as the microphone through dictation to the real providers: WER, term recall, first/last word, timings (needs keys)",
+    kind: "journey",
+    spec: "e2e/perf/voice-replay-perf.spec.ts",
+    gate: "RUN_PERF_VOICE_REPLAY",
+    build: "build:e2e",
+  }),
+  "voice-replay-compare": {
+    summary: "Compare a voice-replay run against the saved baseline, or save one (--save)",
+    kind: "diagnostic",
+    runner: tsxScript("voice-replay-compare.ts"),
+  },
   analyze: {
     summary: "Bundle-size visualizer build (ANALYZE=true vite build)",
     kind: "diagnostic",
