@@ -34,6 +34,42 @@ const STOP_CONNECT_TIMEOUT_MS = 3_000;
 // error. A periodic KeepAlive text frame resets that timer; well under 10s
 // gives margin even if a tick is delayed.
 const KEEPALIVE_INTERVAL_MS = 5_000;
+// Reconnect after an unexpected mid-session drop: retry with backoff until
+// RECONNECT_WINDOW_MS has passed since the drop, then give up. A time window
+// rather than an attempt count, because an attempt made while the network is
+// still down fails in milliseconds and would burn a count before a wifi blip
+// or post-wake reassociation is over. Equal jitter:
+// delay = ceiling/2 + random() * ceiling/2, ceiling = min(CAP, INITIAL * 2^attempt).
+const RECONNECT_WINDOW_MS = 30_000;
+const RECONNECT_INITIAL_MS = 250;
+const RECONNECT_CAP_MS = 3_000;
+// The last attempt in the window still gets this long to connect.
+const RECONNECT_MIN_CONNECT_MS = 1_000;
+// linear16 mono @ 24kHz. Deepgram reports result timing in seconds of audio
+// received on the connection; this converts it back to a byte offset.
+const AUDIO_BYTES_PER_SAMPLE = 2;
+const AUDIO_SAMPLE_RATE = 24_000;
+const AUDIO_BYTES_PER_SECOND = AUDIO_SAMPLE_RATE * AUDIO_BYTES_PER_SAMPLE;
+// Audio captured while reconnecting is held for the whole window, so a long
+// blip is transcribed late rather than lost. Start-up keeps the shared ~3s cap.
+const RECONNECT_BUFFER_MAX_BYTES = (RECONNECT_WINDOW_MS / 1_000) * AUDIO_BYTES_PER_SECOND;
+const RECONNECT_BUFFER_MAX_CHUNKS = 400;
+// Ceiling on audio sent but not yet covered by a final result. Results arrive
+// at every 300ms pause, so in normal speech this stays small; it has to hold a
+// full reconnect flush (~10s before the drop plus the window) so a second drop
+// during the flush still resends all of it.
+const REPLAY_MAX_BYTES = RECONNECT_BUFFER_MAX_BYTES + 10 * AUDIO_BYTES_PER_SECOND;
+
+// Close codes that mean Deepgram refused what we sent (undecodable audio,
+// policy, oversized frame). A new connection would fail the same way.
+const PERMANENT_CLOSE_CODES = new Set<number>([1002, 1003, 1007, 1008, 1009]);
+
+// Upgrade statuses worth another attempt: concurrency/rate limits and server
+// faults. 400/401/402/403 mean bad params, key, credits, or scope.
+function isRetryableHttpStatus(statusCode: number | undefined): boolean {
+  if (statusCode === undefined) return false;
+  return statusCode === 408 || statusCode === 429 || (statusCode >= 500 && statusCode < 600);
+}
 
 // Deepgram caps Nova-3 keyterms at 100 terms and 500 aggregate tokens. The
 // tokenizer is syllable-based (~5 tokens per single-word term), so the term
@@ -137,6 +173,33 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
   private firstTranscriptLogged = false;
 
   private keepAliveTimer: ReturnType<typeof setInterval> | null = null;
+
+  // Session-level, so reconnects reuse the URL the session settled on: once a
+  // 400 forced a smaller keyterm list, every reconnect keeps that step.
+  private keytermAttempt: KeytermAttempt = "full";
+
+  // Reconnect state. Survives per-connection teardown (cleanupConnection) and
+  // is reset by a successful open or a full session reset.
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectAttempt = 0;
+  private isReconnecting = false;
+  // performance.now() past which this recovery gives up. Monotonic, so time
+  // the machine spends asleep doesn't eat the window.
+  private reconnectDeadlineAt: number | null = null;
+  // The most specific failure seen this reconnect cycle, carried into the
+  // fatal error if the attempts run out.
+  private lastReconnectError: VoiceInputError | null = null;
+
+  // Audio sent on the current connection that no received final result covers
+  // yet, oldest first. `unconfirmedOffset` is the connection byte offset of the
+  // first chunk. Every open resends it ahead of the pre-connect buffer, so words
+  // in flight when the socket dropped are transcribed on the next connection.
+  // Trimming follows only results actually received, so a resend can't repeat
+  // text the renderer already has.
+  private unconfirmedAudio: ArrayBuffer[] = [];
+  private unconfirmedBytes = 0;
+  private unconfirmedOffset = 0;
+  private replayEvictionWarned = false;
 
   // Set on graceful/fatal teardown so the trailing `close` event isn't treated
   // as an unexpected drop.
@@ -255,14 +318,17 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     });
   }
 
-  private connect(
-    mySessionId: number,
-    settings: VoiceInputSettings,
-    attempt: KeytermAttempt = "full"
-  ): void {
+  /**
+   * Opens one WebSocket and wires its handlers. Shared by `start()` (with a
+   * pending start to settle) and the reconnect timer; the reconnect path is
+   * told apart by `isReconnecting`, so an attempt that fails before opening
+   * schedules the next one instead of ending the session.
+   */
+  private connect(mySessionId: number, settings: VoiceInputSettings): void {
     this.connectStartedAt = performance.now();
     // On a keyterm-overflow retry, shrink the keyterms on the URL but keep every
     // other setting identical.
+    const attempt = this.keytermAttempt;
     const effectiveSettings =
       attempt === "none"
         ? { ...settings, keyterms: undefined }
@@ -280,6 +346,11 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     } catch (err) {
       const message = formatErrorMessage(err, "Failed to open WebSocket");
       logError(`${P} Failed to open WebSocket`, undefined, voiceErrorLogFields(err));
+      if (this.isReconnecting) {
+        this.lastReconnectError = { severity: "transient", code: "ws_construct_failed", message };
+        this.retryAfterFailedAttempt(mySessionId, settings);
+        return;
+      }
       this.emit({
         type: "error",
         error: { severity: "fatal", code: "ws_construct_failed", message },
@@ -291,18 +362,47 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     }
 
     this.connection = connection;
+    // This socket's own transport error, preferred over the bare close code
+    // that follows it when reporting why recovery failed.
+    let transportError: VoiceInputError | null = null;
     // Don't log the full URL — it carries the assembled keyterms (project/branch/
     // terminal identifiers). The term count is enough to debug keyterm wiring.
     logInfo(`${P} Opening Deepgram WebSocket`, {
       keytermCount: effectiveSettings.keyterms?.length ?? 0,
       language: settings.language || "en",
       keytermAttempt: attempt,
+      reconnectAttempt: this.isReconnecting ? this.reconnectAttempt : 0,
     });
 
+    // A reconnect attempt can't hang past the recovery window.
+    const connectTimeoutMs =
+      this.isReconnecting && this.reconnectDeadlineAt !== null
+        ? Math.max(
+            RECONNECT_MIN_CONNECT_MS,
+            Math.min(CONNECT_TIMEOUT_MS, this.reconnectDeadlineAt - performance.now())
+          )
+        : CONNECT_TIMEOUT_MS;
     this.connectTimeout = setTimeout(() => {
       this.connectTimeout = null;
       if (this.sessionId !== mySessionId) return;
-      logError(`${P} Connection timed out (${CONNECT_TIMEOUT_MS}ms)`);
+      logError(`${P} Connection timed out (${Math.round(connectTimeoutMs)}ms)`);
+      if (this.isReconnecting) {
+        // Detach first so the dead socket's trailing error/close are ignored,
+        // then move straight to the next attempt.
+        this.lastReconnectError = {
+          severity: "transient",
+          code: "connection_timeout",
+          message: "Connection timed out",
+        };
+        this.cleanupConnection();
+        try {
+          connection.terminate();
+        } catch {
+          // Ignore terminate errors
+        }
+        this.retryAfterFailedAttempt(mySessionId, settings);
+        return;
+      }
       this.isExpectedClose = true;
       try {
         connection.close();
@@ -317,7 +417,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
       this.emit({ type: "status", status: "error" });
       this.settlePendingStart(mySessionId, { ok: false, error: "Connection timed out" });
       this.settleDrain("connection-timeout");
-    }, CONNECT_TIMEOUT_MS);
+    }, connectTimeoutMs);
 
     // A non-101 HTTP response to the WebSocket upgrade surfaces here (not via
     // `error`), and only when we register this listener — which also disables
@@ -345,13 +445,23 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
         const next: KeytermAttempt =
           attempt === "full" && keytermCount > TRIMMED_RETRY_KEYTERMS ? "trimmed" : "none";
         logWarn(`${P} Deepgram rejected upgrade with HTTP 400 — retrying (${next} keyterms)`);
+        this.keytermAttempt = next;
         this.cleanupConnection();
-        this.connect(mySessionId, settings, next);
+        this.connect(mySessionId, settings);
         return;
       }
-      // Any other status (401 auth, 403, 429, 5xx) — or a 400 after the
-      // keyterm-free retry — is fatal.
       const message = `Deepgram rejected the connection (HTTP ${statusCode ?? "unknown"})`;
+      // Mid-session, a rate limit or server fault is worth another attempt;
+      // nothing is listening for this socket's trailing close, so schedule here.
+      if (this.isReconnecting && isRetryableHttpStatus(statusCode)) {
+        logWarn(`${P} Reconnect attempt rejected — retrying`, { statusCode });
+        this.lastReconnectError = { severity: "transient", code: "ws_http_error", message };
+        this.cleanupConnection();
+        this.retryAfterFailedAttempt(mySessionId, settings);
+        return;
+      }
+      // 401 auth, 402 credits, 403 scope, a 400 after the keyterm-free retry —
+      // or, on the first connect, anything else — is fatal.
       logError(`${P} Deepgram rejected the connection`, undefined, { statusCode });
       this.handleFatalError(mySessionId, {
         severity: "fatal",
@@ -361,7 +471,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     });
 
     connection.on("open", () => {
-      if (this.sessionId !== mySessionId) {
+      if (this.sessionId !== mySessionId || this.connection !== connection) {
         logWarn(`${P} Session expired during connect, closing`);
         try {
           connection.close();
@@ -374,23 +484,24 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
       // model config lives in the URL query string, so there's no session
       // handshake to await (unlike OpenAI's `session.update`).
       this.clearConnectTimeout();
+      const wasReconnecting = this.isReconnecting;
       logInfo(`${P} WebSocket opened — session ready`, {
         sessionId: mySessionId,
         voiceSessionId: this.voiceSessionId,
         connectMs: Math.round(performance.now() - this.connectStartedAt),
         sinceStartMs: this.sinceStartMs(),
         bufferedChunks: this.preConnectBuffer.length,
+        ...(wasReconnecting
+          ? { reconnectAttempt: this.reconnectAttempt, resentChunks: this.unconfirmedAudio.length }
+          : {}),
       });
-      if (this.preConnectBuffer.length > 0) {
-        logInfo(`${P} Flushing ${this.preConnectBuffer.length} buffered audio chunks`);
-        const buffered = this.preConnectBuffer;
-        this.preConnectBuffer = [];
-        this.preConnectBufferBytes = 0;
-        for (const chunk of buffered) {
-          this.sendAudioBinary(chunk);
-        }
-      }
+      this.flushHeldAudio();
       this.isReady = true;
+      // A successful open gives a later drop a fresh recovery window.
+      this.reconnectAttempt = 0;
+      this.isReconnecting = false;
+      this.reconnectDeadlineAt = null;
+      this.lastReconnectError = null;
       if (this.isDraining) {
         // Stopped while connecting: the mic is already released, so skip
         // KeepAlive and "recording" — close the stream and drain.
@@ -433,15 +544,19 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
       this.clearConnectTimeout();
       const message = formatErrorMessage(err, "WebSocket error");
       logError(`${P} WebSocket error`, undefined, voiceErrorLogFields(err));
-      // `ws` fires `close` right after `error`; a pre-ready transport error
-      // (auth/DNS/refused) is fatal, otherwise let the close handler decide.
-      if (!this.isReady) {
-        this.handleFatalError(mySessionId, {
-          severity: "fatal",
-          code: "ws_transport_error",
-          message,
-        });
+      // `ws` fires `close` right after `error`, and the close handler owns the
+      // reconnect decision; keep the error as the reason to report if the
+      // attempts run out. Only a transport error on the first connect
+      // (auth/DNS/refused) is fatal here.
+      if (this.isReady || this.isReconnecting) {
+        transportError = { severity: "transient", code: "ws_transport_error", message };
+        return;
       }
+      this.handleFatalError(mySessionId, {
+        severity: "fatal",
+        code: "ws_transport_error",
+        message,
+      });
     });
 
     connection.on("close", (code, reason) => {
@@ -455,6 +570,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
         code,
         reasonLength: reason?.length ?? 0,
         wasReady,
+        wasReconnecting: this.isReconnecting,
         wasExpected: this.isExpectedClose,
         wasDraining: this.isDraining,
         audioChunksStreamed: this.audioChunkCount,
@@ -464,21 +580,105 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
         this.settleDrain("connection-closed");
         return;
       }
+      // An unexpected drop of a ready session, or a failed reconnect attempt,
+      // retries with backoff unless Deepgram refused what we sent.
+      if (!this.isExpectedClose && (wasReady || this.isReconnecting)) {
+        const closeCode = typeof code === "number" ? code : 1006;
+        const reasonText = (
+          Buffer.isBuffer(reason) ? reason.toString("utf8") : String(reason ?? "")
+        ).trim();
+        if (PERMANENT_CLOSE_CODES.has(closeCode)) {
+          this.handleFatalError(mySessionId, {
+            severity: "fatal",
+            code: `ws_close_${closeCode}`,
+            message: reasonText
+              ? `Deepgram closed the connection: ${reasonText}`
+              : `Deepgram closed the connection (code ${closeCode})`,
+          });
+          return;
+        }
+        this.lastReconnectError = transportError ?? {
+          severity: "transient",
+          code: `ws_close_${closeCode}`,
+          message: reasonText || `Connection closed (code ${closeCode})`,
+        };
+        this.scheduleReconnect(mySessionId, settings);
+        return;
+      }
       this.settlePendingStart(mySessionId, { ok: false, error: "Connection closed" });
       if (this.isExpectedClose) return;
-      // No reconnect for Deepgram (first-cut provider). An unexpected drop of a
-      // ready session is surfaced as an error; a never-ready drop falls through
-      // to idle (matches the OpenAI provider's terminal semantics).
-      if (wasReady) {
-        this.emit({
-          type: "error",
-          error: { severity: "fatal", code: "ws_close_unexpected", message: "Connection lost" },
-        });
-        this.emit({ type: "status", status: "error" });
-      } else {
-        this.emit({ type: "status", status: "idle" });
-      }
+      // A drop before the first open falls through to idle (matches the OpenAI
+      // provider's terminal semantics).
+      this.emit({ type: "status", status: "idle" });
     });
+  }
+
+  private clearReconnectTimer(): void {
+    if (this.reconnectTimer !== null) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+  }
+
+  /**
+   * Schedules the next reconnect attempt, or gives up with a fatal error once
+   * the recovery window has passed. The timer re-checks the session id, so a
+   * `stop()` or new `start()` in between cancels it (lessons #4850/#4851).
+   */
+  private scheduleReconnect(mySessionId: number, settings: VoiceInputSettings): void {
+    if (this.sessionId !== mySessionId) return;
+    const now = performance.now();
+    this.reconnectDeadlineAt ??= now + RECONNECT_WINDOW_MS;
+    const remainingMs = this.reconnectDeadlineAt - now;
+    if (remainingMs <= 0) {
+      const last = this.lastReconnectError;
+      logError(`${P} Reconnect failed for ${RECONNECT_WINDOW_MS}ms — giving up`, undefined, {
+        attempts: this.reconnectAttempt,
+        lastCode: last?.code,
+      });
+      this.handleFatalError(mySessionId, {
+        severity: "fatal",
+        code: "reconnect_exhausted",
+        message: last
+          ? `Couldn't reconnect to Deepgram: ${last.message}`
+          : "Couldn't reconnect to Deepgram",
+      });
+      return;
+    }
+
+    this.isReconnecting = true;
+    const ceiling = Math.min(RECONNECT_CAP_MS, RECONNECT_INITIAL_MS * 2 ** this.reconnectAttempt);
+    const delay = Math.min(remainingMs, ceiling / 2 + Math.random() * (ceiling / 2));
+    this.reconnectAttempt++;
+    logInfo(`${P} Scheduling reconnect`, {
+      attempt: this.reconnectAttempt,
+      delayMs: Math.round(delay),
+      remainingMs: Math.round(remainingMs),
+      lastCode: this.lastReconnectError?.code,
+    });
+    this.emit({ type: "status", status: "reconnecting" });
+
+    this.clearReconnectTimer();
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      if (this.sessionId !== mySessionId) return;
+      logInfo(`${P} Reconnecting`, { attempt: this.reconnectAttempt });
+      this.cleanupConnection();
+      this.connect(mySessionId, settings);
+    }, delay);
+  }
+
+  /**
+   * A reconnect attempt failed before its socket opened. A graceful stop that
+   * was waiting on it gives up on the held audio rather than retrying past the
+   * user's stop.
+   */
+  private retryAfterFailedAttempt(mySessionId: number, settings: VoiceInputSettings): void {
+    if (this.isDraining) {
+      this.settleDrain("reconnect-failed");
+      return;
+    }
+    this.scheduleReconnect(mySessionId, settings);
   }
 
   private startKeepAlive(connection: WebSocket, mySessionId: number): void {
@@ -509,6 +709,11 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
   private handleFatalError(mySessionId: number, error: VoiceInputError): void {
     logError(`${P} Fatal error — tearing down session`, undefined, { code: error.code });
     this.isExpectedClose = true;
+    this.isReconnecting = false;
+    this.reconnectDeadlineAt = null;
+    this.lastReconnectError = null;
+    this.clearReconnectTimer();
+    this.discardHeldAudio();
     const conn = this.connection;
     this.cleanupConnection();
     if (conn) {
@@ -553,6 +758,9 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
         // Finals cover disjoint spans and never change. A speech_final result is
         // always is_final, so this covers both. A span that showed a preview
         // still completes when it finalises empty, so the preview doesn't linger.
+        // Only a final confirms audio: interims are revised, so their span may
+        // still need resending after a drop.
+        this.confirmAudio(payload.start, payload.duration);
         const previewId = this.spanItemId;
         this.spanItemId = null;
         if (previewId || trimmed) {
@@ -596,6 +804,9 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
 
   private sendAudioBinary(chunk: ArrayBuffer): void {
     if (!this.connection) return;
+    // Tracked before the send: a send that throws means the socket is going
+    // down, and the chunk goes out again on the next connection.
+    this.trackUnconfirmedAudio(chunk);
     try {
       // Deepgram expects raw PCM16 as binary WebSocket frames — NOT base64 JSON.
       this.connection.send(Buffer.from(chunk));
@@ -610,7 +821,8 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     if (this.isDraining) return;
 
     if (!this.isReady || !this.connection) {
-      if (this.connection || this.pendingStart) {
+      // Held while connecting or reconnecting, then sent once a socket opens.
+      if (this.connection || this.pendingStart || this.isReconnecting) {
         this.bufferPreConnectChunk(chunk);
       } else if (!this.staleChunkWarned) {
         this.staleChunkWarned = true;
@@ -626,17 +838,25 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
   }
 
   private bufferPreConnectChunk(chunk: ArrayBuffer): void {
+    const maxChunks = this.isReconnecting ? RECONNECT_BUFFER_MAX_CHUNKS : AUDIO_BUFFER_MAX_CHUNKS;
+    // Gap audio joins the unconfirmed audio in the replay ledger on the next
+    // open, so together they stay under its cap. Otherwise repeated drops would
+    // have the flush silently evict audio this buffer already accepted.
+    const maxBytes = this.isReconnecting
+      ? Math.min(RECONNECT_BUFFER_MAX_BYTES, REPLAY_MAX_BYTES - this.unconfirmedBytes)
+      : AUDIO_BUFFER_MAX_BYTES;
     if (
-      this.preConnectBuffer.length >= AUDIO_BUFFER_MAX_CHUNKS ||
-      this.preConnectBufferBytes + chunk.byteLength > AUDIO_BUFFER_MAX_BYTES
+      this.preConnectBuffer.length >= maxChunks ||
+      this.preConnectBufferBytes + chunk.byteLength > maxBytes
     ) {
       if (!this.preConnectBufferOverflowWarned) {
         this.preConnectBufferOverflowWarned = true;
         logWarn(`${P} Pre-connect buffer full, dropping audio`, {
           chunks: this.preConnectBuffer.length,
           bytes: this.preConnectBufferBytes,
-          maxChunks: AUDIO_BUFFER_MAX_CHUNKS,
-          maxBytes: AUDIO_BUFFER_MAX_BYTES,
+          maxChunks,
+          maxBytes,
+          isReconnecting: this.isReconnecting,
         });
         this.emit({ type: "error", error: createAudioBufferOverflowError() });
       }
@@ -646,7 +866,89 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     this.preConnectBufferBytes += chunk.byteLength;
   }
 
+  private trackUnconfirmedAudio(chunk: ArrayBuffer): void {
+    this.unconfirmedAudio.push(chunk);
+    this.unconfirmedBytes += chunk.byteLength;
+    while (this.unconfirmedBytes > REPLAY_MAX_BYTES && this.unconfirmedAudio.length > 1) {
+      const evicted = this.unconfirmedAudio.shift()!;
+      this.unconfirmedBytes -= evicted.byteLength;
+      this.unconfirmedOffset += evicted.byteLength;
+      if (!this.replayEvictionWarned) {
+        this.replayEvictionWarned = true;
+        logWarn(`${P} No final result for the held audio — oldest dropped from replay`, {
+          maxBytes: REPLAY_MAX_BYTES,
+        });
+      }
+    }
+  }
+
+  /**
+   * Releases the held audio a final result covers. Deepgram times results in
+   * seconds of audio received on this connection, so `start + duration` marks
+   * the byte offset up to which nothing needs resending.
+   */
+  private confirmAudio(start: unknown, duration: unknown): void {
+    if (typeof start !== "number" || typeof duration !== "number") return;
+    const confirmedSeconds = start + duration;
+    if (!Number.isFinite(confirmedSeconds) || confirmedSeconds <= 0) return;
+    const confirmedOffset =
+      Math.round(confirmedSeconds * AUDIO_SAMPLE_RATE) * AUDIO_BYTES_PER_SAMPLE;
+    while (this.unconfirmedAudio.length > 0) {
+      const chunk = this.unconfirmedAudio[0];
+      const chunkEnd = this.unconfirmedOffset + chunk.byteLength;
+      if (chunkEnd <= confirmedOffset) {
+        this.unconfirmedAudio.shift();
+        this.unconfirmedBytes -= chunk.byteLength;
+        this.unconfirmedOffset = chunkEnd;
+        continue;
+      }
+      if (this.unconfirmedOffset < confirmedOffset) {
+        const covered = confirmedOffset - this.unconfirmedOffset;
+        this.unconfirmedAudio[0] = chunk.slice(covered);
+        this.unconfirmedBytes -= covered;
+        this.unconfirmedOffset = confirmedOffset;
+      }
+      return;
+    }
+  }
+
+  /**
+   * Sends the audio held while a socket connected: first what the previous
+   * connection never confirmed, then what was captured in the gap. Both are
+   * tracked again from offset 0, since result timing restarts per connection.
+   */
+  private flushHeldAudio(): void {
+    const unconfirmed = this.unconfirmedAudio;
+    const buffered = this.preConnectBuffer;
+    this.unconfirmedAudio = [];
+    this.unconfirmedBytes = 0;
+    this.unconfirmedOffset = 0;
+    this.preConnectBuffer = [];
+    this.preConnectBufferBytes = 0;
+    if (unconfirmed.length > 0) {
+      logInfo(`${P} Resending ${unconfirmed.length} unconfirmed audio chunks`);
+    }
+    if (buffered.length > 0) {
+      logInfo(`${P} Flushing ${buffered.length} buffered audio chunks`);
+    }
+    for (const chunk of unconfirmed) this.sendAudioBinary(chunk);
+    for (const chunk of buffered) this.sendAudioBinary(chunk);
+  }
+
+  private discardHeldAudio(): void {
+    this.preConnectBuffer = [];
+    this.preConnectBufferBytes = 0;
+    this.unconfirmedAudio = [];
+    this.unconfirmedBytes = 0;
+    this.unconfirmedOffset = 0;
+  }
+
+  /**
+   * Tears down per-connection state only. The session id, reconnect state and
+   * held audio survive it, since a reconnect carries them to the next socket.
+   */
   private cleanupConnection(): void {
+    this.clearConnectTimeout();
     this.clearKeepAlive();
     this.connection = null;
     this.isReady = false;
@@ -664,12 +966,18 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     this.staleChunkWarned = false;
     this.preConnectBufferOverflowWarned = false;
     this.spanItemId = null;
+    this.replayEvictionWarned = false;
     this.isReady = false;
-    this.preConnectBuffer = [];
-    this.preConnectBufferBytes = 0;
+    this.discardHeldAudio();
     this.clearConnectTimeout();
     this.clearDrainTimeout();
     this.clearKeepAlive();
+    this.clearReconnectTimer();
+    this.reconnectAttempt = 0;
+    this.isReconnecting = false;
+    this.reconnectDeadlineAt = null;
+    this.lastReconnectError = null;
+    this.keytermAttempt = "full";
     this.isExpectedClose = false;
     this.isDraining = false;
     this.stopPendingReady = false;
@@ -727,12 +1035,16 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
 
     this.isExpectedClose = true;
 
-    // Audio captured while connecting sits in the pre-connect buffer until the
-    // socket opens. If the connection attempt is still live, wait for it rather
+    // Audio held while (re)connecting — captured in the gap, or sent but never
+    // confirmed before a drop — goes out once a socket opens. If a live
+    // attempt or a scheduled reconnect can still get there, wait for it rather
     // than discarding what the user already said.
-    if (!this.isReady && this.connection && this.preConnectBufferBytes > 0) {
+    const heldBytes = this.preConnectBufferBytes + this.unconfirmedBytes;
+    if (!this.isReady && (this.connection || this.reconnectTimer) && heldBytes > 0) {
       return this.stopAfterConnect();
     }
+    this.isReconnecting = false;
+    this.clearReconnectTimer();
 
     if (!this.connection || !this.isReady) {
       this.cleanupPreviousSession();
@@ -787,6 +1099,8 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     logInfo(`${P} Stop before socket open — waiting to flush buffered audio`, {
       bufferedChunks: this.preConnectBuffer.length,
       bufferedBytes: this.preConnectBufferBytes,
+      unconfirmedBytes: this.unconfirmedBytes,
+      isReconnecting: this.isReconnecting,
     });
     this.isDraining = true;
     this.stopPendingReady = true;
