@@ -5409,10 +5409,12 @@ export class WorkspaceService {
       // replaced, so the "large file, small diff" case that the old gate
       // wrongly refused now succeeds (#11531). lstat, not stat: a symlink's
       // diff is its target path, whatever size the file it points at is.
+      // The staged side never reads the working-tree file, so its size is no
+      // reason to refuse a patch built from the index; the patch cap still holds.
       try {
         const { lstat } = await import("fs/promises");
         const stats = await lstat(absolutePath);
-        if (stats.size > GIT_FILE_DIFF_MAX_SOURCE_BYTES) {
+        if (side !== "staged" && stats.size > GIT_FILE_DIFF_MAX_SOURCE_BYTES) {
           sendSentinel("FILE_TOO_LARGE");
           return;
         }

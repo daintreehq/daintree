@@ -321,6 +321,28 @@ describe("WorkspaceService.getFileDiff", () => {
       expect(mockSimpleGit.diff).toHaveBeenCalledTimes(1);
     });
 
+    it("does not refuse a staged diff because the working-tree copy outgrew the ceiling", async () => {
+      const { lstat } = await import("fs/promises");
+      vi.mocked(lstat).mockResolvedValueOnce({
+        isSymbolicLink: () => false,
+        isDirectory: () => false,
+        size: GIT_FILE_DIFF_MAX_SOURCE_BYTES + 1,
+      } as never);
+      mockSimpleGit.diff.mockResolvedValueOnce(patch);
+      await service.getFileDiff(
+        "req-side-6",
+        "/test/repo",
+        "big.bin",
+        "modified",
+        undefined,
+        undefined,
+        undefined,
+        "staged"
+      );
+
+      expect(mockSimpleGit.diff).toHaveBeenCalledTimes(1);
+    });
+
     it("still inlines an untracked file on the unstaged side", async () => {
       await service.getFileDiff(
         "req-side-5",
