@@ -202,7 +202,8 @@ export function updateDictionaryEntry(
   const existing = entries[index]!;
   const nextTerm = changes.term === undefined ? existing.term : requirePhrase(changes.term, "term");
   if (entries.some((entry, i) => i !== index && fold(entry.term) === fold(nextTerm))) {
-    throw new Error(`"${nextTerm}" is already in the dictionary`);
+    // No term in the message: a thrown IPC error is logged in full, and terms are user content.
+    throw new Error("That term is already in the dictionary");
   }
   const nextHeardAs =
     changes.heardAs === undefined

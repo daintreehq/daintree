@@ -115,6 +115,18 @@ describe("updateDictionaryEntry", () => {
     );
   });
 
+  it("keeps the term out of the refusal, since thrown IPC errors are logged", () => {
+    let message = "";
+    try {
+      updateDictionaryEntry(entries, "zustand", { term: "daintree" });
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    expect(message).toMatch(/already in the dictionary/);
+    expect(message.toLowerCase()).not.toContain("daintree");
+    expect(message.toLowerCase()).not.toContain("zustand");
+  });
+
   it("leaves the list alone when the entry is gone or nothing changes", () => {
     expect(updateDictionaryEntry(entries, "Vite", { term: "vite" })).toBe(entries);
     expect(updateDictionaryEntry(entries, "Daintree", { term: " Daintree " })).toBe(entries);
