@@ -3250,6 +3250,29 @@ describe("OpenAITranscriptionProvider — reconnect replay (#14605)", () => {
     service.stop();
   });
 
+  it("notices a socket that dies after a healthy stretch just as quickly", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const { socket } = await bringSessionReady(service);
+    for (let elapsed = 0; elapsed < 20_000; elapsed += 100) {
+      service.sendAudioChunk(chunk(1));
+      vi.advanceTimersByTime(100);
+    }
+    expect(socket.terminateCalls).toBe(0);
+
+    // Only audio since the last answered ping is unproven, not the whole session.
+    socket.respondsToPing = false;
+    let sinceDeath = 0;
+    while (socket.terminateCalls === 0 && sinceDeath < 40_000) {
+      service.sendAudioChunk(chunk(1));
+      vi.advanceTimersByTime(100);
+      sinceDeath += 100;
+    }
+
+    expect(socket.terminateCalls).toBe(1);
+    expect(sinceDeath).toBeLessThanOrEqual(8_000);
+    service.stop();
+  });
+
   it("does not terminate a streaming socket whose pongs come back within the allowance", async () => {
     const service = new OpenAITranscriptionProvider();
     const { socket } = await bringSessionReady(service);
@@ -3270,7 +3293,7 @@ describe("OpenAITranscriptionProvider — reconnect replay (#14605)", () => {
     service.stop();
   });
 
-  it("terminates a streaming socket whose writes stop completing", async () => {
+  it("terminates a half-open socket whose writes have backed up behind it", async () => {
     const service = new OpenAITranscriptionProvider();
     const { socket } = await bringSessionReady(service);
     // A dead peer: the kernel buffer is full, so nothing more is written out,
@@ -3285,7 +3308,7 @@ describe("OpenAITranscriptionProvider — reconnect replay (#14605)", () => {
     }
 
     expect(socket.terminateCalls).toBe(1);
-    expect(elapsed).toBeLessThanOrEqual(6_000);
+    expect(elapsed).toBeLessThanOrEqual(8_000);
     service.stop();
   });
 
