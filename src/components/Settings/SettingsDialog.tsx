@@ -28,7 +28,7 @@ import {
   usePreferencesStore,
   useSettingsStore,
 } from "@/store";
-import { Search, ChevronRight, ChevronDown, ChevronLeft, Info } from "lucide-react";
+import { Search, ChevronRight, ChevronDown, ChevronLeft, Info, ServerCog } from "lucide-react";
 import { DismissButton } from "@/components/ui/DismissButton";
 import { SearchField } from "@/components/ui/SearchField";
 import { KbdChord } from "@/components/ui/Kbd";
@@ -91,7 +91,17 @@ import { SettingsFlushProvider, SettingsFlushContext } from "./SettingsFlushRegi
 import { useProgressiveRenderLimit } from "@/hooks/useProgressiveRenderLimit";
 import { COUNT_BADGE_CLASS } from "@/components/ui/badge";
 import { pluralize, pluralNoun } from "@/lib/pluralize";
-import { settingsOwnerHeaderLabel, useRemoteHostName } from "@/hooks/useSettingsOwner";
+import {
+  deviceOwnerLabel,
+  settingsOwnerHeaderLabel,
+  useRemoteHostName,
+} from "@/hooks/useSettingsOwner";
+import { currentHostId } from "@/hooks/useHostPlatform";
+import { useHostList } from "@/components/Hosts/hostList";
+import { useSettingsTargetStore } from "@/store/settingsTargetStore";
+import type { HostId } from "@shared/types/remoteHosts";
+import { HostWorkSettingsPage } from "./Hosts/HostWorkSettingsPage";
+import { SettingsMachinePicker, settingsMachineOptions } from "./Hosts/SettingsMachinePicker";
 
 let rememberedTab: SettingsTab = "general";
 let rememberedProjectTab: SettingsTab = "project:general";
@@ -255,6 +265,21 @@ function SettingsDialogInner({
 
   const hasProject = !!projectId;
 
+  // Which machine's work settings are shown (#14706). With no other machine to
+  // pick there is no picker, and the dialog is exactly as it always was.
+  const { hosts: pairedHosts } = useHostList();
+  const remoteHostName = useRemoteHostName();
+  const machineOptions = settingsMachineOptions(pairedHosts, currentHostId(), remoteHostName);
+  const targetHostId = useSettingsTargetStore((s) => s.hostId);
+  const setTargetHostId = useSettingsTargetStore((s) => s.setHostId);
+  const target =
+    machineOptions.find((option) => option.hostId !== null && option.hostId === targetHostId) ??
+    null;
+  const showingDevicePage = useSettingsTargetStore((s) => s.showingDevicePage);
+  const setShowingDevicePage = useSettingsTargetStore((s) => s.setShowingDevicePage);
+  // Another machine's work settings own the page; this machine's device pages stay listed.
+  const editingOther = target !== null && activeScope === "global";
+
   useEffect(() => {
     const id = requestIdleCallback(
       () => {
@@ -311,6 +336,7 @@ function SettingsDialogInner({
   // activeTab is read non-reactively via useEffectEvent to avoid re-running
   // this reset-on-open effect when the user changes tabs mid-session.
   const handleOpenChange = useEffectEvent(() => {
+    if (isOpen) setTargetHostId(null);
     if (isOpen && defaultTab) {
       markTabVisited(defaultTab);
       if (defaultTab !== activeTab) {
@@ -539,8 +565,19 @@ function SettingsDialogInner({
         modifiedSettingIds,
         scope: activeScope,
         hasProject,
-      }),
-    [searchIndex, searchQuery, modifiedTabs, modifiedSettingIds, activeScope, hasProject]
+      }).filter(
+        // Another machine picked: only this machine's own pages can be opened from here.
+        (result) => !editingOther || (!result.plugin && ownerForTab(result.tab) === "device")
+      ),
+    [
+      searchIndex,
+      searchQuery,
+      modifiedTabs,
+      modifiedSettingIds,
+      activeScope,
+      hasProject,
+      editingOther,
+    ]
   );
 
   const cleanSearchQuery = useMemo(() => parseQuery(searchQuery).cleanQuery, [searchQuery]);
@@ -548,10 +585,14 @@ function SettingsDialogInner({
   const matchCounts = useMemo(() => countMatchesPerTab(searchResults), [searchResults]);
 
   const isSearching = searchQuery.trim().length > 0;
+  // Only this machine's own pages ever show under another machine's pick: anything
+  // else (a page remembered from project scope) gives way to the picked machine's.
+  const showHostPage = editingOther && (!showingDevicePage || ownerForTab(activeTab) !== "device");
+  const panelsHidden = isSearching || showHostPage;
   const shownSubpage = subpage && subpage.tab === activeTab && !isSearching ? subpage : null;
 
   const [panelSettled, markPanelInteracted] = usePanelSettled(
-    `${isOpen}|${isSearching}|${activeTab}|${activeSubtabs[activeTab] ?? ""}`
+    `${isOpen}|${isSearching}|${showHostPage ? `host:${target?.hostId}` : activeTab}|${activeSubtabs[activeTab] ?? ""}`
   );
 
   // What a gated result depends on, held until its landing reports whether the setting
@@ -596,6 +637,7 @@ function SettingsDialogInner({
       return;
     }
     markTabVisited(tab);
+    if (editingOther && ownerForTab(tab) === "device") setShowingDevicePage(true);
     setSearchQuery("");
     setHiddenSettingBanner(null);
     pendingRequirementRef.current = requiresEnabled ?? null;
@@ -664,6 +706,7 @@ function SettingsDialogInner({
 
   const handleNavSelect = (tab: SettingsTab) => {
     setFocusedNavTab(null);
+    if (editingOther && ownerForTab(tab) === "device") setShowingDevicePage(true);
     const cannotSuspend = visitedTabs.has(tab) || isSettingsTabLoaded(tab);
     markTabVisited(tab);
     setSearchQuery("");
@@ -676,6 +719,20 @@ function SettingsDialogInner({
     // the transition, which holds the current tab instead of flashing blank.
     if (cannotSuspend) setActiveTab(tab);
     else startTransition(() => setActiveTab(tab));
+  };
+
+  const handleHostPageSelect = () => {
+    setFocusedNavTab(null);
+    setShowingDevicePage(false);
+    setSearchQuery("");
+    setScrollToSection(null);
+    setHiddenSettingBanner(null);
+  };
+
+  const handleMachineChange = (hostId: HostId | null) => {
+    setTargetHostId(hostId);
+    setSearchQuery("");
+    setHiddenSettingBanner(null);
   };
 
   const handleScopeSwitch = (scope: SettingsScope) => {
@@ -698,7 +755,9 @@ function SettingsDialogInner({
   // Manual activation: the arrow keys move focus without selecting, so the one tab
   // stop has to follow focus rather than stay on the selected tab. Null means "the
   // selected tab", which is also where it returns once focus leaves the list.
-  const [focusedNavTab, setFocusedNavTab] = useState<SettingsTab | null>(null);
+  const [focusedNavTab, setFocusedNavTab] = useState<SettingsTab | typeof HOST_WORK_TAB | null>(
+    null
+  );
 
   // A deep link or search hit can land on a tab below the nav's fold — MCP, Plugins,
   // Run history — leaving the page with no visible "you are here". Keep the active
@@ -723,7 +782,9 @@ function SettingsDialogInner({
     // in DOM order the header's close button sat between them, one extra stop on every
     // trip into the content. Close stays reachable — Shift+Tab from the page.
     if (e.key === "Tab" && !e.shiftKey && !isSearching) {
-      const panel = document.getElementById(`settings-panel-${activeTab}`);
+      const panel = document.getElementById(
+        showHostPage ? HOST_WORK_PANEL_ID : `settings-panel-${activeTab}`
+      );
       if (panel) {
         e.preventDefault();
         panel.focus({ preventScroll: true });
@@ -756,7 +817,9 @@ function SettingsDialogInner({
     // covers activation without an explicit keydown branch here.
     const next = tabs[nextIndex]!;
     const nextTab = next.dataset.tab;
-    setFocusedNavTab(nextTab && isSettingsTab(nextTab) ? nextTab : null);
+    setFocusedNavTab(
+      nextTab === HOST_WORK_TAB ? HOST_WORK_TAB : nextTab && isSettingsTab(nextTab) ? nextTab : null
+    );
     next.focus();
   };
 
@@ -771,7 +834,18 @@ function SettingsDialogInner({
   // pane there is no active tab to speak for, so the nav scope is the honest answer.
   const headerScope: SettingsScope = isSearching ? activeScope : contentScopeForTab(activeTab);
 
-  const navGroups = getSettingsNavGroups(activeScope);
+  // With another machine picked, this machine's own pages are one group under its name.
+  const navGroups = editingOther
+    ? [
+        {
+          label: deviceOwnerLabel(),
+          entries: getSettingsNavGroups(activeScope).flatMap((group) =>
+            group.entries.filter((entry) => ownerForTab(entry.id as SettingsTab) === "device")
+          ),
+        },
+      ]
+    : getSettingsNavGroups(activeScope);
+  const navActiveTab = showHostPage ? null : activeTab;
 
   const tabTitles: Record<SettingsTab, string> = {
     ...globalTabTitles,
@@ -820,6 +894,13 @@ function SettingsDialogInner({
                 Settings
               </h2>
             )}
+            {machineOptions.length > 1 && activeScope === "global" && (
+              <SettingsMachinePicker
+                options={machineOptions}
+                value={target?.hostId ?? null}
+                onChange={handleMachineChange}
+              />
+            )}
           </div>
 
           <SearchField
@@ -858,10 +939,26 @@ function SettingsDialogInner({
             onKeyDown={handleTablistKeyDown}
             onBlur={handleTablistBlur}
           >
+            {editingOther && target && (
+              <NavGroup label={target.name}>
+                <HostWorkNavItem
+                  selected={showHostPage}
+                  tabStop={
+                    (focusedNavTab ?? (showHostPage ? HOST_WORK_TAB : null)) === HOST_WORK_TAB
+                  }
+                  isSearching={isSearching}
+                  onSelect={handleHostPageSelect}
+                />
+              </NavGroup>
+            )}
             {navGroups.map((group) => (
               // A lone group's label only repeats the heading above it ("Project
               // settings" over "Project"), so it is dropped rather than shown twice.
-              <NavGroup key={group.label} label={group.label} hideLabel={navGroups.length === 1}>
+              <NavGroup
+                key={group.label}
+                label={group.label}
+                hideLabel={!editingOther && navGroups.length === 1}
+              >
                 {group.entries.map((entry) => {
                   const tabId = entry.id as SettingsTab;
                   const isLazy = entry.importKind === "lazy";
@@ -871,8 +968,8 @@ function SettingsDialogInner({
                       tab={tabId}
                       icon={entry.icon}
                       label={entry.label}
-                      activeTab={activeTab}
-                      tabStop={(focusedNavTab ?? activeTab) === tabId}
+                      activeTab={navActiveTab}
+                      tabStop={(focusedNavTab ?? navActiveTab) === tabId}
                       isSearching={isSearching}
                       matchCount={matchCounts[tabId]}
                       modified={modifiedTabs.has(tabId)}
@@ -926,6 +1023,8 @@ function SettingsDialogInner({
                   icon={
                     shownSubpage ? undefined : isSearching ? (
                       <Search className="w-5 h-5 text-text-secondary" />
+                    ) : showHostPage ? (
+                      <ServerCog className="w-5 h-5" />
                     ) : (
                       tabIcons[activeTab]
                     )
@@ -941,6 +1040,8 @@ function SettingsDialogInner({
                   </span>
                   {isSearching ? (
                     "Search results"
+                  ) : showHostPage ? (
+                    "Work settings"
                   ) : shownSubpage ? (
                     <>
                       <span className="font-normal text-text-secondary">
@@ -967,7 +1068,14 @@ function SettingsDialogInner({
                     </span>
                   )}
                   {/* Search results have no single owner to name. */}
-                  {!isSearching && <SettingsOwnerHeaderChip tab={activeTab} />}
+                  {!isSearching && (
+                    <SettingsOwnerHeaderChip
+                      tab={activeTab}
+                      picked={
+                        editingOther && target ? (showHostPage ? target.name : null) : undefined
+                      }
+                    />
+                  )}
                 </AppDialog.Title>
               </div>
               <AppDialog.CloseButton aria-label="Close settings" />
@@ -1021,8 +1129,23 @@ function SettingsDialogInner({
                 is a role="tab" whose aria-controls points at one of these panels, and a
                 tab pointing at an id that is not in the document is a broken reference
                 for assistive tech — the panels have to outlive the search overlay. */}
+              {editingOther && target?.hostId && (
+                <HostWorkPanel
+                  isActive={showHostPage && !isSearching}
+                  panelSettled={panelSettled}
+                  onInteract={markPanelInteracted}
+                >
+                  <HostWorkSettingsPage
+                    key={target.hostId}
+                    hostId={target.hostId}
+                    hostName={target.name}
+                    connected={target.connected}
+                    shellVersion={appVersion || undefined}
+                  />
+                </HostWorkPanel>
+              )}
               <div
-                className={isSearching ? "hidden" : undefined}
+                className={panelsHidden ? "hidden" : undefined}
                 onPointerDownCapture={markPanelInteracted}
                 onKeyDownCapture={markPanelInteracted}
               >
@@ -1099,7 +1222,7 @@ function SettingsDialogInner({
                               }
                             />
                             <SettingsTabScrollEffect
-                              isActive={isActive && !isSearching}
+                              isActive={isActive && !panelsHidden}
                               scrollToSectionId={scrollToSection}
                               onScrollToSectionHandled={handleScrollToSectionHandled}
                             />
@@ -1119,7 +1242,7 @@ function SettingsDialogInner({
                                   : undefined
                               }
                               onSettingsChange={onSettingsChange}
-                              isActive={isActive && !isSearching}
+                              isActive={isActive && !panelsHidden}
                               scrollToSectionId={scrollToSection}
                               onScrollToSectionHandled={handleScrollToSectionHandled}
                             />
@@ -1155,7 +1278,7 @@ function SettingsDialogInner({
                                   globalEnvVars={globalEnvVars}
                                   globalScrollbackLines={scrollbackLines}
                                   projectLabel={projectLabel}
-                                  isActive={isActive && !isSearching}
+                                  isActive={isActive && !panelsHidden}
                                   scrollToSectionId={scrollToSection}
                                   onScrollToSectionHandled={handleScrollToSectionHandled}
                                 />
@@ -1695,7 +1818,8 @@ interface NavItemProps {
   tab: SettingsTab;
   icon: React.ReactNode;
   label: string;
-  activeTab: SettingsTab;
+  /** Null while a page outside the tab list (another machine's work settings) is shown. */
+  activeTab: SettingsTab | null;
   /** Holds the list's one tab stop. Defaults to the selected tab. */
   tabStop?: boolean;
   isSearching: boolean;
@@ -1783,6 +1907,75 @@ export function NavItem({
       </span>
       <span className="flex-1 truncate">{label}</span>
       {matchCount ? <MatchBadge count={matchCount} /> : null}
+    </button>
+  );
+}
+
+const HOST_WORK_TAB = "host-work";
+const HOST_WORK_PANEL_ID = "settings-panel-host-work";
+
+function HostWorkPanel({
+  isActive,
+  panelSettled,
+  onInteract,
+  children,
+}: {
+  isActive: boolean;
+  panelSettled: boolean;
+  onInteract: (event: { target: EventTarget }) => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      role="tabpanel"
+      id={HOST_WORK_PANEL_ID}
+      aria-labelledby="settings-tab-host-work"
+      tabIndex={0}
+      className={isActive ? SETTINGS_PANEL_CLASS : "hidden"}
+      data-settings-settling={isActive && panelSettled ? undefined : ""}
+      onPointerDownCapture={onInteract}
+      onKeyDownCapture={onInteract}
+    >
+      {children}
+    </div>
+  );
+}
+
+/**
+ * The picked machine's work settings, one page outside the tab registry: it
+ * is no tab of this machine's, so it is never a deep-link or search target.
+ */
+function HostWorkNavItem({
+  selected,
+  tabStop,
+  isSearching,
+  onSelect,
+}: {
+  selected: boolean;
+  tabStop: boolean;
+  isSearching: boolean;
+  onSelect: () => void;
+}) {
+  const active = selected && !isSearching;
+  return (
+    <button
+      role="tab"
+      id="settings-tab-host-work"
+      data-tab={HOST_WORK_TAB}
+      aria-selected={selected}
+      aria-controls={HOST_WORK_PANEL_ID}
+      tabIndex={tabStop ? 0 : -1}
+      onClick={onSelect}
+      className={cn(
+        "relative text-left px-3 h-7 rounded-[var(--radius-md)] text-sm transition-[background-color,color] duration-150 ease-out flex items-center gap-2 w-full scroll-my-6",
+        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2",
+        "settings-nav-item",
+        active ? "text-text-primary" : "text-text-secondary hover:text-text-primary"
+      )}
+      data-active={active ? "true" : undefined}
+    >
+      <ServerCog className="w-4 h-4" aria-hidden="true" />
+      <span className="flex-1 truncate">Work settings</span>
     </button>
   );
 }
@@ -1877,9 +2070,24 @@ export function ScopeChip({
  * Neutral like the scope chip: it answers a question, it doesn't ask for attention.
  * Part of the title's accessible name, after a pause.
  */
-export function SettingsOwnerHeaderChip({ tab }: { tab: SettingsTab }) {
+export function SettingsOwnerHeaderChip({
+  tab,
+  picked,
+}: {
+  tab: SettingsTab;
+  /**
+   * With another machine picked (#14706): its name over its work settings, or
+   * null over one of this machine's own pages, which says so even locally.
+   */
+  picked?: string | null;
+}) {
   const remoteHostName = useRemoteHostName();
-  const label = settingsOwnerHeaderLabel(ownerForTab(tab), remoteHostName);
+  const label =
+    picked === undefined
+      ? settingsOwnerHeaderLabel(ownerForTab(tab), remoteHostName)
+      : picked === null
+        ? deviceOwnerLabel()
+        : `Settings on ${picked}`;
   if (label === null) return null;
   return (
     <span className="flex font-normal" data-settings-owner-chip="">

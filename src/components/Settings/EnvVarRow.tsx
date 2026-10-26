@@ -74,6 +74,8 @@ interface EnvVarRowProps {
   storageBadge?: ReactNode;
   valuePlaceholder?: string;
   keyRef?: Ref<HTMLInputElement>;
+  /** Held while a save of the set it belongs to is in flight. */
+  disabled?: boolean;
 }
 
 export function EnvVarRow({
@@ -89,6 +91,7 @@ export function EnvVarRow({
   storageBadge,
   valuePlaceholder = "value",
   keyRef,
+  disabled,
 }: EnvVarRowProps) {
   const errorId = `${row.id}-error`;
   const name = row.key.trim();
@@ -101,6 +104,7 @@ export function EnvVarRow({
             type="text"
             value={row.key}
             onChange={(e) => onKeyChange(e.target.value)}
+            disabled={disabled}
             spellCheck={false}
             autoCapitalize="none"
             autoComplete="off"
@@ -122,6 +126,7 @@ export function EnvVarRow({
             type={sensitive && !revealed ? "password" : "text"}
             value={row.value}
             onChange={(e) => onValueChange(e.target.value)}
+            disabled={disabled}
             spellCheck={false}
             autoCapitalize="none"
             autoComplete={sensitive ? "new-password" : "off"}
@@ -147,6 +152,7 @@ export function EnvVarRow({
           variant="ghost-danger"
           size="icon-sm"
           onClick={onDelete}
+          disabled={disabled}
           aria-label={`Delete ${name || "unnamed variable"} (row ${position})`}
         >
           <Trash2 />

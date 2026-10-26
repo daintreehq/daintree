@@ -6,6 +6,12 @@ import { appClient } from "@/clients";
 import { appThemeClient } from "@/clients/appThemeClient";
 import { useUserAgentRegistryStore } from "@/store/userAgentRegistryStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { useResourceMonitoringStore } from "@/store/resourceMonitoringStore";
+import {
+  DEFAULT_AUTO_RESTART_THRESHOLD_MB,
+  useMemoryLeakConfigStore,
+} from "@/store/memoryLeakConfigStore";
+import { invalidateGlobalEnvCache } from "@/clients/globalEnvClient";
 import { useAppThemeStore } from "@/store/appThemeStore";
 import { notify } from "@/lib/notify";
 import { keybindingService } from "@/services/KeybindingService";
@@ -16,11 +22,36 @@ import { logError } from "@/utils/logger";
 import { IMPORT_CONFIG_EVENT } from "@/components/Config/importConfigEvent";
 import { pluralize } from "@/lib/pluralize";
 
+/**
+ * The terminal monitoring this view runs, as the host now has it: another
+ * machine's Settings may have changed it there (#14706). Only the mirrors are
+ * set; the host already holds the values, so nothing is written back.
+ */
+async function refreshTerminalMonitoring(): Promise<void> {
+  let config: Awaited<ReturnType<typeof window.electron.terminalConfig.get>>;
+  try {
+    config = await window.electron.terminalConfig.get();
+  } catch (error) {
+    logError("[app.reloadConfig] Failed to refresh terminal monitoring", error);
+    return;
+  }
+  const resourceEnabled = config.resourceMonitoringEnabled === true;
+  useResourceMonitoringStore.getState().setEnabled(resourceEnabled);
+  const leak = useMemoryLeakConfigStore.getState();
+  leak.setEnabled(config.memoryLeakDetectionEnabled ?? resourceEnabled);
+  leak.setAutoRestartThresholdMb(
+    config.memoryLeakAutoRestartThresholdMb ?? DEFAULT_AUTO_RESTART_THRESHOLD_MB
+  );
+}
+
 async function refreshRendererConfig(): Promise<void> {
+  // The next terminal reads the host's environment as it is now, not as first read.
+  invalidateGlobalEnvCache();
   await Promise.all([
     useUserAgentRegistryStore.getState().refresh(),
     useAgentSettingsStore.getState().refresh(),
     keybindingService.loadOverrides(),
+    refreshTerminalMonitoring(),
   ]);
   actionService.dispatch("cliAvailability.refresh", undefined, { source: "agent" });
 }

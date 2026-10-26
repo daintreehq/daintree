@@ -1,4 +1,5 @@
 import type {
+  HostSettingsDescription,
   HostSettingKey,
   HostSettingLeaf,
   HostSettingValue,
@@ -10,6 +11,7 @@ import { HOST_SETTING_KEYS } from "../../../shared/types/hostSettings.js";
 import { AppError } from "../../utils/errorTypes.js";
 import type { LinkSession } from "../link/session.js";
 import {
+  SettingsControlDescribeSchema,
   SettingsControlLinkMethod,
   SettingsControlReadSchema,
   SettingsControlUpdateSchema,
@@ -77,6 +79,11 @@ export class HostSettingsControl {
         SettingsControlUpdateSchema,
         (p) => this.update(p)
       ),
+      session.registerCallHandler(
+        SettingsControlLinkMethod.DESCRIBE,
+        SettingsControlDescribeSchema,
+        () => this.describe()
+      ),
     ];
     session.onClose(() => {
       for (const dispose of unregister) dispose();
@@ -85,6 +92,11 @@ export class HostSettingsControl {
 
   dispose(): void {
     this.disposed = true;
+  }
+
+  async describe(): Promise<HostSettingsDescription> {
+    const leaves = await this.deps.load();
+    return { instanceId: leaves.instanceId, keys: [...HOST_SETTING_KEYS] };
   }
 
   async read(keys: readonly HostSettingKey[]): Promise<HostSettingsReading> {

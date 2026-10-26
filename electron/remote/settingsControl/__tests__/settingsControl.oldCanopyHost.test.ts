@@ -33,6 +33,10 @@ function host({
     isOpen: true,
     call: vi.fn(async (method: string, payload: unknown) => {
       const p = payload as { keys?: string[]; patch?: Record<string, unknown> };
+      // A host this old predates `describe` too.
+      if (method === SettingsControlLinkMethod.DESCRIBE) {
+        throw Object.assign(new Error("Unknown method"), { code: "UNSUPPORTED" });
+      }
       if (method === SettingsControlLinkMethod.READ) {
         if (failReadsWith) throw Object.assign(new Error("failed"), { code: failReadsWith });
         if (!knowsModel && p.keys!.includes("canopyModel")) {

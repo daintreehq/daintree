@@ -1,7 +1,8 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import {
-  HOST_SETTING_KEYS,
+  ASSISTANT_HOST_SETTING_KEYS,
+  type AssistantHostSettingKey,
   type HostSettingKey,
   type HostSettingValue,
   type HostSettingsSnapshot,
@@ -13,7 +14,7 @@ import { AppError } from "../../../utils/errorTypes.js";
 import { canopyLocalOn, canopyStopOn } from "../../../../shared/config/canopyTerms.js";
 import { HostSettingsRequests, type HostSettingsRequestDeps } from "../HostSettingsRequests.js";
 
-type Values = Record<HostSettingKey, HostSettingValue>;
+type Values = Record<AssistantHostSettingKey, HostSettingValue>;
 
 function defaults(): Values {
   return {
@@ -34,13 +35,13 @@ function fakeHosts(names: Record<string, string>) {
       { name, values: defaults(), instanceId: `${hostId}-launch`, canopyRevision: 0 },
     ])
   );
-  const revisionOf = (hostId: string, key: HostSettingKey) => {
+  const revisionOf = (hostId: string, key: AssistantHostSettingKey) => {
     const host = hosts.get(hostId)!;
     return key === "canopyMode"
       ? `${host.canopyRevision}`
       : `v:${JSON.stringify(host.values[key])}`;
   };
-  const leaves = (hostId: string, keys: readonly HostSettingKey[]) =>
+  const leaves = (hostId: string, keys: readonly AssistantHostSettingKey[]) =>
     keys.map((key) => ({
       key,
       value: hosts.get(hostId)!.values[key],
@@ -59,13 +60,17 @@ function fakeHosts(names: Record<string, string>) {
         hostName: host.name,
         scope: "host",
         instanceId: host.instanceId,
-        settings: leaves(hostId, keys ?? [...HOST_SETTING_KEYS]),
+        unavailable: [],
+        settings: leaves(
+          hostId,
+          ASSISTANT_HOST_SETTING_KEYS.filter((key) => (keys ?? [key]).includes(key))
+        ),
       } satisfies HostSettingsSnapshot;
     }),
     update: vi.fn(async (payload: HostSettingsUpdatePayload): Promise<HostSettingsUpdateResult> => {
       updates.push(structuredClone(payload));
       const host = hosts.get(payload.hostId)!;
-      const keys = HOST_SETTING_KEYS.filter((key) => key in payload.patch);
+      const keys = ASSISTANT_HOST_SETTING_KEYS.filter((key) => key in payload.patch);
       const base = { hostId: payload.hostId, hostName: host.name, scope: "host" as const };
       const current =
         payload.expect.instanceId === host.instanceId &&

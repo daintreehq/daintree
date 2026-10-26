@@ -1,6 +1,8 @@
 import {
   HOST_SETTING_KEYS,
-  hostSettingRefusal,
+  HostSettingsDescriptionSchema,
+  LEGACY_HOST_SETTING_KEYS,
+  hostSettingReadable,
   HostSettingsPatchSchema,
   HostSettingsReadingSchema,
   HostSettingsUpdateReplySchema,
@@ -33,6 +35,8 @@ export interface ClientSettingsControlDeps {
 }
 
 const READ_TIMEOUT_MS = 15_000;
+
+const LEGACY_KEYS: ReadonlySet<HostSettingKey> = new Set(LEGACY_HOST_SETTING_KEYS);
 const UPDATE_TIMEOUT_MS = 30_000;
 
 function errorCode(error: unknown): string | null {
@@ -58,14 +62,20 @@ function coversExactly(settings: readonly HostSettingLeaf[], keys: readonly Host
   const seen = new Set<HostSettingKey>();
   for (const leaf of settings) {
     if (!keys.includes(leaf.key) || seen.has(leaf.key)) return false;
-    if (hostSettingRefusal(leaf.key, leaf.value) !== null) return false;
+    if (!hostSettingReadable(leaf.key, leaf.value)) return false;
     seen.add(leaf.key);
   }
   return true;
 }
 
+/** Objects (a host's environment) compare by entries, whatever order they were written in. */
+function canonical(value: unknown): unknown {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return value ?? null;
+  return Object.entries(value).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+}
+
 function sameValue(a: unknown, b: unknown): boolean {
-  return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+  return JSON.stringify(canonical(a)) === JSON.stringify(canonical(b));
 }
 
 /**
@@ -149,8 +159,58 @@ export class ClientSettingsControl {
     }
   }
 
-  private snapshot(hostId: HostId, reading: HostSettingsReading): HostSettingsSnapshot {
-    return { hostId, hostName: this.deps.hostLabel(hostId), scope: "host", ...reading };
+  private snapshot(
+    hostId: HostId,
+    reading: HostSettingsReading,
+    unavailable: HostSettingKey[]
+  ): HostSettingsSnapshot {
+    return {
+      hostId,
+      hostName: this.deps.hostLabel(hostId),
+      scope: "host",
+      unavailable,
+      ...reading,
+    };
+  }
+
+  /**
+   * The keys this host's Daintree can be asked about. One from before
+   * `describe` (#14706) answers `UNSUPPORTED` and knows the original six; a
+   * newer one's keys this Shell doesn't know are dropped.
+   */
+  private async knownKeys(hostId: HostId): Promise<ReadonlySet<HostSettingKey>> {
+    let raw: unknown;
+    try {
+      raw = await this.session(hostId).call(
+        SettingsControlLinkMethod.DESCRIBE,
+        {},
+        { timeoutMs: READ_TIMEOUT_MS }
+      );
+    } catch (error) {
+      if (errorCode(error) === "UNSUPPORTED") return LEGACY_KEYS;
+      throw this.translate(
+        error,
+        hostId,
+        `Couldn't read settings on ${this.deps.hostLabel(hostId)}`
+      );
+    }
+    const parsed = HostSettingsDescriptionSchema.safeParse(raw);
+    if (!parsed.success) {
+      throw new AppError({
+        code: "INTERNAL",
+        message: "The host's settings description was malformed",
+        userMessage: `${this.deps.hostLabel(hostId)} answered in a way this Daintree can't read. Update both to the same version.`,
+      });
+    }
+    return new Set(parsed.data.keys.filter(isHostSettingKey));
+  }
+
+  private tooOld(hostId: HostId): AppError {
+    return new AppError({
+      code: "UNSUPPORTED",
+      message: "The host doesn't know that setting",
+      userMessage: `Daintree on ${this.deps.hostLabel(hostId)} is too old to change this from here. Update it there and try again.`,
+    });
   }
 
   /**
@@ -226,7 +286,11 @@ export class ClientSettingsControl {
       throw new AppError({ code: "VALIDATION", message: "Unknown host setting" });
     }
     if (keys.length === 0) throw new AppError({ code: "VALIDATION", message: "No settings named" });
-    return this.snapshot(hostId, await this.readFrom(hostId, keys));
+    const known = await this.knownKeys(hostId);
+    const askable = keys.filter((key) => known.has(key));
+    if (askable.length === 0) throw this.tooOld(hostId);
+    const unavailable = keys.filter((key) => !known.has(key));
+    return this.snapshot(hostId, await this.readFrom(hostId, askable), unavailable);
   }
 
   /**
@@ -255,6 +319,11 @@ export class ClientSettingsControl {
       });
     }
     const keys = HOST_SETTING_KEYS.filter((key) => Object.hasOwn(patch, key));
+    // A host from before a key would refuse the whole change as malformed: say why instead.
+    if (keys.some((key) => !LEGACY_KEYS.has(key))) {
+      const known = await this.knownKeys(hostId);
+      if (!keys.every((key) => known.has(key))) throw this.tooOld(hostId);
+    }
     const session = this.session(hostId);
     const base = { hostId, hostName: this.deps.hostLabel(hostId), scope: "host" as const };
     const release = this.deps.holdHost?.(hostId);
