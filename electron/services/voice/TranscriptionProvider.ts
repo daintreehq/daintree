@@ -85,8 +85,8 @@ export interface TranscriptionProvider {
   sendAudioChunk(chunk: ArrayBuffer): void;
   /**
    * Flush the current audio segment at a user-driven paragraph boundary (Enter
-   * pressed mid-utterance). A no-op for server-VAD providers, which segment on
-   * their own.
+   * pressed mid-utterance). Server-VAD providers ask the backend to finalise
+   * what it has buffered.
    */
   commitParagraphBoundary(): void;
   stopGracefully(): Promise<void>;

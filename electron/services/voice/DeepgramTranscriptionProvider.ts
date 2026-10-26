@@ -46,6 +46,13 @@ const KEEPALIVE_INTERVAL_MS = 5_000;
 const MAX_DEEPGRAM_URL_KEYTERMS = 50;
 const MAX_DEEPGRAM_URL_KEYTERM_CHARS = 3_000;
 
+// Process-wide: the orchestrator builds a fresh provider per session, so a
+// per-instance counter would hand the renderer the same id twice.
+let spanSeq = 0;
+function nextSpanItemId(): string {
+  return `deepgram-${++spanSeq}`;
+}
+
 /**
  * Conservatively trim assembled keyterms before they go on the streaming URL.
  * Drops empty/whitespace-only terms, then accepts terms in priority order until
@@ -144,9 +151,8 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
 
   // Each interim result is Deepgram's whole hypothesis for the audio since the
   // last final, so that span is one item: its interims replace one preview and
-  // its final retires exactly that preview. The index advances on every final.
-  private spanIndex = 0;
-  private spanPreviewed = false;
+  // its final retires exactly that preview. Null until the span shows a preview.
+  private spanItemId: string | null = null;
 
   onEvent(listener: (event: VoiceTranscriptionEvent) => void): () => void {
     this.listeners.add(listener);
@@ -515,32 +521,35 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     switch (type) {
       case "Results": {
         const channel = payload.channel as
-          { alternatives?: Array<{ transcript?: string }> } | undefined;
-        const transcript = channel?.alternatives?.[0]?.transcript ?? "";
-        const isFinal = payload.is_final === true;
+          { alternatives?: Array<{ transcript?: unknown }> } | undefined;
+        const transcript = channel?.alternatives?.[0]?.transcript;
+        // A malformed result must neither show text nor retire the live span.
+        if (typeof transcript !== "string" || typeof payload.is_final !== "boolean") {
+          logDebug(`${P} ← malformed Results`, voicePayloadShape(payload));
+          return;
+        }
+        const isFinal = payload.is_final;
         const speechFinal = payload.speech_final === true;
         logDebug(`${P} ← Results`, { length: transcript.length, isFinal, speechFinal });
         const trimmed = transcript.trim();
-        const itemId = `deepgram-${this.sessionId}-${this.spanIndex}`;
         if (!isFinal) {
           // An empty revision keeps the last preview; the span's final retires it.
           if (!trimmed) return;
-          this.spanPreviewed = true;
-          this.emit({ type: "delta", text: trimmed, itemId, replace: true });
+          this.spanItemId ??= nextSpanItemId();
+          this.emit({ type: "delta", text: trimmed, itemId: this.spanItemId, replace: true });
           return;
         }
         // Finals cover disjoint spans and never change. A speech_final result is
         // always is_final, so this covers both. A span that showed a preview
         // still completes when it finalises empty, so the preview doesn't linger.
-        const previewed = this.spanPreviewed;
-        this.spanIndex++;
-        this.spanPreviewed = false;
-        if (trimmed || previewed) {
+        const previewId = this.spanItemId;
+        this.spanItemId = null;
+        if (previewId || trimmed) {
           this.emit({
             type: "complete",
             text: trimmed,
             confidence: { ...STUB_CONFIDENCE },
-            itemId,
+            itemId: previewId ?? nextSpanItemId(),
           });
         }
         return;
@@ -643,8 +652,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     this.audioChunkCount = 0;
     this.staleChunkWarned = false;
     this.preConnectBufferOverflowWarned = false;
-    this.spanIndex = 0;
-    this.spanPreviewed = false;
+    this.spanItemId = null;
     this.isReady = false;
     this.preConnectBuffer = [];
     this.preConnectBufferBytes = 0;

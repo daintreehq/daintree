@@ -603,7 +603,59 @@ describe("DeepgramTranscriptionProvider", () => {
     provider.stop();
   });
 
-  it("does not emit an empty interim or reuse a span identity across sessions", async () => {
+  it("a malformed result leaves the live preview for its span's real final", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    provider.onEvent((e) => {
+      if (e.type === "delta" || e.type === "complete") events.push(e);
+    });
+
+    const { socket } = await bringSessionReady(provider);
+    socket.simulateMessage(resultsMessage("hello", { is_final: false }));
+    socket.simulateMessage({ type: "Results", is_final: true });
+    socket.simulateMessage({
+      type: "Results",
+      is_final: true,
+      channel: { alternatives: [{ transcript: 42 }] },
+    });
+    socket.simulateMessage(resultsMessage("Hello.", { is_final: true }));
+
+    expect(events.map((e) => e.type)).toEqual(["delta", "complete"]);
+    const [delta, complete] = events as Array<{ itemId?: string; text?: string }>;
+    expect(complete.text).toBe("Hello.");
+    expect(complete.itemId).toBe(delta.itemId);
+    provider.stop();
+  });
+
+  it("gives a final that arrives without any interim its own span identity", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    provider.onEvent((e) => {
+      if (e.type === "delta" || e.type === "complete") events.push(e);
+    });
+
+    const { socket } = await bringSessionReady(provider);
+    socket.simulateMessage(resultsMessage("Yes.", { is_final: true }));
+    socket.simulateMessage(resultsMessage("and", { is_final: false }));
+
+    const [complete, delta] = events as Array<{ type: string; itemId?: string }>;
+    expect(complete).toMatchObject({ type: "complete", text: "Yes." });
+    expect(complete.itemId).toBeTruthy();
+    expect(delta.itemId).toBeTruthy();
+    expect(delta.itemId).not.toBe(complete.itemId);
+    provider.stop();
+  });
+
+  it("does not emit an empty interim or reuse a span identity across providers", async () => {
+    const other = new DeepgramTranscriptionProvider();
+    const otherIds: Array<string | undefined> = [];
+    other.onEvent((e) => {
+      if (e.type === "delta") otherIds.push(e.itemId);
+    });
+    const otherSession = await bringSessionReady(other);
+    otherSession.socket.simulateMessage(resultsMessage("elsewhere", { is_final: false }));
+    other.stop();
+
     const provider = new DeepgramTranscriptionProvider();
     const deltas: Array<{ text: string; itemId?: string }> = [];
     provider.onEvent((e) => {
@@ -620,6 +672,8 @@ describe("DeepgramTranscriptionProvider", () => {
     second.socket.simulateMessage(resultsMessage("second", { is_final: false }));
     expect(deltas.map((d) => d.text)).toEqual(["first", "second"]);
     expect(deltas[1].itemId).not.toBe(deltas[0].itemId);
+    expect(otherIds).toHaveLength(1);
+    expect(deltas.map((d) => d.itemId)).not.toContain(otherIds[0]);
     provider.stop();
   });
 
@@ -655,7 +709,7 @@ describe("DeepgramTranscriptionProvider", () => {
     const provider = new DeepgramTranscriptionProvider();
     const completes: string[] = [];
     provider.onEvent((e) => {
-      if (e.type === "complete") completes.push(e.text);
+      if (e.type === "complete" || e.type === "delta") completes.push(e.text);
     });
 
     const { socket } = await bringSessionReady(provider);
@@ -665,7 +719,7 @@ describe("DeepgramTranscriptionProvider", () => {
     expect(() =>
       socket.simulateMessage({ type: "Results", is_final: true, channel: { alternatives: [] } })
     ).not.toThrow();
-    // is_final as a string, not a strict boolean — treated as interim, not emitted.
+    // is_final as a string, not a strict boolean — ignored, not shown as a preview.
     expect(() =>
       socket.simulateMessage({
         type: "Results",

@@ -226,6 +226,18 @@ describe("VoiceRecordingService — identified items (#13109)", () => {
     expect(liveText()).toBe("");
   });
 
+  it("anchors the session at a final that arrives without any interim", async () => {
+    await setup();
+    draftState.draft = "existing";
+
+    complete("Yes.", "span-0");
+    revise("and", "span-1");
+
+    const { useVoiceRecordingStore } = await import("@/store/voiceRecordingStore");
+    const start = useVoiceRecordingStore.getState().panelBuffers[PANEL_ID]?.sessionDraftStart;
+    expect(draftState.draft.slice(start)).toBe("Yes.");
+  });
+
   it("still splices unidentified completions at the segment start", async () => {
     const { liveText } = await setup();
     draftState.draft = "existing";

@@ -441,14 +441,16 @@ describe("voiceInput — spoken-command paragraphing", () => {
     ]);
   });
 
-  it("forwards deltas as { text, itemId } envelopes", () => {
+  it("forwards deltas as { text, itemId, replace } envelopes", () => {
     emitTranscriptionEvent({ type: "delta", text: "hel", itemId: "item-A" });
     emitTranscriptionEvent({ type: "delta", text: "lo" });
+    emitTranscriptionEvent({ type: "delta", text: "Hello", itemId: "span-1", replace: true });
 
     const deltas = win.__sent.filter((m) => m.channel === "voice-input:transcription-delta");
     expect(deltas.map((m) => m.payload)).toEqual([
       { sessionId: currentSessionId, text: "hel", itemId: "item-A" },
       { sessionId: currentSessionId, text: "lo" },
+      { sessionId: currentSessionId, text: "Hello", itemId: "span-1", replace: true },
     ]);
   });
 

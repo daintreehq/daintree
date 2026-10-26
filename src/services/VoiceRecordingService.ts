@@ -232,6 +232,9 @@ class VoiceRecordingService {
             // when nothing has been written — the separator still re-fixes spacing.
             const base = segmentStart >= 0 ? draft.slice(0, segmentStart) : draft;
             const { separator, insertStart } = getVoiceInsertMetadata(base);
+            // A Deepgram span can finalise without any interim, so the session's
+            // first text may arrive here rather than in a delta.
+            useVoiceRecordingStore.getState().setSessionDraftStart(panelId, insertStart);
             if ((buffer?.activeParagraphStart ?? -1) < 0) {
               useVoiceRecordingStore.getState().setActiveParagraphStart(panelId, insertStart);
             }
