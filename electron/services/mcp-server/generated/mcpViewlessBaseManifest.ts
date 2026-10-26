@@ -1744,8 +1744,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "boolean",
         },
         generation: {
-          description:
-            "The run you read: another assistant's generation from assistant.list, or for an agent you didn't launch, its incarnation from host.list.",
+          description: "The run you read: its assistant.list generation or host.list incarnation.",
           type: "integer",
           minimum: 0,
           maximum: 9007199254740991,
@@ -1884,8 +1883,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           },
         },
         generation: {
-          description:
-            "The run you read: another assistant's generation from assistant.list, or for an agent you didn't launch, its incarnation from host.list.",
+          description: "The run you read: its assistant.list generation or host.list incarnation.",
           type: "integer",
           minimum: 0,
           maximum: 9007199254740991,
