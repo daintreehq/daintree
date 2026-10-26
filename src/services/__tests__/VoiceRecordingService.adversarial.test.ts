@@ -878,6 +878,9 @@ describe("VoiceRecordingService adversarial", () => {
       expect(runtime.createdWorkletNodes[0]!.port.postMessage).not.toHaveBeenCalledWith({
         type: "flush",
       });
+      expect(runtime.createdWorkletNodes[0]!.port.postMessage).toHaveBeenCalledWith({
+        type: "dispose",
+      });
       expect(runtime.voiceInput.stop).not.toHaveBeenCalled();
       expect(stream.track.stop).toHaveBeenCalled();
     });

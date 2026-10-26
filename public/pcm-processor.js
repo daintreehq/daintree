@@ -46,6 +46,9 @@ class PCMProcessor extends AudioWorkletProcessor {
         this.flush();
       } else if (data.type === "dispose") {
         this.isDisposed = true;
+        // An open channel keeps both ends, and this processor, alive.
+        this.port.onmessage = null;
+        this.port.close();
       }
     };
   }

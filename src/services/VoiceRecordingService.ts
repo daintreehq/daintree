@@ -3001,10 +3001,11 @@ class VoiceRecordingService {
       return;
     }
     // A suspended context renders nothing and, on a real sink, gives the
-    // output device back. Rechecked when it runs: a start may have taken the
-    // context in the meantime.
+    // output device back. An interrupted one is suspended too, or it resumes
+    // by itself when the interruption ends. Rechecked when it runs: a start
+    // may have taken the context in the meantime.
     void this.queueWarmAudioTransition(audio, () =>
-      audio.users.size === 0 && audio.context.state === "running"
+      audio.users.size === 0 && audio.context.state !== "closed"
         ? audio.context.suspend()
         : Promise.resolve()
     ).catch(() => {});

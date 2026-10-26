@@ -227,6 +227,18 @@ function buildAudioContextMock() {
 }
 
 // Set up browser globals for all tests in this suite.
+// The store mock exposes its backing state for tests to prime.
+async function voiceStoreState() {
+  const { __state } = (await import("@/store/voiceRecordingStore")) as unknown as {
+    __state: { activeTarget: { panelId: string } | null };
+  };
+  return __state;
+}
+
+function fakeStream(stream: object): MediaStream {
+  return stream as MediaStream;
+}
+
 function setupGlobals(electronStub = buildElectronStub()) {
   const windowListeners: Record<string, Array<(...args: unknown[]) => void>> = {};
   const documentListeners: Record<string, Array<(...args: unknown[]) => void>> = {};
@@ -350,9 +362,7 @@ describe("VoiceRecordingService — background recording", () => {
     setupGlobals();
 
     // Prime the store with an active target so the suspend handler fires.
-    const { __state } = (await import("@/store/voiceRecordingStore")) as unknown as {
-      __state: { activeTarget: { panelId: string } | null };
-    };
+    const __state = await voiceStoreState();
     __state.activeTarget = { panelId: "panel-1" };
 
     const { voiceRecordingService } = await import("../VoiceRecordingService");
@@ -487,9 +497,8 @@ describe("VoiceRecordingService — background recording", () => {
   it("releases the microphone when the start is cancelled while it is pending", async () => {
     const { ctx } = setupGlobals();
     const getUserMedia = vi.mocked(navigator.mediaDevices.getUserMedia);
-    const stream = await getUserMedia({ audio: true });
-    const getTracks = vi.spyOn(stream, "getTracks");
-    getUserMedia.mockClear();
+    const track = { stop: vi.fn() };
+    const stream = fakeStream({ getTracks: () => [track], getAudioTracks: () => [{}] });
     let grantMicrophone = () => {};
     getUserMedia.mockReturnValue(
       new Promise((resolve) => {
@@ -509,7 +518,7 @@ describe("VoiceRecordingService — background recording", () => {
 
     // The stale start still releases the late-arriving microphone, without
     // releasing the already-released context a second time.
-    expect(getTracks).toHaveBeenCalled();
+    expect(track.stop).toHaveBeenCalled();
     await Promise.resolve();
     expect(ctx.suspend).toHaveBeenCalledTimes(1);
     expect(ctx.close).not.toHaveBeenCalled();
@@ -519,14 +528,14 @@ describe("VoiceRecordingService — background recording", () => {
   it("releases the microphone and parks the AudioContext when stop() is called", async () => {
     const { ctx, oscillatorMock, workletNodes } = setupGlobals();
     const track = { stop: vi.fn() };
-    vi.mocked(navigator.mediaDevices.getUserMedia).mockResolvedValue({
-      getTracks: () => [track],
-      getAudioTracks: () => [{}],
-    } as unknown as MediaStream);
+    vi.mocked(navigator.mediaDevices.getUserMedia).mockResolvedValue(
+      fakeStream({
+        getTracks: () => [track],
+        getAudioTracks: () => [{}],
+      })
+    );
 
-    const { __state } = (await import("@/store/voiceRecordingStore")) as unknown as {
-      __state: { activeTarget: { panelId: string } | null };
-    };
+    const __state = await voiceStoreState();
     __state.activeTarget = { panelId: "panel-1" };
 
     const { voiceRecordingService } = await import("../VoiceRecordingService");
@@ -553,15 +562,15 @@ describe("VoiceRecordingService — background recording", () => {
     const tracks = [{ stop: vi.fn() }, { stop: vi.fn() }];
     const getUserMedia = vi.mocked(navigator.mediaDevices.getUserMedia);
     for (const track of tracks) {
-      getUserMedia.mockResolvedValueOnce({
-        getTracks: () => [track],
-        getAudioTracks: () => [{}],
-      } as unknown as MediaStream);
+      getUserMedia.mockResolvedValueOnce(
+        fakeStream({
+          getTracks: () => [track],
+          getAudioTracks: () => [{}],
+        })
+      );
     }
 
-    const { __state } = (await import("@/store/voiceRecordingStore")) as unknown as {
-      __state: { activeTarget: { panelId: string } | null };
-    };
+    const __state = await voiceStoreState();
     const { voiceRecordingService } = await import("../VoiceRecordingService");
     for (const track of tracks) {
       __state.activeTarget = { panelId: "panel-1" };
@@ -584,6 +593,67 @@ describe("VoiceRecordingService — background recording", () => {
     __state.activeTarget = null;
   });
 
+  it("resumes for the next dictation only once the last stop's suspend has landed", async () => {
+    const { ctx } = setupGlobals();
+    let suspended!: () => void;
+    ctx.suspend.mockImplementationOnce(
+      () =>
+        new Promise<undefined>((resolve) => {
+          suspended = () => resolve(undefined);
+        })
+    );
+
+    const __state = await voiceStoreState();
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    __state.activeTarget = { panelId: "panel-1" };
+    await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Terminal" });
+    await voiceRecordingService.stop("Dictation stopped.", { skipRemoteStop: true });
+    await vi.waitFor(() => expect(ctx.suspend).toHaveBeenCalledTimes(1));
+
+    __state.activeTarget = { panelId: "panel-1" };
+    const starting = voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Terminal" });
+    await vi.waitFor(() => expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledTimes(2));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(ctx.resume).toHaveBeenCalledTimes(1);
+
+    suspended();
+    await starting;
+    expect(ctx.resume).toHaveBeenCalledTimes(2);
+    expect(window.electron.voiceInput.start).toHaveBeenCalledTimes(2);
+    __state.activeTarget = null;
+  });
+
+  it("closes the parked AudioContext when the system goes to sleep", async () => {
+    const { ctx } = setupGlobals();
+    const __state = await voiceStoreState();
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    voiceRecordingService.initialize();
+    __state.activeTarget = { panelId: "panel-1" };
+    await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Terminal" });
+    await voiceRecordingService.stop("Dictation stopped.", { skipRemoteStop: true });
+    __state.activeTarget = null;
+    expect(ctx.close).not.toHaveBeenCalled();
+
+    for (const cb of suspendCallbacks) cb();
+    expect(ctx.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes the AudioContext on destroy only once the capture on it is released", async () => {
+    const { ctx } = setupGlobals();
+    const __state = await voiceStoreState();
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    __state.activeTarget = { panelId: "panel-1" };
+    await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Terminal" });
+
+    voiceRecordingService.destroy();
+    expect(ctx.close).not.toHaveBeenCalled();
+
+    await voiceRecordingService.stop("Dictation stopped.", { skipRemoteStop: true });
+    expect(ctx.close).toHaveBeenCalledTimes(1);
+    expect(ctx.suspend).not.toHaveBeenCalled();
+    __state.activeTarget = null;
+  });
+
   it("closes the idle AudioContext after a few minutes, and builds a new one after", async () => {
     const { ctx } = setupGlobals();
     const audioContextCtor = vi.fn(function () {
@@ -592,9 +662,7 @@ describe("VoiceRecordingService — background recording", () => {
     vi.stubGlobal("AudioContext", audioContextCtor);
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
-      const { __state } = (await import("@/store/voiceRecordingStore")) as unknown as {
-        __state: { activeTarget: { panelId: string } | null };
-      };
+      const __state = await voiceStoreState();
       const { voiceRecordingService } = await import("../VoiceRecordingService");
       __state.activeTarget = { panelId: "panel-1" };
       await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Terminal" });
@@ -645,9 +713,7 @@ describe("VoiceRecordingService — background recording", () => {
       }
     );
 
-    const { __state: voiceState } = (await import("@/store/voiceRecordingStore")) as unknown as {
-      __state: { activeTarget: { panelId: string } | null };
-    };
+    const voiceState = await voiceStoreState();
     voiceState.activeTarget = { panelId: "panel-1" };
 
     setupGlobals();
@@ -1022,18 +1088,20 @@ describe("VoiceRecordingService — microphone device selection", () => {
 
     // Override getUserMedia to return a track with a different deviceId
     const getUserMediaMock = vi.mocked(navigator.mediaDevices.getUserMedia);
-    getUserMediaMock.mockResolvedValue({
-      getTracks: () => [{ stop: vi.fn() }],
-      getAudioTracks: () => [
-        {
-          label: "Other Mic",
-          enabled: true,
-          muted: false,
-          readyState: "live",
-          getSettings: () => ({ deviceId: "different-mic-id" }),
-        },
-      ],
-    } as unknown as MediaStream);
+    getUserMediaMock.mockResolvedValue(
+      fakeStream({
+        getTracks: () => [{ stop: vi.fn() }],
+        getAudioTracks: () => [
+          {
+            label: "Other Mic",
+            enabled: true,
+            muted: false,
+            readyState: "live",
+            getSettings: () => ({ deviceId: "different-mic-id" }),
+          },
+        ],
+      })
+    );
 
     const { logWarn } = await import("@/utils/logger");
 
@@ -1765,9 +1833,7 @@ describe("VoiceRecordingService — interim delta handling (#9172)", () => {
       return () => {};
     });
 
-    const { __state } = (await import("@/store/voiceRecordingStore")) as unknown as {
-      __state: { activeTarget: { panelId: string } | null };
-    };
+    const __state = await voiceStoreState();
     __state.activeTarget = { panelId: "panel-1" };
 
     const { useTerminalInputStore } = await import("@/store/terminalInputStore");

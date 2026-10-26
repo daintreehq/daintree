@@ -811,6 +811,7 @@ describe("VoiceRecordingService — starting while a session finishes (#14604)",
 
     flushed();
     await vi.waitFor(() => expect(drains).toHaveLength(1));
+    expect(tracks[0]!.stop).toHaveBeenCalled();
     drains[0]!.resolve();
     await stopping;
     expect(store().status).toBe("idle");
