@@ -250,7 +250,7 @@ describe("app:hydrate and app:boot", () => {
       activeWorktreeId: "host-wt",
       focusMode: true,
     },
-    terminalConfig: { fontSize: 11, scrollbackLines: 5000 },
+    terminalConfig: { fontSize: 11, scrollbackLines: 5000, resourceMonitoringEnabled: true },
     project: { id: "p1", path: "/home/greg/repo" },
     workspaceId: "p1",
     safeMode: true,
@@ -285,7 +285,12 @@ describe("app:hydrate and app:boot", () => {
       activeWorktreeId: "host-wt",
       focusMode: true,
     });
-    expect(result.terminalConfig).toEqual({ fontSize: 15, scrollbackLines: 5000 });
+    // Scrollback is how much this screen shows, so it is this machine's (#14697).
+    expect(result.terminalConfig).toEqual({
+      fontSize: 15,
+      scrollbackLines: 111,
+      resourceMonitoringEnabled: true,
+    });
     // The assistant agent and default agent are the host's (#13345).
     expect(result.agentDefaults).toEqual({ assistantAgentId: "codex", defaultAgent: null });
   });
@@ -314,13 +319,27 @@ describe("app:hydrate and app:boot", () => {
 describe("settings splits", () => {
   it("merges terminal-config:get by field owner", async () => {
     const { invoke } = setup(
-      () => ({ fontSize: 9, scrollbackLines: 7000, performanceMode: true }),
-      () => ({ fontSize: 14, scrollbackLines: 1000, performanceMode: false })
+      () => ({
+        fontSize: 9,
+        scrollbackLines: 7000,
+        performanceMode: true,
+        hybridInputEnabled: false,
+        memoryLeakDetectionEnabled: true,
+      }),
+      () => ({
+        fontSize: 14,
+        scrollbackLines: 1000,
+        performanceMode: false,
+        hybridInputEnabled: true,
+        memoryLeakDetectionEnabled: false,
+      })
     );
     await expect(invoke(CHANNELS.TERMINAL_CONFIG_GET, [])).resolves.toEqual({
       fontSize: 14,
-      scrollbackLines: 7000,
-      performanceMode: true,
+      scrollbackLines: 1000,
+      performanceMode: false,
+      hybridInputEnabled: true,
+      memoryLeakDetectionEnabled: true,
     });
   });
 

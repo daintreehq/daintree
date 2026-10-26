@@ -4,7 +4,11 @@ import { cn } from "@/lib/utils";
 import { notify } from "@/lib/notify";
 import { latestUndoOnly, UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
-import { joinBadges, useSettingsOwnerMarker } from "@/hooks/useSettingsOwner";
+import {
+  joinBadges,
+  useSettingsOwnerMarker,
+  useSettingsRowOwnerNote,
+} from "@/hooks/useSettingsOwner";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import { SettingsNumberInput } from "@/components/Settings/SettingsNumberInput";
 import { SettingsPresetGroup } from "@/components/Settings/SettingsPresetGroup";
@@ -190,9 +194,11 @@ interface TerminalSettingsTabProps {
 }
 
 export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSettingsTabProps) {
-  // Terminal behaviour runs where the terminals do; limits, cached views and assistive
-  // settings belong to this screen. A remote window says whose on each section.
+  // Resource watching runs where the terminals do; input, scrollback, performance mode,
+  // limits, cached views and assistive settings belong to this screen. A remote window
+  // says whose on each section, and on performance mode, the odd row out in its section.
   const ownerMarker = useSettingsOwnerMarker();
+  const rowOwnerNote = useSettingsRowOwnerNote();
   const layoutConfig = useLayoutConfigStore((state) => state.layoutConfig);
 
   const performanceMode = usePerformanceModeStore((state) => state.performanceMode);
@@ -470,7 +476,10 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
               <SettingsSwitchCard
                 id="terminal-performance-mode"
                 title="Performance mode"
-                subtitle={`Cuts scrollback to ${PERFORMANCE_MODE_SCROLLBACK} lines and turns off animations, for low-end hardware or high-density workflows. Existing terminals keep their scrollback until respawned.`}
+                subtitle={rowOwnerNote(
+                  `Cuts scrollback to ${PERFORMANCE_MODE_SCROLLBACK} lines and turns off animations, for low-end hardware or high-density workflows. Existing terminals keep their scrollback until respawned.`,
+                  "device"
+                )}
                 isEnabled={performanceMode}
                 onChange={() => void setPerformanceMode(!performanceMode)}
                 ariaLabel="Performance Mode Toggle"
@@ -670,7 +679,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
         )}
 
         {effectiveSubtab === "input" && (
-          <SettingsSection title="Agent input" badge={ownerMarker("host")}>
+          <SettingsSection title="Agent input" badge={ownerMarker("device")}>
             {saveError("input")}
             <SettingsGroup>
               <SettingsSwitchCard
@@ -858,7 +867,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
             title="Scrollback history"
             id="terminal-scrollback"
             description="Background terminals may temporarily reduce scrollback under memory pressure"
-            badge={joinBadges("New terminals", ownerMarker("host"))}
+            badge={joinBadges("New terminals", ownerMarker("device"))}
           >
             {saveError("scrollback")}
             <SettingsGroup>

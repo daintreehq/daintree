@@ -5,6 +5,7 @@ import {
   toNonRendererOwnedTools,
 } from "../../../../shared/config/helpAssistantTierAllowlists.js";
 import { MCP_EXTERNAL_TIER_TOOLS } from "../../../../shared/config/mcpExternalTierAllowlist.js";
+import { BUILT_IN_ACTION_IDS } from "../../../../shared/config/actionIds.js";
 import { HOST_DISPATCHABLE_ACTION_IDS } from "../hostDispatchableActions.js";
 
 /**
@@ -58,4 +59,27 @@ describe("HOST_DISPATCHABLE_ACTION_IDS against the default MCP surface", () => {
       expect(HOST_DISPATCHABLE_ACTION_IDS.has(unscoped)).toBe(true);
     }
   );
+});
+
+describe("terminal settings a host's agent reaches through a Shell's view", () => {
+  // Every terminalConfig setter in a remote window writes this machine's store:
+  // its display and input settings, or the views it keeps cached. An agent on
+  // the host is refused rather than reaching into the person's own screen
+  // (#14697); one in the host's own window sets the host's values as before.
+  const setters = BUILT_IN_ACTION_IDS.filter((id) => id.startsWith("terminalConfig.set"));
+
+  it("covers the input, scrollback and performance setters", () => {
+    expect(setters).toEqual(
+      expect.arrayContaining([
+        "terminalConfig.setScrollback",
+        "terminalConfig.setPerformanceMode",
+        "terminalConfig.setHybridInputEnabled",
+        "terminalConfig.setHybridInputAutoFocus",
+      ])
+    );
+  });
+
+  it.each(setters)("refuses %s", (id) => {
+    expect(HOST_DISPATCHABLE_ACTION_IDS.has(id)).toBe(false);
+  });
 });

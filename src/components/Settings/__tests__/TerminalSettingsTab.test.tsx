@@ -24,6 +24,7 @@ import { useResourceMonitoringStore } from "@/store/resourceMonitoringStore";
 import { usePanelLimitStore } from "@/store/panelLimitStore";
 import { useCachedProjectViewsStore } from "@/store/cachedProjectViewsStore";
 import { useMemoryLeakConfigStore } from "@/store/memoryLeakConfigStore";
+import { _resetHostPlatformForTests, setHostPlatformInfo } from "@/hooks/useHostPlatform";
 
 const getHardwareInfo = vi.fn();
 const setResourceMonitoring = vi.fn();
@@ -45,6 +46,36 @@ beforeEach(() => {
 function renderSubtab(subtab: string) {
   return render(<TerminalSettingsTab activeSubtab={subtab} onSubtabChange={() => {}} />);
 }
+
+describe("TerminalSettingsTab in a window attached to another host", () => {
+  beforeEach(() => {
+    _resetHostPlatformForTests();
+    window.__DAINTREE_HOST_ID__ = { id: "studio" };
+    setHostPlatformInfo({ hostName: "studio-01" });
+  });
+
+  afterEach(() => {
+    delete window.__DAINTREE_HOST_ID__;
+    _resetHostPlatformForTests();
+  });
+
+  it("names this machine as the owner of agent input", () => {
+    renderSubtab("input");
+    expect(screen.getByText(/^This (Mac|machine)$/)).toBeTruthy();
+    expect(screen.queryByText("On studio-01")).toBeNull();
+  });
+
+  it("names this machine as the owner of scrollback", () => {
+    renderSubtab("scrollback");
+    expect(screen.getByText(/^New terminals · This (Mac|machine)$/)).toBeTruthy();
+  });
+
+  it("marks performance mode as this machine's inside the host's resources section", () => {
+    renderSubtab("performance");
+    expect(screen.getByText("On studio-01")).toBeTruthy();
+    expect(screen.getByText(/Set on this (Mac|machine)\.$/)).toBeTruthy();
+  });
+});
 
 describe("TerminalSettingsTab", () => {
   it("does not open the performance subtab with a section named after it", () => {
