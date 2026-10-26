@@ -596,7 +596,7 @@ export function AgentSettings({
                 title="Pin to toolbar"
                 subtitle={rowOwnerNote(
                   `Show ${activeAgent.name} in the toolbar for quick access`,
-                  "device"
+                  "agentToolbarPins"
                 )}
                 isEnabled={isAgentToolbarVisible(
                   agentToolbarPin(agentPins, activeAgent.id),

@@ -675,10 +675,10 @@ export interface MigrationGrade {
   /** 009/020 — the legacy window geometry reaches the window-states store. */
   windowStateMisses: number;
   /**
-   * 012/038 — every surviving agent entry lost `selected`/`enabled` (012) and
-   * then the pin 012 gave it (038). This corpus is below agent-settings
+   * 012/039 — every surviving agent entry lost `selected`/`enabled` (012) and
+   * then the pin 012 gave it (039). This corpus is below agent-settings
    * `settingsVersion` 1, whose pins were never shown, so none reach this
-   * machine's `agentToolbarPins`, which 038 still has to create.
+   * machine's `agentToolbarPins`, which 039 still has to create.
    */
   agentPinMisses: number;
   /** 013 — the 100 phantom pins are gone and exactly 100 entries remain. */

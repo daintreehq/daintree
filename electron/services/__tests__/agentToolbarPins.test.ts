@@ -140,7 +140,7 @@ describe("agentToolbarPins (#14702)", () => {
     });
 
     it("never seeds over an upgraded profile, even one whose pins are all unset", () => {
-      // Migration 038 leaves the key on every existing profile.
+      // Migration 039 leaves the key on every existing profile.
       fakeStore.reset({ agentToolbarPins: {} });
 
       expect(seedAgentToolbarPinsIfUnset(availability(BUILT_IN_AGENT_IDS))).toBe(false);

@@ -391,7 +391,7 @@ function recipeRefusal(recipe: Record<string, unknown>): string | null {
 
 /**
  * A copy recorded before pins left agent settings (#14702) holds them in its
- * agent entries, and migration 038 has since taken them off the live ones.
+ * agent entries, and migration 039 has since taken them off the live ones.
  * Compared and put back without them, so the undo neither reads the migration
  * as an edit nor writes a pin back into agent settings.
  */

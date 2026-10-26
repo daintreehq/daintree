@@ -231,7 +231,7 @@ describe("undoing a copy", () => {
   });
 
   it("takes back a copy recorded before pins left agent settings, without writing one back (#14702)", async () => {
-    // The live entries as migration 038 left them: the copy's values, pin gone.
+    // The live entries as migration 039 left them: the copy's values, pin gone.
     storeState.current.agentSettings = {
       globalSkipPermissions: false,
       agents: { claude: { customFlags: "--copied", dangerousMode: "on" } },

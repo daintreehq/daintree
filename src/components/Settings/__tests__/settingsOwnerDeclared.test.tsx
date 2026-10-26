@@ -111,7 +111,7 @@ describe("a section's shown owner is the setting's declared owner", () => {
 
   it("names a row that differs from its section", () => {
     attachToHost();
-    render(<SettingsOwnerTag settings={SECTION_SETTINGS.toolbarAgents} />);
+    render(<SettingsOwnerTag settings={["agentSettings"]} />);
     expect(screen.getByText("On studio-01")).toBeTruthy();
   });
 });
@@ -124,9 +124,10 @@ describe("the marks the owner issue called wrong", () => {
     expect(owner("agentInput")).toBe("device");
   });
 
-  it("splits the toolbar between this machine's layout and the host's agent pins", () => {
+  it("puts the whole toolbar on this machine, agent pins included (#14702)", () => {
     expect(owner("toolbarLayout")).toBe("device");
-    expect(owner("toolbarAgents")).toBe("host");
+    expect(ownerOfSetting("agentToolbarPins")).toBe("device");
+    expect(ownerForTab("toolbar")).toBe("device");
     expect(owner("projectToolbar")).toBe("host");
   });
 
@@ -171,7 +172,6 @@ describe("the declared settings behind each section", () => {
       worktreePathPattern: "host",
       clientPreferences: "device",
       toolbarLayout: "device",
-      toolbarAgents: "host",
       pluginSilences: "host",
       hardwareAcceleration: "device",
       logging: "device",

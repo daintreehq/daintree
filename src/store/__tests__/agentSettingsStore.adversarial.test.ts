@@ -138,8 +138,7 @@ describe("agentSettingsStore adversarial", () => {
 
   it("reset(agentId) forwards the id argument and stores the returned settings", async () => {
     // Pre-populate every registered agent so normalizeAgentSelection has no
-    // missing entries to seed — and stamp the migration version so
-    // migrateAgentSettings doesn't clone the response.
+    // missing entries to seed, and so leaves the response as it is.
     const returned = {
       settingsVersion: 1,
       agents: {
@@ -569,7 +568,7 @@ describe("agentSettingsStore adversarial", () => {
 describe("applySaved (#14700)", () => {
   const savedElsewhere: AgentSettings = {
     settingsVersion: 3,
-    agents: { claude: { pinned: true, customFlags: "--from-another-view" } },
+    agents: { claude: { customFlags: "--from-another-view" } },
   };
 
   it("takes a saved change over a read still travelling", async () => {
@@ -586,19 +585,16 @@ describe("applySaved (#14700)", () => {
     expect(state.isInitialized).toBe(true);
   });
 
-  it("migrates a legacy slice in memory without writing anything back", async () => {
-    useAgentSettingsStore.getState().applySaved({
-      agents: { claude: { pinned: true }, codex: { pinned: false } },
-    });
+  it("takes a saved change as it is, writing nothing back (#14702)", async () => {
+    // Pins left agent settings for this machine's own store, so there is no
+    // renderer migration left for a heard change to echo.
+    const saved: AgentSettings = { agents: { claude: { customFlags: "--x" } } };
+    useAgentSettingsStore.getState().applySaved(saved);
     await Promise.resolve();
 
-    const { migrated, agentsToClear } = migrateAgentSettings({
-      agents: { claude: { pinned: true }, codex: { pinned: false } },
+    expect(useAgentSettingsStore.getState().settings?.agents.claude).toEqual({
+      customFlags: "--x",
     });
-    expect(agentsToClear.length).toBeGreaterThan(0);
-    expect(useAgentSettingsStore.getState().settings?.settingsVersion).toBe(
-      migrated.settingsVersion
-    );
     expect(clientMock.set).not.toHaveBeenCalled();
     expect(clientMock.stampVersion).not.toHaveBeenCalled();
   });
@@ -625,17 +621,17 @@ describe("applySaved (#14700)", () => {
     expect(useAgentSettingsStore.getState().settings?.agents.claude?.customFlags).toBe("ab");
   });
 
-  it("still writes back a reset's migration when its own saved change arrives first", async () => {
-    const legacy: AgentSettings = {
-      agents: { claude: { pinned: true }, codex: { pinned: false } },
-    };
-    clientMock.reset.mockResolvedValueOnce(legacy);
-    clientMock.set.mockResolvedValue({});
-    clientMock.stampVersion.mockResolvedValue({});
+  it("takes a reset's answer without writing anything back (#14702)", async () => {
+    const answer: AgentSettings = { agents: { claude: {}, codex: {} } };
+    clientMock.reset.mockResolvedValueOnce(answer);
     const reset = useAgentSettingsStore.getState().reset();
-    useAgentSettingsStore.getState().applySaved(legacy);
+    useAgentSettingsStore.getState().applySaved(answer);
     await reset;
-    await vi.waitFor(() => expect(clientMock.stampVersion).toHaveBeenCalled());
+    await Promise.resolve();
+
+    expect(useAgentSettingsStore.getState().settings?.agents).toEqual(answer.agents);
+    expect(clientMock.set).not.toHaveBeenCalled();
+    expect(clientMock.stampVersion).not.toHaveBeenCalled();
   });
 
   it("keeps a newer change heard before a write's slower answer", async () => {
