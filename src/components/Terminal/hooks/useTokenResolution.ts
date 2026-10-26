@@ -5,11 +5,7 @@ import { peek as peekTerminalService } from "@/services/terminal/terminalInstanc
 import { buildTerminalSendPayload } from "@/lib/terminalInput";
 import { useCommandHistoryStore } from "@/store/commandHistoryStore";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
-import {
-  findCorrectionCandidates,
-  type CorrectionCandidate,
-} from "@shared/utils/phoneticSimilarity";
-import type { SuggestedDictionaryEntry } from "@shared/types";
+import { findCorrectionCandidates } from "@shared/utils/phoneticSimilarity";
 import {
   getAllAtContextReferences,
   getAllAtTerminalTokens,
@@ -47,45 +43,6 @@ function resolveContextReferences(
   return bridge.resolveContextReferences(references);
 }
 
-/** Cap on the pending-suggestions queue — confirmed words live in customDictionary. */
-const MAX_SUGGESTED_WORDS = 50;
-
-/**
- * Merge freshly-detected correction candidates into the persisted suggestion
- * queue: skip words already in the confirmed dictionary, bump frequency on a
- * repeat, and cap the queue. Returns null when nothing changed.
- */
-function mergeSuggestions(
-  candidates: CorrectionCandidate[],
-  customDictionary: string[],
-  suggested: SuggestedDictionaryEntry[],
-  now: number
-): SuggestedDictionaryEntry[] | null {
-  const confirmed = new Set(customDictionary.map((w) => w.toLowerCase()));
-  const next = [...suggested];
-  let changed = false;
-
-  for (const { word, original } of candidates) {
-    const lower = word.toLowerCase();
-    if (confirmed.has(lower)) continue;
-    const idx = next.findIndex((e) => e.word.toLowerCase() === lower);
-    if (idx >= 0) {
-      const entry = next[idx]!;
-      next[idx] = {
-        ...entry,
-        frequency: entry.frequency + 1,
-        suggestedAt: now,
-        utterance: original,
-      };
-    } else {
-      next.unshift({ word, utterance: original, suggestedAt: now, frequency: 1 });
-    }
-    changed = true;
-  }
-
-  return changed ? next.slice(0, MAX_SUGGESTED_WORDS) : null;
-}
-
 /**
  * Learn custom-dictionary words from a user's manual corrections to dictated
  * text. Compares the settled transcription baseline (captured after dictation
@@ -111,26 +68,11 @@ function detectDictionaryCorrections(panelId: string, finalText: string): void {
     const candidates = findCorrectionCandidates(baseline, finalText.slice(sessionStart));
     if (candidates.length === 0) return;
 
-    // Read-modify-write the suggestion queue via the existing settings channel.
-    // The dictate→correct→send flow is human-paced, so concurrent writes to
-    // suggestedDictionary don't happen in practice.
-    void (async () => {
-      try {
-        const settings = await window.electron.voiceInput.getSettings();
-        if (!settings.learnFromCorrections) return;
-        const next = mergeSuggestions(
-          candidates,
-          settings.customDictionary,
-          settings.suggestedDictionary,
-          Date.now()
-        );
-        if (next) {
-          await window.electron.voiceInput.setSettings({ suggestedDictionary: next });
-        }
-      } catch {
-        // Best-effort; never surface a learning failure to the user.
-      }
-    })();
+    // Main merges them into the queue it owns, so an accept or dismiss made
+    // meanwhile in Settings isn't overwritten by this view's copy.
+    window.electron.voiceDictionary.recordSuggestions({ candidates }).catch(() => {
+      // Best-effort; never surface a learning failure to the user.
+    });
   } catch {
     // Never let learning interfere with sending.
   }

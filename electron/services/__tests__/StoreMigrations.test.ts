@@ -1866,6 +1866,10 @@ describe("MigrationRunner", () => {
       expect(migratedVoice.correctionModel).toBe("gpt-5.6-luna");
       expect(migratedVoice.enabled).toBe(true);
 
+      // Migration 036: the flat word list becomes structured entries.
+      expect(migratedVoice.dictionary).toEqual([]);
+      expect("customDictionary" in migratedVoice).toBe(false);
+
       // Migration 002: terminals should have location field
       const migratedTerminals = (store.data.appState as Record<string, unknown>).terminals as Array<
         Record<string, unknown>

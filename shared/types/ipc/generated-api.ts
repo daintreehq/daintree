@@ -1665,6 +1665,26 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["system-sleep:reset"]["args"]
     ): Promise<IpcInvokeMap["system-sleep:reset"]["result"]>;
   };
+  voiceDictionary: {
+    acceptSuggestion(
+      ...args: IpcInvokeMap["voice-dictionary:accept-suggestion"]["args"]
+    ): Promise<IpcInvokeMap["voice-dictionary:accept-suggestion"]["result"]>;
+    add(
+      ...args: IpcInvokeMap["voice-dictionary:add"]["args"]
+    ): Promise<IpcInvokeMap["voice-dictionary:add"]["result"]>;
+    dismissSuggestion(
+      ...args: IpcInvokeMap["voice-dictionary:dismiss-suggestion"]["args"]
+    ): Promise<IpcInvokeMap["voice-dictionary:dismiss-suggestion"]["result"]>;
+    recordSuggestions(
+      ...args: IpcInvokeMap["voice-dictionary:record-suggestions"]["args"]
+    ): Promise<IpcInvokeMap["voice-dictionary:record-suggestions"]["result"]>;
+    remove(
+      ...args: IpcInvokeMap["voice-dictionary:remove"]["args"]
+    ): Promise<IpcInvokeMap["voice-dictionary:remove"]["result"]>;
+    update(
+      ...args: IpcInvokeMap["voice-dictionary:update"]["args"]
+    ): Promise<IpcInvokeMap["voice-dictionary:update"]["result"]>;
+  };
   voiceInput: {
     flushParagraph(
       ...args: IpcInvokeMap["voice-input:flush-paragraph"]["args"]

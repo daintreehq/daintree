@@ -139,7 +139,11 @@ test.describe.serial("E2E: Voice Input — Settings migration on cold start", ()
     // choice must survive the model upgrade untouched (#9175).
     expect(migrated.transcriptionProvider).toBe("deepgram");
     expect(migrated.deepgramApiKey).toBe("dg-existing");
-    expect(migrated.customDictionary).toEqual(["Daintree"]);
+    // Migration 036 turns the word list into structured entries (#14598).
+    expect((migrated.dictionary as { term: string }[]).map((entry) => entry.term)).toEqual([
+      "Daintree",
+    ]);
+    expect(onDisk.voiceInput.customDictionary).toBeUndefined();
   });
 });
 
@@ -168,7 +172,7 @@ test.describe.serial("E2E: Voice Input — Realtime IPC and settings UI", () => 
       enabled: true,
       openaiApiKey: PRE_SEEDED_KEY,
       language: "en",
-      customDictionary: [],
+      dictionary: [],
       transcriptionModel: "gpt-live-transcribe",
       correctionEnabled: false,
       correctionModel: "gpt-6-luna",

@@ -34,7 +34,7 @@ const BASE = {
   openaiApiKey: "",
   deepgramApiKey: "",
   language: "en",
-  customDictionary: [],
+  dictionary: [],
   transcriptionProvider: "openai",
   transcriptionModel: "gpt-live-transcribe",
   correctionEnabled: false,

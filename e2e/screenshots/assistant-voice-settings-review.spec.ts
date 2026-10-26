@@ -86,7 +86,7 @@ const VOICE_BASE = {
   openaiApiKey: "",
   deepgramApiKey: "",
   language: "en",
-  customDictionary: [] as string[],
+  dictionary: [] as { term: string; heardAs: string[]; source: string; addedAt: number }[],
   transcriptionProvider: "openai",
   transcriptionModel: "gpt-live-transcribe",
   correctionEnabled: false,
@@ -189,7 +189,9 @@ const STATES: ShotState[] = [
         ...VOICE_BASE,
         enabled: true,
         openaiApiKey: "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789",
-        customDictionary: ["Daintree", "Zustand", "xterm", "worktree", "node-pty", "Vite"],
+        dictionary: ["Daintree", "Zustand", "xterm", "worktree", "node-pty", "Vite"].map(
+          (term) => ({ term, heardAs: [], source: "manual", addedAt: 0 })
+        ),
         suggestedDictionary: [
           { word: "drizzle", utterance: "drizzel" },
           { word: "Tailwind", utterance: "tail wind" },

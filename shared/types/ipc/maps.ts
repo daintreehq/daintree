@@ -21,6 +21,7 @@ import type {
   MicPermissionStatus,
   NotificationSettings,
   VoiceInputSettings,
+  VoiceInputSettingsPatch,
 } from "./api.js";
 
 import type { TerminalActivityPayload } from "./terminal.js";
@@ -1266,7 +1267,7 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: VoiceInputSettings;
   };
   "voice-input:set-settings": {
-    args: [patch: Partial<VoiceInputSettings>];
+    args: [patch: VoiceInputSettingsPatch];
     result: void;
   };
 
