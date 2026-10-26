@@ -3,6 +3,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 // Spoken file references (#14616): a transcript that says an explicit command
 // is tagged, its references resolve in the dictated terminal's worktree, a
 // stop waits for the final utterance's to settle, and a miss sends nothing.
+// Results go to the view that started the session, never the app's current
+// view (#14599).
 
 const ipcMainMock = vi.hoisted(() => ({
   handle: vi.fn(),
@@ -36,6 +38,7 @@ const shared = vi.hoisted(() => ({
   projects: new Map<number, string>(),
   projectPaths: new Map<string, string>(),
   currentProject: null as null | { name: string; path: string },
+  currentView: { sent: [] as Array<{ channel: string; payload: unknown }> },
   detect: vi.fn<(text: string, settings: unknown, signal?: AbortSignal) => Promise<Detected>>(),
   resolve:
     vi.fn<
@@ -117,6 +120,12 @@ vi.mock("../../../window/webContentsRegistry.js", async (importOriginal) => {
   return {
     ...actual,
     getProjectForWebContents: vi.fn((id: number) => shared.projects.get(id) ?? null),
+    // Another view is current; a send routed through it would land here.
+    getAppWebContents: vi.fn(() => ({
+      isDestroyed: () => false,
+      send: (channel: string, payload: unknown) =>
+        shared.currentView.sent.push({ channel, payload }),
+    })),
   };
 });
 
@@ -177,7 +186,6 @@ function deferred<T>() {
 }
 
 describe("voiceInput — spoken file references", () => {
-  let appSent: Sent[];
   let cleanup: () => void;
   let owner: FakeSender;
   let ptyClient: {
@@ -186,12 +194,12 @@ describe("voiceInput — spoken file references", () => {
     getTerminalAsync: ReturnType<typeof vi.fn>;
   };
 
-  const completes = () =>
-    appSent
+  const completes = (sender: { sent: Sent[] } = owner) =>
+    sender.sent
       .filter((m) => m.channel === CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE)
       .map((m) => m.payload as { text: string; transcriptId?: string });
-  const fileReferences = () =>
-    appSent
+  const fileReferences = (sender: { sent: Sent[] } = owner) =>
+    sender.sent
       .filter((m) => m.channel === CHANNELS.VOICE_INPUT_FILE_TOKEN_RESOLVED)
       .map((m) => m.payload as FileReferencesPayload);
 
@@ -205,8 +213,11 @@ describe("voiceInput — spoken file references", () => {
     shared.currentProject = { name: "current", path: "/repo/current" };
     shared.detect.mockReset();
     shared.resolve.mockReset();
+    shared.currentView.sent = [];
     owner = makeSender();
-    appSent = [];
+    // The starting view's project, where references resolve without a terminal.
+    shared.projects.set(owner.id, "project-a");
+    shared.projectPaths.set("project-a", "/repo/a");
     ptyClient = {
       hasTerminal: vi.fn(() => false),
       getTerminalProjectId: vi.fn(() => null),
@@ -214,7 +225,9 @@ describe("voiceInput — spoken file references", () => {
     };
     const win = {
       webContents: {
-        send: vi.fn((channel: string, payload: unknown) => appSent.push({ channel, payload })),
+        send: vi.fn((channel: string, payload: unknown) =>
+          shared.currentView.sent.push({ channel, payload })
+        ),
       },
       isDestroyed: vi.fn(() => false),
     };
@@ -261,6 +274,38 @@ describe("voiceInput — spoken file references", () => {
       },
     ]);
     expect(owner.sent.map((m) => m.payload)).toContainEqual({ sessionId: "a", reason: "stopped" });
+  });
+
+  it("sends references to the view that started the session, not the app's current view", async () => {
+    await start(owner, "a");
+    shared.detect.mockResolvedValueOnce([{ description: "router" }]);
+    shared.resolve.mockResolvedValueOnce("src/router.ts");
+
+    emitComplete("Link to the router.");
+    await stop(owner, "a");
+
+    expect(fileReferences()).toEqual([
+      expect.objectContaining({
+        sessionId: "a",
+        references: [{ description: "router", path: "src/router.ts" }],
+      }),
+    ]);
+    expect(shared.currentView.sent).toEqual([]);
+  });
+
+  it("resolves nothing in a view that owns no project, never the app's current one", async () => {
+    const unowned = makeSender();
+    await start(unowned, "a");
+    shared.detect.mockResolvedValueOnce([{ description: "router" }]);
+    shared.resolve.mockResolvedValue("src/router.ts");
+
+    emitComplete("Link to the router.");
+    await stop(unowned, "a");
+
+    expect(shared.detect).toHaveBeenCalledOnce();
+    expect(shared.resolve).not.toHaveBeenCalled();
+    expect(fileReferences(unowned)).toEqual([]);
+    expect(shared.currentView.sent).toEqual([]);
   });
 
   it("sends nothing for a reference that didn't resolve", async () => {
@@ -426,5 +471,7 @@ describe("voiceInput — spoken file references", () => {
     await new Promise((r) => setTimeout(r, 0));
 
     expect(fileReferences()).toEqual([]);
+    expect(fileReferences(other)).toEqual([]);
+    expect(shared.currentView.sent).toEqual([]);
   });
 });
