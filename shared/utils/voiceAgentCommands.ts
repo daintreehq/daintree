@@ -383,6 +383,8 @@ function invocationArgumentsAt(
     if (lead.length > 0 && !lead.some((word) => INVOCATION_VERBS.has(word))) continue;
     let joined = "";
     for (let end = start; end < spans.length && joined.length < entry.key.length; end++) {
+      // As with a spoken prefix, `--force` is an argument, never part of a name.
+      if (spans[end]!.symbolic) break;
       joined += spans[end]!.word;
       if (joined !== entry.key) continue;
       const noun = spans[end + 1];
@@ -443,12 +445,18 @@ export function checkVoiceCommandEdit(
   if (!startsPrompt) return "unprompted_command";
   const argumentsAt = invocationArgumentsAt(trimmedRaw, entry, vocabulary);
   if (argumentsAt < 0) return "unprompted_command";
-  const words = (text: string) => withoutHesitations(toWords(text));
+  const words = (text: string) => withoutHesitations(text.split(/\s+/u).filter(Boolean));
   const correctedArguments = words(trimmedCorrected.slice(correctedLead.length));
-  // Either the rest of what was said comes along whole, or none of it does,
-  // when the whole phrase named the command ("compact the conversation").
+  const rawArguments = words(trimmedRaw.slice(argumentsAt));
+  // The sentence's own closing punctuation may go: it ended prose, not the arguments.
+  const last = rawArguments.length - 1;
+  if (last >= 0)
+    rawArguments[last] = rawArguments[last]!.replace(TRAILING_PROSE_PUNCTUATION_RE, "");
+  // Either the rest of what was said comes along exactly as said, or none of
+  // it does, when the whole phrase named the command ("compact the conversation").
   const kept =
     correctedArguments.length === 0 ||
+    sameWords(correctedArguments, rawArguments) ||
     sameWords(correctedArguments, words(trimmedRaw.slice(argumentsAt)));
   return kept ? null : "arguments_reformatted";
 }

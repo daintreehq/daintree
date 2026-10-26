@@ -272,6 +272,28 @@ describe("checkVoiceCommandEdit", () => {
     ).toBe("unknown_command");
   });
 
+  it("never reads a flag as part of an implied command's name", () => {
+    const vocabulary = buildVoiceCommandVocabulary(
+      [custom("claude", "/review"), custom("claude", "/review-force")],
+      sourcesOf("claude")
+    );
+    expect(
+      checkVoiceCommandEdit("run the review --force", "/review-force", vocabulary, true)
+    ).not.toBeNull();
+    expect(
+      checkVoiceCommandEdit("run the review --force", "/review --force", vocabulary, true)
+    ).toBeNull();
+  });
+
+  it("keeps an introduced command's arguments as said, but for the closing period", () => {
+    expect(
+      checkVoiceCommandEdit("run the review skill on API", "/review on api.", claude, true)
+    ).toBe("arguments_reformatted");
+    expect(
+      checkVoiceCommandEdit("Run the review skill on the API.", "/review on the API", claude, true)
+    ).toBeNull();
+  });
+
   it("rejects an introduced command that drops or rewrites what followed it", () => {
     expect(
       checkVoiceCommandEdit(

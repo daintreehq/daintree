@@ -805,6 +805,15 @@ describe("VoiceCorrectionService", () => {
       expect(result.confirmedText).toBe("$github");
     });
 
+    it("keeps dictionary casing out of every part of a command token", async () => {
+      stubReply("$plugin-creator for the linter");
+      const result = await new VoiceCorrectionService().correct(
+        { rawText: "use the plugin creator skill for the linter", startsPrompt: true },
+        { ...BASE_SETTINGS, customDictionary: ["Creator"], commandTarget: targetFor("codex") }
+      );
+      expect(result.confirmedText).toBe("$plugin-creator for the linter");
+    });
+
     it.each([
       ["a command the target doesn't have", "run the deploy skill", "/deploy", true],
       ["another agent's syntax", "use the plugin creator skill", "$plugin-creator", true],
