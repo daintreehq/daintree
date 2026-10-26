@@ -25,6 +25,7 @@ import { CLOSE_OWNER_ATTR, CLOSE_REQUEST_EVENT } from "@/lib/closeRequest";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/Kbd";
 import { ProgressBar } from "@/components/ui/ProgressBar";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { SURFACE_HEADER_FOCUS_LIFT_CLASS, SurfaceHeader } from "@/components/ui/SurfaceHeader";
 import {
   DropdownMenu,
@@ -773,12 +774,11 @@ export function CanopyCard({
             </span>
           )}
           {action !== null && (
-            <span
-              title={action}
-              className="max-w-[50%] min-w-0 shrink truncate font-mono text-text-primary"
-            >
-              {/^[\w./-]+$/.test(action) && /[./]/.test(action) ? action : `$ ${action}`}
-            </span>
+            <TruncatedTooltip content={action}>
+              <span className="max-w-[50%] min-w-0 shrink truncate font-mono text-text-primary">
+                {/^[\w./-]+$/.test(action) && /[./]/.test(action) ? action : `$ ${action}`}
+              </span>
+            </TruncatedTooltip>
           )}
           {looksDone && (
             <span
@@ -790,24 +790,25 @@ export function CanopyCard({
             </span>
           )}
           {(question ?? shownDetail) !== null && (
-            <span
-              title={question ?? shownDetail ?? undefined}
-              className={cn(
-                // What the reader said keeps a share of the line: the notes
-                // beside it give way first.
-                "min-w-[30%] flex-1 truncate",
-                question !== null && "text-text-primary"
-              )}
-            >
-              {question ?? shownDetail}
-            </span>
+            <TruncatedTooltip content={question ?? shownDetail}>
+              <span
+                className={cn(
+                  // What the reader said keeps a share of the line: the notes
+                  // beside it give way first.
+                  "min-w-[30%] flex-1 truncate",
+                  question !== null && "text-text-primary"
+                )}
+              >
+                {question ?? shownDetail}
+              </span>
+            </TruncatedTooltip>
           )}
           {(summaryNotes.length > 0 || detailAttribution !== null) && (
             <span className="ml-auto flex max-w-[45%] min-w-0 items-center">
               {summaryNotes.length > 0 && (
-                <span title={summaryNotes.join(" · ")} className="min-w-0 truncate">
-                  {summaryNotes.join(" · ")}
-                </span>
+                <TruncatedTooltip content={summaryNotes.join(" · ")}>
+                  <span className="min-w-0 truncate">{summaryNotes.join(" · ")}</span>
+                </TruncatedTooltip>
               )}
               {summaryNotes.length > 0 && detailAttribution !== null && (
                 <span aria-hidden="true" className="shrink-0 px-1">
