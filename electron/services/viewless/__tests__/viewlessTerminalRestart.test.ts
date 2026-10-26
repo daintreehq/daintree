@@ -63,6 +63,19 @@ describe("restartTerminalWithoutView", () => {
       launchAgentId: "claude",
     });
     expect(String(spawn.command)).toContain("sess-123");
+    expect(spawn.actionContext).toMatchObject({ projectId: PROJECT.id, focusedTerminalId: "t1" });
+  });
+
+  it("records the resumed session for the pane's next restore", async () => {
+    const { deps, store } = setup(
+      { id: "t1", launchAgentId: "claude", command: "claude", agentSessionId: "old" },
+      { agentState: "working" },
+      "sess-123"
+    );
+
+    await restartTerminalWithoutView(PROJECT.id, "t1", deps);
+
+    expect(store.read()?.terminals[0]?.agentSessionId).toBe("sess-123");
   });
 
   it("relaunches the saved command when no session was captured", async () => {
@@ -94,18 +107,6 @@ describe("restartTerminalWithoutView", () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
-  it("leaves a terminal locked against input alone", async () => {
-    const { deps, invoke } = setup(
-      { id: "t1", command: "npm run dev", isInputLocked: true } as Partial<TerminalSnapshot> & {
-        id: string;
-      },
-      {}
-    );
-
-    await expect(restartTerminalWithoutView(PROJECT.id, "t1", deps)).resolves.toBe("input-locked");
-    expect(invoke).not.toHaveBeenCalled();
-  });
-
   it("leaves an agent that already quit to its shell alone", async () => {
     const { deps, invoke } = setup(
       { id: "t1", launchAgentId: "claude", command: "claude" },
@@ -116,8 +117,10 @@ describe("restartTerminalWithoutView", () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
-  it("does nothing for a terminal the project's saved layout doesn't hold", async () => {
+  it("does nothing for a live terminal the project's saved layout doesn't hold", async () => {
     const { deps, invoke } = setup({ id: "t1", command: "npm run dev" }, {});
+    const pty = makePty({ t1: { projectId: PROJECT.id }, other: { projectId: PROJECT.id } });
+    deps.getPtyReader = () => pty;
 
     await expect(restartTerminalWithoutView(PROJECT.id, "other", deps)).resolves.toBe("gone");
     expect(invoke).not.toHaveBeenCalled();

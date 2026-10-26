@@ -32,6 +32,9 @@ function harness(
     value: options.target ?? ({ kind: "view", deliver } as MemoryLeakRestartTarget),
   };
   const restartOnHost = vi.fn(async () => "restarted");
+  const readTerminal = vi.fn(
+    async (_id: string): Promise<MemoryLeakTerminalRead | null> => terminal.value
+  );
   const offMetrics = vi.fn();
   const service = new MemoryLeakAutoRestartService({
     onMetrics: (listener) => {
@@ -44,7 +47,7 @@ function harness(
     },
     readPolicy: () => policy,
     generationOf: (id) => generations.get(id),
-    readTerminal: async () => terminal.value,
+    readTerminal,
     pickTarget: () => target.value,
     restartOnHost,
     now: () => clock.now,
@@ -67,6 +70,7 @@ function harness(
     deliver,
     target,
     restartOnHost,
+    readTerminal,
     offMetrics,
     sample,
     exit: (id: string) => exitListener?.(id),
@@ -154,6 +158,21 @@ describe("MemoryLeakAutoRestartService", () => {
     await h.sample(OVER_KB, "t1", AUTO_RESTART_STARTUP_SAMPLES - 1);
     await flush();
     expect(h.deliver).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops a decision whose terminal was relaunched while it was being checked", async () => {
+    const h = harness();
+    h.generations.set("t1", 1);
+    let answer: (read: MemoryLeakTerminalRead) => void = () => {};
+    h.readTerminal.mockImplementationOnce(
+      () => new Promise<MemoryLeakTerminalRead>((resolve) => (answer = resolve))
+    );
+    await h.sample(OVER_KB, "t1", AUTO_RESTART_STARTUP_SAMPLES);
+
+    h.generations.set("t1", 2);
+    answer({ projectId: "p1" });
+    await flush();
+    expect(h.deliver).not.toHaveBeenCalled();
   });
 
   it("forgets a terminal that exits", async () => {

@@ -7,8 +7,13 @@ vi.mock("@/store/panelStore", () => ({
   usePanelStore: { getState: () => ({ panelsById, restartTerminal }) },
 }));
 
-const notify = vi.fn();
-vi.mock("@/lib/notify", () => ({ notify: (...args: unknown[]) => notify(...args) }));
+interface Notice {
+  title: string;
+  message: string;
+  context: unknown;
+}
+const notify = vi.fn((_notice: Notice) => {});
+vi.mock("@/lib/notify", () => ({ notify: (notice: Notice) => notify(notice) }));
 
 const { handleMemoryLeakRestartRequest } = await import("../useMemoryLeakDetection");
 
@@ -30,7 +35,7 @@ describe("handleMemoryLeakRestartRequest", () => {
 
     expect(restartTerminal).toHaveBeenCalledWith("t1");
     expect(notify).toHaveBeenCalledTimes(1);
-    const [notice] = notify.mock.calls[0] as [{ title: string; message: string; context: unknown }];
+    const notice = notify.mock.calls[0]![0];
     expect(notice.title).toContain("Claude");
     expect(notice.message).toContain((8192).toLocaleString());
     expect(notice.context).toEqual({ panelId: "t1", worktreeId: "wt-1" });

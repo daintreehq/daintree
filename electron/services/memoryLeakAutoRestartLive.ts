@@ -1,12 +1,15 @@
+import { webContents } from "electron";
 import { resolveMemoryLeakPolicy } from "../../shared/config/memoryLeakPolicy.js";
 import type { TerminalResourceBatchPayload } from "../../shared/types/pty-host.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { store } from "../store.js";
+import { thawThenSend } from "../utils/thawThenSend.js";
 import { getDriveLeaseService } from "./DriveLeaseService.js";
 import {
   getActiveMemoryLeakAutoRestart,
   MemoryLeakAutoRestartService,
   setActiveMemoryLeakAutoRestart,
+  type MemoryLeakRestartRequest,
   type MemoryLeakRestartTarget,
 } from "./MemoryLeakAutoRestartService.js";
 import type { PtyClient } from "./PtyClient.js";
@@ -28,14 +31,28 @@ function pickTarget(projectId: string): MemoryLeakRestartTarget {
   if (drive.kind === "reserved") return { kind: "wait" };
   const endpoint = drive.kind === "live" ? drive.endpoint : leases.nextHolderEndpoint(projectId);
   if (!endpoint || endpoint.isClosed()) return { kind: "host" };
+  const send = (payload: MemoryLeakRestartRequest) =>
+    endpoint.send({
+      type: "event",
+      channel: CHANNELS.EVENTS_PUSH,
+      args: [{ name: "terminal:memory-leak-restart-requested", payload }],
+    });
+  // A cached view may be frozen, and a frozen renderer runs nothing until it
+  // thaws: thaw it first, as a routed MCP dispatch does.
+  const local = endpoint.kind === "local-view" ? webContents.fromId(endpoint.handle) : undefined;
   return {
     kind: "view",
-    deliver: (payload) =>
-      endpoint.send({
-        type: "event",
-        channel: CHANNELS.EVENTS_PUSH,
-        args: [{ name: "terminal:memory-leak-restart-requested", payload }],
-      }),
+    deliver: (payload) => {
+      if (!local || local.isDestroyed()) {
+        send(payload);
+        return;
+      }
+      thawThenSend(
+        local,
+        () => !endpoint.isClosed(),
+        () => send(payload)
+      );
+    },
   };
 }
 

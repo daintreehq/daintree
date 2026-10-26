@@ -99,16 +99,23 @@ export class MemoryLeakAutoRestartService {
       track.inFlight = true;
       track.lastAttemptAt = now;
       const settled = track;
-      void this.attempt(terminalId, policy.thresholdMb).finally(() => {
+      void this.attempt(terminalId, generation, policy.thresholdMb).finally(() => {
         settled.inFlight = false;
       });
     }
   }
 
-  private async attempt(terminalId: string, thresholdMb: number): Promise<void> {
+  private async attempt(
+    terminalId: string,
+    generation: number | undefined,
+    thresholdMb: number
+  ): Promise<void> {
     try {
       const info = await this.deps.readTerminal(terminalId);
       if (this.disposed || !info || info.isExited === true || info.isTrashed === true) return;
+      // A restart while the read was out replaced the process these samples
+      // measured; its successor gets its own startup grace.
+      if (this.deps.generationOf(terminalId) !== generation) return;
       const projectId = info.projectId;
       if (!projectId) return;
       if (info.agentState === "waiting") return;
