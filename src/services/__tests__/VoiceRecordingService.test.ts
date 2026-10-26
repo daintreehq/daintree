@@ -971,14 +971,23 @@ describe("VoiceRecordingService — arming state", () => {
     storeModule.__state.status = "idle";
   });
 
-  it("an Escape nothing else took stops the session exactly as the dictation key does", async () => {
+  it("an Escape nothing else took cancels the dictation, where the dictation key stops it", async () => {
     setupGlobals();
 
     const storeModule = (await import("@/store/voiceRecordingStore")) as unknown as {
+      useVoiceRecordingStore: {
+        getState: () => {
+          finishSession: ReturnType<typeof vi.fn>;
+          announce: ReturnType<typeof vi.fn>;
+        };
+      };
       __state: { activeTarget: { panelId: string } | null; status: string };
     };
     storeModule.__state.activeTarget = { panelId: "panel-1" };
     storeModule.__state.status = "recording";
+    const { finishSession, announce } = storeModule.useVoiceRecordingStore.getState();
+    finishSession.mockClear();
+    announce.mockClear();
 
     const { voiceRecordingService } = await import("../VoiceRecordingService");
     const stopSpy = vi
@@ -989,19 +998,15 @@ describe("VoiceRecordingService — arming state", () => {
     const { dispatchEscapeFallback } = await import("@/lib/escapeStack");
 
     await voiceRecordingService.toggle({ panelId: "panel-1" });
+    expect(stopSpy).toHaveBeenCalledOnce();
+    expect(stopSpy.mock.calls[0]![1]).toMatchObject({ preserveLiveText: true });
+
     expect(dispatchEscapeFallback()).toBe(true);
 
-    expect(stopSpy).toHaveBeenCalledTimes(2);
-    // Only the session summary tells the two apart.
-    const [keyAnnouncement, keyOptions] = stopSpy.mock.calls[0]!;
-    const [escapeAnnouncement, escapeOptions] = stopSpy.mock.calls[1]!;
-    expect(escapeAnnouncement).toBe(keyAnnouncement);
-    expect(escapeOptions).toEqual({ ...keyOptions, reason: "escape" });
-    expect(keyOptions).toMatchObject({ reason: "user" });
-    // The text stays, so the announcement must not claim it was thrown away.
-    const [announcement, options] = stopSpy.mock.calls[1]!;
-    expect(options).toMatchObject({ preserveLiveText: true });
-    expect(announcement).not.toMatch(/cancel/i);
+    expect(stopSpy).toHaveBeenCalledOnce();
+    expect(stopSpy.mock.calls[0]![1]).toMatchObject({ reason: "user" });
+    expect(finishSession).toHaveBeenCalledWith({ preserveLiveText: false });
+    expect(announce).toHaveBeenCalledWith(expect.stringMatching(/cancelled.*discarded/i));
 
     storeModule.__state.activeTarget = null;
     storeModule.__state.status = "idle";
@@ -1044,20 +1049,23 @@ describe("VoiceRecordingService — arming state", () => {
       storeModule.__state.status = status;
 
       const { voiceRecordingService } = await import("../VoiceRecordingService");
-      const stopSpy = vi
-        .spyOn(voiceRecordingService, "stop")
+      const cancelSpy = vi
+        .spyOn(
+          voiceRecordingService as unknown as { cancelDictation: () => Promise<void> },
+          "cancelDictation"
+        )
         .mockImplementation(async () => undefined);
 
       expect(voiceRecordingService.handleEscape("panel-2")).toBe(false);
-      expect(stopSpy).not.toHaveBeenCalled();
+      expect(cancelSpy).not.toHaveBeenCalled();
 
       expect(voiceRecordingService.handleEscape("panel-1")).toBe(true);
-      expect(stopSpy).toHaveBeenCalledOnce();
+      expect(cancelSpy).toHaveBeenCalledOnce();
 
       voiceRecordingService.initialize();
       const { dispatchEscapeFallback } = await import("@/lib/escapeStack");
       expect(dispatchEscapeFallback()).toBe(true);
-      expect(stopSpy).toHaveBeenCalledTimes(2);
+      expect(cancelSpy).toHaveBeenCalledTimes(2);
 
       storeModule.__state.activeTarget = null;
       storeModule.__state.status = "idle";

@@ -213,6 +213,10 @@ function stop(sender: FakeSender, sessionId: string) {
   return getHandler(CHANNELS.VOICE_INPUT_STOP)({ sender }, sessionId);
 }
 
+function cancel(sender: FakeSender, sessionId: string) {
+  return getHandler(CHANNELS.VOICE_INPUT_CANCEL)({ sender }, sessionId);
+}
+
 function flush(sender: FakeSender, sessionId: string) {
   return getHandler(CHANNELS.VOICE_INPUT_FLUSH_PARAGRAPH)({ sender }, sessionId);
 }
@@ -620,6 +624,74 @@ describe("voiceInput — session identity", () => {
     await expect(pending).resolves.toEqual({ status: "superseded" });
     expect(shared.calls).toEqual([]);
     expect(ended(ownerA)).toEqual([{ sessionId: "a", reason: "cancelled" }]);
+  });
+
+  it("cancels a running session without draining it, dropping anything it still emits", async () => {
+    await start(ownerA, "a");
+    await cancel(ownerA, "a");
+    emit({ type: "complete", text: "late words" });
+
+    expect(shared.calls).toEqual(["start:a", "hard-stop"]);
+    expect(ended(ownerA)).toEqual([{ sessionId: "a", reason: "cancelled" }]);
+    expect(received(ownerA)).toEqual([]);
+    expect(getLiveVoiceSession()).toBeNull();
+  });
+
+  it("cancels a session still starting without ever bringing up its provider", async () => {
+    const resolveKeyterms = deferKeyterms();
+    const pending = start(ownerA, "a");
+    sendChunk("a", 1);
+    await cancel(ownerA, "a");
+    resolveKeyterms();
+
+    await expect(pending).resolves.toEqual({ status: "superseded" });
+    expect(shared.calls).toEqual([]);
+    expect(ended(ownerA)).toEqual([{ sessionId: "a", reason: "cancelled" }]);
+  });
+
+  it("ignores a cancel carrying an id that isn't the live session's", async () => {
+    await start(ownerA, "a");
+    await cancel(ownerB, "b");
+
+    expect(shared.calls).toEqual(["start:a"]);
+    expect(getLiveVoiceSession()?.sessionId).toBe("a");
+    expect(ended(ownerA)).toEqual([]);
+  });
+
+  it("ends a draining session as cancelled when a cancel overtakes its stop", async () => {
+    await start(ownerA, "a");
+    const finishDrain = deferDrain();
+    const stopping = stop(ownerA, "a");
+    await cancel(ownerA, "a");
+    emit({ type: "complete", text: "drained words" });
+    finishDrain();
+    await stopping;
+
+    expect(shared.calls).toEqual(["start:a", "drain", "hard-stop"]);
+    expect(ended(ownerA)).toEqual([{ sessionId: "a", reason: "cancelled" }]);
+    expect(received(ownerA)).toEqual([]);
+  });
+
+  it("ignores a cancel from a view that doesn't own the session", async () => {
+    await start(ownerA, "a");
+    await cancel(ownerB, "a");
+
+    expect(shared.calls).toEqual(["start:a"]);
+    expect(getLiveVoiceSession()?.sessionId).toBe("a");
+    expect(ended(ownerA)).toEqual([]);
+  });
+
+  it("leaves a session being drained for another view's start to that drain", async () => {
+    await start(ownerA, "a");
+    const finishDrain = deferDrain();
+    const startingB = start(ownerB, "b");
+    await settle();
+    await cancel(ownerA, "a");
+
+    expect(shared.calls).toEqual(["start:a", "drain"]);
+    finishDrain();
+    await expect(startingB).resolves.toEqual({ status: "started" });
+    expect(ended(ownerA)).toEqual([{ sessionId: "a", reason: "superseded" }]);
   });
 
   it("drains another view's session before starting, keeping its text with its owner (#14600)", async () => {

@@ -1150,6 +1150,7 @@ export const CHANNEL_LOCALITY = {
   "voice-dictionary:update": "shell",
   "voice-dictionary:update-in-project": "host",
   "voice-input:audio-chunk": "shell",
+  "voice-input:cancel": "shell",
   "voice-input:check-mic-permission": "shell",
   "voice-input:correct": "shell",
   "voice-input:error": "shell",

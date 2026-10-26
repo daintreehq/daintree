@@ -6,6 +6,7 @@ import type { IpcInvokeMap } from "../../types/index.js";
 export const VOICE_INPUT_METHOD_CHANNELS = {
   start: "voice-input:start",
   stop: "voice-input:stop",
+  cancel: "voice-input:cancel",
   flushParagraph: "voice-input:flush-paragraph",
   getLiveSession: "voice-input:get-live-session",
   stopLive: "voice-input:stop-live",

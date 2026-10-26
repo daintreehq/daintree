@@ -297,7 +297,7 @@ describe("VoiceInputSettingsTab copy", () => {
     for (const phrase of [
       "Start or stop dictation",
       "Pause or resume",
-      "Cancel and keep the text so far",
+      "Cancel and discard this dictation",
       "Stop dictation and send the prompt",
     ]) {
       expect(row?.textContent).toContain(phrase);

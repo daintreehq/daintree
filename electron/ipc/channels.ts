@@ -899,6 +899,7 @@ export const CHANNELS = {
   VOICE_INPUT_SET_SETTINGS: "voice-input:set-settings",
   VOICE_INPUT_START: "voice-input:start",
   VOICE_INPUT_STOP: "voice-input:stop",
+  VOICE_INPUT_CANCEL: "voice-input:cancel",
   VOICE_INPUT_AUDIO_CHUNK: "voice-input:audio-chunk",
   VOICE_INPUT_TRANSCRIPTION_DELTA: "voice-input:transcription-delta",
   VOICE_INPUT_TRANSCRIPTION_COMPLETE: "voice-input:transcription-complete",

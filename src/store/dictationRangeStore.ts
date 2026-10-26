@@ -61,6 +61,8 @@ export interface DictationRecord {
    */
   range: TrackedTextRange;
   utterances: DictationUtterance[];
+  /** Each paragraph break the session inserted. */
+  breaks: TrackedTextRange[];
   /**
    * From the session's first dictated word to its last, for learning to diff
    * what is sent against what was heard. Unlike `range`, an edit that reaches
@@ -174,6 +176,13 @@ function sameSpan(a: DictationTextSpan | undefined, b: DictationTextSpan | undef
 function mapRecord(record: DictationRecord, change: TextChange): DictationRecord {
   const range = mapTextRange(record.range, change);
   const learningSpan = record.learningSpan && mapSpanKeepingEdits(record.learningSpan, change);
+  let breaksChanged = false;
+  const breaks = record.breaks.map((paragraphBreak) => {
+    const mapped = mapTextRange(paragraphBreak, change);
+    if (sameRange(mapped, paragraphBreak)) return paragraphBreak;
+    breaksChanged = true;
+    return mapped;
+  });
   let utterancesChanged = false;
   const utterances = record.utterances.map((utterance) => {
     const separatorAfter =
@@ -196,6 +205,7 @@ function mapRecord(record: DictationRecord, change: TextChange): DictationRecord
   });
   if (
     !utterancesChanged &&
+    !breaksChanged &&
     sameRange(range, record.range) &&
     sameSpan(learningSpan, record.learningSpan)
   ) {
@@ -205,8 +215,31 @@ function mapRecord(record: DictationRecord, change: TextChange): DictationRecord
     ...record,
     range,
     utterances: utterancesChanged ? utterances : record.utterances,
+    breaks: breaksChanged ? breaks : record.breaks,
     ...(learningSpan ? { learningSpan } : {}),
   };
+}
+
+/**
+ * Every span the dictation put in the draft, last first, for taking it back
+ * out: each utterance with its separator, and each paragraph break. Text typed
+ * between them stays where it is. Null once any of them has been edited,
+ * because removing them would take the user's edits with them.
+ */
+export function dictatedSpans(
+  record: DictationRecord,
+  draftLength: number
+): DictationTextSpan[] | null {
+  // An insertion holds its utterance's words, so an edit to them flags it too.
+  const pieces = [...record.utterances.map((u) => u.insertion), ...record.breaks];
+  if (pieces.some((piece) => piece.edited)) return null;
+  const spans = pieces.map(({ from, to }) => ({ from, to })).sort((a, b) => b.from - a.from);
+  for (let i = 0; i < spans.length; i++) {
+    const span = spans[i]!;
+    const later = spans[i - 1];
+    if (span.from < 0 || span.to > draftLength || (later && span.to > later.from)) return null;
+  }
+  return spans;
 }
 
 /**
@@ -226,6 +259,8 @@ function withInsertion(
   const index = records.findIndex((record) => record.sessionId === target.sessionId);
   const utterances = utterance ? [utterance] : [];
   const words = utterance ? { from: utterance.range.from, to: utterance.range.to } : undefined;
+  // A paragraph break is kept on its own, so a cancel can take it back out.
+  const breaks = utterance ? [] : [unedited(insertion)];
 
   if (index < 0) {
     const record: DictationRecord = {
@@ -235,6 +270,7 @@ function withInsertion(
       projectId: target.projectId,
       range: unedited(insertion),
       utterances,
+      breaks,
       ...(words ? { learningSpan: words } : {}),
     };
     return { ...drafts, [key]: [...records, record] };
@@ -257,6 +293,7 @@ function withInsertion(
       edited: existing.range.edited || !contiguous,
     },
     utterances: [...existing.utterances, ...utterances],
+    breaks: [...existing.breaks, ...breaks],
     ...(learningSpan ? { learningSpan } : {}),
   };
   return { ...drafts, [key]: records.map((r, i) => (i === index ? record : r)) };

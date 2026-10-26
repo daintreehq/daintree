@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { planVoiceWords } from "@/services/voiceInsertion";
 import { useTerminalInputStore } from "../terminalInputStore";
 import {
+  dictatedSpans,
   subscribeDictationRangeTracking,
   useDictationRangeStore,
   type DictationRecord,
@@ -33,6 +34,14 @@ function dictate(words: string, sessionTarget = target): void {
     insertion: { from: base.length, to: from + words.length },
     words: { from, to: from + words.length },
   });
+}
+
+function paragraphBreak(sessionTarget = target): void {
+  const base = draft();
+  setDraft(base + "\n");
+  useDictationRangeStore
+    .getState()
+    .recordParagraphBreak(sessionTarget, { from: base.length, to: base.length + 1 });
 }
 
 function edit(from: number, to: number, insert: string): void {
@@ -541,6 +550,75 @@ describe("dictationRangeStore", () => {
       const span = useDictationRangeStore.getState().takeLastUtterance(target, draft());
       expect(span).toEqual({ from: 7, to: 19 });
       expect(draft().slice(0, span!.from) + draft().slice(span!.to)).toBe("Please then test it.");
+    });
+  });
+
+  it("keeps each paragraph break on its own through edits around it", () => {
+    dictate("first");
+    paragraphBreak();
+    dictate("second");
+    edit(0, 0, "Intro: ");
+
+    const [paragraph] = only().breaks;
+    expect(textOf(paragraph!)).toBe("\n");
+    expect(paragraph!.edited).toBe(false);
+
+    edit(paragraph!.from, paragraph!.to, " ");
+    expect(only().breaks[0]!.edited).toBe(true);
+  });
+
+  describe("dictatedSpans", () => {
+    const without = (spans: { from: number; to: number }[]) =>
+      spans.reduce((text, { from, to }) => text.slice(0, from) + text.slice(to), draft());
+
+    it("lists every utterance and paragraph break, last first", () => {
+      setDraft("Keep");
+      dictate("first");
+      paragraphBreak();
+      dictate("second");
+
+      const spans = dictatedSpans(only(), draft().length)!;
+      expect(spans.map(textOf)).toEqual(["second", "\n", " first"]);
+      expect(without(spans)).toBe("Keep");
+    });
+
+    it("leaves text typed before, between and after the dictation", () => {
+      setDraft("Start");
+      dictate("first");
+      setDraft(draft() + " typed");
+      dictate("second");
+      edit(0, 0, "Before ");
+      setDraft(draft() + " after");
+
+      expect(only().range.edited).toBe(true);
+      expect(without(dictatedSpans(only(), draft().length)!)).toBe("Before Start typed after");
+    });
+
+    it("refuses once an utterance's words were edited", () => {
+      dictate("hello world");
+      setDraft(draft().replace("world", "there"));
+      expect(dictatedSpans(only(), draft().length)).toBeNull();
+    });
+
+    it("refuses once the separator an utterance inserted was edited", () => {
+      setDraft("Keep");
+      dictate("words");
+      edit(5, 5, "typed ");
+      expect(draft()).toBe("Keep typed words");
+      expect(dictatedSpans(only(), draft().length)).toBeNull();
+    });
+
+    it("refuses once a paragraph break was deleted", () => {
+      dictate("first");
+      paragraphBreak();
+      dictate("second");
+      setDraft("firstsecond");
+      expect(dictatedSpans(only(), draft().length)).toBeNull();
+    });
+
+    it("refuses spans that no longer fit the draft", () => {
+      dictate("words");
+      expect(dictatedSpans(only(), 2)).toBeNull();
     });
   });
 });
