@@ -12,7 +12,12 @@ import { isProjectViewCached } from "@/lib/viewCacheState";
 import { useAgentDirectory } from "@/hooks/useAgentDirectory";
 import { useAssistantWork } from "@/hooks/useAssistantWork";
 import type { HostMenuRow } from "@/components/Hosts/hostModel";
-import { unmatchedTerms, type CanopyInbox, type CanopyItem } from "./canopyModel";
+import {
+  itemNeedsAttention,
+  unmatchedTerms,
+  type CanopyInbox,
+  type CanopyItem,
+} from "./canopyModel";
 import {
   assistantMatches,
   buildAssistantItems,
@@ -212,13 +217,24 @@ export function useCanopyInboxFilters({
     });
   }, [unreadOnly, inbox]);
   // The inbox as listed: every run in it, or with the filter on, the unread.
-  const listed = useMemo(
+  const filtered = useMemo(
     () =>
       unreadOnly
         ? shownInbox.inbox.filter((item) => item.unread || keptUnread.has(item.runId))
         : shownInbox.inbox,
     [unreadOnly, shownInbox, keptUnread]
   );
+  // The runs that need the user lead, each group in rank order: the Needs you band, then the rest.
+  const { listed, bandSize } = useMemo(() => {
+    const band = filtered.filter(itemNeedsAttention);
+    if (band.length === 0 || band.length === filtered.length) {
+      return { listed: filtered, bandSize: band.length };
+    }
+    return {
+      listed: [...band, ...filtered.filter((item) => !itemNeedsAttention(item))],
+      bandSize: band.length,
+    };
+  }, [filtered]);
   const archivedExpanded = useCanopyStore((s) => s.archivedExpanded);
   const setArchivedExpanded = useCanopyStore((s) => s.setArchivedExpanded);
   // A search finds archived runs too, shown under their bar without unfolding it for good.
@@ -359,6 +375,7 @@ export function useCanopyInboxFilters({
     unreadOnly,
     setUnreadOnly,
     listed,
+    bandSize,
     archivedExpanded,
     setArchivedExpanded,
     archivedShown,
