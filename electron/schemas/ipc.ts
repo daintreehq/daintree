@@ -10,6 +10,10 @@ import { MAX_TERMINAL_GRID_DIMENSION } from "../../shared/types/terminal.js";
 import { HANDBACK_CODE_PATTERN } from "../../shared/types/handback.js";
 import { COPY_TREE_RUN_SOURCES } from "../../shared/types/ipc/copyTreeHistory.js";
 import { MAX_TERMINALS_PER_RECIPE_ADMISSION_BATCH } from "../../shared/utils/recipeSanitizer.js";
+import {
+  VOICE_REWRITE_MAX_INSTRUCTION_CHARS,
+  VOICE_REWRITE_MAX_SELECTION_CHARS,
+} from "../../shared/config/voiceCorrection.js";
 
 /** Schema for a launch hint — built-in agent id or plugin-provided string. */
 const LaunchAgentIdSchema = z.union([z.enum(BUILT_IN_AGENT_IDS), z.string().min(1)]);
@@ -771,6 +775,10 @@ export const VoiceSessionIdSchema = z.string().min(1).max(64);
 export const VoiceInputStartOptionsSchema = z
   .object({
     terminalId: z.string().min(1).max(256).optional(),
+    // "rewrite" records a spoken instruction for the selected text, so its
+    // words reach the renderer as spoken: no formatting commands, paragraph
+    // splits or file links.
+    intent: z.enum(["dictation", "rewrite"]).optional(),
   })
   .optional();
 
@@ -779,6 +787,11 @@ export const VoiceInputCorrectPayloadSchema = z.object({
   recentContext: z.array(z.string()).optional(),
   /** The panel the passage was dictated into, which picks the project vocabulary. */
   terminalId: z.string().min(1).max(256).optional(),
+});
+
+export const VoiceInputRewritePayloadSchema = z.object({
+  selectedText: z.string().min(1).max(VOICE_REWRITE_MAX_SELECTION_CHARS),
+  instruction: z.string().min(1).max(VOICE_REWRITE_MAX_INSTRUCTION_CHARS),
 });
 
 export const SystemOpenExternalPayloadSchema = z.object({
@@ -1038,6 +1051,7 @@ export type CopyTreeGetFileTreePayload = z.infer<typeof CopyTreeGetFileTreePaylo
 export type FileReadPayload = z.infer<typeof FileReadPayloadSchema>;
 export type VoiceInputStartOptions = z.infer<typeof VoiceInputStartOptionsSchema>;
 export type VoiceInputCorrectPayload = z.infer<typeof VoiceInputCorrectPayloadSchema>;
+export type VoiceInputRewritePayload = z.infer<typeof VoiceInputRewritePayloadSchema>;
 export type SystemOpenExternalPayload = z.infer<typeof SystemOpenExternalPayloadSchema>;
 export type SystemOpenPathPayload = z.infer<typeof SystemOpenPathPayloadSchema>;
 export type SystemShowItemInFolderUnconfinedPayload = z.infer<

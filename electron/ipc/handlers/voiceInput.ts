@@ -20,6 +20,7 @@ import type {
 } from "../../../shared/types/ipc/api.js";
 import type {
   VoiceLiveSessionUpdate,
+  VoiceRewriteOutcome,
   VoiceSessionEndReason,
   VoiceStartOutcome,
 } from "../../../shared/types/voice.js";
@@ -60,9 +61,11 @@ import { openExternalUrl } from "../../utils/openExternal.js";
 import { openLinuxSoundSettings } from "../../services/voice/linuxSoundSettings.js";
 import {
   VoiceInputCorrectPayloadSchema,
+  VoiceInputRewritePayloadSchema,
   VoiceInputStartOptionsSchema,
   VoiceSessionIdSchema,
   type VoiceInputCorrectPayload,
+  type VoiceInputRewritePayload,
   type VoiceInputStartOptions,
 } from "../../schemas/ipc.js";
 import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
@@ -105,6 +108,8 @@ interface VoiceSession {
   readonly projectInfo: { name?: string; path?: string };
   /** The terminal being dictated into, as the renderer named it at start. */
   readonly terminalId: string | undefined;
+  /** "rewrite" records an instruction for selected text, forwarded as spoken. */
+  readonly intent: "dictation" | "rewrite";
   // starting: main is still preparing, and the provider isn't this session's.
   // active: its provider has been started (it may still be connecting).
   // stopping: a stop owns its graceful drain.
@@ -887,6 +892,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       projectId: ctx.projectId,
       projectInfo: getProjectInfo(ctx.projectId),
       terminalId: options?.terminalId,
+      intent: options?.intent ?? "dictation",
       phase: "starting",
       ended: false,
       stopPromise: null,
@@ -1138,6 +1144,17 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
           ...(voiceEvent.itemId ? { itemId: voiceEvent.itemId } : {}),
           ...(voiceEvent.replace ? { replace: true } : {}),
         });
+      } else if (voiceEvent.type === "complete" && session.intent === "rewrite") {
+        // An instruction, not prompt text: "new line" is part of what was asked.
+        logDebug("[VoiceInput] instruction complete → renderer", {
+          rawLength: voiceEvent.text.length,
+        });
+        target.send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, {
+          sessionId,
+          text: voiceEvent.text.trim(),
+          willCorrect: false,
+          ...(voiceEvent.itemId ? { itemId: voiceEvent.itemId } : {}),
+        });
       } else if (voiceEvent.type === "complete") {
         const rawText = voiceEvent.text.trim();
         // A trailing "send it" that ends the utterance is stripped and handed
@@ -1153,6 +1170,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
           emitCompletion(voiceEvent.itemId, rawText, sendCommand);
         }
       } else if (voiceEvent.type === "paragraph_boundary") {
+        if (session.intent === "rewrite") return;
         target.send(CHANNELS.VOICE_INPUT_PARAGRAPH_BOUNDARY, {
           sessionId,
           rawText: null,
@@ -1404,6 +1422,30 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     return { action: result.action, correctedText: result.confirmedText };
   };
 
+  // A spoken instruction applied to selected composer text. It runs whatever
+  // the cleanup toggle says, since it is something the user asked for.
+  const handleRewrite = async (
+    ctx: IpcContext,
+    request: VoiceInputRewritePayload
+  ): Promise<VoiceRewriteOutcome> => {
+    const settings = getVoiceSettings();
+    if (!settings.openaiApiKey) return { status: "unavailable" };
+    if (!correctionService) {
+      correctionService = new VoiceCorrectionService();
+    }
+    const projectInfo = getProjectInfo(ctx.projectId);
+    return correctionService.rewrite(request, {
+      model: settings.correctionModel,
+      apiKey: settings.openaiApiKey,
+      customDictionary: dictionaryTerms(settings.dictionary),
+      language: normalizeVoiceLanguage(settings.language),
+      projectName: projectInfo.name,
+      projectPath: projectInfo.path,
+      organizationId: settings.organizationId,
+      projectId: settings.projectId,
+    });
+  };
+
   const sessionNamespace = defineIpcNamespace({
     name: "voiceInput",
     ops: {
@@ -1429,6 +1471,12 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         VOICE_INPUT_METHOD_CHANNELS.revealLive,
         VoiceSessionIdSchema,
         handleRevealLive
+      ),
+      rewrite: opValidated(
+        VOICE_INPUT_METHOD_CHANNELS.rewrite,
+        VoiceInputRewritePayloadSchema,
+        handleRewrite,
+        { withContext: true }
       ),
     },
   });

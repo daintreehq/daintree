@@ -16,6 +16,19 @@ import {
 } from "./persistence/persistWriteMerge";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 import type { VoiceMicDevice } from "@/services/voiceMicDevices";
+import type { RewriteSelection } from "@/services/voiceRewriteSelection";
+
+/**
+ * A session recording a spoken instruction for selected composer text
+ * (#14635) rather than dictating into the draft.
+ */
+export interface VoiceRewriteRequest {
+  selection: RewriteSelection;
+  /** The instruction's finished segments, in order. */
+  instruction: string[];
+  /** Escape landed while it was finishing: drain, but don't send it. */
+  cancelled: boolean;
+}
 
 export interface VoiceRecordingTarget {
   panelId: string;
@@ -24,6 +37,8 @@ export interface VoiceRecordingTarget {
   projectName?: string;
   worktreeId?: string;
   worktreeLabel?: string;
+  /** Set when this session records a rewrite instruction instead of dictation. */
+  rewrite?: VoiceRewriteRequest;
 }
 
 /**

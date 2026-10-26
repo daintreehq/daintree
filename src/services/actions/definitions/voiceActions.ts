@@ -69,6 +69,21 @@ export function registerVoiceActions(actions: ActionRegistry): void {
     },
   }));
 
+  actions.set("voiceInput.rewriteSelection", () => ({
+    id: "voiceInput.rewriteSelection",
+    title: "Rewrite selection by voice",
+    description:
+      'Record a spoken instruction ("make this shorter", "turn this into a list") and apply it to the text selected in the focused prompt; stops dictation if it is recording',
+    category: "voice",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    keywords: ["dictate", "mic", "speech", "rewrite", "rephrase", "edit", "command"],
+    run: async () => {
+      await voiceRecordingService.rewriteSelection();
+    },
+  }));
+
   actions.set("voiceInput.togglePause", () => ({
     id: "voiceInput.togglePause",
     title: "Pause or resume voice dictation",

@@ -16,6 +16,7 @@ import {
   useVoiceRecordingStore,
   type VoiceMicNotice,
   type VoiceRecordingTarget,
+  type VoiceRewriteRequest,
 } from "@/store/voiceRecordingStore";
 import {
   isActiveVoiceSession,
@@ -60,6 +61,12 @@ import {
 import { isScratchCommand, recordScratchLanded } from "@/services/voiceScratchCommand";
 import { applyDraftEdits, planFileReferenceEdits } from "@/services/voiceFileReferences";
 import { isSpokenSendable } from "@/services/voiceSpokenSend";
+import { findRewriteComposer, type RewriteSelection } from "@/services/voiceRewriteSelection";
+import {
+  VOICE_REWRITE_MAX_INSTRUCTION_CHARS,
+  VOICE_REWRITE_MAX_SELECTION_CHARS,
+} from "@shared/config/voiceCorrection";
+import type { VoiceRewriteOutcome } from "@shared/types/voice";
 
 const LOG_PREFIX = "[VoiceRecording]";
 const REPLACED_ELSEWHERE_ANNOUNCEMENT =
@@ -207,6 +214,16 @@ function mapLearningStart(before: string, after: string, start: number): number 
   return -1;
 }
 
+/** A spoken rewrite of a composer selection, on its way to the model. */
+interface PendingRewrite {
+  panelId: string;
+  selection: RewriteSelection;
+  /** Landed or dropped; either way it will never touch the draft again. */
+  done: boolean;
+  settled: Promise<void>;
+  settle: () => void;
+}
+
 /** The text a session dictated into its target's draft, while the draft still holds it. */
 function findDictation(
   target: VoiceRecordingTarget,
@@ -336,6 +353,10 @@ class VoiceRecordingService {
   // panel and draft scope: an isolated composer on the same terminal keeps a
   // draft of its own and must not take the pane's send.
   private spokenSendHandlers = new Map<string, () => void>();
+  private pendingRewrites = new Set<PendingRewrite>();
+  // Null until the settings have been read: a rewrite then goes ahead and main
+  // reports a missing key.
+  private hasOpenAIKey: boolean | null = null;
 
   initialize(): void {
     if (this.initialized) return;
@@ -365,7 +386,8 @@ class VoiceRecordingService {
         logDebug(`${LOG_PREFIX} Received transcription delta`, { itemId, length: delta.length });
         const voiceState = useVoiceRecordingStore.getState();
         const target = voiceState.activeTarget;
-        if (target) {
+        // An instruction streams into liveText only; it never lands in the draft.
+        if (target && !target.rewrite) {
           const buffer = voiceState.panelBuffers[target.panelId];
           // An empty revision retracts a preview; it never starts an utterance.
           const isFirstDelta = delta !== "" && (!buffer || buffer.liveText === "");
@@ -400,6 +422,13 @@ class VoiceRecordingService {
       voiceInput.onTranscriptionComplete(({ text, itemId, transcriptId, send }) => {
         logDebug(`${LOG_PREFIX} Received transcription complete`, { itemId, length: text.length });
         const voiceState = useVoiceRecordingStore.getState();
+        const rewrite = voiceState.activeTarget?.rewrite;
+        if (rewrite) {
+          const finalText = text.trim();
+          if (finalText) rewrite.instruction.push(finalText);
+          useVoiceRecordingStore.getState().completeSegment(text, itemId);
+          return;
+        }
         const panelId = voiceState.activeTarget?.panelId;
         const projectId = voiceState.activeTarget?.projectId;
         if (panelId) {
@@ -489,7 +518,7 @@ class VoiceRecordingService {
         logDebug(`${LOG_PREFIX} Received paragraph boundary`, { rawLength: rawText?.length ?? 0 });
         const voiceState = useVoiceRecordingStore.getState();
         const currentTarget = voiceState.activeTarget;
-        if (!currentTarget) return;
+        if (!currentTarget || currentTarget.rewrite) return;
 
         const { panelId, projectId } = currentTarget;
         const buffer = voiceState.panelBuffers[panelId];
@@ -760,6 +789,7 @@ class VoiceRecordingService {
       const matches = [
         ...keybindingService.getEffectiveCombos("voiceInput.toggle"),
         ...keybindingService.getEffectiveCombos("voiceInput.toggleAssistant"),
+        ...keybindingService.getEffectiveCombos("voiceInput.rewriteSelection"),
       ].some((combo) => keybindingService.matchesEvent(e, combo));
       if (!matches) return;
       this.pttActiveKeyCode = e.code;
@@ -813,6 +843,7 @@ class VoiceRecordingService {
     const isConfigured = settings.enabled && hasProviderKey;
     this.selectedDeviceId = settings.deviceId ?? "";
     this.recordingMode = settings.recordingMode ?? "toggle";
+    this.hasOpenAIKey = !!settings.openaiApiKey;
     logDebug(`${LOG_PREFIX} refreshConfiguration`, {
       enabled: settings.enabled,
       provider: settings.transcriptionProvider,
@@ -874,7 +905,7 @@ class VoiceRecordingService {
     // Synchronous pre-audio cue. setArming() resolves under 1ms (Zustand set);
     // the first await inside start() then carries us to "connecting" within
     // ~50–200ms, by which point beginSession() has overwritten this state.
-    useVoiceRecordingStore.getState().setArming(target);
+    this.armTarget(target);
     await this.start(target);
   }
 
@@ -896,6 +927,14 @@ class VoiceRecordingService {
       return true;
     }
     if (panelId !== undefined && state.activeTarget?.panelId !== panelId) return false;
+    const rewrite = state.activeTarget?.rewrite;
+    // A rewrite still draining its instruction is cancelled, not left to land.
+    if (rewrite && state.status === "finishing") {
+      if (rewrite.cancelled) return false;
+      rewrite.cancelled = true;
+      useVoiceRecordingStore.getState().announce("Rewrite cancelled.");
+      return true;
+    }
     // Arming is the pre-audio confirmation window. No session has begun
     // yet, so route abort through cancelArming() instead of stop() —
     // stop() would log "no active session" warnings and skip the cleanup
@@ -911,6 +950,10 @@ class VoiceRecordingService {
       state.status !== "reconnecting"
     ) {
       return false;
+    }
+    if (rewrite) {
+      void this.stop("Rewrite cancelled.", { preserveLiveText: true, skipCorrection: true });
+      return true;
     }
     void this.stop("Dictation stopped.", { preserveLiveText: true });
     return true;
@@ -941,6 +984,7 @@ class VoiceRecordingService {
    * the user has moved on.
    */
   private invalidatePendingStart(): void {
+    this.releasePendingRewrite();
     this.startRequestId++;
     this.startup = null;
     this.releasePendingCapture();
@@ -1678,7 +1722,10 @@ class VoiceRecordingService {
     // before the backend is ready still has the audio to transcribe.
     logDebug(`${LOG_PREFIX} Calling voiceInput.start() IPC`);
     const started = window.electron.voiceInput
-      .start(sessionId, { terminalId: target.panelId })
+      .start(sessionId, {
+        terminalId: target.panelId,
+        ...(target.rewrite ? { intent: "rewrite" as const } : {}),
+      })
       .then(
         (outcome) =>
           outcome.status === "started"
@@ -1914,7 +1961,13 @@ class VoiceRecordingService {
         // stop would silently drop the partial transcription.
         if (preserveLiveText) {
           const currentTarget = useVoiceRecordingStore.getState().activeTarget;
-          if (currentTarget) {
+          const rewrite = currentTarget?.rewrite;
+          if (rewrite) {
+            const remaining = useVoiceRecordingStore
+              .getState()
+              .panelBuffers[currentTarget.panelId]?.liveText.trim();
+            if (remaining) rewrite.instruction.push(remaining);
+          } else if (currentTarget) {
             const { panelId, projectId } = currentTarget;
             const buffer = useVoiceRecordingStore.getState().panelBuffers[panelId];
             const remaining = buffer?.liveText?.trim();
@@ -1953,7 +2006,15 @@ class VoiceRecordingService {
       // doesn't await it: the decoration shows progress, and a send waits for
       // it through waitForPendingCorrections(). It is registered before stop()
       // resolves, so a caller that awaited stop() can always see it.
-      if (!skipRemoteStop && nextStatus === "idle" && !options.skipCorrection && stoppedTarget) {
+      const graceful = !skipRemoteStop && nextStatus === "idle" && !options.skipCorrection;
+      if (stoppedTarget?.rewrite) {
+        if (graceful && !stoppedTarget.rewrite.cancelled) {
+          this.runRewrite(stoppedTarget.panelId, stoppedTarget.rewrite);
+        } else if (this.liveStartup()?.target.rewrite !== stoppedTarget.rewrite) {
+          // A restart of the same rewrite (a microphone switch) keeps recording into it.
+          stoppedTarget.rewrite.selection.release();
+        }
+      } else if (graceful && stoppedTarget) {
         if (correctionEnabled) {
           this.runCorrection(stoppedTarget, stoppedSessionId);
         } else {
@@ -2154,9 +2215,150 @@ class VoiceRecordingService {
     }
   }
 
+  /**
+   * Sends a finished instruction and its selection to the correction model.
+   * Registered before stop() resolves, so a send waits for it like a
+   * correction; an edit that reaches the selection drops it.
+   */
+  private runRewrite(panelId: string, rewrite: VoiceRewriteRequest): void {
+    const { selection } = rewrite;
+    const instruction = rewrite.instruction
+      .join(" ")
+      .trim()
+      .slice(0, VOICE_REWRITE_MAX_INSTRUCTION_CHARS);
+    if (!instruction) {
+      selection.release();
+      this.reportRewriteSkipped("No instruction was heard. The selection is unchanged.");
+      return;
+    }
+    this.requestRewrite(panelId, selection, instruction);
+  }
+
+  private requestRewrite(panelId: string, selection: RewriteSelection, instruction: string): void {
+    if (!selection.range()) {
+      this.reportRewriteSkipped("The selection was edited, so it wasn't rewritten.");
+      return;
+    }
+    let settle!: () => void;
+    const job: PendingRewrite = {
+      panelId,
+      selection,
+      done: false,
+      settled: new Promise<void>((resolve) => {
+        settle = resolve;
+      }),
+      settle: () => settle(),
+    };
+    this.pendingRewrites.add(job);
+    selection.onLost(() => {
+      if (job.done) return;
+      logDebug(`${LOG_PREFIX} Rewrite selection edited, discarding`);
+      this.retireRewrite(job);
+      this.syncCorrectionRange(panelId);
+    });
+    this.syncCorrectionRange(panelId);
+    useVoiceRecordingStore.getState().announce("Rewriting selection…");
+    const selectedText = selection.text;
+    logDebug(`${LOG_PREFIX} Requesting rewrite`, {
+      panelId,
+      selectionLength: selectedText.length,
+      instructionLength: instruction.length,
+    });
+    void this.settleRewrite(job, instruction);
+  }
+
+  private async settleRewrite(job: PendingRewrite, instruction: string): Promise<void> {
+    let outcome: VoiceRewriteOutcome;
+    try {
+      outcome = await window.electron.voiceInput.rewrite({
+        selectedText: job.selection.text,
+        instruction,
+      });
+    } catch (error) {
+      logWarn(`${LOG_PREFIX} Rewrite request failed`, voiceErrorLogFields(error));
+      outcome = { status: "failed" };
+    }
+    if (job.done) {
+      logDebug(`${LOG_PREFIX} Rewrite result stale (selection edited or draft sent), discarding`);
+      return;
+    }
+    this.retireRewrite(job);
+    this.syncCorrectionRange(job.panelId);
+    logDebug(`${LOG_PREFIX} Rewrite settled`, { status: outcome.status });
+
+    const { selection } = job;
+    switch (outcome.status) {
+      case "replace":
+        if (selection.apply(outcome.text)) {
+          useVoiceRecordingStore
+            .getState()
+            .announce("Selection rewritten. Undo restores the original.");
+        } else {
+          this.reportRewriteSkipped("The selection was edited, so it wasn't rewritten.");
+        }
+        return;
+      case "no_change":
+        selection.release();
+        this.reportRewriteSkipped("The rewrite came back the same as the selection.");
+        return;
+      case "rejected":
+        selection.release();
+        this.reportRewriteSkipped(
+          "The rewrite changed a reference, path, flag or code span, so the selection was kept."
+        );
+        return;
+      case "unavailable":
+        selection.release();
+        useVoiceRecordingStore.getState().announce("Rewriting by voice needs an OpenAI API key.");
+        this.reportStartFailure(
+          "Rewrite unavailable",
+          "Add an OpenAI API key in voice settings to rewrite selected text by voice.",
+          this.settingsAction()
+        );
+        return;
+      case "failed":
+        useVoiceRecordingStore
+          .getState()
+          .announce("The rewrite failed. The selection is unchanged.");
+        notify({
+          type: "error",
+          title: "Rewrite failed",
+          message: "The request failed or timed out. The selection is unchanged.",
+          replaceKey: "voice-rewrite",
+          context: { eventKind: "connectivity" },
+          action: this.retryAction(() => this.requestRewrite(job.panelId, selection, instruction)),
+        });
+        return;
+    }
+  }
+
+  private reportRewriteSkipped(message: string): void {
+    useVoiceRecordingStore.getState().announce(message);
+    notify({
+      type: "info",
+      title: "Selection unchanged",
+      message,
+      transient: true,
+      // Feedback on the user's own gesture: a toast, not just an inbox row.
+      priority: "high",
+      replaceKey: "voice-rewrite",
+      context: { eventKind: "uiFeedback" },
+    });
+  }
+
+  private retireRewrite(job: PendingRewrite): void {
+    if (job.done) return;
+    job.done = true;
+    this.pendingRewrites.delete(job);
+    job.settle();
+  }
+
   hasPendingCorrection(panelId: string): boolean {
     for (const correction of this.pendingCorrections) {
       if (correction.panelId === panelId) return true;
+    }
+    for (const rewrite of this.pendingRewrites) {
+      if (rewrite.panelId === panelId) return true;
     }
     return false;
   }
@@ -2180,6 +2382,9 @@ class VoiceRecordingService {
         for (const correction of this.pendingCorrections) {
           if (correction.panelId === panelId) settled.push(correction.settled);
         }
+        for (const rewrite of this.pendingRewrites) {
+          if (rewrite.panelId === panelId) settled.push(rewrite.settled);
+        }
         const landed = await Promise.race([Promise.all(settled).then(() => true), timedOut]);
         if (!landed) return false;
       }
@@ -2198,6 +2403,12 @@ class VoiceRecordingService {
     for (const correction of [...this.pendingCorrections]) {
       if (correction.panelId !== panelId) continue;
       this.retireCorrection(correction);
+      dropped = true;
+    }
+    for (const rewrite of [...this.pendingRewrites]) {
+      if (rewrite.panelId !== panelId) continue;
+      this.retireRewrite(rewrite);
+      rewrite.selection.release();
       dropped = true;
     }
     if (dropped) this.syncCorrectionRange(panelId);
@@ -2340,6 +2551,11 @@ class VoiceRecordingService {
     for (const correction of this.pendingCorrections) {
       if (correction.panelId !== panelId) continue;
       ranges.push(...this.locateLivePassages(correction).values());
+    }
+    for (const rewrite of this.pendingRewrites) {
+      if (rewrite.panelId !== panelId) continue;
+      const range = rewrite.selection.range();
+      if (range) ranges.push(range);
     }
     ranges.sort((a, b) => a.from - b.from);
     const voiceStore = useVoiceRecordingStore.getState();
@@ -2539,6 +2755,109 @@ class VoiceRecordingService {
     await this.startOrToggle(assistantTarget);
   }
 
+  /**
+   * Records a spoken instruction for the text selected in the composer that
+   * holds the caret, then has the correction model apply it there (#14635).
+   * Like the dictation key, a press while anything is recording stops it.
+   */
+  async rewriteSelection(): Promise<void> {
+    this.initialize();
+    const stopping = this.stopAnySession();
+    if (stopping) {
+      await stopping;
+      return;
+    }
+
+    // A press after the key was released, while that rewrite's audio is still
+    // queued, keeps recording into it rather than dropping what was said.
+    const released = this.liveStartup();
+    if (released?.stopAfterStart && released.target.rewrite) {
+      this.resumeReleasedStartup(released.target);
+      return;
+    }
+
+    const source = findRewriteComposer(usePanelStore.getState().focusedId);
+    const target = source ? this.getComposerTarget(source.terminalId) : null;
+    if (!source || !target) {
+      this.reportNothingToRewrite("Select text in an agent's prompt to rewrite it by voice.");
+      return;
+    }
+    if (this.hasOpenAIKey === false) {
+      useVoiceRecordingStore.getState().announce("Rewriting by voice needs an OpenAI API key.");
+      this.reportStartFailure(
+        "Rewrite unavailable",
+        "Add an OpenAI API key in voice settings to rewrite selected text by voice.",
+        this.settingsAction()
+      );
+      return;
+    }
+    const selection = source.captureSelection();
+    if (!selection) {
+      this.reportNothingToRewrite("Select the text to rewrite, then press the shortcut again.");
+      return;
+    }
+    if (selection.text.length > VOICE_REWRITE_MAX_SELECTION_CHARS) {
+      selection.release();
+      this.reportNothingToRewrite(
+        "That selection is too long to rewrite. Select a shorter passage."
+      );
+      return;
+    }
+
+    const rewriteTarget: VoiceRecordingTarget = {
+      ...target,
+      rewrite: { selection, instruction: [], cancelled: false },
+    };
+    this.armTarget(rewriteTarget);
+    await this.start(rewriteTarget);
+  }
+
+  /** The pre-audio cue for a start, which supersedes any start still pending. */
+  private armTarget(target: VoiceRecordingTarget): void {
+    this.releasePendingRewrite(target);
+    useVoiceRecordingStore.getState().setArming(target);
+  }
+
+  /**
+   * A rewrite whose start is cancelled or superseded before its session began
+   * gives its selection back. One whose session is running keeps it for that
+   * session's stop, and `next` keeps it when the new start is the same rewrite.
+   */
+  private releasePendingRewrite(next?: VoiceRecordingTarget): void {
+    const { pendingTarget, activeTarget, status } = useVoiceRecordingStore.getState();
+    const pending = pendingTarget?.rewrite;
+    if (
+      !pending ||
+      pending === next?.rewrite ||
+      (isActiveVoiceSession(status) && activeTarget?.rewrite === pending)
+    ) {
+      return;
+    }
+    pending.selection.release();
+  }
+
+  private reportNothingToRewrite(message: string): void {
+    useVoiceRecordingStore.getState().announce(message);
+    notify({
+      type: "info",
+      title: "Nothing to rewrite",
+      message,
+      transient: true,
+      priority: "high",
+      replaceKey: "voice-rewrite",
+      context: { eventKind: "uiFeedback" },
+    });
+  }
+
+  // The panel whose composer holds the selection: the assistant's own when it
+  // is the assistant's, whatever dictation is locked to.
+  private getComposerTarget(terminalId: string): VoiceRecordingTarget | null {
+    if (selectActiveSlot(useHelpPanelStore.getState()).terminalId === terminalId) {
+      return this.getAssistantTarget();
+    }
+    return this.getPanelTarget(terminalId);
+  }
+
   // In push-to-talk mode the keyboard shortcut starts recording; the keyup
   // listener stops it. But the same action is also reachable from the command
   // palette, the menu, and agent automation — none of which produce a keyup.
@@ -2564,7 +2883,7 @@ class VoiceRecordingService {
       }
       // The held key gets the same pre-audio cue as a toggle press.
       useVoiceRecordingStore.getState().recordRecentTarget(target);
-      useVoiceRecordingStore.getState().setArming(target);
+      this.armTarget(target);
       await this.start(target);
       return;
     }
@@ -2623,9 +2942,12 @@ class VoiceRecordingService {
   }
 
   private getFocusedPanelTarget(): VoiceRecordingTarget | null {
+    const panelId = usePanelStore.getState().focusedId;
+    return panelId ? this.getPanelTarget(panelId) : null;
+  }
+
+  private getPanelTarget(panelId: string): VoiceRecordingTarget | null {
     const terminalState = usePanelStore.getState();
-    const panelId = terminalState.focusedId;
-    if (!panelId) return null;
 
     const foundPanel = terminalState.panelsById[panelId];
     if (!foundPanel || foundPanel.location === "trash") return null;
@@ -3039,6 +3361,11 @@ class VoiceRecordingService {
     for (const correction of [...this.pendingCorrections]) {
       correctedPanels.add(correction.panelId);
       this.retireCorrection(correction);
+    }
+    for (const rewrite of [...this.pendingRewrites]) {
+      correctedPanels.add(rewrite.panelId);
+      this.retireRewrite(rewrite);
+      rewrite.selection.release();
     }
     for (const panelId of correctedPanels) this.syncCorrectionRange(panelId);
     this.baselineOwners.clear();

@@ -4004,8 +4004,17 @@ export interface GeneratedIpcInvokeMap {
     args: [sessionId: string];
     result: boolean;
   };
+  "voice-input:rewrite": {
+    args: [request: { selectedText: string; instruction: string }];
+    result: import("../voice.js").VoiceRewriteOutcome;
+  };
   "voice-input:start": {
-    args: [sessionId: string, options?: { terminalId?: string | undefined } | undefined];
+    args: [
+      sessionId: string,
+      options?:
+        | { terminalId?: string | undefined; intent?: "rewrite" | "dictation" | undefined }
+        | undefined,
+    ];
     result: import("../voice.js").VoiceStartOutcome;
   };
   "voice-input:stop": {

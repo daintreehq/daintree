@@ -121,12 +121,14 @@ import {
   clearComposerHistory,
   createComboboxAttributes,
   minimalDocChange,
+  captureRewriteSelection,
   outsideDraftWrite,
   readImageChipPaths,
   replayLandedCorrection,
 } from "./inputEditorExtensions";
 import { takeLandedCorrection } from "@/services/voiceCorrectionLanding";
 import { takeScratchLanded } from "@/services/voiceScratchCommand";
+import { registerComposerSelectionSource } from "@/services/voiceRewriteSelection";
 import { useHostReparent } from "./hooks/useHostReparent";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { SelectedFileMenuItems } from "./SelectedFileMenuItems";
@@ -881,6 +883,29 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         hybridInputE2EControllers.delete(terminalId);
       };
     }, [terminalId]);
+
+    // The selection a spoken rewrite acts on (#14635). An isolated composer
+    // types to another view's terminal, so dictation never targets it.
+    useEffect(() => {
+      if (isolated) return;
+      return registerComposerSelectionSource({
+        terminalId,
+        hasFocus: () => {
+          const view = editorViewRef.current;
+          return view !== null && editorOwnsDomFocus(view);
+        },
+        captureSelection: () => {
+          const view = editorViewRef.current;
+          // Written through at once: a send waiting on the rewrite reads the
+          // draft store, which would otherwise catch up only on the next render.
+          return view
+            ? captureRewriteSelection(view, (doc) =>
+                useTerminalInputStore.getState().setDraftInput(terminalId, doc, projectId)
+              )
+            : null;
+        },
+      });
+    }, [terminalId, isolated, projectId]);
 
     const { sendText: sendResolvedText } = useTokenResolution({
       latestRef,

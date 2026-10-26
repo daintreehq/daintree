@@ -1727,6 +1727,9 @@ export interface GeneratedElectronAPI {
     revealLive(
       ...args: IpcInvokeMap["voice-input:reveal-live"]["args"]
     ): Promise<IpcInvokeMap["voice-input:reveal-live"]["result"]>;
+    rewrite(
+      ...args: IpcInvokeMap["voice-input:rewrite"]["args"]
+    ): Promise<IpcInvokeMap["voice-input:rewrite"]["result"]>;
     start(
       ...args: IpcInvokeMap["voice-input:start"]["args"]
     ): Promise<IpcInvokeMap["voice-input:start"]["result"]>;

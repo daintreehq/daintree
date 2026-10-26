@@ -1160,6 +1160,7 @@ export const CHANNEL_LOCALITY = {
   "voice-input:request-mic-permission": "shell",
   "voice-input:reveal-live": "shell",
   "voice-input:reveal-requested": "shell",
+  "voice-input:rewrite": "shell",
   "voice-input:session-ended": "shell",
   "voice-input:set-settings": "shell",
   "voice-input:start": "shell",
