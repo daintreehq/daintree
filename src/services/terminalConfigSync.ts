@@ -36,13 +36,13 @@ function sameJson(a: unknown, b: unknown): boolean {
  * back.
  */
 interface FieldSync<T> {
-  resolve: (config: Config) => T | undefined;
-  read: () => T;
-  write: (value: T) => void;
+  resolve(config: Config): T | undefined;
+  read(): T;
+  write(value: T): void;
 }
 
 function field<T>(sync: FieldSync<T>): FieldSync<unknown> {
-  return sync as FieldSync<unknown>;
+  return sync;
 }
 
 const FIELDS: { readonly [K in Field]-?: FieldSync<unknown> } = {
@@ -104,11 +104,8 @@ const FIELDS: { readonly [K in Field]-?: FieldSync<unknown> } = {
   }),
   // The saved list replaces this view's, so a scheme removed elsewhere goes
   // here too, along with a preview of it.
-  customSchemes: field({
-    resolve: ({ customSchemes }) =>
-      Array.isArray(customSchemes)
-        ? (customSchemes as unknown as TerminalColorScheme[])
-        : undefined,
+  customSchemes: field<TerminalColorScheme[]>({
+    resolve: ({ customSchemes }) => (Array.isArray(customSchemes) ? customSchemes : undefined),
     read: () => useTerminalColorSchemeStore.getState().customSchemes,
     write: (schemes) => {
       const { customSchemes: before, previewSchemeId } = useTerminalColorSchemeStore.getState();
@@ -155,9 +152,13 @@ const FIELDS: { readonly [K in Field]-?: FieldSync<unknown> } = {
 
 const OWNERS: readonly SettingOwner[] = ["device", "host"];
 
+function isField(name: string): name is Field {
+  return Object.hasOwn(FIELDS, name);
+}
+
 const FIELDS_OWNED_BY: Readonly<Record<SettingOwner, readonly Field[]>> = (() => {
   const byOwner: Record<SettingOwner, Field[]> = { device: [], host: [] };
-  for (const name of Object.keys(FIELDS) as Field[]) {
+  for (const name of Object.keys(FIELDS).filter(isField)) {
     byOwner[settingOwner(`terminalConfig.${name}`)].push(name);
   }
   return byOwner;

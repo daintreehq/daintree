@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import type { HydrateResult } from "@shared/types/ipc/app";
+import type { TerminalConfig } from "@shared/types/ipc/config";
 
 const appClientMock = {
   hydrate: vi.fn(),
@@ -148,20 +150,26 @@ describe("hydrateAppState with no terminal panels", () => {
   });
 
   describe("terminal settings (#14699)", () => {
-    const hydrateWith = (terminalConfig: Record<string, unknown>) => ({
-      appState: { terminals: [] },
+    const hydrateWith = (terminalConfig: TerminalConfig): HydrateResult => ({
+      appState: { terminals: [], sidebarWidth: 350 },
       terminalConfig,
-      project: { id: "project-1", path: "/project", name: "project-1", lastOpened: 0 },
+      project: { id: "project-1", path: "/project", name: "project-1", emoji: "", lastOpened: 0 },
       workspaceId: "project-1",
       agentSettings: { agents: {} },
+      gpuWebGLHardware: true,
+      gpuHardwareAccelerationDisabled: false,
+      gpuDisabledReason: null,
+      gpuAngleFallbackActive: false,
+      safeMode: false,
+      isWindowsStore: false,
     });
-    const run = (prefetchedHydrateResult?: ReturnType<typeof hydrateWith>) =>
+    const run = (prefetchedHydrateResult?: HydrateResult) =>
       hydrateAppState({
         addPanel: vi.fn().mockResolvedValue("panel-id"),
         setActiveWorktree: vi.fn(),
         loadRecipes: vi.fn().mockResolvedValue(undefined),
         openDiagnosticsDock: vi.fn(),
-        prefetchedHydrateResult: prefetchedHydrateResult as never,
+        prefetchedHydrateResult,
       });
 
     beforeEach(() => {
