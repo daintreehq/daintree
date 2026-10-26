@@ -114,9 +114,7 @@ export async function compareReviewPoint(
       const reason = stopped instanceof ComparisonStopped ? stopped.reason : "deadline";
       return failed(
         reason,
-        reason === "deadline"
-          ? "The comparison ran out of time."
-          : "The comparison was cancelled."
+        reason === "deadline" ? "The comparison ran out of time." : "The comparison was cancelled."
       );
     }
     return failed("git-failed", formatErrorMessage(error, "The comparison failed."));
@@ -299,7 +297,8 @@ async function compare(
     );
     if (index === "unchanged" && worktree === "unchanged") continue;
 
-    const only = bothHaveBase && reviewedSide.kind === "unlisted" && currentSide.kind === "unlisted";
+    const only =
+      bothHaveBase && reviewedSide.kind === "unlisted" && currentSide.kind === "unlisted";
     files.push({
       ...candidate.fields,
       status: fileStatus(reviewedSide, currentSide, index, worktree),
@@ -400,10 +399,7 @@ function sideFrom(
   return null;
 }
 
-async function existingCommits(
-  git: Git,
-  oids: ReadonlyArray<string | null>
-): Promise<Set<string>> {
+async function existingCommits(git: Git, oids: ReadonlyArray<string | null>): Promise<Set<string>> {
   const wanted = [...new Set(oids.filter((oid): oid is string => oid !== null))];
   if (wanted.length === 0) return new Set();
   const out = await git(["cat-file", "--batch-check=%(objectname) %(objecttype)"], {

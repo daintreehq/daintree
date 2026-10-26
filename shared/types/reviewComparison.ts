@@ -109,7 +109,8 @@ export const REVIEW_COMPARISON_INCOMPLETE_REASONS = [
   "commits-unavailable",
 ] as const;
 
-export type ReviewComparisonIncompleteReason = (typeof REVIEW_COMPARISON_INCOMPLETE_REASONS)[number];
+export type ReviewComparisonIncompleteReason =
+  (typeof REVIEW_COMPARISON_INCOMPLETE_REASONS)[number];
 
 /** A path or subtree one side couldn't cover, as that side's point named it. */
 export interface ReviewComparisonGap {

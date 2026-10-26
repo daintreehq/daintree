@@ -314,7 +314,12 @@ describe("compareReviewPoint", () => {
       const result = await compareNow(repo, point);
 
       expect(summary(result)).toEqual({
-        "b.txt": { status: "modified", index: "changed", worktree: "unchanged", baseUpdate: "none" },
+        "b.txt": {
+          status: "modified",
+          index: "changed",
+          worktree: "unchanged",
+          baseUpdate: "none",
+        },
       });
     });
 
@@ -345,9 +350,19 @@ describe("compareReviewPoint", () => {
     const result = await compareNow(repo, point);
 
     expect(summary(result)).toEqual({
-      "added/new.txt": { status: "added", index: "unchanged", worktree: "changed", baseUpdate: "none" },
+      "added/new.txt": {
+        status: "added",
+        index: "unchanged",
+        worktree: "changed",
+        baseUpdate: "none",
+      },
       "edited.txt": { ...MODIFIED_TREE, baseUpdate: "none" },
-      "removed.txt": { status: "deleted", index: "unchanged", worktree: "changed", baseUpdate: "none" },
+      "removed.txt": {
+        status: "deleted",
+        index: "unchanged",
+        worktree: "changed",
+        baseUpdate: "none",
+      },
     });
   });
 
@@ -483,7 +498,9 @@ describe("compareReviewPoint", () => {
 
       expect(result.state).toBe("comparable");
       expect(summary(result)).toEqual({ "g.txt": { ...MODIFIED_BOTH, baseUpdate: "only" } });
-      expect(commitsOf(result)).toEqual([{ subject: "Merge branch 'main' into topic", kind: "new" }]);
+      expect(commitsOf(result)).toEqual([
+        { subject: "Merge branch 'main' into topic", kind: "new" },
+      ]);
       if (result.commits.kind !== "listed") throw new Error("unreachable");
       expect(result.commits.history).toBe("extended");
       expect(result.commits.commits[0]?.parents).toHaveLength(2);
@@ -593,7 +610,7 @@ describe("compareReviewPoint", () => {
 
     const result = await compareNow(repo, point);
 
-    expect(summary(result)).toEqual({ "link": { ...MODIFIED_TREE, baseUpdate: "none" } });
+    expect(summary(result)).toEqual({ link: { ...MODIFIED_TREE, baseUpdate: "none" } });
     const link = result.files[0];
     expect(link?.current).toMatchObject({ kind: "listed", worktree: { kind: "symlink" } });
   });
