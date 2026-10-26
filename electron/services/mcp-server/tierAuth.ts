@@ -29,6 +29,7 @@ import type { McpUnavailableActionStub } from "../../../shared/types/mcpIntrospe
 import { ASSISTANT_CONTROL_TOOL_IDS } from "../../../shared/types/assistantControl.js";
 import { OWNED_TWIN_TOOLS } from "../../../shared/config/helpAssistantTierAllowlists.js";
 import { HOST_CONTROL_TOOL_IDS } from "../../../shared/types/hostControl.js";
+import { globalAssistantMayRelay } from "../../../shared/config/globalAssistant.js";
 
 export { deriveBand, BAND_OVERRIDES };
 
@@ -150,7 +151,7 @@ export function shouldExposeTool(
   if (HOST_CONTROL_TOOL_IDS.has(entry.id) && session.hostCall !== true) {
     return false;
   }
-  if (session.relay === true && isWithheldFromRelaySession(entry.id)) {
+  if (isWithheldFromRelayDiscovery(entry.id, session)) {
     return false;
   }
   if (entry.id === PROJECT_RUN_COMMAND_TOOL) return mayRunProjectCommand(tier, session);
@@ -226,6 +227,22 @@ export function isWithheldFromRelaySession(actionId: string): boolean {
   return actionId.startsWith("host.") || RELAY_WITHHELD_TOOL_IDS.has(actionId);
 }
 
+/**
+ * What a relayed session never finds (#14552): what it is never given, and for
+ * the calling Shell's global Assistant, anything its runtime refuses to send.
+ * Discovery only; the sender's refusal stays the global Assistant's gate.
+ */
+export function isWithheldFromRelayDiscovery(
+  actionId: string,
+  session: Pick<SessionSurfacePolicy, "relay" | "relayGlobal">
+): boolean {
+  if (session.relay !== true) return false;
+  return (
+    isWithheldFromRelaySession(actionId) ||
+    (session.relayGlobal === true && !globalAssistantMayRelay(actionId))
+  );
+}
+
 export interface SessionSurfacePolicy {
   /**
    * Whether this session routes every call to one workspace it was bound to at
@@ -272,6 +289,11 @@ export interface SessionSurfacePolicy {
    * `=== true`.
    */
   relay?: boolean;
+  /**
+   * Whether that relayed assistant is its Shell's global Assistant (#14545);
+   * see {@link isWithheldFromRelayDiscovery}. Read as `=== true`.
+   */
+  relayGlobal?: boolean;
 }
 
 /**

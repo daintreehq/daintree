@@ -16,6 +16,7 @@ import {
 import {
   isWithheldFromBoundSession,
   isWithheldFromRelaySession,
+  isWithheldFromRelayDiscovery,
   isTierPermitted,
   isApprovalRequestable,
   type TargetPolicySessionSnapshot,
@@ -101,11 +102,10 @@ export function buildCallIntrospectionSurface(
     if (assistantControlCaller) permittedActionIds.add(id);
     else permittedActionIds.delete(id);
   }
-  // A relayed session finds nothing it would be refused (#13493).
-  if (sessionSurface.relay === true) {
-    for (const id of [...permittedActionIds]) {
-      if (isWithheldFromRelaySession(id)) permittedActionIds.delete(id);
-    }
+  // A relayed session finds nothing it would be refused (#13493), here or by
+  // the global Assistant's own runtime before the call leaves (#14552).
+  for (const id of [...permittedActionIds]) {
+    if (isWithheldFromRelayDiscovery(id, sessionSurface)) permittedActionIds.delete(id);
   }
   return {
     permittedActionIds,

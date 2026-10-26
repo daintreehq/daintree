@@ -143,6 +143,25 @@ describe("createSessionServerDeps", () => {
     expect(sessionDeps.readClosedPanelProcess).toBe(readClosedPanelProcess);
   });
 
+  // #14552: the target narrows discovery for the global Assistant only if the flag reaches the session.
+  it.each([
+    ["the global Assistant's", { global: true as const }, true],
+    ["a project assistant's", {}, undefined],
+  ])("hands %s relay session its caller's classification", (_label, caller, expected) => {
+    const sessionDeps = createSessionServerDeps(fakeSource(), mutableHost().host, {
+      sessionId: "s",
+      relay: {
+        linkSessionId: "link-1",
+        senderId: "shell-1",
+        helpSessionId: "help-1",
+        shellName: "Shell",
+        ...caller,
+      },
+    });
+
+    expect(sessionDeps.relay?.global).toBe(expected);
+  });
+
   it("names the external client the host reports at dispatch time, not at build", async () => {
     const deps = fakeSource();
     const { state, host } = mutableHost();
