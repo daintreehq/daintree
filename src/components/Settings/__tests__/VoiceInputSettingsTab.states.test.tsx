@@ -63,6 +63,9 @@ function install(
     requestMicPermission: vi.fn().mockResolvedValue(true),
     openMicSettings: vi.fn(),
     validateApiKey: vi.fn().mockResolvedValue({ valid: true }),
+    getLastTerms: vi.fn().mockResolvedValue(null),
+    onStatus: vi.fn(() => () => {}),
+    onSessionEnded: vi.fn(() => () => {}),
     ...overrides,
   };
   const voiceDictionary = {
