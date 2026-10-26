@@ -233,7 +233,7 @@ export function VoiceInputButton({
     if (disabled && !isActive) return;
 
     // Paused → resume on click; the affordance reads as a pause/resume toggle
-    // rather than a stop. Escape (handled by the service) is the cancel path.
+    // rather than a stop. Escape (handled by the service) is the stop path.
     if (isPaused) {
       voiceRecordingService.togglePause();
       return;

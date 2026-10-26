@@ -16,6 +16,7 @@ import { isActiveVoiceSession, type VoiceRecordingMode } from "@shared/types";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { VOICE_INPUT_SETTINGS_CHANGED_EVENT } from "@/lib/voiceInputSettingsEvents";
+import { registerEscapeFallback } from "@/lib/escapeStack";
 import { keybindingService } from "@/services/KeybindingService";
 import { logDebug, logInfo, logWarn, logError } from "@/utils/logger";
 import { voiceErrorLogFields } from "@shared/utils/voiceLogFields";
@@ -457,34 +458,9 @@ class VoiceRecordingService {
       })
     );
 
-    const handleEscapeKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      const state = useVoiceRecordingStore.getState();
-      if (
-        state.status !== "arming" &&
-        state.status !== "connecting" &&
-        state.status !== "recording" &&
-        state.status !== "paused" &&
-        state.status !== "reconnecting"
-      )
-        return;
-      e.preventDefault();
-      e.stopPropagation();
-      // Arming is the pre-audio confirmation window. No session has begun
-      // yet, so route abort through cancelArming() instead of stop() —
-      // stop() would log "no active session" warnings and skip the cleanup
-      // path that resets activeTarget back to null.
-      if (state.status === "arming") {
-        this.cancelArming();
-        return;
-      }
-      this.pttActiveKeyCode = null;
-      void this.stop("Dictation cancelled.", { preserveLiveText: true });
-    };
-    window.addEventListener("keydown", handleEscapeKey, { capture: true });
-    this.unsubscribers.push(() =>
-      window.removeEventListener("keydown", handleEscapeKey, { capture: true })
-    );
+    // Dictation takes Escape only once every overlay, menu, dialog and focused
+    // widget has had its turn; the target composer hands it over itself.
+    this.unsubscribers.push(registerEscapeFallback(() => this.handleEscape()));
 
     // Push-to-talk: a capture-phase keydown listener records the physical key
     // code of the voice shortcut press so the keyup listener can match it. The
@@ -609,6 +585,34 @@ class VoiceRecordingService {
     // ~50–200ms, by which point beginSession() has overwritten this state.
     useVoiceRecordingStore.getState().setArming(target);
     await this.start(target);
+  }
+
+  /**
+   * Escape that reached dictation, from the global fallback or from the target
+   * composer (`panelId`). Returns whether it acted, so a finishing or idle
+   * session leaves the key to whatever is next in line.
+   */
+  handleEscape(panelId?: string): boolean {
+    const state = useVoiceRecordingStore.getState();
+    if (panelId !== undefined && state.activeTarget?.panelId !== panelId) return false;
+    // Arming is the pre-audio confirmation window. No session has begun
+    // yet, so route abort through cancelArming() instead of stop() —
+    // stop() would log "no active session" warnings and skip the cleanup
+    // path that resets activeTarget back to null.
+    if (state.status === "arming") {
+      this.cancelArming();
+      return true;
+    }
+    if (
+      state.status !== "connecting" &&
+      state.status !== "recording" &&
+      state.status !== "paused" &&
+      state.status !== "reconnecting"
+    ) {
+      return false;
+    }
+    void this.stop("Dictation stopped.", { preserveLiveText: true });
+    return true;
   }
 
   /**

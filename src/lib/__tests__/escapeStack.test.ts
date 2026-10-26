@@ -4,6 +4,8 @@ import {
   updateHandler,
   dispatchEscape,
   hasHandlers,
+  registerEscapeFallback,
+  dispatchEscapeFallback,
   _resetForTests,
 } from "../escapeStack";
 
@@ -110,5 +112,62 @@ describe("escapeStack", () => {
     expect(third).toHaveBeenCalledOnce();
     expect(second).not.toHaveBeenCalled();
     expect(first).not.toHaveBeenCalled();
+  });
+});
+
+describe("escape fallbacks", () => {
+  it("are not counted as stack handlers", () => {
+    registerEscapeFallback(() => true);
+
+    expect(hasHandlers()).toBe(false);
+    expect(dispatchEscape()).toBe(false);
+  });
+
+  it("report false when none is registered or none acts", () => {
+    expect(dispatchEscapeFallback()).toBe(false);
+
+    const idle = vi.fn(() => false);
+    registerEscapeFallback(idle);
+
+    expect(dispatchEscapeFallback()).toBe(false);
+    expect(idle).toHaveBeenCalledOnce();
+  });
+
+  it("stop at the newest fallback that acts", () => {
+    const older = vi.fn(() => true);
+    const newerIdle = vi.fn(() => false);
+    const newest = vi.fn(() => true);
+    registerEscapeFallback(older);
+    registerEscapeFallback(newerIdle);
+    registerEscapeFallback(newest);
+
+    expect(dispatchEscapeFallback()).toBe(true);
+    expect(newest).toHaveBeenCalledOnce();
+    expect(newerIdle).not.toHaveBeenCalled();
+    expect(older).not.toHaveBeenCalled();
+  });
+
+  it("unregister removes only that fallback", () => {
+    const remaining = vi.fn(() => true);
+    const removed = vi.fn(() => true);
+    registerEscapeFallback(remaining);
+    const unregister = registerEscapeFallback(removed);
+
+    unregister();
+    unregister();
+    dispatchEscapeFallback();
+
+    expect(removed).not.toHaveBeenCalled();
+    expect(remaining).toHaveBeenCalledOnce();
+  });
+
+  it("count a throwing fallback as handled", () => {
+    registerEscapeFallback(() => {
+      throw new Error("boom");
+    });
+
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(dispatchEscapeFallback()).toBe(true);
+    consoleSpy.mockRestore();
   });
 });

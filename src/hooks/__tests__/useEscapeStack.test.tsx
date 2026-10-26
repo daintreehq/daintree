@@ -3,7 +3,7 @@ import { render, act } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { useEscapeStack } from "../useEscapeStack";
 import { useGlobalEscapeDispatcher } from "../useGlobalEscapeDispatcher";
-import { _resetForTests } from "@/lib/escapeStack";
+import { _resetForTests, registerEscapeFallback } from "@/lib/escapeStack";
 
 beforeEach(() => {
   _resetForTests();
@@ -175,5 +175,59 @@ describe("useEscapeStack + useGlobalEscapeDispatcher", () => {
     });
 
     expect(handler).not.toHaveBeenCalled();
+  });
+
+  describe("fallbacks", () => {
+    function pressCancelableEscape(prevent = false) {
+      const event = new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+      });
+      act(() => {
+        if (prevent) event.preventDefault();
+        window.dispatchEvent(event);
+      });
+      return event;
+    }
+
+    it("run when the stack is empty and claim the key only when they act", () => {
+      const fallback = vi.fn(() => true);
+      registerEscapeFallback(fallback);
+      render(<Dispatcher />);
+
+      expect(pressCancelableEscape().defaultPrevented).toBe(true);
+      expect(fallback).toHaveBeenCalledOnce();
+
+      fallback.mockReturnValue(false);
+      expect(pressCancelableEscape().defaultPrevented).toBe(false);
+    });
+
+    it("wait behind any layer on the stack", () => {
+      const fallback = vi.fn(() => true);
+      const layerClose = vi.fn();
+      registerEscapeFallback(fallback);
+      render(
+        <>
+          <Dispatcher />
+          <Layer enabled={true} onEscape={layerClose} />
+        </>
+      );
+
+      pressEscape();
+
+      expect(layerClose).toHaveBeenCalledOnce();
+      expect(fallback).not.toHaveBeenCalled();
+    });
+
+    it("never see a key something else already handled", () => {
+      const fallback = vi.fn(() => true);
+      registerEscapeFallback(fallback);
+      render(<Dispatcher />);
+
+      pressCancelableEscape(true);
+
+      expect(fallback).not.toHaveBeenCalled();
+    });
   });
 });
