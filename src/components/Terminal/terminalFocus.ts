@@ -79,9 +79,11 @@ export function resolvePaneFocusAction(options: {
  * that the user is just trying to activate.
  *
  * Intentionally narrow: only applies to the unfocused grid case, only for
- * non-pointer (non-link) cells, and never for shift+click — xterm's
- * SelectionService treats shift as the override gesture to bypass PTY mouse
- * reporting and force native text selection, so the event must reach xterm.
+ * non-pointer (non-link) cells, and never for the force-selection click —
+ * xterm's SelectionService treats it as the override gesture to bypass PTY
+ * mouse reporting and force native text selection, so the event must reach
+ * xterm. That is Shift everywhere, plus Option on macOS, where
+ * `macOptionClickForcesSelection` is on and xterm checks Option, not Shift.
  * The redirect to hybrid input vs xterm is *not* decided here — callers
  * consult `getTerminalFocusTarget` separately.
  */
@@ -90,11 +92,14 @@ export function shouldSuppressUnfocusedClick(options: {
   isFocused: boolean;
   isCursorPointer: boolean;
   isShiftKey: boolean;
+  isAltKey?: boolean;
+  isMac?: boolean;
 }): boolean {
   if (options.location !== "grid") return false;
   if (options.isFocused) return false;
   if (options.isCursorPointer) return false;
   if (options.isShiftKey) return false;
+  if (options.isMac && options.isAltKey) return false;
   return true;
 }
 

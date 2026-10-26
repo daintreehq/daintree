@@ -228,6 +228,28 @@ describe("shouldSuppressUnfocusedClick", () => {
   });
 });
 
+describe("shouldSuppressUnfocusedClick option-click", () => {
+  const base = { location: "grid", isFocused: false, isCursorPointer: false, isShiftKey: false };
+
+  it("does not suppress option+click on macOS — xterm's force-selection gesture there", () => {
+    expect(shouldSuppressUnfocusedClick({ ...base, isAltKey: true, isMac: true })).toBe(false);
+  });
+
+  it("still suppresses alt+click off macOS, where alt does not force selection", () => {
+    expect(shouldSuppressUnfocusedClick({ ...base, isAltKey: true, isMac: false })).toBe(true);
+  });
+
+  it("still suppresses a plain click on macOS", () => {
+    expect(shouldSuppressUnfocusedClick({ ...base, isAltKey: false, isMac: true })).toBe(true);
+  });
+
+  it("keeps link cells exempt regardless of option", () => {
+    expect(
+      shouldSuppressUnfocusedClick({ ...base, isCursorPointer: true, isAltKey: false, isMac: true })
+    ).toBe(false);
+  });
+});
+
 describe("getTerminalClickTarget", () => {
   const remembersBar = {
     preferredTarget: "hybridInput",
