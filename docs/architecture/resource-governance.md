@@ -16,12 +16,12 @@ Two loops, different time constants:
 Bridging the two: a third fast path lives **inside** `ResourceProfileService` — an event-loop-lag monitor (5 s interval) that can force the whole app into `efficiency` immediately, bypassing the slow loop's hysteresis, when the JS thread is genuinely saturated.
 
 ```
-                       ┌─────────────────────────────────────────────┐
+                       ┌──────────────────────────────────────────────┐
    signals ──30s──▶    │  ResourceProfileService (main process)       │
    (mem/thermal/       │  ─ computeTargetProfile() → pressureScore    │
     battery/CPU/       │  ─ hysteresis (downgrade 30s / upgrade 90s)  │
     fleet/sys-mem)     │  ─ lag monitor (5s) → fast-path → efficiency │
-                       └───────────────┬─────────────────────────────┘
+                       └───────────────┬──────────────────────────────┘
                                        │ applyProfile(p): fan out RESOURCE_PROFILE_CONFIGS[p]
         ┌───────────────┬──────────────┼───────────────┬────────────────┐
         ▼               ▼              ▼               ▼                ▼
@@ -108,7 +108,7 @@ Every host-independent per-profile knob lives in `RESOURCE_PROFILE_CONFIGS` (`sh
 | `agentScrollbackMaxLines` | 10000 | 10000 | 4000 | Renderer agent scrollback policy (`scrollbackConfig.ts`); the effective cap is `min(this, PTY_MIRROR_SCROLLBACK)` = 5000 / 5000 / 4000, so a warm terminal never holds more than a restore recovers |
 | `fetchIntervalActiveMs` / `fetchIntervalBackgroundMs` | 20 s / 3 min | 30 s / 5 min | 45 s / 10 min | workspace-host `FetchScheduler` |
 | `portBatchThroughputDelayMs` (ms) | 16 | 16 | 40 | pty-host PortBatcher throughput flush window |
-| `memoryPressureInactiveMs` | 60 min | 30 min | 15 min | Not pushed: `IdleBackgroundAutoCloseService` reads it from the table for memory-pressure sleep, capped at the user's idle-terminal threshold (see [Memory-pressure mitigation](#memory-pressure-mitigation-processmemorymonitor)) |
+| `memoryPressureInactiveMs` | 60 min | 30 min | 15 min | `IdleBackgroundAutoCloseService` reads it straight from the table for memory-pressure sleep, capped at the user's idle-terminal threshold (see [Memory-pressure mitigation](#memory-pressure-mitigation-processmemorymonitor)) |
 | `paintGateTimeoutMs` / `paintGateHardTimeoutMs` (ms) | 1500 / 4000 | 1500 / 4000 | 2500 / 6000 | ProjectViewManager cold paint gate |
 | `warmPaintGateTimeoutMs` / `warmPaintGateHardTimeoutMs` (ms) | 500 / 1500 | 500 / 1500 | 800 / 2500 | ProjectViewManager warm paint gate |
 | `viewLoadTimeoutMs` / `viewLoadHardTimeoutMs` (ms) | 10000 / 30000 | 10000 / 30000 | 15000 / 45000 | ProjectViewManager view-load bounds |
@@ -151,7 +151,7 @@ Engage is gated by warm-up (5 ticks) and a 30 s re-engage cooldown after any for
 
 Two consumers: `DiagnosticsCollector`'s `workerGovernance` section (support bundles) plus a compact `workers` summary in the why-slow snapshot, and the efficiency-entry trim fan-out. On each entry into `efficiency`, `applyProfile` fires `requestWorkerTrim` (same per-consumer try/catch isolation as every other fan-out target); the service applies a 5-minute cooldown so profile flapping can never become its own churn source, then asks each provider to trim within its own safety gates:
 
-- **Analysis pool** — rides the existing `set-resource-profile` push instead of the main-side fan-out: on efficiency entry the pty-host runs a one-shot `PtyManager.trimIdleAnalysisSessions()` pass that shrinks the headless scrollback of terminals idle past 10 minutes with no agent in `ACTIVE_AGENT_STATES` (the same protection set as eviction/hibernation). The heap-driven `ResourceGovernor` trims remain the in-host backstop. Request/response traffic to the pool carries a per-slot worker **generation** echoed on every reply, so a reply from a superseded worker instance resolves empty instead of delivering stale content — the request-path counterpart of the data-path feed epoch.
+- **Analysis pool** — rides the existing `set-resource-profile` push instead of the main-side fan-out: on efficiency entry the pty-host runs a one-shot `PtyManager.trimIdleAnalysisSessions()` pass that shrinks the headless scrollback of terminals idle past 10 minutes with no agent in `ACTIVE_AGENT_STATES`. The heap-driven `ResourceGovernor` trims remain the in-host backstop. Request/response traffic to the pool carries a per-slot worker **generation** echoed on every reply, so a reply from a superseded worker instance resolves empty instead of delivering stale content — the request-path counterpart of the data-path feed epoch.
 - **Plugin workers** — `PluginService.disposeIdlePluginWorkers()` disposes workers of plugins idle ≥30 minutes through a narrow deactivation path (worker + imperative registrations torn down; the plugin and its manifest contributions stay loaded, so the next dispatch/panel-open/forge pull lazily re-forks, mirroring the dev-reload cycle). The gate is deliberately conservative: builtins, dev workers, panel or MCP contributions, startup activation, live event subscriptions, pending invokes, managed processes, and fs watchers all disqualify.
 - **DB worker** — report-only, permanently. Its FIFO queue carries write ordering, the `user_version` fence assumes only crash/shutdown teardown, and shutdown draining (cleanup → DB maintenance → close) already owns its lifecycle.
 - **Copytree worker** — report-only for trims; result buffers already release at transfer (pending-map entries are the only retention and are deleted on resolve), and a worker-generation fence at the message listener drops stale results from a dead worker instance.
@@ -197,11 +197,11 @@ Tier 1 runs once at the start of a pressure episode, then at most once per five 
 Tier 2 requires three consecutive pressure samples, rechecks the originating system-memory signal after tier 1, and is limited to once per ten minutes. Its levers run in this order, each in its own `try/catch`:
 
 1. `destroyHiddenWebviews(2)`.
-2. `hibernateIdleProjects`, wired to `IdleBackgroundAutoCloseService.sleepUnderMemoryPressure()`. It does nothing unless the user turned on both idle background auto-close and "Include projects with idle terminals". When they have, it runs the auto-close sweep early for projects with idle shells or resting agents, through the same Sleep teardown and the same gates as the scheduled sweep, with one change: the idle-terminal threshold becomes the profile's `memoryPressureInactiveMs` (60 / 30 / 15 min), never longer than the threshold the user chose. Candidates sleep largest first, and the pressure sweep stops starting new sleeps after 30 s. Terminal-free projects keep their own clock. It runs before the view and host levers because a sleep reads the project's workspace host to prove nothing is mid-lifecycle there.
-3. `evictCachedProjectViews` — every window's `reclaimCachedViewsUnderPressure()`, the forced one-pass eviction down to the active view.
+2. `hibernateIdleProjects`, wired to `IdleBackgroundAutoCloseService.sleepUnderMemoryPressure()`. It does nothing unless the user turned on both idle background auto-close and "Include projects with idle terminals". When they have, it runs the auto-close sweep early for projects with idle shells or resting agents, through the same Sleep teardown and the same gates as the scheduled sweep, with one change: the idle-terminal threshold becomes the profile's `memoryPressureInactiveMs` (60 / 30 / 15 min), never longer than the threshold the user chose. Candidates are tried largest first, and once 30 s have passed since the sweep began, no sleep after the first one starts. Terminal-free projects keep their own clock. It runs before the view and host levers because a sleep reads the project's workspace host to prove nothing is mid-lifecycle there.
+3. `evictCachedProjectViews` — every window's `reclaimCachedViewsUnderPressure()`, a forced one-pass eviction toward the active view that still spares assistant-backed views, the outgoing view of an open paint gate or cold switch, and views holding an MCP dispatch lease.
 4. `reclaimDormantWorkspaceHosts` — disposes every workspace host no window holds, which the view eviction just released (#12519).
 
-A clean sample resets the episode so a later independent event can react immediately. Neither tier clears caches or forces GC. The monitor's one GC lever sits outside the tiers: on macOS, when the kernel's own pressure level reaches warn, the monitor broadcasts `window:reclaim-memory` (at most once per five minutes), and only renderers whose document is hidden run `gc()` in response.
+A clean sample resets the pressure streak, tier 1's cooldown and both tiers' backoff, so tier 1 can react to a later independent event at once; tier 2 keeps its ten-minute cooldown. Neither tier clears caches or forces GC. The monitor's one GC lever sits outside the tiers: on macOS, when the kernel's own pressure level reaches warn, the monitor broadcasts `window:reclaim-memory` (at most once per five minutes), and only renderers whose document is hidden run `gc()` in response.
 
 Nothing hibernates on a timer: the scheduled sweep and its "Hibernate inactive projects" setting were removed (#13840), and migration 035 deletes the stored `hibernation` key so it can't opt anyone into a later automatic sleep. `HibernationService` no longer kills terminals either (#14534); its one job is evicting a sleeping project's cached renderer for `sleepProject`.
 
