@@ -158,7 +158,23 @@ export function registerGitReadHandlers(deps: HandlerDependencies): () => void {
     }
 
     const senderWindowPulse = ctx.event && getWindowForWebContents(ctx.event.sender);
-    const states = await deps.worktreeService.getAllStatesAsync(senderWindowPulse?.id);
+    // With no window behind the call (a host call on a project nobody has
+    // open) the unscoped read spans every project, so the main worktree it
+    // picks could be another repository's.
+    const project =
+      !senderWindowPulse && ctx.projectId
+        ? (await import("../../services/ProjectStore.js")).projectStore.getProjectById(
+            ctx.projectId
+          )
+        : null;
+    const states = project
+      ? (
+          await deps.worktreeService.getAllStatesWithGitBackedForProjectAsync(
+            project.path,
+            project.id
+          )
+        ).states
+      : await deps.worktreeService.getAllStatesAsync(senderWindowPulse?.id);
     const mainWorktree = states.find((wt) => wt.isMainWorktree);
     const mainBranch = mainWorktree?.branch ?? "main";
 

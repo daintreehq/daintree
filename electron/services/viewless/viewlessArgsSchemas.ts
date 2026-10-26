@@ -113,3 +113,25 @@ export const WorktreeWaitForPullRequestArgsSchema = z.object({
   worktreeIds: z.array(z.string().min(1)).min(1).max(MAX_WAIT_FOR_PR_TARGETS),
   timeoutMs: z.number().int().min(0).max(MAX_WAIT_FOR_PR_TIMEOUT_MS).optional(),
 });
+
+/** `agentSessionHistory.list`'s arguments, bounded as its renderer action bounds them. */
+export const AgentSessionHistoryListArgsSchema = z
+  .object({
+    worktreeId: z.string().min(1).optional(),
+    projectId: z.string().min(1).optional(),
+    limit: z.number().int().min(1).max(100).default(20),
+    offset: z.number().int().min(0).default(0),
+  })
+  .optional();
+
+/** `git.getProjectPulse`'s arguments, without the aliases its worktree location folds away. */
+export const GitGetProjectPulseArgsSchema = z
+  .object({
+    worktreeId: selector,
+    worktreePath: selector,
+    rangeDays: z.union([z.literal(60), z.literal(120), z.literal(180)]).default(60),
+    includeDelta: z.boolean().optional(),
+    includeRecentCommits: z.boolean().optional(),
+    forceRefresh: z.boolean().optional(),
+  })
+  .optional();

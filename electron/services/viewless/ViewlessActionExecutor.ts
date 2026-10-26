@@ -73,6 +73,7 @@ import {
 import { runProjectDetectRunners, runProjectGetAll, runWorkspaceList } from "./viewlessProjects.js";
 import { runRecipeList } from "./viewlessRecipes.js";
 import { runForgeRead } from "./viewlessForge.js";
+import { runProjectPulse, runSessionHistoryList } from "./viewlessHistory.js";
 import {
   runActionsGetContext,
   runActionsGetSchema,
@@ -842,6 +843,10 @@ async function runAction(
       return runRecipeList(request, project, deps);
     case "worktree.waitForPullRequest":
       return runWorktreeWaitForPullRequest(request, project, deps);
+    case "agentSessionHistory.list":
+      return runSessionHistoryList(request, project, deps);
+    case "git.getProjectPulse":
+      return runProjectPulse(request, project, deps);
     default:
       return runForgeRead(request, project, deps);
   }
