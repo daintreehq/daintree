@@ -451,13 +451,16 @@ describe("voiceInput — audio sent before the provider starts", () => {
     const resolveKeyterms = deferKeyterms();
     const pending = start();
     const size = 40_000;
-    // 3 × 40KB fits under 150KB; the 4th would exceed it, and so would the 5th.
-    for (let i = 1; i <= 5; i++) sendChunk(i, size);
+    // 18 × 40KB fits under 720KB; the 19th would exceed it, and so would the 20th.
+    for (let i = 1; i <= 20; i++) sendChunk(i, size);
     expect(overflowErrors()).toHaveLength(1);
 
     resolveKeyterms([]);
     await pending;
-    expect(shared.calls).toEqual(["start", "chunk:1", "chunk:2", "chunk:3"]);
+    expect(shared.calls).toEqual([
+      "start",
+      ...Array.from({ length: 18 }, (_, i) => `chunk:${i + 1}`),
+    ]);
   });
 
   it("reports overflow again in a later session", async () => {

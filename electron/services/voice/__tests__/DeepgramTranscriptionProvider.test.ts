@@ -496,16 +496,16 @@ describe("DeepgramTranscriptionProvider", () => {
     await Promise.resolve();
     const socket = latestInstance();
 
-    // Five 40KB chunks = 200KB, over the 150KB ceiling. Only the chunks that
-    // fit under 150KB are retained.
-    for (let i = 0; i < 5; i++) {
+    // Twenty 40KB chunks = 800KB, over the 720KB ceiling. Only the chunks that
+    // fit under 720KB are retained.
+    for (let i = 0; i < 20; i++) {
       provider.sendAudioChunk(new Uint8Array(40_000).buffer);
     }
     socket.simulateOpen();
     await startPromise;
 
-    // 3 × 40KB = 120KB fits; a 4th would push to 160KB > 150KB, so it's dropped.
-    expect(socket.binaryFrames()).toHaveLength(3);
+    // 18 × 40KB = 720KB fits; a 19th would push to 760KB > 720KB, so it's dropped.
+    expect(socket.binaryFrames()).toHaveLength(18);
     // Two chunks dropped, one transient report.
     const overflows = events.filter(
       (e) => e.type === "error" && e.error.code === "audio_buffer_overflow"

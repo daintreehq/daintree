@@ -36,10 +36,11 @@ export type VoiceStartResult = { ok: true } | { ok: false; error: string };
 
 // Ceiling for audio held before it can be sent — both in the IPC handler while
 // the provider is being brought up, and in each provider while its socket
-// connects. 24kHz mono PCM16 ≈ 48KB/s, so ~150KB ≈ 3s, the point past which
-// voice context is lost anyway. Caps memory if chunks are large.
-export const AUDIO_BUFFER_MAX_CHUNKS = 100;
-export const AUDIO_BUFFER_MAX_BYTES = 150_000;
+// connects or reconnects. Sized to the renderer's own startup queue
+// (`MAX_QUEUED_CHUNKS`: 150 chunks of 100ms, 24kHz mono PCM16 = 4,800 bytes
+// each, so 15s), so nothing the renderer can hold is lost one hop later.
+export const AUDIO_BUFFER_MAX_CHUNKS = 150;
+export const AUDIO_BUFFER_MAX_BYTES = 720_000;
 
 export const AUDIO_BUFFER_OVERFLOW_CODE = "audio_buffer_overflow";
 
