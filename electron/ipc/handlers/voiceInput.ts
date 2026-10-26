@@ -168,7 +168,9 @@ const FILE_LINK_JOB_TIMEOUT_MS = 6000;
 
 function whenAborted(signal: AbortSignal): Promise<void> {
   if (signal.aborted) return Promise.resolve();
-  return new Promise((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+  return new Promise((resolve) =>
+    signal.addEventListener("abort", () => resolve(), { once: true })
+  );
 }
 
 function normalizeSpoken(text: string): string {

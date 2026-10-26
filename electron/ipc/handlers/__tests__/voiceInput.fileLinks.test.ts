@@ -38,7 +38,13 @@ const shared = vi.hoisted(() => ({
   currentProject: null as null | { name: string; path: string },
   detect: vi.fn<(text: string, settings: unknown, signal?: AbortSignal) => Promise<Detected>>(),
   resolve:
-    vi.fn<(payload: { cwd: string; description: string; signal?: AbortSignal }) => Promise<string | null>>(),
+    vi.fn<
+      (payload: {
+        cwd: string;
+        description: string;
+        signal?: AbortSignal;
+      }) => Promise<string | null>
+    >(),
 }));
 
 vi.mock("../../../services/VoiceTranscriptionService.js", () => ({

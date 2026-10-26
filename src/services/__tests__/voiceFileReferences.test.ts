@@ -44,9 +44,9 @@ describe("planFileReferenceEdits", () => {
     const draft = "Link to the input bar. Then link to the input bar, I typed.";
     const rec = record([utterance(draft, "Link to the input bar.", { transcriptId: "t1" })]);
 
-    expect(
-      swap(draft, rec, "t1", [{ description: "input bar", path: "src/InputBar.tsx" }])
-    ).toBe("@src/InputBar.tsx. Then link to the input bar, I typed.");
+    expect(swap(draft, rec, "t1", [{ description: "input bar", path: "src/InputBar.tsx" }])).toBe(
+      "@src/InputBar.tsx. Then link to the input bar, I typed."
+    );
   });
 
   it("swaps the spoken command, not the same description said before it", () => {
@@ -54,9 +54,7 @@ describe("planFileReferenceEdits", () => {
     const rec = record([utterance(draft, draft, { transcriptId: "t1" })]);
 
     expect(
-      swap(draft, rec, "t1", [
-        { description: "the input bar component", path: "src/InputBar.tsx" },
-      ])
+      swap(draft, rec, "t1", [{ description: "the input bar component", path: "src/InputBar.tsx" }])
     ).toBe("The input bar component needs work; @src/InputBar.tsx.");
   });
 

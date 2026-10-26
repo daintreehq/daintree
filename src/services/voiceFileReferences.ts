@@ -47,9 +47,7 @@ export function planFileReferenceEdits(
   draft: string
 ): DraftEdit[] {
   const spans = record.utterances
-    .filter(
-      (u) => u.transcriptId === transcriptId && !u.range.edited && u.range.from < u.range.to
-    )
+    .filter((u) => u.transcriptId === transcriptId && !u.range.edited && u.range.from < u.range.to)
     .map((u) => u.range);
   const edits: DraftEdit[] = [];
   let spanIndex = 0;
