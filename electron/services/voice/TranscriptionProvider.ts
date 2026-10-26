@@ -28,6 +28,9 @@ export type VoiceTranscriptionEvent =
   | { type: "error"; error: VoiceInputError }
   | { type: "status"; status: VoiceInputStatus };
 
+/** A provider event as the service forwards it, tagged with its dictation session. */
+export type VoiceSessionEvent = VoiceTranscriptionEvent & { sessionId: string };
+
 export type VoiceStartResult = { ok: true } | { ok: false; error: string };
 
 // Ceiling for audio held before it can be sent — both in the IPC handler while
@@ -76,7 +79,8 @@ export interface TranscriptionProvider {
    * timer exists.
    */
   readonly hasServerVAD: boolean;
-  start(settings: VoiceInputSettings): Promise<VoiceStartResult>;
+  /** `sessionId` is the renderer-minted dictation session id, for correlation. */
+  start(settings: VoiceInputSettings, sessionId: string): Promise<VoiceStartResult>;
   sendAudioChunk(chunk: ArrayBuffer): void;
   /**
    * Flush the current audio segment at a user-driven paragraph boundary (Enter

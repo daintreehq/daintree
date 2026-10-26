@@ -18,6 +18,7 @@ vi.mock("electron", () => ({
 // ── Shared state container for mocks ───────────────────────────────────────
 type MockTranscriptionEvent = {
   type: string;
+  sessionId?: string;
   text?: string;
   itemId?: string;
   status?: string;
@@ -35,15 +36,19 @@ const shared = vi.hoisted(() => ({
   startCalls: [] as unknown[],
   /** Optional override for assembleKeyterms — lets a test defer/control timing. */
   assembleKeyterms: null as null | (() => Promise<string[]>),
+  /** The session the fake provider was last started for; its events carry it. */
+  providerSessionId: null as string | null,
 }));
 
 vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
   VoiceTranscriptionService: function VoiceTranscriptionService(this: Record<string, unknown>) {
     this.onEvent = function (cb: (e: MockTranscriptionEvent) => void) {
-      shared.transcriptionEventCallback = cb;
+      shared.transcriptionEventCallback = (e) =>
+        cb({ ...e, sessionId: shared.providerSessionId ?? undefined });
       return () => {};
     };
-    this.start = function (settings: unknown) {
+    this.start = function (settings: unknown, sessionId: string) {
+      shared.providerSessionId = sessionId;
       shared.startCalls.push(settings);
       return Promise.resolve({ ok: true });
     };
@@ -135,6 +140,7 @@ vi.mock("../../channels.js", () => ({
     VOICE_INPUT_FLUSH_PARAGRAPH: "voice-input:flush-paragraph",
     VOICE_INPUT_PARAGRAPH_BOUNDARY: "voice-input:paragraph-boundary",
     VOICE_INPUT_FILE_TOKEN_RESOLVED: "voice-input:file-token-resolved",
+    VOICE_INPUT_SESSION_ENDED: "voice-input:session-ended",
   },
 }));
 
@@ -170,8 +176,25 @@ function getHandler(channel: string) {
 }
 
 const fakeEvent = {
-  sender: { once: vi.fn(), removeListener: vi.fn(), isDestroyed: () => false },
+  sender: {
+    id: 1,
+    once: vi.fn(),
+    removeListener: vi.fn(),
+    isDestroyed: () => false,
+    send: vi.fn(),
+  },
 } as unknown as Electron.IpcMainInvokeEvent;
+
+type SessionHandler = (e: unknown, sessionId: string) => Promise<unknown>;
+
+// Each start mints a fresh session id, as the renderer does; stops and the
+// payload expectations use the latest one.
+let nextSessionNumber = 1;
+let currentSessionId = "";
+function nextSessionId(): string {
+  currentSessionId = `session-${nextSessionNumber++}`;
+  return currentSessionId;
+}
 
 function emitTranscriptionEvent(event: MockTranscriptionEvent) {
   if (!shared.transcriptionEventCallback) {
@@ -201,7 +224,7 @@ describe("voiceInput — IPC handler surface", () => {
     } as Parameters<typeof registerVoiceInputHandlers>[0]);
 
     const handleStart = getHandler("voice-input:start");
-    await (handleStart as (e: unknown) => Promise<unknown>)(fakeEvent);
+    await (handleStart as SessionHandler)(fakeEvent, nextSessionId());
   });
 
   afterEach(() => {
@@ -214,7 +237,7 @@ describe("voiceInput — IPC handler surface", () => {
 
     const boundaryMsg = win.__sent.find((m) => m.channel === "voice-input:paragraph-boundary");
     expect(boundaryMsg).toBeDefined();
-    expect(boundaryMsg?.payload).toEqual({ rawText: null });
+    expect(boundaryMsg?.payload).toEqual({ sessionId: currentSessionId, rawText: null });
   });
 
   it("correct validates payloads and returns the corrected text", async () => {
@@ -256,20 +279,31 @@ describe("voiceInput — IPC handler surface", () => {
   });
 
   it("status events are forwarded to the renderer unchanged", () => {
-    for (const status of ["connecting", "recording", "finishing", "idle", "error"] as const) {
+    // "error" last: a terminal status ends the session, so nothing after it is forwarded.
+    for (const status of [
+      "connecting",
+      "recording",
+      "reconnecting",
+      "finishing",
+      "error",
+    ] as const) {
       emitTranscriptionEvent({ type: "status", status });
     }
 
     const statusMsgs = win.__sent.filter((m) => m.channel === "voice-input:status");
-    const statuses = statusMsgs.map((m) => m.payload as string);
-    expect(statuses).toEqual(["connecting", "recording", "finishing", "idle", "error"]);
+    expect(statusMsgs.map((m) => m.payload)).toEqual(
+      ["connecting", "recording", "reconnecting", "finishing", "error"].map((status) => ({
+        sessionId: currentSessionId,
+        status,
+      }))
+    );
   });
 
   it("does not start the provider when a stop lands during keyterm assembly", async () => {
     // The beforeEach already opened a session; tear it down so this test owns
     // a clean start whose assembly window we can control.
     const handleStop = getHandler("voice-input:stop");
-    await (handleStop as (e: unknown) => Promise<unknown>)(fakeEvent);
+    await (handleStop as SessionHandler)(fakeEvent, currentSessionId);
     shared.startCalls = [];
 
     // Begin a new session whose keyterm assembly hangs until we resolve it.
@@ -279,18 +313,13 @@ describe("voiceInput — IPC handler surface", () => {
     });
     shared.assembleKeyterms = () => assemblyPromise;
     const handleStart = getHandler("voice-input:start");
-    const startPromise = (handleStart as (e: unknown) => Promise<unknown>)(fakeEvent) as Promise<{
-      ok: boolean;
-      error?: string;
-    }>;
+    const startPromise = (handleStart as SessionHandler)(fakeEvent, nextSessionId());
 
     // Stop arrives mid-assembly, then assembly finishes.
-    await (handleStop as (e: unknown) => Promise<unknown>)(fakeEvent);
+    await (handleStop as SessionHandler)(fakeEvent, currentSessionId);
     resolveAssembly(["Daintree"]);
-    const result = await startPromise;
 
-    expect(result.ok).toBe(false);
-    expect(result.error).toBe("Voice session superseded");
+    await expect(startPromise).resolves.toEqual({ status: "superseded" });
     // The superseded start must never reach svc.start().
     expect(shared.startCalls).toHaveLength(0);
   });
@@ -312,7 +341,7 @@ describe("voiceInput — spoken-command paragraphing", () => {
     } as Parameters<typeof registerVoiceInputHandlers>[0]);
 
     const handleStart = getHandler("voice-input:start");
-    await (handleStart as (e: unknown) => Promise<unknown>)(fakeEvent);
+    await (handleStart as SessionHandler)(fakeEvent, nextSessionId());
   });
 
   afterEach(() => {
@@ -336,15 +365,15 @@ describe("voiceInput — spoken-command paragraphing", () => {
     expect(splitEvents).toEqual([
       {
         channel: "voice-input:transcription-complete",
-        payload: { text: "first sentence", willCorrect: false },
+        payload: { sessionId: currentSessionId, text: "first sentence", willCorrect: false },
       },
       {
         channel: "voice-input:paragraph-boundary",
-        payload: { rawText: null, correctionId: null },
+        payload: { sessionId: currentSessionId, rawText: null, correctionId: null },
       },
       {
         channel: "voice-input:transcription-complete",
-        payload: { text: "second sentence", willCorrect: false },
+        payload: { sessionId: currentSessionId, text: "second sentence", willCorrect: false },
       },
     ]);
   });
@@ -362,9 +391,12 @@ describe("voiceInput — spoken-command paragraphing", () => {
     expect(dictated()).toEqual([
       {
         channel: "voice-input:transcription-complete",
-        payload: { text: "hello", willCorrect: false },
+        payload: { sessionId: currentSessionId, text: "hello", willCorrect: false },
       },
-      { channel: "voice-input:paragraph-boundary", payload: { rawText: null, correctionId: null } },
+      {
+        channel: "voice-input:paragraph-boundary",
+        payload: { sessionId: currentSessionId, rawText: null, correctionId: null },
+      },
     ]);
   });
 
@@ -374,9 +406,12 @@ describe("voiceInput — spoken-command paragraphing", () => {
     expect(dictated()).toEqual([
       {
         channel: "voice-input:transcription-complete",
-        payload: { text: "fix the bug", willCorrect: false },
+        payload: { sessionId: currentSessionId, text: "fix the bug", willCorrect: false },
       },
-      { channel: "voice-input:paragraph-boundary", payload: { rawText: null, correctionId: null } },
+      {
+        channel: "voice-input:paragraph-boundary",
+        payload: { sessionId: currentSessionId, rawText: null, correctionId: null },
+      },
     ]);
   });
 
@@ -384,7 +419,10 @@ describe("voiceInput — spoken-command paragraphing", () => {
     emitTranscriptionEvent({ type: "complete", text: "New paragraph." });
 
     expect(dictated()).toEqual([
-      { channel: "voice-input:paragraph-boundary", payload: { rawText: null, correctionId: null } },
+      {
+        channel: "voice-input:paragraph-boundary",
+        payload: { sessionId: currentSessionId, rawText: null, correctionId: null },
+      },
     ]);
   });
 
@@ -394,7 +432,11 @@ describe("voiceInput — spoken-command paragraphing", () => {
     expect(dictated()).toEqual([
       {
         channel: "voice-input:transcription-complete",
-        payload: { text: "What's the retention period", willCorrect: false },
+        payload: {
+          sessionId: currentSessionId,
+          text: "What's the retention period",
+          willCorrect: false,
+        },
       },
     ]);
   });
@@ -405,8 +447,8 @@ describe("voiceInput — spoken-command paragraphing", () => {
 
     const deltas = win.__sent.filter((m) => m.channel === "voice-input:transcription-delta");
     expect(deltas.map((m) => m.payload)).toEqual([
-      { text: "hel", itemId: "item-A" },
-      { text: "lo" },
+      { sessionId: currentSessionId, text: "hel", itemId: "item-A" },
+      { sessionId: currentSessionId, text: "lo" },
     ]);
   });
 
@@ -419,8 +461,13 @@ describe("voiceInput — spoken-command paragraphing", () => {
 
     const completes = win.__sent.filter((m) => m.channel === "voice-input:transcription-complete");
     expect(completes.map((m) => m.payload)).toEqual([
-      { text: "first sentence", willCorrect: false, itemId: "item-A" },
-      { text: "second sentence", willCorrect: false, itemId: "item-A" },
+      { sessionId: currentSessionId, text: "first sentence", willCorrect: false, itemId: "item-A" },
+      {
+        sessionId: currentSessionId,
+        text: "second sentence",
+        willCorrect: false,
+        itemId: "item-A",
+      },
     ]);
   });
 
@@ -430,7 +477,7 @@ describe("voiceInput — spoken-command paragraphing", () => {
     const completes = win.__sent.filter((m) => m.channel === "voice-input:transcription-complete");
     const boundaries = win.__sent.filter((m) => m.channel === "voice-input:paragraph-boundary");
     expect(completes.map((m) => m.payload)).toEqual([
-      { text: "", willCorrect: false, itemId: "item-A" },
+      { sessionId: currentSessionId, text: "", willCorrect: false, itemId: "item-A" },
     ]);
     expect(boundaries).toHaveLength(1);
   });
@@ -439,7 +486,11 @@ describe("voiceInput — spoken-command paragraphing", () => {
     emitTranscriptionEvent({ type: "complete", text: "hello period" });
 
     const complete = win.__sent.find((m) => m.channel === "voice-input:transcription-complete");
-    expect(complete?.payload).toEqual({ text: "hello period", willCorrect: false });
+    expect(complete?.payload).toEqual({
+      sessionId: currentSessionId,
+      text: "hello period",
+      willCorrect: false,
+    });
   });
 
   it("leaves a mid-sentence 'new paragraph' literal (applyDictationCommands is trailing-only)", () => {
@@ -452,6 +503,7 @@ describe("voiceInput — spoken-command paragraphing", () => {
     const boundaries = win.__sent.filter((m) => m.channel === "voice-input:paragraph-boundary");
     expect(completes).toHaveLength(1);
     expect(completes[0]?.payload).toEqual({
+      sessionId: currentSessionId,
       text: "hello new paragraph world",
       willCorrect: false,
     });
@@ -489,7 +541,7 @@ describe("voiceInput — manual paragraphing strategy", () => {
     } as Parameters<typeof registerVoiceInputHandlers>[0]);
 
     const handleStart = getHandler("voice-input:start");
-    await (handleStart as (e: unknown) => Promise<unknown>)(fakeEvent);
+    await (handleStart as SessionHandler)(fakeEvent, nextSessionId());
   });
 
   afterEach(() => {
@@ -506,6 +558,7 @@ describe("voiceInput — manual paragraphing strategy", () => {
     const boundaries = win.__sent.filter((m) => m.channel === "voice-input:paragraph-boundary");
     expect(completes).toHaveLength(1);
     expect(completes[0]?.payload).toEqual({
+      sessionId: currentSessionId,
       text: "hello new paragraph world",
       willCorrect: false,
     });
@@ -546,8 +599,8 @@ describe("voiceInput — context keyterms wiring", () => {
   }
 
   let cleanup: () => void;
-  let startFn: (e: unknown) => Promise<unknown>;
-  let stopFn: (e: unknown) => Promise<unknown>;
+  let startFn: SessionHandler;
+  let stopFn: SessionHandler;
   let setSettingsFn: (e: unknown, patch: unknown) => Promise<unknown>;
 
   beforeEach(async () => {
@@ -576,7 +629,7 @@ describe("voiceInput — context keyterms wiring", () => {
     vi.mocked(store.get).mockReturnValue(providerSettings("deepgram"));
     shared.assembleKeyterms = () => Promise.resolve(["alpha", "beta"]);
 
-    await startFn(fakeEvent);
+    await startFn(fakeEvent, nextSessionId());
 
     expect(shared.startCalls).toHaveLength(1);
     expect(shared.startCalls[0]).toMatchObject({
@@ -591,7 +644,7 @@ describe("voiceInput — context keyterms wiring", () => {
     const { assembleKeyterms } = await import("../../../services/voiceContextKeyterms.js");
     shared.assembleKeyterms = () => Promise.resolve(["alpha", "beta"]);
 
-    await startFn(fakeEvent);
+    await startFn(fakeEvent, nextSessionId());
 
     // OpenAI consumes keyterms via transcription.prompt, so assembly runs for it too.
     expect(assembleKeyterms).toHaveBeenCalled();
@@ -608,14 +661,17 @@ describe("voiceInput — context keyterms wiring", () => {
     shared.assembleKeyterms = () => gate.promise;
 
     vi.mocked(store.get).mockReturnValue(providerSettings("deepgram"));
-    const aPromise = startFn(fakeEvent);
+    const { assembleKeyterms } = await import("../../../services/voiceContextKeyterms.js");
+    vi.mocked(assembleKeyterms).mockClear();
+    const aPromise = startFn(fakeEvent, nextSessionId());
+    await vi.waitFor(() => expect(assembleKeyterms).toHaveBeenCalled());
 
     // Stop supersedes the in-flight assembly.
-    await stopFn(fakeEvent);
+    await stopFn(fakeEvent, currentSessionId);
 
     // Assembly then fails — the catch path must still honor the supersede.
     gate.reject(new Error("assembly boom"));
-    await expect(aPromise).resolves.toEqual({ ok: false, error: "Voice session superseded" });
+    await expect(aPromise).resolves.toEqual({ status: "superseded" });
     expect(shared.startCalls).toHaveLength(0);
   });
 
@@ -643,15 +699,16 @@ describe("voiceInput — context keyterms wiring", () => {
 
     // Start A (Deepgram) — parks on assembly.
     vi.mocked(store.get).mockReturnValue(providerSettings("deepgram"));
-    const aPromise = startFn(fakeEvent);
+    const aPromise = startFn(fakeEvent, nextSessionId());
+    await vi.waitFor(() => expect(assembleCount).toBe(1));
 
     // Start B (OpenAI) — supersedes A and starts immediately.
     vi.mocked(store.get).mockReturnValue(providerSettings("openai"));
-    await startFn(fakeEvent);
+    await startFn(fakeEvent, nextSessionId());
 
     // A's assembly now resolves — but A must detect it was superseded and bail.
     gate.resolve(["alpha"]);
-    await expect(aPromise).resolves.toEqual({ ok: false, error: "Voice session superseded" });
+    await expect(aPromise).resolves.toEqual({ status: "superseded" });
 
     // Only B reached svc.start; A never did (no second session).
     expect(shared.startCalls).toHaveLength(1);
@@ -1142,7 +1199,7 @@ describe("voiceInput — spoken commands outside English", () => {
         mainWindow: win as unknown as Electron.BrowserWindow,
       } as Parameters<typeof registerVoiceInputHandlers>[0]);
       try {
-        await (getHandler("voice-input:start") as (e: unknown) => Promise<unknown>)(fakeEvent);
+        await (getHandler("voice-input:start") as SessionHandler)(fakeEvent, nextSessionId());
         emitTranscriptionEvent({ type: "complete", text: "hello new paragraph" });
 
         const completes = win.__sent.filter(

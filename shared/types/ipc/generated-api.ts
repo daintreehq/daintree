@@ -1665,6 +1665,17 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["system-sleep:reset"]["args"]
     ): Promise<IpcInvokeMap["system-sleep:reset"]["result"]>;
   };
+  voiceInput: {
+    flushParagraph(
+      ...args: IpcInvokeMap["voice-input:flush-paragraph"]["args"]
+    ): Promise<IpcInvokeMap["voice-input:flush-paragraph"]["result"]>;
+    start(
+      ...args: IpcInvokeMap["voice-input:start"]["args"]
+    ): Promise<IpcInvokeMap["voice-input:start"]["result"]>;
+    stop(
+      ...args: IpcInvokeMap["voice-input:stop"]["args"]
+    ): Promise<IpcInvokeMap["voice-input:stop"]["result"]>;
+  };
   webview: {
     captureElement(
       ...args: IpcInvokeMap["webview:capture-element"]["args"]

@@ -50,14 +50,17 @@ vi.mock("@/services/KeybindingService", () => ({
   },
 }));
 
-type DeltaPayload = { text: string; itemId?: string };
-type CompletePayload = { text: string; willCorrect: boolean; itemId?: string };
-type FileTokenPayload = { description: string; replacement: string };
+type DeltaPayload = { sessionId: string; text: string; itemId?: string };
+type CompletePayload = { sessionId: string; text: string; willCorrect: boolean; itemId?: string };
+type FileTokenPayload = { sessionId: string; description: string; replacement: string };
+type BoundaryPayload = { sessionId: string; rawText: string | null };
+
+const SESSION_ID = "session-1";
 
 const callbacks: {
   delta: ((payload: DeltaPayload) => void) | null;
   complete: ((payload: CompletePayload) => void) | null;
-  boundary: ((payload: { rawText: string | null }) => void) | null;
+  boundary: ((payload: BoundaryPayload) => void) | null;
   fileToken: ((payload: FileTokenPayload) => void) | null;
 } = { delta: null, complete: null, boundary: null, fileToken: null };
 
@@ -76,7 +79,7 @@ function stubElectron() {
         callbacks.complete = cb;
         return () => {};
       }),
-      onParagraphBoundary: vi.fn((cb: (payload: { rawText: string | null }) => void) => {
+      onParagraphBoundary: vi.fn((cb: (payload: BoundaryPayload) => void) => {
         callbacks.boundary = cb;
         return () => {};
       }),
@@ -86,6 +89,7 @@ function stubElectron() {
       }),
       onError: vi.fn(() => () => {}),
       onStatus: vi.fn(() => () => {}),
+      onSessionEnded: vi.fn(() => () => {}),
       getSettings: vi.fn().mockResolvedValue({ enabled: false }),
       stop: vi.fn().mockResolvedValue(undefined),
       correct: correct.fn,
@@ -152,9 +156,10 @@ async function setup(initialDraft = "") {
 
 let unsubscribe: (() => void) | null = null;
 
-const delta = (text: string, itemId?: string) => callbacks.delta!({ text, itemId });
+const delta = (text: string, itemId?: string) =>
+  callbacks.delta!({ sessionId: SESSION_ID, text, itemId });
 const complete = (text: string, itemId?: string) =>
-  callbacks.complete!({ text, willCorrect: false, itemId });
+  callbacks.complete!({ sessionId: SESSION_ID, text, willCorrect: false, itemId });
 
 describe("VoiceRecordingService — dictation ranges (#14597)", () => {
   beforeEach(() => {
@@ -232,7 +237,7 @@ describe("VoiceRecordingService — dictation ranges (#14597)", () => {
 
     delta("first", "item-a");
     complete("First.", "item-a");
-    callbacks.boundary!({ rawText: null });
+    callbacks.boundary!({ sessionId: SESSION_ID, rawText: null });
     complete("Second para.", "item-a");
 
     expect(draft()).toBe("First.\nSecond para.");
@@ -372,7 +377,11 @@ describe("VoiceRecordingService — dictation ranges (#14597)", () => {
     const { draft, records } = await setup();
 
     complete("Open the readme file.", "item-a");
-    callbacks.fileToken!({ description: "the readme file", replacement: "@README.md" });
+    callbacks.fileToken!({
+      sessionId: SESSION_ID,
+      description: "the readme file",
+      replacement: "@README.md",
+    });
 
     expect(draft()).toBe("Open @README.md.");
     expect(records()[0]!.utterances[0]!.range.edited).toBe(true);

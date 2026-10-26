@@ -1133,6 +1133,7 @@ export const CHANNEL_LOCALITY = {
   "voice-input:open-mic-settings": "shell",
   "voice-input:paragraph-boundary": "shell",
   "voice-input:request-mic-permission": "shell",
+  "voice-input:session-ended": "shell",
   "voice-input:set-settings": "shell",
   "voice-input:start": "shell",
   "voice-input:status": "shell",

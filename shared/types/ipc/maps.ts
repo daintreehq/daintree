@@ -1,6 +1,6 @@
 import type { GitRemoteCommitPreview, StagingStatus } from "../git.js";
 import type { AgentId } from "../agent.js";
-import type { VoiceInputError, VoiceInputStatus } from "../voice.js";
+import type { VoiceInputError, VoiceInputStatus, VoiceSessionEndReason } from "../voice.js";
 import type {
   Project,
   ProjectAddOptions,
@@ -1270,18 +1270,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: void;
   };
 
-  "voice-input:start": {
-    args: [];
-    result: { ok: true } | { ok: false; error: string };
-  };
-  "voice-input:stop": {
-    args: [];
-    result: { rawText: string | null };
-  };
-  "voice-input:flush-paragraph": {
-    args: [];
-    result: { rawText: string | null };
-  };
   "voice-input:check-mic-permission": {
     args: [];
     result: MicPermissionStatus;
@@ -2035,17 +2023,24 @@ export interface IpcEventMap {
     panelId: string;
   };
 
-  // Voice input events
-  "voice-input:transcription-delta": { text: string; itemId?: string };
-  "voice-input:transcription-complete": { text: string; willCorrect: boolean; itemId?: string };
-  "voice-input:paragraph-boundary": { rawText: string | null };
+  // Voice input events. Every one carries the id of the session it belongs to.
+  "voice-input:transcription-delta": { sessionId: string; text: string; itemId?: string };
+  "voice-input:transcription-complete": {
+    sessionId: string;
+    text: string;
+    willCorrect: boolean;
+    itemId?: string;
+  };
+  "voice-input:paragraph-boundary": { sessionId: string; rawText: string | null };
   "voice-input:file-token-resolved": {
+    sessionId: string;
     description: string;
     replacement: string;
     resolved: boolean;
   };
-  "voice-input:error": VoiceInputError;
-  "voice-input:status": VoiceInputStatus;
+  "voice-input:error": { sessionId: string; error: VoiceInputError };
+  "voice-input:status": { sessionId: string; status: VoiceInputStatus };
+  "voice-input:session-ended": { sessionId: string; reason: VoiceSessionEndReason };
 
   // Demo mode events (main → renderer command forwarding)
   "demo:exec-move-to": DemoMoveToPayload;

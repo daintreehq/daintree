@@ -26,6 +26,7 @@ import {
   installEventCapture,
   getCapturedEvents,
   clearCapturedEvents,
+  getVoiceSessionId,
   ipcStart,
   ipcStop,
   ipcSendAudio,
@@ -251,7 +252,8 @@ test.describe.serial("E2E: Voice Input — Realtime IPC and settings UI", () => 
       expect(audio.input.turn_detection).toBeNull();
 
       const captured = await getCapturedEvents(ctx.window);
-      expect(captured.completes).toEqual([{ text: "hello world", willCorrect: false }]);
+      const sessionId = await getVoiceSessionId(ctx.window);
+      expect(captured.completes).toEqual([{ sessionId, text: "hello world", willCorrect: false }]);
     });
 
     test("delta events surface to renderer as onTranscriptionDelta in order", async () => {

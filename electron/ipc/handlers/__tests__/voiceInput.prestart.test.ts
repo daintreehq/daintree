@@ -22,7 +22,11 @@ vi.mock("../../../utils/logger.js", () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 
-type ServiceEvent = { type: string; error?: { code: string; severity: string } };
+type ServiceEvent = {
+  type: string;
+  sessionId?: string;
+  error?: { code: string; severity: string };
+};
 
 const shared = vi.hoisted(() => ({
   /** Ordered record of calls reaching the service: "start" and "chunk:<first byte>". */
@@ -36,15 +40,18 @@ const shared = vi.hoisted(() => ({
   assembleKeyterms: null as null | (() => Promise<string[]>),
   /** The signal the correction service was last handed. */
   sessionSignal: null as AbortSignal | null,
+  /** The session the fake provider was last started for; its events carry it. */
+  providerSessionId: null as string | null,
 }));
 
 vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
   VoiceTranscriptionService: function VoiceTranscriptionService(this: Record<string, unknown>) {
     this.onEvent = function (cb: (e: ServiceEvent) => void) {
-      shared.eventCallback = cb;
+      shared.eventCallback = (e) => cb({ ...e, sessionId: shared.providerSessionId ?? undefined });
       return () => {};
     };
-    this.start = function () {
+    this.start = function (_settings: unknown, sessionId: string) {
+      shared.providerSessionId = sessionId;
       shared.calls.push("start");
       if (shared.startError) return Promise.reject(shared.startError);
       return shared.startPromise ?? Promise.resolve(shared.startResult);
@@ -113,6 +120,7 @@ vi.mock("../../channels.js", () => ({
     VOICE_INPUT_FLUSH_PARAGRAPH: "voice-input:flush-paragraph",
     VOICE_INPUT_PARAGRAPH_BOUNDARY: "voice-input:paragraph-boundary",
     VOICE_INPUT_FILE_TOKEN_RESOLVED: "voice-input:file-token-resolved",
+    VOICE_INPUT_SESSION_ENDED: "voice-input:session-ended",
   },
 }));
 
@@ -141,6 +149,7 @@ function makeSender() {
     }),
     removeListener: vi.fn(),
     isDestroyed: () => sender.destroyed,
+    send: vi.fn(),
   };
 }
 
@@ -152,20 +161,40 @@ function getHandler(channel: string) {
   return call[1] as (...args: unknown[]) => Promise<unknown>;
 }
 
-function sendChunk(id: number, bytes = 4800) {
+// Each start() mints a fresh session id, as the renderer does, and audio and
+// stops default to the latest one.
+let nextSessionNumber = 1;
+let currentSessionId = "";
+
+function sendChunk(id: number, bytes = 4800, sessionId = currentSessionId) {
   const call = ipcMainMock.on.mock.calls.find(([c]) => c === "voice-input:audio-chunk");
   if (!call) throw new Error("audio-chunk listener not registered");
   const chunk = new Uint8Array(bytes);
   chunk[0] = id;
-  (call[1] as (e: unknown, c: ArrayBuffer) => void)({}, chunk.buffer);
+  (call[1] as (e: unknown, s: unknown, c: ArrayBuffer) => void)({}, sessionId, chunk.buffer);
 }
 
-function start() {
-  return getHandler("voice-input:start")(fakeEvent) as Promise<StartResult>;
+type StartOutcome = { status: "started" | "superseded" | "failed"; error?: string };
+
+// Mapped onto the old result shape so these cases read the same as before.
+function start(): Promise<StartResult> {
+  currentSessionId = `session-${nextSessionNumber++}`;
+  return (
+    getHandler("voice-input:start")(fakeEvent, currentSessionId) as Promise<StartOutcome>
+  ).then(
+    (outcome) =>
+      outcome.status === "started"
+        ? { ok: true }
+        : {
+            ok: false,
+            error: outcome.status === "failed" ? outcome.error : "Voice session superseded",
+          },
+    (error: Error) => ({ ok: false, error: error.message })
+  );
 }
 
-function stop() {
-  return getHandler("voice-input:stop")(fakeEvent);
+function stop(sessionId = currentSessionId) {
+  return getHandler("voice-input:stop")(fakeEvent, sessionId);
 }
 
 function deferKeyterms() {
@@ -191,6 +220,7 @@ describe("voiceInput — audio sent before the provider starts", () => {
     shared.startError = null;
     shared.assembleKeyterms = null;
     shared.sessionSignal = null;
+    shared.providerSessionId = null;
     sender.destroyed = false;
     sender.onDestroyed = null;
     fakeEvent.sender = makeSender();
@@ -214,7 +244,7 @@ describe("voiceInput — audio sent before the provider starts", () => {
     sent.filter(
       (m) =>
         m.channel === "voice-input:error" &&
-        (m.payload as { code: string }).code === AUDIO_BUFFER_OVERFLOW_CODE
+        (m.payload as { error: { code: string } }).error.code === AUDIO_BUFFER_OVERFLOW_CODE
     );
 
   it("hands audio sent during service load and keyterm assembly to the provider in order, once", async () => {
@@ -294,12 +324,13 @@ describe("voiceInput — audio sent before the provider starts", () => {
     shared.startError = new Error("boom");
     const pending = start();
     sendChunk(1);
-    await expect(pending).rejects.toThrow("boom");
+    await expect(pending).resolves.toEqual({ ok: false, error: "boom" });
 
+    // The failed session's late audio is neither held nor replayed into the next.
     shared.startError = null;
     sendChunk(2);
     await start();
-    expect(shared.calls).toEqual(["start", "chunk:1", "chunk:2", "start"]);
+    expect(shared.calls).toEqual(["start", "chunk:1", "start"]);
   });
 
   it("discards held audio when the renderer is destroyed during keyterm assembly", async () => {
@@ -331,8 +362,9 @@ describe("voiceInput — audio sent before the provider starts", () => {
     sendChunk(1);
     await expect(pending).resolves.toEqual({ ok: false, error: "OpenAI API key not configured" });
 
+    // The session failed, so its audio goes nowhere.
     sendChunk(2);
-    expect(shared.calls).toEqual(["start", "chunk:1", "chunk:2"]);
+    expect(shared.calls).toEqual(["start", "chunk:1"]);
   });
 
   it("leaves the service alone when a renderer whose start failed is destroyed", async () => {
@@ -378,7 +410,10 @@ describe("voiceInput — audio sent before the provider starts", () => {
     for (let i = 0; i < AUDIO_BUFFER_MAX_CHUNKS + 5; i++) sendChunk(i % 256, 1000);
 
     expect(overflowErrors()).toHaveLength(1);
-    expect(overflowErrors()[0]!.payload).toMatchObject({ severity: "transient" });
+    expect(overflowErrors()[0]!.payload).toMatchObject({
+      sessionId: currentSessionId,
+      error: { severity: "transient" },
+    });
 
     resolveKeyterms([]);
     await pending;
@@ -459,11 +494,14 @@ describe("voiceInput — audio sent before the provider starts", () => {
     expect(overflowErrors()).toHaveLength(1);
   });
 
-  it("forwards audio directly when no start is in flight", async () => {
+  it("forwards audio directly once the session is running, and none after it stops", async () => {
     await start();
-    await stop();
     shared.calls = [];
     sendChunk(9);
+    expect(shared.calls).toEqual(["chunk:9"]);
+
+    await stop();
+    sendChunk(10);
     expect(shared.calls).toEqual(["chunk:9"]);
   });
 });

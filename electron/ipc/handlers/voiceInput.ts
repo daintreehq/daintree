@@ -3,13 +3,17 @@ import { ipcMain, systemPreferences } from "electron";
 import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";
 import { projectStore } from "../../services/ProjectStore.js";
-import type { VoiceTranscriptionService } from "../../services/VoiceTranscriptionService.js";
+import type {
+  VoiceSessionEvent,
+  VoiceTranscriptionService,
+} from "../../services/VoiceTranscriptionService.js";
 import { VoiceCorrectionService } from "../../services/VoiceCorrectionService.js";
 import type { HandlerDependencies, IpcContext } from "../types.js";
 import type {
   VoiceInputSettings,
   VoiceTranscriptionProvider,
 } from "../../../shared/types/ipc/api.js";
+import type { VoiceSessionEndReason, VoiceStartOutcome } from "../../../shared/types/voice.js";
 import { logDebug, logInfo, logWarn } from "../../utils/logger.js";
 import { buildOpenAIHeaders } from "../../../shared/utils/openaiHeaders.js";
 import { voiceErrorLogFields } from "../../../shared/utils/voiceLogFields.js";
@@ -25,38 +29,110 @@ import {
 } from "../../services/voice/TranscriptionProvider.js";
 import { getAppWebContents } from "../../window/webContentsRegistry.js";
 import { voiceFileLinkResolver } from "../../services/VoiceFileLinkResolver.js";
-import { typedHandle, typedHandleValidated, typedHandleWithContext } from "../utils.js";
+import { typedHandle, typedHandleValidated } from "../utils.js";
+import { defineIpcNamespace, opValidated } from "../define.js";
+import { AppError } from "../../utils/errorTypes.js";
+import { VOICE_INPUT_METHOD_CHANNELS } from "./voiceInput.preload.js";
 import { openExternalUrl } from "../../utils/openExternal.js";
 import { openLinuxSoundSettings } from "../../services/voice/linuxSoundSettings.js";
 import {
   VoiceInputCorrectPayloadSchema,
+  VoiceSessionIdSchema,
   type VoiceInputCorrectPayload,
 } from "../../schemas/ipc.js";
 import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
 
 let service: VoiceTranscriptionService | null = null;
 let servicePromise: Promise<VoiceTranscriptionService> | null = null;
-let activeEventUnsubscribe: (() => void) | null = null;
-let activeDestroyListener: { fn: () => void; unwatch: () => void } | null = null;
 let correctionService: VoiceCorrectionService | null = null;
+// The controller whose signal correctionService currently carries.
 let sessionController: AbortController | null = null;
-let sessionProjectInfo: { name?: string; path?: string } = {};
-// Bumped on every start so a slow keyterm-assembly await can detect that a
-// newer start (or a stop) has superseded it and bail before calling svc.start.
-let voiceStartNonce = 0;
-// The renderer streams audio as soon as capture is attached, before main has
-// loaded the service, assembled keyterms, and created a provider. Chunks for the
-// start in flight are held here and handed to the new provider exactly once;
-// without this they'd go to no provider, or to the previous session's stopped one.
-let preStartAudio: {
-  nonce: number;
-  chunks: ArrayBuffer[];
-  bytes: number;
-  overflowed: boolean;
-} | null = null;
-// Overflow can be hit both here and in the provider's own connect buffer — one
-// report per session is enough.
-let overflowReportedNonce: number | null = null;
+
+/**
+ * One dictation session, named by the id its renderer minted. Everything a
+ * session sets up hangs off its record, so ending one tears down only its own
+ * subscription, watcher and buffer, never a newer session's.
+ */
+interface VoiceSession {
+  readonly id: string;
+  /** The view that started it. */
+  readonly sender: Electron.WebContents;
+  readonly webContentsId: number;
+  readonly projectId: string | null;
+  // The global current project at start. Keyterms and file links read this
+  // until they move to the owning view's project (#14599).
+  readonly projectInfo: { name?: string; path?: string };
+  // starting: main is still preparing, and the provider isn't this session's.
+  // active: its provider has been started (it may still be connecting).
+  // stopping: a stop owns its graceful drain.
+  phase: "starting" | "active" | "stopping";
+  ended: boolean;
+  stopPromise: Promise<{ rawText: string | null }> | null;
+  readonly controller: AbortController;
+  unsubscribe: (() => void) | null;
+  unwatchDestroyed: (() => void) | null;
+  // The renderer streams audio as soon as capture is attached, before main has
+  // loaded the service, assembled keyterms, and created a provider. Chunks for
+  // a session still starting are held here and handed to its provider exactly
+  // once; without this they'd go to no provider, or to the previous session's.
+  preStartAudio: { chunks: ArrayBuffer[]; bytes: number; overflowed: boolean } | null;
+  // Overflow can be hit both here and in the provider's own connect buffer —
+  // one report per session is enough.
+  overflowReported: boolean;
+}
+
+let liveSession: VoiceSession | null = null;
+
+function isLive(session: VoiceSession): boolean {
+  return liveSession === session && !session.ended;
+}
+
+/** The live session's id and the view and project that own it, or null. */
+export function getLiveVoiceSession(): {
+  sessionId: string;
+  webContentsId: number;
+  projectId: string | null;
+} | null {
+  if (!liveSession) return null;
+  return {
+    sessionId: liveSession.id,
+    webContentsId: liveSession.webContentsId,
+    projectId: liveSession.projectId,
+  };
+}
+
+/**
+ * End a session exactly once: drop it as the live one, release what it set up,
+ * and tell its owning view why. Retiring its provider is left to the caller:
+ * after a drain there is nothing to stop, and by then the provider may belong
+ * to a newer session.
+ */
+function endSession(session: VoiceSession, reason: VoiceSessionEndReason): void {
+  if (session.ended) return;
+  session.ended = true;
+  if (liveSession === session) liveSession = null;
+  session.preStartAudio = null;
+  session.unsubscribe?.();
+  session.unsubscribe = null;
+  session.unwatchDestroyed?.();
+  session.unwatchDestroyed = null;
+  // Abort any in-flight file-link detection / resolution.
+  session.controller.abort();
+  if (sessionController === session.controller) {
+    correctionService?.setSessionSignal(null);
+    sessionController = null;
+  }
+  logInfo("[VoiceInput] Session ended", {
+    sessionId: session.id,
+    reason,
+    phase: session.phase,
+  });
+  if (!session.sender.isDestroyed()) {
+    session.sender.send(CHANNELS.VOICE_INPUT_SESSION_ENDED, { sessionId: session.id, reason });
+  }
+}
+
+const SUPERSEDED: VoiceStartOutcome = { status: "superseded" };
 
 const VALID_TRANSCRIPTION_PROVIDERS: VoiceTranscriptionProvider[] = ["openai", "deepgram"];
 
@@ -185,17 +261,6 @@ async function getService(): Promise<VoiceTranscriptionService> {
     });
   }
   return servicePromise;
-}
-
-function cleanupActiveSubscription(): void {
-  if (activeEventUnsubscribe) {
-    activeEventUnsubscribe();
-    activeEventUnsubscribe = null;
-  }
-  if (activeDestroyListener) {
-    activeDestroyListener.unwatch();
-    activeDestroyListener = null;
-  }
 }
 
 export type MicPermissionStatus =
@@ -363,18 +428,21 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     }
   };
 
-  const reportAudioOverflow = (nonce: number) => {
-    if (overflowReportedNonce === nonce) return;
-    overflowReportedNonce = nonce;
+  const reportAudioOverflow = (session: VoiceSession) => {
+    if (session.overflowReported) return;
+    session.overflowReported = true;
     const win = deps.mainWindow;
     if (!win || win.isDestroyed()) return;
-    getAppWebContents(win).send(CHANNELS.VOICE_INPUT_ERROR, createAudioBufferOverflowError());
+    getAppWebContents(win).send(CHANNELS.VOICE_INPUT_ERROR, {
+      sessionId: session.id,
+      error: createAudioBufferOverflowError(),
+    });
   };
 
-  const flushPreStartAudio = (nonce: number, svc: VoiceTranscriptionService) => {
-    const pending = preStartAudio;
-    if (!pending || pending.nonce !== nonce) return;
-    preStartAudio = null;
+  const flushPreStartAudio = (session: VoiceSession, svc: VoiceTranscriptionService) => {
+    const pending = session.preStartAudio;
+    if (!pending) return;
+    session.preStartAudio = null;
     if (pending.chunks.length > 0) {
       logDebug("[VoiceInput] Flushing pre-start audio", {
         chunks: pending.chunks.length,
@@ -386,51 +454,88 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     }
   };
 
-  const handleStart = async (ctx: IpcContext) => {
-    // Bump the start nonce for EVERY start so a later start of any provider
-    // (and the stop handler) supersedes a start still awaiting the service
-    // import or keyterm assembly. Captured before the first await so a stop
-    // landing during the dynamic import still wins — and the audio buffer is
-    // armed in the same synchronous prefix, before any chunk of this capture
-    // can arrive.
-    const myNonce = ++voiceStartNonce;
-    // Main-process clock only; correlate with renderer start steps by wall time.
-    const startedAt = performance.now();
-    preStartAudio = { nonce: myNonce, chunks: [], bytes: 0, overflowed: false };
-    try {
-      return await startSession(ctx, myNonce, startedAt);
-    } finally {
-      // Superseded, failed, or threw before the handoff — the held audio
-      // belongs to no session.
-      if (preStartAudio?.nonce === myNonce) preStartAudio = null;
+  // A failed or superseded start is an outcome, not an exception: the
+  // provider's message goes back to the renderer and never through the IPC
+  // error logger, where it could quote dictated text (#14620).
+  const handleStart = async (ctx: IpcContext, sessionId: string): Promise<VoiceStartOutcome> => {
+    // Events and the ended notice go back to the view that started it.
+    const sender = ctx.event?.sender;
+    if (!sender || sender.isDestroyed()) return SUPERSEDED;
+    // Two sessions under one id would make every chunk and stop ambiguous.
+    if (liveSession?.id === sessionId) {
+      throw new AppError({ code: "VALIDATION", message: "Voice session already started" });
     }
+    // Published before the first await, so a stop or a newer start landing
+    // during the service import or keyterm assembly sees this session, and its
+    // audio buffer is armed before any chunk of this capture can arrive.
+    const session: VoiceSession = {
+      id: sessionId,
+      sender,
+      webContentsId: ctx.webContentsId,
+      projectId: ctx.projectId,
+      projectInfo: getProjectInfo(),
+      phase: "starting",
+      ended: false,
+      stopPromise: null,
+      controller: new AbortController(),
+      unsubscribe: null,
+      unwatchDestroyed: null,
+      preStartAudio: { chunks: [], bytes: 0, overflowed: false },
+      overflowReported: false,
+    };
+    const previous = liveSession;
+    liveSession = session;
+    if (previous) {
+      const previousOwnsProvider = previous.phase !== "starting";
+      endSession(previous, "superseded");
+      // Nothing listens to it any more, and its audio is now refused.
+      if (previousOwnsProvider) service?.stop();
+    }
+    // A view that goes away takes its session with it. Only a session that is
+    // still live owns the provider it would stop.
+    session.unwatchDestroyed = onWebContentsDestroyed(sender, () => {
+      if (session.ended) return;
+      const ownsProvider = session.phase !== "starting";
+      endSession(session, "cancelled");
+      if (ownsProvider) service?.stop();
+    });
+    // Main-process clock only; correlate with renderer start steps by session id.
+    const startedAt = performance.now();
+    // Whatever already ended it (a stop, a newer start, its view going away)
+    // chose the reason; a stop in progress owns the ending.
+    let outcome: VoiceStartOutcome;
+    try {
+      outcome = await startSession(session, startedAt);
+    } catch (error) {
+      if (session.phase !== "stopping") endSession(session, "failed");
+      throw error;
+    }
+    if (outcome.status === "failed" && session.phase !== "stopping") {
+      endSession(session, "failed");
+    }
+    return outcome;
   };
 
-  const startSession = async (ctx: IpcContext, myNonce: number, startedAt: number) => {
+  const startSession = async (
+    session: VoiceSession,
+    startedAt: number
+  ): Promise<VoiceStartOutcome> => {
     const svc = await getService();
     const serviceReadyAt = performance.now();
     // The renderer went away during the import — nothing is left to record for.
-    if (!ctx.event || ctx.event.sender.isDestroyed()) {
-      return { ok: false, error: "Voice session superseded" };
-    }
+    if (session.sender.isDestroyed()) endSession(session, "cancelled");
+    if (!isLive(session)) return SUPERSEDED;
     // Snapshot transcription settings at session start (model, language, API key).
     // Correction settings are read live from store per-event so mid-session changes apply.
     const settings = getVoiceSettings();
-
-    // Clean up any existing subscription before starting a new session
-    cleanupActiveSubscription();
 
     // Initialize the correction service for this session
     if (!correctionService) {
       correctionService = new VoiceCorrectionService();
     }
 
-    const myController = new AbortController();
-    sessionController = myController;
-    correctionService.setSessionSignal(myController.signal);
-
-    // Capture project info at session start.
-    sessionProjectInfo = getProjectInfo();
+    sessionController = session.controller;
+    correctionService.setSessionSignal(session.controller.signal);
 
     // Kick off keyterm assembly concurrently with the subscription/provider
     // setup below so leading speech isn't delayed waiting on git/terminal reads.
@@ -441,18 +546,20 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // and failures are non-fatal — we just start without keyterms.
     const keytermsPromise = assembleKeyterms({
       customDictionary: settings.customDictionary,
-      projectName: sessionProjectInfo.name,
-      projectPath: sessionProjectInfo.path,
+      projectName: session.projectInfo.name,
+      projectPath: session.projectInfo.path,
       ptyClient: deps.ptyClient,
     });
 
-    const unsubscribe = svc.onEvent((voiceEvent) => {
+    const forwardEvent = (voiceEvent: VoiceSessionEvent) => {
       const win = deps.mainWindow;
       if (!win || win.isDestroyed()) return;
+      const sessionId = session.id;
 
       if (voiceEvent.type === "delta") {
         logDebug("[VoiceInput] → renderer delta", { length: voiceEvent.text.length });
         getAppWebContents(win).send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_DELTA, {
+          sessionId,
           text: voiceEvent.text,
           ...(voiceEvent.itemId ? { itemId: voiceEvent.itemId } : {}),
         });
@@ -490,6 +597,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         const itemIdField = voiceEvent.itemId ? { itemId: voiceEvent.itemId } : {};
         if (parts.length === 0 && voiceEvent.itemId) {
           getAppWebContents(win).send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, {
+            sessionId,
             text: "",
             willCorrect: false,
             ...itemIdField,
@@ -498,6 +606,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         for (let i = 0; i < pieces.length; i++) {
           if (pieces[i]) {
             getAppWebContents(win).send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, {
+              sessionId,
               text: pieces[i],
               willCorrect: false,
               ...itemIdField,
@@ -505,6 +614,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
           }
           if (i < pieces.length - 1) {
             getAppWebContents(win).send(CHANNELS.VOICE_INPUT_PARAGRAPH_BOUNDARY, {
+              sessionId,
               rawText: null,
               correctionId: null,
             });
@@ -518,12 +628,12 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
           correctionService &&
           rawText.length > 0
         ) {
-          const projectPath = sessionProjectInfo.path;
+          const projectPath = session.projectInfo.path;
           const apiKey = liveSettings.openaiApiKey;
           if (projectPath && apiKey) {
-            // Capture signal + service synchronously so a new session's abort
-            // and/or replacement service instance can't be used here.
-            const signal = sessionController?.signal;
+            // Capture the service synchronously so a replacement instance can't
+            // be used here. The signal aborts when this session ends.
+            const signal = session.controller.signal;
             const correctionSvc = correctionService;
             void (async () => {
               const tokens = await correctionSvc.detectFileLinkTokens(rawText, {
@@ -544,10 +654,11 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
                 // local-only match without ever consulting `signal`, so a session
                 // stopped mid-resolution could otherwise leak FILE_TOKEN_RESOLVED
                 // events into a new session's panel.
-                if (signal?.aborted) return;
+                if (signal.aborted) return;
                 const replacement = resolved ? `@${resolved}` : `@?${description}`;
                 if (!win.isDestroyed()) {
                   getAppWebContents(win).send(CHANNELS.VOICE_INPUT_FILE_TOKEN_RESOLVED, {
+                    sessionId,
                     description,
                     replacement,
                     resolved: !!resolved,
@@ -559,39 +670,41 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         }
       } else if (voiceEvent.type === "paragraph_boundary") {
         getAppWebContents(win).send(CHANNELS.VOICE_INPUT_PARAGRAPH_BOUNDARY, {
+          sessionId,
           rawText: null,
         });
       } else if (voiceEvent.type === "error") {
         if (voiceEvent.error.code === AUDIO_BUFFER_OVERFLOW_CODE) {
-          if (overflowReportedNonce === myNonce) return;
-          overflowReportedNonce = myNonce;
+          if (session.overflowReported) return;
+          session.overflowReported = true;
         }
-        getAppWebContents(win).send(CHANNELS.VOICE_INPUT_ERROR, voiceEvent.error);
+        getAppWebContents(win).send(CHANNELS.VOICE_INPUT_ERROR, {
+          sessionId,
+          error: voiceEvent.error,
+        });
       } else if (voiceEvent.type === "status") {
-        getAppWebContents(win).send(CHANNELS.VOICE_INPUT_STATUS, voiceEvent.status);
+        getAppWebContents(win).send(CHANNELS.VOICE_INPUT_STATUS, {
+          sessionId,
+          status: voiceEvent.status,
+        });
+      }
+    };
+
+    session.unsubscribe = svc.onEvent((voiceEvent) => {
+      // A retired provider's events, and anything after this session ended.
+      if (voiceEvent.sessionId !== session.id || session.ended) return;
+      forwardEvent(voiceEvent);
+      // A provider that dies on its own ends the session, even while still
+      // connecting. During a stop, its finishing → idle is the drain that
+      // handleStop is waiting on.
+      if (
+        session.phase === "active" &&
+        voiceEvent.type === "status" &&
+        (voiceEvent.status === "error" || voiceEvent.status === "idle")
+      ) {
+        endSession(session, "failed");
       }
     });
-
-    activeEventUnsubscribe = unsubscribe;
-
-    // Also clean up if the renderer is destroyed unexpectedly
-    const onDestroyed = () => {
-      if (activeEventUnsubscribe === unsubscribe) {
-        activeEventUnsubscribe = null;
-      }
-      activeDestroyListener = null;
-      unsubscribe();
-      service?.stop();
-      // Supersede this start if it hasn't reached svc.start() yet, so the dead
-      // renderer's held audio is never flushed into an orphaned session.
-      if (voiceStartNonce === myNonce) voiceStartNonce++;
-      if (preStartAudio?.nonce === myNonce) preStartAudio = null;
-    };
-    const sender = ctx.event?.sender ?? null;
-    const unwatchDestroyed = sender ? onWebContentsDestroyed(sender, onDestroyed) : null;
-    activeDestroyListener = unwatchDestroyed
-      ? { fn: onDestroyed, unwatch: unwatchDestroyed }
-      : null;
 
     // Freeze the assembled keyterms into the session settings snapshot. Assembly
     // has its own internal timeouts, so this await is bounded and never blocks the
@@ -606,104 +719,83 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       });
     }
     const keytermsReadyAt = performance.now();
-    // A newer start (or a stop) superseded this one while we awaited assembly
-    // (checked on both the success and failure paths) — bail before wiring up a
-    // session that's already stale. A superseding start has already run
-    // cleanupActiveSubscription() (tearing down THIS start's subscription) and
-    // installed its own session controller/subscription, so we must not touch the
-    // shared globals here — only idempotently drop our own subscription handles
-    // and listener, identity-guarded so we never clobber the live session.
-    if (voiceStartNonce !== myNonce) {
-      if (activeEventUnsubscribe === unsubscribe) {
-        activeEventUnsubscribe = null;
-      }
-      unsubscribe();
-      unwatchDestroyed?.();
-      if (activeDestroyListener?.fn === onDestroyed) {
-        activeDestroyListener = null;
-      }
-      return { ok: false, error: "Voice session superseded" };
-    }
+    // A stop, a newer start or the owner going away ended this session while
+    // assembly ran (on either path). Whatever ended it already released its
+    // subscription and watcher, so there is nothing of ours left to undo.
+    if (!isLive(session)) return SUPERSEDED;
     // Field names avoid "key": the logger blanks any field containing it.
     logInfo("[VoiceInput] Start timing — provider start", {
-      startNonce: myNonce,
+      sessionId: session.id,
       serviceLoadMs: Math.round(serviceReadyAt - startedAt),
       biasTermsWaitMs: Math.round(keytermsReadyAt - termsWaitStartedAt),
       elapsedMs: Math.round(keytermsReadyAt - startedAt),
-      heldChunks: preStartAudio?.nonce === myNonce ? preStartAudio.chunks.length : 0,
+      heldChunks: session.preStartAudio?.chunks.length ?? 0,
     });
     // Not awaited before the flush: start() installs the provider and enters its
     // pending-start state synchronously, so the held audio lands in the
     // provider's own connect buffer, ahead of any chunk that arrives next.
-    const startPromise = svc.start({ ...settings, keyterms });
-    flushPreStartAudio(myNonce, svc);
+    session.phase = "active";
+    const startPromise = svc.start({ ...settings, keyterms }, session.id);
+    flushPreStartAudio(session, svc);
     const result = await startPromise;
     const providerSettledAt = performance.now();
     logInfo("[VoiceInput] Start timing — provider settled", {
-      startNonce: myNonce,
+      sessionId: session.id,
       ok: result.ok,
       providerStartMs: Math.round(providerSettledAt - keytermsReadyAt),
       elapsedMs: Math.round(providerSettledAt - startedAt),
     });
-    if (!result.ok) {
-      // Failed to start — clean up subscription immediately
-      if (activeEventUnsubscribe === unsubscribe) {
-        activeEventUnsubscribe = null;
-      }
-      unsubscribe();
-      unwatchDestroyed?.();
-      if (activeDestroyListener?.fn === onDestroyed) {
-        activeDestroyListener = null;
-      }
-      // Tear down this start's session controller so an orphaned signal isn't
-      // left attached to correctionService for the next session. A newer start's
-      // svc.start() is what fails a pending one, and by then it owns the shared
-      // controller, so only clear it while it is still ours.
-      myController.abort();
-      if (sessionController === myController) {
-        correctionService?.setSessionSignal(null);
-        sessionController = null;
-      }
-    }
-    return result;
+    if (!result.ok) return { status: "failed", error: result.error };
+    return isLive(session) ? { status: "started" } : SUPERSEDED;
   };
 
-  const handleStop = async (): Promise<{ rawText: string | null }> => {
-    // Supersede any start still awaiting keyterm assembly so it bails instead of
-    // bringing up a session we're trying to stop.
-    voiceStartNonce++;
-    preStartAudio = null;
-    // Snapshot the session controller so concurrent start/stop cannot cross-abort.
-    const controller = sessionController;
-
-    if (service) {
-      // Drain the transcription service first (waits for pending transcriptions,
-      // fires remaining complete events).
-      await service.stopGracefully();
+  const handleStop = async (sessionId: string): Promise<{ rawText: string | null }> => {
+    const session = liveSession;
+    // Another view's session, or one that has already ended.
+    if (!session || session.id !== sessionId) return { rawText: null };
+    if (session.stopPromise) return session.stopPromise;
+    // Still preparing, so no provider has any of its audio. Ending it makes the
+    // start bail at its next check instead of bringing the session up.
+    if (session.phase === "starting") {
+      endSession(session, "cancelled");
+      return { rawText: null };
     }
-
-    // Abort any in-flight file-link detection / resolution.
-    controller?.abort();
-
-    if (sessionController === controller) {
-      correctionService?.setSessionSignal(null);
-      sessionController = null;
-    }
-
-    cleanupActiveSubscription();
-
-    return { rawText: null };
+    session.phase = "stopping";
+    session.stopPromise = (async () => {
+      try {
+        // Drain the transcription service first (waits for pending
+        // transcriptions, fires remaining complete events) — the subscription
+        // stays up until it has.
+        await service?.stopGracefully();
+      } catch (error) {
+        endSession(session, "failed");
+        throw error;
+      }
+      endSession(session, "stopped");
+      return { rawText: null };
+    })();
+    return session.stopPromise;
   };
 
-  const handleFlushParagraph = (): { rawText: string | null } => {
-    if (service) {
-      service.commitParagraphBoundary();
+  const handleFlushParagraph = (sessionId: string): { rawText: string | null } => {
+    const session = liveSession;
+    // Until the session is active, the service's provider belongs to no one.
+    if (session?.id === sessionId && session.phase !== "starting") {
+      service?.commitParagraphBoundary();
     }
     return { rawText: null };
   };
 
-  const handleAudioChunk = (_event: Electron.IpcMainEvent, chunk: ArrayBuffer) => {
-    const pending = preStartAudio;
+  const handleAudioChunk = (
+    _event: Electron.IpcMainEvent,
+    sessionId: unknown,
+    chunk: ArrayBuffer
+  ) => {
+    const session = liveSession;
+    // Audio for a session that isn't live — another view's, or one that has
+    // already ended — must never reach the provider or the held buffer.
+    if (!session || session.id !== sessionId) return;
+    const pending = session.preStartAudio;
     if (!pending) {
       service?.sendAudioChunk(chunk);
       return;
@@ -721,7 +813,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
           chunks: pending.chunks.length,
           bytes: pending.bytes,
         });
-        reportAudioOverflow(pending.nonce);
+        reportAudioOverflow(session);
       }
       return;
     }
@@ -782,12 +874,25 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     return { action: result.action, correctedText: result.confirmedText };
   };
 
+  const sessionNamespace = defineIpcNamespace({
+    name: "voiceInput",
+    ops: {
+      start: opValidated(VOICE_INPUT_METHOD_CHANNELS.start, VoiceSessionIdSchema, handleStart, {
+        withContext: true,
+      }),
+      stop: opValidated(VOICE_INPUT_METHOD_CHANNELS.stop, VoiceSessionIdSchema, handleStop),
+      flushParagraph: opValidated(
+        VOICE_INPUT_METHOD_CHANNELS.flushParagraph,
+        VoiceSessionIdSchema,
+        handleFlushParagraph
+      ),
+    },
+  });
+
   const cleanups: Array<() => void> = [
+    sessionNamespace.register(),
     typedHandle(CHANNELS.VOICE_INPUT_GET_SETTINGS, handleGetSettings),
     typedHandle(CHANNELS.VOICE_INPUT_SET_SETTINGS, handleSetSettings),
-    // @ts-expect-error: VoiceStartResult contains forbidden envelope key — pending migration to throw AppError. See #6020.
-    typedHandleWithContext(CHANNELS.VOICE_INPUT_START, handleStart),
-    typedHandle(CHANNELS.VOICE_INPUT_STOP, handleStop),
     typedHandle(CHANNELS.VOICE_INPUT_CHECK_MIC_PERMISSION, handleCheckMicPermission),
     typedHandle(CHANNELS.VOICE_INPUT_REQUEST_MIC_PERMISSION, handleRequestMicPermission),
     typedHandle(CHANNELS.VOICE_INPUT_OPEN_MIC_SETTINGS, handleOpenMicSettings),
@@ -797,7 +902,6 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       VoiceInputCorrectPayloadSchema,
       handleCorrect
     ),
-    typedHandle(CHANNELS.VOICE_INPUT_FLUSH_PARAGRAPH, handleFlushParagraph),
   ];
 
   // Fire-and-forget audio-chunk stream stays on ipcMain.on.
@@ -806,9 +910,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
   return () => {
     for (const cleanup of cleanups) cleanup();
     ipcMain.removeListener(CHANNELS.VOICE_INPUT_AUDIO_CHUNK, handleAudioChunk);
-    cleanupActiveSubscription();
-    preStartAudio = null;
-    overflowReportedNonce = null;
+    if (liveSession) endSession(liveSession, "cancelled");
     service?.destroy();
     service = null;
     servicePromise = null;

@@ -764,6 +764,9 @@ export const DiffMediaReadFileVersionsPayloadSchema = z.object({
     .optional(),
 });
 
+// Renderer-minted (a UUID); bounded so a malformed id can't be stored or logged.
+export const VoiceSessionIdSchema = z.string().min(1).max(64);
+
 export const VoiceInputCorrectPayloadSchema = z.object({
   rawText: z.string(),
   recentContext: z.array(z.string()).optional(),

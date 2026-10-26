@@ -12,7 +12,7 @@ import {
   useVoiceRecordingStore,
   type VoiceRecordingTarget,
 } from "@/store/voiceRecordingStore";
-import { isActiveVoiceSession, type VoiceInputError, type VoiceRecordingMode } from "@shared/types";
+import { isActiveVoiceSession, type VoiceRecordingMode } from "@shared/types";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { VOICE_INPUT_SETTINGS_CHANGED_EVENT } from "@/lib/voiceInputSettingsEvents";
@@ -110,6 +110,10 @@ class VoiceRecordingService {
   private initialized = false;
   private generation = 0;
   private startRequestId = 0;
+  // Id of the promoted session, minted by its start() and carried on every
+  // chunk, start and stop main sees, so main can tell which session each
+  // belongs to. Unlike `startRequestId` it is unique across project views.
+  private sessionId: string | null = null;
   private audioContext: AudioContext | null = null;
   // Capture graph built by an in-flight start() and not yet promoted to the
   // session fields below. Held here so a cancel or supersede can release it
@@ -307,7 +311,7 @@ class VoiceRecordingService {
     );
 
     this.unsubscribers.push(
-      voiceInput.onError((error: VoiceInputError) => {
+      voiceInput.onError(({ error }) => {
         // During graceful stop, the main process suppresses drain errors.
         // If one leaks through, ignore it to avoid prematurely finalizing.
         if (this.isStoppingSession) {
@@ -350,7 +354,7 @@ class VoiceRecordingService {
     );
 
     this.unsubscribers.push(
-      voiceInput.onStatus((status) => {
+      voiceInput.onStatus(({ status }) => {
         logDebug(`${LOG_PREFIX} Received status from backend`, {
           status,
           isStoppingSession: this.isStoppingSession,
@@ -387,6 +391,16 @@ class VoiceRecordingService {
             preserveLiveText: true,
           });
         }
+      })
+    );
+
+    this.unsubscribers.push(
+      voiceInput.onSessionEnded(({ sessionId, reason }) => {
+        logDebug(`${LOG_PREFIX} Backend session ended`, {
+          sessionId,
+          reason,
+          current: sessionId === this.sessionId,
+        });
       })
     );
 
@@ -714,6 +728,7 @@ class VoiceRecordingService {
     this.initialize();
     this.releasePendingCapture();
     const startRequestId = ++this.startRequestId;
+    const sessionId = crypto.randomUUID();
     // toggle() reaches here with no await after the hotkey/click, so start()
     // entry stands in for the gesture. Renderer-local clock only — main's
     // timings use their own origin.
@@ -722,6 +737,7 @@ class VoiceRecordingService {
       try {
         logInfo(`${LOG_PREFIX} Start step`, {
           startRequestId,
+          sessionId,
           step,
           elapsedMs: Math.round(performance.now() - startedAt),
           ...details,
@@ -1124,7 +1140,7 @@ class VoiceRecordingService {
         if (capture.queue) {
           this.enqueueCapturedChunk(capture, event.data);
         } else {
-          window.electron.voiceInput.sendAudioChunk(event.data);
+          window.electron.voiceInput.sendAudioChunk(sessionId, event.data);
         }
       };
       source.connect(workletNode);
@@ -1176,6 +1192,7 @@ class VoiceRecordingService {
     this.keepAliveOscillator = capture.keepAliveOscillator;
     this.keepAliveGain = capture.keepAliveGain;
     this.workletNode = workletNode;
+    this.sessionId = sessionId;
     sessionGeneration = generation;
     logInfo(`${LOG_PREFIX} AudioContext created`, {
       requestedSampleRate: 24000,
@@ -1210,12 +1227,19 @@ class VoiceRecordingService {
     // once its own async setup finishes, so anything sent before start()
     // resolves could land on the previous provider or be dropped.
     logDebug(`${LOG_PREFIX} Calling voiceInput.start() IPC`);
-    const result = await window.electron.voiceInput
-      .start()
-      .catch((error: unknown): { ok: false; error: string } => ({
-        ok: false,
+    const result = await window.electron.voiceInput.start(sessionId).then(
+      (outcome) =>
+        outcome.status === "started"
+          ? { ok: true as const }
+          : {
+              ok: false as const,
+              error: outcome.status === "failed" ? outcome.error : "Voice session superseded",
+            },
+      (error: unknown) => ({
+        ok: false as const,
         error: formatErrorMessage(error, "Voice input failed to start."),
-      }));
+      })
+    );
     logDebug(`${LOG_PREFIX} voiceInput.start() returned`, { ok: result.ok });
     logStep("backend_start", { ok: result.ok });
 
@@ -1254,7 +1278,7 @@ class VoiceRecordingService {
     const queued = capture.queue ?? [];
     capture.queue = null;
     for (const chunk of queued) {
-      window.electron.voiceInput.sendAudioChunk(chunk);
+      window.electron.voiceInput.sendAudioChunk(sessionId, chunk);
     }
     logDebug(`${LOG_PREFIX} Flushed startup audio`, {
       chunks: queued.length,
@@ -1339,6 +1363,7 @@ class VoiceRecordingService {
         this.invalidatePendingStart();
       }
 
+      const stopSessionId = this.sessionId;
       const storeState = useVoiceRecordingStore.getState();
       const hasSession =
         storeState.activeTarget !== null || isActiveVoiceSession(storeState.status);
@@ -1387,7 +1412,10 @@ class VoiceRecordingService {
         logDebug(`${LOG_PREFIX} Sending remote stop (graceful drain)`);
         this.isStoppingSession = true;
         useVoiceRecordingStore.getState().setStatus("finishing");
-        await window.electron.voiceInput.stop().catch(() => null);
+        // No promoted session means main never heard of one from this view.
+        if (stopSessionId) {
+          await window.electron.voiceInput.stop(stopSessionId).catch(() => null);
+        }
       }
 
       if (hasSession) {
@@ -1429,6 +1457,7 @@ class VoiceRecordingService {
       }
 
       this.isStoppingSession = false;
+      if (this.sessionId === stopSessionId) this.sessionId = null;
 
       // Whole-passage AI cleanup runs after a deliberate, graceful stop only —
       // not on error, cancel-to-restart, or backend-driven teardown. Fire and

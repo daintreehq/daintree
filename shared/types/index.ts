@@ -552,7 +552,13 @@ export {
 } from "./portal.js";
 
 // Voice types - canonical phase model for voice session and transcript lifecycle
-export type { VoiceInputError, VoiceInputErrorSeverity, VoiceTranscriptPhase } from "./voice.js";
+export type {
+  VoiceInputError,
+  VoiceInputErrorSeverity,
+  VoiceSessionEndReason,
+  VoiceStartOutcome,
+  VoiceTranscriptPhase,
+} from "./voice.js";
 export { isActiveVoiceSession } from "./voice.js";
 
 // Workspace Host types - IPC protocol for workspace management
