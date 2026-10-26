@@ -5,11 +5,7 @@ import {
   type PortableSettingsCategory,
   type PortableSettingsCategoryId,
 } from "@shared/config/portableSettings";
-import type {
-  ConfigBundlePreviewChange,
-  ConfigBundlePreviewSection,
-  ConfigImportReport,
-} from "@shared/types/configBundle";
+import type { ConfigBundlePreviewSection, ConfigImportReport } from "@shared/types/configBundle";
 import type { SettingsCopyPreview } from "@shared/types/ipc/settingsCopy";
 import type { HostId } from "@shared/types/remoteHosts";
 import { clientErrorCode, clientErrorText } from "@/utils/clientAppError";
@@ -18,6 +14,12 @@ import { SettingsCheckbox } from "../SettingsCheckbox";
 import { SettingsSection } from "../SettingsSection";
 import { SettingsActions, SettingsEmptyRow, SettingsGroup, SettingsRow } from "../SettingsGroup";
 import { HostCopyStatusGroup } from "./HostCopyStatusGroup";
+import {
+  DEVICE_CATEGORIES,
+  HOST_CATEGORIES,
+  changeTotal,
+  describeChange,
+} from "./settingsCopyPreview";
 import { useHostSettingsCopyStatus } from "./useHostSettingsCopyStatus";
 
 interface HostCopySettingsSectionProps {
@@ -41,31 +43,10 @@ interface CopyError {
   previewAgain: boolean;
 }
 
-const HOST_CATEGORIES = PORTABLE_SETTINGS_CATEGORIES.filter((category) => !category.device);
-const DEVICE_CATEGORIES = PORTABLE_SETTINGS_CATEGORIES.filter((category) => category.device);
-
 function defaultSelection(): Set<PortableSettingsCategoryId> {
   return new Set(
     PORTABLE_SETTINGS_CATEGORIES.filter((category) => category.selectedByDefault).map((c) => c.id)
   );
-}
-
-/** "Replaced · On → Off", "Added · 4 hours", plus anything to know first. */
-function describeChange(change: ConfigBundlePreviewChange): string {
-  const parts: string[] = [];
-  if (change.kind === "update") {
-    if (change.from !== undefined && change.to !== undefined) {
-      parts.push(`Replaced · ${change.from} → ${change.to}`);
-    } else if (change.renamedTo) {
-      parts.push(`Replaced · becomes ${change.renamedTo}`);
-    } else {
-      parts.push("Replaced");
-    }
-  } else {
-    parts.push(change.to !== undefined ? `Added · ${change.to}` : "Added");
-  }
-  if (change.note) parts.push(change.note);
-  return parts.join(". ");
 }
 
 function sectionsOf(
@@ -73,10 +54,6 @@ function sectionsOf(
   sections: ConfigBundlePreviewSection[]
 ): ConfigBundlePreviewSection[] {
   return sections.filter((section) => category.sections.includes(section.section));
-}
-
-function changeTotal(preview: SettingsCopyPreview): number {
-  return preview.sections.reduce((sum, section) => sum + section.add + section.update, 0);
 }
 
 /**
