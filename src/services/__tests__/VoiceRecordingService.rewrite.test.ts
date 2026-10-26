@@ -60,8 +60,14 @@ vi.mock("@/services/KeybindingService", () => ({
   },
 }));
 
-type DeltaPayload = { text: string; itemId?: string };
-type CompletePayload = { text: string; willCorrect: boolean; itemId?: string; send?: boolean };
+type DeltaPayload = { sessionId?: string; text: string; itemId?: string };
+type CompletePayload = {
+  sessionId?: string;
+  text: string;
+  willCorrect: boolean;
+  itemId?: string;
+  send?: boolean;
+};
 type RewriteOutcome =
   | { status: "replace"; text: string }
   | { status: "no_change" | "rejected" | "unavailable" | "failed" };
@@ -75,6 +81,7 @@ const callbacks: {
 const rewrite =
   vi.fn<(request: { selectedText: string; instruction: string }) => Promise<RewriteOutcome>>();
 const correct = vi.fn();
+const cancel = vi.fn<(sessionId: string) => Promise<void>>();
 
 const windowListeners: Record<string, Array<(...args: unknown[]) => void>> = {};
 
@@ -109,6 +116,7 @@ function stubElectron(openaiApiKey = "sk-key", recordingMode?: string) {
         ...(recordingMode ? { recordingMode } : {}),
       }),
       stop: vi.fn().mockResolvedValue(undefined),
+      cancel,
       correct,
       rewrite,
     },
@@ -204,6 +212,7 @@ describe("VoiceRecordingService — rewrite selection by voice (#14635)", () => 
     callbacks.boundary = null;
     rewrite.mockReset();
     correct.mockReset();
+    cancel.mockReset().mockResolvedValue(undefined);
     notify.mockReset();
     composer.source = null;
   });
@@ -467,6 +476,34 @@ describe("VoiceRecordingService — rewrite selection by voice (#14635)", () => 
 
     expect(rewrite).not.toHaveBeenCalled();
     expect(selection.release).toHaveBeenCalled();
+  });
+
+  it("cancels the instruction without draining it and leaves the selection as it was", async () => {
+    const { service, voiceStore, draft, inputStore, recordInstruction, flush } = await setup();
+    inputStore.getState().setDraftInput("panel-1", "Hi. make me shorter");
+    const selection = fakeSelection("make me shorter");
+    const complete = (text: string, itemId: string) =>
+      callbacks.complete!({ sessionId: "session-1", text, willCorrect: false, itemId });
+
+    recordInstruction(selection);
+    voiceStore.getState().setStatus("recording");
+    Reflect.set(service, "sessionId", "session-1");
+    complete("shorter", "item-1");
+    callbacks.delta!({ sessionId: "session-1", text: "and punch", itemId: "item-2" });
+
+    expect(service.handleEscape("panel-1")).toBe(true);
+    // What the session still had in flight has nowhere to land.
+    complete("and punchier", "item-2");
+    await flush();
+
+    expect(cancel).toHaveBeenCalledWith("session-1");
+    expect(window.electron.voiceInput.stop).not.toHaveBeenCalled();
+    expect(rewrite).not.toHaveBeenCalled();
+    expect(selection.apply).not.toHaveBeenCalled();
+    expect(selection.release).toHaveBeenCalledTimes(1);
+    expect(draft()).toBe("Hi. make me shorter");
+    expect(voiceStore.getState().status).toBe("idle");
+    expect(voiceStore.getState().announcement?.text).toBe("Rewrite cancelled.");
   });
 
   it("says nothing was heard instead of sending an empty instruction", async () => {

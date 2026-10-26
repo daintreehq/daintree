@@ -9,9 +9,11 @@ import { useHelpPanelStore, selectActiveSlot } from "@/store/helpPanelStore";
 import { isAssistantFocused } from "@/store/macroFocusStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import {
+  dictatedSpans,
   useDictationRangeStore,
   type DictationDraftTarget,
   type DictationRecord,
+  type DictationTextSpan,
 } from "@/store/dictationRangeStore";
 import { minimalDocChange, type TrackedTextRange } from "@/lib/textRangeMapping";
 import {
@@ -328,6 +330,15 @@ function findDictation(
   );
 }
 
+/** Where `offset` ends up once each span is taken out; one inside a span goes to its start. */
+function offsetAfterRemoving(offset: number, spans: DictationTextSpan[]): number {
+  let removed = 0;
+  for (const { from, to } of spans) {
+    if (from < offset) removed += Math.min(offset, to) - from;
+  }
+  return offset - removed;
+}
+
 interface CaptureAttempt {
   target: VoiceRecordingTarget;
   audio: WarmAudio;
@@ -381,6 +392,13 @@ class VoiceRecordingService {
   private sessionId: string | null = null;
   // The dictionary's heard-as rules as last read; every start reads them.
   private heardAsRules: HeardAsRewriter | null = null;
+  // Sessions Escape cancelled. Main ends them without a drain, but whatever
+  // they had already sent is still on its way and has nowhere left to land.
+  // Each is let go once main reports it ended, the last thing it sends for it.
+  private discardedSessionIds = new Set<string>();
+  // Main has nothing left to send for this one, so cancelling it needs no
+  // tombstone (and would leave one behind, with no end notice to clear it).
+  private lastEndedSessionId: string | null = null;
   private warmAudio: WarmAudio | null = null;
   // Capture graph built by an in-flight start() and not yet promoted to the
   // session fields below. Held here so a cancel or supersede can release it
@@ -502,6 +520,7 @@ class VoiceRecordingService {
 
     this.unsubscribers.push(
       voiceInput.onTranscriptionDelta(({ sessionId, text: delta, itemId, replace }) => {
+        if (this.discardedSessionIds.has(sessionId)) return;
         logDebug(`${LOG_PREFIX} Received transcription delta`, { itemId, length: delta.length });
         const voiceState = useVoiceRecordingStore.getState();
         const target = voiceState.activeTarget;
@@ -530,6 +549,7 @@ class VoiceRecordingService {
     this.unsubscribers.push(
       voiceInput.onTranscriptionComplete(
         ({ sessionId, text, itemId, transcriptId, heard, send }) => {
+          if (this.discardedSessionIds.has(sessionId)) return;
           logDebug(`${LOG_PREFIX} Received transcription complete`, {
             itemId,
             length: text.length,
@@ -584,6 +604,7 @@ class VoiceRecordingService {
 
     this.unsubscribers.push(
       voiceInput.onFileTokenResolved(({ sessionId, transcriptId, references }) => {
+        if (this.discardedSessionIds.has(sessionId)) return;
         logDebug(`${LOG_PREFIX} Received file references`, { count: references.length });
         // Routed by the session that spoke them, not the active target: the
         // final utterance's references arrive as its session stops, by which
@@ -620,7 +641,8 @@ class VoiceRecordingService {
     );
 
     this.unsubscribers.push(
-      voiceInput.onParagraphBoundary(({ rawText }) => {
+      voiceInput.onParagraphBoundary(({ sessionId, rawText }) => {
+        if (this.discardedSessionIds.has(sessionId)) return;
         logDebug(`${LOG_PREFIX} Received paragraph boundary`, { rawLength: rawText?.length ?? 0 });
         const voiceState = useVoiceRecordingStore.getState();
         const currentTarget = voiceState.activeTarget;
@@ -630,13 +652,13 @@ class VoiceRecordingService {
         const buffer = voiceState.panelBuffers[panelId];
         if (!buffer) return;
 
-        const sessionId = buffer.dictationSessionId;
+        const { dictationSessionId } = buffer;
         const draft = useTerminalInputStore.getState().getDraftInput(panelId, projectId);
         const plan = planVoiceBreak(
           draft,
-          resolveVoiceAnchor(panelId, projectId, sessionId, draft)
+          resolveVoiceAnchor(panelId, projectId, dictationSessionId, draft)
         );
-        commitVoicePlan(panelId, projectId, sessionId, plan, (target, { insertion }) =>
+        commitVoicePlan(panelId, projectId, dictationSessionId, plan, (target, { insertion }) =>
           useDictationRangeStore.getState().recordParagraphBreak(target, insertion)
         );
 
@@ -645,7 +667,8 @@ class VoiceRecordingService {
     );
 
     this.unsubscribers.push(
-      voiceInput.onError(({ error }) => {
+      voiceInput.onError(({ sessionId, error }) => {
+        if (this.discardedSessionIds.has(sessionId)) return;
         // During graceful stop, the main process suppresses drain errors.
         // If one leaks through, ignore it to avoid prematurely finalizing.
         if (this.isStoppingSession) {
@@ -690,6 +713,7 @@ class VoiceRecordingService {
 
     this.unsubscribers.push(
       voiceInput.onStatus(({ sessionId, status }) => {
+        if (this.discardedSessionIds.has(sessionId)) return;
         logDebug(`${LOG_PREFIX} Received status from backend`, {
           status,
           isStoppingSession: this.isStoppingSession,
@@ -759,6 +783,8 @@ class VoiceRecordingService {
           current: sessionId === this.sessionId,
         });
         this.timelines.get(sessionId)?.reportEnded(reason, report);
+        this.lastEndedSessionId = sessionId;
+        this.discardedSessionIds.delete(sessionId);
         // Replaced elsewhere before it had anything to drain, typically while
         // its start was still pending. Its start result is stale from here.
         if (reason !== "superseded" || sessionId !== this.sessionId) return;
@@ -1035,8 +1061,10 @@ class VoiceRecordingService {
 
   /**
    * Escape that reached dictation, from the global fallback or from the target
-   * composer (`panelId`). Returns whether it acted, so a finishing or idle
-   * session leaves the key to whatever is next in line.
+   * composer (`panelId`). It cancels the dictation, taking its text back out of
+   * the draft, unless that text has been edited: then it stops and keeps it,
+   * as the dictation key does. Returns whether it acted, so a finishing or
+   * idle session leaves the key to whatever is next in line.
    */
   handleEscape(panelId?: string): boolean {
     const state = useVoiceRecordingStore.getState();
@@ -1075,16 +1103,130 @@ class VoiceRecordingService {
     ) {
       return false;
     }
+    const target = state.activeTarget;
+    // A stop already under way keeps what it has.
+    if (!target || this.stopPromise) return false;
+    // An instruction never reached the draft, so there is nothing to take out.
     if (rewrite) {
-      void this.stop("Rewrite cancelled.", {
-        preserveLiveText: true,
-        skipCorrection: true,
-        reason: "escape",
-      });
+      void this.cancelDictation(target, null, []);
       return true;
     }
-    void this.stop("Dictation stopped.", { preserveLiveText: true, reason: "escape" });
+
+    const record = findDictation(
+      target,
+      state.panelBuffers[target.panelId]?.dictationSessionId ?? null
+    );
+    const draft = useTerminalInputStore.getState().getDraftInput(target.panelId, target.projectId);
+    const spans = record ? dictatedSpans(record, draft) : [];
+    if (!spans) {
+      void this.stop(
+        "Dictation stopped. Its text was kept because it changed after you dictated it.",
+        { preserveLiveText: true, reason: "escape" }
+      );
+      return true;
+    }
+    void this.cancelDictation(target, record, spans);
     return true;
+  }
+
+  /**
+   * Ends the session without draining it and takes the text it wrote back out
+   * of the draft (#14631). Everything before the teardown's first await runs
+   * in the Escape's own tick, so nothing the session still has in flight can
+   * land between the removal and the end of the session. No correction runs:
+   * there is nothing left to correct.
+   */
+  private async cancelDictation(
+    target: VoiceRecordingTarget,
+    record: DictationRecord | null,
+    spans: DictationTextSpan[]
+  ): Promise<void> {
+    const sessionId = this.sessionId;
+    if (sessionId && sessionId !== this.lastEndedSessionId) {
+      this.discardedSessionIds.add(sessionId);
+    }
+    // A rewrite's timeline was disposed at its start, so only a dictation's is found.
+    const timeline = sessionId ? this.timelines.get(sessionId) : undefined;
+    timeline?.mark("stopRequested");
+    this.dropHeldPress();
+    this.invalidatePendingStart("escape");
+    this.clearTimers();
+    // The worklet forwards and meters nothing more for this session.
+    this.generation++;
+    const wasMicLive = useVoiceRecordingStore.getState().micSignal === "live";
+
+    // Before the removals, so none of them stops to carry an anchor along.
+    releaseActiveVoiceAnchors();
+    if (record) {
+      const { panelId, projectId } = target;
+      const inputStore = useTerminalInputStore.getState();
+      const draft = inputStore.getDraftInput(panelId, projectId);
+      const draftKey = makeDraftKey(panelId, projectId);
+      const caret =
+        peekPendingComposerSelection(draftKey, draft) ?? readComposerSelection(draftKey, draft);
+      // Last first, so each removal leaves the earlier offsets where they were.
+      // Each is written on its own and spelled out, so other sessions' ranges
+      // and the text typed between ours follow what was actually removed, not
+      // a diff's guess across the whole stretch.
+      let next = draft;
+      for (const { from, to } of spans) {
+        if (from === to) continue;
+        const before = next;
+        next = before.slice(0, from) + before.slice(to);
+        useDictationRangeStore
+          .getState()
+          .expectDraftChange(panelId, projectId, before, next, { from, to, insert: "" });
+        inputStore.setDraftInput(panelId, next, projectId);
+      }
+      if (next !== draft) {
+        // The caret stays on the text it was in, wherever the removals left it.
+        if (caret) {
+          setPendingComposerSelection(draftKey, next, {
+            from: offsetAfterRemoving(caret.from, spans),
+            to: offsetAfterRemoving(caret.to, spans),
+          });
+        }
+        // Like a scratch, an edit rather than a send: the composer keeps its
+        // undo history even when the cancel empties the draft.
+        recordScratchLanded(panelId, projectId, next);
+        inputStore.bumpExternalDraftRevision({ keepsSelection: true });
+      }
+      useDictationRangeStore.getState().releaseDictation(record.id);
+    }
+    // A cancelled rewrite drops its instruction and gives the selection back
+    // as it was.
+    const { rewrite } = target;
+    if (rewrite) rewrite.selection.release();
+    useVoiceRecordingStore.getState().finishSession({ preserveLiveText: false });
+    useVoiceRecordingStore
+      .getState()
+      .announce(rewrite ? "Rewrite cancelled." : "Dictation cancelled. Its text was discarded.");
+    logInfo(`${LOG_PREFIX} ${rewrite ? "Rewrite" : "Dictation"} cancelled`, {
+      removedSpans: spans.length,
+    });
+    // Nothing the session still sends can land, so the draft is final now. In
+    // the Escape's own tick, so a stale start that ends the session later
+    // can't name it first.
+    timeline?.mark("settled");
+    timeline?.finish("escape");
+
+    if (this.openingAudio) this.flushOpeningAudio(this.openingAudio);
+    this.cleanupAudioCapture();
+    // After capture closes, as for a stop, and only where the start was cued.
+    if (wasMicLive) this.playCue("dictation-stop");
+    const remoteCancel = sessionId
+      ? window.electron.voiceInput.cancel(sessionId).catch(() => {})
+      : null;
+    // A start that follows waits on this, as it would on a stop.
+    this.stopPromise = (async () => {
+      await remoteCancel;
+      if (this.sessionId === sessionId) this.sessionId = null;
+    })();
+    try {
+      await this.stopPromise;
+    } finally {
+      this.stopPromise = null;
+    }
   }
 
   /**
@@ -1177,7 +1319,7 @@ class VoiceRecordingService {
    * A stop the user asked for: a push-to-talk release, a second press, the
    * shortcut. A start whose capture is attached may hold speech in its queue,
    * so the stop waits for that audio to be sent rather than discarding it
-   * (#14604). Escape, a closed panel and teardown cancel through stop().
+   * (#14604). Escape, a closed panel and teardown end the start outright.
    */
   private requestUserStop(reason: VoiceStopReason = "user"): Promise<void> {
     if (this.deferStopToStartup(reason)) return Promise.resolve();
@@ -3773,6 +3915,7 @@ class VoiceRecordingService {
     this.baselineOwners.clear();
     this.unfollowLearningBaselines();
     this.spokenSendHandlers.clear();
+    this.discardedSessionIds.clear();
     for (const unsub of this.unsubscribers) {
       unsub();
     }

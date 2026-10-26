@@ -164,6 +164,10 @@ function setupGlobals(
       }
       return { rawText: null };
     }),
+    // Main ends a cancelled session at once, sending its notice before the invoke resolves.
+    cancel: vi.fn(async (sessionId: string) => {
+      callbacks.get("ended")?.({ sessionId, reason: "cancelled", report: REPORT });
+    }),
     correct: vi.fn(),
     rewrite: vi.fn().mockResolvedValue({ status: "replace", text: "Shorter." }),
   };
@@ -526,6 +530,35 @@ describe("VoiceRecordingService — session summary (#14617)", () => {
         charsCommitted: DICTATED.length,
       },
     ]);
+  });
+
+  it("logs an Escape that cancels the dictation once, as escape, with main's cancelled report", async () => {
+    const harness = setupGlobals();
+    const { service, summaries } = await load();
+    const sessionId = await startLive(harness, service);
+    harness.emit("complete", { sessionId, text: DICTATED, itemId: "item-1" });
+    harness.paintFrames();
+    expect(draftState.draft).toBe(DICTATED);
+
+    expect(service.handleEscape(TARGET.panelId)).toBe(true);
+    await vi.waitFor(() => expect(harness.voiceInput.cancel).toHaveBeenCalledWith(sessionId));
+    await flushPromises();
+    harness.paintFrames();
+
+    expect(draftState.draft).toBe("");
+    expect(harness.voiceInput.stop).not.toHaveBeenCalled();
+    expect(summaries()).toHaveLength(1);
+    const [line] = summaries();
+    expect(line).toMatchObject({
+      sessionId,
+      stopReason: "escape",
+      backendEnd: "cancelled",
+      charsCommitted: DICTATED.length,
+      ...REPORT,
+    });
+    expect(typeof line!.stopRequestedMs).toBe("number");
+    expect(Object.keys(line!).sort()).toEqual(["sessionId", ...SUMMARY_FIELDS].sort());
+    expect(JSON.stringify(line)).not.toContain("canopy");
   });
 
   it("logs a session whose backend failed to start as start_failed, with main's ending", async () => {

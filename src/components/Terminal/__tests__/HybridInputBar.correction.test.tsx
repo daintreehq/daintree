@@ -23,9 +23,11 @@ import { createWorktreeStore, setCurrentViewStore } from "@/store/createWorktree
 import { usePanelStore } from "@/store/panelStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
+import { useDictationRangeStore } from "@/store/dictationRangeStore";
 import { initBuiltInPanelKinds } from "@/panels/registry";
 import { recordCorrectionLanded, takeLandedCorrection } from "@/services/voiceCorrectionLanding";
 import { recordScratchLanded, takeScratchLanded } from "@/services/voiceScratchCommand";
+import { voiceRecordingService } from "@/services/VoiceRecordingService";
 import { HybridInputBar } from "../HybridInputBar";
 
 const WT_ID = "/repo/wt";
@@ -242,5 +244,33 @@ describe("HybridInputBar after a spoken scratch", () => {
 
     expect(view.state.doc.toString()).toBe("One.");
     expect(draft()).toBe("One.");
+  });
+});
+
+describe("HybridInputBar after Escape cancels a dictation", () => {
+  it("brings back a dictation that emptied the draft with one Cmd+Z", async () => {
+    const { view } = await mount();
+    const voice = useVoiceRecordingStore.getState();
+    voice.beginSession({ panelId: "term-1" }, "session-1");
+    voice.setStatus("recording");
+    useDictationRangeStore.setState({ drafts: {} });
+    await writeDraft("Hello there.");
+    useDictationRangeStore
+      .getState()
+      .recordUtterance(
+        { sessionId: "session-1", panelId: "term-1", projectId: undefined },
+        { insertion: { from: 0, to: 12 }, words: { from: 0, to: 12 } }
+      );
+
+    await act(async () => {
+      expect(voiceRecordingService.handleEscape("term-1")).toBe(true);
+    });
+    expect(draft()).toBe("");
+    expect(view.state.doc.toString()).toBe("");
+
+    await undo(view);
+
+    expect(view.state.doc.toString()).toBe("Hello there.");
+    expect(draft()).toBe("Hello there.");
   });
 });

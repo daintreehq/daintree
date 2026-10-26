@@ -1726,6 +1726,9 @@ export interface GeneratedElectronAPI {
     ): Promise<IpcInvokeMap["voice-dictionary:update-in-project"]["result"]>;
   };
   voiceInput: {
+    cancel(
+      ...args: IpcInvokeMap["voice-input:cancel"]["args"]
+    ): Promise<IpcInvokeMap["voice-input:cancel"]["result"]>;
     flushParagraph(
       ...args: IpcInvokeMap["voice-input:flush-paragraph"]["args"]
     ): Promise<IpcInvokeMap["voice-input:flush-paragraph"]["result"]>;

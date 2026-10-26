@@ -4000,6 +4000,10 @@ export interface GeneratedIpcInvokeMap {
     ];
     result: import("./api.js").VoiceDictionaryEntry[];
   };
+  "voice-input:cancel": {
+    args: [sessionId: string];
+    result: void;
+  };
   "voice-input:flush-paragraph": {
     args: [sessionId: string];
     result: { rawText: string | null };

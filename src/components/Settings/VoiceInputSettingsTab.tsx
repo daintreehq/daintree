@@ -696,7 +696,7 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
                   <ul className="space-y-1.5 text-xs text-text-secondary">
                     <ShortcutLine combo={dictationCombo} label="Start or stop dictation" />
                     <ShortcutLine combo={pauseCombo} label="Pause or resume" />
-                    <ShortcutLine combo="Escape" label="Cancel and keep the text so far" />
+                    <ShortcutLine combo="Escape" label="Cancel and discard this dictation" />
                     <ShortcutLine combo="Enter" label="Stop dictation and send the prompt" />
                   </ul>
                   <Button

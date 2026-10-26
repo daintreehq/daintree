@@ -908,6 +908,24 @@ describe("voiceInput — spoken send on Deepgram's short endpoint", () => {
     expect(toRenderer()).toEqual([stopRequested, completion("Fix the login bug")]);
   });
 
+  it("drops a held send, and sends nothing, when Escape cancels inside the window", async () => {
+    sentenceEndingInSend();
+    vi.advanceTimersByTime(300);
+    const cancelledSessionId = currentSessionId;
+
+    const handleCancel = getHandler("voice-input:cancel");
+    await (handleCancel as SessionHandler)(fakeEvent, cancelledSessionId);
+    vi.advanceTimersByTime(5000);
+
+    expect(toRenderer()).toEqual([]);
+    expect(win.__sent.filter((m) => m.channel === "voice-input:session-ended")).toEqual([
+      {
+        channel: "voice-input:session-ended",
+        payload: { sessionId: cancelledSessionId, reason: "cancelled", report: expect.any(Object) },
+      },
+    ]);
+  });
+
   it("retires a lone 'send it' with an empty completion when dictation stops", async () => {
     emitTranscriptionEvent({
       type: "complete",

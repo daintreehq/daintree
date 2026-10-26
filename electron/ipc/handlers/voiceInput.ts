@@ -1454,6 +1454,18 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     return true;
   };
 
+  // Escape's cancel (#14631): the session ends now, without draining, so
+  // nothing it still had in flight reaches the renderer and its file-link work
+  // is aborted with it. A session being drained for another view's start is
+  // left to that drain, which the newer session is waiting on.
+  const handleCancel = (ctx: IpcContext, sessionId: string): void => {
+    const session = liveSession;
+    if (!session || !ownedBy(session, sessionId, ctx.webContentsId)) return;
+    const ownsProvider = session.phase !== "starting";
+    endSession(session, "cancelled");
+    if (ownsProvider) service?.stop();
+  };
+
   const handleFlushParagraph = (ctx: IpcContext, sessionId: string): { rawText: string | null } => {
     const session = liveSession;
     // Until the session is active, the service's provider belongs to no one.
@@ -1596,6 +1608,9 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     ops: {
       start: op(VOICE_INPUT_METHOD_CHANNELS.start, handleStart, { withContext: true }),
       stop: opValidated(VOICE_INPUT_METHOD_CHANNELS.stop, VoiceSessionIdSchema, handleStop, {
+        withContext: true,
+      }),
+      cancel: opValidated(VOICE_INPUT_METHOD_CHANNELS.cancel, VoiceSessionIdSchema, handleCancel, {
         withContext: true,
       }),
       flushParagraph: opValidated(
