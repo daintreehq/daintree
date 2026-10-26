@@ -632,6 +632,8 @@ function CanopyInbox({
     archivedShown,
     visible,
     listRef,
+    scrollerRef,
+    acknowledgeOpened,
     onlyReadMatch,
   } = useCanopyInboxFilters({
     isOpen,
@@ -705,6 +707,10 @@ function CanopyInbox({
     seeAssistantHandback,
   });
 
+  const openedRunId = focusedItem?.runId ?? null;
+  useLayoutEffect(() => {
+    if (openedRunId !== null) acknowledgeOpened(openedRunId);
+  }, [openedRunId, acknowledgeOpened]);
   const { reserveUndo, undoReads, undoLine } = useCanopyInboxUndo({ hostId, api });
   const {
     readNow,
@@ -1253,6 +1259,7 @@ function CanopyInbox({
                 />
               </div>
               <div
+                ref={scrollerRef}
                 className="canopy-inbox flex min-h-0 flex-1 flex-col overflow-y-auto select-none"
                 data-canopy-list=""
                 // Its rows have menus of their own: the app's Shift+F10 stands down here.

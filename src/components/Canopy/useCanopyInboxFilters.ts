@@ -29,6 +29,8 @@ import {
 import { allHostsKey, parseAllHostsKey } from "./canopyAllHosts";
 import type { CanopyApi } from "./canopyHostSource";
 import { useListReorderMotion } from "./useListReorderMotion";
+import { useCanopyRowsViewed } from "./useCanopyRowsViewed";
+import { canopyCardDomId } from "./CanopyCard";
 
 /**
  * What the inbox lists: the roles shown, the assistants and the work one of
@@ -224,26 +226,51 @@ export function useCanopyInboxFilters({
     () => [...listed, ...(archivedShown ? shownInbox.archived : [])],
     [listed, shownInbox, archivedShown]
   );
-  // What the open panel shows counts as seen: its urgent prompts leave the
-  // toolbar badge. Runs another scope or the Unread filter hides stay on it.
-  // Before paint, so a close in the same moment can't lose it.
+  // An urgent prompt counts as seen once its row has been in view for a second
+  // in the focused, open panel, or its pane is opened: a row below the fold
+  // nobody scrolled to keeps its ask on the badge. Runs another scope or the
+  // Unread filter hides stay on it too.
   const acknowledge = useCanopyStore((s) => s.acknowledge);
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  const viewable = isOpen && (everyHost || !otherHost) && !isProjectViewCached();
+  const rowsKey = visible.map((item) => item.runId).join(" ");
+  // Opening a run's pane is looking at its ask, whether or not the row was in view.
+  const acknowledgeOpened = useCallback(
+    (runId: string) => {
+      if (!isOpen || isProjectViewCached()) return;
+      if (everyHost) {
+        const run = parseAllHostsKey(runId);
+        if (run?.hostId === ownHostId) acknowledge([run.id]);
+      } else if (!otherHost) acknowledge([runId]);
+    },
+    [isOpen, otherHost, everyHost, ownHostId, acknowledge]
+  );
+  const viewedRuns = useCanopyRowsViewed(
+    scrollerRef,
+    viewable,
+    rowsKey,
+    `${listed.length}`,
+    canopyCardDomId,
+    acknowledgeOpened
+  );
+  // Before paint, so a close in the same moment can't lose a look already taken.
   useLayoutEffect(() => {
     // A view nobody can see acknowledges nothing, for the moment before it
     // closes; and the badge counts the window's own host, never another's runs.
     if (!isOpen || isProjectViewCached()) return;
+    const seen = visible.filter((item) => viewedRuns.has(item.runId));
     if (everyHost) {
       // Only the asks this host's rows show: another host's run is never one of them.
-      const own = visible.flatMap((item) => {
+      const own = seen.flatMap((item) => {
         const run = parseAllHostsKey(item.runId);
         return run?.hostId === ownHostId ? [run.id] : [];
       });
       if (own.length > 0) acknowledge(own);
       return;
     }
-    if (otherHost) return;
-    acknowledge(visible.map((item) => item.runId));
-  }, [isOpen, otherHost, everyHost, ownHostId, visible, acknowledge]);
+    if (otherHost || seen.length === 0) return;
+    acknowledge(seen.map((item) => item.runId));
+  }, [isOpen, otherHost, everyHost, ownHostId, visible, viewedRuns, acknowledge]);
   // Main holds a native page back only for an ask the panel shows: told the
   // rows as listed, filters included, whenever they change — and told again
   // when another host's link comes back, having dropped what it was told.
@@ -318,6 +345,8 @@ export function useCanopyInboxFilters({
     archivedShown,
     visible,
     listRef,
+    scrollerRef,
+    acknowledgeOpened,
     onlyReadMatch,
   };
 }
