@@ -12,6 +12,7 @@ import type { HandlerDependencies, IpcContext } from "../types.js";
 import type { PtyClient } from "../../services/PtyClient.js";
 import type {
   VoiceInputSettings,
+  VoiceInputSettingsPatch,
   VoiceTranscriptionProvider,
 } from "../../../shared/types/ipc/api.js";
 import type { VoiceSessionEndReason, VoiceStartOutcome } from "../../../shared/types/voice.js";
@@ -22,6 +23,11 @@ import { applyDictationCommands } from "../../services/voiceDictationCommands.js
 import { VOICE_DICTATION_AI_MODEL } from "../../../shared/config/voiceCorrection.js";
 import { normalizeVoiceLanguage } from "../../../shared/config/voiceLanguages.js";
 import { assembleKeyterms } from "../../services/voiceContextKeyterms.js";
+import {
+  dictionaryTerms,
+  sanitizeDictionary,
+  sanitizeSuggestions,
+} from "../../../shared/utils/voiceDictionary.js";
 import {
   AUDIO_BUFFER_MAX_BYTES,
   AUDIO_BUFFER_MAX_CHUNKS,
@@ -147,16 +153,37 @@ const SUPERSEDED: VoiceStartOutcome = { status: "superseded" };
 
 const VALID_TRANSCRIPTION_PROVIDERS: VoiceTranscriptionProvider[] = ["openai", "deepgram"];
 
-// Fields on VoiceInputSettings that are assembled at runtime and must never be
-// written to the persisted store.
-const RUNTIME_ONLY_VOICE_FIELDS = new Set<string>(["keyterms"]);
+// The only fields setSettings writes. Everything else is refused: `keyterms` is
+// assembled per session, the dictionary and its suggestion queue change only
+// through the voiceDictionary operations so a stale renderer copy can't
+// overwrite them, and a dotted key would reach inside either through the
+// store's dot-path setter. Typed against the patch, so a new setting must be
+// listed here to be saved at all.
+const WRITABLE_VOICE_FIELDS: Record<keyof VoiceInputSettingsPatch, true> = {
+  enabled: true,
+  openaiApiKey: true,
+  deepgramApiKey: true,
+  language: true,
+  transcriptionProvider: true,
+  transcriptionModel: true,
+  correctionEnabled: true,
+  correctionModel: true,
+  correctionCustomInstructions: true,
+  paragraphingStrategy: true,
+  resolveFileLinks: true,
+  deviceId: true,
+  organizationId: true,
+  projectId: true,
+  recordingMode: true,
+  learnFromCorrections: true,
+};
 
 const VOICE_INPUT_DEFAULTS: VoiceInputSettings = {
   enabled: false,
   openaiApiKey: "",
   deepgramApiKey: "",
   language: "en",
-  customDictionary: [],
+  dictionary: [],
   transcriptionProvider: "openai",
   transcriptionModel: "gpt-live-transcribe",
   correctionEnabled: false,
@@ -178,6 +205,7 @@ export function getVoiceSettings(): VoiceInputSettings {
     | (Partial<VoiceInputSettings> & {
         apiKey?: string;
         correctionApiKey?: string;
+        customDictionary?: unknown;
       })
     | undefined;
 
@@ -185,9 +213,26 @@ export function getVoiceSettings(): VoiceInputSettings {
   // spread. `deepgramApiKey` is now a first-class field, so it flows through
   // `rest` instead of being dropped. `keyterms` is runtime-only — drop any value
   // a stale store/migration left behind so it never seeds a session.
-  const { apiKey, correctionApiKey, keyterms, ...rest } = stored ?? {};
+  const { apiKey, correctionApiKey, keyterms, customDictionary, ...rest } = stored ?? {};
   void keyterms;
   const merged: VoiceInputSettings = { ...VOICE_INPUT_DEFAULTS, ...rest };
+
+  // migration036 turned the old word list into entries. A list that shows up
+  // again on a store already past it (a downgraded build, another branch on a
+  // shared dev profile) is folded in rather than lost, then dropped from disk.
+  // Anything else needing repair (a missing time, a case-only repeat, a broken
+  // suggestion) is fixed here and written back once, so a repaired value is
+  // the same on every read.
+  const storedEntries: unknown[] = Array.isArray(rest.dictionary) ? rest.dictionary : [];
+  merged.dictionary = sanitizeDictionary(
+    Array.isArray(customDictionary) ? [...storedEntries, ...customDictionary] : storedEntries,
+    Date.now()
+  );
+  merged.suggestedDictionary = sanitizeSuggestions(rest.suggestedDictionary ?? []);
+  const dictionaryRepaired =
+    customDictionary !== undefined ||
+    JSON.stringify(rest.dictionary ?? []) !== JSON.stringify(merged.dictionary) ||
+    JSON.stringify(rest.suggestedDictionary ?? []) !== JSON.stringify(merged.suggestedDictionary);
 
   // Migrate prior OpenAI keys into the unified field.
   if (!merged.openaiApiKey) {
@@ -240,6 +285,7 @@ export function getVoiceSettings(): VoiceInputSettings {
   if (
     apiKey !== undefined ||
     correctionApiKey !== undefined ||
+    dictionaryRepaired ||
     providerNeedsDefault ||
     staleTranscriptionModel ||
     staleCorrectionModel
@@ -443,13 +489,11 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     return getVoiceSettings();
   };
 
-  const handleSetSettings = async (patch: Partial<VoiceInputSettings>) => {
+  const handleSetSettings = async (patch: VoiceInputSettingsPatch) => {
     if (!patch || typeof patch !== "object") return;
     for (const [field, value] of Object.entries(patch)) {
       if (value === undefined) continue;
-      // `keyterms` is runtime-only — assembled per session, never persisted. Skip
-      // it so a renderer patch can't seed stored keyterms into future sessions.
-      if (RUNTIME_ONLY_VOICE_FIELDS.has(field)) continue;
+      if (!Object.hasOwn(WRITABLE_VOICE_FIELDS, field)) continue;
       store.set(`voiceInput.${field}`, value);
     }
   };
@@ -591,7 +635,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // reconnect paths reuse it unchanged. Assembly is capped internally (~500ms)
     // and failures are non-fatal — we just start without keyterms.
     const keytermsPromise = assembleKeyterms({
-      customDictionary: settings.customDictionary,
+      customDictionary: dictionaryTerms(settings.dictionary),
       ...resolveKeytermTarget(session.projectId, terminalId, deps.ptyClient),
       ptyClient: deps.ptyClient,
     });
@@ -918,7 +962,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       {
         model: settings.correctionModel,
         apiKey: settings.openaiApiKey,
-        customDictionary: settings.customDictionary,
+        customDictionary: dictionaryTerms(settings.dictionary),
         customInstructions: settings.correctionCustomInstructions,
         language: normalizeVoiceLanguage(settings.language),
         projectName: projectInfo.name,

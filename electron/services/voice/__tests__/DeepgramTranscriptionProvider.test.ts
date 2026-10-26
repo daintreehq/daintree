@@ -157,7 +157,7 @@ const BASE_SETTINGS: VoiceInputSettings = {
   openaiApiKey: "",
   deepgramApiKey: "dg-test",
   language: "en",
-  customDictionary: [],
+  dictionary: [],
   transcriptionProvider: "deepgram",
   transcriptionModel: "gpt-live-transcribe",
   correctionEnabled: false,

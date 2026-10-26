@@ -1868,7 +1868,7 @@ export interface GeneratedIpcInvokeMap {
         updates: Partial<
           Omit<
             import("../project.js").TerminalRecipe,
-            "id" | "worktreeId" | "projectId" | "createdAt"
+            "id" | "projectId" | "worktreeId" | "createdAt"
           >
         >;
       },
@@ -3821,6 +3821,38 @@ export interface GeneratedIpcInvokeMap {
   "terminal:trash": {
     args: [id: string];
     result: void;
+  };
+  "voice-dictionary:accept-suggestion": {
+    args: [__0: { word: string }];
+    result: import("./api.js").VoiceDictionaryState;
+  };
+  "voice-dictionary:add": {
+    args: [
+      input: {
+        term: string;
+        heardAs?: string[] | undefined;
+        source?: "manual" | "imported" | undefined;
+      },
+    ];
+    result: import("./api.js").VoiceDictionaryState;
+  };
+  "voice-dictionary:dismiss-suggestion": {
+    args: [__0: { word: string }];
+    result: import("./api.js").VoiceDictionaryState;
+  };
+  "voice-dictionary:record-suggestions": {
+    args: [__0: { candidates: { word: string; original: string }[] }];
+    result: import("./api.js").VoiceDictionaryState;
+  };
+  "voice-dictionary:remove": {
+    args: [__0: { term: string }];
+    result: import("./api.js").VoiceDictionaryState;
+  };
+  "voice-dictionary:update": {
+    args: [
+      __0: { term: string; changes: { term?: string | undefined; heardAs?: string[] | undefined } },
+    ];
+    result: import("./api.js").VoiceDictionaryState;
   };
   "voice-input:flush-paragraph": {
     args: [sessionId: string];

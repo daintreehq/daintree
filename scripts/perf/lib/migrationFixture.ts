@@ -99,6 +99,7 @@ type LegacyStoreV0 = Omit<
   | "forgeAudit"
   | "runHistory"
   | "pluginMcpAudit"
+  | "voiceInput"
 > & {
   appState: Omit<StoreSchema["appState"], "terminals"> & {
     terminals: Array<Omit<StoreSchema["appState"]["terminals"][number], "location">>;
@@ -144,6 +145,10 @@ type LegacyStoreV0 = Omit<
   forgeAudit: Omit<StoreSchema["forgeAudit"], "auditLog"> & { auditLog: RingRecord[] };
   runHistory: { records: RingRecord[] };
   pluginMcpAudit: Omit<StoreSchema["pluginMcpAudit"], "auditLog"> & { auditLog: RingRecord[] };
+  voiceInput: Omit<StoreSchema["voiceInput"], "dictionary"> & {
+    /** Turned into `dictionary` entries by migration 036. */
+    customDictionary: string[];
+  };
 };
 
 /**
@@ -1009,6 +1014,10 @@ async function buildHarness(): Promise<MigrationHarness> {
       if (mcpServer === null || "fullToolSurface" in mcpServer) scalarMigrationMisses += 1;
       // 035 drops the retired hibernation setting outright.
       if ("hibernation" in config) scalarMigrationMisses += 1;
+      // 036 replaces the flat word list with structured entries.
+      if (voice === null || "customDictionary" in voice || !Array.isArray(voice.dictionary)) {
+        scalarMigrationMisses += 1;
+      }
       // 029 keys the single tour record to the built-in tour and hoists mute.
       const onboarding = asRecord(config.onboarding);
       if (onboarding === null || "tour" in onboarding) scalarMigrationMisses += 1;

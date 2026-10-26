@@ -69,6 +69,7 @@ const registerMocks = vi.hoisted(() => ({
   registerForgeDataHandlers: vi.fn(),
   registerForgeAuditHandlers: vi.fn(),
   registerVoiceInputHandlers: vi.fn(),
+  registerVoiceDictionaryHandlers: vi.fn(),
   registerMcpServerHandlers: vi.fn(),
   registerHelpAssistantHandlers: vi.fn(),
   registerWebviewHandlers: vi.fn(),
@@ -243,6 +244,9 @@ vi.mock("../handlers/forgeAudit.js", () => ({
 }));
 vi.mock("../handlers/voiceInput.js", () => ({
   registerVoiceInputHandlers: registerMocks.registerVoiceInputHandlers,
+}));
+vi.mock("../handlers/voiceDictionary.js", () => ({
+  registerVoiceDictionaryHandlers: registerMocks.registerVoiceDictionaryHandlers,
 }));
 vi.mock("../handlers/mcpServer.js", () => ({
   registerMcpServerHandlers: registerMocks.registerMcpServerHandlers,

@@ -282,7 +282,7 @@ const BASE_SETTINGS: VoiceInputSettings = {
   openaiApiKey: "sk-test",
   deepgramApiKey: "",
   language: "en",
-  customDictionary: [],
+  dictionary: [],
   transcriptionProvider: "openai",
   transcriptionModel: "gpt-live-transcribe",
   correctionEnabled: false,

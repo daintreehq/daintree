@@ -32,6 +32,7 @@ import { migration032 } from "./032-assistant-host-consent-defaults.js";
 import { migration033 } from "./033-remove-retired-assistant-cli.js";
 import { migration034 } from "./034-assistant-host-control-fold.js";
 import { migration035 } from "./035-remove-hibernation-setting.js";
+import { migration036 } from "./036-structured-voice-dictionary.js";
 
 export const migrations: Migration[] = [
   migration002,
@@ -68,4 +69,5 @@ export const migrations: Migration[] = [
   migration033,
   migration034,
   migration035,
+  migration036,
 ];

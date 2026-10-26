@@ -8,6 +8,7 @@ import {
   recordingModeDescription,
 } from "../VoiceInputSettingsTab";
 import { VOICE_DICTATION_AI_MODEL } from "@shared/config/voiceCorrection";
+import type { SuggestedDictionaryEntry, VoiceDictionaryEntry } from "@shared/types";
 
 vi.mock("@/lib/voiceInputSettingsEvents", () => ({
   dispatchVoiceInputSettingsChanged: vi.fn(),
@@ -34,7 +35,7 @@ const BASE = {
   openaiApiKey: "",
   deepgramApiKey: "",
   language: "en",
-  customDictionary: [],
+  dictionary: [] as VoiceDictionaryEntry[],
   transcriptionProvider: "openai",
   transcriptionModel: "gpt-live-transcribe",
   correctionEnabled: false,
@@ -46,11 +47,15 @@ const BASE = {
   organizationId: "",
   projectId: "",
   recordingMode: "toggle",
-  suggestedDictionary: [],
+  suggestedDictionary: [] as SuggestedDictionaryEntry[],
   learnFromCorrections: true,
 };
 
-function install(settings: Partial<typeof BASE>, overrides: Record<string, unknown> = {}) {
+function install(
+  settings: Partial<typeof BASE>,
+  overrides: Record<string, unknown> = {},
+  dictionaryOverrides: Record<string, unknown> = {}
+) {
   const api = {
     getSettings: vi.fn().mockResolvedValue({ ...BASE, ...settings }),
     setSettings: vi.fn().mockResolvedValue(undefined),
@@ -60,13 +65,29 @@ function install(settings: Partial<typeof BASE>, overrides: Record<string, unkno
     validateApiKey: vi.fn().mockResolvedValue({ valid: true }),
     ...overrides,
   };
+  const voiceDictionary = {
+    add: vi.fn(),
+    remove: vi.fn(),
+    update: vi.fn(),
+    acceptSuggestion: vi.fn(),
+    dismissSuggestion: vi.fn(),
+    recordSuggestions: vi.fn(),
+    ...dictionaryOverrides,
+  };
   Object.defineProperty(window, "electron", {
-    value: { voiceInput: api, system: { openExternal: vi.fn() } },
+    value: { voiceInput: api, voiceDictionary, system: { openExternal: vi.fn() } },
     configurable: true,
     writable: true,
   });
-  return api;
+  return { ...api, dictionary: voiceDictionary };
 }
+
+const term = (value: string): VoiceDictionaryEntry => ({
+  term: value,
+  heardAs: [],
+  source: "manual",
+  addedAt: 1,
+});
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -409,5 +430,177 @@ describe("VoiceInputSettingsTab mic settings button", () => {
     const SETTLE_MS = 20;
     await new Promise((r) => setTimeout(r, SETTLE_MS));
     expect(container.textContent).not.toContain("Couldn't open the settings app");
+  });
+});
+
+describe("VoiceInputSettingsTab dictionary", () => {
+  const termField = () => screen.findByPlaceholderText<HTMLInputElement>("Add a term…");
+
+  it("adds a term through main and shows the dictionary main returns", async () => {
+    const api = install(
+      {},
+      {},
+      {
+        add: vi.fn().mockResolvedValue({
+          dictionary: [term("Zustand"), term("Daintree")],
+          suggestedDictionary: [],
+        }),
+      }
+    );
+    const { container } = render(<VoiceInputSettingsTab />);
+
+    const input = await termField();
+    fireEvent.change(input, { target: { value: "  Daintree " } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Remove Daintree" })).toBeTruthy()
+    );
+    expect(api.dictionary.add).toHaveBeenCalledWith({ term: "Daintree" });
+    // A term main already held, added from elsewhere, shows up too.
+    expect(screen.getByRole("button", { name: "Remove Zustand" })).toBeTruthy();
+    expect(input.value).toBe("");
+    expect(container.textContent).toContain("2 terms");
+    expect(api.setSettings).not.toHaveBeenCalled();
+  });
+
+  it("shows the queue main holds after an accept, keeping a word learned meanwhile", async () => {
+    const api = install(
+      {
+        suggestedDictionary: [
+          { word: "Zustand", utterance: "zoo stand", suggestedAt: 1, frequency: 1 },
+        ],
+      },
+      {},
+      {
+        acceptSuggestion: vi.fn().mockResolvedValue({
+          dictionary: [{ ...term("Zustand"), heardAs: ["zoo stand"], source: "learned" }],
+          suggestedDictionary: [
+            { word: "Tailwind", utterance: "tail wind", suggestedAt: 2, frequency: 1 },
+          ],
+        }),
+      }
+    );
+    render(<VoiceInputSettingsTab />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Add Zustand to dictionary" }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Remove Zustand" })).toBeTruthy()
+    );
+    expect(api.dictionary.acceptSuggestion).toHaveBeenCalledWith({ word: "Zustand" });
+    expect(screen.getByRole("button", { name: "Add Tailwind to dictionary" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Add Zustand to dictionary" })).toBeNull();
+    expect(api.setSettings).not.toHaveBeenCalled();
+  });
+
+  it("leaves the page as it was when a change fails, and retries it", async () => {
+    const add = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("EROFS"))
+      .mockResolvedValue({ dictionary: [term("Daintree")], suggestedDictionary: [] });
+    install({}, {}, { add });
+    const { container } = render(<VoiceInputSettingsTab />);
+
+    const input = await termField();
+    fireEvent.change(input, { target: { value: "Daintree" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() =>
+      expect(container.textContent).toContain("The dictionary is back to its previous value.")
+    );
+    expect(input.value).toBe("Daintree");
+    expect(screen.queryByRole("button", { name: "Remove Daintree" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Remove Daintree" })).toBeTruthy()
+    );
+    expect(add).toHaveBeenCalledTimes(2);
+    expect(input.value).toBe("");
+    expect(container.textContent).not.toContain("back to its previous value");
+  });
+
+  it("removes a term and dismisses a suggestion through main", async () => {
+    const api = install(
+      {
+        dictionary: [term("Daintree"), term("Vite")],
+        suggestedDictionary: [
+          { word: "Tailwind", utterance: "tail wind", suggestedAt: 1, frequency: 1 },
+        ],
+      },
+      {},
+      {
+        remove: vi.fn().mockResolvedValue({
+          dictionary: [term("Vite")],
+          suggestedDictionary: [
+            { word: "Tailwind", utterance: "tail wind", suggestedAt: 1, frequency: 1 },
+          ],
+        }),
+        dismissSuggestion: vi.fn().mockResolvedValue({
+          dictionary: [term("Vite")],
+          suggestedDictionary: [],
+        }),
+      }
+    );
+    render(<VoiceInputSettingsTab />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Remove Daintree" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Remove Daintree" })).toBeNull()
+    );
+    expect(api.dictionary.remove).toHaveBeenCalledWith({ term: "Daintree" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss Tailwind" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Dismiss Tailwind" })).toBeNull()
+    );
+    expect(api.dictionary.dismissSuggestion).toHaveBeenCalledWith({ word: "Tailwind" });
+    expect(screen.getByRole("button", { name: "Remove Vite" })).toBeTruthy();
+    expect(api.setSettings).not.toHaveBeenCalled();
+  });
+
+  it("keeps what was typed while an add was in flight", async () => {
+    let finish: (state: unknown) => void = () => {};
+    install({}, {}, { add: vi.fn(() => new Promise((resolve) => (finish = resolve))) });
+    render(<VoiceInputSettingsTab />);
+
+    const input = await termField();
+    fireEvent.change(input, { target: { value: "Daintree" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.change(input, { target: { value: "Zust" } });
+    finish({ dictionary: [term("Daintree")], suggestedDictionary: [] });
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Remove Daintree" })).toBeTruthy()
+    );
+    expect(input.value).toBe("Zust");
+  });
+
+  it("retries a failed settings save against what the page shows now", async () => {
+    let finishSecond: () => void = () => {};
+    const setSettings = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("EROFS"))
+      .mockImplementationOnce(() => new Promise<void>((resolve) => (finishSecond = resolve)))
+      .mockRejectedValueOnce(new Error("EROFS"));
+    install({}, { setSettings });
+    render(<VoiceInputSettingsTab />);
+
+    const learn = await screen.findByRole("switch", { name: "Learn words from corrections" });
+    fireEvent.click(learn);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy());
+    expect(learn.getAttribute("aria-checked")).toBe("true");
+
+    // A second save is still in flight when the first failure is retried, and the retry fails.
+    fireEvent.click(learn);
+    await waitFor(() => expect(learn.getAttribute("aria-checked")).toBe("false"));
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(setSettings).toHaveBeenCalledTimes(3));
+    finishSecond();
+
+    // The in-flight save landed, so rolling back must not undo it.
+    await waitFor(() => expect(learn.getAttribute("aria-checked")).toBe("false"));
   });
 });

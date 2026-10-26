@@ -29,7 +29,7 @@ describe("VoiceTranscriptionService integration", () => {
           openaiApiKey: OPENAI_API_KEY,
           deepgramApiKey: "",
           language: "en",
-          customDictionary: [],
+          dictionary: [],
           transcriptionProvider: "openai",
           transcriptionModel: "gpt-live-transcribe",
           // Non-empty so an opt-in run actually exercises the new `keywords` +

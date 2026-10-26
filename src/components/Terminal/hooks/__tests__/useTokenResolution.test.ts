@@ -32,10 +32,18 @@ vi.mock("@/store/commandHistoryStore", () => ({
 }));
 
 // learnFromCorrections=false short-circuits the dictionary-learning side effect.
-vi.mock("@/store/voiceRecordingStore", () => ({
-  useVoiceRecordingStore: {
-    getState: () => ({ learnFromCorrections: false, panelBuffers: {} }),
+const voiceState = vi.hoisted(() => ({
+  value: {
+    learnFromCorrections: false,
+    panelBuffers: {} as Record<
+      string,
+      { sessionCorrectedText?: string; sessionDraftStart?: number }
+    >,
+    setSessionCorrectedText: (_panelId: string, _text: string | null) => {},
   },
+}));
+vi.mock("@/store/voiceRecordingStore", () => ({
+  useVoiceRecordingStore: { getState: () => voiceState.value },
 }));
 
 type Params = Parameters<typeof useTokenResolution>[0];
@@ -499,5 +507,94 @@ describe("useTokenResolution.sendText — targeted submit", () => {
 
     expect(sent).toBe(false);
     expect(submit).not.toHaveBeenCalled();
+  });
+});
+
+describe("useTokenResolution dictionary learning", () => {
+  const defaults = { ...voiceState.value };
+  const installElectron = (value: Record<string, unknown>) =>
+    Object.defineProperty(window, "electron", { value, configurable: true, writable: true });
+
+  beforeEach(() => {
+    voiceState.value = { ...defaults };
+  });
+
+  it("reports a corrected mishearing to main instead of rewriting settings itself", async () => {
+    const recordSuggestions = vi
+      .fn()
+      .mockResolvedValue({ dictionary: [], suggestedDictionary: [] });
+    const getSettings = vi.fn();
+    const setSettings = vi.fn();
+    installElectron({
+      git: { getWorkingDiff: vi.fn() },
+      voiceInput: { getSettings, setSettings },
+      voiceDictionary: { recordSuggestions },
+    });
+    const setSessionCorrectedText = vi.fn();
+    voiceState.value = {
+      learnFromCorrections: true,
+      panelBuffers: {
+        t1: { sessionCorrectedText: "use zoo stand for state", sessionDraftStart: 0 },
+      },
+      setSessionCorrectedText,
+    };
+
+    const { sendText, onSend } = setup();
+    await act(async () => {
+      await sendText("use Zustand for state");
+    });
+
+    expect(onSend).toHaveBeenCalledTimes(1);
+    expect(recordSuggestions).toHaveBeenCalledWith({
+      candidates: [{ word: "Zustand", original: "zoo stand" }],
+    });
+    expect(setSessionCorrectedText).toHaveBeenCalledWith("t1", null);
+    expect(getSettings).not.toHaveBeenCalled();
+    expect(setSettings).not.toHaveBeenCalled();
+  });
+
+  it("still sends when main can't be reached", async () => {
+    const recordSuggestions = vi.fn().mockRejectedValue(new Error("gone"));
+    installElectron({
+      git: { getWorkingDiff: vi.fn() },
+      voiceDictionary: { recordSuggestions },
+    });
+    voiceState.value = {
+      ...defaults,
+      learnFromCorrections: true,
+      panelBuffers: {
+        t1: { sessionCorrectedText: "use zoo stand for state", sessionDraftStart: 0 },
+      },
+    };
+
+    const { sendText, onSend } = setup();
+    await act(async () => {
+      await expect(sendText("use Zustand for state")).resolves.toBe(true);
+    });
+    expect(onSend).toHaveBeenCalledTimes(1);
+    expect(recordSuggestions).toHaveBeenCalledWith({
+      candidates: [{ word: "Zustand", original: "zoo stand" }],
+    });
+  });
+
+  it("reports nothing while learning from corrections is off", async () => {
+    const recordSuggestions = vi.fn();
+    installElectron({
+      git: { getWorkingDiff: vi.fn() },
+      voiceDictionary: { recordSuggestions },
+    });
+    voiceState.value = {
+      ...defaults,
+      learnFromCorrections: false,
+      panelBuffers: {
+        t1: { sessionCorrectedText: "use zoo stand for state", sessionDraftStart: 0 },
+      },
+    };
+
+    const { sendText } = setup();
+    await act(async () => {
+      await sendText("use Zustand for state");
+    });
+    expect(recordSuggestions).not.toHaveBeenCalled();
   });
 });

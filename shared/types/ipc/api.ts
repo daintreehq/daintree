@@ -2148,7 +2148,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   // keyterms come from it alone.
   voiceInput: GeneratedElectronAPI["voiceInput"] & {
     getSettings(): Promise<VoiceInputSettings>;
-    setSettings(settings: Partial<VoiceInputSettings>): Promise<void>;
+    setSettings(settings: VoiceInputSettingsPatch): Promise<void>;
     sendAudioChunk(sessionId: string, chunk: ArrayBuffer): void;
     onTranscriptionDelta(
       callback: (payload: {
@@ -2897,7 +2897,12 @@ export interface VoiceInputSettings {
   /** API key for the Deepgram transcription provider. Empty string when unset. */
   deepgramApiKey: string;
   language: string;
-  customDictionary: string[];
+  /**
+   * The user's dictionary, oldest entry first. Main owns every write: the
+   * renderer changes it only through the `voiceDictionary` operations, never
+   * through `setSettings`.
+   */
+  dictionary: VoiceDictionaryEntry[];
   /** Which transcription backend to use. Defaults to "openai". */
   transcriptionProvider: VoiceTranscriptionProvider;
   transcriptionModel: VoiceTranscriptionModel;
@@ -2928,11 +2933,37 @@ export interface VoiceInputSettings {
   keyterms?: string[];
   /**
    * Words learned from the user's manual corrections to dictated text, pending
-   * explicit accept/dismiss. Never added to `customDictionary` silently.
+   * explicit accept/dismiss. Never added to `dictionary` silently, and, like
+   * it, written only by main.
    */
   suggestedDictionary: SuggestedDictionaryEntry[];
   /** When enabled, manual corrections to dictated text surface as suggested dictionary words. Defaults to true. */
   learnFromCorrections: boolean;
+}
+
+/** What `voiceInput.setSettings` accepts: everything except the main-owned and runtime-only fields. */
+export type VoiceInputSettingsPatch = Partial<
+  Omit<VoiceInputSettings, "dictionary" | "suggestedDictionary" | "keyterms">
+>;
+
+/** Where a dictionary entry came from. */
+export type VoiceDictionarySource = "manual" | "learned" | "imported";
+
+/** One dictionary term and how it tends to be misheard. */
+export interface VoiceDictionaryEntry {
+  /** The written form, in the exact casing to produce (e.g. "Zustand"). Unique ignoring case. */
+  term: string;
+  /** Phrases the transcriber has produced for this term (e.g. "zoo stand"), unique ignoring case. */
+  heardAs: string[];
+  source: VoiceDictionarySource;
+  /** Epoch ms when the entry was added. Entries migrated from the old word list share one time. */
+  addedAt: number;
+}
+
+/** The dictionary and its suggestion queue as main holds them after an operation. */
+export interface VoiceDictionaryState {
+  dictionary: VoiceDictionaryEntry[];
+  suggestedDictionary: SuggestedDictionaryEntry[];
 }
 
 /** A dictionary word suggested from a user's manual correction, with provenance. */

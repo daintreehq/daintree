@@ -109,7 +109,7 @@ vi.mock("../../../store.js", () => ({
           openaiApiKey: "sk-test",
           correctionEnabled: true,
           correctionModel: "gpt-6-luna",
-          customDictionary: [],
+          dictionary: [],
           correctionCustomInstructions: "",
           language: "en",
           transcriptionModel: "gpt-live-transcribe",
@@ -538,7 +538,7 @@ describe("voiceInput — manual paragraphing strategy", () => {
       openaiApiKey: "sk-test",
       correctionEnabled: true,
       correctionModel: "gpt-6-luna",
-      customDictionary: [],
+      dictionary: [],
       correctionCustomInstructions: "",
       language: "en",
       transcriptionModel: "gpt-live-transcribe",
@@ -594,7 +594,7 @@ describe("voiceInput — context keyterms wiring", () => {
       openaiApiKey: provider === "openai" ? "sk-test" : "",
       deepgramApiKey: provider === "deepgram" ? "dg-test" : "",
       language: "en",
-      customDictionary: [],
+      dictionary: [],
       transcriptionProvider: provider,
       transcriptionModel: "gpt-live-transcribe",
       correctionEnabled: false,
@@ -663,6 +663,33 @@ describe("voiceInput — context keyterms wiring", () => {
     expect(shared.startCalls[0]).toMatchObject({
       transcriptionProvider: "openai",
       keyterms: ["alpha", "beta"],
+    });
+  });
+
+  it("hands keyterm assembly and correction the dictionary's written terms", async () => {
+    const { store } = await import("../../../store.js");
+    const dictionary = [
+      { term: "Daintree", heardAs: ["dane tree"], source: "manual", addedAt: 1 },
+      { term: "Zustand", heardAs: [], source: "learned", addedAt: 2 },
+    ];
+    vi.mocked(store.get).mockReturnValue({
+      ...providerSettings("openai"),
+      correctionEnabled: true,
+      dictionary,
+    });
+    const { assembleKeyterms } = await import("../../../services/voiceContextKeyterms.js");
+
+    await startFn(fakeEvent, nextSessionId());
+    await (getHandler("voice-input:correct") as (e: unknown, r: unknown) => Promise<unknown>)(
+      fakeEvent,
+      { rawText: "open dane tree" }
+    );
+
+    expect(vi.mocked(assembleKeyterms).mock.calls.at(-1)?.[0]).toMatchObject({
+      customDictionary: ["Daintree", "Zustand"],
+    });
+    expect(shared.correctionCalls.at(-1)?.settings).toMatchObject({
+      customDictionary: ["Daintree", "Zustand"],
     });
   });
 
@@ -740,7 +767,7 @@ describe("getVoiceSettings migration", () => {
       enabled: true,
       correctionApiKey: "sk-correction",
       language: "en",
-      customDictionary: [],
+      dictionary: [],
       transcriptionModel: "gpt-live-transcribe",
       correctionEnabled: false,
       correctionModel: "gpt-5-mini",
@@ -1197,7 +1224,7 @@ describe("voiceInput — spoken commands outside English", () => {
         openaiApiKey: "sk-test",
         correctionEnabled: false,
         correctionModel: "gpt-6-luna",
-        customDictionary: [],
+        dictionary: [],
         correctionCustomInstructions: "",
         language,
         transcriptionModel: "gpt-live-transcribe",

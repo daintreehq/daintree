@@ -76,6 +76,7 @@ import { buildCopyTreeHistoryPreloadBindings } from "./ipc/handlers/copyTreeHist
 import { buildGeminiPreloadBindings } from "./ipc/handlers/gemini.preload.js";
 import { buildCodexPreloadBindings } from "./ipc/handlers/codex.preload.js";
 import { buildClaudePreloadBindings } from "./ipc/handlers/claude.preload.js";
+import { buildVoiceDictionaryPreloadBindings } from "./ipc/handlers/voiceDictionary.preload.js";
 import { buildOnboardingPreloadBindings } from "./ipc/handlers/onboarding.preload.js";
 import { buildShortcutHintsPreloadBindings } from "./ipc/handlers/shortcutHints.preload.js";
 import { buildForgeRecommendationPreloadBindings } from "./ipc/handlers/forgeRecommendation.preload.js";
@@ -2917,7 +2918,6 @@ function buildElectronApi(): ElectronAPI {
           openaiApiKey: string;
           deepgramApiKey: string;
           language: string;
-          customDictionary: string[];
           transcriptionProvider: "openai" | "deepgram";
           transcriptionModel: "gpt-live-transcribe";
           correctionEnabled: boolean;
@@ -2973,6 +2973,8 @@ function buildElectronApi(): ElectronAPI {
         }) => void
       ) => _typedOn(CHANNELS.VOICE_INPUT_FILE_TOKEN_RESOLVED, callback),
     },
+
+    voiceDictionary: buildVoiceDictionaryPreloadBindings(_unwrappingInvoke),
 
     mcpServer: {
       ...buildMcpServerPreloadBindings(_unwrappingInvoke),

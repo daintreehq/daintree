@@ -907,6 +907,12 @@ export const CHANNELS = {
   VOICE_INPUT_PARAGRAPH_BOUNDARY: "voice-input:paragraph-boundary",
   VOICE_INPUT_FILE_TOKEN_RESOLVED: "voice-input:file-token-resolved",
   VOICE_INPUT_SESSION_ENDED: "voice-input:session-ended",
+  VOICE_DICTIONARY_ADD: "voice-dictionary:add",
+  VOICE_DICTIONARY_REMOVE: "voice-dictionary:remove",
+  VOICE_DICTIONARY_UPDATE: "voice-dictionary:update",
+  VOICE_DICTIONARY_ACCEPT_SUGGESTION: "voice-dictionary:accept-suggestion",
+  VOICE_DICTIONARY_DISMISS_SUGGESTION: "voice-dictionary:dismiss-suggestion",
+  VOICE_DICTIONARY_RECORD_SUGGESTIONS: "voice-dictionary:record-suggestions",
 
   // Help assistant settings channels
   HELP_ASSISTANT_GET_SETTINGS: "help-assistant:get-settings",

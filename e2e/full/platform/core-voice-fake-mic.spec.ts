@@ -65,7 +65,7 @@ test.describe.serial("E2E: Voice Input — fake microphone smoke", () => {
       openaiApiKey: "sk-e2e-test-key-not-real",
       deepgramApiKey: "dg-e2e-test-key-not-real",
       language: "en",
-      customDictionary: [],
+      dictionary: [],
       transcriptionModel: "gpt-live-transcribe",
       correctionEnabled: false,
       correctionModel: "gpt-6-luna",

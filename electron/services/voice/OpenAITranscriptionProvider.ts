@@ -470,7 +470,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     logInfo(`${P} Starting session ${mySessionId}`, {
       voiceSessionId,
       language: settings.language,
-      hasDictionary: settings.customDictionary.length > 0,
+      hasDictionary: settings.dictionary.length > 0,
     });
     this.cleanupPreviousSession();
     this.sessionId = mySessionId;
@@ -532,7 +532,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       url: OPENAI_REALTIME_URL,
       model: OPENAI_TRANSCRIPTION_MODEL,
       language: normalizeVoiceLanguage(settings.language),
-      customDictionaryTerms: settings.customDictionary.length,
+      customDictionaryTerms: settings.dictionary.length,
       reconnectAttempt: this.isReconnecting ? this.reconnectAttempt : 0,
     });
 

@@ -44,6 +44,8 @@ const SENSITIVE = new Set([
   "candidates",
   "matched",
   "customDictionary",
+  "dictionary",
+  "heardAs",
   "customInstructions",
   "recentContext",
   "utterance",

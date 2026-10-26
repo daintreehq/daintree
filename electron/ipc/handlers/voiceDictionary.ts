@@ -1,0 +1,138 @@
+// eager-import-allow: reads and writes the voice dictionary via store.get/store.set synchronously in the IPC handler
+import { z } from "zod";
+import { store } from "../../store.js";
+import { defineIpcNamespace, opValidated } from "../define.js";
+import { getVoiceSettings } from "./voiceInput.js";
+import { VOICE_DICTIONARY_METHOD_CHANNELS } from "./voiceDictionary.preload.js";
+import type { VoiceDictionaryState, VoiceInputSettings } from "../../../shared/types/ipc/api.js";
+import {
+  acceptSuggestion,
+  addDictionaryEntry,
+  dismissSuggestion,
+  mergeSuggestions,
+  removeDictionaryEntry,
+  updateDictionaryEntry,
+} from "../../../shared/utils/voiceDictionary.js";
+
+// Bounds on the raw payload only; the dictionary model trims and applies the
+// real term length cap, so a value over it is refused with a reason. A term
+// that names an existing entry is unbounded: one kept from the old word list
+// can be longer than any new term, and must still be removable.
+const RAW_TEXT_MAX = 1_000;
+const LIST_MAX = 200;
+const text = z.string().max(RAW_TEXT_MAX);
+const existing = z.string();
+const heardAs = z.array(text).max(LIST_MAX);
+
+const addSchema = z.object({
+  term: text,
+  heardAs: heardAs.optional(),
+  source: z.enum(["manual", "imported"]).optional(),
+});
+const removeSchema = z.object({ term: existing });
+const updateSchema = z.object({
+  term: existing,
+  changes: z.object({ term: text.optional(), heardAs: heardAs.optional() }),
+});
+const suggestionSchema = z.object({ word: existing });
+const recordSchema = z.object({
+  candidates: z.array(z.object({ word: text, original: text })).max(LIST_MAX),
+});
+
+/**
+ * One read-modify-write of the stored dictionary. Main is the only writer and
+ * runs this synchronously, so no other operation can land between the read
+ * and the write: two changes made at once both survive. Both lists go back in
+ * one write, so an accept can't land half done, and nothing is written when
+ * nothing changed.
+ */
+function change(
+  apply: (state: VoiceDictionaryState, settings: VoiceInputSettings) => VoiceDictionaryState
+): VoiceDictionaryState {
+  // getVoiceSettings has already repaired and persisted what it read.
+  const settings = getVoiceSettings();
+  const current: VoiceDictionaryState = {
+    dictionary: settings.dictionary,
+    suggestedDictionary: settings.suggestedDictionary,
+  };
+  const next = apply(current, settings);
+  if (
+    next.dictionary !== current.dictionary ||
+    next.suggestedDictionary !== current.suggestedDictionary
+  ) {
+    // The stored object, not `settings`: that one carries env-var key overrides.
+    store.set("voiceInput", {
+      ...store.get("voiceInput"),
+      dictionary: next.dictionary,
+      suggestedDictionary: next.suggestedDictionary,
+    });
+  }
+  return next;
+}
+
+export const voiceDictionaryNamespace = defineIpcNamespace({
+  name: "voiceDictionary",
+  ops: {
+    add: opValidated(
+      VOICE_DICTIONARY_METHOD_CHANNELS.add,
+      addSchema,
+      async (input): Promise<VoiceDictionaryState> =>
+        change((state) => ({
+          ...state,
+          dictionary: addDictionaryEntry(state.dictionary, input, Date.now()),
+        }))
+    ),
+    remove: opValidated(
+      VOICE_DICTIONARY_METHOD_CHANNELS.remove,
+      removeSchema,
+      async ({ term }): Promise<VoiceDictionaryState> =>
+        change((state) => ({ ...state, dictionary: removeDictionaryEntry(state.dictionary, term) }))
+    ),
+    update: opValidated(
+      VOICE_DICTIONARY_METHOD_CHANNELS.update,
+      updateSchema,
+      async ({ term, changes }): Promise<VoiceDictionaryState> =>
+        change((state) => ({
+          ...state,
+          dictionary: updateDictionaryEntry(state.dictionary, term, changes),
+        }))
+    ),
+    acceptSuggestion: opValidated(
+      VOICE_DICTIONARY_METHOD_CHANNELS.acceptSuggestion,
+      suggestionSchema,
+      async ({ word }): Promise<VoiceDictionaryState> =>
+        change((state) => acceptSuggestion(state, word, Date.now()))
+    ),
+    dismissSuggestion: opValidated(
+      VOICE_DICTIONARY_METHOD_CHANNELS.dismissSuggestion,
+      suggestionSchema,
+      async ({ word }): Promise<VoiceDictionaryState> =>
+        change((state) => ({
+          ...state,
+          suggestedDictionary: dismissSuggestion(state.suggestedDictionary, word),
+        }))
+    ),
+    // The learner reports what it saw and main merges it into the queue it
+    // holds, so the learner's copy can't overwrite an accept or dismiss made
+    // meanwhile. A word dismissed earlier can still be suggested again.
+    recordSuggestions: opValidated(
+      VOICE_DICTIONARY_METHOD_CHANNELS.recordSuggestions,
+      recordSchema,
+      async ({ candidates }): Promise<VoiceDictionaryState> =>
+        change((state, settings) => {
+          if (!settings.learnFromCorrections) return state;
+          const next = mergeSuggestions(
+            candidates,
+            state.dictionary,
+            state.suggestedDictionary,
+            Date.now()
+          );
+          return next ? { ...state, suggestedDictionary: next } : state;
+        })
+    ),
+  },
+});
+
+export function registerVoiceDictionaryHandlers(): () => void {
+  return voiceDictionaryNamespace.register();
+}

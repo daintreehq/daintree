@@ -39,8 +39,12 @@ import { voiceErrorLogFields } from "@shared/utils/voiceLogFields";
 import { VOICE_LANGUAGES } from "@shared/config/voiceLanguages";
 import { MAX_DICTIONARY_KEYTERMS } from "@shared/config/voiceKeyterms";
 import { CORE_CORRECTION_PROMPT, VOICE_DICTATION_AI_MODEL } from "@shared/config/voiceCorrection";
+import { MAX_DICTIONARY_TERM_LENGTH } from "@shared/utils/voiceDictionary";
 import type {
   VoiceInputSettings,
+  VoiceInputSettingsPatch,
+  VoiceDictionaryEntry,
+  VoiceDictionaryState,
   SuggestedDictionaryEntry,
   MicPermissionStatus,
   VoiceParagraphingStrategy,
@@ -71,7 +75,7 @@ const DEFAULT_SETTINGS: VoiceInputSettings = {
   openaiApiKey: "",
   deepgramApiKey: "",
   language: "en",
-  customDictionary: [],
+  dictionary: [],
   transcriptionProvider: "openai",
   transcriptionModel: "gpt-live-transcribe",
   correctionEnabled: false,
@@ -89,28 +93,27 @@ const DEFAULT_SETTINGS: VoiceInputSettings = {
 
 type SaveGroup = "setup" | "microphone" | "credentials" | "behavior" | "dictionary" | "correction";
 
+type PatchKey = keyof VoiceInputSettingsPatch;
+
 // Keys report their own save outcome in the key row, so they never raise a section banner.
-const SAVE_GROUP_BY_KEY: Partial<Record<keyof VoiceInputSettings, SaveGroup>> = {
+const SAVE_GROUP_BY_KEY: Partial<Record<PatchKey, SaveGroup>> = {
   openaiApiKey: "credentials",
   deepgramApiKey: "credentials",
   deviceId: "microphone",
   language: "behavior",
   paragraphingStrategy: "behavior",
   recordingMode: "behavior",
-  customDictionary: "dictionary",
-  suggestedDictionary: "dictionary",
   learnFromCorrections: "dictionary",
   correctionEnabled: "correction",
   correctionCustomInstructions: "correction",
   resolveFileLinks: "correction",
 };
 
-const SETTING_KEYS: readonly (keyof VoiceInputSettings)[] = [
+const SETTING_KEYS: readonly PatchKey[] = [
   "enabled",
   "openaiApiKey",
   "deepgramApiKey",
   "language",
-  "customDictionary",
   "transcriptionProvider",
   "transcriptionModel",
   "correctionEnabled",
@@ -122,15 +125,14 @@ const SETTING_KEYS: readonly (keyof VoiceInputSettings)[] = [
   "organizationId",
   "projectId",
   "recordingMode",
-  "suggestedDictionary",
   "learnFromCorrections",
 ];
 
-function patchedKeys(patch: Partial<VoiceInputSettings>): (keyof VoiceInputSettings)[] {
+function patchedKeys(patch: VoiceInputSettingsPatch): PatchKey[] {
   return SETTING_KEYS.filter((key) => key in patch);
 }
 
-function saveGroupOf(patch: Partial<VoiceInputSettings>): SaveGroup {
+function saveGroupOf(patch: VoiceInputSettingsPatch): SaveGroup {
   for (const key of patchedKeys(patch)) {
     const group = SAVE_GROUP_BY_KEY[key];
     if (group) return group;
@@ -138,7 +140,7 @@ function saveGroupOf(patch: Partial<VoiceInputSettings>): SaveGroup {
   return "setup";
 }
 
-function copySetting<K extends keyof VoiceInputSettings>(
+function copySetting<K extends PatchKey>(
   target: VoiceInputSettings,
   source: VoiceInputSettings,
   key: K
@@ -146,7 +148,7 @@ function copySetting<K extends keyof VoiceInputSettings>(
   target[key] = source[key];
 }
 
-const SETTING_LABEL: Partial<Record<keyof VoiceInputSettings, string>> = {
+const SETTING_LABEL: Partial<Record<PatchKey, string>> = {
   enabled: "Dictation",
   transcriptionProvider: "Transcription provider",
   organizationId: "Organization ID",
@@ -155,18 +157,18 @@ const SETTING_LABEL: Partial<Record<keyof VoiceInputSettings, string>> = {
   language: "Language",
   paragraphingStrategy: "Paragraph breaks",
   recordingMode: "Recording mode",
-  customDictionary: "The dictionary",
-  suggestedDictionary: "The suggestions",
   learnFromCorrections: "Learn words from corrections",
   correctionEnabled: "Clean up transcriptions",
   correctionCustomInstructions: "Custom instructions",
   resolveFileLinks: "Resolve file references",
 };
 
-interface SaveFailure {
-  group: SaveGroup;
-  patch: Partial<VoiceInputSettings>;
-}
+// A settings save is retried through the current `update`, so the retry rolls back
+// to what the page shows now. A dictionary change reads no page state, so it can
+// carry its own retry.
+type SaveFailure =
+  | { group: SaveGroup; patch: VoiceInputSettingsPatch }
+  | { group: "dictionary"; label: string; retry: () => void };
 
 type ConclusiveMicStatus = "granted" | "denied" | "restricted";
 
@@ -270,7 +272,7 @@ export function VoiceInputSettingsTab() {
   // Optimistic apply. A rejected save puts back the keys it touched (unless a later
   // change has already moved them) and parks the failure on the group it belongs to,
   // so the page never silently shows a value that did not persist.
-  const update = async (patch: Partial<VoiceInputSettings>): Promise<boolean> => {
+  const update = async (patch: VoiceInputSettingsPatch): Promise<boolean> => {
     const previous = settings;
     const group = saveGroupOf(patch);
     // A key only counts as saved (or removed) once it has persisted: the row's chip
@@ -298,18 +300,23 @@ export function VoiceInputSettingsTab() {
     }
   };
 
-  const saveError = (group: SaveGroup) =>
-    saveFailure?.group === group ? (
+  const saveError = (group: SaveGroup) => {
+    if (saveFailure?.group !== group) return null;
+    const failure = saveFailure;
+    const label =
+      "patch" in failure
+        ? (patchedKeys(failure.patch)
+            .map((key) => SETTING_LABEL[key])
+            .find(Boolean) ?? "The setting")
+        : failure.label;
+    return (
       <SettingsLoadErrorBanner
         title="Couldn't save that change"
-        message={`${
-          patchedKeys(saveFailure.patch)
-            .map((key) => SETTING_LABEL[key])
-            .find(Boolean) ?? "The setting"
-        } is back to its previous value.`}
-        onRetry={() => void update(saveFailure.patch)}
+        message={`${label} is back to its previous value.`}
+        onRetry={"patch" in failure ? () => void update(failure.patch) : failure.retry}
       />
-    ) : null;
+    );
+  };
 
   // Best-effort: a transient IPC failure is inconclusive, not an answer.
   const readMicPermission = async (): Promise<MicPermissionStatus | undefined> => {
@@ -382,39 +389,64 @@ export function VoiceInputSettingsTab() {
     else setMicNote("Couldn't check microphone access. Try again in a moment.");
   };
 
+  // Main owns the dictionary and its suggestion queue: each change is one
+  // operation there, and the page shows what main holds afterwards, so a word
+  // learned while the page is open survives a change made here. Not optimistic:
+  // a failed change leaves the page as it was, with the banner and a retry.
+  const changeDictionary = async (
+    label: string,
+    run: () => Promise<VoiceDictionaryState>,
+    onSaved?: () => void
+  ): Promise<void> => {
+    try {
+      const next = await run();
+      setSettings((current) => ({
+        ...current,
+        dictionary: next.dictionary,
+        suggestedDictionary: next.suggestedDictionary,
+      }));
+      setSaveFailure((current) => (current?.group === "dictionary" ? null : current));
+      onSaved?.();
+    } catch (err) {
+      setSaveFailure({
+        group: "dictionary",
+        label,
+        retry: () => void changeDictionary(label, run, onSaved),
+      });
+      logWarn("Failed to change the voice dictionary", voiceErrorLogFields(err));
+    }
+  };
+
   const addDictionaryWord = () => {
-    const word = newDictionaryWord.trim();
-    if (!word || settings.customDictionary.includes(word)) return;
-    const next = [...settings.customDictionary, word];
-    void update({ customDictionary: next });
-    setNewDictionaryWord("");
+    const term = newDictionaryWord.trim();
+    if (!term) return;
     dictionaryInputRef.current?.focus();
+    void changeDictionary(
+      "The dictionary",
+      () => window.electron.voiceDictionary.add({ term }),
+      // Keep anything typed while the add was in flight.
+      () => setNewDictionaryWord((current) => (current.trim() === term ? "" : current))
+    );
   };
 
   // The removed chip took focus with it; hand it to the field a keyboard user adds from.
-  const removeDictionaryWord = (word: string) => {
-    void update({ customDictionary: settings.customDictionary.filter((w) => w !== word) });
+  const removeDictionaryWord = (term: string) => {
     dictionaryInputRef.current?.focus();
+    void changeDictionary("The dictionary", () => window.electron.voiceDictionary.remove({ term }));
   };
 
-  // Suggestions live in voiceInput settings, so accept/dismiss are plain
-  // settings mutations through `update` — accept moves the word into the
-  // confirmed dictionary, dismiss just drops it from the queue.
   const acceptSuggestion = (word: string) => {
-    void update({
-      suggestedDictionary: settings.suggestedDictionary.filter((e) => e.word !== word),
-      customDictionary: settings.customDictionary.includes(word)
-        ? settings.customDictionary
-        : [...settings.customDictionary, word],
-    });
     dictionaryInputRef.current?.focus();
+    void changeDictionary("The dictionary", () =>
+      window.electron.voiceDictionary.acceptSuggestion({ word })
+    );
   };
 
   const dismissSuggestion = (word: string) => {
-    void update({
-      suggestedDictionary: settings.suggestedDictionary.filter((e) => e.word !== word),
-    });
     dictionaryInputRef.current?.focus();
+    void changeDictionary("The suggestion list", () =>
+      window.electron.voiceDictionary.dismissSuggestion({ word })
+    );
   };
 
   useSettingsTabValidation("voice", Boolean(loadError || saveFailure));
@@ -695,7 +727,7 @@ export function VoiceInputSettingsTab() {
         >
           {saveError("dictionary")}
           <DictionaryGroup
-            words={settings.customDictionary}
+            entries={settings.dictionary}
             suggestedWords={settings.suggestedDictionary}
             learnFromCorrections={settings.learnFromCorrections}
             onLearnFromCorrectionsChange={(v) => void update({ learnFromCorrections: v })}
@@ -1164,7 +1196,7 @@ function MicPermissionRow({
 // ── Dictionary group ──
 
 function DictionaryGroup({
-  words,
+  entries,
   suggestedWords,
   learnFromCorrections,
   onLearnFromCorrectionsChange,
@@ -1176,7 +1208,7 @@ function DictionaryGroup({
   onRemove,
   inputRef,
 }: {
-  words: string[];
+  entries: VoiceDictionaryEntry[];
   suggestedWords: SuggestedDictionaryEntry[];
   learnFromCorrections: boolean;
   onLearnFromCorrectionsChange: (v: boolean) => void;
@@ -1242,8 +1274,8 @@ function DictionaryGroup({
       <SettingsRow
         label="Terms"
         description={
-          words.length > 0
-            ? `${words.length} ${words.length === 1 ? "term" : "terms"}. Up to the newest ${MAX_DICTIONARY_KEYTERMS} are sent with each dictation`
+          entries.length > 0
+            ? `${entries.length} ${entries.length === 1 ? "term" : "terms"}. Up to the newest ${MAX_DICTIONARY_KEYTERMS} are sent with each dictation`
             : "Add product names, APIs or jargon the transcription keeps getting wrong"
         }
         layout="stacked"
@@ -1254,6 +1286,7 @@ function DictionaryGroup({
                 ref={inputRef}
                 type="text"
                 value={newWord}
+                maxLength={MAX_DICTIONARY_TERM_LENGTH}
                 aria-labelledby={labelId}
                 aria-describedby={descriptionId}
                 onChange={(e) => onNewWordChange(e.target.value)}
@@ -1272,20 +1305,20 @@ function DictionaryGroup({
               </Button>
             </div>
 
-            {words.length > 0 && (
+            {entries.length > 0 && (
               <ul className="flex flex-wrap gap-1.5">
-                {words.map((word) => (
+                {entries.map(({ term }) => (
                   <li
-                    key={word}
+                    key={term}
                     className="inline-flex items-center gap-0.5 rounded-full border border-border-default bg-surface-canvas py-0.5 pl-2.5 pr-0.5 text-xs text-text-primary"
                   >
-                    {word}
+                    {term}
                     <Button
                       size="icon-xs"
                       variant="ghost"
                       className="rounded-full"
-                      onClick={() => onRemove(word)}
-                      aria-label={`Remove ${word}`}
+                      onClick={() => onRemove(term)}
+                      aria-label={`Remove ${term}`}
                     >
                       <X aria-hidden="true" />
                     </Button>
