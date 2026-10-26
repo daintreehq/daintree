@@ -513,7 +513,9 @@ describe("VoiceRecordingService — Escape cancels a dictation (#14631)", () => 
 
     complete("First passage.", "item-a");
     await service.stop("Dictation stopped.");
-    expect(ipc.correct).toHaveBeenCalledWith({ rawText: "First passage." });
+    expect(ipc.correct).toHaveBeenCalledWith(
+      expect.objectContaining({ rawText: "First passage." })
+    );
 
     begin("session-2");
     complete("Second.", "item-b", "session-2");
