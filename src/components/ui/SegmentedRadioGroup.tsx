@@ -327,7 +327,15 @@ export function SegmentedRadioGroup<T extends string>({
         if (option.tooltip === undefined) return segment;
         return (
           <Tooltip key={option.value}>
-            <TooltipTrigger asChild>{segment}</TooltipTrigger>
+            {isDisabled ? (
+              // A disabled button takes no pointer events, so the tooltip that
+              // says why hangs off a wrapper instead.
+              <TooltipTrigger asChild>
+                <span className={cn("inline-flex min-w-0", fullWidth && "flex-1")}>{segment}</span>
+              </TooltipTrigger>
+            ) : (
+              <TooltipTrigger asChild>{segment}</TooltipTrigger>
+            )}
             <TooltipContent side="bottom">{option.tooltip}</TooltipContent>
           </Tooltip>
         );

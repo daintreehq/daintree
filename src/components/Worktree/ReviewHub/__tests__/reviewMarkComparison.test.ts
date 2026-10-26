@@ -280,6 +280,12 @@ describe("describeSinceReview", () => {
     });
   });
 
+  it("doesn't say nothing changed when history was rewritten", () => {
+    expect(
+      describeSinceReview(applicable, compared(comparable([], [], { history: "rewritten" })))
+    ).toMatchObject({ kind: "listed", commits: { rewritten: true } });
+  });
+
   it("reports failed and unreadable comparisons apart from empty ones", () => {
     expect(
       describeSinceReview(

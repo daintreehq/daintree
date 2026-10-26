@@ -237,7 +237,10 @@ export function describeSinceReview(
                 ? "Too many commits to list."
                 : null;
       const noCommits = commits.kind === "listed" && commits.commits.length === 0;
-      if (incomplete === null && files.length === 0 && noCommits) return { kind: "empty" };
+      const rewritten = commits.kind === "listed" && commits.rewritten;
+      if (incomplete === null && files.length === 0 && noCommits && !rewritten) {
+        return { kind: "empty" };
+      }
       return { kind: "listed", incomplete, commits, files };
     }
   }

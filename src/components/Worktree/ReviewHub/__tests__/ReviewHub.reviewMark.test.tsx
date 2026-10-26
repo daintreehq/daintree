@@ -57,6 +57,7 @@ vi.mock("@/components/ui/tooltip", () => ({
   TooltipProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));
 
+import { actionService } from "@/services/ActionService";
 import { ReviewHubContent } from "../ReviewHubContent";
 import { resetStagingStatusCacheForTests } from "../stagingStatusCache";
 import { _resetReviewMarksStoreForTesting, useReviewMarksStore } from "@/store/reviewMarksStore";
@@ -706,7 +707,11 @@ describe("Review Hub review marks (#14585)", () => {
       expect(screen.getByTestId("since-review-files-base-update").textContent).toContain("base.ts");
       expect(screen.getByTestId("since-review-files-branch").textContent).toContain("own.ts");
       expect(screen.getAllByTestId("since-review-commit")).toHaveLength(1);
-      // Rows only list.
+      // Rows only list: clicking one opens no diff.
+      const dispatch = vi.mocked(actionService.dispatch);
+      dispatch.mockClear();
+      fireEvent.click(screen.getAllByTestId("since-review-file-row")[0]!);
+      expect(dispatch).not.toHaveBeenCalled();
       expect(screen.getAllByTestId("since-review-file-row")[0]!.closest("button")).toBeNull();
     });
 
@@ -730,13 +735,13 @@ describe("Review Hub review marks (#14585)", () => {
         status: "compared",
         markRevision: 2,
         result: {
-          ...(comparable([], 0) as object),
           state: "incomplete",
+          ...COMPARED,
           reasons: ["current-state-incomplete"],
           gaps: [],
           files: [],
           commits: { kind: "listed", history: "extended", commits: [], truncated: false },
-        } as unknown as ReviewComparisonResult,
+        },
       });
       renderHub();
       fireEvent.click(await screen.findByTestId("review-hub-review-mark-open"));
@@ -802,6 +807,25 @@ describe("Review Hub review marks (#14585)", () => {
       );
       expect(await screen.findByTestId("since-review-files-branch")).not.toBeNull();
       expect(window.electron.git.stageAll).not.toHaveBeenCalled();
+    });
+
+    it("waits for the marks to load before giving up on an open straight into the view", async () => {
+      useReviewMarksStore.setState({ marks: {}, revision: 0, loaded: false });
+      render(
+        <ReviewHubContent
+          isOpen={true}
+          worktreePath={WT}
+          panelId="review-1"
+          onClose={vi.fn()}
+          initialMode="since-review"
+        />
+      );
+      expect(await screen.findByTestId("since-review-unavailable")).not.toBeNull();
+
+      act(() =>
+        useReviewMarksStore.setState({ marks: { [WT]: summary(2) }, revision: 2, loaded: true })
+      );
+      expect(await screen.findByTestId("since-review-comparing")).not.toBeNull();
     });
 
     it("returns to the working tree when the mark is cleared", async () => {
