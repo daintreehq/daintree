@@ -3,7 +3,6 @@ import { renderHook, act } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { usePanelStoreBootstrap } from "../app/usePanelStoreBootstrap";
 import { useResourceMonitoringStore } from "@/store/resourceMonitoringStore";
-import { useCachedProjectViewsStore } from "@/store/cachedProjectViewsStore";
 import {
   useMemoryLeakConfigStore,
   DEFAULT_AUTO_RESTART_THRESHOLD_MB,
@@ -32,6 +31,8 @@ vi.mock("../useMemoryLeakDetection", () => ({
   useMemoryLeakDetection: vi.fn(),
 }));
 
+const { useMemoryLeakDetection } = await import("../useMemoryLeakDetection");
+
 function installElectron(opts?: { config?: TerminalConfig }) {
   const get = vi.fn(async () => opts?.config ?? ({} as TerminalConfig));
   const setResourceMonitoring = vi.fn(async () => {});
@@ -51,81 +52,37 @@ function installElectron(opts?: { config?: TerminalConfig }) {
 beforeEach(() => {
   vi.clearAllMocks();
   useResourceMonitoringStore.setState({ enabled: false });
-  useCachedProjectViewsStore.setState({ cachedProjectViews: 1 });
   useMemoryLeakConfigStore.setState({
     enabled: false,
     autoRestartThresholdMb: DEFAULT_AUTO_RESTART_THRESHOLD_MB,
   });
 });
 
+// Seeding and keeping these settings current is terminalConfigSync's job (#14699).
 describe("usePanelStoreBootstrap", () => {
-  it("hydrates resource monitoring + cached views from the boot terminalConfig (no IPC)", async () => {
+  it("neither reads nor writes terminal settings, so boot can't switch monitoring back on", async () => {
     const { get, setResourceMonitoring } = installElectron();
-    const config: TerminalConfig = {
-      resourceMonitoringEnabled: true,
-      memoryLeakDetectionEnabled: true,
-      memoryLeakAutoRestartThresholdMb: 768,
-      cachedProjectViews: 4,
-    } as TerminalConfig;
 
-    renderHook(() => usePanelStoreBootstrap(config));
-
+    renderHook(() => usePanelStoreBootstrap());
     await act(async () => {
       await Promise.resolve();
     });
 
     expect(get).not.toHaveBeenCalled();
-    expect(useResourceMonitoringStore.getState().enabled).toBe(true);
-    expect(setResourceMonitoring).toHaveBeenCalledWith(true);
-    expect(useMemoryLeakConfigStore.getState().enabled).toBe(true);
-    expect(useMemoryLeakConfigStore.getState().autoRestartThresholdMb).toBe(768);
-    expect(useCachedProjectViewsStore.getState().cachedProjectViews).toBe(4);
+    expect(setResourceMonitoring).not.toHaveBeenCalled();
+    expect(useResourceMonitoringStore.getState().enabled).toBe(false);
   });
 
-  it("falls back to terminalConfig.get() when boot payload is null (boot IPC failed)", async () => {
-    const { get } = installElectron({
-      config: {
-        resourceMonitoringEnabled: true,
-        cachedProjectViews: 2,
-      } as TerminalConfig,
+  it("runs leak detection on the settings the store holds, and follows a change", async () => {
+    installElectron();
+    useMemoryLeakConfigStore.setState({ enabled: true, autoRestartThresholdMb: 768 });
+
+    renderHook(() => usePanelStoreBootstrap());
+    expect(vi.mocked(useMemoryLeakDetection)).toHaveBeenLastCalledWith(true, 768);
+
+    act(() => {
+      useMemoryLeakConfigStore.setState({ enabled: false });
     });
-
-    renderHook(() => usePanelStoreBootstrap(null));
-
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    expect(get).toHaveBeenCalledTimes(1);
-    expect(useResourceMonitoringStore.getState().enabled).toBe(true);
-    expect(useCachedProjectViewsStore.getState().cachedProjectViews).toBe(2);
-  });
-
-  it("skips the fallback IPC when terminalConfig prop arrives later (race)", async () => {
-    const { get } = installElectron();
-    const initialConfig: TerminalConfig = {
-      resourceMonitoringEnabled: true,
-      cachedProjectViews: 3,
-    } as TerminalConfig;
-
-    const { rerender } = renderHook(
-      ({ cfg }: { cfg: TerminalConfig | null }) => usePanelStoreBootstrap(cfg),
-      { initialProps: { cfg: null as TerminalConfig | null } }
-    );
-
-    // First render: fallback IPC fires
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    expect(get).toHaveBeenCalledTimes(1);
-
-    // Boot eventually delivers terminalConfig — must not double-hydrate
-    rerender({ cfg: initialConfig });
-    await act(async () => {
-      await Promise.resolve();
-    });
-    expect(get).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(useMemoryLeakDetection)).toHaveBeenLastCalledWith(false, 768);
   });
 });

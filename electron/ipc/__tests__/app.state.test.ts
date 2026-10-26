@@ -660,7 +660,11 @@ describe("app:boot handler", () => {
     legacyOwnerRef.current = "p1";
 
     const result = (await invokeBoot()) as Record<string, unknown>;
-    expect(result.terminalConfig).toEqual(cachedResult.terminalConfig);
+    expect(result.appState).toEqual(cachedResult.appState);
+    // Saved since the hover, so the payload carries the saved values rather
+    // than the prefetch's copy (#14699).
+    expect(result.terminalConfig).toMatchObject({ resourceMonitoringEnabled: false });
+    expect(result.terminalConfig).not.toMatchObject({ scrollbackLines: 3000 });
     expect(result.crashPending).toBeNull();
     expect(result.crashConfig).toEqual({ autoRestoreOnCrash: false });
   });
