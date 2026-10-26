@@ -15,6 +15,7 @@ import { getCachedStagingStatus } from "@/components/Worktree/ReviewHub/stagingS
 import { useConsoleCaptureStore } from "./consoleCaptureStore";
 import { useResourceMonitoringStore } from "./resourceMonitoringStore";
 import { useVoiceRecordingStore } from "./voiceRecordingStore";
+import { subscribeDictationRangeTracking } from "./dictationRangeStore";
 import { usePluginPanelBadgeStore } from "./pluginPanelBadgeStore";
 import { usePluginPanelActivityStore } from "./pluginPanelActivityStore";
 import { usePluginPanelAttentionStore } from "./pluginPanelAttentionStore";
@@ -625,6 +626,11 @@ export function initStoreOrchestrator(): () => void {
   //     finalizes the run (with its durable run-history append) once every
   //     target settles. Same orchestrator-scoped lifecycle as 5a–5d (#10930).
   disposables.add(toDisposable(subscribeFleetRunWatcher()));
+
+  // 5f. Dictation ranges: carry each dictation's text range through every
+  //     draft edit, and release them once the draft is sent or cleared
+  //     (#14597). Disposing drops the records, since unmapped ranges go stale.
+  disposables.add(toDisposable(subscribeDictationRangeTracking()));
 
   // 5. Availability → agent-settings re-normalization: installed/missing state
   //    is the input to `normalizeAgentSelection`, so re-run normalization any

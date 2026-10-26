@@ -123,6 +123,7 @@ const { useHelpPanelStore } = await import("../helpPanelStore");
 const { usePortalStore } = await import("../portalStore");
 const { useProjectHomeStore, selectProjectMainAreaRoute } = await import("../projectHomeStore");
 const { useProjectPluginStore } = await import("../projectPluginStore");
+const { useDictationRangeStore } = await import("../dictationRangeStore");
 const { initStoreOrchestrator, destroyStoreOrchestrator } =
   await import("../rendererStoreOrchestrator");
 
@@ -2019,6 +2020,54 @@ describe("rendererStoreOrchestrator", () => {
 
       expect(useHelpPanelStore.getState().isOpen).toBe(true);
       expect(usePortalStore.getState().isOpen).toBe(true);
+    });
+  });
+
+  describe("dictation range tracking (#14597)", () => {
+    const setDraft = (value: string) =>
+      useTerminalInputStore.getState().setDraftInput("dictated", value, "p1");
+    const ranges = () => useDictationRangeStore.getState().listDictations("dictated", "p1");
+    const dictateHello = () => {
+      setDraft("hello");
+      useDictationRangeStore
+        .getState()
+        .recordUtterance(
+          { sessionId: "s1", panelId: "dictated", projectId: "p1" },
+          { insertion: { from: 0, to: 5 }, words: { from: 0, to: 5 } }
+        );
+    };
+
+    afterEach(() => {
+      useTerminalInputStore.getState().clearDraftInput("dictated", "p1");
+      useDictationRangeStore.getState().clear();
+    });
+
+    it("maps a dictation through draft edits and releases it when the draft clears", () => {
+      dictateHello();
+      setDraft("Note: hello");
+      expect(ranges()[0]!.range).toEqual({ from: 6, to: 11, edited: false });
+
+      useTerminalInputStore.getState().clearDraftInput("dictated", "p1");
+      expect(ranges()).toEqual([]);
+    });
+
+    it("drops the ranges on destroy and maps them exactly once after re-init", () => {
+      dictateHello();
+      destroyStoreOrchestrator();
+      expect(ranges()).toEqual([]);
+
+      // Torn down, nothing carries a new record through edits.
+      dictateHello();
+      setDraft("Note: hello");
+      expect(ranges()[0]!.range).toEqual({ from: 0, to: 5, edited: false });
+
+      useDictationRangeStore.getState().clear();
+      setDraft("hello");
+      initStoreOrchestrator();
+      initStoreOrchestrator();
+      dictateHello();
+      setDraft("Note: hello");
+      expect(ranges()[0]!.range).toEqual({ from: 6, to: 11, edited: false });
     });
   });
 });

@@ -4,6 +4,7 @@ import { isPtyPanel } from "@shared/types/panel";
 import { useHelpPanelStore, selectActiveSlot } from "@/store/helpPanelStore";
 import { isAssistantFocused } from "@/store/macroFocusStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
+import { useDictationRangeStore } from "@/store/dictationRangeStore";
 import {
   isVoiceMicPending,
   useVoiceRecordingStore,
@@ -56,6 +57,30 @@ function getVoiceInsertMetadata(draft: string): { separator: string; insertStart
     separator,
     insertStart: draft.length + separator.length,
   };
+}
+
+/**
+ * Records where a session's committed words just landed in the draft: `text`
+ * was written at `base + separator`. Call it straight after the write, once
+ * the range store has mapped the session's earlier text through that write.
+ */
+function trackDictatedText(
+  sessionId: string | null | undefined,
+  panelId: string,
+  projectId: string | undefined,
+  base: string,
+  separator: string,
+  text: string
+): void {
+  if (!sessionId) return;
+  const from = base.length + separator.length;
+  const to = from + text.length;
+  useDictationRangeStore
+    .getState()
+    .recordUtterance(
+      { sessionId, panelId, projectId },
+      { insertion: { from: base.length, to }, words: { from, to } }
+    );
 }
 
 // ~15s of 100ms PCM chunks. Covers a retarget drain plus a slow backend
@@ -200,6 +225,14 @@ class VoiceRecordingService {
               useVoiceRecordingStore.getState().setActiveParagraphStart(panelId, insertStart);
             }
             inputStore.setDraftInput(panelId, base + separator + finalText, projectId);
+            trackDictatedText(
+              buffer?.dictationSessionId,
+              panelId,
+              projectId,
+              base,
+              separator,
+              finalText
+            );
             inputStore.bumpExternalDraftRevision();
           }
         }
@@ -252,6 +285,14 @@ class VoiceRecordingService {
 
         // Insert a newline to visually separate paragraphs and reset paragraph state.
         inputStore.setDraftInput(panelId, draft + "\n", projectId);
+        if (buffer.dictationSessionId) {
+          useDictationRangeStore
+            .getState()
+            .recordParagraphBreak(
+              { sessionId: buffer.dictationSessionId, panelId, projectId },
+              { from: draft.length, to: draft.length + 1 }
+            );
+        }
         inputStore.bumpExternalDraftRevision();
 
         voiceState.resetParagraphState(panelId);
@@ -1291,6 +1332,14 @@ class VoiceRecordingService {
               const base = segmentStart >= 0 ? draft.slice(0, segmentStart) : draft;
               const { separator } = getVoiceInsertMetadata(base);
               inputStore.setDraftInput(panelId, base + separator + remaining, projectId);
+              trackDictatedText(
+                buffer?.dictationSessionId,
+                panelId,
+                projectId,
+                base,
+                separator,
+                remaining
+              );
               inputStore.bumpExternalDraftRevision();
             }
           }
