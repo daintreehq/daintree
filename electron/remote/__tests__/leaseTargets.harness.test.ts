@@ -409,7 +409,7 @@ describe("drive lease on the project a call targets (integration harness)", () =
       const written = harnessState.store.get("appState") as Record<string, unknown>;
       expect(written.sidebarWidth).toBe(420);
       expect(written).not.toHaveProperty("activeWorktreeId");
-      expect(written).not.toHaveProperty("panelGridConfig");
+      expect(written.panelGridConfig).toEqual({ strategy: "fixed-columns", value: 3 });
 
       // A project nobody else drives takes the whole write, as it always has.
       const other = addLocalView(52, "proj-2");
