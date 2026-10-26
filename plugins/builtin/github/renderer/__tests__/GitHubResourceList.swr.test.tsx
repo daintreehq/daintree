@@ -146,6 +146,8 @@ vi.mock("react-dom", async () => {
 
 /** What the list passed each row, keyed by resource number. */
 const rowProps = new Map<number, { worktreeId?: string; timeField?: string }>();
+/** How long each row's render spins, to stretch a commit past the scheduler's frame. */
+let rowRenderDelayMs = 0;
 
 vi.mock("../components/GitHubListItem", () => ({
   GitHubListItem: ({
@@ -158,6 +160,10 @@ vi.mock("../components/GitHubListItem", () => ({
     timeField?: string;
   }) => {
     rowProps.set(item.number, { worktreeId: worktree?.id, timeField });
+    const spinUntil = performance.now() + rowRenderDelayMs;
+    while (performance.now() < spinUntil) {
+      // Busy-wait: a timer would yield, and the point is a render that doesn't.
+    }
     return <div data-testid={`item-${item.number}`}>{item.title}</div>;
   },
 }));
@@ -329,6 +335,7 @@ beforeEach(() => {
   filterStore.setPrSortOrder("created");
   worktreeMap.clear();
   rowProps.clear();
+  rowRenderDelayMs = 0;
   virtuosoScrollIntoView.mockClear();
 });
 
@@ -3960,6 +3967,35 @@ describe("GitHubResourceList — only a cursor move scrolls the list (#14067)", 
     act(() => loadMore.click());
     await waitFor(() => expect(screen.getByTestId("item-4")).toBeTruthy());
 
+    expect(revealedIndexes()).toEqual([0]);
+  });
+
+  it("keeps a key pressed after a page commits but before its effects run", async () => {
+    mockListIssues.mockResolvedValueOnce({
+      items: [makeIssue(1), makeIssue(2)],
+      nextCursor: null,
+      hasMore: false,
+    });
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+    const input = screen.getByRole("combobox");
+    // A render longer than the scheduler's 5ms frame makes React yield after
+    // the commit and run its passive effects in a later task. A loaded CI
+    // runner got there by chance; a mutation observer's microtask lands the
+    // key in that gap every time.
+    rowRenderDelayMs = 10;
+    await new Promise<void>((resolve) => {
+      const observer = new MutationObserver(() => {
+        if (!screen.queryByTestId("item-2")) return;
+        observer.disconnect();
+        rowRenderDelayMs = 0;
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+        resolve();
+      });
+      observer.observe(document.body, { childList: true, subtree: true });
+    });
+
+    expect(input.getAttribute("aria-activedescendant")).toBe("github-issue-option-1");
     expect(revealedIndexes()).toEqual([0]);
   });
 

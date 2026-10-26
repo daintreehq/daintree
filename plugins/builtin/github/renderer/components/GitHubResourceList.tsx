@@ -1,6 +1,7 @@
 import {
   useState,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useCallback,
   useContext,
@@ -790,9 +791,14 @@ export function GitHubResourceList({
    * revalidation landing mid-navigation silently threw away your place. The
    * cursor tracks a resource number now, and only drops when that resource is
    * genuinely no longer in the list.
+   *
+   * Layout effects, so the remap lands in the same commit as the rows. As a
+   * passive effect it could trail them, and a key pressed in that gap queued
+   * its move only for the remap's absolute index to overwrite it: the press
+   * was lost, and with it the reveal.
    */
   const activeIndexRef = useRef(activeIndex);
-  useEffect(() => {
+  useLayoutEffect(() => {
     activeIndexRef.current = activeIndex;
   }, [activeIndex]);
 
@@ -814,7 +820,7 @@ export function GitHubResourceList({
    */
   const revealSeenIndexRef = useRef(-1);
   const followedIndexRef = useRef<number | null>(null);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const previousData = previousDataRef.current;
     const previousScope = previousScopeRef.current;
     previousDataRef.current = data;
