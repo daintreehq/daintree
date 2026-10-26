@@ -1036,6 +1036,7 @@ export function createSessionServerDeps(
       ? {
           relay: {
             shellName: relay.shellName,
+            ...(relay.global === true ? { global: true as const } : {}),
             refuseWrite: (projectId: string | undefined) => {
               if (boundWorkspaceId === null) return null;
               if (projectId !== undefined && projectId !== boundWorkspaceId) {

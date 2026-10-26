@@ -40,6 +40,7 @@ export function createSessionContext(sessionId: string, deps: SessionServerDeps)
     paneApproval: requestApproval !== undefined,
     paneSkipConfirmations: requestApproval !== undefined && deps.paneSkipConfirmations === true,
     relay: deps.relay !== undefined,
+    relayGlobal: deps.relay?.global === true,
   };
 
   // `host.list` and `host.call` (#13493): any of this machine's own

@@ -272,6 +272,8 @@ export interface SessionServerDeps extends OwnedMainExecutors {
    */
   relay?: {
     shellName: string;
+    /** The calling Shell's global Assistant (#14545), as its relay caller recorded it. */
+    global?: true;
     /**
      * Asked right before a change this process makes itself rather than
      * through a view: why it may not, or null while the requesting Shell's own
