@@ -108,6 +108,50 @@ function isSpecificDeviceId(deviceId: string): boolean {
 // connect; past it the oldest audio is dropped rather than failing the session.
 const MAX_QUEUED_CHUNKS = 150;
 
+/**
+ * How long a send waits for a dictated passage's correction before it goes
+ * with whatever text is current (#14611).
+ */
+export const VOICE_CORRECTION_SEND_WAIT_MS = 2_000;
+
+/** A finished passage's post-stop AI correction, still on its way. */
+interface PendingCorrection {
+  panelId: string;
+  projectId?: string;
+  /** Where the passage starts in the draft; moves with edits made before it. */
+  from: number;
+  rawText: string;
+  /** The draft as last seen, to tell where the next edit landed. */
+  draft: string;
+  /** Applied or dropped; either way it will never touch the draft again. */
+  done: boolean;
+  /** Resolves when the correction is done. */
+  settled: Promise<void>;
+  settle: () => void;
+}
+
+/**
+ * Where a passage of `length` at `from` sits after the draft went from
+ * `before` to `after`: moved by an edit wholly before it, unmoved by one after
+ * it, and -1 when the edit touched it. The edit is the span between the
+ * longest common prefix and suffix.
+ */
+function mapPassageStart(before: string, after: string, from: number, length: number): number {
+  const shortest = Math.min(before.length, after.length);
+  let prefix = 0;
+  while (prefix < shortest && before[prefix] === after[prefix]) prefix++;
+  let suffix = 0;
+  while (
+    suffix < shortest - prefix &&
+    before[before.length - 1 - suffix] === after[after.length - 1 - suffix]
+  ) {
+    suffix++;
+  }
+  if (prefix >= from + length) return from;
+  if (before.length - suffix <= from) return from + after.length - before.length;
+  return -1;
+}
+
 interface CaptureAttempt {
   target: VoiceRecordingTarget;
   audioContext: AudioContext;
@@ -192,6 +236,14 @@ class VoiceRecordingService {
   private micSilenceSession: { generation: number; startRequestId: number } | null = null;
   // performance.now() when the live session's capture was attached.
   private micCaptureAttachedAt = 0;
+  // Corrections belong to the passage they were started for, not to a global
+  // generation: a session starting anywhere, the same panel included, leaves
+  // them to land. Only the draft being sent, cleared or edited over drops one.
+  private pendingCorrections = new Set<PendingCorrection>();
+  private unwatchCorrectionDrafts: (() => void) | null = null;
+  // The correction whose seed each panel's learning baseline holds. Text alone
+  // can't tell two passages dictated with the same words apart.
+  private baselineOwners = new Map<string, PendingCorrection>();
 
   initialize(): void {
     if (this.initialized) return;
@@ -1258,6 +1310,9 @@ class VoiceRecordingService {
     this.totalPausedMs = 0;
     this.clearPauseTimeout();
     useVoiceRecordingStore.getState().beginSession(target);
+    // beginSession resets the panel's buffer; a passage still being corrected
+    // there keeps its underline.
+    if (this.hasPendingCorrection(target.panelId)) this.syncCorrectionRange(target.panelId);
 
     // Promote the attempt to the session. From here stop() owns its teardown.
     if (this.pendingCapture === capture) this.pendingCapture = null;
@@ -1488,7 +1543,6 @@ class VoiceRecordingService {
       this.clearTimers();
       await this.cleanupAudioCapture();
       this.generation++;
-      const stopGeneration = this.generation;
 
       if (!skipRemoteStop) {
         // Graceful stop: the IPC handler drains pending transcriptions and flushes
@@ -1545,17 +1599,21 @@ class VoiceRecordingService {
       if (this.sessionId === stopSessionId) this.sessionId = null;
 
       // Whole-passage AI cleanup runs after a deliberate, graceful stop only —
-      // not on error, cancel-to-restart, or backend-driven teardown. Fire and
-      // forget: the decoration shows progress, and stop() returns immediately.
+      // not on error, cancel-to-restart, or backend-driven teardown. stop()
+      // doesn't await it: the decoration shows progress, and a send waits for
+      // it through waitForPendingCorrections(). It is registered before stop()
+      // resolves, so a caller that awaited stop() can always see it.
       if (!skipRemoteStop && nextStatus === "idle" && !options.skipCorrection && stoppedTarget) {
         if (correctionEnabled) {
-          void this.runCorrection(stoppedTarget, stopGeneration);
+          this.runCorrection(stoppedTarget);
         } else {
           // No AI correction pass will run, so capture the raw dictated text as
           // the learning baseline directly. The draft retains the full dictated
           // span (finishSession leaves sessionDraftStart intact) so manual
           // corrections can still be detected at send time (#9749).
           const { panelId, projectId } = stoppedTarget;
+          // This passage's baseline isn't any earlier correction's to replace.
+          this.baselineOwners.delete(panelId);
           const buffer = useVoiceRecordingStore.getState().panelBuffers[panelId];
           const sessionStart = buffer?.sessionDraftStart ?? -1;
           if (sessionStart >= 0) {
@@ -1581,10 +1639,11 @@ class VoiceRecordingService {
   /**
    * Whole-passage AI cleanup pass. Runs once after a graceful stop: marks the
    * dictated range with the `cm-voice-pending-ai` decoration, sends the full
-   * dictated text to gpt-6-luna, and swaps in the cleaned result if the region
-   * is still where we left it. Best-effort — any failure leaves the raw text.
+   * dictated text to gpt-6-luna, and swaps in the cleaned result if the
+   * passage is still intact. Best-effort — any failure leaves the raw text.
+   * Registered synchronously, before the request goes out.
    */
-  private async runCorrection(target: VoiceRecordingTarget, stopGeneration: number): Promise<void> {
+  private runCorrection(target: VoiceRecordingTarget): void {
     const { panelId, projectId } = target;
     const buffer = useVoiceRecordingStore.getState().panelBuffers[panelId];
     const sessionStart = buffer?.sessionDraftStart ?? -1;
@@ -1596,9 +1655,8 @@ class VoiceRecordingService {
     if (!rawText.trim()) return;
 
     // Seed the learning baseline with the raw transcription synchronously, before
-    // the async correction call. If a new session starts on a DIFFERENT panel
-    // while this runs, the end-of-function stale check skips the corrected
-    // overwrite — but this panel still keeps a usable baseline (#9749).
+    // the async correction call, so the panel keeps a usable baseline even if
+    // the correction never lands (#9749).
     useVoiceRecordingStore.getState().setSessionCorrectedText(panelId, rawText);
 
     logDebug(`${LOG_PREFIX} Running whole-passage correction`, {
@@ -1606,15 +1664,34 @@ class VoiceRecordingService {
       rawLength: rawText.length,
     });
 
+    let settle!: () => void;
+    const correction: PendingCorrection = {
+      panelId,
+      projectId,
+      from: sessionStart,
+      rawText,
+      draft: draftBefore,
+      done: false,
+      settled: new Promise<void>((resolve) => {
+        settle = resolve;
+      }),
+      settle: () => settle(),
+    };
+    this.pendingCorrections.add(correction);
+    this.baselineOwners.set(panelId, correction);
+    this.watchCorrectionDrafts();
+
     // Show the dotted-underline "correcting" decoration over the dictated range.
-    useVoiceRecordingStore
-      .getState()
-      .setCorrectionRange(panelId, { from: sessionStart, to: draftBefore.length });
+    this.syncCorrectionRange(panelId);
     inputStore.bumpExternalDraftRevision();
 
-    let correctedText = rawText;
+    void this.requestCorrection(correction);
+  }
+
+  private async requestCorrection(correction: PendingCorrection): Promise<void> {
+    let correctedText = correction.rawText;
     try {
-      const result = await window.electron.voiceInput.correct({ rawText });
+      const result = await window.electron.voiceInput.correct({ rawText: correction.rawText });
       if (result.action === "replace" && result.correctedText.trim()) {
         correctedText = result.correctedText;
       }
@@ -1623,35 +1700,40 @@ class VoiceRecordingService {
         `${LOG_PREFIX} Correction request failed, keeping raw text`,
         voiceErrorLogFields(error)
       );
-    } finally {
-      useVoiceRecordingStore.getState().setCorrectionRange(panelId, null);
     }
 
-    // A new session started for this panel while correction was in flight —
-    // don't clobber it.
-    if (this.generation !== stopGeneration) {
-      logDebug(`${LOG_PREFIX} Correction result stale (new session), discarding`);
-      inputStore.bumpExternalDraftRevision();
+    const { panelId, projectId, from, rawText } = correction;
+    if (correction.done) {
+      logDebug(`${LOG_PREFIX} Correction result stale (draft sent or edited), discarding`);
+      this.releaseBaseline(correction);
       return;
     }
+    this.retireCorrection(correction);
 
+    // The passage keeps its own leading and trailing whitespace: a dictation
+    // restarted on the panel was placed after a trailing break, and its
+    // offsets assume the break is still there.
+    const lead = rawText.slice(0, rawText.length - rawText.trimStart().length);
+    const trail = rawText.slice(rawText.trimEnd().length);
+    correctedText = lead + correctedText.trim() + trail;
+
+    const inputStore = useTerminalInputStore.getState();
     if (correctedText !== rawText) {
       const draftNow = inputStore.getDraftInput(panelId, projectId);
-      // Apply only if the dictated region is still intact and unambiguous —
-      // skip rather than guess if the user edited it mid-correction.
-      let start = -1;
-      if (draftNow.slice(sessionStart, sessionStart + rawText.length) === rawText) {
-        start = sessionStart;
-      } else {
-        const lastIdx = draftNow.lastIndexOf(rawText);
-        if (lastIdx >= 0 && draftNow.indexOf(rawText) === lastIdx) {
-          start = lastIdx;
-        }
-      }
-      if (start >= 0) {
-        const before = draftNow.slice(0, start);
-        const after = draftNow.slice(start + rawText.length);
-        inputStore.setDraftInput(panelId, before + correctedText + after, projectId);
+      // The draft watcher drops a passage the moment anything touches it, so a
+      // live one is still exactly where it was tracked.
+      if (draftNow.slice(from, from + rawText.length) === rawText) {
+        const end = from + rawText.length;
+        // A session restarted on this panel is dictating after the passage;
+        // its offsets move with the passage's new length.
+        useVoiceRecordingStore
+          .getState()
+          .shiftDraftOffsets(panelId, end, correctedText.length - rawText.length);
+        inputStore.setDraftInput(
+          panelId,
+          draftNow.slice(0, from) + correctedText + draftNow.slice(end),
+          projectId
+        );
         logDebug(`${LOG_PREFIX} Applied correction`, {
           panelId,
           rawLength: rawText.length,
@@ -1659,15 +1741,143 @@ class VoiceRecordingService {
         });
       } else {
         logDebug(`${LOG_PREFIX} Skipping correction — dictated text changed during cleanup`);
+        correctedText = rawText;
       }
     }
 
     // Record the settled dictated text as the learning baseline. Manual edits
     // the user makes before sending are diffed against this to detect words
-    // worth suggesting for the custom dictionary (#9749).
-    useVoiceRecordingStore.getState().setSessionCorrectedText(panelId, correctedText);
+    // worth suggesting for the custom dictionary (#9749). Only over the seed
+    // this pass wrote: a send consumes it, and a newer session on the panel
+    // replaces it with its own.
+    const voiceStore = useVoiceRecordingStore.getState();
+    if (
+      this.baselineOwners.get(panelId) === correction &&
+      voiceStore.panelBuffers[panelId]?.sessionCorrectedText === rawText
+    ) {
+      voiceStore.setSessionCorrectedText(panelId, correctedText);
+    }
+    this.releaseBaseline(correction);
 
+    this.syncCorrectionRange(panelId);
     inputStore.bumpExternalDraftRevision();
+  }
+
+  hasPendingCorrection(panelId: string): boolean {
+    for (const correction of this.pendingCorrections) {
+      if (correction.panelId === panelId) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Resolves true once every correction pending for the panel has landed or
+   * been dropped, or false if `timeoutMs` runs out first.
+   */
+  async waitForPendingCorrections(panelId: string, timeoutMs: number): Promise<boolean> {
+    if (!this.hasPendingCorrection(panelId)) return true;
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = new Promise<false>((resolve) => {
+      timer = setTimeout(() => resolve(false), timeoutMs);
+    });
+    try {
+      // A dictation restarted and stopped on the panel can register another
+      // correction while this waits; it gets the same deadline.
+      while (this.hasPendingCorrection(panelId)) {
+        const settled: Promise<void>[] = [];
+        for (const correction of this.pendingCorrections) {
+          if (correction.panelId === panelId) settled.push(correction.settled);
+        }
+        const landed = await Promise.race([Promise.all(settled).then(() => true), timedOut]);
+        if (!landed) return false;
+      }
+      return true;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /**
+   * Drops every correction still pending for the panel, for a send that is
+   * taking the draft as it stands. A result that arrives later never lands.
+   */
+  discardPendingCorrections(panelId: string): void {
+    let dropped = false;
+    for (const correction of [...this.pendingCorrections]) {
+      if (correction.panelId !== panelId) continue;
+      this.retireCorrection(correction);
+      dropped = true;
+    }
+    if (dropped) this.syncCorrectionRange(panelId);
+  }
+
+  private releaseBaseline(correction: PendingCorrection): void {
+    if (this.baselineOwners.get(correction.panelId) === correction) {
+      this.baselineOwners.delete(correction.panelId);
+    }
+  }
+
+  private retireCorrection(correction: PendingCorrection): void {
+    if (correction.done) return;
+    correction.done = true;
+    this.pendingCorrections.delete(correction);
+    correction.settle();
+    if (this.pendingCorrections.size === 0) {
+      this.unwatchCorrectionDrafts?.();
+      this.unwatchCorrectionDrafts = null;
+    }
+  }
+
+  /**
+   * Follows each pending passage through draft edits while any is pending. An
+   * edit before a passage moves it; an edit that touches it, or a send or clear
+   * that takes it away, drops its correction for good, so a result arriving
+   * later can never land on whatever the draft holds by then.
+   */
+  private watchCorrectionDrafts(): void {
+    if (this.unwatchCorrectionDrafts) return;
+    this.unwatchCorrectionDrafts = useTerminalInputStore.subscribe((state, prev) => {
+      if (state.draftInputs === prev.draftInputs) return;
+      const touched = new Set<string>();
+      for (const correction of [...this.pendingCorrections]) {
+        const draft = state.getDraftInput(correction.panelId, correction.projectId);
+        if (draft === correction.draft) continue;
+        const from = mapPassageStart(
+          correction.draft,
+          draft,
+          correction.from,
+          correction.rawText.length
+        );
+        correction.draft = draft;
+        touched.add(correction.panelId);
+        if (
+          from < 0 ||
+          draft.slice(from, from + correction.rawText.length) !== correction.rawText
+        ) {
+          this.retireCorrection(correction);
+          continue;
+        }
+        correction.from = from;
+      }
+      for (const panelId of touched) this.syncCorrectionRange(panelId);
+    });
+  }
+
+  /** Points the panel's "correcting" decoration at its pending passages. */
+  private syncCorrectionRange(panelId: string): void {
+    let range: { from: number; to: number } | null = null;
+    for (const correction of this.pendingCorrections) {
+      if (correction.panelId !== panelId) continue;
+      const to = correction.from + correction.rawText.length;
+      range = range
+        ? { from: Math.min(range.from, correction.from), to: Math.max(range.to, to) }
+        : { from: correction.from, to };
+    }
+    const voiceStore = useVoiceRecordingStore.getState();
+    // A closed panel's buffer is gone; a late result mustn't bring it back.
+    if (!voiceStore.panelBuffers[panelId]) return;
+    voiceStore.setCorrectionRange(panelId, range);
   }
 
   async toggleFocusedPanel(): Promise<void> {
@@ -2233,6 +2443,15 @@ class VoiceRecordingService {
     this.clearPauseTimeout();
     this.clearElapsedTimer();
     this.clearMicSilenceTimer();
+    // Release anyone waiting on a correction; none of them may land now, so
+    // none of their underlines may stay either.
+    const correctedPanels = new Set<string>();
+    for (const correction of [...this.pendingCorrections]) {
+      correctedPanels.add(correction.panelId);
+      this.retireCorrection(correction);
+    }
+    for (const panelId of correctedPanels) this.syncCorrectionRange(panelId);
+    this.baselineOwners.clear();
     for (const unsub of this.unsubscribers) {
       unsub();
     }

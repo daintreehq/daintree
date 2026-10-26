@@ -285,6 +285,12 @@ interface VoiceRecordingState {
   setDraftLengthAtSegmentStart: (panelId: string, length: number) => void;
   completeSegment: (text: string, itemId?: string) => void;
   setCorrectionRange: (panelId: string, range: { from: number; to: number } | null) => void;
+  /**
+   * Moves the panel's draft offsets at or after `at` by `delta`, for an edit
+   * the voice service made earlier in the draft (a correction landing while a
+   * new session dictates after it).
+   */
+  shiftDraftOffsets: (panelId: string, at: number, delta: number) => void;
   setActiveParagraphStart: (panelId: string, length: number) => void;
   resetParagraphState: (panelId: string) => void;
   finishSession: (options?: FinishSessionOptions) => void;
@@ -551,6 +557,24 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
             panelBuffers: {
               ...state.panelBuffers,
               [panelId]: { ...buffer, correctionRange: range },
+            },
+          };
+        }),
+
+      shiftDraftOffsets: (panelId, at, delta) =>
+        set((state) => {
+          const buffer = state.panelBuffers[panelId];
+          if (!buffer || delta === 0) return state;
+          const shift = (offset: number) => (offset >= 0 && offset >= at ? offset + delta : offset);
+          return {
+            panelBuffers: {
+              ...state.panelBuffers,
+              [panelId]: {
+                ...buffer,
+                sessionDraftStart: shift(buffer.sessionDraftStart),
+                draftLengthAtSegmentStart: shift(buffer.draftLengthAtSegmentStart),
+                activeParagraphStart: shift(buffer.activeParagraphStart),
+              },
             },
           };
         }),

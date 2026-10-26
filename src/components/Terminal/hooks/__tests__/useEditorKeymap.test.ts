@@ -44,6 +44,8 @@ describe("useEditorKeymap", () => {
   let sendFromEditor: ReturnType<typeof vi.fn<() => void>>;
   let cancelVoiceWaitSubmit: ReturnType<typeof vi.fn<() => boolean>>;
   let handleDictationEscape: ReturnType<typeof vi.fn<() => boolean>>;
+  let startVoiceWaitSubmit: ReturnType<typeof vi.fn<() => void>>;
+  let hasPendingVoiceCorrection: ReturnType<typeof vi.fn<() => boolean>>;
   let setActiveCompletionContext: ReturnType<
     typeof vi.fn<Dispatch<SetStateAction<ActiveCompletionContext | null>>>
   >;
@@ -55,6 +57,8 @@ describe("useEditorKeymap", () => {
     sendFromEditor = vi.fn<() => void>();
     cancelVoiceWaitSubmit = vi.fn<() => boolean>(() => false);
     handleDictationEscape = vi.fn<() => boolean>(() => false);
+    startVoiceWaitSubmit = vi.fn<() => void>();
+    hasPendingVoiceCorrection = vi.fn<() => boolean>(() => false);
     setActiveCompletionContext = vi.fn<Dispatch<SetStateAction<ActiveCompletionContext | null>>>();
     handleHistoryNavigation = vi.fn<(direction: "up" | "down") => boolean>(() => false);
     setSelectedIndex = vi.fn<Dispatch<SetStateAction<number>>>();
@@ -71,9 +75,10 @@ describe("useEditorKeymap", () => {
       applyAutocompleteSelection,
       handleHistoryNavigation,
       sendFromEditor,
-      startVoiceWaitSubmit: vi.fn<() => void>(),
+      startVoiceWaitSubmit,
       cancelVoiceWaitSubmit,
       handleDictationEscape,
+      hasPendingVoiceCorrection,
       stashEditorState:
         vi.fn<(terminalId: string, state: EditorState, projectId?: string) => void>(),
       popStashedEditorState: vi.fn<
@@ -88,6 +93,25 @@ describe("useEditorKeymap", () => {
   }
 
   describe("Enter", () => {
+    it("waits for a finished passage's pending correction instead of sending raw text", () => {
+      hasPendingVoiceCorrection.mockReturnValue(true);
+      const { handlers } = renderKeymap(
+        makeLatest({ isAutocompleteOpen: false, autocompleteItems: [], value: "hello wrld" })
+      );
+      expect(handlers.onEnter()).toBe(true);
+      expect(startVoiceWaitSubmit).toHaveBeenCalledTimes(1);
+      expect(sendFromEditor).not.toHaveBeenCalled();
+    });
+
+    it("sends straight away when no dictation is finishing or being corrected", () => {
+      const { handlers } = renderKeymap(
+        makeLatest({ isAutocompleteOpen: false, autocompleteItems: [], value: "hello" })
+      );
+      expect(handlers.onEnter()).toBe(true);
+      expect(startVoiceWaitSubmit).not.toHaveBeenCalled();
+      expect(sendFromEditor).toHaveBeenCalledTimes(1);
+    });
+
     it("applies the selected item on Enter (item owns insert vs execute)", () => {
       const { handlers } = renderKeymap(makeLatest());
       expect(handlers.onEnter()).toBe(true);
