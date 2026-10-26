@@ -854,6 +854,15 @@ describe("VoiceRecordingService — the target agent's commands (#14655)", () =>
     delta(text, itemId);
     callbacks.complete!({ sessionId: SESSION_ID, text, willCorrect: false, itemId, commandText });
   };
+  async function showComposer(doc: string, anchor: number) {
+    const { EditorState } = await import("@codemirror/state");
+    const { recordComposerState } = await import("@/lib/composerCaret");
+    recordComposerState(
+      `${PROJECT}:${PANEL}`,
+      {},
+      EditorState.create({ doc, selection: { anchor } })
+    );
+  }
 
   it("writes a spoken command as typed when it opens the prompt", async () => {
     const { draft, records, textOf } = await setup();
@@ -866,6 +875,21 @@ describe("VoiceRecordingService — the target agent's commands (#14655)", () =>
     const { draft } = await setup("Note:");
     sayCommand("Slash compact.", "/compact", "item-a");
     expect(draft()).toBe("Note: Slash compact.");
+  });
+
+  it("keeps the words at a caret with typed text before it (#14634)", async () => {
+    const { draft } = await setup("Note: fix it");
+    await showComposer("Note: fix it", 6);
+    sayCommand("slash compact", "/compact", "item-a");
+    expect(draft()).toBe("Note: slash compact fix it");
+  });
+
+  it("writes the command at a caret that opens the prompt, ahead of typed text (#14634)", async () => {
+    const { draft, records, textOf } = await setup("fix it");
+    await showComposer("fix it", 0);
+    sayCommand("slash compact", "/compact", "item-a");
+    expect(draft()).toBe("/compact fix it");
+    expect(textOf(records()[0]!.utterances[0]!.range)).toBe("/compact");
   });
 
   it("keeps the words after a whitespace-only draft is filled in", async () => {
@@ -1291,6 +1315,7 @@ describe("VoiceRecordingService — correction and file links at the caret (#146
       rawText: "step two",
       recentContext: ["Step one."],
       terminalId: "panel-1",
+      startsPrompt: false,
     });
     await vi.waitFor(() => expect(draft()).toBe("Step one. Step two. Step three."));
     expect(voiceStore.getState().panelBuffers[PANEL]!.sessionDraftStart).toBe(10);
