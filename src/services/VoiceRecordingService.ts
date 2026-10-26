@@ -1094,17 +1094,14 @@ class VoiceRecordingService {
     ) {
       return false;
     }
-    if (rewrite) {
-      void this.stop("Rewrite cancelled.", {
-        preserveLiveText: true,
-        skipCorrection: true,
-        reason: "escape",
-      });
-      return true;
-    }
     const target = state.activeTarget;
     // A stop already under way keeps what it has.
     if (!target || this.stopPromise) return false;
+    // An instruction never reached the draft, so there is nothing to take out.
+    if (rewrite) {
+      void this.cancelDictation(target, null, []);
+      return true;
+    }
 
     const record = findDictation(
       target,
@@ -1164,9 +1161,17 @@ class VoiceRecordingService {
       }
       useDictationRangeStore.getState().releaseDictation(record.id);
     }
+    // A cancelled rewrite drops its instruction and gives the selection back
+    // as it was.
+    const { rewrite } = target;
+    if (rewrite) rewrite.selection.release();
     useVoiceRecordingStore.getState().finishSession({ preserveLiveText: false });
-    useVoiceRecordingStore.getState().announce("Dictation cancelled. Its text was discarded.");
-    logInfo(`${LOG_PREFIX} Dictation cancelled`, { removedSpans: spans.length });
+    useVoiceRecordingStore
+      .getState()
+      .announce(rewrite ? "Rewrite cancelled." : "Dictation cancelled. Its text was discarded.");
+    logInfo(`${LOG_PREFIX} ${rewrite ? "Rewrite" : "Dictation"} cancelled`, {
+      removedSpans: spans.length,
+    });
 
     if (this.openingAudio) this.flushOpeningAudio(this.openingAudio);
     this.cleanupAudioCapture();

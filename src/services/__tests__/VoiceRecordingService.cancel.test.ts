@@ -57,6 +57,7 @@ type CompletePayload = {
   willCorrect: boolean;
   itemId?: string;
   transcriptId?: string;
+  send?: boolean;
 };
 type FileTokenPayload = {
   sessionId: string;
@@ -447,6 +448,30 @@ describe("VoiceRecordingService — Escape cancels a dictation (#14631)", () => 
     expect(voiceStore.getState().panelBuffers[PANEL]?.liveText).toBe("fresh");
     complete("Fresh.", "item-c", "session-2");
     expect(draft()).toBe("Keep Fresh.");
+  });
+
+  it("drops a spoken send the cancelled session still had in flight, sending nothing", async () => {
+    const { service, voiceStore, begin, draft, settled } = await setup("Keep this intro.");
+    const spokenSend = vi.fn();
+    service.onSpokenSend(PANEL, PROJECT, spokenSend);
+
+    complete("Fix the login bug.", "item-a");
+    service.handleEscape(PANEL);
+    await settled();
+    // A new dictation into the same composer, which a stray send would submit.
+    begin("session-2");
+    complete("Fresh words here.", "item-b", "session-2");
+    callbacks.complete!({
+      sessionId: SESSION_ID,
+      text: "",
+      willCorrect: false,
+      itemId: "item-c",
+      send: true,
+    });
+
+    expect(spokenSend).not.toHaveBeenCalled();
+    expect(voiceStore.getState().status).toBe("recording");
+    expect(draft()).toBe("Keep this intro. Fresh words here.");
   });
 
   it("lets a cancelled session go once main reports it ended", async () => {
