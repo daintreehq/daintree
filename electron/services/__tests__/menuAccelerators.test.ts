@@ -242,6 +242,14 @@ describe("isDictationKey", () => {
 
     storeMock.get.mockReturnValue({ "voiceInput.toggle": [] });
     expect(isDictationKey(input({ key: "d", meta: true, shift: true }))).toBe(false);
+    expect(isDictationKey(input({ key: ".", meta: true }))).toBe(false);
+  });
+
+  it("matches a space-bar binding, which Input names by its character", () => {
+    setProcessPlatform("darwin");
+    storeMock.get.mockReturnValue({ "voiceInput.toggle": ["Cmd+Shift+Space"] });
+    expect(isDictationKey(input({ key: " ", code: "Space", meta: true, shift: true }))).toBe(true);
+    expect(isDictationKey(input({ key: " ", code: "Space", meta: true }))).toBe(false);
   });
 });
 

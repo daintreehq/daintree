@@ -2976,8 +2976,9 @@ function buildElectronApi(): ElectronAPI {
         _typedOn(CHANNELS.VOICE_INPUT_LIVE_SESSION, callback),
       onStopRequested: (callback: (payload: { sessionId: string }) => void) =>
         _typedOn(CHANNELS.VOICE_INPUT_STOP_REQUESTED, callback),
-      onRevealRequested: (callback: (payload: { sessionId: string }) => void) =>
-        _typedOn(CHANNELS.VOICE_INPUT_REVEAL_REQUESTED, callback),
+      onRevealRequested: (
+        callback: (payload: { sessionId: string; workspaceId: string | null }) => void
+      ) => _typedOn(CHANNELS.VOICE_INPUT_REVEAL_REQUESTED, callback),
       checkMicPermission: () => _unwrappingInvoke(CHANNELS.VOICE_INPUT_CHECK_MIC_PERMISSION),
       requestMicPermission: () => _unwrappingInvoke(CHANNELS.VOICE_INPUT_REQUEST_MIC_PERMISSION),
       openMicSettings: () => _unwrappingInvoke(CHANNELS.VOICE_INPUT_OPEN_MIC_SETTINGS),

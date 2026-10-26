@@ -93,8 +93,9 @@ vi.mock("@/store/terminalInputStore", () => {
 
 vi.mock("@/store/projectStore", () => {
   const state = { currentProject: null, isSwitching: false };
-  const getState = () => ({ ...state, switchProject: vi.fn() });
-  return { useProjectStore: Object.assign(getState, { getState }) };
+  const switchProject = vi.fn();
+  const getState = () => ({ ...state, switchProject });
+  return { useProjectStore: Object.assign(getState, { getState }), __switchProject: switchProject };
 });
 
 vi.mock("@/store/createWorktreeStore", () => ({
@@ -2465,12 +2466,16 @@ describe("VoiceRecordingService — a session another view owns (#14601)", () =>
     panel.__state.focusedId = "panel-b";
     panel.__state.panelsById = {
       "panel-b": { id: "panel-b", title: "Focused", location: "grid", launchAgentId: "claude" },
+      "panel-c": { id: "panel-c", title: "Later", location: "grid", launchAgentId: "claude" },
     };
 
     const voiceModule = (await import("@/store/voiceRecordingStore")) as unknown as {
       __state: VoiceState;
       useVoiceRecordingStore: {
-        getState: () => { announce: ReturnType<typeof vi.fn> };
+        getState: () => {
+          announce: ReturnType<typeof vi.fn>;
+          applyLiveSessionUpdate: ReturnType<typeof vi.fn>;
+        };
       };
     };
     const voiceState = voiceModule.__state;
@@ -2481,6 +2486,9 @@ describe("VoiceRecordingService — a session another view owns (#14601)", () =>
       options.sessionElsewhere === undefined ? elsewhere : options.sessionElsewhere;
     const announce = voiceModule.useVoiceRecordingStore.getState().announce;
     announce.mockClear();
+    const applyLiveSessionUpdate =
+      voiceModule.useVoiceRecordingStore.getState().applyLiveSessionUpdate;
+    applyLiveSessionUpdate.mockClear();
 
     const { voiceRecordingService } = await import("../VoiceRecordingService");
     voiceRecordingService.initialize();
@@ -2494,14 +2502,31 @@ describe("VoiceRecordingService — a session another view owns (#14601)", () =>
     return {
       voiceRecordingService,
       voiceState,
+      panelState: panel.__state,
       electron,
       windowListeners,
       announce,
+      applyLiveSessionUpdate,
       stopSpy,
       startSpy,
       toggleSpy,
     };
   }
+
+  it("applies main's reports of where the live session is, pulled and pushed", async () => {
+    const { electron, applyLiveSessionUpdate } = await arrange({ sessionElsewhere: null });
+    await vi.waitFor(() => {
+      expect(applyLiveSessionUpdate).toHaveBeenCalledWith({ revision: 0, session: null });
+    });
+
+    const push = { revision: 4, session: elsewhere };
+    const onLiveSession = vi.mocked(electron.voiceInput.onLiveSession).mock.calls[0]![0] as (
+      update: typeof push
+    ) => void;
+    onLiveSession(push);
+
+    expect(applyLiveSessionUpdate).toHaveBeenLastCalledWith(push);
+  });
 
   it("stops the other view's session instead of starting one on the focused panel", async () => {
     const { voiceRecordingService, electron, announce, stopSpy, startSpy, toggleSpy } =
@@ -2525,14 +2550,17 @@ describe("VoiceRecordingService — a session another view owns (#14601)", () =>
     expect(electron.voiceInput.stopLive).not.toHaveBeenCalled();
   });
 
-  it("starts on the focused panel when nothing runs anywhere", async () => {
-    const { voiceRecordingService, electron, toggleSpy } = await arrange({
+  it("starts on the panel focused at the press when nothing runs anywhere (#6959)", async () => {
+    const { voiceRecordingService, electron, panelState, toggleSpy } = await arrange({
       sessionElsewhere: null,
     });
 
-    await voiceRecordingService.toggleFocusedPanel();
+    const pressed = voiceRecordingService.toggleFocusedPanel();
+    panelState.focusedId = "panel-c";
+    await pressed;
 
     expect(electron.voiceInput.stopLive).not.toHaveBeenCalled();
+    expect(toggleSpy).toHaveBeenCalledTimes(1);
     expect(toggleSpy).toHaveBeenCalledWith(expect.objectContaining({ panelId: "panel-b" }));
   });
 
@@ -2564,10 +2592,47 @@ describe("VoiceRecordingService — a session another view owns (#14601)", () =>
     expect(stopSpy).not.toHaveBeenCalled();
   });
 
-  it("takes the person to the other view's session", async () => {
+  it("takes the person to the other view's session, and says when it couldn't", async () => {
     const { voiceRecordingService, electron } = await arrange({});
 
     await expect(voiceRecordingService.revealSessionElsewhere()).resolves.toBe(true);
     expect(electron.voiceInput.revealLive).toHaveBeenCalledWith("remote");
+
+    electron.voiceInput.revealLive.mockResolvedValueOnce(false);
+    await expect(voiceRecordingService.revealSessionElsewhere()).resolves.toBe(false);
+    electron.voiceInput.revealLive.mockRejectedValueOnce(new Error("gone"));
+    await expect(voiceRecordingService.revealSessionElsewhere()).resolves.toBe(false);
+  });
+
+  it("asks main for nothing to reveal when no session runs elsewhere", async () => {
+    const { voiceRecordingService, electron } = await arrange({ sessionElsewhere: null });
+
+    await expect(voiceRecordingService.revealSessionElsewhere()).resolves.toBe(false);
+    expect(electron.voiceInput.revealLive).not.toHaveBeenCalled();
+  });
+
+  it("switches to the owner's workspace when on screen in the owner's window", async () => {
+    const { electron } = await arrange({ sessionElsewhere: null });
+    const projectStore = (await import("@/store/projectStore")) as unknown as {
+      __switchProject: ReturnType<typeof vi.fn>;
+    };
+    projectStore.__switchProject.mockClear();
+    const { useScratchStore } = await import("@/store/scratchStore");
+    const switchScratch = vi.fn().mockResolvedValue(undefined);
+    useScratchStore.setState({ switchScratch });
+    const revealRequested = vi.mocked(electron.voiceInput.onRevealRequested).mock.calls[0]![0] as (
+      payload: { sessionId: string; workspaceId: string | null }
+    ) => void;
+
+    const projectId = "a".repeat(64);
+    revealRequested({ sessionId: "remote", workspaceId: projectId });
+    const scratchId = "3f2b8a1c-4d5e-4f60-8a7b-9c0d1e2f3a4b";
+    revealRequested({ sessionId: "remote", workspaceId: scratchId });
+
+    await vi.waitFor(() => {
+      expect(projectStore.__switchProject).toHaveBeenCalledWith(projectId);
+      expect(switchScratch).toHaveBeenCalledWith(scratchId);
+    });
+    expect(projectStore.__switchProject).toHaveBeenCalledTimes(1);
   });
 });

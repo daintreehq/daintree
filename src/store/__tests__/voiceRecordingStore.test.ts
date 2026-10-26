@@ -54,6 +54,32 @@ describe("voiceRecordingStore — session elsewhere (#14601)", () => {
   it("takes the first report whatever its revision", () => {
     useVoiceRecordingStore.getState().applyLiveSessionUpdate({ revision: 0, session: elsewhere });
     expect(useVoiceRecordingStore.getState().sessionElsewhere).toEqual(elsewhere);
+    expect(useVoiceRecordingStore.getState().sessionElsewhereRevision).toBe(0);
+  });
+
+  it("takes a pull of the same revision as the push it already has", () => {
+    useVoiceRecordingStore.getState().applyLiveSessionUpdate({ revision: 5, session: null });
+    useVoiceRecordingStore.getState().applyLiveSessionUpdate({ revision: 5, session: elsewhere });
+
+    expect(useVoiceRecordingStore.getState().sessionElsewhere).toEqual(elsewhere);
+    expect(useVoiceRecordingStore.getState().sessionElsewhereRevision).toBe(5);
+  });
+
+  it("keeps the stored revision when it refuses an older report", () => {
+    useVoiceRecordingStore.getState().applyLiveSessionUpdate({ revision: 7, session: elsewhere });
+    useVoiceRecordingStore.getState().applyLiveSessionUpdate({ revision: 6, session: null });
+
+    expect(useVoiceRecordingStore.getState().sessionElsewhereRevision).toBe(7);
+  });
+
+  it("never persists it", () => {
+    useVoiceRecordingStore.getState().applyLiveSessionUpdate({ revision: 1, session: elsewhere });
+    const persisted = useVoiceRecordingStore.persist
+      .getOptions()
+      .partialize?.(useVoiceRecordingStore.getState());
+
+    expect(persisted).not.toHaveProperty("sessionElsewhere");
+    expect(persisted).not.toHaveProperty("sessionElsewhereRevision");
   });
 });
 

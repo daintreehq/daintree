@@ -1613,15 +1613,21 @@ describe("VoiceRecordingService adversarial", () => {
       });
     });
 
-    it("ends at main a session it no longer holds, without touching its own state", async () => {
+    it("ends at main a session it no longer holds, leaving its own live one alone", async () => {
       const { voiceRecordingService } = await import("../VoiceRecordingService");
-      voiceRecordingService.initialize();
+      await voiceRecordingService.start(panelOne);
+      runtime.voiceState.activeTarget = panelOne;
+      runtime.voiceState.status = "recording";
+      const current = liveSessionId();
       const stopSpy = vi.spyOn(voiceRecordingService, "stop");
 
       requestHandlers().stopRequested({ sessionId: "before-reload" });
 
       expect(stopSpy).not.toHaveBeenCalled();
-      expect(runtime.voiceInput.stop).toHaveBeenCalledWith("before-reload");
+      expect(runtime.voiceInput.stop.mock.calls).toEqual([["before-reload"]]);
+      expect(runtime.voiceInput.stop).not.toHaveBeenCalledWith(current);
+      expect(runtime.voiceFns.finishSession).not.toHaveBeenCalled();
+      expect(runtime.createdStreams[0]?.track.stop).not.toHaveBeenCalled();
     });
 
     it("shows its target only for its own session", async () => {
@@ -1629,10 +1635,10 @@ describe("VoiceRecordingService adversarial", () => {
       await voiceRecordingService.start(panelOne);
       const focusSpy = vi.spyOn(voiceRecordingService, "focusActiveTarget").mockResolvedValue(true);
 
-      requestHandlers().revealRequested({ sessionId: "someone-else" });
+      requestHandlers().revealRequested({ sessionId: "someone-else", workspaceId: null });
       expect(focusSpy).not.toHaveBeenCalled();
 
-      requestHandlers().revealRequested({ sessionId: liveSessionId() });
+      requestHandlers().revealRequested({ sessionId: liveSessionId(), workspaceId: "p" });
       expect(focusSpy).toHaveBeenCalledTimes(1);
     });
   });

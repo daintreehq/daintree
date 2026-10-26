@@ -16,6 +16,7 @@ import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
+import { scratchName, useScratchStore } from "@/store/scratchStore";
 import { actionService } from "@/services/ActionService";
 import type { VoiceSessionElsewhere } from "@shared/types";
 
@@ -81,9 +82,9 @@ function VoiceElsewhereButton({
   shortcut: string | undefined;
   "data-toolbar-item"?: string;
 }) {
-  const title = session.projectName
-    ? `Dictating in ${session.projectName}`
-    : "Dictating in another window";
+  const scratch = useScratchStore((state) => scratchName(state.scratches, session.projectId));
+  const where = session.projectName ?? scratch;
+  const title = where ? `Dictating in ${where}` : "Dictating elsewhere";
   return (
     <Tooltip>
       <TooltipTrigger asChild>

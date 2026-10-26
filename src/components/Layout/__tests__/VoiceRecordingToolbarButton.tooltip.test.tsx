@@ -5,6 +5,8 @@ import path from "path";
 import { render, fireEvent } from "@testing-library/react";
 import { VoiceRecordingToolbarButton } from "../VoiceRecordingToolbarButton";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
+import { useScratchStore } from "@/store/scratchStore";
+import type { Scratch } from "@shared/types";
 import { readToolbarSource } from "./toolbarSource";
 
 const BUTTON_PATH = path.resolve(__dirname, "../VoiceRecordingToolbarButton.tsx");
@@ -194,6 +196,7 @@ describe("VoiceRecordingToolbarButton — tooltip names what a click does", () =
 describe("VoiceRecordingToolbarButton — dictation in another view (#14601)", () => {
   beforeEach(() => {
     revealSessionElsewhere.mockClear();
+    focusActiveTarget.mockClear();
     mockCombo = "Cmd+.";
     useVoiceRecordingStore.setState({
       isConfigured: true,
@@ -220,14 +223,30 @@ describe("VoiceRecordingToolbarButton — dictation in another view (#14601)", (
     expect(revealSessionElsewhere).toHaveBeenCalledTimes(1);
   });
 
-  it("names a window when the owner has no project", () => {
+  it("names a scratch by its own name, which main doesn't know", () => {
+    const scratchId = "3f2b8a1c-4d5e-4f60-8a7b-9c0d1e2f3a4b";
+    useScratchStore.setState({
+      scratches: [{ id: scratchId, name: "Spike" } as Scratch],
+    });
+    useVoiceRecordingStore.setState({
+      sessionElsewhere: { sessionId: "s1", projectId: scratchId, projectName: null },
+    });
+    const { getByTestId } = render(<VoiceRecordingToolbarButton />);
+
+    expect(getByTestId("voice-elsewhere-button").getAttribute("aria-label")).toBe(
+      "Dictating in Spike. Click to go there."
+    );
+    useScratchStore.setState({ scratches: [] });
+  });
+
+  it("says only that it runs elsewhere when the workspace has no known name", () => {
     useVoiceRecordingStore.setState({
       sessionElsewhere: { sessionId: "s1", projectId: null, projectName: null },
     });
     const { getByTestId } = render(<VoiceRecordingToolbarButton />);
 
     expect(getByTestId("voice-elsewhere-button").getAttribute("aria-label")).toBe(
-      "Dictating in another window. Click to go there."
+      "Dictating elsewhere. Click to go there."
     );
   });
 
@@ -238,9 +257,25 @@ describe("VoiceRecordingToolbarButton — dictation in another view (#14601)", (
       activeTarget: { panelId: "p-1", panelTitle: "claude · notes" },
       sessionElsewhere: { sessionId: "s1", projectId: "p-a", projectName: "Alpha" },
     });
-    const { queryByTestId } = render(<VoiceRecordingToolbarButton />);
+    const { queryByTestId, container } = render(<VoiceRecordingToolbarButton />);
 
     expect(queryByTestId("voice-elsewhere-button")).toBeNull();
+    const button = container.querySelector("button")!;
+    expect(button.getAttribute("aria-label")).toBe("Recording: claude · notes");
+    fireEvent.click(button);
+    expect(focusActiveTarget).toHaveBeenCalledTimes(1);
+    expect(revealSessionElsewhere).not.toHaveBeenCalled();
+  });
+
+  it("puts the session elsewhere ahead of this view's lock", () => {
+    useVoiceRecordingStore.setState({
+      lockedTarget: { panelId: "p-1", panelTitle: "claude · notes" },
+      sessionElsewhere: { sessionId: "s1", projectId: "p-a", projectName: "Alpha" },
+    });
+    const { getByTestId, queryByTestId } = render(<VoiceRecordingToolbarButton />);
+
+    expect(getByTestId("voice-elsewhere-button")).toBeTruthy();
+    expect(queryByTestId("voice-locked-button")).toBeNull();
   });
 
   it("stays an invisible placeholder when nothing runs anywhere", () => {
@@ -249,6 +284,7 @@ describe("VoiceRecordingToolbarButton — dictation in another view (#14601)", (
 
     expect(queryByTestId("voice-elsewhere-button")).toBeNull();
     expect(container.querySelector("button")).toBeNull();
+    expect(container.querySelector('[aria-hidden="true"].opacity-0')).not.toBeNull();
   });
 });
 

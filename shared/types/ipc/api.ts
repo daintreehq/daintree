@@ -2202,8 +2202,14 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onLiveSession(callback: (update: VoiceLiveSessionUpdate) => void): () => void;
     /** To the owner, when another view's dictation key asked it to stop. */
     onStopRequested(callback: (payload: { sessionId: string }) => void): () => void;
-    /** To the owner, when another view's indicator asked to be taken to it. */
-    onRevealRequested(callback: (payload: { sessionId: string }) => void): () => void;
+    /**
+     * When another view's indicator asked to be taken to the live session: the
+     * owner focuses its target, and the view on screen in the owner's window
+     * switches to `workspaceId`.
+     */
+    onRevealRequested(
+      callback: (payload: { sessionId: string; workspaceId: string | null }) => void
+    ): () => void;
     checkMicPermission(): Promise<MicPermissionStatus>;
     /**
      * Native permission preflight. Resolves to whether the renderer may proceed

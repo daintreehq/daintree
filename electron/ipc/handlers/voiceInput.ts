@@ -1135,26 +1135,25 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
 
   // Another view's indicator. The owner's own window brings it forward: a
   // switch asked from any other window would release the owner's cached view
-  // to open the project there, ending the session it was meant to show.
+  // to open its workspace there, ending the session it was meant to show.
   const handleRevealLive = (sessionId: string): boolean => {
     const session = liveSession;
     if (!session || session.id !== sessionId || session.ended) return false;
     if (session.sender.isDestroyed()) return false;
+    const reveal = { sessionId, workspaceId: session.projectId };
     const win = getWindowForWebContents(session.sender);
     if (win && !win.isDestroyed()) {
+      // The view on screen there switches to the owner's workspace.
       const shown = getAppWebContents(win);
-      if (shown.id !== session.webContentsId && session.projectId && !shown.isDestroyed()) {
-        shown.send(CHANNELS.MENU_ACTION, {
-          actionId: "project.switch",
-          args: { projectId: session.projectId },
-        });
+      if (shown.id !== session.webContentsId && !shown.isDestroyed()) {
+        shown.send(CHANNELS.VOICE_INPUT_REVEAL_REQUESTED, reveal);
       }
       if (win.isMinimized()) win.restore();
       win.show();
       win.focus();
     }
     // The owner focuses the panel it is dictating into.
-    session.sender.send(CHANNELS.VOICE_INPUT_REVEAL_REQUESTED, { sessionId });
+    session.sender.send(CHANNELS.VOICE_INPUT_REVEAL_REQUESTED, reveal);
     return true;
   };
 

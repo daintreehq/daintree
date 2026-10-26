@@ -1,4 +1,6 @@
 import { useProjectStore } from "@/store/projectStore";
+import { scratchName, useScratchStore } from "@/store/scratchStore";
+import { isScratchWorkspaceId } from "@shared/utils/workspaceIds";
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
@@ -643,8 +645,13 @@ class VoiceRecordingService {
       })
     );
     this.unsubscribers.push(
-      voiceInput.onRevealRequested(({ sessionId }) => {
-        if (sessionId === this.sessionId) void this.focusActiveTarget();
+      voiceInput.onRevealRequested(({ sessionId, workspaceId }) => {
+        if (sessionId === this.sessionId) {
+          void this.focusActiveTarget();
+          return;
+        }
+        // On screen in the owner's window: bring the owner's workspace forward.
+        if (workspaceId) void this.showWorkspace(workspaceId);
       })
     );
 
@@ -2414,13 +2421,25 @@ class VoiceRecordingService {
     }
     // Already over: main's update that says so is on its way.
     if (!stopped) return;
+    const where =
+      session.projectName ?? scratchName(useScratchStore.getState().scratches, session.projectId);
     useVoiceRecordingStore
       .getState()
-      .announce(
-        session.projectName
-          ? `Stopping dictation in ${session.projectName}.`
-          : "Stopping dictation."
-      );
+      .announce(where ? `Stopping dictation in ${where}.` : "Stopping dictation.");
+  }
+
+  // Projects and scratches switch through separate stores, told apart by the
+  // shape of the id.
+  private async showWorkspace(workspaceId: string): Promise<void> {
+    try {
+      if (isScratchWorkspaceId(workspaceId)) {
+        await useScratchStore.getState().switchScratch(workspaceId);
+      } else {
+        await useProjectStore.getState().switchProject(workspaceId);
+      }
+    } catch (error) {
+      logWarn(`${LOG_PREFIX} Couldn't show the dictating workspace`, voiceErrorLogFields(error));
+    }
   }
 
   /** Takes the person to the session another view owns: its window, project and panel. */

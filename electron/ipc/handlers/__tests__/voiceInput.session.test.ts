@@ -42,9 +42,9 @@ const shared = vi.hoisted(() => ({
   projects: new Map<number, string>(),
   /** Every app view, as getAllAppWebContents would list them. */
   appViews: [] as unknown[],
-  /** The window every view lives in, and the view it is showing. */
-  window: null as null | Record<string, unknown>,
-  shownView: null as unknown,
+  /** The window each view lives in, by sender id, and the view each window shows. */
+  windowOf: new Map<number, Record<string, unknown>>(),
+  shownIn: new Map<Record<string, unknown>, unknown>(),
 }));
 
 vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
@@ -116,8 +116,8 @@ vi.mock("../../../window/webContentsRegistry.js", async (importOriginal) => {
     ...actual,
     getProjectForWebContents: vi.fn((id: number) => shared.projects.get(id) ?? null),
     getAllAppWebContents: vi.fn(() => shared.appViews),
-    getWindowForWebContents: vi.fn(() => shared.window),
-    getAppWebContents: vi.fn(() => shared.shownView),
+    getWindowForWebContents: vi.fn((wc: { id: number }) => shared.windowOf.get(wc.id) ?? null),
+    getAppWebContents: vi.fn((win: Record<string, unknown>) => shared.shownIn.get(win)),
   };
 });
 
@@ -745,13 +745,23 @@ describe("voiceInput — a session live in another view (#14601)", () => {
   let ownerA: FakeSender;
   let viewB: FakeSender;
   let viewC: FakeSender;
-  let win: {
+  type FakeWindow = {
     isDestroyed: () => boolean;
     isMinimized: ReturnType<typeof vi.fn>;
     restore: ReturnType<typeof vi.fn>;
     show: ReturnType<typeof vi.fn>;
     focus: ReturnType<typeof vi.fn>;
   };
+  // A's window, and B's own window.
+  let winA: FakeWindow;
+  let winB: FakeWindow;
+  const makeWindow = (): FakeWindow => ({
+    isDestroyed: () => false,
+    isMinimized: vi.fn(() => false),
+    restore: vi.fn(),
+    show: vi.fn(),
+    focus: vi.fn(),
+  });
 
   const liveUpdates = (view: FakeSender) =>
     view.sent.filter((m) => m.channel === CHANNELS.VOICE_INPUT_LIVE_SESSION).map((m) => m.payload);
@@ -781,15 +791,17 @@ describe("voiceInput — a session live in another view (#14601)", () => {
         ? ({ id, name: "Alpha", path: "/alpha" } as ReturnType<typeof projectStore.getProjectById>)
         : null
     );
-    win = {
-      isDestroyed: () => false,
-      isMinimized: vi.fn(() => false),
-      restore: vi.fn(),
-      show: vi.fn(),
-      focus: vi.fn(),
-    };
-    shared.window = win;
-    shared.shownView = ownerA;
+    winA = makeWindow();
+    winB = makeWindow();
+    shared.windowOf = new Map([
+      [ownerA.id, winA],
+      [viewC.id, winA],
+      [viewB.id, winB],
+    ]);
+    shared.shownIn = new Map<Record<string, unknown>, unknown>([
+      [winA, ownerA],
+      [winB, viewB],
+    ]);
     cleanup = registerVoiceInputHandlers({
       mainWindow: { webContents: { send: vi.fn() }, isDestroyed: () => false },
     } as unknown as Parameters<typeof registerVoiceInputHandlers>[0]);
@@ -798,15 +810,19 @@ describe("voiceInput — a session live in another view (#14601)", () => {
   afterEach(() => {
     cleanup?.();
     shared.appViews = [];
-    shared.window = null;
-    shared.shownView = null;
+    shared.windowOf = new Map();
+    shared.shownIn = new Map();
     vi.mocked(projectStore.getProjectById).mockReset();
     vi.mocked(projectStore.getProjectById).mockReturnValue(null);
   });
 
   it("tells every other view where the live session runs, and its owner nothing", async () => {
+    const idle = (await invoke(CHANNELS.VOICE_INPUT_GET_LIVE_SESSION, viewB)) as {
+      revision: number;
+    };
     await start(ownerA, "a");
 
+    expect(lastLive(viewB)!.revision).toBeGreaterThan(idle.revision);
     const elsewhere = { sessionId: "a", projectId: "project-a", projectName: "Alpha" };
     expect(lastLive(viewB)?.session).toEqual(elsewhere);
     expect(lastLive(viewC)?.session).toEqual(elsewhere);
@@ -831,11 +847,17 @@ describe("voiceInput — a session live in another view (#14601)", () => {
     expect(lastLive(viewB)?.session).toBeNull();
   });
 
-  it("gives a view that boots mid-session the same snapshot it would have been sent", async () => {
+  it("gives a view that boots mid-session the snapshot it missed", async () => {
     await start(ownerA, "a");
+    const latecomer = makeSender();
 
-    const pulled = await invoke(CHANNELS.VOICE_INPUT_GET_LIVE_SESSION, viewC);
-    expect(pulled).toEqual(lastLive(viewC));
+    const pulled = await invoke(CHANNELS.VOICE_INPUT_GET_LIVE_SESSION, latecomer);
+
+    expect(liveUpdates(latecomer)).toEqual([]);
+    expect(pulled).toEqual({
+      revision: lastLive(viewB)!.revision,
+      session: { sessionId: "a", projectId: "project-a", projectName: "Alpha" },
+    });
     expect(await invoke(CHANNELS.VOICE_INPUT_GET_LIVE_SESSION, ownerA)).toMatchObject({
       session: null,
     });
@@ -862,31 +884,44 @@ describe("voiceInput — a session live in another view (#14601)", () => {
     expect(sentOn(ownerA, CHANNELS.VOICE_INPUT_STOP_REQUESTED)).toEqual([]);
   });
 
+  const reveal = { sessionId: "a", workspaceId: "project-a" };
+
   it("brings the owner's window forward and asks the owner to show its panel", async () => {
-    win.isMinimized.mockReturnValue(true);
+    winA.isMinimized.mockReturnValue(true);
     await start(ownerA, "a");
 
     expect(await invoke(CHANNELS.VOICE_INPUT_REVEAL_LIVE, viewB, "a")).toBe(true);
 
-    expect(win.restore).toHaveBeenCalled();
-    expect(win.focus).toHaveBeenCalled();
-    expect(sentOn(ownerA, CHANNELS.VOICE_INPUT_REVEAL_REQUESTED)).toEqual([{ sessionId: "a" }]);
-    // Already on screen in its window: no project switch.
-    expect(ownerA.sent.some((m) => m.channel === CHANNELS.MENU_ACTION)).toBe(false);
+    expect(winA.restore).toHaveBeenCalled();
+    expect(winA.show).toHaveBeenCalled();
+    expect(winA.focus).toHaveBeenCalled();
+    expect(winB.focus).not.toHaveBeenCalled();
+    expect(sentOn(ownerA, CHANNELS.VOICE_INPUT_REVEAL_REQUESTED)).toEqual([reveal]);
+    // On screen in its window already, so nothing there switches.
+    expect(sentOn(viewB, CHANNELS.VOICE_INPUT_REVEAL_REQUESTED)).toEqual([]);
+    expect(sentOn(viewC, CHANNELS.VOICE_INPUT_REVEAL_REQUESTED)).toEqual([]);
   });
 
-  it("switches the owner's window to its project when another one is on screen there", async () => {
-    shared.shownView = viewB;
+  it("has the owner's window, not the asking one, switch when another view shows there", async () => {
+    shared.shownIn.set(winA, viewC);
     await start(ownerA, "a");
 
     await invoke(CHANNELS.VOICE_INPUT_REVEAL_LIVE, viewB, "a");
 
     // The owner's own window switches, so its cached view comes forward rather
-    // than being released to open the project somewhere else.
-    expect(sentOn(viewB, CHANNELS.MENU_ACTION)).toEqual([
-      { actionId: "project.switch", args: { projectId: "project-a" } },
-    ]);
-    expect(sentOn(ownerA, CHANNELS.VOICE_INPUT_REVEAL_REQUESTED)).toEqual([{ sessionId: "a" }]);
+    // than being released to open the workspace somewhere else.
+    expect(sentOn(viewC, CHANNELS.VOICE_INPUT_REVEAL_REQUESTED)).toEqual([reveal]);
+    expect(sentOn(viewB, CHANNELS.VOICE_INPUT_REVEAL_REQUESTED)).toEqual([]);
+    expect(sentOn(ownerA, CHANNELS.VOICE_INPUT_REVEAL_REQUESTED)).toEqual([reveal]);
+    expect(winA.restore).not.toHaveBeenCalled();
+  });
+
+  it("reveals nothing for a session that isn't the live one", async () => {
+    await start(ownerA, "a");
+
+    expect(await invoke(CHANNELS.VOICE_INPUT_REVEAL_LIVE, viewB, "old")).toBe(false);
+    expect(winA.focus).not.toHaveBeenCalled();
+    expect(sentOn(ownerA, CHANNELS.VOICE_INPUT_REVEAL_REQUESTED)).toEqual([]);
   });
 
   describe("the dictation key on a page that isn't an app view", () => {
@@ -925,11 +960,4 @@ describe("voiceInput — a session live in another view (#14601)", () => {
     });
   });
 
-  it("reveals nothing for a session that isn't the live one", async () => {
-    await start(ownerA, "a");
-
-    expect(await invoke(CHANNELS.VOICE_INPUT_REVEAL_LIVE, viewB, "old")).toBe(false);
-    expect(win.focus).not.toHaveBeenCalled();
-    expect(sentOn(ownerA, CHANNELS.VOICE_INPUT_REVEAL_REQUESTED)).toEqual([]);
-  });
 });
