@@ -499,6 +499,12 @@ export const useDictationRangeStore = create<DictationRangeState>()((set, get) =
         merged,
         ...mapped.utterances.slice(first + run.length),
       ],
+      // A paragraph break inside the passage is now part of the merged words.
+      // Kept, it would map to an empty edited range and stop a cancel.
+      breaks: mapped.breaks.filter((_, i) => {
+        const paragraphBreak = record.breaks[i]!;
+        return paragraphBreak.to <= from || paragraphBreak.from >= to;
+      }),
     };
     set((state) => {
       const key = makeDraftKey(record.panelId, record.projectId);

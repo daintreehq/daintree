@@ -1145,8 +1145,11 @@ class VoiceRecordingService {
     if (sessionId && sessionId !== this.lastEndedSessionId) {
       this.discardedSessionIds.add(sessionId);
     }
+    // A rewrite's timeline was disposed at its start, so only a dictation's is found.
+    const timeline = sessionId ? this.timelines.get(sessionId) : undefined;
+    timeline?.mark("stopRequested");
     this.dropHeldPress();
-    this.invalidatePendingStart();
+    this.invalidatePendingStart("escape");
     this.clearTimers();
     // The worklet forwards and meters nothing more for this session.
     this.generation++;
@@ -1201,6 +1204,11 @@ class VoiceRecordingService {
     logInfo(`${LOG_PREFIX} ${rewrite ? "Rewrite" : "Dictation"} cancelled`, {
       removedSpans: spans.length,
     });
+    // Nothing the session still sends can land, so the draft is final now. In
+    // the Escape's own tick, so a stale start that ends the session later
+    // can't name it first.
+    timeline?.mark("settled");
+    timeline?.finish("escape");
 
     if (this.openingAudio) this.flushOpeningAudio(this.openingAudio);
     this.cleanupAudioCapture();

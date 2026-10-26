@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { planVoiceBreak, planVoiceWords, type VoiceInsertPlan } from "@/services/voiceInsertion";
+import { collectCorrectionPassages } from "@/services/voiceCorrectionPassages";
 import { useTerminalInputStore } from "../terminalInputStore";
 import {
   dictatedSpans,
@@ -684,6 +685,29 @@ describe("dictationRangeStore", () => {
       dictate("words");
       expect(dictatedSpans(only(), draft().slice(0, 2))).toBeNull();
     });
+
+    it("takes a passage the stop-time heard-as pass rewrote, and keeps the break after it to take (#14737)", () => {
+      setDraft("Keep");
+      dictate("use zoo stand");
+      paragraphBreak();
+      setDraft(draft() + "Typed. ");
+      dictate("more");
+      const record = only();
+      const [passage, later] = collectCorrectionPassages(record, draft());
+      expect(later?.text).toBe("more");
+
+      expect(
+        useDictationRangeStore
+          .getState()
+          .rewritePassage(record.id, passage!, "use Zustand", passage!.text)
+      ).toEqual({ from: 5, to: 18 });
+      expect(draft()).toBe("Keep use Zustand\nTyped. more");
+      expect(only().breaks).toEqual([{ from: 16, to: 17, edited: false }]);
+
+      const spans = dictatedSpans(only(), draft())!;
+      expect(spans.map(textOf)).toEqual(["more", "\n", " use Zustand"]);
+      expect(without(spans)).toBe("KeepTyped. ");
+    });
   });
 });
 
@@ -859,6 +883,45 @@ describe("cancelling a dictation at the caret (#14631, #14634)", () => {
     expect(draft()).toBe("Intro. One.Outro.");
 
     expect(cancelled()).toBe("Intro. Outro.");
+  });
+
+  describe("once the stop-time heard-as pass rewrote a passage (#14737)", () => {
+    /** Rewrites each passage the way the stop-time pass does. */
+    const rewritePassages = (from: string, to: string) => {
+      const { id } = only();
+      for (const passage of collectCorrectionPassages(only(), draft())) {
+        const text = passage.text.replace(from, to);
+        if (text === passage.text) continue;
+        expect(
+          useDictationRangeStore.getState().rewritePassage(id, passage, text, passage.text)
+        ).not.toBeNull();
+      }
+    };
+
+    it("takes exactly the rewritten words and the space after them", () => {
+      speak("Use zoo");
+      speak("stand.");
+      expect(draft()).toBe("Intro. Use zoo stand. Outro.");
+
+      rewritePassages("zoo stand", "Zustand");
+      expect(draft()).toBe("Intro. Use Zustand. Outro.");
+      expect(only().utterances).toHaveLength(1);
+
+      expect(cancelled()).toBe("Intro. Outro.");
+    });
+
+    it("takes a paragraph break the rewritten passage spans", () => {
+      speak("One.");
+      breakLine();
+      speak("Use zoo stand.");
+      expect(collectCorrectionPassages(only(), draft())).toHaveLength(1);
+
+      rewritePassages("zoo stand", "Zustand");
+      expect(draft()).toBe("Intro. One.\nUse Zustand. Outro.");
+      expect(only().breaks).toEqual([]);
+
+      expect(cancelled()).toBe("Intro. Outro.");
+    });
   });
 });
 
