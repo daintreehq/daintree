@@ -9,8 +9,11 @@ import type { HostId } from "./remoteHosts.js";
  * a credential, an environment, a preset or a store path, and nothing this
  * machine owns for itself (its look, its keys) is ever reached this way.
  * `canopyMode` is edited here, deliberately, on the host it names, and never
- * copied (`portableSettings.ts`); so is `canopyModel`, the model that host
- * downloads and reads with.
+ * copied (`portableSettings.ts`). `canopyModel` reads the model that host
+ * reads with, and is how a Shell tells a host that reads locally from one on
+ * a Daintree from before. There is one model, so writing it changes nothing;
+ * any of the publisher's readers passes, as a host on an earlier build may
+ * still report the one it chose.
  */
 export const HOST_SETTING_KEYS = [
   "canopyMode",

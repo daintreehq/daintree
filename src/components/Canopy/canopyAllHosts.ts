@@ -291,12 +291,6 @@ export function createAllHostsRoute(ownHostId: HostId, hostIds: readonly HostId[
     refresh: async () => {
       answered(await Promise.allSettled(hostIds.map((hostId) => apiFor(hostId).refresh())));
     },
-    // The model is each host's own choice, made on that host's panel: across
-    // hosts there is nothing to list and nothing to set.
-    getModels: async () => ({ selected: "", variants: [] }),
-    setModel: async () => {
-      throw new Error("Choose a model on one host at a time");
-    },
     // Each host's own download, tried again wherever it failed; the rest ignore it.
     retryModel: async () => {
       const settled = await Promise.allSettled(

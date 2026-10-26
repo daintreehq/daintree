@@ -1,7 +1,7 @@
 {
   "totals": {
     "waitForTimeout": 28,
-    "isVisibleTimeout": 17
+    "isVisibleTimeout": 16
   },
   "files": {
     "e2e/core/core-terminal-agent-promotion.spec.ts": {
@@ -37,7 +37,7 @@
     },
     "e2e/helpers/panels.ts": {
       "waitForTimeout": 1,
-      "isVisibleTimeout": 8
+      "isVisibleTimeout": 7
     },
     "e2e/helpers/presets.ts": {
       "waitForTimeout": 3
@@ -57,5 +57,5 @@
       "isVisibleTimeout": 1
     }
   },
-  "updatedAt": "2026-10-01T13:28:33.820Z"
+  "updatedAt": "2026-10-26T01:33:03.566Z"
 }

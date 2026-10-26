@@ -345,7 +345,11 @@ describe("CanopyRow", () => {
 
   it("puts what a stopped run reported after where it runs", () => {
     const { container } = renderRow(
-      itemFor("finished", { tests: "passing", changes: "uncommitted" }, { cwd: "/w/fix-rounding" })
+      itemFor(
+        "finished",
+        { tests: "passing", changes: "uncommitted" },
+        { title: "Claude", lastObservedTitle: "✳ Fix flaky panel tests", cwd: "/w/fix-rounding" }
+      )
     );
     const meta = [...container.querySelectorAll("span")].find((el) =>
       el.textContent?.startsWith("🦊")
@@ -368,7 +372,7 @@ describe("CanopyRow", () => {
       itemFor(
         "finished",
         { tests: "passing", changes: "uncommitted", contextLeft: 10 },
-        { cwd: "/w/fix-rounding" }
+        { title: "Claude", lastObservedTitle: "✳ Fix flaky panel tests", cwd: "/w/fix-rounding" }
       )
     );
     // The line gives way from its end, a part at a time: the agent's reports
@@ -421,9 +425,19 @@ describe("CanopyRow", () => {
     expect(container.querySelector("[data-asking]")).toBeNull();
   });
 
-  it("names a row by its agent alone, and says what it wants and where it is after that", () => {
-    const { container } = renderRow(itemFor("question"), { unread: true });
+  it("names a row by its terminal's title, and says what it wants and where it is after that", () => {
+    const { container } = renderRow(
+      itemFor(
+        "question",
+        { task: "Something the reader picked" },
+        { title: "Claude", lastObservedTitle: "✳ Fix flaky panel tests" }
+      ),
+      { unread: true }
+    );
     const name = option(container).getAttribute("aria-label")!;
+    // The terminal's own title, never the line the reader picked as the task.
+    expect(name.startsWith("Fix flaky panel tests")).toBe(true);
+    expect(container.textContent).not.toContain("Something the reader picked");
     const heard = description(container);
     for (const part of ["Choose push to develop or open a PR", "Tests pass locally.", "app"]) {
       expect(name).not.toContain(part);
@@ -433,6 +447,58 @@ describe("CanopyRow", () => {
     expect(heard).toMatch(/unread/);
     // What it wants comes before the place.
     expect(heard.indexOf("Choose push")).toBeLessThan(heard.lastIndexOf("app"));
+  });
+
+  it("never says the title again under it, by the reading's words or the screen's own", () => {
+    const titled = { title: "Claude", lastObservedTitle: "✳ Fix flaky panel tests" };
+    const askLine = (container: HTMLElement) =>
+      container.querySelector('[id$="-ask"]')?.textContent ?? "";
+    const repeated = renderRow(
+      itemFor(
+        "finished",
+        { headline: "Fix flaky panel tests.", statusLine: "Fix flaky panel tests" },
+        titled
+      )
+    );
+    expect(askLine(repeated.container)).toBe("Finished");
+    repeated.unmount();
+    // A summary that only repeats the title goes too.
+    const summary = renderRow(
+      itemFor(
+        "finished",
+        { headline: "All 14 tests pass.", summary: "Fix flaky panel tests" },
+        titled
+      )
+    );
+    expect(askLine(summary.container)).toBe("All 14 tests pass.");
+    expect(summary.container.querySelector("[data-detail]")).toBeNull();
+    summary.unmount();
+    // Nor the screen's own words, before any reading has worded the run.
+    const glance = renderRow(
+      itemFor(
+        "question",
+        {
+          stage: "classified",
+          headline: null,
+          summary: null,
+          glance: { recap: null, said: "Fix flaky panel tests", doing: null, action: null },
+        },
+        titled
+      )
+    );
+    expect(glance.container.textContent?.split("Fix flaky panel tests")).toHaveLength(2);
+  });
+
+  it("keeps an approval's caution and command when its headline only repeats the title", () => {
+    const { container } = renderRow(
+      itemFor(
+        "approval",
+        { headline: "Fix flaky panel tests", risk: "caution", action: "rm -rf dist" },
+        { title: "Claude", lastObservedTitle: "✳ Fix flaky panel tests", waitingReason: "approval" }
+      )
+    );
+    expect(container.textContent).toContain("rm -rf dist");
+    expect(container.querySelector(".text-status-warning")).not.toBeNull();
   });
 
   it("reads out how long ago a run was replied to, as the row shows it", () => {

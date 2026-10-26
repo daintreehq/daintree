@@ -5,6 +5,7 @@ import type {
   HostSettingsPatch,
 } from "../../../shared/types/hostSettings.js";
 import { hostSettingRefusal } from "../../../shared/types/hostSettings.js";
+import { CANOPY_MODEL } from "../../../shared/types/ipc/canopy.js";
 import {
   isStorableDefaultAgent,
   type AgentDefaultsPatch,
@@ -42,7 +43,7 @@ export async function loadHostSettingsLeaves(): Promise<HostSettingsLeaves> {
         return { value: state.mode, revision: `${state.modeRevision}` };
       }
       case "canopyModel": {
-        const value = canopy.selectedCanopyModel();
+        const value = CANOPY_MODEL;
         return { value, revision: digest(value) };
       }
       case "agentDefaults.defaultAgent":
@@ -98,10 +99,7 @@ export async function loadHostSettingsLeaves(): Promise<HostSettingsLeaves> {
       const idleChanged = Object.keys(idlePatch).length > 0;
       if (idleChanged) idleService.updateConfig(idlePatch);
 
-      // The model before the mode: turned on with a new model, the host
-      // downloads that one, never the last one first.
-      const model = patch.canopyModel;
-      if (model !== undefined) canopy.changeCanopyModel(model);
+      // `canopyModel` names the one model there is: writing it changes nothing.
       if (mode !== undefined) {
         const state = canopy.canopyModeState();
         canopy.changeCanopyMode(mode, state.modeRevision, state.hostEpoch);

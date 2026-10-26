@@ -36,8 +36,6 @@ export const CANOPY_HOST_CHANNELS = [
   "canopy:terminal-send-key",
   "canopy:answer",
   "canopy:set-mode",
-  "canopy:get-models",
-  "canopy:set-model",
   "canopy:retry-model",
   "fleet:get-snapshot",
 ] as const;

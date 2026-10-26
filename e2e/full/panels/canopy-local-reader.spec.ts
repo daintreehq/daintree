@@ -2,11 +2,11 @@
  * Canopy on its local model, end to end: the real app, real PTYs, fake Claude
  * agents drawing realistic screens, and the published reader downloaded from
  * Hugging Face and run in its own process. Turning Canopy on downloads the
- * Light model and every row is read on this machine; Settings lists the
- * models and switching to Best downloads it and deletes Light; turning Canopy
- * off lets the reader process go.
+ * model, in INT8 on every CPU, and every row is read on this machine;
+ * Settings offers no choice of model; turning Canopy off lets the reader
+ * process go, and the model can then be deleted.
  *
- * Opt-in only, since it downloads the models (about 90 MB):
+ * Opt-in only, since it downloads the model (about 21 MB):
  *
  *   DAINTREE_E2E_CANOPY_LOCAL=1 npx playwright test --project=full-panels canopy-local-reader
  */
@@ -183,9 +183,9 @@ test.describe("Canopy on its local model", () => {
   test("turning Canopy on downloads Light and reads every agent on this machine", async () => {
     test.info().annotations.push({
       type: "conditional-skip",
-      description: "DAINTREE_E2E_CANOPY_LOCAL is required: the spec downloads the models",
+      description: "DAINTREE_E2E_CANOPY_LOCAL is required: the spec downloads the model",
     });
-    test.skip(!ENABLED, "set DAINTREE_E2E_CANOPY_LOCAL=1 to download the models");
+    test.skip(!ENABLED, "set DAINTREE_E2E_CANOPY_LOCAL=1 to download the model");
     test.setTimeout(300_000);
     const page = ctx.window;
 
@@ -226,9 +226,11 @@ test.describe("Canopy on its local model", () => {
         { timeout: 120_000, intervals: [500] }
       )
       .toBe(true);
-    // Light reads in INT8 on ARM and in FP32 on x86, where its INT8 reads wrongly.
-    const lightWeights = process.arch === "x64" ? "model.fp32.onnx" : "model.int8.onnx";
-    expect(existsSync(path.join(modelDir("canopy-reader-17m"), lightWeights))).toBe(true);
+    // Weight-only INT8 on every CPU, and config.json, which Hugging Face counts downloads by.
+    const light = modelDir("canopy-reader-17m");
+    expect(existsSync(path.join(light, "model.int8.onnx"))).toBe(true);
+    expect(existsSync(path.join(light, "model.fp32.onnx"))).toBe(false);
+    expect(existsSync(path.join(light, "config.json"))).toBe(true);
     expect(existsSync(modelDir("canopy-reader-68m"))).toBe(false);
     const readers = await readerProcesses();
     expect(readers).toHaveLength(1);
@@ -262,83 +264,46 @@ test.describe("Canopy on its local model", () => {
     await page.keyboard.press("Escape");
   });
 
-  test("Settings lists both models honestly, and switching to Best downloads it and deletes Light", async () => {
+  test("Settings offers no choice of model, and names the one downloaded", async () => {
     test.info().annotations.push({
       type: "conditional-skip",
-      description: "DAINTREE_E2E_CANOPY_LOCAL is required: the spec downloads the models",
+      description: "DAINTREE_E2E_CANOPY_LOCAL is required: the spec downloads the model",
     });
-    test.skip(!ENABLED, "set DAINTREE_E2E_CANOPY_LOCAL=1 to download the models");
-    test.setTimeout(300_000);
+    test.skip(!ENABLED, "set DAINTREE_E2E_CANOPY_LOCAL=1 to download the model");
+    test.setTimeout(60_000);
     const page = ctx.window;
     const panel = await openCanopySettings(page);
-    const light = panel.getByRole("radio", { name: /Light/ });
-    const best = panel.getByRole("radio", { name: /Best/ });
-    await expect(light).toBeVisible({ timeout: T_MEDIUM });
-    await expect(best).toBeVisible();
-    await expect(light).toHaveAttribute("aria-checked", "true");
-    await expect(light).toContainText("Downloaded");
-    await expect(panel).toContainText("Both read an agent's state equally well");
+    await expect(panel.getByRole("button", { name: "Delete model" })).toBeVisible({
+      timeout: T_MEDIUM,
+    });
+    await expect(panel).toContainText("Light");
+    await expect(panel.getByRole("radio")).toHaveCount(0);
+    await expect(panel.getByText("Best", { exact: true })).toHaveCount(0);
     await expect(panel.getByText("Plan", { exact: true })).toHaveCount(0);
     await expect(panel.getByText("Privacy policy")).toHaveCount(0);
     console.log("settings:\n" + (await panel.innerText()));
-
-    const switchedAt = Date.now();
-    await best.click();
-    await expect(best).toHaveAttribute("aria-checked", "true");
-    await expect(best).toContainText("Downloaded", { timeout: 240_000 });
-    await expect
-      .poll(() => existsSync(modelDir("canopy-reader-17m")), { timeout: 30_000 })
-      .toBe(false);
-    expect(existsSync(path.join(modelDir("canopy-reader-68m"), "model.int8.onnx"))).toBe(true);
-    await page.keyboard.press("Escape");
-
-    // Best reads the same agents.
-    await toggleCanopy(page);
-    await expect(dialog(page).locator("[data-canopy-status]")).toContainText(
-      "Best model, on this computer",
-      { timeout: 60_000 }
-    );
-    await expect(row(page, agents.approval)).toContainText("Do you want to proceed?", {
-      timeout: 60_000,
-    });
-    const readers = await readerProcesses();
-    expect(readers).toHaveLength(1);
-    console.log(`Best reader process: ${readers[0]!.workingSetKb} KB working set`);
-    // Fresh readings from Best, not the last model's left standing: every agent
-    // read again after the switch, the approval among them.
-    await expect
-      .poll(
-        () => {
-          const since = traceReads().filter(
-            (read) => read.stage === "reader" && read.at >= switchedAt && read.error === undefined
-          );
-          return since
-            .map(
-              (read) => (read.output as { classifier?: { category?: string } }).classifier?.category
-            )
-            .filter((c): c is string => c !== undefined)
-            .sort();
-        },
-        { timeout: 60_000, intervals: [500] }
-      )
-      .toEqual(expect.arrayContaining(["approval", "finished", "question"]));
     await page.keyboard.press("Escape");
   });
 
   test("turning Canopy off lets the reader go, and its model can then be deleted", async () => {
     test.info().annotations.push({
       type: "conditional-skip",
-      description: "DAINTREE_E2E_CANOPY_LOCAL is required: the spec downloads the models",
+      description: "DAINTREE_E2E_CANOPY_LOCAL is required: the spec downloads the model",
     });
-    test.skip(!ENABLED, "set DAINTREE_E2E_CANOPY_LOCAL=1 to download the models");
+    test.skip(!ENABLED, "set DAINTREE_E2E_CANOPY_LOCAL=1 to download the model");
     test.setTimeout(120_000);
     const page = ctx.window;
     const panel = await openCanopySettings(page);
     await panel.getByRole("switch", { name: "Read agent terminals" }).click();
     await expect.poll(readerCount, { timeout: 15_000 }).toBe(0);
     await panel.getByRole("button", { name: "Delete model" }).click();
+    // A destructive confirm: an alert dialog, named for what it deletes.
+    await page
+      .getByRole("alertdialog", { name: "Delete 'Light'?" })
+      .getByRole("button", { name: "Delete model" })
+      .click();
     await expect
-      .poll(() => existsSync(modelDir("canopy-reader-68m")), { timeout: 15_000 })
+      .poll(() => existsSync(modelDir("canopy-reader-17m")), { timeout: 15_000 })
       .toBe(false);
     await expect(panel.getByRole("button", { name: "Delete model" })).toHaveCount(0);
   });

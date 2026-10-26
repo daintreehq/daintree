@@ -154,7 +154,6 @@ export interface GeneratedIpcInvokeMap {
       channel:
         | "canopy:answer"
         | "canopy:archive"
-        | "canopy:get-models"
         | "canopy:get-snapshot"
         | "canopy:mark-all-read"
         | "canopy:mark-seen"
@@ -167,7 +166,6 @@ export interface GeneratedIpcInvokeMap {
         | "canopy:search-screens"
         | "canopy:set-active"
         | "canopy:set-mode"
-        | "canopy:set-model"
         | "canopy:set-read"
         | "canopy:set-scope"
         | "canopy:set-shown"
@@ -192,7 +190,6 @@ export interface GeneratedIpcInvokeMap {
       | import("./canopy.js").CanopySnapshot
       | import("./canopy.js").CanopyReadMark[]
       | import("./fleet.js").FleetSnapshot
-      | import("./canopy.js").CanopyModelCatalogue
       | null;
   };
   "canopy-host:list-assistants": {
@@ -253,9 +250,9 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: Uint8Array<ArrayBufferLike> | null;
   };
-  "canopy:get-models": {
-    args: [refresh?: boolean | undefined];
-    result: import("./canopy.js").CanopyModelCatalogue;
+  "canopy:get-model": {
+    args: [];
+    result: import("./canopy.js").CanopyModelInfo;
   };
   "canopy:get-snapshot": {
     args: [];
@@ -287,7 +284,7 @@ export interface GeneratedIpcInvokeMap {
       entries: (
         | {
             state: "live";
-            role: "assistant" | "worker";
+            role: "worker" | "assistant";
             subject: {
               hostId: string;
               scope: { kind: "project"; projectId: string } | { kind: "global" };
@@ -388,10 +385,6 @@ export interface GeneratedIpcInvokeMap {
       expectRevision?: number | undefined,
       expectHostEpoch?: string | undefined,
     ];
-    result: import("./canopy.js").CanopySnapshot;
-  };
-  "canopy:set-model": {
-    args: [id: string, expectRevision?: number | undefined, expectHostEpoch?: string | undefined];
     result: import("./canopy.js").CanopySnapshot;
   };
   "canopy:set-read": {
@@ -1179,7 +1172,7 @@ export interface GeneratedIpcInvokeMap {
               sourceMap: {
                 mapUrl: string | null;
                 mapRevision: string;
-                sourceCheck: "unchecked" | "matches" | "differs";
+                sourceCheck: "matches" | "differs" | "unchecked";
               };
               candidateId: string;
               claim:
@@ -1214,7 +1207,7 @@ export interface GeneratedIpcInvokeMap {
                 | {
                     mapUrl: string | null;
                     mapRevision: string;
-                    sourceCheck: "unchecked" | "matches" | "differs";
+                    sourceCheck: "matches" | "differs" | "unchecked";
                   }
                 | undefined;
               placedBy?: "structure" | undefined;
@@ -1260,7 +1253,7 @@ export interface GeneratedIpcInvokeMap {
                     sourceMap: {
                       mapUrl: string | null;
                       mapRevision: string;
-                      sourceCheck: "unchecked" | "matches" | "differs";
+                      sourceCheck: "matches" | "differs" | "unchecked";
                     };
                   }
                 | {
@@ -1281,7 +1274,7 @@ export interface GeneratedIpcInvokeMap {
                       | {
                           mapUrl: string | null;
                           mapRevision: string;
-                          sourceCheck: "unchecked" | "matches" | "differs";
+                          sourceCheck: "matches" | "differs" | "unchecked";
                         }
                       | undefined;
                     placedBy?: "structure" | undefined;
@@ -1330,7 +1323,7 @@ export interface GeneratedIpcInvokeMap {
                     sourceMap: {
                       mapUrl: string | null;
                       mapRevision: string;
-                      sourceCheck: "unchecked" | "matches" | "differs";
+                      sourceCheck: "matches" | "differs" | "unchecked";
                     };
                   }
                 | {
@@ -1351,7 +1344,7 @@ export interface GeneratedIpcInvokeMap {
                       | {
                           mapUrl: string | null;
                           mapRevision: string;
-                          sourceCheck: "unchecked" | "matches" | "differs";
+                          sourceCheck: "matches" | "differs" | "unchecked";
                         }
                       | undefined;
                     placedBy?: "structure" | undefined;
@@ -1371,10 +1364,10 @@ export interface GeneratedIpcInvokeMap {
               reason:
                 | "cancelled"
                 | "unsupported"
-                | "mismatch"
                 | "file-missing"
                 | "outside-workspace"
                 | "map-missing"
+                | "mismatch"
                 | "budget-exhausted";
               candidateId: string;
               claim:
@@ -3934,7 +3927,7 @@ export interface GeneratedIpcInvokeMap {
           sourcePrNumber?: number | undefined;
           sourcePrTitle?: string | undefined;
           sourcePrUrl?: string | undefined;
-          sourcePrState?: "merged" | "closed" | "open" | undefined;
+          sourcePrState?: "closed" | "open" | "merged" | undefined;
           sourcePrLinkedIssueNumber?: number | undefined;
           submoduleInit?: "none" | "inherit" | "all" | undefined;
           collisionPolicy?: "error" | "suffix" | undefined;

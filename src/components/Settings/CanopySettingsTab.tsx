@@ -3,14 +3,12 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { CANOPY_LOCAL } from "@/components/Canopy/canopyTerms";
 import { formatModelBytes } from "@/components/Canopy/CanopyStatusBar";
-import { modelComparison, modelDescription } from "@/components/Canopy/canopyModelCopy";
 import { useCanopyStore } from "@/store/canopyStore";
-import type { CanopyMode, CanopyModelCatalogue } from "@shared/types/ipc/canopy";
+import type { CanopyMode, CanopyModelInfo } from "@shared/types/ipc/canopy";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsDependents, SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
-import { SettingsChoicebox } from "./SettingsChoicebox";
 import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
 
 export function CanopySettingsTab() {
@@ -22,16 +20,11 @@ export function CanopySettingsTab() {
   // Held in a ref, not shown: a change takes a moment, too short to dim for.
   const pending = useRef(false);
   const [failure, setFailure] = useState<{ retry: () => void; message: string } | null>(null);
-  const [catalogue, setCatalogue] = useState<CanopyModelCatalogue | null>(null);
-  const [catalogueError, setCatalogueError] = useState<string | null>(null);
+  const [info, setInfo] = useState<CanopyModelInfo | null>(null);
 
-  const loadModels = useCallback((refresh = false) => {
-    setCatalogueError(null);
-    window.electron.canopy
-      .getModels(refresh)
-      .then(setCatalogue, (error: unknown) =>
-        setCatalogueError(formatErrorMessage(error, "Try again in a moment."))
-      );
+  // Only what is on this machine: a failed look leaves the row out, nothing more.
+  const loadModels = useCallback(() => {
+    window.electron.canopy.getModel().then(setInfo, () => setInfo(null));
   }, []);
 
   // A download finishing changes what is on this machine.
@@ -65,14 +58,6 @@ export function CanopySettingsTab() {
       ),
     [act]
   );
-  const setModel = useCallback(
-    (id: string) =>
-      act(
-        () => window.electron.canopy.setModel(id),
-        () => setModel(id)
-      ),
-    [act]
-  );
   const retryModel = useCallback(
     () =>
       act(
@@ -92,13 +77,9 @@ export function CanopySettingsTab() {
 
   const hidden = mode === "hidden";
   const activated = mode === "on";
-  const variants = catalogue?.variants ?? [];
-  const selected = catalogue?.selected ?? null;
   const model = snapshot?.model;
-  const comparison = modelComparison(variants);
-  const installed = variants.filter((v) => v.installed);
-  const installedNames = installed.map((v) => v.name).join(", ");
-  const installedSize = formatModelBytes(installed.reduce((sum, v) => sum + v.downloadBytes, 0));
+  const installed = info?.installed === true ? info : null;
+  const installedSize = installed ? formatModelBytes(installed.bytes) : "";
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   return (
@@ -129,7 +110,7 @@ export function CanopySettingsTab() {
             <SettingsSwitchCard
               id="canopy-read-terminals"
               title="Read agent terminals"
-              subtitle="Downloads the model below the first time. When off, Canopy lets the model go and deletes its readings."
+              subtitle="Downloads a small model the first time. When off, Canopy lets the model go and deletes its readings."
               isEnabled={activated}
               onChange={() => setMode(activated ? "unset" : "on")}
             />
@@ -137,34 +118,9 @@ export function CanopySettingsTab() {
         </SettingsGroup>
       </SettingsSection>
 
-      <SettingsSection
-        title="Model"
-        description="Every screen is read on this computer by the model chosen here, and only that one is kept. While Canopy is on, choosing another downloads it and then deletes the last."
-        id="canopy-model"
-      >
-        {catalogueError && (
-          <SettingsLoadErrorBanner
-            title="Couldn't list the models"
-            message={catalogueError}
-            onRetry={() => loadModels(true)}
-          />
-        )}
-        <SettingsGroup>
-          <SettingsChoicebox
-            label="Model"
-            aria-label="Model"
-            {...(comparison ? { description: comparison } : {})}
-            value={selected ?? ""}
-            onChange={setModel}
-            options={variants.map((variant) => ({
-              value: variant.id,
-              label: variant.name,
-              description: modelDescription(variant),
-              disabled: !variant.supported,
-              ...(variant.installed ? { resolvedLabel: "Downloaded" } : {}),
-            }))}
-          />
-          {activated && model && model.status !== "ready" && (
+      {activated && model && model.status !== "ready" && (
+        <SettingsSection title="Model" id="canopy-model">
+          <SettingsGroup>
             <SettingsRow
               id="canopy-model-status"
               label={
@@ -189,22 +145,17 @@ export function CanopySettingsTab() {
                 )
               }
             />
-          )}
-        </SettingsGroup>
-        {comparison === null && variants.length > 0 && (
-          <p className="text-xs text-text-secondary">
-            Accuracy figures show once Hugging Face can be reached.
-          </p>
-        )}
-      </SettingsSection>
+          </SettingsGroup>
+        </SettingsSection>
+      )}
 
-      {installed.length > 0 && (
+      {installed && (
         <SettingsSection title="Downloaded model" id="canopy-model-files">
           <SettingsGroup>
             <SettingsRow
               id="canopy-delete-model"
-              label={installedNames}
-              description={`${installedSize} on this computer${activated ? "" : ". Turning Canopy on again downloads one"}`}
+              label={installed.name}
+              description={`${installedSize} on this computer${activated ? "" : ". Turning Canopy on again downloads it"}`}
               control={
                 <Button variant="ghost-danger" size="sm" onClick={() => setConfirmDelete(true)}>
                   Delete model
@@ -218,11 +169,11 @@ export function CanopySettingsTab() {
         isOpen={confirmDelete}
         onClose={() => setConfirmDelete(false)}
         variant="destructive"
-        title={`Delete '${installedNames}'?`}
+        title={`Delete '${installed?.name ?? ""}'?`}
         description={
           activated
-            ? `Frees ${installedSize}. Canopy turns off, and turning it on again asks you to choose a model and download it.`
-            : `Frees ${installedSize}. Turning Canopy on again downloads a model.`
+            ? `Frees ${installedSize}. Canopy turns off, and turning it on again downloads the model.`
+            : `Frees ${installedSize}. Turning Canopy on again downloads the model.`
         }
         confirmLabel="Delete model"
         cancelLabel="Cancel"

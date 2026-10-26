@@ -107,15 +107,10 @@ describe("HostSettingsSection (#14167)", () => {
     expect(screen.getByText("Show Canopy to turn it on")).toBeTruthy();
   });
 
-  it("shows the model the host reads with", async () => {
-    api.read.mockResolvedValue({
-      ...snapshot("on"),
-      settings: snapshot("on").settings.map((leaf) =>
-        leaf.key === "canopyModel" ? { ...leaf, value: "daintreehq/canopy-reader-68m" } : leaf
-      ),
-    });
+  it("offers no choice of model: there is one", async () => {
+    api.read.mockResolvedValue(snapshot("on"));
     await renderSection();
-    expect(screen.getByRole("combobox", { name: "Model" }).textContent).toContain("Best");
+    expect(screen.queryByRole("combobox", { name: "Model" })).toBeNull();
   });
 
   it("holds an older host's Canopy off until Daintree there is updated, but lets it be turned off", async () => {

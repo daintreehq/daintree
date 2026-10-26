@@ -102,12 +102,16 @@ export function toCanopyReading(reading: Reading, input: CanopyScreenInput): Can
       reading.question_line >= 0
         ? lines.slice(Math.max(0, reading.question_line - APPROVAL_LOOKBACK_ROWS))
         : lines.slice(-APPROVAL_LOOKBACK_ROWS);
-    const caution = irreversibleReason(card.action, card.headline, question, ...around);
+    // A summary-only card has no headline: its first line takes the ask's
+    // place under the terminal's own title, and the second the summary's.
+    const [first, ...rest] =
+      card.headline === null ? card.summary : [card.headline, card.summary.join(" ")];
+    const caution = irreversibleReason(card.action, first ?? null, question, ...around);
     return toDescriberResult(
       {
         category,
-        headline: card.headline ?? "",
-        summary: card.summary.join(" "),
+        headline: first ?? "",
+        summary: rest.join(" "),
         question: card.question,
         options: card.options,
         attention_score: Number(reading.score),

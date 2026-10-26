@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { AppDialog } from "@/components/ui/AppDialog";
-import type { CanopyMode, CanopyModelCatalogue } from "@shared/types/ipc/canopy";
-import { CanopyModelChoice, useCanopyModelChoice } from "./CanopyModelChoice";
+import type { CanopyMode } from "@shared/types/ipc/canopy";
 import { pluralize } from "@/lib/pluralize";
 import {
   enableCanopyOnHosts,
@@ -51,16 +50,12 @@ export function CanopyBulkEnableDialog({
   onClose,
   targets,
   deps,
-  loadModels,
 }: {
   isOpen: boolean;
   onClose: () => void;
   targets: readonly BulkTarget[];
   deps: Pick<BulkEnableDeps, "transportFor">;
-  /** The models to choose between: this computer's list, the same on every host. */
-  loadModels: () => Promise<CanopyModelCatalogue>;
 }) {
-  const modelChoice = useCanopyModelChoice(loadModels, "all-hosts", isOpen);
   const [phase, setPhase] = useState<Phase>("review");
   const [results, setResults] = useState<Map<string, BulkResult>>(new Map());
   const [modes, setModes] = useState<ReadonlyMap<string, CanopyMode | null> | null>(null);
@@ -92,11 +87,7 @@ export function CanopyBulkEnableDialog({
     setPhase("running");
     void enableCanopyOnHosts(
       subset,
-      {
-        ...depsRef.current,
-        signal: controller.signal,
-        ...(modelChoice.chosen !== null ? { model: modelChoice.chosen } : {}),
-      },
+      { ...depsRef.current, signal: controller.signal },
       before,
       (result) => {
         if (abortRef.current === controller) {
@@ -137,11 +128,6 @@ export function CanopyBulkEnableDialog({
           <>
             <AppDialog.Description>{canopyLocalOnHosts(names)}</AppDialog.Description>
             <p className="text-sm leading-6 text-text-secondary">{CANOPY_STOP_ON_EACH}</p>
-            <CanopyModelChoice choice={modelChoice} name="canopy-bulk-model" />
-            <p className="text-xs text-text-secondary">
-              Each host downloads the model you choose, and nothing downloads before you press
-              Enable.
-            </p>
           </>
         )}
         <ul className="flex flex-col gap-1 text-sm" data-bulk-enable-targets="">
@@ -193,11 +179,7 @@ export function CanopyBulkEnableDialog({
             : {
                 label: "Enable Canopy on all hosts",
                 onClick: () => run(targets, new Map()),
-                disabled:
-                  phase === "running" ||
-                  targets.length === 0 ||
-                  modes === null ||
-                  (modelChoice.chosen === null && modelChoice.error === null),
+                disabled: phase === "running" || targets.length === 0 || modes === null,
                 loading: phase === "running",
               }
         }

@@ -10,8 +10,6 @@ import { CANOPY_DEMO_FRAME_COUNT, canopyDemoItems } from "./canopyDemo";
 import { itemNeedsAttention } from "./canopyModel";
 import { useListReorderMotion } from "./useListReorderMotion";
 import { CanopyHeaderCenter } from "./CanopyHostPicker";
-import type { CanopyModelCatalogue } from "@shared/types/ipc/canopy";
-import { CanopyModelChoice, useCanopyModelChoice } from "./CanopyModelChoice";
 import { CANOPY_LOCAL, CANOPY_STOP, CANOPY_TITLE } from "./canopyTerms";
 
 /** Long enough to read a row that just rose to the top. */
@@ -39,13 +37,8 @@ interface CanopyPitchProps {
   isOpen: boolean;
   onClose: () => void;
   backdrop?: React.ReactNode;
-  /**
-   * The user turned Canopy on with the model they chose, which downloads now
-   * and reads screens on this computer. Null when the list couldn't be had.
-   */
-  onTurnOn: (modelId: string | null) => Promise<void>;
-  /** The models this computer can read with, for the choice made here. */
-  loadModels: () => Promise<CanopyModelCatalogue>;
+  /** The user turned Canopy on: its model downloads and screens are read on this computer. */
+  onTurnOn: () => Promise<void>;
   /** The user doesn't want Canopy: its ways in go, all but Settings. */
   onHide: () => Promise<void>;
   /** Where the keyboard goes when the offer closes: what had it when the panel opened. */
@@ -69,12 +62,10 @@ export function CanopyPitch({
   onClose,
   backdrop,
   onTurnOn,
-  loadModels,
   onHide,
   restoreFocusTo,
   hostPicker,
 }: CanopyPitchProps) {
-  const modelChoice = useCanopyModelChoice(loadModels, "own", isOpen);
   const [pending, setPending] = useState<"on" | "hide" | null>(null);
   const [failed, setFailed] = useState<"on" | "hide" | null>(null);
   // The keyboard lands on the offer's heading, not on Turn on: a reflexive
@@ -156,16 +147,13 @@ export function CanopyPitch({
                   {CANOPY_LOCAL} {CANOPY_STOP}
                 </p>
               </div>
-              <CanopyModelChoice choice={modelChoice} name="canopy-pitch-model" />
               {/* Turning it on and not wanting it are the same size, side by
                   side: the close button is the "not now". */}
               <div className="flex items-center gap-3">
                 <Button
                   variant="contrast"
-                  disabled={
-                    pending !== null || (modelChoice.chosen === null && modelChoice.error === null)
-                  }
-                  onClick={() => choose("on", () => onTurnOn(modelChoice.chosen))}
+                  disabled={pending !== null}
+                  onClick={() => choose("on", onTurnOn)}
                 >
                   Turn on Canopy
                 </Button>

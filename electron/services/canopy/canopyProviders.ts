@@ -179,7 +179,8 @@ export function toDescriberResult(card: unknown, input: CanopyScreenInput): Desc
   const risk = parsed.category === "approval" && instruction === "asked" ? "caution" : parsed.risk;
   return {
     category: parsed.category as CanopyCategory,
-    headline: clip(parsed.headline, 120),
+    // A whole screen sentence: the row truncates it, nothing cuts it here.
+    headline: clip(parsed.headline, 300),
     summary: clip(parsed.summary, 300),
     question: present(parsed.question) ? parsed.question : null,
     options: Array.isArray(parsed.options)

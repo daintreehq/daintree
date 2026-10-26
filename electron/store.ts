@@ -301,8 +301,6 @@ export interface StoreSchema {
    * they don't want it at all. Nothing is read unless it is `on`.
    */
   canopyMode: CanopyMode;
-  /** The Hugging Face repo of the local model Canopy reads screens with. */
-  canopyModel: string;
   windowStates: Record<
     string,
     {
@@ -1032,7 +1030,6 @@ const storeOptions = {
     globalEnvironmentVariables: {},
     appAgentConfig: DEFAULT_APP_AGENT_CONFIG,
     canopyMode: "unset" as const,
-    canopyModel: "daintreehq/canopy-reader-17m",
     windowStates: {},
     worktreeIssueMap: {},
     wslGitByWorktree: {},
