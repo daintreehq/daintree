@@ -79,6 +79,15 @@ function hostDialling(linkStatus: string | undefined, error: unknown): boolean {
   );
 }
 
+/** The link to a host was tried and failed, as the host menu says. */
+function hostLinkFailed(linkStatus: string | undefined): boolean {
+  return (
+    linkStatus === "unreachable" ||
+    linkStatus === "version-mismatch" ||
+    linkStatus === "driven-elsewhere"
+  );
+}
+
 function HostIssueList({ issues }: { issues: readonly HostIssue[] }) {
   return (
     <ul className="flex flex-col gap-1.5">
@@ -763,9 +772,12 @@ function CanopyInbox({
   const connecting = hostDialling(linkStatus, remote.error);
   // The link dropped after the agents were read: what is listed is what it last showed.
   const linkDown = fleet !== null && linkStatus !== undefined && linkStatus !== "connected";
-  // Connecting stays quiet only until there are rows: rows kept from before say they are old.
+  // Connecting stays quiet only until there are rows: rows kept from before say
+  // they are old, until the link is back up and only their reread is owed.
   const hostTrouble =
-    otherHost && (remote.error !== null || linkDown) && !(connecting && fleet === null);
+    otherHost &&
+    (remote.error !== null || linkDown) &&
+    !(connecting && (fleet === null || linkStatus === "connected"));
   // That host runs a Daintree from before Canopy read locally, and still sends
   // its screens to the former hosted service: none of it is shown here, nor is
   // it offered to be turned on, until the host is updated.
@@ -856,8 +868,9 @@ function CanopyInbox({
       const remoteHost = reading.hostId !== ownHostId;
       const linkStatus = remoteHost && row?.isLocal === false ? row.connection?.status : undefined;
       const retry = () => remotes.retry(reading.hostId);
-      if (reading.error !== null && remoteHost) {
-        if (!hostDialling(linkStatus, reading.error)) {
+      const linkFailed = hostLinkFailed(linkStatus);
+      if (remoteHost && (reading.error !== null || (linkFailed && reading.fleet === null))) {
+        if (linkFailed || !hostDialling(linkStatus, reading.error)) {
           return [
             {
               hostId: reading.hostId,

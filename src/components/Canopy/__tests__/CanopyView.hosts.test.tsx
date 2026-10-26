@@ -750,6 +750,31 @@ describe("the Canopy host picker", () => {
     expect(document.getElementById("canopy-card-remote-run")).not.toBeNull();
   });
 
+  it("drops the warning on held rows once the link is back, while their reread is owed", async () => {
+    installElectron();
+    useCanopyStore.setState({ hostId: "studio" });
+    const { rerender } = render(<CanopyView />);
+    await settle();
+    state.hosts = [host("studio", "studio-01", { status: "disconnected" })];
+    state.invoke.mockRejectedValue(
+      new Error("[AppError|HOST_DISCONNECTED] Host studio is not connected")
+    );
+    rerender(<CanopyView />);
+    await settle();
+    // Read again while the link is down: refused, the rows kept.
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await settle();
+    expect(channelsCalled()).toContain("studio canopy:set-active");
+    expect(document.body.textContent).toContain("These are the agents it last showed.");
+
+    state.hosts = [host("studio", "studio-01")];
+    rerender(<CanopyView />);
+    await settle();
+    expect(document.body.textContent).not.toContain("These are the agents it last showed.");
+    expect(document.querySelector('[data-callout="warning"]')).toBeNull();
+    expect(document.getElementById("canopy-card-remote-run")).not.toBeNull();
+  });
+
   it("says it is connecting while picking a host dials it, not that it can't be reached", async () => {
     state.hosts = [host("studio", "studio-01", { status: "disconnected" })];
     // As main's refusal arrives across the bridge: the code rides in the message.
@@ -866,14 +891,25 @@ describe("All hosts", () => {
     await settle();
     quiet();
 
-    state.invoke.mockImplementation(async (_hostId: string, channel: string) => {
-      if (channel === "canopy:set-active") return remoteCanopy;
-      if (channel === "fleet:get-snapshot") return remoteFleet;
-      return null;
-    });
+    // The reread is slow to land, and its two reads land apart.
+    const answer = { canopy: () => {}, fleet: () => {} };
+    state.invoke.mockImplementation(
+      (_hostId: string, channel: string) =>
+        new Promise((resolve) => {
+          if (channel === "canopy:set-active") answer.canopy = () => resolve(remoteCanopy);
+          else if (channel === "fleet:get-snapshot") answer.fleet = () => resolve(remoteFleet);
+          else resolve(null);
+        })
+    );
     act(() => {
       for (const listener of state.listeners) listener({ kind: "resync", hostId: "studio" });
     });
+    await settle();
+    quiet();
+    await act(async () => answer.canopy());
+    await settle();
+    quiet();
+    await act(async () => answer.fleet());
     await settle();
     expect(cardOf("studio", "shared-run")).not.toBeNull();
     expect(document.body.textContent).not.toContain("Connecting to studio-01");
@@ -898,6 +934,22 @@ describe("All hosts", () => {
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await settle();
     expect(channelsCalled()).toContain("studio canopy:set-active");
+  });
+
+  it("says a host whose link failed can't be reached while its reads are still owed", async () => {
+    installElectron();
+    state.hosts = [
+      host("studio", "studio-01", {
+        status: "version-mismatch",
+        mismatch: { kind: "protocol", local: 2, remote: 1 },
+        remote: HANDSHAKE,
+      }),
+    ];
+    state.invoke.mockImplementation(() => new Promise(() => {}));
+    render(<CanopyView />);
+    await settle();
+    expect(document.body.textContent).toContain("Can't reach studio-01");
+    expect(document.body.textContent).not.toContain("Connecting to studio-01");
   });
 
   it("says a host's agents are as last seen once its link drops after they were read", async () => {
