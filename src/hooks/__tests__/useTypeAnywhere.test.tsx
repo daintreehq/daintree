@@ -9,7 +9,9 @@ const exitMaximize = vi.fn();
 const focusPanelInput = vi.fn<(id: string, surface?: string) => boolean>(() => true);
 // The request module has its own suite; this stands in for whether the one
 // request type-anywhere makes is still current.
-const focusRequest = vi.hoisted(() => ({ current: null as { id: string; surface: string } | null }));
+const focusRequest = vi.hoisted(() => ({
+  current: null as { id: string; surface: string } | null,
+}));
 const requestPaneFocus = vi.hoisted(() =>
   vi.fn((id: string, surface: string) => {
     focusRequest.current = { id, surface };

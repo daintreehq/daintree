@@ -94,7 +94,13 @@ async function mount() {
   const view = render(
     <TooltipProvider>
       <WorktreeStoreContext.Provider value={createWorktreeStore()}>
-        <HybridInputBar ref={ref} terminalId="term-1" cwd={WT_ID} agentId="claude" onSend={() => {}} />
+        <HybridInputBar
+          ref={ref}
+          terminalId="term-1"
+          cwd={WT_ID}
+          agentId="claude"
+          onSend={() => {}}
+        />
       </WorktreeStoreContext.Provider>
     </TooltipProvider>
   );

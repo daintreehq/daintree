@@ -36,7 +36,10 @@ let pressListener: (() => void) | null = null;
 
 function isOnSurface(el: Element, intent: PaneFocusIntent): boolean {
   if (intent.surface === "hybridInput") {
-    return el.closest("[data-hybrid-input-root]")?.getAttribute("data-hybrid-input-root") === intent.paneId;
+    return (
+      el.closest("[data-hybrid-input-root]")?.getAttribute("data-hybrid-input-root") ===
+      intent.paneId
+    );
   }
   return (
     el.closest(".xterm") !== null &&
