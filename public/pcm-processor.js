@@ -34,6 +34,9 @@ class PCMProcessor extends AudioWorkletProcessor {
     // Set once a stop has flushed this processor. Nothing may follow the
     // "flushed" marker, so process() stops emitting for good.
     this.isFlushed = false;
+    // The AudioContext outlives each capture, so a processor that is done must
+    // end itself: returning true would keep it alive in the reused context.
+    this.isDisposed = false;
     this.port.onmessage = (event) => {
       const data = event.data;
       if (!data) return;
@@ -41,6 +44,8 @@ class PCMProcessor extends AudioWorkletProcessor {
         this.isPaused = !!data.value;
       } else if (data.type === "flush") {
         this.flush();
+      } else if (data.type === "dispose") {
+        this.isDisposed = true;
       }
     };
   }
@@ -59,13 +64,15 @@ class PCMProcessor extends AudioWorkletProcessor {
   }
 
   process(inputs) {
+    if (this.isFlushed || this.isDisposed) return false;
+
     const input = inputs[0];
     if (!input || input.length === 0) return true;
 
     const src = input[0];
     if (!src || src.length === 0) return true;
 
-    if (this.isPaused || this.isFlushed) return true;
+    if (this.isPaused) return true;
 
     // Walk through output samples using the phase accumulator
     while (this.phase < src.length) {
