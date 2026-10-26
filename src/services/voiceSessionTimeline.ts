@@ -168,7 +168,10 @@ export class VoiceSessionTimeline {
     this.tryLog();
   }
 
-  /** Stops recording; on its own (module teardown) it drops the session without a line. */
+  /**
+   * Stops recording; on its own (module teardown, or a rewrite session) it
+   * drops the session without a line.
+   */
   dispose(): void {
     this.done = true;
     if (this.reportTimer !== null) clearTimeout(this.reportTimer);

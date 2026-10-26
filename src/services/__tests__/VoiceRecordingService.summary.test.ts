@@ -163,6 +163,7 @@ function setupGlobals(
       return { rawText: null };
     }),
     correct: vi.fn(),
+    rewrite: vi.fn().mockResolvedValue({ status: "replace", text: "Shorter." }),
   };
 
   vi.stubGlobal("window", {
@@ -370,6 +371,41 @@ describe("VoiceRecordingService — session summary (#14617)", () => {
     expect(summaries()).toHaveLength(1);
     expect(summaries()[0]).toMatchObject({ backendEnd: "stopped", provider: "openai" });
     expect(JSON.stringify(summaries()[0])).not.toContain(KEYTERM);
+  });
+
+  it("leaves no summary for a rewrite session, and still logs the dictation after it", async () => {
+    const harness = setupGlobals();
+    const { service, summaries, logWarn } = await load();
+    const selection = {
+      text: "make me shorter",
+      range: vi.fn(() => ({ from: 0, to: 15 })),
+      onLost: vi.fn(),
+      apply: vi.fn(() => true),
+      release: vi.fn(),
+    };
+
+    harness.pressShortcut(performance.now() - 25);
+    await service.start({ ...TARGET, rewrite: { selection, instruction: [], cancelled: false } });
+    const rewriteId = String(harness.voiceInput.start.mock.calls.at(-1)![0]);
+    harness.paintFrames();
+    sendChunk(harness.workletNodes.at(-1)!, 2_000);
+    harness.emit("status", { sessionId: rewriteId, status: "recording" });
+    harness.emit("delta", { sessionId: rewriteId, text: "make it" });
+    harness.emit("complete", { sessionId: rewriteId, text: "make it shorter", itemId: "item-1" });
+    harness.paintFrames();
+    await service.stop("Dictation stopped.", { preserveLiveText: true, reason: "user" });
+    await flushPromises();
+    harness.paintFrames();
+
+    expect(harness.voiceInput.rewrite).toHaveBeenCalledTimes(1);
+    expect(draftState.draft).toBe("");
+    expect(summaries()).toHaveLength(0);
+
+    const sessionId = await startLive(harness, service);
+    await service.stop("Dictation stopped.", { reason: "user" });
+
+    expect(summaries()).toMatchObject([{ sessionId, stopReason: "user" }]);
+    expect(logWarn).not.toHaveBeenCalledWith("[VoiceSession] Summary rejected", expect.anything());
   });
 
   it("falls back to start() entry without a shortcut press", async () => {

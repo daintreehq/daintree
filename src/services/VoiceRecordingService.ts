@@ -1122,7 +1122,7 @@ class VoiceRecordingService {
     }, 0);
   }
 
-  private openTimeline(sessionId: string): VoiceSessionTimeline {
+  private openTimeline(sessionId: string, target: VoiceRecordingTarget): VoiceSessionTimeline {
     const pressedAt = this.pendingPressAt;
     this.pendingPressAt = null;
     const timeline = new VoiceSessionTimeline(
@@ -1141,7 +1141,11 @@ class VoiceRecordingService {
       },
       pressedAt
     );
-    this.timelines.set(sessionId, timeline);
+    // A rewrite records an instruction, never words into the draft, so it
+    // leaves no summary: its counts would read as a dictation that lost its
+    // text. Disposed, its timeline takes every mark as a no-op.
+    if (target.rewrite) timeline.dispose();
+    else this.timelines.set(sessionId, timeline);
     return timeline;
   }
 
@@ -1359,7 +1363,7 @@ class VoiceRecordingService {
     this.attemptTimeline?.finish("retarget");
     const startRequestId = ++this.startRequestId;
     const sessionId = crypto.randomUUID();
-    const timeline = this.openTimeline(sessionId);
+    const timeline = this.openTimeline(sessionId, target);
     this.attemptTimeline = timeline;
     // The caller showed the arming cue (or the queued-start cue) just before.
     if (useVoiceRecordingStore.getState().pendingTarget?.panelId === target.panelId) {
