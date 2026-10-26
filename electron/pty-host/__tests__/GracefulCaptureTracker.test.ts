@@ -318,7 +318,7 @@ describe("GracefulCaptureTracker", () => {
     coordinator.pause("port-queue-4");
     const lease = open("t1");
     coordinator.pause("ipc-queue");
-    lease.shouldDiscard("SECRET-OUTPUT codex resume 1234");
+    lease.shouldDiscard("SECRET-OUTPUT codex resume QZXW");
     vi.advanceTimersByTime(750);
 
     lease.close();
@@ -340,7 +340,7 @@ describe("GracefulCaptureTracker", () => {
     });
     expect(context.discardedBytes).toBeGreaterThan(0);
     expect(JSON.stringify(entries)).not.toContain("SECRET-OUTPUT");
-    expect(JSON.stringify(entries)).not.toContain("1234");
+    expect(JSON.stringify(entries)).not.toContain("QZXW");
   });
 
   it("records a sleep hold that kept capture from reading", () => {
