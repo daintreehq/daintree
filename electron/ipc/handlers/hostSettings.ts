@@ -22,7 +22,9 @@ export const hostSettingsNamespace = defineIpcNamespace({
     read: op(
       HOST_SETTINGS_METHOD_CHANNELS.read,
       async (payload: HostSettingsReadPayload): Promise<HostSettingsSnapshot> => {
-        if (payload?.hostId === LOCAL_HOST_ID) {
+        // The raw define, so a build without Remote Hosts drops the import: no
+        // picker there ever names this machine.
+        if (__DAINTREE_REMOTE_HOSTS__ && payload?.hostId === LOCAL_HOST_ID) {
           const { readLocalSettings } = await import("../../remote/settingsControl/local.js");
           return readLocalSettings(payload);
         }
@@ -32,7 +34,9 @@ export const hostSettingsNamespace = defineIpcNamespace({
     update: op(
       HOST_SETTINGS_METHOD_CHANNELS.update,
       async (payload: HostSettingsUpdatePayload): Promise<HostSettingsUpdateResult> => {
-        if (payload?.hostId === LOCAL_HOST_ID) {
+        // The raw define, so a build without Remote Hosts drops the import: no
+        // picker there ever names this machine.
+        if (__DAINTREE_REMOTE_HOSTS__ && payload?.hostId === LOCAL_HOST_ID) {
           const { updateLocalSettings } = await import("../../remote/settingsControl/local.js");
           return updateLocalSettings(payload);
         }
