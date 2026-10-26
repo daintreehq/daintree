@@ -3,6 +3,7 @@ import { canopyHostClient } from "@/clients/canopyHostClient";
 import { remoteHostsClient } from "@/clients/remoteHostsClient";
 import type { BulkTransport } from "@shared/utils/canopyBulkEnable";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
+import { clientErrorCode } from "@/utils/clientAppError";
 import type { CanopyHostChannel } from "@shared/types/ipc/canopyHost";
 import type { CanopySnapshot } from "@shared/types/ipc/canopy";
 import type { FleetSnapshot } from "@shared/types/ipc/fleet";
@@ -209,6 +210,18 @@ export interface RemoteCanopyState {
   epoch: number;
 }
 
+/**
+ * The reads' failure, a refused read last: the refusal only says the link is
+ * coming up, and must not stand in front of the other read's own failure.
+ */
+function readError(state: HeldState): unknown {
+  const { canopyError, fleetError } = state;
+  if (canopyError !== null && clientErrorCode(canopyError) === "HOST_DISCONNECTED") {
+    return fleetError ?? canopyError;
+  }
+  return canopyError ?? fleetError;
+}
+
 interface HeldState {
   canopy: CanopySnapshot | null;
   fleet: FleetSnapshot | null;
@@ -356,7 +369,7 @@ export function useRemoteCanopy(
   return {
     canopy: state.canopy,
     fleet: state.fleet,
-    error: state.canopyError ?? state.fleetError,
+    error: readError(state),
     epoch: state.epoch,
     retry: () => rereadRef.current?.(),
   };
@@ -429,7 +442,7 @@ export function useRemoteCanopies(
       next.set(hostId, {
         canopy: state.canopy,
         fleet: state.fleet,
-        error: state.canopyError ?? state.fleetError,
+        error: readError(state),
         epoch: state.epoch,
       });
     }

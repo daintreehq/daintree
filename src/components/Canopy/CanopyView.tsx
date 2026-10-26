@@ -868,6 +868,19 @@ function CanopyInbox({
       const remoteHost = reading.hostId !== ownHostId;
       const linkStatus = remoteHost && row?.isLocal === false ? row.connection?.status : undefined;
       const retry = () => remotes.retry(reading.hostId);
+      // Its agents were read before the link dropped: they are kept, and old,
+      // whatever the reads since have said.
+      if (reading.fleet !== null && linkStatus !== undefined && linkStatus !== "connected") {
+        return [
+          {
+            hostId: reading.hostId,
+            text: `${name} isn't connected. Its agents are as last seen`,
+            action: "Retry",
+            act: retry,
+            trouble: true,
+          },
+        ];
+      }
       const linkFailed = hostLinkFailed(linkStatus);
       if (remoteHost && (reading.error !== null || (linkFailed && reading.fleet === null))) {
         if (linkFailed || !hostDialling(linkStatus, reading.error)) {
@@ -875,18 +888,6 @@ function CanopyInbox({
             {
               hostId: reading.hostId,
               text: `Can't reach ${name}`,
-              action: "Retry",
-              act: retry,
-              trouble: true,
-            },
-          ];
-        }
-        // Its agents were read before the link dropped: they are kept, and old.
-        if (reading.fleet !== null && linkStatus !== "connected") {
-          return [
-            {
-              hostId: reading.hostId,
-              text: `${name} isn't connected. Its agents are as last seen`,
               action: "Retry",
               act: retry,
               trouble: true,
@@ -961,17 +962,6 @@ function CanopyInbox({
                 act: null,
                 trouble: false,
               },
-        ];
-      }
-      if (linkStatus !== undefined && linkStatus !== "connected") {
-        return [
-          {
-            hostId: reading.hostId,
-            text: `${name} isn't connected. Its agents are as last seen`,
-            action: "Retry",
-            act: retry,
-            trouble: true,
-          },
         ];
       }
       if (reading.canopy.lastError) {
