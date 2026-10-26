@@ -186,7 +186,8 @@ class VoiceRecordingService {
         const target = voiceState.activeTarget;
         if (target) {
           const buffer = voiceState.panelBuffers[target.panelId];
-          const isFirstDelta = !buffer || buffer.liveText === "";
+          // An empty revision retracts a preview; it never starts an utterance.
+          const isFirstDelta = delta !== "" && (!buffer || buffer.liveText === "");
           if (isFirstDelta) {
             const draft = useTerminalInputStore
               .getState()

@@ -377,7 +377,8 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
       appendDelta: (delta, itemId, replace) =>
         set((state) => {
           const panelId = state.activeTarget?.panelId;
-          if (!panelId || !delta) return state;
+          // An empty replacement is a retraction, so it still lands.
+          if (!panelId || (!delta && !replace)) return state;
           const buffer = getBuffer(state.panelBuffers, panelId);
           if (itemId) {
             const index = buffer.liveItems.findIndex((item) => item.itemId === itemId);

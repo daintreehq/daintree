@@ -21,6 +21,7 @@ type MockTranscriptionEvent = {
   sessionId?: string;
   text?: string;
   itemId?: string;
+  replace?: boolean;
   status?: string;
   message?: string;
 };

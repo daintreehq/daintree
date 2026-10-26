@@ -582,7 +582,7 @@ describe("DeepgramTranscriptionProvider", () => {
     provider.stop();
   });
 
-  it("retires a previewed span that finalises empty, without emitting text", async () => {
+  it("retracts and retires a span revised to nothing, then starts fresh spans", async () => {
     const provider = new DeepgramTranscriptionProvider();
     const events: VoiceTranscriptionEvent[] = [];
     provider.onEvent((e) => {
@@ -591,15 +591,27 @@ describe("DeepgramTranscriptionProvider", () => {
 
     const { socket } = await bringSessionReady(provider);
     socket.simulateMessage(resultsMessage("um", { is_final: false }));
+    socket.simulateMessage(resultsMessage("", { is_final: false }));
     socket.simulateMessage(resultsMessage("", { is_final: true }));
+    socket.simulateMessage(resultsMessage("next", { is_final: false }));
+    socket.simulateMessage(resultsMessage("Next.", { is_final: true }));
+    socket.simulateMessage(resultsMessage("Again.", { is_final: true }));
 
-    expect(events).toEqual([
-      expect.objectContaining({ type: "delta", text: "um" }),
-      expect.objectContaining({ type: "complete", text: "" }),
+    expect(events.map((e) => ({ type: e.type, text: "text" in e ? e.text : "" }))).toEqual([
+      { type: "delta", text: "um" },
+      { type: "delta", text: "" },
+      { type: "complete", text: "" },
+      { type: "delta", text: "next" },
+      { type: "complete", text: "Next." },
+      { type: "complete", text: "Again." },
     ]);
-    const [delta, complete] = events as Array<{ itemId?: string }>;
-    expect(delta.itemId).toBeTruthy();
-    expect(complete.itemId).toBe(delta.itemId);
+    expect(events[1]).toMatchObject({ replace: true });
+    const ids = events.map((e) => ("itemId" in e ? e.itemId : undefined));
+    expect(ids.every((id) => typeof id === "string" && id.length > 0)).toBe(true);
+    expect(ids[1]).toBe(ids[0]);
+    expect(ids[2]).toBe(ids[0]);
+    expect(ids[4]).toBe(ids[3]);
+    expect(new Set([ids[0], ids[3], ids[5]]).size).toBe(3);
     provider.stop();
   });
 
@@ -618,6 +630,13 @@ describe("DeepgramTranscriptionProvider", () => {
       is_final: true,
       channel: { alternatives: [{ transcript: 42 }] },
     });
+    for (const isFinal of ["true", null, undefined]) {
+      socket.simulateMessage({
+        type: "Results",
+        is_final: isFinal,
+        channel: { alternatives: [{ transcript: "" }] },
+      });
+    }
     socket.simulateMessage(resultsMessage("Hello.", { is_final: true }));
 
     expect(events.map((e) => e.type)).toEqual(["delta", "complete"]);

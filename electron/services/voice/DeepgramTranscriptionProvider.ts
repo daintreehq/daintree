@@ -533,8 +533,8 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
         logDebug(`${P} ← Results`, { length: transcript.length, isFinal, speechFinal });
         const trimmed = transcript.trim();
         if (!isFinal) {
-          // An empty revision keeps the last preview; the span's final retires it.
-          if (!trimmed) return;
+          // An empty revision retracts the span's preview; before any text it's noise.
+          if (!trimmed && !this.spanItemId) return;
           this.spanItemId ??= nextSpanItemId();
           this.emit({ type: "delta", text: trimmed, itemId: this.spanItemId, replace: true });
           return;

@@ -348,6 +348,18 @@ describe("voiceRecordingStore — identified items (#13109)", () => {
     expect(buffer().completedSegments).toEqual(["Hello world"]);
   });
 
+  it("a replacing delta can shorten or retract its item's preview", () => {
+    const store = useVoiceRecordingStore.getState();
+    store.appendDelta("hello world", "item-a", true);
+    store.appendDelta("hello", "item-a", true);
+    expect(buffer().liveText).toBe("hello");
+
+    store.appendDelta("", "item-a", true);
+    expect(buffer().liveText).toBe("");
+    store.finishSession({ preserveLiveText: true });
+    expect(buffer().completedSegments).toEqual([]);
+  });
+
   it("a replacing delta leaves other items' previews alone", () => {
     const store = useVoiceRecordingStore.getState();
     store.appendDelta("first", "item-a");

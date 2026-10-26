@@ -226,6 +226,24 @@ describe("VoiceRecordingService — identified items (#13109)", () => {
     expect(liveText()).toBe("");
   });
 
+  it("shows a shortened or retracted revision without touching the draft", async () => {
+    const { liveText } = await setup();
+    draftState.draft = "existing";
+
+    revise("hello world", "span-0");
+    revise("Hello", "span-0");
+    expect(liveText()).toBe("Hello");
+    revise("", "span-0");
+    expect(liveText()).toBe("");
+    expect(draftState.draft).toBe("existing");
+
+    complete("", "span-0");
+    revise("Next", "span-1");
+    complete("Next.", "span-1");
+    expect(draftState.draft).toBe("existing Next.");
+    expect(liveText()).toBe("");
+  });
+
   it("anchors the session at a final that arrives without any interim", async () => {
     await setup();
     draftState.draft = "existing";
