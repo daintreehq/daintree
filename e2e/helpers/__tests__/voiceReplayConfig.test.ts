@@ -22,19 +22,21 @@ describe("resolveReplayConfigs", () => {
 
   it("adds file configs, and runs only them when no preset is named", () => {
     const file = JSON.stringify([
-      { id: "mini", provider: "openai", settings: { transcriptionModel: "x" } },
+      { id: "german", provider: "openai", settings: { language: "de" }, dictionary: ["Zod"] },
     ]);
     const configs = resolveReplayConfigs({ VOICE_REPLAY_CONFIG_FILE: "c.json" }, () => file);
     expect(configs).toEqual([
-      { id: "mini", provider: "openai", settings: { transcriptionModel: "x" }, dictionary: [] },
+      { id: "german", provider: "openai", settings: { language: "de" }, dictionary: ["Zod"] },
     ]);
   });
 
   it("refuses a setting the app doesn't read, rather than reporting a difference that isn't there", () => {
-    const file = JSON.stringify([{ id: "high", provider: "openai", settings: { delay: "high" } }]);
-    expect(() => resolveReplayConfigs({ VOICE_REPLAY_CONFIG_FILE: "c.json" }, () => file)).toThrow(
-      /can't vary delay/
-    );
+    for (const setting of ["delay", "transcriptionModel"]) {
+      const file = JSON.stringify([{ id: "x", provider: "openai", settings: { [setting]: "y" } }]);
+      expect(() =>
+        resolveReplayConfigs({ VOICE_REPLAY_CONFIG_FILE: "c.json" }, () => file)
+      ).toThrow(`can't vary ${setting}`);
+    }
   });
 
   it("refuses unknown presets, bad providers and duplicate ids", () => {
@@ -65,6 +67,12 @@ describe("providerKeyEnv", () => {
     });
     expect(providerKeyEnv("deepgram", { DEEPGRAM_API_KEY: "dg" })).toEqual({
       DEEPGRAM_API_KEY: "dg",
+    });
+  });
+
+  it("prefers OPENAI_API_KEY over an inherited WHISPER_API_KEY", () => {
+    expect(providerKeyEnv("openai", { OPENAI_API_KEY: "sk-a", WHISPER_API_KEY: "sk-b" })).toEqual({
+      WHISPER_API_KEY: "sk-a",
     });
   });
 

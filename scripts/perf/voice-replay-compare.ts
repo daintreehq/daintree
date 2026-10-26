@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, readdirSync, readFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import {
   compareRuns,
@@ -6,6 +6,7 @@ import {
   VOICE_REPLAY_SCHEMA_VERSION,
   type VoiceReplayRun,
 } from "../../e2e/helpers/voiceReplayScore";
+import { formatErrorMessage } from "../../shared/utils/errorMessage";
 import { REPO_ROOT } from "./registry";
 
 const RESULTS_DIR = path.join(REPO_ROOT, ".tmp", "perf-results", "voice-replay");
@@ -50,27 +51,46 @@ function newestCompleteRun(): string {
   return candidates[0]!;
 }
 
+interface Args {
+  save: boolean;
+  baseline: string;
+  run: string | null;
+}
+
+function parseArgs(argv: string[]): Args | "help" {
+  const args: Args = { save: false, baseline: BASELINE, run: null };
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]!;
+    if (arg === "--help" || arg === "-h") return "help";
+    if (arg === "--save") args.save = true;
+    else if (arg === "--baseline") {
+      const value = argv[++i];
+      if (!value || value.startsWith("-")) throw new Error("--baseline needs a file");
+      args.baseline = value;
+    } else if (arg.startsWith("-")) throw new Error(`unknown flag ${arg}`);
+    else if (args.run === null) args.run = arg;
+    else throw new Error(`unexpected argument ${arg}`);
+  }
+  if (args.save && args.baseline !== BASELINE) {
+    throw new Error("--save writes the default baseline; it doesn't take --baseline");
+  }
+  return args;
+}
+
 function main(argv: string[]): number {
-  if (argv.includes("--help") || argv.includes("-h")) {
+  const args = parseArgs(argv);
+  if (args === "help") {
     console.log(USAGE);
     return 0;
   }
-  const baselineFlag = argv.indexOf("--baseline");
-  const baselineFile = baselineFlag >= 0 ? argv[baselineFlag + 1] : BASELINE;
-  const positional = argv.filter(
-    (arg, index) => !arg.startsWith("--") && (baselineFlag < 0 || index !== baselineFlag + 1)
-  );
-  if (!baselineFile) {
-    console.error(USAGE);
-    return 1;
-  }
 
-  if (argv.includes("--save")) {
-    const source = positional[0] ?? newestCompleteRun();
+  if (args.save) {
+    const source = args.run ?? newestCompleteRun();
     if (!load(source).complete) {
       console.error(`${source} is a partial run; only a complete run can be the baseline`);
       return 1;
     }
+    mkdirSync(path.dirname(BASELINE), { recursive: true });
     copyFileSync(source, BASELINE);
     console.log(
       `baseline: ${path.relative(REPO_ROOT, source)} → ${path.relative(REPO_ROOT, BASELINE)}`
@@ -78,14 +98,14 @@ function main(argv: string[]): number {
     return 0;
   }
 
-  if (!existsSync(baselineFile)) {
+  if (!existsSync(args.baseline)) {
     console.error(
-      `no baseline at ${baselineFile}; save one with \`npm run perf voice-replay-compare -- --save\``
+      `no baseline at ${args.baseline}; save one with \`npm run perf voice-replay-compare -- --save\``
     );
     return 1;
   }
-  const runFile = positional[0] ?? newestCompleteRun();
-  const baseline = load(baselineFile);
+  const runFile = args.run ?? newestCompleteRun();
+  const baseline = load(args.baseline);
   const run = load(runFile);
   console.log(renderComparison(baseline, run, compareRuns(baseline, run)));
   return 0;
@@ -94,6 +114,6 @@ function main(argv: string[]): number {
 try {
   process.exitCode = main(process.argv.slice(2));
 } catch (error) {
-  console.error(error instanceof Error ? error.message : error);
+  console.error(formatErrorMessage(error, "voice-replay-compare failed"));
   process.exitCode = 1;
 }

@@ -49,22 +49,28 @@ const SPOKEN_SYMBOLS: ReadonlySet<string> = new Set([
   "plus",
 ]);
 
+// Where written punctuation stood, kept as a token so it ends a spelled-out
+// run exactly as a dictated symbol word does.
+const BOUNDARY = "\u0000";
+
 /**
- * camelCase split, lowercase, punctuation to spaces, small number words to
- * digits, spoken symbols dropped, and spelled-out runs merged ("n p m" →
- * "npm"). Spacing is the one thing a provider may get wrong for free:
- * `VoiceRecordingService` and "voice recording service" are the same words.
- * Splitting on punctuation means `src/index.ts` and "src dot index dot ts"
- * score the same, so WER measures the words heard rather than how the provider
- * chose to format them.
+ * camelCase split, lowercase, punctuation and dictated symbols dropped, small
+ * number words to digits, and spelled-out runs merged ("n p m" → "npm").
+ * Spacing is the one thing a provider may get wrong for free:
+ * `VoiceRecordingService` and "voice recording service" are the same words,
+ * and so are `src/index.ts` and "src slash index dot ts". WER then measures
+ * the words heard rather than how the provider chose to format them.
  */
 export function normaliseWords(text: string): string[] {
   const words = text
-    .replace(/([\p{Ll}\p{N}])(\p{Lu})/gu, "$1 $2")
+    // Lower-to-upper and acronym-to-word boundaries only: `E2E` and `TS2345`
+    // stay whole, as their spelled-out forms merge.
+    .replace(/(\p{Ll})(\p{Lu})/gu, "$1 $2")
     .replace(/(\p{Lu}+)(\p{Lu}\p{Ll})/gu, "$1 $2")
     .toLowerCase()
     .replace(/[’']/g, "")
-    .split(/[^\p{L}\p{N}]+/u)
+    .replace(/[^\p{L}\p{N}\s]+/gu, ` ${BOUNDARY} `)
+    .split(/\s+/u)
     .filter((word) => word.length > 0)
     .map((word) => NUMBER_WORDS[word] ?? word);
   const merged: string[] = [];
@@ -77,9 +83,8 @@ export function normaliseWords(text: string): string[] {
     run = [];
   };
   for (const word of words) {
-    // A spoken symbol ends a spelled-out run, as the symbol itself would:
-    // "A P I dot T S" is `api.ts`, not `apits`.
-    if (SPOKEN_SYMBOLS.has(word)) {
+    // "A P I dot T S" ends the run at the symbol, as `api.ts` does: `api ts`.
+    if (word === BOUNDARY || SPOKEN_SYMBOLS.has(word)) {
       flush();
       continue;
     }
@@ -104,21 +109,46 @@ export interface Alignment {
   referenceOps: AlignmentOp[];
 }
 
-/** Word-level Levenshtein alignment with a backtrace that prefers matches. */
+const DIAGONAL = 0;
+const DELETE = 1;
+const INSERT = 2;
+
+/**
+ * Word-level Levenshtein alignment. Among the paths with the fewest edits it
+ * takes the one with the most exact matches, so "commit and push" against
+ * "commit push now" keeps `push` matched (a deletion and an insertion) instead
+ * of reading it as two substitutions and a lost last word.
+ */
 export function alignWords(reference: readonly string[], hypothesis: readonly string[]): Alignment {
   const n = reference.length;
   const m = hypothesis.length;
-  const cost: number[][] = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0));
-  for (let i = 0; i <= n; i++) cost[i]![0] = i;
-  for (let j = 0; j <= m; j++) cost[0]![j] = j;
+  const grid = () => Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0));
+  const cost = grid();
+  const matches = grid();
+  const move = grid();
+  for (let i = 1; i <= n; i++) {
+    cost[i]![0] = i;
+    move[i]![0] = DELETE;
+  }
+  for (let j = 1; j <= m; j++) {
+    cost[0]![j] = j;
+    move[0]![j] = INSERT;
+  }
   for (let i = 1; i <= n; i++) {
     for (let j = 1; j <= m; j++) {
       const same = reference[i - 1] === hypothesis[j - 1];
-      cost[i]![j] = Math.min(
-        cost[i - 1]![j - 1]! + (same ? 0 : 1),
-        cost[i - 1]![j]! + 1,
-        cost[i]![j - 1]! + 1
-      );
+      const candidates: Array<[number, number, number]> = [
+        [cost[i - 1]![j - 1]! + (same ? 0 : 1), matches[i - 1]![j - 1]! + (same ? 1 : 0), DIAGONAL],
+        [cost[i - 1]![j]! + 1, matches[i - 1]![j]!, DELETE],
+        [cost[i]![j - 1]! + 1, matches[i]![j - 1]!, INSERT],
+      ];
+      let best = candidates[0]!;
+      for (const candidate of candidates) {
+        if (candidate[0] < best[0] || (candidate[0] === best[0] && candidate[1] > best[1])) {
+          best = candidate;
+        }
+      }
+      [cost[i]![j], matches[i]![j], move[i]![j]] = best;
     }
   }
 
@@ -129,24 +159,21 @@ export function alignWords(reference: readonly string[], hypothesis: readonly st
   let i = n;
   let j = m;
   while (i > 0 || j > 0) {
-    if (i > 0 && j > 0) {
+    const step = move[i]![j];
+    if (step === DIAGONAL) {
       const same = reference[i - 1] === hypothesis[j - 1];
-      if (cost[i]![j] === cost[i - 1]![j - 1]! + (same ? 0 : 1)) {
-        referenceOps[i - 1] = same ? "match" : "sub";
-        if (!same) substitutions++;
-        i--;
-        j--;
-        continue;
-      }
-    }
-    if (i > 0 && cost[i]![j] === cost[i - 1]![j]! + 1) {
+      referenceOps[i - 1] = same ? "match" : "sub";
+      if (!same) substitutions++;
+      i--;
+      j--;
+    } else if (step === DELETE) {
       referenceOps[i - 1] = "del";
       deletions++;
       i--;
-      continue;
+    } else {
+      insertions++;
+      j--;
     }
-    insertions++;
-    j--;
   }
   return { substitutions, deletions, insertions, referenceOps };
 }
@@ -370,6 +397,7 @@ export interface VoiceReplayClipRecord {
   longestUtteranceMs: number;
   /** Hash of the WAV played, so a new voice or recording reads as a changed clip. */
   audioHash: string;
+  /** Hash of the reference and its terms: dropping a term must not read as better recall. */
   referenceHash: string;
 }
 
@@ -423,8 +451,10 @@ export interface RunComparison {
   /** Configs present on one side only. */
   onlyInBaseline: string[];
   onlyInRun: string[];
-  /** Clips whose reference or audio changed between the two runs: left out of every metric. */
+  /** Clips whose reference, terms or audio changed between the two runs: left out of every metric. */
   changedClips: string[];
+  /** Harness differences that move every config's numbers, such as the stop tail. */
+  harnessNotes: string[];
 }
 
 const ACCURACY_METRICS: ReadonlyArray<{
@@ -526,11 +556,19 @@ export function compareRuns(baseline: VoiceReplayRun, run: VoiceReplayRun): RunC
     });
   }
 
+  const harnessNotes: string[] = [];
+  if (baseline.stopTailMs !== run.stopTailMs) {
+    harnessNotes.push(
+      `The stop tail moved from ${baseline.stopTailMs} ms to ${run.stopTailMs} ms: last-word survival and stop timings aren't comparable.`
+    );
+  }
+
   return {
     configs,
     onlyInBaseline: [...baselineConfigs.keys()].filter((id) => !runConfigs.has(id)),
     onlyInRun: [...runConfigs.keys()].filter((id) => !baselineConfigs.has(id)),
     changedClips,
+    harnessNotes,
   };
 }
 
@@ -581,6 +619,7 @@ export function renderComparison(
     }
     lines.push("");
   }
+  for (const note of comparison.harnessNotes) lines.push(note);
   if (comparison.changedClips.length > 0) {
     lines.push(`Changed clips, left out: ${comparison.changedClips.join(", ")}`);
   }

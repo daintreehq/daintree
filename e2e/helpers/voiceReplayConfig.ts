@@ -30,14 +30,12 @@ export const REPLAY_BASE_SETTINGS: Readonly<Record<string, unknown>> = {
 
 /**
  * The only settings a custom configuration may change. The delay tier, the
- * forced-commit length and microphone processing are constants today, so a
- * config naming them would run unchanged and report a difference that isn't
- * there: they are refused until the app reads them from somewhere.
+ * forced-commit length and microphone processing are constants today, and the
+ * app rewrites any `transcriptionModel` to its one supported model, so a config
+ * naming them would run unchanged and report a difference that isn't there:
+ * they are refused until the app honours them.
  */
-export const REPLAY_TUNABLE_SETTINGS: ReadonlySet<string> = new Set([
-  "language",
-  "transcriptionModel",
-]);
+export const REPLAY_TUNABLE_SETTINGS: ReadonlySet<string> = new Set(["language"]);
 
 export const REPLAY_PRESETS: Readonly<Record<string, Omit<ReplayConfig, "id">>> = {
   openai: { provider: "openai", settings: {}, dictionary: [] },

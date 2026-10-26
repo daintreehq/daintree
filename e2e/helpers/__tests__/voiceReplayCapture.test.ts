@@ -8,12 +8,14 @@ const capture: ReplayCapture = {
     { t: 90, kind: "complete", sessionId: "old", text: "stale words" },
     { t: 1_010, kind: "status", sessionId: "s1", status: "connecting" },
     { t: 1_400, kind: "status", sessionId: "s1", status: "recording" },
+    { t: 1_450, kind: "complete", sessionId: "s1", text: "  " },
     { t: 1_600, kind: "delta", sessionId: "s1", text: " " },
     { t: 1_700, kind: "delta", sessionId: "s1", text: "Run npm" },
     { t: 2_500, kind: "complete", sessionId: "s1", text: " Run npm test. " },
     { t: 2_600, kind: "complete", sessionId: "s1", text: "" },
     { t: 3_900, kind: "status", sessionId: "s1", status: "finishing" },
     { t: 4_300, kind: "complete", sessionId: "s1", text: "Then  push." },
+    { t: 4_400, kind: "complete", sessionId: "s1", text: "" },
     { t: 4_500, kind: "error", sessionId: "s1", message: "drain timed out" },
     { t: 4_600, kind: "ended", sessionId: "s1", reason: "stopped" },
   ],
@@ -21,6 +23,7 @@ const capture: ReplayCapture = {
 
 describe("deriveSession", () => {
   it("joins the session's non-empty finals in order and times them from the press", () => {
+    // Blank finals before the first and after the last real one time nothing.
     const session = deriveSession(capture, {
       startAt: 1_000,
       stopAt: 4_000,

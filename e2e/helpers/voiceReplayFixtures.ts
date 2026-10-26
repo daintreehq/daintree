@@ -163,8 +163,7 @@ export const REPLAY_CLIPS: readonly ReplayClip[] = [
   },
   {
     id: "xterm-webgl",
-    speech:
-      "The xterm web G L renderer drops glyphs after a resize, check the texture atlas size.",
+    speech: "The xterm web G L renderer drops glyphs after a resize, check the texture atlas size.",
     reference:
       "The xterm WebGL renderer drops glyphs after a resize, check the texture atlas size.",
     terms: ["xterm", "WebGL"],
@@ -204,33 +203,45 @@ export interface Pcm16 {
  * header: `say` writes an `FLLR` padding chunk before `data`.
  */
 export function readPcm16Wav(buffer: Buffer): Pcm16 {
-  if (buffer.toString("ascii", 0, 4) !== "RIFF" || buffer.toString("ascii", 8, 12) !== "WAVE") {
+  if (
+    buffer.length < 12 ||
+    buffer.toString("ascii", 0, 4) !== "RIFF" ||
+    buffer.toString("ascii", 8, 12) !== "WAVE"
+  ) {
     throw new Error("not a RIFF/WAVE file");
   }
   let offset = 12;
-  let sampleRate = 0;
-  let channels = 0;
-  let bits = 0;
-  let format = 0;
+  let fmt: { format: number; channels: number; sampleRate: number; bits: number } | null = null;
   while (offset + 8 <= buffer.length) {
     const id = buffer.toString("ascii", offset, offset + 4);
     const size = buffer.readUInt32LE(offset + 4);
     const body = offset + 8;
+    // A truncated copy would otherwise play as a shorter clip against the full
+    // reference, and the provider would take the blame for the missing words.
+    if (body + size > buffer.length)
+      throw new Error(`WAV chunk "${id}" runs past the end of the file`);
     if (id === "fmt ") {
-      format = buffer.readUInt16LE(body);
-      channels = buffer.readUInt16LE(body + 2);
-      sampleRate = buffer.readUInt32LE(body + 4);
-      bits = buffer.readUInt16LE(body + 14);
+      if (size < 16) throw new Error("WAV fmt chunk is too short");
+      fmt = {
+        format: buffer.readUInt16LE(body),
+        channels: buffer.readUInt16LE(body + 2),
+        sampleRate: buffer.readUInt32LE(body + 4),
+        bits: buffer.readUInt16LE(body + 14),
+      };
     } else if (id === "data") {
-      if (format !== 1 || channels !== 1 || bits !== 16) {
+      if (!fmt) throw new Error("WAV data chunk comes before its fmt chunk");
+      if (fmt.format !== 1 || fmt.channels !== 1 || fmt.bits !== 16) {
         throw new Error(
-          `expected mono 16-bit PCM, got format ${format}, ${channels} channel(s), ${bits}-bit`
+          `expected mono 16-bit PCM, got format ${fmt.format}, ${fmt.channels} channel(s), ${fmt.bits}-bit`
         );
       }
-      const end = Math.min(buffer.length, body + size);
-      const samples = new Int16Array((end - body) >> 1);
+      if (fmt.sampleRate < 8_000 || fmt.sampleRate > 192_000) {
+        throw new Error(`implausible sample rate ${fmt.sampleRate}`);
+      }
+      if (size % 2 !== 0) throw new Error("WAV data ends partway through a sample");
+      const samples = new Int16Array(size / 2);
       for (let i = 0; i < samples.length; i++) samples[i] = buffer.readInt16LE(body + i * 2);
-      return { sampleRate, samples };
+      return { sampleRate: fmt.sampleRate, samples };
     }
     offset = body + size + (size % 2);
   }
@@ -256,8 +267,13 @@ export function encodePcm16Wav({ sampleRate, samples }: Pcm16): Buffer {
   return Buffer.concat([header, data]);
 }
 
+/** Fraction of full scale below which a sample counts as silence. */
+const TRIM_THRESHOLD = 0.01;
+// Bump when synthesis or trimming changes, so cached clips are made again.
+const PREPARATION_VERSION = 1;
+
 /** Cuts leading and trailing samples quieter than `threshold` (of full scale). */
-export function trimSilence(pcm: Pcm16, threshold = 0.01): Pcm16 {
+export function trimSilence(pcm: Pcm16, threshold = TRIM_THRESHOLD): Pcm16 {
   const floor = Math.round(threshold * 32768);
   let start = 0;
   let end = pcm.samples.length;
@@ -274,7 +290,7 @@ export function pcmDurationMs(pcm: Pcm16): number {
  * The longest stretch with no gap of at least `gapMs` below `threshold`: the
  * longest single utterance, which is what a forced commit cuts into.
  */
-export function longestUtteranceMs(pcm: Pcm16, gapMs = 400, threshold = 0.01): number {
+export function longestUtteranceMs(pcm: Pcm16, gapMs = 400, threshold = TRIM_THRESHOLD): number {
   const floor = Math.round(threshold * 32768);
   const gapSamples = Math.round((gapMs / 1000) * pcm.sampleRate);
   let longest = 0;
@@ -334,7 +350,15 @@ export function prepareClip(clip: ReplayClip, options: PrepareOptions): Prepared
   }
   mkdirSync(options.cacheDir, { recursive: true });
   const key = createHash("sha256")
-    .update(`${options.voice ?? ""}\n${clip.speech}`)
+    .update(
+      [
+        PREPARATION_VERSION,
+        REPLAY_SAMPLE_RATE,
+        TRIM_THRESHOLD,
+        options.voice ?? "",
+        clip.speech,
+      ].join("\n")
+    )
     .digest("hex")
     .slice(0, 16);
   const wavPath = path.join(options.cacheDir, `${clip.id}-${key}.wav`);

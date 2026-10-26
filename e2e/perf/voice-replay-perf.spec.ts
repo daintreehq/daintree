@@ -30,6 +30,7 @@ import { SEL } from "../helpers/selectors";
 import { T_LONG } from "../helpers/timeouts";
 import { dismissBlockingPalette } from "../helpers/overlays";
 import { ensureWindowFocused } from "../helpers/focus";
+import { formatErrorMessage } from "../../shared/utils/errorMessage";
 import { VOICE_TOGGLE_CHORD } from "../helpers/shortcuts";
 import { installFakeAgent, fakeAgentEnv } from "../helpers/fakeAgent";
 import {
@@ -174,8 +175,10 @@ perfDescribe("Perf: dictation replay against real providers", () => {
       })
     );
 
-    const sessionsPlanned = clips.length * runnable.length * REPEATS;
-    test.setTimeout(120_000 + sessionsPlanned * 150_000);
+    // Launch, onboarding, the agent and the drain take about two minutes at
+    // worst; the clip and the tail are on top of that.
+    const playbackMs = clips.reduce((sum, clip) => sum + clip.audioMs + STOP_TAIL_MS, 0);
+    test.setTimeout(120_000 + runnable.length * REPEATS * (clips.length * 150_000 + playbackMs));
 
     const fixture = createFixtureRepo({ name: "voice-replay-perf" });
     const fakeBinDir = installFakeAgent(fixture.dir);
@@ -216,7 +219,7 @@ perfDescribe("Perf: dictation replay against real providers", () => {
         audioMs: prepared.audioMs,
         longestUtteranceMs: prepared.longestUtteranceMs,
         audioHash: contentHash(readFileSync(prepared.wavPath)),
-        referenceHash: contentHash(prepared.clip.reference),
+        referenceHash: contentHash([prepared.clip.reference, ...prepared.clip.terms].join("\n")),
       })),
       sessions: [],
       failures: [],
@@ -252,7 +255,7 @@ perfDescribe("Perf: dictation replay against real providers", () => {
                   `end ${session.endReason ?? "none"}`
               );
             } catch (error) {
-              const message = error instanceof Error ? error.message : String(error);
+              const message = formatErrorMessage(error, "session failed");
               run.failures.push({ clip: prepared.clip.id, config: config.id, repeat, message });
               console.log(`[voice-replay] ${tag}: harness failure: ${message.split("\n")[0]}`);
             }
@@ -338,21 +341,34 @@ async function dictateOnce(
       )
       .toBe(true);
 
+    const sessionEnded = async () => {
+      const capture = await readReplayCapture(page);
+      const id = sessionIdAfter(capture, startAt);
+      return capture.events.some((e) => e.kind === "ended" && e.sessionId === id);
+    };
+
     // The clip starts playing when the device opens; stop when it runs out.
+    // A session the provider already ended (a rejected key, a dropped socket)
+    // gets no stop press: the chord would start a second session instead.
     const plannedStopAt = micOpenAt! + prepared.audioMs + STOP_TAIL_MS;
-    await sleep(plannedStopAt - (await rendererNow(page)));
-    const stopAt = await rendererNow(page);
-    await page.keyboard.press(VOICE_TOGGLE_CHORD);
+    let endedEarly = false;
+    for (;;) {
+      const remaining = plannedStopAt - (await rendererNow(page));
+      if (remaining <= 0) break;
+      if (await sessionEnded()) {
+        endedEarly = true;
+        break;
+      }
+      await sleep(Math.min(remaining, 250));
+    }
+    let stopAt: number | null = null;
+    if (!endedEarly) {
+      stopAt = await rendererNow(page);
+      await page.keyboard.press(VOICE_TOGGLE_CHORD);
+    }
 
     await expect
-      .poll(
-        async () => {
-          const capture = await readReplayCapture(page);
-          const id = sessionIdAfter(capture, startAt);
-          return capture.events.some((e) => e.kind === "ended" && e.sessionId === id);
-        },
-        { timeout: SESSION_END_TIMEOUT_MS, intervals: [100] }
-      )
+      .poll(sessionEnded, { timeout: SESSION_END_TIMEOUT_MS, intervals: [100] })
       .toBe(true)
       .catch(() => {
         // Scored as it stands: a session that never ended is a result, with
@@ -379,7 +395,14 @@ async function dictateOnce(
     };
   } finally {
     if (ctx?.app) {
-      const pid = ctx.app.process().pid;
+      // process() throws once the app has already died; that must not mask
+      // the session's own error or skip closeApp's descendant cleanup.
+      let pid: number | undefined;
+      try {
+        pid = ctx.app.process()?.pid;
+      } catch {
+        pid = undefined;
+      }
       await closeApp(ctx.app);
       if (pid) await waitForProcessExit(pid).catch(() => {});
     }

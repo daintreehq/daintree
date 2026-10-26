@@ -306,7 +306,7 @@ Per configuration it reports pooled and mean WER over normalised words, term rec
 | Variable | Default | Effect |
 | --- | --- | --- |
 | `VOICE_REPLAY_CONFIGS` | `openai,deepgram` | Presets to run; `openai+terms` and `deepgram+terms` also add every fixture term to the dictionary |
-| `VOICE_REPLAY_CONFIG_FILE` | unset | JSON array of `{ id, provider, settings?, dictionary? }`; `settings` may only change `language` and `transcriptionModel` |
+| `VOICE_REPLAY_CONFIG_FILE` | unset | JSON array of `{ id, provider, settings?, dictionary? }`; `settings` may only change `language` |
 | `VOICE_REPLAY_CLIPS` | all | Comma-separated clip ids |
 | `VOICE_REPLAY_REPEATS` | `1` | Passes over every clip and config |
 | `VOICE_REPLAY_STOP_TAIL_MS` | `0` | Extra time between the clip ending and the stop press |
