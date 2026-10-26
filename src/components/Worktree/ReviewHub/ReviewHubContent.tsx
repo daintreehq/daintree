@@ -1422,7 +1422,7 @@ export function ReviewHubContent({
                     if (diffMode === "base-branch") {
                       if (!baseBranchLoading) void fetchBaseBranch();
                     } else if (diffMode === "since-review") {
-                      reviewMark.retryCompare();
+                      if (!refreshBusy) reviewMark.retryCompare();
                     } else if (!loading) {
                       void refresh();
                       // A fresh capture too, so a mark covers what this read shows.

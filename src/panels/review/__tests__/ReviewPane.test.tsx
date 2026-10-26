@@ -20,6 +20,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 // Escape `keyboardScope` — is covered by the focus suites below.
 interface CapturedReviewHubProps {
   isOpen: boolean;
+  initialMode?: "since-review";
   worktreePath: string;
   onClose: () => void;
   keyboardScope?: HTMLElement;
@@ -55,6 +56,8 @@ vi.mock("@/hooks/useWorktreeStore", () => ({
 
 import { ReviewPane } from "../ReviewPane";
 import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
+import { usePanelStore } from "@/store/panelStore";
+import { createReviewDefaults } from "../defaults";
 
 function lastReviewHubContentProps(): CapturedReviewHubProps {
   const props = reviewHubContentProps.at(-1);
@@ -64,6 +67,26 @@ function lastReviewHubContentProps(): CapturedReviewHubProps {
 
 afterEach(() => {
   reviewHubContentProps.length = 0;
+  usePanelStore.setState({ panelsById: {} });
+});
+
+describe("ReviewPane opening mode", () => {
+  it("carries the opening mode from the panel record into the hub, and never auto-stages for it", () => {
+    const defaults = createReviewDefaults({
+      kind: "review",
+      initialMode: "since-review",
+      autoStageOnOpen: false,
+    });
+    expect(defaults).toMatchObject({ initialMode: "since-review", autoStageOnOpen: false });
+    usePanelStore.setState({
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- the pane reads only these fields
+      panelsById: {
+        "review-1": { id: "review-1", kind: "review", worktreeId: "wt-1", ...defaults },
+      } as never,
+    });
+    render(<ReviewPane id="review-1" worktreeId="wt-1" location="dialog" onClose={vi.fn()} />);
+    expect(lastReviewHubContentProps()).toMatchObject({ initialMode: "since-review" });
+  });
 });
 
 describe("ReviewPane close wiring", () => {
