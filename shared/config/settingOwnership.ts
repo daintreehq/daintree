@@ -6,8 +6,9 @@
  *   plugins, forge, run history, per-project state. A remote window reads and
  *   writes the connected host's value, and its settings page names the host.
  * - `device`: the screen, keyboard and this machine — theme, keybindings,
- *   terminal appearance, window geometry, GPU, voice, privacy, updates, crash
- *   recovery and the host list itself. Always this machine's.
+ *   terminal appearance, input and scrollback, window geometry, GPU, voice,
+ *   privacy, updates, crash recovery and the host list itself. Always this
+ *   machine's.
  *
  * Main derives its ownership tables from this (`electron/storeOwnership.ts`)
  * and holds them total over the store schemas, so a store key or field that
@@ -57,13 +58,16 @@ export const SETTING_CATALOG = {
       // Store-file bookkeeping; each machine's own and never crosses a link.
       _schemaVersion: device,
       windowState: device,
-      // Behaviour runs where the terminals run; appearance is how this screen draws them.
+      // Resource watching runs where the terminals run; how this screen draws and
+      // types into them is this machine's. Scrollback here is how much history
+      // this screen's xterm keeps; the host's pty-host sizes and trims its own
+      // buffers from its own copy.
       terminalConfig: {
         fields: {
-          scrollbackLines: host,
-          performanceMode: host,
-          hybridInputEnabled: host,
-          hybridInputAutoFocus: host,
+          scrollbackLines: device,
+          performanceMode: device,
+          hybridInputEnabled: device,
+          hybridInputAutoFocus: device,
           resourceMonitoringEnabled: host,
           memoryLeakDetectionEnabled: host,
           memoryLeakAutoRestartThresholdMb: host,

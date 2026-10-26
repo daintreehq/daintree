@@ -219,7 +219,11 @@ describe("Remote Hosts end to end over a real socket, started by the real boot",
             hostCalls.push(ctx);
             return {
               appState: { sidebarWidth: 999, activeWorktreeId: "wt-host", terminals: [] },
-              terminalConfig: { fontSize: 30, scrollbackLines: 5000 },
+              terminalConfig: {
+                fontSize: 30,
+                scrollbackLines: 5000,
+                resourceMonitoringEnabled: true,
+              },
               hostPlatform: "linux",
               hostHomeDir: "/home/greg",
               hostTmpDir: "/tmp",
@@ -245,7 +249,7 @@ describe("Remote Hosts end to end over a real socket, started by the real boot",
         project: { id: "proj-1" },
         shellOnly: "from-the-shell",
         appState: { sidebarWidth: 320, activeWorktreeId: "wt-host" },
-        terminalConfig: { fontSize: 14, scrollbackLines: 5000 },
+        terminalConfig: { fontSize: 14, scrollbackLines: 1000, resourceMonitoringEnabled: true },
       });
     },
     TEST_TIMEOUT_MS
