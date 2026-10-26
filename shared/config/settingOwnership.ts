@@ -154,7 +154,7 @@ export const SETTING_CATALOG = {
       // Canopy reads the agents of the machine it runs on, which is the host, with
       // a model downloaded there.
       canopyMode: host,
-      appTheme: device,
+      appTheme: deviceGlobalOrProject,
       privacy: device,
       agentSessionHistory: host,
       voiceInput: device,
