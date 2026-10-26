@@ -1,4 +1,13 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  Suspense,
+  lazy,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { Keyboard, RefreshCw } from "lucide-react";
 import { formatWaitAge } from "@/lib/projectRowStatus";
 import { Telescope } from "@/components/icons";
@@ -57,6 +66,11 @@ import { describeHostMenuState, type HostMenuRow } from "@/components/Hosts/host
 import { isNewWindowClick } from "@/components/Hosts/hostSwitching";
 import type { HostId } from "@shared/types/remoteHosts";
 import { readsWithHostedService } from "@shared/types/ipc/canopy";
+
+// Loaded on first use: the dialog pulls in Pilot's row and band modules.
+const LazyParkRunDialog = lazy(() =>
+  import("@/components/Fleet/ParkRunDialog").then((m) => ({ default: m.ParkRunDialog }))
+);
 
 interface HostIssue {
   hostId: HostId;
@@ -761,6 +775,9 @@ function CanopyInbox({
     markAllRead,
     askRename,
     rowMenu,
+    setAside,
+    parkRunId,
+    closePark,
     trashArm,
     renameAsk,
     refreshes,
@@ -1630,6 +1647,7 @@ function CanopyInbox({
                       }
                       onInitialFocusSettled={() => settlePaneFocus(focusedItem.runId)}
                       otherHostId={(everyHost ? focusedHostId : hostId) ?? undefined}
+                      aside={setAside}
                       terminalApi={terminalApi}
                       reconnecting={
                         everyHost
@@ -1726,6 +1744,11 @@ function CanopyInbox({
           />
         )}
       </div>
+      {parkRunId !== null && (
+        <Suspense fallback={null}>
+          <LazyParkRunDialog key={parkRunId} runId={parkRunId} onClose={closePark} />
+        </Suspense>
+      )}
     </AppDialog>
   );
 }

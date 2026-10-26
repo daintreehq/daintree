@@ -1,10 +1,18 @@
 import { useRef, type ReactNode } from "react";
 import {
+  AGENT_SNOOZE_DURATION_OPTIONS,
+  AGENT_SNOOZE_LABEL,
+  type AgentSnoozeDurationOption,
+} from "@shared/utils/agentSnoozeDurations";
+import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
   ContextMenuShortcut,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { isMac } from "@/lib/platform";
@@ -12,7 +20,19 @@ import { isNewWindowClick } from "@/components/Hosts/hostSwitching";
 import { canReplyTo } from "./CanopyCard";
 import { itemArchived, type CanopyItem } from "./canopyModel";
 
-export interface CanopyRowMenuActions {
+/** Setting a run aside, on the window's own host: Pilot's park and snooze. */
+export interface CanopyAsideActions {
+  /** Only a run on the window's own host can be set aside from here. */
+  canSetAside: (item: CanopyItem) => boolean;
+  /** Open the park editor, for a new park or an edit of the one the run has. */
+  onPark: (item: CanopyItem) => void;
+  onUnpark: (item: CanopyItem) => void;
+  onSnooze: (item: CanopyItem, option: AgentSnoozeDurationOption) => void;
+  /** Lift the run's snooze. */
+  onWake: (item: CanopyItem) => void;
+}
+
+export interface CanopyRowMenuActions extends CanopyAsideActions {
   /** `newWindow`: Cmd/Ctrl held, so another host's run opens in a new window. */
   onOpen: (item: CanopyItem, newWindow?: boolean) => void;
   onReply: (item: CanopyItem) => void;
@@ -39,6 +59,9 @@ export function CanopyRowMenu({
   ...actions
 }: CanopyRowMenuActions & { item: CanopyItem; children: ReactNode }) {
   const archived = itemArchived(item);
+  const canSetAside = actions.canSetAside(item);
+  const parked = item.row.run.park !== undefined;
+  const snoozed = item.row.run.snooze !== undefined;
   const trashChord = isMac() ? "Meta+Backspace" : "Control+Backspace";
   // Rename and Reply send focus into the pane on purpose — the run's name
   // field, or its composer: the menu closing must not hand it back to the row
@@ -102,6 +125,32 @@ export function CanopyRowMenu({
           Rename…
           <ContextMenuShortcut shortcut="F2" />
         </ContextMenuItem>
+        {canSetAside && (
+          <>
+            <ContextMenuItem onSelect={() => actions.onPark(item)}>Park…</ContextMenuItem>
+            {parked && (
+              <ContextMenuItem onSelect={() => actions.onUnpark(item)}>Unpark</ContextMenuItem>
+            )}
+            <ContextMenuSub>
+              <ContextMenuSubTrigger>Snooze…</ContextMenuSubTrigger>
+              <ContextMenuSubContent>
+                {AGENT_SNOOZE_DURATION_OPTIONS.map((option) => (
+                  <ContextMenuItem key={option} onSelect={() => actions.onSnooze(item, option)}>
+                    {AGENT_SNOOZE_LABEL[option]}
+                  </ContextMenuItem>
+                ))}
+                {snoozed && (
+                  <>
+                    <ContextMenuSeparator />
+                    <ContextMenuItem onSelect={() => actions.onWake(item)}>
+                      Wake now
+                    </ContextMenuItem>
+                  </>
+                )}
+              </ContextMenuSubContent>
+            </ContextMenuSub>
+          </>
+        )}
         <ContextMenuSeparator />
         {/* Arms Trash in the agent's pane, as its first press would; the
             second press there confirms it. */}

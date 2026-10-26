@@ -97,6 +97,13 @@ const canopySnapshot: CanopySnapshot = {
   glances: [],
 };
 
+let fleetApi = {
+  parkRun: vi.fn(async (_runId: string, _input?: unknown) => {}),
+  unparkRun: vi.fn(async (_runId: string) => {}),
+  snoozeRun: vi.fn(async (_runId: string, _option: string) => {}),
+  unsnoozeRun: vi.fn(async (_runId: string) => {}),
+};
+
 function installElectron(
   snapshot: CanopySnapshot = canopySnapshot,
   branchOf: (runId: string) => Promise<string | null> = async (runId) => `feature/${runId}`
@@ -169,8 +176,19 @@ function installElectron(
       activated: mode === "on",
     })),
   };
+  fleetApi = {
+    parkRun: vi.fn(async () => {}),
+    unparkRun: vi.fn(async () => {}),
+    snoozeRun: vi.fn(async () => {}),
+    unsnoozeRun: vi.fn(async () => {}),
+  };
   Object.defineProperty(window, "electron", {
-    value: { canopy, terminal: { restore: vi.fn() }, system: { openExternal: vi.fn() } },
+    value: {
+      canopy,
+      fleet: fleetApi,
+      terminal: { restore: vi.fn() },
+      system: { openExternal: vi.fn() },
+    },
     configurable: true,
     writable: true,
   });
@@ -1415,6 +1433,8 @@ describe("CanopyView", () => {
       "Read again",
       "Archive",
       "Rename…",
+      "Park…",
+      "Snooze…",
       "Trash terminal…",
     ]);
     expect(
@@ -1424,6 +1444,48 @@ describe("CanopyView", () => {
     ).toBe("E");
     fireEvent.click(items.find((item) => item.textContent?.startsWith("Archive"))!);
     expect(canopy.archive).toHaveBeenCalledWith("waiting", { spawnedAt: NOW - 3_600_000 });
+  });
+
+  it("snoozes a run from the row's menu and wakes one that is snoozed", async () => {
+    installElectron();
+    const { container } = render(<CanopyView />);
+    await frames();
+    fireEvent.contextMenu(cards(container)[1]!, { clientX: 5, clientY: 5 });
+    const trigger = (await within(document.body).findAllByRole("menuitem", { hidden: true })).find(
+      (item) => item.textContent?.startsWith("Snooze")
+    )!;
+    fireEvent.keyDown(trigger, { key: "ArrowRight" });
+    const fifteen = await within(document.body).findByRole("menuitem", {
+      name: "15 minutes",
+      hidden: true,
+    });
+    fireEvent.click(fifteen);
+    expect(fleetApi.snoozeRun).toHaveBeenCalledWith(
+      cards(container)[1]!.id.replace(/^canopy-card-/, ""),
+      "15m"
+    );
+    expect(fleetApi.parkRun).not.toHaveBeenCalled();
+  });
+
+  it("offers Unpark only for a parked run, and lifts the park", async () => {
+    installElectron();
+    const fleet = useFleetSnapshotStore.getState().snapshot!;
+    const target = fleet.runs[0]!.runId;
+    useFleetSnapshotStore.setState({
+      snapshot: {
+        ...fleet,
+        runs: fleet.runs.map((r) =>
+          r.runId === target ? { ...r, park: { parkedAt: NOW - 1000 } as typeof r.park } : r
+        ),
+      },
+    });
+    const { container } = render(<CanopyView />);
+    await frames();
+    const parkedCard = cards(container).find((card) => card.id.endsWith(target))!;
+    fireEvent.contextMenu(parkedCard, { clientX: 5, clientY: 5 });
+    const items = await within(document.body).findAllByRole("menuitem", { hidden: true });
+    fireEvent.click(items.find((item) => item.textContent === "Unpark")!);
+    expect(fleetApi.unparkRun).toHaveBeenCalledWith(target);
   });
 
   it("shows neither the offer nor the inbox until main says whether Canopy is on", async () => {

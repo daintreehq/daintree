@@ -12,7 +12,9 @@ import type { KeyboardEvent } from "react";
 import {
   Archive,
   ArchiveRestore,
+  Bell,
   CheckCheck,
+  Clock,
   KeyRound,
   MessageSquare,
   SquareArrowOutUpRight,
@@ -25,6 +27,21 @@ import { useCanopyStore } from "@/store/canopyStore";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/Kbd";
 import { SURFACE_HEADER_FOCUS_LIFT_CLASS, SurfaceHeader } from "@/components/ui/SurfaceHeader";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { CirclePause } from "@/components/icons";
+import {
+  AGENT_SNOOZE_DURATION_OPTIONS,
+  AGENT_SNOOZE_LABEL,
+} from "@shared/utils/agentSnoozeDurations";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { AgentStateChip } from "@/components/Terminal/TerminalAgentIndicator";
@@ -47,6 +64,7 @@ import {
 import { KIND_LABEL } from "./CanopyRow";
 import { CanopyTerminal, type CanopyStreamState } from "./CanopyTerminal";
 import { CanopyTitle } from "./CanopyTitle";
+import type { CanopyAsideActions } from "./CanopyRowMenu";
 import { ownCanopyTerminalApi, type CanopyTerminalApi } from "./canopyHostSource";
 
 const LazyHybridInputBar = lazy(() =>
@@ -119,6 +137,8 @@ interface CanopyCardProps extends CanopyCardHandlers {
    * offered to it.
    */
   otherHostId?: string;
+  /** Park and snooze for a run on the window's own host; absent where they can't be offered. */
+  aside?: CanopyAsideActions;
   /** The run's host's Canopy; the window's own by default. */
   terminalApi?: CanopyTerminalApi;
   /** The link to the run's host is down: nothing is typed or answered until it is back. */
@@ -216,6 +236,7 @@ export function CanopyCard({
   armTrash,
   renameRequest,
   otherHostId,
+  aside,
   terminalApi = ownCanopyTerminalApi,
   reconnecting = false,
 }: CanopyCardProps) {
@@ -233,6 +254,7 @@ export function CanopyCard({
   const canReply = canReplyTo(item, stream.secretPrompt);
   const answerChoices = answerOptions(item);
   const canTrash = canTrashItem(item);
+  const canSetAside = aside?.canSetAside(item) ?? false;
   const archived = itemArchived(item);
   const looksDone = itemLooksDone(item);
   const sectionRef = useRef<HTMLElement>(null);
@@ -624,6 +646,58 @@ export function CanopyCard({
           >
             {archived ? <ArchiveRestore aria-hidden="true" /> : <Archive aria-hidden="true" />}
           </HeaderControl>
+          {aside !== undefined && canSetAside && (
+            <DropdownMenu>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-label="Park or snooze"
+                      className={CONTROL_ICON}
+                    >
+                      <CirclePause aria-hidden="true" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Park or snooze</TooltipContent>
+              </Tooltip>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onSelect={() => aside.onPark(item)}>
+                  <CirclePause className="size-3.5" aria-hidden="true" />
+                  Park…
+                </DropdownMenuItem>
+                {run.park !== undefined && (
+                  <DropdownMenuItem onSelect={() => aside.onUnpark(item)}>
+                    <Bell className="size-3.5" aria-hidden="true" />
+                    Unpark
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger>
+                    <Clock className="size-3.5" aria-hidden="true" />
+                    Snooze…
+                  </DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent>
+                    {AGENT_SNOOZE_DURATION_OPTIONS.map((option) => (
+                      <DropdownMenuItem key={option} onSelect={() => aside.onSnooze(item, option)}>
+                        {AGENT_SNOOZE_LABEL[option]}
+                      </DropdownMenuItem>
+                    ))}
+                    {run.snooze !== undefined && (
+                      <>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem onSelect={() => aside.onWake(item)}>
+                          Wake now
+                        </DropdownMenuItem>
+                      </>
+                    )}
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
           {canTrash && (
             <HeaderControl
               label="Trash terminal"

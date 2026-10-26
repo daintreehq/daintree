@@ -11,6 +11,7 @@ import { pluralize } from "@/lib/pluralize";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { consumePaletteFocusRestoreSuppression } from "@/components/ui/paletteFocusRestore";
 import { switchToHost } from "@/components/Hosts/hostSwitching";
+import type { AgentSnoozeDurationOption } from "@shared/utils/agentSnoozeDurations";
 import { itemArchived, itemSubject, type CanopyItem } from "./canopyModel";
 import type { CanopyCardHandle, CanopyCardHandlers, CanopyPaneFocus } from "./CanopyCard";
 import type { CanopyRowMenuActions } from "./CanopyRowMenu";
@@ -428,7 +429,58 @@ export function useCanopyInboxActions({
     setRenameAsk((ask) => ({ runId: item.runId, request: (ask?.request ?? 0) + 1 }));
   };
 
+  // Park and snooze reach this window's fleet service, so only a run on the
+  // window's own host offers them.
+  const canSetAside = useCallback(
+    (item: CanopyItem) => placeOf(item, hostId, ownHostId).hostId === null,
+    [hostId, ownHostId]
+  );
+  const [parkRunId, setParkRunId] = useState<string | null>(null);
+  useEffect(() => {
+    setParkRunId(null);
+  }, [hostId]);
+  const closePark = useCallback(() => setParkRunId(null), []);
+  const asideFailed = (title: string, error: unknown, retry: () => void) =>
+    failToast(title, error, { label: "Retry", onClick: retry });
+  const setAside = {
+    canSetAside,
+    onPark: (item: CanopyItem) => {
+      if (canSetAside(item)) setParkRunId(placeOf(item, hostId, ownHostId).runId);
+    },
+    onUnpark: function unpark(item: CanopyItem) {
+      const { runId } = placeOf(item, hostId, ownHostId);
+      safeFireAndForget(
+        window.electron.fleet
+          .unparkRun(runId)
+          .catch((error: unknown) =>
+            asideFailed("Couldn't unpark the agent", error, () => unpark(item))
+          )
+      );
+    },
+    onSnooze: function snooze(item: CanopyItem, option: AgentSnoozeDurationOption) {
+      const { runId } = placeOf(item, hostId, ownHostId);
+      safeFireAndForget(
+        window.electron.fleet
+          .snoozeRun(runId, option)
+          .catch((error: unknown) =>
+            asideFailed("Couldn't snooze the agent", error, () => snooze(item, option))
+          )
+      );
+    },
+    onWake: function wake(item: CanopyItem) {
+      const { runId } = placeOf(item, hostId, ownHostId);
+      safeFireAndForget(
+        window.electron.fleet
+          .unsnoozeRun(runId)
+          .catch((error: unknown) =>
+            asideFailed("Couldn't wake the agent", error, () => wake(item))
+          )
+      );
+    },
+  };
+
   const rowMenu: CanopyRowMenuActions = {
+    ...setAside,
     onOpen: handlers.onOpen,
     // The run already open keeps its pane mounted, so the composer is focused
     // directly; another run's pane takes the keyboard there as it opens.
@@ -482,6 +534,9 @@ export function useCanopyInboxActions({
     markAllRead,
     askRename,
     rowMenu,
+    setAside,
+    parkRunId,
+    closePark,
     trashArm,
     renameAsk,
     refreshes,
