@@ -17,6 +17,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { SettingsSelect } from "./SettingsSelect";
+import { MicTestRow } from "./MicTestRow";
 import { SettingsPresetGroup } from "./SettingsPresetGroup";
 import { SettingsTextarea } from "./SettingsTextarea";
 import { SettingsInput } from "./SettingsInput";
@@ -627,6 +628,11 @@ export function VoiceInputSettingsTab() {
               disabled={devicesLoading && devices.length <= 1}
               isModified={settings.deviceId !== DEFAULT_SETTINGS.deviceId}
               onReset={() => void update({ deviceId: DEFAULT_SETTINGS.deviceId })}
+            />
+
+            <MicTestRow
+              deviceId={settings.deviceId}
+              disabled={micPermission === "denied" || micPermission === "restricted"}
             />
           </SettingsGroup>
         )}
