@@ -130,6 +130,7 @@ import { buildProcessesPreloadBindings } from "./ipc/handlers/processes.preload.
 import { buildPluginAgentMcpPreloadBindings } from "./ipc/handlers/pluginAgentMcp.preload.js";
 import { buildGlobalRecipesPreloadBindings } from "./ipc/handlers/globalRecipes.preload.js";
 import { buildAgentDefaultsPreloadBindings } from "./ipc/handlers/agentDefaults.preload.js";
+import { buildAgentToolbarPinsPreloadBindings } from "./ipc/handlers/agentToolbarPins.preload.js";
 import { buildEditorConfigPreloadBindings } from "./ipc/handlers/editorConfig.preload.js";
 import { buildWindowChromePreloadBindings } from "./ipc/handlers/windowChrome.preload.js";
 import { buildFleetPreloadBindings } from "./ipc/handlers/fleet.preload.js";
@@ -180,6 +181,7 @@ import type {
   ServiceConnectivityPayload,
   AgentDefaultsSnapshot,
   TerminalConfigChange,
+  AgentToolbarPinsSnapshot,
   GitStatus,
   KeyAction,
   TerminalRecipe,
@@ -1832,6 +1834,14 @@ function buildElectronApi(): ElectronAPI {
 
       onChanged: (callback: (snapshot: AgentDefaultsSnapshot) => void) =>
         _typedOn(CHANNELS.AGENT_DEFAULTS_CHANGED, callback),
+    },
+
+    // This machine's toolbar agent pins (#14702)
+    agentToolbarPins: {
+      ...buildAgentToolbarPinsPreloadBindings(_unwrappingInvoke),
+
+      onChanged: (callback: (snapshot: AgentToolbarPinsSnapshot) => void) =>
+        _typedOn(CHANNELS.AGENT_TOOLBAR_PINS_CHANGED, callback),
     },
 
     // Per-service connectivity API

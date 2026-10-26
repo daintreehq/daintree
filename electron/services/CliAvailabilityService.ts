@@ -28,6 +28,7 @@ import {
 } from "../utils/windowsExecutable.js";
 import { cliSpawnTarget } from "../utils/windowsCliSpawn.js";
 import { createLogger } from "../utils/logger.js";
+import { seedAgentToolbarPinsIfUnset } from "./agentToolbarPins.js";
 
 const logger = createLogger("main:CliAvailabilityService");
 
@@ -298,6 +299,7 @@ export class CliAvailabilityService {
             });
           }
           this.notifyDuplicateInstalls(outcomeEntries, entries);
+          if (pendingAgentIds.length === 0) this.seedToolbarPins(availability);
         }
 
         return availability;
@@ -346,6 +348,15 @@ export class CliAvailabilityService {
     this.checkId++;
     this.inFlightCheck = null;
     return this.checkAvailability();
+  }
+
+  /** A fresh install's first pins come from this machine's first complete check (#14702). */
+  private seedToolbarPins(availability: CliAvailability): void {
+    try {
+      seedAgentToolbarPinsIfUnset(availability);
+    } catch (error) {
+      logger.warn("Couldn't seed the toolbar's first agent pins", { error: String(error) });
+    }
   }
 
   private async checkAgent(config: AgentConfig): Promise<AgentCheckOutcome> {

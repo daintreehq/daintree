@@ -209,6 +209,9 @@ export type {
   AgentDefaultsSnapshot,
   AgentDefaultsPatch,
   AgentDefaultsLegacyCandidates,
+  // This machine's toolbar agent pins (#14702)
+  AgentToolbarPins,
+  AgentToolbarPinsSnapshot,
   // Project presence types
   ProjectPresenceState,
   ProjectPresenceEntry,

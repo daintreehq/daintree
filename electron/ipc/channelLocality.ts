@@ -63,6 +63,10 @@ export const CHANNEL_LOCALITY = {
   "agent-settings:set-global-inline": "host",
   "agent-settings:set-resume-on-restart": "host",
   "agent-settings:stamp-version": "host",
+  // The toolbar is this screen's, so a remote view pins on this machine (#14702).
+  "agent-toolbar-pins:changed": "shell",
+  "agent-toolbar-pins:get": "shell",
+  "agent-toolbar-pins:set": "shell",
   "app-agent:confirmation-response": "host",
   "app-agent:dispatch-action-response": "host",
   "app-agent:get-config": "host",

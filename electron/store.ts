@@ -272,6 +272,13 @@ export interface StoreSchema {
     pathPattern: string;
   };
   agentSettings: AgentSettings;
+  /**
+   * This machine's toolbar agent pins (#14702), moved out of
+   * `agentSettings.agents[id].pinned` by migration 039. Absent only on a fresh
+   * install that hasn't seeded its first pins yet; see
+   * `electron/services/agentToolbarPins.ts`.
+   */
+  agentToolbarPins?: Record<string, boolean>;
   notificationSettings: {
     enabled: boolean;
     completedEnabled: boolean;
