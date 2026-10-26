@@ -98,13 +98,9 @@ export function mergeHostReadings(readings: readonly HostReading[]): {
   // Only a host that is on has screens read; it is the one the open waits for.
   const reading = loadedCanopies.filter(({ canopy }) => canopy!.activated);
   const failedRuns: string[] = [];
-  for (const { hostId, canopy, fleet: hostFleet } of loadedCanopies) {
+  for (const { hostId, canopy } of loadedCanopies) {
     if (outdatedHosts.has(hostId)) continue;
     for (const runId of canopy!.failedRuns) failedRuns.push(allHostsKey(hostId, runId));
-    // A provider failure on a host marks the runs it would have read.
-    if (canopy!.lastError !== null) {
-      for (const run of hostFleet?.runs ?? []) failedRuns.push(allHostsKey(hostId, run.runId));
-    }
   }
   const refreshed = loadedCanopies.flatMap(({ canopy }) =>
     canopy!.refreshedAt === null ? [] : [canopy!.refreshedAt]
