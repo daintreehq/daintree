@@ -4,8 +4,13 @@ import { store } from "../../store.js";
 import { defineIpcNamespace, opValidated } from "../define.js";
 import { getVoiceSettings } from "./voiceInput.js";
 import { VOICE_DICTIONARY_METHOD_CHANNELS } from "./voiceDictionary.preload.js";
+import {
+  changeProjectVoiceDictionary,
+  readProjectVoiceDictionary,
+} from "../../services/projectVoiceDictionary.js";
 import type {
   DismissedSuggestion,
+  VoiceDictionaryEntry,
   VoiceDictionaryState,
   VoiceInputSettings,
 } from "../../../shared/types/ipc/api.js";
@@ -39,6 +44,11 @@ const updateSchema = z.object({
   changes: z.object({ term: text.optional(), heardAs: heardAs.optional() }),
 });
 const suggestionSchema = z.object({ word: existing, utterance: text.optional() });
+const projectId = z.string().min(1).max(RAW_TEXT_MAX);
+const projectSchema = z.object({ projectId });
+const projectAddSchema = addSchema.extend({ projectId });
+const projectRemoveSchema = removeSchema.extend({ projectId });
+const projectUpdateSchema = updateSchema.extend({ projectId });
 const recordSchema = z.object({
   candidates: z.array(z.object({ word: text, original: text })).max(LIST_MAX),
 });
@@ -149,6 +159,36 @@ export const voiceDictionaryNamespace = defineIpcNamespace({
           );
           return next ? { ...state, suggestedDictionary: next } : state;
         })
+    ),
+    // A project's vocabulary lives with the project, and is shared through the
+    // repo when the project keeps its settings there.
+    getProject: opValidated(
+      VOICE_DICTIONARY_METHOD_CHANNELS.getProject,
+      projectSchema,
+      async ({ projectId }): Promise<VoiceDictionaryEntry[]> =>
+        readProjectVoiceDictionary(projectId)
+    ),
+    addToProject: opValidated(
+      VOICE_DICTIONARY_METHOD_CHANNELS.addToProject,
+      projectAddSchema,
+      async ({ projectId, ...input }): Promise<VoiceDictionaryEntry[]> =>
+        changeProjectVoiceDictionary(projectId, (entries) =>
+          addDictionaryEntry(entries, input, Date.now())
+        )
+    ),
+    removeFromProject: opValidated(
+      VOICE_DICTIONARY_METHOD_CHANNELS.removeFromProject,
+      projectRemoveSchema,
+      async ({ projectId, term }): Promise<VoiceDictionaryEntry[]> =>
+        changeProjectVoiceDictionary(projectId, (entries) => removeDictionaryEntry(entries, term))
+    ),
+    updateInProject: opValidated(
+      VOICE_DICTIONARY_METHOD_CHANNELS.updateInProject,
+      projectUpdateSchema,
+      async ({ projectId, term, changes }): Promise<VoiceDictionaryEntry[]> =>
+        changeProjectVoiceDictionary(projectId, (entries) =>
+          updateDictionaryEntry(entries, term, changes)
+        )
     ),
   },
 });

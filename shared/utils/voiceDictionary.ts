@@ -64,6 +64,19 @@ export function dictionaryTerms(entries: readonly VoiceDictionaryEntry[]): strin
 }
 
 /**
+ * The dictionary one dictation uses: the target project's entries first, then
+ * the user's own. A term in both is the project's entry, heard-as forms and
+ * all, so a rule the project dropped can't come back from the global list.
+ */
+export function sessionDictionary(
+  global: readonly VoiceDictionaryEntry[],
+  project: readonly VoiceDictionaryEntry[]
+): VoiceDictionaryEntry[] {
+  const projectTerms = new Set(project.map((entry) => fold(entry.term)));
+  return [...project, ...global.filter((entry) => !projectTerms.has(fold(entry.term)))];
+}
+
+/**
  * Repair whatever the store holds into valid entries. Accepts bare strings (the
  * old word list) as hand-added terms stamped `now`, drops anything without a
  * usable term, and folds a repeat that differs only in case into the first.

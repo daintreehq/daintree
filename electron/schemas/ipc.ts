@@ -777,6 +777,8 @@ export const VoiceInputStartOptionsSchema = z
 export const VoiceInputCorrectPayloadSchema = z.object({
   rawText: z.string(),
   recentContext: z.array(z.string()).optional(),
+  /** The panel the passage was dictated into, which picks the project vocabulary. */
+  terminalId: z.string().min(1).max(256).optional(),
 });
 
 export const SystemOpenExternalPayloadSchema = z.object({

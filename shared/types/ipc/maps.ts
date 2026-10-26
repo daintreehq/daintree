@@ -1288,7 +1288,7 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: { valid: boolean; error?: string };
   };
   "voice-input:correct": {
-    args: [request: { rawText: string; recentContext?: string[] }];
+    args: [request: { rawText: string; recentContext?: string[]; terminalId?: string }];
     result: { action: "no_change" | "replace"; correctedText: string };
   };
 

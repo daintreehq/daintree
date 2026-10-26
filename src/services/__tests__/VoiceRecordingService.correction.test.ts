@@ -186,7 +186,7 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
 
     dictate("panel-1", "fix the bug in the parsr");
     await service.stop();
-    expect(correct).toHaveBeenLastCalledWith({ rawText: "fix the bug in the parsr" });
+    expect(correct).toHaveBeenLastCalledWith({ rawText: "fix the bug in the parsr", terminalId: "panel-1" });
 
     dictate("panel-2", "second thought");
     await service.stop();
@@ -222,6 +222,7 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     expect(correct).toHaveBeenLastCalledWith({
       rawText: "and the lexer",
       recentContext: ["So the parser is broken."],
+      terminalId: "panel-1",
     });
     await flush();
     expect(baseline("panel-1")).toBe("and the lexer");
@@ -241,6 +242,7 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     expect(correct).toHaveBeenLastCalledWith({
       rawText: "and the lexr too",
       recentContext: ["um so the parser is brken"],
+      terminalId: "panel-1",
     });
 
     first.resolve({ action: "replace", correctedText: "So the parser is broken." });
@@ -313,6 +315,7 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     expect(correct).toHaveBeenLastCalledWith({
       rawText: "and the lexer",
       recentContext: ["The parser."],
+      terminalId: "panel-1",
     });
   });
 
@@ -324,7 +327,7 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     dictate("panel-1", "the parsr");
     callbacks.boundary!({ rawText: null });
     await service.stop();
-    expect(correct).toHaveBeenLastCalledWith({ rawText: "the parsr" });
+    expect(correct).toHaveBeenLastCalledWith({ rawText: "the parsr", terminalId: "panel-1" });
 
     voiceStore.getState().beginSession({ panelId: "panel-1" });
     callbacks.delta!({ text: "and the" });
@@ -338,6 +341,7 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     expect(correct).toHaveBeenLastCalledWith({
       rawText: "and the lexer",
       recentContext: ["The parser.\n"],
+      terminalId: "panel-1",
     });
   });
 

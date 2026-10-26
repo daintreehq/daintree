@@ -207,8 +207,12 @@ const CAMEL_RE = /\b[a-z]+(?:[A-Z][a-z0-9]+)+\b|\b[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]
 
 export interface KeytermAssemblyOpts {
   customDictionary: string[];
-  /** The target project's vocabulary, oldest first. It takes the dictionary budget before the global list. */
-  projectDictionary?: string[];
+  /**
+   * The target project's vocabulary, oldest first. It takes the dictionary
+   * budget before the global list. Read alongside the terminal's context, so a
+   * slow read falls back to none rather than delaying the start.
+   */
+  projectDictionary?: string[] | Promise<string[]>;
   /** Name of the project that owns the target terminal. */
   projectName?: string;
   /**
@@ -366,7 +370,7 @@ async function withinBudget<T>(read: Promise<T>, fallback: T, readName: string):
 }
 
 export async function assembleKeyterms(opts: KeytermAssemblyOpts): Promise<string[]> {
-  const { customDictionary, projectDictionary = [], projectName, terminalId, ptyClient } = opts;
+  const { customDictionary, projectName, terminalId, ptyClient } = opts;
   const seen = new Set<string>();
   const result: string[] = [];
 
@@ -379,6 +383,19 @@ export async function assembleKeyterms(opts: KeytermAssemblyOpts): Promise<strin
     result.push(capped);
     return true;
   }
+
+  // Gather dynamic context concurrently, each read guarded by its own timeout.
+  // The reads fire at once so leading speech isn't delayed; results are merged
+  // in priority order afterward.
+  const [projectDictionary, branchName, lines] = await Promise.all([
+    withinBudget(Promise.resolve(opts.projectDictionary ?? []), [], "Project vocabulary read"),
+    ptyClient && terminalId
+      ? withinBudget(getTerminalBranch(ptyClient, terminalId), null, "Branch name lookup")
+      : null,
+    ptyClient && terminalId
+      ? withinBudget(getTerminalLines(ptyClient, terminalId), [], "Terminal identifier extraction")
+      : [],
+  ]);
 
   // Priority 1: The project's vocabulary, then the user's own dictionary, each
   // newest first, because a term is usually added right after recognition
@@ -412,18 +429,6 @@ export async function assembleKeyterms(opts: KeytermAssemblyOpts): Promise<strin
       addProject(token);
     }
   }
-
-  // Gather dynamic context concurrently, each read guarded by its own timeout.
-  // Both reads fire at once so leading speech isn't delayed; results are merged
-  // in priority order afterward (branch tokens = Priority 3, terminal = Priority 4).
-  const [branchName, lines] = await Promise.all([
-    ptyClient && terminalId
-      ? withinBudget(getTerminalBranch(ptyClient, terminalId), null, "Branch name lookup")
-      : null,
-    ptyClient && terminalId
-      ? withinBudget(getTerminalLines(ptyClient, terminalId), [], "Terminal identifier extraction")
-      : [],
-  ]);
 
   // Priority 3: Branch name tokens
   if (branchName) {

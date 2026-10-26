@@ -12,6 +12,7 @@ import {
   PROJECT_SETTINGS_SHAREABILITY,
   PROJECT_TERMINAL_SETTINGS_SHAREABILITY,
 } from "../../../shared/types/project.js";
+import type { VoiceDictionaryEntry } from "../../../shared/types/ipc/api.js";
 import { ProjectIdentityFiles, buildInRepoRecipePayloadString } from "../ProjectIdentityFiles.js";
 
 const DAINTREE_PROJECT_JSON = ".daintree/project.json";
@@ -218,11 +219,16 @@ describe("writeInRepoSettings", () => {
   });
 
   // Mirror of the omission table: every shareable top-level field appears in
-  // the on-disk JSON when populated. `terminalSettings` is exercised via the
-  // dedicated nested test below.
+  // the on-disk JSON when populated. `terminalSettings` and `voiceDictionary`
+  // are exercised via their dedicated tests below.
   const SHAREABLE_TOP_LEVEL_FIELDS = (
     Object.keys(PROJECT_SETTINGS_SHAREABILITY) as Array<keyof ProjectSettings>
-  ).filter((k) => PROJECT_SETTINGS_SHAREABILITY[k] === "shareable" && k !== "terminalSettings");
+  ).filter(
+    (k) =>
+      PROJECT_SETTINGS_SHAREABILITY[k] === "shareable" &&
+      k !== "terminalSettings" &&
+      k !== "voiceDictionary"
+  );
 
   const SHAREABLE_SAMPLES: { [K in keyof ProjectSettings]?: ProjectSettings[K] } = {
     runCommands: [{ id: "dev", name: "Dev", command: "npm run dev" }],
@@ -393,6 +399,128 @@ function makeRecipe(overrides: Partial<TerminalRecipe> = {}): TerminalRecipe {
     ...overrides,
   };
 }
+
+describe("in-repo dictation vocabulary", () => {
+  let tmpDir: string;
+  let identityFiles: ProjectIdentityFiles;
+  const settingsPath = () => path.join(tmpDir, DAINTREE_SETTINGS_JSON);
+  const readFile = async () => JSON.parse(await fs.readFile(settingsPath(), "utf-8"));
+  const entry = (term: string, heardAs: string[] = []): VoiceDictionaryEntry => ({
+    term,
+    heardAs,
+    source: "learned",
+    addedAt: 1234,
+  });
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-vocab-test-"));
+    identityFiles = new ProjectIdentityFiles();
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("seeds a file without a vocabulary from the settings, keeping only term and heard-as", async () => {
+    await identityFiles.writeInRepoSettings(
+      tmpDir,
+      makeSettings({ voiceDictionary: [entry("Daintree", ["dane tree"])] })
+    );
+    expect((await readFile()).voiceDictionary).toEqual([
+      { term: "Daintree", heardAs: ["dane tree"] },
+    ]);
+  });
+
+  it("keeps the committed vocabulary when a settings save carries another copy", async () => {
+    await fs.mkdir(path.join(tmpDir, ".daintree"));
+    await fs.writeFile(
+      settingsPath(),
+      JSON.stringify({ version: 1, voiceDictionary: [{ term: "PtyClient", heardAs: [] }] })
+    );
+    await identityFiles.writeInRepoSettings(
+      tmpDir,
+      makeSettings({ devServerCommand: "npm run dev", voiceDictionary: [entry("Stale")] })
+    );
+    const content = await readFile();
+    expect(content.devServerCommand).toBe("npm run dev");
+    expect(content.voiceDictionary).toEqual([{ term: "PtyClient", heardAs: [] }]);
+  });
+
+  it("keeps an emptied committed vocabulary rather than seeding it again", async () => {
+    await identityFiles.changeInRepoVoiceDictionary(tmpDir, () => [entry("Gone")]);
+    await identityFiles.changeInRepoVoiceDictionary(tmpDir, () => []);
+    await identityFiles.writeInRepoSettings(
+      tmpDir,
+      makeSettings({ voiceDictionary: [entry("Gone")] })
+    );
+    expect((await readFile()).voiceDictionary).toEqual([]);
+  });
+
+  it("patches the vocabulary into the file as it is, keeping every other field", async () => {
+    await fs.mkdir(path.join(tmpDir, ".daintree"));
+    await fs.writeFile(
+      settingsPath(),
+      "\uFEFF" + JSON.stringify({ version: 1, excludedPaths: ["dist"], futureField: { a: 1 } })
+    );
+    const saved = await identityFiles.changeInRepoVoiceDictionary(tmpDir, (entries) => [
+      ...entries,
+      entry("Zustand", ["zoo stand"]),
+    ]);
+    expect(saved.map((e) => e.term)).toEqual(["Zustand"]);
+    expect(await readFile()).toEqual({
+      version: 1,
+      excludedPaths: ["dist"],
+      futureField: { a: 1 },
+      voiceDictionary: [{ term: "Zustand", heardAs: ["zoo stand"] }],
+    });
+  });
+
+  it("writes nothing when the change leaves the list as it was", async () => {
+    await identityFiles.changeInRepoVoiceDictionary(tmpDir, (entries) => entries);
+    await expect(fs.access(settingsPath())).rejects.toThrow();
+  });
+
+  it("reads committed entries, repairing them, and reports a missing vocabulary", async () => {
+    expect(await identityFiles.readInRepoVoiceDictionary(tmpDir)).toEqual({
+      found: false,
+      entries: [],
+    });
+    await fs.mkdir(path.join(tmpDir, ".daintree"));
+    await fs.writeFile(
+      settingsPath(),
+      JSON.stringify({ version: 1, voiceDictionary: ["Daintree", { term: "daintree" }, 7] })
+    );
+    expect(await identityFiles.readInRepoVoiceDictionary(tmpDir)).toEqual({
+      found: true,
+      entries: [{ term: "Daintree", heardAs: [], source: "manual", addedAt: 0 }],
+    });
+  });
+
+  it.each([
+    ["unparseable", "{ not json"],
+    ["not an object", "[]"],
+    ["from a newer version", JSON.stringify({ version: 2, voiceDictionary: [] })],
+  ])("refuses to read or patch a file that is %s", async (_label, content) => {
+    await fs.mkdir(path.join(tmpDir, ".daintree"));
+    await fs.writeFile(settingsPath(), content);
+    await expect(identityFiles.readInRepoVoiceDictionary(tmpDir)).rejects.toThrow();
+    await expect(
+      identityFiles.changeInRepoVoiceDictionary(tmpDir, () => [entry("New")])
+    ).rejects.toThrow();
+    expect(await fs.readFile(settingsPath(), "utf-8")).toBe(content);
+  });
+
+  it("loses no change when vocabulary edits and settings saves land together", async () => {
+    await Promise.all([
+      identityFiles.changeInRepoVoiceDictionary(tmpDir, (e) => [...e, entry("One")]),
+      identityFiles.writeInRepoSettings(tmpDir, makeSettings({ excludedPaths: ["dist"] })),
+      identityFiles.changeInRepoVoiceDictionary(tmpDir, (e) => [...e, entry("Two")]),
+    ]);
+    const content = await readFile();
+    expect(content.excludedPaths).toEqual(["dist"]);
+    expect(content.voiceDictionary.map((e: { term: string }) => e.term)).toEqual(["One", "Two"]);
+  });
+});
 
 describe("writeInRepoRecipe", () => {
   let tmpDir: string;

@@ -5,6 +5,8 @@ import {
   type ProjectTerminalSettings,
 } from "../../shared/types/project.js";
 import type { AgentPreset } from "../../shared/config/agentRegistry.js";
+import type { VoiceDictionaryEntry } from "../../shared/types/ipc/api.js";
+import { sanitizeDictionary } from "../../shared/utils/voiceDictionary.js";
 import path from "path";
 import fs from "fs/promises";
 import { createHash } from "crypto";
@@ -67,6 +69,15 @@ const DAINTREE_PROJECT_JSON = `${DAINTREE_DIR}/project.json`;
 const DAINTREE_SETTINGS_JSON = `${DAINTREE_DIR}/settings.json`;
 const DAINTREE_RECIPES_DIR = `${DAINTREE_DIR}/recipes`;
 const DAINTREE_PRESETS_DIR = `${DAINTREE_DIR}/presets`;
+const IN_REPO_SETTINGS_VERSION = 1;
+
+/**
+ * A vocabulary entry as committed: the term and how it is misheard. Who added
+ * it and when are one machine's history and would only churn the diff.
+ */
+function toSharedDictionaryEntry(entry: VoiceDictionaryEntry): { term: string; heardAs: string[] } {
+  return { term: entry.term, heardAs: entry.heardAs };
+}
 
 // Only accept safe agent subdirectory names: letters, numbers, dot, dash,
 // underscore. Prevents path traversal via a crafted `.daintree/presets/../x`
@@ -137,6 +148,8 @@ function parseSuggestedThemeId(value: unknown): string | undefined {
 }
 
 export class ProjectIdentityFiles {
+  private readonly settingsWriteQueues = new Map<string, Promise<void>>();
+
   async readInRepoProjectIdentity(projectPath: string): Promise<InRepoProjectIdentity> {
     const filePath = path.join(projectPath, DAINTREE_PROJECT_JSON);
     try {
@@ -265,27 +278,129 @@ export class ProjectIdentityFiles {
     }
   }
 
+  /**
+   * Rewrites `.daintree/settings.json` from the shareable settings. The
+   * vocabulary on disk is kept whatever `settings` carries: a whole-settings
+   * save holds a copy read earlier, and a teammate's committed terms must not
+   * be replaced by it. Only {@link changeInRepoVoiceDictionary} changes it. A
+   * file with no vocabulary yet is seeded from `settings`.
+   */
   async writeInRepoSettings(projectPath: string, settings: ProjectSettings): Promise<void> {
-    await this.assertDaintreeDirNotSymlink(projectPath);
+    return this.queueSettingsWrite(projectPath, async () => {
+      await this.assertDaintreeDirNotSymlink(projectPath);
+      const payload: { version: 1 } & Partial<ProjectSettings> = { version: 1 };
+
+      for (const key of Object.keys(PROJECT_SETTINGS_SHAREABILITY) as Array<
+        keyof ProjectSettings
+      >) {
+        if (PROJECT_SETTINGS_SHAREABILITY[key] !== "shareable") continue;
+        if (key === "voiceDictionary") continue;
+        if (key === "terminalSettings") {
+          const shareableTerminal = buildShareableTerminalSettings(settings.terminalSettings);
+          if (shareableTerminal !== undefined) payload.terminalSettings = shareableTerminal;
+          continue;
+        }
+        const value = settings[key];
+        if (!shouldWriteValue(value)) continue;
+        // Assigning a wider union into the specific key type — safe because we
+        // pulled `value` straight from `settings[key]`. The cast is a writer-side
+        // concession to keep the loop generic.
+        (payload as Record<keyof ProjectSettings, unknown>)[key] = value;
+      }
+
+      const existing = await this.readSettingsFileForPatch(projectPath).catch(() => null);
+      if (existing && Object.hasOwn(existing, "voiceDictionary")) {
+        (payload as Record<string, unknown>).voiceDictionary = existing.voiceDictionary;
+      } else if (settings.voiceDictionary && settings.voiceDictionary.length > 0) {
+        payload.voiceDictionary = settings.voiceDictionary.map(toSharedDictionaryEntry);
+      }
+
+      await this.writeSettingsFile(projectPath, payload);
+    });
+  }
+
+  /**
+   * The vocabulary committed in `.daintree/settings.json`. `found` is false
+   * when the file or its vocabulary is absent. A file that exists but can't be
+   * read or parsed, or was written by a newer schema, throws.
+   */
+  async readInRepoVoiceDictionary(
+    projectPath: string
+  ): Promise<{ found: boolean; entries: VoiceDictionaryEntry[] }> {
+    const existing = await this.readSettingsFileForPatch(projectPath);
+    if (!existing || !Object.hasOwn(existing, "voiceDictionary")) {
+      return { found: false, entries: [] };
+    }
+    return { found: true, entries: sanitizeDictionary(existing.voiceDictionary, 0) };
+  }
+
+  /**
+   * One read-modify-write of the committed vocabulary, patched into the file
+   * as it is now so every other field survives. Writes nothing when `apply`
+   * returns the list it was given. Returns the list as saved.
+   */
+  async changeInRepoVoiceDictionary(
+    projectPath: string,
+    apply: (entries: VoiceDictionaryEntry[]) => VoiceDictionaryEntry[]
+  ): Promise<VoiceDictionaryEntry[]> {
+    return this.queueSettingsWrite(projectPath, async () => {
+      await this.assertDaintreeDirNotSymlink(projectPath);
+      const existing = (await this.readSettingsFileForPatch(projectPath)) ?? { version: 1 };
+      const current = sanitizeDictionary(existing.voiceDictionary, 0);
+      const next = apply(current);
+      if (next === current) return current;
+      await this.writeSettingsFile(projectPath, {
+        ...existing,
+        voiceDictionary: next.map(toSharedDictionaryEntry),
+      });
+      return next;
+    });
+  }
+
+  /**
+   * The settings file's raw object, or null when there is none. Throws for a
+   * file that can't be read or parsed, or that a newer build wrote, so a patch
+   * never replaces content it couldn't see.
+   */
+  private async readSettingsFileForPatch(
+    projectPath: string
+  ): Promise<Record<string, unknown> | null> {
+    let content: string;
+    try {
+      content = await fs.readFile(path.join(projectPath, DAINTREE_SETTINGS_JSON), "utf-8");
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
+      throw error;
+    }
+    const parsed: unknown = JSON.parse(stripUtf8Bom(content));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error(`${DAINTREE_SETTINGS_JSON} is not a settings object`);
+    }
+    const version = (parsed as Record<string, unknown>).version;
+    if (typeof version === "number" && version > IN_REPO_SETTINGS_VERSION) {
+      throw new Error(`${DAINTREE_SETTINGS_JSON} was written by a newer version of Daintree`);
+    }
+    return parsed as Record<string, unknown>;
+  }
+
+  private queueSettingsWrite<T>(projectPath: string, write: () => Promise<T>): Promise<T> {
+    const key = path.resolve(projectPath);
+    const previous = this.settingsWriteQueues.get(key) ?? Promise.resolve();
+    const result = previous.then(write);
+    const settled = result.then(
+      () => undefined,
+      () => undefined
+    );
+    this.settingsWriteQueues.set(key, settled);
+    void settled.then(() => {
+      if (this.settingsWriteQueues.get(key) === settled) this.settingsWriteQueues.delete(key);
+    });
+    return result;
+  }
+
+  private async writeSettingsFile(projectPath: string, payload: object): Promise<void> {
     const daintreeDir = path.join(projectPath, DAINTREE_DIR);
     const filePath = path.join(projectPath, DAINTREE_SETTINGS_JSON);
-
-    const payload: { version: 1 } & Partial<ProjectSettings> = { version: 1 };
-
-    for (const key of Object.keys(PROJECT_SETTINGS_SHAREABILITY) as Array<keyof ProjectSettings>) {
-      if (PROJECT_SETTINGS_SHAREABILITY[key] !== "shareable") continue;
-      if (key === "terminalSettings") {
-        const shareableTerminal = buildShareableTerminalSettings(settings.terminalSettings);
-        if (shareableTerminal !== undefined) payload.terminalSettings = shareableTerminal;
-        continue;
-      }
-      const value = settings[key];
-      if (!shouldWriteValue(value)) continue;
-      // Assigning a wider union into the specific key type — safe because we
-      // pulled `value` straight from `settings[key]`. The cast is a writer-side
-      // concession to keep the loop generic.
-      (payload as Record<keyof ProjectSettings, unknown>)[key] = value;
-    }
 
     const attemptWrite = async (ensureDir: boolean): Promise<void> => {
       if (ensureDir) {

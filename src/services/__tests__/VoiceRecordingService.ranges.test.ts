@@ -350,7 +350,7 @@ describe("VoiceRecordingService — dictation ranges (#14597)", () => {
     const id = records()[0]!.id;
     await service.stop("Dictation stopped.");
 
-    expect(correct.fn).toHaveBeenCalledWith({ rawText: "Hello there.", recentContext: ["Intro."] });
+    expect(correct.fn).toHaveBeenCalledWith({ rawText: "Hello there.", recentContext: ["Intro."], terminalId: "panel-1" });
     expect(getDictation(id)).not.toBeNull();
 
     resolveCorrection({ action: "replace", correctedText: "Hello, there." });
@@ -454,7 +454,7 @@ describe("VoiceRecordingService — correction over dictated ranges (#14613)", (
     complete("hello there");
     await service.stop("Dictation stopped.");
 
-    expect(correct.fn).toHaveBeenCalledWith({ rawText: "hello there" });
+    expect(correct.fn).toHaveBeenCalledWith({ rawText: "hello there", terminalId: "panel-1" });
     await vi.waitFor(() => expect(draft()).toBe("Hello, there."));
     const buffer = voiceStore.getState().panelBuffers[PANEL]!;
     expect(buffer.sessionCorrectedText).toBe("Hello, there.");
@@ -503,6 +503,7 @@ describe("VoiceRecordingService — correction over dictated ranges (#14613)", (
     expect(correct.fn).toHaveBeenCalledWith({
       rawText: "it runs on windows",
       recentContext: ["Note: the build fails when"],
+      terminalId: "panel-1",
     });
     await vi.waitFor(() =>
       expect(draft()).toBe("Note: the build fails when it runs on Windows. Thanks.")
@@ -716,6 +717,7 @@ describe("VoiceRecordingService — correction over dictated ranges (#14613)", (
     expect(correct.fn).toHaveBeenCalledWith({
       rawText: "hello there",
       recentContext: ["Intro.\n"],
+      terminalId: "panel-1",
     });
     expect(draft()).toBe(`Intro.\n${expected} Thanks.`);
     expect(voiceStore.getState().panelBuffers[PANEL]!.sessionCorrectedText).toBe(expected);
@@ -730,7 +732,7 @@ describe("VoiceRecordingService — correction over dictated ranges (#14613)", (
     say("more", "item-a");
     await service.stop("Dictation stopped.");
 
-    expect(correct.fn).toHaveBeenCalledWith({ rawText: "more", recentContext: [word] });
+    expect(correct.fn).toHaveBeenCalledWith({ rawText: "more", recentContext: [word], terminalId: "panel-1" });
   });
 
   it("leaves typed text out of the learning baseline when correction is off", async () => {
