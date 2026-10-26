@@ -149,7 +149,6 @@ export class OpenAIVadProcess {
         logWarn(`${P} Retired VAD process reported an error`, {
           sessionId: this.sessionId,
           pid: this.child.pid,
-          message: message.message,
         });
       }
       return;

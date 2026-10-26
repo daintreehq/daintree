@@ -1,6 +1,6 @@
 import { logDebug, logWarn } from "../utils/logger.js";
 import { fileSearchService } from "./FileSearchService.js";
-import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import { voiceErrorLogFields } from "../../shared/utils/voiceLogFields.js";
 import { buildOpenAIHeaders } from "../../shared/utils/openaiHeaders.js";
 import {
   VOICE_DICTATION_AI_MODEL,
@@ -42,7 +42,7 @@ export class VoiceFileLinkResolver {
       });
 
       if (candidates.length === 0) {
-        logDebug(`${P} No candidates found for "${description}"`);
+        logDebug(`${P} No candidates found`, { descriptionLength: description.length });
         return null;
       }
 
@@ -53,7 +53,7 @@ export class VoiceFileLinkResolver {
         topScore >= NL_CONFIDENCE_THRESHOLD &&
         tokens.length >= MIN_MATCHING_TOKENS
       ) {
-        logDebug(`${P} High-confidence match: ${candidates[0]} (score=${topScore.toFixed(2)})`);
+        logDebug(`${P} High-confidence match`, { score: Number(topScore.toFixed(2)) });
         return candidates[0];
       }
 
@@ -67,8 +67,7 @@ export class VoiceFileLinkResolver {
       );
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return null;
-      const msg = formatErrorMessage(error, "Voice file link resolution failed");
-      logWarn(`${P} Resolution failed`, { error: msg });
+      logWarn(`${P} Resolution failed`, voiceErrorLogFields(error));
       return null;
     }
   }
@@ -142,7 +141,10 @@ export class VoiceFileLinkResolver {
     projectId?: string,
     signal?: AbortSignal
   ): Promise<string | null> {
-    logDebug(`${P} AI reranking ${candidates.length} candidates for "${description}"`);
+    logDebug(`${P} AI reranking`, {
+      candidateCount: candidates.length,
+      descriptionLength: description.length,
+    });
 
     try {
       const response = await fetch("https://api.openai.com/v1/responses", {
@@ -197,15 +199,14 @@ export class VoiceFileLinkResolver {
       const parsed = JSON.parse(text) as { matched_file: string | null };
       const matched = parsed.matched_file?.trim();
       if (matched && candidates.includes(matched)) {
-        logDebug(`${P} AI reranked: ${matched}`);
+        logDebug(`${P} AI reranked`);
         return matched;
       }
 
       return null;
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return null;
-      const msg = formatErrorMessage(error, "Voice AI rerank failed");
-      logWarn(`${P} AI rerank failed`, { error: msg });
+      logWarn(`${P} AI rerank failed`, voiceErrorLogFields(error));
       return null;
     }
   }

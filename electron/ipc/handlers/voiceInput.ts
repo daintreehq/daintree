@@ -12,7 +12,7 @@ import type {
 } from "../../../shared/types/ipc/api.js";
 import { logDebug, logInfo, logWarn } from "../../utils/logger.js";
 import { buildOpenAIHeaders } from "../../../shared/utils/openaiHeaders.js";
-import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { voiceErrorLogFields } from "../../../shared/utils/voiceLogFields.js";
 import { applyDictationCommands } from "../../services/voiceDictationCommands.js";
 import { VOICE_DICTATION_AI_MODEL } from "../../../shared/config/voiceCorrection.js";
 import { normalizeVoiceLanguage } from "../../../shared/config/voiceLanguages.js";
@@ -230,8 +230,8 @@ async function requestMicPermission(): Promise<boolean> {
 async function openMicSettings(): Promise<boolean> {
   const logOpenFailure = (err: unknown, command?: string) =>
     logDebug("[VoiceInput] Failed to open mic settings", {
-      error: (err as Error)?.message ?? String(err),
-      ...(command ? { command } : {}),
+      ...voiceErrorLogFields(err),
+      command,
     });
 
   if (process.platform === "darwin" || process.platform === "win32") {
@@ -601,7 +601,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       keyterms = await keytermsPromise;
     } catch (err) {
       logDebug("[VoiceInput] Keyterm assembly failed, starting without keyterms", {
-        message: formatErrorMessage(err, "Unknown error during keyterm assembly"),
+        ...voiceErrorLogFields(err),
       });
     }
     const keytermsReadyAt = performance.now();
