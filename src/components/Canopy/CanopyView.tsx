@@ -832,6 +832,9 @@ function CanopyInbox({
     focusedItem !== null && group.some((run) => run.runId === focusedItem.runId)
       ? focusedItem.runId === item.runId
       : index === 0;
+  // The inbox list is one listbox over workers and band assistants, so it has
+  // one Tab stop between them: a selected band assistant, else the worker rows'.
+  const assistantHoldsStop = bandAssistants.some((a) => a.id === selectedAssistant?.id);
   // Over the whole inbox, whatever the filter shows: a read approval still blocks its agent.
   const needsYouWorkers = projection.needsYou.filter(isWorkerEntry).length;
   const needsYouAssistants = projection.needsYou.length - needsYouWorkers;
@@ -1515,6 +1518,20 @@ function CanopyInbox({
                         </span>
                       }
                     />
+                    {/* An empty band says so above the listbox, not inside it: an option
+                        group holds options, and this one would hold only words. */}
+                    {bandSize === 0 && bandAssistants.length === 0 && listed.length > 0 && (
+                      <div>
+                        <div
+                          id="canopy-needs-you-label"
+                          className="flex h-7 items-center px-3 text-xs font-medium text-text-secondary"
+                          data-testid="canopy-needs-you"
+                        >
+                          Needs you
+                        </div>
+                        <p className="px-3 pb-2 text-xs text-text-secondary">{bandEmptyWords}</p>
+                      </div>
+                    )}
                     {listed.length > 0 || bandAssistants.length > 0 ? (
                       <div
                         ref={listRef}
@@ -1544,24 +1561,18 @@ function CanopyInbox({
                             key={group.id}
                             role="group"
                             aria-labelledby={`${group.id}-label`}
-                            hidden={
-                              group.id === "canopy-everything-else" && group.from === group.to
-                            }
+                            hidden={group.from === group.to && group.assistants.length === 0}
                           >
+                            {/* Pinned under the Inbox bar while its own rows scroll, so a
+                                scrolled list still says which band it is in; the next
+                                group's heading takes its place. */}
                             <div
                               id={`${group.id}-label`}
-                              className="flex h-7 items-center px-3 text-xs font-medium text-text-secondary"
+                              className="canopy-inbox-band-heading flex h-7 items-center px-3 text-xs font-medium text-text-secondary"
                               data-testid={group.id}
                             >
                               {group.label}
                             </div>
-                            {group.from === group.to &&
-                              group.assistants.length === 0 &&
-                              group.id === "canopy-needs-you" && (
-                                <p className="px-3 pb-2 text-xs text-text-secondary">
-                                  {bandEmptyWords}
-                                </p>
-                              )}
                             {listed.slice(group.from, group.to).map((item, offset) => {
                               const index = group.from + offset;
                               const replied = repliedAt(item);
@@ -1571,7 +1582,7 @@ function CanopyInbox({
                                     item={item}
                                     domId={canopyCardDomId(item.runId)}
                                     isSelected={focusedItem?.runId === item.runId}
-                                    tabbable={tabStop(listed, item, index)}
+                                    tabbable={!assistantHoldsStop && tabStop(listed, item, index)}
                                     unread={item.unread}
                                     nowMs={nowMs}
                                     asideLabel={
@@ -1596,9 +1607,9 @@ function CanopyInbox({
                                 item={item}
                                 isSelected={selectedAssistant?.id === item.id}
                                 tabbable={
-                                  bandAssistants.some((a) => a.id === selectedAssistant?.id)
+                                  assistantHoldsStop
                                     ? selectedAssistant?.id === item.id
-                                    : index === 0
+                                    : listed.length === 0 && index === 0
                                 }
                                 onSelect={() => selectAssistant(item.id)}
                                 onOpen={() => openAssistant(item)}
