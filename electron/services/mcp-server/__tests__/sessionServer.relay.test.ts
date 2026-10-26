@@ -524,7 +524,12 @@ describe("a relayed session for the calling Shell's global Assistant", () => {
 
   it("leaves another machine's project assistant finding the command runner", async () => {
     const { ids, listed } = await searched(false);
-    expect(ids).toEqual(["terminal.list", "agent.launch", "project.runCommand", "project.runCheck"]);
+    expect(ids).toEqual([
+      "terminal.list",
+      "agent.launch",
+      "project.runCommand",
+      "project.runCheck",
+    ]);
     expect(listed).toContain("project.runCommand");
   });
 });
