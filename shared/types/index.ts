@@ -291,6 +291,7 @@ export type {
   VoiceInputSettings,
   VoiceInputSettingsPatch,
   SuggestedDictionaryEntry,
+  DismissedSuggestion,
   VoiceDictionaryEntry,
   VoiceDictionarySource,
   VoiceDictionaryState,

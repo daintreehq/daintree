@@ -1,4 +1,5 @@
 import type {
+  DismissedSuggestion,
   SuggestedDictionaryEntry,
   VoiceDictionaryEntry,
   VoiceDictionarySource,
@@ -11,6 +12,9 @@ export const MAX_DICTIONARY_TERM_LENGTH = 100;
 
 /** Cap on the pending-suggestions queue; accepted words live in the dictionary. */
 export const MAX_SUGGESTED_WORDS = 50;
+
+/** Cap on remembered dismissals, high enough that a dismissed pair staying dismissed holds in practice. */
+export const MAX_DISMISSED_SUGGESTIONS = 5000;
 
 const SOURCES: ReadonlySet<string> = new Set<VoiceDictionarySource>([
   "manual",
@@ -138,6 +142,24 @@ export function sanitizeSuggestions(raw: unknown): SuggestedDictionaryEntry[] {
   return out.slice(0, MAX_SUGGESTED_WORDS);
 }
 
+const isDismissed = (dismissed: readonly DismissedSuggestion[], word: string, utterance: string) =>
+  dismissed.some((d) => fold(d.word) === fold(word) && fold(d.utterance) === fold(utterance));
+
+/** Repair the dismissed-pair list the store holds: drop malformed or repeated pairs, keep the newest. */
+export function sanitizeDismissedSuggestions(raw: unknown): DismissedSuggestion[] {
+  if (!Array.isArray(raw)) return [];
+  const out: DismissedSuggestion[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const word = normalizePhrase((item as Record<string, unknown>).word);
+    const utterance = normalizePhrase((item as Record<string, unknown>).utterance) ?? "";
+    if (!word || word.length > MAX_DICTIONARY_TERM_LENGTH) continue;
+    if (isDismissed(out, word, utterance)) continue;
+    out.push({ word, utterance });
+  }
+  return out.slice(-MAX_DISMISSED_SUGGESTIONS);
+}
+
 export interface AddDictionaryEntryInput {
   term: string;
   heardAs?: readonly string[];
@@ -220,14 +242,16 @@ export function updateDictionaryEntry(
 
 /**
  * Merge freshly-detected correction candidates into the suggestion queue: skip
- * words already in the dictionary and words that couldn't be added to it, bump
+ * words already in the dictionary, words that couldn't be added to it and
+ * pairs the user dismissed, bump
  * frequency on a repeat, newest first, capped. Returns null when nothing changed.
  */
 export function mergeSuggestions(
   candidates: readonly CorrectionCandidate[],
   entries: VoiceDictionaryEntry[],
   suggested: readonly SuggestedDictionaryEntry[],
-  now: number
+  now: number,
+  dismissed: readonly DismissedSuggestion[] = []
 ): SuggestedDictionaryEntry[] | null {
   const confirmed = new Set(entries.map((entry) => fold(entry.term)));
   const next = [...suggested];
@@ -238,7 +262,7 @@ export function mergeSuggestions(
     if (!word || word.length > MAX_DICTIONARY_TERM_LENGTH) continue;
     const original = candidate.original.trim();
     const lower = fold(word);
-    if (confirmed.has(lower)) continue;
+    if (confirmed.has(lower) || isDismissed(dismissed, word, original)) continue;
     const idx = next.findIndex((e) => fold(e.word) === lower);
     if (idx >= 0) {
       const entry = next[idx]!;
@@ -266,12 +290,14 @@ export function mergeSuggestions(
 export function acceptSuggestion(
   state: VoiceDictionaryState,
   word: string,
-  now: number
+  now: number,
+  utterance?: string
 ): VoiceDictionaryState {
   const key = fold(normalizePhrase(word) ?? "");
   const suggestion = state.suggestedDictionary.find((entry) => fold(entry.word) === key);
   if (!suggestion) return state;
-  const heard = normalizePhrase(suggestion.utterance);
+  // The pair the user saw, when the queue's copy has since been overwritten.
+  const heard = normalizePhrase(utterance ?? suggestion.utterance);
   return {
     dictionary: addDictionaryEntry(
       state.dictionary,
@@ -286,12 +312,30 @@ export function acceptSuggestion(
   };
 }
 
-/** Drop a suggestion matched ignoring case. Returns the same array when it isn't queued. */
+/**
+ * Drop a suggestion matched ignoring case and remember its word and
+ * utterance, so the same substitution isn't offered again. A word no longer
+ * queued changes nothing. With the utterance the user saw, that pair is the one
+ * remembered, and the queued entry is dropped only if it is that pair.
+ */
 export function dismissSuggestion(
   suggested: SuggestedDictionaryEntry[],
-  word: string
-): SuggestedDictionaryEntry[] {
+  dismissed: DismissedSuggestion[],
+  word: string,
+  seenUtterance?: string
+): {
+  suggestedDictionary: SuggestedDictionaryEntry[];
+  dismissedSuggestions: DismissedSuggestion[];
+} {
   const key = fold(normalizePhrase(word) ?? "");
-  const next = suggested.filter((entry) => fold(entry.word) !== key);
-  return next.length === suggested.length ? suggested : next;
+  const entry = suggested.find((e) => fold(e.word) === key);
+  if (!entry) return { suggestedDictionary: suggested, dismissedSuggestions: dismissed };
+  const utterance = (seenUtterance ?? entry.utterance).trim();
+  const sameAsQueued = utterance === entry.utterance.trim();
+  return {
+    suggestedDictionary: sameAsQueued ? suggested.filter((e) => e !== entry) : suggested,
+    dismissedSuggestions: isDismissed(dismissed, entry.word, utterance)
+      ? dismissed
+      : [...dismissed, { word: entry.word, utterance }].slice(-MAX_DISMISSED_SUGGESTIONS),
+  };
 }

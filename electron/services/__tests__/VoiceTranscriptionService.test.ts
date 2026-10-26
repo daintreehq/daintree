@@ -184,6 +184,7 @@ const OPENAI_SETTINGS: VoiceInputSettings = {
   projectId: "",
   recordingMode: "toggle",
   suggestedDictionary: [],
+  dismissedSuggestions: [],
   learnFromCorrections: true,
 };
 

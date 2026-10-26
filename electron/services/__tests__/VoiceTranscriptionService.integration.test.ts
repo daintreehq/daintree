@@ -47,6 +47,7 @@ describe("VoiceTranscriptionService integration", () => {
           projectId: "",
           recordingMode: "toggle",
           suggestedDictionary: [],
+          dismissedSuggestions: [],
           learnFromCorrections: true,
         },
         "integration-session"

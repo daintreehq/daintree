@@ -3914,7 +3914,7 @@ export interface GeneratedIpcInvokeMap {
     result: void;
   };
   "voice-dictionary:accept-suggestion": {
-    args: [__0: { word: string }];
+    args: [__0: { word: string; utterance?: string | undefined }];
     result: import("./api.js").VoiceDictionaryState;
   };
   "voice-dictionary:add": {
@@ -3928,7 +3928,7 @@ export interface GeneratedIpcInvokeMap {
     result: import("./api.js").VoiceDictionaryState;
   };
   "voice-dictionary:dismiss-suggestion": {
-    args: [__0: { word: string }];
+    args: [__0: { word: string; utterance?: string | undefined }];
     result: import("./api.js").VoiceDictionaryState;
   };
   "voice-dictionary:record-suggestions": {

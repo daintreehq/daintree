@@ -377,6 +377,7 @@ export function createHeavyMigrationFixture(): LegacyStoreV0 {
       projectId: "",
       recordingMode: "push-to-talk",
       suggestedDictionary: [],
+      dismissedSuggestions: [],
       learnFromCorrections: false,
     },
     mcpServer: {
