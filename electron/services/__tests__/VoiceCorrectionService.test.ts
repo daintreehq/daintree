@@ -7,6 +7,7 @@ vi.mock("../../utils/logger.js", () => ({
   logError: vi.fn(),
 }));
 
+import { logWarn } from "../../utils/logger.js";
 import { VoiceCorrectionService } from "../VoiceCorrectionService.js";
 
 const BASE_SETTINGS = {
@@ -298,6 +299,62 @@ describe("VoiceCorrectionService", () => {
     expect(first.input[0].content).toBe(second.input[0].content);
     expect(first.prompt_cache_key).toBe(second.prompt_cache_key);
     expect(first.input[1].content).not.toBe(second.input[1].content);
+  });
+
+  it("logs the OpenAI error code, not its message, when a request is rejected", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 400,
+        json: async () => ({
+          error: { code: "string_above_max_length", message: "secret dictation text" },
+        }),
+      } as unknown as Response)
+    );
+
+    const svc = new VoiceCorrectionService();
+    const result = await svc.correct({ rawText: "react is great" }, BASE_SETTINGS);
+
+    expect(result.action).toBe("no_change");
+    const [, context] = vi.mocked(logWarn).mock.calls.at(-1)!;
+    expect(context).toMatchObject({ status: 400, code: "string_above_max_length" });
+    expect(JSON.stringify(vi.mocked(logWarn).mock.calls.at(-1))).not.toContain("secret");
+  });
+
+  it("keeps prompt_cache_key within OpenAI's 64-character limit for any project and dictionary", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(makeFetchResponse({ corrected_text: "Ok." }));
+    vi.stubGlobal("fetch", fetchMock);
+    const keyFor = async (overrides: Record<string, unknown>) => {
+      fetchMock.mockClear();
+      await new VoiceCorrectionService().correct(
+        { rawText: "react is great" },
+        { ...BASE_SETTINGS, ...overrides }
+      );
+      const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
+      return body.prompt_cache_key as string;
+    };
+
+    const huge = await keyFor({
+      projectName: "p".repeat(500),
+      customDictionary: Array.from({ length: 200 }, (_, i) => `Term${i}Longer`),
+    });
+    expect(huge.length).toBeLessThanOrEqual(64);
+    expect((await keyFor({})).length).toBeLessThanOrEqual(64);
+
+    const base = await keyFor({ projectName: "daintree", customDictionary: ["Daintree"] });
+    expect(await keyFor({ projectName: "daintree", customDictionary: ["Daintree"] })).toBe(base);
+    expect(await keyFor({ projectName: "other", customDictionary: ["Daintree"] })).not.toBe(base);
+    expect(await keyFor({ projectName: "daintree", customDictionary: ["Daintree", "X"] })).not.toBe(
+      base
+    );
+    expect(
+      await keyFor({
+        model: "other-model",
+        projectName: "daintree",
+        customDictionary: ["Daintree"],
+      })
+    ).not.toBe(base);
   });
 
   it("formats explicit correction context in the user message", async () => {
