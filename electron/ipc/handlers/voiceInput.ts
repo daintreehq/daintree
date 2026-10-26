@@ -29,6 +29,7 @@ import { voiceErrorLogFields } from "../../../shared/utils/voiceLogFields.js";
 import {
   applyDictationCommands,
   extractSendCommand,
+  type SendCommandResult,
 } from "../../services/voiceDictationCommands.js";
 import { VOICE_DICTATION_AI_MODEL } from "../../../shared/config/voiceCorrection.js";
 import { normalizeVoiceLanguage } from "../../../shared/config/voiceLanguages.js";
@@ -79,6 +80,15 @@ let correctionService: VoiceCorrectionService | null = null;
 // The controller whose signal correctionService currently carries.
 let sessionController: AbortController | null = null;
 
+// A completion ending in a spoken "send it", waiting to see whether the
+// speaker stays quiet. It goes out as a send, as literal words when the
+// speaker went on, or stripped with no send when dictation stopped first.
+type HeldSendOutcome = "send" | "literal" | "strip";
+interface HeldSend {
+  timer: ReturnType<typeof setTimeout>;
+  readonly release: (outcome: HeldSendOutcome) => void;
+}
+
 /**
  * One dictation session, named by the id its renderer minted. Everything a
  * session sets up hangs off its record, so ending one tears down only its own
@@ -123,6 +133,7 @@ interface VoiceSession {
   // utterance lands before the renderer's post-stop correction reads the
   // draft. Ending the session for any reason aborts what is left.
   readonly fileLinkJobs: Set<Promise<void>>;
+  heldSend: HeldSend | null;
 }
 
 let liveSession: VoiceSession | null = null;
@@ -221,6 +232,10 @@ function endSession(session: VoiceSession, reason: VoiceSessionEndReason): void 
     liveSession = null;
     publishLiveSession();
   }
+  // A stop or a dying provider has already let a held send's words through;
+  // what is left belongs to a session nobody is dictating into any more.
+  if (session.heldSend) clearTimeout(session.heldSend.timer);
+  session.heldSend = null;
   session.preStartAudio = null;
   session.markHandedOff();
   session.unsubscribe?.();
@@ -249,6 +264,24 @@ const SUPERSEDED: VoiceStartOutcome = { status: "superseded" };
 // and so how long a stop can wait on one. Local search ignores abort signals,
 // so the job is raced against its deadline rather than trusted to stop.
 const FILE_LINK_JOB_TIMEOUT_MS = 6000;
+
+// Deepgram ends an utterance after 300ms of silence (`endpointing=300`), a
+// pause that falls inside sentences, so a completion ending in "send it" is
+// held this much longer: about a second of silence in all, close to what
+// OpenAI's VAD waits before it ends an utterance.
+const SPOKEN_SEND_SETTLE_MS = 700;
+// Deepgram's VAD hears speech start long before an interim result for it, and
+// noise can set it off too: a held send then waits this long for a transcript
+// to show the speaker went on.
+const SPOKEN_SEND_SPEECH_CONFIRM_MS = 1500;
+
+function releaseHeldSend(session: VoiceSession, outcome: HeldSendOutcome): void {
+  const held = session.heldSend;
+  if (!held) return;
+  session.heldSend = null;
+  clearTimeout(held.timer);
+  held.release(outcome);
+}
 
 function whenAborted(signal: AbortSignal): Promise<void> {
   if (signal.aborted) return Promise.resolve();
@@ -760,6 +793,9 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       // ended it chose the reason and owns the provider.
       if (session.ended) return { rawText: null };
       session.phase = "stopping";
+      // Dictation stopped before a held send was confirmed: keep its words,
+      // drop the command, and send nothing.
+      releaseHeldSend(session, "strip");
       try {
         // Drain the transcription service first (waits for pending
         // transcriptions, fires remaining complete events) — the subscription
@@ -862,6 +898,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       handedOff,
       markHandedOff,
       fileLinkJobs: new Set(),
+      heldSend: null,
     };
     const previous = liveSession;
     liveSession = session;
@@ -929,6 +966,161 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       return [];
     });
 
+    // OpenAI Realtime emits spoken dictation commands ("new paragraph",
+    // "new line", "send it") as literal text; they are rewritten post-hoc,
+    // gated on the session-snapshotted paragraphing strategy.
+    const spokenCommands =
+      settings.paragraphingStrategy === "spoken-command" &&
+      normalizeVoiceLanguage(settings.language) === "en";
+    // OpenAI's VAD already waits out a long silence, and checks it again,
+    // before it ends an utterance; only Deepgram's short endpoint needs more.
+    const sendSettleMs = settings.transcriptionProvider === "deepgram" ? SPOKEN_SEND_SETTLE_MS : 0;
+
+    const emitCompletion = (
+      itemId: string | undefined,
+      rawText: string,
+      sendCommand: SendCommandResult
+    ) => {
+      const target = session.sender;
+      if (target.isDestroyed()) return;
+      const sessionId = session.id;
+      const liveSettings = getVoiceSettings();
+      // applyDictationCommands rewrites trailing break commands to \n\n / \n.
+      const processedText = spokenCommands ? applyDictationCommands(sendCommand.text) : rawText;
+
+      // Split on line breaks and emit one complete event per non-empty part
+      // with a paragraph_boundary between each pair of pieces. Empty pieces
+      // still get their boundary, so a break at the start or end of an
+      // utterance ("fix the bug new line") survives for the next utterance.
+      const pieces = processedText.split(/\s*\n\s*/).map((p) => p.trim());
+      const parts = pieces.filter(Boolean);
+      // Lengths only — dictated text is user content, kept out of logs.
+      logDebug("[VoiceInput] complete event → renderer", {
+        rawLength: rawText.length,
+        processedLength: processedText.length,
+        paragraphingStrategy: settings.paragraphingStrategy,
+        partCount: parts.length,
+      });
+      // Every part of one item carries its id so the renderer retires that
+      // item's preview. An identified item that yields no text still sends one
+      // empty completion — otherwise its interim deltas would linger as ghost
+      // text and be flushed into the draft on stop.
+      const itemIdField = itemId ? { itemId } : {};
+      // Spoken file references resolve after the words land. Every part of
+      // this transcript carries the id their result will name, so the
+      // renderer swaps them inside these words and nowhere else.
+      const correctionSvc = correctionService;
+      const transcriptId =
+        correctionSvc &&
+        parts.length > 0 &&
+        liveSettings.correctionEnabled &&
+        liveSettings.resolveFileLinks &&
+        liveSettings.openaiApiKey &&
+        mayReferenceFile(sendCommand.text)
+          ? randomUUID()
+          : undefined;
+      if (parts.length === 0 && itemId && !sendCommand.send) {
+        target.send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, {
+          sessionId,
+          text: "",
+          willCorrect: false,
+          ...itemIdField,
+        });
+      }
+      // The send rides the utterance's final completion, after every piece
+      // and break, so the renderer acts on it with all of the text in place.
+      const lastIndex = pieces.length - 1;
+      for (let i = 0; i < pieces.length; i++) {
+        if (pieces[i]) {
+          target.send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, {
+            sessionId,
+            text: pieces[i],
+            willCorrect: false,
+            ...itemIdField,
+            ...(transcriptId ? { transcriptId } : {}),
+            ...(sendCommand.send && i === lastIndex ? { send: true } : {}),
+          });
+        }
+        if (i < lastIndex) {
+          target.send(CHANNELS.VOICE_INPUT_PARAGRAPH_BOUNDARY, {
+            sessionId,
+            rawText: null,
+            correctionId: null,
+          });
+        }
+      }
+      if (sendCommand.send && !pieces[lastIndex]) {
+        target.send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, {
+          sessionId,
+          text: "",
+          willCorrect: false,
+          ...itemIdField,
+          send: true,
+        });
+      }
+
+      if (correctionSvc && transcriptId) {
+        trackFileLinkJob(session, (signal) =>
+          findFileLinks(
+            session,
+            correctionSvc,
+            transcriptId,
+            sendCommand.text,
+            liveSettings,
+            signal
+          )
+        );
+      }
+    };
+
+    // Until it goes out, the renderer keeps whatever preview the item's
+    // interim results gave it.
+    const holdSend = (
+      itemId: string | undefined,
+      rawText: string,
+      sendCommand: SendCommandResult
+    ) => {
+      const held: HeldSend = {
+        timer: setTimeout(() => releaseHeldSend(session, "send"), sendSettleMs),
+        release: (outcome) =>
+          emitCompletion(
+            itemId,
+            rawText,
+            outcome === "send"
+              ? sendCommand
+              : { text: outcome === "literal" ? rawText : sendCommand.text, send: false }
+          ),
+      };
+      session.heldSend = held;
+    };
+
+    // Runs ahead of forwarding each provider event, so a held completion
+    // reaches the renderer before anything the provider said after it.
+    const settleHeldSend = (voiceEvent: VoiceSessionEvent) => {
+      const held = session.heldSend;
+      if (!held) return;
+      switch (voiceEvent.type) {
+        case "speech_started":
+          clearTimeout(held.timer);
+          held.timer = setTimeout(
+            () => releaseHeldSend(session, "send"),
+            SPOKEN_SEND_SPEECH_CONFIRM_MS
+          );
+          return;
+        case "delta":
+        case "complete":
+        case "paragraph_boundary":
+          releaseHeldSend(session, "literal");
+          return;
+        case "status":
+          // A provider that dies ends the dictation, like a stop.
+          if (voiceEvent.status === "error" || voiceEvent.status === "idle") {
+            releaseHeldSend(session, "strip");
+          }
+          return;
+      }
+    };
+
     const forwardEvent = (voiceEvent: VoiceSessionEvent) => {
       const target = session.sender;
       if (target.isDestroyed()) return;
@@ -944,105 +1136,17 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         });
       } else if (voiceEvent.type === "complete") {
         const rawText = voiceEvent.text.trim();
-        const liveSettings = getVoiceSettings();
-
-        // OpenAI Realtime emits spoken dictation commands ("new paragraph",
-        // "new line", etc.) as literal text. applyDictationCommands rewrites
-        // them post-hoc to \n\n / \n, gated on the session-
-        // snapshotted paragraphing strategy. A trailing "send it" that ends
-        // the utterance is stripped first and handed to the renderer, which
-        // owns the send; one the provider cut mid-speech stays literal.
-        const spokenCommands =
-          settings.paragraphingStrategy === "spoken-command" &&
-          normalizeVoiceLanguage(settings.language) === "en";
+        // A trailing "send it" that ends the utterance is stripped and handed
+        // to the renderer, which owns the send; one the provider cut
+        // mid-speech stays literal.
         const sendCommand =
           spokenCommands && voiceEvent.endOfSpeech
             ? extractSendCommand(rawText)
             : { text: rawText, send: false };
-        const processedText = spokenCommands ? applyDictationCommands(sendCommand.text) : rawText;
-
-        // Split on line breaks and emit one complete event per non-empty part
-        // with a paragraph_boundary between each pair of pieces. Empty pieces
-        // still get their boundary, so a break at the start or end of an
-        // utterance ("fix the bug new line") survives for the next utterance.
-        const pieces = processedText.split(/\s*\n\s*/).map((p) => p.trim());
-        const parts = pieces.filter(Boolean);
-        // Lengths only — dictated text is user content, kept out of logs.
-        logDebug("[VoiceInput] complete event → renderer", {
-          rawLength: rawText.length,
-          processedLength: processedText.length,
-          paragraphingStrategy: settings.paragraphingStrategy,
-          partCount: parts.length,
-        });
-        // Every part of one item carries its id so the renderer retires that
-        // item's preview. An identified item that yields no text still sends one
-        // empty completion — otherwise its interim deltas would linger as ghost
-        // text and be flushed into the draft on stop.
-        const itemIdField = voiceEvent.itemId ? { itemId: voiceEvent.itemId } : {};
-        // Spoken file references resolve after the words land. Every part of
-        // this transcript carries the id their result will name, so the
-        // renderer swaps them inside these words and nowhere else.
-        const correctionSvc = correctionService;
-        const transcriptId =
-          correctionSvc &&
-          parts.length > 0 &&
-          liveSettings.correctionEnabled &&
-          liveSettings.resolveFileLinks &&
-          liveSettings.openaiApiKey &&
-          mayReferenceFile(sendCommand.text)
-            ? randomUUID()
-            : undefined;
-        if (parts.length === 0 && voiceEvent.itemId && !sendCommand.send) {
-          target.send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, {
-            sessionId,
-            text: "",
-            willCorrect: false,
-            ...itemIdField,
-          });
-        }
-        // The send rides the utterance's final completion, after every piece
-        // and break, so the renderer acts on it with all of the text in place.
-        const lastIndex = pieces.length - 1;
-        for (let i = 0; i < pieces.length; i++) {
-          if (pieces[i]) {
-            target.send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, {
-              sessionId,
-              text: pieces[i],
-              willCorrect: false,
-              ...itemIdField,
-              ...(transcriptId ? { transcriptId } : {}),
-              ...(sendCommand.send && i === lastIndex ? { send: true } : {}),
-            });
-          }
-          if (i < lastIndex) {
-            target.send(CHANNELS.VOICE_INPUT_PARAGRAPH_BOUNDARY, {
-              sessionId,
-              rawText: null,
-              correctionId: null,
-            });
-          }
-        }
-        if (sendCommand.send && !pieces[lastIndex]) {
-          target.send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, {
-            sessionId,
-            text: "",
-            willCorrect: false,
-            ...itemIdField,
-            send: true,
-          });
-        }
-
-        if (correctionSvc && transcriptId) {
-          trackFileLinkJob(session, (signal) =>
-            findFileLinks(
-              session,
-              correctionSvc,
-              transcriptId,
-              sendCommand.text,
-              liveSettings,
-              signal
-            )
-          );
+        if (sendCommand.send && sendSettleMs > 0 && session.phase === "active") {
+          holdSend(voiceEvent.itemId, rawText, sendCommand);
+        } else {
+          emitCompletion(voiceEvent.itemId, rawText, sendCommand);
         }
       } else if (voiceEvent.type === "paragraph_boundary") {
         target.send(CHANNELS.VOICE_INPUT_PARAGRAPH_BOUNDARY, {
@@ -1069,6 +1173,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     session.unsubscribe = svc.onEvent((voiceEvent) => {
       // A retired provider's events, and anything after this session ended.
       if (voiceEvent.sessionId !== session.id || session.ended) return;
+      settleHeldSend(voiceEvent);
       forwardEvent(voiceEvent);
       // A provider that dies on its own ends the session, even while still
       // connecting. During a stop, its finishing → idle is the drain that

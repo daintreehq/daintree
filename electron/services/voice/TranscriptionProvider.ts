@@ -34,6 +34,9 @@ export type VoiceTranscriptionEvent =
       endOfSpeech?: boolean;
     }
   | { type: "paragraph_boundary" }
+  // The provider's own VAD heard speech begin, before any transcript of it.
+  // Main-only: it holds back a spoken send and never reaches the renderer.
+  | { type: "speech_started" }
   | { type: "error"; error: VoiceInputError }
   | { type: "status"; status: VoiceInputStatus };
 

@@ -76,6 +76,10 @@ export function applyDictationCommands(text: string): string {
 
 const SEND_COMMAND_RE = /(?:^|[\s.,;:!?]+)\bsend\s+it[\s.,;:!?]*$/i;
 
+// "don't send it" talks about sending rather than asking for it.
+const NEGATED_SEND_RE =
+  /(?:^|[^\p{L}\p{N}'’])(?:don['’]?t|not|never|won['’]?t|can['’]?t|cannot|shouldn['’]?t)\s+send\s+it[\s.,;:!?]*$/iu;
+
 export interface SendCommandResult {
   text: string;
   send: boolean;
@@ -88,9 +92,10 @@ export interface SendCommandResult {
  *   extractSendCommand("fix the login bug, send it.") → { text: "fix the login bug", send: true }
  *   extractSendCommand("Send it")                      → { text: "", send: true }
  *   extractSendCommand("then send it to the API")      → unchanged, send: false
+ *   extractSendCommand("but don't send it")            → unchanged, send: false
  */
 export function extractSendCommand(text: string): SendCommandResult {
   const match = SEND_COMMAND_RE.exec(text);
-  if (!match) return { text, send: false };
+  if (!match || NEGATED_SEND_RE.test(text)) return { text, send: false };
   return { text: text.slice(0, match.index).trimEnd(), send: true };
 }

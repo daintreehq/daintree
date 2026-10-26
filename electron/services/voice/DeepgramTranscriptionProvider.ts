@@ -123,6 +123,7 @@ function truncateKeytermsForUrl(keyterms: string[]): string[] {
 /** Build the Deepgram streaming URL. `linear16` @ 24kHz matches the renderer's
  * AudioContext capture rate, so no resampling is needed. `endpointing=300`
  * turns on server-side VAD: a 300ms pause finalizes the current segment.
+ * `vad_events` reports speech starting well before its first interim result.
  * Punctuation, casing and interim results are all off unless asked for. */
 function buildUrl(settings: VoiceInputSettings): string {
   const params = new URLSearchParams({
@@ -133,6 +134,7 @@ function buildUrl(settings: VoiceInputSettings): string {
     punctuate: "true",
     smart_format: "true",
     interim_results: "true",
+    vad_events: "true",
   });
   // Streaming has no `detect_language` (prerecorded only); Nova-3's `multi` is
   // the live multilingual mode.
@@ -773,8 +775,14 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
         return;
       }
 
-      case "UtteranceEnd":
       case "SpeechStarted":
+        // Interim results land about a second of audio apart; this says much
+        // sooner that the speaker went on after a pause.
+        logDebug(`${P} ← ${type}`);
+        this.emit({ type: "speech_started" });
+        return;
+
+      case "UtteranceEnd":
       case "Metadata":
         // VAD / metadata signals. Segmentation is already handled via is_final
         // Results, so these are informational only.
