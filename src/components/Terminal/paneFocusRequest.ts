@@ -21,8 +21,11 @@ import type { TerminalFocusTarget } from "./terminalFocus";
  *
  * The epoch cancels deferred focus work in general, requested or not: a frame
  * scheduled under one epoch does nothing once a newer request, a user press, or
- * anything else that ended an intent has moved it, so a stale grab can't drag
- * the keyboard back from where the user went (#8487).
+ * focus landing on another typing surface has moved it, so a stale grab can't
+ * drag the keyboard back from where the user went (#8487). The selection moving
+ * on ends the intent but not the epoch: the pane it left calls off its own
+ * frames, and a reconcile after a panel closes is no reason to call off anyone
+ * else's, such as the assistant's.
  */
 interface PaneFocusIntent {
   paneId: string;
@@ -72,7 +75,7 @@ function watchIntent(): void {
   if (stopWatching) return;
   const unsubscribe = usePanelStore.subscribe((state, prev) => {
     if (state.focusedId === prev.focusedId) return;
-    if (current && state.focusedId !== current.paneId) supersede();
+    if (current && state.focusedId !== current.paneId) clearIntent();
   });
   const onFocusIn = (e: FocusEvent) => {
     const el = e.target;

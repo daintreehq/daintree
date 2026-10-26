@@ -127,7 +127,9 @@ describe("paneFocusRequest", () => {
 
     usePanelStore.setState({ focusedId: "b" });
     expect(requestedPaneSurface("a")).toBeNull();
-    expect(isFocusEpochCurrent(epoch)).toBe(false);
+    // The pane it left calls off its own frames; a reconcile after a panel
+    // closes mustn't call off unrelated work like the assistant's reveal.
+    expect(isFocusEpochCurrent(epoch)).toBe(true);
 
     // Coming back is a fresh arrival, not the old request revived.
     usePanelStore.setState({ focusedId: "a" });
