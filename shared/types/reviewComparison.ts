@@ -86,9 +86,11 @@ export type ReviewComparisonCommits =
       kind: "unavailable";
       /**
        * `limit`: listing them ran past the comparison's limits. `unreadable`:
-       * git couldn't walk the history, as in a shallow or partial clone.
+       * git couldn't walk the whole history, as in a shallow or partial clone.
+       * `base-unavailable`: the base the point was compared against no longer
+       * resolves, so history merged in from it can't be told apart.
        */
-      reason: "reviewed-commit-missing" | "limit" | "unreadable";
+      reason: "reviewed-commit-missing" | "limit" | "unreadable" | "base-unavailable";
     };
 
 export const REVIEW_COMPARISON_INCOMPLETE_REASONS = [

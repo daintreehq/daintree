@@ -272,6 +272,7 @@ describe("compareReviewPoint", () => {
 
       const result = await compareNow(repo, point);
 
+      expect(result.state).toBe("comparable");
       expect(result.files).toEqual([]);
       expect(commitsOf(result)).toEqual([{ subject: "delete b", kind: "new" }]);
     });
@@ -333,6 +334,7 @@ describe("compareReviewPoint", () => {
 
       const result = await compareNow(repo, point);
 
+      expect(result.state).toBe("comparable");
       expect(result.files).toEqual([]);
     });
   });
@@ -431,18 +433,30 @@ describe("compareReviewPoint", () => {
 
     const result = await compareNow(repo, point);
 
+    expect(result.state).toBe("comparable");
     expect(result.files).toEqual([]);
     expect(commitsOf(result)).toEqual([{ subject: "merge reworded", kind: "patch-equivalent" }]);
+
+    // An amend that changes what the merge holds is new work.
+    write(repo, "b.txt", "resolved differently\n");
+    git(repo, "commit", "-q", "--amend", "-am", "merge changed");
+    expect(commitsOf(await compareNow(repo, point))).toEqual([
+      { subject: "merge changed", kind: "new" },
+    ]);
   });
 
-  it("keeps files from the stored identities when a force push and gc remove the reviewed commit", async () => {
+  it("keeps comparing files when a force push and gc remove the reviewed commit", async () => {
     const repo = topicRepo();
-    write(repo, "b.txt", "uncommitted\n");
+    // The base moves on before the review, so its tip is ahead of the merge
+    // base, and only the merge base says what the unlisted paths held.
+    git(repo, "checkout", "-q", "main");
+    commit(repo, "main edits g", { "g.txt": "g on main\n" });
+    git(repo, "checkout", "-q", "topic");
     const point = await review(repo);
+    expect(point.base.mergeBases).not.toContain(point.base.tip);
     const reviewedCommit = head(repo);
-    git(repo, "checkout", "-q", "--", "b.txt");
     git(repo, "reset", "-q", "--hard", "main");
-    commit(repo, "rewritten", { "a.txt": "a rewritten\n" });
+    commit(repo, "rewritten", { "a.txt": "a rewritten\n", "b.txt": "b rewritten\n" });
     collectGarbage(repo);
     expect(exists(repo, reviewedCommit)).toBe(false);
 
@@ -451,9 +465,48 @@ describe("compareReviewPoint", () => {
     expect(result.state).toBe("reviewed-commit-missing");
     expect(result.commits).toEqual({ kind: "unavailable", reason: "reviewed-commit-missing" });
     expect(summary(result)).toEqual({
+      // Listed at review, so compared with its stored identities.
       "a.txt": { ...MODIFIED_BOTH, baseUpdate: "none" },
-      "b.txt": { ...MODIFIED_TREE, baseUpdate: "none" },
+      // Unlisted at review: what the merge base held.
+      "b.txt": { ...MODIFIED_BOTH, baseUpdate: "none" },
+      "g.txt": { ...MODIFIED_BOTH, baseUpdate: "only" },
     });
+  });
+
+  it("leaves the commit list out when the base it was compared against is gone", async () => {
+    const repo = topicRepo();
+    const point = await review(repo);
+    git(repo, "checkout", "-q", "main");
+    commit(repo, "main edits g", { "g.txt": "g on main\n" });
+    git(repo, "checkout", "-q", "topic");
+    git(repo, "merge", "-q", "--no-edit", "main");
+    git(repo, "branch", "-q", "-D", "main");
+
+    const result = await compareNow(repo, point);
+
+    expect(result.state).toBe("incomplete");
+    if (result.state !== "incomplete") throw new Error("unreachable");
+    expect(result.reasons).toEqual(["commits-unavailable"]);
+    expect(result.commits).toEqual({ kind: "unavailable", reason: "base-unavailable" });
+    expect(summary(result)).toEqual({ "g.txt": { ...MODIFIED_BOTH, baseUpdate: "unknown" } });
+  });
+
+  it("leaves the commit list out when a shallow fetch cuts the history short", async () => {
+    const upstream = topicRepo();
+    const repo = path.join(root, `clone-${repoCount}`);
+    git(root, "clone", "-q", "--no-local", `file://${upstream}`, repo);
+    git(repo, "checkout", "-q", "topic");
+    const point = await review(repo, { base: { kind: "ref", ref: "refs/remotes/origin/main" } });
+    for (const n of [1, 2, 3]) commit(upstream, `c${n}`, { "b.txt": `${n}\n` });
+    git(repo, "fetch", "-q", "--depth=1", "origin", "topic");
+    git(repo, "reset", "-q", "--hard", "FETCH_HEAD");
+    expect(git(repo, "rev-parse", "--is-shallow-repository").trim()).toBe("true");
+
+    const result = await compareNow(repo, point);
+
+    expect(result.state).toBe("incomplete");
+    expect(result.commits).toEqual({ kind: "unavailable", reason: "unreadable" });
+    expect(Object.keys(summary(result))).toEqual(["b.txt"]);
   });
 
   it("says it's incomplete when neither the reviewed commit nor its base survives", async () => {
@@ -572,6 +625,27 @@ describe("compareReviewPoint", () => {
       "a.txt": committed
         ? { ...MODIFIED_BOTH, baseUpdate: "none" }
         : { ...MODIFIED_TREE, baseUpdate: "none" },
+    });
+  });
+
+  it("lists a gitlink staged while its submodule stays unpopulated", async () => {
+    const repo = topicRepo();
+    const [first, second] = ["1", "2"].map((n) => n.repeat(40));
+    git(repo, "update-index", "--add", "--cacheinfo", `160000,${first},sub`);
+    git(repo, "commit", "-q", "-m", "add sub");
+    fs.mkdirSync(path.join(repo, "sub"));
+    const point = await review(repo);
+    expect(point.entries.find((entry) => entry.path === "sub")?.worktree).toEqual({
+      kind: "submodule",
+      commit: null,
+      contents: "clean",
+    });
+    git(repo, "update-index", "--cacheinfo", `160000,${second},sub`);
+
+    const result = await compareNow(repo, point);
+
+    expect(summary(result)).toEqual({
+      sub: { status: "modified", index: "changed", worktree: "unchanged", baseUpdate: "none" },
     });
   });
 
@@ -737,11 +811,11 @@ describe("compareReviewPoint", () => {
     git(repo, "rebase", "-q", "main");
     write(repo, "b.txt", "dirty\n");
     write(repo, "u.txt", "untracked\n");
-    const before = snapshot(path.join(repo, ".git"));
+    const before = snapshot(repo);
 
     await compareNow(repo, point);
 
-    expect(snapshot(path.join(repo, ".git"))).toEqual(before);
+    expect(snapshot(repo)).toEqual(before);
   });
 
   describe("refusals", () => {
@@ -774,8 +848,11 @@ describe("compareReviewPoint", () => {
       const repo = topicRepo();
       const point = await review(repo);
       const controller = new AbortController();
+      const pending = compareReviewPoint(repo, point, { signal: controller.signal });
       controller.abort();
 
+      expect(await pending).toMatchObject({ state: "failed", reason: "cancelled" });
+      // Already cancelled, it never starts.
       expect(await compareReviewPoint(repo, point, { signal: controller.signal })).toMatchObject({
         state: "failed",
         reason: "cancelled",

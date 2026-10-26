@@ -9,6 +9,9 @@ import { compareReviewPoint, type CompareReviewPointOptions } from "./compareRev
  * answers without running at all. A filesystem read already stuck when the
  * cancel arrives can't be stopped (see `captureReviewPoint`), so the next
  * comparison doesn't wait on it.
+ *
+ * Keyed by the path as given, so callers pass the worktree's root as the
+ * worktree list spells it.
  */
 export class ReviewComparisons {
   private readonly latest = new Map<

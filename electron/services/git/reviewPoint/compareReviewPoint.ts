@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import type {
   ReviewComparisonChange,
@@ -473,6 +475,12 @@ async function listCommits(
     };
   }
 
+  // With the base gone, history merged in from it can't be told from the
+  // branch's own; the old base tip only accounts for what came before.
+  if (current.base.tip === null && reviewed.base.tip !== null) {
+    return { kind: "unavailable", reason: "base-unavailable" };
+  }
+
   // The base's own history is left out on both sides: what the branch was
   // compared against then, and what it is compared against now. A reviewed
   // commit the base has since taken in is left out with it, so a rewrite of
@@ -496,6 +504,17 @@ async function listCommits(
       ...excluded,
     ]);
     const listed = parseCommitListing(out.stdout);
+    // A shallow clone's walks stop at its boundary without failing: the
+    // reviewed commit stops looking like an ancestor, and whatever lies past
+    // the boundary is silently left out.
+    const boundary = await shallowBoundary(current.commonDir);
+    if (
+      boundary === null ||
+      (boundary.size > 0 &&
+        (history === "rewritten" || listed.some((item) => boundary.has(item.oid))))
+    ) {
+      return { kind: "unavailable", reason: "unreadable" };
+    }
     // Patch ids skip merges, so a merge amended for its message alone is
     // matched here: the same tree on the same parents.
     if (history === "rewritten" && listed.some((item) => item.parents.length > 1)) {
@@ -525,6 +544,16 @@ async function listCommits(
     // History git can't walk, as in a shallow or partial clone; the files stand.
     if (error instanceof GitCommandError) return { kind: "unavailable", reason: "unreadable" };
     throw error;
+  }
+}
+
+/** The commits a shallow clone's history stops at; null when that can't be read. */
+async function shallowBoundary(commonDir: string): Promise<Set<string> | null> {
+  try {
+    const text = await fs.promises.readFile(path.join(commonDir, "shallow"), "utf8");
+    return new Set(text.split("\n").filter((line) => OID_LINE.test(line)));
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? new Set() : null;
   }
 }
 
@@ -704,7 +733,7 @@ export function compareSides(
   // The index caught up with the reviewed working tree: the reviewed edit was
   // staged or committed as it was. Nothing in it is content not on screen then.
   else if (worktree === "unchanged" && currentVsIndex === "matches") index = "unchanged";
-  else if (before.worktree !== "as-index" && holds(before.worktree, now.index)) {
+  else if (before.worktree !== "as-index" && holds(before.worktree, now.index, true)) {
     index = "unchanged";
   }
   return { index, worktree };
@@ -765,17 +794,24 @@ function sameWorktree(
   return "unchanged";
 }
 
-/** Whether a working-tree identity is exactly what an index entry stores, byte for byte. */
-function holds(worktree: ReviewPointWorktreeIdentity, index: ReviewPointIndexIdentity): boolean {
+/**
+ * Whether a working-tree identity is what an index entry stores, byte for byte.
+ * @param exact refuse an unpopulated submodule, which git counts as matching
+ *   any commit but which proves nothing about which one was there.
+ */
+function holds(
+  worktree: ReviewPointWorktreeIdentity,
+  index: ReviewPointIndexIdentity,
+  exact = false
+): boolean {
   if (index.kind === "absent") return worktree.kind === "absent" || worktree.kind === "directory";
   if (index.kind !== "entry") return false;
   switch (index.mode) {
     case "160000":
-      // An unpopulated submodule is unchanged as far as git is concerned.
       return (
         worktree.kind === "submodule" &&
         worktree.contents === "clean" &&
-        (worktree.commit === null || worktree.commit === index.oid)
+        (worktree.commit === index.oid || (!exact && worktree.commit === null))
       );
     case "120000":
       return worktree.kind === "symlink" && worktree.oid === index.oid;
