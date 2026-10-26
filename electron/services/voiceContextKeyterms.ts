@@ -2,7 +2,11 @@ import { isAbsolute } from "node:path";
 import type { PtyClient } from "./PtyClient.js";
 import { getGitBranch } from "../utils/gitUtils.js";
 import { logDebug } from "../utils/logger.js";
-import { holdsCredential, isSecretShaped, redactSecretShapedLines } from "./voiceKeytermSecrets.js";
+import {
+  holdsCredentialOrId,
+  isSecretShaped,
+  redactSecretShapedLines,
+} from "./voiceKeytermSecrets.js";
 
 const P = "[VoiceKeyterms]";
 
@@ -188,10 +192,11 @@ const BLOCKLIST = new Set([
 // eslint-disable-next-line no-control-regex
 const ANSI_RE = /[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><~]/g;
 
-// OSC sequences (titles, hyperlinks, progress) run to BEL or ST. Their payload
-// isn't output, and left in place it splits whatever it sits inside.
+// OSC sequences (titles, hyperlinks, progress) open with ESC ] or the 8-bit
+// OSC and run to BEL or either form of ST. Their payload isn't output, and
+// left in place it splits whatever it sits inside.
 // eslint-disable-next-line no-control-regex
-const OSC_RE = /[\u001b\u009d]\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g;
+const OSC_RE = /(?:\u001b\]|\u009d)[^\u0007\u001b\u009c]*(?:\u0007|\u001b\\|\u009c)/g;
 
 // Matches identifiers: camelCase, PascalCase, snake_case, kebab-case (with internal separators)
 const IDENTIFIER_RE = /\b[a-zA-Z][a-zA-Z0-9]*(?:[-_][a-zA-Z0-9]+)+\b/g;
@@ -224,10 +229,10 @@ function stripAnsi(text: string): string {
 }
 
 export function tokenizeBranchName(branchName: string): string[] {
-  // A path component holding a credential goes whole, before it can be split
-  // into pieces that each look harmless.
-  const components = branchName.split("/").filter((component) => !holdsCredential(component));
-  return components.flatMap((component) => component.split(/[\-_.]+/)).filter(isValidTerm);
+  // A path component holding a credential or an ID goes whole, before it can
+  // be split into pieces that each look harmless.
+  const components = branchName.split("/").filter((component) => !holdsCredentialOrId(component));
+  return components.flatMap((component) => component.split(/[-_.]+/)).filter(isValidTerm);
 }
 
 export function tokenizeProjectName(name: string): string[] {
@@ -318,8 +323,8 @@ async function getTerminalBranch(ptyClient: PtyClient, terminalId: string): Prom
     if (!terminal) return null;
     const path = terminal.worktreeId ?? terminal.cwd;
     if (typeof path !== "string" || !isAbsolute(path)) return null;
-    // Git gets what's left of the shared budget, so it's killed when the wait
-    // gives up on it rather than running on afterwards.
+    // Git's own timeout is what's left of the shared budget, so it rarely
+    // outlives the wait (resolving the git binary isn't counted).
     const remaining = Math.ceil(ASSEMBLY_TIMEOUT_MS - (performance.now() - startedAt));
     if (remaining <= 0) return null;
     return await getGitBranch(path, { timeout: remaining });
@@ -382,7 +387,7 @@ export async function assembleKeyterms(opts: KeytermAssemblyOpts): Promise<strin
   }
 
   // Priority 2: Project name tokens
-  if (projectName && !holdsCredential(projectName)) {
+  if (projectName && !holdsCredentialOrId(projectName)) {
     const trimmed = projectName.trim();
     if (trimmed.length >= 2 && !/^\d+$/.test(trimmed) && !isSecretShaped(trimmed)) {
       add(trimmed);

@@ -38,7 +38,10 @@ const CREDENTIALS: Record<string, string> = {
   "JWT segment": `eyJ${fakeBody(30, 19)}`,
   "unknown-format random token": fakeBody(32, 20),
   "lowercase random token": fakeBody(24, 21, "abcdefghijklmnopqrstuvwxyz0123456789"),
-  "truncated OpenAI key": `sk-proj-${fakeBody(14, 22)}`,
+  // Long words, so only its three separate digit runs give it away.
+  "digit-studded token": "orange1banana2cherry3",
+  "truncated OpenAI key": "sk-proj-AbcDefGh",
+  "truncated GitHub token": "ghp_AbcDefGhi",
 };
 
 describe("isSecretShaped", () => {
@@ -108,9 +111,18 @@ describe("holdsCredential", () => {
     ["a clone URL", `https://x-access-token:${CREDENTIALS["GitHub classic token"]}@github.com/o/r`],
     ["a bearer header", `Authorization: Bearer ${fakeBody(40, 40)}`],
     [
+      // Every piece is too short to judge alone; joined, they're random.
       "an AWS secret split by slashes",
-      `${fakeBody(12, 41)}/${fakeBody(10, 42)}+${fakeBody(16, 43)}`,
+      `${fakeBody(12, 41)}/${fakeBody(10, 42)}+${fakeBody(14, 43)}`,
     ],
+    ["a .netrc entry", "machine github.com login alice password MapleRiver7!"],
+    ["a padded JSON field", `"password":      "MapleRiver7!"`],
+    ["a YAML key whose value is on the next line", "  password:"],
+    ["credentials in a database URL", "postgres://alice:MapleRiver7!@localhost/db"],
+    ["a basic auth header", "Authorization: Basic Zm9vOmJhcg=="],
+    ["a Docker registry auth", `"auths":{"registry.example.com":{"auth":"Zm9vOmJhcg=="}}`],
+    // Nothing but the shared scrubber's bearer pattern recognises this one.
+    ["a bearer token in prose", "retry with Bearer abcdefghijklmnop"],
     ["a base64url body", `${fakeBody(9, 44)}-${fakeBody(7, 45)}_${fakeBody(11, 46)}`],
   ])("finds %s", (_label, text) => {
     expect(holdsCredential(text)).toBe(true);
@@ -122,6 +134,12 @@ describe("holdsCredential", () => {
     "npm_config_registry=https://registry.npmjs.org/",
     "refreshing the access token in useAuthStore",
     "commit 7c2652f83d4d0fff357e24e02282a679964a112b",
+    "const password = getPassword();",
+    "MAX_TOKENS=8192 useSessionRouter",
+    "Use accessToken: string in useSessionRouter",
+    "secret: process.env.SECRET",
+    "password: ${DB_PASSWORD}",
+    "a".repeat(1000),
   ])("finds nothing in %s", (line) => {
     expect(holdsCredential(line)).toBe(false);
   });
@@ -142,13 +160,23 @@ describe("redactSecretShapedLines", () => {
     expect(out[3]).toContain("useTerminalStore");
   });
 
-  it("empties the line after a credential, which may hold the rest of a wrapped key", () => {
+  it("empties the lines a wrapped key runs onto, up to the first ordinary line", () => {
     const out = redactSecretShapedLines([
       `token: ${CREDENTIALS["GitHub classic token"]}`,
-      "AbcDefGhi",
+      "AbcDefGhi more of the output",
+      "│ JklMnoPqr │",
+      "then useTerminalStore ran",
+    ]);
+    expect(out.slice(0, 3)).toEqual(["", "", ""]);
+    expect(out[3]).toBe("then useTerminalStore ran");
+  });
+
+  it("stops treating lines as a wrapped key at a blank line", () => {
+    const out = redactSecretShapedLines([
+      `token: ${CREDENTIALS["GitHub classic token"]}`,
+      "",
       "useTerminalStore",
     ]);
-    expect(out[1]).toBe("");
     expect(out[2]).toBe("useTerminalStore");
   });
 
@@ -165,6 +193,12 @@ describe("redactSecretShapedLines", () => {
     const deepgramKey = fakeBody(40, 18, HEX);
     const [out] = redactSecretShapedLines([`DG=${deepgramKey} useSessionRouter`]);
     expect(out).not.toContain(deepgramKey.slice(0, 12));
+    expect(out).toContain("useSessionRouter");
+  });
+
+  it("blanks a credential name in a path without the rest of the path", () => {
+    const [out] = redactSecretShapedLines(["src/voiceKeytermSecrets/useSessionRouter.ts"]);
+    expect(out).not.toContain("voiceKeytermSecrets");
     expect(out).toContain("useSessionRouter");
   });
 

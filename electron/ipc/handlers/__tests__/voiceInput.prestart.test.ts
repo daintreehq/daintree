@@ -134,6 +134,7 @@ vi.mock("../../channels.js", () => ({
 
 import { registerVoiceInputHandlers } from "../voiceInput.js";
 import { assembleKeyterms } from "../../../services/voiceContextKeyterms.js";
+import { projectStore } from "../../../services/ProjectStore.js";
 import {
   AUDIO_BUFFER_MAX_BYTES,
   AUDIO_BUFFER_MAX_CHUNKS,
@@ -526,6 +527,7 @@ describe("voiceInput — keyterm target", () => {
     vi.clearAllMocks();
     shared.calls = [];
     shared.assembleKeyterms = null;
+    shared.eventCallback = null;
     shared.viewProjectId = "proj-a";
     sender.destroyed = false;
     fakeEvent.sender = makeSender();
@@ -564,6 +566,7 @@ describe("voiceInput — keyterm target", () => {
 
   it("sends no automatic hints for a terminal main doesn't track", async () => {
     await expect(startWith({ terminalId: "t-gone" })).resolves.toEqual({ ok: true });
+    expect(assembleKeyterms).toHaveBeenCalledTimes(1);
     expect(assemblyOpts()?.terminalId).toBeUndefined();
     expect(assemblyOpts()?.projectName).toBeUndefined();
   });
@@ -571,17 +574,31 @@ describe("voiceInput — keyterm target", () => {
   it("sends none for a terminal another project owns than the view asking", async () => {
     shared.viewProjectId = "proj-b";
     await expect(startWith({ terminalId: "t-1" })).resolves.toEqual({ ok: true });
+    expect(assembleKeyterms).toHaveBeenCalledTimes(1);
     expect(assemblyOpts()?.terminalId).toBeUndefined();
     expect(assemblyOpts()?.projectName).toBeUndefined();
   });
 
-  it("starts without a target, with no automatic hints", async () => {
+  it("starts without a target, with no automatic hints, not even the current project", async () => {
+    vi.mocked(projectStore.getCurrentProject).mockReturnValueOnce({
+      id: "proj-g",
+      name: "Global",
+      path: "/global",
+    } as ReturnType<typeof projectStore.getCurrentProject>);
     await expect(startWith(undefined)).resolves.toEqual({ ok: true });
     expect(assemblyOpts()?.terminalId).toBeUndefined();
+    expect(assemblyOpts()?.projectName).toBeUndefined();
   });
 
-  it("rejects a malformed start before it supersedes anything", async () => {
+  it("rejects a malformed start without superseding the one in flight", async () => {
+    const resolveKeyterms = deferKeyterms();
+    const first = startWith({ terminalId: "t-1" });
+    sendChunk(1);
+    await vi.waitFor(() => expect(shared.eventCallback).not.toBeNull());
+
     await expect(startWith({ terminalId: 42 })).rejects.toThrow();
-    expect(assembleKeyterms).not.toHaveBeenCalled();
+    resolveKeyterms([]);
+    await expect(first).resolves.toEqual({ ok: true });
+    expect(shared.calls).toEqual(["start", "chunk:1"]);
   });
 });

@@ -198,6 +198,15 @@ describe("extractTerminalIdentifiers", () => {
     expect(ids).toEqual(["useSessionRouter"]);
   });
 
+  it.each([
+    ["ESC ] … BEL", "\u001b]0;windowTitle\u0007"],
+    ["ESC ] … ESC \\", "\u001b]0;windowTitle\u001b\\"],
+    ["8-bit OSC … BEL", "\u009d0;windowTitle\u0007"],
+    ["ESC ] … 8-bit ST", "\u001b]0;windowTitle\u009c"],
+  ])("removes an OSC sequence (%s) whole, rejoining the text around it", (_form, osc) => {
+    expect(extractTerminalIdentifiers([`use${osc}SessionRouter`])).toEqual(["useSessionRouter"]);
+  });
+
   it("drops long branch slugs but keeps short compound identifiers", () => {
     const ids = extractTerminalIdentifiers([
       "Switched to bugfix-issue-14621-terminal-derived-keyterms-can-send",
@@ -263,6 +272,45 @@ describe("assembleKeyterms", () => {
     expect(ptyClient.getAllTerminalSnapshots).not.toHaveBeenCalled();
   });
 
+  it("reads the terminal it is given, not another one", async () => {
+    getGitBranchMock.mockClear();
+    const terminals: Record<string, { lines: string[]; cwd: string; worktreeId: string }> = {
+      t1: { lines: ["useFirstTerminal"], cwd: "/a", worktreeId: "/repo/worktrees/first" },
+      t2: { lines: ["useSecondTerminal"], cwd: "/b", worktreeId: "/repo/worktrees/second" },
+    };
+    const ptyClient = {
+      getTerminalSnapshot: vi.fn(async (id: string) =>
+        terminals[id] ? snapshot(id, terminals[id].lines) : null
+      ),
+      getTerminalAsync: vi.fn(async (id: string) =>
+        terminals[id] ? { id, ...terminals[id] } : null
+      ),
+    } as unknown as PtyClient;
+    const result = await assembleKeyterms({ customDictionary: [], terminalId: "t2", ptyClient });
+    expect(result).toContain("useSecondTerminal");
+    expect(result).not.toContain("useFirstTerminal");
+    expect(getGitBranchMock).toHaveBeenCalledWith("/repo/worktrees/second", expect.anything());
+  });
+
+  it("gives up on a terminal read that never answers", async () => {
+    vi.useFakeTimers();
+    try {
+      const ptyClient = {
+        getTerminalSnapshot: vi.fn(() => new Promise(() => {})),
+        getTerminalAsync: vi.fn(() => new Promise(() => {})),
+      } as unknown as PtyClient;
+      const pending = assembleKeyterms({
+        customDictionary: ["CustomFirst"],
+        terminalId: TARGET,
+        ptyClient,
+      });
+      await vi.advanceTimersByTimeAsync(500);
+      await expect(pending).resolves.toEqual(["CustomFirst"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("reads no terminal and no branch without a target", async () => {
     getGitBranchMock.mockClear();
     const ptyClient = makePtyClient(["const myVariable = handleRequest();"]);
@@ -289,6 +337,21 @@ describe("assembleKeyterms", () => {
     expect(result).toContain("login");
     expect(result).not.toContain("ProfileCache");
     expect(result.some((term) => term.includes("Project"))).toBe(false);
+  });
+
+  it("drops credential names and IDs from project and branch names, piece by piece", async () => {
+    getGitBranchMock.mockResolvedValueOnce("fix/550e8400-e29b-41d4-a716-446655440000/login-flow");
+    const result = await assembleKeyterms({
+      customDictionary: [],
+      projectName: "Acme getAccessToken",
+      terminalId: TARGET,
+      ptyClient: asPtyClient(makePtyClient()),
+    });
+    expect(result).toContain("Acme");
+    expect(result).toContain("login");
+    expect(result).not.toContain("Token");
+    expect(result).not.toContain("Acme getAccessToken");
+    for (const piece of ["e29b", "41d4", "a716"]) expect(result).not.toContain(piece);
   });
 
   it("keeps the user's own dictionary entries unfiltered", async () => {
@@ -321,12 +384,16 @@ describe("assembleKeyterms", () => {
     // oldest 40 lines fall outside the 200-line tail window; within the window,
     // the terminal-tier cap keeps only the most recent identifiers.
     const lines = Array.from({ length: 240 }, (_, i) => `term_ident_${i}`);
+    // Repeated across the oldest lines, this would outrank everything if the
+    // window didn't cut it off.
+    for (let i = 0; i < 40; i++) lines[i] += " stale_sentinel";
     const result = await assembleKeyterms({
       customDictionary: [],
       terminalId: TARGET,
       ptyClient: asPtyClient(makePtyClient(lines)),
     });
     // Identifiers from the first 40 lines are dropped by the tail slice.
+    expect(result).not.toContain("stale_sentinel");
     expect(result).not.toContain("term_ident_0");
     expect(result).not.toContain("term_ident_39");
     // The very newest identifier survives and the oldest windowed one (line 40,

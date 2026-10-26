@@ -252,31 +252,29 @@ describe("VoiceInputSettingsTab", () => {
       expect(disclosure).toMatch(/project name/);
       expect(disclosure).toMatch(/branch/);
       expect(disclosure).toMatch(/terminal you're dictating into/);
+      expect(disclosure).toMatch(/go with the audio/);
+      expect(disclosure).toMatch(/filtered out of everything except your dictionary/);
       // Where the key will live is said before it's saved, not only after.
       expect(screen.getByText(/stored locally in plain text/)).toBeTruthy();
     });
   });
 
   it("names the recognition hints in the Deepgram disclosure too", async () => {
-    window.electron = {
-      voiceInput: createVoiceInputApi({
-        getSettings: vi.fn().mockResolvedValue({
-          enabled: true,
-          openaiApiKey: "",
-          deepgramApiKey: "",
-          transcriptionProvider: "deepgram",
-          language: "en",
-          customDictionary: [],
-          transcriptionModel: "gpt-live-transcribe",
-          correctionEnabled: false,
-          correctionModel: "gpt-5.6-luna",
-          correctionCustomInstructions: "",
-          paragraphingStrategy: "spoken-command",
-          resolveFileLinks: true,
-          deviceId: "",
-        }),
-      }),
-    } as unknown as typeof window.electron;
+    window.electron.voiceInput.getSettings = vi.fn().mockResolvedValue({
+      enabled: true,
+      openaiApiKey: "",
+      deepgramApiKey: "",
+      transcriptionProvider: "deepgram",
+      language: "en",
+      customDictionary: [],
+      transcriptionModel: "gpt-live-transcribe",
+      correctionEnabled: false,
+      correctionModel: "gpt-5.6-luna",
+      correctionCustomInstructions: "",
+      paragraphingStrategy: "spoken-command",
+      resolveFileLinks: true,
+      deviceId: "",
+    });
 
     render(<VoiceInputSettingsTab />);
 
@@ -285,6 +283,8 @@ describe("VoiceInputSettingsTab", () => {
       expect(disclosure).toMatch(/project name/);
       expect(disclosure).toMatch(/branch/);
       expect(disclosure).toMatch(/terminal you're dictating into/);
+      expect(disclosure).toMatch(/go with the audio/);
+      expect(disclosure).toMatch(/filtered out of everything except your dictionary/);
     });
   });
 
