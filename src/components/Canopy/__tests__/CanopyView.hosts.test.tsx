@@ -815,8 +815,11 @@ describe("All hosts", () => {
     expect(cardOf("local", "shared-run")).not.toBeNull();
     expect(cardOf("studio", "shared-run")).not.toBeNull();
     // The project and the host, on the row.
-    expect(cardOf("local", "shared-run")!.textContent).toContain("local-app · ");
-    expect(cardOf("studio", "shared-run")!.textContent).toContain("server-app · studio-01");
+    expect(cardOf("local", "shared-run")!.textContent).toContain("local-app");
+    expect(cardOf("studio", "shared-run")!.textContent).toContain("server-app");
+    expect(
+      cardOf("studio", "shared-run")!.querySelector("[data-canopy-host]")?.textContent
+    ).toContain("studio-01");
     expect(screen.getByTestId("canopy-host-picker").getAttribute("data-host-id")).toBe("*");
     // A read scope: no "This project" switch.
     expect(screen.queryByRole("radiogroup", { name: "Agents to show" })).toBeNull();

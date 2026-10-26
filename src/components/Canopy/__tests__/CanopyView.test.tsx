@@ -1043,7 +1043,7 @@ describe("CanopyView", () => {
     const rows = cards(container);
     expect(rows.length).toBeGreaterThan(1);
     for (const row of rows) {
-      const meta = row.querySelector("[data-canopy-meta]");
+      const meta = row.querySelector("[data-canopy-where]");
       expect(meta?.textContent).toContain("🌳");
       expect(meta?.textContent).toContain("app");
     }

@@ -103,6 +103,14 @@ export function CanopyPlace({
       <span className="min-w-0 shrink truncate font-medium text-text-primary">
         {workspace.name}
       </span>
+      {workspace.host && (
+        <span
+          data-canopy-host=""
+          className="max-w-[30%] min-w-8 shrink-[0.5] truncate text-text-secondary"
+        >
+          {workspace.host}
+        </span>
+      )}
       {branch !== null && (
         <span className="flex min-w-0 shrink-[2] items-center gap-1 text-text-secondary">
           <GitBranch className="size-3 shrink-0" aria-hidden="true" />
