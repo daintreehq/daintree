@@ -321,7 +321,12 @@ describe("installHostControl (#13493)", () => {
       {
         tier: "core",
         workspaceId: "proj-1",
-        caller: expect.objectContaining({ senderId: "local", helpSessionId: "global" }),
+        caller: expect.objectContaining({
+          senderId: "local",
+          helpSessionId: "global",
+          local: true,
+          global: true,
+        }),
       },
     ]);
 

@@ -3,9 +3,9 @@ import { LOCAL_HOST_ID } from "../../../shared/types/remoteHosts.js";
 import type { LinkSession } from "../link/session.js";
 import type {
   McpCallAnswer,
-  McpCallPayload,
   RelayApproveAnswer,
   RelayApprovePayload,
+  RelayCallRequest,
   RelayNoticesPayload,
   ThrowawayCallAnswer,
   ThrowawayCallPayload,
@@ -44,7 +44,7 @@ export interface LocalMcpRelayDeps extends Pick<
 }
 
 export interface LocalMcpRelay {
-  relayCall(payload: McpCallPayload): Promise<McpCallAnswer>;
+  relayCall(request: RelayCallRequest): Promise<McpCallAnswer>;
   /** A throwaway tool on this machine (#14446), with no project, session or view. */
   throwawayCall(payload: ThrowawayCallPayload): Promise<ThrowawayCallAnswer>;
   /**
@@ -97,6 +97,7 @@ export function createLocalMcpRelay(deps: LocalMcpRelayDeps): LocalMcpRelay {
         tier: payload.tier,
         shellName: deps.machineName(),
         local: true,
+        ...(payload.global === true ? { global: true as const } : {}),
         deliverNotices: (fired) => {
           if (disposed || fired.length === 0) return;
           deps.receiveNotices({

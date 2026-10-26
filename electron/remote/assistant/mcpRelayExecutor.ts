@@ -38,6 +38,11 @@ export interface RelayMcpSessionSpec {
    * project is this machine's own views', never a link's.
    */
   local?: true;
+  /**
+   * The Shell's global Assistant (#14545), as the Shell's runtime said of its
+   * own lane; absent for any other assistant and from an older Shell.
+   */
+  global?: true;
   /** Carries the notices the session's calls arm back to the Shell (#13500). */
   deliverNotices(notices: readonly RelayedNotice[]): void;
   /**
@@ -326,6 +331,7 @@ export function createMcpRelayExecutor(deps: McpRelayExecutorDeps): McpRelayExec
       spec.helpSessionId,
       spec.projectId,
       spec.tier,
+      spec.global === true ? "global" : "",
     ].join("\0");
     let cached = sessions.get(key);
     if (cached?.session && !cached.session.isOpen()) {

@@ -146,6 +146,7 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
           helpSessionId: spec.helpSessionId,
           shellName: spec.shellName,
           local: true,
+          ...(spec.global === true ? { global: true as const } : {}),
           deliverNotices: spec.deliverNotices,
           requestApproval: spec.requestApproval,
         },

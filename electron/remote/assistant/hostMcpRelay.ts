@@ -12,6 +12,8 @@ import {
   AssistantLinkMethod,
   McpCallPayloadSchema,
   type AgentsAnswer,
+  type McpCallAnswer,
+  type McpCallPayload,
   RelayNoticeStatusPayloadSchema,
   ThrowawayCallPayloadSchema,
   ThrowawayReleasePayloadSchema,
@@ -145,10 +147,9 @@ export function installHostMcpRelay(
     linkSessions.set(sessionId, session);
     if (wired.has(session)) return;
     wired.add(session);
-    session.registerCallHandler(
-      AssistantLinkMethod.MCP_CALL,
-      McpCallPayloadSchema,
-      async (payload) => {
+    const relayCall =
+      (global: boolean) =>
+      async (payload: McpCallPayload): Promise<McpCallAnswer> => {
         if (disposed) throw noSender();
         const senderId = deps.senders()?.senderOf(session);
         if (!senderId) throw noSender();
@@ -161,6 +162,7 @@ export function installHostMcpRelay(
           projectId: payload.projectId,
           tier: payload.tier,
           shellName: client?.clientName || "Remote Shell",
+          ...(global ? { global: true as const } : {}),
           deliverNotices: (fired) => notices.enqueue(senderId, fired),
           // Asked over whichever session is live for this link when the call needs it.
           requestApproval: (ask) =>
@@ -171,7 +173,14 @@ export function installHostMcpRelay(
             }),
         };
         return runner.call(spec, payload);
-      }
+      };
+    session.registerCallHandler(AssistantLinkMethod.MCP_CALL, McpCallPayloadSchema, relayCall(false));
+    // The Shell's global Assistant (#14545): which method a call came by is
+    // the Shell runtime's word, since nothing the model passes picks it.
+    session.registerCallHandler(
+      AssistantLinkMethod.GLOBAL_MCP_CALL,
+      McpCallPayloadSchema,
+      relayCall(true)
     );
     session.registerCallHandler(
       AssistantLinkMethod.THROWAWAY_CALL,

@@ -1261,6 +1261,12 @@ export interface McpRelayCaller {
    */
   local?: true;
   /**
+   * The calling Shell's global Assistant (#14545), from the relay payload its
+   * runtime built from its own lane, never from a tool's arguments. Absent
+   * from an older Shell, so such a caller is an ordinary assistant here.
+   */
+  global?: true;
+  /**
    * Takes the notices this session's calls arm (#13500), for the Shell to
    * type into the run that asked. Absent, a relayed call can't ask for one.
    */

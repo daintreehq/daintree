@@ -121,6 +121,94 @@ describe("HostControlLinkClient.relayCall (#13493)", () => {
   });
 });
 
+describe("HostControlLinkClient.relayCall for the global Assistant (#14545)", () => {
+  const DONE = { status: "done", result: { isError: false, structured: null, text: "ok" } };
+
+  it("sends the global Assistant's call by its own method, with no field an older host refuses", async () => {
+    const { relay, calls } = client((method) =>
+      method === AssistantLinkMethod.GLOBAL_MCP_CALL ? DONE : null
+    );
+
+    await expect(relay.relayCall("studio", { ...PAYLOAD, global: true }, 105_000)).resolves.toEqual(
+      DONE
+    );
+
+    expect(calls.map((call) => call.method)).toEqual([
+      AssistantLinkMethod.AUTHENTICATE,
+      AssistantLinkMethod.GLOBAL_MCP_CALL,
+    ]);
+    expect(calls[1]).toEqual({ method: AssistantLinkMethod.GLOBAL_MCP_CALL, payload: PAYLOAD, timeoutMs: 105_000 });
+  });
+
+  it("sends a project assistant's call as MCP_CALL", async () => {
+    const { relay, calls } = client((method) => (method === AssistantLinkMethod.MCP_CALL ? DONE : null));
+
+    await relay.relayCall("studio", PAYLOAD, 105_000);
+
+    expect(calls.map((call) => call.method)).toEqual([
+      AssistantLinkMethod.AUTHENTICATE,
+      AssistantLinkMethod.MCP_CALL,
+    ]);
+  });
+
+  it("sends the same call as MCP_CALL to a host from before it, and asks that session no more", async () => {
+    const { relay, calls } = client((method) => {
+      if (method === AssistantLinkMethod.GLOBAL_MCP_CALL) {
+        throw new AppError({ code: "UNSUPPORTED", message: "Unknown method" });
+      }
+      return method === AssistantLinkMethod.MCP_CALL ? DONE : null;
+    });
+    const resent = { ...PAYLOAD, resend: true, global: true as const };
+
+    await expect(relay.relayCall("studio", resent, 105_000)).resolves.toEqual(DONE);
+    await relay.relayCall("studio", { ...PAYLOAD, callId: "call-2", global: true }, 105_000);
+
+    expect(calls.map((call) => call.method)).toEqual([
+      AssistantLinkMethod.AUTHENTICATE,
+      AssistantLinkMethod.GLOBAL_MCP_CALL,
+      AssistantLinkMethod.MCP_CALL,
+      AssistantLinkMethod.MCP_CALL,
+    ]);
+    // Nothing ran on the refusal, so the call goes again unchanged, resend flag and all.
+    expect(calls[2]!.payload).toEqual({ ...PAYLOAD, resend: true });
+    expect(calls[3]!.payload).toEqual({ ...PAYLOAD, callId: "call-2" });
+  });
+
+  it.each(["OUTCOME_UNKNOWN", "HOST_DISCONNECTED", "VALIDATION"])(
+    "never sends it again after %s, which may mean it ran",
+    async (code) => {
+      const { relay, calls } = client((method) => {
+        if (method === AssistantLinkMethod.GLOBAL_MCP_CALL) {
+          throw new AppError({ code: code as "VALIDATION", message: "no" });
+        }
+        return method === AssistantLinkMethod.MCP_CALL ? DONE : null;
+      });
+
+      await expect(
+        relay.relayCall("studio", { ...PAYLOAD, global: true }, 105_000)
+      ).rejects.toMatchObject({ code });
+      expect(calls.map((call) => call.method)).toEqual([
+        AssistantLinkMethod.AUTHENTICATE,
+        AssistantLinkMethod.GLOBAL_MCP_CALL,
+      ]);
+    }
+  );
+
+  it("never sends it again after an unreadable answer", async () => {
+    const { relay, calls } = client((method) =>
+      method === AssistantLinkMethod.GLOBAL_MCP_CALL ? null : DONE
+    );
+
+    await expect(
+      relay.relayCall("studio", { ...PAYLOAD, global: true }, 105_000)
+    ).rejects.toMatchObject({ code: "INTERNAL" });
+    expect(calls.map((call) => call.method)).toEqual([
+      AssistantLinkMethod.AUTHENTICATE,
+      AssistantLinkMethod.GLOBAL_MCP_CALL,
+    ]);
+  });
+});
+
 describe("HostControlLinkClient.throwawayCall (#14446)", () => {
   const THROWAWAY: ThrowawayCallPayload = {
     helpSessionId: "help-1",

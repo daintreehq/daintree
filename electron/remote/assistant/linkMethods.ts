@@ -32,6 +32,13 @@ export const AssistantLinkMethod = {
    */
   MCP_CALL: "assistant.mcp-call",
   /**
+   * Shell → Host: MCP_CALL for the Shell's global Assistant (#14545), so the
+   * session the host admits knows whose it is. Its own method, so a host from
+   * before this answers UNSUPPORTED before anything runs, and the Shell sends
+   * the call again as MCP_CALL: that host admits it as any assistant's.
+   */
+  GLOBAL_MCP_CALL: "assistant.global-mcp-call",
+  /**
    * Host → Shell: what this host saw of terminals one of the Shell's
    * assistants asked to hear about through MCP_CALL (#13500). Each names the
    * call that armed it, so the Shell types it only into the run that made
@@ -198,6 +205,14 @@ export const McpCallPayloadSchema = z
   })
   .strict();
 export type McpCallPayload = z.infer<typeof McpCallPayloadSchema>;
+
+/**
+ * A relayed call as the Shell's runtime hands it on (#14545): its payload,
+ * and whether the Shell's global Assistant made it, which the runtime knows
+ * from its own lane and never from the model's arguments. That travels as
+ * the method a call is sent by, GLOBAL_MCP_CALL, never as a payload field.
+ */
+export type RelayCallRequest = McpCallPayload & { global?: true };
 
 export const RELAY_REFUSALS = ["control-off", "no-project", "server-off"] as const;
 export type RelayRefusal = (typeof RELAY_REFUSALS)[number];

@@ -203,6 +203,35 @@ describe("installHostMcpRelay", () => {
     relay.dispose();
   });
 
+  it("marks a session opened by GLOBAL_MCP_CALL as the global Assistant's, and MCP_CALL's as not (#14545)", async () => {
+    const { links, opened, relay } = harness([["link-1", "sender-a"]]);
+    const base = {
+      helpSessionId: "help-g",
+      projectId: "project-1",
+      tier: "core",
+      callId: "call-g",
+      resend: false,
+      tool: "terminal.list",
+      args: {},
+      runMs: 90_000,
+    };
+    await links[0]!.ask(AssistantLinkMethod.GLOBAL_MCP_CALL, base);
+    await links[0]!.call({ helpSessionId: "help-p", callId: "call-p" });
+
+    expect(opened.map((session) => [session.spec.helpSessionId, session.spec.global])).toEqual([
+      ["help-g", true],
+      ["help-p", undefined],
+    ]);
+    relay.dispose();
+  });
+
+  it("refuses a payload that names itself global, so nothing but the method can (#14545)", async () => {
+    const { links, opened, relay } = harness([["link-1", "sender-a"]]);
+    await expect(links[0]!.call({ global: true } as Partial<McpCallPayload>)).rejects.toThrow();
+    expect(opened).toEqual([]);
+    relay.dispose();
+  });
+
   it("never runs a call twice when its answer was lost and it is sent again", async () => {
     const { links, opened, relay } = harness([["link-1", "sender-a"]]);
     const payload = { callId: "launch-1", tool: "agent.launch", args: { agentId: "claude" } };

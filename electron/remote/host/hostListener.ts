@@ -207,6 +207,7 @@ async function buildHostListener(
       senderId,
       helpSessionId,
       shellName,
+      global: isGlobal,
       deliverNotices,
       requestApproval,
     }) => {
@@ -225,6 +226,7 @@ async function buildHostListener(
           senderId,
           helpSessionId,
           shellName,
+          ...(isGlobal === true ? { global: isGlobal } : {}),
           deliverNotices,
           requestApproval,
         },
