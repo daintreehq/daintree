@@ -17,12 +17,13 @@ import {
 } from "@codemirror/state";
 import { invertedEffects, isolateHistory } from "@codemirror/commands";
 import { createTrustedHTML, setTrustedInnerHTML } from "@/lib/trustedTypesPolicy";
-import { formatShortcutForTooltip } from "@/lib/platform";
+import { isMac } from "@/lib/platform";
+import { labelWithShortcut } from "@/lib/kbdShortcut";
 import {
   VOICE_CORRECTION_MARK_DWELL_MS,
   VOICE_CORRECTION_MARK_FADE_MS,
 } from "@/lib/animationUtils";
-import { chipCardMeta, chipCardText, chipHoverTooltip, chipTooltip } from "./chipCard";
+import { chipCardText, chipHoverTooltip, chipTooltip } from "./chipCard";
 
 /** A correction swapped into a dictated passage of the draft. */
 export interface CorrectionReview {
@@ -358,8 +359,7 @@ const reviewTooltip = chipHoverTooltip((view, pos, side) => {
   const end = review.from + review.correctedText.length;
   if (pos === end && side > 0) {
     return chipTooltip({ from: end, to: end }, ".cm-voice-restore", () => [
-      chipCardText(RESTORE_LABEL),
-      chipCardMeta(formatShortcutForTooltip("Cmd+Z")),
+      chipCardText(labelWithShortcut(RESTORE_LABEL, "Cmd+Z", isMac())),
     ]);
   }
   if (phase === "settled") return null;
