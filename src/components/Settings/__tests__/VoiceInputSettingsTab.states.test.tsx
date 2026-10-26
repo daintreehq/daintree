@@ -460,7 +460,7 @@ describe("VoiceInputSettingsTab dictionary", () => {
     // A term main already held, added from elsewhere, shows up too.
     expect(screen.getByRole("button", { name: "Remove Zustand" })).toBeTruthy();
     expect(input.value).toBe("");
-    expect(container.textContent).toContain("2 of");
+    expect(container.textContent).toContain("2 terms");
     expect(api.setSettings).not.toHaveBeenCalled();
   });
 

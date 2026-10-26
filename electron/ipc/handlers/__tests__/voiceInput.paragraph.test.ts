@@ -671,7 +671,7 @@ describe("voiceInput — context keyterms wiring", () => {
     });
     const { assembleKeyterms } = await import("../../../services/voiceContextKeyterms.js");
 
-    await startFn(fakeEvent);
+    await startFn(fakeEvent, nextSessionId());
     await (getHandler("voice-input:correct") as (e: unknown, r: unknown) => Promise<unknown>)(
       fakeEvent,
       { rawText: "open dane tree" }
