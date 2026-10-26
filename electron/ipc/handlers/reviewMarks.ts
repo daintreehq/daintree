@@ -34,7 +34,10 @@ function requireProjectId(ctx: IpcContext): string {
 
 function requireWorktreeId(worktreeId: unknown): string {
   if (!isReviewMarkWorktreeId(worktreeId)) {
-    throw new AppError({ code: "VALIDATION", message: "review marks: worktreeId must be a worktree id" });
+    throw new AppError({
+      code: "VALIDATION",
+      message: "review marks: worktreeId must be a worktree id",
+    });
   }
   return worktreeId;
 }
@@ -111,7 +114,12 @@ class ReviewMarkPruner {
       const store = getReviewMarkStore();
       // Read before asking the host, so a mark made meanwhile isn't the one removed.
       const expected = await store.entryRevisions(projectId, [...named]);
-      const gone = await confirmGoneWorktrees(projectId, [...expected.keys()], "reviewMarks", signal);
+      const gone = await confirmGoneWorktrees(
+        projectId,
+        [...expected.keys()],
+        "reviewMarks",
+        signal
+      );
       if (signal.aborted || gone.length === 0) continue;
       const result = await store.remove(
         projectId,

@@ -30,7 +30,13 @@ export async function readWorktreeIdentity(
       okExitCodes,
     });
   const [located, head] = await Promise.all([
-    run(["rev-parse", "--path-format=absolute", "--show-toplevel", "--git-dir", "--git-common-dir"]),
+    run([
+      "rev-parse",
+      "--path-format=absolute",
+      "--show-toplevel",
+      "--git-dir",
+      "--git-common-dir",
+    ]),
     // Exit 1 with no output is a detached HEAD; an unborn branch still names its ref.
     run(["symbolic-ref", "-q", "HEAD"], [1]),
   ]);

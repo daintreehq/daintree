@@ -320,7 +320,11 @@ describe("reviewMarks IPC namespace", () => {
       expect(workspaceClientMock.getAllStatesForProjectResultAsync).toHaveBeenCalledTimes(2);
       const snapshot = (await hydrate(ctx(PROJECT_A)))!;
       expect(Object.keys(snapshot.marks)).toEqual([WT_2]);
-      expect(broadcastMock).toHaveBeenCalledWith(PROJECT_A, CHANNELS.REVIEW_MARKS_CHANGED, snapshot);
+      expect(broadcastMock).toHaveBeenCalledWith(
+        PROJECT_A,
+        CHANNELS.REVIEW_MARKS_CHANGED,
+        snapshot
+      );
     });
 
     it("keeps a mark the second read finds, or when the host can't answer", async () => {
@@ -369,7 +373,11 @@ describe("reviewMarks IPC namespace", () => {
       await mark(ctx(PROJECT_A), WT_1, point(WT_1), 0);
       liveWorktrees(WT_2);
 
-      client.emit("worktree-removed", { worktreeId: WT_1, projectPath: ROOT_A, projectId: PROJECT_A });
+      client.emit("worktree-removed", {
+        worktreeId: WT_1,
+        projectPath: ROOT_A,
+        projectId: PROJECT_A,
+      });
       await _settleReviewMarkPrunesForTesting();
       expect((await hydrate(ctx(PROJECT_A)))?.marks).toEqual({});
     });
@@ -381,7 +389,11 @@ describe("reviewMarks IPC namespace", () => {
       const saving = mark(ctx(PROJECT_A), WT_1, point(WT_1), 0);
       await vi.waitFor(() => expect(identityMock.readWorktreeIdentity).toHaveBeenCalled());
       liveWorktrees(WT_2);
-      client.emit("worktree-removed", { worktreeId: WT_1, projectPath: ROOT_A, projectId: PROJECT_A });
+      client.emit("worktree-removed", {
+        worktreeId: WT_1,
+        projectPath: ROOT_A,
+        projectId: PROJECT_A,
+      });
       await _settleReviewMarkPrunesForTesting();
       identity.resolve(identityOf(WT_1));
 
@@ -396,7 +408,11 @@ describe("reviewMarks IPC namespace", () => {
       const calls = workspaceClientMock.getAllStatesForProjectResultAsync;
       calls.mockClear();
 
-      client.emit("worktree-removed", { worktreeId: WT_1, projectPath: ROOT_A, projectId: PROJECT_A });
+      client.emit("worktree-removed", {
+        worktreeId: WT_1,
+        projectPath: ROOT_A,
+        projectId: PROJECT_A,
+      });
       await vi.waitFor(() => expect(calls).toHaveBeenCalledTimes(1));
       dispose();
       dispose = () => {};

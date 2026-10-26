@@ -12,10 +12,7 @@ import {
   ReviewPointSchema,
   type ReviewPoint,
 } from "../../shared/types/reviewPoint.js";
-import type {
-  ReviewMarkSummary,
-  ReviewMarksSnapshot,
-} from "../../shared/types/ipc/reviewMarks.js";
+import type { ReviewMarkSummary, ReviewMarksSnapshot } from "../../shared/types/ipc/reviewMarks.js";
 
 /**
  * Each project's review marks (#14584): per worktree, the review point the user
@@ -334,7 +331,10 @@ export class ReviewMarkStore {
       const pointsDir = this.pointsDir(projectId);
       await fs.mkdir(pointsDir, { recursive: true });
       // Unreferenced until the index names it; the next write tidies it if this one fails.
-      await resilientAtomicWriteFile(path.join(pointsDir, pointFileName(worktreeId, revision)), body);
+      await resilientAtomicWriteFile(
+        path.join(pointsDir, pointFileName(worktreeId, revision)),
+        body
+      );
       index.revision = revision;
       index.worktrees.set(worktreeId, { revision, mark: markOf(point, this.now()) });
       await this.commit(projectId, index, guard);

@@ -99,7 +99,10 @@ describe("ReviewMarkStore", () => {
     });
     expect((await store.get(PROJECT, WT_1))?.point).toEqual(point());
 
-    const newer = point({ capturedAt: 2_000, head: { kind: "branch", branch: "feature-1", commit: C2 } });
+    const newer = point({
+      capturedAt: 2_000,
+      head: { kind: "branch", branch: "feature-1", commit: C2 },
+    });
     const second = await store.save(PROJECT, WT_1, newer, 1, allow);
     expect(second.status).toBe("saved");
     expect(Object.keys(second.snapshot.marks)).toEqual([WT_1]);
@@ -188,7 +191,9 @@ describe("ReviewMarkStore", () => {
     // With no index before, a refused first write leaves none.
     asked = 0;
     await expect(store.clear(OTHER_PROJECT, WT_1, 0, handedOver)).rejects.toThrow();
-    await expect(fs.stat(path.join(stateDir(OTHER_PROJECT), "review-marks.json"))).rejects.toThrow();
+    await expect(
+      fs.stat(path.join(stateDir(OTHER_PROJECT), "review-marks.json"))
+    ).rejects.toThrow();
   });
 
   it("refuses to keep a point too large for the link", async () => {
@@ -217,10 +222,7 @@ describe("ReviewMarkStore", () => {
   it("removes marks of gone worktrees, and a save in flight for one can't restore it", async () => {
     await store.save(PROJECT, WT_1, point(), 0, allow);
     const release = store.beginSave(PROJECT, WT_2);
-    const removed = await store.remove(
-      PROJECT,
-      await store.entryRevisions(PROJECT, [WT_2])
-    );
+    const removed = await store.remove(PROJECT, await store.entryRevisions(PROJECT, [WT_2]));
     expect(removed.changed).toBe(true);
     expect(removed.snapshot.marks).toEqual({});
     const late = await store.save(PROJECT, WT_2, point({ worktreePath: WT_2 }), 1, allow);
@@ -263,9 +265,9 @@ describe("ReviewMarkStore", () => {
     expect(Object.keys(index.worktrees as object)).toHaveLength(256);
     expect(index.floor).toBe(2);
     const first = path.resolve("/repos/alpha/wt-0");
-    expect((await store.save(PROJECT, first, point({ worktreePath: first }), 1, allow)).status).toBe(
-      "stale"
-    );
+    expect(
+      (await store.save(PROJECT, first, point({ worktreePath: first }), 1, allow)).status
+    ).toBe("stale");
     expect(
       (await store.save(PROJECT, first, point({ worktreePath: first }), revision, allow)).status
     ).toBe("saved");
@@ -345,7 +347,10 @@ describe("ReviewMarkStore", () => {
       await fs.writeFile(file, JSON.stringify({ ...stored, worktreeId: WT_2 }));
       expect(await store.get(PROJECT, WT_1)).toBeNull();
 
-      await fs.writeFile(file, JSON.stringify({ ...stored, point: { ...stored.point, entries: "x" } }));
+      await fs.writeFile(
+        file,
+        JSON.stringify({ ...stored, point: { ...stored.point, entries: "x" } })
+      );
       expect(await store.get(PROJECT, WT_1)).toBeNull();
 
       await fs.writeFile(file, JSON.stringify(stored));
