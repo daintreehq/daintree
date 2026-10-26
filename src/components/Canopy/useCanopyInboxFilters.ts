@@ -244,6 +244,17 @@ export function useCanopyInboxFilters({
     () => [...listed, ...(archivedShown ? shownInbox.archived : [])],
     [listed, shownInbox, archivedShown]
   );
+  // With both roles shown, an assistant asking for the user sits in the Needs you
+  // band, after the workers there; the Assistants section keeps the rest. Under
+  // the Assistants filter alone there is no band, and every assistant stays in it.
+  const bandAssistants = useMemo(
+    () => (workersShown ? shownAssistants.filter((item) => item.ask !== null) : []),
+    [workersShown, shownAssistants]
+  );
+  const listedAssistants = useMemo(
+    () => (workersShown ? shownAssistants.filter((item) => item.ask === null) : shownAssistants),
+    [workersShown, shownAssistants]
+  );
   // Workers and assistants as one inbox: what needs the user, and the order
   // the keyboard walks.
   const projection = useMemo(
@@ -254,12 +265,27 @@ export function useCanopyInboxFilters({
         assistants: assistantItems,
         listedWorkers: listed,
         shownAssistants,
+        askingAssistantsInBand: workersShown,
         shownArchived: archivedShown ? shownInbox.archived : [],
         workerPlace: (item) => placeOf(item, hostId, ownHostId),
       }),
-    [ownHostId, hostId, inbox, assistantItems, listed, shownAssistants, archivedShown, shownInbox]
+    [
+      ownHostId,
+      hostId,
+      inbox,
+      assistantItems,
+      listed,
+      shownAssistants,
+      workersShown,
+      archivedShown,
+      shownInbox,
+    ]
   );
-  // Moving on after an answer stays among the workers until assistants rank with them (#14519).
+  // Moving on after an answer lands on a worker: the cursor handlers act on a worker's run.
+  const firstAssistant = useMemo(() => {
+    const first = projection.navigation[0];
+    return first?.role === "assistant" ? first.item : null;
+  }, [projection]);
   const workerNavigation = useMemo(() => projection.navigation.filter(isWorkerEntry), [projection]);
   // An urgent prompt counts as seen once its row has been in view for a second
   // in the focused, open panel, or its pane is opened: a row below the fold
@@ -369,6 +395,8 @@ export function useCanopyInboxFilters({
     workPartial,
     workLabelOf,
     shownAssistants,
+    bandAssistants,
+    listedAssistants,
     showWork,
     inWork,
     shownInbox,
@@ -382,6 +410,7 @@ export function useCanopyInboxFilters({
     visible,
     projection,
     workerNavigation,
+    firstAssistant,
     listRef,
     scrollerRef,
     acknowledgeOpened,

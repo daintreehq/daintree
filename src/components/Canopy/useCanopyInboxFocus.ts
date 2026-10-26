@@ -31,6 +31,7 @@ export function useCanopyInboxFocus({
   workerNavigation,
   workersShown,
   shownAssistants,
+  firstAssistant,
   inWork,
   searching,
   query,
@@ -53,6 +54,8 @@ export function useCanopyInboxFocus({
   workerNavigation: CanopyWorkerEntry[];
   workersShown: boolean;
   shownAssistants: CanopyAssistantItem[];
+  /** The assistant at the very top of the keyboard's order, when no worker is above it. */
+  firstAssistant: CanopyAssistantItem | null;
   inWork: (item: CanopyItem) => boolean;
   searching: boolean;
   query: string;
@@ -77,8 +80,8 @@ export function useCanopyInboxFocus({
   // shows the list's first run. A chosen run stays open when it moves into the
   // folded Archived group, so the pane never vanishes under the user's typing.
   // While searching, only a match is ever open.
-  // An assistant chosen in the list, or the first one listed while no worker is:
-  // the pane shows it in place of a worker's.
+  // An assistant chosen in the list, or the top one when it leads the list (an
+  // ask in the band, or no worker listed): the pane shows it in place of a worker's.
   // A worker chosen and only folded away (Archived shut) keeps the pane.
   const workerChosen =
     workersShown &&
@@ -86,7 +89,7 @@ export function useCanopyInboxFocus({
     items.some((item) => item.runId === focusedId && inWork(item));
   const selectedAssistant: CanopyAssistantItem | null =
     shownAssistants.find((item) => item.id === assistantId) ??
-    (visible.length === 0 && !workerChosen ? (shownAssistants[0] ?? null) : null);
+    (!workerChosen && (visible.length === 0 || focusedIndex === -1) ? firstAssistant : null);
   const focusedItem =
     selectedAssistant !== null || !workersShown
       ? null

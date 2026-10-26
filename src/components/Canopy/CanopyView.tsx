@@ -660,6 +660,8 @@ function CanopyInbox({
     workPartial,
     workLabelOf,
     shownAssistants,
+    bandAssistants,
+    listedAssistants,
     showWork,
     inWork,
     shownInbox,
@@ -673,6 +675,7 @@ function CanopyInbox({
     visible,
     projection,
     workerNavigation,
+    firstAssistant,
     listRef,
     scrollerRef,
     acknowledgeOpened,
@@ -741,6 +744,7 @@ function CanopyInbox({
     workerNavigation,
     workersShown,
     shownAssistants,
+    firstAssistant,
     inWork,
     searching,
     query,
@@ -828,8 +832,9 @@ function CanopyInbox({
       ? focusedItem.runId === item.runId
       : index === 0;
   // Over the whole inbox, whatever the filter shows: a read approval still blocks its agent.
-  // Workers only, until assistants' asks rank with theirs (#14519).
-  const needsYou = projection.needsYou.filter(isWorkerEntry).length;
+  const needsYouWorkers = projection.needsYou.filter(isWorkerEntry).length;
+  const needsYouAssistants = projection.needsYou.length - needsYouWorkers;
+  const needsYou = projection.needsYou.length;
 
   const unreadCount = inbox.inbox.filter((item) => item.unread).length;
   // The section bar speaks for what the search shows; the header keeps the whole inbox.
@@ -876,9 +881,8 @@ function CanopyInbox({
     useCanopyInboxKeyboard({
       visible,
       listed,
-      shownInbox,
       shownAssistants,
-      archivedShown,
+      navigation: projection.navigation,
       focusedIndex,
       activeIndex,
       focusedItem,
@@ -889,6 +893,7 @@ function CanopyInbox({
       focusCardNow,
       openPaneNow,
       focusAssistantNow,
+      selectAssistant,
       openAssistant,
       onOpen: handlers.onOpen,
       askRename,
@@ -928,13 +933,19 @@ function CanopyInbox({
             inbox.inbox.some((item) => item.card === null)
             ? "Not every agent could be read yet"
             : "Nothing needs you";
-  const needsYouLead = `${pluralize(needsYou, "agent")} ${needsYou === 1 ? "needs" : "need"} you`;
+  const ownHostLabel = (hostRows ?? []).find((row) => row.hostId === ownHostId)?.name ?? "This Mac";
+  const needsYouLead = `${[
+    needsYouWorkers > 0 ? pluralize(needsYouWorkers, "agent") : null,
+    needsYouAssistants > 0 ? pluralize(needsYouAssistants, "assistant") : null,
+  ]
+    .filter(Boolean)
+    .join(" and ")} ${needsYou === 1 ? "needs" : "need"} you`;
   const summaryLine =
     fleet === null
       ? "Reading agents…"
-      : fleet.degraded && items.length === 0
+      : fleet.degraded && items.length === 0 && needsYou === 0
         ? "Can't tell who needs you right now"
-        : items.length === 0
+        : items.length === 0 && needsYou === 0
           ? scope === "project" && fleet.runs.length > 0
             ? "No agents in this project"
             : "No agents are running"
@@ -1077,17 +1088,29 @@ function CanopyInbox({
   // keeps one of the band's runs out of the list.
   const showNeedsYou = () => {
     const first = inbox.inbox.find(itemNeedsAttention);
-    if (!first) return;
+    // Workers lead the band; with none asking, the first assistant that is.
+    const askingAssistant = assistantItems.find((item) => item.ask !== null);
+    if (!first && !askingAssistant) return;
     const listedIds = new Set(listed.map((item) => item.runId));
-    if (inbox.inbox.some((item) => itemNeedsAttention(item) && !listedIds.has(item.runId))) {
+    const hidden = first
+      ? inbox.inbox.some((item) => itemNeedsAttention(item) && !listedIds.has(item.runId))
+      : !shownAssistants.some((item) => item.id === askingAssistant!.id);
+    if (hidden) {
       if (unreadOnly) setUnreadOnly(false);
       if (query !== "") setQuery("");
       if (workOf !== null) showWorkOf(null);
     }
-    if (!workersShown) setRoleFilter("all");
-    selectNow(first.runId);
-    // The row may only mount once the filters are lifted: scroll to it then too.
-    requestAnimationFrame(() => selectNow(first.runId));
+    if (first) {
+      if (!workersShown) setRoleFilter("all");
+      selectNow(first.runId);
+      // The row may only mount once the filters are lifted: scroll to it then too.
+      requestAnimationFrame(() => selectNow(first.runId));
+    } else {
+      if (!assistantsShown) setRoleFilter("all");
+      const id = askingAssistant!.id;
+      selectAssistant(id);
+      requestAnimationFrame(() => selectAssistant(id));
+    }
     searchRef.current?.focus({ preventScroll: true });
   };
   // What the empty band says: the header's own caution about hosts and readings,
@@ -1371,8 +1394,8 @@ function CanopyInbox({
                   aria-expanded={visible.length > 0}
                   aria-controls={
                     [
-                      listed.length > 0 ? "canopy-inbox-list" : null,
-                      shownAssistants.length > 0 ? "canopy-assistants" : null,
+                      listed.length > 0 || bandAssistants.length > 0 ? "canopy-inbox-list" : null,
+                      listedAssistants.length > 0 ? "canopy-assistants" : null,
                       archivedShown && shownInbox.archived.length > 0 ? "canopy-archived" : null,
                     ]
                       .filter((id) => id !== null)
@@ -1485,7 +1508,7 @@ function CanopyInbox({
                         </span>
                       }
                     />
-                    {listed.length > 0 ? (
+                    {listed.length > 0 || bandAssistants.length > 0 ? (
                       <div
                         ref={listRef}
                         id="canopy-inbox-list"
@@ -1495,12 +1518,19 @@ function CanopyInbox({
                         onPointerLeave={leaveList}
                       >
                         {[
-                          { id: "canopy-needs-you", label: "Needs you", from: 0, to: bandSize },
+                          {
+                            id: "canopy-needs-you",
+                            label: "Needs you",
+                            from: 0,
+                            to: bandSize,
+                            assistants: bandAssistants,
+                          },
                           {
                             id: "canopy-everything-else",
                             label: "Everything else",
                             from: bandSize,
                             to: listed.length,
+                            assistants: [],
                           },
                         ].map((group) => (
                           <div
@@ -1518,11 +1548,13 @@ function CanopyInbox({
                             >
                               {group.label}
                             </div>
-                            {group.from === group.to && group.id === "canopy-needs-you" && (
-                              <p className="px-3 pb-2 text-xs text-text-secondary">
-                                {bandEmptyWords}
-                              </p>
-                            )}
+                            {group.from === group.to &&
+                              group.assistants.length === 0 &&
+                              group.id === "canopy-needs-you" && (
+                                <p className="px-3 pb-2 text-xs text-text-secondary">
+                                  {bandEmptyWords}
+                                </p>
+                              )}
                             {listed.slice(group.from, group.to).map((item, offset) => {
                               const index = group.from + offset;
                               const replied = repliedAt(item);
@@ -1551,6 +1583,21 @@ function CanopyInbox({
                                 </CanopyRowMenu>
                               );
                             })}
+                            {group.assistants.map((item, index) => (
+                              <CanopyAssistantRow
+                                key={item.id}
+                                item={item}
+                                isSelected={selectedAssistant?.id === item.id}
+                                tabbable={
+                                  selectedAssistant !== null
+                                    ? selectedAssistant.id === item.id
+                                    : index === 0
+                                }
+                                onSelect={() => selectAssistant(item.id)}
+                                onOpen={() => openAssistant(item)}
+                                onKeyDown={(event) => onAssistantKeyDown(event, item)}
+                              />
+                            ))}
                           </div>
                         ))}
                       </div>
@@ -1574,43 +1621,50 @@ function CanopyInbox({
                     )}
                   </>
                 )}
-                {assistantsShown && (
-                  <>
-                    <SectionBar
-                      id="canopy-assistants-label"
-                      label="Assistants"
-                      count={shownAssistants.length}
-                      countNoun="assistant"
-                    />
-                    {shownAssistants.length > 0 ? (
-                      <div
-                        id="canopy-assistants"
-                        role="listbox"
-                        aria-labelledby="canopy-assistants-label"
-                      >
-                        {shownAssistants.map((item, index) => (
-                          <CanopyAssistantRow
-                            key={item.id}
-                            item={item}
-                            isSelected={selectedAssistant?.id === item.id}
-                            tabbable={
-                              selectedAssistant !== null
-                                ? selectedAssistant.id === item.id
-                                : index === 0
-                            }
-                            onSelect={() => selectAssistant(item.id)}
-                            onOpen={() => openAssistant(item)}
-                            onKeyDown={(event) => onAssistantKeyDown(event, index)}
-                          />
-                        ))}
-                      </div>
-                    ) : (
-                      assistantsEmpty !== null && (
-                        <p className="px-3 pb-3 text-xs text-text-secondary">{assistantsEmpty}</p>
-                      )
-                    )}
-                  </>
-                )}
+                {assistantsShown &&
+                  (listedAssistants.length > 0 || bandAssistants.length === 0 || everyHost) && (
+                    <>
+                      <SectionBar
+                        id="canopy-assistants-label"
+                        label="Assistants"
+                        count={listedAssistants.length}
+                        countNoun="assistant"
+                      />
+                      {everyHost && (
+                        <p className="px-3 pb-2 text-xs text-text-secondary">
+                          Only {ownHostLabel}'s assistants are listed.
+                        </p>
+                      )}
+                      {listedAssistants.length > 0 ? (
+                        <div
+                          id="canopy-assistants"
+                          role="listbox"
+                          aria-labelledby="canopy-assistants-label"
+                        >
+                          {listedAssistants.map((item, index) => (
+                            <CanopyAssistantRow
+                              key={item.id}
+                              item={item}
+                              isSelected={selectedAssistant?.id === item.id}
+                              tabbable={
+                                selectedAssistant !== null
+                                  ? selectedAssistant.id === item.id
+                                  : index === 0
+                              }
+                              onSelect={() => selectAssistant(item.id)}
+                              onOpen={() => openAssistant(item)}
+                              onKeyDown={(event) => onAssistantKeyDown(event, item)}
+                            />
+                          ))}
+                        </div>
+                      ) : (
+                        bandAssistants.length === 0 &&
+                        assistantsEmpty !== null && (
+                          <p className="px-3 pb-3 text-xs text-text-secondary">{assistantsEmpty}</p>
+                        )
+                      )}
+                    </>
+                  )}
                 {shownInbox.archived.length > 0 && (
                   <>
                     <SectionBar
