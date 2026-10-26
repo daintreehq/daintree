@@ -23,7 +23,12 @@ import {
 } from "../settingsTabIds";
 import { getSettingsTabEntry, ownerForTab } from "../settingsTabRegistry";
 import { _resetHostPlatformForTests, setHostPlatformInfo } from "@/hooks/useHostPlatform";
-import { _resetSettingOwnersShownForTests, ownerOfSetting } from "@/hooks/useSettingsOwner";
+import {
+  _resetSettingOwnersShownForTests,
+  ownerOfSetting,
+  sharedSettingOwner,
+} from "@/hooks/useSettingsOwner";
+import { SETTINGS_SEARCH_INDEX } from "../settingsSearchIndex";
 
 const ALL_TABS: SettingsTab[] = [...GLOBAL_SETTINGS_TAB_IDS, ...PROJECT_SETTINGS_TAB_IDS];
 
@@ -142,5 +147,17 @@ describe("settings header owner chip with another machine picked (#14706)", () =
   it("says a device page is this machine's own, even from a local window", () => {
     render(<SettingsOwnerHeaderChip tab="keyboard" picked={null} />);
     expect(screen.getByText("This Mac")).toBeTruthy();
+  });
+
+  it("leaves open only pages whose every result names the machine being edited", () => {
+    // A pick keeps this machine's pages and search results; a host mark among them
+    // would name the window's host while another machine is the one being edited.
+    const leftOpen = SETTINGS_SEARCH_INDEX.filter(
+      (entry) => !entry.plugin && ownerForTab(entry.tab) === "device"
+    );
+    expect(leftOpen.length).toBeGreaterThan(0);
+    for (const entry of leftOpen) {
+      if (entry.settings) expect(sharedSettingOwner(entry.settings), entry.id).toBe("device");
+    }
   });
 });
