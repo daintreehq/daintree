@@ -111,7 +111,13 @@ function deferred<T = void>() {
   return { promise, resolve };
 }
 
-function setupGlobals(options: { correctionEnabled?: boolean; reportOnStop?: boolean } = {}) {
+function setupGlobals(
+  options: {
+    correctionEnabled?: boolean;
+    reportOnStop?: boolean;
+    recordingMode?: "toggle" | "push-to-talk";
+  } = {}
+) {
   const callbacks = new Map<string, Listener>();
   const windowListeners = new Map<string, Listener[]>();
   const workletNodes: WorkletNode[] = [];
@@ -136,6 +142,7 @@ function setupGlobals(options: { correctionEnabled?: boolean; reportOnStop?: boo
       openaiApiKey: "sk-key",
       transcriptionProvider: "openai",
       correctionEnabled: options.correctionEnabled ?? false,
+      recordingMode: options.recordingMode ?? "toggle",
       deviceId: "",
     })),
     setSettings: vi.fn(),
@@ -241,6 +248,9 @@ function setupGlobals(options: { correctionEnabled?: boolean; reportOnStop?: boo
       for (const cb of windowListeners.get("keydown") ?? []) {
         cb({ code: "KeyD", repeat: false, timeStamp });
       }
+    },
+    releaseShortcut: () => {
+      for (const cb of windowListeners.get("keyup") ?? []) cb({ code: "KeyD" });
     },
     paintFrames: () => {
       for (const frame of frames.splice(0)) frame();
@@ -521,6 +531,60 @@ describe("VoiceRecordingService — session summary (#14617)", () => {
       charsCommitted: "second".length,
     });
     expect(typeof summaries()[1]!.micLiveMs).toBe("number");
+  });
+
+  describe("a stop held until the start's queued audio is sent", () => {
+    async function retargetWithHeldDrain() {
+      const harness = setupGlobals({ recordingMode: "push-to-talk" });
+      const loaded = await load();
+      const first = await startLive(harness, loaded.service);
+      const drain = deferred();
+      harness.voiceInput.stop.mockImplementationOnce(async (sessionId: string) => {
+        await drain.promise;
+        harness.emit("ended", { sessionId, reason: "stopped", report: REPORT });
+        return { rawText: null };
+      });
+      const pressAt = performance.now();
+      harness.pressShortcut(pressAt);
+      const retargeting = loaded.service.toggle(OTHER_TARGET);
+      await vi.waitFor(() => expect(harness.voiceInput.stop).toHaveBeenCalledWith(first));
+      return { harness, ...loaded, first, drain, pressAt, retargeting };
+    }
+
+    const pause = () => new Promise((resolve) => setTimeout(resolve, 25));
+
+    it("keeps the release's reason and its time", async () => {
+      const { harness, summaries, drain, pressAt, retargeting } = await retargetWithHeldDrain();
+      harness.releaseShortcut();
+      const releasedMs = performance.now() - pressAt;
+      await pause();
+      drain.resolve();
+      await retargeting;
+      harness.paintFrames();
+      await vi.waitFor(() => expect(summaries()).toHaveLength(2));
+
+      const second = summaries()[1]!;
+      expect(second).toMatchObject({ origin: "key", stopReason: "key_release" });
+      expect(second.stopRequestedMs as number).toBeLessThanOrEqual(Math.ceil(releasedMs));
+    });
+
+    it("forgets the held stop when a press resumes the start", async () => {
+      const { harness, service, summaries, drain, pressAt, retargeting } =
+        await retargetWithHeldDrain();
+      harness.releaseShortcut();
+      await service.toggle(OTHER_TARGET);
+      await pause();
+      drain.resolve();
+      await retargeting;
+      harness.paintFrames();
+      const resumedMs = performance.now() - pressAt;
+      expect(summaries()).toHaveLength(1);
+
+      await service.stop("Dictation stopped.", { reason: "escape" });
+      const second = summaries()[1]!;
+      expect(second).toMatchObject({ stopReason: "escape" });
+      expect(second.stopRequestedMs as number).toBeGreaterThanOrEqual(Math.floor(resumedMs));
+    });
   });
 
   it("waits for main's report, and logs without it once it is overdue", async () => {
