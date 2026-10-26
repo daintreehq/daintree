@@ -1704,6 +1704,17 @@ describe("CanopyView", () => {
     expect(body.textContent).toContain("2 agents need you");
   });
 
+  it("says a filter hides what the header counts when the band is empty under Unread", async () => {
+    installElectron({ ...canopySnapshot, reads: [unreadMark("working", 1)] });
+    const { container } = render(<CanopyView />);
+    await frames();
+    const body = container.ownerDocument.body;
+    fireEvent.click(screenButton(body, "Unread1"));
+    const band = body.querySelector("[aria-labelledby=canopy-needs-you-label]")!;
+    expect(band.querySelectorAll("[data-canopy-card]")).toHaveLength(0);
+    expect(band.textContent).toContain("2 agents need you, but a filter hides them");
+  });
+
   it("takes the header count to the band and lifts the Unread filter that hides a member", async () => {
     installElectron({ ...canopySnapshot, reads: [unreadMark("working", 1)] });
     const { container } = render(<CanopyView />);

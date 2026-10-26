@@ -1086,8 +1086,21 @@ function CanopyInbox({
     }
     if (!workersShown) setRoleFilter("all");
     selectNow(first.runId);
+    // The row may only mount once the filters are lifted: scroll to it then too.
+    requestAnimationFrame(() => selectNow(first.runId));
     searchRef.current?.focus({ preventScroll: true });
   };
+  // What the empty band says: the header's own caution about hosts and readings,
+  // or that a filter is hiding what the header counts.
+  const bandEmptyWords =
+    needsYou > 0
+      ? `${needsYouLead}, but a filter hides ${needsYou === 1 ? "it" : "them"}`
+      : (hostSummary ??
+        (fleet !== null && hostTroubles.length > 0
+          ? "Not every host could be read"
+          : fleet !== null && retryingSomewhere
+            ? "Checking who needs you…"
+            : nothingWaiting));
   const headerText =
     hostSummary ??
     (needsYou === 0 && fleet !== null && hostTroubles.length > 0
@@ -1507,7 +1520,7 @@ function CanopyInbox({
                             </div>
                             {group.from === group.to && group.id === "canopy-needs-you" && (
                               <p className="px-3 pb-2 text-xs text-text-secondary">
-                                {nothingWaiting}
+                                {bandEmptyWords}
                               </p>
                             )}
                             {listed.slice(group.from, group.to).map((item, offset) => {
