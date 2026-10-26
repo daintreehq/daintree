@@ -287,6 +287,12 @@ class VoiceRecordingService {
     }
 
     this.unsubscribers.push(
+      useVoiceRecordingStore.subscribe((state, prev) => {
+        if (state.status === "error" && prev.status !== "error") this.playCue("dictation-error");
+      })
+    );
+
+    this.unsubscribers.push(
       voiceInput.onTranscriptionDelta(({ text: delta, itemId, replace }) => {
         logDebug(`${LOG_PREFIX} Received transcription delta`, { itemId, length: delta.length });
         const voiceState = useVoiceRecordingStore.getState();
@@ -1650,6 +1656,8 @@ class VoiceRecordingService {
       preservePendingStart?: boolean;
       /** Skip the post-stop whole-passage AI cleanup pass (e.g. when stopping to start a new session). */
       skipCorrection?: boolean;
+      /** The caller already played its own cue for this stop. */
+      silentCue?: boolean;
     } = {}
   ): Promise<void> {
     if (this.stopPromise) {
@@ -1691,6 +1699,7 @@ class VoiceRecordingService {
         ? (storeState.panelBuffers[stoppedTarget.panelId]?.dictationSessionId ?? null)
         : null;
       const correctionEnabled = storeState.correctionEnabled;
+      const wasMicLive = storeState.micSignal === "live";
 
       logDebug(`${LOG_PREFIX} stop() called`, {
         announcement,
@@ -1732,6 +1741,20 @@ class VoiceRecordingService {
       // Stop audio capture — no new audio after this point.
       await this.cleanupAudioCapture();
       this.generation++;
+
+      // After capture closes, so the cue can't be recorded. A stop that makes
+      // way for another session stays silent, and a failed one is cued by the
+      // error transition.
+      if (
+        hasSession &&
+        wasMicLive &&
+        nextStatus === "idle" &&
+        !options.preservePendingStart &&
+        !options.skipCorrection &&
+        !options.silentCue
+      ) {
+        this.playCue("dictation-stop");
+      }
 
       if (!skipRemoteStop) {
         // Graceful stop: the IPC handler drains pending transcriptions and flushes
@@ -2417,6 +2440,11 @@ class VoiceRecordingService {
     this.pauseTimeoutId = null;
   }
 
+  // Main applies the user's sound settings and volume, so this stays unconditional.
+  private playCue(id: "dictation-start" | "dictation-stop" | "dictation-error"): void {
+    window.electron?.notification?.playUiEvent?.(id)?.catch(() => {});
+  }
+
   private markMicLive(target: VoiceRecordingTarget, chunkCount: number): void {
     this.clearMicSilenceTimer();
     const state = useVoiceRecordingStore.getState();
@@ -2426,6 +2454,7 @@ class VoiceRecordingService {
       wasSilent: state.micSignal === "silent",
     });
     state.setMicSignal("live");
+    this.playCue("dictation-start");
     if (state.micNotice?.kind === "silent") state.setMicNotice(null);
     // One announcement, so the fallback mic isn't replaced before it's read.
     const fallbackMic =
@@ -2799,8 +2828,10 @@ class VoiceRecordingService {
       target: store.activeTarget ?? capture.target,
       deviceLabel: capture.deviceLabel,
     });
+    this.playCue("dictation-error");
     void this.stop("Dictation stopped because the microphone was lost.", {
       preserveLiveText: true,
+      silentCue: true,
     });
   }
 

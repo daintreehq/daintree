@@ -759,3 +759,89 @@ describe("VoiceRecordingService — silent mic (#14606)", () => {
     expect(harness.voiceInput.setSettings).not.toHaveBeenCalled();
   });
 });
+
+describe("VoiceRecordingService — dictation sound cues (#14627)", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    draftState.draft = "";
+  });
+
+  afterEach(async () => {
+    loadedService?.destroy();
+    loadedService = null;
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  function withCues(harness: Harness) {
+    const playUiEvent = vi.fn().mockResolvedValue(undefined);
+    (window as unknown as { electron: Record<string, unknown> }).electron.notification = {
+      playUiEvent,
+    };
+    void harness;
+    return playUiEvent;
+  }
+
+  it("cues the start when audio reaches the mic, not on key press, and the stop once capture is closed", async () => {
+    const harness = setupGlobals({ tracks: [BUILT_IN] });
+    const playUiEvent = withCues(harness);
+    const { service } = await load();
+
+    await service.start(TARGET);
+    harness.status.emit("recording");
+    expect(playUiEvent).not.toHaveBeenCalled();
+
+    sendChunk(harness.workletNodes[0]!, 3000);
+    sendChunk(harness.workletNodes[0]!, 3000);
+    expect(playUiEvent.mock.calls).toEqual([["dictation-start"]]);
+
+    await service.stop();
+    expect(harness.tracks[0]!.stop).toHaveBeenCalled();
+    expect(playUiEvent.mock.calls).toEqual([["dictation-start"], ["dictation-stop"]]);
+  });
+
+  it("stays silent when the session is stopped before the mic went live", async () => {
+    const harness = setupGlobals({ tracks: [BUILT_IN] });
+    const playUiEvent = withCues(harness);
+    const { service } = await load();
+
+    await service.start(TARGET);
+    harness.status.emit("recording");
+    await service.stop();
+
+    expect(playUiEvent).not.toHaveBeenCalled();
+  });
+
+  it("cues a failure, and only it, when the mic is lost mid-dictation", async () => {
+    const harness = setupGlobals({ tracks: [BUILT_IN] });
+    const playUiEvent = withCues(harness);
+    const { store, service } = await load();
+
+    await service.start(TARGET);
+    harness.status.emit("recording");
+    sendChunk(harness.workletNodes[0]!, 3000);
+    playUiEvent.mockClear();
+
+    harness.tracks[0]!.end();
+    await vi.waitFor(() => expect(store.getState().status).toBe("idle"));
+
+    expect(playUiEvent.mock.calls).toEqual([["dictation-error"]]);
+  });
+
+  it("cues a failure when the mic was lost before the session began", async () => {
+    const harness = setupGlobals({ tracks: [BUILT_IN] });
+    const playUiEvent = withCues(harness);
+    harness.getUserMedia.mockImplementationOnce(async () => {
+      const track = createTrack("MacBook Pro Microphone", "builtin");
+      track.readyState = "ended";
+      harness.tracks.push(track);
+      return createStream(track);
+    });
+    const { service } = await load();
+
+    await service.start(TARGET);
+
+    expect(playUiEvent.mock.calls).toEqual([["dictation-error"]]);
+  });
+});
