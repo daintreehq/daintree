@@ -7,6 +7,12 @@ import {
   formatAgentContextBlock,
 } from "@shared/utils/agentContextDrag";
 import { draftUnchangedSince, useTokenResolution } from "../useTokenResolution";
+import {
+  subscribeDictationRangeTracking,
+  useDictationRangeStore,
+} from "@/store/dictationRangeStore";
+import { useTerminalInputStore } from "@/store/terminalInputStore";
+import { planVoiceWords } from "@/services/voiceInsertion";
 
 import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
@@ -37,7 +43,12 @@ const voiceState = vi.hoisted(() => ({
     learnFromCorrections: false,
     panelBuffers: {} as Record<
       string,
-      { sessionCorrectedText?: string; sessionDraftStart?: number }
+      {
+        sessionCorrectedText?: string;
+        sessionDraftStart?: number;
+        dictationSessionId?: string;
+        projectId?: string;
+      }
     >,
     setSessionCorrectedText: (_panelId: string, _text: string | null) => {},
   },
@@ -560,7 +571,19 @@ describe("useTokenResolution dictionary learning", () => {
 
   beforeEach(() => {
     voiceState.value = { ...defaults };
+    useTerminalInputStore.setState({ draftInputs: new Map() });
+    useDictationRangeStore.setState({ drafts: {}, anchors: {} });
   });
+
+  /** The draft as it is sent, with the session's dictated words where they sit in it. */
+  const dictated = (draft: string, words: string, sessionId = "s1") => {
+    useTerminalInputStore.getState().setDraftInput("t1", draft);
+    const from = draft.indexOf(words);
+    const span = { from, to: from + words.length };
+    useDictationRangeStore
+      .getState()
+      .recordUtterance({ sessionId, panelId: "t1" }, { insertion: span, words: span });
+  };
 
   it("reports a corrected mishearing to main instead of rewriting settings itself", async () => {
     const recordSuggestions = vi
@@ -577,10 +600,15 @@ describe("useTokenResolution dictionary learning", () => {
     voiceState.value = {
       learnFromCorrections: true,
       panelBuffers: {
-        t1: { sessionCorrectedText: "use zoo stand for state", sessionDraftStart: 0 },
+        t1: {
+          sessionCorrectedText: "use zoo stand for state",
+          sessionDraftStart: 0,
+          dictationSessionId: "s1",
+        },
       },
       setSessionCorrectedText,
     };
+    dictated("use Zustand for state", "use Zustand for state");
 
     const { sendText, onSend } = setup();
     await act(async () => {
@@ -608,9 +636,14 @@ describe("useTokenResolution dictionary learning", () => {
       ...defaults,
       learnFromCorrections: true,
       panelBuffers: {
-        t1: { sessionCorrectedText: "use zoo stand for state", sessionDraftStart: 0 },
+        t1: {
+          sessionCorrectedText: "use zoo stand for state",
+          sessionDraftStart: 0,
+          dictationSessionId: "s1",
+        },
       },
     };
+    dictated("use Zustand for state", "use Zustand for state");
 
     const { sendText, onSend } = setup();
     await act(async () => {
@@ -634,9 +667,14 @@ describe("useTokenResolution dictionary learning", () => {
       ...defaults,
       learnFromCorrections: false,
       panelBuffers: {
-        t1: { sessionCorrectedText: "use zoo stand for state", sessionDraftStart: 0 },
+        t1: {
+          sessionCorrectedText: "use zoo stand for state",
+          sessionDraftStart: 0,
+          dictationSessionId: "s1",
+        },
       },
     };
+    dictated("use Zustand for state", "use Zustand for state");
 
     const { sendText } = setup();
     await act(async () => {
@@ -645,7 +683,11 @@ describe("useTokenResolution dictionary learning", () => {
     expect(recordSuggestions).not.toHaveBeenCalled();
   });
 
-  const learning = (recordSuggestions: ReturnType<typeof vi.fn>, learnFromCorrections = true) => {
+  const learning = (
+    recordSuggestions: ReturnType<typeof vi.fn>,
+    learnFromCorrections = true,
+    sent: string | null = "use Zustand for state"
+  ) => {
     installElectron({
       git: { getWorkingDiff: vi.fn() },
       voiceDictionary: { recordSuggestions },
@@ -673,6 +715,7 @@ describe("useTokenResolution dictionary learning", () => {
       },
     };
     voiceState.value = state;
+    if (sent) dictated(sent, sent);
     return state;
   };
 
@@ -750,12 +793,13 @@ describe("useTokenResolution dictionary learning", () => {
 
   it("compares only the dictated part of the draft, in its sentence (#14645)", async () => {
     const recordSuggestions = vi.fn().mockResolvedValue(undefined);
-    const state = learning(recordSuggestions);
+    const state = learning(recordSuggestions, true, null);
     state.panelBuffers.t1 = {
       ...state.panelBuffers.t1!,
       sessionCorrectedText: "daintree first",
       sessionDraftStart: 5,
     };
+    dictated("open Daintree first", "Daintree first");
     const { sendText } = setup();
     await act(async () => {
       await sendText("open Daintree first");
@@ -765,5 +809,48 @@ describe("useTokenResolution dictionary learning", () => {
         candidates: [{ word: "Daintree", original: "daintree" }],
       })
     );
+  });
+
+  it("learns only from words dictated between the user's own text (#14634)", async () => {
+    const recordSuggestions = vi.fn().mockResolvedValue(undefined);
+    const state = learning(recordSuggestions, true, null);
+    const unsubscribe = subscribeDictationRangeTracking();
+    try {
+      const inputs = useTerminalInputStore.getState();
+      const typed = "Ask about state. Then ship it.";
+      inputs.setDraftInput("t1", typed);
+      // Dictated at the caret after the first sentence, written as the voice service writes it.
+      const plan = planVoiceWords(typed, { from: 16, to: 16, edited: false }, "use zoo stand");
+      inputs.setDraftInput("t1", plan.next);
+      useDictationRangeStore
+        .getState()
+        .recordUtterance(
+          { sessionId: "s1", panelId: "t1" },
+          { insertion: plan.insertion, words: plan.words }
+        );
+      expect(inputs.getDraftInput("t1")).toBe("Ask about state. use zoo stand Then ship it.");
+      state.panelBuffers.t1 = {
+        ...state.panelBuffers.t1!,
+        sessionCorrectedText: "use zoo stand",
+        sessionDraftStart: plan.words.from,
+      };
+
+      // Typing ahead of the dictation moves it; the correction lands inside it.
+      inputs.setDraftInput("t1", "Quick: Ask about state. use zoo stand Then ship it.");
+      const sent = "Quick: Ask about state. use Zustand Then ship it.";
+      inputs.setDraftInput("t1", sent);
+
+      const { sendText } = setup();
+      await act(async () => {
+        await sendText(sent);
+      });
+
+      await vi.waitFor(() => expect(recordSuggestions).toHaveBeenCalledTimes(1));
+      expect(recordSuggestions).toHaveBeenCalledWith({
+        candidates: [{ word: "Zustand", original: "zoo stand" }],
+      });
+    } finally {
+      unsubscribe();
+    }
   });
 });

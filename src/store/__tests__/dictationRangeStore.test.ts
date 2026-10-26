@@ -341,6 +341,20 @@ describe("dictationRangeStore", () => {
     expect(useDictationRangeStore.getState().getDictation(record.id)).toBe(record);
     expect(useDictationRangeStore.getState().getDictation("missing")).toBeNull();
   });
+
+  it("keeps a word retyped at either end in the learning span, and text typed at its edges out", () => {
+    setDraft("Use");
+    dictate("racked query");
+
+    edit(4, 10, "React");
+    expect(textOf(only().utterances[0]!.range)).toBe(" query");
+    edit(10, 15, "queries");
+    edit(0, 0, "Please ");
+    setDraft(`${draft()} now`);
+
+    expect(draft()).toBe("Please Use React queries now");
+    expect(textOf(only().learningSpan!)).toBe("React queries");
+  });
 });
 
 describe("insertion anchors (#14634)", () => {

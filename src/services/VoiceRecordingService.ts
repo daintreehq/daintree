@@ -2017,7 +2017,15 @@ class VoiceRecordingService {
             const buffer = useVoiceRecordingStore.getState().panelBuffers[panelId];
             const remaining = buffer?.liveText?.trim();
             if (remaining) {
-              writeVoiceWords(panelId, projectId, buffer?.dictationSessionId, remaining);
+              const { words } = writeVoiceWords(
+                panelId,
+                projectId,
+                buffer?.dictationSessionId,
+                remaining
+              );
+              // A session stopped mid-utterance may have no final; its learning
+              // baseline still needs a start to follow.
+              useVoiceRecordingStore.getState().setSessionDraftStart(panelId, words.from);
             }
           }
         }

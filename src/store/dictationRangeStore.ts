@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import {
+  mapSpanKeepingEdits,
   mapTextRange,
   minimalDocChange,
   type TextChange,
@@ -51,6 +52,14 @@ export interface DictationRecord {
    */
   range: TrackedTextRange;
   utterances: DictationUtterance[];
+  /**
+   * From the session's first dictated word to its last, for learning to diff
+   * what is sent against what was heard. Unlike `range`, an edit that reaches
+   * its text joins it whole, so a misheard word retyped at either end stays in
+   * it; text typed at either edge stays out. Absent until the session writes
+   * words.
+   */
+  learningSpan?: DictationTextSpan;
 }
 
 export interface DictationDraftTarget {
@@ -130,8 +139,13 @@ function sameRange(a: TrackedTextRange, b: TrackedTextRange): boolean {
   return a.from === b.from && a.to === b.to && a.edited === b.edited;
 }
 
+function sameSpan(a: DictationTextSpan | undefined, b: DictationTextSpan | undefined): boolean {
+  return a === b || (!!a && !!b && a.from === b.from && a.to === b.to);
+}
+
 function mapRecord(record: DictationRecord, change: TextChange): DictationRecord {
   const range = mapTextRange(record.range, change);
+  const learningSpan = record.learningSpan && mapSpanKeepingEdits(record.learningSpan, change);
   let utterancesChanged = false;
   const utterances = record.utterances.map((utterance) => {
     const mapped = {
@@ -148,8 +162,19 @@ function mapRecord(record: DictationRecord, change: TextChange): DictationRecord
     utterancesChanged = true;
     return mapped;
   });
-  if (!utterancesChanged && sameRange(range, record.range)) return record;
-  return { ...record, range, utterances: utterancesChanged ? utterances : record.utterances };
+  if (
+    !utterancesChanged &&
+    sameRange(range, record.range) &&
+    sameSpan(learningSpan, record.learningSpan)
+  ) {
+    return record;
+  }
+  return {
+    ...record,
+    range,
+    utterances: utterancesChanged ? utterances : record.utterances,
+    ...(learningSpan ? { learningSpan } : {}),
+  };
 }
 
 /**
@@ -168,6 +193,7 @@ function withInsertion(
   const records = drafts[key] ?? [];
   const index = records.findIndex((record) => record.sessionId === target.sessionId);
   const utterances = utterance ? [utterance] : [];
+  const words = utterance ? { from: utterance.range.from, to: utterance.range.to } : undefined;
 
   if (index < 0) {
     const record: DictationRecord = {
@@ -177,12 +203,20 @@ function withInsertion(
       projectId: target.projectId,
       range: unedited(insertion),
       utterances,
+      ...(words ? { learningSpan: words } : {}),
     };
     return { ...drafts, [key]: [...records, record] };
   }
 
   const existing = records[index]!;
   const contiguous = insertion.from === existing.range.to;
+  const learningSpan =
+    words && existing.learningSpan
+      ? {
+          from: Math.min(existing.learningSpan.from, words.from),
+          to: Math.max(existing.learningSpan.to, words.to),
+        }
+      : (words ?? existing.learningSpan);
   const record: DictationRecord = {
     ...existing,
     range: {
@@ -191,6 +225,7 @@ function withInsertion(
       edited: existing.range.edited || !contiguous,
     },
     utterances: [...existing.utterances, ...utterances],
+    ...(learningSpan ? { learningSpan } : {}),
   };
   return { ...drafts, [key]: records.map((r, i) => (i === index ? record : r)) };
 }
