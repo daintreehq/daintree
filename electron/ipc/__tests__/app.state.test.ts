@@ -2357,11 +2357,16 @@ describe("app:set-state grid layout patch (#14700)", () => {
     vi.mocked(projectStore.getCurrentProject).mockReturnValue(null);
   });
 
-  it("refuses a count that isn't a whole number from 1 to 10", async () => {
-    await invokeSetState({ panelGridConfig: { value: 99 } });
-    await invokeSetState({ panelGridConfig: { value: 2.5 } });
+  it.each([0, -1, 11, 2.5])("refuses a count of %s", async (value) => {
+    await invokeSetState({ panelGridConfig: { value } });
 
     expect(stored.panelGridConfig).toEqual({ strategy: "automatic", value: 4 });
+  });
+
+  it.each([1, 10])("keeps a count of %s", async (value) => {
+    await invokeSetState({ panelGridConfig: { value } });
+
+    expect(stored.panelGridConfig).toEqual({ strategy: "automatic", value });
   });
 
   it("merges over the count saved while the same write waited on its MRU save", async () => {
