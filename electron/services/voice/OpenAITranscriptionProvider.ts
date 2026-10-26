@@ -82,7 +82,24 @@ const HELD_COMPLETION_TIMEOUT_MS = 5_000;
 // server alive, our socket silently dead — is only detectable by us pinging
 // and watching for the pong. On a missed pong we `terminate()` (no closing
 // handshake on a dead socket) which fires `close` and drives the reconnect.
-const HEARTBEAT_INTERVAL_MS = 20_000;
+//
+// The check runs every HEARTBEAT_TICK_MS. Idle, it pings every
+// HEARTBEAT_IDLE_MS and allows as long for the answer. Once audio has gone out
+// since the server was last heard from, a dead socket is swallowing speech, so
+// it pings at once and allows HEARTBEAT_ACTIVE_MS: a drop is noticed in
+// seconds rather than 20-40s. Any frame from the server counts as an answer.
+//
+// The answer can't come before the server has received everything queued
+// ahead of the ping, which after a reconnect can be seconds of flushed audio
+// on a slow uplink. A pong proves delivery of everything sent before its ping,
+// so each ping also gets the bytes not yet proven delivered at
+// HEARTBEAT_FLOOR_BYTES_PER_MS: the audio stream's own wire rate (4,800 PCM
+// bytes per 100ms, base64 in JSON), since an uplink slower than that can't
+// carry dictation anyway.
+const HEARTBEAT_TICK_MS = 2_000;
+const HEARTBEAT_IDLE_MS = 20_000;
+const HEARTBEAT_ACTIVE_MS = 3_000;
+const HEARTBEAT_FLOOR_BYTES_PER_MS = 64;
 // Automatic reconnect on an unexpected mid-session drop. Exponential backoff
 // with full jitter: delay = random() * min(CAP, INITIAL * MULTIPLIER^attempt).
 // Gentle multiplier so the first few retries are near-instant; after
@@ -111,6 +128,16 @@ const VAD_PRE_ROLL_BYTES = 14_400;
 // (24kHz mono PCM16 → 4800 bytes) with a fatal error event. Skip a commit
 // below this threshold.
 const MIN_COMMIT_BYTES = 4_800;
+// Audio sent since the server last acknowledged a commit is replayed onto the
+// next connection after a drop. Speech keeps it short (the 8s backstop, plus a
+// few seconds to notice a dead socket), so the cap only bites on a long silent
+// tail, where the oldest audio goes first.
+const REPLAY_MAX_BYTES = 1_440_000;
+// A tail the VAD already called silence is cut to its last 2s before replay,
+// so a reconnect doesn't send (and pay to transcribe) minutes of room noise.
+// 2s is far past the VAD's lag behind live audio, so an onset it hasn't
+// reported yet still survives.
+const REPLAY_SILENCE_KEEP_BYTES = 96_000;
 
 // OpenAI Realtime `error.code` values that are recoverable by reconnecting.
 // All other codes (auth, content policy, schema violations) are fatal — a retry
@@ -255,11 +282,20 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   private connectStartedAt = 0;
   private firstTranscriptLogged = false;
 
-  // Heartbeat (half-open detection) for the current connection. `isAlive` is
-  // set on every pong and on open; the interval terminates the socket if a full
-  // cycle elapses with no pong.
+  // Heartbeat (half-open detection) for the current connection. Times are
+  // tick multiples (`heartbeatTick * HEARTBEAT_TICK_MS`), exact for a ping
+  // since pings only go out on a tick. `heartbeatPing` is the ping being judged,
+  // null once answered; `heartbeatPingMarks` holds `heartbeatBytesSent` at each
+  // unanswered ping, oldest first, and a pong moves `heartbeatDeliveredBytes`
+  // up to the oldest. `audioSentSinceHeard` makes an unanswered ping urgent.
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
-  private isAlive = false;
+  private heartbeatTick = 0;
+  private heartbeatLastHeardMs = 0;
+  private heartbeatPing: { sentMs: number; backlogBytes: number } | null = null;
+  private heartbeatPingMarks: number[] = [];
+  private heartbeatBytesSent = 0;
+  private heartbeatDeliveredBytes = 0;
+  private audioSentSinceHeard = false;
 
   // Reconnect state. `reconnectAttempt` and `isReconnecting` survive across
   // individual connection teardowns (cleanupConnection) and are only reset by
@@ -309,6 +345,22 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   private preRollChunks: ArrayBuffer[] = [];
   private preRollBytes = 0;
   private bytesSinceCommit = 0;
+  // Replay ledger: every chunk handed to the socket since the server last
+  // acknowledged a commit, kept even when the send threw, since `ws` drops
+  // sends on a closing socket without one. `replaySegments` are commits sent
+  // but not yet acknowledged, oldest first; `replayTail` is audio since the
+  // last commit. It survives a drop and is resent, segment boundaries and all,
+  // when the next connection is ready. An acknowledged commit is the server's,
+  // so its audio is released and never resent: that is what keeps a replayed
+  // transcript from landing twice. `replayEvictedSegments` counts unacknowledged
+  // segments the byte cap dropped whole, so their acks don't release the wrong
+  // segment.
+  private replaySegments: Array<{ chunks: ArrayBuffer[]; bytes: number }> = [];
+  private replayTail: ArrayBuffer[] = [];
+  private replayTailBytes = 0;
+  private replayBytes = 0;
+  private replayEvictedSegments = 0;
+  private replayOverflowWarned = false;
   // Commits sent (interval, paragraph-boundary, or final) whose terminal result
   // we haven't seen yet — a `...transcription.completed`/`.failed`, or a
   // `conversation.item.done` that actually carries text. Each commit yields
@@ -519,7 +571,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
 
     connection.on("pong", () => {
       if (this.sessionId !== mySessionId || this.connection !== connection) return;
-      this.isAlive = true;
+      this.handlePong();
     });
 
     // Open handler — same logic for initial connect and reconnect.
@@ -626,6 +678,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
 
     connection.on("message", (data) => {
       if (this.sessionId !== mySessionId || this.connection !== connection) return;
+      this.markHeard();
       const raw =
         typeof data === "string"
           ? data
@@ -648,8 +701,8 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     });
 
     connection.on("error", (err) => {
-      this.clearConnectTimeout();
       if (this.sessionId !== mySessionId || this.connection !== connection) return;
+      this.clearConnectTimeout();
       const message = formatErrorMessage(err, "WebSocket error");
       logError(`${P} WebSocket error`, undefined, voiceErrorLogFields(err));
       // A transport error on a ready (or reconnecting) session is recoverable —
@@ -666,12 +719,14 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     });
 
     connection.on("close", (code, reason) => {
-      this.clearConnectTimeout();
-      this.clearHeartbeat();
       // Ignore the close of a socket that's already been superseded or torn down
       // out-of-band (reconnect swap, or handleFatalError which terminates after
-      // nulling this.connection) — that path has already emitted its status.
+      // nulling this.connection) — that path has already emitted its status and
+      // cleared its timers. Checked before touching any timer: a gracefully
+      // closed socket's close can land after its successor armed its own.
       if (this.sessionId !== mySessionId || this.connection !== connection) return;
+      this.clearConnectTimeout();
+      this.clearHeartbeat();
       const wasReady = this.isReady;
       const reasonText = Buffer.isBuffer(reason) ? reason.toString("utf8") : String(reason ?? "");
       logInfo(`${P} WebSocket closed`, {
@@ -715,22 +770,41 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   }
 
   /**
-   * Starts the ping/pong heartbeat for one connection. `isAlive` is set true on
-   * open and on every pong; each interval tick terminates the socket if no pong
-   * arrived since the last ping, then sends a fresh ping. The session-id /
-   * socket-identity guard stops a stale interval from terminating a newer
-   * connection (lesson #4850).
+   * Starts the heartbeat for one connection. Each tick either judges the
+   * outstanding ping against its deadline (send time, plus the allowance, plus
+   * the time the bytes ahead of it need at the floor rate) or sends a new one
+   * when audio has gone out unanswered or the idle interval is up. Deadlines
+   * are fixed when the ping goes out, apart from audio shortening an idle
+   * allowance to the active one, and checked only on later ticks, so they can
+   * run late but never early. The session-id / socket-identity guard stops a
+   * stale interval from terminating a newer connection (lesson #4850).
    */
   private startHeartbeat(connection: WebSocket, mySessionId: number): void {
     this.clearHeartbeat();
-    this.isAlive = true;
+    this.heartbeatTick = 0;
+    this.heartbeatLastHeardMs = 0;
+    this.heartbeatPing = null;
+    this.heartbeatPingMarks = [];
+    this.heartbeatBytesSent = 0;
+    this.heartbeatDeliveredBytes = 0;
+    this.audioSentSinceHeard = false;
     this.heartbeatInterval = setInterval(() => {
       if (this.sessionId !== mySessionId || this.connection !== connection) {
         this.clearHeartbeat();
         return;
       }
-      if (!this.isAlive) {
-        logWarn(`${P} Heartbeat: no pong, terminating half-open connection`);
+      const nowMs = ++this.heartbeatTick * HEARTBEAT_TICK_MS;
+      const ping = this.heartbeatPing;
+      if (ping) {
+        const allowanceMs = this.audioSentSinceHeard ? HEARTBEAT_ACTIVE_MS : HEARTBEAT_IDLE_MS;
+        const deadlineMs =
+          ping.sentMs + allowanceMs + ping.backlogBytes / HEARTBEAT_FLOOR_BYTES_PER_MS;
+        if (nowMs < deadlineMs) return;
+        logWarn(`${P} Heartbeat: no answer, terminating half-open connection`, {
+          waitedMs: nowMs - ping.sentMs,
+          backlogBytes: ping.backlogBytes,
+          audioUnanswered: this.audioSentSinceHeard,
+        });
         try {
           connection.terminate();
         } catch {
@@ -738,13 +812,36 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
         }
         return;
       }
-      this.isAlive = false;
+      if (!this.audioSentSinceHeard && nowMs - this.heartbeatLastHeardMs < HEARTBEAT_IDLE_MS) {
+        return;
+      }
+      this.heartbeatPing = {
+        sentMs: nowMs,
+        backlogBytes: this.heartbeatBytesSent - this.heartbeatDeliveredBytes,
+      };
+      this.heartbeatPingMarks.push(this.heartbeatBytesSent);
       try {
         connection.ping();
       } catch (err) {
         logWarn(`${P} Heartbeat ping failed`, { ...voiceErrorLogFields(err) });
       }
-    }, HEARTBEAT_INTERVAL_MS);
+    }, HEARTBEAT_TICK_MS);
+  }
+
+  /** A pong: everything sent before the oldest unanswered ping has arrived. */
+  private handlePong(): void {
+    const mark = this.heartbeatPingMarks.shift();
+    if (mark !== undefined) {
+      this.heartbeatDeliveredBytes = Math.max(this.heartbeatDeliveredBytes, mark);
+    }
+    this.markHeard();
+  }
+
+  /** Records that the current connection answered: a pong or any server frame. */
+  private markHeard(): void {
+    this.heartbeatLastHeardMs = this.heartbeatTick * HEARTBEAT_TICK_MS;
+    this.heartbeatPing = null;
+    this.audioSentSinceHeard = false;
   }
 
   private clearHeartbeat(): void {
@@ -833,6 +930,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     // connection open otherwise. Captured before cleanupConnection() nulls it.
     const conn = this.connection;
     this.cleanupConnection();
+    this.clearReplay();
     if (conn) {
       try {
         conn.terminate();
@@ -856,7 +954,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
         logInfo(`${P} ← session.created`, summarizeEchoedSession(payload.session));
         return;
 
-      case "session.updated":
+      case "session.updated": {
         this.clearConnectTimeout();
         // Log the session config the server actually applied — this is ground
         // truth for whether `turn_detection`, model, and format took effect.
@@ -866,6 +964,16 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
           sinceStartMs: this.sinceStartMs(),
           bufferedChunks: this.preConnectBuffer.length,
         });
+        if (this.isReady) {
+          // Everything below runs once per connection: a second flush would
+          // resend the replayed audio onto the socket that already has it.
+          logWarn(`${P} Ignoring a repeated session.updated on a ready connection`);
+          return;
+        }
+        // Audio the dropped connection never got committed goes first, then
+        // whatever was captured while reconnecting.
+        const recovering = this.isReconnecting;
+        if (this.connection) this.replayUnacknowledgedAudio();
         if (this.preConnectBuffer.length > 0 && this.connection) {
           logInfo(`${P} Flushing ${this.preConnectBuffer.length} buffered audio chunks`);
           // Detach the buffer before flushing so its state stays consistent even
@@ -891,9 +999,17 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
           return;
         }
         this.startVadWorker(mySessionId);
+        // The new VAD never hears the audio flushed above (its model is still
+        // loading), so if the speech ended during the outage nothing would
+        // commit it. A single backstop does, unless live speech takes over the
+        // timer first.
+        if (recovering && this.bytesSinceCommit >= MIN_COMMIT_BYTES && !this.vadDegraded) {
+          this.startBackstopTimer("reconnect-recovery", { once: true });
+        }
         this.emit({ type: "status", status: "recording" });
         this.settlePendingStart(mySessionId, { ok: true });
         return;
+      }
 
       case "input_audio_buffer.committed": {
         // Server ack that our commit landed. A transcription item
@@ -901,8 +1017,14 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
         // it never does, the session config or the commit cadence is wrong.
         const itemId = typeof payload.item_id === "string" ? payload.item_id : undefined;
         logDebug(`${P} ← input_audio_buffer.committed`, { itemId });
-        if (itemId && !this.completedItemIds.has(itemId) && !this.commitOrder.includes(itemId)) {
+        if (!itemId) {
+          this.releaseAcknowledgedSegment();
+          return;
+        }
+        // A repeated ack must not release a second segment's audio.
+        if (!this.completedItemIds.has(itemId) && !this.commitOrder.includes(itemId)) {
           this.commitOrder.push(itemId);
+          this.releaseAcknowledgedSegment();
         }
         return;
       }
@@ -1164,9 +1286,17 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
 
   private sendAudioJson(chunk: ArrayBuffer): void {
     if (!this.connection) return;
-    const audio = Buffer.from(chunk).toString("base64");
+    // Retained before the send: whether it threw or `ws` quietly dropped it,
+    // only the server's commit acknowledgement proves it arrived.
+    this.retainForReplay(chunk);
+    this.audioSentSinceHeard = true;
+    const payload = JSON.stringify({
+      type: "input_audio_buffer.append",
+      audio: Buffer.from(chunk).toString("base64"),
+    });
+    this.heartbeatBytesSent += payload.length;
     try {
-      this.connection.send(JSON.stringify({ type: "input_audio_buffer.append", audio }));
+      this.connection.send(payload);
     } catch (err) {
       // A send can throw if the socket transitioned to CLOSING mid-flush. Don't
       // let it escape the buffer-flush loop (which would leave the buffer in a
@@ -1177,6 +1307,123 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       return;
     }
     this.bytesSinceCommit += chunk.byteLength;
+  }
+
+  /**
+   * Sends `input_audio_buffer.commit` and does the accounting every commit
+   * shares: one more transcript outstanding, the tail becomes an unacknowledged
+   * replay segment, and the pre-roll restarts so a later barge-in replay can't
+   * resend audio this commit already carries. Throws if the send does; callers
+   * own their eligibility checks, logging and failure handling.
+   */
+  private sendCommit(): void {
+    if (!this.connection) throw new Error("No connection");
+    this.connection.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+    this.pendingCommits++;
+    this.bytesSinceCommit = 0;
+    this.replaySegments.push({ chunks: this.replayTail, bytes: this.replayTailBytes });
+    this.replayTail = [];
+    this.replayTailBytes = 0;
+    this.preRollChunks = [];
+    this.preRollBytes = 0;
+  }
+
+  /** Adds a sent chunk to the replay tail, evicting the oldest audio past the cap. */
+  private retainForReplay(chunk: ArrayBuffer): void {
+    this.replayTail.push(chunk);
+    this.replayTailBytes += chunk.byteLength;
+    this.replayBytes += chunk.byteLength;
+    while (this.replayBytes > REPLAY_MAX_BYTES) {
+      const head = this.replaySegments[0];
+      const evicted = head ? head.chunks.shift() : this.replayTail.shift();
+      if (!evicted) break;
+      this.replayBytes -= evicted.byteLength;
+      if (head) {
+        head.bytes -= evicted.byteLength;
+        if (head.chunks.length === 0) {
+          this.replaySegments.shift();
+          this.replayEvictedSegments++;
+        }
+      } else {
+        this.replayTailBytes -= evicted.byteLength;
+      }
+      if (!this.replayOverflowWarned) {
+        this.replayOverflowWarned = true;
+        logWarn(`${P} Replay buffer full, dropping the oldest unacknowledged audio`, {
+          maxBytes: REPLAY_MAX_BYTES,
+          unacknowledgedSegments: this.replaySegments.length,
+        });
+      }
+    }
+  }
+
+  /** The server acknowledged the oldest outstanding commit: its audio is safe. */
+  private releaseAcknowledgedSegment(): void {
+    if (this.replayEvictedSegments > 0) {
+      this.replayEvictedSegments--;
+      return;
+    }
+    const segment = this.replaySegments.shift();
+    if (segment) this.replayBytes -= segment.bytes;
+  }
+
+  /** The server buffer was cleared: audio since the last commit is gone there too. */
+  private resetReplayTail(): void {
+    this.replayBytes -= this.replayTailBytes;
+    this.replayTail = [];
+    this.replayTailBytes = 0;
+  }
+
+  /** Keeps only the newest `keepBytes` of the tail (at least its last chunk). */
+  private trimReplayTail(keepBytes: number): void {
+    while (
+      this.replayTail.length > 1 &&
+      this.replayTailBytes - this.replayTail[0]!.byteLength >= keepBytes
+    ) {
+      const dropped = this.replayTail.shift()!;
+      this.replayTailBytes -= dropped.byteLength;
+      this.replayBytes -= dropped.byteLength;
+    }
+  }
+
+  private clearReplay(): void {
+    this.replaySegments = [];
+    this.replayTail = [];
+    this.replayTailBytes = 0;
+    this.replayBytes = 0;
+    this.replayEvictedSegments = 0;
+    this.replayOverflowWarned = false;
+  }
+
+  /**
+   * Resends the replay ledger onto a newly ready connection: each
+   * unacknowledged segment followed by its commit, then the uncommitted tail.
+   * The ledger is rebuilt by the sends themselves, so a send that fails here
+   * leaves the audio retained for the next attempt.
+   */
+  private replayUnacknowledgedAudio(): void {
+    if (this.replayBytes === 0) return;
+    const segments = this.replaySegments;
+    const tail = this.replayTail;
+    logInfo(`${P} Replaying audio the dropped connection never committed`, {
+      segments: segments.length,
+      evictedSegments: this.replayEvictedSegments,
+      bytes: this.replayBytes,
+    });
+    this.clearReplay();
+    for (const segment of segments) {
+      for (const chunk of segment.chunks) this.sendAudioJson(chunk);
+      if (this.bytesSinceCommit < MIN_COMMIT_BYTES) continue;
+      try {
+        this.sendCommit();
+        logDebug(`${P} → input_audio_buffer.commit (replayed segment)`, {
+          pendingCommits: this.pendingCommits,
+        });
+      } catch (err) {
+        logWarn(`${P} Failed to commit a replayed segment`, { ...voiceErrorLogFields(err) });
+      }
+    }
+    for (const chunk of tail) this.sendAudioJson(chunk);
   }
 
   sendAudioChunk(chunk: ArrayBuffer): void {
@@ -1269,14 +1516,22 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
    * reconnect. Use `cleanupPreviousSession()` for a full session reset.
    */
   private cleanupConnection(): void {
+    // A tail the live VAD last called silence (speech ended, nothing since) is
+    // cut before it's replayed. Read before the VAD is retired, which resets it.
+    if (this.vadWorker && !this.vadDegraded && this.vadHasEndedSpeech && !this.isSpeaking) {
+      this.trimReplayTail(REPLAY_SILENCE_KEEP_BYTES);
+    }
     // Retire the VAD with the connection — a reconnect re-spawns it fresh on
     // the next `session.updated`, so VAD state never straddles two physical
     // sockets.
     this.stopVadWorker("connection-closed");
     this.clearHeartbeat();
+    this.clearConnectTimeout();
     this.connection = null;
     this.isReady = false;
-    this.isAlive = false;
+    this.heartbeatPing = null;
+    this.heartbeatPingMarks = [];
+    this.audioSentSinceHeard = false;
     this.bytesSinceCommit = 0;
     this.pendingCommits = 0;
     // Item ids are per connection; release what arrived so a reconnect starts a
@@ -1316,7 +1571,10 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     this.isReconnecting = false;
     this.lastReconnectError = null;
     this.isExpectedClose = false;
-    this.isAlive = false;
+    this.heartbeatPing = null;
+    this.heartbeatPingMarks = [];
+    this.audioSentSinceHeard = false;
+    this.clearReplay();
     this.isDraining = false;
     this.stopPendingReady = false;
     this.liveText = "";
@@ -1457,6 +1715,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       return;
     }
     this.bytesSinceCommit = 0;
+    this.resetReplayTail();
     for (const chunk of this.preRollChunks) {
       this.sendAudioJson(chunk);
     }
@@ -1471,9 +1730,10 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     this.maybeCommitSegment("vad-end-of-speech");
   }
 
-  private startBackstopTimer(reason: string): void {
+  private startBackstopTimer(reason: string, { once = false } = {}): void {
     this.clearBackstopTimer();
     this.maxSegmentTimer = setInterval(() => {
+      if (once) this.clearBackstopTimer();
       this.maybeCommitSegment(reason);
     }, VAD_MAX_SEGMENT_MS);
   }
@@ -1511,15 +1771,14 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       return;
     }
     try {
-      this.connection.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
-      this.pendingCommits++;
+      const bytes = this.bytesSinceCommit;
+      this.sendCommit();
       logDebug(`${P} → input_audio_buffer.commit`, {
         reason,
-        bytes: this.bytesSinceCommit,
+        bytes,
         chunksStreamed: this.audioChunkCount,
         pendingCommits: this.pendingCommits,
       });
-      this.bytesSinceCommit = 0;
     } catch (err) {
       logWarn(`${P} Failed to commit audio segment`, {
         reason,
@@ -1561,7 +1820,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     // reconnect — could still deliver it, wait for it rather than discarding.
     const canFlushBufferedAudio =
       !this.isReady &&
-      this.preConnectBufferBytes >= MIN_COMMIT_BYTES &&
+      this.preConnectBufferBytes + this.replayBytes >= MIN_COMMIT_BYTES &&
       (this.connection !== null || this.reconnectTimer !== null);
 
     // A graceful stop is an expected close — stop the close handler from
@@ -1590,14 +1849,13 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     // be in flight, and `pendingCommits` already accounts for it.
     if (this.bytesSinceCommit >= MIN_COMMIT_BYTES) {
       try {
-        this.connection.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
-        this.pendingCommits++;
+        const bytes = this.bytesSinceCommit;
+        this.sendCommit();
         logInfo(`${P} → input_audio_buffer.commit (final)`, {
-          bytes: this.bytesSinceCommit,
+          bytes,
           chunksStreamed: this.audioChunkCount,
           pendingCommits: this.pendingCommits,
         });
-        this.bytesSinceCommit = 0;
       } catch {
         logWarn(`${P} Failed to send final commit, closing immediately`);
         this.releaseHeldCompletions(true);
@@ -1691,23 +1949,27 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     if (!this.connection || this.bytesSinceCommit < MIN_COMMIT_BYTES) {
       logInfo(`${P} Late-ready stop with sub-threshold buffer — no final commit`, {
         bytesSinceCommit: this.bytesSinceCommit,
+        pendingCommits: this.pendingCommits,
       });
-      this.settleDrain("nothing-to-commit");
-      return;
+      // Segments replayed from a dropped connection may still be transcribing.
+      if (!this.connection || this.pendingCommits === 0) {
+        this.settleDrain("nothing-to-commit");
+        return;
+      }
+    } else {
+      const bytes = this.bytesSinceCommit;
+      try {
+        this.sendCommit();
+      } catch {
+        logWarn(`${P} Failed to send final commit after late ready`);
+        this.settleDrain("final-commit-failed");
+        return;
+      }
+      logInfo(`${P} → input_audio_buffer.commit (final, after late ready)`, {
+        bytes,
+        pendingCommits: this.pendingCommits,
+      });
     }
-    try {
-      this.connection.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
-    } catch {
-      logWarn(`${P} Failed to send final commit after late ready`);
-      this.settleDrain("final-commit-failed");
-      return;
-    }
-    this.pendingCommits++;
-    logInfo(`${P} → input_audio_buffer.commit (final, after late ready)`, {
-      bytes: this.bytesSinceCommit,
-      pendingCommits: this.pendingCommits,
-    });
-    this.bytesSinceCommit = 0;
     this.drainTimeout = setTimeout(() => {
       logWarn(`${P} Drain timed out after ${DRAIN_TIMEOUT_MS}ms, force closing`, {
         pendingCommits: this.pendingCommits,
