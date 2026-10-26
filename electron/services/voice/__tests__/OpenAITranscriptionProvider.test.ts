@@ -2997,3 +2997,252 @@ describe("OpenAITranscriptionProvider — item identity and ordering (#13109)", 
     });
   });
 });
+
+describe("OpenAITranscriptionProvider — reconnect replay (#14605)", () => {
+  beforeEach(() => {
+    instances.length = 0;
+    throwOnConstruct = false;
+    constructError = null;
+    vadWorkers.length = 0;
+    throwOnVadConstruct = false;
+    logCalls.length = 0;
+    vi.spyOn(process, "kill").mockImplementation(() => true);
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    for (const worker of vadWorkers) worker.emitExit(0);
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  // 100ms of 24kHz PCM16, the renderer's chunk size, filled with a marker byte.
+  function chunk(marker: number): ArrayBuffer {
+    return new Uint8Array(4_800).fill(marker).buffer;
+  }
+
+  /** The socket's outbound audio and commit traffic, as markers and "commit". */
+  function wire(socket: MockWebSocket): Array<number | "commit" | "clear"> {
+    return socket.sentJson().flatMap((p) => {
+      if (p.type === "input_audio_buffer.append") {
+        return [Buffer.from(p.audio as string, "base64")[0]];
+      }
+      if (p.type === "input_audio_buffer.commit") return ["commit" as const];
+      if (p.type === "input_audio_buffer.clear") return ["clear" as const];
+      return [];
+    });
+  }
+
+  async function reconnect(): Promise<MockWebSocket> {
+    vi.advanceTimersByTime(3_000);
+    const next = latestInstance();
+    next.simulateOpen();
+    next.simulateMessage("session.updated");
+    return next;
+  }
+
+  function done(itemId: string, transcript: string): Record<string, unknown> {
+    return { item: { id: itemId, content: [{ type: "input_audio", transcript }] } };
+  }
+
+  it("replays uncommitted speech from the dead socket ahead of the reconnect-window audio", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const { socket } = await bringSessionReady(service);
+    latestVadWorker().emitSpeechStart();
+    service.sendAudioChunk(chunk(1));
+    service.sendAudioChunk(chunk(2));
+
+    socket.simulateClose(1006);
+    service.sendAudioChunk(chunk(3));
+    const socket2 = await reconnect();
+
+    expect(wire(socket2)).toEqual([1, 2, 3]);
+
+    // The new connection's VAD closes the segment as one commit.
+    latestVadWorker().emitSpeechStart();
+    latestVadWorker().emitSpeechEnd();
+    expect(wire(socket2)).toEqual([1, 2, 3, "commit"]);
+    service.stop();
+  });
+
+  it("replays and re-commits a segment whose commit the dead socket never acknowledged", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const { socket } = await bringSessionReady(service);
+    const vad = latestVadWorker();
+    vad.emitSpeechStart();
+    service.sendAudioChunk(chunk(1));
+    service.sendAudioChunk(chunk(2));
+    vad.emitSpeechEnd();
+    expect(wire(socket)).toEqual([1, 2, "commit"]);
+    vad.emitSpeechStart();
+    service.sendAudioChunk(chunk(3));
+
+    socket.simulateClose(1006);
+    const socket2 = await reconnect();
+
+    expect(wire(socket2)).toEqual([1, 2, "commit", 3]);
+    service.stop();
+  });
+
+  it("does not replay a segment the server acknowledged, so its text lands once", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+    const { socket } = await bringSessionReady(service);
+    const vad = latestVadWorker();
+    vad.emitSpeechStart();
+    service.sendAudioChunk(chunk(1));
+    vad.emitSpeechEnd();
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+    socket.simulateMessage("conversation.item.input_audio_transcription.delta", {
+      item_id: "item-A",
+      delta: "hello",
+    });
+    vad.emitSpeechStart();
+    service.sendAudioChunk(chunk(2));
+
+    socket.simulateClose(1006);
+    const socket2 = await reconnect();
+
+    expect(wire(socket2)).toEqual([2]);
+    expect(
+      events.flatMap((e) => (e.type === "complete" ? [{ text: e.text, itemId: e.itemId }] : []))
+    ).toEqual([{ text: "hello", itemId: "item-A" }]);
+    service.stop();
+  });
+
+  it("replays only the pre-roll of a tail the VAD confirmed as silence", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const { socket } = await bringSessionReady(service);
+    const vad = latestVadWorker();
+    vad.emitSpeechStart();
+    service.sendAudioChunk(chunk(1));
+    vad.emitSpeechEnd();
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+    // Ten seconds of silence after the speech-end commit.
+    for (let i = 0; i < 100; i++) service.sendAudioChunk(chunk(10 + (i % 200)));
+
+    socket.simulateClose(1006);
+    const socket2 = await reconnect();
+
+    // VAD_PRE_ROLL_BYTES is 14,400: the last three 4,800-byte chunks.
+    expect(wire(socket2)).toEqual([107, 108, 109]);
+    service.stop();
+  });
+
+  it("counts a replayed re-commit toward the drain of a later graceful stop", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+    const { socket } = await bringSessionReady(service);
+    const vad = latestVadWorker();
+    vad.emitSpeechStart();
+    service.sendAudioChunk(chunk(1));
+    service.sendAudioChunk(chunk(2));
+    vad.emitSpeechEnd();
+
+    socket.simulateClose(1006);
+    const socket2 = await reconnect();
+    expect(wire(socket2)).toEqual([1, 2, "commit"]);
+
+    let stopped = false;
+    const stopPromise = service.stopGracefully().then(() => (stopped = true));
+    await Promise.resolve();
+    expect(stopped).toBe(false);
+    socket2.simulateMessage("input_audio_buffer.committed", { item_id: "item-B" });
+    socket2.simulateMessage("conversation.item.done", done("item-B", "replayed"));
+    await stopPromise;
+
+    expect(events.some((e) => e.type === "complete" && e.text === "replayed")).toBe(true);
+  });
+
+  it("waits out the reconnect backoff to flush replayed speech when stopped there", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const { socket } = await bringSessionReady(service);
+    latestVadWorker().emitSpeechStart();
+    service.sendAudioChunk(chunk(1));
+    service.sendAudioChunk(chunk(2));
+    socket.simulateClose(1006);
+
+    const stopPromise = service.stopGracefully();
+    const socket2 = await reconnect();
+    expect(wire(socket2)).toEqual([1, 2, "commit"]);
+    socket2.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+    socket2.simulateMessage("conversation.item.done", done("item-A", "kept"));
+    await stopPromise;
+  });
+
+  it("holds as much reconnect-window audio as the renderer can queue at startup", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const errors: string[] = [];
+    service.onEvent((e) => {
+      if (e.type === "error") errors.push(e.error.code);
+    });
+    const { socket } = await bringSessionReady(service);
+    socket.simulateClose(1006);
+
+    // The renderer queues up to 150 chunks of 100ms (MAX_QUEUED_CHUNKS).
+    for (let i = 0; i < 150; i++) service.sendAudioChunk(chunk(i));
+    const socket2 = await reconnect();
+
+    expect(wire(socket2)).toHaveLength(150);
+    expect(errors).not.toContain("audio_buffer_overflow");
+    service.stop();
+  });
+
+  it("notices a half-open socket within a few seconds while audio is streaming", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const { socket } = await bringSessionReady(service);
+    latestVadWorker().emitSpeechStart();
+
+    // The socket accepts every send but nothing comes back: no pong, no events.
+    let elapsed = 0;
+    while (socket.terminateCalls === 0 && elapsed < 20_000) {
+      service.sendAudioChunk(chunk(elapsed / 100));
+      vi.advanceTimersByTime(100);
+      elapsed += 100;
+    }
+
+    expect(socket.terminateCalls).toBe(1);
+    expect(elapsed).toBeLessThanOrEqual(8_000);
+
+    // Everything spoken into the dead socket comes back on the new one.
+    const sentBeforeDeath = wire(socket).length;
+    const socket2 = await reconnect();
+    expect(wire(socket2).slice(0, sentBeforeDeath)).toEqual(wire(socket));
+    service.stop();
+  });
+
+  it("does not terminate a streaming socket that keeps answering pings", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const { socket } = await bringSessionReady(service);
+
+    for (let elapsed = 0; elapsed < 20_000; elapsed += 100) {
+      service.sendAudioChunk(chunk(1));
+      vi.advanceTimersByTime(100);
+      if (socket.pingCalls > 0) socket.simulatePong();
+    }
+
+    expect(socket.pingCalls).toBeGreaterThan(1);
+    expect(socket.terminateCalls).toBe(0);
+    service.stop();
+  });
+
+  it("treats server events as liveness while streaming", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const { socket } = await bringSessionReady(service);
+
+    for (let elapsed = 0; elapsed < 20_000; elapsed += 100) {
+      service.sendAudioChunk(chunk(1));
+      vi.advanceTimersByTime(100);
+      socket.simulateMessage("conversation.item.input_audio_transcription.delta", {
+        item_id: "item-A",
+        delta: "x",
+      });
+    }
+
+    expect(socket.terminateCalls).toBe(0);
+    service.stop();
+  });
+});
