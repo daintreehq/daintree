@@ -58,3 +58,10 @@ export {
 } from "./chipBackspace";
 export type { ChipPendingDelete } from "./chipBackspace";
 export { createCursorBlink } from "./cursorBlink";
+export { createComposerHistory, clearComposerHistory, outsideDraftWrite } from "./composerHistory";
+export {
+  correctionLanded,
+  createCorrectionReview,
+  replayLandedCorrection,
+} from "./correctionReview";
+export type { CorrectionReview } from "./correctionReview";

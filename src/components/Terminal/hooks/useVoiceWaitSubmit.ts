@@ -4,6 +4,10 @@ import type { Compartment } from "@codemirror/state";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useVoiceRecordingStore } from "@/store";
 import { useProjectStore } from "@/store/projectStore";
+import { takeLandedCorrection } from "@/services/voiceCorrectionLanding";
+import { minimalDocChange } from "@/lib/textRangeMapping";
+import { outsideDraftWrite } from "../inputEditorExtensions/composerHistory";
+import { replayLandedCorrection } from "../inputEditorExtensions/correctionReview";
 import {
   voiceRecordingService,
   VOICE_CORRECTION_SEND_WAIT_MS,
@@ -14,6 +18,11 @@ export type VoiceSubmitPhase = "finishing" | "polishing";
 
 interface UseVoiceWaitSubmitParams {
   terminalId: string;
+  /**
+   * The composer's draft scope. An isolated composer's is its own, not the
+   * current project's; left out, the current project's.
+   */
+  projectId?: string;
   editorViewRef: React.RefObject<EditorView | null>;
   editableCompartmentRef: React.RefObject<Compartment>;
   sendFromEditor: () => void;
@@ -33,6 +42,7 @@ function isVoiceSessionActiveFor(panelId: string): boolean {
 
 export function useVoiceWaitSubmit({
   terminalId,
+  projectId,
   editorViewRef,
   editableCompartmentRef,
   sendFromEditor,
@@ -41,6 +51,10 @@ export function useVoiceWaitSubmit({
   useEffect(() => {
     sendFromEditorRef.current = sendFromEditor;
   }, [sendFromEditor]);
+  const projectIdRef = useRef(projectId);
+  useEffect(() => {
+    projectIdRef.current = projectId;
+  }, [projectId]);
 
   // Each Enter is its own attempt, and only the active one may send or unlock
   // the composer: after Escape and a second Enter, the first continuation
@@ -109,17 +123,16 @@ export function useVoiceWaitSubmit({
         // fire until the next React render — which is AFTER this microtask.
         // Sync the editor here so sendFromEditor reads the final dictated text
         // and not the pre-stop doc (#9172).
-        const projectId = useProjectStore.getState().currentProject?.id;
+        const projectId = projectIdRef.current ?? useProjectStore.getState().currentProject?.id;
         const draft = useTerminalInputStore.getState().getDraftInput(terminalId, projectId);
         const finalView = editorViewRef.current;
         if (finalView) {
-          const current = finalView.state.doc.toString();
-          if (draft !== current) {
-            finalView.dispatch({
-              changes: { from: 0, to: current.length, insert: draft },
-              selection: { anchor: draft.length },
-            });
-          }
+          // The same outside write the sync effect would make, correction
+          // included, so a send held back afterwards leaves it undoable.
+          const landed = takeLandedCorrection(terminalId, projectId, draft);
+          const change = minimalDocChange(finalView.state.doc.toString(), draft);
+          if (change !== null) finalView.dispatch(outsideDraftWrite(change, draft, landed));
+          else if (landed) replayLandedCorrection(finalView, landed);
         }
 
         sendFromEditorRef.current();

@@ -109,10 +109,14 @@ import { useFleetMirror } from "./hooks/useFleetMirror";
 import { useEditorDomHandlers } from "./hooks/useEditorDomHandlers";
 import { useEditorFactory } from "./hooks/useEditorFactory";
 import {
+  clearComposerHistory,
   createComboboxAttributes,
   minimalDocChange,
+  outsideDraftWrite,
   readImageChipPaths,
+  replayLandedCorrection,
 } from "./inputEditorExtensions";
+import { takeLandedCorrection } from "@/services/voiceCorrectionLanding";
 import { useHostReparent } from "./hooks/useHostReparent";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { SelectedFileMenuItems } from "./SelectedFileMenuItems";
@@ -236,7 +240,7 @@ interface HybridInputE2EController {
 
 type ApplyEditorValue = (
   nextValue: string,
-  options?: { selection?: EditorSelection; focus?: boolean }
+  options?: { selection?: EditorSelection; focus?: boolean; resetHistory?: boolean }
 ) => void;
 
 const EMPTY_STALE_KEYS: ReadonlySet<string> = new Set<string>();
@@ -581,9 +585,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       handledEnterRef.current = false;
       submitAfterCompositionRef.current = false;
       const view = editorViewRef.current;
-      if (view && view.state.doc.toString() !== draft) {
+      if (!view) return;
+      if (view.state.doc.toString() !== draft) {
         view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: draft } });
       }
+      // Another panel's or project's draft, even one that reads the same.
+      clearComposerHistory(view);
     }, [terminalId, projectId, getDraftInput]);
 
     const wasFollowingDriverRef = useRef(followsDriver);
@@ -814,10 +821,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       setActiveCompletionContext,
     });
 
-    const applyEditorValue = (
-      nextValue: string,
-      options?: { selection?: EditorSelection; focus?: boolean }
-    ) => {
+    const applyEditorValue: ApplyEditorValue = (nextValue, options) => {
       if (lastEmittedValueRef.current !== nextValue) {
         lastEmittedValueRef.current = nextValue;
         setValue(nextValue);
@@ -839,6 +843,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         ...(shouldChangeSelection ? { selection: options?.selection } : {}),
         scrollIntoView: true,
       });
+      if (options?.resetHistory) clearComposerHistory(view);
       if (options?.focus) view.focus();
     };
 
@@ -884,6 +889,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       const draft = useTerminalInputStore.getState().getDraftInput(terminalId, projectId);
       const view = editorViewRef.current;
       if (!view) return;
+      const landed = takeLandedCorrection(terminalId, projectId, draft);
       // Only the span that differs is replaced, so an append leaves the
       // image and file chips already in the draft attached.
       const change = minimalDocChange(view.state.doc.toString(), draft);
@@ -891,13 +897,23 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         setValue(draft);
         lastEmittedValueRef.current = draft;
         isApplyingExternalValueRef.current = true;
-        view.dispatch({
-          changes: change,
-          selection: { anchor: draft.length },
-          scrollIntoView: true,
-        });
+        view.dispatch(outsideDraftWrite(change, draft, landed));
+        // Emptied from outside (sent or cleared elsewhere): nothing to undo into.
+        if (draft === "") clearComposerHistory(view);
+      } else if (landed) {
+        replayLandedCorrection(view, landed);
       }
     }, [externalDraftRevision, terminalId, projectId]);
+
+    // Steps taken while another screen drove are the driver's, not this
+    // view's: none survive a takeover (the sync above lands the latest first).
+    const historyFollowsDriverRef = useRef(followsDriver);
+    useEffect(() => {
+      if (historyFollowsDriverRef.current === followsDriver) return;
+      historyFollowsDriverRef.current = followsDriver;
+      const view = editorViewRef.current;
+      if (view) clearComposerHistory(view);
+    }, [followsDriver]);
 
     useVoiceDecorations({ terminalId, editorViewRef });
 
@@ -939,6 +955,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const resetEditorDoc = () => {
       applyEditorValue("", {
         selection: EditorSelection.create([EditorSelection.cursor(0)]),
+        resetHistory: true,
       });
     };
 
@@ -974,6 +991,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       voiceSubmitPhase,
     } = useVoiceWaitSubmit({
       terminalId,
+      projectId,
       editorViewRef,
       editableCompartmentRef,
       sendFromEditor,

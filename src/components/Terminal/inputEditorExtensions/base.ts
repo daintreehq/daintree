@@ -184,8 +184,37 @@ export function buildInputBarTheme(theme: ITheme): Extension {
       ".cm-chip-remove:hover": {
         background: `color-mix(in oklab, ${c.foreground} 14%, ${c.shellBg})`,
       },
+      // The dictation restore control borrows the remove control's quiet ink
+      // and hit area.
+      ".cm-voice-restore": {
+        position: "relative",
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        width: "16px",
+        height: "16px",
+        marginLeft: "4px",
+        verticalAlign: "-3px",
+        borderRadius: "var(--radius-xs)",
+        color: `color-mix(in oklab, ${c.foreground} 55%, ${c.shellBg})`,
+        cursor: "pointer",
+        transition: `color ${UI_ANIMATION_DURATION}ms ease-out, background-color ${UI_ANIMATION_DURATION}ms ease-out`,
+      },
+      ".cm-voice-restore::before": {
+        content: '""',
+        position: "absolute",
+        inset: "-4px",
+      },
+      ".cm-voice-restore svg": {
+        width: "12px",
+        height: "12px",
+      },
+      ".cm-voice-restore:hover": {
+        color: c.foreground,
+        background: `color-mix(in oklab, ${c.foreground} 14%, ${c.shellBg})`,
+      },
       "@media (prefers-reduced-motion: reduce)": {
-        ".cm-chip-remove": { transition: "none" },
+        ".cm-chip-remove, .cm-voice-restore": { transition: "none" },
       },
       ".cm-diff-chip": {
         ...chipStyle,
@@ -236,6 +265,36 @@ export function buildInputBarTheme(theme: ITheme): Extension {
         textDecorationThickness: "2px",
         textUnderlineOffset: "3px",
         transition: "text-decoration-color 150ms ease-out",
+      },
+      // The pending underline's hue, drawn solid once the correction has
+      // landed, and only under what it changed.
+      ".cm-voice-corrected": {
+        textDecorationLine: "underline",
+        textDecorationStyle: "solid",
+        textDecorationColor: `color-mix(in oklab, ${c.successColor} 82%, transparent)`,
+        textDecorationThickness: "2px",
+        textUnderlineOffset: "3px",
+      },
+      // Words dropped with nothing written in their place: a short stroke of
+      // the same underline across the gap they left. Zero-width, so the text
+      // around it does not move.
+      ".cm-voice-corrected-gap": {
+        display: "inline-block",
+        position: "relative",
+        width: "0",
+        height: "0",
+      },
+      ".cm-voice-corrected-gap::after": {
+        content: '""',
+        position: "absolute",
+        top: "3px",
+        left: "calc(0.5ch - 3px)",
+        width: "6px",
+        height: "2px",
+        background: `color-mix(in oklab, ${c.successColor} 82%, transparent)`,
+      },
+      '.cm-voice-corrected-gap[data-side="before"]::after': {
+        left: "calc(-0.5ch - 3px)",
       },
       '[data-voice-active="true"] & .cm-content': {
         caretColor: c.voiceCursor,

@@ -1,8 +1,11 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
-import { Compartment, EditorState } from "@codemirror/state";
+import { Compartment, EditorState, type Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
+import { undo } from "@codemirror/commands";
+import { createComposerHistory } from "../../inputEditorExtensions/composerHistory";
+import { createCorrectionReview } from "../../inputEditorExtensions/correctionReview";
 
 // Enter while dictating, end to end through the real voice service, both real
 // stores and a real editor: the send waits for the passage's correction, up to
@@ -96,6 +99,21 @@ const draft = (panelId: string) => useTerminalInputStore.getState().getDraftInpu
 
 const PANEL_ID = "panel-1";
 
+// jsdom has no layout: CodeMirror's measure frame reads text through Range
+// rects it lacks, and a marked passage gives it something to measure.
+const originalRangeRects = Object.getOwnPropertyDescriptor(Range.prototype, "getClientRects");
+const originalRangeBounds = Range.prototype.getBoundingClientRect;
+beforeAll(() => {
+  Object.defineProperty(Range.prototype, "getClientRects", { configurable: true, value: () => [] });
+  Range.prototype.getBoundingClientRect = () => new DOMRect();
+});
+afterAll(() => {
+  if (originalRangeRects)
+    Object.defineProperty(Range.prototype, "getClientRects", originalRangeRects);
+  else delete (Range.prototype as Partial<Range>).getClientRects;
+  Range.prototype.getBoundingClientRect = originalRangeBounds;
+});
+
 describe("useVoiceWaitSubmit with a real correction pass (#14611)", () => {
   let view: EditorView;
   let sent: string[];
@@ -152,20 +170,22 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611)", () => {
 
   const isEditable = () => view.state.facet(EditorView.editable);
 
-  function renderComposer() {
+  function renderComposer(options: { extensions?: Extension[]; holdSend?: boolean } = {}) {
     const compartment = new Compartment();
     // The editor still shows the raw transcript: a store write only reaches it
     // on the next render, which the hook has to beat (#9172).
     view = new EditorView({
       state: EditorState.create({
         doc: draft(PANEL_ID),
-        extensions: [compartment.of(EditorView.editable.of(true))],
+        extensions: [compartment.of(EditorView.editable.of(true)), ...(options.extensions ?? [])],
       }),
       parent: document.body,
     });
     // Like the composer's own send: it drops what is still being corrected,
     // then reads the editor. The submit is still in flight, so the draft stays.
+    // A held send is one the composer refuses (an upload still on its way).
     const sendFromEditor = vi.fn(() => {
+      if (options.holdSend) return;
       voiceRecordingService.discardPendingCorrections(PANEL_ID);
       sent.push(view.state.doc.toString());
     });
@@ -201,6 +221,29 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611)", () => {
     expect(sent).toEqual(["Hello world."]);
     expect(result.current.voiceSubmitPhase).toBeNull();
     expect(isEditable()).toBe(true);
+  });
+
+  it("leaves a correction it synced marked and undoable when the send is held back", async () => {
+    const pending = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(pending.promise);
+    dictate(PANEL_ID, "hello wrld");
+    const result = renderComposer({
+      extensions: [createComposerHistory(), createCorrectionReview()],
+      holdSend: true,
+    });
+
+    await act(async () => {
+      result.current.startVoiceWaitSubmit();
+    });
+    await act(async () => {
+      pending.resolve({ action: "replace", correctedText: "Hello world." });
+    });
+
+    expect(sent).toEqual([]);
+    expect(view.state.doc.toString()).toBe("Hello world.");
+    expect(view.contentDOM.querySelectorAll(".cm-voice-corrected")).toHaveLength(1);
+    expect(undo(view)).toBe(true);
+    expect(view.state.doc.toString()).toBe("hello wrld");
   });
 
   it("sends the current text at the cap, and the late correction never touches the draft", async () => {

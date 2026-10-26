@@ -346,6 +346,35 @@ describe("VoiceRecordingService — dictation ranges (#14597)", () => {
     expect(record.range.edited).toBe(true);
   });
 
+  it("hands a correction that swapped the passage to the composer, and only that", async () => {
+    const { service, voiceStore, draft } = await setup("Intro.");
+    const { takeLandedCorrection } = await import("../voiceCorrectionLanding");
+    voiceStore.getState().setCorrectionEnabled(true);
+
+    let resolveCorrection!: (value: unknown) => void;
+    correct.fn.mockReturnValueOnce(new Promise((resolve) => (resolveCorrection = resolve)));
+    complete("Hello there.", "item-a");
+    await service.stop("Dictation stopped.");
+    expect(service.hasPendingCorrection(PANEL)).toBe(true);
+    resolveCorrection({ action: "replace", correctedText: "Hello there." });
+    // The pass retires in the same step that would swap the text.
+    await vi.waitFor(() => expect(service.hasPendingCorrection(PANEL)).toBe(false));
+    expect(takeLandedCorrection(PANEL, PROJECT, draft())).toBeNull();
+
+    voiceStore.getState().beginSession({ panelId: PANEL, projectId: PROJECT });
+    correct.fn.mockResolvedValueOnce({ action: "replace", correctedText: "Hello, again." });
+    complete("hello again", "item-b");
+    await service.stop("Dictation stopped.");
+    await vi.waitFor(() => expect(draft()).toBe("Intro. Hello there. Hello, again."));
+
+    expect(takeLandedCorrection(PANEL, PROJECT, draft())).toEqual({
+      from: "Intro. Hello there. ".length,
+      rawText: "hello again",
+      correctedText: "Hello, again.",
+      baseline: { raw: "hello again", corrected: "Hello, again." },
+    });
+  });
+
   it("keeps a session's ranges after the stop and beside the next session's", async () => {
     const { service, begin, records, textOf, sessionId } = await setup();
 
@@ -545,6 +574,26 @@ describe("VoiceRecordingService — correction over dictated ranges (#14613)", (
     resolvers.forEach((resolve) => resolve({ action: "no_change", correctedText: "" }));
     await vi.waitFor(() => expect(pending()).toEqual([]));
     expect(draft()).toBe("first part typed note second part");
+  });
+
+  it("hands the composer one span over every corrected passage, typed text between kept", async () => {
+    const { service, voiceStore, draft, setDraft } = await setup("Intro.");
+    const { takeLandedCorrection } = await import("../voiceCorrectionLanding");
+    correct.fn.mockImplementation(upperCase);
+    voiceStore.getState().setCorrectionEnabled(true);
+
+    say("first part", "item-a");
+    setDraft(draft() + " typed note");
+    say("second part", "item-b");
+    await service.stop("Dictation stopped.");
+    await vi.waitFor(() => expect(draft()).toBe("Intro. FIRST PART typed note SECOND PART"));
+
+    expect(takeLandedCorrection(PANEL, PROJECT, draft())).toEqual({
+      from: "Intro. ".length,
+      rawText: "first part typed note second part",
+      correctedText: "FIRST PART typed note SECOND PART",
+      baseline: { raw: "first part second part", corrected: "FIRST PART SECOND PART" },
+    });
   });
 
   it("applies every passage when one result shifts text identical to the next", async () => {

@@ -405,6 +405,8 @@ describe("useTokenResolution.sendText — targeted submit", () => {
 
     expect(applyEditorValue).toHaveBeenCalledTimes(1);
     expect(applyEditorValue.mock.calls[0]![0]).toBe("");
+    // A sent prompt is not something Cmd+Z brings back.
+    expect(applyEditorValue.mock.calls[0]![1]).toMatchObject({ resetHistory: true });
     expect(clearDraftInput).toHaveBeenCalledTimes(1);
     // Exactly one delivery: the targeted submit replaces the pane's own send
     // rather than joining it, or the agent would get the text twice.

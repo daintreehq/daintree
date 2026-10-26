@@ -102,7 +102,11 @@ export function useContextDetection({
           }
 
           isUserChange = update.transactions.some(
-            (tr) => tr.isUserEvent("input") || tr.isUserEvent("delete")
+            (tr) =>
+              tr.isUserEvent("input") ||
+              tr.isUserEvent("delete") ||
+              tr.isUserEvent("undo") ||
+              tr.isUserEvent("redo")
           );
         }
 

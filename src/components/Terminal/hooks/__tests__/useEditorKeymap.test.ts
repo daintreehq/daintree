@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook } from "@testing-library/react";
-import { Compartment } from "@codemirror/state";
-import type { EditorState } from "@codemirror/state";
+import { Compartment, EditorState } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
+import { undo, undoDepth } from "@codemirror/commands";
+import { createComposerHistory } from "../../inputEditorExtensions/composerHistory";
 import type { Dispatch, SetStateAction } from "react";
 import type { ActiveCompletionContext } from "../../hybridInputParsing";
 import type { AutocompleteItem } from "../../AutocompleteMenu";
@@ -64,7 +66,7 @@ describe("useEditorKeymap", () => {
     setSelectedIndex = vi.fn<Dispatch<SetStateAction<number>>>();
   });
 
-  function renderKeymap(latest: LatestShape) {
+  function renderKeymap(latest: LatestShape, overrides: Partial<KeymapParams> = {}) {
     const params: KeymapParams = {
       latestRef: { current: latest },
       editorViewRef: { current: null },
@@ -87,6 +89,7 @@ describe("useEditorKeymap", () => {
       setActiveCompletionContext,
       setIsExpanded: vi.fn<Dispatch<SetStateAction<boolean>>>(),
       setSelectedIndex,
+      ...overrides,
     };
     const { result } = renderHook(() => useEditorKeymap(params));
     return { handlers: result.current.handlersRef.current! };
@@ -382,6 +385,33 @@ describe("useEditorKeymap", () => {
       expect(handlers.onArrowUp()).toBe(true);
       expect(handleHistoryNavigation).toHaveBeenCalledWith("up");
       expect(onSendKey).toHaveBeenCalledWith("up");
+    });
+  });
+  describe("Stash", () => {
+    it("stashes the draft with its own undo steps and leaves none in the empty composer", () => {
+      const view = new EditorView({
+        parent: document.createElement("div"),
+        state: EditorState.create({ doc: "", extensions: [createComposerHistory()] }),
+      });
+      view.dispatch({ changes: { from: 0, insert: "half a prompt" }, userEvent: "input.type" });
+      let stashed: EditorState | undefined;
+      const { handlers } = renderKeymap(makeLatest({ isAutocompleteOpen: false }), {
+        editorViewRef: { current: view },
+        stashEditorState: vi.fn((_id: string, state: EditorState) => {
+          stashed = state;
+        }),
+        popStashedEditorState: vi.fn(() => stashed),
+      });
+
+      expect(handlers.onStash()).toBe(true);
+      expect(view.state.doc.toString()).toBe("");
+      expect(undoDepth(view.state)).toBe(0);
+
+      expect(handlers.onPopStash()).toBe(true);
+      expect(view.state.doc.toString()).toBe("half a prompt");
+      expect(undo(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe("");
+      view.destroy();
     });
   });
 });
