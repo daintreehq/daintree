@@ -1940,13 +1940,13 @@ describe("useTerminalFileTransfer hook", () => {
       }
     });
 
-    it("lands on the terminal while xterm holds the keyboard, whatever a click would focus", async () => {
+    it("lands on the terminal while xterm holds the keyboard, whatever home is", async () => {
       const take = registerInputBar();
       focusXterm();
       renderFileTransferHook({
         detectedAgentId: "claude",
         cwdProvider: () => CWD,
-        dropClickTarget: () => "hybridInput",
+        dropHomeTarget: () => "hybridInput",
       });
       await dropFiles([fileAt("App.tsx", `${CWD}/src/App.tsx`)]);
 
@@ -1954,12 +1954,12 @@ describe("useTerminalFileTransfer hook", () => {
       expect(lastWrittenPayload().trimEnd()).toBe("@src/App.tsx");
     });
 
-    it("goes where a click on the terminal would put the keyboard when nothing in the pane holds it", async () => {
+    it("goes to the pane's home when nothing in the pane holds the keyboard", async () => {
       const take = registerInputBar();
       const { rerender } = renderFileTransferHook({
         detectedAgentId: "claude",
         cwdProvider: () => CWD,
-        dropClickTarget: () => "hybridInput",
+        dropHomeTarget: () => "hybridInput",
       });
       await dropFiles([fileAt("a.ts", `${CWD}/a.ts`)]);
       expect(take).toHaveBeenCalledTimes(1);
@@ -1968,14 +1968,14 @@ describe("useTerminalFileTransfer hook", () => {
       rerender({
         detectedAgentId: "claude",
         cwdProvider: () => CWD,
-        dropClickTarget: () => "xterm",
+        dropHomeTarget: () => "xterm",
       });
       await dropFiles([fileAt("b.ts", `${CWD}/b.ts`)]);
       expect(take).toHaveBeenCalledTimes(1);
       expect(lastWrittenPayload().trimEnd()).toBe("@b.ts");
     });
 
-    it("lands on the terminal when nothing holds the keyboard and there is no pane to activate", async () => {
+    it("lands on the terminal when nothing holds the keyboard and there is no pane", async () => {
       const take = registerInputBar();
       renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
       await dropFiles([fileAt("App.tsx", `${CWD}/src/App.tsx`)]);
@@ -1988,7 +1988,7 @@ describe("useTerminalFileTransfer hook", () => {
       renderFileTransferHook({
         detectedAgentId: "claude",
         cwdProvider: () => CWD,
-        dropClickTarget: () => "hybridInput",
+        dropHomeTarget: () => "hybridInput",
       });
       await dropFiles([fileAt("App.tsx", `${CWD}/src/App.tsx`)]);
 
@@ -2052,7 +2052,7 @@ describe("useTerminalFileTransfer hook", () => {
     });
 
     it.each([true, false])(
-      "follows the keyboard whatever Focus the input bar first says (on: %s)",
+      "follows the keyboard whatever Focus first says (hybrid input: %s)",
       async (autoFocus) => {
         const before = useTerminalInputStore.getState().hybridInputAutoFocus;
         useTerminalInputStore.setState({ hybridInputAutoFocus: autoFocus });

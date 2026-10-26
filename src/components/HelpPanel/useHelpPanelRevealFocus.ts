@@ -4,6 +4,7 @@ import type { HybridInputBarHandle } from "@/components/Terminal/HybridInputBar"
 import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { useHelpPanelStore, selectSlot } from "@/store/helpPanelStore";
 import { usePanelStore, useTerminalInputStore } from "@/store";
+import { selectHomeFocusTarget } from "@/store/terminalInputStore";
 import { isAssistantFocused } from "@/store/macroFocusStore";
 import { dismissAllTooltips } from "@/lib/tooltipDismissRegistry";
 import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
@@ -131,15 +132,14 @@ export function useHelpPanelRevealFocus({
         const currentTerminalPty =
           currentTerminal && isPtyPanel(currentTerminal) ? currentTerminal : undefined;
 
-        // Ownership is settled by this point, so now — and only now — the
-        // remembered preference gets to pick which surface receives focus.
-        // Resolving it here rather than letting HybridInputBar's own
-        // `preferredTerminalFocusTarget` check veto the grab matters: that
-        // check aborts silently, which would leave an authorized open request
-        // marked complete with focus still in another pane.
+        // Ownership is settled by this point, so now — and only now — home
+        // gets to pick which surface receives focus. Resolving it here rather
+        // than letting HybridInputBar's own home check veto the grab matters:
+        // that check aborts silently, which would leave an authorized open
+        // request marked complete with focus still in another pane.
         const bar = inputBarRef.current;
         const focusTarget = getTerminalFocusTarget({
-          preferredTarget: usePanelStore.getState().preferredTerminalFocusTarget,
+          preferredTarget: selectHomeFocusTarget(useTerminalInputStore.getState()),
           hasHybridInputSurface: showHybridInputBar && bar !== null,
           isInputDisabled: currentTerminalPty?.isInputLocked === true,
           hybridInputEnabled: useTerminalInputStore.getState().hybridInputEnabled,

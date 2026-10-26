@@ -178,10 +178,10 @@ export const GridTabGroup = React.memo(function GridTabGroup({
     [panels, handBackRunIds]
   );
 
-  // Restore focus to the destination tab when switching tabs within a focused
-  // group. The registry handler routes to either xterm or the hybrid input
-  // depending on the user's current `preferredTerminalFocusTarget`, so tab
-  // switching no longer forces input focus when the user has chosen xterm.
+  // Hand focus to the destination tab when switching tabs within a focused
+  // group. The registry handler routes it to the tab's home, xterm or the
+  // hybrid input as the setting says, so tab switching never forces the input
+  // on someone who types in the terminal.
   // The existing TerminalPane focus effect uses double-rAF which races with
   // HybridInputBar's CodeMirror editor reinitialization on terminalId change.
   const prevActiveTabIdRef = useRef(activeTabId);

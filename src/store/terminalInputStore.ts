@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { EditorState } from "@codemirror/state";
 import { makeDraftKey } from "@/lib/draftKey";
+import type { TerminalFocusTarget } from "@/components/Terminal/terminalFocus";
 
 const MAX_HISTORY_SIZE = 100;
 
@@ -143,6 +144,14 @@ export interface TerminalInputState {
   getDraftProjectIds: () => string[];
 }
 
+/**
+ * The surface every arrival at an agent pane puts the keyboard on, before
+ * availability: the **Focus first** setting, and nothing the user did in some
+ * other pane.
+ */
+export const selectHomeFocusTarget = (state: TerminalInputState): TerminalFocusTarget =>
+  state.hybridInputAutoFocus ? "hybridInput" : "xterm";
+
 export const useTerminalInputStore = create<TerminalInputState>()((set, get) => ({
   hybridInputEnabled: true,
   hybridInputAutoFocus: true,
@@ -172,16 +181,7 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
   isVoiceSubmitting: (panelId) => get().voiceSubmittingPanels.has(panelId),
 
   setHybridInputEnabled: (enabled) => set({ hybridInputEnabled: enabled }),
-  setHybridInputAutoFocus: (enabled) => {
-    set({ hybridInputAutoFocus: enabled });
-    // Re-seed the session-wide focus preference whenever the user (or
-    // hydration) flips this setting. Dynamic import dodges the import cycle
-    // with panelStore, which already imports this store dynamically the other
-    // way around.
-    void import("./panelStore").then(({ usePanelStore }) => {
-      usePanelStore.getState().setPreferredTerminalFocusTarget(enabled ? "hybridInput" : "xterm");
-    });
-  },
+  setHybridInputAutoFocus: (enabled) => set({ hybridInputAutoFocus: enabled }),
   getDraftInput: (terminalId, projectId) => {
     const key = makeDraftKey(terminalId, projectId);
     return get().draftInputs.get(key) ?? "";

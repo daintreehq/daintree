@@ -22,10 +22,6 @@ vi.mock("@codemirror/view", () => ({
   },
 }));
 
-vi.mock("@/store/panelStore", () => ({
-  usePanelStore: { getState: () => ({ setPreferredTerminalFocusTarget: vi.fn() }) },
-}));
-
 vi.mock("@/store/terminalInputStore", () => ({
   useTerminalInputStore: { getState: () => ({ isVoiceSubmitting: () => false }) },
 }));

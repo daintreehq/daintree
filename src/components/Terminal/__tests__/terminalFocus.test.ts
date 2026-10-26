@@ -1,11 +1,9 @@
 import { describe, it, expect } from "vitest";
 import {
-  getTerminalClickTarget,
   getTerminalFocusTarget,
   isLikelyAtSynthesizedPointer,
   resolvePaneFocusAction,
   resolveTerminalPaneFocus,
-  shouldRecordXtermFocusPreference,
   shouldShowHybridInputBar,
   shouldSuppressUnfocusedClick,
 } from "../terminalFocus";
@@ -30,19 +28,16 @@ describe("resolveTerminalPaneFocus", () => {
     ["xterm", "hybridInput", "xterm"],
     [null, "hybridInput", "hybridInput"],
     [null, "xterm", "xterm"],
-  ] as const)(
-    "asked for %s with %s remembered, goes to %s",
-    (requested, preferredTarget, action) => {
-      expect(resolveTerminalPaneFocus({ ...pane, requested, preferredTarget })).toBe(action);
-    }
-  );
+  ] as const)("asked for %s with home %s, goes to %s", (requested, home, action) => {
+    expect(resolveTerminalPaneFocus({ ...pane, requested, home })).toBe(action);
+  });
 
   it("sends a requested hybrid input the pane can't take to the terminal", () => {
     expect(
       resolveTerminalPaneFocus({
         ...pane,
         requested: "hybridInput",
-        preferredTarget: "hybridInput",
+        home: "hybridInput",
         isInputDisabled: true,
       })
     ).toBe("xterm");
@@ -58,11 +53,121 @@ describe("resolveTerminalPaneFocus", () => {
       resolveTerminalPaneFocus({
         ...pane,
         requested,
-        preferredTarget: "hybridInput",
+        home: "hybridInput",
         hasSelection: true,
         xtermOwnsDomFocus: true,
       })
     ).toBe(action);
+  });
+});
+
+/**
+ * The issue #14689 table. Home is the **Focus first** setting;
+ * nothing a pane remembers, so every row is the same whatever the pane, or the
+ * pane before it, did last.
+ */
+describe("where an agent pane puts the keyboard", () => {
+  const available = {
+    hasHybridInputSurface: true,
+    isInputDisabled: false,
+    hybridInputEnabled: true,
+    hasSelection: false,
+  };
+  const homes = ["hybridInput", "xterm"] as const;
+  // The pane's own pass, as it becomes selected or what it can take changes.
+  const ownPass = (options: {
+    home: "hybridInput" | "xterm";
+    owned?: "hybridInput" | "xterm" | null;
+    isInputDisabled?: boolean;
+    hasHybridInputSurface?: boolean;
+    hasSelection?: boolean;
+  }) =>
+    resolveTerminalPaneFocus({
+      ...available,
+      requested: null,
+      home: options.home,
+      hasSelection: options.hasSelection ?? false,
+      isInputDisabled: options.isInputDisabled ?? false,
+      hasHybridInputSurface: options.hasHybridInputSurface ?? true,
+      xtermOwnsDomFocus: options.owned === "xterm",
+      hybridInputOwnsDomFocus: options.owned === "hybridInput",
+      keepOwnedSurface: true,
+    });
+
+  it.each(homes)(
+    "lands an arrival on home %s, wherever the keyboard was in the pane it left",
+    (home) => {
+      // Cmd+Opt+Arrow, Cmd+1-9, a launch: the keyboard is in another pane, or
+      // on a button, so neither of this pane's surfaces holds it.
+      expect(ownPass({ home })).toBe(home);
+      // Tab switch, `panel.focus`, Enter from the grid: the registry, which
+      // keeps nothing.
+      for (const xtermOwnsDomFocus of [true, false]) {
+        expect(
+          resolveTerminalPaneFocus({ ...available, requested: null, home, xtermOwnsDomFocus })
+        ).toBe(home);
+      }
+    }
+  );
+
+  it.each(homes)(
+    "activates an unfocused pane on a terminal click and lands on home %s, grid and dock alike",
+    (home) => {
+      // The click is swallowed before xterm takes the keyboard, so the pane's
+      // own pass finds nothing owned.
+      expect(
+        shouldSuppressUnfocusedClick({
+          isFocused: false,
+          isCursorPointer: false,
+          isShiftKey: false,
+        })
+      ).toBe(true);
+      expect(ownPass({ home, owned: null })).toBe(home);
+    }
+  );
+
+  it.each(homes)("keeps a click into the hybrid input on the hybrid input with home %s", (home) => {
+    // The editor takes the keyboard on the press, before the click selects
+    // the pane, and for a pane already selected no pass runs at all.
+    expect(ownPass({ home, owned: "hybridInput" })).toBe("preserve");
+  });
+
+  it.each(homes)("lets a click on the focused pane's terminal reach xterm with home %s", (home) => {
+    expect(
+      shouldSuppressUnfocusedClick({ isFocused: true, isCursorPointer: false, isShiftKey: false })
+    ).toBe(false);
+    // A later pass on the same pane, its input bar appearing or unlocking,
+    // leaves the keyboard on the terminal the user is typing in.
+    expect(ownPass({ home, owned: "xterm" })).toBe("preserve");
+  });
+
+  it.each(homes)(
+    "falls back to the terminal with home %s when the hybrid input is missing or disabled",
+    (home) => {
+      expect(ownPass({ home, hasHybridInputSurface: false })).toBe("xterm");
+      expect(ownPass({ home, isInputDisabled: true })).toBe("xterm");
+      // A keyboard left on an input bar that just locked doesn't keep it.
+      expect(ownPass({ home, owned: "hybridInput", isInputDisabled: true })).toBe("xterm");
+    }
+  );
+
+  it("still hands an inert selection's pane to home", () => {
+    // #11133: a selection in an xterm that doesn't hold the keyboard is no
+    // reason to strand the keyboard on the pane the user just left.
+    expect(ownPass({ home: "hybridInput", hasSelection: true })).toBe("hybridInput");
+  });
+
+  it("lets a caller that named a surface past what the pane holds", () => {
+    expect(
+      resolveTerminalPaneFocus({
+        ...available,
+        requested: "xterm",
+        home: "hybridInput",
+        xtermOwnsDomFocus: false,
+        hybridInputOwnsDomFocus: true,
+        keepOwnedSurface: true,
+      })
+    ).toBe("xterm");
   });
 });
 
@@ -178,7 +283,7 @@ describe("shouldShowHybridInputBar", () => {
 });
 
 describe("getTerminalFocusTarget", () => {
-  it("honors a hybridInput preference when the surface is available", () => {
+  it("honors a hybridInput target when the surface is available", () => {
     expect(
       getTerminalFocusTarget({
         preferredTarget: "hybridInput",
@@ -189,7 +294,7 @@ describe("getTerminalFocusTarget", () => {
     ).toBe("hybridInput");
   });
 
-  it("honors an xterm preference even when the surface exists", () => {
+  it("honors an xterm target even when the surface exists", () => {
     expect(
       getTerminalFocusTarget({
         preferredTarget: "xterm",
@@ -200,7 +305,7 @@ describe("getTerminalFocusTarget", () => {
     ).toBe("xterm");
   });
 
-  it("falls back to xterm when input is disabled despite preferring hybridInput", () => {
+  it("falls back to xterm when input is disabled despite a hybridInput target", () => {
     expect(
       getTerminalFocusTarget({
         preferredTarget: "hybridInput",
@@ -235,10 +340,9 @@ describe("getTerminalFocusTarget", () => {
 });
 
 describe("shouldSuppressUnfocusedClick", () => {
-  it("suppresses an unfocused grid click on a non-pointer cell", () => {
+  it("suppresses an unfocused pane's click on a non-pointer cell", () => {
     expect(
       shouldSuppressUnfocusedClick({
-        location: "grid",
         isFocused: false,
         isCursorPointer: false,
         isShiftKey: false,
@@ -249,7 +353,6 @@ describe("shouldSuppressUnfocusedClick", () => {
   it("does not suppress when the pane is already focused — the click should pass through to xterm", () => {
     expect(
       shouldSuppressUnfocusedClick({
-        location: "grid",
         isFocused: true,
         isCursorPointer: false,
         isShiftKey: false,
@@ -260,20 +363,8 @@ describe("shouldSuppressUnfocusedClick", () => {
   it("does not suppress on link/cursor-pointer cells so the link click registers", () => {
     expect(
       shouldSuppressUnfocusedClick({
-        location: "grid",
         isFocused: false,
         isCursorPointer: true,
-        isShiftKey: false,
-      })
-    ).toBe(false);
-  });
-
-  it("does not suppress in dock — popovers handle focus differently", () => {
-    expect(
-      shouldSuppressUnfocusedClick({
-        location: "dock",
-        isFocused: false,
-        isCursorPointer: false,
         isShiftKey: false,
       })
     ).toBe(false);
@@ -282,7 +373,6 @@ describe("shouldSuppressUnfocusedClick", () => {
   it("does not suppress shift+click — xterm uses shift to bypass PTY mouse reporting for native selection", () => {
     expect(
       shouldSuppressUnfocusedClick({
-        location: "grid",
         isFocused: false,
         isCursorPointer: false,
         isShiftKey: true,
@@ -292,7 +382,7 @@ describe("shouldSuppressUnfocusedClick", () => {
 });
 
 describe("shouldSuppressUnfocusedClick option-click", () => {
-  const base = { location: "grid", isFocused: false, isCursorPointer: false, isShiftKey: false };
+  const base = { isFocused: false, isCursorPointer: false, isShiftKey: false };
 
   it("does not suppress option+click on macOS — xterm's force-selection gesture there", () => {
     expect(shouldSuppressUnfocusedClick({ ...base, isAltKey: true, isMac: true })).toBe(false);
@@ -310,55 +400,6 @@ describe("shouldSuppressUnfocusedClick option-click", () => {
     expect(
       shouldSuppressUnfocusedClick({ ...base, isCursorPointer: true, isAltKey: false, isMac: true })
     ).toBe(false);
-  });
-});
-
-describe("getTerminalClickTarget", () => {
-  const remembersBar = {
-    preferredTarget: "hybridInput",
-    hasHybridInputSurface: true,
-    isInputDisabled: false,
-    hybridInputEnabled: true,
-  } as const;
-
-  it("sends the activation click on an unfocused grid pane to the target it remembers", () => {
-    expect(getTerminalClickTarget({ location: "grid", isFocused: false, ...remembersBar })).toBe(
-      "hybridInput"
-    );
-    expect(
-      getTerminalClickTarget({
-        location: "grid",
-        isFocused: false,
-        ...remembersBar,
-        preferredTarget: "xterm",
-      })
-    ).toBe("xterm");
-  });
-
-  it("sends that click to xterm when the remembered bar can't take the keyboard", () => {
-    expect(
-      getTerminalClickTarget({
-        location: "grid",
-        isFocused: false,
-        ...remembersBar,
-        isInputDisabled: true,
-      })
-    ).toBe("xterm");
-    expect(
-      getTerminalClickTarget({
-        location: "grid",
-        isFocused: false,
-        ...remembersBar,
-        hasHybridInputSurface: false,
-      })
-    ).toBe("xterm");
-  });
-
-  it.each([
-    ["an already focused grid pane", "grid", true],
-    ["a docked pane", "dock", false],
-  ])("lets a click on %s reach xterm whatever it remembers", (_, location, isFocused) => {
-    expect(getTerminalClickTarget({ location, isFocused, ...remembersBar })).toBe("xterm");
   });
 });
 
@@ -382,38 +423,5 @@ describe("isLikelyAtSynthesizedPointer", () => {
   it("honors a custom threshold", () => {
     expect(isLikelyAtSynthesizedPointer(1000, 1030, 20)).toBe(true);
     expect(isLikelyAtSynthesizedPointer(1000, 1010, 20)).toBe(false);
-  });
-});
-
-describe("recording the xterm focus preference on pointerdown", () => {
-  // Only a click that actually reaches xterm is an explicit "I want the
-  // terminal" gesture. Inputs are derived through the production classifiers
-  // rather than passed as bare booleans, so these cases exercise the real
-  // composition the pane handler performs.
-  const classify = (options: { location: string; isFocused: boolean; lastMoveAt: number | null }) =>
-    shouldRecordXtermFocusPreference({
-      isAtSynthesized: isLikelyAtSynthesizedPointer(options.lastMoveAt, 1000),
-      shouldSuppress: shouldSuppressUnfocusedClick({
-        location: options.location,
-        isFocused: options.isFocused,
-        isCursorPointer: false,
-        isShiftKey: false,
-      }),
-    });
-
-  it("records for a physical click on an already-focused pane — the click reaches xterm", () => {
-    expect(classify({ location: "grid", isFocused: true, lastMoveAt: 990 })).toBe(true);
-  });
-
-  it("preserves the remembered target when the same physical click activates an unfocused pane", () => {
-    // Identical gesture to the case above; only the pane's focus state differs,
-    // which makes the click suppressed and therefore never seen by xterm.
-    expect(classify({ location: "grid", isFocused: false, lastMoveAt: 990 })).toBe(false);
-  });
-
-  it("preserves the remembered target for AT cursor routing that does reach xterm", () => {
-    // Pass-through click (already focused), but with no preceding pointermove:
-    // a screen reader reading terminal output must not switch the user's mode.
-    expect(classify({ location: "grid", isFocused: true, lastMoveAt: null })).toBe(false);
   });
 });

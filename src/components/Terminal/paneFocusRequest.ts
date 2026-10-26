@@ -5,9 +5,8 @@ import type { TerminalFocusTarget } from "./terminalFocus";
 
 /**
  * "Focus this agent pane's hybrid input" (or its terminal), said by whoever
- * steers the keyboard into a pane — a drop, type-anywhere — instead of
- * rewriting the shared `preferredTerminalFocusTarget` that every later arrival
- * reads.
+ * steers the keyboard into a pane — a drop, type-anywhere, a restore — for
+ * that pane alone: every later arrival still lands on home.
  *
  * At most one intent is current per view. An explicit request is one; so is
  * the surface a pane's own focus pass settled on when it arrived, which a
@@ -113,6 +112,15 @@ export function holdPaneFocus(paneId: string, surface: TerminalFocusTarget): voi
   watchPresses();
   current = { paneId, surface, explicit: false };
   watchIntent();
+}
+
+/** Which of `paneId`'s typing surfaces holds the keyboard right now, if either. */
+export function paneSurfaceHoldingFocus(paneId: string): TerminalFocusTarget | null {
+  const el = document.activeElement;
+  if (!el) return null;
+  if (isOnSurface(el, { paneId, surface: "hybridInput", explicit: false })) return "hybridInput";
+  if (isOnSurface(el, { paneId, surface: "xterm", explicit: false })) return "xterm";
+  return null;
 }
 
 /** The surface an explicit, still-current request asks `paneId` to focus, or null. */

@@ -20,63 +20,65 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 //      the identical gate (#11465: gating only one path is inert).
 //   5. Cleanup cancels HybridInputBar's nested frame so it can't land late.
 
-const { focusMock, helpPanelState, panelStoreState, hybridHandle } = vi.hoisted(() => ({
-  focusMock: vi.fn(),
-  helpPanelState: {
-    clearDroppedPreferredAgent: vi.fn(),
-    setAutoLaunchEnabled: vi.fn(),
-    requestFocus: vi.fn(),
-    setActiveFigureNumber: vi.fn(),
-    addFigure: vi.fn(),
-    setActiveSlot: vi.fn(),
-    closeSlot: vi.fn(),
-    openSlot: vi.fn(),
-    // #12108: the panel reads its lane pointer; the mocked selectors
-    // above project this same flat object as that lane.
-    activeSlot: 0,
-    sessions: {} as Record<number, unknown>,
-    isOpen: true,
-    width: 380,
-    terminalId: "t-1" as string | null,
-    agentId: "claude" as string | null,
-    preferredAgentId: null as string | null,
-    sessionId: null as string | null,
-    introDismissed: true,
-    conversationTouched: false,
-    hibernateSessions: {} as Record<string, unknown>,
-    focusRequest: 0,
-    figures: [] as unknown[],
-    markConversationStarted: vi.fn(),
-    setWidth: vi.fn(),
-    setOpen: vi.fn(),
-    clearTerminal: vi.fn(),
-    setPreferredAgent: vi.fn(),
-    setTerminal: vi.fn(),
-    dismissIntro: vi.fn(),
-    setHibernateSession: vi.fn(),
-    clearHibernateSession: vi.fn(),
-  },
-  panelStoreState: {
-    panelIds: [] as string[],
-    panelsById: {} as Record<
-      string,
-      { agentState?: string; cwd?: string; spawnStatus?: string; isInputLocked?: boolean }
-    >,
-    preferredTerminalFocusTarget: "hybridInput" as "hybridInput" | "xterm",
-    removePanel: vi.fn(),
-    addPanel: vi.fn().mockResolvedValue(""),
-  },
-  // Stands in for HybridInputBar's imperative handle. `focusWithCursorAtEnd`
-  // schedules the real focus inside its own rAF behind a generation token, and
-  // `cancelPendingFocus` invalidates it — the exact shape HelpPanel must drive.
-  hybridHandle: {
-    generation: 0,
-    scheduled: 0,
-    editor: null as HTMLElement | null,
-    focusWithCursorAtEnd: vi.fn(),
-    cancelPendingFocus: vi.fn(),
-  },
-}));
+const { focusMock, helpPanelState, panelStoreState, terminalInputState, hybridHandle } = vi.hoisted(
+  () => ({
+    focusMock: vi.fn(),
+    helpPanelState: {
+      clearDroppedPreferredAgent: vi.fn(),
+      setAutoLaunchEnabled: vi.fn(),
+      requestFocus: vi.fn(),
+      setActiveFigureNumber: vi.fn(),
+      addFigure: vi.fn(),
+      setActiveSlot: vi.fn(),
+      closeSlot: vi.fn(),
+      openSlot: vi.fn(),
+      // #12108: the panel reads its lane pointer; the mocked selectors
+      // above project this same flat object as that lane.
+      activeSlot: 0,
+      sessions: {} as Record<number, unknown>,
+      isOpen: true,
+      width: 380,
+      terminalId: "t-1" as string | null,
+      agentId: "claude" as string | null,
+      preferredAgentId: null as string | null,
+      sessionId: null as string | null,
+      introDismissed: true,
+      conversationTouched: false,
+      hibernateSessions: {} as Record<string, unknown>,
+      focusRequest: 0,
+      figures: [] as unknown[],
+      markConversationStarted: vi.fn(),
+      setWidth: vi.fn(),
+      setOpen: vi.fn(),
+      clearTerminal: vi.fn(),
+      setPreferredAgent: vi.fn(),
+      setTerminal: vi.fn(),
+      dismissIntro: vi.fn(),
+      setHibernateSession: vi.fn(),
+      clearHibernateSession: vi.fn(),
+    },
+    panelStoreState: {
+      panelIds: [] as string[],
+      panelsById: {} as Record<
+        string,
+        { agentState?: string; cwd?: string; spawnStatus?: string; isInputLocked?: boolean }
+      >,
+      removePanel: vi.fn(),
+      addPanel: vi.fn().mockResolvedValue(""),
+    },
+    terminalInputState: { hybridInputEnabled: true, hybridInputAutoFocus: true },
+    // Stands in for HybridInputBar's imperative handle. `focusWithCursorAtEnd`
+    // schedules the real focus inside its own rAF behind a generation token, and
+    // `cancelPendingFocus` invalidates it — the exact shape HelpPanel must drive.
+    hybridHandle: {
+      generation: 0,
+      scheduled: 0,
+      editor: null as HTMLElement | null,
+      focusWithCursorAtEnd: vi.fn(),
+      cancelPendingFocus: vi.fn(),
+    },
+  })
+);
 
 const snapshot = {
   showResumeBanner: false,
@@ -281,7 +283,6 @@ vi.mock("@/store", () => {
     selector ? selector(worktreeState) : worktreeState;
   worktreeStore.getState = () => worktreeState;
 
-  const terminalInputState = { hybridInputEnabled: true };
   const terminalInputStore = (selector?: (s: typeof terminalInputState) => unknown) =>
     selector ? selector(terminalInputState) : terminalInputState;
   terminalInputStore.getState = () => terminalInputState;
@@ -427,7 +428,7 @@ beforeEach(() => {
   helpPanelState.preferredAgentId = null;
   helpPanelState.conversationTouched = false;
   helpPanelState.focusRequest = 0;
-  panelStoreState.preferredTerminalFocusTarget = "hybridInput";
+  terminalInputState.hybridInputAutoFocus = true;
   setPanel("t-1");
 
   foreignEditor = document.createElement("textarea");
@@ -664,9 +665,9 @@ describe("HelpPanel — reveal focus ownership (#11472)", () => {
     });
   });
 
-  describe("the remembered target picks the surface, and never authorizes", () => {
-    it("focuses xterm instead of the input bar when the preference is xterm", () => {
-      panelStoreState.preferredTerminalFocusTarget = "xterm";
+  describe("home picks the surface, and never authorizes", () => {
+    it("focuses xterm instead of the input bar when home is the terminal", () => {
+      terminalInputState.hybridInputAutoFocus = false;
       helpPanelState.isOpen = false;
       const { rerender } = render(<HelpPanel width={380} />);
       focusForeignEditor();
@@ -677,7 +678,7 @@ describe("HelpPanel — reveal focus ownership (#11472)", () => {
       act(() => flushFrame());
       act(() => flushFrame());
 
-      // The bar's own preference check would have aborted silently, leaving an
+      // The bar's own home check would have aborted silently, leaving an
       // authorized open request with focus still in the other pane.
       expect(hybridHandle.focusWithCursorAtEnd).not.toHaveBeenCalled();
       expect(focusMock).toHaveBeenCalledWith("t-1");
@@ -701,9 +702,9 @@ describe("HelpPanel — reveal focus ownership (#11472)", () => {
       expect(focusMock).toHaveBeenCalledWith("t-1");
     });
 
-    // The preference must not become a back door around the ownership gate.
-    it("does not let the xterm preference authorize a background structural retry", () => {
-      panelStoreState.preferredTerminalFocusTarget = "xterm";
+    // Home must not become a back door around the ownership gate.
+    it("does not let a terminal home authorize a background structural retry", () => {
+      terminalInputState.hybridInputAutoFocus = false;
       setPanel("t-1", "spawning");
       const { rerender } = render(<HelpPanel width={380} />);
       act(() => flushFrame());

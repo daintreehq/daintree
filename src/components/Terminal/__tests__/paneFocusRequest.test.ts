@@ -7,6 +7,7 @@ import {
   captureFocusEpoch,
   holdPaneFocus,
   isFocusEpochCurrent,
+  paneSurfaceHoldingFocus,
   pendingPaneSurface,
   requestPaneFocus,
   requestedPaneSurface,
@@ -219,6 +220,30 @@ describe("paneFocusRequest", () => {
       holdPaneFocus("a", "hybridInput");
       press();
       expect(pendingPaneSurface("a")).toBeNull();
+    });
+  });
+
+  describe("which surface holds the keyboard", () => {
+    it("names the pane's own surface, and only that pane's", () => {
+      const a = mountPane("a");
+      mountPane("b");
+
+      a.editor.focus();
+      expect(paneSurfaceHoldingFocus("a")).toBe("hybridInput");
+      expect(paneSurfaceHoldingFocus("b")).toBeNull();
+
+      a.xterm.focus();
+      expect(paneSurfaceHoldingFocus("a")).toBe("xterm");
+      expect(paneSurfaceHoldingFocus("b")).toBeNull();
+    });
+
+    it("counts neither the notes nor the pane's other controls", () => {
+      const a = mountPane("a");
+
+      a.notes.focus();
+      expect(paneSurfaceHoldingFocus("a")).toBeNull();
+      a.button.focus();
+      expect(paneSurfaceHoldingFocus("a")).toBeNull();
     });
   });
 

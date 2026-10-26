@@ -4,7 +4,6 @@ import type { EditorView } from "@codemirror/view";
 import { hasFileDrag } from "@/lib/fileDragPayload";
 import { hasAgentContextDrag } from "@/lib/agentContextDragPayload";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
-import { usePanelStore } from "@/store/panelStore";
 import { isEnterLikeLineBreakInputEvent } from "../hybridInputEvents";
 
 interface LatestRefShape {
@@ -59,14 +58,6 @@ export function useEditorDomHandlers({
   const domEventHandlers = useMemo(
     () =>
       EditorViewFacet.domEventHandlers({
-        focus: () => {
-          // Record the session-wide focus preference so Cmd-Opt-Arrow keeps
-          // landing on the hybrid input across panes. Idempotent: the slice
-          // setter no-ops when the value is already "hybridInput", so a burst
-          // of focus events from re-renders does not churn subscribers.
-          usePanelStore.getState().setPreferredTerminalFocusTarget("hybridInput");
-          return false;
-        },
         drop: (event) => {
           if (!event.dataTransfer) return false;
           // CodeMirror reads a dropped file with a FileReader and dispatches its

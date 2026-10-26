@@ -49,9 +49,11 @@ vi.mock("@/store", () => ({
       addPanelToGroup: addPanelToGroupMock,
       tabGroups: mockTabGroups,
     }),
-  useTerminalInputStore: (
-    selector: (s: { hybridInputEnabled: boolean; hybridInputAutoFocus: boolean }) => unknown
-  ) => selector({ hybridInputEnabled: false, hybridInputAutoFocus: false }),
+  useTerminalInputStore: Object.assign(
+    (selector: (s: { hybridInputEnabled: boolean; hybridInputAutoFocus: boolean }) => unknown) =>
+      selector({ hybridInputEnabled: false, hybridInputAutoFocus: false }),
+    { getState: () => ({ hybridInputEnabled: false, hybridInputAutoFocus: false }) }
+  ),
   usePortalStore: (selector: (s: { isOpen: boolean; width: number }) => unknown) =>
     selector({ isOpen: false, width: 0 }),
   useFocusStore: (
@@ -175,8 +177,11 @@ vi.mock("@/components/Terminal/terminalFocus", () => ({
 
 // The real module reaches the panel store graph this suite stubs out.
 let mockRequest: { id: string; surface: string } | null = null;
+let mockHeldSurface: { id: string; surface: string } | null = null;
 vi.mock("@/components/Terminal/paneFocusRequest", () => ({
   requestedPaneSurface: (id: string) => (mockRequest?.id === id ? mockRequest.surface : null),
+  paneSurfaceHoldingFocus: (id: string) =>
+    mockHeldSurface?.id === id ? mockHeldSurface.surface : null,
 }));
 
 // Active Popover mock: captures the Radix callbacks. Focus-driven dismissal is
@@ -353,6 +358,7 @@ describe("DockedTabGroup mount-time close guard (#6602)", () => {
     capturedOnOpenAutoFocus = null;
     capturedOnFocusOutside = null;
     mockRequest = null;
+    mockHeldSurface = null;
     vi.mocked(terminalInstanceService.focus).mockClear();
   });
 
@@ -378,6 +384,20 @@ describe("DockedTabGroup mount-time close guard (#6602)", () => {
     } else {
       expect(terminalInstanceService.focus).not.toHaveBeenCalled();
     }
+  });
+
+  // What the user does inside the pane stays inside it: the popover's focus
+  // pass re-runs on chrome changes, and must not pull the keyboard out of the
+  // input bar for a terminal home.
+  it("leaves the keyboard on the active tab's hybrid input while it holds it", () => {
+    mockActiveDockTerminalId = "t-2";
+    mockTabGroups.set("g-1", makeGroup(["t-1", "t-2"], "t-2"));
+    mockHeldSurface = { id: "t-2", surface: "hybridInput" };
+    const panels = [makePanel({ id: "t-1" }), makePanel({ id: "t-2" })];
+
+    render(<DockedTabGroup group={makeGroup(["t-1", "t-2"], "t-2")} panels={panels} />);
+
+    expect(terminalInstanceService.focus).not.toHaveBeenCalled();
   });
 
   it("wires onFocusOutside to the focus-dismissal guard and never closes on mount", () => {

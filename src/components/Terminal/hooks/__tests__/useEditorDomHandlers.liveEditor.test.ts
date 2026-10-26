@@ -5,10 +5,6 @@ import { EditorState } from "@codemirror/state";
 import type { Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 
-vi.mock("@/store/panelStore", () => ({
-  usePanelStore: { getState: () => ({ setPreferredTerminalFocusTarget: vi.fn() }) },
-}));
-
 vi.mock("@/store/terminalInputStore", () => ({
   useTerminalInputStore: { getState: () => ({ isVoiceSubmitting: () => false }) },
 }));

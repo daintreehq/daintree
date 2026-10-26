@@ -39,6 +39,7 @@ import { useTabOverflow } from "@/hooks";
 import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
 import { isTabCloseKey, useKeyboardTabClose } from "@/hooks/useKeyboardTabClose";
 import { useTerminalInputStore, usePanelStore, useFocusStore } from "@/store";
+import { selectHomeFocusTarget } from "@/store/terminalInputStore";
 import type { PtyPanelData } from "@shared/types/panel";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
@@ -47,7 +48,10 @@ import { getMergedPresets } from "@/config/agents";
 import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { getTerminalFocusTarget } from "@/components/Terminal/terminalFocus";
-import { requestedPaneSurface } from "@/components/Terminal/paneFocusRequest";
+import {
+  paneSurfaceHoldingFocus,
+  requestedPaneSurface,
+} from "@/components/Terminal/paneFocusRequest";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
 import {
@@ -161,7 +165,6 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   const trashPanel = usePanelStore((s) => s.trashPanel);
   const updateTitle = usePanelStore((s) => s.updateTitle);
   const hybridInputEnabled = useTerminalInputStore((s) => s.hybridInputEnabled);
-  const preferredTerminalFocusTarget = usePanelStore((s) => s.preferredTerminalFocusTarget);
   const reorderPanelsInGroup = usePanelStore((s) => s.reorderPanelsInGroup);
   const addPanel = usePanelStore((s) => s.addPanel);
   const addPanelToGroup = usePanelStore((s) => s.addPanelToGroup);
@@ -327,10 +330,17 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
     // Re-runs on agent chrome changes while open; never while the user is
     // writing in the pane's Scratchpad (#12835).
     if (isScratchpadElement(document.activeElement, activePanelId)) return;
+    // Nor while its input bar holds the keyboard: what the user does inside
+    // the pane stays inside it.
+    if (paneSurfaceHoldingFocus(activePanelId) === "hybridInput") return;
 
-    // A drop or type-anywhere that asked this pane for its hybrid input gets it.
+    // Opening the popover is an arrival, so it lands on home; a drop or
+    // type-anywhere that asked this pane for its hybrid input gets it. Home is
+    // read rather than subscribed to: changing the setting isn't an arrival.
     const focusTarget = getTerminalFocusTarget({
-      preferredTarget: requestedPaneSurface(activePanelId) ?? preferredTerminalFocusTarget,
+      preferredTarget:
+        requestedPaneSurface(activePanelId) ??
+        selectHomeFocusTarget(useTerminalInputStore.getState()),
       hasHybridInputSurface: activeIsAgent,
       isInputDisabled: backendStatus === "disconnected" || backendStatus === "recovering",
       hybridInputEnabled,
@@ -344,7 +354,6 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
     activePanelId,
     activeFocusPolicy,
     activeIsAgent,
-    preferredTerminalFocusTarget,
     backendStatus,
     hybridInputEnabled,
   ]);

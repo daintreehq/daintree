@@ -37,9 +37,11 @@ vi.mock("@/store", () => ({
       backendStatus: "connected",
       showDockAgentHighlights: false,
     }),
-  useTerminalInputStore: (
-    selector: (s: { hybridInputEnabled: boolean; hybridInputAutoFocus: boolean }) => unknown
-  ) => selector({ hybridInputEnabled: false, hybridInputAutoFocus: false }),
+  useTerminalInputStore: Object.assign(
+    (selector: (s: { hybridInputEnabled: boolean; hybridInputAutoFocus: boolean }) => unknown) =>
+      selector({ hybridInputEnabled: false, hybridInputAutoFocus: false }),
+    { getState: () => ({ hybridInputEnabled: false, hybridInputAutoFocus: false }) }
+  ),
   usePortalStore: (selector: (s: { isOpen: boolean; width: number }) => unknown) =>
     selector({ isOpen: false, width: 0 }),
   useFocusStore: (
@@ -154,8 +156,10 @@ vi.mock("@/components/Terminal/terminalFocus", () => ({
 }));
 
 let mockRequestedSurface: string | null = null;
+let mockHeldSurface: string | null = null;
 vi.mock("@/components/Terminal/paneFocusRequest", () => ({
   requestedPaneSurface: () => mockRequestedSurface,
+  paneSurfaceHoldingFocus: () => mockHeldSurface,
 }));
 
 // Popover mock: captures the Radix callbacks (onOpenChange, onOpenAutoFocus,
@@ -460,6 +464,7 @@ describe("DockedTerminalItem mount-time close guard (#6602)", () => {
     capturedOnOpenAutoFocus = null;
     capturedOnFocusOutside = null;
     mockRequestedSurface = null;
+    mockHeldSurface = null;
     vi.mocked(terminalInstanceService.focus).mockClear();
   });
 
@@ -537,6 +542,17 @@ describe("DockedTerminalItem mount-time close guard (#6602)", () => {
   it("leaves the keyboard to a hybrid input the pane was asked for", () => {
     mockActiveDockTerminalId = "t-1";
     mockRequestedSurface = "hybridInput";
+    render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
+
+    expect(terminalInstanceService.focus).not.toHaveBeenCalled();
+  });
+
+  // What the user does inside the pane stays inside it: the focus pass re-runs
+  // on chrome changes, and must not pull the keyboard out of the input bar for
+  // a terminal home.
+  it("leaves the keyboard on a hybrid input that holds it", () => {
+    mockActiveDockTerminalId = "t-1";
+    mockHeldSurface = "hybridInput";
     render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
 
     expect(terminalInstanceService.focus).not.toHaveBeenCalled();

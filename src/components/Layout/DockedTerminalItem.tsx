@@ -5,6 +5,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
 import { cn } from "@/lib/utils";
 import { useTerminalInputStore, usePanelStore, useFocusStore } from "@/store";
+import { selectHomeFocusTarget } from "@/store/terminalInputStore";
 import type { PtyPanelData } from "@shared/types/panel";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
@@ -13,7 +14,10 @@ import { getMergedPresets } from "@/config/agents";
 import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { getTerminalFocusTarget } from "@/components/Terminal/terminalFocus";
-import { requestedPaneSurface } from "@/components/Terminal/paneFocusRequest";
+import {
+  paneSurfaceHoldingFocus,
+  requestedPaneSurface,
+} from "@/components/Terminal/paneFocusRequest";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
 import {
@@ -101,7 +105,6 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   const moveTerminalToGrid = usePanelStore((s) => s.moveTerminalToGrid);
   const backendStatus = usePanelStore((s) => s.backendStatus);
   const hybridInputEnabled = useTerminalInputStore((s) => s.hybridInputEnabled);
-  const preferredTerminalFocusTarget = usePanelStore((s) => s.preferredTerminalFocusTarget);
 
   // A boolean, not the raw id: opening or closing another chip's popover must
   // not re-render this one.
@@ -305,10 +308,17 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
     // Re-runs on agent chrome changes while open; never while the user is
     // writing in the pane's Scratchpad (#12835).
     if (isScratchpadElement(document.activeElement, terminal.id)) return;
+    // Nor while its input bar holds the keyboard: what the user does inside
+    // the pane stays inside it.
+    if (paneSurfaceHoldingFocus(terminal.id) === "hybridInput") return;
 
-    // A drop or type-anywhere that asked this pane for its hybrid input gets it.
+    // Opening the popover is an arrival, so it lands on home; a drop or
+    // type-anywhere that asked this pane for its hybrid input gets it. Home is
+    // read rather than subscribed to: changing the setting isn't an arrival.
     const focusTarget = getTerminalFocusTarget({
-      preferredTarget: requestedPaneSurface(terminal.id) ?? preferredTerminalFocusTarget,
+      preferredTarget:
+        requestedPaneSurface(terminal.id) ??
+        selectHomeFocusTarget(useTerminalInputStore.getState()),
       hasHybridInputSurface: chrome.isAgent,
       isInputDisabled: backendStatus === "disconnected" || backendStatus === "recovering",
       hybridInputEnabled,
@@ -321,7 +331,6 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
     portalContainer,
     terminal.id,
     terminal.focusPolicy,
-    preferredTerminalFocusTarget,
     chrome.isAgent,
     backendStatus,
     hybridInputEnabled,
