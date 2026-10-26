@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { VoiceDictionaryEntry } from "../../types/ipc/api.js";
-import { collectHeardAsRules, createHeardAsRewriter } from "../voiceHeardAs.js";
+import { MAX_HEARD_AS_RULES, collectHeardAsRules, createHeardAsRewriter } from "../voiceHeardAs.js";
 
 function entry(term: string, heardAs: string[] = []): VoiceDictionaryEntry {
   return { term, heardAs, source: "manual", addedAt: 0 };
@@ -34,6 +34,28 @@ describe("collectHeardAsRules", () => {
     expect(collectHeardAsRules([entry("Zustand", ["  zoo   stand ", "--", "  "])])).toEqual([
       { heard: "zoo stand", term: "Zustand" },
     ]);
+  });
+
+  it("leaves out forms too long to add and terms that hold a line break", () => {
+    expect(
+      collectHeardAsRules([
+        entry("Long", ["x".repeat(101), "short"]),
+        entry("Two\nlines", ["two lines"]),
+      ])
+    ).toEqual([{ heard: "short", term: "Long" }]);
+  });
+
+  it("keeps the newest entries' rules past the cap", () => {
+    const entries = Array.from({ length: MAX_HEARD_AS_RULES + 5 }, (_, i) =>
+      entry(`Term${i}`, [`heard ${i}`])
+    );
+    const rules = collectHeardAsRules(entries);
+    expect(rules).toHaveLength(MAX_HEARD_AS_RULES);
+    expect(rules[0]).toEqual({ heard: "heard 5", term: "Term5" });
+    expect(rules.at(-1)).toEqual({
+      heard: `heard ${MAX_HEARD_AS_RULES + 4}`,
+      term: `Term${MAX_HEARD_AS_RULES + 4}`,
+    });
   });
 
   it("has no rules for terms without heard-as forms", () => {
@@ -77,6 +99,19 @@ describe("createHeardAsRewriter", () => {
     expect(zustand("zoo stand's API and zoo stand’s store")).toBe(
       "Zustand's API and Zustand’s store"
     );
+    expect(zustand("zoo stand's-helper")).toBe("zoo stand's-helper");
+    expect(zustand("zoo stand'sx")).toBe("zoo stand'sx");
+  });
+
+  it("rewrites only within a span, judging its edges by the text around it", () => {
+    const text = "zoo stand then zoo standalone and zoo stand.ts";
+    expect(zustand(text, { from: 0, to: text.length })).toBe(
+      "Zustand then zoo standalone and zoo stand.ts"
+    );
+    expect(zustand(text, { from: 10, to: 30 })).toBe(text);
+    expect(zustand("x zoo stand y zoo stand", { from: 2, to: 11 })).toBe("x Zustand y zoo stand");
+    // A phrase running past the span's end belongs to text the caller doesn't own.
+    expect(zustand("x zoo stand", { from: 0, to: 8 })).toBe("x zoo stand");
   });
 
   it("prefers the longest phrase starting at the same word", () => {
@@ -147,20 +182,25 @@ describe("createHeardAsRewriter", () => {
     expect(rewrite("zoo stand")).toBe("zoo stand");
   });
 
+  it("finds the term when the regex folds a letter toLowerCase leaves alone", () => {
+    expect(rewriterFor(entry("Straße", ["strasse"]))("die ſtrasse")).toBe("die Straße");
+  });
+
   it("matches non-Latin words by Unicode letters", () => {
     const rewrite = rewriterFor(entry("Straße", ["strasse"]), entry("Кот", ["кот"]));
     expect(rewrite("die strasse und die strassen")).toBe("die Straße und die strassen");
     expect(rewrite("мой КОТ и котик")).toBe("мой Кот и котик");
   });
 
-  it("stays fast on a long passage with many rules", () => {
-    const entries = Array.from({ length: 400 }, (_, i) =>
-      entry(`Term${i}`, [`heard form number ${i}`])
+  it("stays fast on a long draft with a full dictionary, many matches and many spans", () => {
+    const entries = Array.from({ length: MAX_HEARD_AS_RULES }, (_, i) =>
+      entry(`Term${i}`, [`heard form ${i}`])
     );
     const rewrite = rewriterFor(...entries);
-    const text = "heard form number ".repeat(700) + "heard form number 7";
+    const chunk = "heard form 7 and `heard form 8` near heard form ";
+    const text = chunk.repeat(200);
     const started = performance.now();
-    expect(rewrite(text)).toBe("heard form number ".repeat(700) + "Term7");
-    expect(performance.now() - started).toBeLessThan(2000);
+    expect(rewrite(text)).toBe("Term7 and `heard form 8` near heard form ".repeat(200));
+    expect(performance.now() - started).toBeLessThan(3000);
   });
 });

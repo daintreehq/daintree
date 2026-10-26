@@ -50,6 +50,10 @@ const shared = vi.hoisted(() => ({
   assembleKeyterms: null as null | (() => Promise<string[]>),
   /** The session the fake provider was last started for; its events carry it. */
   providerSessionId: null as string | null,
+  /** Texts handed to file-link detection, in call order. */
+  fileLinkCalls: [] as string[],
+  /** The project the fake view belongs to, when a test needs one. */
+  viewProjectId: null as string | null,
 }));
 
 vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
@@ -113,7 +117,8 @@ vi.mock("../../../services/VoiceCorrectionService.js", () => ({
       shared.rewriteCalls.push({ request, settings });
       return Promise.resolve({ status: "replace", text: "Shorter." });
     };
-    this.detectFileLinkTokens = function () {
+    this.detectFileLinkTokens = function (utterance: string) {
+      shared.fileLinkCalls.push(utterance);
       return Promise.resolve([]);
     };
     this.setSessionSignal = function () {};
@@ -127,6 +132,11 @@ vi.mock("../../../services/ProjectStore.js", () => ({
     getCurrentProjectId: vi.fn(() => null),
   },
 }));
+
+vi.mock("../../../window/webContentsRegistry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../window/webContentsRegistry.js")>();
+  return { ...actual, getProjectForWebContents: vi.fn(() => shared.viewProjectId) };
+});
 
 // The real module's pure helpers (the names screen) stay; only assembly is faked.
 vi.mock("../../../services/voiceContextKeyterms.js", async (importOriginal) => ({
@@ -1250,6 +1260,57 @@ describe("voiceInput — context keyterms wiring", () => {
       .filter((m) => m.channel === "voice-input:transcription-complete")
       .at(-1);
     expect(last?.payload).not.toHaveProperty("heard");
+  });
+
+  it("keeps a code fence spanning lines intact and sends no heard text for it", async () => {
+    const { store } = await import("../../../store.js");
+    vi.mocked(store.get).mockReturnValue({
+      ...providerSettings("openai"),
+      dictionary: [{ term: "Zustand", heardAs: ["zoo stand"], source: "manual", addedAt: 1 }],
+    });
+
+    await startFn(fakeEvent, nextSessionId());
+    emitTranscriptionEvent({ type: "complete", text: "```\nzoo stand\n``` then zoo stand" });
+
+    expect(
+      activeSent
+        .filter((m) => m.channel === "voice-input:transcription-complete")
+        .map((m) => m.payload)
+    ).toEqual([
+      { sessionId: currentSessionId, text: "```", willCorrect: false },
+      { sessionId: currentSessionId, text: "zoo stand", willCorrect: false },
+      {
+        sessionId: currentSessionId,
+        text: "``` then Zustand",
+        willCorrect: false,
+        heard: "``` then zoo stand",
+      },
+    ]);
+  });
+
+  it("looks for file links in the text the draft gets", async () => {
+    const { store } = await import("../../../store.js");
+    const { projectStore } = await import("../../../services/ProjectStore.js");
+    shared.fileLinkCalls = [];
+    shared.viewProjectId = "project-1";
+    vi.mocked(projectStore.getProjectById).mockReturnValueOnce({
+      name: "app",
+      path: "/repo/app",
+    } as ReturnType<typeof projectStore.getProjectById>);
+    vi.mocked(store.get).mockReturnValue({
+      ...providerSettings("openai"),
+      correctionEnabled: true,
+      dictionary: [{ term: "Bar", heardAs: ["foo new line"], source: "manual", addedAt: 1 }],
+    });
+
+    try {
+      await startFn(fakeEvent, nextSessionId());
+      emitTranscriptionEvent({ type: "complete", text: "open the zoo foo new line" });
+    } finally {
+      shared.viewProjectId = null;
+    }
+
+    expect(shared.fileLinkCalls).toEqual(["open the zoo foo\n"]);
   });
 
   it("bails a Deepgram start whose assembly throws after a stop", async () => {

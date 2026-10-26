@@ -2359,7 +2359,15 @@ class VoiceRecordingService {
     let rewrote = false;
     for (const passage of collectCorrectionPassages(record, draft)) {
       const heard = transcribedPassageText(record, passage, draft);
-      const text = rewrite(heard);
+      // The draft either side is context, so a phrase that runs on into text
+      // typed against the passage is still judged as one word.
+      const before = draft.slice(0, passage.from);
+      const after = draft.slice(passage.to);
+      const rewritten = rewrite(before + heard + after, {
+        from: before.length,
+        to: before.length + heard.length,
+      });
+      const text = rewritten.slice(before.length, rewritten.length - after.length);
       if (text === passage.text) continue;
       const current = useTerminalInputStore.getState().getDraftInput(panelId, projectId);
       const pending = peekPendingComposerSelection(draftKey, current);

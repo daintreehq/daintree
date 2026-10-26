@@ -52,7 +52,7 @@ function trimProsePunctuation(span: string): string {
   let start = 0;
   let end = span.length;
   while (end > start) {
-    const last = span[end - 1];
+    const last = span[end - 1]!;
     const opener = CLOSERS[last];
     const unbalanced =
       PROSE_PUNCTUATION.has(last) ||
@@ -63,7 +63,7 @@ function trimProsePunctuation(span: string): string {
     end--;
   }
   while (start < end) {
-    const first = span[start];
+    const first = span[start]!;
     const closer = OPENERS[first];
     const unbalanced =
       (closer !== undefined && count(first) > count(closer)) ||

@@ -1075,6 +1075,12 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       // utterance ("fix the bug new line") survives for the next utterance.
       const pieces = processedText.split(/\s*\n\s*/).map((p) => p.trim());
       const parts = pieces.filter(Boolean);
+      // Heard-as rules run after the commands, so a rule never eats a break
+      // or a send and a term it writes is never taken for one, and over the
+      // whole text, so a code fence spanning lines still protects what's
+      // inside. Rules never cross or write a line break, so the pieces line up.
+      const writtenText = rewriteHeardAs(processedText);
+      const written = writtenText.split(/\s*\n\s*/).map((p) => p.trim());
       // Lengths only — dictated text is user content, kept out of logs.
       logDebug("[VoiceInput] complete event → renderer", {
         rawLength: rawText.length,
@@ -1097,7 +1103,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         liveSettings.correctionEnabled &&
         liveSettings.resolveFileLinks &&
         liveSettings.openaiApiKey &&
-        mayReferenceFile(sendCommand.text)
+        mayReferenceFile(writtenText)
           ? randomUUID()
           : undefined;
       if (parts.length === 0 && itemId && !sendCommand.send) {
@@ -1113,11 +1119,9 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       const lastIndex = pieces.length - 1;
       for (let i = 0; i < pieces.length; i++) {
         if (pieces[i]) {
-          // Heard-as rules run after the commands, so a rule never eats a
-          // break or a send and a term it writes is never taken for one. What
-          // was heard goes along with it, so the renderer can rerun the rules
+          // What was heard goes along, so the renderer can rerun the rules
           // over the whole dictation at stop without rewriting a term twice.
-          const text = rewriteHeardAs(pieces[i]);
+          const text = written[i] ?? pieces[i];
           target.send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, {
             sessionId,
             text,
@@ -1147,8 +1151,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       }
 
       if (correctionSvc && transcriptId) {
-        // The renderer finds each description in the draft, which holds the rules' terms.
-        const writtenText = rewriteHeardAs(sendCommand.text);
+        // The renderer finds each description in the draft, so detection
+        // reads the text the draft got.
         trackFileLinkJob(session, (signal) =>
           findFileLinks(session, correctionSvc, transcriptId, writtenText, liveSettings, signal)
         );

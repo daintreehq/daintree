@@ -625,6 +625,19 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
       expect(draft("panel-1")).toBe("add Zustand");
     });
 
+    it("judges a split phrase by text typed against it", async () => {
+      dictionary = [rule("Zustand", "zoo stand")];
+      const { service, dictate, say, draft, inputStore } = await setup();
+      correct.mockResolvedValue({ action: "no_change", correctedText: "" });
+
+      dictate("panel-1", "open zoo");
+      say("stand");
+      inputStore.getState().setDraftInput("panel-1", draft("panel-1") + ".ts");
+      await service.stop();
+
+      expect(draft("panel-1")).toBe("open zoo stand.ts");
+    });
+
     it("leaves typed text between utterances alone", async () => {
       dictionary = [rule("Zustand", "zoo stand")];
       const { service, dictate, say, draft, inputStore } = await setup();

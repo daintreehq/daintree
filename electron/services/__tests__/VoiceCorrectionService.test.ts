@@ -132,14 +132,12 @@ describe("VoiceCorrectionService", () => {
   it("applies the model's cleanup without recasing dictionary terms in it", async () => {
     vi.stubGlobal(
       "fetch",
-      vi
-        .fn()
-        .mockResolvedValue(
-          makeFetchResponse({
-            action: "replace",
-            corrected_text: "Fix @src/react/hooks.ts, let's go.",
-          })
-        )
+      vi.fn().mockResolvedValue(
+        makeFetchResponse({
+          action: "replace",
+          corrected_text: "Fix @src/react/hooks.ts, let's go.",
+        })
+      )
     );
 
     const result = await new VoiceCorrectionService().correct(
@@ -150,22 +148,28 @@ describe("VoiceCorrectionService", () => {
     expect(result.confirmedText).toBe("Fix @src/react/hooks.ts, let's go.");
   });
 
-  it("sends the heard-as rules in the prompt and keys the cache on them", async () => {
+  it("sends the heard-as rules in the prompt and keys the cache on what they say", async () => {
     const fetchMock = vi.fn().mockResolvedValue(makeFetchResponse({ action: "no_change" }));
     vi.stubGlobal("fetch", fetchMock);
     const svc = new VoiceCorrectionService();
-    const send = async (heardAs: { heard: string; term: string }[]) => {
+    const send = async (heardAs: { heard: string; term: string }[], rawText = "add Zustand") => {
       fetchMock.mockClear();
-      await svc.correct({ rawText: "add Zustand" }, { ...BASE_SETTINGS, heardAs });
+      await svc.correct({ rawText }, { ...BASE_SETTINGS, heardAs });
       return JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
     };
 
-    const withRule = await send([{ heard: "zoo stand", term: "Zustand" }]);
-    const without = await send([]);
+    const rule = await send([{ heard: "zoo stand", term: "Zustand" }]);
+    const sameRule = await send([{ heard: "zoo stand", term: "Zustand" }], "another passage");
+    const otherHeard = await send([{ heard: "zoo stan", term: "Zustand" }]);
+    const otherTerm = await send([{ heard: "zoo stand", term: "Zustand2" }]);
+    const none = await send([]);
 
-    expect(withRule.input[0].content).toContain("zoo stand: Zustand");
-    expect(without.input[0].content).not.toContain("<user_terms>");
-    expect(withRule.prompt_cache_key).not.toBe(without.prompt_cache_key);
+    expect(rule.input[0].content).toContain("zoo stand: Zustand");
+    expect(none.input[0].content).not.toContain("<user_terms>");
+    expect(sameRule.prompt_cache_key).toBe(rule.prompt_cache_key);
+    expect(sameRule.input[0].content).toBe(rule.input[0].content);
+    const keys = [rule, otherHeard, otherTerm, none].map((body) => body.prompt_cache_key);
+    expect(new Set(keys).size).toBe(4);
   });
 
   it("falls back to raw text on API error", async () => {

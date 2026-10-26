@@ -410,12 +410,23 @@ describe("dictationRangeStore", () => {
       expect(draft()).toBe("add Zustand typed more");
     });
 
-    it("writes nothing once the passage changed or one of its words was edited", () => {
+    it("writes nothing once the passage holds other text", () => {
       dictate("add zoo");
       dictate("stand");
       edit(0, 3, "put");
       expect(rewrite("add Zustand")).toBeNull();
       expect(draft()).toBe("put zoo stand");
+    });
+
+    it("writes nothing over words that were edited, even back to the same text", () => {
+      dictate("add zoo");
+      dictate("stand");
+      edit(1, 2, "x");
+      edit(1, 2, "d");
+      expect(draft()).toBe("add zoo stand");
+      expect(only().utterances[0]!.range.edited).toBe(true);
+      expect(rewrite("add Zustand")).toBeNull();
+      expect(draft()).toBe("add zoo stand");
     });
 
     it("writes nothing for a dictation the draft released", () => {
