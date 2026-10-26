@@ -93,7 +93,31 @@ describe("OtherHostsWorktrees", () => {
 
     fireEvent.click(rows[0]!);
     expect(onNavigate).toHaveBeenCalled();
-    expect(switchToHost).toHaveBeenCalledWith("studio-01", false, "p-remote");
+    expect(switchToHost).toHaveBeenCalledWith("studio-01", false, "p-remote", undefined);
+  });
+
+  it("focuses the most urgent agent's terminal, and still opens the project without runs", async () => {
+    listWorktrees.mockResolvedValueOnce([
+      {
+        ...worktree,
+        runs: [
+          { band: "needs-you", agentState: "waiting", terminalId: "t-urgent" },
+          { band: "running", agentState: "working", terminalId: "t-other" },
+        ],
+      },
+      { ...worktree, worktreeId: "/srv/other", runs: [] },
+    ]);
+    render(<OtherHostsWorktrees onNavigate={() => {}} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "All hosts" }));
+    });
+    const rows = await screen.findAllByTestId("other-host-worktree-row");
+    fireEvent.click(rows[0]!, { metaKey: true });
+    expect(switchToHost).toHaveBeenCalledWith("studio-01", true, "p-remote", {
+      focusIntent: { intent: "focus-panel", panelId: "t-urgent" },
+    });
+    fireEvent.click(rows[1]!);
+    expect(switchToHost).toHaveBeenLastCalledWith("studio-01", false, "p-remote", undefined);
   });
 
   it("renders nothing without another host", () => {
