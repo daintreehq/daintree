@@ -171,6 +171,22 @@ describe("useEditorKeymap", () => {
       expect(onSendKey).not.toHaveBeenCalled();
     });
 
+    it("collapses an expanded editor without ending the dictation", () => {
+      handleDictationEscape.mockReturnValue(true);
+      const { handlers } = renderKeymap(
+        makeLatest({ isAutocompleteOpen: false, isExpanded: true })
+      );
+      expect(handlers.onEscape()).toBe(true);
+      expect(handleDictationEscape).not.toHaveBeenCalled();
+    });
+
+    it("hands Escape to the dictation even when the composer is disabled", () => {
+      handleDictationEscape.mockReturnValue(true);
+      const { handlers } = renderKeymap(makeLatest({ isAutocompleteOpen: false, disabled: true }));
+      expect(handlers.onEscape()).toBe(true);
+      expect(handleDictationEscape).toHaveBeenCalledOnce();
+    });
+
     it("sends Escape to the agent when no dictation takes it", () => {
       const onSendKey = vi.fn<(key: string) => void>();
       const { handlers } = renderKeymap(makeLatest({ isAutocompleteOpen: false, onSendKey }));

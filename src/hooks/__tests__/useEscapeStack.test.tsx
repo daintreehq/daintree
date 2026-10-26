@@ -4,7 +4,7 @@ import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { useEscapeStack } from "../useEscapeStack";
 import { useGlobalEscapeDispatcher } from "../useGlobalEscapeDispatcher";
-import { _resetForTests, registerEscapeFallback } from "@/lib/escapeStack";
+import { _resetForTests, registerEscape, registerEscapeFallback } from "@/lib/escapeStack";
 
 beforeEach(() => {
   _resetForTests();
@@ -202,23 +202,27 @@ describe("useEscapeStack + useGlobalEscapeDispatcher", () => {
 
       fallback.mockReturnValue(false);
       expect(pressCancelableEscape().defaultPrevented).toBe(false);
+      expect(fallback).toHaveBeenCalledTimes(2);
     });
 
-    it("wait behind any layer on the stack", () => {
+    it("wait behind any layer on the stack, including one that leaves it on that press", () => {
       const fallback = vi.fn(() => true);
       const layerClose = vi.fn();
       registerEscapeFallback(fallback);
-      render(
-        <>
-          <Dispatcher />
-          <Layer enabled={true} onEscape={layerClose} />
-        </>
-      );
+      render(<Dispatcher />);
+      const layer = registerEscape(() => {
+        layerClose();
+        layer.unregister();
+      });
 
       pressEscape();
 
       expect(layerClose).toHaveBeenCalledOnce();
       expect(fallback).not.toHaveBeenCalled();
+
+      pressEscape();
+
+      expect(fallback).toHaveBeenCalledOnce();
     });
 
     it("leave Escape to an open Radix menu", () => {

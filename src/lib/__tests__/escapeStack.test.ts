@@ -133,41 +133,47 @@ describe("escape fallbacks", () => {
     expect(idle).toHaveBeenCalledOnce();
   });
 
-  it("stop at the newest fallback that acts", () => {
-    const older = vi.fn(() => true);
-    const newerIdle = vi.fn(() => false);
-    const newest = vi.fn(() => true);
-    registerEscapeFallback(older);
-    registerEscapeFallback(newerIdle);
-    registerEscapeFallback(newest);
+  it("pass over idle fallbacks, newest first, and stop at the first that acts", () => {
+    const calls: string[] = [];
+    const fallback = (name: string, acts: boolean) => () => {
+      calls.push(name);
+      return acts;
+    };
+    registerEscapeFallback(fallback("oldest", true));
+    registerEscapeFallback(fallback("middle", true));
+    registerEscapeFallback(fallback("newest", false));
 
     expect(dispatchEscapeFallback()).toBe(true);
-    expect(newest).toHaveBeenCalledOnce();
-    expect(newerIdle).not.toHaveBeenCalled();
-    expect(older).not.toHaveBeenCalled();
+    expect(calls).toEqual(["newest", "middle"]);
   });
 
-  it("unregister removes only that fallback", () => {
-    const remaining = vi.fn(() => true);
-    const removed = vi.fn(() => true);
-    registerEscapeFallback(remaining);
-    const unregister = registerEscapeFallback(removed);
+  it("unregister removes only that registration, even of a shared callback", () => {
+    const shared = vi.fn(() => true);
+    const between = vi.fn(() => false);
+    registerEscapeFallback(shared);
+    registerEscapeFallback(between);
+    const unregister = registerEscapeFallback(shared);
 
     unregister();
     unregister();
     dispatchEscapeFallback();
 
-    expect(removed).not.toHaveBeenCalled();
-    expect(remaining).toHaveBeenCalledOnce();
+    // `between` is idle, so the press reaches the first registration of `shared`.
+    expect(between).toHaveBeenCalledOnce();
+    expect(shared).toHaveBeenCalledOnce();
   });
 
-  it("count a throwing fallback as handled", () => {
+  it("count a throwing fallback as handled and go no further", () => {
+    const older = vi.fn(() => true);
+    registerEscapeFallback(older);
     registerEscapeFallback(() => {
       throw new Error("boom");
     });
 
     const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     expect(dispatchEscapeFallback()).toBe(true);
+    expect(consoleSpy).toHaveBeenCalled();
+    expect(older).not.toHaveBeenCalled();
     consoleSpy.mockRestore();
   });
 });
