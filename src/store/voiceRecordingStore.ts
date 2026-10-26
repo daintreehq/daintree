@@ -326,7 +326,11 @@ interface VoiceRecordingState {
   appendDelta: (delta: string, itemId?: string, replace?: boolean) => void;
   setSessionDraftStart: (panelId: string, length: number) => void;
   setDraftLengthAtSegmentStart: (panelId: string, length: number) => void;
-  completeSegment: (text: string, itemId?: string) => void;
+  /**
+   * `discard` retires the utterance without keeping its words: a spoken
+   * command that acts on the draft rather than adding to it.
+   */
+  completeSegment: (text: string, itemId?: string, options?: { discard?: boolean }) => void;
   setCorrectionRanges: (panelId: string, ranges: VoiceCorrectionRange[]) => void;
   /**
    * Moves the panel's draft offsets at or after `at` by `delta`, for an edit
@@ -550,7 +554,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
           };
         }),
 
-      completeSegment: (text, itemId) =>
+      completeSegment: (text, itemId, options) =>
         set((state) => {
           const panelId = state.activeTarget?.panelId;
           if (!panelId) return state;
@@ -585,7 +589,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
               },
             };
           }
-          const normalized = text.trim() || buffer.liveText.trim();
+          const normalized = options?.discard ? "" : text.trim() || buffer.liveText.trim();
           if (!normalized) {
             return {
               panelBuffers: {

@@ -70,6 +70,13 @@ interface DictationRangeState {
   /** Records a paragraph break the session just wrote into the draft. */
   recordParagraphBreak: (target: DictationDraftTarget, insertion: DictationTextSpan) => void;
   /**
+   * Takes the session's latest utterance out of its record and returns the
+   * draft span that held it, trailing paragraph breaks included, for the caller
+   * to delete. Null when the session has no utterance left in this draft or the
+   * latest one was edited since, so typed text is never removed.
+   */
+  takeLastUtterance: (target: DictationDraftTarget, draft: string) => DictationTextSpan | null;
+  /**
    * Carries every record through one transition of the draft map. A draft
    * that is gone or empty — sent, cleared, or its panel removed — releases
    * its records.
@@ -173,6 +180,36 @@ export const useDictationRangeStore = create<DictationRangeState>()((set, get) =
 
   recordParagraphBreak: (target, insertion) =>
     set((state) => ({ drafts: withInsertion(state.drafts, target, insertion, null) })),
+
+  takeLastUtterance: (target, draft) => {
+    const key = makeDraftKey(target.panelId, target.projectId);
+    const records = get().drafts[key] ?? [];
+    const index = records.findIndex((r) => r.sessionId === target.sessionId);
+    const record = records[index];
+    const last = record?.utterances[record.utterances.length - 1];
+    if (!record || !last || last.insertion.edited || last.insertion.from >= last.insertion.to) {
+      return null;
+    }
+    const tail = draft.slice(last.insertion.to, record.range.to);
+    const to = /^\n*$/.test(tail)
+      ? Math.max(last.insertion.to, record.range.to)
+      : last.insertion.to;
+    const from = last.insertion.from;
+    if (to > draft.length) return null;
+    const trimmed: DictationRecord = {
+      ...record,
+      // Taking the text off the envelope's end keeps a clean envelope clean.
+      range:
+        to === record.range.to
+          ? { ...record.range, to: Math.max(record.range.from, from) }
+          : record.range,
+      utterances: record.utterances.slice(0, -1),
+    };
+    set((state) => ({
+      drafts: { ...state.drafts, [key]: records.map((r, i) => (i === index ? trimmed : r)) },
+    }));
+    return { from, to };
+  },
 
   mapDrafts: (previous, next) => {
     const { drafts } = get();
