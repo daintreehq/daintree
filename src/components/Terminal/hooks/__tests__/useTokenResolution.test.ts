@@ -572,4 +572,25 @@ describe("useTokenResolution dictionary learning", () => {
     });
     expect(onSend).toHaveBeenCalledTimes(1);
   });
+
+  it("reports nothing while learning from corrections is off", async () => {
+    const recordSuggestions = vi.fn();
+    installElectron({
+      git: { getWorkingDiff: vi.fn() },
+      voiceDictionary: { recordSuggestions },
+    });
+    voiceState.value = {
+      ...defaults,
+      learnFromCorrections: false,
+      panelBuffers: {
+        t1: { sessionCorrectedText: "use zoo stand for state", sessionDraftStart: 0 },
+      },
+    };
+
+    const { sendText } = setup();
+    await act(async () => {
+      await sendText("use Zustand for state");
+    });
+    expect(recordSuggestions).not.toHaveBeenCalled();
+  });
 });

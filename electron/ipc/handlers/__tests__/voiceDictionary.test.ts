@@ -229,4 +229,113 @@ describe("voiceDictionary operations", () => {
     expect(storedTerms()).toEqual(["Daintree", "Zustand"]);
     expect("customDictionary" in stored()).toBe(false);
   });
+
+  it("setSettings ignores dotted keys that would reach inside main-owned fields", async () => {
+    await op("add", { term: "Daintree" });
+    await call("voice-input:set-settings", {
+      "dictionary.0.term": "daintree",
+      "dictionary.1": { term: "Bogus", heardAs: [], source: "manual", addedAt: 0 },
+      "suggestedDictionary.0": { word: "Bogus", utterance: "", suggestedAt: 0, frequency: 1 },
+      keyterms: ["Bogus"],
+      recordingMode: "push-to-talk",
+    });
+
+    expect(stored().recordingMode).toBe("push-to-talk");
+    expect(storedTerms()).toEqual(["Daintree"]);
+    expect(stored().suggestedDictionary).toEqual([]);
+    expect("keyterms" in stored()).toBe(false);
+  });
+
+  it("writes a repaired dictionary back once, so it reads the same every time", async () => {
+    disk.state.data.voiceInput = {
+      ...stored(),
+      dictionary: [{ term: "Vite" }, { term: "vite", heardAs: ["veet"] }],
+      suggestedDictionary: [{ word: "Bun" }],
+    };
+
+    const first = await call<VoiceInputSettings>("voice-input:get-settings");
+    vi.setSystemTime(NOW + 60_000);
+    const second = await call<VoiceInputSettings>("voice-input:get-settings");
+
+    expect(first.dictionary).toEqual([
+      { term: "Vite", heardAs: ["veet"], source: "manual", addedAt: NOW },
+    ]);
+    expect(second.dictionary).toEqual(first.dictionary);
+    expect(stored().dictionary).toEqual(first.dictionary);
+    expect(stored().suggestedDictionary).toEqual([
+      { word: "Bun", utterance: "", suggestedAt: 0, frequency: 1 },
+    ]);
+
+    vi.mocked(store.set).mockClear();
+    await call("voice-input:get-settings");
+    expect(store.set).not.toHaveBeenCalled();
+  });
+
+  it("commits an accept in one write", async () => {
+    disk.state.data.voiceInput = {
+      ...stored(),
+      suggestedDictionary: [
+        { word: "Zustand", utterance: "zoo stand", suggestedAt: 1, frequency: 1 },
+      ],
+    };
+    vi.mocked(store.set).mockClear();
+
+    await op("acceptSuggestion", { word: "Zustand" });
+
+    expect(store.set).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(store.set).mock.calls[0]![0]).toBe("voiceInput");
+    expect(storedTerms()).toEqual(["Zustand"]);
+    expect(stored().suggestedDictionary).toEqual([]);
+  });
+
+  it("a stale accept of a word no longer queued doesn't bring back a removed term", async () => {
+    disk.state.data.voiceInput = {
+      ...stored(),
+      suggestedDictionary: [
+        { word: "Zustand", utterance: "zoo stand", suggestedAt: 1, frequency: 1 },
+      ],
+    };
+    await op("acceptSuggestion", { word: "Zustand" });
+    await op("remove", { term: "Zustand" });
+
+    const stale = await op("acceptSuggestion", { word: "Zustand" });
+
+    expect(stale.dictionary).toEqual([]);
+    expect(storedTerms()).toEqual([]);
+  });
+
+  it("refuses a rename onto another term and writes nothing", async () => {
+    await op("add", { term: "Daintree" });
+    await op("add", { term: "Zustand" });
+    vi.mocked(store.set).mockClear();
+
+    await expect(
+      op("update", { term: "Zustand", changes: { term: "daintree" } })
+    ).rejects.toThrow();
+    expect(store.set).not.toHaveBeenCalled();
+    expect(storedTerms()).toEqual(["Daintree", "Zustand"]);
+  });
+
+  it("can still remove a term kept from the old list that is longer than any new term", async () => {
+    const long = "z".repeat(1_500);
+    disk.state.data.voiceInput = {
+      ...stored(),
+      dictionary: [{ term: long, heardAs: [], source: "manual", addedAt: 1 }],
+    };
+
+    const after = await op("remove", { term: long });
+
+    expect(after.dictionary).toEqual([]);
+    expect(storedTerms()).toEqual([]);
+  });
+
+  it("keeps env-var key overrides out of the stored settings when it writes", async () => {
+    process.env.WHISPER_API_KEY = "sk-from-env";
+    try {
+      await op("add", { term: "Daintree" });
+      expect(stored().openaiApiKey).toBeUndefined();
+    } finally {
+      delete process.env.WHISPER_API_KEY;
+    }
+  });
 });

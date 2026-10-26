@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { migration036 } from "../036-structured-voice-dictionary.js";
+import { sanitizeDictionary } from "../../../../shared/utils/voiceDictionary.js";
 
 const NOW = 1_760_000_000_000;
 
@@ -51,15 +52,21 @@ describe("migration036 — structured voice dictionary entries", () => {
   });
 
   it("keeps long and unusual terms exactly as written, trimming only the ends", () => {
-    const long = "x".repeat(140);
+    const long = "x".repeat(1_400);
     const { data } = run({
-      voiceInput: { customDictionary: ["  spaced term  ", long, "C++", "12345", "日本語"] },
+      voiceInput: {
+        customDictionary: ["  spaced term  ", "Docker   Compose", long, "C++", "12345", "日本語"],
+      },
     });
 
     const terms = (data.voiceInput as { dictionary: { term: string }[] }).dictionary.map(
       (e) => e.term
     );
-    expect(terms).toEqual(["spaced term", long, "C++", "12345", "日本語"]);
+    expect(terms).toEqual(["spaced term", "Docker   Compose", long, "C++", "12345", "日本語"]);
+
+    // Reading the migrated entries back changes none of them.
+    const migrated = (data.voiceInput as { dictionary: unknown[] }).dictionary;
+    expect(sanitizeDictionary(migrated, NOW + 1)).toEqual(migrated);
   });
 
   it("keeps the first spelling of a repeat that differs only in case, and drops blanks and non-strings", () => {

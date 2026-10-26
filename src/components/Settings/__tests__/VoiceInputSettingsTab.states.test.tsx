@@ -520,4 +520,60 @@ describe("VoiceInputSettingsTab dictionary", () => {
     expect(input.value).toBe("");
     expect(container.textContent).not.toContain("back to its previous value");
   });
+
+  it("removes a term and dismisses a suggestion through main", async () => {
+    const api = install(
+      {
+        dictionary: [term("Daintree"), term("Vite")],
+        suggestedDictionary: [
+          { word: "Tailwind", utterance: "tail wind", suggestedAt: 1, frequency: 1 },
+        ],
+      },
+      {},
+      {
+        remove: vi.fn().mockResolvedValue({
+          dictionary: [term("Vite")],
+          suggestedDictionary: [
+            { word: "Tailwind", utterance: "tail wind", suggestedAt: 1, frequency: 1 },
+          ],
+        }),
+        dismissSuggestion: vi.fn().mockResolvedValue({
+          dictionary: [term("Vite")],
+          suggestedDictionary: [],
+        }),
+      }
+    );
+    render(<VoiceInputSettingsTab />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Remove Daintree" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Remove Daintree" })).toBeNull()
+    );
+    expect(api.dictionary.remove).toHaveBeenCalledWith({ term: "Daintree" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss Tailwind" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Dismiss Tailwind" })).toBeNull()
+    );
+    expect(api.dictionary.dismissSuggestion).toHaveBeenCalledWith({ word: "Tailwind" });
+    expect(screen.getByRole("button", { name: "Remove Vite" })).toBeTruthy();
+    expect(api.setSettings).not.toHaveBeenCalled();
+  });
+
+  it("keeps what was typed while an add was in flight", async () => {
+    let finish: (state: unknown) => void = () => {};
+    install({}, {}, { add: vi.fn(() => new Promise((resolve) => (finish = resolve))) });
+    render(<VoiceInputSettingsTab />);
+
+    const input = await termField();
+    fireEvent.change(input, { target: { value: "Daintree" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.change(input, { target: { value: "Zust" } });
+    finish({ dictionary: [term("Daintree")], suggestedDictionary: [] });
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Remove Daintree" })).toBeTruthy()
+    );
+    expect(input.value).toBe("Zust");
+  });
 });

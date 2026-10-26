@@ -658,6 +658,33 @@ describe("voiceInput — context keyterms wiring", () => {
     });
   });
 
+  it("hands keyterm assembly and correction the dictionary's written terms", async () => {
+    const { store } = await import("../../../store.js");
+    const dictionary = [
+      { term: "Daintree", heardAs: ["dane tree"], source: "manual", addedAt: 1 },
+      { term: "Zustand", heardAs: [], source: "learned", addedAt: 2 },
+    ];
+    vi.mocked(store.get).mockReturnValue({
+      ...providerSettings("openai"),
+      correctionEnabled: true,
+      dictionary,
+    });
+    const { assembleKeyterms } = await import("../../../services/voiceContextKeyterms.js");
+
+    await startFn(fakeEvent);
+    await (getHandler("voice-input:correct") as (e: unknown, r: unknown) => Promise<unknown>)(
+      fakeEvent,
+      { rawText: "open dane tree" }
+    );
+
+    expect(vi.mocked(assembleKeyterms).mock.calls.at(-1)?.[0]).toMatchObject({
+      customDictionary: ["Daintree", "Zustand"],
+    });
+    expect(shared.correctionCalls.at(-1)?.settings).toMatchObject({
+      customDictionary: ["Daintree", "Zustand"],
+    });
+  });
+
   it("bails a Deepgram start whose assembly throws after a stop", async () => {
     const { store } = await import("../../../store.js");
     const gate = deferred<string[]>();

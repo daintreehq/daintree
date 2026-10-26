@@ -22,9 +22,11 @@ const fold = (phrase: string) => phrase.toLowerCase();
 
 function normalizePhrase(raw: unknown): string | null {
   if (typeof raw !== "string") return null;
-  const phrase = raw.trim().replace(/\s+/g, " ");
-  return phrase || null;
+  return raw.trim() || null;
 }
+
+const isTime = (value: unknown): value is number =>
+  typeof value === "number" && Number.isFinite(value) && value >= 0;
 
 function requirePhrase(raw: unknown, what: string): string {
   const phrase = normalizePhrase(raw);
@@ -102,23 +104,38 @@ export function sanitizeDictionary(raw: unknown, now: number): VoiceDictionaryEn
         typeof source === "string" && SOURCES.has(source)
           ? (source as VoiceDictionarySource)
           : "manual",
-      addedAt:
-        typeof addedAt === "number" && Number.isFinite(addedAt) && addedAt >= 0 ? addedAt : now,
+      addedAt: isTime(addedAt) ? addedAt : now,
     });
   }
   return out;
 }
 
-/** Drop malformed suggestions so a hand-edited store can't break the queue. */
+/**
+ * Repair the suggestion queue the store holds: drop entries whose word is
+ * missing or too long to ever be accepted, and anything after the first of a
+ * word ignoring case; default the bookkeeping fields.
+ */
 export function sanitizeSuggestions(raw: unknown): SuggestedDictionaryEntry[] {
   if (!Array.isArray(raw)) return [];
-  return raw.filter(
-    (entry): entry is SuggestedDictionaryEntry =>
-      !!entry &&
-      typeof entry === "object" &&
-      typeof (entry as SuggestedDictionaryEntry).word === "string" &&
-      (entry as SuggestedDictionaryEntry).word.trim() !== ""
-  );
+  const out: SuggestedDictionaryEntry[] = [];
+  const seen = new Set<string>();
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const { word: rawWord, utterance, suggestedAt, frequency } = item as Record<string, unknown>;
+    const word = normalizePhrase(rawWord);
+    if (!word || word.length > MAX_DICTIONARY_TERM_LENGTH || seen.has(fold(word))) continue;
+    seen.add(fold(word));
+    out.push({
+      word,
+      utterance: typeof utterance === "string" ? utterance : "",
+      suggestedAt: isTime(suggestedAt) ? suggestedAt : 0,
+      frequency:
+        typeof frequency === "number" && Number.isInteger(frequency) && frequency >= 1
+          ? frequency
+          : 1,
+    });
+  }
+  return out.slice(0, MAX_SUGGESTED_WORDS);
 }
 
 export interface AddDictionaryEntryInput {
@@ -202,8 +219,8 @@ export function updateDictionaryEntry(
 
 /**
  * Merge freshly-detected correction candidates into the suggestion queue: skip
- * words already in the dictionary, bump frequency on a repeat, newest first,
- * capped. Returns null when nothing changed.
+ * words already in the dictionary and words that couldn't be added to it, bump
+ * frequency on a repeat, newest first, capped. Returns null when nothing changed.
  */
 export function mergeSuggestions(
   candidates: readonly CorrectionCandidate[],
@@ -215,7 +232,10 @@ export function mergeSuggestions(
   const next = [...suggested];
   let changed = false;
 
-  for (const { word, original } of candidates) {
+  for (const candidate of candidates) {
+    const word = normalizePhrase(candidate.word);
+    if (!word || word.length > MAX_DICTIONARY_TERM_LENGTH) continue;
+    const original = candidate.original.trim();
     const lower = fold(word);
     if (confirmed.has(lower)) continue;
     const idx = next.findIndex((e) => fold(e.word) === lower);
@@ -238,8 +258,9 @@ export function mergeSuggestions(
 
 /**
  * Move a suggestion into the dictionary as a learned entry that keeps what it
- * was heard as. A word no longer queued (dismissed or accepted elsewhere) is
- * still added: the click said to.
+ * was heard as. A word no longer queued was dismissed or accepted from
+ * somewhere else, so acting on it now is acting on a stale copy: nothing
+ * changes, and a term removed since stays removed.
  */
 export function acceptSuggestion(
   state: VoiceDictionaryState,
@@ -248,21 +269,19 @@ export function acceptSuggestion(
 ): VoiceDictionaryState {
   const key = fold(normalizePhrase(word) ?? "");
   const suggestion = state.suggestedDictionary.find((entry) => fold(entry.word) === key);
-  const heard = normalizePhrase(suggestion?.utterance);
-  const dictionary = addDictionaryEntry(
-    state.dictionary,
-    {
-      term: suggestion?.word ?? word,
-      heardAs: heard && heard.length <= MAX_DICTIONARY_TERM_LENGTH ? [heard] : [],
-      source: "learned",
-    },
-    now
-  );
+  if (!suggestion) return state;
+  const heard = normalizePhrase(suggestion.utterance);
   return {
-    dictionary,
-    suggestedDictionary: suggestion
-      ? state.suggestedDictionary.filter((entry) => entry !== suggestion)
-      : state.suggestedDictionary,
+    dictionary: addDictionaryEntry(
+      state.dictionary,
+      {
+        term: suggestion.word,
+        heardAs: heard && heard.length <= MAX_DICTIONARY_TERM_LENGTH ? [heard] : [],
+        source: "learned",
+      },
+      now
+    ),
+    suggestedDictionary: state.suggestedDictionary.filter((entry) => entry !== suggestion),
   };
 }
 

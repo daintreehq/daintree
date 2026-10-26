@@ -10,6 +10,7 @@ import {
   mergeSuggestions,
   removeDictionaryEntry,
   sanitizeDictionary,
+  sanitizeSuggestions,
   updateDictionaryEntry,
 } from "../voiceDictionary.js";
 
@@ -25,11 +26,11 @@ function suggestion(word: string, utterance = ""): SuggestedDictionaryEntry {
 }
 
 describe("addDictionaryEntry", () => {
-  it("appends a trimmed term as a hand-added entry stamped now", () => {
+  it("appends a term, trimmed at the ends only, as a hand-added entry stamped now", () => {
     const next = addDictionaryEntry([entry("Daintree")], { term: "  Docker   Compose \n" }, T1);
     expect(next).toEqual([
       entry("Daintree"),
-      { term: "Docker Compose", heardAs: [], source: "manual", addedAt: T1 },
+      { term: "Docker   Compose", heardAs: [], source: "manual", addedAt: T1 },
     ]);
   });
 
@@ -51,10 +52,15 @@ describe("addDictionaryEntry", () => {
     ]);
   });
 
+  it("keeps a heard-as form that differs from the term only in case: it is an explicit recase rule", () => {
+    const [added] = addDictionaryEntry([], { term: "Go", heardAs: ["go"] }, T1);
+    expect(added!.heardAs).toEqual(["go"]);
+  });
+
   it("records the given source and de-duplicates heard-as forms ignoring case", () => {
     const [added] = addDictionaryEntry(
       [],
-      { term: "xterm", heardAs: ["ex term", "Ex Term", " ex  term "], source: "imported" },
+      { term: "xterm", heardAs: ["ex term", "Ex Term", " ex term "], source: "imported" },
       T1
     );
     expect(added).toEqual({ term: "xterm", heardAs: ["ex term"], source: "imported", addedAt: T1 });
@@ -154,6 +160,12 @@ describe("sanitizeDictionary", () => {
     expect(sanitizeDictionary(undefined, T1)).toEqual([]);
   });
 
+  it("keeps a stored term's internal spacing and length as written", () => {
+    expect(dictionaryTerms(sanitizeDictionary(["  Docker   Compose "], T1))).toEqual([
+      "Docker   Compose",
+    ]);
+  });
+
   it("keeps a stored term longer than the add limit as written", () => {
     const long = "y".repeat(MAX_DICTIONARY_TERM_LENGTH + 40);
     expect(dictionaryTerms(sanitizeDictionary([long], T1))).toEqual([long]);
@@ -186,13 +198,9 @@ describe("suggestions", () => {
     });
   });
 
-  it("accepting a word no longer queued still adds it", () => {
-    const state = { dictionary: [], suggestedDictionary: [] };
-    const next = acceptSuggestion(state, "Tailwind", T1);
-    expect(next.dictionary).toEqual([
-      { term: "Tailwind", heardAs: [], source: "learned", addedAt: T1 },
-    ]);
-    expect(next.suggestedDictionary).toBe(state.suggestedDictionary);
+  it("accepting a word no longer queued changes nothing, so a term removed since stays removed", () => {
+    const state = { dictionary: [entry("Daintree")], suggestedDictionary: [suggestion("Vite")] };
+    expect(acceptSuggestion(state, "Tailwind", T1)).toBe(state);
   });
 
   it("dismissing drops the suggestion matched ignoring case", () => {
@@ -231,5 +239,47 @@ describe("suggestions", () => {
     const capped = mergeSuggestions([{ word: "Newest", original: "new est" }], [], full, T1)!;
     expect(capped).toHaveLength(MAX_SUGGESTED_WORDS);
     expect(capped[0]!.word).toBe("Newest");
+  });
+});
+
+describe("sanitizeSuggestions", () => {
+  it("defaults missing bookkeeping so a repeat can't produce a broken count", () => {
+    const [repaired] = sanitizeSuggestions([{ word: " Vite " }]);
+    expect(repaired).toEqual({ word: "Vite", utterance: "", suggestedAt: 0, frequency: 1 });
+    const bumped = mergeSuggestions([{ word: "vite", original: "veet" }], [], [repaired!], T1);
+    expect(bumped![0]!.frequency).toBe(2);
+  });
+
+  it("drops words that are blank, too long to accept, or repeated ignoring case", () => {
+    const queued = sanitizeSuggestions([
+      suggestion("Zustand"),
+      { word: "   " },
+      { word: 7 },
+      null,
+      suggestion("x".repeat(MAX_DICTIONARY_TERM_LENGTH + 1)),
+      suggestion("zustand"),
+      { word: "Vite", utterance: 3, suggestedAt: -5, frequency: 0.5 },
+    ]);
+    expect(queued).toEqual([
+      suggestion("Zustand"),
+      { word: "Vite", utterance: "", suggestedAt: 0, frequency: 1 },
+    ]);
+    expect(sanitizeSuggestions({ word: "Vite" })).toEqual([]);
+  });
+
+  it("trims candidates and ignores ones that could never be added", () => {
+    const next = mergeSuggestions(
+      [
+        { word: "  Zustand ", original: " zoo stand " },
+        { word: "   ", original: "um" },
+        { word: "y".repeat(MAX_DICTIONARY_TERM_LENGTH + 1), original: "long" },
+      ],
+      [],
+      [],
+      T1
+    );
+    expect(next).toEqual([
+      { word: "Zustand", utterance: "zoo stand", suggestedAt: T1, frequency: 1 },
+    ]);
   });
 });

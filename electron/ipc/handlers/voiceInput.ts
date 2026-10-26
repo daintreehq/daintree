@@ -23,7 +23,11 @@ import { applyDictationCommands } from "../../services/voiceDictationCommands.js
 import { VOICE_DICTATION_AI_MODEL } from "../../../shared/config/voiceCorrection.js";
 import { normalizeVoiceLanguage } from "../../../shared/config/voiceLanguages.js";
 import { assembleKeyterms } from "../../services/voiceContextKeyterms.js";
-import { dictionaryTerms, sanitizeDictionary } from "../../../shared/utils/voiceDictionary.js";
+import {
+  dictionaryTerms,
+  sanitizeDictionary,
+  sanitizeSuggestions,
+} from "../../../shared/utils/voiceDictionary.js";
 import {
   AUDIO_BUFFER_MAX_BYTES,
   AUDIO_BUFFER_MAX_CHUNKS,
@@ -143,16 +147,30 @@ const SUPERSEDED: VoiceStartOutcome = { status: "superseded" };
 
 const VALID_TRANSCRIPTION_PROVIDERS: VoiceTranscriptionProvider[] = ["openai", "deepgram"];
 
-// Fields setSettings never writes: `keyterms` is assembled per session, and the
-// dictionary and its suggestion queue change only through the voiceDictionary
-// operations, so a stale renderer copy can't overwrite them. `customDictionary`
-// is the retired word list.
-const UNWRITABLE_VOICE_FIELDS = new Set<string>([
-  "keyterms",
-  "dictionary",
-  "suggestedDictionary",
-  "customDictionary",
-]);
+// The only fields setSettings writes. Everything else is refused: `keyterms` is
+// assembled per session, the dictionary and its suggestion queue change only
+// through the voiceDictionary operations so a stale renderer copy can't
+// overwrite them, and a dotted key would reach inside either through the
+// store's dot-path setter. Typed against the patch, so a new setting must be
+// listed here to be saved at all.
+const WRITABLE_VOICE_FIELDS: Record<keyof VoiceInputSettingsPatch, true> = {
+  enabled: true,
+  openaiApiKey: true,
+  deepgramApiKey: true,
+  language: true,
+  transcriptionProvider: true,
+  transcriptionModel: true,
+  correctionEnabled: true,
+  correctionModel: true,
+  correctionCustomInstructions: true,
+  paragraphingStrategy: true,
+  resolveFileLinks: true,
+  deviceId: true,
+  organizationId: true,
+  projectId: true,
+  recordingMode: true,
+  learnFromCorrections: true,
+};
 
 const VOICE_INPUT_DEFAULTS: VoiceInputSettings = {
   enabled: false,
@@ -196,11 +214,19 @@ export function getVoiceSettings(): VoiceInputSettings {
   // migration036 turned the old word list into entries. A list that shows up
   // again on a store already past it (a downgraded build, another branch on a
   // shared dev profile) is folded in rather than lost, then dropped from disk.
-  const storedEntries: unknown[] = Array.isArray(merged.dictionary) ? merged.dictionary : [];
+  // Anything else needing repair (a missing time, a case-only repeat, a broken
+  // suggestion) is fixed here and written back once, so a repaired value is
+  // the same on every read.
+  const storedEntries: unknown[] = Array.isArray(rest.dictionary) ? rest.dictionary : [];
   merged.dictionary = sanitizeDictionary(
     Array.isArray(customDictionary) ? [...storedEntries, ...customDictionary] : storedEntries,
     Date.now()
   );
+  merged.suggestedDictionary = sanitizeSuggestions(rest.suggestedDictionary ?? []);
+  const dictionaryRepaired =
+    customDictionary !== undefined ||
+    JSON.stringify(rest.dictionary ?? []) !== JSON.stringify(merged.dictionary) ||
+    JSON.stringify(rest.suggestedDictionary ?? []) !== JSON.stringify(merged.suggestedDictionary);
 
   // Migrate prior OpenAI keys into the unified field.
   if (!merged.openaiApiKey) {
@@ -253,7 +279,7 @@ export function getVoiceSettings(): VoiceInputSettings {
   if (
     apiKey !== undefined ||
     correctionApiKey !== undefined ||
-    customDictionary !== undefined ||
+    dictionaryRepaired ||
     providerNeedsDefault ||
     staleTranscriptionModel ||
     staleCorrectionModel
@@ -461,7 +487,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     if (!patch || typeof patch !== "object") return;
     for (const [field, value] of Object.entries(patch)) {
       if (value === undefined) continue;
-      if (UNWRITABLE_VOICE_FIELDS.has(field)) continue;
+      if (!Object.hasOwn(WRITABLE_VOICE_FIELDS, field)) continue;
       store.set(`voiceInput.${field}`, value);
     }
   };

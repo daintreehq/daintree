@@ -11,15 +11,17 @@ import {
   dismissSuggestion,
   mergeSuggestions,
   removeDictionaryEntry,
-  sanitizeSuggestions,
   updateDictionaryEntry,
 } from "../../../shared/utils/voiceDictionary.js";
 
 // Bounds on the raw payload only; the dictionary model trims and applies the
-// real term length cap, so a value over it is refused with a reason.
+// real term length cap, so a value over it is refused with a reason. A term
+// that names an existing entry is unbounded: one kept from the old word list
+// can be longer than any new term, and must still be removable.
 const RAW_TEXT_MAX = 1_000;
 const LIST_MAX = 200;
 const text = z.string().max(RAW_TEXT_MAX);
+const existing = z.string();
 const heardAs = z.array(text).max(LIST_MAX);
 
 const addSchema = z.object({
@@ -27,12 +29,12 @@ const addSchema = z.object({
   heardAs: heardAs.optional(),
   source: z.enum(["manual", "imported"]).optional(),
 });
-const removeSchema = z.object({ term: text });
+const removeSchema = z.object({ term: existing });
 const updateSchema = z.object({
-  term: text,
+  term: existing,
   changes: z.object({ term: text.optional(), heardAs: heardAs.optional() }),
 });
-const suggestionSchema = z.object({ word: text });
+const suggestionSchema = z.object({ word: existing });
 const recordSchema = z.object({
   candidates: z.array(z.object({ word: text, original: text })).max(LIST_MAX),
 });
@@ -40,23 +42,30 @@ const recordSchema = z.object({
 /**
  * One read-modify-write of the stored dictionary. Main is the only writer and
  * runs this synchronously, so no other operation can land between the read
- * and the write: two changes made at once both survive. Only what changed is
- * written back.
+ * and the write: two changes made at once both survive. Both lists go back in
+ * one write, so an accept can't land half done, and nothing is written when
+ * nothing changed.
  */
 function change(
   apply: (state: VoiceDictionaryState, settings: VoiceInputSettings) => VoiceDictionaryState
 ): VoiceDictionaryState {
+  // getVoiceSettings has already repaired and persisted what it read.
   const settings = getVoiceSettings();
   const current: VoiceDictionaryState = {
     dictionary: settings.dictionary,
-    suggestedDictionary: sanitizeSuggestions(settings.suggestedDictionary),
+    suggestedDictionary: settings.suggestedDictionary,
   };
   const next = apply(current, settings);
-  if (next.dictionary !== current.dictionary) {
-    store.set("voiceInput.dictionary", next.dictionary);
-  }
-  if (next.suggestedDictionary !== current.suggestedDictionary) {
-    store.set("voiceInput.suggestedDictionary", next.suggestedDictionary);
+  if (
+    next.dictionary !== current.dictionary ||
+    next.suggestedDictionary !== current.suggestedDictionary
+  ) {
+    // The stored object, not `settings`: that one carries env-var key overrides.
+    store.set("voiceInput", {
+      ...store.get("voiceInput"),
+      dictionary: next.dictionary,
+      suggestedDictionary: next.suggestedDictionary,
+    });
   }
   return next;
 }
@@ -103,8 +112,9 @@ export const voiceDictionaryNamespace = defineIpcNamespace({
           suggestedDictionary: dismissSuggestion(state.suggestedDictionary, word),
         }))
     ),
-    // The learner reports what it saw; main decides what joins the queue, so a
-    // suggestion accepted or dismissed meanwhile isn't brought back.
+    // The learner reports what it saw and main merges it into the queue it
+    // holds, so the learner's copy can't overwrite an accept or dismiss made
+    // meanwhile. A word dismissed earlier can still be suggested again.
     recordSuggestions: opValidated(
       VOICE_DICTIONARY_METHOD_CHANNELS.recordSuggestions,
       recordSchema,
