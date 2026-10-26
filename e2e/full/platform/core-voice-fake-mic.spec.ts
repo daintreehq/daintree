@@ -24,7 +24,12 @@ import { ensureWindowFocused } from "../../helpers/focus";
 import { VOICE_TOGGLE_CHORD } from "../../helpers/shortcuts";
 import { T_LONG, T_MEDIUM } from "../../helpers/timeouts";
 import { createTranscriptionMock, type TranscriptionMock } from "../../helpers/transcriptionMock";
-import { launchAppWithFakeMicrophone, pcmPeak, writeWav } from "../../helpers/fakeMicrophone";
+import {
+  launchAppWithFakeMicrophone,
+  pcmPeak,
+  stubNativeMicrophonePermission,
+  writeWav,
+} from "../../helpers/fakeMicrophone";
 import {
   clearCapturedEvents,
   getCapturedEvents,
@@ -71,6 +76,7 @@ test.describe.serial("E2E: Voice Input — fake microphone smoke", () => {
     removeSingletonFiles(userDataDir);
 
     ctx = await launchAppWithFakeMicrophone({ userDataDir, env: mock.env(), wavPath });
+    await stubNativeMicrophonePermission(ctx.app);
     const fixture = createFixtureRepo({ name: "voice-fake-mic" });
     fixtureCleanup = fixture.cleanup;
     ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixture.dir);
