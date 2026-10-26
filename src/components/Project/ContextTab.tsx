@@ -24,6 +24,7 @@ import { pluralize } from "@/lib/pluralize";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { formatBytes } from "@/lib/formatBytes";
 import { formatTokenCount } from "@/utils/formatTokenCount";
+import { DictationVocabularySection } from "./DictationVocabularySection";
 
 // Keyed loosely on purpose: exclusion reasons are additive upstream, and an
 // unrecognized one falls back to showing its own key rather than nothing.
@@ -118,6 +119,7 @@ interface ContextTabProps {
   onCopyTreeSettingsChange: (value: CopyTreeSettings) => void;
   worktrees: Worktree[];
   isOpen: boolean;
+  projectId?: string | null;
 }
 
 export function ContextTab({
@@ -127,6 +129,7 @@ export function ContextTab({
   onCopyTreeSettingsChange,
   worktrees,
   isOpen,
+  projectId,
 }: ContextTabProps) {
   const [testConfigResult, setTestConfigResult] = useState<CopyTreeTestConfigResult | null>(null);
   const [isTestingConfig, setIsTestingConfig] = useState(false);
@@ -494,6 +497,8 @@ export function ContextTab({
           )}
         </SettingsGroup>
       </SettingsSection>
+
+      {projectId && <DictationVocabularySection projectId={projectId} />}
     </div>
   );
 }
