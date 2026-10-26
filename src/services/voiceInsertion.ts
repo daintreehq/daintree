@@ -32,6 +32,11 @@ function insertionSpan(draft: string, anchor: TrackedTextRange | null): Dictatio
   return { from, to };
 }
 
+/** Whether words planned at the anchor would have nothing but whitespace before them. */
+export function voiceWordsOpenDraft(draft: string, anchor: TrackedTextRange | null): boolean {
+  return draft.slice(0, insertionSpan(draft, anchor).from).trim() === "";
+}
+
 /**
  * Plans dictated words into `draft` at the session's anchor, replacing the
  * selection it still holds. A space is added before the words when they'd

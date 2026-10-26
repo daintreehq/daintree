@@ -92,7 +92,16 @@ const INVOCATION_LEAD_WORDS = new Set([
 ]);
 // At least one of these must be among the lead words: "the review skill is
 // broken" mentions a command without asking for it.
-const INVOCATION_VERBS = new Set(["run", "use", "invoke", "call", "execute", "trigger", "start", "do"]);
+const INVOCATION_VERBS = new Set([
+  "run",
+  "use",
+  "invoke",
+  "call",
+  "execute",
+  "trigger",
+  "start",
+  "do",
+]);
 // What may sit between the name and its arguments: "run the review skill on…".
 const INVOCATION_NOUNS = new Set(["skill", "command", "plugin", "prompt"]);
 
@@ -113,7 +122,9 @@ function spokenName(name: string): string {
 }
 
 function sourcePrefix(source: CompletionSourceConfig): string {
-  return source.discovery.method === "static" ? source.trigger : source.discovery.derive.labelPrefix;
+  return source.discovery.method === "static"
+    ? source.trigger
+    : source.discovery.derive.labelPrefix;
 }
 
 function spokenPrefixForms(source: CompletionSourceConfig, prefix: string): string[][] {

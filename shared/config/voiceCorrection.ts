@@ -187,7 +187,16 @@ RULES:
 
 Return a JSON object matching the response schema. The file_references array contains entries with a "description" field holding the natural-language file description.`;
 
+/** What the dictation is written into, and the commands that composer accepts. */
+export interface CorrectionTargetContext {
+  agentName: string;
+  isAssistant: boolean;
+  /** Most likely first. */
+  commands: readonly { token: string; description: string }[];
+}
+
 export interface CorrectionPromptContext {
+  target?: CorrectionTargetContext;
   projectName?: string;
   projectPath?: string;
   customDictionary?: string[];
@@ -197,6 +206,44 @@ export interface CorrectionPromptContext {
   heardAs?: readonly HeardAsRule[];
   customInstructions?: string;
   language?: string;
+}
+
+// Enough for every command anyone keeps; past it the prompt grows for names
+// nobody will say.
+const MAX_TARGET_COMMANDS = 60;
+const MAX_COMMAND_DESCRIPTION_CHARS = 80;
+
+function commandLine(command: { token: string; description: string }): string {
+  const description = command.description.replace(/\s+/g, " ").trim();
+  if (!description) return command.token;
+  const short =
+    description.length > MAX_COMMAND_DESCRIPTION_CHARS
+      ? `${description.slice(0, MAX_COMMAND_DESCRIPTION_CHARS - 1).trimEnd()}…`
+      : description;
+  return `${command.token} — ${short}`;
+}
+
+function buildTargetSection(target: CorrectionTargetContext): string {
+  const destination = target.isAssistant
+    ? `the Daintree Assistant, Daintree's built-in assistant, which runs on ${target.agentName}`
+    : `${target.agentName}, an AI coding agent`;
+  const lines = [
+    `TARGET:\nThe target is typed into the prompt box of ${destination}. Format it the way a developer types a prompt there, not as prose: keep @-references, identifiers, paths and flags exactly as they are.`,
+  ];
+  const commands = target.commands.slice(0, MAX_TARGET_COMMANDS);
+  if (commands.length === 0) {
+    lines.push("It has no commands. Never write a word as a command.");
+    return lines.join("\n");
+  }
+  lines.push(
+    `COMMANDS: These are the only commands and skills it has, written exactly as they're typed:\n${commands.map(commandLine).join("\n")}`,
+    `COMMAND RULES:
+- When <job> says prompt_start=yes and the target opens by asking to run one of these commands or skills, either with its trigger ("slash review", "dollar plugin creator") or without it ("run the review skill on the auth module", "compact the conversation"), write that command exactly as listed at the very start, then the rest of what was said as its arguments: "/review on the auth module".
+- Only do this when the opening words ask for the command to run. A sentence that just mentions the word ("the review skill is broken", "explain the compact command", "compact cars use less space") stays prose.
+- Never write a command that isn't listed, and never put one anywhere but the very start of the prompt.
+- When the target already starts with one of these commands, copy the command and everything after it exactly: no recasing, no added punctuation, no rewording of its arguments. You may only drop hesitation sounds.`
+  );
+  return lines.join("\n\n");
 }
 
 /** The project, dictionary, language and custom-context blocks both prompts carry. */
@@ -255,13 +302,16 @@ function contextBlocks(context: CorrectionPromptContext): string[] {
  * Structure (for optimal prompt caching):
  *   1. Core prompt (fixed — cached after first request)
  *   2. The user's heard-as rules, next to the core prompt's built-in table
- *   3. Project context (changes per project, not per segment)
- *   4. Custom dictionary (highest priority corrections)
- *   5. Workspace names (hosts, projects and worktrees, when there are any)
- *   6. Language and custom instructions (lower-priority user context)
- *   7. Guardrail suffix (fixed — always last, cannot be overridden)
+ *   3. Target and its commands (changes per agent and project, not per segment)
+ *   4. Project context (changes per project, not per segment)
+ *   5. Custom dictionary (highest priority corrections)
+ *   6. Workspace names (hosts, projects and worktrees, when there are any)
+ *   7. Language and custom instructions (lower-priority user context)
+ *   8. Guardrail suffix (fixed — always last, cannot be overridden)
  *
- * Only the user message (history + raw text) changes per request.
+ * Only the user message (history + raw text) changes per request. The target
+ * block stays out of the rewrite prompt: a spoken rewrite instruction never
+ * becomes a command.
  */
 export function buildCorrectionSystemPrompt(context: CorrectionPromptContext): string {
   const parts: string[] = [CORE_CORRECTION_PROMPT];
@@ -272,6 +322,7 @@ export function buildCorrectionSystemPrompt(context: CorrectionPromptContext): s
     );
   }
 
+  if (context.target) parts.push(buildTargetSection(context.target));
   parts.push(...contextBlocks(context), GUARDRAIL_SUFFIX.trim());
 
   return parts.join("\n\n");

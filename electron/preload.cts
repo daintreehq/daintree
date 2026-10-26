@@ -2986,6 +2986,7 @@ function buildElectronApi(): ElectronAPI {
           itemId?: string;
           transcriptId?: string;
           send?: boolean;
+          commandText?: string;
         }) => void
       ) => _typedOn(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, callback),
       onParagraphBoundary: (
@@ -3014,8 +3015,12 @@ function buildElectronApi(): ElectronAPI {
       openMicSettings: () => _unwrappingInvoke(CHANNELS.VOICE_INPUT_OPEN_MIC_SETTINGS),
       validateApiKey: (apiKey: string) =>
         _unwrappingInvoke(CHANNELS.VOICE_INPUT_VALIDATE_API_KEY, apiKey),
-      correct: (request: { rawText: string; recentContext?: string[]; terminalId?: string }) =>
-        _unwrappingInvoke(CHANNELS.VOICE_INPUT_CORRECT, request),
+      correct: (request: {
+        rawText: string;
+        recentContext?: string[];
+        terminalId?: string;
+        startsPrompt?: boolean;
+      }) => _unwrappingInvoke(CHANNELS.VOICE_INPUT_CORRECT, request),
       onFileTokenResolved: (
         callback: (payload: {
           sessionId: string;

@@ -2192,6 +2192,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
         itemId?: string;
         transcriptId?: string;
         send?: boolean;
+        commandText?: string;
       }) => void
     ): () => void;
     onParagraphBoundary(
@@ -2244,8 +2245,10 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     correct(request: {
       rawText: string;
       recentContext?: string[];
-      /** The panel the passage was dictated into, which picks the project vocabulary. */
+      /** The panel the passage was dictated into: it picks the project vocabulary and the agent's commands. */
       terminalId?: string;
+      /** Nothing but whitespace comes before the passage in the draft. */
+      startsPrompt?: boolean;
     }): Promise<{ action: "no_change" | "replace"; correctedText: string; failed?: true }>;
     onFileTokenResolved(
       callback: (payload: {

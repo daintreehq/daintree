@@ -24,12 +24,13 @@ export type CompletionTrigger = "/" | "$" | "@";
  * followed by the prefix's own words ("slash prompts"). `@` has no spoken form:
  * "at" is too common a word to open a completion on.
  */
-export const COMPLETION_TRIGGER_SPOKEN_FORMS: Readonly<Record<CompletionTrigger, readonly string[]>> =
-  {
-    "/": ["slash", "forward slash"],
-    $: ["dollar", "dollar sign"],
-    "@": [],
-  };
+export const COMPLETION_TRIGGER_SPOKEN_FORMS: Readonly<
+  Record<CompletionTrigger, readonly string[]>
+> = {
+  "/": ["slash", "forward slash"],
+  $: ["dollar", "dollar sign"],
+  "@": [],
+};
 
 /**
  * Semantic category of a completion. `command`, `skill`, and `plugin` are

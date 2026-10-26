@@ -186,11 +186,14 @@ describe("checkVoiceCommandEdit", () => {
         true
       )
     ).toBeNull();
+    expect(checkVoiceCommandEdit("compact the conversation", "/compact", claude, true)).toBeNull();
     expect(
-      checkVoiceCommandEdit("compact the conversation", "/compact", claude, true)
-    ).toBeNull();
-    expect(
-      checkVoiceCommandEdit("use the plugin creator for a linter", "$plugin-creator for a linter", codex, true)
+      checkVoiceCommandEdit(
+        "use the plugin creator for a linter",
+        "$plugin-creator for a linter",
+        codex,
+        true
+      )
     ).toBeNull();
   });
 
@@ -198,9 +201,7 @@ describe("checkVoiceCommandEdit", () => {
     expect(checkVoiceCommandEdit("run the deploy skill", "/deploy", claude, true)).toBe(
       "unknown_command"
     );
-    expect(checkVoiceCommandEdit("compact it", "/compact.", claude, true)).toBe(
-      "unknown_command"
-    );
+    expect(checkVoiceCommandEdit("compact it", "/compact.", claude, true)).toBe("unknown_command");
   });
 
   it("rejects a command introduced anywhere but the start of the prompt", () => {
@@ -217,7 +218,12 @@ describe("checkVoiceCommandEdit", () => {
 
   it("rejects an introduced command that drops or rewrites what followed it", () => {
     expect(
-      checkVoiceCommandEdit("run the review skill on the auth module", "/review on billing", claude, true)
+      checkVoiceCommandEdit(
+        "run the review skill on the auth module",
+        "/review on billing",
+        claude,
+        true
+      )
     ).toBe("arguments_reformatted");
   });
 
@@ -231,9 +237,9 @@ describe("checkVoiceCommandEdit", () => {
     expect(
       checkVoiceCommandEdit("/review the last commit", "/review The last commit.", claude, true)
     ).toBe("arguments_reformatted");
-    expect(
-      checkVoiceCommandEdit("$github open the pr", "$github open the PR", codex, true)
-    ).toBe("arguments_reformatted");
+    expect(checkVoiceCommandEdit("$github open the pr", "$github open the PR", codex, true)).toBe(
+      "arguments_reformatted"
+    );
   });
 
   it("leaves paths and ordinary text to the other guards", () => {

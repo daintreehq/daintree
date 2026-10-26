@@ -400,7 +400,7 @@ describe("VoiceCorrectionService", () => {
     const without = await requestFor({});
     const [prefix] = without.prompt_cache_key.split(":");
     const namesFreeFingerprint = createHash("sha256")
-      .update(JSON.stringify([BASE_SETTINGS.model, "daintree", ["Daintree"]]))
+      .update(JSON.stringify([BASE_SETTINGS.model, "daintree", "none", ["Daintree"]]))
       .digest("hex")
       .slice(0, 32);
     expect(without.prompt_cache_key).toBe(`${prefix}:${namesFreeFingerprint}`);

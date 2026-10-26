@@ -202,6 +202,7 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     await service.stop();
     expect(correct).toHaveBeenLastCalledWith({
       rawText: "fix the bug in the parsr",
+      startsPrompt: true,
       terminalId: "panel-1",
     });
 
@@ -240,6 +241,7 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     expect(correct).toHaveBeenLastCalledWith({
       rawText: "and the lexer",
       recentContext: ["So the parser is broken."],
+      startsPrompt: false,
       terminalId: "panel-1",
     });
     await flush();
@@ -260,6 +262,7 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     expect(correct).toHaveBeenLastCalledWith({
       rawText: "and the lexr too",
       recentContext: ["um so the parser is brken"],
+      startsPrompt: false,
       terminalId: "panel-1",
     });
 
@@ -333,6 +336,7 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     expect(correct).toHaveBeenLastCalledWith({
       rawText: "and the lexer",
       recentContext: ["The parser."],
+      startsPrompt: false,
       terminalId: "panel-1",
     });
   });
@@ -345,7 +349,11 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     dictate("panel-1", "the parsr");
     callbacks.boundary!({ rawText: null });
     await service.stop();
-    expect(correct).toHaveBeenLastCalledWith({ rawText: "the parsr", terminalId: "panel-1" });
+    expect(correct).toHaveBeenLastCalledWith({
+      rawText: "the parsr",
+      startsPrompt: true,
+      terminalId: "panel-1",
+    });
 
     voiceStore.getState().beginSession({ panelId: "panel-1" });
     callbacks.delta!({ text: "and the" });
@@ -359,6 +367,7 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     expect(correct).toHaveBeenLastCalledWith({
       rawText: "and the lexer",
       recentContext: ["The parser.\n"],
+      startsPrompt: false,
       terminalId: "panel-1",
     });
   });

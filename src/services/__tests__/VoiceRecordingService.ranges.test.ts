@@ -357,6 +357,7 @@ describe("VoiceRecordingService — dictation ranges (#14597)", () => {
     expect(correct.fn).toHaveBeenCalledWith({
       rawText: "Hello there.",
       recentContext: ["Intro."],
+      startsPrompt: false,
       terminalId: "panel-1",
     });
     expect(getDictation(id)).not.toBeNull();
@@ -485,7 +486,11 @@ describe("VoiceRecordingService — correction over dictated ranges (#14613)", (
     complete("hello there");
     await service.stop("Dictation stopped.");
 
-    expect(correct.fn).toHaveBeenCalledWith({ rawText: "hello there", terminalId: "panel-1" });
+    expect(correct.fn).toHaveBeenCalledWith({
+      rawText: "hello there",
+      startsPrompt: true,
+      terminalId: "panel-1",
+    });
     await vi.waitFor(() => expect(draft()).toBe("Hello, there."));
     const buffer = voiceStore.getState().panelBuffers[PANEL]!;
     expect(buffer.sessionCorrectedText).toBe("Hello, there.");
@@ -534,6 +539,7 @@ describe("VoiceRecordingService — correction over dictated ranges (#14613)", (
     expect(correct.fn).toHaveBeenCalledWith({
       rawText: "it runs on windows",
       recentContext: ["Note: the build fails when"],
+      startsPrompt: false,
       terminalId: "panel-1",
     });
     await vi.waitFor(() =>
@@ -748,6 +754,7 @@ describe("VoiceRecordingService — correction over dictated ranges (#14613)", (
     expect(correct.fn).toHaveBeenCalledWith({
       rawText: "hello there",
       recentContext: ["Intro.\n"],
+      startsPrompt: false,
       terminalId: "panel-1",
     });
     expect(draft()).toBe(`Intro.\n${expected} Thanks.`);
@@ -766,6 +773,7 @@ describe("VoiceRecordingService — correction over dictated ranges (#14613)", (
     expect(correct.fn).toHaveBeenCalledWith({
       rawText: "more",
       recentContext: [word],
+      startsPrompt: false,
       terminalId: "panel-1",
     });
   });
