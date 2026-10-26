@@ -57,6 +57,7 @@ import { useCanopyInboxActions } from "./useCanopyInboxActions";
 import { useCanopyInboxKeyboard } from "./useCanopyInboxKeyboard";
 import { placeOf } from "./canopyInboxPlace";
 import { CanopyAssistantPane, CanopyAssistantRow } from "./CanopyAssistantList";
+import { canopyAssistantDomId } from "./openAssistantItem";
 import { CANOPY_ROLE_FILTERS, type CanopyRoleFilter } from "./canopyAssistants";
 import { isFullAgentDirectory } from "@shared/types/agentDirectory";
 import { CanopyBulkEnableDialog } from "./CanopyBulkEnableDialog";
@@ -1092,21 +1093,25 @@ function CanopyInbox({
     const askingAssistant = assistantItems.find((item) => item.ask !== null);
     if (!first && !askingAssistant) return;
     const listedIds = new Set(listed.map((item) => item.runId));
-    const hidden = first
-      ? inbox.inbox.some((item) => itemNeedsAttention(item) && !listedIds.has(item.runId))
-      : !shownAssistants.some((item) => item.id === askingAssistant!.id);
-    if (hidden) {
+    const shownIds = new Set(shownAssistants.map((item) => item.id));
+    const hiddenWorker = inbox.inbox.some(
+      (item) => itemNeedsAttention(item) && !listedIds.has(item.runId)
+    );
+    const hiddenAssistant = assistantItems.some(
+      (item) => item.ask !== null && !shownIds.has(item.id)
+    );
+    if (hiddenWorker || hiddenAssistant) {
       if (unreadOnly) setUnreadOnly(false);
       if (query !== "") setQuery("");
       if (workOf !== null) showWorkOf(null);
     }
+    // Whatever the role filter hides of what the header counts comes back.
+    if ((first && !workersShown) || (askingAssistant && !assistantsShown)) setRoleFilter("all");
     if (first) {
-      if (!workersShown) setRoleFilter("all");
       selectNow(first.runId);
       // The row may only mount once the filters are lifted: scroll to it then too.
       requestAnimationFrame(() => selectNow(first.runId));
     } else {
-      if (!assistantsShown) setRoleFilter("all");
       const id = askingAssistant!.id;
       selectAssistant(id);
       requestAnimationFrame(() => selectAssistant(id));
@@ -1403,9 +1408,11 @@ function CanopyInbox({
                   }
                   aria-autocomplete="list"
                   aria-activedescendant={
-                    focusedItem && visible.includes(focusedItem)
-                      ? canopyCardDomId(focusedItem.runId)
-                      : undefined
+                    selectedAssistant !== null
+                      ? canopyAssistantDomId(selectedAssistant.id)
+                      : focusedItem && visible.includes(focusedItem)
+                        ? canopyCardDomId(focusedItem.runId)
+                        : undefined
                   }
                   autoComplete="off"
                   spellCheck={false}
@@ -1589,8 +1596,8 @@ function CanopyInbox({
                                 item={item}
                                 isSelected={selectedAssistant?.id === item.id}
                                 tabbable={
-                                  selectedAssistant !== null
-                                    ? selectedAssistant.id === item.id
+                                  bandAssistants.some((a) => a.id === selectedAssistant?.id)
+                                    ? selectedAssistant?.id === item.id
                                     : index === 0
                                 }
                                 onSelect={() => selectAssistant(item.id)}

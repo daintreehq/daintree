@@ -238,7 +238,10 @@ export function useCanopyInboxFocus({
           restore,
           visible.map((item) => item.runId)
         )
-      : (visible[0]?.runId ?? null);
+      : // An assistant leading the list is the default pane: no worker is picked over it.
+        firstAssistant !== null
+        ? null
+        : (visible[0]?.runId ?? null);
     const land = () => {
       landedRef.current = true;
       restoreRef.current = null;
@@ -270,7 +273,7 @@ export function useCanopyInboxFocus({
       cancelAnimationFrame(outer);
       cancelAnimationFrame(inner);
     };
-  }, [isOpen, items, visible, focusCardNow, setQuery, appliedQuery]);
+  }, [isOpen, items, visible, focusCardNow, setQuery, appliedQuery, firstAssistant]);
 
   // The focused card left (trashed, answered into another section, exited):
   // put the keyboard on the card that took its place instead of dropping it on
@@ -318,8 +321,8 @@ export function useCanopyInboxFocus({
     }
     if (searchedRef.current !== appliedQuery) {
       searchedRef.current = appliedQuery;
-      const top = visible[0];
-      topOwedRef.current = top === undefined;
+      const top = firstAssistant !== null ? undefined : visible[0];
+      topOwedRef.current = top === undefined && firstAssistant === null;
       if (top) selectNow(top.runId);
       else setFocusedId(null);
       return;
@@ -328,7 +331,15 @@ export function useCanopyInboxFocus({
     // recovery waits until they come back to it.
     const assistantChosen =
       assistantId !== null && shownAssistants.some((item) => item.id === assistantId);
-    if (!searching || focusedIndex !== -1 || visible.length === 0 || assistantChosen) return;
+    if (
+      !searching ||
+      focusedIndex !== -1 ||
+      visible.length === 0 ||
+      assistantChosen ||
+      firstAssistant !== null
+    ) {
+      return;
+    }
     const index = topOwedRef.current ? 0 : Math.min(lastIndexRef.current, visible.length - 1);
     topOwedRef.current = false;
     selectNow(visible[index]!.runId);
@@ -341,6 +352,7 @@ export function useCanopyInboxFocus({
     selectNow,
     assistantId,
     shownAssistants,
+    firstAssistant,
   ]);
 
   // Select a run and take the keyboard into its pane — its composer or its
@@ -468,7 +480,16 @@ export function useCanopyInboxFocus({
   const chosenHandbackAt = chosenAssistantId !== null ? selectedAssistant!.handbackAt : null;
   useEffect(() => {
     if (chosenAssistantId !== null && chosenHandbackAt !== null) {
+      const domId = canopyAssistantDomId(chosenAssistantId);
+      const wasFocused = document.activeElement?.id === domId;
       seeAssistantHandback(chosenAssistantId, chosenHandbackAt);
+      // Seen, the handback stops asking and the row moves out of the band: the
+      // keyboard follows it rather than dropping to the page.
+      if (wasFocused) {
+        requestAnimationFrame(() => {
+          if (document.activeElement === document.body) document.getElementById(domId)?.focus();
+        });
+      }
     }
   }, [chosenAssistantId, chosenHandbackAt, seeAssistantHandback]);
   // Each opening, and each change of role, starts from the list's own default,
