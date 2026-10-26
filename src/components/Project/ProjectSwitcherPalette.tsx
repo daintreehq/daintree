@@ -448,7 +448,9 @@ function ProjectPaletteInner({
   // Nothing here matched: the first project another host offers is what Enter
   // opens, the way the first result is when there are results. A search that
   // named only a host lands on that host's own row instead.
-  const firstHostProject = hostOptions.findIndex((option) => option.kind === "project");
+  const firstHostProject = hostOptions.findIndex(
+    (option) => option.kind === "project" || option.kind === "worktree"
+  );
   const defaultHostIndex =
     results.length > 0
       ? -1
@@ -739,7 +741,9 @@ function ProjectPaletteInner({
         : { hostName: currentHostName, names: new Set(remoteNamesKey.split("\n")) },
     [remoteNamesKey, currentHostName]
   );
-  const hostProjectCount = hostOptions.filter((option) => option.kind === "project").length;
+  const hostProjectCount = hostOptions.filter(
+    (option) => option.kind === "project" || option.kind === "worktree"
+  ).length;
   // While searching, a host row the query named is a match like any other and
   // counts — except a Retry already under way, which holds its row but does
   // nothing.

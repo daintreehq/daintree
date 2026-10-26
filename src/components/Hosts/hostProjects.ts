@@ -5,6 +5,7 @@ import type { HostProjectSummary } from "@shared/types/ipc/remoteHosts";
 import { getViewHostId } from "@/hooks/useHostConnection";
 import { logWarn } from "@/utils/logger";
 import { hasRemoteHosts, useHostList } from "./hostList";
+import { _resetHostWorktreesForTesting, pruneHostWorktrees } from "./hostWorktrees";
 import {
   buildHostMenuRows,
   describeHostMenuState,
@@ -260,6 +261,7 @@ export function useOtherHostTargets(localPlatform: ClientPlatform): OtherHostTar
     // another machine.
     const known = new Set(knownKey.split("\n"));
     for (const id of [...getEntries().keys()]) if (!known.has(id)) setEntry(id, null);
+    pruneHostWorktrees(known);
   }, [knownKey]);
 
   useEffect(() => {
@@ -358,4 +360,5 @@ export function _resetHostProjectsForTesting(): void {
   loader = null;
   entries = new Map();
   listeners.clear();
+  _resetHostWorktreesForTesting();
 }
