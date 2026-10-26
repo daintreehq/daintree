@@ -116,6 +116,7 @@ function setupGlobals(
     correctionEnabled?: boolean;
     reportOnStop?: boolean;
     recordingMode?: "toggle" | "push-to-talk" | "tap-or-hold";
+    dictionary?: Array<{ term: string; heardAs: string[]; source: "manual"; addedAt: number }>;
   } = {}
 ) {
   const callbacks = new Map<string, Listener>();
@@ -148,6 +149,7 @@ function setupGlobals(
       correctionEnabled: options.correctionEnabled ?? false,
       recordingMode: options.recordingMode ?? "toggle",
       deviceId: "",
+      dictionary: options.dictionary ?? [],
     })),
     setSettings: vi.fn(),
     checkMicPermission: vi.fn().mockResolvedValue("granted"),
@@ -418,6 +420,21 @@ describe("VoiceRecordingService — session summary (#14617)", () => {
     await service.stop("Dictation stopped.", { reason: "user" });
 
     expect(summaries()).toMatchObject([{ origin: "call" }]);
+  });
+
+  it("counts what the utterances committed, not the stop-time heard-as rewrite", async () => {
+    const harness = setupGlobals({
+      dictionary: [{ term: "Zustand", heardAs: ["zoo stand"], source: "manual", addedAt: 1 }],
+    });
+    const { service, summaries } = await load();
+    const sessionId = await startLive(harness, service);
+    harness.emit("complete", { sessionId, text: "use zoo", itemId: "item-1" });
+    harness.emit("complete", { sessionId, text: "stand now", itemId: "item-2" });
+    harness.paintFrames();
+    await service.stop("Dictation stopped.", { preserveLiveText: true, reason: "user" });
+
+    expect(draftState.draft).toBe("use Zustand now");
+    expect(summaries()).toMatchObject([{ charsCommitted: "use zoo".length + "stand now".length }]);
   });
 
   it("flags a session that heard speech-level audio and committed nothing", async () => {

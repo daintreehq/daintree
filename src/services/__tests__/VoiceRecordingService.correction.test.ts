@@ -52,7 +52,7 @@ vi.mock("@/services/KeybindingService", () => ({
 }));
 
 type DeltaPayload = { text: string; itemId?: string };
-type CompletePayload = { text: string; willCorrect: boolean; itemId?: string };
+type CompletePayload = { text: string; willCorrect: boolean; itemId?: string; heard?: string };
 type CorrectResult = { action: "no_change" | "replace"; correctedText: string };
 
 const callbacks: {
@@ -69,6 +69,8 @@ const correct =
       terminalId?: string;
     }) => Promise<CorrectResult>
   >();
+
+let dictionary: Array<{ term: string; heardAs: string[]; source: "manual"; addedAt: number }> = [];
 
 function stubElectron() {
   const electron = {
@@ -93,11 +95,12 @@ function stubElectron() {
       onStopRequested: vi.fn(() => () => {}),
       onRevealRequested: vi.fn(() => () => {}),
       getLiveSession: vi.fn().mockResolvedValue({ revision: 0, session: null }),
-      getSettings: vi.fn().mockResolvedValue({
+      getSettings: vi.fn(async () => ({
         enabled: true,
         openaiApiKey: "sk-key",
         correctionEnabled: true,
-      }),
+        dictionary,
+      })),
       stop: vi.fn().mockResolvedValue(undefined),
       correct,
     },
@@ -144,14 +147,14 @@ async function setup() {
   let itemSeq = 0;
   // One utterance through the real transcription handlers, the way a provider
   // delivers it: a delta, then its completion.
-  const say = (text: string) => {
+  const say = (text: string, heard?: string) => {
     const itemId = `item-${++itemSeq}`;
-    callbacks.delta!({ text, itemId });
-    callbacks.complete!({ text, willCorrect: false, itemId });
+    callbacks.delta!({ text: heard ?? text, itemId });
+    callbacks.complete!({ text, willCorrect: false, itemId, ...(heard ? { heard } : {}) });
   };
-  const dictate = (panelId: string, text: string) => {
+  const dictate = (panelId: string, text: string, heard?: string) => {
     useVoiceRecordingStore.getState().beginSession({ panelId });
-    say(text);
+    say(text, heard);
   };
   const draft = (panelId: string) => useTerminalInputStore.getState().getDraftInput(panelId);
   const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -179,6 +182,7 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     callbacks.complete = null;
     callbacks.boundary = null;
     correct.mockReset();
+    dictionary = [];
   });
 
   afterEach(() => {
@@ -541,6 +545,147 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     first.resolve({ action: "replace", correctedText: "Hello world." });
     await flush();
     expect(draft("panel-1")).toBe("hello wrld");
+  });
+
+  describe("heard-as rules at stop", () => {
+    const rule = (term: string, ...heardAs: string[]) => ({
+      term,
+      heardAs,
+      source: "manual" as const,
+      addedAt: 0,
+    });
+
+    it("catches a phrase split across utterances before correction sees the passage", async () => {
+      dictionary = [rule("Zustand", "zoo stand")];
+      const { service, dictate, say, draft, flush } = await setup();
+      const result = deferred<CorrectResult>();
+      correct.mockReturnValueOnce(result.promise);
+
+      dictate("panel-1", "add zoo");
+      say("stand to the store");
+      await service.stop();
+
+      expect(draft("panel-1")).toBe("add Zustand to the store");
+      expect(correct).toHaveBeenLastCalledWith({
+        rawText: "add Zustand to the store",
+        terminalId: "panel-1",
+      });
+      result.resolve({ action: "replace", correctedText: "Add Zustand to the store." });
+      await flush();
+      expect(draft("panel-1")).toBe("Add Zustand to the store.");
+    });
+
+    it("applies them with correction off and learns from the rewritten text", async () => {
+      dictionary = [rule("Zustand", "zoo stand")];
+      const { service, dictate, say, draft, baseline, voiceStore } = await setup();
+      voiceStore.getState().setCorrectionEnabled(false);
+
+      dictate("panel-1", "add zoo");
+      say("stand");
+      await service.stop();
+
+      expect(draft("panel-1")).toBe("add Zustand");
+      expect(baseline("panel-1")).toBe("add Zustand");
+      expect(correct).not.toHaveBeenCalled();
+    });
+
+    it("applies them on a stop that skips correction", async () => {
+      dictionary = [rule("Zustand", "zoo stand")];
+      const { service, dictate, say, draft } = await setup();
+
+      dictate("panel-1", "add zoo");
+      say("stand");
+      await service.stop(undefined, { skipCorrection: true });
+
+      expect(draft("panel-1")).toBe("add Zustand");
+      expect(correct).not.toHaveBeenCalled();
+    });
+
+    it("never rewrites a term the rules already wrote", async () => {
+      dictionary = [rule("bee", "ay"), rule("sea", "bee")];
+      const { service, dictate, say, draft } = await setup();
+      correct.mockResolvedValue({ action: "no_change", correctedText: "" });
+
+      dictate("panel-1", "bee", "ay");
+      say("and sea", "and bee");
+      await service.stop();
+
+      expect(draft("panel-1")).toBe("bee and sea");
+    });
+
+    it("finds a longer phrase a shorter one took when it was split", async () => {
+      dictionary = [rule("ZooThing", "zoo"), rule("Zustand", "zoo stand")];
+      const { service, dictate, say, draft } = await setup();
+      correct.mockResolvedValue({ action: "no_change", correctedText: "" });
+
+      dictate("panel-1", "add ZooThing", "add zoo");
+      say("stand");
+      await service.stop();
+
+      expect(draft("panel-1")).toBe("add Zustand");
+    });
+
+    it("judges a split phrase by text typed against it", async () => {
+      dictionary = [rule("Zustand", "zoo stand")];
+      const { service, dictate, say, draft, inputStore } = await setup();
+      correct.mockResolvedValue({ action: "no_change", correctedText: "" });
+
+      dictate("panel-1", "open zoo");
+      say("stand");
+      inputStore.getState().setDraftInput("panel-1", draft("panel-1") + ".ts");
+      await service.stop();
+
+      expect(draft("panel-1")).toBe("open zoo stand.ts");
+    });
+
+    it("leaves typed text between utterances alone", async () => {
+      dictionary = [rule("Zustand", "zoo stand")];
+      const { service, dictate, say, draft, inputStore } = await setup();
+      correct.mockResolvedValue({ action: "no_change", correctedText: "" });
+
+      dictate("panel-1", "add zoo");
+      inputStore.getState().setDraftInput("panel-1", draft("panel-1") + " stand");
+      say("now");
+      await service.stop();
+
+      expect(draft("panel-1")).toBe("add zoo stand now");
+    });
+
+    it("rewrites a split phrase dictated mid-draft in place, with the typed text around it intact", async () => {
+      dictionary = [rule("Zustand", "zoo stand")];
+      const { service, dictate, say, draft, inputStore, voiceStore, baseline } = await setup();
+      voiceStore.getState().setCorrectionEnabled(false);
+      const typed = "Please then test it.";
+      inputStore.getState().setDraftInput("panel-1", typed);
+      const caret = await import("@/lib/composerCaret");
+      caret.recordComposerState(
+        "panel-1",
+        {},
+        {
+          doc: { length: typed.length, toString: () => typed },
+          selection: { main: { from: 7, to: 7 } },
+        }
+      );
+
+      dictate("panel-1", "use zoo");
+      say("stand");
+      expect(draft("panel-1")).toBe("Please use zoo stand then test it.");
+      await service.stop();
+
+      expect(draft("panel-1")).toBe("Please use Zustand then test it.");
+      const { useDictationRangeStore } = await import("@/store/dictationRangeStore");
+      const [record] = useDictationRangeStore.getState().listDictations("panel-1");
+      const { from, to } = record!.learningSpan!;
+      expect(draft("panel-1").slice(from, to)).toBe("use Zustand");
+      expect(record!.utterances).toHaveLength(1);
+      expect(record!.utterances[0]!.separatorAfter).toEqual({ from: 18, to: 19, edited: false });
+      expect(baseline("panel-1")).toBe("use Zustand");
+      // The caret that followed the words is still right after them.
+      expect(caret.takePendingComposerSelection("panel-1", draft("panel-1"))).toEqual({
+        from: 18,
+        to: 18,
+      });
+    });
   });
 });
 

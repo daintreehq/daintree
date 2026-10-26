@@ -15,12 +15,6 @@ vi.mock("electron", () => ({
   BrowserWindow: { fromWebContents: vi.fn(() => null) },
 }));
 
-// The live-session report goes to every app view; these tests have none.
-vi.mock("../../../window/webContentsRegistry.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../window/webContentsRegistry.js")>()),
-  getAllAppWebContents: vi.fn(() => []),
-}));
-
 // ── Shared state container for mocks ───────────────────────────────────────
 type MockTranscriptionEvent = {
   type: string;
@@ -50,6 +44,10 @@ const shared = vi.hoisted(() => ({
   assembleKeyterms: null as null | (() => Promise<string[]>),
   /** The session the fake provider was last started for; its events carry it. */
   providerSessionId: null as string | null,
+  /** Texts handed to file-link detection, in call order. */
+  fileLinkCalls: [] as string[],
+  /** The project the fake view belongs to, when a test needs one. */
+  viewProjectId: null as string | null,
 }));
 
 vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
@@ -113,7 +111,8 @@ vi.mock("../../../services/VoiceCorrectionService.js", () => ({
       shared.rewriteCalls.push({ request, settings });
       return Promise.resolve({ status: "replace", text: "Shorter." });
     };
-    this.detectFileLinkTokens = function () {
+    this.detectFileLinkTokens = function (utterance: string) {
+      shared.fileLinkCalls.push(utterance);
       return Promise.resolve([]);
     };
     this.setSessionSignal = function () {};
@@ -127,6 +126,16 @@ vi.mock("../../../services/ProjectStore.js", () => ({
     getCurrentProjectId: vi.fn(() => null),
   },
 }));
+
+// The live-session report goes to every app view; these tests have none.
+vi.mock("../../../window/webContentsRegistry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../window/webContentsRegistry.js")>();
+  return {
+    ...actual,
+    getAllAppWebContents: vi.fn(() => []),
+    getProjectForWebContents: vi.fn(() => shared.viewProjectId),
+  };
+});
 
 // The real module's pure helpers (the names screen) stay; only assembly is faked.
 vi.mock("../../../services/voiceContextKeyterms.js", async (importOriginal) => ({
@@ -1176,7 +1185,199 @@ describe("voiceInput — context keyterms wiring", () => {
     });
     expect(shared.correctionCalls.at(-1)?.settings).toMatchObject({
       customDictionary: ["Daintree", "Zustand"],
+      heardAs: [{ heard: "dane tree", term: "Daintree" }],
     });
+  });
+
+  it("writes each completed utterance with the heard-as rules the session started with", async () => {
+    const { store } = await import("../../../store.js");
+    const settings = {
+      ...providerSettings("deepgram"),
+      dictionary: [{ term: "Zustand", heardAs: ["zoo stand"], source: "manual", addedAt: 1 }],
+    };
+    vi.mocked(store.get).mockReturnValue(settings);
+    const { assembleTaggedKeyterms } = await import("../../../services/voiceContextKeyterms.js");
+
+    await startFn(fakeEvent, nextSessionId());
+    emitTranscriptionEvent({ type: "complete", text: "add Zoo Stand to @zoo stand" });
+    vi.mocked(store.get).mockReturnValue({ ...settings, dictionary: [] });
+    emitTranscriptionEvent({ type: "complete", text: "then zoo stand again" });
+
+    const completes = activeSent
+      .filter((m) => m.channel === "voice-input:transcription-complete")
+      .map((m) => m.payload);
+    expect(completes).toEqual([
+      {
+        sessionId: currentSessionId,
+        text: "add Zustand to @zoo stand",
+        willCorrect: false,
+        heard: "add Zoo Stand to @zoo stand",
+      },
+      {
+        sessionId: currentSessionId,
+        text: "then Zustand again",
+        willCorrect: false,
+        heard: "then zoo stand again",
+      },
+    ]);
+    // A rule never keeps the written term from biasing the transcriber.
+    expect(vi.mocked(assembleTaggedKeyterms).mock.calls.at(-1)?.[0]).toMatchObject({
+      customDictionary: ["Zustand"],
+    });
+  });
+
+  it("runs spoken commands before the rules and sends no heard text when nothing changed", async () => {
+    const { store } = await import("../../../store.js");
+    vi.mocked(store.get).mockReturnValue({
+      ...providerSettings("openai"),
+      dictionary: [
+        { term: "NewLine", heardAs: ["new line"], source: "manual", addedAt: 1 },
+        { term: "Zustand", heardAs: ["zoo stand"], source: "manual", addedAt: 2 },
+      ],
+    });
+
+    await startFn(fakeEvent, nextSessionId());
+    emitTranscriptionEvent({ type: "complete", text: "use zoo stand new line" });
+    emitTranscriptionEvent({ type: "complete", text: "the new line helper" });
+    emitTranscriptionEvent({ type: "complete", text: "nothing to change" });
+
+    expect(
+      activeSent
+        .filter(
+          (m) =>
+            m.channel === "voice-input:transcription-complete" ||
+            m.channel === "voice-input:paragraph-boundary"
+        )
+        .map((m) => [m.channel.split(":")[1], (m.payload as { text?: string }).text])
+    ).toEqual([
+      ["transcription-complete", "use Zustand"],
+      ["paragraph-boundary", undefined],
+      ["transcription-complete", "the NewLine helper"],
+      ["transcription-complete", "nothing to change"],
+    ]);
+    const last = activeSent
+      .filter((m) => m.channel === "voice-input:transcription-complete")
+      .at(-1);
+    expect(last?.payload).not.toHaveProperty("heard");
+  });
+
+  it("takes a trailing 'send it' before the rules, so a rule never eats the send", async () => {
+    const { store } = await import("../../../store.js");
+    vi.mocked(store.get).mockReturnValue({
+      ...providerSettings("openai"),
+      dictionary: [
+        { term: "SendIt", heardAs: ["send it"], source: "manual", addedAt: 1 },
+        { term: "Zustand", heardAs: ["zoo stand"], source: "manual", addedAt: 2 },
+      ],
+    });
+
+    await startFn(fakeEvent, nextSessionId());
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "use zoo stand, send it.",
+      endOfSpeech: true,
+    });
+    emitTranscriptionEvent({ type: "complete", text: "the send it helper", endOfSpeech: true });
+
+    expect(
+      activeSent
+        .filter((m) => m.channel === "voice-input:transcription-complete")
+        .map((m) => m.payload)
+    ).toEqual([
+      {
+        sessionId: currentSessionId,
+        text: "use Zustand",
+        willCorrect: false,
+        heard: "use zoo stand",
+        send: true,
+      },
+      {
+        sessionId: currentSessionId,
+        text: "the SendIt helper",
+        willCorrect: false,
+        heard: "the send it helper",
+      },
+    ]);
+  });
+
+  it("leaves a rewrite instruction's words as spoken", async () => {
+    const { store } = await import("../../../store.js");
+    vi.mocked(store.get).mockReturnValue({
+      ...providerSettings("openai"),
+      dictionary: [{ term: "Zustand", heardAs: ["zoo stand"], source: "manual", addedAt: 1 }],
+    });
+    const handleStart = getHandler("voice-input:start") as (
+      e: unknown,
+      sessionId: string,
+      options: unknown
+    ) => Promise<unknown>;
+
+    await handleStart(fakeEvent, nextSessionId(), { terminalId: "t1", intent: "rewrite" });
+    emitTranscriptionEvent({ type: "complete", text: "say zoo stand instead", itemId: "i1" });
+
+    expect(
+      activeSent
+        .filter((m) => m.channel === "voice-input:transcription-complete")
+        .map((m) => m.payload)
+    ).toEqual([
+      {
+        sessionId: currentSessionId,
+        text: "say zoo stand instead",
+        willCorrect: false,
+        itemId: "i1",
+      },
+    ]);
+  });
+
+  it("keeps a code fence spanning lines intact and sends no heard text for it", async () => {
+    const { store } = await import("../../../store.js");
+    vi.mocked(store.get).mockReturnValue({
+      ...providerSettings("openai"),
+      dictionary: [{ term: "Zustand", heardAs: ["zoo stand"], source: "manual", addedAt: 1 }],
+    });
+
+    await startFn(fakeEvent, nextSessionId());
+    emitTranscriptionEvent({ type: "complete", text: "```\nzoo stand\n``` then zoo stand" });
+
+    expect(
+      activeSent
+        .filter((m) => m.channel === "voice-input:transcription-complete")
+        .map((m) => m.payload)
+    ).toEqual([
+      { sessionId: currentSessionId, text: "```", willCorrect: false },
+      { sessionId: currentSessionId, text: "zoo stand", willCorrect: false },
+      {
+        sessionId: currentSessionId,
+        text: "``` then Zustand",
+        willCorrect: false,
+        heard: "``` then zoo stand",
+      },
+    ]);
+  });
+
+  it("looks for file links in the text the draft gets", async () => {
+    const { store } = await import("../../../store.js");
+    const { projectStore } = await import("../../../services/ProjectStore.js");
+    shared.fileLinkCalls = [];
+    shared.viewProjectId = "project-1";
+    vi.mocked(projectStore.getProjectById).mockReturnValueOnce({
+      name: "app",
+      path: "/repo/app",
+    } as ReturnType<typeof projectStore.getProjectById>);
+    vi.mocked(store.get).mockReturnValue({
+      ...providerSettings("openai"),
+      correctionEnabled: true,
+      dictionary: [{ term: "Bar", heardAs: ["foo new line"], source: "manual", addedAt: 1 }],
+    });
+
+    try {
+      await startFn(fakeEvent, nextSessionId());
+      emitTranscriptionEvent({ type: "complete", text: "link to the zoo foo new line" });
+    } finally {
+      shared.viewProjectId = null;
+    }
+
+    expect(shared.fileLinkCalls).toEqual(["link to the zoo foo\n"]);
   });
 
   it("bails a Deepgram start whose assembly throws after a stop", async () => {

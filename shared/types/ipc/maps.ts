@@ -2049,6 +2049,8 @@ export interface IpcEventMap {
     sessionId: string;
     text: string;
     willCorrect: boolean;
+    /** The words as transcribed, when heard-as rules rewrote them into `text`. */
+    heard?: string;
     itemId?: string;
     /** Set when spoken file references in this transcript may follow; their result names it. */
     transcriptId?: string;

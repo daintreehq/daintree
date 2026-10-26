@@ -44,6 +44,7 @@ import {
 } from "../../services/voiceContextKeyterms.js";
 import { readProjectVoiceDictionary } from "../../services/projectVoiceDictionary.js";
 import { flattenDictationNames, gatherDictationNames } from "../../services/voiceContextNames.js";
+import { collectHeardAsRules, createHeardAsRewriter } from "../../../shared/utils/voiceHeardAs.js";
 import {
   dictionaryTerms,
   sanitizeDictionary,
@@ -767,7 +768,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     session: VoiceSession,
     correctionSvc: VoiceCorrectionService,
     transcriptId: string,
-    rawText: string,
+    text: string,
     settings: VoiceInputSettings,
     signal: AbortSignal
   ): Promise<void> => {
@@ -776,9 +777,9 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       organizationId: settings.organizationId,
       projectId: settings.projectId,
     };
-    const detected = await correctionSvc.detectFileLinkTokens(rawText, credentials, signal);
+    const detected = await correctionSvc.detectFileLinkTokens(text, credentials, signal);
     // A description the transcript doesn't contain has nowhere to land.
-    const spoken = normalizeSpoken(rawText);
+    const spoken = normalizeSpoken(text);
     const descriptions = detected
       .map(({ description }) => description.trim())
       .filter((description) => spoken.includes(normalizeSpoken(description)));
@@ -1002,6 +1003,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // Correction settings are read live from store per-event so mid-session changes apply.
     const settings = getVoiceSettings();
     session.stats.provider = settings.transcriptionProvider;
+    // Like the keyterms, the rules are the dictionary as it was at the start.
+    const rewriteHeardAs = createHeardAsRewriter(collectHeardAsRules(settings.dictionary));
 
     // Kick off keyterm assembly concurrently with the subscription/provider
     // setup below so leading speech isn't delayed waiting on git/terminal reads.
@@ -1072,6 +1075,12 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       // utterance ("fix the bug new line") survives for the next utterance.
       const pieces = processedText.split(/\s*\n\s*/).map((p) => p.trim());
       const parts = pieces.filter(Boolean);
+      // Heard-as rules run after the commands, so a rule never eats a break
+      // or a send and a term it writes is never taken for one, and over the
+      // whole text, so a code fence spanning lines still protects what's
+      // inside. Rules never cross or write a line break, so the pieces line up.
+      const writtenText = rewriteHeardAs(processedText);
+      const written = writtenText.split(/\s*\n\s*/).map((p) => p.trim());
       // Lengths only — dictated text is user content, kept out of logs.
       logDebug("[VoiceInput] complete event → renderer", {
         rawLength: rawText.length,
@@ -1094,7 +1103,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         liveSettings.correctionEnabled &&
         liveSettings.resolveFileLinks &&
         liveSettings.openaiApiKey &&
-        mayReferenceFile(sendCommand.text)
+        mayReferenceFile(writtenText)
           ? randomUUID()
           : undefined;
       if (parts.length === 0 && itemId && !sendCommand.send) {
@@ -1110,10 +1119,14 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       const lastIndex = pieces.length - 1;
       for (let i = 0; i < pieces.length; i++) {
         if (pieces[i]) {
+          // What was heard goes along, so the renderer can rerun the rules
+          // over the whole dictation at stop without rewriting a term twice.
+          const text = written[i] ?? pieces[i];
           target.send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, {
             sessionId,
-            text: pieces[i],
+            text,
             willCorrect: false,
+            ...(text !== pieces[i] ? { heard: pieces[i] } : {}),
             ...itemIdField,
             ...(transcriptId ? { transcriptId } : {}),
             ...(sendCommand.send && i === lastIndex ? { send: true } : {}),
@@ -1138,15 +1151,10 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       }
 
       if (correctionSvc && transcriptId) {
+        // The renderer finds each description in the draft, so detection
+        // reads the text the draft got.
         trackFileLinkJob(session, (signal) =>
-          findFileLinks(
-            session,
-            correctionSvc,
-            transcriptId,
-            sendCommand.text,
-            liveSettings,
-            signal
-          )
+          findFileLinks(session, correctionSvc, transcriptId, writtenText, liveSettings, signal)
         );
       }
     };
@@ -1538,6 +1546,9 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         customDictionary: dictionaryTerms(sessionDictionary(settings.dictionary, vocabulary)),
         knownNames:
           lastSessionNames?.webContentsId === ctx.webContentsId ? lastSessionNames.names : [],
+        // Global rules only, matching the live rewriter. Project heard-as forms
+        // belong in both places, through sessionDictionary.
+        heardAs: collectHeardAsRules(settings.dictionary),
         customInstructions: settings.correctionCustomInstructions,
         language: normalizeVoiceLanguage(settings.language),
         projectName: projectInfo.name,

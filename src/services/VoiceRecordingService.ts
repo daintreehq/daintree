@@ -63,8 +63,14 @@ import {
   collectCorrectionPassages,
   joinPassageTexts,
   locatePassage,
+  transcribedPassageText,
   type CorrectionPassage,
 } from "@/services/voiceCorrectionPassages";
+import {
+  collectHeardAsRules,
+  createHeardAsRewriter,
+  type HeardAsRewriter,
+} from "@shared/utils/voiceHeardAs";
 import {
   findBuiltInMic,
   isBluetoothMicLabel,
@@ -190,7 +196,8 @@ function writeVoiceWords(
   projectId: string | undefined,
   sessionId: string | null | undefined,
   text: string,
-  transcriptId?: string
+  transcriptId?: string,
+  heard?: string
 ): VoiceInsertPlan {
   const draft = useTerminalInputStore.getState().getDraftInput(panelId, projectId);
   const plan = planVoiceWords(
@@ -206,7 +213,7 @@ function writeVoiceWords(
     (target, { insertion, words, separatorAfter }) =>
       useDictationRangeStore
         .getState()
-        .recordUtterance(target, { insertion, words, separatorAfter, transcriptId })
+        .recordUtterance(target, { insertion, words, separatorAfter, transcriptId, heard })
   );
   return plan;
 }
@@ -372,6 +379,8 @@ class VoiceRecordingService {
   // chunk, start and stop main sees, so main can tell which session each
   // belongs to. Unlike `startRequestId` it is unique across project views.
   private sessionId: string | null = null;
+  // The dictionary's heard-as rules as last read; every start reads them.
+  private heardAsRules: HeardAsRewriter | null = null;
   private warmAudio: WarmAudio | null = null;
   // Capture graph built by an in-flight start() and not yet promoted to the
   // session fields below. Held here so a cancel or supersede can release it
@@ -519,52 +528,58 @@ class VoiceRecordingService {
     );
 
     this.unsubscribers.push(
-      voiceInput.onTranscriptionComplete(({ sessionId, text, itemId, transcriptId, send }) => {
-        logDebug(`${LOG_PREFIX} Received transcription complete`, { itemId, length: text.length });
-        const voiceState = useVoiceRecordingStore.getState();
-        const rewrite = voiceState.activeTarget?.rewrite;
-        if (rewrite) {
-          const finalText = text.trim();
-          if (finalText) rewrite.instruction.push(finalText);
-          useVoiceRecordingStore.getState().completeSegment(text, itemId);
-          return;
-        }
-        const panelId = voiceState.activeTarget?.panelId;
-        const projectId = voiceState.activeTarget?.projectId;
-        if (panelId) {
-          const buffer = voiceState.panelBuffers[panelId];
-          const finalText = text.trim();
-          // "Scratch that, send it" only scratches: the draft it leaves is one
-          // the user hasn't seen, and a spoken send fires with no key press.
-          if (finalText && isScratchCommand(finalText)) {
-            this.scratchLastUtterance(panelId, projectId, buffer?.dictationSessionId);
-            useVoiceRecordingStore.getState().completeSegment("", itemId, { discard: true });
+      voiceInput.onTranscriptionComplete(
+        ({ sessionId, text, itemId, transcriptId, heard, send }) => {
+          logDebug(`${LOG_PREFIX} Received transcription complete`, {
+            itemId,
+            length: text.length,
+          });
+          const voiceState = useVoiceRecordingStore.getState();
+          const rewrite = voiceState.activeTarget?.rewrite;
+          if (rewrite) {
+            const finalText = text.trim();
+            if (finalText) rewrite.instruction.push(finalText);
+            useVoiceRecordingStore.getState().completeSegment(text, itemId);
             return;
           }
-          if (finalText) {
-            const { words } = writeVoiceWords(
-              panelId,
-              projectId,
-              buffer?.dictationSessionId,
-              finalText,
-              transcriptId
-            );
-            // A Deepgram span can finalise without any interim, so the session's
-            // first text may arrive here rather than in a delta.
-            useVoiceRecordingStore.getState().setSessionDraftStart(panelId, words.from);
-            if ((buffer?.activeParagraphStart ?? -1) < 0) {
-              useVoiceRecordingStore.getState().setActiveParagraphStart(panelId, words.from);
+          const panelId = voiceState.activeTarget?.panelId;
+          const projectId = voiceState.activeTarget?.projectId;
+          if (panelId) {
+            const buffer = voiceState.panelBuffers[panelId];
+            const finalText = text.trim();
+            // "Scratch that, send it" only scratches: the draft it leaves is one
+            // the user hasn't seen, and a spoken send fires with no key press.
+            if (finalText && isScratchCommand(finalText)) {
+              this.scratchLastUtterance(panelId, projectId, buffer?.dictationSessionId);
+              useVoiceRecordingStore.getState().completeSegment("", itemId, { discard: true });
+              return;
             }
-            const timeline = this.timelines.get(sessionId);
-            timeline?.addCommitted(finalText.length);
-            timeline?.markNextFrame("firstText");
+            if (finalText) {
+              const { words } = writeVoiceWords(
+                panelId,
+                projectId,
+                buffer?.dictationSessionId,
+                finalText,
+                transcriptId,
+                heard?.trim()
+              );
+              // A Deepgram span can finalise without any interim, so the session's
+              // first text may arrive here rather than in a delta.
+              useVoiceRecordingStore.getState().setSessionDraftStart(panelId, words.from);
+              if ((buffer?.activeParagraphStart ?? -1) < 0) {
+                useVoiceRecordingStore.getState().setActiveParagraphStart(panelId, words.from);
+              }
+              const timeline = this.timelines.get(sessionId);
+              timeline?.addCommitted(finalText.length);
+              timeline?.markNextFrame("firstText");
+            }
           }
+          useVoiceRecordingStore.getState().completeSegment(text, itemId);
+          // After completeSegment, so the command's own preview is already retired
+          // and a stop that preserves live text can't put it back.
+          if (send && panelId) this.handleSpokenSend(panelId, projectId);
         }
-        useVoiceRecordingStore.getState().completeSegment(text, itemId);
-        // After completeSegment, so the command's own preview is already retired
-        // and a stop that preserves live text can't put it back.
-        if (send && panelId) this.handleSpokenSend(panelId, projectId);
-      })
+      )
     );
 
     this.unsubscribers.push(
@@ -948,6 +963,7 @@ class VoiceRecordingService {
     this.recordingMode = settings.recordingMode ?? "tap-or-hold";
     this.hasOpenAIKey = !!settings.openaiApiKey;
     this.transcriptionProvider = settings.transcriptionProvider;
+    this.heardAsRules = createHeardAsRewriter(collectHeardAsRules(settings.dictionary ?? []));
     logDebug(`${LOG_PREFIX} refreshConfiguration`, {
       enabled: settings.enabled,
       provider: settings.transcriptionProvider,
@@ -2271,6 +2287,14 @@ class VoiceRecordingService {
       // Every word the transcription will give is in the draft by now.
       stopTimeline?.mark("settled");
 
+      // Each utterance met the heard-as rules as it landed; with the whole
+      // dictation in, a phrase split across two of them is caught too. Every
+      // stop that keeps the text gets this, whether or not correction runs.
+      // A rewrite's instruction goes to the model as spoken.
+      if (stoppedTarget && !stoppedTarget.rewrite && this.heardAsRules) {
+        this.applyHeardAsRules(stoppedTarget, stoppedSessionId, this.heardAsRules);
+      }
+
       // Whole-passage AI cleanup runs after a deliberate, graceful stop only —
       // not on error, cancel-to-restart, or backend-driven teardown. stop()
       // doesn't await it: the decoration shows progress, and a send waits for
@@ -2317,6 +2341,66 @@ class VoiceRecordingService {
       // Set ahead of the capture teardown, so a throw there must not strand it.
       this.isStoppingSession = false;
     }
+  }
+
+  /**
+   * Reruns the heard-as rules over each of the session's passages as it was
+   * transcribed, so a phrase that was split between utterances, or that a
+   * shorter phrase took first, comes out as one term, and a term already
+   * written is never rewritten again. Rules changed since the session began
+   * apply to all of it alike. Synchronous, so it lands before stop() resolves
+   * and before any send or correction can read the draft.
+   */
+  private applyHeardAsRules(
+    target: VoiceRecordingTarget,
+    sessionId: string | null,
+    rewrite: HeardAsRewriter
+  ): void {
+    const record = findDictation(target, sessionId);
+    if (!record) return;
+    const { panelId, projectId } = target;
+    const inputStore = useTerminalInputStore.getState();
+    const draft = inputStore.getDraftInput(panelId, projectId);
+    const draftKey = makeDraftKey(panelId, projectId);
+    let rewrote = false;
+    for (const passage of collectCorrectionPassages(record, draft)) {
+      const heard = transcribedPassageText(record, passage, draft);
+      // The draft either side is context, so a phrase that runs on into text
+      // typed against the passage is still judged as one word.
+      const before = draft.slice(0, passage.from);
+      const after = draft.slice(passage.to);
+      const rewritten = rewrite(before + heard + after, {
+        from: before.length,
+        to: before.length + heard.length,
+      });
+      const text = rewritten.slice(before.length, rewritten.length - after.length);
+      if (text === passage.text) continue;
+      const current = useTerminalInputStore.getState().getDraftInput(panelId, projectId);
+      const pending = peekPendingComposerSelection(draftKey, current);
+      const caret = pending ?? readComposerSelection(draftKey, current);
+      const span = useDictationRangeStore
+        .getState()
+        .rewritePassage(record.id, passage, text, heard);
+      if (!span) continue;
+      const delta = text.length - (span.to - span.from);
+      // A caret that followed the words, or sits in them, stays with them, and
+      // one an earlier voice write left waiting still lands. Any other caret
+      // the composer carries through the write itself.
+      if (caret && (pending || (caret.from >= span.from && caret.to <= span.to))) {
+        const place = (at: number) =>
+          at <= span.from ? at : at >= span.to ? at + delta : span.from + text.length;
+        setPendingComposerSelection(
+          draftKey,
+          useTerminalInputStore.getState().getDraftInput(panelId, projectId),
+          { from: place(caret.from), to: place(caret.to) }
+        );
+      }
+      // A session restarted on this panel dictates after the passage.
+      useVoiceRecordingStore.getState().shiftDraftOffsets(panelId, span.to, delta);
+      rewrote = true;
+    }
+    // Like the words it rewrites, it leaves the caret to the user.
+    if (rewrote) inputStore.bumpExternalDraftRevision({ keepsSelection: true });
   }
 
   /**

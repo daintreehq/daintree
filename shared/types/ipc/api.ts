@@ -2193,6 +2193,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
         sessionId: string;
         text: string;
         willCorrect: boolean;
+        /** The words as transcribed, when heard-as rules rewrote them into `text`. */
+        heard?: string;
         itemId?: string;
         transcriptId?: string;
         send?: boolean;

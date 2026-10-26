@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { planVoiceWords } from "@/services/voiceInsertion";
 import { useTerminalInputStore } from "../terminalInputStore";
 import {
   subscribeDictationRangeTracking,
@@ -354,6 +355,193 @@ describe("dictationRangeStore", () => {
 
     expect(draft()).toBe("Please Use React queries now");
     expect(textOf(only().learningSpan!)).toBe("React queries");
+  });
+
+  it("keeps what an utterance was heard as", () => {
+    setDraft("Zustand");
+    useDictationRangeStore.getState().recordUtterance(target, {
+      insertion: { from: 0, to: 7 },
+      words: { from: 0, to: 7 },
+      heard: "zoo stand",
+    });
+    expect(only().utterances[0]!.heard).toBe("zoo stand");
+  });
+
+  describe("rewritePassage", () => {
+    const rewrite = (text: string, heard = text) => {
+      const record = records()[0]!;
+      const ids = record.utterances.slice(0, 2).map((u) => u.id);
+      return useDictationRangeStore
+        .getState()
+        .rewritePassage(record.id, { utteranceIds: ids, text: "add zoo stand" }, text, heard);
+    };
+
+    it("writes the passage as one unedited utterance and moves what follows", () => {
+      setDraft("Typed.");
+      dictate("add zoo");
+      dictate("stand");
+      dictate("to it");
+      const other = { ...target, sessionId: "session-2" };
+      dictate("later", other);
+
+      expect(rewrite("add Zustand", "add zoo stand")).toEqual({ from: 7, to: 20 });
+
+      expect(draft()).toBe("Typed. add Zustand to it later");
+      const [record, later] = records();
+      expect(record!.range).toEqual({ from: 6, to: 24, edited: false });
+      expect(record!.utterances.map((u) => [textOf(u.range), u.range.edited])).toEqual([
+        ["add Zustand", false],
+        ["to it", false],
+      ]);
+      expect(textOf(record!.utterances[0]!.insertion)).toBe(" add Zustand");
+      expect(textOf(record!.utterances[1]!.insertion)).toBe(" to it");
+      expect(record!.utterances[0]!.heard).toBe("add zoo stand");
+      expect(textOf(later!.range)).toBe(" later");
+    });
+
+    it("keeps a flag the dictation already carried", () => {
+      dictate("add zoo");
+      dictate("stand");
+      setDraft(draft() + " typed");
+      dictate("more");
+      expect(only().range.edited).toBe(true);
+
+      expect(rewrite("add Zustand")).not.toBeNull();
+      expect(only().range.edited).toBe(true);
+      expect(draft()).toBe("add Zustand typed more");
+    });
+
+    it("writes nothing once the passage holds other text", () => {
+      dictate("add zoo");
+      dictate("stand");
+      edit(0, 3, "put");
+      expect(rewrite("add Zustand")).toBeNull();
+      expect(draft()).toBe("put zoo stand");
+    });
+
+    it("writes nothing over words that were edited, even back to the same text", () => {
+      dictate("add zoo");
+      dictate("stand");
+      edit(1, 2, "x");
+      edit(1, 2, "d");
+      expect(draft()).toBe("add zoo stand");
+      expect(only().utterances[0]!.range.edited).toBe(true);
+      expect(rewrite("add Zustand")).toBeNull();
+      expect(draft()).toBe("add zoo stand");
+    });
+
+    it("keeps the transcript a passage's file references will land in", () => {
+      dictate("add zoo");
+      const { utterances } = only();
+      setDraft(draft() + " stand");
+      useDictationRangeStore.getState().recordUtterance(target, {
+        insertion: { from: 7, to: 13 },
+        words: { from: 8, to: 13 },
+        transcriptId: "t-1",
+      });
+      expect(only().utterances).toHaveLength(utterances.length + 1);
+
+      expect(rewrite("add Zustand")).not.toBeNull();
+      expect(only().utterances.map((u) => [textOf(u.range), u.transcriptId])).toEqual([
+        ["add Zustand", "t-1"],
+      ]);
+    });
+
+    it("merges two transcripts, keeping the first for a file reference still due", () => {
+      for (const [words, transcriptId] of [
+        ["add zoo", "t-1"],
+        ["stand", "t-2"],
+      ] as const) {
+        const base = draft();
+        const separator = base ? " " : "";
+        setDraft(base + separator + words);
+        const from = base.length + separator.length;
+        useDictationRangeStore.getState().recordUtterance(target, {
+          insertion: { from: base.length, to: from + words.length },
+          words: { from, to: from + words.length },
+          transcriptId,
+        });
+      }
+
+      expect(rewrite("add Zustand")).not.toBeNull();
+      expect(only().utterances.map((u) => [textOf(u.range), u.transcriptId])).toEqual([
+        ["add Zustand", "t-1"],
+      ]);
+    });
+
+    it("writes nothing for a dictation the draft released", () => {
+      dictate("add zoo");
+      dictate("stand");
+      const { id, utterances } = only();
+      setDraft("");
+      expect(
+        useDictationRangeStore
+          .getState()
+          .rewritePassage(
+            id,
+            { utteranceIds: utterances.map((u) => u.id), text: "add zoo stand" },
+            "add Zustand",
+            "add zoo stand"
+          )
+      ).toBeNull();
+      expect(records()).toEqual([]);
+    });
+
+    it("rewrites words dictated at the caret in place, carrying the space after them, the learning span and the anchor", () => {
+      /** One utterance at the session's anchor, written the way the voice service writes it. */
+      const dictateAtAnchor = (words: string) => {
+        const before = draft();
+        const plan = planVoiceWords(
+          before,
+          useDictationRangeStore.getState().getAnchor(target),
+          words
+        );
+        useDictationRangeStore
+          .getState()
+          .expectDraftChange(PANEL, PROJECT, before, plan.next, plan.change);
+        setDraft(plan.next);
+        useDictationRangeStore.getState().recordUtterance(target, {
+          insertion: plan.insertion,
+          words: plan.words,
+          ...(plan.separatorAfter ? { separatorAfter: plan.separatorAfter } : {}),
+        });
+        useDictationRangeStore.getState().setAnchor(target, plan.anchor);
+      };
+      setDraft("Please then test it.");
+      useDictationRangeStore.getState().setAnchor(target, { from: 7, to: 7 });
+      dictateAtAnchor("use zoo");
+      dictateAtAnchor("stand");
+      expect(draft()).toBe("Please use zoo stand then test it.");
+      const { id, utterances } = only();
+
+      expect(
+        useDictationRangeStore
+          .getState()
+          .rewritePassage(
+            id,
+            { utteranceIds: utterances.map((u) => u.id), text: "use zoo stand" },
+            "use Zustand",
+            "use zoo stand"
+          )
+      ).toEqual({ from: 7, to: 20 });
+
+      expect(draft()).toBe("Please use Zustand then test it.");
+      const record = only();
+      expect(record.range).toEqual({ from: 7, to: 18, edited: false });
+      expect(textOf(record.learningSpan!)).toBe("use Zustand");
+      expect(record.utterances).toHaveLength(1);
+      expect(textOf(record.utterances[0]!.range)).toBe("use Zustand");
+      expect(record.utterances[0]!.separatorAfter).toEqual({ from: 18, to: 19, edited: false });
+      expect(useDictationRangeStore.getState().getAnchor(target)).toEqual({
+        from: 18,
+        to: 18,
+        edited: false,
+      });
+      // Scratching it leaves the typed text as it was before the dictation.
+      const span = useDictationRangeStore.getState().takeLastUtterance(target, draft());
+      expect(span).toEqual({ from: 7, to: 19 });
+      expect(draft().slice(0, span!.from) + draft().slice(span!.to)).toBe("Please then test it.");
+    });
   });
 });
 

@@ -33,6 +33,8 @@ export interface DictationUtterance {
    * utterances when a spoken new line splits it.
    */
   transcriptId?: string;
+  /** The words as transcribed, when heard-as rules wrote something else in their place. */
+  heard?: string;
 }
 
 /**
@@ -99,6 +101,7 @@ interface DictationRangeState {
       words: DictationTextSpan;
       separatorAfter?: DictationTextSpan;
       transcriptId?: string;
+      heard?: string;
     }
   ) => void;
   /** Records a paragraph break the session just wrote into the draft. */
@@ -128,6 +131,19 @@ interface DictationRangeState {
     after: string,
     change: TextChange
   ) => void;
+  /**
+   * Writes `text` over a passage of the session's own words, as the session:
+   * the passage's utterances become one holding it, still unedited, so
+   * correction treats it as dictated. Returns the span the passage covered
+   * before the write, or null, writing nothing, once the passage no longer
+   * holds `passage.text` or one of its words was edited.
+   */
+  rewritePassage: (
+    id: string,
+    passage: { utteranceIds: readonly string[]; text: string },
+    text: string,
+    heard: string
+  ) => DictationTextSpan | null;
   getDictation: (id: string) => DictationRecord | null;
   listDictations: (panelId: string, projectId?: string) => DictationRecord[];
   /** Every live record the voice session wrote, in any draft. */
@@ -284,7 +300,7 @@ export const useDictationRangeStore = create<DictationRangeState>()((set, get) =
   drafts: {},
   anchors: {},
 
-  recordUtterance: (target, { insertion, words, separatorAfter, transcriptId }) =>
+  recordUtterance: (target, { insertion, words, separatorAfter, transcriptId, heard }) =>
     set((state) => ({
       drafts: withInsertion(state.drafts, target, insertion, {
         id: crypto.randomUUID(),
@@ -292,6 +308,7 @@ export const useDictationRangeStore = create<DictationRangeState>()((set, get) =
         insertion: unedited(insertion),
         ...(separatorAfter ? { separatorAfter: unedited(separatorAfter) } : {}),
         ...(transcriptId ? { transcriptId } : {}),
+        ...(heard !== undefined ? { heard } : {}),
       }),
     })),
 
@@ -366,6 +383,76 @@ export const useDictationRangeStore = create<DictationRangeState>()((set, get) =
 
   expectDraftChange: (panelId, projectId, before, after, change) => {
     expectedChanges.set(makeDraftKey(panelId, projectId), { before, after, change });
+  },
+
+  rewritePassage: (id, passage, text, heard) => {
+    const record = get().getDictation(id);
+    if (!record || !text) return null;
+    const first = record.utterances.findIndex((u) => u.id === passage.utteranceIds[0]);
+    const run = record.utterances.slice(first, first + passage.utteranceIds.length);
+    if (
+      first < 0 ||
+      run.length !== passage.utteranceIds.length ||
+      run.some((u, i) => u.id !== passage.utteranceIds[i] || u.range.edited)
+    ) {
+      return null;
+    }
+    // A stop has waited for its transcripts' file references, so this is only
+    // for one still on its way, which can then land in the merged words.
+    const transcriptId = run.find((u) => u.transcriptId)?.transcriptId;
+    const from = run[0]!.range.from;
+    const to = run[run.length - 1]!.range.to;
+    const inputStore = useTerminalInputStore.getState();
+    const draft = inputStore.getDraftInput(record.panelId, record.projectId);
+    if (draft.slice(from, to) !== passage.text) return null;
+
+    const change: TextChange = { from, to, insert: text };
+    const next = draft.slice(0, from) + text + draft.slice(to);
+    // Spelled out, so the session's anchor and other records follow the words
+    // actually rewritten rather than a repeat of them the diff might pick.
+    get().expectDraftChange(record.panelId, record.projectId, draft, next, change);
+    inputStore.setDraftInput(record.panelId, next, record.projectId);
+    // The write was mapped like anyone's, which flagged the passage edited.
+    // The session wrote it, so the record is rebuilt from what it knows: the
+    // passage becomes one utterance, and what follows it (later words, the
+    // space kept before typed text, the learning span) moves with the write.
+    const mapped = mapRecord(record, change);
+    const end = from + text.length;
+    const separators = mapped.utterances
+      .slice(first, first + run.length)
+      .flatMap((u) => (u.separatorAfter ? [u.separatorAfter] : []));
+    const separatorAfter =
+      separators.find((s) => s.from === end) ?? separators[separators.length - 1];
+    const merged: DictationUtterance = {
+      id: run[0]!.id,
+      range: unedited({ from, to: end }),
+      insertion: { ...run[0]!.insertion, to: end },
+      ...(separatorAfter ? { separatorAfter } : {}),
+      ...(transcriptId ? { transcriptId } : {}),
+      ...(heard !== text ? { heard } : {}),
+    };
+    const delta = end - to;
+    const rewritten: DictationRecord = {
+      ...mapped,
+      range: {
+        ...record.range,
+        to: record.range.to >= to ? record.range.to + delta : record.range.to,
+      },
+      utterances: [
+        ...mapped.utterances.slice(0, first),
+        merged,
+        ...mapped.utterances.slice(first + run.length),
+      ],
+    };
+    set((state) => {
+      const key = makeDraftKey(record.panelId, record.projectId);
+      const records = state.drafts[key];
+      if (!records?.some((r) => r.id === id)) return state;
+      return {
+        drafts: { ...state.drafts, [key]: records.map((r) => (r.id === id ? rewritten : r)) },
+      };
+    });
+    return { from, to };
   },
 
   getDictation: (id) => {
