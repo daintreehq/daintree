@@ -190,6 +190,8 @@ export interface CorrectionPromptContext {
   projectName?: string;
   projectPath?: string;
   customDictionary?: string[];
+  /** Host, project and worktree names, spelled and cased as Daintree shows them. */
+  knownNames?: string[];
   customInstructions?: string;
   language?: string;
 }
@@ -218,6 +220,12 @@ function contextBlocks(context: CorrectionPromptContext): string[] {
   if (context.customDictionary && context.customDictionary.length > 0) {
     parts.push(
       `PREFERRED TERMS (prefer these exact forms when the audio plausibly matches, but do not force them over a transcribed word that already fits the context):\n${context.customDictionary.map((term) => `"${term}"`).join(" | ")}`
+    );
+  }
+
+  if (context.knownNames && context.knownNames.length > 0) {
+    parts.push(
+      `NAMES IN THIS WORKSPACE (the speaker's hosts, projects and worktrees; when the audio plausibly names one, write it in exactly this spelling and casing):\n${context.knownNames.map((term) => `"${term}"`).join(" | ")}`
     );
   }
 

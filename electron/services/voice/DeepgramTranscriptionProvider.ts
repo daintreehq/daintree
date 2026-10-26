@@ -4,6 +4,7 @@ import {
   normalizeVoiceLanguage,
   VOICE_LANGUAGE_AUTO,
 } from "../../../shared/config/voiceLanguages.js";
+import { MAX_KEYTERMS } from "../../../shared/config/voiceKeyterms.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { logDebug, logInfo, logWarn, logError } from "../../utils/logger.js";
 import { voiceErrorLogFields, voicePayloadShape } from "../../../shared/utils/voiceLogFields.js";
@@ -73,14 +74,18 @@ function isRetryableHttpStatus(statusCode: number | undefined): boolean {
 
 // Deepgram caps Nova-3 keyterms at 100 terms and 500 aggregate tokens. The
 // tokenizer is syllable-based (~5 tokens per single-word term), so the term
-// count alone doesn't bound tokens. We cap the URL injection well below both
-// ceilings — 50 terms is a 2x margin on the count, and a ~3000-char aggregate
-// guard backstops pathologically long terms before they blow the token budget.
-// This is deliberately tighter than the assembly-side MAX_KEYTERMS (50): that
-// constant governs how many terms to gather, this one governs how many survive
-// into the wire request.
-const MAX_DEEPGRAM_URL_KEYTERMS = 50;
+// count alone doesn't bound tokens. The URL takes every term assembly gathers
+// (MAX_KEYTERMS, inside the 100-term count, and derived so raising it can't
+// silently clip the last tiers), and a ~3000-char aggregate guard backstops
+// pathologically long terms before they blow the token budget.
+const MAX_DEEPGRAM_URL_KEYTERMS = MAX_KEYTERMS;
 const MAX_DEEPGRAM_URL_KEYTERM_CHARS = 3_000;
+// The keyterms' share of the query string, measured as encoded, since a CJK
+// character percent-encodes to nine. With the fixed parameters this keeps the
+// whole URL under 8 KiB, the request-line limit common to proxies and edge
+// servers. Deepgram publishes no URL cap, and a 414 on the first connect is
+// fatal: only a 400 triggers the keyterm retry.
+const MAX_DEEPGRAM_KEYTERM_QUERY_LENGTH = 6_000;
 // Keyterms arrive dictionary-first, newest first, so a first rejection retries
 // with just the head of the list before the last resort of sending none.
 const TRIMMED_RETRY_KEYTERMS = 20;
@@ -94,22 +99,33 @@ function nextSpanItemId(): string {
   return `deepgram-${++spanSeq}`;
 }
 
+// What one term adds to the query: `&keyterm=` and the term, encoded exactly
+// as URLSearchParams serializes it.
+function encodedKeytermLength(term: string): number {
+  return new URLSearchParams([["keyterm", term]]).toString().length + 1;
+}
+
 /**
  * Conservatively trim assembled keyterms before they go on the streaming URL.
  * Drops empty/whitespace-only terms, then accepts terms in priority order until
- * either the term-count or aggregate-char budget is reached.
+ * the term-count, aggregate-char or encoded-length budget is reached, so the
+ * lowest-priority terms are the ones left off.
  */
 function truncateKeytermsForUrl(keyterms: string[]): string[] {
   const result: string[] = [];
   let chars = 0;
+  let encoded = 0;
   for (const raw of keyterms) {
     const term = raw.trim();
     if (!term) continue;
     if (result.length >= MAX_DEEPGRAM_URL_KEYTERMS) break;
+    const termEncoded = encodedKeytermLength(term);
     // Skip (don't stop on) an oversized term so smaller later terms still fit.
     if (chars + term.length > MAX_DEEPGRAM_URL_KEYTERM_CHARS) continue;
+    if (encoded + termEncoded > MAX_DEEPGRAM_KEYTERM_QUERY_LENGTH) continue;
     result.push(term);
     chars += term.length;
+    encoded += termEncoded;
   }
   return result;
 }

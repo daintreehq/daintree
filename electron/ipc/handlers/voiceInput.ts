@@ -34,8 +34,9 @@ import {
 } from "../../services/voiceDictationCommands.js";
 import { VOICE_DICTATION_AI_MODEL } from "../../../shared/config/voiceCorrection.js";
 import { normalizeVoiceLanguage } from "../../../shared/config/voiceLanguages.js";
-import { assembleKeyterms } from "../../services/voiceContextKeyterms.js";
+import { assembleKeyterms, screenDictationNames } from "../../services/voiceContextKeyterms.js";
 import { readProjectVoiceDictionary } from "../../services/projectVoiceDictionary.js";
+import { flattenDictationNames, gatherDictationNames } from "../../services/voiceContextNames.js";
 import {
   dictionaryTerms,
   sanitizeDictionary,
@@ -680,6 +681,10 @@ async function readVocabulary(projectId: string | null): Promise<VoiceDictionary
   }
 }
 
+// The names the latest dictation sent, so its end-of-passage correction spells
+// them the same way. Keyed by view: another view's names aren't this one's.
+let lastSessionNames: { webContentsId: number; names: string[] } | null = null;
+
 export function registerVoiceInputHandlers(deps: HandlerDependencies): () => void {
   const handleGetSettings = async () => {
     return getVoiceSettings();
@@ -955,16 +960,32 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // setup below so leading speech isn't delayed waiting on git/terminal reads.
     // Both providers consume the result: Deepgram via repeated `keyterm=` params,
     // OpenAI via the transcription prompt. Each provider freezes the list for
-    // the session, so its reconnect path reuses it unchanged. Assembly is capped
-    // internally (~500ms) and failures are non-fatal — we just start without
-    // keyterms.
+    // the session, so its reconnect path reuses it unchanged. Assembly, the
+    // names read included, is capped internally (~500ms) and failures are
+    // non-fatal — we just start without keyterms.
+    const projectDictionary = readVocabulary(
+      resolveVocabularyProject(session.projectId, terminalId, deps.ptyClient)
+    ).then(dictionaryTerms);
+    const names = gatherDictationNames({
+      projectId: session.projectId,
+      terminalId,
+      ptyClient: deps.ptyClient,
+      worktreeService: deps.worktreeService,
+    });
+    // The correction gets the same screened names as the keyterms, whenever
+    // they arrive. Its own record, so a slow read from an older session can't
+    // overwrite this one's.
+    const sessionNames = { webContentsId: session.webContentsId, names: [] as string[] };
+    lastSessionNames = sessionNames;
+    void names.then((gathered) => {
+      sessionNames.names = flattenDictationNames(screenDictationNames(gathered));
+    });
     const keytermsPromise = assembleKeyterms({
       customDictionary: dictionaryTerms(settings.dictionary),
-      projectDictionary: readVocabulary(
-        resolveVocabularyProject(session.projectId, terminalId, deps.ptyClient)
-      ).then(dictionaryTerms),
+      projectDictionary,
       ...resolveKeytermTarget(session.projectId, terminalId, deps.ptyClient),
       ptyClient: deps.ptyClient,
+      names,
     }).catch((err: unknown): string[] => {
       logDebug("[VoiceInput] Keyterm assembly failed, starting without keyterms", {
         ...voiceErrorLogFields(err),
@@ -1410,6 +1431,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         model: settings.correctionModel,
         apiKey: settings.openaiApiKey,
         customDictionary: dictionaryTerms(sessionDictionary(settings.dictionary, vocabulary)),
+        knownNames:
+          lastSessionNames?.webContentsId === ctx.webContentsId ? lastSessionNames.names : [],
         customInstructions: settings.correctionCustomInstructions,
         language: normalizeVoiceLanguage(settings.language),
         projectName: projectInfo.name,
