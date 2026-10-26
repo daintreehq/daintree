@@ -5,20 +5,23 @@ import {
   validateCorrection,
 } from "../voiceCorrectionGuard.js";
 
-// How much slower a run on 4x the input is than on 1x. Linear work scales by
-// about 4 and quadratic by about 16, whatever the runner's speed, so a ratio
-// bound holds on a loaded CI machine where a wall-clock bound flakes.
+// How much slower a run on 8x the input is than on 1x. Linear work scales by
+// about 8 and quadratic by about 64, whatever the runner's speed, so a ratio
+// bound holds on a loaded CI machine where a wall-clock bound flakes. Each run
+// must take whole milliseconds: a sub-millisecond one is all timer noise, and a
+// single GC pause on a busy runner swings the ratio past any sensible bound.
 function scalingRatio(run: (scale: number) => void): number {
   const fastest = (scale: number): number => {
     let best = Infinity;
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 5; i++) {
       const started = performance.now();
       run(scale);
       best = Math.min(best, performance.now() - started);
     }
     return best;
   };
-  return fastest(4) / Math.max(fastest(1), 0.5);
+  run(1);
+  return fastest(8) / Math.max(fastest(1), 1);
 }
 
 describe("extractProtectedSpans", () => {
@@ -54,15 +57,18 @@ describe("extractProtectedSpans", () => {
       const cjk = "我们需要更新这个组件并且不要删除分支然后运行测试。".repeat(120 * scale);
       expect(validateCorrection(cjk, `${cjk}。`)).toEqual({ ok: true });
     });
-    expect(ratio).toBeLessThan(10);
+    expect(ratio).toBeLessThan(24);
   });
 
   it("trims a long run of closing brackets in linear time", () => {
     const ratio = scalingRatio((scale) => {
-      const url = `https://example.com/a${")".repeat(3_000 * scale)}`;
-      expect(extractProtectedSpans(url)).toEqual(["https://example.com/a"]);
+      const url = `https://example.com/a${")".repeat(4_000 * scale)}`;
+      let spans: string[] = [];
+      // One trim is far under a millisecond; repeat it so the timing is real.
+      for (let i = 0; i < 20; i++) spans = extractProtectedSpans(url);
+      expect(spans).toEqual(["https://example.com/a"]);
     });
-    expect(ratio).toBeLessThan(10);
+    expect(ratio).toBeLessThan(24);
   });
 
   it("reports ranges that cover the whole span", () => {
