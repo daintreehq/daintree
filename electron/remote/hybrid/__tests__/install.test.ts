@@ -371,6 +371,13 @@ describe("events:push split", () => {
     );
   });
 
+  it("takes agent settings from the host and the grid layout from here (#14700)", () => {
+    expect(acceptHostPush(CHANNELS.AGENT_SETTINGS_CHANGED, [{}])).toBe(true);
+    expect(acceptLocalPushForRemoteView(CHANNELS.AGENT_SETTINGS_CHANGED, [{}])).toBe(false);
+    expect(acceptHostPush(CHANNELS.APP_PANEL_GRID_CONFIG_CHANGED, [{}])).toBe(false);
+    expect(acceptLocalPushForRemoteView(CHANNELS.APP_PANEL_GRID_CONFIG_CHANGED, [{}])).toBe(true);
+  });
+
   it("drops an unclassified bus event from both sides", () => {
     expect(acceptHostPush(CHANNELS.EVENTS_PUSH, push("made:up"))).toBe(false);
     expect(acceptLocalPushForRemoteView(CHANNELS.EVENTS_PUSH, push("made:up"))).toBe(false);

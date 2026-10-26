@@ -455,3 +455,45 @@ describe("APP_RELOAD_CONFIG handler", () => {
     expect(result).toEqual({ success: true });
   });
 });
+
+describe("agent settings change broadcast (#14700)", () => {
+  const saved = { agents: { claude: { customFlags: "--saved" } }, globalSkipPermissions: true };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    storeMock.get.mockImplementation(() => saved as never);
+    registerAiHandlers({} as never);
+  });
+
+  const writes: Array<[string, string, unknown]> = [
+    ["set", CHANNELS.AGENT_SETTINGS_SET, { agentType: "claude", settings: { customFlags: "x" } }],
+    ["setGlobal", CHANNELS.AGENT_SETTINGS_SET_GLOBAL, true],
+    ["setGlobalInline", CHANNELS.AGENT_SETTINGS_SET_GLOBAL_INLINE, false],
+    ["setResumeOnRestart", CHANNELS.AGENT_SETTINGS_SET_RESUME_ON_RESTART, "never"],
+    ["reset one agent", CHANNELS.AGENT_SETTINGS_RESET, "claude"],
+    ["reset all", CHANNELS.AGENT_SETTINGS_RESET, undefined],
+    ["stampVersion", CHANNELS.AGENT_SETTINGS_STAMP_VERSION, 99],
+  ];
+
+  it.each(writes)("%s tells every view what was saved, after the write", async (_name, channel, arg) => {
+    await getInvokeHandler(channel)({} as never, arg as never);
+
+    const changed = broadcastToRendererMock.mock.calls.filter(
+      ([sent]) => sent === CHANNELS.AGENT_SETTINGS_CHANGED
+    );
+    expect(changed).toEqual([[CHANNELS.AGENT_SETTINGS_CHANGED, saved]]);
+    const broadcastOrder = broadcastToRendererMock.mock.invocationCallOrder[0]!;
+    expect(Math.max(...storeMock.set.mock.invocationCallOrder)).toBeLessThan(broadcastOrder);
+  });
+
+  it("stays quiet when nothing was written", async () => {
+    storeMock.get.mockImplementation(() => ({ ...saved, settingsVersion: 5 }) as never);
+    await getInvokeHandler(CHANNELS.AGENT_SETTINGS_STAMP_VERSION)({} as never, 3 as never);
+    await expect(
+      getInvokeHandler(CHANNELS.AGENT_SETTINGS_SET_GLOBAL)({} as never, "yes" as never)
+    ).rejects.toThrow();
+
+    expect(storeMock.set).not.toHaveBeenCalled();
+    expect(broadcastToRendererMock).not.toHaveBeenCalled();
+  });
+});

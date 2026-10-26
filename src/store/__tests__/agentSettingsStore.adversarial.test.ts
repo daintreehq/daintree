@@ -849,3 +849,43 @@ describe("agentSettingsStore adversarial", () => {
     expect(state.error).toBeTruthy();
   });
 });
+
+describe("applySaved (#14700)", () => {
+  const savedElsewhere = {
+    settingsVersion: 3,
+    agents: { claude: { pinned: true, customFlags: "--from-another-view" } },
+  };
+
+  it("takes a saved change over a read still travelling, without writing anything back", async () => {
+    let resolveRead: (value: unknown) => void = () => {};
+    clientMock.get.mockImplementationOnce(() => new Promise((resolve) => (resolveRead = resolve)));
+    const read = useAgentSettingsStore.getState().refresh();
+
+    useAgentSettingsStore.getState().applySaved(savedElsewhere as never);
+    resolveRead({ settingsVersion: 3, agents: { claude: { customFlags: "--before" } } });
+    await read;
+
+    const state = useAgentSettingsStore.getState();
+    expect(state.settings?.agents.claude?.customFlags).toBe("--from-another-view");
+    expect(state.isInitialized).toBe(true);
+    expect(clientMock.set).not.toHaveBeenCalled();
+    expect(clientMock.stampVersion).not.toHaveBeenCalled();
+  });
+
+  it("still reports a failed save that a saved change overtook, and keeps that change", async () => {
+    let rejectSave: (error: Error) => void = () => {};
+    clientMock.set.mockImplementationOnce(
+      () => new Promise((_, reject) => (rejectSave = reject))
+    );
+    useAgentSettingsStore.getState().applySaved({ settingsVersion: 3, agents: {} } as never);
+    const save = useAgentSettingsStore.getState().updateAgent("claude", { customFlags: "--mine" });
+
+    useAgentSettingsStore.getState().applySaved(savedElsewhere as never);
+    rejectSave(new Error("disk full"));
+
+    await expect(save).rejects.toThrow("disk full");
+    const state = useAgentSettingsStore.getState();
+    expect(state.settings?.agents.claude?.customFlags).toBe("--from-another-view");
+    expect(state.error).toContain("disk full");
+  });
+});

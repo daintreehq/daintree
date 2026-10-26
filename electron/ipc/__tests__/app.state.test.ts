@@ -187,15 +187,19 @@ vi.mock("../../window/webContentsRegistry.js", () => ({
   getProjectForWebContents: vi.fn(() => null),
 }));
 
+const broadcastToRendererMock = vi.hoisted(() => vi.fn());
+
 vi.mock("../../ipc/utils.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../ipc/utils.js")>();
   return {
     ...actual,
     assertIpcSecurityReady: vi.fn(),
+    broadcastToRenderer: broadcastToRendererMock,
   };
 });
 
 import { registerAppStateHandlers } from "../handlers/app/state.js";
+import { CHANNELS } from "../channels.js";
 import { consumePrefetchedHydrateResult } from "../../services/prefetchHydrateCache.js";
 import {
   captureProjectLayoutSeed,
@@ -1900,6 +1904,28 @@ describe("app:set-state handler", () => {
       strategy: "fixed-rows",
       value: 6,
     });
+  });
+
+  it("tells this machine's views the saved grid when it changes, and only then (#14700)", async () => {
+    vi.mocked(storeModule.store.get).mockImplementation(((key: string) =>
+      key === "appState"
+        ? { terminals: [], panelGridConfig: { strategy: "automatic", value: 6 } }
+        : undefined) as never);
+    broadcastToRendererMock.mockClear();
+
+    await invokeSetState({ panelGridConfig: { value: 6 } });
+    await invokeSetState({ sidebarWidth: 300 });
+    expect(broadcastToRendererMock).not.toHaveBeenCalledWith(
+      CHANNELS.APP_PANEL_GRID_CONFIG_CHANGED,
+      expect.anything()
+    );
+
+    await invokeSetState({ panelGridConfig: { strategy: "fixed-rows" } });
+    expect(
+      broadcastToRendererMock.mock.calls.filter(
+        ([channel]) => channel === CHANNELS.APP_PANEL_GRID_CONFIG_CHANGED
+      )
+    ).toEqual([[CHANNELS.APP_PANEL_GRID_CONFIG_CHANGED, { strategy: "fixed-rows", value: 6 }]]);
   });
 
   it("changes the grid count without touching the stored strategy", async () => {
