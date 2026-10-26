@@ -144,6 +144,7 @@ interface Harness {
   };
   status: { emit: (status: string) => void };
   delta: { emit: (text: string) => void };
+  windowListeners: Record<string, Array<(event: unknown) => void>>;
   settings: { deviceId: string };
   playUiEvent: ReturnType<typeof vi.fn>;
 }
@@ -156,6 +157,7 @@ function setupGlobals(options: {
   const tracks: FakeTrack[] = [];
   const workletNodes: WorkletNode[] = [];
   const deviceChangeListeners = new Set<Listener>();
+  const windowListeners: Record<string, Array<(event: unknown) => void>> = {};
   const pendingTracks = [...options.tracks];
   let statusCallback: ((payload: { sessionId: string; status: string }) => void) | null = null;
   let deltaCallback: ((payload: { text: string }) => void) | null = null;
@@ -203,7 +205,9 @@ function setupGlobals(options: {
       notification: { playUiEvent },
       systemSleep: { onSuspend: vi.fn(() => () => {}), onWake: vi.fn(() => () => {}) },
     },
-    addEventListener: vi.fn(),
+    addEventListener: vi.fn((type: string, cb: (event: unknown) => void) => {
+      (windowListeners[type] ??= []).push(cb);
+    }),
     removeEventListener: vi.fn(),
     dispatchEvent: vi.fn(),
     requestAnimationFrame: vi.fn(),
@@ -294,6 +298,7 @@ function setupGlobals(options: {
         statusCallback?.({ sessionId: String(voiceInput.start.mock.calls.at(-1)?.[0]), status }),
     },
     delta: { emit: (text) => deltaCallback?.({ text }) },
+    windowListeners,
     settings,
     playUiEvent,
   };
@@ -755,7 +760,12 @@ describe("VoiceRecordingService — silent mic (#14606)", () => {
     const { store, service, harness } = await startSilent(AIRPODS, [AIRPODS, BUILT_IN]);
     const notice = store.getState().micNotice!;
     // White-box: the key's keydown is what records this in the app.
-    Reflect.set(service, "pttActiveKeyCode", "KeyD");
+    Reflect.set(service, "heldPress", {
+      code: "KeyD",
+      pressedAt: 0,
+      claimed: true,
+      speechChunks: 0,
+    });
 
     await service.switchToMicFromNotice(notice);
 
@@ -865,5 +875,62 @@ describe("VoiceRecordingService — dictation sound cues (#14627)", () => {
 
     sendChunk(harness.workletNodes[1]!, 3000);
     expect(playUiEvent.mock.calls).toEqual([["dictation-start"], ["dictation-start"]]);
+  });
+});
+
+describe("VoiceRecordingService — tap-or-hold speech gate (#14626)", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    draftState.draft = "";
+  });
+
+  afterEach(async () => {
+    loadedService?.destroy();
+    loadedService = null;
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  // A tap-or-hold press (the default mode) that starts dictation, hears these
+  // ~100ms chunks, and is released `heldMs` after it went down.
+  async function holdAndRelease(amplitudes: number[], heldMs: number) {
+    const harness = setupGlobals({ tracks: [BUILT_IN] });
+    const { service } = await load();
+    let now = 10_000;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    // White-box: the keydown listener records the press; the toggle claims it.
+    Reflect.set(service, "heldPress", {
+      code: "KeyD",
+      pressedAt: now,
+      claimed: false,
+      speechChunks: 0,
+    });
+    await service.toggle(TARGET);
+    harness.status.emit("recording");
+    for (const amplitude of amplitudes) sendChunk(harness.workletNodes[0]!, amplitude);
+    now += heldMs;
+    for (const listener of harness.windowListeners.keyup ?? []) listener({ code: "KeyD" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    return harness;
+  }
+
+  it("stops when a hold that heard speech is released", async () => {
+    const harness = await holdAndRelease([3000, 3000], 1_000);
+    await vi.waitFor(() => expect(harness.voiceInput.stop).toHaveBeenCalledTimes(1));
+  });
+
+  it("keeps recording after a quick tap, even one that heard speech", async () => {
+    const harness = await holdAndRelease([3000, 3000], 400);
+    expect(harness.voiceInput.stop).not.toHaveBeenCalled();
+  });
+
+  it("doesn't take one loud chunk, such as a click, for speech", async () => {
+    const harness = await holdAndRelease([3000, 0, 0], 1_000);
+    expect(harness.voiceInput.stop).not.toHaveBeenCalled();
+  });
+
+  it("doesn't take room noise above the mic-signal floor for speech", async () => {
+    const harness = await holdAndRelease([100, 100, 100, 100, 100], 1_000);
+    expect(harness.voiceInput.stop).not.toHaveBeenCalled();
   });
 });

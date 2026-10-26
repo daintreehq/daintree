@@ -10,6 +10,17 @@ export const OPENING_CHUNK_WINDOW = 20;
  */
 export const SIGNAL_PEAK_THRESHOLD = 0.002;
 
+/**
+ * Speech-level loudness (~-40 dBFS RMS), the same line the stop log draws
+ * between a silent session and one that heard something. Background noise and
+ * a single click sit under it once averaged over a ~100ms chunk.
+ */
+export const SPEECH_RMS_THRESHOLD = 0.01;
+
+export function isSpeechLevel(stats: PcmChunkStats): boolean {
+  return stats.rms >= SPEECH_RMS_THRESHOLD;
+}
+
 export interface PcmChunkStats {
   samples: number;
   rms: number;

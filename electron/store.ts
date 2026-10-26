@@ -1064,7 +1064,7 @@ const storeOptions = {
       deviceId: "",
       organizationId: "",
       projectId: "",
-      recordingMode: "toggle",
+      recordingMode: "tap-or-hold",
       suggestedDictionary: [],
       dismissedSuggestions: [],
       learnFromCorrections: true,

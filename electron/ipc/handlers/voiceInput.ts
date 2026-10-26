@@ -343,7 +343,7 @@ const VOICE_INPUT_DEFAULTS: VoiceInputSettings = {
   deviceId: "",
   organizationId: "",
   projectId: "",
-  recordingMode: "toggle",
+  recordingMode: "tap-or-hold",
   suggestedDictionary: [],
   dismissedSuggestions: [],
   learnFromCorrections: true,
@@ -427,8 +427,12 @@ export function getVoiceSettings(): VoiceInputSettings {
   if (staleCorrectionModel) merged.correctionModel = VOICE_DICTATION_AI_MODEL;
 
   // Normalize malformed recordingMode values in memory only (no write-back).
-  if (merged.recordingMode !== "toggle" && merged.recordingMode !== "push-to-talk") {
-    merged.recordingMode = "toggle";
+  if (
+    merged.recordingMode !== "toggle" &&
+    merged.recordingMode !== "push-to-talk" &&
+    merged.recordingMode !== "tap-or-hold"
+  ) {
+    merged.recordingMode = "tap-or-hold";
   }
 
   // Persist the cleaned object on first read after upgrade so the legacy key

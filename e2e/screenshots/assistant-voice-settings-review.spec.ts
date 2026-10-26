@@ -97,7 +97,7 @@ const VOICE_BASE = {
   deviceId: "",
   organizationId: "",
   projectId: "",
-  recordingMode: "toggle",
+  recordingMode: "tap-or-hold",
   suggestedDictionary: [] as { word: string; utterance?: string }[],
   learnFromCorrections: true,
 };

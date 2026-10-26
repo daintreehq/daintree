@@ -1021,6 +1021,8 @@ async function buildHarness(): Promise<MigrationHarness> {
       }
       // 037 turns dictation cleanup on over the fixture's stored `false`.
       if (voice?.correctionEnabled !== true) scalarMigrationMisses += 1;
+      // 038 moves only toggle onto tap-or-hold; the fixture's push-to-talk stays.
+      if (voice?.recordingMode !== "push-to-talk") scalarMigrationMisses += 1;
       // 029 keys the single tour record to the built-in tour and hoists mute.
       const onboarding = asRecord(config.onboarding);
       if (onboarding === null || "tour" in onboarding) scalarMigrationMisses += 1;

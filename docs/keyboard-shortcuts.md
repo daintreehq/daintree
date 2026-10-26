@@ -209,7 +209,7 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 
 | Action | macOS | Windows/Linux |
 | --- | --- | --- |
-| Toggle voice dictation | `⌘+.` | `Ctrl+.` (Windows), `Ctrl+Alt+,` (Linux) |
+| Toggle voice dictation | `⌘+D` | `Ctrl+.` (Windows), `Ctrl+Alt+,` (Linux) |
 | Rewrite the selected prompt text by voice | `⌘+⇧+⌥+.` | `Ctrl+Shift+Alt+.` (Windows), `Ctrl+Shift+Alt+,` (Linux) |
 | Toggle voice dictation in Daintree Assistant | `⌘+⇧+⌥+V` | `Ctrl+Shift+Alt+V` |
 | Pause or resume voice dictation | `⌃+⇧+Space` | `Ctrl+Shift+Space` |

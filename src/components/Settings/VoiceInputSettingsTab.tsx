@@ -77,7 +77,7 @@ const DEFAULT_SETTINGS: VoiceInputSettings = {
   deviceId: "",
   organizationId: "",
   projectId: "",
-  recordingMode: "toggle",
+  recordingMode: "tap-or-hold",
   suggestedDictionary: [],
   dismissedSuggestions: [],
   learnFromCorrections: true,
@@ -440,7 +440,7 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
   const effectiveParagraphing: VoiceParagraphingStrategy = spokenCommandsAvailable
     ? paragraphing
     : "manual";
-  const recordingMode = settings.recordingMode ?? "toggle";
+  const recordingMode = settings.recordingMode ?? "tap-or-hold";
   const dictationShortcut = useKeybindingDisplay("voiceInput.toggle");
   const dictationCombo = useEffectiveCombo("voiceInput.toggle");
   const pauseCombo = useEffectiveCombo("voiceInput.togglePause");
@@ -675,6 +675,7 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
               label="Recording mode"
               description={recordingModeDescription(recordingMode, dictationShortcut)}
               options={[
+                { value: "tap-or-hold" as const, label: "Tap or hold" },
                 { value: "toggle" as const, label: "Toggle" },
                 { value: "push-to-talk" as const, label: "Push to talk" },
               ]}
@@ -798,9 +799,11 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
 export function recordingModeDescription(mode: VoiceRecordingMode, shortcut: string): string {
   const key = shortcut || "the dictation shortcut";
   const how =
-    mode === "toggle"
-      ? `Press ${key} to start, and again to stop.`
-      : `Hold ${key} to record. Releasing it stops without submitting.`;
+    mode === "tap-or-hold"
+      ? `Tap ${key} to start and again to stop, or hold it while you speak and let go to stop.`
+      : mode === "toggle"
+        ? `Press ${key} to start, and again to stop.`
+        : `Hold ${key} to record. Releasing it stops without submitting.`;
   return shortcut ? how : `${how} No shortcut is assigned yet.`;
 }
 

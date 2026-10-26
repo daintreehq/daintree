@@ -19,10 +19,21 @@ describe("buildDefaultKeybindings", () => {
   const windows = buildDefaultKeybindings(true);
   const linux = buildDefaultKeybindings(false, true);
 
-  it("ships the same dictation combo on Windows as on macOS", () => {
-    expect(globalCombo(windows, "voiceInput.toggle")).toEqual(
-      globalCombo(mac, "voiceInput.toggle")
+  it("puts dictation on Cmd+D on macOS and keeps Ctrl+D, a shell's EOF, free elsewhere", () => {
+    expect(globalCombo(mac, "voiceInput.toggle")).toEqual(["Cmd+D"]);
+    expect(globalCombo(windows, "voiceInput.toggle")).toEqual(["Ctrl+."]);
+    expect(globalCombo(linux, "voiceInput.toggle")).toEqual(["Ctrl+Alt+,"]);
+    for (const table of [windows, linux]) {
+      expect(table.some((b) => b.scope === "global" && foldCmd(b.combo) === "Ctrl+D")).toBe(false);
+    }
+  });
+
+  it("keeps Cmd+D clear of every other macOS default", () => {
+    const collisions = mac.filter(
+      (b) => b.actionId !== "voiceInput.toggle" && b.scope === "global" && b.combo === "Cmd+D"
     );
+    expect(collisions).toEqual([]);
+    expect(globalCombo(mac, "terminal.redraw")).toEqual(["Cmd+K Cmd+D"]);
   });
 
   it("replaces the Linux dictation default instead of adding a second one", () => {
@@ -84,7 +95,7 @@ describe("buildDefaultKeybindings", () => {
       .slice(0, core.length)
       .filter((b, i) => b !== core[i])
       .map((b) => b.actionId);
-    expect(changed).toEqual(["fleet.accept", "canopy.toggle"]);
+    expect(changed).toEqual(["fleet.accept", "canopy.toggle", "voiceInput.toggle"]);
     expect(windows.length).toBeGreaterThan(core.length);
   });
 

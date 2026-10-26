@@ -1154,6 +1154,28 @@ describe("MigrationRunner", () => {
     expect((store.data.voiceInput as Record<string, unknown>).correctionEnabled).toBe(false);
   });
 
+  it("runs migration037 then migration038 from v36, turning cleanup on and moving toggle onto tap-or-hold (#14626)", async () => {
+    const store = createBufferedMockStore(storePath, {
+      _schemaVersion: 36,
+      voiceInput: { enabled: true, correctionEnabled: false, recordingMode: "toggle" },
+    });
+    const runner = new MigrationRunner(store as never);
+
+    await runner.runMigrations(migrations);
+
+    expect(store.data._schemaVersion).toBe(LATEST_SCHEMA_VERSION);
+    expect(store.data.voiceInput).toEqual({
+      enabled: true,
+      correctionEnabled: true,
+      recordingMode: "tap-or-hold",
+    });
+
+    // Choosing Toggle again afterwards survives the next launch's runner.
+    (store.data.voiceInput as Record<string, unknown>).recordingMode = "toggle";
+    await new MigrationRunner(store as never).runMigrations(migrations);
+    expect((store.data.voiceInput as Record<string, unknown>).recordingMode).toBe("toggle");
+  });
+
   it("runs migration025 from v24 under the full barrel, upgrading the voice correction model (#11365)", async () => {
     const store = createMockStore(storePath, {
       _schemaVersion: 24,

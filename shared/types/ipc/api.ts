@@ -2917,7 +2917,11 @@ export type VoiceParagraphingStrategy = "spoken-command" | "manual";
 /**
  * Recording mode for voice dictation.
  *
- * "toggle" (default): Pressing the voice shortcut starts recording; pressing it
+ * "tap-or-hold" (default): Recording starts on key down. A quick tap keeps
+ *   recording until the next press; a hold longer than ~400ms stops on release,
+ *   unless no speech was heard yet, in which case it counts as a tap.
+ *
+ * "toggle": Pressing the voice shortcut starts recording; pressing it
  *   again stops recording. Recording persists until the user explicitly ends it.
  *
  * "push-to-talk": Recording is bound to the keyboard shortcut press. Pressing and
@@ -2925,7 +2929,7 @@ export type VoiceParagraphingStrategy = "spoken-command" | "manual";
  *   recording and drains the transcript into the editor without auto-submitting.
  *   Escape still cancels. The toolbar button remains toggle-only regardless of mode.
  */
-export type VoiceRecordingMode = "toggle" | "push-to-talk";
+export type VoiceRecordingMode = "tap-or-hold" | "toggle" | "push-to-talk";
 
 export interface VoiceInputSettings {
   enabled: boolean;
@@ -2955,7 +2959,7 @@ export interface VoiceInputSettings {
   organizationId: string;
   /** OpenAI Project ID for legacy sk- keys. Sent as OpenAI-Project header. */
   projectId: string;
-  /** Controls whether recording is held (push-to-talk) or toggled. Defaults to "toggle". */
+  /** Controls whether recording is held, toggled, or either by press length. Defaults to "tap-or-hold". */
   recordingMode: VoiceRecordingMode;
   /**
    * Runtime-only. Context keyterms (custom dictionary + project/branch/terminal

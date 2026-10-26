@@ -51,6 +51,7 @@ import {
   OPENING_CHUNK_WINDOW,
   hasRealSignal,
   isMicLive,
+  isSpeechLevel,
   measurePcm16Chunk,
   summarizeOpeningChunks,
   type PcmChunkStats,
@@ -348,6 +349,13 @@ interface StartupAttempt {
   stopAfterStart: boolean;
 }
 
+interface HeldPress {
+  code: string;
+  pressedAt: number;
+  claimed: boolean;
+  speechChunks: number;
+}
+
 class VoiceRecordingService {
   private initialized = false;
   private generation = 0;
@@ -375,11 +383,16 @@ class VoiceRecordingService {
   private elapsedTimer: ReturnType<typeof setInterval> | null = null;
   private sessionStartedAt = 0;
   private selectedDeviceId = "";
-  private recordingMode: VoiceRecordingMode = "toggle";
-  // KeyboardEvent.code of the physical key (e.g. "KeyV") that started the
-  // current PTT session. `null` when no PTT session is active. Cleared on stop,
-  // window blur, or Escape.
-  private pttActiveKeyCode: string | null = null;
+  private recordingMode: VoiceRecordingMode = "tap-or-hold";
+  // The voice shortcut press that is down right now, outside toggle mode.
+  // `claimed` once that press started (or resumed) a recording, so only its
+  // release can end it. Cleared on release, stop, window blur, or Escape.
+  private heldPress: HeldPress | null = null;
+  // When a start claimed a press that hadn't reached the keydown listener yet:
+  // the global keybinding listener can be registered first, and dispatch runs
+  // the action synchronously. The keydown takes the claim if it came after the
+  // event was created.
+  private claimedAt: number | null = null;
   private unsubscribers: Array<() => void> = [];
   private isStoppingSession = false;
   private stopPromise: Promise<void> | null = null;
@@ -410,6 +423,11 @@ class VoiceRecordingService {
   // forwarding — the leading audio is still captured and held or sent either
   // way.
   private static readonly MIC_SILENCE_GRACE_MS = 3_000;
+  // Longer than this between press and release is a hold, not a tap.
+  private static readonly HOLD_THRESHOLD_MS = 400;
+  // ~200ms of speech-level audio during a hold before its release stops it,
+  // so a click or a cough while a thumb lingers on Cmd doesn't count.
+  private static readonly HOLD_SPEECH_CHUNKS = 2;
   private micSilenceTimeoutId: ReturnType<typeof setTimeout> | null = null;
   // Owner of the silence countdown, so resume can re-arm it for the same
   // capture after a pause cancelled it.
@@ -731,6 +749,9 @@ class VoiceRecordingService {
     this.unsubscribers.push(
       voiceInput.onStopRequested(({ sessionId }) => {
         if (sessionId === this.sessionId) {
+          // A press still down here belongs to the session ending now, so its
+          // release mustn't act on whatever runs by then.
+          this.dropHeldPress();
           void this.stopAnySession();
           return;
         }
@@ -824,14 +845,15 @@ class VoiceRecordingService {
     // widget has had its turn; the target composer hands it over itself.
     this.unsubscribers.push(registerEscapeFallback(() => this.handleEscape()));
 
-    // Push-to-talk: a capture-phase keydown listener records the physical key
-    // code of the voice shortcut press so the keyup listener can match it. The
-    // actual `start()` call happens via the normal action dispatch chain
-    // (`toggleFocusedPanel` / `toggleAssistant`), which calls `start()`
-    // directly when `recordingMode === "push-to-talk"`. Recording only the
-    // code here avoids racing the action dispatcher.
+    // Push-to-talk and tap-or-hold: a capture-phase keydown listener records
+    // the physical key code of the voice shortcut press so the keyup listener
+    // can match it. The actual `start()` call happens via the normal action
+    // dispatch chain, which always awaits before the action runs, so the press
+    // is recorded before the start that claims it. A press that completes a
+    // chord (Cmd+K Cmd+D) or stops a session is never claimed, and its release
+    // does nothing.
     const handlePttKeyDown = (e: KeyboardEvent) => {
-      if (this.recordingMode !== "push-to-talk") return;
+      if (this.recordingMode === "toggle") return;
       if (e.repeat) return;
       // Every combo that starts recording has to arm the release, or a second
       // override combo would start push-to-talk that its keyup can't stop.
@@ -841,39 +863,42 @@ class VoiceRecordingService {
         ...keybindingService.getEffectiveCombos("voiceInput.rewriteSelection"),
       ].some((combo) => keybindingService.matchesEvent(e, combo));
       if (!matches) return;
-      this.pttActiveKeyCode = e.code;
+      const claimed = this.claimedAt !== null && this.claimedAt >= e.timeStamp;
+      this.claimedAt = null;
+      this.heldPress = {
+        code: e.code,
+        pressedAt: performance.now(),
+        claimed,
+        speechChunks: 0,
+      };
     };
     window.addEventListener("keydown", handlePttKeyDown, { capture: true });
     this.unsubscribers.push(() =>
       window.removeEventListener("keydown", handlePttKeyDown, { capture: true })
     );
 
-    // Push-to-talk: stop recording on keyup of the trigger key. macOS swallows
-    // the trigger keyup if a modifier (Cmd/Meta) is still held, so MetaLeft/
-    // MetaRight keyup also ends the session as a safety net. Modifier-only
-    // releases (Shift, Alt, Ctrl) do not stop — only the physical trigger key
-    // or Meta release.
+    // Release of the trigger key. macOS swallows the trigger keyup if a
+    // modifier (Cmd/Meta) is still held, so MetaLeft/MetaRight keyup also
+    // counts as the release. Modifier-only releases (Shift, Alt, Ctrl) do not —
+    // only the physical trigger key or Meta release.
     const handlePttKeyUp = (e: KeyboardEvent) => {
-      if (this.pttActiveKeyCode === null) return;
-      const isTriggerRelease = e.code === this.pttActiveKeyCode;
+      if (this.heldPress === null) return;
+      const isTriggerRelease = e.code === this.heldPress.code;
       const isMetaRelease = e.code === "MetaLeft" || e.code === "MetaRight";
       if (!isTriggerRelease && !isMetaRelease) return;
-      this.pttActiveKeyCode = null;
-      void this.requestUserStop();
+      this.releaseHeldPress();
     };
     window.addEventListener("keyup", handlePttKeyUp, { capture: true });
     this.unsubscribers.push(() =>
       window.removeEventListener("keyup", handlePttKeyUp, { capture: true })
     );
 
-    // Push-to-talk: window blur safety net. Chromium does NOT dispatch a
-    // synthetic keyup when the window loses focus, so a Cmd+Tab mid-press
-    // would otherwise leave the session running indefinitely. Stops the
-    // session if a PTT press was active.
+    // Window blur safety net. Chromium does NOT dispatch a synthetic keyup
+    // when the window loses focus, so a Cmd+Tab mid-press would otherwise
+    // leave the press held forever. Blur counts as the release.
     const handlePttBlur = () => {
-      if (this.pttActiveKeyCode === null) return;
-      this.pttActiveKeyCode = null;
-      void this.requestUserStop();
+      if (this.heldPress === null) return;
+      this.releaseHeldPress();
     };
     window.addEventListener("blur", handlePttBlur);
     this.unsubscribers.push(() => window.removeEventListener("blur", handlePttBlur));
@@ -891,7 +916,7 @@ class VoiceRecordingService {
         : !!settings.openaiApiKey;
     const isConfigured = settings.enabled && hasProviderKey;
     this.selectedDeviceId = settings.deviceId ?? "";
-    this.recordingMode = settings.recordingMode ?? "toggle";
+    this.recordingMode = settings.recordingMode ?? "tap-or-hold";
     this.hasOpenAIKey = !!settings.openaiApiKey;
     logDebug(`${LOG_PREFIX} refreshConfiguration`, {
       enabled: settings.enabled,
@@ -925,7 +950,10 @@ class VoiceRecordingService {
       status: state.status,
     });
 
-    if (this.resumeReleasedStartup(target)) return;
+    if (this.resumeReleasedStartup(target)) {
+      this.claimHeldPress();
+      return;
+    }
 
     // A second press during the arming window aborts back to idle. No session
     // exists yet, so there is nothing for stop() to drain — cancelArming()
@@ -950,6 +978,7 @@ class VoiceRecordingService {
     // entry reflects the user's intent even if start() bails later — recent
     // targets are a navigation aid, not a session log).
     useVoiceRecordingStore.getState().recordRecentTarget(target);
+    this.claimHeldPress();
 
     // Synchronous pre-audio cue. setArming() resolves under 1ms (Zustand set);
     // the first await inside start() then carries us to "connecting" within
@@ -1015,9 +1044,9 @@ class VoiceRecordingService {
    * touching panel buffers (no transcript exists yet).
    */
   private cancelArming(): void {
-    // A push-to-talk press that aborted arming must not have its keyup send a
-    // stop for a session that never began.
-    this.pttActiveKeyCode = null;
+    // A held press that aborted arming must not have its keyup send a stop
+    // for a session that never began.
+    this.heldPress = null;
     this.invalidatePendingStart();
     // A start queued behind a session that is still finishing leaves that
     // session's target and status to its own stop.
@@ -1065,6 +1094,46 @@ class VoiceRecordingService {
     return this.stop("Dictation stopped.", { preserveLiveText: true });
   }
 
+  /** Hand the press that is down right now to the recording it started. */
+  private claimHeldPress(): void {
+    if (this.heldPress) this.heldPress.claimed = true;
+    // Stamped either way: the press on record may be an older one whose keyup
+    // macOS swallowed, with this start's keydown still to arrive.
+    this.claimedAt = performance.now();
+  }
+
+  /** Forget the press that is down and any claim waiting for its keydown. */
+  private dropHeldPress(): void {
+    this.heldPress = null;
+    this.claimedAt = null;
+  }
+
+  // Local audio, not transcripts: a session still draining can deliver its
+  // text after the next press has started.
+  private noteHeldPressAudio(stats: PcmChunkStats): void {
+    if (this.heldPress?.claimed && isSpeechLevel(stats)) this.heldPress.speechChunks++;
+  }
+
+  /**
+   * The voice shortcut came back up. Push-to-talk always stops. Tap-or-hold
+   * stops only a hold that heard speech: a quick tap, or a thumb that lingers
+   * on Cmd before anything was said, leaves the recording running until the
+   * next press.
+   */
+  private releaseHeldPress(): void {
+    const press = this.heldPress;
+    this.heldPress = null;
+    if (!press?.claimed) return;
+    if (this.recordingMode === "tap-or-hold") {
+      const heldMs = performance.now() - press.pressedAt;
+      const heardSpeech = press.speechChunks >= VoiceRecordingService.HOLD_SPEECH_CHUNKS;
+      if (heldMs <= VoiceRecordingService.HOLD_THRESHOLD_MS || !heardSpeech) return;
+    } else if (this.recordingMode !== "push-to-talk") {
+      return;
+    }
+    void this.requestUserStop();
+  }
+
   private liveStartup(): StartupAttempt | null {
     const startup = this.startup;
     return startup && !this.isStartRequestStale(startup.requestId) ? startup : null;
@@ -1079,7 +1148,7 @@ class VoiceRecordingService {
   private deferStopToStartup(): boolean {
     const startup = this.liveStartup();
     if (!startup) return false;
-    this.pttActiveKeyCode = null;
+    this.heldPress = null;
     if (startup.stopAfterStart) return true;
     startup.stopAfterStart = true;
     const { capture } = startup;
@@ -1619,6 +1688,7 @@ class VoiceRecordingService {
           });
         }
         if (!firstLiveChunk && isMicLive(stats)) firstLiveChunk = arrivedChunks;
+        if (!this.isStartRequestStale(startRequestId)) this.noteHeldPressAudio(stats);
         if (!openingAudio.logged) {
           openingAudio.chunks.push(stats);
           if (openingAudio.chunks.length >= OPENING_CHUNK_WINDOW) {
@@ -1906,7 +1976,7 @@ class VoiceRecordingService {
       // resumes on the new target once the drain finishes.
       if (!options.preservePendingStart) {
         this.invalidatePendingStart();
-        this.pttActiveKeyCode = null;
+        this.heldPress = null;
       }
       await this.stopPromise;
       return;
@@ -1921,7 +1991,7 @@ class VoiceRecordingService {
       // again on a session that's already winding down. A stop that makes way
       // for the next start leaves that start's held key alone.
       if (!options.preservePendingStart) {
-        this.pttActiveKeyCode = null;
+        this.heldPress = null;
         this.invalidatePendingStart();
       }
 
@@ -2729,7 +2799,7 @@ class VoiceRecordingService {
 
   private async stopSessionElsewhere(session: VoiceSessionElsewhere): Promise<void> {
     // This press was a stop, so its release must not stop anything here.
-    this.pttActiveKeyCode = null;
+    this.dropHeldPress();
     let stopped = false;
     try {
       stopped = await window.electron.voiceInput.stopLive(session.sessionId);
@@ -2834,7 +2904,7 @@ class VoiceRecordingService {
     // queued, keeps recording into it rather than dropping what was said.
     const released = this.liveStartup();
     if (released?.stopAfterStart && released.target.rewrite) {
-      this.resumeReleasedStartup(released.target);
+      if (this.resumeReleasedStartup(released.target)) this.claimHeldPress();
       return;
     }
 
@@ -2870,6 +2940,8 @@ class VoiceRecordingService {
       ...target,
       rewrite: { selection, instruction: [], cancelled: false },
     };
+    // The rewrite key follows the recording mode like the dictation key.
+    this.claimHeldPress();
     this.armTarget(rewriteTarget);
     await this.start(rewriteTarget);
   }
@@ -2921,7 +2993,8 @@ class VoiceRecordingService {
   }
 
   // In push-to-talk mode the keyboard shortcut starts recording; the keyup
-  // listener stops it. But the same action is also reachable from the command
+  // listener stops it. Tap-or-hold goes through toggle(), and only the release
+  // of a press toggle() claimed can stop it. But the same action is also reachable from the command
   // palette, the menu, and agent automation — none of which produce a keyup.
   // Falling back to stop-on-second-invoke for an active session of the same
   // target keeps those entry points usable without affecting the held-key
@@ -2932,7 +3005,10 @@ class VoiceRecordingService {
   // be affected by the recording-mode setting.
   private async startOrToggle(target: VoiceRecordingTarget): Promise<void> {
     if (this.recordingMode === "push-to-talk") {
-      if (this.resumeReleasedStartup(target)) return;
+      if (this.resumeReleasedStartup(target)) {
+        this.claimHeldPress();
+        return;
+      }
       const state = useVoiceRecordingStore.getState();
       if (state.pendingTarget?.panelId === target.panelId) {
         if (!this.deferStopToStartup()) this.cancelArming();
@@ -2945,6 +3021,7 @@ class VoiceRecordingService {
       }
       // The held key gets the same pre-audio cue as a toggle press.
       useVoiceRecordingStore.getState().recordRecentTarget(target);
+      this.claimHeldPress();
       this.armTarget(target);
       await this.start(target);
       return;
@@ -3248,7 +3325,7 @@ class VoiceRecordingService {
       ) {
         return;
       }
-      if (state.status === "paused" || this.pttActiveKeyCode !== null) {
+      if (state.status === "paused" || this.heldPress?.claimed) {
         state.dismissMicNotice(notice);
         state.announce(`${builtIn.label} will be used from the next dictation.`);
         return;
