@@ -17,6 +17,7 @@ export const E2E_DEFER_RENDERER_LOAD_ARG = "--daintree-e2e-defer-renderer-load";
 export const E2E_BACKGROUND_WINDOWS_ARG = "--daintree-e2e-background-windows";
 export const E2E_DISABLE_CACHED_VIEW_CPU_THROTTLE_ARG =
   "--daintree-e2e-disable-cached-view-cpu-throttle";
+export const E2E_FAKE_MICROPHONE_ARG = "--daintree-e2e-fake-microphone";
 export const E2E_CRASH_DUMPS_DIR_ARG = "--daintree-e2e-crash-dumps-dir=";
 export const E2E_SIDELOAD_PLUGIN_DIR_ARG = "--daintree-e2e-sideload-plugin-dir=";
 export const FREEZE_HARNESS_ARG = "--daintree-freeze-harness";
@@ -80,6 +81,17 @@ export function getIsE2EDisableCachedViewCpuThrottle(): boolean {
   );
 }
 
+/**
+ * E2E launches whose microphone is Chromium's fake device reading a WAV. The audio service
+ * reads that file, and its sandbox refuses the read on macOS and Windows.
+ */
+export function getIsE2EFakeMicrophone(): boolean {
+  return (
+    !isPackaged &&
+    (process.env.DAINTREE_E2E_FAKE_MICROPHONE === "1" || hasArg(E2E_FAKE_MICROPHONE_ARG))
+  );
+}
+
 export function getE2ECrashDumpsDir(): string | undefined {
   return !isPackaged && process.env.DAINTREE_E2E_CRASH_DUMPS_DIR
     ? process.env.DAINTREE_E2E_CRASH_DUMPS_DIR
@@ -122,6 +134,7 @@ export const isE2EFaultMode = getIsE2EFaultMode();
 export const isE2EDeferRendererLoad = getIsE2EDeferRendererLoad();
 export const isE2EBackgroundWindows = getIsE2EBackgroundWindows();
 export const isE2EDisableCachedViewCpuThrottle = getIsE2EDisableCachedViewCpuThrottle();
+export const isE2EFakeMicrophone = getIsE2EFakeMicrophone();
 export const e2eCrashDumpsDir = getE2ECrashDumpsDir();
 export const e2eSideloadPluginDir = getE2ESideloadPluginDir();
 export const isFreezeHarness = getIsFreezeHarness();

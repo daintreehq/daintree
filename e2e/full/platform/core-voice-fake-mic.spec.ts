@@ -6,7 +6,7 @@
  * socket. Only the transcription server is the shared mock, which records every
  * audio byte so a spec can tell real audio from zero-fill.
  */
-import { test, expect } from "@playwright/test";
+import { test, expect, type Locator } from "@playwright/test";
 import { mkdtempSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
@@ -19,11 +19,11 @@ import {
 import type { AppContext } from "../../helpers/launch";
 import { createFixtureRepo, removePathSync } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
-import { spawnTerminalAndVerify } from "../../helpers/workflows";
 import { ensureWindowFocused } from "../../helpers/focus";
 import { VOICE_TOGGLE_CHORD } from "../../helpers/shortcuts";
 import { T_LONG, T_MEDIUM } from "../../helpers/timeouts";
 import { createTranscriptionMock, type TranscriptionMock } from "../../helpers/transcriptionMock";
+import { fakeAgentEnv, installFakeAgent } from "../../helpers/fakeAgent";
 import {
   launchAppWithFakeMicrophone,
   pcmPeak,
@@ -32,9 +32,11 @@ import {
 } from "../../helpers/fakeMicrophone";
 import {
   clearCapturedEvents,
+  focusDictationTarget,
   getCapturedEvents,
   installEventCapture,
   ipcSetSettings,
+  openDictationTarget,
   seedVoiceConfig,
 } from "../../helpers/voice";
 
@@ -47,12 +49,14 @@ test.describe.serial("E2E: Voice Input — fake microphone smoke", () => {
   let userDataDir: string;
   let workDir: string;
   let fixtureCleanup: (() => void) | undefined;
-  let terminal: Awaited<ReturnType<typeof spawnTerminalAndVerify>>;
+  let binDir: string;
+  let agent: Locator;
 
   test.beforeAll(async () => {
     mock = await createTranscriptionMock();
     workDir = mkdtempSync(path.join(tmpdir(), "daintree-e2e-voice-mic-"));
     const wavPath = writeWav(workDir, "tone.wav", { seconds: 4, frequency: 440, amplitude: 0.5 });
+    binDir = installFakeAgent(workDir);
 
     userDataDir = mkdtempSync(path.join(tmpdir(), "daintree-e2e-voice-mic-ud-"));
     const first = await launchApp({ userDataDir });
@@ -75,12 +79,16 @@ test.describe.serial("E2E: Voice Input — fake microphone smoke", () => {
     });
     removeSingletonFiles(userDataDir);
 
-    ctx = await launchAppWithFakeMicrophone({ userDataDir, env: mock.env(), wavPath });
+    ctx = await launchAppWithFakeMicrophone({
+      userDataDir,
+      env: { ...mock.env(), ...fakeAgentEnv(binDir) },
+      wavPath,
+    });
     await stubNativeMicrophonePermission(ctx.app);
     const fixture = createFixtureRepo({ name: "voice-fake-mic" });
     fixtureCleanup = fixture.cleanup;
     ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixture.dir);
-    terminal = await spawnTerminalAndVerify(ctx.window);
+    agent = await openDictationTarget(ctx.window, binDir);
     await installEventCapture(ctx.window);
   });
 
@@ -103,7 +111,7 @@ test.describe.serial("E2E: Voice Input — fake microphone smoke", () => {
 
   async function dictate(): Promise<void> {
     await ensureWindowFocused(ctx.app);
-    await terminal.click();
+    await focusDictationTarget(agent);
     await ctx.window.keyboard.press(VOICE_TOGGLE_CHORD);
     await mock.waitForAudioBytes(BYTES_PER_SECOND / 2, T_LONG);
     await ctx.window.keyboard.press(VOICE_TOGGLE_CHORD);

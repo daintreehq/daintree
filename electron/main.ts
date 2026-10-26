@@ -16,6 +16,7 @@ import { registerGlobalErrorHandlers } from "./setup/globalErrorHandlers.js";
 import { startDevDiagnostics } from "./setup/devDiagnostics.js";
 import {
   isE2EBackgroundWindows,
+  isE2EFakeMicrophone,
   isE2EFaultMode,
   isE2EMode,
   isIdleHarness,
@@ -315,6 +316,9 @@ app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
 // (CalculateNativeWinOcclusion was considered and rejected: it's a runtime power
 // lever, not a boot win.)
 const disabledFeatures = ["BackForwardCache", "Translate"];
+// The fake microphone's WAV is read inside the audio service. A launch `--disable-features`
+// can't lift its sandbox: Chromium keeps one value per switch, and this one replaces it.
+if (isE2EMode && isE2EFakeMicrophone) disabledFeatures.push("AudioServiceSandbox");
 app.commandLine.appendSwitch("disable-features", disabledFeatures.join(","));
 
 if (isE2EMode && isE2EBackgroundWindows && process.platform === "darwin") {
