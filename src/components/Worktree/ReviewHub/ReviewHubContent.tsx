@@ -52,8 +52,11 @@ import { CommitPanel } from "./CommitPanel";
 import { ConflictPanel } from "./ConflictPanel";
 import { ReadinessRail } from "./ReadinessRail";
 import { useReviewHubStatus } from "./useReviewHubStatus";
+import { useReviewMarksStore } from "@/store/reviewMarksStore";
 import { useReviewHubMark } from "./useReviewHubMark";
 import { ReviewMarkLine } from "./ReviewMarkLine";
+import { SinceReviewPanel } from "./SinceReviewPanel";
+import { describeSinceReview, sinceReviewUnavailableReason } from "./reviewMarkComparison";
 import { registerReviewHubMarkTarget } from "./reviewHubMarkTargets";
 import { useReviewHubBaseBranch } from "./useReviewHubBaseBranch";
 import { useReviewHubCommitAndPush } from "./useReviewHubCommitAndPush";
@@ -171,6 +174,11 @@ export interface ReviewHubContentProps {
    * yet. Fires once per open; reopening the hub re-evaluates.
    */
   autoStageOnOpen?: boolean;
+  /**
+   * Open into the "Since review" view rather than the working tree. Applied on
+   * each open, and falls back to the working tree if the worktree has no mark.
+   */
+  initialMode?: "since-review";
 }
 
 const selectNoProviderHealth = () => null;
@@ -195,6 +203,7 @@ export function ReviewHubContent({
   keyboardScope,
   initialCommitMessage,
   autoStageOnOpen,
+  initialMode,
 }: ReviewHubContentProps) {
   const isDialog = location === "dialog";
   const worktreeId = useWorktreeIdForPath(worktreePath);
@@ -457,7 +466,7 @@ export function ReviewHubContent({
     stagedCount: derivedStaged.length,
     menuReplayBlocked:
       !fileListExpanded ||
-      diffMode === "base-branch" ||
+      diffMode !== "working-tree" ||
       selectedFile !== null ||
       selectedBaseBranchFile !== null,
   });
@@ -916,6 +925,27 @@ export function ReviewHubContent({
     debouncedBgRefreshRef,
   ]);
 
+  const appliedInitialModeRef = useRef(false);
+  useEffect(() => {
+    if (!isOpen) {
+      appliedInitialModeRef.current = false;
+      return;
+    }
+    if (initialMode && !appliedInitialModeRef.current) {
+      appliedInitialModeRef.current = true;
+      setDiffMode(initialMode);
+    }
+  }, [isOpen, initialMode]);
+
+  // The view needs a mark; once the marks are known and there isn't one (it was
+  // cleared, here or in another window), the hub goes back to the working tree.
+  const marksLoaded = useReviewMarksStore((state) => state.loaded);
+  useEffect(() => {
+    if (diffMode === "since-review" && marksLoaded && !hasReviewMark) {
+      setDiffMode("working-tree");
+    }
+  }, [diffMode, marksLoaded, hasReviewMark]);
+
   useEffect(() => {
     if (diffMode === "base-branch" && status?.currentBranch === mainBranch) {
       invalidateBaseBranch();
@@ -1274,7 +1304,14 @@ export function ReviewHubContent({
   const hasStagedSelection = selectionSection === "staged" && selectedPaths.size > 0;
   const hasUnstagedSelection = selectionSection === "unstaged" && selectedPaths.size > 0;
   const stagedPaths = status?.staged.map((f) => f.path) ?? [];
-  const refreshBusy = diffMode === "base-branch" ? baseBranchLoading : loading;
+  const sinceReviewView = describeSinceReview(currentReviewMark, reviewMark.comparison);
+  const sinceReviewUnavailable = sinceReviewUnavailableReason(currentReviewMark);
+  const refreshBusy =
+    diffMode === "base-branch"
+      ? baseBranchLoading
+      : diffMode === "since-review"
+        ? sinceReviewView.kind === "comparing"
+        : loading;
   const refreshSpinning = diffMode === "working-tree" && isBackgroundRefreshing;
   const repoState = status?.repoState ?? "CLEAN";
   const isOperationState =
@@ -1342,6 +1379,12 @@ export function ReviewHubContent({
                   label: `vs ${mainBranch}`,
                   disabled: !status?.currentBranch || status.currentBranch === mainBranch,
                 },
+                {
+                  value: "since-review" as const,
+                  label: "Since review",
+                  disabled: sinceReviewUnavailable !== null,
+                  tooltip: sinceReviewUnavailable ?? undefined,
+                },
               ]}
             />
 
@@ -1378,6 +1421,8 @@ export function ReviewHubContent({
                   onClick={() => {
                     if (diffMode === "base-branch") {
                       if (!baseBranchLoading) void fetchBaseBranch();
+                    } else if (diffMode === "since-review") {
+                      reviewMark.retryCompare();
                     } else if (!loading) {
                       void refresh();
                       // A fresh capture too, so a mark covers what this read shows.
@@ -1424,6 +1469,9 @@ export function ReviewHubContent({
           isClearing={reviewMark.isClearing}
           onClear={() => void clearReviewMark()}
           onRetry={reviewMark.retryCompare}
+          onOpenSinceReview={
+            diffMode === "since-review" ? undefined : () => handleDiffModeChange("since-review")
+          }
           onDismissNotice={reviewMark.dismissNotice}
         />
 
@@ -1542,7 +1590,13 @@ export function ReviewHubContent({
             data-testid="review-hub-body-reservation"
             className={cn(isDialog && DIALOG_MIN_BODY_HEIGHT)}
           >
-            {diffMode === "base-branch" ? (
+            {diffMode === "since-review" ? (
+              <SinceReviewPanel
+                view={sinceReviewView}
+                onClear={() => void clearReviewMark()}
+                onRetry={reviewMark.retryCompare}
+              />
+            ) : diffMode === "base-branch" ? (
               /* Base-branch diff panel */
               baseBranchLoading ? (
                 showBaseBranchSkeleton ? (

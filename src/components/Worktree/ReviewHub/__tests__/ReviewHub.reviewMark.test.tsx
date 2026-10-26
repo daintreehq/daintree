@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, act, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, act, fireEvent, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import type { StagingStatus, WorktreeState } from "@shared/types";
 import type {
@@ -675,4 +675,144 @@ describe("Review Hub review marks (#14585)", () => {
     expect(bridge.compare).toHaveBeenCalledTimes(4);
     expect(screen.getByTestId("review-hub-review-mark-retry")).not.toBeNull();
   }, 10_000);
+
+  describe("Since review view (#14586)", () => {
+    function modeOption(label: string) {
+      return screen.getByRole("radio", { name: label }) as HTMLButtonElement;
+    }
+
+    it("is unavailable without a mark, and available with one", async () => {
+      useReviewMarksStore.setState({ marks: {}, revision: 0, loaded: true });
+      const view = renderHub();
+      await markButtonReady();
+      expect(modeOption("Since review").disabled).toBe(true);
+
+      act(() => useReviewMarksStore.setState({ marks: { [WT]: summary(2) }, revision: 2 }));
+      expect(modeOption("Since review").disabled).toBe(false);
+      view.unmount();
+    });
+
+    it("opens from the review line and lists commits and files, base updates apart", async () => {
+      useReviewMarksStore.setState({ marks: { [WT]: summary(2) }, revision: 2, loaded: true });
+      const result = comparable(["src/own.ts", "src/base.ts"], 1);
+      if (result.state !== "comparable") throw new Error("expected comparable");
+      result.files[1]!.baseUpdate = "only";
+      bridge.compare.mockResolvedValue({ status: "compared", markRevision: 2, result });
+      renderHub();
+
+      fireEvent.click(await screen.findByTestId("review-hub-review-mark-open"));
+
+      expect(await screen.findByTestId("since-review-files-branch")).not.toBeNull();
+      expect(screen.getByTestId("since-review-files-base-update").textContent).toContain("base.ts");
+      expect(screen.getByTestId("since-review-files-branch").textContent).toContain("own.ts");
+      expect(screen.getAllByTestId("since-review-commit")).toHaveLength(1);
+      // Rows only list.
+      expect(screen.getAllByTestId("since-review-file-row")[0]!.closest("button")).toBeNull();
+    });
+
+    it("says nothing changed only for a complete comparison", async () => {
+      useReviewMarksStore.setState({ marks: { [WT]: summary(2) }, revision: 2, loaded: true });
+      bridge.compare.mockResolvedValue({
+        status: "compared",
+        markRevision: 2,
+        result: comparable([], 0),
+      });
+      renderHub();
+      fireEvent.click(await screen.findByTestId("review-hub-review-mark-open"));
+      expect((await screen.findByTestId("since-review-empty")).textContent).toContain(
+        "No changes since your review"
+      );
+    });
+
+    it("shows an incomplete comparison with what it found, not the empty state", async () => {
+      useReviewMarksStore.setState({ marks: { [WT]: summary(2) }, revision: 2, loaded: true });
+      bridge.compare.mockResolvedValue({
+        status: "compared",
+        markRevision: 2,
+        result: {
+          ...(comparable([], 0) as object),
+          state: "incomplete",
+          reasons: ["current-state-incomplete"],
+          gaps: [],
+          files: [],
+          commits: { kind: "listed", history: "extended", commits: [], truncated: false },
+        } as unknown as ReviewComparisonResult,
+      });
+      renderHub();
+      fireEvent.click(await screen.findByTestId("review-hub-review-mark-open"));
+      expect((await screen.findByTestId("since-review-incomplete")).textContent).toContain(
+        "the worktree couldn't be read in full"
+      );
+      expect(screen.queryByTestId("since-review-empty")).toBeNull();
+    });
+
+    it("offers Retry for a failed comparison", async () => {
+      useReviewMarksStore.setState({ marks: { [WT]: summary(2) }, revision: 2, loaded: true });
+      bridge.compare.mockResolvedValueOnce({
+        status: "compared",
+        markRevision: 2,
+        result: { state: "failed", reason: "deadline", message: "ran out of time" },
+      });
+      renderHub();
+      fireEvent.click(await screen.findByTestId("review-hub-review-mark-open"));
+      await screen.findByTestId("since-review-failed");
+      bridge.compare.mockResolvedValue({
+        status: "compared",
+        markRevision: 2,
+        result: comparable(["a.ts"], 0),
+      });
+      fireEvent.click(
+        within(screen.getByTestId("since-review-failed")).getByRole("button", { name: "Retry" })
+      );
+      expect(await screen.findByTestId("since-review-files-branch")).not.toBeNull();
+    });
+
+    it("offers Clear for a mark from another branch", async () => {
+      useReviewMarksStore.setState({
+        marks: {
+          [WT]: { ...summary(2), head: { kind: "branch", branch: "other", commit: COMMIT } },
+        },
+        revision: 2,
+        loaded: true,
+      });
+      bridge.clear.mockResolvedValue({ status: "cleared", snapshot: snapshot({}, 3) });
+      renderHub();
+      fireEvent.click(modeOption("Since review"));
+      const other = await screen.findByTestId("since-review-other-branch");
+      fireEvent.click(within(other).getByRole("button", { name: "Clear review mark" }));
+      await waitFor(() => expect(bridge.clear).toHaveBeenCalled());
+    });
+
+    it("opens straight into the view when asked, without staging", async () => {
+      useReviewMarksStore.setState({ marks: { [WT]: summary(2) }, revision: 2, loaded: true });
+      bridge.compare.mockResolvedValue({
+        status: "compared",
+        markRevision: 2,
+        result: comparable(["a.ts"], 0),
+      });
+      render(
+        <ReviewHubContent
+          isOpen={true}
+          worktreePath={WT}
+          panelId="review-1"
+          onClose={vi.fn()}
+          initialMode="since-review"
+          autoStageOnOpen={false}
+        />
+      );
+      expect(await screen.findByTestId("since-review-files-branch")).not.toBeNull();
+      expect(window.electron.git.stageAll).not.toHaveBeenCalled();
+    });
+
+    it("returns to the working tree when the mark is cleared", async () => {
+      useReviewMarksStore.setState({ marks: { [WT]: summary(2) }, revision: 2, loaded: true });
+      renderHub();
+      fireEvent.click(modeOption("Since review"));
+      await screen.findByTestId("since-review-comparing");
+      act(() => useReviewMarksStore.setState({ marks: {}, revision: 3 }));
+      await waitFor(() =>
+        expect(modeOption("Working tree").getAttribute("aria-checked")).toBe("true")
+      );
+    });
+  });
 });

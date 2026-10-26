@@ -15,5 +15,6 @@ export function createReviewDefaults(options: ReviewPanelOptions): Partial<Revie
       initialCommitMessage: options.initialCommitMessage,
     }),
     ...(options.autoStageOnOpen != null && { autoStageOnOpen: options.autoStageOnOpen }),
+    ...(options.initialMode != null && { initialMode: options.initialMode }),
   };
 }

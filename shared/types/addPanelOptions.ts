@@ -372,6 +372,8 @@ export interface ReviewPanelOptions extends AddPanelOptionsBase {
   initialCommitMessage?: string;
   /** Stage all unstaged files on open when nothing is staged. Open-time hint. */
   autoStageOnOpen?: boolean;
+  /** Open straight into the "Since review" view. Open-time hint. */
+  initialMode?: "since-review";
 }
 
 /** Options for creating a file viewer panel */

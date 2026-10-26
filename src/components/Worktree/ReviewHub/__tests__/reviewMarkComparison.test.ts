@@ -8,7 +8,9 @@ import type {
 import {
   describeNotCovered,
   describeReviewMarkComparison,
+  describeSinceReview,
   reviewMarkNoticeFor,
+  sinceReviewUnavailableReason,
 } from "../reviewMarkComparison";
 
 const COMMIT = "1".repeat(40);
@@ -214,5 +216,128 @@ describe("reviewMarkNoticeFor", () => {
     ).toBe(
       "Not covered: a.ts, b.ts, c.ts and 2 more files; 2 new commits. The check was incomplete, so more may have changed."
     );
+  });
+});
+
+describe("describeSinceReview", () => {
+  const applicable = { applicability: "applicable" as const };
+
+  it("is unavailable, with the reason, without an applicable mark", () => {
+    expect(sinceReviewUnavailableReason(null)).toBe("Mark this worktree reviewed first");
+    expect(sinceReviewUnavailableReason({ applicability: "branch-unknown" })).toBe(
+      "The worktree's branch isn't known yet"
+    );
+    expect(sinceReviewUnavailableReason({ applicability: "branch-changed" })).toBeNull();
+    expect(describeSinceReview(null, null)).toEqual({
+      kind: "unavailable",
+      reason: "Mark this worktree reviewed first",
+    });
+  });
+
+  it("offers Clear for a mark from another branch, whatever the comparison says", () => {
+    expect(describeSinceReview({ applicability: "branch-changed" }, null).kind).toBe(
+      "other-branch"
+    );
+    expect(
+      describeSinceReview(
+        applicable,
+        compared({ state: "different-branch", reviewed: COMPARED.head, current: COMPARED.head })
+      ).kind
+    ).toBe("other-branch");
+  });
+
+  it("is comparing until a comparison lands", () => {
+    expect(describeSinceReview(applicable, null).kind).toBe("comparing");
+    expect(describeSinceReview(applicable, { status: "none" }).kind).toBe("comparing");
+    expect(
+      describeSinceReview(
+        applicable,
+        compared({ state: "failed", reason: "superseded", message: "x" })
+      ).kind
+    ).toBe("comparing");
+  });
+
+  it("says nothing changed only for a complete comparison", () => {
+    expect(describeSinceReview(applicable, compared(comparable([], []))).kind).toBe("empty");
+    expect(
+      describeSinceReview(applicable, compared(comparable([], [], { truncated: true }))).kind
+    ).toBe("listed");
+    expect(
+      describeSinceReview(
+        applicable,
+        compared({
+          state: "incomplete",
+          reasons: ["path-limit"],
+          gaps: [],
+          ...COMPARED,
+          files: [],
+          commits: { kind: "listed", history: "extended", commits: [], truncated: false },
+        })
+      )
+    ).toMatchObject({
+      kind: "listed",
+      incomplete: "Comparison incomplete: too many changed files to list.",
+    });
+  });
+
+  it("reports failed and unreadable comparisons apart from empty ones", () => {
+    expect(
+      describeSinceReview(
+        applicable,
+        compared({ state: "failed", reason: "git-failed", message: "x" })
+      )
+    ).toEqual({ kind: "failed", text: "Couldn't compare with the review." });
+    expect(describeSinceReview(applicable, { status: "unavailable", markRevision: 3 }).kind).toBe(
+      "unreadable"
+    );
+    expect(describeSinceReview(applicable, { status: "too-large", markRevision: 3 }).kind).toBe(
+      "unreadable"
+    );
+  });
+
+  it("lists commits as new or patch-equivalent and groups base-update files apart", () => {
+    const view = describeSinceReview(
+      applicable,
+      compared(
+        comparable(
+          [
+            file("own.ts"),
+            { ...file("base.ts"), baseUpdate: "only" },
+            { ...file("both.ts"), baseUpdate: "also" },
+          ],
+          [commit("new"), commit("patch-equivalent")],
+          { history: "rewritten" }
+        )
+      )
+    );
+    expect(view).toMatchObject({
+      kind: "listed",
+      incomplete: null,
+      commits: { kind: "listed", rewritten: true },
+    });
+    if (view.kind !== "listed") throw new Error("expected a listed view");
+    expect(view.files).toEqual([
+      { path: "own.ts", status: "modified", group: "branch", alsoBaseUpdate: false },
+      { path: "base.ts", status: "modified", group: "base-update", alsoBaseUpdate: false },
+      { path: "both.ts", status: "modified", group: "branch", alsoBaseUpdate: true },
+    ]);
+  });
+
+  it("keeps the files and says why commits are unavailable when the reviewed commit is gone", () => {
+    const view = describeSinceReview(
+      applicable,
+      compared({
+        state: "reviewed-commit-missing",
+        ...COMPARED,
+        files: [file("a.ts")],
+        commits: { kind: "unavailable", reason: "reviewed-commit-missing" },
+      })
+    );
+    expect(view).toMatchObject({
+      kind: "listed",
+      commits: { kind: "unavailable" },
+      files: [{ path: "a.ts" }],
+    });
+    expect(view.kind === "listed" && view.incomplete).toContain("reviewed commit is gone");
   });
 });

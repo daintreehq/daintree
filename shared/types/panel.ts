@@ -922,6 +922,11 @@ export interface ReviewPanelData extends BasePanelData {
    * only; never persisted, so a restored panel never re-stages behind the user.
    */
   autoStageOnOpen?: boolean;
+  /**
+   * Open straight into the hub's "Since review" view (#14586). An open-time
+   * hint only; never persisted.
+   */
+  initialMode?: "since-review";
 }
 
 /**

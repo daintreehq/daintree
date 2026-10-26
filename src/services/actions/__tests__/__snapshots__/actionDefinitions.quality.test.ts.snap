@@ -7293,7 +7293,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "worktree",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Open the Review Hub for a worktree to review uncommitted changes",
+    "description": "Open the Review Hub for a worktree to review uncommitted changes. With mode 'since-review' it opens the view of what changed since the worktree's review mark, without staging anything",
     "examples": undefined,
     "id": "worktree.openReviewHub",
     "keywords": undefined,
