@@ -5,6 +5,7 @@ import { defineIpcNamespace, opValidated } from "../define.js";
 import { getVoiceSettings } from "./voiceInput.js";
 import { VOICE_DICTIONARY_METHOD_CHANNELS } from "./voiceDictionary.preload.js";
 import {
+<<<<<<< HEAD
   changeProjectVoiceDictionary,
   readProjectVoiceDictionary,
 } from "../../services/projectVoiceDictionary.js";
@@ -16,6 +17,9 @@ import type {
 } from "../../../shared/types/ipc/api.js";
 import {
   DICTIONARY_CONTROL_CHARACTERS,
+=======
+  MAX_DICTIONARY_HEARD_AS,
+>>>>>>> 3609d59f18 (fix(voice): pluralize dictionary counts and cap pasted imports)
   acceptSuggestion,
   addDictionaryEntry,
   dismissSuggestion,
@@ -32,7 +36,7 @@ const RAW_TEXT_MAX = 1_000;
 const LIST_MAX = 200;
 const text = z.string().max(RAW_TEXT_MAX);
 const existing = z.string();
-const heardAs = z.array(text).max(LIST_MAX);
+const heardAs = z.array(text).max(MAX_DICTIONARY_HEARD_AS);
 
 const addSchema = z.object({
   term: text,

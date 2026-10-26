@@ -2,6 +2,7 @@ import { useCallback, useState, useEffect, useId, useRef } from "react";
 import type { ReactNode } from "react";
 import { Eye, EyeOff, XCircle, ExternalLink, ChevronRight, CheckCircle2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { pluralize } from "@/lib/pluralize";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -1203,9 +1204,9 @@ function DictionaryGroup({
 }) {
   const rules = entries.reduce((total, entry) => total + entry.heardAs.length, 0);
   const summary = [
-    `${entries.length} ${entries.length === 1 ? "term" : "terms"}`,
-    `${rules} ${rules === 1 ? "rule" : "rules"}`,
-    `${suggestionCount} pending ${suggestionCount === 1 ? "suggestion" : "suggestions"}`,
+    pluralize(entries.length, "term"),
+    pluralize(rules, "heard-as phrase"),
+    pluralize(suggestionCount, "pending suggestion"),
   ].join(" · ");
 
   return (
@@ -1221,7 +1222,7 @@ function DictionaryGroup({
       />
 
       <SettingsRow
-        label="Terms and rules"
+        label="Terms"
         description={summary}
         control={
           <Button ref={manageRef} size="sm" variant="outline" onClick={onManage}>

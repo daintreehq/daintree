@@ -475,7 +475,7 @@ describe("VoiceInputSettingsTab dictionary", () => {
     const { container } = render(<VoiceInputSettingsTab />);
 
     await screen.findByRole("button", { name: /Manage dictionary/ });
-    expect(container.textContent).toContain("2 terms · 2 rules · 1 pending suggestion");
+    expect(container.textContent).toContain("2 terms · 2 heard-as phrases · 1 pending suggestion");
     expect(screen.queryByRole("button", { name: "Remove Vite" })).toBeNull();
 
     await openPage();

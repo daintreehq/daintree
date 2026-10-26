@@ -9,9 +9,14 @@ import { TimeAgo } from "@/components/ui/TimeAgo";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsEmptyRow, SettingsGroup, SettingsRow, SettingsRowActions } from "./SettingsGroup";
 import { useSettingsSubpage } from "./SettingsSubpage";
-import { parseDictionaryInput, parseHeardAsField } from "./voiceDictionaryImport";
+import {
+  MAX_DICTIONARY_IMPORT_TERMS,
+  parseDictionaryInput,
+  parseHeardAsField,
+} from "./voiceDictionaryImport";
+import { pluralNoun, pluralize } from "@/lib/pluralize";
 import { MAX_DICTIONARY_KEYTERMS } from "@shared/config/voiceKeyterms";
-import { MAX_DICTIONARY_TERM_LENGTH } from "@shared/utils/voiceDictionary";
+import { MAX_DICTIONARY_HEARD_AS, MAX_DICTIONARY_TERM_LENGTH } from "@shared/utils/voiceDictionary";
 import type {
   SuggestedDictionaryEntry,
   VoiceDictionaryEntry,
@@ -78,15 +83,16 @@ export function VoiceDictionaryPage({
   const lastRemoved = removed[removed.length - 1];
 
   const addDraft = () => {
-    const { terms, skipped } = parseDictionaryInput(draft);
+    const { terms, skipped, overflowTerms, overflowHeardAs } = parseDictionaryInput(draft);
     if (terms.length === 0) {
       if (skipped > 0) {
         setNotice(
-          `Nothing added: ${skipped === 1 ? "that entry is" : "those entries are"} longer than ${MAX_DICTIONARY_TERM_LENGTH} characters`
+          `Nothing added: ${pluralNoun(skipped, "that entry is", "those entries are")} longer than ${MAX_DICTIONARY_TERM_LENGTH} characters`
         );
       }
       return;
     }
+    const imported = terms.length > 1 || skipped + overflowTerms + overflowHeardAs > 0;
     const text = draft;
     draftRef.current?.focus();
     setRemoved([]);
@@ -98,7 +104,7 @@ export function VoiceDictionaryPage({
           state = await window.electron.voiceDictionary.add({
             term,
             heardAs,
-            ...(terms.length > 1 || skipped > 0 ? { source: "imported" as const } : {}),
+            ...(imported ? { source: "imported" as const } : {}),
           });
         }
         return state!;
@@ -106,12 +112,23 @@ export function VoiceDictionaryPage({
       () => {
         // Keep anything typed while the add was in flight.
         setDraft((current) => (current === text ? "" : current));
-        const base = `Added ${terms.length} ${terms.length === 1 ? "term" : "terms"}`;
-        setNotice(
-          skipped > 0
-            ? `${base}. Skipped ${skipped} over ${MAX_DICTIONARY_TERM_LENGTH} characters`
-            : base
-        );
+        const parts = [`Added ${pluralize(terms.length, "term")}`];
+        if (skipped > 0) {
+          parts.push(
+            `Skipped ${pluralize(skipped, "entry", "entries")} over ${MAX_DICTIONARY_TERM_LENGTH} characters`
+          );
+        }
+        if (overflowTerms > 0) {
+          parts.push(
+            `Left out ${pluralize(overflowTerms, "term")} past the first ${MAX_DICTIONARY_IMPORT_TERMS}`
+          );
+        }
+        if (overflowHeardAs > 0) {
+          parts.push(
+            `Left out ${pluralize(overflowHeardAs, "heard-as phrase")} past the first ${MAX_DICTIONARY_HEARD_AS} for a term`
+          );
+        }
+        setNotice(parts.join(". "));
       }
     );
   };
@@ -373,8 +390,7 @@ export function VoiceDictionaryPage({
         </SettingsGroup>
         {entries.length > 0 && (
           <p className="mt-2 text-xs text-text-secondary">
-            {entries.length} {entries.length === 1 ? "term" : "terms"}, {rules}{" "}
-            {rules === 1 ? "heard-as phrase" : "heard-as phrases"}
+            {pluralize(entries.length, "term")}, {pluralize(rules, "heard-as phrase")}
           </p>
         )}
       </SettingsSection>

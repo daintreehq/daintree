@@ -1,4 +1,7 @@
-import { MAX_DICTIONARY_TERM_LENGTH } from "@shared/utils/voiceDictionary";
+import { MAX_DICTIONARY_HEARD_AS, MAX_DICTIONARY_TERM_LENGTH } from "@shared/utils/voiceDictionary";
+
+/** Terms one paste adds. Each is its own write to main, so a huge paste is trimmed, not queued. */
+export const MAX_DICTIONARY_IMPORT_TERMS = 500;
 
 export interface ParsedDictionaryTerm {
   term: string;
@@ -9,6 +12,10 @@ export interface ParsedDictionaryInput {
   terms: ParsedDictionaryTerm[];
   /** Items dropped for being longer than a keyterm can be. */
   skipped: number;
+  /** Distinct terms left out once the paste reached MAX_DICTIONARY_IMPORT_TERMS. */
+  overflowTerms: number;
+  /** Heard-as phrases left out once their term held MAX_DICTIONARY_HEARD_AS. */
+  overflowHeardAs: number;
 }
 
 const ARROW = /\s*(?:->|=>|→)\s*/;
@@ -20,7 +27,9 @@ const ARROW = /\s*(?:->|=>|→)\s*/;
  */
 export function parseDictionaryInput(text: string): ParsedDictionaryInput {
   const byTerm = new Map<string, ParsedDictionaryTerm>();
+  const overflow = new Set<string>();
   let skipped = 0;
+  let overflowHeardAs = 0;
 
   const take = (rawTerm: string, rawHeard?: string) => {
     const term = rawTerm.trim();
@@ -36,12 +45,19 @@ export function parseDictionaryInput(text: string): ParsedDictionaryInput {
     const key = term.toLowerCase();
     let entry = byTerm.get(key);
     if (!entry) {
+      if (byTerm.size >= MAX_DICTIONARY_IMPORT_TERMS) {
+        overflow.add(key);
+        return;
+      }
       entry = { term, heardAs: [] };
       byTerm.set(key, entry);
     }
-    if (heard && !entry.heardAs.some((h) => h.toLowerCase() === heard.toLowerCase())) {
-      entry.heardAs.push(heard);
+    if (!heard || entry.heardAs.some((h) => h.toLowerCase() === heard.toLowerCase())) return;
+    if (entry.heardAs.length >= MAX_DICTIONARY_HEARD_AS) {
+      overflowHeardAs++;
+      return;
     }
+    entry.heardAs.push(heard);
   };
 
   for (const line of text.split(/\r?\n/)) {
@@ -52,7 +68,7 @@ export function parseDictionaryInput(text: string): ParsedDictionaryInput {
     }
   }
 
-  return { terms: [...byTerm.values()], skipped };
+  return { terms: [...byTerm.values()], skipped, overflowTerms: overflow.size, overflowHeardAs };
 }
 
 /** Heard-as forms typed into one field, one per line: a phrase may itself hold a comma. */
