@@ -141,7 +141,7 @@ let root: string;
 beforeEach(async () => {
   vi.clearAllMocks();
   root = await fs.mkdtemp(path.join(os.tmpdir(), "review-marks-ipc-"));
-  _setReviewMarkStoreForTesting(new ReviewMarkStore(root));
+  _setReviewMarkStoreForTesting(new ReviewMarkStore(root, { now: () => 0 }));
   serviceRefsMock.getWorkspaceClientRef.mockReturnValue(workspaceClientMock);
   leaseMock.mayWriteProjectState.mockReturnValue(true);
   identityMock.readWorktreeIdentity.mockImplementation(async (cwd: string) => identityOf(cwd));
@@ -276,7 +276,37 @@ describe("reviewMarks IPC namespace", () => {
     await expect(mark(ctx(null), WT_1, point(WT_1), 0)).rejects.toThrow("sender has no project");
   });
 
+  it("refuses a first mark undone before it landed", async () => {
+    const identity = deferred<WorktreeIdentity>();
+    identityMock.readWorktreeIdentity.mockReturnValueOnce(identity.promise);
+    const view = ctx(PROJECT_A);
+
+    const saving = mark(view, WT_1, point(WT_1), 0);
+    await vi.waitFor(() => expect(identityMock.readWorktreeIdentity).toHaveBeenCalled());
+    expect((await clear(view, WT_1, 0)).status).toBe("cleared");
+    identity.resolve(identityOf(WT_1));
+
+    expect((await saving).status).toBe("stale");
+    expect((await hydrate(view))?.marks).toEqual({});
+  });
+
   describe("pruning", () => {
+    let client: EventEmitter;
+    let dispose: () => void;
+
+    beforeEach(() => {
+      client = new EventEmitter();
+      dispose = registerReviewMarksHandlers({ worktreeService: client as never });
+    });
+
+    afterEach(() => {
+      dispose();
+    });
+
+    function states(...ids: string[]): StatesResult {
+      return { status: "ok", projectId: PROJECT_A, states: ids.map((id) => ({ id, path: id })) };
+    }
+
     it("drops marks of worktrees the host confirms are gone, on a hydrate", async () => {
       await mark(ctx(PROJECT_A), WT_1, point(WT_1), 0);
       await mark(ctx(PROJECT_A), WT_2, point(WT_2), 1);
@@ -297,15 +327,12 @@ describe("reviewMarks IPC namespace", () => {
       await mark(ctx(PROJECT_A), WT_1, point(WT_1), 0);
       broadcastMock.mockClear();
       workspaceClientMock.getAllStatesForProjectResultAsync
-        .mockResolvedValueOnce({ status: "ok", projectId: PROJECT_A, states: [] })
-        .mockResolvedValueOnce({
-          status: "ok",
-          projectId: PROJECT_A,
-          states: [{ id: WT_1, path: WT_1 }],
-        });
+        .mockResolvedValueOnce(states())
+        .mockResolvedValueOnce(states(WT_1));
       await hydrate(ctx(PROJECT_A));
       await _settleReviewMarkPrunesForTesting();
       expect((await hydrate(ctx(PROJECT_A)))?.marks[WT_1]).toBeDefined();
+      await _settleReviewMarkPrunesForTesting();
 
       workspaceClientMock.getAllStatesForProjectResultAsync.mockResolvedValue({
         status: "unavailable",
@@ -317,24 +344,37 @@ describe("reviewMarks IPC namespace", () => {
       expect(broadcastMock).not.toHaveBeenCalled();
     });
 
-    it("drops a deleted worktree's mark once the host confirms it, and stops listening on dispose", async () => {
-      const client = new EventEmitter();
-      const dispose = registerReviewMarksHandlers({ worktreeService: client as never });
+    it("never drops a mark made while the host was being asked", async () => {
+      await mark(ctx(PROJECT_A), WT_1, point(WT_1), 0);
+      const calls = workspaceClientMock.getAllStatesForProjectResultAsync;
+      calls.mockClear();
+      // The prune's first read misses WT_1; it is recreated and marked again
+      // before the second read, which misses it too.
+      calls
+        .mockResolvedValueOnce(states(WT_2))
+        .mockResolvedValueOnce(states(WT_1, WT_2))
+        .mockResolvedValueOnce(states(WT_2));
+      await hydrate(ctx(PROJECT_A));
+      await vi.waitFor(() => expect(calls).toHaveBeenCalledTimes(1));
+      const remarked = await mark(ctx(PROJECT_A), WT_1, point(WT_1, { capturedAt: 2_000 }), 1);
+      expect(remarked.status).toBe("saved");
+      await _settleReviewMarkPrunesForTesting();
+
+      // Checked again on fresh reads, which find it.
+      expect(calls.mock.calls.length).toBeGreaterThan(3);
+      expect((await hydrate(ctx(PROJECT_A)))?.marks[WT_1]?.capturedAt).toBe(2_000);
+    });
+
+    it("drops a deleted worktree's mark once the host confirms it", async () => {
       await mark(ctx(PROJECT_A), WT_1, point(WT_1), 0);
       liveWorktrees(WT_2);
 
       client.emit("worktree-removed", { worktreeId: WT_1, projectPath: ROOT_A, projectId: PROJECT_A });
       await _settleReviewMarkPrunesForTesting();
       expect((await hydrate(ctx(PROJECT_A)))?.marks).toEqual({});
-
-      dispose();
-      expect(client.listenerCount("worktree-removed")).toBe(0);
-      expect(ipcMainMock.removeHandler).toHaveBeenCalledWith(CHANNELS.REVIEW_MARKS_MARK);
     });
 
     it("refuses a save in flight for a worktree deleted meanwhile", async () => {
-      const client = new EventEmitter();
-      const dispose = registerReviewMarksHandlers({ worktreeService: client as never });
       const identity = deferred<WorktreeIdentity>();
       identityMock.readWorktreeIdentity.mockReturnValueOnce(identity.promise);
 
@@ -347,7 +387,26 @@ describe("reviewMarks IPC namespace", () => {
 
       expect((await saving).status).toBe("stale");
       expect((await hydrate(ctx(PROJECT_A)))?.marks).toEqual({});
+    });
+
+    it("writes nothing once disposed mid-prune, and stops listening", async () => {
+      await mark(ctx(PROJECT_A), WT_1, point(WT_1), 0);
+      broadcastMock.mockClear();
+      liveWorktrees(WT_2);
+      const calls = workspaceClientMock.getAllStatesForProjectResultAsync;
+      calls.mockClear();
+
+      client.emit("worktree-removed", { worktreeId: WT_1, projectPath: ROOT_A, projectId: PROJECT_A });
+      await vi.waitFor(() => expect(calls).toHaveBeenCalledTimes(1));
       dispose();
+      dispose = () => {};
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      expect(calls).toHaveBeenCalledTimes(1);
+      expect(broadcastMock).not.toHaveBeenCalled();
+      expect(client.listenerCount("worktree-removed")).toBe(0);
+      expect(ipcMainMock.removeHandler).toHaveBeenCalledWith(CHANNELS.REVIEW_MARKS_MARK);
+      expect((await hydrate(ctx(PROJECT_A)))?.marks[WT_1]).toBeDefined();
     });
   });
 });

@@ -71,50 +71,73 @@ function announce(projectId: string, snapshot: ReviewMarksSnapshot): void {
   broadcastToProjectRenderers(projectId, CHANNELS.REVIEW_MARKS_CHANGED, snapshot);
 }
 
-const pruning = new Map<string, Promise<void>>();
-const pruneCandidates = new Map<string, Set<string>>();
-
 /**
- * Drop the marks of worktrees the host confirms are gone: every marked one,
+ * Drops the marks of worktrees the host confirms are gone: every marked one,
  * plus any a removal named. Coalesced per project, and run again when asked
- * while one is running, so a removal is never missed.
+ * while one is running, so a removal is never missed. Owned by the handlers'
+ * registration: disposing it stops every prune before its next write.
  */
-function schedulePrune(projectId: string, removed: readonly string[] = []): Promise<void> {
-  let candidates = pruneCandidates.get(projectId);
-  if (!candidates) {
-    candidates = new Set();
-    pruneCandidates.set(projectId, candidates);
+class ReviewMarkPruner {
+  private readonly running = new Map<string, Promise<void>>();
+  private readonly asked = new Map<string, Set<string>>();
+  private readonly abort = new AbortController();
+
+  schedule(projectId: string, removed: readonly string[] = []): Promise<void> {
+    if (this.abort.signal.aborted) return Promise.resolve();
+    const asked = this.asked.get(projectId) ?? new Set<string>();
+    this.asked.set(projectId, asked);
+    for (const id of removed) asked.add(id);
+    const running = this.running.get(projectId);
+    if (running) return running;
+    const run = this.drain(projectId)
+      .catch((error: unknown) => {
+        console.error(`[reviewMarks] Failed to prune marks for project ${projectId}:`, error);
+      })
+      .finally(() => {
+        this.running.delete(projectId);
+        // Asked again after the last pass read what it was asked.
+        if (this.asked.has(projectId)) void this.schedule(projectId);
+      });
+    this.running.set(projectId, run);
+    return run;
   }
-  for (const id of removed) candidates.add(id);
-  const running = pruning.get(projectId);
-  if (running) return running;
-  const run = (async () => {
-    while (pruneCandidates.has(projectId)) {
-      const named = pruneCandidates.get(projectId) ?? new Set<string>();
-      pruneCandidates.delete(projectId);
+
+  private async drain(projectId: string): Promise<void> {
+    const { signal } = this.abort;
+    while (!signal.aborted) {
+      const named = this.asked.get(projectId);
+      if (!named) return;
+      this.asked.delete(projectId);
       const store = getReviewMarkStore();
-      const marked = await store.markedWorktreeIds(projectId);
-      const gone = await confirmGoneWorktrees(
+      // Read before asking the host, so a mark made meanwhile isn't the one removed.
+      const expected = await store.entryRevisions(projectId, [...named]);
+      const gone = await confirmGoneWorktrees(projectId, [...expected.keys()], "reviewMarks", signal);
+      if (signal.aborted || gone.length === 0) continue;
+      const result = await store.remove(
         projectId,
-        [...new Set([...marked, ...named])],
-        "reviewMarks"
+        new Map(gone.map((id) => [id, expected.get(id) ?? null]))
       );
-      if (gone.length === 0) continue;
-      const result = await store.remove(projectId, gone);
       if (result.changed) announce(projectId, result.snapshot);
+      if (result.changedSince.length > 0) {
+        // Changed while the host was asked: checked again on fresh reads.
+        const again = this.asked.get(projectId) ?? new Set<string>();
+        for (const id of result.changedSince) again.add(id);
+        this.asked.set(projectId, again);
+      }
     }
-  })()
-    .catch((error: unknown) => {
-      console.error(`[reviewMarks] Failed to prune marks for project ${projectId}:`, error);
-    })
-    .finally(() => {
-      pruning.delete(projectId);
-      // Asked again after the last pass read its candidates.
-      if (pruneCandidates.has(projectId)) void schedulePrune(projectId);
-    });
-  pruning.set(projectId, run);
-  return run;
+  }
+
+  async settle(): Promise<void> {
+    while (this.running.size > 0) await Promise.all([...this.running.values()]);
+  }
+
+  dispose(): void {
+    this.abort.abort();
+    this.asked.clear();
+  }
 }
+
+let pruner: ReviewMarkPruner | null = null;
 
 /**
  * The marks, then a prune in the background of any whose worktree went while
@@ -125,7 +148,7 @@ function schedulePrune(projectId: string, removed: readonly string[] = []): Prom
 async function handleHydrate(ctx: IpcContext): Promise<ReviewMarksSnapshot | null> {
   if (!ctx.projectId) return null;
   const snapshot = await getReviewMarkStore().read(ctx.projectId);
-  if (Object.keys(snapshot.marks).length > 0) void schedulePrune(ctx.projectId);
+  if (Object.keys(snapshot.marks).length > 0) void pruner?.schedule(ctx.projectId);
   return snapshot;
 }
 
@@ -221,21 +244,26 @@ export function registerReviewMarksHandlers(
   deps: Pick<HandlerDependencies, "worktreeService">
 ): () => void {
   const dispose = reviewMarksNamespace.register();
+  const own = new ReviewMarkPruner();
+  pruner?.dispose();
+  pruner = own;
   const client = deps.worktreeService;
   const onRemoved = (payload: WorktreeRemovedPayload): void => {
     const { worktreeId, projectId } = payload ?? {};
     if (typeof projectId !== "string" || !isReviewMarkWorktreeId(worktreeId)) return;
-    void schedulePrune(projectId, [worktreeId]);
+    void own.schedule(projectId, [worktreeId]);
   };
   const listens = typeof client?.on === "function" && typeof client.off === "function";
   if (listens) client.on("worktree-removed", onRemoved);
   return () => {
     if (listens) client.off("worktree-removed", onRemoved);
+    own.dispose();
+    if (pruner === own) pruner = null;
     dispose();
   };
 }
 
 /** @internal Tests only: settles once every scheduled prune has. */
 export async function _settleReviewMarkPrunesForTesting(): Promise<void> {
-  while (pruning.size > 0) await Promise.all([...pruning.values()]);
+  await pruner?.settle();
 }

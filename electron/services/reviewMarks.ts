@@ -4,6 +4,7 @@ import path from "path";
 import { app } from "electron";
 import { z } from "zod";
 import { resilientAtomicWriteFile, resilientRename, resilientUnlink } from "../utils/fs.js";
+import { AppError } from "../utils/errorTypes.js";
 import { logWarn } from "../utils/logger.js";
 import { getProjectStateDir, UTF8_BOM } from "./projectStorePaths.js";
 import {
@@ -30,11 +31,16 @@ import type {
  *   the host, never rewritten when another worktree's mark changes.
  *
  * Every read and write of a project's files takes a turn in that project's
- * queue, so a check and the write it allows can't be split by another write. A
- * clear or removal keeps the worktree's revision as a tombstone, so a save that
- * started before it is refused rather than bringing the mark back. Past
+ * queue, so a check and the write it allows can't be split by another write,
+ * and nothing outside a turn ever sees a write a turn takes back. A clear or
+ * removal keeps the worktree's revision as a tombstone, so a save that started
+ * before it is refused rather than bringing the mark back. Past
  * {@link MAX_TOMBSTONES} the oldest go, and `floor` keeps their newest revision
  * so a save that started before them is still refused.
+ *
+ * Revisions come from the clock, never below the last plus one: a history that
+ * starts over (an unreadable file moved aside, or one deleted) still counts past
+ * any revision a view holds from before, so the view takes its pushes.
  */
 
 const INDEX_FILENAME = "review-marks.json";
@@ -44,8 +50,12 @@ const POINT_FILE_VERSION = 1;
 /** Worktree ids are absolute paths; nothing longer is one. */
 const MAX_WORKTREE_ID_LENGTH = 4096;
 const MAX_TOMBSTONES = 256;
+/** Past what a Remote Host's link carries in one frame; no capture comes near it. */
+const MAX_POINT_FILE_BYTES = 16 * 1024 * 1024;
+/** Summaries only: far more than every worktree's mark plus the tombstones. */
+const MAX_INDEX_FILE_BYTES = 8 * 1024 * 1024;
 /** A point file this store wrote, or the temp file of one a crash cut short. */
-const POINT_FILE_NAME = /^[0-9a-f]{32}\.[1-9][0-9]{0,15}\.json(?:\.[0-9]+-[0-9a-z]+\.tmp)?$/;
+const POINT_FILE_NAME = /^[0-9a-f]{64}\.[1-9][0-9]{0,15}\.json(?:\.[0-9]+-[0-9a-z]+\.tmp)?$/;
 
 const oid = z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/);
 
@@ -79,9 +89,6 @@ export interface StoredReviewMark {
   summary: ReviewMarkSummary;
 }
 
-export type ReviewMarkSaveResult = "saved" | "stale";
-export type ReviewMarkClearResult = "cleared" | "stale";
-
 export interface ReviewMarksWrite<Status> {
   status: Status;
   snapshot: ReviewMarksSnapshot;
@@ -89,7 +96,12 @@ export interface ReviewMarksWrite<Status> {
   changed: boolean;
 }
 
-/** Thrown from a write's guard to refuse it; nothing is written. */
+export interface ReviewMarksRemoval extends ReviewMarksWrite<"removed"> {
+  /** Candidates whose entry changed since the caller read it: left as they are. */
+  changedSince: string[];
+}
+
+/** Throws to refuse a write: nothing it would have written stays. */
 export type ReviewMarkWriteGuard = () => void;
 
 export function isReviewMarkWorktreeId(id: unknown): id is string {
@@ -147,16 +159,24 @@ function parseIndex(raw: unknown): MarksIndex | { futureVersion: number } | null
   return { revision, floor, worktrees };
 }
 
-function serializeIndex(index: MarksIndex): string {
-  const worktrees: Record<string, { revision: number; mark: StoredMark | null }> = {};
-  for (const [id, entry] of index.worktrees) {
-    Object.defineProperty(worktrees, id, {
-      value: { revision: entry.revision, mark: entry.mark },
+/** Own properties throughout: the keys are paths, and the file is read back as JSON. */
+function ownRecord<T>(entries: Iterable<readonly [string, T]>): Record<string, T> {
+  const record: Record<string, T> = {};
+  for (const [key, value] of entries) {
+    Object.defineProperty(record, key, {
+      value,
       enumerable: true,
       writable: true,
       configurable: true,
     });
   }
+  return record;
+}
+
+function serializeIndex(index: MarksIndex): string {
+  const worktrees = ownRecord(
+    [...index.worktrees].map(([id, entry]) => [id, { revision: entry.revision, mark: entry.mark }])
+  );
   return `${JSON.stringify(
     { version: INDEX_VERSION, revision: index.revision, floor: index.floor, worktrees },
     null,
@@ -177,16 +197,11 @@ function summaryOf(mark: StoredMark, revision: number): ReviewMarkSummary {
 }
 
 function snapshotOf(projectId: string, index: MarksIndex): ReviewMarksSnapshot {
-  const marks: Record<string, ReviewMarkSummary> = {};
-  for (const [id, entry] of index.worktrees) {
-    if (!entry.mark) continue;
-    Object.defineProperty(marks, id, {
-      value: summaryOf(entry.mark, entry.revision),
-      enumerable: true,
-      writable: true,
-      configurable: true,
-    });
-  }
+  const marks = ownRecord(
+    [...index.worktrees].flatMap(([id, entry]) =>
+      entry.mark ? [[id, summaryOf(entry.mark, entry.revision)] as const] : []
+    )
+  );
   return { projectId, marks, revision: index.revision };
 }
 
@@ -201,9 +216,14 @@ function markOf(point: ReviewPoint, markedAt: number): StoredMark {
   };
 }
 
+/** Whether the index's summary of a mark is what its point says. */
+function describes(mark: StoredMark, point: ReviewPoint): boolean {
+  return JSON.stringify(markOf(point, mark.markedAt)) === JSON.stringify(mark);
+}
+
 /** Whether the worktree's mark changed after the revision a write started from. */
 function changedSince(index: MarksIndex, worktreeId: string, basedOn: number): boolean {
-  // Newer than anything here: the caller read a store that has since been reset.
+  // Newer than anything here: the caller read a store that has since started over.
   if (basedOn > index.revision) return true;
   const entry = index.worktrees.get(worktreeId);
   return entry ? entry.revision > basedOn : index.floor > basedOn;
@@ -220,23 +240,30 @@ function trimTombstones(index: MarksIndex): void {
   }
 }
 
-function pointKey(worktreeId: string): string {
-  return createHash("sha256").update(worktreeId).digest("hex").slice(0, 32);
-}
-
 function pointFileName(worktreeId: string, revision: number): string {
-  return `${pointKey(worktreeId)}.${revision}.json`;
+  return `${createHash("sha256").update(worktreeId).digest("hex")}.${revision}.json`;
 }
 
 function isErrno(error: unknown, code: string): boolean {
   return (error as NodeJS.ErrnoException | null)?.code === code;
 }
 
+export interface ReviewMarkStoreOptions {
+  /** Test seam for the clock revisions and `markedAt` are taken from. */
+  now?: () => number;
+}
+
 export class ReviewMarkStore {
   private readonly queues = new Map<string, Promise<void>>();
   private readonly pendingSaves = new Map<string, number>();
+  private readonly now: () => number;
 
-  constructor(private readonly projectsConfigDir: string) {}
+  constructor(
+    private readonly projectsConfigDir: string,
+    options: ReviewMarkStoreOptions = {}
+  ) {
+    this.now = options.now ?? Date.now;
+  }
 
   /** The project's marks as every view holds them. */
   read(projectId: string): Promise<ReviewMarksSnapshot> {
@@ -245,7 +272,8 @@ export class ReviewMarkStore {
 
   /**
    * One worktree's mark with its review point, or null when it has none or its
-   * point file is missing or doesn't match the index.
+   * point file is missing or doesn't match the index. Whether it applies to the
+   * worktree as it is now is the caller's to check (`reviewMarkApplicability`).
    */
   get(projectId: string, worktreeId: string): Promise<StoredReviewMark | null> {
     return this.turn(projectId, async () => {
@@ -253,7 +281,8 @@ export class ReviewMarkStore {
       const entry = index.worktrees.get(worktreeId);
       if (!entry?.mark) return null;
       const point = await this.readPoint(projectId, worktreeId, entry.revision);
-      return point ? { point, summary: summaryOf(entry.mark, entry.revision) } : null;
+      if (!point || !describes(entry.mark, point)) return null;
+      return { point, summary: summaryOf(entry.mark, entry.revision) };
     });
   }
 
@@ -277,9 +306,9 @@ export class ReviewMarkStore {
 
   /**
    * Store `point` as the worktree's mark, replacing any. Refused as stale when
-   * the worktree's mark was set or cleared after `basedOn`, or the held mark
-   * was captured later than `point`. `guard` runs in the same turn as the write
-   * and throws to refuse it.
+   * the worktree's mark was set or cleared after `basedOn`. `guard` is asked
+   * before anything is written and again once it is, and its throw refuses the
+   * save, putting back anything already written.
    */
   save(
     projectId: string,
@@ -287,91 +316,114 @@ export class ReviewMarkStore {
     point: ReviewPoint,
     basedOn: number,
     guard: ReviewMarkWriteGuard
-  ): Promise<ReviewMarksWrite<ReviewMarkSaveResult>> {
+  ): Promise<ReviewMarksWrite<"saved" | "stale">> {
     return this.turn(projectId, async () => {
       const index = await this.readIndex(projectId);
-      const held = index.worktrees.get(worktreeId)?.mark;
-      if (changedSince(index, worktreeId, basedOn) || (held && held.capturedAt > point.capturedAt)) {
+      if (changedSince(index, worktreeId, basedOn)) {
         return { status: "stale", snapshot: snapshotOf(projectId, index), changed: false };
       }
       guard();
-      const revision = index.revision + 1;
-      const pointsDir = this.pointsDir(projectId);
-      const pointFile = path.join(pointsDir, pointFileName(worktreeId, revision));
-      await fs.mkdir(pointsDir, { recursive: true });
-      await resilientAtomicWriteFile(
-        pointFile,
-        JSON.stringify({ version: POINT_FILE_VERSION, worktreeId, revision, point })
-      );
-      index.revision = revision;
-      index.worktrees.set(worktreeId, { revision, mark: markOf(point, Date.now()) });
-      try {
-        await this.commit(projectId, index);
-      } catch (error) {
-        await resilientUnlink(pointFile).catch(() => {});
-        throw error;
+      const revision = this.nextRevision(index);
+      const body = JSON.stringify({ version: POINT_FILE_VERSION, worktreeId, revision, point });
+      if (Buffer.byteLength(body) > MAX_POINT_FILE_BYTES) {
+        throw new AppError({
+          code: "PAYLOAD_TOO_LARGE",
+          message: "review marks: the review point is too large to keep",
+        });
       }
+      const pointsDir = this.pointsDir(projectId);
+      await fs.mkdir(pointsDir, { recursive: true });
+      // Unreferenced until the index names it; the next write tidies it if this one fails.
+      await resilientAtomicWriteFile(path.join(pointsDir, pointFileName(worktreeId, revision)), body);
+      index.revision = revision;
+      index.worktrees.set(worktreeId, { revision, mark: markOf(point, this.now()) });
+      await this.commit(projectId, index, guard);
       return { status: "saved", snapshot: snapshotOf(projectId, index), changed: true };
     });
   }
 
   /**
    * Remove the worktree's mark. Refused as stale when a mark was set after
-   * `basedOn`: clearing it would drop a mark the caller never saw. Clearing a
-   * worktree with no mark writes nothing.
+   * `basedOn`: clearing it would drop a mark the caller never saw. A clear
+   * always leaves a tombstone, even where there was no mark, so a save of the
+   * same worktree already on its way (a mark undone before it landed) can't
+   * bring one back.
    */
   clear(
     projectId: string,
     worktreeId: string,
     basedOn: number,
     guard: ReviewMarkWriteGuard
-  ): Promise<ReviewMarksWrite<ReviewMarkClearResult>> {
+  ): Promise<ReviewMarksWrite<"cleared" | "stale">> {
     return this.turn(projectId, async () => {
       const index = await this.readIndex(projectId);
-      if (!index.worktrees.get(worktreeId)?.mark) {
-        return { status: "cleared", snapshot: snapshotOf(projectId, index), changed: false };
-      }
-      if (changedSince(index, worktreeId, basedOn)) {
+      if (index.worktrees.get(worktreeId)?.mark && changedSince(index, worktreeId, basedOn)) {
         return { status: "stale", snapshot: snapshotOf(projectId, index), changed: false };
       }
       guard();
-      index.revision += 1;
+      index.revision = this.nextRevision(index);
       index.worktrees.set(worktreeId, { revision: index.revision, mark: null });
-      await this.commit(projectId, index);
+      await this.commit(projectId, index, guard);
       return { status: "cleared", snapshot: snapshotOf(projectId, index), changed: true };
     });
   }
 
   /**
-   * Remove the marks of worktrees that are gone, with no revision to check:
-   * the host confirmed they're gone. A tombstone is left for each that had a
-   * mark or has a save in flight.
+   * Each worktree's entry revision, or null for one with none: what a removal
+   * is checked against, so it never drops a mark made after this read.
    */
-  remove(
+  async entryRevisions(
     projectId: string,
-    worktreeIds: readonly string[]
-  ): Promise<ReviewMarksWrite<"removed">> {
+    worktreeIds: readonly string[] = []
+  ): Promise<Map<string, number | null>> {
     return this.turn(projectId, async () => {
       const index = await this.readIndex(projectId);
-      const gone = worktreeIds.filter(
-        (id) =>
-          isReviewMarkWorktreeId(id) &&
-          (!!index.worktrees.get(id)?.mark || this.pendingSaves.has(`${projectId}\0${id}`))
-      );
-      if (gone.length === 0) {
-        return { status: "removed", snapshot: snapshotOf(projectId, index), changed: false };
+      const revisions = new Map<string, number | null>();
+      for (const [id, entry] of index.worktrees) {
+        if (entry.mark) revisions.set(id, entry.revision);
       }
-      index.revision += 1;
-      for (const id of gone) index.worktrees.set(id, { revision: index.revision, mark: null });
-      await this.commit(projectId, index);
-      return { status: "removed", snapshot: snapshotOf(projectId, index), changed: true };
+      for (const id of worktreeIds) {
+        if (!revisions.has(id)) revisions.set(id, index.worktrees.get(id)?.revision ?? null);
+      }
+      return revisions;
     });
   }
 
-  /** Worktree ids that hold a mark, for checking which are gone. */
-  async markedWorktreeIds(projectId: string): Promise<string[]> {
-    const snapshot = await this.read(projectId);
-    return Object.keys(snapshot.marks);
+  /**
+   * Remove the marks of worktrees the host confirmed are gone, each only if
+   * its entry is still what `expected` says it was when the check began. A
+   * tombstone is left for each that had a mark or has a save in flight.
+   */
+  remove(
+    projectId: string,
+    expected: ReadonlyMap<string, number | null>
+  ): Promise<ReviewMarksRemoval> {
+    return this.turn(projectId, async () => {
+      const index = await this.readIndex(projectId);
+      const moved: string[] = [];
+      const gone: string[] = [];
+      for (const [id, revision] of expected) {
+        if (!isReviewMarkWorktreeId(id)) continue;
+        const entry = index.worktrees.get(id);
+        if ((entry?.revision ?? null) !== revision) {
+          moved.push(id);
+          continue;
+        }
+        if (entry?.mark || this.pendingSaves.has(`${projectId}\0${id}`)) gone.push(id);
+      }
+      const result = { status: "removed" as const, changedSince: moved };
+      if (gone.length === 0) {
+        return { ...result, snapshot: snapshotOf(projectId, index), changed: false };
+      }
+      index.revision = this.nextRevision(index);
+      for (const id of gone) index.worktrees.set(id, { revision: index.revision, mark: null });
+      await this.commit(projectId, index);
+      return { ...result, snapshot: snapshotOf(projectId, index), changed: true };
+    });
+  }
+
+  private nextRevision(index: MarksIndex): number {
+    return Math.max(index.revision + 1, this.now());
   }
 
   private turn<T>(projectId: string, run: () => Promise<T>): Promise<T> {
@@ -394,25 +446,36 @@ export class ReviewMarkStore {
     return dir;
   }
 
+  private indexPath(projectId: string): string {
+    return path.join(this.stateDir(projectId), INDEX_FILENAME);
+  }
+
   private pointsDir(projectId: string): string {
     return path.join(this.stateDir(projectId), POINTS_DIRNAME);
   }
 
-  /**
-   * The project's index; empty before anything was stored. A file that can't
-   * be parsed or is from a newer build is moved aside and the project starts
-   * empty. One that can't be read at all throws: writing over a file we could
-   * not read would drop every mark in it.
-   */
-  private async readIndex(projectId: string): Promise<MarksIndex> {
-    const filePath = path.join(this.stateDir(projectId), INDEX_FILENAME);
-    let text: string;
+  /** The index as stored, or null when there is none. Throws when it can't be read. */
+  private async readIndexText(projectId: string): Promise<string | null> {
+    const filePath = this.indexPath(projectId);
     try {
-      text = await fs.readFile(filePath, "utf8");
+      const { size } = await fs.stat(filePath);
+      if (size > MAX_INDEX_FILE_BYTES) return "";
+      return await fs.readFile(filePath, "utf8");
     } catch (error) {
-      if (isErrno(error, "ENOENT")) return emptyIndex();
+      if (isErrno(error, "ENOENT")) return null;
       throw error;
     }
+  }
+
+  /**
+   * The project's index; empty before anything was stored. A file that can't
+   * be parsed or is from a newer build is moved aside, kept for the user, and
+   * the project starts over. One that can't be read at all throws: writing over
+   * a file we could not read would drop every mark in it.
+   */
+  private async readIndex(projectId: string): Promise<MarksIndex> {
+    const text = await this.readIndexText(projectId);
+    if (text === null) return emptyIndex();
     let raw: unknown;
     try {
       raw = JSON.parse(text.startsWith(UTF8_BOM) ? text.slice(UTF8_BOM.length) : text);
@@ -421,10 +484,11 @@ export class ReviewMarkStore {
     }
     const parsed = parseIndex(raw);
     if (parsed && !("futureVersion" in parsed)) return parsed;
+    const filePath = this.indexPath(projectId);
     const aside = parsed
-      ? `${filePath}.future-v${parsed.futureVersion}.${Date.now()}`
-      : `${filePath}.corrupted.${Date.now()}`;
-    logWarn("[reviewMarks] Moved aside an unreadable review marks file", { projectId });
+      ? `${filePath}.future-v${parsed.futureVersion}.${this.now()}`
+      : `${filePath}.corrupted.${this.now()}`;
+    logWarn("[reviewMarks] Moved aside a review marks file it couldn't read", { projectId });
     await resilientRename(filePath, aside);
     return emptyIndex();
   }
@@ -437,6 +501,7 @@ export class ReviewMarkStore {
     const filePath = path.join(this.pointsDir(projectId), pointFileName(worktreeId, revision));
     let raw: unknown;
     try {
+      if ((await fs.stat(filePath)).size > MAX_POINT_FILE_BYTES) return null;
       raw = JSON.parse(await fs.readFile(filePath, "utf8"));
     } catch (error) {
       if (!isErrno(error, "ENOENT")) {
@@ -456,12 +521,29 @@ export class ReviewMarkStore {
     return point.success ? point.data : null;
   }
 
-  /** Write the index, then drop every point file it no longer names. */
-  private async commit(projectId: string, index: MarksIndex): Promise<void> {
+  /**
+   * Write the index, then drop every point file it no longer names. With a
+   * guard, it is asked again once the index is written, and its throw puts the
+   * previous index back: a turn's write is only seen once the turn ends.
+   */
+  private async commit(
+    projectId: string,
+    index: MarksIndex,
+    guard?: ReviewMarkWriteGuard
+  ): Promise<void> {
     trimTombstones(index);
     const stateDir = this.stateDir(projectId);
+    const filePath = this.indexPath(projectId);
+    const previous = guard ? await this.readIndexText(projectId) : null;
     await fs.mkdir(stateDir, { recursive: true });
-    await resilientAtomicWriteFile(path.join(stateDir, INDEX_FILENAME), serializeIndex(index));
+    await resilientAtomicWriteFile(filePath, serializeIndex(index));
+    try {
+      guard?.();
+    } catch (refusal) {
+      if (previous === null) await resilientUnlink(filePath);
+      else await resilientAtomicWriteFile(filePath, previous);
+      throw refusal;
+    }
     await this.sweepPoints(projectId, index);
   }
 

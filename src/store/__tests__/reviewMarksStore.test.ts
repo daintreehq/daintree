@@ -144,6 +144,21 @@ describe("reviewMarksStore", () => {
     expect(useReviewMarksStore.getState().marks[WT_1]).toBeDefined();
   });
 
+  it("tries the re-read after a reconnect again when it fails", async () => {
+    const bridge = installBridge();
+    stop = startReviewMarksSync();
+    await vi.waitFor(() => expect(useReviewMarksStore.getState().loaded).toBe(true));
+    vi.useFakeTimers();
+
+    bridge.hydrate.mockRejectedValueOnce(new Error("link still settling"));
+    bridge.hydrate.mockResolvedValueOnce(snapshot({ [WT_1]: summary(2) }, 2));
+    notifyHostResync();
+    await vi.advanceTimersByTimeAsync(300);
+
+    expect(bridge.hydrate).toHaveBeenCalledTimes(3);
+    expect(useReviewMarksStore.getState().revision).toBe(2);
+  });
+
   it("adopts a write's reply, and one naming a reset store over what it held", async () => {
     const bridge = installBridge();
     bridge.hydrate.mockResolvedValueOnce(snapshot({ [WT_1]: summary(5) }, 5));

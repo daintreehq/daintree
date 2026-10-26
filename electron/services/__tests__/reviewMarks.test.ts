@@ -72,7 +72,7 @@ async function pointFiles(): Promise<string[]> {
 
 beforeEach(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), "review-marks-"));
-  store = new ReviewMarkStore(root);
+  store = new ReviewMarkStore(root, { now: () => 0 });
 });
 
 afterEach(async () => {
@@ -121,10 +121,12 @@ describe("ReviewMarkStore", () => {
     expect((await store.get(PROJECT, WT_1))?.point.capturedAt).toBe(2_000);
   });
 
-  it("refuses a point captured before the mark it would replace, whatever revision it names", async () => {
+  it("orders saves by revision, not by when their points were captured", async () => {
     await store.save(PROJECT, WT_1, point({ capturedAt: 2_000 }), 0, allow);
-    const older = await store.save(PROJECT, WT_1, point({ capturedAt: 1_000 }), 1, allow);
-    expect(older.status).toBe("stale");
+    // Started after the first landed, so it replaces it, earlier capture or not.
+    const later = await store.save(PROJECT, WT_1, point({ capturedAt: 1_000 }), 1, allow);
+    expect(later.status).toBe("saved");
+    expect((await store.get(PROJECT, WT_1))?.point.capturedAt).toBe(1_000);
   });
 
   it("lets a save through when only another worktree's mark changed meanwhile", async () => {
@@ -148,12 +150,16 @@ describe("ReviewMarkStore", () => {
     expect((await store.read(PROJECT)).marks[WT_1]).toBeDefined();
   });
 
-  it("answers a clear of no mark without writing", async () => {
+  it("refuses a first mark that a clear overtook, as when a mark is undone before it lands", async () => {
     expect(await store.clear(PROJECT, WT_1, 0, allow)).toMatchObject({
       status: "cleared",
-      changed: false,
+      changed: true,
     });
-    await expect(fs.stat(stateDir())).rejects.toThrow();
+    expect((await store.save(PROJECT, WT_1, point(), 0, allow)).status).toBe("stale");
+    // A tombstone overtaken again still refuses the save started before it.
+    expect((await store.clear(PROJECT, WT_1, 1, allow)).status).toBe("cleared");
+    expect((await store.save(PROJECT, WT_1, point(), 1, allow)).status).toBe("stale");
+    expect((await store.save(PROJECT, WT_1, point(), 2, allow)).status).toBe("saved");
   });
 
   it("writes nothing when the guard refuses", async () => {
@@ -162,6 +168,41 @@ describe("ReviewMarkStore", () => {
     };
     await expect(store.save(PROJECT, WT_1, point(), 0, refuse)).rejects.toThrow("driven elsewhere");
     expect(await store.read(PROJECT)).toEqual({ projectId: PROJECT, marks: {}, revision: 0 });
+    expect(await pointFiles()).toEqual([]);
+  });
+
+  it("puts the index back when the guard refuses once it is written", async () => {
+    await store.save(PROJECT, WT_1, point(), 0, allow);
+    const before = await readIndexFile();
+    let asked = 0;
+    const handedOver = () => {
+      if (++asked > 1) throw new Error("driven elsewhere");
+    };
+    await expect(
+      store.save(PROJECT, WT_1, point({ capturedAt: 9_000 }), 1, handedOver)
+    ).rejects.toThrow("driven elsewhere");
+    expect(asked).toBe(2);
+    expect(await readIndexFile()).toEqual(before);
+    expect((await store.get(PROJECT, WT_1))?.point).toEqual(point());
+
+    // With no index before, a refused first write leaves none.
+    asked = 0;
+    await expect(store.clear(OTHER_PROJECT, WT_1, 0, handedOver)).rejects.toThrow();
+    await expect(fs.stat(path.join(stateDir(OTHER_PROJECT), "review-marks.json"))).rejects.toThrow();
+  });
+
+  it("refuses to keep a point too large for the link", async () => {
+    const huge = point({
+      entries: Array.from({ length: 1200 }, (_, i) => ({
+        path: `${String(i).padStart(4, "0")}-${"x".repeat(16_000)}`,
+        head: null,
+        index: { kind: "absent" as const },
+        worktree: { kind: "file" as const, mode: "100644" as const, oid: C2, size: 1 },
+      })),
+    });
+    await expect(store.save(PROJECT, WT_1, huge, 0, allow)).rejects.toMatchObject({
+      code: "PAYLOAD_TOO_LARGE",
+    });
     expect(await pointFiles()).toEqual([]);
   });
 
@@ -176,7 +217,10 @@ describe("ReviewMarkStore", () => {
   it("removes marks of gone worktrees, and a save in flight for one can't restore it", async () => {
     await store.save(PROJECT, WT_1, point(), 0, allow);
     const release = store.beginSave(PROJECT, WT_2);
-    const removed = await store.remove(PROJECT, [WT_1, WT_2]);
+    const removed = await store.remove(
+      PROJECT,
+      await store.entryRevisions(PROJECT, [WT_2])
+    );
     expect(removed.changed).toBe(true);
     expect(removed.snapshot.marks).toEqual({});
     const late = await store.save(PROJECT, WT_2, point({ worktreePath: WT_2 }), 1, allow);
@@ -185,8 +229,25 @@ describe("ReviewMarkStore", () => {
   });
 
   it("writes nothing to remove worktrees with no mark and no save in flight", async () => {
-    expect((await store.remove(PROJECT, [WT_1])).changed).toBe(false);
+    expect((await store.remove(PROJECT, new Map([[WT_1, null]]))).changed).toBe(false);
     await expect(fs.stat(stateDir())).rejects.toThrow();
+  });
+
+  it("leaves a mark made after the removal's read, and says so", async () => {
+    await store.save(PROJECT, WT_1, point(), 0, allow);
+    const expected = await store.entryRevisions(PROJECT, [WT_2]);
+    expect(expected).toEqual(
+      new Map([
+        [WT_1, 1],
+        [WT_2, null],
+      ])
+    );
+    // Recreated and marked again while the host was being asked.
+    await store.save(PROJECT, WT_1, point({ capturedAt: 2_000 }), 1, allow);
+    const removal = await store.remove(PROJECT, expected);
+    expect(removal.changedSince).toEqual([WT_1]);
+    expect(removal.changed).toBe(false);
+    expect((await store.get(PROJECT, WT_1))?.point.capturedAt).toBe(2_000);
   });
 
   it("trims old tombstones but still refuses saves that started before them", async () => {
@@ -212,6 +273,21 @@ describe("ReviewMarkStore", () => {
 
   it("refuses a save naming a revision the store never reached", async () => {
     expect((await store.save(PROJECT, WT_1, point(), 7, allow)).status).toBe("stale");
+  });
+
+  it("counts revisions from the clock, so a history that starts over passes the old one", async () => {
+    let clock = 5_000;
+    const clocked = new ReviewMarkStore(root, { now: () => clock });
+    expect((await clocked.save(PROJECT, WT_1, point(), 0, allow)).snapshot.revision).toBe(5_000);
+    // The clock stepping back never moves a revision down.
+    clock = 10;
+    expect((await clocked.clear(PROJECT, WT_1, 5_000, allow)).snapshot.revision).toBe(5_001);
+
+    clock = 6_000;
+    await fs.rm(path.join(stateDir(), "review-marks.json"));
+    const restarted = await clocked.save(PROJECT, WT_2, point({ worktreePath: WT_2 }), 0, allow);
+    expect(restarted.snapshot.revision).toBeGreaterThan(5_001);
+    expect(restarted.snapshot.marks[WT_2]?.markedAt).toBe(6_000);
   });
 
   describe("reading a user-editable file", () => {
@@ -274,12 +350,19 @@ describe("ReviewMarkStore", () => {
 
       await fs.writeFile(file, JSON.stringify(stored));
       expect((await store.get(PROJECT, WT_1))?.point).toEqual(point());
+
+      // A point that doesn't say what the index's summary does isn't the mark.
+      await fs.writeFile(
+        file,
+        JSON.stringify({ ...stored, point: { ...stored.point, capturedAt: 7 } })
+      );
+      expect(await store.get(PROJECT, WT_1)).toBeNull();
     });
 
     it("tidies point files a crash left behind", async () => {
       await store.save(PROJECT, WT_1, point(), 0, allow);
       const dir = path.join(stateDir(), "review-marks");
-      const orphan = `${"c".repeat(32)}.9.json`;
+      const orphan = `${"c".repeat(64)}.9.json`;
       await fs.writeFile(path.join(dir, orphan), "{}");
       await fs.writeFile(path.join(dir, "notes.txt"), "mine");
       await store.save(PROJECT, WT_2, point({ worktreePath: WT_2 }), 1, allow);

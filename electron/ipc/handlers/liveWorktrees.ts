@@ -32,22 +32,32 @@ export async function readLiveWorktrees(
  * The candidates the workspace host confirms are gone, by two reads: the first
  * may be one the client reused from just before a sibling made the worktree,
  * and what's dropped on the strength of this is gone for good, so only an id
- * both reads miss counts. None when the host can't answer.
+ * both reads miss counts. None when the host can't answer or `signal` aborts.
  */
 export async function confirmGoneWorktrees(
   projectId: string,
   candidates: readonly string[],
-  scope: string
+  scope: string,
+  signal?: AbortSignal
 ): Promise<string[]> {
   if (candidates.length === 0) return [];
   const first = await readLiveWorktrees(projectId, scope);
-  if (first === null) return [];
+  if (first === null || signal?.aborted) return [];
   const firstIds = new Set(first.map((state) => state.id));
   const gone = candidates.filter((id) => !firstIds.has(id));
   if (gone.length === 0) return [];
-  await new Promise((resolve) => setTimeout(resolve, GONE_RECHECK_DELAY_MS));
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(done, GONE_RECHECK_DELAY_MS);
+    function done(): void {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", done);
+      resolve();
+    }
+    signal?.addEventListener("abort", done, { once: true });
+  });
+  if (signal?.aborted) return [];
   const second = await readLiveWorktrees(projectId, scope);
-  if (second === null) return [];
+  if (second === null || signal?.aborted) return [];
   const secondIds = new Set(second.map((state) => state.id));
   return gone.filter((id) => !secondIds.has(id));
 }

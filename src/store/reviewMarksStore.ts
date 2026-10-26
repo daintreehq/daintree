@@ -128,8 +128,10 @@ export function startReviewMarksSync(): () => void {
       }, delay);
     });
   };
-  const offResync = onHostResync(() => {
-    if (disposed) return;
+  // Reconnects come in bursts; only the latest one's re-read keeps retrying.
+  let resyncs = 0;
+  let resyncTimer: ReturnType<typeof setTimeout> | null = null;
+  const pullAfterResync = (resync: number, attempt: number): void => {
     // A pull already in flight may have been answered before the lost pushes,
     // so read once more after it settles rather than joining it.
     const inFlight = pull;
@@ -137,13 +139,29 @@ export function startReviewMarksSync(): () => void {
       ? inFlight.catch(() => undefined).then(() => pullReviewMarks())
       : pullReviewMarks();
     pullAfter.catch((error: unknown) => {
-      logWarn("[reviewMarksStore] Failed to read review marks after reconnecting", { error });
+      if (disposed || resync !== resyncs) return;
+      const delay = PULL_RETRY_MS[attempt];
+      if (delay === undefined) {
+        logWarn("[reviewMarksStore] Failed to read review marks after reconnecting", { error });
+        return;
+      }
+      resyncTimer = setTimeout(() => {
+        resyncTimer = null;
+        if (!disposed && resync === resyncs) pullAfterResync(resync, attempt + 1);
+      }, delay);
     });
+  };
+  const offResync = onHostResync(() => {
+    if (disposed) return;
+    if (resyncTimer !== null) clearTimeout(resyncTimer);
+    resyncTimer = null;
+    pullAfterResync(++resyncs, 0);
   });
   pullWithRetry();
   return () => {
     disposed = true;
     if (retryTimer !== null) clearTimeout(retryTimer);
+    if (resyncTimer !== null) clearTimeout(resyncTimer);
     unsubscribe();
     offResync();
   };
