@@ -1131,6 +1131,25 @@ describe("assembleTaggedKeyterms", () => {
     expect(sources.lastIndexOf("names")).toBeLessThan(sources.indexOf("branch"));
   });
 
+  it("tags the target's commands as commands, after the names and ahead of the branch", async () => {
+    const opts = {
+      customDictionary: ["zodSchema"],
+      names: Promise.resolve({ hosts: ["Studio 1"], projects: [], worktrees: [] }),
+      commandTerms: Promise.resolve(["plugin creator", "review"]),
+      terminalId: TARGET,
+      ptyClient: asPtyClient(makePtyClient()),
+    };
+    const tagged = await assembleTaggedKeyterms(opts);
+    expect(tagged.map((t) => t.term)).toEqual(await assembleKeyterms(opts));
+    const sources = tagged.map((t) => t.source);
+    expect(tagged.filter((t) => t.source === "commands").map((t) => t.term)).toEqual([
+      "plugin creator",
+      "review",
+    ]);
+    expect(sources.indexOf("commands")).toBeGreaterThan(sources.lastIndexOf("names"));
+    expect(sources.lastIndexOf("commands")).toBeLessThan(sources.indexOf("branch"));
+  });
+
   it("screens names in the tagged list the same way", async () => {
     const tagged = await assembleTaggedKeyterms({
       customDictionary: [],

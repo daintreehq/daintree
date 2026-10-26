@@ -52,7 +52,13 @@ vi.mock("@/services/KeybindingService", () => ({
 }));
 
 type DeltaPayload = { text: string; itemId?: string };
-type CompletePayload = { text: string; willCorrect: boolean; itemId?: string; heard?: string };
+type CompletePayload = {
+  text: string;
+  willCorrect: boolean;
+  itemId?: string;
+  heard?: string;
+  commandText?: string;
+};
 type CorrectResult = { action: "no_change" | "replace"; correctedText: string };
 
 const callbacks: {
@@ -582,10 +588,34 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
       expect(correct).toHaveBeenLastCalledWith({
         rawText: "add Zustand to the store",
         terminalId: "panel-1",
+        startsPrompt: true,
       });
       result.resolve({ action: "replace", correctedText: "Add Zustand to the store." });
       await flush();
       expect(draft("panel-1")).toBe("Add Zustand to the store.");
+    });
+
+    // Main reads the command from the words as heard and writes its arguments
+    // as heard too, so the command is what the rules rerun over, never the
+    // spoken words it replaced.
+    it("rewrites a spoken command's arguments and keeps the command", async () => {
+      dictionary = [rule("Zustand", "zoo stand")];
+      const { service, voiceStore, draft } = await setup();
+      correct.mockResolvedValue({ action: "no_change", correctedText: "" });
+
+      voiceStore.getState().beginSession({ panelId: "panel-1" });
+      callbacks.delta!({ text: "slash review zoo stand", itemId: "item-cmd" });
+      callbacks.complete!({
+        text: "slash review Zustand",
+        heard: "slash review zoo stand",
+        commandText: "/review zoo stand",
+        willCorrect: false,
+        itemId: "item-cmd",
+      });
+      expect(draft("panel-1")).toBe("/review zoo stand");
+      await service.stop();
+
+      expect(draft("panel-1")).toBe("/review Zustand");
     });
 
     it("applies them with correction off and learns from the rewritten text", async () => {

@@ -58,6 +58,7 @@ type CompletePayload = {
   itemId?: string;
   transcriptId?: string;
   send?: boolean;
+  commandText?: string;
 };
 type FileTokenPayload = {
   sessionId: string;
@@ -274,6 +275,26 @@ describe("VoiceRecordingService — Escape cancels a dictation (#14631)", () => 
 
     expect(draft()).toBe("Keep");
     expect(ipc.cancel).toHaveBeenCalledWith(SESSION_ID);
+  });
+
+  it("removes a spoken command it wrote as one, with the words after it", async () => {
+    const { service, draft, records, settled } = await setup();
+
+    callbacks.complete!({
+      sessionId: SESSION_ID,
+      text: "slash review the last commit",
+      commandText: "/review the last commit",
+      willCorrect: false,
+      itemId: "item-a",
+    });
+    complete("And the tests.", "item-b");
+    expect(draft()).toBe("/review the last commit And the tests.");
+
+    expect(service.handleEscape(PANEL)).toBe(true);
+    await settled();
+
+    expect(draft()).toBe("");
+    expect(records()).toEqual([]);
   });
 
   it("marks the draft it left for the composer, so emptying it stays undoable", async () => {

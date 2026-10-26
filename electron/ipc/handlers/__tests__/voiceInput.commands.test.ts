@@ -44,16 +44,18 @@ const shared = vi.hoisted(() => ({
   startCalls: [] as unknown[],
   /** The start context (pending keyterms) passed alongside each start. */
   startContexts: [] as Array<{ keyterms?: Promise<string[]> } | undefined>,
-  /** Optional override for assembleKeyterms — lets a test defer/control timing. */
+  /** Optional override for assembleTaggedKeyterms — lets a test defer/control timing. */
   assembleKeyterms: null as null | (() => Promise<string[]>),
   /** The session the fake provider was last started for; its events carry it. */
   providerSessionId: null as string | null,
-  /** Arguments of each assembleKeyterms call. */
+  /** Arguments of each assembleTaggedKeyterms call. */
   keytermCalls: [] as Array<{ commandTerms?: Promise<readonly string[]> }>,
   commandTarget: null as unknown,
   /** The transcription provider the stored settings name. */
   provider: "openai" as "openai" | "deepgram",
   resolveCalls: [] as Array<{ terminalId: string | undefined; timeoutMs: number }>,
+  /** The stored dictionary, heard-as rules included. */
+  dictionary: [] as unknown[],
 }));
 
 vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
@@ -87,6 +89,7 @@ vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
     this.sendAudioChunk = function () {};
     this.destroy = function () {};
     this.commitParagraphBoundary = function () {};
+    this.getSessionStats = () => null;
   },
 }));
 
@@ -127,9 +130,12 @@ vi.mock("../../../services/voiceCommandTarget.js", () => ({
 
 vi.mock("../../../services/voiceContextKeyterms.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../services/voiceContextKeyterms.js")>()),
-  assembleKeyterms: vi.fn((opts: { commandTerms?: Promise<readonly string[]> }) => {
+  assembleTaggedKeyterms: vi.fn(async (opts: { commandTerms?: Promise<readonly string[]> }) => {
     shared.keytermCalls.push(opts);
-    return shared.assembleKeyterms ? shared.assembleKeyterms() : Promise.resolve([]);
+    return ((await shared.assembleKeyterms?.()) ?? []).map((term) => ({
+      term,
+      source: "commands",
+    }));
   }),
   formatKeytermPrompt: vi.fn(() => ""),
 }));
@@ -143,7 +149,7 @@ vi.mock("../../../store.js", () => ({
           openaiApiKey: "sk-test",
           correctionEnabled: true,
           correctionModel: "gpt-6-luna",
-          dictionary: [],
+          dictionary: shared.dictionary,
           correctionCustomInstructions: "",
           language: "en",
           transcriptionModel: "gpt-live-transcribe",
@@ -297,6 +303,7 @@ describe("voiceInput — the target agent's commands", () => {
     shared.assembleKeyterms = null;
     shared.provider = "openai";
     shared.commandTarget = claudeTarget();
+    shared.dictionary = [];
 
     const win = buildMainWindow();
     cleanup = registerVoiceInputHandlers({
@@ -348,6 +355,21 @@ describe("voiceInput — the target agent's commands", () => {
     });
     expect(completions()).toEqual([
       expect.objectContaining({ text: "Slash compact", commandText: "/compact", send: true }),
+    ]);
+  });
+
+  // Commands are read from the words as heard, so a heard-as rule that takes
+  // the command's name can't hide it.
+  it("recognises a command from the words as heard, before the heard-as rules", async () => {
+    shared.dictionary = [{ term: "Revue", heardAs: ["review"], source: "manual", addedAt: 1 }];
+    await start();
+    emitTranscriptionEvent({ type: "complete", text: "Slash review the last commit." });
+    expect(completions()).toEqual([
+      expect.objectContaining({
+        text: "Slash Revue the last commit.",
+        heard: "Slash review the last commit.",
+        commandText: "/review the last commit.",
+      }),
     ]);
   });
 

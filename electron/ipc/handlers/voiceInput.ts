@@ -1119,8 +1119,9 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
           ? rewriteSpokenCommand(pieces[0], session.commandTarget.vocabulary)
           : null;
       const parts = pieces.filter(Boolean);
-      // Heard-as rules run after the commands, so a rule never eats a break
-      // or a send and a term it writes is never taken for one, and over the
+      // Heard-as rules run after the commands, the opening one above
+      // included, so a rule never eats a break, a send or a command's name and
+      // a term it writes is never taken for one, and over the
       // whole text, so a code fence spanning lines still protects what's
       // inside. Rules never cross or write a line break, so the pieces line up.
       const writtenText = rewriteHeardAs(processedText);

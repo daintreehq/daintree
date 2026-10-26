@@ -594,8 +594,9 @@ class VoiceRecordingService {
             }
             // A spoken command is written as one only when it opens the prompt:
             // the words land at the caret, so text typed ahead of it keeps the
-            // command as words. The command was read from the words as heard,
-            // so they are what it was written from.
+            // command as words. Main writes it from the words as heard, before
+            // any heard-as rule, so it has no heard text of its own: the rules
+            // reach its arguments at stop, never the spoken words it replaced.
             if (
               commandText &&
               voiceWordsOpenPrompt(panelId, projectId, buffer?.dictationSessionId)
