@@ -18,7 +18,11 @@ import type { IpcContext } from "../../../ipc/types.js";
 import type { RemoteRouter } from "../../../ipc/endpoint.js";
 import { HostRegistry, type RemoteHostsStore } from "../HostRegistry.js";
 import type { RemoteHostManager } from "../RemoteHostManager.js";
-import { RemoteHostsClient, type WindowControl } from "../RemoteHostsClient.js";
+import {
+  RemoteHostsClient,
+  type RemoteHostsClientOptions,
+  type WindowControl,
+} from "../RemoteHostsClient.js";
 import { RemoteRouterImpl } from "../RemoteRouter.js";
 import { WindowHostBinding } from "../WindowHostBinding.js";
 import { _resetRemoteServicesForTest, registerRemoteService } from "../../runtime.js";
@@ -142,6 +146,7 @@ describe("RemoteHostsClient", () => {
   let client: RemoteHostsClient;
   let router: RemoteRouter;
   let onFirstUse: Mock<() => void>;
+  let copiesOnHost: Mock<NonNullable<RemoteHostsClientOptions["copiesOnHost"]>>;
 
   beforeEach(() => {
     registry = new HostRegistry(memoryStore());
@@ -163,8 +168,10 @@ describe("RemoteHostsClient", () => {
     installRouter = vi.fn<(router: RemoteRouter | null) => void>();
     events = [];
     onFirstUse = vi.fn<() => void>();
+    copiesOnHost = vi.fn<NonNullable<RemoteHostsClientOptions["copiesOnHost"]>>(async () => []);
     client = new RemoteHostsClient({
       onFirstUse,
+      copiesOnHost,
       registry,
       manager: manager as unknown as RemoteHostManager,
       bindings,
@@ -1370,6 +1377,190 @@ describe("RemoteHostsClient", () => {
       await expect(
         client.switchWindowHost(ctxFor(5, 1), { hostId: "local", newWindow: false })
       ).resolves.toEqual({ outcome: "choose-project", hostId: "local" });
+    });
+
+    describe("from a window showing a project (#14564)", () => {
+      const copy = (projectId: string) => ({ projectId, name: "App", path: `/srv/${projectId}` });
+
+      beforeEach(() => {
+        keys.set(5, "proj-local");
+        manager.last = { projectId: "proj-2", path: "/srv/proj-2", name: "proj-2" };
+        windows.recentProjectsOnHost = vi.fn(() => ["proj-9"]);
+      });
+
+      it("lands on that project's copy on the host, ahead of anything to return to", async () => {
+        copiesOnHost.mockResolvedValueOnce([copy("proj-copy")]);
+        await expect(
+          client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false })
+        ).resolves.toEqual({ outcome: "switched", hostId: "studio-01", projectId: "proj-copy" });
+        expect(copiesOnHost).toHaveBeenCalledWith(
+          { hostId: "local", projectId: "proj-local" },
+          "studio-01"
+        );
+        expect(windows.openRemoteProject).toHaveBeenCalledWith(
+          1,
+          "studio-01",
+          "proj-copy",
+          "/srv/proj-copy",
+          undefined,
+          { requesterWebContentsId: 5 }
+        );
+        expect(manager.get("studio-01")!.describeProject).not.toHaveBeenCalled();
+        expect(manager.get("studio-01")!.lastActiveProject).not.toHaveBeenCalled();
+      });
+
+      it("lands on a host's copy the first time, with nothing there to return to", async () => {
+        manager.last = null;
+        windows.recentProjectsOnHost = vi.fn(() => []);
+        copiesOnHost.mockResolvedValueOnce([copy("proj-copy")]);
+        await expect(
+          client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false })
+        ).resolves.toEqual({ outcome: "switched", hostId: "studio-01", projectId: "proj-copy" });
+      });
+
+      it("takes the copy this window last had open there when the host has several", async () => {
+        copiesOnHost.mockResolvedValueOnce([copy("proj-a"), copy("proj-b")]);
+        windows.recentProjectsOnHost = vi.fn(() => ["proj-9", "proj-b"]);
+        await expect(
+          client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false })
+        ).resolves.toEqual({ outcome: "switched", hostId: "studio-01", projectId: "proj-b" });
+
+        // None of them in this window's history: the first by path, as the sidebar's row opens.
+        copiesOnHost.mockResolvedValueOnce([copy("proj-z"), copy("proj-a")]);
+        windows.recentProjectsOnHost = vi.fn(() => ["proj-9"]);
+        await expect(
+          client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false })
+        ).resolves.toEqual({ outcome: "switched", hostId: "studio-01", projectId: "proj-a" });
+      });
+
+      it("returns where it would have when the host has no copy, or can't say", async () => {
+        copiesOnHost.mockResolvedValueOnce([]);
+        await expect(
+          client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false })
+        ).resolves.toEqual({ outcome: "switched", hostId: "studio-01", projectId: "proj-9" });
+
+        copiesOnHost.mockResolvedValueOnce(null);
+        windows.recentProjectsOnHost = vi.fn(() => []);
+        await expect(
+          client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false })
+        ).resolves.toEqual({ outcome: "switched", hostId: "studio-01", projectId: "proj-2" });
+
+        copiesOnHost.mockRejectedValueOnce(new Error("link dropped"));
+        manager.last = null;
+        await expect(
+          client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false })
+        ).resolves.toEqual({ outcome: "choose-project", hostId: "studio-01" });
+      });
+
+      it("passes over a copy another window is showing, and never brings that window forward", async () => {
+        copiesOnHost.mockResolvedValue([copy("proj-copy")]);
+        windows.projectOwner = vi.fn((_host: string, projectId: string) =>
+          projectId === "proj-copy" ? { windowId: 2, showing: true } : null
+        );
+        windows.revealWindow = vi.fn();
+        await expect(
+          client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false })
+        ).resolves.toEqual({ outcome: "switched", hostId: "studio-01", projectId: "proj-9" });
+
+        // Nothing else to land on: the host's project list, still not the other window.
+        windows.recentProjectsOnHost = vi.fn(() => []);
+        manager.last = null;
+        await expect(
+          client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false })
+        ).resolves.toEqual({ outcome: "choose-project", hostId: "studio-01" });
+        expect(windows.revealWindow).not.toHaveBeenCalled();
+        expect(windows.openRemoteProject).not.toHaveBeenCalledWith(
+          expect.anything(),
+          "studio-01",
+          "proj-copy",
+          expect.anything(),
+          undefined,
+          expect.anything()
+        );
+      });
+
+      it("passes over a copy another window started showing while the host was answering", async () => {
+        let shownIn2 = false;
+        windows.projectOwner = vi.fn((_host: string, projectId: string) =>
+          projectId === "proj-copy" && shownIn2 ? { windowId: 2, showing: true } : null
+        );
+        copiesOnHost.mockImplementationOnce(async () => {
+          shownIn2 = true;
+          return [copy("proj-copy")];
+        });
+        await expect(
+          client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false })
+        ).resolves.toEqual({ outcome: "switched", hostId: "studio-01", projectId: "proj-9" });
+      });
+
+      it("looks for no copy for a new window, a named project, or a scratch", async () => {
+        copiesOnHost.mockResolvedValue([copy("proj-copy")]);
+        const results = [
+          await client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: true }),
+          await client.switchWindowHost(ctxFor(5, 1), {
+            hostId: "studio-01",
+            newWindow: false,
+            projectId: "proj-1",
+          }),
+        ];
+        keys.set(5, "6f1c2b9e-3a4d-4c5e-8f60-1a2b3c4d5e6f");
+        results.push(
+          await client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false })
+        );
+        expect(results.map((result) => result.outcome)).toEqual([
+          "switched",
+          "switched",
+          "switched",
+        ]);
+        expect(results.map((result) => (result as { projectId?: string }).projectId)).toEqual([
+          "proj-9",
+          "proj-1",
+          "proj-9",
+        ]);
+        expect(copiesOnHost).not.toHaveBeenCalled();
+      });
+
+      it("lands a host's project on this machine's copy of it", async () => {
+        keys.set(5, toHostScopedKey("studio-01", "proj-1"));
+        vi.mocked(windows.lastLocalProjectId).mockReturnValue("local-a");
+        copiesOnHost.mockResolvedValueOnce([copy("local-copy")]);
+        await expect(
+          client.switchWindowHost(ctxFor(5, 1), { hostId: "local", newWindow: false })
+        ).resolves.toEqual({ outcome: "switched", hostId: "local", projectId: "local-copy" });
+        expect(copiesOnHost).toHaveBeenCalledWith(
+          { hostId: "studio-01", projectId: "proj-1" },
+          "local"
+        );
+        expect(windows.openLocalProject).toHaveBeenCalledWith(1, "local-copy", undefined, {
+          requesterWebContentsId: 5,
+        });
+
+        // No copy here: this machine's last project, as before.
+        copiesOnHost.mockResolvedValueOnce([]);
+        await expect(
+          client.switchWindowHost(ctxFor(5, 1), { hostId: "local", newWindow: false })
+        ).resolves.toEqual({ outcome: "switched", hostId: "local", projectId: "local-a" });
+      });
+
+      it("gives way to a newer switch made while the host was looking for its copy", async () => {
+        let answer: (copies: ReturnType<typeof copy>[]) => void = () => {};
+        copiesOnHost.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+        const first = client.switchWindowHost(ctxFor(5, 1), {
+          hostId: "studio-01",
+          newWindow: false,
+        });
+        await vi.waitFor(() => expect(copiesOnHost).toHaveBeenCalledTimes(1));
+        vi.mocked(windows.lastLocalProjectId).mockReturnValueOnce("local-a");
+        const second = client.switchWindowHost(ctxFor(5, 1), { hostId: "local", newWindow: false });
+        await expect(first).resolves.toEqual({ outcome: "superseded", hostId: "studio-01" });
+        answer([copy("proj-copy")]);
+        await expect(second).resolves.toEqual({
+          outcome: "switched",
+          hostId: "local",
+          projectId: "local-a",
+        });
+        expect(windows.openRemoteProject).not.toHaveBeenCalled();
+      });
     });
   });
 

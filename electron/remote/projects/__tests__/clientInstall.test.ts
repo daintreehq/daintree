@@ -152,4 +152,59 @@ describe("createHostSwitchService", () => {
     ).rejects.toMatchObject({ code: "HOST_DISCONNECTED" });
     expect(connectAndWait).not.toHaveBeenCalled();
   });
+
+  it("finds the window's project's copy on the host it is switching to, without dialling either", async () => {
+    const connectAndWait = vi.fn(async () => "ready" as never);
+    const studio3 = {
+      isOpen: true,
+      call: vi.fn(async () => [
+        {
+          projectId: "p3",
+          path: "/srv/daintree",
+          name: "daintree",
+          remotes: [{ name: "origin", url: "https://github.com/daintreehq/daintree.git" }],
+          source: "registered",
+          matchedBy: "remote-url",
+          lastOpenedAt: null,
+        },
+        {
+          projectId: null,
+          path: "/srv/scan/daintree",
+          name: "daintree",
+          remotes: [{ name: "origin", url: "https://github.com/daintreehq/daintree.git" }],
+          source: "on-disk",
+          matchedBy: "remote-url",
+          lastOpenedAt: null,
+        },
+      ]),
+    };
+    const service = createHostSwitchService({
+      client: {
+        connectAndWait,
+        getWindowHost: vi.fn(() => ({ hostId: "local" }) as never),
+        list: vi.fn(
+          () =>
+            [
+              { descriptor: { id: "studio-03", name: "Studio 3" } },
+              { descriptor: { id: "studio-04", name: "Studio 4" } },
+            ] as never
+        ),
+      },
+      sessionFor: (hostId) => (hostId === "studio-03" ? (studio3 as never) : null),
+    });
+    await expect(
+      service.copiesOn({ hostId: "local", projectId: "p1" }, "studio-03")
+    ).resolves.toEqual([{ projectId: "p3", name: "daintree", path: "/srv/daintree" }]);
+    // Neither end connected: it can't say, and it never dials to find out.
+    await expect(service.copiesOn({ hostId: "local", projectId: "p1" }, "studio-04")).resolves.toBe(
+      null
+    );
+    await expect(service.copiesOn({ hostId: "studio-04", projectId: "p1" }, "local")).resolves.toBe(
+      null
+    );
+    await expect(service.copiesOn({ hostId: "local", projectId: "p1" }, "nowhere")).resolves.toBe(
+      null
+    );
+    expect(connectAndWait).not.toHaveBeenCalled();
+  });
 });
