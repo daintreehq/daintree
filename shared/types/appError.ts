@@ -8,10 +8,7 @@ import type { HostAgentLimitSnapshot } from "../utils/hostAgentLimit.js";
  * every member small and free of paths, secrets and user content.
  */
 export type AppErrorDetails =
-  | PluginHostError
-  | RequiredPluginToolsError
-  | HostSwitchOnScreenError
-  | HostAgentLimitError;
+  PluginHostError | RequiredPluginToolsError | HostSwitchOnScreenError | HostAgentLimitError;
 
 /** An agent launch the host refused at its agent ceiling, with the count it was judged on. */
 export interface HostAgentLimitError extends HostAgentLimitSnapshot {

@@ -314,7 +314,9 @@ export function enqueuePtyStartup(
         // the banner can say what's missing and offer to start without them;
         // one at the host's agent ceiling keeps the host it names.
         const spawnError =
-          requiredPluginToolsSpawnError(error) ?? hostAgentLimitSpawnError(error) ?? errnoSpawnError;
+          requiredPluginToolsSpawnError(error) ??
+          hostAgentLimitSpawnError(error) ??
+          errnoSpawnError;
 
         set((state) => {
           const _current = state.panelsById[id];

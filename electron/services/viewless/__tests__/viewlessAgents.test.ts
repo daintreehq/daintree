@@ -348,7 +348,12 @@ describe("agent.launch with no frontend", () => {
 
     expect(result).toMatchObject({
       ok: true,
-      result: { launched: false, terminalId: null, spawnStatus: "host-agent-limit", hostAgentLimit },
+      result: {
+        launched: false,
+        terminalId: null,
+        spawnStatus: "host-agent-limit",
+        hostAgentLimit,
+      },
     });
     expect(invoke.mock.calls.some(([, channel]) => channel === CHANNELS.TERMINAL_SPAWN)).toBe(
       false

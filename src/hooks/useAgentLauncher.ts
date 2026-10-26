@@ -14,10 +14,7 @@ import { isElectronAvailable } from "./useElectron";
 
 import { systemClient, terminalClient } from "@/clients";
 import { notify } from "@/lib/notify";
-import {
-  describeHostAgentLimit,
-  type HostAgentLimitSnapshot,
-} from "@shared/utils/hostAgentLimit";
+import { describeHostAgentLimit, type HostAgentLimitSnapshot } from "@shared/utils/hostAgentLimit";
 import { useHomeDir } from "@/hooks/app/useHomeDir";
 import { logError, logWarn } from "@/utils/logger";
 import { markRendererPerformance } from "@/utils/performance";

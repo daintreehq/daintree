@@ -36,7 +36,11 @@ export function readHostAgentLimit(
   excludeId?: string
 ): HostAgentLimitSnapshot | null {
   if (getRemoteService("hostServer") === undefined) return null;
-  return { host: hostName(), count: counter.countLiveAgentTerminals(excludeId), limit: hostLimit() };
+  return {
+    host: hostName(),
+    count: counter.countLiveAgentTerminals(excludeId),
+    limit: hostLimit(),
+  };
 }
 
 /**

@@ -22,7 +22,9 @@ describe("hostAgentLimitSpawnError (#14704)", () => {
 
   it("leaves every other failure to the ordinary spawn error", () => {
     expect(hostAgentLimitSpawnError(new ClientAppError("PERMISSION", "no"))).toBeNull();
-    expect(hostAgentLimitSpawnError(new ClientAppError("HOST_AGENT_LIMIT_REACHED", "no"))).toBeNull();
+    expect(
+      hostAgentLimitSpawnError(new ClientAppError("HOST_AGENT_LIMIT_REACHED", "no"))
+    ).toBeNull();
     expect(hostAgentLimitSpawnError(new Error("ENOENT"))).toBeNull();
   });
 });

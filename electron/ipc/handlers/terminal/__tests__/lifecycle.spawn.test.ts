@@ -3343,9 +3343,8 @@ describe("terminal spawn handler - host agent ceiling (#14704)", () => {
     const os = await import("os");
     const { computeHostAgentLimit } = await import("../../../../../shared/utils/hostAgentLimit.js");
     limit = computeHostAgentLimit(os.totalmem());
-    const { _resetRemoteServicesForTest, registerRemoteService } = await import(
-      "../../../../remote/runtime.js"
-    );
+    const { _resetRemoteServicesForTest, registerRemoteService } =
+      await import("../../../../remote/runtime.js");
     _resetRemoteServicesForTest();
     registerRemoteService("hostServer", {} as never);
   });
@@ -3429,9 +3428,9 @@ describe("terminal spawn handler - host agent ceiling (#14704)", () => {
   it("still opens a plain shell on a full host", async () => {
     fillWithAgents(limit);
 
-    await expect(agentSpawn("shell", { launchAgentId: undefined, command: undefined })).resolves.toBe(
-      "shell"
-    );
+    await expect(
+      agentSpawn("shell", { launchAgentId: undefined, command: undefined })
+    ).resolves.toBe("shell");
   });
 
   it("holds nothing back while Host mode is off", async () => {

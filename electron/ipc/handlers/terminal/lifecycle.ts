@@ -1808,7 +1808,10 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         CHANNELS.TERMINAL_GET_HOST_MEMORY_PAUSE,
         handleTerminalGetHostMemoryPause
       ),
-      getHostAgentLimit: op(CHANNELS.TERMINAL_GET_HOST_AGENT_LIMIT, handleTerminalGetHostAgentLimit),
+      getHostAgentLimit: op(
+        CHANNELS.TERMINAL_GET_HOST_AGENT_LIMIT,
+        handleTerminalGetHostAgentLimit
+      ),
       agentSessionList: op(CHANNELS.AGENT_SESSION_LIST, handleAgentSessionList),
       agentSessionClear: op(CHANNELS.AGENT_SESSION_CLEAR, handleAgentSessionClear),
       agentSessionGetRetention: op(

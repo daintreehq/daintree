@@ -439,7 +439,8 @@ export async function runAgentLaunch(
     ]);
   } catch (err) {
     const hostAgentLimit = hostAgentLimitRefusal(err);
-    if (hostAgentLimit !== null) return declined("host-agent-limit", null, identity, hostAgentLimit);
+    if (hostAgentLimit !== null)
+      return declined("host-agent-limit", null, identity, hostAgentLimit);
     console.warn("[Viewless] Agent launch failed:", formatErrorMessage(err, "unknown"));
     return declined("spawn-failed", null, identity);
   }

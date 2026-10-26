@@ -1233,7 +1233,10 @@ describe("PtyClient adversarial", () => {
       const client = createReadyClient();
       client.spawn("a1", baseSpawnOptions({ projectId: "p1", launchAgentId: "claude" }));
       client.spawn("a2", baseSpawnOptions({ projectId: "p2", launchAgentId: "codex" }));
-      client.spawn("a3", baseSpawnOptions({ projectId: "p2", launchAgentId: "claude", isAssistantTerminal: true }));
+      client.spawn(
+        "a3",
+        baseSpawnOptions({ projectId: "p2", launchAgentId: "claude", isAssistantTerminal: true })
+      );
       client.spawn("shell", baseSpawnOptions({ projectId: "p1" }));
       mockChild.emit("message", {
         type: "spawn-result",
