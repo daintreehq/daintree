@@ -17,6 +17,13 @@ describe("parseDictionaryInput", () => {
     expect(terms).toEqual([{ term: "Zustand", heardAs: ["zoo stand", "zu stand"] }]);
   });
 
+  it("reads comma-separated pairs one by one", () => {
+    expect(parseDictionaryInput("zoo stand -> Zustand, veet -> Vite").terms).toEqual([
+      { term: "Zustand", heardAs: ["zoo stand"] },
+      { term: "Vite", heardAs: ["veet"] },
+    ]);
+  });
+
   it("skips what a keyterm can't hold and reports it", () => {
     const result = parseDictionaryInput(`${"a".repeat(101)}, ok`);
     expect(result.terms).toEqual([{ term: "ok", heardAs: [] }]);
@@ -29,7 +36,7 @@ describe("parseDictionaryInput", () => {
 });
 
 describe("parseHeardAsField", () => {
-  it("splits on commas and new lines", () => {
-    expect(parseHeardAsField("zoo stand, zu stand\n  ,")).toEqual(["zoo stand", "zu stand"]);
+  it("splits on new lines and keeps commas inside a phrase", () => {
+    expect(parseHeardAsField("zoo stand\n  one, two \n")).toEqual(["zoo stand", "one, two"]);
   });
 });

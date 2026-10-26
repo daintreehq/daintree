@@ -140,16 +140,19 @@ export function VoiceDictionaryPage({
           source: entry.source,
           addedAt: entry.addedAt,
         }),
-      () => setRemoved((current) => current.filter((e) => e !== entry))
+      () => {
+        draftRef.current?.focus();
+        setRemoved((current) => current.filter((e) => e !== entry));
+      }
     );
   };
 
+  // The edited row may have left the search results; the add field is the fallback.
   const refocusEdit = (term: string) =>
     requestAnimationFrame(() => {
       const buttons = listRef.current?.querySelectorAll<HTMLElement>("[data-edit-term]");
-      for (const button of buttons ?? []) {
-        if (fold(button.dataset.editTerm ?? "") === fold(term)) button.focus();
-      }
+      const match = [...(buttons ?? [])].find((b) => fold(b.dataset.editTerm ?? "") === fold(term));
+      (match ?? draftRef.current)?.focus();
     });
 
   return (
@@ -316,7 +319,10 @@ export function VoiceDictionaryPage({
                             changes: { term, heardAs },
                           }),
                         () => {
-                          setEditing(null);
+                          // Another row may have been opened while this saved.
+                          setEditing((current) =>
+                            current !== null && fold(current) === fold(entry.term) ? null : current
+                          );
                           refocusEdit(term);
                         }
                       );
@@ -388,7 +394,7 @@ function EntryEditor({
   onCancel: () => void;
 }) {
   const [term, setTerm] = useState(entry.term);
-  const [heard, setHeard] = useState(entry.heardAs.join(", "));
+  const [heard, setHeard] = useState(entry.heardAs.join("\n"));
   const trimmed = term.trim();
   const heardAs = parseHeardAsField(heard);
   const tooLong =
@@ -402,11 +408,15 @@ function EntryEditor({
       : tooLong
         ? `Terms and phrases can't be longer than ${MAX_DICTIONARY_TERM_LENGTH} characters`
         : undefined;
+  const dirty =
+    trimmed !== entry.term ||
+    heardAs.length !== entry.heardAs.length ||
+    heardAs.some((phrase, i) => phrase !== entry.heardAs[i]);
   const submit = () => {
-    if (!error) onSave(trimmed, heardAs);
+    if (!error && dirty) onSave(trimmed, heardAs);
   };
   const onKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter") {
+    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       submit();
     } else if (e.key === "Escape") {
@@ -432,15 +442,16 @@ function EntryEditor({
             onChange={(e) => setTerm(e.target.value)}
             onKeyDown={onKeyDown}
           />
-          <Input
+          <Textarea
+            rows={2}
             value={heard}
             aria-label={`Heard-as phrases for ${entry.term}`}
-            placeholder="Heard as, separated by commas"
+            placeholder="Heard as, one phrase per line"
             onChange={(e) => setHeard(e.target.value)}
             onKeyDown={onKeyDown}
           />
           <SettingsRowActions>
-            <Button size="sm" variant="contrast" onClick={submit} disabled={!!error}>
+            <Button size="sm" variant="contrast" onClick={submit} disabled={!!error || !dirty}>
               Save
             </Button>
             <Button size="sm" variant="outline" onClick={onCancel}>

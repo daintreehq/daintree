@@ -45,21 +45,20 @@ export function parseDictionaryInput(text: string): ParsedDictionaryInput {
   };
 
   for (const line of text.split(/\r?\n/)) {
-    const pair = line.split(ARROW);
-    if (pair.length === 2) {
-      take(pair[1]!, pair[0]);
-      continue;
+    for (const item of line.split(",")) {
+      const pair = item.split(ARROW);
+      if (pair.length === 2) take(pair[1]!, pair[0]);
+      else take(item);
     }
-    for (const item of line.split(",")) take(item);
   }
 
   return { terms: [...byTerm.values()], skipped };
 }
 
-/** Heard-as forms typed into one field: commas or new lines between them. */
+/** Heard-as forms typed into one field, one per line: a phrase may itself hold a comma. */
 export function parseHeardAsField(text: string): string[] {
   return text
-    .split(/[\n,]/)
+    .split(/\r?\n/)
     .map((phrase) => phrase.trim())
     .filter(Boolean);
 }

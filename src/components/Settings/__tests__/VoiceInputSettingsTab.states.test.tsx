@@ -678,6 +678,7 @@ describe("VoiceInputSettingsTab dictionary", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Edit Zustand" }));
     const heard = screen.getByLabelText("Heard-as phrases for Zustand");
+    expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.change(heard, { target: { value: "zu stand" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
