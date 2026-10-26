@@ -11,13 +11,13 @@ export interface GlobalAssistantHandle {
   error: string | null;
   clearError: () => void;
   /** Start the global run, or resume the conversation it last left. Only ever on a click. */
-  start: () => Promise<void>;
-  /** Take its input for this view, explicitly. */
-  claimInput: () => Promise<void>;
+  start: () => Promise<boolean>;
+  /** Take its input for this view, explicitly. True once main has handed it over. */
+  claimInput: () => Promise<boolean>;
   /** End the run the person confirmed and start a new conversation. */
-  restart: (generation: number) => Promise<void>;
+  restart: (generation: number) => Promise<boolean>;
   /** End the run the person confirmed and forget its conversation. */
-  discard: (generation: number) => Promise<void>;
+  discard: (generation: number) => Promise<boolean>;
 }
 
 function messageOf(error: unknown, fallback: string): string {
@@ -83,13 +83,15 @@ export function useGlobalAssistant(active: boolean): GlobalAssistantHandle {
   }, [active]);
 
   const run = useCallback(
-    async (action: () => Promise<GlobalAssistantView>, fallback: string): Promise<void> => {
+    async (action: () => Promise<GlobalAssistantView>, fallback: string): Promise<boolean> => {
       setError(null);
       try {
         setView(await action());
+        return true;
       } catch (err) {
         logWarn("[GlobalAssistant] action failed", { error: err });
         setError(messageOf(err, fallback));
+        return false;
       }
     },
     []
@@ -102,8 +104,8 @@ export function useGlobalAssistant(active: boolean): GlobalAssistantHandle {
   );
 
   const claimInput = useCallback(async () => {
-    if (attachmentId === null) return;
-    await run(
+    if (attachmentId === null) return false;
+    return run(
       () => window.electron.help.claimGlobalAssistantInput(attachmentId),
       "Daintree couldn't take the global assistant's input."
     );

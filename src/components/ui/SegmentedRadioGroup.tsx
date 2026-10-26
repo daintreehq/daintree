@@ -312,9 +312,12 @@ export function SegmentedRadioGroup<T extends string>({
             {option.trailing === undefined ? (
               <span className="block truncate">{option.label}</span>
             ) : (
-              <span className="flex min-w-0 items-baseline gap-1">
+              // Centred, not baseline-aligned: a tally shares the label's metrics
+              // either way, but a glyph sits its whole height on the baseline and
+              // drops its label below its neighbours'.
+              <span className="flex min-w-0 items-center gap-1">
                 <span className="truncate">{option.label}</span>
-                <span aria-hidden="true" className="shrink-0 tabular-nums">
+                <span aria-hidden="true" className="flex shrink-0 tabular-nums">
                   {option.trailing}
                 </span>
               </span>
