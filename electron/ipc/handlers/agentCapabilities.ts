@@ -100,10 +100,8 @@ export const agentCapabilitiesNamespace = defineIpcNamespace({
         if (agentId === "__proto__" || agentId === "constructor" || agentId === "prototype") {
           throw new Error("Invalid agentId: reserved keyword");
         }
-        const config = getEffectiveAgentConfig(agentId);
-        if (!config) {
-          return false;
-        }
+        // No registry gate: this runs on the Shell (#14702), and a pin for an
+        // agent that only a host defines is still this machine's pin.
         return isAgentPinned(agentToolbarPin(readAgentToolbarPins(), agentId));
       }
     ),
