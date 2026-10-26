@@ -190,10 +190,14 @@ export const useDictationRangeStore = create<DictationRangeState>()((set, get) =
     if (!record || !last || last.insertion.edited || last.insertion.from >= last.insertion.to) {
       return null;
     }
+    // Only an unedited envelope holds nothing but the session's own text, so
+    // only there is a newline past the utterance one of its paragraph breaks
+    // rather than one the user typed.
     const tail = draft.slice(last.insertion.to, record.range.to);
-    const to = /^\n*$/.test(tail)
-      ? Math.max(last.insertion.to, record.range.to)
-      : last.insertion.to;
+    const to =
+      !record.range.edited && /^\n*$/.test(tail)
+        ? Math.max(last.insertion.to, record.range.to)
+        : last.insertion.to;
     const from = last.insertion.from;
     if (to > draft.length) return null;
     const trimmed: DictationRecord = {

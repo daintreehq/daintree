@@ -57,7 +57,7 @@ import {
   stripPseudoDevicePrefix,
   type VoiceMicDevice,
 } from "@/services/voiceMicDevices";
-import { isScratchCommand } from "@/services/voiceScratchCommand";
+import { isScratchCommand, recordScratchLanded } from "@/services/voiceScratchCommand";
 import { applyDraftEdits, planFileReferenceEdits } from "@/services/voiceFileReferences";
 
 const LOG_PREFIX = "[VoiceRecording]";
@@ -2220,8 +2220,10 @@ class VoiceRecordingService {
       .getState()
       .takeLastUtterance({ sessionId, panelId, projectId }, draft);
     if (!span) return;
+    const next = draft.slice(0, span.from) + draft.slice(span.to);
     useVoiceRecordingStore.getState().shiftDraftOffsets(panelId, span.to, -(span.to - span.from));
-    inputStore.setDraftInput(panelId, draft.slice(0, span.from) + draft.slice(span.to), projectId);
+    inputStore.setDraftInput(panelId, next, projectId);
+    recordScratchLanded(panelId, projectId, next);
     inputStore.bumpExternalDraftRevision();
   }
 

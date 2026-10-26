@@ -269,6 +269,44 @@ describe("VoiceRecordingService — scratch that (#14636)", () => {
     expect(draft()).toBe("One. Tw0.");
   });
 
+  it("never takes a newline the user typed between utterances", async () => {
+    const { draft, setDraft } = await setup();
+
+    complete("One.", "a");
+    setDraft(draft() + "\n");
+    complete("Two.", "b");
+    complete("Scratch that.", "c");
+    expect(draft()).toBe("One.\n");
+    complete("Scratch that.", "d");
+
+    expect(draft()).toBe("\n");
+  });
+
+  it("removes the utterance on a completion with no item id, keeping none of its words", async () => {
+    const { draft, voiceStore } = await setup("Existing.");
+
+    complete("One.");
+    callbacks.delta!({ sessionId: SESSION_ID, text: "Scratch that" });
+    complete("Scratch that.");
+
+    expect(draft()).toBe("Existing.");
+    const buffer = voiceStore.getState().panelBuffers[PANEL];
+    expect(buffer?.completedSegments).toEqual(["One."]);
+    expect(buffer?.liveText).toBe("");
+  });
+
+  it("marks the draft it left for the composer, so emptying it stays undoable", async () => {
+    const { draft } = await setup();
+    const { takeScratchLanded } = await import("@/services/voiceScratchCommand");
+
+    complete("One.", "a");
+    complete("Scratch that.", "b");
+
+    expect(draft()).toBe("");
+    expect(takeScratchLanded(PANEL, PROJECT, "")).toBe(true);
+    expect(takeScratchLanded(PANEL, PROJECT, "")).toBe(false);
+  });
+
   it("takes the paragraph break the utterance ended with", async () => {
     const { draft } = await setup();
 
