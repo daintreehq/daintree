@@ -241,13 +241,15 @@ describe("VoiceCorrectionService integration — target commands", () => {
     15_000
   );
 
-  it.skipIf(!OPENAI_API_KEY).each([
-    "the review skill is broken",
-    "compact cars use less space",
-    "explain the compact command",
-    "we should review the last commit later",
-    "don't compact the conversation yet",
-  ])(
+  it
+    .skipIf(!OPENAI_API_KEY)
+    .each([
+      "the review skill is broken",
+      "compact cars use less space",
+      "explain the compact command",
+      "we should review the last commit later",
+      "don't compact the conversation yet",
+    ])(
     "leaves %j as prose",
     async (rawText) => {
       const result = await new VoiceCorrectionService().correct(

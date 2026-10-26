@@ -826,7 +826,10 @@ describe("VoiceCorrectionService", () => {
     it("keys the prompt cache by target", async () => {
       const fetchMock = stubReply("Hi.");
       const svc = new VoiceCorrectionService();
-      await svc.correct({ rawText: "hi" }, { ...BASE_SETTINGS, commandTarget: targetFor("claude") });
+      await svc.correct(
+        { rawText: "hi" },
+        { ...BASE_SETTINGS, commandTarget: targetFor("claude") }
+      );
       await svc.correct({ rawText: "hi" }, { ...BASE_SETTINGS, commandTarget: targetFor("codex") });
       const key = (call: number) =>
         JSON.parse((fetchMock.mock.calls[call] as [string, RequestInit])[1].body as string)
