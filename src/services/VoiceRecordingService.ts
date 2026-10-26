@@ -55,7 +55,8 @@ import {
 import { applyDraftEdits, planFileReferenceEdits } from "@/services/voiceFileReferences";
 
 const LOG_PREFIX = "[VoiceRecording]";
-const REPLACED_ELSEWHERE_ANNOUNCEMENT = "Dictation stopped because it started in another window or project.";
+const REPLACED_ELSEWHERE_ANNOUNCEMENT =
+  "Dictation stopped because it started in another window or project.";
 
 type StartStepLogger = (step: string, details?: Record<string, unknown>) => void;
 

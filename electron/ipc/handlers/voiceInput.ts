@@ -1019,10 +1019,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     return drainSession(session, "stopped");
   };
 
-  const handleFlushParagraph = (
-    ctx: IpcContext,
-    sessionId: string
-  ): { rawText: string | null } => {
+  const handleFlushParagraph = (ctx: IpcContext, sessionId: string): { rawText: string | null } => {
     const session = liveSession;
     // Until the session is active, the service's provider belongs to no one.
     if (ownedBy(session, sessionId, ctx.webContentsId) && session?.phase !== "starting") {
@@ -1031,7 +1028,11 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     return { rawText: null };
   };
 
-  const handleAudioChunk = (event: Electron.IpcMainEvent, sessionId: unknown, chunk: ArrayBuffer) => {
+  const handleAudioChunk = (
+    event: Electron.IpcMainEvent,
+    sessionId: unknown,
+    chunk: ArrayBuffer
+  ) => {
     const session = liveSession;
     // Audio for a session that isn't live — another view's, or one that has
     // already ended — must never reach the provider or the held buffer.
