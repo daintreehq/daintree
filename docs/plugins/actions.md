@@ -196,7 +196,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `git.discardFileChanges` | Discard file changes | confirm | `filePath`, `worktreeId?`, `worktreePath?` |
 | `git.fetch` | Fetch | safe | `cwd?`, `prune?`, `worktreeId?`, `worktreePath?` |
 | `git.forcePushWithLease` | Force push with lease | confirm | `cwd?`, `worktreeId?`, `worktreePath?` |
-| `git.getFileDiff` | Get file diff | safe | `filePath`, `status`, `cwd?`, `ignoreWhitespace?`, `maxBytes?`, `offset?`, `worktreeId?`, `worktreePath?` |
+| `git.getFileDiff` | Get file diff | safe | `filePath`, `status`, `cwd?`, `ignoreWhitespace?`, `maxBytes?`, `offset?`, `side?`, `worktreeId?`, `worktreePath?` |
 | `git.getProjectPulse` | Get project pulse | safe | `forceRefresh?`, `includeDelta?`, `includeRecentCommits?`, `rangeDays?`, `worktreeId?`, `worktreePath?` |
 | `git.getStagingStatus` | Get staging status | safe | `cwd?`, `limit?`, `offset?`, `worktreeId?`, `worktreePath?` |
 | `git.listCommits` | List commits | safe | `branch?`, `cursor?`, `cwd?`, `limit?`, `offset?`, `search?`, `skip?`, `worktreeId?`, `worktreePath?` |
