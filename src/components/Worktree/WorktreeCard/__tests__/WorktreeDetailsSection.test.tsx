@@ -10,6 +10,7 @@ import type { WorktreeChanges } from "@shared/types/git";
 import type { ComputedSubtitle } from "../hooks/useWorktreeStatus";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { actionService } from "@/services/ActionService";
+import { useReviewMarksStore } from "@/store/reviewMarksStore";
 import {
   WorktreeDetailsSection,
   WorktreeDeleteErrorBanner,
@@ -718,5 +719,65 @@ describe("WorktreeDetailsSection — repository command approval", () => {
   it("stays out of the way when nothing needs approval", () => {
     renderSection();
     expect(screen.queryByTestId("worktree-command-approval")).toBeNull();
+  });
+});
+
+describe("WorktreeDetailsSection review change hint", () => {
+  const COMMIT = "c".repeat(40);
+
+  function setMark() {
+    useReviewMarksStore.setState({
+      marks: {
+        "test-wt": {
+          markedAt: 2000,
+          capturedAt: 1000,
+          head: { kind: "branch", branch: "feature/test", commit: COMMIT },
+          base: { ref: null, tip: null },
+          complete: true,
+          pathCount: 1,
+          revision: 1,
+        },
+      },
+      loaded: true,
+    });
+  }
+
+  afterEach(() => {
+    useReviewMarksStore.setState({ marks: {}, revision: 0, loaded: false });
+  });
+
+  it("shows the hint beside the file count once HEAD has moved", () => {
+    setMark();
+    renderSection({ worktree: withChanges({ headOid: "d".repeat(40) }) });
+    expect(screen.getByText(/Changed since review/)).toBeDefined();
+    expect(screen.getByText(/3 files/)).toBeDefined();
+  });
+
+  it("shows nothing when the marked worktree hasn't been seen to move", () => {
+    setMark();
+    renderSection({ worktree: withChanges({ headOid: COMMIT, latestFileMtime: 900 }) });
+    expect(screen.queryByText(/Changed since review/)).toBeNull();
+  });
+
+  it("shows nothing without a mark", () => {
+    renderSection({ worktree: withChanges({ headOid: "d".repeat(40) }) });
+    expect(screen.queryByText(/Changed since review/)).toBeNull();
+  });
+
+  it("shows nothing for a mark made on another branch", () => {
+    setMark();
+    renderSection({
+      worktree: { ...withChanges({ headOid: "d".repeat(40) }), branch: "feature/other" },
+    });
+    expect(screen.queryByText(/Changed since review/)).toBeNull();
+  });
+
+  it("shows the hint on a clean worktree whose HEAD moved", () => {
+    setMark();
+    renderSection({
+      worktree: withChanges({ headOid: "d".repeat(40), changedFileCount: 0 }),
+      hasChanges: false,
+    });
+    expect(screen.getByText(/Changed since review/)).toBeDefined();
   });
 });

@@ -74,6 +74,7 @@ import { ActivityLight } from "./ActivityLight";
 import { CollapsedSessionIndicators } from "./WorktreeCard/CollapsedSessionIndicators";
 import { Badge } from "@/components/ui/badge";
 import { pluralize } from "@/lib/pluralize";
+import { useReviewChangeHint } from "@/hooks/useReviewChangeHint";
 
 /**
  * Column tracks shared by the header and every row, so each section sits on
@@ -328,6 +329,7 @@ export function WorktreeOverviewRow({
   const PrIcon = showPr ? getPrStateGlyph(pr.state) : null;
   const ci = showPr ? getCIStatusVisual(pr.ciStatus) : null;
 
+  const reviewChangeLine = useReviewChangeHint(worktree);
   const changes = worktree.worktreeChanges;
   const fileCount = changes?.changedFileCount ?? 0;
   const insertions = changes?.insertions ?? changes?.totalInsertions ?? 0;
@@ -677,6 +679,9 @@ export function WorktreeOverviewRow({
                   "Clean"
                 )}
               </div>
+              {reviewChangeLine && (
+                <div className="mt-1 truncate text-2xs text-text-secondary">{reviewChangeLine}</div>
+              )}
               {((fileCount > 0 && (insertions > 0 || deletions > 0)) ||
                 ahead > 0 ||
                 behind > 0) && (
