@@ -1,4 +1,4 @@
-import { GitBranch, RefreshCw, Server } from "lucide-react";
+import { FolderGit2, RefreshCw, Server } from "lucide-react";
 import { LOCAL_HOST_ID, type HostId, type HostPlatform } from "@shared/types/remoteHosts";
 import { getViewHostId } from "@/hooks/useHostConnection";
 import { isRemoteShellSupported } from "@/lib/remoteHosts";
@@ -386,13 +386,17 @@ function rowClass(inset: string) {
   );
 }
 
-function WorktreeRowContent({ option }: { option: Extract<OtherHostOption, { kind: "worktree" }> }) {
+function WorktreeRowContent({
+  option,
+}: {
+  option: Extract<OtherHostOption, { kind: "worktree" }>;
+}) {
   const { worktree } = option;
   const state = worktreeState(worktree);
   return (
     <>
       <StatusSlotSpacer />
-      <CommandTile icon={GitBranch} tone="manage" />
+      <CommandTile icon={FolderGit2} tone="manage" />
       <div className="min-w-0 flex-1">
         <div
           className={cn(
@@ -480,7 +484,9 @@ export function OtherHostsSection({
         onPointerMove={onHoverKey ? () => onHoverKey(option.key) : undefined}
         className={cn(
           rowClass(inset),
-          option.kind === "project" || option.kind === "worktree" ? undefined : "text-text-secondary"
+          option.kind === "project" || option.kind === "worktree"
+            ? undefined
+            : "text-text-secondary"
         )}
         onClick={(event) => {
           if (otherHostOptionCloses(option)) onChosen();

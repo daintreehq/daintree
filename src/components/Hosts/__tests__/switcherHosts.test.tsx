@@ -120,7 +120,7 @@ beforeEach(() => {
         },
       },
       hostSwitch: { locate },
-      hostMetrics: { listWorktrees },
+      hostMetrics: { listWorktrees, onEvent: () => () => {} },
     },
   });
 });
