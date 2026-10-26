@@ -137,6 +137,10 @@ function setupGlobals(
     onError: on("error"),
     onStatus: on("status"),
     onSessionEnded: on("ended"),
+    onLiveSession: vi.fn(() => () => {}),
+    onStopRequested: vi.fn(() => () => {}),
+    onRevealRequested: vi.fn(() => () => {}),
+    getLiveSession: vi.fn().mockResolvedValue({ revision: 0, session: null }),
     getSettings: vi.fn(async () => ({
       enabled: true,
       openaiApiKey: "sk-key",
