@@ -42,8 +42,9 @@ export function useVoiceWaitSubmit({
     sendFromEditorRef.current = sendFromEditor;
   }, [sendFromEditor]);
 
-  // Each Enter is its own attempt. After Escape and a second Enter, the first
-  // continuation must neither send nor unlock the composer under the second.
+  // Each Enter is its own attempt, and only the active one may send or unlock
+  // the composer: after Escape and a second Enter, the first continuation
+  // must do neither under the second.
   const attemptRef = useRef(0);
   const activeAttemptRef = useRef<number | null>(null);
   const [voiceSubmitPhase, setVoiceSubmitPhase] = useState<VoiceSubmitPhase | null>(null);
@@ -54,7 +55,6 @@ export function useVoiceWaitSubmit({
     return () => {
       if (activeAttemptRef.current === null) return;
       activeAttemptRef.current = null;
-      attemptRef.current++;
       useTerminalInputStore.getState().setVoiceSubmitting(terminalId, false);
     };
   }, [terminalId]);
@@ -66,7 +66,7 @@ export function useVoiceWaitSubmit({
     const attempt = ++attemptRef.current;
     activeAttemptRef.current = attempt;
     const isCurrentAttempt = () =>
-      attemptRef.current === attempt &&
+      activeAttemptRef.current === attempt &&
       useTerminalInputStore.getState().isVoiceSubmitting(terminalId);
 
     store.setVoiceSubmitting(terminalId, true);
@@ -122,7 +122,7 @@ export function useVoiceWaitSubmit({
 
         sendFromEditorRef.current();
       } finally {
-        if (attemptRef.current === attempt) {
+        if (activeAttemptRef.current === attempt) {
           activeAttemptRef.current = null;
           useTerminalInputStore.getState().setVoiceSubmitting(terminalId, false);
           setVoiceSubmitPhase(null);
@@ -141,7 +141,6 @@ export function useVoiceWaitSubmit({
   const cancelVoiceWaitSubmit = useCallback(() => {
     const store = useTerminalInputStore.getState();
     if (!store.isVoiceSubmitting(terminalId)) return false;
-    attemptRef.current++;
     activeAttemptRef.current = null;
     store.setVoiceSubmitting(terminalId, false);
     setVoiceSubmitPhase(null);
