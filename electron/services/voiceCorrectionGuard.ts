@@ -326,21 +326,21 @@ function keepsProtectedSpans(raw: string, corrected: string): boolean {
   );
 }
 
-function segmentWords(text: string): string[] {
-  const words: string[] = [];
-  for (const segment of wordSegmenter.segment(text.toLowerCase())) {
-    if (segment.isWordLike) words.push(segment.segment);
-  }
-  return words;
+function numberWords(tokens: readonly WordToken[]): string[] {
+  return tokens.flatMap((token) => (NUMBER_WORDS.has(token.word) ? [token.word] : []));
 }
 
-function numbersMatch(raw: string, corrected: string): boolean {
-  const numberWords = (text: string) => segmentWords(text).filter((w) => NUMBER_WORDS.has(w));
+function numbersMatch(
+  raw: string,
+  corrected: string,
+  rawNumberWords: readonly string[],
+  correctedNumberWords: readonly string[]
+): boolean {
   return (
     sameSequence(raw.match(NUMBER_RE) ?? [], corrected.match(NUMBER_RE) ?? []) &&
     sameSequence(raw.match(DIGIT_RUN_RE) ?? [], corrected.match(DIGIT_RUN_RE) ?? []) &&
     sameSequence(raw.match(HAN_NUMERAL_RE) ?? [], corrected.match(HAN_NUMERAL_RE) ?? []) &&
-    sameSequence(numberWords(raw), numberWords(corrected))
+    sameSequence(rawNumberWords, correctedNumberWords)
   );
 }
 
@@ -352,10 +352,13 @@ function numbersMatch(raw: string, corrected: string): boolean {
 function keepsNumbers(
   raw: string,
   corrected: string,
+  rawTokens: readonly WordToken[],
+  correctedTokens: readonly WordToken[],
   enumerators: readonly Enumerator[],
   markerValues: readonly number[]
 ): boolean {
-  if (numbersMatch(raw, corrected)) return true;
+  const correctedNumberWords = numberWords(correctedTokens);
+  if (numbersMatch(raw, corrected, numberWords(rawTokens), correctedNumberWords)) return true;
   const counted = enumerators.filter((enumerator) => enumerator.value !== undefined);
   if (
     counted.length === 0 ||
@@ -366,11 +369,16 @@ function keepsNumbers(
   ) {
     return false;
   }
-  const spoken = blankRanges(
-    raw,
-    counted.map((enumerator) => ({ start: enumerator.valueStart, end: enumerator.end }))
+  const spokenCounts = counted.map((enumerator) => ({
+    start: enumerator.valueStart,
+    end: enumerator.end,
+  }));
+  return numbersMatch(
+    blankRanges(raw, spokenCounts),
+    corrected,
+    numberWords(rawTokens.filter((token) => !overlaps(spokenCounts, token))),
+    correctedNumberWords
   );
-  return numbersMatch(spoken, corrected);
 }
 
 interface Range {
@@ -600,6 +608,7 @@ function freeEnumerators(
 }
 
 function normalizeWord(word: string): string {
+  if (!word.includes("'") && !word.includes("’")) return NOT_FORMS.has(word) ? "not" : word;
   if (CONTRACTED_NOT_RE.test(word)) return "not";
   const bare = word.replace(APOSTROPHE_RE, "");
   return NOT_FORMS.has(bare) ? "not" : bare;
@@ -647,6 +656,8 @@ function mergeJoinedWords(raw: readonly WordToken[], corrected: readonly string[
   for (const { word } of raw) {
     if (available.has(word)) available.set(word, available.get(word)! - 1);
   }
+  // Nothing the cleanup wrote is missing from the raw words, so nothing was joined.
+  if (![...available.values()].some((left) => left > 0)) return [...raw];
   const take = (parts: readonly WordToken[]) => {
     const word = parts.map((part) => part.word).join("");
     const left = available.get(word) ?? 0;
@@ -809,21 +820,37 @@ export function validateCorrection(raw: string, corrected: string): CorrectionGu
   const rawText = sameSequence(rawLayout.values.map(String), correctedLayout.values.map(String))
     ? rawLayout.text
     : raw;
-  const protectedRanges = findProtectedRanges(raw);
-  const enumerators = correctedLayout.items >= 2 ? findEnumerators(rawText, protectedRanges) : [];
-  if (!keepsNumbers(rawText, correctedLayout.text, enumerators, correctedLayout.values)) {
+  // Only the allowances need these, so a plain cleanup costs what it did before.
+  let protectedRanges: ProtectedRange[] | undefined;
+  const rawProtectedRanges = () => (protectedRanges ??= findProtectedRanges(raw));
+  const enumerators =
+    correctedLayout.items >= 2 ? findEnumerators(rawText, rawProtectedRanges()) : [];
+  // Number words come from the same pass as the word checks: no filler or
+  // spoken command contains one.
+  const correctedTokens = contentTokens(correctedLayout.text);
+  const spokenTokens = contentTokens(rawText);
+  if (
+    !keepsNumbers(
+      rawText,
+      correctedLayout.text,
+      spokenTokens,
+      correctedTokens,
+      enumerators,
+      correctedLayout.values
+    )
+  ) {
     return { ok: false, reason: "number" };
   }
 
-  const correctedWords = contentTokens(correctedLayout.text).map((token) => token.word);
-  const rawTokens = mergeJoinedWords(contentTokens(rawText), correctedWords);
+  const correctedWords = correctedTokens.map((token) => token.word);
+  const rawTokens = mergeJoinedWords(spokenTokens, correctedWords);
   const verdict = compareWords(
     rawTokens.map((token) => token.word),
     correctedWords
   );
   if (verdict.ok) return verdict;
 
-  const retractions = findRetractions(rawText, protectedRanges);
+  const retractions = findRetractions(rawText, rawProtectedRanges());
   if (retractions.length === 0 && enumerators.length === 0) return verdict;
   const alignment = alignWords(
     rawTokens.map((token) => token.word),
