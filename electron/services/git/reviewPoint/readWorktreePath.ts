@@ -52,14 +52,7 @@ export function blobId(format: ObjectFormat, content: Buffer): string {
 
 export function statSignature(stats: BigIntStats | null): StatSignature {
   if (!stats) return "absent";
-  return [
-    stats.mode,
-    stats.dev,
-    stats.ino,
-    stats.size,
-    stats.mtimeNs,
-    stats.ctimeNs,
-  ].join(":");
+  return [stats.mode, stats.dev, stats.ino, stats.size, stats.mtimeNs, stats.ctimeNs].join(":");
 }
 
 export async function lstatOrNull(target: string | Buffer): Promise<BigIntStats | null> {
@@ -124,9 +117,7 @@ export async function readWorktreePath(
   // can't each spend the same remaining budget.
   budget.remainingBytes -= size;
 
-  const executable = fileModeTracked
-    ? (before.mode & 0o100n) !== 0n
-    : indexMode === "100755";
+  const executable = fileModeTracked ? (before.mode & 0o100n) !== 0n : indexMode === "100755";
   const mode = executable ? "100755" : "100644";
 
   // O_NOFOLLOW and O_NONBLOCK so a path swapped for a symlink or a FIFO after

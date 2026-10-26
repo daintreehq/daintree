@@ -51,7 +51,9 @@ const indexIdentity = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("conflicted"),
     stages: z
-      .array(z.object({ stage: z.union([z.literal(1), z.literal(2), z.literal(3)]), ...gitEntry.shape }))
+      .array(
+        z.object({ stage: z.union([z.literal(1), z.literal(2), z.literal(3)]), ...gitEntry.shape })
+      )
       .min(1)
       .max(3),
   }),
@@ -177,7 +179,9 @@ export const ReviewPointSchema = z.object({
        * Listed up to a cap; `uncoveredCount` is the full number, or null when
        * the change set couldn't be listed and the number is unknown.
        */
-      uncovered: z.array(z.object({ ...reviewPointPath, reason: z.enum(REVIEW_POINT_GAP_REASONS) })),
+      uncovered: z.array(
+        z.object({ ...reviewPointPath, reason: z.enum(REVIEW_POINT_GAP_REASONS) })
+      ),
       uncoveredCount: z.number().int().nonnegative().nullable(),
     })
     .nullable(),
@@ -194,11 +198,7 @@ export type ReviewPointIncomplete = NonNullable<ReviewPoint["incomplete"]>;
 export type ReviewPointUncovered = ReviewPointIncomplete["uncovered"][number];
 
 export type ReviewPointCaptureFailure =
-  | "not-a-repository"
-  | "invalid-request"
-  | "cancelled"
-  | "deadline"
-  | "git-failed";
+  "not-a-repository" | "invalid-request" | "cancelled" | "deadline" | "git-failed";
 
 export type ReviewPointCaptureResult =
   | { kind: "captured"; point: ReviewPoint }

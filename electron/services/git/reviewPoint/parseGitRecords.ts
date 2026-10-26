@@ -160,8 +160,10 @@ export interface TreeDiffRecord {
 }
 
 /**
- * `git diff-tree -r -z --no-renames <a> <b>` in raw format. Plumbing never
- * detects renames unless asked, so every record names exactly one path.
+ * Raw `-z` diff records from `diff-tree` or `diff-index --cached`, run with
+ * `--no-renames`: plumbing never detects renames unless asked, so every record
+ * names exactly one path. `U` is `diff-index`'s unmerged path, HEAD's side on
+ * the left.
  */
 export function parseDiffTreeRaw(output: Buffer): TreeDiffRecord[] {
   const parts = splitNul(output);
@@ -171,7 +173,7 @@ export function parseDiffTreeRaw(output: Buffer): TreeDiffRecord[] {
     if (header.length === 0) continue;
     const fields = header[0] === 0x3a ? header.toString("latin1").slice(1).split(" ") : [];
     const path = parts[i + 1];
-    if (fields.length !== 5 || path === undefined || !/^[ADMT]$/.test(fields[4])) {
+    if (fields.length !== 5 || path === undefined || !/^[ADMTU]$/.test(fields[4])) {
       throw new Error("Malformed tree diff record");
     }
     i++;

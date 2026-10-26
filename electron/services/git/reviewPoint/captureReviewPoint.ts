@@ -475,7 +475,10 @@ async function capture(
             reasons: [...reasons].sort(),
             uncovered: uncovered
               .slice(0, limits.maxUncoveredListed)
-              .map((gap): ReviewPointUncovered => ({ ...pathFields(gap.path), reason: gap.reason })),
+              .map((gap): ReviewPointUncovered => ({
+                ...pathFields(gap.path),
+                reason: gap.reason,
+              })),
             uncoveredCount: listingComplete ? uncovered.length : null,
           },
   };
@@ -685,8 +688,13 @@ async function readSubmodule(target: string, git: Git): Promise<WorktreeOutcome>
     // An unpopulated submodule is an empty directory, which git counts as
     // unchanged; anything else in there is nothing git can vouch for.
     return {
-      identity: { kind: "submodule", commit: null, contents: names.length === 0 ? "clean" : "unknown" },
-      recheck: async () => (await fs.promises.readdir(target).catch(() => [])).length === names.length,
+      identity: {
+        kind: "submodule",
+        commit: null,
+        contents: names.length === 0 ? "clean" : "unknown",
+      },
+      recheck: async () =>
+        (await fs.promises.readdir(target).catch(() => [])).length === names.length,
     };
   }
 
@@ -710,8 +718,19 @@ async function readSubmodule(target: string, git: Git): Promise<WorktreeOutcome>
   let dirty: boolean;
   try {
     const out = await git(
-      [...bound, "status", "--porcelain=v2", "-z", "--untracked-files=normal", "--ignore-submodules=dirty"],
-      { cwd: target, config: disableFilters(settings.filterDrivers), maxStdoutBytes: SUBMODULE_STATUS_BYTES }
+      [
+        ...bound,
+        "status",
+        "--porcelain=v2",
+        "-z",
+        "--untracked-files=normal",
+        "--ignore-submodules=dirty",
+      ],
+      {
+        cwd: target,
+        config: disableFilters(settings.filterDrivers),
+        maxStdoutBytes: SUBMODULE_STATUS_BYTES,
+      }
     );
     dirty = out.stdout.length > 0;
   } catch (error) {
@@ -767,7 +786,11 @@ function indexIdentity(candidate: Candidate): ReviewPointIndexIdentity {
   }
   if (records.length > 0) {
     return conflicted(
-      records.map((record) => ({ stage: record.stage as 1 | 2 | 3, mode: record.mode, oid: record.oid }))
+      records.map((record) => ({
+        stage: record.stage as 1 | 2 | 3,
+        mode: record.mode,
+        oid: record.oid,
+      }))
     );
   }
   // Committed but not in status: the index matches HEAD.
