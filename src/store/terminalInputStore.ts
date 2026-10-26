@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { EditorState } from "@codemirror/state";
+import { makeDraftKey } from "@/lib/draftKey";
 
 const MAX_HISTORY_SIZE = 100;
 
@@ -25,18 +26,6 @@ export function triggerStashInput(terminalId: string): void {
 
 export function triggerPopStash(terminalId: string): void {
   inputControllers.get(terminalId)?.pop();
-}
-
-/**
- * Creates a composite key for draft inputs that includes the project context.
- * This allows draft inputs to persist across project switches by associating
- * them with both the project and terminal ID.
- *
- * Key format: `{projectId}:{terminalId}` when projectId is provided,
- * otherwise just `{terminalId}` for backward compatibility.
- */
-function makeDraftKey(terminalId: string, projectId?: string): string {
-  return projectId ? `${projectId}:${terminalId}` : terminalId;
 }
 
 function deleteTerminalKeys<V>(map: Map<string, V>, terminalId: string): Map<string, V> {

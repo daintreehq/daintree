@@ -185,6 +185,11 @@ interface VoiceTranscriptBuffer {
    * in-session state.
    */
   sessionCorrectedText: string | null;
+  /**
+   * Renderer-side identity of the session that last opened this buffer. Ties
+   * the text the session writes to its dictation range (`dictationRangeStore`).
+   */
+  dictationSessionId: string | null;
 }
 
 /**
@@ -281,6 +286,7 @@ function getBuffer(
       transcriptPhase: "idle" as VoiceTranscriptPhase,
       correctionRange: null,
       sessionCorrectedText: null,
+      dictationSessionId: null,
     }
   );
 }
@@ -358,6 +364,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
               transcriptPhase: "idle" as VoiceTranscriptPhase,
               correctionRange: null,
               sessionCorrectedText: null,
+              dictationSessionId: crypto.randomUUID(),
             },
           },
         })),
