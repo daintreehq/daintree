@@ -1144,6 +1144,7 @@ class VoiceRecordingService {
     this.clearTimers();
     // The worklet forwards and meters nothing more for this session.
     this.generation++;
+    const wasMicLive = useVoiceRecordingStore.getState().micSignal === "live";
 
     if (record) {
       const { panelId, projectId } = target;
@@ -1166,6 +1167,8 @@ class VoiceRecordingService {
 
     if (this.openingAudio) this.flushOpeningAudio(this.openingAudio);
     this.cleanupAudioCapture();
+    // After capture closes, as for a stop, and only where the start was cued.
+    if (wasMicLive) this.playCue("dictation-stop");
     const remoteCancel = sessionId
       ? window.electron.voiceInput.cancel(sessionId).catch(() => {})
       : null;

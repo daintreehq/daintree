@@ -95,6 +95,7 @@ const ipc = {
   correct: vi.fn<(request: { rawText: string }) => Promise<unknown>>(),
   stop: vi.fn<(sessionId: string) => Promise<unknown>>(),
   cancel: vi.fn<(sessionId: string) => Promise<unknown>>(),
+  playUiEvent: vi.fn<(id: string) => Promise<unknown>>(),
 };
 
 function stubElectron() {
@@ -137,6 +138,7 @@ function stubElectron() {
       onSuspend: vi.fn(() => () => {}),
       onWake: vi.fn(() => () => {}),
     },
+    notification: { playUiEvent: ipc.playUiEvent },
   };
   vi.stubGlobal("window", {
     electron,
@@ -226,6 +228,7 @@ describe("VoiceRecordingService — Escape cancels a dictation (#14631)", () => 
     ipc.correct.mockReset();
     ipc.stop.mockReset().mockResolvedValue({ rawText: null });
     ipc.cancel.mockReset().mockResolvedValue(undefined);
+    ipc.playUiEvent.mockReset().mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -455,6 +458,23 @@ describe("VoiceRecordingService — Escape cancels a dictation (#14631)", () => 
     const discarded: unknown = Reflect.get(service, "discardedSessionIds");
     expect(discarded).toEqual(new Set());
   });
+
+  it.each([
+    ["live", ["dictation-stop"]],
+    ["pending", []],
+  ] as const)(
+    "cues the end of a cancelled dictation only once the mic was %s",
+    async (signal, cues) => {
+      const { service, voiceStore, settled } = await setup();
+      voiceStore.getState().setMicSignal(signal);
+
+      complete("Hello.", "item-a");
+      service.handleEscape(PANEL);
+      await settled();
+
+      expect(ipc.playUiEvent.mock.calls.map(([id]) => id)).toEqual(cues);
+    }
+  );
 
   it("does nothing more for a second Escape once the dictation is cancelled", async () => {
     const { service, settled } = await setup();
