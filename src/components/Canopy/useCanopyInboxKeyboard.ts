@@ -6,8 +6,9 @@ import {
   type CanopyCardHandlers,
   type CanopyPaneFocus,
 } from "./CanopyCard";
-import type { CanopyInbox, CanopyItem } from "./canopyModel";
+import type { CanopyItem } from "./canopyModel";
 import type { CanopyAssistantItem } from "./canopyAssistants";
+import { stepEntry, type CanopyInboxEntry } from "./canopyInboxProjection";
 
 /**
  * ⌘↑/⌘↓ on macOS, Alt+↑/↓ elsewhere (Slack's channel switch): the agent above
@@ -42,9 +43,8 @@ function paneFocusOf(element: Element | null): CanopyPaneFocus {
 export function useCanopyInboxKeyboard({
   visible,
   listed,
-  shownInbox,
   shownAssistants,
-  archivedShown,
+  navigation,
   focusedIndex,
   activeIndex,
   focusedItem,
@@ -55,6 +55,7 @@ export function useCanopyInboxKeyboard({
   focusCardNow,
   openPaneNow,
   focusAssistantNow,
+  selectAssistant,
   openAssistant,
   onOpen,
   askRename,
@@ -64,9 +65,9 @@ export function useCanopyInboxKeyboard({
   /** What the keyboard walks: the list, then the archived runs once shown. */
   visible: CanopyItem[];
   listed: CanopyItem[];
-  shownInbox: CanopyInbox;
   shownAssistants: CanopyAssistantItem[];
-  archivedShown: boolean;
+  /** Every row the keyboard walks, in the order drawn: workers and assistants together. */
+  navigation: CanopyInboxEntry[];
   focusedIndex: number;
   activeIndex: number;
   focusedItem: CanopyItem | null;
@@ -77,39 +78,45 @@ export function useCanopyInboxKeyboard({
   focusCardNow: (runId: string) => void;
   openPaneNow: (runId: string, focus: CanopyPaneFocus) => void;
   focusAssistantNow: (id: string) => void;
+  selectAssistant: (id: string) => void;
   openAssistant: (item: CanopyAssistantItem) => void;
   onOpen: CanopyCardHandlers["onOpen"];
   askRename: (item: CanopyItem) => void;
   toggleRead: (item: CanopyItem) => void;
   markAllRead: () => void;
 }) {
-  // The assistant list's own keys: its rows walk among themselves, and step
-  // off either end into the worker list around them, or back to the search.
-  const onAssistantKeyDown = (event: KeyboardEvent<HTMLElement>, index: number) => {
+  const focusEntryNow = (entry: CanopyInboxEntry) =>
+    entry.role === "worker" ? focusCardNow(entry.item.runId) : focusAssistantNow(entry.item.id);
+  const keyOfWorker = (runId: string | undefined) =>
+    runId === undefined
+      ? null
+      : (navigation.find((entry) => entry.role === "worker" && entry.item.runId === runId)?.key ??
+        null);
+  // The pane's own run, assistant or worker: where a step from the search starts.
+  const shownKey = selectedAssistant?.id ?? keyOfWorker(focusedItem?.runId);
+
+  // The assistant rows' own keys. They walk the same order as the worker rows,
+  // so an assistant in the Needs you band steps into the workers around it.
+  const onAssistantKeyDown = (
+    event: KeyboardEvent<HTMLElement>,
+    assistant: CanopyAssistantItem
+  ) => {
     if (event.metaKey || event.ctrlKey || event.altKey) return;
-    const last = shownAssistants.length - 1;
-    let next: number | null = null;
+    let next: CanopyInboxEntry | undefined;
     if (event.key === "ArrowDown" || event.key === "j") {
-      if (index === last && archivedShown && shownInbox.archived.length > 0) {
-        event.preventDefault();
-        event.stopPropagation();
-        focusCardNow(shownInbox.archived[0]!.runId);
-        return;
-      }
-      next = Math.min(last, index + 1);
+      next = stepEntry(navigation, assistant.id, 1);
     } else if (event.key === "ArrowUp" || event.key === "k") {
-      if (index === 0) {
+      if (navigation[0]?.key === assistant.id) {
         event.preventDefault();
         event.stopPropagation();
-        if (listed.length > 0) focusCardNow(listed[listed.length - 1]!.runId);
-        else searchRef.current?.focus();
+        searchRef.current?.focus();
         return;
       }
-      next = index - 1;
+      next = stepEntry(navigation, assistant.id, -1);
     } else if (event.key === "Home") {
-      next = 0;
+      next = navigation[0];
     } else if (event.key === "End") {
-      next = last;
+      next = navigation[navigation.length - 1];
     } else if (event.key === "/") {
       event.preventDefault();
       event.stopPropagation();
@@ -119,13 +126,13 @@ export function useCanopyInboxKeyboard({
     } else if (event.key === "Enter") {
       event.preventDefault();
       event.stopPropagation();
-      openAssistant(shownAssistants[index]!);
+      openAssistant(assistant);
       return;
     }
-    if (next === null) return;
+    if (next === undefined) return;
     event.preventDefault();
     event.stopPropagation();
-    focusAssistantNow(shownAssistants[next]!.id);
+    focusEntryNow(next);
   };
 
   // ⌘↑/⌘↓ from anywhere in the panel, the live terminal and the composer
@@ -199,38 +206,31 @@ export function useCanopyInboxKeyboard({
       return;
     }
     if (event.metaKey || event.ctrlKey || event.altKey) return;
-    // The assistants sit between the inbox and the archived runs: down off the
-    // inbox's end, or up off the archived runs' top, steps into them.
-    if (shownAssistants.length > 0 && focusedIndex !== -1) {
-      const down = event.key === "ArrowDown" || event.key === "j";
-      const up = event.key === "ArrowUp" || event.key === "k";
-      if ((down && focusedIndex === listed.length - 1) || (up && focusedIndex === listed.length)) {
-        event.preventDefault();
-        focusAssistantNow(shownAssistants[down ? 0 : shownAssistants.length - 1]!.id);
-        return;
-      }
-    }
     // Back to the search: "/" from any row, or up off the top of the list.
     const search = searchRef.current;
-    if (search && (event.key === "/" || (event.key === "ArrowUp" && activeIndex === 0))) {
+    const activeKey = keyOfWorker(visible[activeIndex]?.runId);
+    if (
+      search &&
+      (event.key === "/" || (event.key === "ArrowUp" && navigation[0]?.key === activeKey))
+    ) {
       event.preventDefault();
       search.focus();
       if (event.key === "/") search.select();
       return;
     }
-    let next: number | null = null;
+    let next: CanopyInboxEntry | undefined;
     if (event.key === "ArrowDown" || event.key === "j") {
-      next = Math.min(visible.length - 1, activeIndex + 1);
+      next = stepEntry(navigation, activeKey, 1);
     } else if (event.key === "ArrowUp" || event.key === "k") {
-      next = Math.max(0, activeIndex - 1);
+      next = stepEntry(navigation, activeKey, -1);
     } else if (event.key === "Home") {
-      next = 0;
+      next = navigation[0];
     } else if (event.key === "End") {
-      next = visible.length - 1;
+      next = navigation[navigation.length - 1];
     }
-    if (next !== null) {
+    if (next !== undefined) {
       event.preventDefault();
-      focusCardNow(visible[next]!.runId);
+      focusEntryNow(next);
       return;
     }
     // Keys aimed at the list's selected row act on the selected agent.
@@ -286,9 +286,10 @@ export function useCanopyInboxKeyboard({
     const selected = focusedIndex !== -1 ? visible[focusedIndex]! : (visible[0] ?? null);
     if (plain && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
       event.preventDefault();
-      if (visible.length === 0) return;
-      const step = event.key === "ArrowDown" ? 1 : -1;
-      selectNow(visible[Math.min(visible.length - 1, Math.max(0, activeIndex + step))]!.runId);
+      const target = stepEntry(navigation, shownKey, event.key === "ArrowDown" ? 1 : -1);
+      if (target === undefined) return;
+      if (target.role === "worker") selectNow(target.item.runId);
+      else selectAssistant(target.item.id);
       return;
     }
     if (plain && event.key === "Enter") {

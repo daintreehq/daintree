@@ -270,10 +270,11 @@ describe("CanopyView role filter", () => {
     );
   });
 
-  it("counts only workers in the header until assistants rank with them (#14519)", async () => {
+  it("counts workers and assistants in the header and ranks the asking ones in the band", async () => {
     directory.entries = [
       assistant(0, { waitingReason: "question" }),
       assistant(1, { waitingReason: "approval" }),
+      assistant(2),
     ];
     const snapshot = useFleetSnapshotStore.getState().snapshot!;
     useFleetSnapshotStore.setState({
@@ -287,12 +288,27 @@ describe("CanopyView role filter", () => {
     });
     render(<CanopyView />);
     await settle();
-    expect(assistantRows().map((row) => row.getAttribute("data-ask"))).toEqual([
-      "question",
-      "approval",
-    ]);
     const header = document.querySelector("[data-testid=canopy-dialog]")!.textContent ?? "";
-    expect(header).toContain("2 agents need you");
+    expect(header).toContain("2 agents and 2 assistants need you");
+    const band = document.querySelector("[data-testid=canopy-needs-you]")!.parentElement!;
+    expect(
+      Array.from(band.querySelectorAll("[data-canopy-assistant]")).map((row) =>
+        row.getAttribute("data-ask")
+      )
+    ).toEqual(["question", "approval"]);
+    const section = document.getElementById("canopy-assistants")!;
+    expect(section.querySelectorAll("[data-canopy-assistant]")).toHaveLength(1);
+  });
+
+  it("keeps an asking assistant in its own list under the Assistants filter", async () => {
+    directory.entries = [assistant(0, { waitingReason: "question" })];
+    render(<CanopyView />);
+    await settle();
+    await act(async () => fireEvent.click(roleSegment("assistants")));
+    expect(
+      document.getElementById("canopy-assistants")!.querySelectorAll("[data-ask]")
+    ).toHaveLength(1);
+    expect(document.querySelector("[data-testid=canopy-needs-you]")).toBeNull();
   });
 
   it("never hands an assistant to the reader: not shown, searched or seen as a worker", async () => {

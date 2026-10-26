@@ -35,6 +35,8 @@ export interface CanopyInboxProjectionInput {
   listedWorkers: readonly CanopyItem[];
   /** The assistants listed, in the order shown. */
   shownAssistants: readonly CanopyAssistantItem[];
+  /** The assistants asking for the user sit in the Needs you band, after the workers there. */
+  askingAssistantsInBand: boolean;
   /** The archived workers shown; none while their fold is shut. */
   shownArchived: readonly CanopyItem[];
   /** Where a worker really runs: its host (null for the window's own) and its id there. */
@@ -46,7 +48,11 @@ export interface CanopyInboxProjection {
   inbox: CanopyInboxEntry[];
   /** What needs the user, in inbox order: what the header counts and the band holds. */
   needsYou: CanopyInboxEntry[];
-  /** What the keyboard walks: listed workers, then the assistants, then shown archived workers. */
+  /**
+   * What the keyboard walks, top to bottom as drawn: the band's workers, the
+   * band's assistants, the other listed workers, the other assistants, then
+   * the shown archived workers.
+   */
   navigation: CanopyInboxEntry[];
 }
 
@@ -97,12 +103,17 @@ export function projectCanopyInbox(input: CanopyInboxProjectionInput): CanopyInb
     return entry;
   };
   const inbox = [...input.workers.map(worker), ...input.assistants.map(assistant)];
+  const bandWorkers = input.listedWorkers.filter(itemNeedsAttention);
+  const restWorkers = input.listedWorkers.filter((item) => !itemNeedsAttention(item));
+  const asking = (item: CanopyAssistantItem) => input.askingAssistantsInBand && item.ask !== null;
   return {
     inbox,
     needsYou: inbox.filter(entryNeedsYou),
     navigation: [
-      ...input.listedWorkers.map(worker),
-      ...input.shownAssistants.map(assistant),
+      ...bandWorkers.map(worker),
+      ...input.shownAssistants.filter(asking).map(assistant),
+      ...restWorkers.map(worker),
+      ...input.shownAssistants.filter((item) => !asking(item)).map(assistant),
       ...input.shownArchived.map(worker),
     ],
   };

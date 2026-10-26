@@ -161,6 +161,7 @@ function project(
     assistants: helpers,
     listedWorkers: inbox,
     shownAssistants: helpers,
+    askingAssistantsInBand: true,
     shownArchived: archived,
     workerPlace: (item) => placeOf(item, ALL_HOSTS_ID, OWN),
     ...overrides,
@@ -205,6 +206,7 @@ describe("projectCanopyInbox", () => {
       assistants: [],
       listedWorkers: own,
       shownAssistants: [],
+      askingAssistantsInBand: true,
       shownArchived: [],
       workerPlace: (item) => placeOf(item, OTHER, OWN),
     }).inbox[0]!;
@@ -392,6 +394,40 @@ describe("stepEntry", () => {
   });
 });
 
+describe("navigation order", () => {
+  const idle = { agentState: "idle", since: NOW - 10_000 } as const;
+  const asking = { agentState: "waiting", waitingReason: "question" } as const;
+
+  it("walks the band's workers, the band's asking assistants, the other workers, the other assistants", () => {
+    const helpers = assistants([live(OWN, "quiet"), live(OWN, "asks", asking)]);
+    const items = workers([
+      { host: OWN, run: run("ask", approval) },
+      { host: OWN, run: run("idle", idle) },
+    ]);
+    const order = project(items, helpers).navigation;
+
+    expect(order.map((entry) => entry.role)).toEqual([
+      "worker",
+      "assistant",
+      "worker",
+      "assistant",
+    ]);
+    expect((order[1] as { item: { ask: unknown } }).item.ask).not.toBeNull();
+    expect((order[3] as { item: { ask: unknown } }).item.ask).toBeNull();
+  });
+
+  it("leaves every assistant after the workers when the band is not shared", () => {
+    const helpers = assistants([live(OWN, "asks", asking)]);
+    const items = workers([
+      { host: OWN, run: run("ask", approval) },
+      { host: OWN, run: run("idle", idle) },
+    ]);
+    const order = project(items, helpers, { askingAssistantsInBand: false }).navigation;
+
+    expect(order.map((entry) => entry.role)).toEqual(["worker", "worker", "assistant"]);
+  });
+});
+
 describe("nextAfterEntry", () => {
   const unread = (runId: string): { host: string; mark: CanopyReadMark } => ({
     host: OWN,
@@ -407,10 +443,10 @@ describe("nextAfterEntry", () => {
       { host: OTHER, run: run("next", { ...approval, since: NOW - 1_000 }) },
     ]);
     const order = project(items, [], {
-      listedWorkers: inOrder(items, ["done", "parked", "idle", "next"]),
+      listedWorkers: inOrder(items, ["done", "next", "parked", "idle"]),
     }).navigation;
 
-    expect(nextAfterEntry(order, order[0]!.key)).toBe(order[3]);
+    expect(nextAfterEntry(order, order[0]!.key)).toBe(order[1]);
   });
 
   it("takes an unread run, but never a parked or snoozed one however unread", () => {
@@ -476,8 +512,8 @@ describe("nextAfterEntry", () => {
     ]);
     const order = project(items, helpers).navigation;
 
-    expect(order.map((entry) => entry.role)).toEqual(["worker", "worker", "assistant"]);
-    expect(nextAfterEntry(order, order[0]!.key)).toBe(order[2]);
+    expect(order.map((entry) => entry.role)).toEqual(["worker", "assistant", "worker"]);
+    expect(nextAfterEntry(order, order[0]!.key)).toBe(order[1]);
   });
 
   it("from a run not listed, lands on the first wanted one, or nowhere", () => {
