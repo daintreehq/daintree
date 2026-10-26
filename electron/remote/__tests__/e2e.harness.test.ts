@@ -328,6 +328,29 @@ describe("Remote Hosts end to end over a real socket, started by the real boot",
   );
 
   it(
+    "terminal settings: a view takes the host half of a change from its host, never the device half (#14699)",
+    async () => {
+      const r = await harness();
+      const view = r.addView(VIEW_A, "proj-1");
+      await r.openStreams(view);
+
+      broadcastToRenderer(CHANNELS.TERMINAL_CONFIG_DEVICE_CHANGED, { fontSize: 30 });
+      broadcastToRenderer(CHANNELS.TERMINAL_CONFIG_HOST_CHANGED, {
+        resourceMonitoringEnabled: true,
+      });
+      // Same lane, so once this arrives anything sent before it has too.
+      broadcastToRenderer(CHANNELS.OPERATIONS_EVENT, { type: "fence" });
+      await waitUntil(() => eventsOn(view, CHANNELS.OPERATIONS_EVENT).length === 1, "the fence");
+
+      expect(eventsOn(view, CHANNELS.TERMINAL_CONFIG_HOST_CHANGED)).toEqual([
+        [{ resourceMonitoringEnabled: true }],
+      ]);
+      expect(eventsOn(view, CHANNELS.TERMINAL_CONFIG_DEVICE_CHANGED)).toEqual([]);
+    },
+    TEST_TIMEOUT_MS
+  );
+
+  it(
     "terminal I/O: input reaches the pty, output reaches the renderer port unchanged, acks flow back",
     async () => {
       const r = await harness();

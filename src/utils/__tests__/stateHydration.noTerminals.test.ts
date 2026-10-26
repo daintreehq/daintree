@@ -99,6 +99,10 @@ vi.mock("@/services/TerminalInstanceService", () => ({ createTerminalPaintPlane 
 vi.mock("@/lib/notify", () => ({ notify: vi.fn().mockReturnValue("notification-id") }));
 
 const { hydrateAppState } = await import("../stateHydration");
+const { __resetTerminalConfigSyncForTests, beginTerminalConfigRead } =
+  await import("@/services/terminalConfigSync");
+const { useScrollbackStore } = await import("@/store/scrollbackStore");
+const { usePerformanceModeStore } = await import("@/store/performanceModeStore");
 // Deliberately not primed with load(): the point is that hydration alone never
 // loads the service (#14267).
 const { peek: peekTerminalService } =
@@ -140,5 +144,55 @@ describe("hydrateAppState with no terminal panels", () => {
     expect(addPanel).not.toHaveBeenCalled();
     expect(createTerminalPaintPlane).not.toHaveBeenCalled();
     expect(peekTerminalService()).toBeNull();
+  });
+
+  describe("terminal settings (#14699)", () => {
+    const hydrateWith = (terminalConfig: Record<string, unknown>) => ({
+      appState: { terminals: [] },
+      terminalConfig,
+      project: { id: "project-1", path: "/project", name: "project-1", lastOpened: 0 },
+      workspaceId: "project-1",
+      agentSettings: { agents: {} },
+    });
+    const run = () =>
+      hydrateAppState({
+        addPanel: vi.fn().mockResolvedValue("panel-id"),
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+      });
+
+    beforeEach(() => {
+      __resetTerminalConfigSyncForTests();
+      useScrollbackStore.setState({ scrollbackLines: 1000 });
+      usePerformanceModeStore.setState({ performanceMode: false });
+    });
+
+    it("takes a fresh hydrate's values without saving any back", async () => {
+      // Out of range, as an old build may have saved it: shown corrected, not rewritten.
+      appClientMock.hydrate.mockResolvedValue(
+        hydrateWith({ scrollbackLines: 50_000, performanceMode: true })
+      );
+
+      await run();
+
+      expect(useScrollbackStore.getState().scrollbackLines).toBeLessThan(50_000);
+      expect(usePerformanceModeStore.getState().performanceMode).toBe(true);
+      expect(terminalConfigClientMock.setScrollback).not.toHaveBeenCalled();
+    });
+
+    it("never puts back values a newer read replaced while the hydrate travelled", async () => {
+      let answer: (value: unknown) => void = () => {};
+      appClientMock.hydrate.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+
+      const done = run();
+      await vi.waitFor(() => expect(appClientMock.hydrate).toHaveBeenCalled());
+      beginTerminalConfigRead()({ scrollbackLines: 7000, performanceMode: false });
+      answer(hydrateWith({ scrollbackLines: 2000, performanceMode: true }));
+      await done;
+
+      expect(useScrollbackStore.getState().scrollbackLines).toBe(7000);
+      expect(usePerformanceModeStore.getState().performanceMode).toBe(false);
+    });
   });
 });
