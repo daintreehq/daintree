@@ -3,7 +3,7 @@
 // committed assistant prompt files in `assistant/`. Run after editing any
 // partial; CI runs `--check` mode via `npm run check` to detect drift.
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -39,6 +39,22 @@ const TARGETS = [
       SHARED,
       path.join(SRC_DIR, "AGENTS.transcript.md"),
       SHARED_TAIL,
+    ],
+  },
+  {
+    out: path.join(ASSISTANT_DIR, "global/CLAUDE.md"),
+    parts: [
+      path.join(SRC_DIR, "GLOBAL.CLAUDE.head.md"),
+      path.join(SRC_DIR, "GLOBAL.md"),
+      path.join(SRC_DIR, "CLAUDE.transcript.md"),
+    ],
+  },
+  {
+    out: path.join(ASSISTANT_DIR, "global/AGENTS.md"),
+    parts: [
+      path.join(SRC_DIR, "GLOBAL.AGENTS.head.md"),
+      path.join(SRC_DIR, "GLOBAL.md"),
+      path.join(SRC_DIR, "AGENTS.transcript.md"),
     ],
   },
 ];
@@ -81,6 +97,7 @@ function main() {
         failures++;
       }
     } else {
+      mkdirSync(path.dirname(out), { recursive: true });
       writeFileSync(out, expected);
       console.log(`[build-assistant-prompts] wrote ${relative(out)}`);
     }

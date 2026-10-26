@@ -62,6 +62,19 @@ const COPILOT_BEARER_PLACEHOLDER = "$DAINTREE_MCP_TOKEN";
 // might grow to ship.
 const TEMPLATE_HASH_FILE = ".template-hash";
 
+/**
+ * The template's folder of instructions for the global assistant (#14546). It
+ * is not part of a project session's copy or hash, so project sessions stay
+ * exactly as they were; a global session overlays its files on every provision.
+ */
+const GLOBAL_TEMPLATE_DIR = "global";
+const PROMPT_FILES = ["CLAUDE.md", "AGENTS.md"];
+
+function isGlobalTemplatePath(root: string, candidate: string): boolean {
+  const first = path.relative(root, candidate).split(path.sep)[0];
+  return first === GLOBAL_TEMPLATE_DIR;
+}
+
 // Codex reads project instructions up to `project_doc_max_bytes` (32 KiB) and
 // truncates past it without telling the model. The bundled AGENTS.md is held
 // to 24 KiB by `build-assistant-prompts.test.mjs`; user instructions are inlined
@@ -348,7 +361,10 @@ function buildUserInstructionsPointer(
 async function computeTemplateHash(helpFolder: string): Promise<string> {
   const entries = await fs.readdir(helpFolder, { recursive: true, withFileTypes: true });
   const files = entries
-    .filter((entry) => entry.isFile())
+    .filter(
+      (entry) =>
+        entry.isFile() && !isGlobalTemplatePath(helpFolder, path.join(entry.parentPath, entry.name))
+    )
     .map((entry) => ({
       absolute: path.join(entry.parentPath, entry.name),
       relative: path
@@ -522,7 +538,10 @@ export class AssistantSessionFiles {
           // with the bundled template, picking up any updates to CLAUDE.md /
           // settings baseline / etc. without losing Claude Code's per-folder trust
           // acceptance (which lives in ~/.claude.json, not here).
-          await fs.cp(helpFolder, sessionPath, { recursive: true });
+          await fs.cp(helpFolder, sessionPath, {
+            recursive: true,
+            filter: (source) => !isGlobalTemplatePath(helpFolder, source),
+          });
           await resilientAtomicWriteFile(
             path.join(sessionPath, TEMPLATE_HASH_FILE),
             sourceHash + "\n",
@@ -531,6 +550,10 @@ export class AssistantSessionFiles {
           );
         }
         await fs.chmod(sessionPath, 0o700).catch(() => {});
+        // Unconditional, outside the hash gate: a folder an older build
+        // provisioned holds the project assistant's text, and the stamp says
+        // it is current.
+        if (input.global) await this.overlayGlobalInstructions(helpFolder, sessionPath);
 
         // Instructions and (behind the opt-in) the user's MCP servers and Claude
         // hooks. Same fail-closed policy as the mirror: an existing file that
@@ -659,20 +682,27 @@ export class AssistantSessionFiles {
         await this.writeRunbooksAddendum(sessionPath, runbooksEnabled(settings), {
           global: input.global === true,
         });
-        await this.writeConfirmationsAddendum(sessionPath, input.confirmationsSkipped());
+        // Its project calls are relayed with `external` origin, which never take
+        // the skip preference, so the note would promise what it can't get.
+        await this.writeConfirmationsAddendum(
+          sessionPath,
+          input.global ? false : input.confirmationsSkipped()
+        );
         await this.stripMessagingAddendum(sessionPath);
         // Same unconditional placement, for the same reason: the facts change
         // independently of the template, and every lane shares these files, so
         // only project-level observations go in — never a lane's focus.
         await this.writeProjectMetadataAddendum(
           sessionPath,
-          buildProjectMetadataAddendum({
-            projectId: input.projectId,
-            projectPath: input.projectPath,
-            tier,
-            daintreeControl: settings.daintreeControl,
-            facts: projectFacts,
-          })
+          input.global
+            ? null
+            : buildProjectMetadataAddendum({
+                projectId: input.projectId,
+                projectPath: input.projectPath,
+                tier,
+                daintreeControl: settings.daintreeControl,
+                facts: projectFacts,
+              })
         );
         const siblingLaneLive = input.siblingLaneLive();
         await this.runContentStep(sessionPath, "write the assistant's instructions", () =>
@@ -1198,7 +1228,22 @@ export class AssistantSessionFiles {
     );
   }
 
-  private async writeProjectMetadataAddendum(sessionPath: string, addendum: string): Promise<void> {
+  /** Replaces the session's prompt files with the global assistant's own, before any managed block is written into them. */
+  private async overlayGlobalInstructions(helpFolder: string, sessionPath: string): Promise<void> {
+    await Promise.all(
+      PROMPT_FILES.map(async (name) => {
+        const body = await fs.readFile(path.join(helpFolder, GLOBAL_TEMPLATE_DIR, name), "utf-8");
+        await resilientAtomicWriteFile(path.join(sessionPath, name), body, "utf-8", {
+          mode: 0o600,
+        });
+      })
+    );
+  }
+
+  private async writeProjectMetadataAddendum(
+    sessionPath: string,
+    addendum: string | null
+  ): Promise<void> {
     const markers = { start: PROJECT_METADATA_START, end: PROJECT_METADATA_END };
     const targets = ["CLAUDE.md", "AGENTS.md"];
     await Promise.all(
