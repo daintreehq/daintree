@@ -172,6 +172,11 @@ vi.mock("@/components/Terminal/terminalFocus", () => ({
   getTerminalFocusTarget: () => "terminal",
 }));
 
+// The real module reaches the panel store graph this suite stubs out.
+vi.mock("@/components/Terminal/paneFocusRequest", () => ({
+  requestedPaneSurface: () => null,
+}));
+
 // Active Popover mock: captures the Radix callbacks. Focus-driven dismissal is
 // intercepted at onFocusOutside (not onOpenChange), so the mock no longer
 // simulates a mount-time onOpenChange(false).

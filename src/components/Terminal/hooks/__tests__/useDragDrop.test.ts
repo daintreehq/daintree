@@ -695,10 +695,12 @@ describe("useDragDrop", () => {
         await pending;
       });
 
-      // …and the late insertion neither repeats nor re-takes the selection.
+      // …and the late insertion neither repeats nor re-takes the selection, nor
+      // asks again: a late ask would call off whatever the user did meanwhile.
       expect(dispatch).toHaveBeenCalledTimes(1);
       expect(onDropSelect).toHaveBeenCalledTimes(1);
       expect(focus).toHaveBeenCalledTimes(1);
+      expect(requestPaneFocus).toHaveBeenCalledTimes(1);
     });
 
     // A pane that took nothing has not been pointed at in any sense that should
@@ -1022,12 +1024,26 @@ describe("useDragDrop — agent context", () => {
     expect(onDropSelect).toHaveBeenCalledTimes(1);
     expect(view.focus).toHaveBeenCalledTimes(1);
     expect(requestPaneFocus).toHaveBeenCalledExactlyOnceWith(TERMINAL_ID, "hybridInput");
+    expect(onDropSelect.mock.invocationCallOrder[0]!).toBeLessThan(
+      view.focus.mock.invocationCallOrder[0]!
+    );
     expect(view.focus.mock.invocationCallOrder[0]!).toBeLessThan(
       requestPaneFocus.mock.invocationCallOrder[0]!
     );
     // Nothing goes into the editor directly — the draft store owns the write,
     // and no Enter is ever sent.
     expect(view.dispatch).not.toHaveBeenCalled();
+  });
+
+  // Canopy's reply box drafts into the terminal it borrows the id of, but it
+  // isn't that pane's bar: asking the pane would focus its bar instead.
+  it("asks no pane for focus when the bar only borrows the terminal id", async () => {
+    const { result, view } = renderAgentDrop(TERMINAL_ID);
+    await act(() => result.current.handleDrop(contextDrag()));
+
+    expect(draftAgentContext).toHaveBeenCalledTimes(1);
+    expect(view.focus).toHaveBeenCalledTimes(1);
+    expect(requestPaneFocus).not.toHaveBeenCalled();
   });
 
   it("leaves selection and focus alone when the draft is refused at drop time", async () => {

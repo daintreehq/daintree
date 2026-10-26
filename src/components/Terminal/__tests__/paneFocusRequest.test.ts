@@ -58,20 +58,35 @@ describe("paneFocusRequest", () => {
 
   // A pane that isn't mounted, or a hybrid input still loading, keeps the
   // request for when it can take it.
-  it("keeps a request nothing could take yet", () => {
+  it.each([
+    ["no pane is mounted", null],
+    ["the pane's surface isn't ready", () => false],
+  ])("keeps a request nothing could take yet: %s", (_, handler) => {
+    const cleanup = handler ? registerPanelFocusHandler("a", handler) : () => {};
+
     expect(requestPaneFocus("a", "hybridInput")).toBe(false);
     expect(requestedPaneSurface("a")).toBe("hybridInput");
     expect(pendingPaneSurface("a")).toBe("hybridInput");
+
+    cleanup();
   });
 
-  it("lets a newer request supersede the older one and its deferred work", () => {
+  // The same pane and surface asked again still calls off the first ask's
+  // frames: the newer one schedules its own.
+  it("lets a newer request supersede the older one's deferred work", () => {
     requestPaneFocus("a", "hybridInput");
     const epoch = captureFocusEpoch();
 
-    requestPaneFocus("a", "xterm");
+    requestPaneFocus("a", "hybridInput");
 
-    expect(requestedPaneSurface("a")).toBe("xterm");
+    expect(requestedPaneSurface("a")).toBe("hybridInput");
     expect(isFocusEpochCurrent(epoch)).toBe(false);
+  });
+
+  it("hands the request over to a newer one for another surface", () => {
+    requestPaneFocus("a", "hybridInput");
+    requestPaneFocus("a", "xterm");
+    expect(requestedPaneSurface("a")).toBe("xterm");
   });
 
   it("ends the request and supersedes deferred work on a press anywhere", () => {
@@ -85,12 +100,21 @@ describe("paneFocusRequest", () => {
     expect(isFocusEpochCurrent(epoch)).toBe(false);
   });
 
-  // Deferred work scheduled after the press belongs to the new epoch: the
+  // Counted in the capture phase, before any handler the press reaches: the
   // press that selects a pane must not cancel the focus it leads to.
-  it("lets work scheduled after a press stand", () => {
-    press();
-    const epoch = captureFocusEpoch();
-    expect(isFocusEpochCurrent(epoch)).toBe(true);
+  it("lets work a press's own handlers schedule stand", () => {
+    const before = captureFocusEpoch();
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    let during = -1;
+    target.addEventListener("pointerdown", () => {
+      during = captureFocusEpoch();
+    });
+
+    press(target);
+
+    expect(isFocusEpochCurrent(before)).toBe(false);
+    expect(isFocusEpochCurrent(during)).toBe(true);
   });
 
   it("survives the selection landing on its own pane and ends when it moves on", () => {
@@ -99,9 +123,11 @@ describe("paneFocusRequest", () => {
 
     usePanelStore.setState({ focusedId: "a" });
     expect(requestedPaneSurface("a")).toBe("hybridInput");
+    const epoch = captureFocusEpoch();
 
     usePanelStore.setState({ focusedId: "b" });
     expect(requestedPaneSurface("a")).toBeNull();
+    expect(isFocusEpochCurrent(epoch)).toBe(false);
 
     // Coming back is a fresh arrival, not the old request revived.
     usePanelStore.setState({ focusedId: "a" });
@@ -133,12 +159,24 @@ describe("paneFocusRequest", () => {
       ["the pane's own terminal", (pane: ReturnType<typeof mountPane>) => pane.xterm],
       ["the pane's Scratchpad", (pane: ReturnType<typeof mountPane>) => pane.notes],
       ["another pane's hybrid input", () => mountPane("b").editor],
-    ])("ends when focus lands on %s", (_, target) => {
+    ])("ends when focus lands on %s, with the grabs scheduled for it", (_, target) => {
       const pane = mountPane("a");
       const elsewhere = target(pane);
       requestPaneFocus("a", "hybridInput");
+      const epoch = captureFocusEpoch();
 
       elsewhere.focus();
+
+      expect(requestedPaneSurface("a")).toBeNull();
+      expect(isFocusEpochCurrent(epoch)).toBe(false);
+    });
+
+    it("ends a terminal request when another pane's terminal takes focus", () => {
+      mountPane("a");
+      const other = mountPane("b");
+      requestPaneFocus("a", "xterm");
+
+      other.xterm.focus();
 
       expect(requestedPaneSurface("a")).toBeNull();
     });
@@ -149,7 +187,16 @@ describe("paneFocusRequest", () => {
       holdPaneFocus("a", "hybridInput");
 
       expect(pendingPaneSurface("a")).toBe("hybridInput");
+      expect(pendingPaneSurface("b")).toBeNull();
       expect(requestedPaneSurface("a")).toBeNull();
+    });
+
+    it("replaces a request for another pane", () => {
+      requestPaneFocus("a", "hybridInput");
+      holdPaneFocus("b", "xterm");
+
+      expect(requestedPaneSurface("a")).toBeNull();
+      expect(pendingPaneSurface("b")).toBe("xterm");
     });
 
     it("never replaces an explicit request for the same pane", () => {

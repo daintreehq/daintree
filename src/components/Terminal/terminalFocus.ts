@@ -77,6 +77,34 @@ export function resolvePaneFocusAction(options: {
 }
 
 /**
+ * What an agent pane does with focus: the surface a caller asked for, else the
+ * remembered one, gated on what the pane can take right now, then on whether
+ * its xterm holds a selection and the keyboard. A surface a caller asked for by
+ * name skips that last check.
+ */
+export function resolveTerminalPaneFocus(options: {
+  requested: TerminalFocusTarget | null;
+  preferredTarget: TerminalFocusTarget;
+  hasHybridInputSurface: boolean;
+  isInputDisabled: boolean;
+  hybridInputEnabled: boolean;
+  hasSelection: boolean;
+  xtermOwnsDomFocus: boolean;
+}): PaneFocusAction {
+  const { requested, preferredTarget, hasSelection, xtermOwnsDomFocus, ...availability } = options;
+  const focusTarget = getTerminalFocusTarget({
+    preferredTarget: requested ?? preferredTarget,
+    ...availability,
+  });
+  return resolvePaneFocusAction({
+    focusTarget,
+    requested: requested === focusTarget,
+    hasSelection,
+    xtermOwnsDomFocus,
+  });
+}
+
+/**
  * Whether a pointerdown on the xterm area of an *unfocused* grid pane should
  * be swallowed before xterm sees it. Prevents stray clicks from poking at
  * cursor positions, mouse-mode handlers, or kicking off selection on a pane

@@ -119,7 +119,7 @@ import {
   getTerminalClickTarget,
   getTerminalFocusTarget,
   isLikelyAtSynthesizedPointer,
-  resolvePaneFocusAction,
+  resolveTerminalPaneFocus,
   shouldRecordXtermFocusPreference,
   shouldShowHybridInputBar,
   shouldSuppressUnfocusedClick,
@@ -149,7 +149,7 @@ import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 export type {};
 
 /**
- * Live selection/focus state of a pane's xterm, for `resolvePaneFocusAction`.
+ * Live selection/focus state of a pane's xterm, for `resolveTerminalPaneFocus`.
  * Ownership is measured against `hostElement` — the xterm host specifically,
  * not the pane container, which also holds the input bar and toolbar.
  */
@@ -1083,10 +1083,10 @@ function TerminalPaneComponent({
     }
 
     // Activate the pane only. The `isFocused` effect below owns the resolved
-    // handoff via getTerminalFocusTarget / resolvePaneFocusAction, so forcing
-    // xterm focus here would both duplicate that resolver and defeat it —
-    // landing DOM focus on xterm fires `focusin`, which unconditionally
-    // records "xterm" and overwrites the target we just preserved.
+    // handoff via resolveTerminalPaneFocus, so forcing xterm focus here would
+    // both duplicate that resolver and defeat it — landing DOM focus on xterm
+    // fires `focusin`, which unconditionally records "xterm" and overwrites the
+    // target we just preserved.
     setFocused(id);
   };
 
@@ -1176,16 +1176,12 @@ function TerminalPaneComponent({
     // from briefly landing on the ContentPanel container, which made screen
     // readers announce the container instead of the input bar. A surface a
     // caller asked for (a drop, type-anywhere) outranks the remembered one.
-    const requested = requestedPaneSurface(id);
-    const focusTarget = getTerminalFocusTarget({
-      preferredTarget: requested ?? preferredTerminalFocusTarget,
+    const action = resolveTerminalPaneFocus({
+      requested: requestedPaneSurface(id),
+      preferredTarget: preferredTerminalFocusTarget,
       hasHybridInputSurface: showHybridInputBar,
       isInputDisabled: isHybridInputDisabledForFocus,
       hybridInputEnabled,
-    });
-    const action = resolvePaneFocusAction({
-      focusTarget,
-      requested: requested === focusTarget,
       ...readXtermSelectionState(id),
     });
 
@@ -1242,16 +1238,12 @@ function TerminalPaneComponent({
         (gate.querySelector<HTMLElement>("button:not([disabled])") ?? gate).focus();
         return gate.contains(document.activeElement);
       }
-      const requested = surface ?? requestedPaneSurface(id);
-      const focusTarget = getTerminalFocusTarget({
-        preferredTarget: requested ?? usePanelStore.getState().preferredTerminalFocusTarget,
+      const action = resolveTerminalPaneFocus({
+        requested: surface ?? requestedPaneSurface(id),
+        preferredTarget: usePanelStore.getState().preferredTerminalFocusTarget,
         hasHybridInputSurface: showHybridInputBar,
         isInputDisabled: isHybridInputDisabledForFocus,
         hybridInputEnabled,
-      });
-      const action = resolvePaneFocusAction({
-        focusTarget,
-        requested: requested === focusTarget,
         ...readXtermSelectionState(id),
       });
       // An xterm that already owns the keyboard while holding a selection is a

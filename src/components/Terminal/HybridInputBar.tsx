@@ -1119,6 +1119,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             if (!isFocusEpochCurrent(epoch)) return;
             if (editorViewRef.current !== view) return;
             if (!isHybridInputStillWanted()) return;
+            if (isScratchpadElement(document.activeElement, terminalId)) return;
             // The user can click into the draft between the call and this frame.
             if (editorOwnsDomFocus(view)) return;
             view.dispatch({

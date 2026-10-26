@@ -5,7 +5,7 @@
  * request must be able to call off (#8487).
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createRef } from "react";
+import { createRef, useEffect, type ReactNode } from "react";
 import { act, cleanup, render } from "@testing-library/react";
 import type { PtyPanelData } from "@shared/types/panel";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -89,18 +89,21 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-async function mount() {
+/** Stands in for TerminalPane: its arrival pass runs after its children's effects. */
+function ArrivingPane({ children }: { children: ReactNode }) {
+  useEffect(() => holdPaneFocus("term-1", "hybridInput"), []);
+  return <>{children}</>;
+}
+
+async function mount({ arriving = false } = {}) {
   const ref = createRef<HybridInputBarHandle>();
+  const bar = (
+    <HybridInputBar ref={ref} terminalId="term-1" cwd={WT_ID} agentId="claude" onSend={() => {}} />
+  );
   const view = render(
     <TooltipProvider>
       <WorktreeStoreContext.Provider value={createWorktreeStore()}>
-        <HybridInputBar
-          ref={ref}
-          terminalId="term-1"
-          cwd={WT_ID}
-          agentId="claude"
-          onSend={() => {}}
-        />
+        {arriving ? <ArrivingPane>{bar}</ArrivingPane> : bar}
       </WorktreeStoreContext.Provider>
     </TooltipProvider>
   );
@@ -114,6 +117,14 @@ async function mount() {
 
 function press() {
   document.body.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+}
+
+/** Something to hold the keyboard that takes no typing, so moving to it ends nothing. */
+function focusButton() {
+  const button = document.createElement("button");
+  document.body.appendChild(button);
+  button.focus();
+  return button;
 }
 
 describe("HybridInputBar mount focus", () => {
@@ -132,6 +143,32 @@ describe("HybridInputBar mount focus", () => {
     const { editor } = await mount();
 
     expect(document.activeElement).not.toBe(editor);
+  });
+
+  // The request names this bar, so a remembered terminal doesn't veto it.
+  it("takes a request made while the terminal is remembered", async () => {
+    usePanelStore.setState({ preferredTerminalFocusTarget: "xterm" });
+    requestPaneFocus("term-1", "hybridInput");
+
+    const { editor } = await mount();
+
+    expect(document.activeElement).toBe(editor);
+  });
+
+  it("leaves the keyboard alone while its pane isn't selected", async () => {
+    usePanelStore.setState({ focusedId: "other" });
+    requestPaneFocus("term-1", "hybridInput");
+
+    const { editor } = await mount();
+
+    expect(document.activeElement).not.toBe(editor);
+  });
+
+  // The pane's arrival pass runs after the bar's own effects when both mount
+  // in one commit; the claim has to wait for it.
+  it("takes the arrival of a pane mounting in the same commit", async () => {
+    const { editor } = await mount({ arriving: true });
+    expect(document.activeElement).toBe(editor);
   });
 
   it.each([
@@ -177,14 +214,60 @@ describe("HybridInputBar deferred focus", () => {
     expect(document.activeElement).not.toBe(editor);
   });
 
+  // Even one asking for this same bar: the newer ask schedules its own grab.
   it("drops a grab a newer request arrived ahead of", async () => {
     const { ref, editor } = await mount();
 
     ref.current!.focusWithCursorAtEnd();
-    requestPaneFocus("term-1", "xterm");
+    requestPaneFocus("term-1", "hybridInput");
     flushFrames();
 
     expect(document.activeElement).not.toBe(editor);
+  });
+
+  // Keyboard focus moving to a field ends the request without any press.
+  it("drops a grab once the user has typed their way somewhere else", async () => {
+    const { ref } = await mount();
+    requestPaneFocus("term-1", "hybridInput");
+    ref.current!.focusWithCursorAtEnd();
+
+    const field = document.createElement("input");
+    document.body.appendChild(field);
+    field.focus();
+    flushFrames();
+
+    expect(document.activeElement).toBe(field);
+  });
+
+  it("never takes the Scratchpad's caret from a grab (#12835)", async () => {
+    const { ref } = await mount();
+    ref.current!.focusWithCursorAtEnd();
+
+    const notes = document.createElement("div");
+    notes.setAttribute(SCRATCHPAD_BOUNDARY_ATTR, "term-1");
+    notes.innerHTML = "<textarea></textarea>";
+    document.body.appendChild(notes);
+    const caret = notes.querySelector("textarea")!;
+    caret.focus();
+    flushFrames();
+
+    expect(document.activeElement).toBe(caret);
+  });
+
+  // `focus()` takes the keyboard at once and looks again a frame later; that
+  // second look is deferred work like any other.
+  it.each([
+    ["a press", press],
+    ["a newer request", () => requestPaneFocus("term-1", "hybridInput")],
+  ])("drops the second look after %s", async (_, supersede) => {
+    const { ref } = await mount();
+
+    ref.current!.focus();
+    supersede();
+    const button = focusButton();
+    flushFrames();
+
+    expect(document.activeElement).toBe(button);
   });
 
   // A request naming the bar is what lets a drop or type-anywhere land here

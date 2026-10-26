@@ -20,8 +20,9 @@ import type { TerminalFocusTarget } from "./terminalFocus";
  * (another pane, the other surface, the Scratchpad, a dialog's field).
  *
  * The epoch cancels deferred focus work in general, requested or not: a frame
- * scheduled under one epoch does nothing once a newer request or a user press
- * has moved it, so a stale grab can't drag the keyboard back (#8487).
+ * scheduled under one epoch does nothing once a newer request, a user press, or
+ * anything else that ended an intent has moved it, so a stale grab can't drag
+ * the keyboard back from where the user went (#8487).
  */
 interface PaneFocusIntent {
   paneId: string;
@@ -53,12 +54,15 @@ function clearIntent(): void {
   stopWatching = null;
 }
 
+/** Something newer happened: the intent ends, and so does every grab scheduled before it. */
+function supersede(): void {
+  epoch += 1;
+  clearIntent();
+}
+
 function watchPresses(): void {
   if (pressListener || typeof window === "undefined") return;
-  pressListener = () => {
-    epoch += 1;
-    clearIntent();
-  };
+  pressListener = supersede;
   // Capture, so the press is counted before any handler it reaches schedules
   // focus work of its own: that work then belongs to the new epoch.
   window.addEventListener("pointerdown", pressListener, { capture: true, passive: true });
@@ -68,12 +72,12 @@ function watchIntent(): void {
   if (stopWatching) return;
   const unsubscribe = usePanelStore.subscribe((state, prev) => {
     if (state.focusedId === prev.focusedId) return;
-    if (current && state.focusedId !== current.paneId) clearIntent();
+    if (current && state.focusedId !== current.paneId) supersede();
   });
   const onFocusIn = (e: FocusEvent) => {
     const el = e.target;
     if (!current || !(el instanceof Element)) return;
-    if (hasUsefulFocus(el) && !isOnSurface(el, current)) clearIntent();
+    if (hasUsefulFocus(el) && !isOnSurface(el, current)) supersede();
   };
   document.addEventListener("focusin", onFocusIn, true);
   stopWatching = () => {

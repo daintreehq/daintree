@@ -149,7 +149,13 @@ vi.mock("@/components/Terminal/TerminalIcon", () => ({
 }));
 
 vi.mock("@/components/Terminal/terminalFocus", () => ({
-  getTerminalFocusTarget: () => "terminal",
+  getTerminalFocusTarget: ({ preferredTarget }: { preferredTarget?: string }) =>
+    preferredTarget ?? "terminal",
+}));
+
+let mockRequestedSurface: string | null = null;
+vi.mock("@/components/Terminal/paneFocusRequest", () => ({
+  requestedPaneSurface: () => mockRequestedSurface,
 }));
 
 // Popover mock: captures the Radix callbacks (onOpenChange, onOpenAutoFocus,
@@ -453,6 +459,7 @@ describe("DockedTerminalItem mount-time close guard (#6602)", () => {
     capturedOnOpenChange = null;
     capturedOnOpenAutoFocus = null;
     capturedOnFocusOutside = null;
+    mockRequestedSurface = null;
     vi.mocked(terminalInstanceService.focus).mockClear();
   });
 
@@ -523,6 +530,16 @@ describe("DockedTerminalItem mount-time close guard (#6602)", () => {
     // The popover container ref settles synchronously on mount, so the stable
     // wrapper is moved in and the terminal is focused — no MutationObserver.
     expect(terminalInstanceService.focus).toHaveBeenCalledWith("t-1");
+  });
+
+  // A drop or type-anywhere that asked the pane for its hybrid input; focusing
+  // the terminal here would end that ask before the bar could take it.
+  it("leaves the keyboard to a hybrid input the pane was asked for", () => {
+    mockActiveDockTerminalId = "t-1";
+    mockRequestedSurface = "hybridInput";
+    render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
+
+    expect(terminalInstanceService.focus).not.toHaveBeenCalled();
   });
 
   it("does not focus an MCP-created dock terminal", () => {

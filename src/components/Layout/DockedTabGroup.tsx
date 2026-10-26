@@ -47,6 +47,7 @@ import { getMergedPresets } from "@/config/agents";
 import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { getTerminalFocusTarget } from "@/components/Terminal/terminalFocus";
+import { requestedPaneSurface } from "@/components/Terminal/paneFocusRequest";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
 import {
@@ -327,8 +328,9 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
     // writing in the pane's Scratchpad (#12835).
     if (isScratchpadElement(document.activeElement, activePanelId)) return;
 
+    // A drop or type-anywhere that asked this pane for its hybrid input gets it.
     const focusTarget = getTerminalFocusTarget({
-      preferredTarget: preferredTerminalFocusTarget,
+      preferredTarget: requestedPaneSurface(activePanelId) ?? preferredTerminalFocusTarget,
       hasHybridInputSurface: activeIsAgent,
       isInputDisabled: backendStatus === "disconnected" || backendStatus === "recovering",
       hybridInputEnabled,

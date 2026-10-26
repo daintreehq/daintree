@@ -347,12 +347,14 @@ describe("useTypeAnywhere", () => {
       const rafSpy = vi
         .spyOn(window, "requestAnimationFrame")
         .mockImplementation((cb: FrameRequestCallback) => window.setTimeout(() => cb(0), 0));
-      // The lazy editor mounts on the second attempt and takes the keyboard.
+      // The first attempt is accepted without focus landing (a handle that
+      // reports a mounted view, not a focused one); the lazy editor takes the
+      // keyboard on the next.
       const editor = document.createElement("div");
       editor.setAttribute("data-hybrid-input-root", "a1");
       editor.tabIndex = 0;
       focusPanelInput.mockImplementation(() => {
-        if (focusPanelInput.mock.calls.length < 2) return false;
+        if (focusPanelInput.mock.calls.length < 2) return true;
         document.body.appendChild(editor);
         editor.focus();
         return true;
@@ -374,13 +376,16 @@ describe("useTypeAnywhere", () => {
 
     // A press elsewhere or a newer request ends the request, and a retry after
     // that would drag the keyboard back to where the user has left.
-    it("stops retrying once its request is no longer current", async () => {
+    it.each([
+      ["ended", null],
+      ["replaced by a request for the terminal", { id: "a1", surface: "xterm" }],
+    ])("stops retrying once its request is %s", async (_, next) => {
       vi.useFakeTimers();
       const rafSpy = vi
         .spyOn(window, "requestAnimationFrame")
         .mockImplementation((cb: FrameRequestCallback) => window.setTimeout(() => cb(0), 0));
       focusPanelInput.mockImplementation(() => {
-        focusRequest.current = null;
+        focusRequest.current = next;
         return false;
       });
       renderHook(() => useTypeAnywhere());
