@@ -161,6 +161,7 @@ vi.mock("../../channels.js", () => ({
     VOICE_INPUT_PARAGRAPH_BOUNDARY: "voice-input:paragraph-boundary",
     VOICE_INPUT_FILE_TOKEN_RESOLVED: "voice-input:file-token-resolved",
     VOICE_INPUT_SESSION_ENDED: "voice-input:session-ended",
+    VOICE_INPUT_STOP_REQUESTED: "voice-input:stop-requested",
   },
 }));
 
@@ -832,6 +833,36 @@ describe("voiceInput — spoken send on Deepgram's short endpoint", () => {
     vi.advanceTimersByTime(5000);
 
     expect(toRenderer()).toEqual([completion("Fix the login bug")]);
+  });
+
+  it("strips a held send, and sends nothing, when another view's dictation key stops it", async () => {
+    sentenceEndingInSend();
+    vi.advanceTimersByTime(300);
+    const otherView = {
+      sender: {
+        id: 2,
+        once: vi.fn(),
+        removeListener: vi.fn(),
+        isDestroyed: () => false,
+        send: vi.fn(),
+      },
+    } as unknown as Electron.IpcMainInvokeEvent;
+    const stopRequested = {
+      channel: "voice-input:stop-requested",
+      payload: { sessionId: currentSessionId },
+    };
+
+    const handleStopLive = getHandler("voice-input:stop-live");
+    expect(await (handleStopLive as SessionHandler)(otherView, currentSessionId)).toBe(true);
+    // The request only asks the owner to stop; the held send is still pending.
+    expect(toRenderer()).toEqual([stopRequested]);
+
+    // The owner answers the request with its own stop.
+    const handleStop = getHandler("voice-input:stop");
+    await (handleStop as SessionHandler)(fakeEvent, currentSessionId);
+    vi.advanceTimersByTime(5000);
+
+    expect(toRenderer()).toEqual([stopRequested, completion("Fix the login bug")]);
   });
 
   it("retires a lone 'send it' with an empty completion when dictation stops", async () => {
