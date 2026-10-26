@@ -289,7 +289,7 @@ describe("CanopyRow", () => {
       expect(container.querySelector("#row-ask")!.textContent).toBe("Reading the screen…");
     });
 
-    it("holds three lines whether the words are in or on their way", () => {
+    it("carries no summary lines or bones, whether the words are in or on their way", () => {
       for (const item of [
         itemFor("finished", unread),
         itemFor("finished", { ...unread, headline: "Done", summary: "Shipped the fix." }),
@@ -341,6 +341,32 @@ describe("CanopyRow", () => {
     expect(container.querySelector("[role=progressbar]")).toBeNull();
     expect(itemDetail(lastItem!).progress?.value).toBe(75);
     expect(description(container)).toContain("4 of 6 steps done");
+  });
+
+  it("reads a risky approval's reason aloud though the row no longer prints it", () => {
+    const { container } = renderRow(
+      itemFor(
+        "approval",
+        {
+          headline: "Run the migration",
+          risk: "caution",
+          riskReason: "Rewrites every saved profile",
+        },
+        { waitingReason: "approval" }
+      )
+    );
+    expect(description(container)).toContain("Rewrites every saved profile");
+    expect(option(container).querySelector("[data-canopy-lead] + span")!.textContent).not.toContain(
+      "Rewrites every saved profile"
+    );
+    expect(container.querySelector(".text-status-warning")).not.toBeNull();
+  });
+
+  it("says a stalled working run's screen hasn't changed, on the status line", () => {
+    const { container } = renderRow(
+      itemFor("working", { stalledSince: NOW - 120_000 }, { agentState: "working" })
+    );
+    expect(container.querySelector("#row-ask")!.textContent).toContain("No change 2m");
   });
 
   it("is three lines tall: the name, what it wants, and where it runs", () => {

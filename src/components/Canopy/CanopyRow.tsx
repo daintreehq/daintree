@@ -322,8 +322,14 @@ export function CanopyRow({
   // the spinner and differ only in hue once motion is reduced; the word says
   // which, since the clock beside the glyph is only a time. Everything else the
   // run reported or is carrying out waits in the selected pane.
+  const stalledSince = card?.stalledSince ?? null;
+  const stalled =
+    !compact && row.band !== "quiet" && stalledSince !== null && itemIsBusy(item)
+      ? `No change ${formatWaitAge(stalledSince, nowMs)}`
+      : null;
   const statusTail = [
     asideWord,
+    stalled,
     row.band === "quiet" ? "Quiet" : null,
     unseenLabel,
     item.failed ? "Read failed" : null,
@@ -350,6 +356,7 @@ export function CanopyRow({
     progress?.spoken ?? null,
     facts.length > 0 ? `reported ${facts.map((fact) => fact.toLowerCase()).join(", ")}` : null,
     compact ? null : itemContextWarning(item),
+    caution && card?.riskReason ? `caution: ${card.riskReason}` : null,
     action !== null ? `for ${action}` : null,
     choices.length > 0
       ? `answer with ${choices.map((choice, index) => `${index + 1} ${choice}`).join(", ")}`
