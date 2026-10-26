@@ -613,6 +613,8 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
         commitTitle({ allowReset: true });
         returnFocus();
       } else if (e.key === "Escape") {
+        // The press cancels the rename and nothing else, a dictation included.
+        e.preventDefault();
         titleEditing.stopEditing();
         titleEditing.setEditingValue(title);
         returnFocus();

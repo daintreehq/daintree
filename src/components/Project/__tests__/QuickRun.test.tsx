@@ -343,6 +343,20 @@ describe("QuickRun", () => {
     expect(document.activeElement).toBe(input);
   });
 
+  it("claims Escape only when it shuts the suggestions", () => {
+    localStorage.setItem(
+      "daintree_cmd_history_test-project",
+      JSON.stringify([{ command: "npm test", timestamp: 1 }])
+    );
+    render(<Footer projectId="test-project" />);
+    const input = openPanel();
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+
+    // fireEvent returns false once a handler prevented the default.
+    expect(fireEvent.keyDown(input, { key: "Escape" })).toBe(false);
+    expect(fireEvent.keyDown(input, { key: "Escape" })).toBe(true);
+  });
+
   it("captions the destination with the branch, not the worktree's folder name", () => {
     render(<Footer projectId="test-project" />);
     openPanel();
