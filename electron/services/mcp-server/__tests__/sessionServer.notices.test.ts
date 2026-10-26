@@ -148,6 +148,28 @@ describe("terminal notices", () => {
       ]);
     });
 
+    it("carries an assistant item's generation through to its send and leaves worker items bare", async () => {
+      const { dispatchAction, start } = notifyDeps({ origin: "help" });
+      const server = await start("session-send-many-generation");
+
+      await callTool(server, {
+        name: "terminal.sendCommandMany",
+        arguments: {
+          sends: [
+            { terminalId: "assistant-a", command: "hi A", generation: 3 },
+            { terminalId: "assistant-b", command: "hi B", generation: 0 },
+            { terminalId: "t-worker", command: "go" },
+          ],
+        },
+      });
+
+      expect(dispatchAction.mock.calls.map((c) => [c[0], c[1]])).toEqual([
+        ["terminal.sendCommand", { terminalId: "assistant-a", command: "hi A", generation: 3 }],
+        ["terminal.sendCommand", { terminalId: "assistant-b", command: "hi B", generation: 0 }],
+        ["terminal.sendCommand", { terminalId: "t-worker", command: "go" }],
+      ]);
+    });
+
     it("passes an explicit replyLines, zero included, to each send's notice", async () => {
       const { terminalNotify, start } = notifyDeps({ origin: "help" });
       const server = await start("session-send-many-lines");

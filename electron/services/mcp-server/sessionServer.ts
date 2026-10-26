@@ -391,7 +391,12 @@ const BATCH_TOOLS: Record<string, BatchTool<unknown>> = {
       args.sends.map((send) => ({
         target: send.terminalId,
         tool: rendererOwnedOrigin ? "terminal.sendCommand" : "terminal.sendCommandOwned",
-        args: { terminalId: send.terminalId, command: send.command, ...notifyArgs(args) },
+        args: {
+          terminalId: send.terminalId,
+          command: send.command,
+          ...(send.generation !== undefined ? { generation: send.generation } : {}),
+          ...notifyArgs(args),
+        },
       })),
   }),
   "terminal.closeMany": batchTool({
