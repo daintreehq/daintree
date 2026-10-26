@@ -269,8 +269,9 @@ vi.mock("@/components/ui/EmptyState", () => ({
 import { ReviewHubContent } from "../ReviewHubContent";
 import { useUIStore } from "@/store/uiStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
-import { useDiffViewedStore } from "@/store/diffViewedStore";
-import { resetStagingStatusCacheForTests } from "../stagingStatusCache";
+import { useDiffViewedStore, selectViewedSet } from "@/store/diffViewedStore";
+import { setViewedMarkSourcesAccessor } from "@/store/storeAccessors";
+import { getCachedStagingStatus, resetStagingStatusCacheForTests } from "../stagingStatusCache";
 
 const WORKTREE_PATH = "/home/user/project";
 
@@ -412,7 +413,14 @@ describe("ReviewHub", () => {
 
     // Viewed markers live in the shared diffViewedStore (they deliberately
     // survive hub close/reopen), so tests must reset them explicitly.
-    useDiffViewedStore.setState({ viewedByWorktree: {} });
+    useDiffViewedStore.setState({ viewedByWorktree: {}, baselinesByWorktree: {} });
+    // Production registers this in the store orchestrator, which these tests
+    // don't boot: point it at the same fake worktree map and staging cache.
+    setViewedMarkSourcesAccessor((worktreePath) => ({
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- the fake map holds the fields these tests read
+      worktrees: worktreeStoreData.current as Map<string, WorktreeState>,
+      stagingStatus: getCachedStagingStatus(worktreePath),
+    }));
 
     worktreeStoreData.current = new Map([
       [
@@ -895,6 +903,66 @@ describe("ReviewHub", () => {
         name: "Mark src/index.ts as viewed",
       });
       expect(reopened.getAttribute("aria-checked")).toBe("true");
+    });
+
+    const viewedState = (path: string) =>
+      screen.getByRole("checkbox", { name: `Mark ${path} as viewed` }).getAttribute("aria-checked");
+
+    const poll = async (status: StagingStatus) => {
+      getStagingStatusMock.mockResolvedValue(status);
+      await act(async () => {
+        capturedUpdateCallback!(makeWorktreeState());
+        await Promise.resolve();
+      });
+    };
+
+    it("reads unviewed once a poll delivers new content for a Viewed file", async () => {
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      await waitFor(() => screen.getByText("index.ts"));
+
+      fireEvent.click(screen.getByRole("checkbox", { name: "Mark src/index.ts as viewed" }));
+      fireEvent.click(screen.getByRole("checkbox", { name: "Mark src/app.ts as viewed" }));
+      expect(viewedState("src/index.ts")).toBe("true");
+
+      await poll(
+        makeStatus({
+          staged: [{ path: "src/index.ts", status: "modified", insertions: 9, deletions: 2 }],
+        })
+      );
+
+      await waitFor(() => expect(viewedState("src/index.ts")).toBe("false"));
+      // The file nobody touched keeps its mark.
+      expect(viewedState("src/app.ts")).toBe("true");
+    });
+
+    it("keeps a Viewed mark through a poll that changes nothing", async () => {
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      await waitFor(() => screen.getByText("index.ts"));
+
+      fireEvent.click(screen.getByRole("checkbox", { name: "Mark src/index.ts as viewed" }));
+      await poll(makeStatus());
+
+      await waitFor(() => expect(getStagingStatusMock).toHaveBeenCalledTimes(2));
+      expect(viewedState("src/index.ts")).toBe("true");
+    });
+
+    it("reads unviewed when a Viewed file leaves the list and comes back unchanged", async () => {
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      await waitFor(() => screen.getByText("app.ts"));
+
+      fireEvent.click(screen.getByRole("checkbox", { name: "Mark src/app.ts as viewed" }));
+      expect(viewedState("src/app.ts")).toBe("true");
+
+      await poll(makeStatus({ unstaged: [] }));
+      await waitFor(() => expect(screen.queryByText("app.ts")).toBeNull());
+      // The mark goes when the row does, not when it comes back.
+      expect(
+        selectViewedSet(useDiffViewedStore.getState(), WORKTREE_PATH).has("unstaged:src/app.ts")
+      ).toBe(false);
+
+      await poll(makeStatus());
+      await waitFor(() => screen.getByText("app.ts"));
+      expect(viewedState("src/app.ts")).toBe("false");
     });
   });
 

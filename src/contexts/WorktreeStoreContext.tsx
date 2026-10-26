@@ -729,6 +729,16 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
       })
     );
 
+    // Viewed marks lapse on the first poll that shows their file changed
+    // (#14581). Quiet polls keep the map's identity, and with no marks the
+    // reconcile returns at once, so this costs nothing until a file is marked.
+    cleanups.push(
+      store.subscribe((state, prevState) => {
+        if (state.worktrees === prevState.worktrees) return;
+        useDiffViewedStore.getState().reconcileViewed();
+      })
+    );
+
     // Activations are stamped from the same `(epoch, seq)` counter as the
     // topology events but never advance the store's version — they carry no
     // topology. They get their own high-water mark so a replayed or reordered

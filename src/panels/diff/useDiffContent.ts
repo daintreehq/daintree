@@ -5,9 +5,9 @@ import {
   diffCacheKey,
   purgeWhitespaceEntriesExcept,
   requestDiff,
-  selectDiffFreshnessKey,
   type DiffSubject,
 } from "./diffContentCache";
+import { selectDiffFreshnessKey } from "@/lib/diffFreshness";
 
 const PREFETCH_DWELL_MS = 500;
 

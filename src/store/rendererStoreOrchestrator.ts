@@ -11,6 +11,7 @@ import { subscribeFleetFailureAutoClear } from "./fleetFailureStore";
 import { subscribeFleetRunWatcher } from "./fleetRunStore";
 import { useTerminalInputStore, unregisterInputController } from "./terminalInputStore";
 import { subscribeFleetBroadcastResult } from "@/components/Fleet/fleetRawInputBroadcast";
+import { getCachedStagingStatus } from "@/components/Worktree/ReviewHub/stagingStatusCache";
 import { useConsoleCaptureStore } from "./consoleCaptureStore";
 import { useResourceMonitoringStore } from "./resourceMonitoringStore";
 import { useVoiceRecordingStore } from "./voiceRecordingStore";
@@ -42,6 +43,7 @@ import {
   setWorktreeIdSetAccessor,
   setWorktreeGitDirAccessor,
   setWorktreePathIndexAccessor,
+  setViewedMarkSourcesAccessor,
   setFleetArmingClearAccessor,
   setFleetArmedIdsAccessor,
   setFleetLastArmedIdAccessor,
@@ -133,6 +135,10 @@ export function initStoreOrchestrator(): () => void {
     }
     return index;
   });
+  setViewedMarkSourcesAccessor((worktreePath) => ({
+    worktrees: getCurrentViewStoreOrNull()?.getState().worktrees ?? null,
+    stagingStatus: getCachedStagingStatus(worktreePath),
+  }));
   setFleetArmingClearAccessor(() => {
     useFleetArmingStore.getState().clear();
   });

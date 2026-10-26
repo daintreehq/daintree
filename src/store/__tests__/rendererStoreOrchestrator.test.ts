@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { PtyPanelData, PanelInstance } from "@shared/types/panel";
+import type { StagingStatus } from "@shared/types";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -1747,6 +1748,26 @@ describe("rendererStoreOrchestrator", () => {
       initStoreOrchestrator();
 
       expect(getPanelStoreSnapshot()).not.toBeNull();
+    });
+
+    it("hands Viewed marks the latest staging read for the worktree asked about (#14581)", async () => {
+      const { getViewedMarkSources } = await import("../storeAccessors");
+      const { beginStagingStatusRead, rememberStagingStatus, resetStagingStatusCacheForTests } =
+        await import("@/components/Worktree/ReviewHub/stagingStatusCache");
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- only identity is compared
+      const status = { staged: [], unstaged: [] } as unknown as StagingStatus;
+
+      try {
+        rememberStagingStatus("/wt", status, beginStagingStatusRead());
+        expect(getViewedMarkSources("/wt")?.stagingStatus).toBe(status);
+        expect(getViewedMarkSources("/other")?.stagingStatus).toBeNull();
+
+        destroyStoreOrchestrator();
+        expect(getViewedMarkSources("/wt")).toBeNull();
+      } finally {
+        initStoreOrchestrator();
+        resetStagingStatusCacheForTests();
+      }
     });
   });
 

@@ -1,4 +1,4 @@
-import type { AgentSettingsEntry, TabGroup } from "@shared/types";
+import type { AgentSettingsEntry, StagingStatus, TabGroup, WorktreeSnapshot } from "@shared/types";
 import { getNarrowPanel } from "./slices/panelRegistry/selectors";
 
 // Carrier element from the legacy `panelsById` shape, sourced through
@@ -29,12 +29,21 @@ export interface WorktreeSelectionSnapshot {
   deletedWorktreeIds?: ReadonlySet<string>;
 }
 
+/** What Daintree has observed of a worktree's files, for Viewed marks to compare against. */
+export interface ViewedMarkSources {
+  /** The current project view's worktrees, or `null` when no view store is mounted. */
+  worktrees: ReadonlyMap<string, WorktreeSnapshot> | null;
+  /** The last accepted staging read for the worktree, or `null` when there is none. */
+  stagingStatus: StagingStatus | null;
+}
+
 let _getPanelStoreState: (() => PanelStoreSnapshot) | null = null;
 let _getWorktreeSelectionState: (() => WorktreeSelectionSnapshot) | null = null;
 let _getWorktreeIdSet: (() => Set<string> | null) | null = null;
 let _getWorktreeGitDirById: ((worktreeId: string) => string | undefined) | null = null;
 let _getWorktreePathIndex: (() => ReadonlyMap<string, string> | null) | null = null;
 let _getProjectPathIndex: (() => ReadonlyMap<string, string> | null) | null = null;
+let _getViewedMarkSources: ((worktreePath: string) => ViewedMarkSources) | null = null;
 let _setPanelExtensionState: ((panelId: string, patch: Record<string, unknown>) => boolean) | null =
   null;
 let _setPanelTitle: ((panelId: string, title: string) => void) | null = null;
@@ -130,6 +139,17 @@ export function setWorktreePathIndexAccessor(
  */
 export function getWorktreePathIndex(): ReadonlyMap<string, string> | null {
   return _getWorktreePathIndex?.() ?? null;
+}
+
+export function setViewedMarkSourcesAccessor(
+  getter: (worktreePath: string) => ViewedMarkSources
+): void {
+  _getViewedMarkSources = getter;
+}
+
+/** `null` until registered; Viewed marks then keep no baseline and never lapse. */
+export function getViewedMarkSources(worktreePath: string): ViewedMarkSources | null {
+  return _getViewedMarkSources?.(worktreePath) ?? null;
 }
 
 export function setProjectPathIndexAccessor(
@@ -270,6 +290,7 @@ export function resetStoreAccessorsForTesting(): void {
   _getWorktreeGitDirById = null;
   _getWorktreePathIndex = null;
   _getProjectPathIndex = null;
+  _getViewedMarkSources = null;
   _setPanelExtensionState = null;
   _setPanelTitle = null;
   _clearPanelStoreForSwitch = null;

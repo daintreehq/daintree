@@ -1,6 +1,5 @@
-import type { GitStatus, WorktreeSnapshot } from "@shared/types";
+import type { GitStatus } from "@shared/types";
 import { actionService } from "@/services/ActionService";
-import { isAbsolute, join, normalize } from "@shared/utils/path";
 import { GIT_FILE_DIFF_MAX_BYTES } from "@shared/config/gitReadLimits";
 
 /**
@@ -30,11 +29,6 @@ const diffCache = new Map<string, CachedDiff>();
 const inflightDiffRequests = new Map<string, Promise<CachedDiff | null>>();
 let diffCacheGeneration = 0;
 
-// Distinct from undefined (no signal at all): the worktree is tracked but the
-// file is absent from its change list, so a file staged/reverted/committed
-// while its diff is open still reads as changed.
-const FRESHNESS_MISSING = "missing";
-
 /** Identifies what to diff — the two fetch paths differ past this point. */
 export type DiffSubject =
   | {
@@ -50,37 +44,6 @@ export type DiffSubject =
       baseBranch: string;
       currentBranch: string;
     };
-
-// Store change paths are absolute (electron/utils/git.ts keys changesMap by
-// absolutePath) while hosts pass worktree-relative paths — resolve both
-// against the worktree root before comparing.
-function comparablePath(worktreePath: string, path: string): string {
-  return isAbsolute(path) ? normalize(path) : join(worktreePath, path);
-}
-
-/**
- * Primitive freshness key for one file from the live worktree store.
- * `changes` is rebuilt wholesale every poll tick, so returning the found entry
- * would defeat Object.is bail-outs — the scalar collapses re-renders to actual
- * changes of this one file (#8635).
- */
-export function selectDiffFreshnessKey(
-  state: { worktrees: Map<string, WorktreeSnapshot> },
-  worktreePath: string,
-  filePath: string
-): string | undefined {
-  const worktreeKey = normalize(worktreePath);
-  const fileKey = comparablePath(worktreePath, filePath);
-  for (const worktree of state.worktrees.values()) {
-    if (normalize(worktree.path) !== worktreeKey) continue;
-    const changes = worktree.worktreeChanges?.changes;
-    if (!changes) return undefined;
-    const entry = changes.find((change) => comparablePath(worktreePath, change.path) === fileKey);
-    if (!entry) return FRESHNESS_MISSING;
-    return `${entry.status}:${entry.mtimeMs ?? entry.mtime ?? ""}:${entry.insertions ?? ""}:${entry.deletions ?? ""}`;
-  }
-  return undefined;
-}
 
 export function _resetDiffCacheForTests(): void {
   diffCache.clear();
