@@ -82,6 +82,12 @@ import type { RequiredPluginToolStatus } from "../../../../shared/types/ipc/plug
 import { pluginManifestIdFromInstanceKey } from "../../../../shared/types/plugin.js";
 import { describeMissingPluginTools } from "../../../../shared/utils/requiredPluginTools.js";
 import { pluginMcpGrantRegistry } from "../../../services/pluginAgentMcp/grantRegistry.js";
+import {
+  assertHostAgentCapacity,
+  isHostAgentLimitError,
+  readHostAgentLimit,
+} from "../../../services/hostAgentLimit.js";
+import type { HostAgentLimitSnapshot } from "../../../../shared/utils/hostAgentLimit.js";
 
 type ValidatedTerminalSpawnOptions = z.output<typeof TerminalSpawnOptionsSchema>;
 
@@ -366,6 +372,11 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     ctx: IpcContext,
     validatedOptions: ValidatedTerminalSpawnOptions
   ): Promise<string> => {
+    // Refused before it waits for a rate-limit slot or mints anything; asked
+    // again where the PTY is registered, which is the check that holds (#14704).
+    if (validatedOptions.launchAgentId) {
+      assertHostAgentCapacity(ptyClient, validatedOptions.id);
+    }
     const bypassedRateLimit = validatedOptions.restore === true && consumeRestoreQuota();
     if (!bypassedRateLimit) {
       // A bounded recipe consumes one admission slot, not one slot per panel.
@@ -1250,6 +1261,11 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       const postSpawnInput =
         safeCommand.length > 0 && !commandLaunchShell ? `${safeCommand}\r` : undefined;
 
+      // The host's agent ceiling, counted in the same turn as `ptyClient.spawn`
+      // registers this terminal, so launches from every Shell, view and MCP
+      // client can't overtake one another between the count and the spawn.
+      // Nothing from here to the spawn may await.
+      if (launchAgentId) assertHostAgentCapacity(ptyClient, id);
       if (pluginToolsLaunchProjectId !== null) {
         recordPluginToolsLaunch(id, pluginToolsLaunchProjectId);
       }
@@ -1335,6 +1351,8 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       if (isHelpLaunch) {
         helpSessionService.unbindTerminal(id);
       }
+      // Kept whole, so every caller can say which host refused and why.
+      if (isHostAgentLimitError(error)) throw error;
       const errorMessage = formatErrorMessage(error, "Failed to spawn terminal");
       throw new Error(`Failed to spawn terminal: ${errorMessage}`);
     }
@@ -1490,6 +1508,9 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
   // pressure is the worst placed to answer.
   const handleTerminalGetHostMemoryPause = async (): Promise<HostMemoryPauseSnapshot> =>
     ptyClient.getHostMemoryPause();
+
+  const handleTerminalGetHostAgentLimit = async (): Promise<HostAgentLimitSnapshot | null> =>
+    readHostAgentLimit(ptyClient);
 
   const handleAgentSessionList = async (payload: { worktreeId?: string; projectId?: string }) => {
     const { app } = await import("electron");
@@ -1787,6 +1808,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         CHANNELS.TERMINAL_GET_HOST_MEMORY_PAUSE,
         handleTerminalGetHostMemoryPause
       ),
+      getHostAgentLimit: op(CHANNELS.TERMINAL_GET_HOST_AGENT_LIMIT, handleTerminalGetHostAgentLimit),
       agentSessionList: op(CHANNELS.AGENT_SESSION_LIST, handleAgentSessionList),
       agentSessionClear: op(CHANNELS.AGENT_SESSION_CLEAR, handleAgentSessionClear),
       agentSessionGetRetention: op(

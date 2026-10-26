@@ -1,12 +1,22 @@
 import type { PluginHostError } from "./remoteHosts.js";
 import type { RequiredPluginToolsError } from "./ipc/pluginAgentMcp.js";
+import type { HostAgentLimitSnapshot } from "../utils/hostAgentLimit.js";
 
 /**
  * Structured, allowlisted error details that survive IPC serialization and
  * the packaged-build sanitiser (unlike `context`, which is stripped). Keep
  * every member small and free of paths, secrets and user content.
  */
-export type AppErrorDetails = PluginHostError | RequiredPluginToolsError | HostSwitchOnScreenError;
+export type AppErrorDetails =
+  | PluginHostError
+  | RequiredPluginToolsError
+  | HostSwitchOnScreenError
+  | HostAgentLimitError;
+
+/** An agent launch the host refused at its agent ceiling, with the count it was judged on. */
+export interface HostAgentLimitError extends HostAgentLimitSnapshot {
+  code: "HOST_AGENT_LIMIT_REACHED";
+}
 
 /**
  * A host switch that failed and is showing why on the window's own switch
@@ -110,4 +120,7 @@ export type AppErrorCode =
   // An agent launch that requires a plugin's agent tools was refused because
   // they couldn't be handed over; the per-plugin states travel as details.
   | "REQUIRED_PLUGIN_TOOLS_UNAVAILABLE"
+  // An agent launch the host refused because its live agent terminals, across
+  // every project and Shell, are at the ceiling its memory sets (#14704).
+  | "HOST_AGENT_LIMIT_REACHED"
   | "INTERNAL";
