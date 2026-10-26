@@ -689,6 +689,12 @@ describe("VoiceRecordingService adversarial", () => {
     });
 
     it("keeps the text of a stop that lands while the backend connects (#14603)", async () => {
+      // The correction pass after the stop is covered elsewhere.
+      runtime.voiceInput.getSettings.mockResolvedValue({
+        enabled: true,
+        openaiApiKey: "sk-key",
+        correctionEnabled: false,
+      });
       const backendStart = deferred<{ ok: boolean }>();
       runtime.startQueue.push(backendStart.promise);
       const drain = deferred<void>();

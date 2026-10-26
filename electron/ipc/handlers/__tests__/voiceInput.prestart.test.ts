@@ -317,7 +317,7 @@ describe("voiceInput — audio sent before the provider starts", () => {
     await stopping;
     expect(sent).toContainEqual({
       channel: "voice-input:transcription-complete",
-      payload: { text: "Yes, carry on", willCorrect: false },
+      payload: { sessionId: currentSessionId, text: "Yes, carry on", willCorrect: false },
     });
 
     // The next session must not replay the stopped session's audio.
