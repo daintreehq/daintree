@@ -65,7 +65,9 @@ function resolve(node: ts.Expression, constants: Constants): string | { reason: 
   if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
     return resolve(node.left, constants);
   }
-  return { reason: `\`${node.getText().slice(0, 60)}\` is not a literal or a named string constant` };
+  return {
+    reason: `\`${node.getText().slice(0, 60)}\` is not a literal or a named string constant`,
+  };
 }
 
 /**

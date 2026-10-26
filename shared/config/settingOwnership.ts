@@ -291,9 +291,9 @@ export const SETTING_CATALOG = {
       "daintree_cmd_history_*": devicePerProject,
       "daintree_quickrun_autorestart_*": devicePerProject,
       "daintree_quickrun_expanded_*": devicePerProject,
-      "daintree_project_hosts_expanded": device,
-      "daintree_project_hosts_all_shown": device,
-      "daintree_project_hosts_handoff": device,
+      daintree_project_hosts_expanded: device,
+      daintree_project_hosts_all_shown: device,
+      daintree_project_hosts_handoff: device,
       // Keys earlier builds wrote that the app still reads once or cleans up.
       "daintree-agent-preferences": device,
       "project-groups-storage": device,
