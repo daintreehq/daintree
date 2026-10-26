@@ -393,8 +393,9 @@ export function VoiceInputSettingsTab() {
   // a failed change leaves the page as it was, with the banner and a retry.
   const changeDictionary = async (
     label: string,
-    run: () => Promise<VoiceDictionaryState>
-  ): Promise<boolean> => {
+    run: () => Promise<VoiceDictionaryState>,
+    onSaved?: () => void
+  ): Promise<void> => {
     try {
       const next = await run();
       setSettings((current) => ({
@@ -403,27 +404,27 @@ export function VoiceInputSettingsTab() {
         suggestedDictionary: next.suggestedDictionary,
       }));
       setSaveFailure((current) => (current?.group === "dictionary" ? null : current));
-      return true;
+      onSaved?.();
     } catch (err) {
       setSaveFailure({
         group: "dictionary",
         label,
-        retry: () => void changeDictionary(label, run),
+        retry: () => void changeDictionary(label, run, onSaved),
       });
       logWarn("Failed to change the voice dictionary", voiceErrorLogFields(err));
-      return false;
     }
   };
 
-  const addDictionaryWord = async () => {
+  const addDictionaryWord = () => {
     const term = newDictionaryWord.trim();
     if (!term) return;
     dictionaryInputRef.current?.focus();
-    const saved = await changeDictionary("The dictionary", () =>
-      window.electron.voiceDictionary.add({ term })
+    void changeDictionary(
+      "The dictionary",
+      () => window.electron.voiceDictionary.add({ term }),
+      // Keep anything typed while the add was in flight.
+      () => setNewDictionaryWord((current) => (current.trim() === term ? "" : current))
     );
-    // Keep anything typed while the add was in flight.
-    if (saved) setNewDictionaryWord((current) => (current.trim() === term ? "" : current));
   };
 
   // The removed chip took focus with it; hand it to the field a keyboard user adds from.
@@ -734,7 +735,7 @@ export function VoiceInputSettingsTab() {
             onDismissSuggestion={dismissSuggestion}
             newWord={newDictionaryWord}
             onNewWordChange={setNewDictionaryWord}
-            onAdd={() => void addDictionaryWord()}
+            onAdd={addDictionaryWord}
             onRemove={removeDictionaryWord}
             inputRef={dictionaryInputRef}
           />
