@@ -74,6 +74,9 @@ vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
     this.sendAudioChunk = function () {};
     this.destroy = function () {};
     this.commitParagraphBoundary = function () {};
+    this.keytermsNeededToConnect = function (settings: { transcriptionProvider?: string }) {
+      return settings.transcriptionProvider === "deepgram";
+    };
   },
 }));
 
