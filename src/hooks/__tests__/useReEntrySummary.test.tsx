@@ -500,8 +500,16 @@ describe("useReEntrySummary", () => {
     act(() => {
       window.dispatchEvent(new Event("blur"));
     });
-    addEntry({ type: "warning", message: "Recipes failed to load", context: { projectId: "proj-here" } });
-    addEntry({ type: "success", message: "Done", context: { worktreeId: "wt-1", projectId: "proj-here" } });
+    addEntry({
+      type: "warning",
+      message: "Recipes failed to load",
+      context: { projectId: "proj-here" },
+    });
+    addEntry({
+      type: "success",
+      message: "Done",
+      context: { worktreeId: "wt-1", projectId: "proj-here" },
+    });
 
     focusAfter(5000);
 
@@ -531,7 +539,9 @@ describe("useReEntrySummary", () => {
   it("names a scratch workspace's row after the scratch this view was made for", () => {
     vi.mocked(getViewWorkspaceId).mockReturnValue("scratch-1");
     useScratchStore.setState({ scratches: [{ id: "scratch-1", name: "Spike" }] } as never);
-    useProjectStore.setState({ currentProject: { id: "proj-elsewhere", name: "Elsewhere" } } as never);
+    useProjectStore.setState({
+      currentProject: { id: "proj-elsewhere", name: "Elsewhere" },
+    } as never);
     const { result } = renderHook(() => useReEntrySummary());
 
     act(() => {
@@ -594,8 +604,16 @@ describe("useReEntrySummary", () => {
       message: "Elsewhere",
       context: { worktreeId: "/work/other-repo/feature-x", projectId: "proj-other" },
     });
-    addEntry({ type: "info", message: "Closed idle project", context: { projectId: "proj-other" } });
-    addEntry({ type: "success", message: "Here", context: { worktreeId: "wt-1", projectId: "proj-here" } });
+    addEntry({
+      type: "info",
+      message: "Closed idle project",
+      context: { projectId: "proj-other" },
+    });
+    addEntry({
+      type: "success",
+      message: "Here",
+      context: { worktreeId: "wt-1", projectId: "proj-here" },
+    });
 
     focusAfter(5000);
 

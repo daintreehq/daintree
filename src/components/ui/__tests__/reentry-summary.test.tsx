@@ -103,12 +103,14 @@ describe("ReEntrySummary", () => {
   it("renders worktree rows with severity icon, name, and title", () => {
     const state = makeState({
       rows: [
-        makeRow({ key: "worktree:wt-1",
+        makeRow({
+          key: "worktree:wt-1",
           label: "feature-foo",
           type: "error",
           highlightTitle: "Build failed",
         }),
-        makeRow({ key: "worktree:wt-2",
+        makeRow({
+          key: "worktree:wt-2",
           label: "feature-bar",
           type: "warning",
           highlightTitle: "Tests flaky",
@@ -213,7 +215,9 @@ describe("ReEntrySummary", () => {
     const at = new Date(2026, 9, 26, 11, 55, 0).getTime();
     render(
       <ReEntrySummary
-        state={makeState({ rows: [makeRow({ label: "feature-foo", highlight: { timestamp: at } })] })}
+        state={makeState({
+          rows: [makeRow({ label: "feature-foo", highlight: { timestamp: at } })],
+        })}
       />
     );
     const time = screen.getByRole("status").querySelector("time");
