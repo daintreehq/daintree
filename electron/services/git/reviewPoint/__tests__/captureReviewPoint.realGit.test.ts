@@ -332,6 +332,35 @@ describe("captureReviewPoint", () => {
       });
     });
 
+    it("records intent-to-add even when its placeholder matches HEAD", async () => {
+      const repo = topicRepo();
+      write(repo, "empty.txt", "");
+      git(repo, "add", "empty.txt");
+      git(repo, "commit", "-q", "-m", "empty");
+      git(repo, "rm", "-q", "--cached", "empty.txt");
+      git(repo, "add", "-N", "empty.txt");
+      expect(entry(await capturePoint(repo), "empty.txt")).toMatchObject({
+        head: { mode: "100644", oid: blob("") },
+        index: { kind: "intent-to-add", mode: "100644" },
+      });
+    });
+
+    posixOnly(
+      "takes an intent-to-add file's mode when git ignores the executable bit",
+      async () => {
+        const repo = topicRepo();
+        write(repo, "run.sh", "#!/bin/sh\n");
+        fs.chmodSync(path.join(repo, "run.sh"), 0o755);
+        git(repo, "add", "-N", "run.sh");
+        git(repo, "config", "core.fileMode", "false");
+        fs.chmodSync(path.join(repo, "run.sh"), 0o644);
+        expect(entry(await capturePoint(repo), "run.sh")).toMatchObject({
+          index: { kind: "intent-to-add", mode: "100755" },
+          worktree: { kind: "file", mode: "100755" },
+        });
+      }
+    );
+
     it("keeps a staged empty file apart from intent-to-add", async () => {
       const repo = topicRepo();
       write(repo, "empty.txt", "");
@@ -612,6 +641,14 @@ describe("captureReviewPoint", () => {
       }
     });
 
+    posixOnly("keeps a name that starts with a byte order mark", async () => {
+      const repo = topicRepo();
+      write(repo, "\uFEFFbom.txt", "bom\n");
+      const point = await capturePoint(repo);
+      expect(paths(point)).toEqual(["\uFEFFbom.txt"]);
+      expect(point.entries[0]?.pathBytes).toBeUndefined();
+    });
+
     it("never folds case", async () => {
       const repo = topicRepo();
       write(repo, "Case.txt", "upper\n");
@@ -716,6 +753,17 @@ describe("captureReviewPoint", () => {
       const read = point.entries.filter((candidate) => candidate.worktree.kind === "file");
       expect(read).toHaveLength(1);
       expect(point.incomplete?.reasons).toEqual(["byte-limit"]);
+    });
+
+    posixOnly("counts link text against the byte budget", async () => {
+      const repo = topicRepo();
+      fs.symlinkSync("a.txt", path.join(repo, "link"));
+      expect(
+        entry(await capturePoint(repo, { limits: { maxTotalBytes: 0 } }), "link")?.worktree
+      ).toEqual({
+        kind: "unverifiable",
+        reason: "byte-limit",
+      });
     });
 
     it("hashes a file across many read chunks", async () => {

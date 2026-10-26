@@ -44,8 +44,9 @@ const reviewPointPath = {
 };
 
 const encoder = new TextEncoder();
-const strictUtf8 = new TextDecoder("utf-8", { fatal: true });
-const lenientUtf8 = new TextDecoder("utf-8");
+// `ignoreBOM`: a name may start with U+FEFF, and that is part of the name.
+const strictUtf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+const lenientUtf8 = new TextDecoder("utf-8", { ignoreBOM: true });
 
 /**
  * The exact bytes a path stands for, or null when its two fields don't describe
@@ -87,14 +88,17 @@ export function reviewPointPathKey(path: { path: string; pathBytes?: string }): 
 /** Relative, no `.`, `..` or empty segments; a trailing `/` only where a directory may stand. */
 function isRepositoryPath(bytes: Uint8Array, allowDirectory: boolean): boolean {
   if (bytes.length === 0 || bytes.includes(0)) return false;
-  const segments: number[][] = [[]];
+  let current: number[] = [];
+  const segments: number[][] = [current];
   for (const byte of bytes) {
-    if (byte === 0x2f) segments.push([]);
-    else segments[segments.length - 1].push(byte);
+    if (byte === 0x2f) {
+      current = [];
+      segments.push(current);
+    } else {
+      current.push(byte);
+    }
   }
-  if (allowDirectory && segments.length > 1 && segments[segments.length - 1].length === 0) {
-    segments.pop();
-  }
+  if (allowDirectory && segments.length > 1 && current.length === 0) segments.pop();
   return segments.every(
     (segment) =>
       segment.length > 0 &&
@@ -105,7 +109,10 @@ function isRepositoryPath(bytes: Uint8Array, allowDirectory: boolean): boolean {
 
 function comparePathBytes(a: Uint8Array, b: Uint8Array): number {
   const length = Math.min(a.length, b.length);
-  for (let i = 0; i < length; i++) if (a[i] !== b[i]) return a[i] - b[i];
+  for (let i = 0; i < length; i++) {
+    const difference = (a[i] ?? 0) - (b[i] ?? 0);
+    if (difference !== 0) return difference;
+  }
   return a.length - b.length;
 }
 
@@ -210,12 +217,20 @@ export const REVIEW_POINT_INCOMPLETE_REASONS = [
 
 export type ReviewPointIncompleteReason = (typeof REVIEW_POINT_INCOMPLETE_REASONS)[number];
 
-/** A ref or branch name: no whitespace, control characters or revision syntax. */
-const refName = z
-  .string()
-  .min(1)
-  .max(1024)
-  .refine((value) => !/[\s\x00-\x1f\x7f~^:?*[\\]|\.\.|@\{/.test(value) && !value.startsWith("-"));
+/**
+ * A ref or branch name, by git's own rule: no ASCII control characters or
+ * space, none of `~^:?*[\`, no `..` or `@{`. Anything else, non-ASCII spaces
+ * included, git accepts.
+ */
+function isRefName(value: string): boolean {
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i);
+    if (code <= 0x20 || code === 0x7f) return false;
+  }
+  return !/[~^:?*[\\]|\.\.|@\{/.test(value) && !value.startsWith("-");
+}
+
+const refName = z.string().min(1).max(1024).refine(isRefName);
 
 const fullRef = refName.refine((value) => value.startsWith("refs/"));
 
@@ -312,8 +327,9 @@ function checkPoint(point: z.infer<typeof ReviewPointShape>, ctx: z.RefinementCt
     if (item.index.kind === "entry") oids.push(item.index.oid);
     if (item.index.kind === "conflicted") {
       const stages = item.index.stages.map((stage) => stage.stage);
-      if (stages.some((stage, i) => i > 0 && stage <= stages[i - 1]))
+      if (stages.some((stage, i) => i > 0 && stage <= (stages[i - 1] ?? 0))) {
         fail("Conflict stages repeat");
+      }
       oids.push(...item.index.stages.map((stage) => stage.oid));
     }
 

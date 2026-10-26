@@ -204,6 +204,8 @@ interface WorktreeOutcome {
   identity: ReviewPointWorktreeIdentity;
   /** Re-checked once every read is done; null when there is nothing to re-check. */
   recheck: (() => Promise<boolean>) | null;
+  /** Set when a symlinked directory on the way made the path absent. */
+  linkedAncestor?: boolean;
 }
 
 interface RepositorySettings {
@@ -358,19 +360,19 @@ async function capture(
       };
       const visible = await read("visible");
       const invisible = await read("invisible");
-      for (const [key, shown] of visible) {
+      for (const key of new Set([...visible.keys(), ...invisible.keys()])) {
+        const shown = visible.get(key);
         const hidden = invisible.get(key);
         const candidate = candidates.get(key);
-        if (
-          !candidate ||
-          (hidden && hidden.dstMode === shown.dstMode && hidden.dstOid === shown.dstOid)
-        ) {
-          continue;
-        }
-        candidate.intentToAdd = {
-          mode: shown.dstMode,
-          head: hidden ? gitEntryOrNull(hidden.srcMode, hidden.srcOid) : null,
-        };
+        const same =
+          shown && hidden && shown.dstMode === hidden.dstMode && shown.dstOid === hidden.dstOid;
+        if (!candidate || same) continue;
+        // Read without the entry, HEAD's side is what HEAD has. Read with it and
+        // showing nothing, the entry matches HEAD, so HEAD's mode is its mode.
+        const headSide = hidden ? gitEntryOrNull(hidden.srcMode, hidden.srcOid) : null;
+        const mode = shown?.dstMode ?? headSide?.mode;
+        if (!mode) continue;
+        candidate.intentToAdd = { mode, head: headSide };
       }
     } catch (error) {
       if (!(error instanceof GitOutputLimitError)) throw error;
@@ -521,9 +523,14 @@ async function capture(
     return { kind: "changed-during-capture" };
   }
   let unchanged = true;
+  const ancestorsNow = new Map<string, Promise<boolean>>();
   await forEachLimited([...kept, ...dropped], READ_CONCURRENCY, async (candidate) => {
-    const recheck = candidate.worktree?.recheck;
-    if (unchanged && recheck && !(await recheck())) unchanged = false;
+    signal.throwIfAborted();
+    const outcome = candidate.worktree;
+    if (!unchanged || !outcome || outcome.identity.kind === "unverifiable") return;
+    const linked = await hasLinkedAncestor(root, candidate.path, ancestorsNow);
+    if (linked !== (outcome.linkedAncestor ?? false)) unchanged = false;
+    else if (outcome.recheck && !(await outcome.recheck())) unchanged = false;
   });
   if (!unchanged) return { kind: "changed-during-capture" };
   // A recheck that settled after the deadline confirms nothing for the caller.
@@ -732,16 +739,14 @@ async function readWorktree(
 ): Promise<WorktreeOutcome | "moved"> {
   const target = absoluteWorktreePath(root, candidate.path);
   const index = indexIdentity(candidate);
-  const indexMode = index.kind === "entry" ? index.mode : null;
+  const indexMode = index.kind === "entry" || index.kind === "intent-to-add" ? index.mode : null;
   const headMode = headIdentity(candidate)?.mode ?? null;
 
   // A directory swapped for a symlink would have the read follow it out of the
   // worktree; git counts what was under it as removed, and so does the capture.
+  // Whether one is in the way is asked again when the reads are confirmed.
   if (await hasLinkedAncestor(root, candidate.path, linkedAncestors)) {
-    return {
-      identity: { kind: "absent" },
-      recheck: () => hasLinkedAncestor(root, candidate.path, new Map()),
-    };
+    return { identity: { kind: "absent" }, recheck: null, linkedAncestor: true };
   }
 
   const isGitlink = indexMode === "160000" || (index.kind === "absent" && headMode === "160000");
@@ -978,7 +983,8 @@ function unverifiable(
   return { kind: "unverifiable", reason };
 }
 
-const displayDecoder = new TextDecoder("utf-8");
+// `ignoreBOM`: a name may start with U+FEFF, and that is part of the name.
+const displayDecoder = new TextDecoder("utf-8", { ignoreBOM: true });
 
 /** The path as text when that is exact, with its bytes alongside when it isn't. */
 function pathFields(bytes: Buffer): { path: string; pathBytes?: string } {

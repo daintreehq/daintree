@@ -9,6 +9,20 @@ import {
 const A = "a".repeat(40);
 const B = "b".repeat(40);
 
+const FILE_ENTRY: ReviewPoint["entries"][number] = {
+  path: "a.txt",
+  head: { mode: "100644", oid: A },
+  index: { kind: "entry", mode: "100644", oid: A },
+  worktree: { kind: "file", mode: "100644", oid: B, size: 2 },
+};
+
+const GAP_ENTRY: ReviewPoint["entries"][number] = {
+  path: "b.txt",
+  head: null,
+  index: { kind: "absent" },
+  worktree: { kind: "unverifiable", reason: "file-too-large" },
+};
+
 function point(overrides: Partial<ReviewPoint> = {}): ReviewPoint {
   return {
     version: 1,
@@ -24,20 +38,7 @@ function point(overrides: Partial<ReviewPoint> = {}): ReviewPoint {
       tip: B,
       mergeBases: [B],
     },
-    entries: [
-      {
-        path: "a.txt",
-        head: { mode: "100644", oid: A },
-        index: { kind: "entry", mode: "100644", oid: A },
-        worktree: { kind: "file", mode: "100644", oid: B, size: 2 },
-      },
-      {
-        path: "b.txt",
-        head: null,
-        index: { kind: "absent" },
-        worktree: { kind: "unverifiable", reason: "file-too-large" },
-      },
-    ],
+    entries: [FILE_ENTRY, GAP_ENTRY],
     incomplete: {
       reasons: ["file-too-large"],
       uncovered: [{ path: "b.txt", reason: "file-too-large" }],
@@ -52,6 +53,13 @@ const valid = point();
 describe("ReviewPointSchema", () => {
   it("accepts what a capture produces", () => {
     expect(ReviewPointSchema.safeParse(valid).success).toBe(true);
+    // Names git accepts: a non-ASCII space in a branch, a leading byte order mark in a path.
+    const unusual = point({
+      head: { kind: "branch", branch: "topic\u00A0name", commit: A },
+      entries: [{ ...FILE_ENTRY, path: "\uFEFFa.txt" }],
+      incomplete: null,
+    });
+    expect(ReviewPointSchema.safeParse(unusual).success).toBe(true);
   });
 
   it.each<[string, ReviewPoint]>([
@@ -59,8 +67,8 @@ describe("ReviewPointSchema", () => {
     ["an object id of the wrong format", point({ objectFormat: "sha256" })],
     ["a base tip with no ref", point({ base: { ...valid.base, ref: null } })],
     ["merge bases with no tip", point({ base: { ...valid.base, ref: null, tip: null } })],
-    ["entries out of byte order", point({ entries: [...valid.entries].reverse() })],
-    ["the same path twice", point({ entries: [valid.entries[0], valid.entries[0]] })],
+    ["entries out of byte order", point({ entries: [GAP_ENTRY, FILE_ENTRY] })],
+    ["the same path twice", point({ entries: [FILE_ENTRY, FILE_ENTRY] })],
     [
       "a count below the listed paths",
       point({ incomplete: { ...valid.incomplete!, uncoveredCount: 0 } }),
@@ -75,7 +83,7 @@ describe("ReviewPointSchema", () => {
     ],
     [
       "a path that climbs out of the worktree",
-      point({ entries: [{ ...valid.entries[0], path: "../a.txt" }], incomplete: null }),
+      point({ entries: [{ ...FILE_ENTRY, path: "../a.txt" }], incomplete: null }),
     ],
     [
       "a base ref read as an option",
