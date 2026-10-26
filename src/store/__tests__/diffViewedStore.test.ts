@@ -134,6 +134,8 @@ describe("diffViewedStore", () => {
       main?: string;
       branch?: string;
       mainBranch?: string | null;
+      mainDetached?: boolean;
+      wtDetached?: boolean;
       mainChanges?: FileChangeDetail[];
     }
 
@@ -146,6 +148,7 @@ describe("diffViewedStore", () => {
             snapshot(MAIN, {
               isMainWorktree: true,
               ...(at.mainBranch !== null && { branch: at.mainBranch ?? "main" }),
+              ...(at.mainDetached && { isDetached: true }),
               changes: at.mainChanges ?? [],
               headOid: at.main ?? "base-1",
             }),
@@ -154,6 +157,7 @@ describe("diffViewedStore", () => {
             WT,
             snapshot(WT, {
               branch: at.branch ?? "feature",
+              ...(at.wtDetached && { isDetached: true }),
               changes,
               headOid: at.wt ?? "head-1",
             }),
@@ -424,14 +428,22 @@ describe("diffViewedStore", () => {
       expect(viewed("base:a.ts")).toBe(true);
     });
 
-    it("reads nothing into a detached main worktree's HEAD, which isn't the compared branch", () => {
-      observe([change("a.ts")], { mainBranch: null });
-      mark("base:a.ts");
+    it.each([
+      ["a main worktree with no branch", { mainBranch: null }, { main: "detached-2" }],
+      // Detaching mid-session leaves the old branch name on the snapshot.
+      ["a main worktree that detached", { mainDetached: true }, { main: "detached-2" }],
+      ["a compared worktree that detached", { wtDetached: true }, { wt: "detached-2" }],
+    ] as const)(
+      "reads nothing into the HEAD of %s, which isn't a compared branch",
+      (_label, side, moved) => {
+        observe([change("a.ts")], side);
+        mark("base:a.ts");
 
-      observe([change("a.ts")], { mainBranch: null, main: "detached-2" });
-      reconcile();
+        observe([change("a.ts")], { ...side, ...moved });
+        reconcile();
 
-      expect(viewed("base:a.ts")).toBe(true);
-    });
+        expect(viewed("base:a.ts")).toBe(true);
+      }
+    );
   });
 });

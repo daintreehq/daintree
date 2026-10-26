@@ -85,9 +85,12 @@ function baseComparisonSignal(
   // Review Hub compares the two branches, and a worktree's HEAD is its branch
   // tip only while it is on one. A detached side would track the wrong commit,
   // so it says nothing rather than lapse marks on moves the comparison ignores.
+  // `isDetached` too: a worktree that detaches mid-session keeps its old
+  // `branch` on the snapshot.
   const head = worktree?.worktreeChanges?.headOid;
   const baseHead = main?.worktreeChanges?.headOid;
   if (!worktree?.branch || !main?.branch || !head || !baseHead) return undefined;
+  if (worktree.isDetached || main.isDetached) return undefined;
   return `${main.branch}@${baseHead}..${worktree.branch}@${head}`;
 }
 
