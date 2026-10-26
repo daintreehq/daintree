@@ -754,8 +754,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     const previous = liveSession;
     liveSession = session;
     if (previous) retireSession(previous, session);
-    // A view that goes away takes its session with it. Only a session that is
-    // still live owns the provider it would stop.
+    // A view that goes away takes its session with it, and stops the provider
+    // if the session has one: live, or replaced and still draining.
     session.unwatchDestroyed = onWebContentsDestroyed(sender, () => {
       if (session.ended) return;
       const ownsProvider = session.phase !== "starting";
@@ -794,14 +794,6 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // Snapshot transcription settings at session start (model, language, API key).
     // Correction settings are read live from store per-event so mid-session changes apply.
     const settings = getVoiceSettings();
-
-    // Initialize the correction service for this session
-    if (!correctionService) {
-      correctionService = new VoiceCorrectionService();
-    }
-
-    sessionController = session.controller;
-    correctionService.setSessionSignal(session.controller.signal);
 
     // Kick off keyterm assembly concurrently with the subscription/provider
     // setup below so leading speech isn't delayed waiting on git/terminal reads.
@@ -970,6 +962,11 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       if (!isLive(session)) return SUPERSEDED;
     }
     const providerStartAt = performance.now();
+    // Bound at the handoff: until now a session this one replaced may still be
+    // draining, and its file-link detection runs under its own signal.
+    correctionService ??= new VoiceCorrectionService();
+    sessionController = session.controller;
+    correctionService.setSessionSignal(session.controller.signal);
     // Field names avoid "key": the logger blanks any field containing it.
     logInfo("[VoiceInput] Start timing — provider start", {
       sessionId: session.id,
@@ -998,10 +995,19 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     return isLive(session) ? { status: "started" } : SUPERSEDED;
   };
 
-  const handleStop = async (sessionId: string): Promise<{ rawText: string | null }> => {
+  // Only the view that started a session can stop, flush or feed it.
+  const ownedBy = (session: VoiceSession | null, sessionId: unknown, webContentsId: number) =>
+    session !== null && session.id === sessionId && session.webContentsId === webContentsId;
+
+  const handleStop = async (
+    ctx: IpcContext,
+    sessionId: string
+  ): Promise<{ rawText: string | null }> => {
     // The live session, or a replaced one still draining, whose owner waits on
     // that drain. Another view's session, or one that has already ended, isn't.
-    const session = [liveSession, drainingSession].find((s) => s?.id === sessionId);
+    const session = [liveSession, drainingSession].find((s) =>
+      ownedBy(s, sessionId, ctx.webContentsId)
+    );
     if (!session) return { rawText: null };
     if (session.stopPromise) return session.stopPromise;
     // Still preparing, with nothing held: ending it makes the start bail at its
@@ -1013,24 +1019,23 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     return drainSession(session, "stopped");
   };
 
-  const handleFlushParagraph = (sessionId: string): { rawText: string | null } => {
+  const handleFlushParagraph = (
+    ctx: IpcContext,
+    sessionId: string
+  ): { rawText: string | null } => {
     const session = liveSession;
     // Until the session is active, the service's provider belongs to no one.
-    if (session?.id === sessionId && session.phase !== "starting") {
+    if (ownedBy(session, sessionId, ctx.webContentsId) && session?.phase !== "starting") {
       service?.commitParagraphBoundary();
     }
     return { rawText: null };
   };
 
-  const handleAudioChunk = (
-    _event: Electron.IpcMainEvent,
-    sessionId: unknown,
-    chunk: ArrayBuffer
-  ) => {
+  const handleAudioChunk = (event: Electron.IpcMainEvent, sessionId: unknown, chunk: ArrayBuffer) => {
     const session = liveSession;
     // Audio for a session that isn't live — another view's, or one that has
     // already ended — must never reach the provider or the held buffer.
-    if (!session || session.id !== sessionId) return;
+    if (!session || !ownedBy(session, sessionId, event.sender.id)) return;
     const pending = session.preStartAudio;
     if (!pending) {
       service?.sendAudioChunk(chunk);
@@ -1115,11 +1120,14 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     name: "voiceInput",
     ops: {
       start: op(VOICE_INPUT_METHOD_CHANNELS.start, handleStart, { withContext: true }),
-      stop: opValidated(VOICE_INPUT_METHOD_CHANNELS.stop, VoiceSessionIdSchema, handleStop),
+      stop: opValidated(VOICE_INPUT_METHOD_CHANNELS.stop, VoiceSessionIdSchema, handleStop, {
+        withContext: true,
+      }),
       flushParagraph: opValidated(
         VOICE_INPUT_METHOD_CHANNELS.flushParagraph,
         VoiceSessionIdSchema,
-        handleFlushParagraph
+        handleFlushParagraph,
+        { withContext: true }
       ),
     },
   });
