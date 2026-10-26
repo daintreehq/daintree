@@ -106,7 +106,6 @@ async function flushAsync(): Promise<void> {
   }
 }
 
-
 interface MockProjectStatsService {
   updatePollInterval: Mock;
 }
