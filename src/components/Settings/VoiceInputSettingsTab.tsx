@@ -58,7 +58,7 @@ const PROVIDER_OPTIONS = [
 ];
 
 const RECOGNITION_HINTS_PRIVACY =
-  "Recognition hints go with the audio: your dictionary, the project name, the worktree's branch, and names from the recent output of the terminal you're dictating into. Anything that looks like a key or token is left out.";
+  "Recognition hints go with the audio: your dictionary, the project name, the worktree's branch, and identifiers from the recent output of the terminal you're dictating into. Likely keys and tokens are filtered out of everything except your dictionary.";
 
 const PROVIDER_PRIVACY: Record<VoiceTranscriptionProvider, string> = {
   openai: `Microphone audio is streamed over an encrypted connection to OpenAI for transcription using your API key. Audio is not used for model training. OpenAI may retain audio in abuse-monitoring logs for up to 30 days. ${RECOGNITION_HINTS_PRIVACY}`,

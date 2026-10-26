@@ -257,6 +257,37 @@ describe("VoiceInputSettingsTab", () => {
     });
   });
 
+  it("names the recognition hints in the Deepgram disclosure too", async () => {
+    window.electron = {
+      voiceInput: createVoiceInputApi({
+        getSettings: vi.fn().mockResolvedValue({
+          enabled: true,
+          openaiApiKey: "",
+          deepgramApiKey: "",
+          transcriptionProvider: "deepgram",
+          language: "en",
+          customDictionary: [],
+          transcriptionModel: "gpt-live-transcribe",
+          correctionEnabled: false,
+          correctionModel: "gpt-5.6-luna",
+          correctionCustomInstructions: "",
+          paragraphingStrategy: "spoken-command",
+          resolveFileLinks: true,
+          deviceId: "",
+        }),
+      }),
+    } as unknown as typeof window.electron;
+
+    render(<VoiceInputSettingsTab />);
+
+    await waitFor(() => {
+      const disclosure = screen.getByText(/encrypted connection to Deepgram/).textContent ?? "";
+      expect(disclosure).toMatch(/project name/);
+      expect(disclosure).toMatch(/branch/);
+      expect(disclosure).toMatch(/terminal you're dictating into/);
+    });
+  });
+
   it("does not render a correction-model selector when AI correction is enabled", async () => {
     // gpt-5.6-luna replaced both the gpt-5-mini and gpt-5-nano tiers, so there
     // is no longer a model choice to offer (issue #11365).

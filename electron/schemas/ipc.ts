@@ -767,6 +767,13 @@ export const DiffMediaReadFileVersionsPayloadSchema = z.object({
 // Renderer-minted (a UUID); bounded so a malformed id can't be stored or logged.
 export const VoiceSessionIdSchema = z.string().min(1).max(64);
 
+// The terminal being dictated into: keyterms are read from it alone.
+export const VoiceInputStartOptionsSchema = z
+  .object({
+    terminalId: z.string().min(1).max(256).optional(),
+  })
+  .optional();
+
 export const VoiceInputCorrectPayloadSchema = z.object({
   rawText: z.string(),
   recentContext: z.array(z.string()).optional(),
@@ -1027,6 +1034,7 @@ export type CopyTreeCancelPayload = z.infer<typeof CopyTreeCancelPayloadSchema>;
 export type CopyTreeProgress = z.infer<typeof CopyTreeProgressSchema>;
 export type CopyTreeGetFileTreePayload = z.infer<typeof CopyTreeGetFileTreePayloadSchema>;
 export type FileReadPayload = z.infer<typeof FileReadPayloadSchema>;
+export type VoiceInputStartOptions = z.infer<typeof VoiceInputStartOptionsSchema>;
 export type VoiceInputCorrectPayload = z.infer<typeof VoiceInputCorrectPayloadSchema>;
 export type SystemOpenExternalPayload = z.infer<typeof SystemOpenExternalPayloadSchema>;
 export type SystemOpenPathPayload = z.infer<typeof SystemOpenPathPayloadSchema>;

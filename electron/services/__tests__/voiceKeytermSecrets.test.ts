@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { isSecretShaped, redactSecretShapedText } from "../voiceKeytermSecrets.js";
+import {
+  holdsCredential,
+  isSecretShaped,
+  redactSecretShapedLines,
+} from "../voiceKeytermSecrets.js";
 
 const BASE62 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 const HEX = "0123456789abcdef";
@@ -31,7 +35,6 @@ const CREDENTIALS: Record<string, string> = {
   "Google API key": `AIza${fakeBody(35, 15)}`,
   "npm token": `npm_${fakeBody(36, 16)}`,
   "Hugging Face token": `hf_${fakeBody(34, 17)}`,
-  "Deepgram key": fakeBody(40, 18, HEX),
   "JWT segment": `eyJ${fakeBody(30, 19)}`,
   "unknown-format random token": fakeBody(32, 20),
   "lowercase random token": fakeBody(24, 21, "abcdefghijklmnopqrstuvwxyz0123456789"),
@@ -44,6 +47,7 @@ describe("isSecretShaped", () => {
   });
 
   it.each([
+    fakeBody(40, 18, HEX),
     "550e8400-e29b-41d4-a716-446655440000",
     "e29b-41d4-a716-446655440000",
     "7c2652f83d4d0fff357e24e02282a679964a112b",
@@ -89,44 +93,80 @@ describe("isSecretShaped", () => {
   });
 });
 
-describe("redactSecretShapedText", () => {
-  it("removes a key and its env-var name from an assignment", () => {
+describe("holdsCredential", () => {
+  it.each(Object.entries(CREDENTIALS))("finds a %s in a line of output", (_label, credential) => {
+    expect(holdsCredential(`  -> using ${credential} for the request`)).toBe(true);
+  });
+
+  it.each([
+    ["an env assignment", `OPENAI_API_KEY=${CREDENTIALS["OpenAI legacy key"]}`],
+    ["a prefix behind an assignment", "value=sk-proj-UserProfileCache"],
+    ["a prefix inside a path", "/tmp/sk-proj-UserProfileCache"],
+    ["a recognised token with a suffix", `${CREDENTIALS["GitHub classic token"]}-UserProfileCache`],
+    ["a quoted assignment", `"password": "correct-horse-battery"`],
+    ["a spaced assignment", "client_secret = correct-horse-battery"],
+    ["a clone URL", `https://x-access-token:${CREDENTIALS["GitHub classic token"]}@github.com/o/r`],
+    ["a bearer header", `Authorization: Bearer ${fakeBody(40, 40)}`],
+    ["an AWS secret split by slashes", `${fakeBody(12, 41)}/${fakeBody(10, 42)}+${fakeBody(16, 43)}`],
+    ["a base64url body", `${fakeBody(9, 44)}-${fakeBody(7, 45)}_${fakeBody(11, 46)}`],
+  ])("finds %s", (_label, text) => {
+    expect(holdsCredential(text)).toBe(true);
+  });
+
+  it.each([
+    "src/services/voiceContextKeyterms.ts: extractTerminalIdentifiers passed",
+    "from huggingface_hub import hf_hub_download",
+    "npm_config_registry=https://registry.npmjs.org/",
+    "refreshing the access token in useAuthStore",
+    "commit 7c2652f83d4d0fff357e24e02282a679964a112b",
+  ])("finds nothing in %s", (line) => {
+    expect(holdsCredential(line)).toBe(false);
+  });
+});
+
+describe("redactSecretShapedLines", () => {
+  it("empties a line holding a credential, keeping line positions", () => {
     const key = CREDENTIALS["OpenAI project key"];
-    const out = redactSecretShapedText(`export OPENAI_API_KEY=${key} && run useVoiceRecordingStore`);
-    expect(out).not.toContain("OPENAI_API_KEY");
-    expect(out).not.toContain(key.slice(8, 20));
-    expect(out).toContain("useVoiceRecordingStore");
+    const out = redactSecretShapedLines([
+      "before useSessionRouter",
+      `export OPENAI_API_KEY=${key} && run useVoiceRecordingStore`,
+      "",
+      "after useTerminalStore",
+    ]);
+    expect(out).toHaveLength(4);
+    expect(out[1]).toBe("");
+    expect(out[0]).toContain("useSessionRouter");
+    expect(out[3]).toContain("useTerminalStore");
   });
 
-  it("leaves no camelCase-looking slice of a key behind", () => {
-    // Between its dashes this key holds `AbcDefGhi`, which CAMEL_RE would
-    // match on its own if only the whole key were checked.
-    const key = `sk-proj-${fakeBody(24, 30)}-AbcDefGhi-${fakeBody(24, 31)}`;
-    expect(redactSecretShapedText(`key: ${key}`)).not.toContain("AbcDefGhi");
+  it("empties the line after a credential, which may hold the rest of a wrapped key", () => {
+    const out = redactSecretShapedLines([
+      `token: ${CREDENTIALS["GitHub classic token"]}`,
+      "AbcDefGhi",
+      "useTerminalStore",
+    ]);
+    expect(out[1]).toBe("");
+    expect(out[2]).toBe("useTerminalStore");
   });
 
-  it("removes a token embedded in a clone URL", () => {
-    const token = CREDENTIALS["GitHub classic token"];
-    const out = redactSecretShapedText(
-      `git clone https://x-access-token:${token}@github.com/daintreehq/daintree.git`
-    );
-    expect(out).not.toContain(token);
-    expect(out).toContain("daintreehq");
+  it("blanks opaque IDs and bare credential names but keeps the rest of the line", () => {
+    const [out] = redactSecretShapedLines([
+      "request e29b-41d4-a716-446655440000 set GITHUB_TOKEN via useSessionRouter",
+    ]);
+    expect(out).not.toContain("a716");
+    expect(out).not.toContain("GITHUB_TOKEN");
+    expect(out).toContain("useSessionRouter");
   });
 
-  it("removes a bearer token", () => {
-    const token = fakeBody(40, 32);
-    expect(redactSecretShapedText(`Authorization: Bearer ${token}`)).not.toContain(token);
-  });
-
-  it("removes an AWS secret key whose slashes split it into short pieces", () => {
-    const secret = `${fakeBody(12, 33)}/${fakeBody(10, 34)}+${fakeBody(16, 35)}`;
-    const out = redactSecretShapedText(`aws_secret_access_key = ${secret}`);
-    for (const piece of secret.split(/[/+]/)) expect(out).not.toContain(piece);
+  it("blanks a hex key, which reads like a commit SHA", () => {
+    const deepgramKey = fakeBody(40, 18, HEX);
+    const [out] = redactSecretShapedLines([`DG=${deepgramKey} useSessionRouter`]);
+    expect(out).not.toContain(deepgramKey.slice(0, 12));
+    expect(out).toContain("useSessionRouter");
   });
 
   it("leaves ordinary output alone", () => {
     const line = "src/services/voiceContextKeyterms.ts: extractTerminalIdentifiers passed";
-    expect(redactSecretShapedText(line)).toBe(line);
+    expect(redactSecretShapedLines([line])).toEqual([line]);
   });
 });

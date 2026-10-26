@@ -42,6 +42,13 @@ const shared = vi.hoisted(() => ({
   sessionSignal: null as AbortSignal | null,
   /** The session the fake provider was last started for; its events carry it. */
   providerSessionId: null as string | null,
+  /** The project of the view sending the start. */
+  viewProjectId: null as string | null,
+}));
+
+vi.mock("../../../window/webContentsRegistry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../window/webContentsRegistry.js")>()),
+  getProjectForWebContents: vi.fn(() => shared.viewProjectId),
 }));
 
 vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
@@ -82,6 +89,7 @@ vi.mock("../../../services/ProjectStore.js", () => ({
   projectStore: {
     getCurrentProject: vi.fn(() => null),
     getCurrentProjectId: vi.fn(() => null),
+    getProjectById: vi.fn((id: string) => (id === "proj-a" ? { id, name: "Alpha" } : null)),
   },
 }));
 
@@ -125,6 +133,7 @@ vi.mock("../../channels.js", () => ({
 }));
 
 import { registerVoiceInputHandlers } from "../voiceInput.js";
+import { assembleKeyterms } from "../../../services/voiceContextKeyterms.js";
 import {
   AUDIO_BUFFER_MAX_BYTES,
   AUDIO_BUFFER_MAX_CHUNKS,
@@ -503,5 +512,76 @@ describe("voiceInput — audio sent before the provider starts", () => {
     await stop();
     sendChunk(10);
     expect(shared.calls).toEqual(["chunk:9"]);
+  });
+});
+
+describe("voiceInput — keyterm target", () => {
+  let cleanup: () => void;
+  const ptyClient = {
+    hasTerminal: vi.fn((id: string) => id === "t-1"),
+    getTerminalProjectId: vi.fn((id: string) => (id === "t-1" ? "proj-a" : null)),
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    shared.calls = [];
+    shared.assembleKeyterms = null;
+    shared.viewProjectId = "proj-a";
+    sender.destroyed = false;
+    fakeEvent.sender = makeSender();
+    const win = { webContents: { send: vi.fn() }, isDestroyed: vi.fn(() => false) };
+    cleanup = registerVoiceInputHandlers({
+      mainWindow: win as unknown as Electron.BrowserWindow,
+      ptyClient,
+    } as unknown as Parameters<typeof registerVoiceInputHandlers>[0]);
+  });
+
+  afterEach(() => {
+    cleanup?.();
+  });
+
+  // Mints a session id as start() does and maps the outcome the same way, but
+  // a start main refuses still rejects.
+  const startWith = (options: unknown): Promise<StartResult> => {
+    currentSessionId = `session-${nextSessionNumber++}`;
+    return (
+      getHandler("voice-input:start")(fakeEvent, currentSessionId, options) as Promise<StartOutcome>
+    ).then((outcome) =>
+      outcome.status === "started"
+        ? { ok: true }
+        : {
+            ok: false,
+            error: outcome.status === "failed" ? outcome.error : "Voice session superseded",
+          }
+    );
+  };
+  const assemblyOpts = () => vi.mocked(assembleKeyterms).mock.calls[0]?.[0];
+
+  it("reads keyterms from the terminal being dictated into, under its project's name", async () => {
+    await expect(startWith({ terminalId: "t-1" })).resolves.toEqual({ ok: true });
+    expect(assemblyOpts()).toMatchObject({ terminalId: "t-1", projectName: "Alpha" });
+  });
+
+  it("sends no automatic hints for a terminal main doesn't track", async () => {
+    await expect(startWith({ terminalId: "t-gone" })).resolves.toEqual({ ok: true });
+    expect(assemblyOpts()?.terminalId).toBeUndefined();
+    expect(assemblyOpts()?.projectName).toBeUndefined();
+  });
+
+  it("sends none for a terminal another project owns than the view asking", async () => {
+    shared.viewProjectId = "proj-b";
+    await expect(startWith({ terminalId: "t-1" })).resolves.toEqual({ ok: true });
+    expect(assemblyOpts()?.terminalId).toBeUndefined();
+    expect(assemblyOpts()?.projectName).toBeUndefined();
+  });
+
+  it("starts without a target, with no automatic hints", async () => {
+    await expect(startWith(undefined)).resolves.toEqual({ ok: true });
+    expect(assemblyOpts()?.terminalId).toBeUndefined();
+  });
+
+  it("rejects a malformed start before it supersedes anything", async () => {
+    await expect(startWith({ terminalId: 42 })).rejects.toThrow();
+    expect(assembleKeyterms).not.toHaveBeenCalled();
   });
 });

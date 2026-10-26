@@ -3827,7 +3827,7 @@ export interface GeneratedIpcInvokeMap {
     result: { rawText: string | null };
   };
   "voice-input:start": {
-    args: [sessionId: string];
+    args: [sessionId: string, options?: { terminalId?: string | undefined } | undefined];
     result: import("../voice.js").VoiceStartOutcome;
   };
   "voice-input:stop": {

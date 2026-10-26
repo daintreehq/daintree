@@ -9,6 +9,7 @@ import type {
 } from "../../services/VoiceTranscriptionService.js";
 import { VoiceCorrectionService } from "../../services/VoiceCorrectionService.js";
 import type { HandlerDependencies, IpcContext } from "../types.js";
+import type { PtyClient } from "../../services/PtyClient.js";
 import type {
   VoiceInputSettings,
   VoiceTranscriptionProvider,
@@ -30,15 +31,18 @@ import {
 import { getAppWebContents } from "../../window/webContentsRegistry.js";
 import { voiceFileLinkResolver } from "../../services/VoiceFileLinkResolver.js";
 import { typedHandle, typedHandleValidated } from "../utils.js";
-import { defineIpcNamespace, opValidated } from "../define.js";
+import { defineIpcNamespace, op, opValidated } from "../define.js";
+import { ValidationError } from "../validationError.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { VOICE_INPUT_METHOD_CHANNELS } from "./voiceInput.preload.js";
 import { openExternalUrl } from "../../utils/openExternal.js";
 import { openLinuxSoundSettings } from "../../services/voice/linuxSoundSettings.js";
 import {
   VoiceInputCorrectPayloadSchema,
+  VoiceInputStartOptionsSchema,
   VoiceSessionIdSchema,
   type VoiceInputCorrectPayload,
+  type VoiceInputStartOptions,
 } from "../../schemas/ipc.js";
 import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
 
@@ -59,8 +63,9 @@ interface VoiceSession {
   readonly sender: Electron.WebContents;
   readonly webContentsId: number;
   readonly projectId: string | null;
-  // The global current project at start. Keyterms and file links read this
-  // until they move to the owning view's project (#14599).
+  // The global current project at start. File links read this until they
+  // move to the owning view's project (#14599); keyterms come from the
+  // dictation target's own terminal instead.
   readonly projectInfo: { name?: string; path?: string };
   // starting: main is still preparing, and the provider isn't this session's.
   // active: its provider has been started (it may still be connecting).
@@ -412,6 +417,21 @@ function getProjectInfo(): { name?: string; path?: string } {
   return { name: currentProject.name, path: currentProject.path };
 }
 
+// Automatic hints come only from the terminal being dictated into: its output,
+// its worktree's branch and its owning project's name. A terminal main doesn't
+// track, or one another project owns than the view asking, contributes none.
+function resolveKeytermTarget(
+  viewProjectId: string | null,
+  terminalId: string | undefined,
+  ptyClient: PtyClient | undefined
+): { terminalId?: string; projectName?: string } {
+  if (!terminalId || !ptyClient?.hasTerminal(terminalId)) return {};
+  const ownerId = ptyClient.getTerminalProjectId(terminalId);
+  if (ownerId && viewProjectId && ownerId !== viewProjectId) return {};
+  const projectName = ownerId ? projectStore.getProjectById(ownerId)?.name : undefined;
+  return { terminalId, projectName };
+}
+
 export function registerVoiceInputHandlers(deps: HandlerDependencies): () => void {
   const handleGetSettings = async () => {
     return getVoiceSettings();
@@ -457,7 +477,19 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
   // A failed or superseded start is an outcome, not an exception: the
   // provider's message goes back to the renderer and never through the IPC
   // error logger, where it could quote dictated text (#14620).
-  const handleStart = async (ctx: IpcContext, sessionId: string): Promise<VoiceStartOutcome> => {
+  const handleStart = async (
+    ctx: IpcContext,
+    sessionId: string,
+    options?: VoiceInputStartOptions
+  ): Promise<VoiceStartOutcome> => {
+    // Validated here rather than by opValidated, which parses a single
+    // payload: a malformed start must not supersede the one in flight.
+    if (
+      !VoiceSessionIdSchema.safeParse(sessionId).success ||
+      !VoiceInputStartOptionsSchema.safeParse(options).success
+    ) {
+      throw new ValidationError(VOICE_INPUT_METHOD_CHANNELS.start);
+    }
     // Events and the ended notice go back to the view that started it.
     const sender = ctx.event?.sender;
     if (!sender || sender.isDestroyed()) return SUPERSEDED;
@@ -505,7 +537,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // chose the reason; a stop in progress owns the ending.
     let outcome: VoiceStartOutcome;
     try {
-      outcome = await startSession(session, startedAt);
+      outcome = await startSession(session, startedAt, options?.terminalId);
     } catch (error) {
       if (session.phase !== "stopping") endSession(session, "failed");
       throw error;
@@ -518,7 +550,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
 
   const startSession = async (
     session: VoiceSession,
-    startedAt: number
+    startedAt: number,
+    terminalId: string | undefined
   ): Promise<VoiceStartOutcome> => {
     const svc = await getService();
     const serviceReadyAt = performance.now();
@@ -546,8 +579,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // and failures are non-fatal — we just start without keyterms.
     const keytermsPromise = assembleKeyterms({
       customDictionary: settings.customDictionary,
-      projectName: session.projectInfo.name,
-      projectPath: session.projectInfo.path,
+      ...resolveKeytermTarget(session.projectId, terminalId, deps.ptyClient),
       ptyClient: deps.ptyClient,
     });
 
@@ -877,9 +909,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
   const sessionNamespace = defineIpcNamespace({
     name: "voiceInput",
     ops: {
-      start: opValidated(VOICE_INPUT_METHOD_CHANNELS.start, VoiceSessionIdSchema, handleStart, {
-        withContext: true,
-      }),
+      start: op(VOICE_INPUT_METHOD_CHANNELS.start, handleStart, { withContext: true }),
       stop: opValidated(VOICE_INPUT_METHOD_CHANNELS.stop, VoiceSessionIdSchema, handleStop),
       flushParagraph: opValidated(
         VOICE_INPUT_METHOD_CHANNELS.flushParagraph,
