@@ -240,7 +240,10 @@ describe("assembleKeyterms", () => {
     const result = await assembleKeyterms({
       customDictionary: dictionary,
       projectName: "Alpha Bravo Charlie Delta Echo Foxtrot Gamma Hotel",
-      projectPath: "/tmp/p",
+      terminalId: TARGET,
+      ptyClient: asPtyClient(
+        makePtyClient([], { cwd: "/repo", worktreeId: "/repo/worktrees/feature" })
+      ),
     });
     expect(result).toContain("service");
     expect(result.length).toBeLessThanOrEqual(MAX_KEYTERMS);

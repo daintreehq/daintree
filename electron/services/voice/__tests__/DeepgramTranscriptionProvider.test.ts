@@ -943,7 +943,7 @@ describe("DeepgramTranscriptionProvider", () => {
   it("retries a long keyterm list trimmed to the head before dropping everything", async () => {
     const provider = new DeepgramTranscriptionProvider();
     const keyterms = Array.from({ length: 40 }, (_, i) => `term${i}`);
-    const startPromise = provider.start({ ...BASE_SETTINGS, keyterms });
+    const startPromise = provider.start({ ...BASE_SETTINGS, keyterms }, "session-1");
     await Promise.resolve();
     latestInstance().simulateUnexpectedResponse(400);
     expect(instances).toHaveLength(2);
