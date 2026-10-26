@@ -93,6 +93,8 @@ const runtime = vi.hoisted(() => ({
     correctionEnabled: false,
     isConfigured: false,
     micSignal: "pending" as string,
+    micDeviceLabel: null as string | null,
+    micNotice: null as unknown,
   },
   voiceFns: {
     setLastError: vi.fn<(error: VoiceInputError | null) => void>(),
@@ -107,6 +109,8 @@ const runtime = vi.hoisted(() => ({
       vi.fn<(options?: { nextStatus?: "idle" | "error"; preserveLiveText?: boolean }) => void>(),
     setAudioLevel: vi.fn<(level: number) => void>(),
     setMicSignal: vi.fn<(signal: string) => void>(),
+    setMicDeviceLabel: vi.fn<(label: string | null) => void>(),
+    setMicNotice: vi.fn<(notice: unknown) => void>(),
     setElapsedSeconds: vi.fn<(seconds: number) => void>(),
     appendDelta: vi.fn<(delta: string) => void>(),
     completeSegment: vi.fn<(text: string) => void>(),
@@ -191,6 +195,8 @@ function resetRuntime(): void {
   runtime.voiceState.panelBuffers = {};
   runtime.voiceState.correctionEnabled = false;
   runtime.voiceState.isConfigured = false;
+  runtime.voiceState.micDeviceLabel = null;
+  runtime.voiceState.micNotice = null;
   Object.values(runtime.voiceFns).forEach((fn) => fn.mockReset());
   Object.values(runtime.terminalInputFns).forEach((fn) => fn.mockReset());
   runtime.statusListeners.clear();
@@ -236,6 +242,12 @@ function resetRuntime(): void {
   runtime.voiceFns.setAudioLevel.mockImplementation(() => undefined);
   runtime.voiceFns.setMicSignal.mockImplementation((signal) => {
     runtime.voiceState.micSignal = signal;
+  });
+  runtime.voiceFns.setMicDeviceLabel.mockImplementation((label) => {
+    runtime.voiceState.micDeviceLabel = label;
+  });
+  runtime.voiceFns.setMicNotice.mockImplementation((notice) => {
+    runtime.voiceState.micNotice = notice;
   });
   runtime.voiceFns.setElapsedSeconds.mockImplementation(() => undefined);
   runtime.voiceFns.appendDelta.mockImplementation(() => undefined);

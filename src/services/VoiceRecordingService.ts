@@ -10,6 +10,7 @@ import { useDictationRangeStore } from "@/store/dictationRangeStore";
 import {
   isVoiceMicPending,
   useVoiceRecordingStore,
+  type VoiceMicNotice,
   type VoiceRecordingTarget,
 } from "@/store/voiceRecordingStore";
 import { isActiveVoiceSession, type VoiceRecordingMode } from "@shared/types";
@@ -33,6 +34,12 @@ import {
   summarizeOpeningChunks,
   type PcmChunkStats,
 } from "@/services/voiceStartDiagnostics";
+import {
+  findBuiltInMic,
+  isBluetoothMicLabel,
+  stripPseudoDevicePrefix,
+  type VoiceMicDevice,
+} from "@/services/voiceMicDevices";
 
 const LOG_PREFIX = "[VoiceRecording]";
 
@@ -90,11 +97,18 @@ function trackDictatedText(
     );
 }
 
+// A chosen device of "" (system default) or one of Chromium's alias entries
+// names no particular mic, so whichever one opens is the one asked for.
+function isSpecificDeviceId(deviceId: string): boolean {
+  return deviceId !== "" && deviceId !== "default" && deviceId !== "communications";
+}
+
 // ~15s of 100ms PCM chunks. Covers a retarget drain plus a slow backend
 // connect; past it the oldest audio is dropped rather than failing the session.
 const MAX_QUEUED_CHUNKS = 150;
 
 interface CaptureAttempt {
+  target: VoiceRecordingTarget;
   audioContext: AudioContext;
   keepAliveOscillator: OscillatorNode | null;
   keepAliveGain: GainNode | null;
@@ -104,6 +118,11 @@ interface CaptureAttempt {
   // is. `null` once chunks forward live, or after the attempt is discarded.
   queue: ArrayBuffer[] | null;
   droppedChunks: number;
+  // UI-only: device names never go into logs.
+  deviceLabel: string | null;
+  // The OS pulled the track ("ended"). Latched, so a lost attempt is never
+  // promoted and a lost session is torn down once.
+  lost: boolean;
 }
 
 class VoiceRecordingService {
@@ -125,6 +144,10 @@ class VoiceRecordingService {
   private keepAliveOscillator: OscillatorNode | null = null;
   private keepAliveGain: GainNode | null = null;
   private stream: MediaStream | null = null;
+  // The promoted attempt, whose track loss ends the session.
+  private sessionCapture: CaptureAttempt | null = null;
+  private trackObserverDisposers = new WeakMap<MediaStream, () => void>();
+  private isSwitchingMic = false;
   private elapsedTimer: ReturnType<typeof setInterval> | null = null;
   private sessionStartedAt = 0;
   private selectedDeviceId = "";
@@ -887,6 +910,7 @@ class VoiceRecordingService {
     });
     this.observeAudioContextState(audioContext, logStep);
     const capture: CaptureAttempt = {
+      target,
       audioContext,
       keepAliveOscillator: null,
       keepAliveGain: null,
@@ -894,6 +918,8 @@ class VoiceRecordingService {
       workletNode: null,
       queue: [],
       droppedChunks: 0,
+      deviceLabel: null,
+      lost: false,
     };
     this.pendingCapture = capture;
     // Owned by the attempt until promotion, so a previous session's stop can't
@@ -904,9 +930,7 @@ class VoiceRecordingService {
     const abandonCapture = (stream?: MediaStream) => {
       if (this.pendingCapture === capture) this.releasePendingCapture();
       this.flushOpeningAudio(openingAudio);
-      for (const track of stream?.getTracks() ?? []) {
-        track.stop();
-      }
+      if (stream) this.stopStreamTracks(stream);
     };
 
     // Build the rest of the graph while the microphone is still opening, so it
@@ -950,9 +974,11 @@ class VoiceRecordingService {
     // arrives here as NotAllowedError rather than from the preflight.
     logDebug(`${LOG_PREFIX} Requesting microphone access`);
     let stream: MediaStream;
+    // Snapshot: a settings change while the mic opens mustn't read as a fallback.
+    const requestedDeviceId = this.selectedDeviceId;
     try {
-      const constraints: MediaStreamConstraints = this.selectedDeviceId
-        ? { audio: { deviceId: { ideal: this.selectedDeviceId } }, video: false }
+      const constraints: MediaStreamConstraints = requestedDeviceId
+        ? { audio: { deviceId: { ideal: requestedDeviceId } }, video: false }
         : { audio: true, video: false };
       stream = await navigator.mediaDevices.getUserMedia(constraints);
     } catch (error) {
@@ -1015,29 +1041,62 @@ class VoiceRecordingService {
           };
         }),
       });
-      if (this.selectedDeviceId) {
-        const actualId = stream.getAudioTracks()[0]?.getSettings?.().deviceId;
-        if (actualId && actualId !== this.selectedDeviceId) {
-          logWarn(`${LOG_PREFIX} Microphone device mismatch`, {
-            requested: this.selectedDeviceId,
-            actual: actualId,
-          });
-        }
-      }
     } catch (err) {
       logDebug(`${LOG_PREFIX} Could not read microphone track settings`, voiceErrorLogFields(err));
     }
+    // Which mic opened, for the pane: Chromium falls back silently when the
+    // chosen one is gone, because it is requested as `ideal`.
+    let usingFallbackMic = false;
+    try {
+      const track = stream.getAudioTracks()[0];
+      capture.deviceLabel = track?.label ? stripPseudoDevicePrefix(track.label) || null : null;
+      const actualId = track?.getSettings?.().deviceId;
+      if (isSpecificDeviceId(requestedDeviceId) && actualId && actualId !== requestedDeviceId) {
+        usingFallbackMic = true;
+        logWarn(`${LOG_PREFIX} Microphone device mismatch`, {
+          requested: requestedDeviceId,
+          actual: actualId,
+        });
+      }
+    } catch (err) {
+      logDebug(`${LOG_PREFIX} Could not read microphone device`, voiceErrorLogFields(err));
+    }
     logStep("get_user_media");
-    this.observeTrackState(stream, logStep);
+    this.observeTrackState(stream, logStep, () => this.handleTrackEnded(capture));
 
     if (this.isStartRequestStale(startRequestId)) {
       abandonCapture(stream);
       return;
     }
 
+    const failMicLost = async () => {
+      abandonCapture(stream);
+      logWarn(`${LOG_PREFIX} Microphone lost before the session began`);
+      useVoiceRecordingStore.getState().setLastError({
+        severity: "fatal",
+        code: "mic_lost",
+        message: "The microphone was disconnected.",
+      });
+      useVoiceRecordingStore
+        .getState()
+        .setMicNotice({ kind: "lost", target, deviceLabel: capture.deviceLabel });
+      useVoiceRecordingStore
+        .getState()
+        .announce("Dictation didn't start because the microphone was disconnected.");
+      await this.failArming();
+    };
+    const isCaptureLost = () =>
+      capture.lost ||
+      (typeof stream.getAudioTracks === "function" &&
+        stream.getAudioTracks().some((track) => track.readyState === "ended"));
+
     const graphResult = await graphReady;
     if (this.isStartRequestStale(startRequestId)) {
       abandonCapture(stream);
+      return;
+    }
+    if (isCaptureLost()) {
+      await failMicLost();
       return;
     }
     const failCaptureSetup = async (error: unknown) => {
@@ -1173,6 +1232,10 @@ class VoiceRecordingService {
         abandonCapture(stream);
         return;
       }
+      if (isCaptureLost()) {
+        await failMicLost();
+        return;
+      }
       // The new mic has been capturing through the drain, so that time counts
       // against its grace window.
       micSilenceGraceMs = Math.max(0, micSilenceGraceMs - (performance.now() - captureAttachedAt));
@@ -1187,6 +1250,8 @@ class VoiceRecordingService {
 
     // Promote the attempt to the session. From here stop() owns its teardown.
     if (this.pendingCapture === capture) this.pendingCapture = null;
+    capture.stream = stream;
+    this.sessionCapture = capture;
     this.stream = stream;
     this.audioContext = audioContext;
     this.keepAliveOscillator = capture.keepAliveOscillator;
@@ -1212,6 +1277,13 @@ class VoiceRecordingService {
     // The "Dictation started" announcement waits for real audio (markMicLive);
     // announcing here would tell the user to speak into a mic still delivering
     // zeros.
+    useVoiceRecordingStore.getState().setMicDeviceLabel(capture.deviceLabel);
+    if (usingFallbackMic) {
+      useVoiceRecordingStore
+        .getState()
+        .setMicNotice({ kind: "fallback", target, deviceLabel: capture.deviceLabel });
+    }
+
     this.sessionStartedAt = Date.now();
     this.startElapsedTimer();
     this.micCaptureAttachedAt = captureAttachedAt;
@@ -1904,6 +1976,7 @@ class VoiceRecordingService {
       wasSilent: state.micSignal === "silent",
     });
     state.setMicSignal("live");
+    if (state.micNotice?.kind === "silent") state.setMicNotice(null);
     state.announce(`Dictation started in ${formatTargetLabel(target)}.`);
   }
 
@@ -1927,8 +2000,82 @@ class VoiceRecordingService {
         peakRms: Number(this.sessionPeakRms.toFixed(4)),
       });
       state.setMicSignal("silent");
-      state.announce("No audio from the microphone yet.");
+      const deviceLabel = this.sessionCapture?.deviceLabel ?? null;
+      state.announce(
+        deviceLabel ? `No audio from ${deviceLabel} yet.` : "No audio from the microphone yet."
+      );
+      void this.raiseSilentMicNotice(generation);
     }, delayMs);
+  }
+
+  /**
+   * Shows the silent-mic warning in the pane. A Bluetooth mic gets the
+   * built-in one offered instead, since the call-profile switch is the usual
+   * cause; the device list is read only then, and the answer is dropped if the
+   * session moved on while it was read.
+   */
+  private async raiseSilentMicNotice(generation: number): Promise<void> {
+    const capture = this.sessionCapture;
+    const target = useVoiceRecordingStore.getState().activeTarget;
+    if (!capture || !target) return;
+    const deviceLabel = capture.deviceLabel;
+    const bluetooth = isBluetoothMicLabel(deviceLabel);
+    let builtIn: VoiceMicDevice | null = null;
+    if (bluetooth) {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        builtIn = findBuiltInMic(devices.filter((device) => device.kind === "audioinput"));
+      } catch (err) {
+        logDebug(`${LOG_PREFIX} Could not list microphones`, voiceErrorLogFields(err));
+      }
+    }
+    const state = useVoiceRecordingStore.getState();
+    if (
+      this.generation !== generation ||
+      this.sessionCapture !== capture ||
+      state.micSignal !== "silent" ||
+      state.micNotice?.kind === "lost"
+    ) {
+      return;
+    }
+    state.setMicNotice({ kind: "silent", target, deviceLabel, bluetooth, builtIn });
+  }
+
+  /**
+   * The silent-mic notice's way forward: make the built-in mic the dictation
+   * mic, then restart the session it was raised for on it. The restart is a
+   * retarget onto the same pane, so the new mic records while the silent
+   * session drains.
+   */
+  async switchToMicFromNotice(notice: VoiceMicNotice): Promise<void> {
+    if (notice.kind !== "silent" || !notice.builtIn || this.isSwitchingMic) return;
+    if (useVoiceRecordingStore.getState().micNotice !== notice) return;
+    const { deviceId } = notice.builtIn;
+    const generation = this.generation;
+    this.isSwitchingMic = true;
+    try {
+      await window.electron.voiceInput.setSettings({ deviceId });
+    } catch (err) {
+      logWarn(`${LOG_PREFIX} Could not save the microphone choice`, voiceErrorLogFields(err));
+      useVoiceRecordingStore.getState().announce("Couldn't switch the microphone.");
+      return;
+    } finally {
+      this.isSwitchingMic = false;
+    }
+    this.selectedDeviceId = deviceId;
+    const state = useVoiceRecordingStore.getState();
+    // The choice is saved either way; only the session the notice belongs to
+    // is restarted, and only while it is still running.
+    if (
+      this.generation !== generation ||
+      this.stopPromise ||
+      state.activeTarget?.panelId !== notice.target.panelId ||
+      !isActiveVoiceSession(state.status)
+    ) {
+      return;
+    }
+    logInfo(`${LOG_PREFIX} Restarting dictation on the built-in microphone`);
+    await this.start(state.activeTarget);
   }
 
   private clearMicSilenceTimer(): void {
@@ -2091,25 +2238,81 @@ class VoiceRecordingService {
   }
 
   // A local track.stop() fires no "ended", so an "ended" here means the
-  // device or OS pulled the track.
-  private observeTrackState(stream: MediaStream, logStep: StartStepLogger): void {
+  // device or OS pulled the track. Mute and unmute stay diagnostic: neither
+  // proves the device is gone. Listeners are removed before the tracks are
+  // stopped (stopStreamTracks).
+  private observeTrackState(
+    stream: MediaStream,
+    logStep: StartStepLogger,
+    onEnded: () => void
+  ): void {
+    const removers: Array<() => void> = [];
     try {
       const tracks = typeof stream.getAudioTracks === "function" ? stream.getAudioTracks() : [];
       tracks.forEach((track, trackIndex) => {
         if (typeof track.addEventListener !== "function") return;
         for (const event of ["mute", "unmute", "ended"] as const) {
-          track.addEventListener(event, () => {
-            logStep(`track_${event}`, {
-              trackIndex,
-              muted: track.muted,
-              readyState: track.readyState,
-            });
-          });
+          const listener = () => {
+            try {
+              logStep(`track_${event}`, {
+                trackIndex,
+                muted: track.muted,
+                readyState: track.readyState,
+              });
+            } catch {
+              // Diagnostics must never stop a lost mic from ending the session.
+            }
+            if (event === "ended") onEnded();
+          };
+          track.addEventListener(event, listener);
+          removers.push(() => track.removeEventListener?.(event, listener));
         }
       });
     } catch (err) {
       logDebug(`${LOG_PREFIX} Could not observe microphone track state`, voiceErrorLogFields(err));
     }
+    this.trackObserverDisposers.set(stream, () => {
+      for (const remove of removers) remove();
+    });
+  }
+
+  private stopStreamTracks(stream: MediaStream): void {
+    const dispose = this.trackObserverDisposers.get(stream);
+    if (dispose) {
+      this.trackObserverDisposers.delete(stream);
+      try {
+        dispose();
+      } catch {
+        // Listener removal is best-effort; the tracks still have to stop.
+      }
+    }
+    for (const track of stream.getTracks()) {
+      track.stop();
+    }
+  }
+
+  /**
+   * The input device went away. A session on it ends the way a stop does —
+   * audio already sent is drained and transcribed, live text is kept — and
+   * the pane says why. An attempt not yet promoted is only marked: start()
+   * checks before promoting it.
+   */
+  private handleTrackEnded(capture: CaptureAttempt): void {
+    if (capture.lost) return;
+    capture.lost = true;
+    // A stop already owns the teardown, or this capture was superseded.
+    if (this.sessionCapture !== capture || this.stopPromise || !this.initialized) return;
+    const store = useVoiceRecordingStore.getState();
+    logWarn(`${LOG_PREFIX} Microphone lost mid-session`, { status: store.status });
+    // Published before the stop so it can't land on a session started after it.
+    store.setMicNotice({
+      kind: "lost",
+      target: store.activeTarget ?? capture.target,
+      deviceLabel: capture.deviceLabel,
+    });
+    void this.stop("Dictation stopped because the microphone was lost.", {
+      preserveLiveText: true,
+    });
   }
 
   private async cleanupAudioCapture(): Promise<void> {
@@ -2172,11 +2375,12 @@ class VoiceRecordingService {
     // Tracks stop before the context closes: close() can be slow, and the OS
     // microphone indicator must go out the moment capture is released.
     if (resources.stream) {
-      for (const track of resources.stream.getTracks()) {
-        track.stop();
-      }
+      this.stopStreamTracks(resources.stream);
       if (this.stream === resources.stream) {
         this.stream = null;
+      }
+      if (this.sessionCapture?.stream === resources.stream) {
+        this.sessionCapture = null;
       }
     }
 
