@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-import { render, act } from "@testing-library/react";
+import { render, act, fireEvent, screen } from "@testing-library/react";
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { useEscapeStack } from "../useEscapeStack";
 import { useGlobalEscapeDispatcher } from "../useGlobalEscapeDispatcher";
@@ -217,6 +218,32 @@ describe("useEscapeStack + useGlobalEscapeDispatcher", () => {
       pressEscape();
 
       expect(layerClose).toHaveBeenCalledOnce();
+      expect(fallback).not.toHaveBeenCalled();
+    });
+
+    it("leave Escape to an open Radix menu", () => {
+      const fallback = vi.fn(() => true);
+      const onOpenChange = vi.fn();
+      registerEscapeFallback(fallback);
+      render(
+        <>
+          <Dispatcher />
+          <DropdownMenu.Root open onOpenChange={onOpenChange} modal={false}>
+            <DropdownMenu.Trigger>Open</DropdownMenu.Trigger>
+            <DropdownMenu.Portal>
+              <DropdownMenu.Content>
+                <DropdownMenu.Item>Item</DropdownMenu.Item>
+              </DropdownMenu.Content>
+            </DropdownMenu.Portal>
+          </DropdownMenu.Root>
+        </>
+      );
+
+      act(() => {
+        fireEvent.keyDown(screen.getByRole("menuitem"), { key: "Escape" });
+      });
+
+      expect(onOpenChange).toHaveBeenCalledWith(false);
       expect(fallback).not.toHaveBeenCalled();
     });
 
