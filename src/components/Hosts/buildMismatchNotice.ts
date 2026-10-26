@@ -61,6 +61,7 @@ export function forgetBuildMismatchNotices(hostId: HostId): void {
   const prefix = `${hostId}\u0000`;
   for (const key of [...noticed]) if (key.startsWith(prefix)) noticed.delete(key);
   try {
+    // storage-key: daintree:host-build-noticed:
     for (const key of Object.keys(window.localStorage)) {
       if (key.startsWith(NOTICED_KEY_PREFIX + prefix)) window.localStorage.removeItem(key);
     }
@@ -72,6 +73,7 @@ export function forgetBuildMismatchNotices(hostId: HostId): void {
 export function _resetBuildMismatchNoticesForTesting(): void {
   noticed.clear();
   try {
+    // storage-key: daintree:host-build-noticed:
     for (const key of Object.keys(window.localStorage)) {
       if (key.startsWith(NOTICED_KEY_PREFIX)) window.localStorage.removeItem(key);
     }
