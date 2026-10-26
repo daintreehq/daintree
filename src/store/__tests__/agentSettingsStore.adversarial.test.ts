@@ -920,6 +920,62 @@ describe("applySaved (#14700)", () => {
     await vi.waitFor(() => expect(clientMock.stampVersion).toHaveBeenCalled());
   });
 
+  it("keeps a newer change heard before a write's slower answer", async () => {
+    useAgentSettingsStore.getState().applySaved({ settingsVersion: 3, agents: {} } as never);
+    let answer: (value: unknown) => void = () => {};
+    clientMock.set.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+    const save = useAgentSettingsStore.getState().updateAgent("claude", { customFlags: "S1" });
+
+    const savedWith = (customFlags: string) => ({
+      settingsVersion: 3,
+      agents: { claude: { customFlags } },
+    });
+    useAgentSettingsStore.getState().applySaved(savedWith("S1") as never);
+    useAgentSettingsStore.getState().applySaved(savedWith("S2") as never);
+    answer(savedWith("S1"));
+    await save;
+
+    expect(useAgentSettingsStore.getState().settings?.agents.claude?.customFlags).toBe("S2");
+  });
+
+  it("shows a newer change once its own write settles", async () => {
+    useAgentSettingsStore
+      .getState()
+      .applySaved({ settingsVersion: 3, agents: {}, globalSkipPermissions: false } as never);
+    let answer: () => void = () => {};
+    clientMock.setGlobal.mockImplementationOnce(() => new Promise<void>((r) => (answer = r)));
+    const save = useAgentSettingsStore.getState().setGlobalSkipPermissions(true);
+
+    useAgentSettingsStore
+      .getState()
+      .applySaved({ settingsVersion: 3, agents: {}, globalSkipPermissions: true } as never);
+    useAgentSettingsStore
+      .getState()
+      .applySaved({ settingsVersion: 3, agents: {}, globalSkipPermissions: false } as never);
+    expect(useAgentSettingsStore.getState().settings?.globalSkipPermissions).toBe(true);
+    answer();
+    await save;
+
+    expect(useAgentSettingsStore.getState().settings?.globalSkipPermissions).toBe(false);
+  });
+
+  it("keeps another view's preset for a different worktree while this one's is saving", async () => {
+    const withPresets = (worktreePresets: Record<string, string>) => ({
+      settingsVersion: 3,
+      agents: { claude: { worktreePresets } },
+    });
+    useAgentSettingsStore.getState().applySaved(withPresets({ b: "old" }) as never);
+    clientMock.set.mockImplementationOnce(() => new Promise(() => {}));
+    void useAgentSettingsStore.getState().updateWorktreePreset("claude", "a", "mine");
+
+    useAgentSettingsStore.getState().applySaved(withPresets({ b: "theirs" }) as never);
+
+    expect(useAgentSettingsStore.getState().settings?.agents.claude?.worktreePresets).toEqual({
+      a: "mine",
+      b: "theirs",
+    });
+  });
+
   it("reports a failed save that a saved change overtook, and shows what's saved", async () => {
     let rejectSave: (error: Error) => void = () => {};
     clientMock.set.mockImplementationOnce(() => new Promise((_, reject) => (rejectSave = reject)));
