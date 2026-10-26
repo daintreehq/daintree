@@ -284,7 +284,7 @@ export interface GeneratedIpcInvokeMap {
       entries: (
         | {
             state: "live";
-            role: "worker" | "assistant";
+            role: "assistant" | "worker";
             subject: {
               hostId: string;
               scope: { kind: "project"; projectId: string } | { kind: "global" };
@@ -1172,7 +1172,7 @@ export interface GeneratedIpcInvokeMap {
               sourceMap: {
                 mapUrl: string | null;
                 mapRevision: string;
-                sourceCheck: "matches" | "differs" | "unchecked";
+                sourceCheck: "unchecked" | "matches" | "differs";
               };
               candidateId: string;
               claim:
@@ -1207,7 +1207,7 @@ export interface GeneratedIpcInvokeMap {
                 | {
                     mapUrl: string | null;
                     mapRevision: string;
-                    sourceCheck: "matches" | "differs" | "unchecked";
+                    sourceCheck: "unchecked" | "matches" | "differs";
                   }
                 | undefined;
               placedBy?: "structure" | undefined;
@@ -1253,7 +1253,7 @@ export interface GeneratedIpcInvokeMap {
                     sourceMap: {
                       mapUrl: string | null;
                       mapRevision: string;
-                      sourceCheck: "matches" | "differs" | "unchecked";
+                      sourceCheck: "unchecked" | "matches" | "differs";
                     };
                   }
                 | {
@@ -1274,7 +1274,7 @@ export interface GeneratedIpcInvokeMap {
                       | {
                           mapUrl: string | null;
                           mapRevision: string;
-                          sourceCheck: "matches" | "differs" | "unchecked";
+                          sourceCheck: "unchecked" | "matches" | "differs";
                         }
                       | undefined;
                     placedBy?: "structure" | undefined;
@@ -1323,7 +1323,7 @@ export interface GeneratedIpcInvokeMap {
                     sourceMap: {
                       mapUrl: string | null;
                       mapRevision: string;
-                      sourceCheck: "matches" | "differs" | "unchecked";
+                      sourceCheck: "unchecked" | "matches" | "differs";
                     };
                   }
                 | {
@@ -1344,7 +1344,7 @@ export interface GeneratedIpcInvokeMap {
                       | {
                           mapUrl: string | null;
                           mapRevision: string;
-                          sourceCheck: "matches" | "differs" | "unchecked";
+                          sourceCheck: "unchecked" | "matches" | "differs";
                         }
                       | undefined;
                     placedBy?: "structure" | undefined;
@@ -1364,10 +1364,10 @@ export interface GeneratedIpcInvokeMap {
               reason:
                 | "cancelled"
                 | "unsupported"
+                | "mismatch"
                 | "file-missing"
                 | "outside-workspace"
                 | "map-missing"
-                | "mismatch"
                 | "budget-exhausted";
               candidateId: string;
               claim:
@@ -3927,7 +3927,7 @@ export interface GeneratedIpcInvokeMap {
           sourcePrNumber?: number | undefined;
           sourcePrTitle?: string | undefined;
           sourcePrUrl?: string | undefined;
-          sourcePrState?: "closed" | "open" | "merged" | undefined;
+          sourcePrState?: "merged" | "closed" | "open" | undefined;
           sourcePrLinkedIssueNumber?: number | undefined;
           submoduleInit?: "none" | "inherit" | "all" | undefined;
           collisionPolicy?: "error" | "suffix" | undefined;
