@@ -184,6 +184,8 @@ export interface PilotProjectGroup extends PilotGroupCore {
   rows: PilotAgentRow[];
   workspaceId: string;
   kind: PilotWorkspaceKind;
+  /** The host the project lives on, set only where several hosts share one list. */
+  host?: string;
   emoji: string | null;
   /** Project tile colour, so the header carries the same identity as the switcher's rows. */
   color: string | null;
@@ -248,6 +250,8 @@ function disambiguatingLabel(label: string | null, against: string): string | nu
 export interface PilotWorkspaceMeta {
   kind: PilotWorkspaceKind;
   name: string;
+  /** The host the workspace lives on, set only where several hosts share one list. */
+  host?: string;
   emoji?: string;
   color?: string;
   /**
@@ -532,6 +536,7 @@ export function buildPilotGroups(
       emoji: meta?.emoji ?? null,
       color: meta?.color ?? null,
       isCurrent: workspaceId === ctx.currentWorkspaceId,
+      ...(meta?.host ? { host: meta.host } : {}),
       rows,
       ...summarizeRows(rows),
       lastOpened: openedAt(meta?.lastOpened),

@@ -19,7 +19,7 @@ export interface CanopyItem {
   runId: string;
   workspaceId: string;
   row: PilotAgentRow;
-  workspace: Pick<PilotProjectGroup, "name" | "emoji" | "color" | "kind" | "isCurrent">;
+  workspace: Pick<PilotProjectGroup, "name" | "host" | "emoji" | "color" | "kind" | "isCurrent">;
   /** What the card is drawn as. The classifier's reading once it has one. */
   kind: CanopyCategory;
   /** The classifier's card, when it still describes the run's current state. */
@@ -527,6 +527,7 @@ export function buildCanopyInbox(
         row,
         workspace: {
           name: group.name,
+          ...(group.host ? { host: group.host } : {}),
           emoji: group.emoji,
           color: group.color,
           kind: group.kind,
@@ -597,6 +598,7 @@ export function itemSearchText(item: CanopyItem): string {
   const run = row.run;
   return [
     item.workspace.name,
+    item.workspace.host,
     itemSubject(item),
     row.title,
     run.title,

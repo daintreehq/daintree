@@ -343,7 +343,7 @@ describe("CanopyRow", () => {
     expect(description(container)).toContain("4 of 6 steps done");
   });
 
-  it("puts what a stopped run reported after where it runs", () => {
+  it("puts what a stopped run reported on its own line after where it runs", () => {
     const { container } = renderRow(
       itemFor(
         "finished",
@@ -351,13 +351,12 @@ describe("CanopyRow", () => {
         { title: "Claude", lastObservedTitle: "✳ Fix flaky panel tests", cwd: "/w/fix-rounding" }
       )
     );
-    const meta = [...container.querySelectorAll("span")].find((el) =>
-      el.textContent?.startsWith("🦊")
-    )!;
+    const where = container.querySelector("[data-canopy-where]")!;
     // Each separator is its own padded dot, so the text runs them together.
     // Said as what the agent reported, not as checked facts.
-    expect(meta.textContent).toBe(
-      "🦊app·fix-rounding·Looks done·Reported: tests pass·not committed"
+    expect(where.textContent).toBe("🦊app·fix-rounding");
+    expect(container.querySelector("[data-canopy-meta]")!.textContent).toBe(
+      "Looks done·Reported: tests pass·not committed"
     );
     // Every fact is a whole segment: one that doesn't fit drops, never "Tests p…".
     const facts = [...container.querySelectorAll("span")].filter(
@@ -380,17 +379,14 @@ describe("CanopyRow", () => {
     // each part is one box carrying its separator, so none leaves half of
     // itself or a stray dot behind.
     expect(metaParts(container)).toEqual([
-      "🦊",
-      "app",
-      "·fix-rounding",
-      "·Looks done",
+      "Looks done",
       "·10% context left",
       "·Reported: tests pass",
       "·not committed",
     ]);
   });
 
-  it("leads the meta line with the project when the row is titled after it", () => {
+  it("leads the location line with the project when the row is titled after it", () => {
     const { container } = renderRow(
       itemFor(
         "finished",
@@ -398,7 +394,8 @@ describe("CanopyRow", () => {
         { title: "Claude", cwd: "/Users/dev/app" }
       )
     );
-    expect(metaParts(container)).toEqual(["🦊", "app", "·Looks done", "·Reported: committed"]);
+    expect(container.querySelector("[data-canopy-where]")!.textContent).toBe("🦊app");
+    expect(metaParts(container)).toEqual(["Looks done", "·Reported: committed"]);
   });
 
   it("rings a waiting agent that is asking a question with a question mark", () => {
@@ -670,9 +667,30 @@ describe("CanopyRow", () => {
     const { container } = renderRow(
       itemFor("idle", { task: null }, { title: "Claude", cwd: "/Users/dev/app" })
     );
-    const meta = container.querySelector("[data-canopy-meta]");
-    expect(meta?.textContent).toContain("🦊");
-    expect(meta?.textContent).toContain("app");
+    const where = container.querySelector("[data-canopy-where]");
+    expect(where?.textContent).toContain("🦊");
+    expect(where?.textContent).toContain("app");
+  });
+
+  it("gives the host a slot of its own that stays whole beside long project and worktree names", () => {
+    const item = itemFor("idle", {}, { cwd: "/Users/dev/app" });
+    const long = {
+      ...item,
+      workspace: {
+        ...item.workspace,
+        name: "a-very-long-project-name-that-would-fill-the-line",
+        host: "studio-01",
+      },
+      row: { ...item.row, worktreeLabel: "feature/a-very-long-branch-name-for-testing" },
+    };
+    const { container } = renderRow(long);
+    const where = container.querySelector("[data-canopy-where]")!;
+    expect(where.querySelector("[data-canopy-project]")?.textContent).toBe(long.workspace.name);
+    expect(where.querySelector("[data-canopy-host]")?.textContent).toContain("studio-01");
+    expect(where.querySelector("[data-canopy-host]")?.className).toContain("shrink-0");
+    expect(where.textContent).not.toContain("studio-01 ·");
+    // Location only: nothing else shares the line.
+    expect(container.querySelector("[data-canopy-meta]")!.textContent).not.toContain("studio-01");
   });
 
   it("says in words when a working agent has gone quiet, which the spinner shows only by hue", () => {

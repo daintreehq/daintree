@@ -242,7 +242,8 @@ export function CanopyRow({
   // even on a row titled after it or a list that is all one project.
   const project = item.workspace.name || null;
   const worktree = row.worktreeLabel !== subject ? row.worktreeLabel : null;
-  const where = [project, worktree].filter(Boolean).join(" · ");
+  const host = item.workspace.host || null;
+  const where = [project, worktree, host].filter(Boolean).join(" · ");
   // A first read in flight, with no words yet: in the ask's place, or under a
   // verbatim question that is already on screen. A re-read keeps the words it
   // has until the new ones land.
@@ -583,6 +584,35 @@ export function CanopyRow({
             )}
           </span>
         )}
+        {/* The location line says location only: project, worktree, host. The
+            host has a slot of its own that holds its width while the worktree
+            gives way, and the project keeps its name longer than either. */}
+        <span
+          data-canopy-where=""
+          className="flex h-4 min-w-0 items-center overflow-hidden text-xs leading-4 whitespace-nowrap text-text-secondary"
+        >
+          {/* The emoji leads a place, never stands for one. */}
+          {item.workspace.emoji && where !== "" && (
+            <span className="mr-1.5 shrink-0 leading-none select-none">{item.workspace.emoji}</span>
+          )}
+          {project !== null && (
+            <span data-canopy-project="" className="max-w-[45%] min-w-0 shrink-[0.5] truncate">
+              {project}
+            </span>
+          )}
+          {worktree !== null && (
+            <span data-canopy-worktree="" className="flex max-w-max min-w-0 grow basis-12">
+              {project !== null && <MetaDot />}
+              <span className="min-w-0 truncate">{worktree}</span>
+            </span>
+          )}
+          {host !== null && (
+            <span data-canopy-host="" className="flex max-w-[35%] min-w-12 shrink-0">
+              {(project !== null || worktree !== null) && <MetaDot />}
+              <span className="min-w-0 truncate">{host}</span>
+            </span>
+          )}
+        </span>
         {/* Held at its line's height even with nothing to say: facts landing,
             a reply noted or a run going quiet must not move the rows below.
             Never wider than the row either, or the whole list scrolls
@@ -595,28 +625,9 @@ export function CanopyRow({
           className="flex h-4 min-w-0 flex-wrap items-center overflow-hidden text-xs leading-4 whitespace-nowrap text-text-secondary"
         >
           <span className="h-4 w-0" />
-          {/* The emoji leads a place, never stands for one. */}
-          {item.workspace.emoji && where !== "" && (
-            <span className="mr-1.5 shrink-0 leading-none select-none">{item.workspace.emoji}</span>
-          )}
-          {/* Where it runs is how a row is told apart: the project keeps its
-              name longest, and the worktree's gives way before it. The
-              worktree holds its first few letters while the parts after it
-              find their places, then grows back into whatever room they
-              leave, so the line gives way from its end before the worktree's
-              name is cut below a few characters. */}
-          {project !== null && (
-            <span className="max-w-[45%] min-w-0 shrink-0 truncate">{project}</span>
-          )}
-          {worktree !== null && (
-            <span className="flex max-w-max min-w-0 grow basis-12">
-              {project !== null && <MetaDot />}
-              <span className="min-w-0 truncate">{worktree}</span>
-            </span>
-          )}
           {metaTail.map((part, index) => (
             <span key={part} className="flex shrink-0">
-              {(index > 0 || where !== "") && <MetaDot />}
+              {index > 0 && <MetaDot />}
               {part}
             </span>
           ))}

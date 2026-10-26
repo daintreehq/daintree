@@ -164,14 +164,14 @@ export function useCanopyInboxData({
   const workspaces = useMemo(() => {
     const map = new Map<string, PilotWorkspaceMeta>();
     if (everyHost) {
-      // A project is named with its host, and keyed by it: ids mean something only there.
+      // A project carries its host as a field of its own, and is keyed by it: ids mean something only there.
       const nameOf = (id: HostId) =>
         (hostRows ?? []).find((row) => row.hostId === id)?.name ?? "This Mac";
-      const withHost = (name: string, id: HostId) => `${name} · ${nameOf(id)}`;
       for (const project of projects) {
         map.set(allHostsKey(ownHostId, project.id), {
           kind: "project",
-          name: withHost(project.name, ownHostId),
+          name: project.name,
+          host: nameOf(ownHostId),
           lastOpened: project.lastOpened,
           ...(project.emoji ? { emoji: project.emoji } : {}),
           ...(project.color ? { color: project.color } : {}),
@@ -180,7 +180,8 @@ export function useCanopyInboxData({
       for (const scratch of scratches) {
         map.set(allHostsKey(ownHostId, scratch.id), {
           kind: "scratch",
-          name: withHost(scratch.name, ownHostId),
+          name: scratch.name,
+          host: nameOf(ownHostId),
           lastOpened: scratch.lastOpened,
         });
       }
@@ -188,7 +189,8 @@ export function useCanopyInboxData({
         for (const project of hostProjects.get(id) ?? []) {
           map.set(allHostsKey(id, project.id), {
             kind: "project",
-            name: withHost(project.name, id),
+            name: project.name,
+            host: nameOf(id),
             ...(project.emoji ? { emoji: project.emoji } : {}),
           });
         }
