@@ -261,23 +261,27 @@ describe("ReviewMarkStore", () => {
   });
 
   it("trims old tombstones but still refuses saves that started before them", async () => {
-    // 257 clears, each leaving a tombstone; the first is trimmed.
+    const cap = 4;
+    const capped = new ReviewMarkStore(root, { now: () => 0, maxTombstones: cap });
+    // One clear past the cap, each leaving a tombstone; the first is trimmed.
     let revision = 0;
-    for (let i = 0; i < 257; i++) {
+    for (let i = 0; i <= cap; i++) {
       const id = path.resolve(`/repos/alpha/wt-${i}`);
-      revision = (await store.save(PROJECT, id, point({ worktreePath: id }), revision, allow))
+      revision = (await capped.save(PROJECT, id, point({ worktreePath: id }), revision, allow))
         .snapshot.revision;
-      revision = (await store.clear(PROJECT, id, revision, allow)).snapshot.revision;
+      revision = (await capped.clear(PROJECT, id, revision, allow)).snapshot.revision;
     }
     const index = await readIndexFile();
-    expect(Object.keys(index.worktrees as object)).toHaveLength(256);
-    expect(index.floor).toBe(2);
     const first = path.resolve("/repos/alpha/wt-0");
+    expect(Object.keys(index.worktrees as object)).toHaveLength(cap);
+    expect(index.worktrees).not.toHaveProperty([first]);
+    // wt-0 was saved at revision 1 and cleared at 2: the floor keeps the 2.
+    expect(index.floor).toBe(2);
     expect(
-      (await store.save(PROJECT, first, point({ worktreePath: first }), 1, allow)).status
+      (await capped.save(PROJECT, first, point({ worktreePath: first }), 1, allow)).status
     ).toBe("stale");
     expect(
-      (await store.save(PROJECT, first, point({ worktreePath: first }), revision, allow)).status
+      (await capped.save(PROJECT, first, point({ worktreePath: first }), revision, allow)).status
     ).toBe("saved");
   });
 
