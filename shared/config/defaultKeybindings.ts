@@ -222,6 +222,16 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     description: "Toggle focus between current and previously focused panel",
     category: "Terminal",
   },
+  // Cmd+Alt+E: free of macOS system chords (H hides others) and of anything an
+  // agent TUI reads, since Cmd never reaches the PTY.
+  {
+    actionId: "terminal.toggleInputSurface",
+    combo: "Cmd+Alt+E",
+    scope: "global",
+    priority: 0,
+    description: "Switch between hybrid input and terminal",
+    category: "Terminal",
+  },
   {
     actionId: "tab.next",
     combo: "Cmd+Shift+]",
