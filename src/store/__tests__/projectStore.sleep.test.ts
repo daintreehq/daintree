@@ -201,7 +201,8 @@ describe("projectStore.sleepProject", () => {
 
     it("tells whoever waits on the layout once it is back, and not for a failed restore", async () => {
       await useProjectStore.getState().sleepProject("proj-1");
-      const heard = vi.fn();
+      // What a listener sees when it hears: it re-checks the restore, so it must be done.
+      const heard = vi.fn(() => isDroppedViewRestorePending());
       const off = onDroppedViewRestored(heard);
       expect(isDroppedViewRestorePending()).toBe(true);
 
@@ -215,8 +216,14 @@ describe("projectStore.sleepProject", () => {
       expect(claimDroppedViewRestore("proj-1")).toBe(true);
       await runDroppedViewRestore("proj-1", async () => {});
       expect(heard).toHaveBeenCalledTimes(1);
-      expect(isDroppedViewRestorePending()).toBe(false);
+      expect(heard.mock.results[0]!.value).toBe(false);
       off();
+
+      setCurrentProject(PROJECT);
+      await useProjectStore.getState().sleepProject("proj-1");
+      expect(claimDroppedViewRestore("proj-1")).toBe(true);
+      await runDroppedViewRestore("proj-1", async () => {});
+      expect(heard).toHaveBeenCalledTimes(1);
     });
 
     it("hands a failed restore back for the next reopen", async () => {

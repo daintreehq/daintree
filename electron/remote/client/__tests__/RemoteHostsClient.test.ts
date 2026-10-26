@@ -522,12 +522,17 @@ describe("RemoteHostsClient", () => {
   });
 
   it("carries a worktree to land on, and refuses one that names no worktree (#14569)", async () => {
-    const focusIntent = { intent: "focus-worktree", worktreeId: "/srv/proj-1-feature" } as const;
+    // A worktree's id is its path, which can run well past a project id's length.
+    const focusIntent = {
+      intent: "focus-worktree",
+      worktreeId: `/srv/${"deep/".repeat(100)}proj-1-feature`,
+    } as const;
     await client.switchWindowHost(ctxFor(5, 1), {
       hostId: "studio-01",
       newWindow: false,
       projectId: "proj-1",
-      focusIntent,
+      // Only the intent itself is carried on.
+      focusIntent: { ...focusIntent, panelId: "term-1" } as never,
     });
     expect(windows.openRemoteProject).toHaveBeenCalledWith(
       1,
@@ -548,7 +553,7 @@ describe("RemoteHostsClient", () => {
     });
 
     vi.mocked(windows.openRemoteProject).mockClear();
-    for (const worktreeId of ["", "w".repeat(10_000), 42, undefined]) {
+    for (const worktreeId of ["", "w".repeat(10_000), 42, undefined, ["/srv/a"], { length: 1 }]) {
       await expect(
         client.switchWindowHost(ctxFor(5, 1), {
           hostId: "studio-01",
