@@ -375,6 +375,20 @@ describe("buildCorrectionSystemPrompt target", () => {
     expect(prompt).toContain("runs on Claude");
   });
 
+  it("carries the workspace names beside the target's commands", () => {
+    const prompt = buildCorrectionSystemPrompt({
+      target,
+      customDictionary: ["Daintree"],
+      knownNames: ["Studio 1", "billing"],
+    });
+    const commands = prompt.indexOf("COMMANDS:");
+    const names = prompt.indexOf("NAMES IN THIS WORKSPACE");
+    expect(commands).toBeGreaterThan(prompt.indexOf("TARGET:"));
+    expect(names).toBeGreaterThan(commands);
+    expect(prompt.slice(names)).toContain('"Studio 1" | "billing"');
+    expect(prompt).toContain("/compact\n");
+  });
+
   it("adds no target section without one", () => {
     expect(buildCorrectionSystemPrompt({})).not.toContain("TARGET:");
   });
