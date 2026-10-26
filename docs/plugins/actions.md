@@ -558,7 +558,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `worktree.openFileBrowserPanel` | Browse files | safe | `activateDockOnCreate?`, `location?`, `revealKind?`, `revealPath?`, `rootPath?`, `worktreeId?` |
 | `worktree.openIssue` | Open worktree issue | safe | `worktreeId?` |
 | `worktree.openPR` | Open worktree pull request | safe | `worktreeId?` |
-| `worktree.openReviewHub` | Open review hub | safe | `worktreeId?` |
+| `worktree.openReviewHub` | Open review hub | safe | `mode?`, `worktreeId?` |
 | `worktree.overview.close` | Close worktree overview | safe | — |
 | `worktree.overview.open` | Open worktree overview | safe | — |
 | `worktree.quickCreate` | Quick create worktree | safe | — |
