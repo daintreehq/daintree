@@ -22,6 +22,7 @@ import {
 import { resolveEffectiveActionDanger } from "../../../shared/utils/effectiveActionDanger.js";
 import { isGenericNativeGrantEligible } from "../../../shared/config/nativeGrantUsePolicies.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { SendKeysArgsSchema } from "../../../shared/utils/terminalKeys.js";
 import type { McpDispatchAuthorization } from "../../../shared/types/ipc/mcpServer.js";
 import type { DispatchEnvelope } from "./shared.js";
 import {
@@ -240,6 +241,8 @@ const ASSISTANT_TARGET_TOOLS: ReadonlySet<string> = new Set([
   "terminal.sendCommandOwned",
   "terminal.interrupt",
   "terminal.interruptOwned",
+  "terminal.sendKeys",
+  "terminal.sendKeysOwned",
   "terminal.close",
   "terminal.closeOwned",
   TERMINAL_READ_LAST_MESSAGE_OWNED_TOOL,
@@ -253,6 +256,10 @@ const CLOSE_TOOLS: ReadonlySet<string> = new Set([
 const ASSISTANT_SEND_TOOLS: ReadonlySet<string> = new Set([
   "terminal.sendCommand",
   "terminal.sendCommandOwned",
+]);
+const ASSISTANT_KEYS_TOOLS: ReadonlySet<string> = new Set([
+  "terminal.sendKeys",
+  "terminal.sendKeysOwned",
 ]);
 const ASSISTANT_INTERRUPT_TOOLS: ReadonlySet<string> = new Set([
   "terminal.interrupt",
@@ -842,6 +849,20 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           command,
           generation,
           handback: record.handback === true,
+        });
+      }
+      if (ASSISTANT_KEYS_TOOLS.has(actionId)) {
+        const parsed = SendKeysArgsSchema.safeParse(args);
+        if (!parsed.success) {
+          throw new AssistantTargetError(
+            "VALIDATION_ERROR",
+            `Pressing keys needs \`keys\` or \`choose\`: ${parsed.error.issues[0]?.message ?? "invalid arguments"}`
+          );
+        }
+        return control.sendKeys(caller, target, {
+          keys: parsed.data.keys,
+          choose: parsed.data.choose,
+          generation: parsed.data.generation,
         });
       }
       if (ASSISTANT_INTERRUPT_TOOLS.has(actionId)) return control.interrupt(target);

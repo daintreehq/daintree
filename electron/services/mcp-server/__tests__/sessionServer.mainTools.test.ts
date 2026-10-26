@@ -682,6 +682,7 @@ describe("one assistant addressing another (#13496)", () => {
       list: vi.fn(async () => LISTED),
       start: vi.fn(async () => ({ assistant: {}, ready: true, notReadyReason: null })),
       submit: vi.fn(async () => RECEIPT),
+      sendKeys: vi.fn(async () => ({ terminalId: ASSISTANT_TERMINAL, keys: ["Enter"] })),
       interrupt: vi.fn(async () => ({
         terminalId: ASSISTANT_TERMINAL,
         agentId: "codex",
@@ -869,6 +870,22 @@ describe("one assistant addressing another (#13496)", () => {
       command: "Run the suite",
       generation: 4,
       handback: true,
+    });
+    expect(deps.dispatchAction).not.toHaveBeenCalled();
+  });
+
+  it("presses keys in an assistant in main, with the generation it was given", async () => {
+    const { deps, control } = assistantDeps({ caller: CALLER });
+    const server = await serve(deps);
+    const result = await callTool(server, {
+      name: "terminal.sendKeys",
+      arguments: { terminalId: ASSISTANT_TERMINAL, keys: ["Enter"], generation: 4 },
+    });
+    expect(result.isError).toBeFalsy();
+    expect(control.sendKeys).toHaveBeenCalledWith(CALLER, TARGET, {
+      keys: ["Enter"],
+      choose: undefined,
+      generation: 4,
     });
     expect(deps.dispatchAction).not.toHaveBeenCalled();
   });

@@ -242,6 +242,7 @@ export class HttpLifecycle {
     list: (...args) => this.boundAssistantControl().list(...args),
     start: (...args) => this.boundAssistantControl().start(...args),
     submit: (...args) => this.boundAssistantControl().submit(...args),
+    sendKeys: (...args) => this.boundAssistantControl().sendKeys(...args),
     interrupt: (...args) => this.boundAssistantControl().interrupt(...args),
     close: (...args) => this.boundAssistantControl().close(...args),
     readReply: (...args) => this.boundAssistantControl().readReply(...args),

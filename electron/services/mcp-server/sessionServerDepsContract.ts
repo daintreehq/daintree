@@ -256,6 +256,7 @@ export interface SessionServerDeps extends OwnedMainExecutors {
     | "list"
     | "start"
     | "submit"
+    | "sendKeys"
     | "interrupt"
     | "close"
     | "readReply"
