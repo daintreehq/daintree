@@ -20,7 +20,6 @@ import { ChangeHostTargetDialog } from "./ChangeHostTargetDialog";
 import { HostPluginsSection } from "./HostPluginsSection";
 import { HostSessionsSection } from "./HostSessionsSection";
 import { HostCopySettingsSection } from "./HostCopySettingsSection";
-import { HostSettingsSection } from "./HostSettingsSection";
 import { takeFirstConnect } from "./hostCopySettingsRequests";
 import { HostClipboardGrants } from "./HostClipboardGrants";
 import { HostPluginViewConsents } from "./HostPluginViewConsents";
@@ -34,6 +33,8 @@ import {
 import { describeHostForge } from "@/components/Hosts/hostForges";
 import { clientErrorText } from "@/utils/clientAppError";
 import { isWindows } from "@/lib/platform";
+import { currentHostId } from "@/hooks/useHostPlatform";
+import { useSettingsTargetStore } from "@/store/settingsTargetStore";
 
 interface HostDetailProps {
   entry: HostListEntry;
@@ -463,7 +464,30 @@ export function HostDetail({
         </SettingsGroup>
       </SettingsSection>
 
-      <HostSettingsSection hostId={descriptor.id} hostName={hostName} connected={connected} />
+      <SettingsSection title="Work settings">
+        <SettingsGroup>
+          {descriptor.id === currentHostId() ? (
+            <SettingsRow
+              label={`Settings on ${hostName}`}
+              description={`This window works on ${hostName}, so its Settings pages already change it`}
+            />
+          ) : (
+            <SettingsRow
+              label={`Settings on ${hostName}`}
+              description={`Agents, environment, terminals and Canopy, changed on ${hostName} itself`}
+              control={
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => useSettingsTargetStore.getState().setHostId(descriptor.id)}
+                >
+                  Edit work settings
+                </Button>
+              }
+            />
+          )}
+        </SettingsGroup>
+      </SettingsSection>
       <HostCopySettingsSection
         hostId={descriptor.id}
         hostName={hostName}
