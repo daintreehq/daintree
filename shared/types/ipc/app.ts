@@ -178,6 +178,12 @@ export interface HydrateResult {
    * because a remote host on an older build doesn't send it.
    */
   agentDefaults?: import("./agentDefaults.js").AgentDefaultsSnapshot;
+  /**
+   * The toolbar agent pins of the machine the window is drawn on (#14702), so
+   * a remote window carries the Shell's, never the host's. Optional for the
+   * safe-boot fallback, where the renderer reads them over IPC instead.
+   */
+  agentToolbarPins?: import("./agentToolbarPins.js").AgentToolbarPinsSnapshot;
   gpuWebGLHardware: boolean;
   gpuHardwareAccelerationDisabled: boolean;
   /**

@@ -5,6 +5,7 @@ import { CHANNELS } from "../../channels.js";
 import { store, type StoreSchema, consumePendingSettingsRecovery } from "../../../store.js";
 import { readCanopyMode } from "../../../services/canopy/canopyMode.js";
 import { readAgentDefaults } from "../../../services/agentDefaults.js";
+import { readAgentToolbarPinsSnapshot } from "../../../services/agentToolbarPins.js";
 import { projectStore } from "../../../services/ProjectStore.js";
 import {
   mayWriteProjectState,
@@ -109,6 +110,7 @@ export type ShellHydrateFields = Pick<
   | "crashLoopStateRecovery"
   | "systemTmpDir"
   | "keybindingOverrides"
+  | "agentToolbarPins"
 >;
 
 /**
@@ -152,6 +154,7 @@ export function readShellHydrateFields(options: { consumeOneShots: boolean }): S
     // `system:get-tmp-dir` round-trip on boot (matches `handleSystemGetTmpDir`).
     systemTmpDir: os.tmpdir(),
     keybindingOverrides: getValidatedOverrides(),
+    agentToolbarPins: readAgentToolbarPinsSnapshot(),
   };
 }
 
@@ -391,6 +394,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
         // snapshot from the hover-prefetch window.
         projects: projectStore.getAllProjects(),
         keybindingOverrides: getValidatedOverrides(),
+        agentToolbarPins: readAgentToolbarPinsSnapshot(),
         userAgentRegistry: loadSanitizedUserAgentRegistry(),
         // A terminal setting saved after the hover must not boot this view
         // with the old value (#14699).

@@ -41,7 +41,7 @@ import {
   GripVertical,
 } from "lucide-react";
 import { useToolbarPreferencesStore } from "@/store";
-import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { useAgentToolbarPinsStore } from "@/store/agentToolbarPinsStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { useCanopyStore } from "@/store/canopyStore";
 import type { AnyToolbarButtonId, LauncherItemToolbarButtonId } from "@/../../shared/types/toolbar";
@@ -537,8 +537,8 @@ export function ToolbarSettingsTab() {
     });
   };
 
-  const agentSettings = useAgentSettingsStore((s) => s.settings);
-  const setAgentPinned = useAgentSettingsStore((s) => s.setAgentPinned);
+  const agentPins = useAgentToolbarPinsStore((s) => s.pins);
+  const setAgentPinned = useAgentToolbarPinsStore((s) => s.setAgentPinned);
   const agentAvailability = useCliAvailabilityStore((s) => s.availability);
 
   // In-flight side lists while a drag is active. `null` between drags so we
@@ -713,7 +713,7 @@ export function ToolbarSettingsTab() {
       pinnedButtons: layout.pinnedButtons,
       leftButtons: layout.leftButtons,
       rightButtons: layout.rightButtons,
-      agentSettings,
+      agentPins,
       agentAvailability,
       isPluginContribution: (id) => pluginConfigs.has(id),
     }),
@@ -721,7 +721,7 @@ export function ToolbarSettingsTab() {
       layout.pinnedButtons,
       layout.leftButtons,
       layout.rightButtons,
-      agentSettings,
+      agentPins,
       agentAvailability,
       pluginConfigs,
     ]

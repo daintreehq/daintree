@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo } from "react";
-import type { AgentSettings, CliAvailability } from "@shared/types";
+import type { AgentToolbarPins, CliAvailability } from "@shared/types";
+import { agentToolbarPin } from "@shared/types/ipc/agentToolbarPins";
 import type { AnyToolbarButtonId } from "@shared/types/toolbar";
 import type { PluginToolbarButtonState } from "@/hooks/usePluginToolbarButtons";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
@@ -44,7 +45,8 @@ export interface ToolbarItemPlacementInput {
   devPreviewPlaced: boolean;
   devPreviewHidden: boolean;
   forgeStatsHidden: boolean;
-  effectiveAgentSettings: AgentSettings | null | undefined;
+  /** This machine's toolbar agent pins (#14702). */
+  agentPins: Readonly<AgentToolbarPins>;
   agentAvailability: CliAvailability | undefined;
   launcherCatalog: LauncherToolbarCatalog;
   pluginButtonIds: PluginToolbarButtonState["buttonIds"];
@@ -67,7 +69,7 @@ export function useToolbarItemPlacement({
   devPreviewPlaced,
   devPreviewHidden,
   forgeStatsHidden,
-  effectiveAgentSettings,
+  agentPins,
   agentAvailability,
   launcherCatalog,
   pluginButtonIds,
@@ -105,12 +107,12 @@ export function useToolbarItemPlacement({
 
   // An agent the user explicitly pinned but that sits in neither side array
   // still has to render (#11680). Two ways to get here, and neither can be
-  // repaired in the store's `merge()` — the pin lives in `agentSettingsStore`,
-  // which loads asynchronously over IPC and isn't readable at toolbar-store
-  // hydration:
-  //   - a genuinely fresh profile, where `buildInitialAgentPinUpdates` stamps
-  //     `pinned: true` for the first few installed agents before the user has
-  //     ever touched the toolbar;
+  // repaired in the store's `merge()` — the pin lives in
+  // `agentToolbarPinsStore`, which loads asynchronously over IPC and isn't
+  // readable at toolbar-store hydration:
+  //   - a genuinely fresh profile, where main's first CLI check pins the first
+  //     few installed agents (`seedAgentToolbarPinsIfUnset`) before the user
+  //     has ever touched the toolbar;
   //   - a stale sibling project view overwriting the orderings, which reconcile
   //     last-writer-wins and so drop a position another view just wrote (the
   //     same window `restorePromotedPanelButtons` covers for panels).
@@ -121,9 +123,9 @@ export function useToolbarItemPlacement({
   const unpositionedAgentPins = useMemo(() => {
     const onEitherSide = new Set([...toolbarLayout.leftButtons, ...toolbarLayout.rightButtons]);
     return BUILT_IN_AGENT_IDS.filter(
-      (id) => !onEitherSide.has(id) && isAgentPinned(effectiveAgentSettings?.agents?.[id])
+      (id) => !onEitherSide.has(id) && isAgentPinned(agentToolbarPin(agentPins, id))
     );
-  }, [toolbarLayout.leftButtons, toolbarLayout.rightButtons, effectiveAgentSettings]);
+  }, [toolbarLayout.leftButtons, toolbarLayout.rightButtons, agentPins]);
 
   // Materialize those positions once they're knowable, so the repair is a
   // one-frame bridge rather than a permanent ghost. A rendered-but-unpositioned
@@ -239,7 +241,7 @@ export function useToolbarItemPlacement({
       isToolbarButtonVisible(
         id,
         pinnedButtons,
-        effectiveAgentSettings,
+        agentPins,
         agentAvailability,
         pluginConfigs.has(id)
       ),
@@ -247,7 +249,7 @@ export function useToolbarItemPlacement({
       forgeStatsHidden,
       devPreviewHidden,
       pinnedButtons,
-      effectiveAgentSettings,
+      agentPins,
       agentAvailability,
       pluginConfigs,
     ]

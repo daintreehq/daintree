@@ -124,6 +124,7 @@ export function releaseBootPayload(): void {
     result.appTheme = undefined;
     result.projects = undefined;
     result.keybindingOverrides = undefined;
+    result.agentToolbarPins = undefined;
     result.userAgentRegistry = undefined;
   };
 

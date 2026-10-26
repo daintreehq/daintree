@@ -3,10 +3,11 @@ import type { WorkspaceRoot } from "@/hooks/useWorkspaceRoot";
 import { useWorktreeActions } from "@/hooks/useWorktreeActions";
 import { useDevPreviewHidden } from "@/hooks/useResolvedPresentation";
 import { getAgentConfig, getAgentIds } from "@/config/agents";
-import { getAgentSettingsEntry } from "@/types";
+import { agentToolbarPin } from "@shared/types/ipc/agentToolbarPins";
 import { isAgentLaunchable } from "@shared/utils/agentAvailability";
 import { isAgentPinned } from "@shared/utils/agentPinned";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { useAgentToolbarPinsStore } from "@/store/agentToolbarPinsStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { useRecipeStore } from "@/store/recipeStore";
 import { actionService } from "@/services/ActionService";
@@ -29,6 +30,7 @@ import type { WorktreeMenuActions } from "@/components/Worktree/WorktreeMenuItem
  */
 export function useWorkspaceRootMenuActions(workspace: WorkspaceRoot): WorktreeMenuActions {
   const agentSettings = useAgentSettingsStore((state) => state.settings);
+  const agentPins = useAgentToolbarPinsStore((state) => state.pins);
   const availability = useCliAvailabilityStore((state) => state.availability);
   const allRecipes = useRecipeStore((state) => state.recipes);
   const runRecipeWithResults = useRecipeStore((state) => state.runRecipeWithResults);
@@ -44,7 +46,7 @@ export function useWorkspaceRootMenuActions(workspace: WorkspaceRoot): WorktreeM
   const baseIds = getAgentIds();
   const settingsIds = agentSettings?.agents ? Object.keys(agentSettings.agents) : [];
   const launchAgents = [...baseIds, ...settingsIds.filter((id) => !baseIds.includes(id)).sort()]
-    .filter((id) => isAgentPinned(getAgentSettingsEntry(agentSettings, id)))
+    .filter((id) => isAgentPinned(agentToolbarPin(agentPins, id)))
     .map((id) => {
       const config = getAgentConfig(id);
       return {

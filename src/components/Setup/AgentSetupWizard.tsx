@@ -10,7 +10,7 @@ import { AGENT_REGISTRY } from "@/config/agents";
 import { BrandMark } from "@/components/icons";
 import { AgentCard } from "@/components/agents/AgentCard";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
-import { useAgentSettingsStore } from "@/store";
+import { useAgentSettingsStore, useAgentToolbarPinsStore } from "@/store";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { cliAvailabilityClient } from "@/clients";
 import { logError } from "@/utils/logger";
@@ -519,7 +519,8 @@ export function AgentSetupWizard({
   const [hasFatalHealthFailure, setHasFatalHealthFailure] = useState(false);
   const [isHealthChecking, setIsHealthChecking] = useState(true);
 
-  const { setAgentPinned, setGlobalSkipPermissions } = useAgentSettingsStore();
+  const setGlobalSkipPermissions = useAgentSettingsStore((s) => s.setGlobalSkipPermissions);
+  const setAgentPinned = useAgentToolbarPinsStore((s) => s.setAgentPinned);
   const isAvailabilityLoading = useCliAvailabilityStore((s) => s.isLoading || s.isRefreshing);
   const [isSaving, setIsSaving] = useState(false);
   const [isInstalling, setIsInstalling] = useState(false);

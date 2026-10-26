@@ -1,5 +1,5 @@
 import { useCallback, useMemo } from "react";
-import type { AgentSettings, CliAvailability } from "@shared/types";
+import type { AgentToolbarPins, CliAvailability } from "@shared/types";
 import type { AnyToolbarButtonId } from "@shared/types/toolbar";
 import type { PluginToolbarButtonState } from "@/hooks/usePluginToolbarButtons";
 import type { ToolbarButtonConfig } from "@shared/config/toolbarButtonRegistry";
@@ -19,7 +19,7 @@ import type {
   useResolvedPresentation,
 } from "@/hooks/useResolvedPresentation";
 import { useToolbarPreferencesStore } from "@/store";
-import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { useAgentToolbarPinsStore } from "@/store/agentToolbarPinsStore";
 import { useProjectPresentationStore } from "@/store/projectPresentationStore";
 import { TOOLBAR_BUTTON_METADATA } from "./toolbarButtonMetadata";
 import type { ProjectToolbarMenuState } from "./ToolbarButtonsContextMenu";
@@ -45,7 +45,8 @@ export interface ToolbarCustomizationInput {
   pinnedButtons: ToolbarPreferencesState["layout"]["pinnedButtons"];
   toolbarLayout: ToolbarPreferencesState["layout"];
   positionAgentButton: ToolbarPreferencesState["positionAgentButton"];
-  effectiveAgentSettings: AgentSettings | null | undefined;
+  /** This machine's toolbar agent pins (#14702). */
+  agentPins: Readonly<AgentToolbarPins>;
   agentAvailability: CliAvailability | undefined;
   pluginButtonIds: PluginToolbarButtonState["buttonIds"];
   pluginConfigs: ReadonlyMap<string, ToolbarButtonConfig>;
@@ -67,7 +68,7 @@ export function useToolbarCustomization({
   pinnedButtons,
   toolbarLayout,
   positionAgentButton,
-  effectiveAgentSettings,
+  agentPins,
   agentAvailability,
   pluginButtonIds,
   pluginConfigs,
@@ -93,7 +94,7 @@ export function useToolbarCustomization({
   const setLauncherItemOnToolbar = useToolbarPreferencesStore(
     (state) => state.setLauncherItemOnToolbar
   );
-  const setAgentPinned = useAgentSettingsStore((s) => s.setAgentPinned);
+  const setAgentPinned = useAgentToolbarPinsStore((s) => s.setAgentPinned);
 
   // The same bundle Settings → Toolbar hands the placement resolvers, so the
   // empty-space menu's checkmarks and toggles route exactly as that page does.
@@ -102,7 +103,7 @@ export function useToolbarCustomization({
       pinnedButtons,
       leftButtons: toolbarLayout.leftButtons,
       rightButtons: toolbarLayout.rightButtons,
-      agentSettings: effectiveAgentSettings,
+      agentPins,
       agentAvailability,
       isPluginContribution: (id) => pluginConfigs.has(id),
     }),
@@ -110,7 +111,7 @@ export function useToolbarCustomization({
       pinnedButtons,
       toolbarLayout.leftButtons,
       toolbarLayout.rightButtons,
-      effectiveAgentSettings,
+      agentPins,
       agentAvailability,
       pluginConfigs,
     ]
@@ -162,7 +163,7 @@ export function useToolbarCustomization({
             id,
             buttonRegistry,
             PROJECT_SCOPED_TOOLBAR_IDS,
-            effectiveAgentSettings,
+            agentPins,
             agentAvailability
           ),
         isOnToolbar: (id) => isToolbarButtonOnToolbar(id, toolbarPlacementState),
@@ -172,7 +173,7 @@ export function useToolbarCustomization({
       menuRightButtons,
       dynamicOverflowMeta,
       buttonRegistry,
-      effectiveAgentSettings,
+      agentPins,
       agentAvailability,
       toolbarPlacementState,
     ]

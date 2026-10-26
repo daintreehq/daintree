@@ -1,5 +1,6 @@
 import { isBuiltInAgentId } from "@shared/config/agentIds";
-import type { AgentSettings, CliAvailability } from "@shared/types";
+import type { AgentToolbarPins, CliAvailability } from "@shared/types";
+import { agentToolbarPin } from "@shared/types/ipc/agentToolbarPins";
 import type {
   AnyToolbarButtonId,
   LauncherItemToolbarButtonId,
@@ -18,7 +19,8 @@ import {
 import { isAgentButtonOnToolbar, isAgentToolbarVisible } from "../../shared/utils/agentPinned";
 
 export interface ToolbarVisibilityDispatchDeps {
-  agentSettings: AgentSettings | null | undefined;
+  /** This machine's toolbar agent pins (#14702). */
+  agentPins: Readonly<AgentToolbarPins> | null | undefined;
   agentAvailability: CliAvailability | null | undefined;
   setAgentPinned: (agentId: string, pinned: boolean) => void | Promise<void>;
   toggleButtonVisibility: (buttonId: AnyToolbarButtonId, side: "left" | "right") => void;
@@ -34,9 +36,10 @@ export interface ToolbarVisibilityDispatchDeps {
  * Routes a toolbar visibility toggle to the correct store.
  *
  * Agent IDs (entries in `BUILT_IN_AGENT_IDS`) write through `setAgentPinned`
- * so the pin lives in `agentSettingsStore` (the IPC-persisted, tri-state
- * source per #7673). Every other ID — including `launcher` and plugin
- * buttons — writes through `toggleButtonVisibility` on the toolbar store.
+ * so the pin lives in `agentToolbarPinsStore` (this machine's IPC-persisted,
+ * tri-state pins per #7673 and #14702). Every other ID — including `launcher`
+ * and plugin buttons — writes through `toggleButtonVisibility` on the toolbar
+ * store.
  *
  * When `explicitPinned` is omitted the agent branch toggles the *currently
  * derived* visible state, so an `undefined` pin (no explicit user
@@ -61,7 +64,7 @@ export function dispatchToolbarVisibility(
     const nextPinned =
       explicitPinned ??
       !isAgentToolbarVisible(
-        deps.agentSettings?.agents?.[buttonId],
+        agentToolbarPin(deps.agentPins, buttonId),
         deps.agentAvailability?.[buttonId]
       );
     // Synchronous, deliberately, even though `setAgentPinned` is an async IPC
@@ -99,7 +102,7 @@ export interface ToolbarButtonPlacementState {
   pinnedButtons: ToolbarPinnedState;
   leftButtons: AnyToolbarButtonId[];
   rightButtons: AnyToolbarButtonId[];
-  agentSettings: AgentSettings | null | undefined;
+  agentPins: Readonly<AgentToolbarPins> | null | undefined;
   agentAvailability: CliAvailability | null | undefined;
   /**
    * Live plugin registry membership — the discriminator for a contribution,
@@ -148,7 +151,7 @@ export function isToolbarButtonOnToolbar(
   }
   if (isBuiltInAgentId(buttonId)) {
     return isAgentButtonOnToolbar(
-      state.agentSettings?.agents?.[buttonId],
+      agentToolbarPin(state.agentPins, buttonId),
       state.agentAvailability?.[buttonId],
       state.leftButtons.includes(buttonId) || state.rightButtons.includes(buttonId)
     );
@@ -211,7 +214,7 @@ export function setToolbarButtonOnToolbar(
     buttonId,
     side,
     {
-      agentSettings: state.agentSettings,
+      agentPins: state.agentPins,
       agentAvailability: state.agentAvailability,
       setAgentPinned: actions.setAgentPinned,
       toggleButtonVisibility: actions.toggleButtonVisibility,

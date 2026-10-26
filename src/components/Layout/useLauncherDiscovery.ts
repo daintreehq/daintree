@@ -3,7 +3,8 @@ import {
   useAgentDiscoveryOnboarding,
   NEW_AGENT_TTL_MS,
 } from "@/hooks/app/useAgentDiscoveryOnboarding";
-import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { selectLoadedAgentPins, useAgentToolbarPinsStore } from "@/store/agentToolbarPinsStore";
+import { agentToolbarPin } from "@shared/types/ipc/agentToolbarPins";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { isAgentLaunchable } from "@shared/utils/agentAvailability";
 import { isAgentPinned } from "@shared/utils/agentPinned";
@@ -37,7 +38,7 @@ export function useLauncherDiscovery(agentAvailability?: CliAvailability): Launc
     markAgentsSeen,
     recordAgentFirstSeen,
   } = useAgentDiscoveryOnboarding();
-  const agentSettings = useAgentSettingsStore((s) => s.settings);
+  const agentPins = useAgentToolbarPinsStore(selectLoadedAgentPins);
   const hasRealData = useCliAvailabilityStore((s) => s.hasRealData);
 
   const readyAgentIds = useMemo(
@@ -51,14 +52,13 @@ export function useLauncherDiscovery(agentAvailability?: CliAvailability): Launc
   // card and the discovery badge from both firing for the same agents, so the
   // moment they disagree a grandfathered profile gets both.
   const hasNoPinnedAgents = useMemo(() => {
-    // `false` when settings haven't loaded, matching `WelcomeScreen`'s own
-    // `if (!agentSettings) return false` — it declares the card ineligible, so
+    // `false` when the pins haven't loaded, matching `WelcomeScreen`'s own
+    // `if (!agentPins) return false` — it declares the card ineligible, so
     // claiming "no pins" here would suppress the badge for a card that is never
     // going to render.
-    if (!agentSettings) return false;
-    if (!agentSettings.agents) return true;
-    return !BUILT_IN_AGENT_IDS.some((id) => isAgentPinned(agentSettings.agents?.[id]));
-  }, [agentSettings]);
+    if (!agentPins) return false;
+    return !BUILT_IN_AGENT_IDS.some((id) => isAgentPinned(agentToolbarPin(agentPins, id)));
+  }, [agentPins]);
 
   // While the first-run welcome card is actually being rendered, suppress the
   // launcher discovery badge so the card and badge don't both fire for the same

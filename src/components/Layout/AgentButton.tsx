@@ -68,6 +68,7 @@ import {
   isAgentUnauthenticated,
 } from "../../../shared/utils/agentAvailability";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { useAgentToolbarPinsStore } from "@/store/agentToolbarPinsStore";
 
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
@@ -214,7 +215,7 @@ export function AgentButton({
   const ariaShortcut = useAriaKeyshortcuts(`agent.${type}`);
   const hover = useShortcutHintHover(`agent.${type}`);
   const agentSettings = useAgentSettingsStore((s) => s.settings);
-  const setAgentPinned = useAgentSettingsStore((s) => s.setAgentPinned);
+  const setAgentPinned = useAgentToolbarPinsStore((s) => s.setAgentPinned);
   const ccrPresets = useCcrPresetsStore((s) => s.ccrPresetsByAgent[type]);
   const projectPresets = useProjectPresetsStore((s) => s.presetsByAgent[type]);
 
@@ -422,7 +423,7 @@ export function AgentButton({
     void actionService.dispatch("agent.launch", { agentId: type }, { source: "user" });
   };
 
-  // Per-agent unpin: agent IDs read pin state from agentSettingsStore
+  // Per-agent unpin: agent IDs read pin state from agentToolbarPinsStore
   // (tri-state — see isAgentToolbarVisible / #7673), not from
   // pinnedButtons. The wrapper's default toggleButtonVisibility writes
   // to the wrong store, so override it here.

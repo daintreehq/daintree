@@ -67,6 +67,8 @@ import { resolveEffectivePresetId } from "@shared/types";
 import { getMergedPresets } from "@/config/agents";
 import { actionService } from "@/services/ActionService";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { useAgentToolbarPinsStore } from "@/store/agentToolbarPinsStore";
+import { agentToolbarPin } from "@shared/types/ipc/agentToolbarPins";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { usePanelStore } from "@/store/panelStore";
@@ -160,7 +162,7 @@ const PLACEMENT_CONFIG = {
 /**
  * A row that can be pinned to the toolbar, resolved to the id the write path
  * actually takes. Three write paths behind the one affordance: a built-in agent's
- * pin lives in `agentSettingsStore`, one of the four fixed panel buttons goes
+ * pin lives in `agentToolbarPinsStore`, one of the four fixed panel buttons goes
  * through `setPanelButtonOnToolbar`, and every other row — plugin and
  * user-defined agents, the remaining panel kinds, recipes — through
  * `setLauncherItemOnToolbar` (#12217).
@@ -240,7 +242,8 @@ export function DockLaunchButton({
   // owns its own model's store reads, and it serves both the dock and the
   // toolbar — neither of which is positioned to compute rows for it.
   const agentSettings = useAgentSettingsStore((s) => s.settings);
-  const setAgentPinned = useAgentSettingsStore((s) => s.setAgentPinned);
+  const agentPins = useAgentToolbarPinsStore((s) => s.pins);
+  const setAgentPinned = useAgentToolbarPinsStore((s) => s.setAgentPinned);
   const updateWorktreePreset = useAgentSettingsStore((s) => s.updateWorktreePreset);
   const agentAvailability = useCliAvailabilityStore((s) => s.availability);
   const refreshAvailability = useCliAvailabilityStore((s) => s.refresh);
@@ -360,7 +363,7 @@ export function DockLaunchButton({
           // agent with no position renders no button, and a pin icon that
           // claimed otherwise would be describing a button that isn't there.
           onToolbar: isAgentButtonOnToolbar(
-            agentSettings?.agents?.[id],
+            agentToolbarPin(agentPins, id),
             item.agent.availability,
             leftButtons.includes(id) || rightButtons.includes(id)
           ),
@@ -380,7 +383,7 @@ export function DockLaunchButton({
         onToolbar: isPanelButtonOnToolbar(id, pinnedButtons, leftButtons, rightButtons),
       };
     },
-    [agentSettings, currentProjectId, leftButtons, pinnedButtons, rightButtons]
+    [agentPins, currentProjectId, leftButtons, pinnedButtons, rightButtons]
   );
 
   // Deliberately undebounced, unlike the menu launcher's old `guardPinAction`:
@@ -402,7 +405,7 @@ export function DockLaunchButton({
           target.id,
           "left",
           {
-            agentSettings,
+            agentPins,
             agentAvailability,
             setAgentPinned,
             toggleButtonVisibility,
@@ -420,7 +423,7 @@ export function DockLaunchButton({
     },
     [
       agentAvailability,
-      agentSettings,
+      agentPins,
       positionAgentButton,
       setAgentPinned,
       setLauncherItemOnToolbar,

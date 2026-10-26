@@ -38,7 +38,7 @@ interface ToolbarContextMenuItemsProps {
    * Optional override for the unpin handler. Default is
    * `useToolbarPreferencesStore.toggleButtonVisibility(buttonId, side)`, but
    * built-in agent IDs (`claude` / `gemini` / `codex`) read pin state from
-   * `agentSettingsStore` (tri-state — see #7673 and `isAgentToolbarVisible`),
+   * `agentToolbarPinsStore` (tri-state — see #7673 and `isAgentToolbarVisible`),
    * not from `pinnedButtons`. Pass a callback that calls
    * `setAgentPinned(id, false)` for those buttons so unpinning actually
    * hides them. Buttons outside `BUILT_IN_AGENT_IDS` can rely on the

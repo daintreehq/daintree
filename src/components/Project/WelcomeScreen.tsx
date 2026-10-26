@@ -19,7 +19,12 @@ import { DismissButton } from "@/components/ui/DismissButton";
 import { KbdChord } from "@/components/ui/Kbd";
 import { AppWindow, BrandMark, DaintreeIcon, FolderDown } from "@/components/icons";
 import { useProjectStore } from "@/store/projectStore";
-import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import {
+  selectLoadedAgentPins,
+  useAgentToolbarPinsStore,
+} from "@/store/agentToolbarPinsStore";
+import { agentToolbarPin } from "@shared/types/ipc/agentToolbarPins";
+import type { AgentToolbarPins } from "@shared/types";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { compareProjectsByMode } from "@/lib/projectSort";
@@ -361,21 +366,22 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
 /* ---------- Shared helpers ---------- */
 
 export function isAgentWelcomeCardEligible({
-  agentSettings,
+  agentPins,
   hasRealData,
   welcomeCardDismissed,
   availability,
 }: {
-  agentSettings: { agents?: Record<string, { pinned?: boolean }> } | null;
+  /** This machine's toolbar pins; null until they've loaded. */
+  agentPins: Readonly<AgentToolbarPins> | null;
   hasRealData: boolean;
   welcomeCardDismissed: boolean;
   availability: Record<string, AgentAvailabilityState> | null;
 }): boolean {
-  if (!agentSettings) return false;
+  if (!agentPins) return false;
   if (!hasRealData || welcomeCardDismissed) return false;
   const hasReady = BUILT_IN_AGENT_IDS.some((id) => isAgentLaunchable(availability?.[id]));
   if (!hasReady) return false;
-  const hasPinned = BUILT_IN_AGENT_IDS.some((id) => isAgentPinned(agentSettings.agents?.[id]));
+  const hasPinned = BUILT_IN_AGENT_IDS.some((id) => isAgentPinned(agentToolbarPin(agentPins, id)));
   return !hasPinned;
 }
 
@@ -397,19 +403,19 @@ function NudgeSequencer({
   const { loaded, setupBannerDismissed, welcomeCardDismissed } = useAgentDiscoveryOnboarding();
   const hasRealData = useCliAvailabilityStore((s) => s.hasRealData);
   const availability = useCliAvailabilityStore((s) => s.availability);
-  const agentSettings = useAgentSettingsStore((s) => s.settings);
+  const agentPins = useAgentToolbarPinsStore(selectLoadedAgentPins);
 
   // Mirror AgentWelcomeCard's render predicate so that when the card would
   // return null (no launchable agents, or any built-in already pinned) we
   // fall through to the checklist instead of silently suppressing it.
   const welcomeCardEligible = useMemo(() => {
     return isAgentWelcomeCardEligible({
-      agentSettings,
+      agentPins,
       hasRealData,
       welcomeCardDismissed,
       availability,
     });
-  }, [hasRealData, welcomeCardDismissed, availability, agentSettings]);
+  }, [hasRealData, welcomeCardDismissed, availability, agentPins]);
 
   // Wait for hydration so we don't briefly render setup banner before its
   // persisted dismiss flag arrives, then flip to a different nudge.
@@ -573,8 +579,8 @@ function AgentSetupBannerCard() {
 }
 
 function AgentWelcomeCard() {
-  const agentSettings = useAgentSettingsStore((s) => s.settings);
-  const setAgentPinned = useAgentSettingsStore((s) => s.setAgentPinned);
+  const agentPins = useAgentToolbarPinsStore(selectLoadedAgentPins);
+  const setAgentPinned = useAgentToolbarPinsStore((s) => s.setAgentPinned);
   const availability = useCliAvailabilityStore((s) => s.availability);
   const hasRealData = useCliAvailabilityStore((s) => s.hasRealData);
   const { loaded, welcomeCardDismissed, markAgentsSeen, dismissWelcomeCard } =
@@ -589,7 +595,7 @@ function AgentWelcomeCard() {
 
   if (!loaded) return null;
   if (
-    !isAgentWelcomeCardEligible({ agentSettings, hasRealData, welcomeCardDismissed, availability })
+    !isAgentWelcomeCardEligible({ agentPins, hasRealData, welcomeCardDismissed, availability })
   )
     return null;
 
@@ -598,7 +604,7 @@ function AgentWelcomeCard() {
     setBusy(true);
     setPinError(false);
     try {
-      const targets = readyAgentIds.filter((id) => !isAgentPinned(agentSettings?.agents?.[id]));
+      const targets = readyAgentIds.filter((id) => !isAgentPinned(agentToolbarPin(agentPins, id)));
       const results = await Promise.allSettled(targets.map((id) => setAgentPinned(id, true)));
       const allOk = results.every((r) => r.status === "fulfilled");
       if (!allOk) {

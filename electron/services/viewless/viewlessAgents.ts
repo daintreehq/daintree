@@ -607,15 +607,15 @@ export async function runAgentListAvailable(
   deps: ViewlessDeps
 ): Promise<ActionDispatchResult> {
   try {
-    const [settings, { availability, live }] = await Promise.all([
-      deps.agents.getSettings(),
+    const [pins, { availability, live }] = await Promise.all([
+      deps.agents.getToolbarPins(),
       deps.agents.getAvailability(),
     ]);
     return success(
       buildAvailableAgentListing({
         registry: getEffectiveRegistry(),
         userRegistry: getUserRegistry(),
-        settings,
+        pins,
         availability,
         availabilityLive: live,
       })

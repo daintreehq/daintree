@@ -80,7 +80,7 @@ import { useScratchStore } from "@/store/scratchStore";
 import { activeWorkspaceIdentity } from "@/lib/workspaceIdentity";
 import { usePreferencesStore, useToolbarPreferencesStore, useVoiceRecordingStore } from "@/store";
 import { useProjectStatsStore } from "@/store/projectStatsStore";
-import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { useAgentToolbarPinsStore } from "@/store/agentToolbarPinsStore";
 import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
 import { useCanopyStore } from "@/store/canopyStore";
 import type { AnyToolbarButtonId } from "@/../../shared/types/toolbar";
@@ -91,7 +91,8 @@ import { usePanelStore } from "@/store/panelStore";
 import { useShallow } from "zustand/react/shallow";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
 import { notify } from "@/lib/notify";
-import type { CliAvailability, AgentSettings } from "@shared/types";
+import type { CliAvailability } from "@shared/types";
+import { agentToolbarPin } from "@shared/types/ipc/agentToolbarPins";
 import { isAgentToolbarVisible } from "../../../shared/utils/agentPinned";
 import { isAgentLaunchable } from "../../../shared/utils/agentAvailability";
 import { projectClient } from "@/clients";
@@ -174,7 +175,6 @@ interface ToolbarProps {
    */
   hasWorkspace: boolean;
   agentAvailability?: CliAvailability;
-  agentSettings?: AgentSettings | null;
   projectSwitcherPalette: UseProjectSwitcherPaletteReturn;
 }
 
@@ -188,7 +188,6 @@ export function Toolbar({
   onToggleFocusMode,
   hasWorkspace,
   agentAvailability,
-  agentSettings,
   projectSwitcherPalette,
 }: ToolbarProps) {
   const currentProject = useProjectStore((state) => state.currentProject);
@@ -300,12 +299,9 @@ export function Toolbar({
   const canopyHidden = useCanopyStore((s) => s.mode === "hidden");
   const toolbarLayout = useToolbarPreferencesStore((state) => state.layout);
   const positionAgentButton = useToolbarPreferencesStore((state) => state.positionAgentButton);
-  // Live subscription so pin/unpin toggles from the launcher immediately
-  // update per-agent toolbar button visibility. The `agentSettings` prop is
-  // sourced from `useAgentLauncher()`'s local useState which does not react to
-  // store mutations, so we prefer the store value when available.
-  const liveAgentSettings = useAgentSettingsStore((s) => s.settings);
-  const effectiveAgentSettings = liveAgentSettings ?? agentSettings;
+  // This machine's pins (#14702), live, so a pin from the launcher or another
+  // view shows here at once.
+  const agentPins = useAgentToolbarPinsStore((s) => s.pins);
 
   const [isFullscreen, setIsFullscreen] = useState(false);
   // Store-derived rather than local click state so every clipboard copy spins
@@ -830,7 +826,7 @@ export function Toolbar({
               />
             ),
             isAvailable: isAgentToolbarVisible(
-              effectiveAgentSettings?.agents?.[id],
+              agentToolbarPin(agentPins, id),
               agentAvailability?.[id]
             ),
           },
@@ -1196,7 +1192,7 @@ export function Toolbar({
       hasWorkspace,
       canCopyTree,
       agentAvailability,
-      effectiveAgentSettings,
+      agentPins,
       onLaunchAgent,
       launcherData,
       launchAgentFromToolbar,
@@ -1266,7 +1262,7 @@ export function Toolbar({
     devPreviewPlaced,
     devPreviewHidden,
     forgeStatsHidden,
-    effectiveAgentSettings,
+    agentPins,
     agentAvailability,
     launcherCatalog,
     pluginButtonIds,
@@ -1403,7 +1399,7 @@ export function Toolbar({
     pinnedButtons,
     toolbarLayout,
     positionAgentButton,
-    effectiveAgentSettings,
+    agentPins,
     agentAvailability,
     pluginButtonIds,
     pluginConfigs,

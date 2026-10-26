@@ -93,7 +93,7 @@ import {
 } from "@/components/Layout/DockLaunchMenuItems";
 import type { DockLaunchAgentOptions } from "@/components/Layout/dockLaunchItems";
 import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
-import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { useAgentToolbarPinsStore } from "@/store/agentToolbarPinsStore";
 import { sortAgentsByToolbarPin } from "@/lib/agentMenuOrder";
 import { getMaximizedGroupFocusTarget, enterFocusedPanel } from "./contentGridFocus";
 import { setGridLayoutSnapshot } from "./gridLayoutSnapshot";
@@ -347,7 +347,7 @@ export function useContentGridContext({
   const leftButtons = useToolbarPreferencesStore(useShallow((s) => s.layout.leftButtons));
   const rightButtons = useToolbarPreferencesStore(useShallow((s) => s.layout.rightButtons));
   const pinnedButtons = useToolbarPreferencesStore(useShallow((s) => s.layout.pinnedButtons));
-  const agentSettings = useAgentSettingsStore((s) => s.settings);
+  const agentPins = useAgentToolbarPinsStore((s) => s.pins);
   // Re-derive grid agents when a plugin loads/unloads mid-session so its agents
   // appear / disappear with current icon/name/color (#9879).
   const pluginAgentRegistry = useSyncExternalStore(
@@ -837,14 +837,14 @@ export function useContentGridContext({
           availability: agentAvailability?.[id],
         };
       });
-    return sortAgentsByToolbarPin(agents, leftButtons, agentSettings, rightButtons, pinnedButtons);
+    return sortAgentsByToolbarPin(agents, leftButtons, agentPins, rightButtons, pinnedButtons);
   }, [
     agentAvailability,
     gridSelectedAgentIds,
     leftButtons,
     rightButtons,
     pinnedButtons,
-    agentSettings,
+    agentPins,
     pluginAgentRegistry,
   ]);
 

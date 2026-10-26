@@ -1,5 +1,5 @@
-// eager-import-allow: reads agent-capability settings via store.get synchronously in the IPC handler
-import { store } from "../../store.js";
+// eager-import-allow: reads this machine's toolbar pins via store.get synchronously in the IPC handler
+import { readAgentToolbarPins } from "../../services/agentToolbarPins.js";
 import { CcrConfigService } from "../../services/CcrConfigService.js";
 import {
   AGENT_REGISTRY,
@@ -16,6 +16,7 @@ import type {
 } from "../../../shared/types/ipc/agentCapabilities.js";
 import type { AgentPreset } from "../../../shared/config/agentRegistry.js";
 import { isAgentPinned } from "../../../shared/utils/agentPinned.js";
+import { agentToolbarPin } from "../../../shared/types/ipc/agentToolbarPins.js";
 import { defineIpcNamespace, op } from "../define.js";
 import { AGENT_CAPABILITIES_METHOD_CHANNELS } from "./agentCapabilities.preload.js";
 import { getAgentModelCatalogService } from "../../window/serviceRefs.js";
@@ -103,9 +104,7 @@ export const agentCapabilitiesNamespace = defineIpcNamespace({
         if (!config) {
           return false;
         }
-        const agentSettings = store.get("agentSettings");
-        const agentEntry = agentSettings?.agents?.[agentId];
-        return isAgentPinned(agentEntry);
+        return isAgentPinned(agentToolbarPin(readAgentToolbarPins(), agentId));
       }
     ),
     getCcrPresets: op(

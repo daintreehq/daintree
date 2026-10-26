@@ -1,4 +1,5 @@
 import type { ActionDispatchResult } from "../../../shared/types/actions.js";
+import { sanitizeAgentToolbarPins } from "../../../shared/types/ipc/agentToolbarPins.js";
 import { PLUGIN_WORKTREE_DELETE_NOTES_TIMEOUT_MS } from "../../../shared/config/pluginBudgets.js";
 import {
   executeViewlessAction,
@@ -44,6 +45,7 @@ async function loadLiveDeps(): Promise<ViewlessDeps> {
 
   const agents: ViewlessDeps["agents"] = {
     getSettings: async () => store.get("agentSettings") ?? null,
+    getToolbarPins: async () => sanitizeAgentToolbarPins(store.get("agentToolbarPins")),
     // Discovered presets exist for Claude only; a view's store holds them under
     // that agent once a read finds any, and nothing for every other agent.
     getCcrPresets: async (agentId) => {

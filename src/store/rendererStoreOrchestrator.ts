@@ -69,6 +69,7 @@ import { initAgentDefaultsSync } from "@/services/agentDefaultsSync";
 import { initTerminalConfigSync } from "@/services/terminalConfigSync";
 import { initAgentSettingsSync } from "@/services/agentSettingsSync";
 import { initPanelGridConfigSync } from "@/services/panelGridConfigSync";
+import { initAgentToolbarPinsSync } from "@/services/agentToolbarPinsSync";
 import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
 
 // Thunk form: read the live mruList at fire time, not at schedule time. A
@@ -651,15 +652,15 @@ export function initStoreOrchestrator(): () => void {
   //     (#14597). Disposing drops the records, since unmapped ranges go stale.
   disposables.add(toDisposable(subscribeDictationRangeTracking()));
 
-  // 5. Availability → agent-settings re-normalization: installed/missing state
+  // 5. Availability → agent-settings re-normalization: real availability data
   //    is the input to `normalizeAgentSelection`, so re-run normalization any
   //    time a fresh availability snapshot lands (see issue #5158). Fires on
   //    the `hasRealData: false → true` transition AND on subsequent
   //    `availability` reference changes — the latter covers the focus-refresh
   //    path in `useAgentLauncher`, where a user who installs a CLI outside
-  //    Daintree needs their tray/toolbar state to reconcile without an app
-  //    restart. `cliAvailabilityStore` only swaps the `availability` object
-  //    on real IPC completion, so ref equality is a reliable trigger.
+  //    Daintree needs the new agent's entry without an app restart.
+  //    `cliAvailabilityStore` only swaps the `availability` object on real IPC
+  //    completion, so ref equality is a reliable trigger.
   disposables.add(
     toDisposable(
       useCliAvailabilityStore.subscribe(
@@ -675,24 +676,8 @@ export function initStoreOrchestrator(): () => void {
     )
   );
 
-  // 6. Loading-race backstop for the same availability → settings sync.
-  // If the first real CLI snapshot lands while agent settings are still
-  // hydrating, the subscription above intentionally does not refresh a store
-  // that is mid-initialize. Re-check when the settings store becomes ready so
-  // first-run default pins are not missed on fast availability probes.
-  disposables.add(
-    toDisposable(
-      useAgentSettingsStore.subscribe((state, prevState) => {
-        const becameReady =
-          state.isInitialized &&
-          !state.isLoading &&
-          (!prevState.isInitialized || prevState.isLoading);
-        if (!becameReady) return;
-        if (!useCliAvailabilityStore.getState().hasRealData) return;
-        refreshAgentSettingsFromAvailability();
-      })
-    )
-  );
+  // 6. This machine's toolbar agent pins (#14702), kept current across views.
+  disposables.add(toDisposable(initAgentToolbarPinsSync()));
 
   // 7. The Daintree Assistant and the web chat Portal share the right edge, so
   //    only one is open at a time: opening either closes the other. Keyed on the
