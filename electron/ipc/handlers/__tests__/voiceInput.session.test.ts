@@ -320,13 +320,24 @@ describe("voiceInput — session identity", () => {
     emit({ type: "terms_sent", terms: [] });
     expect(await getLastTerms()).toMatchObject({ sent: [] });
 
+    // A session that reported keeps what it reported when it ends.
+    await stop(ownerA, "a");
+    const reported = (await getLastTerms()) as Record<string, unknown>;
+    expect(reported).toMatchObject({ sessionId: "a", sent: [] });
+    expect(reported).not.toHaveProperty("endedBeforeSending");
+
     shared.assembleKeyterms = async () => ["delta"];
     await start(ownerB, "b");
     expect(await getLastTerms()).toMatchObject({ sessionId: "b", assembledCount: 1, sent: null });
 
-    // Ending before the provider reported leaves "nothing sent", not "pending".
+    // Ending before the provider reported leaves "nothing sent", not "pending",
+    // and marks it so the page doesn't blame the provider's limits.
     await stop(ownerB, "b");
-    expect(await getLastTerms()).toMatchObject({ sessionId: "b", sent: [] });
+    expect(await getLastTerms()).toMatchObject({
+      sessionId: "b",
+      sent: [],
+      endedBeforeSending: true,
+    });
   });
 
   it("records the view and project that own the live session", async () => {

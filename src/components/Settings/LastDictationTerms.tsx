@@ -28,6 +28,7 @@ const ATTEMPT_NOTE = {
 
 function summarize(last: LastDictationTerms): string {
   if (last.sent === null) return "Waiting for the connection to open";
+  if (last.endedBeforeSending) return "The connection closed before any terms were sent";
   const dropped = last.assembledCount - last.sent.length;
   const parts = [`${last.sent.length} of ${pluralize(last.assembledCount, "term")} sent`];
   if (dropped > 0 && last.keytermAttempt && last.keytermAttempt !== "full") {
@@ -35,7 +36,9 @@ function summarize(last: LastDictationTerms): string {
   } else if (dropped > 0) {
     parts.push(`${pluralize(dropped, "term")} dropped by ${PROVIDER_NAME[last.provider]}'s limits`);
   }
-  return parts.join(". ");
+  // One sentence goes without a period; several each take one.
+  const summary = parts.join(". ");
+  return parts.length > 1 ? `${summary}.` : summary;
 }
 
 export function LastDictationTermsSection() {

@@ -255,9 +255,9 @@ function endSession(session: VoiceSession, reason: VoiceSessionEndReason): void 
   if (session.heldSend) clearTimeout(session.heldSend.timer);
   session.heldSend = null;
   // A provider that never reported (rejected, or cancelled while connecting)
-  // sent nothing, and must not read as still connecting.
+  // sent nothing, and must not read as still connecting or as trimmed by limits.
   if (lastDictationTerms?.sessionId === session.id && lastDictationTerms.sent === null) {
-    lastDictationTerms = { ...lastDictationTerms, sent: [] };
+    lastDictationTerms = { ...lastDictationTerms, sent: [], endedBeforeSending: true };
   }
   session.preStartAudio = null;
   session.markHandedOff();

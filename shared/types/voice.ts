@@ -62,7 +62,9 @@ export interface VoiceSentTerm {
  * main's memory for that one session. `sent` is null until the provider has
  * reported its request, and empty when it went out with no terms.
  * `keytermAttempt` is Deepgram's retry step: after an HTTP 400 it re-sends a
- * trimmed list, then none.
+ * trimmed list, then none. `endedBeforeSending` marks a session that ended
+ * before the provider reported a request (rejected, stopped while connecting,
+ * or the request failed to send), so its empty `sent` is not a provider limit.
  */
 export interface LastDictationTerms {
   sessionId: string;
@@ -71,6 +73,7 @@ export interface LastDictationTerms {
   assembledCount: number;
   sent: VoiceSentTerm[] | null;
   keytermAttempt?: "full" | "trimmed" | "none";
+  endedBeforeSending?: true;
   startedAt: number;
 }
 

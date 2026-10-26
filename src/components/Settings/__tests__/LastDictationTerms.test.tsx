@@ -75,6 +75,25 @@ describe("LastDictationTermsSection", () => {
     expect(screen.queryByRole("button", { name: "Show terms" })).toBeNull();
   });
 
+  it("says when a session closed before the provider sent any terms", async () => {
+    mockApi(async () => snapshot({ provider: "openai", sent: [], endedBeforeSending: true }));
+    render(<LastDictationTermsSection />);
+    expect(
+      await screen.findByText("The connection closed before any terms were sent")
+    ).toBeTruthy();
+    expect(screen.queryByText(/dropped by/)).toBeNull();
+    expect(screen.queryByText(/0 of 4 terms sent/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Show terms" })).toBeNull();
+  });
+
+  it("blames the provider's limits only for a request that went out", async () => {
+    mockApi(async () => snapshot({ provider: "openai", assembledCount: 6 }));
+    render(<LastDictationTermsSection />);
+    expect(
+      await screen.findByText("4 of 6 terms sent. 2 terms dropped by OpenAI's limits.")
+    ).toBeTruthy();
+  });
+
   it("separates not-yet-reported from none sent", async () => {
     mockApi(async () => snapshot({ sent: null }));
     render(<LastDictationTermsSection />);

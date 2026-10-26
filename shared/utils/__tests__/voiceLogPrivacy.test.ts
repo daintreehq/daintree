@@ -39,6 +39,10 @@ const SENSITIVE = new Set([
   "cause",
   "exception",
   "keyterms",
+  "taggedKeyterms",
+  "urlKeyterms",
+  "lastDictationTerms",
+  "terms",
   "keywords",
   "prompt",
   "candidates",
@@ -63,7 +67,10 @@ const SENSITIVE = new Set([
 const SAFE_MEMBERS = new Set(["length", "code", "severity", "name", "type", "size", "byteLength"]);
 
 // Files outside a voice-named path that still log voice-session data.
-const EXTRA_FILES = ["src/hooks/useAudioDevices.ts"];
+const EXTRA_FILES = [
+  "src/hooks/useAudioDevices.ts",
+  "src/components/Settings/LastDictationTerms.tsx",
+];
 
 function voiceSourceFiles(): string[] {
   const out: string[] = EXTRA_FILES.map((f) => path.join(ROOT, f));
@@ -195,6 +202,7 @@ describe("voice log privacy", () => {
     expect(files).toContain("src/services/VoiceRecordingService.ts");
     expect(files).toContain("electron/services/voice/OpenAITranscriptionProvider.ts");
     expect(files).toContain("electron/services/VoiceFileLinkResolver.ts");
+    expect(files).toContain("src/components/Settings/LastDictationTerms.tsx");
   });
 
   it("never passes a raw text field to a log call in voice code", () => {
