@@ -259,8 +259,6 @@ export function VoiceInputButton({
     worktreeLabel,
   ]);
 
-  if (!isConfigured && !isActive) return null;
-
   const tooltipText = !isConfigured
     ? "Configure voice input"
     : status === "error"
