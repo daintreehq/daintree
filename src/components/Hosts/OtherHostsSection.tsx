@@ -1,4 +1,5 @@
 import { FolderGit2, RefreshCw, Server } from "lucide-react";
+import { STATE_LABELS } from "@/components/Worktree/terminalStateConfig";
 import { LOCAL_HOST_ID, type HostId, type HostPlatform } from "@shared/types/remoteHosts";
 import { getViewHostId } from "@/hooks/useHostConnection";
 import { isRemoteShellSupported } from "@/lib/remoteHosts";
@@ -58,8 +59,8 @@ export type OtherHostOption = OtherHostOptionBase &
         worktree: HostWorktreeEntry;
         /** The host's link is down: this is what it reported when last asked. */
         stale: boolean;
-        /** When the host reported it, for a stale row to say so. */
-        listedAt: number;
+        /** A stale row's age in words ("listed 5 min ago"); null while the link is up. */
+        listed: string | null;
       }
     | { kind: "connect" }
     /** `busy` while the host is being asked again: the row holds its place and does nothing. */
@@ -114,6 +115,12 @@ function optionKey(kind: string, hostId: HostId, projectId = ""): string {
 export function otherHostOptionId(option: Pick<OtherHostOption, "key">): string {
   return `project-other-host-option-${option.key}`;
 }
+
+/**
+ * A typed query that matches most branches would otherwise draw every worktree
+ * a host reports; the same limit the other palettes stop at.
+ */
+const MAX_WORKTREE_ROWS_PER_HOST = 20;
 
 function listedAgo(listedAt: number, now: number): string {
   // The clock ticks by the minute, so a list just given can be newer than it.
@@ -194,8 +201,12 @@ export function useOtherHostProjectOptions(query: string): OtherHostOptions {
     // a row of its own.
     const worktreeListing = worktreeListings.get(target.hostId);
     if (worktreeListing && tokens.length > 0) {
+      let worktreeRows = 0;
       for (const worktree of worktreeListing.entries) {
-        const own = [worktree.branch ?? "", worktree.name];
+        if (worktreeRows >= MAX_WORKTREE_ROWS_PER_HOST) break;
+        // The main worktree is named after its folder, which is usually the
+        // project's name: a query for that name is the project row's.
+        const own = [worktree.branch ?? "", worktree.isMainWorktree ? "" : worktree.name];
         if (!tokens.some((token) => matchesTokens([token], own))) continue;
         if (!matchesTokens(tokens, [...own, worktree.projectName, target.name])) continue;
         options.push({
@@ -204,8 +215,9 @@ export function useOtherHostProjectOptions(query: string): OtherHostOptions {
           kind: "worktree",
           worktree,
           stale: !target.reachable,
-          listedAt: worktreeListing.listedAt,
+          listed: target.reachable ? null : listedAgo(worktreeListing.listedAt, now),
         });
+        worktreeRows++;
       }
     }
     // A search names the host to reach these; browsing always shows them, so
@@ -287,7 +299,7 @@ function optionLabel(option: OtherHostOption, group: OtherHostGroup): string {
       const { worktree } = option;
       const state = worktreeState(worktree);
       const where = `${worktree.branch ?? worktree.name} in ${worktree.projectName} on ${option.hostName}${state ? `, ${state}` : ""}`;
-      return option.stale ? `${where}, ${listedAgo(option.listedAt, Date.now())}` : where;
+      return option.listed ? `${where}, ${option.listed}` : where;
     }
     case "connect":
       return `Connect to ${option.hostName}${linkAside}`;
@@ -310,7 +322,7 @@ const HOST_ROW_VERB: Record<Exclude<OtherHostOption["kind"], "project" | "worktr
 /** The state the host observed in a worktree's most urgent agent, in words; null when it saw none. */
 function worktreeState(worktree: HostWorktreeEntry): string | null {
   const state = worktree.observed?.agentState ?? worktree.runs?.[0]?.agentState ?? null;
-  return state ? `${state} (observed)` : null;
+  return state ? `${STATE_LABELS[state]} (observed)` : null;
 }
 
 /** The host's platform mark, or a plain server until a handshake has said which. */

@@ -462,6 +462,45 @@ describe("Other hosts band: worktrees by branch", () => {
     expect(screen.queryByRole("option", { name: /fix\/login/ })).toBeNull();
   });
 
+  it("matches a branch whatever its case", async () => {
+    listWorktrees.mockResolvedValue([worktree({})]);
+    render(<Band query="FIX/Login" onChosen={() => {}} />);
+    await screen.findByRole("option", { name: /^fix\/login in api on studio-01$/ });
+  });
+
+  it("finds the main worktree by its branch, never by the folder it shares with its project", async () => {
+    listWorktrees.mockResolvedValue([
+      worktree({
+        worktreeId: "wt-main",
+        name: "api",
+        branch: "main",
+        isMainWorktree: true,
+        path: "/home/greg/api",
+        observed: { band: "done", agentState: "completed" },
+      }),
+    ]);
+    const { rerender } = render(<Band query="api" onChosen={() => {}} />);
+    await screen.findByRole("option", { name: /^api on studio-01/ });
+    await waitFor(() => expect(listWorktrees).toHaveBeenCalled());
+    await settle();
+    expect(screen.queryByRole("option", { name: /^main in api/ })).toBeNull();
+    rerender(<Band query="main" onChosen={() => {}} />);
+    await screen.findByRole("option", {
+      name: "main in api on studio-01, finished (observed)",
+    });
+  });
+
+  it("draws at most 20 worktree rows for a host", async () => {
+    listWorktrees.mockResolvedValue(
+      Array.from({ length: 25 }, (_, index) =>
+        worktree({ worktreeId: `wt-${index}`, name: `fix-${index}`, branch: `fix/${index}` })
+      )
+    );
+    render(<Band query="fix" onChosen={() => {}} />);
+    await screen.findByRole("option", { name: /^fix\/0 in api/ });
+    expect(screen.getAllByRole("option", { name: /^fix\/\d+ in api/ })).toHaveLength(20);
+  });
+
   it("opens the project with the worktree selected, or its agent focused", async () => {
     listWorktrees.mockResolvedValue([
       worktree({}),
