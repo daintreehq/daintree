@@ -48,7 +48,8 @@ interface SidebarViewPersistedState {
  * share the pick. Host-scoped, because a remote host's project can carry the
  * same id as a local one and every view shares this storage; bare locally.
  */
-const STORAGE_KEY = `daintree-sidebar-view:${hostScopedKey(getViewWorkspaceId() ?? "default")}`;
+export const SIDEBAR_VIEW_KEY_PREFIX = "daintree-sidebar-view:";
+const STORAGE_KEY = `${SIDEBAR_VIEW_KEY_PREFIX}${hostScopedKey(getViewWorkspaceId() ?? "default")}`;
 
 export const useSidebarViewStore = create<SidebarViewState>()(
   persist(

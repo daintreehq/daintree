@@ -4,6 +4,7 @@ import { forgetBuildMismatchNotices } from "@/components/Hosts/buildMismatchNoti
 import { QUICK_RUN_KEY_PREFIXES } from "@/components/Project/quickRunStorageKeys";
 import { useCommandHistoryStore } from "@/store/commandHistoryStore";
 import { backupKeyFor } from "@/store/persistence/safeStorage";
+import { SIDEBAR_VIEW_KEY_PREFIX } from "@/store/sidebarViewStore";
 import { useTwoPaneSplitStore } from "@/store/twoPaneSplitStore";
 import { useUrlHistoryStore } from "@/store/urlHistoryStore";
 import { logWarn } from "@/utils/logger";
@@ -47,6 +48,8 @@ function scrubStoredRecord(storageKey: string, field: string, hostId: HostId): v
   );
 }
 
+const HOST_KEYED_KEY_PREFIXES = [...QUICK_RUN_KEY_PREFIXES, SIDEBAR_VIEW_KEY_PREFIX];
+
 const HOST_KEYED_STORES = [
   { store: useCommandHistoryStore, field: "history" },
   { store: useUrlHistoryStore, field: "entries" },
@@ -55,7 +58,7 @@ const HOST_KEYED_STORES = [
 
 /**
  * Drop what this view's renderer keeps under a removed host's id: prompt and
- * URL history, split layouts, QuickRun's toggles and build notices, all keyed
+ * URL history, split layouts, sidebar view picks, QuickRun's toggles and build notices, all keyed
  * by the host's id. Stored copies are scrubbed first, then each store's own
  * state, so its next write records the removal rather than bringing it back.
  */
@@ -70,7 +73,7 @@ export function forgetHostLocalState(hostId: HostId): void {
     const doomed: string[] = [];
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
-      const prefix = key && QUICK_RUN_KEY_PREFIXES.find((p) => key.startsWith(p));
+      const prefix = key && HOST_KEYED_KEY_PREFIXES.find((p) => key.startsWith(p));
       if (key && prefix && parseHostScopedKey(key.slice(prefix.length)).hostId === hostId) {
         doomed.push(key);
       }
