@@ -127,6 +127,10 @@ export interface CanopyReadState {
   failed: boolean;
   /** Runs whose own last read failed. */
   failedRuns?: ReadonlySet<string>;
+  /** The reader is off for every run: no words are coming, so no bone promises them. */
+  off?: boolean;
+  /** Runs on a host whose reader is off, among hosts read together. */
+  offRuns?: ReadonlySet<string>;
 }
 
 const READING: CanopyReadState = { failed: false };
@@ -546,9 +550,11 @@ export function buildCanopyInbox(
         // now, so it draws none; a run put aside is not read for words until
         // it comes back.
         pending:
-          card === null
-            ? !read.failed && disposition === null
-            : card.describing || (stale && !read.failed && disposition === null),
+          read.off === true || read.offRuns?.has(row.run.runId) === true
+            ? false
+            : card === null
+              ? !read.failed && disposition === null
+              : card.describing || (stale && !read.failed && disposition === null),
         stale,
         failed: read.failedRuns?.has(row.run.runId) ?? false,
         disposition,

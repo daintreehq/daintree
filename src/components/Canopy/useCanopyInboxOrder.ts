@@ -48,12 +48,13 @@ export function useCanopyInboxOrder({
   const owedOnOpen = useMemo(() => {
     // Main hasn't answered the open yet: the snapshot in hand is from before
     // it, and says nothing about what the open will read.
+    if (canopy?.activated === false) return false;
     if (canopy?.active !== true) return true;
     const reading = canopy.busy;
     return baseItems.some(
       (item) =>
         item.card?.describing === true ||
-        (reading && item.card === null && item.disposition === null)
+        (reading && item.pending && item.card === null && item.disposition === null)
     );
   }, [baseItems, canopy]);
   const openedAtRef = useRef<number | null>(null);

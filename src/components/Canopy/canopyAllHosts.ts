@@ -57,6 +57,8 @@ function keyed<T extends { runId: string }>(hostId: HostId, item: T): T {
 export function mergeHostReadings(readings: readonly HostReading[]): {
   canopy: CanopySnapshot | null;
   fleet: FleetSnapshot | null;
+  /** Runs on hosts whose reader is off: listed as observed, never as read. */
+  offRuns: ReadonlySet<string>;
 } {
   const loadedFleets = readings.filter((reading) => reading.fleet !== null);
   // A host still on the hosted service counts as off here: none of its readings
@@ -66,6 +68,13 @@ export function mergeHostReadings(readings: readonly HostReading[]): {
       .filter((reading) => reading.canopy !== null && readsWithHostedService(reading.canopy))
       .map((reading) => reading.hostId)
   );
+  // A host that is off reads nothing: its runs carry no reading's placement either.
+  const unreadHosts = new Set(
+    readings
+      .filter((reading) => reading.canopy !== null && !reading.canopy.activated)
+      .map((reading) => reading.hostId)
+  );
+  const offRuns = new Set<string>();
   const loadedCanopies = readings
     .filter((reading) => reading.canopy !== null)
     .map((reading) =>
@@ -78,14 +87,21 @@ export function mergeHostReadings(readings: readonly HostReading[]): {
       ? null
       : {
           runs: loadedFleets.flatMap(({ hostId, fleet: snapshot }) =>
-            snapshot!.runs.map(({ canopy: refinement, ...rest }) => ({
-              ...rest,
-              ...(refinement !== undefined && !outdatedHosts.has(hostId)
-                ? { canopy: refinement }
-                : {}),
-              runId: allHostsKey(hostId, rest.runId),
-              workspaceId: allHostsKey(hostId, rest.workspaceId),
-            }))
+            snapshot!.runs.map(({ canopy: refinement, ...rest }) => {
+              if (unreadHosts.has(hostId) || outdatedHosts.has(hostId)) {
+                offRuns.add(allHostsKey(hostId, rest.runId));
+              }
+              return {
+                ...rest,
+                ...(refinement !== undefined &&
+                !outdatedHosts.has(hostId) &&
+                !unreadHosts.has(hostId)
+                  ? { canopy: refinement }
+                  : {}),
+                runId: allHostsKey(hostId, rest.runId),
+                workspaceId: allHostsKey(hostId, rest.workspaceId),
+              };
+            })
           ),
           changedAt: Math.max(...loadedFleets.map(({ fleet: snapshot }) => snapshot!.changedAt)),
           degraded: loadedFleets.some(({ fleet: snapshot }) => snapshot!.degraded),
@@ -93,7 +109,7 @@ export function mergeHostReadings(readings: readonly HostReading[]): {
             ? null
             : Math.min(...loadedFleets.map(({ fleet: snapshot }) => snapshot!.lastSuccessfulAt!)),
         };
-  if (loadedCanopies.length === 0) return { canopy: null, fleet };
+  if (loadedCanopies.length === 0) return { canopy: null, fleet, offRuns };
 
   // Only a host that is on has screens read; it is the one the open waits for.
   const reading = loadedCanopies.filter(({ canopy }) => canopy!.activated);
@@ -131,7 +147,7 @@ export function mergeHostReadings(readings: readonly HostReading[]): {
     lastError: null,
     failedRuns,
   };
-  return { canopy, fleet };
+  return { canopy, fleet, offRuns };
 }
 
 /** The hosts whose Canopy is known to be off: they add no screen readings. */

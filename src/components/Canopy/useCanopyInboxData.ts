@@ -117,7 +117,17 @@ export function useCanopyInboxData({
     [everyHost, readings]
   );
   const canopy = merged ? merged.canopy : otherHost ? remote.canopy : ownCanopy;
-  const fleet = merged ? merged.fleet : otherHost ? remote.fleet : ownFleet;
+  const heldFleet = merged ? merged.fleet : otherHost ? remote.fleet : ownFleet;
+  // With the host's reader off, its list is what Daintree observed and nothing
+  // a reading placed: no run carries a reader's refinement.
+  const readerOff = !everyHost && canopy?.activated === false;
+  const fleet = useMemo(
+    () =>
+      readerOff && heldFleet
+        ? { ...heldFleet, runs: heldFleet.runs.map(({ canopy: _unread, ...run }) => run) }
+        : heldFleet,
+    [readerOff, heldFleet]
+  );
   const projects = useProjectStore((s) => s.projects);
   const scratches = useScratchStore((s) => s.scratches);
   const hostProjects = useHostProjectLists(
@@ -243,6 +253,8 @@ export function useCanopyInboxData({
       {
         failed: (canopy?.lastError ?? null) !== null,
         failedRuns: new Set(canopy?.failedRuns ?? []),
+        off: readerOff,
+        ...(merged ? { offRuns: merged.offRuns } : {}),
       },
       new Map((canopy?.dispositions ?? []).map((entry) => [entry.runId, entry])),
       new Map((canopy?.seen ?? []).map((entry) => [entry.runId, entry])),
@@ -250,11 +262,12 @@ export function useCanopyInboxData({
       new Map((canopy?.glances ?? []).map((entry) => [entry.runId, entry])),
       new Map((canopy?.reads ?? []).map((entry) => [entry.runId, entry]))
     );
-  }, [fleet, workspaces, nowMs, canopy, scope, otherHost]);
+  }, [fleet, workspaces, nowMs, canopy, scope, otherHost, readerOff, merged]);
 
   return {
     otherHost,
     everyHost,
+    readerOff,
     ownHostId,
     hostName,
     remote,

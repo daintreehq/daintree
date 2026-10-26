@@ -212,6 +212,11 @@ function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow
   const isOpen = useCanopyStore((s) => s.isOpen);
   const close = useCanopyStore((s) => s.close);
   const activated = useCanopyStore((s) => s.snapshot?.activated ?? null);
+  // The offer to turn reading on is one press from the list, never in front of it.
+  const [pitchOpen, setPitchOpen] = useState(false);
+  useEffect(() => {
+    if (!isOpen) setPitchOpen(false);
+  }, [isOpen]);
   const outdatedOwnHost = useCanopyStore((s) => s.outdatedHost);
   const applySnapshot = useCanopyStore((s) => s.applySnapshot);
   // Another host the panel shows, or null for the window's own.
@@ -391,9 +396,9 @@ function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow
     );
   }
 
-  // Until the user turns it on, Canopy is offered, not run: no list, no
-  // terminals, and nothing read.
-  if (activated === false) {
+  // Until the user turns it on, nothing is read: the list is what Daintree
+  // observes, and the pitch waits behind the offer in the status bar.
+  if (activated === false && pitchOpen) {
     return (
       <CanopyPitch
         isOpen={isOpen}
@@ -414,6 +419,7 @@ function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow
       hostRow={null}
       hostRows={null}
       hostPicker={hostPicker}
+      onOfferReading={activated === false ? () => setPitchOpen(true) : null}
     />
   );
 }
@@ -555,6 +561,7 @@ function CanopyInbox({
   hostRow,
   hostRows,
   hostPicker,
+  onOfferReading = null,
 }: {
   backdrop: React.ReactNode;
   /** What had the keyboard when the panel opened, while it is still there. */
@@ -566,12 +573,15 @@ function CanopyInbox({
   /** The hosts read together when `hostId` is All hosts. */
   hostRows: readonly HostMenuRow[] | null;
   hostPicker: React.ReactNode;
+  /** The window's own host with its reader off: opens the pitch. */
+  onOfferReading?: (() => void) | null;
 }) {
   const isOpen = useCanopyStore((s) => s.isOpen);
   const close = useCanopyStore((s) => s.close);
   const {
     otherHost,
     everyHost,
+    readerOff,
     ownHostId,
     hostName,
     remote,
@@ -784,8 +794,17 @@ function CanopyInbox({
   const hostOutdated = otherHost && canopy != null && readsWithHostedService(canopy);
   // Canopy is off on that host: its own offer, for it alone.
   const hostOffer = otherHost && canopy?.activated === false && !hostOutdated;
-  // Either way the host's list is not shown.
-  const hostHeld = hostOffer || hostOutdated;
+  // Its list is what that host observed; the offer takes the panel only once asked for.
+  const [hostOfferOpen, setHostOfferOpen] = useState(false);
+  useEffect(() => {
+    setHostOfferOpen(false);
+  }, [hostId]);
+  const hostOfferShown = hostOffer && hostOfferOpen;
+  const hostHeld = hostOfferShown || hostOutdated;
+  const offerReading =
+    readerOff && !hostOutdated
+      ? (onOfferReading ?? (hostOffer ? () => setHostOfferOpen(true) : null))
+      : null;
 
   const { onAssistantKeyDown, onAgentStepKeyDownCapture, onNavigationKeyDown, onSearchKeyDown } =
     useCanopyInboxKeyboard({
@@ -819,7 +838,7 @@ function CanopyInbox({
         ? `Connecting to ${hostName}…`
         : hostOutdated
           ? `Update Daintree on ${hostName}`
-          : hostOffer
+          : hostOfferShown
             ? `Canopy is off on ${hostName}`
             : null;
   const summaryLine =
@@ -836,24 +855,26 @@ function CanopyInbox({
             [
               needsYou > 0
                 ? `${pluralize(needsYou, "agent")} ${needsYou === 1 ? "needs" : "need"} you`
-                : // "Nothing" is a conclusion: qualified while some screens
-                  // can't be read at all, withheld while Daintree can't see its
-                  // agents, and held back while any run in the inbox has yet to
-                  // be read at all — readings owed, a retry waiting, however
-                  // long they take, and after a scope switch too.
-                  (canopy?.lastError ?? null) !== null
-                  ? "Nothing needs you that Canopy could read"
-                  : fleet.degraded
-                    ? "Can't tell who needs you right now"
-                    : owedOnOpen ||
-                        canopy?.waiting !== undefined ||
-                        (canopy?.busy === true && inbox.inbox.some((item) => item.card === null))
-                      ? "Checking who needs you…"
-                      : // A screen that can't be read yet (starting, hibernating)
-                        // has no reading at all: nothing is concluded about it.
-                        inbox.inbox.some((item) => item.card === null)
-                        ? "Not every agent could be read yet"
-                        : "Nothing needs you",
+                : readerOff
+                  ? "No agent is waiting on you"
+                  : // "Nothing" is a conclusion: qualified while some screens
+                    // can't be read at all, withheld while Daintree can't see its
+                    // agents, and held back while any run in the inbox has yet to
+                    // be read at all — readings owed, a retry waiting, however
+                    // long they take, and after a scope switch too.
+                    (canopy?.lastError ?? null) !== null
+                    ? "Nothing needs you that Canopy could read"
+                    : fleet.degraded
+                      ? "Can't tell who needs you right now"
+                      : owedOnOpen ||
+                          canopy?.waiting !== undefined ||
+                          (canopy?.busy === true && inbox.inbox.some((item) => item.card === null))
+                        ? "Checking who needs you…"
+                        : // A screen that can't be read yet (starting, hibernating)
+                          // has no reading at all: nothing is concluded about it.
+                          inbox.inbox.some((item) => item.card === null)
+                          ? "Not every agent could be read yet"
+                          : "Nothing needs you",
               unreadCount > 0 ? `${unreadCount.toLocaleString()} unread` : null,
             ]
               .filter(Boolean)
@@ -1047,22 +1068,25 @@ function CanopyInbox({
         />
       )}
       <CanopyShortcuts />
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            ref={refreshRef}
-            variant="ghost"
-            size="icon-xs"
-            aria-label="Refresh"
-            aria-busy={refreshes > 0 || undefined}
-            disabled={canopy === null}
-            onClick={refresh}
-          >
-            <SpinningIcon icon={RefreshCw} active={refreshes > 0} />
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">Refresh</TooltipContent>
-      </Tooltip>
+      {/* Nothing is read while the reader is off, so there is nothing to refresh. */}
+      {!readerOff && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              ref={refreshRef}
+              variant="ghost"
+              size="icon-xs"
+              aria-label="Refresh"
+              aria-busy={refreshes > 0 || undefined}
+              disabled={canopy === null}
+              onClick={refresh}
+            >
+              <SpinningIcon icon={RefreshCw} active={refreshes > 0} />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Refresh</TooltipContent>
+        </Tooltip>
+      )}
       <AppDialog.CloseButton />
     </>
   );
@@ -1171,8 +1195,9 @@ function CanopyInbox({
               : {})}
           />
         )}
-        {hostOffer && (
+        {hostOfferShown && (
           <CanopyHostOffer
+            onBack={() => setHostOfferOpen(false)}
             hostName={hostName}
             onTurnOn={async () => {
               // Hidden there, it can't be turned on until it is shown again:
@@ -1483,6 +1508,7 @@ function CanopyInbox({
                 reader={canopy?.reader}
                 model={canopy?.model}
                 waiting={canopy?.waiting}
+                offer={offerReading}
               />
             </div>
             {/* Inset on every side: the top one puts the place line level with the

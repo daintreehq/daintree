@@ -176,6 +176,15 @@ function installElectron(
   return canopy;
 }
 
+async function openOffer() {
+  await act(async () => {
+    fireEvent.click(
+      within(document.body).getByRole("button", { name: "Turn on reading…", hidden: true })
+    );
+  });
+  await frames();
+}
+
 function screenButton(root: HTMLElement, name: string): HTMLElement {
   const found = [...root.querySelectorAll<HTMLElement>("button")].find(
     (button) => button.textContent?.trim() === name
@@ -474,11 +483,32 @@ describe("CanopyView search", () => {
 });
 
 describe("CanopyView", () => {
+  it("lists the agents Daintree observes with the reader off, offering reading beside them", async () => {
+    const canopy = installElectron({ ...canopySnapshot, activated: false, cards: [], glances: [] });
+    useCanopyStore.setState({
+      snapshot: { ...canopySnapshot, activated: false, cards: [], glances: [] },
+    });
+    render(<CanopyView />);
+    await frames();
+    const dialog = document.querySelector<HTMLElement>("[data-testid=canopy-dialog]")!;
+    expect(dialog.querySelector("[role=listbox]")).not.toBeNull();
+    expect(dialog.querySelectorAll("[data-canopy-card]").length).toBeGreaterThan(0);
+    expect(dialog.textContent).not.toContain("Reading the screen");
+    expect(dialog.textContent).not.toContain("Checking who needs you");
+    expect(dialog.querySelector('button[aria-label="Refresh"]')).toBeNull();
+    expect(dialog.querySelector("[data-canopy-pitch], #canopy-pitch-title")).toBeNull();
+    expect(canopy.setMode).not.toHaveBeenCalled();
+    await openOffer();
+    expect(document.getElementById("canopy-pitch-title")).not.toBeNull();
+    expect(canopy.setMode).not.toHaveBeenCalled();
+  });
+
   it("reads nothing until the user turns it on, showing a demo and what turning it on does", async () => {
     const canopy = installElectron({ ...canopySnapshot, activated: false });
     useCanopyStore.setState({ snapshot: { ...canopySnapshot, activated: false } });
     render(<CanopyView />);
     await frames();
+    await openOffer();
     const dialog = document.querySelector<HTMLElement>("[data-testid=canopy-dialog]")!;
     // What turning it on does, and how to stop, said where it is turned on.
     expect(dialog.textContent).toContain("Nothing it reads leaves this computer.");
@@ -494,7 +524,6 @@ describe("CanopyView", () => {
     expect(rows.every((row) => row.closest("[inert]") !== null)).toBe(true);
     expect(dialog.querySelector("[role=listbox]")).toBeNull();
     expect(dialog.querySelector("[data-canopy-terminal]")).toBeNull();
-    expect(canopy.markSeen).not.toHaveBeenCalled();
 
     await act(async () => {
       fireEvent.click(screenButton(dialog, "Turn on Canopy"));
@@ -517,6 +546,7 @@ describe("CanopyView", () => {
     notifySpy.mockClear();
     render(<CanopyView />);
     await frames();
+    await openOffer();
     const dialog = document.querySelector<HTMLElement>("[data-testid=canopy-dialog]")!;
     await act(async () => {
       fireEvent.click(screenButton(dialog, "Hide Canopy"));
@@ -549,6 +579,7 @@ describe("CanopyView", () => {
     notifySpy.mockClear();
     render(<CanopyView />);
     await frames();
+    await openOffer();
     const dialog = document.querySelector<HTMLElement>("[data-testid=canopy-dialog]")!;
     await act(async () => {
       fireEvent.click(screenButton(dialog, "Hide Canopy"));
@@ -582,6 +613,7 @@ describe("CanopyView", () => {
     notifySpy.mockClear();
     render(<CanopyView />);
     await frames();
+    await openOffer();
     const dialog = document.querySelector<HTMLElement>("[data-testid=canopy-dialog]")!;
     await act(async () => {
       fireEvent.click(screenButton(dialog, "Hide Canopy"));
@@ -613,6 +645,7 @@ describe("CanopyView", () => {
     vi.mocked(notify).mockClear();
     render(<CanopyView />);
     await frames();
+    await openOffer();
     const dialog = document.querySelector<HTMLElement>("[data-testid=canopy-dialog]")!;
     await act(async () => {
       fireEvent.click(screenButton(dialog, "Hide Canopy"));

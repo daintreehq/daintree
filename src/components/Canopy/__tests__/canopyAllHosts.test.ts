@@ -227,10 +227,25 @@ describe("mergeHostReadings", () => {
     expect(merged!.cards).toEqual([]);
   });
 
+  it("lists runs of a host whose reader is off as observed, without a reader's placement", () => {
+    const placed = {
+      ...run("r1"),
+      canopy: { kind: "asking" },
+    } as unknown as FleetRunRow;
+    const merged = mergeHostReadings([
+      { hostId: "a", canopy: canopy({ activated: false }), fleet: fleet([placed]), error: null },
+      { hostId: "b", canopy: canopy(), fleet: fleet([run("r2")]), error: null },
+    ]);
+    expect(merged.fleet!.runs.map((r) => r.runId)).toHaveLength(2);
+    expect(merged.fleet!.runs.every((r) => r.canopy === undefined)).toBe(true);
+    expect([...merged.offRuns]).toEqual([allHostsKey("a", "r1")]);
+  });
+
   it("has no snapshots until some host has answered", () => {
     expect(mergeHostReadings([{ hostId: "a", canopy: null, fleet: null, error: null }])).toEqual({
       canopy: null,
       fleet: null,
+      offRuns: new Set(),
     });
   });
 
