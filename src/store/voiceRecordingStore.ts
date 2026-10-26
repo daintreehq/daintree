@@ -155,6 +155,18 @@ function joinLiveItems(items: VoiceLiveItem[]): string {
   return joined;
 }
 
+export interface VoiceCorrectionRange {
+  from: number;
+  to: number;
+}
+
+// Shared empty value, so an idle buffer's ranges keep one identity.
+const NO_CORRECTION_RANGES: VoiceCorrectionRange[] = [];
+
+function sameCorrectionRanges(a: VoiceCorrectionRange[], b: VoiceCorrectionRange[]): boolean {
+  return a.length === b.length && a.every((r, i) => r.from === b[i]!.from && r.to === b[i]!.to);
+}
+
 interface VoiceTranscriptBuffer {
   liveText: string;
   /**
@@ -174,10 +186,11 @@ interface VoiceTranscriptBuffer {
   /** Explicit transcript lifecycle phase — derived from and updated alongside buffer state. */
   transcriptPhase: VoiceTranscriptPhase;
   /**
-   * Draft range currently undergoing the post-stop whole-passage AI cleanup
-   * pass (null = none). Drives the `cm-voice-pending-ai` editor decoration.
+   * Draft ranges currently undergoing the post-stop AI cleanup pass, one per
+   * dictated passage (empty = none). Drives the `cm-voice-pending-ai` editor
+   * decoration.
    */
-  correctionRange: { from: number; to: number } | null;
+  correctionRanges: VoiceCorrectionRange[];
   /**
    * The dictated text as it settled after the post-stop processing pass (AI
    * correction if enabled, else the raw transcription). Diffed against the
@@ -290,7 +303,7 @@ interface VoiceRecordingState {
   setSessionDraftStart: (panelId: string, length: number) => void;
   setDraftLengthAtSegmentStart: (panelId: string, length: number) => void;
   completeSegment: (text: string, itemId?: string) => void;
-  setCorrectionRange: (panelId: string, range: { from: number; to: number } | null) => void;
+  setCorrectionRanges: (panelId: string, ranges: VoiceCorrectionRange[]) => void;
   /**
    * Moves the panel's draft offsets at or after `at` by `delta`, for an edit
    * the voice service made earlier in the draft (a correction landing while a
@@ -325,7 +338,7 @@ function getBuffer(
       draftLengthAtSegmentStart: -1,
       activeParagraphStart: -1,
       transcriptPhase: "idle" as VoiceTranscriptPhase,
-      correctionRange: null,
+      correctionRanges: NO_CORRECTION_RANGES,
       sessionCorrectedText: null,
       dictationSessionId: null,
     }
@@ -424,7 +437,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
               draftLengthAtSegmentStart: -1,
               activeParagraphStart: -1,
               transcriptPhase: "idle" as VoiceTranscriptPhase,
-              correctionRange: null,
+              correctionRanges: NO_CORRECTION_RANGES,
               sessionCorrectedText: null,
               dictationSessionId: crypto.randomUUID(),
             },
@@ -563,14 +576,17 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
           };
         }),
 
-      setCorrectionRange: (panelId, range) =>
+      setCorrectionRanges: (panelId, ranges) =>
         set((state) => {
           const buffer = getBuffer(state.panelBuffers, panelId);
-          if (buffer.correctionRange === range) return state;
+          if (sameCorrectionRanges(buffer.correctionRanges, ranges)) return state;
           return {
             panelBuffers: {
               ...state.panelBuffers,
-              [panelId]: { ...buffer, correctionRange: range },
+              [panelId]: {
+                ...buffer,
+                correctionRanges: ranges.length > 0 ? ranges : NO_CORRECTION_RANGES,
+              },
             },
           };
         }),

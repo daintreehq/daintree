@@ -61,7 +61,8 @@ const callbacks: {
   boundary: ((payload: { rawText: string | null }) => void) | null;
 } = { delta: null, complete: null, boundary: null };
 
-const correct = vi.fn<(request: { rawText: string }) => Promise<CorrectResult>>();
+const correct =
+  vi.fn<(request: { rawText: string; recentContext?: string[] }) => Promise<CorrectResult>>();
 
 function stubElectron() {
   const electron = {
@@ -121,7 +122,11 @@ async function setup() {
   stubElectron();
   const { useVoiceRecordingStore } = await import("@/store/voiceRecordingStore");
   const { useTerminalInputStore } = await import("@/store/terminalInputStore");
+  const { subscribeDictationRangeTracking } = await import("@/store/dictationRangeStore");
   const { voiceRecordingService } = await import("../VoiceRecordingService");
+  // The store orchestrator keeps dictation ranges on their text in the app;
+  // correction finds its passages through them.
+  unsubscribeRanges = subscribeDictationRangeTracking();
   voiceRecordingService.initialize();
   await voiceRecordingService.refreshConfiguration();
   expect(useVoiceRecordingStore.getState().correctionEnabled).toBe(true);
@@ -155,6 +160,8 @@ async function setup() {
   };
 }
 
+let unsubscribeRanges: (() => void) | null = null;
+
 describe("VoiceRecordingService — post-stop correction ownership (#14611)", () => {
   beforeEach(() => {
     vi.resetModules();
@@ -165,6 +172,8 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
   });
 
   afterEach(() => {
+    unsubscribeRanges?.();
+    unsubscribeRanges = null;
     vi.useRealTimers();
     vi.unstubAllGlobals();
   });
@@ -210,7 +219,10 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     say("lexer");
     expect(draft("panel-1")).toBe("So the parser is broken. and the lexer");
     await service.stop();
-    expect(correct).toHaveBeenLastCalledWith({ rawText: "and the lexer" });
+    expect(correct).toHaveBeenLastCalledWith({
+      rawText: "and the lexer",
+      recentContext: ["So the parser is broken."],
+    });
     await flush();
     expect(baseline("panel-1")).toBe("and the lexer");
   });
@@ -226,7 +238,10 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     await service.stop();
     dictate("panel-1", "and the lexr too");
     await service.stop();
-    expect(correct).toHaveBeenLastCalledWith({ rawText: "and the lexr too" });
+    expect(correct).toHaveBeenLastCalledWith({
+      rawText: "and the lexr too",
+      recentContext: ["um so the parser is brken"],
+    });
 
     first.resolve({ action: "replace", correctedText: "So the parser is broken." });
     await flush();
@@ -295,10 +310,13 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     expect(draft("panel-1")).toBe("The parser. and the lexer");
     correct.mockResolvedValueOnce({ action: "no_change", correctedText: "and the lexer" });
     await service.stop();
-    expect(correct).toHaveBeenLastCalledWith({ rawText: "and the lexer" });
+    expect(correct).toHaveBeenLastCalledWith({
+      rawText: "and the lexer",
+      recentContext: ["The parser."],
+    });
   });
 
-  it("keeps a passage's trailing break when its correction drops it, so a restart stays aligned", async () => {
+  it("keeps a passage's trailing break out of its correction, so a restart stays aligned", async () => {
     const { service, dictate, draft, flush, voiceStore } = await setup();
     const first = deferred<CorrectResult>();
     correct.mockReturnValueOnce(first.promise);
@@ -306,7 +324,7 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     dictate("panel-1", "the parsr");
     callbacks.boundary!({ rawText: null });
     await service.stop();
-    expect(correct).toHaveBeenLastCalledWith({ rawText: "the parsr\n" });
+    expect(correct).toHaveBeenLastCalledWith({ rawText: "the parsr" });
 
     voiceStore.getState().beginSession({ panelId: "panel-1" });
     callbacks.delta!({ text: "and the" });
@@ -317,7 +335,10 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
 
     correct.mockResolvedValueOnce({ action: "no_change", correctedText: "and the lexer" });
     await service.stop();
-    expect(correct).toHaveBeenLastCalledWith({ rawText: "and the lexer" });
+    expect(correct).toHaveBeenLastCalledWith({
+      rawText: "and the lexer",
+      recentContext: ["The parser.\n"],
+    });
   });
 
   it("moves the passage with typing before it and still lands the correction", async () => {
@@ -492,13 +513,12 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
 
     dictate("panel-1", "hello wrld");
     await service.stop();
-    expect(voiceStore.getState().panelBuffers["panel-1"]?.correctionRange).toEqual({
-      from: 0,
-      to: 10,
-    });
+    expect(voiceStore.getState().panelBuffers["panel-1"]?.correctionRanges).toEqual([
+      { from: 0, to: 10 },
+    ]);
 
     service.destroy();
-    expect(voiceStore.getState().panelBuffers["panel-1"]?.correctionRange).toBeNull();
+    expect(voiceStore.getState().panelBuffers["panel-1"]?.correctionRanges).toEqual([]);
 
     first.resolve({ action: "replace", correctedText: "Hello world." });
     await flush();

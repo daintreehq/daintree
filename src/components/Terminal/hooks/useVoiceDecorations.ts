@@ -1,7 +1,10 @@
 import { useEffect } from "react";
 import type { EditorView } from "@codemirror/view";
 import { useVoiceRecordingStore } from "@/store";
+import type { VoiceCorrectionRange } from "@/store/voiceRecordingStore";
 import { setInterimText, setPendingAIRanges } from "../inputEditorExtensions";
+
+const NO_RANGES: VoiceCorrectionRange[] = [];
 
 interface UseVoiceDecorationsParams {
   terminalId: string;
@@ -13,8 +16,8 @@ export function useVoiceDecorations({ terminalId, editorViewRef }: UseVoiceDecor
     (s) => s.panelBuffers[terminalId]?.transcriptPhase ?? "idle"
   );
   const liveText = useVoiceRecordingStore((s) => s.panelBuffers[terminalId]?.liveText ?? "");
-  const correctionRange = useVoiceRecordingStore(
-    (s) => s.panelBuffers[terminalId]?.correctionRange ?? null
+  const correctionRanges = useVoiceRecordingStore(
+    (s) => s.panelBuffers[terminalId]?.correctionRanges ?? NO_RANGES
   );
 
   useEffect(() => {
@@ -24,16 +27,12 @@ export function useVoiceDecorations({ terminalId, editorViewRef }: UseVoiceDecor
     const ghostText = transcriptPhase === "interim" && liveText.length > 0 ? liveText : "";
 
     const docLen = view.state.doc.length;
-    const pendingRanges =
-      correctionRange &&
-      correctionRange.from >= 0 &&
-      correctionRange.to <= docLen &&
-      correctionRange.from < correctionRange.to
-        ? [correctionRange]
-        : [];
+    const pendingRanges = correctionRanges.filter(
+      (range) => range.from >= 0 && range.to <= docLen && range.from < range.to
+    );
 
     view.dispatch({
       effects: [setInterimText.of(ghostText), setPendingAIRanges.of(pendingRanges)],
     });
-  }, [transcriptPhase, liveText, correctionRange, editorViewRef]);
+  }, [transcriptPhase, liveText, correctionRanges, editorViewRef]);
 }

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { collectCorrectionPassages, locatePassage } from "../voiceCorrectionPassages";
 
 // Drives the real voice, draft and dictation-range stores through the IPC
 // callbacks: every final the service writes is recorded as a range on the
@@ -64,8 +65,10 @@ const callbacks: {
   fileToken: ((payload: FileTokenPayload) => void) | null;
 } = { delta: null, complete: null, boundary: null, fileToken: null };
 
+type CorrectRequest = { rawText: string; recentContext?: string[] };
+
 const correct = {
-  fn: vi.fn<(request: { rawText: string }) => Promise<unknown>>(),
+  fn: vi.fn<(request: CorrectRequest) => Promise<unknown>>(),
 };
 
 function stubElectron() {
@@ -161,22 +164,22 @@ const delta = (text: string, itemId?: string) =>
 const complete = (text: string, itemId?: string) =>
   callbacks.complete!({ sessionId: SESSION_ID, text, willCorrect: false, itemId });
 
+beforeEach(() => {
+  vi.resetModules();
+  callbacks.delta = null;
+  callbacks.complete = null;
+  callbacks.boundary = null;
+  callbacks.fileToken = null;
+  correct.fn.mockReset();
+});
+
+afterEach(() => {
+  unsubscribe?.();
+  unsubscribe = null;
+  vi.unstubAllGlobals();
+});
+
 describe("VoiceRecordingService — dictation ranges (#14597)", () => {
-  beforeEach(() => {
-    vi.resetModules();
-    callbacks.delta = null;
-    callbacks.complete = null;
-    callbacks.boundary = null;
-    callbacks.fileToken = null;
-    correct.fn.mockReset();
-  });
-
-  afterEach(() => {
-    unsubscribe?.();
-    unsubscribe = null;
-    vi.unstubAllGlobals();
-  });
-
   it("records each unidentified final on the text it wrote", async () => {
     const { draft, records, textOf, sessionId } = await setup("Existing.");
 
@@ -330,7 +333,7 @@ describe("VoiceRecordingService — dictation ranges (#14597)", () => {
     const id = records()[0]!.id;
     await service.stop("Dictation stopped.");
 
-    expect(correct.fn).toHaveBeenCalledWith({ rawText: "Hello there." });
+    expect(correct.fn).toHaveBeenCalledWith({ rawText: "Hello there.", recentContext: ["Intro."] });
     expect(getDictation(id)).not.toBeNull();
 
     resolveCorrection({ action: "replace", correctedText: "Hello, there." });
@@ -385,5 +388,409 @@ describe("VoiceRecordingService — dictation ranges (#14597)", () => {
 
     expect(draft()).toBe("Open @README.md.");
     expect(records()[0]!.utterances[0]!.range.edited).toBe(true);
+  });
+});
+
+describe("VoiceRecordingService — correction over dictated ranges (#14613)", () => {
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+  const upperCase = async ({ rawText }: CorrectRequest) => ({
+    action: "replace",
+    correctedText: rawText.toUpperCase(),
+  });
+  const sentTexts = () => correct.fn.mock.calls.map(([request]) => request.rawText);
+  // An OpenAI utterance: partials first, then its final.
+  const say = (text: string, itemId: string) => {
+    delta(text, itemId);
+    complete(text, itemId);
+  };
+
+  it("corrects a Deepgram session, whose finals arrive without partials", async () => {
+    const { service, voiceStore, draft } = await setup();
+    correct.fn.mockResolvedValue({ action: "replace", correctedText: "Hello, there." });
+    voiceStore.getState().setCorrectionEnabled(true);
+
+    complete("hello there");
+    await service.stop("Dictation stopped.");
+
+    expect(correct.fn).toHaveBeenCalledWith({ rawText: "hello there" });
+    await vi.waitFor(() => expect(draft()).toBe("Hello, there."));
+    const buffer = voiceStore.getState().panelBuffers[PANEL]!;
+    expect(buffer.sessionCorrectedText).toBe("Hello, there.");
+    expect(buffer.sessionDraftStart).toBe(0);
+  });
+
+  it("gives a Deepgram session a learning baseline when correction is off", async () => {
+    const { service, voiceStore } = await setup("Intro.");
+
+    complete("hello there");
+    await service.stop("Dictation stopped.");
+
+    expect(correct.fn).not.toHaveBeenCalled();
+    const buffer = voiceStore.getState().panelBuffers[PANEL]!;
+    expect(buffer.sessionCorrectedText).toBe("hello there");
+    expect(buffer.sessionDraftStart).toBe("Intro. ".length);
+  });
+
+  it("never sends or rewrites text typed between two utterances", async () => {
+    const { service, voiceStore, draft, setDraft } = await setup();
+    correct.fn.mockImplementation(upperCase);
+    voiceStore.getState().setCorrectionEnabled(true);
+
+    say("first part", "item-a");
+    setDraft(draft() + " typed note");
+    say("second part", "item-b");
+    await service.stop("Dictation stopped.");
+
+    expect(sentTexts()).toEqual(["first part", "second part"]);
+    expect(correct.fn.mock.calls[1]![0].recentContext).toEqual(["first part typed note"]);
+    await vi.waitFor(() => expect(draft()).toBe("FIRST PART typed note SECOND PART"));
+    expect(voiceStore.getState().panelBuffers[PANEL]!.sessionCorrectedText).toBe(
+      "FIRST PART SECOND PART"
+    );
+  });
+
+  it("sends the text before the dictation as context and leaves typed text around it alone", async () => {
+    const { service, voiceStore, draft, setDraft } = await setup("Note: the build fails when");
+    correct.fn.mockResolvedValue({ action: "replace", correctedText: "it runs on Windows" });
+    voiceStore.getState().setCorrectionEnabled(true);
+
+    say("it runs on windows", "item-a");
+    setDraft(draft() + ". Thanks.");
+    await service.stop("Dictation stopped.");
+
+    expect(correct.fn).toHaveBeenCalledWith({
+      rawText: "it runs on windows",
+      recentContext: ["Note: the build fails when"],
+    });
+    await vi.waitFor(() =>
+      expect(draft()).toBe("Note: the build fails when it runs on Windows. Thanks.")
+    );
+  });
+
+  it("applies the result to the dictated range after typing around it while correction runs", async () => {
+    const { service, voiceStore, draft, setDraft } = await setup();
+    let resolveCorrection!: (value: unknown) => void;
+    correct.fn.mockReturnValue(new Promise((resolve) => (resolveCorrection = resolve)));
+    voiceStore.getState().setCorrectionEnabled(true);
+
+    say("hello there", "item-a");
+    await service.stop("Dictation stopped.");
+    setDraft("hello there and more");
+    setDraft("Before: " + draft());
+
+    resolveCorrection({ action: "replace", correctedText: "Hello, there." });
+    await vi.waitFor(() => expect(draft()).toBe("Before: Hello, there. and more"));
+  });
+
+  it("discards the result when the dictated text is edited while correction runs", async () => {
+    const { service, voiceStore, draft, setDraft } = await setup();
+    let resolveCorrection!: (value: unknown) => void;
+    correct.fn.mockReturnValue(new Promise((resolve) => (resolveCorrection = resolve)));
+    voiceStore.getState().setCorrectionEnabled(true);
+
+    say("hello there", "item-a");
+    await service.stop("Dictation stopped.");
+    setDraft("hello over there");
+
+    resolveCorrection({ action: "replace", correctedText: "Hello, there." });
+    await flush();
+    expect(draft()).toBe("hello over there");
+    expect(voiceStore.getState().panelBuffers[PANEL]!.correctionRanges).toEqual([]);
+  });
+
+  it("leaves an utterance the user edited during the session out of correction", async () => {
+    const { service, voiceStore, draft, setDraft } = await setup();
+    correct.fn.mockImplementation(upperCase);
+    voiceStore.getState().setCorrectionEnabled(true);
+
+    say("first part", "item-a");
+    setDraft(draft().replace("first part", "first bit"));
+    say("second part", "item-b");
+    await service.stop("Dictation stopped.");
+
+    expect(sentTexts()).toEqual(["second part"]);
+    await vi.waitFor(() => expect(draft()).toBe("first bit SECOND PART"));
+  });
+
+  it("corrects a paragraph break and the text either side as one passage", async () => {
+    const { service, voiceStore, draft } = await setup();
+    correct.fn.mockImplementation(upperCase);
+    voiceStore.getState().setCorrectionEnabled(true);
+
+    say("first para", "item-a");
+    callbacks.boundary!({ sessionId: SESSION_ID, rawText: null });
+    say("second para", "item-b");
+    await service.stop("Dictation stopped.");
+
+    expect(sentTexts()).toEqual(["first para\nsecond para"]);
+    await vi.waitFor(() => expect(draft()).toBe("FIRST PARA\nSECOND PARA"));
+  });
+
+  it("marks only the dictated passages while correction runs", async () => {
+    const { service, voiceStore, draft, setDraft } = await setup();
+    const resolvers: Array<(value: unknown) => void> = [];
+    correct.fn.mockImplementation(() => new Promise((resolve) => resolvers.push(resolve)));
+    voiceStore.getState().setCorrectionEnabled(true);
+
+    say("first part", "item-a");
+    setDraft(draft() + " typed note");
+    say("second part", "item-b");
+    await service.stop("Dictation stopped.");
+
+    const pending = () => voiceStore.getState().panelBuffers[PANEL]!.correctionRanges;
+    expect(pending().map((r) => draft().slice(r.from, r.to))).toEqual([
+      "first part",
+      "second part",
+    ]);
+    resolvers.forEach((resolve) => resolve({ action: "no_change", correctedText: "" }));
+    await vi.waitFor(() => expect(pending()).toEqual([]));
+    expect(draft()).toBe("first part typed note second part");
+  });
+
+  it("applies every passage when one result shifts text identical to the next", async () => {
+    const { service, voiceStore, draft, setDraft } = await setup();
+    correct.fn.mockImplementation(async ({ rawText }: CorrectRequest) => ({
+      action: "replace",
+      correctedText: rawText === "go go" ? "go" : "go.",
+    }));
+    voiceStore.getState().setCorrectionEnabled(true);
+
+    say("go go", "item-a");
+    setDraft(draft() + " go");
+    say("go", "item-b");
+    expect(draft()).toBe("go go go go");
+    const writes: string[] = [];
+    const { useTerminalInputStore } = await import("@/store/terminalInputStore");
+    const off = useTerminalInputStore.subscribe((state, prev) => {
+      if (state.draftInputs !== prev.draftInputs) writes.push(draft());
+    });
+    await service.stop("Dictation stopped.");
+
+    await vi.waitFor(() => expect(draft()).toBe("go go go."));
+    off();
+    expect(writes).toEqual(["go go go."]);
+  });
+
+  it("keeps a passage whose request failed while applying the others", async () => {
+    const { service, voiceStore, draft, setDraft } = await setup();
+    correct.fn.mockImplementation(async ({ rawText }: CorrectRequest) => {
+      if (rawText === "first part") throw new Error("rate limited");
+      return { action: "replace", correctedText: "Second part." };
+    });
+    voiceStore.getState().setCorrectionEnabled(true);
+
+    say("first part", "item-a");
+    setDraft(draft() + " typed");
+    say("second part", "item-b");
+    await service.stop("Dictation stopped.");
+
+    await vi.waitFor(() => expect(draft()).toBe("first part typed Second part."));
+    const buffer = voiceStore.getState().panelBuffers[PANEL]!;
+    expect(buffer.sessionCorrectedText).toBe("first part Second part.");
+    expect(buffer.correctionRanges).toEqual([]);
+  });
+
+  it("keeps the raw text as the learning baseline when a result can't be applied", async () => {
+    const { service, voiceStore, setDraft } = await setup();
+    let resolveCorrection!: (value: unknown) => void;
+    correct.fn.mockReturnValue(new Promise((resolve) => (resolveCorrection = resolve)));
+    voiceStore.getState().setCorrectionEnabled(true);
+
+    say("helo world", "item-a");
+    await service.stop("Dictation stopped.");
+    setDraft("hello world");
+
+    resolveCorrection({ action: "replace", correctedText: "Hello, world." });
+    await flush();
+    expect(voiceStore.getState().panelBuffers[PANEL]!.sessionCorrectedText).toBe("helo world");
+  });
+
+  it("drops a result whose dictation was sent while correction ran", async () => {
+    const { service, voiceStore, draft, setDraft } = await setup();
+    let resolveCorrection!: (value: unknown) => void;
+    correct.fn.mockReturnValue(new Promise((resolve) => (resolveCorrection = resolve)));
+    voiceStore.getState().setCorrectionEnabled(true);
+
+    say("hello there", "item-a");
+    await service.stop("Dictation stopped.");
+    setDraft("");
+    setDraft("hello there");
+
+    resolveCorrection({ action: "replace", correctedText: "Hello, there." });
+    await flush();
+    expect(draft()).toBe("hello there");
+  });
+
+  it("bounds the context to the draft's last few hundred characters, on a word boundary", async () => {
+    const intro = Array.from({ length: 200 }, (_, i) => `word${i}`).join(" ");
+    const { service, voiceStore } = await setup(intro);
+    correct.fn.mockResolvedValue({ action: "no_change", correctedText: "" });
+    voiceStore.getState().setCorrectionEnabled(true);
+
+    say("and then some", "item-a");
+    await service.stop("Dictation stopped.");
+
+    const [context] = correct.fn.mock.calls[0]![0].recentContext!;
+    expect(context!.length).toBeLessThanOrEqual(500);
+    expect(context!.length).toBeGreaterThan(400);
+    expect(intro.endsWith(context!)).toBe(true);
+    expect(intro.charAt(intro.length - context!.length - 1)).toBe(" ");
+  });
+
+  it.each([
+    [{ action: "replace", correctedText: " \nHello, there.\n " }, "Hello, there."],
+    [{ action: "replace", correctedText: " \n\t " }, "hello there"],
+    [{ action: "no_change", correctedText: "Ignored." }, "hello there"],
+  ])("settles %j as %j, keeping a trailing newline in the context", async (result, expected) => {
+    const { service, voiceStore, draft, setDraft } = await setup("Intro.\n");
+    correct.fn.mockResolvedValue(result);
+    voiceStore.getState().setCorrectionEnabled(true);
+
+    say("hello there", "item-a");
+    setDraft(draft() + " Thanks.");
+    await service.stop("Dictation stopped.");
+    await flush();
+
+    expect(correct.fn).toHaveBeenCalledWith({
+      rawText: "hello there",
+      recentContext: ["Intro.\n"],
+    });
+    expect(draft()).toBe(`Intro.\n${expected} Thanks.`);
+    expect(voiceStore.getState().panelBuffers[PANEL]!.sessionCorrectedText).toBe(expected);
+  });
+
+  it("keeps a whole word that starts exactly where the context bound falls", async () => {
+    const word = "a".repeat(499);
+    const { service, voiceStore } = await setup(`x ${word}`);
+    correct.fn.mockResolvedValue({ action: "no_change", correctedText: "" });
+    voiceStore.getState().setCorrectionEnabled(true);
+
+    say("more", "item-a");
+    await service.stop("Dictation stopped.");
+
+    expect(correct.fn).toHaveBeenCalledWith({ rawText: "more", recentContext: [word] });
+  });
+
+  it("leaves typed text out of the learning baseline when correction is off", async () => {
+    const { service, voiceStore, draft, setDraft } = await setup();
+
+    say("first part", "item-a");
+    setDraft(draft() + " typed note");
+    say("second part", "item-b");
+    await service.stop("Dictation stopped.");
+
+    expect(voiceStore.getState().panelBuffers[PANEL]!.sessionCorrectedText).toBe(
+      "first part second part"
+    );
+  });
+
+  it("discards the result when a paragraph break inside the passage was edited and put back", async () => {
+    const { service, voiceStore, draft, setDraft } = await setup();
+    let resolveCorrection!: (value: unknown) => void;
+    correct.fn.mockReturnValue(new Promise((resolve) => (resolveCorrection = resolve)));
+    voiceStore.getState().setCorrectionEnabled(true);
+
+    say("alpha", "item-a");
+    callbacks.boundary!({ sessionId: SESSION_ID, rawText: null });
+    say("beta", "item-b");
+    await service.stop("Dictation stopped.");
+    expect(sentTexts()).toEqual(["alpha\nbeta"]);
+    setDraft("alpha beta");
+    setDraft("alpha\nbeta");
+
+    resolveCorrection({ action: "replace", correctedText: "Alpha.\nBeta." });
+    await flush();
+    expect(draft()).toBe("alpha\nbeta");
+  });
+
+  it("corrects nothing when stopped while a retarget to another panel is still arming", async () => {
+    const { service, voiceStore } = await setup();
+    correct.fn.mockResolvedValue({ action: "replace", correctedText: "Rewritten." });
+    voiceStore.getState().setCorrectionEnabled(true);
+
+    say("old words", "item-a");
+    await service.stop("Dictation stopped.", { skipRemoteStop: true });
+    voiceStore.getState().beginSession({ panelId: "panel-2", projectId: PROJECT });
+    say("new words", "item-b");
+    // Retargeting back to the first panel: its old dictation isn't what stops.
+    voiceStore.getState().setArming({ panelId: PANEL, projectId: PROJECT });
+    await service.stop("Dictation stopped.");
+
+    expect(correct.fn).not.toHaveBeenCalled();
+  });
+
+  it("sends nothing for a dictation the draft already released", async () => {
+    const { service, voiceStore, setDraft } = await setup();
+    voiceStore.getState().setCorrectionEnabled(true);
+
+    say("sent already", "item-a");
+    setDraft("");
+    await service.stop("Dictation stopped.");
+
+    expect(correct.fn).not.toHaveBeenCalled();
+  });
+});
+
+describe("voiceCorrectionPassages (#14613)", () => {
+  it("splits at a separator typed into, though the words either side are untouched", async () => {
+    const { draft, setDraft, records } = await setup();
+
+    complete("first", "item-a");
+    complete("second", "item-b");
+    setDraft("first typed second");
+
+    const record = records()[0]!;
+    expect(record.utterances[1]!.range.edited).toBe(false);
+    expect(record.utterances[1]!.insertion.edited).toBe(true);
+    expect(collectCorrectionPassages(record, draft()).map((p) => p.text)).toEqual([
+      "first",
+      "second",
+    ]);
+  });
+
+  it("still joins utterances written straight after each other once typing split the dictation", async () => {
+    const { draft, setDraft, records } = await setup();
+
+    complete("first", "item-a");
+    setDraft(draft() + " typed");
+    complete("second", "item-b");
+    complete("third", "item-c");
+
+    expect(records()[0]!.range.edited).toBe(true);
+    expect(collectCorrectionPassages(records()[0]!, draft()).map((p) => p.text)).toEqual([
+      "first",
+      "second third",
+    ]);
+  });
+
+  it("rejects words that were edited and put back", async () => {
+    const { draft, setDraft, records } = await setup();
+
+    complete("hello there", "item-a");
+    const [passage] = collectCorrectionPassages(records()[0]!, draft());
+    setDraft("hello over there");
+    setDraft("hello there");
+
+    expect(locatePassage(records()[0]!, passage!, draft())).toBeNull();
+  });
+
+  it("rejects a passage whose text no longer matches, whatever its ranges say", () => {
+    const record = {
+      id: "record",
+      sessionId: "session",
+      panelId: PANEL,
+      range: { from: 0, to: 5, edited: false },
+      utterances: [
+        {
+          id: "u1",
+          range: { from: 0, to: 5, edited: false },
+          insertion: { from: 0, to: 5, edited: false },
+        },
+      ],
+    };
+    const [passage] = collectCorrectionPassages(record, "hello");
+
+    expect(locatePassage(record, passage!, "hello")).toEqual({ from: 0, to: 5 });
+    expect(locatePassage(record, passage!, "jello")).toBeNull();
   });
 });
