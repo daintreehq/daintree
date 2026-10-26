@@ -234,7 +234,25 @@ export function useCanopyInboxFilters({
   const scrollerRef = useRef<HTMLDivElement>(null);
   const viewable = isOpen && (everyHost || !otherHost) && !isProjectViewCached();
   const rowsKey = visible.map((item) => item.runId).join(" ");
-  const viewedRuns = useCanopyRowsViewed(scrollerRef, viewable, rowsKey, canopyCardDomId);
+  // Opening a run's pane is looking at its ask, whether or not the row was in view.
+  const acknowledgeOpened = useCallback(
+    (runId: string) => {
+      if (!isOpen || isProjectViewCached()) return;
+      if (everyHost) {
+        const run = parseAllHostsKey(runId);
+        if (run?.hostId === ownHostId) acknowledge([run.id]);
+      } else if (!otherHost) acknowledge([runId]);
+    },
+    [isOpen, otherHost, everyHost, ownHostId, acknowledge]
+  );
+  const viewedRuns = useCanopyRowsViewed(
+    scrollerRef,
+    viewable,
+    rowsKey,
+    `${listed.length}`,
+    canopyCardDomId,
+    acknowledgeOpened
+  );
   // Before paint, so a close in the same moment can't lose a look already taken.
   useLayoutEffect(() => {
     // A view nobody can see acknowledges nothing, for the moment before it
@@ -253,17 +271,6 @@ export function useCanopyInboxFilters({
     if (otherHost || seen.length === 0) return;
     acknowledge(seen.map((item) => item.runId));
   }, [isOpen, otherHost, everyHost, ownHostId, visible, viewedRuns, acknowledge]);
-  // Opening a run's pane is looking at its ask, whether or not the row was in view.
-  const acknowledgeOpened = useCallback(
-    (runId: string) => {
-      if (!isOpen || isProjectViewCached()) return;
-      if (everyHost) {
-        const run = parseAllHostsKey(runId);
-        if (run?.hostId === ownHostId) acknowledge([run.id]);
-      } else if (!otherHost) acknowledge([runId]);
-    },
-    [isOpen, otherHost, everyHost, ownHostId, acknowledge]
-  );
   // Main holds a native page back only for an ask the panel shows: told the
   // rows as listed, filters included, whenever they change — and told again
   // when another host's link comes back, having dropped what it was told.

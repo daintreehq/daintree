@@ -1,4 +1,4 @@
-import { useEffect, useState, type RefObject } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 
 /** A row this much in view, for this long, counts as looked at. */
 const VIEWED_RATIO = 0.5;
@@ -14,9 +14,18 @@ export function useCanopyRowsViewed(
   enabled: boolean,
   /** The runs the list can show, space-separated. */
   rowsKey: string,
-  domIdOf: (runId: string) => string
+  /** What else moves a row's element without moving its place among the runs. */
+  layoutKey: string,
+  domIdOf: (runId: string) => string,
+  /** Told the moment a row's second is up, ahead of the state it also lands in: a close can't outrun it. */
+  onViewed: (runId: string) => void
 ): ReadonlySet<string> {
   const [viewed, setViewed] = useState<ReadonlySet<string>>(() => new Set());
+
+  const onViewedRef = useRef(onViewed);
+  useEffect(() => {
+    onViewedRef.current = onViewed;
+  }, [onViewed]);
 
   useEffect(() => {
     if (!enabled) setViewed((prev) => (prev.size === 0 ? prev : new Set()));
@@ -31,8 +40,13 @@ export function useCanopyRowsViewed(
     const inView = new Set<string>();
     const timers = new Map<string, number>();
 
+    // Started afresh with each list: a run filtered out and back, or given a new
+    // prompt while the window was away, earns its second again.
+    setViewed((prev) => (prev.size === 0 ? prev : new Set()));
+
     const settle = (runId: string) => {
       timers.delete(runId);
+      onViewedRef.current(runId);
       setViewed((prev) => (prev.has(runId) ? prev : new Set(prev).add(runId)));
     };
     const consider = (runId: string) => {
@@ -83,6 +97,7 @@ export function useCanopyRowsViewed(
       for (const runId of inView) consider(runId);
     };
     const onBlur = () => {
+      setViewed((prev) => (prev.size === 0 ? prev : new Set()));
       for (const runId of [...timers.keys()]) drop(runId);
     };
     window.addEventListener("focus", onFocus);
@@ -93,7 +108,7 @@ export function useCanopyRowsViewed(
       observer.disconnect();
       for (const timer of timers.values()) window.clearTimeout(timer);
     };
-  }, [enabled, scrollerRef, rowsKey, domIdOf]);
+  }, [enabled, scrollerRef, rowsKey, layoutKey, domIdOf]);
 
   return viewed;
 }

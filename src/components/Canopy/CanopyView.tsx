@@ -705,7 +705,7 @@ function CanopyInbox({
     seeAssistantHandback,
   });
 
-  const openedRunId = paneFocus?.runId ?? null;
+  const openedRunId = focusedItem?.runId ?? null;
   useLayoutEffect(() => {
     if (openedRunId !== null) acknowledgeOpened(openedRunId);
   }, [openedRunId, acknowledgeOpened]);

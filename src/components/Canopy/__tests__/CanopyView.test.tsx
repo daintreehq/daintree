@@ -1618,23 +1618,37 @@ describe("CanopyView", () => {
     installElectron(snap);
     render(<CanopyView />);
     await frames();
-    expect(useCanopyStore.getState().acknowledged).toEqual({});
+    // The landing selects the top row, whose pane is open: only it counts as seen.
+    expect(Object.keys(useCanopyStore.getState().acknowledged)).toEqual(["waiting"]);
 
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    setInView("waiting", 0.3);
+    setInView("working", 0.3);
     setInView("asking", 0.6);
     act(() => void vi.advanceTimersByTime(900));
     setInView("asking", 0);
     act(() => void vi.advanceTimersByTime(1000));
-    expect(useCanopyStore.getState().acknowledged).toEqual({});
+    expect(Object.keys(useCanopyStore.getState().acknowledged)).toEqual(["waiting"]);
 
     setInView("asking", 0.6);
     act(() => void vi.advanceTimersByTime(1000));
-    expect(Object.keys(useCanopyStore.getState().acknowledged)).toEqual(["asking"]);
+    expect(Object.keys(useCanopyStore.getState().acknowledged)).toEqual(["waiting", "asking"]);
+  });
+
+  it("counts the ask of a row whose pane is opened as seen, in view or not", async () => {
+    const snap = { ...canopySnapshot, cards: [stuckCard("waiting"), stuckCard("working")] };
+    useCanopyStore.setState({ snapshot: snap, acknowledged: {} });
+    installElectron(snap);
+    const { container } = render(<CanopyView />);
+    await frames();
+    const keys = () => Object.keys(useCanopyStore.getState().acknowledged);
+    expect(keys()).not.toContain("working");
+    fireEvent.click(cards(container).find((card) => card.id === "canopy-card-working")!);
+    await frames();
+    expect(keys()).toContain("working");
   });
 
   it("does not start the second while the window is unfocused", async () => {
-    const snap = { ...canopySnapshot, cards: [stuckCard("working")] };
+    const snap = { ...canopySnapshot, cards: [stuckCard("waiting"), stuckCard("working")] };
     useCanopyStore.setState({ snapshot: snap, acknowledged: {} });
     installElectron(snap);
     render(<CanopyView />);
@@ -1643,7 +1657,7 @@ describe("CanopyView", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     setInView("working", 1);
     act(() => void vi.advanceTimersByTime(2000));
-    expect(useCanopyStore.getState().acknowledged).toEqual({});
+    expect(Object.keys(useCanopyStore.getState().acknowledged)).toEqual(["waiting"]);
   });
 
   it('withholds "Nothing needs you" while a read waits to be retried or agent status is unavailable', async () => {
