@@ -130,7 +130,7 @@ function findViolations(file: string, text = readFileSync(file, "utf8")): string
   const aliases = loggerAliases(source);
   const found: string[] = [];
 
-  const report = (node: ts.Node, call: ts.CallExpression, what: string) => {
+  const report = (call: ts.CallExpression, what: string) => {
     const { line } = source.getLineAndCharacterOfPosition(call.getStart());
     found.push(`${path.relative(ROOT, file)}:${line + 1} logs ${what}`);
   };
@@ -143,14 +143,14 @@ function findViolations(file: string, text = readFileSync(file, "utf8")): string
       !isSanitizerCall(node.expression) &&
       node.expression.getText() !== "details"
     ) {
-      report(node, call, `a spread of \`${node.expression.getText()}\``);
+      report(call, `a spread of \`${node.expression.getText()}\``);
     }
     if (
       ts.isElementAccessExpression(node) &&
       ts.isStringLiteralLike(node.argumentExpression) &&
       SENSITIVE.has(node.argumentExpression.text)
     ) {
-      report(node, call, `\`${node.argumentExpression.text}\``);
+      report(call, `\`${node.argumentExpression.text}\``);
     }
     if (ts.isIdentifier(node)) {
       if (SENSITIVE.has(node.text) || isCatchVariable(node)) {
@@ -164,7 +164,7 @@ function findViolations(file: string, text = readFileSync(file, "utf8")): string
           ts.isPropertyAccessExpression(parent) &&
           parent.expression === access &&
           SAFE_MEMBERS.has(parent.name.text);
-        if (!safe) report(node, call, `\`${node.text}\``);
+        if (!safe) report(call, `\`${node.text}\``);
       }
     }
     ts.forEachChild(node, (child) => check(child, call));
