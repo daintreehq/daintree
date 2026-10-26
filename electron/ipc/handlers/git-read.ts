@@ -4,6 +4,7 @@ import { CHANNELS } from "../channels.js";
 import { checkRateLimit, typedHandle, typedHandleWithContext } from "../utils.js";
 import type { HandlerDependencies } from "../types.js";
 import type { PulseRangeDays, ProjectPulse } from "../../../shared/types/pulse.js";
+import { projectStore } from "../../services/ProjectStore.js";
 import { gitServiceCache } from "../../services/GitServiceCache.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import type { GitFileDiffResult } from "../../../shared/types/ipc/git.js";
@@ -158,7 +159,19 @@ export function registerGitReadHandlers(deps: HandlerDependencies): () => void {
     }
 
     const senderWindowPulse = ctx.event && getWindowForWebContents(ctx.event.sender);
-    const states = await deps.worktreeService.getAllStatesAsync(senderWindowPulse?.id);
+    // With no window behind the call (a host call on a project nobody has
+    // open) the unscoped read spans every project, so the main worktree it
+    // picks could be another repository's.
+    const project =
+      !senderWindowPulse && ctx.projectId ? projectStore.getProjectById(ctx.projectId) : null;
+    const states = project
+      ? (
+          await deps.worktreeService.getAllStatesWithGitBackedForProjectAsync(
+            project.path,
+            project.id
+          )
+        ).states
+      : await deps.worktreeService.getAllStatesAsync(senderWindowPulse?.id);
     const mainWorktree = states.find((wt) => wt.isMainWorktree);
     const mainBranch = mainWorktree?.branch ?? "main";
 

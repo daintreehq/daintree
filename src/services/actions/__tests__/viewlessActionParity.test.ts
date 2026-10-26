@@ -24,6 +24,8 @@ import type { ActionId } from "@shared/types/actions";
 import { z } from "zod";
 import { VIEWLESS_ACTIONS } from "../../../../electron/services/viewless/viewlessActionCatalog";
 import {
+  AgentSessionHistoryListArgsSchema,
+  GitGetProjectPulseArgsSchema,
   SlashCommandsListArgsSchema,
   AgentListModelsArgsSchema,
   AgentListPresetsArgsSchema,
@@ -78,6 +80,8 @@ describe("viewless argument schemas", () => {
     "agent.listPresets": AgentListPresetsArgsSchema,
     "agent.listModels": AgentListModelsArgsSchema,
     "worktree.waitForPullRequest": WorktreeWaitForPullRequestArgsSchema,
+    "agentSessionHistory.list": AgentSessionHistoryListArgsSchema,
+    "git.getProjectPulse": GitGetProjectPulseArgsSchema,
   };
 
   it.each(Object.entries(schemas))(

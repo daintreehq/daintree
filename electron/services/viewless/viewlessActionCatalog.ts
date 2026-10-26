@@ -19,7 +19,9 @@ const write = (danger: ActionDanger = "safe"): ViewlessActionEntry => ({ danger,
  * the runbooks consult (#13501), find the host's tools (#13493), list an
  * agent's slash commands before typing one and the host's workspaces with
  * whether a frontend is attached to each (#14122), and look up what a launch
- * or a create takes and wait on a pull request (#14139).
+ * or a create takes and wait on a pull request (#14139), and the two reads
+ * behind "what happened overnight": closed agent sessions from the journal
+ * main holds and a worktree's commit pulse (#14549).
  * Everything else is a question for a renderer, and is refused as "no
  * frontend attached" rather than guessed at.
  *
@@ -62,6 +64,8 @@ export const VIEWLESS_ACTIONS: Readonly<Record<string, ViewlessActionEntry>> = {
   "forge.getIssue": read(),
   "forge.listIssues": read(),
   "forge.getCIStatus": read(),
+  "agentSessionHistory.list": read(),
+  "git.getProjectPulse": read(),
   "actions.list": read(),
   "actions.search": read(),
   "actions.getSchema": read(),
