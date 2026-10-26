@@ -129,6 +129,10 @@ function stubElectron() {
         callbacks.ended = cb;
         return () => {};
       }),
+      onLiveSession: vi.fn(() => () => {}),
+      onStopRequested: vi.fn(() => () => {}),
+      onRevealRequested: vi.fn(() => () => {}),
+      getLiveSession: vi.fn().mockResolvedValue({ revision: 0, session: null }),
       getSettings: vi.fn().mockResolvedValue({ enabled: false }),
       stop: ipc.stop,
       cancel: ipc.cancel,
