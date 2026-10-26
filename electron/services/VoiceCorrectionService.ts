@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { logDebug, logWarn } from "../utils/logger.js";
+import { logDebug, logInfo, logWarn } from "../utils/logger.js";
 import {
   CORE_CORRECTION_PROMPT,
   CONFIDENCE_SKIP_THRESHOLD,
@@ -16,6 +16,11 @@ import {
   withTimeoutSignal,
   type DisposableTimeoutSignal,
 } from "../../shared/utils/timeoutSignal.js";
+import {
+  findProtectedRanges,
+  validateCorrection,
+  type CorrectionRejectReason,
+} from "./voiceCorrectionGuard.js";
 
 export { CORE_CORRECTION_PROMPT, buildCorrectionSystemPrompt };
 
@@ -23,7 +28,15 @@ const P = "[VoiceCorrection]";
 const SHORT_CORRECTION_TIMEOUT_MS = 7000;
 const LONG_CORRECTION_TIMEOUT_MS = 15000;
 const LONG_CORRECTION_MIN_CHARS = 140;
-const MAX_OUTPUT_TOKENS = 1024;
+const MAX_CORRECTION_TIMEOUT_MS = 60000;
+const CORRECTION_TIMEOUT_MS_PER_CHAR = 5;
+// Past this a passage stays raw on purpose rather than risk a cut-off reply.
+const MAX_CORRECTION_INPUT_CHARS = 12000;
+const MIN_OUTPUT_TOKENS = 1024;
+// Room for the whole passage to come back, at up to ~1 token per character
+// for CJK, plus the JSON wrapper.
+const OUTPUT_TOKENS_PER_CHAR = 1.5;
+const OUTPUT_TOKENS_OVERHEAD = 256;
 const FILE_LINK_MAX_OUTPUT_TOKENS = 256;
 const PROMPT_CACHE_PREFIX = "voice-correction-v8";
 // OpenAI rejects a prompt_cache_key longer than 64 characters.
@@ -140,6 +153,15 @@ class OpenAIRequestError extends Error {
   }
 }
 
+// A reply that is discarded whole rather than applied. Its code reaches the
+// logs through voiceErrorLogFields, so a deliberate raw fallback is visible.
+class CorrectionDiscardedError extends Error {
+  constructor(readonly code: "incomplete" | "malformed") {
+    super(`Correction reply ${code}`);
+    this.name = "CorrectionDiscardedError";
+  }
+}
+
 export class VoiceCorrectionService {
   private sessionSignal: AbortSignal | null = null;
 
@@ -179,6 +201,19 @@ export class VoiceCorrectionService {
       };
     }
 
+    if (trimmedRaw.length > MAX_CORRECTION_INPUT_CHARS) {
+      logInfo(`${P} Skipping correction — passage too long`, {
+        rawLen: trimmedRaw.length,
+        maxLen: MAX_CORRECTION_INPUT_CHARS,
+      });
+      return {
+        action: "no_change",
+        correctedText: request.rawText,
+        confidence: "high",
+        confirmedText: request.rawText,
+      };
+    }
+
     try {
       const result = await this.callApi(
         {
@@ -188,14 +223,33 @@ export class VoiceCorrectionService {
         settings
       );
 
-      const apiConfirmedText =
-        result.action === "no_change"
-          ? request.rawText
-          : result.correctedText.trim() || request.rawText;
-      const confirmedText = this.canonicalizeCustomDictionaryTerms(
-        apiConfirmedText,
-        settings.customDictionary
-      );
+      let confirmedText: string;
+      if (result.action === "no_change" || !result.correctedText.trim()) {
+        confirmedText = this.canonicalizeCustomDictionaryTerms(
+          request.rawText,
+          settings.customDictionary
+        );
+      } else {
+        const candidate = this.canonicalizeCustomDictionaryTerms(
+          result.correctedText.trim(),
+          settings.customDictionary
+        );
+        const rejection = this.findRejection(request.rawText, candidate, result.confidence);
+        if (rejection) {
+          logDebug(`${P} Correction rejected, keeping raw text`, {
+            reason: rejection,
+            rawLen: request.rawText.length,
+            correctedLen: candidate.length,
+          });
+          return {
+            action: "no_change",
+            correctedText: request.rawText,
+            confidence: result.confidence,
+            confirmedText: request.rawText,
+          };
+        }
+        confirmedText = candidate;
+      }
       const action = confirmedText === request.rawText ? "no_change" : "replace";
 
       logDebug(`${P} Correction success`, {
@@ -235,6 +289,16 @@ export class VoiceCorrectionService {
         confirmedText: request.rawText,
       };
     }
+  }
+
+  private findRejection(
+    rawText: string,
+    candidate: string,
+    confidence: VoiceCorrectionResult["confidence"]
+  ): CorrectionRejectReason | "low_confidence" | null {
+    if (confidence === "low") return "low_confidence";
+    const verdict = validateCorrection(rawText, candidate);
+    return verdict.ok ? null : verdict.reason;
   }
 
   private buildPromptCacheKey(settings: VoiceCorrectionSettings): string {
@@ -406,10 +470,22 @@ export class VoiceCorrectionService {
   }
 
   private getCorrectionTimeoutMs(request: VoiceCorrectionRequest): number {
-    if (request.rawText.length >= LONG_CORRECTION_MIN_CHARS || (request.segmentCount ?? 0) > 1) {
-      return LONG_CORRECTION_TIMEOUT_MS;
+    const length = request.rawText.length;
+    if (length < LONG_CORRECTION_MIN_CHARS && (request.segmentCount ?? 0) <= 1) {
+      return SHORT_CORRECTION_TIMEOUT_MS;
     }
-    return SHORT_CORRECTION_TIMEOUT_MS;
+    const extraChars = Math.max(0, length - 1000);
+    return Math.min(
+      MAX_CORRECTION_TIMEOUT_MS,
+      LONG_CORRECTION_TIMEOUT_MS + extraChars * CORRECTION_TIMEOUT_MS_PER_CHAR
+    );
+  }
+
+  private getMaxOutputTokens(request: VoiceCorrectionRequest): number {
+    return Math.max(
+      MIN_OUTPUT_TOKENS,
+      Math.ceil(request.rawText.length * OUTPUT_TOKENS_PER_CHAR) + OUTPUT_TOKENS_OVERHEAD
+    );
   }
 
   private normalizeCorrectedText(text: string): string {
@@ -422,12 +498,17 @@ export class VoiceCorrectionService {
       const canonical = term.trim();
       if (!canonical) continue;
 
+      // Recasing never reaches into a path, flag, reference or backticked span.
+      const protectedRanges = findProtectedRanges(canonicalized);
       const pattern = new RegExp(escapeRegExp(canonical), "giu");
-      canonicalized = canonicalized.replace(pattern, (match, offset, fullText) => {
+      canonicalized = canonicalized.replace(pattern, (match, offset: number, fullText: string) => {
         const before = offset > 0 ? fullText[offset - 1] : "";
         const afterIndex = offset + match.length;
         const after = afterIndex < fullText.length ? fullText[afterIndex] : "";
         if (DICTIONARY_TERM_BOUNDARY_RE.test(before) || DICTIONARY_TERM_BOUNDARY_RE.test(after)) {
+          return match;
+        }
+        if (protectedRanges.some((range) => offset < range.end && afterIndex > range.start)) {
           return match;
         }
         return canonical;
@@ -475,6 +556,7 @@ export class VoiceCorrectionService {
     userMessage: string,
     signal: AbortSignal
   ): Promise<Omit<VoiceCorrectionResult, "confirmedText">> {
+    const maxOutputTokens = this.getMaxOutputTokens(request);
     const response = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
       headers: {
@@ -504,7 +586,7 @@ export class VoiceCorrectionService {
             schema: CORRECTION_RESULT_SCHEMA,
           },
         },
-        max_output_tokens: MAX_OUTPUT_TOKENS,
+        max_output_tokens: maxOutputTokens,
       }),
     });
 
@@ -515,13 +597,33 @@ export class VoiceCorrectionService {
     const data = (await response.json()) as {
       output_text?: string;
       output?: Array<{ content?: Array<{ text?: string }> }>;
+      status?: string;
+      incomplete_details?: { reason?: string };
       usage?: {
         input_tokens?: number;
         output_tokens?: number;
         input_tokens_details?: { cached_tokens?: number };
       };
     };
+    // A cut-off reply can still parse, so check the status before the body:
+    // the passage is corrected whole or not at all.
+    if (data.status === "incomplete") {
+      logDebug(`${P} Correction reply cut off`, {
+        reason: data.incomplete_details?.reason ?? "unknown",
+        maxOutputTokens,
+        rawLen: request.rawText.length,
+      });
+      throw new CorrectionDiscardedError("incomplete");
+    }
+
     const parsed = JSON.parse(this.extractResponseText(data)) as CorrectionApiResult;
+    if (
+      (parsed.action !== "no_change" && parsed.action !== "replace") ||
+      typeof parsed.corrected_text !== "string" ||
+      !["low", "medium", "high"].includes(parsed.confidence)
+    ) {
+      throw new CorrectionDiscardedError("malformed");
+    }
 
     logDebug(`${P} Correction API usage`, {
       cachedTokens: data.usage?.input_tokens_details?.cached_tokens ?? 0,

@@ -504,6 +504,217 @@ describe("VoiceCorrectionService", () => {
     expect(result.action).toBe("no_change");
   });
 
+  describe("meaning guards", () => {
+    async function correctWith(
+      rawText: string,
+      reply: { action?: "no_change" | "replace"; corrected_text: string; confidence?: string },
+      settings: Partial<typeof BASE_SETTINGS> = {}
+    ) {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(makeFetchResponse(reply)));
+      return new VoiceCorrectionService().correct({ rawText }, { ...BASE_SETTINGS, ...settings });
+    }
+
+    it("does not apply a low-confidence replacement", async () => {
+      const result = await correctWith("the promise rejects when it times out", {
+        corrected_text: "The promise regex when it times out.",
+        confidence: "low",
+      });
+      expect(result.action).toBe("no_change");
+      expect(result.confirmedText).toBe("the promise rejects when it times out");
+    });
+
+    it("applies a medium-confidence cleanup", async () => {
+      const result = await correctWith("um wire up the racked component", {
+        corrected_text: "Wire up the React component.",
+        confidence: "medium",
+      });
+      expect(result.action).toBe("replace");
+      expect(result.confirmedText).toBe("Wire up the React component.");
+    });
+
+    it.each([
+      ["drops a negation", "don't delete the branch yet", "Delete the branch yet."],
+      ["adds a negation", "merge it after the tests pass", "Don't merge it after the tests pass."],
+      ["changes a number", "bump the timeout to 3000 ms", "Bump the timeout to 300 ms."],
+      [
+        "recases a path",
+        "fix the bug in src/utils/foo.ts please",
+        "Fix the bug in src/Utils/foo.ts.",
+      ],
+      ["edits a flag", "run it with --dry-run first", "Run it with --dryrun first."],
+      ["edits an @-reference", "check @src/App.tsx for the bug", "Check @src/app.tsx for the bug."],
+      [
+        "edits backticked text",
+        "rename `useFooBar` to something clearer",
+        "Rename `useFoobar` to something clearer.",
+      ],
+      [
+        "answers the prompt instead of cleaning it",
+        "can you explain how the auth flow works",
+        "The auth flow works by issuing a short-lived token when the user signs in, then refreshing it in the background with a long-lived refresh token stored securely on the server side.",
+      ],
+    ])("keeps the raw text when the model %s", async (_label, rawText, corrected) => {
+      const result = await correctWith(rawText, { corrected_text: corrected });
+      expect(result.action).toBe("no_change");
+      expect(result.confirmedText).toBe(rawText);
+    });
+
+    it("keeps protected spans byte for byte through an accepted cleanup", async () => {
+      const rawText = "um so check @src/App.tsx and run `npm test` with --watch on port 5173";
+      const result = await correctWith(rawText, {
+        corrected_text: "So check @src/App.tsx and run `npm test` with --watch on port 5173.",
+      });
+      expect(result.action).toBe("replace");
+      for (const span of ["@src/App.tsx", "`npm test`", "--watch", "5173"]) {
+        expect(result.confirmedText).toContain(span);
+      }
+    });
+
+    it("does not recase a custom dictionary term inside a protected span", async () => {
+      const rawText = "open daintree/src/index.ts in daintree";
+      const result = await correctWith(
+        rawText,
+        { action: "no_change", corrected_text: "" },
+        { customDictionary: ["Daintree"] }
+      );
+      expect(result.confirmedText).toBe("open daintree/src/index.ts in Daintree");
+    });
+
+    it("falls back to the exact raw text, not a recased copy, when a result is rejected", async () => {
+      const rawText = "  ask daintree not to push  ";
+      const result = await correctWith(
+        rawText,
+        { corrected_text: "Ask Daintree to push.", confidence: "high" },
+        { customDictionary: ["Daintree"] }
+      );
+      expect(result.action).toBe("no_change");
+      expect(result.correctedText).toBe(rawText);
+      expect(result.confirmedText).toBe(rawText);
+    });
+
+    it("rejects a malformed reply instead of applying it", async () => {
+      const result = await correctWith("react is great", {
+        corrected_text: "React is great.",
+        confidence: "certain",
+      });
+      expect(result.action).toBe("no_change");
+      expect(result.confirmedText).toBe("react is great");
+    });
+  });
+
+  describe("long passages", () => {
+    function longPassage(chars: number): string {
+      return "the parser keeps the tokens in order ".repeat(Math.ceil(chars / 37)).slice(0, chars);
+    }
+
+    it("leaves a passage over the limit raw without calling the API", async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+      const rawText = longPassage(12_001);
+
+      const result = await new VoiceCorrectionService().correct({ rawText }, BASE_SETTINGS);
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(result.action).toBe("no_change");
+      expect(result.confirmedText).toBe(rawText);
+    });
+
+    it("gives the reply room to return the whole passage", async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValue(makeFetchResponse({ action: "no_change", corrected_text: "" }));
+      vi.stubGlobal("fetch", fetchMock);
+      const svc = new VoiceCorrectionService();
+
+      const budgetFor = async (chars: number) => {
+        fetchMock.mockClear();
+        await svc.correct({ rawText: longPassage(chars) }, BASE_SETTINGS);
+        const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+        return JSON.parse(init.body as string).max_output_tokens as number;
+      };
+
+      // Even CJK, at about one token per character, fits with room for the JSON wrapper.
+      expect(await budgetFor(4000)).toBeGreaterThan(4000);
+      expect(await budgetFor(12_000)).toBeGreaterThan(12_000);
+      expect(await budgetFor(12_000)).toBeGreaterThan(await budgetFor(4000));
+    });
+
+    it("applies a whole reply but drops one that was cut off, even if it parses", async () => {
+      const rawText = longPassage(3000);
+      const cleaned = `T${rawText.slice(1)}.`;
+      const reply = (status: string) => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          status,
+          incomplete_details: status === "incomplete" ? { reason: "max_output_tokens" } : undefined,
+          output_text: JSON.stringify({
+            action: "replace",
+            corrected_text: cleaned,
+            confidence: "high",
+          }),
+        }),
+      });
+
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(reply("completed")));
+      const whole = await new VoiceCorrectionService().correct({ rawText }, BASE_SETTINGS);
+      expect(whole.confirmedText).toBe(cleaned);
+
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(reply("incomplete")));
+      const cutOff = await new VoiceCorrectionService().correct({ rawText }, BASE_SETTINGS);
+      expect(cutOff.action).toBe("no_change");
+      expect(cutOff.confirmedText).toBe(rawText);
+      expect(vi.mocked(logWarn).mock.calls.at(-1)?.[1]).toMatchObject({
+        errorName: "CorrectionDiscardedError",
+        errorCode: "incomplete",
+      });
+    });
+
+    it("keeps the raw text when the reply drops the end of the passage", async () => {
+      const rawText = longPassage(3000);
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(makeFetchResponse({ corrected_text: rawText.slice(0, 2500) }))
+      );
+      const truncated = await new VoiceCorrectionService().correct({ rawText }, BASE_SETTINGS);
+      expect(truncated.action).toBe("no_change");
+      expect(truncated.confirmedText).toBe(rawText);
+    });
+
+    it.each([
+      [5000, 35_000],
+      [12_000, 60_000],
+    ])(
+      "waits for a %i-character passage until %ims, then keeps it raw",
+      async (chars, deadline) => {
+        vi.stubGlobal(
+          "fetch",
+          vi.fn().mockImplementation(
+            (_url: string, init: RequestInit) =>
+              new Promise((_resolve, reject) => {
+                init.signal!.addEventListener("abort", () => reject(init.signal!.reason), {
+                  once: true,
+                });
+              })
+          )
+        );
+        const rawText = longPassage(chars);
+        const resultPromise = new VoiceCorrectionService().correct({ rawText }, BASE_SETTINGS);
+        let settled = false;
+        void resultPromise.finally(() => {
+          settled = true;
+        });
+
+        await vi.advanceTimersByTimeAsync(deadline - 1);
+        expect(settled).toBe(false);
+
+        await vi.advanceTimersByTimeAsync(1);
+        expect(settled).toBe(true);
+        expect((await resultPromise).confirmedText).toBe(rawText);
+      }
+    );
+  });
+
   describe("detectFileLinkTokens", () => {
     it("returns detected file references from the API", async () => {
       vi.stubGlobal(
