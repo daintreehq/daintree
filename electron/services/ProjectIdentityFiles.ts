@@ -282,9 +282,10 @@ export class ProjectIdentityFiles {
    * Rewrites `.daintree/settings.json` from the shareable settings. The
    * vocabulary on disk is kept whatever `settings` carries: a whole-settings
    * save holds a copy read earlier, and a teammate's committed terms must not
-   * be replaced by it. Only {@link changeInRepoVoiceDictionary} changes it. A
-   * file that exists but can't be read is left alone rather than replaced
-   * with one missing what it held.
+   * be replaced by it. Only {@link changeInRepoVoiceDictionary} changes it.
+   * The field is carried over verbatim from any file that parses, a newer
+   * version's included; one that doesn't parse is replaced as it always was,
+   * since nothing in it could be read.
    */
   async writeInRepoSettings(projectPath: string, settings: ProjectSettings): Promise<void> {
     return this.queueSettingsWrite(projectPath, async () => {
@@ -309,7 +310,7 @@ export class ProjectIdentityFiles {
         (payload as Record<keyof ProjectSettings, unknown>)[key] = value;
       }
 
-      const existing = await this.readSettingsFileForPatch(projectPath);
+      const existing = await this.readSettingsFileObject(projectPath).catch(() => null);
       if (existing && Object.hasOwn(existing, "voiceDictionary")) {
         (payload as Record<string, unknown>).voiceDictionary = existing.voiceDictionary;
       }
@@ -364,6 +365,18 @@ export class ProjectIdentityFiles {
   private async readSettingsFileForPatch(
     projectPath: string
   ): Promise<Record<string, unknown> | null> {
+    const parsed = await this.readSettingsFileObject(projectPath);
+    const version = parsed?.version;
+    if (typeof version === "number" && version > IN_REPO_SETTINGS_VERSION) {
+      throw new Error(`${DAINTREE_SETTINGS_JSON} was written by a newer version of Daintree`);
+    }
+    return parsed;
+  }
+
+  /** The settings file's raw object, or null when there is none; throws when it can't be read or parsed. */
+  private async readSettingsFileObject(
+    projectPath: string
+  ): Promise<Record<string, unknown> | null> {
     let content: string;
     try {
       content = await fs.readFile(path.join(projectPath, DAINTREE_SETTINGS_JSON), "utf-8");
@@ -374,10 +387,6 @@ export class ProjectIdentityFiles {
     const parsed: unknown = JSON.parse(stripUtf8Bom(content));
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       throw new Error(`${DAINTREE_SETTINGS_JSON} is not a settings object`);
-    }
-    const version = (parsed as Record<string, unknown>).version;
-    if (typeof version === "number" && version > IN_REPO_SETTINGS_VERSION) {
-      throw new Error(`${DAINTREE_SETTINGS_JSON} was written by a newer version of Daintree`);
     }
     return parsed as Record<string, unknown>;
   }

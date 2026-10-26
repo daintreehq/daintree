@@ -69,6 +69,11 @@ export function DictationVocabularySection({ projectId }: { projectId: string })
   const [heardAs, setHeardAs] = useState("");
   const [failure, setFailure] = useState<Failure | null>(null);
   const termInputRef = useRef<HTMLInputElement>(null);
+  // The draft as typed, read when a save lands after further edits.
+  const draftRef = useRef({ term, heardAs });
+  useEffect(() => {
+    draftRef.current = { term, heardAs };
+  }, [term, heardAs]);
   // Bumped whenever the page moves to a project, so anything still in flight
   // for an earlier visit is dropped, even one to the same project.
   const visitRef = useRef(0);
@@ -126,10 +131,12 @@ export function DictationVocabularySection({ projectId }: { projectId: string })
           term: nextTerm,
           ...(nextHeardAs.length > 0 ? { heardAs: nextHeardAs } : {}),
         }),
-      // A draft typed while this was saving is the user's next entry.
+      // A draft edited while this was saving is the user's next entry.
       () => {
-        setTerm((current) => (current === submittedTerm ? "" : current));
-        setHeardAs((current) => (current === submittedHeardAs ? "" : current));
+        if (draftRef.current.term !== submittedTerm) return;
+        if (draftRef.current.heardAs !== submittedHeardAs) return;
+        setTerm("");
+        setHeardAs("");
       }
     );
   };

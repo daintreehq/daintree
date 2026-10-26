@@ -111,6 +111,9 @@ describe("DictationVocabularySection", () => {
     fireEvent.change(termInput(), { target: { value: "Added" } });
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
 
+    await act(async () => {});
+    expect(api.addToProject).not.toHaveBeenCalled();
+
     await act(async () => resolveRead([entry("Old")]));
     expect(await screen.findByText("Added", { selector: "*:not(input)" })).toBeTruthy();
     expect(api.addToProject).toHaveBeenCalledTimes(1);
@@ -128,5 +131,20 @@ describe("DictationVocabularySection", () => {
     await act(async () => resolveAdd([entry("First")]));
     expect(screen.getByText("First")).toBeTruthy();
     expect(termInput().value).toBe("Second");
+  });
+
+  it("keeps the whole draft when only its heard-as forms changed during the save", async () => {
+    let resolveAdd!: (entries: VoiceDictionaryEntry[]) => void;
+    api.addToProject.mockReturnValueOnce(new Promise((resolve) => (resolveAdd = resolve)));
+    render(<DictationVocabularySection projectId="p1" />);
+    await waitFor(() => expect(api.getProject).toHaveBeenCalled());
+    fireEvent.change(termInput(), { target: { value: "Zustand" } });
+    fireEvent.change(heardAsInput(), { target: { value: "zoo stand" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    fireEvent.change(heardAsInput(), { target: { value: "zoo-stand" } });
+
+    await act(async () => resolveAdd([entry("Zustand", ["zoo stand"])]));
+    expect(termInput().value).toBe("Zustand");
+    expect(heardAsInput().value).toBe("zoo-stand");
   });
 });

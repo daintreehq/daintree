@@ -509,17 +509,31 @@ describe("in-repo dictation vocabulary", () => {
     ["unparseable", "{ not json"],
     ["not an object", "[]"],
     ["from a newer version", JSON.stringify({ version: 2, voiceDictionary: [] })],
-  ])("refuses to read, patch or rewrite a file that is %s", async (_label, content) => {
+  ])("refuses to read or patch a file that is %s", async (_label, content) => {
     await fs.mkdir(path.join(tmpDir, ".daintree"));
     await fs.writeFile(settingsPath(), content);
     await expect(identityFiles.readInRepoVoiceDictionary(tmpDir)).rejects.toThrow();
     await expect(
       identityFiles.changeInRepoVoiceDictionary(tmpDir, () => [entry("New")])
     ).rejects.toThrow();
-    await expect(
-      identityFiles.writeInRepoSettings(tmpDir, makeSettings({ excludedPaths: ["dist"] }))
-    ).rejects.toThrow();
     expect(await fs.readFile(settingsPath(), "utf-8")).toBe(content);
+  });
+
+  it("carries a newer file's vocabulary through a settings save verbatim", async () => {
+    const committed = [{ term: "TeamTerm", heardAs: [], weight: 3 }];
+    await fs.mkdir(path.join(tmpDir, ".daintree"));
+    await fs.writeFile(settingsPath(), JSON.stringify({ version: 2, voiceDictionary: committed }));
+    await identityFiles.writeInRepoSettings(tmpDir, makeSettings({ excludedPaths: ["dist"] }));
+    const content = await readFile();
+    expect(content.excludedPaths).toEqual(["dist"]);
+    expect(content.voiceDictionary).toEqual(committed);
+  });
+
+  it("still saves settings over a committed file that doesn't parse", async () => {
+    await fs.mkdir(path.join(tmpDir, ".daintree"));
+    await fs.writeFile(settingsPath(), "{ not json");
+    await identityFiles.writeInRepoSettings(tmpDir, makeSettings({ excludedPaths: ["dist"] }));
+    expect(await readFile()).toEqual({ version: 1, excludedPaths: ["dist"] });
   });
 
   it("loses no change when vocabulary edits and settings saves land together", async () => {
