@@ -9,7 +9,7 @@ import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { usePanelStore } from "@/store/panelStore";
 import type { Project } from "@shared/types";
 import type { Scratch } from "@shared/types/scratch";
-import type { TerminalInstance } from "@shared/types/panel";
+import type { BrowserPanelData } from "@shared/types/panel";
 import { APP_SOURCE_LABEL } from "@/lib/notificationSourceLabel";
 
 vi.mock("@/store/createWorktreeStore", () => ({
@@ -46,8 +46,8 @@ function scratch(id: string, name: string): Scratch {
   return { id, name, path: `/scratches/${id}`, createdAt: 0, lastOpened: 0 };
 }
 
-function panel(id: string): TerminalInstance {
-  return { id, title: id, location: "grid", cwd: "/tmp", cols: 80, rows: 24, width: 0, height: 0 };
+function panel(id: string): BrowserPanelData {
+  return { id, kind: "browser", title: id, location: "grid" };
 }
 
 function focusAfter(ms: number) {
