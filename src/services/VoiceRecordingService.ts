@@ -127,6 +127,36 @@ const MAX_QUEUED_CHUNKS = 150;
 // suspended, so this only guards a worklet that can no longer reply.
 const WORKLET_FLUSH_TIMEOUT_MS = 250;
 
+// How long the capture context stays warm after the last dictation ends, so a
+// dictation soon after reuses it instead of rebuilding the graph (#14618).
+const WARM_AUDIO_IDLE_MS = 5 * 60_000;
+
+// lib.dom's AudioContextOptions predates `sinkId` (Chromium 110+).
+type CaptureContextOptions = AudioContextOptions & { sinkId?: string | { type: "none" } };
+
+/**
+ * The capture AudioContext, kept across dictations with its worklet module
+ * loaded. Only the microphone and the nodes on it belong to each capture, so
+ * the mic still closes at stop. Suspended while no capture uses it, and closed
+ * after WARM_AUDIO_IDLE_MS of that.
+ */
+interface WarmAudio {
+  context: AudioContext;
+  // "none" renders without opening an output device; "default" is the fallback
+  // when that sink isn't available, and holds the output open while running.
+  sink: "none" | "default";
+  keepAliveOscillator: OscillatorNode | null;
+  keepAliveGain: GainNode | null;
+  workletReady: Promise<void> | null;
+  users: Set<CaptureAttempt>;
+  // Resume and suspend run in call order, so a release's suspend can never
+  // land after the next start's resume.
+  transition: Promise<void>;
+  idleTimer: ReturnType<typeof setTimeout> | null;
+  // Closed once its last capture lets go, instead of parked.
+  retired: boolean;
+}
+
 /**
  * How long a send waits for a dictated passage's correction before it goes
  * with whatever text is current (#14611).
@@ -168,10 +198,10 @@ function findDictation(
 
 interface CaptureAttempt {
   target: VoiceRecordingTarget;
-  audioContext: AudioContext;
-  keepAliveOscillator: OscillatorNode | null;
-  keepAliveGain: GainNode | null;
+  audio: WarmAudio;
+  stopObservingContext: (() => void) | null;
   stream: MediaStream | null;
+  source: MediaStreamAudioSourceNode | null;
   workletNode: AudioWorkletNode | null;
   // PCM captured before the backend start is requested, sent in order the
   // moment it is. `null` once chunks forward live, or after the attempt is
@@ -207,7 +237,7 @@ class VoiceRecordingService {
   // chunk, start and stop main sees, so main can tell which session each
   // belongs to. Unlike `startRequestId` it is unique across project views.
   private sessionId: string | null = null;
-  private audioContext: AudioContext | null = null;
+  private warmAudio: WarmAudio | null = null;
   // Capture graph built by an in-flight start() and not yet promoted to the
   // session fields below. Held here so a cancel or supersede can release it
   // while getUserMedia is pending (an unanswered permission prompt can leave it
@@ -218,8 +248,6 @@ class VoiceRecordingService {
   private workletNode: AudioWorkletNode | null = null;
   // A stop waiting for this worklet's "flushed" marker.
   private pendingWorkletFlush: { node: AudioWorkletNode; resolve: () => void } | null = null;
-  private keepAliveOscillator: OscillatorNode | null = null;
-  private keepAliveGain: GainNode | null = null;
   private stream: MediaStream | null = null;
   // The promoted attempt, whose track loss ends the session.
   private sessionCapture: CaptureAttempt | null = null;
@@ -811,7 +839,7 @@ class VoiceRecordingService {
     if (!pending) return;
     this.pendingCapture = null;
     pending.queue = null;
-    void this.cleanupCaptureResources(pending).catch(() => {});
+    this.cleanupCaptureResources(pending);
   }
 
   /**
@@ -1114,26 +1142,41 @@ class VoiceRecordingService {
       }
     }
 
-    // Build the AudioContext BEFORE opening the microphone. Its constructor
-    // resolves the output device with a synchronous IPC, and Chromium only
-    // caches that answer for a few seconds. Constructed after getUserMedia, a
-    // cache miss queues behind the audio service bringing up the just-opened
-    // input stream and freezes the renderer for ~650ms on macOS — with the
-    // recording indicator already committed but unpainted. Done first, the
-    // lookup lands on an idle audio service and costs a few milliseconds.
-    logDebug(`${LOG_PREFIX} Creating AudioContext (24kHz) — eager capture`);
-    const audioContext = new AudioContext({ sampleRate: 24000 });
-    logStep("audio_context_create", {
-      state: audioContext.state,
-      sampleRate: audioContext.sampleRate,
-    });
-    this.observeAudioContextState(audioContext, logStep);
+    // Acquire the AudioContext BEFORE opening the microphone. Constructing one
+    // on the default sink resolves the output device with a synchronous IPC,
+    // and Chromium only caches that answer for a few seconds. Constructed after
+    // getUserMedia, a cache miss queues behind the audio service bringing up
+    // the just-opened input stream and freezes the renderer for ~650ms on
+    // macOS — with the recording indicator already committed but unpainted.
+    // Done first, the lookup lands on an idle audio service.
+    let audio: WarmAudio;
+    try {
+      audio = this.acquireWarmAudio(logStep);
+    } catch (error) {
+      logError(`${LOG_PREFIX} Failed to create the AudioContext`, undefined, {
+        ...voiceErrorLogFields(error),
+      });
+      useVoiceRecordingStore.getState().setLastError({
+        severity: "fatal",
+        code: "renderer_error",
+        message: "Failed to load the audio processor.",
+      });
+      useVoiceRecordingStore.getState().announce("Voice dictation failed to initialize.");
+      this.reportStartFailure(
+        "Dictation didn't start",
+        "Failed to load the audio processor.",
+        this.retryAction(() => void this.start(target))
+      );
+      await this.failArming(target);
+      return;
+    }
+    const audioContext = audio.context;
     const capture: CaptureAttempt = {
       target,
-      audioContext,
-      keepAliveOscillator: null,
-      keepAliveGain: null,
+      audio,
+      stopObservingContext: this.observeAudioContextState(audioContext, logStep),
       stream: null,
+      source: null,
       workletNode: null,
       queue: [],
       droppedChunks: 0,
@@ -1142,6 +1185,7 @@ class VoiceRecordingService {
       lost: false,
       frozen: false,
     };
+    audio.users.add(capture);
     this.pendingCapture = capture;
     let startup: StartupAttempt | null = null;
     // Owned by the attempt until promotion, so a previous session's stop can't
@@ -1160,32 +1204,16 @@ class VoiceRecordingService {
     // is ready to attach the moment the stream arrives. Observed immediately so
     // a bail before it is awaited can't surface as an unhandled rejection.
     const graphReady = (async () => {
-      // Keep the AudioContext in "running" state while backgrounded. Chromium
-      // suspends capture-only contexts (no output to destination) when the
-      // window loses focus. Connecting a silent oscillator to the destination
-      // tricks the engine into treating the context as audible so
-      // AudioWorkletNode keeps firing.
-      const keepAliveGain = audioContext.createGain();
-      capture.keepAliveGain = keepAliveGain;
-      keepAliveGain.gain.value = 0;
-      const keepAliveOscillator = audioContext.createOscillator();
-      keepAliveOscillator.connect(keepAliveGain);
-      keepAliveGain.connect(audioContext.destination);
-      keepAliveOscillator.start();
-      // Recorded only once started: cleanup calls stop(), which throws on an
-      // oscillator that never started.
-      capture.keepAliveOscillator = keepAliveOscillator;
-
-      logDebug(`${LOG_PREFIX} Loading pcm-processor worklet`);
+      this.startKeepAlive(audio);
+      // A reused context is suspended, or still has a release's suspend
+      // queued, so the resume is queued behind it whatever `state` says.
+      const resumed = this.queueWarmAudioTransition(audio, () => audioContext.resume()).then(() =>
+        logStep("audio_context_resume", { state: audioContext.state })
+      );
+      const cached = audio.workletReady !== null;
       await Promise.all([
-        audioContext.state === "suspended"
-          ? audioContext
-              .resume()
-              .then(() => logStep("audio_context_resume", { state: audioContext.state }))
-          : undefined,
-        audioContext.audioWorklet
-          .addModule("/pcm-processor.js")
-          .then(() => logStep("worklet_load")),
+        resumed,
+        this.loadWorklet(audio).then(() => logStep("worklet_load", { cached })),
       ]);
     })().then(
       () => ({ ok: true as const }),
@@ -1397,6 +1425,7 @@ class VoiceRecordingService {
     };
     try {
       const source = audioContext.createMediaStreamSource(stream);
+      capture.source = source;
       workletNode = new AudioWorkletNode(audioContext, "pcm-processor");
       capture.workletNode = workletNode;
       workletNode.port.onmessage = (event: MessageEvent<ArrayBuffer | { type: "flushed" }>) => {
@@ -1489,13 +1518,11 @@ class VoiceRecordingService {
     capture.stream = stream;
     this.sessionCapture = capture;
     this.stream = stream;
-    this.audioContext = audioContext;
-    this.keepAliveOscillator = capture.keepAliveOscillator;
-    this.keepAliveGain = capture.keepAliveGain;
     this.workletNode = workletNode;
     this.sessionId = sessionId;
     sessionGeneration = generation;
-    logInfo(`${LOG_PREFIX} AudioContext created`, {
+    logInfo(`${LOG_PREFIX} AudioContext attached`, {
+      sink: audio.sink,
       requestedSampleRate: 24000,
       actualSampleRate: audioContext.sampleRate,
       state: audioContext.state,
@@ -1589,13 +1616,7 @@ class VoiceRecordingService {
       // closes the opening-audio window once the tail is in.
       if (!this.stopPromise) {
         this.flushOpeningAudio(openingAudio);
-        await this.cleanupCaptureResources({
-          audioContext,
-          keepAliveGain: capture.keepAliveGain,
-          keepAliveOscillator: capture.keepAliveOscillator,
-          stream,
-          workletNode,
-        });
+        this.cleanupCaptureResources(capture);
       }
       return;
     }
@@ -1604,7 +1625,7 @@ class VoiceRecordingService {
       logError(`${LOG_PREFIX} Backend start failed`);
       this.flushOpeningAudio(openingAudio);
       this.clearTimers();
-      await this.cleanupAudioCapture();
+      this.cleanupAudioCapture();
       // A newer start may have taken over while the teardown awaited.
       if (this.generation !== generation || this.isStartRequestStale(startRequestId)) return;
       useVoiceRecordingStore
@@ -1742,7 +1763,7 @@ class VoiceRecordingService {
       }
 
       // Stop audio capture — no new audio after this point.
-      await this.cleanupAudioCapture();
+      this.cleanupAudioCapture();
       this.generation++;
 
       if (!skipRemoteStop) {
@@ -2412,6 +2433,8 @@ class VoiceRecordingService {
   }
 
   private async handleSuspend(): Promise<void> {
+    // The audio devices may not be the same ones after wake.
+    this.retireWarmAudio();
     if (!useVoiceRecordingStore.getState().activeTarget) return;
     await this.stop("Dictation stopped because the system is going to sleep.", {
       preserveLiveText: true,
@@ -2725,6 +2748,7 @@ class VoiceRecordingService {
       unsub();
     }
     this.unsubscribers = [];
+    this.retireWarmAudio();
     this.initialized = false;
   }
 
@@ -2745,17 +2769,22 @@ class VoiceRecordingService {
     }
   }
 
-  // Listeners live as long as the context/track this start owns; both are
-  // closed or stopped and dropped on teardown, and the final "closed"
-  // transition is itself worth logging. Diagnostics must never abort start().
-  private observeAudioContextState(audioContext: AudioContext, logStep: StartStepLogger): void {
+  // The context outlives each start, so its listener is removed when the
+  // capture releases it. Diagnostics must never abort start().
+  private observeAudioContextState(
+    audioContext: AudioContext,
+    logStep: StartStepLogger
+  ): (() => void) | null {
     try {
-      if (typeof audioContext.addEventListener !== "function") return;
-      audioContext.addEventListener("statechange", () => {
+      if (typeof audioContext.addEventListener !== "function") return null;
+      const listener = () => {
         logStep("audio_context_statechange", { state: audioContext.state });
-      });
+      };
+      audioContext.addEventListener("statechange", listener);
+      return () => audioContext.removeEventListener?.("statechange", listener);
     } catch (err) {
       logDebug(`${LOG_PREFIX} Could not observe AudioContext state`, voiceErrorLogFields(err));
+      return null;
     }
   }
 
@@ -2865,81 +2894,182 @@ class VoiceRecordingService {
     }
   }
 
-  private async cleanupAudioCapture(): Promise<void> {
-    await this.cleanupCaptureResources({
-      audioContext: this.audioContext,
-      keepAliveGain: this.keepAliveGain,
-      keepAliveOscillator: this.keepAliveOscillator,
-      stream: this.stream,
-      workletNode: this.workletNode,
-    });
+  private cleanupAudioCapture(): void {
+    if (this.sessionCapture) this.cleanupCaptureResources(this.sessionCapture);
   }
 
   private isStartRequestStale(startRequestId: number): boolean {
     return !this.initialized || startRequestId !== this.startRequestId;
   }
 
-  private async cleanupCaptureResources(resources: {
-    audioContext?: AudioContext | null;
-    keepAliveGain?: GainNode | null;
-    keepAliveOscillator?: OscillatorNode | null;
-    stream?: MediaStream | null;
-    workletNode?: AudioWorkletNode | null;
-  }): Promise<void> {
-    if (
-      resources.workletNode &&
-      this.levelRaf !== null &&
-      this.workletNode === resources.workletNode
-    ) {
-      cancelAnimationFrame(this.levelRaf);
-      this.levelRaf = null;
-    }
-
-    if (resources.workletNode && this.workletNode === resources.workletNode) {
+  // Idempotent: a capture can be released by a cancel and again by the start
+  // that built it.
+  private cleanupCaptureResources(capture: CaptureAttempt): void {
+    const workletNode = capture.workletNode;
+    if (workletNode && this.workletNode === workletNode) {
+      if (this.levelRaf !== null) {
+        cancelAnimationFrame(this.levelRaf);
+        this.levelRaf = null;
+      }
       this.clearMicSilenceTimer();
     }
 
-    if (resources.workletNode) {
-      resources.workletNode.port.onmessage = null;
-      resources.workletNode.disconnect();
-      if (this.workletNode === resources.workletNode) {
-        this.workletNode = null;
+    // Tracks stop first: the OS microphone indicator must go out the moment
+    // capture is released, whatever the graph teardown does after.
+    if (capture.stream) {
+      this.stopStreamTracks(capture.stream);
+      if (this.stream === capture.stream) this.stream = null;
+    }
+    if (this.sessionCapture === capture) this.sessionCapture = null;
+
+    try {
+      capture.source?.disconnect();
+    } catch {
+      // Already disconnected.
+    }
+    capture.source = null;
+    if (workletNode) {
+      workletNode.port.onmessage = null;
+      try {
+        // The context lives on, so the processor has to end itself.
+        workletNode.port.postMessage({ type: "dispose" });
+        workletNode.disconnect();
+      } catch {
+        // A processor that can't be reached is already gone.
       }
+      if (this.workletNode === workletNode) this.workletNode = null;
     }
 
-    if (resources.keepAliveOscillator) {
-      resources.keepAliveOscillator.stop();
-      resources.keepAliveOscillator.disconnect();
-      if (this.keepAliveOscillator === resources.keepAliveOscillator) {
-        this.keepAliveOscillator = null;
-      }
-    }
+    capture.stopObservingContext?.();
+    capture.stopObservingContext = null;
+    this.releaseWarmAudio(capture);
+  }
 
-    if (resources.keepAliveGain) {
-      resources.keepAliveGain.disconnect();
-      if (this.keepAliveGain === resources.keepAliveGain) {
-        this.keepAliveGain = null;
-      }
+  private createWarmAudio(): WarmAudio {
+    let context: AudioContext;
+    try {
+      context = new AudioContext({
+        sampleRate: 24000,
+        sinkId: { type: "none" },
+      } as CaptureContextOptions);
+    } catch (err) {
+      logWarn(`${LOG_PREFIX} Silent sink rejected, capturing on the default output`, {
+        ...voiceErrorLogFields(err),
+      });
+      context = new AudioContext({ sampleRate: 24000 });
     }
+    // A runtime without sink selection ignores the option and opens the default.
+    const sinkId = (context as AudioContext & { sinkId?: unknown }).sinkId;
+    return {
+      context,
+      sink: typeof sinkId === "object" && sinkId !== null ? "none" : "default",
+      keepAliveOscillator: null,
+      keepAliveGain: null,
+      workletReady: null,
+      users: new Set(),
+      transition: Promise.resolve(),
+      idleTimer: null,
+      retired: false,
+    };
+  }
 
-    // Tracks stop before the context closes: close() can be slow, and the OS
-    // microphone indicator must go out the moment capture is released.
-    if (resources.stream) {
-      this.stopStreamTracks(resources.stream);
-      if (this.stream === resources.stream) {
-        this.stream = null;
-      }
-      if (this.sessionCapture?.stream === resources.stream) {
-        this.sessionCapture = null;
-      }
+  private acquireWarmAudio(logStep: StartStepLogger): WarmAudio {
+    const warm = this.warmAudio;
+    if (warm && !warm.retired && warm.context.state !== "closed") {
+      this.clearWarmAudioExpiry(warm);
+      logStep("audio_context_reuse", { state: warm.context.state, sink: warm.sink });
+      return warm;
     }
+    if (warm) this.retireWarmAudio(warm);
+    logDebug(`${LOG_PREFIX} Creating AudioContext (24kHz)`);
+    const created = this.createWarmAudio();
+    this.warmAudio = created;
+    logStep("audio_context_create", {
+      state: created.context.state,
+      sampleRate: created.context.sampleRate,
+      sink: created.sink,
+    });
+    return created;
+  }
 
-    if (resources.audioContext) {
-      await resources.audioContext.close().catch(() => {});
-      if (this.audioContext === resources.audioContext) {
-        this.audioContext = null;
-      }
+  // Keep the AudioContext in "running" state while backgrounded. Chromium
+  // suspends capture-only contexts (no output to destination) when the window
+  // loses focus. Connecting a silent oscillator to the destination tricks the
+  // engine into treating the context as audible so AudioWorkletNode keeps
+  // firing. On the "none" sink it holds no output device open.
+  private startKeepAlive(audio: WarmAudio): void {
+    if (audio.keepAliveOscillator) return;
+    const keepAliveGain = audio.keepAliveGain ?? audio.context.createGain();
+    audio.keepAliveGain = keepAliveGain;
+    keepAliveGain.gain.value = 0;
+    const keepAliveOscillator = audio.context.createOscillator();
+    keepAliveOscillator.connect(keepAliveGain);
+    keepAliveGain.connect(audio.context.destination);
+    keepAliveOscillator.start();
+    audio.keepAliveOscillator = keepAliveOscillator;
+  }
+
+  // Loaded once per context. A failed load may leave the worklet scope half
+  // set up, so the context is retired and the next start builds a fresh one.
+  private loadWorklet(audio: WarmAudio): Promise<void> {
+    if (!audio.workletReady) {
+      logDebug(`${LOG_PREFIX} Loading pcm-processor worklet`);
+      audio.workletReady = audio.context.audioWorklet.addModule("/pcm-processor.js");
+      audio.workletReady.catch(() => this.retireWarmAudio(audio));
     }
+    return audio.workletReady;
+  }
+
+  private queueWarmAudioTransition(audio: WarmAudio, step: () => Promise<void>): Promise<void> {
+    const next = audio.transition.then(step);
+    audio.transition = next.catch(() => {});
+    return next;
+  }
+
+  private releaseWarmAudio(capture: CaptureAttempt): void {
+    const audio = capture.audio;
+    if (!audio.users.delete(capture) || audio.users.size > 0) return;
+    if (audio.retired || this.warmAudio !== audio) {
+      this.closeWarmAudio(audio);
+      return;
+    }
+    // A suspended context renders nothing and, on a real sink, gives the
+    // output device back. An interrupted one is suspended too, or it resumes
+    // by itself when the interruption ends. Rechecked when it runs: a start
+    // may have taken the context in the meantime.
+    void this.queueWarmAudioTransition(audio, () =>
+      audio.users.size === 0 && audio.context.state !== "closed"
+        ? audio.context.suspend()
+        : Promise.resolve()
+    ).catch(() => {});
+    this.clearWarmAudioExpiry(audio);
+    audio.idleTimer = setTimeout(() => {
+      audio.idleTimer = null;
+      if (audio.users.size === 0) this.retireWarmAudio(audio);
+    }, WARM_AUDIO_IDLE_MS);
+  }
+
+  private clearWarmAudioExpiry(audio: WarmAudio): void {
+    if (audio.idleTimer === null) return;
+    clearTimeout(audio.idleTimer);
+    audio.idleTimer = null;
+  }
+
+  /** Closes the context now if nothing is capturing on it, else at its last release. */
+  private retireWarmAudio(audio: WarmAudio | null = this.warmAudio): void {
+    if (!audio) return;
+    audio.retired = true;
+    if (this.warmAudio === audio) this.warmAudio = null;
+    this.clearWarmAudioExpiry(audio);
+    if (audio.users.size === 0) this.closeWarmAudio(audio);
+  }
+
+  private closeWarmAudio(audio: WarmAudio): void {
+    audio.retired = true;
+    this.clearWarmAudioExpiry(audio);
+    if (this.warmAudio === audio) this.warmAudio = null;
+    if (audio.context.state === "closed") return;
+    void audio.context.close().catch(() => {});
   }
 }
 

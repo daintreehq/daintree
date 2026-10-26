@@ -6,7 +6,9 @@ import { describe, expect, it } from "vitest";
 interface WorkletPort {
   onmessage: ((event: { data: unknown }) => void) | null;
   posted: unknown[];
+  closed: boolean;
   postMessage: (message: unknown) => void;
+  close: () => void;
 }
 
 interface Processor {
@@ -24,8 +26,12 @@ function loadProcessor(sampleRate = 24000): Processor {
     port: WorkletPort = {
       onmessage: null,
       posted: [],
+      closed: false,
       postMessage(message: unknown) {
         this.posted.push(message);
+      },
+      close() {
+        this.closed = true;
       },
     };
   }
@@ -89,6 +95,39 @@ describe("pcm-processor worklet", () => {
     send(processor, { type: "flush" });
 
     expect(processor.port.posted.slice(afterFlush)).toEqual([{ type: "flushed" }]);
+  });
+
+  // The AudioContext is reused across dictations, so a finished processor must
+  // end itself rather than stay alive on the shared graph.
+  it("ends itself once flushed, with or without input", () => {
+    const processor = loadProcessor();
+    expect(processor.process([[new Float32Array(128)]])).toBe(true);
+    send(processor, { type: "flush" });
+    expect(processor.process([[new Float32Array(128)]])).toBe(false);
+    expect(processor.process([])).toBe(false);
+  });
+
+  it("stays alive while paused, and ends when flushed paused", () => {
+    const processor = loadProcessor();
+    send(processor, { type: "setPaused", value: true });
+    expect(processor.process([[new Float32Array(128)]])).toBe(true);
+    expect(processor.process([])).toBe(true);
+
+    send(processor, { type: "flush" });
+    send(processor, { type: "setPaused", value: false });
+    expect(processor.process([[new Float32Array(128)]])).toBe(false);
+  });
+
+  it("ends itself and closes its port when disposed, even paused with no input", () => {
+    const processor = loadProcessor();
+    send(processor, { type: "setPaused", value: true });
+    expect(processor.process([])).toBe(true);
+    send(processor, { type: "dispose" });
+
+    expect(processor.port.closed).toBe(true);
+    expect(processor.process([])).toBe(false);
+    feed(processor, 4800);
+    expect(processor.port.posted).toEqual([]);
   });
 
   it("still flushes audio captured before a pause", () => {

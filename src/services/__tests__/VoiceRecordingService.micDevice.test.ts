@@ -219,6 +219,7 @@ function setupGlobals(options: {
       baseLatency: 0,
       addEventListener: vi.fn(),
       resume: vi.fn().mockResolvedValue(undefined),
+      suspend: vi.fn().mockResolvedValue(undefined),
       close: vi.fn().mockResolvedValue(undefined),
       createGain: vi.fn(() => ({ gain: { value: 1 }, connect: vi.fn(), disconnect: vi.fn() })),
       createOscillator: vi.fn(() => ({

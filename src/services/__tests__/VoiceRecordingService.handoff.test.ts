@@ -220,6 +220,7 @@ function stubEnvironment(recordingMode: "toggle" | "push-to-talk") {
       destination: {},
       sampleRate: 24000,
       resume: vi.fn().mockResolvedValue(undefined),
+      suspend: vi.fn().mockResolvedValue(undefined),
       close: vi.fn().mockResolvedValue(undefined),
       createGain: vi.fn(() => ({ gain: { value: 1 }, connect: vi.fn(), disconnect: vi.fn() })),
       createOscillator: vi.fn(() => ({
@@ -228,7 +229,7 @@ function stubEnvironment(recordingMode: "toggle" | "push-to-talk") {
         start: vi.fn(),
         stop: vi.fn(),
       })),
-      createMediaStreamSource: vi.fn(() => ({ connect: vi.fn() })),
+      createMediaStreamSource: vi.fn(() => ({ connect: vi.fn(), disconnect: vi.fn() })),
       audioWorklet: { addModule: vi.fn().mockResolvedValue(undefined) },
     };
     contexts.push(context);
@@ -805,27 +806,31 @@ describe("VoiceRecordingService — starting while a session finishes (#14604)",
   });
 
   it("shows finishing from the moment of the stop, before the mic has torn down", async () => {
-    const { voiceRecordingService, voiceInput, store, drains, callbacks, contexts } = await setup();
+    const { voiceRecordingService, voiceInput, store, drains, callbacks, workletNodes, tracks } =
+      await setup();
 
     await voiceRecordingService.toggle(PANEL_A);
     callbacks.status!("recording");
-    let closed!: () => void;
-    contexts[0]!.close.mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          closed = resolve;
-        })
-    );
+    const node = workletNodes[0]!;
+    let flushed!: () => void;
+    const flushRequested = vi.fn();
+    node.port.postMessage = (message) => {
+      if (message.type !== "flush") return;
+      flushRequested();
+      flushed = () => node.port.onmessage?.({ data: { type: "flushed" } });
+    };
 
     const stopping = voiceRecordingService.toggle(PANEL_A);
-    await vi.waitFor(() => expect(contexts[0]!.close).toHaveBeenCalled());
+    await vi.waitFor(() => expect(flushRequested).toHaveBeenCalled());
     expect(store().status).toBe("finishing");
     callbacks.status!("recording");
     expect(store().status).toBe("finishing");
+    expect(tracks[0]!.stop).not.toHaveBeenCalled();
     expect(voiceInput.stop).not.toHaveBeenCalled();
 
-    closed();
+    flushed();
     await vi.waitFor(() => expect(drains).toHaveLength(1));
+    expect(tracks[0]!.stop).toHaveBeenCalled();
     drains[0]!.resolve();
     await stopping;
     expect(store().status).toBe("idle");
