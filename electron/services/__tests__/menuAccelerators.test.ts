@@ -235,6 +235,16 @@ describe("isDictationKey", () => {
     expect(isDictationKey(input({ type: "keyUp", key: "d", meta: true }))).toBe(false);
   });
 
+  it("never takes a chord's first stroke, and a chord binding never matches one keystroke", () => {
+    setProcessPlatform("darwin");
+    // Cmd+K Cmd+D is terminal.redraw: its Cmd+K is not the dictation key.
+    expect(isDictationKey(input({ key: "k", code: "KeyK", meta: true }))).toBe(false);
+
+    storeMock.get.mockReturnValue({ "voiceInput.toggle": ["Cmd+K Cmd+D"] });
+    expect(isDictationKey(input({ key: "k", code: "KeyK", meta: true }))).toBe(false);
+    expect(isDictationKey(input({ key: "d", code: "KeyD", meta: true }))).toBe(false);
+  });
+
   it("follows a rebind, and an unbound key takes nothing", () => {
     setProcessPlatform("darwin");
     storeMock.get.mockReturnValue({ "voiceInput.toggle": ["Cmd+Shift+D"] });
