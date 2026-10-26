@@ -116,7 +116,9 @@ describe("presentHostAttention", () => {
 
   it("offers to go to the agent's terminal on that host, from the toast and the inbox", () => {
     vi.spyOn(document, "hasFocus").mockReturnValue(true);
-    const dispatch = vi.spyOn(actionService, "dispatch").mockResolvedValue({ ok: true } as never);
+    const dispatch = vi
+      .spyOn(actionService, "dispatch")
+      .mockResolvedValue({ ok: true, result: undefined });
     presentHostAttention(attention);
     const goTo = { hostId: "studio-01", projectId: "p1", terminalId: "t1" };
     const toast = useNotificationStore.getState().notifications[0];
@@ -143,7 +145,19 @@ describe("presentHostAttention", () => {
     const toast = useNotificationStore.getState().notifications[0];
     expect(toast?.title).toBe("studio-01: agent waiting");
     expect(toastActions(toast)).toEqual([]);
-    expect(useNotificationHistoryStore.getState().entries[0]?.actions ?? []).toEqual([]);
+    const entries = useNotificationHistoryStore.getState().entries;
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.message).toBe("Claude in helios is waiting for input");
+    expect(entries[0]?.actions ?? []).toEqual([]);
+  });
+
+  it("drops the action from a toast still showing when a repeat can't name the project", () => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    presentHostAttention(attention);
+    presentHostAttention({ ...attention, projectId: null });
+    const notifications = useNotificationStore.getState().notifications;
+    expect(notifications).toHaveLength(1);
+    expect(toastActions(notifications[0])).toEqual([]);
   });
 
   it("goes to the inbox only while the window is in the background", () => {

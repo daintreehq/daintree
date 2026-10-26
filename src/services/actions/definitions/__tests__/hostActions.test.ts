@@ -3,11 +3,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ActionCallbacks, ActionRegistry } from "../../actionTypes";
 import type { ActionContext } from "@shared/types/actions";
 import type { HostListEntry } from "@shared/types/remoteHosts";
+import type { NotifyPayload } from "@/lib/notify";
 
 const { supported, remoteHosts, notify } = vi.hoisted(() => ({
   supported: { value: true },
   remoteHosts: { value: [] as HostListEntry[] },
-  notify: vi.fn((_payload: unknown) => "toast"),
+  notify: vi.fn((_payload: NotifyPayload) => "toast"),
 }));
 
 vi.mock("@/lib/notify", async (importOriginal) => ({
@@ -250,8 +251,9 @@ describe("host.switch", () => {
     const args = { hostId: "studio-01", projectId: "p1", terminalId: "t1" };
     await expect(run(registry, "host.switch", args)).rejects.toThrow();
 
-    const toast = notify.mock.calls[0]![0] as { actions: Array<{ onClick: () => void }> };
-    toast.actions[0]!.onClick();
+    const retry = notify.mock.calls[0]?.[0].actions?.[0];
+    expect(retry?.label).toBe("Retry");
+    void retry?.onClick();
     await vi.waitFor(() => expect(switchWindowHost).toHaveBeenCalledTimes(2));
     expect(switchWindowHost).toHaveBeenLastCalledWith({
       hostId: "studio-01",

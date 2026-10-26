@@ -32,16 +32,20 @@ export function presentHostAttention(event: HostAttentionEvent): void {
     context: { eventKind: "waiting", hostName: event.hostName },
     sourceHostPolicy: { quiet: event.quiet },
     ...(event.pagedNatively ? { pagedNatively: true } : {}),
-    ...(goTo && {
-      // Timed like a local agent's waiting toast; the inbox entry keeps the action.
-      duration: HOST_ATTENTION_TOAST_MS,
-      action: {
-        label: "Go to terminal",
-        actionId: "host.switch",
-        actionArgs: goTo,
-        onClick: () => void actionService.dispatch("host.switch", goTo, { source: "user" }),
-      },
-    }),
+    ...(goTo
+      ? {
+          // Timed like a local agent's waiting toast; the inbox entry keeps the action.
+          duration: HOST_ATTENTION_TOAST_MS,
+          action: {
+            label: "Go to terminal",
+            actionId: "host.switch",
+            actionArgs: goTo,
+            onClick: () => void actionService.dispatch("host.switch", goTo, { source: "user" }),
+          },
+        }
+      : // A repeat for the same terminal merges into a toast still showing, so
+        // one with nowhere to go clears the action an earlier one gave it.
+        { action: undefined }),
   });
 }
 
