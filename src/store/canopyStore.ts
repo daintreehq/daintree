@@ -3,6 +3,7 @@ import { getViewWorkspaceId } from "./viewWorkspaceId";
 import { LOCAL_HOST_ID, type HostId } from "@shared/types/remoteHosts";
 import { AGENT_DIRECTORY_ENTRIES_MAX } from "@shared/types/agentDirectory";
 import type { CanopyOrder } from "@/components/Canopy/canopyOrder";
+import { canopyResumeFresh, type CanopyResume } from "@/components/Canopy/canopyResume";
 import {
   isCanopyRoleFilter,
   type AssistantHandbacksSeen,
@@ -29,6 +30,12 @@ interface CanopyState {
   snapshot: CanopySnapshot | null;
   open: () => void;
   close: () => void;
+  /**
+   * Closes after "Go to terminal", remembering where the panel stood: an
+   * opening within `CANOPY_RESUME_MS` lands there, any other close forgets it.
+   */
+  closeForTerminal: (resume: CanopyResume) => void;
+  resume: CanopyResume | null;
   toggle: () => void;
   applySnapshot: (snapshot: CanopySnapshot) => void;
   /**
@@ -393,6 +400,17 @@ function saveScope(scope: CanopyScope): void {
   }
 }
 
+function opened(state: CanopyState): Partial<CanopyState> {
+  if (canopyResumeFresh(state.resume, Date.now())) {
+    return { isOpen: true, hostId: state.resume!.hostId };
+  }
+  return {
+    isOpen: true,
+    resume: null,
+    hostId: state.hostId === ALL_HOSTS_ID ? ALL_HOSTS_ID : null,
+  };
+}
+
 /**
  * Open state for the canopy panel, and the latest cards main pushed.
  *
@@ -460,21 +478,19 @@ export const useCanopyStore = create<CanopyState>((set) => ({
             ),
           }
     ),
-  // Every opening starts on the window's own host, unless the user chose All hosts.
-  open: () =>
-    set((state) =>
-      state.mode === "hidden" || state.isOpen
-        ? state
-        : { isOpen: true, hostId: state.hostId === ALL_HOSTS_ID ? ALL_HOSTS_ID : null }
-    ),
-  close: () => set({ isOpen: false, workOf: null }),
+  resume: null,
+  // Every opening starts on the window's own host, unless the user chose All
+  // hosts or is coming back from "Go to terminal".
+  open: () => set((state) => (state.mode === "hidden" || state.isOpen ? state : opened(state))),
+  close: () => set({ isOpen: false, workOf: null, resume: null }),
+  closeForTerminal: (resume) => set({ isOpen: false, workOf: null, resume }),
   toggle: () =>
     set((state) =>
       state.isOpen
-        ? { isOpen: false, workOf: null }
+        ? { isOpen: false, workOf: null, resume: null }
         : state.mode === "hidden"
           ? state
-          : { isOpen: true, hostId: state.hostId === ALL_HOSTS_ID ? ALL_HOSTS_ID : null }
+          : opened(state)
     ),
   outdatedHost: false,
   applySnapshot: (received) =>
@@ -491,7 +507,14 @@ export const useCanopyStore = create<CanopyState>((set) => ({
       const mode = snapshot.mode;
       // Hidden from another view, or from Settings: a panel this view held open goes too.
       if (mode === "hidden") {
-        return { snapshot, mode, outdatedHost: outdated, isOpen: false, workOf: null };
+        return {
+          snapshot,
+          mode,
+          outdatedHost: outdated,
+          isOpen: false,
+          workOf: null,
+          resume: null,
+        };
       }
       return { snapshot, mode, outdatedHost: outdated };
     }),

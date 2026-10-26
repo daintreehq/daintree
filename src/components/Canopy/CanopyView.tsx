@@ -682,6 +682,7 @@ function CanopyInbox({
     showsHost,
     isSelected,
     captureFocusAfterClose,
+    closeForTerminal,
     focusAfterClose,
   } = useCanopyInboxFocus({
     isOpen,
@@ -697,6 +698,7 @@ function CanopyInbox({
     shownAssistants,
     inWork,
     searching,
+    query,
     appliedQuery,
     setQuery,
     roleFilter,
@@ -733,6 +735,7 @@ function CanopyInbox({
     showsHost,
     isSelected,
     captureFocusAfterClose,
+    closeForTerminal,
     reserveUndo,
     undoReads,
     menuOpenChanged,

@@ -61,6 +61,7 @@ export function useCanopyInboxActions({
   showsHost,
   isSelected,
   captureFocusAfterClose,
+  closeForTerminal,
   reserveUndo,
   undoReads,
   menuOpenChanged,
@@ -86,6 +87,7 @@ export function useCanopyInboxActions({
   showsHost: (hostId: HostId | null) => boolean;
   isSelected: (runId: string) => boolean;
   captureFocusAfterClose: () => void;
+  closeForTerminal: (runId: string) => void;
   reserveUndo: () => UndoReservation;
   undoReads: (before: CanopyReadMark[], after: CanopyReadMark[]) => void;
   menuOpenChanged: (open: boolean) => void;
@@ -144,7 +146,7 @@ export function useCanopyInboxActions({
         // flag is taken here rather than left for the next palette to close.
         consumePaletteFocusRestoreSuppression();
         captureFocusAfterClose();
-        close();
+        closeForTerminal(item.runId);
       });
     };
     // The incarnation on screen, so main refuses a terminal respawned since.
@@ -317,6 +319,7 @@ export function useCanopyInboxActions({
     showsHost,
     isSelected,
     captureFocusAfterClose,
+    closeForTerminal,
     searchRef,
     reserveUndo,
     undoReads,

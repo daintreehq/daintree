@@ -7,6 +7,8 @@ import { canopyCardDomId, type CanopyCardHandle, type CanopyPaneFocus } from "./
 import type { CanopyAssistantItem, CanopyRoleFilter } from "./canopyAssistants";
 import { canopyAssistantDomId, openAssistantItem } from "./openAssistantItem";
 import { placeOf } from "./canopyInboxPlace";
+import { canopyResumeTarget, type CanopyResume } from "./canopyResume";
+import { useCanopyStore } from "@/store/canopyStore";
 
 /**
  * Where the keyboard and the pane are: the run or assistant selected, the
@@ -29,6 +31,7 @@ export function useCanopyInboxFocus({
   shownAssistants,
   inWork,
   searching,
+  query,
   appliedQuery,
   setQuery,
   roleFilter,
@@ -48,6 +51,7 @@ export function useCanopyInboxFocus({
   shownAssistants: CanopyAssistantItem[];
   inWork: (item: CanopyItem) => boolean;
   searching: boolean;
+  query: string;
   appliedQuery: string;
   setQuery: (query: string) => void;
   roleFilter: CanopyRoleFilter;
@@ -169,6 +173,22 @@ export function useCanopyInboxFocus({
   // two frames, so it lands after the palette's own first-tabbable focus rather
   // than racing it, and cancelled on cleanup so a StrictMode replay schedules it afresh.
   const landedRef = useRef(false);
+  // Where "Go to terminal" left the panel, held until the opening that returns
+  // there has landed on it.
+  const restoreRef = useRef<CanopyResume | null>(null);
+  const searchedRef = useRef(appliedQuery);
+  useEffect(() => {
+    if (!isOpen) {
+      restoreRef.current = null;
+      return;
+    }
+    const { resume } = useCanopyStore.getState();
+    if (resume === null) return;
+    useCanopyStore.setState({ resume: null });
+    restoreRef.current = resume;
+    searchedRef.current = resume.query;
+    setQuery(resume.query);
+  }, [isOpen, setQuery]);
   // The user pressed something in the panel since it opened, header included:
   // where they put the keyboard stands, and the landing gives way to it.
   const touchedRef = useRef(false);
@@ -197,15 +217,29 @@ export function useCanopyInboxFocus({
     }
     focusAfterCloseRef.current = null;
     if (landedRef.current || items.length === 0) return;
-    const target = visible[0]?.runId ?? null;
+    // The search it was left with is in force before the run is picked from it.
+    const restore = restoreRef.current;
+    if (restore !== null && appliedQuery !== restore.query) return;
+    const target = restore
+      ? canopyResumeTarget(
+          restore,
+          visible.map((item) => item.runId)
+        )
+      : (visible[0]?.runId ?? null);
     const land = () => {
       landedRef.current = true;
+      restoreRef.current = null;
       // The user got there first — clicked a row, a control or into a
       // terminal while the frames were held back: their place stands.
       if (touchedRef.current) return;
       const search = searchRef.current;
       if (search) {
-        if (target !== null) setFocusedId(target);
+        if (target !== null) {
+          setFocusedId(target);
+          if (restore) {
+            document.getElementById(canopyCardDomId(target))?.scrollIntoView({ block: "nearest" });
+          }
+        }
         search.focus();
       } else if (target !== null) {
         focusCardNow(target);
@@ -223,7 +257,7 @@ export function useCanopyInboxFocus({
       cancelAnimationFrame(outer);
       cancelAnimationFrame(inner);
     };
-  }, [isOpen, items, visible, focusCardNow, setQuery]);
+  }, [isOpen, items, visible, focusCardNow, setQuery, appliedQuery]);
 
   // The focused card left (trashed, answered into another section, exited):
   // put the keyboard on the card that took its place instead of dropping it on
@@ -256,7 +290,6 @@ export function useCanopyInboxFocus({
   // A new search selects its top match, as opening selects the top run; a
   // match leaving under the same search gives its place to the next.
   // A search with no match yet still owes its top match, should a terminal find one.
-  const searchedRef = useRef(appliedQuery);
   const topOwedRef = useRef(false);
   useEffect(() => {
     if (!isOpen) {
@@ -300,13 +333,18 @@ export function useCanopyInboxFocus({
   }, []);
 
   // Another host's list starts afresh: no run open from the last one.
+  // An opening that returns to another host starts there, not from a switch.
   const shownHostRef = useRef(hostId);
+  const hostOpenRef = useRef(isOpen);
   useEffect(() => {
+    const wasOpen = hostOpenRef.current;
+    hostOpenRef.current = isOpen;
     if (shownHostRef.current === hostId) return;
     shownHostRef.current = hostId;
+    if (!wasOpen) return;
     setFocusedId(null);
     setPaneFocus(null);
-  }, [hostId]);
+  }, [hostId, isOpen]);
 
   /**
    * Where the cursor goes once a run is dealt with — archived, answered,
@@ -389,6 +427,22 @@ export function useCanopyInboxFocus({
     focusAfterCloseRef.current =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
   }, []);
+  // Closing for the terminal remembers the panel's place for the next opening.
+  const queryRef = useRef(query);
+  useEffect(() => {
+    queryRef.current = query;
+  });
+  const closeForTerminal = useCallback(
+    (runId: string) =>
+      useCanopyStore.getState().closeForTerminal({
+        at: Date.now(),
+        hostId: listHostRef.current,
+        query: queryRef.current,
+        runId,
+        order: visibleRef.current.map((item) => item.runId),
+      }),
+    []
+  );
   const focusAfterClose = useCallback(() => focusAfterCloseRef.current, []);
   // The assistant in the pane has had its handback in front of the person.
   // An assistant the person chose has had its handback in front of them. One
@@ -434,6 +488,7 @@ export function useCanopyInboxFocus({
     showsHost,
     isSelected,
     captureFocusAfterClose,
+    closeForTerminal,
     focusAfterClose,
   };
 }
