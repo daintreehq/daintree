@@ -52,6 +52,7 @@ interface PluginBridge {
 
 interface AppBridge {
   isViewCached: () => boolean;
+  onPanelGridConfigChanged: (cb: (payload: unknown) => void) => () => void;
 }
 
 interface ProjectPresentationBridge {
@@ -68,6 +69,7 @@ let plugin: PluginBridge;
 let projectPresentation: ProjectPresentationBridge;
 let app: AppBridge;
 let terminalConfig: TerminalConfigBridge;
+let agentSettings: { onChanged: (cb: (settings: unknown) => void) => () => void };
 
 beforeAll(async () => {
   const fakeWindow = {
@@ -103,6 +105,7 @@ beforeAll(async () => {
         plugin?: PluginBridge;
         projectPresentation?: ProjectPresentationBridge;
         terminalConfig?: TerminalConfigBridge;
+        agentSettings?: typeof agentSettings;
         app?: AppBridge;
       }
     | undefined;
@@ -112,6 +115,7 @@ beforeAll(async () => {
   projectPresentation = api!.projectPresentation!;
   app = api!.app!;
   terminalConfig = api!.terminalConfig!;
+  agentSettings = api!.agentSettings!;
 });
 
 afterAll(() => {
@@ -140,6 +144,23 @@ describe("preload event subscriptions", () => {
     ipcRenderer.emit(channels[0], {}, { fontSize: 18 });
     expect(received).toHaveLength(2);
     for (const channel of channels) expect(ipcRenderer.listenerCount(channel)).toBe(0);
+  });
+
+  it("hands on each saved agent settings and grid change until disposed (#14700)", () => {
+    const pushes: Array<[string, (cb: (payload: unknown) => void) => () => void]> = [
+      ["agent-settings:changed", agentSettings.onChanged],
+      ["app:panel-grid-config-changed", app.onPanelGridConfigChanged],
+    ];
+    for (const [channel, subscribe] of pushes) {
+      const received: unknown[] = [];
+      const dispose = subscribe((payload) => received.push(payload));
+      ipcRenderer.emit(channel, {}, { saved: 1 });
+      dispose();
+      dispose();
+      ipcRenderer.emit(channel, {}, { saved: 2 });
+      expect(received).toEqual([{ saved: 1 }]);
+      expect(ipcRenderer.listenerCount(channel)).toBe(0);
+    }
   });
 
   it("delivers each terminal:activity push exactly once after repeated subscribe/unsubscribe cycles", () => {

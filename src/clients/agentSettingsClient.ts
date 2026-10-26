@@ -74,4 +74,15 @@ export const agentSettingsClient = {
     invalidate();
     return window.electron.agentSettings.stampVersion(version).finally(invalidate);
   },
+
+  /**
+   * Every saved change on the host (#14700). The cache is dropped before the
+   * callback runs, so a launch that reads through this client sees the change.
+   */
+  onChanged: (callback: (settings: AgentSettings) => void): (() => void) => {
+    return window.electron.agentSettings.onChanged((settings) => {
+      invalidate();
+      callback(settings);
+    });
+  },
 } as const;

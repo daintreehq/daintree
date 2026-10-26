@@ -2138,6 +2138,12 @@ export interface IpcEventMap {
   // Host-owned agent defaults changed (#13345)
   "agent-defaults:changed": AgentDefaultsSnapshot;
 
+  // A saved agent settings change on the host, the whole slice (#14700)
+  "agent-settings:changed": import("../agentSettings.js").AgentSettings;
+
+  // This machine's saved grid layout changed (#14700)
+  "app:panel-grid-config-changed": import("../config.js").PanelGridConfig;
+
   // A saved terminal-config change, one owner's fields each (#14699)
   "terminal-config:device-changed": Partial<import("./config.js").TerminalConfig>;
   "terminal-config:host-changed": Partial<import("./config.js").TerminalConfig>;

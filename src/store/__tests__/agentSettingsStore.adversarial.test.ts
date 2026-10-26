@@ -38,7 +38,7 @@ import {
 } from "../agentSettingsStore";
 import { useCliAvailabilityStore } from "../cliAvailabilityStore";
 import { BUILT_IN_AGENT_IDS } from "../../../shared/config/agentIds";
-import { DEFAULT_AGENT_SETTINGS, type CliAvailability } from "@shared/types";
+import { DEFAULT_AGENT_SETTINGS, type AgentSettings, type CliAvailability } from "@shared/types";
 
 function setAvailability(
   overrides: Partial<Record<string, "ready" | "installed" | "missing">>,
@@ -847,5 +847,182 @@ describe("agentSettingsStore adversarial", () => {
     const state = useAgentSettingsStore.getState();
     expect(state.settings?.resumeOnRestart).toBe("never");
     expect(state.error).toBeTruthy();
+  });
+});
+
+describe("applySaved (#14700)", () => {
+  const savedElsewhere: AgentSettings = {
+    settingsVersion: 3,
+    agents: { claude: { pinned: true, customFlags: "--from-another-view" } },
+  };
+
+  it("takes a saved change over a read still travelling", async () => {
+    let resolveRead: (value: unknown) => void = () => {};
+    clientMock.get.mockImplementationOnce(() => new Promise((resolve) => (resolveRead = resolve)));
+    const read = useAgentSettingsStore.getState().refresh();
+
+    useAgentSettingsStore.getState().applySaved(savedElsewhere);
+    resolveRead({ settingsVersion: 3, agents: { claude: { customFlags: "--before" } } });
+    await read;
+
+    const state = useAgentSettingsStore.getState();
+    expect(state.settings?.agents.claude?.customFlags).toBe("--from-another-view");
+    expect(state.isInitialized).toBe(true);
+  });
+
+  it("migrates a legacy slice in memory without writing anything back", async () => {
+    useAgentSettingsStore.getState().applySaved({
+      agents: { claude: { pinned: true }, codex: { pinned: false } },
+    });
+    await Promise.resolve();
+
+    const { migrated, agentsToClear } = migrateAgentSettings({
+      agents: { claude: { pinned: true }, codex: { pinned: false } },
+    });
+    expect(agentsToClear.length).toBeGreaterThan(0);
+    expect(useAgentSettingsStore.getState().settings?.settingsVersion).toBe(
+      migrated.settingsVersion
+    );
+    expect(clientMock.set).not.toHaveBeenCalled();
+    expect(clientMock.stampVersion).not.toHaveBeenCalled();
+  });
+
+  it("keeps newer typing over an older keystroke's saved change", async () => {
+    useAgentSettingsStore.getState().applySaved({ settingsVersion: 3, agents: {} });
+    const answers: Array<(value: unknown) => void> = [];
+    clientMock.set.mockImplementation(() => new Promise((resolve) => answers.push(resolve)));
+    const savedWith = (customFlags: string): AgentSettings => ({
+      settingsVersion: 3,
+      agents: { claude: { customFlags } },
+    });
+
+    const first = useAgentSettingsStore.getState().updateAgent("claude", { customFlags: "a" });
+    const second = useAgentSettingsStore.getState().updateAgent("claude", { customFlags: "ab" });
+    useAgentSettingsStore.getState().applySaved(savedWith("a"));
+    expect(useAgentSettingsStore.getState().settings?.agents.claude?.customFlags).toBe("ab");
+
+    answers[0]!(savedWith("a"));
+    await first;
+    useAgentSettingsStore.getState().applySaved(savedWith("ab"));
+    answers[1]!(savedWith("ab"));
+    await second;
+    expect(useAgentSettingsStore.getState().settings?.agents.claude?.customFlags).toBe("ab");
+  });
+
+  it("still writes back a reset's migration when its own saved change arrives first", async () => {
+    const legacy: AgentSettings = {
+      agents: { claude: { pinned: true }, codex: { pinned: false } },
+    };
+    clientMock.reset.mockResolvedValueOnce(legacy);
+    clientMock.set.mockResolvedValue({});
+    clientMock.stampVersion.mockResolvedValue({});
+    const reset = useAgentSettingsStore.getState().reset();
+    useAgentSettingsStore.getState().applySaved(legacy);
+    await reset;
+    await vi.waitFor(() => expect(clientMock.stampVersion).toHaveBeenCalled());
+  });
+
+  it("keeps a newer change heard before a write's slower answer", async () => {
+    useAgentSettingsStore.getState().applySaved({ settingsVersion: 3, agents: {} });
+    let answer: (value: unknown) => void = () => {};
+    clientMock.set.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+    const save = useAgentSettingsStore.getState().updateAgent("claude", { customFlags: "S1" });
+
+    const savedWith = (customFlags: string): AgentSettings => ({
+      settingsVersion: 3,
+      agents: { claude: { customFlags } },
+    });
+    useAgentSettingsStore.getState().applySaved(savedWith("S1"));
+    useAgentSettingsStore.getState().applySaved(savedWith("S2"));
+    answer(savedWith("S1"));
+    await save;
+
+    expect(useAgentSettingsStore.getState().settings?.agents.claude?.customFlags).toBe("S2");
+  });
+
+  it("shows a newer change once its own write settles", async () => {
+    useAgentSettingsStore
+      .getState()
+      .applySaved({ settingsVersion: 3, agents: {}, globalSkipPermissions: false });
+    let answer: () => void = () => {};
+    clientMock.setGlobal.mockImplementationOnce(() => new Promise<void>((r) => (answer = r)));
+    const save = useAgentSettingsStore.getState().setGlobalSkipPermissions(true);
+
+    useAgentSettingsStore
+      .getState()
+      .applySaved({ settingsVersion: 3, agents: {}, globalSkipPermissions: true });
+    useAgentSettingsStore
+      .getState()
+      .applySaved({ settingsVersion: 3, agents: {}, globalSkipPermissions: false });
+    expect(useAgentSettingsStore.getState().settings?.globalSkipPermissions).toBe(true);
+    answer();
+    await save;
+
+    expect(useAgentSettingsStore.getState().settings?.globalSkipPermissions).toBe(false);
+  });
+
+  it("keeps another view's preset for a different worktree while this one's is saving", async () => {
+    const withPresets = (worktreePresets: Record<string, string>): AgentSettings => ({
+      settingsVersion: 3,
+      agents: { claude: { worktreePresets } },
+    });
+    useAgentSettingsStore.getState().applySaved(withPresets({ b: "old" }));
+    clientMock.set.mockImplementationOnce(() => new Promise(() => {}));
+    void useAgentSettingsStore.getState().updateWorktreePreset("claude", "a", "mine");
+
+    useAgentSettingsStore.getState().applySaved(withPresets({ b: "theirs" }));
+
+    expect(useAgentSettingsStore.getState().settings?.agents.claude?.worktreePresets).toEqual({
+      a: "mine",
+      b: "theirs",
+    });
+  });
+
+  it("keeps a write made before boot finished once its answer lands", async () => {
+    let answer: (value: unknown) => void = () => {};
+    clientMock.set.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+    useAgentSettingsStore.setState({ settings: { settingsVersion: 3, agents: {} } });
+    const save = useAgentSettingsStore.getState().updateAgent("claude", { customFlags: "new" });
+    clientMock.get.mockResolvedValueOnce({ settingsVersion: 3, agents: {} });
+    await useAgentSettingsStore.getState().initialize();
+
+    answer({ settingsVersion: 3, agents: { claude: { customFlags: "new" } } });
+    await save;
+
+    expect(useAgentSettingsStore.getState().settings?.agents.claude?.customFlags).toBe("new");
+  });
+
+  it("takes only the newest of this view's root writes when answers come back reversed", async () => {
+    useAgentSettingsStore.getState().applySaved({ settingsVersion: 3, agents: {} });
+    const answers: Array<() => void> = [];
+    clientMock.setGlobal.mockImplementation(() => new Promise<void>((r) => answers.push(r)));
+    const first = useAgentSettingsStore.getState().setGlobalSkipPermissions(true);
+    const second = useAgentSettingsStore.getState().setGlobalSkipPermissions(false);
+
+    answers[1]!();
+    await second;
+    answers[0]!();
+    await first;
+
+    expect(useAgentSettingsStore.getState().settings?.globalSkipPermissions).toBe(false);
+  });
+
+  it("reports a failed save that a saved change overtook, and shows what's saved", async () => {
+    let rejectSave: (error: Error) => void = () => {};
+    clientMock.set.mockImplementationOnce(() => new Promise((_, reject) => (rejectSave = reject)));
+    useAgentSettingsStore.getState().applySaved({ settingsVersion: 3, agents: {} });
+    const save = useAgentSettingsStore.getState().updateAgent("claude", { dangerousArgs: "mine" });
+
+    useAgentSettingsStore.getState().applySaved(savedElsewhere);
+    expect(useAgentSettingsStore.getState().settings?.agents.claude).toMatchObject({
+      dangerousArgs: "mine",
+    });
+    rejectSave(new Error("disk full"));
+
+    await expect(save).rejects.toThrow("disk full");
+    const state = useAgentSettingsStore.getState();
+    expect(state.settings?.agents.claude?.customFlags).toBe("--from-another-view");
+    expect(state.settings?.agents.claude).not.toHaveProperty("dangerousArgs");
+    expect(state.error).toContain("disk full");
   });
 });

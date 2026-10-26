@@ -175,6 +175,7 @@ export const CHANNELS = {
 
   APP_GET_STATE: "app:get-state",
   APP_SET_STATE: "app:set-state",
+  APP_PANEL_GRID_CONFIG_CHANGED: "app:panel-grid-config-changed",
   APP_GET_VERSION: "app:get-version",
   APP_GET_VERSION_INFO: "app:get-version-info",
   APP_HYDRATE: "app:hydrate",
@@ -361,6 +362,7 @@ export const CHANNELS = {
   AGENT_SETTINGS_SET_RESUME_ON_RESTART: "agent-settings:set-resume-on-restart",
   AGENT_SETTINGS_RESET: "agent-settings:reset",
   AGENT_SETTINGS_STAMP_VERSION: "agent-settings:stamp-version",
+  AGENT_SETTINGS_CHANGED: "agent-settings:changed",
 
   AGENT_HELP_GET: "agent-help:get",
 

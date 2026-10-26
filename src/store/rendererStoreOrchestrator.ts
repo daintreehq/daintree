@@ -67,6 +67,8 @@ import { createFocusFollowBreaker } from "./focusFollowBreaker";
 import { subscribeFocusedPanelReporter } from "./focusedPanelReporter";
 import { initAgentDefaultsSync } from "@/services/agentDefaultsSync";
 import { initTerminalConfigSync } from "@/services/terminalConfigSync";
+import { initAgentSettingsSync } from "@/services/agentSettingsSync";
+import { initPanelGridConfigSync } from "@/services/panelGridConfigSync";
 import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
 
 // Thunk form: read the live mruList at fire time, not at schedule time. A
@@ -745,6 +747,10 @@ export function initStoreOrchestrator(): () => void {
 
   // Terminal settings, as saved on whichever machine owns each (#14699).
   disposables.add(toDisposable(initTerminalConfigSync()));
+
+  // Agent settings from the host and the grid layout from this machine (#14700).
+  disposables.add(toDisposable(initAgentSettingsSync()));
+  disposables.add(toDisposable(initPanelGridConfigSync()));
 
   cleanupFn = () => {
     disposables.dispose();

@@ -54,6 +54,7 @@ export const CHANNEL_LEASE_POLICY = {
   "agent-session:promote-bookmark": "free",
   "agent-session:rename-bookmark": "free",
   "agent-session:set-retention": "driver",
+  "agent-settings:changed": "free",
   "agent-settings:get": "free",
   "agent-settings:reset": "free",
   "agent-settings:set": "free",

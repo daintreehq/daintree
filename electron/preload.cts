@@ -169,7 +169,9 @@ import type {
   IpcInvokeMap,
   IpcEventMap,
   IpcEventBusMap,
+  AgentSettings,
   AgentSettingsEntry,
+  PanelGridConfig,
   ResumeOnRestart,
   PRDetectedPayload,
   PRClearedPayload,
@@ -1387,6 +1389,9 @@ function buildElectronApi(): ElectronAPI {
 
       onConfigReloaded: (callback: () => void) => _typedOn(CHANNELS.APP_CONFIG_RELOADED, callback),
 
+      onPanelGridConfigChanged: (callback: (config: PanelGridConfig) => void) =>
+        _typedOn(CHANNELS.APP_PANEL_GRID_CONFIG_CHANGED, callback),
+
       onViewRevealed: (callback: (payload?: { switchId?: string }) => void) =>
         _typedOn(CHANNELS.APP_VIEW_REVEALED, callback),
       onViewWarmActivated: (callback: (payload?: { switchId?: string }) => void) =>
@@ -1799,6 +1804,9 @@ function buildElectronApi(): ElectronAPI {
 
       stampVersion: (version: number) =>
         _unwrappingInvoke(CHANNELS.AGENT_SETTINGS_STAMP_VERSION, version),
+
+      onChanged: (callback: (settings: AgentSettings) => void) =>
+        _typedOn(CHANNELS.AGENT_SETTINGS_CHANGED, callback),
     },
 
     userAgentRegistry: {

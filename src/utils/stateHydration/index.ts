@@ -8,7 +8,6 @@ import {
   getDeletedWorktreeTerminalIds,
   useWorktreeSelectionStore,
 } from "@/store/worktreeStore";
-import { useLayoutConfigStore } from "@/store";
 import type {
   AgentState,
   PanelKind,
@@ -45,6 +44,7 @@ import { useResourceProfileStore } from "@/store/resourceProfileStore";
 import type { AgentPreset } from "@/config/agents";
 import type { HydrationBatchToken } from "@/store/slices/panelRegistry/types";
 import { applyBootTerminalConfig, beginTerminalConfigRead } from "@/services/terminalConfigSync";
+import { applyBootPanelGridConfig, beginPanelGridConfigRead } from "@/services/panelGridConfigSync";
 import { ensureHydrationBootstrap } from "./bootstrapGuard";
 import { dispatchRecoveryNotifications } from "./recoveryNotifications";
 import { scheduleScrollbackRestore } from "./scrollbackRestoreScheduler";
@@ -238,6 +238,9 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
     const applyTerminalConfig = prefetchedHydrateResult
       ? applyBootTerminalConfig
       : beginTerminalConfigRead();
+    const applyPanelGridConfig = prefetchedHydrateResult
+      ? applyBootPanelGridConfig
+      : beginPanelGridConfigRead();
 
     // Use the pre-fetched hydration payload when available, eliminating a
     // ~50-150ms IPC round-trip. Fall back to the IPC pull model otherwise.
@@ -839,9 +842,7 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
       appState.panelGridConfig ??
       (appState as unknown as { terminalGridConfig?: typeof appState.panelGridConfig })
         .terminalGridConfig;
-    if (layoutConfig) {
-      useLayoutConfigStore.getState().setLayoutConfig(layoutConfig);
-    }
+    applyPanelGridConfig(layoutConfig);
 
     // Restore focus mode from per-project state (hydrate returns per-project focus mode)
     if (options.setFocusMode && appState.focusMode !== undefined) {
