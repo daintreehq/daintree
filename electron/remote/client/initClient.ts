@@ -25,6 +25,7 @@ import { AppError, isAppError } from "../../utils/errorTypes.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import {
   getAllAppWebContents,
+  getAppWebContents,
   getProjectForWebContents,
   getWindowForWebContents,
   resolveLiveWebContents,
@@ -553,6 +554,12 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
         },
       });
       if (!replaced && !old.isDestroyed()) throw new Error("The replacement window didn't open");
+    },
+    appViewId(windowId) {
+      const win = getWindowRegistry()?.getByWindowId(windowId)?.browserWindow;
+      if (!win || win.isDestroyed()) return null;
+      const wc = getAppWebContents(win);
+      return wc.isDestroyed() ? null : wc.id;
     },
     offerHostProjects(windowId) {
       const win = getWindowRegistry()?.getByWindowId(windowId)?.browserWindow;

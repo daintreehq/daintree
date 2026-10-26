@@ -140,6 +140,32 @@ describe("presentHostAttention", () => {
     expect(useNotificationStore.getState().notifications).toHaveLength(0);
     expect(useNotificationHistoryStore.getState().entries).toHaveLength(1);
   });
+
+  it("only files one main already paged for with a banner, though the window gained focus since", () => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    presentHostAttention({ ...attention, pagedNatively: true });
+    expect(useNotificationStore.getState().notifications).toHaveLength(0);
+    const entries = useNotificationHistoryStore.getState().entries;
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.seenAsToast).toBe(false);
+    expect(window.electron.notification.showNative).not.toHaveBeenCalled();
+  });
+
+  it("doesn't re-toast a banner's notice to revive a thread the person archived", () => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    presentHostAttention(attention);
+    const history = useNotificationHistoryStore.getState();
+    history.archiveByCorrelationId(history.entries[0]!.correlationId!);
+    useNotificationStore.setState({ notifications: [] });
+
+    presentHostAttention({ ...attention, pagedNatively: true });
+    expect(useNotificationStore.getState().notifications).toHaveLength(0);
+    const live = useNotificationHistoryStore
+      .getState()
+      .entries.filter((e) => e.archivedAt === null);
+    expect(live).toHaveLength(1);
+    expect(live[0]?.seenAsToast).toBe(false);
+  });
 });
 
 describe("startHostMetricsFeed", () => {

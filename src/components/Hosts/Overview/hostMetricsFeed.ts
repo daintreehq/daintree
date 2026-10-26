@@ -9,7 +9,8 @@ import { logWarn } from "@/utils/logger";
  * toast when this window is focused, inbox otherwise. The source host already
  * applied its own policy (off, quiet hours); this window's settings may be a
  * third host's, so only its focus and session mute apply here. Main already
- * checked the opt-in and chose this view.
+ * checked the opt-in and chose this view, and one it paged for with a banner
+ * goes only to the inbox.
  */
 export function presentHostAttention(event: HostAttentionEvent): void {
   const who = event.agentName ?? "An agent";
@@ -21,6 +22,7 @@ export function presentHostAttention(event: HostAttentionEvent): void {
     correlationId: `host-attention:${event.hostId}:${event.terminalId}`,
     context: { eventKind: "waiting", hostName: event.hostName },
     sourceHostPolicy: { quiet: event.quiet },
+    ...(event.pagedNatively ? { pagedNatively: true } : {}),
   });
 }
 

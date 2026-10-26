@@ -481,8 +481,9 @@ export type RemoteHostsEvent =
       previousEnd?: HostPreviousEnd;
     }
   /**
-   * Sent to the view of a new window opened onto a host that had no project
-   * to show: it has that host's project list to offer, taken with
+   * Sent to a window's view when a switch to a host found no project to show
+   * (a new window opened onto it, or a click on a banner about one of its
+   * agents): it has that host's project list to offer, taken with
    * `takeProjectOffer`.
    */
   | { type: "project-offer" }

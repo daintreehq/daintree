@@ -11,6 +11,7 @@ import {
 } from "../../services/NotificationService.js";
 import { soundService } from "../../services/SoundService.js";
 import { store } from "../../store.js";
+import type { HostAttentionEvent } from "../../../shared/types/ipc/hostMetrics.js";
 import { displaySafeText } from "../../../shared/utils/displaySafeText.js";
 import { admitHostNotice } from "./hostNoticeBudget.js";
 
@@ -106,6 +107,31 @@ export function showHostNotification(
     ...(navigation ? { navigation } : {}),
   });
   return true;
+}
+
+/**
+ * Shell side: page for an opted-in host's waiting agent as a banner, titled
+ * with the host's name as its own notifications are. The opt-in, the host's
+ * quiet hours and its notice budget were applied before it got here, and a
+ * waiting agent pages through this screen's session mute as a local one
+ * does. A later notice about the same terminal replaces it.
+ */
+export function showHostAttentionBanner(event: HostAttentionEvent, onClick: () => void): void {
+  const host = displaySafeText(event.hostName).trim() || event.hostId;
+  const who = event.agentName ?? "An agent";
+  const where = event.projectName ? ` in ${event.projectName}` : "";
+  const soundFile = deviceSoundFile("waiting");
+  if (soundFile) soundService.playFile(soundFile);
+  notificationService.showNativeNotification(
+    `${host}: Agent waiting`,
+    `${who}${where} is waiting for input`,
+    {
+      silent: true,
+      category: "waiting",
+      replaceKey: `host-attention:${event.hostId}:${event.terminalId}`,
+      onClick,
+    }
+  );
 }
 
 /**

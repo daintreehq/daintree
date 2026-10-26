@@ -52,6 +52,7 @@ const m = vi.hoisted(() => {
   const client = {
     client: {
       connect: vi.fn(),
+      openHostForNotice: vi.fn(async (_window: unknown, _notice: unknown) => ({})),
       list: vi.fn(() => hostEntries),
       isDisconnectedByPerson: vi.fn((hostId: string) => hostId === "control-on"),
     },
@@ -592,6 +593,21 @@ describe("startRemoteHosts", () => {
     expect(m.clientOpenedListeners.size).toBe(0);
     // Both boot paths already started the workspace client; boot never starts one.
     expect(m.ensureWorkspaceClient).not.toHaveBeenCalled();
+  });
+
+  it("opens a host from a banner about one of its agents through the Remote Hosts client", async () => {
+    await startRemoteHosts({ hostMode: false });
+    const [options] = metrics.installHostMetricsClient.mock.calls[0] as [
+      { openHostForNotice(window: unknown, notice: unknown): Promise<unknown> },
+    ];
+    const notice = { hostId: "studio-01", projectId: null, terminalId: "t1" };
+    const result = { outcome: "switched" };
+    m.client.client.openHostForNotice.mockResolvedValueOnce(result);
+    await expect(options.openHostForNotice(3, notice)).resolves.toBe(result);
+    expect(m.client.client.openHostForNotice).toHaveBeenCalledWith(3, notice);
+    // A failed switch reaches the banner's click handler, which logs it.
+    m.client.client.openHostForNotice.mockRejectedValueOnce(new Error("unreachable"));
+    await expect(options.openHostForNotice(3, notice)).rejects.toThrow("unreachable");
   });
 
   it("installs host control from start, reading each host's switch live", async () => {

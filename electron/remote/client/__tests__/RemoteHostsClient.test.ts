@@ -1106,6 +1106,119 @@ describe("RemoteHostsClient", () => {
     expect(bindings.get(1)).toBe("studio-02");
   });
 
+  describe("a click on a banner about a host's agent", () => {
+    const notice = { hostId: "studio-01", projectId: "proj-1", terminalId: "term-1" };
+
+    beforeEach(() => {
+      // Each window's view on screen: a project's, or a new window's welcome view.
+      windows.appViewId = vi.fn((windowId: number) => ({ 1: 5, 7: 70 })[windowId] ?? null);
+    });
+
+    it("brings the window forward and opens the notice's project there with the agent's pane focused", async () => {
+      const revealWindow = vi.fn();
+      windows.revealWindow = revealWindow;
+      await expect(client.openHostForNotice(1, notice)).resolves.toEqual({
+        outcome: "switched",
+        hostId: "studio-01",
+        projectId: "proj-1",
+      });
+      // The view on screen reports a rollback on its switch screen, so main doesn't too.
+      expect(windows.openRemoteProject).toHaveBeenCalledWith(
+        1,
+        "studio-01",
+        "proj-1",
+        "/srv/proj-1",
+        { intent: "focus-panel", panelId: "term-1" },
+        { requesterWebContentsId: 5 }
+      );
+      expect(revealWindow).toHaveBeenCalledWith(1);
+      expect(revealWindow.mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(windows.openRemoteProject).mock.invocationCallOrder[0]
+      );
+      expect(bindings.get(1)).toBe("studio-01");
+    });
+
+    it("opens it in a new window when none is open, its welcome view standing in to report", async () => {
+      windows.revealWindow = vi.fn();
+      await client.openHostForNotice(null, notice);
+      expect(windows.openWindow).toHaveBeenCalledTimes(1);
+      expect(windows.revealWindow).toHaveBeenCalledWith(7);
+      expect(windows.openRemoteProject).toHaveBeenCalledWith(
+        7,
+        "studio-01",
+        "proj-1",
+        "/srv/proj-1",
+        expect.objectContaining({ panelId: "term-1" }),
+        { requesterWebContentsId: 70 }
+      );
+      expect(bindings.get(7)).toBe("studio-01");
+    });
+
+    it("yields a window it opened to a click that took it over while it was opening", async () => {
+      let opened!: (windowId: number) => void;
+      windows.openWindow = vi.fn(() => new Promise<number>((resolve) => (opened = resolve)));
+      const first = client.openHostForNotice(null, notice);
+      const second = client.openHostForNotice(7, { ...notice, projectId: "proj-2" });
+      opened(7);
+      await expect(first).resolves.toEqual({ outcome: "superseded", hostId: "studio-01" });
+      await expect(second).resolves.toMatchObject({ outcome: "switched", projectId: "proj-2" });
+      expect(windows.openRemoteProject).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps a failure on the window's switch screen, as a switch the person asked for does", async () => {
+      manager.connect("studio-01").whenReady.mockResolvedValueOnce("timeout");
+      const error = await client.openHostForNotice(1, notice).then(
+        () => null,
+        (failure: unknown) => failure
+      );
+      expect((error as AppError).details).toMatchObject({ code: "HOST_SWITCH_ON_SCREEN" });
+      expect(client.getPendingSwitch(ctxFor(5, 1))).toMatchObject({
+        hostId: "studio-01",
+        phase: "failed",
+        request: { projectId: "proj-1" },
+      });
+      expect(bindings.get(1)).toBe("local");
+    });
+
+    it("returns to the project this machine last had open there for a notice that named none", async () => {
+      manager.last = { projectId: "proj-2", path: "/srv/proj-2", name: "proj-2" };
+      await expect(client.openHostForNotice(1, { ...notice, projectId: null })).resolves.toEqual({
+        outcome: "switched",
+        hostId: "studio-01",
+        projectId: "proj-2",
+      });
+      expect(windows.openRemoteProject).toHaveBeenCalledWith(
+        1,
+        "studio-01",
+        "proj-2",
+        "/srv/proj-2",
+        undefined,
+        { requesterWebContentsId: 5 }
+      );
+    });
+
+    it("offers the host's project list in the window when there is nothing to return to", async () => {
+      windows.notifyWindow = vi.fn();
+      const projectless = { ...notice, projectId: null };
+      await expect(client.openHostForNotice(1, projectless)).resolves.toEqual({
+        outcome: "choose-project",
+        hostId: "studio-01",
+      });
+      expect(windows.openRemoteProject).not.toHaveBeenCalled();
+      expect(bindings.get(1)).toBe("local");
+      expect(windows.notifyWindow).toHaveBeenCalledWith(1, { type: "project-offer" });
+      expect(client.takeProjectOffer(ctxFor(5, 1))).toBe("studio-01");
+      expect(client.takeProjectOffer(ctxFor(5, 1))).toBeNull();
+
+      // A second click watches the window for its close once, not again.
+      await client.openHostForNotice(1, projectless);
+      const watches = vi.mocked(windows.watchWindow).mock.calls.filter(([id]) => id === 1);
+      expect(watches).toHaveLength(1);
+      watches[0][1]();
+      expect(client.takeProjectOffer(ctxFor(5, 1))).toBeNull();
+    });
+  });
+
   describe("a switch that names no project", () => {
     it("returns the window to the project the host remembers for this machine", async () => {
       manager.last = { projectId: "proj-2", path: "/srv/proj-2", name: "proj-2" };

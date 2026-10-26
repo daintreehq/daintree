@@ -64,7 +64,8 @@ import {
   showHostNotification,
   unclassifiedPushName,
 } from "../index.js";
-import { NOTIFICATION_SHOW_METHOD } from "../notifications.js";
+import { NOTIFICATION_SHOW_METHOD, showHostAttentionBanner } from "../notifications.js";
+import type { HostAttentionEvent } from "../../../../shared/types/ipc/hostMetrics.js";
 import { resetHostNoticeBudget } from "../hostNoticeBudget.js";
 
 const STUDIO = { id: "studio", name: "Studio Mac" };
@@ -257,6 +258,66 @@ describe("showHostNotification", () => {
       "line two",
       expect.anything()
     );
+  });
+});
+
+describe("showHostAttentionBanner", () => {
+  const event: HostAttentionEvent = {
+    type: "attention",
+    hostId: "studio",
+    hostName: "Studio Mac",
+    kind: "waiting",
+    terminalId: "t1",
+    projectId: "p1",
+    projectName: "api",
+    agentName: "Claude",
+    quiet: false,
+  };
+
+  it("titles the banner with the host's name, plays this device's waiting sound, and hands the click to main", () => {
+    mocks.notificationSettings = { soundEnabled: true, waitingSoundFile: "ping.wav" };
+    const onClick = vi.fn();
+    showHostAttentionBanner(event, onClick);
+    expect(mocks.playFile).toHaveBeenCalledWith("ping.wav");
+    expect(mocks.showNativeNotification).toHaveBeenCalledWith(
+      "Studio Mac: Agent waiting",
+      "Claude in api is waiting for input",
+      expect.objectContaining({ silent: true, category: "waiting", onClick })
+    );
+  });
+
+  it("replaces the banner for the same terminal and keeps another terminal's, or another host's", () => {
+    showHostAttentionBanner(event, () => {});
+    showHostAttentionBanner(event, () => {});
+    showHostAttentionBanner({ ...event, terminalId: "t2" }, () => {});
+    showHostAttentionBanner({ ...event, hostId: "other" }, () => {});
+    const keys = mocks.showNativeNotification.mock.calls.map(
+      ([, , options]) => (options as { replaceKey?: string }).replaceKey
+    );
+    expect(keys[0]).toBeDefined();
+    expect(keys[0]).toBe(keys[1]);
+    expect(keys[2]).not.toBe(keys[0]);
+    // Another host's terminal can share the id.
+    expect(keys[3]).not.toBe(keys[0]);
+  });
+
+  it("names an agent it couldn't identify, and a project it couldn't tell, by what it knows", () => {
+    showHostAttentionBanner(
+      { ...event, hostName: "  ", agentName: null, projectId: null, projectName: null },
+      () => {}
+    );
+    expect(mocks.showNativeNotification).toHaveBeenCalledWith(
+      "studio: Agent waiting",
+      "An agent is waiting for input",
+      expect.anything()
+    );
+    expect(mocks.playFile).not.toHaveBeenCalled();
+  });
+
+  it("pages through this screen's session mute, as a local waiting agent does", () => {
+    mocks.isSessionMuted.mockReturnValue(true);
+    showHostAttentionBanner(event, () => {});
+    expect(mocks.showNativeNotification).toHaveBeenCalledTimes(1);
   });
 });
 
