@@ -488,33 +488,31 @@ async function listCommits(
   const excluded = [current.base.tip, reviewed.base.tip]
     .filter((oid): oid is string => oid !== null && present.has(oid))
     .map((oid) => `^${oid}`);
+  const range = from === null ? [to] : [`${from}...${to}`];
   try {
+    // A shallow clone's walks stop at its boundary without failing: past it,
+    // the reviewed commit stops looking like an ancestor, branch commits go
+    // missing, and base history escapes its exclusion.
+    const boundary = await shallowBoundary(current.commonDir);
+    if (boundary === null || (await walkReachesBoundary(git, [...range, ...excluded], boundary))) {
+      return { kind: "unavailable", reason: "unreadable" };
+    }
+
     let history: "extended" | "rewritten" = "extended";
     if (from !== null && from !== to) {
       const out = await git(["merge-base", "--is-ancestor", from, to], { okExitCodes: [1] });
       if (out.exitCode !== 0) history = "rewritten";
     }
-    const range = from === null ? [to] : ["--right-only", "--cherry-mark", `${from}...${to}`];
     const out = await git([
       "rev-list",
       "--topo-order",
       `--max-count=${limits.maxCommits + 1}`,
       COMMIT_FORMAT,
+      ...(from === null ? [] : ["--right-only", "--cherry-mark"]),
       ...range,
       ...excluded,
     ]);
     const listed = parseCommitListing(out.stdout);
-    // A shallow clone's walks stop at its boundary without failing: the
-    // reviewed commit stops looking like an ancestor, and whatever lies past
-    // the boundary is silently left out.
-    const boundary = await shallowBoundary(current.commonDir);
-    if (
-      boundary === null ||
-      (boundary.size > 0 &&
-        (history === "rewritten" || listed.some((item) => boundary.has(item.oid))))
-    ) {
-      return { kind: "unavailable", reason: "unreadable" };
-    }
     // Patch ids skip merges, so a merge amended for its message alone is
     // matched here: the same tree on the same parents.
     if (history === "rewritten" && listed.some((item) => item.parents.length > 1)) {
@@ -523,7 +521,7 @@ async function listCommits(
         "--left-only",
         "--merges",
         COMMIT_FORMAT,
-        `${from}...${to}`,
+        ...range,
         ...excluded,
       ]);
       const reviewedMerges = new Set(parseCommitListing(left.stdout).map(mergeKey));
@@ -555,6 +553,23 @@ async function shallowBoundary(commonDir: string): Promise<Set<string> | null> {
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === "ENOENT" ? new Set() : null;
   }
+}
+
+/**
+ * Whether the walk touches a boundary commit, listed or as the edge of what it
+ * excluded. One below everything it walks cuts nothing off.
+ */
+async function walkReachesBoundary(
+  git: Git,
+  revisions: readonly string[],
+  boundary: ReadonlySet<string>
+): Promise<boolean> {
+  if (boundary.size === 0) return false;
+  const out = await git(["rev-list", "--boundary", ...revisions]);
+  return out.stdout
+    .toString("utf8")
+    .split("\n")
+    .some((line) => boundary.has(line.replace(/^-/, "")));
 }
 
 function mergeKey(commit: { tree: string; parents: readonly string[] }): string {

@@ -491,6 +491,50 @@ describe("compareReviewPoint", () => {
     expect(summary(result)).toEqual({ "g.txt": { ...MODIFIED_BOTH, baseUpdate: "unknown" } });
   });
 
+  describe("shallow history", () => {
+    function shallowAt(repo: string, oid: string): void {
+      fs.appendFileSync(path.join(repo, ".git", "shallow"), `${oid}\n`);
+    }
+
+    it("leaves the commit list out when a cut base hides its history from the exclusion", async () => {
+      const repo = topicRepo();
+      const point = await review(repo);
+      for (const [message, file] of [
+        ["main edits g", "g.txt"],
+        ["main edits b", "b.txt"],
+      ] as const) {
+        git(repo, "checkout", "-q", "main");
+        commit(repo, message, { [file]: `${message}\n` });
+        git(repo, "checkout", "-q", "topic");
+        git(repo, "merge", "-q", "--no-edit", "main");
+      }
+      // The latest base commit is cut off from its parent, the earlier one.
+      shallowAt(repo, git(repo, "rev-parse", "main").trim());
+
+      const result = await compareNow(repo, point);
+
+      expect(result.commits).toEqual({ kind: "unavailable", reason: "unreadable" });
+      expect(result.state).toBe("incomplete");
+    });
+
+    it("still lists a rewrite when the cut lies below everything it walks", async () => {
+      const repo = topicRepo();
+      git(repo, "checkout", "-q", "main");
+      const below = commit(repo, "main one", { "g.txt": "1\n" });
+      commit(repo, "main two", { "g.txt": "2\n" });
+      git(repo, "checkout", "-q", "topic");
+      git(repo, "rebase", "-q", "main");
+      shallowAt(repo, below);
+      const point = await review(repo);
+      git(repo, "commit", "-q", "--amend", "-m", "reworded");
+
+      const result = await compareNow(repo, point);
+
+      expect(result.state).toBe("comparable");
+      expect(commitsOf(result)).toEqual([{ subject: "reworded", kind: "patch-equivalent" }]);
+    });
+  });
+
   it("leaves the commit list out when a shallow fetch cuts the history short", async () => {
     const upstream = topicRepo();
     const repo = path.join(root, `clone-${repoCount}`);
