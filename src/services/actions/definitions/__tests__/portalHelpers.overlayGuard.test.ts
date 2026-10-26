@@ -22,7 +22,7 @@ import { activatePortalTab, showPortalTabIfNoOverlay } from "../portalHelpers";
 import { registerPortalActions } from "../portalActions";
 
 const BOUNDS = { x: 0, y: 0, width: 800, height: 600 };
-const showMock = vi.fn(async () => ({}));
+const showMock = vi.fn<(payload: unknown) => Promise<unknown>>(async () => ({}));
 const createMock = vi.fn(async () => ({}));
 const hideMock = vi.fn(async () => ({}));
 const setActiveTabMock = vi.fn();
@@ -126,7 +126,7 @@ describe("activatePortalTab with a tab main released (#14537)", () => {
 
   it("hands a tab main no longer holds back for recreation instead of leaving it blank", async () => {
     portalStoreMock.getState.mockReturnValue(stateWith(["tab-1"]));
-    showMock.mockResolvedValueOnce(false as never);
+    showMock.mockResolvedValueOnce(false);
 
     await activatePortalTab("tab-1");
 
@@ -136,7 +136,7 @@ describe("activatePortalTab with a tab main released (#14537)", () => {
 
   it("leaves a shown tab marked created", async () => {
     portalStoreMock.getState.mockReturnValue(stateWith(["tab-1"]));
-    showMock.mockResolvedValueOnce(true as never);
+    showMock.mockResolvedValueOnce(true);
 
     await activatePortalTab("tab-1");
 

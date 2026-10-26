@@ -13,6 +13,7 @@ import {
 import { useUIStore } from "./uiStore";
 import { createDebouncedSafeJSONStorage } from "./persistence/safeStorage";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 
 interface PortalState {
   isOpen: boolean;
@@ -120,9 +121,12 @@ const createPortalStore: StateCreator<PortalState & PortalActions> = (set, get) 
 
     // A tab main released while this view was cached comes back through
     // PortalVisibilityController once it reads as uncreated (#14537).
-    void Promise.resolve(window.electron.portal.show({ tabId, bounds })).then((shown) => {
-      if (shown === false) get().unmarkTabCreated(tabId);
-    });
+    safeFireAndForget(
+      Promise.resolve(window.electron.portal.show({ tabId, bounds })).then((shown) => {
+        if (shown === false) get().unmarkTabCreated(tabId);
+      }),
+      { context: "Restore portal tab after close" }
+    );
   };
 
   return {

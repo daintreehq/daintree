@@ -214,6 +214,9 @@ export class PortalManager {
       });
 
       const sendNavEvent = (navEvent: PortalNavEvent) => {
+        // A released view still loading through its storage flush must not
+        // overwrite the URL of the tab recreated under its id.
+        if (this.viewMap.get(tabId) !== view) return;
         this.sendToWindowViews(CHANNELS.PORTAL_NAV_EVENT, navEvent);
       };
 

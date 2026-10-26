@@ -386,8 +386,15 @@ describe("webContentsRegistry", () => {
   });
 
   it("lists every project view a window holds, current first, and no other window's", async () => {
-    const { getWindowAppWebContents, registerAppView, registerProjectView, registerWebContents } =
-      await loadRegistry();
+    const {
+      getWindowAppWebContents,
+      getProjectForWebContents,
+      isCachedViewWebContents,
+      registerAppView,
+      registerCachedViewWebContents,
+      registerProjectView,
+      registerWebContents,
+    } = await loadRegistry();
     const win = createWindow(1);
     const otherWin = createWindow(2);
     const front = createWebContents(201);
@@ -400,6 +407,7 @@ describe("webContentsRegistry", () => {
 
     registerProjectView("project-b", cached as unknown as WebContents);
     registerWebContents(cached as unknown as WebContents, win);
+    registerCachedViewWebContents(cached as unknown as WebContents);
     registerProjectView("project-a", front as unknown as WebContents);
     registerAppView(win, createView(front));
     registerProjectView("project-c", elsewhere as unknown as WebContents);
@@ -409,6 +417,8 @@ describe("webContentsRegistry", () => {
 
     cached.setDestroyed(true);
     expect(getWindowAppWebContents(win).map((wc) => wc.id)).toEqual([201]);
+    expect(getProjectForWebContents(202)).toBeNull();
+    expect(isCachedViewWebContents(202)).toBe(false);
   });
 
   it("falls back to the window's own webContents when it holds no project views", async () => {

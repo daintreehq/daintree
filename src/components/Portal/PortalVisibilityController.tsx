@@ -234,7 +234,10 @@ export function PortalVisibilityController(): null {
     const wasHiddenByOverlay = prevHasOverlaysRef.current;
     prevHasOverlaysRef.current = hasOverlays;
 
+    // The portal is window-wide: a cached view rerunning this (its tabs change
+    // on navigation notices) would hide the front project's tab.
     if (hasOverlays && portalOpen) {
+      if (isProjectViewCached()) return;
       window.electron.portal.hide();
     } else if (!hasOverlays && wasHiddenByOverlay && portalOpen && activeTabId) {
       const activeTab = tabs.find((t) => t.id === activeTabId);

@@ -1111,16 +1111,24 @@ describe("PortalManager across project views (#14537)", () => {
     expect(sentOn(frontView, "portal:tab-evicted")).toEqual([{ tabId: "tab-1" }]);
   });
 
-  it("tells a cached project view when memory pressure takes its tabs", async () => {
+  it("tells a cached project view when memory pressure takes its tabs, before the flush ends", async () => {
     const manager = new PortalManagerClass(mockWindow);
     manager.createTab("tab-1", "http://localhost:3000");
     manager.createTab("tab-2", "http://localhost:3001");
     manager.showTab("tab-2", { x: 0, y: 0, width: 800, height: 600 });
+    let finishFlush!: () => void;
+    createdWebContents[0].session.flushStorageData.mockReturnValue(
+      new Promise<void>((resolve) => {
+        finishFlush = resolve;
+      })
+    );
 
-    await manager.destroyHiddenTabs();
+    const sweep = manager.destroyHiddenTabs();
 
     expect(sentOn(cachedView, "portal:tabs-evicted")).toEqual([{ tabIds: ["tab-1"] }]);
     expect(sentOn(frontView, "portal:tabs-evicted")).toEqual([{ tabIds: ["tab-1"] }]);
+    finishFlush();
+    await sweep;
   });
 
   it("announces nothing when memory pressure takes no tabs", async () => {
@@ -1141,6 +1149,21 @@ describe("PortalManager across project views (#14537)", () => {
 
     expect(sentOn(cachedView, "portal:nav-event")).toEqual([
       { tabId: "tab-1", title: "Test Page", url: "http://localhost:3000/next" },
+    ]);
+  });
+
+  it("drops navigation from a released view once its tab is recreated", async () => {
+    const manager = new PortalManagerClass(mockWindow);
+    manager.createTab("tab-1", "http://localhost:3000");
+    const oldView = createdWebContents[0];
+    await manager.closeTab("tab-1");
+    manager.createTab("tab-1", "http://localhost:3000/new");
+
+    handlerFor(oldView, "did-navigate")({}, "http://localhost:3000/stale");
+    handlerFor(createdWebContents[1], "did-navigate")({}, "http://localhost:3000/new");
+
+    expect(sentOn(cachedView, "portal:nav-event")).toEqual([
+      { tabId: "tab-1", title: "Test Page", url: "http://localhost:3000/new" },
     ]);
   });
 

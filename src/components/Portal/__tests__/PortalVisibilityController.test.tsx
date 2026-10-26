@@ -57,9 +57,19 @@ describe("PortalVisibilityController", () => {
   let navCallbacks: Array<(data: { tabId: string; title: string; url: string }) => void> = [];
   let viewCached = false;
   let revealCallbacks: Array<() => void> = [];
+  let cachedCallbacks: Array<() => void> = [];
+  const cacheView = () => {
+    viewCached = true;
+    for (const cb of cachedCallbacks) cb();
+  };
   const app = {
     isViewCached: vi.fn(() => viewCached),
-    onViewCached: vi.fn(() => () => {}),
+    onViewCached: vi.fn((cb: () => void) => {
+      cachedCallbacks.push(cb);
+      return () => {
+        cachedCallbacks = cachedCallbacks.filter((c) => c !== cb);
+      };
+    }),
     onViewWarmActivated: vi.fn(() => () => {}),
     onViewRevealed: vi.fn((cb: () => void) => {
       revealCallbacks.push(cb);
@@ -90,6 +100,7 @@ describe("PortalVisibilityController", () => {
     tabsEvictedCallbacks = [];
     navCallbacks = [];
     revealCallbacks = [];
+    cachedCallbacks = [];
     viewCached = false;
     __resetProjectViewCacheStateForTests();
 
@@ -507,9 +518,10 @@ describe("PortalVisibilityController", () => {
       });
 
     beforeEach(() => {
-      vi.spyOn(document, "getElementById").mockReturnValue({
-        getBoundingClientRect: () => createPlaceholderRect(),
-      } as unknown as HTMLElement);
+      const placeholder = Object.assign(document.createElement("div"), {
+        getBoundingClientRect: () => DOMRect.fromRect(createPlaceholderRect()),
+      });
+      vi.spyOn(document, "getElementById").mockReturnValue(placeholder);
     });
 
     it("brings the selected tab back when main evicts it", async () => {
@@ -558,6 +570,55 @@ describe("PortalVisibilityController", () => {
       expect(portal.show).toHaveBeenCalledWith({ tabId: "tab-1", bounds: BOUNDS });
       expect(usePortalStore.getState().createdTabs.has("tab-1")).toBe(true);
       expect(usePortalStore.getState().createdTabs.has("tab-2")).toBe(false);
+    });
+
+    it("holds a restore whose view is cached mid-create until the view's reveal", async () => {
+      openWithCreatedTab();
+      usePortalStore.setState({ createdTabs: new Set<string>(), isOpen: false });
+      const createRequest = deferredPromise();
+      portal.create.mockImplementationOnce(() => createRequest.promise);
+      render(<PortalVisibilityController />);
+
+      act(() => {
+        usePortalStore.setState({ isOpen: true });
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(portal.create).toHaveBeenCalledTimes(1);
+
+      cacheView();
+      createRequest.resolve();
+      await settle();
+      expect(portal.show).not.toHaveBeenCalled();
+
+      viewCached = false;
+      act(() => {
+        for (const cb of revealCallbacks) cb();
+      });
+      await settle();
+
+      expect(portal.show).toHaveBeenCalledWith({ tabId: "tab-1", bounds: BOUNDS });
+      expect(usePortalStore.getState().createdTabs.has("tab-1")).toBe(true);
+    });
+
+    it("never hides the window's portal from a cached view", async () => {
+      openWithCreatedTab();
+      render(<PortalVisibilityController />);
+      act(() => {
+        useUIStore.setState({ overlayStack: ["portal-close-confirm"] });
+      });
+      expect(portal.hide).toHaveBeenCalledTimes(1);
+
+      act(() => {
+        cacheView();
+        for (const cb of navCallbacks) {
+          cb({ tabId: "tab-1", title: "A next", url: "https://example.com/a/next" });
+        }
+      });
+
+      expect(usePortalStore.getState().tabs[0]!.url).toBe("https://example.com/a/next");
+      expect(portal.hide).toHaveBeenCalledTimes(1);
     });
 
     it("comes back at the page's latest URL, navigated while the dock was collapsed", async () => {
