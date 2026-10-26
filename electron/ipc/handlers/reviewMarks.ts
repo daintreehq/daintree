@@ -15,8 +15,14 @@ import {
 } from "../../services/git/reviewPoint/readWorktreeIdentity.js";
 import { captureReviewPoint } from "../../services/git/reviewPoint/captureReviewPoint.js";
 import { reviewComparisons } from "../../services/git/reviewPoint/reviewComparisons.js";
+import { compareReviewPoint } from "../../services/git/reviewPoint/compareReviewPoint.js";
+import {
+  defaultSide,
+  readFileSinceReview,
+} from "../../services/git/reviewPoint/fileSinceReview.js";
 import {
   ReviewPointSchema,
+  reviewPointPathKey,
   type ReviewPoint,
   type ReviewPointBaseRequest,
   type ReviewPointCaptureResult,
@@ -24,8 +30,10 @@ import {
 import type { WorktreeSnapshot } from "../../../shared/types/workspace-host.js";
 import type {
   ReviewMarkCaptureOutcome,
+  ReviewFileSinceRequest,
   ReviewMarkClearOutcome,
   ReviewMarkCompareOutcome,
+  ReviewMarkFileSinceOutcome,
   ReviewMarkSaveOutcome,
   ReviewMarksSnapshot,
 } from "../../../shared/types/ipc/reviewMarks.js";
@@ -425,6 +433,73 @@ async function handleCompare(
   return { status: "compared", markRevision, result };
 }
 
+/**
+ * One file's diff since the worktree's mark (#14587), read beside the
+ * repository. Compares directly rather than through `reviewComparisons`: that
+ * queue lets a newer comparison cancel the one in flight, and opening a file
+ * must neither cancel the hub's own poll nor be cancelled by it.
+ */
+async function handleFileSince(
+  ctx: IpcContext,
+  worktreeId: string,
+  request: ReviewFileSinceRequest
+): Promise<ReviewMarkFileSinceOutcome> {
+  const projectId = requireProjectId(ctx);
+  const id = requireWorktreeId(worktreeId);
+  if (
+    !request ||
+    typeof request.path !== "string" ||
+    request.path.length === 0 ||
+    request.path.length > 16_384 ||
+    (request.pathBytes !== undefined &&
+      (typeof request.pathBytes !== "string" || request.pathBytes.length > 22_000)) ||
+    (request.side !== undefined && request.side !== "worktree" && request.side !== "index")
+  ) {
+    throw new AppError({
+      code: "VALIDATION",
+      message: "review marks: not a file request",
+    });
+  }
+  const store = getReviewMarkStore();
+  const summary = (await store.read(projectId)).marks[id];
+  if (!summary) return { status: "none" };
+  const stored = await store.get(projectId, id);
+  if (!stored) {
+    if (!(await store.read(projectId)).marks[id]) return { status: "none" };
+    return { status: "unavailable", markRevision: summary.revision };
+  }
+  const markRevision = stored.summary.revision;
+  const live = await readLiveWorktrees(projectId, "reviewMarks");
+  const worktree = live?.find((state) => state.id === id);
+  if (!worktree) return { status: "unavailable", markRevision };
+  const result = await compareReviewPoint(worktree.path, stored.point);
+  if (
+    result.state !== "comparable" &&
+    result.state !== "incomplete" &&
+    result.state !== "reviewed-commit-missing"
+  ) {
+    return { status: "unavailable", markRevision };
+  }
+  const key = reviewPointPathKey(request);
+  const file = result.files.find((candidate) => reviewPointPathKey(candidate) === key);
+  if (!file) {
+    // Absent from a complete comparison means it holds what it held; an
+    // incomplete one makes no such claim.
+    return result.state === "incomplete"
+      ? { status: "unavailable", markRevision }
+      : { status: "not-changed", markRevision };
+  }
+  const side = request.side ?? defaultSide(file);
+  const view = await readFileSinceReview(worktree.path, stored.point, file, side);
+  return {
+    status: "read",
+    markRevision,
+    side,
+    changes: { worktree: file.worktree, index: file.index },
+    view,
+  };
+}
+
 export const reviewMarksNamespace = defineIpcNamespace({
   name: "reviewMarks",
   ops: {
@@ -436,6 +511,9 @@ export const reviewMarksNamespace = defineIpcNamespace({
     clear: op(REVIEW_MARKS_METHOD_CHANNELS.clear, handleClear, { withContext: true }),
     capture: op(REVIEW_MARKS_METHOD_CHANNELS.capture, handleCapture, { withContext: true }),
     compare: op(REVIEW_MARKS_METHOD_CHANNELS.compare, handleCompare, { withContext: true }),
+    fileSince: op(REVIEW_MARKS_METHOD_CHANNELS.fileSince, handleFileSince, {
+      withContext: true,
+    }),
   },
 });
 

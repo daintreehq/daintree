@@ -40,6 +40,8 @@ const captureMock = vi.hoisted(() => ({
 const comparisonsMock = vi.hoisted(() => ({
   compare: vi.fn(),
 }));
+const directCompareMock = vi.hoisted(() => ({ compareReviewPoint: vi.fn() }));
+const fileSinceMock = vi.hoisted(() => ({ readFileSinceReview: vi.fn() }));
 
 vi.mock("electron", () => ({ ipcMain: ipcMainMock, app: { getPath: () => os.tmpdir() } }));
 vi.mock("../../utils.js", async (importActual) => ({
@@ -59,6 +61,11 @@ vi.mock("../../../services/git/reviewPoint/captureReviewPoint.js", async (import
 }));
 vi.mock("../../../services/git/reviewPoint/reviewComparisons.js", () => ({
   reviewComparisons: comparisonsMock,
+}));
+vi.mock("../../../services/git/reviewPoint/compareReviewPoint.js", () => directCompareMock);
+vi.mock("../../../services/git/reviewPoint/fileSinceReview.js", async (importActual) => ({
+  ...(await importActual<object>()),
+  readFileSinceReview: fileSinceMock.readFileSinceReview,
 }));
 
 import { CHANNELS } from "../../channels.js";
@@ -80,6 +87,7 @@ import type {
   ReviewMarkCaptureOutcome,
   ReviewMarkClearOutcome,
   ReviewMarkCompareOutcome,
+  ReviewMarkFileSinceOutcome,
   ReviewMarkSaveOutcome,
   ReviewMarksSnapshot,
 } from "../../../../shared/types/ipc/reviewMarks.js";
@@ -126,6 +134,12 @@ const capture = reviewMarksNamespace.ops.capture.handler as unknown as CaptureHa
 const markCaptured = reviewMarksNamespace.ops.markCaptured
   .handler as unknown as MarkCapturedHandler;
 const compare = reviewMarksNamespace.ops.compare.handler as unknown as CompareHandler;
+type FileSinceHandler = (
+  context: IpcContext,
+  worktreeId: string,
+  request: unknown
+) => Promise<ReviewMarkFileSinceOutcome>;
+const fileSince = reviewMarksNamespace.ops.fileSince.handler as unknown as FileSinceHandler;
 
 function ctx(projectId: string | null, endpointId = "view-1"): IpcContext {
   return {
@@ -510,6 +524,89 @@ describe("reviewMarks IPC namespace", () => {
         markRevision: saved.snapshot.marks[WT_1]?.revision,
       });
       expect(comparisonsMock.compare).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("a file's diff since the mark", () => {
+    const FILE = {
+      path: "src/a.ts",
+      status: "modified" as const,
+      index: "unchanged" as const,
+      worktree: "changed" as const,
+      baseUpdate: "none" as const,
+      reviewed: { kind: "unlisted" as const, entry: null },
+      current: { kind: "unlisted" as const, entry: null },
+    };
+
+    it("reads the file's view from the stored point and names the side and the mark's revision", async () => {
+      const saved = await mark(ctx(PROJECT_A), WT_1, point(WT_1), 0);
+      directCompareMock.compareReviewPoint.mockResolvedValue({ ...COMPARABLE, files: [FILE] });
+      fileSinceMock.readFileSinceReview.mockResolvedValue({ kind: "exact", patch: "@@" });
+
+      const outcome = await fileSince(ctx(PROJECT_A), WT_1, { path: "src/a.ts" });
+
+      expect(outcome).toEqual({
+        status: "read",
+        markRevision: saved.snapshot.marks[WT_1]?.revision,
+        side: "worktree",
+        changes: { worktree: "changed", index: "unchanged" },
+        view: { kind: "exact", patch: "@@" },
+      });
+      expect(fileSinceMock.readFileSinceReview).toHaveBeenCalledWith(
+        WT_1,
+        point(WT_1),
+        FILE,
+        "worktree"
+      );
+      // Not through the queue that lets one comparison cancel another.
+      expect(comparisonsMock.compare).not.toHaveBeenCalled();
+    });
+
+    it("says the file no longer differs only from a complete comparison", async () => {
+      const saved = await mark(ctx(PROJECT_A), WT_1, point(WT_1), 0);
+      const markRevision = saved.snapshot.marks[WT_1]?.revision;
+      directCompareMock.compareReviewPoint.mockResolvedValue(COMPARABLE);
+      expect(await fileSince(ctx(PROJECT_A), WT_1, { path: "src/a.ts" })).toEqual({
+        status: "not-changed",
+        markRevision,
+      });
+
+      directCompareMock.compareReviewPoint.mockResolvedValue({
+        ...COMPARABLE,
+        state: "incomplete",
+        reasons: ["path-limit"],
+        gaps: [],
+      });
+      expect(await fileSince(ctx(PROJECT_A), WT_1, { path: "src/a.ts" })).toEqual({
+        status: "unavailable",
+        markRevision,
+      });
+      expect(fileSinceMock.readFileSinceReview).not.toHaveBeenCalled();
+    });
+
+    it("answers unavailable when the comparison failed, and none without a mark", async () => {
+      expect(await fileSince(ctx(PROJECT_A), WT_1, { path: "src/a.ts" })).toEqual({
+        status: "none",
+      });
+      const saved = await mark(ctx(PROJECT_A), WT_1, point(WT_1), 0);
+      directCompareMock.compareReviewPoint.mockResolvedValue({
+        state: "failed",
+        reason: "git-failed",
+        message: "no",
+      });
+
+      expect(await fileSince(ctx(PROJECT_A), WT_1, { path: "src/a.ts" })).toEqual({
+        status: "unavailable",
+        markRevision: saved.snapshot.marks[WT_1]?.revision,
+      });
+    });
+
+    it("refuses a request that isn't a file", async () => {
+      await mark(ctx(PROJECT_A), WT_1, point(WT_1), 0);
+      for (const request of [null, {}, { path: "" }, { path: "a", side: "both" }]) {
+        await expect(fileSince(ctx(PROJECT_A), WT_1, request)).rejects.toThrow(/file request/);
+      }
+      expect(directCompareMock.compareReviewPoint).not.toHaveBeenCalled();
     });
   });
 

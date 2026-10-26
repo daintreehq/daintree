@@ -993,7 +993,11 @@ describe("remote scope gate", () => {
 
   it("keeps a remote view's review reads and captured marks to its own project's worktrees", async () => {
     installScope();
-    const reads = ["review-marks:capture", "review-marks:compare"] as const;
+    const reads = [
+      "review-marks:capture",
+      "review-marks:compare",
+      "review-marks:file-since",
+    ] as const;
     const handlers = reads.map((channel) => handle(channel));
     const markCaptured = handle("review-marks:mark-captured");
     const { endpoint } = makeRemoteEndpoint(-3, "proj-1");

@@ -1450,6 +1450,7 @@ export const CHANNELS = {
   REVIEW_MARKS_CLEAR: "review-marks:clear",
   REVIEW_MARKS_CAPTURE: "review-marks:capture",
   REVIEW_MARKS_COMPARE: "review-marks:compare",
+  REVIEW_MARKS_FILE_SINCE: "review-marks:file-since",
   REVIEW_MARKS_CHANGED: "review-marks:changed",
 
   // Per-service connectivity channels

@@ -963,6 +963,7 @@ export const CHANNEL_LOCALITY = {
   "review-marks:changed": "host",
   "review-marks:clear": "host",
   "review-marks:compare": "host",
+  "review-marks:file-since": "host",
   "review-marks:hydrate": "host",
   "review-marks:mark": "host",
   "review-marks:mark-captured": "host",

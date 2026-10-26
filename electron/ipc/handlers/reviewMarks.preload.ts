@@ -7,6 +7,7 @@ export const REVIEW_MARKS_METHOD_CHANNELS = {
   clear: "review-marks:clear",
   capture: "review-marks:capture",
   compare: "review-marks:compare",
+  fileSince: "review-marks:file-since",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof REVIEW_MARKS_METHOD_CHANNELS;
