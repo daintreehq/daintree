@@ -26,6 +26,7 @@ import { getDatabaseMaintenanceService } from "../services/DatabaseMaintenanceSe
 import { getPeriodicCleanupService } from "../services/PeriodicCleanupService.js";
 import { getIdleTerminalNotificationService } from "../services/IdleTerminalNotificationService.js";
 import { getSystemSleepService } from "../services/SystemSleepService.js";
+import { disposeMemoryLeakAutoRestart } from "../services/MemoryLeakAutoRestartService.js";
 import { getOsDndService } from "../services/OsDndService.js";
 import { isE2EMode } from "../setup/runtimeFlags.js";
 import { getServiceConnectivityRegistry } from "../services/connectivity/index.js";
@@ -304,6 +305,15 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
   // `haltDeferredQueue` above: after the quit-confirmation dialog, because
   // stopping is permanent and a cancelled quit must never reach it.
   cancelBackgroundRestores();
+
+  // Stop the memory-leak auto-restart before the terminals are snapshotted and
+  // swept (#14703): a restart it decides mid-quit would relaunch a terminal
+  // behind the sweep and overwrite the session the sweep persists for it.
+  try {
+    disposeMemoryLeakAutoRestart();
+  } catch (err) {
+    console.warn("[MAIN] disposeMemoryLeakAutoRestart at quit failed:", err);
+  }
 
   // Capture the open-window manifest and latch its writes off, for the same
   // reason and in the same place (#11492). Two hazards this closes: a pending

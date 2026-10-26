@@ -145,6 +145,8 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   "terminal:exit": "external",
   "terminal:spawn-result": "external",
   "terminal:resize-result": "external",
+  // MemoryLeakAutoRestartService sends this itself, to the one view it picked.
+  "terminal:memory-leak-restart-requested": "external",
 } as const satisfies Record<keyof IpcEventBusMap, "bus" | "external">;
 
 const EVENT_BUS_RELAYED_EVENTS = (

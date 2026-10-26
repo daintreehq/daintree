@@ -3,7 +3,6 @@ import { useResourceMonitoringStore } from "@/store/resourceMonitoringStore";
 import { usePanelStore } from "@/store/panelStore";
 import { notify } from "@/lib/notify";
 import { isElectronAvailable } from "@/hooks/useElectron";
-import { DEFAULT_AUTO_RESTART_THRESHOLD_MB } from "@/store/memoryLeakConfigStore";
 import { isPtyPanel } from "@shared/types/panel";
 
 export const MEMORY_HISTORY_SIZE = 30;
@@ -105,17 +104,13 @@ export function createLeakState(): LeakState {
 
 let hookMounted = false;
 
-export function useMemoryLeakDetection(
-  enabled: boolean,
-  autoRestartThresholdMb: number = DEFAULT_AUTO_RESTART_THRESHOLD_MB
-): void {
+export function useMemoryLeakDetection(enabled: boolean): void {
   const stateMapRef = useRef<Map<string, LeakState>>(new Map());
 
   useEffect(() => {
     if (!isElectronAvailable() || !enabled || hookMounted) return;
     hookMounted = true;
 
-    const autoRestartThresholdKb = autoRestartThresholdMb * 1024;
     const localStateMap = stateMapRef.current;
 
     const unsubscribe = useResourceMonitoringStore.subscribe((curr, prev) => {
@@ -185,36 +180,6 @@ export function useMemoryLeakDetection(
             ],
           });
         }
-
-        // Auto-restart: if RSS exceeds threshold and the terminal is not waiting for user input
-        if (
-          autoRestartThresholdKb > 0 &&
-          metric.memoryKb > autoRestartThresholdKb &&
-          leakState.sampleCount >= STARTUP_SKIP_SAMPLES &&
-          !leakState.dismissed
-        ) {
-          const terminal = usePanelStore.getState().panelsById[id];
-          if (
-            terminal &&
-            isPtyPanel(terminal) &&
-            terminal.agentState !== "waiting" &&
-            !terminal.isInputLocked
-          ) {
-            leakState.dismissed = true;
-            const worktreeId = terminal.worktreeId;
-            usePanelStore.getState().restartTerminal(id);
-            notify({
-              type: "info",
-              priority: "high",
-              duration: 5000,
-              title: `Auto-restarted \u2014 ${terminal.title}`,
-              message: `RSS exceeded ${autoRestartThresholdMb.toLocaleString()} MB threshold`,
-              inboxMessage: `Auto-restarted ${terminal.title}: RSS exceeded ${autoRestartThresholdMb.toLocaleString()} MB`,
-              correlationId: `memory-leak-${id}`,
-              context: { panelId: id, ...(worktreeId ? { worktreeId } : {}) },
-            });
-          }
-        }
       }
     });
 
@@ -223,5 +188,42 @@ export function useMemoryLeakDetection(
       hookMounted = false;
       localStateMap.clear();
     };
-  }, [enabled, autoRestartThresholdMb]);
+  }, [enabled]);
+
+  useEffect(() => {
+    if (!isElectronAvailable()) return;
+    return window.electron.events.on(
+      "terminal:memory-leak-restart-requested",
+      handleMemoryLeakRestartRequest
+    );
+  }, []);
+}
+
+/**
+ * The host's memory-leak policy picked this view to restart a terminal over its
+ * auto-restart threshold (#14703). The host decides once per terminal and asks
+ * one view, so this runs the restart the user's own Restart runs, unless the
+ * pane is waiting for input or locked against it: the host asks again later.
+ */
+export function handleMemoryLeakRestartRequest(request: {
+  terminalId: string;
+  thresholdMb: number;
+}): void {
+  const { terminalId, thresholdMb } = request;
+  const terminal = usePanelStore.getState().panelsById[terminalId];
+  if (!terminal || !isPtyPanel(terminal)) return;
+  if (terminal.agentState === "waiting" || terminal.isInputLocked) return;
+
+  const worktreeId = terminal.worktreeId;
+  void usePanelStore.getState().restartTerminal(terminalId);
+  notify({
+    type: "info",
+    priority: "high",
+    duration: 5000,
+    title: `Auto-restarted \u2014 ${terminal.title}`,
+    message: `RSS exceeded ${thresholdMb.toLocaleString()} MB threshold`,
+    inboxMessage: `Auto-restarted ${terminal.title}: RSS exceeded ${thresholdMb.toLocaleString()} MB`,
+    correlationId: `memory-leak-${terminalId}`,
+    context: { panelId: terminalId, ...(worktreeId ? { worktreeId } : {}) },
+  });
 }

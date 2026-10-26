@@ -1,0 +1,228 @@
+import { describe, expect, it, vi } from "vitest";
+import { CHANNELS } from "../../../ipc/channels.js";
+import type { ProjectState, TerminalSnapshot } from "../../../../shared/types/project.js";
+import type { ViewlessTerminalRecord } from "../ViewlessActionExecutor.js";
+import { restartTerminalWithoutView } from "../viewlessTerminalRestart.js";
+import { makeDeps, makePty, PROJECT } from "./viewlessTestDeps.js";
+
+function stateWith(terminal: Partial<TerminalSnapshot> & { id: string }): ProjectState {
+  return {
+    projectId: PROJECT.id,
+    sidebarWidth: 300,
+    terminals: [
+      { title: "Agent", location: "grid", cwd: "/repo", ...terminal } as TerminalSnapshot,
+    ],
+    terminalSizes: { [terminal.id]: { cols: 120, rows: 40 } },
+  };
+}
+
+function setup(
+  terminal: Partial<TerminalSnapshot> & { id: string },
+  record: ViewlessTerminalRecord,
+  killAnswer: string | null = null
+) {
+  const pty = makePty({ [terminal.id]: { projectId: PROJECT.id, cwd: "/repo", ...record } });
+  const made = makeDeps({ getPtyReader: () => pty }, { state: stateWith(terminal) });
+  made.invoke.mockImplementation(async (_projectId, channel, args) => {
+    if (channel === CHANNELS.TERMINAL_GRACEFUL_KILL) return killAnswer;
+    if (channel === CHANNELS.TERMINAL_SPAWN) return (args[0] as { id: string }).id;
+    return undefined;
+  });
+  return made;
+}
+
+function channels(invoke: ReturnType<typeof makeDeps>["invoke"]): string[] {
+  return invoke.mock.calls.map(([, channel]) => channel);
+}
+
+function spawned(invoke: ReturnType<typeof makeDeps>["invoke"]): Record<string, unknown> {
+  const call = invoke.mock.calls.find(([, channel]) => channel === CHANNELS.TERMINAL_SPAWN);
+  if (!call) throw new Error("nothing was spawned");
+  return call[2][0] as Record<string, unknown>;
+}
+
+describe("restartTerminalWithoutView", () => {
+  it("quits an agent gracefully and relaunches the same id resuming its captured session", async () => {
+    const { deps, invoke } = setup(
+      { id: "t1", launchAgentId: "claude", command: "claude", agentLaunchFlags: [] },
+      { agentState: "working", launchAgentId: "claude" },
+      "sess-123"
+    );
+
+    await expect(restartTerminalWithoutView(PROJECT.id, "t1", deps)).resolves.toBe("restarted");
+
+    expect(channels(invoke)).toEqual([CHANNELS.TERMINAL_GRACEFUL_KILL, CHANNELS.TERMINAL_SPAWN]);
+    expect(invoke.mock.calls[0]?.[2]).toEqual(["t1", { forRestart: true }]);
+    const spawn = spawned(invoke);
+    expect(spawn).toMatchObject({
+      id: "t1",
+      projectId: PROJECT.id,
+      cwd: "/repo",
+      cols: 120,
+      rows: 40,
+      launchAgentId: "claude",
+    });
+    expect(String(spawn.command)).toContain("sess-123");
+    expect(spawn.actionContext).toMatchObject({ projectId: PROJECT.id, focusedTerminalId: "t1" });
+  });
+
+  it("records the resumed session for the pane's next restore", async () => {
+    const { deps, store } = setup(
+      { id: "t1", launchAgentId: "claude", command: "claude", agentSessionId: "old" },
+      { agentState: "working" },
+      "sess-123"
+    );
+
+    await restartTerminalWithoutView(PROJECT.id, "t1", deps);
+
+    expect(store.read()?.terminals[0]?.agentSessionId).toBe("sess-123");
+  });
+
+  it("relaunches the saved command when no session was captured", async () => {
+    const { deps, invoke } = setup(
+      { id: "t1", launchAgentId: "claude", command: "claude --model opus" },
+      { agentState: "working" }
+    );
+
+    await expect(restartTerminalWithoutView(PROJECT.id, "t1", deps)).resolves.toBe("restarted");
+    expect(spawned(invoke).command).toBe("claude --model opus");
+  });
+
+  it("kills and respawns a plain terminal with its command", async () => {
+    const { deps, invoke } = setup({ id: "t2", title: "Dev", command: "npm run dev" }, {});
+
+    await expect(restartTerminalWithoutView(PROJECT.id, "t2", deps)).resolves.toBe("restarted");
+    expect(channels(invoke)).toEqual([CHANNELS.TERMINAL_KILL, CHANNELS.TERMINAL_SPAWN]);
+    expect(spawned(invoke)).toMatchObject({ id: "t2", command: "npm run dev" });
+    expect(spawned(invoke)).not.toHaveProperty("launchAgentId");
+  });
+
+  it("leaves a terminal waiting for input alone", async () => {
+    const { deps, invoke } = setup(
+      { id: "t1", launchAgentId: "claude", command: "claude" },
+      { agentState: "waiting" }
+    );
+
+    await expect(restartTerminalWithoutView(PROJECT.id, "t1", deps)).resolves.toBe("waiting");
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("stops before the kill when the terminal was relaunched during its checks", async () => {
+    const { deps, invoke } = setup({ id: "t2", command: "npm run dev" }, {});
+
+    await expect(restartTerminalWithoutView(PROJECT.id, "t2", deps, () => false)).resolves.toBe(
+      "stale"
+    );
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("doesn't respawn when the terminal was relaunched or the policy stopped during the kill", async () => {
+    const { deps, invoke, store } = setup(
+      { id: "t1", launchAgentId: "claude", command: "claude", agentSessionId: "kept" },
+      { agentState: "working" },
+      "sess-123"
+    );
+    let current = true;
+    const kill = invoke.getMockImplementation()!;
+    invoke.mockImplementation(async (projectId, channel, args) => {
+      const answer = await kill(projectId, channel, args);
+      if (channel === CHANNELS.TERMINAL_GRACEFUL_KILL) current = false;
+      return answer;
+    });
+
+    await expect(restartTerminalWithoutView(PROJECT.id, "t1", deps, () => current)).resolves.toBe(
+      "stale"
+    );
+    expect(channels(invoke)).toEqual([CHANNELS.TERMINAL_GRACEFUL_KILL]);
+    expect(store.read()?.terminals[0]?.agentSessionId).toBe("kept");
+  });
+
+  it("leaves an agent that already quit to its shell alone", async () => {
+    const { deps, invoke } = setup(
+      { id: "t1", launchAgentId: "claude", command: "claude" },
+      { agentState: "exited" }
+    );
+
+    await expect(restartTerminalWithoutView(PROJECT.id, "t1", deps)).resolves.toBe("unsupported");
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("does nothing for a live terminal the project's saved layout doesn't hold", async () => {
+    const { deps, invoke } = setup({ id: "t1", command: "npm run dev" }, {});
+    const pty = makePty({ t1: { projectId: PROJECT.id }, other: { projectId: PROJECT.id } });
+    deps.getPtyReader = () => pty;
+
+    await expect(restartTerminalWithoutView(PROJECT.id, "other", deps)).resolves.toBe("gone");
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("leaves an agent running while the host is at its agent ceiling (#14704)", async () => {
+    const { deps, invoke, store } = setup(
+      { id: "t1", launchAgentId: "claude", command: "claude", agentSessionId: "kept" },
+      { agentState: "working" },
+      "sess-123"
+    );
+    const readHostAgentLimit = vi.fn(() => ({ host: "Studio", count: 10, limit: 10 }));
+    deps.readHostAgentLimit = readHostAgentLimit;
+
+    await expect(restartTerminalWithoutView(PROJECT.id, "t1", deps)).resolves.toBe("host-full");
+    expect(readHostAgentLimit).toHaveBeenCalledWith("t1");
+    expect(invoke).not.toHaveBeenCalled();
+    expect(store.read()?.terminals[0]?.agentSessionId).toBe("kept");
+  });
+
+  it("restarts an agent while the host has room, and a plain terminal regardless", async () => {
+    const roomy = setup(
+      { id: "t1", launchAgentId: "claude", command: "claude" },
+      { agentState: "working" }
+    );
+    roomy.deps.readHostAgentLimit = () => ({ host: "Studio", count: 9, limit: 10 });
+    await expect(restartTerminalWithoutView(PROJECT.id, "t1", roomy.deps)).resolves.toBe(
+      "restarted"
+    );
+
+    const plain = setup({ id: "t2", command: "npm run dev" }, {});
+    const readHostAgentLimit = vi.fn(() => ({ host: "Studio", count: 10, limit: 10 }));
+    plain.deps.readHostAgentLimit = readHostAgentLimit;
+    await expect(restartTerminalWithoutView(PROJECT.id, "t2", plain.deps)).resolves.toBe(
+      "restarted"
+    );
+    expect(readHostAgentLimit).not.toHaveBeenCalled();
+  });
+
+  it("keeps the captured session when the host refuses the relaunch after the quit", async () => {
+    const { deps, invoke, store } = setup(
+      { id: "t1", launchAgentId: "claude", command: "claude", agentSessionId: "old" },
+      { agentState: "working" },
+      "sess-123"
+    );
+    deps.readHostAgentLimit = () => ({ host: "Studio", count: 9, limit: 10 });
+    const kill = invoke.getMockImplementation()!;
+    invoke.mockImplementation(async (projectId, channel, args) => {
+      if (channel === CHANNELS.TERMINAL_SPAWN) {
+        throw Object.assign(new Error("Agent launch refused"), {
+          code: "HOST_AGENT_LIMIT_REACHED",
+          details: { code: "HOST_AGENT_LIMIT_REACHED", host: "Studio", count: 10, limit: 10 },
+        });
+      }
+      return kill(projectId, channel, args);
+    });
+
+    await expect(restartTerminalWithoutView(PROJECT.id, "t1", deps)).resolves.toBe("failed");
+    expect(channels(invoke)).toEqual([CHANNELS.TERMINAL_GRACEFUL_KILL, CHANNELS.TERMINAL_SPAWN]);
+    const kept = store.read()?.terminals[0];
+    expect(kept).toMatchObject({ id: "t1", launchAgentId: "claude", command: "claude" });
+    expect(kept?.agentSessionId).toBe("sess-123");
+  });
+
+  it("doesn't spawn when the terminal couldn't be stopped", async () => {
+    const { deps, invoke } = setup({ id: "t2", command: "npm run dev" }, {});
+    invoke.mockImplementation(async (_projectId, channel) => {
+      if (channel === CHANNELS.TERMINAL_KILL) throw new Error("host gone");
+      return undefined;
+    });
+
+    await expect(restartTerminalWithoutView(PROJECT.id, "t2", deps)).resolves.toBe("failed");
+    expect(channels(invoke)).toEqual([CHANNELS.TERMINAL_KILL]);
+  });
+});

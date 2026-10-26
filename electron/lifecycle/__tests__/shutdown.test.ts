@@ -309,6 +309,12 @@ const deferredInitQueueMock = vi.hoisted(() => ({
 
 vi.mock("../../window/deferredInitQueue.js", () => deferredInitQueueMock);
 
+const memoryLeakAutoRestartMock = vi.hoisted(() => ({
+  disposeMemoryLeakAutoRestart: vi.fn(),
+}));
+
+vi.mock("../../services/MemoryLeakAutoRestartService.js", () => memoryLeakAutoRestartMock);
+
 const openWindowsTrackerMock = vi.hoisted(() => ({
   freezeAndSnapshotOpenWindows: vi.fn(),
 }));
@@ -1497,6 +1503,28 @@ describe("registerShutdownHandler", () => {
       expect(record.agentId).toBe("claude");
       expect(record.cwd).toBe("/repo");
       expect(record.branch).toBe("feature/x");
+    });
+
+    it("stops the memory-leak auto-restart before any terminal is snapshotted or killed (#14703)", async () => {
+      // A restart decided mid-quit would relaunch a terminal behind the sweep
+      // and overwrite the session the writeback below persists for it.
+      projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-1" }] as never);
+      const getAllTerminalsAsync = vi.fn(async () => [agentTerminal]);
+      const gracefulKillByProject = vi.fn(async () => [{ id: "t1", agentSessionId: "sess-1" }]);
+      const ptyClient = makePtyClient({ getAllTerminalsAsync, gracefulKillByProject });
+      const { beforeQuitCb } = await setup({ getPtyClient: () => ptyClient });
+
+      await beforeQuitCb(makeEvent());
+      await vi.waitFor(() => expect(appMock.exit).toHaveBeenCalled());
+
+      const { disposeMemoryLeakAutoRestart } = memoryLeakAutoRestartMock;
+      expect(disposeMemoryLeakAutoRestart).toHaveBeenCalledTimes(1);
+      const disposedAt = disposeMemoryLeakAutoRestart.mock.invocationCallOrder[0]!;
+      expect(disposedAt).toBeLessThan(getAllTerminalsAsync.mock.invocationCallOrder[0]!);
+      expect(disposedAt).toBeLessThan(gracefulKillByProject.mock.invocationCallOrder[0]!);
+      expect(disposedAt).toBeLessThan(
+        projectStoreMock.enqueueProjectStateUpdate.mock.invocationCallOrder[0]!
+      );
     });
 
     describe("passive capture barrier (#12433)", () => {

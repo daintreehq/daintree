@@ -151,6 +151,19 @@ export async function spawnHostAssistantLive(
   return spawnHostAssistant(project, spec, deps);
 }
 
+/** Restart a terminal of a project no frontend is attached to (#14703); see `restartTerminalWithoutView`. */
+export async function restartTerminalWithoutViewLive(
+  projectId: string,
+  terminalId: string,
+  isCurrent: () => boolean
+): Promise<import("./viewlessTerminalRestart.js").ViewlessRestartOutcome> {
+  const [{ restartTerminalWithoutView }, deps] = await Promise.all([
+    import("./viewlessTerminalRestart.js"),
+    loadLiveDeps(),
+  ]);
+  return restartTerminalWithoutView(projectId, terminalId, deps, isCurrent);
+}
+
 /** The workspace identity a viewless result is stamped with, when it is a project. */
 export async function describeViewlessWorkspace(
   workspaceId: string

@@ -30,7 +30,6 @@ import {
  */
 export function usePanelStoreBootstrap(terminalConfig?: TerminalConfig | null) {
   const leakDetectionEnabled = useMemoryLeakConfigStore((s) => s.enabled);
-  const autoRestartThresholdMb = useMemoryLeakConfigStore((s) => s.autoRestartThresholdMb);
   const hasHydratedConfig = useRef(false);
 
   useEffect(() => {
@@ -97,5 +96,5 @@ export function usePanelStoreBootstrap(terminalConfig?: TerminalConfig | null) {
     };
   }, [terminalConfig]);
 
-  useMemoryLeakDetection(leakDetectionEnabled, autoRestartThresholdMb);
+  useMemoryLeakDetection(leakDetectionEnabled);
 }
