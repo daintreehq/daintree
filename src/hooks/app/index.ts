@@ -29,6 +29,7 @@ export { usePluginPanelActivitySeenTracking } from "./usePluginPanelActivitySeen
 export { useCanopySnapshotSync } from "./useCanopySnapshotSync";
 export { useCanopyDoubleShift } from "./useCanopyDoubleShift";
 export { useWorktreeCustomTitlesSync } from "./useWorktreeCustomTitlesSync";
+export { useReviewMarksSync } from "./useReviewMarksSync";
 export { useForgeEnableRecommendation } from "./useForgeEnableRecommendation";
 export { useFocusOnActivateIntent } from "./useFocusOnActivateIntent";
 export { useSleptProjectTransition } from "./useSleptProjectTransition";

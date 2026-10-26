@@ -1083,6 +1083,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       callback: (snapshot: import("./worktreeTitles.js").WorktreeTitlesSnapshot) => void
     ): () => void;
   };
+  // hydrate / mark / clear come from GeneratedElectronAPI; onChanged is a renderer-only subscription.
+  reviewMarks: GeneratedElectronAPI["reviewMarks"] & {
+    onChanged(
+      callback: (snapshot: import("./reviewMarks.js").ReviewMarksSnapshot) => void
+    ): () => void;
+  };
   // ensure / restart / stop / getState etc. come from GeneratedElectronAPI;
   // onStateChanged is a renderer-only subscription.
   devPreview: GeneratedElectronAPI["devPreview"] & {

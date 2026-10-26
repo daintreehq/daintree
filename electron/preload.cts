@@ -103,6 +103,7 @@ import { buildProjectPresencePreloadBindings } from "./ipc/handlers/projectPrese
 import { buildProjectPresentationPreloadBindings } from "./ipc/handlers/projectPresentation.preload.js";
 import { buildProjectThemePreloadBindings } from "./ipc/handlers/projectTheme.preload.js";
 import { buildWorktreeTitlesPreloadBindings } from "./ipc/handlers/worktreeTitles.preload.js";
+import { buildReviewMarksPreloadBindings } from "./ipc/handlers/reviewMarks.preload.js";
 import { buildDiffMediaPreloadBindings } from "./ipc/handlers/diffMedia.preload.js";
 import { buildFileDocumentPreloadBindings } from "./ipc/handlers/fileDocument.preload.js";
 import { buildFileBrowserPreloadBindings } from "./ipc/handlers/fileBrowser.preload.js";
@@ -1855,6 +1856,14 @@ function buildElectronApi(): ElectronAPI {
 
       onChanged: (callback: (snapshot: IpcEventMap["worktree-titles:changed"]) => void) =>
         _typedOn(CHANNELS.WORKTREE_TITLES_CHANGED, callback),
+    },
+
+    // The sender project's review marks (#14584)
+    reviewMarks: {
+      ...buildReviewMarksPreloadBindings(_unwrappingInvoke),
+
+      onChanged: (callback: (snapshot: IpcEventMap["review-marks:changed"]) => void) =>
+        _typedOn(CHANNELS.REVIEW_MARKS_CHANGED, callback),
     },
 
     // Dev Preview API

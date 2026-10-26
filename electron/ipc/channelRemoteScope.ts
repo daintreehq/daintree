@@ -67,6 +67,9 @@ export const CHANNEL_REMOTE_SCOPE: Readonly<Record<string, RemoteScopeTarget>> =
   "git:compare-worktrees": CWD_FIELD,
   "git:scan-conflict-markers": CWD_FIELD,
   "git:get-project-pulse": [{ from: "worktree", at: [0, "worktreeId"] }],
+  // A mark is checked against the worktree on disk, so only this project's may be named.
+  "review-marks:mark": [{ from: "worktree", at: [0] }],
+  "review-marks:clear": [{ from: "worktree", at: [0] }],
   "worktree:list-branches": ROOT_FIELD,
   "worktree:get-recent-branches": ROOT_FIELD,
   "worktree:get-available-branch": ROOT_FIELD,
