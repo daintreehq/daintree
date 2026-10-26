@@ -1305,12 +1305,12 @@ describe("voiceInput — context keyterms wiring", () => {
 
     try {
       await startFn(fakeEvent, nextSessionId());
-      emitTranscriptionEvent({ type: "complete", text: "open the zoo foo new line" });
+      emitTranscriptionEvent({ type: "complete", text: "link to the zoo foo new line" });
     } finally {
       shared.viewProjectId = null;
     }
 
-    expect(shared.fileLinkCalls).toEqual(["open the zoo foo\n"]);
+    expect(shared.fileLinkCalls).toEqual(["link to the zoo foo\n"]);
   });
 
   it("bails a Deepgram start whose assembly throws after a stop", async () => {

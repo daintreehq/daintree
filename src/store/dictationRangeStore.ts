@@ -134,9 +134,11 @@ interface DictationRangeState {
   /**
    * Writes `text` over a passage of the session's own words, as the session:
    * the passage's utterances become one holding it, still unedited, so
-   * correction treats it as dictated. Returns the span the passage covered
+   * correction treats it as dictated, and spoken file references still due
+   * for its transcript land in it. Returns the span the passage covered
    * before the write, or null, writing nothing, once the passage no longer
-   * holds `passage.text` or one of its words was edited.
+   * holds `passage.text`, one of its words was edited, or it spans two
+   * transcripts whose file references each belong in their own words.
    */
   rewritePassage: (
     id: string,
@@ -397,6 +399,9 @@ export const useDictationRangeStore = create<DictationRangeState>()((set, get) =
     ) {
       return null;
     }
+    const transcripts = new Set(run.flatMap((u) => (u.transcriptId ? [u.transcriptId] : [])));
+    if (transcripts.size > 1) return null;
+    const [transcriptId] = transcripts;
     const from = run[0]!.range.from;
     const to = run[run.length - 1]!.range.to;
     const inputStore = useTerminalInputStore.getState();
@@ -425,6 +430,7 @@ export const useDictationRangeStore = create<DictationRangeState>()((set, get) =
       range: unedited({ from, to: end }),
       insertion: { ...run[0]!.insertion, to: end },
       ...(separatorAfter ? { separatorAfter } : {}),
+      ...(transcriptId ? { transcriptId } : {}),
       ...(heard !== text ? { heard } : {}),
     };
     const delta = end - to;

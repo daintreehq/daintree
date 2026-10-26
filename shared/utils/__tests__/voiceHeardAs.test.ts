@@ -192,6 +192,20 @@ describe("createHeardAsRewriter", () => {
     expect(rewrite("мой КОТ и котик")).toBe("мой Кот и котик");
   });
 
+  it("scans past protected spans in linear time", () => {
+    // How much slower 4x the input runs: linear is about 4, quadratic about 16.
+    const fastest = (scale: number) => {
+      let best = Infinity;
+      for (let i = 0; i < 3; i++) {
+        const started = performance.now();
+        zustand("`zoo stand` ".repeat(4_000 * scale) + "zoo stand");
+        best = Math.min(best, performance.now() - started);
+      }
+      return best;
+    };
+    expect(fastest(4) / Math.max(fastest(1), 0.5)).toBeLessThan(10);
+  });
+
   it("stays fast on a long draft with a full dictionary, many matches and many spans", () => {
     const entries = Array.from({ length: MAX_HEARD_AS_RULES }, (_, i) =>
       entry(`Term${i}`, [`heard form ${i}`])

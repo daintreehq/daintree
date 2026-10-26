@@ -429,6 +429,43 @@ describe("dictationRangeStore", () => {
       expect(draft()).toBe("add zoo stand");
     });
 
+    it("keeps the transcript a passage's file references will land in", () => {
+      dictate("add zoo");
+      const { utterances } = only();
+      setDraft(draft() + " stand");
+      useDictationRangeStore.getState().recordUtterance(target, {
+        insertion: { from: 7, to: 13 },
+        words: { from: 8, to: 13 },
+        transcriptId: "t-1",
+      });
+      expect(only().utterances).toHaveLength(utterances.length + 1);
+
+      expect(rewrite("add Zustand")).not.toBeNull();
+      expect(only().utterances.map((u) => [textOf(u.range), u.transcriptId])).toEqual([
+        ["add Zustand", "t-1"],
+      ]);
+    });
+
+    it("writes nothing over two transcripts that each wait on file references", () => {
+      for (const [words, transcriptId] of [
+        ["add zoo", "t-1"],
+        ["stand", "t-2"],
+      ] as const) {
+        const base = draft();
+        const separator = base ? " " : "";
+        setDraft(base + separator + words);
+        const from = base.length + separator.length;
+        useDictationRangeStore.getState().recordUtterance(target, {
+          insertion: { from: base.length, to: from + words.length },
+          words: { from, to: from + words.length },
+          transcriptId,
+        });
+      }
+
+      expect(rewrite("add Zustand")).toBeNull();
+      expect(draft()).toBe("add zoo stand");
+    });
+
     it("writes nothing for a dictation the draft released", () => {
       dictate("add zoo");
       dictate("stand");
