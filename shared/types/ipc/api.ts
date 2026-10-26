@@ -1106,7 +1106,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       filePath: string,
       status: GitStatus,
       ignoreWhitespace?: boolean,
-      window?: { offset?: number; maxBytes?: number }
+      window?: {
+        offset?: number;
+        maxBytes?: number;
+        side?: import("../git.js").GitDiffSide;
+      }
     ): Promise<import("./git.js").GitFileDiffResult>;
     getProjectPulse(options: {
       worktreeId: string;

@@ -56,6 +56,7 @@ export function registerGitReadHandlers(deps: HandlerDependencies): () => void {
     filePath: string;
     status: string;
     ignoreWhitespace?: boolean;
+    side?: string;
     offset?: number;
     maxBytes?: number;
   }): Promise<GitFileDiffResult> => {
@@ -64,7 +65,7 @@ export function registerGitReadHandlers(deps: HandlerDependencies): () => void {
       throw new Error("Invalid payload");
     }
 
-    const { cwd, filePath, status, ignoreWhitespace, offset, maxBytes } = payload;
+    const { cwd, filePath, status, ignoreWhitespace, side, offset, maxBytes } = payload;
 
     if (typeof cwd !== "string" || !cwd) {
       throw new Error("Invalid working directory");
@@ -77,6 +78,9 @@ export function registerGitReadHandlers(deps: HandlerDependencies): () => void {
     }
     if (ignoreWhitespace !== undefined && typeof ignoreWhitespace !== "boolean") {
       throw new Error("Invalid ignoreWhitespace");
+    }
+    if (side !== undefined && side !== "staged" && side !== "unstaged") {
+      throw new Error("Invalid side");
     }
     // The renderer argsSchema is one caller among several; the ceiling is
     // re-enforced here so no IPC client can ask for an unbounded window.
@@ -101,7 +105,8 @@ export function registerGitReadHandlers(deps: HandlerDependencies): () => void {
         status,
         ignoreWhitespace,
         offset,
-        maxBytes
+        maxBytes,
+        side
       );
     } catch (error) {
       const errorMessage = formatErrorMessage(error, "Failed to get file diff");

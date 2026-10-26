@@ -1889,13 +1889,14 @@ function buildElectronApi(): ElectronAPI {
         filePath: string,
         status: GitStatus,
         ignoreWhitespace?: boolean,
-        window?: { offset?: number; maxBytes?: number }
+        window?: { offset?: number; maxBytes?: number; side?: "staged" | "unstaged" }
       ) =>
         _unwrappingInvoke(CHANNELS.GIT_GET_FILE_DIFF, {
           cwd,
           filePath,
           status,
           ignoreWhitespace,
+          side: window?.side,
           offset: window?.offset,
           maxBytes: window?.maxBytes,
         }),

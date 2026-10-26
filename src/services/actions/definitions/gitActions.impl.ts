@@ -264,11 +264,12 @@ export const gitActionRuns = {
     return projectPulseForAction(pulse, rangeDays);
   },
   "git.getFileDiff": async (args: unknown, ctx: ActionContext) => {
-    const { filePath, status, ignoreWhitespace, offset, maxBytes, ...location } =
+    const { filePath, status, ignoreWhitespace, side, offset, maxBytes, ...location } =
       args as WorktreeLocationArgs & {
         filePath: string;
         status: z.infer<typeof GitStatusSchema>;
         ignoreWhitespace?: boolean;
+        side?: "staged" | "unstaged";
         offset?: number;
         maxBytes?: number;
       };
@@ -283,6 +284,7 @@ export const gitActionRuns = {
       {
         offset: Math.max(Math.trunc(offset ?? 0) || 0, 0),
         maxBytes: clamp(maxBytes ?? GIT_FILE_DIFF_DEFAULT_MAX_BYTES, 1, GIT_FILE_DIFF_MAX_BYTES),
+        side,
       }
     );
     return {

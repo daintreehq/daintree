@@ -59,7 +59,37 @@ describe("git:get-file-diff window validation", () => {
     const handler = setup();
     await handler({}, { ...base, ignoreWhitespace: true, offset: 2048, maxBytes: 4096 });
 
-    expect(getFileDiffMock).toHaveBeenCalledWith("/repo", "a.ts", "modified", true, 2048, 4096);
+    expect(getFileDiffMock).toHaveBeenCalledWith(
+      "/repo",
+      "a.ts",
+      "modified",
+      true,
+      2048,
+      4096,
+      undefined
+    );
+  });
+
+  it.each(["staged", "unstaged"])("forwards the %s side to the workspace service", async (side) => {
+    const handler = setup();
+    await handler({}, { ...base, side });
+
+    expect(getFileDiffMock).toHaveBeenCalledWith(
+      "/repo",
+      "a.ts",
+      "modified",
+      undefined,
+      undefined,
+      undefined,
+      side
+    );
+  });
+
+  it.each(["index", "", 1])("rejects the side %j without reaching the workspace service", async (side) => {
+    const handler = setup();
+
+    await expect(handler({}, { ...base, side })).rejects.toThrow("Invalid side");
+    expect(getFileDiffMock).not.toHaveBeenCalled();
   });
 
   it("forwards undefined bounds untouched so the service picks its own default", async () => {
@@ -70,6 +100,7 @@ describe("git:get-file-diff window validation", () => {
       "/repo",
       "a.ts",
       "modified",
+      undefined,
       undefined,
       undefined,
       undefined
@@ -86,7 +117,8 @@ describe("git:get-file-diff window validation", () => {
       "modified",
       undefined,
       0,
-      GIT_FILE_DIFF_MAX_BYTES
+      GIT_FILE_DIFF_MAX_BYTES,
+      undefined
     );
   });
 

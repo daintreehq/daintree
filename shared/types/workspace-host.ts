@@ -12,7 +12,13 @@
  */
 
 import type { HostLogEvent } from "./host-log.js";
-import type { BranchInfo, CreateWorktreeOptions, RepoState, WorktreeChanges } from "./git.js";
+import type {
+  BranchInfo,
+  CreateWorktreeOptions,
+  GitDiffSide,
+  RepoState,
+  WorktreeChanges,
+} from "./git.js";
 import type {
   Worktree,
   WorktreeMood,
@@ -618,6 +624,7 @@ export type WorkspaceHostRequest =
       ignoreWhitespace?: boolean;
       offset?: number;
       maxBytes?: number;
+      side?: GitDiffSide;
     }
   // App-wide workspace power policy. The host keeps it as a separate input
   // from its own project-lifecycle state and derives permissions from both.

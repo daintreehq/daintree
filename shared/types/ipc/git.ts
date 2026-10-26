@@ -1,4 +1,4 @@
-import type { GitStatus } from "../git.js";
+import type { GitDiffSide, GitStatus } from "../git.js";
 
 /** Get file diff payload */
 export interface GitGetFileDiffPayload {
@@ -10,6 +10,8 @@ export interface GitGetFileDiffPayload {
   status: GitStatus;
   /** When true, passes --ignore-all-space so whitespace-only changes are omitted */
   ignoreWhitespace?: boolean;
+  /** Which side of the index to diff; omitted diffs HEAD against the working tree */
+  side?: GitDiffSide;
   /** Byte offset to start the diff window at (default 0) */
   offset?: number;
   /** Maximum bytes to return in this window (capped at GIT_FILE_DIFF_MAX_BYTES) */

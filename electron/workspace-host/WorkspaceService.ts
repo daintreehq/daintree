@@ -72,7 +72,7 @@ import type {
 } from "../../shared/types/plugin.js";
 import type { GitOperationReason } from "../../shared/types/ipc/errors.js";
 import type { CIStatus, NormalizedPRState, PRMergeIntent } from "../../shared/types/forge.js";
-import type { WorktreeChanges } from "../../shared/types/git.js";
+import type { GitDiffSide, WorktreeChanges } from "../../shared/types/git.js";
 import type {
   SubmoduleAtRiskCommit,
   SubmoduleDeleteRisk,
@@ -5332,7 +5332,8 @@ export class WorkspaceService {
     status: string,
     ignoreWhitespace?: boolean,
     offset?: number,
-    maxBytes?: number
+    maxBytes?: number,
+    side?: GitDiffSide
   ): Promise<void> {
     // A sentinel is a marker, not diff content — it is never windowed, and
     // totalBytes 0 is what tells the caller to read `diff` as a marker.
@@ -5387,7 +5388,7 @@ export class WorkspaceService {
       // per window.
       const continuation = (offset ?? 0) > 0;
       const cacheKeyFor = (source: "file" | "git"): string =>
-        FileDiffCache.key(source, cwd, gitPath, status, ignoreWhitespace === true);
+        FileDiffCache.key(source, cwd, gitPath, status, ignoreWhitespace === true, side);
       const serveFromCache = (key: string, freshness: string | null): boolean => {
         const cached = freshness === null ? null : this.fileDiffCache.get(key, freshness);
         if (cached === null) return false;
@@ -5423,7 +5424,15 @@ export class WorkspaceService {
 
       const git = await createHardenedGit(cwd);
 
-      if (status === "untracked" || status === "added") {
+      // The staged side is the index blob, never the working-tree file, so only
+      // the unstaged side of a file git does not know yet is inlined from disk.
+      const inlinesWorktreeFile =
+        side === "staged"
+          ? false
+          : side === "unstaged"
+            ? status === "untracked"
+            : status === "untracked" || status === "added";
+      if (inlinesWorktreeFile) {
         const { readFile } = await import("fs/promises");
         // Taken before the read: a write that lands after it changes the key,
         // so the next window recomputes instead of serving what this read saw.
@@ -5484,12 +5493,19 @@ export class WorkspaceService {
       // recognise as a gitlink (#12309).
       // Capped while git runs, since the stat gate above fails open for a
       // deleted file and never sees the HEAD blob.
+      // HEAD is pinned to the commit the freshness key was taken against, so a
+      // HEAD that moves away and back mid-diff cannot pass off a patch against
+      // the other commit as fresh. The staged side leaves it off when HEAD is
+      // unborn: `--cached` alone then diffs the index against the empty tree.
+      const baseRefArgs =
+        side === "unstaged"
+          ? []
+          : side === "staged"
+            ? ["--cached", ...(freshness ? [freshness.head] : [])]
+            : [freshness?.head ?? "HEAD"];
       const diff = await runWithCappedStdout(cwd, GIT_FILE_DIFF_MAX_PATCH_BYTES, (capped) =>
         capped.diff([
-          // Pinned to the commit the freshness key was taken against, so a HEAD
-          // that moves away and back mid-diff cannot pass off a patch against
-          // the other commit as fresh.
-          freshness?.head ?? "HEAD",
+          ...baseRefArgs,
           "--no-ext-diff",
           "--no-textconv",
           "--no-color",

@@ -695,7 +695,8 @@ port.on("message", async (rawMsg: any) => {
           request.status,
           request.ignoreWhitespace,
           request.offset,
-          request.maxBytes
+          request.maxBytes,
+          request.side
         );
         break;
 
