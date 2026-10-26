@@ -677,14 +677,21 @@ describe("useReEntrySummary", () => {
     });
     addEntry({ type: "warning", message: "Mine", context: { panelId: "panel-here" } });
     addEntry({ type: "warning", message: "Another view's", context: { panelId: "panel-there" } });
+    // A project id settles ownership on its own, even once the panel is gone.
+    addEntry({
+      type: "warning",
+      message: "Closed here",
+      context: { projectId: "proj-here", panelId: "panel-closed" },
+    });
 
     focusAfter(5000);
 
-    expect(result.current.entries.map((e) => e.message)).toEqual(["Mine"]);
+    expect(result.current.entries.map((e) => e.message).sort()).toEqual(["Closed here", "Mine"]);
     const byMessage = new Map(
       useNotificationHistoryStore.getState().entries.map((e) => [e.message, e.summarized])
     );
     expect(byMessage.get("Mine")).toBe(true);
+    expect(byMessage.get("Closed here")).toBe(true);
     expect(byMessage.get("Another view's")).toBe(false);
   });
 
@@ -731,20 +738,22 @@ describe("useReEntrySummary", () => {
     act(() => {
       window.dispatchEvent(new Event("blur"));
     });
-    now += 1000;
-    addEntry({
-      type: "error",
-      message: "First failure",
-      context: { worktreeId: "wt-1", panelId: "panel-first" },
-    });
-    now += 60_000;
+    // The history prepends, so the later entry is added first: the loop then
+    // starts on the older one and has to move to the newer by its timestamp.
+    now += 61_000;
     addEntry({
       type: "error",
       message: "Second failure",
       context: { worktreeId: "wt-1", panelId: "panel-second" },
     });
     const secondAt = now;
-    now += 5000;
+    now -= 60_000;
+    addEntry({
+      type: "error",
+      message: "First failure",
+      context: { worktreeId: "wt-1", panelId: "panel-first" },
+    });
+    now += 65_000;
     act(() => {
       window.dispatchEvent(new Event("focus"));
     });

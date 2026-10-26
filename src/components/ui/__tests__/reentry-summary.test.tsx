@@ -437,7 +437,8 @@ describe("ReEntrySummary", () => {
     // drive the real `useAnimatedPresence` rather than mocking it — the whole
     // point of the fix is how long the card stays mounted.
     const dismissedState = (dismiss: () => void) =>
-      makeState({ visible: false, dismiss, rows: [], overflowCount: 0 });
+      // What the hook returns once dismissed: its EMPTY state, clock and all.
+      makeState({ visible: false, dismiss, rows: [], overflowCount: 0, shownAt: 0 });
 
     it("keeps the card mounted for the exit window, then unmounts it", () => {
       const dismiss = vi.fn();
@@ -463,11 +464,19 @@ describe("ReEntrySummary", () => {
 
     it("keeps rendering the dismissed summary's rows while it slides out", () => {
       const dismiss = vi.fn();
+      const shownAt = Date.now();
       const { rerender } = render(
         <ReEntrySummary
           state={makeState({
             dismiss,
-            rows: [makeRow({ label: "feature-foo", highlightTitle: "Build failed" })],
+            shownAt,
+            rows: [
+              makeRow({
+                label: "feature-foo",
+                highlightTitle: "Build failed",
+                highlight: { timestamp: shownAt - 5 * 60_000 },
+              }),
+            ],
             overflowCount: 2,
           })}
         />
@@ -479,6 +488,8 @@ describe("ReEntrySummary", () => {
       expect(screen.getByText("feature-foo")).toBeTruthy();
       expect(screen.getByText("Build failed")).toBeTruthy();
       expect(screen.getByText("+2 more")).toBeTruthy();
+      // The age keeps the summary's own clock, not the EMPTY state's zero.
+      expect(screen.getByRole("status").querySelector("time")?.textContent).toBe("5m ago");
     });
 
     it("makes the exiting card inert rather than aria-hidden", () => {
