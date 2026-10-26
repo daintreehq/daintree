@@ -385,6 +385,39 @@ describe("webContentsRegistry", () => {
     expect(isCachedViewWebContents(wc.id)).toBe(false);
   });
 
+  it("lists every project view a window holds, current first, and no other window's", async () => {
+    const { getWindowAppWebContents, registerAppView, registerProjectView, registerWebContents } =
+      await loadRegistry();
+    const win = createWindow(1);
+    const otherWin = createWindow(2);
+    const front = createWebContents(201);
+    const cached = createWebContents(202);
+    const elsewhere = createWebContents(203);
+    const byId = new Map([front, cached, elsewhere].map((wc) => [wc.id, wc]));
+    electronMock.fromId.mockImplementation(
+      (id) => (byId.get(id) as unknown as WebContents) ?? null
+    );
+
+    registerProjectView("project-b", cached as unknown as WebContents);
+    registerWebContents(cached as unknown as WebContents, win);
+    registerProjectView("project-a", front as unknown as WebContents);
+    registerAppView(win, createView(front));
+    registerProjectView("project-c", elsewhere as unknown as WebContents);
+    registerWebContents(elsewhere as unknown as WebContents, otherWin);
+
+    expect(getWindowAppWebContents(win).map((wc) => wc.id)).toEqual([201, 202]);
+
+    cached.setDestroyed(true);
+    expect(getWindowAppWebContents(win).map((wc) => wc.id)).toEqual([201]);
+  });
+
+  it("falls back to the window's own webContents when it holds no project views", async () => {
+    const { getWindowAppWebContents } = await loadRegistry();
+    const win = createWindow(3);
+
+    expect(getWindowAppWebContents(win)).toEqual([win.webContents]);
+  });
+
   describe("fallback-eligible project set (#12557)", () => {
     it("reports projects whose views hold no port, and drops one once it does", async () => {
       const { getFallbackEligibleProjectIds, registerProjectView, registerPortHolderWebContents } =
