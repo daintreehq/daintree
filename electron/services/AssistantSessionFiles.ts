@@ -49,6 +49,15 @@ import {
   sessionIdFromLaneMcpConfigName,
 } from "../../shared/config/assistantSlots.js";
 import { HelpSessionError } from "./helpSessionError.js";
+import {
+  HOST_INVENTORY_END,
+  HOST_INVENTORY_FILE,
+  HOST_INVENTORY_RESUME_HOOK,
+  HOST_INVENTORY_START,
+  buildHostInventoryBlock,
+  buildHostInventorySidecar,
+  type HostInventorySnapshot,
+} from "./globalAssistantInventory.js";
 
 const META_FILE_NAME = "meta.json";
 // Copilot substitutes this from PTY env at spawn rather than baking a literal
@@ -445,6 +454,8 @@ export interface PrepareSessionDirectoryInput {
   confirmationsSkipped: () => boolean;
   projectFacts: HelpSessionProjectFacts;
   pluginKnowledge: readonly AssistantPluginKnowledge[];
+  /** The global assistant's launch snapshot (#14547); null when it couldn't be read. Ignored for a project lane. */
+  hostInventory?: HostInventorySnapshot | null;
   /** Asked under the directory lock, where sibling sidecar retirement is decided. */
   siblingLaneLive: () => boolean;
   mcpPort: () => Promise<number | null>;
@@ -704,6 +715,10 @@ export class AssistantSessionFiles {
                 facts: projectFacts,
               })
         );
+        await this.writeHostInventory(
+          sessionPath,
+          input.global === true ? (input.hostInventory ?? { takenAt: Date.now(), hosts: [] }) : null
+        );
         const siblingLaneLive = input.siblingLaneLive();
         await this.runContentStep(sessionPath, "write the assistant's instructions", () =>
           this.writeUserInstructions(
@@ -732,7 +747,8 @@ export class AssistantSessionFiles {
             helpFolder,
             settings,
             userConfig.claudeHooks,
-            input.projectPath
+            input.projectPath,
+            input.global === true
           );
         } else if (input.agentId === "copilot") {
           await this.writeCopilotMcpConfig(sessionPath, settings, port, userConfig.mcpServers);
@@ -1038,7 +1054,8 @@ export class AssistantSessionFiles {
     bundledHelpFolder: string,
     settings: { daintreeControl: boolean; bypassPermissions: boolean },
     userHooks: Record<string, unknown> | null = null,
-    projectPath?: string
+    projectPath?: string,
+    resumeInventoryHook = false
   ): Promise<void> {
     const bundledSettingsPath = path.join(bundledHelpFolder, ".claude", "settings.json");
     const baseline = await this.readBundledSettings(bundledSettingsPath);
@@ -1085,6 +1102,15 @@ export class AssistantSessionFiles {
       merged.hooks = deepClonePlainJson(userHooks);
     } else {
       delete merged.hooks;
+    }
+    // The global assistant's reopened conversation is handed the current
+    // inventory (#14547), beside whatever SessionStart hooks the user's own
+    // assistant config adds.
+    if (resumeInventoryHook) {
+      const hooks = (merged.hooks ?? {}) as Record<string, unknown>;
+      const sessionStart = Array.isArray(hooks.SessionStart) ? hooks.SessionStart : [];
+      hooks.SessionStart = [...sessionStart, deepClonePlainJson(HOST_INVENTORY_RESUME_HOOK)];
+      merged.hooks = hooks;
     }
 
     const target = path.join(sessionPath, ".claude", "settings.json");
@@ -1237,6 +1263,33 @@ export class AssistantSessionFiles {
           mode: 0o600,
         });
       })
+    );
+  }
+
+  /**
+   * The global assistant's host and project snapshot (#14547), in both prompt
+   * files and in the sidecar a reopened conversation reads; null takes both
+   * away, so a project lane never carries it. The sidecar is written first: a
+   * launch must not point at a file still holding the previous snapshot.
+   */
+  private async writeHostInventory(
+    sessionPath: string,
+    snapshot: HostInventorySnapshot | null
+  ): Promise<void> {
+    const sidecar = path.join(sessionPath, HOST_INVENTORY_FILE);
+    if (snapshot) {
+      await resilientAtomicWriteFile(sidecar, buildHostInventorySidecar(snapshot), "utf-8", {
+        mode: 0o600,
+      });
+    } else {
+      await fs.rm(sidecar, { force: true });
+    }
+    const body = snapshot ? buildHostInventoryBlock(snapshot) : null;
+    const markers = { start: HOST_INVENTORY_START, end: HOST_INVENTORY_END };
+    await Promise.all(
+      PROMPT_FILES.map((name) =>
+        this.writeManagedBlock(path.join(sessionPath, name), markers, body)
+      )
     );
   }
 

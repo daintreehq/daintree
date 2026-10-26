@@ -25,6 +25,7 @@ import {
   type HostWatchArgs,
   type HostWatchResult,
 } from "../../../shared/types/hostControl.js";
+import type { HostInventorySnapshot } from "../globalAssistantInventory.js";
 
 /**
  * What the MCP server needs of the Shell's host-control runtime (#13493),
@@ -55,6 +56,8 @@ export interface HostControlRuntimeHandle {
   ): Promise<HostControlOutcome<HostSettingsResult>>;
   /** Arms, cancels or lists the calling run's one-shot watches on a host's link or capacity (#14463). */
   watch(helpSessionId: string, args: HostWatchArgs): Promise<HostControlOutcome<HostWatchResult>>;
+  /** The hosts and projects the global assistant starts knowing (#14547); never dials a host. */
+  inventory?(): Promise<HostInventorySnapshot>;
 }
 
 /** What a `host.call` carries from the calling session beyond its arguments. */
@@ -71,6 +74,22 @@ export function setHostControlRuntime(runtime: HostControlRuntimeHandle): () => 
   return () => {
     if (installedRuntime === runtime) installedRuntime = null;
   };
+}
+
+/**
+ * The global assistant's launch snapshot (#14547), or null when no runtime is
+ * installed or it couldn't be read: the assistant is then told to ask
+ * `host.list`, never that there are no hosts.
+ */
+export async function readHostInventory(): Promise<HostInventorySnapshot | null> {
+  const read = installedRuntime?.inventory;
+  if (!installedRuntime || !read) return null;
+  try {
+    return await read.call(installedRuntime);
+  } catch (error) {
+    console.warn("[HostControl] Couldn't read the host inventory:", error);
+    return null;
+  }
 }
 
 export const HOST_CONTROL_NOT_ELIGIBLE_MESSAGE =

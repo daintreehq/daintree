@@ -64,12 +64,12 @@ export interface ProjectMetadataInput {
  * exist, and can reassemble the very delimiter it removed. Oversized values are
  * dropped for the same reason rather than shortened.
  */
-function cleanValue(value: string | undefined): string | null {
+function cleanValue(value: string | undefined, maxBytes = MAX_VALUE_BYTES): string | null {
   if (typeof value !== "string" || value.length === 0) return null;
   // eslint-disable-next-line no-control-regex
   if (/[\u0000-\u001f\u007f`]/.test(value)) return null;
   if (value.includes("<!--") || value.includes("-->")) return null;
-  if (Buffer.byteLength(value, "utf8") > MAX_VALUE_BYTES) return null;
+  if (Buffer.byteLength(value, "utf8") > maxBytes) return null;
   return value;
 }
 
@@ -123,12 +123,17 @@ const FORMAT_CONTROLS = /\p{Cf}/u;
  * the line it sits on is dropped too.
  */
 function cleanAgentValue(value: string): string | null {
-  const cleaned = cleanValue(value);
-  return cleaned !== null &&
-    Buffer.byteLength(cleaned, "utf8") <= MAX_AGENT_VALUE_BYTES &&
-    !FORMAT_CONTROLS.test(cleaned)
-    ? cleaned
-    : null;
+  return cleanDisplayValue(value, MAX_AGENT_VALUE_BYTES);
+}
+
+/**
+ * A name from outside Daintree's own registries (an agent, a host, a
+ * project) as it may sit in a code span: {@link cleanValue}, no longer than
+ * `maxBytes`, and nothing that could reorder the line it sits on.
+ */
+export function cleanDisplayValue(value: string | undefined, maxBytes: number): string | null {
+  const cleaned = cleanValue(value, maxBytes);
+  return cleaned !== null && !FORMAT_CONTROLS.test(cleaned) ? cleaned : null;
 }
 
 /** Letters and digits only, for telling whether a name adds anything to its id. */
