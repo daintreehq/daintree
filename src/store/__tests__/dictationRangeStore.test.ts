@@ -446,7 +446,7 @@ describe("dictationRangeStore", () => {
       ]);
     });
 
-    it("writes nothing over two transcripts that each wait on file references", () => {
+    it("merges two transcripts, keeping the first for a file reference still due", () => {
       for (const [words, transcriptId] of [
         ["add zoo", "t-1"],
         ["stand", "t-2"],
@@ -462,8 +462,10 @@ describe("dictationRangeStore", () => {
         });
       }
 
-      expect(rewrite("add Zustand")).toBeNull();
-      expect(draft()).toBe("add zoo stand");
+      expect(rewrite("add Zustand")).not.toBeNull();
+      expect(only().utterances.map((u) => [textOf(u.range), u.transcriptId])).toEqual([
+        ["add Zustand", "t-1"],
+      ]);
     });
 
     it("writes nothing for a dictation the draft released", () => {
