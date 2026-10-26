@@ -76,9 +76,10 @@ export function applyDictationCommands(text: string): string {
 
 const SEND_COMMAND_RE = /(?:^|[\s.,;:!?]+)\bsend\s+it[\s.,;:!?]*$/i;
 
-// "don't send it" talks about sending rather than asking for it.
+// "don't send it", "not to send it" and "don't just send it" talk about
+// sending rather than asking for it.
 const NEGATED_SEND_RE =
-  /(?:^|[^\p{L}\p{N}'’])(?:don['’]?t|not|never|won['’]?t|can['’]?t|cannot|shouldn['’]?t)\s+send\s+it[\s.,;:!?]*$/iu;
+  /(?:^|[^\p{L}\p{N}'’])(?:(?:do|does|did|is|wo|ca|would|could|should)n['’]?t|not|never|cannot)\s+(?:to\s+)?(?:(?:just|yet)\s+)?send\s+it[\s.,;:!?]*$/iu;
 
 export interface SendCommandResult {
   text: string;

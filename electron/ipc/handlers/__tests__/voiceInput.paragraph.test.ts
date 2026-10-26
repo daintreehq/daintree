@@ -862,6 +862,21 @@ describe("voiceInput — spoken send on Deepgram's short endpoint", () => {
     ]);
   });
 
+  it("keeps 'send it' literal, and sends nothing, when the socket drops inside the window", () => {
+    sentenceEndingInSend();
+    vi.advanceTimersByTime(300);
+    emitTranscriptionEvent({ type: "status", status: "reconnecting" });
+    vi.advanceTimersByTime(5000);
+
+    expect(toRenderer()).toEqual([
+      completion("Fix the login bug, send it."),
+      {
+        channel: "voice-input:status",
+        payload: { sessionId: currentSessionId, status: "reconnecting" },
+      },
+    ]);
+  });
+
   it("drops a held send when a newer session supersedes it", async () => {
     sentenceEndingInSend();
     const handleStart = getHandler("voice-input:start");

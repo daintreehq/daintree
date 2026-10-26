@@ -1116,6 +1116,10 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
           // A provider that dies ends the dictation, like a stop.
           if (voiceEvent.status === "error" || voiceEvent.status === "idle") {
             releaseHeldSend(session, "strip");
+          } else if (voiceEvent.status === "reconnecting") {
+            // Nothing is transcribed while the socket is down, so the window
+            // can no longer show whether the speaker went on: keep the words.
+            releaseHeldSend(session, "literal");
           }
           return;
       }

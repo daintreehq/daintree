@@ -96,6 +96,8 @@ describe("extractSendCommand", () => {
     ["send it", ""],
     ["Tie the knot send it", "Tie the knot"],
     ["Is it right or not? Send it.", "Is it right or not"],
+    ["Looks good, just send it.", "Looks good, just"],
+    ["Don't wait, just send it.", "Don't wait, just"],
   ])("strips the trailing command from %j", (input, text) => {
     expect(extractSendCommand(input)).toEqual({ text, send: true });
   });
@@ -121,6 +123,17 @@ describe("extractSendCommand", () => {
     "I cannot send it",
     "You shouldn't send it.",
     "You shouldnt send it",
+    "I didn't send it.",
+    "I didn’t send it",
+    "It doesn't send it",
+    "It doesnt send it",
+    "I wouldn't send it.",
+    "We couldn't send it",
+    "This isn't send it",
+    "Remember not to send it.",
+    "Don't just send it.",
+    "Please don’t just send it",
+    "Do not yet send it",
   ])("leaves %j literal", (input) => {
     expect(extractSendCommand(input)).toEqual({ text: input, send: false });
   });
