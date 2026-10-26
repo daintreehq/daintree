@@ -357,7 +357,7 @@ vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
 vi.mock("@/store/terminalInputStore", () => {
   const getState = () => ({ ...runtime.terminalInputFns, hybridInputEnabled: true });
   return {
-    useTerminalInputStore: Object.assign(getState, { getState }),
+    useTerminalInputStore: Object.assign(getState, { getState, subscribe: () => () => {} }),
   };
 });
 

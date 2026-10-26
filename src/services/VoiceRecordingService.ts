@@ -6,6 +6,8 @@ import { shouldShowHybridInputBar } from "@/components/Terminal/terminalFocus";
 import { useHelpPanelStore, selectActiveSlot } from "@/store/helpPanelStore";
 import { isAssistantFocused } from "@/store/macroFocusStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
+import { makeDraftKey } from "@/lib/draftKey";
+import { minimalDocChange } from "@/lib/textRangeMapping";
 import { useDictationRangeStore, type DictationRecord } from "@/store/dictationRangeStore";
 import {
   isVoiceMicPending,
@@ -152,6 +154,19 @@ interface PendingCorrection {
   settle: () => void;
 }
 
+/**
+ * Where a dictated passage starting at `start` begins once the draft went from
+ * `before` to `after`: moved by an edit before it (text typed at its start
+ * stays outside it), unmoved by one inside or after it, and -1 when an edit
+ * ran across its start.
+ */
+function mapLearningStart(before: string, after: string, start: number): number {
+  const change = minimalDocChange(before, after);
+  if (!change || (change.from >= start && change.to > start)) return start;
+  if (change.to <= start) return start + change.insert.length - (change.to - change.from);
+  return -1;
+}
+
 /** The text a session dictated into its target's draft, while the draft still holds it. */
 function findDictation(
   target: VoiceRecordingTarget,
@@ -277,6 +292,7 @@ class VoiceRecordingService {
   // The correction whose seed each panel's learning baseline holds. Text alone
   // can't tell two passages dictated with the same words apart.
   private baselineOwners = new Map<string, PendingCorrection>();
+  private unfollowBaselines: (() => void) | null = null;
 
   initialize(): void {
     if (this.initialized) return;
@@ -1819,9 +1835,9 @@ class VoiceRecordingService {
                 useTerminalInputStore.getState().getDraftInput(panelId, projectId)
               )
             : [];
-          useVoiceRecordingStore
-            .getState()
-            .setSessionCorrectedText(panelId, joinPassageTexts(passages.map((p) => p.text)));
+          const baseline = joinPassageTexts(passages.map((p) => p.text));
+          useVoiceRecordingStore.getState().setSessionCorrectedText(panelId, baseline);
+          if (baseline) this.followLearningBaselines();
         }
       }
     })();
@@ -1860,6 +1876,7 @@ class VoiceRecordingService {
     // the correction never lands (#9749).
     const seed = joinPassageTexts(passages.map((p) => p.text));
     useVoiceRecordingStore.getState().setSessionCorrectedText(panelId, seed);
+    if (seed) this.followLearningBaselines();
 
     logDebug(`${LOG_PREFIX} Running correction`, {
       panelId,
@@ -2100,6 +2117,46 @@ class VoiceRecordingService {
       }
       for (const panelId of touched) this.syncCorrectionRange(panelId);
     });
+  }
+
+  /**
+   * Keeps each panel's learning baseline tied to the draft it was dictated
+   * into, while any baseline exists. A draft cleared without a send (Escape, a
+   * fleet broadcast) takes its baseline with it, or the next unrelated send
+   * would be diffed against it; an edit before the passage moves its start.
+   */
+  private followLearningBaselines(): void {
+    if (this.unfollowBaselines) return;
+    this.unfollowBaselines = useTerminalInputStore.subscribe((state, prev) => {
+      if (state.draftInputs === prev.draftInputs) return;
+      const voiceStore = useVoiceRecordingStore.getState();
+      let following = false;
+      for (const [panelId, buffer] of Object.entries(voiceStore.panelBuffers)) {
+        if (buffer.sessionCorrectedText === null || buffer.sessionDraftStart < 0) continue;
+        const key = makeDraftKey(panelId, buffer.projectId);
+        const before = prev.draftInputs.get(key) ?? "";
+        const after = state.draftInputs.get(key) ?? "";
+        const start = after.trim() ? mapLearningStart(before, after, buffer.sessionDraftStart) : -1;
+        if (start < 0) {
+          voiceStore.setSessionCorrectedText(panelId, null);
+          continue;
+        }
+        following = true;
+        if (start !== buffer.sessionDraftStart) {
+          voiceStore.shiftDraftOffsets(
+            panelId,
+            buffer.sessionDraftStart,
+            start - buffer.sessionDraftStart
+          );
+        }
+      }
+      if (!following) this.unfollowLearningBaselines();
+    });
+  }
+
+  private unfollowLearningBaselines(): void {
+    this.unfollowBaselines?.();
+    this.unfollowBaselines = null;
   }
 
   /** Points the panel's "correcting" decoration at its pending passages. */
@@ -2721,6 +2778,7 @@ class VoiceRecordingService {
     }
     for (const panelId of correctedPanels) this.syncCorrectionRange(panelId);
     this.baselineOwners.clear();
+    this.unfollowLearningBaselines();
     for (const unsub of this.unsubscribers) {
       unsub();
     }

@@ -6,6 +6,7 @@ import {
   isLearnableTerm,
   findCorrectionCandidates,
 } from "../phoneticSimilarity.js";
+import { isCommonEnglishWord } from "../commonEnglishWords.js";
 
 describe("soundex", () => {
   it("encodes a word as a letter followed by three digits", () => {
@@ -112,8 +113,9 @@ describe("findCorrectionCandidates", () => {
     expect(findCorrectionCandidates("send 1234 now", "send 5678 now")).toEqual([]);
   });
 
-  it("ignores case-only differences from AI correction", () => {
-    expect(findCorrectionCandidates("install zustand today", "install Zustand today")).toEqual([]);
+  it("ignores a capital the user added at the start of a sentence", () => {
+    expect(findCorrectionCandidates("install it. then run", "install it. Then run")).toEqual([]);
+    expect(findCorrectionCandidates("zustand is next", "Zustand is next")).toEqual([]);
   });
 
   it("dedupes repeated corrections to the same term", () => {
@@ -133,10 +135,80 @@ describe("findCorrectionCandidates", () => {
     // "and"/"tests" were appended, not dictated — must not leak in as terms.
     const result = findCorrectionCandidates("zoo stand", "Zustand and tests");
     expect(result.map((c) => c.word)).not.toContain("tests");
+    expect(result.map((c) => c.word)).not.toContain("Zustand and tests");
   });
 
   it("handles empty input without throwing", () => {
     expect(findCorrectionCandidates("", "")).toEqual([]);
     expect(findCorrectionCandidates("hello", "")).toEqual([]);
+  });
+});
+
+describe("findCorrectionCandidates: rewording versus mishearing (#14645)", () => {
+  it.each([
+    ["modal", "model"],
+    ["settings", "sessions"],
+    ["faster", "further"],
+    ["push", "publish"],
+  ])("does not suggest the rewording %s → %s", (said, sent) => {
+    expect(findCorrectionCandidates(`check the ${said} first`, `check the ${sent} first`)).toEqual(
+      []
+    );
+  });
+
+  it.each([
+    ["daintree", "Daintree"],
+    ["use state", "useState"],
+    ["dock or compose", "Docker Compose"],
+    ["ex term", "xterm"],
+  ])("suggests the fix %s → %s", (said, sent) => {
+    const result = findCorrectionCandidates(`check the ${said} first`, `check the ${sent} first`);
+    expect(result).toEqual([{ word: sent, original: said }]);
+  });
+
+  it("does not suggest a correction to a common English word", () => {
+    expect(findCorrectionCandidates("open the wonder now", "open the window now")).toEqual([]);
+    expect(findCorrectionCandidates("check the stations", "check the sessions")).toEqual([]);
+  });
+
+  it("still suggests a capitalised name that is also a common word", () => {
+    const result = findCorrectionCandidates("migrate to racked now", "migrate to React now");
+    expect(result.map((c) => c.word)).toEqual(["React"]);
+  });
+
+  it("does not suggest lowering a capital the dictation had", () => {
+    expect(findCorrectionCandidates("open Daintree now", "open daintree now")).toEqual([]);
+  });
+
+  it("treats inflected forms of everyday words as everyday words", () => {
+    expect(findCorrectionCandidates("the bitter one", "the better one")).toEqual([]);
+    expect(findCorrectionCandidates("two stations left", "two sessions left")).toEqual([]);
+    expect(findCorrectionCandidates("it was stopped", "it was shopped")).toEqual([]);
+  });
+
+  it("does not suggest a capital the user added to an everyday word", () => {
+    expect(findCorrectionCandidates("pick a model now", "pick a Model now")).toEqual([]);
+  });
+
+  it("does not suggest a long rewrite as one term", () => {
+    expect(
+      findCorrectionCandidates("use zoo stand for all the state", "use Zustand Redux Jotai MobX")
+    ).toEqual([]);
+  });
+});
+
+describe("isCommonEnglishWord", () => {
+  it("recognises base forms and their inflections", () => {
+    expect(isCommonEnglishWord("session")).toBe(true);
+    expect(isCommonEnglishWord("sessions")).toBe(true);
+    expect(isCommonEnglishWord("studies")).toBe(true);
+    expect(isCommonEnglishWord("stopped")).toBe(true);
+    expect(isCommonEnglishWord("bigger")).toBe(true);
+  });
+
+  it("does not recognise technical names", () => {
+    for (const word of ["zustand", "kubernetes", "daintree", "xterm", "docker", "usestate"]) {
+      expect(isCommonEnglishWord(word)).toBe(false);
+    }
   });
 });
