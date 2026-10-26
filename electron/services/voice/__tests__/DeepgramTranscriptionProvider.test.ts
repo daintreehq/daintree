@@ -242,6 +242,17 @@ describe("DeepgramTranscriptionProvider", () => {
     provider.stop();
   });
 
+  it("requests punctuated, formatted text and interim results", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    void provider.start(BASE_SETTINGS);
+    await Promise.resolve();
+    const url = new URL(latestInstance().url);
+    expect(url.searchParams.get("punctuate")).toBe("true");
+    expect(url.searchParams.get("smart_format")).toBe("true");
+    expect(url.searchParams.get("interim_results")).toBe("true");
+    provider.stop();
+  });
+
   it("maps auto language to language=multi, never detect_language", async () => {
     const provider = new DeepgramTranscriptionProvider();
     void provider.start(
@@ -527,13 +538,88 @@ describe("DeepgramTranscriptionProvider", () => {
     });
 
     const { socket } = await bringSessionReady(provider);
-    // Interim hypothesis — must NOT be emitted (would corrupt the live buffer).
     socket.simulateMessage(resultsMessage("hello wor", { is_final: false }));
     expect(completes).toEqual([]);
 
-    // Finalized segment — emitted.
-    socket.simulateMessage(resultsMessage("hello world", { is_final: true }));
-    expect(completes).toEqual(["hello world"]);
+    socket.simulateMessage(resultsMessage("Hello world.", { is_final: true }));
+    expect(completes).toEqual(["Hello world."]);
+    provider.stop();
+  });
+
+  it("emits each interim as a replacing preview of its span, retired by the span's final", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    provider.onEvent((e) => {
+      if (e.type === "delta" || e.type === "complete") events.push(e);
+    });
+
+    const { socket } = await bringSessionReady(provider);
+    socket.simulateMessage(resultsMessage("hello", { is_final: false }));
+    socket.simulateMessage(resultsMessage("Hello world", { is_final: false }));
+    socket.simulateMessage(resultsMessage("Hello, world.", { is_final: true }));
+    // A long utterance finalises in several spans; the next interim is a new span.
+    socket.simulateMessage(resultsMessage("next", { is_final: false }));
+    socket.simulateMessage(resultsMessage("Next one.", { is_final: true, speech_final: true }));
+
+    expect(events.map((e) => ({ type: e.type, text: "text" in e ? e.text : "" }))).toEqual([
+      { type: "delta", text: "hello" },
+      { type: "delta", text: "Hello world" },
+      { type: "complete", text: "Hello, world." },
+      { type: "delta", text: "next" },
+      { type: "complete", text: "Next one." },
+    ]);
+    for (const e of events) {
+      if (e.type === "delta") expect(e.replace).toBe(true);
+    }
+    const ids = events.map((e) => ("itemId" in e ? e.itemId : undefined));
+    expect(ids.every((id) => typeof id === "string" && id.length > 0)).toBe(true);
+    // One identity per span: a span's interims and its final share it, and the
+    // next span never reuses it.
+    expect(ids[0]).toBe(ids[1]);
+    expect(ids[1]).toBe(ids[2]);
+    expect(ids[3]).toBe(ids[4]);
+    expect(ids[3]).not.toBe(ids[0]);
+    provider.stop();
+  });
+
+  it("retires a previewed span that finalises empty, without emitting text", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    provider.onEvent((e) => {
+      if (e.type === "delta" || e.type === "complete") events.push(e);
+    });
+
+    const { socket } = await bringSessionReady(provider);
+    socket.simulateMessage(resultsMessage("um", { is_final: false }));
+    socket.simulateMessage(resultsMessage("", { is_final: true }));
+
+    expect(events).toEqual([
+      expect.objectContaining({ type: "delta", text: "um" }),
+      expect.objectContaining({ type: "complete", text: "" }),
+    ]);
+    const [delta, complete] = events as Array<{ itemId?: string }>;
+    expect(delta.itemId).toBeTruthy();
+    expect(complete.itemId).toBe(delta.itemId);
+    provider.stop();
+  });
+
+  it("does not emit an empty interim or reuse a span identity across sessions", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    const deltas: Array<{ text: string; itemId?: string }> = [];
+    provider.onEvent((e) => {
+      if (e.type === "delta") deltas.push({ text: e.text, itemId: e.itemId });
+    });
+
+    const first = await bringSessionReady(provider);
+    first.socket.simulateMessage(resultsMessage("  ", { is_final: false }));
+    expect(deltas).toEqual([]);
+    first.socket.simulateMessage(resultsMessage("first", { is_final: false }));
+    provider.stop();
+
+    const second = await bringSessionReady(provider);
+    second.socket.simulateMessage(resultsMessage("second", { is_final: false }));
+    expect(deltas.map((d) => d.text)).toEqual(["first", "second"]);
+    expect(deltas[1].itemId).not.toBe(deltas[0].itemId);
     provider.stop();
   });
 
@@ -1115,20 +1201,23 @@ describe("DeepgramTranscriptionProvider start timing diagnostics", () => {
     provider.stop();
   });
 
-  it("logs the first final transcript once, by length only", async () => {
+  it("logs the first transcript once, by length only", async () => {
     const provider = new DeepgramTranscriptionProvider();
     const { socket } = await bringSessionReady(provider);
 
     now = 6_000;
-    socket.simulateMessage(resultsMessage("interim words", { is_final: false }));
+    socket.simulateMessage(resultsMessage("   ", { is_final: false }));
     expect(logDetails("First transcript")).toHaveLength(0);
 
-    socket.simulateMessage(resultsMessage("PRIVATE_DICTATION", { is_final: true }));
+    // The first interim is the first text the user sees, so it is what's timed.
+    socket.simulateMessage(resultsMessage("PRIVATE_DICTATION", { is_final: false }));
+    now = 6_500;
+    socket.simulateMessage(resultsMessage("PRIVATE_DICTATION done", { is_final: true }));
     socket.simulateMessage(resultsMessage("second", { is_final: true }));
 
     const first = logDetails("First transcript");
     expect(first).toEqual([
-      expect.objectContaining({ eventType: "complete", length: 17, sinceStartMs: 1_000 }),
+      expect.objectContaining({ eventType: "delta", length: 17, sinceStartMs: 1_000 }),
     ]);
     expect(JSON.stringify(vi.mocked(logInfo).mock.calls)).not.toContain("PRIVATE_DICTATION");
     provider.stop();

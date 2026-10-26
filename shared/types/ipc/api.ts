@@ -2149,7 +2149,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     setSettings(settings: Partial<VoiceInputSettings>): Promise<void>;
     sendAudioChunk(sessionId: string, chunk: ArrayBuffer): void;
     onTranscriptionDelta(
-      callback: (payload: { sessionId: string; text: string; itemId?: string }) => void
+      callback: (payload: {
+        sessionId: string;
+        text: string;
+        itemId?: string;
+        replace?: boolean;
+      }) => void
     ): () => void;
     onTranscriptionComplete(
       callback: (payload: {

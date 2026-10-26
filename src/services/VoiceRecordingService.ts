@@ -180,7 +180,7 @@ class VoiceRecordingService {
     }
 
     this.unsubscribers.push(
-      voiceInput.onTranscriptionDelta(({ text: delta, itemId }) => {
+      voiceInput.onTranscriptionDelta(({ text: delta, itemId, replace }) => {
         logDebug(`${LOG_PREFIX} Received transcription delta`, { itemId, length: delta.length });
         const voiceState = useVoiceRecordingStore.getState();
         const target = voiceState.activeTarget;
@@ -210,7 +210,7 @@ class VoiceRecordingService {
           // decoration renders them outside the doc model so the editor's
           // history records a single transaction per utterance (#9172).
         }
-        useVoiceRecordingStore.getState().appendDelta(delta, itemId);
+        useVoiceRecordingStore.getState().appendDelta(delta, itemId, replace);
       })
     );
 

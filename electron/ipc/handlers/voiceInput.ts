@@ -562,6 +562,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
           sessionId,
           text: voiceEvent.text,
           ...(voiceEvent.itemId ? { itemId: voiceEvent.itemId } : {}),
+          ...(voiceEvent.replace ? { replace: true } : {}),
         });
       } else if (voiceEvent.type === "complete") {
         const rawText = voiceEvent.text.trim();

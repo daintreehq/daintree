@@ -64,7 +64,7 @@ vi.mock("@/services/KeybindingService", () => ({
   },
 }));
 
-type DeltaPayload = { sessionId: string; text: string; itemId?: string };
+type DeltaPayload = { sessionId: string; text: string; itemId?: string; replace?: boolean };
 type CompletePayload = { sessionId: string; text: string; willCorrect: boolean; itemId?: string };
 
 const SESSION_ID = "session-1";
@@ -131,6 +131,8 @@ async function setup() {
 
 const delta = (text: string, itemId?: string) =>
   callbacks.delta!({ sessionId: SESSION_ID, text, itemId });
+const revise = (text: string, itemId: string) =>
+  callbacks.delta!({ sessionId: SESSION_ID, text, itemId, replace: true });
 const complete = (text: string, itemId?: string) =>
   callbacks.complete!({ sessionId: SESSION_ID, text, willCorrect: false, itemId });
 
@@ -200,6 +202,27 @@ describe("VoiceRecordingService — identified items (#13109)", () => {
     complete("", "item-a");
 
     expect(draftState.draft).toBe("keep");
+    expect(liveText()).toBe("");
+  });
+
+  it("replaces a revised preview and writes each span's final once (#14640)", async () => {
+    const { liveText } = await setup();
+    draftState.draft = "existing";
+
+    revise("hello", "span-0");
+    revise("Hello world", "span-0");
+    expect(liveText()).toBe("Hello world");
+    expect(draftState.draft).toBe("existing");
+
+    complete("Hello, world.", "span-0");
+    expect(draftState.draft).toBe("existing Hello, world.");
+    expect(liveText()).toBe("");
+
+    revise("next", "span-1");
+    revise("Next one", "span-1");
+    expect(liveText()).toBe("Next one");
+    complete("Next one.", "span-1");
+    expect(draftState.draft).toBe("existing Hello, world. Next one.");
     expect(liveText()).toBe("");
   });
 

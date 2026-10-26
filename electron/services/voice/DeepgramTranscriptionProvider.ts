@@ -74,13 +74,17 @@ function truncateKeytermsForUrl(keyterms: string[]): string[] {
 
 /** Build the Deepgram streaming URL. `linear16` @ 24kHz matches the renderer's
  * AudioContext capture rate, so no resampling is needed. `endpointing=300`
- * turns on server-side VAD: a 300ms pause finalizes the current segment. */
+ * turns on server-side VAD: a 300ms pause finalizes the current segment.
+ * Punctuation, casing and interim results are all off unless asked for. */
 function buildUrl(settings: VoiceInputSettings): string {
   const params = new URLSearchParams({
     model: DEEPGRAM_MODEL,
     encoding: "linear16",
     sample_rate: "24000",
     endpointing: "300",
+    punctuate: "true",
+    smart_format: "true",
+    interim_results: "true",
   });
   // Streaming has no `detect_language` (prerecorded only); Nova-3's `multi` is
   // the live multilingual mode.
@@ -137,6 +141,12 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
   private audioChunkCount = 0;
   private staleChunkWarned = false;
   private preConnectBufferOverflowWarned = false;
+
+  // Each interim result is Deepgram's whole hypothesis for the audio since the
+  // last final, so that span is one item: its interims replace one preview and
+  // its final retires exactly that preview. The index advances on every final.
+  private spanIndex = 0;
+  private spanPreviewed = false;
 
   onEvent(listener: (event: VoiceTranscriptionEvent) => void): () => void {
     this.listeners.add(listener);
@@ -509,16 +519,29 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
         const transcript = channel?.alternatives?.[0]?.transcript ?? "";
         const isFinal = payload.is_final === true;
         const speechFinal = payload.speech_final === true;
-        // Interim hypotheses (is_final === false) are revised in place; emitting
-        // them as append-style deltas would corrupt the renderer's live buffer.
-        // Only finalized segments are emitted — they arrive within ~300ms of an
-        // endpoint and won't change. A speech_final result is always is_final,
-        // so this branch covers both.
         logDebug(`${P} ← Results`, { length: transcript.length, isFinal, speechFinal });
-        if (!isFinal) return;
         const trimmed = transcript.trim();
-        if (trimmed) {
-          this.emit({ type: "complete", text: trimmed, confidence: { ...STUB_CONFIDENCE } });
+        const itemId = `deepgram-${this.sessionId}-${this.spanIndex}`;
+        if (!isFinal) {
+          // An empty revision keeps the last preview; the span's final retires it.
+          if (!trimmed) return;
+          this.spanPreviewed = true;
+          this.emit({ type: "delta", text: trimmed, itemId, replace: true });
+          return;
+        }
+        // Finals cover disjoint spans and never change. A speech_final result is
+        // always is_final, so this covers both. A span that showed a preview
+        // still completes when it finalises empty, so the preview doesn't linger.
+        const previewed = this.spanPreviewed;
+        this.spanIndex++;
+        this.spanPreviewed = false;
+        if (trimmed || previewed) {
+          this.emit({
+            type: "complete",
+            text: trimmed,
+            confidence: { ...STUB_CONFIDENCE },
+            itemId,
+          });
         }
         return;
       }
@@ -620,6 +643,8 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     this.audioChunkCount = 0;
     this.staleChunkWarned = false;
     this.preConnectBufferOverflowWarned = false;
+    this.spanIndex = 0;
+    this.spanPreviewed = false;
     this.isReady = false;
     this.preConnectBuffer = [];
     this.preConnectBufferBytes = 0;

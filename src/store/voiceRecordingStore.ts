@@ -159,7 +159,7 @@ interface VoiceTranscriptBuffer {
   /**
    * Interim text per identified item (OpenAI `item_id`), in first-delta order.
    * When non-empty, `liveText` is derived from it so one item's completion
-   * retires only its own preview. Unidentified deltas (Deepgram) bypass it.
+   * retires only its own preview. Unidentified deltas bypass it.
    */
   liveItems: VoiceLiveItem[];
   completedSegments: string[];
@@ -251,7 +251,8 @@ interface VoiceRecordingState {
   setStatus: (status: VoiceInputStatus) => void;
   setLastError: (error: VoiceInputError | null) => void;
   setElapsedSeconds: (seconds: number) => void;
-  appendDelta: (delta: string, itemId?: string) => void;
+  /** `replace` sets the preview to `delta` instead of appending (a revised hypothesis). */
+  appendDelta: (delta: string, itemId?: string, replace?: boolean) => void;
   setSessionDraftStart: (panelId: string, length: number) => void;
   setDraftLengthAtSegmentStart: (panelId: string, length: number) => void;
   completeSegment: (text: string, itemId?: string) => void;
@@ -373,7 +374,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
 
       setElapsedSeconds: (elapsedSeconds) => set({ elapsedSeconds }),
 
-      appendDelta: (delta, itemId) =>
+      appendDelta: (delta, itemId, replace) =>
         set((state) => {
           const panelId = state.activeTarget?.panelId;
           if (!panelId || !delta) return state;
@@ -383,7 +384,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
             const liveItems =
               index >= 0
                 ? buffer.liveItems.map((item, i) =>
-                    i === index ? { itemId, text: item.text + delta } : item
+                    i === index ? { itemId, text: replace ? delta : item.text + delta } : item
                   )
                 : [...buffer.liveItems, { itemId, text: delta }];
             return {
@@ -403,7 +404,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
               ...state.panelBuffers,
               [panelId]: {
                 ...buffer,
-                liveText: buffer.liveText + delta,
+                liveText: replace ? delta : buffer.liveText + delta,
                 transcriptPhase: "interim" as VoiceTranscriptPhase,
               },
             },
