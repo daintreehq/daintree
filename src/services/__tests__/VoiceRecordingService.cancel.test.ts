@@ -366,7 +366,7 @@ describe("VoiceRecordingService — Escape cancels a dictation (#14631)", () => 
 
     expect(draft()).toBe("Intro. and some typed words");
     expect(ipc.correct).not.toHaveBeenCalled();
-    expect(voiceStore.getState().panelBuffers[PANEL]?.correctionRange).toBeNull();
+    expect(voiceStore.getState().panelBuffers[PANEL]?.correctionRanges).toEqual([]);
   });
 
   it("drops events the cancelled session still had in flight, even once a new session starts", async () => {
