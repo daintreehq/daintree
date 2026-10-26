@@ -47,6 +47,12 @@ const shared = vi.hoisted(() => ({
   viewProjectId: null as string | null,
   /** When set, stopGracefully() returns this instead of resolving immediately. */
   drainPromise: null as null | Promise<void>,
+  /** Stored voice settings on top of the enabled, keyed defaults. */
+  voiceInput: {} as Record<string, unknown>,
+  /** Each project's dictation vocabulary, by id. */
+  vocabularies: {} as Record<string, string[]>,
+  /** What the correction service was last asked to prefer. */
+  correctionDictionary: null as string[] | null,
 }));
 
 vi.mock("../../../window/webContentsRegistry.js", async (importOriginal) => ({
@@ -90,6 +96,13 @@ vi.mock("../../../services/VoiceCorrectionService.js", () => ({
     this.setSessionSignal = function (signal: AbortSignal | null) {
       shared.sessionSignal = signal;
     };
+    this.correct = async function (
+      request: { rawText: string },
+      settings: { customDictionary: string[] }
+    ) {
+      shared.correctionDictionary = settings.customDictionary;
+      return { action: "no_change", confirmedText: request.rawText };
+    };
   },
 }));
 
@@ -99,6 +112,14 @@ vi.mock("../../../services/ProjectStore.js", () => ({
     getCurrentProjectId: vi.fn(() => null),
     getProjectById: vi.fn((id: string) => (id === "proj-a" ? { id, name: "Alpha" } : null)),
   },
+}));
+
+vi.mock("../../../services/projectVoiceDictionary.js", () => ({
+  readProjectVoiceDictionary: vi.fn(async (id: string) => {
+    const terms = shared.vocabularies[id];
+    if (!terms) throw new Error("Project not found");
+    return terms.map((term) => ({ term, heardAs: [], source: "manual", addedAt: 0 }));
+  }),
 }));
 
 vi.mock("../../../services/voiceContextKeyterms.js", () => ({
@@ -111,7 +132,9 @@ vi.mock("../../../services/voiceContextKeyterms.js", () => ({
 vi.mock("../../../store.js", () => ({
   store: {
     get: vi.fn((key: string) =>
-      key === "voiceInput" ? { enabled: true, openaiApiKey: "sk-test" } : undefined
+      key === "voiceInput"
+        ? { enabled: true, openaiApiKey: "sk-test", ...shared.voiceInput }
+        : undefined
     ),
     set: vi.fn(),
   },
@@ -611,6 +634,9 @@ describe("voiceInput — keyterm target", () => {
     shared.assembleKeyterms = null;
     shared.eventCallback = null;
     shared.viewProjectId = "proj-a";
+    shared.voiceInput = {};
+    shared.vocabularies = { "proj-a": ["PtyClient"], "proj-b": ["BravoTerm"] };
+    shared.correctionDictionary = null;
     sender.destroyed = false;
     fakeEvent.sender = makeSender();
     const win = { webContents: { send: vi.fn() }, isDestroyed: vi.fn(() => false) };
@@ -670,6 +696,47 @@ describe("voiceInput — keyterm target", () => {
     await expect(startWith(undefined)).resolves.toEqual({ ok: true });
     expect(assemblyOpts()?.terminalId).toBeUndefined();
     expect(assemblyOpts()?.projectName).toBeUndefined();
+  });
+
+  const projectTerms = () => Promise.resolve(assemblyOpts()?.projectDictionary);
+
+  it("sends the vocabulary of the project that owns the target terminal", async () => {
+    await expect(startWith({ terminalId: "t-1" })).resolves.toEqual({ ok: true });
+    expect(await projectTerms()).toEqual(["PtyClient"]);
+  });
+
+  it("sends no project's vocabulary for a terminal another project owns than the view", async () => {
+    shared.viewProjectId = "proj-b";
+    await expect(startWith({ terminalId: "t-1" })).resolves.toEqual({ ok: true });
+    expect(await projectTerms()).toEqual([]);
+  });
+
+  it("uses the view's project for a panel main doesn't track as a terminal", async () => {
+    shared.viewProjectId = "proj-b";
+    await expect(startWith({ terminalId: "browser-1" })).resolves.toEqual({ ok: true });
+    expect(await projectTerms()).toEqual(["BravoTerm"]);
+  });
+
+  it("starts with the global dictionary alone when the vocabulary can't be read", async () => {
+    shared.viewProjectId = "proj-gone";
+    await expect(startWith(undefined)).resolves.toEqual({ ok: true });
+    expect(await projectTerms()).toEqual([]);
+  });
+
+  it("corrects with the target project's terms ahead of the global dictionary", async () => {
+    shared.voiceInput = {
+      correctionEnabled: true,
+      dictionary: [
+        { term: "Global", heardAs: [], source: "manual", addedAt: 0 },
+        { term: "ptyclient", heardAs: [], source: "manual", addedAt: 0 },
+      ],
+    };
+    await getHandler("voice-input:correct")(fakeEvent, { rawText: "fix it", terminalId: "t-1" });
+    expect(shared.correctionDictionary).toEqual(["PtyClient", "Global"]);
+
+    shared.viewProjectId = "proj-b";
+    await getHandler("voice-input:correct")(fakeEvent, { rawText: "fix it", terminalId: "t-1" });
+    expect(shared.correctionDictionary).toEqual(["Global", "ptyclient"]);
   });
 
   it("rejects a malformed start without superseding the one in flight", async () => {

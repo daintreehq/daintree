@@ -23,8 +23,43 @@ vi.mock("../../../utils/logger.js", () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 
+// Each project keeps its vocabulary locally and, when it shares its settings
+// through the repo, in its committed file.
+const projects = vi.hoisted(() => {
+  type Entries = import("../../../../shared/types/ipc/api.js").VoiceDictionaryEntry[];
+  return {
+    byId: new Map<string, { id: string; path: string; inRepoSettings?: boolean }>(),
+    local: new Map<string, Entries>(),
+    repo: new Map<string, Entries>(),
+  };
+});
+
 vi.mock("../../../services/ProjectStore.js", () => ({
-  projectStore: { getCurrentProject: vi.fn(() => null), getCurrentProjectId: vi.fn(() => null) },
+  projectStore: {
+    getCurrentProject: vi.fn(() => null),
+    getCurrentProjectId: vi.fn(() => null),
+    getProjectById: vi.fn((id: string) => projects.byId.get(id) ?? null),
+    getProjectSettings: vi.fn(async (id: string) => ({
+      runCommands: [],
+      voiceDictionary: projects.local.get(id),
+    })),
+    changeLocalVoiceDictionary: vi.fn(async (id: string, apply: (e: unknown[]) => unknown[]) => {
+      const next = apply(projects.local.get(id) ?? []);
+      projects.local.set(id, next as never);
+      return next;
+    }),
+    readInRepoVoiceDictionary: vi.fn(async (path: string) => ({
+      found: projects.repo.has(path),
+      entries: projects.repo.get(path) ?? [],
+    })),
+    changeInRepoVoiceDictionary: vi.fn(
+      async (path: string, apply: (e: unknown[]) => unknown[]) => {
+        const next = apply(projects.repo.get(path) ?? []);
+        projects.repo.set(path, next as never);
+        return next;
+      }
+    ),
+  },
 }));
 
 // An in-memory electron-store: dot-path get/set, and a fresh copy per read like conf.
@@ -343,5 +378,68 @@ describe("voiceDictionary operations", () => {
     } finally {
       delete process.env.WHISPER_API_KEY;
     }
+  });
+});
+
+describe("project vocabulary operations", () => {
+  let cleanup: () => void = () => {};
+  const projectOp = (method: keyof typeof VOICE_DICTIONARY_METHOD_CHANNELS, payload: unknown) =>
+    call<{ term: string; heardAs: string[] }[]>(VOICE_DICTIONARY_METHOD_CHANNELS[method], payload);
+  const terms = (entries: { term: string }[] | undefined) => entries?.map((e) => e.term);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    projects.byId.clear();
+    projects.local.clear();
+    projects.repo.clear();
+    projects.byId.set("local", { id: "local", path: "/repos/local" });
+    projects.byId.set("shared", { id: "shared", path: "/repos/shared", inRepoSettings: true });
+    disk.state.data = { voiceInput: { enabled: true, dictionary: [], suggestedDictionary: [] } };
+    cleanup = registerVoiceDictionaryHandlers();
+  });
+
+  afterEach(() => cleanup());
+
+  it("keeps a project's terms in its local settings, apart from the global dictionary", async () => {
+    const added = await projectOp("addToProject", {
+      projectId: "local",
+      term: " PtyClient ",
+      heardAs: ["PTY client"],
+    });
+    expect(added).toEqual([
+      expect.objectContaining({ term: "PtyClient", heardAs: ["PTY client"], source: "manual" }),
+    ]);
+    expect(terms(projects.local.get("local"))).toEqual(["PtyClient"]);
+    expect(projects.repo.size).toBe(0);
+    expect(storedTerms()).toEqual([]);
+    expect(terms(await projectOp("getProject", { projectId: "local" }))).toEqual(["PtyClient"]);
+  });
+
+  it("reads and writes the committed file for a project that shares its settings", async () => {
+    projects.local.set("shared", [{ term: "LocalOnly", heardAs: [], source: "manual", addedAt: 0 }]);
+    projects.repo.set("/repos/shared", [
+      { term: "Daintree", heardAs: [], source: "manual", addedAt: 0 },
+    ]);
+
+    expect(terms(await projectOp("getProject", { projectId: "shared" }))).toEqual(["Daintree"]);
+    await projectOp("updateInProject", {
+      projectId: "shared",
+      term: "daintree",
+      changes: { heardAs: ["dane tree"] },
+    });
+    await projectOp("removeFromProject", { projectId: "shared", term: "Nope" });
+
+    expect(projects.repo.get("/repos/shared")).toEqual([
+      expect.objectContaining({ term: "Daintree", heardAs: ["dane tree"] }),
+    ]);
+    expect(terms(projects.local.get("shared"))).toEqual(["LocalOnly"]);
+  });
+
+  it("refuses an unknown project and an over-length term, writing nothing", async () => {
+    await expect(projectOp("getProject", { projectId: "missing" })).rejects.toThrow();
+    await expect(
+      projectOp("addToProject", { projectId: "local", term: "x".repeat(101) })
+    ).rejects.toThrow();
+    expect(projects.local.size).toBe(0);
   });
 });

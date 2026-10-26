@@ -10,6 +10,7 @@ import {
   mergeSuggestions,
   removeDictionaryEntry,
   sanitizeDictionary,
+  sessionDictionary,
   sanitizeSuggestions,
   updateDictionaryEntry,
 } from "../voiceDictionary.js";
@@ -336,5 +337,27 @@ describe("sanitizeSuggestions", () => {
     expect(next).toEqual([
       { word: "Zustand", utterance: "zoo stand", suggestedAt: T1, frequency: 1 },
     ]);
+  });
+});
+
+describe("sessionDictionary", () => {
+  const entry = (term: string, heardAs: string[] = []): VoiceDictionaryEntry => ({
+    term,
+    heardAs,
+    source: "manual",
+    addedAt: 0,
+  });
+
+  it("puts the project's entries first, and the project's entry wins a shared term", () => {
+    const merged = sessionDictionary(
+      [entry("Global"), entry("daintree", ["dane tree", "dan tree"])],
+      [entry("Daintree", ["dane tree"]), entry("PtyClient")]
+    );
+    expect(merged).toEqual([entry("Daintree", ["dane tree"]), entry("PtyClient"), entry("Global")]);
+  });
+
+  it("is the global dictionary alone when the project has none", () => {
+    const global = [entry("Global")];
+    expect(sessionDictionary(global, [])).toEqual(global);
   });
 });
