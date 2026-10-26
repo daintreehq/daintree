@@ -1382,9 +1382,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
           pendingCommits: this.pendingCommits,
         });
       } catch (err) {
-        logWarn(`${P} Failed to commit a replayed segment`, {
-          message: formatErrorMessage(err, "commit failed"),
-        });
+        logWarn(`${P} Failed to commit a replayed segment`, { ...voiceErrorLogFields(err) });
       }
     }
     for (const chunk of tail) this.sendAudioJson(chunk);
