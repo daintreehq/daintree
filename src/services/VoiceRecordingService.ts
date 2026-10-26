@@ -42,13 +42,15 @@ interface OpeningAudio {
 function formatTargetLabel(target: VoiceRecordingTarget): string {
   const project = target.projectName?.trim();
   const worktree = target.worktreeLabel?.trim();
+  const title = target.panelTitle?.trim();
 
+  if (title) return title;
   if (project && worktree) {
     return `${project} / ${worktree}`;
   }
   if (project) return project;
   if (worktree) return worktree;
-  return target.panelTitle?.trim() || "current panel";
+  return "current panel";
 }
 
 function getVoiceInsertMetadata(draft: string): { separator: string; insertStart: number } {

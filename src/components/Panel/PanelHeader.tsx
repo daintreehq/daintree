@@ -24,6 +24,7 @@ import {
   PanelBottomClose,
   PanelTopClose,
   Pencil,
+  Mic,
   Plus,
   RadioTower,
   RefreshCw,
@@ -151,6 +152,7 @@ import { actionService } from "@/services/ActionService";
 import { fireWatchNotification } from "@/lib/watchNotification";
 import { scratchpadHasContent } from "@/lib/terminalScratchpad";
 import { useFleetFailureStore } from "@/store/fleetFailureStore";
+import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import type { TerminalChromeDescriptor } from "@/utils/terminalChrome";
 import type { BrandMarkSurface } from "@/lib/brandIcon";
@@ -384,6 +386,18 @@ function PanelHeaderComponent({
   // dot adjacent to the title so the user can see the divergence at the
   // pane the same way a "Retry failed" button surfaces it in the ribbon.
   const isFleetFailed = useFleetFailureStore((s) => s.failedIds.has(id));
+  // Names the dictation target in every layout (grid, maximized, dock), where
+  // the grid-only frame cue can't. Neutral ink: accent stays with the focus frame.
+  const isDictationTarget = useVoiceRecordingStore(
+    (s) =>
+      s.activeTarget?.panelId === id &&
+      (s.status === "arming" ||
+        s.status === "connecting" ||
+        s.status === "recording" ||
+        s.status === "reconnecting" ||
+        s.status === "paused" ||
+        s.status === "finishing")
+  );
   const dismissFleetFailure = useFleetFailureStore((s) => s.dismissId);
   const isArmed = useFleetArmingStore((s) => s.armedIds.has(id));
 
@@ -1318,6 +1332,17 @@ function PanelHeaderComponent({
                   Launched with dangerous permissions — agent can modify files without prompting
                 </TooltipContent>
               </Tooltip>
+            )}
+
+            {isDictationTarget && (
+              <span
+                role="img"
+                className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center text-text-primary"
+                aria-label="Dictation is going into this panel"
+                data-testid="panel-dictation-mark"
+              >
+                <Mic className="h-3.5 w-3.5" aria-hidden="true" />
+              </span>
             )}
 
             {isFleetFailed && (

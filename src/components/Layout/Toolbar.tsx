@@ -349,12 +349,13 @@ export function Toolbar({
 
   const hasActiveVoiceRecording = useVoiceRecordingStore(
     (state) =>
-      state.activeTarget !== null &&
-      (state.status === "arming" ||
-        state.status === "connecting" ||
-        state.status === "recording" ||
-        state.status === "paused" ||
-        state.status === "finishing")
+      state.lockedTarget !== null ||
+      (state.activeTarget !== null &&
+        (state.status === "arming" ||
+          state.status === "connecting" ||
+          state.status === "recording" ||
+          state.status === "paused" ||
+          state.status === "finishing"))
   );
 
   const toolbarRef = useRef<HTMLDivElement>(null);
