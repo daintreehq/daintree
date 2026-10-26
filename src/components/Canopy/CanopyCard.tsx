@@ -22,7 +22,6 @@ import {
 import { cn } from "@/lib/utils";
 import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { CLOSE_OWNER_ATTR, CLOSE_REQUEST_EVENT } from "@/lib/closeRequest";
-import { useCanopyStore } from "@/store/canopyStore";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/Kbd";
 import { ProgressBar } from "@/components/ui/ProgressBar";
@@ -403,15 +402,21 @@ export function CanopyCard({
   };
 
   // Cmd+W with the keyboard in this pane — its terminal, its reply or its
-  // title bar — closes Canopy, as it does from the list. Closing the place you
-  // inspect an agent from must not dispose of the agent; trashing it stays on
-  // its own labelled, two-press control.
+  // title bar — closes the agent's terminal to the trash, as Cmd+W on its grid
+  // pane would; the trash keeps it a while, and the toast and Z take it back.
+  // From the list, with no pane in hand, Cmd+W closes Canopy instead.
+  const onTrashRef = useRef(onTrash);
+  const itemRef = useRef(item);
+  useEffect(() => {
+    onTrashRef.current = onTrash;
+    itemRef.current = item;
+  });
   useEffect(() => {
     const section = sectionRef.current;
     if (!section) return;
     const onClose = (event: Event) => {
       event.preventDefault();
-      useCanopyStore.getState().close();
+      onTrashRef.current(itemRef.current);
     };
     section.addEventListener(CLOSE_REQUEST_EVENT, onClose);
     return () => section.removeEventListener(CLOSE_REQUEST_EVENT, onClose);
@@ -752,40 +757,70 @@ export function CanopyCard({
       </SurfaceHeader>
 
       {/* What the row leaves out to stay three lines tall: the summary, how
-          far through its task the run is, and what the agent reported. */}
+          far through its task the run is, and what the agent reported. One
+          line, so the terminal keeps the height: what the reader said reads
+          from the left, and whose words they are and how old sits at the
+          right. Truncated words are whole on hover, and on the screen below. */}
       {hasSummary && (
         <div
           data-canopy-summary=""
-          // Held to a share of the pane, scrolling past it, so a long question is
-          // there in full without pushing the terminal off screen.
-          className="flex max-h-[40%] shrink-0 flex-col gap-1 overflow-y-auto border-b border-overlay px-3 py-2 text-xs leading-4 text-text-secondary"
+          className="flex h-7 shrink-0 items-center gap-3 border-b border-overlay px-3 text-xs leading-4 text-text-secondary"
         >
           {progress !== null && (
-            <span className="flex items-center gap-2 tabular-nums">
-              <ProgressBar value={progress.value} label={progress.spoken} className="w-24" />
+            <span className="flex shrink-0 items-center gap-2 tabular-nums">
+              <ProgressBar value={progress.value} label={progress.spoken} className="w-16" />
               <span>{progress.label}</span>
             </span>
           )}
           {action !== null && (
-            <span className="font-mono break-words text-text-primary">
+            <span
+              title={action}
+              className="max-w-[50%] min-w-0 shrink truncate font-mono text-text-primary"
+            >
               {/^[\w./-]+$/.test(action) && /[./]/.test(action) ? action : `$ ${action}`}
             </span>
           )}
           {looksDone && (
-            <p role="status" data-canopy-looks-done="" className="text-text-primary">
+            <span
+              role="status"
+              data-canopy-looks-done=""
+              className="shrink-0 whitespace-nowrap text-text-primary"
+            >
               Looks done
-            </p>
+            </span>
           )}
-          {question !== null && (
-            <p className="text-sm leading-5 break-words text-text-primary">{question}</p>
+          {(question ?? shownDetail) !== null && (
+            <span
+              title={question ?? shownDetail ?? undefined}
+              className={cn(
+                // What the reader said keeps a share of the line: the notes
+                // beside it give way first.
+                "min-w-[30%] flex-1 truncate",
+                question !== null && "text-text-primary"
+              )}
+            >
+              {question ?? shownDetail}
+            </span>
           )}
-          {shownDetail !== null && <p className="line-clamp-4 break-words">{shownDetail}</p>}
-          {summaryNotes.length > 0 && <p className="break-words">{summaryNotes.join(" · ")}</p>}
-          {/* Last, so it is read as covering everything above it. */}
-          {detailAttribution !== null && (
-            <p data-canopy-attribution="" className="whitespace-nowrap">
-              {detailAttribution}
-            </p>
+          {(summaryNotes.length > 0 || detailAttribution !== null) && (
+            <span className="ml-auto flex max-w-[45%] min-w-0 items-center">
+              {summaryNotes.length > 0 && (
+                <span title={summaryNotes.join(" · ")} className="min-w-0 truncate">
+                  {summaryNotes.join(" · ")}
+                </span>
+              )}
+              {summaryNotes.length > 0 && detailAttribution !== null && (
+                <span aria-hidden="true" className="shrink-0 px-1">
+                  ·
+                </span>
+              )}
+              {/* Last, so it is read as covering everything before it. */}
+              {detailAttribution !== null && (
+                <span data-canopy-attribution="" className="shrink-0 whitespace-nowrap">
+                  {detailAttribution}
+                </span>
+              )}
+            </span>
           )}
         </div>
       )}

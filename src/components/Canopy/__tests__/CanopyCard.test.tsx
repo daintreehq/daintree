@@ -476,18 +476,20 @@ describe("CanopyCard", () => {
     expect(h.onOpen).toHaveBeenCalledTimes(1);
   });
 
-  it("takes Cmd+W from inside the pane as closing Canopy, leaving the agent's terminal alone", () => {
+  it("takes Cmd+W from inside the pane as trashing the agent's terminal, leaving Canopy open", () => {
     useCanopyStore.setState({ isOpen: true });
-    const { pane, h } = renderCard(itemFor("working"));
+    const item = itemFor("working");
+    const { pane, h } = renderCard(item);
     expect(pane.hasAttribute("data-close-owner")).toBe(true);
     const request = new Event("daintree:close-request", { cancelable: true });
     pane.querySelector("[data-canopy-terminal]")!.dispatchEvent(request);
     // Not bubbling: the hook hands it to the owner itself.
-    expect(useCanopyStore.getState().isOpen).toBe(true);
+    expect(h.onTrash).not.toHaveBeenCalled();
     pane.dispatchEvent(request);
     expect(request.defaultPrevented).toBe(true);
-    expect(useCanopyStore.getState().isOpen).toBe(false);
-    expect(h.onTrash).not.toHaveBeenCalled();
+    expect(h.onTrash).toHaveBeenCalledTimes(1);
+    expect(h.onTrash).toHaveBeenCalledWith(item);
+    expect(useCanopyStore.getState().isOpen).toBe(true);
   });
 
   it("trashes only on a second press, and stands down if none comes", () => {
