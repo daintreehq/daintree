@@ -100,7 +100,7 @@ export interface StoreSchema {
     memoryLeakAutoRestartThresholdMb?: number;
     cachedProjectViews?: number;
     // Appearance fields written by the terminal-config handlers. Declared so
-    // the device/host split in storeOwnership.ts covers them.
+    // the device/host split in shared/config/settingOwnership.ts covers them.
     fontSize?: TerminalConfig["fontSize"];
     fontFamily?: TerminalConfig["fontFamily"];
     colorSchemeId?: TerminalConfig["colorSchemeId"];

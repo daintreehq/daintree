@@ -5,7 +5,7 @@ import type { ConfigBundleSectionId } from "../types/configBundle.js";
  * Configuration (#11889) and Copy settings to a host (#13346) so the two can't
  * drift apart.
  *
- * Ownership (`electron/storeOwnership.ts`) says where a value lives, never
+ * Ownership (`settingOwnership.ts`) says where a value lives, never
  * whether copying it makes sense, so this is a separate, positive list down to
  * fields: a setting that isn't named here stays on its machine, including every
  * one added after this was written. Never listed, on purpose:

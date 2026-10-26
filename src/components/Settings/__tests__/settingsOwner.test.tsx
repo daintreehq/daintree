@@ -23,7 +23,7 @@ import {
 } from "../settingsTabIds";
 import { ownerForTab } from "../settingsTabRegistry";
 import { _resetHostPlatformForTests, setHostPlatformInfo } from "@/hooks/useHostPlatform";
-import { STORE_KEY_OWNERSHIP } from "../../../../electron/storeOwnership";
+import { settingOwner, type SettingPath } from "@shared/config/settingOwnership";
 
 const ALL_TABS: SettingsTab[] = [...GLOBAL_SETTINGS_TAB_IDS, ...PROJECT_SETTINGS_TAB_IDS];
 
@@ -48,8 +48,8 @@ describe("settings tab owners", () => {
     for (const tab of PROJECT_SETTINGS_TAB_IDS) expect(ownerForTab(tab), tab).toBe("host");
   });
 
-  it("follows the store ownership of the settings each single-owner tab writes", () => {
-    const writes: [SettingsTab, (keyof typeof STORE_KEY_OWNERSHIP)[]][] = [
+  it("follows the declared owner of the settings each single-owner tab writes", () => {
+    const writes: [SettingsTab, SettingPath[]][] = [
       ["agents", ["agentSettings", "userAgentRegistry", "agentUpdateSettings"]],
       ["environment", ["globalEnvironmentVariables"]],
       ["mcp", ["mcpServer"]],
@@ -64,7 +64,7 @@ describe("settings tab owners", () => {
     ];
     for (const [tab, keys] of writes) {
       for (const key of keys) {
-        expect(STORE_KEY_OWNERSHIP[key], `${tab} writes ${key}`).toBe(ownerForTab(tab));
+        expect(settingOwner(key), `${tab} writes ${key}`).toBe(ownerForTab(tab));
       }
     }
   });
