@@ -109,6 +109,9 @@ interface VoiceSession {
 }
 
 let liveSession: VoiceSession | null = null;
+// A replaced session whose provider is still draining. The service stays its
+// until the drain settles, so a newer session waits for it before starting.
+let drainingSession: VoiceSession | null = null;
 
 function isLive(session: VoiceSession): boolean {
   return liveSession === session && !session.ended;
@@ -632,6 +635,77 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     session.fileLinkJobs.add(job);
   };
 
+  // Drains the provider a session owns, keeping its subscription up so the
+  // remaining text reaches its owner, then ends it.
+  const drainSession = (
+    session: VoiceSession,
+    reason: "stopped" | "superseded"
+  ): Promise<{ rawText: string | null }> => {
+    session.stopPromise = (async () => {
+      // The renderer sends every chunk it captured before this stop, so audio
+      // held for a session still loading the service or assembling keyterms is
+      // the whole dictation so far. Let the start hand it to the provider, then
+      // drain the provider like any other session: its stop-before-ready path
+      // transcribes the buffered audio once connected.
+      if (session.phase === "starting") await session.handedOff;
+      // Superseded, failed, or its view went away before the handoff; whatever
+      // ended it chose the reason and owns the provider.
+      if (session.ended) return { rawText: null };
+      session.phase = "stopping";
+      try {
+        // Drain the transcription service first (waits for pending
+        // transcriptions, fires remaining complete events) — the subscription
+        // stays up until it has.
+        await service?.stopGracefully();
+      } catch (error) {
+        endSession(session, "failed");
+        throw error;
+      }
+      // The drain can finish the final utterance, whose references only start
+      // resolving then. Each job is bounded, and ending the session another
+      // way aborts them.
+      await Promise.allSettled(session.fileLinkJobs);
+      endSession(session, reason);
+      return { rawText: null };
+    })();
+    return session.stopPromise;
+  };
+
+  // A newer start takes over from the live session. One still preparing has no
+  // provider and ends now, and one whose own stop is draining finishes it. One
+  // running in another view is drained on its owner's behalf, so that view
+  // keeps the text it was given and releases its microphone. A view replacing
+  // its own session has already let the old one go, so that one is cut short.
+  const retireSession = (previous: VoiceSession, next: VoiceSession) => {
+    if (previous.phase === "starting") {
+      endSession(previous, "superseded");
+      return;
+    }
+    if (previous.phase === "active") {
+      if (previous.webContentsId === next.webContentsId) {
+        endSession(previous, "superseded");
+        service?.stop();
+        return;
+      }
+      // Told first, so the owner stops capturing and waits on the drain
+      // instead of treating it as its own stop.
+      if (!previous.sender.isDestroyed()) {
+        previous.sender.send(CHANNELS.VOICE_INPUT_STATUS, {
+          sessionId: previous.id,
+          status: "finishing",
+        });
+      }
+      drainSession(previous, "superseded");
+    }
+    const draining = previous.stopPromise;
+    if (!draining) return;
+    drainingSession = previous;
+    const release = () => {
+      if (drainingSession === previous) drainingSession = null;
+    };
+    draining.then(release, release);
+  };
+
   // A failed or superseded start is an outcome, not an exception: the
   // provider's message goes back to the renderer and never through the IPC
   // error logger, where it could quote dictated text (#14620).
@@ -652,7 +726,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     const sender = ctx.event?.sender;
     if (!sender || sender.isDestroyed()) return SUPERSEDED;
     // Two sessions under one id would make every chunk and stop ambiguous.
-    if (liveSession?.id === sessionId) {
+    if (liveSession?.id === sessionId || drainingSession?.id === sessionId) {
       throw new AppError({ code: "VALIDATION", message: "Voice session already started" });
     }
     // Published before the first await, so a stop or a newer start landing
@@ -683,14 +757,9 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     };
     const previous = liveSession;
     liveSession = session;
-    if (previous) {
-      const previousOwnsProvider = previous.phase !== "starting";
-      endSession(previous, "superseded");
-      // Nothing listens to it any more, and its audio is now refused.
-      if (previousOwnsProvider) service?.stop();
-    }
-    // A view that goes away takes its session with it. Only a session that is
-    // still live owns the provider it would stop.
+    if (previous) retireSession(previous, session);
+    // A view that goes away takes its session with it, and stops the provider
+    // if the session has one: live, or replaced and still draining.
     session.unwatchDestroyed = onWebContentsDestroyed(sender, () => {
       if (session.ended) return;
       const ownsProvider = session.phase !== "starting";
@@ -729,14 +798,6 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // Snapshot transcription settings at session start (model, language, API key).
     // Correction settings are read live from store per-event so mid-session changes apply.
     const settings = getVoiceSettings();
-
-    // Initialize the correction service for this session
-    if (!correctionService) {
-      correctionService = new VoiceCorrectionService();
-    }
-
-    sessionController = session.controller;
-    correctionService.setSessionSignal(session.controller.signal);
 
     // Kick off keyterm assembly concurrently with the subscription/provider
     // setup below so leading speech isn't delayed waiting on git/terminal reads.
@@ -896,12 +957,27 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // assembly ran (on either path). Whatever ended it already released its
     // subscription and watcher, so there is nothing of ours left to undo.
     if (!isLive(session)) return SUPERSEDED;
+    // The session this one replaced is still draining the provider, and
+    // starting now would destroy it mid-drain. This session's audio keeps
+    // going to its own buffer meanwhile.
+    const draining = drainingSession?.stopPromise;
+    if (draining) {
+      await draining.catch(() => {});
+      if (!isLive(session)) return SUPERSEDED;
+    }
+    const providerStartAt = performance.now();
+    // Bound at the handoff: until now a session this one replaced may still be
+    // draining, and its file-link detection runs under its own signal.
+    correctionService ??= new VoiceCorrectionService();
+    sessionController = session.controller;
+    correctionService.setSessionSignal(session.controller.signal);
     // Field names avoid "key": the logger blanks any field containing it.
     logInfo("[VoiceInput] Start timing — provider start", {
       sessionId: session.id,
       serviceLoadMs: Math.round(serviceReadyAt - startedAt),
       biasTermsWaitMs: Math.round(keytermsReadyAt - termsWaitStartedAt),
-      elapsedMs: Math.round(keytermsReadyAt - startedAt),
+      drainWaitMs: Math.round(providerStartAt - keytermsReadyAt),
+      elapsedMs: Math.round(providerStartAt - startedAt),
       heldChunks: session.preStartAudio?.chunks.length ?? 0,
     });
     // Not awaited before the flush: start() installs the provider and enters its
@@ -916,17 +992,27 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     logInfo("[VoiceInput] Start timing — provider settled", {
       sessionId: session.id,
       ok: result.ok,
-      providerStartMs: Math.round(providerSettledAt - keytermsReadyAt),
+      providerStartMs: Math.round(providerSettledAt - providerStartAt),
       elapsedMs: Math.round(providerSettledAt - startedAt),
     });
     if (!result.ok) return { status: "failed", error: result.error };
     return isLive(session) ? { status: "started" } : SUPERSEDED;
   };
 
-  const handleStop = async (sessionId: string): Promise<{ rawText: string | null }> => {
-    const session = liveSession;
-    // Another view's session, or one that has already ended.
-    if (!session || session.id !== sessionId) return { rawText: null };
+  // Only the view that started a session can stop, flush or feed it.
+  const ownedBy = (session: VoiceSession | null, sessionId: unknown, webContentsId: number) =>
+    session !== null && session.id === sessionId && session.webContentsId === webContentsId;
+
+  const handleStop = async (
+    ctx: IpcContext,
+    sessionId: string
+  ): Promise<{ rawText: string | null }> => {
+    // The live session, or a replaced one still draining, whose owner waits on
+    // that drain. Another view's session, or one that has already ended, isn't.
+    const session = [liveSession, drainingSession].find((s) =>
+      ownedBy(s, sessionId, ctx.webContentsId)
+    );
+    if (!session) return { rawText: null };
     if (session.stopPromise) return session.stopPromise;
     // Still preparing, with nothing held: ending it makes the start bail at its
     // next check instead of bringing the session up and opening a socket.
@@ -934,54 +1020,27 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       endSession(session, "cancelled");
       return { rawText: null };
     }
-    session.stopPromise = (async () => {
-      // The renderer sends every chunk it captured before this stop, so audio
-      // held for a session still loading the service or assembling keyterms is
-      // the whole dictation so far. Let the start hand it to the provider, then
-      // drain the provider like any other session: its stop-before-ready path
-      // transcribes the buffered audio once connected.
-      if (session.phase === "starting") await session.handedOff;
-      // Superseded, failed, or its view went away before the handoff; whatever
-      // ended it chose the reason and owns the provider.
-      if (session.ended) return { rawText: null };
-      session.phase = "stopping";
-      try {
-        // Drain the transcription service first (waits for pending
-        // transcriptions, fires remaining complete events) — the subscription
-        // stays up until it has.
-        await service?.stopGracefully();
-      } catch (error) {
-        endSession(session, "failed");
-        throw error;
-      }
-      // The drain can finish the final utterance, whose references only start
-      // resolving then. Each job is bounded, and ending the session another
-      // way aborts them.
-      await Promise.allSettled(session.fileLinkJobs);
-      endSession(session, "stopped");
-      return { rawText: null };
-    })();
-    return session.stopPromise;
+    return drainSession(session, "stopped");
   };
 
-  const handleFlushParagraph = (sessionId: string): { rawText: string | null } => {
+  const handleFlushParagraph = (ctx: IpcContext, sessionId: string): { rawText: string | null } => {
     const session = liveSession;
     // Until the session is active, the service's provider belongs to no one.
-    if (session?.id === sessionId && session.phase !== "starting") {
+    if (ownedBy(session, sessionId, ctx.webContentsId) && session?.phase !== "starting") {
       service?.commitParagraphBoundary();
     }
     return { rawText: null };
   };
 
   const handleAudioChunk = (
-    _event: Electron.IpcMainEvent,
+    event: Electron.IpcMainEvent,
     sessionId: unknown,
     chunk: ArrayBuffer
   ) => {
     const session = liveSession;
     // Audio for a session that isn't live — another view's, or one that has
     // already ended — must never reach the provider or the held buffer.
-    if (!session || session.id !== sessionId) return;
+    if (!session || !ownedBy(session, sessionId, event.sender.id)) return;
     const pending = session.preStartAudio;
     if (!pending) {
       service?.sendAudioChunk(chunk);
@@ -1066,11 +1125,14 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     name: "voiceInput",
     ops: {
       start: op(VOICE_INPUT_METHOD_CHANNELS.start, handleStart, { withContext: true }),
-      stop: opValidated(VOICE_INPUT_METHOD_CHANNELS.stop, VoiceSessionIdSchema, handleStop),
+      stop: opValidated(VOICE_INPUT_METHOD_CHANNELS.stop, VoiceSessionIdSchema, handleStop, {
+        withContext: true,
+      }),
       flushParagraph: opValidated(
         VOICE_INPUT_METHOD_CHANNELS.flushParagraph,
         VoiceSessionIdSchema,
-        handleFlushParagraph
+        handleFlushParagraph,
+        { withContext: true }
       ),
     },
   });
@@ -1097,6 +1159,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     for (const cleanup of cleanups) cleanup();
     ipcMain.removeListener(CHANNELS.VOICE_INPUT_AUDIO_CHUNK, handleAudioChunk);
     if (liveSession) endSession(liveSession, "cancelled");
+    if (drainingSession) endSession(drainingSession, "cancelled");
+    drainingSession = null;
     service?.destroy();
     service = null;
     servicePromise = null;

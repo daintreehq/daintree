@@ -193,7 +193,7 @@ function sendChunk(id: number, bytes = 4800, sessionId = currentSessionId) {
   if (!call) throw new Error("audio-chunk listener not registered");
   const chunk = new Uint8Array(bytes);
   chunk[0] = id;
-  (call[1] as (e: unknown, s: unknown, c: ArrayBuffer) => void)({}, sessionId, chunk.buffer);
+  (call[1] as (e: unknown, s: unknown, c: ArrayBuffer) => void)(fakeEvent, sessionId, chunk.buffer);
 }
 
 type StartOutcome = { status: "started" | "superseded" | "failed"; error?: string };

@@ -154,7 +154,7 @@ function setupGlobals(options: {
   const workletNodes: WorkletNode[] = [];
   const deviceChangeListeners = new Set<Listener>();
   const pendingTracks = [...options.tracks];
-  let statusCallback: ((payload: { status: string }) => void) | null = null;
+  let statusCallback: ((payload: { sessionId: string; status: string }) => void) | null = null;
   let deltaCallback: ((payload: { text: string }) => void) | null = null;
   const settings = {
     enabled: true,
@@ -173,7 +173,7 @@ function setupGlobals(options: {
     onFileTokenResolved: vi.fn(() => () => {}),
     onError: vi.fn(() => () => {}),
     onSessionEnded: vi.fn(() => () => {}),
-    onStatus: vi.fn((cb: (payload: { status: string }) => void) => {
+    onStatus: vi.fn((cb: (payload: { sessionId: string; status: string }) => void) => {
       statusCallback = cb;
       return () => {};
     }),
@@ -279,7 +279,11 @@ function setupGlobals(options: {
     enumerateDevices,
     deviceChangeListeners,
     voiceInput,
-    status: { emit: (status) => statusCallback?.({ status }) },
+    // Tagged with the session the renderer last started, as main tags it.
+    status: {
+      emit: (status) =>
+        statusCallback?.({ sessionId: String(voiceInput.start.mock.calls.at(-1)?.[0]), status }),
+    },
     delta: { emit: (text) => deltaCallback?.({ text }) },
     settings,
   };

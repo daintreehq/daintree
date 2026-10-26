@@ -55,6 +55,8 @@ import {
 import { applyDraftEdits, planFileReferenceEdits } from "@/services/voiceFileReferences";
 
 const LOG_PREFIX = "[VoiceRecording]";
+const REPLACED_ELSEWHERE_ANNOUNCEMENT =
+  "Dictation stopped because it started in another window or project.";
 
 type StartStepLogger = (step: string, details?: Record<string, unknown>) => void;
 
@@ -505,11 +507,24 @@ class VoiceRecordingService {
     );
 
     this.unsubscribers.push(
-      voiceInput.onStatus(({ status }) => {
+      voiceInput.onStatus(({ sessionId, status }) => {
         logDebug(`${LOG_PREFIX} Received status from backend`, {
           status,
           isStoppingSession: this.isStoppingSession,
         });
+        // A replaced session's drain still reports here after this view may
+        // have finished it locally; its statuses aren't this session's.
+        if (sessionId !== this.sessionId) return;
+        // Nothing here asked for this drain: a start in another view replaced
+        // the session. Release the mic now, and join the drain so its last
+        // text still lands in this view's draft before the session finishes.
+        if (status === "finishing" && !this.isStoppingSession && !this.stopPromise) {
+          void this.stop(REPLACED_ELSEWHERE_ANNOUNCEMENT, {
+            preserveLiveText: true,
+            skipCorrection: true,
+          });
+          return;
+        }
         if (status !== "idle") {
           const prevStatus = useVoiceRecordingStore.getState().status;
           // Local "paused" is a renderer-only override that gates worklet PCM
@@ -557,6 +572,14 @@ class VoiceRecordingService {
           sessionId,
           reason,
           current: sessionId === this.sessionId,
+        });
+        // Replaced elsewhere before it had anything to drain, typically while
+        // its start was still pending. Its start result is stale from here.
+        if (reason !== "superseded" || sessionId !== this.sessionId) return;
+        if (this.isStoppingSession || this.stopPromise) return;
+        void this.stop(REPLACED_ELSEWHERE_ANNOUNCEMENT, {
+          skipRemoteStop: true,
+          preserveLiveText: true,
         });
       })
     );
