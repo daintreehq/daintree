@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   bindHostControl,
+  readHostInventory,
   runHostControlTool,
   setHostControlRuntime,
   type HostControlRuntimeHandle,
@@ -272,5 +273,47 @@ describe("runHostControlTool (#13493)", () => {
       ok: false,
       code: "NOT_ELIGIBLE",
     });
+  });
+});
+
+describe("readHostInventory (#14547)", () => {
+  let uninstall: (() => void) | null = null;
+  afterEach(() => {
+    uninstall?.();
+    uninstall = null;
+  });
+
+  function install(runtime: object): void {
+    uninstall = setHostControlRuntime(runtime as unknown as HostControlRuntimeHandle);
+  }
+
+  it("asks the installed runtime as itself", async () => {
+    const snapshot = { takenAt: 1, hosts: [] };
+    install({
+      snapshot,
+      inventory(this: { snapshot: unknown }) {
+        return Promise.resolve(this.snapshot);
+      },
+    });
+    await expect(readHostInventory()).resolves.toBe(snapshot);
+  });
+
+  it("is null with no runtime, a runtime that can't take one, or one that fails", async () => {
+    await expect(readHostInventory()).resolves.toBeNull();
+    install({});
+    await expect(readHostInventory()).resolves.toBeNull();
+    uninstall?.();
+    install({ inventory: () => Promise.reject(new Error("boom")) });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await expect(readHostInventory()).resolves.toBeNull();
+    uninstall?.();
+    install({
+      inventory: () => {
+        throw new Error("sync boom");
+      },
+    });
+    await expect(readHostInventory()).resolves.toBeNull();
+    expect(warn).toHaveBeenCalledTimes(2);
+    warn.mockRestore();
   });
 });

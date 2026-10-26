@@ -1141,7 +1141,7 @@ export class HelpSessionService {
     // throws. Plugin knowledge describes plugin tools, which reach the
     // Assistant through Daintree's MCP server, so with that off there is none.
     const { mcpServerService } = await this.loadMcpServerModule();
-    const [projectFacts, pluginKnowledge] = await Promise.all([
+    const [projectFacts, pluginKnowledge, hostInventory] = await Promise.all([
       this.readProjectFacts(input.projectId, input.projectPath),
       agentSupportsAssistantContent(input.agentId) && mcpServerService.isEnabled()
         ? resolveAssistantPluginKnowledge({
@@ -1149,6 +1149,12 @@ export class HelpSessionService {
             projectPath: input.projectPath,
           })
         : Promise.resolve([]),
+      // Only the global assistant starts knowing every host and project (#14547).
+      input.global === true
+        ? import("./mcp-server/hostControlTools.js")
+            .then((m) => m.readHostInventory())
+            .catch(() => null)
+        : Promise.resolve(null),
     ]);
 
     const ownLockKey = assistantSlotKey(input.projectId, slot);
@@ -1175,6 +1181,7 @@ export class HelpSessionService {
         ),
       projectFacts,
       pluginKnowledge,
+      hostInventory,
       // Another live lane of this project may still be pointing at an older
       // sidecar; it is only safe to retire old ones when none is.
       // A sibling mid-provision counts too: it may already have published

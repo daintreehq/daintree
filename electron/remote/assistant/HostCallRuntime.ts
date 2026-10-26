@@ -47,6 +47,10 @@ import {
   type HostMetricsSummary,
 } from "../../../shared/types/remoteHosts.js";
 import type { HostControlRuntimeHandle } from "../../services/mcp-server/hostControlTools.js";
+import type {
+  HostInventoryHost,
+  HostInventorySnapshot,
+} from "../../services/globalAssistantInventory.js";
 import {
   NOTIFY_KEY_TOOLS,
   NOTIFY_PROMPT_TOOLS,
@@ -257,6 +261,8 @@ const MAX_RAN_PROMPTS_PER_TERMINAL = 4;
 const MAX_PENDING_PROMPTS_PER_TERMINAL = 32;
 /** How long `host.list` waits for a connected host to name its projects. */
 const PROJECTS_READ_MS = 5_000;
+/** How long the global assistant's launch waits for any one host's projects (#14547). */
+const INVENTORY_READ_MS = 1_500;
 /** How long `host.list` waits for a host it dials to connect. */
 const LIST_CONNECT_MS = 8_000;
 /** Hosts' directories kept by host and project filter, for a read that fails (#14455). */
@@ -1681,6 +1687,79 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       }
       return { hosts: agentsOf ? fitToResponse(entries) : entries };
     });
+  }
+
+  /**
+   * The snapshot the global assistant starts with (#14547): every host as this
+   * Shell observes it, this machine first, and the projects of each it can see
+   * now. No caller, so it is no answer to one: it never dials a host, reads no
+   * agents or load, and arms nothing. A host whose projects don't come back in
+   * time is still named, with its projects unknown.
+   */
+  async inventory(): Promise<HostInventorySnapshot> {
+    const toListed = (projects: readonly HostProjectSummary[]) =>
+      projects.map((project) => ({
+        projectId: project.id,
+        name: project.name,
+        frontendAttached: project.frontendAttached ?? null,
+      }));
+    const local = this.deps.local;
+    const localHost = local
+      ? withinMs(
+          Promise.resolve()
+            .then(() => local.projects())
+            .catch(() => null),
+          INVENTORY_READ_MS,
+          null
+        ).then((projects): HostInventoryHost => ({
+          hostId: LOCAL_HOST_ID,
+          name: local.name(),
+          connection: "connected",
+          local: true,
+          control: true,
+          projects: projects ? toListed(projects) : null,
+          projectTotal: projects ? projects.length : null,
+        }))
+      : null;
+    const read = this.deps.listHostProjects;
+    const lists = new Map(
+      await Promise.all(
+        this.deps.hosts().map(async (seen) => {
+          const readable =
+            seen.connection.status === "connected" &&
+            this.deps.controlEnabled?.(seen.hostId) === true &&
+            read !== undefined;
+          const projects = readable
+            ? await withinMs(
+                read(seen.hostId).catch(() => null),
+                INVENTORY_READ_MS,
+                null
+              )
+            : null;
+          return [seen.hostId, projects] as const;
+        })
+      )
+    );
+    const here = localHost ? await localHost : null;
+    // Observed again once every read is in: a host removed meanwhile is gone,
+    // and one that dropped or was switched off meanwhile claims no projects.
+    const remote = this.deps.hosts().map((host): HostInventoryHost => {
+      const control = this.deps.controlEnabled?.(host.hostId) === true;
+      const listed = host.connection.status === "connected" && control;
+      const projects = listed ? (lists.get(host.hostId) ?? null) : null;
+      return {
+        hostId: host.hostId,
+        name: host.name,
+        connection: observedConnection(host.connection),
+        local: false,
+        control,
+        projects: projects ? toListed(projects) : null,
+        // A host sends at most this many and says nothing of the rest.
+        projectTotal: projects && projects.length < MAX_LISTED_PROJECTS ? projects.length : null,
+      };
+    });
+    const hosts = here ? [here, ...remote] : remote;
+    return { takenAt: this.now(), hosts };
   }
 
   /**
