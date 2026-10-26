@@ -897,7 +897,10 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // 152_850 → 152_910 for #14448, measured at 152_899 B (+60): `canopyModel`
   // joins the host settings an assistant may read and change, so its name sits
   // in the keys it reads, the patch it previews and the settings it gets back.
-  const MAX_COHORT_PAYLOAD_BYTES = 152_910;
+  // 152_910 → 152_980 for #14550, measured at 152_971 (+61): each
+  // `terminal.sendCommandMany` item takes the `generation` an assistant send
+  // needs, with a clause on `sends` saying so.
+  const MAX_COHORT_PAYLOAD_BYTES = 152_980;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

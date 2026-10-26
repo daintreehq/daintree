@@ -52,17 +52,14 @@ export const TerminalSendCommandManyArgsSchema = z.object({
       z.object({
         terminalId: z.string().min(1),
         command: z.string().min(1),
-        generation: z
-          .number()
-          .int()
-          .min(0)
-          .optional()
-          .describe("Sending to another assistant: its generation from the assistant listing."),
+        generation: z.number().int().min(0).optional(),
       })
     )
     .min(1)
     .max(MAX_BATCH_SENDS)
-    .describe("1-16 messages, one per terminal, each its next prompt."),
+    .describe(
+      "1-16 messages, one per terminal, each its next prompt. An assistant also needs its generation."
+    ),
   ...notifyFields,
 });
 export type TerminalSendCommandManyArgs = z.infer<typeof TerminalSendCommandManyArgsSchema>;
