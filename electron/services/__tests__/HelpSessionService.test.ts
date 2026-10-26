@@ -11,6 +11,11 @@ import type { McpRuntimeSnapshot } from "../../../shared/types/ipc/mcpServer.js"
 import { assistantSlotKey as slotKey } from "../../../shared/config/assistantSlots.js";
 import { NO_VIEW_HANDLE } from "../../ipc/endpoint.js";
 import {
+  setHostControlRuntime,
+  type HostControlRuntimeHandle,
+} from "../mcp-server/hostControlTools.js";
+import type { HostInventorySnapshot } from "../globalAssistantInventory.js";
+import {
   setUserRegistry,
   type AgentConfig,
   type AssistantSupports,
@@ -789,6 +794,114 @@ describe("HelpSessionService", () => {
       service.markTerminalForToken(result.token, "term-global");
       service.handleTerminalExit("term-global");
       await vi.waitFor(() => expect(service.validateToken(result.token)).toBe(false));
+    });
+
+    describe("host and project inventory (#14547)", () => {
+      const START = "<!-- DAINTREE_HOST_INVENTORY_START -->";
+      let snapshot: HostInventorySnapshot;
+      let uninstall: (() => void) | null = null;
+
+      function install(): void {
+        uninstall = setHostControlRuntime({
+          inventory: async () => snapshot,
+        } as unknown as HostControlRuntimeHandle);
+      }
+
+      function withProjects(names: string[]): HostInventorySnapshot {
+        return {
+          takenAt: Date.UTC(2026, 9, 26, 9, 0, 0),
+          hosts: [
+            {
+              hostId: "local",
+              name: "greg-mbp",
+              connection: "connected",
+              local: true,
+              control: true,
+              projects: names.map((name) => ({
+                projectId: `id-${name}`,
+                name,
+                frontendAttached: false,
+              })),
+              projectTotal: names.length,
+            },
+          ],
+        };
+      }
+
+      afterEach(() => {
+        uninstall?.();
+        uninstall = null;
+      });
+
+      it("writes the snapshot into both prompt files and the sidecar", async () => {
+        snapshot = withProjects(["alpha", "beta"]);
+        install();
+        const result = await service.provisionSession(globalInput());
+        if (!result) throw new Error("expected result");
+        for (const name of ["CLAUDE.md", "AGENTS.md", "host-inventory.md"]) {
+          const content = await fs.readFile(path.join(result.sessionPath, name), "utf-8");
+          expect(content).toContain("- `local` `greg-mbp`: this machine");
+          expect(content).toContain("`id-alpha` `alpha`");
+          expect(content).toContain("2026-10-26T09:00:00.000Z");
+        }
+      });
+
+      it("hands a reopened Claude conversation the sidecar through a resume hook", async () => {
+        snapshot = withProjects(["alpha"]);
+        install();
+        const result = await service.provisionSession(globalInput());
+        if (!result) throw new Error("expected result");
+        const settings = JSON.parse(
+          await fs.readFile(path.join(result.sessionPath, ".claude", "settings.json"), "utf-8")
+        );
+        expect(settings.hooks.SessionStart).toContainEqual({
+          matcher: "resume",
+          hooks: [{ type: "command", command: "cat host-inventory.md" }],
+        });
+      });
+
+      it("rewrites the sidecar on the next launch, which is what a resume reads", async () => {
+        snapshot = withProjects(["alpha", "beta"]);
+        install();
+        const first = await service.provisionSession(globalInput());
+        if (!first) throw new Error("expected result");
+        snapshot = { ...withProjects(["beta", "gamma"]), takenAt: Date.UTC(2026, 9, 27) };
+        const second = await service.provisionSession(globalInput());
+        if (!second) throw new Error("expected result");
+        expect(second.sessionPath).toBe(first.sessionPath);
+        for (const name of ["CLAUDE.md", "host-inventory.md"]) {
+          const content = await fs.readFile(path.join(second.sessionPath, name), "utf-8");
+          expect(content).toContain("`id-gamma`");
+          expect(content).not.toContain("`id-alpha`");
+          expect(content).toContain("2026-10-27T00:00:00.000Z");
+          if (name === "CLAUDE.md") expect(content.split(START)).toHaveLength(2);
+        }
+      });
+
+      it("says the hosts couldn't be read when no runtime answers, rather than that there are none", async () => {
+        const result = await service.provisionSession(globalInput());
+        if (!result) throw new Error("expected result");
+        const content = await fs.readFile(path.join(result.sessionPath, "CLAUDE.md"), "utf-8");
+        expect(content).toContain("No hosts could be read; call `host.list`.");
+      });
+
+      it("never reaches a project assistant's instructions", async () => {
+        snapshot = withProjects(["alpha"]);
+        install();
+        const result = await service.provisionSession(provisionInput());
+        if (!result) throw new Error("expected result");
+        for (const name of ["CLAUDE.md", "AGENTS.md"]) {
+          const content = await fs.readFile(path.join(result.sessionPath, name), "utf-8");
+          expect(content).not.toContain(START);
+        }
+        await expect(
+          fs.access(path.join(result.sessionPath, "host-inventory.md"))
+        ).rejects.toThrow();
+        const settings = JSON.parse(
+          await fs.readFile(path.join(result.sessionPath, ".claude", "settings.json"), "utf-8")
+        );
+        expect(JSON.stringify(settings.hooks ?? {})).not.toContain("host-inventory.md");
+      });
     });
 
     it("keeps its id for itself and refuses a view or an asker", async () => {
