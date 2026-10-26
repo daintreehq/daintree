@@ -2703,10 +2703,10 @@ class VoiceRecordingService {
 
     // The history keeps the cleaned text even when the draft it was meant for
     // was sent or edited first: that is when it's worth recovering.
-    if (correction.historyId && results.some((result) => result !== null)) {
+    if (correction.historyId && results.some((result) => result.text !== null)) {
       keepRecentDictationCorrection(
         correction.historyId,
-        correction.passages.map((passage, i) => results[i] ?? passage.text).join(" ")
+        correction.passages.map((passage, i) => results[i]?.text ?? passage.text).join(" ")
       );
     }
 
