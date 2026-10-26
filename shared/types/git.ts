@@ -9,6 +9,13 @@ export type GitStatus =
  * types (rather than beside the sidebar that renders it) because it is carried
  * on `DiffPanelData`, and `shared/` cannot reach into `src/`.
  */
+/**
+ * Which side of the index a diff is taken from: `staged` is HEAD against the
+ * index, `unstaged` is the index against the working tree. A request that names
+ * neither gets HEAD against the working tree.
+ */
+export type GitDiffSide = "staged" | "unstaged";
+
 export interface DiffChangeSetEntry {
   /** Repo-relative path */
   path: string;
@@ -22,6 +29,12 @@ export interface DiffChangeSetEntry {
    * `base:{path}` (base-branch review).
    */
   viewedKey: string;
+  /**
+   * Set by callers that list a partially staged file twice, so each row's diff
+   * is fetched from its own side of the index. Absent means HEAD against the
+   * working tree.
+   */
+  side?: GitDiffSide;
 }
 
 /** Details about a single file change in a worktree */

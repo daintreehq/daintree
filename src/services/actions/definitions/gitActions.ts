@@ -145,6 +145,12 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
           .boolean()
           .optional()
           .describe("When true, whitespace-only changes are omitted from the diff."),
+        side: z
+          .enum(["staged", "unstaged"])
+          .optional()
+          .describe(
+            "Which side of the index to diff: `staged` is HEAD against the index, `unstaged` is the index against the working tree. Omit for HEAD against the working tree."
+          ),
         // A BYTE offset into the diff text, not a list position — this action
         // windows one file's diff rather than paging a collection, so it stays
         // outside the shared `paginationShape` vocabulary.

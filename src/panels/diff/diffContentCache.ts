@@ -143,6 +143,8 @@ async function fetchDiffContent(
       status: subject.status,
       ignoreWhitespace,
       maxBytes: GIT_FILE_DIFF_MAX_BYTES,
+      // "working-tree" names no side: it keeps HEAD against the working tree.
+      ...(subject.source !== "working-tree" && { side: subject.source }),
     },
     { source: "user" }
   );

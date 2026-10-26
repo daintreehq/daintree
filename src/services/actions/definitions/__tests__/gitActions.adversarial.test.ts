@@ -687,6 +687,21 @@ describe("gitActions adversarial", () => {
     });
   });
 
+  it("git.getFileDiff forwards a named side to the preload bridge", async () => {
+    const { runParsed, git } = setupActions();
+
+    await runParsed(
+      "git.getFileDiff",
+      { worktreeId: "wt-1", filePath: "a.ts", status: "modified", side: "staged" },
+      {}
+    );
+    expect(git.getFileDiff).toHaveBeenLastCalledWith("/repo/one", "a.ts", "modified", undefined, {
+      offset: 0,
+      maxBytes: GIT_FILE_DIFF_DEFAULT_MAX_BYTES,
+      side: "staged",
+    });
+  });
+
   it("git.stageFile falls back to ctx.activeWorktreePath", async () => {
     const { run, git } = setupActions();
     await run("git.stageFile", { filePath: "a.ts" }, { activeWorktreePath: "/repo" });

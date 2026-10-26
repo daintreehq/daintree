@@ -469,6 +469,7 @@ export function ReviewHubContent({
         insertions: item.file.insertions,
         deletions: item.file.deletions,
         viewedKey: `${item.section}:${item.file.path}`,
+        side: item.section,
       })),
     [navigableItems]
   );

@@ -64,6 +64,39 @@ describe("diffContentCache — base-branch subjects are never cached", () => {
   });
 });
 
+describe("diffContentCache — index side", () => {
+  const sided = (source: "staged" | "unstaged"): DiffSubject => ({
+    source,
+    worktreePath: "/repo",
+    filePath: "src/a.ts",
+    status: "modified",
+  });
+
+  it("names no side for a working-tree subject, keeping HEAD against the working tree", async () => {
+    await requestDiff(workingTree("src/a.ts"), false);
+
+    expect(dispatchMock.mock.calls[0]?.[1]).not.toHaveProperty("side");
+  });
+
+  it.each(["staged", "unstaged"] as const)("asks for the %s side of the index", async (source) => {
+    await requestDiff(sided(source), false);
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "git.getFileDiff",
+      expect.objectContaining({ side: source }),
+      expect.anything()
+    );
+  });
+
+  it("keeps the two sides of one path apart in the cache", async () => {
+    await requestDiff(sided("staged"), false);
+    await requestDiff(sided("unstaged"), false);
+    await requestDiff(workingTree("src/a.ts"), false);
+
+    expect(dispatchMock).toHaveBeenCalledTimes(3);
+  });
+});
+
 describe("diffContentCache — diff windowing (#11531)", () => {
   it("requests the full 1MB transport ceiling, not the agent-facing default window", async () => {
     await requestDiff(workingTree("src/a.ts"), false);

@@ -310,13 +310,6 @@ export function DiffPane({
   const panelBaseBranch = panel?.baseBranch;
   const panelViewedKey = panel?.viewedKey;
 
-  // Memoized on primitives so the subject identity only moves when what we're
-  // diffing does — `useDiffContent` refetches on subject identity.
-  const subject = useMemo(
-    () =>
-      buildSubject(diffSource, panelBaseBranch, worktreePath, filePath, fileStatus, currentBranch),
-    [diffSource, panelBaseBranch, worktreePath, filePath, fileStatus, currentBranch]
-  );
   const isWorkspace = (changeSet?.length ?? 0) > 1;
 
   // Resolved by identity, never stored: a change set rebuilt from a later poll
@@ -337,6 +330,30 @@ export function DiffPane({
     if (exact !== -1) return exact;
     return changeSet.findIndex((entry) => entry.path === filePath);
   }, [changeSet, filePath, fileStatus, panelViewedKey]);
+
+  // A working-tree panel lists a partially staged file once per side, and each
+  // entry names its own, so the same path fetches a different diff per row. Any
+  // other source already fixes the comparison for the whole panel.
+  const entrySide = currentIndex === -1 ? undefined : changeSet?.[currentIndex]?.side;
+  const effectiveSource =
+    diffSource === undefined || diffSource === "working-tree"
+      ? (entrySide ?? diffSource)
+      : diffSource;
+
+  // Memoized on primitives so the subject identity only moves when what we're
+  // diffing does — `useDiffContent` refetches on subject identity.
+  const subject = useMemo(
+    () =>
+      buildSubject(
+        effectiveSource,
+        panelBaseBranch,
+        worktreePath,
+        filePath,
+        fileStatus,
+        currentBranch
+      ),
+    [effectiveSource, panelBaseBranch, worktreePath, filePath, fileStatus, currentBranch]
+  );
 
   // Survives the open file dropping out of the set, so stepping resumes from
   // where the user was rather than jumping to the top.
@@ -375,16 +392,21 @@ export function DiffPane({
   const nextEntry = currentIndex === -1 ? undefined : changeSet?.[currentIndex + 1];
   const nextPath = nextEntry?.path;
   const nextStatus = nextEntry?.status;
+  const nextSide = nextEntry?.side;
+  const nextSource =
+    diffSource === undefined || diffSource === "working-tree"
+      ? (nextSide ?? diffSource)
+      : diffSource;
   const nextSubject = useMemo(
     () =>
-      buildSubject(diffSource, panelBaseBranch, worktreePath, nextPath, nextStatus, currentBranch),
-    [diffSource, panelBaseBranch, worktreePath, nextPath, nextStatus, currentBranch]
+      buildSubject(nextSource, panelBaseBranch, worktreePath, nextPath, nextStatus, currentBranch),
+    [nextSource, panelBaseBranch, worktreePath, nextPath, nextStatus, currentBranch]
   );
 
   // Decided from the subject alone, before any content exists: the request's
   // whitespace sensitivity depends on it, so it cannot wait on the verdict that
   // needs the content the request produces.
-  const renderedSupported = isRenderedMarkdownSupported(filePath, diffSource);
+  const renderedSupported = isRenderedMarkdownSupported(filePath, effectiveSource);
   const renderedRequested = diffMarkdownRendered && renderedSupported;
   const renderedContentOptions = useMemo(
     () => (renderedRequested ? { ignoreWhitespace: false } : undefined),
@@ -610,8 +632,8 @@ export function DiffPane({
   // user currently wants to — the toggle stays visible either way so the option
   // is discoverable, and explains itself when it can't be used.
   const sourceAvailability = useMemo(
-    () => getFullFileAvailability(diffSource, fileStatus, isGitlink),
-    [diffSource, fileStatus, isGitlink]
+    () => getFullFileAvailability(effectiveSource, fileStatus, isGitlink),
+    [effectiveSource, fileStatus, isGitlink]
   );
   // An image diff already shows the whole asset, and a diff that hasn't loaded
   // has nothing to expand — folding both into the availability verdict keeps
@@ -715,7 +737,7 @@ export function DiffPane({
 
   const renderedAvailability = getRenderedMarkdownAvailability({
     filePath,
-    diffSource,
+    diffSource: effectiveSource,
     content,
     stale,
     // Only relevant once the rendered layout is the thing waiting on the read —

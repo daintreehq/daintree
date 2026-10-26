@@ -234,6 +234,135 @@ describe("WorkspaceService.getFileDiff", () => {
     expect(mockSimpleGit.diff).toHaveBeenCalledWith(expect.arrayContaining(["--submodule=short"]));
   });
 
+  describe("side", () => {
+    const patch = "diff --git a/foo.ts b/foo.ts\n+change";
+
+    function diffArgs(): string[] {
+      return mockSimpleGit.diff.mock.calls[0][0] as string[];
+    }
+
+    it("diffs HEAD against the working tree when no side is named", async () => {
+      mockSimpleGit.diff.mockResolvedValueOnce(patch);
+      await service.getFileDiff("req-side-0", "/test/repo", "foo.ts", "modified");
+
+      expect(diffArgs()[0]).toBe("HEAD");
+      expect(diffArgs()).not.toContain("--cached");
+    });
+
+    it("diffs HEAD against the index for the staged side", async () => {
+      mockSimpleGit.diff.mockResolvedValueOnce(patch);
+      await service.getFileDiff(
+        "req-side-1",
+        "/test/repo",
+        "foo.ts",
+        "modified",
+        undefined,
+        undefined,
+        undefined,
+        "staged"
+      );
+
+      expect(diffArgs()[0]).toBe("--cached");
+      expect(diffArgs().indexOf("--cached")).toBeLessThan(diffArgs().indexOf("--"));
+    });
+
+    it("diffs the index against the working tree for the unstaged side", async () => {
+      mockSimpleGit.diff.mockResolvedValueOnce(patch);
+      await service.getFileDiff(
+        "req-side-2",
+        "/test/repo",
+        "foo.ts",
+        "modified",
+        undefined,
+        undefined,
+        undefined,
+        "unstaged"
+      );
+
+      expect(diffArgs()).not.toContain("--cached");
+      expect(diffArgs()).not.toContain("HEAD");
+    });
+
+    it("asks git for a staged new file instead of inlining the edited working-tree copy", async () => {
+      const { readFile } = await import("fs/promises");
+      mockSimpleGit.diff.mockResolvedValueOnce(
+        "diff --git a/new.ts b/new.ts\nnew file mode 100644"
+      );
+      await service.getFileDiff(
+        "req-side-3",
+        "/test/repo",
+        "new.ts",
+        "added",
+        undefined,
+        undefined,
+        undefined,
+        "staged"
+      );
+
+      expect(readFile).not.toHaveBeenCalled();
+      expect(diffArgs()).toContain("--cached");
+    });
+
+    it("asks git for the unstaged edits of an added file instead of inlining it", async () => {
+      const { readFile } = await import("fs/promises");
+      mockSimpleGit.diff.mockResolvedValueOnce(patch);
+      await service.getFileDiff(
+        "req-side-4",
+        "/test/repo",
+        "new.ts",
+        "added",
+        undefined,
+        undefined,
+        undefined,
+        "unstaged"
+      );
+
+      expect(readFile).not.toHaveBeenCalled();
+      expect(mockSimpleGit.diff).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not refuse a staged diff because the working-tree copy outgrew the ceiling", async () => {
+      const { lstat } = await import("fs/promises");
+      vi.mocked(lstat).mockResolvedValueOnce({
+        isSymbolicLink: () => false,
+        isDirectory: () => false,
+        size: GIT_FILE_DIFF_MAX_SOURCE_BYTES + 1,
+      } as never);
+      mockSimpleGit.diff.mockResolvedValueOnce(patch);
+      await service.getFileDiff(
+        "req-side-6",
+        "/test/repo",
+        "big.bin",
+        "modified",
+        undefined,
+        undefined,
+        undefined,
+        "staged"
+      );
+
+      expect(mockSimpleGit.diff).toHaveBeenCalledTimes(1);
+    });
+
+    it("still inlines an untracked file on the unstaged side", async () => {
+      await service.getFileDiff(
+        "req-side-5",
+        "/test/repo",
+        "fresh.ts",
+        "untracked",
+        undefined,
+        undefined,
+        undefined,
+        "unstaged"
+      );
+
+      expect(mockSimpleGit.diff).not.toHaveBeenCalled();
+      const event = mockSendEvent.mock.calls
+        .map((call) => call[0])
+        .find((e) => e.requestId === "req-side-5");
+      expect(event.diff).toContain("new file mode");
+    });
+  });
+
   it.each(["untracked", "added"])(
     "shows an %s symlink as its target with git's symlink mode, never what it points at",
     async (status) => {

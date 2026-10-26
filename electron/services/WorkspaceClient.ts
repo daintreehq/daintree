@@ -41,6 +41,7 @@ import type {
   FileTreeNode,
 } from "../../shared/types/ipc.js";
 import type { ProjectPulse, PulseRangeDays } from "../../shared/types/pulse.js";
+import type { GitDiffSide } from "../../shared/types/git.js";
 import type { GitFileDiffResult } from "../../shared/types/ipc/git.js";
 import type { WorkspacePollingPolicy } from "../../shared/types/powerPolicy.js";
 import type { HostLoadKind } from "./ProjectSwitchStatusTiming.js";
@@ -1306,7 +1307,8 @@ export class WorkspaceClient extends EventEmitter {
     status: string,
     ignoreWhitespace?: boolean,
     offset?: number,
-    maxBytes?: number
+    maxBytes?: number,
+    side?: GitDiffSide
   ): Promise<GitFileDiffResult> {
     const host = this.pool.resolveHostForPath(cwd);
     if (!host) throw new Error("No workspace host for path");
@@ -1326,6 +1328,7 @@ export class WorkspaceClient extends EventEmitter {
       ignoreWhitespace,
       offset,
       maxBytes,
+      side,
     });
     return {
       content: result.diff,
