@@ -44,7 +44,11 @@ import type { RunHistoryRecord } from "../shared/types/ipc/runHistory.js";
 import type { CanopyMode } from "../shared/types/ipc/canopy.js";
 import type { WindowOpeningConfig } from "../shared/types/ipc/windowOpening.js";
 import { DEFAULT_OPEN_FOLDERS_IN_NEW_WINDOW } from "../shared/types/windowOpen.js";
-import type { SuggestedDictionaryEntry, VoiceDictionaryEntry } from "../shared/types/ipc/api.js";
+import type {
+  DismissedSuggestion,
+  SuggestedDictionaryEntry,
+  VoiceDictionaryEntry,
+} from "../shared/types/ipc/api.js";
 import { FORGE_AUDIT_DEFAULT_MAX_RECORDS } from "../shared/types/ipc/forge.js";
 import type { BuiltInAgentId } from "../shared/config/agentIds.js";
 import type { AgentId } from "../shared/types/agent.js";
@@ -358,6 +362,7 @@ export interface StoreSchema {
     projectId: string;
     recordingMode: string;
     suggestedDictionary: SuggestedDictionaryEntry[];
+    dismissedSuggestions: DismissedSuggestion[];
     learnFromCorrections: boolean;
   };
   mcpServer: {
@@ -1061,6 +1066,7 @@ const storeOptions = {
       projectId: "",
       recordingMode: "toggle",
       suggestedDictionary: [],
+      dismissedSuggestions: [],
       learnFromCorrections: true,
     },
     mcpServer: {

@@ -27,6 +27,7 @@ import {
   dictionaryTerms,
   sanitizeDictionary,
   sanitizeSuggestions,
+  sanitizeDismissedSuggestions,
 } from "../../../shared/utils/voiceDictionary.js";
 import {
   AUDIO_BUFFER_MAX_BYTES,
@@ -196,6 +197,7 @@ const VOICE_INPUT_DEFAULTS: VoiceInputSettings = {
   projectId: "",
   recordingMode: "toggle",
   suggestedDictionary: [],
+  dismissedSuggestions: [],
   learnFromCorrections: true,
 };
 
@@ -229,10 +231,13 @@ export function getVoiceSettings(): VoiceInputSettings {
     Date.now()
   );
   merged.suggestedDictionary = sanitizeSuggestions(rest.suggestedDictionary ?? []);
+  merged.dismissedSuggestions = sanitizeDismissedSuggestions(rest.dismissedSuggestions ?? []);
   const dictionaryRepaired =
     customDictionary !== undefined ||
     JSON.stringify(rest.dictionary ?? []) !== JSON.stringify(merged.dictionary) ||
-    JSON.stringify(rest.suggestedDictionary ?? []) !== JSON.stringify(merged.suggestedDictionary);
+    JSON.stringify(rest.suggestedDictionary ?? []) !== JSON.stringify(merged.suggestedDictionary) ||
+    JSON.stringify(rest.dismissedSuggestions ?? []) !==
+      JSON.stringify(merged.dismissedSuggestions);
 
   // Migrate prior OpenAI keys into the unified field.
   if (!merged.openaiApiKey) {

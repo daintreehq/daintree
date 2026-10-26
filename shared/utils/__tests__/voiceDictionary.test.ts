@@ -223,8 +223,30 @@ describe("suggestions", () => {
 
   it("dismissing drops the suggestion matched ignoring case", () => {
     const queued = [suggestion("Zustand"), suggestion("Vite")];
-    expect(dismissSuggestion(queued, "ZUSTAND")).toEqual([suggestion("Vite")]);
-    expect(dismissSuggestion(queued, "Bun")).toBe(queued);
+    const dismissed = dismissSuggestion(queued, [], "ZUSTAND");
+    expect(dismissed.suggestedDictionary).toEqual([suggestion("Vite")]);
+    expect(dismissed.dismissedSuggestions).toEqual([
+      { word: "Zustand", utterance: queued[0]!.utterance },
+    ]);
+    const none: never[] = [];
+    const missing = dismissSuggestion(queued, none, "Bun");
+    expect(missing.suggestedDictionary).toBe(queued);
+    expect(missing.dismissedSuggestions).toBe(none);
+  });
+
+  it("a dismissed pair is never suggested again, but the same word heard differently is", () => {
+    const dismissed = [{ word: "Zustand", utterance: "zoo stand" }];
+    expect(
+      mergeSuggestions([{ word: "zustand", original: "Zoo Stand" }], [], [], T1, dismissed)
+    ).toBeNull();
+    const other = mergeSuggestions(
+      [{ word: "Zustand", original: "zoo stan" }],
+      [],
+      [],
+      T1,
+      dismissed
+    );
+    expect(other?.map((e) => e.utterance)).toEqual(["zoo stan"]);
   });
 
   it("merging skips dictionary terms, bumps repeats, puts new words first and caps the queue", () => {

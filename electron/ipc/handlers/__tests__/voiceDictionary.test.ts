@@ -181,6 +181,11 @@ describe("voiceDictionary operations", () => {
     const after = await op("dismissSuggestion", { word: "zustand" });
     expect(after.suggestedDictionary.map((s) => s.word)).toEqual(["Tailwind"]);
     expect(stored().suggestedDictionary).toEqual(after.suggestedDictionary);
+
+    const again = await op("recordSuggestions", {
+      candidates: [{ word: "Zustand", original: "zoo stand" }],
+    });
+    expect(again.suggestedDictionary.map((s) => s.word)).toEqual(["Tailwind"]);
   });
 
   it("learns nothing while learning from corrections is off, or for a word already added", async () => {

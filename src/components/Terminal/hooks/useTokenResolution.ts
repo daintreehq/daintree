@@ -5,6 +5,7 @@ import { peek as peekTerminalService } from "@/services/terminal/terminalInstanc
 import { buildTerminalSendPayload } from "@/lib/terminalInput";
 import { useCommandHistoryStore } from "@/store/commandHistoryStore";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
+import { useDictionaryLearnPromptStore } from "@/store/dictionaryLearnPromptStore";
 import { findCorrectionCandidates } from "@shared/utils/phoneticSimilarity";
 import {
   getAllAtContextReferences,
@@ -48,7 +49,8 @@ function resolveContextReferences(
  * text. Compares the settled transcription baseline (captured after dictation
  * stops) against the final text the user is sending; phonetically-similar
  * substitutions are persisted as suggestions in Voice settings, pending
- * explicit accept/dismiss (#9749).
+ * explicit accept/dismiss (#9749). The first new pair is also offered in the
+ * composer the text was sent from (#14646).
  *
  * Synchronous store read at the send site (no React subscription — see [[#9441]]).
  * Fully swallows errors: learning must never block or alter the send.
@@ -70,9 +72,29 @@ function detectDictionaryCorrections(panelId: string, finalText: string): void {
 
     // Main merges them into the queue it owns, so an accept or dismiss made
     // meanwhile in Settings isn't overwritten by this view's copy.
-    window.electron.voiceDictionary.recordSuggestions({ candidates }).catch(() => {
-      // Best-effort; never surface a learning failure to the user.
-    });
+    window.electron.voiceDictionary
+      .recordSuggestions({ candidates })
+      .then((state) => {
+        // Only a pair main kept in the queue is offered: one already in the
+        // dictionary or dismissed earlier never reaches it.
+        for (const candidate of candidates) {
+          const original = candidate.original.trim();
+          const queued = state.suggestedDictionary.find(
+            (entry) =>
+              entry.word.toLowerCase() === candidate.word.trim().toLowerCase() &&
+              entry.utterance === original
+          );
+          if (queued) {
+            useDictionaryLearnPromptStore
+              .getState()
+              .offer(panelId, { word: queued.word, utterance: queued.utterance });
+            return;
+          }
+        }
+      })
+      .catch(() => {
+        // Best-effort; never surface a learning failure to the user.
+      });
   } catch {
     // Never let learning interfere with sending.
   }

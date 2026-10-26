@@ -50,6 +50,7 @@ import { useFleetArmingStore } from "@/store/fleetArmingStore";
 
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { VoiceInputButton } from "./VoiceInputButton";
+import { DictionaryLearnPrompt } from "./DictionaryLearnPrompt";
 import { Archive } from "lucide-react";
 import { Paperclip } from "@/components/icons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -1713,6 +1714,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             focusEditor();
           }}
         >
+          <DictionaryLearnPrompt terminalId={terminalId} projectId={projectId} />
           {barContent}
         </div>
         <CommandPickerHost

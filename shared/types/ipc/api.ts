@@ -2943,13 +2943,15 @@ export interface VoiceInputSettings {
    * it, written only by main.
    */
   suggestedDictionary: SuggestedDictionaryEntry[];
+  /** Suggestions the user dismissed, so the same substitution is never offered again. Written only by main. */
+  dismissedSuggestions: DismissedSuggestion[];
   /** When enabled, manual corrections to dictated text surface as suggested dictionary words. Defaults to true. */
   learnFromCorrections: boolean;
 }
 
 /** What `voiceInput.setSettings` accepts: everything except the main-owned and runtime-only fields. */
 export type VoiceInputSettingsPatch = Partial<
-  Omit<VoiceInputSettings, "dictionary" | "suggestedDictionary" | "keyterms">
+  Omit<VoiceInputSettings, "dictionary" | "suggestedDictionary" | "dismissedSuggestions" | "keyterms">
 >;
 
 /** Where a dictionary entry came from. */
@@ -2970,6 +2972,12 @@ export interface VoiceDictionaryEntry {
 export interface VoiceDictionaryState {
   dictionary: VoiceDictionaryEntry[];
   suggestedDictionary: SuggestedDictionaryEntry[];
+}
+
+/** A word and what it was heard as, the pair a dismissed suggestion keeps from coming back. */
+export interface DismissedSuggestion {
+  word: string;
+  utterance: string;
 }
 
 /** A dictionary word suggested from a user's manual correction, with provenance. */

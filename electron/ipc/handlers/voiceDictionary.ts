@@ -4,7 +4,11 @@ import { store } from "../../store.js";
 import { defineIpcNamespace, opValidated } from "../define.js";
 import { getVoiceSettings } from "./voiceInput.js";
 import { VOICE_DICTIONARY_METHOD_CHANNELS } from "./voiceDictionary.preload.js";
-import type { VoiceDictionaryState, VoiceInputSettings } from "../../../shared/types/ipc/api.js";
+import type {
+  DismissedSuggestion,
+  VoiceDictionaryState,
+  VoiceInputSettings,
+} from "../../../shared/types/ipc/api.js";
 import {
   acceptSuggestion,
   addDictionaryEntry,
@@ -47,7 +51,10 @@ const recordSchema = z.object({
  * nothing changed.
  */
 function change(
-  apply: (state: VoiceDictionaryState, settings: VoiceInputSettings) => VoiceDictionaryState
+  apply: (
+    state: VoiceDictionaryState,
+    settings: VoiceInputSettings
+  ) => VoiceDictionaryState & { dismissedSuggestions?: DismissedSuggestion[] }
 ): VoiceDictionaryState {
   // getVoiceSettings has already repaired and persisted what it read.
   const settings = getVoiceSettings();
@@ -55,16 +62,23 @@ function change(
     dictionary: settings.dictionary,
     suggestedDictionary: settings.suggestedDictionary,
   };
-  const next = apply(current, settings);
+  const result = apply(current, settings);
+  const next: VoiceDictionaryState = {
+    dictionary: result.dictionary,
+    suggestedDictionary: result.suggestedDictionary,
+  };
+  const dismissed = result.dismissedSuggestions ?? settings.dismissedSuggestions;
   if (
     next.dictionary !== current.dictionary ||
-    next.suggestedDictionary !== current.suggestedDictionary
+    next.suggestedDictionary !== current.suggestedDictionary ||
+    dismissed !== settings.dismissedSuggestions
   ) {
     // The stored object, not `settings`: that one carries env-var key overrides.
     store.set("voiceInput", {
       ...store.get("voiceInput"),
       dictionary: next.dictionary,
       suggestedDictionary: next.suggestedDictionary,
+      dismissedSuggestions: dismissed,
     });
   }
   return next;
@@ -107,14 +121,14 @@ export const voiceDictionaryNamespace = defineIpcNamespace({
       VOICE_DICTIONARY_METHOD_CHANNELS.dismissSuggestion,
       suggestionSchema,
       async ({ word }): Promise<VoiceDictionaryState> =>
-        change((state) => ({
+        change((state, settings) => ({
           ...state,
-          suggestedDictionary: dismissSuggestion(state.suggestedDictionary, word),
+          ...dismissSuggestion(state.suggestedDictionary, settings.dismissedSuggestions, word),
         }))
     ),
     // The learner reports what it saw and main merges it into the queue it
     // holds, so the learner's copy can't overwrite an accept or dismiss made
-    // meanwhile. A word dismissed earlier can still be suggested again.
+    // meanwhile. A dismissed word and utterance pair is skipped.
     recordSuggestions: opValidated(
       VOICE_DICTIONARY_METHOD_CHANNELS.recordSuggestions,
       recordSchema,
@@ -125,7 +139,8 @@ export const voiceDictionaryNamespace = defineIpcNamespace({
             candidates,
             state.dictionary,
             state.suggestedDictionary,
-            Date.now()
+            Date.now(),
+            settings.dismissedSuggestions
           );
           return next ? { ...state, suggestedDictionary: next } : state;
         })
