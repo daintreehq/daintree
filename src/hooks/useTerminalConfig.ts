@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
-import { logError, logWarn } from "@/utils/logger";
+import { logWarn } from "@/utils/logger";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { useTerminalFontStore, useScreenReaderStore } from "@/store";
 import {
@@ -8,62 +8,20 @@ import {
   selectEffectiveTheme,
 } from "@/store/terminalColorSchemeStore";
 import { resolveCommittedScheme, useAppThemeStore } from "@/store/appThemeStore";
-import { terminalConfigClient } from "@/clients/terminalConfigClient";
 
 /**
- * Syncs global terminal config to singleton service.
- * Terminals live outside React, so they don't receive prop updates automatically.
+ * Applies the terminal settings in this view's stores to every live terminal.
+ * Terminals live outside React, so they don't receive prop updates
+ * automatically. The stores themselves are kept current by
+ * `initTerminalConfigSync`.
  */
 export function useTerminalConfig() {
   const fontSize = useTerminalFontStore((state) => state.fontSize);
   const fontFamily = useTerminalFontStore((state) => state.fontFamily);
-  const setFontSize = useTerminalFontStore((state) => state.setFontSize);
-  const setFontFamily = useTerminalFontStore((state) => state.setFontFamily);
 
   const selectedSchemeId = useTerminalColorSchemeStore((state) => state.selectedSchemeId);
   const previewSchemeId = useTerminalColorSchemeStore((state) => state.previewSchemeId);
   const customSchemes = useTerminalColorSchemeStore((state) => state.customSchemes);
-  const addCustomScheme = useTerminalColorSchemeStore((state) => state.addCustomScheme);
-  const setRecentSchemeIds = useTerminalColorSchemeStore((state) => state.setRecentSchemeIds);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    terminalConfigClient
-      .get()
-      .then((config) => {
-        if (cancelled) return;
-        if (typeof config.fontSize === "number" && Number.isFinite(config.fontSize)) {
-          setFontSize(config.fontSize);
-        }
-        if (typeof config.fontFamily === "string" && config.fontFamily.trim()) {
-          setFontFamily(config.fontFamily);
-        }
-        if (typeof config.colorSchemeId === "string" && config.colorSchemeId.trim()) {
-          // Hydrate directly to avoid polluting the recently-used list on startup
-          useTerminalColorSchemeStore.setState({ selectedSchemeId: config.colorSchemeId.trim() });
-        }
-        if (Array.isArray(config.customSchemes)) {
-          for (const scheme of config.customSchemes) {
-            addCustomScheme(scheme);
-          }
-        }
-        if (Array.isArray(config.recentSchemeIds)) {
-          const sanitized = config.recentSchemeIds
-            .filter((id: unknown): id is string => typeof id === "string" && id.trim().length > 0)
-            .map((id) => id.trim())
-            .slice(0, 5);
-          setRecentSchemeIds(sanitized);
-        }
-      })
-      .catch((error) => {
-        logError("Failed to load terminal config", error);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [setFontSize, setFontFamily, addCustomScheme, setRecentSchemeIds]);
 
   const screenReaderEnabled = useScreenReaderStore((s) => s.resolvedScreenReaderEnabled());
 

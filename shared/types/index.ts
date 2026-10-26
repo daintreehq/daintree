@@ -314,6 +314,7 @@ export type {
   AdaptiveBackoffMetrics,
   // Terminal config
   TerminalConfig,
+  TerminalConfigChange,
   // Worktree config
   WorktreeConfig,
   // IPC Contract Maps

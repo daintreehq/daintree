@@ -695,6 +695,7 @@ export const CHANNEL_LEASE_POLICY = {
   "system:show-item-in-folder-unconfined": "free",
   "system:start-agent-update": "free",
   "terminal-config:get": "free",
+  "terminal-config:host-changed": "free",
   "terminal-config:set-memory-leak-auto-restart": "free",
   "terminal-config:set-memory-leak-detection": "free",
   "terminal-config:set-resource-monitoring": "free",

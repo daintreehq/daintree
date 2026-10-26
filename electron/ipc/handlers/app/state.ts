@@ -392,6 +392,9 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
         projects: projectStore.getAllProjects(),
         keybindingOverrides: getValidatedOverrides(),
         userAgentRegistry: loadSanitizedUserAgentRegistry(),
+        // A terminal setting saved after the hover must not boot this view
+        // with the old value (#14699).
+        terminalConfig: readHydrateTerminalConfig(),
         ...readHostPlatformFields(),
       };
     }
