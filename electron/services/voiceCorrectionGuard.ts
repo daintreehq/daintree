@@ -30,7 +30,7 @@ const PROTECTED_SPAN_RE = new RegExp(
     "(?<ref>(?<![\\w@])@[^\\s`]+)",
     "(?<url>(?<![\\w+.-])[a-z][a-z0-9+.-]*:\\/\\/[^\\s`]+)",
     "(?<flag>(?<![\\w-])--?[A-Za-z][^\\s`=,;]*(?:=[^\\s`,;]+)?)",
-    "(?<path>(?<![\\w.~:%+-])[\\w.~:%+-]*[/\\\\][^\\s`,;，。、；：！？]*)",
+    "(?<path>(?<![\\p{L}\\p{N}_.~:%+-])[\\p{L}\\p{N}_.~:%+-]*[/\\\\][^\\s`,;，。、；：！？]*)",
     "(?<dotfile>(?<![\\w.-])\\.[A-Za-z][\\w.-]*)",
     "(?<dotted>(?<![\\w.-])[\\w-]+(?:\\.[\\w-]+)+)",
   ].join("|"),
@@ -43,6 +43,7 @@ const SINGLE_LETTER_PARTS_RE = /^\w(?:\.\w)+$/u;
 
 const PROSE_PUNCTUATION = new Set([".", ",", ";", ":", "!", "?"]);
 const CLOSERS: Record<string, string> = { ")": "(", "]": "[", "}": "{" };
+const OPENERS: Record<string, string> = { "(": ")", "[": "]", "{": "}" };
 const QUOTES = new Set(["'", '"']);
 
 const NUMBER_RE = /(?<![\p{L}\p{N}_])[-+]?\p{Nd}+(?:[.,:/-]\p{Nd}+)*%?/gu;
@@ -122,10 +123,19 @@ const NOT_FORMS = new Set([
 const CONTRACTED_NOT_RE = /n['’]t$/u;
 const APOSTROPHE_RE = /['’]/gu;
 
-// Words a cleanup is expected to drop, left out of every word comparison.
+// Words a cleanup is expected to drop, left out of every word comparison:
+// filler, and the spoken formatting commands it turns into line breaks.
 const HESITATIONS = new Set(["um", "umm", "uh", "uhh", "uhm", "erm", "hmm", "mm"]);
 const SOFT_FILLERS = new Set(["like", "so", "basically", "actually", "literally", "well"]);
-const FILLER_PAIRS = new Set(["you know", "i mean"]);
+const DROPPED_PAIRS = new Set([
+  "you know",
+  "i mean",
+  "new paragraph",
+  "next paragraph",
+  "new line",
+  "next line",
+  "line break",
+]);
 
 // Cleanup removes filler and merges misheard phrases into one term, so it may
 // drop more words than it adds. Answers and rewrites add words; summaries drop them.
@@ -135,28 +145,34 @@ const EDIT_BUDGET_RATIO = 0.15;
 
 const wordSegmenter = new Intl.Segmenter(undefined, { granularity: "word" });
 
+/** Strips prose punctuation and unbalanced brackets or quotes from the ends of a span. */
 function trimProsePunctuation(span: string): string {
-  let text = span;
-  for (;;) {
-    const last = text.at(-1) ?? "";
+  const counts = countBy([...span]);
+  const count = (char: string) => counts.get(char) ?? 0;
+  let start = 0;
+  let end = span.length;
+  while (end > start) {
+    const last = span[end - 1];
     const opener = CLOSERS[last];
     const unbalanced =
       PROSE_PUNCTUATION.has(last) ||
-      (opener !== undefined && text.split(opener).length < text.split(last).length) ||
-      (QUOTES.has(last) && text.split(last).length % 2 === 0);
+      (opener !== undefined && count(opener) < count(last)) ||
+      (QUOTES.has(last) && count(last) % 2 === 1);
     if (!unbalanced) break;
-    text = text.slice(0, -1);
+    counts.set(last, count(last) - 1);
+    end--;
   }
-  for (;;) {
-    const first = text[0] ?? "";
-    const closer = Object.keys(CLOSERS).find((key) => CLOSERS[key] === first);
+  while (start < end) {
+    const first = span[start];
+    const closer = OPENERS[first];
     const unbalanced =
-      (closer !== undefined && text.split(first).length > text.split(closer).length) ||
-      (QUOTES.has(first) && text.split(first).length % 2 === 0);
+      (closer !== undefined && count(first) > count(closer)) ||
+      (QUOTES.has(first) && count(first) % 2 === 1);
     if (!unbalanced) break;
-    text = text.slice(1);
+    counts.set(first, count(first) - 1);
+    start++;
   }
-  return text;
+  return span.slice(start, end);
 }
 
 function isFileName(token: string): boolean {
@@ -270,7 +286,7 @@ function contentWords(text: string): string[] {
   });
   const kept: string[] = [];
   for (let i = 0; i < words.length; i++) {
-    if (FILLER_PAIRS.has(`${words[i]} ${words[i + 1]}`)) {
+    if (DROPPED_PAIRS.has(`${words[i]} ${words[i + 1]}`)) {
       i++;
       continue;
     }
@@ -288,25 +304,31 @@ function countBy(values: readonly string[]): Map<string, number> {
 /**
  * Joins adjacent raw words the cleanup merged into one ("type script" to
  * "typescript", "o auth" to "oauth"), so a fixed mishearing doesn't count as
- * a rewrite or shift what a negation governs.
+ * a rewrite or shift what a negation governs. Only joined words the raw text
+ * didn't already contain can fund a merge, and a negation is never joined
+ * away ("not able" is not "notable").
  */
 function mergeJoinedWords(raw: readonly string[], corrected: readonly string[]): string[] {
   const available = countBy(corrected);
-  const take = (word: string) => {
+  for (const word of raw) {
+    if (available.has(word)) available.set(word, available.get(word)! - 1);
+  }
+  const take = (parts: readonly string[]) => {
+    const word = parts.join("");
     const left = available.get(word) ?? 0;
-    if (left === 0) return false;
+    if (left <= 0 || parts.some((part) => NEGATION_WORDS.has(part))) return false;
     available.set(word, left - 1);
     return true;
   };
   const merged: string[] = [];
   for (let i = 0; i < raw.length; i++) {
-    const pair = i + 1 < raw.length ? raw[i] + raw[i + 1] : null;
-    const triple = pair !== null && i + 2 < raw.length ? pair + raw[i + 2] : null;
+    const pair = i + 1 < raw.length ? raw.slice(i, i + 2) : null;
+    const triple = i + 2 < raw.length ? raw.slice(i, i + 3) : null;
     if (triple !== null && take(triple)) {
-      merged.push(triple);
+      merged.push(triple.join(""));
       i += 2;
     } else if (pair !== null && take(pair)) {
-      merged.push(pair);
+      merged.push(pair.join(""));
       i += 1;
     } else {
       merged.push(raw[i]);

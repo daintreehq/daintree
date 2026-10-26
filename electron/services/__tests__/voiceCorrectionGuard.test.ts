@@ -40,6 +40,13 @@ describe("extractProtectedSpans", () => {
     expect(performance.now() - started).toBeLessThan(100);
   });
 
+  it("trims a long run of closing brackets in linear time", () => {
+    const url = `https://example.com/a${")".repeat(12_000)}`;
+    const started = performance.now();
+    expect(extractProtectedSpans(url)).toEqual(["https://example.com/a"]);
+    expect(performance.now() - started).toBeLessThan(100);
+  });
+
   it("reports ranges that cover the whole span", () => {
     const text = "open daintree/src/index.ts now";
     const [range] = findProtectedRanges(text);
@@ -85,6 +92,16 @@ describe("validateCorrection", () => {
       "Open src/foo.ts, then fix the typo.",
     ],
     ["abbreviations and times", "run e.g. the tests at 9 a.m.", "Run, e.g., the tests at 9 a.m."],
+    [
+      "casing only, beside a word that could merge",
+      "do not log in to the login page",
+      "Do not log in to the login page.",
+    ],
+    [
+      "spoken paragraph commands",
+      "fix the parser new paragraph update the lexer new paragraph run the unit tests new paragraph check the build",
+      "Fix the parser.\n\nUpdate the lexer.\n\nRun the unit tests.\n\nCheck the build.",
+    ],
     ["a span at the end of a sentence", "check @src/App.tsx", "Check @src/App.tsx."],
     ["an introduced term with a dot", "upgrade next jess", "Upgrade Next.js."],
     ["a cleanup in unspaced Chinese", "嗯我们需要更新这个组件", "我们需要更新这个组件。"],
@@ -112,6 +129,7 @@ describe("validateCorrection", () => {
     ["swapped paths", "copy src/a.ts to src/b.ts", "Copy src/b.ts to src/a.ts.", "protected_span"],
     ["a one-letter filename", "open a.ts please", "Open b.ts please.", "protected_span"],
     ["a recased dotfile", "open .env please", "Open .ENV please.", "protected_span"],
+    ["a non-ASCII folder", "open 项目/foo.ts", "Open 其他/foo.ts.", "protected_span"],
     [
       "a URL's closing bracket",
       "see https://example.com/a_(b)",
@@ -141,6 +159,12 @@ describe("validateCorrection", () => {
       "a negation moved to another copy of the verb",
       "do not delete main and delete feature",
       "Delete main and do not delete feature.",
+      "negation",
+    ],
+    [
+      "a negation joined into another word",
+      "make this change not able to delete files",
+      "Make this change notable.",
       "negation",
     ],
     [
