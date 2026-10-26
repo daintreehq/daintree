@@ -2,11 +2,7 @@ import { isAbsolute } from "node:path";
 import type { PtyClient } from "./PtyClient.js";
 import { getGitBranch } from "../utils/gitUtils.js";
 import { logDebug } from "../utils/logger.js";
-import {
-  holdsCredential,
-  isSecretShaped,
-  redactSecretShapedLines,
-} from "./voiceKeytermSecrets.js";
+import { holdsCredential, isSecretShaped, redactSecretShapedLines } from "./voiceKeytermSecrets.js";
 
 const P = "[VoiceKeyterms]";
 

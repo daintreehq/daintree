@@ -107,7 +107,10 @@ describe("holdsCredential", () => {
     ["a spaced assignment", "client_secret = correct-horse-battery"],
     ["a clone URL", `https://x-access-token:${CREDENTIALS["GitHub classic token"]}@github.com/o/r`],
     ["a bearer header", `Authorization: Bearer ${fakeBody(40, 40)}`],
-    ["an AWS secret split by slashes", `${fakeBody(12, 41)}/${fakeBody(10, 42)}+${fakeBody(16, 43)}`],
+    [
+      "an AWS secret split by slashes",
+      `${fakeBody(12, 41)}/${fakeBody(10, 42)}+${fakeBody(16, 43)}`,
+    ],
     ["a base64url body", `${fakeBody(9, 44)}-${fakeBody(7, 45)}_${fakeBody(11, 46)}`],
   ])("finds %s", (_label, text) => {
     expect(holdsCredential(text)).toBe(true);
