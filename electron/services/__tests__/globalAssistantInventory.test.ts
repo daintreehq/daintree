@@ -67,7 +67,10 @@ describe("buildHostInventoryBlock (#14547)", () => {
   });
 
   it("shows a disconnected host as disconnected and claims no projects for it", () => {
-    const block = build([host(), remote("h1", { connection: "disconnected", projects: projects(4, "stale") })]);
+    const block = build([
+      host(),
+      remote("h1", { connection: "disconnected", projects: projects(4, "stale") }),
+    ]);
     expect(block).toContain("- `h1` `h1-box`: disconnected, assistant control on");
     expect(block).toContain("projects not known while it isn't connected");
     expect(block).not.toContain("stale-");
@@ -111,7 +114,9 @@ describe("buildHostInventoryBlock (#14547)", () => {
   });
 
   it("names a fixed number of hosts and counts the rest", () => {
-    const hosts = Array.from({ length: MAX_INVENTORY_HOSTS + 3 }, (_, index) => remote(`h${index}`));
+    const hosts = Array.from({ length: MAX_INVENTORY_HOSTS + 3 }, (_, index) =>
+      remote(`h${index}`)
+    );
     expect(build(hosts)).toContain("…and 3 more hosts not listed");
   });
 

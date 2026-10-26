@@ -1820,17 +1820,15 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
             .catch(() => null),
           INVENTORY_READ_MS,
           null
-        ).then(
-          (projects): HostInventoryHost => ({
-            hostId: LOCAL_HOST_ID,
-            name: local.name(),
-            connection: "connected",
-            local: true,
-            control: true,
-            projects: projects ? toListed(projects) : null,
-            projectTotal: projects ? projects.length : null,
-          })
-        )
+        ).then((projects): HostInventoryHost => ({
+          hostId: LOCAL_HOST_ID,
+          name: local.name(),
+          connection: "connected",
+          local: true,
+          control: true,
+          projects: projects ? toListed(projects) : null,
+          projectTotal: projects ? projects.length : null,
+        }))
       : null;
     const read = this.deps.listHostProjects;
     const remote = this.deps.hosts().map(async (seen): Promise<HostInventoryHost> => {

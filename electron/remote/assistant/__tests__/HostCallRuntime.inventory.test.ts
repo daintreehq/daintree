@@ -78,7 +78,11 @@ describe("HostCallRuntime.inventory (#14547)", () => {
   });
 
   it("names this machine first, then every host, with the projects of the ones it can see", async () => {
-    hosts = [observed("h1", "connected"), observed("h2", "disconnected"), observed("h3", "connected")];
+    hosts = [
+      observed("h1", "connected"),
+      observed("h2", "disconnected"),
+      observed("h3", "connected"),
+    ];
     control = new Set(["h1", "h2"]);
     remote.set("h1", summaries(3, "h1"));
     remote.set("h3", summaries(3, "h3"));

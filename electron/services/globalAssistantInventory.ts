@@ -68,7 +68,8 @@ function hostState(host: HostInventoryHost): string {
 
 /** Why a host's projects aren't listed, in words the agent can act on. */
 function noProjectsReason(host: HostInventoryHost): string {
-  if (!host.local && host.connection !== "connected") return "projects not known while it isn't connected";
+  if (!host.local && host.connection !== "connected")
+    return "projects not known while it isn't connected";
   if (!host.control) return "projects not listed while assistant control is off";
   return "projects not read in time; `host.list` asks again";
 }
