@@ -370,7 +370,7 @@ function buildFleet(
     };
     return {
       run: full,
-      card: fields ? card(full.runId as string, spawnedAt, now, fields) : undefined,
+      card: fields ? card(run.runId as string, spawnedAt, now, fields) : undefined,
       unread,
     };
   };

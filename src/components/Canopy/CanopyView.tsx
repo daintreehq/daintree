@@ -1521,7 +1521,7 @@ function CanopyInbox({
                     {/* An empty band says so above the listbox, not inside it: an option
                         group holds options, and this one would hold only words. */}
                     {bandSize === 0 && bandAssistants.length === 0 && listed.length > 0 && (
-                      <div>
+                      <div role="group" aria-labelledby="canopy-needs-you-label">
                         <div
                           id="canopy-needs-you-label"
                           className="flex h-7 items-center px-3 text-xs font-medium text-text-secondary"
@@ -1556,68 +1556,76 @@ function CanopyInbox({
                             to: listed.length,
                             assistants: [],
                           },
-                        ].map((group) => (
-                          <div
-                            key={group.id}
-                            role="group"
-                            aria-labelledby={`${group.id}-label`}
-                            hidden={group.from === group.to && group.assistants.length === 0}
-                          >
-                            {/* Pinned under the Inbox bar while its own rows scroll, so a
+                        ]
+                          // An empty band is already said above the listbox, under the same id.
+                          .filter(
+                            (group) =>
+                              group.from < group.to ||
+                              group.assistants.length > 0 ||
+                              group.id !== "canopy-needs-you"
+                          )
+                          .map((group) => (
+                            <div
+                              key={group.id}
+                              role="group"
+                              aria-labelledby={`${group.id}-label`}
+                              hidden={group.from === group.to && group.assistants.length === 0}
+                            >
+                              {/* Pinned under the Inbox bar while its own rows scroll, so a
                                 scrolled list still says which band it is in; the next
                                 group's heading takes its place. */}
-                            <div
-                              id={`${group.id}-label`}
-                              className="canopy-inbox-band-heading flex h-7 items-center px-3 text-xs font-medium text-text-secondary"
-                              data-testid={group.id}
-                            >
-                              {group.label}
+                              <div
+                                id={`${group.id}-label`}
+                                className="canopy-inbox-band-heading flex h-7 items-center px-3 text-xs font-medium text-text-secondary"
+                                data-testid={group.id}
+                              >
+                                {group.label}
+                              </div>
+                              {listed.slice(group.from, group.to).map((item, offset) => {
+                                const index = group.from + offset;
+                                const replied = repliedAt(item);
+                                return (
+                                  <CanopyRowMenu key={item.runId} item={item} {...rowMenu}>
+                                    <CanopyRow
+                                      item={item}
+                                      domId={canopyCardDomId(item.runId)}
+                                      isSelected={focusedItem?.runId === item.runId}
+                                      tabbable={!assistantHoldsStop && tabStop(listed, item, index)}
+                                      unread={item.unread}
+                                      nowMs={nowMs}
+                                      asideLabel={
+                                        replied !== null
+                                          ? `Replied ${agoPhrase(replied, nowMs)}`
+                                          : null
+                                      }
+                                      workLabel={workLabelOf(item)}
+                                      onSelect={() => selectRow(item.runId)}
+                                      onClick={() => readNow(item)}
+                                      onOpen={(event) =>
+                                        handlers.onOpen(item, isNewWindowClick(event))
+                                      }
+                                      onArchive={() => handlers.onArchive(item)}
+                                    />
+                                  </CanopyRowMenu>
+                                );
+                              })}
+                              {group.assistants.map((item, index) => (
+                                <CanopyAssistantRow
+                                  key={item.id}
+                                  item={item}
+                                  isSelected={selectedAssistant?.id === item.id}
+                                  tabbable={
+                                    assistantHoldsStop
+                                      ? selectedAssistant?.id === item.id
+                                      : listed.length === 0 && index === 0
+                                  }
+                                  onSelect={() => selectAssistant(item.id)}
+                                  onOpen={() => openAssistant(item)}
+                                  onKeyDown={(event) => onAssistantKeyDown(event, item)}
+                                />
+                              ))}
                             </div>
-                            {listed.slice(group.from, group.to).map((item, offset) => {
-                              const index = group.from + offset;
-                              const replied = repliedAt(item);
-                              return (
-                                <CanopyRowMenu key={item.runId} item={item} {...rowMenu}>
-                                  <CanopyRow
-                                    item={item}
-                                    domId={canopyCardDomId(item.runId)}
-                                    isSelected={focusedItem?.runId === item.runId}
-                                    tabbable={!assistantHoldsStop && tabStop(listed, item, index)}
-                                    unread={item.unread}
-                                    nowMs={nowMs}
-                                    asideLabel={
-                                      replied !== null
-                                        ? `Replied ${agoPhrase(replied, nowMs)}`
-                                        : null
-                                    }
-                                    workLabel={workLabelOf(item)}
-                                    onSelect={() => selectRow(item.runId)}
-                                    onClick={() => readNow(item)}
-                                    onOpen={(event) =>
-                                      handlers.onOpen(item, isNewWindowClick(event))
-                                    }
-                                    onArchive={() => handlers.onArchive(item)}
-                                  />
-                                </CanopyRowMenu>
-                              );
-                            })}
-                            {group.assistants.map((item, index) => (
-                              <CanopyAssistantRow
-                                key={item.id}
-                                item={item}
-                                isSelected={selectedAssistant?.id === item.id}
-                                tabbable={
-                                  assistantHoldsStop
-                                    ? selectedAssistant?.id === item.id
-                                    : listed.length === 0 && index === 0
-                                }
-                                onSelect={() => selectAssistant(item.id)}
-                                onOpen={() => openAssistant(item)}
-                                onKeyDown={(event) => onAssistantKeyDown(event, item)}
-                              />
-                            ))}
-                          </div>
-                        ))}
+                          ))}
                       </div>
                     ) : (searching || workOf !== null) &&
                       shownInbox.inbox.length === 0 &&

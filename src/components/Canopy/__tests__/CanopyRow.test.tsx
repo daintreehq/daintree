@@ -458,7 +458,7 @@ describe("CanopyRow", () => {
         titled
       )
     );
-    expect(askLine(summary.container)).toMatch(/^All 14 tests pass\.Read by Canopy /);
+    expect(askLine(summary.container)).toBe("All 14 tests pass.Canopy");
     expect(summary.container.querySelector("[data-detail]")).toBeNull();
     summary.unmount();
     // Nor the screen's own words, before any reading has worded the run.
@@ -528,13 +528,16 @@ describe("CanopyRow", () => {
     expect(description(container)).not.toMatch(/priority|88/);
   });
 
-  it("marks an unread run with a dot in the gutter, and a read one with none", () => {
-    const dot = (unread: boolean) =>
-      renderRow(itemFor("finished"), { unread }).container.querySelector(
+  it("marks an unread run by its title's weight, with no dot in the gutter", () => {
+    const heavy = (unread: boolean) =>
+      renderRow(itemFor("finished"), { unread }).container.querySelector(".font-semibold");
+    expect(heavy(true)).not.toBeNull();
+    expect(heavy(false)).toBeNull();
+    expect(
+      renderRow(itemFor("finished"), { unread: true }).container.querySelector(
         "[data-canopy-unread-dot]"
-      );
-    expect(dot(true)).not.toBeNull();
-    expect(dot(false)).toBeNull();
+      )
+    ).toBeNull();
   });
 
   it("says a finished run looks done as a reading, to a screen reader", () => {
@@ -710,11 +713,11 @@ describe("CanopyRow", () => {
     const attribution = (container: HTMLElement) =>
       container.querySelector("[data-canopy-attribution]")?.textContent ?? null;
 
-    it("says who read the words and how long ago, beside the ask", () => {
+    it("names the reader beside the ask, and says how long ago to a screen reader", () => {
       const { container } = renderRow(
         itemFor("question", { observedAt: NOW - 2 * 60_000 }, { since: NOW - 3 * 60_000 })
       );
-      expect(attribution(container)).toBe("Read by Canopy 2m ago");
+      expect(attribution(container)).toBe("Canopy");
       expect(description(container)).toContain("read by canopy 2m ago");
     });
 
