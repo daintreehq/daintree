@@ -293,7 +293,7 @@ class VoiceRecordingService {
   // can't tell two passages dictated with the same words apart.
   private baselineOwners = new Map<string, PendingCorrection>();
   private unfollowBaselines: (() => void) | null = null;
-  private writingCorrection = false;
+  private writingShiftedDraft = false;
 
   initialize(): void {
     if (this.initialized) return;
@@ -421,7 +421,7 @@ class VoiceRecordingService {
           const edit = edits[i]!;
           voiceStore.shiftDraftOffsets(panelId, edit.to, edit.text.length - (edit.to - edit.from));
         }
-        inputStore.setDraftInput(panelId, applyDraftEdits(draft, edits), projectId);
+        this.writeShiftedDraft(panelId, applyDraftEdits(draft, edits), projectId);
         inputStore.bumpExternalDraftRevision();
       })
     );
@@ -1959,13 +1959,7 @@ class VoiceRecordingService {
         voiceStore.shiftDraftOffsets(panelId, edit.to, edit.text.length - (edit.to - edit.from));
         next = next.slice(0, edit.from) + edit.text + next.slice(edit.to);
       }
-      // The offsets were shifted above; the baseline follower mustn't shift them again.
-      this.writingCorrection = true;
-      try {
-        inputStore.setDraftInput(panelId, next, projectId);
-      } finally {
-        this.writingCorrection = false;
-      }
+      this.writeShiftedDraft(panelId, next, projectId);
       // One span from the first rewritten passage to the last, so restoring it
       // puts every passage back and leaves text typed between them as it is.
       const from = Math.min(...edits.map((edit) => edit.from));
@@ -2141,7 +2135,7 @@ class VoiceRecordingService {
   private followLearningBaselines(): void {
     if (this.unfollowBaselines) return;
     this.unfollowBaselines = useTerminalInputStore.subscribe((state, prev) => {
-      if (state.draftInputs === prev.draftInputs) return;
+      if (state.draftInputs === prev.draftInputs || this.writingShiftedDraft) return;
       const voiceStore = useVoiceRecordingStore.getState();
       let following = false;
       for (const [panelId, buffer] of Object.entries(voiceStore.panelBuffers)) {
@@ -2155,7 +2149,7 @@ class VoiceRecordingService {
           continue;
         }
         following = true;
-        if (!this.writingCorrection && start !== buffer.sessionDraftStart) {
+        if (start !== buffer.sessionDraftStart) {
           voiceStore.shiftDraftOffsets(
             panelId,
             buffer.sessionDraftStart,
@@ -2165,6 +2159,20 @@ class VoiceRecordingService {
       }
       if (!following) this.unfollowLearningBaselines();
     });
+  }
+
+  /**
+   * Writes a draft whose offsets the caller has already moved with its edits.
+   * The baseline follower sits it out: it would move them a second time, or
+   * read a start already moved past the edit as one the edit ran across.
+   */
+  private writeShiftedDraft(panelId: string, draft: string, projectId: string | undefined): void {
+    this.writingShiftedDraft = true;
+    try {
+      useTerminalInputStore.getState().setDraftInput(panelId, draft, projectId);
+    } finally {
+      this.writingShiftedDraft = false;
+    }
   }
 
   private unfollowLearningBaselines(): void {
