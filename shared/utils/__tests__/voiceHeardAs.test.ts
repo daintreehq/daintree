@@ -22,12 +22,12 @@ describe("collectHeardAsRules", () => {
   });
 
   it("gives a heard form claimed twice to the first entry", () => {
-    expect(
-      collectHeardAsRules([entry("Vite", ["veet"]), entry("Veet", ["VEET", "veat"])])
-    ).toEqual([
-      { heard: "veet", term: "Vite" },
-      { heard: "veat", term: "Veet" },
-    ]);
+    expect(collectHeardAsRules([entry("Vite", ["veet"]), entry("Veet", ["VEET", "veat"])])).toEqual(
+      [
+        { heard: "veet", term: "Vite" },
+        { heard: "veat", term: "Veet" },
+      ]
+    );
   });
 
   it("collapses spacing and drops forms with no letters or digits", () => {

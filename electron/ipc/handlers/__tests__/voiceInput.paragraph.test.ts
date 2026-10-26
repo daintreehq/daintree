@@ -1246,7 +1246,9 @@ describe("voiceInput — context keyterms wiring", () => {
       ["transcription-complete", "the NewLine helper"],
       ["transcription-complete", "nothing to change"],
     ]);
-    const last = activeSent.filter((m) => m.channel === "voice-input:transcription-complete").at(-1);
+    const last = activeSent
+      .filter((m) => m.channel === "voice-input:transcription-complete")
+      .at(-1);
     expect(last?.payload).not.toHaveProperty("heard");
   });
 

@@ -2364,7 +2364,9 @@ class VoiceRecordingService {
       const current = useTerminalInputStore.getState().getDraftInput(panelId, projectId);
       const pending = peekPendingComposerSelection(draftKey, current);
       const caret = pending ?? readComposerSelection(draftKey, current);
-      const span = useDictationRangeStore.getState().rewritePassage(record.id, passage, text, heard);
+      const span = useDictationRangeStore
+        .getState()
+        .rewritePassage(record.id, passage, text, heard);
       if (!span) continue;
       const delta = text.length - (span.to - span.from);
       // A caret that followed the words, or sits in them, stays with them, and

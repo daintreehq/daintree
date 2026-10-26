@@ -444,7 +444,9 @@ export const useDictationRangeStore = create<DictationRangeState>()((set, get) =
       const key = makeDraftKey(record.panelId, record.projectId);
       const records = state.drafts[key];
       if (!records?.some((r) => r.id === id)) return state;
-      return { drafts: { ...state.drafts, [key]: records.map((r) => (r.id === id ? rewritten : r)) } };
+      return {
+        drafts: { ...state.drafts, [key]: records.map((r) => (r.id === id ? rewritten : r)) },
+      };
     });
     return { from, to };
   },
