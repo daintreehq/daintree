@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { HostConnectionState, HostListEntry } from "@shared/types/remoteHosts";
 import type { RemoteHostsEvent } from "@shared/types/ipc/remoteHosts";
+import type { HostWorktreeEntry } from "@shared/types/ipc/hostMetrics";
 
 const { supported, dispatch } = vi.hoisted(() => ({
   supported: { value: true },
@@ -90,6 +91,7 @@ const locate = vi.fn<
   >
 >();
 const switchWindowHost = vi.fn(() => Promise.resolve());
+const listWorktrees = vi.fn<(payload: { hostId: string }) => Promise<HostWorktreeEntry[]>>();
 let emitHostsEvent: (event: RemoteHostsEvent) => void = () => {};
 const loader = vi.fn((hostId: string) => Promise.resolve(PROJECTS[hostId] ?? []));
 
@@ -100,6 +102,8 @@ beforeEach(() => {
   supported.value = true;
   dispatch.mockClear();
   switchWindowHost.mockClear();
+  listWorktrees.mockReset();
+  listWorktrees.mockResolvedValue([]);
   loader.mockClear();
   list.mockReset();
   locate.mockReset();
@@ -116,6 +120,7 @@ beforeEach(() => {
         },
       },
       hostSwitch: { locate },
+      hostMetrics: { listWorktrees },
     },
   });
 });
@@ -407,5 +412,101 @@ describe("Open on… submenu", () => {
     const item = await screen.findByRole("menuitem", { name: "studio-01" });
     await waitFor(() => expect(item.getAttribute("data-presence")).toBe("unknown"));
     expect(item.textContent).not.toContain("clone");
+  });
+});
+
+function worktree(overrides: Partial<HostWorktreeEntry>): HostWorktreeEntry {
+  return {
+    hostId: "studio-01",
+    projectId: "s1-api",
+    projectName: "api",
+    worktreeId: "wt-1",
+    name: "login",
+    branch: "fix/login",
+    path: "/home/greg/api-login",
+    isMainWorktree: false,
+    modifiedCount: null,
+    lastActivityAt: null,
+    observed: null,
+    ...overrides,
+  };
+}
+
+describe("Other hosts band: worktrees by branch", () => {
+  beforeEach(() => {
+    list.mockResolvedValue([host("studio-01")]);
+    setHostProjectsLoader(loader);
+  });
+
+  it("lists a worktree a branch query matches, with its project and observed agent state", async () => {
+    listWorktrees.mockResolvedValue([
+      worktree({ observed: { band: "needs-you", agentState: "waiting" } }),
+      worktree({ worktreeId: "wt-2", name: "docs", branch: "docs/readme" }),
+    ]);
+    render(<Band query="fix/login" onChosen={() => {}} />);
+    const row = await screen.findByRole("option", {
+      name: "fix/login in api on studio-01, waiting (observed)",
+    });
+    expect(row.textContent).toContain("api · waiting (observed)");
+    expect(screen.queryByRole("option", { name: /docs\/readme/ })).toBeNull();
+  });
+
+  it("adds no worktree rows when browsing, or when only the project or host matches", async () => {
+    listWorktrees.mockResolvedValue([worktree({})]);
+    const { rerender } = render(<Band query="" onChosen={() => {}} />);
+    await screen.findByRole("option", { name: /^api on studio-01/ });
+    expect(listWorktrees).not.toHaveBeenCalled();
+    rerender(<Band query="api" onChosen={() => {}} />);
+    await waitFor(() => expect(listWorktrees).toHaveBeenCalled());
+    await settle();
+    expect(screen.queryByRole("option", { name: /fix\/login/ })).toBeNull();
+  });
+
+  it("opens the project with the worktree selected, or its agent focused", async () => {
+    listWorktrees.mockResolvedValue([
+      worktree({}),
+      worktree({
+        worktreeId: "wt-3",
+        branch: "fix/login-2",
+        runs: [{ band: "needs-you", agentState: "waiting", terminalId: "t-9" }],
+      }),
+    ]);
+    const onChosen = vi.fn();
+    render(<Band query="fix/login" onChosen={onChosen} />);
+    fireEvent.click(await screen.findByRole("option", { name: /^fix\/login in api/ }));
+    await waitFor(() =>
+      expect(switchWindowHost).toHaveBeenCalledWith({
+        hostId: "studio-01",
+        newWindow: false,
+        projectId: "s1-api",
+        focusIntent: { intent: "focus-worktree", worktreeId: "wt-1" },
+      })
+    );
+    expect(onChosen).toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole("option", { name: /^fix\/login-2 in api/ }));
+    await waitFor(() =>
+      expect(switchWindowHost).toHaveBeenLastCalledWith({
+        hostId: "studio-01",
+        newWindow: false,
+        projectId: "s1-api",
+        focusIntent: { intent: "focus-panel", panelId: "t-9" },
+      })
+    );
+  });
+
+  it("keeps a dropped host's worktrees, marked listed earlier", async () => {
+    listWorktrees.mockResolvedValue([worktree({})]);
+    render(<Band query="fix/login" onChosen={() => {}} />);
+    await screen.findByRole("option", { name: /^fix\/login in api on studio-01$/ });
+    act(() => {
+      emitHostsEvent({
+        type: "connection-changed",
+        hostId: "studio-01",
+        connection: { status: "disconnected" },
+      } as RemoteHostsEvent);
+    });
+    const row = await screen.findByRole("option", { name: /^fix\/login in api.*, listed / });
+    fireEvent.click(row);
+    await waitFor(() => expect(switchWindowHost).toHaveBeenCalled());
   });
 });

@@ -1,4 +1,4 @@
-import { RefreshCw, Server } from "lucide-react";
+import { GitBranch, RefreshCw, Server } from "lucide-react";
 import { LOCAL_HOST_ID, type HostId, type HostPlatform } from "@shared/types/remoteHosts";
 import { getViewHostId } from "@/hooks/useHostConnection";
 import { isRemoteShellSupported } from "@/lib/remoteHosts";
@@ -22,6 +22,8 @@ import {
   type HostProjectRef,
 } from "./hostProjects";
 import { matchesTokens, queryTokens } from "./hostProjectSearch";
+import { useHostWorktreeListings } from "./hostWorktrees";
+import type { HostWorktreeEntry } from "@shared/types/ipc/hostMetrics";
 import { isNewWindowClick, switchToHost } from "./hostSwitching";
 
 interface OtherHostOptionBase {
@@ -50,6 +52,14 @@ export type OtherHostOption = OtherHostOptionBase &
          * the path rather than the name.
          */
         showPath?: boolean;
+      }
+    | {
+        kind: "worktree";
+        worktree: HostWorktreeEntry;
+        /** The host's link is down: this is what it reported when last asked. */
+        stale: boolean;
+        /** When the host reported it, for a stale row to say so. */
+        listedAt: number;
       }
     | { kind: "connect" }
     /** `busy` while the host is being asked again: the row holds its place and does nothing. */
@@ -150,6 +160,10 @@ export function useOtherHostProjectOptions(query: string): OtherHostOptions {
   const now = useGlobalMinuteClock();
   if (!supported) return { groups: [], options: [], remoteNames: new Set() };
   const tokens = queryTokens(query);
+  const worktreeListings = useHostWorktreeListings(
+    targets.filter((target) => target.reachable).map((target) => target.hostId),
+    tokens.length > 0
+  );
   const remoteNames = new Set<string>();
   const groups: OtherHostGroup[] = [];
   for (const target of targets) {
@@ -175,6 +189,25 @@ export function useOtherHostProjectOptions(query: string): OtherHostOptions {
           (nameCounts.get(project.name.toLocaleLowerCase()) ?? 0) > 1 ||
           (tokens.length > 0 && !matchesTokens(tokens, [project.name, target.name])),
       }));
+    // Only worktrees of projects the host has open, as it lists them; one the
+    // query reaches only through its project or host is that project's row, not
+    // a row of its own.
+    const worktreeListing = worktreeListings.get(target.hostId);
+    if (worktreeListing && tokens.length > 0) {
+      for (const worktree of worktreeListing.entries) {
+        const own = [worktree.branch ?? "", worktree.name];
+        if (!tokens.some((token) => matchesTokens([token], own))) continue;
+        if (!matchesTokens(tokens, [...own, worktree.projectName, target.name])) continue;
+        options.push({
+          ...base,
+          key: optionKey("worktree", target.hostId, `${worktree.projectId}:${worktree.worktreeId}`),
+          kind: "worktree",
+          worktree,
+          stale: !target.reachable,
+          listedAt: worktreeListing.listedAt,
+        });
+      }
+    }
     // A search names the host to reach these; browsing always shows them, so
     // a failure or a host never listed is never passed off as having nothing.
     const offersAction = matchesTokens(tokens, [target.name]);
@@ -220,6 +253,16 @@ export function activateOtherHostOption(option: OtherHostOption, newWindow: bool
     case "project":
       void switchToHost(option.hostId, newWindow, option.project.id);
       return;
+    case "worktree": {
+      // `runs` is most urgent first; absent from an older host, which isn't the same as no agents.
+      const run = option.worktree.runs?.[0];
+      void switchToHost(option.hostId, newWindow, option.worktree.projectId, {
+        focusIntent: run
+          ? { intent: "focus-panel", panelId: run.terminalId }
+          : { intent: "focus-worktree", worktreeId: option.worktree.worktreeId },
+      });
+      return;
+    }
     case "connect":
     case "host":
       void switchToHost(option.hostId, newWindow);
@@ -240,6 +283,12 @@ function optionLabel(option: OtherHostOption, group: OtherHostGroup): string {
       const where = `${option.project.name} on ${option.hostName}, ${option.project.path}`;
       return option.stale && group.note ? `${where}, ${group.note}` : where;
     }
+    case "worktree": {
+      const { worktree } = option;
+      const state = worktreeState(worktree);
+      const where = `${worktree.branch ?? worktree.name} in ${worktree.projectName} on ${option.hostName}${state ? `, ${state}` : ""}`;
+      return option.stale ? `${where}, ${listedAgo(option.listedAt, Date.now())}` : where;
+    }
     case "connect":
       return `Connect to ${option.hostName}${linkAside}`;
     case "retry":
@@ -252,11 +301,17 @@ function optionLabel(option: OtherHostOption, group: OtherHostGroup): string {
 }
 
 /** The word a host's own row ends on: what picking it does. */
-const HOST_ROW_VERB: Record<Exclude<OtherHostOption["kind"], "project">, string> = {
+const HOST_ROW_VERB: Record<Exclude<OtherHostOption["kind"], "project" | "worktree">, string> = {
   connect: "Connect",
   retry: "Retry",
   host: "Switch",
 };
+
+/** The state the host observed in a worktree's most urgent agent, in words; null when it saw none. */
+function worktreeState(worktree: HostWorktreeEntry): string | null {
+  const state = worktree.observed?.agentState ?? worktree.runs?.[0]?.agentState ?? null;
+  return state ? `${state} (observed)` : null;
+}
 
 /** The host's platform mark, or a plain server until a handshake has said which. */
 function HostGlyph({ platform, size }: { platform: HostPlatform | null; size: number }) {
@@ -331,6 +386,31 @@ function rowClass(inset: string) {
   );
 }
 
+function WorktreeRowContent({ option }: { option: Extract<OtherHostOption, { kind: "worktree" }> }) {
+  const { worktree } = option;
+  const state = worktreeState(worktree);
+  return (
+    <>
+      <StatusSlotSpacer />
+      <CommandTile icon={GitBranch} tone="manage" />
+      <div className="min-w-0 flex-1">
+        <div
+          className={cn(
+            "truncate text-sm font-semibold leading-tight",
+            option.stale ? "text-text-secondary" : "text-text-primary",
+            "group-aria-selected:text-text-primary"
+          )}
+        >
+          {worktree.branch ?? worktree.name}
+        </div>
+        <div className="mt-0.5 truncate text-2xs leading-tight text-text-secondary">
+          {[worktree.projectName, state].filter(Boolean).join(" · ")}
+        </div>
+      </div>
+    </>
+  );
+}
+
 function ProjectRowContent({ option }: { option: Extract<OtherHostOption, { kind: "project" }> }) {
   return (
     <>
@@ -400,7 +480,7 @@ export function OtherHostsSection({
         onPointerMove={onHoverKey ? () => onHoverKey(option.key) : undefined}
         className={cn(
           rowClass(inset),
-          option.kind === "project" ? undefined : "text-text-secondary"
+          option.kind === "project" || option.kind === "worktree" ? undefined : "text-text-secondary"
         )}
         onClick={(event) => {
           if (otherHostOptionCloses(option)) onChosen();
@@ -409,6 +489,8 @@ export function OtherHostsSection({
       >
         {option.kind === "project" ? (
           <ProjectRowContent option={option} />
+        ) : option.kind === "worktree" ? (
+          <WorktreeRowContent option={option} />
         ) : group.options.length === 1 ? (
           // The host's own row: the host is the tile, its state the second line.
           <>
@@ -478,7 +560,9 @@ export function OtherHostsSection({
           const only = group.options.length === 1 ? group.options[0]! : null;
           // A host with nothing but its own action needs no header naming it:
           // the row is the host.
-          if (only && only.kind !== "project") return renderOption(only, group, HOST_INSET);
+          if (only && only.kind !== "project" && only.kind !== "worktree") {
+            return renderOption(only, group, HOST_INSET);
+          }
           const headerId = `project-switcher-other-host-${encodeURIComponent(group.hostId)}`;
           return (
             <div key={group.hostId} role="group" aria-labelledby={headerId} className={HOST_GAP}>
