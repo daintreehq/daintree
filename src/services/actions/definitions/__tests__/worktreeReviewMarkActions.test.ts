@@ -105,7 +105,10 @@ describe("worktree.clearReviewMark", () => {
   it("clears a named worktree's mark with no hub open", async () => {
     reviewMarksMock.clearWorktreeReviewMark.mockResolvedValue({ status: "cleared" });
 
-    await getAction("worktree.clearReviewMark").run({ worktreeId: "/repo/other" }, {} as ActionContext);
+    await getAction("worktree.clearReviewMark").run(
+      { worktreeId: "/repo/other" },
+      {} as ActionContext
+    );
 
     expect(reviewMarksMock.clearWorktreeReviewMark).toHaveBeenCalledWith("/repo/other", 9);
   });

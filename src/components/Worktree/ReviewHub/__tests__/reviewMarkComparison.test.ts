@@ -165,7 +165,9 @@ describe("describeReviewMarkComparison", () => {
 describe("reviewMarkNoticeFor", () => {
   it("names what changed after the hub read the worktree", () => {
     const notice = reviewMarkNoticeFor(
-      compared(comparable([file("a.ts"), file("b.ts")], [commit("new"), commit("patch-equivalent")]))
+      compared(
+        comparable([file("a.ts"), file("b.ts")], [commit("new"), commit("patch-equivalent")])
+      )
     );
 
     expect(notice).toEqual({

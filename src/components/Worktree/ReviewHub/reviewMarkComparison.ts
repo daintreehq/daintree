@@ -67,7 +67,10 @@ export function describeReviewMarkComparison(
         text: `Comparison incomplete: ${INCOMPLETE_TEXT[result.reasons[0] ?? "current-state-incomplete"]}`,
       };
     case "reviewed-commit-missing":
-      return { kind: "incomplete", text: "The reviewed commit is gone, so commits can't be counted" };
+      return {
+        kind: "incomplete",
+        text: "The reviewed commit is gone, so commits can't be counted",
+      };
     case "comparable": {
       if (result.commits.kind !== "listed") {
         return { kind: "incomplete", text: "The commits couldn't be listed" };
@@ -116,9 +119,7 @@ export function reviewMarkNoticeFor(outcome: ReviewMarkCompareOutcome): ReviewMa
       ? result.commits.commits.filter((commit) => commit.kind === "new").length
       : 0;
   const partial =
-    result.state !== "comparable" ||
-    result.commits.kind !== "listed" ||
-    result.commits.truncated;
+    result.state !== "comparable" || result.commits.kind !== "listed" || result.commits.truncated;
   if (result.files.length === 0 && commits === 0 && !partial) return null;
   return { kind: "not-covered", paths: result.files.map((file) => file.path), commits, partial };
 }
@@ -126,7 +127,9 @@ export function reviewMarkNoticeFor(outcome: ReviewMarkCompareOutcome): ReviewMa
 const NOTICE_PATHS = 3;
 
 /** One sentence for a not-covered notice: the first few paths, then a count. */
-export function describeNotCovered(notice: Extract<ReviewMarkNotice, { kind: "not-covered" }>): string {
+export function describeNotCovered(
+  notice: Extract<ReviewMarkNotice, { kind: "not-covered" }>
+): string {
   const parts: string[] = [];
   if (notice.paths.length > 0) {
     const shown = notice.paths.slice(0, NOTICE_PATHS).join(", ");

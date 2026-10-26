@@ -243,9 +243,7 @@ export function captureForReviewMark(worktreeId: string): Promise<ReviewMarkCapt
 }
 
 /** Compare the worktree with its stored mark on the host. */
-export async function compareWithReviewMark(
-  worktreeId: string
-): Promise<ReviewMarkCompareOutcome> {
+export async function compareWithReviewMark(worktreeId: string): Promise<ReviewMarkCompareOutcome> {
   const api = reviewMarksBridge();
   if (typeof api?.compare !== "function") throw new Error("Review marks aren't available here");
   return api.compare(worktreeId);
@@ -287,7 +285,9 @@ export function worktreeReviewMark(
 export function newlyMarkedWorktreeIds(prev: ReviewMarksState, next: ReviewMarksState): string[] {
   if (!prev.loaded || prev.marks === next.marks) return [];
   return Object.entries(next.marks)
-    .filter(([id, mark]) => !Object.hasOwn(prev.marks, id) || prev.marks[id]?.revision !== mark.revision)
+    .filter(
+      ([id, mark]) => !Object.hasOwn(prev.marks, id) || prev.marks[id]?.revision !== mark.revision
+    )
     .map(([id]) => id);
 }
 

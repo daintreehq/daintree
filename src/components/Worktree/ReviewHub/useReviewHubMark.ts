@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import type { ReviewMarkCompareOutcome, ReviewMarkSaveOutcome } from "@shared/types/ipc/reviewMarks";
+import type {
+  ReviewMarkCompareOutcome,
+  ReviewMarkSaveOutcome,
+} from "@shared/types/ipc/reviewMarks";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { debounce } from "@/utils/debounce";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";

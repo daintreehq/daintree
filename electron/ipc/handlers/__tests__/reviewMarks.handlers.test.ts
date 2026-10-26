@@ -100,14 +100,20 @@ type ClearHandler = (
   basedOn: number
 ) => Promise<ReviewMarkClearOutcome>;
 
-type CaptureHandler = (context: IpcContext, worktreeId: string) => Promise<ReviewMarkCaptureOutcome>;
+type CaptureHandler = (
+  context: IpcContext,
+  worktreeId: string
+) => Promise<ReviewMarkCaptureOutcome>;
 type MarkCapturedHandler = (
   context: IpcContext,
   worktreeId: string,
   captureId: string,
   basedOn: number
 ) => Promise<ReviewMarkSaveOutcome>;
-type CompareHandler = (context: IpcContext, worktreeId: string) => Promise<ReviewMarkCompareOutcome>;
+type CompareHandler = (
+  context: IpcContext,
+  worktreeId: string
+) => Promise<ReviewMarkCompareOutcome>;
 
 const hydrate = reviewMarksNamespace.ops.hydrate.handler as unknown as HydrateHandler;
 const mark = reviewMarksNamespace.ops.mark.handler as unknown as MarkHandler;
