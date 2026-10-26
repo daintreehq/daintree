@@ -59,12 +59,6 @@ describe("TerminalSettingsTab in a window attached to another host", () => {
     _resetHostPlatformForTests();
   });
 
-  it("names this machine as the owner of agent input", () => {
-    renderSubtab("input");
-    expect(screen.getByText(/^This (Mac|machine)$/)).toBeTruthy();
-    expect(screen.queryByText("On studio-01")).toBeNull();
-  });
-
   it("names this machine as the owner of scrollback", () => {
     renderSubtab("scrollback");
     expect(screen.getByText(/^New terminals · This (Mac|machine)$/)).toBeTruthy();

@@ -9,6 +9,7 @@ vi.mock("@/services/ActionService", () => ({
 
 import { AgentInputSettings } from "../AgentInputSettings";
 import { useTerminalInputStore } from "@/store";
+import { _resetHostPlatformForTests, setHostPlatformInfo } from "@/hooks/useHostPlatform";
 
 beforeEach(() => {
   dispatch.mockClear();
@@ -39,5 +40,19 @@ describe("AgentInputSettings", () => {
     );
     fireEvent.click(radio);
     expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("names this machine as the owner in a window attached to another host", () => {
+    _resetHostPlatformForTests();
+    window.__DAINTREE_HOST_ID__ = { id: "studio" };
+    setHostPlatformInfo({ hostName: "studio-01" });
+    try {
+      render(<AgentInputSettings />);
+      expect(screen.getByText(/^This (Mac|machine)$/)).toBeTruthy();
+      expect(screen.queryByText("On studio-01")).toBeNull();
+    } finally {
+      delete window.__DAINTREE_HOST_ID__;
+      _resetHostPlatformForTests();
+    }
   });
 });
