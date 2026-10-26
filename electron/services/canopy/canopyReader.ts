@@ -22,6 +22,10 @@ export interface ReaderMeta {
     option: number;
     gate: number;
     gate_categories: string[];
+    /** The bar for a card's second line, in models with a summary-only card. */
+    second?: number;
+    /** `summary-only`: no headline, at most two card lines. Absent in older models. */
+    card?: string;
   };
 }
 
@@ -111,7 +115,11 @@ export function isReaderMeta(value: unknown): value is ReaderMeta {
     typeof t === "object" &&
     t !== null &&
     [t.summary_first, t.summary_more, t.option, t.gate].every((n) => typeof n === "number") &&
-    Array.isArray(t.gate_categories)
+    Array.isArray(t.gate_categories) &&
+    // A card mode this build doesn't know is one it can't show.
+    (t.card === undefined ||
+      t.card === "headline" ||
+      (t.card === "summary-only" && typeof t.second === "number"))
   );
 }
 
@@ -125,12 +133,16 @@ export interface Reading {
   notable: number;
   /** Line indices into the screen's lines, -1 for none. */
   question_line: number;
-  /** The headline. */
+  /** The best line on screen: a summary-only card's line one, an older model's headline. */
   status_line: number;
   action_line: number;
   task_line: number;
   /** Most important first. */
   summary_lines: number[];
+  /** A summary-only card's lines: line one, then line two when it reads over the bar. */
+  card_lines: number[];
+  /** `summary-only` for models trained for it, else `headline`. */
+  card_mode: string;
   /** Screen order. */
   option_lines: number[];
   tests: string;
@@ -265,6 +277,13 @@ export function decodeReading(
     if (pSum[j] >= (summary.length ? t.summary_more : t.summary_first)) summary.push(idx[j]);
     else break;
   }
+  const first = pick("status_line");
+  const cardLines = first >= 0 ? [first] : [];
+  if (typeof t.second === "number") {
+    const second = t.second;
+    const next = ranked.find((j) => idx[j] !== first && pSum[j] >= second);
+    if (next !== undefined) cardLines.push(idx[next]);
+  }
   const pOpt = arr("option_lines").slice(0, m).map(sigmoid);
   const probs = softmax(arr("category"));
   const raw = sigmoid(arr("needs_attention")[0]);
@@ -279,10 +298,12 @@ export function decodeReading(
     blocked_on_user: sigmoid(arr("blocked_on_user")[0]),
     notable: sigmoid(arr("notable")[0]),
     question_line: pick("question_line"),
-    status_line: pick("status_line"),
+    status_line: first,
     action_line: pick("action_line"),
     task_line: pick("task_line"),
     summary_lines: summary,
+    card_lines: cardLines,
+    card_mode: t.card ?? "headline",
     option_lines: idx.filter((_, j) => qMask[j] && pOpt[j] >= t.option),
     tests: cls("tests"),
     changes: cls("changes"),
@@ -297,22 +318,31 @@ export function decodeReading(
 // The card as Canopy shows it: line picks turned into clean text.
 
 /** Bullets, tree and box glyphs, spinners, prompt markers, only with a space after: `**bold**` and `>file` survive. */
-const LEAD = /^(?:[⏺•●✦⎿└├│┃║■✻✶✢✳✽✺·*❯›>▸▶◆◇](?:\s+|$))+/u;
-const BOX_TAIL = /\s*[│┃║]\s*$/u;
-const TIMER = /\s*\((?:\d[^)]*)?(?:esc to \w+|thinking|thought for|ctrl\+\w to \w+)[^)]*\)\s*$/iu;
+const LEAD = new RegExp(`^(?:[⏺•●✦⎿└├│┃║■✻✶✢✳✽✺·*❯›>▸▶◆◇-](?:[${PY_WS}]+|$))+`, "u");
+const BOX_TAIL = new RegExp(`[${PY_WS}]*[│┃║][${PY_WS}]*$`, "u");
+const TIMER = new RegExp(
+  `[${PY_WS}]*\\((?:\\d[^)]*)?(?:esc to \\w+|thinking|thought for|ctrl\\+\\w to \\w+)[^)]*\\)[${PY_WS}]*$`,
+  "iu"
+);
 const SENTENCE_END = /[.!?:;)"'`]$/u;
+const INDENTED = new RegExp(`^[${PY_WS}]{2,}[^${PY_WS}]`, "u");
 
 /** One screen line as card text: glyphs, borders and timers off, words kept. null when nothing is left. */
 export function displayText(line: string | undefined): string | null {
   if (line == null) return null;
-  const text = strip(line).replace(LEAD, "").replace(BOX_TAIL, "").replace(TIMER, "").trim();
+  const text = strip(strip(line).replace(LEAD, "").replace(BOX_TAIL, "").replace(TIMER, ""));
   return cp(text) >= 2 ? text : null;
 }
 
 export interface ReaderCard {
   category: string;
+  /** An older model's headline; null on a summary-only card, whose title is the terminal's. */
   headline: string | null;
-  /** Up to three, most important first; a sentence wrapped over lines is one entry. */
+  /**
+   * The card's lines: on a summary-only card at most two, in the order shown;
+   * on an older model up to three, most important first. A sentence wrapped
+   * over lines is one entry.
+   */
   summary: string[];
   question: string | null;
   options: string[];
@@ -320,62 +350,105 @@ export interface ReaderCard {
   task: string | null;
 }
 
-/**
- * Does screen line `j` carry on the sentence of the line above it? Yes when it
- * was picked with it, or when it has no bullet of its own and starts in
- * lowercase or indented: an agent's own line break.
- */
-function continues(lines: readonly string[], j: number, picks: readonly number[]): boolean {
-  const next = lines[j];
-  if (next == null || !strip(next)) return false;
-  // A new bullet is a new item, even when it was picked too.
-  if (LEAD.test(strip(next))) return false;
-  if (picks.includes(j)) return true;
-  return /^\s{2,}\S/u.test(next) || /^\p{Ll}/u.test(strip(next));
+/** A one-character fragment `displayText` drops for length (a lone "1"), not text the cleanup removed. */
+function short(line: string): string | null {
+  const t = strip(line);
+  return cp(t) === 1 ? t : null;
 }
 
-/** Line `i` as text, with up to two following lines joined when the sentence carries on over them. */
+/** Does line `cur` carry on the sentence of `prev`, the agent having wrapped it onto a new row? */
+function continuesFrom(prev: string, cur: string): boolean {
+  if (!strip(prev) || !strip(cur) || LEAD.test(strip(cur))) return false;
+  const before = displayText(prev);
+  if (!before || SENTENCE_END.test(before)) return false;
+  return INDENTED.test(cur) || /^\p{Lowercase}/u.test(strip(cur)) || /^[([{'"`]/u.test(strip(cur));
+}
+
+/**
+ * Line `i` as a whole sentence: back to where a wrapped sentence starts and on
+ * to where it ends, up to four rows each way. A new bullet is always a new item.
+ */
 function sentenceAt(
   lines: readonly string[],
   i: number,
   picks: readonly number[],
   used: Set<number>
 ): string | null {
-  let text = displayText(lines[i]);
-  used.add(i);
+  let k = i;
+  while (k > 0 && i - k < 4 && !used.has(k - 1) && continuesFrom(lines[k - 1]!, lines[k]!)) k--;
+  for (let x = k; x <= i; x++) used.add(x);
+  let text: string | null =
+    lines
+      .slice(k, i + 1)
+      .map((x, n) => displayText(x) ?? (k + n !== i ? short(x) : null))
+      .filter((x): x is string => !!x)
+      .join(" ") || null;
   for (
     let j = i + 1;
-    text && j <= i + 2 && !SENTENCE_END.test(text) && !used.has(j) && continues(lines, j, picks);
+    text && j <= i + 4 && j < lines.length && !SENTENCE_END.test(text) && !used.has(j);
     j++
   ) {
+    const next = lines[j]!;
+    if (!strip(next) || LEAD.test(strip(next))) break;
+    if (!picks.includes(j) && !continuesFrom(lines[j - 1]!, next)) break;
     used.add(j);
-    const more = displayText(lines[j]);
+    // A one-character fragment ("1") the sentence carries on into is kept.
+    const more = displayText(next) ?? short(next);
     if (more) text += " " + more;
   }
   return text;
+}
+
+/** Picks as text, in the order given, each a whole sentence where it wraps. */
+function summaryText(
+  lines: readonly string[],
+  picks: readonly number[],
+  used: Set<number>
+): string[] {
+  const out: string[] = [];
+  for (const i of picks) {
+    if (used.has(i)) continue;
+    const text = sentenceAt(lines, i, picks, used);
+    if (text) out.push(text);
+  }
+  return out;
 }
 
 export function readerCard(r: Reading, lines: readonly string[]): ReaderCard {
   const asks = r.category === "approval" || r.category === "question";
   const line = (i: number) => (i >= 0 ? displayText(lines[i]) : null);
   const used = new Set<number>();
+  const question = asks ? line(r.question_line) : null;
+  const options = asks
+    ? r.option_lines.map((i) => displayText(lines[i])).filter((x): x is string => x !== null)
+    : [];
+  const action = r.category === "approval" ? line(r.action_line) : null;
+  const task = line(r.task_line);
+  if (r.card_mode === "summary-only") {
+    // Two lines within three rows of each other are one paragraph: shown in screen order.
+    const picks =
+      r.card_lines.length === 2 && Math.abs(r.card_lines[0]! - r.card_lines[1]!) <= 3
+        ? [...r.card_lines].sort((a, b) => a - b)
+        : r.card_lines;
+    return {
+      category: r.category,
+      headline: null,
+      summary: summaryText(lines, picks, used),
+      question,
+      options,
+      action,
+      task,
+    };
+  }
   const headline =
     r.status_line >= 0 ? sentenceAt(lines, r.status_line, r.summary_lines, used) : null;
-  const summary: string[] = [];
-  for (const i of r.summary_lines) {
-    if (used.has(i)) continue;
-    const text = sentenceAt(lines, i, r.summary_lines, used);
-    if (text) summary.push(text);
-  }
   return {
     category: r.category,
     headline,
-    summary,
-    question: asks ? line(r.question_line) : null,
-    options: asks
-      ? r.option_lines.map((i) => displayText(lines[i])).filter((x): x is string => x !== null)
-      : [],
-    action: r.category === "approval" ? line(r.action_line) : null,
-    task: line(r.task_line),
+    summary: summaryText(lines, r.summary_lines, used),
+    question,
+    options,
+    action,
+    task,
   };
 }

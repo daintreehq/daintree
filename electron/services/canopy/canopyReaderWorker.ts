@@ -58,7 +58,12 @@ let chain: Promise<void> = Promise.resolve();
 let destroyed = false;
 
 async function load(dir: string): Promise<void> {
-  const meta: unknown = JSON.parse(await readFile(path.join(dir, "reader.json"), "utf8"));
+  // An install from before Daintree fetched `config.json` holds the same
+  // contents as `reader.json`.
+  const metaText = await readFile(path.join(dir, "config.json"), "utf8").catch(() =>
+    readFile(path.join(dir, "reader.json"), "utf8")
+  );
+  const meta: unknown = JSON.parse(metaText);
   if (!isReaderMeta(meta)) throw new Error("This model needs a newer version of Daintree");
   const [tokenizerJson, tokenizerConfig] = await Promise.all([
     readFile(path.join(dir, "tokenizer.json"), "utf8").then((t) => JSON.parse(t) as object),
@@ -78,7 +83,8 @@ async function load(dir: string): Promise<void> {
       return id;
     },
   };
-  // The precision the download chose for this CPU, recorded beside the files.
+  // The precision recorded beside the files: an install from before INT8 read
+  // right on every CPU may hold FP32 weights alone.
   const manifest: unknown = await readFile(path.join(dir, "install.json"), "utf8")
     .then((text) => JSON.parse(text) as unknown)
     .catch(() => null);

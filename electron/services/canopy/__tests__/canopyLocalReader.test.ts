@@ -30,6 +30,8 @@ function reading(over: Partial<Reading> = {}): Reading {
     action_line: 0,
     task_line: -1,
     summary_lines: [],
+    card_lines: [],
+    card_mode: "headline",
     option_lines: [2, 3],
     tests: "unknown",
     changes: "unknown",
@@ -118,6 +120,31 @@ describe("toCanopyReading", () => {
       input({ lines })
     ).words();
     expect(loose.attentionScore).toBeGreaterThanOrEqual(55);
+  });
+
+  it("puts a summary-only card's first line where the headline goes, and its second in the summary", async () => {
+    const screen = ["⏺ Found it: the cache key ignored the locale.", "⏺ All 42 tests pass."];
+    const card = await toCanopyReading(
+      reading({
+        category: "finished",
+        card_mode: "summary-only",
+        card_lines: [1, 0],
+        status_line: 1,
+        question_line: -1,
+        option_lines: [],
+      }),
+      input({ lines: screen })
+    ).words();
+    // One paragraph: screen order.
+    expect(card).toMatchObject({
+      headline: "Found it: the cache key ignored the locale.",
+      summary: "All 42 tests pass.",
+    });
+    const blank = await toCanopyReading(
+      reading({ category: "working", card_mode: "summary-only", card_lines: [], status_line: -1 }),
+      input({ lines: screen })
+    ).words();
+    expect(blank).toMatchObject({ headline: "", summary: "" });
   });
 
   it("raises an approval for an irreversible command to caution whatever the reader said", async () => {

@@ -162,10 +162,15 @@ vi.mock("../../../services/canopy/canopyLocalReader.js", () => ({
 const models = vi.hoisted(() => ({
   ensure: vi.fn(async () => {}),
   cancel: vi.fn(),
-  state: vi.fn((id: string) => ({ id, status: "ready" as const })),
-  list: vi.fn(async () => []),
+  state: vi.fn(() => ({ id: "daintreehq/canopy-reader-17m", status: "ready" as const })),
+  info: vi.fn(async () => ({
+    id: "daintreehq/canopy-reader-17m",
+    name: "Light",
+    bytes: 21_000_000,
+    installed: true,
+  })),
   installedDir: vi.fn(async () => "/tmp/canopy/models/canopy-reader-17m"),
-  removeAllBut: vi.fn(async () => {}),
+  remove: vi.fn(async () => {}),
 }));
 vi.mock("../../../services/canopy/canopyModels.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../services/canopy/canopyModels.js")>()),
@@ -744,52 +749,28 @@ describe("canopy IPC", () => {
     // Off, nothing is downloaded or started.
     expect(models.ensure).not.toHaveBeenCalled();
     await invoke(CANOPY_METHOD_CHANNELS.setMode, sender, "on");
-    expect(models.ensure).toHaveBeenCalledWith("daintreehq/canopy-reader-17m");
+    expect(models.ensure).toHaveBeenCalled();
+    // Once it is ready, any model an earlier Daintree chose goes, the one in use stays.
+    await vi.waitFor(() => expect(models.remove).toHaveBeenCalledWith(true));
     await invoke(CANOPY_METHOD_CHANNELS.setMode, sender, "unset");
     // A download under way stops; no read was made, so no reader was ever started.
     expect(models.cancel).toHaveBeenCalled();
     expect(localReader.read).not.toHaveBeenCalled();
   });
 
-  it("refuses a model id that isn't one of the publisher's readers", async () => {
-    const sender = fakeSender(9);
-    for (const id of ["evil/model", "daintreehq/other", "daintreehq/canopy-reader-17m/../x", 7]) {
-      const result = await outcome(invoke(CANOPY_METHOD_CHANNELS.setModel, sender, id));
-      expect(result.ok).toBe(false);
-    }
-    expect(models.ensure).not.toHaveBeenCalledWith("evil/model");
-  });
-
-  it("keeps the model chosen elsewhere when a guarded choice was made against an older revision", async () => {
-    const { store } = await import("../../../store.js");
-    const sender = fakeSender(9);
-    const BEST = "daintreehq/canopy-reader-68m";
-    const read = (result: unknown) => {
-      const envelope = result as { data?: Record<string, unknown> };
-      return (envelope.data ?? result) as { modeRevision: number; hostEpoch: string };
+  it("says what the model is and whether it is on this machine, as the models say", async () => {
+    const info = {
+      id: "daintreehq/canopy-reader-17m",
+      name: "Light",
+      bytes: 1234,
+      installed: false,
     };
-    const start = read(await invoke(CANOPY_METHOD_CHANNELS.setMode, sender, "unset"));
-    // Another window turns Canopy on meanwhile, at the next revision.
-    await invoke(CANOPY_METHOD_CHANNELS.setMode, sender, "on");
-    vi.mocked(store.set).mockClear();
-    await invoke(
-      CANOPY_METHOD_CHANNELS.setModel,
-      sender,
-      BEST,
-      start.modeRevision,
-      start.hostEpoch
-    );
-    expect(store.set).not.toHaveBeenCalledWith("canopyModel", BEST);
-
-    // At the current revision and launch it lands.
-    const now = read(await invoke(CANOPY_METHOD_CHANNELS.getSnapshot, sender));
-    await invoke(CANOPY_METHOD_CHANNELS.setModel, sender, BEST, now.modeRevision, now.hostEpoch);
-    expect(store.set).toHaveBeenCalledWith("canopyModel", BEST);
-
-    const noRevision = await outcome(
-      invoke(CANOPY_METHOD_CHANNELS.setModel, sender, BEST, undefined, now.hostEpoch)
-    );
-    expect(noRevision.ok).toBe(false);
+    models.info.mockResolvedValueOnce(info);
+    const result = (await invoke(CANOPY_METHOD_CHANNELS.getModel, fakeSender(9))) as {
+      data?: unknown;
+    };
+    expect(models.info).toHaveBeenCalled();
+    expect(result.data ?? result).toEqual(info);
   });
 
   it("deletes the downloaded models at any time, turning Canopy off first when it is on", async () => {
@@ -799,12 +780,12 @@ describe("canopy IPC", () => {
     // Off, through the guarded change: so every view is told, and a restart
     // finds nothing to download again.
     expect(state.mode).toBe("unset");
-    expect(models.removeAllBut).toHaveBeenCalledWith(null);
-    models.removeAllBut.mockClear();
+    expect(models.remove).toHaveBeenCalledWith(false);
+    models.remove.mockClear();
     // Already off: just the delete.
     await invoke(CANOPY_METHOD_CHANNELS.removeModels, sender);
     expect(state.mode).toBe("unset");
-    expect(models.removeAllBut).toHaveBeenCalledWith(null);
+    expect(models.remove).toHaveBeenCalledWith(false);
   });
 
   it("watches a view's lifecycle once however often the panel reopens", async () => {

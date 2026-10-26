@@ -53,7 +53,6 @@ export const STORE_KEY_OWNERSHIP = {
   // Canopy reads the agents of the machine it runs on, which is the host, with
   // a model downloaded there.
   canopyMode: "host",
-  canopyModel: "host",
   appTheme: "device",
   privacy: "device",
   agentSessionHistory: "host",

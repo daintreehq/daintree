@@ -158,6 +158,92 @@ describe("canopyReader", () => {
     expect(reading.progress).toBe("none");
   });
 
+  it("takes a summary-only card's line one from the status pick, and line two only over its bar", () => {
+    const meta = { ...META, thresholds: { ...META.thresholds, second: 0.7, card: "summary-only" } };
+    const idx = [3, 5, 7];
+    const decode = (summary: number[]) =>
+      decodeReading(meta, outputs(3, { status_line: [0, 9, 0, 1], summary_lines: summary }), idx, [
+        false,
+        false,
+        false,
+      ]);
+    // Line two is the best-scored line that isn't line one, even under a
+    // higher-scored line one: 0.95 is line one's own, so 0.75 is next.
+    const both = decode([logit(0.75), logit(0.95), logit(0.6)]);
+    expect(both.card_mode).toBe("summary-only");
+    expect(both.card_lines).toEqual([5, 3]);
+    // The best-scored of several over the bar, not the first on screen.
+    expect(decode([logit(0.75), logit(0.95), logit(0.85)]).card_lines).toEqual([5, 7]);
+    // The bar is the model's own.
+    const strict = { ...meta, thresholds: { ...meta.thresholds, second: 0.8 } };
+    expect(
+      decodeReading(
+        strict,
+        outputs(3, {
+          status_line: [0, 9, 0, 1],
+          summary_lines: [logit(0.75), logit(0.95), logit(0.6)],
+        }),
+        idx,
+        [false, false, false]
+      ).card_lines
+    ).toEqual([5]);
+    // Nothing else at 0.7: one line.
+    expect(decode([logit(0.65), logit(0.95), logit(0.6)]).card_lines).toEqual([5]);
+    // No line one, and line two stands alone.
+    const none = decodeReading(
+      meta,
+      outputs(3, { summary_lines: [logit(0.8), logit(0.1), logit(0.1)] }),
+      idx,
+      [false, false, false]
+    );
+    expect(none.card_lines).toEqual([3]);
+    // An older model has no card lines of its own.
+    expect(decodeReading(META, outputs(1), [0], [false])).toMatchObject({
+      card_mode: "headline",
+      card_lines: [],
+    });
+  });
+
+  it("shows a summary-only card's lines with no headline, one paragraph in screen order", () => {
+    const lines = [
+      "⏺ I traced the failure to the cache key, which",
+      "  ignored the locale.",
+      "⏺ Fixed it and added a test.",
+      "",
+      "⏺ All 42 tests pass.",
+    ];
+    const card = (cardLines: number[]) =>
+      readerCard(
+        {
+          category: "finished",
+          card_mode: "summary-only",
+          card_lines: cardLines,
+          status_line: cardLines[0] ?? -1,
+          summary_lines: [],
+          question_line: -1,
+          option_lines: [],
+          action_line: -1,
+          task_line: -1,
+        } as unknown as Reading,
+        lines
+      );
+    // Within three rows: one paragraph, so the earlier line goes first, and
+    // a pick in the middle of a wrapped sentence shows the whole sentence.
+    expect(card([2, 1])).toMatchObject({
+      headline: null,
+      summary: [
+        "I traced the failure to the cache key, which ignored the locale.",
+        "Fixed it and added a test.",
+      ],
+    });
+    // Further apart: the best first.
+    expect(card([4, 0]).summary).toEqual([
+      "All 42 tests pass.",
+      "I traced the failure to the cache key, which ignored the locale.",
+    ]);
+    expect(card([]).summary).toEqual([]);
+  });
+
   it("strips glyphs, borders and timers off a line, keeping a glyph that is part of a word", () => {
     expect(displayText("⏺ Fixed the rounding.")).toBe("Fixed the rounding.");
     expect(displayText("│ Do you want to proceed?            │")).toBe("Do you want to proceed?");
@@ -222,6 +308,17 @@ describe("canopyReader", () => {
     expect(isReaderMeta({ ...META, max_len: 0 })).toBe(false);
     expect(isReaderMeta({ ...META, classes: { ...META.classes, score: [] } })).toBe(false);
     expect(isReaderMeta(null)).toBe(false);
+    const thresholds = META.thresholds;
+    expect(
+      isReaderMeta({ ...META, thresholds: { ...thresholds, card: "summary-only", second: 0.7 } })
+    ).toBe(true);
+    // A summary-only card needs its second line's bar, and a card unknown here can't be shown.
+    expect(isReaderMeta({ ...META, thresholds: { ...thresholds, card: "summary-only" } })).toBe(
+      false
+    );
+    expect(
+      isReaderMeta({ ...META, thresholds: { ...thresholds, card: "chat", second: 0.7 } })
+    ).toBe(false);
   });
 
   it("loads the weights its install recorded, or whichever it holds when the record is lost", () => {

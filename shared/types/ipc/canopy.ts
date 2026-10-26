@@ -138,9 +138,12 @@ export interface CanopyCard {
   steps: CanopySteps | null;
   tests: CanopyTests;
   changes: CanopyChanges;
-  /** What the user needs to do, at most ~10 words and naming the decision; null until described. */
+  /**
+   * The card's first line under the terminal's own title: the line on screen
+   * that says most, verbatim; null until described, or when no line does.
+   */
   headline: string | null;
-  /** At most ~25 words; null until described. */
+  /** The card's second line, verbatim, when one is worth reading; null until described. */
   summary: string | null;
   /** The prompt the program is asking, verbatim from the screen. */
   question: string | null;
@@ -377,73 +380,42 @@ export interface CanopyPlan {
 /** Who publishes Canopy's models on Hugging Face, and what they are called there. */
 export const CANOPY_MODEL_AUTHOR = "daintreehq";
 export const CANOPY_MODEL_PREFIX = "canopy-reader-";
-/** Light: what Canopy reads with until the user picks another. */
-export const DEFAULT_CANOPY_MODEL = `${CANOPY_MODEL_AUTHOR}/${CANOPY_MODEL_PREFIX}17m`;
+/** The model Canopy reads with. */
+export const CANOPY_MODEL = `${CANOPY_MODEL_AUTHOR}/${CANOPY_MODEL_PREFIX}17m`;
 
 const CANOPY_MODEL_ID = new RegExp(
   `^${CANOPY_MODEL_AUTHOR}/${CANOPY_MODEL_PREFIX}[a-z0-9][a-z0-9-]*$`
 );
 
-/** A model id this build will fetch: one of the publisher's reader repos, nothing else. */
+/**
+ * One of the publisher's reader repos. Only `CANOPY_MODEL` is fetched; an
+ * earlier Daintree could choose among them, and a host on one still names its pick.
+ */
 export function isCanopyModelId(value: unknown): value is string {
   return typeof value === "string" && value.length <= 120 && CANOPY_MODEL_ID.test(value);
 }
 
-/** The names the first two models go by; any later one is named for its size. */
-const CANOPY_MODEL_NAMES: Record<string, string> = {
-  [`${CANOPY_MODEL_AUTHOR}/${CANOPY_MODEL_PREFIX}17m`]: "Light",
-  [`${CANOPY_MODEL_AUTHOR}/${CANOPY_MODEL_PREFIX}68m`]: "Best",
-};
-
+/** What the status bar and Settings call a model. */
 export function canopyModelName(id: string): string {
-  const named = CANOPY_MODEL_NAMES[id];
-  if (named) return named;
+  if (id === CANOPY_MODEL) return "Light";
   return id
     .slice(id.lastIndexOf("/") + 1)
     .replace(CANOPY_MODEL_PREFIX, "")
     .toUpperCase();
 }
 
-/** How a model did on real agent screens it was never trained on, as its publisher measured. */
-export interface CanopyModelBench {
-  /** Hand-checked screens from real sessions whose state it read right, of `gold`. */
-  goldCategory: number;
-  gold: number;
-  /** Researched screens across the agent CLIs whose state it read right, of `agents`. */
-  agentCategory: number;
-  agents: number;
-  /** 0-1: how often its headline was the line a careful reader picked. */
-  headline: number;
-  /** 0-1: how often it got an ask's options exactly right. */
-  options: number;
-  /** 0-1: headline and summary lines against a careful reader's, as F1. */
-  cardF1: number;
-  /** Median ms for one screen on one thread of the publisher's machine. */
-  msPerScreen: number;
-}
-
-/** One published model Canopy can read screens with. */
-export interface CanopyModelVariant {
-  /** Its Hugging Face repo, e.g. `daintreehq/canopy-reader-17m`. */
+/** The model on this machine, as Settings shows it. */
+export interface CanopyModelInfo {
+  /** Its Hugging Face repo. */
   id: string;
-  /** What Settings calls it: Light, Best, or its size. */
   name: string;
-  /** Everything a download fetches, in bytes. */
-  downloadBytes: number;
+  /** What it takes on this machine once installed, else what a download fetches. */
+  bytes: number;
   /** On this machine and checked. */
   installed: boolean;
-  /** This version of Daintree can read with it. */
-  supported: boolean;
-  bench: CanopyModelBench | null;
 }
 
-/** The published models, and the one chosen on this machine. */
-export interface CanopyModelCatalogue {
-  selected: string;
-  variants: CanopyModelVariant[];
-}
-
-/** Where the chosen model stands on this machine. */
+/** Where the model stands on this machine. */
 export type CanopyModelState =
   | { id: string; status: "missing" }
   | { id: string; status: "downloading"; received: number; total: number }
@@ -481,7 +453,7 @@ export interface CanopySnapshot {
   hostEpoch?: string;
   /** The user turned Canopy on; nothing is read until they do. */
   activated: boolean;
-  /** The chosen model and whether it is here; absent while Canopy is off. */
+  /** The model and whether it is here; absent while Canopy is off. */
   model?: CanopyModelState;
   /** Runs the user archived or replied to and that have said nothing new since. */
   dispositions: CanopyDisposition[];

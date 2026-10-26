@@ -12,6 +12,7 @@ import {
   itemNeedsAttention,
   itemProgress,
   itemSubject,
+  repeatsSubject,
   itemPriority,
   observedKind,
   PERMISSION_FLOOR,
@@ -650,12 +651,20 @@ describe("the row's name", () => {
     expect(itemSubject(item!)).toBe("Billing spike");
   });
 
-  it("borrows the readers' title, then the worktree, for a pane named only for its agent", () => {
+  it("names a pane titled only for its agent by its worktree, never by a line the reader picked", () => {
     const worktree = { ...waiting, cwd: "/Users/dev/app-worktrees/fix-rounding" };
     const [titled] = inbox([run("a", worktree)], [card("a", { task: "Fix unit rounding" })]);
-    expect(itemSubject(titled!)).toBe("Fix unit rounding");
+    expect(itemSubject(titled!)).toBe("fix-rounding");
     const [untitled] = inbox([run("a", worktree)], [card("a", { task: null })]);
     expect(itemSubject(untitled!)).toBe("fix-rounding");
+  });
+
+  it("drops a card line that only repeats the row's title", () => {
+    const worktree = { ...waiting, cwd: "/Users/dev/app-worktrees/fix-rounding" };
+    const [item] = inbox([run("a", worktree)], [card("a", {})]);
+    expect(repeatsSubject(item!, "fix-rounding.")).toBe(true);
+    expect(repeatsSubject(item!, "  Fix-Rounding ")).toBe(true);
+    expect(repeatsSubject(item!, "Fixed the rounding in fix-rounding")).toBe(false);
   });
 });
 

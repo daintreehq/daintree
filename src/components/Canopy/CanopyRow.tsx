@@ -21,6 +21,7 @@ import {
   itemNeedsAttention,
   itemProgress,
   itemSubject,
+  repeatsSubject,
   shownPriority,
   unseenLabelMs,
   type CanopyItem,
@@ -60,8 +61,14 @@ export function rowStatus(item: CanopyItem): string {
  * The ask's words, or null when there are none and only the run's state can
  * be named. The readers' headline once written; before it — or instead of
  * words about a stop the run has left — the screen's own words at a glance.
+ * Never words that only say the row's title again.
  */
 function glanceStatus(item: CanopyItem): string | null {
+  const status = statusWords(item);
+  return status !== null && repeatsSubject(item, status) ? null : status;
+}
+
+function statusWords(item: CanopyItem): string | null {
   const card = item.card;
   const glance = item.glance;
   const busy = item.kind === "working" || item.kind === "running";
@@ -77,7 +84,7 @@ function glanceStatus(item: CanopyItem): string | null {
     // else the card says about how recent they are.
     const wordsAboutWork = card.wordsCategory === "working" || card.wordsCategory === "running";
     if (busy && !wordsAboutWork) return working();
-    if (card.headline) return card.headline;
+    if (card.headline && !repeatsSubject(item, card.headline)) return card.headline;
     if (card.question) return card.question;
   }
   if (busy) return working();
@@ -211,15 +218,26 @@ export function CanopyRow({
     unseenMs === null ? null : `Not checked ${formatWaitAge(nowMs - unseenMs, nowMs)}`;
   const handled = itemHandled(item);
   const archived = itemArchived(item);
-  const wordsShown = card !== null && (status === card.headline || status === card.question);
+  // The reading's words are on the row, under the title or as it: a headline
+  // dropped for saying the title again still counts as said.
+  const wordsShown =
+    card !== null &&
+    (status === card.headline ||
+      status === card.question ||
+      (card.headline !== null && repeatsSubject(item, card.headline)));
   // The summary stays when the run goes back to work and its ask gives way to
   // the newest line: a row always says what the run has been doing, until the
   // next reading replaces it.
-  const summary = !compact && card?.summary && card.summary !== status ? card.summary : null;
+  const summary =
+    !compact && card?.summary && card.summary !== status && !repeatsSubject(item, card.summary)
+      ? card.summary
+      : null;
   // Before the readers have written a summary, what the screen itself says
   // beyond the ask: the rest of a recap or report, the agent's last words.
-  const glanceText =
+  const glanceDetailText =
     !compact && summary === null && card?.stage !== "described" ? glanceDetail(item, status) : null;
+  const glanceText =
+    glanceDetailText !== null && !repeatsSubject(item, glanceDetailText) ? glanceDetailText : null;
   // Where it runs, on every row: the bottom line always says which project,
   // even on a row titled after it or a list that is all one project.
   const project = item.workspace.name || null;

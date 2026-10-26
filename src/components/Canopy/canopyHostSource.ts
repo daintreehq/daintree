@@ -32,8 +32,6 @@ export type CanopyApi = Pick<
   | "searchScreens"
   | "setMode"
   | "retryModel"
-  | "getModels"
-  | "setModel"
   | "rename"
   | "trash"
   | "untrash"
@@ -54,8 +52,6 @@ export const ownCanopyApi: CanopyApi = {
   searchScreens: (...args) => window.electron.canopy.searchScreens(...args),
   setMode: (...args) => window.electron.canopy.setMode(...args),
   retryModel: (...args) => window.electron.canopy.retryModel(...args),
-  getModels: (...args) => window.electron.canopy.getModels(...args),
-  setModel: (...args) => window.electron.canopy.setModel(...args),
   rename: (...args) => window.electron.canopy.rename(...args),
   trash: (...args) => window.electron.canopy.trash(...args),
   untrash: (...args) => window.electron.canopy.untrash(...args),
@@ -81,8 +77,6 @@ export function remoteCanopyApi(hostId: HostId): CanopyApi {
     searchScreens: on("canopy:search-screens"),
     setMode: on("canopy:set-mode"),
     retryModel: on("canopy:retry-model"),
-    getModels: on("canopy:get-models"),
-    setModel: on("canopy:set-model"),
     rename: on("canopy:rename"),
     trash: on("canopy:trash"),
     untrash: on("canopy:untrash"),
@@ -107,8 +101,6 @@ export function canopyBulkTransport(
       getSnapshot: () => window.electron.canopy.getSnapshot(),
       setMode: (mode, expectRevision, expectHostEpoch) =>
         window.electron.canopy.setMode(mode, expectRevision, expectHostEpoch),
-      setModel: (id, expectRevision, expectHostEpoch) =>
-        window.electron.canopy.setModel(id, expectRevision, expectHostEpoch),
       release: () => {},
     };
   }
@@ -124,16 +116,6 @@ export function canopyBulkTransport(
         hostId,
         "canopy:set-mode",
         mode,
-        expectRevision,
-        expectHostEpoch
-      );
-    },
-    setModel: (id, expectRevision, expectHostEpoch) => {
-      opened = true;
-      return canopyHostClient.invoke(
-        hostId,
-        "canopy:set-model",
-        id,
         expectRevision,
         expectHostEpoch
       );

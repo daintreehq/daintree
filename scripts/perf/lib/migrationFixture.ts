@@ -344,7 +344,6 @@ export function createHeavyMigrationFixture(): LegacyStoreV0 {
     globalEnvironmentVariables,
     appAgentConfig: {} as StoreSchema["appAgentConfig"],
     canopyMode: "unset",
-    canopyModel: "daintreehq/canopy-reader-17m",
     windowStates: {},
     worktreeIssueMap,
     wslGitByWorktree: {},

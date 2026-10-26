@@ -284,9 +284,19 @@ export function itemSubject(item: CanopyItem): string {
       cwd: run.cwd,
     }) !== null;
   if (panelNamesWork) return row.title;
-  // A pane named only for its agent says nothing about which one this is; where
-  // it runs does, until the readers have titled the work.
-  return item.card?.task ?? row.worktreeLabel ?? item.workspace.name ?? row.title;
+  // A pane named only for its agent says nothing about which one this is;
+  // where it runs does. Never a line off the screen: those go beneath it.
+  return row.worktreeLabel ?? item.workspace.name ?? row.title;
+}
+
+/** Whether a card line only says again what the row's title already does. */
+export function repeatsSubject(item: CanopyItem, text: string): boolean {
+  const flat = (value: string) =>
+    value
+      .replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "")
+      .replace(/\s+/g, " ")
+      .toLowerCase();
+  return flat(text) !== "" && flat(text) === flat(itemSubject(item));
 }
 
 /** How far through the user's task a run is, as the row shows it; null when nothing says. */

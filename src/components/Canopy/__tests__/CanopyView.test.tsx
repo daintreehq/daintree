@@ -96,28 +96,6 @@ const canopySnapshot: CanopySnapshot = {
   glances: [],
 };
 
-const MODELS = {
-  selected: "daintreehq/canopy-reader-17m",
-  variants: [
-    {
-      id: "daintreehq/canopy-reader-17m",
-      name: "Light",
-      downloadBytes: 21_000_000,
-      installed: false,
-      supported: true,
-      bench: null,
-    },
-    {
-      id: "daintreehq/canopy-reader-68m",
-      name: "Best",
-      downloadBytes: 73_000_000,
-      installed: false,
-      supported: true,
-      bench: null,
-    },
-  ],
-};
-
 function installElectron(
   snapshot: CanopySnapshot = canopySnapshot,
   branchOf: (runId: string) => Promise<string | null> = async (runId) => `feature/${runId}`
@@ -183,8 +161,6 @@ function installElectron(
       entries: [],
     })),
     rename: vi.fn(async (_runId: string, _target: { spawnedAt: number }, _title: string) => {}),
-    getModels: vi.fn(async () => MODELS),
-    setModel: vi.fn(async (_id: string) => snapshot),
     setMode: vi.fn(async (mode: CanopySnapshot["mode"], _expectRevision?: number) => ({
       ...snapshot,
       mode,
@@ -529,56 +505,6 @@ describe("CanopyView", () => {
     expect(within(document.body).getByRole("dialog", { name: CANOPY_TITLE })).toBeTruthy();
   });
 
-  it("asks which model before anything is turned on, and downloads only the one chosen", async () => {
-    const canopy = installElectron({ ...canopySnapshot, activated: false });
-    useCanopyStore.setState({ snapshot: { ...canopySnapshot, activated: false } });
-    render(<CanopyView />);
-    await frames();
-    const dialog = document.querySelector<HTMLElement>("[data-testid=canopy-dialog]")!;
-    // Both models are offered with their sizes, Light picked as the one it would use.
-    expect(canopy.getModels).toHaveBeenCalledTimes(1);
-    expect((within(dialog).getByRole("radio", { name: /Light/ }) as HTMLInputElement).checked).toBe(
-      true
-    );
-    expect(
-      within(dialog).getByRole("radio", { name: /Best/ }).closest("label")?.textContent
-    ).toContain("73 MB");
-    // Looking at the choice turns nothing on and downloads nothing.
-    expect(canopy.setModel).not.toHaveBeenCalled();
-    expect(canopy.setMode).not.toHaveBeenCalled();
-
-    fireEvent.click(within(dialog).getByRole("radio", { name: /Best/ }));
-    await act(async () => {
-      fireEvent.click(screenButton(dialog, "Turn on Canopy"));
-    });
-    expect(canopy.setModel).toHaveBeenCalledWith("daintreehq/canopy-reader-68m");
-    expect(canopy.setMode).toHaveBeenCalledWith("on");
-    // The model is chosen first: turned on, it downloads that one and never the default.
-    expect(canopy.setModel.mock.invocationCallOrder[0]!).toBeLessThan(
-      canopy.setMode.mock.invocationCallOrder[0]!
-    );
-  });
-
-  it("keeps Turn on off until the model list is in, and still turns on when it can't be had", async () => {
-    const canopy = installElectron({ ...canopySnapshot, activated: false });
-    useCanopyStore.setState({ snapshot: { ...canopySnapshot, activated: false } });
-    let fail!: (reason: Error) => void;
-    canopy.getModels.mockImplementationOnce(() => new Promise((_, reject) => (fail = reject)));
-    render(<CanopyView />);
-    await frames();
-    const dialog = document.querySelector<HTMLElement>("[data-testid=canopy-dialog]")!;
-    expect(screenButton(dialog, "Turn on Canopy").getAttribute("aria-disabled")).toBe("true");
-    await act(async () => {
-      fail(new Error("offline"));
-    });
-    expect(dialog.textContent).toContain("Canopy will use the one already chosen");
-    await act(async () => {
-      fireEvent.click(screenButton(dialog, "Turn on Canopy"));
-    });
-    // No list, no choice to carry: it turns on with the model it would use anyway.
-    expect(canopy.setModel).not.toHaveBeenCalled();
-    expect(canopy.setMode).toHaveBeenCalledWith("on");
-  });
   it("hides Canopy from its offer, closing it with a way back", async () => {
     const off = {
       ...canopySnapshot,

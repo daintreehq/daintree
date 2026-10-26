@@ -1,8 +1,6 @@
 import { useState } from "react";
 import { HardDrive } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { CanopyModelCatalogue } from "@shared/types/ipc/canopy";
-import { CanopyModelChoice, useCanopyModelChoice } from "./CanopyModelChoice";
 import { canopyLocalOn, canopyStopOn } from "./canopyTerms";
 
 /**
@@ -13,21 +11,16 @@ import { canopyLocalOn, canopyStopOn } from "./canopyTerms";
 export function CanopyHostOffer({
   hostName,
   onTurnOn,
-  loadModels,
 }: {
   hostName: string;
-  /** Turns it on there with the model chosen for that host, which downloads to that host. */
-  onTurnOn: (modelId: string | null) => Promise<void>;
-  /** The models that host can read with. */
-  loadModels: () => Promise<CanopyModelCatalogue>;
+  onTurnOn: () => Promise<void>;
 }) {
-  const modelChoice = useCanopyModelChoice(loadModels, hostName);
   const [pending, setPending] = useState(false);
   const [failed, setFailed] = useState(false);
   const turnOn = () => {
     setPending(true);
     setFailed(false);
-    onTurnOn(modelChoice.chosen).then(
+    onTurnOn().then(
       () => setPending(false),
       () => {
         setPending(false);
@@ -60,17 +53,8 @@ export function CanopyHostOffer({
             {canopyLocalOn(hostName)} {canopyStopOn(hostName)}
           </p>
         </div>
-        <CanopyModelChoice
-          choice={modelChoice}
-          name={`canopy-host-offer-model-${hostName}`}
-          host={hostName}
-        />
         <div className="flex items-center gap-3">
-          <Button
-            variant="contrast"
-            disabled={pending || (modelChoice.chosen === null && modelChoice.error === null)}
-            onClick={turnOn}
-          >
+          <Button variant="contrast" disabled={pending} onClick={turnOn}>
             Turn on Canopy on {hostName}
           </Button>
           <p role="status" className="text-xs text-text-secondary">

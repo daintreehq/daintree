@@ -59,9 +59,9 @@ export interface GeneratedElectronAPI {
     captureBackdrop(
       ...args: IpcInvokeMap["canopy:capture-backdrop"]["args"]
     ): Promise<IpcInvokeMap["canopy:capture-backdrop"]["result"]>;
-    getModels(
-      ...args: IpcInvokeMap["canopy:get-models"]["args"]
-    ): Promise<IpcInvokeMap["canopy:get-models"]["result"]>;
+    getModel(
+      ...args: IpcInvokeMap["canopy:get-model"]["args"]
+    ): Promise<IpcInvokeMap["canopy:get-model"]["result"]>;
     getSnapshot(
       ...args: IpcInvokeMap["canopy:get-snapshot"]["args"]
     ): Promise<IpcInvokeMap["canopy:get-snapshot"]["result"]>;
@@ -113,9 +113,6 @@ export interface GeneratedElectronAPI {
     setMode(
       ...args: IpcInvokeMap["canopy:set-mode"]["args"]
     ): Promise<IpcInvokeMap["canopy:set-mode"]["result"]>;
-    setModel(
-      ...args: IpcInvokeMap["canopy:set-model"]["args"]
-    ): Promise<IpcInvokeMap["canopy:set-model"]["result"]>;
     setRead(
       ...args: IpcInvokeMap["canopy:set-read"]["args"]
     ): Promise<IpcInvokeMap["canopy:set-read"]["result"]>;
