@@ -32,6 +32,7 @@ vi.mock("@/store/projectStore", () => ({
 
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
 import { useVoiceWaitSubmit } from "../useVoiceWaitSubmit";
+import type { ClaimSendHandBack } from "../useSendHandBack";
 
 const stopMock = vi.mocked(voiceRecordingService.stop);
 const hasPendingMock = vi.mocked(voiceRecordingService.hasPendingCorrection);
@@ -78,13 +79,14 @@ describe("useVoiceWaitSubmit", () => {
     useTerminalInputStore.getState().clearDraftInput(PANEL_ID);
   });
 
-  function renderWaitSubmit(isDisabled?: () => boolean) {
+  function renderWaitSubmit(isDisabled?: () => boolean, claimSendHandBack?: ClaimSendHandBack) {
     return renderHook(() =>
       useVoiceWaitSubmit({
         terminalId: PANEL_ID,
         editorViewRef: { current: null },
         editableCompartmentRef: { current: new Compartment() },
         sendFromEditor,
+        claimSendHandBack,
         isDisabled,
       })
     );
@@ -168,6 +170,20 @@ describe("useVoiceWaitSubmit", () => {
 
       expect(sendFromEditor).not.toHaveBeenCalled();
       expect(useTerminalInputStore.getState().isVoiceSubmitting(PANEL_ID)).toBe(false);
+    });
+
+    it("claims the keyboard's hand-back at the command and sends with it, as Enter does", async () => {
+      useTerminalInputStore.getState().setDraftInput(PANEL_ID, "fix the login bug");
+      const handBack = vi.fn();
+      const claimSendHandBack = vi.fn(() => handBack);
+      renderWaitSubmit(undefined, claimSendHandBack);
+
+      await act(async () => {
+        spokenSendHandler()();
+      });
+
+      expect(claimSendHandBack).toHaveBeenCalledTimes(1);
+      expect(sendFromEditor).toHaveBeenCalledWith(handBack);
     });
 
     it("only stops dictation when the composer is disabled", async () => {

@@ -56,6 +56,7 @@ type CompletePayload = {
   willCorrect: boolean;
   itemId?: string;
   transcriptId?: string;
+  send?: boolean;
 };
 type FileTokenPayload = {
   sessionId: string;
@@ -209,6 +210,31 @@ describe("VoiceRecordingService — scratch that (#14636)", () => {
       ]);
     }
   );
+
+  it("scratches without sending when the command ends in a spoken send", async () => {
+    const { service, voiceStore, draft } = await setup("Existing.");
+    voiceStore.getState().setStatus("recording");
+    const send = vi.fn();
+    service.onSpokenSend(PANEL, PROJECT, send);
+    const stop = vi.spyOn(service, "stop").mockResolvedValue(undefined);
+
+    complete("Fix the login bug.", "a");
+    complete("Wrong words.", "b");
+    // "Scratch that, send it." reaches the renderer with main's send flag and
+    // the phrase stripped.
+    callbacks.complete!({
+      sessionId: SESSION_ID,
+      text: "Scratch that",
+      willCorrect: false,
+      itemId: "c",
+      send: true,
+    });
+
+    expect(draft()).toBe("Existing. Fix the login bug.");
+    expect(send).not.toHaveBeenCalled();
+    expect(stop).not.toHaveBeenCalled();
+    expect(voiceStore.getState().status).toBe("recording");
+  });
 
   it("removes one more utterance each time, never into earlier text", async () => {
     const { draft, records } = await setup("Existing.");

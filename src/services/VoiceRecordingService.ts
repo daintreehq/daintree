@@ -406,6 +406,8 @@ class VoiceRecordingService {
           const buffer = voiceState.panelBuffers[panelId];
           const segmentStart = itemId ? -1 : (buffer?.draftLengthAtSegmentStart ?? -1);
           const finalText = text.trim();
+          // "Scratch that, send it" only scratches: the draft it leaves is one
+          // the user hasn't seen, and a spoken send fires with no key press.
           if (finalText && isScratchCommand(finalText)) {
             this.scratchLastUtterance(panelId, projectId, buffer?.dictationSessionId);
             useVoiceRecordingStore.getState().completeSegment("", itemId, { discard: true });
