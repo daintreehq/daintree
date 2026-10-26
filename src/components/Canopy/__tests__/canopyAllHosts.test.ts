@@ -13,6 +13,7 @@ const ownCalls = vi.hoisted(() => ({
   watchTerminal: vi.fn(() => Promise.resolve({ watchId: 1, snapshot: null })),
   unwatchTerminal: vi.fn(() => Promise.resolve()),
   terminalInput: vi.fn(() => Promise.resolve()),
+  terminalResize: vi.fn((_watchId: number, _cols: number, _rows: number) => Promise.resolve()),
   setMode: vi.fn(() => Promise.resolve()),
   refresh: vi.fn(() => Promise.resolve()),
   setRead: vi.fn((): Promise<unknown> => Promise.resolve(null)),
@@ -387,6 +388,21 @@ describe("createAllHostsRoute", () => {
     // A stale id of the old stream reaches nobody.
     await terminalApi.terminalInput(own.watchId!, "y");
     expect(ownCalls.terminalInput).not.toHaveBeenCalled();
+  });
+
+  it("sizes this machine's terminal from the Canopy pane and no other host's", async () => {
+    invoke.mockResolvedValue({ watchId: 1, snapshot: null });
+    const { terminalApi } = createAllHostsRoute("own", ["own", "remote"]);
+    expect(terminalApi.ownSizedId?.(allHostsKey("own", "t1"))).toBe("t1");
+    expect(terminalApi.ownSizedId?.(allHostsKey("remote", "t1"))).toBeNull();
+    const own = await terminalApi.watchTerminal(allHostsKey("own", "t1"), { spawnedAt: 1 });
+    await terminalApi.terminalResize(own.watchId!, 99, 30);
+    expect(ownCalls.terminalResize).toHaveBeenCalledWith(expect.any(Number), 99, 30);
+    const remote = await terminalApi.watchTerminal(allHostsKey("remote", "t1"), { spawnedAt: 1 });
+    ownCalls.terminalResize.mockClear();
+    await terminalApi.terminalResize(remote.watchId!, 99, 30);
+    expect(ownCalls.terminalResize).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalledWith("remote", "canopy:terminal-resize", 1, 99, 30);
   });
 
   it("lets go of a stream opened for a row that was left before the host answered", async () => {

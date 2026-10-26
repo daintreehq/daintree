@@ -141,6 +141,11 @@ export function canopyBulkTransport(
  */
 export interface CanopyTerminalApi {
   holdsSize: boolean;
+  /**
+   * For an API that routes by run: the local terminal's own id when this run is
+   * on the window's own host and so sized from here, otherwise null.
+   */
+  ownSizedId?: (runId: string) => string | null;
   watchTerminal: ElectronCanopy["watchTerminal"];
   unwatchTerminal: ElectronCanopy["unwatchTerminal"];
   terminalInput: ElectronCanopy["terminalInput"];
