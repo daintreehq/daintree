@@ -1305,7 +1305,7 @@ describe("PortalManager idle release (#14538)", () => {
     const { manager, parked } = await parkedBehindAnother();
     closeDestroys(parked);
     parked.getOSProcessId.mockReturnValue(101);
-    parked.mainFrame.framesInSubtree = [{ osProcessId: 101 }, { osProcessId: 202 }];
+    parked.mainFrame.framesInSubtree = [{ osProcessId: 202 }, { osProcessId: 202 }];
     metricsMocks.getAppMetricsSnapshot.mockReturnValue([
       { pid: 101, memory: { workingSetSize: 150_000 } },
       { pid: 202, memory: { workingSetSize: 50_000 } },
@@ -1345,8 +1345,9 @@ describe("PortalManager idle release (#14538)", () => {
 
     vi.setSystemTime(Date.now() + 50 * 60_000);
     manager.hideAll();
+    vi.setSystemTime(Date.now() + 10 * 60_000);
     manager.hideAll();
-    vi.setSystemTime(Date.now() + 30 * 60_000);
+    vi.setSystemTime(Date.now() + 20 * 60_000);
     await manager.releaseIdleTabs();
     expect(wc.close).not.toHaveBeenCalled();
 
@@ -1403,16 +1404,16 @@ describe("PortalManager idle release (#14538)", () => {
     await expect(manager.releaseIdleTabs()).resolves.toEqual([]);
 
     expect(manager.hasTab("tab-1")).toBe(true);
+    expect(mockWindow.contentView.removeChildView).not.toHaveBeenCalled();
+    expect(sentOn(frontView, "portal:tab-evicted")).toEqual([]);
     expect(sentOn(cachedView, "portal:tab-evicted")).toEqual([]);
-    await expect(manager.showTab("tab-1", bounds)).resolves.toBe(true);
-    await manager.showTab("tab-2", bounds);
 
-    vi.setSystemTime(Date.now() + 30 * 60_000);
+    vi.setSystemTime(Date.now() + HOUR - 1000);
     await manager.releaseIdleTabs();
     expect(parked.close).toHaveBeenCalledTimes(1);
 
     closeDestroys(parked);
-    vi.setSystemTime(Date.now() + HOUR);
+    vi.setSystemTime(Date.now() + 1000);
     await manager.releaseIdleTabs();
     expect(parked.close).toHaveBeenCalledTimes(2);
     expect(manager.hasTab("tab-1")).toBe(false);
@@ -1429,11 +1430,13 @@ describe("PortalManager idle release (#14538)", () => {
 
     const release = manager.releaseIdleTabs();
     await expect(manager.showTab("tab-1", bounds)).resolves.toBe(true);
+    manager.hideAll();
+    vi.setSystemTime(Date.now() + HOUR);
     finishFlush();
 
     await expect(release).resolves.toEqual([]);
     expect(parked.close).not.toHaveBeenCalled();
-    expect(manager.getActiveTabId()).toBe("tab-1");
+    expect(manager.hasTab("tab-1")).toBe(true);
     manager.destroy();
   });
 
@@ -1485,23 +1488,102 @@ describe("PortalManager idle release (#14538)", () => {
     manager.destroy();
   });
 
-  it("treats a close with no answer as undecided, and reports the tab if it goes later", async () => {
+  it("keeps holding a show after the sweep stops waiting, and logs a late release once", async () => {
     const { manager, parked } = await parkedBehindAnother();
     vi.setSystemTime(Date.now() + HOUR);
 
     const release = manager.releaseIdleTabs();
-    await vi.advanceTimersByTimeAsync(30_000);
-
+    await vi.advanceTimersByTimeAsync(15_000);
     await expect(release).resolves.toEqual([]);
     expect(manager.hasTab("tab-1")).toBe(true);
+
+    const show = manager.showTab("tab-1", bounds);
+    await Promise.resolve();
+    emit(parked, "destroyed");
+
+    await expect(show).resolves.toBe(false);
+    expect(manager.getActiveTabId()).toBe("tab-2");
+    expect(sentOn(cachedView, "portal:tab-evicted")).toEqual([{ tabId: "tab-1" }]);
+    expect(
+      logMocks.logInfo.mock.calls.filter(([event]) => event === "portal.idle-release")
+    ).toHaveLength(1);
+    manager.destroy();
+  });
+
+  it("lets a held show through once a close has gone a minute unanswered", async () => {
+    const { manager, parked } = await parkedBehindAnother();
+    vi.setSystemTime(Date.now() + HOUR);
+    void manager.releaseIdleTabs();
+    await vi.waitFor(() => expect(parked.close).toHaveBeenCalled());
+
+    const show = manager.showTab("tab-1", bounds);
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    await expect(show).resolves.toBe(true);
+    expect(manager.getActiveTabId()).toBe("tab-1");
     expect(logMocks.logWarn).toHaveBeenCalledWith(
       "portal.idle-release-no-verdict",
       expect.objectContaining({ tabId: "tab-1" })
     );
+    manager.destroy();
+  });
 
-    emit(parked, "destroyed");
-    expect(manager.hasTab("tab-1")).toBe(false);
-    expect(sentOn(cachedView, "portal:tab-evicted")).toEqual([{ tabId: "tab-1" }]);
+  it("doesn't let a newer show be overtaken by one that waited out a release", async () => {
+    const { manager, parked } = await parkedBehindAnother();
+    vi.setSystemTime(Date.now() + HOUR);
+    const release = manager.releaseIdleTabs();
+    await vi.waitFor(() => expect(parked.close).toHaveBeenCalled());
+
+    const waiting = manager.showTab("tab-1", bounds);
+    await expect(manager.showTab("tab-2", bounds)).resolves.toBe(true);
+    emit(parked, "will-prevent-unload");
+
+    await expect(waiting).resolves.toBe(true);
+    expect(manager.getActiveTabId()).toBe("tab-2");
+    await release;
+    manager.destroy();
+  });
+
+  it("brings the tab count back under the cap when refused releases held it over", async () => {
+    const manager = new mod.PortalManager(mockWindow);
+    for (let i = 1; i <= mod.PORTAL_MAX_LIVE_TABS; i++) {
+      manager.createTab(`tab-${i}`, `http://localhost:${3000 + i}`);
+    }
+    vi.setSystemTime(Date.now() + HOUR);
+    const release = manager.releaseIdleTabs();
+    await vi.waitFor(() =>
+      expect(createdWebContents.every((wc) => wc.close.mock.calls.length === 1)).toBe(true)
+    );
+
+    manager.createTab("tab-new", "http://localhost:4000");
+    await manager.showTab("tab-new", bounds);
+    expect(manager.hasTab("tab-1")).toBe(true);
+
+    for (const wc of createdWebContents.slice(0, mod.PORTAL_MAX_LIVE_TABS)) {
+      emit(wc, "will-prevent-unload");
+    }
+    await release;
+
+    const live = ["tab-1", "tab-2", "tab-3", "tab-new"].filter((id) => manager.hasTab(id));
+    expect(live).toHaveLength(mod.PORTAL_MAX_LIVE_TABS);
+    expect(live).toContain("tab-new");
+    manager.destroy();
+  });
+
+  it("checks the exemptions again after the storage flush", async () => {
+    const { manager, parked } = await parkedBehindAnother();
+    let finishFlush!: () => void;
+    parked.session.flushStorageData.mockReturnValue(
+      new Promise<void>((resolve) => (finishFlush = resolve))
+    );
+    vi.setSystemTime(Date.now() + HOUR);
+
+    const release = manager.releaseIdleTabs();
+    parked.isCurrentlyAudible.mockReturnValue(true);
+    finishFlush();
+
+    await expect(release).resolves.toEqual([]);
+    expect(parked.close).not.toHaveBeenCalled();
     manager.destroy();
   });
 

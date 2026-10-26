@@ -47,9 +47,11 @@ export const PORTAL_RESTORE_LEASE_MS = 60_000;
 
 // A storage flush that hasn't finished by then calls the release off.
 const RELEASE_FLUSH_TIMEOUT_MS = 10_000;
-// Chromium proceeds past a hung beforeunload after about a second, so no
-// verdict well after that is worth a warning, not a decision.
+// Chromium proceeds past a hung beforeunload after about a second. A sweep
+// stops waiting for a verdict after the first of these and warns; the release
+// itself stays open, holding back any show, until the second.
 const RELEASE_VERDICT_WATCHDOG_MS = 10_000;
+const RELEASE_VERDICT_DEADLINE_MS = 60_000;
 
 type ReleaseVerdict = "released" | "refused" | "unknown";
 
@@ -57,6 +59,8 @@ interface ReleaseOperation {
   view: WebContentsView;
   phase: "preparing" | "closing";
   cancelled: boolean;
+  // Set when destroyView() takes the tab, which reports it itself.
+  superseded: boolean;
   verdict: Promise<ReleaseVerdict>;
 }
 
@@ -157,6 +161,8 @@ export class PortalManager {
     this.lastShownBounds.delete(tabId);
     this.restoringTabIds.delete(tabId);
     this.releaseRetryAfter.delete(tabId);
+    const releaseOp = this.releaseOps.get(tabId);
+    if (releaseOp) releaseOp.superseded = true;
     this.releaseOps.delete(tabId);
     this.clearHidden(tabId);
 
@@ -287,12 +293,22 @@ export class PortalManager {
       view,
       phase: "preparing",
       cancelled: false,
+      superseded: false,
       verdict: new Promise<ReleaseVerdict>((resolve) => (settle = resolve)),
     };
     this.releaseOps.set(tabId, op);
     const finish = (verdict: ReleaseVerdict): ReleaseVerdict => {
+      const wasClosing = op.phase === "closing" && this.releaseOps.get(tabId) === op;
       if (this.releaseOps.get(tabId) === op) this.releaseOps.delete(tabId);
       settle(verdict);
+      if (wasClosing && verdict !== "released" && !this.disposed) {
+        // The page was asked; don't ask again for another hour.
+        if (this.viewMap.get(tabId) === view) {
+          this.releaseRetryAfter.set(tabId, Date.now() + PORTAL_IDLE_RELEASE_MS);
+        }
+        // LRU skipped this tab while it was closing; it still counts.
+        this.evictIfNeeded();
+      }
       return verdict;
     };
 
@@ -323,50 +339,48 @@ export class PortalManager {
       const footprint = readTabFootprint(wc);
 
       op.phase = "closing";
-      return new Promise<ReleaseVerdict>((resolve) => {
-        let watchdog: NodeJS.Timeout | undefined;
-        const cleanup = () => {
-          clearTimeout(watchdog);
-          wc.removeListener("will-prevent-unload", onRefused);
-          wc.removeListener("destroyed", onDestroyed);
-        };
-        const onRefused = () => {
-          // No preventDefault(): that would override the page and close it.
-          cleanup();
-          if (this.viewMap.get(tabId) === view) {
-            this.releaseRetryAfter.set(tabId, Date.now() + PORTAL_IDLE_RELEASE_MS);
-          }
-          logInfo("portal.idle-release-refused", { tabId, hiddenMs });
-          resolve(finish("refused"));
-        };
-        const onDestroyed = () => {
-          cleanup();
-          // Superseded by a close or eviction that already reported the tab.
-          if (this.releaseOps.get(tabId) === op) {
-            logInfo("portal.idle-release", { tabId, hiddenMs, ...footprint });
-          }
-          resolve(finish("released"));
-        };
-        watchdog = setTimeout(() => {
-          // Not a refusal: the page may still close. Leave it tracked; the
-          // "destroyed" handler cleans up and reports it if it does.
-          cleanup();
-          logWarn("portal.idle-release-no-verdict", { tabId, hiddenMs });
-          if (this.viewMap.get(tabId) === view) {
-            this.releaseRetryAfter.set(tabId, Date.now() + PORTAL_IDLE_RELEASE_MS);
-          }
-          resolve(finish("unknown"));
-        }, RELEASE_VERDICT_WATCHDOG_MS);
-        wc.once("will-prevent-unload", onRefused);
-        wc.once("destroyed", onDestroyed);
-        try {
-          wc.close({ waitForBeforeUnload: true });
-        } catch (error) {
-          cleanup();
-          console.error(`[PortalManager] Error releasing tab ${tabId}:`, error);
-          resolve(finish("refused"));
-        }
-      });
+      const deadline = setTimeout(() => {
+        // Not a refusal: the page may still close, and "destroyed" still
+        // reports it. A show waiting on this goes ahead.
+        wc.removeListener("will-prevent-unload", onRefused);
+        logWarn("portal.idle-release-no-verdict", { tabId, hiddenMs });
+        finish("unknown");
+      }, RELEASE_VERDICT_DEADLINE_MS);
+      const cleanup = () => {
+        clearTimeout(deadline);
+        wc.removeListener("will-prevent-unload", onRefused);
+        wc.removeListener("destroyed", onDestroyed);
+      };
+      // No preventDefault(): that would override the page and close it.
+      const onRefused = () => {
+        cleanup();
+        logInfo("portal.idle-release-refused", { tabId, hiddenMs });
+        finish("refused");
+      };
+      const onDestroyed = () => {
+        cleanup();
+        if (!op.superseded) logInfo("portal.idle-release", { tabId, hiddenMs, ...footprint });
+        finish("released");
+      };
+      wc.once("will-prevent-unload", onRefused);
+      wc.once("destroyed", onDestroyed);
+      try {
+        wc.close({ waitForBeforeUnload: true });
+      } catch (error) {
+        cleanup();
+        console.error(`[PortalManager] Error releasing tab ${tabId}:`, error);
+        return finish("refused");
+      }
+
+      let watchdog: NodeJS.Timeout | undefined;
+      const result = await Promise.race([
+        op.verdict,
+        new Promise<ReleaseVerdict>((resolve) => {
+          watchdog = setTimeout(() => resolve("unknown"), RELEASE_VERDICT_WATCHDOG_MS);
+        }),
+      ]);
+      clearTimeout(watchdog);
+      return result;
     };
 
     return run();
@@ -375,7 +389,11 @@ export class PortalManager {
   private evictIfNeeded(): void {
     if (this.lruOrder.size <= PORTAL_MAX_LIVE_TABS) return;
 
+    // The newest entry is the tab being created or shown, never the one to go,
+    // even when every older tab is protected or already closing.
+    const newest = [...this.lruOrder.keys()].pop();
     for (const tabId of this.lruOrder.keys()) {
+      if (tabId === newest) break;
       if (tabId === this.activeTabId) continue;
       if (this.isRestoring(tabId)) continue;
       // Already closing; it leaves the budget when its release lands.
