@@ -147,7 +147,7 @@ type TrackedSettingId = (typeof MODIFIED_TRACKED_IDS)[number];
 
 /**
  * What `@modified` can see, said wherever its results are: "tracks selected settings in
- * General, CLI agents, Panel grid and Appearance — not project settings". A bare "2 results" read as
+ * General, Panel grid, CLI agents and Appearance — not project settings". A bare "2 results" read as
  * an exhaustive audit when it is a sample.
  */
 export function modifiedCoverageNote(): string {
