@@ -153,6 +153,15 @@ class OpenAIRequestError extends Error {
   }
 }
 
+// A reply that is discarded whole rather than applied. Its code reaches the
+// logs through voiceErrorLogFields, so a deliberate raw fallback is visible.
+class CorrectionDiscardedError extends Error {
+  constructor(readonly code: "incomplete" | "malformed") {
+    super(`Correction reply ${code}`);
+    this.name = "CorrectionDiscardedError";
+  }
+}
+
 export class VoiceCorrectionService {
   private sessionSignal: AbortSignal | null = null;
 
@@ -599,9 +608,12 @@ export class VoiceCorrectionService {
     // A cut-off reply can still parse, so check the status before the body:
     // the passage is corrected whole or not at all.
     if (data.status === "incomplete") {
-      throw new Error(
-        `Correction response incomplete (${data.incomplete_details?.reason ?? "unknown"}, max ${maxOutputTokens} tokens)`
-      );
+      logDebug(`${P} Correction reply cut off`, {
+        reason: data.incomplete_details?.reason ?? "unknown",
+        maxOutputTokens,
+        rawLen: request.rawText.length,
+      });
+      throw new CorrectionDiscardedError("incomplete");
     }
 
     const parsed = JSON.parse(this.extractResponseText(data)) as CorrectionApiResult;
@@ -610,7 +622,7 @@ export class VoiceCorrectionService {
       typeof parsed.corrected_text !== "string" ||
       !["low", "medium", "high"].includes(parsed.confidence)
     ) {
-      throw new Error("Malformed correction response");
+      throw new CorrectionDiscardedError("malformed");
     }
 
     logDebug(`${P} Correction API usage`, {

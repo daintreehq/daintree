@@ -664,6 +664,10 @@ describe("VoiceCorrectionService", () => {
       const cutOff = await new VoiceCorrectionService().correct({ rawText }, BASE_SETTINGS);
       expect(cutOff.action).toBe("no_change");
       expect(cutOff.confirmedText).toBe(rawText);
+      expect(vi.mocked(logWarn).mock.calls.at(-1)?.[1]).toMatchObject({
+        errorName: "CorrectionDiscardedError",
+        errorCode: "incomplete",
+      });
     });
 
     it("keeps the raw text when the reply drops the end of the passage", async () => {
