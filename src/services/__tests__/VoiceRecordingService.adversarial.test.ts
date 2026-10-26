@@ -152,6 +152,8 @@ const runtime = vi.hoisted(() => ({
   audioContextListeners: new Map<string, () => void>(),
   createdAudioContexts: [] as Array<{
     state: string;
+    resume: ReturnType<typeof vi.fn>;
+    suspend: ReturnType<typeof vi.fn>;
     close: ReturnType<typeof vi.fn>;
     audioWorklet: { addModule: ReturnType<typeof vi.fn> };
   }>,
@@ -488,8 +490,16 @@ function setupGlobals(): void {
       resume: vi.fn(async () => {
         context.state = "running";
       }),
+      suspend: vi.fn(async () => {
+        context.state = "suspended";
+      }),
       addEventListener: vi.fn((type: string, listener: () => void) => {
         runtime.audioContextListeners.set(type, listener);
+      }),
+      removeEventListener: vi.fn((type: string, listener: () => void) => {
+        if (runtime.audioContextListeners.get(type) === listener) {
+          runtime.audioContextListeners.delete(type);
+        }
       }),
       close: vi.fn().mockResolvedValue(undefined),
       createGain: vi.fn(() => ({ gain: { value: 1 }, connect: vi.fn(), disconnect: vi.fn() })),
@@ -499,7 +509,7 @@ function setupGlobals(): void {
         start: vi.fn(),
         stop: vi.fn(),
       })),
-      createMediaStreamSource: vi.fn(() => ({ connect: vi.fn() })),
+      createMediaStreamSource: vi.fn(() => ({ connect: vi.fn(), disconnect: vi.fn() })),
       audioWorklet: { addModule },
     };
     runtime.createdAudioContexts.push(context);
@@ -597,10 +607,13 @@ describe("VoiceRecordingService adversarial", () => {
       expect(runtime.createdStreams).toHaveLength(1);
     });
 
+    // The second start shares the context, so it waits on the same module load.
     const secondStart = voiceRecordingService.start(secondTarget);
     await vi.waitFor(() => {
-      expect(runtime.voiceFns.beginSession).toHaveBeenCalledTimes(1);
+      expect(runtime.createdStreams).toHaveLength(2);
     });
+    expect(firstStream.track.stop).toHaveBeenCalled();
+    expect(runtime.voiceFns.beginSession).not.toHaveBeenCalled();
 
     firstAddModule.resolve();
     await Promise.all([firstStart, secondStart]);
@@ -608,8 +621,11 @@ describe("VoiceRecordingService adversarial", () => {
     expect(runtime.voiceState.activeTarget?.panelId).toBe("panel-2");
     expect(runtime.voiceFns.beginSession).toHaveBeenCalledTimes(1);
     expect(runtime.voiceFns.finishSession).not.toHaveBeenCalled();
-    expect(firstStream.track.stop).toHaveBeenCalled();
-    expect(runtime.createdAudioContexts[0]?.close).toHaveBeenCalled();
+    expect(runtime.createdAudioContexts).toHaveLength(1);
+    expect(runtime.createdAudioContexts[0]!.audioWorklet.addModule).toHaveBeenCalledTimes(1);
+    expect(runtime.createdAudioContexts[0]!.close).not.toHaveBeenCalled();
+    // Parked when the first start let go, and resumed for the second.
+    expect(runtime.createdAudioContexts[0]!.state).toBe("running");
     expect(secondStream.track.stop).not.toHaveBeenCalled();
     expect(runtime.voiceInput.start).toHaveBeenCalledTimes(1);
   });
@@ -801,7 +817,10 @@ describe("VoiceRecordingService adversarial", () => {
 
         expect(sent()).toEqual([tail]);
         expectRemoteStopAfterAudio();
-        expect(runtime.createdAudioContexts[0]!.close).toHaveBeenCalledTimes(1);
+        await vi.waitFor(() =>
+          expect(runtime.createdAudioContexts[0]!.suspend).toHaveBeenCalledTimes(1)
+        );
+        expect(runtime.createdAudioContexts[0]!.close).not.toHaveBeenCalled();
         // The stop, not the stale start, closed the opening window, after the tail.
         const opening = vi
           .mocked(logInfo)
@@ -856,7 +875,9 @@ describe("VoiceRecordingService adversarial", () => {
       await starting;
 
       expect(sent()).toHaveLength(1);
-      expect(runtime.createdWorkletNodes[0]!.port.postMessage).not.toHaveBeenCalled();
+      expect(runtime.createdWorkletNodes[0]!.port.postMessage).not.toHaveBeenCalledWith({
+        type: "flush",
+      });
       expect(runtime.voiceInput.stop).not.toHaveBeenCalled();
       expect(stream.track.stop).toHaveBeenCalled();
     });
@@ -930,7 +951,9 @@ describe("VoiceRecordingService adversarial", () => {
 
       expect(sent()).toEqual([chunk]);
       expect(runtime.createdStreams[0]!.track.stop).toHaveBeenCalled();
-      expect(runtime.createdAudioContexts[0]!.close).toHaveBeenCalled();
+      await vi.waitFor(() =>
+        expect(runtime.createdAudioContexts[0]!.suspend).toHaveBeenCalledTimes(1)
+      );
       expect(runtime.voiceFns.finishSession).toHaveBeenCalledWith({ nextStatus: "error" });
     });
 
@@ -1082,7 +1105,12 @@ describe("VoiceRecordingService adversarial", () => {
       await vi.waitFor(() => {
         expect(newStream.track.stop).toHaveBeenCalled();
       });
-      expect(runtime.createdAudioContexts[1]!.close).toHaveBeenCalled();
+      // Both captures shared one context, parked once neither uses it.
+      expect(runtime.createdAudioContexts).toHaveLength(1);
+      await vi.waitFor(() =>
+        expect(runtime.createdAudioContexts[0]!.state).toBe("suspended")
+      );
+      expect(runtime.createdAudioContexts[0]!.close).not.toHaveBeenCalled();
       expect(runtime.createdWorkletNodes[1]!.port.onmessage).toBeNull();
 
       drain.resolve();
@@ -1099,9 +1127,9 @@ describe("VoiceRecordingService adversarial", () => {
       runtime.voiceState.status = "recording";
       const oldStream = runtime.createdStreams[0]!;
 
-      const failure = Promise.reject(new Error("module failed"));
-      failure.catch(() => {});
-      runtime.addModuleQueue.push(failure);
+      // The worklet is already loaded on the shared context, so the resume is
+      // the step left to fail.
+      runtime.createdAudioContexts[0]!.resume.mockRejectedValueOnce(new Error("resume failed"));
       await voiceRecordingService.start(panelTwo);
 
       expect(oldStream.track.stop).toHaveBeenCalled();

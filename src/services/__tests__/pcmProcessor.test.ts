@@ -91,6 +91,25 @@ describe("pcm-processor worklet", () => {
     expect(processor.port.posted.slice(afterFlush)).toEqual([{ type: "flushed" }]);
   });
 
+  // The AudioContext is reused across dictations, so a finished processor must
+  // end itself rather than stay alive on the shared graph.
+  it("ends itself once flushed", () => {
+    const processor = loadProcessor();
+    expect(processor.process([[new Float32Array(128)]])).toBe(true);
+    send(processor, { type: "flush" });
+    expect(processor.process([[new Float32Array(128)]])).toBe(false);
+  });
+
+  it("ends itself when disposed, even with no input", () => {
+    const processor = loadProcessor();
+    expect(processor.process([])).toBe(true);
+    send(processor, { type: "dispose" });
+
+    expect(processor.process([])).toBe(false);
+    feed(processor, 4800);
+    expect(processor.port.posted).toEqual([]);
+  });
+
   it("still flushes audio captured before a pause", () => {
     const processor = loadProcessor();
     feed(processor, 300);

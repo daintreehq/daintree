@@ -208,12 +208,13 @@ function buildAudioContextMock() {
     connect: vi.fn(),
     disconnect: vi.fn(),
   };
-  const sourceMock = { connect: vi.fn() };
+  const sourceMock = { connect: vi.fn(), disconnect: vi.fn() };
   const ctx = {
     state: "running",
     destination,
     sampleRate: 24000,
     resume: vi.fn().mockResolvedValue(undefined),
+    suspend: vi.fn().mockResolvedValue(undefined),
     close: vi.fn().mockResolvedValue(undefined),
     createGain: vi.fn(() => gainMock),
     createOscillator: vi.fn(() => oscillatorMock),
@@ -439,7 +440,37 @@ describe("VoiceRecordingService — background recording", () => {
     expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledTimes(1);
   });
 
-  it("closes the pre-built AudioContext when the microphone can't be opened", async () => {
+  it("asks for an AudioContext that opens no output device", async () => {
+    const { ctx } = setupGlobals();
+    const audioContextCtor = vi.fn(function () {
+      return ctx;
+    });
+    vi.stubGlobal("AudioContext", audioContextCtor);
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Terminal" });
+
+    expect(audioContextCtor).toHaveBeenCalledWith(
+      expect.objectContaining({ sinkId: { type: "none" } })
+    );
+  });
+
+  it("falls back to the default output when the silent sink is rejected", async () => {
+    const { ctx } = setupGlobals();
+    const audioContextCtor = vi.fn(function (options: { sinkId?: unknown }) {
+      if (options.sinkId) throw new DOMException("unsupported", "NotSupportedError");
+      return ctx;
+    });
+    vi.stubGlobal("AudioContext", audioContextCtor);
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Terminal" });
+
+    expect(audioContextCtor).toHaveBeenCalledTimes(2);
+    expect(window.electron.voiceInput.start).toHaveBeenCalledTimes(1);
+  });
+
+  it("parks the pre-built AudioContext when the microphone can't be opened", async () => {
     const { ctx } = setupGlobals();
     vi.mocked(navigator.mediaDevices.getUserMedia).mockRejectedValue(
       new DOMException("denied", "NotAllowedError")
@@ -448,11 +479,12 @@ describe("VoiceRecordingService — background recording", () => {
     const { voiceRecordingService } = await import("../VoiceRecordingService");
     await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Terminal" });
 
-    expect(ctx.close).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(ctx.suspend).toHaveBeenCalledTimes(1));
+    expect(ctx.close).not.toHaveBeenCalled();
     expect(ctx.createMediaStreamSource).not.toHaveBeenCalled();
   });
 
-  it("closes the pre-built AudioContext when the start is cancelled while the microphone is pending", async () => {
+  it("releases the microphone when the start is cancelled while it is pending", async () => {
     const { ctx } = setupGlobals();
     const getUserMedia = vi.mocked(navigator.mediaDevices.getUserMedia);
     const stream = await getUserMedia({ audio: true });
@@ -470,20 +502,27 @@ describe("VoiceRecordingService — background recording", () => {
     await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalled());
 
     await voiceRecordingService.stop();
-    expect(ctx.close).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(ctx.suspend).toHaveBeenCalledTimes(1));
 
     grantMicrophone();
     await starting;
 
     // The stale start still releases the late-arriving microphone, without
-    // closing the already-closed context a second time.
+    // releasing the already-released context a second time.
     expect(getTracks).toHaveBeenCalled();
-    expect(ctx.close).toHaveBeenCalledTimes(1);
+    await Promise.resolve();
+    expect(ctx.suspend).toHaveBeenCalledTimes(1);
+    expect(ctx.close).not.toHaveBeenCalled();
     expect(ctx.createMediaStreamSource).not.toHaveBeenCalled();
   });
 
-  it("tears down the keep-alive oscillator and AudioContext when stop() is called", async () => {
-    const { ctx, oscillatorMock, gainMock } = setupGlobals();
+  it("releases the microphone and parks the AudioContext when stop() is called", async () => {
+    const { ctx, oscillatorMock, workletNodes } = setupGlobals();
+    const track = { stop: vi.fn() };
+    vi.mocked(navigator.mediaDevices.getUserMedia).mockResolvedValue({
+      getTracks: () => [track],
+      getAudioTracks: () => [{}],
+    } as unknown as MediaStream);
 
     const { __state } = (await import("@/store/voiceRecordingStore")) as unknown as {
       __state: { activeTarget: { panelId: string } | null };
@@ -495,12 +534,101 @@ describe("VoiceRecordingService — background recording", () => {
     await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Terminal" });
     await voiceRecordingService.stop("Dictation stopped.", { skipRemoteStop: true });
 
-    expect(oscillatorMock.stop).toHaveBeenCalled();
-    expect(oscillatorMock.disconnect).toHaveBeenCalled();
-    expect(gainMock.disconnect).toHaveBeenCalled();
-    expect(ctx.close).toHaveBeenCalled();
+    expect(track.stop).toHaveBeenCalled();
+    expect(workletNodes[0]!.port.postMessage).toHaveBeenCalledWith({ type: "dispose" });
+    expect(workletNodes[0]!.disconnect).toHaveBeenCalled();
+    await vi.waitFor(() => expect(ctx.suspend).toHaveBeenCalledTimes(1));
+    expect(oscillatorMock.stop).not.toHaveBeenCalled();
+    expect(ctx.close).not.toHaveBeenCalled();
 
     __state.activeTarget = null;
+  });
+
+  it("reuses the AudioContext and worklet for the next dictation, with a fresh microphone", async () => {
+    const { ctx } = setupGlobals();
+    const audioContextCtor = vi.fn(function () {
+      return ctx;
+    });
+    vi.stubGlobal("AudioContext", audioContextCtor);
+    const tracks = [{ stop: vi.fn() }, { stop: vi.fn() }];
+    const getUserMedia = vi.mocked(navigator.mediaDevices.getUserMedia);
+    for (const track of tracks) {
+      getUserMedia.mockResolvedValueOnce({
+        getTracks: () => [track],
+        getAudioTracks: () => [{}],
+      } as unknown as MediaStream);
+    }
+
+    const { __state } = (await import("@/store/voiceRecordingStore")) as unknown as {
+      __state: { activeTarget: { panelId: string } | null };
+    };
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    for (const track of tracks) {
+      __state.activeTarget = { panelId: "panel-1" };
+      await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Terminal" });
+      await voiceRecordingService.stop("Dictation stopped.", { skipRemoteStop: true });
+      expect(track.stop).toHaveBeenCalled();
+    }
+
+    expect(audioContextCtor).toHaveBeenCalledTimes(1);
+    expect(ctx.audioWorklet.addModule).toHaveBeenCalledTimes(1);
+    expect(ctx.createOscillator).toHaveBeenCalledTimes(1);
+    expect(getUserMedia).toHaveBeenCalledTimes(2);
+    expect(ctx.createMediaStreamSource).toHaveBeenCalledTimes(2);
+    // The second start resumes the context the first stop suspended.
+    await vi.waitFor(() => expect(ctx.suspend).toHaveBeenCalledTimes(2));
+    expect(ctx.resume.mock.invocationCallOrder[1]!).toBeGreaterThan(
+      ctx.suspend.mock.invocationCallOrder[0]!
+    );
+    expect(ctx.close).not.toHaveBeenCalled();
+    __state.activeTarget = null;
+  });
+
+  it("closes the idle AudioContext after a few minutes, and builds a new one after", async () => {
+    const { ctx } = setupGlobals();
+    const audioContextCtor = vi.fn(function () {
+      return ctx;
+    });
+    vi.stubGlobal("AudioContext", audioContextCtor);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const { __state } = (await import("@/store/voiceRecordingStore")) as unknown as {
+        __state: { activeTarget: { panelId: string } | null };
+      };
+      const { voiceRecordingService } = await import("../VoiceRecordingService");
+      __state.activeTarget = { panelId: "panel-1" };
+      await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Terminal" });
+      await voiceRecordingService.stop("Dictation stopped.", { skipRemoteStop: true });
+
+      vi.advanceTimersByTime(60_000);
+      expect(ctx.close).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(5 * 60_000);
+      expect(ctx.close).toHaveBeenCalledTimes(1);
+
+      __state.activeTarget = { panelId: "panel-1" };
+      await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Terminal" });
+      expect(audioContextCtor).toHaveBeenCalledTimes(2);
+      __state.activeTarget = null;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("builds a fresh AudioContext after the worklet fails to load", async () => {
+    const { ctx } = setupGlobals();
+    const audioContextCtor = vi.fn(function () {
+      return ctx;
+    });
+    vi.stubGlobal("AudioContext", audioContextCtor);
+    ctx.audioWorklet.addModule.mockRejectedValueOnce(new Error("module failed"));
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Terminal" });
+    expect(ctx.close).toHaveBeenCalledTimes(1);
+
+    await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Terminal" });
+    expect(audioContextCtor).toHaveBeenCalledTimes(2);
+    expect(ctx.audioWorklet.addModule).toHaveBeenCalledTimes(2);
   });
 
   it("stops recording when the active panel is moved to trash (panel-close regression)", async () => {
