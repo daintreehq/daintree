@@ -9,7 +9,8 @@ import { getAppMetricsSnapshot } from "../utils/appMetricsSnapshot.js";
 import { logInfo, logWarn } from "../utils/logger.js";
 import { getProcessMemoryKb } from "../utils/processMemory.js";
 import { getFocusedPanelTracker } from "./FocusedPanelTracker.js";
-import { findPortalPageAction, isDictationKey } from "./menuAccelerators.js";
+import { findPortalPageAction } from "./menuAccelerators.js";
+import { claimDictationKey } from "../ipc/handlers/voiceInput.js";
 
 // Tab keys a focused portal page hands to the portal rather than to the page
 // or the native menu: with the page focused the app renderer never sees the
@@ -543,11 +544,8 @@ export class PortalManager {
       });
 
       view.webContents.on("before-input-event", (event, input) => {
-        if (isDictationKey(input)) {
+        if (claimDictationKey(input)) {
           event.preventDefault();
-          if (!input.isAutoRepeat) {
-            this.sendToApp(CHANNELS.MENU_ACTION, { actionId: "voiceInput.toggle" });
-          }
           return;
         }
         const actionId = findPortalPageAction(input, PORTAL_PAGE_KEY_ACTIONS);

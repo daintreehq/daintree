@@ -348,11 +348,7 @@ export function findTerminalCycleAction(
     : { actionId };
 }
 
-/**
- * Whether this keystroke is the dictation key as the person has it bound. A
- * focused page that isn't an app view hands it to the app, which stops the
- * session wherever it runs or starts one (#14601).
- */
+/** Whether this keystroke is the dictation key as the person has it bound. */
 export function isDictationKey(input: Electron.Input): boolean {
   return findActionForInput(input, ["voiceInput.toggle"], "global") !== undefined;
 }

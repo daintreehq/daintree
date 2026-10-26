@@ -2417,7 +2417,9 @@ class VoiceRecordingService {
     useVoiceRecordingStore
       .getState()
       .announce(
-        session.projectName ? `Dictation stopped in ${session.projectName}.` : "Dictation stopped."
+        session.projectName
+          ? `Stopping dictation in ${session.projectName}.`
+          : "Stopping dictation."
       );
   }
 

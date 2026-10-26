@@ -2513,7 +2513,7 @@ describe("VoiceRecordingService — a session another view owns (#14601)", () =>
     expect(startSpy).not.toHaveBeenCalled();
     expect(toggleSpy).not.toHaveBeenCalled();
     expect(stopSpy).not.toHaveBeenCalled();
-    expect(announce).toHaveBeenCalledWith("Dictation stopped in Alpha.");
+    expect(announce).toHaveBeenCalledWith("Stopping dictation in Alpha.");
   });
 
   it("stops this view's own session first, leaving the other view alone", async () => {

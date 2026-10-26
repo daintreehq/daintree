@@ -21,7 +21,7 @@ import {
 import { getWebviewDialogService } from "../../services/WebviewDialogService.js";
 import { looksLikeOAuthUrl } from "../../services/OAuthLoopbackService.js";
 import { CHANNELS } from "../../ipc/channels.js";
-import { isDictationKey } from "../../services/menuAccelerators.js";
+import { claimDictationKey } from "../../ipc/handlers/voiceInput.js";
 import { getDistPath } from "./app.js";
 
 /** True for any `daintree-html://…` request URL (the sandboxed preview scheme). */
@@ -452,16 +452,8 @@ export function setupWebviewCSP(): void {
       contents.on("before-input-event", (event, input) => {
         if (input.type !== "keyDown") return;
 
-        // The host view decides what the dictation key does, as it would with
-        // its own focus: stop the session wherever it runs, or start one.
-        if (isDictationKey(input)) {
-          const hostWindow = getWindowForWebContents(contents.hostWebContents ?? contents);
-          if (!hostWindow || hostWindow.isDestroyed()) return;
+        if (claimDictationKey(input)) {
           event.preventDefault();
-          if (input.isAutoRepeat) return;
-          getAppWebContents(hostWindow).send(CHANNELS.MENU_ACTION, {
-            actionId: "voiceInput.toggle",
-          });
           return;
         }
 

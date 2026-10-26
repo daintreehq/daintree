@@ -82,12 +82,15 @@ const lifecycleMocks = vi.hoisted(() => ({
 
 vi.mock("../../utils/webContentsLifecycle.js", () => lifecycleMocks);
 
-const acceleratorMocks = vi.hoisted(() => ({
+const keyMocks = vi.hoisted(() => ({
   findPortalPageAction: vi.fn((): string | undefined => undefined),
-  isDictationKey: vi.fn(() => false),
+  claimDictationKey: vi.fn(() => false),
 }));
 
-vi.mock("../menuAccelerators.js", () => acceleratorMocks);
+vi.mock("../menuAccelerators.js", () => ({ findPortalPageAction: keyMocks.findPortalPageAction }));
+vi.mock("../../ipc/handlers/voiceInput.js", () => ({
+  claimDictationKey: keyMocks.claimDictationKey,
+}));
 
 describe("PortalManager", () => {
   let PortalManagerClass: typeof import("../PortalManager.js").PortalManager;
@@ -155,28 +158,25 @@ describe("PortalManager", () => {
     }
 
     afterEach(() => {
-      acceleratorMocks.isDictationKey.mockReturnValue(false);
+      keyMocks.claimDictationKey.mockReturnValue(false);
     });
 
-    it("hands it to the app once per press", () => {
-      acceleratorMocks.isDictationKey.mockReturnValue(true);
+    it("takes the key from the page when it stops dictation running elsewhere", () => {
+      keyMocks.claimDictationKey.mockReturnValue(true);
       const handler = pageKeyHandler();
       const event = { preventDefault: vi.fn() };
 
       handler(event, { type: "keyDown", key: ".", meta: true, isAutoRepeat: false });
-      handler(event, { type: "keyDown", key: ".", meta: true, isAutoRepeat: true });
 
-      expect(event.preventDefault).toHaveBeenCalledTimes(2);
-      expect(
-        vi.mocked(mockWindow.webContents.send).mock.calls.filter(([channel]) => channel === "menu:action")
-      ).toEqual([["menu:action", { actionId: "voiceInput.toggle" }]]);
+      expect(event.preventDefault).toHaveBeenCalledTimes(1);
+      expect(keyMocks.findPortalPageAction).not.toHaveBeenCalled();
     });
 
-    it("leaves other keys to the page", () => {
+    it("leaves the key to the page when nothing is running", () => {
       const handler = pageKeyHandler();
       const event = { preventDefault: vi.fn() };
 
-      handler(event, { type: "keyDown", key: "k", meta: true, isAutoRepeat: false });
+      handler(event, { type: "keyDown", key: ".", meta: true, isAutoRepeat: false });
 
       expect(event.preventDefault).not.toHaveBeenCalled();
     });

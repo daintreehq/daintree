@@ -62,6 +62,7 @@ import {
   type VoiceInputStartOptions,
 } from "../../schemas/ipc.js";
 import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
+import { isDictationKey } from "../../services/menuAccelerators.js";
 import {
   getAllAppWebContents,
   getAppWebContents,
@@ -174,6 +175,31 @@ export function getLiveVoiceSession(): {
     webContentsId: liveSession.webContentsId,
     projectId: liveSession.projectId,
   };
+}
+
+/**
+ * Ask the live session's owner to stop it, as the owner's own dictation key
+ * would: the owner drains it, so the text lands in its draft and its microphone
+ * is released. False when nothing is live, or when `sessionId` names another.
+ */
+export function requestLiveSessionStop(sessionId?: string): boolean {
+  const session = liveSession;
+  if (!session || session.ended || session.sender.isDestroyed()) return false;
+  if (sessionId !== undefined && session.id !== sessionId) return false;
+  session.sender.send(CHANNELS.VOICE_INPUT_STOP_REQUESTED, { sessionId: session.id });
+  return true;
+}
+
+/**
+ * Whether a focused page that isn't an app view (a browser or dev-preview
+ * guest, a portal tab) takes this keystroke from the page. The dictation key
+ * stops dictation running in any view, as it would from an app view; a held
+ * key's repeats go with it. With nothing running it stays the page's (#14601).
+ */
+export function claimDictationKey(input: Electron.Input): boolean {
+  if (!isDictationKey(input)) return false;
+  if (input.isAutoRepeat) return liveSession !== null && !liveSession.ended;
+  return requestLiveSessionStop();
 }
 
 /**
@@ -1104,15 +1130,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
   const handleGetLiveSession = (ctx: IpcContext): VoiceLiveSessionUpdate =>
     liveSessionUpdateFor(ctx.webContentsId);
 
-  // Another view's dictation key. The owner runs its own stop, so the text
-  // lands in its draft and its microphone is released.
-  const handleStopLive = (sessionId: string): boolean => {
-    const session = liveSession;
-    if (!session || session.id !== sessionId || session.ended) return false;
-    if (session.sender.isDestroyed()) return false;
-    session.sender.send(CHANNELS.VOICE_INPUT_STOP_REQUESTED, { sessionId });
-    return true;
-  };
+  // Another view's dictation key.
+  const handleStopLive = (sessionId: string): boolean => requestLiveSessionStop(sessionId);
 
   // Another view's indicator. The owner's own window brings it forward: a
   // switch asked from any other window would release the owner's cached view

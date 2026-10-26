@@ -121,7 +121,15 @@ vi.mock("../../../window/webContentsRegistry.js", async (importOriginal) => {
   };
 });
 
-import { registerVoiceInputHandlers, getLiveVoiceSession } from "../voiceInput.js";
+vi.mock("../../../services/menuAccelerators.js", () => ({
+  isDictationKey: vi.fn((input: { key: string }) => input.key === "."),
+}));
+
+import {
+  registerVoiceInputHandlers,
+  getLiveVoiceSession,
+  claimDictationKey,
+} from "../voiceInput.js";
 import { CHANNELS } from "../../channels.js";
 import { projectStore } from "../../../services/ProjectStore.js";
 import { AUDIO_BUFFER_MAX_CHUNKS } from "../../../services/voice/TranscriptionProvider.js";
@@ -879,6 +887,42 @@ describe("voiceInput — a session live in another view (#14601)", () => {
       { actionId: "project.switch", args: { projectId: "project-a" } },
     ]);
     expect(sentOn(ownerA, CHANNELS.VOICE_INPUT_REVEAL_REQUESTED)).toEqual([{ sessionId: "a" }]);
+  });
+
+  describe("the dictation key on a page that isn't an app view", () => {
+    const press = (overrides: Partial<Electron.Input> = {}) =>
+      ({ type: "keyDown", key: ".", isAutoRepeat: false, ...overrides }) as Electron.Input;
+
+    it("asks the owner to stop and takes the key from the page", async () => {
+      await start(ownerA, "a");
+
+      expect(claimDictationKey(press())).toBe(true);
+      expect(sentOn(ownerA, CHANNELS.VOICE_INPUT_STOP_REQUESTED)).toEqual([{ sessionId: "a" }]);
+    });
+
+    it("takes a held key's repeats without asking again", async () => {
+      await start(ownerA, "a");
+
+      expect(claimDictationKey(press({ isAutoRepeat: true }))).toBe(true);
+      expect(sentOn(ownerA, CHANNELS.VOICE_INPUT_STOP_REQUESTED)).toEqual([]);
+    });
+
+    it("leaves the key to the page when nothing is running", async () => {
+      expect(claimDictationKey(press())).toBe(false);
+      expect(claimDictationKey(press({ isAutoRepeat: true }))).toBe(false);
+
+      await start(ownerA, "a");
+      await stop(ownerA, "a");
+      expect(claimDictationKey(press())).toBe(false);
+      expect(sentOn(ownerA, CHANNELS.VOICE_INPUT_STOP_REQUESTED)).toEqual([]);
+    });
+
+    it("leaves every other key to the page", async () => {
+      await start(ownerA, "a");
+
+      expect(claimDictationKey(press({ key: "k" }))).toBe(false);
+      expect(sentOn(ownerA, CHANNELS.VOICE_INPUT_STOP_REQUESTED)).toEqual([]);
+    });
   });
 
   it("reveals nothing for a session that isn't the live one", async () => {
