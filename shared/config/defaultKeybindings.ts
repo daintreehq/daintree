@@ -1031,9 +1031,11 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     description: "Open settings",
     category: "System",
   },
+  // Under the thumb and middle finger on the Mac. Off the Mac it would fold to
+  // Ctrl+D, a shell's EOF, so the replacement tables keep their own keys.
   {
     actionId: "voiceInput.toggle",
-    combo: "Cmd+.",
+    combo: "Cmd+D",
     scope: "global",
     priority: 0,
     description: "Toggle voice dictation",
@@ -1268,6 +1270,14 @@ const WINDOWS_ONLY_KEYBINDINGS: KeybindingConfig[] = [
 // over from the overview family, and Ctrl+Shift+O is none of the keys Daintree
 // reserves for the PTY.
 const NON_MAC_REPLACEMENT_KEYBINDINGS: KeybindingConfig[] = [
+  {
+    actionId: "voiceInput.toggle",
+    combo: "Ctrl+.",
+    scope: "global",
+    priority: 0,
+    description: "Toggle voice dictation",
+    category: "Voice",
+  },
   // Ctrl+Y is Redo in text fields and editors off the Mac; it accepts the fleet
   // only from outside them.
   {
@@ -1397,7 +1407,8 @@ export function buildDefaultKeybindings(isWindows: boolean, isLinux = false): Ke
     : [...CORE_KEYBINDINGS, ...REMOTE_HOSTS_KEYBINDINGS];
   if (!isWindows && !isLinux) return bindings;
   const replacements = isLinux
-    ? [...NON_MAC_REPLACEMENT_KEYBINDINGS, ...LINUX_REPLACEMENT_KEYBINDINGS]
+    ? // Linux first: the first match wins, and Linux overrides the shared dictation key.
+      [...LINUX_REPLACEMENT_KEYBINDINGS, ...NON_MAC_REPLACEMENT_KEYBINDINGS]
     : NON_MAC_REPLACEMENT_KEYBINDINGS;
   const replaced = bindings.map(
     (binding) =>
