@@ -418,6 +418,8 @@ describe("VoiceRecordingService — Escape cancels a dictation (#14631)", () => 
     service.handleEscape(PANEL);
     await settled();
     callbacks.ended!({ sessionId: "session-2", reason: "cancelled" });
+    const discarded: unknown = Reflect.get(service, "discardedSessionIds");
+    expect(discarded).toEqual(new Set([SESSION_ID]));
     begin("session-3");
 
     complete("Late.", "item-a", SESSION_ID);
