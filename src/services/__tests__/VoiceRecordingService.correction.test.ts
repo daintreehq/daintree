@@ -650,6 +650,42 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
 
       expect(draft("panel-1")).toBe("add zoo stand now");
     });
+
+    it("rewrites a split phrase dictated mid-draft in place, with the typed text around it intact", async () => {
+      dictionary = [rule("Zustand", "zoo stand")];
+      const { service, dictate, say, draft, inputStore, voiceStore, baseline } = await setup();
+      voiceStore.getState().setCorrectionEnabled(false);
+      const typed = "Please then test it.";
+      inputStore.getState().setDraftInput("panel-1", typed);
+      const caret = await import("@/lib/composerCaret");
+      caret.recordComposerState(
+        "panel-1",
+        {},
+        {
+          doc: { length: typed.length, toString: () => typed },
+          selection: { main: { from: 7, to: 7 } },
+        }
+      );
+
+      dictate("panel-1", "use zoo");
+      say("stand");
+      expect(draft("panel-1")).toBe("Please use zoo stand then test it.");
+      await service.stop();
+
+      expect(draft("panel-1")).toBe("Please use Zustand then test it.");
+      const { useDictationRangeStore } = await import("@/store/dictationRangeStore");
+      const [record] = useDictationRangeStore.getState().listDictations("panel-1");
+      const { from, to } = record!.learningSpan!;
+      expect(draft("panel-1").slice(from, to)).toBe("use Zustand");
+      expect(record!.utterances).toHaveLength(1);
+      expect(record!.utterances[0]!.separatorAfter).toEqual({ from: 18, to: 19, edited: false });
+      expect(baseline("panel-1")).toBe("use Zustand");
+      // The caret that followed the words is still right after them.
+      expect(caret.takePendingComposerSelection("panel-1", draft("panel-1"))).toEqual({
+        from: 18,
+        to: 18,
+      });
+    });
   });
 });
 
