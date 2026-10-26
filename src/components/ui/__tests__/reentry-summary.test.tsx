@@ -154,8 +154,7 @@ describe("ReEntrySummary", () => {
     expect(open.getAttribute("data-notification-action")).toBe("primary");
   });
 
-  it("Open notifications button calls openNotificationCenter", async () => {
-    const { useUIStore } = await import("@/store/uiStore");
+  it("Open notifications button calls openNotificationCenter", () => {
     const openSpy = vi.fn();
     useUIStore.setState({ openNotificationCenter: openSpy });
 
@@ -272,8 +271,7 @@ describe("ReEntrySummary", () => {
     expect(time()?.textContent).toBe("5m ago");
   });
 
-  it("overflow row opens notification center", async () => {
-    const { useUIStore } = await import("@/store/uiStore");
+  it("overflow row opens notification center", () => {
     const openSpy = vi.fn();
     useUIStore.setState({ openNotificationCenter: openSpy });
 
