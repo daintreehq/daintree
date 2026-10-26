@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { planVoiceWords } from "@/services/voiceInsertion";
+import { planVoiceBreak, planVoiceWords, type VoiceInsertPlan } from "@/services/voiceInsertion";
 import { useTerminalInputStore } from "../terminalInputStore";
 import {
   dictatedSpans,
@@ -585,7 +585,7 @@ describe("dictationRangeStore", () => {
       expect(draft()).toBe("Keep First.\n");
       expect(only().breaks.map(textOf)).toEqual(["\n"]);
       expect(only().breaks.every((paragraphBreak) => !paragraphBreak.edited)).toBe(true);
-      const spans = dictatedSpans(only(), draft().length)!;
+      const spans = dictatedSpans(only(), draft())!;
       expect(
         spans.reduce((text, { from, to }) => text.slice(0, from) + text.slice(to), draft())
       ).toBe("Keep");
@@ -616,7 +616,7 @@ describe("dictationRangeStore", () => {
       paragraphBreak();
       dictate("second");
 
-      const spans = dictatedSpans(only(), draft().length)!;
+      const spans = dictatedSpans(only(), draft())!;
       expect(spans.map(textOf)).toEqual(["second", "\n", " first"]);
       expect(without(spans)).toBe("Keep");
     });
@@ -630,13 +630,13 @@ describe("dictationRangeStore", () => {
       setDraft(draft() + " after");
 
       expect(only().range.edited).toBe(true);
-      expect(without(dictatedSpans(only(), draft().length)!)).toBe("Before Start typed after");
+      expect(without(dictatedSpans(only(), draft())!)).toBe("Before Start typed after");
     });
 
     it("refuses once an utterance's words were edited", () => {
       dictate("hello world");
       setDraft(draft().replace("world", "there"));
-      expect(dictatedSpans(only(), draft().length)).toBeNull();
+      expect(dictatedSpans(only(), draft())).toBeNull();
     });
 
     it("refuses once text was typed between an utterance's separator and its words", () => {
@@ -644,7 +644,7 @@ describe("dictationRangeStore", () => {
       dictate("words");
       edit(5, 5, "typed ");
       expect(draft()).toBe("Keep typed words");
-      expect(dictatedSpans(only(), draft().length)).toBeNull();
+      expect(dictatedSpans(only(), draft())).toBeNull();
     });
 
     it("refuses once the separator itself was replaced", () => {
@@ -655,7 +655,7 @@ describe("dictationRangeStore", () => {
       const [utterance] = only().utterances;
       expect(utterance!.range.edited).toBe(false);
       expect(utterance!.insertion.edited).toBe(true);
-      expect(dictatedSpans(only(), draft().length)).toBeNull();
+      expect(dictatedSpans(only(), draft())).toBeNull();
     });
 
     it("lists a break spoken before any words and each break after it", () => {
@@ -667,7 +667,7 @@ describe("dictationRangeStore", () => {
       dictate("second");
 
       expect(only().breaks).toHaveLength(3);
-      const spans = dictatedSpans(only(), draft().length)!;
+      const spans = dictatedSpans(only(), draft())!;
       expect(spans.map(textOf)).toEqual(["second", "\n", "\n", "first", "\n"]);
       expect(without(spans)).toBe("Keep");
     });
@@ -677,12 +677,12 @@ describe("dictationRangeStore", () => {
       paragraphBreak();
       dictate("second");
       setDraft("firstsecond");
-      expect(dictatedSpans(only(), draft().length)).toBeNull();
+      expect(dictatedSpans(only(), draft())).toBeNull();
     });
 
     it("refuses spans that no longer fit the draft", () => {
       dictate("words");
-      expect(dictatedSpans(only(), 2)).toBeNull();
+      expect(dictatedSpans(only(), draft().slice(0, 2))).toBeNull();
     });
   });
 });
@@ -783,6 +783,82 @@ describe("taking the last utterance at the caret (#14634)", () => {
     dictateMidDraft();
     edit(11, 12, "_");
     expect(take()).toEqual({ from: 7, to: 11 });
+  });
+});
+
+describe("cancelling a dictation at the caret (#14631, #14634)", () => {
+  const anchor = () => useDictationRangeStore.getState().getAnchor(target);
+
+  /** Writes a plan and records it the way the voice service does. */
+  function commit(plan: VoiceInsertPlan, words: boolean): void {
+    const store = useDictationRangeStore.getState();
+    store.expectDraftChange(PANEL, PROJECT, draft(), plan.next, plan.change);
+    setDraft(plan.next);
+    if (words) {
+      store.recordUtterance(target, {
+        insertion: plan.insertion,
+        words: plan.words,
+        ...(plan.separatorAfter ? { separatorAfter: plan.separatorAfter } : {}),
+      });
+    } else {
+      store.recordParagraphBreak(target, plan.insertion);
+    }
+    store.setAnchor(target, plan.anchor);
+  }
+  const speak = (text: string) => commit(planVoiceWords(draft(), anchor(), text), true);
+  const breakLine = () => commit(planVoiceBreak(draft(), anchor()), false);
+  const cancelled = () => {
+    const spans = dictatedSpans(only(), draft());
+    return (
+      spans && spans.reduce((text, { from, to }) => text.slice(0, from) + text.slice(to), draft())
+    );
+  };
+
+  beforeEach(() => {
+    setDraft("Intro. Outro.");
+    useDictationRangeStore.getState().setAnchor(target, { from: 7, to: 7 });
+  });
+
+  it("takes the words and the space they were given ahead of the text after them", () => {
+    speak("One.");
+    speak("Two.");
+    expect(draft()).toBe("Intro. One. Two. Outro.");
+
+    expect(cancelled()).toBe("Intro. Outro.");
+  });
+
+  it("takes a paragraph break spoken between them too", () => {
+    speak("One.");
+    breakLine();
+    speak("Two.");
+    expect(draft()).toBe("Intro. One.\nTwo. Outro.");
+
+    expect(cancelled()).toBe("Intro. Outro.");
+  });
+
+  it("keeps text typed on both sides of the dictation", () => {
+    speak("One.");
+    edit(0, 0, "Say: ");
+    edit(draft().length, draft().length, " Done");
+    expect(draft()).toBe("Say: Intro. One. Outro. Done");
+
+    expect(cancelled()).toBe("Say: Intro. Outro. Done");
+  });
+
+  it("leaves the space once text is typed between it and the words", () => {
+    speak("One.");
+    edit(11, 11, "X");
+    expect(draft()).toBe("Intro. One.X Outro.");
+
+    expect(cancelled()).toBe("Intro. X Outro.");
+  });
+
+  it("still takes the words once that space was deleted", () => {
+    speak("One.");
+    edit(11, 12, "");
+    expect(draft()).toBe("Intro. One.Outro.");
+
+    expect(cancelled()).toBe("Intro. Outro.");
   });
 });
 

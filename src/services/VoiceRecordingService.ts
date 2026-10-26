@@ -330,6 +330,15 @@ function findDictation(
   );
 }
 
+/** Where `offset` ends up once each span is taken out; one inside a span goes to its start. */
+function offsetAfterRemoving(offset: number, spans: DictationTextSpan[]): number {
+  let removed = 0;
+  for (const { from, to } of spans) {
+    if (from < offset) removed += Math.min(offset, to) - from;
+  }
+  return offset - removed;
+}
+
 interface CaptureAttempt {
   target: VoiceRecordingTarget;
   audio: WarmAudio;
@@ -643,13 +652,13 @@ class VoiceRecordingService {
         const buffer = voiceState.panelBuffers[panelId];
         if (!buffer) return;
 
-        const sessionId = buffer.dictationSessionId;
+        const { dictationSessionId } = buffer;
         const draft = useTerminalInputStore.getState().getDraftInput(panelId, projectId);
         const plan = planVoiceBreak(
           draft,
-          resolveVoiceAnchor(panelId, projectId, sessionId, draft)
+          resolveVoiceAnchor(panelId, projectId, dictationSessionId, draft)
         );
-        commitVoicePlan(panelId, projectId, sessionId, plan, (target, { insertion }) =>
+        commitVoicePlan(panelId, projectId, dictationSessionId, plan, (target, { insertion }) =>
           useDictationRangeStore.getState().recordParagraphBreak(target, insertion)
         );
 
@@ -1108,7 +1117,7 @@ class VoiceRecordingService {
       state.panelBuffers[target.panelId]?.dictationSessionId ?? null
     );
     const draft = useTerminalInputStore.getState().getDraftInput(target.panelId, target.projectId);
-    const spans = record ? dictatedSpans(record, draft.length) : [];
+    const spans = record ? dictatedSpans(record, draft) : [];
     if (!spans) {
       void this.stop(
         "Dictation stopped. Its text was kept because it changed after you dictated it.",
@@ -1143,21 +1152,41 @@ class VoiceRecordingService {
     this.generation++;
     const wasMicLive = useVoiceRecordingStore.getState().micSignal === "live";
 
+    // Before the removals, so none of them stops to carry an anchor along.
+    releaseActiveVoiceAnchors();
     if (record) {
       const { panelId, projectId } = target;
       const inputStore = useTerminalInputStore.getState();
       const draft = inputStore.getDraftInput(panelId, projectId);
+      const draftKey = makeDraftKey(panelId, projectId);
+      const caret =
+        peekPendingComposerSelection(draftKey, draft) ?? readComposerSelection(draftKey, draft);
       // Last first, so each removal leaves the earlier offsets where they were.
-      const next = spans.reduce(
-        (text, { from, to }) => text.slice(0, from) + text.slice(to),
-        draft
-      );
-      if (next !== draft) {
+      // Each is written on its own and spelled out, so other sessions' ranges
+      // and the text typed between ours follow what was actually removed, not
+      // a diff's guess across the whole stretch.
+      let next = draft;
+      for (const { from, to } of spans) {
+        if (from === to) continue;
+        const before = next;
+        next = before.slice(0, from) + before.slice(to);
+        useDictationRangeStore
+          .getState()
+          .expectDraftChange(panelId, projectId, before, next, { from, to, insert: "" });
         inputStore.setDraftInput(panelId, next, projectId);
+      }
+      if (next !== draft) {
+        // The caret stays on the text it was in, wherever the removals left it.
+        if (caret) {
+          setPendingComposerSelection(draftKey, next, {
+            from: offsetAfterRemoving(caret.from, spans),
+            to: offsetAfterRemoving(caret.to, spans),
+          });
+        }
         // Like a scratch, an edit rather than a send: the composer keeps its
         // undo history even when the cancel empties the draft.
         recordScratchLanded(panelId, projectId, next);
-        inputStore.bumpExternalDraftRevision();
+        inputStore.bumpExternalDraftRevision({ keepsSelection: true });
       }
       useDictationRangeStore.getState().releaseDictation(record.id);
     }

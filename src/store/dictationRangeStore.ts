@@ -225,11 +225,13 @@ function mapRecord(record: DictationRecord, change: TextChange): DictationRecord
  * out: each utterance with its separator, and each paragraph break. Text typed
  * between them stays where it is. Null once any of them has been edited,
  * because removing them would take the user's edits with them.
+ *
+ * The space an utterance was given ahead of the text after it goes too while
+ * it is untouched and still right after something removed, as a scratch takes
+ * it, so dictation at the caret leaves the text around it as it was. Edited, or
+ * with text typed up against the words, it stays: it is no longer only ours.
  */
-export function dictatedSpans(
-  record: DictationRecord,
-  draftLength: number
-): DictationTextSpan[] | null {
+export function dictatedSpans(record: DictationRecord, draft: string): DictationTextSpan[] | null {
   // An insertion holds its utterance's words, so an edit to them flags it too.
   const pieces = [...record.utterances.map((u) => u.insertion), ...record.breaks];
   if (pieces.some((piece) => piece.edited)) return null;
@@ -237,9 +239,21 @@ export function dictatedSpans(
   for (let i = 0; i < spans.length; i++) {
     const span = spans[i]!;
     const later = spans[i - 1];
-    if (span.from < 0 || span.to > draftLength || (later && span.to > later.from)) return null;
+    if (span.from < 0 || span.to > draft.length || (later && span.to > later.from)) return null;
   }
-  return spans;
+  const separators = record.utterances.flatMap(({ separatorAfter: separator }) =>
+    separator &&
+    !separator.edited &&
+    separator.from < separator.to &&
+    separator.to <= draft.length &&
+    draft.slice(separator.from, separator.to).trim() === "" &&
+    spans.some((span) => span.to === separator.from) &&
+    !spans.some((span) => span.from < separator.to && span.to > separator.from)
+      ? [{ from: separator.from, to: separator.to }]
+      : []
+  );
+  if (separators.length === 0) return spans;
+  return [...spans, ...separators].sort((a, b) => b.from - a.from);
 }
 
 /**

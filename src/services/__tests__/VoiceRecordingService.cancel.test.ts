@@ -586,3 +586,147 @@ describe("VoiceRecordingService — Escape cancels a dictation (#14631)", () => 
     expect(ipc.correct).toHaveBeenCalledOnce();
   });
 });
+
+describe("VoiceRecordingService — Escape cancels a dictation at the caret (#14631, #14634)", () => {
+  const draftKey = `${PROJECT}:${PANEL}`;
+
+  beforeEach(() => {
+    vi.resetModules();
+    Object.assign(callbacks, {
+      delta: null,
+      complete: null,
+      boundary: null,
+      fileToken: null,
+      status: null,
+      error: null,
+      ended: null,
+    });
+    ipc.correct.mockReset();
+    ipc.stop.mockReset().mockResolvedValue({ rawText: null });
+    ipc.cancel.mockReset().mockResolvedValue(undefined);
+    ipc.playUiEvent.mockReset().mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    unsubscribe?.();
+    unsubscribe = null;
+    vi.unstubAllGlobals();
+  });
+
+  /** What the composer showed: its draft and caret. */
+  async function showComposer(doc: string, anchor: number) {
+    const { EditorState } = await import("@codemirror/state");
+    const { recordComposerState } = await import("@/lib/composerCaret");
+    recordComposerState(draftKey, {}, EditorState.create({ doc, selection: { anchor } }));
+  }
+  const takeCaret = async (draft: string) =>
+    (await import("@/lib/composerCaret")).takePendingComposerSelection(draftKey, draft);
+
+  it("takes out only what was dictated mid-draft, with the text on both sides intact", async () => {
+    const { service, draft, records, settled } = await setup("Fix the bug. Then test.");
+    const { useDictationRangeStore } = await import("@/store/dictationRangeStore");
+    await showComposer("Fix the bug. Then test.", 12);
+
+    complete("Hello.", "item-a");
+    boundary();
+    complete("Again.", "item-b");
+    expect(draft()).toBe("Fix the bug. Hello.\nAgain. Then test.");
+
+    expect(service.handleEscape(PANEL)).toBe(true);
+    await settled();
+
+    expect(draft()).toBe("Fix the bug. Then test.");
+    expect(records()).toEqual([]);
+    expect(
+      useDictationRangeStore
+        .getState()
+        .getAnchor({ sessionId: SESSION_ID, panelId: PANEL, projectId: PROJECT })
+    ).toBeNull();
+    expect(await takeCaret(draft())).toEqual({ from: 12, to: 12 });
+  });
+
+  it("takes the space the words were given ahead of the text after them", async () => {
+    const { service, draft, settled } = await setup("Intro. Outro.");
+    await showComposer("Intro. Outro.", 7);
+
+    complete("One.", "item-a");
+    complete("Two.", "item-b");
+    expect(draft()).toBe("Intro. One. Two. Outro.");
+
+    service.handleEscape(PANEL);
+    await settled();
+
+    expect(draft()).toBe("Intro. Outro.");
+    expect(await takeCaret(draft())).toEqual({ from: 7, to: 7 });
+  });
+
+  it("keeps a caret in the text after the dictation on that text", async () => {
+    const { service, draft, settled } = await setup("Intro. Outro.");
+    const { useTerminalInputStore } = await import("@/store/terminalInputStore");
+    await showComposer("Intro. Outro.", 7);
+
+    complete("One.", "item-a");
+    await takeCaret(draft());
+    await showComposer(draft(), 15);
+    const caretMoving = useTerminalInputStore.getState().caretMovingDraftRevision;
+
+    service.handleEscape(PANEL);
+    await settled();
+
+    expect(draft()).toBe("Intro. Outro.");
+    expect(await takeCaret(draft())).toEqual({ from: 10, to: 10 });
+    expect(useTerminalInputStore.getState().caretMovingDraftRevision).toBe(caretMoving);
+  });
+
+  it("keeps text typed on both sides of the dictation and against its words", async () => {
+    const { service, draft, setDraft, announcement, settled } = await setup("Intro. Outro.");
+    await showComposer("Intro. Outro.", 7);
+
+    complete("One.", "item-a");
+    setDraft("Say: Intro. One. Outro.");
+    setDraft("Say: Intro. One.X Outro.");
+    setDraft("Say: Intro. One.X Outro. Done");
+
+    service.handleEscape(PANEL);
+    await settled();
+
+    expect(draft()).toBe("Say: Intro. X Outro. Done");
+    expect(announcement()).toMatch(/discarded/i);
+  });
+
+  it("stops and keeps the text when the words dictated at the caret were edited", async () => {
+    const { service, draft, setDraft, announcement, settled } = await setup("Intro. Outro.");
+    await showComposer("Intro. Outro.", 7);
+
+    complete("One two.", "item-a");
+    setDraft("Intro. One too. Outro.");
+
+    service.handleEscape(PANEL);
+    await settled();
+
+    expect(draft()).toBe("Intro. One too. Outro.");
+    expect(announcement()).toMatch(/kept/i);
+    expect(ipc.cancel).not.toHaveBeenCalled();
+  });
+
+  it("leaves an earlier session's text right after it untouched", async () => {
+    const { service, begin, draft, records, settled } = await setup("Intro.");
+
+    complete("Outro.", "item-a");
+    await service.stop("Dictation stopped.");
+    expect(draft()).toBe("Intro. Outro.");
+
+    begin("session-2");
+    await showComposer("Intro. Outro.", 6);
+    complete("One.", "item-b", "session-2");
+    expect(draft()).toBe("Intro. One. Outro.");
+    service.handleEscape(PANEL);
+    await settled();
+
+    expect(draft()).toBe("Intro. Outro.");
+    // A diff of the removal would have reached into " Outro." and flagged it.
+    const [earlier] = records();
+    expect(earlier!.sessionId).toBe(SESSION_ID);
+    expect(earlier!.utterances[0]!.insertion).toEqual({ from: 6, to: 13, edited: false });
+  });
+});
