@@ -177,16 +177,20 @@ export function useCanopyInboxFocus({
   // there has landed on it.
   const restoreRef = useRef<CanopyResume | null>(null);
   const searchedRef = useRef(appliedQuery);
+  // The restored search, until the deferred query has caught up to it: that
+  // arrival is the search being put back, not a new search to select the top of.
+  const restoredQueryRef = useRef<string | null>(null);
   useEffect(() => {
     if (!isOpen) {
       restoreRef.current = null;
+      restoredQueryRef.current = null;
       return;
     }
     const { resume } = useCanopyStore.getState();
     if (resume === null) return;
     useCanopyStore.setState({ resume: null });
     restoreRef.current = resume;
-    searchedRef.current = resume.query;
+    restoredQueryRef.current = resume.query;
     setQuery(resume.query);
   }, [isOpen, setQuery]);
   // The user pressed something in the panel since it opened, header included:
@@ -295,6 +299,12 @@ export function useCanopyInboxFocus({
     if (!isOpen) {
       searchedRef.current = "";
       topOwedRef.current = false;
+      return;
+    }
+    if (restoredQueryRef.current !== null) {
+      if (appliedQuery !== restoredQueryRef.current) return;
+      restoredQueryRef.current = null;
+      searchedRef.current = appliedQuery;
       return;
     }
     if (searchedRef.current !== appliedQuery) {

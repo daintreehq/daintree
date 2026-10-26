@@ -1137,8 +1137,8 @@ describe("CanopyView", () => {
       fireEvent.change(searchInput(), { target: { value: "a" } });
       await frames();
       const listed = cards(container).map((c) => c.id.replace(/^canopy-card-/, ""));
-      expect(listed.length).toBeGreaterThan(0);
-      await goToTerminalFrom(container, listed[0]!);
+      expect(listed.length).toBeGreaterThan(1);
+      await goToTerminalFrom(container, listed[1]!);
 
       // The run it was left on has since gone.
       const { resume } = useCanopyStore.getState();

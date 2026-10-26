@@ -720,7 +720,6 @@ function CanopyInbox({
   } = useCanopyInboxActions({
     hostId,
     ownHostId,
-    close,
     api,
     terminalApi,
     listed,
