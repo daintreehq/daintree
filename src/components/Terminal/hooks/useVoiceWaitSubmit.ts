@@ -12,7 +12,7 @@ import {
   voiceRecordingService,
   VOICE_CORRECTION_SEND_WAIT_MS,
 } from "@/services/VoiceRecordingService";
-import type { SendHandBack } from "./useSendHandBack";
+import type { ClaimSendHandBack, SendHandBack } from "./useSendHandBack";
 
 /** What a voice send is waiting on: the transcript draining, or its correction. */
 export type VoiceSubmitPhase = "finishing" | "polishing";
@@ -31,7 +31,7 @@ interface UseVoiceWaitSubmitParams {
    * Claims the keyboard's hand-back for the send at the Enter that starts the
    * wait, not when the wait ends: a press during it calls the hand-back off.
    */
-  claimSendHandBack?: () => SendHandBack | undefined;
+  claimSendHandBack?: ClaimSendHandBack;
 }
 
 export function isVoiceSessionActiveFor(panelId: string): boolean {
@@ -97,7 +97,7 @@ export function useVoiceWaitSubmit({
       useTerminalInputStore.getState().isVoiceSubmitting(terminalId);
 
     // Before the lock below: making the editor non-editable drops its focus.
-    const handBack = claimSendHandBackRef.current?.();
+    const handBack = claimSendHandBackRef.current?.({ blursEditor: true });
     store.setVoiceSubmitting(terminalId, true);
     setVoiceSubmitPhase("finishing");
 

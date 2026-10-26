@@ -107,7 +107,6 @@ import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { terminalClient } from "@/clients";
-import { logWarn } from "@/utils/logger";
 import { useHelpPanelStore, selectActiveSlot } from "@/store/helpPanelStore";
 import { openSendToAgentPaletteWithText } from "@/hooks/useSendToAgentPalette";
 import { formatForTerminalPaste } from "@shared/utils/terminalInputProtocol";
@@ -128,6 +127,7 @@ import {
 } from "./terminalFocus";
 import { decideChromeAction } from "./multiSelectGestures";
 import { registerPanelFocusHandler } from "@/components/Panel/panelFocusRegistry";
+import { submitComposerText } from "./submitComposerText";
 import {
   captureFocusEpoch,
   holdPaneFocus,
@@ -1855,23 +1855,9 @@ function TerminalPaneComponent({
                       if (isInputLocked || isRestarting) return;
                       withTerminalService((service) => service.notifyUserInput(id), id);
                       reportCanopySent(id);
-                      const submission =
-                        imagePaths !== undefined && imagePaths.length > 0
-                          ? terminalClient.submitWithImages(id, text, imagePaths)
-                          : terminalClient.submit(id, text);
+                      const accepted = submitComposerText(id, text, imagePaths);
                       handleInput(trackerData);
-                      // Whether the terminal accepted it, which is when a
-                      // terminal-first user gets the keyboard back (#14692).
-                      // submit rejects when the PTY is gone (#8706); the
-                      // single-pane path has no recovery UI for that, so it is
-                      // logged. Banners/agent-state surface the dead pane.
-                      return submission.then(
-                        () => true,
-                        (err: unknown) => {
-                          logWarn("[TerminalPane] submit failed", { id, error: err });
-                          return false;
-                        }
-                      );
+                      return accepted;
                     }}
                     onSendKey={(key) => {
                       if (!isInputLocked && !isRestarting) {

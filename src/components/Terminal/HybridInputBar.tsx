@@ -947,7 +947,31 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       [editorViewRef, terminalId]
     );
 
-    const claimSendHandBack = useSendHandBack({ terminalId, projectId, isolated, editorViewRef });
+    // The Expanded Editor hands the caret back to the bar when its exit
+    // animation ends: a hand-back from a send that closed it waits for that.
+    const expandedEditorShownRef = useRef(false);
+    const afterExpandedEditorClosedRef = useRef<Array<() => void>>([]);
+    useEffect(() => {
+      if (isExpanded) expandedEditorShownRef.current = true;
+    }, [isExpanded]);
+    const handleExpandedEditorClosed = () => {
+      expandedEditorShownRef.current = false;
+      const waiting = afterExpandedEditorClosedRef.current;
+      afterExpandedEditorClosedRef.current = [];
+      for (const run of waiting) run();
+    };
+    const afterExpandedEditorCloses = useCallback((run: () => void) => {
+      if (expandedEditorShownRef.current) afterExpandedEditorClosedRef.current.push(run);
+      else run();
+    }, []);
+
+    const claimSendHandBack = useSendHandBack({
+      terminalId,
+      projectId,
+      isolated,
+      editorViewRef,
+      afterExpandedEditorCloses,
+    });
 
     // Every way this composer sends — Enter, a picked slash command, a prompt
     // from the command picker — goes through `submitText` when it is given, so
@@ -958,10 +982,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         if (options?.submit) return sendResolvedText(text, options);
         if (!submit) {
           // Claimed before any expansion is awaited, so a press while a diff
-          // is fetched calls the hand-back off.
+          // is fetched calls the hand-back off. A send from the Expanded
+          // Editor closes it, which moves the editor and its caret.
           return sendResolvedText(text, {
             ...options,
-            onHandedOff: options?.onHandedOff ?? claimSendHandBack(),
+            onHandedOff:
+              options?.onHandedOff ??
+              claimSendHandBack({ blursEditor: expandedEditorShownRef.current }),
           });
         }
         const imagePaths = options?.imagePaths ?? [];
@@ -1793,6 +1820,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         <AppDialog
           isOpen={isExpanded}
           onClose={collapseEditor}
+          onCloseComplete={handleExpandedEditorClosed}
           size="5xl"
           maxHeight="max-h-[70vh]"
           dismissible

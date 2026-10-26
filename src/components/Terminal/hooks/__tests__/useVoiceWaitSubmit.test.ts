@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { renderHook, act } from "@testing-library/react";
-import { Compartment } from "@codemirror/state";
+import { Compartment, EditorState } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 
 vi.mock("@/services/VoiceRecordingService", () => ({
@@ -95,8 +96,9 @@ describe("useVoiceWaitSubmit", () => {
     expect(useTerminalInputStore.getState().isVoiceSubmitting(PANEL_ID)).toBe(false);
   });
 
-  // A press during the wait has to count against the hand-back (#14692).
-  it("claims the keyboard's hand-back when the wait starts, and sends with it", async () => {
+  // A press during the wait has to count against the hand-back, and the lock
+  // drops the editor's focus, so the claim comes first (#14692).
+  it("claims the keyboard's hand-back before locking the editor, and sends with it", async () => {
     let resolveStop!: () => void;
     stopMock.mockImplementation(
       () =>
@@ -104,13 +106,21 @@ describe("useVoiceWaitSubmit", () => {
           resolveStop = resolve;
         })
     );
+    const editable = new Compartment();
+    const view = new EditorView({
+      state: EditorState.create({ extensions: [editable.of(EditorView.editable.of(true))] }),
+    });
     const handBack = vi.fn();
-    const claimSendHandBack = vi.fn(() => handBack);
+    let editableAtClaim: boolean | undefined;
+    const claimSendHandBack = vi.fn((_claim?: { blursEditor?: boolean }) => {
+      editableAtClaim = view.state.facet(EditorView.editable);
+      return handBack;
+    });
     const { result } = renderHook(() =>
       useVoiceWaitSubmit({
         terminalId: PANEL_ID,
-        editorViewRef: { current: null },
-        editableCompartmentRef: { current: new Compartment() },
+        editorViewRef: { current: view },
+        editableCompartmentRef: { current: editable },
         sendFromEditor,
         claimSendHandBack,
       })
@@ -119,7 +129,9 @@ describe("useVoiceWaitSubmit", () => {
     act(() => {
       result.current.startVoiceWaitSubmit();
     });
-    expect(claimSendHandBack).toHaveBeenCalledTimes(1);
+    expect(claimSendHandBack).toHaveBeenCalledWith({ blursEditor: true });
+    expect(editableAtClaim).toBe(true);
+    expect(view.state.facet(EditorView.editable)).toBe(false);
     expect(sendFromEditor).not.toHaveBeenCalled();
 
     await act(async () => {
@@ -128,6 +140,7 @@ describe("useVoiceWaitSubmit", () => {
 
     expect(sendFromEditor).toHaveBeenCalledWith(handBack);
     expect(claimSendHandBack).toHaveBeenCalledTimes(1);
+    view.destroy();
   });
 
   it("does not send when cancelled while the transcript is still finishing", async () => {

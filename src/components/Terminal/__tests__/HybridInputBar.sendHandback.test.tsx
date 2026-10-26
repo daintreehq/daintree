@@ -6,7 +6,9 @@
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const fleetBroadcast = vi.hoisted(() => vi.fn((..._args: unknown[]) => false));
+const fleetBroadcast = vi.hoisted(() =>
+  vi.fn((_terminalId: string, _text: string, _onSent: () => void) => false)
+);
 vi.mock("@/components/Fleet/fleetEnterBroadcast", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/components/Fleet/fleetEnterBroadcast")>();
   return { ...actual, tryFleetBroadcastFromEditor: fleetBroadcast };
@@ -26,9 +28,11 @@ import { initBuiltInPanelKinds } from "@/panels/registry";
 import { registerPanelFocusHandler } from "@/components/Panel/panelFocusRegistry";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
 import { HybridInputBar } from "../HybridInputBar";
-import { _resetPaneFocusRequestsForTesting } from "../paneFocusRequest";
+import { _resetPaneFocusRequestsForTesting, requestPaneFocus } from "../paneFocusRequest";
 
 const WT_ID = "/repo/wt";
+const isMac = /Mac/.test(navigator.platform);
+const originalElectron = Object.getOwnPropertyDescriptor(window, "electron");
 
 // jsdom has no layout: CodeMirror measures text through Range rects it lacks.
 const originalRangeRects = Object.getOwnPropertyDescriptor(Range.prototype, "getClientRects");
@@ -45,6 +49,16 @@ afterAll(() => {
 });
 
 let unregisterTerminal: (() => void) | null = null;
+let frames: FrameRequestCallback[] = [];
+function flushFrames() {
+  act(() => {
+    while (frames.length > 0) {
+      const due = frames;
+      frames = [];
+      for (const cb of due) cb(0);
+    }
+  });
+}
 
 beforeEach(() => {
   initBuiltInPanelKinds();
@@ -74,7 +88,11 @@ beforeEach(() => {
   useTerminalInputStore.setState({ draftInputs: new Map(), hybridInputAutoFocus: false });
   fleetBroadcast.mockReset();
   fleetBroadcast.mockReturnValue(false);
-  vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => 0);
+  frames = [];
+  vi.spyOn(window, "requestAnimationFrame").mockImplementation((cb) => {
+    frames.push(cb);
+    return frames.length;
+  });
 });
 
 afterEach(() => {
@@ -85,7 +103,9 @@ afterEach(() => {
   _resetPaneFocusRequestsForTesting();
   useVoiceRecordingStore.setState({ status: "idle", activeTarget: null });
   useFleetArmingStore.setState({ armedIds: new Set() });
-  delete (window as { electron?: unknown }).electron;
+  if (originalElectron) Object.defineProperty(window, "electron", originalElectron);
+  else delete (window as { electron?: unknown }).electron;
+  delete document.body.dataset.performanceMode;
   document.body.innerHTML = "";
 });
 
@@ -134,6 +154,16 @@ async function mount({ isolated = false } = {}) {
       });
     });
   };
+  const openExpandedEditor = async () => {
+    await act(async () => {
+      runScopeHandlers(
+        view,
+        new KeyboardEvent("keydown", { key: "e", shiftKey: true, metaKey: isMac, ctrlKey: !isMac }),
+        "editor"
+      );
+    });
+    flushFrames();
+  };
   const pressEnter = async () => {
     await act(async () => {
       runScopeHandlers(view, new KeyboardEvent("keydown", { key: "Enter" }), "editor");
@@ -145,7 +175,7 @@ async function mount({ isolated = false } = {}) {
       settles.shift()!(accepted);
     });
   };
-  return { ...result, view, onSend, type, pressEnter, settle, ...term };
+  return { ...result, view, onSend, type, openExpandedEditor, pressEnter, settle, ...term };
 }
 
 function press() {
@@ -232,6 +262,46 @@ describe("HybridInputBar hands the keyboard back to a terminal-first user's term
     expect(handler).not.toHaveBeenCalled();
   });
 
+  // Only a dictation's lock is known to drop the keyboard; anything else that
+  // left it nowhere (a control the user tabbed to, then removed) is theirs.
+  it("leaves the keyboard alone when a plain send's keyboard went nowhere", async () => {
+    const { view, type, pressEnter, settle, handler } = await mount();
+    await type("ship it");
+    await pressEnter();
+    view.contentDOM.blur();
+
+    await settle(true);
+
+    expect(document.activeElement).toBe(document.body);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("leaves the keyboard alone when a draft reached the store but not yet the editor", async () => {
+    const { view, type, pressEnter, settle, handler } = await mount();
+    await type("ship it");
+    await pressEnter();
+    act(() => useTerminalInputStore.getState().setDraftInput("term-1", "handed off"));
+    expect(view.state.doc.length).toBe(0);
+
+    await settle(true);
+
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("yields to a newer focus request for the pane", async () => {
+    const { view, type, pressEnter, settle, handler } = await mount();
+    await type("ship it");
+    await pressEnter();
+    act(() => {
+      requestPaneFocus("term-1", "hybridInput");
+    });
+
+    await settle(true);
+
+    expect(document.activeElement).toBe(view.contentDOM);
+    expect(handler).not.toHaveBeenCalledWith("xterm");
+  });
+
   it("leaves the keyboard alone once another pane is selected", async () => {
     const { view, type, pressEnter, settle, handler } = await mount();
     await type("ship it");
@@ -254,6 +324,18 @@ describe("HybridInputBar hands the keyboard back to a terminal-first user's term
 
     expect(document.activeElement).toBe(view.contentDOM);
     expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("reads the setting when the terminal answers", async () => {
+    useTerminalInputStore.setState({ hybridInputAutoFocus: true });
+    const { type, pressEnter, settle, textarea } = await mount();
+    await type("ship it");
+    await pressEnter();
+    act(() => useTerminalInputStore.setState({ hybridInputAutoFocus: false }));
+
+    await settle(true);
+
+    expect(document.activeElement).toBe(textarea);
   });
 
   it("moves nothing once the composer has gone", async () => {
@@ -281,7 +363,7 @@ describe("HybridInputBar hands the keyboard back to a terminal-first user's term
   it("keeps a fleet broadcast in the hybrid input", async () => {
     useFleetArmingStore.setState({ armedIds: new Set(["term-1", "term-2"]) });
     fleetBroadcast.mockImplementation((_id, _text, onSent) => {
-      (onSent as () => void)();
+      onSent();
       return true;
     });
     const { view, type, pressEnter, onSend, handler } = await mount();
@@ -322,6 +404,48 @@ describe("HybridInputBar hands the keyboard back to a terminal-first user's term
 
     expect(handler).toHaveBeenCalledTimes(pressed ? 0 : 1);
     expect(document.activeElement === view.contentDOM).toBe(pressed);
+  });
+
+  // A send closes the Expanded Editor, and both the editor's move back to the
+  // bar and the dialog's exit hand the caret back to the bar afterwards.
+  describe("from the Expanded Editor", () => {
+    it("waits for the dialog to hand the caret back, then hands it to the terminal", async () => {
+      const { view, type, openExpandedEditor, pressEnter, settle, handler, textarea } =
+        await mount();
+      await type("a long prompt");
+      await openExpandedEditor();
+      view.contentDOM.focus();
+      await pressEnter();
+
+      // Accepted while the dialog is still animating out.
+      await settle(true);
+      expect(handler).not.toHaveBeenCalled();
+      flushFrames();
+
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      });
+
+      expect(handler).toHaveBeenCalledWith("xterm");
+      expect(document.activeElement).toBe(textarea);
+    });
+
+    // Performance mode closes the dialog at once; the editor's move back to
+    // the bar still restores its caret a frame later.
+    it("keeps the terminal when the dialog closed at once", async () => {
+      document.body.dataset.performanceMode = "true";
+      const { view, type, openExpandedEditor, pressEnter, settle, textarea } = await mount();
+      await type("a long prompt");
+      await openExpandedEditor();
+      view.contentDOM.focus();
+      await pressEnter();
+
+      await settle(true);
+      expect(document.activeElement).toBe(textarea);
+      flushFrames();
+
+      expect(document.activeElement).toBe(textarea);
+    });
   });
 
   // The voice lock makes the editor non-editable for the wait, and Chromium

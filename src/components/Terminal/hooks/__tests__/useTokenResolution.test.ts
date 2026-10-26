@@ -361,6 +361,47 @@ describe("useTokenResolution.sendText — plugin context references (#13795)", (
   });
 });
 
+describe("useTokenResolution.sendText — the pane's acceptance (#14692)", () => {
+  it("hands on what onSend returned, after the composer has been reset", async () => {
+    const { sendText, onSend, clearDraftInput } = setup();
+    const accepted = Promise.resolve(true);
+    onSend.mockReturnValue(accepted);
+    const onHandedOff = vi.fn((_accepted: Promise<boolean> | void) => {
+      expect(clearDraftInput).toHaveBeenCalledTimes(1);
+    });
+
+    await act(async () => {
+      await sendText("ship it", { onHandedOff });
+    });
+
+    expect(onHandedOff).toHaveBeenCalledTimes(1);
+    expect(onHandedOff.mock.calls[0]![0]).toBe(accepted);
+  });
+
+  it("hands on nothing from a pane that reports nothing", async () => {
+    const { sendText } = setup();
+    const onHandedOff = vi.fn();
+
+    await act(async () => {
+      await sendText("ship it", { onHandedOff });
+    });
+
+    expect(onHandedOff).toHaveBeenCalledWith(undefined);
+  });
+
+  it("is not told about a targeted submit, accepted or refused", async () => {
+    const { sendText } = setup();
+    const onHandedOff = vi.fn();
+
+    await act(async () => {
+      await sendText("ship it", { submit: async () => true, onHandedOff });
+      await sendText("ship it", { submit: async () => false, onHandedOff });
+    });
+
+    expect(onHandedOff).not.toHaveBeenCalled();
+  });
+});
+
 describe("useTokenResolution.sendText — targeted submit", () => {
   beforeEach(() => {
     (window as unknown as { electron: unknown }).electron = {
