@@ -158,12 +158,12 @@ export function useOtherHostProjectOptions(query: string): OtherHostOptions {
   // In state rather than read here: a render-time clock would freeze under the
   // compiler's memoisation and leave "listed 1 min ago" saying so for an hour.
   const now = useGlobalMinuteClock();
-  if (!supported) return { groups: [], options: [], remoteNames: new Set() };
   const tokens = queryTokens(query);
   const worktreeListings = useHostWorktreeListings(
     targets.filter((target) => target.reachable).map((target) => target.hostId),
     tokens.length > 0
   );
+  if (!supported) return { groups: [], options: [], remoteNames: new Set() };
   const remoteNames = new Set<string>();
   const groups: OtherHostGroup[] = [];
   for (const target of targets) {
