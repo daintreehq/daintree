@@ -194,18 +194,18 @@ describe("mergeHostReadings", () => {
     expect(merged!.mode).toBe("on");
   });
 
-  it("marks only the runs of a host whose reader failed", () => {
+  it("marks only the runs a host reports as failing, not its healthy neighbours", () => {
     const { canopy: merged } = mergeHostReadings([
       {
         hostId: "a",
-        canopy: canopy({ lastError: "down" }),
-        fleet: fleet([run("t1")]),
+        canopy: canopy({ lastError: "t2 failed", failedRuns: ["t2"] }),
+        fleet: fleet([run("t1"), run("t2")]),
         error: null,
       },
       { hostId: "b", canopy: canopy(), fleet: fleet([run("t1")]), error: null },
     ]);
     expect(merged!.lastError).toBeNull();
-    expect(merged!.failedRuns).toEqual([allHostsKey("a", "t1")]);
+    expect(merged!.failedRuns).toEqual([allHostsKey("a", "t2")]);
   });
 
   it("moves its scan marker when any host scans, whatever that host's clock", () => {
