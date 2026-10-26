@@ -839,4 +839,20 @@ describe("VoiceRecordingService — dictation sound cues (#14627)", () => {
 
     expect(playUiEvent.mock.calls).toEqual([["dictation-error"]]);
   });
+
+  it("plays no stop cue for a session a retarget ended, and the new start cue only once its mic is live", async () => {
+    const harness = setupGlobals({ tracks: [BUILT_IN, BUILT_IN] });
+    const { playUiEvent } = harness;
+    const { service } = await load();
+
+    await service.start(TARGET);
+    sendChunk(harness.workletNodes[0]!, 3000);
+    expect(playUiEvent.mock.calls).toEqual([["dictation-start"]]);
+
+    await service.start({ panelId: "panel-2", panelTitle: "Codex" });
+    expect(playUiEvent.mock.calls).toEqual([["dictation-start"]]);
+
+    sendChunk(harness.workletNodes[1]!, 3000);
+    expect(playUiEvent.mock.calls).toEqual([["dictation-start"], ["dictation-start"]]);
+  });
 });
