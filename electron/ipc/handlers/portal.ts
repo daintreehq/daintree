@@ -107,16 +107,16 @@ export function registerPortalHandlers(deps: HandlerDependencies): () => void {
         },
         { withContext: true }
       ),
-      show: op(PORTAL_METHOD_CHANNELS.show, async (payload: PortalShowPayload) => {
+      show: op(PORTAL_METHOD_CHANNELS.show, async (payload: PortalShowPayload): Promise<boolean> => {
         try {
-          if (!deps.portalManager) return;
+          if (!deps.portalManager) return false;
           if (!payload?.tabId || typeof payload.tabId !== "string") {
             throw new Error("Invalid tabId");
           }
           if (!isValidBounds(payload?.bounds)) {
             throw new Error("Invalid bounds");
           }
-          deps.portalManager.showTab(payload.tabId, payload.bounds);
+          return deps.portalManager.showTab(payload.tabId, payload.bounds);
         } catch (error) {
           console.error("[PortalHandler] Error in show:", error);
           throw error;

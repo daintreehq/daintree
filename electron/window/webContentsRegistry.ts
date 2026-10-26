@@ -396,6 +396,26 @@ export function getAppWebContents(win: BrowserWindow): WebContents {
 }
 
 /**
+ * Every app webContents a window holds: its current app view first, then each
+ * other project view in it, cached ones included. Each keeps its own renderer
+ * state, so window-scoped state pushes must reach all of them.
+ */
+export function getWindowAppWebContents(win: BrowserWindow): WebContents[] {
+  const current = getAppWebContents(win);
+  const result: WebContents[] = current.isDestroyed() ? [] : [current];
+  for (const wcId of [...viewToProject.keys()]) {
+    if (wcId === current.id || webContentsToWindow.get(wcId) !== win) continue;
+    const wc = webContentsModule.fromId(wcId);
+    if (wc && !wc.isDestroyed()) {
+      result.push(wc);
+    } else {
+      unregisterProjectView(wcId);
+    }
+  }
+  return result;
+}
+
+/**
  * Get the WebContentsView hosting the React app for a window, or null.
  */
 export function getAppView(win: BrowserWindow): WebContentsView | null {
