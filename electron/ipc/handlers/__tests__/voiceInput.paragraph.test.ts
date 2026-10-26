@@ -40,6 +40,7 @@ const shared = vi.hoisted(() => ({
   /** When true, stopGracefully uses a deferred promise instead of resolving immediately. */
   useDeferredDrain: false,
   correctionCalls: [] as Array<{ request: unknown; settings: unknown }>,
+  rewriteCalls: [] as Array<{ request: unknown; settings: unknown }>,
   /** Settings objects passed to svc.start(), in call order. */
   startCalls: [] as unknown[],
   /** The start context passed alongside each of them. */
@@ -95,6 +96,10 @@ vi.mock("../../../services/VoiceCorrectionService.js", () => ({
         confidence: "high",
         confirmedText: "hello world",
       });
+    };
+    this.rewrite = function (request: unknown, settings: unknown) {
+      shared.rewriteCalls.push({ request, settings });
+      return Promise.resolve({ status: "replace", text: "Shorter." });
     };
     this.detectFileLinkTokens = function () {
       return Promise.resolve([]);
@@ -1713,4 +1718,106 @@ describe("voiceInput — spoken commands outside English", () => {
       }
     }
   );
+});
+
+describe("voiceInput — rewrite instructions", () => {
+  let win: ReturnType<typeof buildMainWindow>;
+  let cleanup: () => void;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    shared.transcriptionEventCallback = null;
+    shared.drainResolve = null;
+    shared.useDeferredDrain = false;
+    shared.rewriteCalls = [];
+
+    win = buildMainWindow();
+    cleanup = registerVoiceInputHandlers({
+      mainWindow: win as unknown as Electron.BrowserWindow,
+    } as Parameters<typeof registerVoiceInputHandlers>[0]);
+  });
+
+  afterEach(() => {
+    cleanup?.();
+  });
+
+  const forwarded = () =>
+    win.__sent.filter(
+      (m) =>
+        m.channel === "voice-input:transcription-complete" ||
+        m.channel === "voice-input:paragraph-boundary"
+    );
+
+  it("forwards an instruction as spoken: no formatting commands, splits or boundaries", async () => {
+    const handleStart = getHandler("voice-input:start") as (
+      e: unknown,
+      sessionId: string,
+      options: unknown
+    ) => Promise<unknown>;
+    await handleStart(fakeEvent, nextSessionId(), { terminalId: "t1", intent: "rewrite" });
+
+    emitTranscriptionEvent({ type: "complete", text: " put each step on a new line ", itemId: "i1" });
+    emitTranscriptionEvent({ type: "paragraph_boundary" });
+
+    expect(forwarded()).toEqual([
+      {
+        channel: "voice-input:transcription-complete",
+        payload: {
+          sessionId: currentSessionId,
+          text: "put each step on a new line",
+          willCorrect: false,
+          itemId: "i1",
+        },
+      },
+    ]);
+  });
+
+  it("still applies formatting commands to a dictation session", async () => {
+    const handleStart = getHandler("voice-input:start") as (
+      e: unknown,
+      sessionId: string,
+      options: unknown
+    ) => Promise<unknown>;
+    await handleStart(fakeEvent, nextSessionId(), { terminalId: "t1", intent: "dictation" });
+
+    emitTranscriptionEvent({ type: "complete", text: "fix the bug new line" });
+
+    expect(forwarded().map((m) => m.channel)).toEqual([
+      "voice-input:transcription-complete",
+      "voice-input:paragraph-boundary",
+    ]);
+  });
+
+  it("rewrite validates the payload and hands it to the correction model", async () => {
+    const handleRewrite = getHandler("voice-input:rewrite") as (
+      e: unknown,
+      request: unknown
+    ) => Promise<unknown>;
+
+    const outcome = await handleRewrite(fakeEvent, {
+      selectedText: "a long sentence",
+      instruction: "make it shorter",
+    });
+
+    expect(outcome).toEqual({ status: "replace", text: "Shorter." });
+    expect(shared.rewriteCalls).toHaveLength(1);
+    expect(shared.rewriteCalls[0]?.request).toEqual({
+      selectedText: "a long sentence",
+      instruction: "make it shorter",
+    });
+    expect(shared.rewriteCalls[0]?.settings).toMatchObject({
+      model: "gpt-6-luna",
+      apiKey: "sk-test",
+    });
+
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await expect(handleRewrite(fakeEvent, { selectedText: "", instruction: "x" })).rejects.toBeInstanceOf(
+        ValidationError
+      );
+    } finally {
+      consoleError.mockRestore();
+    }
+    expect(shared.rewriteCalls).toHaveLength(1);
+  });
 });

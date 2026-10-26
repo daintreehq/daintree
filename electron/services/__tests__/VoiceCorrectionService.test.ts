@@ -1060,3 +1060,140 @@ describe("VoiceCorrectionService", () => {
     });
   });
 });
+
+describe("VoiceCorrectionService.rewrite", () => {
+  function rewriteResponse(action: "no_change" | "replace", rewritten_text: string) {
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ output_text: JSON.stringify({ action, rewritten_text }) }),
+    } as unknown as Response;
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("sends the selection and the instruction as separate, labelled blocks", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(rewriteResponse("replace", "Is it fixed?"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const outcome = await new VoiceCorrectionService().rewrite(
+      { selectedText: "it is fixed", instruction: " rephrase as a question " },
+      BASE_SETTINGS
+    );
+
+    expect(outcome).toEqual({ status: "replace", text: "Is it fixed?" });
+    const body = JSON.parse(fetchMock.mock.calls[0]![1].body as string);
+    expect(body.model).toBe(BASE_SETTINGS.model);
+    expect(body.text.format.strict).toBe(true);
+    expect(body.input[1].content).toBe(
+      "<selection>\nit is fixed\n</selection>\n\n<instruction>\nrephrase as a question\n</instruction>"
+    );
+  });
+
+  it("keeps the selection's own leading and trailing whitespace around the rewrite", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(rewriteResponse("replace", "  Shorter.\n")));
+
+    const outcome = await new VoiceCorrectionService().rewrite(
+      { selectedText: " a much longer sentence here.\n\n", instruction: "make it shorter" },
+      BASE_SETTINGS
+    );
+
+    expect(outcome).toEqual({ status: "replace", text: " Shorter.\n\n" });
+  });
+
+  it("rejects a rewrite that changes a reference, flag or backticked span", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(rewriteResponse("replace", "Run the tests on the app."))
+    );
+
+    const outcome = await new VoiceCorrectionService().rewrite(
+      { selectedText: "run `npm test` on @src/App.tsx", instruction: "make it shorter" },
+      BASE_SETTINGS
+    );
+
+    expect(outcome).toEqual({ status: "rejected" });
+  });
+
+  it("reports no_change when the model declines or returns the selection unchanged", async () => {
+    const svc = new VoiceCorrectionService();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(rewriteResponse("no_change", "")));
+    expect(await svc.rewrite({ selectedText: "keep me", instruction: "hmm" }, BASE_SETTINGS)).toEqual(
+      { status: "no_change" }
+    );
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(rewriteResponse("replace", "keep me")));
+    expect(
+      await svc.rewrite({ selectedText: " keep me ", instruction: "tidy it" }, BASE_SETTINGS)
+    ).toEqual({ status: "no_change" });
+  });
+
+  it("is unavailable without an API key and makes no request", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const outcome = await new VoiceCorrectionService().rewrite(
+      { selectedText: "text", instruction: "shorter" },
+      { ...BASE_SETTINGS, apiKey: "" }
+    );
+
+    expect(outcome).toEqual({ status: "unavailable" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("fails without logging content on an API error, a cut-off reply or a malformed one", async () => {
+    const svc = new VoiceCorrectionService();
+    const request = { selectedText: "secret selection", instruction: "secret instruction" };
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        json: async () => ({ error: { code: "server_error" } }),
+      })
+    );
+    expect(await svc.rewrite(request, BASE_SETTINGS)).toEqual({ status: "failed" });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ status: "incomplete", output_text: "{" }),
+      })
+    );
+    expect(await svc.rewrite(request, BASE_SETTINGS)).toEqual({ status: "failed" });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ output_text: JSON.stringify({ action: "rewrite" }) }),
+      })
+    );
+    expect(await svc.rewrite(request, BASE_SETTINGS)).toEqual({ status: "failed" });
+
+    expect(JSON.stringify(vi.mocked(logWarn).mock.calls)).not.toMatch(/secret/);
+  });
+
+  it("is not cancelled by the recording session's signal", async () => {
+    const session = new AbortController();
+    const svc = new VoiceCorrectionService();
+    svc.setSessionSignal(session.signal);
+    session.abort();
+    const fetchMock = vi.fn().mockResolvedValue(rewriteResponse("replace", "Shorter."));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const outcome = await svc.rewrite(
+      { selectedText: "a long sentence", instruction: "shorter" },
+      BASE_SETTINGS
+    );
+
+    expect(outcome).toEqual({ status: "replace", text: "Shorter." });
+    expect((fetchMock.mock.calls[0]![1].signal as AbortSignal).aborted).toBe(false);
+  });
+});

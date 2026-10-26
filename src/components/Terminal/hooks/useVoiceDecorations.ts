@@ -16,6 +16,10 @@ export function useVoiceDecorations({ terminalId, editorViewRef }: UseVoiceDecor
     (s) => s.panelBuffers[terminalId]?.transcriptPhase ?? "idle"
   );
   const liveText = useVoiceRecordingStore((s) => s.panelBuffers[terminalId]?.liveText ?? "");
+  // A spoken rewrite instruction is not prompt text, so it never shows as ghost text.
+  const recordingRewrite = useVoiceRecordingStore(
+    (s) => s.activeTarget?.panelId === terminalId && s.activeTarget.rewrite !== undefined
+  );
   const correctionRanges = useVoiceRecordingStore(
     (s) => s.panelBuffers[terminalId]?.correctionRanges ?? NO_RANGES
   );
@@ -24,7 +28,8 @@ export function useVoiceDecorations({ terminalId, editorViewRef }: UseVoiceDecor
     const view = editorViewRef.current;
     if (!view) return;
 
-    const ghostText = transcriptPhase === "interim" && liveText.length > 0 ? liveText : "";
+    const ghostText =
+      transcriptPhase === "interim" && liveText.length > 0 && !recordingRewrite ? liveText : "";
 
     const docLen = view.state.doc.length;
     const pendingRanges = correctionRanges.filter(
@@ -34,5 +39,5 @@ export function useVoiceDecorations({ terminalId, editorViewRef }: UseVoiceDecor
     view.dispatch({
       effects: [setInterimText.of(ghostText), setPendingAIRanges.of(pendingRanges)],
     });
-  }, [transcriptPhase, liveText, correctionRanges, editorViewRef]);
+  }, [transcriptPhase, liveText, recordingRewrite, correctionRanges, editorViewRef]);
 }
