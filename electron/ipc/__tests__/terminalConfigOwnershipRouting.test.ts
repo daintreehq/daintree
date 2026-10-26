@@ -48,7 +48,11 @@ const pushes = vi.hoisted(
 vi.mock("../utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../utils.js")>()),
   broadcastToRenderer: vi.fn((channel: string, payload: unknown) => {
-    pushes.push({ machine: machines.current === machines.host ? "host" : "shell", channel, payload });
+    pushes.push({
+      machine: machines.current === machines.host ? "host" : "shell",
+      channel,
+      payload,
+    });
   }),
 }));
 

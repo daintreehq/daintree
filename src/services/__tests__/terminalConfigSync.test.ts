@@ -262,7 +262,10 @@ describe("terminalConfigSync (#14699)", () => {
     boot({ resourceMonitoringEnabled: false });
     dispose = initTerminalConfigSync();
     await settle();
-    client.get.mockResolvedValue({ resourceMonitoringEnabled: true, memoryLeakDetectionEnabled: false });
+    client.get.mockResolvedValue({
+      resourceMonitoringEnabled: true,
+      memoryLeakDetectionEnabled: false,
+    });
 
     notifyHostResync();
     await settle();

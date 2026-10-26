@@ -7,7 +7,9 @@ const { savedTerminalConfig, constructed } = vi.hoisted(() => ({
 
 vi.mock("../../store.js", () => ({
   store: {
-    get: vi.fn((key: string) => (key === "terminalConfig" ? savedTerminalConfig.current : undefined)),
+    get: vi.fn((key: string) =>
+      key === "terminalConfig" ? savedTerminalConfig.current : undefined
+    ),
     set: vi.fn(),
     delete: vi.fn(),
   },

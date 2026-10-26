@@ -106,7 +106,9 @@ const FIELDS: { readonly [K in Field]-?: FieldSync<unknown> } = {
   // here too, along with a preview of it.
   customSchemes: field({
     resolve: ({ customSchemes }) =>
-      Array.isArray(customSchemes) ? (customSchemes as unknown as TerminalColorScheme[]) : undefined,
+      Array.isArray(customSchemes)
+        ? (customSchemes as unknown as TerminalColorScheme[])
+        : undefined,
     read: () => useTerminalColorSchemeStore.getState().customSchemes,
     write: (schemes) => {
       const { customSchemes: before, previewSchemeId } = useTerminalColorSchemeStore.getState();
