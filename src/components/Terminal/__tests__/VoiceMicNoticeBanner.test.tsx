@@ -1,0 +1,145 @@
+// @vitest-environment jsdom
+import React from "react";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { WindowControlsInsetProvider } from "@/components/ui/WindowControlsInset";
+import { useVoiceRecordingStore, type VoiceMicNotice } from "@/store/voiceRecordingStore";
+
+const mocks = vi.hoisted(() => ({
+  dispatch: vi.fn(),
+  switchToMicFromNotice: vi.fn<(notice: unknown) => Promise<void>>(),
+}));
+
+vi.mock("@/components/ui/tooltip", () => ({
+  Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+
+vi.mock("@/services/ActionService", () => ({ actionService: { dispatch: mocks.dispatch } }));
+
+vi.mock("@/services/VoiceRecordingService", () => ({
+  voiceRecordingService: { switchToMicFromNotice: mocks.switchToMicFromNotice },
+}));
+
+const { VoiceMicNoticeBanner } = await import("../VoiceMicNoticeBanner");
+
+beforeAll(() => {
+  Object.defineProperty(window, "matchMedia", {
+    writable: true,
+    value: vi.fn().mockImplementation((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })),
+  });
+});
+
+const TARGET = { panelId: "panel-1", panelTitle: "Claude" };
+const BUILT_IN = { deviceId: "builtin", label: "MacBook Pro Microphone" };
+
+function renderNotice(notice: VoiceMicNotice) {
+  useVoiceRecordingStore.setState({ micNotice: notice });
+  return render(
+    <WindowControlsInsetProvider>
+      <VoiceMicNoticeBanner notice={notice} />
+    </WindowControlsInsetProvider>
+  );
+}
+
+function text(): string {
+  return document.body.textContent ?? "";
+}
+
+describe("VoiceMicNoticeBanner", () => {
+  beforeEach(() => {
+    mocks.dispatch.mockReset();
+    mocks.switchToMicFromNotice.mockReset().mockResolvedValue(undefined);
+    useVoiceRecordingStore.setState({ micNotice: null });
+  });
+
+  it("names the mic that was lost", () => {
+    renderNotice({ kind: "lost", target: TARGET, deviceLabel: "Greg's AirPods Pro" });
+
+    expect(text()).toContain("Microphone lost");
+    expect(text()).toContain("Greg's AirPods Pro disconnected, so dictation stopped");
+    expect(screen.queryAllByRole("button").map((b) => b.getAttribute("aria-label"))).toEqual([
+      "Dismiss microphone notice",
+    ]);
+  });
+
+  it("falls back to generic wording without a device name", () => {
+    renderNotice({ kind: "lost", target: TARGET, deviceLabel: null });
+
+    expect(text()).toContain("The microphone disconnected, so dictation stopped");
+  });
+
+  it("says which mic is in use instead of the chosen one", () => {
+    renderNotice({ kind: "fallback", target: TARGET, deviceLabel: "MacBook Pro Microphone" });
+
+    expect(text()).toContain("Using MacBook Pro Microphone");
+    expect(text()).toContain("Your chosen microphone isn't available");
+  });
+
+  it("offers the built-in mic for a silent Bluetooth one", async () => {
+    const notice: VoiceMicNotice = {
+      kind: "silent",
+      target: TARGET,
+      deviceLabel: "Greg's AirPods Pro",
+      bluetooth: true,
+      builtIn: BUILT_IN,
+    };
+    renderNotice(notice);
+
+    expect(text()).toContain("No audio from Greg's AirPods Pro");
+    expect(text()).toContain("Bluetooth mics can go quiet while they switch to call mode");
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Use MacBook Pro Microphone" }));
+    });
+
+    expect(mocks.switchToMicFromNotice).toHaveBeenCalledWith(notice);
+    expect(mocks.dispatch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a Bluetooth mic with no built-in one found", true],
+    ["a wired mic", false],
+  ])("sends %s to Voice settings", (_case, bluetooth) => {
+    renderNotice({
+      kind: "silent",
+      target: TARGET,
+      deviceLabel: "Blue Yeti",
+      bluetooth,
+      builtIn: null,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Open Voice settings" }));
+
+    expect(mocks.dispatch).toHaveBeenCalledWith(
+      "app.settings.openTab",
+      { tab: "voice" },
+      { source: "user" }
+    );
+    expect(mocks.switchToMicFromNotice).not.toHaveBeenCalled();
+  });
+
+  it("dismisses its own notice and leaves a newer one alone", () => {
+    const stale: VoiceMicNotice = { kind: "lost", target: TARGET, deviceLabel: null };
+    renderNotice(stale);
+    const newer: VoiceMicNotice = { kind: "fallback", target: TARGET, deviceLabel: "USB Mic" };
+    useVoiceRecordingStore.setState({ micNotice: newer });
+
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss microphone notice" }));
+    expect(useVoiceRecordingStore.getState().micNotice).toBe(newer);
+
+    useVoiceRecordingStore.setState({ micNotice: stale });
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss microphone notice" }));
+    expect(useVoiceRecordingStore.getState().micNotice).toBeNull();
+  });
+});

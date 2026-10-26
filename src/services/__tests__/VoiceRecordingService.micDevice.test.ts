@@ -426,6 +426,11 @@ describe("VoiceRecordingService — chosen mic not available (#14606)", () => {
       deviceLabel: "MacBook Pro Microphone",
     });
     expect(store.getState().micDeviceLabel).toBe("MacBook Pro Microphone");
+
+    sendChunk(harness.workletNodes[0]!, 3000);
+    expect(store.getState().announcement?.text).toBe(
+      "Dictation started in Claude, using MacBook Pro Microphone."
+    );
   });
 
   it.each([

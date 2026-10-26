@@ -135,6 +135,7 @@ import { useTerminalInputBlock } from "@/hooks/useHostConnection";
 import { ControlConfirmedBanner, TerminalInputBlockBanner } from "./TerminalInputBlockBanner";
 import { useControlConfirmed } from "@/components/Recovery/takeControl";
 import { WorktreeMoveBanner } from "./WorktreeMoveBanner";
+import { VoiceMicNoticeBanner } from "./VoiceMicNoticeBanner";
 import type { TerminalRuntimeIdentity } from "@shared/types/panel";
 
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
@@ -632,6 +633,9 @@ function TerminalPaneComponent({
   // mid-arming repaints the right pane on the next render.
   const isVoiceArming = useVoiceRecordingStore(
     (s) => s.status === "arming" && s.activeTarget?.panelId === id
+  );
+  const voiceMicNotice = useVoiceRecordingStore((s) =>
+    s.micNotice?.target.panelId === id ? s.micNotice : null
   );
 
   const hybridInputEnabled = useTerminalInputStore((state) => state.hybridInputEnabled);
@@ -1658,6 +1662,10 @@ function TerminalPaneComponent({
           onTell={worktreeMoveBanner.tell}
           onDismiss={worktreeMoveBanner.dismiss}
         />
+      </BannerSlot>
+
+      <BannerSlot visible={voiceMicNotice !== null}>
+        {voiceMicNotice && <VoiceMicNoticeBanner notice={voiceMicNotice} />}
       </BannerSlot>
 
       <BannerSlot visible={showInjectionBanner}>

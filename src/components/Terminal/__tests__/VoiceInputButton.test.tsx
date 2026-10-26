@@ -120,15 +120,22 @@ describe("VoiceInputButton", () => {
     { status: "connecting" as const, micSignal: "pending" as const, tip: "Starting microphone…" },
     { status: "recording" as const, micSignal: "pending" as const, tip: "Starting microphone…" },
     { status: "recording" as const, micSignal: "silent" as const, tip: "No audio from microphone" },
+    {
+      status: "recording" as const,
+      micSignal: "silent" as const,
+      micDeviceLabel: "AirPods Pro",
+      tip: "No audio from AirPods Pro",
+    },
     { status: "connecting" as const, micSignal: "live" as const, tip: "Stop recording" },
     { status: "recording" as const, micSignal: "live" as const, tip: "Stop recording" },
   ])(
     "only claims listening once the mic delivers audio ($status, mic $micSignal) — #13105",
-    async ({ status, micSignal, tip }) => {
+    async ({ status, micSignal, micDeviceLabel = null, tip }) => {
       useVoiceRecordingStore.setState({
         isConfigured: true,
         status,
         micSignal,
+        micDeviceLabel,
         activeTarget: { panelId: "panel-1" },
       });
       const { getByRole } = render(

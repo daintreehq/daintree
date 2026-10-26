@@ -1977,7 +1977,16 @@ class VoiceRecordingService {
     });
     state.setMicSignal("live");
     if (state.micNotice?.kind === "silent") state.setMicNotice(null);
-    state.announce(`Dictation started in ${formatTargetLabel(target)}.`);
+    // One announcement, so the fallback mic isn't replaced before it's read.
+    const fallbackMic =
+      state.micNotice?.kind === "fallback"
+        ? (state.micNotice.deviceLabel ?? "another microphone")
+        : null;
+    state.announce(
+      fallbackMic
+        ? `Dictation started in ${formatTargetLabel(target)}, using ${fallbackMic}.`
+        : `Dictation started in ${formatTargetLabel(target)}.`
+    );
   }
 
   private startMicSilenceTimer(

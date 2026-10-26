@@ -120,6 +120,12 @@ describe("VoiceRecordingToolbarButton — tooltip names what a click does", () =
       title: "No audio from microphone",
     },
     {
+      status: "recording" as const,
+      micSignal: "silent" as const,
+      micDeviceLabel: "AirPods Pro",
+      title: "No audio from AirPods Pro",
+    },
+    {
       status: "connecting" as const,
       micSignal: "live" as const,
       title: "Recording: claude · notes · Connecting…",
@@ -131,11 +137,12 @@ describe("VoiceRecordingToolbarButton — tooltip names what a click does", () =
     },
   ])(
     "separates mic state from backend state ($status, mic $micSignal) — #13105",
-    ({ status, micSignal, title }) => {
+    ({ status, micSignal, micDeviceLabel = null, title }) => {
       useVoiceRecordingStore.setState({
         isConfigured: true,
         status,
         micSignal,
+        micDeviceLabel,
         activeTarget: {
           panelId: "p-1",
           panelTitle: "claude · notes",
