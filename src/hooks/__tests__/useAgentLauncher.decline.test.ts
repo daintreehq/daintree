@@ -70,7 +70,14 @@ vi.mock("@/store/agentSettingsStore", () => {
   };
 });
 
-vi.mock("@/clients", () => ({ systemClient: { onWake: vi.fn(() => () => {}) } }));
+const getHostAgentLimit = vi.fn();
+vi.mock("@/clients", () => ({
+  systemClient: { onWake: vi.fn(() => () => {}) },
+  terminalClient: { getHostAgentLimit: () => getHostAgentLimit() },
+}));
+
+const notify = vi.fn();
+vi.mock("@/lib/notify", () => ({ notify: (...args: unknown[]) => notify(...args) }));
 
 vi.mock("@/utils/logger", () => ({
   logError: vi.fn(),
@@ -276,5 +283,86 @@ describe("useAgentLauncher — the launching plugin (#14017)", () => {
 
     expect(addPanel).toHaveBeenCalledOnce();
     expect(addPanel.mock.calls[0]?.[0]).not.toHaveProperty("launchedByPluginId");
+  });
+});
+
+describe("useAgentLauncher — the host's agent ceiling (#14704)", () => {
+  beforeEach(() => {
+    addPanel.mockReset();
+    addPanel.mockResolvedValue("terminal-1");
+    getHostAgentLimit.mockReset();
+    notify.mockReset();
+    setElectron(true);
+  });
+
+  afterEach(() => {
+    setElectron(false);
+  });
+
+  it("declines an agent on a full host before any pane opens, and says which host", async () => {
+    const hostAgentLimit = { host: "Studio", count: 10, limit: 10 };
+    getHostAgentLimit.mockResolvedValue(hostAgentLimit);
+    const onDecline = vi.fn();
+    const { result } = renderHook(() => useAgentLauncher());
+
+    let launched: unknown = "unset";
+    await act(async () => {
+      launched = await result.current.launchAgent("claude", { force: true, onDecline });
+    });
+
+    expect(launched).toBeNull();
+    expect(addPanel).not.toHaveBeenCalled();
+    expect(onDecline).toHaveBeenCalledExactlyOnceWith({
+      reason: "host-agent-limit",
+      panelLimit: null,
+      hostAgentLimit,
+    });
+    expect(notify).toHaveBeenCalledOnce();
+    expect(notify.mock.calls[0]?.[0]).toMatchObject({ type: "warning" });
+    expect(String(notify.mock.calls[0]?.[0]?.message)).toContain("Studio");
+  });
+
+  it("launches with room to spare and hands back the count it was judged on", async () => {
+    const hostAgentLimit = { host: "Studio", count: 9, limit: 10 };
+    getHostAgentLimit.mockResolvedValue(hostAgentLimit);
+    const { result } = renderHook(() => useAgentLauncher());
+
+    let launched: unknown;
+    await act(async () => {
+      launched = await result.current.launchAgent("claude", { force: true });
+    });
+
+    expect(addPanel).toHaveBeenCalledOnce();
+    expect(launched).toMatchObject({ terminalId: "terminal-1", hostAgentLimit });
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("launches as before on a machine that isn't hosting, or a host that can't say", async () => {
+    getHostAgentLimit.mockResolvedValueOnce(null);
+    getHostAgentLimit.mockRejectedValueOnce(new Error("no such channel"));
+    const { result } = renderHook(() => useAgentLauncher());
+
+    const launches: unknown[] = [];
+    await act(async () => {
+      launches.push(await result.current.launchAgent("claude", { force: true }));
+      launches.push(await result.current.launchAgent("claude", { force: true }));
+    });
+
+    expect(addPanel).toHaveBeenCalledTimes(2);
+    for (const launched of launches) {
+      expect(launched).toMatchObject({ terminalId: "terminal-1" });
+      expect(launched).not.toHaveProperty("hostAgentLimit");
+    }
+  });
+
+  it("never asks for a plain shell or a panel", async () => {
+    const { result } = renderHook(() => useAgentLauncher());
+
+    await act(async () => {
+      await result.current.launchAgent("terminal");
+      await result.current.launchAgent("browser");
+    });
+
+    expect(getHostAgentLimit).not.toHaveBeenCalled();
   });
 });

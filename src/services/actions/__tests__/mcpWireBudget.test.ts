@@ -579,7 +579,11 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // so `closedIds` alone told a cancelling caller the work had stopped. The
   // result schema is closed, so the field must be advertised or a client's
   // validator refuses the answer; its descriptions were trimmed first.
-  const MAX_EXTERNAL_PAYLOAD_BYTES = 57_700;
+  // 57_700 → 58_000 for #14704, measured at 57_984 B: `agent.launch` can be
+  // refused at the host's agent ceiling, so its closed result schema gains the
+  // `host-agent-limit` status and the `hostAgentLimit` it was judged on, which
+  // names the host; unadvertised, a client's validator refuses the refusal.
+  const MAX_EXTERNAL_PAYLOAD_BYTES = 58_000;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
   // totals moved by the identical amount. Only this one needed the ratchet
@@ -910,7 +914,9 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // 153_342): `host.switch` takes `projectId` and `terminalId`, so another
   // host's waiting notice lands on the agent's terminal. In-app only, so the
   // external ceiling does not move.
-  const MAX_COHORT_PAYLOAD_BYTES = 153_540;
+  // 153_540 → 153_840 for #14704, measured at 153_830 B: the same
+  // `agent.launch` result fields the external ceiling above pays for.
+  const MAX_COHORT_PAYLOAD_BYTES = 153_840;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

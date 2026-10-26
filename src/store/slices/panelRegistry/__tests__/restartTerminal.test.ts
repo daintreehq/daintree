@@ -268,6 +268,32 @@ describe("restartTerminal agent-exited demotion (#5764)", () => {
     expect(mockSpawn.mock.calls[2]![0].allowMissingPluginTools).toBeUndefined();
   });
 
+  it("shows a restart refused at the host's agent ceiling as the spawn banner naming the host (#14704)", async () => {
+    const { ClientAppError } = await import("@/utils/clientAppError");
+    const hostAgentLimit = { host: "Studio", count: 10, limit: 10 };
+    mockSpawn.mockRejectedValueOnce(
+      new ClientAppError("HOST_AGENT_LIMIT_REACHED", "refused", "Studio is full.", {
+        code: "HOST_AGENT_LIMIT_REACHED",
+        ...hostAgentLimit,
+      })
+    );
+    const active = { ...agentPanelBase, agentState: "working" as const };
+    usePanelStore.setState({ panelsById: { [active.id]: active }, panelIds: [active.id] });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    const panel = usePanelStore.getState().panelsById["test-1"];
+    if (!panel || !isPtyPanel(panel)) throw new Error("expected the PTY panel to remain");
+    expect(panel.restartError).toBeUndefined();
+    expect(panel.spawnStatus).toBe("failed");
+    expect(panel.agentState).toBe("exited");
+    expect(panel.spawnError).toEqual({
+      code: "HOST_AGENT_LIMIT",
+      message: "Studio is full.",
+      hostAgentLimit,
+    });
+  });
+
   it("carries a launch context into a Claude restart, since the fresh bearer binds to it (#12486)", async () => {
     const active = { ...agentPanelBase, agentState: "working" as const };
     usePanelStore.setState({

@@ -285,7 +285,7 @@ export interface UseAgentLauncherReturn {
  */
 async function readHostAgentLimit(): Promise<HostAgentLimitSnapshot | null> {
   try {
-    return await terminalClient.getHostAgentLimit();
+    return (await terminalClient.getHostAgentLimit()) ?? null;
   } catch (error) {
     logWarn("Couldn't read the host's agent limit; launching without it", { error });
     return null;
@@ -375,7 +375,11 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
         panelLimit: PanelLimitSnapshot | null = null,
         hostAgentLimit: HostAgentLimitSnapshot | null = null
       ): null => {
-        launchOptions?.onDecline?.({ reason, panelLimit, hostAgentLimit });
+        launchOptions?.onDecline?.({
+          reason,
+          panelLimit,
+          ...(hostAgentLimit !== null ? { hostAgentLimit } : {}),
+        });
         return null;
       };
 

@@ -80,6 +80,7 @@ const ALL_SPAWN_ERROR_CODES: readonly SpawnErrorCode[] = [
   "TERMINAL_ALREADY_LIVE",
   "SPAWN_TIMEOUT",
   "REQUIRED_PLUGIN_TOOLS",
+  "HOST_AGENT_LIMIT",
   "UNKNOWN",
 ] as const;
 
@@ -433,5 +434,40 @@ describe("SpawnErrorBanner — required plugin tools", () => {
       />
     );
     expect(screen.queryByText("Start without them")).toBeNull();
+  });
+});
+
+describe("SpawnErrorBanner - host agent limit (#14704)", () => {
+  it("names the host that refused and keeps Retry primary, for after an agent closes", () => {
+    const onRetry = vi.fn();
+    render(
+      <SpawnErrorBanner
+        terminalId="t-1"
+        error={{
+          code: "HOST_AGENT_LIMIT",
+          message: "refused",
+          hostAgentLimit: { host: "Studio", count: 10, limit: 10 },
+        }}
+        onUpdateCwd={vi.fn()}
+        onRetry={onRetry}
+        onTrash={vi.fn()}
+      />
+    );
+    expect(document.body.textContent ?? "").toContain("Studio");
+    expect(screen.getByTestId("overflow-content").textContent).not.toContain("Retry");
+    expect(screen.queryByText("Terminal limits")).toBeNull();
+  });
+
+  it("falls back to the refusal's own words when it came without the host's count", () => {
+    render(
+      <SpawnErrorBanner
+        terminalId="t-1"
+        error={{ code: "HOST_AGENT_LIMIT", message: "Studio is full" }}
+        onUpdateCwd={vi.fn()}
+        onRetry={vi.fn()}
+        onTrash={vi.fn()}
+      />
+    );
+    expect(document.body.textContent ?? "").toContain("Studio is full");
   });
 });

@@ -79,6 +79,7 @@ import {
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { isClientAppError } from "@/utils/clientAppError";
 import { requiredPluginToolsSpawnError } from "@/utils/requiredPluginToolsSpawnError";
+import { hostAgentLimitSpawnError } from "@/utils/hostAgentLimitSpawnError";
 import type { SpawnError } from "@shared/types/pty-host";
 import { transferBetweenWorktreeIndex } from "./worktreeIndex";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
@@ -195,11 +196,12 @@ function updateTerminal(
 
 /** {@link updateTerminal}, then persisted, for writes a reload must not undo. */
 /**
- * A relaunch main refused for missing plugin tools (#14096): shown as the
- * spawn banner with its choices, and the agent marked exited, since no process
- * started that could ever report it stopped.
+ * A relaunch main refused, for missing plugin tools (#14096) or at the host's
+ * agent ceiling (#14704): shown as the spawn banner with its choices, and the
+ * agent marked exited, since no process started that could ever report it
+ * stopped.
  */
-function refusedForPluginTools(t: PtyPanelData, spawnError: SpawnError): PtyPanelData {
+function refusedLaunch(t: PtyPanelData, spawnError: SpawnError): PtyPanelData {
   return {
     ...t,
     spawnStatus: "failed",
@@ -1124,25 +1126,25 @@ export const createRestartActions = (
         phase = "frontend-destroy";
       }
 
-      // A refusal for missing plugin tools is the same blocker the first launch
-      // hit, so it shows the spawn banner with its choices again, not a
-      // generic restart failure.
-      const toolsError = requiredPluginToolsSpawnError(error);
-      if (toolsError !== null) {
+      // A refusal for missing plugin tools, or at the host's agent ceiling, is
+      // the same blocker the first launch hit, so it shows the spawn banner
+      // with its choices again, not a generic restart failure.
+      const refusalError = requiredPluginToolsSpawnError(error) ?? hostAgentLimitSpawnError(error);
+      if (refusalError !== null) {
         peekTerminalService()?.setInputLocked(id, false);
         unmarkTerminalRestarting(id);
         // Persisted, and the agent marked exited as a refused first launch is:
         // nothing started, so nothing will ever report it stopped.
         updateAndSaveTerminal(set, id, (t) =>
           isPtyPanel(t)
-            ? refusedForPluginTools(
+            ? refusedLaunch(
                 {
                   ...t,
                   isRestarting: false,
                   restartError: undefined,
                   ...(consumedSessionId ? { agentSessionId: consumedSessionId } : {}),
                 },
-                toolsError
+                refusalError
               )
             : t
         );
@@ -1864,7 +1866,7 @@ async function respawnAgentOnPreset(
       appError?.userMessage ?? formatErrorMessage(error, "Failed to restart terminal");
     // The same refusal a first launch gets, with its choices, on the preset
     // the pane rolls back to.
-    const toolsError = requiredPluginToolsSpawnError(error);
+    const refusalError = requiredPluginToolsSpawnError(error) ?? hostAgentLimitSpawnError(error);
     unmarkTerminalRestarting(id);
     // Persisted: the respawn already saved the destination, and a reload
     // must not bring the pane back on a preset it never started on.
@@ -1885,8 +1887,8 @@ async function respawnAgentOnPreset(
           ? { title: terminal.title, titleMode: terminal.titleMode }
           : {}),
       };
-      if (toolsError !== null && isPtyPanel(rolledBack)) {
-        return refusedForPluginTools({ ...rolledBack, restartError: undefined }, toolsError);
+      if (refusalError !== null && isPtyPanel(rolledBack)) {
+        return refusedLaunch({ ...rolledBack, restartError: undefined }, refusalError);
       }
       return {
         ...rolledBack,
