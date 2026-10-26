@@ -367,6 +367,24 @@ describe("DeepgramTranscriptionProvider", () => {
     }
   );
 
+  it("keeps every term assembly gathers, under Deepgram's 100-term ceiling", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    const full = Array.from({ length: MAX_KEYTERMS + 10 }, (_, i) => `term${i}`);
+    void provider.start({ ...BASE_SETTINGS, keyterms: full }, "session-1");
+    await Promise.resolve();
+    const injected = new URL(latestInstance().url).searchParams.getAll("keyterm");
+    expect(injected).toEqual(full.slice(0, MAX_KEYTERMS));
+    expect(injected.length).toBeLessThanOrEqual(100);
+
+    // Every tier full of the longest terms assembly allows still trims to fit.
+    const longest = Array.from({ length: MAX_KEYTERMS }, (_, i) => `${i}`.padStart(100, "x"));
+    void provider.start({ ...BASE_SETTINGS, keyterms: longest }, "session-1");
+    await Promise.resolve();
+    const trimmed = new URL(latestInstance().url).searchParams.getAll("keyterm");
+    expect(trimmed.reduce((n, t) => n + t.length, 0)).toBeLessThanOrEqual(3_000);
+    provider.stop();
+  });
+
   it("drops empty/whitespace keyterms before injecting", async () => {
     const provider = new DeepgramTranscriptionProvider();
     void provider.start(

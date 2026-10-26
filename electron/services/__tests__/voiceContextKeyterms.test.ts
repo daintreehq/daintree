@@ -315,21 +315,57 @@ describe("assembleKeyterms", () => {
       expect(result.length).toBeLessThanOrEqual(MAX_KEYTERMS);
     });
 
-    it("keeps room for the branch however many commands there are", async () => {
-      const dictionary = Array.from({ length: 100 }, (_, i) => `customTerm${i}`);
-      const result = await assembleKeyterms({
-        customDictionary: dictionary,
-        projectName: "Daintree",
-        terminalId: TARGET,
-        ptyClient: asPtyClient(
-          makePtyClient([], { cwd: "/repo", worktreeId: "/repo/worktrees/feature" })
-        ),
-        commandTerms: Promise.resolve(commands),
-      });
-      expect(result).toContain("command name 0");
-      expect(result).toContain("feature");
-      expect(result).toContain("auth");
-      expect(result).toHaveLength(MAX_KEYTERMS);
+    it("fits every tier at its cap beside a full dictionary, branch included", async () => {
+      const dependencies = ["brindlewood", "corvaxjs", "drumlinkit", "elmwort", "fennickdb"];
+      const root = await mkdtemp(join(tmpdir(), "voice-budget-"));
+      try {
+        await writeFile(
+          join(root, "package.json"),
+          JSON.stringify({
+            name: "quartzline",
+            dependencies: Object.fromEntries([...dependencies, "gorselyui"].map((d) => [d, "1"])),
+          })
+        );
+        const dictionary = Array.from({ length: 100 }, (_, i) => `customTerm${i}`);
+        const names = {
+          hosts: Array.from({ length: 5 }, (_, i) => `Mac Studio ${i + 1}`),
+          projects: Array.from({ length: 5 }, (_, i) => `Plugin Kit ${i + 1}`),
+          worktrees: ["billing", "checkout", "ledger"],
+        };
+        const result = await assembleKeyterms({
+          customDictionary: dictionary,
+          projectName: "Alpha Bravo Charlie Delta Echo",
+          projectPath: root,
+          terminalId: TARGET,
+          ptyClient: asPtyClient(
+            makePtyClient(["const userSessionStore = createStore();"], {
+              cwd: "/repo",
+              worktreeId: "/repo/worktrees/feature",
+            })
+          ),
+          names,
+          commandTerms: Promise.resolve(commands),
+        });
+        // 36 dictionary + 4 project + 6 repository + 12 names + 12 command + 4 branch.
+        expect(result.filter((t) => t.startsWith("customTerm"))).toHaveLength(
+          MAX_DICTIONARY_KEYTERMS
+        );
+        expect(result).toEqual(
+          expect.arrayContaining(["Alpha Bravo Charlie Delta Echo", "Alpha", "Bravo", "Charlie"])
+        );
+        expect(result).toEqual(expect.arrayContaining(["quartzline", ...dependencies]));
+        const screened = screenDictationNames(names);
+        const sentNames = [...screened.hosts, ...screened.projects, ...screened.worktrees];
+        expect(sentNames).toHaveLength(MAX_NAME_KEYTERMS);
+        expect(result).toEqual(expect.arrayContaining(sentNames));
+        expect(result.filter((t) => t.startsWith("command name"))).toHaveLength(12);
+        expect(result.slice(-4)).toEqual(["feature", "auth", "login", "service"]);
+        expect(result).toHaveLength(MAX_KEYTERMS);
+        // The terminal tier takes only what is left.
+        expect(result).not.toContain("userSessionStore");
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
     });
 
     it("adds commands most likely first, ahead of terminal identifiers", async () => {
@@ -704,7 +740,7 @@ describe("assembleKeyterms names", () => {
     expect(result.length).toBeLessThanOrEqual(MAX_KEYTERMS);
   });
 
-  it("keeps every name and four branch words when every tier ahead is full", async () => {
+  it("keeps every name, command and four branch words when every tier ahead is full", async () => {
     const root = await mkdtemp(join(tmpdir(), "voice-tiers-"));
     try {
       const deps = ["zephyr", "quasar", "nebula", "photon", "tachyon", "neutrino", "graviton"];
@@ -723,12 +759,14 @@ describe("assembleKeyterms names", () => {
         worktrees: ["billing", "checkout", "ledger", "invoices", "payouts"],
       };
       const dictionary = Array.from({ length: 80 }, (_, i) => `customTerm${i}`);
+      const commands = Array.from({ length: 20 }, (_, i) => `command name ${i}`);
 
       const result = await assembleKeyterms({
         customDictionary: dictionary,
         projectName: "QuartzlineOrbitStudio",
         projectPath: root,
         names,
+        commandTerms: Promise.resolve(commands),
         terminalId: TARGET,
         ptyClient: asPtyClient(makePtyClient(["const handleRequest = useSessionStore();"])),
       });
@@ -742,7 +780,8 @@ describe("assembleKeyterms names", () => {
       expect(count(["meridian", ...deps])).toBe(6);
       expect(sentNames).toHaveLength(MAX_NAME_KEYTERMS);
       expect(count(sentNames)).toBe(MAX_NAME_KEYTERMS);
-      expect(count(tokenizeBranchName(branch))).toBeGreaterThanOrEqual(4);
+      expect(count(commands)).toBe(12);
+      expect(count(tokenizeBranchName(branch))).toBe(4);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

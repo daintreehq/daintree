@@ -26,8 +26,8 @@ const REPO_TIER_CAP = 6;
 const NAME_CATEGORY_CAP = 5;
 const COMMAND_TIER_CAP = 12;
 // Slots commands leave for the branch, so a long command list can't crowd out
-// the worktree's own words.
-const BRANCH_RESERVED_SLOTS = 2;
+// the worktree's own words. The branch's share of RESERVED_CONTEXT_KEYTERMS.
+const BRANCH_RESERVED_SLOTS = 4;
 // Deepgram nova-3 rejects any keyterm longer than 100 chars with an HTTP 400
 // that fails the WebSocket upgrade, so cap every term at the source.
 const MAX_KEYTERM_LENGTH = 100;
@@ -489,8 +489,9 @@ export async function assembleTaggedKeyterms(opts: KeytermAssemblyOpts): Promise
   // Priority 1: The project's vocabulary, then the user's own dictionary, each
   // newest first, because a term is usually added right after recognition
   // failed on it. Both share one budget, capped below MAX_KEYTERMS so project,
-  // repository, workspace-name and branch terms keep their reserved slots. These
-  // are hand-entered, so they skip the secret filter the derived tiers go through.
+  // repository, workspace-name, command and branch terms keep their reserved
+  // slots. These are hand-entered, so they skip the secret filter the derived
+  // tiers go through.
   let dictionaryAdded = 0;
   for (const [list, listSource] of [
     [projectDictionary, "projectDictionary"],
