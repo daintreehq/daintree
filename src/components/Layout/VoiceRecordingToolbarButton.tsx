@@ -17,6 +17,7 @@ import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
 import { actionService } from "@/services/ActionService";
+import type { VoiceSessionElsewhere } from "@shared/types";
 
 // Flywheel — matches VoiceInputButton so the toolbar and panel-header
 // indicators behave identically.
@@ -69,6 +70,50 @@ function VoiceLockedButton({
   );
 }
 
+// Dictation another view owns: this view can't show its audio, only where it
+// runs. The dictation key stops it from here.
+function VoiceElsewhereButton({
+  session,
+  shortcut,
+  "data-toolbar-item": dataToolbarItem,
+}: {
+  session: VoiceSessionElsewhere;
+  shortcut: string | undefined;
+  "data-toolbar-item"?: string;
+}) {
+  const title = session.projectName
+    ? `Dictating in ${session.projectName}`
+    : "Dictating in another window";
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon"
+          data-toolbar-item={dataToolbarItem}
+          onClick={() => {
+            void voiceRecordingService.revealSessionElsewhere();
+          }}
+          className="toolbar-icon-button relative mr-0.5 text-text-secondary"
+          aria-label={`${title}. Click to go there.`}
+          data-testid="voice-elsewhere-button"
+        >
+          <Mic className="h-4 w-4" />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom">
+        <div className="flex flex-col gap-0.5">
+          <span className="font-medium">{title}</span>
+          <span className="text-text-secondary">Click to go there</span>
+          {shortcut && (
+            <span className="text-text-secondary">{createTooltipContent("Stop", shortcut)}</span>
+          )}
+        </div>
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 function VoiceRecordingPlaceholder() {
   // Reserves the slot footprint so right-aligned toolbar items don't shift
   // when a session starts/stops. Matches DevServerPlaceholder's pattern.
@@ -91,6 +136,7 @@ export function VoiceRecordingToolbarButton({
   const activeTarget = useVoiceRecordingStore((state) => state.activeTarget);
   const lockedTarget = useVoiceRecordingStore((state) => state.lockedTarget);
   const pendingTarget = useVoiceRecordingStore((state) => state.pendingTarget);
+  const sessionElsewhere = useVoiceRecordingStore((state) => state.sessionElsewhere);
   const status = useVoiceRecordingStore((state) => state.status);
   const elapsedSeconds = useVoiceRecordingStore((state) => state.elapsedSeconds);
   const micSignal = useVoiceRecordingStore((state) => state.micSignal);
@@ -248,6 +294,15 @@ export function VoiceRecordingToolbarButton({
   }, [showOrbit, isFinishing, isPaused]);
 
   if (!isActive || (!showOrbit && !showArming)) {
+    if (!isActive && sessionElsewhere) {
+      return (
+        <VoiceElsewhereButton
+          session={sessionElsewhere}
+          shortcut={shortcut}
+          data-toolbar-item={dataToolbarItem}
+        />
+      );
+    }
     if (!isActive && lockedTarget) {
       const lockedLabel =
         lockedTarget.panelTitle?.trim() ||

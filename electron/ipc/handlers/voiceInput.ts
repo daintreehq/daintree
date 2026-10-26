@@ -18,7 +18,11 @@ import type {
   VoiceInputSettingsPatch,
   VoiceTranscriptionProvider,
 } from "../../../shared/types/ipc/api.js";
-import type { VoiceSessionEndReason, VoiceStartOutcome } from "../../../shared/types/voice.js";
+import type {
+  VoiceLiveSessionUpdate,
+  VoiceSessionEndReason,
+  VoiceStartOutcome,
+} from "../../../shared/types/voice.js";
 import { logDebug, logInfo, logWarn } from "../../utils/logger.js";
 import { buildOpenAIHeaders } from "../../../shared/utils/openaiHeaders.js";
 import { voiceErrorLogFields } from "../../../shared/utils/voiceLogFields.js";
@@ -58,6 +62,11 @@ import {
   type VoiceInputStartOptions,
 } from "../../schemas/ipc.js";
 import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
+import {
+  getAllAppWebContents,
+  getAppWebContents,
+  getWindowForWebContents,
+} from "../../window/webContentsRegistry.js";
 
 let service: VoiceTranscriptionService | null = null;
 let servicePromise: Promise<VoiceTranscriptionService> | null = null;
@@ -115,9 +124,42 @@ let liveSession: VoiceSession | null = null;
 // A replaced session whose provider is still draining. The service stays its
 // until the drain settles, so a newer session waits for it before starting.
 let drainingSession: VoiceSession | null = null;
+// Grows with every change of the live session, so a view can order the
+// snapshot it pulled against the updates pushed to it.
+let liveSessionRevision = 0;
 
 function isLive(session: VoiceSession): boolean {
   return liveSession === session && !session.ended;
+}
+
+/** The live session as one view sees it: none when that view owns it. */
+function liveSessionUpdateFor(webContentsId: number): VoiceLiveSessionUpdate {
+  const session = liveSession;
+  if (!session || session.ended || session.webContentsId === webContentsId) {
+    return { revision: liveSessionRevision, session: null };
+  }
+  return {
+    revision: liveSessionRevision,
+    session: {
+      sessionId: session.id,
+      projectId: session.projectId,
+      projectName: session.projectInfo.name ?? null,
+    },
+  };
+}
+
+// Every view hears about it, cached ones included: the dictation key has to
+// stop the live session from any of them, and each says where it runs.
+function publishLiveSession(): void {
+  liveSessionRevision++;
+  for (const wc of getAllAppWebContents()) {
+    if (wc.isDestroyed()) continue;
+    try {
+      wc.send(CHANNELS.VOICE_INPUT_LIVE_SESSION, liveSessionUpdateFor(wc.id));
+    } catch {
+      // A view being torn down misses it; a new one pulls the current state.
+    }
+  }
 }
 
 /** The live session's id and the view and project that own it, or null. */
@@ -143,7 +185,10 @@ export function getLiveVoiceSession(): {
 function endSession(session: VoiceSession, reason: VoiceSessionEndReason): void {
   if (session.ended) return;
   session.ended = true;
-  if (liveSession === session) liveSession = null;
+  if (liveSession === session) {
+    liveSession = null;
+    publishLiveSession();
+  }
   session.preStartAudio = null;
   session.markHandedOff();
   session.unsubscribe?.();
@@ -787,6 +832,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     const previous = liveSession;
     liveSession = session;
     if (previous) retireSession(previous, session);
+    publishLiveSession();
     // A view that goes away takes its session with it, and stops the provider
     // if the session has one: live, or replaced and still draining.
     session.unwatchDestroyed = onWebContentsDestroyed(sender, () => {
@@ -1055,6 +1101,44 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     return drainSession(session, "stopped");
   };
 
+  const handleGetLiveSession = (ctx: IpcContext): VoiceLiveSessionUpdate =>
+    liveSessionUpdateFor(ctx.webContentsId);
+
+  // Another view's dictation key. The owner runs its own stop, so the text
+  // lands in its draft and its microphone is released.
+  const handleStopLive = (sessionId: string): boolean => {
+    const session = liveSession;
+    if (!session || session.id !== sessionId || session.ended) return false;
+    if (session.sender.isDestroyed()) return false;
+    session.sender.send(CHANNELS.VOICE_INPUT_STOP_REQUESTED, { sessionId });
+    return true;
+  };
+
+  // Another view's indicator. The owner's own window brings it forward: a
+  // switch asked from any other window would release the owner's cached view
+  // to open the project there, ending the session it was meant to show.
+  const handleRevealLive = (sessionId: string): boolean => {
+    const session = liveSession;
+    if (!session || session.id !== sessionId || session.ended) return false;
+    if (session.sender.isDestroyed()) return false;
+    const win = getWindowForWebContents(session.sender);
+    if (win && !win.isDestroyed()) {
+      const shown = getAppWebContents(win);
+      if (shown.id !== session.webContentsId && session.projectId && !shown.isDestroyed()) {
+        shown.send(CHANNELS.MENU_ACTION, {
+          actionId: "project.switch",
+          args: { projectId: session.projectId },
+        });
+      }
+      if (win.isMinimized()) win.restore();
+      win.show();
+      win.focus();
+    }
+    // The owner focuses the panel it is dictating into.
+    session.sender.send(CHANNELS.VOICE_INPUT_REVEAL_REQUESTED, { sessionId });
+    return true;
+  };
+
   const handleFlushParagraph = (ctx: IpcContext, sessionId: string): { rawText: string | null } => {
     const session = liveSession;
     // Until the session is active, the service's provider belongs to no one.
@@ -1168,6 +1252,19 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         VoiceSessionIdSchema,
         handleFlushParagraph,
         { withContext: true }
+      ),
+      getLiveSession: op(VOICE_INPUT_METHOD_CHANNELS.getLiveSession, handleGetLiveSession, {
+        withContext: true,
+      }),
+      stopLive: opValidated(
+        VOICE_INPUT_METHOD_CHANNELS.stopLive,
+        VoiceSessionIdSchema,
+        handleStopLive
+      ),
+      revealLive: opValidated(
+        VOICE_INPUT_METHOD_CHANNELS.revealLive,
+        VoiceSessionIdSchema,
+        handleRevealLive
       ),
     },
   });

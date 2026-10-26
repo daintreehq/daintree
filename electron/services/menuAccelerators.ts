@@ -349,6 +349,15 @@ export function findTerminalCycleAction(
 }
 
 /**
+ * Whether this keystroke is the dictation key as the person has it bound. A
+ * focused page that isn't an app view hands it to the app, which stops the
+ * session wherever it runs or starts one (#14601).
+ */
+export function isDictationKey(input: Electron.Input): boolean {
+  return findActionForInput(input, ["voiceInput.toggle"], "global") !== undefined;
+}
+
+/**
  * Portal tab keys a focused portal page hands to the portal. Only combos held
  * with Cmd/Ctrl qualify: a bare or Shift-only key is the page's own typing.
  */

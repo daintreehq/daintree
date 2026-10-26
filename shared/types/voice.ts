@@ -49,6 +49,27 @@ export type VoiceInputStatus =
 export type VoiceSessionEndReason = "stopped" | "cancelled" | "superseded" | "failed";
 
 /**
+ * A dictation session another view owns. Main tells every view about the live
+ * session on `voice-input:live-session`, except the one that owns it, so the
+ * dictation key can stop it from anywhere and the view can say where it runs.
+ */
+export interface VoiceSessionElsewhere {
+  sessionId: string;
+  projectId: string | null;
+  projectName: string | null;
+}
+
+/**
+ * The live session as one view sees it: `session` is null when none is live or
+ * that view owns it. `revision` grows with every change, so a pulled snapshot
+ * can't overwrite a newer push.
+ */
+export interface VoiceLiveSessionUpdate {
+  revision: number;
+  session: VoiceSessionElsewhere | null;
+}
+
+/**
  * How a `voice-input:start` call came out. A provider that couldn't start
  * reports why in `error`, for the user; it is never logged.
  */
