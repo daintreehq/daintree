@@ -131,15 +131,18 @@ export interface CaptureWorktreeOptions extends CaptureReviewPointOptions {
   include?: readonly Uint8Array[];
 }
 
+/** What status said about an entry's working tree against its index, as git compares them. */
+export type WorktreeVsIndex = "matches" | "differs";
+
 /** What a comparison (#14583) reads beside the point. */
 export interface WorktreeCapture {
   point: ReviewPoint;
   /**
-   * `reviewPointPathKey`s of the entries whose working tree status found equal
-   * to their index, as git compares them. A raw id can't say that on its own:
-   * with `core.autocrlf` a text file's bytes never hash to its blob.
+   * By `reviewPointPathKey`, for the entries status compared. A raw id can't
+   * say this on its own: with `core.autocrlf` a text file's bytes never hash to
+   * its blob. An entry status didn't compare has no value.
    */
-  worktreeMatchesIndex: ReadonlySet<string>;
+  worktreeVsIndex: ReadonlyMap<string, WorktreeVsIndex>;
 }
 
 type CaptureFailed = Extract<ReviewPointCaptureResult, { kind: "failed" }>;
@@ -571,7 +574,7 @@ async function capture(
   // -- The point --------------------------------------------------------------
 
   const entries: ReviewPointEntry[] = [];
-  const worktreeMatchesIndex = new Set<string>();
+  const worktreeVsIndex = new Map<string, WorktreeVsIndex>();
   const uncovered: Array<{ path: Buffer; reason: ReviewPointGapReason }> = [...subtrees];
   for (const candidate of kept) {
     const worktree = candidate.worktree?.identity ?? unverifiable("deadline");
@@ -582,7 +585,8 @@ async function capture(
       index: indexIdentity(candidate),
       worktree,
     });
-    if (statusMatchedIndex(candidate)) worktreeMatchesIndex.add(reviewPointPathKey(fields));
+    const compared = status ? statusComparison(candidate) : null;
+    if (compared) worktreeVsIndex.set(reviewPointPathKey(fields), compared);
     if (worktree.kind === "unverifiable") {
       uncovered.push({ path: candidate.path, reason: worktree.reason });
     } else if (worktree.kind === "submodule" && worktree.contents !== "clean") {
@@ -617,7 +621,7 @@ async function capture(
             uncoveredCount: listingComplete ? uncovered.length : null,
           },
   };
-  return { kind: "captured", capture: { point, worktreeMatchesIndex } };
+  return { kind: "captured", capture: { point, worktreeVsIndex } };
 }
 
 // -- Listings -----------------------------------------------------------------
@@ -1001,17 +1005,18 @@ function indexIdentity(candidate: Candidate): ReviewPointIndexIdentity {
 }
 
 /**
- * Whether status compared the working tree with a stage-0 index entry and found
- * them equal. Never for a path status was told not to look at, nor for a
- * gitlink, whose contents status doesn't read here.
+ * What a whole status listing said about a path's working tree against its
+ * stage-0 index entry: a path it didn't report matches. Null where status
+ * didn't compare them: a path it was told not to look at, a gitlink, whose
+ * contents it doesn't read here, or an index this capture couldn't list.
  */
-function statusMatchedIndex(candidate: Candidate): boolean {
+function statusComparison(candidate: Candidate): WorktreeVsIndex | null {
   const stageZero = candidate.index?.find((record) => record.stage === 0);
-  if (!stageZero || stageZero.mode === "160000" || candidate.intentToAdd) return false;
-  if (/^[a-z]$/.test(stageZero.tag) || stageZero.tag === "S" || stageZero.tag === "s") return false;
+  if (!stageZero || stageZero.mode === "160000" || candidate.intentToAdd) return null;
+  if (/^[a-z]$/.test(stageZero.tag) || stageZero.tag === "S" || stageZero.tag === "s") return null;
   const { status } = candidate;
-  if (status) return status.kind === "changed" && status.xy[1] === ".";
-  return true;
+  if (status?.kind === "unmerged") return null;
+  return !status || status.xy[1] === "." ? "matches" : "differs";
 }
 
 function conflicted(

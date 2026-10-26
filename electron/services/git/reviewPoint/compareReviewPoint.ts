@@ -31,9 +31,11 @@ import {
   captureWorktree,
   rejectOnAbort,
   type ReviewPointLimits,
+  type WorktreeVsIndex,
 } from "./captureReviewPoint.js";
 import { parseDiffTreeRaw, type TreeDiffRecord } from "./parseGitRecords.js";
 import {
+  GitCommandError,
   GitOutputLimitError,
   GitTimeoutError,
   runGitForBytes,
@@ -147,7 +149,9 @@ async function compare(
   signal: AbortSignal
 ): Promise<ReviewComparisonResult> {
   const deadlineAt = Date.now() + limits.timeoutMs;
-  const reviewedGaps = gapIndex(reviewed);
+  if (process.platform === "win32" && !usableOnWindows(reviewed)) {
+    return failed("invalid-review-point", "The review point names a path Windows can't hold.");
+  }
   // Every path the point has anything to say about is read again, so it's
   // compared like for like whether or not it is still in the change set.
   const include = [
@@ -165,9 +169,13 @@ async function compare(
     return failed("changed-during-compare", "The worktree changed while it was being compared.");
   }
   if (captured.kind === "failed") return failed(captured.reason, captured.message);
-  const { point: current, worktreeMatchesIndex } = captured.capture;
-  if (current.objectFormat !== reviewed.objectFormat) {
-    return failed("invalid-review-point", "The review point is from another kind of repository.");
+  const { point: current, worktreeVsIndex } = captured.capture;
+  if (
+    current.objectFormat !== reviewed.objectFormat ||
+    current.commonDir !== reviewed.commonDir ||
+    current.worktreePath !== reviewed.worktreePath
+  ) {
+    return failed("invalid-review-point", "The review point was taken in another worktree.");
   }
   if (!sameBranch(reviewed.head, current.head)) {
     return { state: "different-branch", reviewed: reviewed.head, current: current.head };
@@ -190,24 +198,23 @@ async function compare(
     ...reviewed.base.mergeBases,
     current.base.tip,
   ]);
-  const reviewedMergeBase = reviewed.base.mergeBases.find((oid) => present.has(oid)) ?? null;
 
   // What the reviewed point's unlisted paths held: its HEAD commit, or any
   // merge base, which its change set made identical to HEAD outside the set.
   let reviewedTree: string | null = null;
   if (reviewedCommit === null) reviewedTree = emptyTree;
   else if (present.has(reviewedCommit)) reviewedTree = reviewedCommit;
-  else if (reviewedMergeBase) reviewedTree = reviewedMergeBase;
-  // A base with no common ancestor put every path in HEAD in the change set.
-  else if (reviewed.base.tip !== null && reviewed.base.mergeBases.length === 0) {
-    reviewedTree = emptyTree;
+  else {
+    reviewedTree = reviewed.base.mergeBases.find((oid) => present.has(oid)) ?? null;
+    // A base with no common ancestor put every path in HEAD in the change set.
+    if (reviewed.base.tip !== null && reviewed.base.mergeBases.length === 0) {
+      reviewedTree = emptyTree;
+    }
   }
   const currentTree = currentCommit ?? emptyTree;
 
   const reasons = new Set<ReviewComparisonIncompleteReason>();
   if (reviewedTree === null) reasons.add("reviewed-state-unavailable");
-  const reviewedListed = listsWholeChangeSet(reviewed);
-  const currentListed = listsWholeChangeSet(current);
   if (
     reviewed.incomplete?.reasons.some(
       (reason) => reason !== "base-unavailable" || reviewedTree === null
@@ -243,48 +250,52 @@ async function compare(
         candidateFor(pathFieldsOf(record.path)).diff = record;
       }
     } catch (error) {
-      if (!(error instanceof GitOutputLimitError)) throw error;
+      if (error instanceof GitOutputLimitError) reasons.add("change-set-too-large");
+      // The commit is there but its tree isn't, as in a shallow or partial clone.
+      else if (error instanceof GitCommandError) reasons.add("reviewed-state-unavailable");
+      else throw error;
       treesDiffed = false;
-      reasons.add("change-set-too-large");
     }
   }
 
-  const baseChanged = await baseUpdatePaths(git, reviewedMergeBase, current.base.mergeBases);
+  const baseChanged = await baseUpdatePaths(git, reviewed, current, present);
   const bothHaveBase = reviewed.base.tip !== null && current.base.tip !== null;
-  const currentGaps = gapIndex(current);
+  const reviewedCoverage = coverage(reviewed);
+  const currentCoverage = coverage(current);
 
   const files: ReviewComparisonFile[] = [];
   const ordered = [...candidates.entries()].sort(([, a], [, b]) =>
     Buffer.compare(Buffer.from(a.bytes), Buffer.from(b.bytes))
   );
   for (const [key, candidate] of ordered) {
-    const reviewedSide: ReviewComparisonSide = candidate.reviewed
-      ? listed(candidate.reviewed)
-      : (gapFor(reviewedGaps, candidate.bytes) ??
-        (!reviewedListed
-          ? { kind: "uncovered", reason: "change-set-too-large" }
-          : reviewedTree === null
-            ? { kind: "uncovered", reason: "reviewed-state-unavailable" }
-            : candidate.diff
-              ? { kind: "unlisted", entry: gitEntry(candidate.diff.srcMode, candidate.diff.srcOid) }
-              : treesDiffed && candidate.current
-                ? // Not in the tree diff, so the reviewed tree had what HEAD has now.
-                  { kind: "unlisted", entry: candidate.current.head }
-                : { kind: "uncovered", reason: unnamedGap(reviewed) }));
-    const currentSide: ReviewComparisonSide = candidate.current
-      ? listed(candidate.current)
-      : (gapFor(currentGaps, candidate.bytes) ??
-        (!currentListed
-          ? { kind: "uncovered", reason: "change-set-too-large" }
-          : candidate.diff
-            ? { kind: "unlisted", entry: gitEntry(candidate.diff.dstMode, candidate.diff.dstOid) }
-            : // A path the capture was asked to read but left out, past a cap on naming them.
-              { kind: "uncovered", reason: unnamedGap(current) }));
+    let reviewedSide = sideFrom(reviewedCoverage, candidate.bytes, candidate.reviewed);
+    if (!reviewedSide) {
+      if (reviewedTree === null) {
+        reviewedSide = { kind: "uncovered", reason: "reviewed-state-unavailable" };
+      } else if (candidate.diff) {
+        reviewedSide = {
+          kind: "unlisted",
+          entry: gitEntry(candidate.diff.srcMode, candidate.diff.srcOid),
+        };
+      } else if (treesDiffed && candidate.current) {
+        // Not in the tree diff, so the reviewed tree had what HEAD has now.
+        reviewedSide = { kind: "unlisted", entry: candidate.current.head };
+      } else {
+        reviewedSide = { kind: "uncovered", reason: "change-set-too-large" };
+      }
+    }
+    let currentSide = sideFrom(currentCoverage, candidate.bytes, candidate.current);
+    if (!currentSide) {
+      currentSide = candidate.diff
+        ? { kind: "unlisted", entry: gitEntry(candidate.diff.dstMode, candidate.diff.dstOid) }
+        : // A path the capture was asked to read but left out, past a cap on naming them.
+          { kind: "uncovered", reason: currentCoverage.unnamed ?? "change-set-too-large" };
+    }
 
     const { index, worktree } = compareSides(
       reviewedSide,
       currentSide,
-      currentSide.kind === "unlisted" || worktreeMatchesIndex.has(key)
+      currentSide.kind === "unlisted" ? "matches" : (worktreeVsIndex.get(key) ?? null)
     );
     if (index === "unchanged" && worktree === "unchanged") continue;
 
@@ -294,7 +305,13 @@ async function compare(
       status: fileStatus(reviewedSide, currentSide, index, worktree),
       index,
       worktree,
-      baseUpdate: only ? "only" : baseChanged?.has(key) ? "also" : null,
+      baseUpdate: only
+        ? "only"
+        : baseChanged === null
+          ? "unknown"
+          : baseChanged.has(key)
+            ? "also"
+            : "none",
       reviewed: reviewedSide,
       current: currentSide,
     });
@@ -302,8 +319,8 @@ async function compare(
   if (files.length > limits.maxPaths) reasons.add("path-limit");
 
   const commits = await listCommits(git, reviewed, current, present, limits);
-  if (commits.kind === "unavailable" && commits.reason === "limit") {
-    reasons.add("change-set-too-large");
+  if (commits.kind === "unavailable" && commits.reason !== "reviewed-commit-missing") {
+    reasons.add("commits-unavailable");
   }
 
   const compared = {
@@ -337,9 +354,50 @@ function sameBranch(reviewed: ReviewPointHead, current: ReviewPointHead): boolea
   return reviewed.branch === current.branch;
 }
 
-/** Whether an unlisted path is known to match HEAD: the listing itself was whole. */
-function listsWholeChangeSet(point: ReviewPoint): boolean {
-  return !point.incomplete?.reasons.includes("change-set-too-large");
+/**
+ * git never writes a backslash or a colon into a Windows path, and joined onto
+ * the worktree either could reach outside it.
+ */
+function usableOnWindows(point: ReviewPoint): boolean {
+  return [...point.entries, ...(point.incomplete?.uncovered ?? [])].every(
+    (item) => !/[\\:]/.test(item.path)
+  );
+}
+
+/** What one point can vouch for beyond the paths it lists. */
+interface Coverage {
+  /** Its listings may be wrong about anything, so nothing from it is used. */
+  untrusted: boolean;
+  /** Set when it may have left paths out without naming them, so unlisted proves nothing. */
+  unnamed: ReviewPointIncompleteReason | null;
+  gaps: GapIndex;
+}
+
+function coverage(point: ReviewPoint): Coverage {
+  const { incomplete } = point;
+  // A listing that failed outright leaves even listed entries' index and HEAD
+  // sides resting on an assumption about the rest.
+  const untrusted = incomplete?.reasons.includes("change-set-too-large") ?? false;
+  let unnamed: ReviewPointIncompleteReason | null = null;
+  if (untrusted) unnamed = "change-set-too-large";
+  else if (incomplete && incomplete.uncoveredCount !== incomplete.uncovered.length) {
+    unnamed = incomplete.reasons.includes("path-limit") ? "path-limit" : incomplete.reasons[0]!;
+  }
+  return { untrusted, unnamed, gaps: gapIndex(point) };
+}
+
+/** A side from what its point says directly, or null when it has to be derived. */
+function sideFrom(
+  coverage: Coverage,
+  bytes: Uint8Array,
+  entry: ReviewPointEntry | undefined
+): ReviewComparisonSide | null {
+  if (coverage.untrusted) return { kind: "uncovered", reason: "change-set-too-large" };
+  if (entry) return listed(entry);
+  const gap = gapFor(coverage.gaps, bytes);
+  if (gap) return gap;
+  if (coverage.unnamed) return { kind: "uncovered", reason: coverage.unnamed };
+  return null;
 }
 
 async function existingCommits(
@@ -359,15 +417,27 @@ async function existingCommits(
   return present;
 }
 
-/** Paths the base update changed: a merge base then against one now. Null when unknown. */
+/**
+ * Paths the base update changed: the merge base then against the one now, or
+ * nothing when the merge bases didn't move. Null when that can't be told: a
+ * side without a base, a merge base gone, or more than one on either side,
+ * where no single pair stands for the update.
+ */
 async function baseUpdatePaths(
   git: Git,
-  from: string | null,
-  now: readonly string[]
+  reviewed: ReviewPoint,
+  current: ReviewPoint,
+  present: ReadonlySet<string>
 ): Promise<Set<string> | null> {
-  const to = now[0];
-  if (from === null || to === undefined) return null;
-  if (now.includes(from)) return new Set();
+  if (reviewed.base.tip === null || current.base.tip === null) return null;
+  const before = reviewed.base.mergeBases;
+  const now = current.base.mergeBases;
+  if (before.length === now.length && before.every((oid) => now.includes(oid))) {
+    return new Set();
+  }
+  const [from] = before;
+  const [to] = now;
+  if (before.length !== 1 || now.length !== 1 || !from || !to || !present.has(from)) return null;
   try {
     const out = await git(["diff-tree", "-r", "-z", "--no-renames", from, to]);
     return new Set(
@@ -375,14 +445,14 @@ async function baseUpdatePaths(
     );
   } catch (error) {
     // Only the labels depend on it; the files are listed either way.
-    if (error instanceof GitOutputLimitError) return null;
+    if (error instanceof GitOutputLimitError || error instanceof GitCommandError) return null;
     throw error;
   }
 }
 
 // -- Commits ------------------------------------------------------------------
 
-const COMMIT_FORMAT = "--format=%H%x00%P%x00%an%x00%ae%x00%at%x00%s";
+const COMMIT_FORMAT = "--format=%H%x00%T%x00%P%x00%an%x00%ae%x00%at%x00%s";
 
 async function listCommits(
   git: Git,
@@ -407,22 +477,21 @@ async function listCommits(
     };
   }
 
-  let history: "extended" | "rewritten" = "extended";
-  if (from !== null && from !== to) {
-    const out = await git(["merge-base", "--is-ancestor", from, to], { okExitCodes: [1] });
-    if (out.exitCode !== 0) history = "rewritten";
-  }
-
   // The base's own history is left out on both sides: what the branch was
-  // compared against then, and what it is compared against now.
+  // compared against then, and what it is compared against now. A reviewed
+  // commit the base has since taken in is left out with it, so a rewrite of
+  // that one is listed as new.
   const excluded = [current.base.tip, reviewed.base.tip]
     .filter((oid): oid is string => oid !== null && present.has(oid))
     .map((oid) => `^${oid}`);
-  const range =
-    from === null ? [to] : ["--right-only", "--cherry-mark", `${from}...${to}`];
-  let out: RunGitResult;
   try {
-    out = await git([
+    let history: "extended" | "rewritten" = "extended";
+    if (from !== null && from !== to) {
+      const out = await git(["merge-base", "--is-ancestor", from, to], { okExitCodes: [1] });
+      if (out.exitCode !== 0) history = "rewritten";
+    }
+    const range = from === null ? [to] : ["--right-only", "--cherry-mark", `${from}...${to}`];
+    const out = await git([
       "rev-list",
       "--topo-order",
       `--max-count=${limits.maxCommits + 1}`,
@@ -430,17 +499,41 @@ async function listCommits(
       ...range,
       ...excluded,
     ]);
+    const listed = parseCommitListing(out.stdout);
+    // Patch ids skip merges, so a merge amended for its message alone is
+    // matched here: the same tree on the same parents.
+    if (history === "rewritten" && listed.some((item) => item.parents.length > 1)) {
+      const left = await git([
+        "rev-list",
+        "--left-only",
+        "--merges",
+        COMMIT_FORMAT,
+        `${from}...${to}`,
+        ...excluded,
+      ]);
+      const reviewedMerges = new Set(parseCommitListing(left.stdout).map(mergeKey));
+      for (const item of listed) {
+        if (item.parents.length > 1 && reviewedMerges.has(mergeKey(item))) {
+          item.kind = "patch-equivalent";
+        }
+      }
+    }
+    return {
+      kind: "listed",
+      history,
+      commits: listed.slice(0, limits.maxCommits).map(({ tree: _tree, ...item }) => item),
+      truncated: listed.length > limits.maxCommits,
+    };
   } catch (error) {
     if (error instanceof GitOutputLimitError) return { kind: "unavailable", reason: "limit" };
+    // History git can't walk, as in a shallow or partial clone; the files stand.
+    if (error instanceof GitCommandError) return { kind: "unavailable", reason: "unreadable" };
     throw error;
   }
-  const commits = parseCommitListing(out.stdout);
-  return {
-    kind: "listed",
-    history,
-    commits: commits.slice(0, limits.maxCommits),
-    truncated: commits.length > limits.maxCommits,
-  };
+}
+
+function mergeKey(commit: { tree: string; parents: readonly string[] }): string {
+  return `${commit.tree} ${commit.parents.join(" ")}`;
 }
 
 /**
@@ -448,14 +541,19 @@ async function listCommits(
  * subject is one line however the message wraps, and none of the fields can
  * hold a NUL.
  */
-export function parseCommitListing(output: Buffer): ReviewComparisonCommit[] {
+export function parseCommitListing(
+  output: Buffer
+): Array<ReviewComparisonCommit & { tree: string }> {
   const lines = output.toString("utf8").split("\n");
-  const commits: ReviewComparisonCommit[] = [];
-  for (let i = 0; i + 1 < lines.length; i += 2) {
+  if (lines.pop() !== "") throw new Error("Truncated commit listing");
+  if (lines.length % 2 !== 0) throw new Error("Malformed commit listing");
+  const commits: Array<ReviewComparisonCommit & { tree: string }> = [];
+  for (let i = 0; i < lines.length; i += 2) {
     const header = /^commit ([=+]?)([0-9a-f]+)$/.exec(lines[i] ?? "");
     const fields = (lines[i + 1] ?? "").split("\0");
-    if (!header || fields.length !== 6) throw new Error("Malformed commit listing");
-    const [oid, parents, authorName, authorEmail, authoredAt, subject] = fields as [
+    if (!header || fields.length !== 7) throw new Error("Malformed commit listing");
+    const [oid, tree, parents, authorName, authorEmail, authoredAt, subject] = fields as [
+      string,
       string,
       string,
       string,
@@ -463,9 +561,12 @@ export function parseCommitListing(output: Buffer): ReviewComparisonCommit[] {
       string,
       string,
     ];
-    if (oid !== header[2] || !OID_LINE.test(oid)) throw new Error("Malformed commit listing");
+    if (oid !== header[2] || !OID_LINE.test(oid) || !OID_LINE.test(tree)) {
+      throw new Error("Malformed commit listing");
+    }
     commits.push({
       oid,
+      tree,
       parents: parents === "" ? [] : parents.split(" "),
       subject,
       authorName,
@@ -535,11 +636,6 @@ function gapFor(index: GapIndex, bytes: Uint8Array): ReviewComparisonSide | null
   return null;
 }
 
-/** Why a point has a path it neither lists nor names as uncovered. */
-function unnamedGap(point: ReviewPoint): ReviewPointIncompleteReason {
-  return point.incomplete?.reasons.includes("path-limit") ? "path-limit" : "change-set-too-large";
-}
-
 function toGap(gap: ReviewPointUncovered, side: "reviewed" | "current"): ReviewComparisonGap {
   return { ...pathFieldsOf(gap), side, reason: gap.reason };
 }
@@ -575,46 +671,75 @@ function normalize(side: Exclude<ReviewComparisonSide, { kind: "uncovered" }>): 
 }
 
 /**
- * @param currentMatchesIndex whether status found the current working tree
- *   equal to the current index, as git compares them.
+ * @param currentVsIndex what status said about the current working tree
+ *   against the current index, as git compares them; null when it didn't say.
  */
 export function compareSides(
   reviewed: ReviewComparisonSide,
   current: ReviewComparisonSide,
-  currentMatchesIndex: boolean
+  currentVsIndex: WorktreeVsIndex | null
 ): { index: ReviewComparisonChange; worktree: ReviewComparisonChange } {
   if (reviewed.kind === "uncovered" || current.kind === "uncovered") {
     return { index: "unknown", worktree: "unknown" };
   }
   const before = normalize(reviewed);
   const now = normalize(current);
+  const sameIndex = isDeepStrictEqual(before.index, now.index);
 
   let worktree: ReviewComparisonChange;
   if (before.worktree !== "as-index" && now.worktree !== "as-index") {
     worktree = sameWorktree(before.worktree, now.worktree);
   } else if (before.worktree === "as-index" && now.worktree === "as-index") {
-    worktree = isDeepStrictEqual(before.index, now.index) ? "unchanged" : "changed";
-  } else if (now.worktree !== "as-index") {
-    // The reviewed file was whatever its index held, as git compares them.
-    if (!covered(now.worktree)) worktree = "unknown";
-    else if (currentMatchesIndex && isDeepStrictEqual(now.index, before.index)) {
-      worktree = "unchanged";
-    } else worktree = holds(now.worktree, before.index) ? "unchanged" : "changed";
+    worktree = sameIndex ? "unchanged" : "changed";
+  } else if (before.worktree === "as-index") {
+    // The reviewed file held what its index held, as git compares them; its
+    // raw bytes were never read, so only git's comparison now can match it.
+    worktree = againstEntry(now.worktree as ReviewPointWorktreeIdentity, before.index, () => {
+      if (currentVsIndex === "matches") return sameIndex ? "unchanged" : "changed";
+      if (currentVsIndex === "differs" && sameIndex) return "changed";
+      return "unknown";
+    });
   } else {
-    const reviewedTree = before.worktree as ReviewPointWorktreeIdentity;
-    if (!covered(reviewedTree)) worktree = "unknown";
-    else worktree = holds(reviewedTree, now.index) ? "unchanged" : "changed";
+    worktree = againstEntry(before.worktree, now.index, () => "unknown");
   }
 
   let index: ReviewComparisonChange = "changed";
-  if (isDeepStrictEqual(before.index, now.index)) index = "unchanged";
+  if (sameIndex) index = "unchanged";
   // The index caught up with the reviewed working tree: the reviewed edit was
   // staged or committed as it was. Nothing in it is content not on screen then.
-  else if (worktree === "unchanged" && currentMatchesIndex) index = "unchanged";
+  else if (worktree === "unchanged" && currentVsIndex === "matches") index = "unchanged";
   else if (before.worktree !== "as-index" && holds(before.worktree, now.index)) {
     index = "unchanged";
   }
   return { index, worktree };
+}
+
+/**
+ * A raw working-tree identity against an index entry it may or may not have
+ * been checked out from: equal bytes, or something else on disk altogether,
+ * settle it; otherwise `fallback` decides.
+ */
+function againstEntry(
+  worktree: ReviewPointWorktreeIdentity,
+  entry: ReviewPointIndexIdentity,
+  fallback: () => ReviewComparisonChange
+): ReviewComparisonChange {
+  if (!covered(worktree)) return "unknown";
+  if (holds(worktree, entry)) return "unchanged";
+  if (worktreeKind(worktree) !== entryKind(entry)) return "changed";
+  return fallback();
+}
+
+function worktreeKind(identity: ReviewPointWorktreeIdentity): string {
+  if (identity.kind === "directory") return "absent";
+  return identity.kind === "file" ? `file ${identity.mode}` : identity.kind;
+}
+
+function entryKind(index: ReviewPointIndexIdentity): string {
+  if (index.kind === "absent") return "absent";
+  if (index.kind !== "entry") return "other";
+  if (index.mode === "160000") return "submodule";
+  return index.mode === "120000" ? "symlink" : `file ${index.mode}`;
 }
 
 /** Whether a working-tree identity says anything definite about its contents. */
@@ -670,7 +795,7 @@ function fileStatus(
   worktree: ReviewComparisonChange
 ): ReviewComparisonFile["status"] {
   if (reviewed.kind === "uncovered" || current.kind === "uncovered") return "unknown";
-  if (index === "unknown" || worktree === "unknown") return "unknown";
+  if (index !== "changed" && worktree !== "changed") return "unknown";
   const before = isPresent(reviewed);
   const now = isPresent(current);
   if (!before && now) return "added";

@@ -202,8 +202,8 @@ describe("compareReviewPoint", () => {
 
     expect(result.state).toBe("comparable");
     expect(summary(result)).toEqual({
-      "b.txt": { ...MODIFIED_BOTH, baseUpdate: null },
-      "c.txt": { status: "added", index: "changed", worktree: "changed", baseUpdate: null },
+      "b.txt": { ...MODIFIED_BOTH, baseUpdate: "none" },
+      "c.txt": { status: "added", index: "changed", worktree: "changed", baseUpdate: "none" },
     });
     expect(commitsOf(result)).toEqual([
       { subject: "add c", kind: "new" },
@@ -255,6 +255,40 @@ describe("compareReviewPoint", () => {
 
       expect(result.state).toBe("comparable");
       expect(result.files).toEqual([]);
+
+      // A later change to the line endings alone is still a change to the bytes.
+      write(repo, "b.txt", "b edited\nsecond\n");
+      expect(summary(await compareNow(repo, point))["b.txt"]).toMatchObject({
+        status: "modified",
+        worktree: "changed",
+      });
+    });
+
+    it("holds for a reviewed deletion later committed", async () => {
+      const repo = topicRepo();
+      fs.rmSync(path.join(repo, "b.txt"));
+      const point = await review(repo);
+      git(repo, "commit", "-q", "-am", "delete b");
+
+      const result = await compareNow(repo, point);
+
+      expect(result.files).toEqual([]);
+      expect(commitsOf(result)).toEqual([{ subject: "delete b", kind: "new" }]);
+    });
+  });
+
+  it("lists an index that now holds content no side held at review", async () => {
+    const repo = topicRepo();
+    write(repo, "b.txt", "reviewed\n");
+    const point = await review(repo);
+    write(repo, "b.txt", "never seen\n");
+    git(repo, "add", "b.txt");
+    write(repo, "b.txt", "reviewed\n");
+
+    const result = await compareNow(repo, point);
+
+    expect(summary(result)).toEqual({
+      "b.txt": { status: "modified", index: "changed", worktree: "unchanged", baseUpdate: "none" },
     });
   });
 
@@ -266,7 +300,7 @@ describe("compareReviewPoint", () => {
 
     const result = await compareNow(repo, point);
 
-    expect(summary(result)).toEqual({ "b.txt": { ...MODIFIED_TREE, baseUpdate: null } });
+    expect(summary(result)).toEqual({ "b.txt": { ...MODIFIED_TREE, baseUpdate: "none" } });
   });
 
   describe("staged and unstaged changes that cancel out", () => {
@@ -280,7 +314,7 @@ describe("compareReviewPoint", () => {
       const result = await compareNow(repo, point);
 
       expect(summary(result)).toEqual({
-        "b.txt": { status: "modified", index: "changed", worktree: "unchanged", baseUpdate: null },
+        "b.txt": { status: "modified", index: "changed", worktree: "unchanged", baseUpdate: "none" },
       });
     });
 
@@ -311,9 +345,9 @@ describe("compareReviewPoint", () => {
     const result = await compareNow(repo, point);
 
     expect(summary(result)).toEqual({
-      "added/new.txt": { status: "added", index: "unchanged", worktree: "changed", baseUpdate: null },
-      "edited.txt": { ...MODIFIED_TREE, baseUpdate: null },
-      "removed.txt": { status: "deleted", index: "unchanged", worktree: "changed", baseUpdate: null },
+      "added/new.txt": { status: "added", index: "unchanged", worktree: "changed", baseUpdate: "none" },
+      "edited.txt": { ...MODIFIED_TREE, baseUpdate: "none" },
+      "removed.txt": { status: "deleted", index: "unchanged", worktree: "changed", baseUpdate: "none" },
     });
   });
 
@@ -349,7 +383,7 @@ describe("compareReviewPoint", () => {
       const result = await compareNow(repo, point);
 
       expect(summary(result)).toEqual({
-        "b.txt": { ...MODIFIED_BOTH, baseUpdate: null },
+        "b.txt": { ...MODIFIED_BOTH, baseUpdate: "none" },
         "g.txt": { ...MODIFIED_BOTH, baseUpdate: "only" },
       });
       expect(commitsOf(result)).toEqual([
@@ -371,6 +405,21 @@ describe("compareReviewPoint", () => {
     expect(commitsOf(result)).toEqual([{ subject: "reworded", kind: "patch-equivalent" }]);
   });
 
+  it("calls a message-only amend of a merge patch-equivalent", async () => {
+    const repo = topicRepo();
+    git(repo, "checkout", "-q", "main");
+    commit(repo, "main edits g", { "g.txt": "g on main\n" });
+    git(repo, "checkout", "-q", "topic");
+    git(repo, "merge", "-q", "--no-edit", "main");
+    const point = await review(repo);
+    git(repo, "commit", "-q", "--amend", "-m", "merge reworded");
+
+    const result = await compareNow(repo, point);
+
+    expect(result.files).toEqual([]);
+    expect(commitsOf(result)).toEqual([{ subject: "merge reworded", kind: "patch-equivalent" }]);
+  });
+
   it("keeps files from the stored identities when a force push and gc remove the reviewed commit", async () => {
     const repo = topicRepo();
     write(repo, "b.txt", "uncommitted\n");
@@ -387,8 +436,8 @@ describe("compareReviewPoint", () => {
     expect(result.state).toBe("reviewed-commit-missing");
     expect(result.commits).toEqual({ kind: "unavailable", reason: "reviewed-commit-missing" });
     expect(summary(result)).toEqual({
-      "a.txt": { ...MODIFIED_BOTH, baseUpdate: null },
-      "b.txt": { ...MODIFIED_TREE, baseUpdate: null },
+      "a.txt": { ...MODIFIED_BOTH, baseUpdate: "none" },
+      "b.txt": { ...MODIFIED_TREE, baseUpdate: "none" },
     });
   });
 
@@ -413,7 +462,12 @@ describe("compareReviewPoint", () => {
     expect(result.reasons).toContain("reviewed-state-unavailable");
     expect(result.commits).toEqual({ kind: "unavailable", reason: "reviewed-commit-missing" });
     // What it can still say, it says: a.txt was listed then and differs now.
-    expect(summary(result)["a.txt"]).toMatchObject({ status: "modified", worktree: "changed" });
+    expect(summary(result)["a.txt"]).toMatchObject({
+      status: "modified",
+      worktree: "changed",
+      // With the base gone there's no base update to tell it by.
+      baseUpdate: "unknown",
+    });
   });
 
   describe("merging the base in", () => {
@@ -499,8 +553,8 @@ describe("compareReviewPoint", () => {
 
     expect(summary(result)).toEqual({
       "a.txt": committed
-        ? { ...MODIFIED_BOTH, baseUpdate: null }
-        : { ...MODIFIED_TREE, baseUpdate: null },
+        ? { ...MODIFIED_BOTH, baseUpdate: "none" }
+        : { ...MODIFIED_TREE, baseUpdate: "none" },
     });
   });
 
@@ -512,8 +566,8 @@ describe("compareReviewPoint", () => {
     const result = await compareNow(repo, point);
 
     expect(summary(result)).toEqual({
-      "b.txt": { status: "deleted", index: "changed", worktree: "changed", baseUpdate: null },
-      "renamed.txt": { status: "added", index: "changed", worktree: "changed", baseUpdate: null },
+      "b.txt": { status: "deleted", index: "changed", worktree: "changed", baseUpdate: "none" },
+      "renamed.txt": { status: "added", index: "changed", worktree: "changed", baseUpdate: "none" },
     });
   });
 
@@ -525,7 +579,7 @@ describe("compareReviewPoint", () => {
 
     const result = await compareNow(repo, point);
 
-    expect(summary(result)).toEqual({ "blob.bin": { ...MODIFIED_TREE, baseUpdate: null } });
+    expect(summary(result)).toEqual({ "blob.bin": { ...MODIFIED_TREE, baseUpdate: "none" } });
   });
 
   posixOnly("compares a symlink by its link text", async () => {
@@ -539,7 +593,7 @@ describe("compareReviewPoint", () => {
 
     const result = await compareNow(repo, point);
 
-    expect(summary(result)).toEqual({ "link": { ...MODIFIED_TREE, baseUpdate: null } });
+    expect(summary(result)).toEqual({ "link": { ...MODIFIED_TREE, baseUpdate: "none" } });
     const link = result.files[0];
     expect(link?.current).toMatchObject({ kind: "listed", worktree: { kind: "symlink" } });
   });
@@ -592,12 +646,42 @@ describe("compareReviewPoint", () => {
       ["u3.txt", "reviewed", "path-limit"],
     ]);
     expect(summary(result)).toEqual({
-      "u2.txt": { status: "unknown", index: "unknown", worktree: "unknown", baseUpdate: null },
-      "u3.txt": { status: "unknown", index: "unknown", worktree: "unknown", baseUpdate: null },
+      "u2.txt": { status: "unknown", index: "unknown", worktree: "unknown", baseUpdate: "none" },
+      "u3.txt": { status: "unknown", index: "unknown", worktree: "unknown", baseUpdate: "none" },
     });
     expect(result.files[0]?.current).toMatchObject({
       kind: "listed",
       worktree: { kind: "file" },
+    });
+  });
+
+  it("never infers a reviewed identity for a path the point left out without naming", async () => {
+    const repo = topicRepo();
+    write(repo, "f.txt", "A\n");
+    git(repo, "add", "f.txt");
+    git(repo, "commit", "-q", "-m", "add f");
+    write(repo, "f.txt", "B\n");
+    // a.txt fills the one entry; f.txt is past the cap on both paths and names.
+    const point = await review(repo, { limits: { maxPaths: 1, maxUncoveredListed: 0 } });
+    expect(point.incomplete).toMatchObject({ uncovered: [], uncoveredCount: 1 });
+    // Commit B, then stage and leave A: the index and working tree read like
+    // the commit before, which is not what the working tree held at review.
+    git(repo, "commit", "-q", "-am", "commit B");
+    write(repo, "f.txt", "A\n");
+    git(repo, "add", "f.txt");
+
+    const result = await compareNow(repo, point);
+
+    expect(result.state).toBe("incomplete");
+    expect(summary(result)["f.txt"]).toEqual({
+      status: "unknown",
+      index: "unknown",
+      worktree: "unknown",
+      baseUpdate: "none",
+    });
+    expect(result.files.find((file) => file.path === "f.txt")?.reviewed).toEqual({
+      kind: "uncovered",
+      reason: "path-limit",
     });
   });
 
@@ -612,7 +696,7 @@ describe("compareReviewPoint", () => {
     if (result.state !== "incomplete") throw new Error("unreachable");
     expect(result.reasons).toEqual(["current-state-incomplete"]);
     expect(summary(result)).toEqual({
-      "big.txt": { status: "unknown", index: "unchanged", worktree: "unknown", baseUpdate: null },
+      "big.txt": { status: "unknown", index: "unchanged", worktree: "unknown", baseUpdate: "none" },
     });
   });
 
@@ -644,6 +728,20 @@ describe("compareReviewPoint", () => {
   });
 
   describe("refusals", () => {
+    it("refuses a point taken in another worktree on the same branch name", async () => {
+      const repo = topicRepo();
+      const other = path.join(root, `worktree-${repoCount}`);
+      git(repo, "worktree", "add", "-q", "-b", "elsewhere", other);
+      const point = await review(other);
+      git(repo, "worktree", "remove", other);
+      git(repo, "checkout", "-q", "elsewhere");
+
+      expect(await compareReviewPoint(repo, point)).toMatchObject({
+        state: "failed",
+        reason: "invalid-review-point",
+      });
+    });
+
     it("refuses a point that isn't one", async () => {
       const repo = topicRepo();
       const point = await review(repo);

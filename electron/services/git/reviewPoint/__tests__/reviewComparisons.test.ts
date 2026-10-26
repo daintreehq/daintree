@@ -51,7 +51,7 @@ describe("ReviewComparisons", () => {
     expect(fake.maxActive()).toBe(1);
   });
 
-  it("never runs a request superseded while it waited", async () => {
+  it("never runs a request superseded while it waited, nor answers with a superseded result", async () => {
     const fake = controllableRun();
     // A first comparison that ignores its signal for a while, as a stalled read would.
     let releaseFirst = () => {};
@@ -67,7 +67,7 @@ describe("ReviewComparisons", () => {
     const third = queue.compare("/repo", {});
     releaseFirst();
 
-    expect(await first).toBe(DONE);
+    expect(await first).toMatchObject({ state: "failed", reason: "superseded" });
     expect(await second).toMatchObject({ state: "failed", reason: "superseded" });
     await flush();
     expect(call).toBe(2);

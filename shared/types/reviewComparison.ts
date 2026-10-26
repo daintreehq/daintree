@@ -46,12 +46,13 @@ export interface ReviewComparisonFile {
   index: ReviewComparisonChange;
   worktree: ReviewComparisonChange;
   /**
-   * `only`: outside the branch's change set at both points, so it differs only
-   * because the base the branch is compared against moved. `also`: that base
-   * update changed the path, and the branch touches it too. Null when the base
-   * update didn't touch it or there was none to tell.
+   * The part the base the branch is compared against played. `only`: outside
+   * the branch's change set at both points, so it differs only because that
+   * base moved. `also`: the base update changed this path and the branch
+   * touches it too, so the change may hold both. `none`: the base update didn't
+   * touch it, or the base didn't move. `unknown`: there was nothing to tell by.
    */
-  baseUpdate: "only" | "also" | null;
+  baseUpdate: "only" | "also" | "none" | "unknown";
   reviewed: ReviewComparisonSide;
   current: ReviewComparisonSide;
 }
@@ -83,8 +84,11 @@ export type ReviewComparisonCommits =
     }
   | {
       kind: "unavailable";
-      /** `limit`: listing them ran past the comparison's limits. */
-      reason: "reviewed-commit-missing" | "limit";
+      /**
+       * `limit`: listing them ran past the comparison's limits. `unreadable`:
+       * git couldn't walk the history, as in a shallow or partial clone.
+       */
+      reason: "reviewed-commit-missing" | "limit" | "unreadable";
     };
 
 export const REVIEW_COMPARISON_INCOMPLETE_REASONS = [
@@ -101,6 +105,8 @@ export const REVIEW_COMPARISON_INCOMPLETE_REASONS = [
   "change-set-too-large",
   /** More files differ than are listed. */
   "path-limit",
+  /** The commit list couldn't be read, though the reviewed commit exists. */
+  "commits-unavailable",
 ] as const;
 
 export type ReviewComparisonIncompleteReason = (typeof REVIEW_COMPARISON_INCOMPLETE_REASONS)[number];
@@ -130,6 +136,7 @@ interface ReviewComparisonCompared {
 export type ReviewComparisonFailure =
   | "not-a-repository"
   | "invalid-request"
+  /** Not a review point, or one taken in another worktree or repository. */
   | "invalid-review-point"
   | "cancelled"
   /** A newer comparison of the same worktree replaced this one. */

@@ -5,8 +5,10 @@ import { compareReviewPoint, type CompareReviewPointOptions } from "./compareRev
 /**
  * One comparison per worktree at a time on this host. A newer request for the
  * same worktree cancels the one in flight, which answers `superseded`, and
- * starts once that one has settled; a request superseded while still waiting
- * answers without running at all.
+ * starts once that one has answered; a request superseded while still waiting
+ * answers without running at all. A filesystem read already stuck when the
+ * cancel arrives can't be stopped (see `captureReviewPoint`), so the next
+ * comparison doesn't wait on it.
  */
 export class ReviewComparisons {
   private readonly latest = new Map<
@@ -38,7 +40,8 @@ export class ReviewComparisons {
       const outcome = controller.signal.aborted
         ? stopped()
         : await this.run(cwd, point, { ...options, signal: controller.signal });
-      if (controller.signal.reason === SUPERSEDED && outcome.state === "failed") {
+      // Whatever it found is older than what the newer request will find.
+      if (controller.signal.reason === SUPERSEDED) {
         return {
           state: "failed",
           reason: "superseded",
