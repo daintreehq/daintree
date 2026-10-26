@@ -56,7 +56,8 @@ interface OtherHostsWorktreesProps {
 /**
  * A read-only look at the worktrees on every other host, under this view's
  * own list. Nothing here acts on another host's worktree: a row only opens
- * that host's project (with its most urgent agent focused), where the worktree's own actions live.
+ * that host's project with its most urgent agent focused, or with the worktree
+ * selected when it has none, where the worktree's own actions live.
  */
 export function OtherHostsWorktrees({ onNavigate }: OtherHostsWorktreesProps) {
   const hostList = useHostList();
@@ -84,12 +85,11 @@ export function OtherHostsWorktrees({ onNavigate }: OtherHostsWorktreesProps) {
     onNavigate();
     // `runs` is most urgent first; absent from an older host, which isn't the same as no agents.
     const run = entry.runs?.[0];
-    void switchToHost(
-      entry.hostId,
-      newWindow,
-      entry.projectId,
-      run ? { focusIntent: { intent: "focus-panel", panelId: run.terminalId } } : undefined
-    );
+    void switchToHost(entry.hostId, newWindow, entry.projectId, {
+      focusIntent: run
+        ? { intent: "focus-panel", panelId: run.terminalId }
+        : { intent: "focus-worktree", worktreeId: entry.worktreeId },
+    });
   };
 
   return (

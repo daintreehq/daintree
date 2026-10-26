@@ -521,6 +521,46 @@ describe("RemoteHostsClient", () => {
     expect(windows.focusInWindow).toHaveBeenCalledWith(3, "local", "proj-local", focusIntent);
   });
 
+  it("carries a worktree to land on, and refuses one that names no worktree (#14569)", async () => {
+    const focusIntent = { intent: "focus-worktree", worktreeId: "/srv/proj-1-feature" } as const;
+    await client.switchWindowHost(ctxFor(5, 1), {
+      hostId: "studio-01",
+      newWindow: false,
+      projectId: "proj-1",
+      focusIntent,
+    });
+    expect(windows.openRemoteProject).toHaveBeenCalledWith(
+      1,
+      "studio-01",
+      "proj-1",
+      "/srv/proj-1",
+      focusIntent,
+      { requesterWebContentsId: 5 }
+    );
+    await client.switchWindowHost(ctxFor(5, 1), {
+      hostId: "local",
+      newWindow: false,
+      projectId: "proj-local",
+      focusIntent,
+    });
+    expect(windows.openLocalProject).toHaveBeenCalledWith(1, "proj-local", focusIntent, {
+      requesterWebContentsId: 5,
+    });
+
+    vi.mocked(windows.openRemoteProject).mockClear();
+    for (const worktreeId of ["", "w".repeat(10_000), 42, undefined]) {
+      await expect(
+        client.switchWindowHost(ctxFor(5, 1), {
+          hostId: "studio-01",
+          newWindow: false,
+          projectId: "proj-1",
+          focusIntent: { intent: "focus-worktree", worktreeId } as never,
+        })
+      ).rejects.toMatchObject({ code: "VALIDATION" });
+    }
+    expect(windows.openRemoteProject).not.toHaveBeenCalled();
+  });
+
   it("focuses nothing in a window that came forward without being asked to", async () => {
     windows.projectOwner = vi.fn(() => ({ windowId: 2, showing: true }));
     windows.revealWindow = vi.fn();
