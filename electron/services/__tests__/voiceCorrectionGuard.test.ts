@@ -5,6 +5,22 @@ import {
   validateCorrection,
 } from "../voiceCorrectionGuard.js";
 
+// How much slower a run on 4x the input is than on 1x. Linear work scales by
+// about 4 and quadratic by about 16, whatever the runner's speed, so a ratio
+// bound holds on a loaded CI machine where a wall-clock bound flakes.
+function scalingRatio(run: (scale: number) => void): number {
+  const fastest = (scale: number): number => {
+    let best = Infinity;
+    for (let i = 0; i < 3; i++) {
+      const started = performance.now();
+      run(scale);
+      best = Math.min(best, performance.now() - started);
+    }
+    return best;
+  };
+  return fastest(4) / Math.max(fastest(1), 0.5);
+}
+
 describe("extractProtectedSpans", () => {
   it("finds references, backticks, URLs, flags, paths and filenames", () => {
     const text =
@@ -34,17 +50,19 @@ describe("extractProtectedSpans", () => {
 
   it("scans long unspaced text in linear time", () => {
     // A quadratic path scan took ~300ms here, on Electron's main thread.
-    const cjk = "我们需要更新这个组件并且不要删除分支然后运行测试。".repeat(480);
-    const started = performance.now();
-    expect(validateCorrection(cjk, `${cjk}。`)).toEqual({ ok: true });
-    expect(performance.now() - started).toBeLessThan(100);
+    const ratio = scalingRatio((scale) => {
+      const cjk = "我们需要更新这个组件并且不要删除分支然后运行测试。".repeat(120 * scale);
+      expect(validateCorrection(cjk, `${cjk}。`)).toEqual({ ok: true });
+    });
+    expect(ratio).toBeLessThan(10);
   });
 
   it("trims a long run of closing brackets in linear time", () => {
-    const url = `https://example.com/a${")".repeat(12_000)}`;
-    const started = performance.now();
-    expect(extractProtectedSpans(url)).toEqual(["https://example.com/a"]);
-    expect(performance.now() - started).toBeLessThan(100);
+    const ratio = scalingRatio((scale) => {
+      const url = `https://example.com/a${")".repeat(3_000 * scale)}`;
+      expect(extractProtectedSpans(url)).toEqual(["https://example.com/a"]);
+    });
+    expect(ratio).toBeLessThan(10);
   });
 
   it("reports ranges that cover the whole span", () => {
