@@ -304,6 +304,54 @@ let initPromise: Promise<void> | null = null;
 // (see lesson #1377).
 let normalizeEpoch = 0;
 
+/**
+ * Saved changes heard from the host (#14700). A read (initialize, refresh)
+ * that began before the latest one is older than it and yields. A write's
+ * answer doesn't: the host sends its change to every view before answering
+ * the writer, so a write's answer is never older than a change already heard.
+ */
+let savedChangesHeard = 0;
+
+type Patch = (settings: AgentSettings) => AgentSettings;
+
+/**
+ * This view's writes still in flight, oldest first. Each saved snapshot gets
+ * them laid back on top, so a change heard while typing (another keystroke's
+ * save, a host that answers slowly) doesn't take the newer text away.
+ */
+const pendingPatches = new Map<number, Patch>();
+let patchSeq = 0;
+
+/** The newest saved snapshot this view took, without its pending writes. */
+let lastSaved: AgentSettings | null = null;
+
+function withPending(settings: AgentSettings): AgentSettings {
+  let next = settings;
+  for (const patch of pendingPatches.values()) next = patch(next);
+  return next;
+}
+
+function holdPatch(patch: Patch): () => void {
+  const token = ++patchSeq;
+  pendingPatches.set(token, patch);
+  return () => pendingPatches.delete(token);
+}
+
+/** What the store shows once `settings` is saved: it, plus every pending write. */
+function takeSaved(settings: AgentSettings): AgentSettings {
+  lastSaved = settings;
+  return withPending(settings);
+}
+
+/**
+ * A failed write's rollback: the newest saved snapshot with the writes still
+ * in flight, which a change heard meanwhile may have moved past the snapshot
+ * the write started from. That one only before anything was saved.
+ */
+function rollBack(previous: AgentSettings | null): AgentSettings | null {
+  return lastSaved ? withPending(lastSaved) : previous;
+}
+
 export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => ({
   settings: null,
   isLoading: true,
@@ -315,6 +363,7 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
     if (initPromise) return initPromise;
 
     const myEpoch = ++normalizeEpoch;
+    const heardAtStart = savedChangesHeard;
     // Use a holder so the `finally` block can reach back to the promise
     // reference that will exist immediately after the IIFE synchronously
     // returns. Strict TS won't let a `let`/`const` captured in the IIFE be
@@ -339,18 +388,18 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
           ? (boot.result.agentSettings as AgentSettings | undefined)
           : undefined;
         const raw = fromBoot ?? (await agentSettingsClient.get()) ?? DEFAULT_AGENT_SETTINGS;
-        if (myEpoch !== normalizeEpoch) {
-          // A concurrent refresh/update bumped the epoch — its result is
+        if (myEpoch !== normalizeEpoch || heardAtStart !== savedChangesHeard) {
+          // A concurrent refresh/update or a saved change landed — its result is
           // authoritative. Flip `isInitialized` anyway so the store exits the
           // loading state (and future `initialize()` calls no-op as intended).
           set({ isLoading: false, isInitialized: true });
           return;
         }
         const saved = normalizeSaved(raw);
-        set({ settings: saved.settings, isLoading: false, isInitialized: true });
+        set({ settings: takeSaved(saved.settings), isLoading: false, isInitialized: true });
         scheduleWriteBacks(saved);
       } catch (e) {
-        if (myEpoch !== normalizeEpoch) {
+        if (myEpoch !== normalizeEpoch || heardAtStart !== savedChangesHeard) {
           set({ isLoading: false, isInitialized: true });
           return;
         }
@@ -372,10 +421,9 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
   },
 
   applySaved: (raw: AgentSettings) => {
-    // Newer than any read or write answer still travelling, which then yields.
-    ++normalizeEpoch;
+    savedChangesHeard += 1;
     set({
-      settings: normalizeSaved(raw).settings,
+      settings: takeSaved(normalizeSaved(raw).settings),
       isLoading: false,
       isInitialized: true,
     });
@@ -383,6 +431,7 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
 
   refresh: async () => {
     const myEpoch = ++normalizeEpoch;
+    const heardAtStart = savedChangesHeard;
     set({ error: null });
     try {
       // refresh() exists to re-pull external changes (cross-window writes,
@@ -390,15 +439,15 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
       // every later get() see post-change data, not a pre-change snapshot.
       agentSettingsClient.invalidate();
       const raw = (await agentSettingsClient.get()) ?? DEFAULT_AGENT_SETTINGS;
-      if (myEpoch !== normalizeEpoch) return;
+      if (myEpoch !== normalizeEpoch || heardAtStart !== savedChangesHeard) return;
       const saved = normalizeSaved(raw);
-      set({ settings: saved.settings });
+      set({ settings: takeSaved(saved.settings) });
       scheduleWriteBacks(saved);
     } catch (e) {
       // Stale failures yield silently — whichever newer op bumped the epoch
       // owns the error surface now, and fire-and-forget callers should not
       // see spurious unhandled rejections from an invalidated attempt.
-      if (myEpoch !== normalizeEpoch) return;
+      if (myEpoch !== normalizeEpoch || heardAtStart !== savedChangesHeard) return;
       set({ error: formatErrorMessage(e, "Failed to refresh agent settings") });
       throw e;
     }
@@ -408,31 +457,31 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
     const myEpoch = ++normalizeEpoch;
     set({ error: null });
     const previous = get().settings;
-    if (previous) {
-      set({
-        settings: {
-          ...previous,
-          agents: {
-            ...previous.agents,
-            [agentId]: { ...previous.agents[agentId], ...updates },
-          },
-        },
-      });
-    }
+    const patch: Patch = (settings) => ({
+      ...settings,
+      agents: {
+        ...settings.agents,
+        [agentId]: { ...settings.agents[agentId], ...updates },
+      },
+    });
+    const release = holdPatch(patch);
+    if (previous) set({ settings: patch(previous) });
     try {
       const raw = await agentSettingsClient.set(agentId, updates);
+      release();
       if (myEpoch !== normalizeEpoch) return;
       // Run migration against the response too — covers the edge case where
       // `updateAgent` is the first interaction with a legacy store (before
       // initialize() has hydrated) and the IPC response still carries stale
       // concrete pin values for other agents (#7673 review).
       const saved = normalizeSaved(raw);
-      set({ settings: saved.settings });
+      set({ settings: takeSaved(saved.settings) });
       scheduleWriteBacks(saved);
     } catch (e) {
-      // A save that failed is reported even when a newer snapshot has landed
-      // since; only a rollback would undo that snapshot, so it is skipped.
-      if (myEpoch === normalizeEpoch && previous) set({ settings: previous });
+      release();
+      // Reported even when a newer snapshot has landed since.
+      const restored = rollBack(previous);
+      if (restored) set({ settings: restored });
       set({ error: formatErrorMessage(e, `Failed to update ${agentId} settings`) });
       throw e;
     }
@@ -450,20 +499,23 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
     // merges into the agents record and would not touch this root field, #5514).
     // This must not mutate any per-agent `dangerousEnabled`; it is a live
     // override OR-ed in at flag-generation time (#10432).
+    const release = holdPatch((settings) => ({ ...settings, globalSkipPermissions: value }));
     if (previous) {
       set({ settings: { ...previous, globalSkipPermissions: value } });
     }
     try {
       await agentSettingsClient.setGlobal(value);
+      release();
       if (myEpoch !== normalizeEpoch) return;
       // The IPC response echoes the persisted value; the optimistic state
       // already reflects it, and the renderer-normalized agents record is the
       // source of truth for per-agent state, so keep it rather than overwriting
       // from the raw response.
     } catch (e) {
-      // A save that failed is reported even when a newer snapshot has landed
-      // since; only a rollback would undo that snapshot, so it is skipped.
-      if (myEpoch === normalizeEpoch && previous) set({ settings: previous });
+      release();
+      // Reported even when a newer snapshot has landed since.
+      const restored = rollBack(previous);
+      if (restored) set({ settings: restored });
       set({ error: formatErrorMessage(e, "Failed to update global skip-permissions setting") });
       throw e;
     }
@@ -477,18 +529,21 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
     // merges into the agents record and would not touch this root field, #5514).
     // This must not mutate any per-agent `inlineMode`; it is a live override
     // resolved at flag-generation time (#10876).
+    const release = holdPatch((settings) => ({ ...settings, globalUseAltScreen: value }));
     if (previous) {
       set({ settings: { ...previous, globalUseAltScreen: value } });
     }
     try {
       await agentSettingsClient.setGlobalInline(value);
+      release();
       if (myEpoch !== normalizeEpoch) return;
       // The IPC response echoes the persisted value; the optimistic state
       // already reflects it, so keep the renderer-normalized snapshot.
     } catch (e) {
-      // A save that failed is reported even when a newer snapshot has landed
-      // since; only a rollback would undo that snapshot, so it is skipped.
-      if (myEpoch === normalizeEpoch && previous) set({ settings: previous });
+      release();
+      // Reported even when a newer snapshot has landed since.
+      const restored = rollBack(previous);
+      if (restored) set({ settings: restored });
       set({ error: formatErrorMessage(e, "Failed to update global alt-screen setting") });
       throw e;
     }
@@ -498,15 +553,18 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
     const myEpoch = ++normalizeEpoch;
     set({ error: null });
     const previous = get().settings;
+    const release = holdPatch((settings) => ({ ...settings, resumeOnRestart: value }));
     if (previous) {
       set({ settings: { ...previous, resumeOnRestart: value } });
     }
     try {
       await agentSettingsClient.setResumeOnRestart(value);
+      release();
     } catch (e) {
-      // A save that failed is reported even when a newer snapshot has landed
-      // since; only a rollback would undo that snapshot, so it is skipped.
-      if (myEpoch === normalizeEpoch && previous) set({ settings: previous });
+      release();
+      // Reported even when a newer snapshot has landed since.
+      const restored = rollBack(previous);
+      if (restored) set({ settings: restored });
       set({ error: formatErrorMessage(e, "Failed to update the resume after restart setting") });
       throw e;
     }
@@ -539,9 +597,10 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
       // doesn't bump version); run migration to keep tri-state semantics
       // intact (#7673 review).
       const saved = normalizeSaved(raw);
-      set({ settings: saved.settings });
+      set({ settings: takeSaved(saved.settings) });
       scheduleWriteBacks(saved);
     } catch (e) {
+      if (myEpoch !== normalizeEpoch) return;
       set({ error: formatErrorMessage(e, "Failed to reset agent settings") });
       throw e;
     }
@@ -558,6 +617,8 @@ export function getPinnedAgents(): string[] {
 
 export function cleanupAgentSettingsStore() {
   normalizeEpoch++;
+  pendingPatches.clear();
+  lastSaved = null;
   initPromise = null;
   agentSettingsClient.invalidate();
   useAgentSettingsStore.setState({

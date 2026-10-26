@@ -856,7 +856,7 @@ describe("applySaved (#14700)", () => {
     agents: { claude: { pinned: true, customFlags: "--from-another-view" } },
   };
 
-  it("takes a saved change over a read still travelling, without writing anything back", async () => {
+  it("takes a saved change over a read still travelling", async () => {
     let resolveRead: (value: unknown) => void = () => {};
     clientMock.get.mockImplementationOnce(() => new Promise((resolve) => (resolveRead = resolve)));
     const read = useAgentSettingsStore.getState().refresh();
@@ -868,22 +868,74 @@ describe("applySaved (#14700)", () => {
     const state = useAgentSettingsStore.getState();
     expect(state.settings?.agents.claude?.customFlags).toBe("--from-another-view");
     expect(state.isInitialized).toBe(true);
+  });
+
+  it("migrates a legacy slice in memory without writing anything back", async () => {
+    useAgentSettingsStore.getState().applySaved({
+      agents: { claude: { pinned: true }, codex: { pinned: false } },
+    } as never);
+    await Promise.resolve();
+
+    const { migrated, agentsToClear } = migrateAgentSettings({
+      agents: { claude: { pinned: true }, codex: { pinned: false } },
+    } as never);
+    expect(agentsToClear.length).toBeGreaterThan(0);
+    expect(useAgentSettingsStore.getState().settings?.settingsVersion).toBe(
+      migrated.settingsVersion
+    );
     expect(clientMock.set).not.toHaveBeenCalled();
     expect(clientMock.stampVersion).not.toHaveBeenCalled();
   });
 
-  it("still reports a failed save that a saved change overtook, and keeps that change", async () => {
+  it("keeps newer typing over an older keystroke's saved change", async () => {
+    useAgentSettingsStore.getState().applySaved({ settingsVersion: 3, agents: {} } as never);
+    const answers: Array<(value: unknown) => void> = [];
+    clientMock.set.mockImplementation(() => new Promise((resolve) => answers.push(resolve)));
+    const savedWith = (customFlags: string) => ({
+      settingsVersion: 3,
+      agents: { claude: { customFlags } },
+    });
+
+    const first = useAgentSettingsStore.getState().updateAgent("claude", { customFlags: "a" });
+    const second = useAgentSettingsStore.getState().updateAgent("claude", { customFlags: "ab" });
+    useAgentSettingsStore.getState().applySaved(savedWith("a") as never);
+    expect(useAgentSettingsStore.getState().settings?.agents.claude?.customFlags).toBe("ab");
+
+    answers[0]!(savedWith("a"));
+    await first;
+    useAgentSettingsStore.getState().applySaved(savedWith("ab") as never);
+    answers[1]!(savedWith("ab"));
+    await second;
+    expect(useAgentSettingsStore.getState().settings?.agents.claude?.customFlags).toBe("ab");
+  });
+
+  it("still writes back a reset's migration when its own saved change arrives first", async () => {
+    const legacy = { agents: { claude: { pinned: true }, codex: { pinned: false } } };
+    clientMock.reset.mockResolvedValueOnce(legacy);
+    clientMock.set.mockResolvedValue({});
+    clientMock.stampVersion.mockResolvedValue({});
+    const reset = useAgentSettingsStore.getState().reset();
+    useAgentSettingsStore.getState().applySaved(legacy as never);
+    await reset;
+    await vi.waitFor(() => expect(clientMock.stampVersion).toHaveBeenCalled());
+  });
+
+  it("reports a failed save that a saved change overtook, and shows what's saved", async () => {
     let rejectSave: (error: Error) => void = () => {};
     clientMock.set.mockImplementationOnce(() => new Promise((_, reject) => (rejectSave = reject)));
     useAgentSettingsStore.getState().applySaved({ settingsVersion: 3, agents: {} } as never);
-    const save = useAgentSettingsStore.getState().updateAgent("claude", { customFlags: "--mine" });
+    const save = useAgentSettingsStore.getState().updateAgent("claude", { model: "mine" } as never);
 
     useAgentSettingsStore.getState().applySaved(savedElsewhere as never);
+    expect(useAgentSettingsStore.getState().settings?.agents.claude).toMatchObject({
+      model: "mine",
+    });
     rejectSave(new Error("disk full"));
 
     await expect(save).rejects.toThrow("disk full");
     const state = useAgentSettingsStore.getState();
     expect(state.settings?.agents.claude?.customFlags).toBe("--from-another-view");
+    expect(state.settings?.agents.claude).not.toHaveProperty("model");
     expect(state.error).toContain("disk full");
   });
 });

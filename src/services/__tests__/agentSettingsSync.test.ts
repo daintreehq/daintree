@@ -61,16 +61,20 @@ describe("initAgentSettingsSync (#14700)", () => {
     agentSettingsClient.invalidate();
   });
 
-  it("applies each saved change and drops the client's cached copy first", async () => {
+  it("applies each saved change after dropping the client's cached copy", async () => {
     bridge.get.mockResolvedValueOnce({ agents: {} }).mockResolvedValueOnce(saved);
     await agentSettingsClient.get();
     dispose = initAgentSettingsSync();
+    // A launch reacting to the change reads through the client straight away.
+    let readDuringApply: Promise<unknown> | undefined;
+    store.applySaved.mockImplementationOnce(() => {
+      readDuringApply = agentSettingsClient.get();
+    });
 
     bridge.push(saved);
 
     expect(store.applySaved).toHaveBeenCalledWith(saved);
-    await expect(agentSettingsClient.get()).resolves.toBe(saved);
-    expect(bridge.get).toHaveBeenCalledTimes(2);
+    await expect(readDuringApply).resolves.toBe(saved);
   });
 
   it("reads again after a host resync and when a cached view returns", () => {

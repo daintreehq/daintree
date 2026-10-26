@@ -457,40 +457,73 @@ describe("APP_RELOAD_CONFIG handler", () => {
 });
 
 describe("agent settings change broadcast (#14700)", () => {
-  const saved = { agents: { claude: { customFlags: "--saved" } }, globalSkipPermissions: true };
+  // A store that keeps what's written, replacing the slice on every write so a
+  // payload taken before a write can't pass for one taken after it.
+  let slice: Record<string, unknown>;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    storeMock.get.mockImplementation(() => saved as never);
+    slice = { agents: { claude: { customFlags: "--before" } }, globalSkipPermissions: false };
+    storeMock.get.mockImplementation(((key: string) =>
+      key === "agentSettings" ? slice : undefined) as never);
+    storeMock.set.mockImplementation(((key: string, value: unknown) => {
+      if (key === "agentSettings") slice = value as Record<string, unknown>;
+      else slice = { ...slice, [key.slice("agentSettings.".length)]: value };
+    }) as never);
     registerAiHandlers({} as never);
   });
 
-  const writes: Array<[string, string, unknown]> = [
-    ["set", CHANNELS.AGENT_SETTINGS_SET, { agentType: "claude", settings: { customFlags: "x" } }],
-    ["setGlobal", CHANNELS.AGENT_SETTINGS_SET_GLOBAL, true],
-    ["setGlobalInline", CHANNELS.AGENT_SETTINGS_SET_GLOBAL_INLINE, false],
-    ["setResumeOnRestart", CHANNELS.AGENT_SETTINGS_SET_RESUME_ON_RESTART, "never"],
-    ["reset one agent", CHANNELS.AGENT_SETTINGS_RESET, "claude"],
-    ["reset all", CHANNELS.AGENT_SETTINGS_RESET, undefined],
-    ["stampVersion", CHANNELS.AGENT_SETTINGS_STAMP_VERSION, 99],
+  const writes: Array<[string, string, unknown, Record<string, unknown>]> = [
+    [
+      "set",
+      CHANNELS.AGENT_SETTINGS_SET,
+      { agentType: "claude", settings: { customFlags: "--after" } },
+      { agents: { claude: { customFlags: "--after" } } },
+    ],
+    ["setGlobal", CHANNELS.AGENT_SETTINGS_SET_GLOBAL, true, { globalSkipPermissions: true }],
+    [
+      "setGlobalInline",
+      CHANNELS.AGENT_SETTINGS_SET_GLOBAL_INLINE,
+      true,
+      { globalUseAltScreen: true },
+    ],
+    [
+      "setResumeOnRestart",
+      CHANNELS.AGENT_SETTINGS_SET_RESUME_ON_RESTART,
+      "never",
+      { resumeOnRestart: "never" },
+    ],
+    ["stampVersion", CHANNELS.AGENT_SETTINGS_STAMP_VERSION, 99, { settingsVersion: 99 }],
+    ["reset all", CHANNELS.AGENT_SETTINGS_RESET, undefined, {}],
   ];
 
-  it.each(writes)(
-    "%s tells every view what was saved, after the write",
-    async (_name, channel, arg) => {
-      await getInvokeHandler(channel)({} as never, arg as never);
+  it.each(writes)("%s tells every view what was saved", async (_name, channel, arg, expected) => {
+    const before = slice;
+    await getInvokeHandler(channel)({} as never, arg as never);
 
-      const changed = broadcastToRendererMock.mock.calls.filter(
-        ([sent]) => sent === CHANNELS.AGENT_SETTINGS_CHANGED
-      );
-      expect(changed).toEqual([[CHANNELS.AGENT_SETTINGS_CHANGED, saved]]);
-      const broadcastOrder = broadcastToRendererMock.mock.invocationCallOrder[0]!;
-      expect(Math.max(...storeMock.set.mock.invocationCallOrder)).toBeLessThan(broadcastOrder);
-    }
-  );
+    const changed = broadcastToRendererMock.mock.calls.filter(
+      ([sent]) => sent === CHANNELS.AGENT_SETTINGS_CHANGED
+    );
+    expect(changed).toHaveLength(1);
+    expect(changed[0]![1]).not.toBe(before);
+    expect(changed[0]![1]).toBe(slice);
+    expect(changed[0]![1]).toMatchObject(expected);
+  });
+
+  it("resetting one agent sends that agent's defaults", async () => {
+    await getInvokeHandler(CHANNELS.AGENT_SETTINGS_RESET)({} as never, "claude" as never);
+
+    const [, payload] = broadcastToRendererMock.mock.calls.find(
+      ([sent]) => sent === CHANNELS.AGENT_SETTINGS_CHANGED
+    )!;
+    expect(payload).toBe(slice);
+    expect(
+      (payload as { agents: Record<string, { customFlags?: string }> }).agents.claude?.customFlags
+    ).not.toBe("--before");
+  });
 
   it("stays quiet when nothing was written", async () => {
-    storeMock.get.mockImplementation(() => ({ ...saved, settingsVersion: 5 }) as never);
+    slice = { ...slice, settingsVersion: 5 };
     await getInvokeHandler(CHANNELS.AGENT_SETTINGS_STAMP_VERSION)({} as never, 3 as never);
     await expect(
       getInvokeHandler(CHANNELS.AGENT_SETTINGS_SET_GLOBAL)({} as never, "yes" as never)
