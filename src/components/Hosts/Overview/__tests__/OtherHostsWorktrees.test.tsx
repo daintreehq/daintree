@@ -93,10 +93,13 @@ describe("OtherHostsWorktrees", () => {
 
     fireEvent.click(rows[0]!);
     expect(onNavigate).toHaveBeenCalled();
-    expect(switchToHost).toHaveBeenCalledWith("studio-01", false, "p-remote", undefined);
+    // A row with no agent lands on its worktree (#14569).
+    expect(switchToHost).toHaveBeenCalledWith("studio-01", false, "p-remote", {
+      focusIntent: { intent: "focus-worktree", worktreeId: "/srv/helios-feature" },
+    });
   });
 
-  it("focuses the most urgent agent's terminal, and still opens the project without runs", async () => {
+  it("focuses the most urgent agent's terminal, and lands on the worktree without runs", async () => {
     listWorktrees.mockResolvedValueOnce([
       {
         ...worktree,
@@ -117,7 +120,9 @@ describe("OtherHostsWorktrees", () => {
       focusIntent: { intent: "focus-panel", panelId: "t-urgent" },
     });
     fireEvent.click(rows[1]!);
-    expect(switchToHost).toHaveBeenLastCalledWith("studio-01", false, "p-remote", undefined);
+    expect(switchToHost).toHaveBeenLastCalledWith("studio-01", false, "p-remote", {
+      focusIntent: { intent: "focus-worktree", worktreeId: "/srv/other" },
+    });
   });
 
   it("renders nothing without another host", () => {

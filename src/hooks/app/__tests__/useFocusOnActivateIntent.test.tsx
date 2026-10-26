@@ -5,6 +5,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 type FocusPayload =
   | { intent: "focus-next-waiting" }
   | { intent: "focus-panel"; panelId: string }
+  | { intent: "focus-worktree"; worktreeId: string }
   | { intent: "open-assistant"; subject: Record<string, unknown> };
 
 const onFocusOnActivateMock = vi.hoisted(() =>
@@ -33,6 +34,13 @@ vi.mock("@/services/assistantSubject", () => ({ activateAssistantLane: activateL
 
 const notifyMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
+
+const { landOnWorktreeMock, worktreeStore } = vi.hoisted(() => ({
+  landOnWorktreeMock: vi.fn((_worktreeId: string, _store: unknown) => vi.fn()),
+  worktreeStore: { name: "the view's worktree store" },
+}));
+vi.mock("@/services/worktreeLanding", () => ({ landOnWorktree: landOnWorktreeMock }));
+vi.mock("@/hooks/useWorktreeStore", () => ({ useWorktreeStoreApi: () => worktreeStore }));
 
 import { useFocusOnActivateIntent } from "../useFocusOnActivateIntent";
 
@@ -211,6 +219,49 @@ describe("useFocusOnActivateIntent", () => {
     });
     expect(notifyMock).toHaveBeenCalledTimes(1);
     expect(notifyMock).toHaveBeenCalledWith(expect.objectContaining({ title: "Terminal is gone" }));
+  });
+
+  it("lands on the worktree it was sent once hydrated, dispatching nothing else (#14569)", () => {
+    const { rerender } = renderHook(({ loaded }) => useFocusOnActivateIntent(loaded), {
+      initialProps: { loaded: false },
+    });
+    act(() => {
+      lastCallback?.({ intent: "focus-worktree", worktreeId: "/repo-feature" });
+    });
+    expect(landOnWorktreeMock).not.toHaveBeenCalled();
+
+    rerender({ loaded: true });
+    expect(landOnWorktreeMock).toHaveBeenCalledTimes(1);
+    expect(landOnWorktreeMock).toHaveBeenCalledWith("/repo-feature", worktreeStore);
+    expect(dispatchMock).not.toHaveBeenCalled();
+    rerender({ loaded: true });
+    expect(landOnWorktreeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops a landing still waiting when a newer intent arrives or the view unmounts", () => {
+    const { unmount } = renderHook(({ loaded }) => useFocusOnActivateIntent(loaded), {
+      initialProps: { loaded: true },
+    });
+    act(() => {
+      lastCallback?.({ intent: "focus-worktree", worktreeId: "/repo-feature" });
+    });
+    const cancelFirst = landOnWorktreeMock.mock.results[0]!.value;
+    expect(cancelFirst).not.toHaveBeenCalled();
+
+    act(() => {
+      lastCallback?.({ intent: "focus-next-waiting" });
+    });
+    expect(cancelFirst).toHaveBeenCalledTimes(1);
+    expect(dispatchMock).toHaveBeenCalledWith("agent.focusNextWaiting");
+
+    act(() => {
+      lastCallback?.({ intent: "focus-worktree", worktreeId: "/repo-other" });
+    });
+    expect(landOnWorktreeMock).toHaveBeenLastCalledWith("/repo-other", worktreeStore);
+    const cancelSecond = landOnWorktreeMock.mock.results[1]!.value;
+    unmount();
+    expect(cancelSecond).toHaveBeenCalledTimes(1);
+    expect(cancelFirst).toHaveBeenCalledTimes(1);
   });
 
   it("unsubscribes on unmount", () => {

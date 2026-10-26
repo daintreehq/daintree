@@ -1,10 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { actionService } from "@/services/ActionService";
 import type { ProjectFocusOnActivateIntent } from "@shared/types/ipc/project";
 import type { ActionId } from "@shared/types/actions";
 import { logWarn } from "@/utils/logger";
 import { notify } from "@/lib/notify";
 import { activateAssistantLane } from "@/services/assistantSubject";
+import { landOnWorktree } from "@/services/worktreeLanding";
+import { useWorktreeStoreApi } from "@/hooks/useWorktreeStore";
 
 /**
  * Cross-project focus intent receiver.
@@ -27,19 +29,29 @@ import { activateAssistantLane } from "@/services/assistantSubject";
  */
 export function useFocusOnActivateIntent(isStateLoaded: boolean): void {
   const [pending, setPending] = useState<ProjectFocusOnActivateIntent | null>(null);
+  const worktreeStore = useWorktreeStoreApi();
+  /** A worktree landing still waiting on the list: a newer intent or unmount cancels it. */
+  const cancelLanding = useRef<(() => void) | null>(null);
 
   useEffect(() => {
-    return window.electron.project.onFocusOnActivate((payload) => {
+    const off = window.electron.project.onFocusOnActivate((payload) => {
       if (
         payload?.intent !== "focus-next-waiting" &&
         payload?.intent !== "focus-panel" &&
+        payload?.intent !== "focus-worktree" &&
         payload?.intent !== "run-plugin-action" &&
         payload?.intent !== "open-assistant"
       ) {
         return;
       }
+      cancelLanding.current?.();
+      cancelLanding.current = null;
       setPending(payload);
     });
+    return () => {
+      off();
+      cancelLanding.current?.();
+    };
   }, []);
 
   useEffect(() => {
@@ -67,6 +79,10 @@ export function useFocusOnActivateIntent(isStateLoaded: boolean): void {
       });
       return;
     }
+    if (pending.intent === "focus-worktree") {
+      cancelLanding.current = landOnWorktree(pending.worktreeId, worktreeStore);
+      return;
+    }
     if (pending.intent === "focus-panel") {
       // The terminal can exit or be trashed while the project switch is in flight.
       void actionService.dispatch("panel.focus", { panelId: pending.panelId }).then((result) => {
@@ -82,5 +98,5 @@ export function useFocusOnActivateIntent(isStateLoaded: boolean): void {
       return;
     }
     void actionService.dispatch("agent.focusNextWaiting");
-  }, [isStateLoaded, pending]);
+  }, [isStateLoaded, pending, worktreeStore]);
 }

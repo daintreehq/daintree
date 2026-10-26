@@ -259,6 +259,8 @@ const STARTING_TIMEOUT_MS = 120_000;
 const DEFAULT_FORGET_SWITCH_WAIT_MS = 5_000;
 
 const MAX_PROJECT_ID_LENGTH = 256;
+/** A worktree's id is its path. */
+const MAX_WORKTREE_ID_LENGTH = 4096;
 
 /** A readiness probe's answer when the host hasn't settled yet. */
 const NOT_SETTLED = Symbol("not-settled");
@@ -285,8 +287,9 @@ function focusIntentOf(payload: SwitchWindowHostPayload): ProjectFocusOnActivate
     const {
       intent: kind,
       panelId,
+      worktreeId,
       subject: rawSubject,
-    } = intent as { intent?: unknown; panelId?: unknown; subject?: unknown };
+    } = intent as { intent?: unknown; panelId?: unknown; worktreeId?: unknown; subject?: unknown };
     if (kind === "focus-next-waiting") return { intent: kind };
     if (kind === "open-assistant") {
       // A remote person's "Open in Assistant" (#14163): only a project lane, and
@@ -312,6 +315,14 @@ function focusIntentOf(payload: SwitchWindowHostPayload): ProjectFocusOnActivate
       panelId.length <= MAX_PROJECT_ID_LENGTH
     ) {
       return { intent: kind, panelId };
+    }
+    if (
+      kind === "focus-worktree" &&
+      typeof worktreeId === "string" &&
+      worktreeId.length > 0 &&
+      worktreeId.length <= MAX_WORKTREE_ID_LENGTH
+    ) {
+      return { intent: kind, worktreeId };
     }
   }
   throw invalid("focusIntent is not a focus intent");
