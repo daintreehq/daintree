@@ -525,3 +525,136 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     expect(draft("panel-1")).toBe("hello wrld");
   });
 });
+
+describe("VoiceRecordingService — learning baseline follows its draft (#14645)", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    callbacks.delta = null;
+    callbacks.complete = null;
+    callbacks.boundary = null;
+    correct.mockReset();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const passage = (
+    voiceStore: Awaited<ReturnType<typeof setup>>["voiceStore"],
+    draft: string,
+    panelId = "panel-1"
+  ) => draft.slice(voiceStore.getState().panelBuffers[panelId]!.sessionDraftStart);
+
+  it("takes the corrected text as the baseline once the correction lands", async () => {
+    const { service, dictate, flush, baseline } = await setup();
+    correct.mockResolvedValueOnce({ action: "replace", correctedText: "migrate to React" });
+
+    dictate("panel-1", "migrate to racked");
+    await service.stop();
+    await flush();
+
+    expect(baseline("panel-1")).toBe("migrate to React");
+  });
+
+  it("keeps the dictated text as the baseline when the user edits during the correction", async () => {
+    const { service, dictate, draft, flush, baseline, inputStore } = await setup();
+    const first = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(first.promise);
+
+    dictate("panel-1", "migrate to racked");
+    await service.stop();
+    inputStore.getState().setDraftInput("panel-1", "migrate to rackets");
+    first.resolve({ action: "replace", correctedText: "migrate to React" });
+    await flush();
+
+    expect(draft("panel-1")).toBe("migrate to rackets");
+    expect(baseline("panel-1")).toBe("migrate to racked");
+  });
+
+  it("drops the baseline when its draft is cleared without a send", async () => {
+    const { service, dictate, flush, baseline, inputStore, voiceStore } = await setup();
+    correct.mockResolvedValueOnce({ action: "no_change", correctedText: "the parser" });
+
+    dictate("panel-1", "the parser");
+    await service.stop();
+    await flush();
+    expect(baseline("panel-1")).toBe("the parser");
+
+    inputStore.getState().clearDraftInput("panel-1");
+    expect(baseline("panel-1")).toBeNull();
+
+    voiceStore.getState().setCorrectionEnabled(false);
+    dictate("panel-1", "the lexer");
+    await service.stop();
+    expect(baseline("panel-1")).toBe("the lexer");
+
+    inputStore.getState().setDraftInput("panel-1", "");
+    expect(baseline("panel-1")).toBeNull();
+  });
+
+  it("drops a pending correction's seeded baseline when the draft is cleared", async () => {
+    const { service, dictate, flush, baseline, inputStore } = await setup();
+    const first = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(first.promise);
+
+    dictate("panel-1", "the parsr");
+    await service.stop();
+    expect(baseline("panel-1")).toBe("the parsr");
+
+    inputStore.getState().clearDraftInput("panel-1");
+    first.resolve({ action: "replace", correctedText: "the parser" });
+    await flush();
+
+    expect(baseline("panel-1")).toBeNull();
+  });
+
+  it("learns without correction from the passage as it stood in the draft", async () => {
+    const { service, dictate, baseline, inputStore, voiceStore } = await setup();
+    voiceStore.getState().setCorrectionEnabled(false);
+
+    inputStore.getState().setDraftInput("panel-1", "note:");
+    dictate("panel-1", "the parsr");
+    await service.stop();
+    expect(correct).not.toHaveBeenCalled();
+    expect(baseline("panel-1")).toBe("the parsr");
+
+    // Typing before the passage moves where it starts; editing it doesn't.
+    inputStore.getState().setDraftInput("panel-1", "my note: the parsr");
+    inputStore.getState().setDraftInput("panel-1", "my note: the parser");
+    expect(passage(voiceStore, inputStore.getState().getDraftInput("panel-1"))).toBe("the parser");
+    expect(baseline("panel-1")).toBe("the parsr");
+  });
+
+  it("moves a newer baseline once when an older correction lands before it", async () => {
+    const { service, dictate, flush, baseline, inputStore, voiceStore } = await setup();
+    const first = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(first.promise);
+
+    dictate("panel-1", "the parsr");
+    await service.stop();
+    voiceStore.getState().setCorrectionEnabled(false);
+    dictate("panel-1", "and the lexer");
+    await service.stop();
+    expect(baseline("panel-1")).toBe("and the lexer");
+
+    first.resolve({ action: "replace", correctedText: "the parser" });
+    await flush();
+
+    const draft = inputStore.getState().getDraftInput("panel-1");
+    expect(draft).toContain("the parser");
+    expect(passage(voiceStore, draft).trim()).toBe("and the lexer");
+  });
+
+  it("follows baselines again after the service is torn down and brought back", async () => {
+    const { service, dictate, baseline, inputStore, voiceStore } = await setup();
+    voiceStore.getState().setCorrectionEnabled(false);
+    dictate("panel-1", "the parsr");
+    await service.stop();
+
+    service.destroy();
+    service.initialize();
+    inputStore.getState().clearDraftInput("panel-1");
+
+    expect(baseline("panel-1")).toBeNull();
+  });
+});

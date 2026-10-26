@@ -547,9 +547,11 @@ describe("useTokenResolution dictionary learning", () => {
     });
 
     expect(onSend).toHaveBeenCalledTimes(1);
-    expect(recordSuggestions).toHaveBeenCalledWith({
-      candidates: [{ word: "Zustand", original: "zoo stand" }],
-    });
+    await vi.waitFor(() =>
+      expect(recordSuggestions).toHaveBeenCalledWith({
+        candidates: [{ word: "Zustand", original: "zoo stand" }],
+      })
+    );
     expect(setSessionCorrectedText).toHaveBeenCalledWith("t1", null);
     expect(getSettings).not.toHaveBeenCalled();
     expect(setSettings).not.toHaveBeenCalled();
@@ -574,9 +576,11 @@ describe("useTokenResolution dictionary learning", () => {
       await expect(sendText("use Zustand for state")).resolves.toBe(true);
     });
     expect(onSend).toHaveBeenCalledTimes(1);
-    expect(recordSuggestions).toHaveBeenCalledWith({
-      candidates: [{ word: "Zustand", original: "zoo stand" }],
-    });
+    await vi.waitFor(() =>
+      expect(recordSuggestions).toHaveBeenCalledWith({
+        candidates: [{ word: "Zustand", original: "zoo stand" }],
+      })
+    );
   });
 
   it("reports nothing while learning from corrections is off", async () => {
@@ -598,5 +602,127 @@ describe("useTokenResolution dictionary learning", () => {
       await sendText("use Zustand for state");
     });
     expect(recordSuggestions).not.toHaveBeenCalled();
+  });
+
+  const learning = (recordSuggestions: ReturnType<typeof vi.fn>, learnFromCorrections = true) => {
+    installElectron({
+      git: { getWorkingDiff: vi.fn() },
+      voiceDictionary: { recordSuggestions },
+    });
+    const state = {
+      learnFromCorrections,
+      panelBuffers: {
+        t1: {
+          sessionCorrectedText: "use zoo stand for state",
+          sessionDraftStart: 0,
+          dictationSessionId: "s1",
+        },
+      } as Record<
+        string,
+        {
+          sessionCorrectedText?: string;
+          sessionDraftStart?: number;
+          dictationSessionId?: string;
+          projectId?: string;
+        }
+      >,
+      setSessionCorrectedText: (panelId: string, text: string | null) => {
+        const buffer = state.panelBuffers[panelId];
+        if (buffer) buffer.sessionCorrectedText = text ?? undefined;
+      },
+    };
+    voiceState.value = state;
+    return state;
+  };
+
+  it("drops the baseline on a send even while learning is off (#14645)", async () => {
+    const state = learning(vi.fn(), false);
+    const { sendText } = setup();
+    await act(async () => {
+      await sendText("use Zustand for state");
+    });
+    expect(state.panelBuffers.t1!.sessionCorrectedText).toBeUndefined();
+  });
+
+  it("keeps the baseline when the submit is refused (#14645)", async () => {
+    const recordSuggestions = vi.fn();
+    const state = learning(recordSuggestions);
+    const { sendText } = setup();
+    await act(async () => {
+      await sendText("use Zustand for state", { submit: async () => false });
+    });
+    expect(state.panelBuffers.t1!.sessionCorrectedText).toBe("use zoo stand for state");
+    expect(recordSuggestions).not.toHaveBeenCalled();
+  });
+
+  it("diffs against the baseline the send began with, and leaves a newer one alone (#14645)", async () => {
+    const recordSuggestions = vi.fn().mockResolvedValue(undefined);
+    const state = learning(recordSuggestions);
+    const { sendText } = setup();
+    await act(async () => {
+      await sendText("use Zustand for state", {
+        submit: async () => {
+          // A dictation finishing while the submit is on its way.
+          state.panelBuffers.t1 = {
+            sessionCorrectedText: "next passage",
+            sessionDraftStart: 30,
+            dictationSessionId: "s2",
+          };
+          return true;
+        },
+      });
+    });
+
+    await vi.waitFor(() =>
+      expect(recordSuggestions).toHaveBeenCalledWith({
+        candidates: [{ word: "Zustand", original: "zoo stand" }],
+      })
+    );
+    expect(state.panelBuffers.t1!.sessionCorrectedText).toBe("next passage");
+  });
+
+  it("leaves a newer session's baseline that says the same words (#14645)", async () => {
+    const state = learning(vi.fn().mockResolvedValue(undefined));
+    const { sendText } = setup();
+    await act(async () => {
+      await sendText("use Zustand for state", {
+        submit: async () => {
+          state.panelBuffers.t1 = { ...state.panelBuffers.t1!, dictationSessionId: "s2" };
+          return true;
+        },
+      });
+    });
+    expect(state.panelBuffers.t1!.sessionCorrectedText).toBe("use zoo stand for state");
+  });
+
+  it("leaves the baseline of a draft under another key alone (#14645)", async () => {
+    const recordSuggestions = vi.fn();
+    const state = learning(recordSuggestions);
+    state.panelBuffers.t1!.projectId = "project-a";
+    const { sendText } = setup({ projectId: "isolated-composer" });
+    await act(async () => {
+      await sendText("use Zustand for state");
+    });
+    expect(state.panelBuffers.t1!.sessionCorrectedText).toBe("use zoo stand for state");
+    expect(recordSuggestions).not.toHaveBeenCalled();
+  });
+
+  it("compares only the dictated part of the draft, in its sentence (#14645)", async () => {
+    const recordSuggestions = vi.fn().mockResolvedValue(undefined);
+    const state = learning(recordSuggestions);
+    state.panelBuffers.t1 = {
+      ...state.panelBuffers.t1!,
+      sessionCorrectedText: "daintree first",
+      sessionDraftStart: 5,
+    };
+    const { sendText } = setup();
+    await act(async () => {
+      await sendText("open Daintree first");
+    });
+    await vi.waitFor(() =>
+      expect(recordSuggestions).toHaveBeenCalledWith({
+        candidates: [{ word: "Daintree", original: "daintree" }],
+      })
+    );
   });
 });

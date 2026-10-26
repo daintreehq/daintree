@@ -6,7 +6,6 @@ import { buildTerminalSendPayload } from "@/lib/terminalInput";
 import { useCommandHistoryStore } from "@/store/commandHistoryStore";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { useDictionaryLearnPromptStore } from "@/store/dictionaryLearnPromptStore";
-import { findCorrectionCandidates } from "@shared/utils/phoneticSimilarity";
 import {
   getAllAtContextReferences,
   getAllAtTerminalTokens,
@@ -44,6 +43,44 @@ function resolveContextReferences(
   return bridge.resolveContextReferences(references);
 }
 
+/** A dictated passage as it settled, and the same passage as the user is sending it. */
+interface CorrectionSnapshot {
+  baseline: string;
+  edited: string;
+  /** The draft before the passage. */
+  preceding: string;
+  /** The session that wrote the baseline; a newer one owns whatever replaced it. */
+  sessionId: string | null;
+}
+
+/**
+ * Pairs the panel's learning baseline with the draft being sent. Taken before
+ * the send awaits anything: a dictation that finishes meanwhile writes a newer
+ * baseline, and this draft must not be diffed against it. A draft under
+ * another key (an isolated composer on the same terminal) isn't the one the
+ * passage was dictated into.
+ */
+function takeCorrectionSnapshot(
+  panelId: string,
+  projectId: string | undefined,
+  text: string
+): CorrectionSnapshot | null {
+  try {
+    const buffer = useVoiceRecordingStore.getState().panelBuffers[panelId];
+    const baseline = buffer?.sessionCorrectedText;
+    const sessionStart = buffer?.sessionDraftStart ?? -1;
+    if (!baseline || sessionStart < 0 || buffer.projectId !== projectId) return null;
+    return {
+      baseline,
+      edited: text.slice(sessionStart),
+      preceding: text.slice(0, sessionStart),
+      sessionId: buffer.dictationSessionId,
+    };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Learn custom-dictionary words from a user's manual corrections to dictated
  * text. Compares the settled transcription baseline (captured after dictation
@@ -57,29 +94,37 @@ function resolveContextReferences(
  */
 const latestLearnSend = new Map<string, number>();
 
-function detectDictionaryCorrections(panelId: string, finalText: string): void {
+function detectDictionaryCorrections(panelId: string, snapshot: CorrectionSnapshot | null): void {
   // A later send supersedes a reply still in flight, so it can't offer a stale pair.
   const send = (latestLearnSend.get(panelId) ?? 0) + 1;
   latestLearnSend.set(panelId, send);
+  if (!snapshot) return;
   try {
     const voiceState = useVoiceRecordingStore.getState();
-    if (!voiceState.learnFromCorrections) return;
+    // The draft is gone, so its baseline goes with it whether or not learning
+    // is on — unless a newer dictation has already replaced it.
     const buffer = voiceState.panelBuffers[panelId];
-    const baseline = buffer?.sessionCorrectedText;
-    const sessionStart = buffer?.sessionDraftStart ?? -1;
-    if (!baseline || sessionStart < 0) return;
+    if (
+      buffer?.sessionCorrectedText === snapshot.baseline &&
+      buffer.dictationSessionId === snapshot.sessionId
+    ) {
+      voiceState.setSessionCorrectedText(panelId, null);
+    }
+    if (!voiceState.learnFromCorrections) return;
 
-    // Consume the baseline so a later send of unrelated text can't re-trigger.
-    voiceState.setSessionCorrectedText(panelId, null);
-
-    const candidates = findCorrectionCandidates(baseline, finalText.slice(sessionStart));
-    if (candidates.length === 0) return;
-
-    // Main merges them into the queue it owns, so an accept or dismiss made
+    // The matcher and its word list load here, off the send path. Main merges
+    // the candidates into the queue it owns, so an accept or dismiss made
     // meanwhile in Settings isn't overwritten by this view's copy.
-    window.electron.voiceDictionary
-      .recordSuggestions({ candidates })
-      .then((state) => {
+    const report = async () => {
+      try {
+        const { findCorrectionCandidates } = await import("@shared/utils/phoneticSimilarity");
+        const candidates = findCorrectionCandidates(
+          snapshot.baseline,
+          snapshot.edited,
+          snapshot.preceding
+        );
+        if (candidates.length === 0) return;
+        const state = await window.electron.voiceDictionary.recordSuggestions({ candidates });
         if (latestLearnSend.get(panelId) !== send) return;
         // Only a pair main kept in the queue is offered: one already in the
         // dictionary or dismissed earlier never reaches it.
@@ -97,10 +142,11 @@ function detectDictionaryCorrections(panelId: string, finalText: string): void {
             return;
           }
         }
-      })
-      .catch(() => {
+      } catch {
         // Best-effort; never surface a learning failure to the user.
-      });
+      }
+    };
+    void report();
   } catch {
     // Never let learning interfere with sending.
   }
@@ -232,6 +278,7 @@ export function useTokenResolution({
       // could otherwise interleave and double-post.
       isSendingRef.current = true;
       try {
+        const correctionSnapshot = takeCorrectionSnapshot(terminalId, latest.projectId, text);
         const terminalTokens = expandContext ? getAllAtTerminalTokens(text) : [];
         const selectionTokens = expandContext ? getAllAtSelectionTokens(text) : [];
         const diffTokens = expandContext ? getAllAtDiffTokens(text) : [];
@@ -325,7 +372,7 @@ export function useTokenResolution({
         // Learn dictionary words from manual corrections to dictated text. Uses
         // the original `text` (the human-authored content), not `resolvedText`
         // (which has @-token expansions spliced in).
-        detectDictionaryCorrections(terminalId, text);
+        detectDictionaryCorrections(terminalId, correctionSnapshot);
 
         // History keeps what the human authored, so recalling it re-runs the
         // tokens rather than a frozen expansion — composed the same way, because

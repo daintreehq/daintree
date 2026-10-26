@@ -431,6 +431,29 @@ describe("VoiceRecordingService — dictation ranges (#14597)", () => {
     expect(draft()).toBe("@README.md.");
     expect(records()[0]!.utterances[0]!.range.edited).toBe(true);
   });
+
+  it("moves a newer session's learning baseline once when an older one's file link lands before it", async () => {
+    const { service, voiceStore, begin, draft } = await setup();
+
+    complete("Link to the readme file.", "item-a", "t1");
+    await service.stop("Dictation stopped.");
+    begin("session-2");
+    callbacks.complete!({
+      sessionId: "session-2",
+      text: "hello there",
+      willCorrect: false,
+      itemId: "item-b",
+    });
+    await service.stop("Dictation stopped.");
+    expect(voiceStore.getState().panelBuffers[PANEL]!.sessionCorrectedText).toBe("hello there");
+
+    fileReferences("t1", [{ description: "readme file", path: "README.md" }]);
+
+    expect(draft()).toBe("@README.md. hello there");
+    const buffer = voiceStore.getState().panelBuffers[PANEL]!;
+    expect(buffer.sessionCorrectedText).toBe("hello there");
+    expect(draft().slice(buffer.sessionDraftStart)).toBe("hello there");
+  });
 });
 
 describe("VoiceRecordingService — correction over dictated ranges (#14613)", () => {

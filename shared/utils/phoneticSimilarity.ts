@@ -11,7 +11,15 @@
  * Electron-only imports and can't be loaded from the renderer.
  */
 
+import { isCommonEnglishWord } from "./commonEnglishWords.js";
+
 const MIN_TERM_LENGTH = 4;
+/** Edit ratio a correction needs when Soundex alone can't vouch for it. */
+const SIMILAR_RATIO = 0.6;
+/** Edit ratio a correction needs when the user changed its first sound. */
+const DIFFERENT_FIRST_SOUND_RATIO = 0.8;
+/** Longest run, on either side, still treated as one corrected term. */
+const MAX_RUN_TOKENS = 3;
 
 // Shell commands, language keywords, and common English stop words that should
 // never be suggested as dictionary terms even if they pass the phonetic gate.
@@ -287,14 +295,17 @@ function firstSoundCompatible(a: string, b: string): boolean {
 
 /**
  * Whether two normalized forms are close enough to be a mishearing rather than
- * an unrelated rewrite. Requires a compatible leading sound plus either an
- * exact Soundex match or a high edit ratio.
+ * a reworded sentence. A compatible leading sound plus an exact Soundex match
+ * or a good edit ratio passes; a different leading sound needs a near-identical
+ * spelling (ex term → xterm). A phrase needs the edit ratio either way, because
+ * Soundex only looks at its first few consonants.
  */
-function isPhoneticallySimilar(a: string, b: string): boolean {
+function isPhoneticallySimilar(a: string, b: string, phrase: boolean): boolean {
   if (!a || !b || a === b) return false;
-  if (!firstSoundCompatible(a, b)) return false;
-  if (soundex(a) === soundex(b)) return true;
-  return levenshteinRatio(a, b) >= 0.4;
+  const ratio = levenshteinRatio(a, b);
+  if (!firstSoundCompatible(a, b)) return ratio >= DIFFERENT_FIRST_SOUND_RATIO;
+  if (!phrase && soundex(a) === soundex(b)) return true;
+  return ratio >= SIMILAR_RATIO;
 }
 
 /** Split text into whitespace-delimited tokens. */
@@ -302,12 +313,57 @@ function tokenize(text: string): string[] {
   return text.split(/\s+/).filter(Boolean);
 }
 
+function letters(text: string): string {
+  return text.replace(/[^\p{L}\p{N}]/gu, "");
+}
+
+function isSentenceStart(previous: string | undefined): boolean {
+  return previous === undefined || /[.!?:][^\p{L}\p{N}]*$/u.test(previous);
+}
+
+/**
+ * Whether the user gave `after` a capital `before` didn't have, somewhere a
+ * capital means something. The first word of a sentence is capitalised anyway,
+ * so a capital there says nothing about the word; nor does a lone letter (i →
+ * I). Where the letters are the same, a capital has to land on a letter that
+ * wasn't one (Usestate → useState); otherwise there have to be more of them.
+ */
+function addsCapital(before: string, after: string, previous: string | undefined): boolean {
+  const b = letters(before);
+  const a = letters(after);
+  if (a.length < 2) return false;
+  const from = isSentenceStart(previous) ? 1 : 0;
+  const isUpper = (ch: string) => ch !== ch.toLowerCase();
+  if (a.toLowerCase() === b.toLowerCase()) {
+    for (let k = from; k < a.length; k++) {
+      if (isUpper(a[k]!) && !isUpper(b[k]!)) return true;
+    }
+    return false;
+  }
+  const count = (text: string) => [...text.slice(from)].filter(isUpper).length;
+  return count(a) > count(b);
+}
+
+interface DiffRun {
+  before: string[];
+  after: string[];
+  /** The edited token just before the run, for telling a sentence's first word. */
+  previous: string | undefined;
+  /** A token in the run has the same letters as before, with a capital the user added. */
+  recased: boolean;
+}
+
 /**
  * Align two token sequences via LCS and return the substituted runs — maximal
- * spans where one side's tokens were replaced by the other's. Pure insertions
- * and deletions (one side empty) are included so callers can filter them out.
+ * spans where one side's tokens were replaced by the other's. Tokens match on
+ * their normalized form, so a recapitalised token aligns with its original; it
+ * still joins the run before it when the user gave it a capital, since that is
+ * the user correcting the term (dock or compose → Docker Compose), but nothing
+ * after it joins, so words typed after a recased term stay out of it. Pure
+ * insertions and deletions (one side empty) are included so callers can filter
+ * them out.
  */
-function diffRuns(before: string[], after: string[]): Array<{ before: string[]; after: string[] }> {
+function diffRuns(before: string[], after: string[], previous: string | undefined): DiffRun[] {
   const a = before.map(normalizeToken);
   const b = after.map(normalizeToken);
   const m = a.length;
@@ -321,37 +377,84 @@ function diffRuns(before: string[], after: string[]): Array<{ before: string[]; 
     }
   }
 
-  const runs: Array<{ before: string[]; after: string[] }> = [];
-  let curBefore: string[] = [];
-  let curAfter: string[] = [];
-  const flush = () => {
-    if (curBefore.length || curAfter.length) {
-      runs.push({ before: curBefore, after: curAfter });
-      curBefore = [];
-      curAfter = [];
+  const runs: DiffRun[] = [];
+  const open = (j: number): DiffRun => ({
+    before: [],
+    after: [],
+    previous: j > 0 ? after[j - 1] : previous,
+    recased: false,
+  });
+  let current = open(0);
+  let endsRecased = false;
+  const flush = (j: number) => {
+    if (current.before.length || current.after.length) runs.push(current);
+    current = open(j);
+    endsRecased = false;
+  };
+  // Whether the unmatched gap starting at (i, j) replaces tokens with others,
+  // rather than only adding or only dropping some.
+  const gapSubstitutes = (i: number, j: number) => {
+    let dropped = false;
+    let added = false;
+    while ((i < m || j < n) && !(i < m && j < n && a[i] === b[j])) {
+      if (j >= n || (i < m && dp[i + 1]![j]! >= dp[i]![j + 1]!)) {
+        dropped = true;
+        i++;
+      } else {
+        added = true;
+        j++;
+      }
     }
+    return dropped && added;
+  };
+  // A recased term keeps the substitution after it (react quarry → React
+  // Query), but not words merely typed or dropped after it.
+  const extend = (i: number, j: number) => {
+    if (endsRecased && !gapSubstitutes(i, j)) flush(j);
+    endsRecased = false;
   };
 
   let i = 0;
   let j = 0;
   while (i < m && j < n) {
     if (a[i] === b[j]) {
-      flush();
+      if (addsCapital(before[i]!, after[j]!, j > 0 ? after[j - 1] : previous)) {
+        current.before.push(before[i]!);
+        current.after.push(after[j]!);
+        current.recased = true;
+        endsRecased = true;
+      } else {
+        flush(j + 1);
+      }
       i++;
       j++;
     } else if (dp[i + 1]![j]! >= dp[i]![j + 1]!) {
-      curBefore.push(before[i]!);
+      extend(i, j);
+      current.before.push(before[i]!);
       i++;
     } else {
-      curAfter.push(after[j]!);
+      extend(i, j);
+      current.after.push(after[j]!);
       j++;
     }
   }
-  while (i < m) curBefore.push(before[i++]!);
-  while (j < n) curAfter.push(after[j++]!);
-  flush();
+  if (i < m || j < n) extend(i, j);
+  while (i < m) current.before.push(before[i++]!);
+  while (j < n) current.after.push(after[j++]!);
+  flush(n);
 
   return runs;
+}
+
+/** The last token of `text`, or undefined when there is none. */
+function lastToken(text: string | undefined): string | undefined {
+  const tokens = text ? tokenize(text) : [];
+  return tokens[tokens.length - 1];
+}
+
+/** Ordinary English, or a word the blocklist already rules out (tests, pushed). */
+function isOrdinaryWord(word: string): boolean {
+  return isCommonEnglishWord(normalizeToken(word), BLOCKLIST);
 }
 
 /**
@@ -359,13 +462,23 @@ function diffRuns(before: string[], after: string[]): Array<{ before: string[]; 
  * the user's edited text. Returns the corrected terms (deduped, case
  * preserved) the user likely wants in their dictionary.
  *
- * Handles 1:1, many:1 ("zoo stand" → "Zustand"), and 1:many substitutions by
- * comparing the concatenated forms of each substituted run.
+ * Handles 1:1, many:1 ("zoo stand" → "Zustand"), and short many:many ("dock or
+ * compose" → "Docker Compose") substitutions by comparing the concatenated
+ * forms of each run, plus joins ("use state" → "useState") and capitalisation
+ * ("daintree" → "Daintree"), where the letters stay the same. A correction to
+ * ordinary English is the user rewording, not fixing a mishearing, so it's
+ * skipped unless the user also capitalised it into a name (racked → React).
+ * `precedingText` is the draft before the dictated passage, so a capital on
+ * the passage's first word can be told from a sentence's.
  */
-export function findCorrectionCandidates(baseline: string, edited: string): CorrectionCandidate[] {
+export function findCorrectionCandidates(
+  baseline: string,
+  edited: string,
+  precedingText?: string
+): CorrectionCandidate[] {
   if (!baseline.trim() || !edited.trim()) return [];
 
-  const runs = diffRuns(tokenize(baseline), tokenize(edited));
+  const runs = diffRuns(tokenize(baseline), tokenize(edited), lastToken(precedingText));
   const out: CorrectionCandidate[] = [];
   const seen = new Set<string>();
 
@@ -373,20 +486,32 @@ export function findCorrectionCandidates(baseline: string, edited: string): Corr
     // Only substitutions (both sides non-empty) are corrections; pure
     // insertions or deletions carry no misheard→fixed pairing.
     if (run.before.length === 0 || run.after.length === 0) continue;
-    // Only clean consolidating substitutions (1:1 or many:1). A multi-token
-    // corrected run is ambiguous — it usually means the user appended unrelated
-    // words after the dictated term — so skip it rather than suggest noise.
-    if (run.after.length !== 1) continue;
+    // A long run is the user rewriting a passage, not fixing a term.
+    if (run.before.length > MAX_RUN_TOKENS || run.after.length > MAX_RUN_TOKENS) continue;
 
-    const token = run.after[0]!;
+    const words = run.after.map(stripEdgePunctuation).filter(Boolean);
+    if (words.length === 0) continue;
     const beforeJoined = run.before.map(normalizeToken).join("");
-    const normalized = normalizeToken(token);
-    if (!isPhoneticallySimilar(beforeJoined, normalized)) continue;
+    const normalized = words.map(normalizeToken).join("");
+
+    const capitalised =
+      run.recased || addsCapital(run.before.join(" "), run.after.join(" "), run.previous);
+
+    if (beforeJoined === normalized) {
+      // Same letters: only a join, a split or a capital the user added is a fix.
+      if (run.before.length === run.after.length && !capitalised) continue;
+    } else if (!isPhoneticallySimilar(beforeJoined, normalized, run.after.length > 1)) {
+      continue;
+    }
+
     if (!isLearnableTerm(normalized)) continue;
+    const ordinary = words.every(isOrdinaryWord);
+    const renamed = capitalised && beforeJoined !== normalized;
+    if (ordinary && !renamed) continue;
     if (seen.has(normalized)) continue;
 
     seen.add(normalized);
-    out.push({ word: stripEdgePunctuation(token), original: run.before.join(" ") });
+    out.push({ word: words.join(" "), original: run.before.join(" ") });
   }
 
   return out;

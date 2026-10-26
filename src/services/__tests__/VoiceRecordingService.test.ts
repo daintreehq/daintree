@@ -84,7 +84,9 @@ vi.mock("@/store/terminalInputStore", () => {
     bumpExternalDraftRevision: vi.fn(),
   };
   const getState = () => ({ ...fns, hybridInputEnabled: true });
-  return { useTerminalInputStore: Object.assign(getState, { getState }) };
+  return {
+    useTerminalInputStore: Object.assign(getState, { getState, subscribe: () => () => {} }),
+  };
 });
 
 vi.mock("@/store/projectStore", () => {
