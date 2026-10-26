@@ -1,0 +1,381 @@
+import { randomUUID } from "node:crypto";
+import { WORKER_STEER_REFUSALS } from "../../../shared/types/assistantControl.js";
+import type { AgentState, WaitingReason } from "../../../shared/types/agent.js";
+import { isBuiltInAgentId } from "../../../shared/config/agentIds.js";
+import { readTailSnapshot, tailCapturedOutput } from "../../../shared/utils/artifactParser.js";
+import { stampAssistantPrompt } from "../../../shared/utils/assistantProvenance.js";
+import { appendHandbackInstruction, mintHandbackCode } from "../../../shared/utils/handback.js";
+import { planChoice } from "../../../shared/utils/terminalChoice.js";
+import { assessInterruptCandidate } from "../../../shared/utils/terminalInterrupt.js";
+import {
+  CHOOSE_SCREEN_LINES,
+  SEND_KEYS_GAP_MS,
+  SEND_KEYS_SCREEN_LINES,
+  SEND_KEYS_SETTLE_MS,
+  keySequence,
+} from "../../../shared/utils/terminalKeys.js";
+import {
+  buildTerminalSendCommandReceipt,
+  type TerminalSendCommandReceipt,
+} from "../../../shared/utils/terminalSendCommandResult.js";
+import {
+  ASSISTANT_SEND_GATE,
+  evaluateWakeGate,
+} from "../../../shared/utils/terminalWakeGate.js";
+import type { PtyClient } from "../PtyClient.js";
+import { AssistantTargetError } from "./AssistantTerminalControl.js";
+
+/** The pty-host record fields a steer reads. */
+export interface WorkerSteerRecord {
+  projectId?: string;
+  isAssistantTerminal?: boolean;
+  detectedAgentId?: string;
+  agentState?: AgentState;
+  waitingReason?: WaitingReason;
+  lastStateChange?: number;
+  lastTypedInputAt?: number;
+  hasPendingSubmission?: boolean;
+  isExited?: boolean;
+  hasPty?: boolean;
+  isTrashed?: boolean;
+}
+
+export interface GlobalWorkerSteerDeps {
+  getTerminalProjectId(terminalId: string): string | null;
+  getLiveGeneration(terminalId: string): number | null;
+  /** Main's sealed stamp, or a running assistant lane: either is no worker. */
+  isAssistantTerminal(terminalId: string): boolean;
+  getTerminal(terminalId: string): Promise<WorkerSteerRecord | null>;
+  serializedState(
+    terminalId: string,
+    options?: { tailRows: number }
+  ): Promise<{ data: string; partial?: true } | null>;
+  /** Under the strict settled-prompt guard, so the host admits it only while the gate still holds. */
+  submit(terminalId: string, text: string, submissionToken: string, handbackCode?: string): void;
+  write(terminalId: string, data: string): void;
+  /** The pair's gap is scheduled in the pty-host, where IPC can't collapse it. */
+  doubleEscape(terminalId: string): void;
+  sleep?: (ms: number) => Promise<void>;
+}
+
+/**
+ * The run a steer names: a terminal in the project the call's session is
+ * bound to, by the launch generation `host.list` gave as its `incarnation`.
+ */
+export interface WorkerSteerTarget {
+  projectId: string;
+  terminalId: string;
+  generation: number | undefined;
+  /**
+   * Asked right before every write: throws while the call may no longer
+   * write here (the drive rule, a session gone), so nothing more goes out.
+   */
+  authorize(): void;
+}
+
+const NOTHING_SENT = "Nothing was sent.";
+
+function refuse(code: string, message: string): never {
+  throw new AssistantTargetError(code, message);
+}
+
+/**
+ * Who else is at the terminal (#14551): a submission still being written, or
+ * input since its agent last settled, which a draft in its composer is. An
+ * unknown settle fails closed. Our own keys stamp the same field, so a
+ * sequence passes the stamp it last read back to tell its keys from a person's.
+ */
+function personAtTerminal(
+  terminalId: string,
+  record: WorkerSteerRecord,
+  ownStamp?: number
+): string | null {
+  if (record.hasPendingSubmission === true) {
+    return `A submission is still being written to terminal '${terminalId}'.`;
+  }
+  const typed = record.lastTypedInputAt;
+  if (ownStamp !== undefined) {
+    return typed !== undefined && typed > ownStamp
+      ? `Someone typed into terminal '${terminalId}' while the keys were going in.`
+      : null;
+  }
+  if (record.lastStateChange === undefined) {
+    return `Terminal '${terminalId}' hasn't been seen settling, so a draft in it can't be ruled out.`;
+  }
+  return typed !== undefined && typed >= record.lastStateChange
+    ? `Someone has typed into terminal '${terminalId}' since its agent last settled, so their input stays as it is.`
+    : null;
+}
+
+/**
+ * The global Assistant steering a worker it neither launched nor was handed
+ * (#14551): a prompt, keys and an interrupt, and nothing else. Each reaches
+ * only an agent terminal of the session's project, only the run its
+ * generation names, and never one a person is typing into: all three are
+ * read again right before each write, never trusted from the caller's read.
+ * Answers say what was written, never what the agent did with it.
+ */
+export class GlobalWorkerSteer {
+  /** Runs a steer is writing to: a second, planned from the same screen, is refused. */
+  private readonly writing = new Set<string>();
+
+  constructor(private readonly deps: GlobalWorkerSteerDeps) {}
+
+  async prompt(
+    target: WorkerSteerTarget,
+    request: { command: string; handback: boolean; machineName: string }
+  ): Promise<TerminalSendCommandReceipt> {
+    return this.exclusive(target, async () => {
+      const record = await this.requireWorker(target);
+      const verdict = evaluateWakeGate(record, ASSISTANT_SEND_GATE);
+      if (verdict.kind !== "ready") {
+        const typing = verdict.reason === "typing";
+        refuse(
+          typing ? WORKER_STEER_REFUSALS.typing : WORKER_STEER_REFUSALS.busy,
+          typing
+            ? `${personAtTerminal(target.terminalId, record) ?? `Someone has typed into terminal '${target.terminalId}'.`} ${NOTHING_SENT}`
+            : `Terminal '${target.terminalId}' isn't waiting at its agent's prompt (state: ${record.agentState ?? "unknown"}${
+                record.waitingReason ? `, ${record.waitingReason}` : ""
+              }). ${NOTHING_SENT} Answer a dialog with keys, or send once it is waiting.`
+        );
+      }
+      const pending = personAtTerminal(target.terminalId, record);
+      if (pending !== null) refuse(WORKER_STEER_REFUSALS.typing, `${pending} ${NOTHING_SENT}`);
+      this.requireSameRun(target);
+      target.authorize();
+      const stamped = stampAssistantPrompt(request.command, request.machineName);
+      const submissionToken = randomUUID();
+      // The host's strict guard asks the same gate again when it writes, so
+      // a draft typed after this read still keeps the prompt out.
+      if (request.handback) {
+        const handbackCode = mintHandbackCode();
+        this.deps.submit(
+          target.terminalId,
+          appendHandbackInstruction(stamped, handbackCode),
+          submissionToken,
+          handbackCode
+        );
+      } else {
+        this.deps.submit(target.terminalId, stamped, submissionToken);
+      }
+      return buildTerminalSendCommandReceipt(target.terminalId, request.command, submissionToken);
+    });
+  }
+
+  async keys(
+    target: WorkerSteerTarget,
+    request: { keys?: readonly string[]; choose?: string }
+  ): Promise<{ terminalId: string; keys: string[]; screen?: string }> {
+    return this.exclusive(target, async () => {
+      const { terminalId } = target;
+      let record = await this.requireWorker(target);
+      let keys = request.keys ? [...request.keys] : undefined;
+      if (request.choose !== undefined) {
+        const plan = planChoice((await this.readScreen(terminalId, CHOOSE_SCREEN_LINES)) ?? "", request.choose);
+        if (!plan.ok) refuse("VALIDATION_ERROR", `${plan.reason} Nothing was pressed.`);
+        keys = plan.keys;
+        record = await this.requireWorker(target);
+      }
+      if (keys === undefined || keys.length === 0) {
+        refuse("VALIDATION_ERROR", "Pass `choose` or `keys`. Nothing was pressed.");
+      }
+      const pressed: string[] = [];
+      const stop = (code: string, why: string): never =>
+        refuse(
+          pressed.length === 0 ? code : WORKER_STEER_REFUSALS.partial,
+          pressed.length === 0
+            ? `${why} Nothing was pressed.`
+            : `${why} ${pressed.length} of ${keys!.length} keys went in (${pressed.join(", ")}); the rest weren't pressed.`
+        );
+      let ownStamp: number | undefined;
+      for (const [index, key] of keys.entries()) {
+        if (index > 0) {
+          await this.sleep(SEND_KEYS_GAP_MS);
+          const now = await this.deps.getTerminal(terminalId).catch(() => null);
+          if (!now) stop(WORKER_STEER_REFUSALS.notFound, `Terminal '${terminalId}' can't be read right now.`);
+          record = now!;
+        }
+        const person = personAtTerminal(terminalId, record, ownStamp);
+        if (person !== null) stop(WORKER_STEER_REFUSALS.typing, person);
+        if (!this.isSameRun(target)) stop(WORKER_STEER_REFUSALS.restarted, this.restartedWhy(target));
+        try {
+          target.authorize();
+        } catch (error) {
+          if (pressed.length === 0 || !(error instanceof AssistantTargetError)) throw error;
+          stop(error.code, error.message);
+        }
+        this.deps.write(terminalId, keySequence(key));
+        pressed.push(key);
+        // Read back on the same host channel the key went down, so the stamp
+        // it left is the one the next key compares against.
+        if (index < keys.length - 1) {
+          const after = await this.deps.getTerminal(terminalId).catch(() => null);
+          if (!after) stop(WORKER_STEER_REFUSALS.notFound, `Terminal '${terminalId}' can't be read right now.`);
+          ownStamp = after!.lastTypedInputAt;
+        }
+      }
+      await this.sleep(SEND_KEYS_SETTLE_MS);
+      // Never quote a successor's screen as what these keys did.
+      const screen = this.isSameRun(target)
+        ? await this.readScreen(terminalId, SEND_KEYS_SCREEN_LINES).catch(() => null)
+        : null;
+      return { terminalId, keys: pressed, ...(screen ? { screen } : {}) };
+    });
+  }
+
+  async interrupt(target: WorkerSteerTarget): Promise<{
+    terminalId: string;
+    agentId: string;
+    agentStateAtDispatch: string | undefined;
+    status: "requested" | "requested-unverified";
+  }> {
+    return this.exclusive(target, async () => {
+      const record = await this.requireWorker(target);
+      const assessment = assessInterruptCandidate(
+        {
+          isPty: true,
+          trashed: record.isTrashed === true,
+          ...(record.hasPty !== undefined ? { hasPty: record.hasPty } : {}),
+          exited: record.isExited === true,
+          agentId: isBuiltInAgentId(record.detectedAgentId) ? record.detectedAgentId : undefined,
+          ...(record.agentState !== undefined ? { agentState: record.agentState } : {}),
+          ...(record.waitingReason !== undefined ? { waitingReason: record.waitingReason } : {}),
+        },
+        target.terminalId
+      );
+      if (!assessment.eligible) refuse("VALIDATION_ERROR", assessment.reason);
+      // An Escape clears a composer as readily as it stops a turn.
+      const person = personAtTerminal(target.terminalId, record);
+      if (person !== null) refuse(WORKER_STEER_REFUSALS.typing, `${person} Nothing was pressed.`);
+      this.requireSameRun(target);
+      target.authorize();
+      this.deps.doubleEscape(target.terminalId);
+      return {
+        terminalId: target.terminalId,
+        agentId: assessment.agentId,
+        agentStateAtDispatch: assessment.agentState,
+        status: assessment.support === "advertised" ? "requested" : "requested-unverified",
+      };
+    });
+  }
+
+  private async exclusive<T>(target: WorkerSteerTarget, run: () => Promise<T>): Promise<T> {
+    if (this.writing.has(target.terminalId)) {
+      refuse(
+        WORKER_STEER_REFUSALS.busy,
+        `Another call is still writing to terminal '${target.terminalId}'. ${NOTHING_SENT}`
+      );
+    }
+    this.writing.add(target.terminalId);
+    try {
+      return await run();
+    } finally {
+      this.writing.delete(target.terminalId);
+    }
+  }
+
+  /** The named run, if it is still an agent worker of this project; refused otherwise. */
+  private async requireWorker(target: WorkerSteerTarget): Promise<WorkerSteerRecord> {
+    const { terminalId, projectId } = target;
+    if (target.generation === undefined) {
+      refuse(
+        "VALIDATION_ERROR",
+        `Steering an agent you didn't launch needs its 'generation': the 'incarnation' host.list gave for it. ${NOTHING_SENT}`
+      );
+    }
+    if (this.deps.getTerminalProjectId(terminalId) !== projectId) {
+      refuse(
+        WORKER_STEER_REFUSALS.notFound,
+        `No terminal '${terminalId}' is in this project. ${NOTHING_SENT} Take the id from host.list or terminal.list here.`
+      );
+    }
+    if (this.deps.isAssistantTerminal(terminalId)) {
+      refuse(
+        WORKER_STEER_REFUSALS.notAgent,
+        `Terminal '${terminalId}' runs a Daintree Assistant, not a worker. ${NOTHING_SENT}`
+      );
+    }
+    this.requireSameRun(target);
+    const record = await this.deps.getTerminal(terminalId).catch(() => null);
+    if (!record || (record.projectId !== undefined && record.projectId !== projectId)) {
+      refuse(
+        WORKER_STEER_REFUSALS.notFound,
+        `Terminal '${terminalId}' can't be read right now. ${NOTHING_SENT}`
+      );
+    }
+    // The read was async: still the run the caller named.
+    this.requireSameRun(target);
+    if (record.isAssistantTerminal === true) {
+      refuse(
+        WORKER_STEER_REFUSALS.notAgent,
+        `Terminal '${terminalId}' runs a Daintree Assistant, not a worker. ${NOTHING_SENT}`
+      );
+    }
+    if (record.isExited === true || record.hasPty === false || record.isTrashed === true) {
+      refuse(
+        WORKER_STEER_REFUSALS.notAgent,
+        `Terminal '${terminalId}' has no running process, or is in the trash. ${NOTHING_SENT}`
+      );
+    }
+    // A launch hint is intent, not identity: a shell an agent has left is a shell.
+    if (record.detectedAgentId === undefined) {
+      refuse(
+        WORKER_STEER_REFUSALS.notAgent,
+        `No agent is seen running in terminal '${terminalId}': it is a plain shell, or its agent isn't recognised yet. ${NOTHING_SENT}`
+      );
+    }
+    return record;
+  }
+
+  private isSameRun(target: WorkerSteerTarget): boolean {
+    return (
+      target.generation !== undefined &&
+      this.deps.getLiveGeneration(target.terminalId) === target.generation
+    );
+  }
+
+  private restartedWhy(target: WorkerSteerTarget): string {
+    return `Terminal '${target.terminalId}' isn't the run that generation named: it was restarted or replaced.`;
+  }
+
+  private requireSameRun(target: WorkerSteerTarget): void {
+    if (!this.isSameRun(target)) {
+      refuse(
+        WORKER_STEER_REFUSALS.restarted,
+        `${this.restartedWhy(target)} ${NOTHING_SENT} List the agents again with host.list.`
+      );
+    }
+  }
+
+  private async readScreen(terminalId: string, lines: number): Promise<string | null> {
+    const snapshot = await readTailSnapshot(
+      (options) => this.deps.serializedState(terminalId, options),
+      lines
+    );
+    return snapshot === null ? null : tailCapturedOutput(snapshot.data, lines, true).content;
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return (this.deps.sleep ?? ((wait) => new Promise((resolve) => setTimeout(resolve, wait))))(ms);
+  }
+}
+
+/** The steer as the app runs it, over the pty-host. */
+export function liveGlobalWorkerSteer(deps: {
+  pty: () => PtyClient | null;
+  isAssistantTerminal(terminalId: string): boolean;
+}): GlobalWorkerSteer {
+  return new GlobalWorkerSteer({
+    getTerminalProjectId: (terminalId) => deps.pty()?.getTerminalProjectId(terminalId) ?? null,
+    getLiveGeneration: (terminalId) => deps.pty()?.getLiveGeneration(terminalId) ?? null,
+    isAssistantTerminal: (terminalId) =>
+      deps.isAssistantTerminal(terminalId) || deps.pty()?.isAssistantTerminal(terminalId) === true,
+    getTerminal: async (terminalId) => (await deps.pty()?.getTerminalAsync(terminalId)) ?? null,
+    serializedState: (terminalId, options) =>
+      deps.pty()?.getSerializedStateAsync(terminalId, options) ?? Promise.resolve(null),
+    submit: (terminalId, text, submissionToken, handbackCode) =>
+      deps.pty()?.submit(terminalId, text, submissionToken, handbackCode, "settled-prompt-strict"),
+    write: (terminalId, data) => deps.pty()?.write(terminalId, data),
+    doubleEscape: (terminalId) => deps.pty()?.batchDoubleEscape([terminalId]),
+  });
+}

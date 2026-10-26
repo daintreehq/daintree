@@ -261,6 +261,15 @@ export interface SessionServerDeps extends OwnedMainExecutors {
     | "close"
     | "readReply"
   >;
+  /**
+   * The global Assistant's steer of a worker it didn't launch (#14551), set
+   * only for a session relayed for one: a prompt, keys or an interrupt, each
+   * held to the run it names and the person at it. Absent, nothing widens.
+   */
+  globalSteer?: Pick<
+    import("../assistants/GlobalWorkerSteer.js").GlobalWorkerSteer,
+    "prompt" | "keys" | "interrupt"
+  >;
   /** This machine's Codex quota, as `agent.readQuota` reports it. */
   readCodexQuota?: () => Promise<CodexQuotaResult>;
   /** Blocking replies for `waitForReply`. Optional; absent, the flag is ignored. */
@@ -274,6 +283,11 @@ export interface SessionServerDeps extends OwnedMainExecutors {
   relay?: {
     shellName: string;
     /** The calling Shell's global Assistant (#14545), as its relay caller recorded it. */
+    global?: true;
+    /**
+     * The Shell's global Assistant (#14545), from the relay caller its runtime
+     * named, never from a tool's arguments.
+     */
     global?: true;
     /**
      * Asked right before a change this process makes itself rather than

@@ -19,10 +19,12 @@ import {
   SEND_KEYS_SCREEN_LINES,
   SEND_KEYS_SETTLE_MS,
   SendKeysArgsSchema,
+  SendKeysOwnedArgsSchema,
 } from "@shared/utils/terminalKeys";
 import { requireExplicitTerminalIdForAgentDispatch } from "./terminalTargetBinding";
 import { assessTerminalInterrupt } from "@/utils/terminalInterrupt";
 import { UnactionableTargetError } from "@/services/actions/unactionableTarget";
+import { RunGenerationArgSchema } from "@shared/types/assistantControl";
 
 /**
  * What an interrupt request can honestly report (#12338).
@@ -301,6 +303,7 @@ export function registerTerminalInputActions(
         .describe(
           "Agent panel `id` this session created or was handed. Required; no focus fallback."
         ),
+      generation: RunGenerationArgSchema,
     }),
     resultSchema: TerminalInterruptResultSchema,
     mcpOutputSchema: true,
@@ -391,7 +394,7 @@ export function registerTerminalInputActions(
     scope: "renderer",
     keywords: ["key", "press", "dialog", "trust", "select", "owned"],
     palette: { mode: "hidden" },
-    argsSchema: SendKeysArgsSchema,
+    argsSchema: SendKeysOwnedArgsSchema,
     resultSchema: SendKeysResultSchema,
     run: async () => {
       throw new Error(

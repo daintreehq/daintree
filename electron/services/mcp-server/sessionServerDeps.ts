@@ -48,7 +48,11 @@ import type {
 } from "../../../shared/types/ipc/mcpServer.js";
 import { buildAnnotations } from "./tierAuth.js";
 import { bindHostControl } from "./hostControlTools.js";
-import type { AssistantCaller } from "../assistants/AssistantTerminalControl.js";
+import {
+  AssistantTargetError,
+  type AssistantCaller,
+} from "../assistants/AssistantTerminalControl.js";
+import { WORKER_STEER_REFUSALS } from "../../../shared/types/assistantControl.js";
 import { getAssistantConfirmations } from "../assistants/assistantConfirmations.js";
 import type { SessionStore } from "./sessionStore.js";
 import type { AuditService } from "./auditLog.js";
@@ -304,6 +308,20 @@ export interface SessionServerDepsHost {
   getBearerInfoForSession(sessionId: string): McpBearerIdentity | null;
   /** Stable; each of its methods reads the binding as the call finds it. */
   readonly assistantControl: AssistantControlBinding["control"];
+}
+
+/** The steer the binding holds as a call finds it; unbound, the call is refused, never widened. */
+function boundSteer(
+  host: Pick<SessionServerDepsHost, "assistantControlBinding">
+): NonNullable<AssistantControlBinding["steer"]> {
+  const steer = host.assistantControlBinding()?.steer;
+  if (steer === undefined) {
+    throw new AssistantTargetError(
+      WORKER_STEER_REFUSALS.notFound,
+      "This host can't steer its agents for you right now. Nothing was sent."
+    );
+  }
+  return steer;
 }
 
 /**
@@ -1094,6 +1112,17 @@ export function createSessionServerDeps(
           hostControl: bindHostControl(() => deps.sessionStore.sessionHelpIdMap.get(sessionId)),
         }),
     assistantControl: host.assistantControl,
+    // Only a session relayed for a Shell's global Assistant (#14551), read
+    // from the binding as each call finds it.
+    ...(relay?.global === true
+      ? {
+          globalSteer: {
+            prompt: (...args) => boundSteer(host).prompt(...args),
+            keys: (...args) => boundSteer(host).keys(...args),
+            interrupt: (...args) => boundSteer(host).interrupt(...args),
+          },
+        }
+      : {}),
     assistantCaller: () => assistantCallerFor(),
     ...(deps.readCodexQuota !== undefined ? { readCodexQuota: deps.readCodexQuota } : {}),
     // A pane bearer's own terminal is fixed for the bearer's life and was

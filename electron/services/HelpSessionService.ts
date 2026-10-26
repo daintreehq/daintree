@@ -2477,11 +2477,13 @@ export class HelpSessionService {
     const [
       { mcpServerService },
       { liveAssistantTerminalControl },
+      { liveGlobalWorkerSteer },
       { extractReply },
       { getPtyClient },
     ] = await Promise.all([
       this.loadMcpServerModule(),
       import("./assistants/AssistantTerminalControl.js"),
+      import("./assistants/GlobalWorkerSteer.js"),
       import("./mcp-server/terminalNotify.js"),
       import("../window/serviceRefs.js"),
     ]);
@@ -2491,6 +2493,10 @@ export class HelpSessionService {
         help: this,
         pty: () => getPtyClient(),
         extractReply,
+      }),
+      steer: liveGlobalWorkerSteer({
+        pty: () => getPtyClient(),
+        isAssistantTerminal: (terminalId) => this.isHelpTerminal(terminalId),
       }),
       sessionProject: (sessionId) => this.getSessionLane(sessionId)?.projectId ?? null,
       sessionAgent: (sessionId) => this.getSessionAgent(sessionId),

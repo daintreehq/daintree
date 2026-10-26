@@ -152,6 +152,8 @@ export interface AssistantControlBinding {
     import("./sessionServerDepsContract.js").SessionServerDeps["assistantControl"]
   >;
   sessionProject(helpSessionId: string): string | null;
+  /** The global Assistant's steer of workers it didn't launch (#14551); absent, it has none. */
+  steer?: NonNullable<import("./sessionServerDepsContract.js").SessionServerDeps["globalSteer"]>;
   /** The agent the help session runs, so confirmations can follow its skip setting (#14141). */
   sessionAgent?(helpSessionId: string): string | null;
 }

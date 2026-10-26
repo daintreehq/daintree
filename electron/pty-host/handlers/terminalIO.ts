@@ -112,7 +112,9 @@ export function createTerminalIOHandlers(ctx: HostContext): HandlerMap {
         ptyManager.write(id, ESC);
         setTimeout(() => {
           const t = ptyManager.getTerminal(id);
-          if (!t || t.wasKilled || t.isExited) return;
+          // The same spawn the first went to: a restart under this id in the
+          // gap is a new run that asked for no Escape.
+          if (!t || t.spawnedAt !== terminal.spawnedAt || t.wasKilled || t.isExited) return;
           ptyManager.write(id, ESC);
         }, INTER_ESC_DELAY_MS);
       }

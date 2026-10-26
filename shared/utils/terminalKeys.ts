@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { RunGenerationArgSchema } from "../types/assistantControl.js";
 import { NotifyReplyLinesSchema } from "../types/terminalNotify.js";
 
 /**
@@ -67,4 +68,9 @@ export const SendKeysArgsSchema = z.object({
     .optional()
     .describe("As on a send: hear, with its reply, when the turn these keys unblock ends."),
   replyLines: NotifyReplyLinesSchema,
+});
+
+/** The owned twin's arguments: the same keys, and the run they are for (#14551). */
+export const SendKeysOwnedArgsSchema = SendKeysArgsSchema.extend({
+  generation: RunGenerationArgSchema,
 });
