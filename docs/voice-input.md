@@ -44,7 +44,7 @@ The renderer never knows which backend is in use; the main process never touches
 
 ### Text-injection model (important)
 
-Interim `delta` text is **never** written into the editor document. It accumulates only in `liveText` in `voiceRecordingStore` and is rendered as a CodeMirror ghost-widget decoration (`useVoiceDecorations`, `src/components/Terminal/hooks/useVoiceDecorations.ts`), outside the doc model. Only a `complete` event writes real text, so the editor's undo history records **one transaction per utterance** rather than one per token (#9172). The service tracks several draft offsets per panel buffer to splice correctly:
+Interim `delta` text is **never** written into the editor document. It accumulates only in `liveText` in `voiceRecordingStore` (or, for a delta flagged `replace`, overwrites its item's preview: Deepgram's interims are whole revisions of the span since its last final, not additions) and is rendered as a CodeMirror ghost-widget decoration (`useVoiceDecorations`, `src/components/Terminal/hooks/useVoiceDecorations.ts`), outside the doc model. Only a `complete` event writes real text, so the editor's undo history records **one transaction per utterance** rather than one per token (#9172). The service tracks several draft offsets per panel buffer to splice correctly:
 
 - `sessionDraftStart` — where the whole session's dictated text begins (anchor for `runCorrection`).
 - `draftLengthAtSegmentStart` — where the current segment begins; a `complete` slices back to here and replaces, so re-firing is idempotent.
@@ -74,7 +74,7 @@ interface TranscriptionProvider {
 | Provider | `hasServerVAD` | Endpoint | Audio on wire | Segmentation | Keep-alive |
 | --- | --- | --- | --- | --- | --- |
 | `OpenAITranscriptionProvider` | `false` | `wss://api.openai.com/v1/realtime?intent=transcription`, model `gpt-live-transcribe` | base64 JSON `input_audio_buffer.append` | client-side Silero VAD process + 8s backstop | ping/pong heartbeat (20s) |
-| `DeepgramTranscriptionProvider` | `true` | `wss://api.deepgram.com/v1/listen`, model `nova-3` | raw binary frames, `linear16` @ 24kHz | server-side `endpointing=300` | `KeepAlive` frame (5s) |
+| `DeepgramTranscriptionProvider` | `true` | `wss://api.deepgram.com/v1/listen`, model `nova-3`, `punctuate` + `smart_format` + `interim_results` | raw binary frames, `linear16` @ 24kHz | server-side `endpointing=300`; each span between finals is one item | `KeepAlive` frame (5s) |
 
 Both buffer up to `PRE_CONNECT_BUFFER_MAX` (100) chunks / `150_000` bytes (~3s) while connecting or reconnecting, then flush on session-ready. WebSocket URLs accept env overrides (`DAINTREE_REALTIME_WS_URL`, `DAINTREE_DEEPGRAM_WS_URL`) for testing.
 
