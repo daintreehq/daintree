@@ -505,6 +505,7 @@ export class HostMetricsClient {
         hostName: descriptor.name,
         kind: payload.kind,
         terminalId: payload.terminalId,
+        projectId: payload.projectId ?? null,
         projectName: payload.projectName === null ? null : displaySafeText(payload.projectName),
         agentName: payload.agentName === null ? null : displaySafeText(payload.agentName),
         quiet: payload.quiet,

@@ -538,6 +538,7 @@ describe("HostMetricsClient", () => {
     const payload = {
       kind: "waiting",
       terminalId: "t1",
+      projectId: "p1",
       projectName: "app",
       agentName: "Claude",
       quiet: true,
@@ -551,11 +552,34 @@ describe("HostMetricsClient", () => {
         hostName: "name-loud",
         kind: "waiting",
         terminalId: "t1",
+        projectId: "p1",
         projectName: "app",
         agentName: "Claude",
         quiet: true,
       },
     ]);
+    h.client.dispose();
+  });
+
+  it("carries the host's project id, a null one, and none from a host that predates it", async () => {
+    const h = harness([descriptor("loud", true)]);
+    h.client.start();
+    const loud = await openSessionPair(dir);
+    open.push(loud.host, loud.client);
+    h.openSession("loud", loud.client);
+    const base = { kind: "waiting", projectName: "app", agentName: null, quiet: false };
+    await loud.host.call(MetricsLinkMethod.ATTENTION, {
+      ...base,
+      terminalId: "a",
+      projectId: "p9",
+    });
+    await loud.host.call(MetricsLinkMethod.ATTENTION, {
+      ...base,
+      terminalId: "b",
+      projectId: null,
+    });
+    await loud.host.call(MetricsLinkMethod.ATTENTION, { ...base, terminalId: "c" });
+    expect(h.attention.map((e) => e.projectId)).toEqual(["p9", null, null]);
     h.client.dispose();
   });
 

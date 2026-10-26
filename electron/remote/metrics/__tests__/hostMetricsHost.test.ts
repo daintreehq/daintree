@@ -467,6 +467,7 @@ describe("installHostMetricsHostWith", () => {
     const payload: WaitingEvent = {
       kind: "waiting",
       terminalId: "t1",
+      projectId: "p1",
       projectName: "app",
       agentName: "Claude",
     };
@@ -497,6 +498,7 @@ describe("installHostMetricsHostWith", () => {
     const event = (terminalId: string): WaitingEvent => ({
       kind: "waiting",
       terminalId,
+      projectId: null,
       projectName: null,
       agentName: null,
     });
