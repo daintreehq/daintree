@@ -41,7 +41,7 @@ import {
   GripVertical,
 } from "lucide-react";
 import { useToolbarPreferencesStore } from "@/store";
-import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { useAgentToolbarPinsStore } from "@/store/agentToolbarPinsStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { useCanopyStore } from "@/store/canopyStore";
 import type { AnyToolbarButtonId, LauncherItemToolbarButtonId } from "@/../../shared/types/toolbar";
@@ -102,7 +102,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { useSettingsRowOwnerNote } from "@/hooks/useSettingsOwner";
-import { SettingsOwnerTag } from "@/components/Settings/SettingsOwnerTag";
 import { SettingsSection } from "./SettingsSection";
 import { SECTION_SETTINGS } from "@/components/Settings/settingsSectionOwners";
 import { SettingsSelect } from "./SettingsSelect";
@@ -202,14 +201,6 @@ function ToolbarButtonMoveMenu({
   );
 }
 
-// Which agents are pinned is the host's agent settings; the arrangement around them is
-// this machine's, which is what the sections name.
-function AgentOwnerTag({ buttonId }: { buttonId: string }) {
-  return isBuiltInAgentId(buttonId) ? (
-    <SettingsOwnerTag settings={SECTION_SETTINGS.toolbarAgents} />
-  ) : null;
-}
-
 // Presentational row shared by the sortable list and the drag overlay. It
 // never calls `useSortable` so it is safe to render inside `DragOverlay`
 // (which mounts outside any `SortableContext`).
@@ -249,7 +240,6 @@ function ToolbarButtonCard({
           )}
           <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
           <span className="truncate">{metadata.label}</span>
-          <AgentOwnerTag buttonId={buttonId} />
         </span>
       }
       labelText={metadata.label}
@@ -352,7 +342,6 @@ function PoolButtonRow({
         <span className="flex min-w-0 items-center gap-2.5">
           <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
           <span className="truncate">{metadata.label}</span>
-          <AgentOwnerTag buttonId={buttonId} />
         </span>
       }
       labelText={metadata.label}
@@ -537,8 +526,8 @@ export function ToolbarSettingsTab() {
     });
   };
 
-  const agentSettings = useAgentSettingsStore((s) => s.settings);
-  const setAgentPinned = useAgentSettingsStore((s) => s.setAgentPinned);
+  const agentPins = useAgentToolbarPinsStore((s) => s.pins);
+  const setAgentPinned = useAgentToolbarPinsStore((s) => s.setAgentPinned);
   const agentAvailability = useCliAvailabilityStore((s) => s.availability);
 
   // In-flight side lists while a drag is active. `null` between drags so we
@@ -713,7 +702,7 @@ export function ToolbarSettingsTab() {
       pinnedButtons: layout.pinnedButtons,
       leftButtons: layout.leftButtons,
       rightButtons: layout.rightButtons,
-      agentSettings,
+      agentPins,
       agentAvailability,
       isPluginContribution: (id) => pluginConfigs.has(id),
     }),
@@ -721,7 +710,7 @@ export function ToolbarSettingsTab() {
       layout.pinnedButtons,
       layout.leftButtons,
       layout.rightButtons,
-      agentSettings,
+      agentPins,
       agentAvailability,
       pluginConfigs,
     ]

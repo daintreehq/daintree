@@ -1412,6 +1412,11 @@ export const CHANNELS = {
   AGENT_DEFAULTS_MIGRATE_LEGACY: "agent-defaults:migrate-legacy",
   AGENT_DEFAULTS_CHANGED: "agent-defaults:changed",
 
+  // This machine's toolbar agent pins (#14702)
+  AGENT_TOOLBAR_PINS_GET: "agent-toolbar-pins:get",
+  AGENT_TOOLBAR_PINS_SET: "agent-toolbar-pins:set",
+  AGENT_TOOLBAR_PINS_CHANGED: "agent-toolbar-pins:changed",
+
   // Per-project presentation profile (#13771)
   PROJECT_PRESENTATION_GET: "project-presentation:get",
   PROJECT_PRESENTATION_SET_LEVEL: "project-presentation:set-level",

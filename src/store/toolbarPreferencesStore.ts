@@ -440,8 +440,8 @@ interface ToolbarPreferencesState extends ToolbarPreferences {
    * (#11680).
    *
    * Agents are the one launcher row whose pin does NOT live here — it is the
-   * tri-state `pinned` in `agentSettingsStore`, IPC-persisted in main (#7673),
-   * and this store must not mirror it (a second copy is a second thing that can
+   * tri-state pin in `agentToolbarPinsStore`, IPC-persisted in this machine's
+   * main (#7673, #14702), and this store must not mirror it (a second copy is a second thing that can
    * disagree). But since #11680 removed the `BUILT_IN_AGENT_IDS` spread from
    * `DEFAULT_LEFT_BUTTONS`, a fresh profile's agent ids sit in neither side
    * array, so an explicit pin alone leaves the button with nowhere to render —
@@ -451,9 +451,10 @@ interface ToolbarPreferencesState extends ToolbarPreferences {
    * mistaken for a seeded default. Unpinning deliberately leaves the position
    * behind, matching `setPanelButtonOnToolbar`'s hide branch, so re-pinning
    * restores the button where the user had it. The rendered-but-unpositioned
-   * window (a stale cross-view write dropping the array, or the first-run pin
-   * seeding in `buildInitialAgentPinUpdates`) is covered at the render boundary
-   * in `Toolbar.tsx`, which reads the authoritative pin from `agentSettingsStore`.
+   * window (a stale cross-view write dropping the array, or main's first-run
+   * pin seeding in `seedAgentToolbarPinsIfUnset`) is covered at the render
+   * boundary in `Toolbar.tsx`, which reads the authoritative pin from
+   * `agentToolbarPinsStore`.
    *
    * Takes a batch as well as a single id: positioning several agents one call at
    * a time reverses them, since every insert lands at the same index — see

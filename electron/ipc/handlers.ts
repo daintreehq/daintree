@@ -124,6 +124,7 @@ import { registerPluginFocusedPanelHandlers } from "./handlers/pluginFocusedPane
 import { registerPluginProjectPresenceHandlers } from "./handlers/pluginProjectPresence.js";
 import { registerConnectivityHandlers } from "./handlers/connectivity.js";
 import { registerAgentDefaultsHandlers } from "./handlers/agentDefaults.js";
+import { registerAgentToolbarPinsHandlers } from "./handlers/agentToolbarPins.js";
 import { registerProjectPresenceHandlers } from "./handlers/projectPresence.js";
 import { registerProjectPresentationHandlers } from "./handlers/projectPresentation.js";
 import { registerProjectThemeHandlers } from "./handlers/projectTheme.js";
@@ -285,6 +286,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerPerfHandlers(deps));
     register(() => registerConnectivityHandlers());
     register(() => registerAgentDefaultsHandlers());
+    register(() => registerAgentToolbarPinsHandlers());
     register(() => registerProjectPresenceHandlers(deps));
     register(() => registerProjectPresentationHandlers());
     register(() => registerProjectThemeHandlers());

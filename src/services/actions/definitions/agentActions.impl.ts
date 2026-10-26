@@ -23,7 +23,13 @@ import {
   getMergedPresetIdentities,
   isRegisteredAgent,
 } from "@/config/agents";
-import { agentCapabilitiesClient, agentSettingsClient, cliAvailabilityClient } from "@/clients";
+import {
+  agentCapabilitiesClient,
+  agentSettingsClient,
+  agentToolbarPinsClient,
+  cliAvailabilityClient,
+} from "@/clients";
+import { agentToolbarPin } from "@shared/types/ipc/agentToolbarPins";
 import { userAgentRegistryClient } from "@/clients/userAgentRegistryClient";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { isAgentToolbarVisible } from "@shared/utils/agentPinned";
@@ -101,15 +107,15 @@ async function withReadDeadline<T>(work: Promise<T>, leg: string): Promise<T> {
 }
 
 const readAgentDiscoveryState = async () => {
-  // These are the same normalized renderer stores the toolbar reads. Fall back to
-  // cache-aware IPC clients only before hydration; neither path exposes settings
-  // details beyond the narrow fields each discovery action selects below.
-  const [{ useAgentSettingsStore }, { useCliAvailabilityStore }] = await Promise.all([
-    import("@/store/agentSettingsStore"),
+  // These are the same renderer stores the toolbar reads: this machine's pins
+  // (#14702) and the view's host's availability. Fall back to IPC only before
+  // they hydrate.
+  const [{ useAgentToolbarPinsStore }, { useCliAvailabilityStore }] = await Promise.all([
+    import("@/store/agentToolbarPinsStore"),
     import("@/store/cliAvailabilityStore"),
   ]);
-  const storeSettings = useAgentSettingsStore.getState().settings;
-  const settings = storeSettings ?? (await agentSettingsClient.get());
+  const pinsState = useAgentToolbarPinsStore.getState();
+  const pins = pinsState.revision >= 0 ? pinsState.pins : (await agentToolbarPinsClient.get()).pins;
   const availabilityStore = useCliAvailabilityStore.getState();
   const availability = availabilityStore.hasRealData
     ? availabilityStore.availability
@@ -121,7 +127,7 @@ const readAgentDiscoveryState = async () => {
   // reading `availability` directly because it must mirror the live toolbar,
   // which renders from the same hydrating store.
   const availabilityLive = availabilityStore.isInitialized === true;
-  return { settings, availability, availabilityLive };
+  return { pins, availability, availabilityLive };
 };
 
 /**
@@ -945,32 +951,31 @@ export const agentActionRuns = {
     return { bookmarks: page, total, hasMore };
   },
   "agent.listToolbar": async () => {
-    const { settings, availability } = await readAgentDiscoveryState();
+    const { pins, availability } = await readAgentDiscoveryState();
     return {
       agents: BUILT_IN_AGENT_IDS.map((id) => {
-        const entry = settings.agents?.[id];
+        const pin = agentToolbarPin(pins, id);
         const state = availability[id];
         // Omit `pinned` unless it's an explicit boolean (tri-state): an
         // absent key means "follows CLI availability", distinct from an
-        // explicit true/false pin/unpin. A non-boolean from a corrupted
-        // config is treated as absent, never forwarded.
+        // explicit true/false pin/unpin.
         return {
           id,
           displayName: getAgentDisplayTitle(id),
-          ...(typeof entry?.pinned === "boolean" ? { pinned: entry.pinned } : {}),
+          ...(pin !== undefined ? { pinned: pin } : {}),
           installed: isAgentInstalled(state),
-          visible: isAgentToolbarVisible(entry, state),
+          visible: isAgentToolbarVisible(pin, state),
         };
       }),
     };
   },
   "agent.listAvailable": async () => {
-    const [{ settings, availability, availabilityLive }, registry, userRegistry] =
+    const [{ pins, availability, availabilityLive }, registry, userRegistry] =
       await readAvailableAgentSources();
     return buildAvailableAgentListing({
       registry,
       userRegistry,
-      settings,
+      pins,
       availability,
       availabilityLive,
     });

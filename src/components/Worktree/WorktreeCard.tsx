@@ -51,7 +51,8 @@ import {
 } from "@/lib/worktreeFilters";
 import { getWorktreeHeadline } from "@/lib/worktreeHeadline";
 import { getAgentConfig, getAgentIds } from "@/config/agents";
-import { getAgentSettingsEntry } from "@/types";
+import { agentToolbarPin } from "@shared/types/ipc/agentToolbarPins";
+import { useAgentToolbarPinsStore } from "@/store/agentToolbarPinsStore";
 import type { UseAgentLauncherReturn } from "@/hooks/useAgentLauncher";
 import { isAgentLaunchable } from "../../../shared/utils/agentAvailability";
 import { isAgentPinned } from "../../../shared/utils/agentPinned";
@@ -201,6 +202,7 @@ export function WorktreeCard({
   const trackTerminalFocus = useWorktreeSelectionStore((state) => state.trackTerminalFocus);
 
   const getRecipesForWorktree = useRecipeStore((state) => state.getRecipesForWorktree);
+  const agentPins = useAgentToolbarPinsStore((state) => state.pins);
   const recipes = getRecipesForWorktree(worktree.id);
 
   const resourceEnvironments = useProjectSettingsStore(
@@ -779,7 +781,7 @@ export function WorktreeCard({
 
   const launchAgents = (() => {
     return agentIds
-      .filter((agentId) => isAgentPinned(getAgentSettingsEntry(agentSettings, agentId)))
+      .filter((agentId) => isAgentPinned(agentToolbarPin(agentPins, agentId)))
       .map((agentId) => {
         const config = getAgentConfig(agentId);
         const available = isAgentLaunchable(agentAvailability?.[agentId]);

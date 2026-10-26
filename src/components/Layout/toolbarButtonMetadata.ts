@@ -19,7 +19,8 @@ import {
   decodeLauncherItemToolbarButtonId,
   isLauncherItemToolbarButtonId,
 } from "@shared/types/toolbar";
-import type { AgentSettings, CliAvailability } from "@shared/types";
+import type { AgentToolbarPins, CliAvailability } from "@shared/types";
+import { agentToolbarPin } from "@shared/types/ipc/agentToolbarPins";
 import { isAgentToolbarVisible } from "../../../shared/utils/agentPinned";
 import { getAgentConfig } from "@/config/agents";
 
@@ -207,7 +208,7 @@ export function getToolbarButtonGroup(
  * never disagree (#7666).
  *
  * Agent IDs (entries in `BUILT_IN_AGENT_IDS`) route to `isAgentToolbarVisible`
- * — their pin lives in `agentSettingsStore`. Built-in IDs, including
+ * — their pin is this machine's (`agentToolbarPinsStore`). Built-in IDs, including
  * `launcher` and `plugin-tray`, read from the toolbar store's
  * `pinnedButtons` map: an explicit `false` hides; missing or `true` shows.
  *
@@ -222,12 +223,15 @@ export function getToolbarButtonGroup(
 export function isToolbarButtonVisible(
   buttonId: AnyToolbarButtonId,
   pinnedButtons: ToolbarPinnedState,
-  agentSettings: AgentSettings | null | undefined,
+  agentPins: Readonly<AgentToolbarPins> | null | undefined,
   agentAvailability: CliAvailability | null | undefined,
   isPluginContribution = false
 ): boolean {
   if (isBuiltInAgentId(buttonId)) {
-    return isAgentToolbarVisible(agentSettings?.agents?.[buttonId], agentAvailability?.[buttonId]);
+    return isAgentToolbarVisible(
+      agentToolbarPin(agentPins, buttonId),
+      agentAvailability?.[buttonId]
+    );
   }
   if (isPluginContribution) return pinnedButtons[buttonId] === true;
   // Launcher items invert the built-in default for the same reason plugin

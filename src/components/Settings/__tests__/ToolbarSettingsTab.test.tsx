@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, fireEvent, act, within } from "@testing-library/react";
-import type { AgentSettings } from "@shared/types";
+import type { AgentToolbarPins } from "@shared/types";
 
 const setLeftButtonsMock = vi.fn<(ids: string[]) => void>();
 const setRightButtonsMock = vi.fn();
@@ -62,7 +62,7 @@ function makeToolbarState(
 }
 
 let mockToolbarState: ToolbarState = makeToolbarState();
-let mockAgentSettings: AgentSettings | null = null;
+let mockAgentPins: AgentToolbarPins | null = null;
 
 function clearStoreMocks() {
   setStateMock.mockClear();
@@ -97,13 +97,11 @@ vi.mock("@/components/Settings/ProjectToolbarProfileNotice", () => ({
 }));
 vi.mock("@/lib/notify", () => ({ notify: (...args: unknown[]) => mockNotify(...args) }));
 
-vi.mock("@/store/agentSettingsStore", () => ({
-  useAgentSettingsStore: (
-    selector: (s: {
-      settings: AgentSettings | null;
-      setAgentPinned: typeof setAgentPinnedMock;
-    }) => unknown
-  ) => selector({ settings: mockAgentSettings, setAgentPinned: setAgentPinnedMock }),
+// The toolbar's agent pins are this machine's (#14702).
+vi.mock("@/store/agentToolbarPinsStore", () => ({
+  useAgentToolbarPinsStore: (
+    selector: (s: { pins: AgentToolbarPins; setAgentPinned: typeof setAgentPinnedMock }) => unknown
+  ) => selector({ pins: mockAgentPins ?? {}, setAgentPinned: setAgentPinnedMock }),
 }));
 
 const mockRecipes = vi.hoisted(() => ({ list: [] as Array<{ id: string; name: string }> }));
@@ -292,10 +290,6 @@ import { LAUNCHER_PANEL_BUTTON_IDS } from "@shared/types/toolbar";
 import { useCanopyStore } from "@/store/canopyStore";
 import { ToolbarSettingsTab } from "../ToolbarSettingsTab";
 
-function agentSettings(overrides: Record<string, { pinned?: boolean }>): AgentSettings {
-  return { agents: overrides } as unknown as AgentSettings;
-}
-
 function switchName(label: string): string {
   return `Show ${label} on the toolbar`;
 }
@@ -332,14 +326,14 @@ describe("ToolbarSettingsTab — agent visibility routing", () => {
     clearStoreMocks();
     vi.mocked(useSortable).mockImplementation(defaultSortable);
     mockToolbarState = makeToolbarState();
-    mockAgentSettings = null;
+    mockAgentPins = null;
   });
 
-  it("shows agent rows as checked when pinned in agentSettingsStore", () => {
-    mockAgentSettings = agentSettings({
-      claude: { pinned: true },
-      gemini: { pinned: false },
-    });
+  it("shows agent rows as checked when pinned in this machine's agent pins", () => {
+    mockAgentPins = {
+      claude: true,
+      gemini: false,
+    };
 
     const { getByLabelText } = render(<ToolbarSettingsTab />);
 
@@ -347,23 +341,23 @@ describe("ToolbarSettingsTab — agent visibility routing", () => {
     expect(getByLabelText(switchName("Gemini agent")).getAttribute("aria-checked")).toBe("false");
   });
 
-  it("ignores pinnedButtons for agent IDs (agentSettingsStore wins)", () => {
+  it("ignores pinnedButtons for agent IDs (the agent pins win)", () => {
     // Stale entry from pre-migration persisted state — the UI must still
-    // derive the agent's visibility from `agentSettingsStore`, not from
+    // derive the agent's visibility from `agentToolbarPinsStore`, not from
     // `pinnedButtons`.
     mockToolbarState.layout.pinnedButtons = { claude: false };
-    mockAgentSettings = agentSettings({
-      claude: { pinned: true },
-    });
+    mockAgentPins = {
+      claude: true,
+    };
 
     const { getByLabelText } = render(<ToolbarSettingsTab />);
     expect(getByLabelText(switchName("Claude agent")).getAttribute("aria-checked")).toBe("true");
   });
 
   it("routes agent switch toggle to setAgentPinned (not toggleButtonVisibility)", () => {
-    mockAgentSettings = agentSettings({
-      claude: { pinned: true },
-    });
+    mockAgentPins = {
+      claude: true,
+    };
 
     const { getByLabelText } = render(<ToolbarSettingsTab />);
     fireEvent.click(getByLabelText(switchName("Claude agent")));
@@ -374,9 +368,9 @@ describe("ToolbarSettingsTab — agent visibility routing", () => {
   });
 
   it("routes agent switch toggle upward (unpinned → pinned) via setAgentPinned", () => {
-    mockAgentSettings = agentSettings({
-      gemini: { pinned: false },
-    });
+    mockAgentPins = {
+      gemini: false,
+    };
 
     const { getByLabelText } = render(<ToolbarSettingsTab />);
     fireEvent.click(getByLabelText(switchName("Gemini agent")));
@@ -460,10 +454,10 @@ describe("ToolbarSettingsTab — agent visibility routing", () => {
   });
 
   it("reflects pinned agents in the side visible-count summary", () => {
-    mockAgentSettings = agentSettings({
-      claude: { pinned: true },
-      gemini: { pinned: false },
-    });
+    mockAgentPins = {
+      claude: true,
+      gemini: false,
+    };
 
     const { getByText } = render(<ToolbarSettingsTab />);
     // Left side: launcher (visible), claude (pinned, visible),
@@ -471,8 +465,8 @@ describe("ToolbarSettingsTab — agent visibility routing", () => {
     expect(getByText("Left side · 3 buttons")).toBeTruthy();
   });
 
-  it("treats null agentSettings as all-unpinned without crashing", () => {
-    mockAgentSettings = null;
+  it("treats unloaded agent pins as all-unpinned without crashing", () => {
+    mockAgentPins = null;
 
     const { getByLabelText } = render(<ToolbarSettingsTab />);
     expect(getByLabelText(switchName("Claude agent")).getAttribute("aria-checked")).toBe("false");
@@ -485,9 +479,9 @@ describe("ToolbarSettingsTab — agent visibility routing", () => {
       rightButtons: ["codex", "settings"],
       pinnedButtons: {},
     };
-    mockAgentSettings = agentSettings({
-      codex: { pinned: true },
-    });
+    mockAgentPins = {
+      codex: true,
+    };
 
     const { getByLabelText } = render(<ToolbarSettingsTab />);
     fireEvent.click(getByLabelText(switchName("Codex agent")));
@@ -501,7 +495,7 @@ describe("ToolbarSettingsTab — one row per button", () => {
   beforeEach(() => {
     clearStoreMocks();
     vi.mocked(useSortable).mockImplementation(defaultSortable);
-    mockAgentSettings = null;
+    mockAgentPins = null;
   });
 
   afterEach(() => {
@@ -517,10 +511,10 @@ describe("ToolbarSettingsTab — one row per button", () => {
       rightButtons: ["copy-tree", "settings"],
       pinnedButtons: {},
     });
-    mockAgentSettings = agentSettings({
-      claude: { pinned: false },
-      gemini: { pinned: false },
-    });
+    mockAgentPins = {
+      claude: false,
+      gemini: false,
+    };
 
     const { container } = render(<ToolbarSettingsTab />);
     const ids = new Set<string>([
@@ -555,10 +549,10 @@ describe("ToolbarSettingsTab — one row per button", () => {
       rightButtons: ["settings"],
       pinnedButtons: {},
     });
-    mockAgentSettings = agentSettings({
-      claude: { pinned: true },
-      codex: { pinned: false },
-    });
+    mockAgentPins = {
+      claude: true,
+      codex: false,
+    };
 
     const { container, getByLabelText, rerender } = render(<ToolbarSettingsTab />);
 
@@ -566,10 +560,10 @@ describe("ToolbarSettingsTab — one row per button", () => {
     const claudeSwitch = getByLabelText(switchName("Claude agent"));
     expect(leftColumn(container).contains(claudeSwitch)).toBe(true);
     fireEvent.click(claudeSwitch);
-    mockAgentSettings = agentSettings({
-      claude: { pinned: false },
-      codex: { pinned: false },
-    });
+    mockAgentPins = {
+      claude: false,
+      codex: false,
+    };
     rerender(<ToolbarSettingsTab />);
 
     expect(claudeSwitch.isConnected).toBe(true);
@@ -583,10 +577,10 @@ describe("ToolbarSettingsTab — one row per button", () => {
     fireEvent.click(codexSwitch);
     expect(setAgentPinnedMock).toHaveBeenLastCalledWith("codex", true);
     // What the store does on a pin: record it and give the agent a slot.
-    mockAgentSettings = agentSettings({
-      claude: { pinned: false },
-      codex: { pinned: true },
-    });
+    mockAgentPins = {
+      claude: false,
+      codex: true,
+    };
     mockToolbarState = makeToolbarState({
       ...mockToolbarState.layout,
       leftButtons: [...mockToolbarState.layout.leftButtons, "codex"],
@@ -613,7 +607,7 @@ describe("ToolbarSettingsTab — drag reordering and cross-side moves", () => {
     clearStoreMocks();
     vi.mocked(useSortable).mockImplementation(defaultSortable);
     mockToolbarState = makeToolbarState();
-    mockAgentSettings = null;
+    mockAgentPins = null;
   });
 
   function fire(name: string, event: unknown) {
@@ -645,7 +639,7 @@ describe("ToolbarSettingsTab — drag reordering and cross-side moves", () => {
       rightButtons: [],
       pinnedButtons: {},
     });
-    mockAgentSettings = agentSettings({ claude: { pinned: true }, gemini: { pinned: true } });
+    mockAgentPins = { claude: true, gemini: true };
 
     const { container } = render(<ToolbarSettingsTab />);
 
@@ -675,7 +669,7 @@ describe("ToolbarSettingsTab — drag reordering and cross-side moves", () => {
       rightButtons: ["terminal"],
       pinnedButtons: {},
     });
-    mockAgentSettings = agentSettings({ claude: { pinned: true }, gemini: { pinned: true } });
+    mockAgentPins = { claude: true, gemini: true };
 
     const { container } = render(<ToolbarSettingsTab />);
 
@@ -732,7 +726,7 @@ describe("ToolbarSettingsTab — drag reordering and cross-side moves", () => {
       rightButtons: ["codex", "settings"],
       pinnedButtons: {},
     });
-    mockAgentSettings = agentSettings({ claude: { pinned: true }, codex: { pinned: true } });
+    mockAgentPins = { claude: true, codex: true };
   }
 
   it("commits a cross-side move after the hovered item (centre below its midpoint)", () => {
@@ -855,7 +849,7 @@ describe("ToolbarSettingsTab — drag-source vs off-row opacity", () => {
     clearStoreMocks();
     vi.mocked(useSortable).mockImplementation(defaultSortable);
     mockToolbarState = makeToolbarState();
-    mockAgentSettings = null;
+    mockAgentPins = null;
   });
 
   // The opacity-bearing node is the sortable wrapper (`setNodeRef` div): it is
@@ -871,10 +865,10 @@ describe("ToolbarSettingsTab — drag-source vs off-row opacity", () => {
   // An off row only has a column row when it was switched off during this
   // visit: at rest it is listed under "Not on the toolbar" instead.
   function switchGeminiOffInColumn() {
-    mockAgentSettings = agentSettings({ gemini: { pinned: true } });
+    mockAgentPins = { gemini: true };
     const view = render(<ToolbarSettingsTab />);
     fireEvent.click(view.getByLabelText(switchName("Gemini agent")));
-    mockAgentSettings = agentSettings({ gemini: { pinned: false } });
+    mockAgentPins = { gemini: false };
     view.rerender(<ToolbarSettingsTab />);
     expect(view.getByLabelText(switchName("Gemini agent")).getAttribute("aria-checked")).toBe(
       "false"
@@ -919,7 +913,7 @@ describe("ToolbarSettingsTab — drag-source vs off-row opacity", () => {
   });
 
   it("renders a visible, non-dragged row at full opacity", () => {
-    mockAgentSettings = agentSettings({ claude: { pinned: true } });
+    mockAgentPins = { claude: true };
 
     const { container } = render(<ToolbarSettingsTab />);
     const row = rowFor("Claude agent", container);
@@ -931,7 +925,7 @@ describe("ToolbarSettingsTab — plugin button promotion (#11304)", () => {
   beforeEach(() => {
     clearStoreMocks();
     mockToolbarState = makeToolbarState();
-    mockAgentSettings = null;
+    mockAgentPins = null;
     pluginButtons.configs = new Map([
       [
         "acme.ping",
@@ -1063,7 +1057,7 @@ describe("ToolbarSettingsTab — panel button pinning (#11667)", () => {
     clearStoreMocks();
     vi.mocked(useSortable).mockImplementation(defaultSortable);
     mockToolbarState = freshV13Profile();
-    mockAgentSettings = null;
+    mockAgentPins = null;
   });
 
   it("lists a panel button the side columns cannot reach", () => {
@@ -1151,7 +1145,7 @@ describe("ToolbarSettingsTab — panel button pinning (#11667)", () => {
 describe("ToolbarSettingsTab — launcher pins (#12217)", () => {
   beforeEach(() => {
     clearStoreMocks();
-    mockAgentSettings = null;
+    mockAgentPins = null;
     mockRecipes.list = [];
     pluginButtons.configs = new Map();
   });
@@ -1305,11 +1299,11 @@ describe("ToolbarSettingsTab — move menu and agent inventory", () => {
     clearStoreMocks();
     vi.mocked(useSortable).mockImplementation(defaultSortable);
     mockToolbarState = makeToolbarState();
-    mockAgentSettings = agentSettings({
-      claude: { pinned: true },
-      gemini: { pinned: true },
-      codex: { pinned: false },
-    });
+    mockAgentPins = {
+      claude: true,
+      gemini: true,
+      codex: false,
+    };
   });
 
   afterEach(() => {
@@ -1354,11 +1348,11 @@ describe("ToolbarSettingsTab — move menu and agent inventory", () => {
       rightButtons: ["settings"],
       pinnedButtons: {},
     });
-    mockAgentSettings = agentSettings({
-      claude: { pinned: true },
-      gemini: { pinned: false },
-      codex: { pinned: true },
-    });
+    mockAgentPins = {
+      claude: true,
+      gemini: false,
+      codex: true,
+    };
 
     const { getByLabelText } = render(<ToolbarSettingsTab />);
     fireEvent.click(
@@ -1377,11 +1371,11 @@ describe("ToolbarSettingsTab — move menu and agent inventory", () => {
     const { getByLabelText, container, rerender } = render(<ToolbarSettingsTab />);
 
     fireEvent.click(getByLabelText(switchName("Gemini agent")));
-    mockAgentSettings = agentSettings({
-      claude: { pinned: true },
-      gemini: { pinned: false },
-      codex: { pinned: false },
-    });
+    mockAgentPins = {
+      claude: true,
+      gemini: false,
+      codex: false,
+    };
     rerender(<ToolbarSettingsTab />);
 
     const gemini = getByLabelText(switchName("Gemini agent"));
@@ -1392,7 +1386,7 @@ describe("ToolbarSettingsTab — move menu and agent inventory", () => {
   });
 
   it("hides agents that aren't installed behind a disclosure", () => {
-    mockAgentSettings = agentSettings({ claude: { pinned: false } });
+    mockAgentPins = { claude: false };
     mockAvailability.value = { claude: "ready", gemini: "missing" };
 
     const { container, queryByLabelText, getByLabelText } = render(<ToolbarSettingsTab />);
@@ -1418,7 +1412,7 @@ describe("ToolbarSettingsTab — reset", () => {
     clearStoreMocks();
     vi.mocked(useSortable).mockImplementation(defaultSortable);
     mockToolbarState = makeToolbarState();
-    mockAgentSettings = null;
+    mockAgentPins = null;
   });
 
   const openUndo = () => {
@@ -1473,7 +1467,7 @@ describe("ToolbarSettingsTab — a hidden Canopy", () => {
   beforeEach(() => {
     clearStoreMocks();
     vi.mocked(useSortable).mockImplementation(defaultSortable);
-    mockAgentSettings = null;
+    mockAgentPins = null;
     mockToolbarState = makeToolbarState({
       leftButtons: ["launcher", "terminal"],
       rightButtons: ["canopy", "settings"],

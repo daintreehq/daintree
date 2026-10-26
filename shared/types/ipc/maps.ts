@@ -109,6 +109,7 @@ import type {
 import type { DevPreviewStateChangedPayload, DevPreviewAllSessionsPayload } from "./devPreview.js";
 import type { ServiceConnectivityPayload } from "./connectivity.js";
 import type { AgentDefaultsSnapshot } from "./agentDefaults.js";
+import type { AgentToolbarPinsSnapshot } from "./agentToolbarPins.js";
 import type { SanitizedTelemetryEvent, TelemetryPreviewState } from "./telemetryPreview.js";
 import type { ProjectPulse, PulseRangeDays } from "../pulse.js";
 import type { GitCommitListOptions, GitCommitListResponse } from "../git.js";
@@ -2153,6 +2154,9 @@ export interface IpcEventMap {
   // A saved terminal-config change, one owner's fields each (#14699)
   "terminal-config:device-changed": Partial<import("./config.js").TerminalConfig>;
   "terminal-config:host-changed": Partial<import("./config.js").TerminalConfig>;
+
+  // This machine's toolbar agent pins changed (#14702)
+  "agent-toolbar-pins:changed": AgentToolbarPinsSnapshot;
   "help:global-assistant-changed": import("./help.js").GlobalAssistantView;
 
   // Plugin action registry events

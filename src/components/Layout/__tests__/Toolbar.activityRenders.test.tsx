@@ -8,7 +8,7 @@
 import "../__preview__/toolbarShims";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
-import type { CliAvailability, AgentSettings } from "@shared/types";
+import type { CliAvailability } from "@shared/types";
 import type { PtyPanelData } from "@shared/types/panel";
 
 const toolbarRenders = vi.hoisted(() => ({ count: 0 }));
@@ -32,7 +32,7 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useProjectStore } from "@/store/projectStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
-import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { useAgentToolbarPinsStore } from "@/store/agentToolbarPinsStore";
 import { enqueueActivityUpdate, flushPanelStatusBuffer } from "@/store/panelStatusBuffer";
 import { initBuiltInPanelKinds } from "@/panels/registry";
 import { PREVIEW_PROJECT } from "../__preview__/toolbarShims";
@@ -61,7 +61,7 @@ function agentPanel(id: string, agentId: string): PtyPanelData {
 
 const noop = () => {};
 
-function Harness(props: { availability: CliAvailability; settings: AgentSettings }) {
+function Harness(props: { availability: CliAvailability }) {
   // The real hook, wired as AppLayout wires it.
   const projectSwitcherPalette = useProjectSwitcherPalette();
   return (
@@ -70,7 +70,6 @@ function Harness(props: { availability: CliAvailability; settings: AgentSettings
       onSettings={noop}
       hasWorkspace
       agentAvailability={props.availability}
-      agentSettings={props.settings}
       projectSwitcherPalette={projectSwitcherPalette}
     />
   );
@@ -100,10 +99,10 @@ beforeEach(async () => {
   useProjectStore.setState({ currentProject: PREVIEW_PROJECT });
   const availability = Object.fromEntries(AGENTS.map((id) => [id, "ready"])) as CliAvailability;
   useCliAvailabilityStore.setState({ availability, hasRealData: true });
-  const settings = {
-    agents: Object.fromEntries(AGENTS.map((id) => [id, { pinned: true }])),
-  } as AgentSettings;
-  useAgentSettingsStore.setState({ settings });
+  useAgentToolbarPinsStore.setState({
+    pins: Object.fromEntries(AGENTS.map((id) => [id, true])),
+    revision: 0,
+  });
 
   const panels = AGENTS.map((agentId, i) => agentPanel(`pane-${i}`, agentId));
   usePanelStore.setState({
@@ -115,7 +114,7 @@ beforeEach(async () => {
   render(
     <TooltipProvider>
       <WorktreeStoreContext.Provider value={worktreeStore}>
-        <Harness availability={availability} settings={settings} />
+        <Harness availability={availability} />
       </WorktreeStoreContext.Provider>
     </TooltipProvider>
   );

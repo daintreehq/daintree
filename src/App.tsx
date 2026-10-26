@@ -146,7 +146,7 @@ function AppInner() {
 
   const focusedId = usePanelStore((state) => state.focusedId);
 
-  const { launchAgent, availability, agentSettings, refreshSettings } = useAgentLauncher();
+  const { launchAgent, availability, refreshSettings } = useAgentLauncher();
 
   useTerminalConfig();
   useAppThemeConfig();
@@ -512,7 +512,6 @@ function AppInner() {
                   onSettings={handleSettings}
                   onPreloadSettings={handlePreloadSettings}
                   agentAvailability={availability}
-                  agentSettings={agentSettings}
                   isHydrated={false}
                   projectSwitcherPalette={projectSwitcherPalette}
                 />
@@ -552,7 +551,6 @@ function AppInner() {
                   onRetry={handleErrorRetry}
                   onCancelRetry={handleCancelRetry}
                   agentAvailability={availability}
-                  agentSettings={agentSettings}
                   isHydrated={isStateLoaded}
                   projectSwitcherPalette={projectSwitcherPalette}
                 >

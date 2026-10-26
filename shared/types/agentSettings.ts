@@ -55,16 +55,6 @@ export type DangerousMode = "inherit" | "on" | "off";
 export type InlineMode = "inherit" | "on" | "off";
 
 export interface AgentSettingsEntry {
-  /**
-   * Tri-state pin for the toolbar: `true` (explicit pin), `false` (explicit
-   * unpin), or `undefined` (no explicit intent — follow live CLI availability).
-   * Use `isAgentToolbarVisible(entry, availability)` from
-   * `shared/utils/agentPinned.ts` for toolbar visibility so installing or
-   * uninstalling a CLI flips the button without ever needing to write a
-   * concrete value here. `isAgentPinned()` reads the explicit user intent
-   * directly (see #7673).
-   */
-  pinned?: boolean;
   customFlags?: string;
   /** Additional args appended when dangerous mode is enabled */
   dangerousArgs?: string;
@@ -160,11 +150,9 @@ export interface AgentSettingsEntry {
 export interface AgentSettings {
   agents: Record<string, AgentSettingsEntry>;
   /**
-   * Schema version for the persisted store. Absent on stores written by
-   * versions before the tri-state pin fix (#7673); presence of `1` signals
-   * that the one-shot migration has cleared eagerly-seeded `pinned` values
-   * so toolbar visibility can follow live CLI availability. Stamped by the
-   * main-process IPC handler on the first write after migration.
+   * Legacy schema version, read only by migration 039 (#14702): below `1` the
+   * store's toolbar pins predate the tri-state fix (#7673) and were never
+   * shown, so they don't move to this machine's toolbar pins.
    */
   settingsVersion?: number;
   /**

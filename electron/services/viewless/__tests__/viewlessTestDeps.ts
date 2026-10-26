@@ -143,6 +143,7 @@ export function makeDeps(
     send,
     agents: {
       getSettings: async () => null,
+      getToolbarPins: async () => ({}),
       getCcrPresets: async () => undefined,
       getProjectPresets: async () => ({}),
       getCliDetail: async () => ({

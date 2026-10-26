@@ -36,7 +36,6 @@ export const SECTION_SETTINGS = {
   worktreePathPattern: ["worktreeConfig"],
   clientPreferences: ["storage:daintree-preferences"],
   toolbarLayout: ["storage:daintree-toolbar-preferences"],
-  toolbarAgents: ["agentSettings"],
   pluginSilences: ["pluginNotificationSilences"],
   hardwareAcceleration: ["gpu"],
   logging: ["logLevelOverrides"],

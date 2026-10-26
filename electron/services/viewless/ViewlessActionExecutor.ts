@@ -13,6 +13,7 @@ import type { HostAgentLimitSnapshot } from "../../../shared/utils/hostAgentLimi
 import type { PanelSnapshot, Project, ProjectState } from "../../../shared/types/project.js";
 import type { AgentPreset } from "../../../shared/config/agentRegistry.js";
 import type { AgentSettings } from "../../../shared/types/agentSettings.js";
+import type { AgentToolbarPins } from "../../../shared/types/ipc/agentToolbarPins.js";
 import type { AgentAvailabilityState, AgentCliDetail } from "../../../shared/types/ipc/system.js";
 import type { AgentState, WaitingReason } from "../../../shared/types/agent.js";
 import type { TerminalStatusResult } from "../../../shared/types/terminalStatus.js";
@@ -177,6 +178,8 @@ export interface ViewlessLaunchEnvLayers {
  */
 export interface ViewlessAgentSources {
   getSettings(): Promise<AgentSettings | null>;
+  /** This machine's toolbar pins: with no view, there is no other screen to describe (#14702). */
+  getToolbarPins(): Promise<AgentToolbarPins>;
   getCcrPresets(agentId: string): Promise<AgentPreset[] | undefined>;
   getProjectPresets(projectPath: string): Promise<Record<string, AgentPreset[]>>;
   getCliDetail(agentId: string): Promise<AgentCliDetail | undefined>;

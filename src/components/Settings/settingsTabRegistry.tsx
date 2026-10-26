@@ -1102,7 +1102,8 @@ export const SETTINGS_REGISTRY = [
     id: "toolbar",
     scope: "global",
     group: "Terminal",
-    settings: ["storage:daintree-toolbar-preferences", "agentSettings"],
+    // Agent pins are this machine's like the rest of the toolbar (#14702).
+    settings: ["storage:daintree-toolbar-preferences", "agentToolbarPins"],
     sectionSettings: {
       "Left side buttons": SECTION_SETTINGS.toolbarLayout,
       "Right side buttons": SECTION_SETTINGS.toolbarLayout,

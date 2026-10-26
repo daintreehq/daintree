@@ -194,11 +194,11 @@ export function categoryOfSection(
 /**
  * Per-agent preferences that travel. `dangerous*` is permission posture and
  * travels only in its own opt-in section; `worktreePresets` is bookkeeping
- * keyed by worktree ids that mean nothing on another machine; the retired
- * `selected`/`enabled` keys and anything unnamed stay behind.
+ * keyed by worktree ids that mean nothing on another machine; a toolbar pin is
+ * the screen's, not the agent's (#14702); the retired `selected`/`enabled`
+ * keys and anything unnamed stay behind.
  */
 export const AGENT_SETTINGS_PORTABLE_FIELDS = [
-  "pinned",
   "customFlags",
   "inlineMode",
   "shareClipboardDirectory",

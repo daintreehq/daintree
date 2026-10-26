@@ -69,7 +69,9 @@ describe("settings tab owners", () => {
     expect(ownerForTab("keyboard")).toBe("device");
     expect(ownerForTab("voice")).toBe("device");
     expect(ownerForTab("hosts")).toBe("device");
-    for (const tab of ["general", "toolbar", "terminal", "troubleshooting"] as const) {
+    // The toolbar's agent pins are this machine's too (#14702).
+    expect(ownerForTab("toolbar")).toBe("device");
+    for (const tab of ["general", "terminal", "troubleshooting"] as const) {
       expect(ownerForTab(tab), tab).toBe("mixed");
     }
   });

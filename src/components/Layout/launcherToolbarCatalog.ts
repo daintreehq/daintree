@@ -24,7 +24,7 @@ import type { DockLaunchItem } from "./dockLaunchItems";
  * nothing at all.
  *
  * Three answers, in the order they have to be asked. A built-in agent keeps its
- * bare agent id — its pin lives in `agentSettingsStore`, not `pinnedButtons`,
+ * bare agent id — its pin lives in `agentToolbarPinsStore`, not `pinnedButtons`,
  * and minting a synthetic id for it would split one button across two stores.
  * One of the four fixed panel kinds keeps its own button id for the same
  * reason: existing profiles carry it, and `isPanelButtonOnToolbar`'s array

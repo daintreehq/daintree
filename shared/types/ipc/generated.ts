@@ -110,6 +110,14 @@ export interface GeneratedIpcInvokeMap {
     args: [value: "never" | "always" | "on-focus"];
     result: import("../agentSettings.js").AgentSettings;
   };
+  "agent-toolbar-pins:get": {
+    args: [];
+    result: import("./agentToolbarPins.js").AgentToolbarPinsSnapshot;
+  };
+  "agent-toolbar-pins:set": {
+    args: [agentId: string, pinned: boolean];
+    result: import("./agentToolbarPins.js").AgentToolbarPinsSnapshot;
+  };
   "app:clear-quarantined-panel": {
     args: [panelId: string];
     result: { cleared: boolean };

@@ -10,6 +10,8 @@ import type { AgentSettings, CliAvailability, WorktreeSnapshot } from "@shared/t
 let mockAvailability: CliAvailability = {} as CliAvailability;
 let mockHasRealData = true;
 let mockAgentSettings: AgentSettings | null = { agents: {} } as AgentSettings;
+// This machine's toolbar pins (#14702), the only pin source.
+let mockAgentPins: Record<string, boolean> = {};
 let mockLeftButtons: string[] = [];
 let mockRightButtons: string[] = [];
 let mockActiveWorktreeId: string | null = null;
@@ -34,6 +36,11 @@ vi.mock("@/store/scratchStore", () => ({
 vi.mock("@/store/agentSettingsStore", () => ({
   useAgentSettingsStore: (selector: (s: { settings: AgentSettings | null }) => unknown) =>
     selector({ settings: mockAgentSettings }),
+}));
+
+vi.mock("@/store/agentToolbarPinsStore", () => ({
+  useAgentToolbarPinsStore: (selector: (s: { pins: Record<string, boolean> }) => unknown) =>
+    selector({ pins: mockAgentPins }),
 }));
 
 vi.mock("@/store/cliAvailabilityStore", () => ({
@@ -70,6 +77,7 @@ beforeEach(() => {
   mockAvailability = {} as CliAvailability;
   mockHasRealData = true;
   mockAgentSettings = { agents: {} } as AgentSettings;
+  mockAgentPins = {};
   mockLeftButtons = [];
   mockRightButtons = [];
   mockActiveWorktreeId = null;
@@ -102,9 +110,7 @@ describe("useLauncherData", () => {
     // Counting it would push the Pinned/Other boundary one row down and label
     // an unpinned, ready agent as pinned.
     mockAvailability = { claude: "blocked", gemini: "ready", codex: "ready" } as CliAvailability;
-    mockAgentSettings = {
-      agents: { claude: { pinned: true }, gemini: { pinned: false }, codex: { pinned: false } },
-    } as AgentSettings;
+    mockAgentPins = { claude: true, gemini: false, codex: false };
     mockLeftButtons = ["claude"];
 
     const { result } = renderHook(() => useLauncherData());
@@ -115,12 +121,16 @@ describe("useLauncherData", () => {
     expect(result.current.pinnedCount).toBe(0);
   });
 
-  it("counts a pinned launchable agent", () => {
+  it("counts a pinned launchable agent from this machine's pins, not the host's settings", () => {
     mockAvailability = { claude: "ready", gemini: "ready" } as CliAvailability;
+    // Claude is pinned with no position yet; gemini holds one but is hidden.
+    // Read through positions alone, or from the retired host field below, the
+    // answer would be the other way round.
+    mockAgentPins = { claude: true, gemini: false };
     mockAgentSettings = {
-      agents: { claude: { pinned: true }, gemini: { pinned: false } },
+      agents: { claude: { pinned: false }, gemini: { pinned: true } },
     } as AgentSettings;
-    mockLeftButtons = ["claude"];
+    mockLeftButtons = ["gemini"];
 
     const { result } = renderHook(() => useLauncherData());
     expect(result.current.pinnedCount).toBe(1);

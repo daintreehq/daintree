@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach } from "vitest";
 import type { AnyToolbarButtonId } from "@/../../shared/types/toolbar";
-import type { AgentSettings, CliAvailability } from "@shared/types";
+import type { AgentToolbarPins, CliAvailability } from "@shared/types";
 import type { ToolbarButtonMetadata } from "../toolbarButtonMetadata";
 import {
   buildToolbarVisibilityMenuRows,
@@ -118,23 +118,19 @@ describe("canListToolbarButton", () => {
   it("omits an agent whose CLI is missing and that was never pinned", () => {
     const availability: CliAvailability = { claude: "missing" };
 
-    expect(
-      canListToolbarButton("claude", REGISTRY, PROJECT_SCOPED, { agents: {} }, availability)
-    ).toBe(false);
+    expect(canListToolbarButton("claude", REGISTRY, PROJECT_SCOPED, {}, availability)).toBe(false);
   });
 
   it("lists an agent the user pinned or hid, whatever its CLI", () => {
-    const agentSettings: AgentSettings = {
-      agents: { claude: { pinned: true }, gemini: { pinned: false } },
-    };
+    const agentPins: AgentToolbarPins = { claude: true, gemini: false };
     const availability: CliAvailability = { claude: "missing", gemini: "missing" };
 
-    expect(
-      canListToolbarButton("claude", REGISTRY, PROJECT_SCOPED, agentSettings, availability)
-    ).toBe(true);
-    expect(
-      canListToolbarButton("gemini", REGISTRY, PROJECT_SCOPED, agentSettings, availability)
-    ).toBe(true);
+    expect(canListToolbarButton("claude", REGISTRY, PROJECT_SCOPED, agentPins, availability)).toBe(
+      true
+    );
+    expect(canListToolbarButton("gemini", REGISTRY, PROJECT_SCOPED, agentPins, availability)).toBe(
+      true
+    );
   });
 
   it("lists an installed agent even though its registry entry reads as hidden", () => {
@@ -144,9 +140,7 @@ describe("canListToolbarButton", () => {
   });
 
   it("holds back an unpinned agent while CLI availability is still loading", () => {
-    expect(canListToolbarButton("claude", REGISTRY, PROJECT_SCOPED, { agents: {} }, null)).toBe(
-      false
-    );
+    expect(canListToolbarButton("claude", REGISTRY, PROJECT_SCOPED, {}, null)).toBe(false);
   });
 });
 

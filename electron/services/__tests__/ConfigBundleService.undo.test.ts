@@ -230,6 +230,46 @@ describe("undoing a copy", () => {
     expect(storeState.current.agentSettings).toEqual(original);
   });
 
+  it("takes back a copy recorded before pins left agent settings, without writing one back (#14702)", async () => {
+    // The live entries as migration 039 left them: the copy's values, pin gone.
+    storeState.current.agentSettings = {
+      globalSkipPermissions: false,
+      agents: { claude: { customFlags: "--copied", dangerousMode: "on" } },
+    };
+    const captured: Captured[] = [
+      {
+        section: "agentSettings",
+        leaves: [
+          {
+            key: "claude",
+            before: { pinned: true, customFlags: "--host", dangerousMode: "off" },
+            after: { pinned: true, customFlags: "--copied", dangerousMode: "off" },
+          },
+        ],
+      },
+      {
+        section: "permissionBypass",
+        leaves: [
+          {
+            key: "agents.claude",
+            before: { pinned: true, customFlags: "--copied", dangerousMode: "off" },
+            after: { pinned: true, customFlags: "--copied", dangerousMode: "on" },
+          },
+        ],
+      },
+    ];
+
+    const results = await makeService().undo(captured);
+
+    expect(statuses(results)).toEqual({
+      "agentSettings:claude": "restored",
+      "permissionBypass:agents.claude": "restored",
+    });
+    expect(
+      (storeState.current.agentSettings as { agents: { claude: unknown } }).agents.claude
+    ).toEqual({ customFlags: "--host", dangerousMode: "off" });
+  });
+
   it("keeps an agent entry edited since the copy, whole", async () => {
     const { service, captured } = await copy({
       agentSettings: { claude: { customFlags: "--copied" } },

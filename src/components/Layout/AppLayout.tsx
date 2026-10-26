@@ -55,7 +55,7 @@ import { useDiagnosticsAutoOpen } from "@/hooks/useDiagnosticsAutoOpen";
 import { useDockPopoverLayerSync } from "@/components/Layout/useOpenDockPopoverId";
 import type { RetryAction } from "@/store";
 import { appClient } from "@/clients";
-import type { CliAvailability, AgentSettings } from "@shared/types";
+import type { CliAvailability } from "@shared/types";
 import { useLayoutState, useOverlayOpen } from "@/hooks";
 import { useKeepMounted } from "@/hooks/useKeepMounted";
 import { useGlobalBannerHeightVar } from "@/hooks/useGlobalBannerHeightVar";
@@ -169,7 +169,6 @@ interface AppLayoutProps {
   onRetry?: (id: string, action: RetryAction, args?: Record<string, unknown>) => void;
   onCancelRetry?: (id: string) => void;
   agentAvailability?: CliAvailability;
-  agentSettings?: AgentSettings | null;
   isHydrated?: boolean;
   projectSwitcherPalette: UseProjectSwitcherPaletteReturn;
 }
@@ -205,7 +204,6 @@ export function AppLayout({
   onRetry,
   onCancelRetry,
   agentAvailability,
-  agentSettings,
   isHydrated = true,
   projectSwitcherPalette,
 }: AppLayoutProps) {
@@ -995,7 +993,6 @@ export function AppLayout({
           onToggleFocusMode={handleToggleSidebar}
           hasWorkspace={hasWorkspace}
           agentAvailability={agentAvailability}
-          agentSettings={agentSettings}
           projectSwitcherPalette={projectSwitcherPalette}
         />
         <FleetArmingRibbon />

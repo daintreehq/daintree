@@ -41,5 +41,6 @@ export { pluginRecipesClient } from "./pluginRecipesClient";
 export { telemetryPreviewClient } from "./telemetryPreviewClient";
 export { connectivityClient } from "./connectivityClient";
 export { agentDefaultsClient } from "./agentDefaultsClient";
+export { agentToolbarPinsClient } from "./agentToolbarPinsClient";
 export { projectPresenceClient } from "./projectPresenceClient";
 export { watchdogClient } from "./watchdogClient";

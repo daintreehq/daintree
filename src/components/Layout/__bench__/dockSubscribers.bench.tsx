@@ -17,7 +17,7 @@ import { Profiler } from "react";
 import { describe, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
 import { DndContext } from "@dnd-kit/core";
-import type { AgentSettings, CliAvailability, WorktreeSnapshot } from "@shared/types";
+import type { CliAvailability, WorktreeSnapshot } from "@shared/types";
 import type { PanelInstance, PtyPanelData, TabGroup } from "@shared/types/panel";
 
 const renders = vi.hoisted(() => new Map<string, number>());
@@ -83,7 +83,7 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useProjectStore } from "@/store/projectStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
-import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { useAgentToolbarPinsStore } from "@/store/agentToolbarPinsStore";
 import { initBuiltInPanelKinds } from "@/panels/registry";
 import { PREVIEW_PROJECT } from "../__preview__/toolbarShims";
 import { Toolbar } from "../Toolbar";
@@ -143,7 +143,7 @@ const dockPanelContext: DockPanelContextValue = {
   registerDragHandle: () => noop,
 };
 
-function Harness(props: { availability: CliAvailability; settings: AgentSettings }) {
+function Harness(props: { availability: CliAvailability }) {
   const projectSwitcherPalette = useProjectSwitcherPalette();
   return (
     <>
@@ -152,7 +152,6 @@ function Harness(props: { availability: CliAvailability; settings: AgentSettings
         onSettings={noop}
         hasWorkspace
         agentAvailability={props.availability}
-        agentSettings={props.settings}
         projectSwitcherPalette={projectSwitcherPalette}
       />
       <DndContext>
@@ -188,10 +187,10 @@ async function runOnce(phase: "snapshots" | "popovers"): Promise<RunResult> {
   useProjectStore.setState({ currentProject: PREVIEW_PROJECT });
   const availability = Object.fromEntries(AGENTS.map((id) => [id, "ready"])) as CliAvailability;
   useCliAvailabilityStore.setState({ availability, hasRealData: true });
-  const settings = {
-    agents: Object.fromEntries(AGENTS.map((id) => [id, { pinned: true }])),
-  } as AgentSettings;
-  useAgentSettingsStore.setState({ settings });
+  useAgentToolbarPinsStore.setState({
+    pins: Object.fromEntries(AGENTS.map((id) => [id, true])),
+    revision: 0,
+  });
 
   const panels: PanelInstance[] = [];
   for (let i = 0; i < 14; i++)
@@ -239,7 +238,7 @@ async function runOnce(phase: "snapshots" | "popovers"): Promise<RunResult> {
     <Profiler id="bench" onRender={onRender}>
       <TooltipProvider>
         <WorktreeStoreContext.Provider value={worktreeStore}>
-          <Harness availability={availability} settings={settings} />
+          <Harness availability={availability} />
         </WorktreeStoreContext.Provider>
       </TooltipProvider>
     </Profiler>

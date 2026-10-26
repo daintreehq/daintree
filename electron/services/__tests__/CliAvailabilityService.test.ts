@@ -2307,6 +2307,40 @@ describe("CliAvailabilityService", () => {
       expect(timedOutAgentIds()).toEqual([["goose"]]);
     });
 
+    it("seeds a fresh install's toolbar pins only from a check that finished (#14702)", async () => {
+      mockedExecFileSync.mockImplementation((_file, args) => {
+        if (cmdOf(args) === "claude") return Buffer.from("/usr/local/bin/claude\n");
+        throw Object.assign(new Error("not found"), { code: "ENOENT" });
+      });
+      hangPathLookupFor("goose");
+
+      vi.useFakeTimers();
+      const partial = service.checkAvailability();
+      await vi.advanceTimersByTimeAsync(60_000);
+      await partial;
+      // Half an answer would unpin every agent that hadn't replied yet.
+      expect(storeBackingMap.has("agentToolbarPins")).toBe(false);
+      vi.useRealTimers();
+
+      mockedFindAllOnPath.mockImplementation(pathFixtureLookup);
+      await service.refresh();
+      const pins = storeBackingMap.get("agentToolbarPins") as Record<string, boolean>;
+      expect(pins.claude).toBe(true);
+      expect(pins.goose).toBe(false);
+    });
+
+    it("leaves an upgraded profile's toolbar pins alone (#14702)", async () => {
+      storeBackingMap.set("agentToolbarPins", {});
+      mockedExecFileSync.mockImplementation((_file, args) => {
+        if (cmdOf(args) === "claude") return Buffer.from("/usr/local/bin/claude\n");
+        throw Object.assign(new Error("not found"), { code: "ENOENT" });
+      });
+
+      await service.checkAvailability();
+
+      expect(storeBackingMap.get("agentToolbarPins")).toEqual({});
+    });
+
     it("carries an agent's previous result forward when its re-check times out", async () => {
       mockedExecFileSync.mockImplementation((_file, args) => {
         const cmd = cmdOf(args);

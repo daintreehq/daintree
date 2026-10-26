@@ -75,9 +75,9 @@ export type ToolbarButtonId =
   | "portal-toggle";
 
 /**
- * Sparse pin-state map for toolbar buttons. Mirrors the tri-state semantics
- * used by `agentSettingsStore.agents[id].pinned`, but the default the missing
- * entry falls back to differs by button kind:
+ * Sparse pin-state map for toolbar buttons. Mirrors the tri-state semantics of
+ * this machine's agent toolbar pins (`AgentToolbarPins`), but the default the
+ * missing entry falls back to differs by button kind:
  *
  * Built-in buttons (incl. `launcher` / `plugin-tray`) default to visible:
  *   - `false`      → user explicitly hid this button

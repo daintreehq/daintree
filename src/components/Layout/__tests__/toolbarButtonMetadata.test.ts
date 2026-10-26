@@ -76,12 +76,12 @@ describe("isToolbarButtonVisible", () => {
 
   it("routes agent IDs to isAgentToolbarVisible (pinned:true wins regardless of pinnedButtons)", () => {
     // Even though pinnedButtons.claude is false (which would hide a non-agent
-    // button), agent visibility comes from agentSettingsStore. claude:pinned
-    // wins.
+    // button), agent visibility comes from this machine's agent pins. The
+    // claude pin wins.
     const visible = isToolbarButtonVisible(
       "claude" as AnyToolbarButtonId,
       { claude: false } as Record<AnyToolbarButtonId, boolean>,
-      { agents: { claude: { pinned: true } } } as never,
+      { claude: true },
       undefined
     );
     expect(visible).toBe(true);
@@ -91,7 +91,7 @@ describe("isToolbarButtonVisible", () => {
     const visible = isToolbarButtonVisible(
       "claude" as AnyToolbarButtonId,
       { claude: true } as Record<AnyToolbarButtonId, boolean>,
-      { agents: { claude: { pinned: false } } } as never,
+      { claude: false },
       undefined
     );
     expect(visible).toBe(false);

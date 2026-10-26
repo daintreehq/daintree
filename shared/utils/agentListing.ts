@@ -1,5 +1,5 @@
 import { isBuiltInAgentId, BUILT_IN_AGENT_IDS } from "../config/agentIds.js";
-import type { AgentSettings } from "../types/agentSettings.js";
+import { agentToolbarPin, type AgentToolbarPins } from "../types/ipc/agentToolbarPins.js";
 import type { AgentAvailabilityState } from "../types/ipc/system.js";
 import { isAgentInstalled, isAgentLaunchable } from "./agentAvailability.js";
 import { isAgentToolbarVisible } from "./agentPinned.js";
@@ -17,7 +17,8 @@ export function listedAgentIds(registry: Readonly<Record<string, unknown>>): str
 export interface AvailableAgentListingSources {
   registry: Readonly<Record<string, { name?: string } | undefined>>;
   userRegistry: Readonly<Record<string, unknown>>;
-  settings: AgentSettings | null | undefined;
+  /** The toolbar pins of the machine the answer describes (#14702). */
+  pins: Readonly<AgentToolbarPins> | null | undefined;
   availability: Readonly<Record<string, AgentAvailabilityState | undefined>>;
   /** Whether a live CLI probe has completed, rather than a cache hydrating. */
   availabilityLive: boolean;
@@ -45,7 +46,7 @@ export interface AvailableAgentListing {
 export function buildAvailableAgentListing({
   registry,
   userRegistry,
-  settings,
+  pins,
   availability,
   availabilityLive,
 }: AvailableAgentListingSources): AvailableAgentListing {
@@ -64,7 +65,7 @@ export function buildAvailableAgentListing({
       const rawState = availability[id];
       const probedState = availabilityLive ? rawState : undefined;
       const builtIn = isBuiltInAgentId(id);
-      const entry = builtIn ? settings?.agents?.[id] : undefined;
+      const pin = builtIn ? agentToolbarPin(pins, id) : undefined;
       return {
         id,
         displayName: registry[id]?.name ?? id,
@@ -80,8 +81,8 @@ export function buildAvailableAgentListing({
               launchable: isAgentLaunchable(probedState),
             }
           : {}),
-        ...(builtIn && typeof entry?.pinned === "boolean" ? { pinned: entry.pinned } : {}),
-        ...(builtIn ? { toolbarVisible: isAgentToolbarVisible(entry, rawState) } : {}),
+        ...(pin !== undefined ? { pinned: pin } : {}),
+        ...(builtIn ? { toolbarVisible: isAgentToolbarVisible(pin, rawState) } : {}),
       };
     }),
   };

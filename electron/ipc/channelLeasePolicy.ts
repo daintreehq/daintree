@@ -38,7 +38,6 @@ export const CHANNEL_LEASE_POLICY = {
   "agent-capabilities:get-ccr-presets": "free",
   "agent-capabilities:get-registry": "free",
   "agent-capabilities:get-resolved-model-list": "free",
-  "agent-capabilities:is-agent-enabled": "free",
   "agent-help:get": "free",
   "agent-defaults:changed": "free",
   "agent-defaults:get": "free",

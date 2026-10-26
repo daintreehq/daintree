@@ -1934,7 +1934,9 @@ describe("MigrationRunner", () => {
       expect(notif.waitingSoundFile).toBe("waiting.wav");
       expect(notif.soundFile).toBeUndefined();
 
-      // Migration 012: agents should have pinned field, no selected/enabled
+      // Migration 012 retires selected/enabled; 039 then moves the pins it
+      // wrote off the agents. This store predates `settingsVersion` 1, whose
+      // pins the renderer never showed, so none carry over (#14702).
       const migratedAgents = (store.data.agentSettings as Record<string, unknown>).agents as Record<
         string,
         Record<string, unknown>
@@ -1942,8 +1944,9 @@ describe("MigrationRunner", () => {
       for (const [, entry] of Object.entries(migratedAgents)) {
         expect(entry.selected).toBeUndefined();
         expect(entry.enabled).toBeUndefined();
-        expect(typeof entry.pinned).toBe("boolean");
+        expect("pinned" in entry).toBe(false);
       }
+      expect(store.data.agentToolbarPins).toEqual({});
 
       // Migration 019: orphaned fleet deck keys should be gone
       const migratedAppState = store.data.appState as Record<string, unknown>;
