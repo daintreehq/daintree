@@ -32,6 +32,12 @@ import { normalizeVoiceLanguage } from "../../../shared/config/voiceLanguages.js
 import { assembleKeyterms } from "../../services/voiceContextKeyterms.js";
 import { readProjectVoiceDictionary } from "../../services/projectVoiceDictionary.js";
 import {
+  flattenDictationNames,
+  gatherDictationNames,
+  NO_DICTATION_NAMES,
+  type DictationNames,
+} from "../../services/voiceContextNames.js";
+import {
   dictionaryTerms,
   sanitizeDictionary,
   sessionDictionary,
@@ -639,6 +645,10 @@ async function readVocabulary(projectId: string | null): Promise<VoiceDictionary
   }
 }
 
+// The names the latest dictation sent, so its end-of-passage correction spells
+// them the same way. Keyed by view: another view's names aren't this one's.
+let lastSessionNames: { webContentsId: number; names: string[] } | null = null;
+
 export function registerVoiceInputHandlers(deps: HandlerDependencies): () => void {
   const handleGetSettings = async () => {
     return getVoiceSettings();
@@ -912,19 +922,40 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // the session, so its reconnect path reuses it unchanged. Assembly is capped
     // internally (~500ms) and failures are non-fatal — we just start without
     // keyterms.
-    const keytermsPromise = assembleKeyterms({
-      customDictionary: dictionaryTerms(settings.dictionary),
-      projectDictionary: readVocabulary(
-        resolveVocabularyProject(session.projectId, terminalId, deps.ptyClient)
-      ).then(dictionaryTerms),
-      ...resolveKeytermTarget(session.projectId, terminalId, deps.ptyClient),
-      ptyClient: deps.ptyClient,
-    }).catch((err: unknown): string[] => {
-      logDebug("[VoiceInput] Keyterm assembly failed, starting without keyterms", {
-        ...voiceErrorLogFields(err),
+    const projectDictionary = readVocabulary(
+      resolveVocabularyProject(session.projectId, terminalId, deps.ptyClient)
+    ).then(dictionaryTerms);
+    const namesPromise: Promise<DictationNames> = Promise.race([
+      gatherDictationNames({
+        projectId: session.projectId,
+        terminalId,
+        ptyClient: deps.ptyClient,
+        worktreeService: deps.worktreeService,
+      }),
+      new Promise<DictationNames>((resolve) => {
+        setTimeout(() => resolve(NO_DICTATION_NAMES), 400).unref();
+      }),
+    ]);
+    const keytermsPromise = namesPromise
+      .then((names) => {
+        lastSessionNames = {
+          webContentsId: session.webContentsId,
+          names: flattenDictationNames(names),
+        };
+        return assembleKeyterms({
+          customDictionary: dictionaryTerms(settings.dictionary),
+          projectDictionary,
+          ...resolveKeytermTarget(session.projectId, terminalId, deps.ptyClient),
+          ptyClient: deps.ptyClient,
+          names,
+        });
+      })
+      .catch((err: unknown): string[] => {
+        logDebug("[VoiceInput] Keyterm assembly failed, starting without keyterms", {
+          ...voiceErrorLogFields(err),
+        });
+        return [];
       });
-      return [];
-    });
 
     const forwardEvent = (voiceEvent: VoiceSessionEvent) => {
       const target = session.sender;
@@ -1255,6 +1286,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         model: settings.correctionModel,
         apiKey: settings.openaiApiKey,
         customDictionary: dictionaryTerms(sessionDictionary(settings.dictionary, vocabulary)),
+        knownNames:
+          lastSessionNames?.webContentsId === ctx.webContentsId ? lastSessionNames.names : [],
         customInstructions: settings.correctionCustomInstructions,
         language: normalizeVoiceLanguage(settings.language),
         projectName: projectInfo.name,

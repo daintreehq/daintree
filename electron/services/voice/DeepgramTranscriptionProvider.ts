@@ -74,12 +74,12 @@ function isRetryableHttpStatus(statusCode: number | undefined): boolean {
 // Deepgram caps Nova-3 keyterms at 100 terms and 500 aggregate tokens. The
 // tokenizer is syllable-based (~5 tokens per single-word term), so the term
 // count alone doesn't bound tokens. We cap the URL injection well below both
-// ceilings — 50 terms is a 2x margin on the count, and a ~3000-char aggregate
+// ceilings — 62 terms is well inside the count, and a ~3000-char aggregate
 // guard backstops pathologically long terms before they blow the token budget.
-// This is deliberately tighter than the assembly-side MAX_KEYTERMS (50): that
+// This is deliberately tighter than the assembly-side MAX_KEYTERMS (62): that
 // constant governs how many terms to gather, this one governs how many survive
 // into the wire request.
-const MAX_DEEPGRAM_URL_KEYTERMS = 50;
+const MAX_DEEPGRAM_URL_KEYTERMS = 62;
 const MAX_DEEPGRAM_URL_KEYTERM_CHARS = 3_000;
 // Keyterms arrive dictionary-first, newest first, so a first rejection retries
 // with just the head of the list before the last resort of sending none.

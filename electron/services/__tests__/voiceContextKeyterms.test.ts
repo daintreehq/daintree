@@ -596,6 +596,49 @@ describe("assembleKeyterms", () => {
   });
 });
 
+describe("assembleKeyterms names", () => {
+  const assistantNames = {
+    hosts: ["Studio 1", "Studio 2"],
+    projects: ["Plugin SDK"],
+    worktrees: ["billing"],
+  };
+
+  it("sends host, project and worktree names whole, as spelled", async () => {
+    const result = await assembleKeyterms({ customDictionary: [], names: assistantNames });
+    expect(result).toEqual(["Studio 1", "Studio 2", "Plugin SDK", "billing"]);
+  });
+
+  it("puts names after the project name and before the branch", async () => {
+    const result = await assembleKeyterms({
+      customDictionary: [],
+      projectName: "Quartzline",
+      names: { hosts: [], projects: [], worktrees: ["billing"] },
+      terminalId: TARGET,
+      ptyClient: asPtyClient(makePtyClient()),
+    });
+    expect(result.indexOf("billing")).toBeGreaterThan(result.indexOf("Quartzline"));
+    expect(result.indexOf("billing")).toBeLessThan(result.indexOf("auth"));
+  });
+
+  it("keeps every dictionary term when names are present", async () => {
+    const dictionary = Array.from({ length: 80 }, (_, i) => `customTerm${i}`);
+    const result = await assembleKeyterms({ customDictionary: dictionary, names: assistantNames });
+    for (let i = 79; i > 79 - MAX_DICTIONARY_KEYTERMS; i--) {
+      expect(result).toContain(`customTerm${i}`);
+    }
+    expect(result).toContain("Studio 1");
+    expect(result.length).toBeLessThanOrEqual(MAX_KEYTERMS);
+  });
+
+  it("drops secret-shaped names", async () => {
+    const result = await assembleKeyterms({
+      customDictionary: [],
+      names: { hosts: ["sk-abcdefghijklmnopqrstuvwxyz0123456789"], projects: [], worktrees: [] },
+    });
+    expect(result).toEqual([]);
+  });
+});
+
 describe("formatKeytermPrompt", () => {
   it("joins terms into the OpenAI prompt string format", () => {
     expect(formatKeytermPrompt(["foo", "bar", "baz"])).toBe("Keywords: foo, bar, baz");

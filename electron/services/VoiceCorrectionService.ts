@@ -89,6 +89,7 @@ export interface VoiceCorrectionSettings {
   model: string;
   apiKey: string;
   customDictionary: string[];
+  knownNames?: string[];
   customInstructions?: string;
   language?: string;
   projectName?: string;
@@ -293,7 +294,14 @@ export class VoiceCorrectionService {
   private buildPromptCacheKey(settings: VoiceCorrectionSettings): string {
     const projectKey = settings.projectName ?? settings.projectPath ?? "global";
     const fingerprint = createHash("sha256")
-      .update(JSON.stringify([settings.model, projectKey, settings.customDictionary]))
+      .update(
+        JSON.stringify([
+          settings.model,
+          projectKey,
+          settings.customDictionary,
+          settings.knownNames ?? [],
+        ])
+      )
       .digest("hex")
       .slice(0, 32);
     return `${PROMPT_CACHE_PREFIX}:${fingerprint}`.slice(0, PROMPT_CACHE_KEY_MAX_LENGTH);
@@ -505,13 +513,21 @@ export class VoiceCorrectionService {
     request: VoiceCorrectionRequest,
     settings: VoiceCorrectionSettings
   ): Promise<Omit<VoiceCorrectionResult, "confirmedText">> {
-    const { model, customDictionary, customInstructions, projectName, projectPath, language } =
-      settings;
+    const {
+      model,
+      customDictionary,
+      knownNames,
+      customInstructions,
+      projectName,
+      projectPath,
+      language,
+    } = settings;
 
     const context: CorrectionPromptContext = {
       projectName,
       projectPath,
       customDictionary,
+      knownNames,
       customInstructions,
       language,
     };
