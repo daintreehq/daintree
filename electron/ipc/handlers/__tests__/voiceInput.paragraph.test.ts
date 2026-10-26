@@ -1196,7 +1196,7 @@ describe("voiceInput — context keyterms wiring", () => {
       dictionary: [{ term: "Zustand", heardAs: ["zoo stand"], source: "manual", addedAt: 1 }],
     };
     vi.mocked(store.get).mockReturnValue(settings);
-    const { assembleKeyterms } = await import("../../../services/voiceContextKeyterms.js");
+    const { assembleTaggedKeyterms } = await import("../../../services/voiceContextKeyterms.js");
 
     await startFn(fakeEvent, nextSessionId());
     emitTranscriptionEvent({ type: "complete", text: "add Zoo Stand to @zoo stand" });
@@ -1221,7 +1221,7 @@ describe("voiceInput — context keyterms wiring", () => {
       },
     ]);
     // A rule never keeps the written term from biasing the transcriber.
-    expect(vi.mocked(assembleKeyterms).mock.calls.at(-1)?.[0]).toMatchObject({
+    expect(vi.mocked(assembleTaggedKeyterms).mock.calls.at(-1)?.[0]).toMatchObject({
       customDictionary: ["Zustand"],
     });
   });

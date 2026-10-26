@@ -528,53 +528,58 @@ class VoiceRecordingService {
     );
 
     this.unsubscribers.push(
-      voiceInput.onTranscriptionComplete(({ sessionId, text, itemId, transcriptId, heard, send }) => {
-        logDebug(`${LOG_PREFIX} Received transcription complete`, { itemId, length: text.length });
-        const voiceState = useVoiceRecordingStore.getState();
-        const rewrite = voiceState.activeTarget?.rewrite;
-        if (rewrite) {
-          const finalText = text.trim();
-          if (finalText) rewrite.instruction.push(finalText);
-          useVoiceRecordingStore.getState().completeSegment(text, itemId);
-          return;
-        }
-        const panelId = voiceState.activeTarget?.panelId;
-        const projectId = voiceState.activeTarget?.projectId;
-        if (panelId) {
-          const buffer = voiceState.panelBuffers[panelId];
-          const finalText = text.trim();
-          // "Scratch that, send it" only scratches: the draft it leaves is one
-          // the user hasn't seen, and a spoken send fires with no key press.
-          if (finalText && isScratchCommand(finalText)) {
-            this.scratchLastUtterance(panelId, projectId, buffer?.dictationSessionId);
-            useVoiceRecordingStore.getState().completeSegment("", itemId, { discard: true });
+      voiceInput.onTranscriptionComplete(
+        ({ sessionId, text, itemId, transcriptId, heard, send }) => {
+          logDebug(`${LOG_PREFIX} Received transcription complete`, {
+            itemId,
+            length: text.length,
+          });
+          const voiceState = useVoiceRecordingStore.getState();
+          const rewrite = voiceState.activeTarget?.rewrite;
+          if (rewrite) {
+            const finalText = text.trim();
+            if (finalText) rewrite.instruction.push(finalText);
+            useVoiceRecordingStore.getState().completeSegment(text, itemId);
             return;
           }
-          if (finalText) {
-            const { words } = writeVoiceWords(
-              panelId,
-              projectId,
-              buffer?.dictationSessionId,
-              finalText,
-              transcriptId,
-              heard?.trim()
-            );
-            // A Deepgram span can finalise without any interim, so the session's
-            // first text may arrive here rather than in a delta.
-            useVoiceRecordingStore.getState().setSessionDraftStart(panelId, words.from);
-            if ((buffer?.activeParagraphStart ?? -1) < 0) {
-              useVoiceRecordingStore.getState().setActiveParagraphStart(panelId, words.from);
+          const panelId = voiceState.activeTarget?.panelId;
+          const projectId = voiceState.activeTarget?.projectId;
+          if (panelId) {
+            const buffer = voiceState.panelBuffers[panelId];
+            const finalText = text.trim();
+            // "Scratch that, send it" only scratches: the draft it leaves is one
+            // the user hasn't seen, and a spoken send fires with no key press.
+            if (finalText && isScratchCommand(finalText)) {
+              this.scratchLastUtterance(panelId, projectId, buffer?.dictationSessionId);
+              useVoiceRecordingStore.getState().completeSegment("", itemId, { discard: true });
+              return;
             }
-            const timeline = this.timelines.get(sessionId);
-            timeline?.addCommitted(finalText.length);
-            timeline?.markNextFrame("firstText");
+            if (finalText) {
+              const { words } = writeVoiceWords(
+                panelId,
+                projectId,
+                buffer?.dictationSessionId,
+                finalText,
+                transcriptId,
+                heard?.trim()
+              );
+              // A Deepgram span can finalise without any interim, so the session's
+              // first text may arrive here rather than in a delta.
+              useVoiceRecordingStore.getState().setSessionDraftStart(panelId, words.from);
+              if ((buffer?.activeParagraphStart ?? -1) < 0) {
+                useVoiceRecordingStore.getState().setActiveParagraphStart(panelId, words.from);
+              }
+              const timeline = this.timelines.get(sessionId);
+              timeline?.addCommitted(finalText.length);
+              timeline?.markNextFrame("firstText");
+            }
           }
+          useVoiceRecordingStore.getState().completeSegment(text, itemId);
+          // After completeSegment, so the command's own preview is already retired
+          // and a stop that preserves live text can't put it back.
+          if (send && panelId) this.handleSpokenSend(panelId, projectId);
         }
-        useVoiceRecordingStore.getState().completeSegment(text, itemId);
-        // After completeSegment, so the command's own preview is already retired
-        // and a stop that preserves live text can't put it back.
-        if (send && panelId) this.handleSpokenSend(panelId, projectId);
-      })
+      )
     );
 
     this.unsubscribers.push(
