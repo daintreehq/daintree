@@ -22,7 +22,7 @@ import { activatePortalTab, showPortalTabIfNoOverlay } from "../portalHelpers";
 import { registerPortalActions } from "../portalActions";
 
 const BOUNDS = { x: 0, y: 0, width: 800, height: 600 };
-const showMock = vi.fn(async () => ({}));
+const showMock = vi.fn<(payload: unknown) => Promise<unknown>>(async () => ({}));
 const createMock = vi.fn(async () => ({}));
 const hideMock = vi.fn(async () => ({}));
 const setActiveTabMock = vi.fn();
@@ -95,6 +95,52 @@ describe("activatePortalTab overlay guard", () => {
     expect(createMock).toHaveBeenCalledOnce();
     expect(markTabCreatedMock).toHaveBeenCalledWith("tab-1");
     expect(showMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("activatePortalTab with a tab main released (#14537)", () => {
+  const unmarkTabCreatedMock = vi.fn();
+  const tabs = [{ id: "tab-1", url: "https://example.com/latest", partition: "persist:p" }];
+  const stateWith = (created: string[]) => ({
+    isOpen: true,
+    tabs,
+    createdTabs: new Set(created),
+    setActiveTab: setActiveTabMock,
+    markTabCreated: markTabCreatedMock,
+    unmarkTabCreated: unmarkTabCreatedMock,
+  });
+
+  it("creates a tab whose eviction notice landed during the bounds wait", async () => {
+    portalStoreMock.getState.mockReturnValueOnce(stateWith(["tab-1"]));
+    portalStoreMock.getState.mockReturnValue(stateWith([]));
+
+    await activatePortalTab("tab-1");
+
+    expect(createMock).toHaveBeenCalledWith({
+      tabId: "tab-1",
+      url: "https://example.com/latest",
+      partition: "persist:p",
+    });
+    expect(showMock).toHaveBeenCalledWith({ tabId: "tab-1", bounds: BOUNDS });
+  });
+
+  it("hands a tab main no longer holds back for recreation instead of leaving it blank", async () => {
+    portalStoreMock.getState.mockReturnValue(stateWith(["tab-1"]));
+    showMock.mockResolvedValueOnce(false);
+
+    await activatePortalTab("tab-1");
+
+    expect(createMock).not.toHaveBeenCalled();
+    expect(unmarkTabCreatedMock).toHaveBeenCalledWith("tab-1");
+  });
+
+  it("leaves a shown tab marked created", async () => {
+    portalStoreMock.getState.mockReturnValue(stateWith(["tab-1"]));
+    showMock.mockResolvedValueOnce(true);
+
+    await activatePortalTab("tab-1");
+
+    expect(unmarkTabCreatedMock).not.toHaveBeenCalled();
   });
 });
 

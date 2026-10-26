@@ -1062,3 +1062,147 @@ describe("PortalManager destroyHiddenTabs()", () => {
     expect(manager.hasTab("tab-only")).toBe(true);
   });
 });
+
+describe("PortalManager across project views (#14537)", () => {
+  let PortalManagerClass: typeof import("../PortalManager.js").PortalManager;
+  let PORTAL_MAX_LIVE_TABS: number;
+  let mockWindow: InstanceType<typeof import("electron").BrowserWindow>;
+  const frontView = { id: 1, send: vi.fn(), isDestroyed: () => false };
+  const cachedView = { id: 2, send: vi.fn(), isDestroyed: () => false };
+
+  const sentOn = (wc: { send: ReturnType<typeof vi.fn> }, channel: string) =>
+    wc.send.mock.calls.filter(([ch]) => ch === channel).map(([, payload]) => payload);
+
+  const handlerFor = (wc: ReturnType<typeof createMockWebContents>, event: string) => {
+    const calls = [...wc.on.mock.calls, ...wc.once.mock.calls] as Array<
+      [string, (...args: unknown[]) => void]
+    >;
+    return calls.find(([name]) => name === event)![1];
+  };
+
+  beforeEach(async () => {
+    createdWebContents.length = 0;
+    vi.resetModules();
+    vi.doMock("../../window/webContentsRegistry.js", () => ({
+      getAppWebContents: () => frontView,
+      getWindowAppWebContents: () => [frontView, cachedView],
+    }));
+
+    const electron = await import("electron");
+    mockWindow = new electron.BrowserWindow() as InstanceType<typeof electron.BrowserWindow>;
+
+    const module = await import("../PortalManager.js");
+    PortalManagerClass = module.PortalManager;
+    PORTAL_MAX_LIVE_TABS = module.PORTAL_MAX_LIVE_TABS;
+  });
+
+  afterEach(() => {
+    vi.doUnmock("../../window/webContentsRegistry.js");
+    vi.clearAllMocks();
+  });
+
+  it("tells a cached project view when LRU eviction takes one of its tabs", () => {
+    const manager = new PortalManagerClass(mockWindow);
+    for (let i = 1; i <= PORTAL_MAX_LIVE_TABS + 1; i++) {
+      manager.createTab(`tab-${i}`, `http://localhost:${1000 + i}`);
+    }
+
+    expect(sentOn(cachedView, "portal:tab-evicted")).toEqual([{ tabId: "tab-1" }]);
+    expect(sentOn(frontView, "portal:tab-evicted")).toEqual([{ tabId: "tab-1" }]);
+  });
+
+  it("tells a cached project view when memory pressure takes its tabs, before the flush ends", async () => {
+    const manager = new PortalManagerClass(mockWindow);
+    manager.createTab("tab-1", "http://localhost:3000");
+    manager.createTab("tab-2", "http://localhost:3001");
+    manager.showTab("tab-2", { x: 0, y: 0, width: 800, height: 600 });
+    let finishFlush!: () => void;
+    createdWebContents[0].session.flushStorageData.mockReturnValue(
+      new Promise<void>((resolve) => {
+        finishFlush = resolve;
+      })
+    );
+
+    const sweep = manager.destroyHiddenTabs();
+
+    expect(sentOn(cachedView, "portal:tabs-evicted")).toEqual([{ tabIds: ["tab-1"] }]);
+    expect(sentOn(frontView, "portal:tabs-evicted")).toEqual([{ tabIds: ["tab-1"] }]);
+    finishFlush();
+    await sweep;
+  });
+
+  it("announces nothing when memory pressure takes no tabs", async () => {
+    const manager = new PortalManagerClass(mockWindow);
+    manager.createTab("tab-1", "http://localhost:3000");
+    manager.showTab("tab-1", { x: 0, y: 0, width: 800, height: 600 });
+
+    await manager.destroyHiddenTabs();
+
+    expect(sentOn(cachedView, "portal:tabs-evicted")).toEqual([]);
+  });
+
+  it("keeps a cached project view's tab URL current", () => {
+    const manager = new PortalManagerClass(mockWindow);
+    manager.createTab("tab-1", "http://localhost:3000");
+
+    handlerFor(createdWebContents[0], "did-navigate")({}, "http://localhost:3000/next");
+
+    expect(sentOn(cachedView, "portal:nav-event")).toEqual([
+      { tabId: "tab-1", title: "Test Page", url: "http://localhost:3000/next" },
+    ]);
+  });
+
+  it("drops navigation from a released view once its tab is recreated", async () => {
+    const manager = new PortalManagerClass(mockWindow);
+    manager.createTab("tab-1", "http://localhost:3000");
+    const oldView = createdWebContents[0];
+    await manager.closeTab("tab-1");
+    manager.createTab("tab-1", "http://localhost:3000/new");
+
+    handlerFor(oldView, "did-navigate")({}, "http://localhost:3000/stale");
+    handlerFor(createdWebContents[1], "did-navigate")({}, "http://localhost:3000/new");
+
+    expect(sentOn(cachedView, "portal:nav-event")).toEqual([
+      { tabId: "tab-1", title: "Test Page", url: "http://localhost:3000/new" },
+    ]);
+  });
+
+  it("spares a tab between its create and its show from memory pressure", async () => {
+    const manager = new PortalManagerClass(mockWindow);
+    manager.createTab("tab-1", "http://localhost:3000");
+    manager.showTab("tab-1", { x: 0, y: 0, width: 800, height: 600 });
+    manager.markRestoring("tab-2");
+    manager.createTab("tab-2", "http://localhost:3001");
+
+    const destroyed = await manager.destroyHiddenTabs();
+
+    expect(destroyed).toEqual([]);
+    expect(manager.hasTab("tab-2")).toBe(true);
+  });
+
+  it("reports whether it had a view to show", () => {
+    const manager = new PortalManagerClass(mockWindow);
+    const bounds = { x: 0, y: 0, width: 800, height: 600 };
+    manager.createTab("tab-1", "http://localhost:3000");
+
+    expect(manager.showTab("tab-1", bounds)).toBe(true);
+    expect(manager.showTab("tab-gone", bounds)).toBe(false);
+  });
+
+  it("keeps a tab recreated while its old view is still shutting down", async () => {
+    const manager = new PortalManagerClass(mockWindow);
+    const bounds = { x: 0, y: 0, width: 800, height: 600 };
+    manager.createTab("tab-1", "http://localhost:3000");
+    manager.showTab("tab-1", bounds);
+    const oldView = createdWebContents[0];
+
+    await manager.closeTab("tab-1");
+    manager.createTab("tab-1", "http://localhost:3000");
+    manager.showTab("tab-1", bounds);
+    handlerFor(oldView, "destroyed")();
+
+    expect(manager.hasTab("tab-1")).toBe(true);
+    expect(manager.getActiveTabId()).toBe("tab-1");
+    expect(manager.showTab("tab-1", bounds)).toBe(true);
+  });
+});

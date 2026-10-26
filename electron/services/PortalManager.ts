@@ -3,7 +3,7 @@ import type { PortalBounds, PortalNavEvent } from "../../shared/types/portal.js"
 import { isSafeNavigationUrl } from "../../shared/utils/urlUtils.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { canOpenExternalUrl, openExternalUrl } from "../utils/openExternal.js";
-import { getAppWebContents } from "../window/webContentsRegistry.js";
+import { getAppWebContents, getWindowAppWebContents } from "../window/webContentsRegistry.js";
 import { unthrottleCpuWebContents } from "../utils/webContentsLifecycle.js";
 import { getFocusedPanelTracker } from "./FocusedPanelTracker.js";
 import { findPortalPageAction } from "./menuAccelerators.js";
@@ -77,6 +77,20 @@ export class PortalManager {
     }
   }
 
+  // Every project view in the window keeps its own record of which tabs main
+  // holds and at which URL, so tab lifecycle notices go to all of them, not
+  // just the one in front (#14537).
+  private sendToWindowViews(channel: string, ...args: unknown[]): void {
+    if (this.window?.isDestroyed()) return;
+    for (const wc of getWindowAppWebContents(this.window)) {
+      try {
+        wc.send(channel, ...args);
+      } catch {
+        // Silently ignore send failures during window disposal.
+      }
+    }
+  }
+
   private touchLru(tabId: string): void {
     this.lruOrder.delete(tabId);
     this.lruOrder.set(tabId, true);
@@ -140,7 +154,7 @@ export class PortalManager {
       // Fire-and-forget: eviction is synchronous caller path, flush is best-effort
       void this.destroyView(tabId);
 
-      this.sendToApp(CHANNELS.PORTAL_TAB_EVICTED, { tabId });
+      this.sendToWindowViews(CHANNELS.PORTAL_TAB_EVICTED, { tabId });
       break;
     }
   }
@@ -200,7 +214,10 @@ export class PortalManager {
       });
 
       const sendNavEvent = (navEvent: PortalNavEvent) => {
-        this.sendToApp(CHANNELS.PORTAL_NAV_EVENT, navEvent);
+        // A released view still loading through its storage flush must not
+        // overwrite the URL of the tab recreated under its id.
+        if (this.viewMap.get(tabId) !== view) return;
+        this.sendToWindowViews(CHANNELS.PORTAL_NAV_EVENT, navEvent);
       };
 
       view.webContents.on("page-title-updated", (_, title) => {
@@ -228,11 +245,17 @@ export class PortalManager {
       });
 
       view.webContents.once("destroyed", () => {
-        this.setTabFocused(tabId, false);
-        this.viewMap.delete(tabId);
-        this.lruOrder.delete(tabId);
-        this.lastShownBounds.delete(tabId);
-        this.restoringTabIds.delete(tabId);
+        // A view closed by destroyView() only fires this after its storage
+        // flush, by which time the tab may have been created again under the
+        // same id. That state belongs to the new view.
+        const current = this.viewMap.get(tabId);
+        if (current === undefined || current === view) {
+          this.setTabFocused(tabId, false);
+          this.viewMap.delete(tabId);
+          this.lruOrder.delete(tabId);
+          this.lastShownBounds.delete(tabId);
+          this.restoringTabIds.delete(tabId);
+        }
         // Detach if attached — covers both the active view and any view parked
         // offscreen via hideAll().
         if (this.attachedViews.has(view)) {
@@ -243,7 +266,7 @@ export class PortalManager {
           }
           this.attachedViews.delete(view);
         }
-        if (this.activeTabId === tabId) {
+        if (this.activeView === view) {
           this.activeView = null;
           this.activeTabId = null;
           this.hidden = false;
@@ -403,10 +426,14 @@ export class PortalManager {
     }
   }
 
-  showTab(tabId: string, bounds: PortalBounds): void {
+  /**
+   * Returns false when main holds no view for the tab, so the renderer can
+   * recreate it instead of leaving the pane blank.
+   */
+  showTab(tabId: string, bounds: PortalBounds): boolean {
     console.log(`[PortalManager] Showing tab ${tabId}`, bounds);
     const view = this.viewMap.get(tabId);
-    if (!view) return;
+    if (!view) return false;
 
     // Park the previously-active view offscreen instead of detaching it —
     // keeps its renderer state (scroll, in-flight requests, sockets) alive.
@@ -445,6 +472,7 @@ export class PortalManager {
     this.touchLru(tabId);
     this.evictIfNeeded();
     this.lastShownTabId = tabId;
+    return true;
   }
 
   private validateBounds(bounds: PortalBounds): {
@@ -560,10 +588,15 @@ export class PortalManager {
     const destroyed: string[] = [];
     for (const tabId of [...this.viewMap.keys()]) {
       if (tabId === skipId) continue;
+      // A tab between its create and its show is about to be the visible one.
+      if (this.restoringTabIds.has(tabId)) continue;
       destroyed.push(tabId);
     }
     if (destroyed.length > 0) {
-      await Promise.allSettled(destroyed.map((tabId) => this.destroyView(tabId)));
+      const closed = Promise.allSettled(destroyed.map((tabId) => this.destroyView(tabId)));
+      // destroyView() drops the tabs synchronously; say so before the flushes.
+      this.sendToWindowViews(CHANNELS.PORTAL_TABS_EVICTED, { tabIds: destroyed });
+      await closed;
       console.log(
         `[PortalManager] Destroyed ${destroyed.length} hidden tab(s) for memory pressure`
       );

@@ -2,7 +2,16 @@ import { useEffect, useRef, useCallback } from "react";
 import { usePortalStore } from "@/store";
 import { useUIStore } from "@/store/uiStore";
 import { getPortalPlaceholderBounds } from "@/lib/portalBounds";
+import { getAIAgentInfo } from "@/lib/aiAgentDetection";
+import { isProjectViewCached } from "@/lib/viewCacheState";
+import { useProjectViewRevealed } from "@/hooks/useProjectViewRevealed";
 import { logError } from "@/utils/logger";
+
+interface PendingRestore {
+  tabId: string;
+  tabUrl: string;
+  retried: boolean;
+}
 
 /**
  * Zero-UI controller component that manages portal visibility.
@@ -10,6 +19,7 @@ import { logError } from "@/utils/logger";
  * - Overlays open/close (modal dialogs, etc.)
  * - Portal is collapsed and re-expanded
  * - App starts up with persisted tabs (auto-creates backend views)
+ * - Main releases the active tab, here or while this project view was cached
  */
 export function PortalVisibilityController(): null {
   const portalOpen = usePortalStore((state) => state.isOpen);
@@ -20,17 +30,21 @@ export function PortalVisibilityController(): null {
   const overlayStackLength = useUIStore((state) => state.overlayStack.length);
   const hasOverlays = overlayStackLength > 0;
   const isRestoringRef = useRef(false);
-  const pendingRestoreRef = useRef<{ tabId: string; tabUrl: string } | null>(null);
+  const pendingRestoreRef = useRef<PendingRestore | null>(null);
   const isMountedRef = useRef(true);
 
   const prevHasOverlaysRef = useRef(hasOverlays);
   const prevPortalOpenRef = useRef(portalOpen);
   const prevActiveTabIdRef = useRef(activeTabId);
+  const prevCreatedTabsRef = useRef(createdTabs);
 
   const ensureTabAndRestore = useCallback(
-    async (tabId: string, tabUrl: string) => {
+    async (tabId: string, tabUrl: string, retried = false) => {
+      // A cached view showing a tab would put it over the project in front.
+      // Its reveal catches up instead.
+      if (isProjectViewCached()) return;
       if (isRestoringRef.current) {
-        pendingRestoreRef.current = { tabId, tabUrl };
+        pendingRestoreRef.current = { tabId, tabUrl, retried };
         return;
       }
       isRestoringRef.current = true;
@@ -63,7 +77,7 @@ export function PortalVisibilityController(): null {
         while (!bounds && attempts < 20) {
           await new Promise((resolve) => setTimeout(resolve, 50));
           if (!isMountedRef.current) break;
-          const pending = pendingRestoreRef.current as { tabId: string; tabUrl: string } | null;
+          const pending = pendingRestoreRef.current as PendingRestore | null;
           if (pending && pending.tabId !== tabId) break;
           bounds = getBounds();
           attempts++;
@@ -84,12 +98,27 @@ export function PortalVisibilityController(): null {
           isRestoringRef.current = false;
           return;
         }
-        if (uiState.overlayStack.length > 0) {
+        if (uiState.overlayStack.length > 0 || isProjectViewCached()) {
           isRestoringRef.current = false;
           return;
         }
 
-        await window.electron.portal.show({ tabId, bounds });
+        const shown = await window.electron.portal.show({ tabId, bounds });
+        if (shown === false) {
+          // Main released the tab after createdTabs said it held it, or between
+          // our create and this show. Unmarking an already-created tab hands it
+          // to the released-tab effect below; one we just created gets a single
+          // retry here, at its latest URL.
+          if (needsCreation) {
+            const latestUrl = usePortalStore.getState().tabs.find((t) => t.id === tabId)?.url;
+            if (!retried && latestUrl && !pendingRestoreRef.current) {
+              pendingRestoreRef.current = { tabId, tabUrl: latestUrl, retried: true };
+            }
+          } else {
+            usePortalStore.getState().unmarkTabCreated(tabId);
+          }
+          return;
+        }
 
         // Mark created only after the full create + show pipeline completes so
         // PortalDock can derive `isTabRestoring = !createdTabs.has(activeTabId)`
@@ -104,15 +133,53 @@ export function PortalVisibilityController(): null {
         logError("Failed to restore tab", error);
       } finally {
         isRestoringRef.current = false;
-        const pending = pendingRestoreRef.current as { tabId: string; tabUrl: string } | null;
+        const pending = pendingRestoreRef.current as PendingRestore | null;
         if (pending && isMountedRef.current) {
           pendingRestoreRef.current = null;
-          void ensureTabAndRestore(pending.tabId, pending.tabUrl);
+          void ensureTabAndRestore(pending.tabId, pending.tabUrl, pending.retried);
         }
       }
     },
     [markTabCreated]
   );
+
+  // Bring the active tab back when main no longer holds it. Main reaches every
+  // project view with its eviction notices, so a cached view learns about the
+  // loss while hidden and restores on its way back to the front (#14537).
+  const restoreActiveTabIfReleased = useCallback(() => {
+    const state = usePortalStore.getState();
+    const tabId = state.activeTabId;
+    if (!state.isOpen || !tabId || state.createdTabs.has(tabId)) return;
+    if (useUIStore.getState().overlayStack.length > 0) return;
+    const tab = state.tabs.find((t) => t.id === tabId);
+    if (tab?.url) void ensureTabAndRestore(tabId, tab.url);
+  }, [ensureTabAndRestore]);
+
+  useProjectViewRevealed(restoreActiveTabIfReleased);
+
+  // The selected tab dropping out of createdTabs changes nothing the other
+  // effects watch, so the pane would sit blank or on its skeleton.
+  useEffect(() => {
+    const prevCreatedTabs = prevCreatedTabsRef.current;
+    prevCreatedTabsRef.current = createdTabs;
+    if (!activeTabId || !prevCreatedTabs.has(activeTabId) || createdTabs.has(activeTabId)) return;
+    restoreActiveTabIfReleased();
+  }, [activeTabId, createdTabs, restoreActiveTabIfReleased]);
+
+  // Navigation is tracked here rather than in the dock, which unmounts when
+  // collapsed, so a released tab comes back at the page's latest URL.
+  useEffect(() => {
+    return window.electron.portal.onNavEvent((data) => {
+      const store = usePortalStore.getState();
+      if (!store.tabs.some((t) => t.id === data.tabId)) return;
+      const agentInfo = getAIAgentInfo(data.url);
+      store.updateTabTitle(data.tabId, agentInfo?.title ?? data.title);
+      store.updateTabUrl(data.tabId, data.url);
+      if (agentInfo?.icon) {
+        store.updateTabIcon(data.tabId, agentInfo.icon);
+      }
+    });
+  }, []);
 
   useEffect(() => {
     return window.electron.portal.onTabEvicted(({ tabId }) => {
@@ -167,7 +234,10 @@ export function PortalVisibilityController(): null {
     const wasHiddenByOverlay = prevHasOverlaysRef.current;
     prevHasOverlaysRef.current = hasOverlays;
 
+    // The portal is window-wide: a cached view rerunning this (its tabs change
+    // on navigation notices) would hide the front project's tab.
     if (hasOverlays && portalOpen) {
+      if (isProjectViewCached()) return;
       window.electron.portal.hide();
     } else if (!hasOverlays && wasHiddenByOverlay && portalOpen && activeTabId) {
       const activeTab = tabs.find((t) => t.id === activeTabId);

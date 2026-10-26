@@ -807,12 +807,7 @@ export async function initGlobalServices(
                 try {
                   if (wCtx.services.portalManager) {
                     const evictedTabIds = await wCtx.services.portalManager.destroyHiddenTabs();
-                    if (evictedTabIds.length > 0) {
-                      tabsEvicted += evictedTabIds.length;
-                      sendToRenderer(wCtx.browserWindow, CHANNELS.PORTAL_TABS_EVICTED, {
-                        tabIds: evictedTabIds,
-                      });
-                    }
+                    tabsEvicted += evictedTabIds.length;
                   }
                 } catch {
                   /* non-critical */

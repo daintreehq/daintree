@@ -3032,7 +3032,7 @@ export interface GeneratedIpcInvokeMap {
   };
   "portal:show": {
     args: [payload: import("../portal.js").PortalShowPayload];
-    result: void;
+    result: boolean;
   };
   "privacy:clear-cache": {
     args: [];
