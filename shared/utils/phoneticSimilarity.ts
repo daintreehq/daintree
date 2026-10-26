@@ -391,9 +391,27 @@ function diffRuns(before: string[], after: string[], previous: string | undefine
     current = open(j);
     endsRecased = false;
   };
-  // A token that isn't a match never joins a run that ends on a recased term.
-  const extend = (j: number) => {
-    if (endsRecased) flush(j);
+  // Whether the unmatched gap starting at (i, j) replaces tokens with others,
+  // rather than only adding or only dropping some.
+  const gapSubstitutes = (i: number, j: number) => {
+    let dropped = false;
+    let added = false;
+    while ((i < m || j < n) && !(i < m && j < n && a[i] === b[j])) {
+      if (j >= n || (i < m && dp[i + 1]![j]! >= dp[i]![j + 1]!)) {
+        dropped = true;
+        i++;
+      } else {
+        added = true;
+        j++;
+      }
+    }
+    return dropped && added;
+  };
+  // A recased term keeps the substitution after it (react quarry → React
+  // Query), but not words merely typed or dropped after it.
+  const extend = (i: number, j: number) => {
+    if (endsRecased && !gapSubstitutes(i, j)) flush(j);
+    endsRecased = false;
   };
 
   let i = 0;
@@ -411,16 +429,16 @@ function diffRuns(before: string[], after: string[], previous: string | undefine
       i++;
       j++;
     } else if (dp[i + 1]![j]! >= dp[i]![j + 1]!) {
-      extend(j);
+      extend(i, j);
       current.before.push(before[i]!);
       i++;
     } else {
-      extend(j);
+      extend(i, j);
       current.after.push(after[j]!);
       j++;
     }
   }
-  if (i < m || j < n) extend(j);
+  if (i < m || j < n) extend(i, j);
   while (i < m) current.before.push(before[i++]!);
   while (j < n) current.after.push(after[j++]!);
   flush(n);

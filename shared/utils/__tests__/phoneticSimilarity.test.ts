@@ -215,6 +215,12 @@ describe("findCorrectionCandidates: rewording versus mishearing (#14645)", () =>
     ).toEqual(["Zustand"]);
   });
 
+  it("keeps a substitution after a recased term in the same term", () => {
+    expect(findCorrectionCandidates("check react quarry now", "check React Query now")).toEqual([
+      { word: "React Query", original: "react quarry" },
+    ]);
+  });
+
   it("does not take a capital the dictation already had as the user's", () => {
     expect(findCorrectionCandidates("check the Modal first", "check the Model first")).toEqual([]);
   });
