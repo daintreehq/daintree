@@ -35,7 +35,7 @@ vi.mock("../hostOps.js", () => ({
 }));
 
 import { CHANNELS } from "../../../ipc/channels.js";
-import { installHostMetricsClient, type HostNotice, type NoticeWindow } from "../clientInstall.js";
+import { installHostMetricsClient, type HostNotice } from "../clientInstall.js";
 
 interface FakeWindow {
   windowId: number;
@@ -74,7 +74,7 @@ const EVENT: HostAttentionEvent = {
 
 let viewHosts: Map<number, string>;
 let hosts: Set<string>;
-let openHostForNotice: Mock<(window: NoticeWindow | null, notice: HostNotice) => Promise<unknown>>;
+let openHostForNotice: Mock<(window: number | null, notice: HostNotice) => Promise<unknown>>;
 let dispose: () => void;
 
 function install(): void {
@@ -102,7 +102,7 @@ beforeEach(() => {
   mocks.focusOrder = [];
   viewHosts = new Map();
   hosts = new Set(["build-box"]);
-  openHostForNotice = vi.fn(async (_window: NoticeWindow | null, _notice: HostNotice) => ({
+  openHostForNotice = vi.fn(async (_window: number | null, _notice: HostNotice) => ({
     outcome: "switched",
   }));
   install();
@@ -186,14 +186,11 @@ describe("installHostMetricsClient banner click", () => {
     first.browserWindow.isDestroyed = () => true;
     mocks.focusOrder = [first, fakeWindow(2, 12)];
     clickBanner();
-    expect(openHostForNotice).toHaveBeenCalledWith(
-      { windowId: 2, viewId: 12 },
-      {
-        hostId: "build-box",
-        projectId: "p1",
-        terminalId: "t1",
-      }
-    );
+    expect(openHostForNotice).toHaveBeenCalledWith(2, {
+      hostId: "build-box",
+      projectId: "p1",
+      terminalId: "t1",
+    });
   });
 
   it("switches to the host for a notice with no project id, in a new window when none is open", () => {

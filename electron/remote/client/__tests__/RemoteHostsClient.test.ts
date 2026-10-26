@@ -1107,12 +1107,16 @@ describe("RemoteHostsClient", () => {
 
   describe("a click on a banner about a host's agent", () => {
     const notice = { hostId: "studio-01", projectId: "proj-1", terminalId: "term-1" };
-    const onScreen = { windowId: 1, viewId: 5 };
+
+    beforeEach(() => {
+      // Each window's view on screen: a project's, or a new window's welcome view.
+      windows.appViewId = vi.fn((windowId: number) => ({ 1: 5, 7: 70 })[windowId] ?? null);
+    });
 
     it("brings the window forward and opens the notice's project there with the agent's pane focused", async () => {
       const revealWindow = vi.fn();
       windows.revealWindow = revealWindow;
-      await expect(client.openHostForNotice(onScreen, notice)).resolves.toEqual({
+      await expect(client.openHostForNotice(1, notice)).resolves.toEqual({
         outcome: "switched",
         hostId: "studio-01",
         projectId: "proj-1",
@@ -1133,7 +1137,7 @@ describe("RemoteHostsClient", () => {
       expect(bindings.get(1)).toBe("studio-01");
     });
 
-    it("opens it in a new window when none is open", async () => {
+    it("opens it in a new window when none is open, its welcome view standing in to report", async () => {
       windows.revealWindow = vi.fn();
       await client.openHostForNotice(null, notice);
       expect(windows.openWindow).toHaveBeenCalledTimes(1);
@@ -1143,7 +1147,8 @@ describe("RemoteHostsClient", () => {
         "studio-01",
         "proj-1",
         "/srv/proj-1",
-        expect.objectContaining({ panelId: "term-1" })
+        expect.objectContaining({ panelId: "term-1" }),
+        { requesterWebContentsId: 70 }
       );
       expect(bindings.get(7)).toBe("studio-01");
     });
@@ -1152,10 +1157,7 @@ describe("RemoteHostsClient", () => {
       let opened!: (windowId: number) => void;
       windows.openWindow = vi.fn(() => new Promise<number>((resolve) => (opened = resolve)));
       const first = client.openHostForNotice(null, notice);
-      const second = client.openHostForNotice(
-        { windowId: 7, viewId: null },
-        { ...notice, projectId: "proj-2" }
-      );
+      const second = client.openHostForNotice(7, { ...notice, projectId: "proj-2" });
       opened(7);
       await expect(first).resolves.toEqual({ outcome: "superseded", hostId: "studio-01" });
       await expect(second).resolves.toMatchObject({ outcome: "switched", projectId: "proj-2" });
@@ -1164,7 +1166,7 @@ describe("RemoteHostsClient", () => {
 
     it("keeps a failure on the window's switch screen, as a switch the person asked for does", async () => {
       manager.connect("studio-01").whenReady.mockResolvedValueOnce("timeout");
-      const error = await client.openHostForNotice(onScreen, notice).then(
+      const error = await client.openHostForNotice(1, notice).then(
         () => null,
         (failure: unknown) => failure
       );
@@ -1179,9 +1181,7 @@ describe("RemoteHostsClient", () => {
 
     it("returns to the project this machine last had open there for a notice that named none", async () => {
       manager.last = { projectId: "proj-2", path: "/srv/proj-2", name: "proj-2" };
-      await expect(
-        client.openHostForNotice(onScreen, { ...notice, projectId: null })
-      ).resolves.toEqual({
+      await expect(client.openHostForNotice(1, { ...notice, projectId: null })).resolves.toEqual({
         outcome: "switched",
         hostId: "studio-01",
         projectId: "proj-2",
@@ -1199,7 +1199,7 @@ describe("RemoteHostsClient", () => {
     it("offers the host's project list in the window when there is nothing to return to", async () => {
       windows.notifyWindow = vi.fn();
       const projectless = { ...notice, projectId: null };
-      await expect(client.openHostForNotice(onScreen, projectless)).resolves.toEqual({
+      await expect(client.openHostForNotice(1, projectless)).resolves.toEqual({
         outcome: "choose-project",
         hostId: "studio-01",
       });
@@ -1210,7 +1210,7 @@ describe("RemoteHostsClient", () => {
       expect(client.takeProjectOffer(ctxFor(5, 1))).toBeNull();
 
       // A second click watches the window for its close once, not again.
-      await client.openHostForNotice(onScreen, projectless);
+      await client.openHostForNotice(1, projectless);
       const watches = vi.mocked(windows.watchWindow).mock.calls.filter(([id]) => id === 1);
       expect(watches).toHaveLength(1);
       watches[0][1]();

@@ -601,14 +601,13 @@ describe("startRemoteHosts", () => {
       { openHostForNotice(window: unknown, notice: unknown): Promise<unknown> },
     ];
     const notice = { hostId: "studio-01", projectId: null, terminalId: "t1" };
-    const window = { windowId: 3, viewId: 30 };
     const result = { outcome: "switched" };
     m.client.client.openHostForNotice.mockResolvedValueOnce(result);
-    await expect(options.openHostForNotice(window, notice)).resolves.toBe(result);
-    expect(m.client.client.openHostForNotice).toHaveBeenCalledWith(window, notice);
+    await expect(options.openHostForNotice(3, notice)).resolves.toBe(result);
+    expect(m.client.client.openHostForNotice).toHaveBeenCalledWith(3, notice);
     // A failed switch reaches the banner's click handler, which logs it.
     m.client.client.openHostForNotice.mockRejectedValueOnce(new Error("unreachable"));
-    await expect(options.openHostForNotice(window, notice)).rejects.toThrow("unreachable");
+    await expect(options.openHostForNotice(3, notice)).rejects.toThrow("unreachable");
   });
 
   it("installs host control from start, reading each host's switch live", async () => {

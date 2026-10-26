@@ -172,6 +172,8 @@ export interface WindowControl {
   showsHost?(windowId: number, hostId: HostId): boolean;
   /** Whether a view is on screen in a window (or still leaving it), not parked in its cache. */
   showsView?(windowId: number, webContentsId: number): boolean;
+  /** The view a window is showing, its project's or its welcome view, or null. */
+  appViewId?(windowId: number): number | null;
   /**
    * Tell a window's view, if it is up, that it has a host's project list to
    * offer ({@link RemoteHostsClient.takeProjectOffer}). A view still loading
@@ -821,14 +823,16 @@ export class RemoteHostsClient {
    * rollback to it is reported once, on that screen.
    */
   async openHostForNotice(
-    window: { windowId: number; viewId: number | null } | null,
+    windowId: number | null,
     notice: { hostId: HostId; projectId: string | null; terminalId: string }
   ): Promise<SwitchWindowHostResult> {
     const { hostId, projectId, terminalId } = notice;
-    const target = window?.windowId ?? (await this.options.windows.openWindow());
+    const target = windowId ?? (await this.options.windows.openWindow());
     // A click that found this window while it was opening is newer, and has it.
-    if (window === null && this.switchTickets.has(target)) return { outcome: "superseded", hostId };
+    if (windowId === null && this.switchTickets.has(target))
+      return { outcome: "superseded", hostId };
     this.options.windows.revealWindow?.(target);
+    const requesterWebContentsId = this.options.windows.appViewId?.(target) ?? null;
     const result = await this.switchWindow(
       target,
       projectId === null
@@ -842,7 +846,7 @@ export class RemoteHostsClient {
       undefined,
       {
         failureOnScreen: true,
-        ...(window?.viewId != null ? { requesterWebContentsId: window.viewId } : {}),
+        ...(requesterWebContentsId === null ? {} : { requesterWebContentsId }),
       }
     );
     if (result.outcome === "choose-project") {
