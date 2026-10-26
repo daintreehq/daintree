@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "fs/promises";
 import path from "path";
 import { render, fireEvent } from "@testing-library/react";
@@ -67,6 +67,10 @@ describe("VoiceRecordingToolbarButton — tooltip names what a click does", () =
   beforeEach(() => {
     focusActiveTarget.mockClear();
     mockCombo = undefined;
+    useVoiceRecordingStore.setState({ pendingTarget: null });
+  });
+
+  afterEach(() => {
     useVoiceRecordingStore.setState({ pendingTarget: null });
   });
 

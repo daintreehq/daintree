@@ -8,7 +8,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const runtime = vi.hoisted(() => ({
   drafts: {} as Record<string, string>,
   panelState: {
-    panelsById: {} as Record<string, { id: string; title: string; location: string }>,
+    panelsById: {} as Record<
+      string,
+      { id: string; title: string; location: string; launchAgentId?: string }
+    >,
     panelIds: [] as string[],
     focusedId: null as string | null,
     activateTerminal: vi.fn(),
@@ -25,8 +28,13 @@ vi.mock("@/store/terminalInputStore", () => {
     }),
     bumpExternalDraftRevision: vi.fn(),
   };
-  const getState = () => fns;
+  const getState = () => ({ ...fns, hybridInputEnabled: true });
   return { useTerminalInputStore: Object.assign(getState, { getState }) };
+});
+
+vi.mock("@/store/fleetArmingStore", () => {
+  const getState = () => ({ armedIds: new Set<string>() });
+  return { useFleetArmingStore: Object.assign(getState, { getState }) };
 });
 
 vi.mock("@/store/panelStore", () => {
@@ -138,10 +146,11 @@ function stubEnvironment(recordingMode: "toggle" | "push-to-talk") {
       }
     ),
     onError: vi.fn(() => () => {}),
-    onStatus: vi.fn((cb: (status: string) => void) => {
-      callbacks.status = cb;
+    onStatus: vi.fn((cb: (payload: { sessionId: string; status: string }) => void) => {
+      callbacks.status = (status) => cb({ sessionId: "", status });
       return () => {};
     }),
+    onSessionEnded: vi.fn(() => () => {}),
     getSettings: vi.fn().mockResolvedValue({
       enabled: true,
       openaiApiKey: "sk-key",
@@ -151,10 +160,10 @@ function stubEnvironment(recordingMode: "toggle" | "push-to-talk") {
     checkMicPermission: vi.fn().mockResolvedValue("granted"),
     requestMicPermission: vi.fn().mockResolvedValue(true),
     openMicSettings: vi.fn().mockResolvedValue(undefined),
-    sendAudioChunk: vi.fn((chunk: ArrayBuffer) => {
+    sendAudioChunk: vi.fn((_sessionId: string, chunk: ArrayBuffer) => {
       sentChunks.push(chunk);
     }),
-    start: vi.fn().mockResolvedValue({ ok: true }),
+    start: vi.fn().mockResolvedValue({ status: "started" }),
     // Each remote stop drains until the test releases it.
     stop: vi.fn(() => {
       const drain = deferred();
@@ -191,6 +200,7 @@ function stubEnvironment(recordingMode: "toggle" | "push-to-talk") {
         tracks.push(track);
         return { getTracks: () => [track], getAudioTracks: () => [track] };
       }),
+      enumerateDevices: vi.fn(async () => []),
     },
   });
   vi.stubGlobal("AudioContext", function () {
@@ -262,10 +272,7 @@ async function setup(recordingMode: "toggle" | "push-to-talk" = "toggle") {
   const release = (code = "Period") => {
     for (const listener of runtime.windowListeners["keyup"] ?? []) listener({ code });
   };
-  const escape = () => {
-    const event = { key: "Escape", preventDefault: vi.fn(), stopPropagation: vi.fn() };
-    for (const listener of runtime.windowListeners["keydown"] ?? []) listener(event);
-  };
+  const escape = () => voiceRecordingService.handleEscape();
   // Records each new capture's audio and returns the chunks it was fed.
   const speak = (captureIndex: number, count = 2) => {
     const chunks = Array.from({ length: count }, speech);
@@ -298,8 +305,8 @@ describe("VoiceRecordingService — starting while a session finishes (#14604)",
     vi.resetModules();
     runtime.drafts = {};
     runtime.panelState.panelsById = {
-      "panel-a": { id: "panel-a", title: "Panel A", location: "grid" },
-      "panel-b": { id: "panel-b", title: "Panel B", location: "grid" },
+      "panel-a": { id: "panel-a", title: "Panel A", location: "grid", launchAgentId: "claude" },
+      "panel-b": { id: "panel-b", title: "Panel B", location: "grid", launchAgentId: "claude" },
     };
     runtime.panelState.panelIds = ["panel-a", "panel-b"];
     runtime.panelState.focusedId = "panel-a";
@@ -464,7 +471,7 @@ describe("VoiceRecordingService — starting while a session finishes (#14604)",
   it("keeps a push-to-talk hold released before its backend has connected", async () => {
     const { voiceRecordingService, voiceInput, store, drains, sentChunks, press, release, speak } =
       await setup("push-to-talk");
-    let connect!: (result: { ok: boolean }) => void;
+    let connect!: (result: { status: string; error?: string }) => void;
     voiceInput.start.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
@@ -481,7 +488,7 @@ describe("VoiceRecordingService — starting while a session finishes (#14604)",
     speak(0);
     expect(drains).toHaveLength(0);
 
-    connect({ ok: true });
+    connect({ status: "started" });
 
     await vi.waitFor(() => expect(drains).toHaveLength(1));
     expect(sentChunks).toEqual(utterance);
@@ -652,7 +659,7 @@ describe("VoiceRecordingService — starting while a session finishes (#14604)",
   it("reports a backend failure after a stopped start and lets the next one through", async () => {
     const { voiceRecordingService, voiceInput, store, drains, sentChunks, press, release, speak } =
       await setup("push-to-talk");
-    let connect!: (result: { ok: boolean; error?: string }) => void;
+    let connect!: (result: { status: string; error?: string }) => void;
     voiceInput.start.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
@@ -665,7 +672,7 @@ describe("VoiceRecordingService — starting while a session finishes (#14604)",
     await vi.waitFor(() => expect(voiceInput.start).toHaveBeenCalledTimes(1));
     speak(0);
     release();
-    connect({ ok: false, error: "Voice backend unavailable." });
+    connect({ status: "failed", error: "Voice backend unavailable." });
     await hold;
 
     expect(sentChunks).toEqual([]);
@@ -682,7 +689,7 @@ describe("VoiceRecordingService — starting while a session finishes (#14604)",
   it("treats a window blur mid-hold like a release that keeps the queued speech", async () => {
     const { voiceRecordingService, voiceInput, drains, sentChunks, press, blur, speak } =
       await setup("push-to-talk");
-    let connect!: (result: { ok: boolean }) => void;
+    let connect!: (result: { status: string; error?: string }) => void;
     voiceInput.start.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
@@ -696,7 +703,7 @@ describe("VoiceRecordingService — starting while a session finishes (#14604)",
     const utterance = speak(0);
     blur();
     speak(0);
-    connect({ ok: true });
+    connect({ status: "started" });
 
     await vi.waitFor(() => expect(drains).toHaveLength(1));
     expect(sentChunks).toEqual(utterance);
