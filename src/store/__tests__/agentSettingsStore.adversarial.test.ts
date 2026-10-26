@@ -874,9 +874,7 @@ describe("applySaved (#14700)", () => {
 
   it("still reports a failed save that a saved change overtook, and keeps that change", async () => {
     let rejectSave: (error: Error) => void = () => {};
-    clientMock.set.mockImplementationOnce(
-      () => new Promise((_, reject) => (rejectSave = reject))
-    );
+    clientMock.set.mockImplementationOnce(() => new Promise((_, reject) => (rejectSave = reject)));
     useAgentSettingsStore.getState().applySaved({ settingsVersion: 3, agents: {} } as never);
     const save = useAgentSettingsStore.getState().updateAgent("claude", { customFlags: "--mine" });
 

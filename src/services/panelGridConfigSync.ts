@@ -2,7 +2,11 @@ import type { PanelGridConfig } from "@shared/types";
 import { appClient } from "@/clients/appClient";
 import { useLayoutConfigStore } from "@/store/layoutConfigStore";
 
-const STRATEGIES = new Set<PanelGridConfig["strategy"]>(["automatic", "fixed-columns", "fixed-rows"]);
+const STRATEGIES = new Set<PanelGridConfig["strategy"]>([
+  "automatic",
+  "fixed-columns",
+  "fixed-rows",
+]);
 
 function isPanelGridConfig(value: unknown): value is PanelGridConfig {
   if (!value || typeof value !== "object") return false;

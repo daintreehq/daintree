@@ -44,10 +44,7 @@ import { useResourceProfileStore } from "@/store/resourceProfileStore";
 import type { AgentPreset } from "@/config/agents";
 import type { HydrationBatchToken } from "@/store/slices/panelRegistry/types";
 import { applyBootTerminalConfig, beginTerminalConfigRead } from "@/services/terminalConfigSync";
-import {
-  applyBootPanelGridConfig,
-  beginPanelGridConfigRead,
-} from "@/services/panelGridConfigSync";
+import { applyBootPanelGridConfig, beginPanelGridConfigRead } from "@/services/panelGridConfigSync";
 import { ensureHydrationBootstrap } from "./bootstrapGuard";
 import { dispatchRecoveryNotifications } from "./recoveryNotifications";
 import { scheduleScrollbackRestore } from "./scrollbackRestoreScheduler";

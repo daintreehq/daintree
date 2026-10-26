@@ -475,16 +475,19 @@ describe("agent settings change broadcast (#14700)", () => {
     ["stampVersion", CHANNELS.AGENT_SETTINGS_STAMP_VERSION, 99],
   ];
 
-  it.each(writes)("%s tells every view what was saved, after the write", async (_name, channel, arg) => {
-    await getInvokeHandler(channel)({} as never, arg as never);
+  it.each(writes)(
+    "%s tells every view what was saved, after the write",
+    async (_name, channel, arg) => {
+      await getInvokeHandler(channel)({} as never, arg as never);
 
-    const changed = broadcastToRendererMock.mock.calls.filter(
-      ([sent]) => sent === CHANNELS.AGENT_SETTINGS_CHANGED
-    );
-    expect(changed).toEqual([[CHANNELS.AGENT_SETTINGS_CHANGED, saved]]);
-    const broadcastOrder = broadcastToRendererMock.mock.invocationCallOrder[0]!;
-    expect(Math.max(...storeMock.set.mock.invocationCallOrder)).toBeLessThan(broadcastOrder);
-  });
+      const changed = broadcastToRendererMock.mock.calls.filter(
+        ([sent]) => sent === CHANNELS.AGENT_SETTINGS_CHANGED
+      );
+      expect(changed).toEqual([[CHANNELS.AGENT_SETTINGS_CHANGED, saved]]);
+      const broadcastOrder = broadcastToRendererMock.mock.invocationCallOrder[0]!;
+      expect(Math.max(...storeMock.set.mock.invocationCallOrder)).toBeLessThan(broadcastOrder);
+    }
+  );
 
   it("stays quiet when nothing was written", async () => {
     storeMock.get.mockImplementation(() => ({ ...saved, settingsVersion: 5 }) as never);
