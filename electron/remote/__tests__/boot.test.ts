@@ -159,6 +159,8 @@ const m = vi.hoisted(() => {
     installHostFileService: vi.fn(),
     attachHostFiles: vi.fn(),
     admitHybridHostLegs: vi.fn(() => vi.fn()),
+    installNotificationPolicyPush: vi.fn(() => vi.fn()),
+    installNotificationPolicyHost: vi.fn(() => vi.fn()),
     acceptLocalPushForRemoteView: vi.fn((channel: string) => channel === "shell:ok"),
     uninstallViewRequests: vi.fn(),
     uninstallWorktreeRedelivery: vi.fn(),
@@ -310,6 +312,8 @@ vi.mock("../../services/mcp-server/driveTarget.js", () => ({
 vi.mock("../hybrid/index.js", () => ({
   installHybridSplits: m.installHybridSplits,
   admitHybridHostLegs: m.admitHybridHostLegs,
+  installNotificationPolicyPush: m.installNotificationPolicyPush,
+  installNotificationPolicyHost: m.installNotificationPolicyHost,
   acceptLocalPushForRemoteView: m.acceptLocalPushForRemoteView,
   ViewVisibilityReporter: vi.fn(function ViewVisibilityReporter() {
     return m.visibility;
