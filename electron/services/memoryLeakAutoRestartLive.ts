@@ -42,14 +42,14 @@ function pickTarget(projectId: string): MemoryLeakRestartTarget {
   const local = endpoint.kind === "local-view" ? webContents.fromId(endpoint.handle) : undefined;
   return {
     kind: "view",
-    deliver: (payload) => {
+    deliver: (payload, isCurrent) => {
       if (!local || local.isDestroyed()) {
         send(payload);
         return;
       }
       thawThenSend(
         local,
-        () => !endpoint.isClosed(),
+        () => !endpoint.isClosed() && isCurrent(),
         () => send(payload)
       );
     },

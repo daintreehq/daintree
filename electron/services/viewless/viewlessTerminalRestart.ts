@@ -13,7 +13,7 @@ import type { ViewlessDeps } from "./ViewlessActionExecutor.js";
 
 /** Why a restart with no view did not run, or that it did. */
 export type ViewlessRestartOutcome =
-  "restarted" | "gone" | "unsupported" | "waiting" | "input-locked" | "failed";
+  "restarted" | "gone" | "unsupported" | "stale" | "waiting" | "failed";
 
 /**
  * Restart one terminal of a project no frontend is attached to (#14703): the
