@@ -456,7 +456,24 @@ describe("voiceInput — spoken file references", () => {
     expect(fileReferences()).toEqual([]);
   });
 
-  it("abandons an older session's references when a newer start supersedes it", async () => {
+  it("abandons an older session's references when its own view starts a newer one", async () => {
+    await start(owner, "a");
+    const detection = deferred<Detected>();
+    shared.detect.mockReturnValueOnce(detection.promise);
+    shared.resolve.mockResolvedValue("src/router.ts");
+
+    emitComplete("Link to the router.");
+    await vi.waitFor(() => expect(shared.detect).toHaveBeenCalledOnce());
+    await start(owner, "b");
+    expect(shared.detect.mock.calls[0]![2]!.aborted).toBe(true);
+    detection.resolve([{ description: "router" }]);
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(fileReferences()).toEqual([]);
+    expect(shared.currentView.sent).toEqual([]);
+  });
+
+  it("delivers an older session's references to its own view when another view's start supersedes it", async () => {
     const other = makeSender();
     await start(owner, "a");
     const detection = deferred<Detected>();
@@ -465,13 +482,31 @@ describe("voiceInput — spoken file references", () => {
 
     emitComplete("Link to the router.");
     await vi.waitFor(() => expect(shared.detect).toHaveBeenCalledOnce());
-    await start(other, "b");
-    expect(shared.detect.mock.calls[0]![2]!.aborted).toBe(true);
-    detection.resolve([{ description: "router" }]);
-    await new Promise((r) => setTimeout(r, 0));
+    let started = false;
+    const starting = start(other, "b").then(() => {
+      started = true;
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    // The newer provider waits for the drain, which includes these references.
+    expect(started).toBe(false);
+    expect(shared.providerSessionId).toBe("a");
+    expect(shared.detect.mock.calls[0]![2]!.aborted).toBe(false);
 
-    expect(fileReferences()).toEqual([]);
+    detection.resolve([{ description: "router" }]);
+    await starting;
+
+    expect(fileReferences()).toEqual([
+      expect.objectContaining({
+        sessionId: "a",
+        references: [{ description: "router", path: "src/router.ts" }],
+      }),
+    ]);
+    expect(owner.sent.map((m) => m.payload)).toContainEqual({
+      sessionId: "a",
+      reason: "superseded",
+    });
     expect(fileReferences(other)).toEqual([]);
     expect(shared.currentView.sent).toEqual([]);
+    expect(shared.providerSessionId).toBe("b");
   });
 });
