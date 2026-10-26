@@ -1,6 +1,10 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook } from "@testing-library/react";
+import { EditorState } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
+import { undoDepth } from "@codemirror/commands";
+import { createComposerHistory } from "../../inputEditorExtensions/composerHistory";
 import { useFleetMirror } from "../useFleetMirror";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
@@ -100,6 +104,22 @@ describe("useFleetMirror", () => {
   it("clears resolution preview when not primary or disabled", () => {
     render({ isFleetPrimary: false, disabled: false } as any);
     expect(clear).toHaveBeenCalled();
+  });
+
+  it("follower takes the primary's draft without making it, or its own past edits, undoable", () => {
+    const view = new EditorView({
+      parent: document.createElement("div"),
+      state: EditorState.create({ doc: "", extensions: [createComposerHistory()] }),
+    });
+    view.dispatch({ changes: { from: 0, insert: "mine" }, userEvent: "input.type" });
+    editorViewRef.current = view;
+    vi.mocked(useTerminalInputStore).mockImplementation(() => "driver text" as any);
+
+    render({ isFleetFollower: true, value: "mine" } as any);
+
+    expect(view.state.doc.toString()).toBe("driver text");
+    expect(undoDepth(view.state)).toBe(0);
+    view.destroy();
   });
 
   it("clears resolution preview when primary but disabled", () => {

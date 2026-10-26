@@ -346,6 +346,36 @@ describe("VoiceRecordingService — dictation ranges (#14597)", () => {
     expect(record.range.edited).toBe(true);
   });
 
+  it("hands a correction that swapped the passage to the composer, and only that", async () => {
+    const { service, voiceStore, draft } = await setup("Intro.");
+    const { takeLandedCorrection } = await import("../voiceCorrectionLanding");
+    voiceStore.getState().setCorrectionEnabled(true);
+
+    let resolveCorrection!: (value: unknown) => void;
+    correct.fn.mockReturnValueOnce(new Promise((resolve) => (resolveCorrection = resolve)));
+    complete("Hello there.", "item-a");
+    await service.stop("Dictation stopped.");
+    expect(voiceStore.getState().panelBuffers[PANEL]?.correctionRange).not.toBeNull();
+    resolveCorrection({ action: "replace", correctedText: "Hello there." });
+    // The pending range clears in the same step that would swap the text.
+    await vi.waitFor(() =>
+      expect(voiceStore.getState().panelBuffers[PANEL]?.correctionRange).toBeNull()
+    );
+    expect(takeLandedCorrection(PANEL, draft())).toBeNull();
+
+    voiceStore.getState().beginSession({ panelId: PANEL, projectId: PROJECT });
+    correct.fn.mockResolvedValueOnce({ action: "replace", correctedText: "Hello, again." });
+    complete("hello again", "item-b");
+    await service.stop("Dictation stopped.");
+    await vi.waitFor(() => expect(draft()).toBe("Intro. Hello there. Hello, again."));
+
+    expect(takeLandedCorrection(PANEL, draft())).toEqual({
+      from: "Intro. Hello there. ".length,
+      rawText: "hello again",
+      correctedText: "Hello, again.",
+    });
+  });
+
   it("keeps a session's ranges after the stop and beside the next session's", async () => {
     const { service, begin, records, textOf, sessionId } = await setup();
 
