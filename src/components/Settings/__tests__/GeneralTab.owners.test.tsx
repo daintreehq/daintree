@@ -10,21 +10,32 @@ vi.mock("@/lib/platform", async (importOriginal) => ({
 
 vi.mock("@/lib/utils", () => ({ cn: (...args: unknown[]) => args.filter(Boolean).join(" ") }));
 
-vi.mock("../SettingsSection", () => ({
-  SettingsSection: ({
-    children,
-    title,
-    badge,
-  }: {
-    children: React.ReactNode;
-    title: string;
-    badge?: string;
-  }) => (
-    <section data-section={title} data-badge={badge ?? ""}>
-      {children}
-    </section>
-  ),
-}));
+vi.mock("../SettingsSection", async () => {
+  const { joinBadges, useSettingsOwnerMarker } = await import("@/hooks/useSettingsOwner");
+  return {
+    SettingsSection: ({
+      children,
+      title,
+      badge,
+      settings,
+    }: {
+      children: React.ReactNode;
+      title: string;
+      badge?: string;
+      settings?: readonly import("@/hooks/useSettingsOwner").SettingRef[];
+    }) => {
+      const ownerMarker = useSettingsOwnerMarker();
+      return (
+        <section
+          data-section={title}
+          data-badge={joinBadges(badge, settings ? ownerMarker(...settings) : undefined) ?? ""}
+        >
+          {children}
+        </section>
+      );
+    },
+  };
+});
 
 vi.mock("../SettingsSubtabBar", () => ({
   SettingsSubtabBar: () => null,
