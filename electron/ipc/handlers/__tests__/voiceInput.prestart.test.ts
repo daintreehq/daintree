@@ -67,6 +67,7 @@ vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
       shared.calls.push(`chunk:${new Uint8Array(chunk)[0]}`);
     };
     this.stopGracefully = function () {
+      shared.calls.push("stopGracefully");
       return Promise.resolve();
     };
     this.stop = function () {
@@ -277,19 +278,54 @@ describe("voiceInput — audio sent before the provider starts", () => {
     expect(shared.calls).toEqual(["start", "chunk:1", "chunk:2", "chunk:3", "chunk:4"]);
   });
 
-  it("discards held audio when a stop lands before the provider starts", async () => {
+  it("drains held audio when a stop lands before the provider starts", async () => {
     const resolveKeyterms = deferKeyterms();
     const pending = start();
     sendChunk(1);
+    sendChunk(2);
+    const stopping = stop();
+    await vi.waitFor(() => expect(shared.eventCallback).not.toBeNull());
+    expect(shared.calls).toEqual([]);
+
+    resolveKeyterms([]);
+    await expect(pending).resolves.toEqual({ ok: true });
+    await stopping;
+    // The provider gets the audio before the stop, so its stop-before-ready
+    // path can transcribe it once connected.
+    expect(shared.calls).toEqual(["start", "chunk:1", "chunk:2", "stopGracefully"]);
+
+    // The next session must not replay the stopped session's audio.
+    shared.calls = [];
+    const next = start();
+    sendChunk(3);
+    await expect(next).resolves.toEqual({ ok: true });
+    expect(shared.calls).toEqual(["start", "chunk:3"]);
+  });
+
+  it("cancels a start without opening a provider when a stop lands before any audio", async () => {
+    const resolveKeyterms = deferKeyterms();
+    const pending = start();
     await stop();
     resolveKeyterms([]);
     await expect(pending).resolves.toEqual({ ok: false, error: "Voice session superseded" });
+    expect(shared.calls).not.toContain("start");
+  });
 
-    // The next session must not replay the cancelled session's audio.
+  it("leaves a newer start alone when it supersedes a start a stop is draining", async () => {
+    const resolveFirst = deferKeyterms();
+    const first = start();
+    sendChunk(1);
+    const stopping = stop();
+    await vi.waitFor(() => expect(shared.eventCallback).not.toBeNull());
+
     shared.assembleKeyterms = null;
-    const next = start();
+    const second = start();
     sendChunk(2);
-    await expect(next).resolves.toEqual({ ok: true });
+    resolveFirst([]);
+
+    await expect(first).resolves.toEqual({ ok: false, error: "Voice session superseded" });
+    await expect(second).resolves.toEqual({ ok: true });
+    await stopping;
     expect(shared.calls).toEqual(["start", "chunk:2"]);
   });
 
@@ -515,7 +551,7 @@ describe("voiceInput — audio sent before the provider starts", () => {
 
     await stop();
     sendChunk(10);
-    expect(shared.calls).toEqual(["chunk:9"]);
+    expect(shared.calls.filter((c) => c.startsWith("chunk:"))).toEqual(["chunk:9"]);
   });
 });
 

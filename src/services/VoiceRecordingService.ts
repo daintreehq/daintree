@@ -104,9 +104,15 @@ function isSpecificDeviceId(deviceId: string): boolean {
   return deviceId !== "" && deviceId !== "default" && deviceId !== "communications";
 }
 
-// ~15s of 100ms PCM chunks. Covers a retarget drain plus a slow backend
-// connect; past it the oldest audio is dropped rather than failing the session.
+// ~15s of 100ms PCM chunks, held only until the backend start is requested
+// (a retarget drain can take that long); past it the oldest audio is dropped
+// rather than failing the session.
 const MAX_QUEUED_CHUNKS = 150;
+
+// How long a stop waits for the worklet to hand over its partial chunk. Port
+// messages are answered within a render quantum, even while the context is
+// suspended, so this only guards a worklet that can no longer reply.
+const WORKLET_FLUSH_TIMEOUT_MS = 250;
 
 /**
  * How long a send waits for a dictated passage's correction before it goes
@@ -159,8 +165,9 @@ interface CaptureAttempt {
   keepAliveGain: GainNode | null;
   stream: MediaStream | null;
   workletNode: AudioWorkletNode | null;
-  // PCM captured before the backend session is ready, flushed in order once it
-  // is. `null` once chunks forward live, or after the attempt is discarded.
+  // PCM captured before the backend start is requested, sent in order the
+  // moment it is. `null` once chunks forward live, or after the attempt is
+  // discarded.
   queue: ArrayBuffer[] | null;
   droppedChunks: number;
   deviceId: string | null;
@@ -187,6 +194,8 @@ class VoiceRecordingService {
   // drain with the new microphone already recording into its queue.
   private pendingCapture: CaptureAttempt | null = null;
   private workletNode: AudioWorkletNode | null = null;
+  // A stop waiting for this worklet's "flushed" marker.
+  private pendingWorkletFlush: { node: AudioWorkletNode; resolve: () => void } | null = null;
   private keepAliveOscillator: OscillatorNode | null = null;
   private keepAliveGain: GainNode | null = null;
   private stream: MediaStream | null = null;
@@ -451,6 +460,12 @@ class VoiceRecordingService {
           // ("error") still flow through; "idle" is handled below.
           const isBenignBackendTick = status === "recording" || status === "reconnecting";
           if (prevStatus === "paused" && isBenignBackendTick) {
+            return;
+          }
+          // A stop that landed before the backend was ready drains a provider
+          // that is still coming up; its start-up ticks must not pull the UI
+          // back out of "finishing".
+          if (this.isStoppingSession && (status === "connecting" || isBenignBackendTick)) {
             return;
           }
           useVoiceRecordingStore.getState().setStatus(status);
@@ -1238,7 +1253,13 @@ class VoiceRecordingService {
       const source = audioContext.createMediaStreamSource(stream);
       workletNode = new AudioWorkletNode(audioContext, "pcm-processor");
       capture.workletNode = workletNode;
-      workletNode.port.onmessage = (event: MessageEvent<ArrayBuffer>) => {
+      workletNode.port.onmessage = (event: MessageEvent<ArrayBuffer | { type: "flushed" }>) => {
+        if (!(event.data instanceof ArrayBuffer)) {
+          if (event.data?.type === "flushed" && this.pendingWorkletFlush?.node === workletNode) {
+            this.pendingWorkletFlush.resolve();
+          }
+          return;
+        }
         if (sessionGeneration !== null && this.generation !== sessionGeneration) return;
         // Measured on arrival, held or not, so the timings show when audio
         // actually reached the renderer. Read before sendAudioChunk() hands
@@ -1360,12 +1381,13 @@ class VoiceRecordingService {
       this.startMicSilenceTimer(generation, startRequestId, micSilenceGraceMs);
     }
 
-    // Connect in parallel — audio keeps queueing until the backend is ready.
-    // Chunks can't go out earlier: main only swaps in this session's provider
-    // once its own async setup finishes, so anything sent before start()
-    // resolves could land on the previous provider or be dropped.
+    // The start request goes out before any held chunk: main arms its
+    // pre-start buffer for this session synchronously on receipt, and a send
+    // issued after the invoke reaches main after it. From here every chunk
+    // streams to main, which holds it until the provider exists, so a stop
+    // before the backend is ready still has the audio to transcribe.
     logDebug(`${LOG_PREFIX} Calling voiceInput.start() IPC`);
-    const result = await window.electron.voiceInput
+    const started = window.electron.voiceInput
       .start(sessionId, { terminalId: target.panelId })
       .then(
         (outcome) =>
@@ -1380,39 +1402,6 @@ class VoiceRecordingService {
           error: formatErrorMessage(error, "Voice input failed to start."),
         })
       );
-    logDebug(`${LOG_PREFIX} voiceInput.start() returned`, { ok: result.ok });
-    logStep("backend_start", { ok: result.ok });
-
-    if (this.generation !== generation || this.isStartRequestStale(startRequestId)) {
-      logWarn(`${LOG_PREFIX} Generation mismatch after IPC start`);
-      this.clearMicSilenceTimerFor(generation, startRequestId);
-      capture.queue = null;
-      this.flushOpeningAudio(openingAudio);
-      await this.cleanupCaptureResources({
-        audioContext,
-        keepAliveGain: capture.keepAliveGain,
-        keepAliveOscillator: capture.keepAliveOscillator,
-        stream,
-        workletNode,
-      });
-      return;
-    }
-
-    if (!result.ok) {
-      logError(`${LOG_PREFIX} Backend start failed`);
-      capture.queue = null;
-      this.flushOpeningAudio(openingAudio);
-      await this.cleanupAudioCapture();
-      // A newer start may have taken over while the teardown awaited.
-      if (this.generation !== generation || this.isStartRequestStale(startRequestId)) return;
-      useVoiceRecordingStore
-        .getState()
-        .setLastError({ severity: "fatal", code: "backend_start_failed", message: result.error });
-      useVoiceRecordingStore.getState().finishSession({ nextStatus: "error" });
-      useVoiceRecordingStore.getState().announce("Voice dictation failed to start.");
-      this.reportStartFailure("Dictation didn't start", result.error, this.settingsAction());
-      return;
-    }
 
     // Flush synchronously, oldest first, so no live chunk can interleave.
     const queued = capture.queue ?? [];
@@ -1428,6 +1417,43 @@ class VoiceRecordingService {
       chunks: queued.length,
       droppedChunks: capture.droppedChunks,
     });
+
+    const result = await started;
+    logDebug(`${LOG_PREFIX} voiceInput.start() returned`, { ok: result.ok });
+    logStep("backend_start", { ok: result.ok });
+
+    if (this.generation !== generation || this.isStartRequestStale(startRequestId)) {
+      logWarn(`${LOG_PREFIX} Generation mismatch after IPC start`);
+      this.clearMicSilenceTimerFor(generation, startRequestId);
+      this.flushOpeningAudio(openingAudio);
+      // A stop in progress owns the promoted capture, and may still be draining
+      // the worklet through the handler this cleanup would detach.
+      if (!this.stopPromise) {
+        await this.cleanupCaptureResources({
+          audioContext,
+          keepAliveGain: capture.keepAliveGain,
+          keepAliveOscillator: capture.keepAliveOscillator,
+          stream,
+          workletNode,
+        });
+      }
+      return;
+    }
+
+    if (!result.ok) {
+      logError(`${LOG_PREFIX} Backend start failed`);
+      this.flushOpeningAudio(openingAudio);
+      await this.cleanupAudioCapture();
+      // A newer start may have taken over while the teardown awaited.
+      if (this.generation !== generation || this.isStartRequestStale(startRequestId)) return;
+      useVoiceRecordingStore
+        .getState()
+        .setLastError({ severity: "fatal", code: "backend_start_failed", message: result.error });
+      useVoiceRecordingStore.getState().finishSession({ nextStatus: "error" });
+      useVoiceRecordingStore.getState().announce("Voice dictation failed to start.");
+      this.reportStartFailure("Dictation didn't start", result.error, this.settingsAction());
+      return;
+    }
 
     // Backend is connected — status transitions to "recording" via the onStatus listener.
     logDebug(`${LOG_PREFIX} Recording started successfully`);
@@ -1521,6 +1547,18 @@ class VoiceRecordingService {
         hasActiveTarget: !!storeState.activeTarget,
       });
 
+      this.clearTimers();
+      if (!skipRemoteStop) {
+        // Finishing from here: backend errors and start-up ticks that land
+        // while the tail drains belong to the session being stopped.
+        this.isStoppingSession = true;
+        useVoiceRecordingStore.getState().setStatus("finishing");
+        // Have the worklet hand over its partial chunk and forward every chunk
+        // still in flight. The generation isn't bumped until after, so those
+        // chunks still reach main ahead of the remote stop.
+        await this.flushCapturedAudio();
+      }
+
       // A session shorter than the opening window still reports what it had.
       if (this.openingAudio) this.flushOpeningAudio(this.openingAudio);
 
@@ -1537,10 +1575,7 @@ class VoiceRecordingService {
         logWarn(`${LOG_PREFIX} Session produced zero audio chunks`);
       }
 
-      // Stop audio capture immediately — no new audio after this point.
-      // DON'T increment generation yet so in-flight worklet messages still
-      // get forwarded to the main process before the drain.
-      this.clearTimers();
+      // Stop audio capture — no new audio after this point.
       await this.cleanupAudioCapture();
       this.generation++;
 
@@ -1549,8 +1584,6 @@ class VoiceRecordingService {
         // the paragraph buffer before resolving. Keep activeTarget alive so late
         // transcription and correction events are still applied to the correct panel.
         logDebug(`${LOG_PREFIX} Sending remote stop (graceful drain)`);
-        this.isStoppingSession = true;
-        useVoiceRecordingStore.getState().setStatus("finishing");
         // No promoted session means main never heard of one from this view.
         if (stopSessionId) {
           await window.electron.voiceInput.stop(stopSessionId).catch(() => null);
@@ -2566,6 +2599,34 @@ class VoiceRecordingService {
     void this.stop("Dictation stopped because the microphone was lost.", {
       preserveLiveText: true,
     });
+  }
+
+  /**
+   * Ask the worklet for the partial chunk it is still filling and wait for its
+   * "flushed" marker. Port messages arrive in order, so once the marker lands
+   * every chunk the worklet posted has been through onmessage and sent.
+   */
+  private async flushCapturedAudio(): Promise<void> {
+    const node = this.workletNode;
+    if (!node) return;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    const flushed = new Promise<boolean>((resolve) => {
+      this.pendingWorkletFlush = { node, resolve: () => resolve(true) };
+      timeoutId = setTimeout(() => resolve(false), WORKLET_FLUSH_TIMEOUT_MS);
+    });
+    try {
+      node.port.postMessage({ type: "flush" });
+      if (!(await flushed)) {
+        logWarn(`${LOG_PREFIX} Worklet did not confirm the final flush`, {
+          timeoutMs: WORKLET_FLUSH_TIMEOUT_MS,
+        });
+      }
+    } catch (err) {
+      logDebug(`${LOG_PREFIX} Could not flush the worklet`, voiceErrorLogFields(err));
+    } finally {
+      if (timeoutId !== null) clearTimeout(timeoutId);
+      if (this.pendingWorkletFlush?.node === node) this.pendingWorkletFlush = null;
+    }
   }
 
   private async cleanupAudioCapture(): Promise<void> {
