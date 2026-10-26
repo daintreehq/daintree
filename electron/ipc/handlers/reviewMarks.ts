@@ -3,7 +3,7 @@ import { defineIpcNamespace, op } from "../define.js";
 import type { HandlerDependencies, IpcContext } from "../types.js";
 import { broadcastToProjectRenderers } from "../utils.js";
 import { REVIEW_MARKS_METHOD_CHANNELS } from "./reviewMarks.preload.js";
-import { confirmGoneWorktrees, readLiveWorktrees } from "./liveWorktrees.js";
+import { confirmGoneWorktrees, GONE_RECHECK_DELAY_MS, readLiveWorktrees } from "./liveWorktrees.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { mayWriteProjectState } from "../../services/DriveLeaseService.js";
 import { getReviewMarkStore, isReviewMarkWorktreeId } from "../../services/reviewMarks.js";
@@ -83,7 +83,31 @@ function announce(projectId: string, snapshot: ReviewMarksSnapshot): void {
 class ReviewMarkPruner {
   private readonly running = new Map<string, Promise<void>>();
   private readonly asked = new Map<string, Set<string>>();
+  private readonly settling = new Set<Promise<void>>();
   private readonly abort = new AbortController();
+
+  /**
+   * A removal the host just reported. The prune waits out the workspace
+   * client's reuse of a finished read first: one taken just before the
+   * removal would still list the worktree and settle nothing.
+   */
+  removed(projectId: string, worktreeId: string): void {
+    const { signal } = this.abort;
+    if (signal.aborted) return;
+    const waited = new Promise<void>((resolve) => {
+      const timer = setTimeout(done, GONE_RECHECK_DELAY_MS);
+      function done(): void {
+        clearTimeout(timer);
+        signal.removeEventListener("abort", done);
+        resolve();
+      }
+      signal.addEventListener("abort", done, { once: true });
+    }).then(() => {
+      this.settling.delete(waited);
+      if (!signal.aborted) void this.schedule(projectId, [worktreeId]);
+    });
+    this.settling.add(waited);
+  }
 
   schedule(projectId: string, removed: readonly string[] = []): Promise<void> {
     if (this.abort.signal.aborted) return Promise.resolve();
@@ -94,6 +118,7 @@ class ReviewMarkPruner {
     if (running) return running;
     const run = this.drain(projectId)
       .catch((error: unknown) => {
+        if (this.abort.signal.aborted) return;
         console.error(`[reviewMarks] Failed to prune marks for project ${projectId}:`, error);
       })
       .finally(() => {
@@ -123,7 +148,8 @@ class ReviewMarkPruner {
       if (signal.aborted || gone.length === 0) continue;
       const result = await store.remove(
         projectId,
-        new Map(gone.map((id) => [id, expected.get(id) ?? null]))
+        new Map(gone.map((id) => [id, expected.get(id) ?? null])),
+        () => signal.throwIfAborted()
       );
       if (result.changed) announce(projectId, result.snapshot);
       if (result.changedSince.length > 0) {
@@ -136,7 +162,9 @@ class ReviewMarkPruner {
   }
 
   async settle(): Promise<void> {
-    while (this.running.size > 0) await Promise.all([...this.running.values()]);
+    while (this.running.size > 0 || this.settling.size > 0) {
+      await Promise.all([...this.settling, ...this.running.values()]);
+    }
   }
 
   dispose(): void {
@@ -259,7 +287,7 @@ export function registerReviewMarksHandlers(
   const onRemoved = (payload: WorktreeRemovedPayload): void => {
     const { worktreeId, projectId } = payload ?? {};
     if (typeof projectId !== "string" || !isReviewMarkWorktreeId(worktreeId)) return;
-    void own.schedule(projectId, [worktreeId]);
+    own.removed(projectId, worktreeId);
   };
   const listens = typeof client?.on === "function" && typeof client.off === "function";
   if (listens) client.on("worktree-removed", onRemoved);

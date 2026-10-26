@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import fs from "fs/promises";
+import { readFileSync } from "fs";
 import os from "os";
 import path from "path";
 import { ReviewMarkStore } from "../reviewMarks.js";
@@ -178,13 +179,20 @@ describe("ReviewMarkStore", () => {
     await store.save(PROJECT, WT_1, point(), 0, allow);
     const before = await readIndexFile();
     let asked = 0;
+    let onDiskWhenAskedAgain: unknown;
     const handedOver = () => {
-      if (++asked > 1) throw new Error("driven elsewhere");
+      if (++asked === 1) return;
+      // Asked again only once the new index is on disk.
+      onDiskWhenAskedAgain = JSON.parse(
+        readFileSync(path.join(stateDir(), "review-marks.json"), "utf8")
+      ).revision;
+      throw new Error("driven elsewhere");
     };
     await expect(
       store.save(PROJECT, WT_1, point({ capturedAt: 9_000 }), 1, handedOver)
     ).rejects.toThrow("driven elsewhere");
     expect(asked).toBe(2);
+    expect(onDiskWhenAskedAgain).toBe(2);
     expect(await readIndexFile()).toEqual(before);
     expect((await store.get(PROJECT, WT_1))?.point).toEqual(point());
 
@@ -296,9 +304,16 @@ describe("ReviewMarkStore", () => {
     it("drops what isn't a worktree id and keeps an unreadable mark as a tombstone", async () => {
       await store.save(PROJECT, WT_1, point(), 0, allow);
       const index = await readIndexFile();
-      const worktrees = index.worktrees as Record<string, { mark: Record<string, unknown> }>;
-      worktrees[WT_1]!.mark.head = { kind: "branch", branch: "bad..name", commit: C1 };
-      worktrees["relative/path"] = { mark: worktrees[WT_1]!.mark };
+      const worktrees = index.worktrees as Record<
+        string,
+        { revision?: number; mark: Record<string, unknown> }
+      >;
+      const head = worktrees[WT_1]!.mark.head;
+      worktrees[WT_1]!.mark = {
+        ...worktrees[WT_1]!.mark,
+        head: { kind: "branch", branch: "bad..name", commit: C1 },
+      };
+      worktrees["relative/path"] = { revision: 1, mark: { ...worktrees[WT_1]!.mark, head } };
       await writeIndexFile(index);
 
       expect((await store.read(PROJECT)).marks).toEqual({});

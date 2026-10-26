@@ -393,12 +393,15 @@ export class ReviewMarkStore {
    * Remove the marks of worktrees the host confirmed are gone, each only if
    * its entry is still what `expected` says it was when the check began. A
    * tombstone is left for each that had a mark or has a save in flight.
+   * `guard`, when given, refuses the removal as it does a save.
    */
   remove(
     projectId: string,
-    expected: ReadonlyMap<string, number | null>
+    expected: ReadonlyMap<string, number | null>,
+    guard?: ReviewMarkWriteGuard
   ): Promise<ReviewMarksRemoval> {
     return this.turn(projectId, async () => {
+      guard?.();
       const index = await this.readIndex(projectId);
       const moved: string[] = [];
       const gone: string[] = [];
@@ -417,7 +420,7 @@ export class ReviewMarkStore {
       }
       index.revision = this.nextRevision(index);
       for (const id of gone) index.worktrees.set(id, { revision: index.revision, mark: null });
-      await this.commit(projectId, index);
+      await this.commit(projectId, index, guard);
       return { ...result, snapshot: snapshotOf(projectId, index), changed: true };
     });
   }
@@ -535,8 +538,15 @@ export class ReviewMarkStore {
     const stateDir = this.stateDir(projectId);
     const filePath = this.indexPath(projectId);
     const previous = guard ? await this.readIndexText(projectId) : null;
+    const text = serializeIndex(index);
     await fs.mkdir(stateDir, { recursive: true });
-    await resilientAtomicWriteFile(filePath, serializeIndex(index));
+    try {
+      await resilientAtomicWriteFile(filePath, text);
+    } catch (error) {
+      // The write can fail after its rename, syncing the directory: then it landed.
+      const landed = await this.readIndexText(projectId).catch(() => null);
+      if (landed !== text) throw error;
+    }
     try {
       guard?.();
     } catch (refusal) {

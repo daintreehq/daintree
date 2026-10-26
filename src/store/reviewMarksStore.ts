@@ -70,10 +70,15 @@ function adopt(snapshot: ReviewMarksSnapshot, authoritative = false): void {
 
 /**
  * A write's reply. One naming a revision below the one the write started from
- * means main's store was reset since: the reply is the newest word there is.
+ * means main's store started over since, and with nothing adopted while the
+ * write was out, the reply is the newest word there is.
  */
-function adoptReply(snapshot: ReviewMarksSnapshot, basedOn: number): void {
-  adopt(snapshot, basedOn > snapshot.revision);
+function adoptReply(
+  snapshot: ReviewMarksSnapshot,
+  basedOn: number,
+  adoptionsAtStart: number
+): void {
+  adopt(snapshot, basedOn > snapshot.revision && adoptions === adoptionsAtStart);
 }
 
 /** Read main's marks and adopt them. Shared while in flight; rejects on an unbound or failed read. */
@@ -136,7 +141,9 @@ export function startReviewMarksSync(): () => void {
     // so read once more after it settles rather than joining it.
     const inFlight = pull;
     const pullAfter = inFlight
-      ? inFlight.catch(() => undefined).then(() => pullReviewMarks())
+      ? inFlight
+          .catch(() => undefined)
+          .then(() => (disposed || resync !== resyncs ? undefined : pullReviewMarks()))
       : pullReviewMarks();
     pullAfter.catch((error: unknown) => {
       if (disposed || resync !== resyncs) return;
@@ -184,8 +191,9 @@ export async function markWorktreeReviewed(
 ): Promise<ReviewMarkSaveOutcome> {
   const api = reviewMarksBridge();
   if (typeof api?.mark !== "function") throw new Error("Review marks aren't available here");
+  const adoptionsAtStart = adoptions;
   const outcome = await api.mark(worktreeId, point, basedOn);
-  adoptReply(outcome.snapshot, basedOn);
+  adoptReply(outcome.snapshot, basedOn, adoptionsAtStart);
   return outcome;
 }
 
@@ -196,8 +204,9 @@ export async function clearWorktreeReviewMark(
 ): Promise<ReviewMarkClearOutcome> {
   const api = reviewMarksBridge();
   if (typeof api?.clear !== "function") throw new Error("Review marks aren't available here");
+  const adoptionsAtStart = adoptions;
   const outcome = await api.clear(worktreeId, basedOn);
-  adoptReply(outcome.snapshot, basedOn);
+  adoptReply(outcome.snapshot, basedOn, adoptionsAtStart);
   return outcome;
 }
 

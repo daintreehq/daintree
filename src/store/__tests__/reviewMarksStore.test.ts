@@ -44,7 +44,18 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-const POINT = { capturedAt: 5 } as unknown as ReviewPoint;
+const POINT: ReviewPoint = {
+  version: 1,
+  capturedAt: 5,
+  worktreePath: WT_1,
+  gitDir: "/repos/alpha/.git/worktrees/feature-1",
+  commonDir: "/repos/alpha/.git",
+  objectFormat: "sha1",
+  head: { kind: "branch", branch: "feature-1", commit: COMMIT },
+  base: { requested: { kind: "branch", branch: "main" }, ref: null, tip: null, mergeBases: [] },
+  entries: [],
+  incomplete: null,
+};
 
 function installBridge() {
   const listeners: ChangedCallback[] = [];
@@ -180,14 +191,38 @@ describe("reviewMarksStore", () => {
     expect(useReviewMarksStore.getState()).toMatchObject({ marks: {}, revision: 0 });
   });
 
-  it("stops following the host once disposed", async () => {
+  it("never lets a stale reply naming a restarted store undo a push that beat it", async () => {
     const bridge = installBridge();
+    bridge.hydrate.mockResolvedValueOnce(snapshot({ [WT_1]: summary(10) }, 10));
     stop = startReviewMarksSync();
-    await vi.waitFor(() => expect(useReviewMarksStore.getState().loaded).toBe(true));
+    await vi.waitFor(() => expect(useReviewMarksStore.getState().revision).toBe(10));
+
+    const reply = deferred<{ status: "stale"; snapshot: ReviewMarksSnapshot }>();
+    bridge.clear.mockReturnValueOnce(reply.promise);
+    const clearing = clearWorktreeReviewMark(WT_1, 10);
+    bridge.push(snapshot({ [WT_2]: summary(11, "feature-2") }, 11));
+    reply.resolve({ status: "stale", snapshot: snapshot({}, 0) });
+    await clearing;
+
+    expect(useReviewMarksStore.getState().revision).toBe(11);
+    expect(Object.keys(useReviewMarksStore.getState().marks)).toEqual([WT_2]);
+  });
+
+  it("stops following the host once disposed, even with reads and retries pending", async () => {
+    vi.useFakeTimers();
+    const bridge = installBridge();
+    const first = deferred<ReviewMarksSnapshot | null>();
+    bridge.hydrate.mockReturnValueOnce(first.promise);
+    stop = startReviewMarksSync();
+    // A reconnect queues a second read behind the first.
+    notifyHostResync();
     stop();
     stop = null;
     expect(bridge.listenerCount()).toBe(0);
+    first.resolve(null);
+    await vi.advanceTimersByTimeAsync(60_000);
     notifyHostResync();
+    await vi.advanceTimersByTimeAsync(60_000);
     expect(bridge.hydrate).toHaveBeenCalledTimes(1);
   });
 

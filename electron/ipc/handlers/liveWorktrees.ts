@@ -6,7 +6,7 @@ import type { WorktreeSnapshot } from "../../../shared/types/workspace-host.js";
  * Past the workspace client's 150 ms reuse of a finished read, so a second read
  * is taken after the prune was asked for and sees any worktree made before it.
  */
-const GONE_RECHECK_DELAY_MS = 200;
+export const GONE_RECHECK_DELAY_MS = 200;
 
 /**
  * The project's worktrees as its workspace host has them right now, or `null`

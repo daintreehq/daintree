@@ -88,6 +88,14 @@ describe("readWorktreeIdentity", () => {
     expect(await mismatch(await capture(repo), linked)).toBe("worktree");
   });
 
+  it("refuses a point whose git dir isn't this worktree's, at the same path", async () => {
+    const point = await capture(linked);
+    const identity = await readWorktreeIdentity(linked, { timeoutMs: 10_000 });
+    expect(reviewPointMismatch({ ...point, gitDir: path.join(root, "elsewhere") }, identity)).toBe(
+      "worktree"
+    );
+  });
+
   it("refuses another repository", async () => {
     expect(await mismatch(await capture(repo), other)).toBe("repository");
   });

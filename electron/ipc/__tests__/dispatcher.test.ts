@@ -984,9 +984,11 @@ describe("remote scope gate", () => {
     expect((await ask(endpoint, "review-marks:mark", [`${P1}/wt`, {}, 0])).ok).toBe(true);
     const other = await ask(endpoint, "review-marks:mark", [`${P2}/wt`, {}, 0]);
     expect(other.ok ? null : other.error.code).toBe("PERMISSION");
+    expect((await ask(endpoint, "review-marks:clear", [`${P1}/wt`, 0])).ok).toBe(true);
+    expect((await ask(endpoint, "review-marks:clear", [`${P2}/wt`, 0])).ok).toBe(false);
     expect((await ask(endpoint, "review-marks:clear", ["/elsewhere", 0])).ok).toBe(false);
     expect(mark).toHaveBeenCalledTimes(1);
-    expect(clear).not.toHaveBeenCalled();
+    expect(clear).toHaveBeenCalledTimes(1);
   });
 
   it("checks every terminal of a batch, letting gone ones through for the handler to answer", async () => {
