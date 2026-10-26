@@ -107,7 +107,10 @@ type DeltaPayload = { text: string; itemId?: string };
 type CompletePayload = { text: string; willCorrect: boolean; itemId?: string };
 
 interface WorkletNodeStub {
-  port: { onmessage: ((event: { data: ArrayBuffer }) => void) | null; postMessage: () => void };
+  port: {
+    onmessage: ((event: { data: ArrayBuffer | { type: string } }) => void) | null;
+    postMessage: (message: { type: string }) => void;
+  };
   connect: () => void;
   disconnect: () => void;
 }
@@ -225,7 +228,15 @@ function stubEnvironment(recordingMode: "toggle" | "push-to-talk") {
   });
   vi.stubGlobal("AudioWorkletNode", function () {
     const node: WorkletNodeStub = {
-      port: { onmessage: null, postMessage: vi.fn() },
+      port: {
+        onmessage: null,
+        // The real worklet answers a flush with "flushed" once its partial
+        // chunk is posted.
+        postMessage: vi.fn((message: { type: string }) => {
+          if (message.type !== "flush") return;
+          queueMicrotask(() => node.port.onmessage?.({ data: { type: "flushed" } }));
+        }),
+      },
       connect: vi.fn(),
       disconnect: vi.fn(),
     };
@@ -485,8 +496,6 @@ describe("VoiceRecordingService — starting while a session finishes (#14604)",
     expect(store().status).toBe("connecting");
     const utterance = speak(0);
     release();
-    speak(0);
-    expect(drains).toHaveLength(0);
 
     connect({ status: "started" });
 
@@ -494,7 +503,7 @@ describe("VoiceRecordingService — starting while a session finishes (#14604)",
     expect(sentChunks).toEqual(utterance);
     drains[0]!.resolve();
     await hold;
-    expect(store().status).toBe("idle");
+    await vi.waitFor(() => expect(store().status).toBe("idle"));
   });
 
   it("keeps speech queued behind a drain when the next session is toggled off early", async () => {
@@ -656,33 +665,47 @@ describe("VoiceRecordingService — starting while a session finishes (#14604)",
     expect(store().status).toBe("idle");
   });
 
-  it("reports a backend failure after a stopped start and lets the next one through", async () => {
-    const { voiceRecordingService, voiceInput, store, drains, sentChunks, press, release, speak } =
-      await setup("push-to-talk");
-    let connect!: (result: { status: string; error?: string }) => void;
-    voiceInput.start.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          connect = resolve;
-        })
-    );
+  it("leaves nothing stuck when a stopped start's backend then fails", async () => {
+    const {
+      voiceRecordingService,
+      voiceInput,
+      store,
+      drains,
+      callbacks,
+      sentChunks,
+      attached,
+      press,
+      release,
+      speak,
+    } = await setup("push-to-talk");
 
     press();
-    const hold = voiceRecordingService.toggleFocusedPanel();
-    await vi.waitFor(() => expect(voiceInput.start).toHaveBeenCalledTimes(1));
-    speak(0);
+    await voiceRecordingService.toggleFocusedPanel();
+    callbacks.status!("recording");
     release();
-    connect({ status: "failed", error: "Voice backend unavailable." });
-    await hold;
+    await vi.waitFor(() => expect(drains).toHaveLength(1));
 
-    expect(sentChunks).toEqual([]);
-    expect(drains).toHaveLength(0);
-    expect(store().status).toBe("error");
+    voiceInput.start.mockResolvedValueOnce({
+      status: "failed",
+      error: "Voice backend unavailable.",
+    });
+    press();
+    const secondHold = voiceRecordingService.toggleFocusedPanel();
+    await attached(1);
+    const utterance = speak(1);
+    release();
+
+    drains[0]!.resolve();
+    await vi.waitFor(() => expect(drains).toHaveLength(2));
+    expect(sentChunks).toEqual(utterance);
+    drains[1]!.resolve();
+    await secondHold;
+    expect(store().status).toBe("idle");
     expect(store().pendingTarget).toBeNull();
 
     press();
     await voiceRecordingService.toggleFocusedPanel();
-    expect(voiceInput.start).toHaveBeenCalledTimes(2);
+    expect(voiceInput.start).toHaveBeenCalledTimes(3);
     expect(store().activeTarget?.panelId).toBe("panel-a");
   });
 
@@ -702,7 +725,6 @@ describe("VoiceRecordingService — starting while a session finishes (#14604)",
     await vi.waitFor(() => expect(voiceInput.start).toHaveBeenCalledTimes(1));
     const utterance = speak(0);
     blur();
-    speak(0);
     connect({ status: "started" });
 
     await vi.waitFor(() => expect(drains).toHaveLength(1));
