@@ -767,6 +767,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
             text: trimmed,
             confidence: { ...STUB_CONFIDENCE },
             itemId: previewId ?? nextSpanItemId(),
+            ...(speechFinal ? { endOfSpeech: true } : {}),
           });
         }
         return;

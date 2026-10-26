@@ -592,6 +592,24 @@ describe("DeepgramTranscriptionProvider", () => {
     provider.stop();
   });
 
+  it("marks only a speech_final span as ending speech", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    const completes: Array<{ text: string; endOfSpeech: boolean }> = [];
+    provider.onEvent((e) => {
+      if (e.type === "complete") completes.push({ text: e.text, endOfSpeech: !!e.endOfSpeech });
+    });
+
+    const { socket } = await bringSessionReady(provider);
+    socket.simulateMessage(resultsMessage("then send it", { is_final: true }));
+    socket.simulateMessage(resultsMessage("to the API.", { is_final: true, speech_final: true }));
+
+    expect(completes).toEqual([
+      { text: "then send it", endOfSpeech: false },
+      { text: "to the API.", endOfSpeech: true },
+    ]);
+    provider.stop();
+  });
+
   it("retracts and retires a span revised to nothing, then starts fresh spans", async () => {
     const provider = new DeepgramTranscriptionProvider();
     const events: VoiceTranscriptionEvent[] = [];

@@ -26,7 +26,10 @@ import type {
 import { logDebug, logInfo, logWarn } from "../../utils/logger.js";
 import { buildOpenAIHeaders } from "../../../shared/utils/openaiHeaders.js";
 import { voiceErrorLogFields } from "../../../shared/utils/voiceLogFields.js";
-import { applyDictationCommands } from "../../services/voiceDictationCommands.js";
+import {
+  applyDictationCommands,
+  extractSendCommand,
+} from "../../services/voiceDictationCommands.js";
 import { VOICE_DICTATION_AI_MODEL } from "../../../shared/config/voiceCorrection.js";
 import { normalizeVoiceLanguage } from "../../../shared/config/voiceLanguages.js";
 import { assembleKeyterms } from "../../services/voiceContextKeyterms.js";
@@ -946,12 +949,17 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         // OpenAI Realtime emits spoken dictation commands ("new paragraph",
         // "new line", etc.) as literal text. applyDictationCommands rewrites
         // them post-hoc to \n\n / \n, gated on the session-
-        // snapshotted paragraphing strategy.
-        const processedText =
+        // snapshotted paragraphing strategy. A trailing "send it" that ends
+        // the utterance is stripped first and handed to the renderer, which
+        // owns the send; one the provider cut mid-speech stays literal.
+        const spokenCommands =
           settings.paragraphingStrategy === "spoken-command" &&
-          normalizeVoiceLanguage(settings.language) === "en"
-            ? applyDictationCommands(rawText)
-            : rawText;
+          normalizeVoiceLanguage(settings.language) === "en";
+        const sendCommand =
+          spokenCommands && voiceEvent.endOfSpeech
+            ? extractSendCommand(rawText)
+            : { text: rawText, send: false };
+        const processedText = spokenCommands ? applyDictationCommands(sendCommand.text) : rawText;
 
         // Split on line breaks and emit one complete event per non-empty part
         // with a paragraph_boundary between each pair of pieces. Empty pieces
@@ -981,10 +989,10 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
           liveSettings.correctionEnabled &&
           liveSettings.resolveFileLinks &&
           liveSettings.openaiApiKey &&
-          mayReferenceFile(rawText)
+          mayReferenceFile(sendCommand.text)
             ? randomUUID()
             : undefined;
-        if (parts.length === 0 && voiceEvent.itemId) {
+        if (parts.length === 0 && voiceEvent.itemId && !sendCommand.send) {
           target.send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, {
             sessionId,
             text: "",
@@ -992,6 +1000,9 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
             ...itemIdField,
           });
         }
+        // The send rides the utterance's final completion, after every piece
+        // and break, so the renderer acts on it with all of the text in place.
+        const lastIndex = pieces.length - 1;
         for (let i = 0; i < pieces.length; i++) {
           if (pieces[i]) {
             target.send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, {
@@ -1000,9 +1011,10 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
               willCorrect: false,
               ...itemIdField,
               ...(transcriptId ? { transcriptId } : {}),
+              ...(sendCommand.send && i === lastIndex ? { send: true } : {}),
             });
           }
-          if (i < pieces.length - 1) {
+          if (i < lastIndex) {
             target.send(CHANNELS.VOICE_INPUT_PARAGRAPH_BOUNDARY, {
               sessionId,
               rawText: null,
@@ -1010,10 +1022,26 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
             });
           }
         }
+        if (sendCommand.send && !pieces[lastIndex]) {
+          target.send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, {
+            sessionId,
+            text: "",
+            willCorrect: false,
+            ...itemIdField,
+            send: true,
+          });
+        }
 
         if (correctionSvc && transcriptId) {
           trackFileLinkJob(session, (signal) =>
-            findFileLinks(session, correctionSvc, transcriptId, rawText, liveSettings, signal)
+            findFileLinks(
+              session,
+              correctionSvc,
+              transcriptId,
+              sendCommand.text,
+              liveSettings,
+              signal
+            )
           );
         }
       } else if (voiceEvent.type === "paragraph_boundary") {

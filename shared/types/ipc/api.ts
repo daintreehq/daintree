@@ -2182,6 +2182,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
         willCorrect: boolean;
         itemId?: string;
         transcriptId?: string;
+        send?: boolean;
       }) => void
     ): () => void;
     onParagraphBoundary(

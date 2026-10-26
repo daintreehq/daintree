@@ -2974,6 +2974,7 @@ function buildElectronApi(): ElectronAPI {
           willCorrect: boolean;
           itemId?: string;
           transcriptId?: string;
+          send?: boolean;
         }) => void
       ) => _typedOn(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, callback),
       onParagraphBoundary: (

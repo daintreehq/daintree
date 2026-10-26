@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { applyDictationCommands } from "../voiceDictationCommands.js";
+import { applyDictationCommands, extractSendCommand } from "../voiceDictationCommands.js";
 
 describe("applyDictationCommands", () => {
   describe("break commands at end of utterance", () => {
@@ -83,5 +83,34 @@ describe("applyDictationCommands", () => {
   it("is idempotent", () => {
     const once = applyDictationCommands("hello new line");
     expect(applyDictationCommands(once)).toBe(once);
+  });
+});
+
+describe("extractSendCommand", () => {
+  it.each([
+    ["fix the login bug send it", "fix the login bug"],
+    ["Fix the login bug, send it.", "Fix the login bug"],
+    ["Fix the login bug. Send it!", "Fix the login bug"],
+    ["fix the login bug Send  It ", "fix the login bug"],
+    ["Send it.", ""],
+    ["send it", ""],
+  ])("strips the trailing command from %j", (input, text) => {
+    expect(extractSendCommand(input)).toEqual({ text, send: true });
+  });
+
+  it.each([
+    "then send it to the API",
+    "send it to the API",
+    "resend it",
+    "we should send items later",
+    "",
+    "hello",
+  ])("leaves %j literal", (input) => {
+    expect(extractSendCommand(input)).toEqual({ text: input, send: false });
+  });
+
+  it("leaves break commands before it for applyDictationCommands", () => {
+    const { text } = extractSendCommand("hello new line send it");
+    expect(applyDictationCommands(text)).toBe("hello\n");
   });
 });

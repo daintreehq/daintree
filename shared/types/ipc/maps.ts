@@ -2049,6 +2049,8 @@ export interface IpcEventMap {
     itemId?: string;
     /** Set when spoken file references in this transcript may follow; their result names it. */
     transcriptId?: string;
+    /** The utterance ended with a spoken "send it", already stripped from `text`. */
+    send?: boolean;
   };
   "voice-input:paragraph-boundary": { sessionId: string; rawText: string | null };
   "voice-input:file-token-resolved": {

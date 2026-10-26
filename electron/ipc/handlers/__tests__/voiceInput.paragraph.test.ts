@@ -28,6 +28,7 @@ type MockTranscriptionEvent = {
   text?: string;
   itemId?: string;
   replace?: boolean;
+  endOfSpeech?: boolean;
   status?: string;
   message?: string;
 };
@@ -533,6 +534,120 @@ describe("voiceInput — spoken-command paragraphing", () => {
     expect(boundaries).toHaveLength(1);
   });
 
+  it("strips a trailing 'send it' that ends the utterance and flags the send", () => {
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "Fix the login bug, send it.",
+      itemId: "item-A",
+      endOfSpeech: true,
+    });
+
+    expect(dictated()).toEqual([
+      {
+        channel: "voice-input:transcription-complete",
+        payload: {
+          sessionId: currentSessionId,
+          text: "Fix the login bug",
+          willCorrect: false,
+          itemId: "item-A",
+          send: true,
+        },
+      },
+    ]);
+  });
+
+  it("flags the send on a trailing completion after a break command", () => {
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "hello new line send it",
+      itemId: "item-A",
+      endOfSpeech: true,
+    });
+
+    expect(dictated()).toEqual([
+      {
+        channel: "voice-input:transcription-complete",
+        payload: {
+          sessionId: currentSessionId,
+          text: "hello",
+          willCorrect: false,
+          itemId: "item-A",
+        },
+      },
+      {
+        channel: "voice-input:paragraph-boundary",
+        payload: { sessionId: currentSessionId, rawText: null, correctionId: null },
+      },
+      {
+        channel: "voice-input:transcription-complete",
+        payload: {
+          sessionId: currentSessionId,
+          text: "",
+          willCorrect: false,
+          itemId: "item-A",
+          send: true,
+        },
+      },
+    ]);
+  });
+
+  it("sends one empty flagged completion for a lone 'send it'", () => {
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "Send it.",
+      itemId: "item-A",
+      endOfSpeech: true,
+    });
+
+    expect(dictated()).toEqual([
+      {
+        channel: "voice-input:transcription-complete",
+        payload: {
+          sessionId: currentSessionId,
+          text: "",
+          willCorrect: false,
+          itemId: "item-A",
+          send: true,
+        },
+      },
+    ]);
+  });
+
+  it("keeps a trailing 'send it' literal on a completion cut mid-speech", () => {
+    emitTranscriptionEvent({ type: "complete", text: "then send it", itemId: "item-A" });
+
+    expect(dictated()).toEqual([
+      {
+        channel: "voice-input:transcription-complete",
+        payload: {
+          sessionId: currentSessionId,
+          text: "then send it",
+          willCorrect: false,
+          itemId: "item-A",
+        },
+      },
+    ]);
+  });
+
+  it("keeps a mid-sentence 'send it' literal", () => {
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "then send it to the API",
+      endOfSpeech: true,
+    });
+
+    expect(dictated()).toEqual([
+      {
+        channel: "voice-input:transcription-complete",
+        payload: {
+          sessionId: currentSessionId,
+          text: "then send it to the API",
+          willCorrect: false,
+        },
+      },
+    ]);
+  });
+
   it("leaves a trailing 'period' literal on the emitted text", () => {
     emitTranscriptionEvent({ type: "complete", text: "hello period" });
 
@@ -597,6 +712,15 @@ describe("voiceInput — manual paragraphing strategy", () => {
 
   afterEach(() => {
     cleanup?.();
+  });
+
+  it("leaves a trailing 'send it' literal and flags no send", () => {
+    emitTranscriptionEvent({ type: "complete", text: "fix it send it", endOfSpeech: true });
+
+    const completes = win.__sent.filter((m) => m.channel === "voice-input:transcription-complete");
+    expect(completes.map((m) => m.payload)).toEqual([
+      { sessionId: currentSessionId, text: "fix it send it", willCorrect: false },
+    ]);
   });
 
   it("leaves spoken commands literal and does not emit paragraph boundaries", () => {
