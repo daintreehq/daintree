@@ -161,7 +161,7 @@ const BASE_SETTINGS: VoiceInputSettings = {
   transcriptionProvider: "deepgram",
   transcriptionModel: "gpt-live-transcribe",
   correctionEnabled: false,
-  correctionModel: "gpt-5.6-luna",
+  correctionModel: "gpt-6-luna",
   correctionCustomInstructions: "",
   paragraphingStrategy: "spoken-command",
   resolveFileLinks: true,

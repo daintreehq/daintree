@@ -38,7 +38,7 @@ const BASE = {
   transcriptionProvider: "openai",
   transcriptionModel: "gpt-live-transcribe",
   correctionEnabled: false,
-  correctionModel: "gpt-5.6-luna",
+  correctionModel: "gpt-6-luna",
   correctionCustomInstructions: "",
   paragraphingStrategy: "spoken-command",
   resolveFileLinks: true,

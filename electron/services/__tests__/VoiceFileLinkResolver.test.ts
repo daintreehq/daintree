@@ -201,8 +201,8 @@ describe("VoiceFileLinkResolver", () => {
     const body = JSON.parse(init.body as string);
     expect(body.prompt_cache_key).toBe("voice-file-rerank-v1");
     // Rerank shares the single voice model and pinned low-latency effort so it
-    // can't silently inherit gpt-5.6-luna's "medium" default (issue #11365).
-    expect(body.model).toBe("gpt-5.6-luna");
+    // can't silently inherit gpt-6-luna's "medium" default (issue #11365).
+    expect(body.model).toBe("gpt-6-luna");
     expect(body.reasoning).toEqual({ effort: "none" });
   });
 

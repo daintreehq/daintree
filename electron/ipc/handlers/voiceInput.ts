@@ -209,7 +209,7 @@ export function getVoiceSettings(): VoiceInputSettings {
   const staleTranscriptionModel = merged.transcriptionModel !== "gpt-live-transcribe";
   if (staleTranscriptionModel) merged.transcriptionModel = "gpt-live-transcribe";
 
-  // Same one-shot cleanup for the correction model: gpt-5.6-luna replaced the
+  // Same one-shot cleanup for the correction model: gpt-6-luna replaced the
   // retired gpt-5-mini/gpt-5-nano tiers, so this union is single-valued too.
   // migration025 upgrades stores on older schema versions; this read-time net
   // catches stores already on the current version (never revisited by the
@@ -837,7 +837,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
   };
 
   // Whole-passage cleanup pass. The renderer calls this once after recording
-  // stops, with the full dictated text; correction runs as a single gpt-5.6-luna
+  // stops, with the full dictated text; correction runs as a single gpt-6-luna
   // request rather than the old per-segment streaming pipeline.
   const handleCorrect = async (
     request: VoiceInputCorrectPayload

@@ -11,7 +11,7 @@ import { logWarn } from "../../utils/logger.js";
 import { VoiceCorrectionService } from "../VoiceCorrectionService.js";
 
 const BASE_SETTINGS = {
-  model: "gpt-5.6-luna",
+  model: "gpt-6-luna",
   apiKey: "sk-test",
   customDictionary: [] as string[],
 };
@@ -385,7 +385,7 @@ describe("VoiceCorrectionService", () => {
     expect(userMessage).toContain("<right_context>");
   });
 
-  it("sends gpt-5.6-luna with explicit none reasoning effort and strict JSON output", async () => {
+  it("sends gpt-6-luna with explicit none reasoning effort and strict JSON output", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValue(makeFetchResponse({ corrected_text: "Corrected." }));
@@ -395,9 +395,9 @@ describe("VoiceCorrectionService", () => {
     await svc.correct({ rawText: "test" }, BASE_SETTINGS);
 
     const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
-    // gpt-5.6-luna defaults reasoning to "medium" when omitted, so the request
+    // gpt-6-luna defaults reasoning to "medium" when omitted, so the request
     // must pin "none" explicitly — never leave the field off (issue #11365).
-    expect(body.model).toBe("gpt-5.6-luna");
+    expect(body.model).toBe("gpt-6-luna");
     expect(body.reasoning).toEqual({ effort: "none" });
     expect(body.max_output_tokens).toBe(1024);
     expect(body.text.format.type).toBe("json_schema");
@@ -606,7 +606,7 @@ describe("VoiceCorrectionService", () => {
       expect(body.prompt_cache_key).toBe("voice-file-link-v1");
       // File-link detection shares the single voice model and the explicit
       // low-latency reasoning effort (issue #11365).
-      expect(body.model).toBe("gpt-5.6-luna");
+      expect(body.model).toBe("gpt-6-luna");
       expect(body.reasoning).toEqual({ effort: "none" });
     });
 

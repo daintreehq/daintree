@@ -106,7 +106,7 @@ vi.mock("../../../store.js", () => ({
           enabled: true,
           openaiApiKey: "sk-test",
           correctionEnabled: true,
-          correctionModel: "gpt-5.6-luna",
+          correctionModel: "gpt-6-luna",
           customDictionary: [],
           correctionCustomInstructions: "",
           language: "en",
@@ -256,7 +256,7 @@ describe("voiceInput — IPC handler surface", () => {
       reason: "stop",
     });
     expect(shared.correctionCalls[0]?.settings).toMatchObject({
-      model: "gpt-5.6-luna",
+      model: "gpt-6-luna",
       apiKey: "sk-test",
     });
   });
@@ -526,7 +526,7 @@ describe("voiceInput — manual paragraphing strategy", () => {
       enabled: true,
       openaiApiKey: "sk-test",
       correctionEnabled: true,
-      correctionModel: "gpt-5.6-luna",
+      correctionModel: "gpt-6-luna",
       customDictionary: [],
       correctionCustomInstructions: "",
       language: "en",
@@ -587,7 +587,7 @@ describe("voiceInput — context keyterms wiring", () => {
       transcriptionProvider: provider,
       transcriptionModel: "gpt-live-transcribe",
       correctionEnabled: false,
-      correctionModel: "gpt-5.6-luna",
+      correctionModel: "gpt-6-luna",
       correctionCustomInstructions: "",
       paragraphingStrategy: "spoken-command",
       resolveFileLinks: true,
@@ -978,7 +978,7 @@ describe("getVoiceSettings migration", () => {
     }
   });
 
-  it("normalizes a stale correctionModel to gpt-5.6-luna and persists the cleanup", async () => {
+  it("normalizes a stale correctionModel to gpt-6-luna and persists the cleanup", async () => {
     const { store } = await import("../../../store.js");
     vi.mocked(store.get).mockReturnValueOnce({
       enabled: true,
@@ -988,31 +988,31 @@ describe("getVoiceSettings migration", () => {
 
     const settings = getVoiceSettings();
 
-    expect(settings.correctionModel).toBe("gpt-5.6-luna");
+    expect(settings.correctionModel).toBe("gpt-6-luna");
     // The read-time safety net writes the cleaned value through once so the
     // stale model does not survive on disk (issue #11365).
     expect(vi.mocked(store.set)).toHaveBeenCalledOnce();
     const persisted = (
       vi.mocked(store.set).mock.calls[0] as unknown as [string, Record<string, unknown>]
     )[1];
-    expect(persisted.correctionModel).toBe("gpt-5.6-luna");
+    expect(persisted.correctionModel).toBe("gpt-6-luna");
     // Normalization must write the full merged object, not a defaults-only one —
     // sibling settings must survive the cleanup write.
     expect(persisted.enabled).toBe(true);
     expect(persisted.openaiApiKey).toBe("sk-present");
   });
 
-  it("does not write back when correctionModel is already gpt-5.6-luna", async () => {
+  it("does not write back when correctionModel is already gpt-6-luna", async () => {
     const { store } = await import("../../../store.js");
     vi.mocked(store.get).mockReturnValueOnce({
       enabled: true,
       openaiApiKey: "sk-present",
-      correctionModel: "gpt-5.6-luna",
+      correctionModel: "gpt-6-luna",
     });
 
     const settings = getVoiceSettings();
 
-    expect(settings.correctionModel).toBe("gpt-5.6-luna");
+    expect(settings.correctionModel).toBe("gpt-6-luna");
     expect(vi.mocked(store.set)).not.toHaveBeenCalled();
   });
 });
@@ -1185,7 +1185,7 @@ describe("voiceInput — spoken commands outside English", () => {
         enabled: true,
         openaiApiKey: "sk-test",
         correctionEnabled: false,
-        correctionModel: "gpt-5.6-luna",
+        correctionModel: "gpt-6-luna",
         customDictionary: [],
         correctionCustomInstructions: "",
         language,

@@ -493,7 +493,7 @@ export class VoiceCorrectionService {
         ],
         prompt_cache_key: this.buildPromptCacheKey(settings),
         service_tier: "auto",
-        // Explicit low-latency effort: gpt-5.6-luna defaults to "medium" when
+        // Explicit low-latency effort: gpt-6-luna defaults to "medium" when
         // omitted, so we pin the lowest tier rather than inherit that default.
         reasoning: { effort: VOICE_DICTATION_REASONING_EFFORT },
         text: {
