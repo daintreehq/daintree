@@ -85,12 +85,15 @@ describe("git:get-file-diff window validation", () => {
     );
   });
 
-  it.each(["index", "", 1])("rejects the side %j without reaching the workspace service", async (side) => {
-    const handler = setup();
+  it.each(["index", "", 1])(
+    "rejects the side %j without reaching the workspace service",
+    async (side) => {
+      const handler = setup();
 
-    await expect(handler({}, { ...base, side })).rejects.toThrow("Invalid side");
-    expect(getFileDiffMock).not.toHaveBeenCalled();
-  });
+      await expect(handler({}, { ...base, side })).rejects.toThrow("Invalid side");
+      expect(getFileDiffMock).not.toHaveBeenCalled();
+    }
+  );
 
   it("forwards undefined bounds untouched so the service picks its own default", async () => {
     const handler = setup();

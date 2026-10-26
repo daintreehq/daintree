@@ -285,7 +285,9 @@ describe("WorkspaceService.getFileDiff", () => {
 
     it("asks git for a staged new file instead of inlining the edited working-tree copy", async () => {
       const { readFile } = await import("fs/promises");
-      mockSimpleGit.diff.mockResolvedValueOnce("diff --git a/new.ts b/new.ts\nnew file mode 100644");
+      mockSimpleGit.diff.mockResolvedValueOnce(
+        "diff --git a/new.ts b/new.ts\nnew file mode 100644"
+      );
       await service.getFileDiff(
         "req-side-3",
         "/test/repo",
