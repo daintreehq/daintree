@@ -87,9 +87,11 @@ describe("mapTextRange", () => {
 
   it("collapses when select-all pastes over the draft", () => {
     const next = "something else entirely";
-    const range = follow(DICTATED, DRAFT, next);
-    expect(range.from).toBe(range.to);
-    expect(range.edited).toBe(true);
+    expect(follow(DICTATED, DRAFT, next)).toEqual({
+      from: next.length,
+      to: next.length,
+      edited: true,
+    });
   });
 
   it("stays edited after later edits elsewhere", () => {
@@ -114,6 +116,15 @@ describe("mapTextRange", () => {
       edited: false,
     });
     expect(mapTextRange(anchor, { from: 6, to: 6, insert: "abc" })).toBe(anchor);
+  });
+
+  it("keeps an emptied range's edited flag when a later change sweeps over it", () => {
+    const emptied: TrackedTextRange = { from: 5, to: 5, edited: true };
+    expect(mapTextRange(emptied, { from: 2, to: 9, insert: "x" })).toEqual({
+      from: 3,
+      to: 3,
+      edited: true,
+    });
   });
 
   it("never reports an unedited range whose text changed", () => {

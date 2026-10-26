@@ -66,6 +66,7 @@ describe("dictationRangeStore", () => {
 
   it("grows one record over a session's utterances and paragraph breaks", () => {
     dictate("first");
+    const id = only().id;
     const before = draft();
     setDraft(before + "\n");
     useDictationRangeStore
@@ -78,6 +79,19 @@ describe("dictationRangeStore", () => {
     expect(record.range.edited).toBe(false);
     expect(record.utterances.map((u) => textOf(u.range))).toEqual(["first", "second"]);
     expect(new Set(record.utterances.map((u) => u.id)).size).toBe(2);
+    expect(record.id).toBe(id);
+    expect(useDictationRangeStore.getState().getDictation(id)).toBe(record);
+  });
+
+  it("starts a record from a paragraph break spoken before any words", () => {
+    setDraft("Intro.");
+    setDraft("Intro.\n");
+    useDictationRangeStore.getState().recordParagraphBreak(target, { from: 6, to: 7 });
+    expect(only()).toMatchObject({ range: { from: 6, to: 7, edited: false }, utterances: [] });
+
+    dictate("words");
+    expect(textOf(only().range)).toBe("\nwords");
+    expect(only().range.edited).toBe(false);
   });
 
   it("flags the dictation, not its utterances, when typed text ends up between them", () => {
@@ -89,6 +103,11 @@ describe("dictationRangeStore", () => {
     expect(textOf(record.range)).toBe("first typed second");
     expect(record.range.edited).toBe(true);
     expect(record.utterances.map((u) => u.range.edited)).toEqual([false, false]);
+
+    dictate("third");
+    expect(textOf(only().range)).toBe("first typed second third");
+    expect(only().range.edited).toBe(true);
+    expect(only().utterances.map((u) => u.range.edited)).toEqual([false, false, false]);
   });
 
   it("keeps separate records for separate sessions in one draft", () => {
@@ -99,6 +118,70 @@ describe("dictationRangeStore", () => {
     expect(textOf(first!.range)).toBe("one");
     expect(textOf(second!.range)).toBe(" two");
     expect(first!.id).not.toBe(second!.id);
+  });
+
+  it("maps every record when two sessions interleave in one draft", () => {
+    const other = { ...target, sessionId: "session-2" };
+    dictate("one");
+    dictate("two", other);
+    dictate("three");
+    edit(0, 0, "> ");
+
+    const [first, second] = records();
+    expect(records()).toHaveLength(2);
+    expect(textOf(first!.range)).toBe("one two three");
+    expect(first!.range.edited).toBe(true);
+    expect(first!.utterances.map((u) => textOf(u.range))).toEqual(["one", "three"]);
+    expect(first!.utterances.map((u) => textOf(u.insertion))).toEqual(["one", " three"]);
+    expect(textOf(second!.range)).toBe(" two");
+    expect(second!.range.edited).toBe(false);
+    expect(textOf(second!.utterances[0]!.insertion)).toBe(" two");
+  });
+
+  it("keeps the same panel's drafts in different projects apart", () => {
+    const inputs = useTerminalInputStore.getState();
+    const elsewhere = { ...target, projectId: "project-2" };
+    const bare = { ...target, projectId: undefined };
+    inputs.setDraftInput(PANEL, "other", "project-2");
+    useDictationRangeStore.getState().recordUtterance(elsewhere, {
+      insertion: { from: 0, to: 5 },
+      words: { from: 0, to: 5 },
+    });
+    inputs.setDraftInput(PANEL, "bare");
+    useDictationRangeStore.getState().recordUtterance(bare, {
+      insertion: { from: 0, to: 4 },
+      words: { from: 0, to: 4 },
+    });
+    dictate("mine");
+    const untouched = [
+      useDictationRangeStore.getState().listDictations(PANEL, "project-2"),
+      useDictationRangeStore.getState().listDictations(PANEL),
+    ];
+
+    edit(0, 0, "> ");
+    useTerminalInputStore.getState().clearDraftInput(PANEL, PROJECT);
+
+    expect(records()).toEqual([]);
+    expect(useDictationRangeStore.getState().listDictations(PANEL, "project-2")).toBe(untouched[0]);
+    expect(useDictationRangeStore.getState().listDictations(PANEL)).toBe(untouched[1]);
+  });
+
+  it("maps a record through a restored draft", () => {
+    dictate("hello");
+    const id = only().id;
+
+    useTerminalInputStore.getState().restoreProjectDraftInputs(PROJECT, { [PANEL]: "Note: hello" });
+    const record = only();
+    expect(record.id).toBe(id);
+    expect(record.range).toEqual({ from: 6, to: 11, edited: false });
+    expect(record.utterances[0]!.range).toEqual({ from: 6, to: 11, edited: false });
+    expect(record.utterances[0]!.insertion).toEqual({ from: 6, to: 11, edited: false });
+
+    useTerminalInputStore
+      .getState()
+      .restoreProjectDraftInputs(PROJECT, { [PANEL]: "Note: heXllo" });
+    expect(only().range.edited).toBe(true);
+    expect(only().utterances[0]!.range.edited).toBe(true);
   });
 
   describe("through draft edits", () => {
@@ -113,7 +196,20 @@ describe("dictationRangeStore", () => {
       const record = only();
       expect(textOf(record.range)).toBe(" alpha beta gamma");
       expect(record.utterances.map((u) => textOf(u.range))).toEqual(["alpha beta", "gamma"]);
+      expect(record.utterances.map((u) => textOf(u.insertion))).toEqual([" alpha beta", " gamma"]);
       expect(record.range.edited).toBe(false);
+      expect(record.utterances.some((u) => u.range.edited || u.insertion.edited)).toBe(false);
+    });
+
+    it("flags the insertion, not the words, when only the separator is replaced", () => {
+      // The space between "Intro." and "alpha".
+      edit(6, 7, "\n");
+      const record = only();
+      expect(record.range.edited).toBe(true);
+      expect(record.utterances[0]!.insertion.edited).toBe(true);
+      expect(textOf(record.utterances[0]!.insertion)).toBe("alpha beta");
+      expect(record.utterances[0]!.range).toMatchObject({ edited: false });
+      expect(textOf(record.utterances[0]!.range)).toBe("alpha beta");
     });
 
     it("stays put when text is typed after the dictation", () => {
@@ -128,8 +224,12 @@ describe("dictationRangeStore", () => {
       const record = only();
       expect(textOf(record.utterances[0]!.range)).toBe("alpha, beta");
       expect(record.utterances[0]!.range.edited).toBe(true);
+      expect(textOf(record.utterances[0]!.insertion)).toBe(" alpha, beta");
+      expect(record.utterances[0]!.insertion.edited).toBe(true);
       expect(record.utterances[1]!.range).toMatchObject({ edited: false });
+      expect(record.utterances[1]!.insertion).toMatchObject({ edited: false });
       expect(textOf(record.utterances[1]!.range)).toBe("gamma");
+      expect(textOf(record.utterances[1]!.insertion)).toBe(" gamma");
       expect(record.range.edited).toBe(true);
     });
 
@@ -142,7 +242,10 @@ describe("dictationRangeStore", () => {
       expect(record.range.edited).toBe(true);
       expect(textOf(record.utterances[0]!.range)).toBe("ha beta");
       expect(record.utterances[0]!.range.edited).toBe(true);
+      expect(textOf(record.utterances[0]!.insertion)).toBe("ha beta");
+      expect(record.utterances[0]!.insertion.edited).toBe(true);
       expect(record.utterances[1]!.range.edited).toBe(false);
+      expect(textOf(record.utterances[1]!.insertion)).toBe(" gamma");
     });
 
     it("trims a delete across the end of an utterance", () => {
@@ -152,7 +255,9 @@ describe("dictationRangeStore", () => {
       const record = only();
       expect(textOf(record.utterances[0]!.range)).toBe("alpha ");
       expect(textOf(record.utterances[1]!.range)).toBe("amma");
-      expect(record.utterances.every((u) => u.range.edited)).toBe(true);
+      expect(textOf(record.utterances[0]!.insertion)).toBe(" alpha ");
+      expect(textOf(record.utterances[1]!.insertion)).toBe("amma");
+      expect(record.utterances.every((u) => u.range.edited && u.insertion.edited)).toBe(true);
     });
   });
 

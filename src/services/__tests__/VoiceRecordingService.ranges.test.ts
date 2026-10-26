@@ -61,6 +61,10 @@ const callbacks: {
   fileToken: ((payload: FileTokenPayload) => void) | null;
 } = { delta: null, complete: null, boundary: null, fileToken: null };
 
+const correct = {
+  fn: vi.fn<(request: { rawText: string }) => Promise<unknown>>(),
+};
+
 function stubElectron() {
   const electron = {
     voiceInput: {
@@ -84,6 +88,7 @@ function stubElectron() {
       onStatus: vi.fn(() => () => {}),
       getSettings: vi.fn().mockResolvedValue({ enabled: false }),
       stop: vi.fn().mockResolvedValue(undefined),
+      correct: correct.fn,
     },
     systemSleep: {
       onSuspend: vi.fn(() => () => {}),
@@ -131,7 +136,18 @@ async function setup(initialDraft = "") {
   const textOf = (range: { from: number; to: number }) => draft().slice(range.from, range.to);
   const sessionId = () =>
     useVoiceRecordingStore.getState().panelBuffers[PANEL]?.dictationSessionId ?? null;
-  return { service: voiceRecordingService, begin, draft, setDraft, records, textOf, sessionId };
+  const getDictation = (id: string) => useDictationRangeStore.getState().getDictation(id);
+  return {
+    service: voiceRecordingService,
+    voiceStore: useVoiceRecordingStore,
+    begin,
+    draft,
+    setDraft,
+    records,
+    textOf,
+    sessionId,
+    getDictation,
+  };
 }
 
 let unsubscribe: (() => void) | null = null;
@@ -147,6 +163,7 @@ describe("VoiceRecordingService — dictation ranges (#14597)", () => {
     callbacks.complete = null;
     callbacks.boundary = null;
     callbacks.fileToken = null;
+    correct.fn.mockReset();
   });
 
   afterEach(() => {
@@ -171,6 +188,31 @@ describe("VoiceRecordingService — dictation ranges (#14597)", () => {
     expect(textOf(record!.range)).toBe(" Hello. Again.");
     expect(record!.utterances.map((u) => textOf(u.range))).toEqual(["Hello.", "Again."]);
     expect(record!.range.edited).toBe(false);
+  });
+
+  it("records an unidentified final where its slice put it, past text typed mid-utterance", async () => {
+    const { draft, setDraft, records, textOf } = await setup("prefix");
+
+    delta("fin");
+    // Typed while the utterance streamed. Today's slice at the segment start
+    // drops it; the range has to land on what was actually written.
+    setDraft("prefix typed");
+    complete("Final.");
+
+    expect(draft()).toBe("prefix Final.");
+    const [record] = records();
+    expect(record!.utterances[0]!.range).toEqual({ from: 7, to: 13, edited: false });
+    expect(textOf(record!.range)).toBe("Final.");
+  });
+
+  it("records nothing for a whitespace-only unidentified final", async () => {
+    const { draft, records } = await setup("keep");
+
+    delta("um");
+    complete("  ");
+
+    expect(draft()).toBe("keep");
+    expect(records()).toEqual([]);
   });
 
   it("records identified items in the order they land", async () => {
@@ -220,9 +262,32 @@ describe("VoiceRecordingService — dictation ranges (#14597)", () => {
     expect(textOf(records()[0]!.range)).toBe("Hello there.");
     expect(records()[0]!.range.edited).toBe(false);
 
+    const [utterance] = records()[0]!.utterances;
+    expect(textOf(utterance!.range)).toBe("Hello there.");
+    expect(textOf(utterance!.insertion)).toBe("Hello there.");
+
     setDraft(draft().replace("Hello there", "Hello over there"));
-    expect(textOf(records()[0]!.range)).toBe("Hello over there.");
-    expect(records()[0]!.range.edited).toBe(true);
+    const [record] = records();
+    expect(textOf(record!.range)).toBe("Hello over there.");
+    expect(record!.range.edited).toBe(true);
+    expect(textOf(record!.utterances[0]!.range)).toBe("Hello over there.");
+    expect(record!.utterances[0]!.range.edited).toBe(true);
+  });
+
+  it("trims and flags every span a delete crosses into", async () => {
+    const { draft, setDraft, records, textOf } = await setup("Intro.");
+
+    complete("Hello.", "item-a");
+    // Deletes "o. Hel".
+    setDraft("Intrlo.");
+
+    const [record] = records();
+    const [utterance] = record!.utterances;
+    for (const range of [record!.range, utterance!.range, utterance!.insertion]) {
+      expect(textOf(range)).toBe("lo.");
+      expect(range.edited).toBe(true);
+    }
+    expect(draft()).toBe("Intrlo.");
   });
 
   it("records the stop flush of unfinished speech", async () => {
@@ -235,6 +300,42 @@ describe("VoiceRecordingService — dictation ranges (#14597)", () => {
     const [record] = records();
     expect(textOf(record!.range)).toBe(" half a thought");
     expect(textOf(record!.utterances[0]!.range)).toBe("half a thought");
+  });
+
+  it("records a stop flush where its slice put it", async () => {
+    const { service, draft, setDraft, records, textOf } = await setup("prefix");
+
+    delta("half");
+    setDraft("prefix typed");
+    await service.stop("Dictation stopped.", { skipRemoteStop: true, preserveLiveText: true });
+
+    expect(draft()).toBe("prefix half");
+    expect(records()[0]!.utterances[0]!.range).toEqual({ from: 7, to: 11, edited: false });
+    expect(textOf(records()[0]!.range)).toBe("half");
+  });
+
+  it("keeps the dictation findable through post-stop correction, which flags what it rewrote", async () => {
+    const { service, voiceStore, draft, records, textOf, getDictation } = await setup("Intro.");
+    let resolveCorrection!: (value: unknown) => void;
+    correct.fn.mockReturnValue(new Promise((resolve) => (resolveCorrection = resolve)));
+    voiceStore.getState().setCorrectionEnabled(true);
+
+    delta("hello", "item-a");
+    complete("Hello there.", "item-a");
+    const id = records()[0]!.id;
+    await service.stop("Dictation stopped.");
+
+    expect(correct.fn).toHaveBeenCalledWith({ rawText: "Hello there." });
+    expect(getDictation(id)).not.toBeNull();
+
+    resolveCorrection({ action: "replace", correctedText: "Hello, there." });
+    await vi.waitFor(() => expect(draft()).toBe("Intro. Hello, there."));
+
+    const record = getDictation(id)!;
+    expect(textOf(record.utterances[0]!.range)).toBe("Hello, there.");
+    expect(record.utterances[0]!.range.edited).toBe(true);
+    expect(record.utterances[0]!.insertion.edited).toBe(true);
+    expect(record.range.edited).toBe(true);
   });
 
   it("keeps a session's ranges after the stop and beside the next session's", async () => {
