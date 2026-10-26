@@ -1561,15 +1561,24 @@ export interface GeneratedElectronAPI {
     ): Promise<IpcInvokeMap["remote-hosts:update"]["result"]>;
   };
   reviewMarks: {
+    capture(
+      ...args: IpcInvokeMap["review-marks:capture"]["args"]
+    ): Promise<IpcInvokeMap["review-marks:capture"]["result"]>;
     clear(
       ...args: IpcInvokeMap["review-marks:clear"]["args"]
     ): Promise<IpcInvokeMap["review-marks:clear"]["result"]>;
+    compare(
+      ...args: IpcInvokeMap["review-marks:compare"]["args"]
+    ): Promise<IpcInvokeMap["review-marks:compare"]["result"]>;
     hydrate(
       ...args: IpcInvokeMap["review-marks:hydrate"]["args"]
     ): Promise<IpcInvokeMap["review-marks:hydrate"]["result"]>;
     mark(
       ...args: IpcInvokeMap["review-marks:mark"]["args"]
     ): Promise<IpcInvokeMap["review-marks:mark"]["result"]>;
+    markCaptured(
+      ...args: IpcInvokeMap["review-marks:mark-captured"]["args"]
+    ): Promise<IpcInvokeMap["review-marks:mark-captured"]["result"]>;
   };
   runHistory: {
     append(

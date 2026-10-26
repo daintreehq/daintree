@@ -227,11 +227,11 @@ function changedSince(index: MarksIndex, worktreeId: string, basedOn: number): b
 }
 
 /** Drop the oldest tombstones past the cap; `floor` keeps what they refused. */
-function trimTombstones(index: MarksIndex): void {
+function trimTombstones(index: MarksIndex, cap: number): void {
   const tombstones = [...index.worktrees].filter(([, entry]) => entry.mark === null);
-  if (tombstones.length <= MAX_TOMBSTONES) return;
+  if (tombstones.length <= cap) return;
   tombstones.sort(([, a], [, b]) => a.revision - b.revision);
-  for (const [id, entry] of tombstones.slice(0, tombstones.length - MAX_TOMBSTONES)) {
+  for (const [id, entry] of tombstones.slice(0, tombstones.length - cap)) {
     index.worktrees.delete(id);
     index.floor = Math.max(index.floor, entry.revision);
   }
@@ -248,18 +248,22 @@ function isErrno(error: unknown, code: string): boolean {
 export interface ReviewMarkStoreOptions {
   /** Test seam for the clock revisions and `markedAt` are taken from. */
   now?: () => number;
+  /** Test seam for how many tombstones are kept; {@link MAX_TOMBSTONES} by default. */
+  maxTombstones?: number;
 }
 
 export class ReviewMarkStore {
   private readonly queues = new Map<string, Promise<void>>();
   private readonly pendingSaves = new Map<string, number>();
   private readonly now: () => number;
+  private readonly maxTombstones: number;
 
   constructor(
     private readonly projectsConfigDir: string,
     options: ReviewMarkStoreOptions = {}
   ) {
     this.now = options.now ?? Date.now;
+    this.maxTombstones = options.maxTombstones ?? MAX_TOMBSTONES;
   }
 
   /** The project's marks as every view holds them. */
@@ -534,7 +538,7 @@ export class ReviewMarkStore {
     index: MarksIndex,
     guard?: ReviewMarkWriteGuard
   ): Promise<void> {
-    trimTombstones(index);
+    trimTombstones(index, this.maxTombstones);
     const previous = await this.readIndexText(projectId);
     await fs.mkdir(this.stateDir(projectId), { recursive: true });
     try {

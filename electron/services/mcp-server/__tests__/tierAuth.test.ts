@@ -540,6 +540,20 @@ describe("project.restart stays off every tier (#14179)", () => {
   });
 });
 
+// Review marks are the user's acknowledgement of what they saw, and "reviewed"
+// is never something an agent gets to say (#14580, #14585).
+describe("review mark actions stay off every tier (#14585)", () => {
+  const ids = ["worktree.markReviewed", "worktree.clearReviewMark"] as const;
+  it.each(
+    (["core", "full", "external"] as const).flatMap((tier) => ids.map((id) => [tier, id] as const))
+  )("keeps %s from %s", (tier, id) => {
+    expect(BUILT_IN_ACTION_IDS as readonly string[]).toContain(id);
+    expect(TIER_ALLOWLISTS[tier].has(id)).toBe(false);
+    expect(isTierPermitted(tier, id)).toBe(false);
+    expect(isTierPermitted(tier, id, true)).toBe(false);
+  });
+});
+
 describe("external tool surface invariants (#10701, #11537)", () => {
   const builtInIds = new Set<string>(BUILT_IN_ACTION_IDS);
 

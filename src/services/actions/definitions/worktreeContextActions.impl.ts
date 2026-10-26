@@ -27,6 +27,7 @@ import { formatCopyResultMessage } from "@/lib/formatCopyResult";
 import { announceCopyTreeCopy } from "@/lib/copyTreeFeedback";
 import { useCopyTreeRunStore } from "@/store/copyTreeRunStore";
 import { deriveCommitMessageSeed } from "@/lib/worktreeAiNote";
+import { findReviewHubMarkTarget } from "@/components/Worktree/ReviewHub/reviewHubMarkTargets";
 import { buildWorkingTreeDiffModel } from "@/lib/workingTreeDiff";
 import { basename } from "@shared/utils/path";
 import {
@@ -260,6 +261,8 @@ interface WorktreeContextActionRunArgsTable {
   "worktree.setCustomTitle": { worktreeId: string; title: string | null };
   "worktree.openEditor": WorktreeIdArgs;
   "worktree.openReviewHub": WorktreeIdArgs;
+  "worktree.markReviewed": WorktreeIdArgs;
+  "worktree.clearReviewMark": WorktreeIdArgs;
   "worktree.openChanges": WorktreeIdArgs;
   "worktree.openFileBrowser": FileBrowserArgs;
   "worktree.openFileBrowserPanel": FileBrowserPanelArgs;
@@ -460,6 +463,38 @@ export const worktreeContextActionRuns: {
       initialCommitMessage: deriveCommitMessageSeed(worktree, Date.now()),
       autoStageOnOpen: true,
     });
+  },
+
+  "worktree.markReviewed": async (args, ctx) => {
+    const target = findReviewHubMarkTarget({
+      worktreeId: args?.worktreeId,
+      focusedPanelId: ctx.focusedTerminalKind === "review" ? ctx.focusedTerminalId : null,
+    });
+    // Marking stores what a hub displayed, so there's nothing to mark without one.
+    if (!target) throw new Error("Open Review Hub on the worktree to mark it reviewed.");
+    const blocked = target.markBlockedReason();
+    if (blocked) throw new Error(`Can't mark reviewed yet: ${blocked}.`);
+    await target.markReviewed();
+  },
+
+  "worktree.clearReviewMark": async (args, ctx) => {
+    const target = findReviewHubMarkTarget({
+      worktreeId: args?.worktreeId,
+      focusedPanelId: ctx.focusedTerminalKind === "review" ? ctx.focusedTerminalId : null,
+    });
+    if (target) {
+      await target.clearReviewMark();
+      return;
+    }
+    if (!args?.worktreeId) {
+      throw new Error("Open Review Hub on the worktree, or name it, to clear its review mark.");
+    }
+    const { clearWorktreeReviewMark, getReviewMarksRevision } =
+      await import("@/store/reviewMarksStore");
+    const outcome = await clearWorktreeReviewMark(args.worktreeId, getReviewMarksRevision());
+    if (outcome.status === "stale") {
+      throw new Error("The review mark changed in another window, so it was left as it is.");
+    }
   },
 
   "worktree.openChanges": async (args, ctx) => {

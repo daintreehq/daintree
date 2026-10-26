@@ -991,6 +991,29 @@ describe("remote scope gate", () => {
     expect(clear).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps a remote view's review reads and captured marks to its own project's worktrees", async () => {
+    installScope();
+    const reads = ["review-marks:capture", "review-marks:compare"] as const;
+    const handlers = reads.map((channel) => handle(channel));
+    const markCaptured = handle("review-marks:mark-captured");
+    const { endpoint } = makeRemoteEndpoint(-3, "proj-1");
+
+    for (const channel of reads) {
+      expect((await ask(endpoint, channel, [`${P1}/wt`])).ok, channel).toBe(true);
+      const other = await ask(endpoint, channel, [`${P2}/wt`]);
+      expect(other.ok ? null : other.error.code, channel).toBe("PERMISSION");
+      expect((await ask(endpoint, channel, ["/elsewhere"])).ok, channel).toBe(false);
+    }
+    expect((await ask(endpoint, "review-marks:mark-captured", [`${P1}/wt`, "id", 0])).ok).toBe(
+      true
+    );
+    expect((await ask(endpoint, "review-marks:mark-captured", [`${P2}/wt`, "id", 0])).ok).toBe(
+      false
+    );
+    for (const handler of handlers) expect(handler).toHaveBeenCalledTimes(1);
+    expect(markCaptured).toHaveBeenCalledTimes(1);
+  });
+
   it("checks every terminal of a batch, letting gone ones through for the handler to answer", async () => {
     installScope();
     const batch = handle("terminal:get-serialized-states");

@@ -1119,6 +1119,24 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     description: "Open changes for focused worktree",
     category: "Worktrees",
   },
+  {
+    // Unbound by default; here so it can be bound (#14585).
+    actionId: "worktree.markReviewed",
+    combo: "",
+    scope: "global",
+    priority: 0,
+    description: "Mark worktree reviewed in Review Hub",
+    category: "Worktrees",
+  },
+  {
+    // Unbound by default; here so it can be bound (#14585).
+    actionId: "worktree.clearReviewMark",
+    combo: "",
+    scope: "global",
+    priority: 0,
+    description: "Clear worktree review mark",
+    category: "Worktrees",
+  },
   // Cmd+Alt, not a Cmd+K chord, and not Cmd+Shift: the file browser is a panel
   // you open, so it belongs with terminal.new/agent.* rather than the worktree
   // chord family. Cmd+K Cmd+B reads as the obvious "browse" mnemonic but Cmd+B

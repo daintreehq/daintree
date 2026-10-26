@@ -1,3 +1,4 @@
+import path from "node:path";
 import { CHANNELS } from "../channels.js";
 import { defineIpcNamespace, op } from "../define.js";
 import type { HandlerDependencies, IpcContext } from "../types.js";
@@ -7,13 +8,24 @@ import { confirmGoneWorktrees, GONE_RECHECK_DELAY_MS, readLiveWorktrees } from "
 import { AppError } from "../../utils/errorTypes.js";
 import { mayWriteProjectState } from "../../services/DriveLeaseService.js";
 import { getReviewMarkStore, isReviewMarkWorktreeId } from "../../services/reviewMarks.js";
+import { reviewPointCaptures } from "../../services/reviewPointCaptures.js";
 import {
   readWorktreeIdentity,
   reviewPointMismatch,
 } from "../../services/git/reviewPoint/readWorktreeIdentity.js";
-import { ReviewPointSchema, type ReviewPoint } from "../../../shared/types/reviewPoint.js";
+import { captureReviewPoint } from "../../services/git/reviewPoint/captureReviewPoint.js";
+import { reviewComparisons } from "../../services/git/reviewPoint/reviewComparisons.js";
+import {
+  ReviewPointSchema,
+  type ReviewPoint,
+  type ReviewPointBaseRequest,
+  type ReviewPointCaptureResult,
+} from "../../../shared/types/reviewPoint.js";
+import type { WorktreeSnapshot } from "../../../shared/types/workspace-host.js";
 import type {
+  ReviewMarkCaptureOutcome,
   ReviewMarkClearOutcome,
+  ReviewMarkCompareOutcome,
   ReviewMarkSaveOutcome,
   ReviewMarksSnapshot,
 } from "../../../shared/types/ipc/reviewMarks.js";
@@ -26,6 +38,8 @@ import type {
  */
 
 const IDENTITY_TIMEOUT_MS = 10_000;
+/** Under what a Remote Host's link carries in one frame, with room for the envelope. */
+const MAX_COMPARISON_REPLY_BYTES = 12 * 1024 * 1024;
 
 function requireProjectId(ctx: IpcContext): string {
   if (!ctx.projectId) throw new Error("review marks: sender has no project");
@@ -40,6 +54,16 @@ function requireWorktreeId(worktreeId: unknown): string {
     });
   }
   return worktreeId;
+}
+
+function requireCaptureId(captureId: unknown): string {
+  if (typeof captureId !== "string" || captureId.length === 0 || captureId.length > 64) {
+    throw new AppError({
+      code: "VALIDATION",
+      message: "review marks: captureId must name a capture",
+    });
+  }
+  return captureId;
 }
 
 function requireRevision(basedOn: unknown): number {
@@ -208,6 +232,36 @@ async function handleMark(
   if (!parsed.success) {
     throw new AppError({ code: "VALIDATION", message: "review marks: not a review point" });
   }
+  return saveMark(ctx, projectId, id, parsed.data, revision);
+}
+
+/**
+ * Store a capture Review Hub took while reading the worktree as its mark
+ * (#14585): the point behind the read the hub displayed, checked like any
+ * other. `basedOn` is the revision the hub held before that capture started.
+ */
+async function handleMarkCaptured(
+  ctx: IpcContext,
+  worktreeId: string,
+  captureId: string,
+  basedOn: number
+): Promise<ReviewMarkSaveOutcome> {
+  const projectId = requireProjectId(ctx);
+  const id = requireWorktreeId(worktreeId);
+  const capture = requireCaptureId(captureId);
+  const revision = requireRevision(basedOn);
+  const point = reviewPointCaptures.get(projectId, id, capture);
+  if (!point) return { status: "expired", snapshot: await getReviewMarkStore().read(projectId) };
+  return saveMark(ctx, projectId, id, point, revision);
+}
+
+async function saveMark(
+  ctx: IpcContext,
+  projectId: string,
+  id: string,
+  point: ReviewPoint,
+  revision: number
+): Promise<ReviewMarkSaveOutcome> {
   const store = getReviewMarkStore();
   const release = store.beginSave(projectId, id);
   try {
@@ -221,17 +275,11 @@ async function handleMark(
       console.warn(`[reviewMarks] Couldn't read worktree identity for ${projectId}:`, error);
       return { status: "unavailable", snapshot: await store.read(projectId) };
     }
-    const mismatch = reviewPointMismatch(parsed.data, identity);
+    const mismatch = reviewPointMismatch(point, identity);
     if (mismatch) {
       return { status: "mismatch", reason: mismatch, snapshot: await store.read(projectId) };
     }
-    const result = await store.save(
-      projectId,
-      id,
-      parsed.data,
-      revision,
-      driverGuard(ctx, projectId)
-    );
+    const result = await store.save(projectId, id, point, revision, driverGuard(ctx, projectId));
     if (result.changed) announce(projectId, result.snapshot);
     return { status: result.status, snapshot: result.snapshot };
   } finally {
@@ -257,12 +305,137 @@ async function handleClear(
   return { status: result.status, snapshot: result.snapshot };
 }
 
+/**
+ * The branch a worktree's change set is read against: a linked PR's base or the
+ * repository's main branch, as the host's divergence pass has it, else the main
+ * worktree's branch (the main worktree has no base of its own), else `main`, the
+ * workspace host's own default. One that doesn't resolve makes an incomplete
+ * point that says so, never no capture at all.
+ */
+function baseRequestFor(
+  worktree: WorktreeSnapshot,
+  live: readonly WorktreeSnapshot[]
+): ReviewPointBaseRequest {
+  const branch =
+    worktree.baseBranchName?.trim() ||
+    live.find((state) => state.isMainWorktree)?.branch?.trim() ||
+    worktree.branch?.trim() ||
+    "main";
+  return { kind: "branch", branch };
+}
+
+/**
+ * One capture per worktree at a time on this host. Requests that arrive while
+ * one runs share the next run, which starts after it: never the run in flight,
+ * whose content may predate a mark the caller has already seen.
+ */
+class SerialCaptures {
+  private readonly slots = new Map<
+    string,
+    { active: Promise<unknown> | null; queued: Promise<ReviewPointCaptureResult> | null }
+  >();
+
+  capture(cwd: string, base: ReviewPointBaseRequest): Promise<ReviewPointCaptureResult> {
+    const key = `${path.resolve(cwd)}\0${JSON.stringify(base)}`;
+    let slot = this.slots.get(key);
+    if (!slot) {
+      slot = { active: null, queued: null };
+      this.slots.set(key, slot);
+    }
+    if (slot.queued) return slot.queued;
+    const own = slot;
+    const run: Promise<ReviewPointCaptureResult> = (own.active ?? Promise.resolve())
+      .catch(() => undefined)
+      .then(() => {
+        own.queued = null;
+        own.active = run;
+        return captureReviewPoint(cwd, { base });
+      })
+      .finally(() => {
+        if (own.active === run) own.active = null;
+        if (!own.active && !own.queued && this.slots.get(key) === own) this.slots.delete(key);
+      });
+    own.queued = run;
+    return run;
+  }
+}
+
+const serialCaptures = new SerialCaptures();
+
+/**
+ * Capture what the worktree holds now, for Review Hub's read of it (#14585).
+ * The point stays on the host; the caller gets its id and summary.
+ */
+async function handleCapture(
+  ctx: IpcContext,
+  worktreeId: string
+): Promise<ReviewMarkCaptureOutcome> {
+  const projectId = requireProjectId(ctx);
+  const id = requireWorktreeId(worktreeId);
+  const live = await readLiveWorktrees(projectId, "reviewMarks");
+  const worktree = live?.find((state) => state.id === id);
+  if (!worktree || !live) return { status: "unavailable" };
+  const result = await serialCaptures.capture(worktree.path, baseRequestFor(worktree, live));
+  if (result.kind === "changed-during-capture") return { status: "changed-during-capture" };
+  if (result.kind === "failed") {
+    return { status: "failed", reason: result.reason, message: result.message };
+  }
+  const { point } = result;
+  const captureId = reviewPointCaptures.hold(projectId, id, point);
+  if (captureId === null) return { status: "too-large" };
+  return {
+    status: "captured",
+    capture: {
+      captureId,
+      capturedAt: point.capturedAt,
+      head: point.head,
+      complete: point.incomplete === null,
+      pathCount: point.entries.length,
+    },
+  };
+}
+
+/**
+ * Compare the worktree as it is now against its stored mark. The point is read
+ * here, beside the repository, and never sent to the caller.
+ */
+async function handleCompare(
+  ctx: IpcContext,
+  worktreeId: string
+): Promise<ReviewMarkCompareOutcome> {
+  const projectId = requireProjectId(ctx);
+  const id = requireWorktreeId(worktreeId);
+  const store = getReviewMarkStore();
+  const summary = (await store.read(projectId)).marks[id];
+  if (!summary) return { status: "none" };
+  const stored = await store.get(projectId, id);
+  if (!stored) {
+    // Cleared since the read above, or its point file is missing or edited.
+    if (!(await store.read(projectId)).marks[id]) return { status: "none" };
+    return { status: "unavailable", markRevision: summary.revision };
+  }
+  const markRevision = stored.summary.revision;
+  const live = await readLiveWorktrees(projectId, "reviewMarks");
+  const worktree = live?.find((state) => state.id === id);
+  if (!worktree) return { status: "unavailable", markRevision };
+  const result = await reviewComparisons.compare(worktree.path, stored.point);
+  if (Buffer.byteLength(JSON.stringify(result)) > MAX_COMPARISON_REPLY_BYTES) {
+    return { status: "too-large", markRevision };
+  }
+  return { status: "compared", markRevision, result };
+}
+
 export const reviewMarksNamespace = defineIpcNamespace({
   name: "reviewMarks",
   ops: {
     hydrate: op(REVIEW_MARKS_METHOD_CHANNELS.hydrate, handleHydrate, { withContext: true }),
     mark: op(REVIEW_MARKS_METHOD_CHANNELS.mark, handleMark, { withContext: true }),
+    markCaptured: op(REVIEW_MARKS_METHOD_CHANNELS.markCaptured, handleMarkCaptured, {
+      withContext: true,
+    }),
     clear: op(REVIEW_MARKS_METHOD_CHANNELS.clear, handleClear, { withContext: true }),
+    capture: op(REVIEW_MARKS_METHOD_CHANNELS.capture, handleCapture, { withContext: true }),
+    compare: op(REVIEW_MARKS_METHOD_CHANNELS.compare, handleCompare, { withContext: true }),
   },
 });
 

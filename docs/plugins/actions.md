@@ -535,6 +535,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `workflow.startWorkOnIssue` | Start work on issue | safe | `agentId`, `issueNumber`, `assignToSelf?`, `baseBranch?`, `branchName?`, `focusPolicy?`, `injectContext?`, `recipeId?`, `spawnedBy?` |
 | `worktree.bulk.closeSessions` | Close sessions for selected worktrees | confirm | — |
 | `worktree.bulk.remove` | Delete selected worktrees | confirm | — |
+| `worktree.clearReviewMark` | Clear review mark | safe | `worktreeId?` |
 | `worktree.compareDiff` | Compare worktree diff | safe | `compareToWorktreeId`, `ignoreWhitespace?`, `limit?`, `offset?`, `useMergeBase?`, `worktreeId?` |
 | `worktree.copyContext` | Copy worktree context (alias) | safe | `format?`, `modified?`, `worktreeId?` |
 | `worktree.copyTree` | Copy worktree context | safe | `format?`, `includePaths?`, `modified?`, `scopeIgnoresIgnoreFiles?`, `scopePaths?`, `worktreeId?` |
@@ -550,6 +551,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `worktree.lifecycle.retrySetup` | Retry setup | safe | `worktreeId?` |
 | `worktree.list` | List worktrees | safe | — |
 | `worktree.listBranches` | List branches | safe | `limit?`, `offset?`, `rootPath?`, `worktreeId?`, `worktreePath?` |
+| `worktree.markReviewed` | Mark reviewed | safe | `worktreeId?` |
 | `worktree.openChanges` | Open changes | safe | `worktreeId?` |
 | `worktree.openEditor` | Open in editor | safe | `worktreeId?` |
 | `worktree.openFileBrowser` | Browse files | safe | `revealKind?`, `revealPath?`, `worktreeId?` |

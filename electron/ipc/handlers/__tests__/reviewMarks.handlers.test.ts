@@ -34,6 +34,12 @@ const leaseMock = vi.hoisted(() => ({
 const identityMock = vi.hoisted(() => ({
   readWorktreeIdentity: vi.fn(),
 }));
+const captureMock = vi.hoisted(() => ({
+  captureReviewPoint: vi.fn(),
+}));
+const comparisonsMock = vi.hoisted(() => ({
+  compare: vi.fn(),
+}));
 
 vi.mock("electron", () => ({ ipcMain: ipcMainMock, app: { getPath: () => os.tmpdir() } }));
 vi.mock("../../utils.js", async (importActual) => ({
@@ -47,6 +53,13 @@ vi.mock("../../../services/git/reviewPoint/readWorktreeIdentity.js", async (impo
   ...(await importActual<object>()),
   readWorktreeIdentity: identityMock.readWorktreeIdentity,
 }));
+vi.mock("../../../services/git/reviewPoint/captureReviewPoint.js", async (importActual) => ({
+  ...(await importActual<object>()),
+  captureReviewPoint: captureMock.captureReviewPoint,
+}));
+vi.mock("../../../services/git/reviewPoint/reviewComparisons.js", () => ({
+  reviewComparisons: comparisonsMock,
+}));
 
 import { CHANNELS } from "../../channels.js";
 import {
@@ -54,14 +67,23 @@ import {
   registerReviewMarksHandlers,
   reviewMarksNamespace,
 } from "../reviewMarks.js";
-import { ReviewMarkStore, _setReviewMarkStoreForTesting } from "../../../services/reviewMarks.js";
+import {
+  ReviewMarkStore,
+  _setReviewMarkStoreForTesting,
+  getReviewMarkStore,
+} from "../../../services/reviewMarks.js";
+import { reviewPointCaptures } from "../../../services/reviewPointCaptures.js";
+import { getProjectStateDir } from "../../../services/projectStorePaths.js";
 import type { WorktreeIdentity } from "../../../services/git/reviewPoint/readWorktreeIdentity.js";
 import type { ReviewPoint } from "../../../../shared/types/reviewPoint.js";
 import type {
+  ReviewMarkCaptureOutcome,
   ReviewMarkClearOutcome,
+  ReviewMarkCompareOutcome,
   ReviewMarkSaveOutcome,
   ReviewMarksSnapshot,
 } from "../../../../shared/types/ipc/reviewMarks.js";
+import type { ReviewComparisonResult } from "../../../../shared/types/reviewComparison.js";
 
 const PROJECT_A = "a".repeat(64);
 const ROOT_A = path.resolve("/repos/alpha");
@@ -82,9 +104,28 @@ type ClearHandler = (
   basedOn: number
 ) => Promise<ReviewMarkClearOutcome>;
 
+type CaptureHandler = (
+  context: IpcContext,
+  worktreeId: string
+) => Promise<ReviewMarkCaptureOutcome>;
+type MarkCapturedHandler = (
+  context: IpcContext,
+  worktreeId: string,
+  captureId: string,
+  basedOn: number
+) => Promise<ReviewMarkSaveOutcome>;
+type CompareHandler = (
+  context: IpcContext,
+  worktreeId: string
+) => Promise<ReviewMarkCompareOutcome>;
+
 const hydrate = reviewMarksNamespace.ops.hydrate.handler as unknown as HydrateHandler;
 const mark = reviewMarksNamespace.ops.mark.handler as unknown as MarkHandler;
 const clear = reviewMarksNamespace.ops.clear.handler as unknown as ClearHandler;
+const capture = reviewMarksNamespace.ops.capture.handler as unknown as CaptureHandler;
+const markCaptured = reviewMarksNamespace.ops.markCaptured
+  .handler as unknown as MarkCapturedHandler;
+const compare = reviewMarksNamespace.ops.compare.handler as unknown as CompareHandler;
 
 function ctx(projectId: string | null, endpointId = "view-1"): IpcContext {
   return {
@@ -128,6 +169,27 @@ function liveWorktrees(...ids: string[]): void {
   });
 }
 
+function liveStates(states: Array<Record<string, unknown> & { id: string; path: string }>): void {
+  projectStoreMock.getProjectById.mockReturnValue({ path: ROOT_A });
+  workspaceClientMock.getAllStatesForProjectResultAsync.mockResolvedValue({
+    status: "ok",
+    projectId: PROJECT_A,
+    states,
+  });
+}
+
+const COMPARABLE: ReviewComparisonResult = {
+  state: "comparable",
+  comparedAt: 5_000,
+  head: { kind: "branch", branch: "feature-1", commit: COMMIT },
+  base: {
+    reviewed: { ref: null, tip: null, mergeBases: [] },
+    current: { ref: null, tip: null, mergeBases: [] },
+  },
+  files: [],
+  commits: { kind: "listed", history: "extended", commits: [], truncated: false },
+};
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((r) => {
@@ -151,6 +213,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await _settleReviewMarkPrunesForTesting();
   _setReviewMarkStoreForTesting(null);
+  reviewPointCaptures.clear();
   await fs.rm(root, { recursive: true, force: true });
 });
 
@@ -288,6 +351,166 @@ describe("reviewMarks IPC namespace", () => {
 
     expect((await saving).status).toBe("stale");
     expect((await hydrate(view))?.marks).toEqual({});
+  });
+
+  describe("Review Hub's captures (#14585)", () => {
+    beforeEach(() => {
+      liveStates([
+        { id: ROOT_A, path: ROOT_A, isMainWorktree: true, branch: "main" },
+        { id: WT_1, path: WT_1, branch: "feature-1" },
+        { id: WT_2, path: WT_2, branch: "feature-2" },
+      ]);
+    });
+
+    it("holds the capture on the host and hands back only its id and summary", async () => {
+      captureMock.captureReviewPoint.mockResolvedValue({
+        kind: "captured",
+        point: point(WT_1, { capturedAt: 4_000 }),
+      });
+
+      const outcome = await capture(ctx(PROJECT_A), WT_1);
+
+      expect(outcome).toEqual({
+        status: "captured",
+        capture: {
+          captureId: expect.any(String),
+          capturedAt: 4_000,
+          head: point(WT_1).head,
+          complete: true,
+          pathCount: 0,
+        },
+      });
+      expect(JSON.stringify(outcome)).not.toContain("gitDir");
+      expect(captureMock.captureReviewPoint).toHaveBeenCalledWith(WT_1, {
+        base: { kind: "branch", branch: "main" },
+      });
+    });
+
+    it("reads the change set against the worktree's own base, else the main worktree's branch", async () => {
+      captureMock.captureReviewPoint.mockResolvedValue({ kind: "changed-during-capture" });
+      liveStates([
+        { id: ROOT_A, path: ROOT_A, isMainWorktree: true, branch: "develop" },
+        { id: WT_1, path: WT_1, branch: "feature-1", baseBranchName: "release/2" },
+        { id: WT_2, path: WT_2, branch: "feature-2", baseBranchName: null },
+      ]);
+
+      expect(await capture(ctx(PROJECT_A), WT_1)).toEqual({ status: "changed-during-capture" });
+      await capture(ctx(PROJECT_A), WT_2);
+      await capture(ctx(PROJECT_A), ROOT_A);
+      // Nothing to go by when the main worktree is detached too: the workspace
+      // host's own default, which makes an incomplete point if it's not there.
+      liveStates([
+        { id: ROOT_A, path: ROOT_A, isMainWorktree: true },
+        { id: WT_1, path: WT_1 },
+      ]);
+      await capture(ctx(PROJECT_A), WT_1);
+
+      expect(captureMock.captureReviewPoint.mock.calls.map(([, options]) => options.base)).toEqual([
+        { kind: "branch", branch: "release/2" },
+        { kind: "branch", branch: "develop" },
+        { kind: "branch", branch: "develop" },
+        { kind: "branch", branch: "main" },
+      ]);
+    });
+
+    it("runs one capture of a worktree at a time, sharing the next run among those that wait", async () => {
+      const first = deferred<unknown>();
+      const second = deferred<unknown>();
+      captureMock.captureReviewPoint
+        .mockReturnValueOnce(first.promise)
+        .mockReturnValueOnce(second.promise);
+
+      const running = capture(ctx(PROJECT_A), WT_1);
+      await vi.waitFor(() => expect(captureMock.captureReviewPoint).toHaveBeenCalledTimes(1));
+      const waitingA = capture(ctx(PROJECT_A, "view-a"), WT_1);
+      const waitingB = capture(ctx(PROJECT_A, "view-b"), WT_1);
+      await Promise.resolve();
+      // Neither joins the run in flight, which started before they asked.
+      expect(captureMock.captureReviewPoint).toHaveBeenCalledTimes(1);
+
+      first.resolve({ kind: "captured", point: point(WT_1, { capturedAt: 1 }) });
+      await vi.waitFor(() => expect(captureMock.captureReviewPoint).toHaveBeenCalledTimes(2));
+      second.resolve({ kind: "captured", point: point(WT_1, { capturedAt: 2 }) });
+      const [a, b, c] = await Promise.all([running, waitingA, waitingB]);
+
+      expect(captureMock.captureReviewPoint).toHaveBeenCalledTimes(2);
+      expect(a.status === "captured" && a.capture.capturedAt).toBe(1);
+      expect(b.status === "captured" && b.capture.capturedAt).toBe(2);
+      expect(c.status === "captured" && c.capture.capturedAt).toBe(2);
+    });
+
+    it("captures nothing for a worktree the host doesn't list", async () => {
+      expect(await capture(ctx(PROJECT_A), path.join(ROOT_A, "gone"))).toEqual({
+        status: "unavailable",
+      });
+      expect(captureMock.captureReviewPoint).not.toHaveBeenCalled();
+    });
+
+    it("marks the held capture, checked like a handed point", async () => {
+      captureMock.captureReviewPoint.mockResolvedValue({
+        kind: "captured",
+        point: point(WT_1, { capturedAt: 4_000 }),
+      });
+      const captured = await capture(ctx(PROJECT_A), WT_1);
+      if (captured.status !== "captured") throw new Error("expected a capture");
+
+      const outcome = await markCaptured(ctx(PROJECT_A), WT_1, captured.capture.captureId, 0);
+
+      expect(outcome.status).toBe("saved");
+      expect(outcome.snapshot.marks[WT_1]).toMatchObject({ capturedAt: 4_000 });
+      expect(identityMock.readWorktreeIdentity).toHaveBeenCalledWith(WT_1, expect.anything());
+      // The point held at capture is what's stored, never a fresh one.
+      expect(captureMock.captureReviewPoint).toHaveBeenCalledTimes(1);
+      expect((await getReviewMarkStore().get(PROJECT_A, WT_1))?.point).toEqual(
+        point(WT_1, { capturedAt: 4_000 })
+      );
+    });
+
+    it("refuses a capture id from another worktree or one no longer held", async () => {
+      captureMock.captureReviewPoint.mockResolvedValue({ kind: "captured", point: point(WT_1) });
+      const captured = await capture(ctx(PROJECT_A), WT_1);
+      if (captured.status !== "captured") throw new Error("expected a capture");
+
+      const other = await markCaptured(ctx(PROJECT_A), WT_2, captured.capture.captureId, 0);
+      const unknown = await markCaptured(ctx(PROJECT_A), WT_1, "not-a-held-capture", 0);
+
+      expect(other.status).toBe("expired");
+      expect(unknown.status).toBe("expired");
+      expect(other.snapshot.marks).toEqual({});
+      expect(broadcastMock).not.toHaveBeenCalled();
+      await expect(markCaptured(ctx(PROJECT_A), WT_1, "", 0)).rejects.toThrow(/captureId/);
+    });
+
+    it("compares the worktree against its stored point and names the mark's revision", async () => {
+      const saved = await mark(ctx(PROJECT_A), WT_1, point(WT_1), 0);
+      comparisonsMock.compare.mockResolvedValue(COMPARABLE);
+
+      const outcome = await compare(ctx(PROJECT_A), WT_1);
+
+      expect(outcome).toEqual({
+        status: "compared",
+        markRevision: saved.snapshot.marks[WT_1]?.revision,
+        result: COMPARABLE,
+      });
+      expect(comparisonsMock.compare).toHaveBeenCalledWith(WT_1, point(WT_1));
+    });
+
+    it("says there's no mark rather than comparing", async () => {
+      expect(await compare(ctx(PROJECT_A), WT_1)).toEqual({ status: "none" });
+      expect(comparisonsMock.compare).not.toHaveBeenCalled();
+    });
+
+    it("says the mark can't be read when its point file is gone, never that there is none", async () => {
+      const saved = await mark(ctx(PROJECT_A), WT_1, point(WT_1), 0);
+      const dir = path.join(getProjectStateDir(root, PROJECT_A) ?? root, "review-marks");
+      for (const file of await fs.readdir(dir)) await fs.rm(path.join(dir, file));
+
+      expect(await compare(ctx(PROJECT_A), WT_1)).toEqual({
+        status: "unavailable",
+        markRevision: saved.snapshot.marks[WT_1]?.revision,
+      });
+      expect(comparisonsMock.compare).not.toHaveBeenCalled();
+    });
   });
 
   describe("pruning", () => {

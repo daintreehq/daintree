@@ -8,6 +8,7 @@ import { WORKTREE_LABEL_COLOR_NAMES } from "@shared/theme/worktreeColors";
 import { GIT_PAGE_LIMIT_DEFAULT, GIT_PAGE_LIMIT_MAX } from "@shared/config/gitReadLimits";
 import { WORKTREE_CUSTOM_TITLE_MAX_LENGTH } from "@shared/utils/worktreeCustomTitle";
 import { REVIEW_READINESS_ITEM_IDS } from "@/components/Worktree/ReviewHub/reviewReadinessItemIds";
+import { findReviewHubMarkTarget } from "@/components/Worktree/ReviewHub/reviewHubMarkTargets";
 import { fileBrowserArgsSchema, fileBrowserPanelArgsSchema } from "./worktreeContextActionArgs";
 import type {
   WorktreeContextActionRunArgs,
@@ -126,6 +127,13 @@ function fileBrowserIsReady(ctx: ActionContext): boolean {
     return worktrees ? worktrees.has(contextWorktreeId) : false;
   }
   return Boolean(ctx.projectPath ?? ctx.scratchPath);
+}
+
+/** The open Review Hub the context means: a dialog's, else the focused grid panel's. */
+function contextReviewHub(ctx: ActionContext) {
+  return findReviewHubMarkTarget({
+    focusedPanelId: ctx.focusedTerminalKind === "review" ? ctx.focusedTerminalId : null,
+  });
 }
 
 /**
@@ -330,6 +338,49 @@ export function registerWorktreeContextActions(
       scope: "renderer",
       argsSchema: z.object({ worktreeId: z.string().optional() }).optional(),
       run: (args, ctx) => runWorktreeContextAction("worktree.openReviewHub", args, ctx, callbacks),
+    })
+  );
+
+  actions.set("worktree.markReviewed", () =>
+    defineAction({
+      id: "worktree.markReviewed",
+      title: "Mark reviewed",
+      description:
+        "Mark a worktree reviewed at the commit, index and working tree its open Review Hub displays. Needs Review Hub open on the worktree; clears its per-file Viewed marks",
+      category: "worktree",
+      kind: "command",
+      danger: "safe",
+      scope: "renderer",
+      // A palette gate, as `worktree.openChanges` explains: `isEnabled` would
+      // answer for the context's hub even when `worktreeId` names another.
+      palette: {
+        mode: "requireContext",
+        isReady: (ctx: ActionContext) => contextReviewHub(ctx)?.markBlockedReason() === null,
+        reason: "Open Review Hub on a worktree and let it finish reading",
+      },
+      argsSchema: z.object({ worktreeId: z.string().optional() }).optional(),
+      run: (args, ctx) => runWorktreeContextAction("worktree.markReviewed", args, ctx, callbacks),
+    })
+  );
+
+  actions.set("worktree.clearReviewMark", () =>
+    defineAction({
+      id: "worktree.clearReviewMark",
+      title: "Clear review mark",
+      description:
+        "Remove a worktree's review mark: the one in its open Review Hub, or the worktree named",
+      category: "worktree",
+      kind: "command",
+      danger: "safe",
+      scope: "renderer",
+      palette: {
+        mode: "requireContext",
+        isReady: (ctx: ActionContext) => contextReviewHub(ctx)?.hasMark() === true,
+        reason: "Open Review Hub on a worktree that has a review mark",
+      },
+      argsSchema: z.object({ worktreeId: z.string().optional() }).optional(),
+      run: (args, ctx) =>
+        runWorktreeContextAction("worktree.clearReviewMark", args, ctx, callbacks),
     })
   );
 

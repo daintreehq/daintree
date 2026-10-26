@@ -1436,7 +1436,10 @@ export const CHANNELS = {
   // The sender project's review marks (#14584)
   REVIEW_MARKS_HYDRATE: "review-marks:hydrate",
   REVIEW_MARKS_MARK: "review-marks:mark",
+  REVIEW_MARKS_MARK_CAPTURED: "review-marks:mark-captured",
   REVIEW_MARKS_CLEAR: "review-marks:clear",
+  REVIEW_MARKS_CAPTURE: "review-marks:capture",
+  REVIEW_MARKS_COMPARE: "review-marks:compare",
   REVIEW_MARKS_CHANGED: "review-marks:changed",
 
   // Per-service connectivity channels
