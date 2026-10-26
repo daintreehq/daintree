@@ -196,7 +196,7 @@ const ANSI_RE = /[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZ
 // OSC and run to BEL or either form of ST. Their payload isn't output, and
 // left in place it splits whatever it sits inside.
 // eslint-disable-next-line no-control-regex
-const OSC_RE = /(?:\u001b\]|\u009d)[^\u0007\u001b\u009c]*(?:\u0007|\u001b\\|\u009c)/g;
+const OSC_RE = /(?:\u001b\]|\u009d)[^\u0007\u001b\u009c\u009d]*(?:\u0007|\u001b\\|\u009c)/g;
 
 // Matches identifiers: camelCase, PascalCase, snake_case, kebab-case (with internal separators)
 const IDENTIFIER_RE = /\b[a-zA-Z][a-zA-Z0-9]*(?:[-_][a-zA-Z0-9]+)+\b/g;

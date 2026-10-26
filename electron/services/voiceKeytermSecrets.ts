@@ -84,13 +84,14 @@ const CANDIDATE_RUN_RE = /[A-Za-z0-9_\-+/=]+/g;
 const BLANKABLE_RUN_RE = /[A-Za-z0-9_\-+=]+/g;
 
 // `NAME=value`, `NAME: value`, `"name":   "value"`, and `name:` at the end of a
-// line with the value on the next. The name must start at a boundary, which
-// keeps a long run with no delimiter linear.
+// line with the value on the next; not `==`, `=>` or `::`. The name must start
+// at a boundary, which keeps a long run with no delimiter linear.
 const ASSIGNMENT_RE =
-  /(?<![A-Za-z0-9_-])([A-Za-z0-9_-]{1,64})["']?[ \t]*[:=][ \t]*(["']?)([^\s"',;(]*)(\(?)/g;
+  /(?<![A-Za-z0-9_-])([A-Za-z0-9_-]{1,64})["']?[ \t]*(?:=(?![=>])|:(?!:))[ \t]*(["']?)([^\s"',;(]*)(\(\)?)?/g;
 // Values that are code rather than a credential: `password: string`,
 // `MAX_TOKENS=8192`, `token = getToken()`, `secret: process.env.SECRET`,
-// `password: ${DB_PASSWORD}`.
+// `password: ${DB_PASSWORD}`. A call with arguments may be wrapping a literal,
+// so only an empty one counts.
 const TYPE_WORDS = new Set([
   "any",
   "boolean",
@@ -103,7 +104,8 @@ const TYPE_WORDS = new Set([
   "undefined",
   "unknown",
 ]);
-const MEMBER_CHAIN_RE = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+$/;
+const MEMBER_CHAIN_RE = /^[a-z_][\w$]*(?:\.[A-Za-z_$][\w$]*)+$/;
+const ENV_REFERENCE_RE = /^\$(?:\{[A-Za-z_][A-Za-z0-9_]*\}|[A-Z_][A-Z0-9_]*)$/;
 const URL_CREDENTIALS_RE = /\b[a-z][a-z0-9+.-]{1,30}:\/\/[^\s/@:]+:[^\s/@]+@/i;
 const NETRC_RE = /^\s*(?:machine\s+\S+|default)\b.*\bpassword\s+\S/;
 
@@ -167,8 +169,9 @@ function namesCredential(run: string): boolean {
   });
 }
 
-function isCodeValue(value: string, calls: boolean): boolean {
-  if (calls || /^\d+$/.test(value) || value.startsWith("$")) return true;
+function isCodeValue(value: string, call: string | undefined): boolean {
+  if (call !== undefined) return call === "()";
+  if (/^\d+$/.test(value) || ENV_REFERENCE_RE.test(value)) return true;
   return TYPE_WORDS.has(value.toLowerCase()) || MEMBER_CHAIN_RE.test(value);
 }
 
@@ -185,7 +188,7 @@ function assignsCredential(text: string): boolean {
       if (text.slice(match.index + match[0].length).trim() === "") return true;
       continue;
     }
-    if (!isCodeValue(value, call === "(")) return true;
+    if (!isCodeValue(value, call)) return true;
   }
   return false;
 }
@@ -224,10 +227,8 @@ export function holdsCredentialOrId(text: string): boolean {
   return false;
 }
 
-// A wrapped key body: one run of key characters, perhaps inside TUI framing.
-function isBareRun(line: string): boolean {
-  return (line.match(CANDIDATE_RUN_RE)?.length ?? 0) === 1;
-}
+// A wrapped key body: nothing but key characters, perhaps inside TUI framing.
+const BARE_RUN_RE = /^[\s│┃║|⎿]*[A-Za-z0-9_\-+/=]+[\s│┃║|]*$/;
 
 /**
  * Prepares terminal lines for identifier extraction, keeping their positions.
@@ -250,7 +251,7 @@ export function redactSecretShapedLines(lines: readonly string[]): string[] {
     }
     if (wrapping) {
       // A blank line ends a wrapped key.
-      const continues = line.trim() !== "" && (firstAfter || isBareRun(line));
+      const continues = line.trim() !== "" && (firstAfter || BARE_RUN_RE.test(line));
       firstAfter = false;
       if (continues) return "";
       wrapping = false;

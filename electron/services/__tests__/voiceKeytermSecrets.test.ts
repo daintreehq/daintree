@@ -40,7 +40,8 @@ const CREDENTIALS: Record<string, string> = {
   "lowercase random token": fakeBody(24, 21, "abcdefghijklmnopqrstuvwxyz0123456789"),
   // Long words, so only its three separate digit runs give it away.
   "digit-studded token": "orange1banana2cherry3",
-  "truncated OpenAI key": "sk-proj-AbcDefGh",
+  // Too short for the generic `sk-` rule, so only `sk-proj-` itself catches it.
+  "truncated OpenAI key": "sk-proj-Abcd",
   "truncated GitHub token": "ghp_AbcDefGhi",
 };
 
@@ -123,6 +124,9 @@ describe("holdsCredential", () => {
     ["a Docker registry auth", `"auths":{"registry.example.com":{"auth":"Zm9vOmJhcg=="}}`],
     // Nothing but the shared scrubber's bearer pattern recognises this one.
     ["a bearer token in prose", "retry with Bearer abcdefghijklmnop"],
+    ["a password with a dot in it", "password: MapleRiver7.fooBar"],
+    ["a password starting with $", "password: $MapleRiver7"],
+    ["a password wrapped in a call", `password = String("MapleRiver7")`],
     ["a base64url body", `${fakeBody(9, 44)}-${fakeBody(7, 45)}_${fakeBody(11, 46)}`],
   ])("finds %s", (_label, text) => {
     expect(holdsCredential(text)).toBe(true);
@@ -139,6 +143,8 @@ describe("holdsCredential", () => {
     "Use accessToken: string in useSessionRouter",
     "secret: process.env.SECRET",
     "password: ${DB_PASSWORD}",
+    "if (auth === expectedAuth) useSessionRouter();",
+    "const run = (token) => useSessionRouter(token);",
     "a".repeat(1000),
   ])("finds nothing in %s", (line) => {
     expect(holdsCredential(line)).toBe(false);
@@ -169,6 +175,15 @@ describe("redactSecretShapedLines", () => {
     ]);
     expect(out.slice(0, 3)).toEqual(["", "", ""]);
     expect(out[3]).toBe("then useTerminalStore ran");
+  });
+
+  it("doesn't take a line of code for the rest of a wrapped key", () => {
+    const out = redactSecretShapedLines([
+      `token: ${CREDENTIALS["GitHub classic token"]}`,
+      "AbcDefGhi",
+      "useSessionRouter();",
+    ]);
+    expect(out[2]).toBe("useSessionRouter();");
   });
 
   it("stops treating lines as a wrapped key at a blank line", () => {

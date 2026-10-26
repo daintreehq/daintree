@@ -354,6 +354,14 @@ describe("assembleKeyterms", () => {
     for (const piece of ["e29b", "41d4", "a716"]) expect(result).not.toContain(piece);
   });
 
+  it("skips a project name holding an ID, rather than splitting the ID into pieces", async () => {
+    const result = await assembleKeyterms({
+      customDictionary: [],
+      projectName: "Acme 550e8400-e29b-41d4-a716-446655440000",
+    });
+    for (const piece of ["e29b", "41d4", "a716"]) expect(result).not.toContain(piece);
+  });
+
   it("keeps the user's own dictionary entries unfiltered", async () => {
     const result = await assembleKeyterms({ customDictionary: ["OPENAI_API_KEY"] });
     expect(result).toEqual(["OPENAI_API_KEY"]);
