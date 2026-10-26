@@ -348,3 +348,98 @@ describe("VoiceRecordingService — scratch that (#14636)", () => {
     expect(draft()).toBe("One.");
   });
 });
+
+describe("VoiceRecordingService — scratch that at the caret (#14634)", () => {
+  const draftKey = `${PROJECT}:${PANEL}`;
+
+  /** What the composer showed when dictation began: its draft and caret. */
+  async function showComposer(doc: string, anchor: number) {
+    const { EditorState } = await import("@codemirror/state");
+    const { recordComposerState } = await import("@/lib/composerCaret");
+    recordComposerState(draftKey, {}, EditorState.create({ doc, selection: { anchor } }));
+  }
+  const takeCaret = async (draft: string) =>
+    (await import("@/lib/composerCaret")).takePendingComposerSelection(draftKey, draft);
+
+  it("removes only the utterance dictated mid-draft, with the text on both sides intact", async () => {
+    const { draft, records, textOf } = await setup("Fix the bug. Then test.");
+    await showComposer("Fix the bug. Then test.", 12);
+
+    complete("Hello.", "a");
+    complete("Again.", "b");
+    expect(draft()).toBe("Fix the bug. Hello. Again. Then test.");
+
+    complete("Scratch that.", "c");
+    expect(draft()).toBe("Fix the bug. Hello. Then test.");
+    const [record] = records();
+    expect(record!.utterances.map((u) => textOf(u.range))).toEqual(["Hello."]);
+    // Learning diffs only the words still there.
+    expect(textOf(record!.learningSpan!)).toBe("Hello.");
+
+    complete("Scratch that.", "d");
+    complete("Scratch that.", "e");
+    expect(draft()).toBe("Fix the bug. Then test.");
+  });
+
+  it("takes the space the words were given ahead of the text after them", async () => {
+    const { draft } = await setup("Intro. Outro.");
+    await showComposer("Intro. Outro.", 7);
+
+    complete("One.", "a");
+    expect(draft()).toBe("Intro. One. Outro.");
+    complete("Scratch that.", "b");
+
+    expect(draft()).toBe("Intro. Outro.");
+  });
+
+  it("never takes text typed against the words, or the space before it", async () => {
+    const { draft, setDraft } = await setup("Intro. Outro.");
+    await showComposer("Intro. Outro.", 7);
+
+    complete("One.", "a");
+    setDraft("Intro. One.X Outro.");
+    complete("Scratch that.", "b");
+
+    expect(draft()).toBe("Intro. X Outro.");
+  });
+
+  it("dictates at the scratched spot afterwards", async () => {
+    const { draft } = await setup("Intro. Outro.");
+    await showComposer("Intro. Outro.", 7);
+
+    complete("One.", "a");
+    complete("Scratch that.", "b");
+    complete("Two.", "c");
+
+    expect(draft()).toBe("Intro. Two. Outro.");
+  });
+
+  it("puts a caret that followed the words where they were, and leaves any other alone", async () => {
+    const { draft } = await setup("Intro. Outro.");
+    await showComposer("Intro. Outro.", 7);
+
+    complete("One.", "a");
+    complete("Scratch that.", "b");
+    expect(await takeCaret(draft())).toEqual({ from: 7, to: 7 });
+
+    complete("Two.", "c");
+    await takeCaret(draft());
+    await showComposer(draft(), 0);
+    complete("Scratch that.", "d");
+    expect(await takeCaret(draft())).toBeNull();
+  });
+
+  it("marks the draft it left for the composer without moving the caret to the end", async () => {
+    const { draft } = await setup("Intro. Outro.");
+    const { useTerminalInputStore } = await import("@/store/terminalInputStore");
+    const { takeScratchLanded } = await import("@/services/voiceScratchCommand");
+    await showComposer("Intro. Outro.", 7);
+    complete("One.", "a");
+    const caretMoving = useTerminalInputStore.getState().caretMovingDraftRevision;
+
+    complete("Scratch that.", "b");
+
+    expect(takeScratchLanded(PANEL, PROJECT, draft())).toBe(true);
+    expect(useTerminalInputStore.getState().caretMovingDraftRevision).toBe(caretMoving);
+  });
+});

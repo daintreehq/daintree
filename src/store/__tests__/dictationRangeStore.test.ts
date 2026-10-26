@@ -425,6 +425,37 @@ describe("insertion anchors (#14634)", () => {
   });
 });
 
+describe("taking the last utterance at the caret (#14634)", () => {
+  /** "Intro. Outro." with "One." dictated before "Outro.", as the voice service writes it. */
+  function dictateMidDraft(): void {
+    setDraft("Intro. One. Outro.");
+    useDictationRangeStore.getState().recordUtterance(target, {
+      insertion: { from: 7, to: 11 },
+      words: { from: 7, to: 11 },
+      separatorAfter: { from: 11, to: 12 },
+    });
+  }
+  const take = () => useDictationRangeStore.getState().takeLastUtterance(target, draft());
+
+  it("takes the space the words were given ahead of the text after them", () => {
+    dictateMidDraft();
+    expect(take()).toEqual({ from: 7, to: 12 });
+  });
+
+  it("leaves that space once text is typed between it and the words", () => {
+    dictateMidDraft();
+    edit(11, 11, "X");
+    expect(draft()).toBe("Intro. One.X Outro.");
+    expect(take()).toEqual({ from: 7, to: 11 });
+  });
+
+  it("leaves that space once it is edited", () => {
+    dictateMidDraft();
+    edit(11, 12, "_");
+    expect(take()).toEqual({ from: 7, to: 11 });
+  });
+});
+
 describe("expected draft changes (#14634)", () => {
   it("maps through the change a writer declared, not the diff's guess", () => {
     setDraft("foo");

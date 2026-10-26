@@ -14,6 +14,8 @@ export interface VoiceInsertPlan {
   words: DictationTextSpan;
   /** Where the session's anchor goes next. */
   anchor: DictationTextSpan;
+  /** The space put after the words so they don't run into the text after them, when one was. */
+  separatorAfter?: DictationTextSpan;
 }
 
 // Text that hugs the word before it, so dictation landing just ahead of it
@@ -58,6 +60,7 @@ export function planVoiceWords(
     insertion: { from, to: wordsTo },
     words: { from: wordsFrom, to: wordsTo },
     anchor: { from: wordsTo, to: wordsTo },
+    ...(trailing ? { separatorAfter: { from: wordsTo, to: wordsTo + trailing.length } } : {}),
   };
 }
 

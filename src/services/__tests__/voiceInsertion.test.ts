@@ -67,6 +67,12 @@ describe("planVoiceWords", () => {
     expect(plan.next).toBe("hello big world");
     expect(plan.change).toEqual({ from: 5, to: 5, insert: " big " });
     expect(plan.anchor).toEqual({ from: 9, to: 9 });
+    expect(plan.separatorAfter).toEqual({ from: 9, to: 10 });
+  });
+
+  it("reports no separator after the words when the draft already had one", () => {
+    expect(planVoiceWords("hello world", point(5), "big").separatorAfter).toBeUndefined();
+    expect(planVoiceWords("hello", null, "big").separatorAfter).toBeUndefined();
   });
 
   it("puts no space before dictated punctuation", () => {

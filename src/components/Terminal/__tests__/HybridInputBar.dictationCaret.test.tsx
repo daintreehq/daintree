@@ -15,7 +15,7 @@ vi.mock("@/lib/trustedTypesPolicy", () => ({
 }));
 
 import { act, cleanup, render } from "@testing-library/react";
-import { EditorView } from "@codemirror/view";
+import { EditorView, runScopeHandlers } from "@codemirror/view";
 import type { PtyPanelData } from "@shared/types/panel";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { WorktreeStoreContext } from "@/contexts/WorktreeStoreContext";
@@ -26,6 +26,7 @@ import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { initBuiltInPanelKinds } from "@/panels/registry";
 import { takeLandedCorrection } from "@/services/voiceCorrectionLanding";
 import { setPendingComposerSelection } from "@/lib/composerCaret";
+import { recordScratchLanded, takeScratchLanded } from "@/services/voiceScratchCommand";
 import { HybridInputBar } from "../HybridInputBar";
 
 const WT_ID = "/repo/wt";
@@ -72,6 +73,7 @@ beforeEach(() => {
   useTerminalInputStore.setState({ draftInputs: new Map() });
   useVoiceRecordingStore.setState({ panelBuffers: {} });
   takeLandedCorrection("term-1", undefined, "");
+  takeScratchLanded("term-1", undefined, "");
 });
 
 afterEach(() => {
@@ -197,5 +199,41 @@ describe("HybridInputBar caret through outside writes", () => {
     });
 
     expect(selection(view)).toEqual({ anchor: 16, head: 16 });
+  });
+});
+
+describe("HybridInputBar after a spoken scratch mid-draft (#14636)", () => {
+  it("puts the caret where the words were, and undo brings them back", async () => {
+    const { view } = await mount();
+    await write("Intro. Outro.");
+    await focusAt(view, 7);
+    setPendingComposerSelection("term-1", "Intro. One. Outro.", { from: 11, to: 11 });
+    await write("Intro. One. Outro.", { keepsSelection: true });
+    expect(selection(view)).toEqual({ anchor: 11, head: 11 });
+
+    // As `scratchLastUtterance` writes it.
+    await act(async () => {
+      const inputs = useTerminalInputStore.getState();
+      setPendingComposerSelection("term-1", "Intro. Outro.", { from: 7, to: 7 });
+      inputs.setDraftInput("term-1", "Intro. Outro.");
+      recordScratchLanded("term-1", undefined, "Intro. Outro.");
+      inputs.bumpExternalDraftRevision({ keepsSelection: true });
+    });
+    expect(view.state.doc.toString()).toBe("Intro. Outro.");
+    expect(selection(view)).toEqual({ anchor: 7, head: 7 });
+
+    await act(async () => {
+      runScopeHandlers(
+        view,
+        new KeyboardEvent("keydown", {
+          key: "z",
+          metaKey: /Mac/.test(navigator.platform),
+          ctrlKey: !/Mac/.test(navigator.platform),
+        }),
+        "editor"
+      );
+    });
+    expect(view.state.doc.toString()).toBe("Intro. One. Outro.");
+    expect(useTerminalInputStore.getState().getDraftInput("term-1")).toBe("Intro. One. Outro.");
   });
 });

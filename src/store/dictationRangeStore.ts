@@ -21,6 +21,13 @@ export interface DictationUtterance {
   /** Everything the utterance put in the draft: its leading separator and its words. */
   insertion: TrackedTextRange;
   /**
+   * The space the write put after the words when they landed against text.
+   * It stays outside `insertion`, so the next utterance goes in ahead of it;
+   * scratching the utterance takes it too while it is untouched and still
+   * right after what's removed.
+   */
+  separatorAfter?: TrackedTextRange;
+  /**
    * Main's id for the transcript the words came from, set when spoken file
    * references in it may still arrive. One transcript can span several
    * utterances when a spoken new line splits it.
@@ -87,14 +94,19 @@ interface DictationRangeState {
   /** Records an utterance the session just wrote into the draft. */
   recordUtterance: (
     target: DictationDraftTarget,
-    span: { insertion: DictationTextSpan; words: DictationTextSpan; transcriptId?: string }
+    span: {
+      insertion: DictationTextSpan;
+      words: DictationTextSpan;
+      separatorAfter?: DictationTextSpan;
+      transcriptId?: string;
+    }
   ) => void;
   /** Records a paragraph break the session just wrote into the draft. */
   recordParagraphBreak: (target: DictationDraftTarget, insertion: DictationTextSpan) => void;
   /**
    * Takes the session's latest utterance out of its record and returns the
-   * draft span that held it, trailing paragraph breaks included, for the caller
-   * to delete. Null when the session has no utterance left in this draft or the
+   * draft span that held it, trailing paragraph breaks and the space it was
+   * given ahead of the text after it included, for the caller to delete. Null when the session has no utterance left in this draft or the
    * latest one was edited since, so typed text is never removed.
    */
   takeLastUtterance: (target: DictationDraftTarget, draft: string) => DictationTextSpan | null;
@@ -148,14 +160,18 @@ function mapRecord(record: DictationRecord, change: TextChange): DictationRecord
   const learningSpan = record.learningSpan && mapSpanKeepingEdits(record.learningSpan, change);
   let utterancesChanged = false;
   const utterances = record.utterances.map((utterance) => {
+    const separatorAfter =
+      utterance.separatorAfter && mapTextRange(utterance.separatorAfter, change);
     const mapped = {
       ...utterance,
       range: mapTextRange(utterance.range, change),
       insertion: mapTextRange(utterance.insertion, change),
+      ...(separatorAfter ? { separatorAfter } : {}),
     };
     if (
       sameRange(mapped.range, utterance.range) &&
-      sameRange(mapped.insertion, utterance.insertion)
+      sameRange(mapped.insertion, utterance.insertion) &&
+      (!separatorAfter || sameRange(separatorAfter, utterance.separatorAfter!))
     ) {
       return utterance;
     }
@@ -268,12 +284,13 @@ export const useDictationRangeStore = create<DictationRangeState>()((set, get) =
   drafts: {},
   anchors: {},
 
-  recordUtterance: (target, { insertion, words, transcriptId }) =>
+  recordUtterance: (target, { insertion, words, separatorAfter, transcriptId }) =>
     set((state) => ({
       drafts: withInsertion(state.drafts, target, insertion, {
         id: crypto.randomUUID(),
         range: unedited(words),
         insertion: unedited(insertion),
+        ...(separatorAfter ? { separatorAfter: unedited(separatorAfter) } : {}),
         ...(transcriptId ? { transcriptId } : {}),
       }),
     })),
@@ -300,6 +317,17 @@ export const useDictationRangeStore = create<DictationRangeState>()((set, get) =
         : last.insertion.to;
     const from = last.insertion.from;
     if (to > draft.length) return null;
+    // The space the words were given ahead of the text after them goes with
+    // them, so that text is left as it was before they landed.
+    const separator = last.separatorAfter;
+    const end =
+      separator &&
+      !separator.edited &&
+      separator.from === to &&
+      separator.to <= draft.length &&
+      draft.slice(separator.from, separator.to).trim() === ""
+        ? separator.to
+        : to;
     const trimmed: DictationRecord = {
       ...record,
       // Taking the text off the envelope's end keeps a clean envelope clean.
@@ -312,7 +340,7 @@ export const useDictationRangeStore = create<DictationRangeState>()((set, get) =
     set((state) => ({
       drafts: { ...state.drafts, [key]: records.map((r, i) => (i === index ? trimmed : r)) },
     }));
-    return { from, to };
+    return { from, to: end };
   },
 
   mapDrafts: (previous, next) => {

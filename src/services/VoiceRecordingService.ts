@@ -194,8 +194,15 @@ function writeVoiceWords(
     resolveVoiceAnchor(panelId, projectId, sessionId, draft),
     text
   );
-  commitVoicePlan(panelId, projectId, sessionId, plan, (target, { insertion, words }) =>
-    useDictationRangeStore.getState().recordUtterance(target, { insertion, words, transcriptId })
+  commitVoicePlan(
+    panelId,
+    projectId,
+    sessionId,
+    plan,
+    (target, { insertion, words, separatorAfter }) =>
+      useDictationRangeStore
+        .getState()
+        .recordUtterance(target, { insertion, words, separatorAfter, transcriptId })
   );
   return plan;
 }
@@ -2485,6 +2492,15 @@ class VoiceRecordingService {
       .takeLastUtterance({ sessionId, panelId, projectId }, draft);
     if (!span) return;
     const next = draft.slice(0, span.from) + draft.slice(span.to);
+    // A caret that followed the words stays where they were. The composer's
+    // own diff could slide it along a run the removal shares with the text
+    // after it, as the ranges below would be without the change spelled out.
+    const draftKey = makeDraftKey(panelId, projectId);
+    const caret =
+      peekPendingComposerSelection(draftKey, draft) ?? readComposerSelection(draftKey, draft);
+    if (caret && caret.from >= span.from && caret.to <= span.to) {
+      setPendingComposerSelection(draftKey, next, { from: span.from, to: span.from });
+    }
     useVoiceRecordingStore.getState().shiftDraftOffsets(panelId, span.to, -(span.to - span.from));
     // The anchor and earlier ranges follow the words actually removed, not a
     // repeat of them the diff might pick.
@@ -2493,6 +2509,7 @@ class VoiceRecordingService {
       .expectDraftChange(panelId, projectId, draft, next, { ...span, insert: "" });
     inputStore.setDraftInput(panelId, next, projectId);
     recordScratchLanded(panelId, projectId, next);
+    // Like the words it removes, it leaves the caret to the user.
     inputStore.bumpExternalDraftRevision({ keepsSelection: true });
   }
 
