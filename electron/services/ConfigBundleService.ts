@@ -80,6 +80,7 @@ import {
 import {
   customPresetIds,
   mergeAgentEntry,
+  withoutLegacyPin,
   mergeEnv,
   projectAgentEntry,
   projectAgents,
@@ -388,6 +389,26 @@ function recipeRefusal(recipe: Record<string, unknown>): string | null {
   return null;
 }
 
+/**
+ * A copy recorded before pins left agent settings (#14702) holds them in its
+ * agent entries, and migration 038 has since taken them off the live ones.
+ * Compared and put back without them, so the undo neither reads the migration
+ * as an edit nor writes a pin back into agent settings.
+ */
+function withoutLegacyPins(section: ConfigBundleSectionId, leaves: UndoLeaf[]): UndoLeaf[] {
+  const isAgentEntry = (key: string) =>
+    section === "agentSettings" || (section === "permissionBypass" && key.startsWith("agents."));
+  return leaves.map((leaf) => {
+    if (!isAgentEntry(leaf.key)) return leaf;
+    const { before, after } = leaf;
+    return {
+      key: leaf.key,
+      ...(before !== undefined ? { before: withoutLegacyPin(before) } : {}),
+      ...(after !== undefined ? { after: withoutLegacyPin(after) } : {}),
+    };
+  });
+}
+
 export class ConfigBundleService {
   private readonly handlers: SectionHandler[];
 
@@ -659,12 +680,13 @@ export class ConfigBundleService {
         results.push({ section, leaves: leaves.map(({ key }) => ({ key, status: "failed" })) });
         continue;
       }
+      const comparable = withoutLegacyPins(section, leaves);
       try {
         results.push({
           section,
           leaves: handler.undo
-            ? await handler.undo(leaves)
-            : await this.undoLeaves(handler, leaves),
+            ? await handler.undo(comparable)
+            : await this.undoLeaves(handler, comparable),
         });
       } catch (error) {
         console.error(`[ConfigBundleService] Failed to undo ${section}:`, error);

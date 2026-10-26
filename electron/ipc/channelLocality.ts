@@ -39,7 +39,8 @@ export const CHANNEL_LOCALITY = {
   "agent-capabilities:get-ccr-presets": "host",
   "agent-capabilities:get-registry": "host",
   "agent-capabilities:get-resolved-model-list": "host",
-  "agent-capabilities:is-agent-enabled": "host",
+  // Answers from this machine's toolbar pins (#14702).
+  "agent-capabilities:is-agent-enabled": "shell",
   "agent-help:get": "host",
   "agent-defaults:changed": "host",
   "agent-defaults:get": "host",

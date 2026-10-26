@@ -100,6 +100,16 @@ export function mergePresets(current: unknown, incoming: unknown): Entry[] {
 }
 
 /**
+ * An agent entry without the toolbar pin it may still carry from before pins
+ * became this machine's (#14702). Anything else comes back as it was.
+ */
+export function withoutLegacyPin(entry: unknown): unknown {
+  if (!isRecord(entry) || !Object.hasOwn(entry, "pinned")) return entry;
+  const { pinned: _pinned, ...rest } = entry;
+  return rest;
+}
+
+/**
  * One agent's settings with the incoming portable fields laid over the
  * target's, minus the retired `selected`/`enabled`/`pinned` keys (dropped here
  * as the `agentSettings:set` handler drops them, so a merge also clears a

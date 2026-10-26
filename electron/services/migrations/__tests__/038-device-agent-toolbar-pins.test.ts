@@ -37,6 +37,14 @@ describe("migration038 — toolbar agent pins move onto this machine (#14702)", 
     expect(data.agentToolbarPins).toEqual({ claude: true, gemini: false });
   });
 
+  it("carries pins from a store at settingsVersion 1, the first that showed them", () => {
+    const { data } = run({
+      agentSettings: { settingsVersion: 1, agents: { claude: { pinned: false } } },
+    });
+
+    expect(data.agentToolbarPins).toEqual({ claude: false });
+  });
+
   it("strips the pin from agent settings and keeps every execution setting", () => {
     const { data } = run({
       agentSettings: {

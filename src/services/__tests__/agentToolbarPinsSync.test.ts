@@ -49,7 +49,7 @@ beforeEach(() => {
     configurable: true,
     writable: true,
   });
-  useAgentToolbarPinsStore.setState({ pins: {}, revision: -1 });
+  useAgentToolbarPinsStore.setState({ pins: {}, committedPins: {}, revision: -1 });
 });
 
 describe("initAgentToolbarPinsSync (#14702)", () => {
@@ -158,7 +158,7 @@ describe("agentToolbarPinsStore", () => {
   });
 
   it("rolls its own guess back when main can't be read either", async () => {
-    useAgentToolbarPinsStore.setState({ pins: { claude: true }, revision: 2 });
+    useAgentToolbarPinsStore.getState().applySnapshot({ pins: { claude: true }, revision: 2 });
     clientMock.set.mockRejectedValue(new Error("IPC down"));
     clientMock.get.mockRejectedValue(new Error("IPC down"));
 
@@ -167,6 +167,57 @@ describe("agentToolbarPinsStore", () => {
     ).rejects.toThrow("IPC down");
 
     expect(pins()).toEqual({ claude: true });
+  });
+
+  it("undoes only its own agent when two overlapping writes both fail", async () => {
+    useAgentToolbarPinsStore.getState().applySnapshot({ pins: { claude: true }, revision: 2 });
+    clientMock.get.mockRejectedValue(new Error("IPC down"));
+    const rejects: Array<(error: Error) => void> = [];
+    clientMock.set.mockImplementation(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejects.push(reject);
+        })
+    );
+
+    const { setAgentPinned } = useAgentToolbarPinsStore.getState();
+    const pinGemini = setAgentPinned("gemini", true);
+    const unpinClaude = setAgentPinned("claude", false);
+    expect(pins()).toEqual({ claude: false, gemini: true });
+
+    rejects[0]!(new Error("IPC down"));
+    await expect(pinGemini).rejects.toThrow("IPC down");
+    rejects[1]!(new Error("IPC down"));
+    await expect(unpinClaude).rejects.toThrow("IPC down");
+
+    // Neither failed write survives, and neither undo restores the other's guess.
+    expect(pins()).toEqual({ claude: true });
+  });
+
+  it("puts an agent back to what main confirmed when two writes to it both fail", async () => {
+    useAgentToolbarPinsStore.getState().applySnapshot({ pins: {}, revision: 2 });
+    clientMock.get.mockRejectedValue(new Error("IPC down"));
+    const rejects: Array<(error: Error) => void> = [];
+    clientMock.set.mockImplementation(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejects.push(reject);
+        })
+    );
+
+    const { setAgentPinned } = useAgentToolbarPinsStore.getState();
+    const pin = setAgentPinned("claude", true);
+    const unpin = setAgentPinned("claude", false);
+
+    rejects[0]!(new Error("IPC down"));
+    await expect(pin).rejects.toThrow("IPC down");
+    // The later write owns the agent now, so the first failure leaves it be.
+    expect(pins()).toEqual({ claude: false });
+    rejects[1]!(new Error("IPC down"));
+    await expect(unpin).rejects.toThrow("IPC down");
+
+    // Not the first write's guess: the unset pin main last confirmed.
+    expect(pins()).toEqual({});
   });
 
   it("never lets an older snapshot replace a newer one", () => {

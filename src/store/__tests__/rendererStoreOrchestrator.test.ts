@@ -36,6 +36,14 @@ vi.mock("@/clients", () => ({
   },
 }));
 
+const agentToolbarPinsSync = vi.hoisted(() => {
+  const dispose = vi.fn();
+  return { dispose, init: vi.fn(() => dispose) };
+});
+vi.mock("@/services/agentToolbarPinsSync", () => ({
+  initAgentToolbarPinsSync: agentToolbarPinsSync.init,
+}));
+
 vi.mock("@/services/TerminalInstanceService", () => {
   const terminalInstanceService = {
     cleanup: vi.fn(),
@@ -118,7 +126,6 @@ const { useCliAvailabilityStore, cleanupCliAvailabilityStore } =
   await import("../cliAvailabilityStore");
 const { useAgentSettingsStore, cleanupAgentSettingsStore } = await import("../agentSettingsStore");
 const { agentSettingsClient } = await import("@/clients");
-const { DEFAULT_AGENT_SETTINGS } = await import("@shared/types");
 const { useHelpPanelStore } = await import("../helpPanelStore");
 const { usePortalStore } = await import("../portalStore");
 const { useProjectHomeStore, selectProjectMainAreaRoute } = await import("../projectHomeStore");
@@ -2069,6 +2076,22 @@ describe("rendererStoreOrchestrator", () => {
       dictateHello();
       setDraft("Note: hello");
       expect(ranges()[0]!.range).toEqual({ from: 6, to: 11, edited: false });
+    });
+  });
+
+  describe("this machine's toolbar agent pins (#14702)", () => {
+    it("keeps the pins in sync for the orchestrator's life, once per init", () => {
+      destroyStoreOrchestrator();
+      agentToolbarPinsSync.init.mockClear();
+      agentToolbarPinsSync.dispose.mockClear();
+
+      initStoreOrchestrator();
+      initStoreOrchestrator();
+      expect(agentToolbarPinsSync.init).toHaveBeenCalledTimes(1);
+      expect(agentToolbarPinsSync.dispose).not.toHaveBeenCalled();
+
+      destroyStoreOrchestrator();
+      expect(agentToolbarPinsSync.dispose).toHaveBeenCalledTimes(1);
     });
   });
 });

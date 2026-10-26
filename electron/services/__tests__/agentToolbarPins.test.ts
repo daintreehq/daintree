@@ -118,14 +118,16 @@ describe("agentToolbarPins (#14702)", () => {
 
   describe("seedAgentToolbarPinsIfUnset", () => {
     it("pins the first five installed built-ins on a fresh install and unpins the rest", () => {
-      const installed = BUILT_IN_AGENT_IDS.slice(0, 7);
+      // Every other agent, so the five picked reach past the registry's first five.
+      const installed = BUILT_IN_AGENT_IDS.filter((_, index) => index % 2 === 1);
+      expect(installed.length).toBeGreaterThan(5);
 
       expect(seedAgentToolbarPinsIfUnset(availability(installed))).toBe(true);
 
       const pins = fakeStore.dump().agentToolbarPins as Record<string, boolean>;
-      for (const [index, id] of BUILT_IN_AGENT_IDS.entries()) {
-        expect(pins[id]).toBe(index < 5);
-      }
+      const pinned = BUILT_IN_AGENT_IDS.filter((id) => pins[id]);
+      expect(pinned).toEqual(installed.slice(0, 5));
+      expect(Object.keys(pins).sort()).toEqual([...BUILT_IN_AGENT_IDS].sort());
       expect(broadcastMock).toHaveBeenCalledTimes(1);
     });
 

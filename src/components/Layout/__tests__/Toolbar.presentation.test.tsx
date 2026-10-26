@@ -7,7 +7,7 @@
 import "../__preview__/toolbarShims";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import type { CliAvailability, AgentSettings } from "@shared/types";
+import type { CliAvailability } from "@shared/types";
 import type { PresentationLevels } from "@shared/config/presentationProfile";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { WorktreeStoreContext } from "@/contexts/WorktreeStoreContext";
@@ -35,7 +35,6 @@ function Harness() {
       onSettings={noop}
       hasWorkspace
       agentAvailability={{} as CliAvailability}
-      agentSettings={{ agents: {} } as AgentSettings}
       projectSwitcherPalette={projectSwitcherPalette}
     />
   );
