@@ -46,6 +46,7 @@ import {
 } from "./useReviewHubStagingActions";
 import { PushErrorBanner } from "./PushErrorBanner";
 import { PrStatusChip } from "./PrStatusChip";
+import { ReviewHubContext } from "./ReviewHubContext";
 import { CommitPanel } from "./CommitPanel";
 import { ConflictPanel } from "./ConflictPanel";
 import { ReadinessRail } from "./ReadinessRail";
@@ -1340,6 +1341,8 @@ export function ReviewHubContent({
             )}
           </div>
         </SurfaceHeader>
+
+        <ReviewHubContext worktreePath={worktreePath} worktreeId={worktreeId} />
 
         {/* Merge-readiness rail — hidden until staging status resolves.
             While `PushErrorBanner` is mounted it owns the push failure outright:
