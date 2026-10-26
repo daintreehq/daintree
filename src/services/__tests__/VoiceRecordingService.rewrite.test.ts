@@ -290,6 +290,21 @@ describe("VoiceRecordingService — rewrite selection by voice (#14635)", () => 
     expect(voiceStore.getState().status).toBe("idle");
   });
 
+  it("gives the selection back when another start supersedes a rewrite still arming", async () => {
+    const { service, voiceStore } = await setup();
+    vi.spyOn(service, "start").mockResolvedValue();
+    const selection = fakeSelection("make me shorter");
+    voiceStore.getState().setArming({
+      panelId: "panel-1",
+      rewrite: { selection, instruction: [], cancelled: false },
+    });
+
+    await service.toggle({ panelId: "panel-2" });
+
+    expect(selection.release).toHaveBeenCalled();
+    expect(voiceStore.getState().pendingTarget?.panelId).toBe("panel-2");
+  });
+
   it("keeps the selection when the same rewrite restarts on another microphone", async () => {
     const { service, voiceStore, say, recordInstruction, flush } = await setup();
     const selection = fakeSelection("make me shorter");

@@ -905,7 +905,7 @@ class VoiceRecordingService {
     // Synchronous pre-audio cue. setArming() resolves under 1ms (Zustand set);
     // the first await inside start() then carries us to "connecting" within
     // ~50–200ms, by which point beginSession() has overwritten this state.
-    useVoiceRecordingStore.getState().setArming(target);
+    this.armTarget(target);
     await this.start(target);
   }
 
@@ -984,16 +984,7 @@ class VoiceRecordingService {
    * the user has moved on.
    */
   private invalidatePendingStart(): void {
-    // A rewrite that never began its session gives its selection back; one
-    // whose session is running keeps it for that session's stop.
-    const { pendingTarget, activeTarget, status } = useVoiceRecordingStore.getState();
-    const cancelledRewrite = pendingTarget?.rewrite;
-    if (
-      cancelledRewrite &&
-      !(isActiveVoiceSession(status) && activeTarget?.rewrite === cancelledRewrite)
-    ) {
-      cancelledRewrite.selection.release();
-    }
+    this.releasePendingRewrite();
     this.startRequestId++;
     this.startup = null;
     this.releasePendingCapture();
@@ -2817,8 +2808,32 @@ class VoiceRecordingService {
       ...target,
       rewrite: { selection, instruction: [], cancelled: false },
     };
-    useVoiceRecordingStore.getState().setArming(rewriteTarget);
+    this.armTarget(rewriteTarget);
     await this.start(rewriteTarget);
+  }
+
+  /** The pre-audio cue for a start, which supersedes any start still pending. */
+  private armTarget(target: VoiceRecordingTarget): void {
+    this.releasePendingRewrite(target);
+    useVoiceRecordingStore.getState().setArming(target);
+  }
+
+  /**
+   * A rewrite whose start is cancelled or superseded before its session began
+   * gives its selection back. One whose session is running keeps it for that
+   * session's stop, and `next` keeps it when the new start is the same rewrite.
+   */
+  private releasePendingRewrite(next?: VoiceRecordingTarget): void {
+    const { pendingTarget, activeTarget, status } = useVoiceRecordingStore.getState();
+    const pending = pendingTarget?.rewrite;
+    if (
+      !pending ||
+      pending === next?.rewrite ||
+      (isActiveVoiceSession(status) && activeTarget?.rewrite === pending)
+    ) {
+      return;
+    }
+    pending.selection.release();
   }
 
   private reportNothingToRewrite(message: string): void {
@@ -2868,7 +2883,7 @@ class VoiceRecordingService {
       }
       // The held key gets the same pre-audio cue as a toggle press.
       useVoiceRecordingStore.getState().recordRecentTarget(target);
-      useVoiceRecordingStore.getState().setArming(target);
+      this.armTarget(target);
       await this.start(target);
       return;
     }

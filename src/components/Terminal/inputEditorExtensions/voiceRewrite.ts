@@ -15,7 +15,8 @@ class TrackedSelection implements RewriteSelection {
     private readonly view: EditorView,
     readonly text: string,
     private from: number,
-    private to: number
+    private to: number,
+    private readonly onApplied: (doc: string) => void
   ) {}
 
   range(): { from: number; to: number } | null {
@@ -72,6 +73,7 @@ class TrackedSelection implements RewriteSelection {
       scrollIntoView: true,
       annotations: [isolateHistory.of("full"), Transaction.userEvent.of(REWRITE_USER_EVENT)],
     });
+    this.onApplied(view.state.doc.toString());
     return true;
   }
 
@@ -82,11 +84,18 @@ class TrackedSelection implements RewriteSelection {
   }
 }
 
-/** The view's non-empty main selection, followed through every edit from now on. */
-export function captureRewriteSelection(view: EditorView): RewriteSelection | null {
+/**
+ * The view's non-empty main selection, followed through every edit from now
+ * on. `onApplied` gets the document a landed rewrite leaves, for whatever must
+ * hold it before the next render does.
+ */
+export function captureRewriteSelection(
+  view: EditorView,
+  onApplied: (doc: string) => void = () => {}
+): RewriteSelection | null {
   const { from, to } = view.state.selection.main;
   if (from === to) return null;
-  const tracked = new TrackedSelection(view, view.state.sliceDoc(from, to), from, to);
+  const tracked = new TrackedSelection(view, view.state.sliceDoc(from, to), from, to, onApplied);
   let set = trackedByView.get(view);
   if (!set) {
     set = new Set();

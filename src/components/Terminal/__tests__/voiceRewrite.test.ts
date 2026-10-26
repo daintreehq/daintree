@@ -117,6 +117,16 @@ describe("captureRewriteSelection", () => {
     expect(second.range()).toBeNull();
   });
 
+  it("hands the document it leaves to the caller as it lands", () => {
+    const view = mount(DOC, FROM, TO);
+    const onApplied = vi.fn();
+    const selection = captureRewriteSelection(view, onApplied)!;
+
+    selection.apply("Shorter.");
+
+    expect(onApplied).toHaveBeenCalledExactlyOnceWith("Intro. Shorter. Outro.");
+  });
+
   it("lands while a send holds the composer read-only", () => {
     const locked = new EditorView({
       parent: document.createElement("div"),

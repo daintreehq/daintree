@@ -896,10 +896,16 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         },
         captureSelection: () => {
           const view = editorViewRef.current;
-          return view ? captureRewriteSelection(view) : null;
+          // Written through at once: a send waiting on the rewrite reads the
+          // draft store, which would otherwise catch up only on the next render.
+          return view
+            ? captureRewriteSelection(view, (doc) =>
+                useTerminalInputStore.getState().setDraftInput(terminalId, doc, projectId)
+              )
+            : null;
         },
       });
-    }, [terminalId, isolated]);
+    }, [terminalId, isolated, projectId]);
 
     const { sendText: sendResolvedText } = useTokenResolution({
       latestRef,
