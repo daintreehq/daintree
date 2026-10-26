@@ -1,15 +1,13 @@
 import { z } from "zod";
 
-/**
+/*
  * The one line a dictation session leaves in the log: where its time went, on
  * the renderer's clock, and what went wrong along the way. Every field is a
  * number, an enum or a flag, so no dictated text, panel title or keyterm can
- * ride along; the session id beside it is the only string on the line.
- *
- * The message doubles as the marker that keeps the line out of telemetry: the
- * Sentry breadcrumb filter drops any console line carrying it.
+ * ride along; the session id beside it is the only string on the line. Its
+ * message (`VOICE_SESSION_SUMMARY_MESSAGE`, in shared/utils/voiceLogFields)
+ * keeps it out of telemetry.
  */
-export const VOICE_SESSION_SUMMARY_MESSAGE = "[VoiceSession] Summary";
 
 export const VOICE_DELAY_TIERS = ["minimal", "low", "medium", "high", "xhigh"] as const;
 

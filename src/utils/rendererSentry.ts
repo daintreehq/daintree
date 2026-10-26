@@ -1,3 +1,5 @@
+import { isVoiceSessionSummaryLine } from "@shared/utils/voiceLogFields";
+
 export type ConsentLevel = "off" | "errors" | "full";
 
 export interface ConsentState {
@@ -71,6 +73,9 @@ export function initRendererSentry(): Promise<void> {
       },
       beforeBreadcrumb: (breadcrumb) => {
         if (!consentState.hasSeenPrompt || consentState.level === "off") return null;
+        // The logger's console fallback would otherwise turn the local-only
+        // dictation summary into a crumb (#14617).
+        if (isVoiceSessionSummaryLine(breadcrumb.message)) return null;
         return breadcrumb;
       },
       // Match the main-process ring size — renderer breadcrumbs merge into

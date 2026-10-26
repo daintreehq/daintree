@@ -9,6 +9,7 @@ import { sanitizePath } from "../utils/pathScrubber.js";
 import { emitTelemetryPreview, isTelemetryPreviewActive } from "./TelemetryPreviewBroadcaster.js";
 import { getWritesSuppressed } from "./diskPressureState.js";
 import { BreadcrumbRepeatLimiter } from "./breadcrumbRepeatLimiter.js";
+import { isVoiceSessionSummaryLine } from "../../shared/utils/voiceLogFields.js";
 import {
   REPORTED_EXIT_REASONS,
   buildChildProcessExitEvent,
@@ -384,7 +385,12 @@ export async function initializeTelemetry(): Promise<void> {
         // (drag bursts, agent-state polls, file-watcher fanouts) don't rotate
         // the crash-triggering breadcrumb out before flush. See #7575.
         maxBreadcrumbs: 250,
-        beforeBreadcrumb: (breadcrumb) => breadcrumbLimiter.filter(breadcrumb),
+        // The dictation summary is for the local log only (#14617); the
+        // logger also prints it to the console, which would make it a crumb.
+        beforeBreadcrumb: (breadcrumb) =>
+          isVoiceSessionSummaryLine(breadcrumb.message)
+            ? null
+            : breadcrumbLimiter.filter(breadcrumb),
         // No tracing backend consumes these, and the default fetch / Electron
         // net integrations otherwise stamp `sentry-trace` + `baggage` (public
         // key, release, trace id) onto every outbound request to third-party

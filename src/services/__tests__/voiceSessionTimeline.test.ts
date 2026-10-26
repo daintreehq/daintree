@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { VOICE_SESSION_SUMMARY_MESSAGE } from "@shared/types/voiceSessionSummary";
+import { VOICE_SESSION_SUMMARY_MESSAGE } from "@shared/utils/voiceLogFields";
 import {
   VOICE_PRESS_WINDOW_MS,
   VOICE_REPORT_WAIT_MS,

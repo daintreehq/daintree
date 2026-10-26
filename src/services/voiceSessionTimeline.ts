@@ -1,5 +1,5 @@
+import { VOICE_SESSION_SUMMARY_MESSAGE } from "@shared/utils/voiceLogFields";
 import {
-  VOICE_SESSION_SUMMARY_MESSAGE,
   VoiceSessionReportSchema,
   VoiceSessionSummarySchema,
   type VoiceSessionReport,
