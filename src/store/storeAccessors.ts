@@ -1,9 +1,4 @@
-import type {
-  AgentSettingsEntry,
-  StagingStatus,
-  TabGroup,
-  WorktreeSnapshot,
-} from "@shared/types";
+import type { AgentSettingsEntry, StagingStatus, TabGroup, WorktreeSnapshot } from "@shared/types";
 import { getNarrowPanel } from "./slices/panelRegistry/selectors";
 
 // Carrier element from the legacy `panelsById` shape, sourced through

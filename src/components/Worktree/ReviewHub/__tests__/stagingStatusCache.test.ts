@@ -9,7 +9,10 @@ import {
   resetStagingStatusCacheForTests,
 } from "../stagingStatusCache";
 import { useDiffViewedStore, selectViewedSet } from "@/store/diffViewedStore";
-import { resetStoreAccessorsForTesting, setViewedMarkSourcesAccessor } from "@/store/storeAccessors";
+import {
+  resetStoreAccessorsForTesting,
+  setViewedMarkSourcesAccessor,
+} from "@/store/storeAccessors";
 
 const statusNamed = (branch: string): StagingStatus =>
   ({ currentBranch: branch, staged: [], unstaged: [] }) as unknown as StagingStatus;
@@ -39,8 +42,7 @@ describe("stagingStatusCache", () => {
         staged: [{ path: "a.ts", status: "modified", insertions, deletions: 0 }],
         unstaged: [],
       }) as unknown as StagingStatus;
-    const viewed = () =>
-      selectViewedSet(useDiffViewedStore.getState(), "/wt").has("staged:a.ts");
+    const viewed = () => selectViewedSet(useDiffViewedStore.getState(), "/wt").has("staged:a.ts");
 
     const older = beginStagingStatusRead();
     rememberStagingStatus("/wt", withStaged(1), beginStagingStatusRead());

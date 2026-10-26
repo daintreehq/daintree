@@ -6,7 +6,10 @@ import { useContext } from "react";
 import { useProjectStore } from "@/store/projectStore";
 import { useDiffViewedStore, selectViewedSet } from "@/store/diffViewedStore";
 import { getCurrentViewStoreOrNull } from "@/store/createWorktreeStore";
-import { resetStoreAccessorsForTesting, setViewedMarkSourcesAccessor } from "@/store/storeAccessors";
+import {
+  resetStoreAccessorsForTesting,
+  setViewedMarkSourcesAccessor,
+} from "@/store/storeAccessors";
 import type { FileChangeDetail, WorktreeEventVersion, WorktreeSnapshot } from "@shared/types";
 import type { Project } from "@shared/types/project";
 
@@ -63,8 +66,7 @@ function emitUpdate(worktree: WorktreeSnapshot): void {
   });
 }
 
-const viewed = (key: string) =>
-  selectViewedSet(useDiffViewedStore.getState(), WT_PATH).has(key);
+const viewed = (key: string) => selectViewedSet(useDiffViewedStore.getState(), WT_PATH).has(key);
 
 beforeEach(() => {
   listeners.clear();

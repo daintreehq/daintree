@@ -162,7 +162,8 @@ describe("diffViewedStore", () => {
       sources = { ...sources, stagingStatus: { staged, unstaged } as unknown as StagingStatus };
     };
 
-    const mark = (key: string, path = WT) => useDiffViewedStore.getState().setViewed(path, key, true);
+    const mark = (key: string, path = WT) =>
+      useDiffViewedStore.getState().setViewed(path, key, true);
     const reconcile = (path?: string) => useDiffViewedStore.getState().reconcileViewed(path);
     const viewed = (key: string, path = WT) =>
       selectViewedSet(useDiffViewedStore.getState(), path).has(key);
