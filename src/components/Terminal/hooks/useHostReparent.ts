@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import type { EditorView } from "@codemirror/view";
 import type { Compartment } from "@codemirror/state";
 import { createAutoSize } from "../inputEditorExtensions";
+import { captureFocusEpoch, isFocusEpochCurrent } from "../paneFocusRequest";
 
 export type ReparentEditorView = Pick<
   EditorView,
@@ -47,6 +48,9 @@ export function useHostReparent({
     // React re-running this effect on an unchanged host (StrictMode's mount
     // replay), must not pull focus into an editor nobody asked for.
     const shouldRestoreFocus = previousExpanded !== null && previousExpanded !== isExpanded;
+    // A press or a focus request before the frame takes the keyboard elsewhere,
+    // such as a send that closed the Expanded Editor handing it to the terminal.
+    const epoch = captureFocusEpoch();
     let rafId: number | null = null;
     let nestedRafId: number | null = null;
 
@@ -57,7 +61,7 @@ export function useHostReparent({
       rafId = requestAnimationFrame(() => {
         nestedRafId = requestAnimationFrame(() => {
           view.requestMeasure();
-          if (shouldRestoreFocus) view.focus();
+          if (shouldRestoreFocus && isFocusEpochCurrent(epoch)) view.focus();
         });
       });
     } else if (!isExpanded && compactHost) {
@@ -66,7 +70,7 @@ export function useHostReparent({
       resetEditorDomForHost(viewDom, scrollDom, "");
       rafId = requestAnimationFrame(() => {
         view.requestMeasure();
-        if (shouldRestoreFocus) view.focus();
+        if (shouldRestoreFocus && isFocusEpochCurrent(epoch)) view.focus();
       });
     }
 

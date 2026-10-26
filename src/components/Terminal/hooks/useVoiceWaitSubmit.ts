@@ -12,6 +12,7 @@ import {
   voiceRecordingService,
   VOICE_CORRECTION_SEND_WAIT_MS,
 } from "@/services/VoiceRecordingService";
+import type { ClaimSendHandBack, SendHandBack } from "./useSendHandBack";
 
 /** What a voice send is waiting on: the transcript draining, or its correction. */
 export type VoiceSubmitPhase = "finishing" | "polishing";
@@ -25,10 +26,15 @@ interface UseVoiceWaitSubmitParams {
   projectId?: string;
   editorViewRef: React.RefObject<EditorView | null>;
   editableCompartmentRef: React.RefObject<Compartment>;
-  sendFromEditor: () => void;
+  sendFromEditor: (handBack?: SendHandBack) => void;
+  /**
+   * Claims the keyboard's hand-back for the send at the Enter that starts the
+   * wait, not when the wait ends: a press during it calls the hand-back off.
+   */
+  claimSendHandBack?: ClaimSendHandBack;
 }
 
-function isVoiceSessionActiveFor(panelId: string): boolean {
+export function isVoiceSessionActiveFor(panelId: string): boolean {
   const voiceState = useVoiceRecordingStore.getState();
   return (
     voiceState.activeTarget?.panelId === panelId &&
@@ -46,11 +52,16 @@ export function useVoiceWaitSubmit({
   editorViewRef,
   editableCompartmentRef,
   sendFromEditor,
+  claimSendHandBack,
 }: UseVoiceWaitSubmitParams) {
   const sendFromEditorRef = useRef(sendFromEditor);
   useEffect(() => {
     sendFromEditorRef.current = sendFromEditor;
   }, [sendFromEditor]);
+  const claimSendHandBackRef = useRef(claimSendHandBack);
+  useEffect(() => {
+    claimSendHandBackRef.current = claimSendHandBack;
+  }, [claimSendHandBack]);
   const projectIdRef = useRef(projectId);
   useEffect(() => {
     projectIdRef.current = projectId;
@@ -85,6 +96,8 @@ export function useVoiceWaitSubmit({
       activeAttemptRef.current === attempt &&
       useTerminalInputStore.getState().isVoiceSubmitting(terminalId);
 
+    // Before the lock below, so a press during the wait counts against it.
+    const handBack = claimSendHandBackRef.current?.();
     store.setVoiceSubmitting(terminalId, true);
     setVoiceSubmitPhase("finishing");
 
@@ -135,7 +148,7 @@ export function useVoiceWaitSubmit({
           else if (landed) replayLandedCorrection(finalView, landed);
         }
 
-        sendFromEditorRef.current();
+        sendFromEditorRef.current(handBack);
       } finally {
         if (activeAttemptRef.current === attempt) {
           activeAttemptRef.current = null;

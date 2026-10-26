@@ -125,7 +125,7 @@ describe("Enter in an armed composer", () => {
 describe("the composer's send", () => {
   it("lets the broadcast decide, rather than counting only this view's armed panes", () => {
     const source = readFileSync(path.resolve(__dirname, "../HybridInputBar.tsx"), "utf8");
-    const start = source.indexOf("const sendFromEditor = () => {");
+    const start = source.indexOf("const sendFromEditor = (");
     const end = source.indexOf("sendText(text", start);
     expect(start).toBeGreaterThan(-1);
     // A missing end marker would slice to the end of the file and read code
