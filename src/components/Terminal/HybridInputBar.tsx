@@ -117,6 +117,7 @@ import { SelectedFileMenuItems } from "./SelectedFileMenuItems";
 import { systemClient } from "@/clients/systemClient";
 import { resolveSelectedFilePath } from "@/services/terminal/filePathDetection";
 import { composeDraftWithInstruction } from "@/services/terminal/worktreeMoveInstruction";
+import { voiceRecordingService } from "@/services/VoiceRecordingService";
 import { isScratchpadElement } from "@/lib/terminalScratchpad";
 
 export interface HybridInputBarHandle {
@@ -958,6 +959,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       sendFromEditor,
     });
 
+    const handleDictationEscape = () => voiceRecordingService.handleEscape(terminalId);
+
     const collapseEditor = () => setIsExpanded(false);
 
     const focusEditor = () => {
@@ -1147,6 +1150,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       sendFromEditor,
       startVoiceWaitSubmit,
       cancelVoiceWaitSubmit,
+      handleDictationEscape,
       stashEditorState,
       popStashedEditorState,
       setActiveCompletionContext,

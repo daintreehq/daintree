@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
-import { render, act } from "@testing-library/react";
+import { render, act, fireEvent, screen } from "@testing-library/react";
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { useEscapeStack } from "../useEscapeStack";
 import { useGlobalEscapeDispatcher } from "../useGlobalEscapeDispatcher";
-import { _resetForTests } from "@/lib/escapeStack";
+import { _resetForTests, registerEscape, registerEscapeFallback } from "@/lib/escapeStack";
 
 beforeEach(() => {
   _resetForTests();
@@ -175,5 +176,89 @@ describe("useEscapeStack + useGlobalEscapeDispatcher", () => {
     });
 
     expect(handler).not.toHaveBeenCalled();
+  });
+
+  describe("fallbacks", () => {
+    function pressCancelableEscape(prevent = false) {
+      const event = new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+      });
+      act(() => {
+        if (prevent) event.preventDefault();
+        window.dispatchEvent(event);
+      });
+      return event;
+    }
+
+    it("run when the stack is empty and claim the key only when they act", () => {
+      const fallback = vi.fn(() => true);
+      registerEscapeFallback(fallback);
+      render(<Dispatcher />);
+
+      expect(pressCancelableEscape().defaultPrevented).toBe(true);
+      expect(fallback).toHaveBeenCalledOnce();
+
+      fallback.mockReturnValue(false);
+      expect(pressCancelableEscape().defaultPrevented).toBe(false);
+      expect(fallback).toHaveBeenCalledTimes(2);
+    });
+
+    it("wait behind any layer on the stack, including one that leaves it on that press", () => {
+      const fallback = vi.fn(() => true);
+      const layerClose = vi.fn();
+      registerEscapeFallback(fallback);
+      render(<Dispatcher />);
+      const layer = registerEscape(() => {
+        layerClose();
+        layer.unregister();
+      });
+
+      pressEscape();
+
+      expect(layerClose).toHaveBeenCalledOnce();
+      expect(fallback).not.toHaveBeenCalled();
+
+      pressEscape();
+
+      expect(fallback).toHaveBeenCalledOnce();
+    });
+
+    it("leave Escape to an open Radix menu", () => {
+      const fallback = vi.fn(() => true);
+      const onOpenChange = vi.fn();
+      registerEscapeFallback(fallback);
+      render(
+        <>
+          <Dispatcher />
+          <DropdownMenu.Root open onOpenChange={onOpenChange} modal={false}>
+            <DropdownMenu.Trigger>Open</DropdownMenu.Trigger>
+            <DropdownMenu.Portal>
+              <DropdownMenu.Content>
+                <DropdownMenu.Item>Item</DropdownMenu.Item>
+              </DropdownMenu.Content>
+            </DropdownMenu.Portal>
+          </DropdownMenu.Root>
+        </>
+      );
+
+      act(() => {
+        fireEvent.keyDown(screen.getByRole("menuitem"), { key: "Escape" });
+      });
+
+      expect(onOpenChange).toHaveBeenCalledWith(false);
+      expect(fallback).not.toHaveBeenCalled();
+    });
+
+    it("never see a key something else already handled", () => {
+      const fallback = vi.fn(() => true);
+      registerEscapeFallback(fallback);
+      render(<Dispatcher />);
+
+      pressCancelableEscape(true);
+
+      expect(fallback).not.toHaveBeenCalled();
+    });
   });
 });

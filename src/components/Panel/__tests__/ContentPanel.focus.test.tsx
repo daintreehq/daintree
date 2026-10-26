@@ -857,6 +857,15 @@ describe("ContentPanel title", () => {
       expect(onTitleChange.mock.calls).toEqual([["after Enter"]]);
     });
 
+    it("claims the Escape that cancels the rename", async () => {
+      renderPanel();
+      fireEvent.keyDown(titleButton(), { key: "F2" });
+      await act(nextFrame);
+
+      // fireEvent returns false once a handler prevented the default.
+      expect(fireEvent.keyDown(titleField(), { key: "Escape" })).toBe(false);
+    });
+
     it("does not re-select text typed in the moment after the field opens", async () => {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       try {

@@ -43,6 +43,7 @@ describe("useEditorKeymap", () => {
   let applyAutocompleteSelection: ReturnType<typeof vi.fn<(mode: "enter" | "complete") => boolean>>;
   let sendFromEditor: ReturnType<typeof vi.fn<() => void>>;
   let cancelVoiceWaitSubmit: ReturnType<typeof vi.fn<() => boolean>>;
+  let handleDictationEscape: ReturnType<typeof vi.fn<() => boolean>>;
   let setActiveCompletionContext: ReturnType<
     typeof vi.fn<Dispatch<SetStateAction<ActiveCompletionContext | null>>>
   >;
@@ -53,6 +54,7 @@ describe("useEditorKeymap", () => {
     applyAutocompleteSelection = vi.fn<(mode: "enter" | "complete") => boolean>(() => true);
     sendFromEditor = vi.fn<() => void>();
     cancelVoiceWaitSubmit = vi.fn<() => boolean>(() => false);
+    handleDictationEscape = vi.fn<() => boolean>(() => false);
     setActiveCompletionContext = vi.fn<Dispatch<SetStateAction<ActiveCompletionContext | null>>>();
     handleHistoryNavigation = vi.fn<(direction: "up" | "down") => boolean>(() => false);
     setSelectedIndex = vi.fn<Dispatch<SetStateAction<number>>>();
@@ -71,6 +73,7 @@ describe("useEditorKeymap", () => {
       sendFromEditor,
       startVoiceWaitSubmit: vi.fn<() => void>(),
       cancelVoiceWaitSubmit,
+      handleDictationEscape,
       stashEditorState:
         vi.fn<(terminalId: string, state: EditorState, projectId?: string) => void>(),
       popStashedEditorState: vi.fn<
@@ -149,6 +152,47 @@ describe("useEditorKeymap", () => {
       const { handlers } = renderKeymap(makeLatest());
       expect(handlers.onEscape()).toBe(true);
       expect(setActiveCompletionContext).not.toHaveBeenCalled();
+    });
+
+    it("closes an open autocomplete without ending the dictation", () => {
+      handleDictationEscape.mockReturnValue(true);
+      const { handlers } = renderKeymap(makeLatest());
+      expect(handlers.onEscape()).toBe(true);
+      expect(setActiveCompletionContext).toHaveBeenCalledWith(null);
+      expect(handleDictationEscape).not.toHaveBeenCalled();
+    });
+
+    it("hands Escape to the dictation instead of the agent at rest", () => {
+      handleDictationEscape.mockReturnValue(true);
+      const onSendKey = vi.fn<(key: string) => void>();
+      const { handlers } = renderKeymap(makeLatest({ isAutocompleteOpen: false, onSendKey }));
+      expect(handlers.onEscape()).toBe(true);
+      expect(handleDictationEscape).toHaveBeenCalledOnce();
+      expect(onSendKey).not.toHaveBeenCalled();
+    });
+
+    it("collapses an expanded editor without ending the dictation", () => {
+      handleDictationEscape.mockReturnValue(true);
+      const { handlers } = renderKeymap(
+        makeLatest({ isAutocompleteOpen: false, isExpanded: true })
+      );
+      expect(handlers.onEscape()).toBe(true);
+      expect(handleDictationEscape).not.toHaveBeenCalled();
+    });
+
+    it("hands Escape to the dictation even when the composer is disabled", () => {
+      handleDictationEscape.mockReturnValue(true);
+      const { handlers } = renderKeymap(makeLatest({ isAutocompleteOpen: false, disabled: true }));
+      expect(handlers.onEscape()).toBe(true);
+      expect(handleDictationEscape).toHaveBeenCalledOnce();
+    });
+
+    it("sends Escape to the agent when no dictation takes it", () => {
+      const onSendKey = vi.fn<(key: string) => void>();
+      const { handlers } = renderKeymap(makeLatest({ isAutocompleteOpen: false, onSendKey }));
+      expect(handlers.onEscape()).toBe(true);
+      expect(handleDictationEscape).toHaveBeenCalledOnce();
+      expect(onSendKey).toHaveBeenCalledWith("escape");
     });
   });
 

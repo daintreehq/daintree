@@ -591,7 +591,9 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
       setFocusedSuggestionIndex(next);
     } else if (e.key === "Escape") {
       // Dismiss the menu, keep the field. Blurring threw the keyboard user out
-      // of the one control they came here for.
+      // of the one control they came here for. Claimed only when there was a
+      // list to shut, so a running dictation isn't stopped by the same press.
+      if (listOpen) e.preventDefault();
       setShowSuggestions(false);
       setFocusedSuggestionIndex(-1);
     } else if (e.key === "Tab" && !e.shiftKey && canComplete && highlighted) {
@@ -757,7 +759,10 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
               onKeyDown={(e) => {
                 // The field handles its own keys; from a toggle, Escape still
                 // dismisses the list it kept open.
-                if (e.key === "Escape" && e.target !== inputRef.current) setShowSuggestions(false);
+                if (e.key === "Escape" && e.target !== inputRef.current) {
+                  if (listOpen) e.preventDefault();
+                  setShowSuggestions(false);
+                }
               }}
               className={cn(
                 // Fallback keeps themes without --dock-input-bg byte-identical.

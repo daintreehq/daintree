@@ -673,7 +673,7 @@ describe("VoiceRecordingService — arming state", () => {
   });
 
   it("Escape during arming routes through finishSession instead of stop()", async () => {
-    const { windowListeners } = setupGlobals();
+    setupGlobals();
 
     const storeModule = (await import("@/store/voiceRecordingStore")) as unknown as {
       useVoiceRecordingStore: {
@@ -689,16 +689,9 @@ describe("VoiceRecordingService — arming state", () => {
     const stopSpy = vi.spyOn(voiceRecordingService, "stop");
 
     voiceRecordingService.initialize();
+    const { dispatchEscapeFallback } = await import("@/lib/escapeStack");
 
-    const escapeEvent = {
-      key: "Escape",
-      preventDefault: vi.fn(),
-      stopPropagation: vi.fn(),
-    };
-    const keydownListeners = windowListeners["keydown"] ?? [];
-    for (const listener of keydownListeners) {
-      listener(escapeEvent);
-    }
+    expect(dispatchEscapeFallback()).toBe(true);
 
     expect(finishSessionMock).toHaveBeenCalledWith({ nextStatus: "idle" });
     expect(stopSpy).not.toHaveBeenCalled();
@@ -706,6 +699,127 @@ describe("VoiceRecordingService — arming state", () => {
     storeModule.__state.activeTarget = null;
     storeModule.__state.status = "idle";
   });
+
+  it("leaves a window Escape alone while recording so an open overlay can take it", async () => {
+    const { windowListeners } = setupGlobals();
+
+    const storeModule = (await import("@/store/voiceRecordingStore")) as unknown as {
+      __state: { activeTarget: { panelId: string } | null; status: string };
+    };
+    storeModule.__state.activeTarget = { panelId: "panel-1" };
+    storeModule.__state.status = "recording";
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const stopSpy = vi
+      .spyOn(voiceRecordingService, "stop")
+      .mockImplementation(async () => undefined);
+
+    voiceRecordingService.initialize();
+
+    const escapeEvent = {
+      key: "Escape",
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    };
+    for (const listener of windowListeners["keydown"] ?? []) {
+      listener(escapeEvent);
+    }
+
+    expect(escapeEvent.stopPropagation).not.toHaveBeenCalled();
+    expect(escapeEvent.preventDefault).not.toHaveBeenCalled();
+    expect(stopSpy).not.toHaveBeenCalled();
+
+    storeModule.__state.activeTarget = null;
+    storeModule.__state.status = "idle";
+  });
+
+  it("an Escape nothing else took stops the session exactly as the dictation key does", async () => {
+    setupGlobals();
+
+    const storeModule = (await import("@/store/voiceRecordingStore")) as unknown as {
+      __state: { activeTarget: { panelId: string } | null; status: string };
+    };
+    storeModule.__state.activeTarget = { panelId: "panel-1" };
+    storeModule.__state.status = "recording";
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const stopSpy = vi
+      .spyOn(voiceRecordingService, "stop")
+      .mockImplementation(async () => undefined);
+
+    voiceRecordingService.initialize();
+    const { dispatchEscapeFallback } = await import("@/lib/escapeStack");
+
+    await voiceRecordingService.toggle({ panelId: "panel-1" });
+    expect(dispatchEscapeFallback()).toBe(true);
+
+    expect(stopSpy).toHaveBeenCalledTimes(2);
+    expect(stopSpy.mock.calls[1]).toEqual(stopSpy.mock.calls[0]);
+    // The text stays, so the announcement must not claim it was thrown away.
+    const [announcement, options] = stopSpy.mock.calls[1]!;
+    expect(options).toMatchObject({ preserveLiveText: true });
+    expect(announcement).not.toMatch(/cancel/i);
+
+    storeModule.__state.activeTarget = null;
+    storeModule.__state.status = "idle";
+  });
+
+  it("leaves Escape alone once the session is finishing", async () => {
+    setupGlobals();
+
+    const storeModule = (await import("@/store/voiceRecordingStore")) as unknown as {
+      __state: { activeTarget: { panelId: string } | null; status: string };
+    };
+    storeModule.__state.activeTarget = { panelId: "panel-1" };
+    storeModule.__state.status = "finishing";
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const stopSpy = vi
+      .spyOn(voiceRecordingService, "stop")
+      .mockImplementation(async () => undefined);
+
+    voiceRecordingService.initialize();
+    const { dispatchEscapeFallback } = await import("@/lib/escapeStack");
+
+    expect(dispatchEscapeFallback()).toBe(false);
+    expect(voiceRecordingService.handleEscape("panel-1")).toBe(false);
+    expect(stopSpy).not.toHaveBeenCalled();
+
+    storeModule.__state.activeTarget = null;
+    storeModule.__state.status = "idle";
+  });
+
+  it.each(["connecting", "recording", "paused", "reconnecting"])(
+    "takes a composer's Escape only from the panel it is dictating into (%s)",
+    async (status) => {
+      setupGlobals();
+
+      const storeModule = (await import("@/store/voiceRecordingStore")) as unknown as {
+        __state: { activeTarget: { panelId: string } | null; status: string };
+      };
+      storeModule.__state.activeTarget = { panelId: "panel-1" };
+      storeModule.__state.status = status;
+
+      const { voiceRecordingService } = await import("../VoiceRecordingService");
+      const stopSpy = vi
+        .spyOn(voiceRecordingService, "stop")
+        .mockImplementation(async () => undefined);
+
+      expect(voiceRecordingService.handleEscape("panel-2")).toBe(false);
+      expect(stopSpy).not.toHaveBeenCalled();
+
+      expect(voiceRecordingService.handleEscape("panel-1")).toBe(true);
+      expect(stopSpy).toHaveBeenCalledOnce();
+
+      voiceRecordingService.initialize();
+      const { dispatchEscapeFallback } = await import("@/lib/escapeStack");
+      expect(dispatchEscapeFallback()).toBe(true);
+      expect(stopSpy).toHaveBeenCalledTimes(2);
+
+      storeModule.__state.activeTarget = null;
+      storeModule.__state.status = "idle";
+    }
+  );
 });
 
 describe("VoiceRecordingService — microphone device selection", () => {

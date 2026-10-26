@@ -35,6 +35,7 @@ interface UseEditorKeymapParams {
   sendFromEditor: () => void;
   startVoiceWaitSubmit: () => void;
   cancelVoiceWaitSubmit: () => boolean;
+  handleDictationEscape: () => boolean;
   stashEditorState: (terminalId: string, state: EditorView["state"], projectId?: string) => void;
   popStashedEditorState: (
     terminalId: string,
@@ -72,6 +73,7 @@ export function useEditorKeymap({
   sendFromEditor,
   startVoiceWaitSubmit,
   cancelVoiceWaitSubmit,
+  handleDictationEscape,
   stashEditorState,
   popStashedEditorState,
   setActiveCompletionContext,
@@ -155,6 +157,10 @@ export function useEditorKeymap({
         setIsExpanded(false);
         return true;
       }
+
+      // Dictating into this composer, the first Escape ends the dictation
+      // rather than interrupting the agent; the next one reaches the agent.
+      if (handleDictationEscape()) return true;
 
       if (latest.disabled) return false;
       if (!latest.onSendKey) return false;
