@@ -19,7 +19,6 @@ import {
   SEND_KEYS_SCREEN_LINES,
   SEND_KEYS_SETTLE_MS,
   SendKeysArgsSchema,
-  SendKeysOwnedArgsSchema,
 } from "@shared/utils/terminalKeys";
 import { requireExplicitTerminalIdForAgentDispatch } from "./terminalTargetBinding";
 import { assessTerminalInterrupt } from "@/utils/terminalInterrupt";
@@ -394,7 +393,7 @@ export function registerTerminalInputActions(
     scope: "renderer",
     keywords: ["key", "press", "dialog", "trust", "select", "owned"],
     palette: { mode: "hidden" },
-    argsSchema: SendKeysOwnedArgsSchema,
+    argsSchema: SendKeysArgsSchema,
     resultSchema: SendKeysResultSchema,
     run: async () => {
       throw new Error(

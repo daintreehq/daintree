@@ -1885,7 +1885,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         generation: {
           description:
-            "Pressing keys in another assistant: its generation from the assistant listing.",
+            "The run you read: another assistant's generation from assistant.list, or for an agent you didn't launch, its incarnation from host.list.",
           type: "integer",
           minimum: 0,
           maximum: 9007199254740991,

@@ -55,12 +55,7 @@ export const SendKeysArgsSchema = z.object({
     .describe(
       "Or up to 16 of: Up, Down, Left, Right, Enter, Escape, Tab, Space, Backspace, a-z, 0-9."
     ),
-  generation: z
-    .number()
-    .int()
-    .min(0)
-    .optional()
-    .describe("Pressing keys in another assistant: its generation from the assistant listing."),
+  generation: RunGenerationArgSchema,
   // Acted on in main, like the send's: after answering a dialog, be told when
   // the agent finishes the turn it unblocked.
   notify: z
@@ -68,9 +63,4 @@ export const SendKeysArgsSchema = z.object({
     .optional()
     .describe("As on a send: hear, with its reply, when the turn these keys unblock ends."),
   replyLines: NotifyReplyLinesSchema,
-});
-
-/** The owned twin's arguments: the same keys, and the run they are for (#14551). */
-export const SendKeysOwnedArgsSchema = SendKeysArgsSchema.extend({
-  generation: RunGenerationArgSchema,
 });

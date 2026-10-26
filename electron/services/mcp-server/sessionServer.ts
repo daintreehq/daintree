@@ -113,7 +113,6 @@ import {
   AssistantStartArgsSchema,
   WORKER_STEER_REFUSALS,
 } from "../../../shared/types/assistantControl.js";
-import { SendKeysOwnedArgsSchema } from "../../../shared/utils/terminalKeys.js";
 import { HOST_CALL_TOOL, HOST_CONTROL_TOOL_IDS } from "../../../shared/types/hostControl.js";
 import { auditCodeForHostControlRefusal, runHostControlTool } from "./hostControlTools.js";
 import {
@@ -927,7 +926,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         });
       }
       if (actionId === "terminal.sendKeysOwned") {
-        const parsed = SendKeysOwnedArgsSchema.safeParse(args);
+        const parsed = SendKeysArgsSchema.safeParse(args);
         if (!parsed.success) {
           throw new AssistantTargetError(
             "VALIDATION_ERROR",
