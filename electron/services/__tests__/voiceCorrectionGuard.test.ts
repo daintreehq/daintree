@@ -32,6 +32,14 @@ describe("extractProtectedSpans", () => {
     expect(extractProtectedSpans("a well-known fix - e.g. the re-run step")).toEqual([]);
   });
 
+  it("scans long unspaced text in linear time", () => {
+    // A quadratic path scan took ~300ms here, on Electron's main thread.
+    const cjk = "我们需要更新这个组件并且不要删除分支然后运行测试。".repeat(480);
+    const started = performance.now();
+    expect(validateCorrection(cjk, `${cjk}。`)).toEqual({ ok: true });
+    expect(performance.now() - started).toBeLessThan(100);
+  });
+
   it("reports ranges that cover the whole span", () => {
     const text = "open daintree/src/index.ts now";
     const [range] = findProtectedRanges(text);
@@ -50,7 +58,33 @@ describe("validateCorrection", () => {
     ["a fixed term in a short dictation", "cube netties pods", "Kubernetes pods."],
     ["a contraction change", "do not delete the branch", "Don't delete the branch."],
     ["an apostrophe fix", "dont delete it", "Don't delete it."],
-    ["a path moved into backticks", "open src/foo.ts please", "Open `src/foo.ts`, please."],
+    [
+      "merged mishearings next to a negation",
+      "there is no o auth support",
+      "There is no OAuth support.",
+    ],
+    ["filler right after a negation", "do not like delete the branch", "Do not delete the branch."],
+    ["phrase fillers", "um like you know fix it", "Fix it."],
+    ["only hesitation sounds dropped", "um uh erm fix it", "Fix it."],
+    [
+      "two multi-word fixes in a short sentence",
+      "cube netties and post gress",
+      "Kubernetes and Postgres.",
+    ],
+    ["a three-word merge", "e s lint", "ESLint."],
+    [
+      "repeated merges beside a kept word",
+      "type script type script type",
+      "TypeScript TypeScript type.",
+    ],
+    ["a fully respelled term", "jay double you tee", "JWT."],
+    ["a backticked span against Chinese text", "运行`npm test`", "运行`npm test`。"],
+    [
+      "a comma fixed after a path",
+      "open src/foo.ts,then fix teh typo",
+      "Open src/foo.ts, then fix the typo.",
+    ],
+    ["abbreviations and times", "run e.g. the tests at 9 a.m.", "Run, e.g., the tests at 9 a.m."],
     ["a span at the end of a sentence", "check @src/App.tsx", "Check @src/App.tsx."],
     ["an introduced term with a dot", "upgrade next jess", "Upgrade Next.js."],
     ["a cleanup in unspaced Chinese", "嗯我们需要更新这个组件", "我们需要更新这个组件。"],
@@ -65,7 +99,31 @@ describe("validateCorrection", () => {
     ["a dropped @-reference", "see @a.ts and @b.ts", "See @a.ts.", "protected_span"],
     ["one of two identical spans", "copy `x` to `x`", "Copy `x` to it.", "protected_span"],
     ["an edited symbol-only span", "use `=>` here", "Use `->` here.", "protected_span"],
+    [
+      "a path moved into backticks",
+      "open src/foo.ts please",
+      "Open `src/foo.ts`, please.",
+      "protected_span",
+    ],
+    ["a prefixed filename", "edit foo.ts", "Edit old.foo.ts.", "protected_span"],
+    ["a suffixed path", "open src/foo.ts", "Open src/foo.ts?raw.", "protected_span"],
+    ["a joined flag", "run --watch", "Run --watch+foo.", "protected_span"],
+    ["an invented flag", "run npm test", "Run npm test --force.", "protected_span"],
+    ["swapped paths", "copy src/a.ts to src/b.ts", "Copy src/b.ts to src/a.ts.", "protected_span"],
+    ["a one-letter filename", "open a.ts please", "Open b.ts please.", "protected_span"],
+    ["a recased dotfile", "open .env please", "Open .ENV please.", "protected_span"],
+    [
+      "a URL's closing bracket",
+      "see https://example.com/a_(b)",
+      "See https://example.com/a_(b.",
+      "protected_span",
+    ],
+    ["a flag's closing quote", "run --flag='ok'", "Run --flag='ok.", "protected_span"],
     ["a changed number", "wait 3000 ms", "Wait 300 ms.", "number"],
+    ["a number inside an identifier", "use v5", "Use v6.", "number"],
+    ["swapped identifiers", "use v10 and v20", "Use v20 and v10.", "number"],
+    ["a changed spoken number", "retry three times", "Retry four times.", "number"],
+    ["a changed Chinese numeral", "等三秒再运行", "等五秒再运行。", "number"],
     ["a decimal turned into a fraction", "scale by 1.5", "Scale by 1/5.", "number"],
     ["a dropped sign", "offset of -5", "Offset of 5.", "number"],
     ["swapped numbers", "move 10 then 20", "Move 20 then 10.", "number"],
@@ -79,6 +137,18 @@ describe("validateCorrection", () => {
       "negation",
     ],
     ["never turned into not", "never rebase main", "Do not rebase main.", "negation"],
+    [
+      "a negation moved to another copy of the verb",
+      "do not delete main and delete feature",
+      "Delete main and do not delete feature.",
+      "negation",
+    ],
+    [
+      "words added to a short command",
+      "fix it",
+      "Fix it and also rewrite authentication caching logging and deployment.",
+      "edit_size",
+    ],
     [
       "an answer instead of a cleanup",
       "can you explain how the auth flow works",

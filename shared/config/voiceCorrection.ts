@@ -37,15 +37,14 @@ tan stack: TanStack
 get hub: GitHub
 cube netties/cube nettis: Kubernetes
 cube cuttle/cube control: kubectl
-terra form/tariff form: Terraform
+terra form: Terraform
 post gress/post grey ess: Postgres
-my sequel: MySQL
 mongo dee bee: MongoDB
 sea quel: SQL
 rediss: Redis
 graph cue el: GraphQL
 g RPC/jeep are see: gRPC
-o auth/oh auth: OAuth
+o auth: OAuth
 jay double you tee: JWT
 rest a pi/rest API: REST API
 web socket: WebSocket
@@ -63,7 +62,6 @@ p n p m/pin pin: pnpm
 zoo stand: Zustand
 prism a: Prisma
 E S lint: ESLint
-pretty err: Prettier
 yam el/yammel: YAML
 red jacks: regex
 bool ee an: boolean
@@ -85,7 +83,7 @@ super base: Supabase
 verse el/voucell: Vercel
 cloud flare: Cloudflare
 dot net/dotnet: .NET
-see sharp/c sharp: C#
+c sharp: C#
 go lang: Golang
 rust lang: Rust
 </terms>`;

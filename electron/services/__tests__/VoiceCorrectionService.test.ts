@@ -639,56 +639,76 @@ describe("VoiceCorrectionService", () => {
       expect(await budgetFor(12_000)).toBeGreaterThan(await budgetFor(4000));
     });
 
-    it("keeps the raw text when the reply was cut off, even if it parses", async () => {
-      vi.stubGlobal(
-        "fetch",
-        vi.fn().mockResolvedValue({
-          ok: true,
-          status: 200,
-          json: async () => ({
-            status: "incomplete",
-            incomplete_details: { reason: "max_output_tokens" },
-            output_text: JSON.stringify({
-              action: "replace",
-              corrected_text: "The parser keeps",
-              confidence: "high",
-            }),
-          }),
-        } as unknown as Response)
-      );
+    it("applies a whole reply but drops one that was cut off, even if it parses", async () => {
       const rawText = longPassage(3000);
-
-      const result = await new VoiceCorrectionService().correct({ rawText }, BASE_SETTINGS);
-
-      expect(result.action).toBe("no_change");
-      expect(result.confirmedText).toBe(rawText);
-    });
-
-    it("waits longer for a longer passage", async () => {
-      vi.stubGlobal(
-        "fetch",
-        vi.fn().mockImplementation(
-          (_url: string, init: RequestInit) =>
-            new Promise((_resolve, reject) => {
-              init.signal!.addEventListener("abort", () => reject(init.signal!.reason), {
-                once: true,
-              });
-            })
-        )
-      );
-      const rawText = longPassage(5000);
-      const resultPromise = new VoiceCorrectionService().correct({ rawText }, BASE_SETTINGS);
-      let settled = false;
-      void resultPromise.finally(() => {
-        settled = true;
+      const cleaned = `T${rawText.slice(1)}.`;
+      const reply = (status: string) => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          status,
+          incomplete_details: status === "incomplete" ? { reason: "max_output_tokens" } : undefined,
+          output_text: JSON.stringify({
+            action: "replace",
+            corrected_text: cleaned,
+            confidence: "high",
+          }),
+        }),
       });
 
-      await vi.advanceTimersByTimeAsync(20_000);
-      expect(settled).toBe(false);
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(reply("completed")));
+      const whole = await new VoiceCorrectionService().correct({ rawText }, BASE_SETTINGS);
+      expect(whole.confirmedText).toBe(cleaned);
 
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect((await resultPromise).confirmedText).toBe(rawText);
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(reply("incomplete")));
+      const cutOff = await new VoiceCorrectionService().correct({ rawText }, BASE_SETTINGS);
+      expect(cutOff.action).toBe("no_change");
+      expect(cutOff.confirmedText).toBe(rawText);
     });
+
+    it("keeps the raw text when the reply drops the end of the passage", async () => {
+      const rawText = longPassage(3000);
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(makeFetchResponse({ corrected_text: rawText.slice(0, 2500) }))
+      );
+      const truncated = await new VoiceCorrectionService().correct({ rawText }, BASE_SETTINGS);
+      expect(truncated.action).toBe("no_change");
+      expect(truncated.confirmedText).toBe(rawText);
+    });
+
+    it.each([
+      [5000, 35_000],
+      [12_000, 60_000],
+    ])(
+      "waits for a %i-character passage until %ims, then keeps it raw",
+      async (chars, deadline) => {
+        vi.stubGlobal(
+          "fetch",
+          vi.fn().mockImplementation(
+            (_url: string, init: RequestInit) =>
+              new Promise((_resolve, reject) => {
+                init.signal!.addEventListener("abort", () => reject(init.signal!.reason), {
+                  once: true,
+                });
+              })
+          )
+        );
+        const rawText = longPassage(chars);
+        const resultPromise = new VoiceCorrectionService().correct({ rawText }, BASE_SETTINGS);
+        let settled = false;
+        void resultPromise.finally(() => {
+          settled = true;
+        });
+
+        await vi.advanceTimersByTimeAsync(deadline - 1);
+        expect(settled).toBe(false);
+
+        await vi.advanceTimersByTimeAsync(1);
+        expect(settled).toBe(true);
+        expect((await resultPromise).confirmedText).toBe(rawText);
+      }
+    );
   });
 
   describe("detectFileLinkTokens", () => {
