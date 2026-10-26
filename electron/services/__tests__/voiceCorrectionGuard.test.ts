@@ -268,6 +268,16 @@ describe("validateCorrection on self-corrections and lists", () => {
       "Set the theme to light mode.",
     ],
     [
+      "a correction that ends its sentence",
+      "Point the client at the old staging server, no wait. At the local one.",
+      "Point the client at the local one.",
+    ],
+    [
+      "a list counted in cardinals and ordinals",
+      "One, add a test. Second, fix the bug.",
+      "1. Add a test.\n2. Fix the bug.",
+    ],
+    [
       "a retraction after a line break",
       "Add a retry around the fetch call.\nScratch that. Add a timeout.",
       "Add a timeout.",
@@ -316,6 +326,24 @@ describe("validateCorrection on self-corrections and lists", () => {
       "a no wait that is a real prohibition",
       "Ensure there is no wait, even under load.",
       "Ensure there is a wait, even under load.",
+      "negation",
+    ],
+    [
+      "a no wait prohibition dropped with the words before it",
+      "Ensure there is no wait, even under load.",
+      "Ensure delays, even under load.",
+      "negation",
+    ],
+    [
+      "a no wait prohibition dropped whole",
+      "Ensure there is no wait, even under load.",
+      "Ensure, even under load.",
+      "negation",
+    ],
+    [
+      "words added where the retracted ones were",
+      "Keep the old cache, no wait, the new one.",
+      "Keep and purge the new one.",
       "negation",
     ],
     [
@@ -404,14 +432,20 @@ describe("validateCorrection on self-corrections and lists", () => {
     ],
     [
       "a decimal read as an item number",
-      "Use timeout: 1.5 seconds. Retry twice.",
+      "Use timeout: 1.5 seconds. 2, retry twice.",
       "1. Use timeout: 5 seconds.\n2. Retry twice.",
       "number",
     ],
     [
+      "a decimal's fraction read as an item number",
+      "Timeout: 9.1, retries: 2.",
+      "1. Timeout: 9.\n2. Retries.",
+      "number",
+    ],
+    [
       "a counting word inside backticks funding another",
-      "Use `status: one, ready` and set retries to one.",
-      "1. Use `status: one, ready`.\n2. Set retries.",
+      "Use `status: one, ready` and set retries to one. Two, ship it.",
+      "1. Use `status: one, ready` and set retries.\n2. Ship it.",
       "number",
     ],
     [
@@ -467,15 +501,22 @@ describe("validateCorrection on self-corrections and lists", () => {
 
   it.each([
     [
-      "self-corrections",
+      "self-corrections, past the alignment limit",
       "Use the old cache, no wait, the new one, and log it. ".repeat(220),
       "Use the new one, and log it. ".repeat(220),
+      false,
     ],
-    ["bullet lines", "- a\n".repeat(3000), "- a\n".repeat(2999)],
-    ["whitespace runs", `no${" ".repeat(12_000)}, sorry,`, "sorry,"],
-  ])("checks a 12,000-character passage of %s quickly", (_label, raw, corrected) => {
+    ["bullet lines", "- a\n".repeat(3000), "- a\n".repeat(2999), true],
+    ["whitespace runs", `fix it, no${" ".repeat(12_000)}, sorry, now`, "Fix it now.", false],
+    [
+      "corrections that each scan back",
+      `${"x ".repeat(3000)}${"I mean ".repeat(800)}a b c`,
+      "a b c",
+      false,
+    ],
+  ])("checks a 12,000-character passage of %s quickly", (_label, raw, corrected, ok) => {
     const started = performance.now();
-    validateCorrection(raw, corrected);
+    expect(validateCorrection(raw, corrected).ok).toBe(ok);
     expect(performance.now() - started).toBeLessThan(200);
   });
 });
