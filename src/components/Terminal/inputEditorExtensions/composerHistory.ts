@@ -6,14 +6,7 @@ import {
   type StateField,
 } from "@codemirror/state";
 import { EditorView, keymap, type Command } from "@codemirror/view";
-import {
-  history,
-  invertedEffects,
-  redo,
-  redoDepth,
-  undo,
-  undoDepth,
-} from "@codemirror/commands";
+import { history, invertedEffects, redo, redoDepth, undo, undoDepth } from "@codemirror/commands";
 
 interface ChipEntryRange {
   from: number;
@@ -61,7 +54,10 @@ export function clearComposerHistory(view: EditorView): void {
  * than the one the effect refers to; the composer clears its history after
  * those, and a chip that cannot be placed is dropped rather than misplaced.
  */
-export function mapChipEntry<T extends ChipEntryRange>(entry: T, mapping: ChangeDesc): T | undefined {
+export function mapChipEntry<T extends ChipEntryRange>(
+  entry: T,
+  mapping: ChangeDesc
+): T | undefined {
   if (entry.to > mapping.length) return undefined;
   const from = mapping.mapPos(entry.from, 1);
   const to = mapping.mapPos(entry.to, -1);

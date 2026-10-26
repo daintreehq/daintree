@@ -41,7 +41,8 @@ describe("landed corrections", () => {
 });
 
 describe("rebaseCorrectionBaseline", () => {
-  const baseline = () => useVoiceRecordingStore.getState().panelBuffers["term-1"]?.sessionCorrectedText;
+  const baseline = () =>
+    useVoiceRecordingStore.getState().panelBuffers["term-1"]?.sessionCorrectedText;
 
   beforeEach(() => {
     useVoiceRecordingStore.setState({ panelBuffers: {} });

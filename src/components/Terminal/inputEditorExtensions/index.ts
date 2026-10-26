@@ -59,9 +59,5 @@ export {
 export type { ChipPendingDelete } from "./chipBackspace";
 export { createCursorBlink } from "./cursorBlink";
 export { createComposerHistory, clearComposerHistory } from "./composerHistory";
-export {
-  correctionLanded,
-  createCorrectionReview,
-  showCorrectionReview,
-} from "./correctionReview";
+export { correctionLanded, createCorrectionReview, showCorrectionReview } from "./correctionReview";
 export type { CorrectionReview } from "./correctionReview";
