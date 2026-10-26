@@ -45,13 +45,26 @@ export function useVoiceWaitSubmit({
   // Each Enter is its own attempt. After Escape and a second Enter, the first
   // continuation must neither send nor unlock the composer under the second.
   const attemptRef = useRef(0);
+  const activeAttemptRef = useRef<number | null>(null);
   const [voiceSubmitPhase, setVoiceSubmitPhase] = useState<VoiceSubmitPhase | null>(null);
+
+  // A composer that unmounts mid-wait can't send what it no longer shows. The
+  // draft, and any correction still on its way to it, stay in the store.
+  useEffect(() => {
+    return () => {
+      if (activeAttemptRef.current === null) return;
+      activeAttemptRef.current = null;
+      attemptRef.current++;
+      useTerminalInputStore.getState().setVoiceSubmitting(terminalId, false);
+    };
+  }, [terminalId]);
 
   const startVoiceWaitSubmit = useCallback(() => {
     const store = useTerminalInputStore.getState();
     if (store.isVoiceSubmitting(terminalId)) return;
 
     const attempt = ++attemptRef.current;
+    activeAttemptRef.current = attempt;
     const isCurrentAttempt = () =>
       attemptRef.current === attempt &&
       useTerminalInputStore.getState().isVoiceSubmitting(terminalId);
@@ -78,7 +91,8 @@ export function useVoiceWaitSubmit({
         if (!isCurrentAttempt()) return;
 
         // stop() has registered the passage's correction by now. The send
-        // waits briefly for it, then goes with whatever text is current (#14611).
+        // waits briefly for it, then goes with whatever text is current; the
+        // send itself drops what is still on its way (#14611).
         if (voiceRecordingService.hasPendingCorrection(terminalId)) {
           setVoiceSubmitPhase("polishing");
           await voiceRecordingService.waitForPendingCorrections(
@@ -87,11 +101,6 @@ export function useVoiceWaitSubmit({
           );
           if (!isCurrentAttempt()) return;
         }
-
-        // The send takes the draft as it stands. A correction still on its way
-        // must not rewrite it while the send is in flight, or land on the next
-        // draft afterwards.
-        voiceRecordingService.discardPendingCorrections(terminalId);
 
         // `stop()` and a landed correction bump externalDraftRevision after
         // writing the draft store, but HybridInputBar's sync useEffect doesn't
@@ -114,6 +123,7 @@ export function useVoiceWaitSubmit({
         sendFromEditorRef.current();
       } finally {
         if (attemptRef.current === attempt) {
+          activeAttemptRef.current = null;
           useTerminalInputStore.getState().setVoiceSubmitting(terminalId, false);
           setVoiceSubmitPhase(null);
           const v = editorViewRef.current;
@@ -132,6 +142,7 @@ export function useVoiceWaitSubmit({
     const store = useTerminalInputStore.getState();
     if (!store.isVoiceSubmitting(terminalId)) return false;
     attemptRef.current++;
+    activeAttemptRef.current = null;
     store.setVoiceSubmitting(terminalId, false);
     setVoiceSubmitPhase(null);
     const view = editorViewRef.current;

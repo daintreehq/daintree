@@ -100,33 +100,35 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611)", () => {
   let sent: string[];
 
   beforeEach(async () => {
-    (window as unknown as { electron: unknown }).electron = {
-      voiceInput: {
-        onTranscriptionDelta: vi.fn((cb: (payload: DeltaPayload) => void) => {
-          callbacks.delta = cb;
-          return () => {};
-        }),
-        onTranscriptionComplete: vi.fn((cb: (payload: CompletePayload) => void) => {
-          callbacks.complete = cb;
-          return () => {};
-        }),
-        onParagraphBoundary: vi.fn(() => () => {}),
-        onFileTokenResolved: vi.fn(() => () => {}),
-        onError: vi.fn(() => () => {}),
-        onStatus: vi.fn(() => () => {}),
-        getSettings: vi.fn().mockResolvedValue({
-          enabled: true,
-          openaiApiKey: "sk-key",
-          correctionEnabled: true,
-        }),
-        stop: vi.fn().mockResolvedValue(undefined),
-        correct,
+    Object.assign(window, {
+      electron: {
+        voiceInput: {
+          onTranscriptionDelta: vi.fn((cb: (payload: DeltaPayload) => void) => {
+            callbacks.delta = cb;
+            return () => {};
+          }),
+          onTranscriptionComplete: vi.fn((cb: (payload: CompletePayload) => void) => {
+            callbacks.complete = cb;
+            return () => {};
+          }),
+          onParagraphBoundary: vi.fn(() => () => {}),
+          onFileTokenResolved: vi.fn(() => () => {}),
+          onError: vi.fn(() => () => {}),
+          onStatus: vi.fn(() => () => {}),
+          getSettings: vi.fn().mockResolvedValue({
+            enabled: true,
+            openaiApiKey: "sk-key",
+            correctionEnabled: true,
+          }),
+          stop: vi.fn().mockResolvedValue(undefined),
+          correct,
+        },
+        systemSleep: {
+          onSuspend: vi.fn(() => () => {}),
+          onWake: vi.fn(() => () => {}),
+        },
       },
-      systemSleep: {
-        onSuspend: vi.fn(() => () => {}),
-        onWake: vi.fn(() => () => {}),
-      },
-    };
+    });
     correct.mockReset();
     useTerminalInputStore.setState({ draftInputs: new Map(), voiceSubmittingPanels: new Set() });
     useVoiceRecordingStore.setState({ panelBuffers: {}, activeTarget: null, status: "idle" });
@@ -141,6 +143,8 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611)", () => {
     vi.useRealTimers();
   });
 
+  const isEditable = () => view.state.facet(EditorView.editable);
+
   function renderComposer() {
     const compartment = new Compartment();
     // The editor still shows the raw transcript: a store write only reaches it
@@ -152,9 +156,11 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611)", () => {
       }),
       parent: document.body,
     });
+    // Like the composer's own send: it drops what is still being corrected,
+    // then reads the editor. The submit is still in flight, so the draft stays.
     const sendFromEditor = vi.fn(() => {
+      voiceRecordingService.discardPendingCorrections(PANEL_ID);
       sent.push(view.state.doc.toString());
-      useTerminalInputStore.getState().clearDraftInput(PANEL_ID);
     });
     const { result } = renderHook(() =>
       useVoiceWaitSubmit({
@@ -178,6 +184,7 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611)", () => {
     });
     expect(correct).toHaveBeenCalledWith({ rawText: "hello wrld" });
     expect(result.current.voiceSubmitPhase).toBe("polishing");
+    expect(isEditable()).toBe(false);
     expect(sent).toEqual([]);
 
     await act(async () => {
@@ -186,9 +193,10 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611)", () => {
 
     expect(sent).toEqual(["Hello world."]);
     expect(result.current.voiceSubmitPhase).toBeNull();
+    expect(isEditable()).toBe(true);
   });
 
-  it("sends the current text at the cap, and the late correction never touches the next draft", async () => {
+  it("sends the current text at the cap, and the late correction never touches the draft", async () => {
     vi.useFakeTimers();
     const pending = deferred<CorrectResult>();
     correct.mockReturnValueOnce(pending.promise);
@@ -207,7 +215,8 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611)", () => {
     });
     expect(sent).toEqual(["hello wrld"]);
 
-    useTerminalInputStore.getState().setDraftInput(PANEL_ID, "hello wrld");
+    // The draft still holds the passage while the submit is in flight; the
+    // late result must not rewrite it under the send.
     await act(async () => {
       pending.resolve({ action: "replace", correctedText: "Hello world." });
       await vi.advanceTimersByTimeAsync(0);
@@ -252,6 +261,7 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611)", () => {
     act(() => {
       result.current.cancelVoiceWaitSubmit();
     });
+    expect(isEditable()).toBe(true);
     await act(async () => {
       pending.resolve({ action: "replace", correctedText: "Hello world." });
     });

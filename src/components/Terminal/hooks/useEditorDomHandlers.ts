@@ -16,6 +16,7 @@ interface LatestRefShape {
   value: string;
   terminalId: string;
   onSendKey?: (key: string) => void;
+  isVoiceActiveForPanel: boolean;
   isExpanded: boolean;
 }
 
@@ -116,7 +117,9 @@ export function useEditorDomHandlers({
             return true;
           }
           const text = editorViewRef.current?.state.doc.toString() ?? latest.value;
-          if (text.trim().length === 0) {
+          // While dictating, the words can still be on their way into an empty
+          // doc; the send finishes the dictation, as the keymap's Enter does.
+          if (text.trim().length === 0 && !latest.isVoiceActiveForPanel) {
             if (latest.onSendKey) latest.onSendKey("enter");
             return true;
           }

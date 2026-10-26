@@ -241,6 +241,9 @@ class VoiceRecordingService {
   // them to land. Only the draft being sent, cleared or edited over drops one.
   private pendingCorrections = new Set<PendingCorrection>();
   private unwatchCorrectionDrafts: (() => void) | null = null;
+  // The correction whose seed each panel's learning baseline holds. Text alone
+  // can't tell two passages dictated with the same words apart.
+  private baselineOwners = new Map<string, PendingCorrection>();
 
   initialize(): void {
     if (this.initialized) return;
@@ -1673,6 +1676,7 @@ class VoiceRecordingService {
       settle: () => settle(),
     };
     this.pendingCorrections.add(correction);
+    this.baselineOwners.set(panelId, correction);
     this.watchCorrectionDrafts();
 
     // Show the dotted-underline "correcting" decoration over the dictated range.
@@ -1696,13 +1700,21 @@ class VoiceRecordingService {
       );
     }
 
+    const { panelId, projectId, from, rawText } = correction;
     if (correction.done) {
       logDebug(`${LOG_PREFIX} Correction result stale (draft sent or edited), discarding`);
+      this.releaseBaseline(correction);
       return;
     }
     this.retireCorrection(correction);
 
-    const { panelId, projectId, from, rawText } = correction;
+    // The passage keeps its own leading and trailing whitespace: a dictation
+    // restarted on the panel was placed after a trailing break, and its
+    // offsets assume the break is still there.
+    const lead = rawText.slice(0, rawText.length - rawText.trimStart().length);
+    const trail = rawText.slice(rawText.trimEnd().length);
+    correctedText = lead + correctedText.trim() + trail;
+
     const inputStore = useTerminalInputStore.getState();
     if (correctedText !== rawText) {
       const draftNow = inputStore.getDraftInput(panelId, projectId);
@@ -1737,9 +1749,13 @@ class VoiceRecordingService {
     // this pass wrote: a send consumes it, and a newer session on the panel
     // replaces it with its own.
     const voiceStore = useVoiceRecordingStore.getState();
-    if (voiceStore.panelBuffers[panelId]?.sessionCorrectedText === rawText) {
+    if (
+      this.baselineOwners.get(panelId) === correction &&
+      voiceStore.panelBuffers[panelId]?.sessionCorrectedText === rawText
+    ) {
       voiceStore.setSessionCorrectedText(panelId, correctedText);
     }
+    this.releaseBaseline(correction);
 
     this.syncCorrectionRange(panelId);
     inputStore.bumpExternalDraftRevision();
@@ -1757,18 +1773,24 @@ class VoiceRecordingService {
    * been dropped, or false if `timeoutMs` runs out first.
    */
   async waitForPendingCorrections(panelId: string, timeoutMs: number): Promise<boolean> {
-    const settled: Promise<void>[] = [];
-    for (const correction of this.pendingCorrections) {
-      if (correction.panelId === panelId) settled.push(correction.settled);
-    }
-    if (settled.length === 0) return true;
+    if (!this.hasPendingCorrection(panelId)) return true;
 
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const timedOut = new Promise<boolean>((resolve) => {
+    const timedOut = new Promise<false>((resolve) => {
       timer = setTimeout(() => resolve(false), timeoutMs);
     });
     try {
-      return await Promise.race([Promise.all(settled).then(() => true), timedOut]);
+      // A dictation restarted and stopped on the panel can register another
+      // correction while this waits; it gets the same deadline.
+      while (this.hasPendingCorrection(panelId)) {
+        const settled: Promise<void>[] = [];
+        for (const correction of this.pendingCorrections) {
+          if (correction.panelId === panelId) settled.push(correction.settled);
+        }
+        const landed = await Promise.race([Promise.all(settled).then(() => true), timedOut]);
+        if (!landed) return false;
+      }
+      return true;
     } finally {
       clearTimeout(timer);
     }
@@ -1786,6 +1808,12 @@ class VoiceRecordingService {
       dropped = true;
     }
     if (dropped) this.syncCorrectionRange(panelId);
+  }
+
+  private releaseBaseline(correction: PendingCorrection): void {
+    if (this.baselineOwners.get(correction.panelId) === correction) {
+      this.baselineOwners.delete(correction.panelId);
+    }
   }
 
   private retireCorrection(correction: PendingCorrection): void {
@@ -2413,10 +2441,15 @@ class VoiceRecordingService {
     this.clearPauseTimeout();
     this.clearElapsedTimer();
     this.clearMicSilenceTimer();
-    // Release anyone waiting on a correction; none of them may land now.
+    // Release anyone waiting on a correction; none of them may land now, so
+    // none of their underlines may stay either.
+    const correctedPanels = new Set<string>();
     for (const correction of [...this.pendingCorrections]) {
+      correctedPanels.add(correction.panelId);
       this.retireCorrection(correction);
     }
+    for (const panelId of correctedPanels) this.syncCorrectionRange(panelId);
+    this.baselineOwners.clear();
     for (const unsub of this.unsubscribers) {
       unsub();
     }

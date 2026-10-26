@@ -58,7 +58,8 @@ type CorrectResult = { action: "no_change" | "replace"; correctedText: string };
 const callbacks: {
   delta: ((payload: DeltaPayload) => void) | null;
   complete: ((payload: CompletePayload) => void) | null;
-} = { delta: null, complete: null };
+  boundary: ((payload: { rawText: string | null }) => void) | null;
+} = { delta: null, complete: null, boundary: null };
 
 const correct = vi.fn<(request: { rawText: string }) => Promise<CorrectResult>>();
 
@@ -73,7 +74,10 @@ function stubElectron() {
         callbacks.complete = cb;
         return () => {};
       }),
-      onParagraphBoundary: vi.fn(() => () => {}),
+      onParagraphBoundary: vi.fn((cb: (payload: { rawText: string | null }) => void) => {
+        callbacks.boundary = cb;
+        return () => {};
+      }),
       onFileTokenResolved: vi.fn(() => () => {}),
       onError: vi.fn(() => () => {}),
       onStatus: vi.fn(() => () => {}),
@@ -135,10 +139,13 @@ async function setup() {
   };
   const draft = (panelId: string) => useTerminalInputStore.getState().getDraftInput(panelId);
   const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+  const baseline = (panelId: string) =>
+    useVoiceRecordingStore.getState().panelBuffers[panelId]?.sessionCorrectedText;
 
   return {
     service: voiceRecordingService,
     voiceStore: useVoiceRecordingStore,
+    baseline,
     inputStore: useTerminalInputStore,
     say,
     dictate,
@@ -152,6 +159,7 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     vi.resetModules();
     callbacks.delta = null;
     callbacks.complete = null;
+    callbacks.boundary = null;
     correct.mockReset();
   });
 
@@ -181,7 +189,7 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
   });
 
   it("lands the finished passage's correction while dictation restarts on the same panel", async () => {
-    const { service, dictate, say, draft, flush, voiceStore } = await setup();
+    const { service, dictate, say, draft, flush, baseline } = await setup();
     const first = deferred<CorrectResult>();
     correct.mockReturnValueOnce(first.promise);
     correct.mockResolvedValueOnce({ action: "no_change", correctedText: "and the lexer" });
@@ -193,6 +201,8 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     first.resolve({ action: "replace", correctedText: "So the parser is broken." });
     await flush();
     expect(draft("panel-1")).toBe("So the parser is broken. and the");
+    // The restarted session owns the panel's learning baseline now.
+    expect(baseline("panel-1")).toBeNull();
 
     // The restarted session's own text still lines up after the earlier
     // passage changed length under it.
@@ -201,13 +211,11 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     await service.stop();
     expect(correct).toHaveBeenLastCalledWith({ rawText: "and the lexer" });
     await flush();
-    expect(voiceStore.getState().panelBuffers["panel-1"]?.sessionCorrectedText).toBe(
-      "and the lexer"
-    );
+    expect(baseline("panel-1")).toBe("and the lexer");
   });
 
   it("lands both passages when a same-panel restart stops before the first correction returns", async () => {
-    const { service, dictate, draft, flush } = await setup();
+    const { service, dictate, draft, flush, baseline } = await setup();
     const first = deferred<CorrectResult>();
     const second = deferred<CorrectResult>();
     correct.mockReturnValueOnce(first.promise);
@@ -221,8 +229,10 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
 
     first.resolve({ action: "replace", correctedText: "So the parser is broken." });
     await flush();
+    expect(baseline("panel-1")).toBe("and the lexr too");
     second.resolve({ action: "replace", correctedText: "And the lexer too." });
     await flush();
+    expect(baseline("panel-1")).toBe("And the lexer too.");
 
     expect(draft("panel-1")).toBe("So the parser is broken. And the lexer too.");
     expect(service.hasPendingCorrection("panel-1")).toBe(false);
@@ -282,6 +292,31 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     callbacks.complete!({ text: "and the lexer", willCorrect: false });
 
     expect(draft("panel-1")).toBe("The parser. and the lexer");
+    correct.mockResolvedValueOnce({ action: "no_change", correctedText: "and the lexer" });
+    await service.stop();
+    expect(correct).toHaveBeenLastCalledWith({ rawText: "and the lexer" });
+  });
+
+  it("keeps a passage's trailing break when its correction drops it, so a restart stays aligned", async () => {
+    const { service, dictate, draft, flush, voiceStore } = await setup();
+    const first = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(first.promise);
+
+    dictate("panel-1", "the parsr");
+    callbacks.boundary!({ rawText: null });
+    await service.stop();
+    expect(correct).toHaveBeenLastCalledWith({ rawText: "the parsr\n" });
+
+    voiceStore.getState().beginSession({ panelId: "panel-1" });
+    callbacks.delta!({ text: "and the" });
+    first.resolve({ action: "replace", correctedText: "The parser." });
+    await flush();
+    callbacks.complete!({ text: "and the lexer", willCorrect: false });
+    expect(draft("panel-1")).toBe("The parser.\nand the lexer");
+
+    correct.mockResolvedValueOnce({ action: "no_change", correctedText: "and the lexer" });
+    await service.stop();
+    expect(correct).toHaveBeenLastCalledWith({ rawText: "and the lexer" });
   });
 
   it("moves the passage with typing before it and still lands the correction", async () => {
@@ -310,11 +345,14 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     await service.stop();
 
     inputStore.getState().setDraftInput("panel-1", "the parsr the parser");
+    expect(service.hasPendingCorrection("panel-1")).toBe(false);
+
+    // Undoing the edit doesn't bring the dropped correction back.
+    inputStore.getState().setDraftInput("panel-1", "the parsr the parsr");
     first.resolve({ action: "replace", correctedText: "the parser" });
     await flush();
 
-    expect(draft("panel-1")).toBe("the parsr the parser");
-    expect(service.hasPendingCorrection("panel-1")).toBe(false);
+    expect(draft("panel-1")).toBe("the parsr the parsr");
   });
 
   it("releases a waiter as soon as the draft is cleared", async () => {
@@ -331,7 +369,7 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
   });
 
   it("waits for a pending correction and reports when it lands", async () => {
-    const { service, dictate, draft } = await setup();
+    const { service, dictate, draft, flush } = await setup();
     const first = deferred<CorrectResult>();
     correct.mockReturnValueOnce(first.promise);
 
@@ -340,7 +378,14 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     expect(service.hasPendingCorrection("panel-1")).toBe(true);
     expect(service.hasPendingCorrection("panel-2")).toBe(false);
 
+    let settled = false;
     const waited = service.waitForPendingCorrections("panel-1", 2000);
+    void waited.then(() => {
+      settled = true;
+    });
+    await flush();
+    expect(settled).toBe(false);
+
     first.resolve({ action: "replace", correctedText: "Hello world." });
     await expect(waited).resolves.toBe(true);
 
@@ -357,15 +402,85 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     await service.stop();
 
     vi.useFakeTimers();
+    let settled = false;
     const waited = service.waitForPendingCorrections("panel-1", 2000);
+    void waited.then(() => {
+      settled = true;
+    });
     await vi.advanceTimersByTimeAsync(1999);
-    expect(service.hasPendingCorrection("panel-1")).toBe(true);
+    expect(settled).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
     await expect(waited).resolves.toBe(false);
     vi.useRealTimers();
 
     service.discardPendingCorrections("panel-1");
     expect(service.hasPendingCorrection("panel-1")).toBe(false);
+
+    first.resolve({ action: "replace", correctedText: "Hello world." });
+    await flush();
+    expect(draft("panel-1")).toBe("hello wrld");
+  });
+
+  it("keeps waiting for a correction registered on the panel while it waits", async () => {
+    const { service, dictate } = await setup();
+    const first = deferred<CorrectResult>();
+    const second = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(first.promise);
+    correct.mockReturnValueOnce(second.promise);
+
+    dictate("panel-1", "the parsr");
+    await service.stop();
+    let settled = false;
+    const waited = service.waitForPendingCorrections("panel-1", 2000);
+    void waited.then(() => {
+      settled = true;
+    });
+
+    dictate("panel-1", "and the lexr");
+    await service.stop();
+    first.resolve({ action: "replace", correctedText: "The parser" });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(settled).toBe(false);
+
+    second.resolve({ action: "replace", correctedText: "and the lexer" });
+    await expect(waited).resolves.toBe(true);
+  });
+
+  it("keeps the learning baseline with its own passage when two say the same words", async () => {
+    const { service, dictate, flush, baseline } = await setup();
+    const first = deferred<CorrectResult>();
+    const second = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(first.promise);
+    correct.mockReturnValueOnce(second.promise);
+
+    dictate("panel-1", "zoo stand");
+    await service.stop();
+    dictate("panel-1", "zoo stand");
+    await service.stop();
+
+    first.resolve({ action: "replace", correctedText: "Zustand" });
+    await flush();
+    expect(baseline("panel-1")).toBe("zoo stand");
+
+    second.resolve({ action: "no_change", correctedText: "zoo stand" });
+    await flush();
+    expect(baseline("panel-1")).toBe("zoo stand");
+  });
+
+  it("clears the underline and drops pending corrections when the service is torn down", async () => {
+    const { service, dictate, draft, flush, voiceStore } = await setup();
+    const first = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(first.promise);
+
+    dictate("panel-1", "hello wrld");
+    await service.stop();
+    expect(voiceStore.getState().panelBuffers["panel-1"]?.correctionRange).toEqual({
+      from: 0,
+      to: 10,
+    });
+
+    service.destroy();
+    expect(voiceStore.getState().panelBuffers["panel-1"]?.correctionRange).toBeNull();
 
     first.resolve({ action: "replace", correctedText: "Hello world." });
     await flush();

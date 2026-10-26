@@ -9,7 +9,6 @@ vi.mock("@/services/VoiceRecordingService", () => ({
     stop: vi.fn().mockResolvedValue(undefined),
     hasPendingCorrection: vi.fn(() => false),
     waitForPendingCorrections: vi.fn().mockResolvedValue(true),
-    discardPendingCorrections: vi.fn(),
   },
   VOICE_CORRECTION_SEND_WAIT_MS: 2000,
 }));
@@ -35,7 +34,6 @@ import { useVoiceWaitSubmit } from "../useVoiceWaitSubmit";
 const stopMock = vi.mocked(voiceRecordingService.stop);
 const hasPendingMock = vi.mocked(voiceRecordingService.hasPendingCorrection);
 const waitMock = vi.mocked(voiceRecordingService.waitForPendingCorrections);
-const discardMock = vi.mocked(voiceRecordingService.discardPendingCorrections);
 
 const PANEL_ID = "test-panel";
 
@@ -72,7 +70,6 @@ describe("useVoiceWaitSubmit", () => {
     hasPendingMock.mockReturnValue(false);
     waitMock.mockReset();
     waitMock.mockResolvedValue(true);
-    discardMock.mockReset();
   });
 
   function renderWaitSubmit() {
@@ -156,7 +153,7 @@ describe("useVoiceWaitSubmit", () => {
     expect(sendFromEditor).toHaveBeenCalledTimes(1);
   });
 
-  it("waits for a pending correction, then drops what is left and sends", async () => {
+  it("waits for a pending correction before it sends", async () => {
     let finishCorrection!: (landed: boolean) => void;
     hasPendingMock.mockReturnValue(true);
     waitMock.mockImplementation(
@@ -179,10 +176,6 @@ describe("useVoiceWaitSubmit", () => {
       finishCorrection(false);
     });
 
-    expect(discardMock).toHaveBeenCalledWith(PANEL_ID);
-    expect(discardMock.mock.invocationCallOrder[0]).toBeLessThan(
-      sendFromEditor.mock.invocationCallOrder[0]!
-    );
     expect(sendFromEditor).toHaveBeenCalledTimes(1);
     expect(result.current.voiceSubmitPhase).toBeNull();
     expect(useTerminalInputStore.getState().isVoiceSubmitting(PANEL_ID)).toBe(false);
@@ -211,7 +204,29 @@ describe("useVoiceWaitSubmit", () => {
       finishCorrection(true);
     });
 
-    expect(discardMock).not.toHaveBeenCalled();
+    expect(sendFromEditor).not.toHaveBeenCalled();
+  });
+
+  it("drops its send when the composer unmounts mid-wait, leaving the panel free to send", async () => {
+    let finishCorrection!: (landed: boolean) => void;
+    hasPendingMock.mockReturnValue(true);
+    waitMock.mockImplementation(
+      () =>
+        new Promise<boolean>((resolve) => {
+          finishCorrection = resolve;
+        })
+    );
+
+    const { result, unmount } = renderWaitSubmit();
+    await act(async () => {
+      result.current.startVoiceWaitSubmit();
+    });
+    unmount();
+    expect(useTerminalInputStore.getState().isVoiceSubmitting(PANEL_ID)).toBe(false);
+
+    await act(async () => {
+      finishCorrection(true);
+    });
     expect(sendFromEditor).not.toHaveBeenCalled();
   });
 
@@ -262,13 +277,19 @@ describe("useVoiceWaitSubmit submitFromEditor", () => {
     hasPendingMock.mockReset();
     waitMock.mockReset();
     waitMock.mockResolvedValue(true);
-    discardMock.mockReset();
   });
 
   it("routes through the correction wait when this panel has one pending", async () => {
     // The mocked voice store reports a session on PANEL_ID; this composer is
     // another panel, so only its own pending correction can hold the send.
     hasPendingMock.mockImplementation((panelId) => panelId === "other-panel");
+    let finishCorrection!: (landed: boolean) => void;
+    waitMock.mockImplementation(
+      () =>
+        new Promise<boolean>((resolve) => {
+          finishCorrection = resolve;
+        })
+    );
     const { result } = renderHook(() =>
       useVoiceWaitSubmit({
         terminalId: "other-panel",
@@ -284,6 +305,11 @@ describe("useVoiceWaitSubmit submitFromEditor", () => {
 
     expect(stopMock).not.toHaveBeenCalled();
     expect(waitMock).toHaveBeenCalledWith("other-panel", 2000);
+    expect(sendFromEditor).not.toHaveBeenCalled();
+
+    await act(async () => {
+      finishCorrection(true);
+    });
     expect(sendFromEditor).toHaveBeenCalledTimes(1);
   });
 

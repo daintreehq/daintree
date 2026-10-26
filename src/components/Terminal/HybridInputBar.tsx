@@ -934,6 +934,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const sendFromEditor = () => {
       // An upload still on its way would leave its reference out of what is sent.
       if (hasPendingUploads(uploadSurface)) return;
+      // The send takes the draft as it stands. A dictation correction still on
+      // its way must not rewrite it mid-send, or land on the next draft (#14611).
+      voiceRecordingService.discardPendingCorrections(terminalId);
       const view = editorViewRef.current;
       const latest = latestRef.current;
       const text = view?.state.doc.toString() ?? latest?.value ?? "";
