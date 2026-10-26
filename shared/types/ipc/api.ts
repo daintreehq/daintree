@@ -2170,6 +2170,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
         text: string;
         willCorrect: boolean;
         itemId?: string;
+        transcriptId?: string;
       }) => void
     ): () => void;
     onParagraphBoundary(
@@ -2206,9 +2207,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onFileTokenResolved(
       callback: (payload: {
         sessionId: string;
-        description: string;
-        replacement: string;
-        resolved: boolean;
+        transcriptId: string;
+        references: Array<{ description: string; path: string }>;
       }) => void
     ): () => void;
   };

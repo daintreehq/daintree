@@ -997,7 +997,10 @@ describe("VoiceRecordingService adversarial", () => {
       drain.resolve();
       await retargeting;
 
-      expect(runtime.voiceFns.beginSession).toHaveBeenLastCalledWith(panelTwo);
+      expect(runtime.voiceFns.beginSession).toHaveBeenLastCalledWith(
+        panelTwo,
+        runtime.voiceInput.start.mock.lastCall![0]
+      );
       expect(runtime.voiceInput.sendAudioChunk.mock.calls.map(([, chunk]) => chunk)).toEqual([
         early,
       ]);
@@ -1057,7 +1060,10 @@ describe("VoiceRecordingService adversarial", () => {
       drain.resolve();
       await retargeting;
 
-      expect(runtime.voiceFns.beginSession).toHaveBeenLastCalledWith(panelTwo);
+      expect(runtime.voiceFns.beginSession).toHaveBeenLastCalledWith(
+        panelTwo,
+        runtime.voiceInput.start.mock.lastCall![0]
+      );
       expect(runtime.voiceFns.setMicSignal).toHaveBeenLastCalledWith("live");
       expect(runtime.voiceState.micSignal).toBe("live");
     });

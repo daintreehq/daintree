@@ -205,8 +205,10 @@ interface VoiceTranscriptBuffer {
    */
   sessionCorrectedText: string | null;
   /**
-   * Renderer-side identity of the session that last opened this buffer. Ties
-   * the text the session writes to its dictation range (`dictationRangeStore`).
+   * Identity of the session that last opened this buffer: the id main knows
+   * it by, when it has one. Ties the text the session writes to its dictation
+   * range (`dictationRangeStore`), so results main sends after the session
+   * moves on still find that text.
    */
   dictationSessionId: string | null;
 }
@@ -305,7 +307,7 @@ interface VoiceRecordingState {
   dismissMicNotice: (notice: VoiceMicNotice) => void;
   setArming: (target: VoiceRecordingTarget) => void;
   clearPendingTarget: () => void;
-  beginSession: (target: VoiceRecordingTarget) => void;
+  beginSession: (target: VoiceRecordingTarget, sessionId?: string) => void;
   setStatus: (status: VoiceInputStatus) => void;
   setLastError: (error: VoiceInputError | null) => void;
   setPauseStopWarning: (warning: boolean) => void;
@@ -439,7 +441,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
       clearPendingTarget: () =>
         set((state) => (state.pendingTarget === null ? state : { pendingTarget: null })),
 
-      beginSession: (target) =>
+      beginSession: (target, sessionId) =>
         set((state) => ({
           activeTarget: target,
           pendingTarget: null,
@@ -464,7 +466,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
               transcriptPhase: "idle" as VoiceTranscriptPhase,
               correctionRanges: NO_CORRECTION_RANGES,
               sessionCorrectedText: null,
-              dictationSessionId: crypto.randomUUID(),
+              dictationSessionId: sessionId ?? crypto.randomUUID(),
             },
           },
         })),

@@ -51,6 +51,7 @@ import {
   stripPseudoDevicePrefix,
   type VoiceMicDevice,
 } from "@/services/voiceMicDevices";
+import { applyDraftEdits, planFileReferenceEdits } from "@/services/voiceFileReferences";
 
 const LOG_PREFIX = "[VoiceRecording]";
 
@@ -95,7 +96,8 @@ function trackDictatedText(
   projectId: string | undefined,
   base: string,
   separator: string,
-  text: string
+  text: string,
+  transcriptId?: string
 ): void {
   if (!sessionId) return;
   const from = base.length + separator.length;
@@ -104,7 +106,7 @@ function trackDictatedText(
     .getState()
     .recordUtterance(
       { sessionId, panelId, projectId },
-      { insertion: { from: base.length, to }, words: { from, to } }
+      { insertion: { from: base.length, to }, words: { from, to }, transcriptId }
     );
 }
 
@@ -323,7 +325,7 @@ class VoiceRecordingService {
     );
 
     this.unsubscribers.push(
-      voiceInput.onTranscriptionComplete(({ text, itemId }) => {
+      voiceInput.onTranscriptionComplete(({ text, itemId, transcriptId }) => {
         logDebug(`${LOG_PREFIX} Received transcription complete`, { itemId, length: text.length });
         const voiceState = useVoiceRecordingStore.getState();
         const panelId = voiceState.activeTarget?.panelId;
@@ -353,7 +355,8 @@ class VoiceRecordingService {
               projectId,
               base,
               separator,
-              finalText
+              finalText,
+              transcriptId
             );
             inputStore.bumpExternalDraftRevision();
           }
@@ -363,31 +366,32 @@ class VoiceRecordingService {
     );
 
     this.unsubscribers.push(
-      voiceInput.onFileTokenResolved(({ description, replacement }) => {
-        logDebug(`${LOG_PREFIX} Received file token resolved`, {
-          descriptionLength: description.length,
-          replacementLength: replacement.length,
-        });
-        const voiceState = useVoiceRecordingStore.getState();
-        const currentTarget = voiceState.activeTarget;
-        if (!currentTarget) return;
+      voiceInput.onFileTokenResolved(({ sessionId, transcriptId, references }) => {
+        logDebug(`${LOG_PREFIX} Received file references`, { count: references.length });
+        // Routed by the session that spoke them, not the active target: the
+        // final utterance's references arrive as its session stops, by which
+        // point another panel may be dictating.
+        const record = useDictationRangeStore
+          .getState()
+          .listSessionDictations(sessionId)
+          .find((r) => r.utterances.some((u) => u.transcriptId === transcriptId));
+        if (!record) {
+          logDebug(`${LOG_PREFIX} File references' dictation is gone, discarding`);
+          return;
+        }
 
-        const { panelId, projectId } = currentTarget;
+        const { panelId, projectId } = record;
         const inputStore = useTerminalInputStore.getState();
         const draft = inputStore.getDraftInput(panelId, projectId);
-
-        // Best-effort replacement: search for the description text in the draft
-        const idx = draft.lastIndexOf(description);
-        if (idx >= 0) {
-          const before = draft.slice(0, idx);
-          const after = draft.slice(idx + description.length);
-          inputStore.setDraftInput(panelId, before + replacement + after, projectId);
-          inputStore.bumpExternalDraftRevision();
-        } else {
-          logDebug(`${LOG_PREFIX} File token description not found in draft, discarding`, {
-            descriptionLength: description.length,
+        const edits = planFileReferenceEdits(record, transcriptId, references, draft);
+        if (edits.length === 0) {
+          logDebug(`${LOG_PREFIX} File references not found in their words, discarding`, {
+            count: references.length,
           });
+          return;
         }
+        inputStore.setDraftInput(panelId, applyDraftEdits(draft, edits), projectId);
+        inputStore.bumpExternalDraftRevision();
       })
     );
 
@@ -1467,7 +1471,7 @@ class VoiceRecordingService {
     this.pauseStartedAt = 0;
     this.totalPausedMs = 0;
     this.clearPauseTimeout();
-    useVoiceRecordingStore.getState().beginSession(target);
+    useVoiceRecordingStore.getState().beginSession(target, sessionId);
     // beginSession resets the panel's buffer; a passage still being corrected
     // there keeps its underline.
     if (this.hasPendingCorrection(target.panelId)) this.syncCorrectionRange(target.panelId);

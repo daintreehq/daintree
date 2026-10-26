@@ -52,8 +52,18 @@ vi.mock("@/services/KeybindingService", () => ({
 }));
 
 type DeltaPayload = { sessionId: string; text: string; itemId?: string };
-type CompletePayload = { sessionId: string; text: string; willCorrect: boolean; itemId?: string };
-type FileTokenPayload = { sessionId: string; description: string; replacement: string };
+type CompletePayload = {
+  sessionId: string;
+  text: string;
+  willCorrect: boolean;
+  itemId?: string;
+  transcriptId?: string;
+};
+type FileTokenPayload = {
+  sessionId: string;
+  transcriptId: string;
+  references: Array<{ description: string; path: string }>;
+};
 type BoundaryPayload = { sessionId: string; rawText: string | null };
 
 const SESSION_ID = "session-1";
@@ -132,9 +142,11 @@ async function setup(initialDraft = "") {
   const inputs = useTerminalInputStore.getState();
   if (initialDraft) inputs.setDraftInput(PANEL, initialDraft, PROJECT);
 
-  const begin = () =>
-    useVoiceRecordingStore.getState().beginSession({ panelId: PANEL, projectId: PROJECT });
-  begin();
+  const begin = (sessionId?: string) =>
+    useVoiceRecordingStore
+      .getState()
+      .beginSession({ panelId: PANEL, projectId: PROJECT }, sessionId);
+  begin(SESSION_ID);
 
   const draft = () => useTerminalInputStore.getState().getDraftInput(PANEL, PROJECT);
   const setDraft = (value: string) =>
@@ -161,8 +173,13 @@ let unsubscribe: (() => void) | null = null;
 
 const delta = (text: string, itemId?: string) =>
   callbacks.delta!({ sessionId: SESSION_ID, text, itemId });
-const complete = (text: string, itemId?: string) =>
-  callbacks.complete!({ sessionId: SESSION_ID, text, willCorrect: false, itemId });
+const complete = (text: string, itemId?: string, transcriptId?: string) =>
+  callbacks.complete!({ sessionId: SESSION_ID, text, willCorrect: false, itemId, transcriptId });
+const fileReferences = (
+  transcriptId: string,
+  references: FileTokenPayload["references"],
+  sessionId = SESSION_ID
+) => callbacks.fileToken!({ sessionId, transcriptId, references });
 
 beforeEach(() => {
   vi.resetModules();
@@ -379,14 +396,10 @@ describe("VoiceRecordingService — dictation ranges (#14597)", () => {
   it("flags a dictation a file-link swap rewrote, leaving the swap itself unchanged", async () => {
     const { draft, records } = await setup();
 
-    complete("Open the readme file.", "item-a");
-    callbacks.fileToken!({
-      sessionId: SESSION_ID,
-      description: "the readme file",
-      replacement: "@README.md",
-    });
+    complete("Link to the readme file.", "item-a", "t1");
+    fileReferences("t1", [{ description: "readme file", path: "README.md" }]);
 
-    expect(draft()).toBe("Open @README.md.");
+    expect(draft()).toBe("@README.md.");
     expect(records()[0]!.utterances[0]!.range.edited).toBe(true);
   });
 });
@@ -798,5 +811,95 @@ describe("voiceCorrectionPassages (#14613)", () => {
 
     expect(locatePassage(record, passage!, "hello")).toEqual({ from: 0, to: 5 });
     expect(locatePassage(record, passage!, "jello")).toBeNull();
+  });
+});
+
+describe("VoiceRecordingService — spoken file references (#14616)", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    callbacks.delta = null;
+    callbacks.complete = null;
+    callbacks.boundary = null;
+    callbacks.fileToken = null;
+    correct.fn.mockReset();
+  });
+
+  afterEach(() => {
+    unsubscribe?.();
+    unsubscribe = null;
+    vi.unstubAllGlobals();
+  });
+
+  it("lands a reference in the final utterance after the session has stopped", async () => {
+    const { service, voiceStore, draft } = await setup("Fix the padding.");
+
+    complete("Link to the input bar component.", "item-a", "t1");
+    await service.stop("Dictation stopped.", { skipRemoteStop: true });
+    expect(voiceStore.getState().activeTarget).toBeNull();
+
+    fileReferences("t1", [{ description: "input bar component", path: "src/InputBar.tsx" }]);
+
+    expect(draft()).toBe("Fix the padding. @src/InputBar.tsx.");
+  });
+
+  it("lands in the speaking session's panel while another panel is dictating", async () => {
+    const { voiceStore, draft } = await setup();
+    const { useTerminalInputStore } = await import("@/store/terminalInputStore");
+
+    complete("Link to the router.", "item-a", "t1");
+    voiceStore.getState().beginSession({ panelId: "panel-2", projectId: PROJECT }, "session-2");
+    fileReferences("t1", [{ description: "router", path: "src/router.ts" }]);
+
+    expect(draft()).toBe("@src/router.ts.");
+    expect(useTerminalInputStore.getState().getDraftInput("panel-2", PROJECT)).toBe("");
+  });
+
+  it("swaps inside its own transcript, not text typed after it", async () => {
+    const { draft, setDraft } = await setup();
+
+    complete("Link to the router.", "item-a", "t1");
+    setDraft(`${draft()} Then link to the router again.`);
+    fileReferences("t1", [{ description: "router", path: "src/router.ts" }]);
+
+    expect(draft()).toBe("@src/router.ts. Then link to the router again.");
+  });
+
+  it("leaves the spoken words when nothing resolved them", async () => {
+    const { draft } = await setup();
+
+    complete("Link to the old API.", "item-a", "t1");
+    fileReferences("t1", [{ description: "something else", path: "src/other.ts" }]);
+
+    expect(draft()).toBe("Link to the old API.");
+    expect(draft()).not.toContain("@?");
+  });
+
+  it("ignores references from another session", async () => {
+    const { draft } = await setup();
+
+    complete("Link to the router.", "item-a", "t1");
+    fileReferences("t1", [{ description: "router", path: "src/router.ts" }], "session-other");
+
+    expect(draft()).toBe("Link to the router.");
+  });
+
+  it("leaves words the user edited before the reference arrived", async () => {
+    const { draft, setDraft } = await setup();
+
+    complete("Link to the router.", "item-a", "t1");
+    setDraft("Link to the main router.");
+    fileReferences("t1", [{ description: "router", path: "src/router.ts" }]);
+
+    expect(draft()).toBe("Link to the main router.");
+  });
+
+  it("drops references whose draft was sent", async () => {
+    const { draft, setDraft } = await setup();
+
+    complete("Link to the router.", "item-a", "t1");
+    setDraft("");
+    fileReferences("t1", [{ description: "router", path: "src/router.ts" }]);
+
+    expect(draft()).toBe("");
   });
 });

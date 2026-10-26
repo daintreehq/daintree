@@ -2039,13 +2039,15 @@ export interface IpcEventMap {
     text: string;
     willCorrect: boolean;
     itemId?: string;
+    /** Set when spoken file references in this transcript may follow; their result names it. */
+    transcriptId?: string;
   };
   "voice-input:paragraph-boundary": { sessionId: string; rawText: string | null };
   "voice-input:file-token-resolved": {
     sessionId: string;
-    description: string;
-    replacement: string;
-    resolved: boolean;
+    transcriptId: string;
+    /** Only the references that resolved, in spoken order, with worktree-relative paths. */
+    references: Array<{ description: string; path: string }>;
   };
   "voice-input:error": { sessionId: string; error: VoiceInputError };
   "voice-input:status": { sessionId: string; status: VoiceInputStatus };

@@ -21,7 +21,7 @@ import {
   validateCorrection,
   type CorrectionRejectReason,
 } from "./voiceCorrectionGuard.js";
-import { mayReferenceFile } from "./voiceFileLinkTrigger.js";
+import { mayReferenceFile } from "../../shared/utils/voiceFileLinkCommands.js";
 
 export { CORE_CORRECTION_PROMPT, buildCorrectionSystemPrompt };
 

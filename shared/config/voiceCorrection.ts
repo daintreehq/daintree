@@ -150,7 +150,7 @@ TASK: Scan the utterance for explicit commands to insert a reference to a projec
 
 COMMANDS (only these count):
 - "link to [description]"
-- "at file [description]"
+- "at file [description]" (also spoken or transcribed as "at-file")
 - "add file [description]"
 - "insert file [description]"
 - "reference file [description]"

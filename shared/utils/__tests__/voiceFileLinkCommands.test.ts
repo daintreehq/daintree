@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mayReferenceFile } from "../voiceFileLinkTrigger.js";
+import { mayReferenceFile } from "../voiceFileLinkCommands.js";
 
 describe("mayReferenceFile", () => {
   it.each([
