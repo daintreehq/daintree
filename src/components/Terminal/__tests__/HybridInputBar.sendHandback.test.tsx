@@ -86,7 +86,6 @@ beforeEach(() => {
     panelIds: [panel.id],
     panelIdsByWorktreeId: { [WT_ID]: [panel.id] },
     focusedId: panel.id,
-    preferredTerminalFocusTarget: "hybridInput",
   });
   useTerminalInputStore.setState({ draftInputs: new Map(), hybridInputAutoFocus: false });
   fleetBroadcast.mockReset();

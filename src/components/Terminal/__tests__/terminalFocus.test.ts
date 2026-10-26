@@ -157,18 +157,29 @@ describe("where an agent pane puts the keyboard", () => {
     expect(ownPass({ home: "hybridInput", hasSelection: true })).toBe("hybridInput");
   });
 
-  it("lets a caller that named a surface past what the pane holds", () => {
-    expect(
-      resolveTerminalPaneFocus({
-        ...available,
-        requested: "xterm",
-        home: "hybridInput",
-        xtermOwnsDomFocus: false,
-        hybridInputOwnsDomFocus: true,
-        keepOwnedSurface: true,
-      })
-    ).toBe("xterm");
-  });
+  // A drop, type-anywhere, a search restore, a send's hand-back to the
+  // terminal (#14692): the surface a caller named wins over home and over
+  // whichever of the pane's surfaces holds the keyboard.
+  it.each([
+    ["xterm", "hybridInput", "hybridInput"],
+    ["xterm", "xterm", "hybridInput"],
+    ["hybridInput", "hybridInput", "xterm"],
+    ["hybridInput", "xterm", "xterm"],
+  ] as const)(
+    "lets a caller that named %s with home %s past the keyboard on the %s",
+    (requested, home, owned) => {
+      expect(
+        resolveTerminalPaneFocus({
+          ...available,
+          requested,
+          home,
+          xtermOwnsDomFocus: owned === "xterm",
+          hybridInputOwnsDomFocus: owned === "hybridInput",
+          keepOwnedSurface: true,
+        })
+      ).toBe(requested);
+    }
+  );
 });
 
 describe("resolvePaneFocusAction", () => {
