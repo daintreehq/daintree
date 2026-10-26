@@ -6,8 +6,9 @@ export interface StorageProblem {
 }
 
 /** Whether a declared key (exact, or ending `*` for a prefix) covers a key the code uses. */
-export function covers(declared: string, key: string): boolean {
-  return declared.endsWith("*") ? key.startsWith(declared.slice(0, -1)) : declared === key;
+export function covers(declared: string, key: string, partial = false): boolean {
+  if (declared.endsWith("*")) return key.startsWith(declared.slice(0, -1));
+  return !partial && declared === key;
 }
 
 export function checkRendererStorage(
@@ -26,12 +27,12 @@ export function checkRendererStorage(
       continue;
     }
     for (const key of use.keys) {
-      const match = declared.filter((d) => covers(d, key));
+      const match = declared.filter((d) => covers(d, key, use.partial));
       for (const d of match) used.add(d);
       if (match.length === 0) {
         problems.push({
           file: use.file,
-          message: `${where}: storage key "${key}" has no declared owner and scope.`,
+          message: `${where}: storage key "${key}"${use.partial ? " (built at runtime)" : ""} has no declared owner and scope.${use.partial ? " Declare it as a `*` prefix." : ""}`,
         });
       }
     }

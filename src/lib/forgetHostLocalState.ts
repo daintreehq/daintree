@@ -29,6 +29,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * (often the host's own view, already gone) are taken out on disk here.
  */
 function scrubStoredRecord(storageKey: string, field: string, hostId: HostId): void {
+  // storage-key: daintree-command-history daintree-url-history daintree-two-pane-split
   const raw = localStorage.getItem(storageKey);
   if (raw === null) return;
   let parsed: unknown;
@@ -42,6 +43,7 @@ function scrubStoredRecord(storageKey: string, field: string, hostId: HostId): v
   if (!isRecord(record)) return;
   const kept = withoutHost(record, hostId);
   if (!kept) return;
+  // storage-key: daintree-command-history daintree-url-history daintree-two-pane-split
   localStorage.setItem(
     storageKey,
     JSON.stringify({ ...parsed, state: { ...parsed.state, [field]: kept } })

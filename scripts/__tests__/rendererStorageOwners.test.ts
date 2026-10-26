@@ -63,6 +63,37 @@ create(persist(() => ({}), { name: "daintree-new-thing" }));`,
     expect(text).toMatch(/daintree-other.*not used/);
   });
 
+  it("holds a key built at runtime to a prefix declaration", () => {
+    const files = { "a.ts": `localStorage.setItem("daintree-preferences" + suffix, "1");` };
+    expect(
+      checkRendererStorage(src(files), ["daintree-preferences"]).map((p) => p.message)
+    ).toEqual([expect.stringMatching(/built at runtime/), expect.stringMatching(/not used/)]);
+    expect(checkRendererStorage(src(files), ["daintree-preferences*"])).toEqual([]);
+  });
+
+  it("reads an aliased persist import and an aliased storage variable", () => {
+    const problems = checkRendererStorage(
+      src({
+        "a.ts": `import { persist as keep } from "zustand/middleware";
+create(keep(() => ({}), { name: "alias-store" }));
+const store = window.localStorage;
+store.setItem("alias-key", "1");`,
+      }),
+      []
+    );
+    expect(problems.map((p) => p.message).join()).toMatch(/alias-store[\s\S]*alias-key/);
+  });
+
+  it("reads a constant only where the file defines or imports it", () => {
+    const [use] = scanSources(
+      src({
+        "a.ts": `export const OTHER_KEY = "daintree-elsewhere";`,
+        "b.ts": `function read(storageKey: string) { return localStorage.getItem(storageKey); }`,
+      })
+    );
+    expect(use?.keys).toEqual([]);
+  });
+
   it("passes when a prefix entry covers the key", () => {
     expect(
       checkRendererStorage(src({ "a.ts": `localStorage.getItem("p:" + id);` }), ["p:*"])
@@ -78,6 +109,7 @@ describe("renderer storage catalog", () => {
     });
     expect(rendererStorageDeclaration("daintree-sidebar-view:host:abc")?.scope).toBe("host");
     expect(rendererStorageOwner("daintree-preferences")).toBe("device");
+    expect(rendererStorageDeclaration("daintree-preferences.__bak")?.owner).toBe("device");
     expect(rendererStorageDeclaration("nope")).toBeUndefined();
     expect(() => rendererStorageOwner("nope")).toThrow(/No renderer storage key/);
   });

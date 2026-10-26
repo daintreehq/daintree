@@ -347,8 +347,16 @@ const RENDERER_STORAGE = [
   SETTING_CATALOG["renderer-session-storage"].entries,
 ] as const;
 
-/** The declaration covering a renderer storage key, exact or by `*` prefix. */
+const BACKUP_KEY_SUFFIX = ".__bak";
+
+/**
+ * The declaration covering a renderer storage key, exact or by `*` prefix. A
+ * persisted store's last-good backup (`<key>.__bak`) belongs to its owner.
+ */
 export function rendererStorageDeclaration(key: string): SettingDeclaration | undefined {
+  if (key.endsWith(BACKUP_KEY_SUFFIX)) {
+    return rendererStorageDeclaration(key.slice(0, -BACKUP_KEY_SUFFIX.length));
+  }
   for (const entries of RENDERER_STORAGE) {
     const exact = own<SettingEntry>(entries, key);
     if (exact && !("fields" in exact)) return exact;
