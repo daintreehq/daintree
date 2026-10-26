@@ -6,7 +6,12 @@ import {
   takeLandedCorrection,
 } from "../voiceCorrectionLanding";
 
-const correction = { from: 7, rawText: "hello there", correctedText: "Hello, there." };
+const correction = {
+  from: 7,
+  rawText: "hello there",
+  correctedText: "Hello, there.",
+  baseline: { raw: "hello there", corrected: "Hello, there." },
+};
 const draft = `Intro. ${correction.correctedText}`;
 
 describe("landed corrections", () => {
@@ -42,7 +47,12 @@ describe("landed corrections", () => {
   });
 
   it("records nothing for a correction that changed nothing", () => {
-    recordCorrectionLanded("term-1", "p1", { from: 0, rawText: "same", correctedText: "same" });
+    recordCorrectionLanded("term-1", "p1", {
+      from: 0,
+      rawText: "same",
+      correctedText: "same",
+      baseline: null,
+    });
     expect(takeLandedCorrection("term-1", "p1", "same")).toBeNull();
   });
 });
@@ -61,6 +71,12 @@ describe("rebaseCorrectionBaseline", () => {
     rebaseCorrectionBaseline("term-1", correction, "raw");
     expect(baseline()).toBe(correction.rawText);
     rebaseCorrectionBaseline("term-1", correction, "corrected");
+    expect(baseline()).toBe(correction.correctedText);
+  });
+
+  it("leaves the baseline alone for a correction that never set one", () => {
+    useVoiceRecordingStore.getState().setSessionCorrectedText("term-1", correction.correctedText);
+    rebaseCorrectionBaseline("term-1", { ...correction, baseline: null }, "raw");
     expect(baseline()).toBe(correction.correctedText);
   });
 

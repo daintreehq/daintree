@@ -1952,12 +1952,13 @@ class VoiceRecordingService {
     }
     this.releaseBaseline(correction);
     if (swapped) {
+      const corrected = joinPassageTexts(settled);
       recordCorrectionLanded(panelId, projectId, {
         ...swapped,
         baseline:
-          correction.seed === null
+          correction.seed === null || corrected === null
             ? null
-            : { raw: correction.seed, corrected: joinPassageTexts(settled) },
+            : { raw: correction.seed, corrected },
       });
     }
 

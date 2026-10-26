@@ -1,12 +1,22 @@
 import { makeDraftKey } from "@/lib/draftKey";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 
+/**
+ * The send-time learning baseline (#9749) on either side of a swap: the
+ * dictated passages as heard, and as corrected.
+ */
+export interface CorrectionBaseline {
+  raw: string;
+  corrected: string;
+}
+
 /** A correction just swapped into a panel's draft, on its way to that panel's composer. */
 export interface LandedCorrection {
-  /** Where the corrected passage starts in the draft. */
+  /** Where the corrected span starts in the draft. */
   from: number;
   rawText: string;
   correctedText: string;
+  baseline: CorrectionBaseline | null;
 }
 
 // Keyed by draft, so an isolated composer for the same terminal never takes
@@ -42,24 +52,24 @@ export function takeLandedCorrection(
 }
 
 /**
- * Moves the send-time learning baseline (#9749) with the passage. Putting the
- * raw transcription back is rejecting the correction, not correcting the
+ * Moves the send-time learning baseline with the passage. Putting the raw
+ * transcription back is rejecting the correction, not correcting the
  * transcriber, so learning diffs the send against what was heard. Only a
  * baseline that still matches the other side moves: a newer session's, or one
  * a send already consumed, stays as it is.
  */
 export function rebaseCorrectionBaseline(
   panelId: string,
-  correction: LandedCorrection,
+  correction: { baseline?: CorrectionBaseline | null },
   now: "raw" | "corrected"
 ): void {
+  if (!correction.baseline) return;
   const voice = useVoiceRecordingStore.getState();
-  const baseline = voice.panelBuffers[panelId]?.sessionCorrectedText;
-  const [from, to] =
-    now === "raw"
-      ? [correction.correctedText, correction.rawText]
-      : [correction.rawText, correction.correctedText];
-  if (baseline === from) voice.setSessionCorrectedText(panelId, to);
+  const { raw, corrected } = correction.baseline;
+  const [from, to] = now === "raw" ? [corrected, raw] : [raw, corrected];
+  if (voice.panelBuffers[panelId]?.sessionCorrectedText === from) {
+    voice.setSessionCorrectedText(panelId, to);
+  }
 }
 
 export function announceCorrectionShown(): void {

@@ -123,6 +123,7 @@ async function landCorrection(): Promise<void> {
       from: FROM,
       rawText: RAW.slice(FROM),
       correctedText: CORRECTED.slice(FROM),
+      baseline: { raw: RAW.slice(FROM), corrected: CORRECTED.slice(FROM) },
     });
     useVoiceRecordingStore.getState().setSessionCorrectedText("term-1", CORRECTED.slice(FROM));
     inputs.bumpExternalDraftRevision();
@@ -208,6 +209,7 @@ describe("HybridInputBar after an AI correction lands", () => {
       from: FROM,
       rawText: RAW.slice(FROM),
       correctedText: CORRECTED.slice(FROM),
+      baseline: { raw: RAW.slice(FROM), corrected: CORRECTED.slice(FROM) },
     });
     useTerminalInputStore.getState().bumpExternalDraftRevision();
 

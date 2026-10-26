@@ -355,12 +355,10 @@ describe("VoiceRecordingService — dictation ranges (#14597)", () => {
     correct.fn.mockReturnValueOnce(new Promise((resolve) => (resolveCorrection = resolve)));
     complete("Hello there.", "item-a");
     await service.stop("Dictation stopped.");
-    expect(voiceStore.getState().panelBuffers[PANEL]?.correctionRange).not.toBeNull();
+    expect(service.hasPendingCorrection(PANEL)).toBe(true);
     resolveCorrection({ action: "replace", correctedText: "Hello there." });
-    // The pending range clears in the same step that would swap the text.
-    await vi.waitFor(() =>
-      expect(voiceStore.getState().panelBuffers[PANEL]?.correctionRange).toBeNull()
-    );
+    // The pass retires in the same step that would swap the text.
+    await vi.waitFor(() => expect(service.hasPendingCorrection(PANEL)).toBe(false));
     expect(takeLandedCorrection(PANEL, PROJECT, draft())).toBeNull();
 
     voiceStore.getState().beginSession({ panelId: PANEL, projectId: PROJECT });
@@ -373,6 +371,7 @@ describe("VoiceRecordingService — dictation ranges (#14597)", () => {
       from: "Intro. Hello there. ".length,
       rawText: "hello again",
       correctedText: "Hello, again.",
+      baseline: { raw: "hello again", corrected: "Hello, again." },
     });
   });
 
@@ -577,6 +576,26 @@ describe("VoiceRecordingService — correction over dictated ranges (#14613)", (
     expect(draft()).toBe("first part typed note second part");
   });
 
+  it("hands the composer one span over every corrected passage, typed text between kept", async () => {
+    const { service, voiceStore, draft, setDraft } = await setup("Intro.");
+    const { takeLandedCorrection } = await import("../voiceCorrectionLanding");
+    correct.fn.mockImplementation(upperCase);
+    voiceStore.getState().setCorrectionEnabled(true);
+
+    say("first part", "item-a");
+    setDraft(draft() + " typed note");
+    say("second part", "item-b");
+    await service.stop("Dictation stopped.");
+    await vi.waitFor(() => expect(draft()).toBe("Intro. FIRST PART typed note SECOND PART"));
+
+    expect(takeLandedCorrection(PANEL, PROJECT, draft())).toEqual({
+      from: "Intro. ".length,
+      rawText: "first part typed note second part",
+      correctedText: "FIRST PART typed note SECOND PART",
+      baseline: { raw: "first part second part", corrected: "FIRST PART SECOND PART" },
+    });
+  });
+
   it("applies every passage when one result shifts text identical to the next", async () => {
     const { service, voiceStore, draft, setDraft } = await setup();
     correct.fn.mockImplementation(async ({ rawText }: CorrectRequest) => ({
@@ -733,7 +752,7 @@ describe("VoiceRecordingService — correction over dictated ranges (#14613)", (
     expect(draft()).toBe("alpha\nbeta");
   });
 
-  it("corrects nothing when stopped while a retarget to another panel is still arming", async () => {
+  it("corrects only the stopping session when stopped while a retarget to another panel is still arming", async () => {
     const { service, voiceStore } = await setup();
     correct.fn.mockResolvedValue({ action: "replace", correctedText: "Rewritten." });
     voiceStore.getState().setCorrectionEnabled(true);
@@ -742,11 +761,17 @@ describe("VoiceRecordingService — correction over dictated ranges (#14613)", (
     await service.stop("Dictation stopped.", { skipRemoteStop: true });
     voiceStore.getState().beginSession({ panelId: "panel-2", projectId: PROJECT });
     say("new words", "item-b");
-    // Retargeting back to the first panel: its old dictation isn't what stops.
+    // Retargeting back to the first panel only queues it (#14604): the live
+    // session on panel-2 is what stops, and the first panel's old dictation
+    // is never corrected.
     voiceStore.getState().setArming({ panelId: PANEL, projectId: PROJECT });
     await service.stop("Dictation stopped.");
 
-    expect(correct.fn).not.toHaveBeenCalled();
+    expect(correct.fn).toHaveBeenCalledTimes(1);
+    expect(correct.fn).toHaveBeenCalledWith(expect.objectContaining({ rawText: "new words" }));
+    expect(correct.fn).not.toHaveBeenCalledWith(
+      expect.objectContaining({ rawText: expect.stringContaining("old words") })
+    );
   });
 
   it("sends nothing for a dictation the draft already released", async () => {

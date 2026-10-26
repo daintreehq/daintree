@@ -31,6 +31,8 @@ export interface CorrectionReview {
   from: number;
   rawText: string;
   correctedText: string;
+  /** Opaque here: carried through history for `onSwapped`'s listener. */
+  baseline?: { raw: string; corrected: string } | null;
 }
 
 /** Offsets into the corrected text, each with the words that were heard there. */
