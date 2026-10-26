@@ -37,7 +37,9 @@ const heardAs = z.array(text).max(LIST_MAX);
 const addSchema = z.object({
   term: text,
   heardAs: heardAs.optional(),
-  source: z.enum(["manual", "imported"]).optional(),
+  // Source and time ride along only so an undone removal restores the entry as it was.
+  source: z.enum(["manual", "learned", "imported"]).optional(),
+  addedAt: z.number().finite().nonnegative().optional(),
 });
 const removeSchema = z.object({ term: existing });
 const updateSchema = z.object({

@@ -180,6 +180,8 @@ export interface AddDictionaryEntryInput {
   term: string;
   heardAs?: readonly string[];
   source?: VoiceDictionarySource;
+  /** Keeps the original time on a restored entry; defaults to now. */
+  addedAt?: number;
 }
 
 /**
@@ -198,7 +200,12 @@ export function addDictionaryEntry(
   if (index < 0) {
     return [
       ...entries,
-      { term, heardAs: appendHeardAs([], heardAs), source: input.source ?? "manual", addedAt: now },
+      {
+        term,
+        heardAs: appendHeardAs([], heardAs),
+        source: input.source ?? "manual",
+        addedAt: isTime(input.addedAt) ? input.addedAt : now,
+      },
     ];
   }
   const existing = entries[index]!;
