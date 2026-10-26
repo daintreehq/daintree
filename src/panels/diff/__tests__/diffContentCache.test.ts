@@ -75,7 +75,7 @@ describe("diffContentCache — index side", () => {
   it("names no side for a working-tree subject, keeping HEAD against the working tree", async () => {
     await requestDiff(workingTree("src/a.ts"), false);
 
-    expect(dispatchMock.mock.calls[0][1]).not.toHaveProperty("side");
+    expect(dispatchMock.mock.calls[0]?.[1]).not.toHaveProperty("side");
   });
 
   it.each(["staged", "unstaged"] as const)("asks for the %s side of the index", async (source) => {
