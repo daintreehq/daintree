@@ -31,7 +31,8 @@ export type ViewlessRestartOutcome =
 export async function restartTerminalWithoutView(
   projectId: string,
   terminalId: string,
-  deps: ViewlessDeps
+  deps: ViewlessDeps,
+  isCurrent: () => boolean = () => true
 ): Promise<ViewlessRestartOutcome> {
   const pty = deps.getPtyReader();
   if (!pty) return "gone";
@@ -50,6 +51,10 @@ export async function restartTerminalWithoutView(
   // A demoted pane runs the shell its agent quit to; a view restarts it as that
   // shell, which takes launch state this host never kept for it.
   if (agentId !== undefined && info.agentState === "exited") return "unsupported";
+
+  // The reads above wait on the pty-host and the disk; the terminal may have
+  // been relaunched meanwhile, and its successor isn't the one that leaked.
+  if (!isCurrent()) return "stale";
 
   let capturedSessionId: string | null = null;
   try {

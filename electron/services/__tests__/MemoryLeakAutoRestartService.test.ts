@@ -31,7 +31,9 @@ function harness(
   const target = {
     value: options.target ?? ({ kind: "view", deliver } as MemoryLeakRestartTarget),
   };
-  const restartOnHost = vi.fn(async () => "restarted");
+  const restartOnHost = vi.fn(
+    async (_projectId: string, _terminalId: string, _isCurrent: () => boolean) => "restarted"
+  );
   const readTerminal = vi.fn(
     async (_id: string): Promise<MemoryLeakTerminalRead | null> => terminal.value
   );
@@ -92,7 +94,10 @@ describe("MemoryLeakAutoRestartService", () => {
 
     await h.sample(OVER_KB);
     await flush();
-    expect(h.deliver).toHaveBeenCalledWith({ terminalId: "t1", thresholdMb: THRESHOLD_MB });
+    expect(h.deliver).toHaveBeenCalledWith(
+      { terminalId: "t1", thresholdMb: THRESHOLD_MB },
+      expect.any(Function)
+    );
   });
 
   it("restarts only above the threshold, not at it", async () => {
@@ -119,7 +124,7 @@ describe("MemoryLeakAutoRestartService", () => {
     await h.sample(OVER_KB, "t1", AUTO_RESTART_STARTUP_SAMPLES);
     await flush();
     expect(h.restartOnHost).toHaveBeenCalledTimes(1);
-    expect(h.restartOnHost).toHaveBeenCalledWith("p1", "t1");
+    expect(h.restartOnHost).toHaveBeenCalledWith("p1", "t1", expect.any(Function));
   });
 
   it("never restarts a terminal waiting for input, and tries again later", async () => {
@@ -137,6 +142,18 @@ describe("MemoryLeakAutoRestartService", () => {
     await h.sample(OVER_KB);
     await flush();
     expect(h.deliver).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets the host restart see a relaunch that lands after the decision", async () => {
+    const h = harness({ target: { kind: "host" } });
+    h.generations.set("t1", 1);
+    await h.sample(OVER_KB, "t1", AUTO_RESTART_STARTUP_SAMPLES);
+    await flush();
+    const isCurrent = h.restartOnHost.mock.calls[0]![2];
+    expect(isCurrent()).toBe(true);
+
+    h.generations.set("t1", 2);
+    expect(isCurrent()).toBe(false);
   });
 
   it("waits while the project's driver is away", async () => {

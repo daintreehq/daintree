@@ -81,9 +81,9 @@ export function startMemoryLeakAutoRestart(ptyClient: PtyClient): void {
     generationOf: (terminalId) => getLifecycleLedger().currentGeneration(terminalId),
     readTerminal: (terminalId) => ptyClient.getTerminalAsync(terminalId),
     pickTarget,
-    restartOnHost: async (projectId, terminalId) => {
+    restartOnHost: async (projectId, terminalId, isCurrent) => {
       const { restartTerminalWithoutViewLive } = await import("./viewless/index.js");
-      return restartTerminalWithoutViewLive(projectId, terminalId);
+      return restartTerminalWithoutViewLive(projectId, terminalId, isCurrent);
     },
     now: () => Date.now(),
   });

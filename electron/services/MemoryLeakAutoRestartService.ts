@@ -10,7 +10,11 @@ export type MemoryLeakRestartRequest = IpcEventBusMap["terminal:memory-leak-rest
  * yet while its driver is away, or the host itself when no view is attached.
  */
 export type MemoryLeakRestartTarget =
-  | { kind: "view"; deliver: (request: MemoryLeakRestartRequest) => void }
+  | {
+      kind: "view";
+      /** `isCurrent` says whether the decision still holds when the view can take it. */
+      deliver: (request: MemoryLeakRestartRequest, isCurrent: () => boolean) => void;
+    }
   | { kind: "wait" }
   | { kind: "host" };
 
@@ -29,7 +33,7 @@ export interface MemoryLeakAutoRestartDeps {
   generationOf(terminalId: string): number | undefined;
   readTerminal(terminalId: string): Promise<MemoryLeakTerminalRead | null>;
   pickTarget(projectId: string): MemoryLeakRestartTarget;
-  restartOnHost(projectId: string, terminalId: string): Promise<string>;
+  restartOnHost(projectId: string, terminalId: string, isCurrent: () => boolean): Promise<string>;
   now(): number;
 }
 
@@ -120,15 +124,16 @@ export class MemoryLeakAutoRestartService {
       if (!projectId) return;
       if (info.agentState === "waiting") return;
 
+      const isCurrent = () => !this.disposed && this.deps.generationOf(terminalId) === generation;
       const target = this.deps.pickTarget(projectId);
       switch (target.kind) {
         case "wait":
           return;
         case "view":
-          target.deliver({ terminalId, thresholdMb });
+          target.deliver({ terminalId, thresholdMb }, isCurrent);
           return;
         case "host": {
-          const outcome = await this.deps.restartOnHost(projectId, terminalId);
+          const outcome = await this.deps.restartOnHost(projectId, terminalId, isCurrent);
           if (outcome === "restarted") {
             console.log(
               `[MemoryLeak] Auto-restarted terminal ${terminalId.slice(0, 8)}: RSS exceeded ${thresholdMb} MB`

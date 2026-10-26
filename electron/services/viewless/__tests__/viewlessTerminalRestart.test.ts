@@ -107,6 +107,15 @@ describe("restartTerminalWithoutView", () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
+  it("stops before the kill when the terminal was relaunched during its checks", async () => {
+    const { deps, invoke } = setup({ id: "t2", command: "npm run dev" }, {});
+
+    await expect(restartTerminalWithoutView(PROJECT.id, "t2", deps, () => false)).resolves.toBe(
+      "stale"
+    );
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
   it("leaves an agent that already quit to its shell alone", async () => {
     const { deps, invoke } = setup(
       { id: "t1", launchAgentId: "claude", command: "claude" },
