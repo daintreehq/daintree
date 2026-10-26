@@ -260,6 +260,88 @@ describe("VoiceRecordingService — rewrite selection by voice (#14635)", () => 
     expect(voiceStore.getState().activeTarget?.rewrite?.selection).toBe(selection);
   });
 
+  it("resumes a released push-to-talk rewrite instead of dropping its queued instruction", async () => {
+    const { service } = await setup();
+    const start = vi.spyOn(service, "start").mockResolvedValue();
+    const captureSelection = vi.fn();
+    composer.source = { terminalId: "panel-1", hasFocus: () => true, captureSelection };
+    const internals = service as unknown as {
+      startup: { stopAfterStart: boolean; capture: { frozen: boolean } } | null;
+      startRequestId: number;
+    };
+    const selection = fakeSelection("make me shorter");
+    internals.startup = {
+      requestId: internals.startRequestId,
+      target: { panelId: "panel-1", rewrite: { selection, instruction: [], cancelled: false } },
+      capture: { frozen: true },
+      stopAfterStart: true,
+    } as unknown as typeof internals.startup;
+
+    await service.rewriteSelection();
+
+    expect(internals.startup!.stopAfterStart).toBe(false);
+    expect(internals.startup!.capture.frozen).toBe(false);
+    expect(start).not.toHaveBeenCalled();
+    expect(captureSelection).not.toHaveBeenCalled();
+    internals.startup = null;
+  });
+
+  it("gives the selection back when the rewrite is cancelled before its session begins", async () => {
+    const { service, voiceStore } = await setup();
+    const selection = fakeSelection("make me shorter");
+
+    voiceStore.getState().setArming({
+      panelId: "panel-1",
+      rewrite: { selection, instruction: [], cancelled: false },
+    });
+    expect(service.handleEscape("panel-1")).toBe(true);
+
+    expect(selection.release).toHaveBeenCalled();
+    expect(voiceStore.getState().status).toBe("idle");
+  });
+
+  it("keeps the selection when the same rewrite restarts on another microphone", async () => {
+    const { service, voiceStore, say, recordInstruction, flush } = await setup();
+    const selection = fakeSelection("make me shorter");
+    rewrite.mockResolvedValueOnce({ status: "replace", text: "Shorter." });
+    recordInstruction(selection);
+    say("make it");
+    const target = voiceStore.getState().activeTarget!;
+    // The restart's own start, attached and waiting on this stop.
+    const internals = service as unknown as {
+      startup: unknown;
+      startRequestId: number;
+    };
+    internals.startup = {
+      requestId: internals.startRequestId,
+      target,
+      capture: {},
+      stopAfterStart: false,
+    };
+
+    await service.stop(undefined, {
+      preserveLiveText: true,
+      preservePendingStart: true,
+      skipCorrection: true,
+    });
+    internals.startup = null;
+
+    expect(selection.release).not.toHaveBeenCalled();
+    expect(rewrite).not.toHaveBeenCalled();
+
+    // The restart begins its session on the very same target.
+    voiceStore.getState().beginSession(target);
+    say("shorter");
+    await service.stop();
+    await flush();
+
+    expect(rewrite).toHaveBeenCalledWith({
+      selectedText: "make me shorter",
+      instruction: "make it shorter",
+    });
+    expect(selection.apply).toHaveBeenCalledWith("Shorter.");
+  });
+
   it("keeps the instruction out of the draft and lands the rewrite on the selection", async () => {
     const { service, draft, inputStore, say, recordInstruction, flush } = await setup();
     inputStore.getState().setDraftInput("panel-1", "Hi. make me shorter please");

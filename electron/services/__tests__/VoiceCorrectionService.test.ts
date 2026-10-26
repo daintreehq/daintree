@@ -1120,7 +1120,10 @@ describe("VoiceCorrectionService.rewrite", () => {
 
   it("reports no_change when the model declines or returns the selection unchanged", async () => {
     const svc = new VoiceCorrectionService();
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(rewriteResponse("no_change", "")));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(rewriteResponse("no_change", "Something else entirely."))
+    );
     expect(
       await svc.rewrite({ selectedText: "keep me", instruction: "hmm" }, BASE_SETTINGS)
     ).toEqual({ status: "no_change" });
@@ -1162,7 +1165,10 @@ describe("VoiceCorrectionService.rewrite", () => {
       vi.fn().mockResolvedValue({
         ok: true,
         status: 200,
-        json: async () => ({ status: "incomplete", output_text: "{" }),
+        json: async () => ({
+          status: "incomplete",
+          output_text: JSON.stringify({ action: "replace", rewritten_text: "secret cut-off" }),
+        }),
       })
     );
     expect(await svc.rewrite(request, BASE_SETTINGS)).toEqual({ status: "failed" });
@@ -1172,7 +1178,9 @@ describe("VoiceCorrectionService.rewrite", () => {
       vi.fn().mockResolvedValue({
         ok: true,
         status: 200,
-        json: async () => ({ output_text: JSON.stringify({ action: "rewrite" }) }),
+        json: async () => ({
+          output_text: JSON.stringify({ action: "rewrite", rewritten_text: "secret rewrite" }),
+        }),
       })
     );
     expect(await svc.rewrite(request, BASE_SETTINGS)).toEqual({ status: "failed" });

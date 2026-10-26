@@ -1,4 +1,4 @@
-import { EditorView, ViewPlugin, type ViewUpdate } from "@codemirror/view";
+import { ViewPlugin, type EditorView, type ViewUpdate } from "@codemirror/view";
 import { Transaction, type ChangeDesc, type Extension } from "@codemirror/state";
 import { isolateHistory } from "@codemirror/commands";
 import type { RewriteSelection } from "@/services/voiceRewriteSelection";
@@ -58,7 +58,9 @@ class TrackedSelection implements RewriteSelection {
   apply(replacement: string): boolean {
     if (this.lost) return false;
     const { view, from, to } = this;
-    if (!view.state.facet(EditorView.editable) || view.state.sliceDoc(from, to) !== this.text) {
+    // Lands even while a send holds the composer read-only: the send is
+    // waiting for exactly this.
+    if (view.state.sliceDoc(from, to) !== this.text) {
       this.lose();
       return false;
     }

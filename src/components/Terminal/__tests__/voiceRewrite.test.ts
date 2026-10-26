@@ -117,9 +117,7 @@ describe("captureRewriteSelection", () => {
     expect(second.range()).toBeNull();
   });
 
-  it("refuses to land in a composer that has been locked", () => {
-    const view = mount(DOC, FROM, TO);
-    const selection = captureRewriteSelection(view)!;
+  it("lands while a send holds the composer read-only", () => {
     const locked = new EditorView({
       parent: document.createElement("div"),
       state: EditorState.create({
@@ -129,11 +127,27 @@ describe("captureRewriteSelection", () => {
       }),
     });
     views.push(locked);
-    const lockedSelection = captureRewriteSelection(locked)!;
 
-    expect(lockedSelection.apply("Shorter.")).toBe(false);
-    expect(locked.state.doc.toString()).toBe(DOC);
-    expect(selection.apply("Shorter.")).toBe(true);
+    expect(captureRewriteSelection(locked)!.apply("Shorter.")).toBe(true);
+    expect(locked.state.doc.toString()).toBe("Intro. Shorter. Outro.");
+  });
+
+  it("keeps typing straight after the rewrite out of its undo step", () => {
+    const view = mount(DOC, FROM, TO);
+    const selection = captureRewriteSelection(view)!;
+
+    selection.apply("Shorter.");
+    const end = FROM + "Shorter.".length;
+    view.dispatch({
+      changes: { from: end, insert: "!" },
+      selection: { anchor: end + 1 },
+      userEvent: "input.type",
+    });
+
+    undo(view);
+    expect(view.state.doc.toString()).toBe("Intro. Shorter. Outro.");
+    undo(view);
+    expect(view.state.doc.toString()).toBe(DOC);
   });
 
   it("stops following a released selection", () => {

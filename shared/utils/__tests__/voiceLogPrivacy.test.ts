@@ -52,6 +52,7 @@ const SENSITIVE = new Set([
   "instruction",
   "selectedText",
   "selection",
+  "rewritten",
   "path",
   "filePath",
   "label",
@@ -227,6 +228,13 @@ describe("the log-call scan", () => {
     expect(scan("warn('a', { deviceLabel });")).not.toEqual([]);
     expect(scan("warn('a', { mic: state.micDeviceLabel });")).not.toEqual([]);
     expect(scan("warn('a', { hasLabel: Boolean(track.label) });")).toEqual([]);
+  });
+
+  it("flags a rewrite's instruction, selection and result", () => {
+    expect(scan("warn('a', { instruction });")).not.toEqual([]);
+    expect(scan("warn('a', { s: request.selectedText });")).not.toEqual([]);
+    expect(scan("warn('a', { rewrittenLen: rewritten });")).not.toEqual([]);
+    expect(scan("warn('a', { n: rewritten.length, m: selectedText.length });")).toEqual([]);
   });
 
   it("allows lengths, codes and sanitized errors", () => {

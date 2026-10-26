@@ -423,6 +423,28 @@ describe("VoiceRecordingService — background recording", () => {
     });
   });
 
+  it("tells main when the session records a rewrite instruction", async () => {
+    setupGlobals();
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const selection = {
+      text: "make me shorter",
+      range: () => ({ from: 0, to: 15 }),
+      onLost: () => {},
+      apply: () => true,
+      release: () => {},
+    };
+    await voiceRecordingService.start({
+      panelId: "panel-7",
+      rewrite: { selection, instruction: [], cancelled: false },
+    });
+
+    expect(window.electron.voiceInput.start).toHaveBeenCalledWith(expect.any(String), {
+      terminalId: "panel-7",
+      intent: "rewrite",
+    });
+  });
+
   // Constructed after getUserMedia, the context's synchronous output-device
   // lookup queued behind the input stream start and froze the renderer ~650ms.
   it("constructs the AudioContext before opening the microphone", async () => {

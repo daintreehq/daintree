@@ -984,6 +984,16 @@ class VoiceRecordingService {
    * the user has moved on.
    */
   private invalidatePendingStart(): void {
+    // A rewrite that never began its session gives its selection back; one
+    // whose session is running keeps it for that session's stop.
+    const { pendingTarget, activeTarget, status } = useVoiceRecordingStore.getState();
+    const cancelledRewrite = pendingTarget?.rewrite;
+    if (
+      cancelledRewrite &&
+      !(isActiveVoiceSession(status) && activeTarget?.rewrite === cancelledRewrite)
+    ) {
+      cancelledRewrite.selection.release();
+    }
     this.startRequestId++;
     this.startup = null;
     this.releasePendingCapture();
@@ -2009,7 +2019,8 @@ class VoiceRecordingService {
       if (stoppedTarget?.rewrite) {
         if (graceful && !stoppedTarget.rewrite.cancelled) {
           this.runRewrite(stoppedTarget.panelId, stoppedTarget.rewrite);
-        } else {
+        } else if (this.liveStartup()?.target.rewrite !== stoppedTarget.rewrite) {
+          // A restart of the same rewrite (a microphone switch) keeps recording into it.
           stoppedTarget.rewrite.selection.release();
         }
       } else if (graceful && stoppedTarget) {
@@ -2323,6 +2334,7 @@ class VoiceRecordingService {
           title: "Rewrite failed",
           message: "The request failed or timed out. The selection is unchanged.",
           replaceKey: "voice-rewrite",
+          context: { eventKind: "connectivity" },
           action: this.retryAction(() => this.requestRewrite(job.panelId, selection, instruction)),
         });
         return;
@@ -2336,7 +2348,10 @@ class VoiceRecordingService {
       title: "Selection unchanged",
       message,
       transient: true,
+      // Feedback on the user's own gesture: a toast, not just an inbox row.
+      priority: "high",
       replaceKey: "voice-rewrite",
+      context: { eventKind: "uiFeedback" },
     });
   }
 
@@ -2762,6 +2777,14 @@ class VoiceRecordingService {
       return;
     }
 
+    // A press after the key was released, while that rewrite's audio is still
+    // queued, keeps recording into it rather than dropping what was said.
+    const released = this.liveStartup();
+    if (released?.stopAfterStart && released.target.rewrite) {
+      this.resumeReleasedStartup(released.target);
+      return;
+    }
+
     const source = findRewriteComposer(usePanelStore.getState().focusedId);
     const target = source ? this.getComposerTarget(source.terminalId) : null;
     if (!source || !target) {
@@ -2805,7 +2828,9 @@ class VoiceRecordingService {
       title: "Nothing to rewrite",
       message,
       transient: true,
+      priority: "high",
       replaceKey: "voice-rewrite",
+      context: { eventKind: "uiFeedback" },
     });
   }
 
