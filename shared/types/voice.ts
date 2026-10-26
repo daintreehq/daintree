@@ -37,6 +37,18 @@ export type VoiceInputStatus =
   | "error";
 
 /**
+ * Why main ended a dictation session. Sent once per session on
+ * `voice-input:session-ended`, keyed by the renderer-minted session id.
+ *
+ * - stopped: the owner stopped a running session and its transcription drained.
+ * - cancelled: it ended before anything was committed: stopped before the
+ *   provider came up, or its owning view went away.
+ * - superseded: a newer start replaced it.
+ * - failed: the provider failed to start or died mid-session.
+ */
+export type VoiceSessionEndReason = "stopped" | "cancelled" | "superseded" | "failed";
+
+/**
  * The lifecycle phase of the transcript within a single voice panel buffer.
  * This is a renderer-level concept — it is derived from store state and is never
  * sent over IPC directly.

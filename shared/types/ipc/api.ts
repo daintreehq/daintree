@@ -19,7 +19,7 @@ import type { ChecklistState, HelpAssistantTier, IpcEventBusMap, IpcInvokeMap } 
 import type { GeneratedElectronAPI } from "./generated-api.js";
 import type { AgentSettings, AgentSettingsEntry, ResumeOnRestart } from "../agentSettings.js";
 import type { AgentPreset } from "../../config/agentRegistry.js";
-import type { VoiceInputError, VoiceInputStatus } from "../voice.js";
+import type { VoiceInputError, VoiceInputStatus, VoiceSessionEndReason } from "../voice.js";
 export type { VoiceInputError, VoiceInputStatus };
 import type {
   AuthValidation,
@@ -2140,22 +2140,36 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onIssueNotFound(callback: (data: IssueNotFoundPayload) => void): () => void;
   };
   // forgeAudit comes from GeneratedElectronAPI
-  voiceInput: {
+  // start, stop and flushParagraph come from GeneratedElectronAPI. Each takes
+  // the session id the renderer minted before its start path first awaited;
+  // main ignores audio, stop and flush carrying an id that isn't the live
+  // session's, and every event carries the id of the session it belongs to.
+  voiceInput: GeneratedElectronAPI["voiceInput"] & {
     getSettings(): Promise<VoiceInputSettings>;
     setSettings(settings: Partial<VoiceInputSettings>): Promise<void>;
-    start(): Promise<{ ok: true } | { ok: false; error: string }>;
-    stop(): Promise<{ rawText: string | null }>;
-    flushParagraph(): Promise<{ rawText: string | null }>;
-    sendAudioChunk(chunk: ArrayBuffer): void;
+    sendAudioChunk(sessionId: string, chunk: ArrayBuffer): void;
     onTranscriptionDelta(
-      callback: (payload: { text: string; itemId?: string }) => void
+      callback: (payload: { sessionId: string; text: string; itemId?: string }) => void
     ): () => void;
     onTranscriptionComplete(
-      callback: (payload: { text: string; willCorrect: boolean; itemId?: string }) => void
+      callback: (payload: {
+        sessionId: string;
+        text: string;
+        willCorrect: boolean;
+        itemId?: string;
+      }) => void
     ): () => void;
-    onParagraphBoundary(callback: (payload: { rawText: string | null }) => void): () => void;
-    onError(callback: (error: VoiceInputError) => void): () => void;
-    onStatus(callback: (status: VoiceInputStatus) => void): () => void;
+    onParagraphBoundary(
+      callback: (payload: { sessionId: string; rawText: string | null }) => void
+    ): () => void;
+    onError(callback: (payload: { sessionId: string; error: VoiceInputError }) => void): () => void;
+    onStatus(
+      callback: (payload: { sessionId: string; status: VoiceInputStatus }) => void
+    ): () => void;
+    /** Fires once per session when main ends it, with why. */
+    onSessionEnded(
+      callback: (payload: { sessionId: string; reason: VoiceSessionEndReason }) => void
+    ): () => void;
     checkMicPermission(): Promise<MicPermissionStatus>;
     /**
      * Native permission preflight. Resolves to whether the renderer may proceed
@@ -2177,7 +2191,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       recentContext?: string[];
     }): Promise<{ action: "no_change" | "replace"; correctedText: string }>;
     onFileTokenResolved(
-      callback: (payload: { description: string; replacement: string; resolved: boolean }) => void
+      callback: (payload: {
+        sessionId: string;
+        description: string;
+        replacement: string;
+        resolved: boolean;
+      }) => void
     ): () => void;
   };
   // Invoke methods come from GeneratedElectronAPI; the rest are

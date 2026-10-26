@@ -28,7 +28,7 @@ export async function installEventCapture(window: Page): Promise<void> {
     };
     w.__voiceCapture__ = captured;
     const v = w.electron.voiceInput;
-    v.onStatus((status: string) => captured.statuses.push(status));
+    v.onStatus((payload: { status: string }) => captured.statuses.push(payload.status));
     v.onTranscriptionDelta((payload: { text: string }) => captured.deltas.push(payload.text));
     v.onTranscriptionComplete((payload: { text: string; willCorrect: boolean }) =>
       captured.completes.push(payload)
@@ -36,7 +36,7 @@ export async function installEventCapture(window: Page): Promise<void> {
     v.onParagraphBoundary((payload: { rawText: string | null }) =>
       captured.paragraphBoundaries.push(payload)
     );
-    v.onError((error: string | { message?: string }) => captured.errors.push(error));
+    v.onError((payload: { error: { message?: string } }) => captured.errors.push(payload.error));
   });
 }
 
@@ -63,15 +63,25 @@ export async function clearCapturedEvents(window: Page): Promise<void> {
 // IPC wrappers (run in renderer context, where window.electron exists)
 // ---------------------------------------------------------------------------
 
+// Each start mints the session id that its audio and stop then carry, as the
+// renderer service does; main ignores audio and stops for any other id.
 export async function ipcStart(window: Page): Promise<{ ok: boolean; error?: string }> {
   return await window.evaluate(async () => {
-    return await (window as any).electron.voiceInput.start();
+    const w = window as any;
+    w.__voiceSessionId__ = crypto.randomUUID();
+    try {
+      await w.electron.voiceInput.start(w.__voiceSessionId__);
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
   });
 }
 
 export async function ipcStop(window: Page): Promise<void> {
   await window.evaluate(async () => {
-    await (window as any).electron.voiceInput.stop();
+    const w = window as any;
+    if (w.__voiceSessionId__) await w.electron.voiceInput.stop(w.__voiceSessionId__);
   });
 }
 
@@ -83,7 +93,8 @@ export async function ipcStop(window: Page): Promise<void> {
  */
 export async function ipcSendAudio(window: Page, bytes = 6_000): Promise<void> {
   await window.evaluate((n) => {
-    (window as any).electron.voiceInput.sendAudioChunk(new ArrayBuffer(n));
+    const w = window as any;
+    w.electron.voiceInput.sendAudioChunk(w.__voiceSessionId__ ?? "", new ArrayBuffer(n));
   }, bytes);
 }
 

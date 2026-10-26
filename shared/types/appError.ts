@@ -110,4 +110,7 @@ export type AppErrorCode =
   // An agent launch that requires a plugin's agent tools was refused because
   // they couldn't be handed over; the per-plugin states travel as details.
   | "REQUIRED_PLUGIN_TOOLS_UNAVAILABLE"
+  // The transcription provider couldn't start a dictation session (no key,
+  // rejected key, connection failure). The message is the provider's own.
+  | "VOICE_START_FAILED"
   | "INTERNAL";

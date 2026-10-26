@@ -68,6 +68,7 @@ import { buildPluginProjectPresencePreloadBindings } from "./ipc/handlers/plugin
 import { buildPluginMetricsPreloadBindings } from "./ipc/handlers/pluginMetrics.preload.js";
 import { buildScratchPreloadBindings } from "./ipc/handlers/scratch/preload.js";
 import { buildMcpServerPreloadBindings } from "./ipc/handlers/mcpServer.preload.js";
+import { buildVoiceInputPreloadBindings } from "./ipc/handlers/voiceInput.preload.js";
 import { buildForgeAuditPreloadBindings } from "./ipc/handlers/forgeAudit.preload.js";
 import { buildProjectGroupsPreloadBindings } from "./ipc/handlers/projectGroups.preload.js";
 import { buildRunHistoryPreloadBindings } from "./ipc/handlers/runHistory.preload.js";
@@ -181,6 +182,7 @@ import type {
   IssueAssociation,
   VoiceInputError,
   VoiceInputStatus,
+  VoiceSessionEndReason,
 } from "../shared/types/index.js";
 import type { ColorVisionMode, AppColorScheme } from "../shared/types/appTheme.js";
 import type {
@@ -2907,6 +2909,7 @@ function buildElectronApi(): ElectronAPI {
 
     // Voice Input API
     voiceInput: {
+      ...buildVoiceInputPreloadBindings(_unwrappingInvoke),
       getSettings: () => _unwrappingInvoke(CHANNELS.VOICE_INPUT_GET_SETTINGS),
       setSettings: (
         patch: Partial<{
@@ -2926,22 +2929,29 @@ function buildElectronApi(): ElectronAPI {
           recordingMode: "toggle" | "push-to-talk";
         }>
       ) => _unwrappingInvoke(CHANNELS.VOICE_INPUT_SET_SETTINGS, patch),
-      start: () => _unwrappingInvoke(CHANNELS.VOICE_INPUT_START),
-      stop: () => _unwrappingInvoke(CHANNELS.VOICE_INPUT_STOP),
-      flushParagraph: () => _unwrappingInvoke(CHANNELS.VOICE_INPUT_FLUSH_PARAGRAPH),
-      sendAudioChunk: (chunk: ArrayBuffer) =>
-        ipcRenderer.send(CHANNELS.VOICE_INPUT_AUDIO_CHUNK, chunk),
-      onTranscriptionDelta: (callback: (payload: { text: string; itemId?: string }) => void) =>
-        _typedOn(CHANNELS.VOICE_INPUT_TRANSCRIPTION_DELTA, callback),
+      sendAudioChunk: (sessionId: string, chunk: ArrayBuffer) =>
+        ipcRenderer.send(CHANNELS.VOICE_INPUT_AUDIO_CHUNK, sessionId, chunk),
+      onTranscriptionDelta: (
+        callback: (payload: { sessionId: string; text: string; itemId?: string }) => void
+      ) => _typedOn(CHANNELS.VOICE_INPUT_TRANSCRIPTION_DELTA, callback),
       onTranscriptionComplete: (
-        callback: (payload: { text: string; willCorrect: boolean; itemId?: string }) => void
+        callback: (payload: {
+          sessionId: string;
+          text: string;
+          willCorrect: boolean;
+          itemId?: string;
+        }) => void
       ) => _typedOn(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, callback),
-      onParagraphBoundary: (callback: (payload: { rawText: string | null }) => void) =>
-        _typedOn(CHANNELS.VOICE_INPUT_PARAGRAPH_BOUNDARY, callback),
-      onError: (callback: (error: VoiceInputError) => void) =>
+      onParagraphBoundary: (
+        callback: (payload: { sessionId: string; rawText: string | null }) => void
+      ) => _typedOn(CHANNELS.VOICE_INPUT_PARAGRAPH_BOUNDARY, callback),
+      onError: (callback: (payload: { sessionId: string; error: VoiceInputError }) => void) =>
         _typedOn(CHANNELS.VOICE_INPUT_ERROR, callback),
-      onStatus: (callback: (status: VoiceInputStatus) => void) =>
+      onStatus: (callback: (payload: { sessionId: string; status: VoiceInputStatus }) => void) =>
         _typedOn(CHANNELS.VOICE_INPUT_STATUS, callback),
+      onSessionEnded: (
+        callback: (payload: { sessionId: string; reason: VoiceSessionEndReason }) => void
+      ) => _typedOn(CHANNELS.VOICE_INPUT_SESSION_ENDED, callback),
       checkMicPermission: () => _unwrappingInvoke(CHANNELS.VOICE_INPUT_CHECK_MIC_PERMISSION),
       requestMicPermission: () => _unwrappingInvoke(CHANNELS.VOICE_INPUT_REQUEST_MIC_PERMISSION),
       openMicSettings: () => _unwrappingInvoke(CHANNELS.VOICE_INPUT_OPEN_MIC_SETTINGS),
@@ -2950,7 +2960,12 @@ function buildElectronApi(): ElectronAPI {
       correct: (request: { rawText: string; recentContext?: string[] }) =>
         _unwrappingInvoke(CHANNELS.VOICE_INPUT_CORRECT, request),
       onFileTokenResolved: (
-        callback: (payload: { description: string; replacement: string; resolved: boolean }) => void
+        callback: (payload: {
+          sessionId: string;
+          description: string;
+          replacement: string;
+          resolved: boolean;
+        }) => void
       ) => _typedOn(CHANNELS.VOICE_INPUT_FILE_TOKEN_RESOLVED, callback),
     },
 

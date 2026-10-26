@@ -237,6 +237,9 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
 
   private connection: WebSocket | null = null;
   private sessionId = 0;
+  // The dictation session this provider was started for, minted by the
+  // renderer. Diagnostics only: `sessionId` above guards reconnects.
+  private voiceSessionId = "";
   private connectTimeout: ReturnType<typeof setTimeout> | null = null;
   private listeners: Set<(event: VoiceTranscriptionEvent) => void> = new Set();
   private pendingStart: { sessionId: number; resolve: (result: VoiceStartResult) => void } | null =
@@ -372,6 +375,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       this.firstTranscriptLogged = true;
       logInfo(`${P} First transcript`, {
         sessionId: this.sessionId,
+        voiceSessionId: this.voiceSessionId,
         eventType: event.type,
         length: event.text.length,
         sinceStartMs: this.sinceStartMs(),
@@ -404,7 +408,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     return Math.round(performance.now() - this.sessionStartedAt);
   }
 
-  async start(settings: VoiceInputSettings): Promise<VoiceStartResult> {
+  async start(settings: VoiceInputSettings, voiceSessionId: string): Promise<VoiceStartResult> {
     if (!settings.openaiApiKey) {
       logWarn(`${P} No OpenAI API key configured`);
       return { ok: false, error: "OpenAI API key not configured" };
@@ -412,11 +416,13 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
 
     const mySessionId = this.sessionId + 1;
     logInfo(`${P} Starting session ${mySessionId}`, {
+      voiceSessionId,
       language: settings.language,
       hasDictionary: settings.customDictionary.length > 0,
     });
     this.cleanupPreviousSession();
     this.sessionId = mySessionId;
+    this.voiceSessionId = voiceSessionId;
     this.sessionStartedAt = performance.now();
     this.firstTranscriptLogged = false;
     this.isReady = false;
@@ -530,6 +536,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       this.startHeartbeat(connection, mySessionId);
       logInfo(`${P} WebSocket opened, sending session.update`, {
         sessionId: mySessionId,
+        voiceSessionId: this.voiceSessionId,
         connectMs: Math.round(performance.now() - this.connectStartedAt),
         sinceStartMs: this.sinceStartMs(),
       });
@@ -1281,6 +1288,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   private cleanupPreviousSession(): void {
     logDebug(`${P} Cleaning up previous session`, {
       sessionId: this.sessionId,
+      voiceSessionId: this.voiceSessionId,
       hasConnection: !!this.connection,
     });
     const pendingSessionId = this.pendingStart?.sessionId;
@@ -1539,6 +1547,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   async stopGracefully(): Promise<void> {
     logInfo(`${P} stopGracefully() called`, {
       sessionId: this.sessionId,
+      voiceSessionId: this.voiceSessionId,
       hasConnection: !!this.connection,
     });
 
@@ -1708,7 +1717,11 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   }
 
   stop(): void {
-    logInfo(`${P} stop() called`, { sessionId: this.sessionId, hasConnection: !!this.connection });
+    logInfo(`${P} stop() called`, {
+      sessionId: this.sessionId,
+      voiceSessionId: this.voiceSessionId,
+      hasConnection: !!this.connection,
+    });
     // Suppress any reconnect: this is a deliberate stop. The sessionId bump in
     // cleanupPreviousSession is the primary guard; the flag documents intent and
     // covers the brief window before the bump takes effect.

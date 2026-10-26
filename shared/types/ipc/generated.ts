@@ -3822,6 +3822,18 @@ export interface GeneratedIpcInvokeMap {
     args: [id: string];
     result: void;
   };
+  "voice-input:flush-paragraph": {
+    args: [sessionId: string];
+    result: { rawText: string | null };
+  };
+  "voice-input:start": {
+    args: [sessionId: string];
+    result: void;
+  };
+  "voice-input:stop": {
+    args: [sessionId: string];
+    result: { rawText: string | null };
+  };
   "watchdog:restart": {
     args: [];
     result: void;

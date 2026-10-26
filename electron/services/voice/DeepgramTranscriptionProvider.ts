@@ -102,6 +102,9 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
 
   private connection: WebSocket | null = null;
   private sessionId = 0;
+  // The dictation session this provider was started for, minted by the
+  // renderer. Diagnostics only: `sessionId` above guards reconnects.
+  private voiceSessionId = "";
   private connectTimeout: ReturnType<typeof setTimeout> | null = null;
   private listeners: Set<(event: VoiceTranscriptionEvent) => void> = new Set();
   private pendingStart: { sessionId: number; resolve: (result: VoiceStartResult) => void } | null =
@@ -173,6 +176,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
       this.firstTranscriptLogged = true;
       logInfo(`${P} First transcript`, {
         sessionId: this.sessionId,
+        voiceSessionId: this.voiceSessionId,
         eventType: event.type,
         length: event.text.length,
         sinceStartMs: this.sinceStartMs(),
@@ -201,16 +205,20 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     return Math.round(performance.now() - this.sessionStartedAt);
   }
 
-  async start(settings: VoiceInputSettings): Promise<VoiceStartResult> {
+  async start(settings: VoiceInputSettings, voiceSessionId: string): Promise<VoiceStartResult> {
     if (!settings.deepgramApiKey) {
       logWarn(`${P} No Deepgram API key configured`);
       return { ok: false, error: "Deepgram API key not configured" };
     }
 
     const mySessionId = this.sessionId + 1;
-    logInfo(`${P} Starting session ${mySessionId}`, { language: settings.language });
+    logInfo(`${P} Starting session ${mySessionId}`, {
+      voiceSessionId,
+      language: settings.language,
+    });
     this.cleanupPreviousSession();
     this.sessionId = mySessionId;
+    this.voiceSessionId = voiceSessionId;
     this.sessionStartedAt = performance.now();
     this.firstTranscriptLogged = false;
     this.isReady = false;
@@ -341,6 +349,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
       this.clearConnectTimeout();
       logInfo(`${P} WebSocket opened — session ready`, {
         sessionId: mySessionId,
+        voiceSessionId: this.voiceSessionId,
         connectMs: Math.round(performance.now() - this.connectStartedAt),
         sinceStartMs: this.sinceStartMs(),
         bufferedChunks: this.preConnectBuffer.length,
@@ -603,6 +612,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
   private cleanupPreviousSession(): void {
     logDebug(`${P} Cleaning up previous session`, {
       sessionId: this.sessionId,
+      voiceSessionId: this.voiceSessionId,
       hasConnection: !!this.connection,
     });
     const pendingSessionId = this.pendingStart?.sessionId;
@@ -662,6 +672,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
   async stopGracefully(): Promise<void> {
     logInfo(`${P} stopGracefully() called`, {
       sessionId: this.sessionId,
+      voiceSessionId: this.voiceSessionId,
       hasConnection: !!this.connection,
     });
 
@@ -779,7 +790,11 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
   }
 
   stop(): void {
-    logInfo(`${P} stop() called`, { sessionId: this.sessionId, hasConnection: !!this.connection });
+    logInfo(`${P} stop() called`, {
+      sessionId: this.sessionId,
+      voiceSessionId: this.voiceSessionId,
+      hasConnection: !!this.connection,
+    });
     this.isExpectedClose = true;
     this.cleanupPreviousSession();
     this.emit({ type: "status", status: "idle" });
