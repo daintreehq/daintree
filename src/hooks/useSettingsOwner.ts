@@ -1,3 +1,4 @@
+import type { SettingOwner } from "@shared/config/settingOwnership";
 import { isMac } from "@/lib/platform";
 import { currentHostId, isRemoteWindow, useHostPlatform } from "@/hooks/useHostPlatform";
 
@@ -6,7 +7,7 @@ import { currentHostId, isRemoteWindow, useHostPlatform } from "@/hooks/useHostP
  * the host's (everything about the work), this machine's (the screen, keyboard
  * and this computer), or a page holding both, whose sections name their own.
  */
-export type SettingsOwner = "host" | "device" | "mixed";
+export type SettingsOwner = SettingOwner | "mixed";
 
 /** The machine at the keyboard, named the way the person knows it. */
 export function deviceOwnerLabel(): string {
@@ -38,7 +39,7 @@ export function settingsOwnerHeaderLabel(
 
 /** A section or row marker on a mixed page; undefined locally so nothing renders. */
 export function settingsOwnerMarker(
-  owner: Exclude<SettingsOwner, "mixed">,
+  owner: SettingOwner,
   remoteHostName: string | null
 ): string | undefined {
   if (remoteHostName === null) return undefined;
@@ -49,9 +50,7 @@ export function settingsOwnerMarker(
  * The marker for one section or row of a mixed settings page. Nothing in a
  * local window, so a page with no hosts renders exactly as it always has.
  */
-export function useSettingsOwnerMarker(): (
-  owner: Exclude<SettingsOwner, "mixed">
-) => string | undefined {
+export function useSettingsOwnerMarker(): (owner: SettingOwner) => string | undefined {
   const remoteHostName = useRemoteHostName();
   return (owner) => settingsOwnerMarker(owner, remoteHostName);
 }
@@ -63,7 +62,7 @@ export function joinBadges(badge: string, marker: string | undefined): string {
 
 /** Where one row's value lives, for the odd row whose owner differs from its section's. */
 export function settingsRowOwnerNote(
-  owner: Exclude<SettingsOwner, "mixed">,
+  owner: SettingOwner,
   remoteHostName: string | null
 ): string | undefined {
   if (remoteHostName === null) return undefined;
@@ -74,10 +73,7 @@ export function settingsRowOwnerNote(
  * A row description with its owner appended in a remote window, matching the
  * description's own punctuation. The description, untouched, locally.
  */
-export function useSettingsRowOwnerNote(): (
-  description: string,
-  owner: Exclude<SettingsOwner, "mixed">
-) => string {
+export function useSettingsRowOwnerNote(): (description: string, owner: SettingOwner) => string {
   const remoteHostName = useRemoteHostName();
   return (description, owner) => {
     const note = settingsRowOwnerNote(owner, remoteHostName);
