@@ -3,6 +3,7 @@ import type {
   VoiceInputSettings,
   VoiceInputStatus,
 } from "../../../shared/types/ipc/api.js";
+import type { VoiceSessionReport } from "../../../shared/types/voiceSessionSummary.js";
 
 export interface CorrectionWord {
   word: string;
@@ -57,6 +58,20 @@ export interface TranscriptionStartContext {
    */
   keyterms?: Promise<string[]>;
 }
+
+/** A provider's share of the session summary: counts only, for its latest session. */
+export type ProviderSessionStats = Pick<
+  VoiceSessionReport,
+  "delayTier" | "droppedConnect" | "droppedReplay" | "reconnects"
+>;
+
+/** For a session whose provider never started. */
+export const NO_PROVIDER_SESSION_STATS: ProviderSessionStats = {
+  delayTier: null,
+  droppedConnect: 0,
+  droppedReplay: 0,
+  reconnects: 0,
+};
 
 // Ceiling for audio held before it can be sent — both in the IPC handler while
 // the provider is being brought up, and in each provider while its socket
@@ -119,6 +134,11 @@ export interface TranscriptionProvider {
    */
   commitParagraphBoundary(): void;
   stopGracefully(): Promise<void>;
+  /**
+   * Counts for the session last started, which survive its stop and drain
+   * and reset only on the next start().
+   */
+  getSessionStats(): ProviderSessionStats;
   stop(): void;
   destroy(): void;
   onEvent(listener: (event: VoiceTranscriptionEvent) => void): () => void;

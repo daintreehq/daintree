@@ -13,6 +13,7 @@ import {
   AUDIO_BUFFER_MAX_CHUNKS,
   STUB_CONFIDENCE,
   createAudioBufferOverflowError,
+  type ProviderSessionStats,
   type TranscriptionProvider,
   type VoiceStartResult,
   type VoiceTranscriptionEvent,
@@ -230,6 +231,11 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
   private stopPendingReady = false;
 
   private audioChunkCount = 0;
+  // Session-summary counts. They outlive the drain's cleanup and reset only
+  // when the next session starts.
+  private droppedConnectChunks = 0;
+  private droppedReplayChunks = 0;
+  private reconnectCount = 0;
   private staleChunkWarned = false;
   private preConnectBufferOverflowWarned = false;
 
@@ -325,6 +331,9 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     this.preConnectBuffer = [];
     this.preConnectBufferBytes = 0;
     this.isExpectedClose = false;
+    this.droppedConnectChunks = 0;
+    this.droppedReplayChunks = 0;
+    this.reconnectCount = 0;
 
     this.emit({ type: "status", status: "connecting" });
 
@@ -679,6 +688,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
       this.reconnectTimer = null;
       if (this.sessionId !== mySessionId) return;
       logInfo(`${P} Reconnecting`, { attempt: this.reconnectAttempt });
+      this.reconnectCount++;
       this.cleanupConnection();
       this.connect(mySessionId, settings);
     }, delay);
@@ -872,6 +882,8 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
       this.preConnectBuffer.length >= maxChunks ||
       this.preConnectBufferBytes + chunk.byteLength > maxBytes
     ) {
+      // Counted first: the overflow error below can end the session.
+      this.droppedConnectChunks++;
       if (!this.preConnectBufferOverflowWarned) {
         this.preConnectBufferOverflowWarned = true;
         logWarn(`${P} Pre-connect buffer full, dropping audio`, {
@@ -894,6 +906,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     this.unconfirmedBytes += chunk.byteLength;
     while (this.unconfirmedBytes > REPLAY_MAX_BYTES && this.unconfirmedAudio.length > 1) {
       const evicted = this.unconfirmedAudio.shift()!;
+      this.droppedReplayChunks++;
       this.unconfirmedBytes -= evicted.byteLength;
       this.unconfirmedOffset += evicted.byteLength;
       if (!this.replayEvictionWarned) {
@@ -1042,6 +1055,16 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     } else {
       logDebug(`${P} settleDrain called with no pending drain`, { reason });
     }
+  }
+
+  // No delay tier: its turn detection is `endpointing`, a separate setting.
+  getSessionStats(): ProviderSessionStats {
+    return {
+      delayTier: "none",
+      droppedConnect: this.droppedConnectChunks,
+      droppedReplay: this.droppedReplayChunks,
+      reconnects: this.reconnectCount,
+    };
   }
 
   async stopGracefully(): Promise<void> {

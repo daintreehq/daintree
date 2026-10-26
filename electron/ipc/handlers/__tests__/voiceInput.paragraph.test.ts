@@ -41,6 +41,7 @@ const shared = vi.hoisted(() => ({
   useDeferredDrain: false,
   correctionCalls: [] as Array<{ request: unknown; settings: unknown }>,
   rewriteCalls: [] as Array<{ request: unknown; settings: unknown }>,
+  correctionFailed: false,
   /** Settings objects passed to svc.start(), in call order. */
   startCalls: [] as unknown[],
   /** The start context passed alongside each of them. */
@@ -71,6 +72,7 @@ vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
       shared.startContexts.push(context);
       return Promise.resolve({ ok: true });
     };
+    this.getSessionStats = () => null;
     this.stopGracefully = function () {
       if (shared.useDeferredDrain) {
         return new Promise<void>((resolve) => {
@@ -90,6 +92,16 @@ vi.mock("../../../services/VoiceCorrectionService.js", () => ({
   VoiceCorrectionService: function VoiceCorrectionService(this: Record<string, unknown>) {
     this.correct = function (request: unknown, settings: unknown) {
       shared.correctionCalls.push({ request, settings });
+      if (shared.correctionFailed) {
+        const { rawText } = request as { rawText: string };
+        return Promise.resolve({
+          action: "no_change",
+          correctedText: rawText,
+          confidence: "low",
+          confirmedText: rawText,
+          failed: true,
+        });
+      }
       return Promise.resolve({
         action: "replace",
         correctedText: "hello world",
@@ -250,6 +262,7 @@ describe("voiceInput — IPC handler surface", () => {
     shared.drainResolve = null;
     shared.useDeferredDrain = false;
     shared.correctionCalls = [];
+    shared.correctionFailed = false;
     shared.startCalls = [];
     shared.startContexts = [];
     shared.assembleKeyterms = null;
@@ -295,6 +308,18 @@ describe("voiceInput — IPC handler surface", () => {
       model: "gpt-6-luna",
       apiKey: "sk-test",
     });
+  });
+
+  it("correct tells the renderer when the request failed", async () => {
+    shared.correctionFailed = true;
+    const handleCorrect = getHandler("voice-input:correct");
+
+    const result = await (handleCorrect as (e: unknown, request: unknown) => Promise<unknown>)(
+      fakeEvent,
+      { rawText: "helo world" }
+    );
+
+    expect(result).toEqual({ action: "no_change", correctedText: "helo world", failed: true });
   });
 
   it("correct rejects malformed payloads before invoking correction", async () => {

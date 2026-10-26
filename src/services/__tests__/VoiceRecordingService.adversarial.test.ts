@@ -1607,7 +1607,10 @@ describe("VoiceRecordingService adversarial", () => {
 
       requestHandlers().stopRequested({ sessionId: liveSessionId() });
 
-      expect(stopSpy).toHaveBeenCalledWith("Dictation stopped.", { preserveLiveText: true });
+      expect(stopSpy).toHaveBeenCalledWith("Dictation stopped.", {
+        preserveLiveText: true,
+        reason: "user",
+      });
       await vi.waitFor(() => {
         expect(runtime.voiceInput.stop).toHaveBeenCalledWith(liveSessionId());
       });

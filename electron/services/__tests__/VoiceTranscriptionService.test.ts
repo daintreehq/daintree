@@ -421,6 +421,23 @@ describe("VoiceTranscriptionService (coordinator)", () => {
 
   // ── Lifecycle delegation ───────────────────────────────────────────────────
 
+  it("answers a session's provider counts only while that provider is the current one", async () => {
+    const service = new VoiceTranscriptionService();
+    await bringOpenAiReady(service, "session-a");
+    expect(service.getSessionStats("session-a")).toMatchObject({ delayTier: "low" });
+    expect(service.getSessionStats("session-b")).toBeNull();
+
+    service.stop();
+    expect(service.getSessionStats("session-a")).toMatchObject({ delayTier: "low" });
+
+    await bringDeepgramReady(service, "session-b");
+    expect(service.getSessionStats("session-a")).toBeNull();
+    expect(service.getSessionStats("session-b")).toMatchObject({ delayTier: "none" });
+
+    service.destroy();
+    expect(service.getSessionStats("session-b")).toBeNull();
+  });
+
   it("delegates commitParagraphBoundary to the active provider", async () => {
     const service = new VoiceTranscriptionService();
     const socket = await bringDeepgramReady(service);

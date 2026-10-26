@@ -6,6 +6,7 @@ import type {
   VoiceLiveSessionUpdate,
   VoiceSessionEndReason,
 } from "../voice.js";
+import type { VoiceSessionReport } from "../voiceSessionSummary.js";
 import type {
   Project,
   ProjectAddOptions,
@@ -1294,7 +1295,8 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   };
   "voice-input:correct": {
     args: [request: { rawText: string; recentContext?: string[]; terminalId?: string }];
-    result: { action: "no_change" | "replace"; correctedText: string };
+    // `failed`: the request failed or was cancelled, leaving the raw text.
+    result: { action: "no_change" | "replace"; correctedText: string; failed?: true };
   };
 
   // Crash Recovery channels
@@ -2061,7 +2063,11 @@ export interface IpcEventMap {
   };
   "voice-input:error": { sessionId: string; error: VoiceInputError };
   "voice-input:status": { sessionId: string; status: VoiceInputStatus };
-  "voice-input:session-ended": { sessionId: string; reason: VoiceSessionEndReason };
+  "voice-input:session-ended": {
+    sessionId: string;
+    reason: VoiceSessionEndReason;
+    report: VoiceSessionReport;
+  };
   // To every view whenever the live session changes. Not keyed to a session:
   // it names the one live elsewhere, or none.
   "voice-input:live-session": VoiceLiveSessionUpdate;

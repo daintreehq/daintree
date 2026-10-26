@@ -33,7 +33,9 @@ import {
   type VoiceInputStatus,
   type VoiceRecordingMode,
   type VoiceSessionElsewhere,
+  type VoiceTranscriptionProvider,
 } from "@shared/types";
+import type { VoiceStopReason } from "@shared/types/voiceSessionSummary";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { VOICE_INPUT_SETTINGS_CHANGED_EVENT } from "@/lib/voiceInputSettingsEvents";
@@ -78,6 +80,7 @@ import {
   VOICE_REWRITE_MAX_SELECTION_CHARS,
 } from "@shared/config/voiceCorrection";
 import type { VoiceRewriteOutcome } from "@shared/types/voice";
+import { VoiceSessionTimeline, type VoiceCorrectionOutcome } from "@/services/voiceSessionTimeline";
 
 const LOG_PREFIX = "[VoiceRecording]";
 const REPLACED_ELSEWHERE_ANNOUNCEMENT =
@@ -277,6 +280,8 @@ interface PendingCorrection {
   /** Resolves when the correction is done. */
   settled: Promise<void>;
   settle: () => void;
+  /** The summary of the session that dictated the passages. */
+  timeline: VoiceSessionTimeline | null;
 }
 
 /**
@@ -328,6 +333,7 @@ interface CaptureAttempt {
   // discarded.
   queue: ArrayBuffer[] | null;
   droppedChunks: number;
+  timeline: VoiceSessionTimeline;
   deviceId: string | null;
   // UI-only: device names never go into logs.
   deviceLabel: string | null;
@@ -347,6 +353,8 @@ interface StartupAttempt {
   target: VoiceRecordingTarget;
   capture: CaptureAttempt;
   stopAfterStart: boolean;
+  /** Why the held stop was asked for, for the session summary. */
+  stopReason: VoiceStopReason;
 }
 
 interface HeldPress {
@@ -452,6 +460,13 @@ class VoiceRecordingService {
   // Null until the settings have been read: a rewrite then goes ahead and main
   // reports a missing key.
   private hasOpenAIKey: boolean | null = null;
+  // Each session's summary until its line is logged, by session id (#14617).
+  private timelines = new Map<string, VoiceSessionTimeline>();
+  // The in-flight start's summary, until its capture is promoted.
+  private attemptTimeline: VoiceSessionTimeline | null = null;
+  // When the dictation shortcut was pressed, for a start in the same dispatch.
+  private pendingPressAt: number | null = null;
+  private transcriptionProvider: VoiceTranscriptionProvider | null = null;
 
   initialize(): void {
     if (this.initialized) return;
@@ -477,12 +492,13 @@ class VoiceRecordingService {
     );
 
     this.unsubscribers.push(
-      voiceInput.onTranscriptionDelta(({ text: delta, itemId, replace }) => {
+      voiceInput.onTranscriptionDelta(({ sessionId, text: delta, itemId, replace }) => {
         logDebug(`${LOG_PREFIX} Received transcription delta`, { itemId, length: delta.length });
         const voiceState = useVoiceRecordingStore.getState();
         const target = voiceState.activeTarget;
         // An instruction streams into liveText only; it never lands in the draft.
         if (target && !target.rewrite) {
+          if (delta.trim()) this.timelines.get(sessionId)?.markNextFrame("firstText");
           const buffer = voiceState.panelBuffers[target.panelId];
           // An empty revision retracts a preview; it never starts an utterance.
           const isFirstDelta = delta !== "" && (!buffer || buffer.liveText === "");
@@ -503,7 +519,7 @@ class VoiceRecordingService {
     );
 
     this.unsubscribers.push(
-      voiceInput.onTranscriptionComplete(({ text, itemId, transcriptId, send }) => {
+      voiceInput.onTranscriptionComplete(({ sessionId, text, itemId, transcriptId, send }) => {
         logDebug(`${LOG_PREFIX} Received transcription complete`, { itemId, length: text.length });
         const voiceState = useVoiceRecordingStore.getState();
         const rewrite = voiceState.activeTarget?.rewrite;
@@ -539,6 +555,9 @@ class VoiceRecordingService {
             if ((buffer?.activeParagraphStart ?? -1) < 0) {
               useVoiceRecordingStore.getState().setActiveParagraphStart(panelId, words.from);
             }
+            const timeline = this.timelines.get(sessionId);
+            timeline?.addCommitted(finalText.length);
+            timeline?.markNextFrame("firstText");
           }
         }
         useVoiceRecordingStore.getState().completeSegment(text, itemId);
@@ -649,6 +668,7 @@ class VoiceRecordingService {
           skipRemoteStop: true,
           nextStatus: "error",
           preserveLiveText: true,
+          reason: "provider_error",
         });
       })
     );
@@ -659,6 +679,7 @@ class VoiceRecordingService {
           status,
           isStoppingSession: this.isStoppingSession,
         });
+        if (status === "recording") this.timelines.get(sessionId)?.mark("socketReady");
         // A replaced session's drain still reports here after this view may
         // have finished it locally; its statuses aren't this session's.
         if (sessionId !== this.sessionId) return;
@@ -669,6 +690,7 @@ class VoiceRecordingService {
           void this.stop(REPLACED_ELSEWHERE_ANNOUNCEMENT, {
             preserveLiveText: true,
             skipCorrection: true,
+            reason: "superseded",
           });
           return;
         }
@@ -708,18 +730,20 @@ class VoiceRecordingService {
           void this.stop("Dictation stopped.", {
             skipRemoteStop: true,
             preserveLiveText: true,
+            reason: "provider_ended",
           });
         }
       })
     );
 
     this.unsubscribers.push(
-      voiceInput.onSessionEnded(({ sessionId, reason }) => {
+      voiceInput.onSessionEnded(({ sessionId, reason, report }) => {
         logDebug(`${LOG_PREFIX} Backend session ended`, {
           sessionId,
           reason,
           current: sessionId === this.sessionId,
         });
+        this.timelines.get(sessionId)?.reportEnded(reason, report);
         // Replaced elsewhere before it had anything to drain, typically while
         // its start was still pending. Its start result is stale from here.
         if (reason !== "superseded" || sessionId !== this.sessionId) return;
@@ -727,6 +751,7 @@ class VoiceRecordingService {
         void this.stop(REPLACED_ELSEWHERE_ANNOUNCEMENT, {
           skipRemoteStop: true,
           preserveLiveText: true,
+          reason: "superseded",
         });
       })
     );
@@ -780,6 +805,7 @@ class VoiceRecordingService {
           void this.stop("Dictation stopped after system sleep.", {
             skipRemoteStop: true,
             preserveLiveText: true,
+            reason: "wake",
           });
         }
       })
@@ -813,7 +839,7 @@ class VoiceRecordingService {
           pendingTarget.panelId !== sessionTarget?.panelId &&
           isClosed(pendingTarget)
         ) {
-          this.cancelArming();
+          this.cancelArming("panel_closed");
         }
 
         const voiceState = useVoiceRecordingStore.getState();
@@ -825,13 +851,14 @@ class VoiceRecordingService {
           // cancelArming() so we don't drive stop() through a non-existent
           // session.
           if (voiceState.status === "arming") {
-            this.cancelArming();
+            this.cancelArming("panel_closed");
             return;
           }
           const panelId = activeTarget.panelId;
           const pendingTarget = voiceState.pendingTarget;
           void this.stop("Dictation stopped because its panel was closed.", {
             preserveLiveText: true,
+            reason: "panel_closed",
             // A start waiting on this session for another, open panel goes ahead.
             preservePendingStart: pendingTarget !== null && pendingTarget.panelId !== panelId,
           }).then(() => {
@@ -845,15 +872,15 @@ class VoiceRecordingService {
     // widget has had its turn; the target composer hands it over itself.
     this.unsubscribers.push(registerEscapeFallback(() => this.handleEscape()));
 
-    // Push-to-talk and tap-or-hold: a capture-phase keydown listener records
-    // the physical key code of the voice shortcut press so the keyup listener
-    // can match it. The actual `start()` call happens via the normal action
-    // dispatch chain, which always awaits before the action runs, so the press
-    // is recorded before the start that claims it. A press that completes a
-    // chord (Cmd+K Cmd+D) or stops a session is never claimed, and its release
-    // does nothing.
-    const handlePttKeyDown = (e: KeyboardEvent) => {
-      if (this.recordingMode === "toggle") return;
+    // A capture-phase keydown listener sees each voice shortcut press. Its
+    // time is the origin of the session summary the press starts, and in
+    // push-to-talk and tap-or-hold it records the physical key code so the
+    // keyup listener can match it. The actual `start()` call happens via the
+    // normal action dispatch chain, which always awaits before the action
+    // runs, so the press is recorded before the start that claims it. A press
+    // that completes a chord (Cmd+K Cmd+D) or stops a session is never
+    // claimed, and its release does nothing.
+    const handleShortcutKeyDown = (e: KeyboardEvent) => {
       if (e.repeat) return;
       // Every combo that starts recording has to arm the release, or a second
       // override combo would start push-to-talk that its keyup can't stop.
@@ -863,6 +890,8 @@ class VoiceRecordingService {
         ...keybindingService.getEffectiveCombos("voiceInput.rewriteSelection"),
       ].some((combo) => keybindingService.matchesEvent(e, combo));
       if (!matches) return;
+      this.noteShortcutPress(e.timeStamp);
+      if (this.recordingMode === "toggle") return;
       const claimed = this.claimedAt !== null && this.claimedAt >= e.timeStamp;
       this.claimedAt = null;
       this.heldPress = {
@@ -872,9 +901,9 @@ class VoiceRecordingService {
         speechChunks: 0,
       };
     };
-    window.addEventListener("keydown", handlePttKeyDown, { capture: true });
+    window.addEventListener("keydown", handleShortcutKeyDown, { capture: true });
     this.unsubscribers.push(() =>
-      window.removeEventListener("keydown", handlePttKeyDown, { capture: true })
+      window.removeEventListener("keydown", handleShortcutKeyDown, { capture: true })
     );
 
     // Release of the trigger key. macOS swallows the trigger keyup if a
@@ -886,7 +915,7 @@ class VoiceRecordingService {
       const isTriggerRelease = e.code === this.heldPress.code;
       const isMetaRelease = e.code === "MetaLeft" || e.code === "MetaRight";
       if (!isTriggerRelease && !isMetaRelease) return;
-      this.releaseHeldPress();
+      this.releaseHeldPress("key_release");
     };
     window.addEventListener("keyup", handlePttKeyUp, { capture: true });
     this.unsubscribers.push(() =>
@@ -898,7 +927,7 @@ class VoiceRecordingService {
     // leave the press held forever. Blur counts as the release.
     const handlePttBlur = () => {
       if (this.heldPress === null) return;
-      this.releaseHeldPress();
+      this.releaseHeldPress("window_blur");
     };
     window.addEventListener("blur", handlePttBlur);
     this.unsubscribers.push(() => window.removeEventListener("blur", handlePttBlur));
@@ -918,6 +947,7 @@ class VoiceRecordingService {
     this.selectedDeviceId = settings.deviceId ?? "";
     this.recordingMode = settings.recordingMode ?? "tap-or-hold";
     this.hasOpenAIKey = !!settings.openaiApiKey;
+    this.transcriptionProvider = settings.transcriptionProvider;
     logDebug(`${LOG_PREFIX} refreshConfiguration`, {
       enabled: settings.enabled,
       provider: settings.transcriptionProvider,
@@ -965,12 +995,12 @@ class VoiceRecordingService {
       state.pendingTarget?.panelId === target.panelId ||
       (isActiveTarget && state.status === "arming")
     ) {
-      if (!this.deferStopToStartup()) this.cancelArming();
+      if (!this.deferStopToStartup("user")) this.cancelArming("user");
       return;
     }
 
     if (isActiveTarget && isActive) {
-      await this.requestUserStop();
+      await this.requestUserStop("user");
       return;
     }
 
@@ -1001,7 +1031,7 @@ class VoiceRecordingService {
       !this.isStoppableSession(state.status) &&
       (panelId === undefined || state.pendingTarget.panelId === panelId)
     ) {
-      this.cancelArming();
+      this.cancelArming("escape");
       return true;
     }
     if (panelId !== undefined && state.activeTarget?.panelId !== panelId) return false;
@@ -1018,7 +1048,7 @@ class VoiceRecordingService {
     // stop() would log "no active session" warnings and skip the cleanup
     // path that resets activeTarget back to null.
     if (state.status === "arming") {
-      this.cancelArming();
+      this.cancelArming("escape");
       return true;
     }
     if (
@@ -1030,10 +1060,14 @@ class VoiceRecordingService {
       return false;
     }
     if (rewrite) {
-      void this.stop("Rewrite cancelled.", { preserveLiveText: true, skipCorrection: true });
+      void this.stop("Rewrite cancelled.", {
+        preserveLiveText: true,
+        skipCorrection: true,
+        reason: "escape",
+      });
       return true;
     }
-    void this.stop("Dictation stopped.", { preserveLiveText: true });
+    void this.stop("Dictation stopped.", { preserveLiveText: true, reason: "escape" });
     return true;
   }
 
@@ -1043,11 +1077,11 @@ class VoiceRecordingService {
    * staleness check; finishSession() returns the store to idle without
    * touching panel buffers (no transcript exists yet).
    */
-  private cancelArming(): void {
+  private cancelArming(reason: VoiceStopReason): void {
     // A held press that aborted arming must not have its keyup send a stop
     // for a session that never began.
     this.heldPress = null;
-    this.invalidatePendingStart();
+    this.invalidatePendingStart(reason);
     // A start queued behind a session that is still finishing leaves that
     // session's target and status to its own stop.
     if (useVoiceRecordingStore.getState().status === "arming") {
@@ -1062,12 +1096,57 @@ class VoiceRecordingService {
    * retarget drain doesn't hold the microphone or an output stream open after
    * the user has moved on.
    */
-  private invalidatePendingStart(): void {
+  private invalidatePendingStart(reason?: VoiceStopReason): void {
     this.releasePendingRewrite();
     this.startRequestId++;
     this.startup = null;
     this.releasePendingCapture();
     useVoiceRecordingStore.getState().clearPendingTarget();
+    // Closed here rather than when its awaits return: a permission prompt may
+    // never settle.
+    const attempt = this.attemptTimeline;
+    this.attemptTimeline = null;
+    if (attempt && reason) attempt.finish(reason);
+  }
+
+  /**
+   * The dictation shortcut was pressed. A start the same dispatch already ran
+   * takes it now (the keybinding listener can fire before this one); otherwise
+   * it waits for one until the event's task is over.
+   */
+  private noteShortcutPress(at: number): void {
+    if (this.attemptTimeline?.notePress(at)) return;
+    this.pendingPressAt = at;
+    setTimeout(() => {
+      if (this.pendingPressAt === at) this.pendingPressAt = null;
+    }, 0);
+  }
+
+  private openTimeline(sessionId: string, target: VoiceRecordingTarget): VoiceSessionTimeline {
+    const pressedAt = this.pendingPressAt;
+    this.pendingPressAt = null;
+    const timeline = new VoiceSessionTimeline(
+      sessionId,
+      {
+        now: () => performance.now(),
+        log: logInfo,
+        warn: logWarn,
+        nextFrame: (callback) => {
+          const frame = requestAnimationFrame(callback);
+          return () => cancelAnimationFrame(frame);
+        },
+        onDone: (done) => {
+          if (this.timelines.get(done.sessionId) === done) this.timelines.delete(done.sessionId);
+        },
+      },
+      pressedAt
+    );
+    // A rewrite records an instruction, never words into the draft, so it
+    // leaves no summary: its counts would read as a dictation that lost its
+    // text. Disposed, its timeline takes every mark as a no-op.
+    if (target.rewrite) timeline.dispose();
+    else this.timelines.set(sessionId, timeline);
+    return timeline;
   }
 
   private releasePendingCapture(): void {
@@ -1084,14 +1163,14 @@ class VoiceRecordingService {
    * so the stop waits for that audio to be sent rather than discarding it
    * (#14604). Escape, a closed panel and teardown cancel through stop().
    */
-  private requestUserStop(): Promise<void> {
-    if (this.deferStopToStartup()) return Promise.resolve();
+  private requestUserStop(reason: VoiceStopReason = "user"): Promise<void> {
+    if (this.deferStopToStartup(reason)) return Promise.resolve();
     const { status, pendingTarget } = useVoiceRecordingStore.getState();
     if ((pendingTarget || status === "arming") && !this.stream) {
-      this.cancelArming();
+      this.cancelArming(reason);
       return Promise.resolve();
     }
-    return this.stop("Dictation stopped.", { preserveLiveText: true });
+    return this.stop("Dictation stopped.", { preserveLiveText: true, reason });
   }
 
   /** Hand the press that is down right now to the recording it started. */
@@ -1120,7 +1199,7 @@ class VoiceRecordingService {
    * on Cmd before anything was said, leaves the recording running until the
    * next press.
    */
-  private releaseHeldPress(): void {
+  private releaseHeldPress(reason: "key_release" | "window_blur"): void {
     const press = this.heldPress;
     this.heldPress = null;
     if (!press?.claimed) return;
@@ -1131,7 +1210,7 @@ class VoiceRecordingService {
     } else if (this.recordingMode !== "push-to-talk") {
       return;
     }
-    void this.requestUserStop();
+    void this.requestUserStop(reason);
   }
 
   private liveStartup(): StartupAttempt | null {
@@ -1145,12 +1224,15 @@ class VoiceRecordingService {
    * queue is sent. The microphone stays open until then so a press on the same
    * target can resume it. False when there is no such start.
    */
-  private deferStopToStartup(): boolean {
+  private deferStopToStartup(reason: VoiceStopReason): boolean {
     const startup = this.liveStartup();
     if (!startup) return false;
     this.heldPress = null;
     if (startup.stopAfterStart) return true;
     startup.stopAfterStart = true;
+    startup.stopReason = reason;
+    // The stop is the user's from now, though it runs once the queue is sent.
+    startup.capture.timeline.mark("stopRequested");
     const { capture } = startup;
     capture.frozen = true;
     if (this.workletNode === capture.workletNode) this.clearMicSilenceTimer();
@@ -1170,6 +1252,7 @@ class VoiceRecordingService {
     if (!startup?.stopAfterStart || startup.target.panelId !== target.panelId) return false;
     startup.stopAfterStart = false;
     startup.capture.frozen = false;
+    startup.capture.timeline.unmark("stopRequested");
     if (
       this.workletNode === startup.capture.workletNode &&
       useVoiceRecordingStore.getState().micSignal === "pending"
@@ -1186,6 +1269,7 @@ class VoiceRecordingService {
     queue.push(chunk);
     if (queue.length > MAX_QUEUED_CHUNKS) {
       queue.shift();
+      capture.timeline.addDroppedQueued(1);
       if (++capture.droppedChunks === 1) {
         logWarn(`${LOG_PREFIX} Startup audio queue full, dropping oldest audio`);
       }
@@ -1261,6 +1345,7 @@ class VoiceRecordingService {
         nextStatus: "error",
         announce: false,
         preservePendingStart: true,
+        reason: "retarget",
       });
       return;
     }
@@ -1274,10 +1359,36 @@ class VoiceRecordingService {
   async start(target: VoiceRecordingTarget): Promise<void> {
     this.initialize();
     this.releasePendingCapture();
+    // A newer start in this view replaces one still under way.
+    this.attemptTimeline?.finish("retarget");
     const startRequestId = ++this.startRequestId;
     const sessionId = crypto.randomUUID();
+    const timeline = this.openTimeline(sessionId, target);
+    this.attemptTimeline = timeline;
+    // The caller showed the arming cue (or the queued-start cue) just before.
+    if (useVoiceRecordingStore.getState().pendingTarget?.panelId === target.panelId) {
+      timeline.markNextFrame("cue");
+    }
+    try {
+      await this.runStart(target, startRequestId, sessionId, timeline);
+    } finally {
+      // Neither promoted nor cancelled: the start gave up on its own.
+      if (this.attemptTimeline === timeline) {
+        this.attemptTimeline = null;
+        timeline.finish("start_failed");
+      }
+    }
+  }
+
+  private async runStart(
+    target: VoiceRecordingTarget,
+    startRequestId: number,
+    sessionId: string,
+    timeline: VoiceSessionTimeline
+  ): Promise<void> {
     // toggle() reaches here with no await after the hotkey/click, so start()
-    // entry stands in for the gesture. Renderer-local clock only — main's
+    // entry stands in for the gesture in these step logs; the session summary
+    // goes back to the key press itself. Renderer-local clock only — main's
     // timings use their own origin.
     const startedAt = performance.now();
     const logStep: StartStepLogger = (step, details) => {
@@ -1313,6 +1424,7 @@ class VoiceRecordingService {
     );
     const isConfigured = await this.refreshConfiguration().catch(() => false);
     logStep("settings", { configured: isConfigured });
+    if (this.transcriptionProvider) timeline.setProvider(this.transcriptionProvider);
     if (!isConfigured || this.isStartRequestStale(startRequestId)) {
       logWarn(`${LOG_PREFIX} Not configured, aborting start`);
       if (!this.isStartRequestStale(startRequestId)) {
@@ -1457,6 +1569,7 @@ class VoiceRecordingService {
       workletNode: null,
       queue: [],
       droppedChunks: 0,
+      timeline,
       deviceId: null,
       deviceLabel: null,
       lost: false,
@@ -1682,12 +1795,18 @@ class VoiceRecordingService {
         }
         if (!firstSignalChunk && hasRealSignal(stats)) {
           firstSignalChunk = arrivedChunks;
+          timeline.noteSignal();
           logStep("first_signal_chunk", {
             chunk: arrivedChunks,
             peak: Number(stats.peak.toFixed(4)),
           });
         }
-        if (!firstLiveChunk && isMicLive(stats)) firstLiveChunk = arrivedChunks;
+        // On arrival, held or not: a mic that came alive while a previous
+        // session drained was live from here, not from promotion.
+        if (!firstLiveChunk && isMicLive(stats)) {
+          firstLiveChunk = arrivedChunks;
+          timeline.mark("micLive");
+        }
         if (!this.isStartRequestStale(startRequestId)) this.noteHeldPressAudio(stats);
         if (!openingAudio.logged) {
           openingAudio.chunks.push(stats);
@@ -1745,7 +1864,13 @@ class VoiceRecordingService {
       await failCaptureSetup(error);
       return;
     }
-    startup = { requestId: startRequestId, target, capture, stopAfterStart: false };
+    startup = {
+      requestId: startRequestId,
+      target,
+      capture,
+      stopAfterStart: false,
+      stopReason: "user",
+    };
     this.startup = startup;
     logDebug(`${LOG_PREFIX} Eager audio capture started`);
     logStep("source_attach");
@@ -1766,6 +1891,7 @@ class VoiceRecordingService {
         announce: false,
         preservePendingStart: true,
         skipCorrection: true,
+        reason: "retarget",
       });
       logStep("previous_session_stop");
       if (this.isStartRequestStale(startRequestId)) {
@@ -1791,8 +1917,12 @@ class VoiceRecordingService {
     // there keeps its underline.
     if (this.hasPendingCorrection(target.panelId)) this.syncCorrectionRange(target.panelId);
 
-    // Promote the attempt to the session. From here stop() owns its teardown.
+    // Promote the attempt to the session. From here stop() owns its teardown,
+    // and its summary's end.
     if (this.pendingCapture === capture) this.pendingCapture = null;
+    if (this.attemptTimeline === timeline) this.attemptTimeline = null;
+    // The connecting cue, for a start that showed none before it.
+    timeline.markNextFrame("cue");
     capture.stream = stream;
     this.sessionCapture = capture;
     this.stream = stream;
@@ -1842,6 +1972,7 @@ class VoiceRecordingService {
     // streams to main, which holds it until the provider exists, so a stop
     // before the backend is ready still has the audio to transcribe.
     logDebug(`${LOG_PREFIX} Calling voiceInput.start() IPC`);
+    timeline.expectReport();
     const started = window.electron.voiceInput
       .start(sessionId, {
         terminalId: target.panelId,
@@ -1860,6 +1991,12 @@ class VoiceRecordingService {
           error: formatErrorMessage(error, "Voice input failed to start."),
         })
       );
+    // Marked apart from the await below: a stop held during startup returns
+    // before it, and a provider stopped while connecting becomes ready without
+    // a "recording" status.
+    void started.then((outcome) => {
+      if (outcome.ok) timeline.mark("socketReady");
+    });
 
     // Flush synchronously, oldest first, so no live chunk can interleave.
     const queued = capture.queue ?? [];
@@ -1881,7 +2018,10 @@ class VoiceRecordingService {
     // the session drains like any stop that lands before the backend is ready.
     if (startup.stopAfterStart) {
       logDebug(`${LOG_PREFIX} Running the stop requested during startup`);
-      await this.stop("Dictation stopped.", { preserveLiveText: true });
+      await this.stop("Dictation stopped.", {
+        preserveLiveText: true,
+        reason: startup.stopReason,
+      });
       return;
     }
 
@@ -1896,6 +2036,8 @@ class VoiceRecordingService {
       // the worklet through the handler this cleanup would detach. It also
       // closes the opening-audio window once the tail is in.
       if (!this.stopPromise) {
+        // No stop owns it, so the newer start that made it stale ends it here.
+        timeline.finish("retarget");
         this.flushOpeningAudio(openingAudio);
         this.cleanupCaptureResources(capture);
       }
@@ -1904,6 +2046,9 @@ class VoiceRecordingService {
 
     if (!result.ok) {
       logError(`${LOG_PREFIX} Backend start failed`);
+      // Main has already ended it: there is nothing left to stop remotely.
+      if (this.sessionId === sessionId) this.sessionId = null;
+      timeline.finish("start_failed");
       this.flushOpeningAudio(openingAudio);
       this.clearTimers();
       this.cleanupAudioCapture();
@@ -1967,15 +2112,18 @@ class VoiceRecordingService {
       skipCorrection?: boolean;
       /** The caller already played its own cue for this stop. */
       silentCue?: boolean;
+      /** Why, for the session summary; a joined stop keeps the first one's. */
+      reason?: VoiceStopReason;
     } = {}
   ): Promise<void> {
+    const reason = options.reason ?? "user";
     if (this.stopPromise) {
       // Joining a stop already in flight — typically a retarget's teardown,
       // which runs with preservePendingStart so its own start can follow. An
       // explicit stop has to cancel that pending start too, or the recording
       // resumes on the new target once the drain finishes.
       if (!options.preservePendingStart) {
-        this.invalidatePendingStart();
+        this.invalidatePendingStart(reason);
         this.heldPress = null;
       }
       await this.stopPromise;
@@ -1992,10 +2140,12 @@ class VoiceRecordingService {
       // for the next start leaves that start's held key alone.
       if (!options.preservePendingStart) {
         this.heldPress = null;
-        this.invalidatePendingStart();
+        this.invalidatePendingStart(reason);
       }
 
       const stopSessionId = this.sessionId;
+      const stopTimeline = stopSessionId ? this.timelines.get(stopSessionId) : undefined;
+      stopTimeline?.mark("stopRequested");
       const storeState = useVoiceRecordingStore.getState();
       const hasSession =
         storeState.activeTarget !== null || isActiveVoiceSession(storeState.status);
@@ -2103,6 +2253,7 @@ class VoiceRecordingService {
               // A session stopped mid-utterance may have no final; its learning
               // baseline still needs a start to follow.
               useVoiceRecordingStore.getState().setSessionDraftStart(panelId, words.from);
+              stopTimeline?.addCommitted(remaining.length);
             }
           }
         }
@@ -2117,6 +2268,8 @@ class VoiceRecordingService {
 
       this.isStoppingSession = false;
       if (this.sessionId === stopSessionId) this.sessionId = null;
+      // Every word the transcription will give is in the draft by now.
+      stopTimeline?.mark("settled");
 
       // Whole-passage AI cleanup runs after a deliberate, graceful stop only —
       // not on error, cancel-to-restart, or backend-driven teardown. stop()
@@ -2133,7 +2286,7 @@ class VoiceRecordingService {
         }
       } else if (graceful && stoppedTarget) {
         if (correctionEnabled) {
-          this.runCorrection(stoppedTarget, stoppedSessionId);
+          this.runCorrection(stoppedTarget, stoppedSessionId, stopTimeline ?? null);
         } else {
           // No AI correction pass will run, so capture the raw dictated text as
           // the learning baseline directly; manual corrections to it can still
@@ -2153,6 +2306,8 @@ class VoiceRecordingService {
           if (baseline) this.followLearningBaselines();
         }
       }
+      // After the correction is registered, so the summary waits for it.
+      stopTimeline?.finish(reason);
     })();
 
     try {
@@ -2172,7 +2327,11 @@ class VoiceRecordingService {
    * between the passages is never sent or rewritten. Best-effort — any failure
    * leaves the raw text. Registered synchronously, before the requests go out.
    */
-  private runCorrection(target: VoiceRecordingTarget, sessionId: string | null): void {
+  private runCorrection(
+    target: VoiceRecordingTarget,
+    sessionId: string | null,
+    timeline: VoiceSessionTimeline | null
+  ): void {
     const { panelId, projectId } = target;
     const record = findDictation(target, sessionId);
     if (!record) return;
@@ -2210,7 +2369,9 @@ class VoiceRecordingService {
         settle = resolve;
       }),
       settle: () => settle(),
+      timeline,
     };
+    timeline?.beginCorrection();
     this.pendingCorrections.add(correction);
     this.baselineOwners.set(panelId, correction);
     this.watchCorrectionDrafts();
@@ -2233,6 +2394,7 @@ class VoiceRecordingService {
     if (correction.done) {
       logDebug(`${LOG_PREFIX} Correction result stale (draft sent or edited), discarding`);
       this.releaseBaseline(correction);
+      correction.timeline?.endCorrection("discarded");
       return;
     }
     // Every passage is checked against the same draft and written in one
@@ -2246,7 +2408,7 @@ class VoiceRecordingService {
     const edits: Array<{ from: number; to: number; text: string }> = [];
     let skipped = 0;
     const settled = correction.passages.map((passage, index) => {
-      const corrected = results[index];
+      const corrected = results[index]?.text;
       if (!corrected || corrected === passage.text) return passage.text;
       const span = spans.get(passage);
       if (!span) {
@@ -2307,13 +2469,23 @@ class VoiceRecordingService {
 
     this.syncCorrectionRange(panelId);
     inputStore.bumpExternalDraftRevision({ keepsSelection: true });
+    // A passage that couldn't land outranks one that did: the summary is
+    // there to show what went wrong.
+    let outcome: VoiceCorrectionOutcome = "unchanged";
+    if (skipped > 0) outcome = "discarded";
+    else if (edits.length > 0) outcome = "applied";
+    else if (results.some((result) => result.failed)) outcome = "failed";
+    correction.timeline?.endCorrection(outcome);
   }
 
-  /** The cleaned text for one passage, or null to keep it as dictated. */
+  /**
+   * The cleaned text for one passage, or null to keep it as dictated, and
+   * whether the request failed rather than coming back unchanged.
+   */
   private async requestPassageCorrection(
     passage: CorrectionPassage,
     panelId: string
-  ): Promise<string | null> {
+  ): Promise<{ text: string | null; failed: boolean }> {
     try {
       const result = await window.electron.voiceInput.correct({
         rawText: passage.text,
@@ -2322,13 +2494,14 @@ class VoiceRecordingService {
       });
       // The passage runs from its first word to its last; its separators and
       // paragraph breaks either side stay the session's, not the model's.
-      return result.action === "replace" ? result.correctedText.trim() || null : null;
+      const text = result.action === "replace" ? result.correctedText.trim() || null : null;
+      return { text, failed: result.failed === true };
     } catch (error) {
       logWarn(
         `${LOG_PREFIX} Correction request failed, keeping raw text`,
         voiceErrorLogFields(error)
       );
-      return null;
+      return { text: null, failed: true };
     }
   }
 
@@ -3011,7 +3184,7 @@ class VoiceRecordingService {
       }
       const state = useVoiceRecordingStore.getState();
       if (state.pendingTarget?.panelId === target.panelId) {
-        if (!this.deferStopToStartup()) this.cancelArming();
+        if (!this.deferStopToStartup("user")) this.cancelArming("user");
         return;
       }
       const isActiveTarget = state.activeTarget?.panelId === target.panelId;
@@ -3162,6 +3335,7 @@ class VoiceRecordingService {
     if (!useVoiceRecordingStore.getState().activeTarget) return;
     await this.stop("Dictation stopped because the system is going to sleep.", {
       preserveLiveText: true,
+      reason: "sleep",
     });
   }
 
@@ -3401,6 +3575,7 @@ class VoiceRecordingService {
       logInfo(`${LOG_PREFIX} Auto-stopping after 60s pause`);
       void this.stop("Dictation stopped after 60-second pause.", {
         preserveLiveText: true,
+        reason: "pause_timeout",
       });
     }, VoiceRecordingService.PAUSE_AUTO_STOP_MS);
   }
@@ -3484,10 +3659,14 @@ class VoiceRecordingService {
       handler();
       return;
     }
-    void this.stop();
+    void this.stop("Dictation stopped.", { reason: "send" });
   }
 
   destroy(): void {
+    // Late awaits and events find nothing to record into.
+    for (const timeline of this.timelines.values()) timeline.dispose();
+    this.timelines.clear();
+    this.pendingPressAt = null;
     this.invalidatePendingStart();
     // Vite HMR disposes and re-evaluates this module; the old singleton's
     // timers must be cleared or they fire against the new singleton's state.
@@ -3631,6 +3810,7 @@ class VoiceRecordingService {
     void this.stop("Dictation stopped because the microphone was lost.", {
       preserveLiveText: true,
       silentCue: true,
+      reason: "mic_lost",
     });
   }
 

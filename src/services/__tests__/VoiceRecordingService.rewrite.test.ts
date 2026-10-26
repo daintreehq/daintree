@@ -273,8 +273,9 @@ describe("VoiceRecordingService — rewrite selection by voice (#14635)", () => 
     const released = {
       requestId: Reflect.get(service, "startRequestId"),
       target: { panelId: "panel-1", rewrite: { selection, instruction: [], cancelled: false } },
-      capture: { frozen: true },
+      capture: { frozen: true, timeline: { unmark: vi.fn() } },
       stopAfterStart: true,
+      stopReason: "key_release",
     };
     Reflect.set(service, "startup", released);
 

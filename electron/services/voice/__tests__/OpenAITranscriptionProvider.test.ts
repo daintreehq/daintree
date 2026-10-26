@@ -4082,4 +4082,58 @@ describe("OpenAITranscriptionProvider — reconnect replay (#14605)", () => {
     expect(wire(socket3)).toEqual([1, 2]);
     service.stop();
   });
+
+  describe("session stats", () => {
+    it("counts every chunk the connect buffer refuses", async () => {
+      const service = new OpenAITranscriptionProvider();
+      void service.start(BASE_SETTINGS, "session-1");
+      await Promise.resolve();
+      for (let i = 0; i < AUDIO_BUFFER_MAX_CHUNKS + 5; i++) service.sendAudioChunk(chunk(i % 250));
+
+      expect(service.getSessionStats()).toEqual({
+        delayTier: "low",
+        droppedConnect: 5,
+        droppedReplay: 0,
+        reconnects: 0,
+      });
+      service.stop();
+    });
+
+    it("doesn't count a reconnect the stop cancelled before it began", async () => {
+      const service = new OpenAITranscriptionProvider();
+      const { socket } = await bringSessionReady(service);
+      socket.simulateClose(1006);
+      service.stop();
+      vi.advanceTimersByTime(5_000);
+
+      expect(service.getSessionStats().reconnects).toBe(0);
+    });
+
+    it("counts each replay chunk the cap evicts", async () => {
+      const service = new OpenAITranscriptionProvider();
+      await bringSessionReady(service);
+      // REPLAY_MAX_BYTES holds 300 chunks.
+      for (let i = 0; i < 303; i++) service.sendAudioChunk(chunk(9));
+
+      expect(service.getSessionStats().droppedReplay).toBe(3);
+      service.stop();
+    });
+
+    it("keeps its reconnect count through recovery and the stop, until the next start", async () => {
+      const service = new OpenAITranscriptionProvider();
+      const { socket } = await bringSessionReady(service);
+      socket.simulateClose(1006);
+      // Scheduled is not attempted.
+      expect(service.getSessionStats().reconnects).toBe(0);
+      const socket2 = await reconnect();
+      socket2.simulateClose(1006);
+      await reconnect();
+      await service.stopGracefully();
+
+      expect(service.getSessionStats().reconnects).toBe(2);
+      await bringSessionReady(service);
+      expect(service.getSessionStats().reconnects).toBe(0);
+      service.stop();
+    });
+  });
 });

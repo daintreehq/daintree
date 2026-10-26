@@ -95,6 +95,7 @@ vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
     this.sendAudioChunk = function (chunk: ArrayBuffer) {
       shared.calls.push(`chunk:${new Uint8Array(chunk)[0]}`);
     };
+    this.getSessionStats = () => null;
     this.stopGracefully = function () {
       shared.calls.push("stopGracefully");
       return shared.drainPromise ?? Promise.resolve();

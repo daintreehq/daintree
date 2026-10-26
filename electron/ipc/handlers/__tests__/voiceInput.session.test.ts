@@ -41,6 +41,8 @@ const shared = vi.hoisted(() => ({
   /** The start context svc.start() was last handed: OpenAI's pending terms. */
   startContext: undefined as undefined | { keyterms?: Promise<string[]> },
   transcriptionProvider: "openai" as "openai" | "deepgram",
+  /** What the fake provider counts for the session it was started for. */
+  providerStats: { delayTier: "low", droppedConnect: 0, droppedReplay: 0, reconnects: 0 },
   /** Project registered per sender id, as the view registry would answer. */
   projects: new Map<number, string>(),
   /** Every app view, as getAllAppWebContents would list them. */
@@ -85,6 +87,9 @@ vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
     };
     this.commitParagraphBoundary = function () {
       shared.calls.push("commit");
+    };
+    this.getSessionStats = function (sessionId: string) {
+      return sessionId === shared.providerSessionId ? shared.providerStats : null;
     };
   },
 }));
@@ -260,8 +265,15 @@ function deferDrain() {
 const received = (sender: FakeSender) =>
   sender.sent.filter((m) => m.channel !== CHANNELS.VOICE_INPUT_SESSION_ENDED);
 
+type Ended = { sessionId: string; reason: string; report: Record<string, unknown> };
+
+const endedPayloads = (sender: FakeSender) =>
+  sender.sent
+    .filter((m) => m.channel === CHANNELS.VOICE_INPUT_SESSION_ENDED)
+    .map((m) => m.payload as Ended);
+
 const ended = (sender: FakeSender) =>
-  sender.sent.filter((m) => m.channel === CHANNELS.VOICE_INPUT_SESSION_ENDED).map((m) => m.payload);
+  endedPayloads(sender).map(({ sessionId, reason }) => ({ sessionId, reason }));
 
 describe("voiceInput — session identity", () => {
   let appSent: Sent[];
@@ -281,6 +293,7 @@ describe("voiceInput — session identity", () => {
     shared.assembleKeyterms = null;
     shared.startContext = undefined;
     shared.transcriptionProvider = "openai";
+    shared.providerStats = { delayTier: "low", droppedConnect: 0, droppedReplay: 0, reconnects: 0 };
     shared.projects.clear();
     owners.clear();
     ownerA = makeSender();
@@ -907,6 +920,94 @@ describe("voiceInput — session identity", () => {
     } finally {
       consoleError.mockRestore();
     }
+  });
+
+  describe("the report sent with the ended notice", () => {
+    it("carries main's and the provider's counts, and none of the text", async () => {
+      shared.assembleKeyterms = () => Promise.resolve(["daintree", "canopy", "worktree"]);
+      shared.providerStats = {
+        delayTier: "low",
+        droppedConnect: 3,
+        droppedReplay: 4,
+        reconnects: 2,
+      };
+      await start(ownerA, "a");
+      emit({ type: "complete", text: "fix the login bug", itemId: "i1" });
+      emit({ type: "complete", text: "", itemId: "i2" });
+      emit({ type: "complete", text: "   " });
+      await stop(ownerA, "a");
+
+      const [payload] = endedPayloads(ownerA);
+      expect(payload).toEqual({
+        sessionId: "a",
+        reason: "stopped",
+        report: {
+          provider: "openai",
+          delayTier: "low",
+          biasTermCount: 3,
+          droppedPreStart: 0,
+          droppedConnect: 3,
+          droppedReplay: 4,
+          reconnects: 2,
+          completedSegments: 1,
+          emptyCompletions: 2,
+        },
+      });
+      expect(JSON.stringify(payload)).not.toMatch(/daintree|canopy|login/);
+    });
+
+    it("counts every chunk refused while the session was still starting", async () => {
+      const resolveKeyterms = deferKeyterms();
+      const pending = start(ownerA, "a");
+      for (let i = 0; i < AUDIO_BUFFER_MAX_CHUNKS + 5; i++) sendChunk("a", i % 250);
+      const stopping = stop(ownerA, "a");
+      resolveKeyterms();
+      await pending;
+      await stopping;
+
+      expect(endedPayloads(ownerA)[0]?.report).toMatchObject({ droppedPreStart: 5 });
+    });
+
+    it("reads a superseded session's counts before the new session's provider starts", async () => {
+      shared.providerStats = {
+        delayTier: "low",
+        droppedConnect: 2,
+        droppedReplay: 0,
+        reconnects: 3,
+      };
+      await start(ownerA, "a");
+      await start(ownerB, "b");
+
+      expect(endedPayloads(ownerA)).toMatchObject([
+        { sessionId: "a", reason: "superseded", report: { reconnects: 3, droppedConnect: 2 } },
+      ]);
+    });
+
+    it("has no provider counts for a session that ended before its provider started", async () => {
+      // An older session's provider is still the service's, with counts of its own.
+      shared.providerStats = {
+        delayTier: "low",
+        droppedConnect: 9,
+        droppedReplay: 9,
+        reconnects: 9,
+      };
+      await start(ownerA, "z");
+      await stop(ownerA, "z");
+      const resolveKeyterms = deferKeyterms();
+      const pending = start(ownerA, "a");
+      await stop(ownerA, "a");
+      resolveKeyterms(["daintree"]);
+      await pending;
+
+      expect(endedPayloads(ownerA).find((p) => p.sessionId === "a")?.report).toMatchObject({
+        delayTier: null,
+        biasTermCount: null,
+        droppedConnect: 0,
+        droppedReplay: 0,
+        reconnects: 0,
+        completedSegments: 0,
+      });
+    });
   });
 });
 

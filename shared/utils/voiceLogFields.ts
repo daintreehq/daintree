@@ -5,6 +5,18 @@
  * quote them back. These helpers reduce a value to a shape that is safe to log.
  */
 
+/**
+ * The message of the per-session dictation summary (#14617). The line is for
+ * the local log only, so both Sentry breadcrumb filters drop any console line
+ * that carries it.
+ */
+export const VOICE_SESSION_SUMMARY_MESSAGE = "[VoiceSession] Summary";
+
+/** Whether a console line or breadcrumb message is a dictation session summary. */
+export function isVoiceSessionSummaryLine(message: unknown): boolean {
+  return typeof message === "string" && message.includes(VOICE_SESSION_SUMMARY_MESSAGE);
+}
+
 // A type alias, not an interface: the loggers' LogContext is an index signature.
 type ErrorLogFields = {
   errorName?: string;

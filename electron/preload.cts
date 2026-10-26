@@ -192,6 +192,7 @@ import type {
   VoiceSessionEndReason,
 } from "../shared/types/index.js";
 import type { ColorVisionMode, AppColorScheme } from "../shared/types/appTheme.js";
+import type { VoiceSessionReport } from "../shared/types/voiceSessionSummary.js";
 import type {
   WorktreePortAction,
   WorktreePortPayload,
@@ -2993,7 +2994,11 @@ function buildElectronApi(): ElectronAPI {
       onStatus: (callback: (payload: { sessionId: string; status: VoiceInputStatus }) => void) =>
         _typedOn(CHANNELS.VOICE_INPUT_STATUS, callback),
       onSessionEnded: (
-        callback: (payload: { sessionId: string; reason: VoiceSessionEndReason }) => void
+        callback: (payload: {
+          sessionId: string;
+          reason: VoiceSessionEndReason;
+          report: VoiceSessionReport;
+        }) => void
       ) => _typedOn(CHANNELS.VOICE_INPUT_SESSION_ENDED, callback),
       onLiveSession: (callback: (update: VoiceLiveSessionUpdate) => void) =>
         _typedOn(CHANNELS.VOICE_INPUT_LIVE_SESSION, callback),

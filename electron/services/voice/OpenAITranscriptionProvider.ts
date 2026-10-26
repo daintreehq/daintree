@@ -3,12 +3,14 @@ import type { VoiceInputError, VoiceInputSettings } from "../../../shared/types/
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { buildOpenAIHeaders } from "../../../shared/utils/openaiHeaders.js";
 import { logDebug, logInfo, logWarn, logError } from "../../utils/logger.js";
+import type { VoiceDelayTier } from "../../../shared/types/voiceSessionSummary.js";
 import { voiceErrorLogFields, voicePayloadShape } from "../../../shared/utils/voiceLogFields.js";
 import {
   AUDIO_BUFFER_MAX_BYTES,
   AUDIO_BUFFER_MAX_CHUNKS,
   STUB_CONFIDENCE,
   createAudioBufferOverflowError,
+  type ProviderSessionStats,
   type TranscriptionProvider,
   type TranscriptionStartContext,
   type VoiceStartResult,
@@ -39,12 +41,10 @@ const P = "[VoiceTranscription:openai]";
  * the deprecated singular field a compile error — `languages` and `language` are
  * mutually exclusive on the wire and must never both be sent.
  */
-type OpenAITranscriptionDelay = "minimal" | "low" | "medium" | "high" | "xhigh";
-
 interface OpenAITranscriptionConfig {
   model: string;
   languages?: string[];
-  delay: OpenAITranscriptionDelay;
+  delay: VoiceDelayTier;
   keywords?: string[];
   prompt?: string;
   language?: never;
@@ -64,7 +64,7 @@ const OPENAI_TRANSCRIPTION_MODEL = "gpt-live-transcribe";
 // explicit `input_audio_buffer.commit`: the final `...completed` is transcribed
 // from the whole frozen buffer regardless. It is therefore a different axis to
 // VAD_MAX_SEGMENT_MS below (client-side segmentation), and the two do not fight.
-const OPENAI_TRANSCRIPTION_DELAY: OpenAITranscriptionDelay = "low";
+const OPENAI_TRANSCRIPTION_DELAY: VoiceDelayTier = "low";
 const CONNECT_TIMEOUT_MS = 10_000;
 // Backstop for the drain: if a committed segment never reports a terminal
 // result (server error, dropped frame, or only an empty `conversation.item.done`),
@@ -408,6 +408,11 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
 
   private audioChunkCount = 0;
   private staleChunkWarned = false;
+  // Session-summary counts. They outlive the drain's cleanup and reset only
+  // when the next session starts.
+  private droppedConnectChunks = 0;
+  private droppedReplayChunks = 0;
+  private reconnectCount = 0;
   private preConnectBufferOverflowWarned = false;
 
   onEvent(listener: (event: VoiceTranscriptionEvent) => void): () => void {
@@ -509,6 +514,9 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     this.liveText = "";
     this.keyterms = context?.keyterms ? null : [...(settings.keyterms ?? [])];
     this.sendSessionUpdateOnKeyterms = null;
+    this.droppedConnectChunks = 0;
+    this.droppedReplayChunks = 0;
+    this.reconnectCount = 0;
 
     this.emit({ type: "status", status: "connecting" });
     // The model loads while the socket connects, so the VAD is ready by the
@@ -978,6 +986,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   private reconnectOnce(mySessionId: number, settings: VoiceInputSettings): void {
     if (this.sessionId !== mySessionId) return;
     logInfo(`${P} Reconnecting`, { attempt: this.reconnectAttempt });
+    this.reconnectCount++;
     this.cleanupConnection();
     this.connect(mySessionId, settings);
   }
@@ -1440,6 +1449,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       const head = this.replaySegments[0];
       const evicted = head ? head.chunks.shift() : this.replayTail.shift();
       if (!evicted) break;
+      this.droppedReplayChunks++;
       this.replayBytes -= evicted.byteLength;
       if (head) {
         head.bytes -= evicted.byteLength;
@@ -1600,6 +1610,8 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       this.preConnectBuffer.length >= AUDIO_BUFFER_MAX_CHUNKS ||
       this.preConnectBufferBytes + chunk.byteLength > AUDIO_BUFFER_MAX_BYTES
     ) {
+      // Counted first: the overflow error below can end the session.
+      this.droppedConnectChunks++;
       if (!this.preConnectBufferOverflowWarned) {
         this.preConnectBufferOverflowWarned = true;
         logWarn(`${P} Pre-connect buffer full, dropping audio`, {
@@ -1956,6 +1968,15 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     } else {
       logDebug(`${P} settleDrain called with no pending drain`, { reason });
     }
+  }
+
+  getSessionStats(): ProviderSessionStats {
+    return {
+      delayTier: OPENAI_TRANSCRIPTION_DELAY,
+      droppedConnect: this.droppedConnectChunks,
+      droppedReplay: this.droppedReplayChunks,
+      reconnects: this.reconnectCount,
+    };
   }
 
   async stopGracefully(): Promise<void> {

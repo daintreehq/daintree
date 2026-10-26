@@ -70,6 +70,7 @@ vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
     this.stop = function () {};
     this.destroy = function () {};
     this.commitParagraphBoundary = function () {};
+    this.getSessionStats = () => null;
   },
 }));
 
@@ -280,7 +281,11 @@ describe("voiceInput — spoken file references", () => {
         references: [{ description: "input bar component", path: "src/InputBar.tsx" }],
       },
     ]);
-    expect(owner.sent.map((m) => m.payload)).toContainEqual({ sessionId: "a", reason: "stopped" });
+    expect(owner.sent.map((m) => m.payload)).toContainEqual({
+      sessionId: "a",
+      reason: "stopped",
+      report: expect.objectContaining({ completedSegments: 1 }),
+    });
   });
 
   it("sends references to the view that started the session, not the app's current view", async () => {
@@ -511,6 +516,7 @@ describe("voiceInput — spoken file references", () => {
     expect(owner.sent.map((m) => m.payload)).toContainEqual({
       sessionId: "a",
       reason: "superseded",
+      report: expect.objectContaining({ completedSegments: 1 }),
     });
     expect(fileReferences(other)).toEqual([]);
     expect(shared.currentView.sent).toEqual([]);

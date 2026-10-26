@@ -25,6 +25,7 @@ import type {
   VoiceLiveSessionUpdate,
   VoiceSessionEndReason,
 } from "../voice.js";
+import type { VoiceSessionReport } from "../voiceSessionSummary.js";
 export type { VoiceInputError, VoiceInputStatus };
 import type {
   AuthValidation,
@@ -2198,9 +2199,13 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onStatus(
       callback: (payload: { sessionId: string; status: VoiceInputStatus }) => void
     ): () => void;
-    /** Fires once per session when main ends it, with why. */
+    /** Fires once per session when main ends it, with why and main's counts for its summary. */
     onSessionEnded(
-      callback: (payload: { sessionId: string; reason: VoiceSessionEndReason }) => void
+      callback: (payload: {
+        sessionId: string;
+        reason: VoiceSessionEndReason;
+        report: VoiceSessionReport;
+      }) => void
     ): () => void;
     /**
      * The session live in another view, or none, whenever it changes. A view
@@ -2239,7 +2244,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       recentContext?: string[];
       /** The panel the passage was dictated into, which picks the project vocabulary. */
       terminalId?: string;
-    }): Promise<{ action: "no_change" | "replace"; correctedText: string }>;
+    }): Promise<{ action: "no_change" | "replace"; correctedText: string; failed?: true }>;
     onFileTokenResolved(
       callback: (payload: {
         sessionId: string;

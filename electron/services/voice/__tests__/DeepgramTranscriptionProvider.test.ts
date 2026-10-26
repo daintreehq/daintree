@@ -149,6 +149,7 @@ vi.mock("../../../utils/logger.js", () => ({
 
 // Import AFTER vi.mock so the mocked `ws` is used.
 const { DeepgramTranscriptionProvider } = await import("../DeepgramTranscriptionProvider.js");
+const { AUDIO_BUFFER_MAX_CHUNKS } = await import("../TranscriptionProvider.js");
 const { logInfo } = await import("../../../utils/logger.js");
 type DeepgramTranscriptionProviderInstance = InstanceType<typeof DeepgramTranscriptionProvider>;
 type VoiceTranscriptionEvent = import("../TranscriptionProvider.js").VoiceTranscriptionEvent;
@@ -523,6 +524,23 @@ describe("DeepgramTranscriptionProvider", () => {
     expect(binary).toHaveLength(2);
     expect(binary[0].equals(Buffer.from(new Uint8Array([1])))).toBe(true);
     expect(binary[1].equals(Buffer.from(new Uint8Array([2])))).toBe(true);
+    provider.stop();
+  });
+
+  it("counts every chunk the connect buffer refuses, and reports no delay tier", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    void provider.start(BASE_SETTINGS, "session-1");
+    await Promise.resolve();
+    for (let i = 0; i < AUDIO_BUFFER_MAX_CHUNKS + 4; i++) {
+      provider.sendAudioChunk(new Uint8Array([i % 250]).buffer);
+    }
+
+    expect(provider.getSessionStats()).toEqual({
+      delayTier: "none",
+      droppedConnect: 4,
+      droppedReplay: 0,
+      reconnects: 0,
+    });
     provider.stop();
   });
 
@@ -1162,6 +1180,36 @@ describe("DeepgramTranscriptionProvider", () => {
 
     second.simulateMessage(resultsMessage("after the drop", { is_final: true }));
     expect(events.some((e) => e.type === "complete" && e.text === "after the drop")).toBe(true);
+    provider.stop();
+  });
+
+  it("counts reconnect attempts, keeping them through the stop until the next start", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    const { socket: first } = await bringSessionReady(provider);
+    first.simulateClose(1006);
+    // Scheduled is not attempted.
+    expect(provider.getSessionStats().reconnects).toBe(0);
+    vi.advanceTimersToNextTimer();
+    const second = latestInstance();
+    second.simulateOpen();
+    second.simulateClose(1006);
+    vi.advanceTimersToNextTimer();
+    latestInstance().simulateOpen();
+    provider.stop();
+
+    expect(provider.getSessionStats().reconnects).toBe(2);
+    await bringSessionReady(provider);
+    expect(provider.getSessionStats().reconnects).toBe(0);
+    provider.stop();
+  });
+
+  it("counts each held chunk the replay cap evicts", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    await bringSessionReady(provider);
+    // 40s of 100ms chunks fill the replay ledger; no final result confirms any.
+    for (let i = 0; i < 402; i++) provider.sendAudioChunk(new Uint8Array(4_800).buffer);
+
+    expect(provider.getSessionStats().droppedReplay).toBe(2);
     provider.stop();
   });
 
