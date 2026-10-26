@@ -4,6 +4,11 @@ import type { VoiceInputError } from "@shared/types";
 
 type VoiceStatusCallback = (payload: { sessionId: string; status: string }) => void;
 type VoiceErrorCallback = (payload: { sessionId: string; error: VoiceInputError }) => void;
+type VoiceCompleteCallback = (payload: {
+  sessionId: string;
+  text: string;
+  itemId?: string;
+}) => void;
 type VoidCleanup = () => void;
 
 interface MockTrack {
@@ -127,6 +132,7 @@ const runtime = vi.hoisted(() => ({
   },
   statusListeners: new Set<VoiceStatusCallback>(),
   errorListeners: new Set<VoiceErrorCallback>(),
+  completeListeners: new Set<VoiceCompleteCallback>(),
   rafCallbacks: new Map<number, FrameRequestCallback>(),
   nextRafId: 1,
   micPermissionQueue: [] as Array<string | Promise<string>>,
@@ -147,8 +153,8 @@ const runtime = vi.hoisted(() => ({
   }>,
   createdWorkletNodes: [] as Array<{
     port: {
-      onmessage: ((event: MessageEvent<ArrayBuffer>) => void) | null;
-      postMessage: ReturnType<typeof vi.fn>;
+      onmessage: ((event: MessageEvent) => void) | null;
+      postMessage: ReturnType<typeof vi.fn<(message: unknown) => void>>;
     };
     disconnect: ReturnType<typeof vi.fn>;
   }>,
@@ -201,6 +207,7 @@ function resetRuntime(): void {
   Object.values(runtime.terminalInputFns).forEach((fn) => fn.mockReset());
   runtime.statusListeners.clear();
   runtime.errorListeners.clear();
+  runtime.completeListeners.clear();
   runtime.rafCallbacks.clear();
   runtime.nextRafId = 1;
   runtime.micPermissionQueue = [];
@@ -399,7 +406,9 @@ function setupGlobals(): void {
     electron: {
       voiceInput: {
         onTranscriptionDelta: vi.fn(() => () => {}),
-        onTranscriptionComplete: vi.fn(() => () => {}),
+        onTranscriptionComplete: vi.fn((callback: VoiceCompleteCallback) =>
+          addListener(runtime.completeListeners, callback)
+        ),
         onParagraphBoundary: vi.fn(() => () => {}),
         onFileTokenResolved: vi.fn(() => () => {}),
         onError: vi.fn((callback: VoiceErrorCallback) =>
@@ -493,8 +502,15 @@ function setupGlobals(): void {
   vi.stubGlobal("AudioWorkletNode", function () {
     const node = {
       port: {
-        onmessage: null as ((event: MessageEvent<ArrayBuffer>) => void) | null,
-        postMessage: vi.fn(),
+        onmessage: null as ((event: MessageEvent) => void) | null,
+        // Like the real worklet, a flush is answered asynchronously, behind any
+        // chunk it already posted.
+        postMessage: vi.fn((message: unknown) => {
+          if ((message as { type?: string } | null)?.type !== "flush") return;
+          void Promise.resolve().then(() =>
+            node.port.onmessage?.(new MessageEvent("message", { data: { type: "flushed" } }))
+          );
+        }),
       },
       connect: vi.fn(),
       disconnect: vi.fn(),
@@ -520,6 +536,12 @@ function liveSessionId(): string {
 function emitStatus(status: string): void {
   for (const listener of runtime.statusListeners) {
     listener({ sessionId: liveSessionId(), status });
+  }
+}
+
+function emitComplete(text: string): void {
+  for (const listener of runtime.completeListeners) {
+    listener({ sessionId: liveSessionId(), text });
   }
 }
 
@@ -589,13 +611,32 @@ describe("VoiceRecordingService adversarial", () => {
     const panelOne: VoiceRecordingTarget = { panelId: "panel-1", panelTitle: "Panel One" };
     const panelTwo: VoiceRecordingTarget = { panelId: "panel-2", panelTitle: "Panel Two" };
 
-    function emitChunk(nodeIndex: number, fill: number): ArrayBuffer {
-      const samples = new Int16Array(2400);
-      samples.fill(fill);
+    function emitChunk(nodeIndex: number, fill: number, samples = 2400): ArrayBuffer {
+      const pcm = new Int16Array(samples);
+      pcm.fill(fill);
       runtime.createdWorkletNodes[nodeIndex]?.port.onmessage?.(
-        new MessageEvent<ArrayBuffer>("message", { data: samples.buffer })
+        new MessageEvent<ArrayBuffer>("message", { data: pcm.buffer })
       );
-      return samples.buffer;
+      return pcm.buffer;
+    }
+
+    const sent = () => runtime.voiceInput.sendAudioChunk.mock.calls.map(([, chunk]) => chunk);
+
+    function deliver(nodeIndex: number, data: unknown): void {
+      runtime.createdWorkletNodes[nodeIndex]?.port.onmessage?.(
+        new MessageEvent("message", { data })
+      );
+    }
+
+    // Runs queued promise continuations without moving (fake) timers.
+    async function settle(): Promise<void> {
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+    }
+
+    // The remote stop goes out only after every chunk has been sent.
+    function expectRemoteStopAfterAudio(): void {
+      const lastSend = Math.max(...runtime.voiceInput.sendAudioChunk.mock.invocationCallOrder);
+      expect(runtime.voiceInput.stop.mock.invocationCallOrder[0]).toBeGreaterThan(lastSend);
     }
 
     it("loads the worklet while the microphone is still opening", async () => {
@@ -617,7 +658,7 @@ describe("VoiceRecordingService adversarial", () => {
       expect(runtime.voiceInput.start).toHaveBeenCalledTimes(1);
     });
 
-    it("queues audio until the backend starts, then flushes it in order before live audio", async () => {
+    it("streams audio to main while the backend start is still pending (#14603)", async () => {
       const backendStart = deferred<{ ok: boolean }>();
       runtime.startQueue.push(backendStart.promise);
 
@@ -629,17 +670,14 @@ describe("VoiceRecordingService adversarial", () => {
 
       const first = emitChunk(0, 100);
       const second = emitChunk(0, 200);
-      expect(runtime.voiceInput.sendAudioChunk).not.toHaveBeenCalled();
+      expect(sent()).toEqual([first, second]);
 
       backendStart.resolve({ ok: true });
       await starting;
       const live = emitChunk(0, 300);
 
-      expect(runtime.voiceInput.sendAudioChunk.mock.calls.map(([, chunk]) => chunk)).toEqual([
-        first,
-        second,
-        live,
-      ]);
+      // Nothing is replayed once the backend is ready.
+      expect(sent()).toEqual([first, second, live]);
       // Held and live audio both carry the id the start went out with.
       const sessionId = runtime.voiceInput.start.mock.calls[0]?.[0];
       expect(sessionId).toEqual(expect.any(String));
@@ -650,7 +688,149 @@ describe("VoiceRecordingService adversarial", () => {
       ]);
     });
 
-    it("discards queued audio when the start is cancelled before the backend is ready", async () => {
+    it("keeps the text of a stop that lands while the backend connects (#14603)", async () => {
+      // The correction pass after the stop is covered elsewhere.
+      runtime.voiceInput.getSettings.mockResolvedValue({
+        enabled: true,
+        openaiApiKey: "sk-key",
+        correctionEnabled: false,
+      });
+      const backendStart = deferred<{ ok: boolean }>();
+      runtime.startQueue.push(backendStart.promise);
+      const drain = deferred<void>();
+      runtime.stopQueue.push(drain.promise);
+
+      const { voiceRecordingService } = await import("../VoiceRecordingService");
+      const starting = voiceRecordingService.start(panelOne);
+      await vi.waitFor(() => {
+        expect(runtime.voiceInput.start).toHaveBeenCalledTimes(1);
+      });
+      const first = emitChunk(0, 100);
+      const second = emitChunk(0, 200);
+
+      const stopping = voiceRecordingService.stop("Dictation stopped.");
+      await vi.waitFor(() => {
+        expect(runtime.voiceInput.stop).toHaveBeenCalledTimes(1);
+      });
+      expect(sent()).toEqual([first, second]);
+      expectRemoteStopAfterAudio();
+
+      // Main brings the provider up behind the stop and drains it; the
+      // transcript lands while the session is finishing.
+      backendStart.resolve({ ok: true });
+      emitComplete("Yes, carry on");
+      drain.resolve();
+      await Promise.all([stopping, starting]);
+
+      expect(runtime.drafts["panel-1"]).toBe("Yes, carry on");
+      expect(runtime.voiceFns.finishSession).toHaveBeenCalledTimes(1);
+      expect(runtime.createdStreams[0]!.track.stop).toHaveBeenCalled();
+    });
+
+    it("keeps the worklet's final partial chunk and audio still in flight at the stop (#14603)", async () => {
+      // Frozen timers: the flush timeout can't fire, so only the marker lets
+      // the stop go on.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        const { voiceRecordingService } = await import("../VoiceRecordingService");
+        await voiceRecordingService.start(panelOne);
+        const full = emitChunk(0, 100);
+        const node = runtime.createdWorkletNodes[0]!;
+        node.port.postMessage.mockImplementation(() => {});
+
+        const stopping = voiceRecordingService.stop("Dictation stopped.");
+        await settle();
+        expect(node.port.postMessage).toHaveBeenCalledWith({ type: "flush" });
+
+        // A full chunk posted just before the flush arrived, then the partial
+        // chunk the flush produces, each its own task.
+        const inFlight = new Int16Array(2400).fill(200).buffer;
+        const tail = new Int16Array(640).fill(300).buffer;
+        for (const chunk of [inFlight, tail]) {
+          deliver(0, chunk);
+          await settle();
+          expect(node.port.onmessage).not.toBeNull();
+          expect(runtime.voiceInput.stop).not.toHaveBeenCalled();
+        }
+
+        deliver(0, { type: "flushed" });
+        await stopping;
+
+        expect(sent()).toEqual([full, inFlight, tail]);
+        expectRemoteStopAfterAudio();
+        expect(node.port.onmessage).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("keeps the tail when the backend start settles during the stop's flush", async () => {
+      const backendStart = deferred<{ ok: boolean }>();
+      runtime.startQueue.push(backendStart.promise);
+
+      const { voiceRecordingService } = await import("../VoiceRecordingService");
+      const { logInfo } = await import("@/utils/logger");
+      vi.mocked(logInfo).mockClear();
+      const starting = voiceRecordingService.start(panelOne);
+      await vi.waitFor(() => {
+        expect(runtime.voiceInput.start).toHaveBeenCalledTimes(1);
+      });
+      const node = runtime.createdWorkletNodes[0]!;
+      node.port.postMessage.mockImplementation(() => {});
+
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        const stopping = voiceRecordingService.stop("Dictation stopped.");
+        await settle();
+        backendStart.resolve({ ok: true });
+        await settle();
+        // The now-stale start left the capture to the stop draining it.
+        expect(node.port.onmessage).not.toBeNull();
+
+        const tail = new Int16Array(640).fill(300).buffer;
+        deliver(0, tail);
+        deliver(0, { type: "flushed" });
+        await Promise.all([stopping, starting]);
+
+        expect(sent()).toEqual([tail]);
+        expectRemoteStopAfterAudio();
+        expect(runtime.createdAudioContexts[0]!.close).toHaveBeenCalledTimes(1);
+        // The stop, not the stale start, closed the opening window, after the tail.
+        const opening = vi
+          .mocked(logInfo)
+          .mock.calls.filter(([message]) => String(message).includes("Opening audio"));
+        expect(opening).toHaveLength(1);
+        expect(opening[0]![1]).toMatchObject({ chunks: 1 });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("stops waiting for a worklet that never confirms the flush", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        const { voiceRecordingService } = await import("../VoiceRecordingService");
+        await voiceRecordingService.start(panelOne);
+        runtime.createdWorkletNodes[0]!.port.postMessage.mockImplementation(() => {});
+
+        const stopping = voiceRecordingService.stop("Dictation stopped.");
+        await vi.advanceTimersByTimeAsync(100);
+        // Still waiting on the worklet: capture attached, no remote stop yet.
+        expect(runtime.createdWorkletNodes[0]!.port.onmessage).not.toBeNull();
+        expect(runtime.voiceInput.stop).not.toHaveBeenCalled();
+
+        await vi.advanceTimersByTimeAsync(1_000);
+        await stopping;
+
+        expect(runtime.voiceInput.stop).toHaveBeenCalledTimes(1);
+        expect(runtime.createdStreams[0]!.track.stop).toHaveBeenCalled();
+        expect(runtime.voiceFns.finishSession).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("skips the flush when the backend has already ended the session", async () => {
       const backendStart = deferred<{ ok: boolean }>();
       runtime.startQueue.push(backendStart.promise);
       const stream = createStream();
@@ -664,14 +844,47 @@ describe("VoiceRecordingService adversarial", () => {
       emitChunk(0, 100);
 
       await voiceRecordingService.stop("Dictation stopped.", { skipRemoteStop: true });
+      emitChunk(0, 200);
       backendStart.resolve({ ok: true });
       await starting;
 
-      expect(runtime.voiceInput.sendAudioChunk).not.toHaveBeenCalled();
+      expect(sent()).toHaveLength(1);
+      expect(runtime.createdWorkletNodes[0]!.port.postMessage).not.toHaveBeenCalled();
+      expect(runtime.voiceInput.stop).not.toHaveBeenCalled();
       expect(stream.track.stop).toHaveBeenCalled();
     });
 
-    it("discards queued audio when the backend fails to start", async () => {
+    it("keeps the session finishing while a provider brought up by the stop connects", async () => {
+      const backendStart = deferred<{ ok: boolean }>();
+      runtime.startQueue.push(backendStart.promise);
+      const drain = deferred<void>();
+      runtime.stopQueue.push(drain.promise);
+
+      const { voiceRecordingService } = await import("../VoiceRecordingService");
+      const starting = voiceRecordingService.start(panelOne);
+      await vi.waitFor(() => {
+        expect(runtime.voiceInput.start).toHaveBeenCalledTimes(1);
+      });
+      emitChunk(0, 100);
+
+      const stopping = voiceRecordingService.stop("Dictation stopped.");
+      await vi.waitFor(() => {
+        expect(runtime.voiceInput.stop).toHaveBeenCalledTimes(1);
+      });
+      runtime.voiceFns.setStatus.mockClear();
+      emitStatus("connecting");
+      emitStatus("recording");
+      emitStatus("reconnecting");
+      emitStatus("finishing");
+      expect(runtime.voiceFns.setStatus.mock.calls).toEqual([["finishing"]]);
+
+      drain.resolve();
+      backendStart.resolve({ ok: true });
+      await Promise.all([stopping, starting]);
+      expect(runtime.voiceFns.finishSession).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaves audio already sent to main when the backend fails to start", async () => {
       const backendStart = deferred<{ ok: boolean; error?: string }>();
       runtime.startQueue.push(backendStart.promise);
 
@@ -681,12 +894,13 @@ describe("VoiceRecordingService adversarial", () => {
         expect(runtime.voiceInput.start).toHaveBeenCalledTimes(1);
       });
       expect(runtime.createdWorkletNodes[0]?.port.onmessage).toBeTypeOf("function");
-      emitChunk(0, 100);
+      // Main discards what it held for a start that fails; nothing is resent.
+      const chunk = emitChunk(0, 100);
 
       backendStart.resolve({ ok: false, error: "boom" });
       await starting;
 
-      expect(runtime.voiceInput.sendAudioChunk).not.toHaveBeenCalled();
+      expect(sent()).toEqual([chunk]);
       expect(runtime.createdStreams[0]!.track.stop).toHaveBeenCalled();
       expect(runtime.voiceFns.setLastError).toHaveBeenCalledWith(
         expect.objectContaining({ code: "backend_start_failed" })
@@ -702,35 +916,37 @@ describe("VoiceRecordingService adversarial", () => {
       await vi.waitFor(() => {
         expect(runtime.voiceInput.start).toHaveBeenCalledTimes(1);
       });
-      emitChunk(0, 100);
+      const chunk = emitChunk(0, 100);
 
       backendStart.reject(new Error("service import failed"));
       await expect(starting).resolves.toBeUndefined();
 
-      expect(runtime.voiceInput.sendAudioChunk).not.toHaveBeenCalled();
+      expect(sent()).toEqual([chunk]);
       expect(runtime.createdStreams[0]!.track.stop).toHaveBeenCalled();
       expect(runtime.createdAudioContexts[0]!.close).toHaveBeenCalled();
       expect(runtime.voiceFns.finishSession).toHaveBeenCalledWith({ nextStatus: "error" });
     });
 
-    it("caps the startup queue by dropping the oldest audio", async () => {
-      const backendStart = deferred<{ ok: boolean }>();
-      runtime.startQueue.push(backendStart.promise);
-
+    it("caps audio held through a retarget drain by dropping the oldest", async () => {
       const { voiceRecordingService } = await import("../VoiceRecordingService");
-      const starting = voiceRecordingService.start(panelOne);
+      await voiceRecordingService.start(panelOne);
+      runtime.voiceState.status = "recording";
+
+      const drain = deferred<void>();
+      runtime.stopQueue.push(drain.promise);
+      const retargeting = voiceRecordingService.start(panelTwo);
       await vi.waitFor(() => {
-        expect(runtime.voiceInput.start).toHaveBeenCalledTimes(1);
+        expect(runtime.voiceInput.stop).toHaveBeenCalledTimes(1);
       });
-      const chunks = Array.from({ length: 160 }, (_, i) => emitChunk(0, i));
+      const chunks = Array.from({ length: 160 }, (_, i) => emitChunk(1, i));
+      expect(sent()).toEqual([]);
 
-      backendStart.resolve({ ok: true });
-      await starting;
+      drain.resolve();
+      await retargeting;
 
-      const sent = runtime.voiceInput.sendAudioChunk.mock.calls.map(([, chunk]) => chunk);
-      expect(sent).toHaveLength(150);
-      expect(sent[0]).toBe(chunks[10]);
-      expect(sent[149]).toBe(chunks[159]);
+      expect(sent()).toHaveLength(150);
+      expect(sent()[0]).toBe(chunks[10]);
+      expect(sent()[149]).toBe(chunks[159]);
     });
 
     it("releases the microphone when the worklet fails to load", async () => {
@@ -787,7 +1003,7 @@ describe("VoiceRecordingService adversarial", () => {
       expect(runtime.voiceInput.stop).toHaveBeenLastCalledWith(secondId);
     });
 
-    it("marks the mic live from held audio before the backend connects (#13105)", async () => {
+    it("marks the mic live from audio captured before the backend connects (#13105)", async () => {
       const backendStart = deferred<{ ok: boolean }>();
       runtime.startQueue.push(backendStart.promise);
 
@@ -804,7 +1020,7 @@ describe("VoiceRecordingService adversarial", () => {
       );
 
       emitChunk(0, 10);
-      expect(runtime.voiceInput.sendAudioChunk).not.toHaveBeenCalled();
+      expect(runtime.voiceInput.sendAudioChunk).toHaveBeenCalledTimes(2);
       expect(runtime.voiceState.micSignal).toBe("live");
       expect(runtime.voiceFns.announce).toHaveBeenCalledWith(
         expect.stringContaining("Dictation started")
@@ -1462,8 +1678,8 @@ describe("VoiceRecordingService start diagnostics", () => {
       "audio_context_create",
       "get_user_media",
       "source_attach",
-      "backend_start",
       "startup_audio_flush",
+      "backend_start",
     ]);
     // Settings and permission reads run together, as do the microphone open
     // and the worklet load, so each pair is pinned only to its bracketing steps.
@@ -1568,7 +1784,7 @@ describe("VoiceRecordingService start diagnostics", () => {
     expect(logs[1]!.startRequestId).not.toBe(failedId);
   });
 
-  it("measures audio held before the backend is ready on arrival and logs its flush", async () => {
+  it("measures audio on arrival and sends it on while the backend is still starting", async () => {
     const backendStart = deferred<{ ok: boolean }>();
     runtime.startQueue.push(backendStart.promise);
     const { voiceRecordingService, sendChunk, steps } = await loadService();
@@ -1580,19 +1796,19 @@ describe("VoiceRecordingService start diagnostics", () => {
 
     const arrivalSteps = steps().filter((s) => String(s.step).startsWith("first_"));
     expect(arrivalSteps).toEqual([
-      expect.objectContaining({ step: "first_chunk", held: true }),
+      expect.objectContaining({ step: "first_chunk", held: false }),
       expect.objectContaining({ step: "first_nonzero_chunk", chunk: 2 }),
       expect.objectContaining({ step: "first_signal_chunk", chunk: 2 }),
     ]);
-    expect(runtime.voiceInput.sendAudioChunk).not.toHaveBeenCalled();
+    expect(runtime.voiceInput.sendAudioChunk).toHaveBeenCalledTimes(2);
+    // Capture attaches right before the start request, so nothing was held.
+    expect(steps().find((s) => s.step === "startup_audio_flush")).toMatchObject({
+      chunks: 0,
+      droppedChunks: 0,
+    });
 
     backendStart.resolve({ ok: true });
     await starting;
-
-    expect(steps().find((s) => s.step === "startup_audio_flush")).toMatchObject({
-      chunks: 2,
-      droppedChunks: 0,
-    });
     expect(runtime.voiceInput.sendAudioChunk).toHaveBeenCalledTimes(2);
   });
 

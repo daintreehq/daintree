@@ -76,11 +76,17 @@ interface VoiceSession {
   readonly controller: AbortController;
   unsubscribe: (() => void) | null;
   unwatchDestroyed: (() => void) | null;
-  // The renderer streams audio as soon as capture is attached, before main has
-  // loaded the service, assembled keyterms, and created a provider. Chunks for
-  // a session still starting are held here and handed to its provider exactly
-  // once; without this they'd go to no provider, or to the previous session's.
+  // The renderer streams audio from the moment it sends the start request,
+  // before main has loaded the service, assembled keyterms, and created a
+  // provider. Chunks for a session still starting are held here and handed to
+  // its provider exactly once; without this they'd go to no provider, or to the
+  // previous session's.
   preStartAudio: { chunks: ArrayBuffer[]; bytes: number; overflowed: boolean } | null;
+  // Settles once the held audio is in this session's provider, or once the
+  // session has ended, so a stop that lands while it is still starting can
+  // wait for the handoff instead of discarding what was said.
+  readonly handedOff: Promise<void>;
+  readonly markHandedOff: () => void;
   // Overflow can be hit both here and in the provider's own connect buffer —
   // one report per session is enough.
   overflowReported: boolean;
@@ -117,6 +123,7 @@ function endSession(session: VoiceSession, reason: VoiceSessionEndReason): void 
   session.ended = true;
   if (liveSession === session) liveSession = null;
   session.preStartAudio = null;
+  session.markHandedOff();
   session.unsubscribe?.();
   session.unsubscribe = null;
   session.unwatchDestroyed?.();
@@ -500,6 +507,10 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // Published before the first await, so a stop or a newer start landing
     // during the service import or keyterm assembly sees this session, and its
     // audio buffer is armed before any chunk of this capture can arrive.
+    let markHandedOff!: () => void;
+    const handedOff = new Promise<void>((resolve) => {
+      markHandedOff = resolve;
+    });
     const session: VoiceSession = {
       id: sessionId,
       sender,
@@ -514,6 +525,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       unwatchDestroyed: null,
       preStartAudio: { chunks: [], bytes: 0, overflowed: false },
       overflowReported: false,
+      handedOff,
+      markHandedOff,
     };
     const previous = liveSession;
     liveSession = session;
@@ -541,6 +554,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     } catch (error) {
       if (session.phase !== "stopping") endSession(session, "failed");
       throw error;
+    } finally {
+      session.markHandedOff();
     }
     if (outcome.status === "failed" && session.phase !== "stopping") {
       endSession(session, "failed");
@@ -770,6 +785,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     session.phase = "active";
     const startPromise = svc.start({ ...settings, keyterms }, session.id);
     flushPreStartAudio(session, svc);
+    session.markHandedOff();
     const result = await startPromise;
     const providerSettledAt = performance.now();
     logInfo("[VoiceInput] Start timing — provider settled", {
@@ -787,14 +803,23 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // Another view's session, or one that has already ended.
     if (!session || session.id !== sessionId) return { rawText: null };
     if (session.stopPromise) return session.stopPromise;
-    // Still preparing, so no provider has any of its audio. Ending it makes the
-    // start bail at its next check instead of bringing the session up.
-    if (session.phase === "starting") {
+    // Still preparing, with nothing held: ending it makes the start bail at its
+    // next check instead of bringing the session up and opening a socket.
+    if (session.phase === "starting" && !session.preStartAudio?.chunks.length) {
       endSession(session, "cancelled");
       return { rawText: null };
     }
-    session.phase = "stopping";
     session.stopPromise = (async () => {
+      // The renderer sends every chunk it captured before this stop, so audio
+      // held for a session still loading the service or assembling keyterms is
+      // the whole dictation so far. Let the start hand it to the provider, then
+      // drain the provider like any other session: its stop-before-ready path
+      // transcribes the buffered audio once connected.
+      if (session.phase === "starting") await session.handedOff;
+      // Superseded, failed, or its view went away before the handoff; whatever
+      // ended it chose the reason and owns the provider.
+      if (session.ended) return { rawText: null };
+      session.phase = "stopping";
       try {
         // Drain the transcription service first (waits for pending
         // transcriptions, fires remaining complete events) — the subscription

@@ -25,6 +25,7 @@ vi.mock("../../../utils/logger.js", () => ({
 type ServiceEvent = {
   type: string;
   sessionId?: string;
+  text?: string;
   error?: { code: string; severity: string };
 };
 
@@ -44,6 +45,8 @@ const shared = vi.hoisted(() => ({
   providerSessionId: null as string | null,
   /** The project of the view sending the start. */
   viewProjectId: null as string | null,
+  /** When set, stopGracefully() returns this instead of resolving immediately. */
+  drainPromise: null as null | Promise<void>,
 }));
 
 vi.mock("../../../window/webContentsRegistry.js", async (importOriginal) => ({
@@ -54,8 +57,12 @@ vi.mock("../../../window/webContentsRegistry.js", async (importOriginal) => ({
 vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
   VoiceTranscriptionService: function VoiceTranscriptionService(this: Record<string, unknown>) {
     this.onEvent = function (cb: (e: ServiceEvent) => void) {
-      shared.eventCallback = (e) => cb({ ...e, sessionId: shared.providerSessionId ?? undefined });
-      return () => {};
+      const forward = (e: ServiceEvent) =>
+        cb({ ...e, sessionId: shared.providerSessionId ?? undefined });
+      shared.eventCallback = forward;
+      return () => {
+        if (shared.eventCallback === forward) shared.eventCallback = null;
+      };
     };
     this.start = function (_settings: unknown, sessionId: string) {
       shared.providerSessionId = sessionId;
@@ -67,7 +74,8 @@ vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
       shared.calls.push(`chunk:${new Uint8Array(chunk)[0]}`);
     };
     this.stopGracefully = function () {
-      return Promise.resolve();
+      shared.calls.push("stopGracefully");
+      return shared.drainPromise ?? Promise.resolve();
     };
     this.stop = function () {
       shared.stops++;
@@ -231,6 +239,7 @@ describe("voiceInput — audio sent before the provider starts", () => {
     shared.assembleKeyterms = null;
     shared.sessionSignal = null;
     shared.providerSessionId = null;
+    shared.drainPromise = null;
     sender.destroyed = false;
     sender.onDestroyed = null;
     fakeEvent.sender = makeSender();
@@ -277,19 +286,72 @@ describe("voiceInput — audio sent before the provider starts", () => {
     expect(shared.calls).toEqual(["start", "chunk:1", "chunk:2", "chunk:3", "chunk:4"]);
   });
 
-  it("discards held audio when a stop lands before the provider starts", async () => {
+  it("drains held audio when a stop lands before the provider starts", async () => {
+    let resolveStart!: (r: StartResult) => void;
+    shared.startPromise = new Promise((r) => {
+      resolveStart = r;
+    });
+    let finishDrain!: () => void;
+    shared.drainPromise = new Promise((r) => {
+      finishDrain = r;
+    });
     const resolveKeyterms = deferKeyterms();
     const pending = start();
     sendChunk(1);
+    sendChunk(2);
+    const stopping = stop();
+    await vi.waitFor(() => expect(shared.eventCallback).not.toBeNull());
+    expect(shared.calls).toEqual([]);
+
+    resolveKeyterms([]);
+    // The stop reaches the provider while it is still connecting, already
+    // holding the audio, so its stop-before-ready path can transcribe it.
+    await vi.waitFor(() => expect(shared.calls).toContain("stopGracefully"));
+    expect(shared.calls).toEqual(["start", "chunk:1", "chunk:2", "stopGracefully"]);
+
+    // The provider connects and transcribes while the stop drains it.
+    resolveStart({ ok: true });
+    await expect(pending).resolves.toEqual({ ok: true });
+    shared.eventCallback!({ type: "complete", text: "Yes, carry on" });
+    finishDrain();
+    await stopping;
+    expect(sent).toContainEqual({
+      channel: "voice-input:transcription-complete",
+      payload: { sessionId: currentSessionId, text: "Yes, carry on", willCorrect: false },
+    });
+
+    // The next session must not replay the stopped session's audio.
+    shared.calls = [];
+    const next = start();
+    sendChunk(3);
+    await expect(next).resolves.toEqual({ ok: true });
+    expect(shared.calls).toEqual(["start", "chunk:3"]);
+  });
+
+  it("cancels a start without opening a provider when a stop lands before any audio", async () => {
+    const resolveKeyterms = deferKeyterms();
+    const pending = start();
     await stop();
     resolveKeyterms([]);
     await expect(pending).resolves.toEqual({ ok: false, error: "Voice session superseded" });
+    expect(shared.calls).not.toContain("start");
+  });
 
-    // The next session must not replay the cancelled session's audio.
+  it("leaves a newer start alone when it supersedes a start a stop is draining", async () => {
+    const resolveFirst = deferKeyterms();
+    const first = start();
+    sendChunk(1);
+    const stopping = stop();
+    await vi.waitFor(() => expect(shared.eventCallback).not.toBeNull());
+
     shared.assembleKeyterms = null;
-    const next = start();
+    const second = start();
     sendChunk(2);
-    await expect(next).resolves.toEqual({ ok: true });
+    resolveFirst([]);
+
+    await expect(first).resolves.toEqual({ ok: false, error: "Voice session superseded" });
+    await expect(second).resolves.toEqual({ ok: true });
+    await stopping;
     expect(shared.calls).toEqual(["start", "chunk:2"]);
   });
 
@@ -414,6 +476,18 @@ describe("voiceInput — audio sent before the provider starts", () => {
     expect(shared.sessionSignal).toBe(secondSignal);
   });
 
+  it("holds 15 seconds of startup audio without dropping any", async () => {
+    const resolveKeyterms = deferKeyterms();
+    const pending = start();
+    // 150 chunks of 100ms at 24kHz mono PCM16: speech held through a slow connect.
+    for (let i = 0; i < 150; i++) sendChunk(i % 256, 4800);
+
+    resolveKeyterms([]);
+    await pending;
+    expect(shared.calls.filter((c) => c.startsWith("chunk:"))).toHaveLength(150);
+    expect(overflowErrors()).toHaveLength(0);
+  });
+
   it("drops the newest audio past the chunk cap and reports it once", async () => {
     const resolveKeyterms = deferKeyterms();
     const pending = start();
@@ -515,7 +589,7 @@ describe("voiceInput — audio sent before the provider starts", () => {
 
     await stop();
     sendChunk(10);
-    expect(shared.calls).toEqual(["chunk:9"]);
+    expect(shared.calls.filter((c) => c.startsWith("chunk:"))).toEqual(["chunk:9"]);
   });
 });
 

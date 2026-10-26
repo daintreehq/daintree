@@ -116,7 +116,10 @@ function createStream(track: FakeTrack) {
 }
 
 interface WorkletNode {
-  port: { onmessage: ((event: { data: ArrayBuffer }) => void) | null; postMessage: Listener };
+  port: {
+    onmessage: ((event: { data: unknown }) => void) | null;
+    postMessage: (message: unknown) => void;
+  };
   connect: Listener;
   disconnect: Listener;
 }
@@ -230,7 +233,15 @@ function setupGlobals(options: {
   });
   vi.stubGlobal("AudioWorkletNode", function () {
     const node: WorkletNode = {
-      port: { onmessage: null, postMessage: vi.fn() },
+      port: {
+        onmessage: null,
+        // Like the real worklet, a stop's flush is answered asynchronously,
+        // behind any chunk it already posted.
+        postMessage: vi.fn((message: unknown) => {
+          if ((message as { type?: string } | null)?.type !== "flush") return;
+          void Promise.resolve().then(() => node.port.onmessage?.({ data: { type: "flushed" } }));
+        }),
+      },
       connect: vi.fn(),
       disconnect: vi.fn(),
     };
