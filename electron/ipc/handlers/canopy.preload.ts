@@ -29,6 +29,7 @@ export const CANOPY_METHOD_CHANNELS = {
   captureBackdrop: "canopy:capture-backdrop",
   setMode: "canopy:set-mode",
   getModel: "canopy:get-model",
+  getSizeHolds: "canopy:get-size-holds",
   retryModel: "canopy:retry-model",
   removeModels: "canopy:remove-models",
   terminalInput: "canopy:terminal-input",

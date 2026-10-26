@@ -62,6 +62,9 @@ export interface GeneratedElectronAPI {
     getModel(
       ...args: IpcInvokeMap["canopy:get-model"]["args"]
     ): Promise<IpcInvokeMap["canopy:get-model"]["result"]>;
+    getSizeHolds(
+      ...args: IpcInvokeMap["canopy:get-size-holds"]["args"]
+    ): Promise<IpcInvokeMap["canopy:get-size-holds"]["result"]>;
     getSnapshot(
       ...args: IpcInvokeMap["canopy:get-snapshot"]["args"]
     ): Promise<IpcInvokeMap["canopy:get-snapshot"]["result"]>;

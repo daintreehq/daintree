@@ -220,6 +220,12 @@ export interface CanopyTerminalView {
     /** What the snapshot covers up to; chunks at or before it are already in it. */
     continuation?: import("../terminal.js").SnapshotContinuation;
   } | null;
+  /**
+   * The host holds the PTY at the size the view asks for while it may drive
+   * the run (#14497). Absent from a host that predates it, which a view on
+   * another machine then never asks to size.
+   */
+  holdsSize?: boolean;
 }
 
 /**

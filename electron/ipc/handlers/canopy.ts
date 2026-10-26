@@ -35,6 +35,7 @@ import { store } from "../../store.js";
 import { hostInstanceId } from "../../services/hostInstance.js";
 import { traced } from "../../services/canopy/canopyTrace.js";
 import {
+  broadcastToRenderer,
   checkRateLimit,
   endpointPushTarget,
   getProjectPushTargets,
@@ -51,6 +52,9 @@ import { CANOPY_METHOD_CHANNELS } from "./canopy.preload.js";
 import {
   beginWatchRequest,
   isCurrentWatchRequest,
+  onSizeHoldsChange,
+  publishSizeHolds,
+  remoteSizeHolds,
   stopAllTerminalWatches,
   stopWorkerTerminalWatches,
   resizeWatchedTerminal,
@@ -930,9 +934,9 @@ function drivenElsewhere(projectId: string | null): AppError {
 }
 
 /**
- * A panel reading this host from a view bound elsewhere. It types as its own
- * machine's windows do, but never sizes a terminal (the window showing it here
- * owns that) and has no files on this machine to attach.
+ * A panel reading this host from a view bound elsewhere. It types and sizes a
+ * worker's terminal as its own machine's windows do, but has no files on this
+ * machine to attach.
  */
 function isViewer(ctx: IpcContext): boolean {
   return isCanopyViewerEndpointId(ctx.endpoint.endpointId);
@@ -1023,6 +1027,17 @@ function assertMayType(watched: { assistant: boolean; mayType: boolean }): void 
   }
 }
 
+let offDriveLease: (() => void) | null = null;
+
+/**
+ * A viewer that stops driving stops holding: the lease moving unpublishes its
+ * hold at once, so the new driver's panes fit again without waiting for the
+ * stream to end.
+ */
+function followDriveLease(): void {
+  offDriveLease ??= peekDriveLeaseService()?.onChange(() => publishSizeHolds()) ?? null;
+}
+
 function assertDrivesRun(ctx: IpcContext, runId: string): void {
   if (!drivesRun(ctx, runId)) throw drivenElsewhere(requirePtyClient().getTerminalProjectId(runId));
 }
@@ -1101,15 +1116,23 @@ export const canopyNamespace = defineIpcNamespace({
         if (generation !== null && !ptyClient.isLiveGeneration(runId, generation)) {
           throw new Error("That agent isn't running any more.");
         }
-        return watchTerminal(
+        const remote = isViewer(ctx);
+        if (remote) followDriveLease();
+        const view = await watchTerminal(
           ptyClient,
           viewOf(ctx),
           runId,
           target.spawnedAt,
           ticket,
           generation,
-          isViewer(ctx) ? () => false : () => drivesRun(ctx, runId)
+          // Sizing follows typing: only while the view drives the run's project.
+          () => drivesRun(ctx, runId),
+          null,
+          remote
         );
+        // Says to a panel on another machine that this host takes its size;
+        // one that predates it says nothing, and is never asked.
+        return view.watchId === null ? view : { ...view, holdsSize: true };
       },
       { withContext: true }
     ),
@@ -1293,6 +1316,16 @@ export const canopyNamespace = defineIpcNamespace({
     ),
 
     /** The model, and whether it is on this machine. */
+    /**
+     * The terminals a panel on another machine holds at its own size, for a
+     * window here to freeze their panes. Not gated on Canopy: any window with
+     * the terminal open needs it, and with Canopy off the list is empty.
+     */
+    getSizeHolds: op(
+      CANOPY_METHOD_CHANNELS.getSizeHolds,
+      async (): Promise<string[]> => remoteSizeHolds()
+    ),
+
     getModel: op(CANOPY_METHOD_CHANNELS.getModel, async (): Promise<CanopyModelInfo> =>
       getModels().info()
     ),
@@ -1366,10 +1399,11 @@ export const canopyNamespace = defineIpcNamespace({
       async (ctx, watchId: number, cols: number, rows: number): Promise<void> => {
         requireActivatedUnlessAssistant(ctx.webContentsId, watchId);
         checkRateLimit(CANOPY_METHOD_CHANNELS.terminalResize, 60, 10_000);
-        if (isViewer(ctx)) return;
         // Ignored rather than refused, as `terminal:resize` ignores one: the
         // panel keeps reading at whatever size the driver's pane gave it.
         const watched = watchedTerminal(ctx.webContentsId, watchId);
+        // A viewer's assistant follows the size this machine's own window gave it.
+        if (isViewer(ctx) && watched?.assistant !== false) return;
         if (watched && !drivesRun(ctx, watched.runId)) return;
         // Another window's session to size: this one only reads it.
         if (watched && !watched.mayType) return;
@@ -1815,10 +1849,18 @@ export function registerCanopyHandlers(): () => void {
   // Canopy made is over, and its receipt must not restore a later one.
   const offRestored = events.on("terminal:restored", ({ id }) => onHostRestored(id));
   const offHandBack = events.on("terminal:hand-back-changed", onHandBackChanged);
+  const offSizeHolds = onSizeHoldsChange((terminalIds) =>
+    broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
+      name: "terminal:canopy-size-holds-changed",
+      payload: terminalIds,
+    })
+  );
   return () => {
     unregister();
     offRestored();
     offHandBack();
+    offDriveLease?.();
+    offDriveLease = null;
     unsubscribeFleet?.();
     unsubscribeFleet = null;
     unsubscribeInput?.();
@@ -1831,6 +1873,7 @@ export function registerCanopyHandlers(): () => void {
     recentlyTrashed.clear();
     ownRestores.clear();
     stopAllTerminalWatches();
+    offSizeHolds();
     setCanopyRefinementSource(null);
     service?.dispose();
     service = null;

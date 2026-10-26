@@ -98,6 +98,7 @@ export const CHANNEL_LEASE_POLICY = {
   "canopy:set-active": "free",
   "canopy:set-mode": "free",
   "canopy:get-model": "free",
+  "canopy:get-size-holds": "free",
   "canopy:retry-model": "free",
   "canopy:remove-models": "free",
   "canopy:set-read": "free",

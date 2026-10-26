@@ -72,6 +72,8 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   "terminal:submit-status": "external",
   // Broadcast by the MCP server handlers whenever a hand-over starts or ends.
   "terminal:adoptions-changed": "external",
+  // Broadcast by the Canopy handlers whenever a panel on another machine takes or lets go of a terminal's size.
+  "terminal:canopy-size-holds-changed": "external",
 
   // Sent project-scoped by the MCP terminal-notify service.
   "terminal:notify-state": "external",

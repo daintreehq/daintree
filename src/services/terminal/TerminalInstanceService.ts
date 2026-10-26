@@ -10,6 +10,7 @@ import {
 } from "@/lib/viewCacheState";
 import { terminalClient } from "@/clients";
 import { getDriveLeaseSnapshot, subscribeDriveLeaseSnapshot } from "./inputGate";
+import { isCanopySizeHeld, subscribeCanopySizeHolds } from "./canopySizeHolds";
 import { TerminalRefreshTier } from "@/types";
 import type { AgentState } from "@/types";
 import type { RendererTerminalBufferCounts } from "@shared/types/memoryAccounting";
@@ -247,10 +248,12 @@ class TerminalInstanceService {
   private unsubResizeResult: (() => void) | null = null;
   private unsubExit: (() => void) | null = null;
   private unsubDriveLease: (() => void) | null = null;
+  private unsubCanopySizeHolds: (() => void) | null = null;
   /**
-   * Terminals held at the PTY's grid because another frontend drives this
-   * project and owns its size (#13282). One controller hold each, released
-   * together when this view takes the project over.
+   * Terminals held at the PTY's grid because another frontend owns their size:
+   * it drives this project (#13282), or a Canopy panel on another machine
+   * holds the terminal (#14497). One controller hold each, released when
+   * neither does any more.
    */
   private watchHolds = new Set<string>();
   /** Bumped by each echo for an id, so a seed read before it can't land after it. */
@@ -1336,6 +1339,7 @@ class TerminalInstanceService {
   private ensureDriveLeaseSubscription(): void {
     if (this.unsubDriveLease) return;
     this.unsubDriveLease = subscribeDriveLeaseSnapshot(() => this.syncWatchMode());
+    this.unsubCanopySizeHolds = subscribeCanopySizeHolds(() => this.syncWatchMode());
   }
 
   /**
@@ -1348,16 +1352,20 @@ class TerminalInstanceService {
     return lease !== null && !lease.drivingHere && lease.holder !== null;
   }
 
+  private followsPty(id: string): boolean {
+    return this.isWatching() || isCanopySizeHeld(id);
+  }
+
   private syncWatchMode(): void {
-    if (!this.isWatching()) {
-      this.stopWatching();
-      return;
-    }
+    if (!this.isWatching()) this.watchEpoch += 1;
     // A seed that failed (the link dropped mid-read) gets another go on the
     // next lease answer, which a reconnect always brings.
     const retry = [...this.watchUnseeded];
-    this.instances.forEach((managed, id) => this.watchTerminal(id, managed));
-    for (const id of retry) this.seedWatchedGeometry(id);
+    this.stopWatching([...this.watchHolds].filter((id) => !this.followsPty(id)));
+    this.instances.forEach((managed, id) => {
+      if (this.followsPty(id)) this.watchTerminal(id, managed);
+    });
+    for (const id of retry) if (this.watchHolds.has(id)) this.seedWatchedGeometry(id);
   }
 
   private watchTerminal(id: string, managed: ManagedTerminal): void {
@@ -1407,15 +1415,14 @@ class TerminalInstanceService {
   }
 
   /**
-   * This view drives again (it took the project over, or the lease is gone):
-   * re-fit every watched pane to its own box and send that to the PTY, in one
-   * pass so the panes don't supersede one another's.
+   * This view sizes these panes again (it took the project over, the lease is
+   * gone, or Canopy let the terminal go): re-fit each to its own box and send
+   * that to the PTY, in one pass so the panes don't supersede one another's.
    */
-  private stopWatching(): void {
-    this.watchEpoch += 1;
-    if (this.watchHolds.size === 0) return;
+  private stopWatching(ids: readonly string[]): void {
+    if (ids.length === 0) return;
     const refit: string[] = [];
-    for (const id of this.watchHolds) {
+    for (const id of ids) {
       const managed = this.instances.get(id);
       if (managed) {
         // The PTY was last sized by the other frontend, and the pane's box was
@@ -1427,11 +1434,11 @@ class TerminalInstanceService {
         managed.reassertPtyGrid = true;
         this.resizeController.invalidatePtyGrid(id);
       }
+      this.watchHolds.delete(id);
+      this.watchEchoSeq.delete(id);
+      this.watchUnseeded.delete(id);
       if (this.resizeController.releaseGeometry(id) && managed) refit.push(id);
     }
-    this.watchHolds.clear();
-    this.watchEchoSeq.clear();
-    this.watchUnseeded.clear();
     if (refit.length > 0) this.runResizePass(refit, { immediate: true });
   }
 
@@ -1810,7 +1817,7 @@ class TerminalInstanceService {
     this.instances.set(id, managed);
     this.ensureResizeResultSubscription();
     this.ensureDriveLeaseSubscription();
-    if (this.isWatching()) this.watchTerminal(id, managed);
+    if (this.followsPty(id)) this.watchTerminal(id, managed);
 
     const initialTier = getRefreshTier ? getRefreshTier() : TerminalRefreshTier.FOCUSED;
     this.rendererPolicy.applyRendererPolicy(id, initialTier);
@@ -3987,6 +3994,8 @@ class TerminalInstanceService {
     this.unsubExit = null;
     this.unsubDriveLease?.();
     this.unsubDriveLease = null;
+    this.unsubCanopySizeHolds?.();
+    this.unsubCanopySizeHolds = null;
     this.workerIngestController.dispose();
     this.resizePassScheduler.dispose();
     this.reflowController.dispose();

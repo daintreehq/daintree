@@ -170,6 +170,7 @@ export interface GeneratedIpcInvokeMap {
         | "canopy:set-scope"
         | "canopy:set-shown"
         | "canopy:terminal-input"
+        | "canopy:terminal-resize"
         | "canopy:terminal-send-key"
         | "canopy:terminal-submit"
         | "canopy:trash"
@@ -253,6 +254,10 @@ export interface GeneratedIpcInvokeMap {
   "canopy:get-model": {
     args: [];
     result: import("./canopy.js").CanopyModelInfo;
+  };
+  "canopy:get-size-holds": {
+    args: [];
+    result: string[];
   };
   "canopy:get-snapshot": {
     args: [];

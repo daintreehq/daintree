@@ -136,9 +136,10 @@ export function canopyBulkTransport(
 
 /**
  * What the live pane, its composer and the one-key answers ask of the host the
- * run is on. `holdsSize` is the window's own host alone: a panel reading
- * another host follows the size that host's window gave the terminal, and
- * takes nothing it would have to hand back.
+ * run is on. `holdsSize` is the window's own host alone, whose pane in this
+ * view is frozen from here. Another host sizes its terminal only when its
+ * watch answer says it will (`CanopyTerminalView.holdsSize`), and freezes its
+ * own panes itself.
  */
 export interface CanopyTerminalApi {
   holdsSize: boolean;
@@ -174,7 +175,7 @@ export const ownCanopyTerminalApi: CanopyTerminalApi = {
   onResync: NO_RESYNC,
 };
 
-/** The same, on another host's Canopy; its terminal is never resized from here. */
+/** The same, on another host's Canopy. */
 export function remoteCanopyTerminalApi(hostId: HostId): CanopyTerminalApi {
   const on =
     <C extends CanopyHostChannel>(channel: C) =>
@@ -185,7 +186,7 @@ export function remoteCanopyTerminalApi(hostId: HostId): CanopyTerminalApi {
     watchTerminal: on("canopy:watch-terminal"),
     unwatchTerminal: on("canopy:unwatch-terminal"),
     terminalInput: on("canopy:terminal-input"),
-    terminalResize: () => Promise.resolve(),
+    terminalResize: on("canopy:terminal-resize"),
     terminalSubmit: on("canopy:terminal-submit"),
     terminalSendKey: on("canopy:terminal-send-key"),
     answer: on("canopy:answer"),

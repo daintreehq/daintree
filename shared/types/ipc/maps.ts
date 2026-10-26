@@ -1552,6 +1552,9 @@ export interface IpcEventMap {
   // Every terminal currently handed to an orchestrating pane (#12490). The
   // whole list on each change: it is small and rarely changes.
   "terminal:adoptions-changed": import("./mcpServer.js").TerminalAdoptionEntry[];
+  // The terminals a Canopy panel on another machine holds at its own size (#14497);
+  // their panes follow the PTY's grid instead of fitting.
+  "terminal:canopy-size-holds-changed": string[];
   // A pane's pending terminal notices changed; project-scoped send.
   "terminal:notify-state": import("../terminalNotify.js").PaneNotifyState;
   "terminal:reliability-metric": TerminalReliabilityMetricPayload;
@@ -2599,6 +2602,7 @@ export type IpcEventBusMap = Pick<
   | "terminal:submit-status"
   // Terminals handed to an orchestrating pane (global broadcast)
   | "terminal:adoptions-changed"
+  | "terminal:canopy-size-holds-changed"
   | "terminal:notify-state"
   // Agent session journaled — resume surfaces refetch (global broadcast)
   | "agent-session:recorded"
