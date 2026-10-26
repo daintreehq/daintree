@@ -209,8 +209,8 @@ export interface AllHostsRoute {
 /**
  * The calls the inbox makes, sent to the host each run is on and to no other:
  * a key says whose run it is, and a write goes with the incarnation the panel
- * showed. The scope turns nothing on — `setMode` is refused — and sizes no
- * terminal.
+ * showed. The scope turns nothing on — `setMode` is refused — and sizes only
+ * this machine's terminals.
  */
 export function createAllHostsRoute(ownHostId: HostId, hostIds: readonly HostId[]): AllHostsRoute {
   const apiFor = (hostId: HostId): CanopyApi =>
@@ -387,6 +387,10 @@ export function createAllHostsRoute(ownHostId: HostId, hostIds: readonly HostId[
 
   const terminalApi: CanopyTerminalApi = {
     holdsSize: false,
+    ownSizedId: (key) => {
+      const parsed = parseAllHostsKey(key);
+      return parsed && parsed.hostId === ownHostId && known.has(ownHostId) ? parsed.id : null;
+    },
     watchTerminal: async (key, target): Promise<CanopyTerminalView> => {
       const parsed = parseAllHostsKey(key);
       if (!parsed || !known.has(parsed.hostId)) return unknownRun();
@@ -459,7 +463,13 @@ export function createAllHostsRoute(ownHostId: HostId, hostIds: readonly HostId[
       const watch = watchOf(mine);
       return watch ? terminalFor(watch.hostId).terminalInput(watch.raw, data) : Promise.resolve();
     },
-    terminalResize: () => Promise.resolve(),
+    terminalResize: (mine, cols, rows) => {
+      const watch = watchOf(mine);
+      // Another host's terminal keeps the size its own window gave it.
+      return watch && watch.hostId === ownHostId
+        ? ownCanopyTerminalApi.terminalResize(watch.raw, cols, rows)
+        : Promise.resolve();
+    },
     terminalSubmit: (mine, text, imagePaths) => {
       const watch = watchOf(mine);
       return watch

@@ -203,6 +203,10 @@ export function CanopyTerminal({
       (error: unknown) => logWarn("[Canopy] couldn't load the WebGL renderer", { error })
     );
 
+    // The local terminal's own id: a routed run is keyed by host, the terminal service is not.
+    const localId = api.holdsSize ? runId : (api.ownSizedId?.(runId) ?? null);
+    const holdsSize = localId !== null;
+
     let inset = FRAME_PADDING_PX;
     const bufferChange = terminal.buffer.onBufferChange((buffer) => {
       const alternate = buffer.type === "alternate";
@@ -225,7 +229,7 @@ export function CanopyTerminal({
         const watchId = stream.watchId;
         const cell = getXtermCellDimensions(terminal);
         // Another host's terminal keeps the size its own window gave it.
-        if (disposed || watchId === null || cell === null || !api.holdsSize) return;
+        if (disposed || watchId === null || cell === null || !holdsSize) return;
         // Fractional bounds, truncated, as the grid pane measures them: a
         // rounded-up clientWidth can promise a column the pane hasn't got.
         const box = frame.getBoundingClientRect();
@@ -445,8 +449,8 @@ export function CanopyTerminal({
       }
       view = opened;
       // The pane in this view is frozen only for a terminal this view sizes.
-      if (api.holdsSize && releasePane === null) {
-        releasePane = subscribeTerminalServiceWhenReady((service) => service.holdGeometry(runId));
+      if (localId !== null && releasePane === null) {
+        releasePane = subscribeTerminalServiceWhenReady((service) => service.holdGeometry(localId));
       }
       const snapshot = opened.snapshot;
       ptySize = { cols: snapshot.cols, rows: snapshot.rows };

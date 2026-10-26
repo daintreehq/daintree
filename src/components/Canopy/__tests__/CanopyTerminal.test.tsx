@@ -493,6 +493,30 @@ describe("CanopyTerminal", () => {
       expect(terminalResize).not.toHaveBeenCalled();
     });
 
+    it("sizes and freezes by the terminal's own id when the route says the run is this machine's", async () => {
+      cell.current = { width: 8, height: 16 };
+      const remote = remoteApi();
+      remote.api.ownSizedId = (key) => (key === "own:run-1" ? "run-1" : null);
+      const view = render(
+        <CanopyTerminal
+          runId="own:run-1"
+          spawnedAt={100}
+          api={remote.api}
+          reconnecting={false}
+          onStreamChange={() => {}}
+        />
+      );
+      view.container.querySelector("[data-canopy-terminal]")!.getBoundingClientRect = paneRect;
+      await act(async () =>
+        remote.opens[0]!({ watchId: 3, snapshot: { data: "S", cols: 90, rows: 30 } })
+      );
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, PAST_SIZE_SETTLE_MS));
+      });
+      expect(pane.events).toEqual(["hold run-1"]);
+      expect(remote.api.terminalResize).toHaveBeenCalledWith(3, 99, 30);
+    });
+
     it("stops input while the link is down, says so, and starts again from a fresh screen", async () => {
       const remote = remoteApi();
       const view = mountRemote(remote);
