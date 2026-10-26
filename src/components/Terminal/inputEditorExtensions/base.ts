@@ -630,34 +630,6 @@ export function createPlainPasteKeymap(): Extension {
 }
 
 /**
- * The one change that turns `current` into `next`, leaving their common start
- * and end untouched. A draft written from outside — a plugin handoff appended
- * below the user's text, a voice insert — arrives as a whole new string; as a
- * whole-document replacement it would drop every chip field entry it overlaps,
- * image attachments included, even though that text did not change.
- */
-export function minimalDocChange(
-  current: string,
-  next: string
-): { from: number; to: number; insert: string } | null {
-  if (current === next) return null;
-  const shorter = Math.min(current.length, next.length);
-  let start = 0;
-  while (start < shorter && current.charCodeAt(start) === next.charCodeAt(start)) start++;
-  let endCurrent = current.length;
-  let endNext = next.length;
-  while (
-    endCurrent > start &&
-    endNext > start &&
-    current.charCodeAt(endCurrent - 1) === next.charCodeAt(endNext - 1)
-  ) {
-    endCurrent--;
-    endNext--;
-  }
-  return { from: start, to: endCurrent, insert: next.slice(start, endNext) };
-}
-
-/**
  * The remove control an attachment chip ends in. Pointer-only by construction,
  * like a `RowControlTooltip` control: the chip is `role="img"`, whose children
  * are presentational, so a button here took a tab stop that assistive tech

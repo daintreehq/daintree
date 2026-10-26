@@ -13,9 +13,9 @@ export {
   createContentAttributes,
   createComboboxAttributes,
   createPlainPasteKeymap,
-  minimalDocChange,
   removeChipRange,
 } from "./base";
+export { minimalDocChange } from "@/lib/textRangeMapping";
 export type { AutoSizeConfig, ComboboxAttributes } from "./base";
 
 export {
