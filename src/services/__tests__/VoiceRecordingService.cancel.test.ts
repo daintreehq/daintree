@@ -545,6 +545,55 @@ describe("VoiceRecordingService — Escape cancels a dictation (#14631)", () => 
     expect(ipc.cancel).toHaveBeenCalledOnce();
   });
 
+  it.each(["push-to-talk", "tap-or-hold"])(
+    "lets go of a %s press still held when Escape cancels, so its release does nothing",
+    async (recordingMode) => {
+      const { service, voiceStore, draft, settled } = await setup("Existing.");
+      // The settings read initialize() started lands first.
+      await service.refreshConfiguration();
+      Reflect.set(service, "recordingMode", recordingMode);
+      const { keybindingService } = await import("@/services/KeybindingService");
+      vi.mocked(keybindingService.getEffectiveCombos).mockImplementation((actionId: string) =>
+        actionId === "voiceInput.toggle" ? ["Cmd+D"] : []
+      );
+      vi.mocked(keybindingService.matchesEvent).mockImplementation(
+        (e: KeyboardEvent) => e.code === "KeyD"
+      );
+      const fire = (type: string, init: object) => {
+        const event = Object.assign(new Event(type), init);
+        for (const [eventType, listener] of vi.mocked(window.addEventListener).mock.calls) {
+          if (eventType !== type) continue;
+          if (typeof listener === "function") listener(event);
+          else listener.handleEvent(event);
+        }
+      };
+
+      fire("keydown", { code: "KeyD", key: "d", repeat: false, metaKey: true });
+      // The start the press dispatched claims it.
+      service["claimHeldPress"]();
+      complete("Hello.", "item-a");
+      // Held long enough, with speech, that its release would stop a recording.
+      const speech = { samples: 1_600, rms: 0.1, peak: 0.3, zeroFraction: 0 };
+      service["noteHeldPressAudio"](speech);
+      service["noteHeldPressAudio"](speech);
+      service["heldPress"]!.pressedAt -= 1_000;
+
+      expect(service.handleEscape(PANEL)).toBe(true);
+      await settled();
+      expect(draft()).toBe("Existing.");
+
+      const stop = vi.spyOn(service, "stop");
+      const start = vi.spyOn(service, "start");
+      fire("keyup", { code: "KeyD" });
+      fire("keyup", { code: "MetaLeft" });
+
+      expect(stop).not.toHaveBeenCalled();
+      expect(start).not.toHaveBeenCalled();
+      expect(ipc.stop).not.toHaveBeenCalled();
+      expect(voiceStore.getState().status).toBe("idle");
+    }
+  );
+
   it("keeps a dictation whose words a file reference already rewrote", async () => {
     const { service, draft, settled } = await setup();
 
