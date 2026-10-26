@@ -30,119 +30,156 @@ function sameJson(a: unknown, b: unknown): boolean {
 }
 
 /**
- * Puts one field of a saved config into this view's store. Each writes only
- * when the value differs: an unchanged value reaching a store can still have
- * effects (autofocus re-seeds the session's focus preference). None of them
- * writes the setting back.
+ * How one saved field reaches this view's store: the value a saved config
+ * means for it (`undefined` when the config says nothing usable), the value
+ * the store holds, and how to put a new one there. None writes the setting
+ * back.
  */
-const APPLY: { readonly [K in Field]-?: (config: Config) => void } = {
-  scrollbackLines: ({ scrollbackLines }) => {
-    if (scrollbackLines === undefined) return;
-    const lines = normalizeScrollbackLines(scrollbackLines);
-    const store = useScrollbackStore.getState();
-    if (store.scrollbackLines !== lines) store.setScrollbackLines(lines);
-  },
-  performanceMode: ({ performanceMode }) => {
-    if (typeof performanceMode !== "boolean") return;
-    const store = usePerformanceModeStore.getState();
-    if (store.performanceMode !== performanceMode) store.setPerformanceMode(performanceMode);
-  },
-  hybridInputEnabled: ({ hybridInputEnabled }) => {
-    const enabled = hybridInputEnabled ?? true;
-    const store = useTerminalInputStore.getState();
-    if (store.hybridInputEnabled !== enabled) store.setHybridInputEnabled(enabled);
-  },
-  hybridInputAutoFocus: ({ hybridInputAutoFocus }) => {
-    const enabled = hybridInputAutoFocus ?? true;
-    const store = useTerminalInputStore.getState();
-    if (store.hybridInputAutoFocus !== enabled) store.setHybridInputAutoFocus(enabled);
-  },
-  screenReaderMode: ({ screenReaderMode: mode }) => {
-    if (mode !== "auto" && mode !== "on" && mode !== "off") return;
-    const store = useScreenReaderStore.getState();
-    if (store.screenReaderMode !== mode) store.setScreenReaderMode(mode);
-  },
-  cachedProjectViews: ({ cachedProjectViews }) => {
-    const count = cachedProjectViews ?? 1;
-    const store = useCachedProjectViewsStore.getState();
-    if (store.cachedProjectViews !== count) store.setCachedProjectViews(count);
-  },
-  fontSize: ({ fontSize }) => {
-    if (typeof fontSize !== "number" || !Number.isFinite(fontSize)) return;
-    const store = useTerminalFontStore.getState();
-    if (store.fontSize !== fontSize) store.setFontSize(fontSize);
-  },
-  fontFamily: ({ fontFamily }) => {
-    if (typeof fontFamily !== "string" || !fontFamily.trim()) return;
-    const store = useTerminalFontStore.getState();
-    if (store.fontFamily !== fontFamily) store.setFontFamily(fontFamily);
-  },
+interface FieldSync<T> {
+  resolve: (config: Config) => T | undefined;
+  read: () => T;
+  write: (value: T) => void;
+}
+
+function field<T>(sync: FieldSync<T>): FieldSync<unknown> {
+  return sync as FieldSync<unknown>;
+}
+
+const FIELDS: { readonly [K in Field]-?: FieldSync<unknown> } = {
+  scrollbackLines: field({
+    resolve: ({ scrollbackLines }) =>
+      scrollbackLines === undefined ? undefined : normalizeScrollbackLines(scrollbackLines),
+    read: () => useScrollbackStore.getState().scrollbackLines,
+    write: (lines) => useScrollbackStore.getState().setScrollbackLines(lines),
+  }),
+  performanceMode: field({
+    resolve: ({ performanceMode }) =>
+      typeof performanceMode === "boolean" ? performanceMode : undefined,
+    read: () => usePerformanceModeStore.getState().performanceMode,
+    write: (enabled) => usePerformanceModeStore.getState().setPerformanceMode(enabled),
+  }),
+  hybridInputEnabled: field({
+    resolve: ({ hybridInputEnabled }) => hybridInputEnabled ?? true,
+    read: () => useTerminalInputStore.getState().hybridInputEnabled,
+    write: (enabled) => useTerminalInputStore.getState().setHybridInputEnabled(enabled),
+  }),
+  // Its setter also re-seeds the session's focus preference.
+  hybridInputAutoFocus: field({
+    resolve: ({ hybridInputAutoFocus }) => hybridInputAutoFocus ?? true,
+    read: () => useTerminalInputStore.getState().hybridInputAutoFocus,
+    write: (enabled) => useTerminalInputStore.getState().setHybridInputAutoFocus(enabled),
+  }),
+  screenReaderMode: field({
+    resolve: ({ screenReaderMode: mode }) =>
+      mode === "auto" || mode === "on" || mode === "off" ? mode : undefined,
+    read: () => useScreenReaderStore.getState().screenReaderMode,
+    write: (mode) => useScreenReaderStore.getState().setScreenReaderMode(mode),
+  }),
+  cachedProjectViews: field({
+    resolve: ({ cachedProjectViews }) => cachedProjectViews ?? 1,
+    read: () => useCachedProjectViewsStore.getState().cachedProjectViews,
+    write: (count) => useCachedProjectViewsStore.getState().setCachedProjectViews(count),
+  }),
+  fontSize: field({
+    resolve: ({ fontSize }) =>
+      typeof fontSize === "number" && Number.isFinite(fontSize) ? fontSize : undefined,
+    read: () => useTerminalFontStore.getState().fontSize,
+    write: (size) => useTerminalFontStore.getState().setFontSize(size),
+  }),
+  fontFamily: field({
+    resolve: ({ fontFamily }) =>
+      typeof fontFamily === "string" && fontFamily.trim() ? fontFamily : undefined,
+    read: () => useTerminalFontStore.getState().fontFamily,
+    write: (family) => useTerminalFontStore.getState().setFontFamily(family),
+  }),
   // Set directly: the store's own setter is a pick, which would put a scheme
   // chosen in another view at the top of this one's recents.
-  colorSchemeId: ({ colorSchemeId }) => {
-    const id = typeof colorSchemeId === "string" ? colorSchemeId.trim() : "";
-    if (!id || useTerminalColorSchemeStore.getState().selectedSchemeId === id) return;
-    useTerminalColorSchemeStore.setState({ selectedSchemeId: id });
-  },
+  colorSchemeId: field({
+    resolve: ({ colorSchemeId }) => {
+      const id = typeof colorSchemeId === "string" ? colorSchemeId.trim() : "";
+      return id || undefined;
+    },
+    read: () => useTerminalColorSchemeStore.getState().selectedSchemeId,
+    write: (id) => useTerminalColorSchemeStore.setState({ selectedSchemeId: id }),
+  }),
   // The saved list replaces this view's, so a scheme removed elsewhere goes
   // here too, along with a preview of it.
-  customSchemes: ({ customSchemes }) => {
-    if (!Array.isArray(customSchemes)) return;
-    const schemes = customSchemes as unknown as TerminalColorScheme[];
-    const state = useTerminalColorSchemeStore.getState();
-    if (sameJson(state.customSchemes, schemes)) return;
-    const previewGone =
-      state.previewSchemeId !== null &&
-      state.customSchemes.some((scheme) => scheme.id === state.previewSchemeId) &&
-      !schemes.some((scheme) => scheme.id === state.previewSchemeId);
-    useTerminalColorSchemeStore.setState({
-      customSchemes: schemes,
-      ...(previewGone ? { previewSchemeId: null } : {}),
-    });
-  },
-  recentSchemeIds: ({ recentSchemeIds }) => {
-    if (!Array.isArray(recentSchemeIds)) return;
-    const ids = recentSchemeIds
-      .filter((id): id is string => typeof id === "string" && id.trim().length > 0)
-      .map((id) => id.trim())
-      .slice(0, RECENT_SCHEMES_LIMIT);
-    const store = useTerminalColorSchemeStore.getState();
-    if (!sameJson(store.recentSchemeIds, ids)) store.setRecentSchemeIds(ids);
-  },
-  resourceMonitoringEnabled: ({ resourceMonitoringEnabled }) => {
-    const enabled = resourceMonitoringEnabled === true;
-    const store = useResourceMonitoringStore.getState();
-    if (store.enabled !== enabled) store.setEnabled(enabled);
-  },
+  customSchemes: field({
+    resolve: ({ customSchemes }) =>
+      Array.isArray(customSchemes) ? (customSchemes as unknown as TerminalColorScheme[]) : undefined,
+    read: () => useTerminalColorSchemeStore.getState().customSchemes,
+    write: (schemes) => {
+      const { customSchemes: before, previewSchemeId } = useTerminalColorSchemeStore.getState();
+      const previewGone =
+        previewSchemeId !== null &&
+        before.some((scheme) => scheme.id === previewSchemeId) &&
+        !schemes.some((scheme) => scheme.id === previewSchemeId);
+      useTerminalColorSchemeStore.setState({
+        customSchemes: schemes,
+        ...(previewGone ? { previewSchemeId: null } : {}),
+      });
+    },
+  }),
+  recentSchemeIds: field({
+    resolve: ({ recentSchemeIds }) =>
+      Array.isArray(recentSchemeIds)
+        ? recentSchemeIds
+            .filter((id): id is string => typeof id === "string" && id.trim().length > 0)
+            .map((id) => id.trim())
+            .slice(0, RECENT_SCHEMES_LIMIT)
+        : undefined,
+    read: () => useTerminalColorSchemeStore.getState().recentSchemeIds,
+    write: (ids) => useTerminalColorSchemeStore.getState().setRecentSchemeIds(ids),
+  }),
+  resourceMonitoringEnabled: field({
+    resolve: ({ resourceMonitoringEnabled }) => resourceMonitoringEnabled === true,
+    read: () => useResourceMonitoringStore.getState().enabled,
+    write: (enabled) => useResourceMonitoringStore.getState().setEnabled(enabled),
+  }),
   // Defaults to on wherever resource monitoring is on.
-  memoryLeakDetectionEnabled: ({ memoryLeakDetectionEnabled, resourceMonitoringEnabled }) => {
-    const enabled = memoryLeakDetectionEnabled ?? resourceMonitoringEnabled === true;
-    const store = useMemoryLeakConfigStore.getState();
-    if (store.enabled !== enabled) store.setEnabled(enabled);
-  },
-  memoryLeakAutoRestartThresholdMb: ({ memoryLeakAutoRestartThresholdMb }) => {
-    const threshold = memoryLeakAutoRestartThresholdMb ?? DEFAULT_AUTO_RESTART_THRESHOLD_MB;
-    const store = useMemoryLeakConfigStore.getState();
-    if (store.autoRestartThresholdMb !== threshold) store.setAutoRestartThresholdMb(threshold);
-  },
+  memoryLeakDetectionEnabled: field({
+    resolve: ({ memoryLeakDetectionEnabled, resourceMonitoringEnabled }) =>
+      memoryLeakDetectionEnabled ?? resourceMonitoringEnabled === true,
+    read: () => useMemoryLeakConfigStore.getState().enabled,
+    write: (enabled) => useMemoryLeakConfigStore.getState().setEnabled(enabled),
+  }),
+  memoryLeakAutoRestartThresholdMb: field({
+    resolve: ({ memoryLeakAutoRestartThresholdMb }) =>
+      memoryLeakAutoRestartThresholdMb ?? DEFAULT_AUTO_RESTART_THRESHOLD_MB,
+    read: () => useMemoryLeakConfigStore.getState().autoRestartThresholdMb,
+    write: (threshold) => useMemoryLeakConfigStore.getState().setAutoRestartThresholdMb(threshold),
+  }),
 };
 
 const OWNERS: readonly SettingOwner[] = ["device", "host"];
 
 const FIELDS_OWNED_BY: Readonly<Record<SettingOwner, readonly Field[]>> = (() => {
   const byOwner: Record<SettingOwner, Field[]> = { device: [], host: [] };
-  for (const field of Object.keys(APPLY) as Field[]) {
-    byOwner[settingOwner(`terminalConfig.${field}`)].push(field);
+  for (const name of Object.keys(FIELDS) as Field[]) {
+    byOwner[settingOwner(`terminalConfig.${name}`)].push(name);
   }
   return byOwner;
 })();
 
+/**
+ * What this view last heard was saved, per field. A config is applied only
+ * where it differs from this, so a change saved elsewhere lands while an edit
+ * this view hasn't saved yet survives a push about some other field.
+ */
+let heard = new Map<Field, unknown>();
+
 function applyOwnedBy(owner: SettingOwner, config: Config): void {
-  for (const field of FIELDS_OWNED_BY[owner]) {
+  for (const name of FIELDS_OWNED_BY[owner]) {
     try {
-      APPLY[field](config);
+      const sync = FIELDS[name];
+      const saved = sync.resolve(config);
+      if (saved === undefined) continue;
+      if (heard.has(name) && sameJson(heard.get(name), saved)) continue;
+      heard.set(name, saved);
+      // Left alone when the store has it: some setters do more than store it.
+      if (!sameJson(sync.read(), saved)) sync.write(saved);
     } catch (error) {
-      logWarn("[terminalConfig] Couldn't apply a terminal setting", { field, error });
+      logWarn("[terminalConfig] Couldn't apply a terminal setting", { field: name, error });
     }
   }
 }
@@ -263,4 +300,5 @@ export function initTerminalConfigSync(): () => void {
 
 export function __resetTerminalConfigSyncForTests(): void {
   owners = freshState();
+  heard = new Map();
 }

@@ -331,6 +331,40 @@ describe("terminalConfigSync (#14699)", () => {
     });
   });
 
+  // The picker selects locally, saves the scheme, then saves the recents it
+  // reads back from the store; the scheme's push lands in between.
+  it("keeps an edit this view hasn't saved yet when another field's change arrives", async () => {
+    boot({ colorSchemeId: "a", recentSchemeIds: ["a"] });
+    dispose = initTerminalConfigSync();
+    await settle();
+
+    useTerminalColorSchemeStore.getState().setSelectedSchemeId("b");
+    client.push(device({ colorSchemeId: "b", recentSchemeIds: ["a"] }));
+    expect(useTerminalColorSchemeStore.getState().recentSchemeIds).toEqual(["b", "a"]);
+
+    client.push(device({ colorSchemeId: "b", recentSchemeIds: ["b", "a"] }));
+    client.push(device({ colorSchemeId: "c", recentSchemeIds: ["c", "b", "a"] }));
+    expect(useTerminalColorSchemeStore.getState()).toMatchObject({
+      selectedSchemeId: "c",
+      recentSchemeIds: ["c", "b", "a"],
+    });
+  });
+
+  it("catches up on a change it missed when it reads again", async () => {
+    boot({ fontSize: 13, scrollbackLines: 1000 });
+    dispose = initTerminalConfigSync();
+    await settle();
+    // Edited here and not saved yet; the read must not undo it.
+    useScrollbackStore.setState({ scrollbackLines: 4000 });
+    client.get.mockResolvedValue({ fontSize: 17, scrollbackLines: 1000 });
+
+    lifecycle.emit("active");
+    await settle();
+
+    expect(useTerminalFontStore.getState().fontSize).toBe(17);
+    expect(useScrollbackStore.getState().scrollbackLines).toBe(4000);
+  });
+
   it("stops listening and ignores a read still in flight once disposed", async () => {
     boot({});
     dispose = initTerminalConfigSync();
