@@ -115,7 +115,7 @@ function setupGlobals(
   options: {
     correctionEnabled?: boolean;
     reportOnStop?: boolean;
-    recordingMode?: "toggle" | "push-to-talk";
+    recordingMode?: "toggle" | "push-to-talk" | "tap-or-hold";
   } = {}
 ) {
   const callbacks = new Map<string, Listener>();
@@ -256,6 +256,9 @@ function setupGlobals(
     },
     releaseShortcut: () => {
       for (const cb of windowListeners.get("keyup") ?? []) cb({ code: "KeyD" });
+    },
+    blurWindow: () => {
+      for (const cb of windowListeners.get("blur") ?? []) cb();
     },
     paintFrames: () => {
       for (const frame of frames.splice(0)) frame();
@@ -650,6 +653,53 @@ describe("VoiceRecordingService — session summary (#14617)", () => {
       const second = summaries()[1]!;
       expect(second).toMatchObject({ stopReason: "escape" });
       expect(second.stopRequestedMs as number).toBeGreaterThanOrEqual(Math.floor(resumedMs));
+    });
+  });
+
+  describe("tap-or-hold", () => {
+    // A hold that heard speech: pressed, started, two speech-level chunks, and
+    // past the hold threshold by the time it comes back up.
+    async function holdWithSpeech() {
+      const harness = setupGlobals({ recordingMode: "tap-or-hold" });
+      const loaded = await load();
+      harness.pressShortcut(performance.now());
+      const sessionId = await startLive(harness, loaded.service);
+      sendChunk(harness.workletNodes.at(-1)!, 2_000);
+      const realNow = performance.now.bind(performance);
+      vi.spyOn(performance, "now").mockImplementation(() => realNow() + 1_000);
+      return { harness, ...loaded, sessionId };
+    }
+
+    it("names a held key's release as key_release", async () => {
+      const { harness, summaries, sessionId } = await holdWithSpeech();
+      harness.releaseShortcut();
+      await vi.waitFor(() => expect(summaries()).toHaveLength(1));
+      expect(summaries()[0]).toMatchObject({ sessionId, origin: "key", stopReason: "key_release" });
+    });
+
+    it("names a blur while the key is held as window_blur", async () => {
+      const { harness, summaries, sessionId } = await holdWithSpeech();
+      harness.blurWindow();
+      await vi.waitFor(() => expect(summaries()).toHaveLength(1));
+      expect(summaries()[0]).toMatchObject({ sessionId, stopReason: "window_blur" });
+    });
+
+    it("logs nothing for a tap's release or for the release of the press that stopped it", async () => {
+      const harness = setupGlobals({ recordingMode: "tap-or-hold" });
+      const { service, summaries } = await load();
+      harness.pressShortcut(performance.now());
+      const sessionId = await startLive(harness, service);
+      harness.releaseShortcut();
+      await flushPromises();
+      expect(harness.voiceInput.stop).not.toHaveBeenCalled();
+      expect(summaries()).toHaveLength(0);
+
+      harness.pressShortcut(performance.now());
+      await service.toggle(TARGET);
+      harness.releaseShortcut();
+      await flushPromises();
+      expect(summaries()).toMatchObject([{ sessionId, stopReason: "user" }]);
+      expect(harness.voiceInput.start).toHaveBeenCalledTimes(1);
     });
   });
 
