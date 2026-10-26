@@ -85,7 +85,7 @@ function inventoryAnswer() {
   };
 }
 
-function harness(hosts: HostDescriptor[]) {
+function harness(hosts: HostDescriptor[], extra: Partial<HostMetricsClientOptions> = {}) {
   let list = hosts;
   const registryListeners = new Set<() => void>();
   const sessionListeners = new Set<(hostId: string, session: LinkSession) => void>();
@@ -177,6 +177,7 @@ function harness(hosts: HostDescriptor[]) {
     ringSize: 3,
     fleetReconcileMs: 200,
     worktreesChangedDelayMs: 5,
+    ...extra,
   };
   const client = new HostMetricsClient(options);
   return {
@@ -678,6 +679,40 @@ describe("HostMetricsClient", () => {
     }
     expect(h.attention).toHaveLength(6);
     expect(h.attention[0]).toMatchObject({ projectName: "ppa", agentName: null });
+    h.client.dispose();
+  });
+
+  it("judges a host's waiting agent by this machine's choices, before its notice budget (#14701)", async () => {
+    let policy: "silent" | "quiet" | "announce" = "silent";
+    const h = harness([descriptor("loud", true)], { waitingPolicy: () => policy });
+    h.client.start();
+    const loud = await openSessionPair(dir);
+    open.push(loud.host, loud.client);
+    h.openSession("loud", loud.client);
+    const attend = (terminalId: string, quiet = false) =>
+      loud.host.call(MetricsLinkMethod.ATTENTION, {
+        kind: "waiting",
+        terminalId,
+        projectName: null,
+        agentName: null,
+        quiet,
+      });
+
+    // Waiting alerts off here: nothing shows, and none of the host's share is spent.
+    for (let i = 0; i < 8; i++) await attend(`off-${i}`);
+    expect(h.attention).toEqual([]);
+
+    policy = "quiet";
+    await attend("quiet");
+    policy = "announce";
+    await attend("loud");
+    // An older host that judged it quiet by its own hours still can't make it loud.
+    await attend("host-quiet", true);
+    expect(h.attention.map((e) => [e.terminalId, e.quiet])).toEqual([
+      ["quiet", true],
+      ["loud", false],
+      ["host-quiet", true],
+    ]);
     h.client.dispose();
   });
 

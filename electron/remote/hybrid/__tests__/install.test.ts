@@ -211,6 +211,40 @@ describe("showHostNotification", () => {
     expect(mocks.playFile).toHaveBeenCalledWith("ping.wav");
   });
 
+  it("holds back a host's completion during this machine's quiet hours, whatever the host's (#14701)", () => {
+    mocks.notificationSettings = {
+      quietHoursEnabled: true,
+      quietHoursStartMin: 11 * 60,
+      quietHoursEndMin: 13 * 60,
+      quietHoursWeekdays: [],
+    };
+    const at = (hour: number) => new Date(2026, 9, 26, hour, 0).getTime();
+    const show = (category: string, hour: number) =>
+      showHostNotification(12, { title: category, body: "b", category }, STUDIO, at(hour));
+
+    expect(show("completed", 12)).toBe(true);
+    expect(mocks.showNativeNotification).not.toHaveBeenCalled();
+    // A waiting agent pages through quiet hours, as it does locally.
+    show("waiting", 12);
+    show("completed", 14);
+    expect(mocks.showNativeNotification.mock.calls.map((call) => call[0])).toEqual([
+      "Studio Mac: waiting",
+      "Studio Mac: completed",
+    ]);
+  });
+
+  it("shows nothing with this machine's notifications off, and spends none of the host's share", () => {
+    mocks.notificationSettings = { enabled: false };
+    const show = () =>
+      showHostNotification(12, { title: "t", body: "b", category: "waiting" }, STUDIO, 1_000);
+    for (let i = 0; i < 6 + 3; i++) expect(show()).toBe(true);
+    expect(mocks.showNativeNotification).not.toHaveBeenCalled();
+
+    mocks.notificationSettings = { enabled: true };
+    for (let i = 0; i < 6 + 3; i++) show();
+    expect(mocks.showNativeNotification).toHaveBeenCalledTimes(6);
+  });
+
   it("rejects a presentation instead of a category", () => {
     expect(showHostNotification(12, { title: "t", body: "b", silent: false }, STUDIO)).toBe(false);
   });

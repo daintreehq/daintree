@@ -687,6 +687,27 @@ describe("ProjectSettingsManager caching", () => {
     });
   });
 
+  it("puts another machine's global choices under the project's own overrides (#14701)", async () => {
+    const shell = { completedEnabled: false, waitingEnabled: false, waitingEscalationDelayMs: 60_000 };
+    expect(manager.getEffectiveNotificationSettings(null, shell)).toMatchObject(shell);
+
+    await manager.saveProjectSettings(projectId, {
+      runCommands: [],
+      notificationOverrides: { waitingEnabled: true },
+    });
+    await manager.getProjectSettings(projectId);
+    expect(manager.getEffectiveNotificationSettings(projectId, shell)).toMatchObject({
+      completedEnabled: false,
+      waitingEnabled: true,
+      waitingEscalationDelayMs: 60_000,
+    });
+    // This machine's own values are untouched for its own reads.
+    expect(manager.getEffectiveNotificationSettings(projectId)).toMatchObject({
+      completedEnabled: true,
+      waitingEscalationDelayMs: 30_000,
+    });
+  });
+
   describe("isNotificationsMuted (#13818)", () => {
     it("reads a cold project's file, and counts only both of its own switches off", async () => {
       const settingsPath = path.join(tempDir, projectId, "settings.json");

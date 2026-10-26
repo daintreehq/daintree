@@ -52,7 +52,9 @@ export interface NotificationPolicySource {
 const storePolicySource: NotificationPolicySource = {
   read: () => notificationPolicyOf(store.get("notificationSettings")),
   onMaybeChanged(listener) {
-    const events = store.events;
+    // The in-memory store an unreadable settings file falls back to has none.
+    const events: EventTarget | undefined = store.events;
+    if (!events) return () => {};
     events.addEventListener("change", listener);
     return () => events.removeEventListener("change", listener);
   },
