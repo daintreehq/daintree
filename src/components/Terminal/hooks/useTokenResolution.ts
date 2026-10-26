@@ -47,20 +47,35 @@ function resolveContextReferences(
 interface CorrectionSnapshot {
   baseline: string;
   edited: string;
+  /** The draft before the passage. */
+  preceding: string;
+  /** The session that wrote the baseline; a newer one owns whatever replaced it. */
+  sessionId: string | null;
 }
 
 /**
  * Pairs the panel's learning baseline with the draft being sent. Taken before
  * the send awaits anything: a dictation that finishes meanwhile writes a newer
- * baseline, and this draft must not be diffed against it.
+ * baseline, and this draft must not be diffed against it. A draft under
+ * another key (an isolated composer on the same terminal) isn't the one the
+ * passage was dictated into.
  */
-function takeCorrectionSnapshot(panelId: string, text: string): CorrectionSnapshot | null {
+function takeCorrectionSnapshot(
+  panelId: string,
+  projectId: string | undefined,
+  text: string
+): CorrectionSnapshot | null {
   try {
     const buffer = useVoiceRecordingStore.getState().panelBuffers[panelId];
     const baseline = buffer?.sessionCorrectedText;
     const sessionStart = buffer?.sessionDraftStart ?? -1;
-    if (!baseline || sessionStart < 0) return null;
-    return { baseline, edited: text.slice(sessionStart) };
+    if (!baseline || sessionStart < 0 || buffer.projectId !== projectId) return null;
+    return {
+      baseline,
+      edited: text.slice(sessionStart),
+      preceding: text.slice(0, sessionStart),
+      sessionId: buffer.dictationSessionId,
+    };
   } catch {
     return null;
   }
@@ -88,7 +103,11 @@ function detectDictionaryCorrections(panelId: string, snapshot: CorrectionSnapsh
     const voiceState = useVoiceRecordingStore.getState();
     // The draft is gone, so its baseline goes with it whether or not learning
     // is on — unless a newer dictation has already replaced it.
-    if (voiceState.panelBuffers[panelId]?.sessionCorrectedText === snapshot.baseline) {
+    const buffer = voiceState.panelBuffers[panelId];
+    if (
+      buffer?.sessionCorrectedText === snapshot.baseline &&
+      buffer.dictationSessionId === snapshot.sessionId
+    ) {
       voiceState.setSessionCorrectedText(panelId, null);
     }
     if (!voiceState.learnFromCorrections) return;
@@ -98,7 +117,11 @@ function detectDictionaryCorrections(panelId: string, snapshot: CorrectionSnapsh
     // meanwhile in Settings isn't overwritten by this view's copy.
     void import("@shared/utils/phoneticSimilarity")
       .then(async ({ findCorrectionCandidates }) => {
-        const candidates = findCorrectionCandidates(snapshot.baseline, snapshot.edited);
+        const candidates = findCorrectionCandidates(
+          snapshot.baseline,
+          snapshot.edited,
+          snapshot.preceding
+        );
         if (candidates.length === 0) return;
         const state = await window.electron.voiceDictionary.recordSuggestions({ candidates });
         if (latestLearnSend.get(panelId) !== send) return;
@@ -253,7 +276,7 @@ export function useTokenResolution({
       // could otherwise interleave and double-post.
       isSendingRef.current = true;
       try {
-        const correctionSnapshot = takeCorrectionSnapshot(terminalId, text);
+        const correctionSnapshot = takeCorrectionSnapshot(terminalId, latest.projectId, text);
         const terminalTokens = expandContext ? getAllAtTerminalTokens(text) : [];
         const selectionTokens = expandContext ? getAllAtSelectionTokens(text) : [];
         const diffTokens = expandContext ? getAllAtDiffTokens(text) : [];

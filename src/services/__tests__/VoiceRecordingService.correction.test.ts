@@ -625,18 +625,36 @@ describe("VoiceRecordingService — learning baseline follows its draft (#14645)
     expect(baseline("panel-1")).toBe("the parsr");
   });
 
-  it("stops following drafts once no baseline is left", async () => {
+  it("moves a newer baseline once when an older correction lands before it", async () => {
+    const { service, dictate, flush, baseline, inputStore, voiceStore } = await setup();
+    const first = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(first.promise);
+
+    dictate("panel-1", "the parsr");
+    await service.stop();
+    voiceStore.getState().setCorrectionEnabled(false);
+    dictate("panel-1", "and the lexer");
+    await service.stop();
+    expect(baseline("panel-1")).toBe("and the lexer");
+
+    first.resolve({ action: "replace", correctedText: "the parser" });
+    await flush();
+
+    const draft = inputStore.getState().getDraftInput("panel-1");
+    expect(draft).toContain("the parser");
+    expect(passage(voiceStore, draft).trim()).toBe("and the lexer");
+  });
+
+  it("follows baselines again after the service is torn down and brought back", async () => {
     const { service, dictate, baseline, inputStore, voiceStore } = await setup();
     voiceStore.getState().setCorrectionEnabled(false);
     dictate("panel-1", "the parsr");
     await service.stop();
 
-    voiceStore.getState().setSessionCorrectedText("panel-1", null);
-    inputStore.getState().setDraftInput("panel-1", "edited");
-    const start = voiceStore.getState().panelBuffers["panel-1"]!.sessionDraftStart;
-    inputStore.getState().setDraftInput("panel-1", "xx edited");
+    service.destroy();
+    service.initialize();
+    inputStore.getState().clearDraftInput("panel-1");
 
-    expect(voiceStore.getState().panelBuffers["panel-1"]!.sessionDraftStart).toBe(start);
     expect(baseline("panel-1")).toBeNull();
   });
 });

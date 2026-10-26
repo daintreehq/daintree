@@ -190,10 +190,57 @@ describe("findCorrectionCandidates: rewording versus mishearing (#14645)", () =>
     expect(findCorrectionCandidates("pick a model now", "pick a Model now")).toEqual([]);
   });
 
-  it("does not suggest a long rewrite as one term", () => {
+  it("does not suggest a long run as one term", () => {
     expect(
-      findCorrectionCandidates("use zoo stand for all the state", "use Zustand Redux Jotai MobX")
+      findCorrectionCandidates("kuber netties zoo stand now", "Kubernetes Zustand now")
     ).toEqual([]);
+  });
+
+  it("needs a near-identical spelling when the first sound changed", () => {
+    expect(findCorrectionCandidates("check exit term now", "check xterm now")).toEqual([]);
+  });
+
+  it("needs a close spelling when Soundex doesn't match", () => {
+    expect(findCorrectionCandidates("use copper netties now", "use Kubernetes now")).toEqual([]);
+  });
+
+  it("keeps words typed after a recased term out of it", () => {
+    expect(findCorrectionCandidates("check daintree", "check Daintree now")).toEqual([
+      { word: "Daintree", original: "daintree" },
+    ]);
+    expect(
+      findCorrectionCandidates("check zoo stand i think", "check Zustand I think").map(
+        (c) => c.word
+      )
+    ).toEqual(["Zustand"]);
+  });
+
+  it("does not take a capital the dictation already had as the user's", () => {
+    expect(findCorrectionCandidates("check the Modal first", "check the Model first")).toEqual([]);
+  });
+
+  it("tells a sentence's first word through quotes and from the text before the passage", () => {
+    expect(findCorrectionCandidates('check. "modal first', 'check. "Model first')).toEqual([]);
+    expect(
+      findCorrectionCandidates("check.\u201d modal first", "check.\u201d Model first")
+    ).toEqual([]);
+    expect(findCorrectionCandidates("daintree first", "Daintree first", "open ")).toEqual([
+      { word: "Daintree", original: "daintree" },
+    ]);
+    expect(findCorrectionCandidates("daintree first", "Daintree first", "Done. ")).toEqual([]);
+  });
+
+  it("suggests a capital moved inside a word", () => {
+    expect(findCorrectionCandidates("check Usestate now", "check useState now")).toEqual([
+      { word: "useState", original: "Usestate" },
+    ]);
+  });
+
+  it("does not suggest everyday joins, splits and plurals", () => {
+    expect(findCorrectionCandidates("this maybe useful", "this may be useful")).toEqual([]);
+    expect(findCorrectionCandidates("check a while first", "check awhile first")).toEqual([]);
+    expect(findCorrectionCandidates("check the test now", "check the tests now")).toEqual([]);
+    expect(findCorrectionCandidates("check the pliers now", "check the players now")).toEqual([]);
   });
 });
 
@@ -204,6 +251,9 @@ describe("isCommonEnglishWord", () => {
     expect(isCommonEnglishWord("studies")).toBe(true);
     expect(isCommonEnglishWord("stopped")).toBe(true);
     expect(isCommonEnglishWord("bigger")).toBe(true);
+    expect(isCommonEnglishWord("players")).toBe(true);
+    expect(isCommonEnglishWord("tries")).toBe(true);
+    expect(isCommonEnglishWord("slowly")).toBe(true);
   });
 
   it("does not recognise technical names", () => {

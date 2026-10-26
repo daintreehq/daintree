@@ -313,40 +313,57 @@ function tokenize(text: string): string[] {
   return text.split(/\s+/).filter(Boolean);
 }
 
-function countCapitals(token: string): number {
-  return token.match(/\p{Lu}/gu)?.length ?? 0;
-}
-
-/**
- * Whether the user gave `after` capitals that `before` didn't have, somewhere
- * a capital means something. The first word of a sentence is capitalised
- * anyway, so a capital there says nothing about the word.
- */
-function addsCapitals(before: string, after: string, previous: string | undefined): boolean {
-  if (countCapitals(after) <= countCapitals(before)) return false;
-  return !isSentenceStart(previous) || countCapitals(after.slice(1)) > 0;
+function letters(text: string): string {
+  return text.replace(/[^\p{L}\p{N}]/gu, "");
 }
 
 function isSentenceStart(previous: string | undefined): boolean {
-  return previous === undefined || /[.!?:]["')\]]*$/.test(previous);
+  return previous === undefined || /[.!?:][^\p{L}\p{N}]*$/u.test(previous);
+}
+
+/**
+ * Whether the user gave `after` a capital `before` didn't have, somewhere a
+ * capital means something. The first word of a sentence is capitalised anyway,
+ * so a capital there says nothing about the word; nor does a lone letter (i →
+ * I). Where the letters are the same, a capital has to land on a letter that
+ * wasn't one (Usestate → useState); otherwise there have to be more of them.
+ */
+function addsCapital(before: string, after: string, previous: string | undefined): boolean {
+  const b = letters(before);
+  const a = letters(after);
+  if (a.length < 2) return false;
+  const from = isSentenceStart(previous) ? 1 : 0;
+  const isUpper = (ch: string) => ch !== ch.toLowerCase();
+  if (a.toLowerCase() === b.toLowerCase()) {
+    for (let k = from; k < a.length; k++) {
+      if (isUpper(a[k]!) && !isUpper(b[k]!)) return true;
+    }
+    return false;
+  }
+  const count = (text: string) => [...text.slice(from)].filter(isUpper).length;
+  return count(a) > count(b);
 }
 
 interface DiffRun {
   before: string[];
   after: string[];
-  /** The user capitalised something in the run, outside a sentence's first letter. */
-  capitalised: boolean;
+  /** The edited token just before the run, for telling a sentence's first word. */
+  previous: string | undefined;
+  /** A token in the run has the same letters as before, with a capital the user added. */
+  recased: boolean;
 }
 
 /**
  * Align two token sequences via LCS and return the substituted runs — maximal
  * spans where one side's tokens were replaced by the other's. Tokens match on
  * their normalized form, so a recapitalised token aligns with its original; it
- * still joins the run around it when the user gave it a capital, since that is
- * the user correcting the word. Pure insertions and deletions (one side empty)
- * are included so callers can filter them out.
+ * still joins the run before it when the user gave it a capital, since that is
+ * the user correcting the term (dock or compose → Docker Compose), but nothing
+ * after it joins, so words typed after a recased term stay out of it. Pure
+ * insertions and deletions (one side empty) are included so callers can filter
+ * them out.
  */
-function diffRuns(before: string[], after: string[]): DiffRun[] {
+function diffRuns(before: string[], after: string[], previous: string | undefined): DiffRun[] {
   const a = before.map(normalizeToken);
   const b = after.map(normalizeToken);
   const m = a.length;
@@ -361,44 +378,65 @@ function diffRuns(before: string[], after: string[]): DiffRun[] {
   }
 
   const runs: DiffRun[] = [];
-  let current: DiffRun = { before: [], after: [], capitalised: false };
-  const flush = () => {
-    if (current.before.length || current.after.length) {
-      runs.push(current);
-      current = { before: [], after: [], capitalised: false };
-    }
+  const open = (j: number): DiffRun => ({
+    before: [],
+    after: [],
+    previous: j > 0 ? after[j - 1] : previous,
+    recased: false,
+  });
+  let current = open(0);
+  let endsRecased = false;
+  const flush = (j: number) => {
+    if (current.before.length || current.after.length) runs.push(current);
+    current = open(j);
+    endsRecased = false;
+  };
+  // A token that isn't a match never joins a run that ends on a recased term.
+  const extend = (j: number) => {
+    if (endsRecased) flush(j);
   };
 
   let i = 0;
   let j = 0;
   while (i < m && j < n) {
     if (a[i] === b[j]) {
-      if (addsCapitals(before[i]!, after[j]!, after[j - 1])) {
+      if (addsCapital(before[i]!, after[j]!, j > 0 ? after[j - 1] : previous)) {
         current.before.push(before[i]!);
         current.after.push(after[j]!);
-        current.capitalised = true;
+        current.recased = true;
+        endsRecased = true;
       } else {
-        flush();
+        flush(j + 1);
       }
       i++;
       j++;
     } else if (dp[i + 1]![j]! >= dp[i]![j + 1]!) {
+      extend(j);
       current.before.push(before[i]!);
       i++;
     } else {
-      if (addsCapitals("", after[j]!, after[j - 1])) current.capitalised = true;
+      extend(j);
       current.after.push(after[j]!);
       j++;
     }
   }
+  if (i < m || j < n) extend(j);
   while (i < m) current.before.push(before[i++]!);
-  while (j < n) {
-    if (addsCapitals("", after[j]!, after[j - 1])) current.capitalised = true;
-    current.after.push(after[j++]!);
-  }
-  flush();
+  while (j < n) current.after.push(after[j++]!);
+  flush(n);
 
   return runs;
+}
+
+/** The last token of `text`, or undefined when there is none. */
+function lastToken(text: string | undefined): string | undefined {
+  const tokens = text ? tokenize(text) : [];
+  return tokens[tokens.length - 1];
+}
+
+/** Ordinary English, or a word the blocklist already rules out (tests, pushed). */
+function isOrdinaryWord(word: string): boolean {
+  return isCommonEnglishWord(normalizeToken(word), BLOCKLIST);
 }
 
 /**
@@ -412,11 +450,17 @@ function diffRuns(before: string[], after: string[]): DiffRun[] {
  * ("daintree" → "Daintree"), where the letters stay the same. A correction to
  * ordinary English is the user rewording, not fixing a mishearing, so it's
  * skipped unless the user also capitalised it into a name (racked → React).
+ * `precedingText` is the draft before the dictated passage, so a capital on
+ * the passage's first word can be told from a sentence's.
  */
-export function findCorrectionCandidates(baseline: string, edited: string): CorrectionCandidate[] {
+export function findCorrectionCandidates(
+  baseline: string,
+  edited: string,
+  precedingText?: string
+): CorrectionCandidate[] {
   if (!baseline.trim() || !edited.trim()) return [];
 
-  const runs = diffRuns(tokenize(baseline), tokenize(edited));
+  const runs = diffRuns(tokenize(baseline), tokenize(edited), lastToken(precedingText));
   const out: CorrectionCandidate[] = [];
   const seen = new Set<string>();
 
@@ -432,16 +476,19 @@ export function findCorrectionCandidates(baseline: string, edited: string): Corr
     const beforeJoined = run.before.map(normalizeToken).join("");
     const normalized = words.map(normalizeToken).join("");
 
+    const capitalised =
+      run.recased || addsCapital(run.before.join(" "), run.after.join(" "), run.previous);
+
     if (beforeJoined === normalized) {
       // Same letters: only a join, a split or a capital the user added is a fix.
-      if (run.before.length === run.after.length && !run.capitalised) continue;
+      if (run.before.length === run.after.length && !capitalised) continue;
     } else if (!isPhoneticallySimilar(beforeJoined, normalized, run.after.length > 1)) {
       continue;
     }
 
     if (!isLearnableTerm(normalized)) continue;
-    const ordinary = words.every((word) => isCommonEnglishWord(normalizeToken(word)));
-    const renamed = run.capitalised && beforeJoined !== normalized;
+    const ordinary = words.every(isOrdinaryWord);
+    const renamed = capitalised && beforeJoined !== normalized;
     if (ordinary && !renamed) continue;
     if (seen.has(normalized)) continue;
 

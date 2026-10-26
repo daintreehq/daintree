@@ -91,6 +91,52 @@ view visible visit voice wait walk wall want war warn watch water way we weak we
 weight welcome well what whatever wheel when where whether which while white who whole why
 wide wife will win window wish with within without woman wonder word work world worry
 worth would wrap write wrong yeah year yes yet you young your zone
+am an are as at awhile be been did does etc had has he i is me nor okay ok shall so us
+was were whom whose
+able ability above accident across actor adult afford afraid agency agenda alarm alive
+angle angry annual anxious apartment appeal apple april arrival artist assist
+attack attend attitude august average award bag band base basket bath battle beach
+beauty bedroom beer bell belt bench bet bike bird birth bite bitter blame blind blood
+blow boat bone bonus boot boss bother bowl brave bread breath brick bunch burden bus
+cabinet cake campaign cancer candidate cap capacity carbon cat cattle ceiling chain
+cheese chest chicken chip church citizen civil classic climate coach coast coat
+collection college combination comedy commercial commission commit competition
+complain concert conference congress connection consequence construction consumer
+contest cook corporate cotton council courage court cousin crack craft crazy cream
+crew crime crisis criteria critical crop cup currency curve cute dance danger dad
+debate decade deck decline deficit delight democracy dentist departure deputy desert
+desire destroy diet dinner dirt disaster discount disease dish distinct district
+divorce doctor dollar domestic draw drama drawer driver drug dry duck dumb ear east
+economy edition educate effective efficient egg elect electric elephant emergency
+emotion employ engineer enormous entertain equipment essay estate estimate evening
+evil exam excellent excite excuse exercise exhibit expense fan fancy farm fashion fat
+fee female fence festival fever fiction finance fish flight flood floor flower fold
+football forest fortune founder fruit fuel funny furniture garage garden gas gene
+gentle gift girl glove golf grade grain grand grass gray grey guest guitar gun guy
+habit happen harm hat hate hell hero highway hill hire holiday honest honey horror
+horse hospital hotel hunt husband ice illness income injury insect inspector
+insurance intend invest iron island jacket joke journey juice jury kick kill kind kiss
+knife lab ladder lady lake lamp lawyer leader league lean lecture lemon lesson liberal
+lip liquid literature loan lonely lucky lunch luxury mad magazine mail male mall manner
+marriage mass meal meat medicine mess metal milk minister mirror mission mom monitor
+mood moon motor mountain mouth mud murder muscle museum mystery nail neck nerve nest
+nose novel nurse nut ocean odd oil onion orange organic oven pace palm pan pants pen
+pencil pension pepper pet piano pie pig pilot pink pipe pitch pizza planet plastic
+plate pleasure pocket poem poet poetry police politics pond porch potato pound
+pressure prince prison prize profit promise proposal prospect proud pub pupil purple
+puzzle rabbit rail rare rat recipe regret relief religion rent rescue rice rich ride
+river rope rose rough royal rub rubber rush sad salad salary salt sand sauce scared
+scope screw sea senate senior sentence settle shadow shame shape shirt shoe shoulder
+sick silly silver singer sister skill skin sky slave slice slip smell smile smoke snow
+soap soccer sock soil soldier soul soup south spare spirit sport spouse spring stable
+stadium steal steel stomach stone storm strategy straw stress stretch strike strip
+stuff stupid sugar suicide summer sun sweet swim sword tail tale tank tape taste tax
+tea teacher tear teen temple tennis tent terror theatre theater thick thin thumb
+tight tire tired toe tomato tone tongue tooth tour tourist towel tower town toy
+tradition traffic tragedy trail trash tree trial trick trip truck tune twin uncle
+union unique university valley vehicle victim village virus vote wage waste weapon
+weather wedding west wet wild wine wing winter wire wise witness wolf wood wool worker
+yard yellow youth
 `;
 
 let vocabulary: Set<string> | null = null;
@@ -100,14 +146,13 @@ function getVocabulary(): Set<string> {
   return vocabulary;
 }
 
-/** Base forms an inflected word could come from: sessions → session, studies → study. */
-function baseForms(word: string): string[] {
-  const forms = [word];
+/** Base forms one suffix away from `word`: sessions → session, studies → study. */
+function strippedForms(word: string): string[] {
+  const forms: string[] = [];
   const strip = (suffix: string) =>
     word.length > suffix.length + 2 && word.endsWith(suffix) ? word.slice(0, -suffix.length) : null;
 
-  const ies = strip("ies");
-  if (ies) forms.push(ies + "y");
+  if (word.length > 4 && word.endsWith("ies")) forms.push(word.slice(0, -3) + "y");
   const es = strip("es");
   if (es) forms.push(es);
   const s = strip("s");
@@ -129,8 +174,17 @@ function baseForms(word: string): string[] {
   return forms;
 }
 
-/** Whether a lowercase alphanumeric word is ordinary English, inflections included. */
-export function isCommonEnglishWord(normalized: string): boolean {
+/** `word` and what it could be inflected from, two suffixes deep (players → play). */
+function baseForms(word: string): string[] {
+  const once = strippedForms(word);
+  return [word, ...once, ...once.flatMap(strippedForms)];
+}
+
+/**
+ * Whether a lowercase alphanumeric word is ordinary English, inflections
+ * included. `extra` holds more words to count as ordinary, in base form.
+ */
+export function isCommonEnglishWord(normalized: string, extra?: ReadonlySet<string>): boolean {
   const words = getVocabulary();
-  return baseForms(normalized).some((form) => words.has(form));
+  return baseForms(normalized).some((form) => words.has(form) || !!extra?.has(form));
 }

@@ -293,6 +293,7 @@ class VoiceRecordingService {
   // can't tell two passages dictated with the same words apart.
   private baselineOwners = new Map<string, PendingCorrection>();
   private unfollowBaselines: (() => void) | null = null;
+  private writingCorrection = false;
 
   initialize(): void {
     if (this.initialized) return;
@@ -303,6 +304,12 @@ class VoiceRecordingService {
     if (!voiceInput) {
       logWarn(`${LOG_PREFIX} window.electron.voiceInput not available`);
       return;
+    }
+
+    // A singleton replaced by HMR left its baselines in the store.
+    const buffers = Object.values(useVoiceRecordingStore.getState().panelBuffers);
+    if (buffers.some((buffer) => buffer.sessionCorrectedText !== null)) {
+      this.followLearningBaselines();
     }
 
     this.unsubscribers.push(
@@ -1952,7 +1959,13 @@ class VoiceRecordingService {
         voiceStore.shiftDraftOffsets(panelId, edit.to, edit.text.length - (edit.to - edit.from));
         next = next.slice(0, edit.from) + edit.text + next.slice(edit.to);
       }
-      inputStore.setDraftInput(panelId, next, projectId);
+      // The offsets were shifted above; the baseline follower mustn't shift them again.
+      this.writingCorrection = true;
+      try {
+        inputStore.setDraftInput(panelId, next, projectId);
+      } finally {
+        this.writingCorrection = false;
+      }
       // One span from the first rewritten passage to the last, so restoring it
       // puts every passage back and leaves text typed between them as it is.
       const from = Math.min(...edits.map((edit) => edit.from));
@@ -2142,7 +2155,7 @@ class VoiceRecordingService {
           continue;
         }
         following = true;
-        if (start !== buffer.sessionDraftStart) {
+        if (!this.writingCorrection && start !== buffer.sessionDraftStart) {
           voiceStore.shiftDraftOffsets(
             panelId,
             buffer.sessionDraftStart,

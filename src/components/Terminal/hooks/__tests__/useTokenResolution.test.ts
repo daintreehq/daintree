@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import {
   appendAgentContextToDraft,
@@ -612,8 +612,20 @@ describe("useTokenResolution dictionary learning", () => {
     const state = {
       learnFromCorrections,
       panelBuffers: {
-        t1: { sessionCorrectedText: "use zoo stand for state", sessionDraftStart: 0 },
-      } as Record<string, { sessionCorrectedText?: string; sessionDraftStart?: number }>,
+        t1: {
+          sessionCorrectedText: "use zoo stand for state",
+          sessionDraftStart: 0,
+          dictationSessionId: "s1",
+        },
+      } as Record<
+        string,
+        {
+          sessionCorrectedText?: string;
+          sessionDraftStart?: number;
+          dictationSessionId?: string;
+          projectId?: string;
+        }
+      >,
       setSessionCorrectedText: (panelId: string, text: string | null) => {
         const buffer = state.panelBuffers[panelId];
         if (buffer) buffer.sessionCorrectedText = text ?? undefined;
@@ -651,7 +663,11 @@ describe("useTokenResolution dictionary learning", () => {
       await sendText("use Zustand for state", {
         submit: async () => {
           // A dictation finishing while the submit is on its way.
-          state.panelBuffers.t1 = { sessionCorrectedText: "next passage", sessionDraftStart: 30 };
+          state.panelBuffers.t1 = {
+            sessionCorrectedText: "next passage",
+            sessionDraftStart: 30,
+            dictationSessionId: "s2",
+          };
           return true;
         },
       });
@@ -663,5 +679,50 @@ describe("useTokenResolution dictionary learning", () => {
       })
     );
     expect(state.panelBuffers.t1!.sessionCorrectedText).toBe("next passage");
+  });
+
+  it("leaves a newer session's baseline that says the same words (#14645)", async () => {
+    const state = learning(vi.fn().mockResolvedValue(undefined));
+    const { sendText } = setup();
+    await act(async () => {
+      await sendText("use Zustand for state", {
+        submit: async () => {
+          state.panelBuffers.t1 = { ...state.panelBuffers.t1!, dictationSessionId: "s2" };
+          return true;
+        },
+      });
+    });
+    expect(state.panelBuffers.t1!.sessionCorrectedText).toBe("use zoo stand for state");
+  });
+
+  it("leaves the baseline of a draft under another key alone (#14645)", async () => {
+    const recordSuggestions = vi.fn();
+    const state = learning(recordSuggestions);
+    state.panelBuffers.t1!.projectId = "project-a";
+    const { sendText } = setup({ projectId: "isolated-composer" });
+    await act(async () => {
+      await sendText("use Zustand for state");
+    });
+    expect(state.panelBuffers.t1!.sessionCorrectedText).toBe("use zoo stand for state");
+    expect(recordSuggestions).not.toHaveBeenCalled();
+  });
+
+  it("compares only the dictated part of the draft, in its sentence (#14645)", async () => {
+    const recordSuggestions = vi.fn().mockResolvedValue(undefined);
+    const state = learning(recordSuggestions);
+    state.panelBuffers.t1 = {
+      ...state.panelBuffers.t1!,
+      sessionCorrectedText: "daintree first",
+      sessionDraftStart: 5,
+    };
+    const { sendText } = setup();
+    await act(async () => {
+      await sendText("open Daintree first");
+    });
+    await vi.waitFor(() =>
+      expect(recordSuggestions).toHaveBeenCalledWith({
+        candidates: [{ word: "Daintree", original: "daintree" }],
+      })
+    );
   });
 });
