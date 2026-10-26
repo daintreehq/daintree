@@ -269,6 +269,19 @@ describe("HybridInputBar deferred focus", () => {
     expect(document.activeElement).toBe(button);
   });
 
+  // The selection moving on ends the ask without advancing the epoch; home
+  // being the hybrid input is no reason for the pane left behind to grab.
+  it("drops a requested grab once the selection moves to another pane", async () => {
+    const { ref, editor } = await mount();
+    requestPaneFocus("term-1", "hybridInput");
+
+    ref.current!.focusWithCursorAtEnd();
+    usePanelStore.setState({ focusedId: "other" });
+    flushFrames();
+
+    expect(document.activeElement).not.toBe(editor);
+  });
+
   // A request naming the bar is what lets a drop, type-anywhere or a restore
   // land here while home is the terminal; without one, home vetoes the grab.
   it.each([
