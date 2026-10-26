@@ -361,7 +361,7 @@ describe("VoiceRecordingService — dictation ranges (#14597)", () => {
     await vi.waitFor(() =>
       expect(voiceStore.getState().panelBuffers[PANEL]?.correctionRange).toBeNull()
     );
-    expect(takeLandedCorrection(PANEL, draft())).toBeNull();
+    expect(takeLandedCorrection(PANEL, PROJECT, draft())).toBeNull();
 
     voiceStore.getState().beginSession({ panelId: PANEL, projectId: PROJECT });
     correct.fn.mockResolvedValueOnce({ action: "replace", correctedText: "Hello, again." });
@@ -369,7 +369,7 @@ describe("VoiceRecordingService — dictation ranges (#14597)", () => {
     await service.stop("Dictation stopped.");
     await vi.waitFor(() => expect(draft()).toBe("Intro. Hello there. Hello, again."));
 
-    expect(takeLandedCorrection(PANEL, draft())).toEqual({
+    expect(takeLandedCorrection(PANEL, PROJECT, draft())).toEqual({
       from: "Intro. Hello there. ".length,
       rawText: "hello again",
       correctedText: "Hello, again.",

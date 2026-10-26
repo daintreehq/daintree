@@ -68,7 +68,7 @@ beforeEach(() => {
   });
   useTerminalInputStore.setState({ draftInputs: new Map() });
   useVoiceRecordingStore.setState({ panelBuffers: {} });
-  takeLandedCorrection("term-1", "");
+  takeLandedCorrection("term-1", undefined, "");
 });
 
 afterEach(() => {
@@ -76,11 +76,11 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function mount() {
+async function mount(onSend: (payload: unknown) => void = () => {}) {
   const result = render(
     <TooltipProvider>
       <WorktreeStoreContext.Provider value={createWorktreeStore()}>
-        <HybridInputBar terminalId="term-1" cwd={WT_ID} agentId="claude" onSend={() => {}} />
+        <HybridInputBar terminalId="term-1" cwd={WT_ID} agentId="claude" onSend={onSend} />
       </WorktreeStoreContext.Provider>
     </TooltipProvider>
   );
@@ -119,7 +119,7 @@ async function landCorrection(): Promise<void> {
   await act(async () => {
     const inputs = useTerminalInputStore.getState();
     inputs.setDraftInput("term-1", CORRECTED);
-    recordCorrectionLanded("term-1", {
+    recordCorrectionLanded("term-1", undefined, {
       from: FROM,
       rawText: RAW.slice(FROM),
       correctedText: CORRECTED.slice(FROM),
@@ -157,6 +157,40 @@ describe("HybridInputBar after an AI correction lands", () => {
     expect(view.state.doc.toString()).toBe("");
   });
 
+  it("keeps typing after the correction its own step", async () => {
+    const { view } = await mount();
+    await writeDraft(RAW);
+    await landCorrection();
+
+    await act(async () => {
+      view.dispatch({
+        changes: { from: CORRECTED.length, insert: " Thanks" },
+        userEvent: "input.type",
+      });
+    });
+    await undo(view);
+    expect(view.state.doc.toString()).toBe(CORRECTED);
+    await undo(view);
+    expect(view.state.doc.toString()).toBe(RAW);
+  });
+
+  it("has nothing to undo after a send", async () => {
+    const onSend = vi.fn();
+    const { view } = await mount(onSend);
+    await act(async () => {
+      view.dispatch({ changes: { from: 0, insert: "ship it" }, userEvent: "input.type" });
+    });
+
+    await act(async () => {
+      runScopeHandlers(view, new KeyboardEvent("keydown", { key: "Enter" }), "editor");
+    });
+    expect(onSend).toHaveBeenCalled();
+    expect(view.state.doc.toString()).toBe("");
+
+    await undo(view);
+    expect(view.state.doc.toString()).toBe("");
+  });
+
   it("has nothing to undo once the draft is emptied from outside", async () => {
     const { view } = await mount();
     await writeDraft("sent from another window");
@@ -168,9 +202,9 @@ describe("HybridInputBar after an AI correction lands", () => {
     expect(draft()).toBe("");
   });
 
-  it("shows a correction that landed before the composer mounted", async () => {
+  it("shows a correction that landed before the composer mounted, and undoes it", async () => {
     useTerminalInputStore.getState().setDraftInput("term-1", CORRECTED);
-    recordCorrectionLanded("term-1", {
+    recordCorrectionLanded("term-1", undefined, {
       from: FROM,
       rawText: RAW.slice(FROM),
       correctedText: CORRECTED.slice(FROM),
@@ -180,5 +214,8 @@ describe("HybridInputBar after an AI correction lands", () => {
     const { view } = await mount();
 
     expect(view.contentDOM.querySelector(".cm-voice-restore")).not.toBeNull();
+    await undo(view);
+    expect(view.state.doc.toString()).toBe(RAW);
+    expect(draft()).toBe(RAW);
   });
 });

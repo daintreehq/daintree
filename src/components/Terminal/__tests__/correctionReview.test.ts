@@ -10,7 +10,7 @@ vi.mock("@/lib/trustedTypesPolicy", () => ({
   },
 }));
 
-import { EditorState } from "@codemirror/state";
+import { EditorState, type Extension } from "@codemirror/state";
 import { EditorView, runScopeHandlers } from "@codemirror/view";
 import { isolateHistory, undoDepth } from "@codemirror/commands";
 import { minimalDocChange } from "@/lib/textRangeMapping";
@@ -23,8 +23,8 @@ import {
   correctionLanded,
   createCorrectionReview,
   diffCorrection,
+  replayLandedCorrection,
   restoreCorrection,
-  showCorrectionReview,
   type CorrectionReview,
 } from "../inputEditorExtensions/correctionReview";
 
@@ -65,18 +65,23 @@ describe("diffCorrection", () => {
     expect(diffCorrection("same words", "same words")).toEqual({ changed: [], removed: [] });
   });
 
-  it("aligns repeated words to the ones the correction kept", () => {
-    expect(changedWords("the the test the end", "the test the end")).toEqual([]);
-    expect(diffCorrection("the the test the end", "the test the end").removed).toHaveLength(1);
+  it("aligns repeated words inside the changed middle to the ones the correction kept", () => {
+    const raw = "fix the the bug in the test";
+    const corrected = "fix the bug in this test";
+    const { changed, removed } = diffCorrection(raw, corrected);
+    expect(changed.map((s) => [corrected.slice(s.from, s.to), s.heard])).toEqual([["this", "the"]]);
+    expect(removed).toEqual([{ at: "fix the".length, afterWord: true, heard: "the" }]);
   });
 
   it("marks one span between the common head and tail when a passage is too long to align", () => {
     const words = (n: number, w: string) => Array.from({ length: n }, (_, i) => `${w}${i}`);
-    const raw = ["start", ...words(600, "a"), "end"].join(" ");
-    const corrected = ["start", ...words(600, "b"), "end"].join(" ");
+    // A word both sides share mid-passage, which a full alignment would keep.
+    const middle = (w: string) => [...words(300, w), "shared", ...words(300, `${w}x`)];
+    const raw = ["start", ...middle("a"), "end"].join(" ");
+    const corrected = ["start", ...middle("b"), "end"].join(" ");
     const { changed } = diffCorrection(raw, corrected);
     expect(changed).toHaveLength(1);
-    expect(corrected.slice(changed[0]!.from, changed[0]!.to)).toBe(words(600, "b").join(" "));
+    expect(corrected.slice(changed[0]!.from, changed[0]!.to)).toBe(middle("b").join(" "));
   });
 });
 
@@ -109,14 +114,18 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function mount(doc: string): EditorView {
+function mount(doc: string, extensions: Extension[] = []): EditorView {
   const parent = document.createElement("div");
   document.body.appendChild(parent);
   const view = new EditorView({
     parent,
     state: EditorState.create({
       doc,
-      extensions: [createComposerHistory(), createCorrectionReview({ onShown, onSwapped })],
+      extensions: [
+        createComposerHistory(),
+        createCorrectionReview({ onShown, onSwapped }),
+        ...extensions,
+      ],
     }),
   });
   views.push(view);
@@ -178,6 +187,7 @@ describe("correction review", () => {
     vi.advanceTimersByTime(VOICE_CORRECTION_MARK_FADE_MS);
     expect(marked(view)).toEqual([]);
     expect(restoreControl(view)).not.toBeNull();
+    expect(onShown).toHaveBeenCalledTimes(1);
     const dispatch = vi.spyOn(view, "dispatch");
     vi.advanceTimersByTime(VOICE_CORRECTION_MARK_DWELL_MS * 10);
     expect(dispatch).not.toHaveBeenCalled();
@@ -254,24 +264,36 @@ describe("correction review", () => {
     expect(onSwapped).not.toHaveBeenCalled();
   });
 
-  it("shows a correction that landed before the editor saw it, without an undo step", () => {
+  it("replays a correction that landed before the editor saw it as an undoable swap", () => {
     const view = mount(INTRO + CORRECTED);
-    showCorrectionReview(view, review);
+    replayLandedCorrection(view, review);
 
+    expect(view.state.doc.toString()).toBe(INTRO + CORRECTED);
     expect(marked(view)).toEqual(["Open", "Zustand store."]);
-    expect(undoDepth(view.state)).toBe(0);
+    expect(undoDepth(view.state)).toBe(1);
 
-    restoreControl(view)!.dispatchEvent(new MouseEvent("click", { bubbles: true, button: 0 }));
+    undoKey(view);
     expect(view.state.doc.toString()).toBe(INTRO + RAW);
+    expect(onSwapped).toHaveBeenLastCalledWith(review, "raw");
   });
 
-  it("refuses to show or restore a correction the draft no longer holds", () => {
+  it("refuses to replay or restore a correction the draft no longer holds", () => {
     const view = mount(INTRO + "something else entirely");
-    showCorrectionReview(view, review);
+    replayLandedCorrection(view, review);
 
     expect(marked(view)).toEqual([]);
+    expect(undoDepth(view.state)).toBe(0);
     expect(restoreCorrection(view)).toBe(false);
     expect(view.state.doc.toString()).toBe(INTRO + "something else entirely");
+  });
+
+  it("takes no restore while the composer is locked", () => {
+    const view = mount(INTRO + RAW, [EditorView.editable.of(false)]);
+    land(view, review);
+
+    expect(restoreCorrection(view)).toBe(false);
+    expect(view.state.doc.toString()).toBe(INTRO + CORRECTED);
+    expect(onSwapped).not.toHaveBeenCalled();
   });
 
   it("drops its pending deadline when the editor goes away", () => {

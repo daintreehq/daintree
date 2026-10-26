@@ -4,6 +4,10 @@ import type { Compartment } from "@codemirror/state";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useVoiceRecordingStore } from "@/store";
 import { useProjectStore } from "@/store/projectStore";
+import { takeLandedCorrection } from "@/services/voiceCorrectionLanding";
+import { minimalDocChange } from "@/lib/textRangeMapping";
+import { outsideDraftWrite } from "../inputEditorExtensions/composerHistory";
+import { replayLandedCorrection } from "../inputEditorExtensions/correctionReview";
 import {
   voiceRecordingService,
   VOICE_CORRECTION_SEND_WAIT_MS,
@@ -113,13 +117,12 @@ export function useVoiceWaitSubmit({
         const draft = useTerminalInputStore.getState().getDraftInput(terminalId, projectId);
         const finalView = editorViewRef.current;
         if (finalView) {
-          const current = finalView.state.doc.toString();
-          if (draft !== current) {
-            finalView.dispatch({
-              changes: { from: 0, to: current.length, insert: draft },
-              selection: { anchor: draft.length },
-            });
-          }
+          // The same outside write the sync effect would make, correction
+          // included, so a send held back afterwards leaves it undoable.
+          const landed = takeLandedCorrection(terminalId, projectId, draft);
+          const change = minimalDocChange(finalView.state.doc.toString(), draft);
+          if (change !== null) finalView.dispatch(outsideDraftWrite(change, draft, landed));
+          else if (landed) replayLandedCorrection(finalView, landed);
         }
 
         sendFromEditorRef.current();

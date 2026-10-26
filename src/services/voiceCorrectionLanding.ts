@@ -1,3 +1,4 @@
+import { makeDraftKey } from "@/lib/draftKey";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 
 /** A correction just swapped into a panel's draft, on its way to that panel's composer. */
@@ -8,24 +9,34 @@ export interface LandedCorrection {
   correctedText: string;
 }
 
-// Keyed by panel. The composer takes it with the draft revision the swap
-// bumped; a composer that is not mounted takes it when it next syncs.
+// Keyed by draft, so an isolated composer for the same terminal never takes
+// the pane's. The composer takes it with the draft revision the swap bumped;
+// one that is not mounted takes it when it next syncs.
 const landed = new Map<string, LandedCorrection>();
 
-export function recordCorrectionLanded(panelId: string, correction: LandedCorrection): void {
+export function recordCorrectionLanded(
+  panelId: string,
+  projectId: string | undefined,
+  correction: LandedCorrection
+): void {
   if (correction.rawText === correction.correctedText) return;
-  landed.set(panelId, correction);
+  landed.set(makeDraftKey(panelId, projectId), correction);
 }
 
 /**
- * The correction waiting for `panelId`'s composer, if `draft` still holds it
+ * The correction waiting for this draft's composer, if `draft` still holds it
  * where it landed. Taken either way: one that no longer matches the draft has
  * nothing left to show.
  */
-export function takeLandedCorrection(panelId: string, draft: string): LandedCorrection | null {
-  const correction = landed.get(panelId);
+export function takeLandedCorrection(
+  panelId: string,
+  projectId: string | undefined,
+  draft: string
+): LandedCorrection | null {
+  const key = makeDraftKey(panelId, projectId);
+  const correction = landed.get(key);
   if (!correction) return null;
-  landed.delete(panelId);
+  landed.delete(key);
   const { from, correctedText } = correction;
   return draft.slice(from, from + correctedText.length) === correctedText ? correction : null;
 }

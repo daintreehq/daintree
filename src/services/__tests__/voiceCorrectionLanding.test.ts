@@ -11,32 +11,39 @@ const draft = `Intro. ${correction.correctedText}`;
 
 describe("landed corrections", () => {
   beforeEach(() => {
-    takeLandedCorrection("term-1", "");
+    takeLandedCorrection("term-1", "p1", "");
     useVoiceRecordingStore.setState({ panelBuffers: {} });
   });
 
   it("hands a correction to its panel's composer once", () => {
-    recordCorrectionLanded("term-1", correction);
+    recordCorrectionLanded("term-1", "p1", correction);
 
-    expect(takeLandedCorrection("term-2", draft)).toBeNull();
-    expect(takeLandedCorrection("term-1", draft)).toEqual(correction);
-    expect(takeLandedCorrection("term-1", draft)).toBeNull();
+    expect(takeLandedCorrection("term-2", "p1", draft)).toBeNull();
+    expect(takeLandedCorrection("term-1", "p1", draft)).toEqual(correction);
+    expect(takeLandedCorrection("term-1", "p1", draft)).toBeNull();
   });
 
   it("drops a correction the draft no longer holds where it landed", () => {
-    recordCorrectionLanded("term-1", correction);
+    recordCorrectionLanded("term-1", "p1", correction);
 
-    expect(takeLandedCorrection("term-1", `Intro! ${correction.correctedText}`)).toEqual(
+    expect(takeLandedCorrection("term-1", "p1", `Intro! ${correction.correctedText}`)).toEqual(
       correction
     );
-    recordCorrectionLanded("term-1", correction);
-    expect(takeLandedCorrection("term-1", "Intro. Hello, there")).toBeNull();
-    expect(takeLandedCorrection("term-1", draft)).toBeNull();
+    recordCorrectionLanded("term-1", "p1", correction);
+    expect(takeLandedCorrection("term-1", "p1", "Intro. Hello, there")).toBeNull();
+    expect(takeLandedCorrection("term-1", "p1", draft)).toBeNull();
+  });
+
+  it("keeps a correction for its own draft, apart from an isolated composer's", () => {
+    recordCorrectionLanded("term-1", "p1", correction);
+
+    expect(takeLandedCorrection("term-1", "isolated-composer", draft)).toBeNull();
+    expect(takeLandedCorrection("term-1", "p1", draft)).toEqual(correction);
   });
 
   it("records nothing for a correction that changed nothing", () => {
-    recordCorrectionLanded("term-1", { from: 0, rawText: "same", correctedText: "same" });
-    expect(takeLandedCorrection("term-1", "same")).toBeNull();
+    recordCorrectionLanded("term-1", "p1", { from: 0, rawText: "same", correctedText: "same" });
+    expect(takeLandedCorrection("term-1", "p1", "same")).toBeNull();
   });
 });
 

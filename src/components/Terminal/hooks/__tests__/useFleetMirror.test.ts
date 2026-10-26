@@ -29,6 +29,7 @@ describe("useFleetMirror", () => {
   let setValue: ReturnType<typeof vi.fn>;
   let viewDispatch: ReturnType<typeof vi.fn>;
   let editorViewRef: { current: any };
+  let mirroredDraft: string;
 
   beforeEach(() => {
     setDraftInput = vi.fn();
@@ -43,8 +44,9 @@ describe("useFleetMirror", () => {
       },
     };
 
+    mirroredDraft = "";
     vi.mocked(useTerminalInputStore).mockImplementation((_selector: unknown) => {
-      return "" as any;
+      return mirroredDraft as any;
     });
 
     (useTerminalInputStore as any).getState = vi.fn(() => ({
@@ -113,9 +115,9 @@ describe("useFleetMirror", () => {
     });
     view.dispatch({ changes: { from: 0, insert: "mine" }, userEvent: "input.type" });
     editorViewRef.current = view;
-    vi.mocked(useTerminalInputStore).mockImplementation(() => "driver text" as any);
+    mirroredDraft = "driver text";
 
-    render({ isFleetFollower: true, value: "mine" } as any);
+    render({ isFleetFollower: true, value: "mine" });
 
     expect(view.state.doc.toString()).toBe("driver text");
     expect(undoDepth(view.state)).toBe(0);

@@ -1,12 +1,24 @@
 import {
   Compartment,
+  Prec,
   type ChangeDesc,
+  type ChangeSpec,
   type Extension,
   type StateEffectType,
   type StateField,
+  type TransactionSpec,
 } from "@codemirror/state";
 import { EditorView, keymap, type Command } from "@codemirror/view";
-import { history, invertedEffects, redo, redoDepth, undo, undoDepth } from "@codemirror/commands";
+import {
+  history,
+  invertedEffects,
+  isolateHistory,
+  redo,
+  redoDepth,
+  undo,
+  undoDepth,
+} from "@codemirror/commands";
+import { correctionLanded, type CorrectionReview } from "./correctionReview";
 
 interface ChipEntryRange {
   from: number;
@@ -31,8 +43,41 @@ const composerHistoryKeymap = keymap.of([
   { linux: "Ctrl-Shift-z", run: whileEditable(redo), preventDefault: true },
 ]);
 
+// The same lock for the Edit menu's Undo, which reaches the editor as a
+// `beforeinput` that `history()` would otherwise run unguarded.
+const lockedNativeHistory = Prec.highest(
+  EditorView.domEventHandlers({
+    beforeinput(event, view) {
+      if (event.inputType !== "historyUndo" && event.inputType !== "historyRedo") return false;
+      if (view.state.facet(EditorView.editable)) return false;
+      event.preventDefault();
+      return true;
+    },
+  })
+);
+
 export function createComposerHistory(): Extension {
-  return [historyCompartment.of(history()), composerHistoryKeymap];
+  return [historyCompartment.of(history()), composerHistoryKeymap, lockedNativeHistory];
+}
+
+/**
+ * An outside write to the draft (a dictated utterance, a correction or
+ * file-link swap, a handoff) as one undo step of its own: typing next to it
+ * within the grouping delay would otherwise merge into it. A correction that
+ * landed in it rides along, so undo and redo carry the correction too.
+ */
+export function outsideDraftWrite(
+  change: ChangeSpec,
+  draft: string,
+  landed: CorrectionReview | null
+): TransactionSpec {
+  return {
+    changes: change,
+    selection: { anchor: draft.length },
+    scrollIntoView: true,
+    effects: landed ? correctionLanded.of(landed) : [],
+    annotations: isolateHistory.of("full"),
+  };
 }
 
 /**
@@ -50,9 +95,9 @@ export function clearComposerHistory(view: EditorView): void {
 /**
  * The `map` for a chip's add effect, so an undo step that merged with adjacent
  * typing restores the chip where that typing left it. History also maps stored
- * effects across changes kept out of it, measured against a different document
- * than the one the effect refers to; the composer clears its history after
- * those, and a chip that cannot be placed is dropped rather than misplaced.
+ * effects across changes kept out of it (a fleet follower's mirror, a replayed
+ * correction), measured against a different document than the one the effect
+ * refers to; a chip that cannot be placed that way is dropped, not misplaced.
  */
 export function mapChipEntry<T extends ChipEntryRange>(
   entry: T,

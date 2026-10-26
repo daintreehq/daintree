@@ -10,7 +10,7 @@ vi.mock("@/lib/trustedTypesPolicy", () => ({
   },
 }));
 
-import { EditorState, Transaction, type Extension } from "@codemirror/state";
+import { Compartment, EditorState, Transaction, type Extension } from "@codemirror/state";
 import { EditorView, runScopeHandlers } from "@codemirror/view";
 import { isolateHistory, redoDepth, undoDepth } from "@codemirror/commands";
 import {
@@ -95,13 +95,33 @@ describe("composer history", () => {
     expect(view.state.doc.toString()).toBe("");
   });
 
-  it("refuses undo and redo while the composer is not editable", () => {
-    const view = mount("", [EditorView.editable.of(false)]);
-    type(view, 0, "held for send");
+  it("refuses undo and redo, by key or from the Edit menu, while the composer is locked", () => {
+    const editable = new Compartment();
+    const view = mount("", [editable.of(EditorView.editable.of(true))]);
+    type(view, 0, "held");
+    pause(view);
+    type(view, 4, " for send");
+    undoKey(view);
+    view.dispatch({ effects: editable.reconfigure(EditorView.editable.of(false)) });
 
     undoKey(view);
-    expect(view.state.doc.toString()).toBe("held for send");
-    expect(undoDepth(view.state)).toBe(1);
+    expect(view.state.doc.toString()).toBe("held");
+    redoKey(view);
+    expect(view.state.doc.toString()).toBe("held");
+    const native = new InputEvent("beforeinput", {
+      inputType: "historyUndo",
+      bubbles: true,
+      cancelable: true,
+    });
+    view.contentDOM.dispatchEvent(native);
+    expect(native.defaultPrevented).toBe(true);
+    expect(view.state.doc.toString()).toBe("held");
+
+    view.dispatch({ effects: editable.reconfigure(EditorView.editable.of(true)) });
+    view.contentDOM.dispatchEvent(
+      new InputEvent("beforeinput", { inputType: "historyUndo", bubbles: true, cancelable: true })
+    );
+    expect(view.state.doc.toString()).toBe("");
   });
 
   it("clears every undo and redo step", () => {
@@ -110,16 +130,16 @@ describe("composer history", () => {
     pause(view);
     type(view, 11, " more");
     undoKey(view);
-    expect(undoDepth(view.state)).toBeGreaterThan(0);
-    expect(redoDepth(view.state)).toBeGreaterThan(0);
+    expect(undoDepth(view.state)).toBe(1);
+    expect(redoDepth(view.state)).toBe(1);
 
-    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: "" } });
     clearComposerHistory(view);
 
     expect(undoDepth(view.state)).toBe(0);
     expect(redoDepth(view.state)).toBe(0);
     undoKey(view);
-    expect(view.state.doc.toString()).toBe("");
+    redoKey(view);
+    expect(view.state.doc.toString()).toBe("sent prompt");
   });
 
   it("leaves a view without history alone, and history kept working after a clear", () => {
@@ -139,19 +159,6 @@ describe("composer history", () => {
     type(view, 3, " new");
     undoKey(view);
     expect(view.state.doc.toString()).toBe("old");
-  });
-
-  it("does not record a change kept out of history", () => {
-    const view = mount("");
-    type(view, 0, "mine");
-    view.dispatch({
-      changes: { from: 0, to: 4, insert: "theirs" },
-      annotations: Transaction.addToHistory.of(false),
-    });
-    clearComposerHistory(view);
-
-    undoKey(view);
-    expect(view.state.doc.toString()).toBe("theirs");
   });
 });
 
@@ -209,6 +216,21 @@ describe("chips through undo", () => {
     expect(view.state.field(imageChipField).map((e) => [e.from, e.to])).toEqual([
       [5, 5 + imagePath.length],
     ]);
+  });
+
+  it("drops a chip it cannot place rather than throwing, when text moved outside history", () => {
+    const view = withImageChip();
+    const entry = view.state.field(imageChipField)[0]!;
+    view.dispatch({ changes: { from: entry.from, to: entry.to }, userEvent: "delete" });
+    view.dispatch({
+      changes: { from: 0, insert: ">> " },
+      annotations: Transaction.addToHistory.of(false),
+    });
+
+    expect(() => undoKey(view)).not.toThrow();
+
+    expect(view.state.doc.toString()).toBe(`>> look ${imagePath} here`);
+    expect(readImageChipPaths(view)).toEqual([]);
   });
 
   it("brings a file-drop chip back when its pasted insertion is undone and redone", () => {

@@ -191,14 +191,26 @@ export const correctionReviewField = StateField.define<ReviewState | null>({
 });
 
 /**
- * Shows a correction the editor did not see land: the draft was loaded with it
- * already in place. Kept out of history, so Cmd+Z never stops on it — only the
- * restore control can put this one back.
+ * A correction already in the document when the editor learns of it: the
+ * composer mounted after it landed, or a send synced the draft ahead of the
+ * usual sync. The raw text goes back out of history and the correction lands
+ * over it as its own undo step, the same as one seen live.
  */
-export function showCorrectionReview(view: EditorView, review: CorrectionReview): void {
+export function replayLandedCorrection(view: EditorView, review: CorrectionReview): void {
+  const to = review.from + review.correctedText.length;
+  if (view.state.doc.sliceString(review.from, to) !== review.correctedText) return;
   view.dispatch({
-    effects: correctionLanded.of(review),
+    changes: { from: review.from, to, insert: review.rawText },
     annotations: Transaction.addToHistory.of(false),
+  });
+  view.dispatch({
+    changes: {
+      from: review.from,
+      to: review.from + review.rawText.length,
+      insert: review.correctedText,
+    },
+    effects: correctionLanded.of(review),
+    annotations: isolateHistory.of("full"),
   });
 }
 
@@ -210,7 +222,7 @@ const RESTORE_USER_EVENT = "input.restore";
  */
 export function restoreCorrection(view: EditorView): boolean {
   const state = view.state.field(correctionReviewField, false);
-  if (!state) return false;
+  if (!state || !view.state.facet(EditorView.editable)) return false;
   const { review } = state;
   const to = review.from + review.correctedText.length;
   if (view.state.doc.sliceString(review.from, to) !== review.correctedText) return false;
@@ -383,6 +395,8 @@ const reviewFadeTheme = EditorView.baseTheme({
   ".cm-voice-corrected-gap.cm-voice-corrected-fading": {
     animation: `cm-voice-corrected-out ${VOICE_CORRECTION_MARK_FADE_MS}ms ease-out forwards`,
   },
+  // A locked composer (disabled, or holding a send) takes no restore.
+  '.cm-content[contenteditable="false"] .cm-voice-restore': { display: "none" },
 });
 
 export interface CorrectionReviewOptions {

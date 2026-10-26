@@ -6,6 +6,7 @@
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
+import { EditorView, runScopeHandlers } from "@codemirror/view";
 import type { PtyPanelData } from "@shared/types/panel";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { WorktreeStoreContext } from "@/contexts/WorktreeStoreContext";
@@ -146,5 +147,29 @@ describe("HybridInputBar following the driver's draft", () => {
 
     expect(useTerminalInputStore.getState().getDraftInput("term-1")).toBe("");
     expect(editorText(view.container)).toBe("");
+  });
+
+  it("takes over with none of the driver's drafts left to undo into", async () => {
+    const view = mount(true);
+    await act(async () => {});
+    await hostDraft("first draft");
+    await hostDraft("first draft, revised");
+
+    await act(async () => {
+      view.rerender(bar(false));
+    });
+    const editor = EditorView.findFromDOM(
+      view.container.querySelector<HTMLElement>(".cm-editor")!
+    )!;
+    const isMac = /Mac/.test(navigator.platform);
+    await act(async () => {
+      runScopeHandlers(
+        editor,
+        new KeyboardEvent("keydown", { key: "z", metaKey: isMac, ctrlKey: !isMac }),
+        "editor"
+      );
+    });
+
+    expect(editorText(view.container)).toBe("first draft, revised");
   });
 });
