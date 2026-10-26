@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { HostId } from "@shared/types/remoteHosts";
 import { CANOPY_SEEN_HEARTBEAT_MS, canopyViewIsWatched, reportCanopySeen } from "@/lib/canopySeen";
 import { subscribeProjectViewObservability } from "@/lib/viewCacheState";
-import { itemNeedsAttention, type CanopyItem } from "./canopyModel";
+import { itemNeedsAttention, itemPutAside, type CanopyItem } from "./canopyModel";
 import { canopyCardDomId, type CanopyCardHandle, type CanopyPaneFocus } from "./CanopyCard";
 import type { CanopyAssistantItem, CanopyRoleFilter } from "./canopyAssistants";
 import { canopyAssistantDomId, openAssistantItem } from "./openAssistantItem";
@@ -317,7 +317,9 @@ export function useCanopyInboxFocus({
     const order = visibleRef.current;
     const index = order.findIndex((candidate) => candidate.runId === runId);
     const wanted = (candidate: CanopyItem) =>
-      candidate.runId !== runId && (itemNeedsAttention(candidate) || candidate.unread);
+      candidate.runId !== runId &&
+      !itemPutAside(candidate) &&
+      (itemNeedsAttention(candidate) || candidate.unread);
     return (
       order.slice(index + 1).find(wanted) ??
       order.slice(0, Math.max(index, 0)).find(wanted) ??

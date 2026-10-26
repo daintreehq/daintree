@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useCanopyStore, type CanopyScope } from "@/store/canopyStore";
 import { CANOPY_URGENT_PRIORITY, type CanopySnapshot } from "@shared/types/ipc/canopy";
-import { itemPriority, splitInbox, type CanopyItem } from "./canopyModel";
+import { itemPriority, itemPutAside, splitInbox, type CanopyItem } from "./canopyModel";
 import { CANOPY_REVEAL_MS, nextCanopyOrder } from "./canopyOrder";
 import type { HostId } from "@shared/types/remoteHosts";
 
@@ -10,6 +10,7 @@ function isUrgentItem(item: CanopyItem): boolean {
   const card = item.card;
   return (
     card !== null &&
+    !itemPutAside(item) &&
     card.priority >= CANOPY_URGENT_PRIORITY &&
     card.handledAt === null &&
     item.disposition === null

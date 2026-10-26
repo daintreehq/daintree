@@ -189,6 +189,11 @@ interface CanopyRowProps {
  * there in words, never as a score — on screen or read aloud. A click opens its
  * terminal beside the list.
  */
+function parkedLabel(note: string | undefined): string {
+  const trimmed = note?.trim();
+  return trimmed ? `Parked: ${trimmed}` : "Parked";
+}
+
 export function CanopyRow({
   item,
   domId,
@@ -310,6 +315,14 @@ export function CanopyRow({
   // Quiet and working share the spinner and differ only in hue once motion is
   // reduced; the word says which, since the clock beside the glyph is only a time.
   if (row.band === "quiet") metaTail.push("Quiet");
+  // The user's own decision, said first so a held ask is never read as live.
+  const asideWord =
+    row.run.park !== undefined
+      ? parkedLabel(row.run.park.note)
+      : row.run.snooze !== undefined
+        ? "Snoozed"
+        : null;
+  if (asideWord !== null) metaTail.unshift(asideWord);
   // A reading, not an observation, so it is said as one: it looks done.
   if (!compact && looksDone) metaTail.push("Looks done");
   // Still behind a ticking spinner: Daintree's own quiet tracking cannot see it.
@@ -347,6 +360,7 @@ export function CanopyRow({
     unread ? "unread" : null,
     asking ? "asking you a question" : null,
     looksDone ? "looks done" : null,
+    asideWord !== null ? asideWord.toLowerCase() : null,
     row.agePhrase,
     !compact && row.band !== "quiet" && card?.stalledSince != null && itemIsBusy(item)
       ? `screen unchanged for ${formatWaitAge(card.stalledSince, nowMs)}`
