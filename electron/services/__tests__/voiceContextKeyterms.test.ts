@@ -301,6 +301,71 @@ describe("assembleKeyterms", () => {
     expect(result.length).toBeLessThanOrEqual(MAX_KEYTERMS);
   });
 
+  describe("command terms", () => {
+    const commands = Array.from({ length: 20 }, (_, i) => `command name ${i}`);
+
+    it("never displaces a dictionary term", async () => {
+      const dictionary = Array.from({ length: 100 }, (_, i) => `customTerm${i}`);
+      const result = await assembleKeyterms({
+        customDictionary: dictionary,
+        commandTerms: Promise.resolve(commands),
+      });
+      const fromDictionary = result.filter((term) => term.startsWith("customTerm"));
+      expect(fromDictionary).toHaveLength(MAX_DICTIONARY_KEYTERMS);
+      expect(result.length).toBeLessThanOrEqual(MAX_KEYTERMS);
+    });
+
+    it("keeps room for the branch however many commands there are", async () => {
+      const dictionary = Array.from({ length: 100 }, (_, i) => `customTerm${i}`);
+      const result = await assembleKeyterms({
+        customDictionary: dictionary,
+        projectName: "Daintree",
+        terminalId: TARGET,
+        ptyClient: asPtyClient(
+          makePtyClient([], { cwd: "/repo", worktreeId: "/repo/worktrees/feature" })
+        ),
+        commandTerms: Promise.resolve(commands),
+      });
+      expect(result).toContain("command name 0");
+      expect(result).toContain("feature");
+      expect(result).toContain("auth");
+      expect(result).toHaveLength(MAX_KEYTERMS);
+    });
+
+    it("adds commands most likely first, ahead of terminal identifiers", async () => {
+      const ptyClient = makePtyClient(["const userSessionStore = createStore();"]);
+      const result = await assembleKeyterms({
+        customDictionary: [],
+        terminalId: TARGET,
+        ptyClient: asPtyClient(ptyClient),
+        commandTerms: Promise.resolve(["plugin creator", "review"]),
+      });
+      const pluginAt = result.indexOf("plugin creator");
+      expect(pluginAt).toBeGreaterThanOrEqual(0);
+      expect(result.indexOf("review")).toBe(pluginAt + 1);
+      expect(result.indexOf("userSessionStore")).toBeGreaterThan(pluginAt);
+    });
+
+    it("caps the tier and skips names too short to help", async () => {
+      const result = await assembleKeyterms({
+        customDictionary: [],
+        commandTerms: Promise.resolve(["ui", ...commands]),
+      });
+      expect(result).not.toContain("ui");
+      expect(result.filter((term) => term.startsWith("command name")).length).toBeLessThan(
+        commands.length
+      );
+    });
+
+    it("starts without commands when their lookup fails", async () => {
+      const result = await assembleKeyterms({
+        customDictionary: ["Daintree"],
+        commandTerms: Promise.reject(new Error("lookup failed")),
+      });
+      expect(result).toEqual(["Daintree"]);
+    });
+  });
+
   it("adds project name tokens", async () => {
     const result = await assembleKeyterms({
       customDictionary: [],

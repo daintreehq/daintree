@@ -58,6 +58,7 @@ type CompletePayload = {
   willCorrect: boolean;
   itemId?: string;
   transcriptId?: string;
+  commandText?: string;
 };
 type FileTokenPayload = {
   sessionId: string;
@@ -841,6 +842,62 @@ describe("VoiceRecordingService — correction over dictated ranges (#14613)", (
     await service.stop("Dictation stopped.");
 
     expect(correct.fn).not.toHaveBeenCalled();
+  });
+});
+
+describe("VoiceRecordingService — the target agent's commands (#14655)", () => {
+  const say = (text: string, itemId: string) => {
+    delta(text, itemId);
+    complete(text, itemId);
+  };
+  const sayCommand = (text: string, commandText: string, itemId: string) => {
+    delta(text, itemId);
+    callbacks.complete!({ sessionId: SESSION_ID, text, willCorrect: false, itemId, commandText });
+  };
+
+  it("writes a spoken command as typed when it opens the prompt", async () => {
+    const { draft, records, textOf } = await setup();
+    sayCommand("Slash review the last commit.", "/review the last commit.", "item-a");
+    expect(draft()).toBe("/review the last commit.");
+    expect(textOf(records()[0]!.utterances[0]!.range)).toBe("/review the last commit.");
+  });
+
+  it("keeps the words when text comes before them", async () => {
+    const { draft } = await setup("Note:");
+    sayCommand("Slash compact.", "/compact", "item-a");
+    expect(draft()).toBe("Note: Slash compact.");
+  });
+
+  it("keeps the words after a whitespace-only draft is filled in", async () => {
+    const { draft } = await setup("  ");
+    sayCommand("slash compact", "/compact", "item-a");
+    expect(draft().trim()).toBe("/compact");
+  });
+
+  it("drops a command correction wrote once text is typed in front of the passage", async () => {
+    const { service, voiceStore, draft, setDraft } = await setup();
+    let resolveCorrection!: (value: unknown) => void;
+    correct.fn.mockReturnValue(new Promise((resolve) => (resolveCorrection = resolve)));
+    voiceStore.getState().setCorrectionEnabled(true);
+
+    say("compact the conversation", "item-a");
+    await service.stop("Dictation stopped.");
+    expect(correct.fn).toHaveBeenCalledWith(expect.objectContaining({ startsPrompt: true }));
+    setDraft("First: " + draft());
+
+    resolveCorrection({ action: "replace", correctedText: "/compact" });
+    await vi.waitFor(() => expect(service.hasPendingCorrection(PANEL)).toBe(false));
+    expect(draft()).toBe("First: compact the conversation");
+  });
+
+  it("lands a command correction wrote while the passage still opens the prompt", async () => {
+    const { service, voiceStore, draft } = await setup();
+    correct.fn.mockResolvedValue({ action: "replace", correctedText: "/compact" });
+    voiceStore.getState().setCorrectionEnabled(true);
+
+    say("compact the conversation", "item-a");
+    await service.stop("Dictation stopped.");
+    await vi.waitFor(() => expect(draft()).toBe("/compact"));
   });
 });
 

@@ -322,3 +322,55 @@ describe("buildCorrectionSystemPrompt", () => {
     expect(prompt).toContain("my-repo");
   });
 });
+
+describe("buildCorrectionSystemPrompt target", () => {
+  const target = {
+    agentName: "Codex",
+    isAssistant: false,
+    commands: [
+      { token: "$plugin-creator", description: "Scaffold a plugin\nfrom a template" },
+      { token: "/compact", description: "" },
+    ],
+  };
+
+  it("follows the fixed core prompt, so its cacheable prefix holds", () => {
+    const prompt = buildCorrectionSystemPrompt({ target, projectName: "Daintree" });
+    expect(prompt.startsWith(CORE_CORRECTION_PROMPT)).toBe(true);
+    expect(prompt.indexOf("TARGET:")).toBeLessThan(prompt.indexOf("CURRENT PROJECT:"));
+  });
+
+  it("lists each command as typed, with its description on one line", () => {
+    const prompt = buildCorrectionSystemPrompt({ target });
+    expect(prompt).toContain("Codex, an AI coding agent");
+    expect(prompt).toContain("$plugin-creator — Scaffold a plugin from a template\n/compact\n");
+  });
+
+  it("bounds the command list and each description", () => {
+    const many = Array.from({ length: 100 }, (_, i) => ({
+      token: `/command-${i}`,
+      description: "x".repeat(200),
+    }));
+    const prompt = buildCorrectionSystemPrompt({ target: { ...target, commands: many } });
+    expect(prompt).toContain("/command-0 — ");
+    expect(prompt).not.toContain("/command-99");
+    expect(prompt).not.toContain("x".repeat(100));
+  });
+
+  it("tells a target with no commands never to write one", () => {
+    const prompt = buildCorrectionSystemPrompt({ target: { ...target, commands: [] } });
+    expect(prompt).toContain("It has no commands");
+    expect(prompt).not.toContain("COMMAND RULES:");
+  });
+
+  it("names the Assistant and the agent it runs on", () => {
+    const prompt = buildCorrectionSystemPrompt({
+      target: { ...target, agentName: "Claude", isAssistant: true },
+    });
+    expect(prompt).toContain("the Daintree Assistant");
+    expect(prompt).toContain("runs on Claude");
+  });
+
+  it("adds no target section without one", () => {
+    expect(buildCorrectionSystemPrompt({})).not.toContain("TARGET:");
+  });
+});

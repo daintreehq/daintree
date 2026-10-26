@@ -289,10 +289,22 @@ export function voiceCommandKeyterms(vocabulary: VoiceCommandVocabulary, limit: 
   return terms;
 }
 
-/** The first word of `text` when it opens with one of the vocabulary's prefixes. */
-function leadingCommandWord(text: string, vocabulary: VoiceCommandVocabulary): string | null {
-  const word = text.trim().split(/\s/u, 1)[0] ?? "";
-  return vocabulary.prefixes.some((prefix) => word.startsWith(prefix.prefix)) ? word : null;
+// Every trigger a command can be spoken with. Correction may never invent a
+// token opening with one, whatever the target accepts.
+const SPOKEN_TRIGGERS = (
+  Object.entries(COMPLETION_TRIGGER_SPOKEN_FORMS) as [CompletionTrigger, readonly string[]][]
+)
+  .filter(([, forms]) => forms.length > 0)
+  .map(([trigger]) => trigger);
+
+function leadingWord(text: string): string {
+  return text.trim().split(/\s/u, 1)[0] ?? "";
+}
+
+/** `/review`, `$plugin-creator`, `/prompts:deploy`, but not `/etc/hosts` or `/`. */
+function isCommandShaped(word: string): boolean {
+  const trigger = SPOKEN_TRIGGERS.find((candidate) => word.startsWith(candidate));
+  return trigger !== undefined && COMMAND_SHAPED_RE.test(word.slice(trigger.length));
 }
 
 function knownToken(token: string, vocabulary: VoiceCommandVocabulary): VoiceCommandEntry | null {
@@ -348,12 +360,11 @@ export function checkVoiceCommandEdit(
   vocabulary: VoiceCommandVocabulary,
   startsPrompt: boolean
 ): VoiceCommandEditRejection | null {
-  if (vocabulary.prefixes.length === 0) return null;
-  const rawLead = leadingCommandWord(raw, vocabulary);
-  const correctedLead = leadingCommandWord(corrected, vocabulary);
+  const rawLead = leadingWord(raw);
+  const correctedLead = leadingWord(corrected);
   const argumentsOf = (text: string, token: string) => text.trim().slice(token.length);
 
-  if (rawLead && knownToken(rawLead, vocabulary)) {
+  if (knownToken(rawLead, vocabulary)) {
     if (correctedLead !== rawLead) return "command_changed";
     const kept = isSubsequence(
       splitWords(argumentsOf(corrected, rawLead)),
@@ -362,12 +373,8 @@ export function checkVoiceCommandEdit(
     return kept ? null : "arguments_reformatted";
   }
 
-  if (!correctedLead || correctedLead === rawLead) return null;
-  const prefix = vocabulary.prefixes.find((candidate) =>
-    correctedLead.startsWith(candidate.prefix)
-  );
   // "/etc/hosts" fixed up from "slash etc slash hosts" is a path, not a command.
-  if (!prefix || !COMMAND_SHAPED_RE.test(correctedLead.slice(prefix.prefix.length))) return null;
+  if (correctedLead === rawLead || !isCommandShaped(correctedLead)) return null;
   const entry = knownToken(correctedLead, vocabulary);
   if (!entry) return "unknown_command";
   if (!startsPrompt) return "unprompted_command";
