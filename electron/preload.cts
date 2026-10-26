@@ -2932,7 +2932,12 @@ function buildElectronApi(): ElectronAPI {
       sendAudioChunk: (sessionId: string, chunk: ArrayBuffer) =>
         ipcRenderer.send(CHANNELS.VOICE_INPUT_AUDIO_CHUNK, sessionId, chunk),
       onTranscriptionDelta: (
-        callback: (payload: { sessionId: string; text: string; itemId?: string }) => void
+        callback: (payload: {
+          sessionId: string;
+          text: string;
+          itemId?: string;
+          replace?: boolean;
+        }) => void
       ) => _typedOn(CHANNELS.VOICE_INPUT_TRANSCRIPTION_DELTA, callback),
       onTranscriptionComplete: (
         callback: (payload: {

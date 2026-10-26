@@ -46,6 +46,13 @@ const KEEPALIVE_INTERVAL_MS = 5_000;
 const MAX_DEEPGRAM_URL_KEYTERMS = 50;
 const MAX_DEEPGRAM_URL_KEYTERM_CHARS = 3_000;
 
+// Process-wide: the orchestrator builds a fresh provider per session, so a
+// per-instance counter would hand the renderer the same id twice.
+let spanSeq = 0;
+function nextSpanItemId(): string {
+  return `deepgram-${++spanSeq}`;
+}
+
 /**
  * Conservatively trim assembled keyterms before they go on the streaming URL.
  * Drops empty/whitespace-only terms, then accepts terms in priority order until
@@ -74,13 +81,17 @@ function truncateKeytermsForUrl(keyterms: string[]): string[] {
 
 /** Build the Deepgram streaming URL. `linear16` @ 24kHz matches the renderer's
  * AudioContext capture rate, so no resampling is needed. `endpointing=300`
- * turns on server-side VAD: a 300ms pause finalizes the current segment. */
+ * turns on server-side VAD: a 300ms pause finalizes the current segment.
+ * Punctuation, casing and interim results are all off unless asked for. */
 function buildUrl(settings: VoiceInputSettings): string {
   const params = new URLSearchParams({
     model: DEEPGRAM_MODEL,
     encoding: "linear16",
     sample_rate: "24000",
     endpointing: "300",
+    punctuate: "true",
+    smart_format: "true",
+    interim_results: "true",
   });
   // Streaming has no `detect_language` (prerecorded only); Nova-3's `multi` is
   // the live multilingual mode.
@@ -137,6 +148,11 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
   private audioChunkCount = 0;
   private staleChunkWarned = false;
   private preConnectBufferOverflowWarned = false;
+
+  // Each interim result is Deepgram's whole hypothesis for the audio since the
+  // last final, so that span is one item: its interims replace one preview and
+  // its final retires exactly that preview. Null until the span shows a preview.
+  private spanItemId: string | null = null;
 
   onEvent(listener: (event: VoiceTranscriptionEvent) => void): () => void {
     this.listeners.add(listener);
@@ -505,20 +521,36 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     switch (type) {
       case "Results": {
         const channel = payload.channel as
-          { alternatives?: Array<{ transcript?: string }> } | undefined;
-        const transcript = channel?.alternatives?.[0]?.transcript ?? "";
-        const isFinal = payload.is_final === true;
+          { alternatives?: Array<{ transcript?: unknown }> } | undefined;
+        const transcript = channel?.alternatives?.[0]?.transcript;
+        // A malformed result must neither show text nor retire the live span.
+        if (typeof transcript !== "string" || typeof payload.is_final !== "boolean") {
+          logDebug(`${P} ← malformed Results`, voicePayloadShape(payload));
+          return;
+        }
+        const isFinal = payload.is_final;
         const speechFinal = payload.speech_final === true;
-        // Interim hypotheses (is_final === false) are revised in place; emitting
-        // them as append-style deltas would corrupt the renderer's live buffer.
-        // Only finalized segments are emitted — they arrive within ~300ms of an
-        // endpoint and won't change. A speech_final result is always is_final,
-        // so this branch covers both.
         logDebug(`${P} ← Results`, { length: transcript.length, isFinal, speechFinal });
-        if (!isFinal) return;
         const trimmed = transcript.trim();
-        if (trimmed) {
-          this.emit({ type: "complete", text: trimmed, confidence: { ...STUB_CONFIDENCE } });
+        if (!isFinal) {
+          // An empty revision retracts the span's preview; before any text it's noise.
+          if (!trimmed && !this.spanItemId) return;
+          this.spanItemId ??= nextSpanItemId();
+          this.emit({ type: "delta", text: trimmed, itemId: this.spanItemId, replace: true });
+          return;
+        }
+        // Finals cover disjoint spans and never change. A speech_final result is
+        // always is_final, so this covers both. A span that showed a preview
+        // still completes when it finalises empty, so the preview doesn't linger.
+        const previewId = this.spanItemId;
+        this.spanItemId = null;
+        if (previewId || trimmed) {
+          this.emit({
+            type: "complete",
+            text: trimmed,
+            confidence: { ...STUB_CONFIDENCE },
+            itemId: previewId ?? nextSpanItemId(),
+          });
         }
         return;
       }
@@ -620,6 +652,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     this.audioChunkCount = 0;
     this.staleChunkWarned = false;
     this.preConnectBufferOverflowWarned = false;
+    this.spanItemId = null;
     this.isReady = false;
     this.preConnectBuffer = [];
     this.preConnectBufferBytes = 0;

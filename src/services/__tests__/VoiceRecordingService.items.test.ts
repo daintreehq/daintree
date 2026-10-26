@@ -64,7 +64,7 @@ vi.mock("@/services/KeybindingService", () => ({
   },
 }));
 
-type DeltaPayload = { sessionId: string; text: string; itemId?: string };
+type DeltaPayload = { sessionId: string; text: string; itemId?: string; replace?: boolean };
 type CompletePayload = { sessionId: string; text: string; willCorrect: boolean; itemId?: string };
 
 const SESSION_ID = "session-1";
@@ -131,6 +131,8 @@ async function setup() {
 
 const delta = (text: string, itemId?: string) =>
   callbacks.delta!({ sessionId: SESSION_ID, text, itemId });
+const revise = (text: string, itemId: string) =>
+  callbacks.delta!({ sessionId: SESSION_ID, text, itemId, replace: true });
 const complete = (text: string, itemId?: string) =>
   callbacks.complete!({ sessionId: SESSION_ID, text, willCorrect: false, itemId });
 
@@ -201,6 +203,57 @@ describe("VoiceRecordingService — identified items (#13109)", () => {
 
     expect(draftState.draft).toBe("keep");
     expect(liveText()).toBe("");
+  });
+
+  it("replaces a revised preview and writes each span's final once (#14640)", async () => {
+    const { liveText } = await setup();
+    draftState.draft = "existing";
+
+    revise("hello", "span-0");
+    revise("Hello world", "span-0");
+    expect(liveText()).toBe("Hello world");
+    expect(draftState.draft).toBe("existing");
+
+    complete("Hello, world.", "span-0");
+    expect(draftState.draft).toBe("existing Hello, world.");
+    expect(liveText()).toBe("");
+
+    revise("next", "span-1");
+    revise("Next one", "span-1");
+    expect(liveText()).toBe("Next one");
+    complete("Next one.", "span-1");
+    expect(draftState.draft).toBe("existing Hello, world. Next one.");
+    expect(liveText()).toBe("");
+  });
+
+  it("shows a shortened or retracted revision without touching the draft", async () => {
+    const { liveText } = await setup();
+    draftState.draft = "existing";
+
+    revise("hello world", "span-0");
+    revise("Hello", "span-0");
+    expect(liveText()).toBe("Hello");
+    revise("", "span-0");
+    expect(liveText()).toBe("");
+    expect(draftState.draft).toBe("existing");
+
+    complete("", "span-0");
+    revise("Next", "span-1");
+    complete("Next.", "span-1");
+    expect(draftState.draft).toBe("existing Next.");
+    expect(liveText()).toBe("");
+  });
+
+  it("anchors the session at a final that arrives without any interim", async () => {
+    await setup();
+    draftState.draft = "existing";
+
+    complete("Yes.", "span-0");
+    revise("and", "span-1");
+
+    const { useVoiceRecordingStore } = await import("@/store/voiceRecordingStore");
+    const start = useVoiceRecordingStore.getState().panelBuffers[PANEL_ID]?.sessionDraftStart;
+    expect(draftState.draft.slice(start)).toBe("Yes.");
   });
 
   it("still splices unidentified completions at the segment start", async () => {

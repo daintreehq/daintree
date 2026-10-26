@@ -336,6 +336,38 @@ describe("voiceRecordingStore — identified items (#13109)", () => {
     expect(buffer().completedSegments).toEqual(["first second"]);
   });
 
+  it("a replacing delta revises its item's preview instead of appending (#14640)", () => {
+    const store = useVoiceRecordingStore.getState();
+    store.appendDelta("hello", "item-a", true);
+    store.appendDelta("Hello world", "item-a", true);
+    expect(buffer().liveText).toBe("Hello world");
+    expect(buffer().transcriptPhase).toBe("interim");
+
+    // A stop that never saw the final keeps only the latest revision.
+    store.finishSession({ preserveLiveText: true });
+    expect(buffer().completedSegments).toEqual(["Hello world"]);
+  });
+
+  it("a replacing delta can shorten or retract its item's preview", () => {
+    const store = useVoiceRecordingStore.getState();
+    store.appendDelta("hello world", "item-a", true);
+    store.appendDelta("hello", "item-a", true);
+    expect(buffer().liveText).toBe("hello");
+
+    store.appendDelta("", "item-a", true);
+    expect(buffer().liveText).toBe("");
+    store.finishSession({ preserveLiveText: true });
+    expect(buffer().completedSegments).toEqual([]);
+  });
+
+  it("a replacing delta leaves other items' previews alone", () => {
+    const store = useVoiceRecordingStore.getState();
+    store.appendDelta("first", "item-a");
+    store.appendDelta("sec", "item-b", true);
+    store.appendDelta("Second", "item-b", true);
+    expect(buffer().liveText).toBe("first Second");
+  });
+
   it("beginSession clears items left from a previous session", () => {
     useVoiceRecordingStore.getState().appendDelta("stale", "item-a");
     useVoiceRecordingStore.getState().beginSession(TARGET);

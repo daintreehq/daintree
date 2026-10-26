@@ -19,10 +19,11 @@ export interface SegmentConfidence {
 }
 
 export type VoiceTranscriptionEvent =
-  // `itemId` identifies the committed audio segment a delta/completion belongs
-  // to. Providers without per-segment identity (Deepgram) omit it, and the
-  // renderer falls back to strictly sequential reconciliation.
-  | { type: "delta"; text: string; itemId?: string }
+  // `itemId` identifies the audio segment a delta/completion belongs to. A
+  // delta without one is reconciled strictly sequentially by the renderer.
+  // `replace` marks a delta carrying the item's whole text so far rather than
+  // an addition: Deepgram revises its interim hypothesis in place.
+  | { type: "delta"; text: string; itemId?: string; replace?: boolean }
   | { type: "complete"; text: string; confidence?: SegmentConfidence; itemId?: string }
   | { type: "paragraph_boundary" }
   | { type: "error"; error: VoiceInputError }
@@ -84,8 +85,8 @@ export interface TranscriptionProvider {
   sendAudioChunk(chunk: ArrayBuffer): void;
   /**
    * Flush the current audio segment at a user-driven paragraph boundary (Enter
-   * pressed mid-utterance). A no-op for server-VAD providers, which segment on
-   * their own.
+   * pressed mid-utterance). Server-VAD providers ask the backend to finalise
+   * what it has buffered.
    */
   commitParagraphBoundary(): void;
   stopGracefully(): Promise<void>;

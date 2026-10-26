@@ -180,13 +180,14 @@ class VoiceRecordingService {
     }
 
     this.unsubscribers.push(
-      voiceInput.onTranscriptionDelta(({ text: delta, itemId }) => {
+      voiceInput.onTranscriptionDelta(({ text: delta, itemId, replace }) => {
         logDebug(`${LOG_PREFIX} Received transcription delta`, { itemId, length: delta.length });
         const voiceState = useVoiceRecordingStore.getState();
         const target = voiceState.activeTarget;
         if (target) {
           const buffer = voiceState.panelBuffers[target.panelId];
-          const isFirstDelta = !buffer || buffer.liveText === "";
+          // An empty revision retracts a preview; it never starts an utterance.
+          const isFirstDelta = delta !== "" && (!buffer || buffer.liveText === "");
           if (isFirstDelta) {
             const draft = useTerminalInputStore
               .getState()
@@ -210,7 +211,7 @@ class VoiceRecordingService {
           // decoration renders them outside the doc model so the editor's
           // history records a single transaction per utterance (#9172).
         }
-        useVoiceRecordingStore.getState().appendDelta(delta, itemId);
+        useVoiceRecordingStore.getState().appendDelta(delta, itemId, replace);
       })
     );
 
@@ -232,6 +233,9 @@ class VoiceRecordingService {
             // when nothing has been written — the separator still re-fixes spacing.
             const base = segmentStart >= 0 ? draft.slice(0, segmentStart) : draft;
             const { separator, insertStart } = getVoiceInsertMetadata(base);
+            // A Deepgram span can finalise without any interim, so the session's
+            // first text may arrive here rather than in a delta.
+            useVoiceRecordingStore.getState().setSessionDraftStart(panelId, insertStart);
             if ((buffer?.activeParagraphStart ?? -1) < 0) {
               useVoiceRecordingStore.getState().setActiveParagraphStart(panelId, insertStart);
             }

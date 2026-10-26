@@ -2024,7 +2024,12 @@ export interface IpcEventMap {
   };
 
   // Voice input events. Every one carries the id of the session it belongs to.
-  "voice-input:transcription-delta": { sessionId: string; text: string; itemId?: string };
+  "voice-input:transcription-delta": {
+    sessionId: string;
+    text: string;
+    itemId?: string;
+    replace?: boolean;
+  };
   "voice-input:transcription-complete": {
     sessionId: string;
     text: string;
