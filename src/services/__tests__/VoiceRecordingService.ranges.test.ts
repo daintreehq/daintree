@@ -350,7 +350,11 @@ describe("VoiceRecordingService — dictation ranges (#14597)", () => {
     const id = records()[0]!.id;
     await service.stop("Dictation stopped.");
 
-    expect(correct.fn).toHaveBeenCalledWith({ rawText: "Hello there.", recentContext: ["Intro."], terminalId: "panel-1" });
+    expect(correct.fn).toHaveBeenCalledWith({
+      rawText: "Hello there.",
+      recentContext: ["Intro."],
+      terminalId: "panel-1",
+    });
     expect(getDictation(id)).not.toBeNull();
 
     resolveCorrection({ action: "replace", correctedText: "Hello, there." });
@@ -732,7 +736,11 @@ describe("VoiceRecordingService — correction over dictated ranges (#14613)", (
     say("more", "item-a");
     await service.stop("Dictation stopped.");
 
-    expect(correct.fn).toHaveBeenCalledWith({ rawText: "more", recentContext: [word], terminalId: "panel-1" });
+    expect(correct.fn).toHaveBeenCalledWith({
+      rawText: "more",
+      recentContext: [word],
+      terminalId: "panel-1",
+    });
   });
 
   it("leaves typed text out of the learning baseline when correction is off", async () => {

@@ -252,7 +252,10 @@ describe("assembleKeyterms", () => {
     });
     expect(result).toHaveLength(MAX_DICTIONARY_KEYTERMS);
     expect(result.filter((t) => t.startsWith("projTerm"))).toHaveLength(project.length);
-    expect(result.filter((t) => t.startsWith("globalTerm"))).toEqual(["globalTerm9", "globalTerm8"]);
+    expect(result.filter((t) => t.startsWith("globalTerm"))).toEqual([
+      "globalTerm9",
+      "globalTerm8",
+    ]);
   });
 
   it("sends a term in both lists once, in the project's casing", async () => {

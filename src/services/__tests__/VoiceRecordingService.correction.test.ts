@@ -186,7 +186,10 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
 
     dictate("panel-1", "fix the bug in the parsr");
     await service.stop();
-    expect(correct).toHaveBeenLastCalledWith({ rawText: "fix the bug in the parsr", terminalId: "panel-1" });
+    expect(correct).toHaveBeenLastCalledWith({
+      rawText: "fix the bug in the parsr",
+      terminalId: "panel-1",
+    });
 
     dictate("panel-2", "second thought");
     await service.stop();

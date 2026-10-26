@@ -826,9 +826,15 @@ describe("ProjectSettingsManager caching", () => {
     });
 
     it("merges the vocabulary into the settings on disk", async () => {
-      await manager.saveProjectSettings(projectId, { runCommands: [], devServerCommand: "npm start" });
+      await manager.saveProjectSettings(projectId, {
+        runCommands: [],
+        devServerCommand: "npm start",
+      });
 
-      const saved = await manager.changeVoiceDictionary(projectId, (e) => [...e, entry("Daintree")]);
+      const saved = await manager.changeVoiceDictionary(projectId, (e) => [
+        ...e,
+        entry("Daintree"),
+      ]);
 
       expect(saved.map((e) => e.term)).toEqual(["Daintree"]);
       const settings = await readFromDisk();

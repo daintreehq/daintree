@@ -52,13 +52,11 @@ vi.mock("../../../services/ProjectStore.js", () => ({
       found: projects.repo.has(path),
       entries: projects.repo.get(path) ?? [],
     })),
-    changeInRepoVoiceDictionary: vi.fn(
-      async (path: string, apply: (e: unknown[]) => unknown[]) => {
-        const next = apply(projects.repo.get(path) ?? []);
-        projects.repo.set(path, next as never);
-        return next;
-      }
-    ),
+    changeInRepoVoiceDictionary: vi.fn(async (path: string, apply: (e: unknown[]) => unknown[]) => {
+      const next = apply(projects.repo.get(path) ?? []);
+      projects.repo.set(path, next as never);
+      return next;
+    }),
   },
 }));
 
@@ -416,7 +414,9 @@ describe("project vocabulary operations", () => {
   });
 
   it("reads and writes the committed file for a project that shares its settings", async () => {
-    projects.local.set("shared", [{ term: "LocalOnly", heardAs: [], source: "manual", addedAt: 0 }]);
+    projects.local.set("shared", [
+      { term: "LocalOnly", heardAs: [], source: "manual", addedAt: 0 },
+    ]);
     projects.repo.set("/repos/shared", [
       { term: "Daintree", heardAs: [], source: "manual", addedAt: 0 },
     ]);
