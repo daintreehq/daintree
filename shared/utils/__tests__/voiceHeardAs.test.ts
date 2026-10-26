@@ -10,6 +10,25 @@ function rewriterFor(...entries: VoiceDictionaryEntry[]) {
   return createHeardAsRewriter(collectHeardAsRules(entries));
 }
 
+// How much slower a run on 8x the input is than on 1x. Linear work scales by
+// about 8 and quadratic by about 64, whatever the runner's speed, so a ratio
+// bound holds on a loaded CI machine where a wall-clock bound flakes. Each run
+// must take whole milliseconds: a sub-millisecond one is all timer noise, and a
+// single GC pause on a busy runner swings the ratio past any sensible bound.
+function scalingRatio(run: (scale: number) => void): number {
+  const fastest = (scale: number): number => {
+    let best = Infinity;
+    for (let i = 0; i < 5; i++) {
+      const started = performance.now();
+      run(scale);
+      best = Math.min(best, performance.now() - started);
+    }
+    return best;
+  };
+  run(1);
+  return fastest(8) / Math.max(fastest(1), 1);
+}
+
 describe("collectHeardAsRules", () => {
   it("pairs each heard form with its term, oldest entry first", () => {
     expect(
@@ -193,28 +212,24 @@ describe("createHeardAsRewriter", () => {
   });
 
   it("scans past protected spans in linear time", () => {
-    // How much slower 4x the input runs: linear is about 4, quadratic about 16.
-    const fastest = (scale: number) => {
-      let best = Infinity;
-      for (let i = 0; i < 3; i++) {
-        const started = performance.now();
-        zustand("`zoo stand` ".repeat(4_000 * scale) + "zoo stand");
-        best = Math.min(best, performance.now() - started);
-      }
-      return best;
-    };
-    expect(fastest(4) / Math.max(fastest(1), 0.5)).toBeLessThan(10);
+    const ratio = scalingRatio((scale) => {
+      expect(zustand("`zoo stand` ".repeat(2_000 * scale) + "zoo stand")).toMatch(/ Zustand$/);
+    });
+    expect(ratio).toBeLessThan(24);
   });
 
-  it("stays fast on a long draft with a full dictionary, many matches and many spans", () => {
+  it("rewrites a long draft in linear time with a full dictionary, many matches and spans", () => {
     const entries = Array.from({ length: MAX_HEARD_AS_RULES }, (_, i) =>
       entry(`Term${i}`, [`heard form ${i}`])
     );
     const rewrite = rewriterFor(...entries);
     const chunk = "heard form 7 and `heard form 8` near heard form ";
-    const text = chunk.repeat(200);
-    const started = performance.now();
-    expect(rewrite(text)).toBe("Term7 and `heard form 8` near heard form ".repeat(200));
-    expect(performance.now() - started).toBeLessThan(3000);
+    // 50 chunks take several milliseconds, so the 1x run is past timer noise.
+    const ratio = scalingRatio((scale) => {
+      expect(rewrite(chunk.repeat(50 * scale))).toBe(
+        "Term7 and `heard form 8` near heard form ".repeat(50 * scale)
+      );
+    });
+    expect(ratio).toBeLessThan(24);
   });
 });
