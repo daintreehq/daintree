@@ -11,6 +11,7 @@ export const VOICE_INPUT_METHOD_CHANNELS = {
   stopLive: "voice-input:stop-live",
   revealLive: "voice-input:reveal-live",
   rewrite: "voice-input:rewrite",
+  getLastTerms: "voice-input:get-last-terms",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof VOICE_INPUT_METHOD_CHANNELS;

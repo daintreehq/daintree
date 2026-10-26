@@ -893,6 +893,7 @@ export const CHANNELS = {
 
   // Voice Input channels
   VOICE_INPUT_GET_SETTINGS: "voice-input:get-settings",
+  VOICE_INPUT_GET_LAST_TERMS: "voice-input:get-last-terms",
   VOICE_INPUT_SET_SETTINGS: "voice-input:set-settings",
   VOICE_INPUT_START: "voice-input:start",
   VOICE_INPUT_STOP: "voice-input:stop",

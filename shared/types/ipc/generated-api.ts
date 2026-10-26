@@ -1721,6 +1721,9 @@ export interface GeneratedElectronAPI {
     flushParagraph(
       ...args: IpcInvokeMap["voice-input:flush-paragraph"]["args"]
     ): Promise<IpcInvokeMap["voice-input:flush-paragraph"]["result"]>;
+    getLastTerms(
+      ...args: IpcInvokeMap["voice-input:get-last-terms"]["args"]
+    ): Promise<IpcInvokeMap["voice-input:get-last-terms"]["result"]>;
     getLiveSession(
       ...args: IpcInvokeMap["voice-input:get-live-session"]["args"]
     ): Promise<IpcInvokeMap["voice-input:get-live-session"]["result"]>;

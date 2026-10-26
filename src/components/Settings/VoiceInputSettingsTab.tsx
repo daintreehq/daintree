@@ -20,6 +20,7 @@ import {
   SettingsRow,
   SettingsRowActions,
 } from "./SettingsGroup";
+import { LastDictationTermsSection } from "./LastDictationTerms";
 import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
 import { useSettingsTabValidation } from "./SettingsValidationRegistry";
 import { dispatchVoiceInputSettingsChanged } from "@/lib/voiceInputSettingsEvents";
@@ -733,6 +734,8 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
           />
         </SettingsSection>
       )}
+
+      {settings.enabled && <LastDictationTermsSection />}
 
       {settings.enabled && (
         <SettingsSection

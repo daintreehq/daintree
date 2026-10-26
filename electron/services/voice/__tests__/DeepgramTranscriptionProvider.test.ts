@@ -1786,6 +1786,56 @@ describe("DeepgramTranscriptionProvider", () => {
     provider.stop();
   });
 
+  it("reports the terms its request carried, per retry step", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    const reports: Array<{ terms: string[]; attempt?: string }> = [];
+    provider.onEvent((e) => {
+      if (e.type === "terms_sent") reports.push({ terms: e.terms, attempt: e.keytermAttempt });
+    });
+    const keyterms = ["  padded  ", ...Array.from({ length: 59 }, (_, i) => `term${i}`)];
+    void provider.start({ ...BASE_SETTINGS, keyterms }, "session-1");
+    await Promise.resolve();
+    expect(reports).toEqual([]);
+    latestInstance().simulateUnexpectedResponse(400);
+    expect(reports).toEqual([]);
+    latestInstance().simulateOpen();
+
+    // The report is what was on the opened socket's URL, not the assembled list.
+    expect(reports).toHaveLength(1);
+    expect(reports[0]!.attempt).toBe("trimmed");
+    expect(reports[0]!.terms).toEqual(new URL(latestInstance().url).searchParams.getAll("keyterm"));
+    expect(reports[0]!.terms).toHaveLength(20);
+    expect(reports[0]!.terms[0]).toBe("padded");
+    provider.stop();
+  });
+
+  it("reports each opened connection's terms for full, none and a failed first socket", async () => {
+    const collect = (provider: InstanceType<typeof DeepgramTranscriptionProvider>) => {
+      const reports: Array<{ terms: string[]; attempt?: string }> = [];
+      provider.onEvent((e: VoiceTranscriptionEvent) => {
+        if (e.type === "terms_sent") reports.push({ terms: e.terms, attempt: e.keytermAttempt });
+      });
+      return reports;
+    };
+
+    const plain = new DeepgramTranscriptionProvider();
+    const plainReports = collect(plain);
+    void plain.start({ ...BASE_SETTINGS, keyterms: ["alpha", "beta"] }, "session-1");
+    await Promise.resolve();
+    latestInstance().simulateOpen();
+    expect(plainReports).toEqual([{ terms: ["alpha", "beta"], attempt: "full" }]);
+    plain.stop();
+
+    const retried = new DeepgramTranscriptionProvider();
+    const retriedReports = collect(retried);
+    void retried.start({ ...BASE_SETTINGS, keyterms: ["alpha", "beta"] }, "session-2");
+    await Promise.resolve();
+    latestInstance().simulateUnexpectedResponse(400);
+    latestInstance().simulateOpen();
+    expect(retriedReports).toEqual([{ terms: [], attempt: "none" }]);
+    retried.stop();
+  });
+
   it("retries a long keyterm list trimmed to the head before dropping everything", async () => {
     const provider = new DeepgramTranscriptionProvider();
     const keyterms = Array.from({ length: 40 }, (_, i) => `term${i}`);

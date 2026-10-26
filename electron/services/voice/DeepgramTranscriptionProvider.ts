@@ -141,7 +141,7 @@ function truncateKeytermsForUrl(keyterms: string[]): string[] {
  * turns on server-side VAD: a 300ms pause finalizes the current segment.
  * `vad_events` reports speech starting well before its first interim result.
  * Punctuation, casing and interim results are all off unless asked for. */
-function buildUrl(settings: VoiceInputSettings): string {
+function buildUrl(settings: VoiceInputSettings, keyterms: readonly string[]): string {
   const params = new URLSearchParams({
     model: DEEPGRAM_MODEL,
     encoding: "linear16",
@@ -159,10 +159,8 @@ function buildUrl(settings: VoiceInputSettings): string {
   // Nova-3 keyterms are repeated `keyterm=` params — one per term. A comma-
   // joined value would be treated as a single literal phrase, not a list.
   // (NOT the legacy `keywords` param, which 400s the upgrade on nova-3.)
-  if (settings.keyterms && settings.keyterms.length > 0) {
-    for (const term of truncateKeytermsForUrl(settings.keyterms)) {
-      params.append("keyterm", term);
-    }
+  for (const term of keyterms) {
+    params.append("keyterm", term);
   }
   return `${DEEPGRAM_BASE_URL}?${params.toString()}`;
 }
@@ -353,7 +351,8 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
         : attempt === "trimmed"
           ? { ...settings, keyterms: settings.keyterms?.slice(0, TRIMMED_RETRY_KEYTERMS) }
           : settings;
-    const url = buildUrl(effectiveSettings);
+    const urlKeyterms = truncateKeytermsForUrl(effectiveSettings.keyterms ?? []);
+    const url = buildUrl(effectiveSettings, urlKeyterms);
     let connection: WebSocket;
     try {
       connection = new WebSocket(url, {
@@ -511,6 +510,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
         reconnectAttempt: this.reconnectAttempt,
         resentChunks: this.unconfirmedAudio.length,
       });
+      this.emit({ type: "terms_sent", terms: urlKeyterms, keytermAttempt: attempt });
       this.flushHeldAudio();
       this.isReady = true;
       // A successful open gives a later drop a fresh recovery window.

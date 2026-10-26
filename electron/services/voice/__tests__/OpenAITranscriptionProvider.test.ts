@@ -545,6 +545,25 @@ describe("OpenAITranscriptionProvider", () => {
     service.stop();
   });
 
+  it("reports the sanitized keywords once session.update is sent", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const reports: string[][] = [];
+    service.onEvent((e) => {
+      if (e.type === "terms_sent") reports.push(e.terms);
+    });
+    void service.start(
+      { ...BASE_SETTINGS, keyterms: ["Daintree", "<div>", "xterm", "xterm"] },
+      "session-1"
+    );
+    await Promise.resolve();
+    const socket = latestInstance();
+    expect(reports).toEqual([]);
+    socket.simulateOpen();
+    expect(reports).toEqual([readTranscription(socket).keywords]);
+    expect(reports[0]).toEqual(["Daintree", "xterm"]);
+    service.stop();
+  });
+
   it("omits both keywords and prompt for auto language with no frozen keyterms", async () => {
     const service = new OpenAITranscriptionProvider();
     void service.start({ ...BASE_SETTINGS, language: "auto" }, "session-1");

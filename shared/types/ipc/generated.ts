@@ -3996,6 +3996,10 @@ export interface GeneratedIpcInvokeMap {
     args: [sessionId: string];
     result: { rawText: string | null };
   };
+  "voice-input:get-last-terms": {
+    args: [];
+    result: import("../voice.js").LastDictationTerms | null;
+  };
   "voice-input:get-live-session": {
     args: [];
     result: import("../voice.js").VoiceLiveSessionUpdate;

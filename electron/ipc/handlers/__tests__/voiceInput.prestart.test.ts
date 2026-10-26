@@ -153,8 +153,8 @@ vi.mock("../../../services/voiceContextNames.js", async (importOriginal) => {
 // The real module's pure helpers (the names screen) stay; only assembly is faked.
 vi.mock("../../../services/voiceContextKeyterms.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../services/voiceContextKeyterms.js")>()),
-  assembleKeyterms: vi.fn(() =>
-    shared.assembleKeyterms ? shared.assembleKeyterms() : Promise.resolve([])
+  assembleTaggedKeyterms: vi.fn(async () =>
+    ((await shared.assembleKeyterms?.()) ?? []).map((term) => ({ term, source: "dictionary" }))
   ),
   formatKeytermPrompt: vi.fn(() => ""),
 }));
@@ -200,7 +200,7 @@ vi.mock("../../channels.js", () => ({
 }));
 
 import { registerVoiceInputHandlers } from "../voiceInput.js";
-import { assembleKeyterms } from "../../../services/voiceContextKeyterms.js";
+import { assembleTaggedKeyterms } from "../../../services/voiceContextKeyterms.js";
 import { projectStore } from "../../../services/ProjectStore.js";
 import {
   AUDIO_BUFFER_MAX_BYTES,
@@ -523,7 +523,7 @@ describe("voiceInput — audio sent before the provider starts", () => {
     const resolveKeyterms = deferKeyterms();
     const pending = start();
     sendChunk(1);
-    await vi.waitFor(() => expect(assembleKeyterms).toHaveBeenCalled());
+    await vi.waitFor(() => expect(assembleTaggedKeyterms).toHaveBeenCalled());
     expect(sender.onDestroyed).not.toBeNull();
 
     sender.destroyed = true;
@@ -755,7 +755,7 @@ describe("voiceInput — keyterm target", () => {
           }
     );
   };
-  const assemblyOpts = () => vi.mocked(assembleKeyterms).mock.calls[0]?.[0];
+  const assemblyOpts = () => vi.mocked(assembleTaggedKeyterms).mock.calls[0]?.[0];
 
   it("reads keyterms from the terminal being dictated into, under its project's name", async () => {
     await expect(startWith({ terminalId: "t-1" })).resolves.toEqual({ ok: true });
@@ -764,7 +764,7 @@ describe("voiceInput — keyterm target", () => {
 
   it("sends no automatic hints for a terminal main doesn't track", async () => {
     await expect(startWith({ terminalId: "t-gone" })).resolves.toEqual({ ok: true });
-    expect(assembleKeyterms).toHaveBeenCalledTimes(1);
+    expect(assembleTaggedKeyterms).toHaveBeenCalledTimes(1);
     expect(assemblyOpts()?.terminalId).toBeUndefined();
     expect(assemblyOpts()?.projectName).toBeUndefined();
   });
@@ -772,7 +772,7 @@ describe("voiceInput — keyterm target", () => {
   it("sends none for a terminal another project owns than the view asking", async () => {
     shared.viewProjectId = "proj-b";
     await expect(startWith({ terminalId: "t-1" })).resolves.toEqual({ ok: true });
-    expect(assembleKeyterms).toHaveBeenCalledTimes(1);
+    expect(assembleTaggedKeyterms).toHaveBeenCalledTimes(1);
     expect(assemblyOpts()?.terminalId).toBeUndefined();
     expect(assemblyOpts()?.projectName).toBeUndefined();
   });
@@ -839,7 +839,7 @@ describe("voiceInput — keyterm target", () => {
     shared.transcriptionProvider = "deepgram";
     shared.names = new Promise(() => {});
     await expect(startWith({ terminalId: "t-1" })).resolves.toEqual({ ok: true });
-    expect(assembleKeyterms).toHaveBeenCalledTimes(1);
+    expect(assembleTaggedKeyterms).toHaveBeenCalledTimes(1);
     expect(assemblyOpts()?.names).toBeInstanceOf(Promise);
     expect(shared.calls).toContain("start");
   });

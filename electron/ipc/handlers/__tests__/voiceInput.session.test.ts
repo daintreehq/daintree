@@ -101,8 +101,8 @@ vi.mock("../../../services/ProjectStore.js", () => ({
 // The real module's pure helpers (the names screen) stay; only assembly is faked.
 vi.mock("../../../services/voiceContextKeyterms.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../services/voiceContextKeyterms.js")>()),
-  assembleKeyterms: vi.fn(() =>
-    shared.assembleKeyterms ? shared.assembleKeyterms() : Promise.resolve([])
+  assembleTaggedKeyterms: vi.fn(async () =>
+    ((await shared.assembleKeyterms?.()) ?? []).map((term) => ({ term, source: "dictionary" }))
   ),
   formatKeytermPrompt: vi.fn(() => ""),
 }));
@@ -292,6 +292,41 @@ describe("voiceInput — session identity", () => {
 
   afterEach(() => {
     cleanup?.();
+  });
+
+  it("keeps the terms the provider reported, unforwarded, until the next dictation", async () => {
+    const getLastTerms = () => getHandler(CHANNELS.VOICE_INPUT_GET_LAST_TERMS)({});
+    expect(await getLastTerms()).toBeNull();
+
+    shared.assembleKeyterms = async () => ["alpha", "Beta", "gamma"];
+    await start(ownerA, "a");
+    expect(await getLastTerms()).toMatchObject({ sessionId: "a", assembledCount: 3, sent: null });
+
+    emit({
+      type: "terms_sent",
+      terms: ["alpha", "beta", "unassembled"],
+      keytermAttempt: "trimmed",
+    });
+    expect(await getLastTerms()).toMatchObject({
+      sessionId: "a",
+      sent: [
+        { term: "alpha", source: "dictionary" },
+        { term: "beta", source: "dictionary" },
+      ],
+      keytermAttempt: "trimmed",
+    });
+    expect(received(ownerA)).toEqual([]);
+
+    emit({ type: "terms_sent", terms: [] });
+    expect(await getLastTerms()).toMatchObject({ sent: [] });
+
+    shared.assembleKeyterms = async () => ["delta"];
+    await start(ownerB, "b");
+    expect(await getLastTerms()).toMatchObject({ sessionId: "b", assembledCount: 1, sent: null });
+
+    // Ending before the provider reported leaves "nothing sent", not "pending".
+    await stop(ownerB, "b");
+    expect(await getLastTerms()).toMatchObject({ sessionId: "b", sent: [] });
   });
 
   it("records the view and project that own the live session", async () => {
