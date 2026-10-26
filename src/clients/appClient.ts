@@ -1,4 +1,4 @@
-import type { AppState, HydrateResult } from "@shared/types";
+import type { AppState, HydrateResult, PanelGridConfig } from "@shared/types";
 import type { AppVersionInfo } from "@shared/types/ipc/app";
 
 /**
@@ -33,5 +33,9 @@ export const appClient = {
 
   forceQuit: (): Promise<void> => {
     return window.electron.app.forceQuit();
+  },
+
+  onPanelGridConfigChanged: (callback: (config: PanelGridConfig) => void): (() => void) => {
+    return window.electron.app.onPanelGridConfigChanged(callback);
   },
 } as const;

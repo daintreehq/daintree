@@ -55,6 +55,7 @@ export const CHANNEL_LOCALITY = {
   "agent-session:promote-bookmark": "host",
   "agent-session:rename-bookmark": "host",
   "agent-session:set-retention": "host",
+  "agent-settings:changed": "host",
   "agent-settings:get": "host",
   "agent-settings:reset": "host",
   "agent-settings:set": "host",
@@ -91,6 +92,8 @@ export const CHANNEL_LOCALITY = {
   "app:get-version": "shell",
   "app:get-version-info": "shell",
   "app:hydrate": "hybrid",
+  // Device-owned (#14698): only this machine's views hear their grid change.
+  "app:panel-grid-config-changed": "shell",
   "app:quit": "shell",
   "app:reload-config": "hybrid",
   "app:reset-and-relaunch": "shell",

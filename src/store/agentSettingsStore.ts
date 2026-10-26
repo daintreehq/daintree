@@ -216,6 +216,39 @@ function readAvailabilitySnapshot(): {
   return { availability: state.availability, hasRealData: state.hasRealData };
 }
 
+/**
+ * A saved slice as this view holds it: migrated and normalized against this
+ * view's CLI availability, with any write-backs that implies. Pure, so a
+ * change heard from another view can be applied without echoing them.
+ */
+function normalizeSaved(raw: AgentSettings): {
+  settings: AgentSettings;
+  agentsToClear: string[];
+  initialPinUpdates: Record<string, boolean> | null;
+} {
+  const { availability, hasRealData } = readAvailabilitySnapshot();
+  const initialPinUpdates = buildInitialAgentPinUpdates(raw, availability, hasRealData);
+  const { migrated, agentsToClear } = migrateAgentSettings(raw);
+  let settings = normalizeAgentSelection(migrated, availability, hasRealData, {
+    seedInitialPins: agentsToClear.length === 0,
+  });
+  if (initialPinUpdates) {
+    settings = applyAgentPinUpdates(settings, initialPinUpdates, INITIAL_PIN_SETTINGS_VERSION);
+  }
+  return { settings, agentsToClear, initialPinUpdates };
+}
+
+function scheduleWriteBacks({
+  agentsToClear,
+  initialPinUpdates,
+}: ReturnType<typeof normalizeSaved>): void {
+  if (agentsToClear.length > 0) {
+    void scheduleMigrationWriteBacks(agentsToClear);
+  } else if (initialPinUpdates) {
+    void scheduleInitialPinWriteBacks(initialPinUpdates);
+  }
+}
+
 interface AgentSettingsState {
   settings: AgentSettings | null;
   isLoading: boolean;
@@ -226,6 +259,11 @@ interface AgentSettingsState {
 interface AgentSettingsActions {
   initialize: () => Promise<void>;
   refresh: () => Promise<void>;
+  /**
+   * Take a saved slice another view (or this one) just wrote (#14700). Pure:
+   * its migration write-backs are the writer's, so no view echoes them.
+   */
+  applySaved: (raw: AgentSettings) => void;
   updateAgent: (agentId: string, updates: Partial<AgentSettingsEntry>) => Promise<void>;
   setAgentPinned: (agentId: string, pinned: boolean) => Promise<void>;
   /**
@@ -308,25 +346,9 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
           set({ isLoading: false, isInitialized: true });
           return;
         }
-        const { availability, hasRealData } = readAvailabilitySnapshot();
-        const initialPinUpdates = buildInitialAgentPinUpdates(raw, availability, hasRealData);
-        const { migrated, agentsToClear } = migrateAgentSettings(raw);
-        let settings = normalizeAgentSelection(migrated, availability, hasRealData, {
-          seedInitialPins: agentsToClear.length === 0,
-        });
-        if (initialPinUpdates) {
-          settings = applyAgentPinUpdates(
-            settings,
-            initialPinUpdates,
-            INITIAL_PIN_SETTINGS_VERSION
-          );
-        }
-        set({ settings, isLoading: false, isInitialized: true });
-        if (agentsToClear.length > 0) {
-          void scheduleMigrationWriteBacks(agentsToClear);
-        } else if (initialPinUpdates) {
-          void scheduleInitialPinWriteBacks(initialPinUpdates);
-        }
+        const saved = normalizeSaved(raw);
+        set({ settings: saved.settings, isLoading: false, isInitialized: true });
+        scheduleWriteBacks(saved);
       } catch (e) {
         if (myEpoch !== normalizeEpoch) {
           set({ isLoading: false, isInitialized: true });
@@ -349,6 +371,16 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
     return promise;
   },
 
+  applySaved: (raw: AgentSettings) => {
+    // Newer than any read or write answer still travelling, which then yields.
+    ++normalizeEpoch;
+    set({
+      settings: normalizeSaved(raw).settings,
+      isLoading: false,
+      isInitialized: true,
+    });
+  },
+
   refresh: async () => {
     const myEpoch = ++normalizeEpoch;
     set({ error: null });
@@ -359,21 +391,9 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
       agentSettingsClient.invalidate();
       const raw = (await agentSettingsClient.get()) ?? DEFAULT_AGENT_SETTINGS;
       if (myEpoch !== normalizeEpoch) return;
-      const { availability, hasRealData } = readAvailabilitySnapshot();
-      const initialPinUpdates = buildInitialAgentPinUpdates(raw, availability, hasRealData);
-      const { migrated, agentsToClear } = migrateAgentSettings(raw);
-      let settings = normalizeAgentSelection(migrated, availability, hasRealData, {
-        seedInitialPins: agentsToClear.length === 0,
-      });
-      if (initialPinUpdates) {
-        settings = applyAgentPinUpdates(settings, initialPinUpdates, INITIAL_PIN_SETTINGS_VERSION);
-      }
-      set({ settings });
-      if (agentsToClear.length > 0) {
-        void scheduleMigrationWriteBacks(agentsToClear);
-      } else if (initialPinUpdates) {
-        void scheduleInitialPinWriteBacks(initialPinUpdates);
-      }
+      const saved = normalizeSaved(raw);
+      set({ settings: saved.settings });
+      scheduleWriteBacks(saved);
     } catch (e) {
       // Stale failures yield silently — whichever newer op bumped the epoch
       // owns the error surface now, and fire-and-forget callers should not
@@ -406,24 +426,13 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
       // `updateAgent` is the first interaction with a legacy store (before
       // initialize() has hydrated) and the IPC response still carries stale
       // concrete pin values for other agents (#7673 review).
-      const { availability, hasRealData } = readAvailabilitySnapshot();
-      const initialPinUpdates = buildInitialAgentPinUpdates(raw, availability, hasRealData);
-      const { migrated, agentsToClear } = migrateAgentSettings(raw);
-      let settings = normalizeAgentSelection(migrated, availability, hasRealData, {
-        seedInitialPins: agentsToClear.length === 0,
-      });
-      if (initialPinUpdates) {
-        settings = applyAgentPinUpdates(settings, initialPinUpdates, INITIAL_PIN_SETTINGS_VERSION);
-      }
-      set({ settings });
-      if (agentsToClear.length > 0) {
-        void scheduleMigrationWriteBacks(agentsToClear);
-      } else if (initialPinUpdates) {
-        void scheduleInitialPinWriteBacks(initialPinUpdates);
-      }
+      const saved = normalizeSaved(raw);
+      set({ settings: saved.settings });
+      scheduleWriteBacks(saved);
     } catch (e) {
-      if (myEpoch !== normalizeEpoch) return;
-      if (previous) set({ settings: previous });
+      // A save that failed is reported even when a newer snapshot has landed
+      // since; only a rollback would undo that snapshot, so it is skipped.
+      if (myEpoch === normalizeEpoch && previous) set({ settings: previous });
       set({ error: formatErrorMessage(e, `Failed to update ${agentId} settings`) });
       throw e;
     }
@@ -452,8 +461,9 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
       // source of truth for per-agent state, so keep it rather than overwriting
       // from the raw response.
     } catch (e) {
-      if (myEpoch !== normalizeEpoch) return;
-      if (previous) set({ settings: previous });
+      // A save that failed is reported even when a newer snapshot has landed
+      // since; only a rollback would undo that snapshot, so it is skipped.
+      if (myEpoch === normalizeEpoch && previous) set({ settings: previous });
       set({ error: formatErrorMessage(e, "Failed to update global skip-permissions setting") });
       throw e;
     }
@@ -476,8 +486,9 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
       // The IPC response echoes the persisted value; the optimistic state
       // already reflects it, so keep the renderer-normalized snapshot.
     } catch (e) {
-      if (myEpoch !== normalizeEpoch) return;
-      if (previous) set({ settings: previous });
+      // A save that failed is reported even when a newer snapshot has landed
+      // since; only a rollback would undo that snapshot, so it is skipped.
+      if (myEpoch === normalizeEpoch && previous) set({ settings: previous });
       set({ error: formatErrorMessage(e, "Failed to update global alt-screen setting") });
       throw e;
     }
@@ -493,8 +504,9 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
     try {
       await agentSettingsClient.setResumeOnRestart(value);
     } catch (e) {
-      if (myEpoch !== normalizeEpoch) return;
-      if (previous) set({ settings: previous });
+      // A save that failed is reported even when a newer snapshot has landed
+      // since; only a rollback would undo that snapshot, so it is skipped.
+      if (myEpoch === normalizeEpoch && previous) set({ settings: previous });
       set({ error: formatErrorMessage(e, "Failed to update the resume after restart setting") });
       throw e;
     }
@@ -526,23 +538,10 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
       // Reset response may still represent a legacy store (per-agent reset
       // doesn't bump version); run migration to keep tri-state semantics
       // intact (#7673 review).
-      const { availability, hasRealData } = readAvailabilitySnapshot();
-      const initialPinUpdates = buildInitialAgentPinUpdates(raw, availability, hasRealData);
-      const { migrated, agentsToClear } = migrateAgentSettings(raw);
-      let settings = normalizeAgentSelection(migrated, availability, hasRealData, {
-        seedInitialPins: agentsToClear.length === 0,
-      });
-      if (initialPinUpdates) {
-        settings = applyAgentPinUpdates(settings, initialPinUpdates, INITIAL_PIN_SETTINGS_VERSION);
-      }
-      set({ settings });
-      if (agentsToClear.length > 0) {
-        void scheduleMigrationWriteBacks(agentsToClear);
-      } else if (initialPinUpdates) {
-        void scheduleInitialPinWriteBacks(initialPinUpdates);
-      }
+      const saved = normalizeSaved(raw);
+      set({ settings: saved.settings });
+      scheduleWriteBacks(saved);
     } catch (e) {
-      if (myEpoch !== normalizeEpoch) return;
       set({ error: formatErrorMessage(e, "Failed to reset agent settings") });
       throw e;
     }

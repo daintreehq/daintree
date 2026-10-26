@@ -61,7 +61,7 @@ import { readGpuDisabledFlagData } from "../../../services/gpuDisabledFlag.js";
 import { getCrashLoopGuard } from "../../../services/CrashLoopGuardService.js";
 import { getPanelSuspectLedger } from "../../../services/PanelSuspectLedgerService.js";
 import { inferKind } from "../../../../shared/utils/inferPanelKind.js";
-import { typedHandle, typedHandleWithContext } from "../../utils.js";
+import { broadcastToRenderer, typedHandle, typedHandleWithContext } from "../../utils.js";
 import { signalFirstInteractive } from "../../../window/deferredInitQueue.js";
 import { markPerformance } from "../../../utils/performance.js";
 import { PERF_MARKS } from "../../../../shared/perf/marks.js";
@@ -1186,6 +1186,16 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
             }
           }
           store.set("appState", merged as StoreSchema["appState"]);
+          // Every view on this machine hears it, a view of another host too:
+          // the grid is device-owned (#14698, #14700).
+          const grid = updates.panelGridConfig;
+          const previousGrid = current.panelGridConfig as PanelGridConfig | undefined;
+          if (
+            grid &&
+            (grid.strategy !== previousGrid?.strategy || grid.value !== previousGrid?.value)
+          ) {
+            broadcastToRenderer(CHANNELS.APP_PANEL_GRID_CONFIG_CHANGED, grid);
+          }
         }
       } finally {
         if (hasCriticalField) {

@@ -623,6 +623,10 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     ): () => void;
     reloadConfig(): Promise<{ success: boolean }>;
     onConfigReloaded(callback: () => void): () => void;
+    /** This machine's saved grid layout, after any view changes it (#14700). */
+    onPanelGridConfigChanged(
+      callback: (config: import("../config.js").PanelGridConfig) => void
+    ): () => void;
     /**
      * Subscribe to the post-reveal repaint signal (#10362). Main fires this
      * after it detaches the warm anti-flash bridge and focuses the cached view,
@@ -1042,6 +1046,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * the requested value.
      */
     stampVersion(version: number): Promise<Record<string, unknown>>;
+    /** Every saved change on the host, the whole slice as `get` reads it (#14700). */
+    onChanged(callback: (settings: AgentSettings) => void): () => void;
   };
   userAgentRegistry: {
     get(): Promise<import("../userAgentRegistry.js").UserAgentRegistry>;
