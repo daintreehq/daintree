@@ -587,8 +587,7 @@ function SettingsDialogInner({
   const isSearching = searchQuery.trim().length > 0;
   // Only this machine's own pages ever show under another machine's pick: anything
   // else (a page remembered from project scope) gives way to the picked machine's.
-  const showHostPage =
-    editingOther && (!showingDevicePage || ownerForTab(activeTab) !== "device");
+  const showHostPage = editingOther && (!showingDevicePage || ownerForTab(activeTab) !== "device");
   const panelsHidden = isSearching || showHostPage;
   const shownSubpage = subpage && subpage.tab === activeTab && !isSearching ? subpage : null;
 
@@ -944,7 +943,9 @@ function SettingsDialogInner({
               <NavGroup label={target.name}>
                 <HostWorkNavItem
                   selected={showHostPage}
-                  tabStop={(focusedNavTab ?? (showHostPage ? HOST_WORK_TAB : null)) === HOST_WORK_TAB}
+                  tabStop={
+                    (focusedNavTab ?? (showHostPage ? HOST_WORK_TAB : null)) === HOST_WORK_TAB
+                  }
                   isSearching={isSearching}
                   onSelect={handleHostPageSelect}
                 />
