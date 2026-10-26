@@ -13,9 +13,17 @@ export function MetricDash({ label, align }: { label: string; align?: "right" })
 
 /**
  * A host's waiting and working agents as its own output heuristics saw them,
- * waiting first. Unknown is a dash, never zero.
+ * waiting first. Unknown is a dash, never zero. `quietZero` is for a list that
+ * only needs to point at the hosts with something going on: an idle host then
+ * draws nothing and still says so to a screen reader.
  */
-export function AgentCounts({ summary }: { summary: HostMetricsSummary }) {
+export function AgentCounts({
+  summary,
+  quietZero = false,
+}: {
+  summary: HostMetricsSummary;
+  quietZero?: boolean;
+}) {
   const observed = summary.agentsObserved;
   if (!observed) return <MetricDash label="Agent activity unknown" />;
   const { working, waiting } = observed;
@@ -29,9 +37,11 @@ export function AgentCounts({ summary }: { summary: HostMetricsSummary }) {
     <span className="flex items-center gap-2 text-xs tabular-nums text-text-primary">
       <span className="sr-only">{spoken} (observed)</span>
       {working === 0 && waiting === 0 ? (
-        <span aria-hidden="true" className="text-text-secondary">
-          0
-        </span>
+        !quietZero && (
+          <span aria-hidden="true" className="text-text-secondary">
+            0
+          </span>
+        )
       ) : (
         <>
           {/* Waiting leads: it's the one asking for something. */}
