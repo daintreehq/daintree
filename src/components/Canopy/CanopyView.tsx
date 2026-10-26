@@ -35,7 +35,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useFrozenBackdrop } from "./useFrozenBackdrop";
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { Callout } from "@/components/ui/Callout";
-import { repliedAt, type CanopyItem } from "./canopyModel";
+import { itemNeedsAttention, repliedAt, type CanopyItem } from "./canopyModel";
 import { isWorkerEntry } from "./canopyInboxProjection";
 import { CanopyCard, canopyCardDomId } from "./CanopyCard";
 import { CanopyRow } from "./CanopyRow";
@@ -666,6 +666,7 @@ function CanopyInbox({
     unreadOnly,
     setUnreadOnly,
     listed,
+    bandSize,
     archivedExpanded,
     setArchivedExpanded,
     archivedShown,
@@ -906,6 +907,28 @@ function CanopyInbox({
           : hostOfferShown
             ? `Canopy is off on ${hostName}`
             : null;
+  // What the line and the empty band both say while no agent needs the user.
+  const nothingWaiting = readerOff
+    ? "No agent is waiting on you"
+    : // "Nothing" is a conclusion: qualified while some screens
+      // can't be read at all, withheld while Daintree can't see its
+      // agents, and held back while any run in the inbox has yet to
+      // be read at all — readings owed, a retry waiting, however
+      // long they take, and after a scope switch too.
+      (canopy?.lastError ?? null) !== null
+      ? "Nothing needs you that Canopy could read"
+      : fleet?.degraded
+        ? "Can't tell who needs you right now"
+        : owedOnOpen ||
+            canopy?.waiting !== undefined ||
+            (canopy?.busy === true && inbox.inbox.some((item) => item.card === null))
+          ? "Checking who needs you…"
+          : // A screen that can't be read yet (starting, hibernating)
+            // has no reading at all: nothing is concluded about it.
+            inbox.inbox.some((item) => item.card === null)
+            ? "Not every agent could be read yet"
+            : "Nothing needs you";
+  const needsYouLead = `${pluralize(needsYou, "agent")} ${needsYou === 1 ? "needs" : "need"} you`;
   const summaryLine =
     fleet === null
       ? "Reading agents…"
@@ -918,28 +941,7 @@ function CanopyInbox({
           : // What needs you leads; what is new follows. The list's own heading
             // counts the agents.
             [
-              needsYou > 0
-                ? `${pluralize(needsYou, "agent")} ${needsYou === 1 ? "needs" : "need"} you`
-                : readerOff
-                  ? "No agent is waiting on you"
-                  : // "Nothing" is a conclusion: qualified while some screens
-                    // can't be read at all, withheld while Daintree can't see its
-                    // agents, and held back while any run in the inbox has yet to
-                    // be read at all — readings owed, a retry waiting, however
-                    // long they take, and after a scope switch too.
-                    (canopy?.lastError ?? null) !== null
-                    ? "Nothing needs you that Canopy could read"
-                    : fleet.degraded
-                      ? "Can't tell who needs you right now"
-                      : owedOnOpen ||
-                          canopy?.waiting !== undefined ||
-                          (canopy?.busy === true && inbox.inbox.some((item) => item.card === null))
-                        ? "Checking who needs you…"
-                        : // A screen that can't be read yet (starting, hibernating)
-                          // has no reading at all: nothing is concluded about it.
-                          inbox.inbox.some((item) => item.card === null)
-                          ? "Not every agent could be read yet"
-                          : "Nothing needs you",
+              needsYou > 0 ? needsYouLead : nothingWaiting,
               unreadCount > 0 ? `${unreadCount.toLocaleString()} unread` : null,
             ]
               .filter(Boolean)
@@ -1071,13 +1073,45 @@ function CanopyInbox({
     everyHost &&
     (hostProgress.some((issue) => !issue.settled) ||
       readings.some((reading) => reading.canopy?.activated === true && reading.canopy.waiting));
-  const headerWords =
+  // The header's count moves to the first run in the band, first lifting whatever
+  // keeps one of the band's runs out of the list.
+  const showNeedsYou = () => {
+    const first = inbox.inbox.find(itemNeedsAttention);
+    if (!first) return;
+    const listedIds = new Set(listed.map((item) => item.runId));
+    if (inbox.inbox.some((item) => itemNeedsAttention(item) && !listedIds.has(item.runId))) {
+      if (unreadOnly) setUnreadOnly(false);
+      if (query !== "") setQuery("");
+      if (workOf !== null) showWorkOf(null);
+    }
+    if (!workersShown) setRoleFilter("all");
+    selectNow(first.runId);
+    searchRef.current?.focus({ preventScroll: true });
+  };
+  const headerText =
     hostSummary ??
     (needsYou === 0 && fleet !== null && hostTroubles.length > 0
       ? "Not every host could be read"
       : needsYou === 0 && fleet !== null && retryingSomewhere
         ? "Checking who needs you…"
         : summaryLine);
+  // The count is a control when it leads the line: it takes the user to the band.
+  const headerWords =
+    needsYou > 0 && headerText === summaryLine ? (
+      <>
+        <button
+          type="button"
+          data-testid="canopy-needs-you-count"
+          onClick={showNeedsYou}
+          className="rounded-sm text-text-primary outline-hidden hover:underline focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-selection-outline"
+        >
+          {needsYouLead}
+        </button>
+        {headerText.slice(needsYouLead.length)}
+      </>
+    ) : (
+      headerText
+    );
 
   // With assistants to list, or only assistants asked for, the list shows
   // even when no worker runs.
@@ -1447,29 +1481,65 @@ function CanopyInbox({
                         onPointerEnter={(event) => enterList(event.pointerType)}
                         onPointerLeave={leaveList}
                       >
-                        {listed.map((item, index) => {
-                          const replied = repliedAt(item);
-                          return (
-                            <CanopyRowMenu key={item.runId} item={item} {...rowMenu}>
-                              <CanopyRow
-                                item={item}
-                                domId={canopyCardDomId(item.runId)}
-                                isSelected={focusedItem?.runId === item.runId}
-                                tabbable={tabStop(listed, item, index)}
-                                unread={item.unread}
-                                nowMs={nowMs}
-                                asideLabel={
-                                  replied !== null ? `Replied ${agoPhrase(replied, nowMs)}` : null
-                                }
-                                workLabel={workLabelOf(item)}
-                                onSelect={() => selectRow(item.runId)}
-                                onClick={() => readNow(item)}
-                                onOpen={(event) => handlers.onOpen(item, isNewWindowClick(event))}
-                                onArchive={() => handlers.onArchive(item)}
-                              />
-                            </CanopyRowMenu>
-                          );
-                        })}
+                        {[
+                          { id: "canopy-needs-you", label: "Needs you", from: 0, to: bandSize },
+                          {
+                            id: "canopy-everything-else",
+                            label: "Everything else",
+                            from: bandSize,
+                            to: listed.length,
+                          },
+                        ].map((group) => (
+                          <div
+                            key={group.id}
+                            role="group"
+                            aria-labelledby={`${group.id}-label`}
+                            hidden={
+                              group.id === "canopy-everything-else" && group.from === group.to
+                            }
+                          >
+                            <div
+                              id={`${group.id}-label`}
+                              className="flex h-7 items-center px-3 text-xs font-medium text-text-secondary"
+                              data-testid={group.id}
+                            >
+                              {group.label}
+                            </div>
+                            {group.from === group.to && group.id === "canopy-needs-you" && (
+                              <p className="px-3 pb-2 text-xs text-text-secondary">
+                                {nothingWaiting}
+                              </p>
+                            )}
+                            {listed.slice(group.from, group.to).map((item, offset) => {
+                              const index = group.from + offset;
+                              const replied = repliedAt(item);
+                              return (
+                                <CanopyRowMenu key={item.runId} item={item} {...rowMenu}>
+                                  <CanopyRow
+                                    item={item}
+                                    domId={canopyCardDomId(item.runId)}
+                                    isSelected={focusedItem?.runId === item.runId}
+                                    tabbable={tabStop(listed, item, index)}
+                                    unread={item.unread}
+                                    nowMs={nowMs}
+                                    asideLabel={
+                                      replied !== null
+                                        ? `Replied ${agoPhrase(replied, nowMs)}`
+                                        : null
+                                    }
+                                    workLabel={workLabelOf(item)}
+                                    onSelect={() => selectRow(item.runId)}
+                                    onClick={() => readNow(item)}
+                                    onOpen={(event) =>
+                                      handlers.onOpen(item, isNewWindowClick(event))
+                                    }
+                                    onArchive={() => handlers.onArchive(item)}
+                                  />
+                                </CanopyRowMenu>
+                              );
+                            })}
+                          </div>
+                        ))}
                       </div>
                     ) : (searching || workOf !== null) &&
                       shownInbox.inbox.length === 0 &&

@@ -1690,6 +1690,34 @@ describe("CanopyView", () => {
     expect(container.ownerDocument.body.textContent).toContain("2 agents need you · 1 unread");
   });
 
+  it("holds exactly the runs the header counts in the Needs you band, ahead of the rest", async () => {
+    installElectron({ ...canopySnapshot, reads: [unreadMark("working", 1)] });
+    const { container } = render(<CanopyView />);
+    await frames();
+    const body = container.ownerDocument.body;
+    const band = body.querySelector("[aria-labelledby=canopy-needs-you-label]")!;
+    const rest = body.querySelector("[aria-labelledby=canopy-everything-else-label]")!;
+    expect(band.querySelectorAll("[data-canopy-card]")).toHaveLength(2);
+    expect([...rest.querySelectorAll("[data-canopy-card]")].map((card) => card.id)).toEqual([
+      "canopy-card-working",
+    ]);
+    expect(body.textContent).toContain("2 agents need you");
+  });
+
+  it("takes the header count to the band and lifts the Unread filter that hides a member", async () => {
+    installElectron({ ...canopySnapshot, reads: [unreadMark("working", 1)] });
+    const { container } = render(<CanopyView />);
+    await frames();
+    const body = container.ownerDocument.body;
+    fireEvent.click(screenButton(body, "Unread1"));
+    expect(cards(container).map((card) => card.id)).toEqual(["canopy-card-working"]);
+    fireEvent.click(body.querySelector<HTMLElement>("[data-testid=canopy-needs-you-count]")!);
+    await frames();
+    expect(useCanopyStore.getState().unreadOnly).toBe(false);
+    const first = body.querySelector("[aria-labelledby=canopy-needs-you-label] [data-canopy-card]");
+    expect(first?.getAttribute("aria-selected")).toBe("true");
+  });
+
   it("opens the selected row's menu from Shift+F10", async () => {
     installElectron();
     const { container } = render(<CanopyView />);
@@ -1896,7 +1924,12 @@ describe("CanopyView", () => {
     await frames();
     expect(cards(container).map((card) => card.id)).toEqual(["canopy-card-working"]);
     expect(liveRun(container)).toBe("working");
-    expect(container.ownerDocument.body.textContent).not.toContain("Everything else");
+    const body = container.ownerDocument.body;
+    expect(body.querySelector("#canopy-needs-you-label")).not.toBeNull();
+    expect(
+      body.querySelector("[role=group][aria-labelledby=canopy-needs-you-label]")?.textContent
+    ).toContain("Not every agent could be read yet");
+    expect(body.querySelector("#canopy-everything-else-label")).not.toBeNull();
   });
 
   it("tells main when a look at the shown run starts and ends, and starts none while the window is away", async () => {
