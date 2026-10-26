@@ -1425,10 +1425,11 @@ class VoiceRecordingService {
     if (this.generation !== generation || this.isStartRequestStale(startRequestId)) {
       logWarn(`${LOG_PREFIX} Generation mismatch after IPC start`);
       this.clearMicSilenceTimerFor(generation, startRequestId);
-      this.flushOpeningAudio(openingAudio);
       // A stop in progress owns the promoted capture, and may still be draining
-      // the worklet through the handler this cleanup would detach.
+      // the worklet through the handler this cleanup would detach. It also
+      // closes the opening-audio window once the tail is in.
       if (!this.stopPromise) {
+        this.flushOpeningAudio(openingAudio);
         await this.cleanupCaptureResources({
           audioContext,
           keepAliveGain: capture.keepAliveGain,

@@ -45,8 +45,8 @@ const shared = vi.hoisted(() => ({
   providerSessionId: null as string | null,
   /** The project of the view sending the start. */
   viewProjectId: null as string | null,
-  /** Transcript the provider delivers while a graceful stop drains it. */
-  drainTranscript: null as string | null,
+  /** When set, stopGracefully() returns this instead of resolving immediately. */
+  drainPromise: null as null | Promise<void>,
 }));
 
 vi.mock("../../../window/webContentsRegistry.js", async (importOriginal) => ({
@@ -57,8 +57,12 @@ vi.mock("../../../window/webContentsRegistry.js", async (importOriginal) => ({
 vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
   VoiceTranscriptionService: function VoiceTranscriptionService(this: Record<string, unknown>) {
     this.onEvent = function (cb: (e: ServiceEvent) => void) {
-      shared.eventCallback = (e) => cb({ ...e, sessionId: shared.providerSessionId ?? undefined });
-      return () => {};
+      const forward = (e: ServiceEvent) =>
+        cb({ ...e, sessionId: shared.providerSessionId ?? undefined });
+      shared.eventCallback = forward;
+      return () => {
+        if (shared.eventCallback === forward) shared.eventCallback = null;
+      };
     };
     this.start = function (_settings: unknown, sessionId: string) {
       shared.providerSessionId = sessionId;
@@ -71,10 +75,7 @@ vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
     };
     this.stopGracefully = function () {
       shared.calls.push("stopGracefully");
-      if (shared.drainTranscript) {
-        shared.eventCallback?.({ type: "complete", text: shared.drainTranscript });
-      }
-      return Promise.resolve();
+      return shared.drainPromise ?? Promise.resolve();
     };
     this.stop = function () {
       shared.stops++;
@@ -238,7 +239,7 @@ describe("voiceInput — audio sent before the provider starts", () => {
     shared.assembleKeyterms = null;
     shared.sessionSignal = null;
     shared.providerSessionId = null;
-    shared.drainTranscript = null;
+    shared.drainPromise = null;
     sender.destroyed = false;
     sender.onDestroyed = null;
     fakeEvent.sender = makeSender();
@@ -286,7 +287,14 @@ describe("voiceInput — audio sent before the provider starts", () => {
   });
 
   it("drains held audio when a stop lands before the provider starts", async () => {
-    shared.drainTranscript = "Yes, carry on";
+    let resolveStart!: (r: StartResult) => void;
+    shared.startPromise = new Promise((r) => {
+      resolveStart = r;
+    });
+    let finishDrain!: () => void;
+    shared.drainPromise = new Promise((r) => {
+      finishDrain = r;
+    });
     const resolveKeyterms = deferKeyterms();
     const pending = start();
     sendChunk(1);
@@ -296,11 +304,17 @@ describe("voiceInput — audio sent before the provider starts", () => {
     expect(shared.calls).toEqual([]);
 
     resolveKeyterms([]);
-    await expect(pending).resolves.toEqual({ ok: true });
-    await stopping;
-    // The provider gets the audio before the stop, so its stop-before-ready
-    // path can transcribe it once connected, and the text reaches the renderer.
+    // The stop reaches the provider while it is still connecting, already
+    // holding the audio, so its stop-before-ready path can transcribe it.
+    await vi.waitFor(() => expect(shared.calls).toContain("stopGracefully"));
     expect(shared.calls).toEqual(["start", "chunk:1", "chunk:2", "stopGracefully"]);
+
+    // The provider connects and transcribes while the stop drains it.
+    resolveStart({ ok: true });
+    await expect(pending).resolves.toEqual({ ok: true });
+    shared.eventCallback!({ type: "complete", text: "Yes, carry on" });
+    finishDrain();
+    await stopping;
     expect(sent).toContainEqual({
       channel: "voice-input:transcription-complete",
       payload: { text: "Yes, carry on", willCorrect: false },
@@ -460,6 +474,18 @@ describe("voiceInput — audio sent before the provider starts", () => {
     expect(firstSignal.aborted).toBe(true);
     expect(secondSignal.aborted).toBe(false);
     expect(shared.sessionSignal).toBe(secondSignal);
+  });
+
+  it("holds 15 seconds of startup audio without dropping any", async () => {
+    const resolveKeyterms = deferKeyterms();
+    const pending = start();
+    // 150 chunks of 100ms at 24kHz mono PCM16: speech held through a slow connect.
+    for (let i = 0; i < 150; i++) sendChunk(i % 256, 4800);
+
+    resolveKeyterms([]);
+    await pending;
+    expect(shared.calls.filter((c) => c.startsWith("chunk:"))).toHaveLength(150);
+    expect(overflowErrors()).toHaveLength(0);
   });
 
   it("drops the newest audio past the chunk cap and reports it once", async () => {

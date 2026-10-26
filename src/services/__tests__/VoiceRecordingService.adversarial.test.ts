@@ -4,6 +4,11 @@ import type { VoiceInputError } from "@shared/types";
 
 type VoiceStatusCallback = (payload: { sessionId: string; status: string }) => void;
 type VoiceErrorCallback = (payload: { sessionId: string; error: VoiceInputError }) => void;
+type VoiceCompleteCallback = (payload: {
+  sessionId: string;
+  text: string;
+  itemId?: string;
+}) => void;
 type VoidCleanup = () => void;
 
 interface MockTrack {
@@ -127,6 +132,7 @@ const runtime = vi.hoisted(() => ({
   },
   statusListeners: new Set<VoiceStatusCallback>(),
   errorListeners: new Set<VoiceErrorCallback>(),
+  completeListeners: new Set<VoiceCompleteCallback>(),
   rafCallbacks: new Map<number, FrameRequestCallback>(),
   nextRafId: 1,
   micPermissionQueue: [] as Array<string | Promise<string>>,
@@ -201,6 +207,7 @@ function resetRuntime(): void {
   Object.values(runtime.terminalInputFns).forEach((fn) => fn.mockReset());
   runtime.statusListeners.clear();
   runtime.errorListeners.clear();
+  runtime.completeListeners.clear();
   runtime.rafCallbacks.clear();
   runtime.nextRafId = 1;
   runtime.micPermissionQueue = [];
@@ -399,7 +406,9 @@ function setupGlobals(): void {
     electron: {
       voiceInput: {
         onTranscriptionDelta: vi.fn(() => () => {}),
-        onTranscriptionComplete: vi.fn(() => () => {}),
+        onTranscriptionComplete: vi.fn((callback: VoiceCompleteCallback) =>
+          addListener(runtime.completeListeners, callback)
+        ),
         onParagraphBoundary: vi.fn(() => () => {}),
         onFileTokenResolved: vi.fn(() => () => {}),
         onError: vi.fn((callback: VoiceErrorCallback) =>
@@ -530,6 +539,12 @@ function emitStatus(status: string): void {
   }
 }
 
+function emitComplete(text: string): void {
+  for (const listener of runtime.completeListeners) {
+    listener({ sessionId: liveSessionId(), text });
+  }
+}
+
 function emitError(error: VoiceInputError): void {
   for (const listener of runtime.errorListeners) {
     listener({ sessionId: liveSessionId(), error });
@@ -607,6 +622,15 @@ describe("VoiceRecordingService adversarial", () => {
 
     const sent = () => runtime.voiceInput.sendAudioChunk.mock.calls.map(([, chunk]) => chunk);
 
+    function deliver(nodeIndex: number, data: unknown): void {
+      runtime.createdWorkletNodes[nodeIndex]?.port.onmessage?.(new MessageEvent("message", { data }));
+    }
+
+    // Runs queued promise continuations without moving (fake) timers.
+    async function settle(): Promise<void> {
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+    }
+
     // The remote stop goes out only after every chunk has been sent.
     function expectRemoteStopAfterAudio(): void {
       const lastSend = Math.max(...runtime.voiceInput.sendAudioChunk.mock.invocationCallOrder);
@@ -662,9 +686,11 @@ describe("VoiceRecordingService adversarial", () => {
       ]);
     });
 
-    it("sends everything captured before a stop that lands while the backend connects (#14603)", async () => {
+    it("keeps the text of a stop that lands while the backend connects (#14603)", async () => {
       const backendStart = deferred<{ ok: boolean }>();
       runtime.startQueue.push(backendStart.promise);
+      const drain = deferred<void>();
+      runtime.stopQueue.push(drain.promise);
 
       const { voiceRecordingService } = await import("../VoiceRecordingService");
       const starting = voiceRecordingService.start(panelOne);
@@ -674,41 +700,60 @@ describe("VoiceRecordingService adversarial", () => {
       const first = emitChunk(0, 100);
       const second = emitChunk(0, 200);
 
-      await voiceRecordingService.stop("Dictation stopped.");
-      backendStart.resolve({ ok: true });
-      await starting;
-
+      const stopping = voiceRecordingService.stop("Dictation stopped.");
+      await vi.waitFor(() => {
+        expect(runtime.voiceInput.stop).toHaveBeenCalledTimes(1);
+      });
       expect(sent()).toEqual([first, second]);
-      expect(runtime.voiceInput.stop).toHaveBeenCalledTimes(1);
       expectRemoteStopAfterAudio();
+
+      // Main brings the provider up behind the stop and drains it; the
+      // transcript lands while the session is finishing.
+      backendStart.resolve({ ok: true });
+      emitComplete("Yes, carry on");
+      drain.resolve();
+      await Promise.all([stopping, starting]);
+
+      expect(runtime.drafts["panel-1"]).toBe("Yes, carry on");
+      expect(runtime.voiceFns.finishSession).toHaveBeenCalledTimes(1);
       expect(runtime.createdStreams[0]!.track.stop).toHaveBeenCalled();
     });
 
     it("keeps the worklet's final partial chunk and audio still in flight at the stop (#14603)", async () => {
-      const { voiceRecordingService } = await import("../VoiceRecordingService");
-      await voiceRecordingService.start(panelOne);
-      const full = emitChunk(0, 100);
+      // Frozen timers: the flush timeout can't fire, so only the marker lets
+      // the stop go on.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        const { voiceRecordingService } = await import("../VoiceRecordingService");
+        await voiceRecordingService.start(panelOne);
+        const full = emitChunk(0, 100);
+        const node = runtime.createdWorkletNodes[0]!;
+        node.port.postMessage.mockImplementation(() => {});
 
-      const node = runtime.createdWorkletNodes[0]!;
-      const inFlight = new Int16Array(2400).fill(200).buffer;
-      const tail = new Int16Array(640).fill(300).buffer;
-      node.port.postMessage.mockImplementation((message) => {
-        if ((message as { type?: string }).type !== "flush") return;
+        const stopping = voiceRecordingService.stop("Dictation stopped.");
+        await settle();
+        expect(node.port.postMessage).toHaveBeenCalledWith({ type: "flush" });
+
         // A full chunk posted just before the flush arrived, then the partial
-        // chunk and the marker the flush produces — each its own task.
-        setTimeout(() => {
-          node.port.onmessage?.(new MessageEvent("message", { data: inFlight }));
-          node.port.onmessage?.(new MessageEvent("message", { data: tail }));
-          node.port.onmessage?.(new MessageEvent("message", { data: { type: "flushed" } }));
-        }, 0);
-      });
+        // chunk the flush produces, each its own task.
+        const inFlight = new Int16Array(2400).fill(200).buffer;
+        const tail = new Int16Array(640).fill(300).buffer;
+        for (const chunk of [inFlight, tail]) {
+          deliver(0, chunk);
+          await settle();
+          expect(node.port.onmessage).not.toBeNull();
+          expect(runtime.voiceInput.stop).not.toHaveBeenCalled();
+        }
 
-      await voiceRecordingService.stop("Dictation stopped.");
+        deliver(0, { type: "flushed" });
+        await stopping;
 
-      expect(node.port.postMessage).toHaveBeenCalledWith({ type: "flush" });
-      expect(sent()).toEqual([full, inFlight, tail]);
-      expectRemoteStopAfterAudio();
-      expect(node.port.onmessage).toBeNull();
+        expect(sent()).toEqual([full, inFlight, tail]);
+        expectRemoteStopAfterAudio();
+        expect(node.port.onmessage).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("keeps the tail when the backend start settles during the stop's flush", async () => {
@@ -716,28 +761,41 @@ describe("VoiceRecordingService adversarial", () => {
       runtime.startQueue.push(backendStart.promise);
 
       const { voiceRecordingService } = await import("../VoiceRecordingService");
+      const { logInfo } = await import("@/utils/logger");
+      vi.mocked(logInfo).mockClear();
       const starting = voiceRecordingService.start(panelOne);
       await vi.waitFor(() => {
         expect(runtime.voiceInput.start).toHaveBeenCalledTimes(1);
       });
-
       const node = runtime.createdWorkletNodes[0]!;
-      const tail = new Int16Array(640).fill(300).buffer;
-      node.port.postMessage.mockImplementation((message) => {
-        if ((message as { type?: string }).type !== "flush") return;
+      node.port.postMessage.mockImplementation(() => {});
+
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        const stopping = voiceRecordingService.stop("Dictation stopped.");
+        await settle();
         backendStart.resolve({ ok: true });
-        setTimeout(() => {
-          node.port.onmessage?.(new MessageEvent("message", { data: tail }));
-          node.port.onmessage?.(new MessageEvent("message", { data: { type: "flushed" } }));
-        }, 0);
-      });
+        await settle();
+        // The now-stale start left the capture to the stop draining it.
+        expect(node.port.onmessage).not.toBeNull();
 
-      await voiceRecordingService.stop("Dictation stopped.");
-      await starting;
+        const tail = new Int16Array(640).fill(300).buffer;
+        deliver(0, tail);
+        deliver(0, { type: "flushed" });
+        await Promise.all([stopping, starting]);
 
-      expect(sent()).toEqual([tail]);
-      expectRemoteStopAfterAudio();
-      expect(runtime.createdAudioContexts[0]!.close).toHaveBeenCalledTimes(1);
+        expect(sent()).toEqual([tail]);
+        expectRemoteStopAfterAudio();
+        expect(runtime.createdAudioContexts[0]!.close).toHaveBeenCalledTimes(1);
+        // The stop, not the stale start, closed the opening window, after the tail.
+        const opening = vi
+          .mocked(logInfo)
+          .mock.calls.filter(([message]) => String(message).includes("Opening audio"));
+        expect(opening).toHaveLength(1);
+        expect(opening[0]![1]).toMatchObject({ chunks: 1 });
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("stops waiting for a worklet that never confirms the flush", async () => {
@@ -748,6 +806,11 @@ describe("VoiceRecordingService adversarial", () => {
         runtime.createdWorkletNodes[0]!.port.postMessage.mockImplementation(() => {});
 
         const stopping = voiceRecordingService.stop("Dictation stopped.");
+        await vi.advanceTimersByTimeAsync(100);
+        // Still waiting on the worklet: capture attached, no remote stop yet.
+        expect(runtime.createdWorkletNodes[0]!.port.onmessage).not.toBeNull();
+        expect(runtime.voiceInput.stop).not.toHaveBeenCalled();
+
         await vi.advanceTimersByTimeAsync(1_000);
         await stopping;
 
