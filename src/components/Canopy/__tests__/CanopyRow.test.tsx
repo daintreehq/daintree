@@ -6,7 +6,7 @@ import type { FleetRunRow } from "@shared/types/ipc/fleet";
 import type { CanopyCard as CanopyCardData, CanopyCategory } from "@shared/types/ipc/canopy";
 import { buildPilotGroups } from "@/components/Pilot/pilotRows";
 import { buildCanopyInbox, type CanopyItem } from "../canopyModel";
-import { CanopyRow } from "../CanopyRow";
+import { CanopyRow, itemDetail } from "../CanopyRow";
 
 const NOW = 1_700_000_000_000;
 
@@ -71,6 +71,9 @@ function itemFor(
   return buildCanopyInbox(groups, new Map([["run-1", data]]))[0]!;
 }
 
+/** The item the last row was rendered with: what it leaves to the selected pane is read off it. */
+let lastItem: CanopyItem | undefined;
+
 function renderRow(
   item: CanopyItem,
   props: {
@@ -81,6 +84,7 @@ function renderRow(
     onArchive?: () => void;
   } = {}
 ) {
+  lastItem = item;
   // The archive button's tooltip needs the provider the app root gives it.
   return render(
     <TooltipProvider delayDuration={0}>
@@ -93,7 +97,6 @@ function renderRow(
         asideLabel={props.asideLabel}
         nowMs={NOW}
         tabbable
-        reserveDetail
         onSelect={props.onSelect ?? (() => {})}
         onClick={() => {}}
         onOpen={() => {}}
@@ -104,12 +107,6 @@ function renderRow(
 }
 
 const option = (container: HTMLElement) => container.querySelector<HTMLElement>("[role=option]")!;
-
-/** The meta line's parts, each the box that stays or wraps away whole; the empty line-holder is not one. */
-const metaParts = (container: HTMLElement) =>
-  [...container.querySelector("[data-canopy-meta]")!.children]
-    .map((part) => part.textContent ?? "")
-    .filter((text) => text !== "");
 
 /** What a screen reader hears after the name: every element the row points its description at. */
 function description(container: HTMLElement): string {
@@ -147,7 +144,7 @@ describe("CanopyRow", () => {
         })
       );
       expect(container.querySelector("#row-ask")!.textContent).toBe("You ran npm test five times.");
-      expect(container.querySelector("#row-detail")!.textContent).toBe(
+      expect(itemDetail(lastItem!).detail).toBe(
         "All five failed the same way. Next: fix the rounding."
       );
       expect(container.querySelector(".canopy-reading")).toBeNull();
@@ -169,14 +166,14 @@ describe("CanopyRow", () => {
           { agentState: "working" }
         )
       );
-      expect(container.querySelector("#row-ask")!.textContent).toBe("Reading 1 file: src/units.ts");
-      expect(container.querySelector("#row-detail")!.textContent).toBe(
-        "I'll examine the rounding logic in src/units.ts."
+      expect(container.querySelector("#row-ask > span")!.textContent).toBe(
+        "Reading 1 file: src/units.ts"
       );
+      expect(itemDetail(lastItem!).detail).toBe("I'll examine the rounding logic in src/units.ts.");
     });
 
     it("does not repeat a question the agent's report opens with", () => {
-      const { container } = renderRow(
+      renderRow(
         itemFor("question", {
           ...unread,
           question: "Which date format should the entry use?",
@@ -188,7 +185,7 @@ describe("CanopyRow", () => {
           },
         })
       );
-      expect(container.querySelector("#row-detail")!.textContent).toBe("For example: ISO 8601.");
+      expect(itemDetail(lastItem!).detail).toBe("For example: ISO 8601.");
     });
 
     it("shows a screen's words for a run no reader has carded yet", () => {
@@ -233,7 +230,7 @@ describe("CanopyRow", () => {
       )[0]!;
       const { container } = renderRow(item);
       expect(container.querySelector("#row-ask")!.textContent).toBe("Committed as 43d0e48.");
-      expect(container.querySelector("#row-detail")!.textContent).toBe("Tests pass.");
+      expect(itemDetail(lastItem!).detail).toBe("Tests pass.");
     });
 
     it("says a turn was interrupted before a report written ahead of it", () => {
@@ -267,7 +264,7 @@ describe("CanopyRow", () => {
         })
       );
       expect(container.querySelector("#row-ask")!.textContent).toBe("Fixed the rounding bug.");
-      expect(container.querySelector("#row-detail")!.textContent).toBe("Tests pass.");
+      expect(itemDetail(lastItem!).detail).toBe("Tests pass.");
     });
 
     it("never shows an old screen's words once the run's state has moved", () => {
@@ -292,14 +289,16 @@ describe("CanopyRow", () => {
       expect(container.querySelector("#row-ask")!.textContent).toBe("Reading the screen…");
     });
 
-    it("holds a summary still on its way as bones, and a written one as words", () => {
-      const due = renderRow(itemFor("finished", unread));
-      expect(due.container.querySelector("#row-detail [data-canopy-detail-due]")).not.toBeNull();
-      due.unmount();
-      const written = renderRow(
-        itemFor("finished", { ...unread, headline: "Done", summary: "Shipped the fix." })
-      );
-      expect(written.container.querySelector("[data-canopy-detail-due]")).toBeNull();
+    it("holds three lines whether the words are in or on their way", () => {
+      for (const item of [
+        itemFor("finished", unread),
+        itemFor("finished", { ...unread, headline: "Done", summary: "Shipped the fix." }),
+      ]) {
+        const { container, unmount } = renderRow(item);
+        expect(container.querySelector("[data-canopy-detail-due]")).toBeNull();
+        expect(container.querySelector("[id$='-detail']")).toBeNull();
+        unmount();
+      }
     });
   });
 
@@ -316,7 +315,7 @@ describe("CanopyRow", () => {
     expect(waitedFor(60_000).container.querySelector("[data-overdue]")).toBeNull();
   });
 
-  it("numbers a dialog's choices on the row, as the keys that pick them", () => {
+  it("leaves a dialog's choices and command to the selected pane, but still reads them out", () => {
     const { container } = renderRow(
       itemFor(
         "approval",
@@ -327,75 +326,41 @@ describe("CanopyRow", () => {
         { agentState: "waiting", waitingReason: "approval" }
       )
     );
-    const keys = [...container.querySelectorAll("kbd")].map((kbd) => kbd.textContent);
-    expect(keys).toEqual(["1", "2"]);
-    expect(container.textContent).toContain("$ npm test");
+    expect(container.querySelectorAll("kbd")).toHaveLength(0);
+    expect(option(container).querySelector("[data-canopy-lead] + span")!.textContent).not.toContain(
+      "npm test"
+    );
+    expect(itemDetail(lastItem!).action).toBe("npm test");
     expect(description(container)).toContain("answer with 1 Yes, proceed");
   });
 
-  it("shows how far through its task a run is, counted off its checklist, and says it aloud", () => {
+  it("keeps progress off the row, counted off the checklist and said aloud", () => {
     const { container } = renderRow(
       itemFor("approval", { progress: 75, steps: { done: 4, total: 6, current: "Run tests" } })
     );
-    expect(container.querySelector("[role=progressbar]")?.getAttribute("aria-valuenow")).toBe("75");
-    expect(container.textContent).toContain("75%");
-    expect(container.textContent).not.toContain("4/6");
+    expect(container.querySelector("[role=progressbar]")).toBeNull();
+    expect(itemDetail(lastItem!).progress?.value).toBe(75);
     expect(description(container)).toContain("4 of 6 steps done");
   });
 
-  it("puts what a stopped run reported on its own line after where it runs", () => {
+  it("is three lines tall: the name, what it wants, and where it runs", () => {
     const { container } = renderRow(
       itemFor(
         "finished",
-        { tests: "passing", changes: "uncommitted" },
+        { tests: "passing", changes: "uncommitted", contextLeft: 10, summary: "Shipped the fix." },
         { title: "Claude", lastObservedTitle: "✳ Fix flaky panel tests", cwd: "/w/fix-rounding" }
       )
     );
-    const where = container.querySelector("[data-canopy-where]")!;
-    // Each separator is its own padded dot, so the text runs them together.
-    // Said as what the agent reported, not as checked facts.
-    expect(where.textContent).toBe("🦊app·fix-rounding");
-    expect(container.querySelector("[data-canopy-meta]")!.textContent).toBe(
-      "Looks done·Reported: tests pass·not committed"
-    );
-    // Every fact is a whole segment: one that doesn't fit drops, never "Tests p…".
-    const facts = [...container.querySelectorAll("span")].filter(
-      (el) => el.textContent === "·Reported: tests pass" || el.textContent === "·not committed"
-    );
-    expect(facts).toHaveLength(2);
+    const lines = option(container).querySelector("[data-canopy-lead] + span")!.children;
+    expect(lines).toHaveLength(3);
+    expect(lines[2]!.hasAttribute("data-canopy-where")).toBe(true);
+    expect(lines[0]!.textContent).toContain("Fix flaky panel tests");
+    expect(container.querySelector("[data-canopy-age]")!.parentElement).toBe(lines[0]);
+    expect(container.querySelector("[data-canopy-where]")!.textContent).toBe("🦊app·fix-rounding");
+    const reported = itemDetail(lastItem!);
+    expect(reported.facts).toEqual(["Tests pass", "Not committed"]);
+    expect(container.textContent).not.toContain("Shipped the fix.");
     expect(description(container)).toContain("reported tests pass, not committed");
-  });
-
-  it("ends the meta line with what the agent reported, each part whole with its own dot", () => {
-    const { container } = renderRow(
-      itemFor(
-        "finished",
-        { tests: "passing", changes: "uncommitted", contextLeft: 10 },
-        { title: "Claude", lastObservedTitle: "✳ Fix flaky panel tests", cwd: "/w/fix-rounding" }
-      )
-    );
-    // The line gives way from its end, a part at a time: the agent's reports
-    // sit after everything Daintree saw, so they are the first to go, and
-    // each part is one box carrying its separator, so none leaves half of
-    // itself or a stray dot behind.
-    expect(metaParts(container)).toEqual([
-      "Looks done",
-      "·10% context left",
-      "·Reported: tests pass",
-      "·not committed",
-    ]);
-  });
-
-  it("leads the location line with the project when the row is titled after it", () => {
-    const { container } = renderRow(
-      itemFor(
-        "finished",
-        { task: null, changes: "committed" },
-        { title: "Claude", cwd: "/Users/dev/app" }
-      )
-    );
-    expect(container.querySelector("[data-canopy-where]")!.textContent).toBe("🦊app");
-    expect(metaParts(container)).toEqual(["Looks done", "·Reported: committed"]);
   });
 
   it("rings a waiting agent that is asking a question with a question mark", () => {
@@ -436,7 +401,7 @@ describe("CanopyRow", () => {
     expect(name.startsWith("Fix flaky panel tests")).toBe(true);
     expect(container.textContent).not.toContain("Something the reader picked");
     const heard = description(container);
-    for (const part of ["Choose push to develop or open a PR", "Tests pass locally.", "app"]) {
+    for (const part of ["Choose push to develop or open a PR", "app"]) {
       expect(name).not.toContain(part);
       expect(heard).toContain(part);
     }
@@ -494,7 +459,7 @@ describe("CanopyRow", () => {
         { title: "Claude", lastObservedTitle: "✳ Fix flaky panel tests", waitingReason: "approval" }
       )
     );
-    expect(container.textContent).toContain("rm -rf dist");
+    expect(itemDetail(lastItem!).action).toBe("rm -rf dist");
     expect(container.querySelector(".text-status-warning")).not.toBeNull();
   });
 
@@ -546,11 +511,11 @@ describe("CanopyRow", () => {
     expect(dot(false)).toBeNull();
   });
 
-  it("says a finished run looks done as a reading, in the meta line", () => {
+  it("says a finished run looks done as a reading, to a screen reader", () => {
     const { container } = renderRow(
       itemFor("finished", { tests: "passing", progress: 100 }, { agentState: "completed" })
     );
-    expect(container.querySelector("[data-canopy-meta]")?.textContent).toContain("Looks done");
+    expect(description(container)).toContain("looks done");
     expect(leadingColumn(container).textContent).not.toMatch(/done/i);
   });
 
@@ -643,7 +608,7 @@ describe("CanopyRow", () => {
     expect(leftBehind.textContent).toContain("Update(src/x.ts)");
     expect(leftBehind.textContent).not.toContain("Approve the edit");
     // Its summary stays until the next reading replaces it.
-    expect(leftBehind.textContent).toContain("Tests pass locally.");
+    expect(itemDetail(lastItem!).detail).toBe("Tests pass locally.");
   });
 
   it("says how long a working agent has gone unseen, and reads it out", () => {
@@ -690,7 +655,7 @@ describe("CanopyRow", () => {
     expect(where.querySelector("[data-canopy-host]")?.className).toContain("shrink-0");
     expect(where.textContent).not.toContain("studio-01 ·");
     // Location only: nothing else shares the line.
-    expect(container.querySelector("[data-canopy-meta]")!.textContent).not.toContain("studio-01");
+    expect(where.textContent).not.toContain("Quiet");
   });
 
   it("says in words when a working agent has gone quiet, which the spinner shows only by hue", () => {
@@ -705,10 +670,10 @@ describe("CanopyRow", () => {
     expect(busy.textContent).not.toContain("Quiet");
   });
 
-  it("gives the leading column the time, never a score or a word the glyph already says", () => {
+  it("gives the name line the time, never a score or a word the glyph already says", () => {
     const { container } = renderRow(itemFor("question", {}, { waitingReason: "question" }));
     const column = leadingColumn(container);
-    expect(column.textContent).toContain("1m");
+    expect(container.querySelector("[data-canopy-age]")!.textContent).toContain("1m");
     expect(column.textContent).not.toContain("88");
     expect(column.textContent).not.toMatch(/waiting|blocked/i);
     // The state still reaches a screen reader, with its time.

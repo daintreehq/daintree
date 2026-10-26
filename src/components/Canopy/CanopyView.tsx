@@ -1395,9 +1395,6 @@ function CanopyInbox({
                                 item={item}
                                 domId={canopyCardDomId(item.runId)}
                                 isSelected={focusedItem?.runId === item.runId}
-                                // Words are coming whenever screens are read, so the slot
-                                // for them is held from the start.
-                                reserveDetail
                                 tabbable={tabStop(listed, item, index)}
                                 unread={item.unread}
                                 nowMs={nowMs}
@@ -1501,7 +1498,6 @@ function CanopyInbox({
                               item={item}
                               domId={canopyCardDomId(item.runId)}
                               isSelected={focusedItem?.runId === item.runId}
-                              reserveDetail={false}
                               tabbable={tabStop(shownInbox.archived, item, index)}
                               unread={false}
                               compact
@@ -1592,6 +1588,7 @@ function CanopyInbox({
                       onInitialFocusSettled={() => settlePaneFocus(focusedItem.runId)}
                       otherHostId={(everyHost ? focusedHostId : hostId) ?? undefined}
                       terminalApi={terminalApi}
+                      workLabel={workLabelOf(focusedItem)}
                       reconnecting={
                         everyHost
                           ? focusedLinkStatus !== undefined && focusedLinkStatus !== "connected"
