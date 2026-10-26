@@ -12,7 +12,6 @@ import { getFocusedPanelTracker } from "../services/FocusedPanelTracker.js";
 import { distributePortsToView, releaseAllTerminalWorkerPorts } from "./portDistribution.js";
 import { resolveInitialCanvasBackgroundColor } from "./skeletonCss.js";
 import { PtyClient } from "../services/PtyClient.js";
-import { readTerminalConfig } from "../services/terminalConfig.js";
 import { startTerminalLifecycleObserver } from "../services/pty/TerminalLifecycleObserver.js";
 import type { MainProcessWatchdogClient } from "../services/MainProcessWatchdogClient.js";
 import { CliAvailabilityService } from "../services/CliAvailabilityService.js";
@@ -389,9 +388,6 @@ export function ensureCriticalServices(windowRegistry: WindowRegistry | undefine
     // refresh after startRendererLoad.
     deferStart: true,
   });
-  // The saved monitoring choice, replayed to each shard on its first ready.
-  // Seeded here so no view has to switch it on from its boot snapshot (#14699).
-  ptyClient.setResourceMonitoring(readTerminalConfig().resourceMonitoringEnabled === true);
   setPtyClientRef(ptyClient);
   // Main-lifetime, like the client: every spawn from here on is observed, so a
   // plugin's terminal-lifecycle feed (#13814) can attribute each terminal's

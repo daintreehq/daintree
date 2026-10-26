@@ -73,16 +73,16 @@ describe("usePanelStoreBootstrap", () => {
     expect(useResourceMonitoringStore.getState().enabled).toBe(false);
   });
 
-  it("runs leak detection on the settings the store holds, and follows a change", async () => {
+  it("runs leak detection on the setting the store holds, and follows a change", async () => {
     installElectron();
-    useMemoryLeakConfigStore.setState({ enabled: true, autoRestartThresholdMb: 768 });
+    useMemoryLeakConfigStore.setState({ enabled: true });
 
     renderHook(() => usePanelStoreBootstrap());
-    expect(vi.mocked(useMemoryLeakDetection)).toHaveBeenLastCalledWith(true, 768);
+    expect(vi.mocked(useMemoryLeakDetection)).toHaveBeenLastCalledWith(true);
 
     act(() => {
       useMemoryLeakConfigStore.setState({ enabled: false });
     });
-    expect(vi.mocked(useMemoryLeakDetection)).toHaveBeenLastCalledWith(false, 768);
+    expect(vi.mocked(useMemoryLeakDetection)).toHaveBeenLastCalledWith(false);
   });
 });
