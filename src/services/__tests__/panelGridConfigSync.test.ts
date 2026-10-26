@@ -1,17 +1,16 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PanelGridConfig } from "@shared/types";
 
 const bridge = vi.hoisted(() => {
-  let listener: ((config: PanelGridConfig) => void) | null = null;
+  let listener: ((config: unknown) => void) | null = null;
   return {
-    onPanelGridConfigChanged: vi.fn((cb: (config: PanelGridConfig) => void) => {
+    onPanelGridConfigChanged: vi.fn((cb: (config: unknown) => void) => {
       listener = cb;
       return () => {
         listener = null;
       };
     }),
-    push: (config: unknown) => listener?.(config as PanelGridConfig),
+    push: (config: unknown) => listener?.(config),
     hasListener: () => listener !== null,
   };
 });

@@ -41,7 +41,7 @@ import { agentSettingsClient } from "@/clients/agentSettingsClient";
 import { notifyHostResync } from "@/store/hostResyncSignal";
 import { initAgentSettingsSync } from "../agentSettingsSync";
 
-const saved = { agents: { claude: { customFlags: "--new" } } } as unknown as AgentSettings;
+const saved: AgentSettings = { agents: { claude: { customFlags: "--new" } } };
 
 describe("initAgentSettingsSync (#14700)", () => {
   let dispose: () => void = () => {};

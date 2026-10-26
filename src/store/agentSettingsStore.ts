@@ -312,6 +312,13 @@ let normalizeEpoch = 0;
  */
 let savedChangesHeard = 0;
 
+/**
+ * Bumped by each write this view starts, and by cleanup. Only a write's own
+ * successor (or a cleanup) makes its answer stale; a read started after it
+ * doesn't, so the answer to a write made before boot finished still counts.
+ */
+let writeEpoch = 0;
+
 type Patch = (settings: AgentSettings) => AgentSettings;
 
 /**
@@ -368,10 +375,12 @@ function settleWrite(answer: AgentSettings | null, heardAtStart: number): AgentS
 function settleRootWrite<K extends keyof AgentSettings>(
   field: K,
   value: AgentSettings[K],
-  heardAtStart: number
+  heardAtStart: number,
+  myWrite: number
 ): AgentSettings | null {
   if (!lastSaved) return null;
-  return settleWrite({ ...lastSaved, [field]: value }, heardAtStart);
+  const answer = myWrite === writeEpoch ? { ...lastSaved, [field]: value } : null;
+  return settleWrite(answer, heardAtStart);
 }
 
 type StoreSet = (partial: Partial<AgentSettingsStore>) => void;
@@ -390,7 +399,8 @@ async function writeAgentEntry(
   updates: Partial<AgentSettingsEntry>,
   patch: Patch
 ): Promise<void> {
-  const myEpoch = ++normalizeEpoch;
+  ++normalizeEpoch;
+  const myWrite = ++writeEpoch;
   const heardAtStart = savedChangesHeard;
   set({ error: null });
   const previous = get().settings;
@@ -404,7 +414,7 @@ async function writeAgentEntry(
     // initialize() has hydrated) and the IPC response still carries stale
     // concrete pin values for other agents (#7673 review). A newer write of
     // this view's own owns that.
-    const saved = myEpoch === normalizeEpoch ? normalizeSaved(raw) : null;
+    const saved = myWrite === writeEpoch ? normalizeSaved(raw) : null;
     if (saved) scheduleWriteBacks(saved);
     const next = settleWrite(saved?.settings ?? null, heardAtStart);
     if (next) set({ settings: next });
@@ -534,6 +544,7 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
 
   setGlobalSkipPermissions: async (value: boolean) => {
     ++normalizeEpoch;
+    const myWrite = ++writeEpoch;
     const heardAtStart = savedChangesHeard;
     set({ error: null });
     const previous = get().settings;
@@ -551,7 +562,7 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
       // The IPC response echoes the persisted value; the renderer-normalized
       // agents record is the source of truth for per-agent state, so only the
       // field written is taken from it.
-      const next = settleRootWrite("globalSkipPermissions", value, heardAtStart);
+      const next = settleRootWrite("globalSkipPermissions", value, heardAtStart, myWrite);
       if (next) set({ settings: next });
     } catch (e) {
       release();
@@ -565,6 +576,7 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
 
   setGlobalUseAltScreen: async (value: boolean) => {
     ++normalizeEpoch;
+    const myWrite = ++writeEpoch;
     const heardAtStart = savedChangesHeard;
     set({ error: null });
     const previous = get().settings;
@@ -582,7 +594,7 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
       // The IPC response echoes the persisted value; the renderer-normalized
       // agents record is the source of truth for per-agent state, so only the
       // field written is taken from it.
-      const next = settleRootWrite("globalUseAltScreen", value, heardAtStart);
+      const next = settleRootWrite("globalUseAltScreen", value, heardAtStart, myWrite);
       if (next) set({ settings: next });
     } catch (e) {
       release();
@@ -596,6 +608,7 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
 
   setResumeOnRestart: async (value: ResumeOnRestart) => {
     ++normalizeEpoch;
+    const myWrite = ++writeEpoch;
     const heardAtStart = savedChangesHeard;
     set({ error: null });
     const previous = get().settings;
@@ -606,7 +619,7 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
     try {
       await agentSettingsClient.setResumeOnRestart(value);
       release();
-      const next = settleRootWrite("resumeOnRestart", value, heardAtStart);
+      const next = settleRootWrite("resumeOnRestart", value, heardAtStart, myWrite);
       if (next) set({ settings: next });
     } catch (e) {
       release();
@@ -682,6 +695,7 @@ export function getPinnedAgents(): string[] {
 
 export function cleanupAgentSettingsStore() {
   normalizeEpoch++;
+  writeEpoch++;
   pendingPatches.clear();
   lastSaved = null;
   initPromise = null;
