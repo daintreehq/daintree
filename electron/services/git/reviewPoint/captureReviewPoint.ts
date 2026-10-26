@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   REVIEW_POINT_VERSION,
+  reviewPointPathKey,
   type ReviewPoint,
   type ReviewPointBaseRequest,
   type ReviewPointCaptureFailure,
@@ -95,7 +96,7 @@ export interface CaptureReviewPointOptions {
 }
 
 /** The empty tree, which every path in HEAD differs from. */
-const EMPTY_TREE: Record<ObjectFormat, string> = {
+export const EMPTY_TREE: Record<ObjectFormat, string> = {
   sha1: "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
   sha256: "6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321",
 };
@@ -114,7 +115,7 @@ const READ_CONCURRENCY = 8;
 const READ_PHASE_SHARE = 0.7;
 /** A submodule's status is only read for whether it says anything. */
 const SUBMODULE_STATUS_BYTES = 64 * 1024;
-const OID_LINE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+export const OID_LINE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const ABSENT_MODE = /^0+$/;
 
 class CaptureStopped extends Error {
@@ -125,10 +126,43 @@ class CaptureStopped extends Error {
 
 class InvalidRequest extends Error {}
 
+export interface CaptureWorktreeOptions extends CaptureReviewPointOptions {
+  /** Paths read and listed whether or not they are in the change set. */
+  include?: readonly Uint8Array[];
+}
+
+/** What status said about an entry's working tree against its index, as git compares them. */
+export type WorktreeVsIndex = "matches" | "differs";
+
+/** What a comparison (#14583) reads beside the point. */
+export interface WorktreeCapture {
+  point: ReviewPoint;
+  /**
+   * By `reviewPointPathKey`, for the entries status compared. A raw id can't
+   * say this on its own: with `core.autocrlf` a text file's bytes never hash to
+   * its blob. An entry status didn't compare has no value.
+   */
+  worktreeVsIndex: ReadonlyMap<string, WorktreeVsIndex>;
+}
+
+type CaptureFailed = Extract<ReviewPointCaptureResult, { kind: "failed" }>;
+
+export type WorktreeCaptureResult =
+  | { kind: "captured"; capture: WorktreeCapture }
+  | Exclude<ReviewPointCaptureResult, { kind: "captured" }>;
+
 export async function captureReviewPoint(
   cwd: string,
   options: CaptureReviewPointOptions
 ): Promise<ReviewPointCaptureResult> {
+  const result = await captureWorktree(cwd, options);
+  return result.kind === "captured" ? { kind: "captured", point: result.capture.point } : result;
+}
+
+export async function captureWorktree(
+  cwd: string,
+  options: CaptureWorktreeOptions
+): Promise<WorktreeCaptureResult> {
   const limits = { ...DEFAULT_REVIEW_POINT_LIMITS, ...options.limits };
   if (options.signal?.aborted) return failed("cancelled", "The capture was cancelled.");
 
@@ -164,14 +198,14 @@ export async function captureReviewPoint(
   }
 }
 
-function rejectOnAbort(signal: AbortSignal): Promise<never> {
+export function rejectOnAbort(signal: AbortSignal): Promise<never> {
   return new Promise((_, reject) => {
     if (signal.aborted) reject(signal.reason);
     signal.addEventListener("abort", () => reject(signal.reason), { once: true });
   });
 }
 
-function failed(reason: ReviewPointCaptureFailure, message: string): ReviewPointCaptureResult {
+function failed(reason: ReviewPointCaptureFailure, message: string): CaptureFailed {
   return { kind: "failed", reason, message };
 }
 
@@ -216,10 +250,10 @@ interface RepositorySettings {
 
 async function capture(
   cwd: string,
-  options: CaptureReviewPointOptions,
+  options: CaptureWorktreeOptions,
   limits: ReviewPointLimits,
   signal: AbortSignal
-): Promise<ReviewPointCaptureResult> {
+): Promise<WorktreeCaptureResult> {
   const startedAt = Date.now();
   const deadlineAt = startedAt + limits.timeoutMs;
   const readsEndAt = startedAt + limits.timeoutMs * READ_PHASE_SHARE;
@@ -334,6 +368,7 @@ async function capture(
     if (record.kind === "unmerged") hasUnmerged = true;
     candidateFor(record.path).status = record;
   }
+  for (const bytes of options.include ?? []) candidateFor(Buffer.from(bytes));
 
   const emptyBlob = EMPTY_BLOB[objectFormat];
   const mayIntendToAdd = (status?.parsed.records ?? []).some(
@@ -539,15 +574,19 @@ async function capture(
   // -- The point --------------------------------------------------------------
 
   const entries: ReviewPointEntry[] = [];
+  const worktreeVsIndex = new Map<string, WorktreeVsIndex>();
   const uncovered: Array<{ path: Buffer; reason: ReviewPointGapReason }> = [...subtrees];
   for (const candidate of kept) {
     const worktree = candidate.worktree?.identity ?? unverifiable("deadline");
+    const fields = pathFields(candidate.path);
     entries.push({
-      ...pathFields(candidate.path),
+      ...fields,
       head: headIdentity(candidate),
       index: indexIdentity(candidate),
       worktree,
     });
+    const compared = status ? statusComparison(candidate) : null;
+    if (compared) worktreeVsIndex.set(reviewPointPathKey(fields), compared);
     if (worktree.kind === "unverifiable") {
       uncovered.push({ path: candidate.path, reason: worktree.reason });
     } else if (worktree.kind === "submodule" && worktree.contents !== "clean") {
@@ -582,7 +621,7 @@ async function capture(
             uncoveredCount: listingComplete ? uncovered.length : null,
           },
   };
-  return { kind: "captured", point };
+  return { kind: "captured", capture: { point, worktreeVsIndex } };
 }
 
 // -- Listings -----------------------------------------------------------------
@@ -963,6 +1002,21 @@ function indexIdentity(candidate: Candidate): ReviewPointIndexIdentity {
   // Committed but not in status: the index matches HEAD.
   if (candidate.committed) return { kind: "entry", ...candidate.committed };
   return { kind: "absent" };
+}
+
+/**
+ * What a whole status listing said about a path's working tree against its
+ * stage-0 index entry: a path it didn't report matches. Null where status
+ * didn't compare them: a path it was told not to look at, a gitlink, whose
+ * contents it doesn't read here, or an index this capture couldn't list.
+ */
+function statusComparison(candidate: Candidate): WorktreeVsIndex | null {
+  const stageZero = candidate.index?.find((record) => record.stage === 0);
+  if (!stageZero || stageZero.mode === "160000" || candidate.intentToAdd) return null;
+  if (/^[a-z]$/.test(stageZero.tag) || stageZero.tag === "S" || stageZero.tag === "s") return null;
+  const { status } = candidate;
+  if (status?.kind === "unmerged") return null;
+  return !status || status.xy[1] === "." ? "matches" : "differs";
 }
 
 function conflicted(
