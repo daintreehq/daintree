@@ -52,7 +52,9 @@ const mockClaimDictationKey = vi.hoisted(() =>
   vi.fn<(input: Electron.Input) => boolean>(() => false)
 );
 
-vi.mock("../../ipc/handlers/voiceInput.js", () => ({ claimDictationKey: mockClaimDictationKey }));
+vi.mock("../../services/voice/pageDictationKey.js", () => ({
+  claimPageDictationKey: mockClaimDictationKey,
+}));
 
 vi.mock("../../utils/logger.js", () => ({
   logInfo: vi.fn(),

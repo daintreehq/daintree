@@ -63,6 +63,7 @@ import {
 } from "../../schemas/ipc.js";
 import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
 import { isDictationKey } from "../../services/menuAccelerators.js";
+import { registerPageDictationKey } from "../../services/voice/pageDictationKey.js";
 import {
   getAllAppWebContents,
   getAppWebContents,
@@ -197,8 +198,10 @@ export function requestLiveSessionStop(sessionId?: string): boolean {
  * key's repeats go with it. With nothing running it stays the page's (#14601).
  */
 export function claimDictationKey(input: Electron.Input): boolean {
+  // Checked first: idle on nearly every keystroke, so most skip the binding lookup.
+  if (!liveSession || liveSession.ended) return false;
   if (!isDictationKey(input)) return false;
-  if (input.isAutoRepeat) return liveSession !== null && !liveSession.ended;
+  if (input.isAutoRepeat) return true;
   return requestLiveSessionStop();
 }
 
@@ -1289,6 +1292,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
 
   const cleanups: Array<() => void> = [
     sessionNamespace.register(),
+    registerPageDictationKey(claimDictationKey),
     typedHandle(CHANNELS.VOICE_INPUT_GET_SETTINGS, handleGetSettings),
     typedHandle(CHANNELS.VOICE_INPUT_SET_SETTINGS, handleSetSettings),
     typedHandle(CHANNELS.VOICE_INPUT_CHECK_MIC_PERMISSION, handleCheckMicPermission),

@@ -88,8 +88,8 @@ const keyMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../menuAccelerators.js", () => ({ findPortalPageAction: keyMocks.findPortalPageAction }));
-vi.mock("../../ipc/handlers/voiceInput.js", () => ({
-  claimDictationKey: keyMocks.claimDictationKey,
+vi.mock("../voice/pageDictationKey.js", () => ({
+  claimPageDictationKey: keyMocks.claimDictationKey,
 }));
 
 describe("PortalManager", () => {

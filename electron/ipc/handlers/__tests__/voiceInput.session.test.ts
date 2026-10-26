@@ -131,6 +131,7 @@ import {
   claimDictationKey,
 } from "../voiceInput.js";
 import { CHANNELS } from "../../channels.js";
+import { claimPageDictationKey } from "../../../services/voice/pageDictationKey.js";
 import { projectStore } from "../../../services/ProjectStore.js";
 import { AUDIO_BUFFER_MAX_CHUNKS } from "../../../services/voice/TranscriptionProvider.js";
 
@@ -957,6 +958,17 @@ describe("voiceInput — a session live in another view (#14601)", () => {
 
       expect(claimDictationKey(press({ key: "k" }))).toBe(false);
       expect(sentOn(ownerA, CHANNELS.VOICE_INPUT_STOP_REQUESTED)).toEqual([]);
+    });
+
+    it("is what the page key hooks ask while the handlers are registered", async () => {
+      await start(ownerA, "a");
+
+      expect(claimPageDictationKey(press())).toBe(true);
+      expect(sentOn(ownerA, CHANNELS.VOICE_INPUT_STOP_REQUESTED)).toEqual([{ sessionId: "a" }]);
+
+      cleanup();
+      cleanup = () => {};
+      expect(claimPageDictationKey(press())).toBe(false);
     });
   });
 });
