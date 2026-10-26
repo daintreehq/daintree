@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook } from "@testing-library/react";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { undoDepth } from "@codemirror/commands";
+import { isolateHistory, undo, undoDepth } from "@codemirror/commands";
 import { createComposerHistory } from "../../inputEditorExtensions/composerHistory";
 import { useFleetMirror } from "../useFleetMirror";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
@@ -114,13 +114,18 @@ describe("useFleetMirror", () => {
       state: EditorState.create({ doc: "", extensions: [createComposerHistory()] }),
     });
     view.dispatch({ changes: { from: 0, insert: "mine" }, userEvent: "input.type" });
+    view.dispatch({ annotations: isolateHistory.of("after") });
+    // An own deletion: undoing it would put "in" back into the mirrored text.
+    view.dispatch({ changes: { from: 1, to: 3 }, userEvent: "delete" });
     editorViewRef.current = view;
     mirroredDraft = "driver text";
 
-    render({ isFleetFollower: true, value: "mine" });
+    render({ isFleetFollower: true, value: "me" });
 
     expect(view.state.doc.toString()).toBe("driver text");
     expect(undoDepth(view.state)).toBe(0);
+    expect(undo(view)).toBe(false);
+    expect(view.state.doc.toString()).toBe("driver text");
     view.destroy();
   });
 

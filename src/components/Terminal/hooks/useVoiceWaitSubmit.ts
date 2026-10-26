@@ -18,6 +18,11 @@ export type VoiceSubmitPhase = "finishing" | "polishing";
 
 interface UseVoiceWaitSubmitParams {
   terminalId: string;
+  /**
+   * The composer's draft scope. An isolated composer's is its own, not the
+   * current project's; left out, the current project's.
+   */
+  projectId?: string;
   editorViewRef: React.RefObject<EditorView | null>;
   editableCompartmentRef: React.RefObject<Compartment>;
   sendFromEditor: () => void;
@@ -37,6 +42,7 @@ function isVoiceSessionActiveFor(panelId: string): boolean {
 
 export function useVoiceWaitSubmit({
   terminalId,
+  projectId,
   editorViewRef,
   editableCompartmentRef,
   sendFromEditor,
@@ -45,6 +51,10 @@ export function useVoiceWaitSubmit({
   useEffect(() => {
     sendFromEditorRef.current = sendFromEditor;
   }, [sendFromEditor]);
+  const projectIdRef = useRef(projectId);
+  useEffect(() => {
+    projectIdRef.current = projectId;
+  }, [projectId]);
 
   // Each Enter is its own attempt, and only the active one may send or unlock
   // the composer: after Escape and a second Enter, the first continuation
@@ -113,7 +123,7 @@ export function useVoiceWaitSubmit({
         // fire until the next React render — which is AFTER this microtask.
         // Sync the editor here so sendFromEditor reads the final dictated text
         // and not the pre-stop doc (#9172).
-        const projectId = useProjectStore.getState().currentProject?.id;
+        const projectId = projectIdRef.current ?? useProjectStore.getState().currentProject?.id;
         const draft = useTerminalInputStore.getState().getDraftInput(terminalId, projectId);
         const finalView = editorViewRef.current;
         if (finalView) {

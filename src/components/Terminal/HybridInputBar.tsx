@@ -991,6 +991,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       voiceSubmitPhase,
     } = useVoiceWaitSubmit({
       terminalId,
+      projectId,
       editorViewRef,
       editableCompartmentRef,
       sendFromEditor,
