@@ -535,26 +535,42 @@ export class ReviewMarkStore {
     guard?: ReviewMarkWriteGuard
   ): Promise<void> {
     trimTombstones(index);
-    const stateDir = this.stateDir(projectId);
-    const filePath = this.indexPath(projectId);
-    const previous = guard ? await this.readIndexText(projectId) : null;
-    const text = serializeIndex(index);
-    await fs.mkdir(stateDir, { recursive: true });
+    const previous = await this.readIndexText(projectId);
+    await fs.mkdir(this.stateDir(projectId), { recursive: true });
     try {
-      await resilientAtomicWriteFile(filePath, text);
+      await this.writeIndexText(projectId, serializeIndex(index));
     } catch (error) {
-      // The write can fail after its rename, syncing the directory: then it landed.
-      const landed = await this.readIndexText(projectId).catch(() => null);
-      if (landed !== text) throw error;
+      // Whatever reached the disk, the previous index goes back.
+      await this.restoreIndex(projectId, previous).catch(() => {});
+      throw error;
     }
     try {
       guard?.();
     } catch (refusal) {
-      if (previous === null) await resilientUnlink(filePath);
-      else await resilientAtomicWriteFile(filePath, previous);
+      await this.restoreIndex(projectId, previous);
       throw refusal;
     }
     await this.sweepPoints(projectId, index);
+  }
+
+  /** A failure after the rename (syncing the directory) still counts as written. */
+  private async writeIndexText(projectId: string, text: string): Promise<void> {
+    try {
+      await resilientAtomicWriteFile(this.indexPath(projectId), text);
+    } catch (error) {
+      const landed = await this.readIndexText(projectId).catch(() => undefined);
+      if (landed !== text) throw error;
+    }
+  }
+
+  private async restoreIndex(projectId: string, previous: string | null): Promise<void> {
+    if (previous !== null) {
+      await this.writeIndexText(projectId, previous);
+      return;
+    }
+    await resilientUnlink(this.indexPath(projectId)).catch((error: unknown) => {
+      if (!isErrno(error, "ENOENT")) throw error;
+    });
   }
 
   private async sweepPoints(projectId: string, index: MarksIndex): Promise<void> {

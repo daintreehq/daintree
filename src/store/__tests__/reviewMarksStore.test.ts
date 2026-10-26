@@ -208,6 +208,26 @@ describe("reviewMarksStore", () => {
     expect(Object.keys(useReviewMarksStore.getState().marks)).toEqual([WT_2]);
   });
 
+  it("reads again when a reply naming a restarted store can't be ordered against what landed", async () => {
+    const bridge = installBridge();
+    bridge.hydrate.mockResolvedValueOnce(snapshot({ [WT_1]: summary(1_000) }, 1_000));
+    stop = startReviewMarksSync();
+    await vi.waitFor(() => expect(useReviewMarksStore.getState().revision).toBe(1_000));
+
+    const reply = deferred<{ status: "stale"; snapshot: ReviewMarksSnapshot }>();
+    bridge.mark.mockReturnValueOnce(reply.promise);
+    const marking = markWorktreeReviewed(WT_1, POINT, 1_000);
+    // A snapshot lands while the write is out; the host then starts over.
+    bridge.push(snapshot({ [WT_1]: summary(1_001) }, 1_001));
+    bridge.hydrate.mockResolvedValueOnce(snapshot({}, 0));
+    reply.resolve({ status: "stale", snapshot: snapshot({}, 0) });
+    await marking;
+
+    await vi.waitFor(() => expect(bridge.hydrate).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(useReviewMarksStore.getState().revision).toBe(0));
+    expect(useReviewMarksStore.getState().marks).toEqual({});
+  });
+
   it("stops following the host once disposed, even with reads and retries pending", async () => {
     vi.useFakeTimers();
     const bridge = installBridge();

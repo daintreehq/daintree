@@ -78,7 +78,20 @@ function adoptReply(
   basedOn: number,
   adoptionsAtStart: number
 ): void {
-  adopt(snapshot, basedOn > snapshot.revision && adoptions === adoptionsAtStart);
+  if (basedOn <= snapshot.revision) {
+    adopt(snapshot);
+  } else if (adoptions === adoptionsAtStart) {
+    adopt(snapshot, true);
+  } else {
+    // Something landed while the write was out, so this reply can't say which
+    // is newer. A read taken from here can, once any read in flight is done.
+    void (pull ?? Promise.resolve())
+      .catch(() => undefined)
+      .then(() => pullReviewMarks())
+      .catch((error: unknown) => {
+        logWarn("[reviewMarksStore] Failed to read review marks again", { error });
+      });
+  }
 }
 
 /** Read main's marks and adopt them. Shared while in flight; rejects on an unbound or failed read. */
