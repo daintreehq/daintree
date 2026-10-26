@@ -14,6 +14,11 @@ vi.mock("@/lib/voiceInputSettingsEvents", () => ({
 
 vi.mock("@/utils/logger", () => ({ logWarn: vi.fn() }));
 
+const mockStartMicTest = vi.fn();
+vi.mock("@/services/voiceMicTest", () => ({
+  startMicTest: (...args: unknown[]) => mockStartMicTest(...args),
+}));
+
 vi.mock("@/components/ui/button", () => ({
   Button: (props: React.ButtonHTMLAttributes<HTMLButtonElement>) => <button {...props} />,
 }));
@@ -185,6 +190,37 @@ describe("VoiceInputSettingsTab", () => {
       const checked = group.querySelector('[aria-checked="true"]');
       expect(checked?.textContent).toBe("Push to talk");
     });
+  });
+
+  it("stops a running microphone test when the page is hidden", async () => {
+    Object.assign(window.electron.voiceInput, {
+      getSettings: vi.fn().mockResolvedValue({
+        enabled: true,
+        openaiApiKey: "sk-test",
+        language: "en",
+        dictionary: [],
+        transcriptionModel: "gpt-live-transcribe",
+        correctionEnabled: false,
+        correctionModel: "gpt-6-luna",
+        correctionCustomInstructions: "",
+        paragraphingStrategy: "spoken-command",
+        resolveFileLinks: true,
+        deviceId: "",
+      }),
+    });
+    const stop = vi.fn();
+    mockStartMicTest.mockResolvedValue({
+      opened: { label: "Headset", substituted: false, bluetooth: false },
+      stop,
+    });
+
+    const { rerender } = render(<VoiceInputSettingsTab isActive />);
+    fireEvent.click(await screen.findByRole("button", { name: "Test microphone" }));
+    await screen.findByRole("button", { name: "Stop test" });
+    expect(stop).not.toHaveBeenCalled();
+
+    rerender(<VoiceInputSettingsTab isActive={false} />);
+    expect(stop).toHaveBeenCalledTimes(1);
   });
 
   it("saves the new recording mode when the user picks 'Push to talk'", async () => {

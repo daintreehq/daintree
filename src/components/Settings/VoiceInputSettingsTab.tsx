@@ -17,6 +17,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { SettingsSelect } from "./SettingsSelect";
+import { MicTestRow } from "./MicTestRow";
 import { SettingsPresetGroup } from "./SettingsPresetGroup";
 import { SettingsTextarea } from "./SettingsTextarea";
 import { SettingsInput } from "./SettingsInput";
@@ -228,7 +229,12 @@ async function probeMicCapture(): Promise<"granted" | "denied" | "unavailable"> 
   }
 }
 
-export function VoiceInputSettingsTab() {
+interface VoiceInputSettingsTabProps {
+  /** False while the settings dialog shows another page; this one stays mounted. */
+  isActive?: boolean;
+}
+
+export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTabProps = {}) {
   const [settings, setSettings] = useState<VoiceInputSettings>(DEFAULT_SETTINGS);
   const [micPermission, setMicPermission] = useState<MicPermissionStatus>("unknown");
   const [isRequestingMic, setIsRequestingMic] = useState(false);
@@ -628,6 +634,12 @@ export function VoiceInputSettingsTab() {
               disabled={devicesLoading && devices.length <= 1}
               isModified={settings.deviceId !== DEFAULT_SETTINGS.deviceId}
               onReset={() => void update({ deviceId: DEFAULT_SETTINGS.deviceId })}
+            />
+
+            <MicTestRow
+              deviceId={settings.deviceId}
+              active={isActive}
+              disabled={micPermission === "denied" || micPermission === "restricted"}
             />
           </SettingsGroup>
         )}
