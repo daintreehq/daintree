@@ -148,14 +148,20 @@ describe("CanopyHostsClient", () => {
     ]);
   });
 
-  it("refuses resizing a run's terminal, and any channel outside Canopy's reads and actions", async () => {
+  it("refuses any channel outside Canopy's reads and actions", async () => {
     const s = setup();
-    for (const channel of ["canopy:terminal-resize", "terminal:write"]) {
-      await expect(s.client.invoke(VIEW, "studio", channel, [])).rejects.toMatchObject({
-        code: "VALIDATION",
-      });
-    }
+    await expect(s.client.invoke(VIEW, "studio", "terminal:write", [])).rejects.toMatchObject({
+      code: "VALIDATION",
+    });
     expect(s.connections.get("studio")!.calls).toEqual([]);
+  });
+
+  it("sends a resize of the run's terminal to its host (#14497)", async () => {
+    const s = setup();
+    await s.client.invoke(VIEW, "studio", "canopy:terminal-resize", [3, 100, 30]);
+    expect(s.connections.get("studio")!.calls.map(([, payload]) => payload)).toEqual([
+      { viewerId: "v1", channel: "canopy:terminal-resize", args: [3, 100, 30], interactive: true },
+    ]);
   });
 
   it("refuses a host that isn't in the host list", async () => {

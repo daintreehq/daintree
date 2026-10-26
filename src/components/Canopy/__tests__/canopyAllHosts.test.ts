@@ -390,7 +390,7 @@ describe("createAllHostsRoute", () => {
     expect(ownCalls.terminalInput).not.toHaveBeenCalled();
   });
 
-  it("sizes this machine's terminal from the Canopy pane and no other host's", async () => {
+  it("sizes each run's terminal on its own host, freezing a pane here only for this machine's", async () => {
     invoke.mockResolvedValue({ watchId: 1, snapshot: null });
     const { terminalApi } = createAllHostsRoute("own", ["own", "remote"]);
     expect(terminalApi.ownSizedId?.(allHostsKey("own", "t1"))).toBe("t1");
@@ -402,7 +402,15 @@ describe("createAllHostsRoute", () => {
     ownCalls.terminalResize.mockClear();
     await terminalApi.terminalResize(remote.watchId!, 99, 30);
     expect(ownCalls.terminalResize).not.toHaveBeenCalled();
-    expect(invoke).not.toHaveBeenCalledWith("remote", "canopy:terminal-resize", 1, 99, 30);
+    // By the host's own stream number, not the one the route gave the pane.
+    expect(invoke).toHaveBeenCalledWith("remote", "canopy:terminal-resize", 1, 99, 30);
+  });
+
+  it("keeps the host's word on sizing through the renumbered stream (#14497)", async () => {
+    invoke.mockResolvedValue({ watchId: 7, snapshot: null, holdsSize: true });
+    const { terminalApi } = createAllHostsRoute("own", ["own", "remote"]);
+    const view = await terminalApi.watchTerminal(allHostsKey("remote", "t1"), { spawnedAt: 1 });
+    expect(view.holdsSize).toBe(true);
   });
 
   it("lets go of a stream opened for a row that was left before the host answered", async () => {
