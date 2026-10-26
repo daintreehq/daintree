@@ -15,6 +15,12 @@ export const VOICE_PRESS_WINDOW_MS = 1_000;
 /** How long a finished session waits for main's report before logging without it. */
 export const VOICE_REPORT_WAIT_MS = 10_000;
 
+/**
+ * How long a finished session waits for a frame a mark is still waiting on. A
+ * hidden window draws none, and its mark stays null.
+ */
+export const VOICE_FRAME_WAIT_MS = 1_000;
+
 type Mark = "cue" | "micLive" | "socketReady" | "firstText" | "stopRequested" | "settled";
 
 export type VoiceCorrectionOutcome = "applied" | "unchanged" | "failed" | "discarded";
@@ -31,9 +37,9 @@ export interface VoiceSessionTimelineDeps {
 /**
  * One dictation session's marks and counts, on the renderer's clock, logged
  * as a single summary line once the session is over, its correction (if any)
- * has come back, and main has reported its side — or main never heard of the
- * session, or its report is overdue. Every mark is first-wins and nothing is
- * recorded once the line is out.
+ * has come back, main has reported its side (or never heard of the session, or
+ * its report is overdue), and any mark waiting on a frame has had it. Every
+ * mark is first-wins and nothing is recorded once the line is out.
  */
 export class VoiceSessionTimeline {
   private readonly startedAt: number;
@@ -55,6 +61,7 @@ export class VoiceSessionTimeline {
     state: "none",
   };
   private reportTimer: ReturnType<typeof setTimeout> | null = null;
+  private frameTimer: ReturnType<typeof setTimeout> | null = null;
   private done = false;
 
   constructor(
@@ -81,6 +88,14 @@ export class VoiceSessionTimeline {
     this.marks.set(name, this.deps.now());
   }
 
+  /** Takes back a mark that no longer holds: a stop the user undid with another press. */
+  unmark(name: Mark): void {
+    if (this.done) return;
+    this.marks.delete(name);
+    this.pendingFrames.get(name)?.();
+    this.pendingFrames.delete(name);
+  }
+
   /**
    * Marks `name` at the next animation frame: the store change that shows it
    * has rendered by then, and the frame paints right after its callbacks. An
@@ -93,6 +108,7 @@ export class VoiceSessionTimeline {
       this.deps.nextFrame(() => {
         this.pendingFrames.delete(name);
         this.mark(name);
+        this.tryLog();
       })
     );
   }
@@ -157,6 +173,8 @@ export class VoiceSessionTimeline {
     this.done = true;
     if (this.reportTimer !== null) clearTimeout(this.reportTimer);
     this.reportTimer = null;
+    if (this.frameTimer !== null) clearTimeout(this.frameTimer);
+    this.frameTimer = null;
     for (const cancel of this.pendingFrames.values()) cancel();
     this.pendingFrames.clear();
   }
@@ -165,6 +183,16 @@ export class VoiceSessionTimeline {
     if (this.done || this.stopReason === null) return;
     if (this.correctionStartedAt !== null && this.correctionMs === null) return;
     if (this.backend.state === "pending") return;
+    // Text that arrived during the stop is painted on a frame still to come.
+    if (this.pendingFrames.size > 0) {
+      this.frameTimer ??= setTimeout(() => {
+        this.frameTimer = null;
+        for (const cancel of this.pendingFrames.values()) cancel();
+        this.pendingFrames.clear();
+        this.tryLog();
+      }, VOICE_FRAME_WAIT_MS);
+      return;
+    }
     this.dispose();
     try {
       const summary = VoiceSessionSummarySchema.safeParse(this.buildSummary(this.stopReason));

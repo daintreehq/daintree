@@ -156,6 +156,7 @@ describe("VoiceCorrectionService", () => {
     const result = await svc.correct({ rawText: "react is great" }, BASE_SETTINGS);
     expect(result.confirmedText).toBe("react is great");
     expect(result.action).toBe("no_change");
+    expect(result.failed).toBe(true);
   });
 
   it("keeps the short timeout for single-sentence corrections", async () => {
@@ -539,6 +540,7 @@ describe("VoiceCorrectionService", () => {
     const result = await resultPromise;
     expect(result.confirmedText).toBe("react is great");
     expect(result.action).toBe("no_change");
+    expect(result.failed).toBe(true);
   });
 
   describe("meaning guards", () => {
@@ -651,6 +653,8 @@ describe("VoiceCorrectionService", () => {
       expect(result.action).toBe("no_change");
       expect(result.correctedText).toBe(rawText);
       expect(result.confirmedText).toBe(rawText);
+      // The request worked; only its answer was refused.
+      expect(result.failed).toBeUndefined();
     });
 
     it("rejects a malformed reply instead of applying it", async () => {

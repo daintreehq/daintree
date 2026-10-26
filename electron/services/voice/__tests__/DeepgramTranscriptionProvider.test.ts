@@ -1183,6 +1183,36 @@ describe("DeepgramTranscriptionProvider", () => {
     provider.stop();
   });
 
+  it("counts reconnect attempts, keeping them through the stop until the next start", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    const { socket: first } = await bringSessionReady(provider);
+    first.simulateClose(1006);
+    // Scheduled is not attempted.
+    expect(provider.getSessionStats().reconnects).toBe(0);
+    vi.advanceTimersToNextTimer();
+    const second = latestInstance();
+    second.simulateOpen();
+    second.simulateClose(1006);
+    vi.advanceTimersToNextTimer();
+    latestInstance().simulateOpen();
+    provider.stop();
+
+    expect(provider.getSessionStats().reconnects).toBe(2);
+    await bringSessionReady(provider);
+    expect(provider.getSessionStats().reconnects).toBe(0);
+    provider.stop();
+  });
+
+  it("counts each held chunk the replay cap evicts", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    await bringSessionReady(provider);
+    // 40s of 100ms chunks fill the replay ledger; no final result confirms any.
+    for (let i = 0; i < 402; i++) provider.sendAudioChunk(new Uint8Array(4_800).buffer);
+
+    expect(provider.getSessionStats().droppedReplay).toBe(2);
+    provider.stop();
+  });
+
   it("ends the session with a clear error when a reconnect attempt is rejected for auth", async () => {
     const provider = new DeepgramTranscriptionProvider();
     const events: VoiceTranscriptionEvent[] = [];

@@ -819,14 +819,38 @@ describe("voiceInput — session identity", () => {
       expect(endedPayloads(ownerA)[0]?.report).toMatchObject({ droppedPreStart: 5 });
     });
 
+    it("reads a superseded session's counts before the new session's provider starts", async () => {
+      shared.providerStats = {
+        delayTier: "low",
+        droppedConnect: 2,
+        droppedReplay: 0,
+        reconnects: 3,
+      };
+      await start(ownerA, "a");
+      await start(ownerB, "b");
+
+      expect(endedPayloads(ownerA)).toMatchObject([
+        { sessionId: "a", reason: "superseded", report: { reconnects: 3, droppedConnect: 2 } },
+      ]);
+    });
+
     it("has no provider counts for a session that ended before its provider started", async () => {
+      // An older session's provider is still the service's, with counts of its own.
+      shared.providerStats = {
+        delayTier: "low",
+        droppedConnect: 9,
+        droppedReplay: 9,
+        reconnects: 9,
+      };
+      await start(ownerA, "z");
+      await stop(ownerA, "z");
       const resolveKeyterms = deferKeyterms();
       const pending = start(ownerA, "a");
       await stop(ownerA, "a");
       resolveKeyterms(["daintree"]);
       await pending;
 
-      expect(endedPayloads(ownerA)[0]?.report).toMatchObject({
+      expect(endedPayloads(ownerA).find((p) => p.sessionId === "a")?.report).toMatchObject({
         delayTier: null,
         biasTermCount: null,
         droppedConnect: 0,

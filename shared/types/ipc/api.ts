@@ -2238,7 +2238,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       recentContext?: string[];
       /** The panel the passage was dictated into, which picks the project vocabulary. */
       terminalId?: string;
-    }): Promise<{ action: "no_change" | "replace"; correctedText: string }>;
+    }): Promise<{ action: "no_change" | "replace"; correctedText: string; failed?: true }>;
     onFileTokenResolved(
       callback: (payload: {
         sessionId: string;

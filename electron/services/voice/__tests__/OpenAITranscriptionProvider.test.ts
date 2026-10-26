@@ -4060,6 +4060,16 @@ describe("OpenAITranscriptionProvider — reconnect replay (#14605)", () => {
       service.stop();
     });
 
+    it("doesn't count a reconnect the stop cancelled before it began", async () => {
+      const service = new OpenAITranscriptionProvider();
+      const { socket } = await bringSessionReady(service);
+      socket.simulateClose(1006);
+      service.stop();
+      vi.advanceTimersByTime(5_000);
+
+      expect(service.getSessionStats().reconnects).toBe(0);
+    });
+
     it("counts each replay chunk the cap evicts", async () => {
       const service = new OpenAITranscriptionProvider();
       await bringSessionReady(service);
@@ -4074,6 +4084,8 @@ describe("OpenAITranscriptionProvider — reconnect replay (#14605)", () => {
       const service = new OpenAITranscriptionProvider();
       const { socket } = await bringSessionReady(service);
       socket.simulateClose(1006);
+      // Scheduled is not attempted.
+      expect(service.getSessionStats().reconnects).toBe(0);
       const socket2 = await reconnect();
       socket2.simulateClose(1006);
       await reconnect();

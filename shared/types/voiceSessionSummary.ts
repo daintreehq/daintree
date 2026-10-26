@@ -34,6 +34,8 @@ export const VOICE_STOP_REASONS = [
   "provider_ended",
   // A newer start in this view replaced it.
   "retarget",
+  // A start in another view replaced it.
+  "superseded",
   "start_failed",
   // Abandoned before it began: a second press while arming, or a newer start.
   "cancelled",

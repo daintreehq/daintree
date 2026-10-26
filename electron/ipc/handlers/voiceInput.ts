@@ -1447,7 +1447,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
   const handleCorrect = async (
     ctx: IpcContext,
     request: VoiceInputCorrectPayload
-  ): Promise<{ action: "no_change" | "replace"; correctedText: string }> => {
+  ): Promise<{ action: "no_change" | "replace"; correctedText: string; failed?: true }> => {
     const settings = getVoiceSettings();
     if (!settings.correctionEnabled || !settings.openaiApiKey || !request.rawText.trim()) {
       return { action: "no_change", correctedText: request.rawText };
@@ -1482,7 +1482,11 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       }
     );
 
-    return { action: result.action, correctedText: result.confirmedText };
+    return {
+      action: result.action,
+      correctedText: result.confirmedText,
+      ...(result.failed ? { failed: true as const } : {}),
+    };
   };
 
   // A spoken instruction applied to selected composer text. It runs whatever

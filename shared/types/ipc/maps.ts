@@ -1295,7 +1295,8 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   };
   "voice-input:correct": {
     args: [request: { rawText: string; recentContext?: string[]; terminalId?: string }];
-    result: { action: "no_change" | "replace"; correctedText: string };
+    // `failed`: the request failed or was cancelled, leaving the raw text.
+    result: { action: "no_change" | "replace"; correctedText: string; failed?: true };
   };
 
   // Crash Recovery channels

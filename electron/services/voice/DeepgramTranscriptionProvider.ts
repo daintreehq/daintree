@@ -233,8 +233,11 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
   private stopPendingReady = false;
 
   private audioChunkCount = 0;
-  // Session-summary count; outlives the drain's cleanup, reset on start().
+  // Session-summary counts. They outlive the drain's cleanup and reset only
+  // when the next session starts.
   private droppedConnectChunks = 0;
+  private droppedReplayChunks = 0;
+  private reconnectCount = 0;
   private staleChunkWarned = false;
   private preConnectBufferOverflowWarned = false;
 
@@ -331,6 +334,8 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     this.preConnectBufferBytes = 0;
     this.isExpectedClose = false;
     this.droppedConnectChunks = 0;
+    this.droppedReplayChunks = 0;
+    this.reconnectCount = 0;
 
     this.emit({ type: "status", status: "connecting" });
 
@@ -683,6 +688,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
       this.reconnectTimer = null;
       if (this.sessionId !== mySessionId) return;
       logInfo(`${P} Reconnecting`, { attempt: this.reconnectAttempt });
+      this.reconnectCount++;
       this.cleanupConnection();
       this.connect(mySessionId, settings);
     }, delay);
@@ -900,6 +906,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     this.unconfirmedBytes += chunk.byteLength;
     while (this.unconfirmedBytes > REPLAY_MAX_BYTES && this.unconfirmedAudio.length > 1) {
       const evicted = this.unconfirmedAudio.shift()!;
+      this.droppedReplayChunks++;
       this.unconfirmedBytes -= evicted.byteLength;
       this.unconfirmedOffset += evicted.byteLength;
       if (!this.replayEvictionWarned) {
@@ -1050,14 +1057,13 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     }
   }
 
-  // No delay tier (its turn detection is `endpointing`), no replay ledger and
-  // no reconnect yet.
+  // No delay tier: its turn detection is `endpointing`, a separate setting.
   getSessionStats(): ProviderSessionStats {
     return {
       delayTier: "none",
       droppedConnect: this.droppedConnectChunks,
-      droppedReplay: 0,
-      reconnects: 0,
+      droppedReplay: this.droppedReplayChunks,
+      reconnects: this.reconnectCount,
     };
   }
 

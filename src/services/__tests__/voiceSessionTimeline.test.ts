@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VOICE_SESSION_SUMMARY_MESSAGE } from "@shared/utils/voiceLogFields";
 import {
+  VOICE_FRAME_WAIT_MS,
   VOICE_PRESS_WINDOW_MS,
   VOICE_REPORT_WAIT_MS,
   VoiceSessionTimeline,
@@ -119,12 +120,15 @@ describe("VoiceSessionTimeline", () => {
 
   it("keeps the first mark and the first stop reason", () => {
     const t = timeline();
+    t.expectReport();
     clock = 1_100;
     t.mark("firstText");
     clock = 1_500;
     t.mark("firstText");
+    // Still waiting on main, so the second stop lands on a live timeline.
     t.finish("escape");
     t.finish("user");
+    t.reportEnded("stopped", report);
     expect(logged()).toMatchObject({ firstTextMs: 100, stopReason: "escape" });
   });
 
@@ -177,11 +181,15 @@ describe("VoiceSessionTimeline", () => {
     expect(logged()).toMatchObject({ correctionMs: 850, correction: "applied" });
   });
 
-  it("drops a report carrying anything but numbers and enums", () => {
+  it.each([
+    ["text in an enum field", { ...report, provider: "fix the login bug" }],
+    ["a field it doesn't declare", { ...report, keyterms: ["daintree"] }],
+    ["text in a count", { ...report, reconnects: "daintree" }],
+  ])("drops a report carrying %s", (_case, bad) => {
     const t = timeline();
     t.expectReport();
     t.finish("user");
-    t.reportEnded("stopped", { ...report, provider: "fix the login bug", keyterms: ["daintree"] });
+    t.reportEnded("stopped", bad);
 
     const line = logged();
     expect(line).toMatchObject({ backendEnd: "stopped", provider: null, biasTermCount: null });
@@ -201,6 +209,43 @@ describe("VoiceSessionTimeline", () => {
     spoken.addDroppedQueued(3);
     spoken.finish("user");
     expect(logged()).toMatchObject({ audioNoText: false, charsCommitted: 12, droppedQueued: 3 });
+
+    log.mockReset();
+    timeline().finish("user");
+    expect(logged()).toMatchObject({ audioNoText: false, charsCommitted: 0 });
+  });
+
+  it("holds the line for a frame still to paint text that came in during the stop", () => {
+    const t = timeline();
+    clock = 1_400;
+    t.markNextFrame("firstText");
+    t.finish("user");
+    expect(log).not.toHaveBeenCalled();
+    clock = 1_416;
+    frames.shift()!();
+    expect(logged()).toMatchObject({ firstTextMs: 416 });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("drops the frame wait along with everything else when disposed", () => {
+    const t = timeline();
+    t.markNextFrame("firstText");
+    t.finish("user");
+    expect(vi.getTimerCount()).toBe(1);
+    t.dispose();
+    expect(vi.getTimerCount()).toBe(0);
+    expect(frames).toHaveLength(0);
+  });
+
+  it("logs a mark whose frame never comes as null, once the wait is over", () => {
+    const t = timeline();
+    t.markNextFrame("firstText");
+    t.finish("user");
+    vi.advanceTimersByTime(VOICE_FRAME_WAIT_MS - 1);
+    expect(log).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(logged()).toMatchObject({ firstTextMs: null });
+    expect(frames).toHaveLength(0);
   });
 
   it("asks for one frame per mark, and cancels it when disposed", () => {
@@ -227,6 +272,7 @@ describe("VoiceSessionTimeline", () => {
     t.expectReport();
     t.finish("user");
     t.dispose();
+    expect(vi.getTimerCount()).toBe(0);
     vi.advanceTimersByTime(VOICE_REPORT_WAIT_MS);
     t.reportEnded("stopped", report);
     expect(log).not.toHaveBeenCalled();

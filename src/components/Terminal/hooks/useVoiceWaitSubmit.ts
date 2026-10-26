@@ -131,6 +131,7 @@ export function useVoiceWaitSubmit({
             await voiceRecordingService.stop("Submitting command.", {
               preserveLiveText: true,
               announce: false,
+              reason: "send",
             });
           }
 

@@ -139,6 +139,8 @@ export interface VoiceCorrectionResult {
   correctedText: string;
   confidence: "low" | "medium" | "high";
   confirmedText: string;
+  /** The request failed or was cancelled, so the raw text stands untried. */
+  failed?: true;
 }
 
 interface CorrectionApiResult {
@@ -289,6 +291,7 @@ export class VoiceCorrectionService {
           correctedText: request.rawText,
           confidence: "low",
           confirmedText: request.rawText,
+          failed: true,
         };
       }
       const rejection = error instanceof OpenAIRequestError ? error : undefined;
@@ -302,6 +305,7 @@ export class VoiceCorrectionService {
         correctedText: request.rawText,
         confidence: "low",
         confirmedText: request.rawText,
+        failed: true,
       };
     }
   }

@@ -266,6 +266,11 @@ function setupGlobals(electronStub = buildElectronStub()) {
     requestAnimationFrame: vi.fn(),
     cancelAnimationFrame: vi.fn(),
   });
+  vi.stubGlobal(
+    "requestAnimationFrame",
+    vi.fn(() => 0)
+  );
+  vi.stubGlobal("cancelAnimationFrame", vi.fn());
 
   vi.stubGlobal("document", {
     visibilityState: "visible",
@@ -987,7 +992,12 @@ describe("VoiceRecordingService — arming state", () => {
     expect(dispatchEscapeFallback()).toBe(true);
 
     expect(stopSpy).toHaveBeenCalledTimes(2);
-    expect(stopSpy.mock.calls[1]).toEqual(stopSpy.mock.calls[0]);
+    // Only the session summary tells the two apart.
+    const [keyAnnouncement, keyOptions] = stopSpy.mock.calls[0]!;
+    const [escapeAnnouncement, escapeOptions] = stopSpy.mock.calls[1]!;
+    expect(escapeAnnouncement).toBe(keyAnnouncement);
+    expect(escapeOptions).toEqual({ ...keyOptions, reason: "escape" });
+    expect(keyOptions).toMatchObject({ reason: "user" });
     // The text stays, so the announcement must not claim it was thrown away.
     const [announcement, options] = stopSpy.mock.calls[1]!;
     expect(options).toMatchObject({ preserveLiveText: true });
@@ -1498,7 +1508,10 @@ describe("VoiceRecordingService — shortcut stops from anywhere (#12832)", () =
       await voiceRecordingService.toggleFocusedPanel();
 
       expect(stopSpy).toHaveBeenCalledTimes(1);
-      expect(stopSpy).toHaveBeenCalledWith("Dictation stopped.", { preserveLiveText: true });
+      expect(stopSpy).toHaveBeenCalledWith("Dictation stopped.", {
+        preserveLiveText: true,
+        reason: "user",
+      });
       expect(startSpy).not.toHaveBeenCalled();
       expect(toggleSpy).not.toHaveBeenCalled();
     });
