@@ -795,7 +795,16 @@ class VoiceRecordingService {
    * the store is about to report an error with no target, and that session's
    * microphone must not keep recording behind it.
    */
-  private async failArming(): Promise<void> {
+  private async failArming(target: VoiceRecordingTarget): Promise<void> {
+    await this.rollBackArming();
+    // A push-to-talk start fails before any target is armed, so the error mark
+    // is pinned to the panel that asked rather than read off the store.
+    if (useVoiceRecordingStore.getState().status === "error") {
+      useVoiceRecordingStore.getState().setErrorPanelId(target.panelId);
+    }
+  }
+
+  private async rollBackArming(): Promise<void> {
     if (this.stream) {
       await this.stop(undefined, {
         nextStatus: "error",
@@ -863,7 +872,7 @@ class VoiceRecordingService {
         useVoiceRecordingStore
           .getState()
           .announce("Voice dictation is not configured. Open Voice settings to continue.");
-        await this.failArming();
+        await this.failArming(target);
         this.openVoiceSettings();
       }
       return;
@@ -891,7 +900,7 @@ class VoiceRecordingService {
           "Could not check microphone permission.",
           this.retryAction(() => void this.start(target))
         );
-        await this.failArming();
+        await this.failArming(target);
       }
       return;
     }
@@ -909,7 +918,7 @@ class VoiceRecordingService {
         .setLastError({ severity: "fatal", code: "mic_permission_denied", message });
       useVoiceRecordingStore.getState().announce(message);
       this.reportStartFailure("Microphone blocked", message, this.micSettingsAction());
-      await this.failArming();
+      await this.failArming(target);
       return;
     }
 
@@ -937,7 +946,7 @@ class VoiceRecordingService {
             "Could not request microphone permission.",
             this.retryAction(() => void this.start(target))
           );
-          await this.failArming();
+          await this.failArming(target);
         }
         return;
       }
@@ -953,7 +962,7 @@ class VoiceRecordingService {
           .setLastError({ severity: "fatal", code: "mic_permission_denied", message });
         useVoiceRecordingStore.getState().announce(message);
         this.reportStartFailure("Microphone blocked", message, this.micSettingsAction());
-        await this.failArming();
+        await this.failArming(target);
         return;
       }
     }
@@ -1073,7 +1082,7 @@ class VoiceRecordingService {
             ? this.micSettingsAction()
             : this.retryAction(() => void this.start(target))
         );
-        await this.failArming();
+        await this.failArming(target);
       }
       return;
     }
@@ -1148,7 +1157,7 @@ class VoiceRecordingService {
       useVoiceRecordingStore
         .getState()
         .announce("Dictation didn't start because the microphone was disconnected.");
-      await this.failArming();
+      await this.failArming(target);
     };
     const isCaptureLost = () =>
       capture.lost ||
@@ -1182,7 +1191,7 @@ class VoiceRecordingService {
         "Failed to load the audio processor.",
         this.retryAction(() => void this.start(target))
       );
-      await this.failArming();
+      await this.failArming(target);
     };
     if (!graphResult.ok) {
       await failCaptureSetup(graphResult.error);

@@ -283,6 +283,7 @@ interface VoiceRecordingState {
   setStatus: (status: VoiceInputStatus) => void;
   setLastError: (error: VoiceInputError | null) => void;
   setPauseStopWarning: (warning: boolean) => void;
+  setErrorPanelId: (panelId: string | null) => void;
   setElapsedSeconds: (seconds: number) => void;
   /** `replace` sets the preview to `delta` instead of appending (a revised hypothesis). */
   appendDelta: (delta: string, itemId?: string, replace?: boolean) => void;
@@ -373,6 +374,8 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
       setLastError: (error) => set({ lastError: error }),
 
       setPauseStopWarning: (pauseStopWarning) => set({ pauseStopWarning }),
+
+      setErrorPanelId: (errorPanelId) => set({ errorPanelId }),
 
       setAudioLevel: (audioLevel) => set({ audioLevel }),
 

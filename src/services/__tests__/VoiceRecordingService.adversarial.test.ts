@@ -99,6 +99,7 @@ const runtime = vi.hoisted(() => ({
   voiceFns: {
     setLastError: vi.fn<(error: VoiceInputError | null) => void>(),
     setPauseStopWarning: vi.fn<(warning: boolean) => void>(),
+    setErrorPanelId: vi.fn<(panelId: string | null) => void>(),
     announce: vi.fn<(text: string) => void>(),
     setStatus: vi.fn<(status: string) => void>(),
     setConfigured: vi.fn<(configured: boolean) => void>(),
@@ -219,6 +220,7 @@ function resetRuntime(): void {
 
   runtime.voiceFns.setLastError.mockImplementation(() => undefined);
   runtime.voiceFns.setPauseStopWarning.mockImplementation(() => undefined);
+  runtime.voiceFns.setErrorPanelId.mockImplementation(() => undefined);
   runtime.voiceFns.announce.mockImplementation(() => undefined);
   runtime.voiceFns.setStatus.mockImplementation((status) => {
     runtime.voiceState.status = status;

@@ -73,6 +73,26 @@ describe("voiceRecordingStore — setArming", () => {
   });
 });
 
+describe("voiceRecordingStore — errorPanelId (#14628)", () => {
+  beforeEach(reset);
+  afterEach(reset);
+
+  it("pins an errored session to the panel it ended in and clears on the next start", () => {
+    useVoiceRecordingStore.getState().setArming(TARGET);
+    useVoiceRecordingStore.getState().finishSession({ nextStatus: "error" });
+    expect(useVoiceRecordingStore.getState().errorPanelId).toBe(PANEL_ID);
+
+    useVoiceRecordingStore.getState().setArming({ panelId: "panel-2" });
+    expect(useVoiceRecordingStore.getState().errorPanelId).toBeNull();
+  });
+
+  it("does not pin a clean finish", () => {
+    useVoiceRecordingStore.getState().setArming(TARGET);
+    useVoiceRecordingStore.getState().finishSession();
+    expect(useVoiceRecordingStore.getState().errorPanelId).toBeNull();
+  });
+});
+
 describe("voiceRecordingStore — micSignal (#13105)", () => {
   beforeEach(reset);
 
