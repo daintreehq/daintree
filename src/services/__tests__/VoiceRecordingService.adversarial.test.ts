@@ -1107,9 +1107,7 @@ describe("VoiceRecordingService adversarial", () => {
       });
       // Both captures shared one context, parked once neither uses it.
       expect(runtime.createdAudioContexts).toHaveLength(1);
-      await vi.waitFor(() =>
-        expect(runtime.createdAudioContexts[0]!.state).toBe("suspended")
-      );
+      await vi.waitFor(() => expect(runtime.createdAudioContexts[0]!.state).toBe("suspended"));
       expect(runtime.createdAudioContexts[0]!.close).not.toHaveBeenCalled();
       expect(runtime.createdWorkletNodes[1]!.port.onmessage).toBeNull();
 
