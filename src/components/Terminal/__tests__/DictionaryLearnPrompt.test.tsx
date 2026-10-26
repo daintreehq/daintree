@@ -10,9 +10,9 @@ const dismissSuggestion = vi.fn(() => Promise.resolve());
 
 beforeEach(() => {
   vi.useFakeTimers();
-  (window as unknown as { electron: unknown }).electron = {
-    voiceDictionary: { acceptSuggestion, dismissSuggestion },
-  };
+  Object.assign(window, {
+    electron: { voiceDictionary: { acceptSuggestion, dismissSuggestion } },
+  });
   acceptSuggestion.mockClear();
   dismissSuggestion.mockClear();
   useTerminalInputStore.setState({ draftInputs: new Map() });

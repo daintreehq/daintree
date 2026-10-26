@@ -236,8 +236,7 @@ export function getVoiceSettings(): VoiceInputSettings {
     customDictionary !== undefined ||
     JSON.stringify(rest.dictionary ?? []) !== JSON.stringify(merged.dictionary) ||
     JSON.stringify(rest.suggestedDictionary ?? []) !== JSON.stringify(merged.suggestedDictionary) ||
-    JSON.stringify(rest.dismissedSuggestions ?? []) !==
-      JSON.stringify(merged.dismissedSuggestions);
+    JSON.stringify(rest.dismissedSuggestions ?? []) !== JSON.stringify(merged.dismissedSuggestions);
 
   // Migrate prior OpenAI keys into the unified field.
   if (!merged.openaiApiKey) {

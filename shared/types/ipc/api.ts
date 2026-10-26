@@ -2951,7 +2951,10 @@ export interface VoiceInputSettings {
 
 /** What `voiceInput.setSettings` accepts: everything except the main-owned and runtime-only fields. */
 export type VoiceInputSettingsPatch = Partial<
-  Omit<VoiceInputSettings, "dictionary" | "suggestedDictionary" | "dismissedSuggestions" | "keyterms">
+  Omit<
+    VoiceInputSettings,
+    "dictionary" | "suggestedDictionary" | "dismissedSuggestions" | "keyterms"
+  >
 >;
 
 /** Where a dictionary entry came from. */
