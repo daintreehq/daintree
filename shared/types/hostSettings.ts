@@ -97,12 +97,20 @@ export const IDLE_THRESHOLD_MINUTES = { min: 15, max: 1440 } as const;
 export const LEAK_RESTART_THRESHOLD_MB = { min: 1024, max: 32768 } as const;
 
 /**
- * Bounds on a host's global environment as it travels: generous enough for
- * any set a person keeps, small enough that one reply stays well inside a
- * link frame. Names follow what the host's own Settings stores, not only the
- * POSIX form its form asks for, so a variable kept from before still reads.
+ * Bounds on a host's global environment as it is written here: generous
+ * enough for any set a person keeps. Names follow what the host's own
+ * Settings stores, not only the POSIX form its form asks for, so a variable
+ * kept from before still reads.
  */
 export const HOST_ENV_LIMITS = { entries: 500, nameLength: 256, valueLength: 32_768 } as const;
+
+/**
+ * The whole set, as JSON in UTF-8. The limits above alone allow over 16 MB,
+ * past a link frame (16 MiB), so this is what keeps a change and the reply to
+ * it well inside one. A larger set is past what macOS or Linux would start a
+ * process with anyway. Reads are held to none of this (`hostSettingReadable`).
+ */
+export const HOST_ENV_MAX_BYTES = 2 * 1024 * 1024;
 
 function envRefusal(value: unknown): string | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -120,6 +128,9 @@ function envRefusal(value: unknown): string | null {
     if (typeof text !== "string") return `${name} needs a text value.`;
     if (text.length > HOST_ENV_LIMITS.valueLength) return `${name}'s value is too long.`;
     if (text.includes("\0")) return `${name}'s value can't hold a null character.`;
+  }
+  if (new TextEncoder().encode(JSON.stringify(value)).length > HOST_ENV_MAX_BYTES) {
+    return `These variables come to more than ${HOST_ENV_MAX_BYTES / (1024 * 1024)} MB together.`;
   }
   return null;
 }

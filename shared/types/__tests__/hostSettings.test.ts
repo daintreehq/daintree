@@ -89,6 +89,34 @@ describe("work settings on a host (#14706)", () => {
     ).toBe(false);
   });
 
+  it("refuses an environment too large as a whole, though each variable is within its own limits", async () => {
+    const { HOST_ENV_LIMITS, HOST_ENV_MAX_BYTES, hostSettingReadable } =
+      await import("../hostSettings.js");
+    const set = (count: number, char: string) =>
+      Object.fromEntries(
+        Array.from({ length: count }, (_, i) => [
+          `VAR_${i}`,
+          char.repeat(HOST_ENV_LIMITS.valueLength),
+        ])
+      );
+    const fits = set(60, "x");
+    expect(new TextEncoder().encode(JSON.stringify(fits)).length).toBeLessThan(HOST_ENV_MAX_BYTES);
+    expect(hostSettingRefusal("globalEnvironmentVariables", fits)).toBeNull();
+
+    const tooMany = set(100, "x");
+    expect(Object.keys(tooMany).length).toBeLessThan(HOST_ENV_LIMITS.entries);
+    expect(hostSettingRefusal("globalEnvironmentVariables", tooMany)).not.toBeNull();
+    expect(HostSettingsPatchSchema.safeParse({ globalEnvironmentVariables: tooMany }).success).toBe(
+      false
+    );
+    // Counted in encoded bytes, not characters.
+    const wide = set(40, "é");
+    expect(JSON.stringify(wide).length).toBeLessThan(HOST_ENV_MAX_BYTES);
+    expect(hostSettingRefusal("globalEnvironmentVariables", wide)).not.toBeNull();
+    // A set stored that large on the host itself still reads.
+    expect(hostSettingReadable("globalEnvironmentVariables", tooMany)).toBe(true);
+  });
+
   it("holds terminal and idle-project values to the ranges their own Settings allows", () => {
     expect(hostSettingRefusal("terminalConfig.memoryLeakAutoRestartThresholdMb", 1024)).toBeNull();
     expect(
