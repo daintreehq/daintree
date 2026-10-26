@@ -950,9 +950,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // The Expanded Editor hands the caret back to the bar when its exit
     // animation ends: a hand-back from a send that closed it waits for that.
     const expandedEditorShownRef = useRef(false);
+    const expandedEditorOpeningsRef = useRef(0);
     const afterExpandedEditorClosedRef = useRef<Array<() => void>>([]);
     useEffect(() => {
-      if (isExpanded) expandedEditorShownRef.current = true;
+      if (!isExpanded) return;
+      expandedEditorShownRef.current = true;
+      expandedEditorOpeningsRef.current += 1;
     }, [isExpanded]);
     const handleExpandedEditorClosed = () => {
       expandedEditorShownRef.current = false;
@@ -970,6 +973,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       projectId,
       isolated,
       editorViewRef,
+      expandedEditorOpeningsRef,
       afterExpandedEditorCloses,
     });
 
@@ -982,13 +986,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         if (options?.submit) return sendResolvedText(text, options);
         if (!submit) {
           // Claimed before any expansion is awaited, so a press while a diff
-          // is fetched calls the hand-back off. A send from the Expanded
-          // Editor closes it, which moves the editor and its caret.
+          // is fetched calls the hand-back off.
           return sendResolvedText(text, {
             ...options,
-            onHandedOff:
-              options?.onHandedOff ??
-              claimSendHandBack({ blursEditor: expandedEditorShownRef.current }),
+            onHandedOff: options?.onHandedOff ?? claimSendHandBack(),
           });
         }
         const imagePaths = options?.imagePaths ?? [];

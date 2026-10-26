@@ -265,17 +265,37 @@ describe("HybridInputBar hands the keyboard back to a terminal-first user's term
     expect(handler).not.toHaveBeenCalled();
   });
 
-  // Only a dictation's lock is known to drop the keyboard; anything else that
-  // left it nowhere (a control the user tabbed to, then removed) is theirs.
-  it("leaves the keyboard alone when a plain send's keyboard went nowhere", async () => {
-    const { view, type, pressEnter, settle, handler } = await mount();
+  // Tabbed to a control that then went away: the keyboard is nowhere, but
+  // the user left first.
+  it("leaves the keyboard alone when it went elsewhere, then nowhere", async () => {
+    const { type, pressEnter, settle, handler } = await mount();
     await type("ship it");
     await pressEnter();
-    view.contentDOM.blur();
+    const control = document.createElement("button");
+    document.body.appendChild(control);
+    control.focus();
+    control.remove();
+    expect(document.activeElement).toBe(document.body);
 
     await settle(true);
 
-    expect(document.activeElement).toBe(document.body);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  // Something handing focus back to the composer, a dialog restoring its
+  // opener say, doesn't undo where the user went meanwhile.
+  it("leaves the keyboard alone when it went elsewhere and came back", async () => {
+    const { view, type, pressEnter, settle, handler } = await mount();
+    await type("ship it");
+    await pressEnter();
+    const control = document.createElement("button");
+    document.body.appendChild(control);
+    control.focus();
+    view.contentDOM.focus();
+
+    await settle(true);
+
+    expect(document.activeElement).toBe(view.contentDOM);
     expect(handler).not.toHaveBeenCalled();
   });
 
@@ -448,6 +468,23 @@ describe("HybridInputBar hands the keyboard back to a terminal-first user's term
       flushFrames();
 
       expect(document.activeElement).toBe(textarea);
+    });
+
+    it("leaves the keyboard alone when the editor opened again before its exit finished", async () => {
+      const { view, type, openExpandedEditor, pressEnter, settle, handler } = await mount();
+      await type("a long prompt");
+      await openExpandedEditor();
+      view.contentDOM.focus();
+      await pressEnter();
+      await settle(true);
+
+      await openExpandedEditor();
+      await openExpandedEditor();
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, PAST_DIALOG_EXIT_MS));
+      });
+
+      expect(handler).not.toHaveBeenCalled();
     });
   });
 

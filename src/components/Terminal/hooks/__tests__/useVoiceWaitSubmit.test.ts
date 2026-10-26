@@ -96,8 +96,7 @@ describe("useVoiceWaitSubmit", () => {
     expect(useTerminalInputStore.getState().isVoiceSubmitting(PANEL_ID)).toBe(false);
   });
 
-  // A press during the wait has to count against the hand-back, and the lock
-  // drops the editor's focus, so the claim comes first (#14692).
+  // A press during the wait has to count against the hand-back (#14692).
   it("claims the keyboard's hand-back before locking the editor, and sends with it", async () => {
     let resolveStop!: () => void;
     stopMock.mockImplementation(
@@ -112,7 +111,7 @@ describe("useVoiceWaitSubmit", () => {
     });
     const handBack = vi.fn();
     let editableAtClaim: boolean | undefined;
-    const claimSendHandBack = vi.fn((_claim?: { blursEditor?: boolean }) => {
+    const claimSendHandBack = vi.fn(() => {
       editableAtClaim = view.state.facet(EditorView.editable);
       return handBack;
     });
@@ -129,7 +128,7 @@ describe("useVoiceWaitSubmit", () => {
     act(() => {
       result.current.startVoiceWaitSubmit();
     });
-    expect(claimSendHandBack).toHaveBeenCalledWith({ blursEditor: true });
+    expect(claimSendHandBack).toHaveBeenCalledTimes(1);
     expect(editableAtClaim).toBe(true);
     expect(view.state.facet(EditorView.editable)).toBe(false);
     expect(sendFromEditor).not.toHaveBeenCalled();

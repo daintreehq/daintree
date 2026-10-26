@@ -96,8 +96,8 @@ export function useVoiceWaitSubmit({
       activeAttemptRef.current === attempt &&
       useTerminalInputStore.getState().isVoiceSubmitting(terminalId);
 
-    // Before the lock below: making the editor non-editable drops its focus.
-    const handBack = claimSendHandBackRef.current?.({ blursEditor: true });
+    // Before the lock below, so a press during the wait counts against it.
+    const handBack = claimSendHandBackRef.current?.();
     store.setVoiceSubmitting(terminalId, true);
     setVoiceSubmitPhase("finishing");
 
