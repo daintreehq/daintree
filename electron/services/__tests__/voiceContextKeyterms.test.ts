@@ -9,17 +9,10 @@ import {
   extractTerminalIdentifiers,
 } from "../voiceContextKeyterms.js";
 
-const gitListBranchesMock = vi.fn().mockResolvedValue([
-  { name: "feature/auth-login-service", current: true, commit: "abc123" },
-  { name: "main", current: false, commit: "def456" },
-]);
+const getGitBranchMock = vi.fn().mockResolvedValue("feature/auth-login-service");
 
-vi.mock("../GitService.js", () => ({
-  GitService: class MockGitService {
-    listBranches(...args: unknown[]) {
-      return gitListBranchesMock(...args);
-    }
-  },
+vi.mock("../../utils/gitUtils.js", () => ({
+  getGitBranch: (...args: unknown[]) => getGitBranchMock(...args),
 }));
 
 vi.mock("../../utils/logger.js", () => ({
@@ -29,19 +22,28 @@ vi.mock("../../utils/logger.js", () => ({
   logError: vi.fn(),
 }));
 
-function makePtyClient(lines: string[] = []): Pick<PtyClient, "getAllTerminalSnapshots"> {
+const TARGET = "t1";
+
+function snapshot(id: string, lines: string[]) {
+  return { id, lines, lastInputTime: 0, lastOutputTime: 0, lastCheckTime: 0, spawnedAt: 0 };
+}
+
+// Only the target terminal exists; a read of every terminal fails the test.
+function makePtyClient(
+  lines: string[] = [],
+  terminal: { cwd: string; worktreeId?: string } = { cwd: "/repo/worktrees/feature" }
+) {
   return {
-    getAllTerminalSnapshots: vi.fn().mockResolvedValue([
-      {
-        id: "t1",
-        lines,
-        lastInputTime: 0,
-        lastOutputTime: 0,
-        lastCheckTime: 0,
-        spawnedAt: 0,
-      },
-    ]),
+    getTerminalSnapshot: vi.fn(async (id: string) => (id === TARGET ? snapshot(id, lines) : null)),
+    getTerminalAsync: vi.fn(async (id: string) => (id === TARGET ? { id, ...terminal } : null)),
+    getAllTerminalSnapshots: vi.fn(async () => {
+      throw new Error("read every terminal");
+    }),
   };
+}
+
+function asPtyClient(client: ReturnType<typeof makePtyClient>): PtyClient {
+  return client as unknown as PtyClient;
 }
 
 describe("tokenizeBranchName", () => {
@@ -165,6 +167,54 @@ describe("extractTerminalIdentifiers", () => {
     const ids = extractTerminalIdentifiers(lines);
     expect(ids).toEqual(["alpha_term", "zebra_term"]);
   });
+
+  it("never turns a credential, its name or an opaque ID into a term", () => {
+    // Bodies are assembled at runtime so no credential literal sits in source.
+    const githubToken = `ghp_${"aB3xK9mQ".repeat(4)}Zt7W`;
+    const openaiKey = `sk-proj-${"Qw8eRt2Y".repeat(3)}-UserProfileCache-${"Lm4nB6vC".repeat(3)}`;
+    const ids = extractTerminalIdentifiers([
+      `export OPENAI_API_KEY=${openaiKey}`,
+      `remote: https://x-access-token:${githubToken}@github.com/owner/repo-name`,
+      "the rest of a wrapped key: AbcDefGhi",
+      "request_id=e29b-41d4-a716-446655440000 handled by useSessionRouter",
+    ]);
+    expect(ids).toContain("useSessionRouter");
+    expect(ids).not.toContain("AbcDefGhi");
+    for (const id of ids) {
+      expect(githubToken).not.toContain(id);
+      expect(openaiKey).not.toContain(id);
+    }
+    expect(ids).not.toContain("OPENAI_API_KEY");
+    expect(ids.some((id) => id.includes("a716"))).toBe(false);
+  });
+
+  it("rejoins a credential an OSC sequence split, and drops OSC payloads", () => {
+    const token = `ghp_${"aB3xK9mQ".repeat(2)}\u001b]0;tab title\u0007${"Zt7WpL2n".repeat(2)}`;
+    const ids = extractTerminalIdentifiers([
+      `using ${token} now`,
+      "",
+      "\u001b]8;;https://example.com/window-title-text\u0007useSessionRouter\u001b]8;;\u0007",
+    ]);
+    expect(ids).toEqual(["useSessionRouter"]);
+  });
+
+  it.each([
+    ["ESC ] … BEL", "\u001b]0;windowTitle\u0007"],
+    ["ESC ] … ESC \\", "\u001b]0;windowTitle\u001b\\"],
+    ["8-bit OSC … BEL", "\u009d0;windowTitle\u0007"],
+    ["ESC ] … 8-bit ST", "\u001b]0;windowTitle\u009c"],
+  ])("removes an OSC sequence (%s) whole, rejoining the text around it", (_form, osc) => {
+    expect(extractTerminalIdentifiers([`use${osc}SessionRouter`])).toEqual(["useSessionRouter"]);
+  });
+
+  it("drops long branch slugs but keeps short compound identifiers", () => {
+    const ids = extractTerminalIdentifiers([
+      "Switched to bugfix-issue-14621-terminal-derived-keyterms-can-send",
+      "edited voice-context-keyterms",
+    ]);
+    expect(ids).toContain("voice-context-keyterms");
+    expect(ids.some((id) => id.startsWith("bugfix-issue"))).toBe(false);
+  });
 });
 
 describe("assembleKeyterms", () => {
@@ -185,25 +235,136 @@ describe("assembleKeyterms", () => {
     expect(result).toContain("DaintreeEditor");
   });
 
-  it("adds branch name tokens when projectPath provided", async () => {
+  it("adds branch tokens from the worktree the target terminal is filed under", async () => {
+    const ptyClient = makePtyClient([], { cwd: "/repo", worktreeId: "/repo/worktrees/feature" });
     const result = await assembleKeyterms({
       customDictionary: [],
-      projectPath: "/some/path",
+      terminalId: TARGET,
+      ptyClient: asPtyClient(ptyClient),
     });
+    expect(getGitBranchMock).toHaveBeenCalledWith("/repo/worktrees/feature", expect.anything());
     // From mock: "feature/auth-login-service"
     expect(result).toContain("auth");
     expect(result).toContain("login");
     expect(result).toContain("service");
   });
 
-  it("adds terminal identifiers when ptyClient provided", async () => {
-    const ptyClient = makePtyClient(["const myVariable = handleRequest();"]) as PtyClient;
+  it("reads the branch from the terminal's cwd when it isn't in a worktree", async () => {
+    getGitBranchMock.mockClear();
+    await assembleKeyterms({
+      customDictionary: [],
+      terminalId: TARGET,
+      ptyClient: asPtyClient(makePtyClient([], { cwd: "/home/me/scratch" })),
+    });
+    expect(getGitBranchMock).toHaveBeenCalledWith("/home/me/scratch", expect.anything());
+  });
+
+  it("adds terminal identifiers from the target terminal", async () => {
+    const ptyClient = makePtyClient(["const myVariable = handleRequest();"]);
     const result = await assembleKeyterms({
       customDictionary: [],
-      ptyClient,
+      terminalId: TARGET,
+      ptyClient: asPtyClient(ptyClient),
     });
     expect(result).toContain("myVariable");
     expect(result).toContain("handleRequest");
+    expect(ptyClient.getTerminalSnapshot).toHaveBeenCalledWith(TARGET);
+    expect(ptyClient.getAllTerminalSnapshots).not.toHaveBeenCalled();
+  });
+
+  it("reads the terminal it is given, not another one", async () => {
+    getGitBranchMock.mockClear();
+    const terminals: Record<string, { lines: string[]; cwd: string; worktreeId: string }> = {
+      t1: { lines: ["useFirstTerminal"], cwd: "/a", worktreeId: "/repo/worktrees/first" },
+      t2: { lines: ["useSecondTerminal"], cwd: "/b", worktreeId: "/repo/worktrees/second" },
+    };
+    const ptyClient = {
+      getTerminalSnapshot: vi.fn(async (id: string) =>
+        terminals[id] ? snapshot(id, terminals[id].lines) : null
+      ),
+      getTerminalAsync: vi.fn(async (id: string) =>
+        terminals[id] ? { id, ...terminals[id] } : null
+      ),
+    } as unknown as PtyClient;
+    const result = await assembleKeyterms({ customDictionary: [], terminalId: "t2", ptyClient });
+    expect(result).toContain("useSecondTerminal");
+    expect(result).not.toContain("useFirstTerminal");
+    expect(getGitBranchMock).toHaveBeenCalledWith("/repo/worktrees/second", expect.anything());
+  });
+
+  it("gives up on a terminal read that never answers", async () => {
+    vi.useFakeTimers();
+    try {
+      const ptyClient = {
+        getTerminalSnapshot: vi.fn(() => new Promise(() => {})),
+        getTerminalAsync: vi.fn(() => new Promise(() => {})),
+      } as unknown as PtyClient;
+      const pending = assembleKeyterms({
+        customDictionary: ["CustomFirst"],
+        terminalId: TARGET,
+        ptyClient,
+      });
+      await vi.advanceTimersByTimeAsync(500);
+      await expect(pending).resolves.toEqual(["CustomFirst"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reads no terminal and no branch without a target", async () => {
+    getGitBranchMock.mockClear();
+    const ptyClient = makePtyClient(["const myVariable = handleRequest();"]);
+    const result = await assembleKeyterms({
+      customDictionary: ["CustomFirst"],
+      ptyClient: asPtyClient(ptyClient),
+    });
+    expect(result).toEqual(["CustomFirst"]);
+    expect(ptyClient.getTerminalSnapshot).not.toHaveBeenCalled();
+    expect(ptyClient.getTerminalAsync).not.toHaveBeenCalled();
+    expect(ptyClient.getAllTerminalSnapshots).not.toHaveBeenCalled();
+    expect(getGitBranchMock).not.toHaveBeenCalled();
+  });
+
+  it("skips a project or branch name holding a credential before splitting it", async () => {
+    const token = `ghp_${"aB3xK9mQ".repeat(4)}Zt7W`;
+    getGitBranchMock.mockResolvedValueOnce(`fix/${token}-ProfileCache/login-flow`);
+    const result = await assembleKeyterms({
+      customDictionary: [],
+      projectName: `${token}-ProjectCache`,
+      terminalId: TARGET,
+      ptyClient: asPtyClient(makePtyClient()),
+    });
+    expect(result).toContain("login");
+    expect(result).not.toContain("ProfileCache");
+    expect(result.some((term) => term.includes("Project"))).toBe(false);
+  });
+
+  it("drops credential names and IDs from project and branch names, piece by piece", async () => {
+    getGitBranchMock.mockResolvedValueOnce("fix/550e8400-e29b-41d4-a716-446655440000/login-flow");
+    const result = await assembleKeyterms({
+      customDictionary: [],
+      projectName: "Acme getAccessToken",
+      terminalId: TARGET,
+      ptyClient: asPtyClient(makePtyClient()),
+    });
+    expect(result).toContain("Acme");
+    expect(result).toContain("login");
+    expect(result).not.toContain("Token");
+    expect(result).not.toContain("Acme getAccessToken");
+    for (const piece of ["e29b", "41d4", "a716"]) expect(result).not.toContain(piece);
+  });
+
+  it("skips a project name holding an ID, rather than splitting the ID into pieces", async () => {
+    const result = await assembleKeyterms({
+      customDictionary: [],
+      projectName: "Acme 550e8400-e29b-41d4-a716-446655440000",
+    });
+    for (const piece of ["e29b", "41d4", "a716"]) expect(result).not.toContain(piece);
+  });
+
+  it("keeps the user's own dictionary entries unfiltered", async () => {
+    const result = await assembleKeyterms({ customDictionary: ["OPENAI_API_KEY"] });
+    expect(result).toEqual(["OPENAI_API_KEY"]);
   });
 
   it("deduplicates case-insensitively", async () => {
@@ -226,38 +387,29 @@ describe("assembleKeyterms", () => {
   });
 
   it("caps terminal lines at 200 and ranks the newest by recency", async () => {
-    // 4 terminals × 60 lines = 240 total. Each line carries one unique
-    // identifier so frequency is constant (1 line each) and recency — the line
-    // position — is the sole ranking signal. The oldest 40 lines fall outside
-    // the 200-line tail window; within the window, the terminal-tier cap keeps
-    // only the most recent identifiers.
-    const snapshots = Array.from({ length: 4 }, (_, termIdx) => ({
-      id: `t${termIdx}`,
-      lines: Array.from({ length: 60 }, (_, lineIdx) => {
-        const globalLine = termIdx * 60 + lineIdx;
-        return `term${termIdx}_ident_${globalLine}`;
-      }),
-      lastInputTime: 0,
-      lastOutputTime: 0,
-      lastCheckTime: 0,
-      spawnedAt: 0,
-    }));
-    const ptyClient = {
-      getAllTerminalSnapshots: vi.fn().mockResolvedValue(snapshots),
-    } as unknown as PtyClient;
+    // Each line carries one unique identifier so frequency is constant (1 line
+    // each) and recency — the line position — is the sole ranking signal. The
+    // oldest 40 lines fall outside the 200-line tail window; within the window,
+    // the terminal-tier cap keeps only the most recent identifiers.
+    const lines = Array.from({ length: 240 }, (_, i) => `term_ident_${i}`);
+    // Repeated across the oldest lines, this would outrank everything if the
+    // window didn't cut it off.
+    for (let i = 0; i < 40; i++) lines[i] += " stale_sentinel";
     const result = await assembleKeyterms({
       customDictionary: [],
-      ptyClient,
+      terminalId: TARGET,
+      ptyClient: asPtyClient(makePtyClient(lines)),
     });
-    // Identifiers from the first 40 lines (globally 0-39) are dropped by the tail slice.
-    expect(result).not.toContain("term0_ident_0");
-    expect(result).not.toContain("term0_ident_39");
+    // Identifiers from the first 40 lines are dropped by the tail slice.
+    expect(result).not.toContain("stale_sentinel");
+    expect(result).not.toContain("term_ident_0");
+    expect(result).not.toContain("term_ident_39");
     // The very newest identifier survives and the oldest windowed one (line 40,
     // lowest recency) is squeezed out by the terminal-tier cap.
-    expect(result).toContain("term3_ident_239");
-    expect(result).not.toContain("term0_ident_40");
+    expect(result).toContain("term_ident_239");
+    expect(result).not.toContain("term_ident_40");
     // Recency ranking: a more recent identifier outranks a less recent one.
-    expect(result.indexOf("term3_ident_239")).toBeLessThan(result.indexOf("term3_ident_220"));
+    expect(result.indexOf("term_ident_239")).toBeLessThan(result.indexOf("term_ident_220"));
     // The cap truncates far below the 200-line window size.
     expect(result.length).toBeLessThan(200);
   });
@@ -269,10 +421,10 @@ describe("assembleKeyterms", () => {
     // contribution must be bounded well below what was supplied.
     const dictTerms = ["AlphaKeyword", "BetaKeyword", "GammaKeyword"];
     const lines = Array.from({ length: 60 }, (_, i) => `terminal_ident_${i}`);
-    const ptyClient = makePtyClient(lines) as PtyClient;
     const result = await assembleKeyterms({
       customDictionary: dictTerms,
-      ptyClient,
+      terminalId: TARGET,
+      ptyClient: asPtyClient(makePtyClient(lines)),
     });
     for (const term of dictTerms) {
       expect(result).toContain(term);
@@ -290,10 +442,10 @@ describe("assembleKeyterms", () => {
     // on a successful add — otherwise the duplicate would burn a tier slot and
     // the tier would yield one fewer unique terminal term.
     const lines = Array.from({ length: 60 }, (_, i) => `terminal_ident_${i}`);
-    const ptyClient = makePtyClient(lines) as PtyClient;
     const result = await assembleKeyterms({
       customDictionary: ["terminal_ident_59"],
-      ptyClient,
+      terminalId: TARGET,
+      ptyClient: asPtyClient(makePtyClient(lines)),
     });
     // Recency ranks 59→0; 59 is the dict dup. The tier should still fill with
     // the next-newest unique terms down to terminal_ident_29 (30 unique slots).
@@ -303,10 +455,12 @@ describe("assembleKeyterms", () => {
 
   it("falls back gracefully when ptyClient fails", async () => {
     const ptyClient = {
-      getAllTerminalSnapshots: vi.fn().mockRejectedValue(new Error("pty error")),
+      getTerminalSnapshot: vi.fn().mockRejectedValue(new Error("pty error")),
+      getTerminalAsync: vi.fn().mockRejectedValue(new Error("pty error")),
     } as unknown as PtyClient;
     const result = await assembleKeyterms({
       customDictionary: ["MyTerm"],
+      terminalId: TARGET,
       ptyClient,
     });
     expect(result).toContain("MyTerm");
@@ -346,13 +500,12 @@ describe("assembleKeyterms", () => {
     // Branch read fails, terminal read succeeds — the surviving terminal
     // identifiers still land after custom/project tokens, never lost to the
     // concurrent failure.
-    gitListBranchesMock.mockRejectedValueOnce(new Error("git not found"));
-    const ptyClient = makePtyClient(["const terminalIdent = true;"]) as PtyClient;
+    getGitBranchMock.mockRejectedValueOnce(new Error("git not found"));
     const result = await assembleKeyterms({
       customDictionary: ["CustomFirst"],
       projectName: "ProjectSecond",
-      projectPath: "/some/path",
-      ptyClient,
+      terminalId: TARGET,
+      ptyClient: asPtyClient(makePtyClient(["const terminalIdent = true;"])),
     });
     expect(result).toContain("CustomFirst");
     expect(result).toContain("terminalIdent");
@@ -361,12 +514,11 @@ describe("assembleKeyterms", () => {
   });
 
   it("preserves priority order: custom dict > project name > branch > terminal", async () => {
-    const ptyClient = makePtyClient(["const terminalIdent = true;"]) as PtyClient;
     const result = await assembleKeyterms({
       customDictionary: ["CustomFirst"],
       projectName: "ProjectSecond",
-      projectPath: "/some/path",
-      ptyClient,
+      terminalId: TARGET,
+      ptyClient: asPtyClient(makePtyClient(["const terminalIdent = true;"])),
     });
     const customIdx = result.indexOf("CustomFirst");
     const projectIdx = result.indexOf("ProjectSecond");

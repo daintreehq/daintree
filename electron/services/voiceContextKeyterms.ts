@@ -1,6 +1,12 @@
-import { GitService } from "./GitService.js";
+import { isAbsolute } from "node:path";
 import type { PtyClient } from "./PtyClient.js";
+import { getGitBranch } from "../utils/gitUtils.js";
 import { logDebug } from "../utils/logger.js";
+import {
+  holdsCredentialOrId,
+  isSecretShaped,
+  redactSecretShapedLines,
+} from "./voiceKeytermSecrets.js";
 
 const P = "[VoiceKeyterms]";
 
@@ -12,6 +18,9 @@ const MAX_KEYTERM_LENGTH = 100;
 const ASSEMBLY_TIMEOUT_MS = 500;
 const MIN_TERM_LENGTH = 4;
 const MAX_KEYTERM_LINES = 200;
+// A separator-joined identifier with more parts than this is a branch slug or a
+// generated name, not something anyone says aloud.
+const MAX_IDENTIFIER_PARTS = 4;
 export const MAX_PROMPT_CHARS = 400;
 const KEYTERM_PROMPT_PREFIX = "Keywords: ";
 const KEYTERM_PROMPT_SEPARATOR = ", ";
@@ -183,6 +192,12 @@ const BLOCKLIST = new Set([
 // eslint-disable-next-line no-control-regex
 const ANSI_RE = /[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><~]/g;
 
+// OSC sequences (titles, hyperlinks, progress) open with ESC ] or the 8-bit
+// OSC and run to BEL or either form of ST. Their payload isn't output, and
+// left in place it splits whatever it sits inside.
+// eslint-disable-next-line no-control-regex
+const OSC_RE = /(?:\u001b\]|\u009d)[^\u0007\u001b\u009c\u009d]*(?:\u0007|\u001b\\|\u009c)/g;
+
 // Matches identifiers: camelCase, PascalCase, snake_case, kebab-case (with internal separators)
 const IDENTIFIER_RE = /\b[a-zA-Z][a-zA-Z0-9]*(?:[-_][a-zA-Z0-9]+)+\b/g;
 
@@ -191,8 +206,13 @@ const CAMEL_RE = /\b[a-z]+(?:[A-Z][a-z0-9]+)+\b|\b[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]
 
 export interface KeytermAssemblyOpts {
   customDictionary: string[];
+  /** Name of the project that owns the target terminal. */
   projectName?: string;
-  projectPath?: string;
+  /**
+   * The terminal being dictated into: the only source of terminal terms, and
+   * its worktree the only source of the branch.
+   */
+  terminalId?: string;
   ptyClient?: PtyClient;
 }
 
@@ -200,16 +220,19 @@ function isValidTerm(term: string): boolean {
   if (term.length < MIN_TERM_LENGTH) return false;
   if (/^\d+$/.test(term)) return false;
   if (BLOCKLIST.has(term.toLowerCase())) return false;
+  if (isSecretShaped(term)) return false;
   return true;
 }
 
 function stripAnsi(text: string): string {
-  return text.replace(ANSI_RE, "");
+  return text.replace(OSC_RE, "").replace(ANSI_RE, "");
 }
 
 export function tokenizeBranchName(branchName: string): string[] {
-  const parts = branchName.split(/[/\-_.]+/);
-  return parts.filter(isValidTerm);
+  // A path component holding a credential or an ID goes whole, before it can
+  // be split into pieces that each look harmless.
+  const components = branchName.split("/").filter((component) => !holdsCredentialOrId(component));
+  return components.flatMap((component) => component.split(/[-_.]+/)).filter(isValidTerm);
 }
 
 export function tokenizeProjectName(name: string): string[] {
@@ -244,18 +267,20 @@ interface TermScore {
 // cross-platform ordering. No clocks, no floats, no external state.
 export function extractTerminalIdentifiers(lines: string[]): string[] {
   const scores = new Map<string, TermScore>();
+  // Guard against malformed IPC payloads delivering non-string lines, which
+  // would otherwise throw in stripAnsi and drop the entire terminal tier.
+  const cleanLines = redactSecretShapedLines(
+    lines.map((line) => (typeof line === "string" ? stripAnsi(line) : ""))
+  );
 
-  lines.forEach((line, lineIndex) => {
-    // Guard against malformed IPC payloads delivering non-string lines, which
-    // would otherwise throw in stripAnsi and drop the entire terminal tier.
-    if (typeof line !== "string") return;
-    const clean = stripAnsi(line);
+  cleanLines.forEach((clean, lineIndex) => {
     // Count each term at most once per line so same-line repeats don't inflate
     // frequency (e.g. a log line spamming one identifier).
     const seenThisLine = new Set<string>();
 
     const record = (term: string): void => {
       if (!isValidTerm(term)) return;
+      if (term.split(/[-_]/).length > MAX_IDENTIFIER_PARTS) return;
       const key = term.toLowerCase();
       if (seenThisLine.has(key)) return;
       seenThisLine.add(key);
@@ -288,34 +313,57 @@ export function extractTerminalIdentifiers(lines: string[]): string[] {
     .map((entry) => entry.canonical);
 }
 
-async function getBranchName(projectPath: string): Promise<string | null> {
+// The worktree the terminal is filed under, whose id is its path; a move
+// updates it while the spawn cwd stays put. A terminal outside any worktree
+// falls back to its cwd.
+async function getTerminalBranch(ptyClient: PtyClient, terminalId: string): Promise<string | null> {
+  const startedAt = performance.now();
   try {
-    const git = new GitService(projectPath);
-    const branches = await git.listBranches();
-    const current = branches.find((b) => b.current);
-    return current?.name ?? null;
+    const terminal = await ptyClient.getTerminalAsync(terminalId);
+    if (!terminal) return null;
+    const path = terminal.worktreeId ?? terminal.cwd;
+    if (typeof path !== "string" || !isAbsolute(path)) return null;
+    // Git's own timeout is what's left of the shared budget, so it rarely
+    // outlives the wait (resolving the git binary isn't counted).
+    const remaining = Math.ceil(ASSEMBLY_TIMEOUT_MS - (performance.now() - startedAt));
+    if (remaining <= 0) return null;
+    return await getGitBranch(path, { timeout: remaining });
   } catch {
     logDebug(`${P} Failed to get branch name`);
     return null;
   }
 }
 
-async function getTerminalLines(ptyClient: PtyClient): Promise<string[]> {
+async function getTerminalLines(ptyClient: PtyClient, terminalId: string): Promise<string[]> {
   try {
-    const snapshots = await ptyClient.getAllTerminalSnapshots();
-    const allLines: string[] = [];
-    for (const snap of snapshots) {
-      allLines.push(...snap.lines);
-    }
-    return allLines.slice(-MAX_KEYTERM_LINES);
+    const snapshot = await ptyClient.getTerminalSnapshot(terminalId);
+    return Array.isArray(snapshot?.lines) ? snapshot.lines.slice(-MAX_KEYTERM_LINES) : [];
   } catch {
-    logDebug(`${P} Failed to get terminal snapshots`);
+    logDebug(`${P} Failed to get terminal snapshot`);
     return [];
   }
 }
 
+// Bounds one dynamic read so leading speech isn't held up; a slow or failed
+// read yields `fallback`. The read itself isn't cancelled.
+async function withinBudget<T>(read: Promise<T>, fallback: T, label: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    const timeout = new Promise<T>((resolve) => {
+      timer = setTimeout(() => resolve(fallback), ASSEMBLY_TIMEOUT_MS);
+      timer.unref();
+    });
+    return await Promise.race([read, timeout]);
+  } catch {
+    logDebug(`${P} ${label} failed`);
+    return fallback;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export async function assembleKeyterms(opts: KeytermAssemblyOpts): Promise<string[]> {
-  const { customDictionary, projectName, projectPath, ptyClient } = opts;
+  const { customDictionary, projectName, terminalId, ptyClient } = opts;
   const seen = new Set<string>();
   const result: string[] = [];
 
@@ -329,7 +377,8 @@ export async function assembleKeyterms(opts: KeytermAssemblyOpts): Promise<strin
     return true;
   }
 
-  // Priority 1: User custom dictionary (highest priority)
+  // Priority 1: User custom dictionary (highest priority). These are the user's
+  // own entries, so they skip the secret filter the derived tiers go through.
   for (const term of customDictionary) {
     const trimmed = term.trim();
     if (trimmed.length >= 2 && !/^\d+$/.test(trimmed)) {
@@ -338,9 +387,9 @@ export async function assembleKeyterms(opts: KeytermAssemblyOpts): Promise<strin
   }
 
   // Priority 2: Project name tokens
-  if (projectName) {
+  if (projectName && !holdsCredentialOrId(projectName)) {
     const trimmed = projectName.trim();
-    if (trimmed.length >= 2 && !/^\d+$/.test(trimmed)) {
+    if (trimmed.length >= 2 && !/^\d+$/.test(trimmed) && !isSecretShaped(trimmed)) {
       add(trimmed);
     }
     for (const token of tokenizeProjectName(projectName)) {
@@ -351,43 +400,14 @@ export async function assembleKeyterms(opts: KeytermAssemblyOpts): Promise<strin
   // Gather dynamic context concurrently, each read guarded by its own timeout.
   // Both reads fire at once so leading speech isn't delayed; results are merged
   // in priority order afterward (branch tokens = Priority 3, terminal = Priority 4).
-  const branchPromise = projectPath
-    ? (async (): Promise<string | null> => {
-        let branchTimer: NodeJS.Timeout | undefined;
-        try {
-          const timeoutPromise = new Promise<null>((resolve) => {
-            branchTimer = setTimeout(() => resolve(null), ASSEMBLY_TIMEOUT_MS);
-            branchTimer.unref();
-          });
-          return await Promise.race([getBranchName(projectPath), timeoutPromise]);
-        } catch {
-          logDebug(`${P} Branch name lookup failed`);
-          return null;
-        } finally {
-          if (branchTimer) clearTimeout(branchTimer);
-        }
-      })()
-    : Promise.resolve(null);
-
-  const linesPromise = ptyClient
-    ? (async (): Promise<string[]> => {
-        let linesTimer: NodeJS.Timeout | undefined;
-        try {
-          const timeoutPromise = new Promise<string[]>((resolve) => {
-            linesTimer = setTimeout(() => resolve([]), ASSEMBLY_TIMEOUT_MS);
-            linesTimer.unref();
-          });
-          return await Promise.race([getTerminalLines(ptyClient), timeoutPromise]);
-        } catch {
-          logDebug(`${P} Terminal identifier extraction failed`);
-          return [];
-        } finally {
-          if (linesTimer) clearTimeout(linesTimer);
-        }
-      })()
-    : Promise.resolve<string[]>([]);
-
-  const [branchName, lines] = await Promise.all([branchPromise, linesPromise]);
+  const [branchName, lines] = await Promise.all([
+    ptyClient && terminalId
+      ? withinBudget(getTerminalBranch(ptyClient, terminalId), null, "Branch name lookup")
+      : null,
+    ptyClient && terminalId
+      ? withinBudget(getTerminalLines(ptyClient, terminalId), [], "Terminal identifier extraction")
+      : [],
+  ]);
 
   // Priority 3: Branch name tokens
   if (branchName) {

@@ -2144,6 +2144,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   // the session id the renderer minted before its start path first awaited;
   // main ignores audio, stop and flush carrying an id that isn't the live
   // session's, and every event carries the id of the session it belongs to.
+  // start's optional `terminalId` names the terminal being dictated into;
+  // keyterms come from it alone.
   voiceInput: GeneratedElectronAPI["voiceInput"] & {
     getSettings(): Promise<VoiceInputSettings>;
     setSettings(settings: Partial<VoiceInputSettings>): Promise<void>;

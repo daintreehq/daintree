@@ -247,8 +247,44 @@ describe("VoiceInputSettingsTab", () => {
       expect(screen.getByText(/encrypted connection to OpenAI/)).toBeTruthy();
       expect(screen.getByText(/not used for model training/)).toBeTruthy();
       expect(screen.getByText(/abuse-monitoring logs for up to 30 days/)).toBeTruthy();
+      // Keyterms leave the machine too, so the disclosure names every source.
+      const disclosure = screen.getByText(/encrypted connection to OpenAI/).textContent ?? "";
+      expect(disclosure).toMatch(/project name/);
+      expect(disclosure).toMatch(/branch/);
+      expect(disclosure).toMatch(/terminal you're dictating into/);
+      expect(disclosure).toMatch(/go with the audio/);
+      expect(disclosure).toMatch(/filtered out of everything except your dictionary/);
       // Where the key will live is said before it's saved, not only after.
       expect(screen.getByText(/stored locally in plain text/)).toBeTruthy();
+    });
+  });
+
+  it("names the recognition hints in the Deepgram disclosure too", async () => {
+    window.electron.voiceInput.getSettings = vi.fn().mockResolvedValue({
+      enabled: true,
+      openaiApiKey: "",
+      deepgramApiKey: "",
+      transcriptionProvider: "deepgram",
+      language: "en",
+      customDictionary: [],
+      transcriptionModel: "gpt-live-transcribe",
+      correctionEnabled: false,
+      correctionModel: "gpt-5.6-luna",
+      correctionCustomInstructions: "",
+      paragraphingStrategy: "spoken-command",
+      resolveFileLinks: true,
+      deviceId: "",
+    });
+
+    render(<VoiceInputSettingsTab />);
+
+    await waitFor(() => {
+      const disclosure = screen.getByText(/encrypted connection to Deepgram/).textContent ?? "";
+      expect(disclosure).toMatch(/project name/);
+      expect(disclosure).toMatch(/branch/);
+      expect(disclosure).toMatch(/terminal you're dictating into/);
+      expect(disclosure).toMatch(/go with the audio/);
+      expect(disclosure).toMatch(/filtered out of everything except your dictionary/);
     });
   });
 

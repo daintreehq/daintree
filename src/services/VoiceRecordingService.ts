@@ -1227,19 +1227,21 @@ class VoiceRecordingService {
     // once its own async setup finishes, so anything sent before start()
     // resolves could land on the previous provider or be dropped.
     logDebug(`${LOG_PREFIX} Calling voiceInput.start() IPC`);
-    const result = await window.electron.voiceInput.start(sessionId).then(
-      (outcome) =>
-        outcome.status === "started"
-          ? { ok: true as const }
-          : {
-              ok: false as const,
-              error: outcome.status === "failed" ? outcome.error : "Voice session superseded",
-            },
-      (error: unknown) => ({
-        ok: false as const,
-        error: formatErrorMessage(error, "Voice input failed to start."),
-      })
-    );
+    const result = await window.electron.voiceInput
+      .start(sessionId, { terminalId: target.panelId })
+      .then(
+        (outcome) =>
+          outcome.status === "started"
+            ? { ok: true as const }
+            : {
+                ok: false as const,
+                error: outcome.status === "failed" ? outcome.error : "Voice session superseded",
+              },
+        (error: unknown) => ({
+          ok: false as const,
+          error: formatErrorMessage(error, "Voice input failed to start."),
+        })
+      );
     logDebug(`${LOG_PREFIX} voiceInput.start() returned`, { ok: result.ok });
     logStep("backend_start", { ok: result.ok });
 

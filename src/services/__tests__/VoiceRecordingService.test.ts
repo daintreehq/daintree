@@ -375,6 +375,17 @@ describe("VoiceRecordingService — background recording", () => {
     expect(gainMock.connect).toHaveBeenCalledWith(ctx.destination);
   });
 
+  it("tells main which terminal it is dictating into", async () => {
+    setupGlobals();
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    await voiceRecordingService.start({ panelId: "panel-7", panelTitle: "Terminal" });
+
+    expect(window.electron.voiceInput.start).toHaveBeenCalledWith(expect.any(String), {
+      terminalId: "panel-7",
+    });
+  });
+
   // Constructed after getUserMedia, the context's synchronous output-device
   // lookup queued behind the input stream start and froze the renderer ~650ms.
   it("constructs the AudioContext before opening the microphone", async () => {
