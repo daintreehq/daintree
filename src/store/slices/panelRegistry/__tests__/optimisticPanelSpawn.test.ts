@@ -860,7 +860,7 @@ describe("a spawn whose answer was lost with the link (#13915)", () => {
   });
 
   it("shows a launch refused at the host's agent ceiling as the banner naming the host (#14704)", async () => {
-    const hostAgentLimit = { host: "Studio", count: 10, limit: 10 };
+    const hostAgentLimit = { host: "Studio", count: 12, limit: 10 };
     terminalClient.spawn.mockRejectedValueOnce(
       new ClientAppError("HOST_AGENT_LIMIT_REACHED", "refused", "Studio is full.", {
         code: "HOST_AGENT_LIMIT_REACHED",

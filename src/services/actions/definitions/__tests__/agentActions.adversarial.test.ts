@@ -692,7 +692,7 @@ describe("agentActions adversarial", () => {
 
   it("agent.launch names a refusal at the host's agent ceiling and the host (#14704)", async () => {
     const callbacks = makeCallbacks();
-    const hostAgentLimit = { host: "Studio", count: 10, limit: 10 };
+    const hostAgentLimit = { host: "Studio", count: 12, limit: 10 };
     callbacks.onLaunchAgent.mockImplementationOnce(
       async (_agentId: string, options?: { onDecline?: (d: unknown) => void }) => {
         options?.onDecline?.({ reason: "host-agent-limit", panelLimit: null, hostAgentLimit });
@@ -747,7 +747,7 @@ describe("agentActions adversarial", () => {
 
       const { actions, pending } = launchOnHost();
       await vi.waitFor(() => expect(listener).toBeDefined());
-      const refusal = { host: "Studio", count: 10, limit: 10 };
+      const refusal = { host: "Studio", count: 12, limit: 10 };
       setPanel({
         spawnStatus: "failed",
         spawnError: { code: "HOST_AGENT_LIMIT", message: "full", hostAgentLimit: refusal },
@@ -763,6 +763,42 @@ describe("agentActions adversarial", () => {
       });
       expect(unsubscribe).toHaveBeenCalled();
       expect(parseAgainstSchema(actions, "agent.launch", result).success).toBe(true);
+    });
+
+    it("reports the launch as made when its spawn hasn't answered in time, and stops listening", async () => {
+      vi.useFakeTimers();
+      try {
+        const unsubscribe = vi.fn();
+        panelStoreMock.subscribe.mockImplementationOnce(() => unsubscribe);
+        setPanel({ spawnStatus: "spawning" });
+
+        const { pending } = launchOnHost();
+        await vi.advanceTimersByTimeAsync(60_000);
+
+        expect(await pending).toEqual(launchedResult());
+        expect(unsubscribe).toHaveBeenCalledOnce();
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("settles when the pane goes away while its spawn is pending", async () => {
+      let listener: (() => void) | undefined;
+      const unsubscribe = vi.fn();
+      panelStoreMock.subscribe.mockImplementationOnce((next) => {
+        listener = next;
+        return unsubscribe;
+      });
+      setPanel({ spawnStatus: "spawning" });
+
+      const { pending } = launchOnHost();
+      await vi.waitFor(() => expect(listener).toBeDefined());
+      setPanel(undefined);
+      listener!();
+
+      expect(await pending).toEqual(launchedResult());
+      expect(unsubscribe).toHaveBeenCalledOnce();
     });
 
     it("reports a launch whose spawn the host already admitted", async () => {

@@ -108,6 +108,11 @@ export interface ActionCallbacks {
     branch: string | null;
     cwd: string | null;
     cwdOutsideWorktree: boolean | null;
+    /**
+     * The host's agent count and ceiling when it holds this launch to one
+     * (#14704); the pane's spawn answer says whether it was admitted.
+     */
+    hostAgentLimit?: HostAgentLimitSnapshot;
   } | null>;
   onInject: (worktreeId: string, terminalId?: string) => void;
   getDefaultCwd: () => string;

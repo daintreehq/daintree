@@ -3,7 +3,7 @@ import { ClientAppError } from "../clientAppError";
 import { hostAgentLimitFromError, hostAgentLimitSpawnError } from "../hostAgentLimitSpawnError";
 
 describe("hostAgentLimitSpawnError (#14704)", () => {
-  const hostAgentLimit = { host: "Studio", count: 10, limit: 10 };
+  const hostAgentLimit = { host: "Studio", count: 12, limit: 10 };
   const refusal = new ClientAppError(
     "HOST_AGENT_LIMIT_REACHED",
     "Agent launch refused",

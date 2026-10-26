@@ -270,7 +270,7 @@ describe("restartTerminal agent-exited demotion (#5764)", () => {
 
   it("shows a restart refused at the host's agent ceiling as the spawn banner naming the host (#14704)", async () => {
     const { ClientAppError } = await import("@/utils/clientAppError");
-    const hostAgentLimit = { host: "Studio", count: 10, limit: 10 };
+    const hostAgentLimit = { host: "Studio", count: 12, limit: 10 };
     mockSpawn.mockRejectedValueOnce(
       new ClientAppError("HOST_AGENT_LIMIT_REACHED", "refused", "Studio is full.", {
         code: "HOST_AGENT_LIMIT_REACHED",

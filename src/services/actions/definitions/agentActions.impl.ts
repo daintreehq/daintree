@@ -327,17 +327,18 @@ function awaitHostAgentAdmission(terminalId: string): Promise<HostAgentLimitSnap
   const now = read();
   if (now !== undefined) return Promise.resolve(now);
   return new Promise((resolve) => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const unsubscribe = usePanelStore.subscribe(() => {
-      const next = read();
-      if (next !== undefined) finish(next);
-    });
+    // Both are bound before either can fire: the timer runs later and the
+    // store only notifies on a later write.
     const finish = (value: HostAgentLimitSnapshot | null): void => {
       clearTimeout(timer);
       unsubscribe();
       resolve(value);
     };
-    timer = setTimeout(() => finish(null), HOST_AGENT_ADMISSION_WAIT_MS);
+    const timer = setTimeout(() => finish(null), HOST_AGENT_ADMISSION_WAIT_MS);
+    const unsubscribe = usePanelStore.subscribe(() => {
+      const next = read();
+      if (next !== undefined) finish(next);
+    });
   });
 }
 

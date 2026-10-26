@@ -338,7 +338,7 @@ describe("agent.launch with no frontend", () => {
   });
 
   it("declines on a host at its agent ceiling, naming the host, and starts nothing (#14704)", async () => {
-    const hostAgentLimit = { host: "Studio", count: 10, limit: 10 };
+    const hostAgentLimit = { host: "Studio", count: 12, limit: 10 };
     const { deps, invoke, store } = launchDeps({ readHostAgentLimit: () => hostAgentLimit });
 
     const result = await executeViewlessAction(
@@ -362,7 +362,7 @@ describe("agent.launch with no frontend", () => {
   });
 
   it("reports the host's own refusal of a launch that lost the last slot (#14704)", async () => {
-    const refusal = { host: "Studio", count: 10, limit: 10 };
+    const refusal = { host: "Studio", count: 12, limit: 10 };
     const { deps, invoke, store } = launchDeps({
       readHostAgentLimit: () => ({ host: "Studio", count: 9, limit: 10 }),
     });

@@ -548,7 +548,7 @@ describe("AppError details allowlist", () => {
         details: {
           code: "HOST_AGENT_LIMIT_REACHED",
           host: "studio",
-          count: 10,
+          count: 12,
           limit: 10,
           path: "/Users/me",
         },
@@ -557,7 +557,7 @@ describe("AppError details allowlist", () => {
     expect(serialized.details).toEqual({
       code: "HOST_AGENT_LIMIT_REACHED",
       host: "studio",
-      count: 10,
+      count: 12,
       limit: 10,
     });
 

@@ -34,6 +34,14 @@ export function getRemoteService<K extends keyof RemoteServices>(
   return services.get(key) as RemoteServices[K] | undefined;
 }
 
+/**
+ * Whether a service is registered under `key`, for core code compiled in
+ * programs that never see the module augmenting `RemoteServices` with it.
+ */
+export function hasRemoteService(key: string): boolean {
+  return (services as ReadonlyMap<string, unknown>).has(key);
+}
+
 export function requireRemoteService<K extends keyof RemoteServices>(key: K): RemoteServices[K] {
   const service = services.get(key);
   if (service === undefined) {

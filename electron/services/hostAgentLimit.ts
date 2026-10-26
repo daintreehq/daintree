@@ -1,5 +1,5 @@
 import os from "node:os";
-import { getRemoteService } from "../remote/runtime.js";
+import { hasRemoteService } from "../remote/runtime.js";
 import { AppError } from "../utils/errorTypes.js";
 import { machineDisplayName } from "../utils/machineName.js";
 import {
@@ -35,7 +35,8 @@ export function readHostAgentLimit(
   counter: AgentTerminalCounter,
   excludeId?: string
 ): HostAgentLimitSnapshot | null {
-  if (getRemoteService("hostServer") === undefined) return null;
+  // Registered only while the Host listener is up (`hostListener.ts`).
+  if (!hasRemoteService("hostServer")) return null;
   return {
     host: hostName(),
     count: counter.countLiveAgentTerminals(excludeId),

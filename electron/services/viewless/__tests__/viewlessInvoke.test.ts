@@ -72,7 +72,7 @@ describe("invokeHostChannel", () => {
       throw new AppError({
         code: "HOST_AGENT_LIMIT_REACHED",
         message: "full",
-        details: { code: "HOST_AGENT_LIMIT_REACHED", host: "Studio", count: 10, limit: 10 },
+        details: { code: "HOST_AGENT_LIMIT_REACHED", host: "Studio", count: 12, limit: 10 },
       });
     });
 
@@ -81,7 +81,7 @@ describe("invokeHostChannel", () => {
     expect((err as ViewlessInvokeError).details).toEqual({
       code: "HOST_AGENT_LIMIT_REACHED",
       host: "Studio",
-      count: 10,
+      count: 12,
       limit: 10,
     });
   });

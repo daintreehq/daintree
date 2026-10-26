@@ -717,7 +717,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
             title: "Host agent limit reached",
             message: describeHostAgentLimit(hostAgentLimit),
             duration: 5000,
-            context: { worktreeId: effectiveWorktreeId ?? undefined },
+            context: { eventKind: "uiFeedback", worktreeId: effectiveWorktreeId ?? undefined },
           });
           return decline("host-agent-limit", null, hostAgentLimit);
         }

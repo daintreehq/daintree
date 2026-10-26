@@ -3318,7 +3318,7 @@ describe("terminal spawn handler - host agent ceiling (#14704)", () => {
     spawn: ReturnType<typeof vi.fn>;
     hasTerminal: ReturnType<typeof vi.fn>;
     write: ReturnType<typeof vi.fn>;
-    countLiveAgentTerminals: ReturnType<typeof vi.fn>;
+    countLiveAgentTerminals: ReturnType<typeof vi.fn<(excludeId?: string) => number>>;
   };
   let limit: number;
 
@@ -3334,7 +3334,7 @@ describe("terminal spawn handler - host agent ceiling (#14704)", () => {
       spawn: vi.fn((id: string, options: FakeSpawnOptions) => live.set(id, options)),
       hasTerminal: vi.fn(() => false),
       write: vi.fn(),
-      countLiveAgentTerminals: vi.fn((excludeId?: string) => {
+      countLiveAgentTerminals: vi.fn<(excludeId?: string) => number>((excludeId) => {
         let count = 0;
         for (const [id, options] of live) if (id !== excludeId && options.launchAgentId) count++;
         return count;

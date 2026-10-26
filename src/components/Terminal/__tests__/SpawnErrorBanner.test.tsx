@@ -446,7 +446,7 @@ describe("SpawnErrorBanner - host agent limit (#14704)", () => {
         error={{
           code: "HOST_AGENT_LIMIT",
           message: "refused",
-          hostAgentLimit: { host: "Studio", count: 10, limit: 10 },
+          hostAgentLimit: { host: "Studio", count: 12, limit: 10 },
         }}
         onUpdateCwd={vi.fn()}
         onRetry={onRetry}
@@ -454,8 +454,13 @@ describe("SpawnErrorBanner - host agent limit (#14704)", () => {
       />
     );
     expect(document.body.textContent ?? "").toContain("Studio");
-    expect(screen.getByTestId("overflow-content").textContent).not.toContain("Retry");
+    const overflow = screen.getByTestId("overflow-content");
+    expect(overflow.textContent).not.toContain("Retry");
     expect(screen.queryByText("Terminal limits")).toBeNull();
+    const retry = screen.getByRole("button", { name: "Retry starting terminal" });
+    expect(overflow.contains(retry)).toBe(false);
+    fireEvent.click(retry);
+    expect(onRetry).toHaveBeenCalledWith("t-1");
   });
 
   it("falls back to the refusal's own words when it came without the host's count", () => {
