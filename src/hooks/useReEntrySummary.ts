@@ -4,15 +4,29 @@ import {
   type NotificationHistoryEntry,
 } from "@/store/slices/notificationHistorySlice";
 import { getCurrentViewStoreOrNull } from "@/store/createWorktreeStore";
+import { useProjectStore } from "@/store/projectStore";
+import { usePanelStore } from "@/store/panelStore";
+import { useScratchStore } from "@/store/scratchStore";
+import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { SEVERITY_WEIGHTS } from "@/lib/notificationSeverity";
-import { worktreeNameFromId } from "@/lib/notificationSourceLabel";
+import { APP_SOURCE_LABEL, worktreeNameFromId } from "@/lib/notificationSourceLabel";
+import { isOtherProjectContext } from "@/lib/notificationDestination";
 
 const MIN_BLUR_MS = 3000;
 
-export interface WorktreeRow {
-  worktreeId: string;
-  worktreeName: string;
-  worstType: NotificationHistoryEntry["type"];
+/** What a workspace row is called when the view's own project or scratch has no name to hand. */
+const OWN_WORKSPACE_LABEL = "This project";
+
+export interface SummaryRow {
+  key: string;
+  /** The worktree, the view's own project or scratch, or the app itself. */
+  label: string;
+  /**
+   * The entry the row speaks for: the most severe, then the latest. Its title,
+   * time and address are all read from here, so the row never pairs one
+   * event's words with another's time or destination.
+   */
+  highlight: NotificationHistoryEntry;
   highlightTitle: string;
   entryCount: number;
 }
@@ -20,30 +34,70 @@ export interface WorktreeRow {
 export interface ReEntrySummaryState {
   visible: boolean;
   entries: NotificationHistoryEntry[];
-  rows: WorktreeRow[];
+  rows: SummaryRow[];
   overflowCount: number;
+  /** When the summary was built: every row's age is told against this, not a ticking clock. */
+  shownAt: number;
   dismiss: () => void;
 }
 
-function buildWorktreeRows(entries: NotificationHistoryEntry[]): WorktreeRow[] {
-  const byWorktree = new Map<string, NotificationHistoryEntry[]>();
+/**
+ * Every view hydrates the same notification history, so an entry can name a
+ * project this view doesn't own or come from another host altogether. Neither
+ * can be reached from here. A record with no project id is this view's own,
+ * except one addressed only to a panel: an installed plugin's notice about one
+ * of its panels names no project and reaches every view, so only the view
+ * holding that panel can claim it.
+ */
+function isFromThisView(
+  entry: NotificationHistoryEntry,
+  ownerId: string | undefined,
+  panelsById: Readonly<Record<string, unknown>>
+): boolean {
+  const context = entry.context;
+  if (context?.hostName) return false;
+  if (isOtherProjectContext(context, ownerId)) return false;
+  if (context?.panelId && !context.projectId && !context.worktreeId) {
+    return panelsById[context.panelId] !== undefined;
+  }
+  return true;
+}
 
+function ownWorkspaceLabel(ownerId: string | undefined): string {
+  if (!ownerId) return OWN_WORKSPACE_LABEL;
+  const name =
+    useProjectStore.getState().projects.find((p) => p.id === ownerId)?.name ??
+    useScratchStore.getState().scratches.find((s) => s.id === ownerId)?.name;
+  return name?.trim() || OWN_WORKSPACE_LABEL;
+}
+
+function buildSummaryRows(
+  entries: NotificationHistoryEntry[],
+  ownerId: string | undefined
+): SummaryRow[] {
+  // A worktree's entries share its row; one that names only the project gets
+  // the project's row; one that names neither came from the app itself. The
+  // last two stay apart so a disk-space warning is never put on the project.
+  const groups = new Map<string, NotificationHistoryEntry[]>();
   for (const e of entries) {
-    const wid = e.context?.worktreeId;
-    if (!wid) continue;
-    const group = byWorktree.get(wid);
+    const key = e.context?.worktreeId
+      ? `worktree:${e.context.worktreeId}`
+      : e.context?.projectId
+        ? "workspace"
+        : "app";
+    const group = groups.get(key);
     if (group) {
       group.push(e);
     } else {
-      byWorktree.set(wid, [e]);
+      groups.set(key, [e]);
     }
   }
 
   const worktrees = getCurrentViewStoreOrNull()?.getState().worktrees ?? new Map();
 
-  const rows: WorktreeRow[] = [];
+  const rows: SummaryRow[] = [];
 
-  for (const [worktreeId, groupEntries] of byWorktree) {
+  for (const [key, groupEntries] of groups) {
     let worst = groupEntries[0]!;
     for (let i = 1; i < groupEntries.length; i++) {
       const e = groupEntries[i]!;
@@ -54,23 +108,28 @@ function buildWorktreeRows(entries: NotificationHistoryEntry[]): WorktreeRow[] {
       }
     }
 
-    const worktreeName = worktrees.get(worktreeId)?.name?.trim() || worktreeNameFromId(worktreeId);
+    const worktreeId = worst.context?.worktreeId;
+    const label = worktreeId
+      ? worktrees.get(worktreeId)?.name?.trim() || worktreeNameFromId(worktreeId)
+      : key === "workspace"
+        ? ownWorkspaceLabel(ownerId)
+        : APP_SOURCE_LABEL;
 
     rows.push({
-      worktreeId,
-      worktreeName,
-      worstType: worst.type,
+      key,
+      label,
+      highlight: worst,
       highlightTitle: worst.title?.trim() || worst.message,
       entryCount: groupEntries.length,
     });
   }
 
   rows.sort((a, b) => {
-    const sv = SEVERITY_WEIGHTS[b.worstType] - SEVERITY_WEIGHTS[a.worstType];
+    const sv = SEVERITY_WEIGHTS[b.highlight.type] - SEVERITY_WEIGHTS[a.highlight.type];
     if (sv !== 0) return sv;
     const cv = b.entryCount - a.entryCount;
     if (cv !== 0) return cv;
-    return a.worktreeName.localeCompare(b.worktreeName);
+    return a.label.localeCompare(b.label);
   });
 
   return rows;
@@ -81,6 +140,7 @@ const EMPTY: ReEntrySummaryState = {
   entries: [],
   rows: [],
   overflowCount: 0,
+  shownAt: 0,
   dismiss: () => {},
 };
 
@@ -91,6 +151,7 @@ export function useReEntrySummary(): ReEntrySummaryState {
     entries: [],
     rows: [],
     overflowCount: 0,
+    shownAt: 0,
   });
 
   const dismiss = useCallback(() => {
@@ -103,23 +164,32 @@ export function useReEntrySummary(): ReEntrySummaryState {
 
       const blurTime = blurTimeRef.current;
       blurTimeRef.current = null;
-      if (blurTime === null || Date.now() - blurTime < MIN_BLUR_MS) return;
+      const now = Date.now();
+      if (blurTime === null || now - blurTime < MIN_BLUR_MS) return;
 
       const { entries, markSummarized } = useNotificationHistoryStore.getState();
+      const ownerId = getViewWorkspaceId() ?? useProjectStore.getState().currentProject?.id;
+      const { panelsById } = usePanelStore.getState();
+      // Only what this summary shows is marked: an entry from another project
+      // or host is left as it was, for the inbox and its own view to report.
       const unseen = entries.filter(
-        (e) => !e.seenAsToast && !e.summarized && e.timestamp >= blurTime
+        (e) =>
+          !e.seenAsToast &&
+          !e.summarized &&
+          e.timestamp >= blurTime &&
+          isFromThisView(e, ownerId, panelsById)
       );
       if (unseen.length === 0) return;
 
       markSummarized(unseen.map((e) => e.id));
 
-      const allRows = buildWorktreeRows(unseen);
-      if (allRows.length === 0) return;
+      const allRows = buildSummaryRows(unseen, ownerId);
       setState({
         visible: true,
         entries: unseen,
         rows: allRows.slice(0, 3),
         overflowCount: Math.max(0, allRows.length - 3),
+        shownAt: now,
       });
     };
 

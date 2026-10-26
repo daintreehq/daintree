@@ -76,7 +76,7 @@ export { useWindowNotifications } from "./useWindowNotifications";
 export { useWatchedPanelNotifications } from "./useWatchedPanelNotifications";
 
 export { useReEntrySummary } from "./useReEntrySummary";
-export type { ReEntrySummaryState, WorktreeRow } from "./useReEntrySummary";
+export type { ReEntrySummaryState, SummaryRow } from "./useReEntrySummary";
 
 export { useWorktreeActions } from "./useWorktreeActions";
 export type { WorktreeActions } from "./useWorktreeActions";

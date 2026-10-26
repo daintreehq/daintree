@@ -8,7 +8,9 @@ import {
   UI_ENTER_EASING,
   UI_EXIT_EASING,
 } from "@/lib/animationUtils";
-import type { ReEntrySummaryState, WorktreeRow } from "@/hooks/useReEntrySummary";
+import type { ReEntrySummaryState, SummaryRow } from "@/hooks/useReEntrySummary";
+import { navigateToNotificationSource } from "@/components/Notifications/notificationNavigation";
+import { useUIStore } from "@/store/uiStore";
 import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
 import type { ReactNode } from "react";
 
@@ -21,8 +23,8 @@ vi.mock("@/components/ui/tooltip", () => ({
   TooltipTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));
 
-vi.mock("@/store/createWorktreeStore", () => ({
-  getCurrentViewStoreOrNull: vi.fn(),
+vi.mock("@/components/Notifications/notificationNavigation", () => ({
+  navigateToNotificationSource: vi.fn(),
 }));
 
 // No requestAnimationFrame stub: `vi.useFakeTimers()` fakes rAF itself, so any
@@ -43,14 +45,20 @@ function makeEntry(overrides: Partial<NotificationHistoryEntry> = {}): Notificat
   };
 }
 
-function makeRow(overrides: Partial<WorktreeRow> = {}): WorktreeRow {
+function makeRow(
+  overrides: Partial<Omit<SummaryRow, "highlight">> & {
+    type?: NotificationHistoryEntry["type"];
+    highlight?: Partial<NotificationHistoryEntry>;
+  } = {}
+): SummaryRow {
+  const { type = "error", highlight, ...rest } = overrides;
   return {
-    worktreeId: "wt-1",
-    worktreeName: "feature-test",
-    worstType: "error" as NotificationHistoryEntry["type"],
+    key: "worktree:wt-1",
+    label: "feature-test",
     highlightTitle: "Build failed",
     entryCount: 2,
-    ...overrides,
+    ...rest,
+    highlight: makeEntry({ type, context: { worktreeId: "wt-1" }, ...highlight }),
   };
 }
 
@@ -60,55 +68,22 @@ function makeState(overrides: Partial<ReEntrySummaryState> = {}): ReEntrySummary
     entries: [],
     rows: [],
     overflowCount: 0,
+    shownAt: Date.now(),
     dismiss: vi.fn(),
     ...overrides,
   };
 }
 
 describe("ReEntrySummary", () => {
-  beforeEach(async () => {
+  const realOpenNotificationCenter = useUIStore.getState().openNotificationCenter;
+
+  beforeEach(() => {
     vi.useFakeTimers();
-    const { getCurrentViewStoreOrNull } = await import("@/store/createWorktreeStore");
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-    vi.mocked(getCurrentViewStoreOrNull).mockReturnValue({
-      getState: () => ({
-        worktrees: new Map([
-          [
-            "wt-1",
-            {
-              id: "wt-1",
-              path: "/tmp/wt-1",
-              name: "feature-test",
-              isCurrent: false,
-              worktreeId: "wt-1",
-            },
-          ],
-          [
-            "wt-2",
-            {
-              id: "wt-2",
-              path: "/tmp/wt-2",
-              name: "feature-other",
-              isCurrent: false,
-              worktreeId: "wt-2",
-            },
-          ],
-          [
-            "wt-42",
-            {
-              id: "wt-42",
-              path: "/tmp/wt-42",
-              name: "fix-bug",
-              isCurrent: false,
-              worktreeId: "wt-42",
-            },
-          ],
-        ]),
-      }),
-    } as ReturnType<typeof getCurrentViewStoreOrNull>);
+    vi.mocked(navigateToNotificationSource).mockReset().mockResolvedValue(true);
   });
 
   afterEach(() => {
+    useUIStore.setState({ openNotificationCenter: realOpenNotificationCenter });
     vi.useRealTimers();
     delete document.body.dataset.performanceMode;
   });
@@ -134,16 +109,17 @@ describe("ReEntrySummary", () => {
     const state = makeState({
       rows: [
         makeRow({
-          worktreeId: "wt-1",
-          worktreeName: "feature-foo",
-          worstType: "error",
+          key: "worktree:wt-1",
+          label: "feature-foo",
+          type: "error",
           highlightTitle: "Build failed",
         }),
         makeRow({
-          worktreeId: "wt-2",
-          worktreeName: "feature-bar",
-          worstType: "warning",
+          key: "worktree:wt-2",
+          label: "feature-bar",
+          type: "warning",
           highlightTitle: "Tests flaky",
+          highlight: { context: { worktreeId: "wt-2" } },
         }),
       ],
     });
@@ -161,7 +137,7 @@ describe("ReEntrySummary", () => {
       <ReEntrySummary
         state={makeState({
           dismiss,
-          rows: [makeRow({ worstType: "success", highlightTitle: "Done" })],
+          rows: [makeRow({ type: "success", highlightTitle: "Done" })],
         })}
       />
     );
@@ -172,14 +148,13 @@ describe("ReEntrySummary", () => {
   // The card's edge carries severity; the action beside it stays neutral, as
   // on the toast, and is marked for the forced-colors primary border.
   it("keeps its primary action neutral and marked for forced colours", () => {
-    render(<ReEntrySummary state={makeState({ rows: [makeRow({ worstType: "error" })] })} />);
+    render(<ReEntrySummary state={makeState({ rows: [makeRow({ type: "error" })] })} />);
     const open = screen.getByRole("button", { name: "Open notifications" });
     expect(open.className).not.toMatch(/(?:^|\s)(?:[a-z-]+:)*(?:bg|text|border|ring)-status-/);
     expect(open.getAttribute("data-notification-action")).toBe("primary");
   });
 
-  it("Open notifications button calls openNotificationCenter", async () => {
-    const { useUIStore } = await import("@/store/uiStore");
+  it("Open notifications button calls openNotificationCenter", () => {
     const openSpy = vi.fn();
     useUIStore.setState({ openNotificationCenter: openSpy });
 
@@ -188,7 +163,7 @@ describe("ReEntrySummary", () => {
       <ReEntrySummary
         state={makeState({
           dismiss,
-          rows: [makeRow({ worstType: "success", highlightTitle: "Done" })],
+          rows: [makeRow({ type: "success", highlightTitle: "Done" })],
         })}
       />
     );
@@ -197,27 +172,106 @@ describe("ReEntrySummary", () => {
     expect(dismiss).toHaveBeenCalledOnce();
   });
 
-  it("clicking a worktree row calls selectWorktree and dismiss", async () => {
-    const { useWorktreeSelectionStore } = await import("@/store/worktreeStore");
-    const selectSpy = vi.fn();
-    useWorktreeSelectionStore.setState({ selectWorktree: selectSpy });
+  it("clicking a row dismisses, then goes to that row's highlighted entry", async () => {
+    const openSpy = vi.fn();
+    useUIStore.setState({ openNotificationCenter: openSpy });
+    const dismiss = vi.fn();
+    let dismissedBeforeNavigating = false;
+    vi.mocked(navigateToNotificationSource).mockImplementation(() => {
+      dismissedBeforeNavigating = dismiss.mock.calls.length === 1;
+      return Promise.resolve(true);
+    });
+
+    const context = { worktreeId: "wt-42", panelId: "panel-7" };
+    render(
+      <ReEntrySummary
+        state={makeState({
+          dismiss,
+          rows: [
+            makeRow({ key: "worktree:wt-1", label: "feature-test" }),
+            makeRow({ key: "worktree:wt-42", label: "fix-bug", highlight: { context } }),
+          ],
+        })}
+      />
+    );
+    fireEvent.click(screen.getByText("fix-bug"));
+    await act(async () => {});
+
+    expect(dismissedBeforeNavigating).toBe(true);
+    expect(navigateToNotificationSource).toHaveBeenCalledOnce();
+    expect(navigateToNotificationSource).toHaveBeenCalledWith(context);
+    expect(openSpy).not.toHaveBeenCalled();
+  });
+
+  it("opens the inbox when a row has nowhere live to land", async () => {
+    const openSpy = vi.fn();
+    useUIStore.setState({ openNotificationCenter: openSpy });
+    vi.mocked(navigateToNotificationSource).mockResolvedValue(false);
+
+    const dismiss = vi.fn();
+    const context = { worktreeId: "wt-removed" };
+    render(
+      <ReEntrySummary
+        state={makeState({
+          dismiss,
+          rows: [
+            makeRow({ key: "worktree:wt-removed", label: "wt-removed", highlight: { context } }),
+          ],
+        })}
+      />
+    );
+    fireEvent.click(screen.getByText("wt-removed"));
+    await act(async () => {});
+
+    expect(navigateToNotificationSource).toHaveBeenCalledWith(context);
+    expect(dismiss).toHaveBeenCalledOnce();
+    expect(openSpy).toHaveBeenCalledOnce();
+  });
+
+  it("opens the inbox when navigation throws", async () => {
+    const openSpy = vi.fn();
+    useUIStore.setState({ openNotificationCenter: openSpy });
+    vi.mocked(navigateToNotificationSource).mockRejectedValue(new Error("refused"));
 
     const dismiss = vi.fn();
     render(
       <ReEntrySummary
         state={makeState({
           dismiss,
-          rows: [makeRow({ worktreeId: "wt-42", worktreeName: "fix-bug" })],
+          rows: [makeRow({ label: "fix-bug", highlight: { context: { panelId: "panel-7" } } })],
         })}
       />
     );
     fireEvent.click(screen.getByText("fix-bug"));
-    expect(selectSpy).toHaveBeenCalledWith("wt-42");
+    await act(async () => {});
+
     expect(dismiss).toHaveBeenCalledOnce();
+    expect(openSpy).toHaveBeenCalledOnce();
   });
 
-  it("overflow row opens notification center", async () => {
-    const { useUIStore } = await import("@/store/uiStore");
+  it("shows when the highlighted entry happened, with the exact time on hover", () => {
+    vi.setSystemTime(new Date(2026, 9, 26, 12, 0, 0));
+    const at = new Date(2026, 9, 26, 11, 55, 0).getTime();
+    render(
+      <ReEntrySummary
+        state={makeState({
+          rows: [makeRow({ label: "feature-foo", highlight: { timestamp: at } })],
+        })}
+      />
+    );
+    const time = () => screen.getByRole("status").querySelector("time");
+    expect(time()?.textContent).toBe("5m ago");
+    expect(time()?.getAttribute("dateTime")).toBe(new Date(at).toISOString());
+    expect(time()?.getAttribute("title")).toBe(new Date(at).toLocaleString());
+
+    // Static inside a live region: the label must not tick on its own.
+    act(() => {
+      vi.advanceTimersByTime(3 * 60_000);
+    });
+    expect(time()?.textContent).toBe("5m ago");
+  });
+
+  it("overflow row opens notification center", () => {
     const openSpy = vi.fn();
     useUIStore.setState({ openNotificationCenter: openSpy });
 
@@ -242,7 +296,7 @@ describe("ReEntrySummary", () => {
       <ReEntrySummary
         state={makeState({
           dismiss,
-          rows: [makeRow({ worstType: "success", highlightTitle: "Done" })],
+          rows: [makeRow({ type: "success", highlightTitle: "Done" })],
         })}
       />
     );
@@ -259,7 +313,7 @@ describe("ReEntrySummary", () => {
       <ReEntrySummary
         state={makeState({
           dismiss,
-          rows: [makeRow({ worstType: "success", highlightTitle: "Done" })],
+          rows: [makeRow({ type: "success", highlightTitle: "Done" })],
         })}
       />
     );
@@ -284,7 +338,7 @@ describe("ReEntrySummary", () => {
       <ReEntrySummary
         state={makeState({
           dismiss,
-          rows: [makeRow({ worstType: "success", highlightTitle: "Done" })],
+          rows: [makeRow({ type: "success", highlightTitle: "Done" })],
         })}
       />
     );
@@ -307,7 +361,7 @@ describe("ReEntrySummary", () => {
       <ReEntrySummary
         state={makeState({
           dismiss,
-          rows: [makeRow({ worstType: "success", highlightTitle: "Done" })],
+          rows: [makeRow({ type: "success", highlightTitle: "Done" })],
         })}
       />
     );
@@ -332,7 +386,7 @@ describe("ReEntrySummary", () => {
         state={makeState({
           visible: true,
           dismiss,
-          rows: [makeRow({ worktreeId: "wt-1", highlightTitle: "First" })],
+          rows: [makeRow({ key: "worktree:wt-1", highlightTitle: "First" })],
         })}
       />
     );
@@ -355,7 +409,7 @@ describe("ReEntrySummary", () => {
         state={makeState({
           visible: true,
           dismiss,
-          rows: [makeRow({ worktreeId: "wt-2", highlightTitle: "Second" })],
+          rows: [makeRow({ key: "worktree:wt-2", highlightTitle: "Second" })],
         })}
       />
     );
@@ -367,7 +421,7 @@ describe("ReEntrySummary", () => {
     render(
       <ReEntrySummary
         state={makeState({
-          rows: [makeRow({ worstType: "success", highlightTitle: "Done" })],
+          rows: [makeRow({ type: "success", highlightTitle: "Done" })],
         })}
       />
     );
@@ -381,7 +435,8 @@ describe("ReEntrySummary", () => {
     // drive the real `useAnimatedPresence` rather than mocking it — the whole
     // point of the fix is how long the card stays mounted.
     const dismissedState = (dismiss: () => void) =>
-      makeState({ visible: false, dismiss, rows: [], overflowCount: 0 });
+      // What the hook returns once dismissed: its EMPTY state, clock and all.
+      makeState({ visible: false, dismiss, rows: [], overflowCount: 0, shownAt: 0 });
 
     it("keeps the card mounted for the exit window, then unmounts it", () => {
       const dismiss = vi.fn();
@@ -407,11 +462,19 @@ describe("ReEntrySummary", () => {
 
     it("keeps rendering the dismissed summary's rows while it slides out", () => {
       const dismiss = vi.fn();
+      const shownAt = Date.now();
       const { rerender } = render(
         <ReEntrySummary
           state={makeState({
             dismiss,
-            rows: [makeRow({ worktreeName: "feature-foo", highlightTitle: "Build failed" })],
+            shownAt,
+            rows: [
+              makeRow({
+                label: "feature-foo",
+                highlightTitle: "Build failed",
+                highlight: { timestamp: shownAt - 5 * 60_000 },
+              }),
+            ],
             overflowCount: 2,
           })}
         />
@@ -423,6 +486,8 @@ describe("ReEntrySummary", () => {
       expect(screen.getByText("feature-foo")).toBeTruthy();
       expect(screen.getByText("Build failed")).toBeTruthy();
       expect(screen.getByText("+2 more")).toBeTruthy();
+      // The age keeps the summary's own clock, not the EMPTY state's zero.
+      expect(screen.getByRole("status").querySelector("time")?.textContent).toBe("5m ago");
     });
 
     it("makes the exiting card inert rather than aria-hidden", () => {
@@ -453,7 +518,7 @@ describe("ReEntrySummary", () => {
           state={makeState({
             dismiss,
             entries: [makeEntry({ id: "a" })],
-            rows: [makeRow({ worktreeId: "wt-1" })],
+            rows: [makeRow({ key: "worktree:wt-1" })],
           })}
         />
       );
@@ -471,7 +536,7 @@ describe("ReEntrySummary", () => {
           state={makeState({
             dismiss,
             entries: [makeEntry({ id: "b" })],
-            rows: [makeRow({ worktreeId: "wt-2" })],
+            rows: [makeRow({ key: "worktree:wt-2" })],
           })}
         />
       );
@@ -494,7 +559,7 @@ describe("ReEntrySummary", () => {
           state={makeState({
             dismiss,
             entries: [makeEntry({ id: "a" })],
-            rows: [makeRow({ worktreeId: "wt-1", highlightTitle: "First" })],
+            rows: [makeRow({ key: "worktree:wt-1", highlightTitle: "First" })],
           })}
         />
       );
@@ -510,7 +575,7 @@ describe("ReEntrySummary", () => {
           state={makeState({
             dismiss,
             entries: [makeEntry({ id: "b" })],
-            rows: [makeRow({ worktreeId: "wt-1", highlightTitle: "Second" })],
+            rows: [makeRow({ key: "worktree:wt-1", highlightTitle: "Second" })],
           })}
         />
       );
@@ -536,7 +601,7 @@ describe("ReEntrySummary", () => {
           state={makeState({
             dismiss,
             entries: [makeEntry({ id: "a" })],
-            rows: [makeRow({ worktreeId: "wt-1" })],
+            rows: [makeRow({ key: "worktree:wt-1" })],
           })}
         />
       );
@@ -550,7 +615,7 @@ describe("ReEntrySummary", () => {
           state={makeState({
             dismiss,
             entries: [makeEntry({ id: "b" })],
-            rows: [makeRow({ worktreeId: "wt-1" })],
+            rows: [makeRow({ key: "worktree:wt-1" })],
           })}
         />
       );
@@ -564,7 +629,7 @@ describe("ReEntrySummary", () => {
         <ReEntrySummary
           state={makeState({
             dismiss,
-            rows: [makeRow({ worktreeId: "wt-1", worktreeName: "first-wt" })],
+            rows: [makeRow({ key: "worktree:wt-1", label: "first-wt" })],
           })}
         />
       );
@@ -581,7 +646,7 @@ describe("ReEntrySummary", () => {
           state={makeState({
             visible: true,
             dismiss,
-            rows: [makeRow({ worktreeId: "wt-2", worktreeName: "second-wt" })],
+            rows: [makeRow({ key: "worktree:wt-2", label: "second-wt" })],
           })}
         />
       );

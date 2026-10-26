@@ -3,12 +3,11 @@ import { createPortal } from "react-dom";
 import { Pin } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DismissButton } from "@/components/ui/DismissButton";
+import { TimeAgo } from "@/components/ui/TimeAgo";
 import { cn } from "@/lib/utils";
 import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { FLOATING_CARD_RADIUS_CLASS } from "@/components/ui/floatingSurface";
 import { useUIStore } from "@/store/uiStore";
-import { useWorktreeSelectionStore } from "@/store/worktreeStore";
-import { getCurrentViewStoreOrNull } from "@/store/createWorktreeStore";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 import {
   UI_ENTER_DURATION,
@@ -17,7 +16,8 @@ import {
   UI_EXIT_EASING,
   getUiTransitionDuration,
 } from "@/lib/animationUtils";
-import type { ReEntrySummaryState } from "@/hooks/useReEntrySummary";
+import { navigateToNotificationSource } from "@/components/Notifications/notificationNavigation";
+import type { ReEntrySummaryState, SummaryRow } from "@/hooks/useReEntrySummary";
 import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
 
 export const AUTO_DISMISS_MS = 8000;
@@ -30,7 +30,7 @@ const SEVERITY_CLASS: Record<NotificationHistoryEntry["type"], string> = {
 };
 
 export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
-  const { visible, dismiss, entries, rows, overflowCount } = state;
+  const { visible, dismiss, entries, rows, overflowCount, shownAt } = state;
   const { isVisible, shouldRender } = useAnimatedPresence({
     isOpen: visible,
     animationDuration: getUiTransitionDuration("exit"),
@@ -70,15 +70,26 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
   // bug ScrollIndicator solves for its count (#10316). State adjusted during
   // render, not a ref: React discards an abandoned concurrent render's state
   // update, so stale rows can't leak in.
-  const [content, setContent] = useState({ rows, overflowCount });
-  if (visible && (content.rows !== rows || content.overflowCount !== overflowCount)) {
-    setContent({ rows, overflowCount });
+  const [content, setContent] = useState({ rows, overflowCount, shownAt });
+  if (
+    visible &&
+    (content.rows !== rows ||
+      content.overflowCount !== overflowCount ||
+      content.shownAt !== shownAt)
+  ) {
+    setContent({ rows, overflowCount, shownAt });
   }
 
   if (!shouldRender) return null;
 
-  const { rows: displayRows, overflowCount: displayOverflowCount } = content;
-  const hasUrgent = displayRows.some((r) => r.worstType === "error" || r.worstType === "warning");
+  const {
+    rows: displayRows,
+    overflowCount: displayOverflowCount,
+    shownAt: displayShownAt,
+  } = content;
+  const hasUrgent = displayRows.some(
+    (r) => r.highlight.type === "error" || r.highlight.type === "warning"
+  );
   // Only the excursion gets a hue. A green rule here would just be saying no
   // entry was urgent, which is the good case already implied by the rows (#12002).
   const accentClass = hasUrgent ? "border-l-status-warning" : "border-l-border-default";
@@ -88,11 +99,18 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
     state.dismiss();
   };
 
-  const handleRowClick = (worktreeId: string) => {
-    const hasWorktree = getCurrentViewStoreOrNull()?.getState().worktrees.has(worktreeId) ?? false;
-    if (!hasWorktree) return;
-    useWorktreeSelectionStore.getState().selectWorktree(worktreeId);
+  // The row goes where its highlighted entry came from, as the inbox's own
+  // rows do. One with nowhere live to land (the app, the project itself, a
+  // worktree removed while you were away) opens the inbox, which holds it.
+  // Dismissed first: the card never holds focus, and a summary that replaced
+  // this one mid-navigation must not be dismissed by the old click.
+  const handleRowClick = (row: SummaryRow) => {
     state.dismiss();
+    void navigateToNotificationSource(row.highlight.context)
+      .catch(() => false)
+      .then((arrived) => {
+        if (!arrived) useUIStore.getState().openNotificationCenter();
+      });
   };
 
   return createPortal(
@@ -170,25 +188,35 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
           {displayRows.map((row) => {
             // The toaster's and the inbox's glyphs, so an entry keeps its shape as it
             // moves between the three surfaces that show it.
-            const Icon = SEVERITY_GLYPH[row.worstType];
+            const type = row.highlight.type;
+            const Icon = SEVERITY_GLYPH[type];
             return (
-              <li key={row.worktreeId}>
+              <li key={row.key}>
                 <button
                   type="button"
-                  onClick={() => handleRowClick(row.worktreeId)}
+                  onClick={() => handleRowClick(row)}
                   className={cn(
                     "flex items-center gap-1.5 w-full text-left text-xs",
                     "rounded-[var(--radius-xs)] px-0.5 py-0.5 -mx-0.5",
                     "hover:bg-overlay-subtle transition-colors duration-150",
                     "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
-                    row.worstType === "error" || row.worstType === "warning"
+                    type === "error" || type === "warning"
                       ? "text-text-primary"
                       : "text-text-secondary"
                   )}
                 >
-                  <Icon className={cn("h-3.5 w-3.5 shrink-0", SEVERITY_CLASS[row.worstType])} />
-                  <span className="font-medium truncate min-w-0">{row.worktreeName}</span>
+                  <Icon className={cn("h-3.5 w-3.5 shrink-0", SEVERITY_CLASS[type])} />
+                  <span className="font-medium truncate min-w-0">{row.label}</span>
                   <span className="text-text-secondary truncate min-w-0">{row.highlightTitle}</span>
+                  {/* The highlighted entry's own time, not the row's latest: the
+                      line it sits on is that entry's. Told against when the
+                      summary was built, so no re-render (a hover, a pin) can
+                      change the text inside this live region. */}
+                  <TimeAgo
+                    timestamp={row.highlight.timestamp}
+                    now={displayShownAt}
+                    className="ml-auto shrink-0 pl-1 text-text-secondary"
+                  />
                 </button>
               </li>
             );
