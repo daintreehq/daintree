@@ -425,8 +425,9 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       correctionService = new VoiceCorrectionService();
     }
 
-    sessionController = new AbortController();
-    correctionService.setSessionSignal(sessionController.signal);
+    const myController = new AbortController();
+    sessionController = myController;
+    correctionService.setSessionSignal(myController.signal);
 
     // Capture project info at session start.
     sessionProjectInfo = getProjectInfo();
@@ -650,13 +651,19 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         activeEventUnsubscribe = null;
       }
       unsubscribe();
-      sender?.removeListener("destroyed", onDestroyed);
-      activeDestroyListener = null;
-      // Tear down the session controller so an orphaned signal isn't left
-      // attached to correctionService for the next session.
-      sessionController?.abort();
-      correctionService?.setSessionSignal(null);
-      sessionController = null;
+      unwatchDestroyed?.();
+      if (activeDestroyListener?.fn === onDestroyed) {
+        activeDestroyListener = null;
+      }
+      // Tear down this start's session controller so an orphaned signal isn't
+      // left attached to correctionService for the next session. A newer start's
+      // svc.start() is what fails a pending one, and by then it owns the shared
+      // controller, so only clear it while it is still ours.
+      myController.abort();
+      if (sessionController === myController) {
+        correctionService?.setSessionSignal(null);
+        sessionController = null;
+      }
     }
     return result;
   };

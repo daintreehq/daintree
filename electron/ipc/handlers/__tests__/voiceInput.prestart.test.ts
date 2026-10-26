@@ -27,12 +27,15 @@ type ServiceEvent = { type: string; error?: { code: string; severity: string } }
 const shared = vi.hoisted(() => ({
   /** Ordered record of calls reaching the service: "start" and "chunk:<first byte>". */
   calls: [] as string[],
+  stops: 0,
   eventCallback: null as ((e: ServiceEvent) => void) | null,
   startResult: { ok: true } as { ok: boolean; error?: string },
   /** When set, svc.start() returns this instead of resolving immediately. */
   startPromise: null as null | Promise<{ ok: boolean; error?: string }>,
   startError: null as null | Error,
   assembleKeyterms: null as null | (() => Promise<string[]>),
+  /** The signal the correction service was last handed. */
+  sessionSignal: null as AbortSignal | null,
 }));
 
 vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
@@ -52,7 +55,9 @@ vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
     this.stopGracefully = function () {
       return Promise.resolve();
     };
-    this.stop = function () {};
+    this.stop = function () {
+      shared.stops++;
+    };
     this.destroy = function () {};
     this.commitParagraphBoundary = function () {};
   },
@@ -60,7 +65,9 @@ vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
 
 vi.mock("../../../services/VoiceCorrectionService.js", () => ({
   VoiceCorrectionService: function VoiceCorrectionService(this: Record<string, unknown>) {
-    this.setSessionSignal = function () {};
+    this.setSessionSignal = function (signal: AbortSignal | null) {
+      shared.sessionSignal = signal;
+    };
   },
 }));
 
@@ -177,11 +184,13 @@ describe("voiceInput — audio sent before the provider starts", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     shared.calls = [];
+    shared.stops = 0;
     shared.eventCallback = null;
     shared.startResult = { ok: true };
     shared.startPromise = null;
     shared.startError = null;
     shared.assembleKeyterms = null;
+    shared.sessionSignal = null;
     sender.destroyed = false;
     sender.onDestroyed = null;
     fakeEvent.sender = makeSender();
@@ -324,6 +333,43 @@ describe("voiceInput — audio sent before the provider starts", () => {
 
     sendChunk(2);
     expect(shared.calls).toEqual(["start", "chunk:1", "chunk:2"]);
+  });
+
+  it("leaves the service alone when a renderer whose start failed is destroyed", async () => {
+    shared.startResult = { ok: false, error: "OpenAI API key not configured" };
+    await expect(start()).resolves.toEqual({ ok: false, error: "OpenAI API key not configured" });
+    expect(sender.onDestroyed).not.toBeNull();
+
+    sender.destroyed = true;
+    sender.onDestroyed!();
+
+    expect(shared.stops).toBe(0);
+  });
+
+  it("leaves a newer session's signal alone when an older pending start fails", async () => {
+    let failFirst!: (result: StartResult) => void;
+    shared.startPromise = new Promise<StartResult>((r) => {
+      failFirst = r;
+    });
+    const first = start();
+    await vi.waitFor(() => expect(shared.calls).toEqual(["start"]));
+    const firstSignal = shared.sessionSignal!;
+
+    // Another view starts while the first is still connecting.
+    fakeEvent.sender = makeSender();
+    shared.startPromise = null;
+    await expect(start()).resolves.toEqual({ ok: true });
+    const secondSignal = shared.sessionSignal!;
+    expect(secondSignal).not.toBe(firstSignal);
+
+    // The second start's svc.start() tore down the first provider, which settles
+    // its pending start as stopped.
+    failFirst({ ok: false, error: "Voice session stopped" });
+    await expect(first).resolves.toEqual({ ok: false, error: "Voice session stopped" });
+
+    expect(firstSignal.aborted).toBe(true);
+    expect(secondSignal.aborted).toBe(false);
+    expect(shared.sessionSignal).toBe(secondSignal);
   });
 
   it("drops the newest audio past the chunk cap and reports it once", async () => {
