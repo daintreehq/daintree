@@ -62,7 +62,9 @@ vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
       shared.calls.push("hard-stop");
       shared.endDrain?.();
     };
-    this.destroy = function () {};
+    this.destroy = function () {
+      shared.endDrain?.();
+    };
     this.commitParagraphBoundary = function () {
       shared.calls.push("commit");
     };
@@ -153,7 +155,11 @@ function getHandler(channel: string) {
   return call[1] as (...args: unknown[]) => Promise<unknown>;
 }
 
+// The view each session id was started from, which streams its audio.
+const owners = new Map<string, FakeSender>();
+
 function start(sender: FakeSender, sessionId: string) {
+  owners.set(sessionId, sender);
   return getHandler(CHANNELS.VOICE_INPUT_START)({ sender }, sessionId);
 }
 
@@ -165,12 +171,16 @@ function flush(sender: FakeSender, sessionId: string) {
   return getHandler(CHANNELS.VOICE_INPUT_FLUSH_PARAGRAPH)({ sender }, sessionId);
 }
 
-function sendChunk(sessionId: string, id: number, bytes = 4800) {
+function sendChunk(sessionId: string, id: number, from = owners.get(sessionId) ?? makeSender()) {
   const call = ipcMainMock.on.mock.calls.find(([c]) => c === CHANNELS.VOICE_INPUT_AUDIO_CHUNK);
   if (!call) throw new Error("audio-chunk listener not registered");
-  const chunk = new Uint8Array(bytes);
+  const chunk = new Uint8Array(4800);
   chunk[0] = id;
-  (call[1] as (e: unknown, s: unknown, c: ArrayBuffer) => void)({}, sessionId, chunk.buffer);
+  (call[1] as (e: unknown, s: unknown, c: ArrayBuffer) => void)(
+    { sender: from },
+    sessionId,
+    chunk.buffer
+  );
 }
 
 /** An event from the current provider, tagged as the real service tags it. */
@@ -219,6 +229,7 @@ describe("voiceInput — session identity", () => {
     shared.endDrain = null;
     shared.assembleKeyterms = null;
     shared.projects.clear();
+    owners.clear();
     ownerA = makeSender();
     ownerB = makeSender();
     appSent = [];
@@ -411,6 +422,7 @@ describe("voiceInput — session identity", () => {
     // B's capture is already streaming; A's hasn't heard it lost the session.
     sendChunk("b", 1);
     sendChunk("a", 9);
+    sendChunk("b", 2);
     emit({ type: "complete", text: "last words" });
 
     expect(shared.calls).toEqual(["start:a", "drain"]);
@@ -420,9 +432,9 @@ describe("voiceInput — session identity", () => {
     finishDrain();
     await expect(startingB).resolves.toEqual({ status: "started" });
     sendChunk("a", 8);
-    sendChunk("b", 2);
+    sendChunk("b", 3);
 
-    expect(shared.calls).toEqual(["start:a", "drain", "start:b", "chunk:1", "chunk:2"]);
+    expect(shared.calls).toEqual(["start:a", "drain", "start:b", "chunk:1", "chunk:2", "chunk:3"]);
     expect(received(ownerA).map((m) => m.payload)).toEqual([
       { sessionId: "a", status: "finishing" },
       { sessionId: "a", text: "last words", willCorrect: false },
@@ -502,6 +514,54 @@ describe("voiceInput — session identity", () => {
     await Promise.all([startingB, stoppingB]);
     expect(shared.calls).toEqual(["start:a", "drain", "start:b", "chunk:1", "drain"]);
     expect(ended(ownerB)).toEqual([{ sessionId: "b", reason: "stopped" }]);
+  });
+
+  it("ignores audio, stop and flush from another view carrying the live session's id", async () => {
+    await start(ownerA, "a");
+    sendChunk("a", 1, ownerB);
+    await flush(ownerB, "a");
+    await expect(stop(ownerB, "a")).resolves.toEqual({ rawText: null });
+
+    expect(shared.calls).toEqual(["start:a"]);
+    expect(getLiveVoiceSession()?.sessionId).toBe("a");
+    expect(ended(ownerA)).toEqual([]);
+  });
+
+  it("refuses a start reusing the id of a session still draining", async () => {
+    await start(ownerA, "a");
+    const finishDrain = deferDrain();
+    const startingB = start(ownerB, "b");
+
+    await expect(start(ownerB, "a")).rejects.toThrow("Voice session already started");
+    expect(getLiveVoiceSession()?.sessionId).toBe("b");
+    finishDrain();
+    await expect(startingB).resolves.toEqual({ status: "started" });
+  });
+
+  it("starts the waiting session even when the drain it waits on fails", async () => {
+    await start(ownerA, "a");
+    let failDrain!: (error: Error) => void;
+    shared.drain = new Promise<void>((_resolve, reject) => {
+      failDrain = reject;
+    });
+    const startingB = start(ownerB, "b");
+    failDrain(new Error("socket closed"));
+
+    await expect(startingB).resolves.toEqual({ status: "started" });
+    expect(ended(ownerA)).toEqual([{ sessionId: "a", reason: "failed" }]);
+    expect(shared.calls).toEqual(["start:a", "drain", "start:b"]);
+  });
+
+  it("ends both the draining and the waiting session when the handlers go away", async () => {
+    await start(ownerA, "a");
+    deferDrain();
+    const startingB = start(ownerB, "b");
+    cleanup();
+
+    expect(ended(ownerA)).toEqual([{ sessionId: "a", reason: "cancelled" }]);
+    expect(ended(ownerB)).toEqual([{ sessionId: "b", reason: "cancelled" }]);
+    await expect(startingB).resolves.toEqual({ status: "superseded" });
+    expect(getLiveVoiceSession()).toBeNull();
   });
 
   it("ends a session the same view replaced at once, retiring its provider", async () => {

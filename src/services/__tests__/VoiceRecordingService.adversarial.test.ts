@@ -801,6 +801,28 @@ describe("VoiceRecordingService adversarial", () => {
       expect(runtime.voiceInput.stop).not.toHaveBeenCalled();
     });
 
+    it("still reports a start failure whose ended notice arrives before the reply", async () => {
+      const backendStart = deferred<{ ok: boolean; error?: string }>();
+      runtime.startQueue.push(backendStart.promise);
+
+      const { voiceRecordingService } = await import("../VoiceRecordingService");
+      const starting = voiceRecordingService.start(panelOne);
+      await vi.waitFor(() => {
+        expect(runtime.voiceInput.start).toHaveBeenCalledTimes(1);
+      });
+
+      emitSessionEnded("failed");
+      backendStart.resolve({ ok: false, error: "Connection timed out" });
+      await starting;
+
+      expect(runtime.voiceFns.setLastError).toHaveBeenCalledWith(
+        expect.objectContaining({ code: "backend_start_failed", message: "Connection timed out" })
+      );
+      expect(runtime.voiceFns.finishSession).toHaveBeenCalledWith(
+        expect.objectContaining({ nextStatus: "error" })
+      );
+    });
+
     it("ignores statuses from a session this view already finished", async () => {
       const { voiceRecordingService } = await import("../VoiceRecordingService");
       await voiceRecordingService.start(panelOne);
