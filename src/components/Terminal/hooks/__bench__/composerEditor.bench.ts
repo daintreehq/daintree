@@ -37,8 +37,10 @@ function mountComposer() {
       const editorViewRef = useRef<EditorView | null>(null);
       const contextUpdateRef = useRef<(u: ViewUpdate) => void>(() => {});
       const keymapHandlersRef = useRef(null);
+      const draftKeyRef = useRef("t1");
       useEditorFactory({
         terminalId: "t1",
+        draftKeyRef,
         editorHostRef,
         editorViewRef,
         value: "",

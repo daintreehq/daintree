@@ -6,7 +6,12 @@ import { useVoiceRecordingStore } from "@/store";
 import { useProjectStore } from "@/store/projectStore";
 import { takeLandedCorrection } from "@/services/voiceCorrectionLanding";
 import { minimalDocChange } from "@/lib/textRangeMapping";
-import { outsideDraftWrite } from "../inputEditorExtensions/composerHistory";
+import {
+  outsideDraftWrite,
+  selectionAfterOutsideWrite,
+} from "../inputEditorExtensions/composerHistory";
+import { takePendingComposerSelection } from "@/lib/composerCaret";
+import { makeDraftKey } from "@/lib/draftKey";
 import { replayLandedCorrection } from "../inputEditorExtensions/correctionReview";
 import {
   voiceRecordingService,
@@ -155,9 +160,26 @@ export function useVoiceWaitSubmit({
             // The same outside write the sync effect would make, correction
             // included, so a send held back afterwards leaves it undoable.
             const landed = takeLandedCorrection(terminalId, projectId, draft);
+            // The caret stays where dictation left it, so a send that's held
+            // back doesn't strand it at the end.
+            const pending = takePendingComposerSelection(
+              makeDraftKey(terminalId, projectId),
+              draft
+            );
             const change = minimalDocChange(finalView.state.doc.toString(), draft);
-            if (change !== null) finalView.dispatch(outsideDraftWrite(change, draft, landed));
-            else if (landed) replayLandedCorrection(finalView, landed);
+            if (change !== null) {
+              const selection = selectionAfterOutsideWrite(
+                finalView.state,
+                finalView.hasFocus,
+                change,
+                pending
+              );
+              finalView.dispatch(outsideDraftWrite(change, draft, landed, selection));
+            } else {
+              if (landed) replayLandedCorrection(finalView, landed);
+              if (pending)
+                finalView.dispatch({ selection: { anchor: pending.from, head: pending.to } });
+            }
           }
 
           if (options?.spoken && !isSpokenSendable(draft)) return;

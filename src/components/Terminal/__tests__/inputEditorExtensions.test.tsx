@@ -999,6 +999,23 @@ describe("interimWidgetField", () => {
     view.destroy();
   });
 
+  it("renders the ghost at its position and keeps it there through edits around it", () => {
+    const view = makeView("hello world");
+    view.dispatch({ effects: setInterimText.of({ text: " big", pos: 5 }) });
+    expect(view.state.field(interimWidgetField)).toEqual({ text: " big", pos: 5 });
+    expect(view.contentDOM.querySelector(".cm-line")?.textContent).toBe("hello big world");
+
+    const line = () => view.contentDOM.querySelector(".cm-line")?.textContent;
+    view.dispatch({ changes: { from: 0, insert: "Say " } });
+    expect(view.state.field(interimWidgetField).pos).toBe(9);
+    expect(line()).toBe("Say hello big world");
+    view.dispatch({ changes: { from: 9, insert: "!" } });
+    // Typed at the preview's own spot: the preview stays after it, as the words will.
+    expect(view.state.field(interimWidgetField).pos).toBe(10);
+    expect(line()).toBe("Say hello! big world");
+    view.destroy();
+  });
+
   it("clears the ghost widget when an empty string is dispatched", () => {
     const view = makeView("hello world");
     view.dispatch({ effects: setInterimText.of("draft") });
@@ -1177,14 +1194,14 @@ describe("voice decoration phase integration", () => {
       effects: [setInterimText.of("draft"), setPendingAIRanges.of([{ from: 6, to: 11 }])],
     });
 
-    expect(view.state.field(interimWidgetField)).toBe("draft");
+    expect(view.state.field(interimWidgetField).text).toBe("draft");
     expect(view.state.field(pendingAIField).iter().value).not.toBeNull();
 
     view.dispatch({
       effects: [setInterimText.of(""), setPendingAIRanges.of([])],
     });
 
-    expect(view.state.field(interimWidgetField)).toBe("");
+    expect(view.state.field(interimWidgetField).text).toBe("");
     expect(view.state.field(pendingAIField).iter().value).toBeNull();
     expect(view.contentDOM.querySelector(".cm-voice-interim")).toBeNull();
     view.destroy();

@@ -59,9 +59,22 @@ export interface DictationDraftTarget {
   projectId?: string;
 }
 
+/**
+ * Where a session's next words go in one draft. It starts as the caret, or the
+ * selection the first words will replace, and becomes a point after the words
+ * once any are written. It follows draft edits like a record does, so typing
+ * elsewhere never pulls the dictation along with it.
+ */
+export interface DictationAnchor {
+  sessionId: string;
+  range: TrackedTextRange;
+}
+
 interface DictationRangeState {
   /** Records per draft key (`makeDraftKey`), oldest first. Runtime-only. */
   drafts: Record<string, DictationRecord[]>;
+  /** Insertion anchors per draft key (`makeDraftKey`), one per session. Runtime-only. */
+  anchors: Record<string, DictationAnchor[]>;
   /** Records an utterance the session just wrote into the draft. */
   recordUtterance: (
     target: DictationDraftTarget,
@@ -82,11 +95,28 @@ interface DictationRangeState {
    * its records.
    */
   mapDrafts: (previous: Map<string, string>, next: Map<string, string>) => void;
+  /**
+   * Tells the next mapping of this draft what the write it's about to see
+   * actually changed. A diff of the two strings can't say which of two
+   * identical runs was written, so a writer that knows passes it here.
+   */
+  expectDraftChange: (
+    panelId: string,
+    projectId: string | undefined,
+    before: string,
+    after: string,
+    change: TextChange
+  ) => void;
   getDictation: (id: string) => DictationRecord | null;
   listDictations: (panelId: string, projectId?: string) => DictationRecord[];
   /** Every live record the voice session wrote, in any draft. */
   listSessionDictations: (sessionId: string) => DictationRecord[];
   releaseDictation: (id: string) => void;
+  /** Places the session's insertion anchor in the target's draft. */
+  setAnchor: (target: DictationDraftTarget, span: DictationTextSpan) => void;
+  getAnchor: (target: DictationDraftTarget) => TrackedTextRange | null;
+  /** Drops the session's anchors in every draft; its records stay. */
+  releaseAnchors: (sessionId: string) => void;
   clear: () => void;
 }
 
@@ -165,8 +195,43 @@ function withInsertion(
   return { ...drafts, [key]: records.map((r, i) => (i === index ? record : r)) };
 }
 
+// One-shot and keyed by draft: a write that never lands as expected (another
+// write got there first) is simply diffed, as every other write is.
+const expectedChanges = new Map<string, { before: string; after: string; change: TextChange }>();
+
+function changeFor(key: string, before: string, after: string): TextChange {
+  const expected = expectedChanges.get(key);
+  if (expected?.before === before && expected.after === after) return expected.change;
+  return minimalDocChange(before, after)!;
+}
+
+function mapAnchors(
+  anchors: Record<string, DictationAnchor[]>,
+  previous: Map<string, string>,
+  next: Map<string, string>
+): Record<string, DictationAnchor[]> | null {
+  let nextAnchors: Record<string, DictationAnchor[]> | null = null;
+  for (const [key, list] of Object.entries(anchors)) {
+    const after = next.get(key) ?? "";
+    const before = previous.get(key) ?? "";
+    if (after === before) continue;
+    nextAnchors ??= { ...anchors };
+    if (after === "") {
+      delete nextAnchors[key];
+      continue;
+    }
+    const change = changeFor(key, before, after);
+    nextAnchors[key] = list.map((anchor) => ({
+      ...anchor,
+      range: mapTextRange(anchor.range, change),
+    }));
+  }
+  return nextAnchors;
+}
+
 export const useDictationRangeStore = create<DictationRangeState>()((set, get) => ({
   drafts: {},
+  anchors: {},
 
   recordUtterance: (target, { insertion, words, transcriptId }) =>
     set((state) => ({
@@ -216,7 +281,9 @@ export const useDictationRangeStore = create<DictationRangeState>()((set, get) =
   },
 
   mapDrafts: (previous, next) => {
-    const { drafts } = get();
+    const { drafts, anchors } = get();
+    const nextAnchors = mapAnchors(anchors, previous, next);
+    if (nextAnchors) set({ anchors: nextAnchors });
     let nextDrafts: Record<string, DictationRecord[]> | null = null;
     for (const [key, records] of Object.entries(drafts)) {
       const after = next.get(key) ?? "";
@@ -227,10 +294,15 @@ export const useDictationRangeStore = create<DictationRangeState>()((set, get) =
         delete nextDrafts[key];
         continue;
       }
-      const change = minimalDocChange(before, after)!;
+      const change = changeFor(key, before, after);
       nextDrafts[key] = records.map((record) => mapRecord(record, change));
     }
+    expectedChanges.clear();
     if (nextDrafts) set({ drafts: nextDrafts });
+  },
+
+  expectDraftChange: (panelId, projectId, before, after, change) => {
+    expectedChanges.set(makeDraftKey(panelId, projectId), { before, after, change });
   },
 
   getDictation: (id) => {
@@ -261,7 +333,44 @@ export const useDictationRangeStore = create<DictationRangeState>()((set, get) =
       return state;
     }),
 
-  clear: () => set((state) => (Object.keys(state.drafts).length === 0 ? state : { drafts: {} })),
+  setAnchor: (target, span) =>
+    set((state) => {
+      const key = makeDraftKey(target.panelId, target.projectId);
+      const others = (state.anchors[key] ?? []).filter((a) => a.sessionId !== target.sessionId);
+      return {
+        anchors: {
+          ...state.anchors,
+          [key]: [...others, { sessionId: target.sessionId, range: unedited(span) }],
+        },
+      };
+    }),
+
+  getAnchor: (target) =>
+    get().anchors[makeDraftKey(target.panelId, target.projectId)]?.find(
+      (anchor) => anchor.sessionId === target.sessionId
+    )?.range ?? null,
+
+  releaseAnchors: (sessionId) =>
+    set((state) => {
+      let anchors: Record<string, DictationAnchor[]> | null = null;
+      for (const [key, list] of Object.entries(state.anchors)) {
+        if (!list.some((a) => a.sessionId === sessionId)) continue;
+        anchors ??= { ...state.anchors };
+        const remaining = list.filter((a) => a.sessionId !== sessionId);
+        if (remaining.length > 0) anchors[key] = remaining;
+        else delete anchors[key];
+      }
+      return anchors ? { anchors } : state;
+    }),
+
+  clear: () => {
+    expectedChanges.clear();
+    set((state) =>
+      Object.keys(state.drafts).length === 0 && Object.keys(state.anchors).length === 0
+        ? state
+        : { drafts: {}, anchors: {} }
+    );
+  },
 }));
 
 /**

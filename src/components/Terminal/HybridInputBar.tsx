@@ -123,12 +123,15 @@ import {
   minimalDocChange,
   captureRewriteSelection,
   outsideDraftWrite,
+  selectionAfterOutsideWrite,
   readImageChipPaths,
   replayLandedCorrection,
 } from "./inputEditorExtensions";
 import { takeLandedCorrection } from "@/services/voiceCorrectionLanding";
 import { takeScratchLanded } from "@/services/voiceScratchCommand";
 import { registerComposerSelectionSource } from "@/services/voiceRewriteSelection";
+import { takePendingComposerSelection } from "@/lib/composerCaret";
+import { makeDraftKey } from "@/lib/draftKey";
 import { useHostReparent } from "./hooks/useHostReparent";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { SelectedFileMenuItems } from "./SelectedFileMenuItems";
@@ -348,6 +351,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         ? `${ISOLATED_COMPOSER_SCOPE}:${otherHostId}`
         : ISOLATED_COMPOSER_SCOPE
       : currentProjectId;
+    const draftKey = makeDraftKey(terminalId, projectId);
+    const draftKeyRef = useRef(draftKey);
+    useEffect(() => {
+      draftKeyRef.current = draftKey;
+    }, [draftKey]);
     const isInHistoryMode = useTerminalInputStore((s) => {
       const key = projectId ? `${projectId}:${terminalId}` : terminalId;
       return (s.historyIndex.get(key) ?? -1) !== -1;
@@ -924,9 +932,16 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const appliedExternalDraftRevisionRef = useRef(externalDraftRevision);
 
     useEffect(() => {
+      const appliedBefore = appliedExternalDraftRevisionRef.current;
       appliedExternalDraftRevisionRef.current = externalDraftRevision;
       if (externalDraftRevision === 0) return;
-      const draft = useTerminalInputStore.getState().getDraftInput(terminalId, projectId);
+      const inputState = useTerminalInputStore.getState();
+      const draft = inputState.getDraftInput(terminalId, projectId);
+      // Taken whatever happens, so a hint for a draft never shown can't land later.
+      const pendingSelection = takePendingComposerSelection(
+        makeDraftKey(terminalId, projectId),
+        draft
+      );
       const view = editorViewRef.current;
       if (!view) return;
       const landed = takeLandedCorrection(terminalId, projectId, draft);
@@ -938,13 +953,26 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         setValue(draft);
         lastEmittedValueRef.current = draft;
         isApplyingExternalValueRef.current = true;
-        view.dispatch(outsideDraftWrite(change, draft, landed));
+        // Only writes that keep the caret since this last ran (dictation,
+        // its correction and file links) leave it to the user.
+        const selection =
+          inputState.caretMovingDraftRevision > appliedBefore
+            ? undefined
+            : selectionAfterOutsideWrite(view.state, view.hasFocus, change, pendingSelection);
+        view.dispatch(outsideDraftWrite(change, draft, landed, selection));
         // Emptied from outside (sent or cleared elsewhere): nothing to undo into.
         // A spoken "scratch that" that empties it is an edit, so undo brings
         // the words back.
         if (draft === "" && !scratched) clearComposerHistory(view);
-      } else if (landed) {
-        replayLandedCorrection(view, landed);
+      } else {
+        if (landed) replayLandedCorrection(view, landed);
+        // Words that replaced a selection with the same text change nothing,
+        // but the selection still collapses after them.
+        if (pendingSelection) {
+          view.dispatch({
+            selection: { anchor: pendingSelection.from, head: pendingSelection.to },
+          });
+        }
       }
     }, [externalDraftRevision, terminalId, projectId]);
 
@@ -1354,6 +1382,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
     useEditorFactory({
       terminalId,
+      draftKeyRef,
       editorHostRef,
       editorViewRef,
       value,

@@ -199,10 +199,8 @@ interface VoiceTranscriptBuffer {
   liveItems: VoiceLiveItem[];
   completedSegments: string[];
   projectId?: string;
-  /** Draft length snapshot taken before the first delta of the session. */
+  /** Where the session's first dictated words start in the draft (-1 = none yet). */
   sessionDraftStart: number;
-  /** Draft length snapshot taken before the first delta of a segment. */
-  draftLengthAtSegmentStart: number;
   /** Draft length at the start of the current paragraph (-1 = not set). */
   activeParagraphStart: number;
   /** Explicit transcript lifecycle phase — derived from and updated alongside buffer state. */
@@ -340,7 +338,6 @@ interface VoiceRecordingState {
   /** `replace` sets the preview to `delta` instead of appending (a revised hypothesis). */
   appendDelta: (delta: string, itemId?: string, replace?: boolean) => void;
   setSessionDraftStart: (panelId: string, length: number) => void;
-  setDraftLengthAtSegmentStart: (panelId: string, length: number) => void;
   /**
    * `discard` retires the utterance without keeping its words: a spoken
    * command that acts on the draft rather than adding to it.
@@ -380,7 +377,6 @@ function getBuffer(
       liveItems: [],
       completedSegments: [],
       sessionDraftStart: -1,
-      draftLengthAtSegmentStart: -1,
       activeParagraphStart: -1,
       transcriptPhase: "idle" as VoiceTranscriptPhase,
       correctionRanges: NO_CORRECTION_RANGES,
@@ -493,7 +489,6 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
               completedSegments: [],
               projectId: target.projectId,
               sessionDraftStart: -1,
-              draftLengthAtSegmentStart: -1,
               activeParagraphStart: -1,
               transcriptPhase: "idle" as VoiceTranscriptPhase,
               correctionRanges: NO_CORRECTION_RANGES,
@@ -557,18 +552,6 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
           };
         }),
 
-      setDraftLengthAtSegmentStart: (panelId, length) =>
-        set((state) => {
-          const buffer = getBuffer(state.panelBuffers, panelId);
-          if (buffer.draftLengthAtSegmentStart >= 0) return state;
-          return {
-            panelBuffers: {
-              ...state.panelBuffers,
-              [panelId]: { ...buffer, draftLengthAtSegmentStart: length },
-            },
-          };
-        }),
-
       completeSegment: (text, itemId, options) =>
         set((state) => {
           const panelId = state.activeTarget?.panelId;
@@ -591,7 +574,6 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
                   liveText,
                   // Any legacy anchor from an unidentified delta is consumed here;
                   // leaving it would let a later stop flush slice at a stale offset.
-                  draftLengthAtSegmentStart: -1,
                   completedSegments: finalText
                     ? [...buffer.completedSegments, finalText]
                     : buffer.completedSegments,
@@ -613,7 +595,6 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
                   ...buffer,
                   liveText: "",
                   liveItems: [],
-                  draftLengthAtSegmentStart: -1,
                   transcriptPhase: "idle" as VoiceTranscriptPhase,
                 },
               },
@@ -627,7 +608,6 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
                 ...buffer,
                 liveText: "",
                 liveItems: [],
-                draftLengthAtSegmentStart: -1,
                 completedSegments: [...buffer.completedSegments, normalized],
                 transcriptPhase: "utterance_final" as VoiceTranscriptPhase,
               },
@@ -661,7 +641,6 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
               [panelId]: {
                 ...buffer,
                 sessionDraftStart: shift(buffer.sessionDraftStart),
-                draftLengthAtSegmentStart: shift(buffer.draftLengthAtSegmentStart),
                 activeParagraphStart: shift(buffer.activeParagraphStart),
               },
             },
@@ -692,7 +671,6 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
                 // a paragraph break inside an earlier item must not erase them.
                 liveText: joinLiveItems(buffer.liveItems),
                 completedSegments: [],
-                draftLengthAtSegmentStart: -1,
                 activeParagraphStart: -1,
                 transcriptPhase: (buffer.liveItems.some((item) => item.text)
                   ? "interim"

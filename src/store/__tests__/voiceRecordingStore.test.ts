@@ -316,17 +316,6 @@ describe("voiceRecordingStore — transcript phase transitions", () => {
     expect(useVoiceRecordingStore.getState().panelBuffers[PANEL_ID]?.liveText).toBe("");
   });
 
-  it("after resetParagraphState, setDraftLengthAtSegmentStart can set a new anchor", () => {
-    useVoiceRecordingStore.getState().beginSession(TARGET);
-    useVoiceRecordingStore.getState().setDraftLengthAtSegmentStart(PANEL_ID, 20);
-    useVoiceRecordingStore.getState().resetParagraphState(PANEL_ID);
-    useVoiceRecordingStore.getState().setDraftLengthAtSegmentStart(PANEL_ID, 21);
-
-    expect(
-      useVoiceRecordingStore.getState().panelBuffers[PANEL_ID]?.draftLengthAtSegmentStart
-    ).toBe(21);
-  });
-
   it("finishSession resets transcriptPhase to idle regardless of prior phase", () => {
     useVoiceRecordingStore.getState().beginSession(TARGET);
     useVoiceRecordingStore.getState().appendDelta("unfinished");
@@ -467,14 +456,6 @@ describe("voiceRecordingStore — identified items (#13109)", () => {
     expect(buffer().liveText).toBe("");
     expect(buffer().completedSegments).toEqual([]);
     expect(buffer().transcriptPhase).toBe("idle");
-  });
-
-  it("consumes a legacy segment anchor so a later flush can't slice at it", () => {
-    const store = useVoiceRecordingStore.getState();
-    store.setDraftLengthAtSegmentStart(PANEL_ID, 5);
-    store.appendDelta("hello", "item-a");
-    store.completeSegment("Hello.", "item-a");
-    expect(buffer().draftLengthAtSegmentStart).toBe(-1);
   });
 
   it("an unidentified completion clears identified item state", () => {

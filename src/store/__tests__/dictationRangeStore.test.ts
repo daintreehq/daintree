@@ -43,7 +43,7 @@ let unsubscribe: () => void;
 
 beforeEach(() => {
   useTerminalInputStore.setState({ draftInputs: new Map() });
-  useDictationRangeStore.setState({ drafts: {} });
+  useDictationRangeStore.setState({ drafts: {}, anchors: {} });
   unsubscribe = subscribeDictationRangeTracking();
 });
 
@@ -340,5 +340,101 @@ describe("dictationRangeStore", () => {
     const record = only();
     expect(useDictationRangeStore.getState().getDictation(record.id)).toBe(record);
     expect(useDictationRangeStore.getState().getDictation("missing")).toBeNull();
+  });
+});
+
+describe("insertion anchors (#14634)", () => {
+  const anchor = () => useDictationRangeStore.getState().getAnchor(target);
+
+  it("follows edits before it and stays put for edits after it", () => {
+    setDraft("hello world");
+    useDictationRangeStore.getState().setAnchor(target, { from: 5, to: 5 });
+
+    edit(0, 0, "Say ");
+    expect(anchor()).toEqual({ from: 9, to: 9, edited: false });
+    edit(15, 15, "!");
+    expect(anchor()).toEqual({ from: 9, to: 9, edited: false });
+  });
+
+  it("moves past text typed at it", () => {
+    setDraft("hello");
+    useDictationRangeStore.getState().setAnchor(target, { from: 5, to: 5 });
+    edit(5, 5, " there");
+    expect(anchor()).toEqual({ from: 11, to: 11, edited: false });
+  });
+
+  it("flags a held selection once its text is edited", () => {
+    setDraft("open the zoo store");
+    useDictationRangeStore.getState().setAnchor(target, { from: 9, to: 12 });
+    edit(10, 11, "xyz");
+    expect(anchor()).toEqual({ from: 9, to: 14, edited: true });
+  });
+
+  it("is kept for an empty draft until the draft changes, then released with it", () => {
+    useDictationRangeStore.getState().setAnchor(target, { from: 0, to: 0 });
+    expect(anchor()).toEqual({ from: 0, to: 0, edited: false });
+
+    setDraft("typed");
+    expect(anchor()).toEqual({ from: 5, to: 5, edited: false });
+    setDraft("");
+    expect(anchor()).toBeNull();
+  });
+
+  it("keeps sessions apart and releases one session's anchors in every draft", () => {
+    setDraft("abc");
+    const elsewhere = { ...target, panelId: "panel-2" };
+    useTerminalInputStore.getState().setDraftInput("panel-2", "xyz", PROJECT);
+    const other = { ...target, sessionId: "session-2" };
+    useDictationRangeStore.getState().setAnchor(target, { from: 1, to: 1 });
+    useDictationRangeStore.getState().setAnchor(elsewhere, { from: 2, to: 2 });
+    useDictationRangeStore.getState().setAnchor(other, { from: 2, to: 2 });
+
+    useDictationRangeStore.getState().releaseAnchors(SESSION);
+    expect(anchor()).toBeNull();
+    expect(useDictationRangeStore.getState().getAnchor(elsewhere)).toBeNull();
+    expect(useDictationRangeStore.getState().getAnchor(other)).toEqual({
+      from: 2,
+      to: 2,
+      edited: false,
+    });
+  });
+
+  it("drops every anchor when tracking is torn down", () => {
+    setDraft("abc");
+    const elsewhere = { ...target, panelId: "panel-2" };
+    useDictationRangeStore.getState().setAnchor(target, { from: 1, to: 1 });
+    useDictationRangeStore.getState().setAnchor(elsewhere, { from: 0, to: 0 });
+    unsubscribe();
+    expect(anchor()).toBeNull();
+    expect(useDictationRangeStore.getState().getAnchor(elsewhere)).toBeNull();
+    unsubscribe = subscribeDictationRangeTracking();
+  });
+});
+
+describe("expected draft changes (#14634)", () => {
+  it("maps through the change a writer declared, not the diff's guess", () => {
+    setDraft("foo");
+    dictate("foo");
+    useDictationRangeStore.getState().expectDraftChange(PANEL, PROJECT, "foo foo", "foo foo foo", {
+      from: 0,
+      to: 0,
+      insert: "foo ",
+    });
+    setDraft("foo foo foo");
+
+    expect(only().utterances[0]!.range).toEqual({ from: 8, to: 11, edited: false });
+  });
+
+  it("falls back to the diff when the write isn't the one declared", () => {
+    setDraft("foo");
+    dictate("foo");
+    useDictationRangeStore.getState().expectDraftChange(PANEL, PROJECT, "foo foo", "foo foo foo", {
+      from: 0,
+      to: 0,
+      insert: "foo ",
+    });
+    setDraft("foo foo!");
+
+    expect(only().utterances[0]!.range).toEqual({ from: 4, to: 7, edited: false });
   });
 });

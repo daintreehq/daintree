@@ -173,20 +173,6 @@ describe("VoiceRecordingService — identified items (#13109)", () => {
     expect(liveText()).toBe("");
   });
 
-  it("appends each completion to the current draft rather than a stale segment offset", async () => {
-    await setup();
-    draftState.draft = "prefix";
-
-    delta("one", "item-a");
-    complete("One.", "item-a");
-    // User types between segments; a later item must not slice it away.
-    draftState.draft += " typed";
-    delta("two", "item-b");
-    complete("Two.", "item-b");
-
-    expect(draftState.draft).toBe("prefix One. typed Two.");
-  });
-
   it("keeps later items' previews across a paragraph split inside an earlier item", async () => {
     const { liveText } = await setup();
 
