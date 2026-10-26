@@ -6,6 +6,7 @@ import type {
   VoiceLiveSessionUpdate,
   VoiceSessionEndReason,
 } from "../voice.js";
+import type { VoiceSessionReport } from "../voiceSessionSummary.js";
 import type {
   Project,
   ProjectAddOptions,
@@ -2061,7 +2062,11 @@ export interface IpcEventMap {
   };
   "voice-input:error": { sessionId: string; error: VoiceInputError };
   "voice-input:status": { sessionId: string; status: VoiceInputStatus };
-  "voice-input:session-ended": { sessionId: string; reason: VoiceSessionEndReason };
+  "voice-input:session-ended": {
+    sessionId: string;
+    reason: VoiceSessionEndReason;
+    report: VoiceSessionReport;
+  };
   // To every view whenever the live session changes. Not keyed to a session:
   // it names the one live elsewhere, or none.
   "voice-input:live-session": VoiceLiveSessionUpdate;

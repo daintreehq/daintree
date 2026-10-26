@@ -149,6 +149,7 @@ vi.mock("../../../utils/logger.js", () => ({
 
 // Import AFTER vi.mock so the mocked `ws` is used.
 const { DeepgramTranscriptionProvider } = await import("../DeepgramTranscriptionProvider.js");
+const { AUDIO_BUFFER_MAX_CHUNKS } = await import("../TranscriptionProvider.js");
 const { logInfo } = await import("../../../utils/logger.js");
 type DeepgramTranscriptionProviderInstance = InstanceType<typeof DeepgramTranscriptionProvider>;
 type VoiceTranscriptionEvent = import("../TranscriptionProvider.js").VoiceTranscriptionEvent;
@@ -523,6 +524,23 @@ describe("DeepgramTranscriptionProvider", () => {
     expect(binary).toHaveLength(2);
     expect(binary[0].equals(Buffer.from(new Uint8Array([1])))).toBe(true);
     expect(binary[1].equals(Buffer.from(new Uint8Array([2])))).toBe(true);
+    provider.stop();
+  });
+
+  it("counts every chunk the connect buffer refuses, and reports no delay tier", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    void provider.start(BASE_SETTINGS, "session-1");
+    await Promise.resolve();
+    for (let i = 0; i < AUDIO_BUFFER_MAX_CHUNKS + 4; i++) {
+      provider.sendAudioChunk(new Uint8Array([i % 250]).buffer);
+    }
+
+    expect(provider.getSessionStats()).toEqual({
+      delayTier: "none",
+      droppedConnect: 4,
+      droppedReplay: 0,
+      reconnects: 0,
+    });
     provider.stop();
   });
 

@@ -71,6 +71,7 @@ vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
       shared.startContexts.push(context);
       return Promise.resolve({ ok: true });
     };
+    this.getSessionStats = () => null;
     this.stopGracefully = function () {
       if (shared.useDeferredDrain) {
         return new Promise<void>((resolve) => {

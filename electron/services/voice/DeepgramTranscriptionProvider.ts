@@ -13,6 +13,7 @@ import {
   AUDIO_BUFFER_MAX_CHUNKS,
   STUB_CONFIDENCE,
   createAudioBufferOverflowError,
+  type ProviderSessionStats,
   type TranscriptionProvider,
   type VoiceStartResult,
   type VoiceTranscriptionEvent,
@@ -232,6 +233,8 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
   private stopPendingReady = false;
 
   private audioChunkCount = 0;
+  // Session-summary count; outlives the drain's cleanup, reset on start().
+  private droppedConnectChunks = 0;
   private staleChunkWarned = false;
   private preConnectBufferOverflowWarned = false;
 
@@ -327,6 +330,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     this.preConnectBuffer = [];
     this.preConnectBufferBytes = 0;
     this.isExpectedClose = false;
+    this.droppedConnectChunks = 0;
 
     this.emit({ type: "status", status: "connecting" });
 
@@ -872,6 +876,8 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
       this.preConnectBuffer.length >= maxChunks ||
       this.preConnectBufferBytes + chunk.byteLength > maxBytes
     ) {
+      // Counted first: the overflow error below can end the session.
+      this.droppedConnectChunks++;
       if (!this.preConnectBufferOverflowWarned) {
         this.preConnectBufferOverflowWarned = true;
         logWarn(`${P} Pre-connect buffer full, dropping audio`, {
@@ -1042,6 +1048,17 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     } else {
       logDebug(`${P} settleDrain called with no pending drain`, { reason });
     }
+  }
+
+  // No delay tier (its turn detection is `endpointing`), no replay ledger and
+  // no reconnect yet.
+  getSessionStats(): ProviderSessionStats {
+    return {
+      delayTier: "none",
+      droppedConnect: this.droppedConnectChunks,
+      droppedReplay: 0,
+      reconnects: 0,
+    };
   }
 
   async stopGracefully(): Promise<void> {

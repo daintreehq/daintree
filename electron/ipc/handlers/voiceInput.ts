@@ -24,6 +24,7 @@ import type {
   VoiceSessionEndReason,
   VoiceStartOutcome,
 } from "../../../shared/types/voice.js";
+import type { VoiceSessionReport } from "../../../shared/types/voiceSessionSummary.js";
 import { logDebug, logInfo, logWarn } from "../../utils/logger.js";
 import { buildOpenAIHeaders } from "../../../shared/utils/openaiHeaders.js";
 import { voiceErrorLogFields } from "../../../shared/utils/voiceLogFields.js";
@@ -48,6 +49,7 @@ import {
   AUDIO_BUFFER_MAX_BYTES,
   AUDIO_BUFFER_MAX_CHUNKS,
   AUDIO_BUFFER_OVERFLOW_CODE,
+  NO_PROVIDER_SESSION_STATS,
   createAudioBufferOverflowError,
 } from "../../services/voice/TranscriptionProvider.js";
 import { voiceFileLinkResolver } from "../../services/VoiceFileLinkResolver.js";
@@ -140,6 +142,12 @@ interface VoiceSession {
   // draft. Ending the session for any reason aborts what is left.
   readonly fileLinkJobs: Set<Promise<void>>;
   heldSend: HeldSend | null;
+  // Main's share of the session summary, sent with its ended notice. Kept
+  // apart from the buffers above, which are released as the session goes.
+  readonly stats: Pick<
+    VoiceSessionReport,
+    "provider" | "biasTermCount" | "droppedPreStart" | "completedSegments" | "emptyCompletions"
+  >;
 }
 
 let liveSession: VoiceSession | null = null;
@@ -259,8 +267,18 @@ function endSession(session: VoiceSession, reason: VoiceSessionEndReason): void 
     reason,
     phase: session.phase,
   });
+  // Read before the caller retires the provider: until then it is still this
+  // session's, or the service answers null.
+  const report: VoiceSessionReport = {
+    ...session.stats,
+    ...(service?.getSessionStats(session.id) ?? NO_PROVIDER_SESSION_STATS),
+  };
   if (!session.sender.isDestroyed()) {
-    session.sender.send(CHANNELS.VOICE_INPUT_SESSION_ENDED, { sessionId: session.id, reason });
+    session.sender.send(CHANNELS.VOICE_INPUT_SESSION_ENDED, {
+      sessionId: session.id,
+      reason,
+      report,
+    });
   }
 }
 
@@ -914,6 +932,13 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       markHandedOff,
       fileLinkJobs: new Set(),
       heldSend: null,
+      stats: {
+        provider: null,
+        biasTermCount: null,
+        droppedPreStart: 0,
+        completedSegments: 0,
+        emptyCompletions: 0,
+      },
     };
     const previous = liveSession;
     liveSession = session;
@@ -959,6 +984,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // Snapshot transcription settings at session start (model, language, API key).
     // Correction settings are read live from store per-event so mid-session changes apply.
     const settings = getVoiceSettings();
+    session.stats.provider = settings.transcriptionProvider;
 
     // Kick off keyterm assembly concurrently with the subscription/provider
     // setup below so leading speech isn't delayed waiting on git/terminal reads.
@@ -995,6 +1021,10 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         ...voiceErrorLogFields(err),
       });
       return [];
+    });
+    // Counted whenever assembly lands: OpenAI's start doesn't wait for it.
+    void keytermsPromise.then((terms) => {
+      session.stats.biasTermCount = terms.length;
     });
 
     // OpenAI Realtime emits spoken dictation commands ("new paragraph",
@@ -1221,6 +1251,11 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       // A retired provider's events, and anything after this session ended.
       if (voiceEvent.sessionId !== session.id || session.ended) return;
       settleHeldSend(voiceEvent);
+      // Counted per provider segment, before the split into paragraph pieces.
+      if (voiceEvent.type === "complete") {
+        if (voiceEvent.text.trim()) session.stats.completedSegments++;
+        else session.stats.emptyCompletions++;
+      }
       forwardEvent(voiceEvent);
       // A provider that dies on its own ends the session, even while still
       // connecting. During a stop, its finishing → idle is the drain that
@@ -1376,6 +1411,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       pending.chunks.length >= AUDIO_BUFFER_MAX_CHUNKS ||
       pending.bytes + chunk.byteLength > AUDIO_BUFFER_MAX_BYTES
     ) {
+      session.stats.droppedPreStart++;
       if (!pending.overflowed) {
         pending.overflowed = true;
         logWarn("[VoiceInput] Pre-start audio buffer full, dropping audio", {

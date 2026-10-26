@@ -3,6 +3,7 @@ import { logInfo } from "../utils/logger.js";
 import { DeepgramTranscriptionProvider } from "./voice/DeepgramTranscriptionProvider.js";
 import { OpenAITranscriptionProvider } from "./voice/OpenAITranscriptionProvider.js";
 import type {
+  ProviderSessionStats,
   TranscriptionProvider,
   TranscriptionStartContext,
   VoiceSessionEvent,
@@ -35,6 +36,8 @@ const P = "[VoiceTranscription]";
  */
 export class VoiceTranscriptionService {
   private provider: TranscriptionProvider | null = null;
+  // The session the current provider was started for.
+  private providerSessionId: string | null = null;
   private providerUnsub: (() => void) | null = null;
   private listeners: Set<(event: VoiceSessionEvent) => void> = new Set();
 
@@ -68,6 +71,7 @@ export class VoiceTranscriptionService {
       this.provider.destroy();
       this.provider = null;
     }
+    this.providerSessionId = null;
   }
 
   /**
@@ -89,6 +93,7 @@ export class VoiceTranscriptionService {
     this.disposeProvider();
     const provider = this.createProvider(settings);
     this.provider = provider;
+    this.providerSessionId = sessionId;
     logInfo(`${P} Using provider`, {
       sessionId,
       provider: settings.transcriptionProvider,
@@ -99,6 +104,12 @@ export class VoiceTranscriptionService {
     // so nothing a retired provider still emits can carry the new session's id.
     this.providerUnsub = provider.onEvent((event) => this.emit({ ...event, sessionId }));
     return provider.start(settings, sessionId, context);
+  }
+
+  /** The provider's counts, only while it is still the one started for `sessionId`. */
+  getSessionStats(sessionId: string): ProviderSessionStats | null {
+    if (!this.provider || this.providerSessionId !== sessionId) return null;
+    return this.provider.getSessionStats();
   }
 
   sendAudioChunk(chunk: ArrayBuffer): void {
