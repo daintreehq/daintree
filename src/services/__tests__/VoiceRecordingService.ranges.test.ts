@@ -1210,6 +1210,7 @@ describe("VoiceRecordingService — correction and file links at the caret (#146
     expect(correct.fn).toHaveBeenCalledWith({
       rawText: "step two",
       recentContext: ["Step one."],
+      terminalId: "panel-1",
     });
     await vi.waitFor(() => expect(draft()).toBe("Step one. Step two. Step three."));
     expect(voiceStore.getState().panelBuffers[PANEL]!.sessionDraftStart).toBe(10);
