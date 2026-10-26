@@ -39,6 +39,7 @@ const shared = vi.hoisted(() => ({
   projectPaths: new Map<string, string>(),
   currentProject: null as null | { name: string; path: string },
   currentView: { sent: [] as Array<{ channel: string; payload: unknown }> },
+  dictionary: [] as unknown[],
   detect: vi.fn<(text: string, settings: unknown, signal?: AbortSignal) => Promise<Detected>>(),
   resolve:
     vi.fn<
@@ -114,6 +115,7 @@ vi.mock("../../../store.js", () => ({
             resolveFileLinks: true,
             paragraphingStrategy: "spoken-command",
             language: "en",
+            dictionary: shared.dictionary,
           }
         : undefined
     ),
@@ -222,6 +224,7 @@ describe("voiceInput — spoken file references", () => {
     shared.detect.mockReset();
     shared.resolve.mockReset();
     shared.currentView.sent = [];
+    shared.dictionary = [];
     owner = makeSender();
     // The starting view's project, where references resolve without a terminal.
     shared.projects.set(owner.id, "project-a");
@@ -286,6 +289,28 @@ describe("voiceInput — spoken file references", () => {
       reason: "stopped",
       report: expect.objectContaining({ completedSegments: 1 }),
     });
+  });
+
+  it("detects references in the words the heard-as rules wrote", async () => {
+    shared.dictionary = [{ term: "Zustand", heardAs: ["zoo stand"], source: "manual", addedAt: 1 }];
+    await start(owner, "a");
+    shared.detect.mockResolvedValueOnce([{ description: "Zustand store" }]);
+    shared.resolve.mockResolvedValueOnce("src/store.ts");
+
+    emitComplete("Link to the zoo stand store.");
+    await stop(owner, "a");
+
+    expect(completes()[0]!.text).toBe("Link to the Zustand store.");
+    expect(shared.detect).toHaveBeenCalledWith(
+      "Link to the Zustand store.",
+      expect.anything(),
+      expect.anything()
+    );
+    expect(fileReferences()).toEqual([
+      expect.objectContaining({
+        references: [{ description: "Zustand store", path: "src/store.ts" }],
+      }),
+    ]);
   });
 
   it("sends references to the view that started the session, not the app's current view", async () => {

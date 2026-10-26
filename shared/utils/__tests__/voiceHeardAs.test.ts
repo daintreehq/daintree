@@ -212,8 +212,9 @@ describe("createHeardAsRewriter", () => {
   });
 
   it("scans past protected spans in linear time", () => {
+    // 20,000 spans take a few milliseconds, so the 1x run is past timer noise.
     const ratio = scalingRatio((scale) => {
-      expect(zustand("`zoo stand` ".repeat(2_000 * scale) + "zoo stand")).toMatch(/ Zustand$/);
+      expect(zustand("`zoo stand` ".repeat(20_000 * scale) + "zoo stand")).toMatch(/ Zustand$/);
     });
     expect(ratio).toBeLessThan(24);
   });

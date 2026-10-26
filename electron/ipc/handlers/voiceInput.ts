@@ -768,7 +768,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     session: VoiceSession,
     correctionSvc: VoiceCorrectionService,
     transcriptId: string,
-    rawText: string,
+    text: string,
     settings: VoiceInputSettings,
     signal: AbortSignal
   ): Promise<void> => {
@@ -777,9 +777,9 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       organizationId: settings.organizationId,
       projectId: settings.projectId,
     };
-    const detected = await correctionSvc.detectFileLinkTokens(rawText, credentials, signal);
+    const detected = await correctionSvc.detectFileLinkTokens(text, credentials, signal);
     // A description the transcript doesn't contain has nowhere to land.
-    const spoken = normalizeSpoken(rawText);
+    const spoken = normalizeSpoken(text);
     const descriptions = detected
       .map(({ description }) => description.trim())
       .filter((description) => spoken.includes(normalizeSpoken(description)));
