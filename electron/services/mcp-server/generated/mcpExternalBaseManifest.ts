@@ -1786,6 +1786,13 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           description:
             "Agent panel `id` this session created or was handed. Required; no focus fallback.",
         },
+        generation: {
+          description:
+            "The run you read: another assistant's generation from assistant.list, or for an agent you didn't launch, its incarnation from host.list.",
+          type: "integer",
+          minimum: 0,
+          maximum: 9007199254740991,
+        },
       },
       required: ["terminalId"],
     },
@@ -2414,7 +2421,8 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "boolean",
         },
         generation: {
-          description: "Sending to another assistant: its generation from the assistant listing.",
+          description:
+            "The run you read: another assistant's generation from assistant.list, or for an agent you didn't launch, its incarnation from host.list.",
           type: "integer",
           minimum: 0,
           maximum: 9007199254740991,

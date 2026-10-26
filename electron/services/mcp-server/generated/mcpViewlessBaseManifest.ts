@@ -1744,7 +1744,8 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "boolean",
         },
         generation: {
-          description: "Sending to another assistant: its generation from the assistant listing.",
+          description:
+            "The run you read: another assistant's generation from assistant.list, or for an agent you didn't launch, its incarnation from host.list.",
           type: "integer",
           minimum: 0,
           maximum: 9007199254740991,
