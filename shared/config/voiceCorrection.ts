@@ -108,7 +108,7 @@ CORRECTION PRIORITY:
    - Paragraph break (\\n\\n): "new paragraph", "next paragraph", "start a new paragraph", "start new paragraph"
    - Line break (\\n): "new line", "next line", "line break"
    Only treat these as commands when spoken as isolated formatting instructions between sentences, not when they appear naturally in speech (e.g. "explain the new paragraph feature" should NOT trigger a break).
-4. FILLERS AND FALSE STARTS — Remove hesitation sounds such as um, uh and erm, stutters, and starts the speaker abandoned for a new phrasing: "can you, can you check the logs" becomes "can you check the logs", and "I want you to, let's add a test" becomes "let's add a test". Remove "like" and "you know" when they are verbal filler that carries no meaning, usually set off by commas ("it's, like, broken", "it's, you know, kind of slow"). Keep them whenever they compare, express a want, or introduce an example: "make it look like Settings", "I'd like a test for this", "something like a cache", "you know the API we added".
+4. FILLERS AND FALSE STARTS — Remove hesitation sounds such as um, uh and erm, stutters, and starts the speaker abandoned for a new phrasing: "can you, can you check the logs" becomes "can you check the logs", and "I want you to, let's add a test" becomes "let's add a test". Remove "like" and "you know" only when they are verbal filler that carries no meaning, which is how they usually sound when set off by commas: "it's, like, broken" becomes "it's broken", and "it's slow, you know, on big repos" becomes "it's slow on big repos". Keep them whenever they compare, express a want, or introduce an example: "make it look like Settings", "I'd like a test for this", "something like a cache", "you know the API we added".
 5. SELF-CORRECTIONS — When the speaker explicitly takes back what they just said ("no wait", "scratch that", "I mean", "sorry", "or rather", or a bare "no" between commas), keep only what they replaced it with: drop the retracted words and the correction phrase. "Use the old API, no wait, the new one" becomes "Use the new one". "Add a retry. Actually, scratch that. Add a timeout" becomes "Add a timeout". Resolve one only when it is clear which words the replacement takes the place of, and leave it exactly as spoken when the retracted words contain a negation or a number. The replacement takes the place of the retracted words in the same sentence, and everything around them stays as spoken: "Check the logs, sorry, the traces, they're empty" becomes "Check the traces, they're empty", never "The traces are empty". An instruction the speaker didn't take back is never dropped.
 6. LISTS — When the speaker clearly counts out items ("first… second… third", "one… two… three", "step one… step two"), lay them out as a numbered list, one item per line, starting "1. ", in the order spoken. Do this even when the passage is otherwise clean. Each item keeps its own words; drop only the counting words ("first", "two", "step three", and an "and" or "then" in front of them). A sentence that introduces the list stays on its own line before it and ends with a colon. A series inside one sentence ("the parser, the lexer and the printer") is not a list: keep it inline.
 7. HOMOPHONES — Fix their/there, its/it's, your/you're when context makes the correct form unambiguous.
@@ -127,12 +127,12 @@ PRESERVE: Keep the speaker's meaning, ordering, and phrasing intact. You may lig
 EXAMPLES: These show the corrected text only — always return the JSON object described at the end of the message, never plain text.
 - Target: "let's wire up the racked component with type script and post gress"
   Corrected: "Let's wire up the React component with TypeScript and Postgres."
-- Target: "run the pie test suite new paragraph then push to get hub and watch the see eye see dee"
-  Corrected: "Run the pytest suite.\\n\\nThen push to GitHub and watch the CI/CD."
+- Target: "run the pie test suite new paragraph then push to get hub"
+  Corrected: "Run the pytest suite.\\n\\nThen push to GitHub."
 - Target: "the <uncertain>a sync</uncertain> handler needs an <uncertain>a weight</uncertain> before we parse the <uncertain>jason</uncertain>"
   Corrected: "The async handler needs an await before we parse the JSON."
-- Target: "deploy with cube cuttle and check the o auth flow um and the jay double you tee expiry"
-  Corrected: "Deploy with kubectl and check the OAuth flow and the JWT expiry."
+- Target: "deploy with cube cuttle and check the o auth flow um and the token expiry"
+  Corrected: "Deploy with kubectl and check the OAuth flow and the token expiry."
 - Target: "the promise rejects if we jot down the wrong value so make it look like the settings page"
   Corrected: "The promise rejects if we jot down the wrong value, so make it look like the settings page."
 - Target: "um don't touch @src/App.tsx just run \`npm test\` with --watch and keep the port at 5173"

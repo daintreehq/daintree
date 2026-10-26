@@ -559,6 +559,30 @@ describe("VoiceCorrectionService", () => {
       expect(result.confirmedText).toBe(rawText);
     });
 
+    it.each([
+      [
+        "a resolved self-correction",
+        "Use the old API, no wait, the new one for the session refresh.",
+        "Use the new one for the session refresh.",
+      ],
+      [
+        "a spoken list laid out on its own lines",
+        "Two things. One, bump the timeout. And two, log the retries.",
+        "Two things:\n1. Bump the timeout.\n2. Log the retries.",
+      ],
+    ])("applies %s", async (_label, rawText, corrected) => {
+      const result = await correctWith(rawText, { corrected_text: corrected });
+      expect(result.action).toBe("replace");
+      expect(result.confirmedText).toBe(corrected);
+    });
+
+    it("keeps a self-correction as spoken when it would drop a negation", async () => {
+      const rawText = "Don't push to main, no wait, push to the release branch.";
+      const result = await correctWith(rawText, { corrected_text: "Push to the release branch." });
+      expect(result.action).toBe("no_change");
+      expect(result.confirmedText).toBe(rawText);
+    });
+
     it("keeps protected spans byte for byte through an accepted cleanup", async () => {
       const rawText = "um so check @src/App.tsx and run `npm test` with --watch on port 5173";
       const result = await correctWith(rawText, {

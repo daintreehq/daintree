@@ -4,6 +4,8 @@ import {
   findProtectedRanges,
   validateCorrection,
 } from "../voiceCorrectionGuard.js";
+import { CORE_CORRECTION_PROMPT } from "../../../shared/config/voiceCorrection.js";
+import { DICTATED_PROMPTS } from "./fixtures/dictatedPrompts.js";
 
 // How much slower a run on 8x the input is than on 1x. Linear work scales by
 // about 8 and quadratic by about 64, whatever the runner's speed, so a ratio
@@ -217,5 +219,156 @@ describe("validateCorrection", () => {
     ],
   ])("rejects %s", (_label, raw, corrected, reason) => {
     expect(validateCorrection(raw, corrected)).toEqual({ ok: false, reason });
+  });
+});
+
+describe("validateCorrection on self-corrections and lists", () => {
+  it.each(
+    DICTATED_PROMPTS.flatMap(({ name, raw, expected }) =>
+      expected.map((corrected) => [name, raw, corrected] as const)
+    )
+  )("accepts the expected cleanup of the dictated prompt: %s", (_name, raw, corrected) => {
+    expect(validateCorrection(raw, corrected)).toEqual({ ok: true });
+  });
+
+  it.each([
+    [
+      "a retraction that restarts a long phrase",
+      "Point the client at the old staging server, no wait, at the local one.",
+      "Point the client at the local one.",
+    ],
+    [
+      "a retraction of the previous sentence",
+      "Add a retry around the fetch call and log every attempt. Scratch that. Add a timeout.",
+      "Add a timeout.",
+    ],
+    [
+      "a retracted name with no repeated word",
+      "Rename the helper to formatDate, I mean formatDateTime, and update every caller.",
+      "Rename the helper to formatDateTime, and update every caller.",
+    ],
+    [
+      "a retraction beside a negation it leaves alone",
+      "Don't touch the old migration files, I mean the seed files, just regenerate them.",
+      "Don't touch the seed files, just regenerate them.",
+    ],
+    [
+      "a list counted with digits",
+      "Two fixes. Step 1, pin the version. Step 2, rerun the install.",
+      "Two fixes:\n1. Pin the version.\n2. Rerun the install.",
+    ],
+    [
+      "a list laid out with bullets",
+      "Check three things. First, the logs. Then, the traces. And finally, the metrics.",
+      "Check three things:\n- The logs.\n- The traces.\n- The metrics.",
+    ],
+    [
+      "list items that keep their own numbers",
+      "First, retry 3 times. Second, wait 500 ms between tries.",
+      "1. Retry 3 times.\n2. Wait 500 ms between tries.",
+    ],
+  ])("accepts %s", (_label, raw, corrected) => {
+    expect(validateCorrection(raw, corrected)).toEqual({ ok: true });
+  });
+
+  it.each([
+    [
+      "a retraction used to drop earlier instructions",
+      "Update the README with the install steps and bump the version and tag the release, I mean the changelog.",
+      "The changelog.",
+      "edit_size",
+    ],
+    [
+      "a retraction that drops the verb before the retracted words",
+      "Please check and then rebuild the useAuth hook, sorry, the useSession hook.",
+      "The useSession hook.",
+      "edit_size",
+    ],
+    [
+      "a negation inside the retracted words",
+      "Don't push to main, no wait, push to the release branch.",
+      "Push to the release branch.",
+      "negation",
+    ],
+    [
+      "a number inside the retracted words",
+      "Retry 3 times, no wait, 5 times.",
+      "Retry 5 times.",
+      "number",
+    ],
+    [
+      "a literal no wait dropped",
+      "Make sure there's no wait between the retries.",
+      "Make sure there's between the retries.",
+      "negation",
+    ],
+    [
+      "a no that answers a question",
+      "Do we need a migration? No, just update the model.",
+      "Just update the model.",
+      "negation",
+    ],
+    [
+      "words before a marker inside backticks",
+      "Delete the archived build logs from last week `no wait`, the fresh ones.",
+      "Delete `no wait`, the fresh ones.",
+      "edit_size",
+    ],
+    [
+      "words before the restart of a repeated phrase",
+      "Put the big blue submit button in the header, no wait, the footer.",
+      "Put the footer.",
+      "edit_size",
+    ],
+    [
+      "a list that drops an item",
+      "First, fix the parser. Second, update the docs and the changelog. Third, bump the version.",
+      "1. Fix the parser.\n2. Bump the version.",
+      "edit_size",
+    ],
+    [
+      "list numbers that skip",
+      "One, add a test. Two, fix the bug.",
+      "1. Add a test.\n3. Fix the bug.",
+      "number",
+    ],
+    [
+      "a count turned into a list number",
+      "Start one worker, then two more.",
+      "1. Start one worker.\n2. Then more.",
+      "number",
+    ],
+    [
+      "counting words dropped without a list",
+      "First, fix the parser. Second, update the docs. Third, bump the version. Fourth, tag it. Fifth, ship it.",
+      "Fix the parser. Update the docs. Bump the version. Tag it. Ship it.",
+      "edit_size",
+    ],
+  ])("rejects %s", (_label, raw, corrected, reason) => {
+    expect(validateCorrection(raw, corrected)).toEqual({ ok: false, reason });
+  });
+
+  it("accepts every worked example the prompt teaches", () => {
+    const unquote = (text: string) =>
+      text
+        .replace(/\\n/g, "\n")
+        .replace(/<\/?uncertain>/g, "")
+        .replace(/\\`/g, "`");
+    const examples = [
+      ...CORE_CORRECTION_PROMPT.matchAll(/- Target: "(.*)"\n {2}Corrected: "(.*?)"(?: \(|$)/gm),
+    ];
+    expect(examples.length).toBeGreaterThan(10);
+    for (const [, target, corrected] of examples) {
+      expect(validateCorrection(unquote(target), unquote(corrected)), target).toEqual({ ok: true });
+    }
+  });
+
+  it("checks a long passage full of self-corrections quickly", () => {
+    const sentence = "Use the old cache, no wait, the new one, and log it. ";
+    const raw = sentence.repeat(220);
+    const corrected = "Use the new one, and log it. ".repeat(220);
+    const started = performance.now();
+    validateCorrection(raw, corrected);
+    expect(performance.now() - started).toBeLessThan(200);
   });
 });

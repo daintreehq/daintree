@@ -908,6 +908,16 @@ describe("getVoiceSettings migration", () => {
     expect(vi.mocked(store.set)).not.toHaveBeenCalled();
   });
 
+  it("reads cleanup as on when the store never recorded a choice, and keeps a stored off", async () => {
+    const { store } = await import("../../../store.js");
+    vi.mocked(store.get)
+      .mockReturnValueOnce({ enabled: true, openaiApiKey: "sk-present" })
+      .mockReturnValueOnce({ enabled: true, openaiApiKey: "sk-present", correctionEnabled: false });
+
+    expect(getVoiceSettings().correctionEnabled).toBe(true);
+    expect(getVoiceSettings().correctionEnabled).toBe(false);
+  });
+
   it("does not overwrite an existing openaiApiKey when legacy fields are present", async () => {
     const { store } = await import("../../../store.js");
     vi.mocked(store.get).mockReturnValueOnce({
