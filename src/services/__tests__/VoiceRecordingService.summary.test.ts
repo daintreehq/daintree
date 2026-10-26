@@ -434,11 +434,37 @@ describe("VoiceRecordingService — session summary (#14617)", () => {
     await flushPromises();
     connected.resolve({ status: "started" });
     await flushPromises();
+    // Another view's start then replaces the first in main, which also ends
+    // this view's start still waiting on its prompt (#14600).
     harness.emit("ended", { sessionId: first, reason: "superseded", report: REPORT });
+    await flushPromises();
     harness.paintFrames();
 
     expect(summaries()).toMatchObject([
       { sessionId: first, stopReason: "retarget", backendEnd: "superseded" },
+      { stopReason: "superseded", backendEnd: "none" },
+    ]);
+  });
+
+  it("logs a session another view's start replaced as superseded", async () => {
+    const harness = setupGlobals({ reportOnStop: false });
+    const { service, summaries } = await load();
+    const sessionId = await startLive(harness, service);
+    harness.emit("complete", { sessionId, text: DICTATED, itemId: "item-1" });
+    harness.paintFrames();
+    // Main drains it for the other view's start, then ends it.
+    harness.emit("status", { sessionId, status: "finishing" });
+    await vi.waitFor(() => expect(harness.voiceInput.stop).toHaveBeenCalledWith(sessionId));
+    harness.emit("ended", { sessionId, reason: "superseded", report: REPORT });
+    await flushPromises();
+
+    expect(summaries()).toMatchObject([
+      {
+        sessionId,
+        stopReason: "superseded",
+        backendEnd: "superseded",
+        charsCommitted: DICTATED.length,
+      },
     ]);
   });
 

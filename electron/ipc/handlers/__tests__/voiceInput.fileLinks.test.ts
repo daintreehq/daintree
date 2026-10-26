@@ -516,6 +516,7 @@ describe("voiceInput — spoken file references", () => {
     expect(owner.sent.map((m) => m.payload)).toContainEqual({
       sessionId: "a",
       reason: "superseded",
+      report: expect.objectContaining({ completedSegments: 1 }),
     });
     expect(fileReferences(other)).toEqual([]);
     expect(shared.currentView.sent).toEqual([]);
