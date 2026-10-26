@@ -3558,7 +3558,7 @@ describe("OpenAITranscriptionProvider — reconnect replay (#14605)", () => {
       if (e.type === "error") errors.push(e.error.code);
     });
     const { socket: first } = await bringSessionReady(service);
-    void service.start(BASE_SETTINGS);
+    void service.start(BASE_SETTINGS, "session-2");
     await Promise.resolve();
     first.simulateClose(1000);
 
