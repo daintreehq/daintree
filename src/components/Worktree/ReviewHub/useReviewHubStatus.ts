@@ -44,8 +44,9 @@ interface CaptureLane {
   session: Session;
   running: boolean;
   again: boolean;
-  /** Sends a status read if the capture is still running when it fires. */
+  /** Sends a status read if the capture is still running when it fires; once per run. */
   timer: ReturnType<typeof setTimeout> | null;
+  earlyReadSent: boolean;
 }
 
 /**
@@ -86,8 +87,18 @@ export function useReviewHubStatus({ isOpen, worktreePath, worktreeId }: UseRevi
   // a worktree switch: a capture from another opening is never shown with this
   // one's reads.
   const sessionRef = useRef<Session>({ live: false });
+  // The worktree the subscription is open on. A callback a staging action held
+  // across a worktree switch still reads its own worktree, and that read must
+  // never land in this one's list.
+  const openPathRef = useRef<string | null>(null);
   const latestCaptureRef = useRef<{ path: string; capture: ReviewHubCapture } | null>(null);
   const laneRef = useRef<CaptureLane | null>(null);
+
+  /** Whether a read of `path` belongs to the worktree open now; true before any opening. */
+  const isOpenPath = useCallback((path: string): boolean => {
+    const open = openPathRef.current;
+    return open === null || open === path;
+  }, []);
 
   /** The capture a read of `path` sent now may show. */
   const captureForRead = useCallback((path: string): ReviewHubCapture | null => {
@@ -106,7 +117,11 @@ export function useReviewHubStatus({ isOpen, worktreePath, worktreeId }: UseRevi
     try {
       const result = await window.electron.git.getStagingStatus(worktreePath);
       rememberStagingStatus(worktreePath, result, readSeq);
-      if (refreshIdRef.current === requestId && publishSeq > publishedSeqRef.current) {
+      if (
+        refreshIdRef.current === requestId &&
+        publishSeq > publishedSeqRef.current &&
+        isOpenPath(worktreePath)
+      ) {
         publishedSeqRef.current = publishSeq;
         setStatusIsFresh(true);
         setStatus(result);
@@ -121,7 +136,7 @@ export function useReviewHubStatus({ isOpen, worktreePath, worktreeId }: UseRevi
         setLoading(false);
       }
     }
-  }, [worktreePath, captureForRead]);
+  }, [worktreePath, captureForRead, isOpenPath]);
 
   const backgroundRefresh = useCallback(async () => {
     if (!worktreePath) return;
@@ -133,7 +148,11 @@ export function useReviewHubStatus({ isOpen, worktreePath, worktreeId }: UseRevi
     try {
       const result = await window.electron.git.getStagingStatus(worktreePath);
       rememberStagingStatus(worktreePath, result, readSeq);
-      if (bgRefreshIdRef.current === requestId && publishSeq > publishedSeqRef.current) {
+      if (
+        bgRefreshIdRef.current === requestId &&
+        publishSeq > publishedSeqRef.current &&
+        isOpenPath(worktreePath)
+      ) {
         publishedSeqRef.current = publishSeq;
         setStatusIsFresh(true);
         setStatus(result);
@@ -147,7 +166,7 @@ export function useReviewHubStatus({ isOpen, worktreePath, worktreeId }: UseRevi
         setIsBackgroundRefreshing(false);
       }
     }
-  }, [worktreePath, captureForRead]);
+  }, [worktreePath, captureForRead, isOpenPath]);
 
   /**
    * Capture, then read status once the capture lands, or once it's taken too
@@ -169,11 +188,13 @@ export function useReviewHubStatus({ isOpen, worktreePath, worktreeId }: UseRevi
       const lane: CaptureLane =
         current && current.session === session && current.running
           ? current
-          : { session, running: false, again: false, timer: null };
-      if (lane.timer === null) {
+          : { session, running: false, again: false, timer: null, earlyReadSent: false };
+      if (lane.timer === null && !lane.earlyReadSent) {
         lane.timer = setTimeout(() => {
           lane.timer = null;
-          if (lane.running && session.live) void backgroundRefresh();
+          if (!lane.running || !session.live) return;
+          lane.earlyReadSent = true;
+          void backgroundRefresh();
         }, CAPTURE_WAIT_MS);
       }
       if (lane.running) {
@@ -205,6 +226,7 @@ export function useReviewHubStatus({ isOpen, worktreePath, worktreeId }: UseRevi
     if (!isOpen) return;
     const session: Session = { live: true };
     sessionRef.current = session;
+    openPathRef.current = worktreePath;
     latestCaptureRef.current = null;
 
     const debouncedBgRefresh = debounce(() => readWithCapture(), 800);

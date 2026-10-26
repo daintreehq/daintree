@@ -558,6 +558,44 @@ describe("Review Hub review marks (#14585)", () => {
     expect(bridge.capture).toHaveBeenLastCalledWith(other);
   });
 
+  it("never shows the previous worktree's rows, or its capture, after a switch", async () => {
+    const other = "/home/user/other-wt";
+    worktreeStoreData.current.set(other, {
+      id: other,
+      path: other,
+      name: "other",
+      branch: "feature/other",
+      isCurrent: false,
+      worktreeChanges: null,
+      lastActivityTimestamp: null,
+    });
+    const otherStatus: StagingStatus = {
+      ...status,
+      unstaged: [{ path: "src/other.ts", status: "modified", insertions: 1, deletions: 0 }],
+    };
+    getStagingStatus.mockImplementation(async (path: string) =>
+      path === WT ? status : otherStatus
+    );
+    const staging = deferred<void>();
+    window.electron.git.stageFile = vi.fn().mockReturnValue(staging.promise);
+    const view = renderHub();
+    await markButtonReady();
+    // Staging a row in the first worktree holds its refresh until git answers.
+    fireEvent.click(screen.getByRole("button", { name: "Stage src/app.ts" }));
+
+    view.rerender(
+      <ReviewHubContent isOpen={true} worktreePath={other} panelId="review-1" onClose={vi.fn()} />
+    );
+    await screen.findByText("other.ts");
+    await act(async () => staging.resolve());
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
+    });
+
+    expect(screen.queryByText("app.ts")).toBeNull();
+    expect(screen.getByText("other.ts")).not.toBeNull();
+  });
+
   it("says the comparison failed once other windows' keep replacing it, and offers Retry", async () => {
     vi.spyOn(Math, "random").mockReturnValue(0);
     useReviewMarksStore.setState({ marks: { [WT]: summary(2) }, revision: 2, loaded: true });

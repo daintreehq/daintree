@@ -122,8 +122,10 @@ export function useReviewHubMark({
       if (noticeForRef.current !== revision) return;
       const derived = reviewMarkNoticeFor(outcome);
       // The worktree moved while this one ran, so it may have missed a change;
-      // a later comparison settles the notice unless this one found something.
-      if (!fresh && derived === null) return;
+      // a later comparison settles the notice unless this one already named some.
+      const named =
+        derived?.kind === "not-covered" && (derived.paths.length > 0 || derived.commits > 0);
+      if (!fresh && !named) return;
       noticeForRef.current = null;
       setNoticeFor(null);
       setNotice(derived ? { markRevision: revision, notice: derived } : null);
@@ -248,6 +250,10 @@ export function useReviewHubMark({
       }
       return;
     }
+    // Every view clears its own as the new mark reaches it; this one may not
+    // count the reply as new when it's the first snapshot the view adopts. The
+    // mark is saved whether or not this hub is still open to see it.
+    if (outcome.status === "saved") useDiffViewedStore.getState().clearWorktree(worktreePath);
     if (!session.live) return;
     setIsMarking(false);
     // Every capture held now names a revision from before this write, so the
@@ -258,9 +264,6 @@ export function useReviewHubMark({
       onFailure(failure);
       return;
     }
-    // Every view clears its own as the new mark reaches it; this one may not
-    // count the reply as new when it's the first snapshot the view adopts.
-    useDiffViewedStore.getState().clearWorktree(worktreePath);
     const saved = outcome.snapshot.marks[worktreeId]?.revision ?? null;
     noticeForRef.current = saved;
     setNoticeFor(saved);
