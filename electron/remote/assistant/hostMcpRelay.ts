@@ -174,7 +174,11 @@ export function installHostMcpRelay(
         };
         return runner.call(spec, payload);
       };
-    session.registerCallHandler(AssistantLinkMethod.MCP_CALL, McpCallPayloadSchema, relayCall(false));
+    session.registerCallHandler(
+      AssistantLinkMethod.MCP_CALL,
+      McpCallPayloadSchema,
+      relayCall(false)
+    );
     // The Shell's global Assistant (#14545): which method a call came by is
     // the Shell runtime's word, since nothing the model passes picks it.
     session.registerCallHandler(

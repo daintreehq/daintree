@@ -468,7 +468,12 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
 
     describe("whose the call is (#14545)", () => {
       beforeEach(() => {
-        runs.set("g", { ...RUN_A, projectId: GLOBAL_ASSISTANT_ID, sessionId: "g", terminalId: "t-g" });
+        runs.set("g", {
+          ...RUN_A,
+          projectId: GLOBAL_ASSISTANT_ID,
+          sessionId: "g",
+          terminalId: "t-g",
+        });
         relayCall.mockResolvedValue({
           status: "done",
           result: { isError: false, structured: null, text: "ok" },
@@ -490,7 +495,10 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
         await runtime.call("g", remote, { tier: "core" });
         await runtime.call("a", remote, { tier: "core" });
 
-        expect(relayCall.mock.calls.map(([, payload]) => payload.global)).toEqual([true, undefined]);
+        expect(relayCall.mock.calls.map(([, payload]) => payload.global)).toEqual([
+          true,
+          undefined,
+        ]);
       });
 
       it("takes it from the caller's own lane, never from anything the model passes", async () => {

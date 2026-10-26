@@ -137,11 +137,17 @@ describe("HostControlLinkClient.relayCall for the global Assistant (#14545)", ()
       AssistantLinkMethod.AUTHENTICATE,
       AssistantLinkMethod.GLOBAL_MCP_CALL,
     ]);
-    expect(calls[1]).toEqual({ method: AssistantLinkMethod.GLOBAL_MCP_CALL, payload: PAYLOAD, timeoutMs: 105_000 });
+    expect(calls[1]).toEqual({
+      method: AssistantLinkMethod.GLOBAL_MCP_CALL,
+      payload: PAYLOAD,
+      timeoutMs: 105_000,
+    });
   });
 
   it("sends a project assistant's call as MCP_CALL", async () => {
-    const { relay, calls } = client((method) => (method === AssistantLinkMethod.MCP_CALL ? DONE : null));
+    const { relay, calls } = client((method) =>
+      method === AssistantLinkMethod.MCP_CALL ? DONE : null
+    );
 
     await relay.relayCall("studio", PAYLOAD, 105_000);
 
