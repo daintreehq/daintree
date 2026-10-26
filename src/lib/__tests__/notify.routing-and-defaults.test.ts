@@ -943,6 +943,19 @@ describe("notify() — thread re-promotion (#9008)", () => {
     expect(urgentEntry?.seenAsToast).toBe(false);
   });
 
+  it("routes one main already paged for natively as a blurred window would, though focused", () => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    seedThread([
+      seedEntry({ type: "info", correlationId: "build", archivedAt: Date.now() - 5000 }),
+    ]);
+    notify({ type: "info", correlationId: "build", message: "Paged", pagedNatively: true });
+    expect(useNotificationStore.getState().notifications).toHaveLength(0);
+    const paged = useNotificationHistoryStore
+      .getState()
+      .entries.find((e) => e.message === "Paged");
+    expect(paged?.seenAsToast).toBe(false);
+  });
+
   it("excludes archived entries from the escalation baseline", () => {
     // Active worst is "info"; an old archived "error" must not block escalation.
     seedThread([

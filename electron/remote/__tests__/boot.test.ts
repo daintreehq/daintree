@@ -52,6 +52,7 @@ const m = vi.hoisted(() => {
   const client = {
     client: {
       connect: vi.fn(),
+      openHostForNotice: vi.fn(async (_windowId: number | null, _notice: unknown) => ({})),
       list: vi.fn(() => hostEntries),
       isDisconnectedByPerson: vi.fn((hostId: string) => hostId === "control-on"),
     },
@@ -592,6 +593,16 @@ describe("startRemoteHosts", () => {
     expect(m.clientOpenedListeners.size).toBe(0);
     // Both boot paths already started the workspace client; boot never starts one.
     expect(m.ensureWorkspaceClient).not.toHaveBeenCalled();
+  });
+
+  it("opens a host from a banner about one of its agents through the Remote Hosts client", async () => {
+    await startRemoteHosts({ hostMode: false });
+    const [options] = metrics.installHostMetricsClient.mock.calls[0] as [
+      { openHostForNotice(windowId: number | null, notice: unknown): Promise<unknown> },
+    ];
+    const notice = { hostId: "studio-01", projectId: null, terminalId: "t1" };
+    await options.openHostForNotice(3, notice);
+    expect(m.client.client.openHostForNotice).toHaveBeenCalledWith(3, notice);
   });
 
   it("installs host control from start, reading each host's switch live", async () => {

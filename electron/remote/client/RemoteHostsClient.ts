@@ -342,7 +342,7 @@ function hostIdOf(payload: unknown): HostId {
 export class RemoteHostsClient {
   private routerInstalled = false;
   private readonly watchedWindows = new Set<number>();
-  /** New windows opened onto a host with no project there: the host whose list each offers. */
+  /** Windows with a host's project list to offer, as nothing there to return to left them. */
   private readonly projectOffers = new Map<number, HostId>();
   /** Each window's newest switch request; abandoning it settles the wait it is in. */
   private readonly switchTickets = new Map<number, { seq: number; abandon: () => void }>();
@@ -661,7 +661,7 @@ export class RemoteHostsClient {
   }
 
   /**
-   * The host whose project list the sender's window was opened to offer, handed
+   * The host whose project list the sender's window was left to offer, handed
    * out once: a send before the view listened would be lost, so the view asks.
    * Null when there is none, or the host has since been removed.
    */
@@ -808,6 +808,41 @@ export class RemoteHostsClient {
       });
     }
     return this.switchWindow(null, { hostId, newWindow: true, projectId: project.id });
+  }
+
+  /**
+   * Open a host for a click on a banner about one of its agents, in the
+   * window last in use or, with none open, a new one: the notice's project
+   * with that agent's pane focused, or for a notice that named none, the
+   * project this machine last had open there, else the host's project list.
+   * The window comes forward first, so the switch's screen is in sight, and
+   * since a person clicked, a failure stays there with its Retry.
+   */
+  async openHostForNotice(
+    windowId: number | null,
+    notice: { hostId: HostId; projectId: string | null; terminalId: string }
+  ): Promise<SwitchWindowHostResult> {
+    const { hostId, projectId, terminalId } = notice;
+    const target = windowId ?? (await this.options.windows.openWindow());
+    this.options.windows.revealWindow?.(target);
+    const result = await this.switchWindow(
+      target,
+      projectId === null
+        ? { hostId, newWindow: false }
+        : {
+            hostId,
+            newWindow: false,
+            projectId,
+            focusIntent: { intent: "focus-panel", panelId: terminalId },
+          },
+      undefined,
+      { failureOnScreen: true }
+    );
+    if (result.outcome === "choose-project") {
+      this.holdProjectOffer(target, hostId);
+      this.options.windows.notifyWindow?.(target, { type: "project-offer" });
+    }
+    return result;
   }
 
   /**
@@ -1245,8 +1280,7 @@ export class RemoteHostsClient {
       // the host's behind it made a window whose calls went to the host while
       // its chip, copy and pickers all said This Mac.
       const offerProjects = (): SwitchWindowHostResult => {
-        this.projectOffers.set(windowId, hostId);
-        this.options.windows.watchWindow(windowId, () => this.projectOffers.delete(windowId));
+        this.holdProjectOffer(windowId, hostId);
         this.options.windows.offerHostProjects?.(windowId);
         return { outcome: "window-opened", hostId };
       };
@@ -1513,7 +1547,7 @@ export class RemoteHostsClient {
     };
   }
 
-  /** Forget a window's binding, switch tickets and pending switch when it closes. */
+  /** Forget a window's binding, switch tickets, pending switch and project offer when it closes. */
   private watchClosing(windowId: number): void {
     if (this.watchedWindows.has(windowId)) return;
     this.watchedWindows.add(windowId);
@@ -1523,8 +1557,15 @@ export class RemoteHostsClient {
       this.switchTickets.delete(windowId);
       this.pendingSwitches.delete(windowId);
       this.committedSwitches.delete(windowId);
+      this.projectOffers.delete(windowId);
       this.options.bindings.release(windowId);
     });
+  }
+
+  /** Hold a host's project list for `windowId`'s view to take ({@link takeProjectOffer}). */
+  private holdProjectOffer(windowId: number, hostId: HostId): void {
+    this.projectOffers.set(windowId, hostId);
+    this.watchClosing(windowId);
   }
 
   /** Tell a window's views where its switch is, and remember it for one that asks. */

@@ -351,6 +351,12 @@ interface NotifyPayloadBase {
    * hours would for a local event.
    */
   sourceHostPolicy?: { quiet: boolean };
+  /**
+   * Main already paged for this with a native banner, finding no window
+   * focused. It routes as it would in a blurred window, so one focused while
+   * it was on its way doesn't toast it as well.
+   */
+  pagedNatively?: boolean;
   /** Fires exactly once when the user explicitly dismisses the toast via the close or action button */
   onDismiss?: () => void;
   /**
@@ -1077,7 +1083,8 @@ export function notify(payload: NotifyPayload): string {
     });
   }
 
-  const isFocused = typeof document !== "undefined" ? document.hasFocus() : true;
+  const isFocused =
+    payload.pagedNatively !== true && (typeof document !== "undefined" ? document.hasFocus() : true);
 
   const originVisible =
     payload.suppressWhenOriginVisible === true &&

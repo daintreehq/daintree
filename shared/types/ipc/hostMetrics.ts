@@ -29,6 +29,12 @@ export interface HostAttentionEvent {
    * session mute.
    */
   quiet: boolean;
+  /**
+   * Main already paged for it with a banner, finding no window here focused:
+   * the view records it as a blurred window would, so a window focused while
+   * it was on its way doesn't toast it as well.
+   */
+  pagedNatively?: true;
 }
 
 /**

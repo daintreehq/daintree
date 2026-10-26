@@ -5,9 +5,11 @@ import type {
 } from "../../../shared/types/ipc/hostMetrics.js";
 import type { HostId } from "../../../shared/types/remoteHosts.js";
 import { CHANNELS } from "../../ipc/channels.js";
+import { createLogger } from "../../utils/logger.js";
 import { getAllAppWebContents } from "../../window/webContentsRegistry.js";
 import { getWindowRegistry } from "../../window/windowRef.js";
 import { setHostAgentsSource } from "../client/initClient.js";
+import { showHostAttentionBanner } from "../hybrid/notifications.js";
 import { registerRemoteService } from "../runtime.js";
 import { HostMetricsClient, type HostMetricsClientOptions } from "./client.js";
 import {
@@ -23,6 +25,8 @@ declare module "../runtime.js" {
     hostMetrics: HostMetricsClient;
   }
 }
+
+const logger = createLogger("main:hostMetrics");
 
 function sendTo(wc: WebContents, event: HostMetricsEvent): boolean {
   if (wc.isDestroyed()) return false;
@@ -61,14 +65,66 @@ function deliverToOneView(
   return false;
 }
 
+/**
+ * Whether this screen is paged with a banner for an attention event: no
+ * window here has focus, and none shows that host, whose own notifications
+ * reach it. The host's quiet hours keep it to the inbox.
+ */
+function pagesNatively(
+  event: HostAttentionEvent,
+  hostForView: (webContentsId: number) => HostId | null
+): boolean {
+  if (event.quiet) return false;
+  for (const ctx of getWindowRegistry()?.all() ?? []) {
+    if (ctx.browserWindow.isDestroyed()) continue;
+    if (ctx.browserWindow.isFocused()) return false;
+    const wc = ctx.services.projectViewManager?.getActiveView()?.webContents;
+    if (wc && !wc.isDestroyed() && hostForView(wc.id) === event.hostId) return false;
+  }
+  return true;
+}
+
+/** A notice about one of a host's agents, as a click on its banner opens it. */
+export interface HostNotice {
+  hostId: HostId;
+  projectId: string | null;
+  terminalId: string;
+}
+
 export interface InstallHostMetricsClientOptions {
   manager: HostMetricsClientOptions["manager"];
   registry: HostMetricsClientOptions["registry"];
   hostForView(webContentsId: number): HostId | null;
+  /** Open the notice's host in `windowId`, or a new window when null. */
+  openHostForNotice(windowId: number | null, notice: HostNotice): Promise<unknown>;
 }
 
 /** Start the Shell side: summary links to every known host, the rings, and the IPC service. */
 export function installHostMetricsClient(options: InstallHostMetricsClientOptions): () => void {
+  let live = true;
+  const open = (notice: HostNotice): void => {
+    // A banner can outlive this Shell side, or the host it was about.
+    if (!live || !options.registry.get(notice.hostId)) return;
+    const target =
+      getWindowRegistry()
+        ?.focusOrder()
+        .find((ctx) => !ctx.browserWindow.isDestroyed()) ?? null;
+    options.openHostForNotice(target?.windowId ?? null, notice).catch((error: unknown) => {
+      // A failed switch says so on the window's own switch screen.
+      logger.warn("Couldn't open a host from its notice", { error });
+    });
+  };
+  const deliverAttention = (event: HostAttentionEvent): boolean => {
+    if (!live) return false;
+    if (!pagesNatively(event, options.hostForView)) {
+      return deliverToOneView(event, options.hostForView);
+    }
+    const { hostId, projectId, terminalId } = event;
+    showHostAttentionBanner(event, () => open({ hostId, projectId, terminalId }));
+    // The inbox still keeps it, as a local agent's wait is kept beside its banner.
+    deliverToOneView({ ...event, pagedNatively: true }, options.hostForView);
+    return true;
+  };
   const client = new HostMetricsClient({
     manager: options.manager,
     registry: options.registry,
@@ -76,7 +132,7 @@ export function installHostMetricsClient(options: InstallHostMetricsClientOption
     emit(event) {
       for (const wc of getAllAppWebContents()) sendTo(wc, event);
     },
-    deliverAttention: (event) => deliverToOneView(event, options.hostForView),
+    deliverAttention,
     local: {
       listFleetTargets: listLocalFleetTargets,
       submitFleet: submitLocalFleet,
@@ -95,6 +151,7 @@ export function installHostMetricsClient(options: InstallHostMetricsClientOption
   const unregister = registerRemoteService("hostMetrics", client);
   setHostAgentsSource((hostId) => client.observedAgents(hostId));
   return () => {
+    live = false;
     setHostAgentsSource(null);
     unregister();
     client.dispose();
