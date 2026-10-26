@@ -458,7 +458,7 @@ describe("CanopyRow", () => {
         titled
       )
     );
-    expect(askLine(summary.container)).toBe("All 14 tests pass.Canopy");
+    expect(askLine(summary.container)).toBe("All 14 tests pass.");
     expect(summary.container.querySelector("[data-detail]")).toBeNull();
     summary.unmount();
     // Nor the screen's own words, before any reading has worded the run.
@@ -713,12 +713,12 @@ describe("CanopyRow", () => {
     const attribution = (container: HTMLElement) =>
       container.querySelector("[data-canopy-attribution]")?.textContent ?? null;
 
-    it("names the reader beside the ask, and says how long ago to a screen reader", () => {
+    it("tags no fresh read beside the ask, and says how long ago to a screen reader", () => {
       const { container } = renderRow(
         itemFor("question", { observedAt: NOW - 2 * 60_000 }, { since: NOW - 3 * 60_000 })
       );
-      expect(attribution(container)).toBe("Canopy");
-      expect(description(container)).toContain("read by canopy 2m ago");
+      expect(attribution(container)).toBeNull();
+      expect(description(container)).toContain("read 2m ago");
     });
 
     it("marks words kept from an earlier screen, and why they are still there", () => {

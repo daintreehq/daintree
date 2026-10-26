@@ -135,8 +135,8 @@ export function firstSentence(text: string): { head: string; rest: string | null
 }
 
 /**
- * Who wrote the words beside it, and how old they are: `Read by Canopy 2m ago`
- * for the reader's words on the screen as it was read, `Earlier screen` — with
+ * How old the reader's words beside it are: `Read 2m ago` for words on the
+ * screen as it was read (inside Canopy the reader needs no naming), `Earlier screen` — with
  * `read failed` or `reading again` as the case may be — for words kept after
  * the run moved on. Null for words that are not the reader's. Never a
  * confidence number: the age is what lets the user judge the reading.
@@ -149,18 +149,19 @@ export function readerAttribution(item: CanopyItem, nowMs: number): string | nul
     if (item.pending) return "Earlier screen, reading again";
     return "Earlier screen";
   }
-  return `Read by Canopy ${formatTimeAgo(card.observedAt, nowMs)}`;
+  return `Read ${formatTimeAgo(card.observedAt, nowMs)}`;
 }
 
 /**
- * The same attribution as a row can afford it: whose words they are, in one
- * word, with the age left to the selected pane — the age is what lets the user
- * judge a reading, and it is the same "just now" down a list read in one pass.
- * Words kept from an earlier screen still say so in full: that is news.
+ * The attribution as a row can afford it: a fresh read says nothing, its age
+ * left to the selected pane and the row's description — it is the same "just
+ * now" down a list read in one pass. Words kept from an earlier screen still
+ * say so in full: that is news.
  */
 export function readerTag(item: CanopyItem, nowMs: number): string | null {
-  const full = readerAttribution(item, nowMs);
-  return full !== null && full.startsWith("Read by Canopy") ? "Canopy" : full;
+  const card = item.card;
+  if (card === null || !(item.stale || card.wordsFromEarlierRead)) return null;
+  return readerAttribution(item, nowMs);
 }
 
 /** When a snooze lifts, as the clock on the wall says it. */
