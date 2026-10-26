@@ -1520,6 +1520,7 @@ export const CHANNELS = {
   FILE_TRANSFER_UPLOAD_LOCAL_FILE: "file-transfer:upload-local-file",
   FILE_TRANSFER_UPLOAD_BYTES: "file-transfer:upload-bytes",
   FILE_TRANSFER_DOWNLOAD: "file-transfer:download",
+  FILE_TRANSFER_GRANT_CLICKED_FILE: "file-transfer:grant-clicked-file",
   FILE_TRANSFER_CANCEL: "file-transfer:cancel",
   FILE_TRANSFER_ANSWER_HOST_PICK: "file-transfer:answer-host-pick",
   FILE_TRANSFER_GET_PREVIEW_CAPABILITY: "file-transfer:get-preview-capability",

@@ -19,6 +19,7 @@ import {
   type SpacedFilePathCandidate,
 } from "./filePathDetection";
 import { fileBrowserClient } from "@/clients/fileBrowserClient";
+import { grantClickedHostFile } from "./clickedHostFile";
 import type { TerminalLink } from "./types";
 
 // Coalesce key for file-link activation failures. A user who scrolls a stack
@@ -1325,6 +1326,7 @@ class FileLink implements ILink {
    * the route, and a panel that can't open falls back to the dialog.
    */
   private async _view(): Promise<void> {
+    await grantClickedHostFile(this._absolutePath);
     // Lazy, like the project store import above: the resolver reads that store.
     const { currentFileEditorDefault } = await import("@/registry/fileEditorDefaults");
     if (currentFileEditorDefault(this._absolutePath) !== null) {

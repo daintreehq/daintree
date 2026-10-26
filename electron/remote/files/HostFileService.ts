@@ -19,6 +19,7 @@ import {
   DOWNLOAD_SINK_PREFIX,
   FileCancelPayloadSchema,
   FileDownloadPayloadSchema,
+  FileGrantClickedPayloadSchema,
   FileLinkMethod,
   FilePullPayloadSchema,
   FileRequestPayloadSchema,
@@ -26,6 +27,7 @@ import {
   STREAM_SINK_PREFIX,
   type FileDownloadPayload,
   type FileDownloadStart,
+  type FileGrantClickedPayload,
   type FilePullPayload,
   type FilePullResult,
   type FileRequestPayload,
@@ -44,7 +46,8 @@ import {
  * project a view may download is a CopyTree bundle the host generated for that
  * same endpoint and project ({@link HostFileService.recordBundle}), and a file it
  * uploaded into the host inbox itself, which it may also preview and read
- * ({@link HostFileService.recordUpload}).
+ * ({@link HostFileService.recordUpload}), and a file the person clicked a link
+ * to in one of the view's terminals ({@link HostFileService.grantClicked}).
  *
  * Capacity (requests, open streams, buffered bytes, downloads) is reserved
  * before any filesystem work and released on every path. Streams and
@@ -60,7 +63,10 @@ export type HostFileEndpoint = Pick<
 export interface HostFileServiceOptions {
   /** Folders a project's previews may be rooted in. */
   rootsFor(projectId: string): Promise<string[]>;
-  isDriving(projectId: string, endpoint: HostFileEndpoint): boolean;
+  isDriving(
+    projectId: string,
+    endpoint: Pick<HostFileEndpoint, "endpointId" | "clientId">
+  ): boolean;
   /** Answers from the opened descriptor; tests substitute it. */
   serve?: typeof serveOpenedContainedFile;
   maxStreamsPerSession?: number;
@@ -77,6 +83,8 @@ export interface HostFileServiceOptions {
   bundleTtlMs?: number;
   /** How long a view's own inbox upload stays readable by it. */
   uploadTtlMs?: number;
+  /** How long a file the person clicked stays readable by the view. */
+  clickedTtlMs?: number;
 }
 
 const DEFAULT_MAX_STREAMS_PER_SESSION = 32;
@@ -91,6 +99,10 @@ const DEFAULT_BUNDLE_TTL_MS = 10 * 60 * 1000;
 const DEFAULT_UPLOAD_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_BUNDLES_PER_ENDPOINT = 8;
 const MAX_UPLOADS_PER_ENDPOINT = 64;
+// Long enough to read the file, reopen the dialog or pin it as a panel; a
+// click on the same link again starts it over.
+const DEFAULT_CLICKED_TTL_MS = 60 * 60 * 1000;
+const MAX_CLICKED_PER_ENDPOINT = 64;
 const MAX_GRANT_ENDPOINTS = 256;
 const MAX_ERROR_TEXT = 1024;
 
@@ -170,6 +182,16 @@ interface RecordedUpload {
   projectId: string;
   expiresAt: number;
   identity: Promise<UploadIdentity | null>;
+}
+
+/**
+ * A file the person opened from a terminal link. Held by path, not identity:
+ * what they asked to see is whatever file is at that path, so a log that grows
+ * or a file an editor saves over stays readable on refresh.
+ */
+interface RecordedClick {
+  projectId: string;
+  expiresAt: number;
 }
 
 function isUpload(stats: import("node:fs").BigIntStats, identity: UploadIdentity): boolean {
@@ -287,6 +309,8 @@ export class HostFileService {
   private readonly bundles = new Map<string, Map<string, RecordedBundle>>();
   /** Host endpoint id → the inbox files it uploaded itself, by exact path. */
   private readonly uploads = new Map<string, Map<string, RecordedUpload>>();
+  /** Host endpoint id → the files the person clicked in its terminals, by exact path. */
+  private readonly clicked = new Map<string, Map<string, RecordedClick>>();
   private bufferedBytes = 0;
   private disposed = false;
 
@@ -304,6 +328,7 @@ export class HostFileService {
           this.endpointSubscriptions.delete(endpoint.endpointId);
           this.bundles.delete(endpoint.endpointId);
           this.uploads.delete(endpoint.endpointId);
+          this.clicked.delete(endpoint.endpointId);
           this.revokeWhere((entry) => entry.endpoint === endpoint);
           files.endpoints.delete(endpoint.clientEndpointId);
         })
@@ -389,6 +414,21 @@ export class HostFileService {
   }
 
   /**
+   * Whether `filePath` is a file the person clicked in one of this endpoint's
+   * terminals, for its current project, while it still drives that project:
+   * what lets a text read reach it outside the project's folders. Text reads
+   * don't otherwise need the lease, but the grant rests on it.
+   */
+  isClicked(
+    endpoint: Pick<ClientEndpoint, "endpointId" | "clientId" | "projectId">,
+    filePath: string
+  ): boolean {
+    if (this.disposed || !endpoint.projectId || !isRequestPath(filePath)) return false;
+    if (!this.options.isDriving(endpoint.projectId, endpoint)) return false;
+    return this.freshClick(endpoint.endpointId, endpoint.projectId, filePath) !== null;
+  }
+
+  /**
    * Whether `candidate` lies in the project's folder or one of its worktrees:
    * the only roots a remote endpoint of that project may name to the host's
    * own file readers.
@@ -440,6 +480,7 @@ export class HostFileService {
     this.endpointSubscriptions.clear();
     this.bundles.clear();
     this.uploads.clear();
+    this.clicked.clear();
   }
 
   private grantsFor<T>(grants: Map<string, Map<string, T>>, endpointId: string): Map<string, T> {
@@ -482,6 +523,11 @@ export class HostFileService {
       ),
       session.registerCallHandler(FileLinkMethod.DOWNLOAD, FileDownloadPayloadSchema, (payload) =>
         this.handleDownload(created, payload)
+      ),
+      session.registerCallHandler(
+        FileLinkMethod.GRANT_CLICKED,
+        FileGrantClickedPayloadSchema,
+        (payload) => this.grantClicked(created, payload)
       ),
       session.onClose(() => {
         for (const dispose of created.unregister.splice(0)) dispose();
@@ -601,6 +647,90 @@ export class HostFileService {
         };
   }
 
+  /**
+   * The person clicked a link to this file in a terminal of the asking view.
+   * The host can't see the click, only that the view drives its project: a
+   * view that drives can already read any file through that project's
+   * terminals, so this widens nothing it could reach, only what the viewer
+   * shows. Regular files only, never through a link at the last step.
+   */
+  private async grantClicked(files: SessionFiles, payload: FileGrantClickedPayload): Promise<null> {
+    if (!isRequestPath(payload.hostPath)) {
+      throw new AppError({ code: "INVALID_PATH", message: "The path must be absolute" });
+    }
+    const admitted = this.admit(files, payload.endpointId);
+    if ("refused" in admitted) {
+      throw admitted.refused === "driven-elsewhere"
+        ? new AppError({
+            code: "DRIVEN_ELSEWHERE",
+            message: "Another window drives this project",
+            userMessage: "Another window has control of this project. Take control to open files.",
+          })
+        : notInProject();
+    }
+    const key = path.normalize(payload.hostPath);
+    const stats = await fs.lstat(key).catch(() => null);
+    if (!stats?.isFile()) {
+      throw new AppError({ code: "NOT_A_FILE", message: "Only files can be opened" });
+    }
+    if (!this.stillAdmitted(files, admitted.endpoint, admitted.projectId)) throw notInProject();
+    boundedSet(
+      this.grantsFor(this.clicked, admitted.endpoint.endpointId),
+      key,
+      {
+        projectId: admitted.projectId,
+        expiresAt: Date.now() + (this.options.clickedTtlMs ?? DEFAULT_CLICKED_TTL_MS),
+      },
+      MAX_CLICKED_PER_ENDPOINT
+    );
+    return null;
+  }
+
+  /** The click this endpoint recorded for this project at exactly this path, if still fresh. */
+  private freshClick(
+    endpointId: string,
+    projectId: string,
+    hostPath: string
+  ): RecordedClick | null {
+    const recorded = this.clicked.get(endpointId);
+    const key = path.normalize(hostPath);
+    const click = recorded?.get(key);
+    if (!click) return null;
+    if (click.expiresAt <= Date.now()) {
+      recorded!.delete(key);
+      return null;
+    }
+    return click.projectId === projectId ? click : null;
+  }
+
+  /**
+   * Where to open the file the person clicked in this endpoint's terminals at
+   * exactly this path. The walk would follow a link that stays in the folder,
+   * so the opened file must be the very file the path names now: a link put
+   * in its place never reaches a file beside it.
+   */
+  private async locateClicked(
+    endpointId: string,
+    projectId: string,
+    hostPath: string,
+    within?: string
+  ): Promise<Located | null> {
+    if (!this.freshClick(endpointId, projectId, hostPath)) return null;
+    const key = path.normalize(hostPath);
+    if (within !== undefined && componentsBelow(within, key) === null) return null;
+    const named = await fs.lstat(key, { bigint: true }).catch(() => null);
+    if (!named?.isFile()) return null;
+    const anchor = await fs.realpath(path.dirname(key)).catch(() => null);
+    return anchor === null
+      ? null
+      : {
+          anchor,
+          components: [path.basename(key)],
+          isRecorded: (stats) =>
+            stats.isFile() && stats.dev === named.dev && stats.ino === named.ino,
+        };
+  }
+
   /** Close what was opened for a recorded file that isn't that file any more. */
   private async stillRecorded(
     located: Located,
@@ -662,6 +792,14 @@ export class HostFileService {
       }
       const located =
         (await this.locate(admitted.projectId, payload.path, payload.root)) ??
+        // A clicked file before an upload: an upload grant whose file was
+        // replaced since would otherwise refuse a click on the same path.
+        (await this.locateClicked(
+          admitted.endpoint.endpointId,
+          admitted.projectId,
+          payload.path,
+          payload.root
+        )) ??
         (await this.locateUpload(
           admitted.endpoint.endpointId,
           admitted.projectId,
@@ -836,6 +974,11 @@ export class HostFileService {
       const located =
         (await this.locateBundle(admitted.endpoint, admitted.projectId, payload.hostPath)) ??
         (await this.locate(admitted.projectId, payload.hostPath)) ??
+        (await this.locateClicked(
+          admitted.endpoint.endpointId,
+          admitted.projectId,
+          payload.hostPath
+        )) ??
         (await this.locateUpload(
           admitted.endpoint.endpointId,
           admitted.projectId,

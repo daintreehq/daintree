@@ -362,6 +362,13 @@ export class ClientFileTransport {
     return FileResponseSchema.parse(answer);
   }
 
+  /** The person clicked a link to this host file in the view's terminal: let the view open it. */
+  async grantClicked(hostId: HostId, hostPath: string, webContentsId: number): Promise<void> {
+    const endpointId = this.endpointFor(hostId, webContentsId);
+    if (endpointId === null) throw disconnected(hostId);
+    await this.sessionFor(hostId).call(FileLinkMethod.GRANT_CLICKED, { endpointId, hostPath });
+  }
+
   /** The next slice of a streamed body; `done` once the host has sent it all. */
   pull(
     hostId: HostId,

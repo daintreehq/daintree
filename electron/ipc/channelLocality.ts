@@ -309,6 +309,7 @@ export const CHANNEL_LOCALITY = {
   "file-transfer:event": "shell",
   "file-transfer:get-preview-capability": "shell",
   "file-transfer:get-upload-preferences": "shell",
+  "file-transfer:grant-clicked-file": "shell",
   "file-transfer:grant-local-sources": "shell",
   "file-transfer:set-upload-preferences": "shell",
   "file-transfer:stat-local-file": "shell",
