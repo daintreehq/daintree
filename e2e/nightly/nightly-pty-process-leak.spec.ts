@@ -30,15 +30,6 @@ const WARMUP_CYCLES = 3;
 // the first — a single terminal wouldn't surface an early-exiting kill loop.
 const PROJECT_A_TERMINALS = 3;
 
-// Scheduled hibernation currently kills no PTYs: HibernationService.ts pins
-// `EXPERIMENT_HIBERNATION_DISABLED = true`, so the scheduled-kill branch is dead
-// code and a test for it would be vacuous. The "project.sleepProject" test below
-// covers the real background-project PTY-teardown path (gracefulKillByProject),
-// which bypasses the experiment flag. Flip this to true and add a scheduled-kill
-// assertion when EXPERIMENT_HIBERNATION_DISABLED is removed (#10829).
-const HIBERNATION_KILL_ENABLED = false;
-void HIBERNATION_KILL_ENABLED;
-
 async function openAndCloseTerminal(window: AppContext["window"]): Promise<void> {
   const idsBefore = await getGridPanelIds(window);
   await openTerminal(window);

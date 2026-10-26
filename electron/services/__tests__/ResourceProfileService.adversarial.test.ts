@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { PtyClient } from "../PtyClient.js";
 import type { WorkspaceClient } from "../WorkspaceClient.js";
-import type { HibernationService } from "../HibernationService.js";
 import type { ProjectStatsService } from "../ProjectStatsService.js";
 import type { ProjectViewManager } from "../../window/ProjectViewManager.js";
 
@@ -107,10 +106,6 @@ async function flushAsync(): Promise<void> {
   }
 }
 
-interface MockHibernationService {
-  setMemoryPressureThresholdMs: Mock;
-}
-
 interface MockProjectStatsService {
   updatePollInterval: Mock;
 }
@@ -151,7 +146,6 @@ function createDeps(overrides?: Partial<ResourceProfileDeps>): {
   deps: ResourceProfileDeps;
   workspace: MockWorkspaceClient;
   pty: MockPtyClient;
-  hibernation: MockHibernationService;
   stats: MockProjectStatsService;
 } {
   const pty: MockPtyClient = {
@@ -162,9 +156,6 @@ function createDeps(overrides?: Partial<ResourceProfileDeps>): {
     updateMonitorConfig: vi.fn(),
     getAllStatesAsync: vi.fn().mockResolvedValue([]),
   };
-  const hibernation: MockHibernationService = {
-    setMemoryPressureThresholdMs: vi.fn(),
-  };
   const stats: MockProjectStatsService = {
     updatePollInterval: vi.fn(),
   };
@@ -173,7 +164,6 @@ function createDeps(overrides?: Partial<ResourceProfileDeps>): {
     deps: {
       getPtyClient: () => pty as unknown as PtyClient,
       getWorkspaceClient: () => workspace as unknown as WorkspaceClient,
-      getHibernationService: () => hibernation as unknown as HibernationService,
       getAllProjectViewManagers: () => [],
       getProjectStatsService: () => stats as unknown as ProjectStatsService,
       // Models the RAM-tier default (effectiveCachedProjectViews never returns 1).
@@ -182,7 +172,6 @@ function createDeps(overrides?: Partial<ResourceProfileDeps>): {
     },
     workspace,
     pty,
-    hibernation,
     stats,
   };
 }
@@ -330,7 +319,7 @@ describe("ResourceProfileService adversarial", () => {
   });
 
   it("clears pending evaluation timers on stop", () => {
-    const { deps, workspace, pty, hibernation } = createDeps();
+    const { deps, workspace, pty } = createDeps();
     const service = new ResourceProfileService(deps);
 
     service.start();
@@ -346,7 +335,6 @@ describe("ResourceProfileService adversarial", () => {
     expect(service.getProfile()).toBe("balanced");
     expect(workspace.updateMonitorConfig).not.toHaveBeenCalled();
     expect(pty.setResourceProfile).not.toHaveBeenCalled();
-    expect(hibernation.setMemoryPressureThresholdMs).not.toHaveBeenCalled();
     expect(broadcastToRenderer).not.toHaveBeenCalled();
   });
 
@@ -1346,7 +1334,7 @@ describe("ResourceProfileService adversarial", () => {
  * provider itself: leaving efficiency must restore every healthy window's
  * cached-view limit and unfreeze its renderers no matter which sibling setter
  * throws, and a throwing getAllProjectViewManagers must not swallow the rest
- * of the fan-out (pty/workspace/hibernation/stats/renderer broadcast). A
+ * of the fan-out (pty/workspace/stats/renderer broadcast). A
  * frozen renderer after profile exit has no recovery trigger — these paths
  * must be unconditionally safe.
  */
@@ -1438,7 +1426,7 @@ describe("ResourceProfileService fan-out isolation", () => {
 
   describe("provider failure", () => {
     it("a throwing getAllProjectViewManagers does not skip the rest of the fan-out", () => {
-      const { deps, pty, workspace, hibernation, stats } = createDeps({
+      const { deps, pty, workspace, stats } = createDeps({
         getAllProjectViewManagers: () => {
           throw new Error("window registry torn down");
         },
@@ -1448,9 +1436,6 @@ describe("ResourceProfileService fan-out isolation", () => {
       expect(() => service._forceProfileForTesting("efficiency")).not.toThrow();
 
       expect(workspace.updateMonitorConfig).toHaveBeenCalled();
-      expect(hibernation.setMemoryPressureThresholdMs).toHaveBeenCalledWith(
-        RESOURCE_PROFILE_CONFIGS.efficiency.memoryPressureInactiveMs
-      );
       expect(pty.setResourceProfile).toHaveBeenCalledWith("efficiency");
       expect(stats.updatePollInterval).toHaveBeenCalled();
       // The renderer broadcast — the only signal cached views get — still fired.

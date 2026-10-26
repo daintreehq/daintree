@@ -24,7 +24,6 @@ import { getPressureMemoryKb } from "../utils/processMemory.js";
 import { getCachedMemoryRollup } from "./memoryAccounting.js";
 import type { PtyClient } from "./PtyClient.js";
 import type { WorkspaceClient } from "./WorkspaceClient.js";
-import type { HibernationService } from "./HibernationService.js";
 import type { ProjectViewManager } from "../window/ProjectViewManager.js";
 import type { ProjectStatsService } from "./ProjectStatsService.js";
 import type { FleetSnapshotService } from "./FleetSnapshotService.js";
@@ -154,7 +153,6 @@ const TERMINAL_WORKLOAD_FRESH_MS = 60_000;
 export interface ResourceProfileDeps {
   getPtyClient: () => PtyClient | null;
   getWorkspaceClient: () => WorkspaceClient | null;
-  getHibernationService: () => HibernationService | null;
   getAllProjectViewManagers: () => ProjectViewManager[];
   getProjectStatsService: () => ProjectStatsService | null;
   getFleetSnapshotService?: () => FleetSnapshotService | null;
@@ -1126,16 +1124,6 @@ export class ResourceProfileService {
           backgroundGitWatcherCap: config.backgroundGitWatcherCap,
           agentRecursiveWatcherCap: config.agentRecursiveWatcherCap,
         });
-      } catch {
-        // non-critical
-      }
-    }
-
-    // Update HibernationService threshold
-    const hibernationService = this.deps.getHibernationService();
-    if (hibernationService) {
-      try {
-        hibernationService.setMemoryPressureThresholdMs(config.memoryPressureInactiveMs);
       } catch {
         // non-critical
       }

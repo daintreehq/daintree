@@ -108,7 +108,7 @@ Every host-independent per-profile knob lives in `RESOURCE_PROFILE_CONFIGS` (`sh
 | `agentScrollbackMaxLines` | 10000 | 10000 | 4000 | Renderer agent scrollback policy (`scrollbackConfig.ts`); the effective cap is `min(this, PTY_MIRROR_SCROLLBACK)` = 5000 / 5000 / 4000, so a warm terminal never holds more than a restore recovers |
 | `fetchIntervalActiveMs` / `fetchIntervalBackgroundMs` | 20 s / 3 min | 30 s / 5 min | 45 s / 10 min | workspace-host `FetchScheduler` |
 | `portBatchThroughputDelayMs` (ms) | 16 | 16 | 40 | pty-host PortBatcher throughput flush window |
-| `memoryPressureInactiveMs` | 60 min | 30 min | 15 min | HibernationService |
+| `memoryPressureInactiveMs` | 60 min | 30 min | 15 min | IdleBackgroundAutoCloseService pressure idle-shell threshold (read directly, never pushed) |
 | `paintGateTimeoutMs` / `paintGateHardTimeoutMs` (ms) | 1500 / 4000 | 1500 / 4000 | 2500 / 6000 | ProjectViewManager cold paint gate |
 | `warmPaintGateTimeoutMs` / `warmPaintGateHardTimeoutMs` (ms) | 500 / 1500 | 500 / 1500 | 800 / 2500 | ProjectViewManager warm paint gate |
 | `viewLoadTimeoutMs` / `viewLoadHardTimeoutMs` (ms) | 10000 / 30000 | 10000 / 30000 | 15000 / 45000 | ProjectViewManager view-load bounds |
@@ -127,13 +127,11 @@ Two entries also pin values that live in a second place and must move together: 
 
 A **backgrounded project** (its host paused via `WorkspaceService.pause()`) runs no fetch or resource-status polling at all. Its worktrees without a working agent — the focused one included — also stop their status poll and drop their watcher entirely, so the host holds no FSEvents/inotify streams for them. Agent-active worktrees keep their watcher and status poll through the pause, because their freshness is the product's core loop; an agent that finishes while paused is released at once, and one that starts gets its watcher back. On resume, each released worktree re-arms and runs one catch-up status pass through the poll queue — forced where recursive coverage returns, since nothing was watching in between.
 
-### HibernationService
+### Memory-pressure sleep
 
-`setMemoryPressureThresholdMs(config.memoryPressureInactiveMs)` tunes the **memory-pressure** hibernation path (`HibernationService.ts`). Nothing hibernates on a timer: the scheduled sweep and its "Hibernate inactive projects" setting were removed (#13840), and migration 035 deletes the stored `hibernation` key so it can't opt anyone into a later automatic sleep.
+Nothing is pushed for `memoryPressureInactiveMs`: `IdleBackgroundAutoCloseService.pressureShellThresholdMs()` reads it from `RESOURCE_PROFILE_CONFIGS` for the active profile on every check. Tier 2's `hibernateIdleProjects` lever runs `sleepUnderMemoryPressure()`, the idle-shell sleep sweep run early with its threshold shortened to that value; every other gate still applies. `HibernationService` no longer kills terminals; it only evicts cached renderers for Sleep (#14534). Nothing hibernates on a timer: the scheduled sweep and its "Hibernate inactive projects" setting were removed (#13840), and migration 035 deletes the stored `hibernation` key so it can't opt anyone into a later automatic sleep.
 
-- **Memory-pressure** — `hibernateUnderMemoryPressure()`, invoked by `ProcessMemoryMonitor`'s tier-2 mitigation (`ProcessMemoryMonitor.ts`, wired through `globalServicesInit.ts`). It hibernates non-current projects idle longer than `memoryPressureInactiveMs`, skipping any project with an active agent (`ACTIVE_AGENT_STATES`) or an in-flight git operation. The profile makes this threshold stricter under pressure (15 min on `efficiency` vs 60 min on `performance`).
-
-`ProcessMemoryMonitor` applies tier 1 once at the start of a pressure episode, then at most once per five minutes while the same episode persists. Tier 1 trims PTY-host state and hidden browser/dev-preview webviews; it never clears caches or forces GC in the visible renderer. Tier 2 requires three consecutive pressure samples, rechecks the originating system-memory signal after tier 1, and is limited to once per ten minutes. It destroys hidden webviews, evicts cached project renderers down to the active view, and runs memory-pressure hibernation. A clean sample resets the episode so a later independent event can react immediately.
+`ProcessMemoryMonitor` applies tier 1 once at the start of a pressure episode, then at most once per five minutes while the same episode persists. Tier 1 trims PTY-host state and hidden browser/dev-preview webviews; it never clears caches or forces GC in the visible renderer. Tier 2 requires three consecutive pressure samples, rechecks the originating system-memory signal after tier 1, and is limited to once per ten minutes. It destroys hidden webviews, evicts cached project renderers down to the active view, and runs memory-pressure sleep. A clean sample resets the episode so a later independent event can react immediately.
 
 ### PtyClient → ResourceGovernor (cross-process)
 
@@ -224,7 +222,7 @@ Resource governance is deliberately **quiet**. Per the runtime-signal tiers in [
 | Idle plugin-worker dispose | `electron/services/PluginService.ts` (`disposeIdlePluginWorkers`) |
 | View freeze / LRU eviction / paint gate | `electron/window/ProjectViewManager.ts` |
 | CDP freeze, memory-purge, and CPU-rate reset helpers | `electron/utils/webContentsLifecycle.ts` |
-| Memory-pressure hibernation | `electron/services/HibernationService.ts` |
+| Memory-pressure sleep | `electron/services/IdleBackgroundAutoCloseService.ts` |
 | Per-process memory mitigation tiers | `electron/services/ProcessMemoryMonitor.ts` |
 | Background git-watcher LRU budget | `electron/workspace-host/WorkspaceService.ts` |
 | Service wiring (deps, instantiation) | `electron/window/globalServicesInit.ts` |

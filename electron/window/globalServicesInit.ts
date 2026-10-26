@@ -11,10 +11,7 @@ import { getServiceConnectivityRegistry } from "../services/connectivity/index.j
 import { notificationService } from "../services/NotificationService.js";
 import { getActionBreadcrumbService } from "../services/ActionBreadcrumbService.js";
 import { getPluginActionAuditService } from "../services/PluginActionAuditService.js";
-import {
-  initializeHibernationService,
-  getHibernationService,
-} from "../services/HibernationService.js";
+import { getHibernationService } from "../services/HibernationService.js";
 import {
   evictSessionFiles,
   SESSION_EVICTION_TTL_MS,
@@ -613,31 +610,17 @@ export async function initGlobalServices(
   registerDeferredTask({
     name: "hibernation-service",
     run: () => {
-      const svc = initializeHibernationService();
-      // Let user-initiated hibernation reach every window's cached project
-      // renderers so it can evict them (#10668). Lazy lambda — windows open and
-      // close after this wires, so re-read the registry on each call. Same
-      // pattern ResourceProfileService uses below.
-      svc.setProjectViewManagersProvider(
+      // Let Sleep reach every window's cached project renderers so it can
+      // evict them (#10668). Lazy lambda — windows open and close after this
+      // wires, so re-read the registry on each call. Same pattern
+      // ResourceProfileService uses below.
+      getHibernationService().setProjectViewManagersProvider(
         () =>
           windowRegistry
             ?.all()
             .map((wCtx) => wCtx.services.projectViewManager)
             .filter((pvm): pvm is ProjectViewManager => pvm !== undefined) ?? []
       );
-      // Keep background hibernation off a running Daintree Assistant (#11477).
-      // The same binding + PTY-liveness pair `ProjectViewManager` is wired with
-      // in main.ts: the binding alone survives an assistant that exited under
-      // its own steam, and `hasTerminal` is PtyClient's synchronous main-local
-      // spawn registry, so it is authoritative from the assistant's first
-      // instant. Lazy, like the provider above — the PtyClient is not resolved
-      // yet at wiring time.
-      svc.setHasLiveAssistantBackend((projectId) => {
-        // Any live lane floors the project (#12108) — hibernating it would
-        // revoke every lane, taking running siblings with it.
-        const backends = helpSessionService.getAssistantBackends(projectId);
-        return backends.some((backend) => getPtyClient()?.hasTerminal(backend.terminalId) === true);
-      });
     },
   });
 
@@ -1321,7 +1304,6 @@ export async function initGlobalServices(
       const svc = new ResourceProfileService({
         getPtyClient: () => getPtyClient(),
         getWorkspaceClient: () => getWorkspaceClientRef(),
-        getHibernationService: () => getHibernationService(),
         getAllProjectViewManagers: () =>
           windowRegistry
             ?.all()
