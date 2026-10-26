@@ -1,4 +1,5 @@
 import type { VoiceDictionaryEntry } from "../../shared/types/ipc/api.js";
+import { voiceErrorLogFields } from "../../shared/utils/voiceLogFields.js";
 import { projectStore } from "./ProjectStore.js";
 
 // A project's dictation vocabulary has one home at a time, never a merge of
@@ -62,7 +63,10 @@ export async function keepSharedVoiceDictionaryLocally(projectId: string): Promi
   } catch (error) {
     // A committed file that can't be read leaves the local list as it was, and
     // turning sharing off still goes ahead. A failed local write does not.
-    console.warn("[ProjectVoiceDictionary] Couldn't read the committed vocabulary:", error);
+    console.warn(
+      "[ProjectVoiceDictionary] Couldn't read the committed vocabulary:",
+      voiceErrorLogFields(error)
+    );
     return;
   }
   await projectStore.changeLocalVoiceDictionary(projectId, () => entries);

@@ -6,7 +6,12 @@ import {
 } from "../../shared/types/project.js";
 import type { AgentPreset } from "../../shared/config/agentRegistry.js";
 import type { VoiceDictionaryEntry } from "../../shared/types/ipc/api.js";
-import { sanitizeDictionary } from "../../shared/utils/voiceDictionary.js";
+import {
+  DICTIONARY_CONTROL_CHARACTERS,
+  MAX_DICTIONARY_TERM_LENGTH,
+  sanitizeDictionary,
+} from "../../shared/utils/voiceDictionary.js";
+import { AppError } from "../utils/errorTypes.js";
 import path from "path";
 import fs from "fs/promises";
 import { createHash } from "crypto";
@@ -77,6 +82,29 @@ const IN_REPO_SETTINGS_VERSION = 1;
  */
 function toSharedDictionaryEntry(entry: VoiceDictionaryEntry): { term: string; heardAs: string[] } {
   return { term: entry.term, heardAs: entry.heardAs };
+}
+
+/** Cap on the committed vocabulary: every term in it goes into each correction request. */
+export const MAX_SHARED_DICTIONARY_ENTRIES = 500;
+
+const isUsableSharedPhrase = (phrase: string) =>
+  phrase.length <= MAX_DICTIONARY_TERM_LENGTH && !DICTIONARY_CONTROL_CHARACTERS.test(phrase);
+
+/**
+ * The committed vocabulary as dictation uses it. Anyone who can push to the
+ * repo writes this file, and its terms are quoted into the correction model's
+ * prompt, so a term or heard-as phrase too long to add here, or holding a line
+ * break or other control character, is left out, and the list is capped.
+ */
+function usableSharedDictionary(entries: readonly VoiceDictionaryEntry[]): VoiceDictionaryEntry[] {
+  const out: VoiceDictionaryEntry[] = [];
+  for (const entry of entries) {
+    if (out.length >= MAX_SHARED_DICTIONARY_ENTRIES) break;
+    if (!isUsableSharedPhrase(entry.term)) continue;
+    const heardAs = entry.heardAs.filter(isUsableSharedPhrase);
+    out.push(heardAs.length === entry.heardAs.length ? entry : { ...entry, heardAs });
+  }
+  return out;
 }
 
 // Only accept safe agent subdirectory names: letters, numbers, dot, dash,
@@ -320,9 +348,10 @@ export class ProjectIdentityFiles {
   }
 
   /**
-   * The vocabulary committed in `.daintree/settings.json`. `found` is false
-   * when the file or its vocabulary is absent. A file that exists but can't be
-   * read or parsed, or was written by a newer schema, throws.
+   * The vocabulary committed in `.daintree/settings.json`, less what dictation
+   * can't use (see {@link usableSharedDictionary}). `found` is false when the
+   * file or its vocabulary is absent. A file that exists but can't be read or
+   * parsed, or was written by a newer schema, throws.
    */
   async readInRepoVoiceDictionary(
     projectPath: string
@@ -331,13 +360,19 @@ export class ProjectIdentityFiles {
     if (!existing || !Object.hasOwn(existing, "voiceDictionary")) {
       return { found: false, entries: [] };
     }
-    return { found: true, entries: sanitizeDictionary(existing.voiceDictionary, 0) };
+    return {
+      found: true,
+      entries: usableSharedDictionary(sanitizeDictionary(existing.voiceDictionary, 0)),
+    };
   }
 
   /**
    * One read-modify-write of the committed vocabulary, patched into the file
-   * as it is now so every other field survives. Writes nothing when `apply`
-   * returns the list it was given. Returns the list as saved.
+   * as it is now so every other field survives. `apply` gets every committed
+   * entry, so an entry dictation leaves out stays in the file. Writes nothing
+   * when `apply` returns the list it was given, and refuses to grow the list
+   * past {@link MAX_SHARED_DICTIONARY_ENTRIES}, where a new term would never be
+   * read back. Returns the list as {@link readInRepoVoiceDictionary} reads it.
    */
   async changeInRepoVoiceDictionary(
     projectPath: string,
@@ -348,12 +383,18 @@ export class ProjectIdentityFiles {
       const existing = (await this.readSettingsFileForPatch(projectPath)) ?? { version: 1 };
       const current = sanitizeDictionary(existing.voiceDictionary, 0);
       const next = apply(current);
-      if (next === current) return current;
+      if (next === current) return usableSharedDictionary(current);
+      if (next.length > current.length && next.length > MAX_SHARED_DICTIONARY_ENTRIES) {
+        throw new AppError({
+          code: "VALIDATION",
+          message: `A shared vocabulary can't hold more than ${MAX_SHARED_DICTIONARY_ENTRIES} terms`,
+        });
+      }
       await this.writeSettingsFile(projectPath, {
         ...existing,
         voiceDictionary: next.map(toSharedDictionaryEntry),
       });
-      return next;
+      return usableSharedDictionary(next);
     });
   }
 
@@ -384,7 +425,17 @@ export class ProjectIdentityFiles {
       if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
       throw error;
     }
-    const parsed: unknown = JSON.parse(stripUtf8Bom(content));
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(stripUtf8Bom(content));
+    } catch {
+      // V8's SyntaxError quotes the text around the fault, and thrown IPC
+      // errors are logged where logs leave the machine, so it isn't passed on.
+      throw new AppError({
+        code: "VALIDATION",
+        message: `${DAINTREE_SETTINGS_JSON} isn't valid JSON`,
+      });
+    }
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       throw new Error(`${DAINTREE_SETTINGS_JSON} is not a settings object`);
     }

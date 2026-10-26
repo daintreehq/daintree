@@ -10,6 +10,9 @@ import type { CorrectionCandidate } from "./phoneticSimilarity.js";
 /** Deepgram rejects any keyterm over 100 characters, so a term or heard-as phrase can't be longer. */
 export const MAX_DICTIONARY_TERM_LENGTH = 100;
 
+/** Line breaks and other control characters: a phrase holding one could step out of a prompt's term list. */
+export const DICTIONARY_CONTROL_CHARACTERS = /[\p{Cc}\p{Zl}\p{Zp}]/u;
+
 /** Cap on the pending-suggestions queue; accepted words live in the dictionary. */
 export const MAX_SUGGESTED_WORDS = 50;
 

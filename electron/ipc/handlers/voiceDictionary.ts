@@ -15,6 +15,7 @@ import type {
   VoiceInputSettings,
 } from "../../../shared/types/ipc/api.js";
 import {
+  DICTIONARY_CONTROL_CHARACTERS,
   acceptSuggestion,
   addDictionaryEntry,
   dismissSuggestion,
@@ -45,10 +46,24 @@ const updateSchema = z.object({
 });
 const suggestionSchema = z.object({ word: existing, utterance: text.optional() });
 const projectId = z.string().min(1).max(RAW_TEXT_MAX);
+// A project's terms can be committed to the repo, where a read leaves out any
+// phrase holding a line break or control character, so one can't be added.
+const projectText = text.refine(
+  (value) => !DICTIONARY_CONTROL_CHARACTERS.test(value.trim()),
+  "A dictionary phrase can't hold a line break or control character"
+);
+const projectHeardAs = z.array(projectText).max(LIST_MAX);
 const projectSchema = z.object({ projectId });
-const projectAddSchema = addSchema.extend({ projectId });
+const projectAddSchema = addSchema.extend({
+  projectId,
+  term: projectText,
+  heardAs: projectHeardAs.optional(),
+});
 const projectRemoveSchema = removeSchema.extend({ projectId });
-const projectUpdateSchema = updateSchema.extend({ projectId });
+const projectUpdateSchema = updateSchema.extend({
+  projectId,
+  changes: z.object({ term: projectText.optional(), heardAs: projectHeardAs.optional() }),
+});
 const recordSchema = z.object({
   candidates: z.array(z.object({ word: text, original: text })).max(LIST_MAX),
 });

@@ -3930,10 +3930,10 @@ export interface GeneratedIpcInvokeMap {
   "voice-dictionary:add-to-project": {
     args: [
       __0: {
-        term: string;
         projectId: string;
-        heardAs?: string[] | undefined;
+        term: string;
         source?: "manual" | "imported" | undefined;
+        heardAs?: string[] | undefined;
       },
     ];
     result: import("./api.js").VoiceDictionaryEntry[];
@@ -3968,8 +3968,8 @@ export interface GeneratedIpcInvokeMap {
     args: [
       __0: {
         term: string;
-        changes: { term?: string | undefined; heardAs?: string[] | undefined };
         projectId: string;
+        changes: { term?: string | undefined; heardAs?: string[] | undefined };
       },
     ];
     result: import("./api.js").VoiceDictionaryEntry[];

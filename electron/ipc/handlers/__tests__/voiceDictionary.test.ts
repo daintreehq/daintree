@@ -448,6 +448,27 @@ describe("project vocabulary operations", () => {
     expect(terms(projects.local.get("local"))).toEqual(["Two"]);
   });
 
+  it("refuses a project phrase holding a line break or control character, writing nothing", async () => {
+    const daintree = [{ term: "Daintree", heardAs: [], source: "manual" as const, addedAt: 0 }];
+    projects.local.set("local", daintree);
+    projects.repo.set("/repos/shared", daintree);
+    for (const projectId of ["local", "shared"]) {
+      await expect(projectOp("addToProject", { projectId, term: "Two\nLines" })).rejects.toThrow();
+      await expect(
+        projectOp("addToProject", { projectId, term: "Daintree", heardAs: ["dane\ttree"] })
+      ).rejects.toThrow();
+      await expect(
+        projectOp("updateInProject", {
+          projectId,
+          term: "Daintree",
+          changes: { heardAs: ["dane\u2028tree"] },
+        })
+      ).rejects.toThrow();
+    }
+    expect(projects.local.get("local")).toBe(daintree);
+    expect(projects.repo.get("/repos/shared")).toBe(daintree);
+  });
+
   it("refuses an unknown project and an over-length term, writing nothing", async () => {
     await expect(projectOp("getProject", { projectId: "missing" })).rejects.toThrow();
     await expect(
