@@ -93,7 +93,7 @@ Three sibling rules live beside it in the renderer `no-restricted-syntax` block 
 | --- | --- | --- |
 | Banned error+low (#6885) | `type: "error"` with `priority: "low"` | raise the priority, or `console.warn` |
 | Action-free error (#8097) | `type: "error"` with no `action`/`actions` | wire a recovery action (Title-Message-Action), or annotate when the surrounding UI _is_ the recovery surface |
-| Unprotected success toast (#8249) | `type: "success"` with none of `transient: true`, `priority: "low"`, or a `correlationId` | pick one of the three, or drop the notify — the in-place UI change is usually the signal |
+| Unprotected success toast (#8249) | `type: "success"` with none of `transient: true`, `priority: "low"`, or a `correlationId` | drop the notify when the user did it and the result is on screen — the change is the confirmation; otherwise pick one of the three |
 | Missing `context.eventKind` | an inline-literal payload with no `context.eventKind` | add the kind so `EVENT_POLICY` can resolve priority/placement/duration centrally |
 
 The last rule skips spread-bearing payloads (`notify({ ...payload })`) and variable-reference contexts, neither of which can be checked statically; the remaining legacy sites carry the annotation.

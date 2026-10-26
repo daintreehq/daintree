@@ -3,7 +3,6 @@ import { Button } from "@/components/ui/button";
 import { keybindingService } from "@/services/KeybindingService";
 import { notify } from "@/lib/notify";
 import type { KeybindingImportResult } from "@shared/types/ipc/api";
-import { pluralize } from "@/lib/pluralize";
 
 interface KeybindingProfileActionsProps {
   onImportComplete: () => void;
@@ -16,15 +15,7 @@ export function KeybindingProfileActions({ onImportComplete }: KeybindingProfile
     if (isLoading) return;
     setIsLoading(true);
     try {
-      const saved = await window.electron.keybinding.exportProfile();
-      if (saved) {
-        notify({
-          type: "success",
-          title: "Shortcuts exported",
-          message: "Profile saved to disk",
-          transient: true,
-        });
-      }
+      await window.electron.keybinding.exportProfile();
     } catch {
       // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
       notify({
@@ -69,15 +60,16 @@ export function KeybindingProfileActions({ onImportComplete }: KeybindingProfile
       await keybindingService.loadOverrides();
       onImportComplete();
 
-      notify({
-        type: "success",
-        title: "Shortcuts imported",
-        message:
-          result.applied > 0
-            ? `Applied ${pluralize(result.applied, "shortcut")}`
-            : "No shortcuts were applied",
-        transient: true,
-      });
+      if (result.applied === 0) {
+        notify({
+          type: "info",
+          title: "No shortcuts imported",
+          priority: "high",
+          context: { eventKind: "settings" },
+          message: "No shortcuts were applied",
+          transient: true,
+        });
+      }
     } finally {
       setIsLoading(false);
     }

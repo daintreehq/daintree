@@ -141,16 +141,16 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
         const result = await window.electron.configBundle.export();
         if (result.outcome === "canceled") return;
 
+        // The user picked the destination, so a clean export needs no toast.
+        // Values left out of the file are something they couldn't see.
         const omitted = result.omittedSecretPaths.length;
+        if (omitted === 0) return;
         notify({
-          type: "success",
+          type: "info",
           priority: "high",
           transient: true,
           context: { eventKind: "settings" },
-          message:
-            omitted > 0
-              ? `Configuration exported — ${pluralize(omitted, "value that looked like a secret was", "values that looked like secrets were")} left out`
-              : "Configuration exported",
+          message: `Configuration exported — ${pluralize(omitted, "value that looked like a secret was", "values that looked like secrets were")} left out`,
           duration: 4000,
         });
       } catch (error) {

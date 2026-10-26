@@ -450,7 +450,7 @@ describe("deleteAllScratches", () => {
 
     expect(result.current.deleteAllScratchesConfirm).toBeNull();
     expect(result.current.isDeletingAllScratches).toBe(false);
-    expect(notifyMock).toHaveBeenCalledTimes(1);
+    expect(notifyMock).not.toHaveBeenCalled();
   });
 
   it("freezes the targets at confirm-open so a later arrival is never enrolled", async () => {
@@ -502,7 +502,7 @@ describe("deleteAllScratches", () => {
     expect(deletedIds()).toEqual(expect.arrayContaining(seeded.map((s) => s.id)));
   });
 
-  it("collapses a fully successful run into a single summary notification", async () => {
+  it("raises no notification for a fully successful run, only the announcement", async () => {
     const seeded = seedScratches(3);
     const { result } = renderHook(() => useProjectSwitcherPalette());
 
@@ -514,12 +514,12 @@ describe("deleteAllScratches", () => {
     // Tied to the actual deletions: a summary that reported success without ever
     // calling the store would otherwise pass.
     expect([...deletedIds()].sort()).toEqual(seeded.map((s) => s.id).sort());
-    // One summary, not one toast per scratch — the single-delete receipt must
-    // not be reused for the fan-out.
-    expect(notifyMock).toHaveBeenCalledTimes(1);
-    const payload = lastNotification();
-    expect(payload.type).toBe("success");
-    expect(payload.title).toContain(String(seeded.length));
+    // The section emptying is the confirmation: no toast and no inbox row.
+    expect(notifyMock).not.toHaveBeenCalled();
+    expect(announceMock).toHaveBeenCalledWith(
+      expect.stringContaining(String(seeded.length)),
+      undefined
+    );
   });
 
   it("reports a partial run as a warning counting the successes against the total", async () => {
@@ -595,7 +595,7 @@ describe("deleteAllScratches", () => {
     });
 
     expect(scratchState.removeScratch).toHaveBeenCalledTimes(seeded.length);
-    expect(notifyMock).toHaveBeenCalledTimes(1);
+    expect(notifyMock).not.toHaveBeenCalled();
   });
 
   it("routes the announcement through closeAndAnnounce rather than the announcer", async () => {
@@ -633,7 +633,7 @@ describe("deleteAllScratches", () => {
     expect(result.current.deleteAllScratchesConfirm).not.toBeNull();
 
     const [closeFn, message] = closeAndAnnounceSpy.mock.calls[0]!;
-    expect(message).toBe(lastNotification().title);
+    expect(message).toEqual(expect.stringContaining("Deleted 2"));
 
     act(() => closeFn());
 
@@ -651,7 +651,8 @@ describe("deleteAllScratches", () => {
 
     // Call-through: the real helper closed the dialog, then announced.
     expect(result.current.deleteAllScratchesConfirm).toBeNull();
-    expect(announceMock).toHaveBeenCalledWith(lastNotification().title, undefined);
+    expect(announceMock).toHaveBeenCalledWith(expect.stringContaining("Deleted 2"), undefined);
+    expect(notifyMock).not.toHaveBeenCalled();
   });
 
   it("announces assertively only when nothing could be deleted", async () => {
@@ -818,10 +819,10 @@ describe("deleteScratch", () => {
 
     expect(result.current.deleteScratchConfirm).toBeNull();
     expect(result.current.isDeletingScratch).toBe(false);
-    expect(notifyMock).toHaveBeenCalledTimes(1);
+    expect(notifyMock).not.toHaveBeenCalled();
   });
 
-  it("keeps the frozen name in the receipt after the row is gone", async () => {
+  it("keeps the frozen name in the announcement after the row is gone", async () => {
     const seeded = seedScratches(2);
     const { result } = renderHook(() => useProjectSwitcherPalette());
 
@@ -830,29 +831,8 @@ describe("deleteScratch", () => {
       await result.current.confirmDeleteScratch();
     });
 
-    const payload = lastNotification();
-    expect(payload.type).toBe("success");
-    expect(payload.title).toContain(seeded[0]!.name);
-  });
-
-  it("shapes the success receipt as a supported transient payload", async () => {
-    const seeded = seedScratches(2);
-    const { result } = renderHook(() => useProjectSwitcherPalette());
-
-    act(() => result.current.requestDeleteScratch(seeded[0]!.id));
-    await act(async () => {
-      await result.current.confirmDeleteScratch();
-    });
-
-    const payload = lastNotification();
-    // Shape, not delivery — delivery is `notify()`'s own contract. `transient`
-    // paired with `context` is the combination notify() DEV-warns about (context
-    // suppression needs an inbox entry to fall back to, and transient has none),
-    // and paired with a passive priority it is a silent no-op. This is the one
-    // supported transient shape, and the bulk sibling above does not use it.
-    expect(payload.transient).toBe(true);
-    expect(payload.priority).toBe("high");
-    expect(payload.context).toBeUndefined();
+    expect(notifyMock).not.toHaveBeenCalled();
+    expect(announceMock).toHaveBeenCalledWith(expect.stringContaining(seeded[0]!.name), undefined);
   });
 
   it("announces through closeAndAnnounce rather than the announcer", async () => {
@@ -921,7 +901,7 @@ describe("deleteScratch", () => {
     });
 
     expect(scratchState.removeScratch).toHaveBeenCalledTimes(1);
-    expect(notifyMock).toHaveBeenCalledTimes(1);
+    expect(notifyMock).not.toHaveBeenCalled();
   });
 
   it("dismisses the dialog when the target vanishes from another window", () => {

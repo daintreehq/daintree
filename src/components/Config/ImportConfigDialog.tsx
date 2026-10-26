@@ -417,13 +417,14 @@ export function ImportConfigDialog() {
       return;
     }
 
+    // A clean import raises nothing: the user just confirmed the preview, and
+    // the changed settings are the confirmation. Skips do surface: the toast
+    // names one, and the inbox keeps every one of them.
     const reasons = skippedReasons(report, preview);
+    if (reasons.length === 0) return;
     notify({
-      type: reasons.length > 0 ? "warning" : "success",
+      type: "warning",
       priority: "high",
-      // A clean import needs no record. Skips do: the toast names one, and the
-      // inbox keeps every one of them.
-      transient: reasons.length === 0,
       context: { eventKind: "settings" },
       message: outcomeMessage(report, preview),
       ...(reasons.length > 1

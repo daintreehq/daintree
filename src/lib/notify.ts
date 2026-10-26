@@ -320,9 +320,10 @@ interface NotifyPayloadBase {
   countable?: boolean;
   /**
    * When true, the notification is shown as a toast only — no history entry is
-   * written and no unread badge increments. Use only for one-shot confirmations
-   * where the result is already visible elsewhere (clipboard write, file dialog
-   * outcome, in-place UI state). Stronger than `countable: false`, which still
+   * written and no unread badge increments. Use only for news the user can't
+   * see for themselves that isn't worth keeping. Never confirm the user's own
+   * action when its result is already on screen (a delete, an import, a save to
+   * a destination they chose): the change is the confirmation. Stronger than `countable: false`, which still
    * writes the entry; `transient` skips the inbox entirely.
    */
   transient?: boolean;

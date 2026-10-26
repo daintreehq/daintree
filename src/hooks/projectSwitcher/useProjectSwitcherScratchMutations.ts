@@ -206,25 +206,8 @@ export function useProjectSwitcherScratchMutations({
       // Close before announcing: VoiceOver drops live-region updates raised from
       // outside a focused `aria-modal` subtree (lesson #9434).
       closeAndAnnounce(() => setDeleteScratchConfirm(null), title);
-      // Reports the terminals, not the folder: main tombstones the row and then
-      // treats `fs.rm` as best-effort, so a resolved call proves the workspace is
-      // gone from the app, not that the directory is gone from disk.
-      //
-      // A focused-window receipt, deliberately best-effort: the row leaving is
-      // only visible if the palette is still open on it, so a toast is worth
-      // raising, but a deletion that lands while the window is blurred is dropped
-      // rather than filed. `transient` is what drops it, and it stays because a
-      // routine delete is not inbox-worthy — `closeAndAnnounce` above is the
-      // guaranteed signal. No `context` for the same reason: suppression needs an
-      // inbox entry to fall back to, and a transient payload has none.
-      // eslint-disable-next-line no-restricted-syntax -- notify-event-kind: ok
-      notify({
-        type: "success",
-        title,
-        message: "Its terminals were closed.",
-        transient: true,
-        priority: "high",
-      });
+      // No toast: the row leaving is the confirmation, and `closeAndAnnounce`
+      // above carries it to screen readers.
     } catch (error) {
       // Another window may have deleted this scratch while our own call was in
       // flight, which is how ours came to fail. The user asked for it gone and it
@@ -320,22 +303,8 @@ export function useProjectSwitcherScratchMutations({
       if (failures.length === 0) {
         const title = `Deleted ${total} ${noun}`;
         closeAndAnnounce(close, title);
-        // Reports the terminals, not the folders: main tombstones the row and then
-        // treats `fs.rm` as best-effort, swallowing a failure and leaving cleanup to
-        // a later sweep (`ScratchStore.removeScratch`). A resolved call therefore
-        // proves the workspace is gone from the app, not that the directory is gone
-        // from disk — claiming the latter would be a lie on a locked folder.
-        //
-        // Transient: the section emptying in front of the user is the real
-        // confirmation — this is a one-shot receipt, not an inbox entry.
-        notify({
-          type: "success",
-          title,
-          message: total === 1 ? "Its terminals were closed." : "Their terminals were closed.",
-          transient: true,
-          priority: "high",
-          context: { eventKind: "uiFeedback" },
-        });
+        // No toast: the section emptying is the confirmation, and the announcer
+        // carries it to screen readers.
       } else if (successCount === 0) {
         const title = total === 1 ? "Couldn't delete scratch" : "Couldn't delete scratches";
         closeAndAnnounce(close, title, "assertive");
