@@ -642,7 +642,10 @@ export function TroubleshootingTab() {
 
   return (
     <div className="space-y-8">
-      <SettingsSection title="System" settings={SECTION_SETTINGS.systemStatus}>
+      <SettingsSection
+        title="System"
+        settings={[...SECTION_SETTINGS.hardwareAcceleration, ...SECTION_SETTINGS.systemStatus]}
+      >
         <SettingsGroup>
           <HardwareAccelerationSection />
           <SystemHealthSection />

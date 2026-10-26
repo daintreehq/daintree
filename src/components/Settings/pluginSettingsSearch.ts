@@ -39,6 +39,9 @@ const HOME_SCOPE = { manager: "user", project: "project" } as const satisfies Re
   "user" | "project"
 >;
 
+/** Plugins and what they keep are the host's. */
+const PLUGIN_SETTINGS: readonly SettingRef[] = ["plugins"];
+
 /**
  * The search rows for each plugin, filed under the home that shows each one:
  * the home itself, its setup steps, its account, every declared setting, and
@@ -51,9 +54,6 @@ const HOME_SCOPE = { manager: "user", project: "project" } as const satisfies Re
  * identities, and what a setup step observed stay out, which is what keeps a
  * secret field's contents unsearchable.
  */
-/** Plugins and what they keep are the host's. */
-const PLUGIN_SETTINGS: readonly SettingRef[] = ["plugins"];
-
 export function buildPluginSettingsSearchEntries(
   plugins: readonly SearchablePlugin[]
 ): SettingsSearchEntry[] {
