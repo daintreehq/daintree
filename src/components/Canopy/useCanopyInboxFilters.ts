@@ -28,6 +28,8 @@ import {
 } from "./canopyRelationships";
 import { allHostsKey, parseAllHostsKey } from "./canopyAllHosts";
 import type { CanopyApi } from "./canopyHostSource";
+import { placeOf } from "./canopyInboxPlace";
+import { isWorkerEntry, projectCanopyInbox } from "./canopyInboxProjection";
 import { useListReorderMotion } from "./useListReorderMotion";
 import { useCanopyRowsViewed } from "./useCanopyRowsViewed";
 import { canopyCardDomId } from "./CanopyCard";
@@ -226,6 +228,23 @@ export function useCanopyInboxFilters({
     () => [...listed, ...(archivedShown ? shownInbox.archived : [])],
     [listed, shownInbox, archivedShown]
   );
+  // Workers and assistants as one inbox: what needs the user, and the order
+  // the keyboard walks.
+  const projection = useMemo(
+    () =>
+      projectCanopyInbox({
+        ownHostId,
+        workers: inbox.inbox,
+        assistants: assistantItems,
+        listedWorkers: listed,
+        shownAssistants,
+        shownArchived: archivedShown ? shownInbox.archived : [],
+        workerPlace: (item) => placeOf(item, hostId, ownHostId),
+      }),
+    [ownHostId, hostId, inbox, assistantItems, listed, shownAssistants, archivedShown, shownInbox]
+  );
+  // Moving on after an answer stays among the workers until assistants rank with them (#14519).
+  const workerNavigation = useMemo(() => projection.navigation.filter(isWorkerEntry), [projection]);
   // An urgent prompt counts as seen once its row has been in view for a second
   // in the focused, open panel, or its pane is opened: a row below the fold
   // nobody scrolled to keeps its ask on the badge. Runs another scope or the
@@ -344,6 +363,8 @@ export function useCanopyInboxFilters({
     setArchivedExpanded,
     archivedShown,
     visible,
+    projection,
+    workerNavigation,
     listRef,
     scrollerRef,
     acknowledgeOpened,

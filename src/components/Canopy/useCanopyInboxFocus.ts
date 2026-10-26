@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { HostId } from "@shared/types/remoteHosts";
 import { CANOPY_SEEN_HEARTBEAT_MS, canopyViewIsWatched, reportCanopySeen } from "@/lib/canopySeen";
 import { subscribeProjectViewObservability } from "@/lib/viewCacheState";
-import { itemNeedsAttention, itemPutAside, type CanopyItem } from "./canopyModel";
+import type { CanopyItem } from "./canopyModel";
+import { nextAfterEntry, type CanopyWorkerEntry } from "./canopyInboxProjection";
 import { canopyCardDomId, type CanopyCardHandle, type CanopyPaneFocus } from "./CanopyCard";
 import type { CanopyAssistantItem, CanopyRoleFilter } from "./canopyAssistants";
 import { canopyAssistantDomId, openAssistantItem } from "./openAssistantItem";
@@ -27,6 +28,7 @@ export function useCanopyInboxFocus({
   items,
   listed,
   visible,
+  workerNavigation,
   workersShown,
   shownAssistants,
   inWork,
@@ -47,6 +49,8 @@ export function useCanopyInboxFocus({
   items: CanopyItem[];
   listed: CanopyItem[];
   visible: CanopyItem[];
+  /** The workers the keyboard walks, as the inbox projection orders them. */
+  workerNavigation: CanopyWorkerEntry[];
   workersShown: boolean;
   shownAssistants: CanopyAssistantItem[];
   inWork: (item: CanopyItem) => boolean;
@@ -92,6 +96,7 @@ export function useCanopyInboxFocus({
           ? (visible[0] ?? null)
           : (items.find((item) => item.runId === focusedId && inWork(item)) ?? listed[0] ?? null);
   const visibleRef = useRef<CanopyItem[]>([]);
+  const workerNavigationRef = useRef<CanopyWorkerEntry[]>([]);
   const selectedRef = useRef<string | null>(null);
   // An answer or a reply settles after the panel may have closed, and a new
   // one opened over the same ids: only this one's own may move the keyboard.
@@ -106,6 +111,7 @@ export function useCanopyInboxFocus({
   const listHostRef = useRef(hostId);
   useEffect(() => {
     visibleRef.current = visible;
+    workerNavigationRef.current = workerNavigation;
     selectedRef.current = focusedItem?.runId ?? null;
     listHostRef.current = hostId;
   });
@@ -362,17 +368,9 @@ export function useCanopyInboxFocus({
    * else the one before it that does, else simply its neighbour.
    */
   const nextAfter = useCallback((runId: string): CanopyItem | undefined => {
-    const order = visibleRef.current;
-    const index = order.findIndex((candidate) => candidate.runId === runId);
-    const wanted = (candidate: CanopyItem) =>
-      candidate.runId !== runId &&
-      !itemPutAside(candidate) &&
-      (itemNeedsAttention(candidate) || candidate.unread);
-    return (
-      order.slice(index + 1).find(wanted) ??
-      order.slice(0, Math.max(index, 0)).find(wanted) ??
-      (index === -1 ? undefined : (order[index + 1] ?? order[index - 1]))
-    );
+    const order = workerNavigationRef.current;
+    const key = order.find((entry) => entry.item.runId === runId)?.key ?? null;
+    return nextAfterEntry(order, key)?.item;
   }, []);
   // Escape from the pane lands on the run's row; a run folded away in
   // Archived has no row to land on, so the keyboard takes the fold instead

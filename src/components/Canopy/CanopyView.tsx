@@ -35,7 +35,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useFrozenBackdrop } from "./useFrozenBackdrop";
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { Callout } from "@/components/ui/Callout";
-import { itemNeedsAttention, repliedAt, type CanopyItem } from "./canopyModel";
+import { repliedAt, type CanopyItem } from "./canopyModel";
+import { isWorkerEntry } from "./canopyInboxProjection";
 import { CanopyCard, canopyCardDomId } from "./CanopyCard";
 import { CanopyRow } from "./CanopyRow";
 import { CanopyRowMenu } from "./CanopyRowMenu";
@@ -669,6 +670,8 @@ function CanopyInbox({
     setArchivedExpanded,
     archivedShown,
     visible,
+    projection,
+    workerNavigation,
     listRef,
     scrollerRef,
     acknowledgeOpened,
@@ -734,6 +737,7 @@ function CanopyInbox({
     items,
     listed,
     visible,
+    workerNavigation,
     workersShown,
     shownAssistants,
     inWork,
@@ -823,7 +827,8 @@ function CanopyInbox({
       ? focusedItem.runId === item.runId
       : index === 0;
   // Over the whole inbox, whatever the filter shows: a read approval still blocks its agent.
-  const needsYou = inbox.inbox.filter(itemNeedsAttention).length;
+  // Workers only, until assistants' asks rank with theirs (#14519).
+  const needsYou = projection.needsYou.filter(isWorkerEntry).length;
 
   const unreadCount = inbox.inbox.filter((item) => item.unread).length;
   // The section bar speaks for what the search shows; the header keeps the whole inbox.
