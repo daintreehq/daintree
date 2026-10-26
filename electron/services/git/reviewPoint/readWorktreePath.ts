@@ -93,6 +93,19 @@ export async function readWorktreePath(
   if (!before) return { read: { kind: "absent" }, signature };
   if (before.isDirectory()) return { read: { kind: "directory" }, signature };
 
+  const size = Number(before.size);
+  if (before.isSymbolicLink() || before.isFile()) {
+    if (size > budget.maxFileBytes) {
+      return { read: { kind: "too-large", reason: "file-too-large" }, signature };
+    }
+    if (size > budget.remainingBytes) {
+      return { read: { kind: "too-large", reason: "byte-limit" }, signature };
+    }
+    // Reserved in the same tick as the check, so reads running side by side
+    // can't each spend the same remaining budget.
+    budget.remainingBytes -= size;
+  }
+
   if (before.isSymbolicLink()) {
     try {
       const text = await fs.promises.readlink(target, { encoding: "buffer" });
@@ -105,17 +118,6 @@ export async function readWorktreePath(
   }
 
   if (!before.isFile()) return { read: { kind: "special" }, signature };
-
-  const size = Number(before.size);
-  if (size > budget.maxFileBytes) {
-    return { read: { kind: "too-large", reason: "file-too-large" }, signature };
-  }
-  if (size > budget.remainingBytes) {
-    return { read: { kind: "too-large", reason: "byte-limit" }, signature };
-  }
-  // Reserved in the same tick as the check, so reads running side by side
-  // can't each spend the same remaining budget.
-  budget.remainingBytes -= size;
 
   const executable = fileModeTracked ? (before.mode & 0o100n) !== 0n : indexMode === "100755";
   const mode = executable ? "100755" : "100644";

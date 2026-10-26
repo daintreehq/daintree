@@ -16,6 +16,8 @@ import { captureReviewPoint, type CaptureReviewPointOptions } from "../captureRe
 // git's actual output for the states it has to cover.
 
 const posixOnly = process.platform === "win32" ? it.skip : it;
+const linuxOnly = process.platform === "linux" ? it : it.skip;
+const isRoot = typeof process.getuid === "function" && process.getuid() === 0;
 
 let root: string;
 
@@ -43,15 +45,34 @@ function git(cwd: string, ...args: string[]): string {
   });
 }
 
+/**
+ * Plain status, the way anything other than the capture would run it, filters
+ * and all. Optional locks stay off so it can't refresh the index the capture
+ * then reads.
+ */
+function plainStatus(cwd: string): string {
+  try {
+    return execFileSync("git", ["status", "--porcelain"], {
+      cwd,
+      env: { ...fixtureEnv(), GIT_OPTIONAL_LOCKS: "0" },
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch {
+    // A failing required filter fails status too; only its side effect matters.
+    return "";
+  }
+}
+
 function write(repo: string, relative: string, content: string | Buffer): void {
   const target = path.join(repo, relative);
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.writeFileSync(target, content);
 }
 
-function blob(content: string | Buffer): string {
+function blob(content: string | Buffer, format: "sha1" | "sha256" = "sha1"): string {
   const bytes = typeof content === "string" ? Buffer.from(content) : content;
-  return createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
+  return createHash(format).update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
 }
 
 let repoCount = 0;
@@ -62,9 +83,9 @@ function newDir(): string {
 }
 
 /** `main` with two files, and `topic` checked out on top of it. */
-function topicRepo(): string {
+function topicRepo(objectFormat: "sha1" | "sha256" = "sha1"): string {
   const repo = newDir();
-  git(repo, "init", "-q", "-b", "main");
+  git(repo, "init", "-q", "-b", "main", `--object-format=${objectFormat}`);
   git(repo, "config", "commit.gpgsign", "false");
   write(repo, "a.txt", "a\n");
   write(repo, "b.txt", "b\n");
@@ -90,7 +111,7 @@ async function capturePoint(
   const result = await capture(repo, options);
   if (result.kind !== "captured")
     throw new Error(`Expected a point, got ${JSON.stringify(result)}`);
-  // Every point survives the trip a stored mark takes.
+  // Every point survives the trip a stored mark takes, refinements included.
   expect(ReviewPointSchema.parse(JSON.parse(JSON.stringify(result.point)))).toEqual(result.point);
   return result.point;
 }
@@ -103,26 +124,41 @@ function paths(point: ReviewPoint): string[] {
   return point.entries.map((candidate) => candidate.path);
 }
 
-/** Every file under the git dir: bytes, inode and times, so any write shows. */
+/**
+ * Every file and directory under the git dir: bytes, inode and times. A
+ * directory's times move when anything is created or removed in it, so even a
+ * lock file that came and went shows up.
+ */
 function snapshot(dir: string): Map<string, string> {
   const out = new Map<string, string>();
-  const walk = (current: string) => {
-    for (const name of fs.readdirSync(current)) {
-      const full = path.join(current, name);
-      const stats = fs.lstatSync(full, { bigint: true });
-      if (stats.isDirectory()) {
-        out.set(full, "dir");
-        walk(full);
-        continue;
-      }
-      const digest = stats.isFile()
-        ? createHash("sha1").update(fs.readFileSync(full)).digest("hex")
-        : "";
-      out.set(full, [stats.ino, stats.size, stats.mtimeNs, stats.ctimeNs, digest].join(":"));
+  const record = (full: string) => {
+    const stats = fs.lstatSync(full, { bigint: true });
+    const digest = stats.isFile()
+      ? createHash("sha1").update(fs.readFileSync(full)).digest("hex")
+      : "";
+    out.set(full, [stats.ino, stats.size, stats.mtimeNs, stats.ctimeNs, digest].join(":"));
+    if (stats.isDirectory()) {
+      for (const name of fs.readdirSync(full)) record(path.join(full, name));
     }
   };
-  walk(dir);
+  record(dir);
   return out;
+}
+
+function withSubmodule(): { repo: string; sub: string; commit: string } {
+  const upstream = newDir();
+  git(upstream, "init", "-q", "-b", "main");
+  write(upstream, "s.txt", "s\n");
+  git(upstream, "add", ".");
+  git(upstream, "commit", "-q", "-m", "s");
+  const repo = topicRepo();
+  git(repo, "checkout", "-q", "main");
+  git(repo, "submodule", "add", "-q", upstream, "sub");
+  git(repo, "commit", "-q", "-m", "sub");
+  git(repo, "checkout", "-q", "topic");
+  git(repo, "merge", "-q", "--ff-only", "main");
+  const sub = path.join(repo, "sub");
+  return { repo, sub, commit: git(sub, "rev-parse", "HEAD").trim() };
 }
 
 beforeAll(() => {
@@ -135,6 +171,7 @@ beforeAll(() => {
 
 afterAll(() => {
   vi.unstubAllEnvs();
+  // A test may leave an unreadable file behind; make sure cleanup can remove it.
   fs.rmSync(root, { recursive: true, force: true });
 });
 
@@ -185,31 +222,48 @@ describe("captureReviewPoint", () => {
 
   it("resolves a base branch the way the worktree card does", async () => {
     const repo = topicRepo();
+    write(repo, "a.txt", "remote\n");
+    git(repo, "commit", "-q", "-am", "remote");
+    const remoteTip = git(repo, "rev-parse", "HEAD").trim();
+    git(repo, "reset", "-q", "--hard", "main");
+    git(repo, "remote", "add", "origin", repo);
+    git(repo, "update-ref", "refs/remotes/origin/main", remoteTip);
+
     const point = await capturePoint(repo, { base: { kind: "branch", branch: "main" } });
-    expect(point.base.ref).toBe("refs/heads/main");
-    expect(point.entries).toEqual([]);
+    // The remote-tracking ref wins over the local branch, as on the card.
+    expect(point.base).toMatchObject({ ref: "refs/remotes/origin/main", tip: remoteTip });
   });
 
   describe("never writes to the repository", () => {
-    it("leaves objects, the index, refs and every other git file as they were", async () => {
+    posixOnly("leaves objects, the index, refs and every other git file as they were", async () => {
       const repo = topicRepo();
-      const sentinel = path.join(root, "clean-filter-ran");
-      // A clean filter that leaves a trace: status hashes a stat-dirty file
-      // through it, the way git-lfs's would write into .git/lfs.
-      git(repo, "config", "filter.spy.clean", `sh -c 'touch "${sentinel}"; cat'`);
-      git(repo, "config", "filter.spy.required", "true");
-      write(repo, ".gitattributes", "*.spy filter=spy\n");
+      const cleanRan = path.join(root, `clean-ran-${repoCount}`);
+      const processRan = path.join(root, `process-ran-${repoCount}`);
       write(repo, "f.spy", "x\n");
+      write(repo, "f.proc", "x\n");
       git(repo, "add", ".");
-      git(repo, "commit", "-q", "-m", "spy");
-      fs.rmSync(sentinel, { force: true });
+      git(repo, "commit", "-q", "-m", "filtered files");
+      // Filters that leave a trace, the way git-lfs's would write into .git/lfs.
+      git(repo, "config", "filter.spy.clean", `sh -c 'touch "${cleanRan}"; cat'`);
+      git(repo, "config", "filter.spy.required", "true");
+      git(repo, "config", "filter.proc.process", `sh -c 'touch "${processRan}"; exit 1'`);
+      // Not required, so its failure leaves status going on to the next file.
+      git(repo, "config", "filter.proc.required", "false");
+      write(repo, ".git/info/attributes", "*.spy filter=spy\n*.proc filter=proc\n");
       // Same size, later mtime: git can only tell by hashing the content.
       const later = new Date(Date.now() + 60_000);
       fs.utimesSync(path.join(repo, "f.spy"), later, later);
+      fs.utimesSync(path.join(repo, "f.proc"), later, later);
       write(repo, "a.txt", "dirty\n");
       write(repo, "b.txt", "staged\n");
       git(repo, "add", "b.txt");
       write(repo, "u.txt", "untracked\n");
+
+      // The fixture is armed: a plain status runs both filters.
+      plainStatus(repo);
+      expect(fs.existsSync(cleanRan) && fs.existsSync(processRan)).toBe(true);
+      fs.rmSync(cleanRan);
+      fs.rmSync(processRan);
 
       const objectsBefore = git(repo, "count-objects", "-v");
       const indexBefore = fs.readFileSync(path.join(repo, ".git", "index"));
@@ -220,7 +274,22 @@ describe("captureReviewPoint", () => {
       expect(git(repo, "count-objects", "-v")).toBe(objectsBefore);
       expect(fs.readFileSync(path.join(repo, ".git", "index")).equals(indexBefore)).toBe(true);
       expect(snapshot(path.join(repo, ".git"))).toEqual(before);
-      expect(fs.existsSync(sentinel)).toBe(false);
+      expect(fs.existsSync(cleanRan)).toBe(false);
+      expect(fs.existsSync(processRan)).toBe(false);
+    });
+
+    linuxOnly("refuses to run when a filter's name can't be switched off exactly", async () => {
+      const repo = topicRepo();
+      const config = path.join(repo, ".git", "config");
+      fs.appendFileSync(
+        config,
+        Buffer.concat([
+          Buffer.from('[filter "bad'),
+          Buffer.from([0xff]),
+          Buffer.from('"]\n\tclean = cat\n'),
+        ])
+      );
+      expect(await capture(repo)).toMatchObject({ kind: "failed", reason: "git-failed" });
     });
   });
 
@@ -241,34 +310,84 @@ describe("captureReviewPoint", () => {
     expect(stagedB.entries).not.toEqual(aloneA.entries);
   });
 
-  it("records intent-to-add and conflicted index entries as such", async () => {
-    const repo = topicRepo();
-    write(repo, "ita.txt", "later\n");
-    git(repo, "add", "-N", "ita.txt");
-    expect(entry(await capturePoint(repo), "ita.txt")?.index).toEqual({ kind: "intent-to-add" });
+  describe("index states", () => {
+    it("records intent-to-add, with and without its file", async () => {
+      const repo = topicRepo();
+      write(repo, "ita.txt", "later\n");
+      git(repo, "add", "-N", "ita.txt");
+      expect(entry(await capturePoint(repo), "ita.txt")).toEqual({
+        path: "ita.txt",
+        head: null,
+        index: { kind: "intent-to-add", mode: "100644" },
+        worktree: { kind: "file", mode: "100644", oid: blob("later\n"), size: 6 },
+      });
 
-    git(repo, "reset", "-q");
-    fs.rmSync(path.join(repo, "ita.txt"));
-    write(repo, "a.txt", "topic\n");
-    git(repo, "commit", "-q", "-am", "topic");
-    git(repo, "checkout", "-q", "main");
-    write(repo, "a.txt", "main\n");
-    git(repo, "commit", "-q", "-am", "main");
-    git(repo, "checkout", "-q", "topic");
-    try {
-      git(repo, "merge", "-q", "main");
-    } catch {
-      // The conflict is the point.
-    }
-    const conflicted = entry(await capturePoint(repo), "a.txt");
-    expect(conflicted?.head).toEqual({ mode: "100644", oid: blob("topic\n") });
-    expect(conflicted?.index).toEqual({
-      kind: "conflicted",
-      stages: [
-        { stage: 1, mode: "100644", oid: blob("a\n") },
-        { stage: 2, mode: "100644", oid: blob("topic\n") },
-        { stage: 3, mode: "100644", oid: blob("main\n") },
-      ],
+      // Status reports HEAD's side from the index once the file is gone.
+      fs.rmSync(path.join(repo, "ita.txt"));
+      expect(entry(await capturePoint(repo), "ita.txt")).toEqual({
+        path: "ita.txt",
+        head: null,
+        index: { kind: "intent-to-add", mode: "100644" },
+        worktree: { kind: "absent" },
+      });
+    });
+
+    it("keeps a staged empty file apart from intent-to-add", async () => {
+      const repo = topicRepo();
+      write(repo, "empty.txt", "");
+      git(repo, "add", "empty.txt");
+      fs.rmSync(path.join(repo, "empty.txt"));
+      expect(entry(await capturePoint(repo), "empty.txt")?.index).toEqual({
+        kind: "entry",
+        mode: "100644",
+        oid: blob(""),
+      });
+    });
+
+    it("records each conflicted stage and HEAD's side", async () => {
+      const repo = topicRepo();
+      write(repo, "a.txt", "topic\n");
+      git(repo, "commit", "-q", "-am", "topic");
+      git(repo, "checkout", "-q", "main");
+      write(repo, "a.txt", "main\n");
+      git(repo, "commit", "-q", "-am", "main");
+      git(repo, "checkout", "-q", "topic");
+      try {
+        git(repo, "merge", "-q", "main");
+      } catch {
+        // The conflict is the point.
+      }
+      const conflicted = entry(await capturePoint(repo), "a.txt");
+      expect(conflicted?.head).toEqual({ mode: "100644", oid: blob("topic\n") });
+      expect(conflicted?.index).toEqual({
+        kind: "conflicted",
+        stages: [
+          { stage: 1, mode: "100644", oid: blob("a\n") },
+          { stage: 2, mode: "100644", oid: blob("topic\n") },
+          { stage: 3, mode: "100644", oid: blob("main\n") },
+        ],
+      });
+    });
+
+    it("sees a change git hides behind assume-unchanged", async () => {
+      const repo = topicRepo();
+      git(repo, "update-index", "--assume-unchanged", "a.txt");
+      write(repo, "a.txt", "hidden\n");
+      expect(entry(await capturePoint(repo), "a.txt")?.worktree).toMatchObject({
+        oid: blob("hidden\n"),
+      });
+    });
+
+    it("sees a skip-worktree file only once it's on disk", async () => {
+      const repo = topicRepo();
+      git(repo, "update-index", "--skip-worktree", "a.txt");
+      fs.rmSync(path.join(repo, "a.txt"));
+      expect((await capturePoint(repo)).entries).toEqual([]);
+
+      write(repo, "a.txt", "materialised\n");
+      expect(entry(await capturePoint(repo), "a.txt")?.worktree).toMatchObject({
+        oid: blob("materialised\n"),
+      });
     });
   });
 
@@ -281,6 +400,16 @@ describe("captureReviewPoint", () => {
         mode: "100755",
         oid: blob("a\n"),
         size: 2,
+      });
+    });
+
+    posixOnly("takes the mode from the index when git ignores the executable bit", async () => {
+      const repo = topicRepo();
+      git(repo, "config", "core.fileMode", "false");
+      fs.chmodSync(path.join(repo, "a.txt"), 0o755);
+      write(repo, "a.txt", "edited\n");
+      expect(entry(await capturePoint(repo), "a.txt")?.worktree).toMatchObject({
+        mode: "100644",
       });
     });
 
@@ -312,6 +441,33 @@ describe("captureReviewPoint", () => {
       });
     });
 
+    posixOnly("reads a link checked out as a file when core.symlinks is off", async () => {
+      const repo = topicRepo();
+      fs.symlinkSync("a.txt", path.join(repo, "link"));
+      git(repo, "add", "link");
+      git(repo, "commit", "-q", "-m", "link");
+      git(repo, "config", "core.symlinks", "false");
+      fs.rmSync(path.join(repo, "link"));
+      write(repo, "link", "a.txt");
+      expect(entry(await capturePoint(repo), "link")?.worktree).toEqual({
+        kind: "symlink",
+        oid: blob("a.txt"),
+      });
+    });
+
+    posixOnly("never follows a directory replaced by a symlink", async () => {
+      const repo = topicRepo();
+      write(repo, "dir/file.txt", "inside\n");
+      git(repo, "add", ".");
+      git(repo, "commit", "-q", "-m", "dir");
+      const outside = newDir();
+      write(outside, "file.txt", "outside\n");
+      fs.rmSync(path.join(repo, "dir"), { recursive: true });
+      fs.symlinkSync(outside, path.join(repo, "dir"));
+      const point = await capturePoint(repo);
+      expect(entry(point, "dir/file.txt")?.worktree).toEqual({ kind: "absent" });
+    });
+
     posixOnly("records a file replaced by a directory as a directory", async () => {
       const repo = topicRepo();
       fs.rmSync(path.join(repo, "a.txt"));
@@ -321,23 +477,37 @@ describe("captureReviewPoint", () => {
       expect(entry(point, "a.txt/inner")?.worktree).toMatchObject({ kind: "file" });
     });
 
-    describe("submodules", () => {
-      function withSubmodule(): { repo: string; sub: string; commit: string } {
-        const upstream = newDir();
-        git(upstream, "init", "-q", "-b", "main");
-        write(upstream, "s.txt", "s\n");
-        git(upstream, "add", ".");
-        git(upstream, "commit", "-q", "-m", "s");
-        const repo = topicRepo();
-        git(repo, "checkout", "-q", "main");
-        git(repo, "submodule", "add", "-q", upstream, "sub");
-        git(repo, "commit", "-q", "-m", "sub");
-        git(repo, "checkout", "-q", "topic");
-        git(repo, "merge", "-q", "--ff-only", "main");
-        const sub = path.join(repo, "sub");
-        return { repo, sub, commit: git(sub, "rev-parse", "HEAD").trim() };
-      }
+    posixOnly("never opens a FIFO", async () => {
+      const repo = topicRepo();
+      fs.rmSync(path.join(repo, "a.txt"));
+      execFileSync("mkfifo", [path.join(repo, "a.txt")]);
+      const point = await capturePoint(repo);
+      expect(entry(point, "a.txt")?.worktree).toEqual({
+        kind: "unverifiable",
+        reason: "special-file",
+      });
+      expect(point.incomplete?.reasons).toEqual(["special-file"]);
+    });
 
+    (isRoot || process.platform === "win32" ? it.skip : it)(
+      "marks a file it can't read unverifiable",
+      async () => {
+        const repo = topicRepo();
+        write(repo, "a.txt", "secret\n");
+        fs.chmodSync(path.join(repo, "a.txt"), 0o000);
+        try {
+          const point = await capturePoint(repo);
+          expect(entry(point, "a.txt")?.worktree).toEqual({
+            kind: "unverifiable",
+            reason: "unreadable",
+          });
+        } finally {
+          fs.chmodSync(path.join(repo, "a.txt"), 0o644);
+        }
+      }
+    );
+
+    describe("submodules", () => {
       it("leaves a clean submodule out", async () => {
         const { repo } = withSubmodule();
         const point = await capturePoint(repo);
@@ -369,10 +539,21 @@ describe("captureReviewPoint", () => {
           commit,
           contents: "dirty",
         });
-        expect(point.incomplete).toMatchObject({
+        expect(point.incomplete).toEqual({
           reasons: ["submodule-contents"],
           uncovered: [{ path: "sub", reason: "submodule-contents" }],
           uncoveredCount: 1,
+        });
+      });
+
+      it("says it can't vouch for files the submodule was told not to look at", async () => {
+        const { repo, sub, commit } = withSubmodule();
+        git(sub, "update-index", "--assume-unchanged", "s.txt");
+        write(sub, "s.txt", "hidden\n");
+        expect(entry(await capturePoint(repo), "sub")?.worktree).toEqual({
+          kind: "submodule",
+          commit,
+          contents: "unknown",
         });
       });
 
@@ -382,12 +563,34 @@ describe("captureReviewPoint", () => {
         const point = await capturePoint(repo);
         expect(point.entries).toEqual([]);
         expect(point.incomplete).toBeNull();
+
+        write(repo, "sub/stray.txt", "x\n");
+        expect(entry(await capturePoint(repo), "sub")?.worktree).toEqual({
+          kind: "submodule",
+          commit: null,
+          contents: "unknown",
+        });
+      });
+
+      it.each([
+        ["left out as clean", false],
+        ["listed as moved", true],
+      ])("notices its contents changing while it's captured, %s", async (_label, move) => {
+        const { repo, sub } = withSubmodule();
+        if (move) {
+          write(sub, "s.txt", "s2\n");
+          git(sub, "commit", "-q", "-am", "s2");
+        }
+        const result = await capture(repo, {
+          beforeValidation: async () => write(sub, "s.txt", "edited mid-capture\n"),
+        });
+        expect(result).toEqual({ kind: "changed-during-capture" });
       });
     });
   });
 
   describe("paths", () => {
-    posixOnly("keeps unusual names exactly as git spells them", async () => {
+    posixOnly("keeps unusual names exactly as git spells them, in byte order", async () => {
       const repo = topicRepo();
       const names = [
         "tab\tname.txt",
@@ -397,9 +600,12 @@ describe("captureReviewPoint", () => {
         "-leading-dash.txt",
         "back\\slash.txt",
         "日本語.txt",
+        "Zebra.txt",
       ];
       for (const name of names) write(repo, name, `${name}\n`);
       const point = await capturePoint(repo);
+      const expected = names.slice().sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b)));
+      expect(paths(point)).toEqual(expected);
       for (const name of names) {
         expect(entry(point, name)?.worktree).toMatchObject({ oid: blob(`${name}\n`) });
         expect(entry(point, name)?.pathBytes).toBeUndefined();
@@ -410,10 +616,9 @@ describe("captureReviewPoint", () => {
       const repo = topicRepo();
       write(repo, "Case.txt", "upper\n");
       write(repo, "case.txt", "lower\n");
-      const caseSensitive =
-        fs.readdirSync(repo).includes("Case.txt") && fs.readdirSync(repo).includes("case.txt");
+      const listed = fs.readdirSync(repo);
       const point = await capturePoint(repo);
-      if (caseSensitive) {
+      if (listed.includes("Case.txt") && listed.includes("case.txt")) {
         expect(entry(point, "Case.txt")?.worktree).toMatchObject({ oid: blob("upper\n") });
         expect(entry(point, "case.txt")?.worktree).toMatchObject({ oid: blob("lower\n") });
       } else {
@@ -422,20 +627,27 @@ describe("captureReviewPoint", () => {
       }
     });
 
-    it("keeps a name that isn't valid UTF-8 as bytes", async () => {
-      const repo = topicRepo();
-      const name = Buffer.from([0x62, 0x61, 0x64, 0xff, 0x2e, 0x74, 0x78, 0x74]);
-      try {
-        fs.writeFileSync(Buffer.concat([Buffer.from(`${repo}/`), name]), "bytes\n");
-      } catch {
-        // macOS and Windows refuse such names; Linux keeps them.
-        return;
+    // macOS and Windows refuse names that aren't valid UTF-8; Linux keeps them.
+    linuxOnly(
+      "keeps names that aren't valid UTF-8 as bytes, even when they display alike",
+      async () => {
+        const repo = topicRepo();
+        const first = Buffer.from([0x62, 0xff, 0x2e, 0x74]);
+        const second = Buffer.from([0x62, 0xfe, 0x2e, 0x74]);
+        fs.writeFileSync(Buffer.concat([Buffer.from(`${repo}/`), first]), "first\n");
+        fs.writeFileSync(Buffer.concat([Buffer.from(`${repo}/`), second]), "second\n");
+        const point = await capturePoint(repo);
+        const byBytes = new Map(point.entries.map((item) => [item.pathBytes, item]));
+        expect(point.entries).toHaveLength(2);
+        expect(point.entries[0].path).toBe(point.entries[1].path);
+        expect(byBytes.get(first.toString("base64"))?.worktree).toMatchObject({
+          oid: blob("first\n"),
+        });
+        expect(byBytes.get(second.toString("base64"))?.worktree).toMatchObject({
+          oid: blob("second\n"),
+        });
       }
-      const point = await capturePoint(repo);
-      const found = point.entries.find((candidate) => candidate.pathBytes !== undefined);
-      expect(found?.pathBytes).toBe(name.toString("base64"));
-      expect(found?.worktree).toMatchObject({ oid: blob("bytes\n") });
-    });
+    );
   });
 
   describe("content git transforms on commit", () => {
@@ -455,33 +667,25 @@ describe("captureReviewPoint", () => {
       expect(entry(lf, "eol.txt")?.worktree).toMatchObject({ oid: blob("one\ntwo\n") });
     });
 
-    posixOnly("identifies what a lossy clean filter would merge", async () => {
-      const repo = topicRepo();
-      git(repo, "config", "filter.strip.clean", "grep -v SECRET || true");
-      write(repo, ".gitattributes", "*.cfg filter=strip\n");
+    posixOnly("finds an edit a many-to-one clean filter hides from git", async () => {
+      const repo = newDir();
+      git(repo, "init", "-q", "-b", "main");
+      git(repo, "config", "filter.fold.clean", "tr X '\\n'");
+      write(repo, ".gitattributes", "*.cfg filter=fold\n");
       write(repo, "app.cfg", "a=1\n");
       git(repo, "add", ".");
       git(repo, "commit", "-q", "-m", "cfg");
+      // Committed on the base, so only the working tree can bring it into the change set.
+      git(repo, "checkout", "-q", "-b", "topic");
 
-      write(repo, "app.cfg", "a=1\nSECRET=x\n");
-      const withSecret = await capturePoint(repo);
-      write(repo, "app.cfg", "a=1\nSECRET=y\n");
-      const otherSecret = await capturePoint(repo);
+      // Same size, later mtime, and the same bytes once cleaned.
+      write(repo, "app.cfg", "a=1X");
+      const later = new Date(Date.now() + 60_000);
+      fs.utimesSync(path.join(repo, "app.cfg"), later, later);
+      expect(plainStatus(repo)).toBe("");
 
-      expect(entry(withSecret, "app.cfg")?.worktree).toMatchObject({
-        oid: blob("a=1\nSECRET=x\n"),
-      });
-      expect(entry(otherSecret, "app.cfg")?.worktree).toMatchObject({
-        oid: blob("a=1\nSECRET=y\n"),
-      });
-    });
-
-    it("sees a change git hides behind assume-unchanged", async () => {
-      const repo = topicRepo();
-      git(repo, "update-index", "--assume-unchanged", "a.txt");
-      write(repo, "a.txt", "hidden\n");
-      expect(entry(await capturePoint(repo), "a.txt")?.worktree).toMatchObject({
-        oid: blob("hidden\n"),
+      expect(entry(await capturePoint(repo), "app.cfg")?.worktree).toMatchObject({
+        oid: blob("a=1X"),
       });
     });
   });
@@ -512,6 +716,17 @@ describe("captureReviewPoint", () => {
       const read = point.entries.filter((candidate) => candidate.worktree.kind === "file");
       expect(read).toHaveLength(1);
       expect(point.incomplete?.reasons).toEqual(["byte-limit"]);
+    });
+
+    it("hashes a file across many read chunks", async () => {
+      const repo = topicRepo();
+      const big = Buffer.alloc(600 * 1024);
+      for (let i = 0; i < big.length; i++) big[i] = i % 251;
+      write(repo, "big.bin", big);
+      expect(entry(await capturePoint(repo), "big.bin")?.worktree).toMatchObject({
+        oid: blob(big),
+        size: big.length,
+      });
     });
 
     it("names the paths past the path limit", async () => {
@@ -559,14 +774,21 @@ describe("captureReviewPoint", () => {
       });
     });
 
-    it("stops when the caller cancels", async () => {
+    it("stops when the caller cancels, before or during the capture", async () => {
       const repo = topicRepo();
-      const controller = new AbortController();
-      controller.abort();
-      expect(await capture(repo, { signal: controller.signal })).toMatchObject({
+      const before = new AbortController();
+      before.abort();
+      expect(await capture(repo, { signal: before.signal })).toMatchObject({
         kind: "failed",
         reason: "cancelled",
       });
+
+      const during = new AbortController();
+      const result = await capture(repo, {
+        signal: during.signal,
+        beforeValidation: async () => during.abort(),
+      });
+      expect(result).toMatchObject({ kind: "failed", reason: "cancelled" });
     });
   });
 
@@ -577,7 +799,10 @@ describe("captureReviewPoint", () => {
         (repo: string) => write(repo, "a.txt", "edited again, longer\n"),
       ],
       ["a new file appears", (repo: string) => write(repo, "appeared.txt", "new\n")],
-      ["a file is staged", (repo: string) => git(repo, "add", "a.txt")],
+      [
+        "the index is rewritten",
+        (repo: string) => git(repo, "update-index", "--assume-unchanged", "b.txt"),
+      ],
       [
         "the branch is switched at the same commit",
         (repo: string) => git(repo, "checkout", "-q", "-b", "other"),
@@ -631,8 +856,38 @@ describe("captureReviewPoint", () => {
       const point = await capturePoint(repo);
       expect(point.head).toEqual({ kind: "unborn", branch: "main" });
       expect(point.base).toMatchObject({ tip: null, mergeBases: [] });
-      expect(paths(point)).toEqual(["loose.txt", "staged.txt"]);
       expect(point.incomplete).toBeNull();
+      expect(point.entries).toEqual([
+        {
+          path: "loose.txt",
+          head: null,
+          index: { kind: "absent" },
+          worktree: { kind: "file", mode: "100644", oid: blob("l\n"), size: 2 },
+        },
+        {
+          path: "staged.txt",
+          head: null,
+          index: { kind: "entry", mode: "100644", oid: blob("s\n") },
+          worktree: { kind: "file", mode: "100644", oid: blob("s\n"), size: 2 },
+        },
+      ]);
+    });
+
+    it("captures a SHA-256 repository", async () => {
+      let repo: string;
+      try {
+        repo = topicRepo("sha256");
+      } catch {
+        // A git built without SHA-256 support.
+        return;
+      }
+      write(repo, "a.txt", "edited\n");
+      const point = await capturePoint(repo);
+      expect(point.objectFormat).toBe("sha256");
+      expect(entry(point, "a.txt")).toMatchObject({
+        head: { oid: blob("a\n", "sha256") },
+        worktree: { oid: blob("edited\n", "sha256") },
+      });
     });
 
     it("says the committed change set isn't covered when the base doesn't exist", async () => {
@@ -672,6 +927,8 @@ describe("captureReviewPoint", () => {
       git(repo, "merge", "-q", "--no-edit", "left");
       const point = await capturePoint(repo, { base: { kind: "ref", ref: "refs/heads/cross-l" } });
       expect(point.base.mergeBases).toHaveLength(2);
+      // Each base contributes the path the other one already has.
+      expect(paths(point)).toEqual(["left.txt", "right.txt"]);
     });
 
     it("leaves a nested repository's contents uncovered", async () => {

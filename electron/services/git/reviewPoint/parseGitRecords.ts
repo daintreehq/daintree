@@ -16,8 +16,19 @@ function splitNul(output: Buffer): Buffer[] {
     records.push(output.subarray(start, i));
     start = i + 1;
   }
-  if (start < output.length) records.push(output.subarray(start));
+  // git ends every record with a NUL; output that stops short was cut off.
+  if (start < output.length) throw new Error("Truncated git output");
   return records;
+}
+
+const MODE = /^[0-7]{6}$/;
+const OID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+
+function assertFields(modes: readonly string[], oids: readonly string[], path: Buffer): void {
+  if (!modes.every((mode) => MODE.test(mode)) || !oids.every((oid) => OID.test(oid))) {
+    throw new Error("Malformed git record");
+  }
+  if (path.length === 0) throw new Error("Malformed git record");
 }
 
 /** The first `count` space-separated fields as text, and the bytes after them. */
@@ -108,6 +119,7 @@ export function parsePorcelainV2(output: Buffer): ParsedStatus {
       const split = splitFields(part, 8);
       if (!split) throw new Error("Malformed status record");
       const [, xy, sub, modeHead, modeIndex, modeWorktree, oidHead, oidIndex] = split.fields;
+      assertFields([modeHead, modeIndex, modeWorktree], [oidHead, oidIndex], split.rest);
       records.push({
         kind: "changed",
         xy,
@@ -126,6 +138,7 @@ export function parsePorcelainV2(output: Buffer): ParsedStatus {
       const split = splitFields(part, 10);
       if (!split) throw new Error("Malformed status record");
       const [, xy, sub, m1, m2, m3, modeWorktree, h1, h2, h3] = split.fields;
+      assertFields([m1, m2, m3, modeWorktree], [h1, h2, h3], split.rest);
       const stages: StatusUnmergedRecord["stages"] = [];
       if (!/^0+$/.test(m1)) stages.push({ stage: 1, mode: m1, oid: h1 });
       if (!/^0+$/.test(m2)) stages.push({ stage: 2, mode: m2, oid: h2 });
@@ -178,6 +191,7 @@ export function parseDiffTreeRaw(output: Buffer): TreeDiffRecord[] {
     }
     i++;
     const [srcMode, dstMode, srcOid, dstOid, status] = fields;
+    assertFields([srcMode, dstMode], [srcOid, dstOid], path);
     records.push({ srcMode, dstMode, srcOid, dstOid, status, path });
   }
   return records;
@@ -203,26 +217,26 @@ export function parseIndexListing(output: Buffer): IndexListingRecord[] {
       throw new Error("Malformed index record");
     }
     const [tag, mode, oid, stage] = fields;
+    assertFields([mode], [oid], record.subarray(tab + 1));
     records.push({ tag, mode, oid, stage: Number(stage), path: record.subarray(tab + 1) });
   }
   return records;
 }
 
 /**
- * `git config -z --get-regexp`: `<key>\n<value>`, or a bare `<key>` for a
- * value-less boolean. Section and variable names come back lowercased;
- * subsection names keep their case.
+ * `git config -z --list`: `<key>\n<value>`, or a bare `<key>` for a value-less
+ * boolean. Section and variable names come back lowercased; subsection names
+ * keep their case and their bytes, so keys stay `Buffer`s.
  */
-export function parseConfigListing(output: Buffer): Array<{ key: string; value: string | null }> {
-  const entries: Array<{ key: string; value: string | null }> = [];
+export function parseConfigListing(output: Buffer): Array<{ key: Buffer; value: string | null }> {
+  const entries: Array<{ key: Buffer; value: string | null }> = [];
   for (const record of splitNul(output)) {
     if (record.length === 0) continue;
-    const text = record.toString("utf8");
-    const newline = text.indexOf("\n");
+    const newline = record.indexOf(0x0a);
     entries.push(
       newline === -1
-        ? { key: text, value: null }
-        : { key: text.slice(0, newline), value: text.slice(newline + 1) }
+        ? { key: record, value: null }
+        : { key: record.subarray(0, newline), value: record.toString("utf8", newline + 1) }
     );
   }
   return entries;

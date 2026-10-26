@@ -100,6 +100,15 @@ const EMPTY_TREE: Record<ObjectFormat, string> = {
   sha256: "6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321",
 };
 
+/** What `git add -N` puts in the index, and what a staged empty file looks like too. */
+const EMPTY_BLOB: Record<ObjectFormat, string> = {
+  sha1: "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+  sha256: "473a0f4c3be8a93681a267e3b1e9a7dcda1185436fe141f7749120a303721813",
+};
+
+/** Merge bases the change set is built from; past this the point says it's incomplete. */
+const MAX_MERGE_BASES = 64;
+
 const READ_CONCURRENCY = 8;
 /** Share of the time budget the reads may spend; the rest confirms nothing moved. */
 const READ_PHASE_SHARE = 0.7;
@@ -132,7 +141,12 @@ export async function captureReviewPoint(
   options.signal?.addEventListener("abort", onAbort, { once: true });
 
   try {
-    return await capture(cwd, options, limits, controller.signal);
+    const work = capture(cwd, options, limits, controller.signal);
+    // A stalled filesystem call never settles and can't be cancelled, so the
+    // caller is answered when the signal fires whatever is still pending. What
+    // the abandoned work does afterwards no longer reaches anyone.
+    work.catch(() => {});
+    return await Promise.race([work, rejectOnAbort(controller.signal)]);
   } catch (error) {
     const stopped = controller.signal.aborted ? controller.signal.reason : null;
     if (stopped instanceof CaptureStopped || error instanceof GitTimeoutError) {
@@ -150,6 +164,13 @@ export async function captureReviewPoint(
   }
 }
 
+function rejectOnAbort(signal: AbortSignal): Promise<never> {
+  return new Promise((_, reject) => {
+    if (signal.aborted) reject(signal.reason);
+    signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+  });
+}
+
 function failed(reason: ReviewPointCaptureFailure, message: string): ReviewPointCaptureResult {
   return { kind: "failed", reason, message };
 }
@@ -165,6 +186,11 @@ interface Candidate {
   status?: StatusChangedRecord | StatusUnmergedRecord;
   /** HEAD's side of an unmerged path, which status doesn't report. */
   unmergedHead?: ReviewPointGitEntry | null;
+  /**
+   * Set for an intent-to-add entry. Status fills HEAD's columns for one from
+   * the index once its file is deleted, so HEAD's side comes from here.
+   */
+  intentToAdd?: { mode: string; head: ReviewPointGitEntry | null };
   committed?: ReviewPointGitEntry | null;
   index?: IndexListingRecord[];
   /** Kept only if its file turns out to exist: sparse checkouts leave most absent. */
@@ -265,7 +291,11 @@ async function capture(
       : { kind: "detached", commit: headOid };
   }
 
-  const base = await resolveBase(git, options.base, headOid);
+  const { base, mergeBasesTruncated } = await resolveBase(git, options.base, headOid);
+  if (mergeBasesTruncated) {
+    listingComplete = false;
+    reasons.add("change-set-too-large");
+  }
   // Without a base the branch's own commits can't be told apart from history;
   // an unborn branch has none to tell apart.
   if (base.tip === null && headOid !== null) reasons.add("base-unavailable");
@@ -301,6 +331,52 @@ async function capture(
     }
     if (record.kind === "unmerged") hasUnmerged = true;
     candidateFor(record.path).status = record;
+  }
+
+  const emptyBlob = EMPTY_BLOB[objectFormat];
+  const mayIntendToAdd = (status?.parsed.records ?? []).some(
+    (record) => record.kind === "changed" && (record.xy[1] === "A" || record.oidIndex === emptyBlob)
+  );
+  if (mayIntendToAdd) {
+    // An intent-to-add entry is the one entry these two readings of the index
+    // disagree about; a staged empty file reads the same both ways.
+    try {
+      const against = headOid ?? EMPTY_TREE[objectFormat];
+      const read = async (mode: "visible" | "invisible") => {
+        const args = [
+          "diff-index",
+          "--cached",
+          "-r",
+          "-z",
+          "--no-renames",
+          `--ita-${mode}-in-index`,
+        ];
+        const out = await git([...args, against]);
+        return new Map(
+          parseDiffTreeRaw(out.stdout).map((record) => [record.path.toString("latin1"), record])
+        );
+      };
+      const visible = await read("visible");
+      const invisible = await read("invisible");
+      for (const [key, shown] of visible) {
+        const hidden = invisible.get(key);
+        const candidate = candidates.get(key);
+        if (
+          !candidate ||
+          (hidden && hidden.dstMode === shown.dstMode && hidden.dstOid === shown.dstOid)
+        ) {
+          continue;
+        }
+        candidate.intentToAdd = {
+          mode: shown.dstMode,
+          head: hidden ? gitEntryOrNull(hidden.srcMode, hidden.srcOid) : null,
+        };
+      }
+    } catch (error) {
+      if (!(error instanceof GitOutputLimitError)) throw error;
+      listingComplete = false;
+      reasons.add("change-set-too-large");
+    }
   }
 
   if (hasUnmerged && headOid) {
@@ -372,13 +448,23 @@ async function capture(
     signal,
   };
   let moved = false;
+  const linkedAncestors = new Map<string, Promise<boolean>>();
   const readCandidate = async (candidate: Candidate): Promise<void> => {
+    signal.throwIfAborted();
     if (moved || candidate.worktree) return;
     if (Date.now() >= readsEndAt) {
       candidate.worktree = { identity: unverifiable("deadline"), recheck: null };
       return;
     }
-    const outcome = await readWorktree(candidate, root, objectFormat, budget, settings, git);
+    const outcome = await readWorktree(
+      candidate,
+      root,
+      objectFormat,
+      budget,
+      settings,
+      git,
+      linkedAncestors
+    );
     if (outcome === "moved") moved = true;
     else candidate.worktree = outcome;
   };
@@ -390,6 +476,8 @@ async function capture(
   );
   await forEachLimited(conditional, READ_CONCURRENCY, readCandidate);
   if (moved) return { kind: "changed-during-capture" };
+  // Left out because they matched, so they're re-checked like everything read.
+  const dropped: Candidate[] = [];
   for (const [key, candidate] of candidates) {
     const identity = candidate.worktree?.identity;
     if (!identity || identity.kind === "unverifiable") continue;
@@ -399,7 +487,10 @@ async function capture(
       identity.kind === "submodule" &&
       identity.contents === "clean" &&
       (identity.commit === null || identity.commit === candidate.index?.[0]?.oid);
-    if (dropSkipped || dropGitlink) candidates.delete(key);
+    if (dropSkipped || dropGitlink) {
+      candidates.delete(key);
+      dropped.push(candidate);
+    }
   }
 
   const ordered = [...candidates.values()].sort((a, b) => Buffer.compare(a.path, b.path));
@@ -430,11 +521,13 @@ async function capture(
     return { kind: "changed-during-capture" };
   }
   let unchanged = true;
-  await forEachLimited(kept, READ_CONCURRENCY, async (candidate) => {
+  await forEachLimited([...kept, ...dropped], READ_CONCURRENCY, async (candidate) => {
     const recheck = candidate.worktree?.recheck;
     if (unchanged && recheck && !(await recheck())) unchanged = false;
   });
   if (!unchanged) return { kind: "changed-during-capture" };
+  // A recheck that settled after the deadline confirms nothing for the caller.
+  signal.throwIfAborted();
 
   // -- The point --------------------------------------------------------------
 
@@ -540,7 +633,7 @@ async function resolveBase(
   git: Git,
   requested: ReviewPointBaseRequest,
   headOid: string | null
-): Promise<ReviewPoint["base"]> {
+): Promise<{ base: ReviewPoint["base"]; mergeBasesTruncated: boolean }> {
   let ref: string | null;
   if (requested.kind === "branch") {
     if (!validateBranchName(requested.branch).valid) {
@@ -563,7 +656,12 @@ async function resolveBase(
     const oid = out.stdout.toString("utf8").trim();
     tip = OID_LINE.test(oid) ? oid : null;
   }
-  if (tip === null) return { requested, ref: null, tip: null, mergeBases: [] };
+  if (tip === null) {
+    return {
+      base: { requested, ref: null, tip: null, mergeBases: [] },
+      mergeBasesTruncated: false,
+    };
+  }
 
   let mergeBases: string[] = [];
   if (headOid) {
@@ -573,28 +671,35 @@ async function resolveBase(
     mergeBases = out.stdout
       .toString("utf8")
       .split("\n")
-      .filter((line) => OID_LINE.test(line))
-      .slice(0, 64);
+      .filter((line) => OID_LINE.test(line));
   }
-  return { requested, ref, tip, mergeBases };
+  return {
+    base: { requested, ref, tip, mergeBases: mergeBases.slice(0, MAX_MERGE_BASES) },
+    mergeBasesTruncated: mergeBases.length > MAX_MERGE_BASES,
+  };
 }
 
+/**
+ * The whole config, read as bytes: a key regexp would run under a UTF-8
+ * locale, where a subsection name that isn't valid UTF-8 can fail to match,
+ * and that driver would then run unswitched.
+ */
 async function readRepositorySettings(git: Git, cwd: string): Promise<RepositorySettings> {
-  const out = await git(
-    [
-      "config",
-      "-z",
-      "--get-regexp",
-      "^(filter\\..+\\.(clean|process|required)|core\\.(filemode|symlinks))$",
-    ],
-    { cwd, okExitCodes: [1] }
-  );
+  const out = await git(["config", "-z", "--list"], { cwd, okExitCodes: [1] });
   const settings: RepositorySettings = { filterDrivers: [], fileMode: true, symlinks: true };
   const drivers = new Set<string>();
   for (const { key, value } of parseConfigListing(out.stdout)) {
-    if (key === "core.filemode") settings.fileMode = gitBool(value);
-    else if (key === "core.symlinks") settings.symlinks = gitBool(value);
-    else drivers.add(key.slice("filter.".length, key.lastIndexOf(".")));
+    const text = key.toString("utf8");
+    if (text === "core.filemode") settings.fileMode = gitBool(value);
+    else if (text === "core.symlinks") settings.symlinks = gitBool(value);
+    else if (/^filter\..+\.(clean|process|required)$/s.test(text)) {
+      // The override is handed to git as text; a name it can't carry exactly
+      // would switch off some other driver and leave this one running.
+      if (!Buffer.from(text, "utf8").equals(key)) {
+        throw new Error("A filter driver's name isn't valid UTF-8, so it can't be switched off.");
+      }
+      drivers.add(text.slice("filter.".length, text.lastIndexOf(".")));
+    }
   }
   settings.filterDrivers = [...drivers];
   return settings;
@@ -622,17 +727,34 @@ async function readWorktree(
   objectFormat: ObjectFormat,
   budget: ReadBudget,
   settings: RepositorySettings,
-  git: Git
+  git: Git,
+  linkedAncestors: Map<string, Promise<boolean>>
 ): Promise<WorktreeOutcome | "moved"> {
   const target = absoluteWorktreePath(root, candidate.path);
   const index = indexIdentity(candidate);
   const indexMode = index.kind === "entry" ? index.mode : null;
   const headMode = headIdentity(candidate)?.mode ?? null;
 
+  // A directory swapped for a symlink would have the read follow it out of the
+  // worktree; git counts what was under it as removed, and so does the capture.
+  if (await hasLinkedAncestor(root, candidate.path, linkedAncestors)) {
+    return {
+      identity: { kind: "absent" },
+      recheck: () => hasLinkedAncestor(root, candidate.path, new Map()),
+    };
+  }
+
   const isGitlink = indexMode === "160000" || (index.kind === "absent" && headMode === "160000");
   if (isGitlink) {
     const stats = await lstatOrNull(target);
-    if (stats?.isDirectory()) return readSubmodule(target.toString(), git);
+    if (stats?.isDirectory()) {
+      // Submodule discovery and git's arguments take text, so a name that
+      // isn't valid UTF-8 can't be reached exactly.
+      if (typeof target !== "string" && pathFields(candidate.path).pathBytes !== undefined) {
+        return { identity: unverifiable("unreadable"), recheck: null };
+      }
+      return readSubmodule(target.toString(), git);
+    }
   }
 
   const { read, signature } = await readWorktreePath(
@@ -677,39 +799,42 @@ async function readWorktree(
  * superproject.
  */
 async function readSubmodule(target: string, git: Git): Promise<WorktreeOutcome> {
+  const identity = await readSubmoduleIdentity(target, git);
+  const expected = JSON.stringify(identity);
+  return {
+    identity,
+    recheck:
+      identity.kind === "unverifiable"
+        ? null
+        : async () => JSON.stringify(await readSubmoduleIdentity(target, git)) === expected,
+  };
+}
+
+async function readSubmoduleIdentity(
+  target: string,
+  git: Git
+): Promise<ReviewPointWorktreeIdentity> {
   const gitDir = await resolveGitDirFromFs(target);
   if (!gitDir) {
     let names: string[];
     try {
       names = await fs.promises.readdir(target);
     } catch {
-      return { identity: unverifiable("unreadable"), recheck: null };
+      return unverifiable("unreadable");
     }
     // An unpopulated submodule is an empty directory, which git counts as
     // unchanged; anything else in there is nothing git can vouch for.
-    return {
-      identity: {
-        kind: "submodule",
-        commit: null,
-        contents: names.length === 0 ? "clean" : "unknown",
-      },
-      recheck: async () =>
-        (await fs.promises.readdir(target).catch(() => [])).length === names.length,
-    };
+    return { kind: "submodule", commit: null, contents: names.length === 0 ? "clean" : "unknown" };
   }
 
   const bound = ["--git-dir", gitDir, "--work-tree", target];
-  const readCommit = async () => {
-    const out = await git([...bound, "rev-parse", "--verify", "-q", "HEAD^{commit}"], {
-      cwd: target,
-      config: [],
-      okExitCodes: [1],
-    });
-    const oid = out.stdout.toString("utf8").trim();
-    return OID_LINE.test(oid) ? oid : null;
-  };
-  const commit = await readCommit();
-  if (!commit) return { identity: unverifiable("unreadable"), recheck: null };
+  const out = await git([...bound, "rev-parse", "--verify", "-q", "HEAD^{commit}"], {
+    cwd: target,
+    config: [],
+    okExitCodes: [1],
+  });
+  const commit = out.stdout.toString("utf8").trim();
+  if (!OID_LINE.test(commit)) return unverifiable("unreadable");
 
   const settings = await readRepositorySettings(
     (args, extra) => git([...bound, ...args], { ...extra, config: [] }),
@@ -737,30 +862,67 @@ async function readSubmodule(target: string, git: Git): Promise<WorktreeOutcome>
     if (!(error instanceof GitOutputLimitError)) throw error;
     dirty = true;
   }
-  // One level down only: a submodule of its own would need the same care again.
+  if (dirty) return { kind: "submodule", commit, contents: "dirty" };
+
+  // Its status is silent about files it was told not to look at, and one level
+  // down is as far as this goes: a submodule of its own would need the same
+  // care again. Either way its contents are nothing the capture can vouch for.
   const nested = (await lstatOrNull(path.join(target, ".gitmodules")).catch(() => null)) !== null;
-  return {
-    identity: {
-      kind: "submodule",
-      commit,
-      contents: dirty ? "dirty" : nested ? "unknown" : "clean",
-    },
-    recheck: async () => (await readCommit()) === commit,
-  };
+  let hidden = true;
+  try {
+    const listing = await git([...bound, "ls-files", "-v", "-z"], { cwd: target, config: [] });
+    hidden = listing.stdout
+      .toString("latin1")
+      .split("\0")
+      .some((record) => /^([a-z]|S) /.test(record));
+  } catch (error) {
+    if (!(error instanceof GitOutputLimitError)) throw error;
+  }
+  return { kind: "submodule", commit, contents: nested || hidden ? "unknown" : "clean" };
+}
+
+/** Whether any directory on the way to `relative` is a symlink. */
+async function hasLinkedAncestor(
+  root: string,
+  relative: Buffer,
+  cache: Map<string, Promise<boolean>>
+): Promise<boolean> {
+  for (
+    let slash = relative.indexOf(0x2f);
+    slash !== -1;
+    slash = relative.indexOf(0x2f, slash + 1)
+  ) {
+    const dir = relative.subarray(0, slash);
+    const key = dir.toString("latin1");
+    let linked = cache.get(key);
+    if (!linked) {
+      linked = lstatOrNull(absoluteWorktreePath(root, dir)).then(
+        (stats) => stats?.isSymbolicLink() ?? false,
+        () => false
+      );
+      cache.set(key, linked);
+    }
+    if (await linked) return true;
+  }
+  return false;
 }
 
 // -- Identities ---------------------------------------------------------------
 
-function gitEntryOrNull(mode: string, oid: string): ReviewPointGitEntry | null {
-  if (ABSENT_MODE.test(mode)) return null;
+function gitMode(mode: string): ReviewPointGitEntry["mode"] {
   if (mode !== "100644" && mode !== "100755" && mode !== "120000" && mode !== "160000") {
     throw new Error(`Unexpected git mode ${mode}`);
   }
-  return { mode, oid };
+  return mode;
+}
+
+function gitEntryOrNull(mode: string, oid: string): ReviewPointGitEntry | null {
+  return ABSENT_MODE.test(mode) ? null : { mode: gitMode(mode), oid };
 }
 
 function headIdentity(candidate: Candidate): ReviewPointGitEntry | null {
   const { status } = candidate;
+  if (candidate.intentToAdd) return candidate.intentToAdd.head;
   if (status?.kind === "changed") return gitEntryOrNull(status.modeHead, status.oidHead);
   if (status?.kind === "unmerged") return candidate.unmergedHead ?? null;
   if (candidate.committed !== undefined) return candidate.committed;
@@ -772,9 +934,9 @@ function headIdentity(candidate: Candidate): ReviewPointGitEntry | null {
 function indexIdentity(candidate: Candidate): ReviewPointIndexIdentity {
   const { status } = candidate;
   if (status?.kind === "unmerged") return conflicted(status.stages);
+  if (candidate.intentToAdd)
+    return { kind: "intent-to-add", mode: gitMode(candidate.intentToAdd.mode) };
   if (status?.kind === "changed") {
-    // `.A`: added with `git add -N`, so nothing is staged for it yet.
-    if (status.xy[1] === "A") return { kind: "intent-to-add" };
     const entry = gitEntryOrNull(status.modeIndex, status.oidIndex);
     return entry ? { kind: "entry", ...entry } : { kind: "absent" };
   }
@@ -816,9 +978,12 @@ function unverifiable(
   return { kind: "unverifiable", reason };
 }
 
+const displayDecoder = new TextDecoder("utf-8");
+
 /** The path as text when that is exact, with its bytes alongside when it isn't. */
 function pathFields(bytes: Buffer): { path: string; pathBytes?: string } {
-  const text = bytes.toString("utf8");
+  // The decoder the schema checks the display form with, so the two agree.
+  const text = displayDecoder.decode(bytes);
   return Buffer.from(text, "utf8").equals(bytes)
     ? { path: text }
     : { path: text, pathBytes: bytes.toString("base64") };

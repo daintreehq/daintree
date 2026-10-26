@@ -66,20 +66,22 @@ describe("parsePorcelainV2", () => {
   });
 
   it("refuses output it doesn't recognise rather than skip a path", () => {
+    const headers = [`# branch.oid ${OID_A}`, "# branch.head x"];
+    const rename = `2 R. N... 100644 100644 100644 ${OID_A} ${OID_B} R100 new`;
+    expect(() => parsePorcelainV2(z(...headers, rename, "old"))).toThrow("Unrecognised");
+    expect(() => parsePorcelainV2(z(...headers, "1 M. N... 100644"))).toThrow("Malformed");
     expect(() =>
-      parsePorcelainV2(
-        z(
-          `# branch.oid ${OID_A}`,
-          "# branch.head x",
-          "2 R. N... 100644 100644 100644 a b R100 new",
-          "old"
-        )
-      )
-    ).toThrow();
-    expect(() =>
-      parsePorcelainV2(z(`# branch.oid ${OID_A}`, "# branch.head x", "1 M. N... 100644"))
-    ).toThrow();
-    expect(() => parsePorcelainV2(z("? orphan"))).toThrow();
+      parsePorcelainV2(z(...headers, `1 M. N... 100644 100644 100644 ${OID_A} nope a.txt`))
+    ).toThrow("Malformed");
+    expect(() => parsePorcelainV2(z("# branch.head x", "? orphan"))).toThrow("branch headers");
+    expect(() => parsePorcelainV2(z(`# branch.oid ${OID_A}`, "? orphan"))).toThrow(
+      "branch headers"
+    );
+  });
+
+  it("refuses output that stops before its last NUL", () => {
+    const whole = z(`# branch.oid ${OID_A}`, "# branch.head x", "? a.txt");
+    expect(() => parsePorcelainV2(whole.subarray(0, whole.length - 1))).toThrow("Truncated");
   });
 });
 
@@ -113,11 +115,19 @@ describe("parseDiffTreeRaw", () => {
     ]);
   });
 
-  it("refuses renames and truncated records", () => {
+  it("refuses renames and records missing their path", () => {
     expect(() =>
       parseDiffTreeRaw(z(`:100644 100644 ${OID_A} ${OID_B} R100`, "old", "new"))
-    ).toThrow();
-    expect(() => parseDiffTreeRaw(z(`:100644 100644 ${OID_A} ${OID_B} M`))).toThrow();
+    ).toThrow("Malformed");
+    expect(() => parseDiffTreeRaw(z(`:100644 100644 ${OID_A} ${OID_B} M`))).toThrow("Malformed");
+    expect(() => parseDiffTreeRaw(z(`:100644 100644 ${OID_A} short M`, "a"))).toThrow("Malformed");
+  });
+
+  it("reads diff-index's unmerged records", () => {
+    expect(parseDiffTreeRaw(z(`:100644 000000 ${OID_A} ${ZERO} U`, "c"))[0]).toMatchObject({
+      srcOid: OID_A,
+      status: "U",
+    });
   });
 });
 
@@ -132,13 +142,26 @@ describe("parseIndexListing", () => {
 });
 
 describe("parseConfigListing", () => {
-  it("reads values, including empty and missing ones", () => {
-    expect(
-      parseConfigListing(z("filter.My.Driver.clean\ncat", "core.filemode\n", "core.symlinks"))
-    ).toEqual([
-      { key: "filter.My.Driver.clean", value: "cat" },
-      { key: "core.filemode", value: "" },
-      { key: "core.symlinks", value: null },
+  it("reads values, including empty and missing ones, keeping key bytes", () => {
+    const odd = Buffer.concat([
+      Buffer.from("filter.b"),
+      Buffer.from([0xff]),
+      Buffer.from(".clean"),
     ]);
+    const entries = parseConfigListing(
+      z(
+        "filter.My.Driver.clean\ncat",
+        "core.filemode\n",
+        "core.symlinks",
+        Buffer.concat([odd, Buffer.from("\nx")])
+      )
+    );
+    expect(entries.map(({ key, value }) => [key.toString("utf8"), value])).toEqual([
+      ["filter.My.Driver.clean", "cat"],
+      ["core.filemode", ""],
+      ["core.symlinks", null],
+      [odd.toString("utf8"), "x"],
+    ]);
+    expect(entries[3].key.equals(odd)).toBe(true);
   });
 });
