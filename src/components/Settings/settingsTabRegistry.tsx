@@ -36,7 +36,8 @@ import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { AGENT_REGISTRY } from "@shared/config/agentRegistry";
 import { GeneralTab } from "./GeneralTab";
 import { isRemoteShellSupported } from "@/lib/remoteHosts";
-import type { SettingsOwner } from "@/hooks/useSettingsOwner";
+import { SECTION_SETTINGS } from "./settingsSectionOwners";
+import { settingsOwnerOf, type SettingRef, type SettingsOwner } from "@/hooks/useSettingsOwner";
 import type {
   GlobalSettingsTab,
   ProjectSettingsTab,
@@ -66,6 +67,8 @@ export interface SettingsSectionMeta {
     readonly settingId: string;
     readonly label: string;
   };
+  /** What this entry writes when it differs from its section's or its tab's. */
+  readonly settings?: readonly SettingRef[];
 }
 
 export interface SettingsTabEntry {
@@ -81,11 +84,17 @@ export interface SettingsTabEntry {
    */
   readonly contentScope?: "global" | "project";
   /**
-   * Whose values the tab edits in a window attached to another host: the host's, this
-   * machine's, or both (each section then names its own). Required, so a new tab can't
-   * leave the question unanswered; follows the ownership of the settings it writes.
+   * The settings the tab writes. Its owner is read from the settings catalog (#14694), so
+   * a tab can't name a machine that isn't the one its settings live on: the header names
+   * the owner they share, and a page holding both leaves each section to name its own.
+   * A section or row of another owner marks itself.
    */
-  readonly owner: SettingsOwner;
+  readonly settings: readonly SettingRef[];
+  /**
+   * What each section of a mixed page writes, by the section name search lists it under,
+   * so a result names the owner its heading does.
+   */
+  readonly sectionSettings?: Readonly<Record<string, readonly SettingRef[]>>;
   readonly group: string;
   readonly label: string;
   readonly headerTitle?: string;
@@ -279,7 +288,7 @@ const HOSTS_TAB = {
   id: "hosts",
   scope: "global",
   group: "Integrations",
-  owner: "device",
+  settings: ["remoteHosts", "hostMode"],
   label: "Hosts",
   icon: <Server className="w-4 h-4" />,
   importKind: "lazy",
@@ -333,7 +342,16 @@ export const SETTINGS_REGISTRY = [
     id: "general",
     scope: "global",
     group: "General",
-    owner: "mixed",
+    settings: ["sessionRestore", "windowOpening"],
+    sectionSettings: {
+      "System status": SECTION_SETTINGS.systemStatus,
+      Updates: SECTION_SETTINGS.updates,
+      Startup: SECTION_SETTINGS.startup,
+      "Opening folders": SECTION_SETTINGS.openingFolders,
+      "Keep awake": SECTION_SETTINGS.keepAwake,
+      "Background projects": SECTION_SETTINGS.backgroundProjects,
+      "Interface elements": SECTION_SETTINGS.interfaceElements,
+    },
     label: "General",
     icon: <Settings2 className="w-4 h-4" />,
     importKind: "eager",
@@ -600,7 +618,7 @@ export const SETTINGS_REGISTRY = [
     id: "terminalAppearance",
     scope: "global",
     group: "General",
-    owner: "device",
+    settings: ["appTheme", "terminalConfig.fontSize"],
     label: "Appearance",
     icon: <SquareTerminal className="w-4 h-4" />,
     importKind: "lazy",
@@ -682,7 +700,7 @@ export const SETTINGS_REGISTRY = [
     id: "keyboard",
     scope: "global",
     group: "General",
-    owner: "device",
+    settings: ["keybindingOverrides"],
     label: "Keyboard",
     headerTitle: "Keyboard shortcuts",
     icon: <Keyboard className="w-4 h-4" />,
@@ -721,7 +739,7 @@ export const SETTINGS_REGISTRY = [
     id: "notifications",
     scope: "global",
     group: "General",
-    owner: "device",
+    settings: ["notificationSettings"],
     label: "Notifications",
     icon: <Bell className="w-4 h-4" />,
     importKind: "lazy",
@@ -759,7 +777,14 @@ export const SETTINGS_REGISTRY = [
     id: "privacy",
     scope: "global",
     group: "General",
-    owner: "mixed",
+    settings: ["privacy", "agentSessionHistory"],
+    sectionSettings: {
+      "Telemetry & diagnostics": SECTION_SETTINGS.privacy,
+      "Log retention": SECTION_SETTINGS.sessionHistory,
+      "Data folder": SECTION_SETTINGS.privacy,
+      "Clear cache": SECTION_SETTINGS.privacy,
+      "Reset all app data": SECTION_SETTINGS.privacy,
+    },
     label: "Privacy & data",
     icon: <Shield className="w-4 h-4" />,
     importKind: "lazy",
@@ -839,7 +864,7 @@ export const SETTINGS_REGISTRY = [
     id: "import-export",
     scope: "global",
     group: "General",
-    owner: "device",
+    settings: ["_schemaVersion"],
     label: "Import & export",
     icon: <ArrowDownUp className="w-4 h-4" />,
     importKind: "lazy",
@@ -870,7 +895,15 @@ export const SETTINGS_REGISTRY = [
     id: "terminal",
     scope: "global",
     group: "Terminal",
-    owner: "mixed",
+    settings: ["terminalConfig.scrollbackLines", "terminalConfig.resourceMonitoringEnabled"],
+    sectionSettings: {
+      "Performance mode": SECTION_SETTINGS.performanceMode,
+      "Panel limits": SECTION_SETTINGS.panelLimits,
+      "Two-pane split layout": SECTION_SETTINGS.twoPaneSplit,
+      "Scrollback history": SECTION_SETTINGS.scrollback,
+      "Grid layout": SECTION_SETTINGS.gridLayout,
+      "Screen reader mode": SECTION_SETTINGS.assistiveTechnology,
+    },
     label: "Panel grid",
     icon: <LayoutGrid className="w-4 h-4" />,
     importKind: "lazy",
@@ -1003,7 +1036,11 @@ export const SETTINGS_REGISTRY = [
     id: "worktree",
     scope: "global",
     group: "Terminal",
-    owner: "mixed",
+    settings: ["worktreeConfig", "storage:daintree-preferences"],
+    sectionSettings: {
+      "Worktree path pattern": SECTION_SETTINGS.worktreePathPattern,
+      "Always-hidden files": SECTION_SETTINGS.clientPreferences,
+    },
     label: "Worktree",
     headerTitle: "Worktree paths",
     icon: <FolderGit2 className="w-4 h-4" />,
@@ -1065,7 +1102,14 @@ export const SETTINGS_REGISTRY = [
     id: "toolbar",
     scope: "global",
     group: "Terminal",
-    owner: "mixed",
+    settings: ["storage:daintree-toolbar-preferences", "agentSettings"],
+    sectionSettings: {
+      "Left side buttons": SECTION_SETTINGS.toolbarLayout,
+      "Right side buttons": SECTION_SETTINGS.toolbarLayout,
+      "Not on the toolbar": SECTION_SETTINGS.toolbarLayout,
+      "Launcher palette": SECTION_SETTINGS.toolbarLayout,
+      "Toolbar customization": SECTION_SETTINGS.toolbarLayout,
+    },
     label: "Toolbar",
     headerTitle: "Toolbar customization",
     // Not the gear: that is project General's glyph, and global General's sliders
@@ -1120,7 +1164,7 @@ export const SETTINGS_REGISTRY = [
     id: "environment",
     scope: "global",
     group: "Terminal",
-    owner: "host",
+    settings: ["globalEnvironmentVariables"],
     label: "Environment",
     headerTitle: "Environment variables",
     icon: <KeyRound className="w-4 h-4" />,
@@ -1168,7 +1212,7 @@ export const SETTINGS_REGISTRY = [
     id: "assistant",
     scope: "global",
     group: "Assistant",
-    owner: "host",
+    settings: ["helpAssistant"],
     label: "Daintree Assistant",
     icon: <DaintreeIcon className="w-4 h-4" size={16} />,
     importKind: "lazy",
@@ -1280,7 +1324,10 @@ export const SETTINGS_REGISTRY = [
     id: "agents",
     scope: "global",
     group: "Integrations",
-    owner: "host",
+    settings: ["agentSettings", "userAgentRegistry", "agentUpdateSettings"],
+    sectionSettings: {
+      Input: SECTION_SETTINGS.agentInput,
+    },
     label: "CLI agents",
     icon: <Plug className="w-4 h-4" />,
     importKind: "lazy",
@@ -1428,7 +1475,7 @@ export const SETTINGS_REGISTRY = [
     id: "code-forge",
     scope: "global",
     group: "Integrations",
-    owner: "host",
+    settings: ["forgeCredentials", "forgeDefaultProviderId"],
     label: "Code forge",
     headerTitle: "Code forge",
     icon: <GitBranch className="w-4 h-4" />,
@@ -1520,7 +1567,7 @@ export const SETTINGS_REGISTRY = [
     // editorClient.setConfig({ projectId }) and projectClient.saveSettings(projectId).
     contentScope: "project",
     group: "Integrations",
-    owner: "host",
+    settings: ["projectPluginAccountBindings"],
     label: "Integrations",
     icon: <Blocks className="w-4 h-4" />,
     importKind: "lazy",
@@ -1588,7 +1635,7 @@ export const SETTINGS_REGISTRY = [
     id: "voice",
     scope: "global",
     group: "Integrations",
-    owner: "device",
+    settings: ["voiceInput"],
     label: "Voice input",
     icon: <Mic className="w-4 h-4" />,
     importKind: "lazy",
@@ -1728,7 +1775,7 @@ export const SETTINGS_REGISTRY = [
     id: "portal",
     scope: "global",
     group: "Integrations",
-    owner: "device",
+    settings: ["storage:portal-storage"],
     label: "Portal",
     headerTitle: "Portal links",
     icon: <PanelRight className="w-4 h-4" />,
@@ -1766,7 +1813,7 @@ export const SETTINGS_REGISTRY = [
     id: "mcp",
     scope: "global",
     group: "Integrations",
-    owner: "host",
+    settings: ["mcpServer"],
     label: "MCP server",
     icon: <McpServerIcon className="w-4 h-4" />,
     importKind: "lazy",
@@ -1829,7 +1876,7 @@ export const SETTINGS_REGISTRY = [
     id: "plugins",
     scope: "global",
     group: "Integrations",
-    owner: "host",
+    settings: ["plugins", "pluginCapabilityConsent"],
     label: "Plugins",
     icon: <Package className="w-4 h-4" />,
     importKind: "lazy",
@@ -1879,7 +1926,7 @@ export const SETTINGS_REGISTRY = [
     id: "plugin-actions",
     scope: "global",
     group: "Integrations",
-    owner: "host",
+    settings: ["pluginCapabilityConsent"],
     label: "Plugin actions",
     headerTitle: "Plugin actions",
     icon: <ScrollText className="w-4 h-4" />,
@@ -1904,7 +1951,7 @@ export const SETTINGS_REGISTRY = [
     id: "canopy",
     scope: "global",
     group: "Integrations",
-    owner: "host",
+    settings: ["canopyMode"],
     label: "Canopy",
     icon: <Telescope className="w-4 h-4" />,
     importKind: "lazy",
@@ -1942,7 +1989,7 @@ export const SETTINGS_REGISTRY = [
     id: "run-history",
     scope: "global",
     group: "Integrations",
-    owner: "host",
+    settings: ["runHistory"],
     label: "Run history",
     headerTitle: "Run history",
     icon: <History className="w-4 h-4" />,
@@ -1988,7 +2035,13 @@ export const SETTINGS_REGISTRY = [
     id: "troubleshooting",
     scope: "global",
     group: "Support",
-    owner: "mixed",
+    settings: ["agentSettings", "gpu", "logLevelOverrides"],
+    sectionSettings: {
+      "Hardware acceleration": SECTION_SETTINGS.hardwareAcceleration,
+      "System health check": SECTION_SETTINGS.systemStatus,
+      "Application logs": SECTION_SETTINGS.logging,
+      "Developer mode": SECTION_SETTINGS.developerTools,
+    },
     label: "Troubleshooting",
     icon: <LifeBuoy className="w-4 h-4" />,
     importKind: "lazy",
@@ -2073,7 +2126,7 @@ export const SETTINGS_REGISTRY = [
     id: "project:general",
     scope: "project",
     group: "Project",
-    owner: "host",
+    settings: ["projectPresentation"],
     label: "General",
     icon: <SettingsIcon className="w-4 h-4" />,
     importKind: "lazy",
@@ -2086,7 +2139,7 @@ export const SETTINGS_REGISTRY = [
     id: "project:context",
     scope: "project",
     group: "Project",
-    owner: "host",
+    settings: ["projectPresentation"],
     label: "Context",
     icon: <FileCode className="w-4 h-4" />,
     importKind: "lazy",
@@ -2099,7 +2152,7 @@ export const SETTINGS_REGISTRY = [
     id: "project:variables",
     scope: "project",
     group: "Project",
-    owner: "host",
+    settings: ["projectEnv"],
     label: "Variables",
     icon: <KeyRound className="w-4 h-4" />,
     importKind: "lazy",
@@ -2112,7 +2165,7 @@ export const SETTINGS_REGISTRY = [
     id: "project:automation",
     scope: "project",
     group: "Project",
-    owner: "host",
+    settings: ["worktreeConfig"],
     label: "Worktree setup",
     // Not GitBranch: project Code Forge already uses it, and two sections in the same
     // nav list sharing one glyph makes the icon useless for telling them apart.
@@ -2127,7 +2180,7 @@ export const SETTINGS_REGISTRY = [
     id: "project:recipes",
     scope: "project",
     group: "Project",
-    owner: "host",
+    settings: ["appState.recipes"],
     label: "Recipes",
     icon: <Workflow className="w-4 h-4" />,
     importKind: "lazy",
@@ -2140,7 +2193,7 @@ export const SETTINGS_REGISTRY = [
     id: "project:commands",
     scope: "project",
     group: "Project",
-    owner: "host",
+    settings: ["projectPresentation"],
     label: "Commands",
     icon: <Command className="w-4 h-4" />,
     importKind: "lazy",
@@ -2153,7 +2206,7 @@ export const SETTINGS_REGISTRY = [
     id: "project:notifications",
     scope: "project",
     group: "Project",
-    owner: "host",
+    settings: ["idleTerminalNotify"],
     label: "Notifications",
     icon: <Bell className="w-4 h-4" />,
     importKind: "lazy",
@@ -2166,7 +2219,7 @@ export const SETTINGS_REGISTRY = [
     id: "project:code-forge",
     scope: "project",
     group: "Project",
-    owner: "host",
+    settings: ["forgeEnableDismissedPaths"],
     label: "Code forge",
     icon: <GitBranch className="w-4 h-4" />,
     importKind: "lazy",
@@ -2179,7 +2232,7 @@ export const SETTINGS_REGISTRY = [
     id: "project:plugins",
     scope: "project",
     group: "Project",
-    owner: "host",
+    settings: ["projectPluginTrust", "projectPluginVisibility"],
     label: "Plugins",
     icon: <Package className="w-4 h-4" />,
     importKind: "lazy",
@@ -2211,9 +2264,10 @@ export function contentScopeForTab(tab: SettingsTab): "global" | "project" {
   return entry?.contentScope ?? scopeForTab(tab);
 }
 
-/** Whose values the tab edits when the window belongs to another host. */
+/** Whose values the tab edits, from the owners the catalog declares for its settings. */
 export function ownerForTab(tab: SettingsTab): SettingsOwner {
-  return getSettingsTabEntry(tab)?.owner ?? "host";
+  const settings = getSettingsTabEntry(tab)?.settings;
+  return settings ? settingsOwnerOf(settings) : "host";
 }
 
 type ProjectScopedEntry = Extract<(typeof SETTINGS_REGISTRY)[number], { scope: "project" }>;
@@ -2242,6 +2296,7 @@ export const PROJECT_SETTINGS_SECTIONS: Readonly<
       {
         id: "project-theme",
         section: "Project identity",
+        settings: SECTION_SETTINGS.projectTheme,
         title: "Theme",
         description: "Show this project in its own theme instead of the global one",
         keywords: ["theme", "appearance", "colors", "dark", "light", "suggested"],

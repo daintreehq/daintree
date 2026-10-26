@@ -1,4 +1,5 @@
 import { SettingsSection } from "@/components/Settings/SettingsSection";
+import { SECTION_SETTINGS } from "@/components/Settings/settingsSectionOwners";
 import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
 import { useSidebarViewOptions } from "@/hooks/useSidebarViews";
 import { useWorkspaceRoot } from "@/hooks/useWorkspaceRoot";
@@ -37,7 +38,11 @@ export function SidebarDefaultViewSection() {
 
   return (
     <div data-testid="project-sidebar-default">
-      <SettingsSection title="Sidebar" description="The view this project's sidebar opens on">
+      <SettingsSection
+        title="Sidebar"
+        description="The view this project's sidebar opens on"
+        settings={SECTION_SETTINGS.sidebarDefaultView}
+      >
         <SettingsGroup>
           <SettingsRow
             label="Default view"

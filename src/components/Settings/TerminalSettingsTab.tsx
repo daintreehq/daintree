@@ -4,11 +4,8 @@ import { cn } from "@/lib/utils";
 import { notify } from "@/lib/notify";
 import { latestUndoOnly, UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
-import {
-  joinBadges,
-  useSettingsOwnerMarker,
-  useSettingsRowOwnerNote,
-} from "@/hooks/useSettingsOwner";
+import { SECTION_SETTINGS } from "@/components/Settings/settingsSectionOwners";
+import { useSettingsRowOwnerNote } from "@/hooks/useSettingsOwner";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import { SettingsNumberInput } from "@/components/Settings/SettingsNumberInput";
 import { SettingsPresetGroup } from "@/components/Settings/SettingsPresetGroup";
@@ -140,10 +137,9 @@ interface TerminalSettingsTabProps {
 }
 
 export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSettingsTabProps) {
-  // Resource watching runs where the terminals do; input, scrollback, performance mode,
-  // limits, cached views and assistive settings belong to this screen. A remote window
-  // says whose on each section, and on performance mode, the odd row out in its section.
-  const ownerMarker = useSettingsOwnerMarker();
+  // Terminal behaviour runs where the terminals do; limits, cached views and assistive
+  // settings belong to this screen. A remote window says whose on each section, and on
+  // performance mode, the odd row out in its section.
   const rowOwnerNote = useSettingsRowOwnerNote();
   const layoutConfig = useLayoutConfigStore((state) => state.layoutConfig);
 
@@ -399,7 +395,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
 
       <div {...subtabPanelProps("terminal", effectiveSubtab)} className="space-y-8">
         {effectiveSubtab === "performance" && (
-          <SettingsSection title="Terminal resources" badge={ownerMarker("host")}>
+          <SettingsSection title="Terminal resources" settings={SECTION_SETTINGS.terminalResources}>
             {saveError("resources")}
             <SettingsGroup>
               <SettingsSwitchCard
@@ -407,7 +403,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                 title="Performance mode"
                 subtitle={rowOwnerNote(
                   `Cuts scrollback to ${PERFORMANCE_MODE_SCROLLBACK} lines and turns off animations, for low-end hardware or high-density workflows. Existing terminals keep their scrollback until respawned.`,
-                  "device"
+                  "terminalConfig.performanceMode"
                 )}
                 isEnabled={performanceMode}
                 onChange={() => void setPerformanceMode(!performanceMode)}
@@ -489,7 +485,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
         {effectiveSubtab === "performance" && (
           <SettingsSection
             title="Panel limits"
-            badge={ownerMarker("device")}
+            settings={SECTION_SETTINGS.panelLimits}
             id="terminal-panel-limits"
             description="When warnings appear as you open more panels. Limits are detected from your hardware on first launch."
           >
@@ -581,7 +577,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
         )}
 
         {effectiveSubtab === "performance" && (
-          <SettingsSection title="Project views" badge={ownerMarker("device")}>
+          <SettingsSection title="Project views" settings={SECTION_SETTINGS.projectViews}>
             {saveError("project-views")}
             <SettingsGroup>
               <SettingsPresetGroup
@@ -612,7 +608,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
             <SettingsSection
               title="Two-pane split"
               id="terminal-two-pane-split"
-              badge={ownerMarker("device")}
+              settings={SECTION_SETTINGS.twoPaneSplit}
             >
               <SettingsGroup>
                 <SettingsSwitchCard
@@ -694,7 +690,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
 
             <SettingsSection
               title="Grid layout"
-              badge={ownerMarker("device")}
+              settings={SECTION_SETTINGS.gridLayout}
               id="terminal-grid-layout"
               description="How panels arrange in the grid as you add more"
             >
@@ -763,7 +759,8 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
             title="Scrollback history"
             id="terminal-scrollback"
             description="Background terminals may temporarily reduce scrollback under memory pressure"
-            badge={joinBadges("New terminals", ownerMarker("device"))}
+            badge="New terminals"
+            settings={SECTION_SETTINGS.scrollback}
           >
             {saveError("scrollback")}
             <SettingsGroup>
@@ -811,7 +808,10 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
         )}
 
         {effectiveSubtab === "accessibility" && (
-          <SettingsSection title="Assistive technology" badge={ownerMarker("device")}>
+          <SettingsSection
+            title="Assistive technology"
+            settings={SECTION_SETTINGS.assistiveTechnology}
+          >
             {saveError("accessibility")}
             <SettingsGroup>
               <SettingsPresetGroup

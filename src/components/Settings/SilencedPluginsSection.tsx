@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from "react";
+import { SECTION_SETTINGS } from "@/components/Settings/settingsSectionOwners";
 import { Button } from "@/components/ui/button";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
 import { pluginClient } from "@/clients/pluginClient";
 import { useProjectStore } from "@/store/projectStore";
-import { useSettingsOwnerMarker } from "@/hooks/useSettingsOwner";
 import { UNKNOWN_PROJECT_LABEL } from "@/lib/notificationSourceLabel";
 import type { PluginNotificationSilence } from "@shared/types/ipc/maps";
 
@@ -15,7 +15,6 @@ import type { PluginNotificationSilence } from "@shared/types/ipc/maps";
  * Unsilence. One change at a time, so each answer from main is the whole list.
  */
 export function SilencedPluginsSection() {
-  const ownerMarker = useSettingsOwnerMarker();
   const [silences, setSilences] = useState<PluginNotificationSilence[] | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [failedUnsilence, setFailedUnsilence] = useState<PluginNotificationSilence | null>(null);
@@ -65,7 +64,7 @@ export function SilencedPluginsSection() {
   return (
     <SettingsSection
       title="Silenced plugins"
-      badge={ownerMarker("host")}
+      settings={SECTION_SETTINGS.pluginSilences}
       description="A silenced plugin's toasts and notifications are held back before they reach any window"
     >
       {loadFailed && (

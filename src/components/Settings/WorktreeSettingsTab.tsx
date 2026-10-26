@@ -21,7 +21,7 @@ import { FileBrowserVisibilitySettings } from "./FileBrowserVisibilitySettings";
 import { SettingsActions, SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
 import { SettingsSection } from "./SettingsSection";
-import { useSettingsOwnerMarker } from "@/hooks/useSettingsOwner";
+import { SECTION_SETTINGS } from "@/components/Settings/settingsSectionOwners";
 import { SettingsSelect } from "./SettingsSelect";
 import { useSettingsTabValidation } from "./SettingsValidationRegistry";
 import { useSettingsTabFlush } from "./SettingsFlushRegistry";
@@ -65,7 +65,6 @@ const DELETED_WORKTREE_CLEANUP_OPTIONS = [
 
 export function WorktreeSettingsTab() {
   // Worktree paths are the host's; cleanup timing and hidden files are this screen's.
-  const ownerMarker = useSettingsOwnerMarker();
   const [pattern, setPattern] = useState("");
   const [originalPattern, setOriginalPattern] = useState("");
   const [isLoading, setIsLoading] = useState(true);
@@ -215,7 +214,7 @@ export function WorktreeSettingsTab() {
       <SettingsSection
         id="worktree-path-pattern"
         title="Path pattern"
-        badge={ownerMarker("host")}
+        settings={SECTION_SETTINGS.worktreePathPattern}
         description="Where new worktrees are created. Relative paths (starting with . or ..) resolve from the repository root."
       >
         {loadError !== null && (
@@ -403,7 +402,7 @@ export function WorktreeSettingsTab() {
 
       <SettingsSection
         title="Deleted worktrees"
-        badge={ownerMarker("device")}
+        settings={SECTION_SETTINGS.clientPreferences}
         description="When a worktree is deleted while terminals are still running, its terminals stay in a temporary sidebar row until you move or close them"
       >
         <SettingsGroup>

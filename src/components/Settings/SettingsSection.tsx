@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import type { RootAttributes } from "@/components/ui/rootAttributes";
+import { joinBadges, useSettingsOwnerMarker, type SettingRef } from "@/hooks/useSettingsOwner";
 
 interface SettingsSectionProps {
   title: string;
@@ -14,6 +15,12 @@ interface SettingsSectionProps {
   children: ReactNode;
   id?: string;
   badge?: string;
+  /**
+   * What the section writes. Its owner is read from the settings catalog and named
+   * beside the title once owners are shown; settings that differ in owner name nothing
+   * here, and each row says where its own lives.
+   */
+  settings?: readonly SettingRef[];
   /** Section-level control pinned to the right of the heading (a wizard, an "Add" button). */
   action?: ReactNode;
   className?: string;
@@ -35,11 +42,14 @@ export function SettingsSection({
   children,
   id,
   badge,
+  settings,
   action,
   className,
   rootAttributes,
 }: SettingsSectionProps) {
   const headingId = useId();
+  const ownerMarker = useSettingsOwnerMarker();
+  const shownBadge = joinBadges(badge, settings ? ownerMarker(...settings) : undefined);
 
   return (
     // A group, not a <section>: a named section is a region landmark, and thirty of
@@ -59,7 +69,7 @@ export function SettingsSection({
             className="text-sm font-semibold text-text-primary flex items-center gap-2 flex-wrap"
           >
             {title}
-            {badge && <Badge size="xs">{badge}</Badge>}
+            {shownBadge && <Badge size="xs">{shownBadge}</Badge>}
           </h4>
           {description && (
             <p className="mt-1 text-xs text-text-secondary select-text">{description}</p>

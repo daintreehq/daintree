@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { hostModeClient } from "@/clients/hostModeClient";
 import { isRemoteHostSupported } from "@/lib/remoteHosts";
+import { refreshSettingOwnersShown } from "@/hooks/useSettingsOwner";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { HostModeStatus, SetHostModePayload } from "@shared/types/ipc/hostMode";
 
@@ -51,7 +52,10 @@ export function useHostMode(): UseHostModeResult {
     if (!supported) return;
     let active = true;
     const off = hostModeClient.onEvent((event) => {
-      if (active && event.type === "status-changed") setStatus(event.status);
+      if (active && event.type === "status-changed") {
+        setStatus(event.status);
+        refreshSettingOwnersShown();
+      }
     });
     hostModeClient.getStatus().then(
       (next) => {

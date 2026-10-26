@@ -7,6 +7,7 @@ import { ChevronRight, ShieldBan, KeyRound, Wrench, ExternalLink } from "lucide-
 import { cn } from "@/lib/utils";
 import { DaintreeIcon } from "@/components/icons";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
+import { SECTION_SETTINGS } from "@/components/Settings/settingsSectionOwners";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
 import { KeepAwakeSection } from "@/components/Settings/KeepAwakeSection";
@@ -43,7 +44,7 @@ import { getBuildChannelLabel } from "@shared/config/distribution";
 import { logError } from "@/utils/logger";
 import { useDistributionStore } from "@/store/distributionStore";
 import { pluralize } from "@/lib/pluralize";
-import { useRemoteHostName, useSettingsOwnerMarker } from "@/hooks/useSettingsOwner";
+import { useRemoteHostName } from "@/hooks/useSettingsOwner";
 
 const GENERAL_SUBTABS: SettingsSubtabItem[] = [
   { id: "overview", label: "Overview" },
@@ -161,7 +162,6 @@ export function GeneralTab({
   // badge. Distinct from the user-selected update-feed `updateChannel`.
   const buildChannelLabel = getBuildChannelLabel(appVersion);
   // This page holds both machines' settings in a remote window, so each section says whose.
-  const ownerMarker = useSettingsOwnerMarker();
   // Agent detection runs on the host, so a remote window names it rather than "this machine".
   const remoteHostName = useRemoteHostName();
   const agentMachine = remoteHostName ?? "this machine";
@@ -694,7 +694,7 @@ export function GeneralTab({
           <>
             <SettingsSection
               title="System status"
-              badge={ownerMarker("host")}
+              settings={SECTION_SETTINGS.systemStatus}
               description={<span role="status">{systemStatusSummary}</span>}
               id="general-system-status"
             >
@@ -941,7 +941,7 @@ export function GeneralTab({
                 save over a value the user never saw. */}
             <SettingsSection
               title="Startup"
-              badge={ownerMarker("host")}
+              settings={SECTION_SETTINGS.startup}
               description="What comes back when Daintree restarts"
               id="general-session-restore"
             >
@@ -979,7 +979,7 @@ export function GeneralTab({
             {updatesManagedByStore ? (
               <SettingsSection
                 title="Updates"
-                badge={ownerMarker("device")}
+                settings={SECTION_SETTINGS.updates}
                 description="Updates are managed by the Microsoft Store on Windows"
                 id="general-update-channel"
               >
@@ -997,7 +997,7 @@ export function GeneralTab({
             ) : (
               <SettingsSection
                 title="Updates"
-                badge={ownerMarker("device")}
+                settings={SECTION_SETTINGS.updates}
                 id="general-update-channel"
               >
                 {updateChannelLoadFailed && (
@@ -1026,7 +1026,7 @@ export function GeneralTab({
 
             <SettingsSection
               title="Quick reference"
-              badge={ownerMarker("device")}
+              settings={SECTION_SETTINGS.quickReference}
               description="Common keyboard shortcuts"
               action={
                 <Button
@@ -1149,7 +1149,7 @@ export function GeneralTab({
                 were a section of their own whose only row repeated its heading. */}
             <SettingsSection
               title="Background projects"
-              badge={ownerMarker("host")}
+              settings={SECTION_SETTINGS.backgroundProjects}
               description="What happens to projects you haven't used in a while — the active project is never touched"
             >
               {sectionErrors.idleNotify && (
@@ -1292,7 +1292,7 @@ export function GeneralTab({
         {effectiveSubtab === "display" && (
           <SettingsSection
             title="Interface elements"
-            badge={ownerMarker("device")}
+            settings={SECTION_SETTINGS.interfaceElements}
             description="What Daintree shows while you work"
             id="general-project-pulse"
           >
