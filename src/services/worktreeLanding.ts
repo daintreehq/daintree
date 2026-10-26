@@ -79,7 +79,13 @@ export function landOnWorktree(worktreeId: string, store: WorktreeListSource): (
       if (!landed) tryLand();
     })
   );
-  cleanups.push(onDroppedViewRestored(tryLand));
+  cleanups.push(
+    onDroppedViewRestored(() => {
+      // The restore moved the selection: the next list it can trust lands again.
+      landed = false;
+      tryLand();
+    })
+  );
   cleanups.push(
     subscribeProjectViewLifecycle((phase) => {
       if (phase === "cached") finish();

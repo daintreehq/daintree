@@ -162,6 +162,44 @@ describe("landOnWorktree", () => {
     expect(dropped.listeners.size).toBe(0);
   });
 
+  it("lands once before the restore, however often the list changes meanwhile", () => {
+    dropped.pending = true;
+    const { store, source } = makeStore({
+      ...LOADED,
+      worktrees: worktreesOf("/repo", "/repo-feature"),
+    });
+    landOnWorktree("/repo-feature", source);
+    store.setState({ worktrees: worktreesOf("/repo", "/repo-feature", "/repo-other") });
+    store.setState({ worktrees: worktreesOf("/repo", "/repo-feature") });
+    expect(selectWorktree).toHaveBeenCalledTimes(1);
+  });
+
+  it("lands again on the list after a restore that finished mid-reconnect", () => {
+    for (const after of [worktreesOf("/repo", "/repo-feature"), worktreesOf("/repo")]) {
+      selectWorktree.mockClear();
+      notifyMock.mockClear();
+      dropped.pending = true;
+      const { store, source, listening } = makeStore({
+        ...LOADED,
+        worktrees: worktreesOf("/repo", "/repo-feature"),
+      });
+      landOnWorktree("/repo-feature", source);
+      store.setState({ isReconnecting: true });
+      restoreDroppedView();
+      expect(selectWorktree).toHaveBeenCalledTimes(1);
+
+      store.setState({ isReconnecting: false, worktrees: after });
+      if (after.has("/repo-feature")) {
+        expect(selectWorktree).toHaveBeenCalledTimes(2);
+        expect(notifyMock).not.toHaveBeenCalled();
+      } else {
+        expect(selectWorktree).toHaveBeenCalledTimes(1);
+        expect(notifyMock).toHaveBeenCalledTimes(1);
+      }
+      expect(listening()).toBe(0);
+    }
+  });
+
   it("says a worktree is gone across a dropped view's restore only once", () => {
     dropped.pending = true;
     const { source } = makeStore({ ...LOADED, worktrees: worktreesOf("/repo") });
