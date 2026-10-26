@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CHANNELS } from "../../../ipc/channels.js";
 import type { ProjectState, TerminalSnapshot } from "../../../../shared/types/project.js";
 import type { ViewlessTerminalRecord } from "../ViewlessActionExecutor.js";
@@ -154,6 +154,65 @@ describe("restartTerminalWithoutView", () => {
 
     await expect(restartTerminalWithoutView(PROJECT.id, "other", deps)).resolves.toBe("gone");
     expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("leaves an agent running while the host is at its agent ceiling (#14704)", async () => {
+    const { deps, invoke, store } = setup(
+      { id: "t1", launchAgentId: "claude", command: "claude", agentSessionId: "kept" },
+      { agentState: "working" },
+      "sess-123"
+    );
+    const readHostAgentLimit = vi.fn(() => ({ host: "Studio", count: 10, limit: 10 }));
+    deps.readHostAgentLimit = readHostAgentLimit;
+
+    await expect(restartTerminalWithoutView(PROJECT.id, "t1", deps)).resolves.toBe("host-full");
+    expect(readHostAgentLimit).toHaveBeenCalledWith("t1");
+    expect(invoke).not.toHaveBeenCalled();
+    expect(store.read()?.terminals[0]?.agentSessionId).toBe("kept");
+  });
+
+  it("restarts an agent while the host has room, and a plain terminal regardless", async () => {
+    const roomy = setup(
+      { id: "t1", launchAgentId: "claude", command: "claude" },
+      { agentState: "working" }
+    );
+    roomy.deps.readHostAgentLimit = () => ({ host: "Studio", count: 9, limit: 10 });
+    await expect(restartTerminalWithoutView(PROJECT.id, "t1", roomy.deps)).resolves.toBe(
+      "restarted"
+    );
+
+    const plain = setup({ id: "t2", command: "npm run dev" }, {});
+    const readHostAgentLimit = vi.fn(() => ({ host: "Studio", count: 10, limit: 10 }));
+    plain.deps.readHostAgentLimit = readHostAgentLimit;
+    await expect(restartTerminalWithoutView(PROJECT.id, "t2", plain.deps)).resolves.toBe(
+      "restarted"
+    );
+    expect(readHostAgentLimit).not.toHaveBeenCalled();
+  });
+
+  it("keeps the captured session when the host refuses the relaunch after the quit", async () => {
+    const { deps, invoke, store } = setup(
+      { id: "t1", launchAgentId: "claude", command: "claude", agentSessionId: "old" },
+      { agentState: "working" },
+      "sess-123"
+    );
+    deps.readHostAgentLimit = () => ({ host: "Studio", count: 9, limit: 10 });
+    const kill = invoke.getMockImplementation()!;
+    invoke.mockImplementation(async (projectId, channel, args) => {
+      if (channel === CHANNELS.TERMINAL_SPAWN) {
+        throw Object.assign(new Error("Agent launch refused"), {
+          code: "HOST_AGENT_LIMIT_REACHED",
+          details: { code: "HOST_AGENT_LIMIT_REACHED", host: "Studio", count: 10, limit: 10 },
+        });
+      }
+      return kill(projectId, channel, args);
+    });
+
+    await expect(restartTerminalWithoutView(PROJECT.id, "t1", deps)).resolves.toBe("failed");
+    expect(channels(invoke)).toEqual([CHANNELS.TERMINAL_GRACEFUL_KILL, CHANNELS.TERMINAL_SPAWN]);
+    const kept = store.read()?.terminals[0];
+    expect(kept).toMatchObject({ id: "t1", launchAgentId: "claude", command: "claude" });
+    expect(kept?.agentSessionId).toBe("sess-123");
   });
 
   it("doesn't spawn when the terminal couldn't be stopped", async () => {

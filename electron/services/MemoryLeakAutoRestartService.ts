@@ -57,8 +57,9 @@ interface TerminalTrack {
  * The restart runs once: in the project's driving view when one is attached,
  * where it is the same restart the user's own Restart runs, or on the host
  * when none is. A terminal waiting for input is never restarted, here or in
- * the view; it is tried again once the retry interval passes. Warnings stay in
- * every view.
+ * the view, nor is an agent on the host while it has no room to relaunch it;
+ * each is tried again once the retry interval passes. Warnings stay in every
+ * view.
  */
 export class MemoryLeakAutoRestartService {
   private readonly tracks = new Map<string, TerminalTrack>();
