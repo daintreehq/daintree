@@ -1,0 +1,383 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// Drives the real voice and draft stores through a rewrite session (#14635):
+// the spoken instruction never reaches the draft, and the model's result lands
+// on the captured selection only.
+
+vi.mock("@/store/panelStore", () => {
+  const state = { panelsById: {}, panelIds: [], focusedId: null };
+  const getState = () => state;
+  return { usePanelStore: Object.assign(getState, { getState, subscribe: vi.fn(() => () => {}) }) };
+});
+
+vi.mock("@/store/projectStore", () => {
+  const getState = () => ({ currentProject: null, isSwitching: false, switchProject: vi.fn() });
+  return { useProjectStore: Object.assign(getState, { getState }) };
+});
+
+vi.mock("@/store/createWorktreeStore", () => ({
+  getCurrentViewStore: () => ({ getState: () => ({ worktrees: new Map() }) }),
+}));
+
+vi.mock("@/store/worktreeStore", () => {
+  const getState = () => ({ activeWorktreeId: null, selectWorktree: vi.fn() });
+  return { useWorktreeSelectionStore: Object.assign(getState, { getState }) };
+});
+
+vi.mock("@/store/helpPanelStore", () => {
+  const state = { isOpen: false, terminalId: null };
+  const getState = () => ({ ...state, setOpen: vi.fn(), requestFocus: vi.fn() });
+  return {
+    useHelpPanelStore: Object.assign(getState, { getState }),
+    selectActiveSlot: (s: typeof state) => s,
+  };
+});
+
+vi.mock("@/store/macroFocusStore", () => ({ isAssistantFocused: vi.fn(() => false) }));
+
+vi.mock("@/utils/logger", () => ({
+  logDebug: vi.fn(),
+  logInfo: vi.fn(),
+  logWarn: vi.fn(),
+  logError: vi.fn(),
+}));
+
+const notify = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/notify", () => ({ notify }));
+
+const composer = vi.hoisted(() => ({ source: null as unknown }));
+vi.mock("@/services/voiceRewriteSelection", () => ({
+  findRewriteComposer: () => composer.source,
+}));
+
+vi.mock("@/services/KeybindingService", () => ({
+  keybindingService: {
+    getEffectiveCombo: vi.fn(),
+    getEffectiveCombos: vi.fn(() => []),
+    matchesEvent: vi.fn(),
+  },
+}));
+
+type DeltaPayload = { text: string; itemId?: string };
+type CompletePayload = { text: string; willCorrect: boolean; itemId?: string };
+type RewriteOutcome =
+  | { status: "replace"; text: string }
+  | { status: "no_change" | "rejected" | "unavailable" | "failed" };
+
+const callbacks: {
+  delta: ((payload: DeltaPayload) => void) | null;
+  complete: ((payload: CompletePayload) => void) | null;
+  boundary: ((payload: { rawText: string | null }) => void) | null;
+} = { delta: null, complete: null, boundary: null };
+
+const rewrite =
+  vi.fn<(request: { selectedText: string; instruction: string }) => Promise<RewriteOutcome>>();
+const correct = vi.fn();
+
+function stubElectron(openaiApiKey = "sk-key") {
+  const electron = {
+    voiceInput: {
+      onTranscriptionDelta: vi.fn((cb: (payload: DeltaPayload) => void) => {
+        callbacks.delta = cb;
+        return () => {};
+      }),
+      onTranscriptionComplete: vi.fn((cb: (payload: CompletePayload) => void) => {
+        callbacks.complete = cb;
+        return () => {};
+      }),
+      onParagraphBoundary: vi.fn((cb: (payload: { rawText: string | null }) => void) => {
+        callbacks.boundary = cb;
+        return () => {};
+      }),
+      onFileTokenResolved: vi.fn(() => () => {}),
+      onError: vi.fn(() => () => {}),
+      onStatus: vi.fn(() => () => {}),
+      onSessionEnded: vi.fn(() => () => {}),
+      getSettings: vi.fn().mockResolvedValue({
+        enabled: true,
+        openaiApiKey,
+        correctionEnabled: true,
+      }),
+      stop: vi.fn().mockResolvedValue(undefined),
+      correct,
+      rewrite,
+    },
+    systemSleep: {
+      onSuspend: vi.fn(() => () => {}),
+      onWake: vi.fn(() => () => {}),
+    },
+  };
+  vi.stubGlobal("window", {
+    electron,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    requestAnimationFrame: vi.fn(),
+    cancelAnimationFrame: vi.fn(),
+  });
+  vi.stubGlobal("document", {
+    visibilityState: "visible",
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+  });
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
+/** A captured selection, lost on demand the way an edit inside it would lose it. */
+function fakeSelection(text: string) {
+  let lost = false;
+  const listeners: Array<() => void> = [];
+  return {
+    text,
+    range: vi.fn(() => (lost ? null : { from: 4, to: 4 + text.length })),
+    onLost: vi.fn((listener: () => void) => {
+      if (lost) listener();
+      else listeners.push(listener);
+    }),
+    apply: vi.fn(() => !lost),
+    release: vi.fn(() => {
+      lost = true;
+    }),
+    edit: () => {
+      lost = true;
+      for (const listener of listeners.splice(0)) listener();
+    },
+  };
+}
+
+async function setup(openaiApiKey?: string) {
+  stubElectron(openaiApiKey);
+  const { useVoiceRecordingStore } = await import("@/store/voiceRecordingStore");
+  const { useTerminalInputStore } = await import("@/store/terminalInputStore");
+  const { voiceRecordingService } = await import("../VoiceRecordingService");
+  voiceRecordingService.initialize();
+  await voiceRecordingService.refreshConfiguration();
+
+  let itemSeq = 0;
+  const say = (text: string) => {
+    const itemId = `item-${++itemSeq}`;
+    callbacks.delta!({ text, itemId });
+    callbacks.complete!({ text, willCorrect: false, itemId });
+  };
+  const recordInstruction = (selection: ReturnType<typeof fakeSelection>) => {
+    useVoiceRecordingStore.getState().beginSession({
+      panelId: "panel-1",
+      rewrite: { selection, instruction: [], cancelled: false },
+    });
+  };
+  const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+  return {
+    service: voiceRecordingService,
+    voiceStore: useVoiceRecordingStore,
+    draft: () => useTerminalInputStore.getState().getDraftInput("panel-1"),
+    inputStore: useTerminalInputStore,
+    say,
+    recordInstruction,
+    flush,
+  };
+}
+
+describe("VoiceRecordingService — rewrite selection by voice (#14635)", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    callbacks.delta = null;
+    callbacks.complete = null;
+    callbacks.boundary = null;
+    rewrite.mockReset();
+    correct.mockReset();
+    notify.mockReset();
+    composer.source = null;
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("says so, without recording, when nothing is selected", async () => {
+    const { service, voiceStore } = await setup();
+    const start = vi.spyOn(service, "start").mockResolvedValue();
+    composer.source = { terminalId: "panel-1", hasFocus: () => true, captureSelection: () => null };
+    vi.spyOn(
+      service as unknown as { getComposerTarget: () => unknown },
+      "getComposerTarget"
+    ).mockReturnValue({ panelId: "panel-1" });
+
+    await service.rewriteSelection();
+
+    expect(start).not.toHaveBeenCalled();
+    expect(voiceStore.getState().status).toBe("idle");
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ title: "Nothing to rewrite" }));
+  });
+
+  it("refuses up front, without capturing, when there is no OpenAI key", async () => {
+    const { service } = await setup("");
+    const start = vi.spyOn(service, "start").mockResolvedValue();
+    const captureSelection = vi.fn(() => fakeSelection("text"));
+    composer.source = { terminalId: "panel-1", hasFocus: () => true, captureSelection };
+    vi.spyOn(
+      service as unknown as { getComposerTarget: () => unknown },
+      "getComposerTarget"
+    ).mockReturnValue({ panelId: "panel-1" });
+
+    await service.rewriteSelection();
+
+    expect(start).not.toHaveBeenCalled();
+    expect(captureSelection).not.toHaveBeenCalled();
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Rewrite unavailable", action: expect.anything() })
+    );
+  });
+
+  it("arms a rewrite session for the composer's selection", async () => {
+    const { service, voiceStore } = await setup();
+    const start = vi.spyOn(service, "start").mockResolvedValue();
+    const selection = fakeSelection("make me shorter");
+    composer.source = {
+      terminalId: "panel-1",
+      hasFocus: () => true,
+      captureSelection: () => selection,
+    };
+    vi.spyOn(
+      service as unknown as { getComposerTarget: () => unknown },
+      "getComposerTarget"
+    ).mockReturnValue({ panelId: "panel-1" });
+
+    await service.rewriteSelection();
+
+    expect(start).toHaveBeenCalledWith(
+      expect.objectContaining({ panelId: "panel-1", rewrite: expect.objectContaining({ selection }) })
+    );
+    expect(voiceStore.getState().activeTarget?.rewrite?.selection).toBe(selection);
+  });
+
+  it("keeps the instruction out of the draft and lands the rewrite on the selection", async () => {
+    const { service, draft, inputStore, say, recordInstruction, flush } = await setup();
+    inputStore.getState().setDraftInput("panel-1", "Hi. make me shorter please");
+    const selection = fakeSelection("make me shorter please");
+    const pending = deferred<RewriteOutcome>();
+    rewrite.mockReturnValueOnce(pending.promise);
+
+    recordInstruction(selection);
+    say("make it");
+    callbacks.boundary!({ rawText: null });
+    say("much shorter");
+    callbacks.delta!({ text: "please", itemId: "trailing" });
+    await service.stop();
+
+    expect(draft()).toBe("Hi. make me shorter please");
+    expect(correct).not.toHaveBeenCalled();
+    expect(rewrite).toHaveBeenCalledWith({
+      selectedText: "make me shorter please",
+      instruction: "make it much shorter please",
+    });
+    expect(service.hasPendingCorrection("panel-1")).toBe(true);
+
+    pending.resolve({ status: "replace", text: "Shorter." });
+    await flush();
+
+    expect(selection.apply).toHaveBeenCalledWith("Shorter.");
+    expect(service.hasPendingCorrection("panel-1")).toBe(false);
+  });
+
+  it("drops the rewrite when an edit reaches the selection first, so a waiting send goes at once", async () => {
+    const { service, say, recordInstruction, flush } = await setup();
+    const selection = fakeSelection("make me shorter");
+    const pending = deferred<RewriteOutcome>();
+    rewrite.mockReturnValueOnce(pending.promise);
+
+    recordInstruction(selection);
+    say("shorter");
+    await service.stop();
+    const waiting = service.waitForPendingCorrections("panel-1", 5_000);
+
+    selection.edit();
+    await expect(waiting).resolves.toBe(true);
+
+    pending.resolve({ status: "replace", text: "Shorter." });
+    await flush();
+    expect(selection.apply).not.toHaveBeenCalled();
+  });
+
+  it("never lands once a send discarded it", async () => {
+    const { service, say, recordInstruction, flush } = await setup();
+    const selection = fakeSelection("make me shorter");
+    const pending = deferred<RewriteOutcome>();
+    rewrite.mockReturnValueOnce(pending.promise);
+
+    recordInstruction(selection);
+    say("shorter");
+    await service.stop();
+    service.discardPendingCorrections("panel-1");
+
+    pending.resolve({ status: "replace", text: "Shorter." });
+    await flush();
+    expect(selection.apply).not.toHaveBeenCalled();
+    expect(selection.release).toHaveBeenCalled();
+  });
+
+  it("sends nothing when Escape cancels the instruction", async () => {
+    const { service, voiceStore, say, recordInstruction, flush } = await setup();
+    const selection = fakeSelection("make me shorter");
+
+    recordInstruction(selection);
+    voiceStore.getState().setStatus("recording");
+    say("shorter");
+    expect(service.handleEscape("panel-1")).toBe(true);
+    await flush();
+    await flush();
+
+    expect(rewrite).not.toHaveBeenCalled();
+    expect(selection.release).toHaveBeenCalled();
+  });
+
+  it("says nothing was heard instead of sending an empty instruction", async () => {
+    const { service, recordInstruction } = await setup();
+    const selection = fakeSelection("make me shorter");
+
+    recordInstruction(selection);
+    await service.stop();
+
+    expect(rewrite).not.toHaveBeenCalled();
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ title: "Selection unchanged" }));
+  });
+
+  it("explains a rejected rewrite and offers a retry for a failed one", async () => {
+    const { service, say, recordInstruction, flush } = await setup();
+
+    const rejected = fakeSelection("run `npm test`");
+    rewrite.mockResolvedValueOnce({ status: "rejected" });
+    recordInstruction(rejected);
+    say("shorter");
+    await service.stop();
+    await flush();
+    expect(rejected.apply).not.toHaveBeenCalled();
+    expect(notify).toHaveBeenLastCalledWith(
+      expect.objectContaining({ title: "Selection unchanged" })
+    );
+
+    const failed = fakeSelection("make me shorter");
+    rewrite.mockResolvedValueOnce({ status: "failed" });
+    recordInstruction(failed);
+    say("shorter");
+    await service.stop();
+    await flush();
+    const toast = notify.mock.lastCall![0] as { title: string; action: { onClick: () => void } };
+    expect(toast.title).toBe("Rewrite failed");
+
+    rewrite.mockResolvedValueOnce({ status: "replace", text: "Shorter." });
+    toast.action.onClick();
+    await flush();
+    expect(rewrite).toHaveBeenLastCalledWith({
+      selectedText: "make me shorter",
+      instruction: "shorter",
+    });
+    expect(failed.apply).toHaveBeenCalledWith("Shorter.");
+  });
+});

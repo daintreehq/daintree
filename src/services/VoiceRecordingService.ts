@@ -2255,9 +2255,10 @@ class VoiceRecordingService {
     });
     this.syncCorrectionRange(panelId);
     useVoiceRecordingStore.getState().announce("Rewriting selection…");
+    const selectedText = selection.text;
     logDebug(`${LOG_PREFIX} Requesting rewrite`, {
       panelId,
-      selectionLength: selection.text.length,
+      selectionLength: selectedText.length,
       instructionLength: instruction.length,
     });
     void this.settleRewrite(job, instruction);

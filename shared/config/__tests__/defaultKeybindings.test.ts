@@ -59,6 +59,7 @@ describe("buildDefaultKeybindings", () => {
       "terminal.focusUp",
       "terminal.new",
       "terminal.scrollToLastActivity",
+      "voiceInput.rewriteSelection",
       "voiceInput.toggle",
       "worktree.openFileBrowserPanel",
     ]);
