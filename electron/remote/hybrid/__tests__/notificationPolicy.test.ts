@@ -232,30 +232,38 @@ describe("notification policy over a link (#14701)", () => {
     }
   });
 
-  it("retries on its own when nothing else changes, and stops for a host that can't take it", async () => {
-    vi.useFakeTimers();
-    try {
-      const manager = fakeManager();
-      const settings = fakeSource(CHOICES);
-      const offShell = installNotificationPolicyPush(manager, settings.source);
-      const busy = vi
-        .fn()
-        .mockRejectedValueOnce(Object.assign(new Error("late"), { code: "OUTCOME_UNKNOWN" }))
-        .mockResolvedValue(null);
-      const old = vi
-        .fn()
-        .mockRejectedValue(Object.assign(new Error("unknown"), { code: "UNSUPPORTED" }));
-      for (const call of [busy, old]) {
-        manager.opened({ isOpen: true, call, onClose: () => () => {} } as unknown as LinkSession);
+  it.each(["RATE_LIMITED", "OUTCOME_UNKNOWN"])(
+    "sends unchanged choices again on its own after %s, and stops for a host that can't take them",
+    async (code) => {
+      vi.useFakeTimers();
+      try {
+        const manager = fakeManager();
+        const settings = fakeSource(CHOICES);
+        const offShell = installNotificationPolicyPush(manager, settings.source);
+        const busy = vi
+          .fn()
+          .mockRejectedValueOnce(Object.assign(new Error("busy"), { code }))
+          .mockResolvedValue(null);
+        const old = vi
+          .fn()
+          .mockRejectedValue(Object.assign(new Error("unknown"), { code: "UNSUPPORTED" }));
+        for (const call of [busy, old]) {
+          manager.opened({ isOpen: true, call, onClose: () => () => {} } as unknown as LinkSession);
+        }
+        await vi.advanceTimersByTimeAsync(POLICY_RETRY_MS - 1);
+        expect(busy).toHaveBeenCalledTimes(1);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(busy).toHaveBeenCalledTimes(2);
+        expect(busy).toHaveBeenLastCalledWith(NOTIFICATION_POLICY_METHOD, CHOICES);
+        await vi.advanceTimersByTimeAsync(POLICY_RETRY_MS);
+        expect(busy).toHaveBeenCalledTimes(2);
+        expect(old).toHaveBeenCalledTimes(1);
+        offShell();
+      } finally {
+        vi.useRealTimers();
       }
-      await vi.advanceTimersByTimeAsync(POLICY_RETRY_MS);
-      expect(busy).toHaveBeenCalledTimes(2);
-      expect(old).toHaveBeenCalledTimes(1);
-      offShell();
-    } finally {
-      vi.useRealTimers();
     }
-  });
+  );
 
   it("ignores a session that closed before it was handed over", () => {
     const manager = fakeManager();

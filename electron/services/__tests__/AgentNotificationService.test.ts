@@ -2887,6 +2887,19 @@ describe("a remote Shell's own alert choices (#14701)", () => {
     expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledTimes(1);
   });
 
+  it("drops a buffered wait whose machine turned waiting off before the burst went out", () => {
+    mockStore({ waitingEnabled: true, soundEnabled: true });
+    agentNotificationService.setShellPolicy("client-a", SHELL_CHOICES);
+    agentNotificationService.syncWatchedPanels(REMOTE_OWNER, ["term-1"]);
+    events.emit("agent:state-changed", makePayload("waiting"));
+    agentNotificationService.setShellPolicy("client-a", {
+      ...SHELL_CHOICES,
+      waitingEnabled: false,
+    });
+    vi.advanceTimersByTime(250);
+    expect(shownTo(REMOTE_OWNER)).toEqual([]);
+  });
+
   it("pages each machine for its own waiting agents when they ask at once", () => {
     const terminals = [
       ...DEFAULT_APP_STATE.terminals,
