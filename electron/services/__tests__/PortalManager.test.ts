@@ -1246,8 +1246,6 @@ describe("PortalManager idle release (#14538)", () => {
     wc.close.mockImplementation(() => queueMicrotask(() => emit(wc, "destroyed")));
 
   beforeEach(async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-10-26T09:00:00Z"));
     createdWebContents.length = 0;
     vi.resetModules();
     vi.doMock("../../window/webContentsRegistry.js", () => ({
@@ -1263,6 +1261,8 @@ describe("PortalManager idle release (#14538)", () => {
     const electron = await import("electron");
     mockWindow = new electron.BrowserWindow() as InstanceType<typeof electron.BrowserWindow>;
     mod = await import("../PortalManager.js");
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-26T09:00:00Z"));
   });
 
   afterEach(() => {
