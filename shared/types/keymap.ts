@@ -220,6 +220,7 @@ export type BuiltInKeyAction =
   | "voiceInput.lockTarget"
   | "voiceInput.unlockTarget"
   | "voiceInput.recallRecentTarget"
+  | "voiceInput.openRecentDictations"
 
   // Layout undo/redo
   | "layout.undo"
@@ -415,6 +416,7 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "voiceInput.lockTarget",
   "voiceInput.unlockTarget",
   "voiceInput.recallRecentTarget",
+  "voiceInput.openRecentDictations",
   "layout.undo",
   "layout.redo",
   "app.newWindow",

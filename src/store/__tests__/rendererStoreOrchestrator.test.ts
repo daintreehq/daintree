@@ -949,6 +949,7 @@ describe("rendererStoreOrchestrator", () => {
 
   it("cleans up voice recording store buffer when terminal is removed", () => {
     const panelId = "term-voice-1";
+    useVoiceRecordingStore.setState({ activeTarget: null });
 
     usePanelStore.setState({
       panelsById: {
@@ -967,11 +968,40 @@ describe("rendererStoreOrchestrator", () => {
 
     useVoiceRecordingStore.getState().beginSession({ panelId });
     useVoiceRecordingStore.getState().appendDelta("test transcript");
+    useVoiceRecordingStore.getState().finishSession({ preserveLiveText: true });
     expect(useVoiceRecordingStore.getState().panelBuffers[panelId]).toBeDefined();
 
     usePanelStore.getState().removePanel(panelId);
 
     expect(useVoiceRecordingStore.getState().panelBuffers[panelId]).toBeUndefined();
+  });
+
+  it("leaves the buffer of a panel still being dictated into for the voice service (#14637)", () => {
+    const panelId = "term-voice-2";
+    usePanelStore.setState({
+      panelsById: {
+        [panelId]: {
+          id: panelId,
+          title: "T2",
+          kind: "terminal" as const,
+          cwd: "/test",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+        },
+      },
+      panelIds: [panelId],
+    });
+
+    useVoiceRecordingStore.getState().beginSession({ panelId });
+    useVoiceRecordingStore.getState().completeSegment("words to keep");
+    usePanelStore.getState().removePanel(panelId);
+
+    // Its stop reads these words for the history, then clears the buffer.
+    expect(useVoiceRecordingStore.getState().panelBuffers[panelId]?.completedSegments).toEqual([
+      "words to keep",
+    ]);
+    useVoiceRecordingStore.setState({ activeTarget: null, panelBuffers: {} });
   });
 
   it("prunes resource-monitoring metrics for the removed panel only", () => {

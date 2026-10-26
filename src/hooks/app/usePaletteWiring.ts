@@ -19,7 +19,7 @@ import { getNormalizedWorktreeMap } from "@/hooks/useWorktrees";
 /**
  * Composes the app's ~10 palette hooks (new-terminal, panel, project-switcher,
  * action, quick-switcher, send-to-agent, worktree, quick-create) plus the
- * theme/log-level/resume-sessions palette-store flags and every palette's
+ * theme/log-level/resume-sessions/recent-dictations palette-store flags and every palette's
  * `useKeepMounted` exit-animation latch (#9917) into one typed bag.
  *
  * This runs in the app root, so the worktree list is only subscribed to while
@@ -59,6 +59,9 @@ export function usePaletteWiring({ isWorktreeOverviewOpen }: { isWorktreeOvervie
   const isResumeSessionsPaletteOpen = usePaletteStore(
     (state) => state.activePaletteId === "resume-sessions"
   );
+  const isRecentDictationsPaletteOpen = usePaletteStore(
+    (state) => state.activePaletteId === "recent-dictations"
+  );
   // Keep each palette mounted after its first open so its exit animation
   // (driven by useAnimatedPresence) can run — gating directly on `isOpen`
   // unmounts in the same React commit that flips it false, killing the exit
@@ -74,6 +77,7 @@ export function usePaletteWiring({ isWorktreeOverviewOpen }: { isWorktreeOvervie
   const shouldMountPanelPalette = useKeepMounted(panelPalette.isOpen);
   const shouldMountThemePalette = useKeepMounted(isThemePaletteOpen);
   const shouldMountResumeSessionsPalette = useKeepMounted(isResumeSessionsPaletteOpen);
+  const shouldMountRecentDictationsPalette = useKeepMounted(isRecentDictationsPaletteOpen);
   const shouldMountLogLevelPalette = useKeepMounted(isLogLevelPaletteOpen);
   const shouldMountActionPalette = useKeepMounted(actionPalette.isOpen);
 
@@ -91,6 +95,7 @@ export function usePaletteWiring({ isWorktreeOverviewOpen }: { isWorktreeOvervie
     isThemePaletteOpen,
     isLogLevelPaletteOpen,
     isResumeSessionsPaletteOpen,
+    isRecentDictationsPaletteOpen,
     isProjectSwitcherModalOpen,
     shouldMountQuickSwitcher,
     shouldMountSendToAgentPalette,
@@ -100,6 +105,7 @@ export function usePaletteWiring({ isWorktreeOverviewOpen }: { isWorktreeOvervie
     shouldMountPanelPalette,
     shouldMountThemePalette,
     shouldMountResumeSessionsPalette,
+    shouldMountRecentDictationsPalette,
     shouldMountLogLevelPalette,
     shouldMountActionPalette,
   };

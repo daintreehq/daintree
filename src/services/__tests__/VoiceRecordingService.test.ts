@@ -50,6 +50,7 @@ vi.mock("@/store/voiceRecordingStore", () => {
     setSessionDraftStart: vi.fn(),
     setActiveParagraphStart: vi.fn(),
     clearPanelBuffer: vi.fn(),
+    consumeCompletedSegments: vi.fn(() => []),
     lockTarget: vi.fn(),
     unlockTarget: vi.fn(),
     clearLockedTarget: vi.fn(),

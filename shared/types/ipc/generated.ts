@@ -3297,6 +3297,18 @@ export interface GeneratedIpcInvokeMap {
     args: [projectId: string];
     result: import("./project.js").ProjectSleepResult;
   };
+  "recent-dictations:list": {
+    args: [];
+    result: import("../voice.js").RecentDictation[];
+  };
+  "recent-dictations:record": {
+    args: [dictation: import("../voice.js").RecentDictation];
+    result: void;
+  };
+  "recent-dictations:set-corrected-text": {
+    args: [update: { id: string; correctedText: string }];
+    result: void;
+  };
   "remote-hosts:add": {
     args: [payload: import("./remoteHosts.js").AddHostPayload];
     result: import("../remoteHosts.js").HostDescriptor;

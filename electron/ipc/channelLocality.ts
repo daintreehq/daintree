@@ -925,6 +925,11 @@ export const CHANNEL_LOCALITY = {
   "project:updated": "host",
   "project:worktree-load-status": "host",
   "project:write-claude-md": "host",
+  // Dictation text recovered on the machine that heard it; never crosses a link.
+  "recent-dictations:changed": "shell",
+  "recent-dictations:list": "shell",
+  "recent-dictations:record": "shell",
+  "recent-dictations:set-corrected-text": "shell",
   "recipe:export-file": "shell",
   "recipe:import-file": "shell",
   "recovery:export-diagnostics": "shell",

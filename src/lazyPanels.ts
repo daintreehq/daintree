@@ -144,6 +144,12 @@ export const LazyResumeSessionsPalette = lazy(() =>
   }))
 );
 
+export const LazyRecentDictationsPalette = lazy(() =>
+  import("./components/Terminal/RecentDictationsPalette").then((m) => ({
+    default: m.RecentDictationsPalette,
+  }))
+);
+
 export const LazyLogLevelPalette = lazyWithPreload(
   () => import("./components/LogLevelPalette/LogLevelPalette"),
   (m) => m.LogLevelPalette

@@ -77,6 +77,7 @@ import { registerFleetHandlers } from "./handlers/fleet.js";
 import { registerCanopyHandlers } from "./handlers/canopy.js";
 import { registerVoiceInputHandlers } from "./handlers/voiceInput.js";
 import { registerVoiceDictionaryHandlers } from "./handlers/voiceDictionary.js";
+import { registerRecentDictationsHandlers } from "./handlers/recentDictations.js";
 import { registerMcpServerHandlers } from "./handlers/mcpServer.js";
 import { registerHelpAssistantHandlers } from "./handlers/helpAssistant.js";
 import { registerWebviewHandlers } from "./handlers/webview.js";
@@ -255,6 +256,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerCanopyHandlers());
     register(() => registerVoiceInputHandlers(deps));
     register(() => registerVoiceDictionaryHandlers());
+    register(() => registerRecentDictationsHandlers());
     register(() => registerMcpServerHandlers());
     register(() => registerHelpAssistantHandlers());
     register(() => registerWebviewHandlers(deps));

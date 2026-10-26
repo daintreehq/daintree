@@ -16,6 +16,7 @@ import {
 } from "./persistence/persistWriteMerge";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 import type { VoiceMicDevice } from "@/services/voiceMicDevices";
+import { VOICE_PARAGRAPH_BREAK } from "@/lib/voiceTranscriptSegments";
 import type { RewriteSelection } from "@/services/voiceRewriteSelection";
 
 /**
@@ -197,6 +198,11 @@ interface VoiceTranscriptBuffer {
    * retires only its own preview. Unidentified deltas bypass it.
    */
   liveItems: VoiceLiveItem[];
+  /**
+   * The session's committed text so far, in order, with a
+   * {@link VOICE_PARAGRAPH_BREAK} entry where each paragraph ended. Reset when
+   * a session begins and read once by `consumeCompletedSegments` when it stops.
+   */
   completedSegments: string[];
   projectId?: string;
   /** Where the session's first dictated words start in the draft (-1 = none yet). */
@@ -670,7 +676,12 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
                 // Identified items still streaming belong to later segments —
                 // a paragraph break inside an earlier item must not erase them.
                 liveText: joinLiveItems(buffer.liveItems),
-                completedSegments: [],
+                // The session keeps its earlier paragraphs for the history
+                // (#14637); "new paragraph" arrives as two breaks in a row.
+                completedSegments:
+                  buffer.completedSegments.length > 0
+                    ? [...buffer.completedSegments, VOICE_PARAGRAPH_BREAK]
+                    : buffer.completedSegments,
                 activeParagraphStart: -1,
                 transcriptPhase: (buffer.liveItems.some((item) => item.text)
                   ? "interim"

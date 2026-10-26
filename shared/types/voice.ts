@@ -200,3 +200,30 @@ export interface VoiceInputError {
   /** OpenAI error payload `param` field, when present. */
   param?: string | null;
 }
+
+/** How many finished dictations the app session keeps for recovery. */
+export const MAX_RECENT_DICTATIONS = 20;
+
+/**
+ * A finished dictation session, kept in main's memory for the app session so
+ * its words can be recovered when they went somewhere wrong (#14637). Never
+ * persisted, logged or sent off the machine.
+ */
+export interface RecentDictation {
+  /** The session's renderer identity (`dictationSessionId`). */
+  id: string;
+  /** What the provider transcribed, paragraph breaks included. */
+  rawText: string;
+  /** What the AI cleanup returned for the whole session; null when none ran or it changed nothing. */
+  correctedText: string | null;
+  /** The panel the session dictated into, as it was when the session ended. Display only. */
+  target: {
+    panelId: string;
+    panelTitle?: string;
+    projectId?: string;
+    projectName?: string;
+    worktreeId?: string;
+    worktreeLabel?: string;
+  };
+  endedAt: number;
+}

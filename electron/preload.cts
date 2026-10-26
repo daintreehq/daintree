@@ -78,6 +78,7 @@ import { buildGeminiPreloadBindings } from "./ipc/handlers/gemini.preload.js";
 import { buildCodexPreloadBindings } from "./ipc/handlers/codex.preload.js";
 import { buildClaudePreloadBindings } from "./ipc/handlers/claude.preload.js";
 import { buildVoiceDictionaryPreloadBindings } from "./ipc/handlers/voiceDictionary.preload.js";
+import { buildRecentDictationsPreloadBindings } from "./ipc/handlers/recentDictations.preload.js";
 import { buildOnboardingPreloadBindings } from "./ipc/handlers/onboarding.preload.js";
 import { buildShortcutHintsPreloadBindings } from "./ipc/handlers/shortcutHints.preload.js";
 import { buildForgeRecommendationPreloadBindings } from "./ipc/handlers/forgeRecommendation.preload.js";
@@ -3041,6 +3042,12 @@ function buildElectronApi(): ElectronAPI {
     },
 
     voiceDictionary: buildVoiceDictionaryPreloadBindings(_unwrappingInvoke),
+
+    recentDictations: {
+      ...buildRecentDictationsPreloadBindings(_unwrappingInvoke),
+
+      onChanged: (callback: () => void) => _typedOn(CHANNELS.RECENT_DICTATIONS_CHANGED, callback),
+    },
 
     mcpServer: {
       ...buildMcpServerPreloadBindings(_unwrappingInvoke),

@@ -184,6 +184,7 @@ function AppInner() {
     isThemePaletteOpen,
     isLogLevelPaletteOpen,
     isResumeSessionsPaletteOpen,
+    isRecentDictationsPaletteOpen,
     isProjectSwitcherModalOpen,
     shouldMountQuickSwitcher,
     shouldMountSendToAgentPalette,
@@ -193,6 +194,7 @@ function AppInner() {
     shouldMountPanelPalette,
     shouldMountThemePalette,
     shouldMountResumeSessionsPalette,
+    shouldMountRecentDictationsPalette,
     shouldMountLogLevelPalette,
     shouldMountActionPalette,
   } = usePaletteWiring({ isWorktreeOverviewOpen });
@@ -601,6 +603,8 @@ function AppInner() {
                 closeThemePalette={closeThemePalette}
                 isResumeSessionsPaletteOpen={isResumeSessionsPaletteOpen}
                 shouldMountResumeSessionsPalette={shouldMountResumeSessionsPalette}
+                isRecentDictationsPaletteOpen={isRecentDictationsPaletteOpen}
+                shouldMountRecentDictationsPalette={shouldMountRecentDictationsPalette}
                 isLogLevelPaletteOpen={isLogLevelPaletteOpen}
                 shouldMountLogLevelPalette={shouldMountLogLevelPalette}
                 closeLogLevelPalette={closeLogLevelPalette}

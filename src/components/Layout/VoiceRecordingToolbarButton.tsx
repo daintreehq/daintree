@@ -1,5 +1,5 @@
-import { useEffect, useRef } from "react";
-import { Lock, Mic } from "lucide-react";
+import { useEffect, useRef, type ReactNode } from "react";
+import { History, Lock, Mic } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -14,7 +14,10 @@ import { useEffectiveCombo, useShortcutHintHover } from "@/hooks";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
+import { RecentDictationMenuItems } from "./RecentDictationMenuItems";
+import { focusRecoveredComposer } from "@/services/recentDictationRecovery";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
+import { useRecentDictationsStore } from "@/store/recentDictationsStore";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
 import { scratchName, useScratchStore } from "@/store/scratchStore";
 import { actionService } from "@/services/ActionService";
@@ -115,6 +118,92 @@ function VoiceElsewhereButton({
   );
 }
 
+/**
+ * Shown while nothing records but this session has dictations to recover
+ * (#14637), so the voice menu is still there after a dictation went wrong.
+ */
+function VoiceHistoryButton({
+  "data-toolbar-item": dataToolbarItem,
+}: {
+  "data-toolbar-item"?: string;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon"
+          data-toolbar-item={dataToolbarItem}
+          onClick={() => {
+            void actionService.dispatch("voiceInput.openRecentDictations", undefined, {
+              source: "user",
+            });
+          }}
+          className="toolbar-icon-button relative mr-0.5 text-text-secondary"
+          aria-label="Recent dictations"
+          data-testid="voice-history-button"
+        >
+          <History className="h-4 w-4" />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom">
+        <div className="flex flex-col gap-0.5">
+          <span className="font-medium">Recent dictations</span>
+          <span className="text-text-secondary">Click to add one to a draft or copy it</span>
+        </div>
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+/**
+ * The voice button's right-click menu, the same in every state it shows in:
+ * whatever the state adds first, then the recent dictations, then the
+ * toolbar's own items.
+ */
+function VoiceToolbarMenu({
+  children,
+  leadingItems,
+}: {
+  children: ReactNode;
+  leadingItems?: ReactNode;
+}) {
+  // The composer an item just added text to. The menu's close would hand the
+  // keyboard back to this button; the composer gets it instead.
+  const insertedPanelRef = useRef<string | null>(null);
+  return (
+    <ContextMenu
+      onOpenChange={(open) => {
+        // A close the menu never finished (reopened mid-exit) must not carry
+        // an earlier add's destination into this opening.
+        if (open) insertedPanelRef.current = null;
+      }}
+    >
+      <ContextMenuTrigger asChild>
+        <span className="inline-flex">{children}</span>
+      </ContextMenuTrigger>
+      <ContextMenuContent
+        className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto"
+        onCloseAutoFocus={(event) => {
+          const panelId = insertedPanelRef.current;
+          insertedPanelRef.current = null;
+          if (!panelId) return;
+          event.preventDefault();
+          focusRecoveredComposer(panelId);
+        }}
+      >
+        {leadingItems}
+        <RecentDictationMenuItems
+          onInserted={(panelId) => {
+            insertedPanelRef.current = panelId;
+          }}
+        />
+        <ToolbarContextMenuItems buttonId="voice-recording" side="right" />
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+}
+
 function VoiceRecordingPlaceholder() {
   // Reserves the slot footprint so right-aligned toolbar items don't shift
   // when a session starts/stops. Matches DevServerPlaceholder's pattern.
@@ -143,6 +232,7 @@ export function VoiceRecordingToolbarButton({
   const micSignal = useVoiceRecordingStore((state) => state.micSignal);
   const micDeviceLabel = useVoiceRecordingStore((state) => state.micDeviceLabel);
   const pauseStopWarning = useVoiceRecordingStore((state) => state.pauseStopWarning);
+  const hasRecentDictations = useRecentDictationsStore((state) => state.dictations.length > 0);
   const shortcut = useEffectiveCombo("voiceInput.toggle");
   const pauseShortcut = useEffectiveCombo("voiceInput.togglePause");
   const hover = useShortcutHintHover("voiceInput.toggle");
@@ -297,11 +387,13 @@ export function VoiceRecordingToolbarButton({
   if (!isActive || (!showOrbit && !showArming)) {
     if (!isActive && sessionElsewhere) {
       return (
-        <VoiceElsewhereButton
-          session={sessionElsewhere}
-          shortcut={shortcut}
-          data-toolbar-item={dataToolbarItem}
-        />
+        <VoiceToolbarMenu>
+          <VoiceElsewhereButton
+            session={sessionElsewhere}
+            shortcut={shortcut}
+            data-toolbar-item={dataToolbarItem}
+          />
+        </VoiceToolbarMenu>
       );
     }
     if (!isActive && lockedTarget) {
@@ -309,7 +401,18 @@ export function VoiceRecordingToolbarButton({
         lockedTarget.panelTitle?.trim() ||
         [lockedTarget.projectName, lockedTarget.worktreeLabel].filter(Boolean).join(" / ") ||
         "a panel";
-      return <VoiceLockedButton label={lockedLabel} data-toolbar-item={dataToolbarItem} />;
+      return (
+        <VoiceToolbarMenu>
+          <VoiceLockedButton label={lockedLabel} data-toolbar-item={dataToolbarItem} />
+        </VoiceToolbarMenu>
+      );
+    }
+    if (!isActive && hasRecentDictations) {
+      return (
+        <VoiceToolbarMenu>
+          <VoiceHistoryButton data-toolbar-item={dataToolbarItem} />
+        </VoiceToolbarMenu>
+      );
     }
     return <VoiceRecordingPlaceholder />;
   }
@@ -353,138 +456,134 @@ export function VoiceRecordingToolbarButton({
   const actionCombo = isPaused ? pauseShortcut : shortcut;
 
   return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>
-        <span className="inline-flex">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                {...hover}
-                variant="ghost"
-                size="icon"
-                data-toolbar-item={dataToolbarItem}
-                onClick={() => {
-                  void voiceRecordingService.focusActiveTarget();
-                }}
-                className={cn(
-                  "toolbar-icon-button relative mr-0.5 text-text-primary",
-                  "hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))]"
-                )}
-                aria-label={tooltipTitle}
-              >
-                <Mic className="h-4 w-4" />
-                {/* Arming ring — static accent border painted during the
-                  pre-audio confirmation window. Replaces the orbit until
-                  audio is hot, so the user sees an immediate confirmation
-                  that the hotkey was registered. */}
-                {showArming && (
-                  <span
-                    aria-hidden="true"
-                    className="absolute inset-1 rounded-full pointer-events-none"
-                    style={{
-                      background: `var(--theme-accent-primary)`,
-                      opacity: 0.55,
-                      mask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
-                      WebkitMask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
-                      maskComposite: "exclude",
-                      WebkitMaskComposite: "xor",
-                      padding: `${BASE_THICKNESS}px`,
-                    }}
-                  />
-                )}
-                {/* Orbit overlay — absolute inset on the relative Button. No
-                  contain:strict at this scale: the toolbar button is a flex
-                  child and clipping the orbit would crop the ring. */}
-                {showOrbit && (
-                  <>
-                    <span
-                      ref={trackRef}
-                      aria-hidden="true"
-                      className="absolute inset-1 rounded-full pointer-events-none"
-                      style={{
-                        opacity: 0.08,
-                        background: `var(--theme-accent-primary)`,
-                        mask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
-                        WebkitMask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
-                        maskComposite: "exclude",
-                        WebkitMaskComposite: "xor",
-                        padding: `${BASE_THICKNESS}px`,
-                        transition: "opacity var(--duration-75) ease-out",
-                      }}
-                    />
-                    <div
-                      ref={wrapperRef}
-                      aria-hidden="true"
-                      className="absolute inset-1 pointer-events-none"
-                      style={{ willChange: "transform" }}
-                    >
-                      <span
-                        ref={ringRef}
-                        className="absolute inset-0 rounded-full"
-                        style={{
-                          padding: `${BASE_THICKNESS}px`,
-                          mask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
-                          WebkitMask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
-                          maskComposite: "exclude",
-                          WebkitMaskComposite: "xor",
-                        }}
-                      />
-                      <span
-                        ref={dotHaloRef}
-                        className="absolute rounded-full bg-daintree-accent/30"
-                        style={{
-                          width: "6px",
-                          height: "6px",
-                          top: 0,
-                          left: "50%",
-                          transform: "translate(-50%, -35%)",
-                        }}
-                      />
-                      <span
-                        ref={dotCoreRef}
-                        className="absolute rounded-full bg-accent-primary"
-                        style={{
-                          width: "3.5px",
-                          height: "3.5px",
-                          top: 0,
-                          left: "50%",
-                          transform: "translate(-50%, -15%)",
-                        }}
-                      />
-                    </div>
-                  </>
-                )}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">
-              <div className="flex flex-col gap-0.5">
-                <span className="font-medium">{tooltipTitle}</span>
-                {panelLabel && contextLabel && (
-                  <span className="text-text-secondary">{contextLabel}</span>
-                )}
-                {elapsedLabel && <span className="text-text-secondary">{elapsedLabel}</span>}
-                <span className="text-text-secondary">Click to jump to panel</span>
-                {actionCombo && (
-                  <span className="text-text-secondary">
-                    {createTooltipContent(isPaused ? "Resume" : "Stop", actionCombo)}
-                  </span>
-                )}
-              </div>
-            </TooltipContent>
-          </Tooltip>
-        </span>
-      </ContextMenuTrigger>
-      <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
-        {(isRecording || isPaused) && (
+    <VoiceToolbarMenu
+      leadingItems={
+        (isRecording || isPaused) && (
           <>
             <ContextMenuItem onSelect={() => voiceRecordingService.togglePause()}>
               {isPaused ? "Resume dictation" : "Pause dictation"}
             </ContextMenuItem>
             <ContextMenuSeparator />
           </>
-        )}
-        <ToolbarContextMenuItems buttonId="voice-recording" side="right" />
-      </ContextMenuContent>
-    </ContextMenu>
+        )
+      }
+    >
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            {...hover}
+            variant="ghost"
+            size="icon"
+            data-toolbar-item={dataToolbarItem}
+            onClick={() => {
+              void voiceRecordingService.focusActiveTarget();
+            }}
+            className={cn(
+              "toolbar-icon-button relative mr-0.5 text-text-primary",
+              "hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))]"
+            )}
+            aria-label={tooltipTitle}
+          >
+            <Mic className="h-4 w-4" />
+            {/* Arming ring — static accent border painted during the
+              pre-audio confirmation window. Replaces the orbit until
+              audio is hot, so the user sees an immediate confirmation
+              that the hotkey was registered. */}
+            {showArming && (
+              <span
+                aria-hidden="true"
+                className="absolute inset-1 rounded-full pointer-events-none"
+                style={{
+                  background: `var(--theme-accent-primary)`,
+                  opacity: 0.55,
+                  mask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
+                  WebkitMask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
+                  maskComposite: "exclude",
+                  WebkitMaskComposite: "xor",
+                  padding: `${BASE_THICKNESS}px`,
+                }}
+              />
+            )}
+            {/* Orbit overlay — absolute inset on the relative Button. No
+              contain:strict at this scale: the toolbar button is a flex
+              child and clipping the orbit would crop the ring. */}
+            {showOrbit && (
+              <>
+                <span
+                  ref={trackRef}
+                  aria-hidden="true"
+                  className="absolute inset-1 rounded-full pointer-events-none"
+                  style={{
+                    opacity: 0.08,
+                    background: `var(--theme-accent-primary)`,
+                    mask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
+                    WebkitMask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
+                    maskComposite: "exclude",
+                    WebkitMaskComposite: "xor",
+                    padding: `${BASE_THICKNESS}px`,
+                    transition: "opacity var(--duration-75) ease-out",
+                  }}
+                />
+                <div
+                  ref={wrapperRef}
+                  aria-hidden="true"
+                  className="absolute inset-1 pointer-events-none"
+                  style={{ willChange: "transform" }}
+                >
+                  <span
+                    ref={ringRef}
+                    className="absolute inset-0 rounded-full"
+                    style={{
+                      padding: `${BASE_THICKNESS}px`,
+                      mask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
+                      WebkitMask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
+                      maskComposite: "exclude",
+                      WebkitMaskComposite: "xor",
+                    }}
+                  />
+                  <span
+                    ref={dotHaloRef}
+                    className="absolute rounded-full bg-daintree-accent/30"
+                    style={{
+                      width: "6px",
+                      height: "6px",
+                      top: 0,
+                      left: "50%",
+                      transform: "translate(-50%, -35%)",
+                    }}
+                  />
+                  <span
+                    ref={dotCoreRef}
+                    className="absolute rounded-full bg-accent-primary"
+                    style={{
+                      width: "3.5px",
+                      height: "3.5px",
+                      top: 0,
+                      left: "50%",
+                      transform: "translate(-50%, -15%)",
+                    }}
+                  />
+                </div>
+              </>
+            )}
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">
+          <div className="flex flex-col gap-0.5">
+            <span className="font-medium">{tooltipTitle}</span>
+            {panelLabel && contextLabel && (
+              <span className="text-text-secondary">{contextLabel}</span>
+            )}
+            {elapsedLabel && <span className="text-text-secondary">{elapsedLabel}</span>}
+            <span className="text-text-secondary">Click to jump to panel</span>
+            {actionCombo && (
+              <span className="text-text-secondary">
+                {createTooltipContent(isPaused ? "Resume" : "Stop", actionCombo)}
+              </span>
+            )}
+          </div>
+        </TooltipContent>
+      </Tooltip>
+    </VoiceToolbarMenu>
   );
 }

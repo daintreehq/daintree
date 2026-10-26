@@ -5,6 +5,7 @@ import { usePanelStore } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
+import { usePaletteStore } from "@/store/paletteStore";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 
 const lockTargetArgsSchema = z.object({ panelId: z.string().optional() });
@@ -180,6 +181,23 @@ export function registerVoiceActions(actions: ActionRegistry): void {
         return;
       }
       await voiceRecordingService.toggle(target);
+    },
+  }));
+
+  // Opens the picker only: the text never rides on the action, so dispatch
+  // logging and automation can't carry it.
+  actions.set("voiceInput.openRecentDictations", () => ({
+    id: "voiceInput.openRecentDictations",
+    title: "Recover a recent dictation",
+    description:
+      "Pick one of this session's dictations to add to the focused input's draft or copy",
+    category: "voice",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    keywords: ["dictate", "dictation", "voice", "history", "recover", "copy", "transcript"],
+    run: async () => {
+      usePaletteStore.getState().openPalette("recent-dictations");
     },
   }));
 }
