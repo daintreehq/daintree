@@ -247,6 +247,11 @@ describe("VoiceInputSettingsTab", () => {
       expect(screen.getByText(/encrypted connection to OpenAI/)).toBeTruthy();
       expect(screen.getByText(/not used for model training/)).toBeTruthy();
       expect(screen.getByText(/abuse-monitoring logs for up to 30 days/)).toBeTruthy();
+      // Keyterms leave the machine too, so the disclosure names every source.
+      const disclosure = screen.getByText(/encrypted connection to OpenAI/).textContent ?? "";
+      expect(disclosure).toMatch(/project name/);
+      expect(disclosure).toMatch(/branch/);
+      expect(disclosure).toMatch(/terminal you're dictating into/);
       // Where the key will live is said before it's saved, not only after.
       expect(screen.getByText(/stored locally in plain text/)).toBeTruthy();
     });
