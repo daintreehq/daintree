@@ -1132,6 +1132,23 @@ describe("MigrationRunner", () => {
     expect(store.data.idleTerminalNotify).toEqual({ enabled: true, thresholdMinutes: 60 });
   });
 
+  it("runs migration037 from v36 under the full barrel, turning dictation cleanup on (#14615)", async () => {
+    const store = createBufferedMockStore(storePath, {
+      _schemaVersion: 36,
+      voiceInput: { enabled: true, openaiApiKey: "sk-test", correctionEnabled: false },
+    });
+    const runner = new MigrationRunner(store as never);
+
+    await runner.runMigrations(migrations);
+
+    expect(store.data._schemaVersion).toBe(LATEST_SCHEMA_VERSION);
+    expect(store.data.voiceInput).toEqual({
+      enabled: true,
+      openaiApiKey: "sk-test",
+      correctionEnabled: true,
+    });
+  });
+
   it("runs migration025 from v24 under the full barrel, upgrading the voice correction model (#11365)", async () => {
     const store = createMockStore(storePath, {
       _schemaVersion: 24,

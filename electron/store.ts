@@ -1056,7 +1056,7 @@ const storeOptions = {
       dictionary: [],
       transcriptionProvider: "openai",
       transcriptionModel: "gpt-live-transcribe",
-      correctionEnabled: false,
+      correctionEnabled: true,
       correctionModel: "gpt-6-luna",
       correctionCustomInstructions: "",
       paragraphingStrategy: "spoken-command",
