@@ -1,4 +1,5 @@
 import { isBluetoothMicLabel } from "./voiceMicDevices";
+import { MIC_LIVE_PEAK_THRESHOLD } from "./voiceStartDiagnostics";
 
 export type MicTestFailure = "denied" | "unavailable";
 
@@ -35,9 +36,9 @@ export interface MicTestOptions {
 export const SILENCE_AFTER_MS = 3000;
 export const MAX_TEST_MS = 60_000;
 const TICK_MS = 50;
-// Roughly -54 dBFS peak: above the exact zeros a muted or profile-switching
-// headset delivers, below a quiet room's noise floor.
-const SOUND_PEAK = 0.002;
+// The same liveness bar dictation uses: above the exact zeros a muted or
+// profile-switching headset delivers.
+const SOUND_PEAK = MIC_LIVE_PEAK_THRESHOLD;
 const FLOOR_DB = -60;
 
 export function levelFromPeak(peak: number): number {
@@ -61,7 +62,7 @@ export async function startMicTest(options: MicTestOptions): Promise<MicTestHand
   try {
     // `ideal`, as dictation asks, so the test falls back exactly where it would.
     stream = await navigator.mediaDevices.getUserMedia({
-      audio: isSpecific(deviceId) ? { deviceId: { ideal: deviceId } } : true,
+      audio: deviceId ? { deviceId: { ideal: deviceId } } : true,
       video: false,
     });
   } catch (err) {
@@ -104,10 +105,15 @@ export async function startMicTest(options: MicTestOptions): Promise<MicTestHand
     analyser.fftSize = 1024;
     context.createMediaStreamSource(stream).connect(analyser);
     const buffer = new Float32Array(analyser.fftSize);
-    const startedAt = performance.now();
+    // Counted in ticks that ran with the context processing, so a suspended
+    // context's frozen zeros never read as a silent mic.
+    let runningMs = 0;
     let heardSound = false;
+    void context.resume().catch(() => {});
 
     timer = setInterval(() => {
+      if (context?.state !== "running") return;
+      runningMs += TICK_MS;
       analyser.getFloatTimeDomainData(buffer);
       let peak = 0;
       for (let i = 0; i < buffer.length; i++) peak = Math.max(peak, Math.abs(buffer[i]!));
@@ -115,7 +121,7 @@ export async function startMicTest(options: MicTestOptions): Promise<MicTestHand
       onSample({
         level: levelFromPeak(peak),
         heardSound,
-        silent: !heardSound && performance.now() - startedAt >= SILENCE_AFTER_MS,
+        silent: !heardSound && runningMs >= SILENCE_AFTER_MS,
       });
     }, TICK_MS);
     limit = setTimeout(() => {

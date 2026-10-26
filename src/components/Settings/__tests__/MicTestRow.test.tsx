@@ -39,6 +39,22 @@ describe("MicTestRow", () => {
     expect(screen.getByRole("status").textContent).toContain("Bluetooth");
   });
 
+  it("keeps the wrong-device note beside the silence advice", async () => {
+    startMicTest.mockResolvedValue({
+      opened: { label: "Built-in", substituted: true, bluetooth: false },
+      stop: vi.fn(),
+    });
+    render(<MicTestRow deviceId="mic-1" />);
+    fireEvent.click(screen.getByRole("button", { name: "Test microphone" }));
+    await waitFor(() => screen.getByRole("button", { name: "Stop test" }));
+    act(() => {
+      startMicTest.mock.calls[0]![0].onSample({ level: 0, heardSound: false, silent: true });
+    });
+    const text = screen.getByRole("status").textContent;
+    expect(text).toContain("testing Built-in instead");
+    expect(text).toContain("No sound from Built-in");
+  });
+
   it("releases the mic when the page unmounts", async () => {
     const stop = vi.fn();
     startMicTest.mockResolvedValue({ opened, stop });

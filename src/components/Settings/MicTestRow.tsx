@@ -33,14 +33,17 @@ function describe(state: TestState): string {
         : "Couldn't open a microphone. Check one is connected and not in use, then try again";
     case "running": {
       const { opened, sample } = state;
+      const instead = opened.substituted
+        ? `The selected microphone wasn't available, so this is testing ${opened.label} instead. `
+        : "";
       if (sample.silent) {
-        return opened.bluetooth
-          ? `No sound from ${opened.label}. Bluetooth headsets can go quiet while they switch modes. Wait a moment and speak again, or pick the built-in microphone`
-          : `No sound from ${opened.label}. Check it isn't muted, or pick another microphone`;
+        return `${instead}${
+          opened.bluetooth
+            ? `No sound from ${opened.label}. Bluetooth headsets can go quiet while they switch modes. Wait a moment and speak again, or pick the built-in microphone`
+            : `No sound from ${opened.label}. Check it isn't muted, or pick another microphone`
+        }`;
       }
-      if (opened.substituted) {
-        return `The selected microphone wasn't available, so this is testing ${opened.label} instead`;
-      }
+      if (opened.substituted) return instead.trim();
       return sample.heardSound
         ? `Hearing ${opened.label}`
         : `Listening to ${opened.label}. Say something`;

@@ -6,7 +6,9 @@ let peak = 0;
 let trackStop: ReturnType<typeof vi.fn>;
 let contextClose: ReturnType<typeof vi.fn>;
 
-function installMedia(opts: { label?: string; actualId?: string; error?: Error } = {}) {
+function installMedia(
+  opts: { label?: string; actualId?: string; error?: Error; contextState?: string } = {}
+) {
   trackStop = vi.fn();
   contextClose = vi.fn().mockResolvedValue(undefined);
   const track = {
@@ -24,6 +26,8 @@ function installMedia(opts: { label?: string; actualId?: string; error?: Error }
   vi.stubGlobal(
     "AudioContext",
     class {
+      state = opts.contextState ?? "running";
+      resume = vi.fn().mockResolvedValue(undefined);
       close = contextClose;
       createAnalyser() {
         return {
@@ -91,6 +95,63 @@ describe("startMicTest", () => {
     expect(onSample).toHaveBeenLastCalledWith(expect.objectContaining({ silent: false }));
     vi.advanceTimersByTime(200);
     expect(onSample).toHaveBeenLastCalledWith(expect.objectContaining({ silent: true }));
+    h.stop();
+  });
+
+  it("never flags silence once sound was heard, even when later samples are zero", async () => {
+    installMedia();
+    const onSample = vi.fn();
+    const h = await startMicTest({ deviceId: "", onSample, onEnded: vi.fn() });
+    peak = 0.2;
+    vi.advanceTimersByTime(100);
+    peak = 0;
+    vi.advanceTimersByTime(SILENCE_AFTER_MS + 500);
+    expect(onSample).toHaveBeenLastCalledWith(
+      expect.objectContaining({ heardSound: true, silent: false })
+    );
+    h.stop();
+  });
+
+  it("counts a quiet but live mic as sound", async () => {
+    installMedia();
+    const onSample = vi.fn();
+    const h = await startMicTest({ deviceId: "", onSample, onEnded: vi.fn() });
+    peak = 0.0015;
+    vi.advanceTimersByTime(SILENCE_AFTER_MS + 500);
+    expect(onSample).toHaveBeenLastCalledWith(
+      expect.objectContaining({ heardSound: true, silent: false })
+    );
+    h.stop();
+  });
+
+  it("does not read a suspended context's zeros as silence", async () => {
+    installMedia({ contextState: "suspended" });
+    const onSample = vi.fn();
+    const h = await startMicTest({ deviceId: "", onSample, onEnded: vi.fn() });
+    vi.advanceTimersByTime(SILENCE_AFTER_MS * 2);
+    expect(onSample).not.toHaveBeenCalled();
+    h.stop();
+  });
+
+  it("keeps the communications alias in the request and never calls it a substitution", async () => {
+    const gum = installMedia({ actualId: "real-headset" });
+    const h = await startMicTest({
+      deviceId: "communications",
+      onSample: vi.fn(),
+      onEnded: vi.fn(),
+    });
+    expect(gum).toHaveBeenCalledWith({
+      audio: { deviceId: { ideal: "communications" } },
+      video: false,
+    });
+    expect(h.opened.substituted).toBe(false);
+    h.stop();
+  });
+
+  it("reports no substitution when the selected device opened", async () => {
+    installMedia();
+    const h = await startMicTest({ deviceId: "mic-1", onSample: vi.fn(), onEnded: vi.fn() });
+    expect(h.opened.substituted).toBe(false);
     h.stop();
   });
 
