@@ -2905,11 +2905,11 @@ export type VoiceCorrectionModel = "gpt-6-luna";
  * Paragraphing strategy for voice dictation.
  *
  * "spoken-command" (default): The user says "new paragraph" to insert a paragraph break.
- *   Spoken commands ("new paragraph" → \n\n, "period" → ".", "new line" → \n, etc.) are
- *   transcribed literally by the upstream service and rewritten post-hoc by the IPC handler
- *   via applyDictationCommands. Manual Enter is always available as a secondary mechanism.
+ *   Spoken commands ("new paragraph" → \n\n, "new line" → \n, and a final "send it",
+ *   which sends the prompt) are transcribed literally by the upstream service and
+ *   rewritten post-hoc by the IPC handler. Shift+Enter is always available for a break.
  *
- * "manual": Paragraph breaks are inserted only via the Enter key. No spoken commands.
+ * "manual": Paragraph breaks are inserted only via Shift+Enter. No spoken commands.
  *   Best for users who prefer keyboard control or find spoken formatting commands awkward.
  */
 export type VoiceParagraphingStrategy = "spoken-command" | "manual";

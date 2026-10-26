@@ -656,7 +656,7 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
                 label="Paragraph breaks"
                 description={
                   effectiveParagraphing === "spoken-command"
-                    ? 'Say "new paragraph" or "new line" to add a break. Enter stops dictation and sends the prompt.'
+                    ? 'Say "new paragraph" or "new line" to add a break, or end with "send it" to stop dictation and send a prompt of three or more words. Enter stops dictation and sends the prompt too.'
                     : "Spoken break commands are off. Press Shift+Enter to add a break yourself; Enter stops dictation and sends the prompt."
                 }
                 options={[

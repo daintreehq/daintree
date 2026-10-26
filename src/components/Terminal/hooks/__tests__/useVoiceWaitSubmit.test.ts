@@ -10,6 +10,7 @@ vi.mock("@/services/VoiceRecordingService", () => ({
     stop: vi.fn().mockResolvedValue(undefined),
     hasPendingCorrection: vi.fn(() => false),
     waitForPendingCorrections: vi.fn().mockResolvedValue(true),
+    onSpokenSend: vi.fn(() => () => {}),
   },
   VOICE_CORRECTION_SEND_WAIT_MS: 2000,
 }));
@@ -35,6 +36,7 @@ import { useVoiceWaitSubmit } from "../useVoiceWaitSubmit";
 const stopMock = vi.mocked(voiceRecordingService.stop);
 const hasPendingMock = vi.mocked(voiceRecordingService.hasPendingCorrection);
 const waitMock = vi.mocked(voiceRecordingService.waitForPendingCorrections);
+const onSpokenSendMock = vi.mocked(voiceRecordingService.onSpokenSend);
 
 const PANEL_ID = "test-panel";
 
@@ -71,18 +73,120 @@ describe("useVoiceWaitSubmit", () => {
     hasPendingMock.mockReturnValue(false);
     waitMock.mockReset();
     waitMock.mockResolvedValue(true);
+    onSpokenSendMock.mockReset();
+    onSpokenSendMock.mockReturnValue(() => {});
+    useTerminalInputStore.getState().clearDraftInput(PANEL_ID);
   });
 
-  function renderWaitSubmit() {
+  function renderWaitSubmit(isDisabled?: () => boolean) {
     return renderHook(() =>
       useVoiceWaitSubmit({
         terminalId: PANEL_ID,
         editorViewRef: { current: null },
         editableCompartmentRef: { current: new Compartment() },
         sendFromEditor,
+        isDisabled,
       })
     );
   }
+
+  function spokenSendHandler(): () => void {
+    const call = onSpokenSendMock.mock.calls.at(-1);
+    expect(call?.[0]).toBe(PANEL_ID);
+    return call![1];
+  }
+
+  describe("spoken send", () => {
+    it("stops the session and sends a prompt of three or more words", async () => {
+      useTerminalInputStore.getState().setDraftInput(PANEL_ID, "fix the login bug");
+      renderWaitSubmit();
+
+      await act(async () => {
+        spokenSendHandler()();
+      });
+
+      expect(stopMock).toHaveBeenCalledTimes(1);
+      expect(sendFromEditor).toHaveBeenCalledTimes(1);
+    });
+
+    it("waits for the correction before sending, as Enter does", async () => {
+      useTerminalInputStore.getState().setDraftInput(PANEL_ID, "fix the login bug");
+      hasPendingMock.mockReturnValue(true);
+      renderWaitSubmit();
+
+      await act(async () => {
+        spokenSendHandler()();
+      });
+
+      expect(waitMock).toHaveBeenCalledWith(PANEL_ID, 2000);
+      expect(waitMock.mock.invocationCallOrder[0]).toBeLessThan(
+        sendFromEditor.mock.invocationCallOrder[0]
+      );
+    });
+
+    it.each(["", "fix it", "  ok , ! "])("stops but leaves %j unsent", async (draft) => {
+      useTerminalInputStore.getState().setDraftInput(PANEL_ID, draft);
+      renderWaitSubmit();
+
+      await act(async () => {
+        spokenSendHandler()();
+      });
+
+      expect(stopMock).toHaveBeenCalledTimes(1);
+      expect(sendFromEditor).not.toHaveBeenCalled();
+      expect(useTerminalInputStore.getState().isVoiceSubmitting(PANEL_ID)).toBe(false);
+    });
+
+    it("rechecks the draft after the correction lands", async () => {
+      useTerminalInputStore.getState().setDraftInput(PANEL_ID, "um so yeah");
+      hasPendingMock.mockReturnValue(true);
+      waitMock.mockImplementation(async () => {
+        useTerminalInputStore.getState().setDraftInput(PANEL_ID, "Yeah.");
+        return true;
+      });
+      renderWaitSubmit();
+
+      await act(async () => {
+        spokenSendHandler()();
+      });
+
+      expect(sendFromEditor).not.toHaveBeenCalled();
+    });
+
+    it("only stops dictation when the composer is disabled", async () => {
+      useTerminalInputStore.getState().setDraftInput(PANEL_ID, "fix the login bug");
+      renderWaitSubmit(() => true);
+
+      await act(async () => {
+        spokenSendHandler()();
+      });
+
+      expect(stopMock).toHaveBeenCalledTimes(1);
+      expect(sendFromEditor).not.toHaveBeenCalled();
+      expect(useTerminalInputStore.getState().isVoiceSubmitting(PANEL_ID)).toBe(false);
+    });
+
+    it("leaves Enter free to send a short prompt", async () => {
+      useTerminalInputStore.getState().setDraftInput(PANEL_ID, "yes");
+      const { result } = renderWaitSubmit();
+
+      await act(async () => {
+        result.current.startVoiceWaitSubmit();
+      });
+
+      expect(sendFromEditor).toHaveBeenCalledTimes(1);
+    });
+
+    it("unregisters when the composer unmounts", () => {
+      const unsubscribe = vi.fn();
+      onSpokenSendMock.mockReturnValue(unsubscribe);
+      const { unmount } = renderWaitSubmit();
+
+      unmount();
+
+      expect(unsubscribe).toHaveBeenCalledTimes(1);
+    });
+  });
 
   it("stops the session, sends, and clears the submitting flag", async () => {
     const { result } = renderWaitSubmit();

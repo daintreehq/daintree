@@ -59,6 +59,7 @@ import {
 } from "@/services/voiceMicDevices";
 import { isScratchCommand, recordScratchLanded } from "@/services/voiceScratchCommand";
 import { applyDraftEdits, planFileReferenceEdits } from "@/services/voiceFileReferences";
+import { isSpokenSendable } from "@/services/voiceSpokenSend";
 
 const LOG_PREFIX = "[VoiceRecording]";
 const REPLACED_ELSEWHERE_ANNOUNCEMENT =
@@ -328,6 +329,8 @@ class VoiceRecordingService {
   private baselineOwners = new Map<string, PendingCorrection>();
   private unfollowBaselines: (() => void) | null = null;
   private writingShiftedDraft = false;
+  // The composer showing each panel, which owns its send. One per panel.
+  private spokenSendHandlers = new Map<string, () => void>();
 
   initialize(): void {
     if (this.initialized) return;
@@ -389,7 +392,7 @@ class VoiceRecordingService {
     );
 
     this.unsubscribers.push(
-      voiceInput.onTranscriptionComplete(({ text, itemId, transcriptId }) => {
+      voiceInput.onTranscriptionComplete(({ text, itemId, transcriptId, send }) => {
         logDebug(`${LOG_PREFIX} Received transcription complete`, { itemId, length: text.length });
         const voiceState = useVoiceRecordingStore.getState();
         const panelId = voiceState.activeTarget?.panelId;
@@ -431,6 +434,9 @@ class VoiceRecordingService {
           }
         }
         useVoiceRecordingStore.getState().completeSegment(text, itemId);
+        // After completeSegment, so the command's own preview is already retired
+        // and a stop that preserves live text can't put it back.
+        if (send && panelId) this.handleSpokenSend(panelId, projectId);
       })
     );
 
@@ -2984,6 +2990,34 @@ class VoiceRecordingService {
     }
   }
 
+  /**
+   * Registers the composer that sends `panelId`'s prompt when the user says
+   * "send it". The handler runs Enter's dictation path: stop, wait for the
+   * correction, send.
+   */
+  onSpokenSend(panelId: string, handler: () => void): () => void {
+    this.spokenSendHandlers.set(panelId, handler);
+    return () => {
+      if (this.spokenSendHandlers.get(panelId) === handler) {
+        this.spokenSendHandlers.delete(panelId);
+      }
+    };
+  }
+
+  // A send heard while dictation is already stopping (Escape, the hotkey, a
+  // retarget, Enter) must not start a second stop or a send nobody asked for.
+  private handleSpokenSend(panelId: string, projectId: string | undefined): void {
+    const voiceState = useVoiceRecordingStore.getState();
+    if (voiceState.status !== "recording" || voiceState.activeTarget?.panelId !== panelId) return;
+    const draft = useTerminalInputStore.getState().getDraftInput(panelId, projectId);
+    const handler = this.spokenSendHandlers.get(panelId);
+    if (handler && isSpokenSendable(draft)) {
+      handler();
+      return;
+    }
+    void this.stop();
+  }
+
   destroy(): void {
     this.invalidatePendingStart();
     // Vite HMR disposes and re-evaluates this module; the old singleton's
@@ -3001,6 +3035,7 @@ class VoiceRecordingService {
     for (const panelId of correctedPanels) this.syncCorrectionRange(panelId);
     this.baselineOwners.clear();
     this.unfollowLearningBaselines();
+    this.spokenSendHandlers.clear();
     for (const unsub of this.unsubscribers) {
       unsub();
     }
