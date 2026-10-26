@@ -24,6 +24,10 @@ function seed(): void {
   localStorage.setItem("daintree_quickrun_expanded_studio:p1", "true");
   localStorage.setItem("daintree_quickrun_autorestart_studio-2:p1", "true");
   localStorage.setItem(`daintree_quickrun_expanded_${LOCAL}`, "true");
+  localStorage.setItem("daintree-sidebar-view:studio:p1", "{}");
+  localStorage.setItem(backupKeyFor("daintree-sidebar-view:studio:p1"), "{}");
+  localStorage.setItem("daintree-sidebar-view:studio-2:p1", "{}");
+  localStorage.setItem(`daintree-sidebar-view:${LOCAL}`, "{}");
   localStorage.setItem("unrelated_studio:p1", "kept");
 }
 
@@ -45,6 +49,10 @@ describe("forgetHostLocalState", () => {
     expect(localStorage.getItem("daintree_quickrun_expanded_studio:p1")).toBeNull();
     expect(localStorage.getItem("daintree_quickrun_autorestart_studio-2:p1")).toBe("true");
     expect(localStorage.getItem(`daintree_quickrun_expanded_${LOCAL}`)).toBe("true");
+    expect(localStorage.getItem("daintree-sidebar-view:studio:p1")).toBeNull();
+    expect(localStorage.getItem(backupKeyFor("daintree-sidebar-view:studio:p1"))).toBeNull();
+    expect(localStorage.getItem("daintree-sidebar-view:studio-2:p1")).toBe("{}");
+    expect(localStorage.getItem(`daintree-sidebar-view:${LOCAL}`)).toBe("{}");
     expect(localStorage.getItem("unrelated_studio:p1")).toBe("kept");
   });
 
