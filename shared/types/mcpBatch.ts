@@ -52,6 +52,12 @@ export const TerminalSendCommandManyArgsSchema = z.object({
       z.object({
         terminalId: z.string().min(1),
         command: z.string().min(1),
+        generation: z
+          .number()
+          .int()
+          .min(0)
+          .optional()
+          .describe("Sending to another assistant: its generation from the assistant listing."),
       })
     )
     .min(1)
