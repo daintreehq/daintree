@@ -1647,41 +1647,6 @@ describe("rendererStoreOrchestrator", () => {
       expect(agentSettingsClient.get).not.toHaveBeenCalled();
     });
 
-    it("refreshes after agent settings finishes loading if availability landed during the load", async () => {
-      useAgentSettingsStore.setState({
-        settings: null,
-        isInitialized: false,
-        isLoading: true,
-        error: null,
-      });
-      (agentSettingsClient.get as ReturnType<typeof vi.fn>).mockResolvedValue(
-        DEFAULT_AGENT_SETTINGS
-      );
-      (agentSettingsClient.get as ReturnType<typeof vi.fn>).mockClear();
-
-      useCliAvailabilityStore.setState({
-        availability: { claude: "ready", codex: "installed" } as never,
-        hasRealData: true,
-      });
-      await Promise.resolve();
-      expect(agentSettingsClient.get).not.toHaveBeenCalled();
-
-      useAgentSettingsStore.setState({
-        settings: { agents: {} },
-        isInitialized: true,
-        isLoading: false,
-        error: null,
-      });
-      await Promise.resolve();
-      await Promise.resolve();
-
-      expect(agentSettingsClient.get).toHaveBeenCalledTimes(1);
-      const settings = useAgentSettingsStore.getState().settings;
-      expect(settings?.settingsVersion).toBe(2);
-      expect(settings?.agents.claude?.pinned).toBe(true);
-      expect(settings?.agents.codex?.pinned).toBe(true);
-    });
-
     it("stops firing after the orchestrator is destroyed", () => {
       useAgentSettingsStore.setState({
         settings: { agents: {} },

@@ -433,4 +433,26 @@ describe("agent.listAvailable with no frontend", () => {
       source: "built-in",
     });
   });
+
+  it("reports this machine's toolbar pins, not the agent settings (#14702)", async () => {
+    const { deps } = makeDeps();
+    deps.agents.getAvailability = async () => ({
+      availability: { claude: "ready", gemini: "missing", codex: "ready" },
+      live: true,
+    });
+    deps.agents.getToolbarPins = async () => ({ gemini: true, codex: false });
+
+    const result = await executeViewlessAction(request("agent.listAvailable", undefined), deps);
+
+    const agents = (
+      result as {
+        result: { agents: Array<{ id: string; pinned?: boolean; toolbarVisible?: boolean }> };
+      }
+    ).result.agents;
+    const byId = (id: string) => agents.find((agent) => agent.id === id);
+    expect(byId("gemini")).toMatchObject({ pinned: true, toolbarVisible: true });
+    expect(byId("codex")).toMatchObject({ pinned: false, toolbarVisible: false });
+    expect(byId("claude")).not.toHaveProperty("pinned");
+    expect(byId("claude")).toMatchObject({ toolbarVisible: true });
+  });
 });

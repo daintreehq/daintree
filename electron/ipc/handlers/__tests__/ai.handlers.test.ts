@@ -357,7 +357,7 @@ describe("ai handler payload validation", () => {
         {} as never,
         {
           agentType: " __proto__ ",
-          settings: { pinned: true },
+          settings: { customFlags: "--x" },
         } as never
       )
     ).rejects.toThrow("reserved key");
@@ -366,7 +366,7 @@ describe("ai handler payload validation", () => {
       {} as never,
       {
         agentType: " claude ",
-        settings: { pinned: false },
+        settings: { customFlags: "--verbose" },
       } as never
     );
 
@@ -374,7 +374,7 @@ describe("ai handler payload validation", () => {
       "agentSettings.agents",
       expect.objectContaining({
         claude: expect.objectContaining({
-          pinned: false,
+          customFlags: "--verbose",
         }),
       })
     );
@@ -382,11 +382,30 @@ describe("ai handler payload validation", () => {
       expect.objectContaining({
         agents: expect.objectContaining({
           claude: expect.objectContaining({
-            pinned: false,
+            customFlags: "--verbose",
           }),
         }),
       })
     );
+  });
+
+  it("never persists a toolbar pin into agent settings (#14702)", async () => {
+    (storeMock.get as Mock).mockImplementation((key: string, defaultValue?: unknown) =>
+      key === "agentSettings"
+        ? { agents: { claude: { pinned: true, customFlags: "--old" } } }
+        : defaultValue
+    );
+    const handler = getInvokeHandler(CHANNELS.AGENT_SETTINGS_SET);
+
+    const result = (await handler(
+      {} as never,
+      { agentType: "claude", settings: { pinned: false, customFlags: "--new" } } as never
+    )) as { agents: Record<string, Record<string, unknown>> };
+
+    expect(storeMock.set).toHaveBeenCalledWith("agentSettings.agents", {
+      claude: { customFlags: "--new" },
+    });
+    expect(result.agents.claude).toEqual({ customFlags: "--new" });
   });
 
   it("trims AGENT_SETTINGS_RESET agentType and blocks reserved values after trimming", async () => {

@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import type { AgentSettings } from "@shared/types/agentSettings";
 import type { AgentAvailabilityState } from "@shared/types";
 import { launcherItemToolbarButtonId } from "@shared/types/toolbar";
 import { sortAgentsByToolbarPin, type PinnableAgent } from "../agentMenuOrder";
@@ -8,17 +7,13 @@ function agent(id: string, availability?: AgentAvailabilityState): PinnableAgent
   return { id, availability };
 }
 
-function settings(agents: AgentSettings["agents"]): AgentSettings {
-  return { agents };
-}
-
 describe("sortAgentsByToolbarPin", () => {
   it("orders pinned agents by leftButtons index, unpinned trailing in input order", () => {
     const agents = [agent("claude", "missing"), agent("gemini", "ready"), agent("codex", "ready")];
     const { sorted, pinnedCount } = sortAgentsByToolbarPin(
       agents,
       ["codex", "gemini"],
-      settings({}),
+      {},
       [],
       {}
     );
@@ -31,7 +26,7 @@ describe("sortAgentsByToolbarPin", () => {
     const { sorted, pinnedCount } = sortAgentsByToolbarPin(
       agents,
       ["claude"],
-      settings({ claude: { pinned: true } }),
+      { claude: true },
       [],
       {}
     );
@@ -44,7 +39,7 @@ describe("sortAgentsByToolbarPin", () => {
     const { sorted, pinnedCount } = sortAgentsByToolbarPin(
       agents,
       ["claude", "gemini"],
-      settings({ claude: { pinned: false } }),
+      { claude: false },
       [],
       {}
     );
@@ -54,7 +49,7 @@ describe("sortAgentsByToolbarPin", () => {
 
   it("returns pinnedCount 0 when no agents are pinned", () => {
     const agents = [agent("claude", "missing"), agent("gemini", undefined)];
-    const { sorted, pinnedCount } = sortAgentsByToolbarPin(agents, [], settings({}), [], {});
+    const { sorted, pinnedCount } = sortAgentsByToolbarPin(agents, [], {}, [], {});
     expect(sorted.map((a) => a.id)).toEqual(["claude", "gemini"]);
     expect(pinnedCount).toBe(0);
   });
@@ -64,7 +59,7 @@ describe("sortAgentsByToolbarPin", () => {
     const { sorted, pinnedCount } = sortAgentsByToolbarPin(
       agents,
       ["gemini", "claude"],
-      settings({}),
+      {},
       [],
       {}
     );
@@ -83,7 +78,7 @@ describe("sortAgentsByToolbarPin", () => {
     const { sorted, pinnedCount } = sortAgentsByToolbarPin(
       agents,
       ["claude"],
-      settings({ gemini: { pinned: true } }),
+      { gemini: true },
       [],
       {}
     );
@@ -96,7 +91,7 @@ describe("sortAgentsByToolbarPin", () => {
     const { sorted } = sortAgentsByToolbarPin(
       agents,
       ["gemini", "claude", "gemini"],
-      settings({}),
+      {},
       [],
       {}
     );
@@ -115,7 +110,7 @@ describe("sortAgentsByToolbarPin", () => {
     // stopped implying a toolbar slot, so grouping on availability alone put an
     // agent under "Pinned" while its own pin affordance read as unpinned.
     const agents = [agent("claude", "ready"), agent("gemini", "ready")];
-    const { pinnedCount } = sortAgentsByToolbarPin(agents, [], settings({}), [], {});
+    const { pinnedCount } = sortAgentsByToolbarPin(agents, [], {}, [], {});
     expect(pinnedCount).toBe(0);
   });
 
@@ -124,7 +119,7 @@ describe("sortAgentsByToolbarPin", () => {
     const { sorted, pinnedCount } = sortAgentsByToolbarPin(
       agents,
       [],
-      settings({}),
+      {},
       ["gemini"],
       {}
     );
@@ -139,7 +134,7 @@ describe("sortAgentsByToolbarPin", () => {
     const { sorted, pinnedCount } = sortAgentsByToolbarPin(
       agents,
       ["claude"],
-      settings({}),
+      {},
       ["gemini"],
       {}
     );
@@ -147,15 +142,15 @@ describe("sortAgentsByToolbarPin", () => {
     expect(pinnedCount).toBe(2);
   });
 
-  it("reads a non-built-in agent's pin from pinnedButtons, not agentSettings", () => {
-    // A plugin or user-defined agent has no `agentSettingsStore` button, so its
-    // pin lives under a launcher-item id (#12217). An entry sitting in
-    // `agentSettings` under its raw id is not that pin and must not count.
+  it("reads a non-built-in agent's pin from pinnedButtons, not the agent pins", () => {
+    // A plugin or user-defined agent has no built-in toolbar button, so its
+    // pin lives under a launcher-item id (#12217). An agent pin under its raw
+    // id is not that pin and must not count.
     const agents = [agent("my-plugin-agent", "ready"), agent("claude", "ready")];
     const { sorted, pinnedCount } = sortAgentsByToolbarPin(
       agents,
       ["my-plugin-agent", "claude"],
-      settings({ "my-plugin-agent": { pinned: true } }),
+      { "my-plugin-agent": true },
       [],
       {}
     );
@@ -167,7 +162,7 @@ describe("sortAgentsByToolbarPin", () => {
     // Before this, a plugin agent could carry a filled pin icon while sitting
     // under "Other" — the launcher contradicting itself in one list.
     const agents = [agent("my-plugin-agent", "ready"), agent("claude", "ready")];
-    const { sorted, pinnedCount } = sortAgentsByToolbarPin(agents, ["claude"], settings({}), [], {
+    const { sorted, pinnedCount } = sortAgentsByToolbarPin(agents, ["claude"], {}, [], {
       [launcherItemToolbarButtonId("agent", "my-plugin-agent")]: true,
     });
     // `claude` holds index 0 in leftButtons; the plugin agent has no position
@@ -186,7 +181,7 @@ describe("sortAgentsByToolbarPin", () => {
     const { sorted, pinnedCount } = sortAgentsByToolbarPin(
       agents,
       [pluginId, "claude"],
-      settings({}),
+      {},
       [],
       { [pluginId]: true }
     );
@@ -203,7 +198,7 @@ describe("sortAgentsByToolbarPin", () => {
     const { pinnedCount } = sortAgentsByToolbarPin(
       agents,
       ["my-plugin-agent"],
-      settings({}),
+      {},
       [],
       {}
     );

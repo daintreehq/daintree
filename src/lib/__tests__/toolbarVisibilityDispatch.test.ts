@@ -10,14 +10,14 @@ import {
 import { isToolbarButtonVisible } from "@/components/Layout/toolbarButtonMetadata";
 import { launcherItemToolbarButtonId } from "@shared/types/toolbar";
 import type { AnyToolbarButtonId, ToolbarPinnedState } from "@/../../shared/types/toolbar";
-import type { AgentSettings, CliAvailability } from "@shared/types";
+import type { AgentToolbarPins, CliAvailability } from "@shared/types";
 import type { AgentAvailabilityState } from "@shared/types/ipc/system";
 
 function makeDeps(
   overrides: Partial<ToolbarVisibilityDispatchDeps> = {}
 ): ToolbarVisibilityDispatchDeps {
   return {
-    agentSettings: null,
+    agentPins: null,
     agentAvailability: null,
     setAgentPinned: vi.fn(),
     toggleButtonVisibility: vi.fn(),
@@ -28,7 +28,7 @@ function makeDeps(
 describe("dispatchToolbarVisibility", () => {
   it("undefined-pinned agent + missing availability flips to true (show)", () => {
     const deps = makeDeps({
-      agentSettings: { agents: {} } as AgentSettings,
+      agentPins: {},
       agentAvailability: { claude: "missing" } as unknown as CliAvailability,
     });
     dispatchToolbarVisibility("claude", "left", deps);
@@ -37,7 +37,7 @@ describe("dispatchToolbarVisibility", () => {
 
   it("explicitly pinned (true) agent flips to false regardless of availability", () => {
     const deps = makeDeps({
-      agentSettings: { agents: { claude: { pinned: true } } } as AgentSettings,
+      agentPins: { claude: true },
       agentAvailability: { claude: "missing" } as unknown as CliAvailability,
     });
     dispatchToolbarVisibility("claude", "left", deps);
@@ -46,7 +46,7 @@ describe("dispatchToolbarVisibility", () => {
 
   it("explicitPinned=false bypasses availability lookup", () => {
     const deps = makeDeps({
-      agentSettings: null,
+      agentPins: null,
       agentAvailability: null,
     });
     dispatchToolbarVisibility("claude", "left", deps, false);
@@ -67,9 +67,9 @@ describe("dispatchToolbarVisibility", () => {
     expect(deps.setAgentPinned).not.toHaveBeenCalled();
   });
 
-  it("null agentSettings treated as no entry — flips on availability alone", () => {
+  it("null agentPins treated as no pin — flips on availability alone", () => {
     const deps = makeDeps({
-      agentSettings: null,
+      agentPins: null,
       agentAvailability: { gemini: "ready" } as unknown as CliAvailability,
     });
     dispatchToolbarVisibility("gemini", "left", deps);
@@ -78,7 +78,7 @@ describe("dispatchToolbarVisibility", () => {
 
   it("null agentAvailability treated as missing — flips undefined-pinned agent to true", () => {
     const deps = makeDeps({
-      agentSettings: { agents: {} } as AgentSettings,
+      agentPins: {},
       agentAvailability: null,
     });
     dispatchToolbarVisibility("gemini", "left", deps);
@@ -97,7 +97,7 @@ function makeState(
     pinnedButtons: {},
     leftButtons: [],
     rightButtons: [],
-    agentSettings: null,
+    agentPins: null,
     agentAvailability: null,
     isPluginContribution: (id) => id === PLUGIN_ID,
     ...overrides,
@@ -140,16 +140,16 @@ describe("isToolbarButtonOnToolbar", () => {
     "agrees with the toolbar's own filter for positioned %s (pin %s, CLI %s)",
     (id, pin, availability) => {
       const pinnedButtons: ToolbarPinnedState = {};
-      const agentSettings: AgentSettings = { agents: {} };
+      const agentPins: AgentToolbarPins = {};
       if (pin !== undefined) {
         pinnedButtons[id] = pin;
-        agentSettings.agents[id] = { pinned: pin };
+        agentPins[id] = pin;
       }
       const agentAvailability: CliAvailability = { claude: availability };
       const state = makeState({
         pinnedButtons,
         leftButtons: [id],
-        agentSettings,
+        agentPins,
         agentAvailability,
       });
 
@@ -157,7 +157,7 @@ describe("isToolbarButtonOnToolbar", () => {
         isToolbarButtonVisible(
           id,
           pinnedButtons,
-          agentSettings,
+          agentPins,
           agentAvailability,
           state.isPluginContribution(id)
         )
@@ -290,7 +290,7 @@ describe("setToolbarButtonOnToolbar", () => {
       false,
       makeState({
         leftButtons: ["claude"],
-        agentSettings: { agents: { claude: { pinned: true } } },
+        agentPins: { claude: true },
       }),
       actions
     );
