@@ -52,7 +52,8 @@ export function landOnWorktree(worktreeId: string, store: WorktreeViewStoreApi):
     notify({
       type: "warning",
       title: "Worktree is gone",
-      message: "The worktree you were opening isn't in this project anymore. You're on the one it last had.",
+      message:
+        "The worktree you were opening isn't in this project anymore. You're on the one it last had.",
       context: { eventKind: "uiFeedback" },
       replaceKey: "focus-on-activate:worktree-gone",
     });
