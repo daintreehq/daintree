@@ -1143,6 +1143,80 @@ describe("CanopyView", () => {
     delete (window as { __DAINTREE_INITIAL_PROJECT__?: unknown }).__DAINTREE_INITIAL_PROJECT__;
   });
 
+  describe("reopening after Go to terminal", () => {
+    beforeEach(() => {
+      (window as { __DAINTREE_INITIAL_PROJECT__?: unknown }).__DAINTREE_INITIAL_PROJECT__ = {
+        id: "p1",
+      };
+    });
+    afterEach(() => {
+      delete (window as { __DAINTREE_INITIAL_PROJECT__?: unknown }).__DAINTREE_INITIAL_PROJECT__;
+      vi.useRealTimers();
+    });
+
+    async function goToTerminalFrom(container: HTMLElement, runId: string) {
+      const card = cards(container).find((c) => c.id === `canopy-card-${runId}`)!;
+      act(() => card.focus());
+      fireEvent.keyDown(card, { key: "Enter" });
+      await act(async () => {});
+      expect(useCanopyStore.getState().isOpen).toBe(false);
+    }
+
+    it("lands on the run it was left on, keeping the search, with the keyboard in the search", async () => {
+      installElectron();
+      const { container } = render(<CanopyView />);
+      await frames();
+      await goToTerminalFrom(container, "asking");
+      expect(useCanopyStore.getState().resume?.runId).toBe("asking");
+
+      act(() => useCanopyStore.getState().open());
+      await frames();
+      expect(selectedRun(container)).toBe("asking");
+      expect(document.activeElement).toBe(searchInput());
+      expect(useCanopyStore.getState().resume).toBeNull();
+    });
+
+    it("keeps the search it was left with, and gives a gone run's place to its neighbour", async () => {
+      installElectron();
+      const { container } = render(<CanopyView />);
+      await frames();
+      fireEvent.change(searchInput(), { target: { value: "a" } });
+      await frames();
+      const listed = cards(container).map((c) => c.id.replace(/^canopy-card-/, ""));
+      expect(listed.length).toBeGreaterThan(1);
+      await goToTerminalFrom(container, listed[1]!);
+
+      // The run it was left on has since gone.
+      const { resume } = useCanopyStore.getState();
+      useCanopyStore.setState({
+        resume: { ...resume!, runId: "gone", order: ["gone", ...listed] },
+      });
+      act(() => useCanopyStore.getState().open());
+      await frames();
+      expect(searchInput().value).toBe("a");
+      expect(selectedRun(container)).toBe(listed[0]);
+    });
+
+    it("opens as it does today after a plain close, or after thirty minutes", async () => {
+      installElectron();
+      const { container } = render(<CanopyView />);
+      await frames();
+      fireEvent.keyDown(cards(container)[1]!, { key: "ArrowDown" });
+      act(() => useCanopyStore.getState().close());
+      act(() => useCanopyStore.getState().open());
+      await frames();
+      expect(selectedRun(container)).toBe(cards(container)[0]!.id.replace(/^canopy-card-/, ""));
+
+      await goToTerminalFrom(container, "asking");
+      const { resume } = useCanopyStore.getState();
+      useCanopyStore.setState({ resume: { ...resume!, at: Date.now() - 31 * 60 * 1000 } });
+      act(() => useCanopyStore.getState().open());
+      await frames();
+      expect(selectedRun(container)).toBe(cards(container)[0]!.id.replace(/^canopy-card-/, ""));
+      expect(useCanopyStore.getState().resume).toBeNull();
+    });
+  });
+
   it("looks at a run the arrow keys move onto, leaving the reading to the look", async () => {
     const canopy = installElectron({
       ...canopySnapshot,

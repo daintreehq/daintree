@@ -49,7 +49,6 @@ interface UndoReservation {
 export function useCanopyInboxActions({
   hostId,
   ownHostId,
-  close,
   api,
   terminalApi,
   listed,
@@ -64,6 +63,7 @@ export function useCanopyInboxActions({
   showsHost,
   isSelected,
   captureFocusAfterClose,
+  closeForTerminal,
   reserveUndo,
   undoReads,
   menuOpenChanged,
@@ -72,7 +72,6 @@ export function useCanopyInboxActions({
   /** The other host the panel shows, or null for the window's own. */
   hostId: HostId | null;
   ownHostId: HostId;
-  close: () => void;
   api: CanopyApi;
   terminalApi: CanopyTerminalApi;
   /** The inbox as listed, filters included. */
@@ -89,6 +88,7 @@ export function useCanopyInboxActions({
   showsHost: (hostId: HostId | null) => boolean;
   isSelected: (runId: string) => boolean;
   captureFocusAfterClose: () => void;
+  closeForTerminal: (runId: string) => void;
   reserveUndo: () => UndoReservation;
   undoReads: (before: CanopyReadMark[], after: CanopyReadMark[]) => void;
   menuOpenChanged: (open: boolean) => void;
@@ -124,15 +124,16 @@ export function useCanopyInboxActions({
           onLanded: () => {
             // A panel since closed, or showing another host, is the user's newer choice.
             if (!showsHost(hostId)) return;
-            if (useCanopyStore.getState().isOpen) close();
+            if (useCanopyStore.getState().isOpen) closeForTerminal(item.runId);
           },
         });
         return;
       }
       const args = { runId: place.runId, workspaceId: place.workspaceId };
       if (place.workspaceId !== getViewWorkspaceId()) {
-        // The switch replaces this view, so the panel closes first.
-        close();
+        // The switch replaces this view, so the panel closes first; the view
+        // is kept, and the panel opens where it was left when it comes back.
+        closeForTerminal(item.runId);
         void actionService.dispatch("pilot.openRun", args, { source: "user" });
         return;
       }
@@ -147,7 +148,7 @@ export function useCanopyInboxActions({
         // flag is taken here rather than left for the next palette to close.
         consumePaletteFocusRestoreSuppression();
         captureFocusAfterClose();
-        close();
+        closeForTerminal(item.runId);
       });
     };
     // The incarnation on screen, so main refuses a terminal respawned since.
@@ -315,7 +316,6 @@ export function useCanopyInboxActions({
       },
     };
   }, [
-    close,
     readNow,
     focusCardNow,
     selectNow,
@@ -325,6 +325,7 @@ export function useCanopyInboxActions({
     showsHost,
     isSelected,
     captureFocusAfterClose,
+    closeForTerminal,
     searchRef,
     reserveUndo,
     undoReads,
