@@ -244,7 +244,7 @@ describe("DeepgramTranscriptionProvider", () => {
 
   it("requests punctuated, formatted text and interim results", async () => {
     const provider = new DeepgramTranscriptionProvider();
-    void provider.start(BASE_SETTINGS);
+    void provider.start(BASE_SETTINGS, "session-1");
     await Promise.resolve();
     const url = new URL(latestInstance().url);
     expect(url.searchParams.get("punctuate")).toBe("true");
