@@ -1113,10 +1113,16 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       const lastIndex = pieces.length - 1;
       for (let i = 0; i < pieces.length; i++) {
         if (pieces[i]) {
+          // Heard-as rules run after the commands, so a rule never eats a
+          // break or a send and a term it writes is never taken for one. What
+          // was heard goes along with it, so the renderer can rerun the rules
+          // over the whole dictation at stop without rewriting a term twice.
+          const text = rewriteHeardAs(pieces[i]);
           target.send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, {
             sessionId,
-            text: pieces[i],
+            text,
             willCorrect: false,
+            ...(text !== pieces[i] ? { heard: pieces[i] } : {}),
             ...itemIdField,
             ...(transcriptId ? { transcriptId } : {}),
             ...(sendCommand.send && i === lastIndex ? { send: true } : {}),
@@ -1141,15 +1147,10 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       }
 
       if (correctionSvc && transcriptId) {
+        // The renderer finds each description in the draft, which holds the rules' terms.
+        const writtenText = rewriteHeardAs(sendCommand.text);
         trackFileLinkJob(session, (signal) =>
-          findFileLinks(
-            session,
-            correctionSvc,
-            transcriptId,
-            sendCommand.text,
-            liveSettings,
-            signal
-          )
+          findFileLinks(session, correctionSvc, transcriptId, writtenText, liveSettings, signal)
         );
       }
     };
@@ -1249,9 +1250,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
           ...(voiceEvent.itemId ? { itemId: voiceEvent.itemId } : {}),
         });
       } else if (voiceEvent.type === "complete") {
-        // Heard-as rules come first, so the draft, file-link detection and
-        // correction all see the dictionary's terms rather than the mishearing.
-        const rawText = rewriteHeardAs(voiceEvent.text.trim());
+        const rawText = voiceEvent.text.trim();
         // A trailing "send it" that ends the utterance is stripped and handed
         // to the renderer, which owns the send; one the provider cut
         // mid-speech stays literal.

@@ -1196,12 +1196,58 @@ describe("voiceInput — context keyterms wiring", () => {
 
     const completes = activeSent
       .filter((m) => m.channel === "voice-input:transcription-complete")
-      .map((m) => (m.payload as { text: string }).text);
-    expect(completes).toEqual(["add Zustand to @zoo stand", "then Zustand again"]);
+      .map((m) => m.payload);
+    expect(completes).toEqual([
+      {
+        sessionId: currentSessionId,
+        text: "add Zustand to @zoo stand",
+        willCorrect: false,
+        heard: "add Zoo Stand to @zoo stand",
+      },
+      {
+        sessionId: currentSessionId,
+        text: "then Zustand again",
+        willCorrect: false,
+        heard: "then zoo stand again",
+      },
+    ]);
     // A rule never keeps the written term from biasing the transcriber.
     expect(vi.mocked(assembleKeyterms).mock.calls.at(-1)?.[0]).toMatchObject({
       customDictionary: ["Zustand"],
     });
+  });
+
+  it("runs spoken commands before the rules and sends no heard text when nothing changed", async () => {
+    const { store } = await import("../../../store.js");
+    vi.mocked(store.get).mockReturnValue({
+      ...providerSettings("openai"),
+      dictionary: [
+        { term: "NewLine", heardAs: ["new line"], source: "manual", addedAt: 1 },
+        { term: "Zustand", heardAs: ["zoo stand"], source: "manual", addedAt: 2 },
+      ],
+    });
+
+    await startFn(fakeEvent, nextSessionId());
+    emitTranscriptionEvent({ type: "complete", text: "use zoo stand new line" });
+    emitTranscriptionEvent({ type: "complete", text: "the new line helper" });
+    emitTranscriptionEvent({ type: "complete", text: "nothing to change" });
+
+    expect(
+      activeSent
+        .filter(
+          (m) =>
+            m.channel === "voice-input:transcription-complete" ||
+            m.channel === "voice-input:paragraph-boundary"
+        )
+        .map((m) => [m.channel.split(":")[1], (m.payload as { text?: string }).text])
+    ).toEqual([
+      ["transcription-complete", "use Zustand"],
+      ["paragraph-boundary", undefined],
+      ["transcription-complete", "the NewLine helper"],
+      ["transcription-complete", "nothing to change"],
+    ]);
+    const last = activeSent.filter((m) => m.channel === "voice-input:transcription-complete").at(-1);
+    expect(last?.payload).not.toHaveProperty("heard");
   });
 
   it("bails a Deepgram start whose assembly throws after a stop", async () => {

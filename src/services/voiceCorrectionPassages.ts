@@ -106,6 +106,29 @@ export function locatePassage(
   return draft.slice(from, to) === passage.text ? { from, to } : null;
 }
 
+/**
+ * A passage as the transcriber produced it, before any heard-as rule: each
+ * utterance's heard words in place of what the rules wrote, with the
+ * session's own separators between them. Read from the same draft the
+ * passage was collected from.
+ */
+export function transcribedPassageText(
+  record: DictationRecord,
+  passage: CorrectionPassage,
+  draft: string
+): string {
+  let text = "";
+  let at = passage.from;
+  for (const id of passage.utteranceIds) {
+    const utterance = record.utterances.find((u) => u.id === id);
+    if (!utterance) continue;
+    const { from, to } = utterance.range;
+    text += draft.slice(at, from) + (utterance.heard ?? draft.slice(from, to));
+    at = to;
+  }
+  return text;
+}
+
 /** One learning baseline for the session, from each passage's settled text. */
 export function joinPassageTexts(texts: string[]): string | null {
   const joined = texts.join(" ");
