@@ -107,7 +107,7 @@ describe("HostsCopySettingsSection", () => {
                 skipped: [{ key: "codex", label: "Codex", reason: "not installed there" }],
               },
             ],
-            unknownSections: ["notificationSettings"],
+            unknownSections: ["worktreeConfig"],
             withheld: [{ section: "agentSettings", name: "API_TOKEN" }],
           }
     );
@@ -126,7 +126,7 @@ describe("HostsCopySettingsSection", () => {
     expect(bravo.textContent).toContain("API_TOKEN looks like a secret");
     // Kept even though bravo has nothing else to change.
     expect(bravo.textContent).toContain("Not known there yet");
-    expect(bravo.textContent).toContain("Notifications: update Daintree on bravo");
+    expect(bravo.textContent).toContain("Worktree path pattern: update Daintree on bravo");
 
     expect(settingsCopy.apply).not.toHaveBeenCalled();
   });
