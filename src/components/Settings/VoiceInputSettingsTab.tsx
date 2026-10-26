@@ -1,20 +1,13 @@
 import { useCallback, useState, useEffect, useId, useRef } from "react";
 import type { ReactNode } from "react";
-import {
-  Eye,
-  EyeOff,
-  Plus,
-  X,
-  XCircle,
-  ExternalLink,
-  ChevronRight,
-  CheckCircle2,
-} from "lucide-react";
+import { Eye, EyeOff, XCircle, ExternalLink, ChevronRight, CheckCircle2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { pluralize } from "@/lib/pluralize";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SettingsSection } from "./SettingsSection";
+import { VoiceDictionaryPage } from "./VoiceDictionaryPage";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { SettingsSelect } from "./SettingsSelect";
 import { MicTestRow } from "./MicTestRow";
@@ -38,15 +31,12 @@ import { actionService } from "@/services/ActionService";
 import { KbdChord } from "@/components/ui/Kbd";
 import { voiceErrorLogFields } from "@shared/utils/voiceLogFields";
 import { VOICE_LANGUAGES } from "@shared/config/voiceLanguages";
-import { MAX_DICTIONARY_KEYTERMS } from "@shared/config/voiceKeyterms";
 import { CORE_CORRECTION_PROMPT, VOICE_DICTATION_AI_MODEL } from "@shared/config/voiceCorrection";
-import { MAX_DICTIONARY_TERM_LENGTH } from "@shared/utils/voiceDictionary";
 import type {
   VoiceInputSettings,
   VoiceInputSettingsPatch,
   VoiceDictionaryEntry,
   VoiceDictionaryState,
-  SuggestedDictionaryEntry,
   MicPermissionStatus,
   VoiceParagraphingStrategy,
   VoiceTranscriptionProvider,
@@ -240,9 +230,10 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
   const [isRequestingMic, setIsRequestingMic] = useState(false);
   // A check that couldn't answer, said once in the row instead of a silent no-op.
   const [micNote, setMicNote] = useState<string | null>(null);
-  const [newDictionaryWord, setNewDictionaryWord] = useState("");
+  const [dictionaryOpen, setDictionaryOpen] = useState(false);
   const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
-  const dictionaryInputRef = useRef<HTMLInputElement>(null);
+  const manageDictionaryRef = useRef<HTMLButtonElement>(null);
+  const returnFocusToManage = useRef<{ visible: boolean } | null>(null);
 
   const {
     devices,
@@ -404,7 +395,7 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
     label: string,
     run: () => Promise<VoiceDictionaryState>,
     onSaved?: () => void
-  ): Promise<void> => {
+  ): Promise<boolean> => {
     try {
       const next = await run();
       setSettings((current) => ({
@@ -414,6 +405,7 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
       }));
       setSaveFailure((current) => (current?.group === "dictionary" ? null : current));
       onSaved?.();
+      return true;
     } catch (err) {
       setSaveFailure({
         group: "dictionary",
@@ -421,42 +413,19 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
         retry: () => void changeDictionary(label, run, onSaved),
       });
       logWarn("Failed to change the voice dictionary", voiceErrorLogFields(err));
+      return false;
     }
   };
 
-  const addDictionaryWord = () => {
-    const term = newDictionaryWord.trim();
-    if (!term) return;
-    dictionaryInputRef.current?.focus();
-    void changeDictionary(
-      "The dictionary",
-      () => window.electron.voiceDictionary.add({ term }),
-      // Keep anything typed while the add was in flight.
-      () => setNewDictionaryWord((current) => (current.trim() === term ? "" : current))
-    );
-  };
-
-  // The removed chip took focus with it; hand it to the field a keyboard user adds from.
-  const removeDictionaryWord = (term: string) => {
-    dictionaryInputRef.current?.focus();
-    void changeDictionary("The dictionary", () => window.electron.voiceDictionary.remove({ term }));
-  };
-
-  const acceptSuggestion = (word: string) => {
-    dictionaryInputRef.current?.focus();
-    void changeDictionary("The dictionary", () =>
-      window.electron.voiceDictionary.acceptSuggestion({ word })
-    );
-  };
-
-  const dismissSuggestion = (word: string) => {
-    dictionaryInputRef.current?.focus();
-    void changeDictionary("The suggestion list", () =>
-      window.electron.voiceDictionary.dismissSuggestion({ word })
-    );
-  };
-
   useSettingsTabValidation("voice", Boolean(loadError || saveFailure));
+
+  // The Manage button unmounts while the dictionary page is open; hand focus back to it.
+  useEffect(() => {
+    const target = returnFocusToManage.current;
+    if (dictionaryOpen || !target) return;
+    returnFocusToManage.current = null;
+    manageDictionaryRef.current?.focus({ focusVisible: target.visible } as FocusOptions);
+  }, [dictionaryOpen]);
 
   const provider = settings.transcriptionProvider;
   const blockers = dictationBlockers(settings, micPermission);
@@ -504,6 +473,21 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
       }
     />
   );
+
+  if (dictionaryOpen) {
+    return (
+      <VoiceDictionaryPage
+        entries={settings.dictionary}
+        suggestions={settings.suggestedDictionary}
+        onChange={changeDictionary}
+        failure={saveError("dictionary")}
+        onBack={(viaKeyboard) => {
+          returnFocusToManage.current = { visible: viaKeyboard === true };
+          setDictionaryOpen(false);
+        }}
+      />
+    );
+  }
 
   return (
     <div className="space-y-8">
@@ -741,16 +725,11 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
           {saveError("dictionary")}
           <DictionaryGroup
             entries={settings.dictionary}
-            suggestedWords={settings.suggestedDictionary}
+            suggestionCount={settings.suggestedDictionary.length}
             learnFromCorrections={settings.learnFromCorrections}
             onLearnFromCorrectionsChange={(v) => void update({ learnFromCorrections: v })}
-            onAcceptSuggestion={acceptSuggestion}
-            onDismissSuggestion={dismissSuggestion}
-            newWord={newDictionaryWord}
-            onNewWordChange={setNewDictionaryWord}
-            onAdd={addDictionaryWord}
-            onRemove={removeDictionaryWord}
-            inputRef={dictionaryInputRef}
+            onManage={() => setDictionaryOpen(true)}
+            manageRef={manageDictionaryRef}
           />
         </SettingsSection>
       )}
@@ -1210,29 +1189,26 @@ function MicPermissionRow({
 
 function DictionaryGroup({
   entries,
-  suggestedWords,
+  suggestionCount,
   learnFromCorrections,
   onLearnFromCorrectionsChange,
-  onAcceptSuggestion,
-  onDismissSuggestion,
-  newWord,
-  onNewWordChange,
-  onAdd,
-  onRemove,
-  inputRef,
+  onManage,
+  manageRef,
 }: {
   entries: VoiceDictionaryEntry[];
-  suggestedWords: SuggestedDictionaryEntry[];
+  suggestionCount: number;
   learnFromCorrections: boolean;
   onLearnFromCorrectionsChange: (v: boolean) => void;
-  onAcceptSuggestion: (word: string) => void;
-  onDismissSuggestion: (word: string) => void;
-  newWord: string;
-  onNewWordChange: (v: string) => void;
-  onAdd: () => void;
-  onRemove: (word: string) => void;
-  inputRef: React.RefObject<HTMLInputElement | null>;
+  onManage: () => void;
+  manageRef: React.RefObject<HTMLButtonElement | null>;
 }) {
+  const rules = entries.reduce((total, entry) => total + entry.heardAs.length, 0);
+  const summary = [
+    pluralize(entries.length, "term"),
+    pluralize(rules, "heard-as phrase"),
+    pluralize(suggestionCount, "pending suggestion"),
+  ].join(" · ");
+
   return (
     <SettingsGroup>
       <SettingsSwitchCard
@@ -1245,102 +1221,15 @@ function DictionaryGroup({
         onReset={() => onLearnFromCorrectionsChange(DEFAULT_SETTINGS.learnFromCorrections)}
       />
 
-      {suggestedWords.length > 0 && (
-        <SettingsRow
-          label="Suggested from corrections"
-          description="Add a term to the dictionary, or dismiss it"
-          layout="stacked"
-          control={
-            <ul className="flex flex-wrap gap-1.5">
-              {suggestedWords.map((entry) => (
-                <li
-                  key={entry.word}
-                  className="inline-flex items-center gap-0.5 rounded-full border border-border-default bg-overlay-subtle py-0.5 pl-2.5 pr-0.5 text-xs text-text-primary"
-                  title={entry.utterance ? `Heard as "${entry.utterance}"` : undefined}
-                >
-                  <span className="mr-1">{entry.word}</span>
-                  <Button
-                    size="icon-xs"
-                    variant="ghost"
-                    className="rounded-full"
-                    onClick={() => onAcceptSuggestion(entry.word)}
-                    aria-label={`Add ${entry.word} to dictionary`}
-                  >
-                    <Plus aria-hidden="true" />
-                  </Button>
-                  <Button
-                    size="icon-xs"
-                    variant="ghost"
-                    className="rounded-full"
-                    onClick={() => onDismissSuggestion(entry.word)}
-                    aria-label={`Dismiss ${entry.word}`}
-                  >
-                    <X aria-hidden="true" />
-                  </Button>
-                </li>
-              ))}
-            </ul>
-          }
-        />
-      )}
-
       <SettingsRow
         label="Terms"
-        description={
-          entries.length > 0
-            ? `${entries.length} ${entries.length === 1 ? "term" : "terms"}. Up to the newest ${MAX_DICTIONARY_KEYTERMS} are sent with each dictation`
-            : "Add product names, APIs or jargon the transcription keeps getting wrong"
+        description={summary}
+        control={
+          <Button ref={manageRef} size="sm" variant="outline" onClick={onManage}>
+            Manage dictionary
+            <ChevronRight aria-hidden="true" />
+          </Button>
         }
-        layout="stacked"
-        control={({ labelId, descriptionId }) => (
-          <div className="space-y-2">
-            <div className="flex gap-2">
-              <Input
-                ref={inputRef}
-                type="text"
-                value={newWord}
-                maxLength={MAX_DICTIONARY_TERM_LENGTH}
-                aria-labelledby={labelId}
-                aria-describedby={descriptionId}
-                onChange={(e) => onNewWordChange(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    onAdd();
-                  }
-                }}
-                placeholder="Add a term…"
-                className="w-auto min-w-0 flex-1"
-              />
-              <Button onClick={onAdd} disabled={!newWord.trim()} size="sm" variant="outline">
-                <Plus aria-hidden="true" />
-                Add
-              </Button>
-            </div>
-
-            {entries.length > 0 && (
-              <ul className="flex flex-wrap gap-1.5">
-                {entries.map(({ term }) => (
-                  <li
-                    key={term}
-                    className="inline-flex items-center gap-0.5 rounded-full border border-border-default bg-surface-canvas py-0.5 pl-2.5 pr-0.5 text-xs text-text-primary"
-                  >
-                    {term}
-                    <Button
-                      size="icon-xs"
-                      variant="ghost"
-                      className="rounded-full"
-                      onClick={() => onRemove(term)}
-                      aria-label={`Remove ${term}`}
-                    >
-                      <X aria-hidden="true" />
-                    </Button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        )}
       />
     </SettingsGroup>
   );

@@ -3926,7 +3926,8 @@ export interface GeneratedIpcInvokeMap {
       input: {
         term: string;
         heardAs?: string[] | undefined;
-        source?: "manual" | "imported" | undefined;
+        source?: "manual" | "learned" | "imported" | undefined;
+        addedAt?: number | undefined;
       },
     ];
     result: import("./api.js").VoiceDictionaryState;
@@ -3936,7 +3937,8 @@ export interface GeneratedIpcInvokeMap {
       __0: {
         projectId: string;
         term: string;
-        source?: "manual" | "imported" | undefined;
+        source?: "manual" | "learned" | "imported" | undefined;
+        addedAt?: number | undefined;
         heardAs?: string[] | undefined;
       },
     ];

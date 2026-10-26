@@ -16,6 +16,7 @@ import type {
 } from "../../../shared/types/ipc/api.js";
 import {
   DICTIONARY_CONTROL_CHARACTERS,
+  MAX_DICTIONARY_HEARD_AS,
   acceptSuggestion,
   addDictionaryEntry,
   dismissSuggestion,
@@ -32,12 +33,14 @@ const RAW_TEXT_MAX = 1_000;
 const LIST_MAX = 200;
 const text = z.string().max(RAW_TEXT_MAX);
 const existing = z.string();
-const heardAs = z.array(text).max(LIST_MAX);
+const heardAs = z.array(text).max(MAX_DICTIONARY_HEARD_AS);
 
 const addSchema = z.object({
   term: text,
   heardAs: heardAs.optional(),
-  source: z.enum(["manual", "imported"]).optional(),
+  // Source and time ride along only so an undone removal restores the entry as it was.
+  source: z.enum(["manual", "learned", "imported"]).optional(),
+  addedAt: z.number().finite().nonnegative().optional(),
 });
 const removeSchema = z.object({ term: existing });
 const updateSchema = z.object({

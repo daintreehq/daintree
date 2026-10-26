@@ -12,6 +12,8 @@ export const MAX_DICTIONARY_TERM_LENGTH = 100;
 
 /** Line breaks and other control characters: a phrase holding one could step out of a prompt's term list. */
 export const DICTIONARY_CONTROL_CHARACTERS = /[\p{Cc}\p{Zl}\p{Zp}]/u;
+/** Heard-as phrases one add or edit can carry; main refuses a longer list. */
+export const MAX_DICTIONARY_HEARD_AS = 200;
 
 /** Cap on the pending-suggestions queue; accepted words live in the dictionary. */
 export const MAX_SUGGESTED_WORDS = 50;
@@ -180,6 +182,8 @@ export interface AddDictionaryEntryInput {
   term: string;
   heardAs?: readonly string[];
   source?: VoiceDictionarySource;
+  /** Keeps the original time on a restored entry; defaults to now. */
+  addedAt?: number;
 }
 
 /**
@@ -198,7 +202,12 @@ export function addDictionaryEntry(
   if (index < 0) {
     return [
       ...entries,
-      { term, heardAs: appendHeardAs([], heardAs), source: input.source ?? "manual", addedAt: now },
+      {
+        term,
+        heardAs: appendHeardAs([], heardAs),
+        source: input.source ?? "manual",
+        addedAt: isTime(input.addedAt) ? input.addedAt : now,
+      },
     ];
   }
   const existing = entries[index]!;

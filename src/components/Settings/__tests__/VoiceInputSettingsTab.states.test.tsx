@@ -457,7 +457,31 @@ describe("VoiceInputSettingsTab mic settings button", () => {
 });
 
 describe("VoiceInputSettingsTab dictionary", () => {
-  const termField = () => screen.findByPlaceholderText<HTMLInputElement>("Add a term…");
+  const termField = () => screen.findByLabelText<HTMLTextAreaElement>("Add terms");
+  const openPage = async () =>
+    fireEvent.click(await screen.findByRole("button", { name: /Manage dictionary/ }));
+  const suggestion = (word: string, utterance: string) => ({
+    word,
+    utterance,
+    suggestedAt: 1,
+    frequency: 1,
+  });
+
+  it("summarises the dictionary and opens the page", async () => {
+    install({
+      dictionary: [{ ...term("Zustand"), heardAs: ["zoo stand", "zu stand"] }, term("Vite")],
+      suggestedDictionary: [suggestion("Tailwind", "tail wind")],
+    });
+    const { container } = render(<VoiceInputSettingsTab />);
+
+    await screen.findByRole("button", { name: /Manage dictionary/ });
+    expect(container.textContent).toContain("2 terms · 2 heard-as phrases · 1 pending suggestion");
+    expect(screen.queryByRole("button", { name: "Remove Vite" })).toBeNull();
+
+    await openPage();
+    expect(screen.getByRole("button", { name: "Remove Vite" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Add Tailwind to dictionary" })).toBeTruthy();
+  });
 
   it("adds a term through main and shows the dictionary main returns", async () => {
     const api = install(
@@ -471,6 +495,7 @@ describe("VoiceInputSettingsTab dictionary", () => {
       }
     );
     const { container } = render(<VoiceInputSettingsTab />);
+    await openPage();
 
     const input = await termField();
     fireEvent.change(input, { target: { value: "  Daintree " } });
@@ -479,32 +504,48 @@ describe("VoiceInputSettingsTab dictionary", () => {
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "Remove Daintree" })).toBeTruthy()
     );
-    expect(api.dictionary.add).toHaveBeenCalledWith({ term: "Daintree" });
+    expect(api.dictionary.add).toHaveBeenCalledWith({ term: "Daintree", heardAs: [] });
     // A term main already held, added from elsewhere, shows up too.
     expect(screen.getByRole("button", { name: "Remove Zustand" })).toBeTruthy();
     expect(input.value).toBe("");
-    expect(container.textContent).toContain("2 terms");
+    expect(container.textContent).toContain("Added 1 term");
     expect(api.setSettings).not.toHaveBeenCalled();
+  });
+
+  it("adds pasted lines, comma lists and heard -> Term pairs as imports", async () => {
+    const add = vi.fn().mockResolvedValue({ dictionary: [], suggestedDictionary: [] });
+    install({}, {}, { add });
+    render(<VoiceInputSettingsTab />);
+    await openPage();
+
+    fireEvent.change(await termField(), {
+      target: { value: "Vite, Daintree\nzoo stand -> Zustand\nzu stand -> zustand" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+
+    await waitFor(() => expect(add).toHaveBeenCalledTimes(3));
+    expect(add).toHaveBeenNthCalledWith(1, { term: "Vite", heardAs: [], source: "imported" });
+    expect(add).toHaveBeenNthCalledWith(2, { term: "Daintree", heardAs: [], source: "imported" });
+    expect(add).toHaveBeenNthCalledWith(3, {
+      term: "Zustand",
+      heardAs: ["zoo stand", "zu stand"],
+      source: "imported",
+    });
   });
 
   it("shows the queue main holds after an accept, keeping a word learned meanwhile", async () => {
     const api = install(
-      {
-        suggestedDictionary: [
-          { word: "Zustand", utterance: "zoo stand", suggestedAt: 1, frequency: 1 },
-        ],
-      },
+      { suggestedDictionary: [suggestion("Zustand", "zoo stand")] },
       {},
       {
         acceptSuggestion: vi.fn().mockResolvedValue({
           dictionary: [{ ...term("Zustand"), heardAs: ["zoo stand"], source: "learned" }],
-          suggestedDictionary: [
-            { word: "Tailwind", utterance: "tail wind", suggestedAt: 2, frequency: 1 },
-          ],
+          suggestedDictionary: [suggestion("Tailwind", "tail wind")],
         }),
       }
     );
-    render(<VoiceInputSettingsTab />);
+    const { container } = render(<VoiceInputSettingsTab />);
+    await openPage();
 
     fireEvent.click(await screen.findByRole("button", { name: "Add Zustand to dictionary" }));
 
@@ -514,6 +555,7 @@ describe("VoiceInputSettingsTab dictionary", () => {
     expect(api.dictionary.acceptSuggestion).toHaveBeenCalledWith({ word: "Zustand" });
     expect(screen.getByRole("button", { name: "Add Tailwind to dictionary" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Add Zustand to dictionary" })).toBeNull();
+    expect(container.textContent).toContain('Learned from "zoo stand"');
     expect(api.setSettings).not.toHaveBeenCalled();
   });
 
@@ -524,6 +566,7 @@ describe("VoiceInputSettingsTab dictionary", () => {
       .mockResolvedValue({ dictionary: [term("Daintree")], suggestedDictionary: [] });
     install({}, {}, { add });
     const { container } = render(<VoiceInputSettingsTab />);
+    await openPage();
 
     const input = await termField();
     fireEvent.change(input, { target: { value: "Daintree" } });
@@ -545,35 +588,55 @@ describe("VoiceInputSettingsTab dictionary", () => {
     expect(container.textContent).not.toContain("back to its previous value");
   });
 
-  it("removes a term and dismisses a suggestion through main", async () => {
+  it("removes a term, undoes the removal, and dismisses a suggestion through main", async () => {
+    const learned = {
+      ...term("Daintree"),
+      heardAs: ["dain tree"],
+      source: "learned" as const,
+      addedAt: 42,
+    };
     const api = install(
       {
-        dictionary: [term("Daintree"), term("Vite")],
-        suggestedDictionary: [
-          { word: "Tailwind", utterance: "tail wind", suggestedAt: 1, frequency: 1 },
-        ],
+        dictionary: [learned, term("Vite")],
+        suggestedDictionary: [suggestion("Tailwind", "tail wind")],
       },
       {},
       {
         remove: vi.fn().mockResolvedValue({
           dictionary: [term("Vite")],
-          suggestedDictionary: [
-            { word: "Tailwind", utterance: "tail wind", suggestedAt: 1, frequency: 1 },
-          ],
+          suggestedDictionary: [suggestion("Tailwind", "tail wind")],
+        }),
+        add: vi.fn().mockResolvedValue({
+          dictionary: [term("Vite"), learned],
+          suggestedDictionary: [suggestion("Tailwind", "tail wind")],
         }),
         dismissSuggestion: vi.fn().mockResolvedValue({
-          dictionary: [term("Vite")],
+          dictionary: [term("Vite"), learned],
           suggestedDictionary: [],
         }),
       }
     );
-    render(<VoiceInputSettingsTab />);
+    const { container } = render(<VoiceInputSettingsTab />);
+    await openPage();
 
     fireEvent.click(await screen.findByRole("button", { name: "Remove Daintree" }));
     await waitFor(() =>
       expect(screen.queryByRole("button", { name: "Remove Daintree" })).toBeNull()
     );
     expect(api.dictionary.remove).toHaveBeenCalledWith({ term: "Daintree" });
+    expect(container.textContent).toContain("Removed Daintree");
+
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Remove Daintree" })).toBeTruthy()
+    );
+    expect(api.dictionary.add).toHaveBeenCalledWith({
+      term: "Daintree",
+      heardAs: ["dain tree"],
+      source: "learned",
+      addedAt: 42,
+    });
+    expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Dismiss Tailwind" }));
     await waitFor(() =>
@@ -584,21 +647,54 @@ describe("VoiceInputSettingsTab dictionary", () => {
     expect(api.setSettings).not.toHaveBeenCalled();
   });
 
-  it("keeps what was typed while an add was in flight", async () => {
-    let finish: (state: unknown) => void = () => {};
-    install({}, {}, { add: vi.fn(() => new Promise((resolve) => (finish = resolve))) });
+  it("searches terms and heard-as phrases", async () => {
+    install({
+      dictionary: [{ ...term("Zustand"), heardAs: ["zoo stand"] }, term("Vite")],
+    });
     render(<VoiceInputSettingsTab />);
+    await openPage();
 
-    const input = await termField();
-    fireEvent.change(input, { target: { value: "Daintree" } });
-    fireEvent.keyDown(input, { key: "Enter" });
-    fireEvent.change(input, { target: { value: "Zust" } });
-    finish({ dictionary: [term("Daintree")], suggestedDictionary: [] });
+    fireEvent.change(await screen.findByLabelText("Search the dictionary"), {
+      target: { value: "zoo" },
+    });
+    expect(screen.getByRole("button", { name: "Remove Zustand" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Remove Vite" })).toBeNull();
+  });
+
+  it("edits an entry and refuses a term another entry already has", async () => {
+    const update = vi.fn().mockResolvedValue({
+      dictionary: [{ ...term("Zustand"), heardAs: ["zu stand"] }, term("Vite")],
+      suggestedDictionary: [],
+    });
+    install(
+      { dictionary: [{ ...term("Zustand"), heardAs: ["zoo stand"] }, term("Vite")] },
+      {},
+      {
+        update,
+      }
+    );
+    render(<VoiceInputSettingsTab />);
+    await openPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Edit Zustand" }));
+    const heard = screen.getByLabelText("Heard-as phrases for Zustand");
+    expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(heard, { target: { value: "zu stand" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Remove Daintree" })).toBeTruthy()
+      expect(update).toHaveBeenCalledWith({
+        term: "Zustand",
+        changes: { term: "Zustand", heardAs: ["zu stand"] },
+      })
     );
-    expect(input.value).toBe("Zust");
+    await screen.findByRole("button", { name: "Edit Zustand" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit Vite" }));
+    const field = screen.getByLabelText("Edit Vite");
+    fireEvent.change(field, { target: { value: "zustand" } });
+    expect(screen.getByText("That term is already in the dictionary")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("retries a failed settings save against what the page shows now", async () => {
