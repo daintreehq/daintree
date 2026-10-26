@@ -62,6 +62,47 @@ interface HostIssue {
   text: string;
   action: string | null;
   act: (() => void) | null;
+  /** Something wrong with the host, not a read still on its way. */
+  trouble: boolean;
+}
+
+/**
+ * A host's link coming up: dialling, or a first read refused while it dials.
+ * The link reads `connected` a moment before the `resync` reread lands, so the
+ * refusal outlives the dial by that much.
+ */
+function hostDialling(linkStatus: string | undefined, error: unknown): boolean {
+  return (
+    linkStatus === "connecting" ||
+    ((linkStatus === "disconnected" || linkStatus === "connected") &&
+      clientErrorCode(error) === "HOST_DISCONNECTED")
+  );
+}
+
+/** The link to a host was tried and failed, as the host menu says. */
+function hostLinkFailed(linkStatus: string | undefined): boolean {
+  return (
+    linkStatus === "unreachable" ||
+    linkStatus === "version-mismatch" ||
+    linkStatus === "driven-elsewhere"
+  );
+}
+
+function HostIssueList({ issues }: { issues: readonly HostIssue[] }) {
+  return (
+    <ul className="flex flex-col gap-1.5">
+      {issues.map((issue) => (
+        <li key={issue.hostId} className="flex items-center gap-2">
+          <span className="min-w-0 flex-1 truncate">{issue.text}</span>
+          {issue.act && (
+            <Button variant="outline" size="xs" onClick={issue.act}>
+              {issue.action}
+            </Button>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
 }
 
 /** "3m ago", or "just now" — never "just now ago". */
@@ -728,14 +769,15 @@ function CanopyInbox({
   const linkStatus = hostRow?.isLocal === false ? hostRow.connection?.status : undefined;
   // Picking a host that isn't connected dials it: its first read is refused
   // while the link comes up, which is connecting, not trouble.
-  const connecting =
-    linkStatus === "connecting" ||
-    (linkStatus === "disconnected" && clientErrorCode(remote.error) === "HOST_DISCONNECTED");
+  const connecting = hostDialling(linkStatus, remote.error);
   // The link dropped after the agents were read: what is listed is what it last showed.
   const linkDown = fleet !== null && linkStatus !== undefined && linkStatus !== "connected";
-  // Connecting stays quiet only until there are rows: rows kept from before say they are old.
+  // Connecting stays quiet only until there are rows: rows kept from before say
+  // they are old, until the link is back up and only their reread is owed.
   const hostTrouble =
-    otherHost && (remote.error !== null || linkDown) && !(connecting && fleet === null);
+    otherHost &&
+    (remote.error !== null || linkDown) &&
+    !(connecting && (fleet === null || linkStatus === "connected"));
   // That host runs a Daintree from before Canopy read locally, and still sends
   // its screens to the former hosted service: none of it is shown here, nor is
   // it offered to be turned on, until the host is updated.
@@ -824,13 +866,41 @@ function CanopyInbox({
       const row = (hostRows ?? []).find((candidate) => candidate.hostId === reading.hostId);
       const name = row?.name ?? "This Mac";
       const remoteHost = reading.hostId !== ownHostId;
-      if (reading.error !== null && remoteHost) {
+      const linkStatus = remoteHost && row?.isLocal === false ? row.connection?.status : undefined;
+      const retry = () => remotes.retry(reading.hostId);
+      // Its agents were read before the link dropped: they are kept, and old,
+      // whatever the reads since have said.
+      if (reading.fleet !== null && linkStatus !== undefined && linkStatus !== "connected") {
         return [
           {
             hostId: reading.hostId,
-            text: `Can't reach ${name}`,
+            text: `${name} isn't connected. Its agents are as last seen`,
             action: "Retry",
-            act: () => remotes.retry(reading.hostId),
+            act: retry,
+            trouble: true,
+          },
+        ];
+      }
+      const linkFailed = hostLinkFailed(linkStatus);
+      if (remoteHost && (reading.error !== null || (linkFailed && reading.fleet === null))) {
+        if (linkFailed || !hostDialling(linkStatus, reading.error)) {
+          return [
+            {
+              hostId: reading.hostId,
+              text: `Can't reach ${name}`,
+              action: "Retry",
+              act: retry,
+              trouble: true,
+            },
+          ];
+        }
+        return [
+          {
+            hostId: reading.hostId,
+            text: `Connecting to ${name}…`,
+            action: null,
+            act: null,
+            trouble: false,
           },
         ];
       }
@@ -842,6 +912,7 @@ function CanopyInbox({
             text: remoteHost ? `Connecting to ${name}…` : `Reading ${name}…`,
             action: null,
             act: null,
+            trouble: false,
           },
         ];
       }
@@ -852,6 +923,7 @@ function CanopyInbox({
             text: `Update Daintree on ${name} to read its agents`,
             action: "Show",
             act: () => useCanopyStore.getState().setHostId(reading.hostId),
+            trouble: true,
           },
         ];
       }
@@ -862,6 +934,7 @@ function CanopyInbox({
             text: `Canopy is off on ${name}`,
             action: "Set up",
             act: () => useCanopyStore.getState().setHostId(reading.hostId),
+            trouble: true,
           },
         ];
       }
@@ -877,6 +950,7 @@ function CanopyInbox({
                 text: `Couldn't download Canopy's model${where}`,
                 action: "Retry",
                 act: () => void hostApi.retryModel().catch(() => {}),
+                trouble: true,
               }
             : {
                 hostId: reading.hostId,
@@ -886,18 +960,8 @@ function CanopyInbox({
                     : `Waiting for Canopy's model${where}…`,
                 action: null,
                 act: null,
+                trouble: false,
               },
-        ];
-      }
-      const linkStatus = remoteHost && row?.isLocal === false ? row.connection?.status : undefined;
-      if (linkStatus !== undefined && linkStatus !== "connected") {
-        return [
-          {
-            hostId: reading.hostId,
-            text: `${name} isn't connected. Its agents are as last seen`,
-            action: "Retry",
-            act: () => remotes.retry(reading.hostId),
-          },
         ];
       }
       if (reading.canopy.lastError) {
@@ -907,18 +971,22 @@ function CanopyInbox({
             text: `Canopy couldn't read every agent on ${name}`,
             action: null,
             act: null,
+            trouble: true,
           },
         ];
       }
       return [];
     });
   }, [everyHost, readings, hostRows, ownHostId, remotes]);
+  const hostTroubles = hostIssues.filter((issue) => issue.trouble);
+  const hostProgress = hostIssues.filter((issue) => !issue.trouble);
   const retryingSomewhere =
     everyHost &&
-    readings.some((reading) => reading.canopy?.activated === true && reading.canopy.waiting);
+    (hostProgress.length > 0 ||
+      readings.some((reading) => reading.canopy?.activated === true && reading.canopy.waiting));
   const headerWords =
     hostSummary ??
-    (needsYou === 0 && fleet !== null && hostIssues.length > 0
+    (needsYou === 0 && fleet !== null && hostTroubles.length > 0
       ? "Not every host could be read"
       : needsYou === 0 && fleet !== null && retryingSomewhere
         ? "Checking who needs you…"
@@ -1072,20 +1140,17 @@ function CanopyInbox({
         )}
         {everyHost && hostIssues.length > 0 && (
           <div className="flex shrink-0 flex-col gap-2 border-b border-border-default p-3">
-            <Callout severity="warning" size="compact" title="Not every host is being read">
-              <ul className="flex flex-col gap-1.5">
-                {hostIssues.map((issue) => (
-                  <li key={issue.hostId} className="flex items-center gap-2">
-                    <span className="min-w-0 flex-1 truncate">{issue.text}</span>
-                    {issue.act && (
-                      <Button variant="outline" size="xs" onClick={issue.act}>
-                        {issue.action}
-                      </Button>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </Callout>
+            {hostTroubles.length > 0 && (
+              <Callout severity="warning" size="compact" title="Not every host is being read">
+                <HostIssueList issues={hostTroubles} />
+              </Callout>
+            )}
+            {/* Reads still on their way: noted, never a warning. */}
+            {hostProgress.length > 0 && (
+              <Callout severity="neutral" size="compact">
+                <HostIssueList issues={hostProgress} />
+              </Callout>
+            )}
           </div>
         )}
         {otherHost && fleet === null && !hostTrouble && connecting && (
