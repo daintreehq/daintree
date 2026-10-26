@@ -37,18 +37,18 @@ describe("measureCoverage", () => {
     const partialTail = chunks.at(-1)!.subarray(0, 1_200);
     const captured = [...chunks.slice(0, -1), partialTail];
     const received = [
-      ...chunks.slice(SILENT_LEAD + 2, SILENT_LEAD + 6),
-      ...chunks.slice(SILENT_LEAD + 7, -2),
+      ...chunks.slice(SILENT_LEAD + 1, SILENT_LEAD + 6),
+      ...chunks.slice(SILENT_LEAD + 7, -3),
     ];
 
     expect(measureCoverage(captured, received)).toEqual({
       capturedChunks: spoken,
       repeatedChunks: 0,
-      missingAtStart: 2,
-      missingAtEnd: 2,
+      missingAtStart: 1,
+      missingAtEnd: 3,
       missingInside: 1,
-      missingMsAtStart: 200,
-      missingMsAtEnd: 125,
+      missingMsAtStart: 100,
+      missingMsAtEnd: 225,
     });
   });
 

@@ -77,7 +77,8 @@ test.describe.serial("E2E: Voice Input — no words lost at start and stop", () 
   test.beforeAll(async () => {
     mock = await createTranscriptionMock();
     workDir = mkdtempSync(path.join(tmpdir(), "daintree-e2e-voice-words-"));
-    const wavPath = writeWav(workDir, "voice.wav", { seconds: 6, waveform: glidingVoice });
+    // Long enough that no session reaches the loop point, where chunks would start repeating.
+    const wavPath = writeWav(workDir, "voice.wav", { seconds: 30, waveform: glidingVoice });
     binDir = installFakeAgent(workDir);
 
     userDataDir = mkdtempSync(path.join(tmpdir(), "daintree-e2e-voice-words-ud-"));
@@ -161,22 +162,24 @@ test.describe.serial("E2E: Voice Input — no words lost at start and stop", () 
 
   /**
    * Queues the transcript for more than one boundary: on a synthetic voice the provider's VAD
-   * may commit mid-session and take one early, and the final text is the one after the stop.
+   * may commit mid-session and take one early, and the final text is the session's last.
    */
   function scriptTranscript(): void {
     mock.script(...Array.from({ length: 3 }, () => ({ text: TRANSCRIPT })));
   }
 
-  /** The session's text after the stop, then the provider closing its socket. */
-  async function finishSession(stop: KeyEvent): Promise<void> {
-    await expect
-      .poll(async () => (await readTapEvents(ctx.window)).completes.some((c) => c.t >= stop.t), {
-        timeout: T_MEDIUM,
-      })
-      .toBe(true);
+  /** The provider closing its socket, then every transcript the mock played reaching the view. */
+  async function finishSession(): Promise<void> {
     await expect
       .poll(() => mock.connections.every((c) => c.closedAt !== undefined), { timeout: T_MEDIUM })
       .toBe(true);
+    const played = mock.sent.filter(
+      (m) => m.type === "conversation.item.done" || m.type === "Results"
+    ).length;
+    expect(played, "the mock played a transcript").toBeGreaterThan(0);
+    await expect
+      .poll(async () => (await readTapEvents(ctx.window)).completes.length, { timeout: T_MEDIUM })
+      .toBeGreaterThanOrEqual(played);
   }
 
   /**
@@ -198,7 +201,7 @@ test.describe.serial("E2E: Voice Input — no words lost at start and stop", () 
       node.chunks.map((c) => c.bytes),
       received.map((a) => a.bytes)
     );
-    const finalText = tap.completes.find((c) => c.t >= stop.t);
+    const finalText = tap.completes.at(-1);
     const report = {
       keyToFirstAudioMs: received.length ? received[0].t - start.t : null,
       stopToFinalTextMs: finalText ? finalText.t - stop.t : null,
@@ -212,6 +215,10 @@ test.describe.serial("E2E: Voice Input — no words lost at start and stop", () 
     );
     expect(mock.connections, "one connection, so no reconnect replayed audio").toHaveLength(1);
     expect(finalText?.text).toBe(TRANSCRIPT);
+    expect(
+      report.stopToFinalTextMs,
+      "the final transcript follows the stop"
+    ).toBeGreaterThanOrEqual(0);
     expect(report.keyToFirstAudioMs).toBeGreaterThanOrEqual(0);
     expect(coverage.capturedChunks).toBeGreaterThanOrEqual(SPEECH_CHUNKS);
     expect(coverage.repeatedChunks, "voiced chunks are distinct, so arrival is unambiguous").toBe(
@@ -236,7 +243,7 @@ test.describe.serial("E2E: Voice Input — no words lost at start and stop", () 
       const presses = triggerKeys((await readTapEvents(ctx.window)).keys, "keydown");
       expect(presses).toHaveLength(2);
       const [start, stop] = presses;
-      await finishSession(stop);
+      await finishSession();
       await expectEveryWordKept(`${provider} toggle`, provider, start, stop);
     });
   }
@@ -266,7 +273,7 @@ test.describe.serial("E2E: Voice Input — no words lost at start and stop", () 
     const [stop] = triggerKeys(keys, "keyup");
     expect(start).toBeDefined();
     expect(stop).toBeDefined();
-    await finishSession(stop);
+    await finishSession();
     await expectEveryWordKept("openai push-to-talk", "openai", start, stop);
   });
 
@@ -300,13 +307,19 @@ test.describe.serial("E2E: Voice Input — no words lost at start and stop", () 
       .poll(() => signalChunksTapped(ctx.window), { timeout: T_LONG })
       .toBeGreaterThanOrEqual(SPEECH_CHUNKS / 2);
     await confirmSession(held);
-    await waitForSpeech();
+    // Speech keeps coming once the provider has flushed what it held, so the stop lands on a
+    // ready session rather than collapsing into a stop before ready.
+    await expect.poll(() => mock.audio.length, { timeout: T_MEDIUM }).toBeGreaterThan(0);
+    const atReady = await signalChunksTapped(ctx.window);
+    await expect
+      .poll(() => signalChunksTapped(ctx.window), { timeout: T_LONG })
+      .toBeGreaterThanOrEqual(atReady + SPEECH_CHUNKS / 2);
     await ctx.window.keyboard.press(VOICE_TOGGLE_CHORD);
 
     const presses = triggerKeys((await readTapEvents(ctx.window)).keys, "keydown");
     expect(presses).toHaveLength(2);
     const [start, stop] = presses;
-    await finishSession(stop);
+    await finishSession();
     await expectEveryWordKept("openai slow connect", "openai", start, stop);
   });
 
@@ -327,7 +340,7 @@ test.describe.serial("E2E: Voice Input — no words lost at start and stop", () 
     const presses = triggerKeys((await readTapEvents(ctx.window)).keys, "keydown");
     expect(presses).toHaveLength(2);
     const [start, stop] = presses;
-    await finishSession(stop);
+    await finishSession();
     await expectEveryWordKept("openai stop before ready", "openai", start, stop);
   });
 });
