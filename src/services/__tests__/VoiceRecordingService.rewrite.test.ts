@@ -61,7 +61,7 @@ vi.mock("@/services/KeybindingService", () => ({
 }));
 
 type DeltaPayload = { text: string; itemId?: string };
-type CompletePayload = { text: string; willCorrect: boolean; itemId?: string };
+type CompletePayload = { text: string; willCorrect: boolean; itemId?: string; send?: boolean };
 type RewriteOutcome =
   | { status: "replace"; text: string }
   | { status: "no_change" | "rejected" | "unavailable" | "failed" };
@@ -374,6 +374,40 @@ describe("VoiceRecordingService — rewrite selection by voice (#14635)", () => 
 
     expect(selection.apply).toHaveBeenCalledWith("Shorter.");
     expect(service.hasPendingCorrection("panel-1")).toBe(false);
+  });
+
+  it("keeps a spoken send in the instruction: a rewrite never sends", async () => {
+    const { service, voiceStore, draft, inputStore, recordInstruction, flush } = await setup();
+    inputStore.getState().setDraftInput("panel-1", "Hi. make me shorter please");
+    const selection = fakeSelection("make me shorter please");
+    rewrite.mockResolvedValueOnce({ status: "replace", text: "Shorter." });
+    const spokenSend = vi.fn();
+    service.onSpokenSend("panel-1", undefined, spokenSend);
+    const stop = vi.spyOn(service, "stop");
+
+    recordInstruction(selection);
+    voiceStore.getState().setStatus("recording");
+    callbacks.complete!({
+      text: "make it shorter and send it",
+      willCorrect: false,
+      itemId: "item-1",
+      send: true,
+    });
+
+    expect(spokenSend).not.toHaveBeenCalled();
+    expect(stop).not.toHaveBeenCalled();
+    expect(voiceStore.getState().status).toBe("recording");
+
+    await service.stop();
+    await flush();
+
+    expect(spokenSend).not.toHaveBeenCalled();
+    expect(draft()).toBe("Hi. make me shorter please");
+    expect(rewrite).toHaveBeenCalledWith({
+      selectedText: "make me shorter please",
+      instruction: "make it shorter and send it",
+    });
+    expect(selection.apply).toHaveBeenCalledWith("Shorter.");
   });
 
   it("drops the rewrite when an edit reaches the selection first, so a waiting send goes at once", async () => {

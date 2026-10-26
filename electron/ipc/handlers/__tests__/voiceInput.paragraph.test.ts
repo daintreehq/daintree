@@ -1776,6 +1776,34 @@ describe("voiceInput — rewrite instructions", () => {
     ]);
   });
 
+  it("keeps a trailing 'send it' in the instruction and never flags a send", async () => {
+    const handleStart = getHandler("voice-input:start") as (
+      e: unknown,
+      sessionId: string,
+      options: unknown
+    ) => Promise<unknown>;
+    await handleStart(fakeEvent, nextSessionId(), { terminalId: "t1", intent: "rewrite" });
+
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "make it shorter and send it.",
+      itemId: "i1",
+      endOfSpeech: true,
+    });
+
+    expect(forwarded()).toEqual([
+      {
+        channel: "voice-input:transcription-complete",
+        payload: {
+          sessionId: currentSessionId,
+          text: "make it shorter and send it.",
+          willCorrect: false,
+          itemId: "i1",
+        },
+      },
+    ]);
+  });
+
   it("still applies formatting commands to a dictation session", async () => {
     const handleStart = getHandler("voice-input:start") as (
       e: unknown,
