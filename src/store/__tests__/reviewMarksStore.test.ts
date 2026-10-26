@@ -7,7 +7,9 @@ import {
   _resetReviewMarksStoreForTesting,
   clearWorktreeReviewMark,
   getReviewMarksRevision,
+  markCapturedWorktreeReviewed,
   markWorktreeReviewed,
+  newlyMarkedWorktreeIds,
   startReviewMarksSync,
   useReviewMarksStore,
   worktreeReviewMark,
@@ -61,6 +63,7 @@ function installBridge() {
   const listeners: ChangedCallback[] = [];
   const hydrate = vi.fn(async (): Promise<ReviewMarksSnapshot | null> => snapshot({}, 0));
   const mark = vi.fn();
+  const markCaptured = vi.fn();
   const clear = vi.fn();
   const onChanged = vi.fn((cb: ChangedCallback) => {
     listeners.push(cb);
@@ -72,13 +75,14 @@ function installBridge() {
   // `defineProperty` rather than an assignment + cast: a partial stub of the
   // full `ElectronAPI` would need a type assertion the lint ratchet counts.
   Object.defineProperty(window, "electron", {
-    value: { reviewMarks: { hydrate, mark, clear, onChanged } },
+    value: { reviewMarks: { hydrate, mark, markCaptured, clear, onChanged } },
     configurable: true,
     writable: true,
   });
   return {
     hydrate,
     mark,
+    markCaptured,
     clear,
     push: (next: ReviewMarksSnapshot) => {
       for (const cb of [...listeners]) cb(next);
@@ -259,5 +263,44 @@ describe("reviewMarksStore", () => {
       "branch-changed"
     );
     expect(worktreeReviewMark(marks, { id: WT_1 })?.applicability).toBe("branch-unknown");
+  });
+
+  it("adopts the reply to marking a held capture", async () => {
+    const bridge = installBridge();
+    stop = startReviewMarksSync();
+    await vi.waitFor(() => expect(useReviewMarksStore.getState().loaded).toBe(true));
+    bridge.markCaptured.mockResolvedValueOnce({
+      status: "saved",
+      snapshot: snapshot({ [WT_1]: summary(4) }, 4),
+    });
+
+    const outcome = await markCapturedWorktreeReviewed(WT_1, "capture-1", 0);
+
+    expect(outcome.status).toBe("saved");
+    expect(bridge.markCaptured).toHaveBeenCalledWith(WT_1, "capture-1", 0);
+    expect(useReviewMarksStore.getState().marks).toEqual({ [WT_1]: summary(4) });
+  });
+
+  it("names a worktree as newly marked only when its mark is saved after the view loaded", () => {
+    const empty = { marks: {}, revision: 0, loaded: false };
+    const loaded = { marks: { [WT_1]: summary(1) }, revision: 1, loaded: true };
+
+    // The first snapshot shows marks made before the view was there.
+    expect(newlyMarkedWorktreeIds(empty, loaded)).toEqual([]);
+    expect(
+      newlyMarkedWorktreeIds(loaded, {
+        marks: { [WT_1]: summary(1), [WT_2]: summary(2, "feature-2") },
+        revision: 2,
+        loaded: true,
+      })
+    ).toEqual([WT_2]);
+    expect(
+      newlyMarkedWorktreeIds(loaded, { marks: { [WT_1]: summary(3) }, revision: 3, loaded: true })
+    ).toEqual([WT_1]);
+    // A clear, and a re-read with the same marks, mark nothing new.
+    expect(newlyMarkedWorktreeIds(loaded, { marks: {}, revision: 4, loaded: true })).toEqual([]);
+    expect(
+      newlyMarkedWorktreeIds(loaded, { marks: { [WT_1]: summary(1) }, revision: 4, loaded: true })
+    ).toEqual([]);
   });
 });

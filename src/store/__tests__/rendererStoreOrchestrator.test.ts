@@ -126,6 +126,9 @@ const { useProjectPluginStore } = await import("../projectPluginStore");
 const { useDictationRangeStore } = await import("../dictationRangeStore");
 const { initStoreOrchestrator, destroyStoreOrchestrator } =
   await import("../rendererStoreOrchestrator");
+const { useReviewMarksStore, _resetReviewMarksStoreForTesting } =
+  await import("../reviewMarksStore");
+const { useDiffViewedStore } = await import("../diffViewedStore");
 
 describe("rendererStoreOrchestrator", () => {
   beforeEach(async () => {
@@ -259,6 +262,39 @@ describe("rendererStoreOrchestrator", () => {
       expect(changed).toHaveBeenCalledTimes(1);
       useProjectHomeStore.setState({ routeByProject: {} });
     });
+  });
+
+  it("clears a worktree's Viewed marks when a review mark for it lands, from any view", () => {
+    _resetReviewMarksStoreForTesting();
+    const mark = (revision: number) => ({
+      markedAt: 1,
+      capturedAt: 1,
+      head: { kind: "branch" as const, branch: "feature", commit: "1".repeat(40) },
+      base: { ref: null, tip: null },
+      complete: true,
+      pathCount: 1,
+      revision,
+    });
+    useDiffViewedStore.getState().setViewed("/repo/wt-a", "unstaged:a.ts", true);
+    useDiffViewedStore.getState().setViewed("/repo/wt-b", "unstaged:b.ts", true);
+
+    // The first snapshot a view adopts holds marks made before it: no clearing.
+    useReviewMarksStore.setState({ marks: { "/repo/wt-a": mark(1) }, revision: 1, loaded: true });
+    expect(useDiffViewedStore.getState().viewedByWorktree["/repo/wt-a"]?.size).toBe(1);
+
+    useReviewMarksStore.setState({ marks: { "/repo/wt-a": mark(2) }, revision: 2 });
+
+    expect(useDiffViewedStore.getState().viewedByWorktree["/repo/wt-a"]).toBeUndefined();
+    expect(useDiffViewedStore.getState().viewedByWorktree["/repo/wt-b"]?.size).toBe(1);
+
+    // A first mark clears too; clearing a mark leaves Viewed marks alone.
+    useReviewMarksStore.setState({ marks: { "/repo/wt-b": mark(3) }, revision: 3 });
+    expect(useDiffViewedStore.getState().viewedByWorktree["/repo/wt-b"]).toBeUndefined();
+    useDiffViewedStore.getState().setViewed("/repo/wt-b", "unstaged:b.ts", true);
+    useReviewMarksStore.setState({ marks: {}, revision: 4 });
+    expect(useDiffViewedStore.getState().viewedByWorktree["/repo/wt-b"]?.size).toBe(1);
+    _resetReviewMarksStoreForTesting();
+    useDiffViewedStore.setState({ viewedByWorktree: {}, baselinesByWorktree: {} });
   });
 
   it("tracks terminal focus in worktree store when focusedId changes", () => {

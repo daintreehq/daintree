@@ -1,7 +1,9 @@
 import { create } from "zustand";
 import type { ReviewPoint } from "@shared/types/reviewPoint";
 import type {
+  ReviewMarkCaptureOutcome,
   ReviewMarkClearOutcome,
+  ReviewMarkCompareOutcome,
   ReviewMarkSaveOutcome,
   ReviewMarkSummary,
   ReviewMarksSnapshot,
@@ -20,7 +22,7 @@ import { onHostResync } from "./hostResyncSignal";
  * change; no call carries a project id. Renderer state is per project view, so
  * this module-level store is already scoped to one project.
  */
-interface ReviewMarksState {
+export interface ReviewMarksState {
   /** Worktree id → its mark, as main last said. */
   marks: Record<string, ReviewMarkSummary>;
   /** Main's write count for the marks held here; an older snapshot is dropped. */
@@ -210,6 +212,40 @@ export async function markWorktreeReviewed(
   return outcome;
 }
 
+/**
+ * Store a capture Review Hub took as the worktree's mark (#14585). `basedOn` is
+ * the revision taken before that capture started.
+ */
+export async function markCapturedWorktreeReviewed(
+  worktreeId: string,
+  captureId: string,
+  basedOn: number
+): Promise<ReviewMarkSaveOutcome> {
+  const api = reviewMarksBridge();
+  if (typeof api?.markCaptured !== "function") {
+    throw new Error("Review marks aren't available here");
+  }
+  const adoptionsAtStart = adoptions;
+  const outcome = await api.markCaptured(worktreeId, captureId, basedOn);
+  adoptReply(outcome.snapshot, basedOn, adoptionsAtStart);
+  return outcome;
+}
+
+/** Capture what the worktree holds now, held on the host. Null where the bridge isn't. */
+export function captureForReviewMark(worktreeId: string): Promise<ReviewMarkCaptureOutcome> | null {
+  const api = reviewMarksBridge();
+  return typeof api?.capture === "function" ? api.capture(worktreeId) : null;
+}
+
+/** Compare the worktree with its stored mark on the host. */
+export async function compareWithReviewMark(
+  worktreeId: string
+): Promise<ReviewMarkCompareOutcome> {
+  const api = reviewMarksBridge();
+  if (typeof api?.compare !== "function") throw new Error("Review marks aren't available here");
+  return api.compare(worktreeId);
+}
+
 /** Remove the worktree's mark. `basedOn` comes from {@link getReviewMarksRevision}. */
 export async function clearWorktreeReviewMark(
   worktreeId: string,
@@ -237,6 +273,17 @@ export function worktreeReviewMark(
   const mark = Object.hasOwn(marks, worktree.id) ? marks[worktree.id] : undefined;
   if (!mark) return null;
   return { mark, applicability: reviewMarkApplicability(mark.head, worktree) };
+}
+
+/**
+ * Worktrees whose mark is new in `next`: saved since `prev`, by any view. The
+ * first snapshot a view adopts names none, since it shows marks made before.
+ */
+export function newlyMarkedWorktreeIds(prev: ReviewMarksState, next: ReviewMarksState): string[] {
+  if (!prev.loaded || prev.marks === next.marks) return [];
+  return Object.entries(next.marks)
+    .filter(([id, mark]) => !Object.hasOwn(prev.marks, id) || prev.marks[id]?.revision !== mark.revision)
+    .map(([id]) => id);
 }
 
 /** @internal Tests only. */

@@ -33,6 +33,8 @@ import {
   useProjectHomeStore,
 } from "./projectHomeStore";
 import { useProjectPluginStore } from "./projectPluginStore";
+import { newlyMarkedWorktreeIds, useReviewMarksStore } from "./reviewMarksStore";
+import { useDiffViewedStore } from "./diffViewedStore";
 import { removeArtifactsForTerminal } from "@/hooks/useArtifacts";
 import { forgetPanelActivity } from "@/utils/panelProps";
 import {
@@ -496,6 +498,20 @@ export function initStoreOrchestrator(): () => void {
         },
         { equalityFn: shallow }
       )
+    )
+  );
+
+  // Marking a worktree reviewed clears its per-file Viewed marks (#14585), in
+  // every view of the project, since each view keeps its own.
+  disposables.add(
+    toDisposable(
+      useReviewMarksStore.subscribe((state, prev) => {
+        for (const worktreeId of newlyMarkedWorktreeIds(prev, state)) {
+          const worktrees = getCurrentViewStoreOrNull()?.getState().worktrees;
+          const path = worktrees?.get(worktreeId)?.path ?? worktreeId;
+          useDiffViewedStore.getState().clearWorktree(path);
+        }
+      })
     )
   );
 
