@@ -94,7 +94,7 @@ export function VoiceInputButton({
   const isActive = isSessionOpen || isFinishing || isPaused;
   // A click while the session finishes starts the next one (#14604), so a
   // disabled input blocks it like any other start.
-  const isClickBlocked = disabled && (!isActive || isFinishing);
+  const blockedWhenDisabled = !isActive || isFinishing;
   // Only a session still feeding from the mic spins. Paused, finishing and
   // reconnecting hold still: speech past the provider's short reconnect buffer
   // is lost, and a draining stop is not listening.
@@ -241,7 +241,7 @@ export function VoiceInputButton({
   }, [showOrbit, isFinishing, isOrbitStill]);
 
   const handleClick = useCallback(() => {
-    if (isClickBlocked) return;
+    if (disabled && blockedWhenDisabled) return;
 
     // Paused → resume on click; the affordance reads as a pause/resume toggle
     // rather than a stop. Escape (handled by the service) is the stop path.
@@ -259,7 +259,8 @@ export function VoiceInputButton({
       worktreeLabel,
     });
   }, [
-    isClickBlocked,
+    disabled,
+    blockedWhenDisabled,
     isPaused,
     panelId,
     panelTitle,
@@ -367,7 +368,7 @@ export function VoiceInputButton({
           <button
             type="button"
             onClick={handleClick}
-            disabled={isClickBlocked}
+            disabled={disabled && blockedWhenDisabled}
             className={cn(
               "relative flex items-center justify-center rounded-full transition duration-150",
               "h-6 w-6",
