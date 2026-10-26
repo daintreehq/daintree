@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { logDebug, logWarn } from "../utils/logger.js";
 import {
   CORE_CORRECTION_PROMPT,
@@ -24,7 +25,9 @@ const LONG_CORRECTION_TIMEOUT_MS = 15000;
 const LONG_CORRECTION_MIN_CHARS = 140;
 const MAX_OUTPUT_TOKENS = 1024;
 const FILE_LINK_MAX_OUTPUT_TOKENS = 256;
-const PROMPT_CACHE_PREFIX = "voice-correction-v7";
+const PROMPT_CACHE_PREFIX = "voice-correction-v8";
+// OpenAI rejects a prompt_cache_key longer than 64 characters.
+const PROMPT_CACHE_KEY_MAX_LENGTH = 64;
 const FILE_LINK_DETECTION_TIMEOUT_MS = 4000;
 const FILE_LINK_CACHE_PREFIX = "voice-file-link-v1";
 const LEADING_FILLER_RE = /^(?:\s*(?:um|uh)[\s,.;:!-]+)+/i;
@@ -116,6 +119,27 @@ interface CorrectionApiResult {
   confidence: "low" | "medium" | "high";
 }
 
+// Carries the status and OpenAI error code only; the body's message can echo request content.
+class OpenAIRequestError extends Error {
+  constructor(
+    readonly status: number,
+    readonly code: string | undefined
+  ) {
+    super(`OpenAI API error: ${status}${code ? ` (${code})` : ""}`);
+  }
+
+  static async fromResponse(response: Response): Promise<OpenAIRequestError> {
+    let code: string | undefined;
+    try {
+      const body = (await response.json()) as { error?: { code?: unknown } };
+      if (typeof body.error?.code === "string") code = body.error.code;
+    } catch {
+      // Non-JSON error body: the status alone is enough.
+    }
+    return new OpenAIRequestError(response.status, code);
+  }
+}
+
 export class VoiceCorrectionService {
   private sessionSignal: AbortSignal | null = null;
 
@@ -198,7 +222,12 @@ export class VoiceCorrectionService {
           confirmedText: request.rawText,
         };
       }
-      logWarn(`${P} Correction failed, using raw text`, voiceErrorLogFields(error));
+      const rejection = error instanceof OpenAIRequestError ? error : undefined;
+      logWarn(`${P} Correction failed, using raw text`, {
+        ...voiceErrorLogFields(error),
+        status: rejection?.status,
+        code: rejection?.code,
+      });
       return {
         action: "no_change",
         correctedText: request.rawText,
@@ -210,9 +239,11 @@ export class VoiceCorrectionService {
 
   private buildPromptCacheKey(settings: VoiceCorrectionSettings): string {
     const projectKey = settings.projectName ?? settings.projectPath ?? "global";
-    const dictionaryKey =
-      settings.customDictionary.length > 0 ? settings.customDictionary.join("|") : "no-dict";
-    return `${PROMPT_CACHE_PREFIX}:${settings.model}:${projectKey}:${dictionaryKey}`;
+    const fingerprint = createHash("sha256")
+      .update(JSON.stringify([settings.model, projectKey, settings.customDictionary]))
+      .digest("hex")
+      .slice(0, 32);
+    return `${PROMPT_CACHE_PREFIX}:${fingerprint}`.slice(0, PROMPT_CACHE_KEY_MAX_LENGTH);
   }
 
   private extractResponseText(data: {
@@ -316,7 +347,8 @@ export class VoiceCorrectionService {
       });
 
       if (!response.ok) {
-        logWarn(`${P} File link detection API error: ${response.status}`);
+        const failure = await OpenAIRequestError.fromResponse(response);
+        logWarn(`${P} File link detection API error: ${response.status}`, { code: failure.code });
         return [];
       }
 
@@ -477,7 +509,7 @@ export class VoiceCorrectionService {
     });
 
     if (!response.ok) {
-      throw new Error(`OpenAI API error: ${response.status}`);
+      throw await OpenAIRequestError.fromResponse(response);
     }
 
     const data = (await response.json()) as {
