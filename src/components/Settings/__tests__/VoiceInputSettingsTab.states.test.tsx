@@ -225,6 +225,29 @@ describe("VoiceInputSettingsTab correction prerequisites", () => {
   });
 });
 
+describe("VoiceInputSettingsTab cleanup default", () => {
+  const resetName = "Reset Clean up transcriptions to default";
+
+  it("treats cleanup switched on as the default", async () => {
+    install({ openaiApiKey: "sk-proj-abc1234", correctionEnabled: true });
+    render(<VoiceInputSettingsTab />);
+
+    const cleanup = await screen.findByRole("switch", { name: "Clean up transcriptions" });
+    expect(cleanup.getAttribute("aria-checked")).toBe("true");
+    expect(screen.queryByRole("button", { name: resetName })).toBeNull();
+  });
+
+  it("marks cleanup switched off as modified and resets it back on", async () => {
+    const api = install({ openaiApiKey: "sk-proj-abc1234", correctionEnabled: false });
+    render(<VoiceInputSettingsTab />);
+
+    const cleanup = await screen.findByRole("switch", { name: "Clean up transcriptions" });
+    expect(cleanup.getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(await screen.findByRole("button", { name: resetName }));
+    await waitFor(() => expect(api.setSettings).toHaveBeenCalledWith({ correctionEnabled: true }));
+  });
+});
+
 describe("VoiceInputSettingsTab paragraph breaks", () => {
   it("shows the mode that will actually apply for a language without spoken commands", async () => {
     install({ language: "de", paragraphingStrategy: "spoken-command" });

@@ -4,6 +4,8 @@ import {
   findProtectedRanges,
   validateCorrection,
 } from "../voiceCorrectionGuard.js";
+import { CORE_CORRECTION_PROMPT } from "../../../shared/config/voiceCorrection.js";
+import { DICTATED_PROMPTS } from "./fixtures/dictatedPrompts.js";
 
 // How much slower a run on 8x the input is than on 1x. Linear work scales by
 // about 8 and quadratic by about 64, whatever the runner's speed, so a ratio
@@ -217,5 +219,315 @@ describe("validateCorrection", () => {
     ],
   ])("rejects %s", (_label, raw, corrected, reason) => {
     expect(validateCorrection(raw, corrected)).toEqual({ ok: false, reason });
+  });
+});
+
+describe("validateCorrection on self-corrections and lists", () => {
+  it.each(
+    DICTATED_PROMPTS.flatMap(({ name, raw, expected }) =>
+      expected.map((corrected) => [name, raw, corrected] as const)
+    )
+  )("accepts the expected cleanup of the dictated prompt: %s", (_name, raw, corrected) => {
+    expect(validateCorrection(raw, corrected)).toEqual({ ok: true });
+  });
+
+  it.each([
+    [
+      "a retraction that restarts a long phrase",
+      "Point the client at the old staging server, no wait, at the local one.",
+      "Point the client at the local one.",
+    ],
+    [
+      "a retraction of the previous sentence",
+      "Add a retry around the fetch call and log every attempt. Scratch that. Add a timeout.",
+      "Add a timeout.",
+    ],
+    [
+      "a retracted name with no repeated word",
+      "Rename the helper to formatDate, I mean formatDateTime, and update every caller.",
+      "Rename the helper to formatDateTime, and update every caller.",
+    ],
+    [
+      "a retraction beside a negation it leaves alone",
+      "Don't touch the old migration files, I mean the seed files, just regenerate them.",
+      "Don't touch the seed files, just regenerate them.",
+    ],
+    [
+      "a list counted with digits",
+      "Two fixes. Step 1, pin the version. Step 2, rerun the install.",
+      "Two fixes:\n1. Pin the version.\n2. Rerun the install.",
+    ],
+    [
+      "a list laid out with bullets",
+      "Check five things. First, the logs. Second, the traces. Third, the metrics. Fourth, the alerts. And finally, the dashboards.",
+      "Check five things:\n- The logs.\n- The traces.\n- The metrics.\n- The alerts.\n- The dashboards.",
+    ],
+    [
+      "a retraction with no repeated word, as long as its replacement",
+      "Set the theme to dark blue mode, no wait, light mode.",
+      "Set the theme to light mode.",
+    ],
+    [
+      "a correction that ends its sentence",
+      "Point the client at the old staging server, no wait. At the local one.",
+      "Point the client at the local one.",
+    ],
+    [
+      "a list counted in cardinals and ordinals",
+      "One, add a test. Second, fix the bug.",
+      "1. Add a test.\n2. Fix the bug.",
+    ],
+    [
+      "a retraction after a line break",
+      "Add a retry around the fetch call.\nScratch that. Add a timeout.",
+      "Add a timeout.",
+    ],
+    [
+      "list items that keep their own numbers",
+      "First, retry 3 times. Second, wait 500 ms between tries.",
+      "1. Retry 3 times.\n2. Wait 500 ms between tries.",
+    ],
+  ])("accepts %s", (_label, raw, corrected) => {
+    expect(validateCorrection(raw, corrected)).toEqual({ ok: true });
+  });
+
+  it.each([
+    [
+      "a retraction used to drop earlier instructions",
+      "Update the README with the install steps and bump the version and tag the release, I mean the changelog.",
+      "The changelog.",
+      "edit_size",
+    ],
+    [
+      "a retraction that drops the verb before the retracted words",
+      "Please check and then rebuild the useAuth hook, sorry, the useSession hook.",
+      "The useSession hook.",
+      "edit_size",
+    ],
+    [
+      "a negation inside the retracted words",
+      "Push to the release branch and don't tag it, no wait, push to main.",
+      "Push to main.",
+      "negation",
+    ],
+    [
+      "a negation left governing the replacement",
+      "Do not delete backups, I mean switch to the new parser.",
+      "Do not switch to the new parser.",
+      "negation",
+    ],
+    [
+      "a negation across a clause break",
+      "Do not delete backups; use the old parser, I mean switch to the new parser for imports.",
+      "Do not switch to the new parser for imports.",
+      "negation",
+    ],
+    [
+      "a no wait that is a real prohibition",
+      "Ensure there is no wait, even under load.",
+      "Ensure there is a wait, even under load.",
+      "negation",
+    ],
+    [
+      "a no wait prohibition dropped with the words before it",
+      "Ensure there is no wait, even under load.",
+      "Ensure delays, even under load.",
+      "negation",
+    ],
+    [
+      "a no wait prohibition dropped whole",
+      "Ensure there is no wait, even under load.",
+      "Ensure, even under load.",
+      "negation",
+    ],
+    [
+      "words added where the retracted ones were",
+      "Keep the old cache, no wait, the new one.",
+      "Keep and purge the new one.",
+      "negation",
+    ],
+    [
+      "the retracted words kept and the replacement dropped",
+      "Use the old API, no wait, the new parser.",
+      "Use the old API.",
+      "negation",
+    ],
+    [
+      "a retracted value whose replacement was dropped too",
+      "Rename the theme to dark, no wait, light, and update the docs.",
+      "Rename the theme, and update the docs.",
+      "negation",
+    ],
+    [
+      "a restart matched in an earlier clause",
+      "Delete the logs, rebuild the cache, no wait, delete the temp files.",
+      "Delete the temp files.",
+      "edit_size",
+    ],
+    [
+      "a fallback reaching past its replacement's length",
+      "Keep backups and use the old parser, I mean switch to the new parser for imports.",
+      "Switch to the new parser for imports.",
+      "edit_size",
+    ],
+    [
+      "a correction phrase with nothing after it",
+      "Keep backups. Update the parser and run all tests, I mean.",
+      "Keep backups.",
+      "edit_size",
+    ],
+    [
+      "a literal scratch that",
+      "Keep the existing API and add a scratch that button.",
+      "Keep the existing API.",
+      "edit_size",
+    ],
+    [
+      "a retraction reaching past twelve words",
+      "Move the retry loop out of the request handler and into the shared client wrapper. Scratch that. Keep it.",
+      "Keep it.",
+      "edit_size",
+    ],
+    [
+      "a number inside the retracted words",
+      "Retry 3 times, no wait, 5 times.",
+      "Retry 5 times.",
+      "number",
+    ],
+    [
+      "a literal no wait dropped",
+      "Make sure there's no wait between the retries.",
+      "Make sure there's between the retries.",
+      "negation",
+    ],
+    [
+      "a no that answers a question",
+      "Do we need a migration? No, just update the model.",
+      "Just update the model.",
+      "negation",
+    ],
+    [
+      "words before a marker inside backticks",
+      "Delete the archived build logs from last week `no wait`, the fresh ones.",
+      "Delete `no wait`, the fresh ones.",
+      "edit_size",
+    ],
+    [
+      "words before the restart of a repeated phrase",
+      "Put the big blue submit button in the header, no wait, the footer.",
+      "Put the footer.",
+      "edit_size",
+    ],
+    [
+      "a list that drops an item",
+      "First, fix the parser. Second, update the docs and the changelog. Third, bump the version.",
+      "1. Fix the parser.\n2. Bump the version.",
+      "edit_size",
+    ],
+    [
+      "list numbers that skip",
+      "First, add a test. Second, fix the bug.",
+      "1. Add a test.\n3. Fix the bug.",
+      "number",
+    ],
+    [
+      "a decimal read as an item number",
+      "Use timeout: 1.5 seconds. 2, retry twice.",
+      "1. Use timeout: 5 seconds.\n2. Retry twice.",
+      "number",
+    ],
+    [
+      "a decimal's fraction read as an item number",
+      "Timeout: 9.1, retries: 2.",
+      "1. Timeout: 9.\n2. Retries.",
+      "number",
+    ],
+    [
+      "a counting word inside backticks funding another",
+      "Use `status: one, ready` and set retries to one. Two, ship it.",
+      "1. Use `status: one, ready` and set retries.\n2. Ship it.",
+      "number",
+    ],
+    [
+      "a dictated line number dropped as layout",
+      "Return the value\n1. Preserve its type.",
+      "Return the value. Preserve its type.",
+      "number",
+    ],
+    [
+      "ordinals that are adjectives",
+      "First failures require logging. Second retries require approval. Third parties need authorization. Fourth attempts require escalation. Next releases require review.",
+      "- Failures require logging.\n- Retries require approval.\n- Parties need authorization.\n- Attempts require escalation.\n- Releases require review.",
+      "edit_size",
+    ],
+    [
+      "a count turned into a list number",
+      "Start one worker, then two more.",
+      "1. Start one worker.\n2. Then more.",
+      "number",
+    ],
+    [
+      "counting words dropped without a list",
+      "First, fix the parser. Second, update the docs. Third, bump the version. Fourth, tag it. Fifth, ship it.",
+      "Fix the parser. Update the docs. Bump the version. Tag it. Ship it.",
+      "edit_size",
+    ],
+  ])("rejects %s", (_label, raw, corrected, reason) => {
+    expect(validateCorrection(raw, corrected)).toEqual({ ok: false, reason });
+  });
+
+  it("accepts every worked example the prompt teaches", () => {
+    const unquote = (text: string) =>
+      text
+        .replace(/\\n/g, "\n")
+        .replace(/<\/?uncertain>/g, "")
+        .replace(/\\`/g, "`");
+    const examples = [
+      ...CORE_CORRECTION_PROMPT.matchAll(/- Target: "(.*)"\n {2}Corrected: "(.*?)"(?: \(|$)/gm),
+    ];
+    expect(examples.length).toBe(CORE_CORRECTION_PROMPT.match(/^- Target: /gm)?.length);
+    for (const [, target, corrected] of examples) {
+      expect(validateCorrection(unquote(target), unquote(corrected)), target).toEqual({ ok: true });
+    }
+  });
+
+  it("resolves a passage of self-corrections up to the alignment limit", () => {
+    const raw = "Use the old cache, no wait, the new one, and log it. ".repeat(40);
+    const corrected = "Use the new one, and log it. ".repeat(40);
+    expect(validateCorrection(raw, corrected)).toEqual({ ok: true });
+  });
+
+  // At 8x each input is 12,000 characters, the longest passage cleanup sees.
+  it.each([
+    [
+      "self-corrections",
+      (scale: number) => "Use the old cache, no wait, the new one, and log it. ".repeat(28 * scale),
+      (scale: number) => "Use the new one, and log it. ".repeat(28 * scale),
+      true,
+    ],
+    [
+      "bullet lines",
+      (scale: number) => "- a\n".repeat(375 * scale),
+      (scale: number) => "- a\n".repeat(375 * scale - 1),
+      true,
+    ],
+    [
+      "whitespace runs",
+      (scale: number) => `fix it, no${" ".repeat(1_500 * scale)}, sorry, now`,
+      () => "Fix it now.",
+      false,
+    ],
+    [
+      "corrections that each scan back",
+      (scale: number) => `${"x ".repeat(375 * scale)}${"I mean ".repeat(100 * scale)}a b c`,
+      () => "a b c",
+      false,
+    ],
+  ])("checks a passage of %s in linear time", (_label, raw, corrected, ok) => {
+    expect(validateCorrection(raw(1), corrected(1)).ok).toBe(ok);
+    const ratio = scalingRatio((scale) => {
+      for (let i = 0; i < 10; i++) validateCorrection(raw(scale), corrected(scale));
+    });
+    expect(ratio).toBeLessThan(24);
   });
 });

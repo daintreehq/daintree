@@ -219,7 +219,7 @@ const VOICE_INPUT_DEFAULTS: VoiceInputSettings = {
   dictionary: [],
   transcriptionProvider: "openai",
   transcriptionModel: "gpt-live-transcribe",
-  correctionEnabled: false,
+  correctionEnabled: true,
   correctionModel: VOICE_DICTATION_AI_MODEL,
   correctionCustomInstructions: "",
   paragraphingStrategy: "spoken-command",

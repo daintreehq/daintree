@@ -1019,6 +1019,8 @@ async function buildHarness(): Promise<MigrationHarness> {
       if (voice === null || "customDictionary" in voice || !Array.isArray(voice.dictionary)) {
         scalarMigrationMisses += 1;
       }
+      // 037 turns dictation cleanup on over the fixture's stored `false`.
+      if (voice?.correctionEnabled !== true) scalarMigrationMisses += 1;
       // 029 keys the single tour record to the built-in tour and hoists mute.
       const onboarding = asRecord(config.onboarding);
       if (onboarding === null || "tour" in onboarding) scalarMigrationMisses += 1;

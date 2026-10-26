@@ -79,7 +79,7 @@ const DEFAULT_SETTINGS: VoiceInputSettings = {
   dictionary: [],
   transcriptionProvider: "openai",
   transcriptionModel: "gpt-live-transcribe",
-  correctionEnabled: false,
+  correctionEnabled: true,
   correctionModel: VOICE_DICTATION_AI_MODEL,
   correctionCustomInstructions: "",
   paragraphingStrategy: "spoken-command",
@@ -758,7 +758,7 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
       {settings.enabled && (
         <SettingsSection
           title="AI text correction"
-          description={`When you stop dictating, the whole passage is corrected once with ${VOICE_DICTATION_AI_MODEL} to fix technical terms, punctuation and filler words. The text is sent to OpenAI.`}
+          description={`When you stop dictating, the whole passage is corrected once with ${VOICE_DICTATION_AI_MODEL} to fix technical terms, punctuation and filler words, resolve self-corrections, and lay out spoken lists. The text is sent to OpenAI.`}
           id="voice-ai-correction"
         >
           {saveError("correction")}
