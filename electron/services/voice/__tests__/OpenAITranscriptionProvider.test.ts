@@ -30,6 +30,11 @@ class MockWebSocket {
   pingCalls = 0;
   // A healthy transport answers every ping. Half-open tests turn this off.
   respondsToPing = true;
+  // Writes complete at once unless a test drains them by hand with
+  // flushWrites(), to model a slow uplink or a full kernel buffer.
+  manualFlush = false;
+  throwOnSend = false;
+  private unflushed: Array<() => void> = [];
 
   private listeners: Map<string, Set<WsListener>> = new Map();
 
@@ -62,8 +67,20 @@ class MockWebSocket {
     for (const listener of set) listener(...args);
   }
 
-  send(payload: string): void {
+  send(payload: string, cb?: (err?: Error) => void): void {
+    if (this.throwOnSend) throw new Error("send failed");
     this.sent.push(payload);
+    this.write(() => cb?.());
+  }
+
+  private write(complete: () => void): void {
+    if (this.manualFlush) this.unflushed.push(complete);
+    else complete();
+  }
+
+  /** Completes up to `count` queued writes, oldest first. */
+  flushWrites(count = Infinity): void {
+    for (let i = 0; i < count && this.unflushed.length > 0; i++) this.unflushed.shift()!();
   }
 
   close(code?: number): void {
@@ -81,9 +98,12 @@ class MockWebSocket {
     this.fire("close", 1006, undefined);
   }
 
-  ping(): void {
+  ping(_data?: unknown, _mask?: boolean, cb?: (err?: Error) => void): void {
     this.pingCalls++;
-    if (this.respondsToPing) this.fire("pong");
+    this.write(() => {
+      cb?.();
+      if (this.respondsToPing) this.fire("pong");
+    });
   }
 
   // Test helpers
@@ -1022,6 +1042,11 @@ describe("OpenAITranscriptionProvider", () => {
     vi.advanceTimersByTime(8_000);
     expect(socket.sentJson().filter((p) => p.type === "input_audio_buffer.commit")).toHaveLength(1);
 
+    // And keeps firing while the speech goes on.
+    feedCommittableAudio(service);
+    vi.advanceTimersByTime(8_000);
+    expect(socket.sentJson().filter((p) => p.type === "input_audio_buffer.commit")).toHaveLength(2);
+
     service.stop();
   });
 
@@ -1037,6 +1062,9 @@ describe("OpenAITranscriptionProvider", () => {
     feedCommittableAudio(service);
     vi.advanceTimersByTime(8_000);
     expect(socket.sentJson().filter((p) => p.type === "input_audio_buffer.commit")).toHaveLength(1);
+    feedCommittableAudio(service);
+    vi.advanceTimersByTime(8_000);
+    expect(socket.sentJson().filter((p) => p.type === "input_audio_buffer.commit")).toHaveLength(2);
 
     service.stop();
   });
@@ -3031,7 +3059,7 @@ describe("OpenAITranscriptionProvider — reconnect replay (#14605)", () => {
   function wire(socket: MockWebSocket): Array<number | "commit" | "clear"> {
     return socket.sentJson().flatMap((p) => {
       if (p.type === "input_audio_buffer.append") {
-        return [Buffer.from(p.audio as string, "base64")[0]];
+        return [Buffer.from(p.audio as string, "base64").readUInt8(0)];
       }
       if (p.type === "input_audio_buffer.commit") return ["commit" as const];
       if (p.type === "input_audio_buffer.clear") return ["clear" as const];
@@ -3215,25 +3243,73 @@ describe("OpenAITranscriptionProvider — reconnect replay (#14605)", () => {
     expect(socket.terminateCalls).toBe(1);
     expect(elapsed).toBeLessThanOrEqual(8_000);
 
-    // Everything spoken into the dead socket comes back on the new one.
-    const sentBeforeDeath = wire(socket).length;
+    // Everything spoken into the dead socket comes back on the new one, once.
     const socket2 = await reconnect();
-    expect(wire(socket2).slice(0, sentBeforeDeath)).toEqual(wire(socket));
+    expect(wire(socket2)).toEqual(wire(socket));
     service.stop();
   });
 
-  it("does not terminate a streaming socket that keeps answering pings", async () => {
+  it("does not terminate a streaming socket whose pongs come back within the allowance", async () => {
     const service = new OpenAITranscriptionProvider();
     const { socket } = await bringSessionReady(service);
+    socket.respondsToPing = false;
 
+    let answered = 0;
     for (let elapsed = 0; elapsed < 20_000; elapsed += 100) {
       service.sendAudioChunk(chunk(1));
       vi.advanceTimersByTime(100);
-      if (socket.pingCalls > 0) socket.simulatePong();
+      // A slow but live server: each pong arrives 3s after its ping.
+      for (; answered < socket.pingCalls; answered++) {
+        setTimeout(() => socket.simulatePong(), 3_000);
+      }
     }
 
     expect(socket.pingCalls).toBeGreaterThan(1);
     expect(socket.terminateCalls).toBe(0);
+    service.stop();
+  });
+
+  it("terminates a streaming socket whose writes stop completing", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const { socket } = await bringSessionReady(service);
+    // A dead peer: the kernel buffer is full, so nothing more is written out,
+    // the ping included.
+    socket.manualFlush = true;
+
+    let elapsed = 0;
+    while (socket.terminateCalls === 0 && elapsed < 20_000) {
+      service.sendAudioChunk(chunk(1));
+      vi.advanceTimersByTime(100);
+      elapsed += 100;
+    }
+
+    expect(socket.terminateCalls).toBe(1);
+    expect(elapsed).toBeLessThanOrEqual(6_000);
+    service.stop();
+  });
+
+  it("does not time out a ping queued behind a reconnect flush on a slow uplink", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const { socket } = await bringSessionReady(service);
+    socket.simulateClose(1006);
+    for (let i = 0; i < 150; i++) service.sendAudioChunk(chunk(i));
+
+    vi.advanceTimersByTime(1_000);
+    const socket2 = latestInstance();
+    socket2.manualFlush = true;
+    socket2.simulateOpen();
+    socket2.simulateMessage("session.updated");
+
+    // Writes drain at twice the audio rate, so the 15s backlog clears in about
+    // 15s, and the first ping (and its pong) waits behind it.
+    for (let elapsed = 0; elapsed < 20_000; elapsed += 100) {
+      service.sendAudioChunk(chunk(1));
+      socket2.flushWrites(2);
+      vi.advanceTimersByTime(100);
+    }
+
+    expect(socket2.pingCalls).toBeGreaterThan(0);
+    expect(socket2.terminateCalls).toBe(0);
     service.stop();
   });
 
@@ -3354,7 +3430,7 @@ describe("OpenAITranscriptionProvider — reconnect replay (#14605)", () => {
     service.stop();
   });
 
-  it("forgets unacknowledged audio after a fatal error", async () => {
+  it("starts a new session after a fatal error with nothing to replay", async () => {
     const service = new OpenAITranscriptionProvider();
     const { socket } = await bringSessionReady(service);
     latestVadWorker().emitSpeechStart();
@@ -3363,6 +3439,128 @@ describe("OpenAITranscriptionProvider — reconnect replay (#14605)", () => {
 
     const { socket: next } = await bringSessionReady(service);
     expect(wire(next)).toEqual([]);
+    service.stop();
+  });
+
+  it("releases the oldest segment on an acknowledgement without an item id", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const { socket } = await bringSessionReady(service);
+    const vad = latestVadWorker();
+    vad.emitSpeechStart();
+    service.sendAudioChunk(chunk(1));
+    vad.emitSpeechEnd();
+    vad.emitSpeechStart();
+    service.sendAudioChunk(chunk(2));
+    vad.emitSpeechEnd();
+    socket.simulateMessage("input_audio_buffer.committed");
+
+    socket.simulateClose(1006);
+    const socket2 = await reconnect();
+
+    expect(wire(socket2)).toEqual([2, "commit"]);
+    service.stop();
+  });
+
+  it("replays only what survived a barge-in clear, with the pre-roll once", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const { socket } = await bringSessionReady(service);
+    const vad = latestVadWorker();
+    vad.emitSpeechStart();
+    service.sendAudioChunk(chunk(1));
+    vad.emitSpeechEnd();
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+    service.sendAudioChunk(chunk(10));
+    service.sendAudioChunk(chunk(11));
+    service.sendAudioChunk(chunk(12));
+    vad.emitSpeechStart();
+    expect(wire(socket).slice(-4)).toEqual(["clear", 10, 11, 12]);
+    service.sendAudioChunk(chunk(13));
+
+    socket.simulateClose(1006);
+    const socket2 = await reconnect();
+
+    expect(wire(socket2)).toEqual([10, 11, 12, 13]);
+    service.stop();
+  });
+
+  it("keeps acknowledgements aligned after the cap evicts a whole segment", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const { socket } = await bringSessionReady(service);
+    const vad = latestVadWorker();
+    vad.emitSpeechStart();
+    service.sendAudioChunk(chunk(1));
+    service.sendAudioChunk(chunk(2));
+    vad.emitSpeechEnd();
+    vad.emitSpeechStart();
+    service.sendAudioChunk(chunk(3));
+    service.sendAudioChunk(chunk(4));
+    vad.emitSpeechEnd();
+    vad.emitSpeechStart();
+    // REPLAY_MAX_BYTES holds 300 chunks: 299 more evicts all of the first
+    // segment and the first chunk of the second.
+    for (let i = 0; i < 299; i++) service.sendAudioChunk(chunk(9));
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+
+    socket.simulateClose(1006);
+    const socket2 = await reconnect();
+
+    expect(wire(socket2)).toEqual([4, "commit", ...Array<number>(299).fill(9)]);
+    service.stop();
+  });
+
+  it("keeps the successor's heartbeat armed when a replaced socket closes late", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const { socket: first } = await bringSessionReady(service);
+    const { socket: second } = await bringSessionReady(service);
+    second.respondsToPing = false;
+    first.simulateClose(1000);
+
+    let elapsed = 0;
+    while (second.terminateCalls === 0 && elapsed < 20_000) {
+      service.sendAudioChunk(chunk(1));
+      vi.advanceTimersByTime(100);
+      elapsed += 100;
+    }
+
+    expect(second.terminateCalls).toBe(1);
+    expect(elapsed).toBeLessThanOrEqual(8_000);
+    service.stop();
+  });
+
+  it("keeps the successor's connect timeout armed when a replaced socket closes late", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const errors: string[] = [];
+    service.onEvent((e) => {
+      if (e.type === "error") errors.push(e.error.code);
+    });
+    const { socket: first } = await bringSessionReady(service);
+    void service.start(BASE_SETTINGS);
+    await Promise.resolve();
+    first.simulateClose(1000);
+
+    vi.advanceTimersByTime(10_000);
+    expect(errors).toContain("connection_timeout");
+    service.stop();
+  });
+
+  it("keeps audio whose send threw, through a replay that throws too", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const { socket } = await bringSessionReady(service);
+    latestVadWorker().emitSpeechStart();
+    service.sendAudioChunk(chunk(1));
+    socket.throwOnSend = true;
+    service.sendAudioChunk(chunk(2));
+    socket.simulateClose(1006);
+
+    vi.advanceTimersByTime(1_000);
+    const socket2 = latestInstance();
+    socket2.simulateOpen();
+    socket2.throwOnSend = true;
+    socket2.simulateMessage("session.updated");
+    socket2.simulateClose(1006);
+
+    const socket3 = await reconnect();
+    expect(wire(socket3)).toEqual([1, 2]);
     service.stop();
   });
 });

@@ -88,7 +88,11 @@ const HELD_COMPLETION_TIMEOUT_MS = 5_000;
 // out since the server was last heard from, a dead socket is swallowing speech,
 // so it pings at once and allows only HEARTBEAT_ACTIVE_TICKS: a drop is noticed
 // within about 6s rather than 20-40s. Any frame from the server counts as an
-// answer, so a busy session is never probed into a false timeout.
+// answer, so a busy session is never probed into a false timeout, and the
+// answer is only awaited once the ping has been written: on a slow uplink it
+// can sit behind seconds of reconnect flush, and writes that keep completing
+// show the socket is alive. Writes that stop completing are the other signal:
+// a dead peer leaves the kernel buffer full.
 const HEARTBEAT_TICK_MS = 2_000;
 const HEARTBEAT_IDLE_TICKS = 10;
 const HEARTBEAT_ACTIVE_TICKS = 2;
@@ -276,12 +280,18 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
 
   // Heartbeat (half-open detection) for the current connection, counted in
   // ticks. `heartbeatLastHeardTick` moves on every pong or server frame;
-  // `heartbeatPingTick` is the outstanding ping, null once answered.
-  // `audioSentSinceHeard` makes an unanswered ping urgent.
+  // `heartbeatPingTick` is the outstanding ping, null once answered, and
+  // `heartbeatPingWrittenTick` when it reached the OS. Audio appends and pings
+  // are counted in `heartbeatPendingWrites` until written, and
+  // `heartbeatWriteProgressTick` is the last time one was.
+  // `audioSentSinceHeard` makes both checks urgent.
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
   private heartbeatTick = 0;
   private heartbeatLastHeardTick = 0;
   private heartbeatPingTick: number | null = null;
+  private heartbeatPingWrittenTick: number | null = null;
+  private heartbeatPendingWrites = 0;
+  private heartbeatWriteProgressTick = 0;
   private audioSentSinceHeard = false;
 
   // Reconnect state. `reconnectAttempt` and `isReconnecting` survive across
@@ -757,19 +767,26 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   }
 
   /**
-   * Starts the heartbeat for one connection. Each tick either waits on the
-   * outstanding ping, terminating once its deadline passes, or sends a new one
-   * when audio has gone out unanswered or the idle interval is up. The deadline
-   * counts from when the ping went out, so later audio or ticks never extend
-   * it; audio does shorten an idle ping's deadline to the active one. The
-   * session-id / socket-identity guard stops a stale interval from terminating
-   * a newer connection (lesson #4850).
+   * Starts the heartbeat for one connection. Two checks run each tick, with
+   * the active allowance once audio has gone out unanswered and the idle one
+   * otherwise:
+   * - writes are pending but none has completed within the allowance: the
+   *   kernel buffer is full and draining nowhere, so the peer is gone;
+   * - a ping reached the OS and no answer came within the allowance.
+   * Both clocks start when they become true and later audio never extends
+   * them. A ping still queued behind a large flush isn't judged on its answer,
+   * since a slow uplink that keeps completing writes is alive. The session-id /
+   * socket-identity guard stops a stale interval from terminating a newer
+   * connection (lesson #4850).
    */
   private startHeartbeat(connection: WebSocket, mySessionId: number): void {
     this.clearHeartbeat();
     this.heartbeatTick = 0;
     this.heartbeatLastHeardTick = 0;
     this.heartbeatPingTick = null;
+    this.heartbeatPingWrittenTick = null;
+    this.heartbeatPendingWrites = 0;
+    this.heartbeatWriteProgressTick = 0;
     this.audioSentSinceHeard = false;
     this.heartbeatInterval = setInterval(() => {
       if (this.sessionId !== mySessionId || this.connection !== connection) {
@@ -778,35 +795,74 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       }
       const tick = ++this.heartbeatTick;
       const allowance = this.audioSentSinceHeard ? HEARTBEAT_ACTIVE_TICKS : HEARTBEAT_IDLE_TICKS;
+      if (this.heartbeatPendingWrites > 0 && tick - this.heartbeatWriteProgressTick >= allowance) {
+        this.terminateHalfOpen(
+          connection,
+          "writes stalled",
+          tick - this.heartbeatWriteProgressTick
+        );
+        return;
+      }
       if (this.heartbeatPingTick !== null) {
-        if (tick - this.heartbeatPingTick < allowance) return;
-        logWarn(`${P} Heartbeat: no answer, terminating half-open connection`, {
-          waitedMs: (tick - this.heartbeatPingTick) * HEARTBEAT_TICK_MS,
-          audioUnanswered: this.audioSentSinceHeard,
-        });
-        try {
-          connection.terminate();
-        } catch {
-          // Ignore terminate errors — the close handler drives reconnect.
-        }
+        const written = this.heartbeatPingWrittenTick;
+        if (written === null || tick - written < allowance) return;
+        this.terminateHalfOpen(connection, "no answer", tick - written);
         return;
       }
       if (!this.audioSentSinceHeard && tick - this.heartbeatLastHeardTick < HEARTBEAT_IDLE_TICKS) {
         return;
       }
       this.heartbeatPingTick = tick;
+      this.heartbeatPingWrittenTick = null;
+      const done = this.trackWrite(connection);
       try {
-        connection.ping();
+        connection.ping(undefined, undefined, (err) => {
+          done(err);
+          if (this.connection === connection && this.heartbeatPingTick === tick) {
+            this.heartbeatPingWrittenTick = this.heartbeatTick;
+          }
+        });
       } catch (err) {
+        done();
         logWarn(`${P} Heartbeat ping failed`, { ...voiceErrorLogFields(err) });
       }
     }, HEARTBEAT_TICK_MS);
+  }
+
+  private terminateHalfOpen(connection: WebSocket, reason: string, waitedTicks: number): void {
+    logWarn(`${P} Heartbeat: ${reason}, terminating half-open connection`, {
+      waitedMs: waitedTicks * HEARTBEAT_TICK_MS,
+      pendingWrites: this.heartbeatPendingWrites,
+      audioUnanswered: this.audioSentSinceHeard,
+    });
+    try {
+      connection.terminate();
+    } catch {
+      // Ignore terminate errors — the close handler drives reconnect.
+    }
+  }
+
+  /**
+   * Counts one write until `ws` reports it handed to the OS (or failed), for
+   * the send-stall check. The first pending write starts the stall clock.
+   */
+  private trackWrite(connection: WebSocket): (err?: Error) => void {
+    if (this.heartbeatPendingWrites === 0) this.heartbeatWriteProgressTick = this.heartbeatTick;
+    this.heartbeatPendingWrites++;
+    let settled = false;
+    return () => {
+      if (settled || this.connection !== connection) return;
+      settled = true;
+      this.heartbeatPendingWrites--;
+      this.heartbeatWriteProgressTick = this.heartbeatTick;
+    };
   }
 
   /** Records that the current connection answered: a pong or any server frame. */
   private markHeard(): void {
     this.heartbeatLastHeardTick = this.heartbeatTick;
     this.heartbeatPingTick = null;
+    this.heartbeatPingWrittenTick = null;
     this.audioSentSinceHeard = false;
   }
 
@@ -1257,9 +1313,11 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     this.retainForReplay(chunk);
     this.audioSentSinceHeard = true;
     const audio = Buffer.from(chunk).toString("base64");
+    const done = this.trackWrite(this.connection);
     try {
-      this.connection.send(JSON.stringify({ type: "input_audio_buffer.append", audio }));
+      this.connection.send(JSON.stringify({ type: "input_audio_buffer.append", audio }), done);
     } catch (err) {
+      done();
       // A send can throw if the socket transitioned to CLOSING mid-flush. Don't
       // let it escape the buffer-flush loop (which would leave the buffer in a
       // partially-cleared state) — the trailing `close` event drives reconnect.
@@ -1492,6 +1550,8 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     this.connection = null;
     this.isReady = false;
     this.heartbeatPingTick = null;
+    this.heartbeatPingWrittenTick = null;
+    this.heartbeatPendingWrites = 0;
     this.audioSentSinceHeard = false;
     this.bytesSinceCommit = 0;
     this.pendingCommits = 0;
