@@ -15,12 +15,6 @@ vi.mock("electron", () => ({
   BrowserWindow: { fromWebContents: vi.fn(() => null) },
 }));
 
-// The live-session report goes to every app view; these tests have none.
-vi.mock("../../../window/webContentsRegistry.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../window/webContentsRegistry.js")>()),
-  getAllAppWebContents: vi.fn(() => []),
-}));
-
 // ── Shared state container for mocks ───────────────────────────────────────
 type MockTranscriptionEvent = {
   type: string;
@@ -133,9 +127,14 @@ vi.mock("../../../services/ProjectStore.js", () => ({
   },
 }));
 
+// The live-session report goes to every app view; these tests have none.
 vi.mock("../../../window/webContentsRegistry.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../window/webContentsRegistry.js")>();
-  return { ...actual, getProjectForWebContents: vi.fn(() => shared.viewProjectId) };
+  return {
+    ...actual,
+    getAllAppWebContents: vi.fn(() => []),
+    getProjectForWebContents: vi.fn(() => shared.viewProjectId),
+  };
 });
 
 // The real module's pure helpers (the names screen) stay; only assembly is faked.
