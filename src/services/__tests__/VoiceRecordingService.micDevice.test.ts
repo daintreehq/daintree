@@ -143,6 +143,7 @@ interface Harness {
   status: { emit: (status: string) => void };
   delta: { emit: (text: string) => void };
   settings: { deviceId: string };
+  playUiEvent: ReturnType<typeof vi.fn>;
 }
 
 function setupGlobals(options: {
@@ -189,9 +190,11 @@ function setupGlobals(options: {
     stop: vi.fn().mockResolvedValue(undefined),
   };
 
+  const playUiEvent = vi.fn().mockResolvedValue(undefined);
   vi.stubGlobal("window", {
     electron: {
       voiceInput,
+      notification: { playUiEvent },
       systemSleep: { onSuspend: vi.fn(() => () => {}), onWake: vi.fn(() => () => {}) },
     },
     addEventListener: vi.fn(),
@@ -281,6 +284,7 @@ function setupGlobals(options: {
     status: { emit: (status) => statusCallback?.({ status }) },
     delta: { emit: (text) => deltaCallback?.({ text }) },
     settings,
+    playUiEvent,
   };
 }
 
@@ -774,18 +778,9 @@ describe("VoiceRecordingService — dictation sound cues (#14627)", () => {
     vi.restoreAllMocks();
   });
 
-  function withCues(harness: Harness) {
-    const playUiEvent = vi.fn().mockResolvedValue(undefined);
-    (window as unknown as { electron: Record<string, unknown> }).electron.notification = {
-      playUiEvent,
-    };
-    void harness;
-    return playUiEvent;
-  }
-
   it("cues the start when audio reaches the mic, not on key press, and the stop once capture is closed", async () => {
     const harness = setupGlobals({ tracks: [BUILT_IN] });
-    const playUiEvent = withCues(harness);
+    const { playUiEvent } = harness;
     const { service } = await load();
 
     await service.start(TARGET);
@@ -803,7 +798,7 @@ describe("VoiceRecordingService — dictation sound cues (#14627)", () => {
 
   it("stays silent when the session is stopped before the mic went live", async () => {
     const harness = setupGlobals({ tracks: [BUILT_IN] });
-    const playUiEvent = withCues(harness);
+    const { playUiEvent } = harness;
     const { service } = await load();
 
     await service.start(TARGET);
@@ -813,9 +808,9 @@ describe("VoiceRecordingService — dictation sound cues (#14627)", () => {
     expect(playUiEvent).not.toHaveBeenCalled();
   });
 
-  it("cues a failure, and only it, when the mic is lost mid-dictation", async () => {
+  it("cues a failure, and not a stop, when the mic is lost mid-dictation", async () => {
     const harness = setupGlobals({ tracks: [BUILT_IN] });
-    const playUiEvent = withCues(harness);
+    const { playUiEvent } = harness;
     const { store, service } = await load();
 
     await service.start(TARGET);
@@ -831,7 +826,7 @@ describe("VoiceRecordingService — dictation sound cues (#14627)", () => {
 
   it("cues a failure when the mic was lost before the session began", async () => {
     const harness = setupGlobals({ tracks: [BUILT_IN] });
-    const playUiEvent = withCues(harness);
+    const { playUiEvent } = harness;
     harness.getUserMedia.mockImplementationOnce(async () => {
       const track = createTrack("MacBook Pro Microphone", "builtin");
       track.readyState = "ended";
