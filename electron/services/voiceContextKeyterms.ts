@@ -12,6 +12,7 @@ import { MAX_DICTIONARY_KEYTERMS, MAX_KEYTERMS } from "../../shared/config/voice
 const P = "[VoiceKeyterms]";
 
 const TERMINAL_TIER_CAP = 30;
+const PROJECT_TIER_CAP = 4;
 // Deepgram nova-3 rejects any keyterm longer than 100 chars with an HTTP 400
 // that fails the WebSocket upgrade, so cap every term at the source.
 const MAX_KEYTERM_LENGTH = 100;
@@ -390,14 +391,20 @@ export async function assembleKeyterms(opts: KeytermAssemblyOpts): Promise<strin
     }
   }
 
-  // Priority 2: Project name tokens
+  // Priority 2: Project name tokens. Bounded so a long project name can't use
+  // every reserved slot and leave none for branch tokens.
   if (projectName && !holdsCredentialOrId(projectName)) {
+    let projectAdded = 0;
+    const addProject = (term: string): void => {
+      if (projectAdded >= PROJECT_TIER_CAP) return;
+      if (add(term)) projectAdded++;
+    };
     const trimmed = projectName.trim();
     if (trimmed.length >= 2 && !/^\d+$/.test(trimmed) && !isSecretShaped(trimmed)) {
-      add(trimmed);
+      addProject(trimmed);
     }
     for (const token of tokenizeProjectName(projectName)) {
-      add(token);
+      addProject(token);
     }
   }
 

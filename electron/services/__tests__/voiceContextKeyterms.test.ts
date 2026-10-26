@@ -235,6 +235,17 @@ describe("assembleKeyterms", () => {
     expect(result).not.toContain(`customTerm${99 - MAX_DICTIONARY_KEYTERMS}`);
   });
 
+  it("bounds project tokens so branch tokens still get reserved slots", async () => {
+    const dictionary = Array.from({ length: 100 }, (_, i) => `customTerm${i}`);
+    const result = await assembleKeyterms({
+      customDictionary: dictionary,
+      projectName: "Alpha Bravo Charlie Delta Echo Foxtrot Gamma Hotel",
+      projectPath: "/tmp/p",
+    });
+    expect(result).toContain("service");
+    expect(result.length).toBeLessThanOrEqual(MAX_KEYTERMS);
+  });
+
   it("keeps slots for project and branch tokens however large the dictionary", async () => {
     const dictionary = Array.from({ length: 100 }, (_, i) => `customTerm${i}`);
     const result = await assembleKeyterms({

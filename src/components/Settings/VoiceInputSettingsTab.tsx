@@ -1243,9 +1243,7 @@ function DictionaryGroup({
         label="Terms"
         description={
           words.length > 0
-            ? words.length > MAX_DICTIONARY_KEYTERMS
-              ? `${words.length} terms. The newest ${MAX_DICTIONARY_KEYTERMS} are sent with each dictation`
-              : `${words.length} ${words.length === 1 ? "term" : "terms"}, all sent with each dictation`
+            ? `${words.length} ${words.length === 1 ? "term" : "terms"}. Up to the newest ${MAX_DICTIONARY_KEYTERMS} are sent with each dictation`
             : "Add product names, APIs or jargon the transcription keeps getting wrong"
         }
         layout="stacked"
