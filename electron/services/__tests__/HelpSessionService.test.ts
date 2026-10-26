@@ -204,6 +204,13 @@ async function makeBundledHelpFolder(root: string): Promise<string> {
   );
   await fs.writeFile(path.join(helpDir, "CLAUDE.md"), "# Help");
   await fs.writeFile(path.join(helpDir, "AGENTS.md"), "# Agents Help");
+  await fs.mkdir(path.join(helpDir, "global"));
+  for (const name of ["CLAUDE.md", "AGENTS.md"]) {
+    await fs.writeFile(
+      path.join(helpDir, "global", name),
+      "# Global Help\n\n<!-- DAINTREE_RUNBOOKS_START -->\n<!-- DAINTREE_RUNBOOKS_END -->\n\nRoute through host.call.\n"
+    );
+  }
   return helpDir;
 }
 
@@ -4890,7 +4897,11 @@ describe("HelpSessionService", () => {
     async function expectedTemplateHash(folder: string): Promise<string> {
       const entries = await fs.readdir(folder, { recursive: true, withFileTypes: true });
       const files = entries
-        .filter((entry) => entry.isFile())
+        .filter(
+          (entry) =>
+            entry.isFile() &&
+            path.relative(folder, entry.parentPath).split(path.sep)[0] !== "global"
+        )
         .map((entry) => ({
           absolute: path.join(entry.parentPath, entry.name),
           relative: path
@@ -5435,6 +5446,59 @@ describe("HelpSessionService", () => {
       expect(content).not.toContain("Forge remote");
     });
   });
+  describe("global assistant instructions (#14546)", () => {
+    const globalInput = () => ({
+      projectId: GLOBAL_ASSISTANT_ID,
+      projectPath: "/tmp/global-assistant",
+      agentId: "claude",
+      windowId: NO_VIEW_HANDLE,
+      projectViewWebContentsId: NO_VIEW_HANDLE,
+      global: true as const,
+    });
+
+    it.each(["CLAUDE.md", "AGENTS.md"])(
+      "writes its own %s with no project block or confirmations note",
+      async (file) => {
+        mockStoreGet.mockImplementation((key: string) =>
+          key === "agentSettings" ? { globalSkipPermissions: true } : {}
+        );
+        const result = await service.provisionSession(globalInput());
+        if (!result) throw new Error("expected result");
+
+        const content = await fs.readFile(path.join(result.sessionPath, file), "utf-8");
+        expect(content).toContain("Route through host.call.");
+        expect(content).not.toContain("DAINTREE_PROJECT_METADATA");
+        expect(content).not.toContain("DAINTREE_CONFIRMATIONS");
+        expect(content).not.toContain("# Help");
+        await expect(fs.stat(path.join(result.sessionPath, "global"))).rejects.toThrow();
+      }
+    );
+
+    it("corrects a folder an older build provisioned with the project text", async () => {
+      const first = await service.provisionSession(globalInput());
+      if (!first) throw new Error("expected result");
+      const claudePath = path.join(first.sessionPath, "CLAUDE.md");
+      await fs.writeFile(
+        claudePath,
+        "# Help\n\n<!-- DAINTREE_PROJECT_METADATA_START -->\nold\n<!-- DAINTREE_PROJECT_METADATA_END -->\n"
+      );
+
+      await service.provisionSession(globalInput());
+      const content = await fs.readFile(claudePath, "utf-8");
+      expect(content).toContain("Route through host.call.");
+      expect(content).not.toContain("DAINTREE_PROJECT_METADATA");
+    });
+
+    it("leaves a project session's files as the template", async () => {
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+      const content = await fs.readFile(path.join(result.sessionPath, "CLAUDE.md"), "utf-8");
+      expect(content).toContain("# Help");
+      expect(content).not.toContain("Route through host.call.");
+      await expect(fs.stat(path.join(result.sessionPath, "global"))).rejects.toThrow();
+    });
+  });
+
   describe("confirmations note (#12874)", () => {
     const START = "<!-- DAINTREE_CONFIRMATIONS_START -->";
     const storeWith =

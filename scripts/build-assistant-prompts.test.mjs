@@ -560,3 +560,30 @@ describe("build-assistant-prompts script integration", () => {
     expect(missing.stderr).toContain("missing generated file");
   });
 });
+
+describe("global assistant prompts (#14546)", () => {
+  const GLOBAL = [
+    ["global/CLAUDE.md", readFileSync(path.join(root, "assistant/global/CLAUDE.md"), "utf8")],
+    ["global/AGENTS.md", readFileSync(path.join(root, "assistant/global/AGENTS.md"), "utf8")],
+  ];
+
+  it.each(GLOBAL)("%s carries the routing guidance and its four tools", (_name, body) => {
+    for (const tool of [
+      "host.list",
+      "host.call",
+      "host.settings",
+      "host.watch",
+      "actions.search",
+    ]) {
+      expect(body).toContain(tool);
+    }
+    expect(body).toContain("<!-- DAINTREE_RUNBOOKS_START -->");
+  });
+
+  it.each(GLOBAL)("%s omits the project assistant's direct-call text", (_name, body) => {
+    expect(body).not.toContain("## Common Tasks");
+    expect(body).not.toContain("agent.launch({");
+    expect(body).not.toContain("worktreeId?");
+    expect(body).not.toContain("Daintree Confirmations");
+  });
+});
