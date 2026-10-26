@@ -2,9 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   extractProtectedSpans,
   findProtectedRanges,
-  validateCorrection,
-  validateRewrite,
-} from "../voiceCorrectionGuard.js";
+} from "../../../shared/utils/voiceProtectedSpans.js";
+import { validateCorrection, validateRewrite } from "../voiceCorrectionGuard.js";
 import { CORE_CORRECTION_PROMPT } from "../../../shared/config/voiceCorrection.js";
 import { DICTATED_PROMPTS } from "./fixtures/dictatedPrompts.js";
 
