@@ -270,6 +270,21 @@ describe("CanopyView role filter", () => {
     );
   });
 
+  it("counts only workers in the header until assistants rank with them (#14519)", async () => {
+    directory.entries = [
+      assistant(0, { waitingReason: "question" }),
+      assistant(1, { waitingReason: "approval" }),
+    ];
+    render(<CanopyView />);
+    await settle();
+    expect(assistantRows().map((row) => row.getAttribute("data-ask"))).toEqual([
+      "question",
+      "approval",
+    ]);
+    const header = document.querySelector("[data-testid=canopy-dialog]")!.textContent ?? "";
+    expect(header).toContain("1 agent needs you");
+  });
+
   it("never hands an assistant to the reader: not shown, searched or seen as a worker", async () => {
     const canopy = installElectron();
     render(<CanopyView />);
