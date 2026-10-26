@@ -134,6 +134,61 @@ describe("OpenAI VAD process shutdown", () => {
   });
 });
 
+describe("OpenAI VAD audio while the model loads", () => {
+  it("analyses audio that arrived during the load, in order, once the model is ready", async () => {
+    const vad = model();
+    const loading = deferred<typeof vad>();
+    mocks.create.mockReturnValue(loading.promise);
+    await loadWorker();
+    await vi.waitFor(() => expect(mocks.create).toHaveBeenCalledTimes(1));
+    send({ type: "audio", pcm: new Int16Array([16384]).buffer });
+    send({ type: "audio", pcm: new Int16Array([-16384]).buffer });
+    await Promise.resolve();
+    expect(vad.processAudio).not.toHaveBeenCalled();
+
+    loading.resolve(vad);
+    await vi.waitFor(() => expect(vad.processAudio).toHaveBeenCalledTimes(2));
+    const frames = vad.processAudio.mock.calls.map((call) => Array.from(call[0] as Float32Array));
+    expect(frames).toEqual([[0.5], [-0.5]]);
+    expect(vad.start.mock.invocationCallOrder[0]).toBeLessThan(
+      vad.processAudio.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it("holds no more than the provider's connect buffer while the load is outstanding", async () => {
+    const { AUDIO_BUFFER_MAX_CHUNKS } = await import("../TranscriptionProvider.js");
+    const vad = model();
+    const loading = deferred<typeof vad>();
+    mocks.create.mockReturnValue(loading.promise);
+    await loadWorker();
+    await vi.waitFor(() => expect(mocks.create).toHaveBeenCalledTimes(1));
+    for (let i = 0; i < AUDIO_BUFFER_MAX_CHUNKS + 5; i++) {
+      send({ type: "audio", pcm: new ArrayBuffer(2) });
+    }
+    loading.resolve(vad);
+    await vi.waitFor(() => expect(vad.processAudio).toHaveBeenCalledTimes(AUDIO_BUFFER_MAX_CHUNKS));
+    // Once loaded, audio is analysed as it comes.
+    send({ type: "audio", pcm: new ArrayBuffer(2) });
+    await vi.waitFor(() =>
+      expect(vad.processAudio).toHaveBeenCalledTimes(AUDIO_BUFFER_MAX_CHUNKS + 1)
+    );
+  });
+
+  it("never analyses held audio when destroy lands before the model loads", async () => {
+    const vad = model();
+    const loading = deferred<typeof vad>();
+    mocks.create.mockReturnValue(loading.promise);
+    await loadWorker();
+    await vi.waitFor(() => expect(mocks.create).toHaveBeenCalledTimes(1));
+    send({ type: "audio", pcm: new ArrayBuffer(1024) });
+    send({ type: "destroy" });
+    loading.resolve(vad);
+    await vi.waitFor(() => expect(exitSpy).toHaveBeenCalledWith(0));
+    expect(vad.processAudio).not.toHaveBeenCalled();
+    expect(vad.destroy).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("OpenAI VAD process failures", () => {
   it("reports a native load failure as an error message instead of failing the entry", async () => {
     vi.doMock("avr-vad", () => {

@@ -20,6 +20,7 @@
  */
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import type { VadWorkerInbound, VadWorkerOutbound } from "./openaiVadWorkerProtocol.js";
+import { AUDIO_BUFFER_MAX_CHUNKS } from "./TranscriptionProvider.js";
 
 interface VadParentPort {
   on(event: "message", listener: (event: { data: VadWorkerInbound }) => void): void;
@@ -85,11 +86,12 @@ function pcm16ToFloat32(pcm: ArrayBuffer): Float32Array {
 type RealTimeVADInstance = Awaited<ReturnType<RealTimeVADClass["new"]>>;
 
 let vad: RealTimeVADInstance | null = null;
-// Serializes processAudio() calls — avr-vad mutates an internal buffer per call,
-// so overlapping awaits would corrupt frame boundaries. Audio messages chain
-// onto this promise in arrival order.
-let processChain: Promise<void> = Promise.resolve();
 let destroyed = false;
+// Chunks that arrived before the model finished loading. The provider starts
+// this process as the socket starts connecting and feeds it from the first
+// chunk, so the opening speech is analysed rather than dropped; the cap matches
+// the provider's own connect buffer, in case the load hangs.
+let chunksWhileLoading = 0;
 
 async function init(): Promise<void> {
   try {
@@ -120,6 +122,12 @@ async function init(): Promise<void> {
   }
 }
 
+const initialization = init();
+// Serializes processAudio() calls — avr-vad mutates an internal buffer per call,
+// so overlapping awaits would corrupt frame boundaries. Audio messages chain
+// onto this promise in arrival order, behind the model load.
+let processChain: Promise<void> = initialization;
+
 port.on("message", ({ data: message }) => {
   if (message.type === "destroy") {
     if (destroyed) return;
@@ -147,7 +155,11 @@ port.on("message", ({ data: message }) => {
   }
 
   if (message.type === "audio") {
-    if (destroyed || !vad) return;
+    if (destroyed) return;
+    if (!vad) {
+      if (chunksWhileLoading >= AUDIO_BUFFER_MAX_CHUNKS) return;
+      chunksWhileLoading++;
+    }
     const frame = pcm16ToFloat32(message.pcm);
     processChain = processChain
       .then(() => (!destroyed && vad ? vad.processAudio(frame) : undefined))
@@ -156,5 +168,3 @@ port.on("message", ({ data: message }) => {
       });
   }
 });
-
-const initialization = init();
