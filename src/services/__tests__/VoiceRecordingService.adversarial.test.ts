@@ -746,6 +746,12 @@ describe("VoiceRecordingService adversarial", () => {
     });
 
     it("releases the mic and keeps the drained text when a start elsewhere replaces it (#14600)", async () => {
+      // With correction off, any stop that isn't skipping it records a baseline.
+      runtime.voiceInput.getSettings.mockResolvedValue({
+        enabled: true,
+        openaiApiKey: "sk-key",
+        correctionEnabled: false,
+      });
       const drain = deferred<void>();
       runtime.stopQueue.push(drain.promise);
 
@@ -761,13 +767,15 @@ describe("VoiceRecordingService adversarial", () => {
       expect(runtime.createdStreams[0]!.track.stop).toHaveBeenCalled();
       expect(runtime.voiceFns.finishSession).not.toHaveBeenCalled();
 
-      // The drain's last words still reach this view's draft.
+      // The drain's last words still reach this view's draft, and so does the
+      // interim text still showing when it ends.
       emitComplete("Last words");
+      runtime.voiceState.panelBuffers["panel-1"]!.liveText = "and then";
       drain.resolve();
       await vi.waitFor(() => {
         expect(runtime.voiceFns.finishSession).toHaveBeenCalledTimes(1);
       });
-      expect(runtime.drafts["panel-1"]).toBe("Last words");
+      expect(runtime.drafts["panel-1"]).toBe("Last words and then");
       expect(runtime.voiceFns.finishSession).toHaveBeenCalledWith(
         expect.objectContaining({ nextStatus: "idle" })
       );

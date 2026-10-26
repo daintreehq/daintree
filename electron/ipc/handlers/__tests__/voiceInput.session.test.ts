@@ -35,6 +35,8 @@ const shared = vi.hoisted(() => ({
   drain: null as null | Promise<void>,
   /** Settles a deferred drain, as the real provider's stop() does. */
   endDrain: null as null | (() => void),
+  /** Every signal the correction service was bound to, in order. */
+  signals: [] as Array<AbortSignal | null>,
   assembleKeyterms: null as null | (() => Promise<string[]>),
   /** Project registered per sender id, as the view registry would answer. */
   projects: new Map<number, string>(),
@@ -73,7 +75,9 @@ vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
 
 vi.mock("../../../services/VoiceCorrectionService.js", () => ({
   VoiceCorrectionService: function VoiceCorrectionService(this: Record<string, unknown>) {
-    this.setSessionSignal = function () {};
+    this.setSessionSignal = function (signal: AbortSignal | null) {
+      shared.signals.push(signal);
+    };
   },
 }));
 
@@ -188,6 +192,9 @@ function emit(event: ServiceEvent, sessionId = shared.providerSessionId ?? undef
   for (const listener of [...shared.listeners]) listener({ ...event, sessionId });
 }
 
+// Lets a pending start run through its preparation to wherever it waits.
+const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
 function deferKeyterms() {
   let resolve!: (terms: string[]) => void;
   const promise = new Promise<string[]>((r) => {
@@ -227,6 +234,7 @@ describe("voiceInput — session identity", () => {
     shared.startResult = { ok: true };
     shared.drain = null;
     shared.endDrain = null;
+    shared.signals = [];
     shared.assembleKeyterms = null;
     shared.projects.clear();
     owners.clear();
@@ -424,6 +432,7 @@ describe("voiceInput — session identity", () => {
     sendChunk("a", 9);
     sendChunk("b", 2);
     emit({ type: "complete", text: "last words" });
+    await settle();
 
     expect(shared.calls).toEqual(["start:a", "drain"]);
     expect(ended(ownerA)).toEqual([]);
@@ -454,8 +463,9 @@ describe("voiceInput — session identity", () => {
     });
     // A flush from the old owner never reaches the provider it is draining.
     await flush(ownerA, "a");
-    await Promise.resolve();
+    await settle();
     expect(stopped).toBe(false);
+    expect(shared.calls).toEqual(["start:a", "drain"]);
 
     finishDrain();
     await Promise.all([stopping, startingB]);
@@ -467,7 +477,9 @@ describe("voiceInput — session identity", () => {
     await start(ownerA, "a");
     const finishDrain = deferDrain();
     const startingB = start(ownerB, "b");
+    await settle();
     const startingC = start(ownerC, "c");
+    await settle();
     expect(shared.calls).toEqual(["start:a", "drain"]);
 
     finishDrain();
@@ -478,10 +490,54 @@ describe("voiceInput — session identity", () => {
     expect(ended(ownerB)).toEqual([{ sessionId: "b", reason: "superseded" }]);
   });
 
+  it("ends a waiting start and its pending stop when a third start replaces it", async () => {
+    const ownerC = makeSender();
+    await start(ownerA, "a");
+    const finishDrain = deferDrain();
+    const startingB = start(ownerB, "b");
+    sendChunk("b", 1);
+    await settle();
+    const stoppingB = stop(ownerB, "b");
+    const startingC = start(ownerC, "c");
+    sendChunk("c", 2);
+
+    // B never reached a provider, so its stop has nothing to drain.
+    await expect(stoppingB).resolves.toEqual({ rawText: null });
+    expect(ended(ownerB)).toEqual([{ sessionId: "b", reason: "superseded" }]);
+    expect(shared.calls).toEqual(["start:a", "drain"]);
+
+    finishDrain();
+    await expect(startingB).resolves.toEqual({ status: "superseded" });
+    await expect(startingC).resolves.toEqual({ status: "started" });
+    expect(shared.calls).toEqual(["start:a", "drain", "start:c", "chunk:2"]);
+  });
+
+  it("binds the new session's correction signal only once the drain hands over", async () => {
+    await start(ownerA, "a");
+    const signalA = shared.signals.at(-1)!;
+    const finishDrain = deferDrain();
+    const startingB = start(ownerB, "b");
+    await settle();
+
+    // A's file-link detection during its drain still runs under A's signal.
+    expect(shared.signals.at(-1)).toBe(signalA);
+    expect(signalA.aborted).toBe(false);
+
+    finishDrain();
+    await startingB;
+    const signalB = shared.signals.at(-1);
+    expect(signalA.aborted).toBe(true);
+    expect(signalB).toBeInstanceOf(AbortSignal);
+    expect(signalB).not.toBe(signalA);
+    expect(signalB?.aborted).toBe(false);
+  });
+
   it("starts the waiting session once a draining view goes away", async () => {
     await start(ownerA, "a");
     deferDrain();
     const startingB = start(ownerB, "b");
+    await settle();
+    expect(shared.calls).toEqual(["start:a", "drain"]);
     ownerA.destroy();
 
     await expect(startingB).resolves.toEqual({ status: "started" });
@@ -493,6 +549,7 @@ describe("voiceInput — session identity", () => {
     await start(ownerA, "a");
     const finishDrain = deferDrain();
     const startingB = start(ownerB, "b");
+    await settle();
     await stop(ownerB, "b");
     finishDrain();
 
@@ -507,7 +564,10 @@ describe("voiceInput — session identity", () => {
     const finishDrain = deferDrain();
     const startingB = start(ownerB, "b");
     sendChunk("b", 1);
+    await settle();
     const stoppingB = stop(ownerB, "b");
+    await settle();
+    expect(shared.calls).toEqual(["start:a", "drain"]);
     finishDrain();
     shared.drain = null;
 
@@ -545,6 +605,7 @@ describe("voiceInput — session identity", () => {
       failDrain = reject;
     });
     const startingB = start(ownerB, "b");
+    await settle();
     failDrain(new Error("socket closed"));
 
     await expect(startingB).resolves.toEqual({ status: "started" });
@@ -556,6 +617,7 @@ describe("voiceInput — session identity", () => {
     await start(ownerA, "a");
     deferDrain();
     const startingB = start(ownerB, "b");
+    await settle();
     cleanup();
 
     expect(ended(ownerA)).toEqual([{ sessionId: "a", reason: "cancelled" }]);
@@ -626,6 +688,7 @@ describe("voiceInput — session identity", () => {
     const stopping = stop(ownerA, "a");
     const startingB = start(ownerB, "b");
     sendChunk("b", 1);
+    await settle();
     expect(shared.calls).toEqual(["start:a", "drain"]);
 
     finishDrain();
