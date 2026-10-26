@@ -2285,7 +2285,8 @@ class VoiceRecordingService {
       // Each utterance met the heard-as rules as it landed; with the whole
       // dictation in, a phrase split across two of them is caught too. Every
       // stop that keeps the text gets this, whether or not correction runs.
-      if (stoppedTarget && this.heardAsRules) {
+      // A rewrite's instruction goes to the model as spoken.
+      if (stoppedTarget && !stoppedTarget.rewrite && this.heardAsRules) {
         this.applyHeardAsRules(stoppedTarget, stoppedSessionId, this.heardAsRules);
       }
 

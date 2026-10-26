@@ -1261,6 +1261,74 @@ describe("voiceInput — context keyterms wiring", () => {
     expect(last?.payload).not.toHaveProperty("heard");
   });
 
+  it("takes a trailing 'send it' before the rules, so a rule never eats the send", async () => {
+    const { store } = await import("../../../store.js");
+    vi.mocked(store.get).mockReturnValue({
+      ...providerSettings("openai"),
+      dictionary: [
+        { term: "SendIt", heardAs: ["send it"], source: "manual", addedAt: 1 },
+        { term: "Zustand", heardAs: ["zoo stand"], source: "manual", addedAt: 2 },
+      ],
+    });
+
+    await startFn(fakeEvent, nextSessionId());
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "use zoo stand, send it.",
+      endOfSpeech: true,
+    });
+    emitTranscriptionEvent({ type: "complete", text: "the send it helper", endOfSpeech: true });
+
+    expect(
+      activeSent
+        .filter((m) => m.channel === "voice-input:transcription-complete")
+        .map((m) => m.payload)
+    ).toEqual([
+      {
+        sessionId: currentSessionId,
+        text: "use Zustand",
+        willCorrect: false,
+        heard: "use zoo stand",
+        send: true,
+      },
+      {
+        sessionId: currentSessionId,
+        text: "the SendIt helper",
+        willCorrect: false,
+        heard: "the send it helper",
+      },
+    ]);
+  });
+
+  it("leaves a rewrite instruction's words as spoken", async () => {
+    const { store } = await import("../../../store.js");
+    vi.mocked(store.get).mockReturnValue({
+      ...providerSettings("openai"),
+      dictionary: [{ term: "Zustand", heardAs: ["zoo stand"], source: "manual", addedAt: 1 }],
+    });
+    const handleStart = getHandler("voice-input:start") as (
+      e: unknown,
+      sessionId: string,
+      options: unknown
+    ) => Promise<unknown>;
+
+    await handleStart(fakeEvent, nextSessionId(), { terminalId: "t1", intent: "rewrite" });
+    emitTranscriptionEvent({ type: "complete", text: "say zoo stand instead", itemId: "i1" });
+
+    expect(
+      activeSent
+        .filter((m) => m.channel === "voice-input:transcription-complete")
+        .map((m) => m.payload)
+    ).toEqual([
+      {
+        sessionId: currentSessionId,
+        text: "say zoo stand instead",
+        willCorrect: false,
+        itemId: "i1",
+      },
+    ]);
+  });
+
   it("keeps a code fence spanning lines intact and sends no heard text for it", async () => {
     const { store } = await import("../../../store.js");
     vi.mocked(store.get).mockReturnValue({
