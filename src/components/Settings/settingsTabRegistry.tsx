@@ -780,7 +780,7 @@ export const SETTINGS_REGISTRY = [
     settings: ["privacy", "agentSessionHistory"],
     sectionSettings: {
       "Telemetry & diagnostics": SECTION_SETTINGS.privacy,
-      "Log retention": SECTION_SETTINGS.sessionHistory,
+      "Log retention": SECTION_SETTINGS.privacy,
       "Data folder": SECTION_SETTINGS.privacy,
       "Clear cache": SECTION_SETTINGS.privacy,
       "Reset all app data": SECTION_SETTINGS.privacy,

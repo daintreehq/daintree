@@ -101,6 +101,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "./SettingsGroup";
+import { useSettingsRowOwnerNote } from "@/hooks/useSettingsOwner";
 import { SettingsOwnerTag } from "@/components/Settings/SettingsOwnerTag";
 import { SettingsSection } from "./SettingsSection";
 import { SECTION_SETTINGS } from "@/components/Settings/settingsSectionOwners";
@@ -481,6 +482,7 @@ function restoreUntouched<T extends object>(before: T, afterReset: T, now: T): T
 }
 
 export function ToolbarSettingsTab() {
+  const rowOwnerNote = useSettingsRowOwnerNote();
   const layout = useToolbarPreferencesStore((s) => s.layout);
   const canopyHidden = useCanopyStore((s) => s.mode === "hidden");
   const launcher = useToolbarPreferencesStore((s) => s.launcher);
@@ -1277,7 +1279,10 @@ export function ToolbarSettingsTab() {
       <SettingsGroup id="toolbar-reset" className="scroll-mt-6">
         <SettingsRow
           label="Reset toolbar"
-          description="Restores the default buttons, order and launcher palette options"
+          description={rowOwnerNote(
+            "Restores the default buttons, order and launcher palette options",
+            ...SECTION_SETTINGS.toolbarLayout
+          )}
           control={({ labelId, descriptionId, disabled }) => (
             <Button
               type="button"

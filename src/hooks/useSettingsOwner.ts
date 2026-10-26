@@ -7,7 +7,6 @@ import {
   type SettingPath,
 } from "@shared/config/settingOwnership";
 import { isMac, isWindows } from "@/lib/platform";
-import { useRemoteHostsStore } from "@/store/remoteHostsStore";
 import { currentHostId, isRemoteWindow, useHostPlatform } from "@/hooks/useHostPlatform";
 
 /**
@@ -69,15 +68,15 @@ export function refreshSettingOwnersShown(): void {
 
 let watchingHostList = false;
 
-/** Adding the first host, or removing the last, changes whether owners are shown. */
+/** Adding the first host, removing the last, or switching Host mode (in any window) changes whether owners are shown. */
 function watchHostList(): void {
   if (watchingHostList) return;
   watchingHostList = true;
-  let count = useRemoteHostsStore.getState().hosts.length;
-  useRemoteHostsStore.subscribe((state) => {
-    if (state.hosts.length === count) return;
-    count = state.hosts.length;
-    refreshSettingOwnersShown();
+  window.electron?.remoteHosts?.onEvent?.((event) => {
+    if (event.type === "hosts-changed") refreshSettingOwnersShown();
+  });
+  window.electron?.hostMode?.onEvent?.((event) => {
+    if (event.type === "status-changed") refreshSettingOwnersShown();
   });
 }
 
@@ -119,10 +118,14 @@ export type SettingRef = SettingPath | `storage:${LocalStorageKey}`;
 
 const STORAGE_PREFIX = "storage:";
 
+function isStorageRef(ref: SettingRef): ref is `storage:${LocalStorageKey}` {
+  return ref.startsWith(STORAGE_PREFIX);
+}
+
 export function ownerOfSetting(ref: SettingRef): SettingOwner {
-  return ref.startsWith(STORAGE_PREFIX)
+  return isStorageRef(ref)
     ? rendererStorageOwner(ref.slice(STORAGE_PREFIX.length))
-    : settingOwner(ref as SettingPath);
+    : settingOwner(ref);
 }
 
 /** The one owner a set of settings shares; null when they differ. */

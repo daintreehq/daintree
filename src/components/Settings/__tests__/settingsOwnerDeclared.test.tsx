@@ -130,11 +130,63 @@ describe("the marks the owner issue called wrong", () => {
     expect(owner("projectToolbar")).toBe("host");
   });
 
+  it("puts the whole Notifications page on this machine, with no section of its own", () => {
+    expect(ownerOfSetting("notificationSettings")).toBe("device");
+    expect(ownerForTab("notifications")).toBe("device");
+    expect(SETTINGS_REGISTRY.find((tab) => tab.id === "notifications")).not.toHaveProperty(
+      "sectionSettings"
+    );
+  });
+
   it("keeps the sidebar default view and project theme off the host's mark", () => {
     expect(owner("sidebarDefaultView")).toBe("device");
     expect(owner("projectTheme")).toBe("device");
     expect(ownerForTab("project:plugins")).toBe("host");
     expect(ownerForTab("project:general")).toBe("host");
+  });
+});
+
+describe("the declared settings behind each section", () => {
+  it("resolve to the owner each section's controls really write to", () => {
+    const expected: Record<keyof typeof SECTION_SETTINGS, "host" | "device"> = {
+      systemStatus: "host",
+      updates: "device",
+      startup: "host",
+      openingFolders: "device",
+      keepAwake: "device",
+      backgroundProjects: "host",
+      interfaceElements: "device",
+      quickReference: "device",
+      privacy: "device",
+      sessionHistory: "host",
+      terminalResources: "host",
+      performanceMode: "device",
+      panelLimits: "device",
+      projectViews: "device",
+      agentInput: "device",
+      clipboardImages: "device",
+      twoPaneSplit: "device",
+      gridLayout: "device",
+      scrollback: "device",
+      assistiveTechnology: "device",
+      worktreePathPattern: "host",
+      clientPreferences: "device",
+      toolbarLayout: "device",
+      toolbarAgents: "host",
+      pluginSilences: "host",
+      hardwareAcceleration: "device",
+      logging: "device",
+      developerTools: "device",
+      projectIdentity: "host",
+      projectToolbar: "host",
+      projectTheme: "device",
+      sidebarDefaultView: "device",
+    };
+    for (const [key, owner] of Object.entries(expected)) {
+      expect(sharedSettingOwner(SECTION_SETTINGS[key as keyof typeof SECTION_SETTINGS]), key).toBe(
+        owner
+      );
+    }
   });
 });
 
