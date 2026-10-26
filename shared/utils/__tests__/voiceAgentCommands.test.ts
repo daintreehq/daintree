@@ -104,6 +104,8 @@ describe("rewriteSpokenCommand", () => {
     ["slash prcomments", "/pr-comments"],
     ["Forward slash frontend component a modal", "/frontend:component a modal"],
     ["slash ship it now", "/ship-it now"],
+    ["slash review --force ./src/app.ts", "/review --force ./src/app.ts"],
+    ["Slash review @src/App.tsx and `npm test`", "/review @src/App.tsx and `npm test`"],
   ])("Claude Code: %j → %j", (spoken, written) => {
     expect(rewriteSpokenCommand(spoken, claude)).toBe(written);
   });
@@ -131,6 +133,28 @@ describe("rewriteSpokenCommand", () => {
   ])("leaves %j as words", (text) => {
     expect(rewriteSpokenCommand(text, claude)).toBeNull();
     expect(rewriteSpokenCommand(text, codex)).toBeNull();
+  });
+
+  it("keeps a name two commands share as words", () => {
+    const vocabulary = buildVoiceCommandVocabulary(
+      [custom("claude", "/foo-bar"), custom("claude", "/foobar", { scope: "user" })],
+      sourcesOf("claude")
+    );
+    expect(rewriteSpokenCommand("slash foo bar now", vocabulary)).toBeNull();
+  });
+
+  it("says a prefix the way its source declares", () => {
+    const sources: readonly CompletionSourceConfig[] = [
+      { ...sourcesOf("codex")[1]!, spokenPrefixes: ["skill"] },
+    ];
+    const vocabulary = buildVoiceCommandVocabulary(
+      [custom("codex", "$github", { kind: "plugin" })],
+      sources
+    );
+    expect(rewriteSpokenCommand("skill github open the PR", vocabulary)).toBe(
+      "$github open the PR"
+    );
+    expect(rewriteSpokenCommand("dollar github open the PR", vocabulary)).toBeNull();
   });
 
   it("only writes commands the target has", () => {
@@ -185,10 +209,16 @@ describe("checkVoiceCommandEdit", () => {
     );
   });
 
-  it("rejects a command the dictation never named", () => {
+  it("rejects a command the dictation never asked for", () => {
     expect(checkVoiceCommandEdit("tidy things up a bit", "/compact", claude, true)).toBe(
       "unprompted_command"
     );
+  });
+
+  it("rejects an introduced command that drops or rewrites what followed it", () => {
+    expect(
+      checkVoiceCommandEdit("run the review skill on the auth module", "/review on billing", claude, true)
+    ).toBe("arguments_reformatted");
   });
 
   it("keeps a leading command and its arguments' formatting", () => {
@@ -215,17 +245,20 @@ describe("checkVoiceCommandEdit", () => {
     ).toBeNull();
   });
 
-  // Ordinary sentences that mention command words: a cleanup that turned any
-  // of them into a command it wasn't asked for is caught when it isn't at the
-  // start, or names nothing the dictation said.
+  // Ordinary sentences that mention command words, at the start of a prompt:
+  // a cleanup that turned any of them into a command is thrown out. A sentence
+  // that opens with a bare command name ("compact cars use less space") reads
+  // like an invocation, so telling those apart is the model's job.
   it.each([
-    ["we should review the last commit later", "/review the last commit later", false],
-    ["the compact layout looks off", "/compact layout looks off", false],
-    ["i like that plugin creator idea", "$plugin-creator idea", false],
-  ])("catches %j turned into a command mid-prompt", (raw, corrected, startsPrompt) => {
+    ["the review skill is broken", "/review is broken"],
+    ["we should review the last commit later", "/review the last commit later"],
+    ["explain the compact command", "/compact"],
+    ["don't compact the conversation", "/compact the conversation"],
+    ["the compact layout looks off", "/compact layout looks off"],
+    ["i like that plugin creator idea", "$plugin-creator idea"],
+    ["can you review how the github plugin works", "$github plugin works"],
+  ])("leaves %j as prose", (raw, corrected) => {
     const vocabulary = corrected.startsWith("$") ? codex : claude;
-    expect(checkVoiceCommandEdit(raw, corrected, vocabulary, startsPrompt)).toBe(
-      "unprompted_command"
-    );
+    expect(checkVoiceCommandEdit(raw, corrected, vocabulary, true)).not.toBeNull();
   });
 });

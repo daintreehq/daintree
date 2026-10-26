@@ -161,4 +161,10 @@ export interface CompletionSourceConfig {
   trigger: CompletionTrigger;
   sourcePrecedence: number;
   discovery: CompletionDiscovery;
+  /**
+   * How dictation says this source's prefix, when it isn't one of the
+   * trigger's {@link COMPLETION_TRIGGER_SPOKEN_FORMS} followed by the prefix's
+   * own words.
+   */
+  spokenPrefixes?: readonly string[];
 }

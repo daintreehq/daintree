@@ -58,10 +58,43 @@ const MAX_NAME_WORDS = 6;
 // introduced was named by ("please run the plugin creator skill").
 const MAX_LEAD_WORDS = 8;
 const NON_WORD_RE = /[^\p{L}\p{N}]+/gu;
-const LEADING_SEPARATORS_RE = /^[\s,.;:!?…-]+/u;
 const COMMAND_SHAPED_RE = /^[\p{L}\p{N}][\p{L}\p{N}_:.-]*$/u;
 // Joins a prefix to its name when said aloud: "slash prompts colon deploy".
 const SPOKEN_JOINERS = new Set(["colon"]);
+// What may come before a command's name when it's asked for without its
+// trigger: "please run the review skill", "can you use plugin creator".
+const INVOCATION_LEAD_WORDS = new Set([
+  "please",
+  "can",
+  "could",
+  "would",
+  "you",
+  "lets",
+  "let",
+  "us",
+  "go",
+  "now",
+  "ok",
+  "okay",
+  "run",
+  "use",
+  "invoke",
+  "call",
+  "execute",
+  "trigger",
+  "start",
+  "do",
+  "the",
+  "a",
+  "an",
+  "my",
+  "our",
+]);
+// At least one of these must be among the lead words: "the review skill is
+// broken" mentions a command without asking for it.
+const INVOCATION_VERBS = new Set(["run", "use", "invoke", "call", "execute", "trigger", "start", "do"]);
+// What may sit between the name and its arguments: "run the review skill on…".
+const INVOCATION_NOUNS = new Set(["skill", "command", "plugin", "prompt"]);
 
 function toWords(text: string): string[] {
   return text.toLowerCase().split(NON_WORD_RE).filter(Boolean);
@@ -83,7 +116,9 @@ function sourcePrefix(source: CompletionSourceConfig): string {
   return source.discovery.method === "static" ? source.trigger : source.discovery.derive.labelPrefix;
 }
 
-function spokenPrefixForms(trigger: CompletionTrigger, prefix: string): string[][] {
+function spokenPrefixForms(source: CompletionSourceConfig, prefix: string): string[][] {
+  if (source.spokenPrefixes) return source.spokenPrefixes.map(toWords);
+  const { trigger } = source;
   const tail = toWords(prefix.startsWith(trigger) ? prefix.slice(trigger.length) : prefix);
   return COMPLETION_TRIGGER_SPOKEN_FORMS[trigger].map((form) => [...toWords(form), ...tail]);
 }
@@ -103,7 +138,7 @@ export function buildVoiceCommandVocabulary(
   for (const source of sources) {
     const prefix = sourcePrefix(source);
     if (!prefix || prefixes.some((known) => known.prefix === prefix)) continue;
-    const entry = { prefix, spoken: spokenPrefixForms(source.trigger, prefix) };
+    const entry = { prefix, spoken: spokenPrefixForms(source, prefix) };
     prefixes.push(entry);
     const forTrigger = prefixesByTrigger.get(source.trigger) ?? [];
     forTrigger.push(entry);
@@ -189,10 +224,13 @@ function matchName(
       .map((span) => span.word)
       .join("");
     if (!key) continue;
-    const entry = vocabulary.entries.find(
+    const matches = vocabulary.entries.filter(
       (candidate) => candidate.prefix === prefix.prefix && candidate.key === key
     );
-    if (entry) return { entry, end: words[skip + count - 1]!.end };
+    // `foo-bar` and `foobar` sound the same; guessing between them would
+    // write a command nobody asked for.
+    if (matches.length > 1) return null;
+    if (matches[0]) return { entry: matches[0], end: words[skip + count - 1]!.end };
   }
   return null;
 }
@@ -213,7 +251,8 @@ export function rewriteSpokenCommand(
     for (const nameStart of matchPrefix(trimmed, prefix)) {
       const match = matchName(trimmed, nameStart, prefix, vocabulary);
       if (!match) continue;
-      const rest = trimmed.slice(match.end).replace(LEADING_SEPARATORS_RE, "");
+      // The arguments are copied as said: `--force` and `./src` keep every character.
+      const rest = trimmed.slice(match.end).trimStart();
       return rest ? `${match.entry.token} ${rest}` : match.entry.token;
     }
   }
@@ -249,49 +288,48 @@ function knownToken(token: string, vocabulary: VoiceCommandVocabulary): VoiceCom
   return vocabulary.entries.find((entry) => entry.token === token) ?? null;
 }
 
-/** Whether the opening words of `raw` name `entry` ("run the review skill"). */
-function namesCommand(raw: string, entry: VoiceCommandEntry): boolean {
-  const words = toWords(raw).slice(0, MAX_LEAD_WORDS);
-  for (let start = 0; start < words.length; start++) {
+/**
+ * Where the arguments start in `raw` when its opening words ask for `entry`
+ * ("compact the conversation", "please run the review skill on…"), else -1.
+ */
+function invocationArgumentsStart(raw: string, entry: VoiceCommandEntry): number {
+  const words = toWords(raw);
+  const limit = Math.min(MAX_LEAD_WORDS, words.length);
+  for (let start = 0; start < limit; start++) {
+    const lead = words.slice(0, start);
+    if (!lead.every((word) => INVOCATION_LEAD_WORDS.has(word))) return -1;
+    if (lead.length > 0 && !lead.some((word) => INVOCATION_VERBS.has(word))) continue;
     let joined = "";
     for (let end = start; end < words.length && joined.length < entry.key.length; end++) {
       joined += words[end];
-      if (joined === entry.key) return true;
+      if (joined !== entry.key) continue;
+      let next = end + 1;
+      if (INVOCATION_NOUNS.has(words[next] ?? "")) next++;
+      return next;
     }
   }
-  return false;
+  return -1;
 }
 
-function punctuationCount(text: string): number {
-  return text.match(/[.,;:!?…]/gu)?.length ?? 0;
-}
-
-/** Whether `corrected` recased a word of `raw` or punctuated inside it. */
-function reformatsArguments(raw: string, corrected: string): boolean {
-  if (punctuationCount(corrected) > punctuationCount(raw)) return true;
-  const rawWords = new Map<string, Set<string>>();
-  for (const word of raw.split(/\s+/u).filter(Boolean)) {
-    const forms = rawWords.get(word.toLowerCase()) ?? new Set<string>();
-    forms.add(word);
-    rawWords.set(word.toLowerCase(), forms);
+function isSubsequence(needle: readonly string[], haystack: readonly string[]): boolean {
+  let found = 0;
+  for (const value of haystack) {
+    if (found < needle.length && value === needle[found]) found++;
   }
-  return corrected
-    .split(/\s+/u)
-    .filter(Boolean)
-    .some((word) => {
-      const forms = rawWords.get(word.toLowerCase());
-      return forms !== undefined && !forms.has(word);
-    });
+  return found === needle.length;
 }
+
+const splitWords = (text: string) => text.split(/\s+/u).filter(Boolean);
 
 export type VoiceCommandEditRejection =
   "command_changed" | "arguments_reformatted" | "unknown_command" | "unprompted_command";
 
 /**
  * Checks a cleanup's handling of commands. A command `raw` opens with comes
- * back exactly, with its arguments neither recased nor punctuated. A command
- * cleanup introduces must be one the target has, may open only the prompt
- * itself, and must have been named in the dictation's opening words.
+ * back exactly, and its arguments may only lose words, never be recased,
+ * respelled or punctuated. A command cleanup introduces must be one the target
+ * has, may open only the prompt itself, must have been asked for by the
+ * dictation's opening words, and keeps the words that followed them.
  */
 export function checkVoiceCommandEdit(
   raw: string,
@@ -302,11 +340,15 @@ export function checkVoiceCommandEdit(
   if (vocabulary.prefixes.length === 0) return null;
   const rawLead = leadingCommandWord(raw, vocabulary);
   const correctedLead = leadingCommandWord(corrected, vocabulary);
+  const argumentsOf = (text: string, token: string) => text.trim().slice(token.length);
 
   if (rawLead && knownToken(rawLead, vocabulary)) {
     if (correctedLead !== rawLead) return "command_changed";
-    const args = (text: string) => text.trim().slice(rawLead.length);
-    return reformatsArguments(args(raw), args(corrected)) ? "arguments_reformatted" : null;
+    const kept = isSubsequence(
+      splitWords(argumentsOf(corrected, rawLead)),
+      splitWords(argumentsOf(raw, rawLead))
+    );
+    return kept ? null : "arguments_reformatted";
   }
 
   if (!correctedLead || correctedLead === rawLead) return null;
@@ -317,6 +359,12 @@ export function checkVoiceCommandEdit(
   if (!prefix || !COMMAND_SHAPED_RE.test(correctedLead.slice(prefix.prefix.length))) return null;
   const entry = knownToken(correctedLead, vocabulary);
   if (!entry) return "unknown_command";
-  if (!startsPrompt || !namesCommand(raw, entry)) return "unprompted_command";
-  return null;
+  if (!startsPrompt) return "unprompted_command";
+  const argumentsStart = invocationArgumentsStart(raw, entry);
+  if (argumentsStart < 0) return "unprompted_command";
+  const kept = isSubsequence(
+    toWords(argumentsOf(corrected, correctedLead)),
+    toWords(raw).slice(argumentsStart)
+  );
+  return kept ? null : "arguments_reformatted";
 }
