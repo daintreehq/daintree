@@ -132,7 +132,7 @@ export const RunGenerationArgSchema = z
   .int()
   .min(0)
   .optional()
-  .describe("The run you read: its assistant.list generation or host.list incarnation.");
+  .describe("Run you read: assistant-listing generation or host-listing incarnation.");
 
 /** Refusal codes the global Assistant's steer of a worker answers with (#14551). */
 export const WORKER_STEER_REFUSALS = {
