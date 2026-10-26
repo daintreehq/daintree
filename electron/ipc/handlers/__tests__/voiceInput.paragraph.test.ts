@@ -349,26 +349,54 @@ describe("voiceInput — spoken-command paragraphing", () => {
     ]);
   });
 
-  it("strips a trailing 'new paragraph' command and emits only the prefix as one complete", () => {
-    // applyDictationCommands turns "hello new paragraph" into "hello\n\n";
-    // the handler's split + filter(Boolean) drops the trailing empty part,
-    // so a single complete fires with no paragraph-boundary.
+  const dictated = () =>
+    win.__sent.filter(
+      (m) =>
+        m.channel === "voice-input:transcription-complete" ||
+        m.channel === "voice-input:paragraph-boundary"
+    );
+
+  it("emits the prefix then a boundary for a trailing 'new paragraph'", () => {
     emitTranscriptionEvent({ type: "complete", text: "hello new paragraph" });
 
-    const completes = win.__sent.filter((m) => m.channel === "voice-input:transcription-complete");
-    const boundaries = win.__sent.filter((m) => m.channel === "voice-input:paragraph-boundary");
-    expect(completes).toHaveLength(1);
-    expect(completes[0]?.payload).toEqual({ text: "hello", willCorrect: false });
-    expect(boundaries).toHaveLength(0);
+    expect(dictated()).toEqual([
+      {
+        channel: "voice-input:transcription-complete",
+        payload: { text: "hello", willCorrect: false },
+      },
+      { channel: "voice-input:paragraph-boundary", payload: { rawText: null, correctionId: null } },
+    ]);
   });
 
-  it("emits nothing when the utterance is just a paragraph command", () => {
-    emitTranscriptionEvent({ type: "complete", text: "new paragraph" });
+  it("emits the prefix then a boundary for a trailing 'new line'", () => {
+    emitTranscriptionEvent({ type: "complete", text: "fix the bug new line" });
 
-    const completes = win.__sent.filter((m) => m.channel === "voice-input:transcription-complete");
-    const boundaries = win.__sent.filter((m) => m.channel === "voice-input:paragraph-boundary");
-    expect(completes).toHaveLength(0);
-    expect(boundaries).toHaveLength(0);
+    expect(dictated()).toEqual([
+      {
+        channel: "voice-input:transcription-complete",
+        payload: { text: "fix the bug", willCorrect: false },
+      },
+      { channel: "voice-input:paragraph-boundary", payload: { rawText: null, correctionId: null } },
+    ]);
+  });
+
+  it("emits only a boundary when the utterance is just a paragraph command", () => {
+    emitTranscriptionEvent({ type: "complete", text: "New paragraph." });
+
+    expect(dictated()).toEqual([
+      { channel: "voice-input:paragraph-boundary", payload: { rawText: null, correctionId: null } },
+    ]);
+  });
+
+  it("keeps spoken punctuation words literal", () => {
+    emitTranscriptionEvent({ type: "complete", text: "What's the retention period" });
+
+    expect(dictated()).toEqual([
+      {
+        channel: "voice-input:transcription-complete",
+        payload: { text: "What's the retention period", willCorrect: false },
+      },
+    ]);
   });
 
   it("forwards deltas as { text, itemId } envelopes", () => {
@@ -404,14 +432,14 @@ describe("voiceInput — spoken-command paragraphing", () => {
     expect(completes.map((m) => m.payload)).toEqual([
       { text: "", willCorrect: false, itemId: "item-A" },
     ]);
-    expect(boundaries).toHaveLength(0);
+    expect(boundaries).toHaveLength(1);
   });
 
-  it("rewrites a trailing 'period' command into '.' on the emitted text", () => {
+  it("leaves a trailing 'period' literal on the emitted text", () => {
     emitTranscriptionEvent({ type: "complete", text: "hello period" });
 
     const complete = win.__sent.find((m) => m.channel === "voice-input:transcription-complete");
-    expect(complete?.payload).toEqual({ text: "hello.", willCorrect: false });
+    expect(complete?.payload).toEqual({ text: "hello period", willCorrect: false });
   });
 
   it("leaves a mid-sentence 'new paragraph' literal (applyDictationCommands is trailing-only)", () => {
