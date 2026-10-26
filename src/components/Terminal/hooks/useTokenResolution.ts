@@ -162,7 +162,7 @@ interface LatestRefShape {
     trackerData: string;
     text: string;
     imagePaths?: string[];
-  }) => void;
+  }) => void | Promise<boolean>;
   addToHistory: (terminalId: string, command: string, projectId?: string) => void;
   resetHistoryIndex: (terminalId: string, projectId?: string) => void;
   clearDraftInput: (terminalId: string, projectId?: string) => void;
@@ -198,6 +198,13 @@ export interface SendTextOptions {
    * of the two outcomes.
    */
   isDraftUnchanged?: () => boolean;
+  /**
+   * Handed what the pane's `onSend` returned — a promise of whether the
+   * terminal accepted the text, from a host that can say — once the composer
+   * has been reset after the send. Not called when `submit` replaces the
+   * handoff.
+   */
+  onHandedOff?: (accepted: Promise<boolean> | void) => void;
 }
 
 /**
@@ -353,13 +360,14 @@ export function useTokenResolution({
         // draft is a perfectly good send once an instruction has been appended.
         if (outgoing.trim().length === 0) return false;
 
+        let accepted: Promise<boolean> | void = undefined;
         if (options?.submit) {
           // Nothing below this line runs on a refused submission — the draft the
           // user can still see is the draft they still have.
           if (!(await options.submit(outgoing))) return false;
         } else {
           const payload = buildTerminalSendPayload(outgoing);
-          latest.onSend({
+          accepted = latest.onSend({
             data: payload.data,
             trackerData: payload.trackerData,
             text: outgoing,
@@ -398,6 +406,7 @@ export function useTokenResolution({
           latest.clearDraftInput(latest.terminalId, latest.projectId);
           setActiveCompletionContext(null);
         }
+        if (!options?.submit) options?.onHandedOff?.(accepted);
         return true;
       } finally {
         isSendingRef.current = false;

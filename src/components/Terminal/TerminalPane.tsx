@@ -1852,22 +1852,26 @@ function TerminalPaneComponent({
                     restartKey={restartKey}
                     onActivate={handleClick}
                     onSend={({ trackerData, text, imagePaths }) => {
-                      if (!isInputLocked && !isRestarting) {
-                        withTerminalService((service) => service.notifyUserInput(id), id);
-                        reportCanopySent(id);
-                        // submit now rejects when the PTY is gone (#8706); the
-                        // single-pane path has no recovery UI for that, so
-                        // swallow to log instead of leaking an unhandled
-                        // rejection. Banners/agent-state surface the dead pane.
-                        const submission =
-                          imagePaths !== undefined && imagePaths.length > 0
-                            ? terminalClient.submitWithImages(id, text, imagePaths)
-                            : terminalClient.submit(id, text);
-                        submission.catch((err) => {
+                      if (isInputLocked || isRestarting) return;
+                      withTerminalService((service) => service.notifyUserInput(id), id);
+                      reportCanopySent(id);
+                      const submission =
+                        imagePaths !== undefined && imagePaths.length > 0
+                          ? terminalClient.submitWithImages(id, text, imagePaths)
+                          : terminalClient.submit(id, text);
+                      handleInput(trackerData);
+                      // Whether the terminal accepted it, which is when a
+                      // terminal-first user gets the keyboard back (#14692).
+                      // submit rejects when the PTY is gone (#8706); the
+                      // single-pane path has no recovery UI for that, so it is
+                      // logged. Banners/agent-state surface the dead pane.
+                      return submission.then(
+                        () => true,
+                        (err: unknown) => {
                           logWarn("[TerminalPane] submit failed", { id, error: err });
-                        });
-                        handleInput(trackerData);
-                      }
+                          return false;
+                        }
+                      );
                     }}
                     onSendKey={(key) => {
                       if (!isInputLocked && !isRestarting) {

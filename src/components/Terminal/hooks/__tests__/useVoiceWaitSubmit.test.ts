@@ -95,6 +95,41 @@ describe("useVoiceWaitSubmit", () => {
     expect(useTerminalInputStore.getState().isVoiceSubmitting(PANEL_ID)).toBe(false);
   });
 
+  // A press during the wait has to count against the hand-back (#14692).
+  it("claims the keyboard's hand-back when the wait starts, and sends with it", async () => {
+    let resolveStop!: () => void;
+    stopMock.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveStop = resolve;
+        })
+    );
+    const handBack = vi.fn();
+    const claimSendHandBack = vi.fn(() => handBack);
+    const { result } = renderHook(() =>
+      useVoiceWaitSubmit({
+        terminalId: PANEL_ID,
+        editorViewRef: { current: null },
+        editableCompartmentRef: { current: new Compartment() },
+        sendFromEditor,
+        claimSendHandBack,
+      })
+    );
+
+    act(() => {
+      result.current.startVoiceWaitSubmit();
+    });
+    expect(claimSendHandBack).toHaveBeenCalledTimes(1);
+    expect(sendFromEditor).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveStop();
+    });
+
+    expect(sendFromEditor).toHaveBeenCalledWith(handBack);
+    expect(claimSendHandBack).toHaveBeenCalledTimes(1);
+  });
+
   it("does not send when cancelled while the transcript is still finishing", async () => {
     let resolveStop!: () => void;
     stopMock.mockImplementation(

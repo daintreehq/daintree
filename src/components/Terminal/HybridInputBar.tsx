@@ -114,6 +114,7 @@ import { useAutocompletePositioning } from "./hooks/useAutocompletePositioning";
 import { useComposerMeasure } from "./hooks/useComposerMeasure";
 import { useAutocompleteApply } from "./hooks/useAutocompleteApply";
 import { useFleetMirror } from "./hooks/useFleetMirror";
+import { useSendHandBack, type SendHandBack } from "./hooks/useSendHandBack";
 import { useEditorDomHandlers } from "./hooks/useEditorDomHandlers";
 import { useEditorFactory } from "./hooks/useEditorFactory";
 import {
@@ -160,13 +161,18 @@ export interface HybridInputBarHandle {
 
 export interface HybridInputBarProps {
   terminalId: string;
+  /**
+   * Hands the text to the terminal. A host that can say whether the terminal
+   * accepted it returns that, and a terminal-first user's keyboard goes back
+   * to the pane's terminal once it has (#14692).
+   */
   onSend: (payload: {
     data: string;
     trackerData: string;
     text: string;
     /** The draft's image chips, in order, each also present in `text` (#12792). */
     imagePaths?: string[];
-  }) => void;
+  }) => void | Promise<boolean>;
   onSendKey?: (key: string) => void;
   onActivate?: () => void;
   cwd: string;
@@ -941,13 +947,23 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       [editorViewRef, terminalId]
     );
 
+    const claimSendHandBack = useSendHandBack({ terminalId, projectId, isolated, editorViewRef });
+
     // Every way this composer sends — Enter, a picked slash command, a prompt
     // from the command picker — goes through `submitText` when it is given, so
     // a refused send never eats the draft, whichever path sent it.
     const sendText = useCallback<typeof sendResolvedText>(
       (text, options) => {
         const submit = submitTextRef.current;
-        if (!submit || options?.submit) return sendResolvedText(text, options);
+        if (options?.submit) return sendResolvedText(text, options);
+        if (!submit) {
+          // Claimed before any expansion is awaited, so a press while a diff
+          // is fetched calls the hand-back off.
+          return sendResolvedText(text, {
+            ...options,
+            onHandedOff: options?.onHandedOff ?? claimSendHandBack(),
+          });
+        }
         const imagePaths = options?.imagePaths ?? [];
         return sendResolvedText(text, {
           // Awaited now, so the user can type while it is on its way: only the
@@ -957,7 +973,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           submit: (outgoing: string) => submit(outgoing, imagePaths),
         });
       },
-      [sendResolvedText, guardSentDraft]
+      [sendResolvedText, guardSentDraft, claimSendHandBack]
     );
 
     const resetEditorDoc = () => {
@@ -967,7 +983,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       });
     };
 
-    const sendFromEditor = () => {
+    const sendFromEditor = (handBack?: SendHandBack) => {
       // An upload still on its way would leave its reference out of what is sent.
       if (hasPendingUploads(uploadSurface)) return;
       // The send takes the draft as it stands. A dictation correction still on
@@ -988,6 +1004,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         // A `@diff` fetch is awaited, and a handoff or the user's own typing can
         // land in the draft meanwhile; only the text that went out is cleared.
         isDraftUnchanged: guardSentDraft(latest?.projectId),
+        onHandedOff: handBack,
       });
     };
 
@@ -1003,6 +1020,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       editorViewRef,
       editableCompartmentRef,
       sendFromEditor,
+      claimSendHandBack,
     });
     // The editor locks the moment a voice send starts; the status waits out
     // the loading gate, so a drain or correction that lands quickly shows none.
