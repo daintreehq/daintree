@@ -1043,29 +1043,34 @@ describe("VoiceRecordingService — arming state", () => {
       setupGlobals();
 
       const storeModule = (await import("@/store/voiceRecordingStore")) as unknown as {
+        useVoiceRecordingStore: {
+          getState: () => { finishSession: ReturnType<typeof vi.fn> };
+        };
         __state: { activeTarget: { panelId: string } | null; status: string };
       };
       storeModule.__state.activeTarget = { panelId: "panel-1" };
       storeModule.__state.status = status;
+      const { finishSession } = storeModule.useVoiceRecordingStore.getState();
+      finishSession.mockClear();
 
       const { voiceRecordingService } = await import("../VoiceRecordingService");
-      const cancelSpy = vi
-        .spyOn(
-          voiceRecordingService as unknown as { cancelDictation: () => Promise<void> },
-          "cancelDictation"
-        )
-        .mockImplementation(async () => undefined);
+      const stopSpy = vi.spyOn(voiceRecordingService, "stop");
+      const teardownDone = () =>
+        vi.waitFor(() => expect(Reflect.get(voiceRecordingService, "stopPromise")).toBeNull());
 
       expect(voiceRecordingService.handleEscape("panel-2")).toBe(false);
-      expect(cancelSpy).not.toHaveBeenCalled();
+      expect(finishSession).not.toHaveBeenCalled();
 
       expect(voiceRecordingService.handleEscape("panel-1")).toBe(true);
-      expect(cancelSpy).toHaveBeenCalledOnce();
+      expect(finishSession).toHaveBeenCalledExactlyOnceWith({ preserveLiveText: false });
+      await teardownDone();
 
       voiceRecordingService.initialize();
       const { dispatchEscapeFallback } = await import("@/lib/escapeStack");
       expect(dispatchEscapeFallback()).toBe(true);
-      expect(cancelSpy).toHaveBeenCalledTimes(2);
+      expect(finishSession).toHaveBeenCalledTimes(2);
+      await teardownDone();
+      expect(stopSpy).not.toHaveBeenCalled();
 
       storeModule.__state.activeTarget = null;
       storeModule.__state.status = "idle";

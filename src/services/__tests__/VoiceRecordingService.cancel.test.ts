@@ -56,6 +56,10 @@ type FileTokenPayload = { sessionId: string; description: string; replacement: s
 type BoundaryPayload = { sessionId: string; rawText: string | null };
 type StatusPayload = { sessionId: string; status: string };
 type EndedPayload = { sessionId: string; reason: string };
+type ErrorPayload = {
+  sessionId: string;
+  error: { severity: "transient" | "fatal"; code: string; message: string };
+};
 
 const SESSION_ID = "session-1";
 
@@ -65,8 +69,17 @@ const callbacks: {
   boundary: ((payload: BoundaryPayload) => void) | null;
   fileToken: ((payload: FileTokenPayload) => void) | null;
   status: ((payload: StatusPayload) => void) | null;
+  error: ((payload: ErrorPayload) => void) | null;
   ended: ((payload: EndedPayload) => void) | null;
-} = { delta: null, complete: null, boundary: null, fileToken: null, status: null, ended: null };
+} = {
+  delta: null,
+  complete: null,
+  boundary: null,
+  fileToken: null,
+  status: null,
+  error: null,
+  ended: null,
+};
 
 const ipc = {
   correct: vi.fn<(request: { rawText: string }) => Promise<unknown>>(),
@@ -93,7 +106,10 @@ function stubElectron() {
         callbacks.fileToken = cb;
         return () => {};
       }),
-      onError: vi.fn(() => () => {}),
+      onError: vi.fn((cb: (payload: ErrorPayload) => void) => {
+        callbacks.error = cb;
+        return () => {};
+      }),
       onStatus: vi.fn((cb: (payload: StatusPayload) => void) => {
         callbacks.status = cb;
         return () => {};
@@ -150,7 +166,7 @@ async function setup(initialDraft = "") {
   const begin = (sessionId = SESSION_ID) => {
     useVoiceRecordingStore.getState().beginSession({ panelId: PANEL, projectId: PROJECT });
     useVoiceRecordingStore.getState().setStatus("recording");
-    (voiceRecordingService as unknown as { sessionId: string | null }).sessionId = sessionId;
+    Reflect.set(voiceRecordingService, "sessionId", sessionId);
   };
   begin();
 
@@ -159,8 +175,12 @@ async function setup(initialDraft = "") {
     useTerminalInputStore.getState().setDraftInput(PANEL, value, PROJECT);
   const records = () => useDictationRangeStore.getState().listDictations(PANEL, PROJECT);
   const announcement = () => useVoiceRecordingStore.getState().announcement?.text ?? null;
+  // Idle, and the capture teardown a following start would wait on is done.
   const settled = () =>
-    vi.waitFor(() => expect(useVoiceRecordingStore.getState().status).toBe("idle"));
+    vi.waitFor(() => {
+      expect(useVoiceRecordingStore.getState().status).toBe("idle");
+      expect(Reflect.get(voiceRecordingService, "stopPromise")).toBeNull();
+    });
   return {
     service: voiceRecordingService,
     voiceStore: useVoiceRecordingStore,
@@ -182,9 +202,15 @@ const boundary = (sessionId = SESSION_ID) => callbacks.boundary!({ sessionId, ra
 describe("VoiceRecordingService — Escape cancels a dictation (#14631)", () => {
   beforeEach(() => {
     vi.resetModules();
-    for (const key of Object.keys(callbacks) as Array<keyof typeof callbacks>) {
-      callbacks[key] = null;
-    }
+    Object.assign(callbacks, {
+      delta: null,
+      complete: null,
+      boundary: null,
+      fileToken: null,
+      status: null,
+      error: null,
+      ended: null,
+    });
     ipc.correct.mockReset();
     ipc.stop.mockReset().mockResolvedValue({ rawText: null });
     ipc.cancel.mockReset().mockResolvedValue(undefined);
@@ -238,6 +264,37 @@ describe("VoiceRecordingService — Escape cancels a dictation (#14631)", () => 
     expect(draft()).toBe("Keep");
   });
 
+  it("removes a break spoken before any words and every break after it", async () => {
+    const { service, draft, settled } = await setup("  ");
+
+    boundary();
+    complete("One.", "item-a");
+    boundary();
+    boundary();
+    complete("Two.", "item-b");
+    expect(draft()).toBe("  \nOne.\n\nTwo.");
+
+    service.handleEscape(PANEL);
+    await settled();
+
+    expect(draft()).toBe("  ");
+  });
+
+  it("removes only what was dictated since the draft was last sent", async () => {
+    const { service, draft, setDraft, settled } = await setup();
+
+    complete("Sent.", "item-a");
+    setDraft("");
+    setDraft("Typed");
+    complete("More.", "item-b");
+    expect(draft()).toBe("Typed More.");
+
+    service.handleEscape(PANEL);
+    await settled();
+
+    expect(draft()).toBe("Typed");
+  });
+
   it("keeps text typed before and after the dictation", async () => {
     const { service, draft, setDraft, settled } = await setup("Start");
 
@@ -270,12 +327,15 @@ describe("VoiceRecordingService — Escape cancels a dictation (#14631)", () => 
 
     complete("Done.", "item-a");
     delta("half a thou", "item-b");
+    expect(voiceStore.getState().panelBuffers[PANEL]?.liveText).toBe("half a thou");
 
     service.handleEscape(PANEL);
     await settled();
 
     expect(draft()).toBe("Keep");
-    expect(voiceStore.getState().panelBuffers[PANEL]?.liveText).toBe("");
+    const buffer = voiceStore.getState().panelBuffers[PANEL];
+    expect(buffer?.liveText).toBe("");
+    expect(buffer?.completedSegments).not.toContain("half a thou");
   });
 
   it("stops and keeps the text when the dictated words were edited", async () => {
@@ -295,13 +355,16 @@ describe("VoiceRecordingService — Escape cancels a dictation (#14631)", () => 
   });
 
   it("runs no correction for a cancelled dictation", async () => {
-    const { service, voiceStore, settled } = await setup("Intro.");
+    const { service, voiceStore, draft, setDraft, settled } = await setup("Intro.");
     voiceStore.getState().setCorrectionEnabled(true);
 
     complete("Hello there.", "item-a");
+    // Left where the dictation began, so a correction pass would have text to take.
+    setDraft(draft() + " and some typed words");
     service.handleEscape(PANEL);
     await settled();
 
+    expect(draft()).toBe("Intro. and some typed words");
     expect(ipc.correct).not.toHaveBeenCalled();
     expect(voiceStore.getState().panelBuffers[PANEL]?.correctionRange).toBeNull();
   });
@@ -314,13 +377,22 @@ describe("VoiceRecordingService — Escape cancels a dictation (#14631)", () => 
     await settled();
     begin("session-2");
 
+    delta("late preview", "item-b");
     complete("Late.", "item-b");
     boundary();
     callbacks.fileToken!({ sessionId: SESSION_ID, description: "Keep", replacement: "@x.ts" });
+    callbacks.error!({
+      sessionId: SESSION_ID,
+      error: { severity: "transient", code: "rate_limit", message: "slow down" },
+    });
     callbacks.status!({ sessionId: SESSION_ID, status: "idle" });
     expect(draft()).toBe("Keep");
+    expect(voiceStore.getState().panelBuffers[PANEL]?.liveText).toBe("");
+    expect(voiceStore.getState().lastError).toBeNull();
     expect(voiceStore.getState().status).toBe("recording");
 
+    delta("fresh", "item-c", "session-2");
+    expect(voiceStore.getState().panelBuffers[PANEL]?.liveText).toBe("fresh");
     complete("Fresh.", "item-c", "session-2");
     expect(draft()).toBe("Keep Fresh.");
   });
@@ -335,6 +407,35 @@ describe("VoiceRecordingService — Escape cancels a dictation (#14631)", () => 
     complete("Heard.", "item-a");
 
     expect(draft()).toBe("Heard.");
+  });
+
+  it("lets go only of the session main reported ended", async () => {
+    const { service, begin, draft, settled } = await setup();
+
+    service.handleEscape(PANEL);
+    await settled();
+    begin("session-2");
+    service.handleEscape(PANEL);
+    await settled();
+    callbacks.ended!({ sessionId: "session-2", reason: "cancelled" });
+    begin("session-3");
+
+    complete("Late.", "item-a", SESSION_ID);
+    expect(draft()).toBe("");
+    complete("Heard.", "item-b", "session-3");
+    expect(draft()).toBe("Heard.");
+  });
+
+  it("leaves no tombstone for a session main had already ended", async () => {
+    const { service, settled } = await setup();
+
+    complete("Hello.", "item-a");
+    callbacks.ended!({ sessionId: SESSION_ID, reason: "superseded" });
+    service.handleEscape(PANEL);
+    await settled();
+
+    const discarded: unknown = Reflect.get(service, "discardedSessionIds");
+    expect(discarded).toEqual(new Set());
   });
 
   it("does nothing more for a second Escape once the dictation is cancelled", async () => {

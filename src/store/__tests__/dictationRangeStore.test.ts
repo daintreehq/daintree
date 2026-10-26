@@ -600,12 +600,37 @@ describe("dictationRangeStore", () => {
       expect(dictatedSpans(only(), draft().length)).toBeNull();
     });
 
-    it("refuses once the separator an utterance inserted was edited", () => {
+    it("refuses once text was typed between an utterance's separator and its words", () => {
       setDraft("Keep");
       dictate("words");
       edit(5, 5, "typed ");
       expect(draft()).toBe("Keep typed words");
       expect(dictatedSpans(only(), draft().length)).toBeNull();
+    });
+
+    it("refuses once the separator itself was replaced", () => {
+      setDraft("Keep");
+      dictate("words");
+      edit(4, 5, "\n");
+
+      const [utterance] = only().utterances;
+      expect(utterance!.range.edited).toBe(false);
+      expect(utterance!.insertion.edited).toBe(true);
+      expect(dictatedSpans(only(), draft().length)).toBeNull();
+    });
+
+    it("lists a break spoken before any words and each break after it", () => {
+      setDraft("Keep");
+      paragraphBreak();
+      dictate("first");
+      paragraphBreak();
+      paragraphBreak();
+      dictate("second");
+
+      expect(only().breaks).toHaveLength(3);
+      const spans = dictatedSpans(only(), draft().length)!;
+      expect(spans.map(textOf)).toEqual(["second", "\n", "\n", "first", "\n"]);
+      expect(without(spans)).toBe("Keep");
     });
 
     it("refuses once a paragraph break was deleted", () => {

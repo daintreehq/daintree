@@ -387,6 +387,9 @@ class VoiceRecordingService {
   // they had already sent is still on its way and has nowhere left to land.
   // Each is let go once main reports it ended, the last thing it sends for it.
   private discardedSessionIds = new Set<string>();
+  // Main has nothing left to send for this one, so cancelling it needs no
+  // tombstone (and would leave one behind, with no end notice to clear it).
+  private lastEndedSessionId: string | null = null;
   private warmAudio: WarmAudio | null = null;
   // Capture graph built by an in-flight start() and not yet promoted to the
   // session fields below. Held here so a cancel or supersede can release it
@@ -771,6 +774,7 @@ class VoiceRecordingService {
           current: sessionId === this.sessionId,
         });
         this.timelines.get(sessionId)?.reportEnded(reason, report);
+        this.lastEndedSessionId = sessionId;
         this.discardedSessionIds.delete(sessionId);
         // Replaced elsewhere before it had anything to drain, typically while
         // its start was still pending. Its start result is stale from here.
@@ -1132,7 +1136,9 @@ class VoiceRecordingService {
     spans: DictationTextSpan[]
   ): Promise<void> {
     const sessionId = this.sessionId;
-    if (sessionId) this.discardedSessionIds.add(sessionId);
+    if (sessionId && sessionId !== this.lastEndedSessionId) {
+      this.discardedSessionIds.add(sessionId);
+    }
     this.dropHeldPress();
     this.invalidatePendingStart();
     this.clearTimers();
