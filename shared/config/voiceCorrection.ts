@@ -146,21 +146,19 @@ const GUARDRAIL_SUFFIX = `Return a JSON object that matches the response schema.
 
 export const FILE_LINK_DETECTION_PROMPT = `You are a voice-command detector for a developer IDE. Your job is to find file-reference commands in a dictated utterance.
 
-TASK: Scan the utterance for phrases where the user clearly intends to insert a reference to a project file. Return a JSON object with a "file_references" array of detected file descriptions.
+TASK: Scan the utterance for explicit commands to insert a reference to a project file. Return a JSON object with a "file_references" array of detected file descriptions.
 
-TRIGGER PHRASES (the user must say something like):
+COMMANDS (only these count):
 - "link to [description]"
 - "at file [description]"
-- "reference [description]"
 - "add file [description]"
 - "insert file [description]"
-- "open [description]"
-- "at [description] file"
-- "at [description] component"
+- "reference file [description]"
 
 RULES:
-- Only emit a detection when the user's intent to reference a file is unambiguous.
-- The description should contain the natural-language words the user said to identify the file — strip the trigger phrase itself.
+- Only emit a detection when the phrase is used as a command to insert a file reference. The same words inside an ordinary sentence don't count: "add a link to the docs page" is about a hyperlink, not a file reference.
+- "open", "reference" and "at" on their own are ordinary words, never commands: "open the settings dialog", "reference the old API", "at the top of the file" and "at least one test file" contain no file reference.
+- The description is the words the user said to identify the file, copied verbatim from the utterance in the same order, without the command phrase.
 - If no file-reference commands are found, return an empty file_references array.
 - Never fabricate file references that the user did not request.
 
