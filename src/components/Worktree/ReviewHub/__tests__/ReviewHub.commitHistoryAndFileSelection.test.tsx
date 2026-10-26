@@ -270,7 +270,8 @@ import { ReviewHubContent } from "../ReviewHubContent";
 import { useUIStore } from "@/store/uiStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useDiffViewedStore } from "@/store/diffViewedStore";
-import { resetStagingStatusCacheForTests } from "../stagingStatusCache";
+import { setViewedMarkSourcesAccessor } from "@/store/storeAccessors";
+import { getCachedStagingStatus, resetStagingStatusCacheForTests } from "../stagingStatusCache";
 
 const WORKTREE_PATH = "/home/user/project";
 
@@ -412,7 +413,13 @@ describe("ReviewHub", () => {
 
     // Viewed markers live in the shared diffViewedStore (they deliberately
     // survive hub close/reopen), so tests must reset them explicitly.
-    useDiffViewedStore.setState({ viewedByWorktree: {} });
+    useDiffViewedStore.setState({ viewedByWorktree: {}, baselinesByWorktree: {} });
+    // Production registers this in the store orchestrator, which these tests
+    // don't boot: point it at the same fake worktree map and staging cache.
+    setViewedMarkSourcesAccessor((worktreePath) => ({
+      worktrees: worktreeStoreData.current as Map<string, WorktreeState>,
+      stagingStatus: getCachedStagingStatus(worktreePath),
+    }));
 
     worktreeStoreData.current = new Map([
       [

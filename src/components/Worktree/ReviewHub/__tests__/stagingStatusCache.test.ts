@@ -8,6 +8,8 @@ import {
   rememberStagingStatus,
   resetStagingStatusCacheForTests,
 } from "../stagingStatusCache";
+import { useDiffViewedStore, selectViewedSet } from "@/store/diffViewedStore";
+import { resetStoreAccessorsForTesting, setViewedMarkSourcesAccessor } from "@/store/storeAccessors";
 
 const statusNamed = (branch: string): StagingStatus =>
   ({ currentBranch: branch, staged: [], unstaged: [] }) as unknown as StagingStatus;
@@ -22,7 +24,33 @@ describe("stagingStatusCache", () => {
 
   afterEach(() => {
     resetStagingStatusCacheForTests();
+    resetStoreAccessorsForTesting();
+    useDiffViewedStore.setState({ viewedByWorktree: {}, baselinesByWorktree: {} });
     delete (window as unknown as { electron?: unknown }).electron;
+  });
+
+  it("lapses Viewed marks on an accepted read, never on one a newer read already beat", () => {
+    setViewedMarkSourcesAccessor((worktreePath) => ({
+      worktrees: null,
+      stagingStatus: getCachedStagingStatus(worktreePath),
+    }));
+    const withStaged = (insertions: number): StagingStatus =>
+      ({
+        staged: [{ path: "a.ts", status: "modified", insertions, deletions: 0 }],
+        unstaged: [],
+      }) as unknown as StagingStatus;
+    const viewed = () =>
+      selectViewedSet(useDiffViewedStore.getState(), "/wt").has("staged:a.ts");
+
+    const older = beginStagingStatusRead();
+    rememberStagingStatus("/wt", withStaged(1), beginStagingStatusRead());
+    useDiffViewedStore.getState().setViewed("/wt", "staged:a.ts", true);
+
+    rememberStagingStatus("/wt", withStaged(5), older);
+    expect(viewed()).toBe(true);
+
+    rememberStagingStatus("/wt", withStaged(5), beginStagingStatusRead());
+    expect(viewed()).toBe(false);
   });
 
   it("keeps the newer read when an older one lands after it", () => {

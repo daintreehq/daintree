@@ -1,4 +1,5 @@
 import type { StagingStatus } from "@shared/types";
+import { useDiffViewedStore } from "@/store/diffViewedStore";
 
 // Last staging status per worktree. The hub resets on close, so without this
 // every open showed the skeleton until `getStagingStatus` answered; with it a
@@ -39,6 +40,9 @@ export function rememberStagingStatus(
     const oldest = cache.keys().next().value;
     if (oldest !== undefined) cache.delete(oldest);
   }
+  // Every accepted read is an observation of the worktree's staging sections,
+  // whoever asked for it, so Viewed marks on rows it shows changed lapse here.
+  useDiffViewedStore.getState().reconcileViewed(worktreePath);
 }
 
 /**
