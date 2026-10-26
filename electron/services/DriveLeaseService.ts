@@ -451,10 +451,7 @@ export class DriveLeaseService {
    * the lease id, null when nobody holds the project, or false when the
    * endpoint does not drive it.
    */
-  drivingLeaseId(
-    projectId: string,
-    endpoint: DriveStanding
-  ): number | null | false {
+  drivingLeaseId(projectId: string, endpoint: DriveStanding): number | null | false {
     const holder = this.getHolder(projectId);
     if (!drives(holder, endpoint)) return false;
     return holder?.leaseId ?? null;
@@ -464,9 +461,7 @@ export class DriveLeaseService {
    * Every project someone other than `endpoint` drives, with its holder: the
    * projects a call from it may not change.
    */
-  projectsDrivenElsewhere(
-    endpoint: DriveStanding
-  ): Map<string, DriveLeaseHolder> {
+  projectsDrivenElsewhere(endpoint: DriveStanding): Map<string, DriveLeaseHolder> {
     const out = new Map<string, DriveLeaseHolder>();
     const projects = new Set([...this.leases.keys(), ...this.attachedProjects()]);
     for (const projectId of projects) {
@@ -965,8 +960,7 @@ function drives(holder: DriveLeaseHolder | null, endpoint: DriveStanding): boole
   // it, since any Shell may claim another's in its HELLO.
   if (
     endpoint.linkSessionId !== undefined &&
-    (isCanopyViewerEndpointId(endpoint.endpointId) ||
-      isDeviceAnswerEndpointId(endpoint.endpointId))
+    (isCanopyViewerEndpointId(endpoint.endpointId) || isDeviceAnswerEndpointId(endpoint.endpointId))
   ) {
     return isSessionEndpoint(endpoint.linkSessionId, holder.endpointId);
   }

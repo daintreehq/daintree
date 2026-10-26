@@ -48,8 +48,7 @@ vi.mock("../../../services/DriveLeaseService.js", () => ({
     isDriving: (
       projectId: string,
       endpoint: { endpointId: string; clientId: string; linkSessionId?: string }
-    ) =>
-      state.driving(projectId, endpoint),
+    ) => state.driving(projectId, endpoint),
   }),
 }));
 vi.mock("../../../services/plugin/pluginTerminalScreenRead.js", () => ({
