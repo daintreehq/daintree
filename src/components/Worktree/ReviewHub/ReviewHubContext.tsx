@@ -5,7 +5,7 @@ import type { TerminalHandback } from "@shared/types/handback";
 import { actionService } from "@/services/ActionService";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
-import { formatRelativeTime } from "@/lib/formatRelativeTime";
+import { TimeAgo } from "@/components/ui/TimeAgo";
 
 interface HandbackEntry {
   panelId: string;
@@ -103,13 +103,7 @@ export function ReviewHubContext({ worktreePath, worktreeId }: ReviewHubContextP
             <span className="shrink-0">Last handback from</span>
             <span className="truncate text-text-secondary">{title}</span>
             <span className="shrink-0">·</span>
-            <time
-              className="shrink-0"
-              dateTime={new Date(handback.observedAt).toISOString()}
-              title={new Date(handback.observedAt).toLocaleString()}
-            >
-              {formatRelativeTime(handback.observedAt)}
-            </time>
+            <TimeAgo timestamp={handback.observedAt} verbose />
             <button
               type="button"
               className="ml-auto shrink-0 inline-flex items-center gap-1 text-text-secondary hover:text-text-primary"
