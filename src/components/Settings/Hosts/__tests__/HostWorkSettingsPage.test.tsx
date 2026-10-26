@@ -216,7 +216,9 @@ describe("HostWorkSettingsPage (#14167, #14706)", () => {
       outcome: "applied",
       confirmedBy: "reply",
       instanceId: "launch-1",
-      settings: [{ key: "globalEnvironmentVariables", value: { LANG: "C.UTF-8" }, revision: "r-2" }],
+      settings: [
+        { key: "globalEnvironmentVariables", value: { LANG: "C.UTF-8" }, revision: "r-2" },
+      ],
     });
     await renderSection();
     const save = screen.getByRole("button", { name: "Save" });

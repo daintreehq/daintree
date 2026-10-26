@@ -90,7 +90,9 @@ function envRecord(rows: readonly EnvVarDraft[]): Record<string, string> {
 
 function sameEnv(a: Record<string, string>, b: Record<string, string>): boolean {
   const keys = Object.keys(a);
-  return keys.length === Object.keys(b).length && keys.every((k) => Object.hasOwn(b, k) && a[k] === b[k]);
+  return (
+    keys.length === Object.keys(b).length && keys.every((k) => Object.hasOwn(b, k) && a[k] === b[k])
+  );
 }
 
 function isEnvRecord(value: HostSettingValue | undefined): value is Record<string, string> {
@@ -277,7 +279,9 @@ export function HostWorkSettingsPage({
       >
         <SettingsGroup>
           {!connected ? (
-            <SettingsEmptyRow>Connect to {hostName} to see and change its settings</SettingsEmptyRow>
+            <SettingsEmptyRow>
+              Connect to {hostName} to see and change its settings
+            </SettingsEmptyRow>
           ) : loadError ? (
             <SettingsRow
               label={`Couldn't read ${hostName}'s settings`}
@@ -655,7 +659,9 @@ function HostEnvironmentSection({
       variant="outline"
       size="sm"
       disabled={locked}
-      onClick={() => setRows((prev) => [...prev, { id: `env-${crypto.randomUUID()}`, key: "", value: "" }])}
+      onClick={() =>
+        setRows((prev) => [...prev, { id: `env-${crypto.randomUUID()}`, key: "", value: "" }])
+      }
     >
       <Plus aria-hidden="true" />
       Add variable
@@ -666,7 +672,9 @@ function HostEnvironmentSection({
     <InlineError role="alert">{error}</InlineError>
   ) : errorCount > 0 ? (
     <InlineError>
-      {errorCount === 1 ? "Fix the name above to save" : `Fix the ${errorCount} names above to save`}
+      {errorCount === 1
+        ? "Fix the name above to save"
+        : `Fix the ${errorCount} names above to save`}
     </InlineError>
   ) : unavailableReason ? (
     unavailableReason

@@ -40,7 +40,8 @@ export function settingsMachineOptions(
       connected: true,
     },
   ];
-  if (remoteWindow) options.push({ hostId: LOCAL_HOST_ID, name: deviceOwnerLabel(), note: null, connected: true });
+  if (remoteWindow)
+    options.push({ hostId: LOCAL_HOST_ID, name: deviceOwnerLabel(), note: null, connected: true });
   for (const host of hosts) {
     const id = host.descriptor.id;
     if (id === ownHostId || id === LOCAL_HOST_ID) continue;

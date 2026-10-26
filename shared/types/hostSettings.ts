@@ -180,7 +180,11 @@ export function hostSettingRefusal(key: HostSettingKey, value: unknown): string 
 }
 
 const agentId = z.string().min(1).max(128).nullable();
-const idleMinutes = z.number().int().min(IDLE_THRESHOLD_MINUTES.min).max(IDLE_THRESHOLD_MINUTES.max);
+const idleMinutes = z
+  .number()
+  .int()
+  .min(IDLE_THRESHOLD_MINUTES.min)
+  .max(IDLE_THRESHOLD_MINUTES.max);
 const envVariables = z
   .record(z.string(), z.string())
   .refine((value) => envRefusal(value) === null, { message: "not a set of variables" });

@@ -45,7 +45,9 @@ describe("work settings on a host (#14706)", () => {
   });
 
   it("takes an environment a host would store, and refuses one it wouldn't", () => {
-    expect(hostSettingRefusal("globalEnvironmentVariables", { PATH: "/bin", lower_ok: "" })).toBeNull();
+    expect(
+      hostSettingRefusal("globalEnvironmentVariables", { PATH: "/bin", lower_ok: "" })
+    ).toBeNull();
     for (const value of [
       null,
       [],
@@ -63,9 +65,13 @@ describe("work settings on a host (#14706)", () => {
 
   it("holds terminal and idle-project values to the ranges their own Settings allows", () => {
     expect(hostSettingRefusal("terminalConfig.memoryLeakAutoRestartThresholdMb", 1024)).toBeNull();
-    expect(hostSettingRefusal("terminalConfig.memoryLeakAutoRestartThresholdMb", 512)).not.toBeNull();
+    expect(
+      hostSettingRefusal("terminalConfig.memoryLeakAutoRestartThresholdMb", 512)
+    ).not.toBeNull();
     expect(hostSettingRefusal("idleBackgroundAutoClose.idleShellThresholdMinutes", 240)).toBeNull();
-    expect(hostSettingRefusal("idleBackgroundAutoClose.idleShellThresholdMinutes", 90)).not.toBeNull();
+    expect(
+      hostSettingRefusal("idleBackgroundAutoClose.idleShellThresholdMinutes", 90)
+    ).not.toBeNull();
     expect(hostSettingRefusal("agentSettings.resumeOnRestart", "on-focus")).toBeNull();
     expect(hostSettingRefusal("agentSettings.resumeOnRestart", "sometimes")).not.toBeNull();
   });

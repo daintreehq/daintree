@@ -572,7 +572,15 @@ function SettingsDialogInner({
         // Another machine picked: only this machine's own pages can be opened from here.
         (result) => !editingOther || (!result.plugin && ownerForTab(result.tab) === "device")
       ),
-    [searchIndex, searchQuery, modifiedTabs, modifiedSettingIds, activeScope, hasProject, editingOther]
+    [
+      searchIndex,
+      searchQuery,
+      modifiedTabs,
+      modifiedSettingIds,
+      activeScope,
+      hasProject,
+      editingOther,
+    ]
   );
 
   const cleanSearchQuery = useMemo(() => parseQuery(searchQuery).cleanQuery, [searchQuery]);
@@ -1059,7 +1067,9 @@ function SettingsDialogInner({
                   {!isSearching && (
                     <SettingsOwnerHeaderChip
                       tab={activeTab}
-                      picked={editingOther && target ? (showHostPage ? target.name : null) : undefined}
+                      picked={
+                        editingOther && target ? (showHostPage ? target.name : null) : undefined
+                      }
                     />
                   )}
                 </AppDialog.Title>

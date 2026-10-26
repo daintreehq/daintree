@@ -44,7 +44,12 @@ vi.mock("../../../store.js", () => ({
 const pty = vi.hoisted(() => ({ setResourceMonitoring: vi.fn() }));
 vi.mock("../../../window/serviceRefs.js", () => ({ getPtyClient: () => pty }));
 const sleep = vi.hoisted(() => ({
-  config: { enabled: false, thresholdMinutes: 60, includeIdleShells: false, idleShellThresholdMinutes: 120 },
+  config: {
+    enabled: false,
+    thresholdMinutes: 60,
+    includeIdleShells: false,
+    idleShellThresholdMinutes: 120,
+  },
   updateConfig: vi.fn(),
 }));
 vi.mock("../../../services/IdleBackgroundAutoCloseService.js", () => ({

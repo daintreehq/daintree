@@ -96,7 +96,9 @@ export async function loadHostSettingsLeaves(): Promise<HostSettingsLeaves> {
       case "terminalConfig.memoryLeakDetectionEnabled": {
         // Off unless set, or following resource monitoring, as this host's views read it.
         const config = store.get("terminalConfig");
-        return leaf(config?.memoryLeakDetectionEnabled ?? config?.resourceMonitoringEnabled === true);
+        return leaf(
+          config?.memoryLeakDetectionEnabled ?? config?.resourceMonitoringEnabled === true
+        );
       }
       case "terminalConfig.memoryLeakAutoRestartThresholdMb":
         return leaf(

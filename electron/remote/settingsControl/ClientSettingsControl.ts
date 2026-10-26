@@ -164,7 +164,13 @@ export class ClientSettingsControl {
     reading: HostSettingsReading,
     unavailable: HostSettingKey[]
   ): HostSettingsSnapshot {
-    return { hostId, hostName: this.deps.hostLabel(hostId), scope: "host", unavailable, ...reading };
+    return {
+      hostId,
+      hostName: this.deps.hostLabel(hostId),
+      scope: "host",
+      unavailable,
+      ...reading,
+    };
   }
 
   /**

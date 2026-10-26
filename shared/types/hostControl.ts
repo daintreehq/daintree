@@ -464,7 +464,9 @@ export const HostSettingsArgsSchema = z.object({
     .array(z.enum(ASSISTANT_HOST_SETTING_KEYS))
     .max(ASSISTANT_HOST_SETTING_KEYS.length)
     .optional()
-    .describe(`For read: which settings, up to ${ASSISTANT_HOST_SETTING_KEYS.length}. Default: all.`),
+    .describe(
+      `For read: which settings, up to ${ASSISTANT_HOST_SETTING_KEYS.length}. Default: all.`
+    ),
   patch: AssistantHostSettingsPatchFieldsSchema.optional().describe(
     "For preview: values to set on every host named."
   ),
