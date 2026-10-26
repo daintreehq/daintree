@@ -16,6 +16,13 @@ const projectStoreMock = vi.hoisted(() => ({
   writeInRepoSettings: vi.fn(async () => undefined),
   writeInRepoRecipe: vi.fn(async () => undefined),
   updateProject: vi.fn(async () => ({ id: "p1", inRepoSettings: true })),
+  readInRepoVoiceDictionary: vi.fn(async () => ({ found: false, entries: [] as unknown[] })),
+  changeInRepoVoiceDictionary: vi.fn(async (_path: string, apply: (e: unknown[]) => unknown[]) =>
+    apply([])
+  ),
+  changeLocalVoiceDictionary: vi.fn(async (_id: string, apply: (e: unknown[]) => unknown[]) =>
+    apply([])
+  ),
 }));
 
 vi.mock("electron", () => ({ ipcMain: ipcMainMock, dialog: {} }));
@@ -118,5 +125,76 @@ describe("project:enable-in-repo-settings forward-compatibility pre-flight (#122
     await enable();
     expect(projectStoreMock.assertInRepoRecipesForwardCompatible).toHaveBeenCalledWith("/repo", []);
     expect(projectStoreMock.updateProject).toHaveBeenCalled();
+  });
+});
+
+describe("in-repo settings move the dictation vocabulary with them", () => {
+  let cleanup: () => void;
+  const local = [{ term: "LocalTerm", heardAs: [], source: "manual", addedAt: 0 }];
+  const shared = [{ term: "TeamTerm", heardAs: [], source: "manual", addedAt: 0 }];
+  const appliedTo = (mock: { mock: { calls: unknown[][] } }) =>
+    (mock.mock.calls[0]![1] as (e: unknown[]) => unknown[])([]);
+
+  beforeEach(() => {
+    ipcHandlers.clear();
+    vi.clearAllMocks();
+    projectStoreMock.getRecipes.mockResolvedValue([]);
+    projectStoreMock.getProjectSettings.mockResolvedValue({ voiceDictionary: local } as never);
+    projectStoreMock.readInRepoVoiceDictionary.mockResolvedValue({ found: false, entries: [] });
+    cleanup = registerProjectInRepoSettingsHandlers({} as HandlerDependencies);
+  });
+
+  afterEach(() => cleanup());
+
+  const run = (channel: string, inRepoSettings: boolean) => {
+    projectStoreMock.getProjectById.mockReturnValue({
+      id: "p1",
+      name: "Repo",
+      path: "/repo",
+      inRepoSettings,
+    } as unknown as undefined);
+    return getHandler(channel)(fakeEvent(), "p1");
+  };
+
+  it("commits the local vocabulary when the repo has none", async () => {
+    await run(CHANNELS.PROJECT_ENABLE_IN_REPO_SETTINGS, false);
+    expect(projectStoreMock.changeInRepoVoiceDictionary).toHaveBeenCalledWith(
+      "/repo",
+      expect.any(Function)
+    );
+    expect(appliedTo(projectStoreMock.changeInRepoVoiceDictionary)).toEqual(local);
+  });
+
+  it("adopts a vocabulary already committed, even an empty one", async () => {
+    projectStoreMock.readInRepoVoiceDictionary.mockResolvedValue({ found: true, entries: [] });
+    await run(CHANNELS.PROJECT_ENABLE_IN_REPO_SETTINGS, false);
+    expect(projectStoreMock.changeInRepoVoiceDictionary).not.toHaveBeenCalled();
+  });
+
+  it("carries the committed list locally when sharing stops, and an empty one when the repo has none", async () => {
+    projectStoreMock.readInRepoVoiceDictionary.mockResolvedValue({ found: true, entries: shared });
+    await run(CHANNELS.PROJECT_DISABLE_IN_REPO_SETTINGS, true);
+    expect(appliedTo(projectStoreMock.changeLocalVoiceDictionary)).toEqual(shared);
+
+    vi.clearAllMocks();
+    projectStoreMock.readInRepoVoiceDictionary.mockResolvedValue({ found: false, entries: [] });
+    await run(CHANNELS.PROJECT_DISABLE_IN_REPO_SETTINGS, true);
+    expect(appliedTo(projectStoreMock.changeLocalVoiceDictionary)).toEqual([]);
+  });
+
+  it("stops sharing without touching the local list when the committed file can't be read", async () => {
+    projectStoreMock.readInRepoVoiceDictionary.mockRejectedValue(new Error("bad json"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await run(CHANNELS.PROJECT_DISABLE_IN_REPO_SETTINGS, true);
+    expect(projectStoreMock.changeLocalVoiceDictionary).not.toHaveBeenCalled();
+    expect(projectStoreMock.updateProject).toHaveBeenCalledWith("p1", { inRepoSettings: false });
+    warn.mockRestore();
+  });
+
+  it("keeps sharing on when the local copy can't be written", async () => {
+    projectStoreMock.readInRepoVoiceDictionary.mockResolvedValue({ found: true, entries: shared });
+    projectStoreMock.changeLocalVoiceDictionary.mockRejectedValueOnce(new Error("ENOSPC"));
+    await expect(run(CHANNELS.PROJECT_DISABLE_IN_REPO_SETTINGS, true)).rejects.toThrow("ENOSPC");
+    expect(projectStoreMock.updateProject).not.toHaveBeenCalled();
   });
 });

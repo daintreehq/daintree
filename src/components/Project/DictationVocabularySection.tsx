@@ -21,6 +21,43 @@ export function parseHeardAs(raw: string): string[] {
     .filter(Boolean);
 }
 
+interface Queue {
+  queueRef: React.RefObject<Promise<void>>;
+  visitRef: React.RefObject<number>;
+  setEntries: (entries: VoiceDictionaryEntry[]) => void;
+  setFailure: (failure: Failure | null) => void;
+}
+
+/**
+ * Runs `run` after everything already queued, and shows its result unless the
+ * page has moved to another visit since it was queued. A failure hands back a
+ * retry that queues the same call again.
+ */
+function enqueue(
+  { queueRef, visitRef, setEntries, setFailure }: Queue,
+  run: () => Promise<VoiceDictionaryEntry[]>,
+  onFailure: (error: unknown, retry: () => void) => void,
+  onSaved?: () => void
+): void {
+  const visit = visitRef.current;
+  const attempt = () => {
+    queueRef.current = queueRef.current.then(async () => {
+      if (visitRef.current !== visit) return;
+      try {
+        const next = await run();
+        if (visitRef.current !== visit) return;
+        setEntries(next);
+        setFailure(null);
+        onSaved?.();
+      } catch (error) {
+        if (visitRef.current !== visit) return;
+        onFailure(error, attempt);
+      }
+    });
+  };
+  attempt();
+}
+
 /**
  * The project's own dictation terms. Main owns the list and where it lives
  * (the repo file when project settings are stored there), so every change is
@@ -32,60 +69,54 @@ export function DictationVocabularySection({ projectId }: { projectId: string })
   const [heardAs, setHeardAs] = useState("");
   const [failure, setFailure] = useState<Failure | null>(null);
   const termInputRef = useRef<HTMLInputElement>(null);
-  // Results for a project the page has since left are dropped.
-  const currentProjectRef = useRef(projectId);
-  // One change at a time, so each starts from what the last one saved.
+  // Bumped whenever the page moves to a project, so anything still in flight
+  // for an earlier visit is dropped, even one to the same project.
+  const visitRef = useRef(0);
+  // Reads and changes run one at a time, so a read can't land over a change
+  // made after it, and each change starts from what the last one saved.
   const queueRef = useRef<Promise<void>>(Promise.resolve());
 
   useEffect(() => {
-    currentProjectRef.current = projectId;
+    visitRef.current++;
+    // A visit doesn't wait on an earlier one, whose results are dropped anyway.
+    queueRef.current = Promise.resolve();
     setEntries([]);
     setFailure(null);
-    const load = () => {
-      window.electron.voiceDictionary.getProject({ projectId }).then(
-        (next) => {
-          if (currentProjectRef.current !== projectId) return;
-          setEntries(next);
-          setFailure(null);
-        },
-        (error: unknown) => {
-          if (currentProjectRef.current !== projectId) return;
-          logWarn("Failed to read the project vocabulary", voiceErrorLogFields(error));
-          setFailure({
-            title: "Couldn't load the vocabulary",
-            message: "The project's terms couldn't be read.",
-            retry: load,
-          });
-        }
-      );
-    };
-    load();
+    enqueue(
+      { queueRef, visitRef, setEntries, setFailure },
+      () => window.electron.voiceDictionary.getProject({ projectId }),
+      (error, retry) => {
+        logWarn("Failed to read the project vocabulary", voiceErrorLogFields(error));
+        setFailure({
+          title: "Couldn't load the vocabulary",
+          message: "The project's terms couldn't be read.",
+          retry,
+        });
+      }
+    );
   }, [projectId]);
 
   const change = (run: () => Promise<VoiceDictionaryEntry[]>, onSaved?: () => void) => {
-    const forProject = projectId;
-    queueRef.current = queueRef.current.then(async () => {
-      try {
-        const next = await run();
-        if (currentProjectRef.current !== forProject) return;
-        setEntries(next);
-        setFailure(null);
-        onSaved?.();
-      } catch (error) {
-        if (currentProjectRef.current !== forProject) return;
+    enqueue(
+      { queueRef, visitRef, setEntries, setFailure },
+      run,
+      (error, retry) => {
         logWarn("Failed to change the project vocabulary", voiceErrorLogFields(error));
         setFailure({
           title: "Couldn't save that change",
           message: "The vocabulary is as it was.",
-          retry: () => change(run, onSaved),
+          retry,
         });
-      }
-    });
+      },
+      onSaved
+    );
   };
 
   const add = () => {
     const nextTerm = term.trim();
     if (!nextTerm) return;
+    const submittedTerm = term;
+    const submittedHeardAs = heardAs;
     const nextHeardAs = parseHeardAs(heardAs);
     termInputRef.current?.focus();
     change(
@@ -95,9 +126,10 @@ export function DictationVocabularySection({ projectId }: { projectId: string })
           term: nextTerm,
           ...(nextHeardAs.length > 0 ? { heardAs: nextHeardAs } : {}),
         }),
+      // A draft typed while this was saving is the user's next entry.
       () => {
-        setTerm("");
-        setHeardAs("");
+        setTerm((current) => (current === submittedTerm ? "" : current));
+        setHeardAs((current) => (current === submittedHeardAs ? "" : current));
       }
     );
   };

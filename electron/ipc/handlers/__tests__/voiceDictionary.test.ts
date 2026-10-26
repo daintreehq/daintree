@@ -427,12 +427,25 @@ describe("project vocabulary operations", () => {
       term: "daintree",
       changes: { heardAs: ["dane tree"] },
     });
-    await projectOp("removeFromProject", { projectId: "shared", term: "Nope" });
-
+    await projectOp("addToProject", { projectId: "shared", term: "Zustand" });
     expect(projects.repo.get("/repos/shared")).toEqual([
       expect.objectContaining({ term: "Daintree", heardAs: ["dane tree"] }),
+      expect.objectContaining({ term: "Zustand" }),
     ]);
+
+    const removed = await projectOp("removeFromProject", { projectId: "shared", term: "DAINTREE" });
+    expect(terms(removed)).toEqual(["Zustand"]);
+    expect(terms(await projectOp("getProject", { projectId: "shared" }))).toEqual(["Zustand"]);
     expect(terms(projects.local.get("shared"))).toEqual(["LocalOnly"]);
+  });
+
+  it("removes a term from a project that keeps its vocabulary locally", async () => {
+    await projectOp("addToProject", { projectId: "local", term: "One" });
+    await projectOp("addToProject", { projectId: "local", term: "Two" });
+    expect(
+      terms(await projectOp("removeFromProject", { projectId: "local", term: "one" }))
+    ).toEqual(["Two"]);
+    expect(terms(projects.local.get("local"))).toEqual(["Two"]);
   });
 
   it("refuses an unknown project and an over-length term, writing nothing", async () => {

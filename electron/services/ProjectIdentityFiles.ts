@@ -283,7 +283,8 @@ export class ProjectIdentityFiles {
    * vocabulary on disk is kept whatever `settings` carries: a whole-settings
    * save holds a copy read earlier, and a teammate's committed terms must not
    * be replaced by it. Only {@link changeInRepoVoiceDictionary} changes it. A
-   * file with no vocabulary yet is seeded from `settings`.
+   * file that exists but can't be read is left alone rather than replaced
+   * with one missing what it held.
    */
   async writeInRepoSettings(projectPath: string, settings: ProjectSettings): Promise<void> {
     return this.queueSettingsWrite(projectPath, async () => {
@@ -308,11 +309,9 @@ export class ProjectIdentityFiles {
         (payload as Record<keyof ProjectSettings, unknown>)[key] = value;
       }
 
-      const existing = await this.readSettingsFileForPatch(projectPath).catch(() => null);
+      const existing = await this.readSettingsFileForPatch(projectPath);
       if (existing && Object.hasOwn(existing, "voiceDictionary")) {
         (payload as Record<string, unknown>).voiceDictionary = existing.voiceDictionary;
-      } else if (settings.voiceDictionary && settings.voiceDictionary.length > 0) {
-        payload.voiceDictionary = settings.voiceDictionary.map(toSharedDictionaryEntry);
       }
 
       await this.writeSettingsFile(projectPath, payload);

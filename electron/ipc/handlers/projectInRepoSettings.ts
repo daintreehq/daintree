@@ -2,7 +2,10 @@ import path from "path";
 import fs from "fs/promises";
 import { CHANNELS } from "../channels.js";
 import { projectStore } from "../../services/ProjectStore.js";
-import { keepSharedVoiceDictionaryLocally } from "../../services/projectVoiceDictionary.js";
+import {
+  keepSharedVoiceDictionaryLocally,
+  shareLocalVoiceDictionary,
+} from "../../services/projectVoiceDictionary.js";
 import type { HandlerDependencies } from "../types.js";
 import type { Project } from "../../types/index.js";
 import { typedHandle } from "../utils.js";
@@ -115,6 +118,7 @@ export function registerProjectInRepoSettingsHandlers(_deps: HandlerDependencies
       color: project.color,
     });
     await projectStore.writeInRepoSettings(project.path, settings);
+    await shareLocalVoiceDictionary(projectId);
 
     // Sync existing project recipes to .daintree/recipes/ (pre-flighted above).
     for (const recipe of recipes) {
@@ -138,11 +142,7 @@ export function registerProjectInRepoSettingsHandlers(_deps: HandlerDependencies
     if (!project) {
       throw new Error(`Project not found: ${projectId}`);
     }
-    // A committed file that can't be read leaves the local list as it was;
-    // turning sharing off still goes ahead.
-    await keepSharedVoiceDictionaryLocally(projectId).catch((error: unknown) => {
-      console.warn("[IPC] Failed to keep the shared dictation vocabulary locally:", error);
-    });
+    await keepSharedVoiceDictionaryLocally(projectId);
     return projectStore.updateProject(projectId, { inRepoSettings: false });
   };
   handlers.push(

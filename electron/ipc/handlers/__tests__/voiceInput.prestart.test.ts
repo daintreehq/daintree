@@ -719,8 +719,12 @@ describe("voiceInput — keyterm target", () => {
 
   it("starts with the global dictionary alone when the vocabulary can't be read", async () => {
     shared.viewProjectId = "proj-gone";
+    shared.voiceInput = {
+      dictionary: [{ term: "GlobalTerm", heardAs: [], source: "manual", addedAt: 0 }],
+    };
     await expect(startWith(undefined)).resolves.toEqual({ ok: true });
     expect(await projectTerms()).toEqual([]);
+    expect(assemblyOpts()?.customDictionary).toEqual(["GlobalTerm"]);
   });
 
   it("corrects with the target project's terms ahead of the global dictionary", async () => {

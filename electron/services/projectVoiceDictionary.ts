@@ -36,14 +36,34 @@ export async function changeProjectVoiceDictionary(
 }
 
 /**
- * Before a project stops keeping its settings in the repo, carry the
- * committed vocabulary into its local settings, so turning sharing off
- * doesn't bring back an older local list.
+ * When a project starts keeping its settings in the repo: a vocabulary
+ * already committed there is the team's and is adopted as it is; otherwise
+ * the local one is committed, so turning sharing on doesn't lose it.
+ */
+export async function shareLocalVoiceDictionary(projectId: string): Promise<void> {
+  const project = requireProject(projectId);
+  if ((await projectStore.readInRepoVoiceDictionary(project.path)).found) return;
+  const local = (await projectStore.getProjectSettings(projectId)).voiceDictionary ?? [];
+  if (local.length === 0) return;
+  await projectStore.changeInRepoVoiceDictionary(project.path, () => local);
+}
+
+/**
+ * Before a project stops keeping its settings in the repo, carry the list in
+ * use (the committed one, empty when the repo has none) into its local
+ * settings, so turning sharing off doesn't bring back an older local list.
  */
 export async function keepSharedVoiceDictionaryLocally(projectId: string): Promise<void> {
   const project = requireProject(projectId);
   if (!project.inRepoSettings) return;
-  const shared = await projectStore.readInRepoVoiceDictionary(project.path);
-  if (!shared.found) return;
-  await projectStore.changeLocalVoiceDictionary(projectId, () => shared.entries);
+  let entries: VoiceDictionaryEntry[];
+  try {
+    ({ entries } = await projectStore.readInRepoVoiceDictionary(project.path));
+  } catch (error) {
+    // A committed file that can't be read leaves the local list as it was, and
+    // turning sharing off still goes ahead. A failed local write does not.
+    console.warn("[ProjectVoiceDictionary] Couldn't read the committed vocabulary:", error);
+    return;
+  }
+  await projectStore.changeLocalVoiceDictionary(projectId, () => entries);
 }

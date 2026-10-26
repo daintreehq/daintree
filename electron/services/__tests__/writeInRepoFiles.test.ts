@@ -421,11 +421,20 @@ describe("in-repo dictation vocabulary", () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  it("seeds a file without a vocabulary from the settings, keeping only term and heard-as", async () => {
+  it("never writes the vocabulary a settings save carries into a file without one", async () => {
     await identityFiles.writeInRepoSettings(
       tmpDir,
-      makeSettings({ voiceDictionary: [entry("Daintree", ["dane tree"])] })
+      makeSettings({ excludedPaths: ["dist"], voiceDictionary: [entry("Daintree")] })
     );
+    const content = await readFile();
+    expect(content.excludedPaths).toEqual(["dist"]);
+    expect(content).not.toHaveProperty("voiceDictionary");
+  });
+
+  it("commits only each entry's term and heard-as forms", async () => {
+    await identityFiles.changeInRepoVoiceDictionary(tmpDir, () => [
+      entry("Daintree", ["dane tree"]),
+    ]);
     expect((await readFile()).voiceDictionary).toEqual([
       { term: "Daintree", heardAs: ["dane tree"] },
     ]);
@@ -446,7 +455,7 @@ describe("in-repo dictation vocabulary", () => {
     expect(content.voiceDictionary).toEqual([{ term: "PtyClient", heardAs: [] }]);
   });
 
-  it("keeps an emptied committed vocabulary rather than seeding it again", async () => {
+  it("keeps an emptied committed vocabulary through a settings save", async () => {
     await identityFiles.changeInRepoVoiceDictionary(tmpDir, () => [entry("Gone")]);
     await identityFiles.changeInRepoVoiceDictionary(tmpDir, () => []);
     await identityFiles.writeInRepoSettings(
@@ -500,12 +509,15 @@ describe("in-repo dictation vocabulary", () => {
     ["unparseable", "{ not json"],
     ["not an object", "[]"],
     ["from a newer version", JSON.stringify({ version: 2, voiceDictionary: [] })],
-  ])("refuses to read or patch a file that is %s", async (_label, content) => {
+  ])("refuses to read, patch or rewrite a file that is %s", async (_label, content) => {
     await fs.mkdir(path.join(tmpDir, ".daintree"));
     await fs.writeFile(settingsPath(), content);
     await expect(identityFiles.readInRepoVoiceDictionary(tmpDir)).rejects.toThrow();
     await expect(
       identityFiles.changeInRepoVoiceDictionary(tmpDir, () => [entry("New")])
+    ).rejects.toThrow();
+    await expect(
+      identityFiles.writeInRepoSettings(tmpDir, makeSettings({ excludedPaths: ["dist"] }))
     ).rejects.toThrow();
     expect(await fs.readFile(settingsPath(), "utf-8")).toBe(content);
   });

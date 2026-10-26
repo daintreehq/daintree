@@ -1,8 +1,8 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import type { VoiceDictionaryEntry } from "@shared/types/ipc/api";
 import { DictationVocabularySection, parseHeardAs } from "../DictationVocabularySection";
 
@@ -22,7 +22,11 @@ const api = {
 beforeEach(() => {
   vi.clearAllMocks();
   api.getProject.mockResolvedValue([]);
-  (window as unknown as { electron: unknown }).electron = { voiceDictionary: api };
+  vi.stubGlobal("electron", { voiceDictionary: api });
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 const termInput = () => screen.getByPlaceholderText("Term, as written…") as HTMLInputElement;
@@ -90,11 +94,39 @@ describe("DictationVocabularySection", () => {
     api.getProject.mockReturnValueOnce(new Promise((resolve) => (resolveFirst = resolve)));
     api.getProject.mockResolvedValueOnce([entry("SecondProjectTerm")]);
     const { rerender } = render(<DictationVocabularySection projectId="p1" />);
+    await waitFor(() => expect(api.getProject).toHaveBeenCalledWith({ projectId: "p1" }));
     rerender(<DictationVocabularySection projectId="p2" />);
     expect(await screen.findByText("SecondProjectTerm")).toBeTruthy();
 
-    resolveFirst([entry("FirstProjectTerm")]);
-    await Promise.resolve();
+    await act(async () => resolveFirst([entry("FirstProjectTerm")]));
     expect(screen.queryByText("FirstProjectTerm")).toBeNull();
+    expect(screen.getByText("SecondProjectTerm")).toBeTruthy();
+  });
+
+  it("keeps a read that lands late from replacing a change made after it", async () => {
+    let resolveRead!: (entries: VoiceDictionaryEntry[]) => void;
+    api.getProject.mockReturnValueOnce(new Promise((resolve) => (resolveRead = resolve)));
+    api.addToProject.mockResolvedValue([entry("Old"), entry("Added")]);
+    render(<DictationVocabularySection projectId="p1" />);
+    fireEvent.change(termInput(), { target: { value: "Added" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+
+    await act(async () => resolveRead([entry("Old")]));
+    expect(await screen.findByText("Added", { selector: "*:not(input)" })).toBeTruthy();
+    expect(api.addToProject).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a draft typed while the previous term was saving", async () => {
+    let resolveAdd!: (entries: VoiceDictionaryEntry[]) => void;
+    api.addToProject.mockReturnValueOnce(new Promise((resolve) => (resolveAdd = resolve)));
+    render(<DictationVocabularySection projectId="p1" />);
+    await waitFor(() => expect(api.getProject).toHaveBeenCalled());
+    fireEvent.change(termInput(), { target: { value: "First" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    fireEvent.change(termInput(), { target: { value: "Second" } });
+
+    await act(async () => resolveAdd([entry("First")]));
+    expect(screen.getByText("First")).toBeTruthy();
+    expect(termInput().value).toBe("Second");
   });
 });
