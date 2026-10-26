@@ -1220,7 +1220,9 @@ describe("PortalManager idle release (#14538)", () => {
   const cachedView = { id: 2, send: vi.fn(), isDestroyed: () => false };
   const logMocks = vi.hoisted(() => ({ logInfo: vi.fn(), logWarn: vi.fn() }));
   const metricsMocks = vi.hoisted(() => ({
-    getAppMetricsSnapshot: vi.fn((): Array<{ pid: number; memory: { workingSetSize: number } }> => []),
+    getAppMetricsSnapshot: vi.fn(
+      (): Array<{ pid: number; memory: { workingSetSize: number } }> => []
+    ),
   }));
   const bounds = { x: 0, y: 0, width: 800, height: 600 };
   const HOUR = 60 * 60 * 1000;
@@ -1393,7 +1395,9 @@ describe("PortalManager idle release (#14538)", () => {
 
   it("leaves a tab whose page refuses exactly as it was, and asks again an hour later", async () => {
     const { manager, parked } = await parkedBehindAnother();
-    parked.close.mockImplementation(() => queueMicrotask(() => emit(parked, "will-prevent-unload")));
+    parked.close.mockImplementation(() =>
+      queueMicrotask(() => emit(parked, "will-prevent-unload"))
+    );
 
     vi.setSystemTime(Date.now() + HOUR);
     await expect(manager.releaseIdleTabs()).resolves.toEqual([]);
