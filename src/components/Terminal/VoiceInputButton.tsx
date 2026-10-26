@@ -70,6 +70,7 @@ export function VoiceInputButton({
   const isConfigured = useVoiceRecordingStore((state) => state.isConfigured);
   const lastError = useVoiceRecordingStore((state) => state.lastError);
   const micSignal = useVoiceRecordingStore((state) => state.micSignal);
+  const micDeviceLabel = useVoiceRecordingStore((state) => state.micDeviceLabel);
   const activePanelId = useVoiceRecordingStore((state) => state.activeTarget?.panelId ?? null);
 
   const isRecording = activePanelId === panelId && status === "recording";
@@ -269,7 +270,7 @@ export function VoiceInputButton({
           ? "Paused — click to resume"
           : isMicStarting
             ? micSignal === "silent"
-              ? "No audio from microphone · Click to stop"
+              ? `No audio from ${micDeviceLabel ?? "microphone"} · Click to stop`
               : "Starting microphone… Click to stop"
             : isReconnecting
               ? "Reconnecting… Click to stop"

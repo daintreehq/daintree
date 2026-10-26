@@ -14,6 +14,8 @@ vi.mock("@/store/voiceRecordingStore", () => {
     lockedTarget: null as { panelId: string } | null,
     recentTargets: [] as Array<unknown>,
     micSignal: "pending" as string,
+    micDeviceLabel: null as string | null,
+    micNotice: null as unknown,
   };
   const fns = {
     setLastError: vi.fn(),
@@ -29,6 +31,12 @@ vi.mock("@/store/voiceRecordingStore", () => {
     setAudioLevel: vi.fn(),
     setMicSignal: vi.fn((signal: string) => {
       state.micSignal = signal;
+    }),
+    setMicDeviceLabel: vi.fn((label: string | null) => {
+      state.micDeviceLabel = label;
+    }),
+    setMicNotice: vi.fn((notice: unknown) => {
+      state.micNotice = notice;
     }),
     setElapsedSeconds: vi.fn(),
     appendDelta: vi.fn(),

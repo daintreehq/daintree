@@ -1,6 +1,7 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import {
   isVoiceMicPending,
+  selectMicNoticeForPanel,
   useVoiceRecordingStore,
   type RecentDictationTarget,
 } from "../voiceRecordingStore";
@@ -20,6 +21,8 @@ function reset() {
     elapsedSeconds: 0,
     audioLevel: 0,
     micSignal: "pending",
+    micDeviceLabel: null,
+    micNotice: null,
     panelBuffers: {},
     announcement: null,
   });
@@ -102,6 +105,62 @@ describe("voiceRecordingStore — micSignal (#13105)", () => {
     for (const status of ["idle", "arming", "paused", "finishing", "error"] as const) {
       expect(isVoiceMicPending({ status, micSignal: "pending" })).toBe(false);
     }
+  });
+});
+
+describe("voiceRecordingStore — micNotice (#14606)", () => {
+  beforeEach(reset);
+
+  const lost = { kind: "lost" as const, target: TARGET, deviceLabel: "AirPods Pro" };
+  const fallback = { kind: "fallback" as const, target: TARGET, deviceLabel: "USB Mic" };
+  const silent = {
+    kind: "silent" as const,
+    target: TARGET,
+    deviceLabel: "AirPods Pro",
+    bluetooth: true,
+    builtIn: null,
+  };
+
+  it("clears the notice and the device name when a new session arms or begins", () => {
+    for (const enter of [
+      () => useVoiceRecordingStore.getState().setArming(TARGET),
+      () => useVoiceRecordingStore.getState().beginSession(TARGET),
+    ]) {
+      useVoiceRecordingStore.setState({ micNotice: lost, micDeviceLabel: "AirPods Pro" });
+      enter();
+      expect(useVoiceRecordingStore.getState().micNotice).toBeNull();
+      expect(useVoiceRecordingStore.getState().micDeviceLabel).toBeNull();
+    }
+  });
+
+  it("keeps a lost or fallback notice past the session's end, but not a silent one", () => {
+    for (const [notice, kept] of [
+      [lost, true],
+      [fallback, true],
+      [silent, false],
+    ] as const) {
+      useVoiceRecordingStore.getState().beginSession(TARGET);
+      useVoiceRecordingStore.setState({ micNotice: notice, micDeviceLabel: "AirPods Pro" });
+      useVoiceRecordingStore.getState().finishSession({ preserveLiveText: true });
+      expect(useVoiceRecordingStore.getState().micNotice).toBe(kept ? notice : null);
+      expect(useVoiceRecordingStore.getState().micDeviceLabel).toBeNull();
+    }
+  });
+
+  it("dismisses only the notice it was given, even against a newer one of the same kind", () => {
+    const newer = { ...lost, deviceLabel: "USB Mic" };
+    useVoiceRecordingStore.getState().setMicNotice(newer);
+    useVoiceRecordingStore.getState().dismissMicNotice(lost);
+    expect(useVoiceRecordingStore.getState().micNotice).toBe(newer);
+    useVoiceRecordingStore.getState().dismissMicNotice(newer);
+    expect(useVoiceRecordingStore.getState().micNotice).toBeNull();
+  });
+
+  it("hands a notice only to the pane it happened on", () => {
+    expect(selectMicNoticeForPanel({ micNotice: lost }, PANEL_ID)).toBe(lost);
+    expect(selectMicNoticeForPanel({ micNotice: lost }, "panel-2")).toBeNull();
+    expect(selectMicNoticeForPanel({ micNotice: lost }, null)).toBeNull();
+    expect(selectMicNoticeForPanel({ micNotice: null }, PANEL_ID)).toBeNull();
   });
 });
 

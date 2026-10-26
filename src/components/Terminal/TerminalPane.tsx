@@ -82,7 +82,7 @@ import {
   useTerminalInputStore,
 } from "@/store";
 import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
-import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
+import { selectMicNoticeForPanel, useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { useTerminalLogic } from "@/hooks/useTerminalLogic";
 import { useIsHibernated } from "@/hooks/useIsHibernated";
 import { errorsClient } from "@/clients";
@@ -135,6 +135,7 @@ import { useTerminalInputBlock } from "@/hooks/useHostConnection";
 import { ControlConfirmedBanner, TerminalInputBlockBanner } from "./TerminalInputBlockBanner";
 import { useControlConfirmed } from "@/components/Recovery/takeControl";
 import { WorktreeMoveBanner } from "./WorktreeMoveBanner";
+import { VoiceMicNoticeBanner } from "./VoiceMicNoticeBanner";
 import type { TerminalRuntimeIdentity } from "@shared/types/panel";
 
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
@@ -633,6 +634,7 @@ function TerminalPaneComponent({
   const isVoiceArming = useVoiceRecordingStore(
     (s) => s.status === "arming" && s.activeTarget?.panelId === id
   );
+  const voiceMicNotice = useVoiceRecordingStore((s) => selectMicNoticeForPanel(s, id));
 
   const hybridInputEnabled = useTerminalInputStore((state) => state.hybridInputEnabled);
   const preferredTerminalFocusTarget = usePanelStore((state) => state.preferredTerminalFocusTarget);
@@ -1658,6 +1660,10 @@ function TerminalPaneComponent({
           onTell={worktreeMoveBanner.tell}
           onDismiss={worktreeMoveBanner.dismiss}
         />
+      </BannerSlot>
+
+      <BannerSlot visible={voiceMicNotice !== null}>
+        {voiceMicNotice && <VoiceMicNoticeBanner notice={voiceMicNotice} />}
       </BannerSlot>
 
       <BannerSlot visible={showInjectionBanner}>

@@ -87,6 +87,7 @@ export function VoiceRecordingToolbarButton({
   const status = useVoiceRecordingStore((state) => state.status);
   const elapsedSeconds = useVoiceRecordingStore((state) => state.elapsedSeconds);
   const micSignal = useVoiceRecordingStore((state) => state.micSignal);
+  const micDeviceLabel = useVoiceRecordingStore((state) => state.micDeviceLabel);
   const shortcut = useEffectiveCombo("voiceInput.toggle");
   const pauseShortcut = useEffectiveCombo("voiceInput.togglePause");
   const hover = useShortcutHintHover("voiceInput.toggle");
@@ -253,7 +254,7 @@ export function VoiceRecordingToolbarButton({
       : "Arming dictation…"
     : isMicStarting
       ? micSignal === "silent"
-        ? "No audio from microphone"
+        ? `No audio from ${micDeviceLabel ?? "microphone"}`
         : "Starting microphone…"
       : isConnecting
         ? targetLabel

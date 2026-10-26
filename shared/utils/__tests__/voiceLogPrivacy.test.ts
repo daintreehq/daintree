@@ -11,15 +11,17 @@ const SANITIZERS = new Set([
   "voicePayloadShape",
   "summarizeEchoedSession",
   "summarizeOpeningChunks",
+  "Boolean",
 ]);
 // logStep is the renderer's start-diagnostics wrapper around logInfo, so its call
 // sites are scanned too and the wrapper may forward its `details` untouched.
 const LOG_FUNCTIONS = new Set(["logDebug", "logInfo", "logWarn", "logError", "logStep"]);
 
 // Names that hold or can hold user content on the voice paths: spoken text,
-// file descriptions and paths, keyterms, and provider/error messages (which can
-// quote a rejected keyword back). Only a length, count or code of these may be
-// logged.
+// file descriptions and paths, keyterms, provider/error messages (which can
+// quote a rejected keyword back), and microphone names (which carry the
+// owner's name: "Greg's AirPods"). Only a length, count or code of these may
+// be logged.
 const SENSITIVE = new Set([
   "description",
   "replacement",
@@ -47,6 +49,9 @@ const SENSITIVE = new Set([
   "utterance",
   "path",
   "filePath",
+  "label",
+  "deviceLabel",
+  "micDeviceLabel",
 ]);
 
 const SAFE_MEMBERS = new Set(["length", "code", "severity", "name", "type", "size", "byteLength"]);
@@ -210,6 +215,13 @@ describe("the log-call scan", () => {
     expect(scan("warn('a', { v: event['message'] });")).not.toEqual([]);
     expect(scan("try {} catch (failure2) { warn('a', failure2); }")).not.toEqual([]);
     expect(scan("warn(`heard ${transcript}`);")).not.toEqual([]);
+  });
+
+  it("flags microphone names", () => {
+    expect(scan("warn('a', { mic: track.label });")).not.toEqual([]);
+    expect(scan("warn('a', { deviceLabel });")).not.toEqual([]);
+    expect(scan("warn('a', { mic: state.micDeviceLabel });")).not.toEqual([]);
+    expect(scan("warn('a', { hasLabel: Boolean(track.label) });")).toEqual([]);
   });
 
   it("allows lengths, codes and sanitized errors", () => {

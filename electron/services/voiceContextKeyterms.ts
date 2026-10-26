@@ -346,7 +346,7 @@ async function getTerminalLines(ptyClient: PtyClient, terminalId: string): Promi
 
 // Bounds one dynamic read so leading speech isn't held up; a slow or failed
 // read yields `fallback`. The read itself isn't cancelled.
-async function withinBudget<T>(read: Promise<T>, fallback: T, label: string): Promise<T> {
+async function withinBudget<T>(read: Promise<T>, fallback: T, readName: string): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
   try {
     const timeout = new Promise<T>((resolve) => {
@@ -355,7 +355,7 @@ async function withinBudget<T>(read: Promise<T>, fallback: T, label: string): Pr
     });
     return await Promise.race([read, timeout]);
   } catch {
-    logDebug(`${P} ${label} failed`);
+    logDebug(`${P} ${readName} failed`);
     return fallback;
   } finally {
     if (timer) clearTimeout(timer);

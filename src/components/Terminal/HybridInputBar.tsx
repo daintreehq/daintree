@@ -388,6 +388,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       thisMachineOff ? null : (s.activeTarget?.panelId ?? null)
     );
     const voiceMicSignal = useVoiceRecordingStore((s) => s.micSignal);
+    const voiceMicDeviceLabel = useVoiceRecordingStore((s) => s.micDeviceLabel);
     const externalDraftRevision = useTerminalInputStore((s) => s.externalDraftRevision);
     const panelWorktreeId = usePanelStore((s) => s.panelsById[terminalId]?.worktreeId);
     const panelOwnTitle = usePanelStore((s) => s.panelsById[terminalId]?.title);
@@ -614,7 +615,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const placeholder = (() => {
       if (isVoicePaused) return "Paused · Resume to continue.";
       if (isVoiceMicStarting) {
-        return voiceMicSignal === "silent" ? "No audio from microphone" : "Starting microphone…";
+        if (voiceMicSignal !== "silent") return "Starting microphone…";
+        return `No audio from ${voiceMicDeviceLabel ?? "microphone"}`;
       }
       const agentName = agentId ? getAgentConfig(agentId)?.name : null;
       return agentName ? `Ask ${agentName}` : "Ask anything";

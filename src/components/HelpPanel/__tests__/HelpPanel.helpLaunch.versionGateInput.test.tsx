@@ -1008,6 +1008,44 @@ describe("HelpPanel — HybridInputBar wiring (issue #8185)", () => {
     expect(queryByTestId("hybrid-input-bar")).toBeNull();
   });
 
+  it("shows a microphone notice only for the Assistant's own terminal (#14606)", async () => {
+    const original = Object.getOwnPropertyDescriptor(window, "matchMedia");
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      writable: true,
+      value: vi.fn(() => ({
+        matches: false,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    });
+    const { useVoiceRecordingStore } = await import("@/store/voiceRecordingStore");
+    try {
+      setupBoundTerminal();
+      terminalInputState.hybridInputEnabled = true;
+      useVoiceRecordingStore.setState({
+        micNotice: { kind: "lost", target: { panelId: "term-2" }, deviceLabel: "AirPods Pro" },
+      });
+      let container!: HTMLElement;
+      await act(async () => {
+        ({ container } = render(<HelpPanel width={380} />));
+      });
+      expect(container.textContent).not.toContain("Microphone lost");
+
+      await act(async () => {
+        useVoiceRecordingStore.setState({
+          micNotice: { kind: "lost", target: { panelId: "term-1" }, deviceLabel: "AirPods Pro" },
+        });
+      });
+      expect(container.textContent).toContain("Microphone lost");
+      expect(container.textContent).toContain("AirPods Pro disconnected");
+    } finally {
+      useVoiceRecordingStore.setState({ micNotice: null });
+      if (original) Object.defineProperty(window, "matchMedia", original);
+      else Reflect.deleteProperty(window, "matchMedia");
+    }
+  });
+
   it("does not render HybridInputBar when no agent is bound", async () => {
     helpPanelState.terminalId = null;
     helpPanelState.agentId = null;

@@ -8,6 +8,7 @@ import {
   type PersistWriteMergeContext,
 } from "./persistence/persistWriteMerge";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
+import type { VoiceMicDevice } from "@/services/voiceMicDevices";
 
 export interface VoiceRecordingTarget {
   panelId: string;
@@ -204,6 +205,26 @@ interface VoiceTranscriptBuffer {
  */
 export type VoiceMicSignal = "pending" | "live" | "silent";
 
+/**
+ * A microphone event the pane that was dictating has to explain (#14606),
+ * scoped to that target. Device labels are shown here and never logged.
+ *
+ * - lost: the input device went away; the session was ended and its text kept.
+ * - fallback: the chosen device wasn't there at start, so another mic is in use.
+ * - silent: the mic is still delivering silence after the grace window.
+ *   `builtIn` is the mic to switch to, when one other than this one is found.
+ */
+export type VoiceMicNotice =
+  | { kind: "lost"; target: VoiceRecordingTarget; deviceLabel: string | null }
+  | { kind: "fallback"; target: VoiceRecordingTarget; deviceLabel: string | null }
+  | {
+      kind: "silent";
+      target: VoiceRecordingTarget;
+      deviceLabel: string | null;
+      bluetooth: boolean;
+      builtIn: VoiceMicDevice | null;
+    };
+
 interface VoiceAnnouncement {
   id: number;
   text: string;
@@ -238,6 +259,9 @@ interface VoiceRecordingState {
   elapsedSeconds: number;
   audioLevel: number;
   micSignal: VoiceMicSignal;
+  /** Label of the mic the current session captures from; null when unknown or idle. */
+  micDeviceLabel: string | null;
+  micNotice: VoiceMicNotice | null;
   panelBuffers: Record<string, VoiceTranscriptBuffer>;
   announcement: VoiceAnnouncement | null;
   setConfigured: (isConfigured: boolean) => void;
@@ -246,6 +270,10 @@ interface VoiceRecordingState {
   setSessionCorrectedText: (panelId: string, text: string | null) => void;
   setAudioLevel: (level: number) => void;
   setMicSignal: (signal: VoiceMicSignal) => void;
+  setMicDeviceLabel: (label: string | null) => void;
+  setMicNotice: (notice: VoiceMicNotice | null) => void;
+  /** Clears the notice only if it is still `notice`, so a newer one survives a stale dismiss. */
+  dismissMicNotice: (notice: VoiceMicNotice) => void;
   setArming: (target: VoiceRecordingTarget) => void;
   beginSession: (target: VoiceRecordingTarget) => void;
   setStatus: (status: VoiceInputStatus) => void;
@@ -306,6 +334,8 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
       elapsedSeconds: 0,
       audioLevel: 0,
       micSignal: "pending",
+      micDeviceLabel: null,
+      micNotice: null,
       panelBuffers: {},
       announcement: null,
 
@@ -333,6 +363,13 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
 
       setMicSignal: (micSignal) => set({ micSignal }),
 
+      setMicDeviceLabel: (micDeviceLabel) => set({ micDeviceLabel }),
+
+      setMicNotice: (micNotice) => set({ micNotice }),
+
+      dismissMicNotice: (notice) =>
+        set((state) => (state.micNotice === notice ? { micNotice: null } : state)),
+
       // Atomic single-set transition into the pre-audio confirmation phase.
       // Fires synchronously before any await in start() so the target panel
       // and toolbar can paint the arming cue before microphone init begins.
@@ -342,6 +379,8 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
           status: "arming",
           lastError: null,
           micSignal: "pending",
+          micDeviceLabel: null,
+          micNotice: null,
         }),
 
       beginSession: (target) =>
@@ -351,6 +390,8 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
           lastError: null,
           elapsedSeconds: 0,
           micSignal: "pending",
+          micDeviceLabel: null,
+          micNotice: null,
           panelBuffers: {
             ...state.panelBuffers,
             [target.panelId]: {
@@ -551,6 +592,9 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
       finishSession: ({ nextStatus = "idle", preserveLiveText = false } = {}) =>
         set((state) => {
           const panelId = state.activeTarget?.panelId;
+          // A silent warning belongs to the session that was silent; the other
+          // notices outlive it until dismissed or the next session starts.
+          const micNotice = state.micNotice?.kind === "silent" ? null : state.micNotice;
           if (!panelId) {
             return {
               activeTarget: null,
@@ -558,6 +602,8 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
               elapsedSeconds: 0,
               audioLevel: 0,
               micSignal: "pending" as VoiceMicSignal,
+              micDeviceLabel: null,
+              micNotice,
             };
           }
 
@@ -574,6 +620,8 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
             elapsedSeconds: 0,
             audioLevel: 0,
             micSignal: "pending" as VoiceMicSignal,
+            micDeviceLabel: null,
+            micNotice,
             panelBuffers: {
               ...state.panelBuffers,
               [panelId]: {
@@ -689,6 +737,14 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
     }
   )
 );
+
+/** The mic notice for one pane: a notice is only ever shown where it happened. */
+export function selectMicNoticeForPanel(
+  state: { micNotice: VoiceMicNotice | null },
+  panelId: string | null | undefined
+): VoiceMicNotice | null {
+  return panelId && state.micNotice?.target.panelId === panelId ? state.micNotice : null;
+}
 
 /**
  * True while a session is open but the mic hasn't delivered real audio yet —

@@ -15,6 +15,7 @@ import { reportCanopySent } from "@/lib/canopySeen";
 import { Button } from "@/components/ui/button";
 import { ChoiceCard } from "@/components/ui/card";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
+import { VoiceMicNoticeBanner } from "@/components/Terminal/VoiceMicNoticeBanner";
 import { XtermAdapter } from "@/components/Terminal/XtermAdapter";
 import { MissingCliGate } from "@/components/Terminal/MissingCliGate";
 import { shouldShowHybridInputBar } from "@/components/Terminal/terminalFocus";
@@ -61,6 +62,7 @@ import { useMacroFocusStore } from "@/store/macroFocusStore";
 // hand-listed hook set) across the HelpPanel/controller suites, so pulling a new
 // hook through it would crash every one of them on an undefined destructure.
 import { useScratchStore } from "@/store/scratchStore";
+import { selectMicNoticeForPanel, useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { useFocusStore } from "@/store/focusStore";
 import { getAgentConfig } from "@/config/agents";
 import { buildResumeCommand } from "@shared/types/agentSettings";
@@ -239,6 +241,7 @@ export function HelpPanel({
 
   const terminal = usePanelStore((s) => (terminalId ? s.panelsById[terminalId] : undefined));
   const terminalPty = terminal && isPtyPanel(terminal) ? terminal : undefined;
+  const voiceMicNotice = useVoiceRecordingStore((s) => selectMicNoticeForPanel(s, terminalId));
   // Narrow structural triggers for the reveal-focus effect (useHelpPanelRevealFocus). A live
   // assistant replaces its whole panel object constantly — `updateAgentState`,
   // `updateLastObservedTitle` on every distinct OSC title, and the RAF-coalesced
@@ -1214,6 +1217,7 @@ export function HelpPanel({
               {!introDismissed && !hasEverLaunchedAgent && (
                 <HelpIntroBanner onDismiss={dismissIntro} />
               )}
+              {voiceMicNotice && <VoiceMicNoticeBanner notice={voiceMicNotice} />}
               {/* Claims the right-click so the app views' native edit menu
                   stays out of the terminal: xterm parks its helper textarea
                   under the pointer, and Cut or Select all there would act on
