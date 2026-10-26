@@ -811,12 +811,6 @@ class TerminalInstanceService {
       onEnterPressed: (id) => this.onEnterPressed(id),
       updateLastObservedTitle: (id, title) =>
         usePanelStore.getState().updateLastObservedTitle(id, title),
-      notifyXtermFocused: () => {
-        // Idempotent setter: store no-ops when value is unchanged, so the
-        // burst of focusin events that xterm emits during selection,
-        // mouse-mode reporting, and IME composition does not cause renders.
-        usePanelStore.getState().setPreferredTerminalFocusTarget("xterm");
-      },
     };
   }
 

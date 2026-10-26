@@ -139,6 +139,7 @@ describe("useTypeAnywhere", () => {
       lastTypedAgentTarget: null,
       voiceSubmittingPanels: new Set(),
       hybridInputEnabled: true,
+      hybridInputAutoFocus: true,
     });
     useTypingLocatorStore.setState({ message: null, revision: 0 });
   });
@@ -163,6 +164,21 @@ describe("useTypeAnywhere", () => {
         requestPaneFocus.mock.invocationCallOrder[0]!
       );
     });
+
+    // Type-anywhere saved the keystroke in the hybrid input's draft, so that is
+    // where the keyboard goes, whichever surface arrivals land on.
+    it.each([true, false])(
+      "asks for the hybrid input whatever home is (Focus the input bar first: %s)",
+      (hybridInputAutoFocus) => {
+        useTerminalInputStore.setState({ hybridInputAutoFocus });
+        renderHook(() => useTypeAnywhere());
+
+        press("h");
+
+        expect(draftOf("a1")).toBe("h");
+        expect(requestPaneFocus).toHaveBeenCalledExactlyOnceWith("a1", "hybridInput");
+      }
+    );
 
     it("appends to an existing draft rather than replacing it", () => {
       useTerminalInputStore.getState().setDraftInput("a1", "fix the ", "proj");

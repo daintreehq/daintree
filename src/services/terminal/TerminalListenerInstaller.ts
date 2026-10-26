@@ -317,8 +317,6 @@ export interface TerminalListenerInstallDeps {
   // Panel store side effects (routed through deps to keep this module
   // import-cycle-free relative to the renderer store).
   updateLastObservedTitle: (id: string, title: string) => void;
-  /** Fired when xterm gains focus (helper textarea or any host descendant). */
-  notifyXtermFocused: () => void;
 }
 
 /**
@@ -801,21 +799,6 @@ export function installTerminalBoundListeners(
     hostElement.removeEventListener("wheel", onWheel);
     hostElement.removeEventListener("wheel", onWheelScrollIntent, { capture: true });
     hostElement.removeEventListener("keydown", onKeydownScroll);
-  });
-
-  // Track xterm focus so the session-wide preferred focus target stays in
-  // sync with what the user is actually using. xterm 6 has no high-level
-  // onFocusChange API; the helper textarea is created lazily during
-  // `terminal.open()` and may be re-created across hibernation. Listening
-  // on `hostElement` (which is reused across the wake/unhibernate path)
-  // captures focus events bubbling from any descendant — robust to the
-  // helper textarea being recreated.
-  const onHostFocusIn = () => {
-    deps.notifyXtermFocused();
-  };
-  hostElement.addEventListener("focusin", onHostFocusIn);
-  managed.listeners.push(() => {
-    hostElement.removeEventListener("focusin", onHostFocusIn);
   });
 
   const selectionDisposable = terminal.onSelectionChange(() => {

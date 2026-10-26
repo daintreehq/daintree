@@ -72,9 +72,8 @@ beforeEach(() => {
     panelIds: [panel.id],
     panelIdsByWorktreeId: { [WT_ID]: [panel.id] },
     focusedId: panel.id,
-    preferredTerminalFocusTarget: "hybridInput",
   });
-  useTerminalInputStore.setState({ draftInputs: new Map() });
+  useTerminalInputStore.setState({ draftInputs: new Map(), hybridInputAutoFocus: true });
   frames = [];
   vi.spyOn(window, "requestAnimationFrame").mockImplementation((cb) => {
     frames.push(cb);
@@ -145,9 +144,9 @@ describe("HybridInputBar mount focus", () => {
     expect(document.activeElement).not.toBe(editor);
   });
 
-  // The request names this bar, so a remembered terminal doesn't veto it.
-  it("takes a request made while the terminal is remembered", async () => {
-    usePanelStore.setState({ preferredTerminalFocusTarget: "xterm" });
+  // The request names this bar, so a terminal home doesn't veto it.
+  it("takes a request made while home is the terminal", async () => {
+    useTerminalInputStore.setState({ hybridInputAutoFocus: false });
     requestPaneFocus("term-1", "hybridInput");
 
     const { editor } = await mount();
@@ -270,14 +269,26 @@ describe("HybridInputBar deferred focus", () => {
     expect(document.activeElement).toBe(button);
   });
 
-  // A request naming the bar is what lets a drop or type-anywhere land here
-  // while the remembered surface is the terminal; without one, the remembered
-  // surface still vetoes the grab.
+  // The selection moving on ends the ask without advancing the epoch; home
+  // being the hybrid input is no reason for the pane left behind to grab.
+  it("drops a requested grab once the selection moves to another pane", async () => {
+    const { ref, editor } = await mount();
+    requestPaneFocus("term-1", "hybridInput");
+
+    ref.current!.focusWithCursorAtEnd();
+    usePanelStore.setState({ focusedId: "other" });
+    flushFrames();
+
+    expect(document.activeElement).not.toBe(editor);
+  });
+
+  // A request naming the bar is what lets a drop, type-anywhere or a restore
+  // land here while home is the terminal; without one, home vetoes the grab.
   it.each([
     ["takes", true],
     ["vetoes", false],
-  ])("%s the grab against a remembered terminal", async (_, requested) => {
-    usePanelStore.setState({ preferredTerminalFocusTarget: "xterm" });
+  ])("%s the grab against a terminal home", async (_, requested) => {
+    useTerminalInputStore.setState({ hybridInputAutoFocus: false });
     const { ref, editor } = await mount();
     if (requested) requestPaneFocus("term-1", "hybridInput");
 

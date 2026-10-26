@@ -82,6 +82,7 @@ import {
   getTerminalRefreshTier,
   useTerminalInputStore,
 } from "@/store";
+import { selectHomeFocusTarget } from "@/store/terminalInputStore";
 import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
 import { selectMicNoticeForPanel, useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { useTerminalLogic } from "@/hooks/useTerminalLogic";
@@ -116,11 +117,9 @@ const LazyHybridInputBar = lazy(() =>
   import("./HybridInputBar").then((m) => ({ default: m.HybridInputBar }))
 );
 import {
-  getTerminalClickTarget,
   getTerminalFocusTarget,
   isLikelyAtSynthesizedPointer,
   resolveTerminalPaneFocus,
-  shouldRecordXtermFocusPreference,
   shouldShowHybridInputBar,
   shouldSuppressUnfocusedClick,
   type TerminalFocusTarget,
@@ -132,6 +131,8 @@ import {
   captureFocusEpoch,
   holdPaneFocus,
   isFocusEpochCurrent,
+  paneSurfaceHoldingFocus,
+  requestPaneFocus,
   requestedPaneSurface,
 } from "./paneFocusRequest";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
@@ -441,6 +442,11 @@ function TerminalPaneComponent({
   // `dismissedRestartPrompt` either way, so acknowledging a lost session still
   // never suppresses a later exit-error banner (issue #10823).
   const [isSearchOpen, setIsSearchOpen] = useState(false);
+  // The surface that held the keyboard when search opened, for its close. Kept
+  // with its pane id: a tab switch reuses this component for another terminal.
+  const searchReturnRef = useRef<{ paneId: string; surface: TerminalFocusTarget | null } | null>(
+    null
+  );
   const [isUpdateCwdOpen, setIsUpdateCwdOpen] = useState(false);
   const [isAutoRestarting, setIsAutoRestarting] = useState(false);
   const [completionBannerDismissed, setCompletionBannerDismissed] = useState(false);
@@ -629,9 +635,9 @@ function TerminalPaneComponent({
     isRestarting ||
     followsDriver ||
     hostSwitchPending;
-  // Focus routing ignores a pending switch: moving focus to xterm for it would
-  // flip the pane's stored preference, so a switch that fails or comes back
-  // would leave the keyboard off the composer the user was in.
+  // Focus routing ignores a pending switch: it is brief and window-wide, and
+  // moving the keyboard to xterm for it would leave it there once the switch
+  // lands or fails, off the composer the user was in.
   const isHybridInputDisabledForFocus = isHybridInputDisabled && !hostSwitchPending;
 
   const isHibernated = useIsHibernated(id);
@@ -643,10 +649,6 @@ function TerminalPaneComponent({
   const voiceMicNotice = useVoiceRecordingStore((s) => selectMicNoticeForPanel(s, id));
 
   const hybridInputEnabled = useTerminalInputStore((state) => state.hybridInputEnabled);
-  const preferredTerminalFocusTarget = usePanelStore((state) => state.preferredTerminalFocusTarget);
-  const setPreferredTerminalFocusTarget = usePanelStore(
-    (state) => state.setPreferredTerminalFocusTarget
-  );
   // Panel kind is always "terminal" for PTY panels; live identity is runtime chrome.
   const kind = "terminal" as const;
   // The stored kind, which for a PTY-backed plugin panel names the plugin's kind.
@@ -891,6 +893,11 @@ function TerminalPaneComponent({
       // A held pane has no terminal to search (#12434), and its query would
       // land in whichever search bar the document happens to hold.
       if (!isFocused || isHeldPane) return;
+      // Remembered only on the way in, so a second Cmd+F from the search
+      // field doesn't make the field the place to return to.
+      if (!isSearchOpen || searchReturnRef.current?.paneId !== id) {
+        searchReturnRef.current = { paneId: id, surface: paneSurfaceHoldingFocus(id) };
+      }
       setIsSearchOpen(true);
       requestAnimationFrame(() => {
         document.querySelector<HTMLInputElement>("[data-terminal-search-input]")?.focus();
@@ -899,7 +906,7 @@ function TerminalPaneComponent({
 
     window.addEventListener("daintree:find-in-panel", handleFindInPanel);
     return () => window.removeEventListener("daintree:find-in-panel", handleFindInPanel);
-  }, [isFocused, isHeldPane]);
+  }, [id, isFocused, isHeldPane, isSearchOpen]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     // The Scratchpad is its own editor: its copy, Enter and Space are the
@@ -1039,7 +1046,6 @@ function TerminalPaneComponent({
     );
 
     const shouldSuppress = shouldSuppressUnfocusedClick({
-      location,
       isFocused,
       isCursorPointer: xtermElement.classList.contains("xterm-cursor-pointer"),
       isShiftKey: e.shiftKey,
@@ -1047,20 +1053,12 @@ function TerminalPaneComponent({
       isMac: isMac(),
     });
 
-    // A physical click that reaches xterm is an explicit "I want the terminal"
-    // gesture — record it so subsequent Cmd-Opt-Arrow navigation stays on
-    // xterm across panes. Classify the click first: a suppressed activation
-    // click is swallowed before xterm sees it, and recording there is what
-    // used to destroy the remembered hybrid-input target (#11465).
-    if (shouldRecordXtermFocusPreference({ isAtSynthesized, shouldSuppress })) {
-      setPreferredTerminalFocusTarget("xterm");
-    }
-
     if (!shouldSuppress) {
-      // Pass-through cases — already-focused panes, dock panes, link cells,
-      // shift+click. Let the click reach xterm so selection, cursor
-      // positioning, and mouse reporting work natively. The xterm focus
-      // listener (TerminalInstanceService) records the focus event.
+      // Pass-through cases — already-focused panes, link cells, the
+      // force-selection click. Let the click reach xterm so selection, cursor
+      // positioning, and mouse reporting work natively. The keyboard moving to
+      // this pane's terminal stays this pane's business: the next pane anyone
+      // arrives at still lands on home.
       return;
     }
 
@@ -1085,21 +1083,19 @@ function TerminalPaneComponent({
       // Element was detached (e.g. LRU view eviction). Safe to ignore.
     }
 
-    // Activate the pane only. The `isFocused` effect below owns the resolved
-    // handoff via resolveTerminalPaneFocus, so forcing xterm focus here would
-    // both duplicate that resolver and defeat it — landing DOM focus on xterm
-    // fires `focusin`, which unconditionally records "xterm" and overwrites the
-    // target we just preserved.
+    // Activate the pane only. The `isFocused` effect below owns the handoff to
+    // home via resolveTerminalPaneFocus; forcing xterm focus here would put the
+    // keyboard on the terminal before the pane's own pass sees it, which then
+    // keeps it there (#11465).
     setFocused(id);
   };
 
   // A file drop that finds neither the terminal nor the input bar holding the
-  // keyboard lands where a click on the terminal would have put it.
-  const getDropClickTarget = (): TerminalFocusTarget =>
-    getTerminalClickTarget({
-      location,
-      isFocused,
-      preferredTarget: usePanelStore.getState().preferredTerminalFocusTarget,
+  // keyboard lands on home, focused pane or not, in the grid and the dock
+  // alike (#13275).
+  const getDropHomeTarget = (): TerminalFocusTarget =>
+    getTerminalFocusTarget({
+      preferredTarget: selectHomeFocusTarget(useTerminalInputStore.getState()),
       hasHybridInputSurface: showHybridInputBar,
       isInputDisabled: isHybridInputDisabledForFocus,
       hybridInputEnabled,
@@ -1178,14 +1174,18 @@ function TerminalPaneComponent({
     // Deciding up front (rather than inside the deferred RAF) also keeps focus
     // from briefly landing on the ContentPanel container, which made screen
     // readers announce the container instead of the input bar. A surface a
-    // caller asked for (a drop, type-anywhere) outranks the remembered one.
+    // caller asked for (a drop, type-anywhere) outranks home; a keyboard the
+    // user already put on one of this pane's surfaces stays there. Home is
+    // read rather than subscribed to: changing the setting isn't an arrival.
     const action = resolveTerminalPaneFocus({
       requested: requestedPaneSurface(id),
-      preferredTarget: preferredTerminalFocusTarget,
+      home: selectHomeFocusTarget(useTerminalInputStore.getState()),
       hasHybridInputSurface: showHybridInputBar,
       isInputDisabled: isHybridInputDisabledForFocus,
       hybridInputEnabled,
       ...readXtermSelectionState(id),
+      hybridInputOwnsDomFocus: paneSurfaceHoldingFocus(id) === "hybridInput",
+      keepOwnedSurface: true,
     });
 
     if (action === "preserve") return;
@@ -1222,18 +1222,15 @@ function TerminalPaneComponent({
     isHeldPane,
     showHybridInputBar,
     hybridInputEnabled,
-    preferredTerminalFocusTarget,
     isHybridInputDisabledForFocus,
   ]);
 
   useEffect(() => {
-    // The registry is invoked on tab switches inside a focused tab group —
-    // the destination tab needs focus routed to whichever sub-target the
-    // user is currently using. Honor the preference rather than always
-    // forcing the input; that's what the old model did, and tab switching
-    // would otherwise yank focus out of xterm against the user's intent. A
-    // caller that names a surface, or a request still current for this pane,
-    // gets that one instead; a held pane has only its recovery controls.
+    // The registry is how callers arrive at a pane they didn't just select: a
+    // tab switch inside a focused tab group, `panel.focus`, Enter from the grid,
+    // a dock pane revealed late. Each lands on home. A caller that names a
+    // surface, or a request still current for this pane, gets that one
+    // instead; a held pane has only its recovery controls.
     return registerPanelFocusHandler(id, (surface) => {
       if (isHeldPane) {
         const gate = recoveryGateRef.current;
@@ -1243,7 +1240,7 @@ function TerminalPaneComponent({
       }
       const action = resolveTerminalPaneFocus({
         requested: surface ?? requestedPaneSurface(id),
-        preferredTarget: usePanelStore.getState().preferredTerminalFocusTarget,
+        home: selectHomeFocusTarget(useTerminalInputStore.getState()),
         hasHybridInputSurface: showHybridInputBar,
         isInputDisabled: isHybridInputDisabledForFocus,
         hybridInputEnabled,
@@ -1254,9 +1251,9 @@ function TerminalPaneComponent({
       if (action === "preserve") return true;
       if (action === "hybridInput") {
         // The bar is rendered but its editor may still be lazy-loading. Decline
-        // rather than falling through to xterm: focusing xterm flips the stored
-        // preferred target, so a transient miss would silently and permanently
-        // move the user off the input bar.
+        // rather than falling through to xterm: the pane's own pass keeps a
+        // keyboard it finds on the terminal, so a transient miss would leave
+        // the user off the input bar.
         return inputBarRef.current?.focusWithCursorAtEnd() ?? false;
       }
       // Verify rather than predict. Neither map membership nor `isOpened` is
@@ -1782,7 +1779,7 @@ function TerminalPaneComponent({
                       // gestures behind, since those only fire for a real click
                       // that landed in pane chrome (#11809).
                       onDropSelect={handleClick}
-                      dropClickTarget={getDropClickTarget}
+                      dropHomeTarget={getDropHomeTarget}
                       onAttached={handleAttached}
                       className="absolute inset-0"
                       getRefreshTier={getRefreshTierCallback}
@@ -1796,23 +1793,19 @@ function TerminalPaneComponent({
                       terminalId={id}
                       onClose={() => {
                         setIsSearchOpen(false);
-                        // Restore focus to whichever sub-target the user is
-                        // currently using — read at RAF time (not from the
-                        // render closure) so a same-frame preference flip
-                        // between onClose and the focus call is honored.
-                        requestAnimationFrame(() => {
-                          const focusTarget = getTerminalFocusTarget({
-                            preferredTarget: usePanelStore.getState().preferredTerminalFocusTarget,
-                            hasHybridInputSurface: showHybridInputBar,
-                            isInputDisabled: isHybridInputDisabled,
-                            hybridInputEnabled,
-                          });
-                          if (focusTarget === "hybridInput") {
-                            inputBarRef.current?.focusWithCursorAtEnd();
-                          } else {
-                            peekTerminalService()?.focus(id);
-                          }
-                        });
+                        // Restoring isn't arriving: the keyboard goes back to
+                        // the surface that had it when search opened, home when
+                        // neither did, resolved against what the pane can take
+                        // by then. Asked now rather than a frame later, so it
+                        // can't land after the user has moved to another pane;
+                        // a hybrid input's own deferred grab is called off by
+                        // this pane losing the selection.
+                        const opened = searchReturnRef.current;
+                        searchReturnRef.current = null;
+                        const surface =
+                          (opened?.paneId === id ? opened.surface : null) ??
+                          selectHomeFocusTarget(useTerminalInputStore.getState());
+                        requestPaneFocus(id, surface);
                       }}
                     />
                   )}

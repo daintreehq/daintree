@@ -254,13 +254,11 @@ interface UseTerminalFileTransferOptions extends TerminalFileTransferIdentity {
    */
   cwdProvider?: () => string;
   /**
-   * Where a click on the terminal would put the keyboard right now — the
-   * input bar for an activation click on a pane that remembers it. A file
-   * drop that finds neither the terminal nor its input bar holding the
-   * keyboard lands there. Omitted means xterm, which is where a click goes
-   * wherever there is no pane to activate.
+   * The pane's home right now, resolved against what it can take. A file drop
+   * that finds neither the terminal nor its input bar holding the keyboard
+   * lands there. Omitted means xterm, wherever there is no pane.
    */
-  dropClickTarget?: () => TerminalFocusTarget;
+  dropHomeTarget?: () => TerminalFocusTarget;
 }
 
 /**
@@ -317,7 +315,7 @@ export function useTerminalFileTransfer(
     launchAgentId,
     detectedAgentId,
     agentState,
-    dropClickTarget,
+    dropHomeTarget,
   }: UseTerminalFileTransferOptions
 ): boolean {
   const dragDepthRef = useRef(0);
@@ -346,7 +344,7 @@ export function useTerminalFileTransfer(
   // every render, and putting it in the listener effect's deps would tear down
   // and re-register all five DOM listeners that often.
   const onDropSelectRef = useRef(onDropSelect);
-  const dropClickTargetRef = useRef(dropClickTarget);
+  const dropHomeTargetRef = useRef(dropHomeTarget);
 
   // Bumped each time input locks, so paced writes queued before a lock stay
   // cancelled even if the lock lifts again before their next timer fires.
@@ -358,7 +356,7 @@ export function useTerminalFileTransfer(
     isInputLockedRef.current = isInputLocked;
     cwdProviderRef.current = cwdProvider;
     onDropSelectRef.current = onDropSelect;
-    dropClickTargetRef.current = dropClickTarget;
+    dropHomeTargetRef.current = dropHomeTarget;
   });
 
   useLayoutEffect(() => {
@@ -690,12 +688,11 @@ export function useTerminalFileTransfer(
 
     // Where a drag let go over this terminal lands. An agent pane's files go
     // to whichever of the terminal and its input bar holds the keyboard, as a
-    // paste would; with neither holding it, to wherever a click here would
-    // have put it. A shell's drop and an agent-context handoff keep their own
+    // paste would; with neither holding it, to the pane's home. A shell's drop and an agent-context handoff keep their own
     // routes: a shell takes no `@` tokens, and the handoff drafts on its own.
     const dropTarget = (types: readonly string[]): TerminalFocusTarget => {
       if (hasAgentContextDrag(types) || !isAgentTerminal()) return "xterm";
-      return resolvePaneDropTarget(terminalId, "xterm", dropClickTargetRef.current?.() ?? "xterm");
+      return resolvePaneDropTarget(terminalId, "xterm", dropHomeTargetRef.current?.() ?? "xterm");
     };
 
     const handleDragEnter = (e: DragEvent) => {

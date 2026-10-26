@@ -65,7 +65,11 @@ import {
 } from "./composerControlStyles";
 import { useVoiceWaitSubmit } from "./hooks/useVoiceWaitSubmit";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
-import { registerInputController, unregisterInputController } from "@/store/terminalInputStore";
+import {
+  registerInputController,
+  selectHomeFocusTarget,
+  unregisterInputController,
+} from "@/store/terminalInputStore";
 import type { CommandResult } from "@shared/types/commands";
 import { AppDialog } from "@/components/ui/AppDialog";
 import {
@@ -1089,12 +1093,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const collapseEditor = () => setIsExpanded(false);
 
     // Whether a deferred grab still has the keyboard to take. A current request
-    // naming this pane's surface decides; without one, the remembered surface
-    // still vetoes the grab as it always has.
+    // naming this pane's surface decides; without one, only a home of the
+    // hybrid input does, so a grab nobody asked for never lands off home.
     const isHybridInputStillWanted = () => {
       const requested = requestedPaneSurface(terminalId);
       if (requested !== null) return requested === "hybridInput";
-      return usePanelStore.getState().preferredTerminalFocusTarget === "hybridInput";
+      return selectHomeFocusTarget(useTerminalInputStore.getState()) === "hybridInput";
     };
 
     const focusEditor = () => {
@@ -1208,11 +1212,16 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           if (editorOwnsDomFocus(view)) return true;
           const gen = focusGenerationRef.current;
           const epoch = captureFocusEpoch();
+          // A grab a caller asked for ends with the ask. The selection moving to
+          // another pane ends it without advancing the epoch, and home alone
+          // must not carry the grab on into the pane the user left.
+          const asked = requestedPaneSurface(terminalId);
           requestAnimationFrame(() => {
             if (focusGenerationRef.current !== gen) return;
             // A press or a newer request since the call (#8487).
             if (!isFocusEpochCurrent(epoch)) return;
             if (editorViewRef.current !== view) return;
+            if (asked !== null && requestedPaneSurface(terminalId) !== asked) return;
             if (!isHybridInputStillWanted()) return;
             if (isScratchpadElement(document.activeElement, terminalId)) return;
             // The user can click into the draft between the call and this frame.

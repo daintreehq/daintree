@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef } from "react";
 import type { EditorView } from "@codemirror/view";
 import { usePanelStore } from "@/store/panelStore";
-import { useTerminalInputStore } from "@/store/terminalInputStore";
+import { selectHomeFocusTarget, useTerminalInputStore } from "@/store/terminalInputStore";
 import { captureFocusEpoch, isFocusEpochCurrent, requestPaneFocus } from "../paneFocusRequest";
 import { isVoiceSessionActiveFor } from "./useVoiceWaitSubmit";
 import type { SendTextOptions } from "./useTokenResolution";
@@ -63,13 +63,14 @@ function keyboardStayedPut(terminalId: string, view: EditorView): boolean {
 /**
  * For a terminal-first user the hybrid input is for the occasional job, so a
  * send from it hands the keyboard back to the pane's terminal once the
- * terminal has accepted it (#14692).
+ * terminal has accepted it (#14692). Terminal-first is the pane's home, the
+ * same one every arrival at the pane lands on, so the two can't disagree.
  *
  * The claim is taken at the gesture, before a `@diff` fetch or a dictation's
  * wait. A press, a newer focus request, the keyboard going anywhere but a
  * hybrid input, the selection moving on, or the Expanded Editor opening again
  * after it calls the hand-back off. The rest is read when the terminal answers:
- * the setting, a new draft (any edit since the send's own reset, even one
+ * home, a new draft (any edit since the send's own reset, even one
  * erased again), a dictation started meanwhile, and whether the keyboard is
  * still here. A send that closed the Expanded Editor waits for the dialog to
  * hand the caret back first, or the dialog would undo the hand-back.
@@ -103,7 +104,7 @@ export function useSendHandBack({
       // erased again, leaves a different one in its place.
       const resetDoc = view.state.doc;
       const handBack = () => {
-        if (useTerminalInputStore.getState().hybridInputAutoFocus) return;
+        if (selectHomeFocusTarget(useTerminalInputStore.getState()) !== "xterm") return;
         if (!isFocusEpochCurrent(epoch)) return;
         if (focusMovesAway !== movesAway) return;
         if (expandedEditorOpeningsRef.current !== openings) return;

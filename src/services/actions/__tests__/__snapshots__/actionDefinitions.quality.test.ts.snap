@@ -6427,7 +6427,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "settings",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Choose whether agent panes start with the hybrid input or the terminal focused — runtime clicks still win",
+    "description": "Choose whether switching to an agent pane focuses its hybrid input or its terminal",
     "examples": undefined,
     "id": "terminalConfig.setHybridInputAutoFocus",
     "keywords": undefined,

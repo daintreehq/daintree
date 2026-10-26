@@ -20,11 +20,6 @@ const lifecycle = vi.hoisted(() => {
 });
 vi.mock("@/lib/viewCacheState", () => lifecycle);
 
-const focusPreference = vi.hoisted(() => ({ set: vi.fn() }));
-vi.mock("@/store/panelStore", () => ({
-  usePanelStore: { getState: () => ({ setPreferredTerminalFocusTarget: focusPreference.set }) },
-}));
-
 const client = vi.hoisted(() => {
   let listener: ((change: TerminalConfigChange) => void) | null = null;
   return {
@@ -55,7 +50,7 @@ import {
 import { notifyHostResync } from "@/store/hostResyncSignal";
 import { useScrollbackStore } from "@/store/scrollbackStore";
 import { usePerformanceModeStore } from "@/store/performanceModeStore";
-import { useTerminalInputStore } from "@/store/terminalInputStore";
+import { selectHomeFocusTarget, useTerminalInputStore } from "@/store/terminalInputStore";
 import { useScreenReaderStore } from "@/store/screenReaderStore";
 import { useTerminalFontStore } from "@/store/terminalFontStore";
 import { useTerminalColorSchemeStore } from "@/store/terminalColorSchemeStore";
@@ -335,18 +330,26 @@ describe("terminalConfigSync (#14699)", () => {
     expect(useScrollbackStore.getState().scrollbackLines).toBe(5000);
   });
 
-  it("re-seeds the session's focus preference only when autofocus actually changes", async () => {
+  it("moves every agent pane's home only when autofocus actually changes", async () => {
     boot({ hybridInputAutoFocus: true });
     dispose = initTerminalConfigSync();
     await settle();
+    const homeOf = () => selectHomeFocusTarget(useTerminalInputStore.getState());
+    const homes: string[] = [];
+    const unsubscribe = useTerminalInputStore.subscribe((state) =>
+      homes.push(selectHomeFocusTarget(state))
+    );
 
-    client.push(device({ hybridInputAutoFocus: true, fontSize: 16 }));
-    client.push(device({ hybridInputAutoFocus: false }));
+    try {
+      client.push(device({ hybridInputAutoFocus: true, fontSize: 16 }));
+      expect(homeOf()).toBe("hybridInput");
 
-    // The store re-seeds through a dynamic import; once the change's lands,
-    // an unchanged value's would have too.
-    await vi.waitFor(() => expect(focusPreference.set).toHaveBeenCalled());
-    expect(focusPreference.set.mock.calls).toEqual([["xterm"]]);
+      client.push(device({ hybridInputAutoFocus: false }));
+      expect(homeOf()).toBe("xterm");
+    } finally {
+      unsubscribe();
+    }
+    expect(homes).toEqual(["xterm"]);
   });
 
   it("replaces the custom schemes, dropping a removed scheme's preview, and leaves recents to the saved list", async () => {

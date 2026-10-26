@@ -63,7 +63,6 @@ const FIELDS: { readonly [K in Field]-?: FieldSync<unknown> } = {
     read: () => useTerminalInputStore.getState().hybridInputEnabled,
     write: (enabled) => useTerminalInputStore.getState().setHybridInputEnabled(enabled),
   }),
-  // Its setter also re-seeds the session's focus preference.
   hybridInputAutoFocus: field({
     resolve: ({ hybridInputAutoFocus }) => hybridInputAutoFocus ?? true,
     read: () => useTerminalInputStore.getState().hybridInputAutoFocus,
