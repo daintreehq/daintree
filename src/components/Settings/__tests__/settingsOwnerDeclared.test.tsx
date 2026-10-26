@@ -120,7 +120,7 @@ describe("the marks the owner issue called wrong", () => {
   const owner = (key: keyof typeof SECTION_SETTINGS) => sharedSettingOwner(SECTION_SETTINGS[key]);
 
   it("puts the Ctrl+V clipboard row on this machine, alongside the other input settings", () => {
-    expect(owner("clipboardImages")).toBe("device");
+    expect(SECTION_SETTINGS.agentInput).toContain("remoteHostsPreferences");
     expect(owner("agentInput")).toBe("device");
   });
 
@@ -164,7 +164,6 @@ describe("the declared settings behind each section", () => {
       panelLimits: "device",
       projectViews: "device",
       agentInput: "device",
-      clipboardImages: "device",
       twoPaneSplit: "device",
       gridLayout: "device",
       scrollback: "device",
@@ -200,7 +199,8 @@ describe("search results", () => {
     expect(owned("tab-nav-agents")).toBe("host");
     expect(owned("tab-nav-keyboard")).toBe("device");
     expect(owned("terminal-panel-limits")).toBe("device");
-    expect(owned("terminal-hybrid-input")).toBe("device");
+    expect(owned("agents-hybrid-input")).toBe("device");
+    expect(owned("agents-hybrid-focus")).toBe("device");
     expect(owned("general-keep-awake")).toBe("device");
     expect(owned("general-session-restore")).toBe("host");
     expect(owned("project-theme")).toBe("device");
