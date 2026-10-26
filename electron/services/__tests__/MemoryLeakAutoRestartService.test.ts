@@ -23,10 +23,14 @@ function harness(
   let exitListener: ((id: string) => void) | null = null;
   const policy = { enabled: options.enabled ?? true, thresholdMb: THRESHOLD_MB };
   const generations = new Map<string, number>();
-  const terminal = { value: options.terminal === undefined ? { projectId: "p1" } : options.terminal };
+  const terminal = {
+    value: options.terminal === undefined ? { projectId: "p1" } : options.terminal,
+  };
   const clock = { now: 0 };
   const deliver = vi.fn();
-  const target = { value: options.target ?? ({ kind: "view", deliver } as MemoryLeakRestartTarget) };
+  const target = {
+    value: options.target ?? ({ kind: "view", deliver } as MemoryLeakRestartTarget),
+  };
   const restartOnHost = vi.fn(async () => "restarted");
   const offMetrics = vi.fn();
   const service = new MemoryLeakAutoRestartService({

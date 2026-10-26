@@ -9,7 +9,9 @@ function stateWith(terminal: Partial<TerminalSnapshot> & { id: string }): Projec
   return {
     projectId: PROJECT.id,
     sidebarWidth: 300,
-    terminals: [{ title: "Agent", location: "grid", cwd: "/repo", ...terminal } as TerminalSnapshot],
+    terminals: [
+      { title: "Agent", location: "grid", cwd: "/repo", ...terminal } as TerminalSnapshot,
+    ],
     terminalSizes: { [terminal.id]: { cols: 120, rows: 40 } },
   };
 }
