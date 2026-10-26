@@ -536,7 +536,11 @@ describe("VoiceCorrectionService", () => {
       ["drops a negation", "don't delete the branch yet", "Delete the branch yet."],
       ["adds a negation", "merge it after the tests pass", "Don't merge it after the tests pass."],
       ["changes a number", "bump the timeout to 3000 ms", "Bump the timeout to 300 ms."],
-      ["recases a path", "fix the bug in src/utils/foo.ts please", "Fix the bug in src/Utils/foo.ts."],
+      [
+        "recases a path",
+        "fix the bug in src/utils/foo.ts please",
+        "Fix the bug in src/Utils/foo.ts.",
+      ],
       ["edits a flag", "run it with --dry-run first", "Run it with --dryrun first."],
       ["edits an @-reference", "check @src/App.tsx for the bug", "Check @src/app.tsx for the bug."],
       [

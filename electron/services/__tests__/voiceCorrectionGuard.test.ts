@@ -41,7 +41,11 @@ describe("extractProtectedSpans", () => {
 
 describe("validateCorrection", () => {
   it.each([
-    ["an ordinary cleanup", "um so we need to like update the racked component", "So we need to update the React component."],
+    [
+      "an ordinary cleanup",
+      "um so we need to like update the racked component",
+      "So we need to update the React component.",
+    ],
     ["joined mishearings", "type script and post gress", "TypeScript and Postgres."],
     ["a fixed term in a short dictation", "cube netties pods", "Kubernetes pods."],
     ["a contraction change", "do not delete the branch", "Don't delete the branch."],
@@ -68,7 +72,12 @@ describe("validateCorrection", () => {
     ["a spoken number turned into digits", "retry three times", "Retry 3 times.", "number"],
     ["a dropped negation", "don't push yet", "Push yet.", "negation"],
     ["an added negation", "merge it now", "Don't merge it now.", "negation"],
-    ["a negation moved to another verb", "do not start it and stop it", "Start it and do not stop it.", "negation"],
+    [
+      "a negation moved to another verb",
+      "do not start it and stop it",
+      "Start it and do not stop it.",
+      "negation",
+    ],
     ["never turned into not", "never rebase main", "Do not rebase main.", "negation"],
     [
       "an answer instead of a cleanup",
@@ -76,7 +85,12 @@ describe("validateCorrection", () => {
       "The auth flow issues a short-lived token at sign-in and refreshes it in the background.",
       "edit_size",
     ],
-    ["a short command rewritten", "fix the login bug", "Refactor the authentication module.", "edit_size"],
+    [
+      "a short command rewritten",
+      "fix the login bug",
+      "Refactor the authentication module.",
+      "edit_size",
+    ],
     [
       "dropped clauses in a longer passage",
       "update the parser and the lexer and the printer and the docs and the changelog",

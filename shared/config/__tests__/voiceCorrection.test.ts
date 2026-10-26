@@ -92,7 +92,9 @@ describe("CORE_CORRECTION_PROMPT", () => {
 
   it("applies <terms> only where the words make no sense as plain English", () => {
     expect(CORE_CORRECTION_PROMPT).not.toContain("even if the phrase was not wrapped");
-    expect(CORE_CORRECTION_PROMPT).toMatch(/only when the phrase makes no sense as ordinary English/);
+    expect(CORE_CORRECTION_PROMPT).toMatch(
+      /only when the phrase makes no sense as ordinary English/
+    );
     expect(CORE_CORRECTION_PROMPT).toContain("the promise rejects");
   });
 
