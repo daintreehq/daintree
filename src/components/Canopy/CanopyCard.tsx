@@ -14,6 +14,7 @@ import {
   ArchiveRestore,
   CheckCheck,
   KeyRound,
+  MessageSquare,
   SquareArrowOutUpRight,
   Trash2,
 } from "lucide-react";
@@ -22,6 +23,7 @@ import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { CLOSE_OWNER_ATTR, CLOSE_REQUEST_EVENT } from "@/lib/closeRequest";
 import { useCanopyStore } from "@/store/canopyStore";
 import { Button } from "@/components/ui/button";
+import { Kbd } from "@/components/ui/Kbd";
 import { SURFACE_HEADER_FOCUS_LIFT_CLASS, SurfaceHeader } from "@/components/ui/SurfaceHeader";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
@@ -229,6 +231,7 @@ export function CanopyCard({
   const { row } = item;
   const run = row.run;
   const canReply = canReplyTo(item, stream.secretPrompt);
+  const answerChoices = answerOptions(item);
   const canTrash = canTrashItem(item);
   const archived = itemArchived(item);
   const looksDone = itemLooksDone(item);
@@ -389,6 +392,20 @@ export function CanopyCard({
     return () => section.removeEventListener(CLOSE_REQUEST_EVENT, onClose);
   }, []);
 
+  // The one path an answer takes, from a number key, Y or a click on a choice:
+  // nothing is pressed into a screen this panel can't see, and a risky action
+  // takes two presses of the same choice.
+  const pressAnswer = (label: string, digit: number | null) => {
+    if (reconnecting) return;
+    const confirms = digit !== null && armedAnswer?.digit === digit && armedAnswer.label === label;
+    if (digit !== null && answerNeedsConfirm(item) && !confirms) {
+      setAnswerArmed({ label, digit, target: trashTarget });
+      return;
+    }
+    setAnswerArmed(null);
+    onAnswer(item, label);
+  };
+
   const handleKey = (event: KeyboardEvent<HTMLElement>): boolean => {
     // One key answers the dialog: its number picks that option, Y the first
     // (never on a risky action, which takes its number).
@@ -403,15 +420,7 @@ export function CanopyCard({
             : null;
       if (label !== null) {
         event.preventDefault();
-        // Nothing is pressed into a screen this panel can't see.
-        if (event.repeat || reconnecting) return true;
-        const confirms = armedAnswer?.digit === digit && armedAnswer.label === label;
-        if (digit !== null && answerNeedsConfirm(item) && !confirms) {
-          setAnswerArmed({ label, digit, target: trashTarget });
-          return true;
-        }
-        setAnswerArmed(null);
-        onAnswer(item, label);
+        if (!event.repeat) pressAnswer(label, digit);
         return true;
       }
     }
@@ -683,6 +692,59 @@ export function CanopyCard({
           onSubmitted={() => onSent(item, "terminal")}
           onGoTo={(event) => onOpen(item, isNewWindowClick(event))}
         />
+        {answerChoices.length > 0 && (
+          <div
+            role="group"
+            aria-label="Answer"
+            data-canopy-choices=""
+            className="flex shrink-0 flex-wrap items-center gap-1.5 border-t border-overlay px-3 py-2"
+          >
+            {answerChoices.map((choice, index) => {
+              const armed = armedAnswer?.digit === index + 1;
+              return (
+                <Button
+                  key={`${index}:${choice}`}
+                  variant={armed ? "ghost-danger" : "subtle"}
+                  size="xs"
+                  disabled={reconnecting}
+                  data-armed={armed || undefined}
+                  aria-keyshortcuts={String(index + 1)}
+                  className={cn("max-w-full", armed && "bg-status-error/10")}
+                  onClick={() => pressAnswer(choice, index + 1)}
+                >
+                  <Kbd className="shrink-0">{index + 1}</Kbd>
+                  <span className="min-w-0 truncate">
+                    {armed ? `Press again: ${choice}` : choice}
+                  </span>
+                </Button>
+              );
+            })}
+            <span className="ml-auto flex shrink-0 items-center gap-1.5">
+              {canReply && (
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  aria-keyshortcuts="R"
+                  onClick={() => composerRef.current?.focus()}
+                >
+                  <MessageSquare aria-hidden="true" />
+                  Reply
+                  <Kbd className="shrink-0">R</Kbd>
+                </Button>
+              )}
+              <Button
+                variant="ghost"
+                size="xs"
+                aria-keyshortcuts="Enter"
+                onClick={(event) => onOpen(item, isNewWindowClick(event))}
+              >
+                <SquareArrowOutUpRight aria-hidden="true" />
+                Go to terminal
+                <Kbd className="shrink-0">↵</Kbd>
+              </Button>
+            </span>
+          </div>
+        )}
         {canReply ? (
           <div ref={replyHostRef} data-keybindings-isolated="" className="contents">
             <Suspense fallback={null}>

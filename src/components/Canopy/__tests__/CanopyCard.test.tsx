@@ -408,6 +408,38 @@ describe("CanopyCard", () => {
     }
   });
 
+  it("answers by clicking a choice, through the same guarded path as its number", () => {
+    const h = handlers();
+    const { container } = render(
+      <CanopyCard
+        item={itemFor("approval", { options: ["Yes", "No"], risk: "none" })}
+        {...PROPS}
+        {...h}
+      />
+    );
+    const buttons = container.querySelectorAll<HTMLButtonElement>("[data-canopy-choices] button");
+    expect(buttons[1]!.textContent).toContain("No");
+    fireEvent.click(buttons[1]!);
+    expect(h.onAnswer).toHaveBeenCalledWith(expect.anything(), "No");
+    const names = Array.from(buttons).map((b) => b.textContent);
+    expect(names.some((n) => n?.includes("Reply"))).toBe(true);
+    expect(names.some((n) => n?.includes("Go to terminal"))).toBe(true);
+  });
+
+  it("takes two clicks on a risky choice, and none while reconnecting", () => {
+    const h = handlers();
+    const item = itemFor("approval", { options: ["Yes", "No"], risk: "caution" });
+    const { container, rerender } = render(<CanopyCard item={item} {...PROPS} {...h} />);
+    const first = () => container.querySelector<HTMLButtonElement>("[data-canopy-choices] button")!;
+    fireEvent.click(first());
+    expect(h.onAnswer).not.toHaveBeenCalled();
+    expect(first().textContent).toContain("Press again");
+    fireEvent.click(first());
+    expect(h.onAnswer).toHaveBeenCalledWith(expect.anything(), "Yes");
+    rerender(<CanopyCard item={item} {...PROPS} {...h} reconnecting />);
+    expect(first().disabled).toBe(true);
+  });
+
   it("keeps a secret out of the composer, which records history", async () => {
     const { container } = renderCard(
       itemFor("question", { question: "Password:", secretPrompt: true })
