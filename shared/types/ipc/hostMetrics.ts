@@ -19,6 +19,8 @@ export interface HostAttentionEvent {
   hostName: string;
   kind: "waiting";
   terminalId: string;
+  /** The host's own id for the terminal's project, or null when the host couldn't tell. */
+  projectId: string | null;
   projectName: string | null;
   agentName: string | null;
   /**

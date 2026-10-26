@@ -88,7 +88,9 @@ export type LocalRestartTerminals = Omit<
 >;
 
 /** A waiting agent before this host's policy has been applied. */
-export type WaitingEvent = Omit<AttentionPayload, "quiet">;
+export type WaitingEvent = Omit<AttentionPayload, "quiet" | "projectId"> & {
+  projectId: string | null;
+};
 
 /**
  * This host's verdict on a waiting agent: not announced at all when its user
@@ -347,7 +349,13 @@ export async function installHostMetricsHost(server: MetricsSessionSource): Prom
         const agentName = payload.agentId
           ? (registry.getAgentConfig(payload.agentId)?.name ?? payload.agentId)
           : null;
-        listener({ kind: "waiting", terminalId, projectName: project?.name ?? null, agentName });
+        listener({
+          kind: "waiting",
+          terminalId,
+          projectId,
+          projectName: project?.name ?? null,
+          agentName,
+        });
       });
     },
     notificationSettings: () => projectStore.getEffectiveNotificationSettings(),

@@ -19,6 +19,7 @@ const attention: HostAttentionEvent = {
   hostName: "studio-01",
   kind: "waiting",
   terminalId: "t1",
+  projectId: "p1",
   projectName: "helios",
   agentName: "Claude",
   quiet: false,

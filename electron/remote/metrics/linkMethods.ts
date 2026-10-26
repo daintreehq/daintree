@@ -56,6 +56,8 @@ const name = z.string().max(1024);
 export const AttentionPayloadSchema = z.object({
   kind: z.literal("waiting"),
   terminalId: id,
+  /** Absent from a host older than this field; the Shell reads that as unknown. */
+  projectId: id.nullish(),
   projectName: name.nullable(),
   agentName: name.nullable(),
   /** The host's own quiet hours hold this back: the Shell files it in the inbox without a toast. */
