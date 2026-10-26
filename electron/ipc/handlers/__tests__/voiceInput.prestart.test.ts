@@ -25,6 +25,7 @@ vi.mock("../../../utils/logger.js", () => ({
 type ServiceEvent = {
   type: string;
   sessionId?: string;
+  text?: string;
   error?: { code: string; severity: string };
 };
 
@@ -44,6 +45,8 @@ const shared = vi.hoisted(() => ({
   providerSessionId: null as string | null,
   /** The project of the view sending the start. */
   viewProjectId: null as string | null,
+  /** Transcript the provider delivers while a graceful stop drains it. */
+  drainTranscript: null as string | null,
 }));
 
 vi.mock("../../../window/webContentsRegistry.js", async (importOriginal) => ({
@@ -68,6 +71,9 @@ vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
     };
     this.stopGracefully = function () {
       shared.calls.push("stopGracefully");
+      if (shared.drainTranscript) {
+        shared.eventCallback?.({ type: "complete", text: shared.drainTranscript });
+      }
       return Promise.resolve();
     };
     this.stop = function () {
@@ -232,6 +238,7 @@ describe("voiceInput — audio sent before the provider starts", () => {
     shared.assembleKeyterms = null;
     shared.sessionSignal = null;
     shared.providerSessionId = null;
+    shared.drainTranscript = null;
     sender.destroyed = false;
     sender.onDestroyed = null;
     fakeEvent.sender = makeSender();
@@ -279,6 +286,7 @@ describe("voiceInput — audio sent before the provider starts", () => {
   });
 
   it("drains held audio when a stop lands before the provider starts", async () => {
+    shared.drainTranscript = "Yes, carry on";
     const resolveKeyterms = deferKeyterms();
     const pending = start();
     sendChunk(1);
@@ -291,8 +299,12 @@ describe("voiceInput — audio sent before the provider starts", () => {
     await expect(pending).resolves.toEqual({ ok: true });
     await stopping;
     // The provider gets the audio before the stop, so its stop-before-ready
-    // path can transcribe it once connected.
+    // path can transcribe it once connected, and the text reaches the renderer.
     expect(shared.calls).toEqual(["start", "chunk:1", "chunk:2", "stopGracefully"]);
+    expect(sent).toContainEqual({
+      channel: "voice-input:transcription-complete",
+      payload: { text: "Yes, carry on", willCorrect: false },
+    });
 
     // The next session must not replay the stopped session's audio.
     shared.calls = [];
