@@ -4,6 +4,8 @@ import { act, renderHook } from "@testing-library/react";
 import { useReEntrySummary } from "../useReEntrySummary";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
 import { useProjectStore } from "@/store/projectStore";
+import { useScratchStore } from "@/store/scratchStore";
+import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { APP_SOURCE_LABEL } from "@/lib/notificationSourceLabel";
 
 vi.mock("@/store/createWorktreeStore", () => ({
@@ -65,6 +67,8 @@ describe("useReEntrySummary", () => {
   beforeEach(async () => {
     useNotificationHistoryStore.setState({ entries: [], unreadCount: 0 });
     useProjectStore.setState({ projects: [], currentProject: null });
+    useScratchStore.setState({ scratches: [] });
+    vi.mocked(getViewWorkspaceId).mockReturnValue("proj-here");
     hasFocusSpy = vi.spyOn(document, "hasFocus").mockReturnValue(true);
     const { getCurrentViewStoreOrNull } = await import("@/store/createWorktreeStore");
     vi.mocked(getCurrentViewStoreOrNull).mockReturnValue(null);
@@ -105,8 +109,8 @@ describe("useReEntrySummary", () => {
     expect(result.current.visible).toBe(true);
     expect(result.current.entries).toHaveLength(2);
     expect(result.current.rows).toHaveLength(2);
-    expect(result.current.rows[0]!.worstType).toBe("error");
-    expect(result.current.rows[1]!.worstType).toBe("success");
+    expect(result.current.rows[0]!.highlight.type).toBe("error");
+    expect(result.current.rows[1]!.highlight.type).toBe("success");
   });
 
   it("does not show summary when blur is less than 3 seconds", () => {
@@ -261,8 +265,8 @@ describe("useReEntrySummary", () => {
 
     expect(result.current.visible).toBe(true);
     expect(result.current.rows).toHaveLength(1);
-    expect(result.current.rows[0]!.worktreeId).toBe("wt-1");
-    expect(result.current.rows[0]!.worstType).toBe("error");
+    expect(result.current.rows[0]!.key).toBe("worktree:wt-1");
+    expect(result.current.rows[0]!.highlight.type).toBe("error");
     expect(result.current.rows[0]!.highlightTitle).toBe("Error Title");
     expect(result.current.rows[0]!.entryCount).toBe(2);
   });
@@ -322,9 +326,9 @@ describe("useReEntrySummary", () => {
 
     Date.now = realNow;
 
-    expect(result.current.rows[0]!.worstType).toBe("error");
-    expect(result.current.rows[1]!.worstType).toBe("warning");
-    expect(result.current.rows[2]!.worstType).toBe("info");
+    expect(result.current.rows[0]!.highlight.type).toBe("error");
+    expect(result.current.rows[1]!.highlight.type).toBe("warning");
+    expect(result.current.rows[2]!.highlight.type).toBe("info");
   });
 
   it("caps rows at 3 and sets overflowCount", () => {
@@ -394,7 +398,7 @@ describe("useReEntrySummary", () => {
 
     Date.now = realNow;
 
-    expect(result.current.rows[0]!.worktreeName).toBe("feature-xyz");
+    expect(result.current.rows[0]!.label).toBe("feature-xyz");
   });
 
   it("names an unresolved worktree by the last segment of its path, not a prefix of it", () => {
@@ -420,7 +424,7 @@ describe("useReEntrySummary", () => {
 
     // A worktree id is its path: its first twelve characters are the user's
     // home directory, the same for every worktree; its last segment is which.
-    expect(result.current.rows[0]!.worktreeName).toBe("feature-rate-limits");
+    expect(result.current.rows[0]!.label).toBe("feature-rate-limits");
   });
 
   it("falls back to the path's last segment when the worktree name is empty", async () => {
@@ -459,7 +463,7 @@ describe("useReEntrySummary", () => {
 
     Date.now = realNow;
 
-    expect(result.current.rows[0]!.worktreeName).toBe("wt-one");
+    expect(result.current.rows[0]!.label).toBe("wt-one");
   });
 
   it("sorts by name as tiebreaker when severity and count are equal", () => {
@@ -481,9 +485,9 @@ describe("useReEntrySummary", () => {
 
     Date.now = realNow;
 
-    expect(result.current.rows[0]!.worktreeId).toBe("wt-alpha");
-    expect(result.current.rows[1]!.worktreeId).toBe("wt-beta");
-    expect(result.current.rows[2]!.worktreeId).toBe("wt-zeta");
+    expect(result.current.rows[0]!.key).toBe("worktree:wt-alpha");
+    expect(result.current.rows[1]!.key).toBe("worktree:wt-beta");
+    expect(result.current.rows[2]!.key).toBe("worktree:wt-zeta");
   });
 
   it("gives entries with no worktree a row for their project", () => {
@@ -502,9 +506,64 @@ describe("useReEntrySummary", () => {
     focusAfter(5000);
 
     expect(result.current.visible).toBe(true);
-    expect(result.current.rows.map((r) => r.worktreeName)).toEqual(["atlas-api", "wt-1"]);
-    expect(result.current.rows[0]!.worktreeId).toBeNull();
+    expect(result.current.rows.map((r) => r.label)).toEqual(["atlas-api", "wt-1"]);
+    expect(result.current.rows[0]!.key).toBe("workspace");
     expect(useNotificationHistoryStore.getState().entries.every((e) => e.summarized)).toBe(true);
+  });
+
+  it("keeps the project's own entries apart from the app's", () => {
+    const { result } = renderHook(() => useReEntrySummary());
+
+    act(() => {
+      window.dispatchEvent(new Event("blur"));
+    });
+    addEntry({ type: "info", message: "Recipes loaded", context: { projectId: "proj-here" } });
+    addEntry({ type: "warning", message: "Disk space low" });
+
+    focusAfter(5000);
+
+    expect(result.current.rows.map((r) => [r.key, r.label])).toEqual([
+      ["app", APP_SOURCE_LABEL],
+      ["workspace", "This project"],
+    ]);
+  });
+
+  it("names a scratch workspace's row after the scratch this view was made for", () => {
+    vi.mocked(getViewWorkspaceId).mockReturnValue("scratch-1");
+    useScratchStore.setState({ scratches: [{ id: "scratch-1", name: "Spike" }] } as never);
+    useProjectStore.setState({ currentProject: { id: "proj-elsewhere", name: "Elsewhere" } } as never);
+    const { result } = renderHook(() => useReEntrySummary());
+
+    act(() => {
+      window.dispatchEvent(new Event("blur"));
+    });
+    addEntry({ type: "info", message: "Mine", context: { projectId: "scratch-1" } });
+    addEntry({ type: "info", message: "Not mine", context: { projectId: "proj-elsewhere" } });
+
+    focusAfter(5000);
+
+    expect(result.current.rows.map((r) => r.label)).toEqual(["Spike"]);
+    expect(result.current.entries.map((e) => e.message)).toEqual(["Mine"]);
+  });
+
+  it("falls back to the current project when the view has no workspace id", () => {
+    vi.mocked(getViewWorkspaceId).mockReturnValue(null);
+    useProjectStore.setState({
+      projects: [{ id: "proj-a", name: "atlas" }],
+      currentProject: { id: "proj-a", name: "atlas" },
+    } as never);
+    const { result } = renderHook(() => useReEntrySummary());
+
+    act(() => {
+      window.dispatchEvent(new Event("blur"));
+    });
+    addEntry({ type: "info", message: "Here", context: { projectId: "proj-a" } });
+    addEntry({ type: "info", message: "There", context: { projectId: "proj-b" } });
+
+    focusAfter(5000);
+
+    expect(result.current.entries.map((e) => e.message)).toEqual(["Here"]);
+    expect(result.current.rows[0]!.label).toBe("atlas");
   });
 
   it("gives entries from the app itself a row named after the app", () => {
@@ -519,7 +578,7 @@ describe("useReEntrySummary", () => {
 
     expect(result.current.visible).toBe(true);
     expect(result.current.rows).toHaveLength(1);
-    expect(result.current.rows[0]!.worktreeName).toBe(APP_SOURCE_LABEL);
+    expect(result.current.rows[0]!.label).toBe(APP_SOURCE_LABEL);
     expect(result.current.rows[0]!.highlightTitle).toBe("Disk space low");
     expect(useNotificationHistoryStore.getState().entries[0]!.summarized).toBe(true);
   });
@@ -541,7 +600,7 @@ describe("useReEntrySummary", () => {
     focusAfter(5000);
 
     expect(result.current.visible).toBe(true);
-    expect(result.current.rows.map((r) => r.worktreeId)).toEqual(["wt-1"]);
+    expect(result.current.rows.map((r) => r.key)).toEqual(["worktree:wt-1"]);
     expect(result.current.entries.map((e) => e.message)).toEqual(["Here"]);
     const byMessage = new Map(
       useNotificationHistoryStore.getState().entries.map((e) => [e.message, e.summarized])
@@ -586,7 +645,7 @@ describe("useReEntrySummary", () => {
     Date.now = realNow;
 
     expect(result.current.rows[0]!.highlightTitle).toBe("Build failed");
-    expect(result.current.rows[0]!.highlightTimestamp).toBe(errorAt);
+    expect(result.current.rows[0]!.highlight.timestamp).toBe(errorAt);
   });
 
   it("only includes entries created during the blur period", () => {

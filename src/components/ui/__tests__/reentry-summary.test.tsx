@@ -8,7 +8,8 @@ import {
   UI_ENTER_EASING,
   UI_EXIT_EASING,
 } from "@/lib/animationUtils";
-import type { ReEntrySummaryState, WorktreeRow } from "@/hooks/useReEntrySummary";
+import type { ReEntrySummaryState, SummaryRow } from "@/hooks/useReEntrySummary";
+import { navigateToNotificationSource } from "@/components/Notifications/notificationNavigation";
 import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
 import type { ReactNode } from "react";
 
@@ -21,8 +22,8 @@ vi.mock("@/components/ui/tooltip", () => ({
   TooltipTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));
 
-vi.mock("@/store/createWorktreeStore", () => ({
-  getCurrentViewStoreOrNull: vi.fn(),
+vi.mock("@/components/Notifications/notificationNavigation", () => ({
+  navigateToNotificationSource: vi.fn(),
 }));
 
 // No requestAnimationFrame stub: `vi.useFakeTimers()` fakes rAF itself, so any
@@ -43,14 +44,20 @@ function makeEntry(overrides: Partial<NotificationHistoryEntry> = {}): Notificat
   };
 }
 
-function makeRow(overrides: Partial<WorktreeRow> = {}): WorktreeRow {
+function makeRow(
+  overrides: Partial<Omit<SummaryRow, "highlight">> & {
+    type?: NotificationHistoryEntry["type"];
+    highlight?: Partial<NotificationHistoryEntry>;
+  } = {}
+): SummaryRow {
+  const { type = "error", highlight, ...rest } = overrides;
   return {
-    worktreeId: "wt-1",
-    worktreeName: "feature-test",
-    worstType: "error" as NotificationHistoryEntry["type"],
+    key: "worktree:wt-1",
+    label: "feature-test",
     highlightTitle: "Build failed",
     entryCount: 2,
-    ...overrides,
+    ...rest,
+    highlight: makeEntry({ type, context: { worktreeId: "wt-1" }, ...highlight }),
   };
 }
 
@@ -66,46 +73,9 @@ function makeState(overrides: Partial<ReEntrySummaryState> = {}): ReEntrySummary
 }
 
 describe("ReEntrySummary", () => {
-  beforeEach(async () => {
+  beforeEach(() => {
     vi.useFakeTimers();
-    const { getCurrentViewStoreOrNull } = await import("@/store/createWorktreeStore");
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-    vi.mocked(getCurrentViewStoreOrNull).mockReturnValue({
-      getState: () => ({
-        worktrees: new Map([
-          [
-            "wt-1",
-            {
-              id: "wt-1",
-              path: "/tmp/wt-1",
-              name: "feature-test",
-              isCurrent: false,
-              worktreeId: "wt-1",
-            },
-          ],
-          [
-            "wt-2",
-            {
-              id: "wt-2",
-              path: "/tmp/wt-2",
-              name: "feature-other",
-              isCurrent: false,
-              worktreeId: "wt-2",
-            },
-          ],
-          [
-            "wt-42",
-            {
-              id: "wt-42",
-              path: "/tmp/wt-42",
-              name: "fix-bug",
-              isCurrent: false,
-              worktreeId: "wt-42",
-            },
-          ],
-        ]),
-      }),
-    } as ReturnType<typeof getCurrentViewStoreOrNull>);
+    vi.mocked(navigateToNotificationSource).mockReset().mockResolvedValue(true);
   });
 
   afterEach(() => {
@@ -133,16 +103,14 @@ describe("ReEntrySummary", () => {
   it("renders worktree rows with severity icon, name, and title", () => {
     const state = makeState({
       rows: [
-        makeRow({
-          worktreeId: "wt-1",
-          worktreeName: "feature-foo",
-          worstType: "error",
+        makeRow({ key: "worktree:wt-1",
+          label: "feature-foo",
+          type: "error",
           highlightTitle: "Build failed",
         }),
-        makeRow({
-          worktreeId: "wt-2",
-          worktreeName: "feature-bar",
-          worstType: "warning",
+        makeRow({ key: "worktree:wt-2",
+          label: "feature-bar",
+          type: "warning",
           highlightTitle: "Tests flaky",
         }),
       ],
@@ -161,7 +129,7 @@ describe("ReEntrySummary", () => {
       <ReEntrySummary
         state={makeState({
           dismiss,
-          rows: [makeRow({ worstType: "success", highlightTitle: "Done" })],
+          rows: [makeRow({ type: "success", highlightTitle: "Done" })],
         })}
       />
     );
@@ -172,7 +140,7 @@ describe("ReEntrySummary", () => {
   // The card's edge carries severity; the action beside it stays neutral, as
   // on the toast, and is marked for the forced-colors primary border.
   it("keeps its primary action neutral and marked for forced colours", () => {
-    render(<ReEntrySummary state={makeState({ rows: [makeRow({ worstType: "error" })] })} />);
+    render(<ReEntrySummary state={makeState({ rows: [makeRow({ type: "error" })] })} />);
     const open = screen.getByRole("button", { name: "Open notifications" });
     expect(open.className).not.toMatch(/(?:^|\s)(?:[a-z-]+:)*(?:bg|text|border|ring)-status-/);
     expect(open.getAttribute("data-notification-action")).toBe("primary");
@@ -188,7 +156,7 @@ describe("ReEntrySummary", () => {
       <ReEntrySummary
         state={makeState({
           dismiss,
-          rows: [makeRow({ worstType: "success", highlightTitle: "Done" })],
+          rows: [makeRow({ type: "success", highlightTitle: "Done" })],
         })}
       />
     );
@@ -197,23 +165,61 @@ describe("ReEntrySummary", () => {
     expect(dismiss).toHaveBeenCalledOnce();
   });
 
-  it("clicking a worktree row calls selectWorktree and dismiss", async () => {
-    const { useWorktreeSelectionStore } = await import("@/store/worktreeStore");
-    const selectSpy = vi.fn();
-    useWorktreeSelectionStore.setState({ selectWorktree: selectSpy });
+  it("clicking a row dismisses and goes to its highlighted entry's source", async () => {
+    const { useUIStore } = await import("@/store/uiStore");
+    const openSpy = vi.fn();
+    useUIStore.setState({ openNotificationCenter: openSpy });
+
+    const dismiss = vi.fn();
+    const context = { worktreeId: "wt-42", panelId: "panel-7" };
+    render(
+      <ReEntrySummary
+        state={makeState({
+          dismiss,
+          rows: [makeRow({ key: "worktree:wt-42", label: "fix-bug", highlight: { context } })],
+        })}
+      />
+    );
+    fireEvent.click(screen.getByText("fix-bug"));
+    expect(dismiss).toHaveBeenCalledOnce();
+    expect(navigateToNotificationSource).toHaveBeenCalledWith(context);
+    await act(async () => {});
+    expect(openSpy).not.toHaveBeenCalled();
+  });
+
+  it("opens the inbox when a row has nowhere live to land", async () => {
+    const { useUIStore } = await import("@/store/uiStore");
+    const openSpy = vi.fn();
+    useUIStore.setState({ openNotificationCenter: openSpy });
+    vi.mocked(navigateToNotificationSource).mockResolvedValue(false);
 
     const dismiss = vi.fn();
     render(
       <ReEntrySummary
         state={makeState({
           dismiss,
-          rows: [makeRow({ worktreeId: "wt-42", worktreeName: "fix-bug" })],
+          rows: [makeRow({ key: "app", label: "Daintree", highlight: { context: undefined } })],
         })}
       />
     );
-    fireEvent.click(screen.getByText("fix-bug"));
-    expect(selectSpy).toHaveBeenCalledWith("wt-42");
+    fireEvent.click(screen.getByText("Daintree"));
+    await act(async () => {});
     expect(dismiss).toHaveBeenCalledOnce();
+    expect(openSpy).toHaveBeenCalledOnce();
+  });
+
+  it("shows when the highlighted entry happened, with the exact time on hover", () => {
+    vi.setSystemTime(new Date(2026, 9, 26, 12, 0, 0));
+    const at = new Date(2026, 9, 26, 11, 55, 0).getTime();
+    render(
+      <ReEntrySummary
+        state={makeState({ rows: [makeRow({ label: "feature-foo", highlight: { timestamp: at } })] })}
+      />
+    );
+    const time = screen.getByRole("status").querySelector("time");
+    expect(time?.textContent).toBe("5m ago");
+    expect(time?.getAttribute("dateTime")).toBe(new Date(at).toISOString());
+    expect(time?.getAttribute("title")).toBe(new Date(at).toLocaleString());
   });
 
   it("overflow row opens notification center", async () => {
@@ -242,7 +248,7 @@ describe("ReEntrySummary", () => {
       <ReEntrySummary
         state={makeState({
           dismiss,
-          rows: [makeRow({ worstType: "success", highlightTitle: "Done" })],
+          rows: [makeRow({ type: "success", highlightTitle: "Done" })],
         })}
       />
     );
@@ -259,7 +265,7 @@ describe("ReEntrySummary", () => {
       <ReEntrySummary
         state={makeState({
           dismiss,
-          rows: [makeRow({ worstType: "success", highlightTitle: "Done" })],
+          rows: [makeRow({ type: "success", highlightTitle: "Done" })],
         })}
       />
     );
@@ -284,7 +290,7 @@ describe("ReEntrySummary", () => {
       <ReEntrySummary
         state={makeState({
           dismiss,
-          rows: [makeRow({ worstType: "success", highlightTitle: "Done" })],
+          rows: [makeRow({ type: "success", highlightTitle: "Done" })],
         })}
       />
     );
@@ -307,7 +313,7 @@ describe("ReEntrySummary", () => {
       <ReEntrySummary
         state={makeState({
           dismiss,
-          rows: [makeRow({ worstType: "success", highlightTitle: "Done" })],
+          rows: [makeRow({ type: "success", highlightTitle: "Done" })],
         })}
       />
     );
@@ -332,7 +338,7 @@ describe("ReEntrySummary", () => {
         state={makeState({
           visible: true,
           dismiss,
-          rows: [makeRow({ worktreeId: "wt-1", highlightTitle: "First" })],
+          rows: [makeRow({ key: "worktree:wt-1", highlightTitle: "First" })],
         })}
       />
     );
@@ -355,7 +361,7 @@ describe("ReEntrySummary", () => {
         state={makeState({
           visible: true,
           dismiss,
-          rows: [makeRow({ worktreeId: "wt-2", highlightTitle: "Second" })],
+          rows: [makeRow({ key: "worktree:wt-2", highlightTitle: "Second" })],
         })}
       />
     );
@@ -367,7 +373,7 @@ describe("ReEntrySummary", () => {
     render(
       <ReEntrySummary
         state={makeState({
-          rows: [makeRow({ worstType: "success", highlightTitle: "Done" })],
+          rows: [makeRow({ type: "success", highlightTitle: "Done" })],
         })}
       />
     );
@@ -411,7 +417,7 @@ describe("ReEntrySummary", () => {
         <ReEntrySummary
           state={makeState({
             dismiss,
-            rows: [makeRow({ worktreeName: "feature-foo", highlightTitle: "Build failed" })],
+            rows: [makeRow({ label: "feature-foo", highlightTitle: "Build failed" })],
             overflowCount: 2,
           })}
         />
@@ -453,7 +459,7 @@ describe("ReEntrySummary", () => {
           state={makeState({
             dismiss,
             entries: [makeEntry({ id: "a" })],
-            rows: [makeRow({ worktreeId: "wt-1" })],
+            rows: [makeRow({ key: "worktree:wt-1" })],
           })}
         />
       );
@@ -471,7 +477,7 @@ describe("ReEntrySummary", () => {
           state={makeState({
             dismiss,
             entries: [makeEntry({ id: "b" })],
-            rows: [makeRow({ worktreeId: "wt-2" })],
+            rows: [makeRow({ key: "worktree:wt-2" })],
           })}
         />
       );
@@ -494,7 +500,7 @@ describe("ReEntrySummary", () => {
           state={makeState({
             dismiss,
             entries: [makeEntry({ id: "a" })],
-            rows: [makeRow({ worktreeId: "wt-1", highlightTitle: "First" })],
+            rows: [makeRow({ key: "worktree:wt-1", highlightTitle: "First" })],
           })}
         />
       );
@@ -510,7 +516,7 @@ describe("ReEntrySummary", () => {
           state={makeState({
             dismiss,
             entries: [makeEntry({ id: "b" })],
-            rows: [makeRow({ worktreeId: "wt-1", highlightTitle: "Second" })],
+            rows: [makeRow({ key: "worktree:wt-1", highlightTitle: "Second" })],
           })}
         />
       );
@@ -536,7 +542,7 @@ describe("ReEntrySummary", () => {
           state={makeState({
             dismiss,
             entries: [makeEntry({ id: "a" })],
-            rows: [makeRow({ worktreeId: "wt-1" })],
+            rows: [makeRow({ key: "worktree:wt-1" })],
           })}
         />
       );
@@ -550,7 +556,7 @@ describe("ReEntrySummary", () => {
           state={makeState({
             dismiss,
             entries: [makeEntry({ id: "b" })],
-            rows: [makeRow({ worktreeId: "wt-1" })],
+            rows: [makeRow({ key: "worktree:wt-1" })],
           })}
         />
       );
@@ -564,7 +570,7 @@ describe("ReEntrySummary", () => {
         <ReEntrySummary
           state={makeState({
             dismiss,
-            rows: [makeRow({ worktreeId: "wt-1", worktreeName: "first-wt" })],
+            rows: [makeRow({ key: "worktree:wt-1", label: "first-wt" })],
           })}
         />
       );
@@ -581,7 +587,7 @@ describe("ReEntrySummary", () => {
           state={makeState({
             visible: true,
             dismiss,
-            rows: [makeRow({ worktreeId: "wt-2", worktreeName: "second-wt" })],
+            rows: [makeRow({ key: "worktree:wt-2", label: "second-wt" })],
           })}
         />
       );
