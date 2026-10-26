@@ -1093,403 +1093,295 @@ function CanopyInbox({
   );
 
   return (
-    <>
-      <AppDialog
-        isOpen={isOpen}
-        onClose={close}
-        size="workspace"
-        maxHeight="h-[min(90vh,1100px)]"
-        // The panel lands on its first run itself, two frames in; the dialog's own
-        // first-control focus would race it. With no rows to land on, the first
-        // control takes focus instead of leaving it on whatever opened the panel.
-        initialFocus={items.length > 0 && !hostHeld ? "none" : "first"}
-        restoreFocusTo={() => focusAfterClose() ?? restoreOpener()}
-        preferRestoreFocusTo
-        backdrop={backdrop}
-        data-testid="canopy-dialog"
-      >
-        <AppDialog.Header>
-          {hostPicker ? (
-            // Three parts, the outer two sharing what is left, so the picker
-            // stands in the middle of the header.
-            <>
-              <span className="flex min-w-0 flex-1 basis-0 items-center">
-                <AppDialog.Title icon={<Telescope />}>{CANOPY_TITLE}</AppDialog.Title>
-                <span className="mx-3 min-w-0 flex-1 truncate text-sm text-text-secondary">
-                  {headerWords}
-                </span>
-              </span>
-              {hostPicker}
-              <span className="ml-3 flex min-w-0 flex-1 basis-0 items-center justify-end">
-                {headerControls}
-              </span>
-            </>
-          ) : (
-            <>
+    <AppDialog
+      isOpen={isOpen}
+      onClose={close}
+      size="workspace"
+      maxHeight="h-[min(90vh,1100px)]"
+      // The panel lands on its first run itself, two frames in; the dialog's own
+      // first-control focus would race it. With no rows to land on, the first
+      // control takes focus instead of leaving it on whatever opened the panel.
+      initialFocus={items.length > 0 && !hostHeld ? "none" : "first"}
+      restoreFocusTo={() => focusAfterClose() ?? restoreOpener()}
+      preferRestoreFocusTo
+      backdrop={backdrop}
+      data-testid="canopy-dialog"
+    >
+      <AppDialog.Header>
+        {hostPicker ? (
+          // Three parts, the outer two sharing what is left, so the picker
+          // stands in the middle of the header.
+          <>
+            <span className="flex min-w-0 flex-1 basis-0 items-center">
               <AppDialog.Title icon={<Telescope />}>{CANOPY_TITLE}</AppDialog.Title>
-              <span className="mr-3 ml-3 min-w-0 flex-1 truncate text-sm text-text-secondary">
+              <span className="mx-3 min-w-0 flex-1 truncate text-sm text-text-secondary">
                 {headerWords}
               </span>
+            </span>
+            {hostPicker}
+            <span className="ml-3 flex min-w-0 flex-1 basis-0 items-center justify-end">
               {headerControls}
-            </>
-          )}
-        </AppDialog.Header>
+            </span>
+          </>
+        ) : (
+          <>
+            <AppDialog.Title icon={<Telescope />}>{CANOPY_TITLE}</AppDialog.Title>
+            <span className="mr-3 ml-3 min-w-0 flex-1 truncate text-sm text-text-secondary">
+              {headerWords}
+            </span>
+            {headerControls}
+          </>
+        )}
+      </AppDialog.Header>
 
-        <div
-          ref={bodyRef}
-          className="flex min-h-0 flex-1 flex-col"
-          onKeyDownCapture={onAgentStepKeyDownCapture}
-          onKeyDown={onNavigationKeyDown}
-        >
-          {hostTrouble && (
-            <div className="flex shrink-0 flex-col gap-2 border-b border-border-default p-3">
+      <div
+        ref={bodyRef}
+        className="flex min-h-0 flex-1 flex-col"
+        onKeyDownCapture={onAgentStepKeyDownCapture}
+        onKeyDown={onNavigationKeyDown}
+      >
+        {hostTrouble && (
+          <div className="flex shrink-0 flex-col gap-2 border-b border-border-default p-3">
+            <Callout
+              severity="warning"
+              size="compact"
+              title={connecting ? `Reconnecting to ${hostName}…` : `Can't reach ${hostName}`}
+              action={
+                <Button variant="outline" size="xs" onClick={remote.retry}>
+                  Retry
+                </Button>
+              }
+            >
+              {connecting
+                ? ""
+                : linkWords?.state && linkWords.state !== "Connected"
+                  ? [linkWords.state, linkWords.note].filter(Boolean).join(". ") + "."
+                  : formatErrorMessage(remote.error, `${hostName} didn't answer.`)}{" "}
+              {fleet !== null
+                ? "These are the agents it last showed."
+                : "Its agents show here once it answers."}
+            </Callout>
+          </div>
+        )}
+        {everyHost && hostIssues.length > 0 && (
+          <div className="flex shrink-0 flex-col gap-2 border-b border-border-default p-3">
+            {hostTroubles.length > 0 && (
+              <Callout severity="warning" size="compact" title="Not every host is being read">
+                <HostIssueList issues={hostTroubles} />
+              </Callout>
+            )}
+            {/* Reads still on their way: noted, never a warning. */}
+            {hostProgress.length > 0 && (
+              <Callout severity="neutral" size="compact">
+                <HostIssueList issues={hostProgress} />
+              </Callout>
+            )}
+          </div>
+        )}
+        {otherHost && fleet === null && !hostTrouble && connecting && (
+          <p className="flex flex-1 items-center justify-center text-sm text-text-secondary">
+            Connecting to {hostName}…
+          </p>
+        )}
+        {hostOutdated && (
+          <CanopyHostOutdated
+            hostName={hostName}
+            {...(canopy?.mode === "on"
+              ? {
+                  onTurnOff: async () => {
+                    await api.setMode("unset");
+                    if (useCanopyStore.getState().hostId === hostId) remote.retry();
+                  },
+                }
+              : {})}
+          />
+        )}
+        {hostOffer && (
+          <CanopyHostOffer
+            hostName={hostName}
+            onTurnOn={async () => {
+              // Hidden there, it can't be turned on until it is shown again:
+              // the press here, on an offer naming the host, is the user's ask for both.
+              if (canopy?.mode === "hidden") await api.setMode("unset");
+              await api.setMode("on");
+              // Read it again only while it is still the host shown.
+              if (useCanopyStore.getState().hostId === hostId) remote.retry();
+            }}
+          />
+        )}
+        {!hostHeld && (fleet?.degraded === true || canopy?.lastError) && (
+          <div className="flex shrink-0 flex-col gap-2 border-b border-border-default p-3">
+            {/* Daintree can't see its agents right now: the rows are the last
+                it saw, and nothing is read until it can again. */}
+            {fleet?.degraded === true && (
+              <Callout severity="warning" size="compact" title="Agent status is unavailable">
+                {fleet.lastSuccessfulAt !== null
+                  ? `These are the agents Daintree saw ${agoPhrase(fleet.lastSuccessfulAt, nowMs)}. Canopy reads them again once it can.`
+                  : "Daintree hasn't been able to list its agents yet. Canopy reads them once it can."}
+              </Callout>
+            )}
+            {canopy?.lastError && (
               <Callout
                 severity="warning"
                 size="compact"
-                title={connecting ? `Reconnecting to ${hostName}…` : `Can't reach ${hostName}`}
+                title="Canopy couldn't read some screens"
                 action={
-                  <Button variant="outline" size="xs" onClick={remote.retry}>
+                  <Button variant="outline" size="xs" onClick={refresh}>
                     Retry
                   </Button>
                 }
               >
-                {connecting
-                  ? ""
-                  : linkWords?.state && linkWords.state !== "Connected"
-                    ? [linkWords.state, linkWords.note].filter(Boolean).join(". ") + "."
-                    : formatErrorMessage(remote.error, `${hostName} didn't answer.`)}{" "}
-                {fleet !== null
-                  ? "These are the agents it last showed."
-                  : "Its agents show here once it answers."}
+                {canopy.lastError} Rows marked “Read failed” keep what was read before, and Canopy
+                keeps trying.
               </Callout>
-            </div>
-          )}
-          {everyHost && hostIssues.length > 0 && (
-            <div className="flex shrink-0 flex-col gap-2 border-b border-border-default p-3">
-              {hostTroubles.length > 0 && (
-                <Callout severity="warning" size="compact" title="Not every host is being read">
-                  <HostIssueList issues={hostTroubles} />
-                </Callout>
-              )}
-              {/* Reads still on their way: noted, never a warning. */}
-              {hostProgress.length > 0 && (
-                <Callout severity="neutral" size="compact">
-                  <HostIssueList issues={hostProgress} />
-                </Callout>
-              )}
-            </div>
-          )}
-          {otherHost && fleet === null && !hostTrouble && connecting && (
-            <p className="flex flex-1 items-center justify-center text-sm text-text-secondary">
-              Connecting to {hostName}…
-            </p>
-          )}
-          {hostOutdated && (
-            <CanopyHostOutdated
-              hostName={hostName}
-              {...(canopy?.mode === "on"
-                ? {
-                    onTurnOff: async () => {
-                      await api.setMode("unset");
-                      if (useCanopyStore.getState().hostId === hostId) remote.retry();
-                    },
-                  }
-                : {})}
-            />
-          )}
-          {hostOffer && (
-            <CanopyHostOffer
-              hostName={hostName}
-              onTurnOn={async () => {
-                // Hidden there, it can't be turned on until it is shown again:
-                // the press here, on an offer naming the host, is the user's ask for both.
-                if (canopy?.mode === "hidden") await api.setMode("unset");
-                await api.setMode("on");
-                // Read it again only while it is still the host shown.
-                if (useCanopyStore.getState().hostId === hostId) remote.retry();
-              }}
-            />
-          )}
-          {!hostHeld && (fleet?.degraded === true || canopy?.lastError) && (
-            <div className="flex shrink-0 flex-col gap-2 border-b border-border-default p-3">
-              {/* Daintree can't see its agents right now: the rows are the last
-                it saw, and nothing is read until it can again. */}
-              {fleet?.degraded === true && (
-                <Callout severity="warning" size="compact" title="Agent status is unavailable">
-                  {fleet.lastSuccessfulAt !== null
-                    ? `These are the agents Daintree saw ${agoPhrase(fleet.lastSuccessfulAt, nowMs)}. Canopy reads them again once it can.`
-                    : "Daintree hasn't been able to list its agents yet. Canopy reads them once it can."}
-                </Callout>
-              )}
-              {canopy?.lastError && (
-                <Callout
-                  severity="warning"
+            )}
+          </div>
+        )}
+        {!hostHeld && (items.length > 0 || listsAssistants) && (
+          // An inbox: what needs you down a sidebar, most urgent first, the rest
+          // folded away beneath it, and the selected agent's own terminal beside
+          // it, drawn as its pane.
+          <div className="flex min-h-0 flex-1">
+            <div className="canopy-inbox-column flex min-h-0 w-[28rem] shrink-0 flex-col self-stretch border-r border-border-default">
+              <div className="shrink-0 px-3 pt-3 pb-1">
+                <SearchField
                   size="compact"
-                  title="Canopy couldn't read some screens"
-                  action={
-                    <Button variant="outline" size="xs" onClick={refresh}>
-                      Retry
-                    </Button>
+                  focusedOnOpen
+                  inputRef={searchRef}
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  onClear={() => setQuery("")}
+                  onKeyDown={onSearchKeyDown}
+                  placeholder="Search agents and their terminals"
+                  aria-label="Search agents"
+                  role="combobox"
+                  aria-expanded={visible.length > 0}
+                  aria-controls={
+                    [
+                      listed.length > 0 ? "canopy-inbox-list" : null,
+                      shownAssistants.length > 0 ? "canopy-assistants" : null,
+                      archivedShown && shownInbox.archived.length > 0 ? "canopy-archived" : null,
+                    ]
+                      .filter((id) => id !== null)
+                      .join(" ") || undefined
                   }
-                >
-                  {canopy.lastError} Rows marked “Read failed” keep what was read before, and Canopy
-                  keeps trying.
-                </Callout>
-              )}
-            </div>
-          )}
-          {!hostHeld && (items.length > 0 || listsAssistants) && (
-            // An inbox: what needs you down a sidebar, most urgent first, the rest
-            // folded away beneath it, and the selected agent's own terminal beside
-            // it, drawn as its pane.
-            <div className="flex min-h-0 flex-1">
-              <div className="canopy-inbox-column flex min-h-0 w-[28rem] shrink-0 flex-col self-stretch border-r border-border-default">
-                <div className="shrink-0 px-3 pt-3 pb-1">
-                  <SearchField
-                    size="compact"
-                    focusedOnOpen
-                    inputRef={searchRef}
-                    value={query}
-                    onChange={(event) => setQuery(event.target.value)}
-                    onClear={() => setQuery("")}
-                    onKeyDown={onSearchKeyDown}
-                    placeholder="Search agents and their terminals"
-                    aria-label="Search agents"
-                    role="combobox"
-                    aria-expanded={visible.length > 0}
-                    aria-controls={
-                      [
-                        listed.length > 0 ? "canopy-inbox-list" : null,
-                        shownAssistants.length > 0 ? "canopy-assistants" : null,
-                        archivedShown && shownInbox.archived.length > 0 ? "canopy-archived" : null,
-                      ]
-                        .filter((id) => id !== null)
-                        .join(" ") || undefined
-                    }
-                    aria-autocomplete="list"
-                    aria-activedescendant={
-                      focusedItem && visible.includes(focusedItem)
-                        ? canopyCardDomId(focusedItem.runId)
-                        : undefined
-                    }
-                    autoComplete="off"
-                    spellCheck={false}
-                  />
-                </div>
-                <div
-                  ref={scrollerRef}
-                  className="canopy-inbox flex min-h-0 flex-1 flex-col overflow-y-auto select-none"
-                  data-canopy-list=""
-                  // Its rows have menus of their own: the app's Shift+F10 stands down here.
-                  data-row-menu=""
-                  // Still placing runs as the open's readings land.
-                  data-revealing={revealed ? undefined : "true"}
-                >
-                  {workOf !== null && (
-                    <div
-                      className="flex shrink-0 items-center gap-2 px-3 py-2 text-xs"
-                      data-testid="canopy-work-of"
+                  aria-autocomplete="list"
+                  aria-activedescendant={
+                    focusedItem && visible.includes(focusedItem)
+                      ? canopyCardDomId(focusedItem.runId)
+                      : undefined
+                  }
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+              </div>
+              <div
+                ref={scrollerRef}
+                className="canopy-inbox flex min-h-0 flex-1 flex-col overflow-y-auto select-none"
+                data-canopy-list=""
+                // Its rows have menus of their own: the app's Shift+F10 stands down here.
+                data-row-menu=""
+                // Still placing runs as the open's readings land.
+                data-revealing={revealed ? undefined : "true"}
+              >
+                {workOf !== null && (
+                  <div
+                    className="flex shrink-0 items-center gap-2 px-3 py-2 text-xs"
+                    data-testid="canopy-work-of"
+                  >
+                    <span className="min-w-0 flex-1 text-text-primary">
+                      Showing the work of {workOf.name}
+                      {workPartial && (
+                        <span className="text-text-secondary">
+                          {" "}
+                          · Some hosts couldn't be read, so this may be incomplete
+                        </span>
+                      )}
+                    </span>
+                    <Button
+                      variant="outline"
+                      size="xs"
+                      onClick={(event) => {
+                        // The button leaves with the banner: the keyboard stays in the
+                        // panel, on the search unless the whole list leaves with it.
+                        const listStays =
+                          items.length > 0 ||
+                          (assistantsShown && (assistantItems.length > 0 || !workersShown));
+                        (listStays ? searchRef : refreshRef).current?.focus({
+                          preventScroll: true,
+                          focusVisible: event.detail === 0,
+                        });
+                        showWorkOf(null);
+                      }}
                     >
-                      <span className="min-w-0 flex-1 text-text-primary">
-                        Showing the work of {workOf.name}
-                        {workPartial && (
-                          <span className="text-text-secondary">
-                            {" "}
-                            · Some hosts couldn't be read, so this may be incomplete
-                          </span>
-                        )}
-                      </span>
-                      <Button
-                        variant="outline"
-                        size="xs"
-                        onClick={(event) => {
-                          // The button leaves with the banner: the keyboard stays in the
-                          // panel, on the search unless the whole list leaves with it.
-                          const listStays =
-                            items.length > 0 ||
-                            (assistantsShown && (assistantItems.length > 0 || !workersShown));
-                          (listStays ? searchRef : refreshRef).current?.focus({
-                            preventScroll: true,
-                            focusVisible: event.detail === 0,
-                          });
-                          showWorkOf(null);
-                        }}
+                      Show all
+                    </Button>
+                  </div>
+                )}
+                {workersShown && (
+                  <>
+                    <SectionBar
+                      id="canopy-inbox-label"
+                      label="Inbox"
+                      count={listed.length}
+                      trailing={
+                        // The last button's padding hangs into the bar's own, so its
+                        // words end on the field's right edge and the rows' meters.
+                        <span className="-mr-2.5 flex items-center gap-1">
+                          <Button
+                            variant="ghost"
+                            size="xs"
+                            pressed={unreadOnly}
+                            onClick={() => setUnreadOnly(!unreadOnly)}
+                          >
+                            Unread
+                            {shownUnreadCount > 0 && (
+                              <span className="tabular-nums">{shownUnreadCount}</span>
+                            )}
+                          </Button>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="xs"
+                                disabled={!listedUnread}
+                                onClick={markAllRead}
+                              >
+                                Mark all read
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent side="bottom">
+                              <KbdChord shortcut="Alt+U" />
+                            </TooltipContent>
+                          </Tooltip>
+                        </span>
+                      }
+                    />
+                    {listed.length > 0 ? (
+                      <div
+                        ref={listRef}
+                        id="canopy-inbox-list"
+                        role="listbox"
+                        aria-labelledby="canopy-inbox-label"
+                        onPointerEnter={(event) => enterList(event.pointerType)}
+                        onPointerLeave={leaveList}
                       >
-                        Show all
-                      </Button>
-                    </div>
-                  )}
-                  {workersShown && (
-                    <>
-                      <SectionBar
-                        id="canopy-inbox-label"
-                        label="Inbox"
-                        count={listed.length}
-                        trailing={
-                          // The last button's padding hangs into the bar's own, so its
-                          // words end on the field's right edge and the rows' meters.
-                          <span className="-mr-2.5 flex items-center gap-1">
-                            <Button
-                              variant="ghost"
-                              size="xs"
-                              pressed={unreadOnly}
-                              onClick={() => setUnreadOnly(!unreadOnly)}
-                            >
-                              Unread
-                              {shownUnreadCount > 0 && (
-                                <span className="tabular-nums">{shownUnreadCount}</span>
-                              )}
-                            </Button>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Button
-                                  variant="ghost"
-                                  size="xs"
-                                  disabled={!listedUnread}
-                                  onClick={markAllRead}
-                                >
-                                  Mark all read
-                                </Button>
-                              </TooltipTrigger>
-                              <TooltipContent side="bottom">
-                                <KbdChord shortcut="Alt+U" />
-                              </TooltipContent>
-                            </Tooltip>
-                          </span>
-                        }
-                      />
-                      {listed.length > 0 ? (
-                        <div
-                          ref={listRef}
-                          id="canopy-inbox-list"
-                          role="listbox"
-                          aria-labelledby="canopy-inbox-label"
-                          onPointerEnter={(event) => enterList(event.pointerType)}
-                          onPointerLeave={leaveList}
-                        >
-                          {listed.map((item, index) => {
-                            const replied = repliedAt(item);
-                            return (
-                              <CanopyRowMenu key={item.runId} item={item} {...rowMenu}>
-                                <CanopyRow
-                                  item={item}
-                                  domId={canopyCardDomId(item.runId)}
-                                  isSelected={focusedItem?.runId === item.runId}
-                                  // Words are coming whenever screens are read, so the slot
-                                  // for them is held from the start.
-                                  reserveDetail
-                                  tabbable={tabStop(listed, item, index)}
-                                  unread={item.unread}
-                                  nowMs={nowMs}
-                                  asideLabel={
-                                    replied !== null ? `Replied ${agoPhrase(replied, nowMs)}` : null
-                                  }
-                                  workLabel={workLabelOf(item)}
-                                  onSelect={() => selectRow(item.runId)}
-                                  onClick={() => readNow(item)}
-                                  onOpen={(event) => handlers.onOpen(item, isNewWindowClick(event))}
-                                  onArchive={() => handlers.onArchive(item)}
-                                />
-                              </CanopyRowMenu>
-                            );
-                          })}
-                        </div>
-                      ) : (searching || workOf !== null) &&
-                        shownInbox.inbox.length === 0 &&
-                        shownInbox.archived.length > 0 ? null : (
-                        // A search whose only matches are archived lets their bar below say so.
-                        <p className="px-3 pb-3 text-xs text-text-secondary">
-                          {searching
-                            ? shownInbox.inbox.length > 0
-                              ? `Nothing unread matches “${appliedQuery.trim()}”.`
-                              : `Nothing matches “${appliedQuery.trim()}”.`
-                            : workOf !== null
-                              ? workPartial
-                                ? "None found on the hosts that could be read."
-                                : "No worker in the inbox was started by or handed to this assistant."
-                              : unreadOnly && inbox.inbox.length > 0
-                                ? "Nothing unread. Each agent shows here again when it does something new."
-                                : "Every agent is archived. Each comes back when it has something new to say."}
-                        </p>
-                      )}
-                    </>
-                  )}
-                  {assistantsShown && (
-                    <>
-                      <SectionBar
-                        id="canopy-assistants-label"
-                        label="Assistants"
-                        count={shownAssistants.length}
-                        countNoun="assistant"
-                      />
-                      {shownAssistants.length > 0 ? (
-                        <div
-                          id="canopy-assistants"
-                          role="listbox"
-                          aria-labelledby="canopy-assistants-label"
-                        >
-                          {shownAssistants.map((item, index) => (
-                            <CanopyAssistantRow
-                              key={item.id}
-                              item={item}
-                              isSelected={selectedAssistant?.id === item.id}
-                              tabbable={
-                                selectedAssistant !== null
-                                  ? selectedAssistant.id === item.id
-                                  : index === 0
-                              }
-                              onSelect={() => selectAssistant(item.id)}
-                              onOpen={() => openAssistant(item)}
-                              onKeyDown={(event) => onAssistantKeyDown(event, index)}
-                            />
-                          ))}
-                        </div>
-                      ) : (
-                        assistantsEmpty !== null && (
-                          <p className="px-3 pb-3 text-xs text-text-secondary">{assistantsEmpty}</p>
-                        )
-                      )}
-                    </>
-                  )}
-                  {shownInbox.archived.length > 0 && (
-                    <>
-                      <SectionBar
-                        id="canopy-archived-label"
-                        label="Archived"
-                        count={shownInbox.archived.length}
-                        // A search shows its archived matches open; the fold is the user's again after.
-                        fold={
-                          searching
-                            ? undefined
-                            : {
-                                expanded: archivedExpanded,
-                                controls: "canopy-archived",
-                                onToggle: () => setArchivedExpanded(!archivedExpanded),
-                                onEnter: () => focusCardNow(shownInbox.archived[0]!.runId),
-                              }
-                        }
-                      />
-                      {archivedShown && (
-                        <div
-                          id="canopy-archived"
-                          role="listbox"
-                          aria-labelledby="canopy-archived-label"
-                        >
-                          {shownInbox.archived.map((item, index) => (
+                        {listed.map((item, index) => {
+                          const replied = repliedAt(item);
+                          return (
                             <CanopyRowMenu key={item.runId} item={item} {...rowMenu}>
                               <CanopyRow
                                 item={item}
                                 domId={canopyCardDomId(item.runId)}
                                 isSelected={focusedItem?.runId === item.runId}
-                                reserveDetail={false}
-                                tabbable={tabStop(shownInbox.archived, item, index)}
-                                unread={false}
-                                compact
+                                // Words are coming whenever screens are read, so the slot
+                                // for them is held from the start.
+                                reserveDetail
+                                tabbable={tabStop(listed, item, index)}
+                                unread={item.unread}
                                 nowMs={nowMs}
                                 asideLabel={
-                                  item.disposition
-                                    ? `Archived ${agoPhrase(item.disposition.at, nowMs)}`
-                                    : null
+                                  replied !== null ? `Replied ${agoPhrase(replied, nowMs)}` : null
                                 }
                                 workLabel={workLabelOf(item)}
                                 onSelect={() => selectRow(item.runId)}
@@ -1498,175 +1390,279 @@ function CanopyInbox({
                                 onArchive={() => handlers.onArchive(item)}
                               />
                             </CanopyRowMenu>
-                          ))}
-                        </div>
-                      )}
-                    </>
-                  )}
-                </div>
-                {undoLine && (
-                  <div
-                    data-canopy-undo-line=""
-                    className="flex h-8 shrink-0 items-center gap-2 border-t border-divider px-3 text-xs text-text-secondary"
-                  >
-                    <span role="status" className="min-w-0 flex-1 truncate">
-                      {undoLine.message}
-                    </span>
-                    <KbdChord shortcut="Z" />
-                    <Button
-                      variant="link"
-                      size="xs"
-                      className="h-auto shrink-0 p-0"
-                      onClick={undoLine.undo}
-                    >
-                      Undo
-                    </Button>
-                  </div>
-                )}
-                <CanopyStatusBar
-                  host={otherHost ? hostName : null}
-                  onRetryModel={() => void api.retryModel().catch(() => {})}
-                  reader={canopy?.reader}
-                  model={canopy?.model}
-                  waiting={canopy?.waiting}
-                />
-              </div>
-              {/* Inset on every side: the top one puts the place line level with the
-                search beside it, and the card's top with the Inbox bar's. */}
-              <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-surface-canvas p-2">
-                {selectedAssistant !== null ? (
-                  <CanopyAssistantPane
-                    key={selectedAssistant.id}
-                    item={selectedAssistant}
-                    refusal={
-                      assistantRefusal?.id === selectedAssistant.id ? assistantRefusal.text : null
-                    }
-                    onOpen={() => openAssistant(selectedAssistant)}
-                    showingWork={workOf?.assistantId === selectedAssistant.id}
-                    onShowWork={() => showWork(selectedAssistant)}
-                  />
-                ) : (
-                  <>
-                    {focusedItem && (
-                      <CanopyPlace
-                        item={focusedItem}
-                        id={`canopy-place-${focusedItem.runId}`}
-                        hostId={everyHost ? (focusedHostId ?? "") : (hostId ?? "")}
-                        runBranch={api.runBranch}
-                      />
+                          );
+                        })}
+                      </div>
+                    ) : (searching || workOf !== null) &&
+                      shownInbox.inbox.length === 0 &&
+                      shownInbox.archived.length > 0 ? null : (
+                      // A search whose only matches are archived lets their bar below say so.
+                      <p className="px-3 pb-3 text-xs text-text-secondary">
+                        {searching
+                          ? shownInbox.inbox.length > 0
+                            ? `Nothing unread matches “${appliedQuery.trim()}”.`
+                            : `Nothing matches “${appliedQuery.trim()}”.`
+                          : workOf !== null
+                            ? workPartial
+                              ? "None found on the hosts that could be read."
+                              : "No worker in the inbox was started by or handed to this assistant."
+                            : unreadOnly && inbox.inbox.length > 0
+                              ? "Nothing unread. Each agent shows here again when it does something new."
+                              : "Every agent is archived. Each comes back when it has something new to say."}
+                      </p>
                     )}
-                    {focusedItem ? (
-                      <CanopyCard
-                        key={`${hostId ?? ""}:${focusedItem.runId}`}
-                        ref={detailRef}
-                        item={focusedItem}
-                        domId={`canopy-detail-${focusedItem.runId}`}
-                        describedBy={`canopy-place-${focusedItem.runId}`}
-                        initialFocus={
-                          paneFocus?.runId === focusedItem.runId ? paneFocus.focus : null
-                        }
-                        armTrash={
-                          trashArm?.runId === focusedItem.runId ? trashArm.request : undefined
-                        }
-                        renameRequest={
-                          renameAsk?.runId === focusedItem.runId ? renameAsk.request : undefined
-                        }
-                        onInitialFocusSettled={() => settlePaneFocus(focusedItem.runId)}
-                        otherHostId={(everyHost ? focusedHostId : hostId) ?? undefined}
-                        aside={setAside}
-                        terminalApi={terminalApi}
-                        reconnecting={
-                          everyHost
-                            ? focusedLinkStatus !== undefined && focusedLinkStatus !== "connected"
-                            : otherHost && linkStatus !== undefined && linkStatus !== "connected"
-                        }
-                        {...handlers}
-                      />
+                  </>
+                )}
+                {assistantsShown && (
+                  <>
+                    <SectionBar
+                      id="canopy-assistants-label"
+                      label="Assistants"
+                      count={shownAssistants.length}
+                      countNoun="assistant"
+                    />
+                    {shownAssistants.length > 0 ? (
+                      <div
+                        id="canopy-assistants"
+                        role="listbox"
+                        aria-labelledby="canopy-assistants-label"
+                      >
+                        {shownAssistants.map((item, index) => (
+                          <CanopyAssistantRow
+                            key={item.id}
+                            item={item}
+                            isSelected={selectedAssistant?.id === item.id}
+                            tabbable={
+                              selectedAssistant !== null
+                                ? selectedAssistant.id === item.id
+                                : index === 0
+                            }
+                            onSelect={() => selectAssistant(item.id)}
+                            onOpen={() => openAssistant(item)}
+                            onKeyDown={(event) => onAssistantKeyDown(event, index)}
+                          />
+                        ))}
+                      </div>
                     ) : (
-                      <div className="flex flex-1 flex-col items-center justify-center gap-1 text-center">
-                        {!workersShown ? (
-                          <>
-                            <p className="text-sm text-text-primary">No assistant to show</p>
-                            <p className="text-xs text-text-secondary">
-                              Start one from the Assistant panel and it shows up here.
-                            </p>
-                          </>
-                        ) : onlyReadMatch ? (
-                          <>
-                            <p className="text-sm text-text-primary">No unread agent matches</p>
-                            <p className="text-xs text-text-secondary">
-                              Turn off Unread to see every agent that matches.
-                            </p>
-                          </>
-                        ) : searching ? (
-                          <>
-                            <p className="text-sm text-text-primary">No agent matches</p>
-                            <p className="text-xs text-text-secondary">
-                              Try other words, or press Esc to clear the search.
-                            </p>
-                          </>
-                        ) : unreadOnly && inbox.inbox.length > 0 ? (
-                          <>
-                            <p className="text-sm text-text-primary">Nothing unread</p>
-                            <p className="text-xs text-text-secondary">
-                              Turn off Unread to see every agent's terminal here.
-                            </p>
-                          </>
-                        ) : (
-                          <>
-                            <p className="text-sm text-text-primary">Nothing in the inbox</p>
-                            <p className="text-xs text-text-secondary">
-                              Open an archived agent to see its terminal here.
-                            </p>
-                          </>
-                        )}
+                      assistantsEmpty !== null && (
+                        <p className="px-3 pb-3 text-xs text-text-secondary">{assistantsEmpty}</p>
+                      )
+                    )}
+                  </>
+                )}
+                {shownInbox.archived.length > 0 && (
+                  <>
+                    <SectionBar
+                      id="canopy-archived-label"
+                      label="Archived"
+                      count={shownInbox.archived.length}
+                      // A search shows its archived matches open; the fold is the user's again after.
+                      fold={
+                        searching
+                          ? undefined
+                          : {
+                              expanded: archivedExpanded,
+                              controls: "canopy-archived",
+                              onToggle: () => setArchivedExpanded(!archivedExpanded),
+                              onEnter: () => focusCardNow(shownInbox.archived[0]!.runId),
+                            }
+                      }
+                    />
+                    {archivedShown && (
+                      <div
+                        id="canopy-archived"
+                        role="listbox"
+                        aria-labelledby="canopy-archived-label"
+                      >
+                        {shownInbox.archived.map((item, index) => (
+                          <CanopyRowMenu key={item.runId} item={item} {...rowMenu}>
+                            <CanopyRow
+                              item={item}
+                              domId={canopyCardDomId(item.runId)}
+                              isSelected={focusedItem?.runId === item.runId}
+                              reserveDetail={false}
+                              tabbable={tabStop(shownInbox.archived, item, index)}
+                              unread={false}
+                              compact
+                              nowMs={nowMs}
+                              asideLabel={
+                                item.disposition
+                                  ? `Archived ${agoPhrase(item.disposition.at, nowMs)}`
+                                  : null
+                              }
+                              workLabel={workLabelOf(item)}
+                              onSelect={() => selectRow(item.runId)}
+                              onClick={() => readNow(item)}
+                              onOpen={(event) => handlers.onOpen(item, isNewWindowClick(event))}
+                              onArchive={() => handlers.onArchive(item)}
+                            />
+                          </CanopyRowMenu>
+                        ))}
                       </div>
                     )}
                   </>
                 )}
               </div>
+              {undoLine && (
+                <div
+                  data-canopy-undo-line=""
+                  className="flex h-8 shrink-0 items-center gap-2 border-t border-divider px-3 text-xs text-text-secondary"
+                >
+                  <span role="status" className="min-w-0 flex-1 truncate">
+                    {undoLine.message}
+                  </span>
+                  <KbdChord shortcut="Z" />
+                  <Button
+                    variant="link"
+                    size="xs"
+                    className="h-auto shrink-0 p-0"
+                    onClick={undoLine.undo}
+                  >
+                    Undo
+                  </Button>
+                </div>
+              )}
+              <CanopyStatusBar
+                host={otherHost ? hostName : null}
+                onRetryModel={() => void api.retryModel().catch(() => {})}
+                reader={canopy?.reader}
+                model={canopy?.model}
+                waiting={canopy?.waiting}
+              />
+            </div>
+            {/* Inset on every side: the top one puts the place line level with the
+                search beside it, and the card's top with the Inbox bar's. */}
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-surface-canvas p-2">
+              {selectedAssistant !== null ? (
+                <CanopyAssistantPane
+                  key={selectedAssistant.id}
+                  item={selectedAssistant}
+                  refusal={
+                    assistantRefusal?.id === selectedAssistant.id ? assistantRefusal.text : null
+                  }
+                  onOpen={() => openAssistant(selectedAssistant)}
+                  showingWork={workOf?.assistantId === selectedAssistant.id}
+                  onShowWork={() => showWork(selectedAssistant)}
+                />
+              ) : (
+                <>
+                  {focusedItem && (
+                    <CanopyPlace
+                      item={focusedItem}
+                      id={`canopy-place-${focusedItem.runId}`}
+                      hostId={everyHost ? (focusedHostId ?? "") : (hostId ?? "")}
+                      runBranch={api.runBranch}
+                    />
+                  )}
+                  {focusedItem ? (
+                    <CanopyCard
+                      key={`${hostId ?? ""}:${focusedItem.runId}`}
+                      ref={detailRef}
+                      item={focusedItem}
+                      domId={`canopy-detail-${focusedItem.runId}`}
+                      describedBy={`canopy-place-${focusedItem.runId}`}
+                      initialFocus={paneFocus?.runId === focusedItem.runId ? paneFocus.focus : null}
+                      armTrash={
+                        trashArm?.runId === focusedItem.runId ? trashArm.request : undefined
+                      }
+                      renameRequest={
+                        renameAsk?.runId === focusedItem.runId ? renameAsk.request : undefined
+                      }
+                      onInitialFocusSettled={() => settlePaneFocus(focusedItem.runId)}
+                      otherHostId={(everyHost ? focusedHostId : hostId) ?? undefined}
+                      aside={setAside}
+                      terminalApi={terminalApi}
+                      reconnecting={
+                        everyHost
+                          ? focusedLinkStatus !== undefined && focusedLinkStatus !== "connected"
+                          : otherHost && linkStatus !== undefined && linkStatus !== "connected"
+                      }
+                      {...handlers}
+                    />
+                  ) : (
+                    <div className="flex flex-1 flex-col items-center justify-center gap-1 text-center">
+                      {!workersShown ? (
+                        <>
+                          <p className="text-sm text-text-primary">No assistant to show</p>
+                          <p className="text-xs text-text-secondary">
+                            Start one from the Assistant panel and it shows up here.
+                          </p>
+                        </>
+                      ) : onlyReadMatch ? (
+                        <>
+                          <p className="text-sm text-text-primary">No unread agent matches</p>
+                          <p className="text-xs text-text-secondary">
+                            Turn off Unread to see every agent that matches.
+                          </p>
+                        </>
+                      ) : searching ? (
+                        <>
+                          <p className="text-sm text-text-primary">No agent matches</p>
+                          <p className="text-xs text-text-secondary">
+                            Try other words, or press Esc to clear the search.
+                          </p>
+                        </>
+                      ) : unreadOnly && inbox.inbox.length > 0 ? (
+                        <>
+                          <p className="text-sm text-text-primary">Nothing unread</p>
+                          <p className="text-xs text-text-secondary">
+                            Turn off Unread to see every agent's terminal here.
+                          </p>
+                        </>
+                      ) : (
+                        <>
+                          <p className="text-sm text-text-primary">Nothing in the inbox</p>
+                          <p className="text-xs text-text-secondary">
+                            Open an archived agent to see its terminal here.
+                          </p>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        )}
+        {!hostHeld &&
+          fleet !== null &&
+          !fleet.degraded &&
+          items.length === 0 &&
+          !listsAssistants && (
+            <div className="flex flex-1 flex-col items-center justify-center gap-3">
+              {scope === "project" && fleet.runs.length > 0 ? (
+                <>
+                  <p className="text-sm text-text-secondary">
+                    No agents in this project. Other projects have{" "}
+                    {pluralize(fleet.runs.length, "agent")}.
+                  </p>
+                  <Button variant="outline" size="sm" onClick={() => setScope("all")}>
+                    Show all projects
+                  </Button>
+                </>
+              ) : everyHost ? (
+                <p className="text-sm text-text-secondary">
+                  {hostIssues.length > 0
+                    ? "No agents on the hosts that answered."
+                    : "No agents are running on any host. Each one shows up here once it starts."}
+                </p>
+              ) : otherHost ? (
+                <p className="text-sm text-text-secondary">
+                  No agents are running on {hostName}. Each one shows up here once it starts.
+                </p>
+              ) : (
+                <p className="text-sm text-text-secondary">
+                  Launch an agent from the toolbar and it shows up here.
+                </p>
+              )}
             </div>
           )}
-          {!hostHeld &&
-            fleet !== null &&
-            !fleet.degraded &&
-            items.length === 0 &&
-            !listsAssistants && (
-              <div className="flex flex-1 flex-col items-center justify-center gap-3">
-                {scope === "project" && fleet.runs.length > 0 ? (
-                  <>
-                    <p className="text-sm text-text-secondary">
-                      No agents in this project. Other projects have{" "}
-                      {pluralize(fleet.runs.length, "agent")}.
-                    </p>
-                    <Button variant="outline" size="sm" onClick={() => setScope("all")}>
-                      Show all projects
-                    </Button>
-                  </>
-                ) : everyHost ? (
-                  <p className="text-sm text-text-secondary">
-                    {hostIssues.length > 0
-                      ? "No agents on the hosts that answered."
-                      : "No agents are running on any host. Each one shows up here once it starts."}
-                  </p>
-                ) : otherHost ? (
-                  <p className="text-sm text-text-secondary">
-                    No agents are running on {hostName}. Each one shows up here once it starts.
-                  </p>
-                ) : (
-                  <p className="text-sm text-text-secondary">
-                    Launch an agent from the toolbar and it shows up here.
-                  </p>
-                )}
-              </div>
-            )}
-        </div>
-      </AppDialog>
+      </div>
       {parkRunId !== null && (
         <Suspense fallback={null}>
           <LazyParkRunDialog key={parkRunId} runId={parkRunId} onClose={closePark} />
         </Suspense>
       )}
-    </>
+    </AppDialog>
   );
 }
