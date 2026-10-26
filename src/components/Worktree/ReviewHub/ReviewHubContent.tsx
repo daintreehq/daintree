@@ -235,20 +235,22 @@ export function ReviewHubContent({
 
   // `worktree.markReviewed` and `worktree.clearReviewMark` act through the
   // hub they target, dialog or grid; marking needs the state it displayed.
-  const readMarkBlockedReason = useEffectEvent(() => markBlockedReason);
-  const readHasReviewMark = useEffectEvent(() => hasReviewMark);
-  const runMarkReviewed = useEffectEvent(() => markReviewed());
-  const runClearReviewMark = useEffectEvent(() => clearReviewMark());
+  // The palette asks whether they're ready while it renders, so the target
+  // reads what this hub last committed rather than calling into its render.
+  const markTargetRef = useRef({ markBlockedReason, hasReviewMark, markReviewed, clearReviewMark });
+  useEffect(() => {
+    markTargetRef.current = { markBlockedReason, hasReviewMark, markReviewed, clearReviewMark };
+  });
   useEffect(() => {
     if (!isOpen || !panelId || !worktreeId) return;
     return registerReviewHubMarkTarget({
       panelId,
       worktreeId,
       isDialog,
-      markBlockedReason: () => readMarkBlockedReason(),
-      hasMark: () => readHasReviewMark(),
-      markReviewed: () => runMarkReviewed(),
-      clearReviewMark: () => runClearReviewMark(),
+      markBlockedReason: () => markTargetRef.current.markBlockedReason,
+      hasMark: () => markTargetRef.current.hasReviewMark,
+      markReviewed: () => markTargetRef.current.markReviewed(),
+      clearReviewMark: () => markTargetRef.current.clearReviewMark(),
     });
   }, [isOpen, panelId, worktreeId, isDialog]);
   const {

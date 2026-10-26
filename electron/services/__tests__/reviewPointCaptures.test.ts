@@ -27,7 +27,7 @@ function point(capturedAt: number, padding = 0): ReviewPoint {
 describe("ReviewPointCaptures", () => {
   it("gives a capture back only for the project and worktree it was taken in", () => {
     const captures = new ReviewPointCaptures();
-    const id = captures.hold("p1", "/repo/wt", point(1));
+    const id = captures.hold("p1", "/repo/wt", point(1))!;
 
     expect(captures.get("p1", "/repo/wt", id)?.capturedAt).toBe(1);
     expect(captures.get("p2", "/repo/wt", id)).toBeNull();
@@ -37,34 +37,49 @@ describe("ReviewPointCaptures", () => {
 
   it("keeps a worktree's newest captures and lets the oldest go", () => {
     const captures = new ReviewPointCaptures();
-    const ids = Array.from({ length: 10 }, (_, i) => captures.hold("p1", "/repo/wt", point(i)));
-    const other = captures.hold("p1", "/repo/other", point(99));
+    const other = captures.hold("p1", "/repo/other", point(99))!;
+    const elsewhere = captures.hold("p2", "/repo/wt", point(98))!;
+    const ids = Array.from({ length: 12 }, (_, i) => captures.hold("p1", "/repo/wt", point(i))!);
 
     const kept = ids.filter((id) => captures.get("p1", "/repo/wt", id) !== null);
-    expect(kept).toEqual(ids.slice(ids.length - kept.length));
-    expect(kept.length).toBeLessThan(ids.length);
-    expect(captures.get("p1", "/repo/wt", ids.at(-1)!)).not.toBeNull();
+    // A hub's displayed capture is among its last few; eight is plenty, and
+    // another worktree's or project's captures are never what's let go.
+    expect(kept).toEqual(ids.slice(4));
     expect(captures.get("p1", "/repo/other", other)).not.toBeNull();
+    expect(captures.get("p2", "/repo/wt", elsewhere)).not.toBeNull();
   });
 
-  it("lets captures go once they're old", () => {
+  it("lets captures go once they're old, and keeps them until then", () => {
     let now = 0;
     const captures = new ReviewPointCaptures(() => now);
-    const id = captures.hold("p1", "/repo/wt", point(1));
+    const id = captures.hold("p1", "/repo/wt", point(1))!;
 
-    now += 60 * 60_000;
-
+    now += 29 * 60_000;
+    expect(captures.get("p1", "/repo/wt", id)).not.toBeNull();
+    now += 2 * 60_000;
     expect(captures.get("p1", "/repo/wt", id)).toBeNull();
+  });
+
+  it("holds no capture larger than a mark can keep, and lets nothing go for one", () => {
+    const captures = new ReviewPointCaptures();
+    const kept = captures.hold("p1", "/repo/wt", point(1))!;
+    // Over 16 MiB of entries.
+    const huge = point(2, 110_000);
+
+    expect(captures.hold("p1", "/repo/wt", huge)).toBeNull();
+    expect(captures.get("p1", "/repo/wt", kept)).not.toBeNull();
   });
 
   it("drops the oldest captures across worktrees once their total size runs over", () => {
     const captures = new ReviewPointCaptures();
-    // Roughly 3 MB each, across worktrees so no per-worktree limit applies.
+    const size = Buffer.byteLength(JSON.stringify(point(0, 20_000)));
+    // Across worktrees, so no per-worktree limit applies.
     const ids = Array.from({ length: 30 }, (_, i) =>
-      captures.hold("p1", `/repo/wt-${i}`, point(i, 20_000))
+      captures.hold("p1", `/repo/wt-${i}`, point(i, 20_000))!
     );
 
-    expect(captures.get("p1", "/repo/wt-0", ids[0]!)).toBeNull();
-    expect(captures.get("p1", "/repo/wt-29", ids[29]!)).not.toBeNull();
+    const kept = ids.filter((id, i) => captures.get("p1", `/repo/wt-${i}`, id) !== null);
+    // The newest that fit in 64 MiB together, and no fewer.
+    expect(kept).toEqual(ids.slice(ids.length - Math.floor((64 * 1024 * 1024) / size)));
   });
 });

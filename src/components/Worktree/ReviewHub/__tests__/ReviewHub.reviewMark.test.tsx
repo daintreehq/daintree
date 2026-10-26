@@ -33,8 +33,9 @@ vi.mock("@/hooks", () => ({
 }));
 
 vi.mock("@/hooks/useWorktreeStore", () => ({
-  useWorktreeStore: (selector: (state: { worktrees: Map<string, WorktreeState> }) => unknown) =>
-    selector({ worktrees: worktreeStoreData.current as Map<string, WorktreeState> }),
+  useWorktreeStore: (
+    selector: (state: { worktrees: Map<string, Partial<WorktreeState>> }) => unknown
+  ) => selector({ worktrees: worktreeStoreData.current }),
 }));
 
 vi.mock("@/panels/diff/useWorktreeIdForPath", () => ({
@@ -65,6 +66,7 @@ import {
 } from "../reviewHubMarkTargets";
 
 const WT = "/home/user/project-wt";
+const SETTLE_MS = 50;
 const COMMIT = "a1b2c3d4e5f6a7b8c9d0a1b2c3d4e5f6a7b8c9d0";
 const PROJECT = "p".repeat(64);
 
@@ -238,6 +240,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.clearAllMocks();
 });
 
@@ -461,4 +464,119 @@ describe("Review Hub review marks (#14585)", () => {
     await waitFor(() => expect(bridge.clear).toHaveBeenCalledWith(WT, 2));
     await waitFor(() => expect(screen.queryByTestId("review-hub-review-mark")).toBeNull());
   });
+
+  it("reads status twice on open: once straight away, once after the capture", async () => {
+    renderHub();
+    await markButtonReady();
+    // Long enough for any read the lane would still send to have gone out.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
+    });
+
+    // Staging status is rate limited on the host; the lane adds one read per capture.
+    expect(getStagingStatus).toHaveBeenCalledTimes(2);
+    expect(bridge.capture).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the capture on screen when the opening's first read answers last", async () => {
+    bridge.markCaptured.mockResolvedValue({
+      status: "saved",
+      snapshot: snapshot({ [WT]: summary(1) }, 1),
+    } satisfies ReviewMarkSaveOutcome);
+    const firstRead = deferred<StagingStatus>();
+    getStagingStatus.mockReturnValueOnce(firstRead.promise);
+    renderHub();
+    const button = await markButtonReady();
+
+    // The read sent before the capture landed answers after the one sent after it.
+    await act(async () => firstRead.resolve(status));
+
+    expect(button.getAttribute("aria-disabled")).toBeNull();
+    fireEvent.click(button);
+    await waitFor(() => expect(bridge.markCaptured).toHaveBeenCalledWith(WT, "c1", 0));
+  });
+
+  it("answers whether it can mark while another component renders, as the palette asks", async () => {
+    renderHub();
+    await markButtonReady();
+
+    function PaletteProbe() {
+      const reason = findReviewHubMarkTarget({ focusedPanelId: "review-1" })?.markBlockedReason();
+      return <span data-testid="palette-probe">{reason === null ? "ready" : String(reason)}</span>;
+    }
+    render(<PaletteProbe />);
+
+    expect(screen.getByTestId("palette-probe").textContent).toBe("ready");
+  });
+
+  it("still names what isn't covered when the mark's push and its comparison beat the reply", async () => {
+    const reply = deferred<ReviewMarkSaveOutcome>();
+    bridge.markCaptured.mockReturnValue(reply.promise);
+    bridge.compare.mockResolvedValue({
+      status: "compared",
+      markRevision: 7,
+      result: comparable(["src/app.ts"]),
+    } satisfies ReviewMarkCompareOutcome);
+    renderHub();
+    fireEvent.click(await markButtonReady());
+
+    act(() =>
+      useReviewMarksStore.setState({ marks: { [WT]: summary(7) }, revision: 7, loaded: true })
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("review-hub-review-mark-since").textContent).toBe("1 file since")
+    );
+    await act(async () =>
+      reply.resolve({ status: "saved", snapshot: snapshot({ [WT]: summary(7) }, 7) })
+    );
+
+    const notice = await screen.findByTestId("review-hub-review-mark-notice");
+    expect(notice.textContent).toContain("Not covered: src/app.ts.");
+  });
+
+  it("can mark the next worktree when it switches while a mark is still out", async () => {
+    const other = "/home/user/other-wt";
+    worktreeStoreData.current.set(other, {
+      id: other,
+      path: other,
+      name: "other",
+      branch: "feature/other",
+      isCurrent: false,
+      worktreeChanges: null,
+      lastActivityTimestamp: null,
+    });
+    bridge.markCaptured.mockReturnValue(new Promise(() => {}));
+    const view = renderHub();
+    fireEvent.click(await markButtonReady());
+    await waitFor(() => expect(bridge.markCaptured).toHaveBeenCalledTimes(1));
+
+    view.rerender(
+      <ReviewHubContent isOpen={true} worktreePath={other} panelId="review-1" onClose={vi.fn()} />
+    );
+
+    await markButtonReady();
+    expect(bridge.capture).toHaveBeenLastCalledWith(other);
+  });
+
+  it("says the comparison failed once other windows' keep replacing it, and offers Retry", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    useReviewMarksStore.setState({ marks: { [WT]: summary(2) }, revision: 2, loaded: true });
+    bridge.compare.mockResolvedValue({
+      status: "compared",
+      markRevision: 2,
+      result: { state: "failed", reason: "superseded", message: "A newer comparison replaced it." },
+    } satisfies ReviewMarkCompareOutcome);
+    renderHub();
+
+    await waitFor(
+      () =>
+        expect(screen.getByTestId("review-hub-review-mark-since").textContent).toBe(
+          "Couldn't compare with the review"
+        ),
+      { timeout: 6_000 }
+    );
+    // The first ask and three more, spaced out.
+    expect(bridge.compare).toHaveBeenCalledTimes(4);
+    expect(screen.getByTestId("review-hub-review-mark-retry")).not.toBeNull();
+  }, 10_000);
 });

@@ -75,8 +75,10 @@ export type ReviewMarkCaptureOutcome =
   | { status: "captured"; capture: ReviewMarkCapture }
   /** The worktree moved while it was read; nothing mixed is held. */
   | { status: "changed-during-capture" }
-  /** The host couldn't find the worktree, or a base to read it against. */
+  /** The host couldn't find the worktree. */
   | { status: "unavailable" }
+  /** The capture is larger than a mark can keep. */
+  | { status: "too-large" }
   | { status: "failed"; reason: ReviewPointCaptureFailure; message: string };
 
 export type ReviewMarkCompareOutcome =

@@ -1,3 +1,4 @@
+import path from "node:path";
 import { CHANNELS } from "../channels.js";
 import { defineIpcNamespace, op } from "../define.js";
 import type { HandlerDependencies, IpcContext } from "../types.js";
@@ -18,6 +19,7 @@ import {
   ReviewPointSchema,
   type ReviewPoint,
   type ReviewPointBaseRequest,
+  type ReviewPointCaptureResult,
 } from "../../../shared/types/reviewPoint.js";
 import type { WorktreeSnapshot } from "../../../shared/types/workspace-host.js";
 import type {
@@ -306,18 +308,59 @@ async function handleClear(
 /**
  * The branch a worktree's change set is read against: a linked PR's base or the
  * repository's main branch, as the host's divergence pass has it, else the main
- * worktree's branch (the main worktree has no base of its own).
+ * worktree's branch (the main worktree has no base of its own), else `main`, the
+ * workspace host's own default. One that doesn't resolve makes an incomplete
+ * point that says so, never no capture at all.
  */
 function baseRequestFor(
   worktree: WorktreeSnapshot,
   live: readonly WorktreeSnapshot[]
-): ReviewPointBaseRequest | null {
+): ReviewPointBaseRequest {
   const branch =
     worktree.baseBranchName?.trim() ||
     live.find((state) => state.isMainWorktree)?.branch?.trim() ||
-    worktree.branch?.trim();
-  return branch ? { kind: "branch", branch } : null;
+    worktree.branch?.trim() ||
+    "main";
+  return { kind: "branch", branch };
 }
+
+/**
+ * One capture per worktree at a time on this host. Requests that arrive while
+ * one runs share the next run, which starts after it: never the run in flight,
+ * whose content may predate a mark the caller has already seen.
+ */
+class SerialCaptures {
+  private readonly slots = new Map<
+    string,
+    { active: Promise<unknown> | null; queued: Promise<ReviewPointCaptureResult> | null }
+  >();
+
+  capture(cwd: string, base: ReviewPointBaseRequest): Promise<ReviewPointCaptureResult> {
+    const key = `${path.resolve(cwd)}\0${JSON.stringify(base)}`;
+    let slot = this.slots.get(key);
+    if (!slot) {
+      slot = { active: null, queued: null };
+      this.slots.set(key, slot);
+    }
+    if (slot.queued) return slot.queued;
+    const own = slot;
+    const run: Promise<ReviewPointCaptureResult> = (own.active ?? Promise.resolve())
+      .catch(() => undefined)
+      .then(() => {
+        own.queued = null;
+        own.active = run;
+        return captureReviewPoint(cwd, { base });
+      })
+      .finally(() => {
+        if (own.active === run) own.active = null;
+        if (!own.active && !own.queued && this.slots.get(key) === own) this.slots.delete(key);
+      });
+    own.queued = run;
+    return run;
+  }
+}
+
+const serialCaptures = new SerialCaptures();
 
 /**
  * Capture what the worktree holds now, for Review Hub's read of it (#14585).
@@ -331,18 +374,19 @@ async function handleCapture(
   const id = requireWorktreeId(worktreeId);
   const live = await readLiveWorktrees(projectId, "reviewMarks");
   const worktree = live?.find((state) => state.id === id);
-  const base = worktree && live ? baseRequestFor(worktree, live) : null;
-  if (!worktree || !base) return { status: "unavailable" };
-  const result = await captureReviewPoint(worktree.path, { base });
+  if (!worktree || !live) return { status: "unavailable" };
+  const result = await serialCaptures.capture(worktree.path, baseRequestFor(worktree, live));
   if (result.kind === "changed-during-capture") return { status: "changed-during-capture" };
   if (result.kind === "failed") {
     return { status: "failed", reason: result.reason, message: result.message };
   }
   const { point } = result;
+  const captureId = reviewPointCaptures.hold(projectId, id, point);
+  if (captureId === null) return { status: "too-large" };
   return {
     status: "captured",
     capture: {
-      captureId: reviewPointCaptures.hold(projectId, id, point),
+      captureId,
       capturedAt: point.capturedAt,
       head: point.head,
       complete: point.incomplete === null,

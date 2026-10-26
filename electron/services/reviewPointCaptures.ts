@@ -1,4 +1,5 @@
 import { randomUUID } from "crypto";
+import { performance } from "perf_hooks";
 import type { ReviewPoint } from "../../shared/types/reviewPoint.js";
 
 /**
@@ -13,6 +14,8 @@ import type { ReviewPoint } from "../../shared/types/reviewPoint.js";
 
 const MAX_PER_WORKTREE = 8;
 const MAX_TOTAL_BYTES = 64 * 1024 * 1024;
+/** What the mark store keeps of one point; a larger one could never be saved. */
+export const MAX_HELD_POINT_BYTES = 16 * 1024 * 1024;
 const MAX_AGE_MS = 30 * 60_000;
 
 interface HeldCapture {
@@ -28,13 +31,18 @@ export class ReviewPointCaptures {
   private readonly held = new Map<string, HeldCapture>();
   private totalBytes = 0;
 
-  constructor(private readonly now: () => number = Date.now) {}
+  /** Monotonic, so a clock set back never keeps a capture past its age. */
+  constructor(private readonly now: () => number = () => performance.now()) {}
 
-  /** Hold `point` for the worktree and return the id that names it. */
-  hold(projectId: string, worktreeId: string, point: ReviewPoint): string {
+  /**
+   * Hold `point` for the worktree and return the id that names it, or null for
+   * one too large to keep as a mark, which is held nowhere and evicts nothing.
+   */
+  hold(projectId: string, worktreeId: string, point: ReviewPoint): string | null {
     this.sweep();
-    const captureId = randomUUID();
     const bytes = Buffer.byteLength(JSON.stringify(point));
+    if (bytes > MAX_HELD_POINT_BYTES) return null;
+    const captureId = randomUUID();
     this.held.set(captureId, { projectId, worktreeId, point, bytes, heldAt: this.now() });
     this.totalBytes += bytes;
 

@@ -67,7 +67,11 @@ import {
   registerReviewMarksHandlers,
   reviewMarksNamespace,
 } from "../reviewMarks.js";
-import { ReviewMarkStore, _setReviewMarkStoreForTesting } from "../../../services/reviewMarks.js";
+import {
+  ReviewMarkStore,
+  _setReviewMarkStoreForTesting,
+  getReviewMarkStore,
+} from "../../../services/reviewMarks.js";
 import { reviewPointCaptures } from "../../../services/reviewPointCaptures.js";
 import { getProjectStateDir } from "../../../services/projectStorePaths.js";
 import type { WorktreeIdentity } from "../../../services/git/reviewPoint/readWorktreeIdentity.js";
@@ -393,12 +397,46 @@ describe("reviewMarks IPC namespace", () => {
       expect(await capture(ctx(PROJECT_A), WT_1)).toEqual({ status: "changed-during-capture" });
       await capture(ctx(PROJECT_A), WT_2);
       await capture(ctx(PROJECT_A), ROOT_A);
+      // Nothing to go by when the main worktree is detached too: the workspace
+      // host's own default, which makes an incomplete point if it's not there.
+      liveStates([
+        { id: ROOT_A, path: ROOT_A, isMainWorktree: true },
+        { id: WT_1, path: WT_1 },
+      ]);
+      await capture(ctx(PROJECT_A), WT_1);
 
       expect(captureMock.captureReviewPoint.mock.calls.map(([, options]) => options.base)).toEqual([
         { kind: "branch", branch: "release/2" },
         { kind: "branch", branch: "develop" },
         { kind: "branch", branch: "develop" },
+        { kind: "branch", branch: "main" },
       ]);
+    });
+
+    it("runs one capture of a worktree at a time, sharing the next run among those that wait", async () => {
+      const first = deferred<unknown>();
+      const second = deferred<unknown>();
+      captureMock.captureReviewPoint
+        .mockReturnValueOnce(first.promise)
+        .mockReturnValueOnce(second.promise);
+
+      const running = capture(ctx(PROJECT_A), WT_1);
+      await vi.waitFor(() => expect(captureMock.captureReviewPoint).toHaveBeenCalledTimes(1));
+      const waitingA = capture(ctx(PROJECT_A, "view-a"), WT_1);
+      const waitingB = capture(ctx(PROJECT_A, "view-b"), WT_1);
+      await Promise.resolve();
+      // Neither joins the run in flight, which started before they asked.
+      expect(captureMock.captureReviewPoint).toHaveBeenCalledTimes(1);
+
+      first.resolve({ kind: "captured", point: point(WT_1, { capturedAt: 1 }) });
+      await vi.waitFor(() => expect(captureMock.captureReviewPoint).toHaveBeenCalledTimes(2));
+      second.resolve({ kind: "captured", point: point(WT_1, { capturedAt: 2 }) });
+      const [a, b, c] = await Promise.all([running, waitingA, waitingB]);
+
+      expect(captureMock.captureReviewPoint).toHaveBeenCalledTimes(2);
+      expect(a.status === "captured" && a.capture.capturedAt).toBe(1);
+      expect(b.status === "captured" && b.capture.capturedAt).toBe(2);
+      expect(c.status === "captured" && c.capture.capturedAt).toBe(2);
     });
 
     it("captures nothing for a worktree the host doesn't list", async () => {
@@ -421,6 +459,11 @@ describe("reviewMarks IPC namespace", () => {
       expect(outcome.status).toBe("saved");
       expect(outcome.snapshot.marks[WT_1]).toMatchObject({ capturedAt: 4_000 });
       expect(identityMock.readWorktreeIdentity).toHaveBeenCalledWith(WT_1, expect.anything());
+      // The point held at capture is what's stored, never a fresh one.
+      expect(captureMock.captureReviewPoint).toHaveBeenCalledTimes(1);
+      expect((await getReviewMarkStore().get(PROJECT_A, WT_1))?.point).toEqual(
+        point(WT_1, { capturedAt: 4_000 })
+      );
     });
 
     it("refuses a capture id from another worktree or one no longer held", async () => {

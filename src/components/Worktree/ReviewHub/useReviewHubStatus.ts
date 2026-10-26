@@ -13,6 +13,7 @@ import {
   getCachedStagingStatus,
   rememberStagingStatus,
 } from "./stagingStatusCache";
+import { worktreeEventPath } from "./worktreeEventPath";
 
 interface UseReviewHubStatusArgs {
   isOpen: boolean;
@@ -29,31 +30,38 @@ export interface ReviewHubCapture {
 }
 
 /**
- * How long a background read waits for the capture it was asked alongside
- * before reading status anyway, so a slow capture never holds the list back.
+ * How long a capture can keep the status read it was asked alongside waiting
+ * before that read goes out anyway, so a slow capture never holds the list back.
  */
 const CAPTURE_WAIT_MS = 1_500;
 
+/** One opening of one worktree; ended by the subscription's cleanup. */
+interface Session {
+  live: boolean;
+}
+
 interface CaptureLane {
-  session: number;
-  running: Promise<void> | null;
+  session: Session;
+  running: boolean;
   again: boolean;
-  /** A status read went out while this run was capturing, so it got an older capture. */
-  statusDuringRun: boolean;
+  /** Sends a status read if the capture is still running when it fires. */
+  timer: ReturnType<typeof setTimeout> | null;
 }
 
 /**
  * The open hub's working-tree staging status: the foreground read, the silent
- * background re-read that worktree events debounce into, and the request
- * generations that keep a superseded read from landing. A background read
- * never raises `loading`, so it never swaps the foreground surface out.
+ * background re-read that worktree events debounce into, and the publication
+ * order that keeps an older read from landing over a newer one. A background
+ * read never raises `loading`, so it never swaps the foreground surface out.
  *
  * Beside it runs the capture lane (#14585): the host captures what the
  * worktree holds, on open, on the same events and when asked, and each status
- * read takes the newest capture that had landed when the read was sent. A
- * capture that landed before a read went out holds nothing that arrived after
- * that read, so the capture shown with a status never covers content the hub
- * hadn't read. The cached snapshot seeded at open has none.
+ * read takes the newest capture of its worktree that had landed when the read
+ * was sent. A capture that landed before a read went out holds nothing that
+ * arrived after that read, so the capture shown with a status never covers
+ * content the hub hadn't read. The cached snapshot seeded at open has none.
+ * Each capture run is followed by one status read (two when the capture is
+ * slow), never one per request: staging status is rate limited on the host.
  */
 export function useReviewHubStatus({ isOpen, worktreePath, worktreeId }: UseReviewHubStatusArgs) {
   const [status, setStatus] = useState<StagingStatus | null>(null);
@@ -69,37 +77,37 @@ export function useReviewHubStatus({ isOpen, worktreePath, worktreeId }: UseRevi
   const [loadError, setLoadError] = useState<string | null>(null);
   const refreshIdRef = useRef(0);
   const bgRefreshIdRef = useRef(0);
+  // Every read, foreground or background, takes the next number when sent; a
+  // reply older than the one on screen is dropped.
+  const publishSeqRef = useRef(0);
+  const publishedSeqRef = useRef(0);
   const debouncedBgRefreshRef = useRef<ReturnType<typeof debounce> | null>(null);
-  // Bumped as the event subscription below starts and stops, i.e. on open,
-  // close and a worktree switch: a capture from another opening or worktree is
-  // never attached to this one's reads.
-  const sessionRef = useRef(0);
-  const latestCaptureRef = useRef<ReviewHubCapture | null>(null);
-  const laneRef = useRef<CaptureLane>({
-    session: 0,
-    running: null,
-    again: false,
-    statusDuringRun: false,
-  });
+  // Started and ended by the event subscription below, i.e. on open, close and
+  // a worktree switch: a capture from another opening is never shown with this
+  // one's reads.
+  const sessionRef = useRef<Session>({ live: false });
+  const latestCaptureRef = useRef<{ path: string; capture: ReviewHubCapture } | null>(null);
+  const laneRef = useRef<CaptureLane | null>(null);
 
-  /** The capture a read sent now may show, noting a read sent while one is capturing. */
-  const captureForRead = useCallback((): ReviewHubCapture | null => {
-    const lane = laneRef.current;
-    if (lane.running && lane.session === sessionRef.current) lane.statusDuringRun = true;
-    return latestCaptureRef.current;
+  /** The capture a read of `path` sent now may show. */
+  const captureForRead = useCallback((path: string): ReviewHubCapture | null => {
+    const latest = latestCaptureRef.current;
+    return latest && latest.path === path ? latest.capture : null;
   }, []);
 
   const refresh = useCallback(async () => {
     if (!worktreePath) return;
     const requestId = ++refreshIdRef.current;
+    const publishSeq = ++publishSeqRef.current;
     const readSeq = beginStagingStatusRead();
-    const capture = captureForRead();
+    const capture = captureForRead(worktreePath);
     setLoading(true);
     setLoadError(null);
     try {
       const result = await window.electron.git.getStagingStatus(worktreePath);
       rememberStagingStatus(worktreePath, result, readSeq);
-      if (refreshIdRef.current === requestId) {
+      if (refreshIdRef.current === requestId && publishSeq > publishedSeqRef.current) {
+        publishedSeqRef.current = publishSeq;
         setStatusIsFresh(true);
         setStatus(result);
         setStatusCapture(capture);
@@ -118,13 +126,15 @@ export function useReviewHubStatus({ isOpen, worktreePath, worktreeId }: UseRevi
   const backgroundRefresh = useCallback(async () => {
     if (!worktreePath) return;
     const requestId = ++bgRefreshIdRef.current;
+    const publishSeq = ++publishSeqRef.current;
     const readSeq = beginStagingStatusRead();
-    const capture = captureForRead();
+    const capture = captureForRead(worktreePath);
     setIsBackgroundRefreshing(true);
     try {
       const result = await window.electron.git.getStagingStatus(worktreePath);
       rememberStagingStatus(worktreePath, result, readSeq);
-      if (bgRefreshIdRef.current === requestId) {
+      if (bgRefreshIdRef.current === requestId && publishSeq > publishedSeqRef.current) {
+        publishedSeqRef.current = publishSeq;
         setStatusIsFresh(true);
         setStatus(result);
         setStatusCapture(capture);
@@ -140,73 +150,61 @@ export function useReviewHubStatus({ isOpen, worktreePath, worktreeId }: UseRevi
   }, [worktreePath, captureForRead]);
 
   /**
-   * Capture once, or once more after the capture in flight. Resolves when the
-   * lane is idle; null when this view can't capture. A status read sent while
-   * it ran showed an older capture, so one more read follows to show the new one.
-   */
-  const runCapture = useCallback((): Promise<void> | null => {
-    const session = sessionRef.current;
-    if (!worktreeId || !reviewMarkCapturesAvailable()) return null;
-    const lane = laneRef.current;
-    if (lane.session === session && lane.running) {
-      lane.again = true;
-      return lane.running;
-    }
-    const next: CaptureLane = { session, running: null, again: false, statusDuringRun: false };
-    laneRef.current = next;
-    const run = (async () => {
-      do {
-        next.again = false;
-        const basedOn = getReviewMarksRevision();
-        const pending = captureForReviewMark(worktreeId);
-        if (!pending) return;
-        const outcome = await pending.catch(() => null);
-        if (sessionRef.current !== session) return;
-        if (outcome?.status === "captured") {
-          latestCaptureRef.current = { capture: outcome.capture, basedOn };
-        }
-      } while (next.again);
-    })().finally(() => {
-      next.running = null;
-      if (next.statusDuringRun && sessionRef.current === session) {
-        next.statusDuringRun = false;
-        void backgroundRefresh();
-      }
-    });
-    next.running = run;
-    return run;
-  }, [worktreeId, backgroundRefresh]);
-
-  /**
-   * Capture, then read status once the capture lands or once it's taken too
-   * long. Where this view can't capture, the read goes straight out, unless
-   * `captureOnly` says it was only wanted for the capture.
+   * Capture, then read status once the capture lands, or once it's taken too
+   * long. A request while one is capturing asks for one more capture after it,
+   * and the lane still reads status once, at its end. Where this view can't
+   * capture, the read goes straight out, unless `captureOnly` says it was only
+   * wanted for the capture.
    */
   const readWithCapture = useCallback(
     (captureOnly = false) => {
       const session = sessionRef.current;
-      const capturing = runCapture();
-      if (!capturing) {
+      if (!session.live) return;
+      if (!worktreeId || !reviewMarkCapturesAvailable()) {
         if (!captureOnly) void backgroundRefresh();
         return;
       }
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      void Promise.race([
-        capturing,
-        new Promise<void>((resolve) => {
-          timer = setTimeout(resolve, CAPTURE_WAIT_MS);
-        }),
-      ]).then(() => {
-        clearTimeout(timer);
-        if (sessionRef.current === session) void backgroundRefresh();
-      });
+      const path = worktreePath;
+      const current = laneRef.current;
+      const lane: CaptureLane =
+        current && current.session === session && current.running
+          ? current
+          : { session, running: false, again: false, timer: null };
+      if (lane.timer === null) {
+        lane.timer = setTimeout(() => {
+          lane.timer = null;
+          if (lane.running && session.live) void backgroundRefresh();
+        }, CAPTURE_WAIT_MS);
+      }
+      if (lane.running) {
+        lane.again = true;
+        return;
+      }
+      lane.running = true;
+      laneRef.current = lane;
+      void (async () => {
+        do {
+          lane.again = false;
+          const basedOn = getReviewMarksRevision();
+          const outcome = await captureForReviewMark(worktreeId)?.catch(() => null);
+          if (!session.live) break;
+          if (outcome?.status === "captured") {
+            latestCaptureRef.current = { path, capture: { capture: outcome.capture, basedOn } };
+          }
+        } while (lane.again);
+        lane.running = false;
+        if (lane.timer !== null) clearTimeout(lane.timer);
+        lane.timer = null;
+        if (session.live) void backgroundRefresh();
+      })();
     },
-    [runCapture, backgroundRefresh]
+    [worktreeId, worktreePath, backgroundRefresh]
   );
 
   useEffect(() => {
     if (!isOpen) return;
-    sessionRef.current++;
+    const session: Session = { live: true };
+    sessionRef.current = session;
     latestCaptureRef.current = null;
 
     const debouncedBgRefresh = debounce(() => readWithCapture(), 800);
@@ -216,16 +214,14 @@ export function useReviewHubStatus({ isOpen, worktreePath, worktreeId }: UseRevi
     // consumes. The main-relayed events:push copy of worktree-update was
     // removed (this component was its only subscriber).
     const unsubscribeUpdate = window.electron.worktreePort.onEvent("worktree-update", (data) => {
-      const event = data as { worktree?: { path?: string } };
-      if (event?.worktree?.path === worktreePath) {
+      if (worktreeEventPath(data, "worktree") === worktreePath) {
         debouncedBgRefresh();
       }
     });
     // A stamp-only update (a watcher flush, a forced status pass) arrives as a
     // tick; it still means the files on disk may have moved.
     const unsubscribeTick = window.electron.worktreePort.onEvent("worktree-tick", (data) => {
-      const event = data as { tick?: { path?: string } };
-      if (event?.tick?.path === worktreePath) {
+      if (worktreeEventPath(data, "tick") === worktreePath) {
         debouncedBgRefresh();
       }
     });
@@ -234,7 +230,7 @@ export function useReviewHubStatus({ isOpen, worktreePath, worktreeId }: UseRevi
     readWithCapture(true);
 
     return () => {
-      sessionRef.current++;
+      session.live = false;
       latestCaptureRef.current = null;
       unsubscribeUpdate();
       unsubscribeTick();

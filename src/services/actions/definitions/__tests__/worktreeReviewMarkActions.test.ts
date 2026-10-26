@@ -33,7 +33,9 @@ import {
 
 function getAction(id: "worktree.markReviewed" | "worktree.clearReviewMark") {
   const actions: ActionRegistry = new Map();
-  registerWorktreeContextActions(actions, { onInject: vi.fn() } as unknown as ActionCallbacks);
+  // These actions never reach a callback.
+  const noCallbacks: ActionCallbacks = Object.create(null);
+  registerWorktreeContextActions(actions, noCallbacks);
   const factory = actions.get(id);
   if (!factory) throw new Error(`${id} is not registered`);
   return factory();
@@ -84,10 +86,16 @@ describe("worktree.markReviewed", () => {
 
   it("is offered in the palette only while the context's hub can mark", () => {
     const palette = getAction("worktree.markReviewed").palette;
-    expect(palette?.isReady?.({} as ActionContext)).toBe(false);
+    if (palette?.mode !== "requireContext") throw new Error("expected a context gate");
+    expect(palette.isReady({})).toBe(false);
+    const off = registerReviewHubMarkTarget(
+      hub({ markBlockedReason: () => "Review Hub is still reading this worktree" })
+    );
+    expect(palette.isReady(IN_HUB)).toBe(false);
+    off();
     registerReviewHubMarkTarget(hub());
-    expect(palette?.isReady?.(IN_HUB)).toBe(true);
-    expect(palette?.isReady?.({ focusedTerminalId: "terminal-1" } as ActionContext)).toBe(false);
+    expect(palette.isReady(IN_HUB)).toBe(true);
+    expect(palette.isReady({ focusedTerminalId: "terminal-1" })).toBe(false);
   });
 });
 
