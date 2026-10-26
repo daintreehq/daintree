@@ -16,6 +16,7 @@ function reset() {
     status: "idle",
     lastError: null,
     activeTarget: null,
+    pendingTarget: null,
     lockedTarget: null,
     recentTargets: [],
     elapsedSeconds: 0,
@@ -70,7 +71,43 @@ describe("voiceRecordingStore — setArming", () => {
     const state = useVoiceRecordingStore.getState();
     expect(state.status).toBe("connecting");
     expect(state.activeTarget).toEqual(TARGET);
+    expect(state.pendingTarget).toBeNull();
   });
+
+  // #14604: the running or finishing session's transcripts still route by
+  // activeTarget, so arming the next target must not take it over.
+  for (const status of [
+    "connecting",
+    "recording",
+    "paused",
+    "reconnecting",
+    "finishing",
+  ] as const) {
+    it(`leaves a ${status} session's target and status alone while the next start waits`, () => {
+      const next = { panelId: "panel-2" };
+      useVoiceRecordingStore.getState().beginSession(TARGET);
+      useVoiceRecordingStore.getState().setStatus(status);
+      useVoiceRecordingStore.getState().setMicSignal("live");
+      useVoiceRecordingStore
+        .getState()
+        .setLastError({ severity: "transient", code: "ws_close_1006", message: "Dropped" });
+
+      useVoiceRecordingStore.getState().setArming(next);
+
+      const state = useVoiceRecordingStore.getState();
+      expect(state.activeTarget).toEqual(TARGET);
+      expect(state.status).toBe(status);
+      expect(state.micSignal).toBe("live");
+      expect(state.pendingTarget).toEqual(next);
+      expect(state.lastError).toBeNull();
+
+      useVoiceRecordingStore.getState().finishSession();
+      expect(useVoiceRecordingStore.getState().pendingTarget).toEqual(next);
+      useVoiceRecordingStore.getState().beginSession(next);
+      expect(useVoiceRecordingStore.getState().activeTarget).toEqual(next);
+      expect(useVoiceRecordingStore.getState().pendingTarget).toBeNull();
+    });
+  }
 });
 
 describe("voiceRecordingStore — errorPanelId (#14628)", () => {

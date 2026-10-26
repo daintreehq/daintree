@@ -1,7 +1,12 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { StorageValue } from "zustand/middleware";
-import type { VoiceInputError, VoiceInputStatus, VoiceTranscriptPhase } from "@shared/types";
+import {
+  isActiveVoiceSession,
+  type VoiceInputError,
+  type VoiceInputStatus,
+  type VoiceTranscriptPhase,
+} from "@shared/types";
 import { createDebouncedSafeJSONStorage } from "./persistence/safeStorage";
 import {
   mergeRecordByWriterDelta,
@@ -249,6 +254,13 @@ interface VoiceRecordingState {
   pauseStopWarning: boolean;
   activeTarget: VoiceRecordingTarget | null;
   /**
+   * Where the next session will record, from the press until it begins. A
+   * start can wait behind a session that is still finishing, and that
+   * session's late transcripts keep routing by `activeTarget`, so the arming
+   * cue reads this field instead.
+   */
+  pendingTarget: VoiceRecordingTarget | null;
+  /**
    * Pinned dictation target. When set, `toggleFocusedPanel` routes here
    * regardless of which panel owns focus. Runtime-only: panelId is ephemeral,
    * so this is stripped from the persisted blob.
@@ -279,6 +291,7 @@ interface VoiceRecordingState {
   /** Clears the notice only if it is still `notice`, so a newer one survives a stale dismiss. */
   dismissMicNotice: (notice: VoiceMicNotice) => void;
   setArming: (target: VoiceRecordingTarget) => void;
+  clearPendingTarget: () => void;
   beginSession: (target: VoiceRecordingTarget) => void;
   setStatus: (status: VoiceInputStatus) => void;
   setLastError: (error: VoiceInputError | null) => void;
@@ -343,6 +356,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
       errorPanelId: null,
       pauseStopWarning: false,
       activeTarget: null,
+      pendingTarget: null,
       lockedTarget: null,
       recentTargets: [],
       elapsedSeconds: 0,
@@ -391,20 +405,31 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
       // Atomic single-set transition into the pre-audio confirmation phase.
       // Fires synchronously before any await in start() so the target panel
       // and toolbar can paint the arming cue before microphone init begins.
+      // A session still running or finishing keeps its target and status: its
+      // remaining transcripts belong to its own panel (#14604).
       setArming: (target) =>
-        set({
-          activeTarget: target,
-          status: "arming",
-          lastError: null,
-          errorPanelId: null,
-          micSignal: "pending",
-          micDeviceLabel: null,
-          micNotice: null,
-        }),
+        set((state) =>
+          isActiveVoiceSession(state.status)
+            ? { pendingTarget: target, lastError: null, errorPanelId: null }
+            : {
+                activeTarget: target,
+                pendingTarget: target,
+                status: "arming",
+                lastError: null,
+                errorPanelId: null,
+                micSignal: "pending",
+                micDeviceLabel: null,
+                micNotice: null,
+              }
+        ),
+
+      clearPendingTarget: () =>
+        set((state) => (state.pendingTarget === null ? state : { pendingTarget: null })),
 
       beginSession: (target) =>
         set((state) => ({
           activeTarget: target,
+          pendingTarget: null,
           status: "connecting",
           lastError: null,
           errorPanelId: null,

@@ -67,6 +67,7 @@ describe("VoiceRecordingToolbarButton — tooltip names what a click does", () =
   beforeEach(() => {
     focusActiveTarget.mockClear();
     mockCombo = undefined;
+    useVoiceRecordingStore.setState({ pendingTarget: null });
   });
 
   function renderWith(status: "recording" | "paused") {
@@ -156,6 +157,30 @@ describe("VoiceRecordingToolbarButton — tooltip names what a click does", () =
       expect(container.querySelector("button")?.getAttribute("aria-label")).toBe(title);
     }
   );
+
+  // #14604: a start waiting on a finishing session gets the arming cue here,
+  // the only place a single or maximized pane shows it.
+  it.each([
+    {
+      status: "finishing" as const,
+      activeTarget: { panelId: "p-1", panelTitle: "claude · notes" },
+    },
+    { status: "idle" as const, activeTarget: null },
+  ])("arms for a queued start instead of the orbit ($status)", ({ status, activeTarget }) => {
+    useVoiceRecordingStore.setState({
+      isConfigured: true,
+      status,
+      micSignal: "live",
+      activeTarget,
+      pendingTarget: { panelId: "p-2", panelTitle: "codex · api" },
+    });
+    const { container } = render(<VoiceRecordingToolbarButton />);
+
+    expect(container.querySelector("button")?.getAttribute("aria-label")).toBe(
+      "Arming dictation: codex · api"
+    );
+    expect(container.querySelector('[style*="will-change"]')).toBeNull();
+  });
 });
 
 describe("VoiceRecordingToolbarButton polish — issue #8176", () => {
@@ -222,7 +247,7 @@ describe("VoiceRecordingToolbarButton polish — issue #8176", () => {
 
     it("holds the static arming ring from the hotkey press until the mic is live", () => {
       expect(source).toMatch(
-        /const\s+showArming\s*=\s*isActive\s*&&\s*\(isArming\s*\|\|\s*isMicStarting\s*\|\|\s*isReconnecting\s*\|\|\s*isFinishing\)/
+        /const\s+showArming\s*=\s*isQueued\s*\|\|\s*\(isActive\s*&&\s*\(isArming\s*\|\|\s*isMicStarting\s*\|\|\s*isReconnecting\s*\|\|\s*isFinishing\)\)/
       );
     });
   });
@@ -249,7 +274,7 @@ describe("VoiceRecordingToolbarButton polish — issue #8176", () => {
       // isPaused as another isActive sub-state that should still render the
       // (frozen) orbit chrome.
       expect(source).toMatch(
-        /const\s+showOrbit\s*=\s*isActive\s*&&\s*\(isListening\s*\|\|\s*isPaused\)/
+        /const\s+showOrbit\s*=\s*!isQueued\s*&&\s*isActive\s*&&\s*\(isListening\s*\|\|\s*isPaused\)/
       );
     });
 

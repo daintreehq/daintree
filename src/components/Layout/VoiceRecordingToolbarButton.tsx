@@ -90,6 +90,7 @@ export function VoiceRecordingToolbarButton({
 }) {
   const activeTarget = useVoiceRecordingStore((state) => state.activeTarget);
   const lockedTarget = useVoiceRecordingStore((state) => state.lockedTarget);
+  const pendingTarget = useVoiceRecordingStore((state) => state.pendingTarget);
   const status = useVoiceRecordingStore((state) => state.status);
   const elapsedSeconds = useVoiceRecordingStore((state) => state.elapsedSeconds);
   const micSignal = useVoiceRecordingStore((state) => state.micSignal);
@@ -105,9 +106,13 @@ export function VoiceRecordingToolbarButton({
   const isReconnecting = status === "reconnecting";
   const isFinishing = status === "finishing";
   const isPaused = status === "paused";
+  // A start waiting on a session that is still finishing (#14604). Single and
+  // maximized panes paint no arming border, so the toolbar carries the cue.
+  const isQueued = pendingTarget !== null && !isArming;
   const isActive =
-    Boolean(activeTarget) &&
-    (isArming || isConnecting || isRecording || isReconnecting || isFinishing || isPaused);
+    isQueued ||
+    (Boolean(activeTarget) &&
+      (isArming || isConnecting || isRecording || isReconnecting || isFinishing || isPaused));
 
   // The orbit means "listening", so it waits for the mic to deliver real
   // audio — not for the transcription backend, which is a separate state
@@ -121,11 +126,12 @@ export function VoiceRecordingToolbarButton({
   // RAF loop spinning on null refs.
   // Reconnecting and finishing are not listening, so they get the static ring.
   const isListening = (isRecording || isConnecting) && isMicLive;
-  const showOrbit = isActive && (isListening || isPaused);
+  const showOrbit = !isQueued && isActive && (isListening || isPaused);
   // Arming paints immediately — the visual confirmation IS the point of the
   // state. The static accent ring holds from the hotkey press until the mic
   // is live, so the indicator never blanks out before the orbit takes over.
-  const showArming = isActive && (isArming || isMicStarting || isReconnecting || isFinishing);
+  const showArming =
+    isQueued || (isActive && (isArming || isMicStarting || isReconnecting || isFinishing));
 
   const wrapperRef = useRef<HTMLDivElement>(null);
   const ringRef = useRef<HTMLSpanElement>(null);
@@ -252,37 +258,40 @@ export function VoiceRecordingToolbarButton({
     return <VoiceRecordingPlaceholder />;
   }
 
-  const contextLabel = [activeTarget?.projectName, activeTarget?.worktreeLabel]
+  const labelTarget = isQueued ? pendingTarget : activeTarget;
+  const contextLabel = [labelTarget?.projectName, labelTarget?.worktreeLabel]
     .filter(Boolean)
     .join(" / ");
-  const panelLabel = activeTarget?.panelTitle?.trim();
+  const panelLabel = labelTarget?.panelTitle?.trim();
   const targetLabel = panelLabel || contextLabel;
-  const tooltipTitle = isArming
-    ? targetLabel
-      ? `Arming dictation: ${targetLabel}`
-      : "Arming dictation…"
-    : isMicStarting
-      ? micSignal === "silent"
-        ? `No audio from ${micDeviceLabel ?? "microphone"}`
-        : "Starting microphone…"
-      : isConnecting
-        ? targetLabel
-          ? `Recording: ${targetLabel} · Connecting…`
-          : "Recording · Connecting…"
-        : isReconnecting
-          ? "Reconnecting…"
-          : isFinishing
-            ? "Finishing transcription…"
-            : isPaused
-              ? pauseStopWarning
-                ? "Paused · Stopping in 10s unless resumed"
+  const tooltipTitle =
+    isArming || isQueued
+      ? targetLabel
+        ? `Arming dictation: ${targetLabel}`
+        : "Arming dictation…"
+      : isMicStarting
+        ? micSignal === "silent"
+          ? `No audio from ${micDeviceLabel ?? "microphone"}`
+          : "Starting microphone…"
+        : isConnecting
+          ? targetLabel
+            ? `Recording: ${targetLabel} · Connecting…`
+            : "Recording · Connecting…"
+          : isReconnecting
+            ? "Reconnecting…"
+            : isFinishing
+              ? "Finishing transcription…"
+              : isPaused
+                ? pauseStopWarning
+                  ? "Paused · Stopping in 10s unless resumed"
+                  : targetLabel
+                    ? `Paused: ${targetLabel}`
+                    : "Dictation paused"
                 : targetLabel
-                  ? `Paused: ${targetLabel}`
-                  : "Dictation paused"
-              : targetLabel
-                ? `Recording: ${targetLabel}`
-                : "Recording in another panel";
-  const elapsedLabel = isRecording || isPaused ? formatDuration(elapsedSeconds) : null;
+                  ? `Recording: ${targetLabel}`
+                  : "Recording in another panel";
+  const elapsedLabel =
+    !isQueued && (isRecording || isPaused) ? formatDuration(elapsedSeconds) : null;
   // The toggle shortcut would start a new session when focused elsewhere; the
   // pause shortcut is the resume affordance the user actually wants.
   const actionCombo = isPaused ? pauseShortcut : shortcut;

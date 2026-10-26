@@ -629,11 +629,10 @@ function TerminalPaneComponent({
 
   const isHibernated = useIsHibernated(id);
 
-  // Pre-audio confirmation cue. Subscribes to both fields so a target swap
-  // mid-arming repaints the right pane on the next render.
-  const isVoiceArming = useVoiceRecordingStore(
-    (s) => s.status === "arming" && s.activeTarget?.panelId === id
-  );
+  // Pre-audio confirmation cue. Follows the pending target rather than the
+  // session's, so it also shows while a new start waits behind a session that
+  // is still finishing.
+  const isVoiceArming = useVoiceRecordingStore((s) => s.pendingTarget?.panelId === id);
   const voiceMicNotice = useVoiceRecordingStore((s) => selectMicNoticeForPanel(s, id));
 
   const hybridInputEnabled = useTerminalInputStore((state) => state.hybridInputEnabled);

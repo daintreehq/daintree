@@ -74,6 +74,8 @@ export function VoiceInputButton({
   const micSignal = useVoiceRecordingStore((state) => state.micSignal);
   const micDeviceLabel = useVoiceRecordingStore((state) => state.micDeviceLabel);
   const activePanelId = useVoiceRecordingStore((state) => state.activeTarget?.panelId ?? null);
+  // A start aimed here that hasn't begun its session yet; a click ends it.
+  const isPending = useVoiceRecordingStore((state) => state.pendingTarget?.panelId === panelId);
 
   const isRecording = activePanelId === panelId && status === "recording";
   const isConnecting = activePanelId === panelId && status === "connecting";
@@ -90,6 +92,9 @@ export function VoiceInputButton({
   // Keep orbit visible through finishing and paused for continuity
   const showOrbit = isSessionOpen || isFinishing || isPaused;
   const isActive = isSessionOpen || isFinishing || isPaused;
+  // A click while the session finishes starts the next one (#14604), so a
+  // disabled input blocks it like any other start.
+  const isClickBlocked = disabled && (!isActive || isFinishing);
   // Only a session still feeding from the mic spins. Paused, finishing and
   // reconnecting hold still: speech past the provider's short reconnect buffer
   // is lost, and a draining stop is not listening.
@@ -236,7 +241,7 @@ export function VoiceInputButton({
   }, [showOrbit, isFinishing, isOrbitStill]);
 
   const handleClick = useCallback(() => {
-    if (disabled && !isActive) return;
+    if (isClickBlocked) return;
 
     // Paused → resume on click; the affordance reads as a pause/resume toggle
     // rather than a stop. Escape (handled by the service) is the stop path.
@@ -254,8 +259,7 @@ export function VoiceInputButton({
       worktreeLabel,
     });
   }, [
-    disabled,
-    isActive,
+    isClickBlocked,
     isPaused,
     panelId,
     panelTitle,
@@ -269,21 +273,25 @@ export function VoiceInputButton({
     ? "Configure voice input"
     : hasError
       ? formatVoiceErrorTooltip(lastError)
-      : isFinishing
-        ? "Finishing transcription…"
-        : isPaused
-          ? pauseStopWarning
-            ? "Paused — stops in 10s · Click to resume"
-            : "Paused — click to resume"
-          : isMicStarting
-            ? micSignal === "silent"
-              ? `No audio from ${micDeviceLabel ?? "microphone"} · Click to stop`
-              : "Starting microphone… Click to stop"
-            : isReconnecting
-              ? "Reconnecting… Click to stop"
-              : isListening
-                ? "Stop recording"
-                : "Start voice input";
+      : isPending
+        ? "Starting microphone… Click to stop"
+        : isFinishing
+          ? disabled
+            ? "Finishing transcription…"
+            : "Finishing transcription… Click to start again"
+          : isPaused
+            ? pauseStopWarning
+              ? "Paused — stops in 10s · Click to resume"
+              : "Paused — click to resume"
+            : isMicStarting
+              ? micSignal === "silent"
+                ? `No audio from ${micDeviceLabel ?? "microphone"} · Click to stop`
+                : "Starting microphone… Click to stop"
+              : isReconnecting
+                ? "Reconnecting… Click to stop"
+                : isListening
+                  ? "Stop recording"
+                  : "Start voice input";
 
   return (
     <div
@@ -359,7 +367,7 @@ export function VoiceInputButton({
           <button
             type="button"
             onClick={handleClick}
-            disabled={(disabled && !isActive) || isFinishing}
+            disabled={isClickBlocked}
             className={cn(
               "relative flex items-center justify-center rounded-full transition duration-150",
               "h-6 w-6",
@@ -379,11 +387,11 @@ export function VoiceInputButton({
                 ? "Set up voice input"
                 : isPaused
                   ? "Resume voice recording"
-                  : isSessionOpen
+                  : isSessionOpen || isPending
                     ? "Stop voice recording"
                     : "Start voice recording"
             }
-            aria-pressed={isConfigured ? isSessionOpen || isPaused : undefined}
+            aria-pressed={isConfigured ? isSessionOpen || isPaused || isPending : undefined}
           >
             {isFinishing || isReconnecting ? (
               <Spinner size="sm" />

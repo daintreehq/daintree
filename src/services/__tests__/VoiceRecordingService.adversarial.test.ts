@@ -93,6 +93,7 @@ const runtime = vi.hoisted(() => ({
   },
   voiceState: {
     activeTarget: null as VoiceRecordingTarget | null,
+    pendingTarget: null as VoiceRecordingTarget | null,
     status: "idle",
     panelBuffers: {} as Record<string, MockPanelBuffer>,
     correctionEnabled: false,
@@ -112,6 +113,7 @@ const runtime = vi.hoisted(() => ({
     setLearnFromCorrections: vi.fn<(enabled: boolean) => void>(),
     setSessionCorrectedText: vi.fn<(panelId: string, text: string | null) => void>(),
     beginSession: vi.fn<(target: VoiceRecordingTarget) => void>(),
+    clearPendingTarget: vi.fn<() => void>(),
     finishSession:
       vi.fn<(options?: { nextStatus?: "idle" | "error"; preserveLiveText?: boolean }) => void>(),
     setAudioLevel: vi.fn<(level: number) => void>(),
@@ -199,6 +201,7 @@ function resetRuntime(): void {
   runtime.worktreeSelectionState.activeWorktreeId = null;
   runtime.worktreeSelectionState.selectWorktree.mockReset();
   runtime.voiceState.activeTarget = null;
+  runtime.voiceState.pendingTarget = null;
   runtime.voiceState.status = "idle";
   runtime.voiceState.panelBuffers = {};
   runtime.voiceState.correctionEnabled = false;
