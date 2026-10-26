@@ -484,16 +484,14 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
       // model config lives in the URL query string, so there's no session
       // handshake to await (unlike OpenAI's `session.update`).
       this.clearConnectTimeout();
-      const wasReconnecting = this.isReconnecting;
       logInfo(`${P} WebSocket opened — session ready`, {
         sessionId: mySessionId,
         voiceSessionId: this.voiceSessionId,
         connectMs: Math.round(performance.now() - this.connectStartedAt),
         sinceStartMs: this.sinceStartMs(),
         bufferedChunks: this.preConnectBuffer.length,
-        ...(wasReconnecting
-          ? { reconnectAttempt: this.reconnectAttempt, resentChunks: this.unconfirmedAudio.length }
-          : {}),
+        reconnectAttempt: this.reconnectAttempt,
+        resentChunks: this.unconfirmedAudio.length,
       });
       this.flushHeldAudio();
       this.isReady = true;
