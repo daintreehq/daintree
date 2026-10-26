@@ -582,7 +582,7 @@ describe("useWorktreeBulkRemove — execution", () => {
     expect(hook.result.current.isConfirmOpen).toBe(false);
   });
 
-  it("emits a past-tense success toast on all-success — no 'successfully' adverb (microcopy rule)", async () => {
+  it("raises no toast on all-success: the cards leaving the overview are the confirmation", async () => {
     worktreeClientMock.delete.mockResolvedValue(undefined);
     const { hook } = setup(["a", "b"], [wt("a"), wt("b")]);
 
@@ -591,13 +591,7 @@ describe("useWorktreeBulkRemove — execution", () => {
       await hook.result.current.handleConfirm();
     });
 
-    const successCall = notifyMock.mock.calls.find(
-      (c) => (c[0] as { type: string }).type === "success"
-    );
-    expect(successCall).toBeDefined();
-    const payload = successCall![0] as { title: string };
-    expect(payload.title).toBe("Deleted 2 worktrees");
-    expect(payload.title).not.toMatch(/successfully/i);
+    expect(notifyMock).not.toHaveBeenCalled();
   });
 
   it("emits a warning toast on partial failure with the success/total ratio in the title", async () => {
@@ -653,7 +647,7 @@ describe("useWorktreeBulkRemove — execution", () => {
     expect(payload.context?.worktreeId).toBe("a");
   });
 
-  it("stops dev previews before each delete and folds counts into the success toast (#9084)", async () => {
+  it("stops dev previews before each delete and surfaces the stopped servers, and only those (#9084)", async () => {
     worktreeClientMock.delete.mockResolvedValue(undefined);
     const runningState = {
       panelId: "panel",
@@ -681,12 +675,15 @@ describe("useWorktreeBulkRemove — execution", () => {
     expect(devPreviewStopByWorktreeMock).toHaveBeenCalledWith({ worktreeId: "a" });
     expect(devPreviewStopByWorktreeMock).toHaveBeenCalledWith({ worktreeId: "b" });
 
-    const successCall = notifyMock.mock.calls.find(
-      (c) => (c[0] as { type: string }).type === "success"
-    );
-    expect(successCall).toBeDefined();
-    const payload = successCall![0] as { message: string };
-    expect(payload.message).toContain("Stopped 2 dev servers");
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+    const payload = notifyMock.mock.calls[0]![0] as {
+      type: string;
+      title: string;
+      message: string;
+    };
+    expect(payload.type).toBe("info");
+    expect(payload.title).not.toMatch(/^Deleted/);
+    expect(payload.message).toBe("Stopped 2 dev servers.");
   });
 
   it("uses singular dev server copy when exactly one preview was stopped (#9084)", async () => {
@@ -723,11 +720,9 @@ describe("useWorktreeBulkRemove — execution", () => {
     expect(devPreviewStopByWorktreeMock).toHaveBeenCalledWith({ worktreeId: "a" });
     expect(devPreviewStopByWorktreeMock).toHaveBeenCalledWith({ worktreeId: "b" });
 
-    const successCall = notifyMock.mock.calls.find(
-      (c) => (c[0] as { type: string }).type === "success"
-    );
-    const payload = successCall![0] as { message: string };
-    expect(payload.message).toContain("Stopped dev server for a");
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+    const payload = notifyMock.mock.calls[0]![0] as { message: string };
+    expect(payload.message).toBe("Stopped dev server for a.");
   });
 
   it("does not start the delete until the dev preview stop resolves (#9084)", async () => {
@@ -836,8 +831,8 @@ describe("useWorktreeBulkRemove — execution", () => {
     await act(async () => {
       await pending;
     });
-    // One run, so exactly one summary.
-    expect(notifyMock).toHaveBeenCalledTimes(1);
+    // One run and a clean delete: nothing to say.
+    expect(notifyMock).not.toHaveBeenCalled();
   });
 });
 
@@ -875,11 +870,9 @@ describe("useWorktreeBulkRemove — the queue no longer guillotines the batch (#
       await pending;
     });
 
-    const successCall = notifyMock.mock.calls.find(
-      (c) => (c[0] as { type: string }).type === "success"
-    );
-    expect(successCall).toBeDefined();
-    expect((successCall![0] as { title: string }).title).toBe("Deleted 2 worktrees");
+    expect(
+      notifyMock.mock.calls.find((c) => (c[0] as { type: string }).type === "success")
+    ).toBeUndefined();
     // The old escape-hatch toast is gone along with the branch that raised it.
     expect(
       notifyMock.mock.calls.find((c) => (c[0] as { title: string }).title === "Bulk remove aborted")
@@ -1028,9 +1021,7 @@ describe("useWorktreeBulkRemove — nested worktrees (#12789)", () => {
       await confirmed;
     });
     expect(deletedIds()).toEqual(["child", "parent"]);
-    expect(notifyMock).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "success", title: "Deleted 2 worktrees" })
-    );
+    expect(notifyMock).not.toHaveBeenCalled();
   });
 
   it("keeps the ancestor when a nested worktree fails", async () => {

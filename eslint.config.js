@@ -474,8 +474,8 @@ export default tseslint.config(
           // saves, panel docks, undo confirmations). Per CLAUDE.md's notify
           // four-question gate, a success toast is justified only when at
           // least one of three escape hatches is present: `transient: true`
-          // (one-shot, no inbox row written — fine for ambient confirmations
-          // whose recovery surface is the UI itself), `priority: "low"`
+          // (one-shot, no inbox row written — for news the user can't see for
+          // themselves, never to confirm their own visible action), `priority: "low"`
           // (history-only, no toast — fine for background completions), or
           // a `correlationId` (the success threads into an existing
           // notification group — fine for stateful flows like update-check).
@@ -489,7 +489,7 @@ export default tseslint.config(
           selector:
             "CallExpression:matches([callee.name=/^(notify|addNotification)$/], [callee.property.name=/^(notify|addNotification)$/]) > ObjectExpression:has(> Property[key.name='type'][value.value='success']):not(:has(> Property[key.name='transient'][value.value=true])):not(:has(> Property[key.name='priority'][value.value='low'])):not(:has(> Property[key.name='correlationId']))",
           message:
-            'Unprotected success toast. Success is over-used — fires on routine in-place state changes users can already see. Add one of: `transient: true` (one-shot, no inbox row), `priority: "low"` (history-only), or a `correlationId` (threads into an existing notification group). Or annotate with `// eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok` when the call is deliberate. See #8249.',
+            'Unprotected success toast. Success is over-used. When the user did it and the result is on screen, drop the notify: the change is the confirmation. Otherwise add one of: `transient: true` (one-shot, no inbox row), `priority: "low"` (history-only), or a `correlationId` (threads into an existing notification group). Or annotate with `// eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok` when the call is deliberate. See #8249.',
         },
         {
           // why: routing each notify() through the EVENT_POLICY manifest needs a

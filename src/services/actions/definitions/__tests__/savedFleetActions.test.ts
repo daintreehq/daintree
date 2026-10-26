@@ -263,6 +263,8 @@ describe("fleet.saveNamedFleet", () => {
     const stored = useProjectSettingsStore.getState().settings?.fleetSavedScopes;
     expect(stored).toHaveLength(1);
     expect(stored?.[0]).toMatchObject({ kind: "snapshot", name: "My Fleet" });
+    // The new row in the saved list is the confirmation.
+    expect(notifyMock).not.toHaveBeenCalled();
   });
 
   it("captures the snapshot armOrder before the IPC round-trip", async () => {

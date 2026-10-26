@@ -759,28 +759,23 @@ export function useWorktreeBulkRemove({
       const announce = useAnnouncerStore.getState().announce;
       const soleTargetId = targets.length === 1 ? targets[0]!.id : undefined;
       if (failures.length === 0) {
-        // Transient: the overview grid already reflects the removed
-        // worktrees disappearing — the toast is a one-shot confirmation,
-        // not something the user needs to revisit from the notification
-        // inbox (#8249).
+        // No toast for the delete itself: the cards leaving the overview are the
+        // confirmation, and the announcer carries it to screen readers. A dev
+        // server stopped as a side effect is not visible there, so that surfaces.
         const successTitle = `Deleted ${pluralize(total, "worktree")}`;
-        let successMessage =
-          total === 1
-            ? "The worktree directory was deleted from disk."
-            : `${total} worktree directories were deleted from disk.`;
-        if (stoppedDevServerCount === 1 && stoppedDevServerName) {
-          successMessage = `${successMessage} Stopped dev server for ${stoppedDevServerName}.`;
-        } else if (stoppedDevServerCount > 1) {
-          successMessage = `${successMessage} Stopped ${stoppedDevServerCount} dev servers.`;
+        if (stoppedDevServerCount > 0) {
+          notify({
+            type: "info",
+            title: "Dev server stopped",
+            message:
+              stoppedDevServerCount === 1 && stoppedDevServerName
+                ? `Stopped dev server for ${stoppedDevServerName}.`
+                : `Stopped ${stoppedDevServerCount} dev servers.`,
+            transient: true,
+            priority: "high",
+            context: { worktreeId: soleTargetId, eventKind: "uiFeedback" },
+          });
         }
-        notify({
-          type: "success",
-          title: successTitle,
-          message: successMessage,
-          transient: true,
-          priority: "high",
-          context: { worktreeId: soleTargetId, eventKind: "uiFeedback" },
-        });
         announce(successTitle);
       } else if (successCount === 0) {
         // Total failure — no recovery action attached because the modal

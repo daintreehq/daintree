@@ -276,6 +276,24 @@ describe("ImportConfigDialog", () => {
     expect(bodyText()).toMatch(/earlier attempt may already have changed/);
   });
 
+  it("raises no notification when a clean import lands", async () => {
+    applyImport.mockResolvedValue({
+      outcome: "applied",
+      sections: [],
+      errors: [],
+      rolledBack: false,
+    } satisfies ConfigImportReport);
+    await open(REPLACING);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Import configuration" }));
+    });
+
+    expect(applyImport).toHaveBeenCalledTimes(1);
+    expect(refreshMock).toHaveBeenCalledTimes(1);
+    expect(notifyMock).not.toHaveBeenCalled();
+  });
+
   it("doesn't call an import where nothing landed 'imported', in the toast or the inbox", async () => {
     applyImport.mockResolvedValue({
       outcome: "applied",

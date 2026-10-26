@@ -347,11 +347,6 @@ export const fleetActionRuns = {
       // call `setSettings(nextSettings)` here — that would overwrite a
       // concurrent recall's stamp that landed on the in-memory store
       // between the append and the await above.
-      notify({
-        type: "success",
-        message: `Saved fleet "${newScope.name}"`,
-        priority: "low",
-      });
     } catch (error) {
       // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
       notify({
