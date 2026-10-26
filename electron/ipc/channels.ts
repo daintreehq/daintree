@@ -1420,6 +1420,12 @@ export const CHANNELS = {
   WORKTREE_TITLES_PRUNE: "worktree-titles:prune",
   WORKTREE_TITLES_CHANGED: "worktree-titles:changed",
 
+  // The sender project's review marks (#14584)
+  REVIEW_MARKS_HYDRATE: "review-marks:hydrate",
+  REVIEW_MARKS_MARK: "review-marks:mark",
+  REVIEW_MARKS_CLEAR: "review-marks:clear",
+  REVIEW_MARKS_CHANGED: "review-marks:changed",
+
   // Per-service connectivity channels
   CONNECTIVITY_GET_STATE: "connectivity:get-state",
   CONNECTIVITY_SERVICE_CHANGED: "connectivity:service-changed",

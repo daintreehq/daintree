@@ -1651,6 +1651,9 @@ export interface IpcEventMap {
   // The sender project's custom worktree titles changed (#14022); main sends them to every view of that project.
   "worktree-titles:changed": import("./worktreeTitles.js").WorktreeTitlesSnapshot;
 
+  // The sender project's review marks changed (#14584); main sends them to every view of that project.
+  "review-marks:changed": import("./reviewMarks.js").ReviewMarksSnapshot;
+
   /**
    * MCP server runtime-state transition. Distinct from
    * `connectivity:service-changed` because the renderer needs the derived

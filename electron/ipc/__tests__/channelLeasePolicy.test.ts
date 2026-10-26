@@ -27,6 +27,7 @@ describe("channel lease policy", () => {
       "terminal:get-for-project",
       "terminal:reconnect-bulk",
       "app:hydrate",
+      "review-marks:hydrate",
     ]) {
       expect(getChannelLeasePolicy(channel), channel).toBe("free");
     }
@@ -45,6 +46,8 @@ describe("channel lease policy", () => {
       "project:set-draft-inputs",
       "app:set-state",
       "plugin-agent-mcp:set-plugin-access",
+      "review-marks:mark",
+      "review-marks:clear",
     ]) {
       expect(getChannelLeasePolicy(channel), channel).toBe("driver");
     }

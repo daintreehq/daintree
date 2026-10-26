@@ -3,8 +3,7 @@ import { defineIpcNamespace, op } from "../define.js";
 import type { IpcContext } from "../types.js";
 import { broadcastToProjectRenderers } from "../utils.js";
 import { WORKTREE_TITLES_METHOD_CHANNELS } from "./worktreeTitles.preload.js";
-import { projectStore } from "../../services/ProjectStore.js";
-import { getWorkspaceClientRef } from "../../window/serviceRefs.js";
+import { confirmGoneWorktrees } from "./liveWorktrees.js";
 import {
   clearWorktreeCustomTitles,
   getWorktreeCustomTitles,
@@ -22,12 +21,6 @@ import type { WorktreeTitlesSnapshot } from "../../../shared/types/ipc/worktreeT
 
 /** More stale ids than any sidebar holds; anything past it is not a prune. */
 const MAX_PRUNE_IDS = 1000;
-
-/**
- * Past the workspace client's 150 ms reuse of a finished read, so a second read
- * is taken after the prune was asked for and sees any worktree made before it.
- */
-const PRUNE_RECHECK_DELAY_MS = 200;
 
 function snapshotOf(projectId: string, stored: StoredWorktreeCustomTitles): WorktreeTitlesSnapshot {
   return { projectId, titles: { ...stored.titles }, revision: stored.revision };
@@ -57,23 +50,6 @@ function requireProjectId(ctx: IpcContext): string {
  */
 function fromRemoteView(ctx: IpcContext): boolean {
   return ctx.endpoint?.kind === "remote-view" || ctx.client?.kind !== "local";
-}
-
-/**
- * The worktree ids the project's workspace host has right now, or `null` when
- * it can't say (project closed, host not ready, a scratch with no project).
- */
-async function liveWorktreeIds(projectId: string): Promise<Set<string> | null> {
-  const project = projectStore.getProjectById(projectId);
-  const client = getWorkspaceClientRef();
-  if (!project || !client) return null;
-  try {
-    const result = await client.getAllStatesForProjectResultAsync(project.path, projectId);
-    return result.status === "ok" ? new Set(result.states.map((state) => state.id)) : null;
-  } catch (error) {
-    console.error(`[worktreeTitles] Failed to list worktrees for project ${projectId}:`, error);
-    return null;
-  }
 }
 
 /**
@@ -123,15 +99,7 @@ async function handlePrune(
     (id) => typeof id === "string" && Object.hasOwn(held.titles, id)
   );
   if (candidates.length === 0) return snapshotOf(projectId, held);
-  const first = await liveWorktreeIds(projectId);
-  let gone = first === null ? [] : candidates.filter((id) => !first.has(id));
-  if (gone.length > 0) {
-    // The first read may be one the client reused from just before a sibling
-    // made the worktree; a clear is permanent, so only one both reads miss goes.
-    await new Promise((resolve) => setTimeout(resolve, PRUNE_RECHECK_DELAY_MS));
-    const second = await liveWorktreeIds(projectId);
-    gone = second === null ? [] : gone.filter((id) => !second.has(id));
-  }
+  const gone = await confirmGoneWorktrees(projectId, candidates, "worktreeTitles");
   // Re-read after the awaits, so the reply never carries an older set than a push sent meanwhile.
   const before = getWorktreeCustomTitles(projectId).revision;
   return reply(projectId, before, clearWorktreeCustomTitles(projectId, gone));

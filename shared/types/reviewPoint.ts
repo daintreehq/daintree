@@ -240,6 +240,9 @@ const head = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("unborn"), branch: refName }),
 ]);
 
+/** A point's `head`, on its own: a stored review mark's summary carries it (#14584). */
+export const ReviewPointHeadSchema = head;
+
 const baseRequest = z.discriminatedUnion("kind", [
   /** Resolved the way the worktree card's behind count resolves it. */
   z.object({ kind: z.literal("branch"), branch: refName }),

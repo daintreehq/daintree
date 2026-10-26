@@ -63,6 +63,7 @@ import {
   useCanopySnapshotSync,
   useCanopyDoubleShift,
   useWorktreeCustomTitlesSync,
+  useReviewMarksSync,
 } from "./hooks/app";
 import { useResourceProfile } from "./hooks/useResourceProfile";
 import { AppLayout } from "./components/Layout";
@@ -245,6 +246,7 @@ function AppInner() {
   useAgentActivityBroadcast();
   useCanopySnapshotSync();
   useWorktreeCustomTitlesSync();
+  useReviewMarksSync();
   useCanopySeenTracking();
   usePluginPanelActivitySeenTracking();
   useCanopyDoubleShift();

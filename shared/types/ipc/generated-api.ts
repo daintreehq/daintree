@@ -1560,6 +1560,17 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["remote-hosts:update"]["args"]
     ): Promise<IpcInvokeMap["remote-hosts:update"]["result"]>;
   };
+  reviewMarks: {
+    clear(
+      ...args: IpcInvokeMap["review-marks:clear"]["args"]
+    ): Promise<IpcInvokeMap["review-marks:clear"]["result"]>;
+    hydrate(
+      ...args: IpcInvokeMap["review-marks:hydrate"]["args"]
+    ): Promise<IpcInvokeMap["review-marks:hydrate"]["result"]>;
+    mark(
+      ...args: IpcInvokeMap["review-marks:mark"]["args"]
+    ): Promise<IpcInvokeMap["review-marks:mark"]["result"]>;
+  };
   runHistory: {
     append(
       ...args: IpcInvokeMap["run-history:append"]["args"]

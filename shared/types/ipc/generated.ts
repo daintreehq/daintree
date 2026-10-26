@@ -3397,6 +3397,97 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("./remoteHosts.js").UpdateHostPayload];
     result: import("../remoteHosts.js").HostDescriptor;
   };
+  "review-marks:clear": {
+    args: [worktreeId: string, basedOn: number];
+    result: import("./reviewMarks.js").ReviewMarkClearOutcome;
+  };
+  "review-marks:hydrate": {
+    args: [];
+    result: import("./reviewMarks.js").ReviewMarksSnapshot | null;
+  };
+  "review-marks:mark": {
+    args: [
+      worktreeId: string,
+      point: {
+        version: 1;
+        capturedAt: number;
+        worktreePath: string;
+        gitDir: string;
+        commonDir: string;
+        objectFormat: "sha1" | "sha256";
+        head:
+          | { kind: "branch"; branch: string; commit: string }
+          | { kind: "detached"; commit: string }
+          | { kind: "unborn"; branch: string };
+        base: {
+          requested: { kind: "branch"; branch: string } | { kind: "ref"; ref: string };
+          ref: string | null;
+          tip: string | null;
+          mergeBases: string[];
+        };
+        entries: {
+          head: { mode: "100644" | "100755" | "120000" | "160000"; oid: string } | null;
+          index:
+            | { kind: "absent" }
+            | { mode: "100644" | "100755" | "120000" | "160000"; oid: string; kind: "entry" }
+            | { kind: "intent-to-add"; mode: "100644" | "100755" | "120000" | "160000" }
+            | {
+                kind: "conflicted";
+                stages: {
+                  mode: "100644" | "100755" | "120000" | "160000";
+                  oid: string;
+                  stage: 1 | 2 | 3;
+                }[];
+              };
+          worktree:
+            | { kind: "absent" }
+            | { kind: "file"; mode: "100644" | "100755"; oid: string; size: number }
+            | { kind: "symlink"; oid: string }
+            | { kind: "directory" }
+            | { kind: "submodule"; commit: string | null; contents: "unknown" | "clean" | "dirty" }
+            | {
+                kind: "unverifiable";
+                reason:
+                  "unreadable" | "file-too-large" | "byte-limit" | "deadline" | "special-file";
+              };
+          path: string;
+          pathBytes?: string | undefined;
+        }[];
+        incomplete: {
+          reasons: (
+            | "unreadable"
+            | "file-too-large"
+            | "byte-limit"
+            | "deadline"
+            | "special-file"
+            | "path-limit"
+            | "nested-repository"
+            | "untracked-directory"
+            | "submodule-contents"
+            | "base-unavailable"
+            | "change-set-too-large"
+          )[];
+          uncovered: {
+            reason:
+              | "unreadable"
+              | "file-too-large"
+              | "byte-limit"
+              | "deadline"
+              | "special-file"
+              | "path-limit"
+              | "nested-repository"
+              | "untracked-directory"
+              | "submodule-contents";
+            path: string;
+            pathBytes?: string | undefined;
+          }[];
+          uncoveredCount: number | null;
+        } | null;
+      },
+      basedOn: number,
+    ];
+    result: import("./reviewMarks.js").ReviewMarkSaveOutcome;
+  };
   "run-history:append": {
     args: [input: import("./runHistory.js").RunHistoryAppendInput];
     result: void;

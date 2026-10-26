@@ -220,6 +220,7 @@ export class WorkspaceHostEventRouter {
         this.emit("worktree-removed", {
           worktreeId: event.worktreeId,
           projectPath: entry.projectPath,
+          projectId: entry.projectId,
         });
         // Fallback signal for external removals (CLI `git worktree remove`,
         // IDE-driven cleanup). The UI-initiated delete path stops the dev
