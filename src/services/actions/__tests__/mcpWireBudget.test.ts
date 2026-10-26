@@ -906,7 +906,11 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // 153_235 → 153_350 for #14551, measured at 153_339 B (+114 over #14548's
   // 153_225): `terminal.interruptOwned` takes `generation` too, so the global
   // Assistant interrupts the run it read; the shared description got shorter.
-  const MAX_COHORT_PAYLOAD_BYTES = 153_350;
+  // 153_350 → 153_540 for #14570, measured at 153_529 B (+200 over develop's
+  // 153_329): `host.switch` takes `projectId` and `terminalId`, so another
+  // host's waiting notice lands on the agent's terminal. In-app only, so the
+  // external ceiling does not move.
+  const MAX_COHORT_PAYLOAD_BYTES = 153_540;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 
