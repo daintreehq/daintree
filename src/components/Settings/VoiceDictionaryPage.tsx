@@ -1,7 +1,8 @@
 import { useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { ChevronLeft, Pencil, Plus, Trash2, X } from "lucide-react";
+import { ChevronLeft, Pencil, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { DismissButton } from "@/components/ui/DismissButton";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { SearchField } from "@/components/ui/SearchField";
@@ -223,9 +224,7 @@ export function VoiceDictionaryPage({
                       <Plus aria-hidden="true" />
                       Add
                     </Button>
-                    <Button
-                      size="icon-sm"
-                      variant="ghost"
+                    <DismissButton
                       onClick={() => {
                         draftRef.current?.focus();
                         void onChange("The suggestion list", () =>
@@ -235,9 +234,7 @@ export function VoiceDictionaryPage({
                         );
                       }}
                       aria-label={`Dismiss ${suggestion.word}`}
-                    >
-                      <X aria-hidden="true" />
-                    </Button>
+                    />
                   </SettingsRowActions>
                 }
               />
