@@ -146,7 +146,10 @@ describe("presentHostAttention", () => {
     vi.spyOn(document, "hasFocus").mockReturnValue(false);
     presentHostAttention(attention);
     expect(useNotificationStore.getState().notifications).toHaveLength(0);
-    expect(useNotificationHistoryStore.getState().entries).toHaveLength(1);
+    const entries = useNotificationHistoryStore.getState().entries;
+    expect(entries).toHaveLength(1);
+    // Never shown as a toast, it still carries the way there.
+    expect(entries[0]?.actions?.map((action) => action.actionId)).toEqual(["host.switch"]);
   });
 
   it("files it in the inbox without a toast when the source host is in its quiet hours", () => {

@@ -34,13 +34,23 @@ const switchArgsSchema = z
       .min(1)
       .max(256)
       .optional()
-      .describe("Open this project, by the host's own id for it. Needs hostId."),
+      .describe("A project to open, by the host's own id. Needs hostId."),
     terminalId: z
       .string()
       .min(1)
       .max(256)
       .optional()
-      .describe("Focus this terminal once the project shows. Needs projectId."),
+      .describe("A terminal to focus once it shows. Needs projectId."),
+  })
+  // Refused before any confirmation, never dropped: a caller naming a project
+  // or a terminal means to land on it.
+  .superRefine((args, ctx) => {
+    if (args.projectId !== undefined && !args.hostId) {
+      ctx.addIssue({ code: "custom", path: ["projectId"], message: "projectId needs hostId" });
+    }
+    if (args.terminalId !== undefined && args.projectId === undefined) {
+      ctx.addIssue({ code: "custom", path: ["terminalId"], message: "terminalId needs projectId" });
+    }
   })
   .optional();
 
@@ -127,13 +137,6 @@ export function registerHostActions(actions: ActionRegistry, callbacks: ActionCa
     selfNotifiesOnExecutionError: true,
     run: async (args: unknown) => {
       const parsed = switchArgsSchema.parse(args);
-      // Never dropped quietly: a caller naming a project or terminal means to land on it.
-      if (parsed?.projectId !== undefined && !parsed.hostId) {
-        throw new ClientAppError("VALIDATION", "projectId needs a hostId");
-      }
-      if (parsed?.terminalId !== undefined && parsed.projectId === undefined) {
-        throw new ClientAppError("VALIDATION", "terminalId needs a projectId");
-      }
       if (!parsed?.hostId) {
         // With only this machine there is nowhere to switch to; adding a host is the next step.
         if (anyRemoteHost()) usePaletteStore.getState().openPalette("host-switcher");

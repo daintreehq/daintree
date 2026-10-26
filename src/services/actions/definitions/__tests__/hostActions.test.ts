@@ -26,6 +26,7 @@ vi.mock("@/components/Hosts/hostList", async (importOriginal) => ({
 }));
 
 import { createActionDefinitions } from "../../actionDefinitions";
+import { ActionService } from "@/services/ActionService";
 import { ClientAppError } from "@/utils/clientAppError";
 import { registerHostActions } from "../hostActions";
 import { registerPortActions } from "../portActions";
@@ -259,17 +260,49 @@ describe("host.switch", () => {
       focusIntent: { intent: "focus-panel", panelId: "t1" },
     });
   });
+});
 
-  it("refuses a terminal without its project, and a project without its host", async () => {
-    remoteHosts.value = [host("studio-01")];
+describe("host.switch through the action service", () => {
+  function service(): ActionService {
     const registry: ActionRegistry = new Map();
     registerHostActions(registry, callbacks());
-    await expect(
-      run(registry, "host.switch", { hostId: "studio-01", terminalId: "t1" })
-    ).rejects.toThrow(/projectId/);
-    await expect(run(registry, "host.switch", { projectId: "p1" })).rejects.toThrow(/hostId/);
+    const svc = new ActionService();
+    for (const [, factory] of registry) svc.register(factory());
+    return svc;
+  }
+
+  it("refuses a terminal without its project, and a project without its host, before asking anyone", async () => {
+    remoteHosts.value = [host("studio-01")];
+    const svc = service();
+    const terminalOnly = await svc.dispatch(
+      "host.switch",
+      { hostId: "studio-01", terminalId: "t1" },
+      { source: "agent" }
+    );
+    expect(terminalOnly).toMatchObject({ ok: false, error: { code: "VALIDATION_ERROR" } });
+    const projectOnly = await svc.dispatch("host.switch", { projectId: "p1" }, { source: "user" });
+    expect(projectOnly).toMatchObject({ ok: false, error: { code: "VALIDATION_ERROR" } });
     expect(switchWindowHost).not.toHaveBeenCalled();
     expect(usePaletteStore.getState().activePaletteId).toBeNull();
+  });
+
+  it("asks an agent first, and lands on the project and terminal once confirmed", async () => {
+    const svc = service();
+    const args = { hostId: "studio-01", projectId: "p1", terminalId: "t1" };
+    expect(await svc.dispatch("host.switch", args, { source: "agent" })).toMatchObject({
+      ok: false,
+      error: { code: "CONFIRMATION_REQUIRED" },
+    });
+    expect(switchWindowHost).not.toHaveBeenCalled();
+
+    const confirmed = await svc.dispatch("host.switch", args, { source: "agent", confirmed: true });
+    expect(confirmed.ok).toBe(true);
+    expect(switchWindowHost).toHaveBeenCalledWith({
+      hostId: "studio-01",
+      newWindow: false,
+      projectId: "p1",
+      focusIntent: { intent: "focus-panel", panelId: "t1" },
+    });
   });
 });
 
