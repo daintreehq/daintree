@@ -1039,6 +1039,19 @@ describe("assembleTaggedKeyterms", () => {
     expect(tagged).toEqual([{ term: "Studio 1", source: "names" }]);
   });
 
+  it("tags the project's own dictionary apart from the user's", async () => {
+    const tagged = await assembleTaggedKeyterms({
+      customDictionary: ["mine"],
+      projectDictionary: ["shared"],
+    });
+    expect(tagged).toEqual(
+      expect.arrayContaining([
+        { term: "shared", source: "projectDictionary" },
+        { term: "mine", source: "dictionary" },
+      ])
+    );
+  });
+
   it("tags branch and terminal terms from the target terminal", async () => {
     const ptyClient = makePtyClient(["const myVariable = handleRequest();"]);
     const tagged = await assembleTaggedKeyterms({
