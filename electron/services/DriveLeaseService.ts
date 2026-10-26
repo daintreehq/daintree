@@ -882,7 +882,7 @@ export class DriveLeaseService {
       ...(awayUntil !== null ? { holderAwayMs: Math.max(0, awayUntil - this.now()) } : {}),
       projectId,
       holder,
-      drivingHere: drives(holder, { endpointId: endpoint?.endpointId ?? "", clientId }),
+      drivingHere: drives(holder, endpoint ?? { endpointId: "", clientId }),
       isHolderEndpoint: holder !== null && endpoint?.endpointId === holder.endpointId,
       viewerIsHostLocal: endpoint ? endpoint.kind === "local-view" : true,
       heldByThisClient: holder !== null && holder.clientId === clientId,
