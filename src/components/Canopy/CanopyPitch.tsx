@@ -24,7 +24,7 @@ const POINTS = [
   {
     icon: ListChecks,
     title: "Where every run has got to",
-    body: "What each agent is doing, how far through it is, and whether its tests pass and its work is committed.",
+    body: "What each agent is doing, how far through it is, and what it reports about its tests and its commits.",
   },
   {
     icon: Hourglass,

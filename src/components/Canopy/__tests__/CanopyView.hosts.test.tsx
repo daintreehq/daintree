@@ -851,6 +851,9 @@ describe("All hosts", () => {
     render(<CanopyView />);
     await settle();
     expect(document.body.textContent).toContain("Canopy is off on studio-01");
+    // A reader left off is a choice, not a failure: it stays out of the warning.
+    expect(document.body.textContent).not.toContain("Not every host is being read");
+    expect(document.body.textContent).not.toContain("Not every host could be read");
     expect(channelsCalled()).not.toContain("studio canopy:set-mode");
     expect(own.setMode).not.toHaveBeenCalled();
     // What the host that is off adds is what Daintree observes of its runs.
