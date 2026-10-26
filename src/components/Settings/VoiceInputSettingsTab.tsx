@@ -228,7 +228,12 @@ async function probeMicCapture(): Promise<"granted" | "denied" | "unavailable"> 
   }
 }
 
-export function VoiceInputSettingsTab() {
+interface VoiceInputSettingsTabProps {
+  /** False while the settings dialog shows another page; this one stays mounted. */
+  isActive?: boolean;
+}
+
+export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTabProps = {}) {
   const [settings, setSettings] = useState<VoiceInputSettings>(DEFAULT_SETTINGS);
   const [micPermission, setMicPermission] = useState<MicPermissionStatus>("unknown");
   const [isRequestingMic, setIsRequestingMic] = useState(false);
@@ -632,6 +637,7 @@ export function VoiceInputSettingsTab() {
 
             <MicTestRow
               deviceId={settings.deviceId}
+              active={isActive}
               disabled={micPermission === "denied" || micPermission === "restricted"}
             />
           </SettingsGroup>

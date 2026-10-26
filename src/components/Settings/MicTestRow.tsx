@@ -18,40 +18,44 @@ type TestState =
 interface MicTestRowProps {
   /** The saved input device; empty for the system default. */
   deviceId: string;
+  /**
+   * False while the page is hidden. Settings keeps visited pages mounted, so
+   * this, not unmounting, is what lets go of the mic on a page switch.
+   */
+  active?: boolean;
   disabled?: boolean;
 }
 
 function describe(state: TestState): string {
   switch (state.phase) {
     case "idle":
-      return "Check that the selected microphone is picking you up. Nothing is recorded or sent anywhere";
+      return "Check that the selected microphone is picking you up. Nothing is recorded or sent anywhere.";
     case "starting":
       return "Opening the microphone…";
     case "failed":
       return state.reason === "denied"
-        ? "Microphone access is blocked, so the test can't listen. Allow it above, then try again"
-        : "Couldn't open a microphone. Check one is connected and not in use, then try again";
+        ? "Microphone access is blocked, so the test can't listen. Allow it above, then try again."
+        : "Couldn't open a microphone. Check one is connected and not in use, then try again.";
     case "running": {
       const { opened, sample } = state;
       const instead = opened.substituted
-        ? `The selected microphone wasn't available, so this is testing ${opened.label} instead. `
-        : "";
+        ? `The selected microphone wasn't available, so this is testing ${opened.label} instead`
+        : null;
       if (sample.silent) {
-        return `${instead}${
-          opened.bluetooth
-            ? `No sound from ${opened.label}. Bluetooth headsets can go quiet while they switch modes. Wait a moment and speak again, or pick the built-in microphone`
-            : `No sound from ${opened.label}. Check it isn't muted, or pick another microphone`
-        }`;
+        const advice = opened.bluetooth
+          ? `No sound from ${opened.label}. Bluetooth headsets can go quiet while they switch modes. Wait a moment and speak again, or pick the built-in microphone.`
+          : `No sound from ${opened.label}. Check it isn't muted, or pick another microphone.`;
+        return instead ? `${instead}. ${advice}` : advice;
       }
-      if (opened.substituted) return instead.trim();
+      if (instead) return instead;
       return sample.heardSound
         ? `Hearing ${opened.label}`
-        : `Listening to ${opened.label}. Say something`;
+        : `Listening to ${opened.label}. Say something.`;
     }
   }
 }
 
-export function MicTestRow({ deviceId, disabled }: MicTestRowProps) {
+export function MicTestRow({ deviceId, active = true, disabled }: MicTestRowProps) {
   const [state, setState] = useState<TestState>({ phase: "idle" });
   const handleRef = useRef<MicTestHandle | null>(null);
   // Bumped on every start and stop, so a start that resolves after the user
@@ -99,8 +103,12 @@ export function MicTestRow({ deviceId, disabled }: MicTestRowProps) {
     }
   }, [deviceId]);
 
-  // A test belongs to the device it was started on, and never outlives the page.
-  useEffect(() => stop, [stop, deviceId]);
+  // A test belongs to the device it was started on, and never outlives the page:
+  // unmounting or hiding it (another settings page, a search) stops the test.
+  useEffect(() => {
+    if (!active) return;
+    return stop;
+  }, [stop, active, deviceId]);
 
   const running = state.phase === "running";
   const level = running ? state.sample.level : 0;
@@ -113,20 +121,24 @@ export function MicTestRow({ deviceId, disabled }: MicTestRowProps) {
       layout="stacked"
       description={<span role="status">{describe(state)}</span>}
       disabled={disabled}
-      control={
+      control={({ disabled: rowDisabled, descriptionId }) => (
         <div className="flex items-center gap-3">
           <Button
             size="sm"
             variant="outline"
             onClick={running ? stop : () => void start()}
             loading={state.phase === "starting"}
-            disabled={disabled}
+            // A running test can always be stopped, so the mic is never held
+            // open by a row that became disabled mid-test.
+            disabled={rowDisabled && !running}
+            aria-describedby={descriptionId}
           >
             {running ? "Stop test" : "Test microphone"}
           </Button>
           <div
             role="meter"
             aria-label="Microphone level"
+            aria-describedby={descriptionId}
             aria-valuemin={0}
             aria-valuemax={100}
             aria-valuenow={Math.round(level * 100)}
@@ -141,7 +153,7 @@ export function MicTestRow({ deviceId, disabled }: MicTestRowProps) {
             />
           </div>
         </div>
-      }
+      )}
     />
   );
 }

@@ -1217,6 +1217,9 @@ function LazyTabContentImpl({
   if (entry.needsOnSettingsChange) {
     props.onSettingsChange = onSettingsChange;
   }
+  if (entry.needsIsActive) {
+    props.isActive = isActive;
+  }
 
   // Runs synchronously after the lazy chunk's Suspense boundary commits, so
   // the target section element is guaranteed to exist in the DOM. Replaces

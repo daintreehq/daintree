@@ -108,6 +108,11 @@ export interface LazySettingsTabEntry extends SettingsTabEntry {
   readonly needsOnSettingsChange?: boolean;
   readonly needsProjectForm?: boolean;
   readonly needsOnNavigateToTab?: boolean;
+  /**
+   * Hand the tab `isActive`. Visited tabs stay mounted while hidden, so a tab that
+   * holds a live resource (an open mic) uses it to let go when it stops showing.
+   */
+  readonly needsIsActive?: boolean;
 }
 
 export interface EagerSettingsTabEntry extends SettingsTabEntry {
@@ -1579,6 +1584,7 @@ export const SETTINGS_REGISTRY = [
     importKind: "lazy",
     importer: LazyVoiceInputSettingsTab.preload,
     LazyComponent: LazyVoiceInputSettingsTab,
+    needsIsActive: true,
     searchNavDescription: "Speech-to-text transcription and AI text correction settings",
     searchNavKeywords: [
       "voice",
