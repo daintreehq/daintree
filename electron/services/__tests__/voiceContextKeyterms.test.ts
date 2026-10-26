@@ -165,6 +165,34 @@ describe("extractTerminalIdentifiers", () => {
     const ids = extractTerminalIdentifiers(lines);
     expect(ids).toEqual(["alpha_term", "zebra_term"]);
   });
+
+  it("never turns a credential, its name or an opaque ID into a term", () => {
+    // Bodies are assembled at runtime so no credential literal sits in source.
+    const githubToken = `ghp_${"aB3xK9mQ".repeat(4)}Zt7W`;
+    const openaiKey = `sk-proj-${"Qw8eRt2Y".repeat(3)}-UserProfileCache-${"Lm4nB6vC".repeat(3)}`;
+    const ids = extractTerminalIdentifiers([
+      `export OPENAI_API_KEY=${openaiKey}`,
+      `remote: https://x-access-token:${githubToken}@github.com/owner/repo-name`,
+      "request_id=e29b-41d4-a716-446655440000 handled by useSessionRouter",
+    ]);
+    expect(ids).toContain("useSessionRouter");
+    expect(ids).toContain("repo-name");
+    for (const id of ids) {
+      expect(githubToken).not.toContain(id);
+      expect(openaiKey).not.toContain(id);
+    }
+    expect(ids).not.toContain("OPENAI_API_KEY");
+    expect(ids.some((id) => id.includes("a716"))).toBe(false);
+  });
+
+  it("drops long branch slugs but keeps short compound identifiers", () => {
+    const ids = extractTerminalIdentifiers([
+      "Switched to bugfix-issue-14621-terminal-derived-keyterms-can-send",
+      "edited voice-context-keyterms",
+    ]);
+    expect(ids).toContain("voice-context-keyterms");
+    expect(ids.some((id) => id.startsWith("bugfix-issue"))).toBe(false);
+  });
 });
 
 describe("assembleKeyterms", () => {

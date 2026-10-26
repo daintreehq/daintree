@@ -1,6 +1,7 @@
 import { GitService } from "./GitService.js";
 import type { PtyClient } from "./PtyClient.js";
 import { logDebug } from "../utils/logger.js";
+import { isSecretShaped, redactSecretShapedText } from "./voiceKeytermSecrets.js";
 
 const P = "[VoiceKeyterms]";
 
@@ -12,6 +13,9 @@ const MAX_KEYTERM_LENGTH = 100;
 const ASSEMBLY_TIMEOUT_MS = 500;
 const MIN_TERM_LENGTH = 4;
 const MAX_KEYTERM_LINES = 200;
+// A separator-joined identifier with more parts than this is a branch slug or a
+// generated name, not something anyone says aloud.
+const MAX_IDENTIFIER_PARTS = 4;
 export const MAX_PROMPT_CHARS = 400;
 const KEYTERM_PROMPT_PREFIX = "Keywords: ";
 const KEYTERM_PROMPT_SEPARATOR = ", ";
@@ -200,6 +204,7 @@ function isValidTerm(term: string): boolean {
   if (term.length < MIN_TERM_LENGTH) return false;
   if (/^\d+$/.test(term)) return false;
   if (BLOCKLIST.has(term.toLowerCase())) return false;
+  if (isSecretShaped(term)) return false;
   return true;
 }
 
@@ -249,13 +254,14 @@ export function extractTerminalIdentifiers(lines: string[]): string[] {
     // Guard against malformed IPC payloads delivering non-string lines, which
     // would otherwise throw in stripAnsi and drop the entire terminal tier.
     if (typeof line !== "string") return;
-    const clean = stripAnsi(line);
+    const clean = redactSecretShapedText(stripAnsi(line));
     // Count each term at most once per line so same-line repeats don't inflate
     // frequency (e.g. a log line spamming one identifier).
     const seenThisLine = new Set<string>();
 
     const record = (term: string): void => {
       if (!isValidTerm(term)) return;
+      if (term.split(/[-_]/).length > MAX_IDENTIFIER_PARTS) return;
       const key = term.toLowerCase();
       if (seenThisLine.has(key)) return;
       seenThisLine.add(key);
@@ -340,7 +346,7 @@ export async function assembleKeyterms(opts: KeytermAssemblyOpts): Promise<strin
   // Priority 2: Project name tokens
   if (projectName) {
     const trimmed = projectName.trim();
-    if (trimmed.length >= 2 && !/^\d+$/.test(trimmed)) {
+    if (trimmed.length >= 2 && !/^\d+$/.test(trimmed) && !isSecretShaped(trimmed)) {
       add(trimmed);
     }
     for (const token of tokenizeProjectName(projectName)) {
