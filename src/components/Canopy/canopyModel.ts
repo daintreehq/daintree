@@ -138,10 +138,23 @@ const READING: CanopyReadState = { failed: false };
  */
 export const PERMISSION_FLOOR = 92;
 
+/**
+ * The user parked or snoozed this run in Pilot. The record is the user's own
+ * decision and beats every observed state, an approval included; it ends only
+ * by their release paths, or a snooze expiring, after which main drops it.
+ */
+export function itemPutAside(item: CanopyItem): boolean {
+  return item.row.run.park !== undefined || item.row.run.snooze !== undefined;
+}
+
+/** Where a parked or snoozed run sorts at the highest: with the low-priority runs. */
+export const PUT_ASIDE_PRIORITY = 15;
+
 /** Daintree itself sees the agent stopped on an approval dialog, and nobody has answered it. */
 export function itemAwaitsPermission(item: CanopyItem): boolean {
   const run = item.row.run;
   return (
+    !itemPutAside(item) &&
     run.agentState === "waiting" &&
     run.waitingReason === "approval" &&
     !itemHandled(item) &&
@@ -228,6 +241,7 @@ export function itemPriority(item: CanopyItem, nowMs: number): number {
   // otherwise rank it as the prompt the user just answered.
   if (itemHandled(item)) return 0;
   const read = readPriority(item);
+  if (itemPutAside(item)) return Math.min(read, PUT_ASIDE_PRIORITY);
   if (itemAwaitsPermission(item)) return Math.max(read, PERMISSION_FLOOR);
   if (!itemIsBusy(item)) return read;
   return Math.max(read, checkInPriority(item, nowMs));
@@ -246,6 +260,7 @@ export function shownPriority(item: CanopyItem, nowMs: number): number | null {
   // A reading stands until the next replaces it while the run stays the kind
   // it was read as; once Daintree sees it change kind, the number goes.
   const read = card === null || card.priorityFromEarlierRead ? null : card.priority;
+  if (itemPutAside(item)) return read === null ? null : Math.min(read, PUT_ASIDE_PRIORITY);
   // Daintree's own observation needs no reading behind it.
   if (itemAwaitsPermission(item)) return Math.max(read ?? 0, PERMISSION_FLOOR);
   if (!itemIsBusy(item) || itemHandled(item)) return read;
@@ -461,7 +476,7 @@ export function repliedAt(item: CanopyItem): number | null {
  * read the screen — Daintree's own state says the agent is waiting.
  */
 export function itemNeedsAttention(item: CanopyItem): boolean {
-  if (itemHandled(item) || itemArchived(item)) return false;
+  if (itemHandled(item) || itemArchived(item) || itemPutAside(item)) return false;
   if (itemAwaitsPermission(item)) return true;
   // Daintree's own stall observation: working, and no output for ten minutes.
   // Whether it is stuck or just slow, it is worth a look.

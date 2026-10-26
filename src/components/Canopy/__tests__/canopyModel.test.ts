@@ -16,6 +16,7 @@ import {
   itemPriority,
   observedKind,
   PERMISSION_FLOOR,
+  PUT_ASIDE_PRIORITY,
   QUIET_PRIORITY,
   shownPriority,
   searchTerms,
@@ -104,6 +105,43 @@ const seenAt = (runId: string, ago: number): CanopySeen => ({
   runId,
   spawnedAt: SPAWNED,
   at: NOW - ago,
+});
+
+describe("parked and snoozed runs", () => {
+  const approval = {
+    agentState: "waiting",
+    waitingReason: "approval",
+    since: NOW - 5_000,
+  } as const;
+
+  it("keeps a parked approval out of the needs-you count and off the permission floor", () => {
+    const items = inbox([
+      run("live", approval),
+      run("parked", { ...approval, park: { parkedAt: NOW - 1_000, note: "later" } }),
+    ]);
+    const live = items.find((i) => i.runId === "live")!;
+    const parked = items.find((i) => i.runId === "parked")!;
+    expect(itemNeedsAttention(live)).toBe(true);
+    expect(itemNeedsAttention(parked)).toBe(false);
+    expect(itemPriority(live, NOW)).toBeGreaterThanOrEqual(PERMISSION_FLOOR);
+    expect(itemPriority(parked, NOW)).toBeLessThanOrEqual(PUT_ASIDE_PRIORITY);
+    expect(items.map((i) => i.runId)).toEqual(["live", "parked"]);
+  });
+
+  it("holds a snoozed question down even when a reading scores it high", () => {
+    const [item] = inbox(
+      [run("a", { agentState: "waiting", waitingReason: "question", snooze: { snoozedAt: NOW } })],
+      [card("a", { category: "question", priority: 90 })]
+    );
+    expect(itemNeedsAttention(item!)).toBe(false);
+    expect(itemPriority(item!, NOW)).toBe(PUT_ASIDE_PRIORITY);
+    expect(shownPriority(item!, NOW)).toBe(PUT_ASIDE_PRIORITY);
+  });
+
+  it("returns to its observed place once the record is gone", () => {
+    const [item] = inbox([run("a", approval)]);
+    expect(itemNeedsAttention(item!)).toBe(true);
+  });
 });
 
 describe("observedKind", () => {
