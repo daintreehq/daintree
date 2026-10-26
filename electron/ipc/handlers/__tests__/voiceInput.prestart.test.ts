@@ -34,6 +34,8 @@ const shared = vi.hoisted(() => ({
   startPromise: null as null | Promise<{ ok: boolean; error?: string }>,
   startError: null as null | Error,
   assembleKeyterms: null as null | (() => Promise<string[]>),
+  /** The signal the correction service was last handed. */
+  sessionSignal: null as AbortSignal | null,
 }));
 
 vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
@@ -63,7 +65,9 @@ vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
 
 vi.mock("../../../services/VoiceCorrectionService.js", () => ({
   VoiceCorrectionService: function VoiceCorrectionService(this: Record<string, unknown>) {
-    this.setSessionSignal = function () {};
+    this.setSessionSignal = function (signal: AbortSignal | null) {
+      shared.sessionSignal = signal;
+    };
   },
 }));
 
@@ -186,6 +190,7 @@ describe("voiceInput — audio sent before the provider starts", () => {
     shared.startPromise = null;
     shared.startError = null;
     shared.assembleKeyterms = null;
+    shared.sessionSignal = null;
     sender.destroyed = false;
     sender.onDestroyed = null;
     fakeEvent.sender = makeSender();
@@ -339,6 +344,32 @@ describe("voiceInput — audio sent before the provider starts", () => {
     sender.onDestroyed!();
 
     expect(shared.stops).toBe(0);
+  });
+
+  it("leaves a newer session's signal alone when an older pending start fails", async () => {
+    let failFirst!: (result: StartResult) => void;
+    shared.startPromise = new Promise<StartResult>((r) => {
+      failFirst = r;
+    });
+    const first = start();
+    await vi.waitFor(() => expect(shared.calls).toEqual(["start"]));
+    const firstSignal = shared.sessionSignal!;
+
+    // Another view starts while the first is still connecting.
+    fakeEvent.sender = makeSender();
+    shared.startPromise = null;
+    await expect(start()).resolves.toEqual({ ok: true });
+    const secondSignal = shared.sessionSignal!;
+    expect(secondSignal).not.toBe(firstSignal);
+
+    // The second start's svc.start() tore down the first provider, which settles
+    // its pending start as stopped.
+    failFirst({ ok: false, error: "Voice session stopped" });
+    await expect(first).resolves.toEqual({ ok: false, error: "Voice session stopped" });
+
+    expect(firstSignal.aborted).toBe(true);
+    expect(secondSignal.aborted).toBe(false);
+    expect(shared.sessionSignal).toBe(secondSignal);
   });
 
   it("drops the newest audio past the chunk cap and reports it once", async () => {
