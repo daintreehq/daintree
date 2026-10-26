@@ -1112,10 +1112,11 @@ export class RemoteHostsClient {
         // showing: the host's memory is shared by every window (#13291).
         announce("opening");
         const recent = this.options.windows.recentProjectsOnHost?.(sourceWindowId, hostId) ?? [];
-        const copy = await this.copyToLand(copyOf, hostId, sourceWindowId, recent, untilAbandoned);
-        if (copy === ABANDONED) return { outcome: "superseded", hostId };
+        const copies = await this.copiesToLand(copyOf, hostId, recent, untilAbandoned);
+        if (copies === ABANDONED) return { outcome: "superseded", hostId };
         const staleCopy = superseded();
         if (staleCopy) return staleCopy;
+        const copy = this.firstFree(copies, hostId, sourceWindowId);
         let remembered: { projectId: string; path: string; name: string } | null = copy;
         // With its copy found there, nothing of this window's past there is asked about.
         for (const candidate of copy ? [] : recent) {
@@ -1192,10 +1193,12 @@ export class RemoteHostsClient {
       }
     } else if (projectId === undefined) {
       const recent = this.options.windows.recentProjectsOnHost?.(sourceWindowId, hostId) ?? [];
-      const copy = await this.copyToLand(copyOf, hostId, sourceWindowId, recent, untilAbandoned);
-      if (copy === ABANDONED) return { outcome: "superseded", hostId };
+      const copies = await this.copiesToLand(copyOf, hostId, recent, untilAbandoned);
+      if (copies === ABANDONED) return { outcome: "superseded", hostId };
       projectId =
-        copy?.projectId ?? this.options.windows.lastLocalProjectId(sourceWindowId) ?? undefined;
+        this.firstFree(copies, hostId, sourceWindowId)?.projectId ??
+        this.options.windows.lastLocalProjectId(sourceWindowId) ??
+        undefined;
     }
 
     const stale = superseded();
@@ -1445,44 +1448,51 @@ export class RemoteHostsClient {
   }
 
   /**
-   * The shown project's copy on the host for a switch naming no project to
-   * land on (#14564): one this window last had open there first, then by
-   * path, as the sidebar's host row opens. Never one another window is
-   * showing, asked once the host has answered. Null when there is none, or
-   * the host couldn't say in time.
+   * The shown project's copies on the host for a switch naming no project to
+   * land on (#14564), in the order it tries them: one this window last had
+   * open there first, then by path, as the sidebar's host row opens. Empty
+   * when there are none, or the host couldn't say in time.
    */
-  private async copyToLand(
+  private async copiesToLand(
     from: ShownProject | null,
     hostId: HostId,
-    windowId: number | null,
     recent: readonly string[],
     untilAbandoned: <T>(work: Promise<T>) => Promise<T | typeof ABANDONED>
-  ): Promise<ProjectCopy | null | typeof ABANDONED> {
+  ): Promise<ProjectCopy[] | typeof ABANDONED> {
     const lookup = from && getRemoteService("hostSwitchService")?.copiesOn(from, hostId);
-    if (!lookup) return null;
+    if (!lookup) return [];
     // Abandonment inside the deadline, so a Cancel clears its timer at once.
     const copies = await withTimeout(
       untilAbandoned(lookup),
       this.options.copyLookupTimeoutMs ?? DEFAULT_COPY_LOOKUP_TIMEOUT_MS,
       `Host ${hostId} didn't say in time whether it has the project`
     ).catch(() => null);
-    if (copies === ABANDONED || !copies) return copies;
+    if (copies === ABANDONED) return ABANDONED;
     const rank = (copy: ProjectCopy): number => {
       const at = recent.indexOf(copy.projectId);
       return at === -1 ? recent.length : at;
     };
-    return (
-      [...copies]
-        .sort(
-          (a, b) =>
-            rank(a) - rank(b) ||
-            a.path.localeCompare(b.path) ||
-            a.projectId.localeCompare(b.projectId)
-        )
-        .find(
-          (copy) => copy.path !== "" && !this.shownElsewhere(hostId, copy.projectId, windowId)
-        ) ?? null
-    );
+    return (copies ?? [])
+      .filter((copy) => copy.path !== "")
+      .sort(
+        (a, b) =>
+          rank(a) - rank(b) ||
+          a.path.localeCompare(b.path) ||
+          a.projectId.localeCompare(b.projectId)
+      );
+  }
+
+  /**
+   * The first copy no other window is showing. Asked by the switch itself in
+   * the tick it acts on the answer: another window may take one while any
+   * wait before it settles.
+   */
+  private firstFree(
+    copies: readonly ProjectCopy[],
+    hostId: HostId,
+    windowId: number | null
+  ): ProjectCopy | null {
+    return copies.find((copy) => !this.shownElsewhere(hostId, copy.projectId, windowId)) ?? null;
   }
 
   /** Whether a window other than `windowId` is showing the project, or on its way to it. */
