@@ -42,7 +42,9 @@ vi.mock("@/utils/logger", () => ({
   logError: vi.fn(),
 }));
 
-const notify = vi.hoisted(() => vi.fn());
+const notify = vi.hoisted(() =>
+  vi.fn<(payload: { title: string; action?: { onClick: () => void } }) => void>()
+);
 vi.mock("@/lib/notify", () => ({ notify }));
 
 const composer = vi.hoisted(() => ({ source: null as unknown }));
@@ -204,10 +206,7 @@ describe("VoiceRecordingService — rewrite selection by voice (#14635)", () => 
     const { service, voiceStore } = await setup();
     const start = vi.spyOn(service, "start").mockResolvedValue();
     composer.source = { terminalId: "panel-1", hasFocus: () => true, captureSelection: () => null };
-    vi.spyOn(
-      service as unknown as { getComposerTarget: () => unknown },
-      "getComposerTarget"
-    ).mockReturnValue({ panelId: "panel-1" });
+    Reflect.set(service, "getComposerTarget", () => ({ panelId: "panel-1" }));
 
     await service.rewriteSelection();
 
@@ -221,10 +220,7 @@ describe("VoiceRecordingService — rewrite selection by voice (#14635)", () => 
     const start = vi.spyOn(service, "start").mockResolvedValue();
     const captureSelection = vi.fn(() => fakeSelection("text"));
     composer.source = { terminalId: "panel-1", hasFocus: () => true, captureSelection };
-    vi.spyOn(
-      service as unknown as { getComposerTarget: () => unknown },
-      "getComposerTarget"
-    ).mockReturnValue({ panelId: "panel-1" });
+    Reflect.set(service, "getComposerTarget", () => ({ panelId: "panel-1" }));
 
     await service.rewriteSelection();
 
@@ -244,10 +240,7 @@ describe("VoiceRecordingService — rewrite selection by voice (#14635)", () => 
       hasFocus: () => true,
       captureSelection: () => selection,
     };
-    vi.spyOn(
-      service as unknown as { getComposerTarget: () => unknown },
-      "getComposerTarget"
-    ).mockReturnValue({ panelId: "panel-1" });
+    Reflect.set(service, "getComposerTarget", () => ({ panelId: "panel-1" }));
 
     await service.rewriteSelection();
 
@@ -265,25 +258,22 @@ describe("VoiceRecordingService — rewrite selection by voice (#14635)", () => 
     const start = vi.spyOn(service, "start").mockResolvedValue();
     const captureSelection = vi.fn();
     composer.source = { terminalId: "panel-1", hasFocus: () => true, captureSelection };
-    const internals = service as unknown as {
-      startup: { stopAfterStart: boolean; capture: { frozen: boolean } } | null;
-      startRequestId: number;
-    };
     const selection = fakeSelection("make me shorter");
-    internals.startup = {
-      requestId: internals.startRequestId,
+    const released = {
+      requestId: Reflect.get(service, "startRequestId"),
       target: { panelId: "panel-1", rewrite: { selection, instruction: [], cancelled: false } },
       capture: { frozen: true },
       stopAfterStart: true,
-    } as unknown as typeof internals.startup;
+    };
+    Reflect.set(service, "startup", released);
 
     await service.rewriteSelection();
 
-    expect(internals.startup!.stopAfterStart).toBe(false);
-    expect(internals.startup!.capture.frozen).toBe(false);
+    expect(released.stopAfterStart).toBe(false);
+    expect(released.capture.frozen).toBe(false);
     expect(start).not.toHaveBeenCalled();
     expect(captureSelection).not.toHaveBeenCalled();
-    internals.startup = null;
+    Reflect.set(service, "startup", null);
   });
 
   it("gives the selection back when the rewrite is cancelled before its session begins", async () => {
@@ -308,23 +298,19 @@ describe("VoiceRecordingService — rewrite selection by voice (#14635)", () => 
     say("make it");
     const target = voiceStore.getState().activeTarget!;
     // The restart's own start, attached and waiting on this stop.
-    const internals = service as unknown as {
-      startup: unknown;
-      startRequestId: number;
-    };
-    internals.startup = {
-      requestId: internals.startRequestId,
+    Reflect.set(service, "startup", {
+      requestId: Reflect.get(service, "startRequestId"),
       target,
       capture: {},
       stopAfterStart: false,
-    };
+    });
 
     await service.stop(undefined, {
       preserveLiveText: true,
       preservePendingStart: true,
       skipCorrection: true,
     });
-    internals.startup = null;
+    Reflect.set(service, "startup", null);
 
     expect(selection.release).not.toHaveBeenCalled();
     expect(rewrite).not.toHaveBeenCalled();
@@ -453,11 +439,11 @@ describe("VoiceRecordingService — rewrite selection by voice (#14635)", () => 
     say("shorter");
     await service.stop();
     await flush();
-    const toast = notify.mock.lastCall![0] as { title: string; action: { onClick: () => void } };
+    const toast = notify.mock.lastCall![0];
     expect(toast.title).toBe("Rewrite failed");
 
     rewrite.mockResolvedValueOnce({ status: "replace", text: "Shorter." });
-    toast.action.onClick();
+    toast.action!.onClick();
     await flush();
     expect(rewrite).toHaveBeenLastCalledWith({
       selectedText: "make me shorter",
