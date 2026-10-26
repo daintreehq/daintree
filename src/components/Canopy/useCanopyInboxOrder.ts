@@ -8,6 +8,13 @@ import type { HostId } from "@shared/types/remoteHosts";
 /** An ask that pages the user: placed in the list at once, whatever is held. */
 function isUrgentItem(item: CanopyItem): boolean {
   const card = item.card;
+  // Observed alone, an approval dialog is the ask that pages.
+  if (card === null) {
+    const run = item.row.run;
+    return (
+      run.agentState === "waiting" && run.waitingReason === "approval" && item.disposition === null
+    );
+  }
   return (
     card !== null &&
     card.priority >= CANOPY_URGENT_PRIORITY &&
@@ -30,6 +37,7 @@ export function useCanopyInboxOrder({
   canopy,
   baseItems,
   nowMs,
+  observedAt = null,
 }: {
   isOpen: boolean;
   /** The other host the panel shows, or null for the window's own. */
@@ -39,6 +47,8 @@ export function useCanopyInboxOrder({
   canopy: CanopySnapshot | null;
   baseItems: CanopyItem[];
   nowMs: number;
+  /** With the reader off, no scan marks a re-rank: when Daintree's own view of the fleet last moved. */
+  observedAt?: number | null;
 }) {
   // Every run shows the moment the panel opens, in the order it was left — or,
   // the first time, by what Daintree observes of each — and moves to its place
@@ -89,7 +99,7 @@ export function useCanopyInboxOrder({
 
   // The list moves only at moments the user can expect it to; see `nextCanopyOrder`.
   // Each host keeps its own order: the same run ids mean other runs elsewhere.
-  const refreshedAt = canopy?.refreshedAt ?? null;
+  const refreshedAt = observedAt ?? canopy?.refreshedAt ?? null;
   const ownOrder = useCanopyStore((s) => s.orders[scope]);
   const hostOrder = useCanopyStore((s) => (hostId === null ? undefined : s.hostOrders[hostId]));
   const order = (otherHost ? hostOrder : ownOrder) ?? null;

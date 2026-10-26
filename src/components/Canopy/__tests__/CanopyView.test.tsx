@@ -503,6 +503,20 @@ describe("CanopyView", () => {
     expect(canopy.setMode).not.toHaveBeenCalled();
   });
 
+  it("still offers reading, quietly, when the reader is off and no agent runs", async () => {
+    const off = { ...canopySnapshot, activated: false, cards: [], glances: [] };
+    installElectron(off);
+    useCanopyStore.setState({ snapshot: off });
+    useFleetSnapshotStore.setState({
+      snapshot: { ...useFleetSnapshotStore.getState().snapshot!, runs: [] },
+    });
+    render(<CanopyView />);
+    await frames();
+    expect(document.body.textContent).toContain("Launch an agent from the toolbar");
+    await openOffer();
+    expect(document.getElementById("canopy-pitch-title")).not.toBeNull();
+  });
+
   it("reads nothing until the user turns it on, showing a demo and what turning it on does", async () => {
     const canopy = installElectron({ ...canopySnapshot, activated: false });
     useCanopyStore.setState({ snapshot: { ...canopySnapshot, activated: false } });

@@ -94,8 +94,10 @@ const MAX_KEY_LENGTH = 32;
 const MAX_LABEL_LENGTH = 200;
 const BACKDROP_JPEG_QUALITY = 85;
 /**
- * Canopy acts on nothing until the user has turned it on. Checked here as well
- * as in the panel, so no other caller can reach a terminal through it.
+ * Reading runs only once the user has turned it on, and so does acting on what
+ * was read. Checked here as well as in the panel, so no other caller can reach
+ * the reader through it. The list, the terminal pane and the user's own marks
+ * work without it: they use only what Daintree observes.
  */
 function requireActivated(): void {
   if (currentPlan().activated) return;
@@ -988,19 +990,6 @@ async function liveAssistantSources() {
 }
 
 /**
- * Canopy's own gate guards its workers; a person typing to an assistant they
- * chose isn't using Canopy. The watch says which this is, so a stale or
- * unknown id still meets the gate first.
- */
-function requireActivatedUnlessAssistant(viewId: number, watchId: unknown): void {
-  const watched =
-    typeof watchId === "number" && Number.isInteger(watchId)
-      ? watchedTerminal(viewId, watchId)
-      : null;
-  if (!watched?.assistant) requireActivated();
-}
-
-/**
  * A card answer presses keys with no input ownership behind it, so it never
  * reaches the global assistant, whose input one window holds at a time (#14454).
  */
@@ -1092,7 +1081,6 @@ export const canopyNamespace = defineIpcNamespace({
     watchTerminal: op(
       CANOPY_METHOD_CHANNELS.watchTerminal,
       async (ctx, runId: string, target: CanopyTarget): Promise<CanopyTerminalView> => {
-        requireActivated();
         // One stream per view, and a newer request overtakes an older one, so
         // this only bounds a runaway view: arrowing down the list opens one per row.
         checkRateLimit(CANOPY_METHOD_CHANNELS.watchTerminal, 120, 10_000);
@@ -1111,8 +1099,6 @@ export const canopyNamespace = defineIpcNamespace({
         const generation = ptyClient.getLiveGeneration(runId);
         await assertSameTerminal(runId, target);
         if (!isCurrentWatchRequest(viewId, ticket)) return { watchId: null, snapshot: null };
-        // Turning Canopy off ends worker streams only; one still being checked meets the gate again.
-        requireActivated();
         if (generation !== null && !ptyClient.isLiveGeneration(runId, generation)) {
           throw new Error("That agent isn't running any more.");
         }
@@ -1372,7 +1358,6 @@ export const canopyNamespace = defineIpcNamespace({
     terminalInput: op(
       CANOPY_METHOD_CHANNELS.terminalInput,
       async (ctx, watchId: number, data: string): Promise<void> => {
-        requireActivatedUnlessAssistant(ctx.webContentsId, watchId);
         if (typeof data !== "string" || data.length === 0 || data.length > MAX_INPUT_LENGTH) {
           throw new Error("Invalid input");
         }
@@ -1396,7 +1381,6 @@ export const canopyNamespace = defineIpcNamespace({
     terminalResize: op(
       CANOPY_METHOD_CHANNELS.terminalResize,
       async (ctx, watchId: number, cols: number, rows: number): Promise<void> => {
-        requireActivatedUnlessAssistant(ctx.webContentsId, watchId);
         checkRateLimit(CANOPY_METHOD_CHANNELS.terminalResize, 60, 10_000);
         // Ignored rather than refused, as `terminal:resize` ignores one: the
         // panel keeps reading at whatever size the driver's pane gave it.
@@ -1415,7 +1399,6 @@ export const canopyNamespace = defineIpcNamespace({
     terminalSendKey: op(
       CANOPY_METHOD_CHANNELS.terminalSendKey,
       async (ctx, watchId: number, key: string): Promise<void> => {
-        requireActivatedUnlessAssistant(ctx.webContentsId, watchId);
         if (typeof key !== "string" || key.length === 0 || key.length > MAX_KEY_LENGTH) {
           throw new Error("Invalid key");
         }
@@ -1435,7 +1418,6 @@ export const canopyNamespace = defineIpcNamespace({
     terminalSubmit: op(
       CANOPY_METHOD_CHANNELS.terminalSubmit,
       async (ctx, watchId: number, text: string, imagePaths?: string[]): Promise<void> => {
-        requireActivatedUnlessAssistant(ctx.webContentsId, watchId);
         if (typeof text !== "string" || text.length > MAX_SUBMIT_LENGTH) {
           throw new Error("Invalid message");
         }
@@ -1502,7 +1484,6 @@ export const canopyNamespace = defineIpcNamespace({
     trash: op(
       CANOPY_METHOD_CHANNELS.trash,
       async (runId: string, target: CanopyTarget): Promise<number | null> => {
-        requireActivated();
         checkRateLimit(CANOPY_METHOD_CHANNELS.trash, 20, 10_000);
         assertRunId(runId);
         assertTarget(target);
@@ -1565,7 +1546,6 @@ export const canopyNamespace = defineIpcNamespace({
     rename: op(
       CANOPY_METHOD_CHANNELS.rename,
       async (runId: string, target: CanopyTarget, title: string): Promise<void> => {
-        requireActivated();
         checkRateLimit(CANOPY_METHOD_CHANNELS.rename, 20, 10_000);
         assertRunId(runId);
         assertTarget(target);
@@ -1589,7 +1569,6 @@ export const canopyNamespace = defineIpcNamespace({
         target: CanopyTarget,
         expectTurn?: number
       ): Promise<CanopyReadMark | null> => {
-        requireActivated();
         checkRateLimit(CANOPY_METHOD_CHANNELS.archive, 30, 10_000);
         assertRunId(runId);
         assertTarget(target);
@@ -1646,7 +1625,6 @@ export const canopyNamespace = defineIpcNamespace({
     unarchive: op(
       CANOPY_METHOD_CHANNELS.unarchive,
       async (runId: string, target: CanopyTarget): Promise<void> => {
-        requireActivated();
         checkRateLimit(CANOPY_METHOD_CHANNELS.unarchive, 30, 10_000);
         assertRunId(runId);
         assertTarget(target);
@@ -1661,7 +1639,6 @@ export const canopyNamespace = defineIpcNamespace({
     markSeen: op(
       CANOPY_METHOD_CHANNELS.markSeen,
       async (ctx, runId: string, looking?: boolean, place?: CanopyLookPlace): Promise<void> => {
-        requireActivated();
         // A look ending is never refused: one dropped would keep reading the
         // run for the look's whole lease, a row the user only passed over.
         if (looking !== false) checkRateLimit(CANOPY_METHOD_CHANNELS.markSeen, 120, 10_000);
@@ -1706,7 +1683,6 @@ export const canopyNamespace = defineIpcNamespace({
         read: boolean,
         turn?: number
       ): Promise<CanopyReadMark | null> => {
-        requireActivated();
         checkRateLimit(CANOPY_METHOD_CHANNELS.setRead, 60, 10_000);
         assertRunId(runId);
         assertTarget(target);
@@ -1722,7 +1698,6 @@ export const canopyNamespace = defineIpcNamespace({
     markAllRead: op(
       CANOPY_METHOD_CHANNELS.markAllRead,
       async (targets: CanopyReadTarget[]): Promise<CanopyReadMark[]> => {
-        requireActivated();
         checkRateLimit(CANOPY_METHOD_CHANNELS.markAllRead, 10, 10_000);
         if (!Array.isArray(targets) || targets.length > MAX_READ_BATCH) {
           throw new Error("Invalid runs");
@@ -1738,7 +1713,6 @@ export const canopyNamespace = defineIpcNamespace({
     restoreReads: op(
       CANOPY_METHOD_CHANNELS.restoreReads,
       async (restores: CanopyReadRestore[]): Promise<void> => {
-        requireActivated();
         checkRateLimit(CANOPY_METHOD_CHANNELS.restoreReads, 20, 10_000);
         if (!Array.isArray(restores) || restores.length > MAX_READ_BATCH) {
           throw new Error("Invalid runs");
@@ -1757,7 +1731,6 @@ export const canopyNamespace = defineIpcNamespace({
     runBranch: op(
       CANOPY_METHOD_CHANNELS.runBranch,
       async (runId: string, target: CanopyTarget): Promise<string | null> => {
-        requireActivated();
         checkRateLimit(CANOPY_METHOD_CHANNELS.runBranch, 60, 10_000);
         assertRunId(runId);
         assertTarget(target);
@@ -1778,7 +1751,6 @@ export const canopyNamespace = defineIpcNamespace({
     searchScreens: op(
       CANOPY_METHOD_CHANNELS.searchScreens,
       async (targets: CanopyScreenSearchTarget[]): Promise<string[]> => {
-        requireActivated();
         checkRateLimit(CANOPY_METHOD_CHANNELS.searchScreens, 60, 10_000);
         if (!Array.isArray(targets) || targets.length > MAX_READ_BATCH) {
           throw new Error("Invalid runs");

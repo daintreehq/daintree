@@ -215,13 +215,14 @@ function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow
   // The offer to turn reading on is one press from the list, never in front of it.
   const [pitchOpen, setPitchOpen] = useState(false);
   useEffect(() => {
-    if (!isOpen) setPitchOpen(false);
-  }, [isOpen]);
+    if (!isOpen || activated !== false) setPitchOpen(false);
+  }, [isOpen, activated]);
   const outdatedOwnHost = useCanopyStore((s) => s.outdatedHost);
   const applySnapshot = useCanopyStore((s) => s.applySnapshot);
   // Another host the panel shows, or null for the window's own.
   const hostId = useCanopyStore((s) => s.hostId);
   const setHostId = useCanopyStore((s) => s.setHostId);
+  useEffect(() => setPitchOpen(false), [hostId]);
   const allHosts = hostId === ALL_HOSTS_ID;
   const hostRows = useCanopyHostRows(hostId ?? canopyOwnHostId());
   const hostPicker = hostRows ? (
@@ -613,7 +614,16 @@ function CanopyInbox({
     listHidden,
     menuOpenChanged,
     requestRank,
-  } = useCanopyInboxOrder({ isOpen, hostId, otherHost, scope, canopy, baseItems, nowMs });
+  } = useCanopyInboxOrder({
+    isOpen,
+    hostId,
+    otherHost,
+    scope,
+    canopy,
+    baseItems,
+    nowMs,
+    observedAt: readerOff ? (fleet?.changedAt ?? null) : null,
+  });
   const { query, setQuery, appliedQuery, terms, searching, searchKey, screenAsk, onScreen } =
     useCanopyInboxSearch({ isOpen, hostId, items, api, refreshedAt });
   const {
@@ -796,6 +806,9 @@ function CanopyInbox({
   const hostOffer = otherHost && canopy?.activated === false && !hostOutdated;
   // Its list is what that host observed; the offer takes the panel only once asked for.
   const [hostOfferOpen, setHostOfferOpen] = useState(false);
+  useEffect(() => {
+    if (!hostOffer) setHostOfferOpen(false);
+  }, [hostOffer]);
   useEffect(() => {
     setHostOfferOpen(false);
   }, [hostId]);
@@ -1216,8 +1229,8 @@ function CanopyInbox({
             {fleet?.degraded === true && (
               <Callout severity="warning" size="compact" title="Agent status is unavailable">
                 {fleet.lastSuccessfulAt !== null
-                  ? `These are the agents Daintree saw ${agoPhrase(fleet.lastSuccessfulAt, nowMs)}. Canopy reads them again once it can.`
-                  : "Daintree hasn't been able to list its agents yet. Canopy reads them once it can."}
+                  ? `These are the agents Daintree saw ${agoPhrase(fleet.lastSuccessfulAt, nowMs)}.${readerOff ? "" : " Canopy reads them again once it can."}`
+                  : `Daintree hasn't been able to list its agents yet.${readerOff ? "" : " Canopy reads them once it can."}`}
               </Callout>
             )}
             {canopy?.lastError && (
@@ -1637,6 +1650,15 @@ function CanopyInbox({
               )}
             </div>
           )}
+        {offerReading && !hostHeld && items.length === 0 && !listsAssistants && (
+          <CanopyStatusBar
+            host={otherHost ? hostName : null}
+            model={undefined}
+            reader={undefined}
+            waiting={undefined}
+            offer={offerReading}
+          />
+        )}
       </div>
     </AppDialog>
   );
