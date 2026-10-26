@@ -116,6 +116,27 @@ describe("restartTerminalWithoutView", () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
+  it("doesn't respawn when the terminal was relaunched or the policy stopped during the kill", async () => {
+    const { deps, invoke, store } = setup(
+      { id: "t1", launchAgentId: "claude", command: "claude", agentSessionId: "kept" },
+      { agentState: "working" },
+      "sess-123"
+    );
+    let current = true;
+    const kill = invoke.getMockImplementation()!;
+    invoke.mockImplementation(async (projectId, channel, args) => {
+      const answer = await kill(projectId, channel, args);
+      if (channel === CHANNELS.TERMINAL_GRACEFUL_KILL) current = false;
+      return answer;
+    });
+
+    await expect(restartTerminalWithoutView(PROJECT.id, "t1", deps, () => current)).resolves.toBe(
+      "stale"
+    );
+    expect(channels(invoke)).toEqual([CHANNELS.TERMINAL_GRACEFUL_KILL]);
+    expect(store.read()?.terminals[0]?.agentSessionId).toBe("kept");
+  });
+
   it("leaves an agent that already quit to its shell alone", async () => {
     const { deps, invoke } = setup(
       { id: "t1", launchAgentId: "claude", command: "claude" },

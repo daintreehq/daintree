@@ -123,6 +123,10 @@ export async function restartTerminalWithoutView(
         }
       : undefined;
 
+  // The kill and the launch reads above wait too: a relaunch meanwhile already
+  // runs under this id, and a quit has its own sweep, so neither gets a respawn.
+  if (!isCurrent()) return "stale";
+
   try {
     await deps.invoke<string>(projectId, CHANNELS.TERMINAL_SPAWN, [
       {

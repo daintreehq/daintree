@@ -306,6 +306,15 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
   // stopping is permanent and a cancelled quit must never reach it.
   cancelBackgroundRestores();
 
+  // Stop the memory-leak auto-restart before the terminals are snapshotted and
+  // swept (#14703): a restart it decides mid-quit would relaunch a terminal
+  // behind the sweep and overwrite the session the sweep persists for it.
+  try {
+    disposeMemoryLeakAutoRestart();
+  } catch (err) {
+    console.warn("[MAIN] disposeMemoryLeakAutoRestart at quit failed:", err);
+  }
+
   // Capture the open-window manifest and latch its writes off, for the same
   // reason and in the same place (#11492). Two hazards this closes: a pending
   // 500ms debounce owing an unsaved project switch, which the active-shutdown
@@ -867,7 +876,6 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
           } catch (err) {
             console.warn("[MAIN] disposeAgentAvailabilityStore failed:", err);
           }
-          disposeMemoryLeakAutoRestart();
           // The chain waits on the hosts' own exit: each one is still tree-killing
           // its terminals, trashed ones included, and is SIGKILLed only past its
           // dispose deadline (#13167).

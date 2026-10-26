@@ -44,7 +44,7 @@ function pickTarget(projectId: string): MemoryLeakRestartTarget {
     kind: "view",
     deliver: (payload, isCurrent) => {
       if (!local || local.isDestroyed()) {
-        send(payload);
+        if (isCurrent()) send(payload);
         return;
       }
       thawThenSend(
