@@ -1,4 +1,9 @@
-import type { HostDriverObservation, HostId, HostMetricsSummary } from "@shared/types/remoteHosts";
+import {
+  MAX_HOST_SUMMARY_DRIVERS,
+  type HostDriverObservation,
+  type HostId,
+  type HostMetricsSummary,
+} from "@shared/types/remoteHosts";
 import { busyCores, reportedCapacity, reportsMemoryCapacity } from "@shared/utils/hostCapacity";
 import type { HostMenuRow } from "../hostModel";
 import { formatHostTime } from "../hostTime";
@@ -250,6 +255,23 @@ export function describeDriver(summary: HostMetricsSummary): string | null {
   if (launches.length === 0) return null;
   const labels = launches.map((launch) => launchLabel(launch, launches, summary.sampledAt));
   return `Driven from ${joinNames(labels)}`;
+}
+
+/**
+ * Who drives these projects on the host, as its summary reports. Null when the
+ * summary doesn't say: from before `drivers`, a failed read, or a list at its
+ * cap, where a project missing from it may only have been cut. An empty answer
+ * means the host reported the project undriven.
+ */
+export function describeProjectDriver(
+  summary: HostMetricsSummary,
+  projectIds: readonly string[]
+): string | null {
+  const drivers = summary.drivers;
+  if (!drivers) return null;
+  const mine = drivers.filter((driver) => projectIds.includes(driver.projectId));
+  if (mine.length === 0) return drivers.length >= MAX_HOST_SUMMARY_DRIVERS ? null : "";
+  return describeDriver({ ...summary, drivers: mine });
 }
 
 /** Each driven project and who holds it, for the full wording behind {@link describeDriver}. */
