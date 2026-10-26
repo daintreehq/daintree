@@ -65,6 +65,9 @@ const LOG_PREFIX = "[VoiceRecording]";
 const REPLACED_ELSEWHERE_ANNOUNCEMENT =
   "Dictation stopped because it started in another window or project.";
 
+const spokenSendKey = (panelId: string, projectId: string | undefined) =>
+  `${projectId ?? ""}\0${panelId}`;
+
 type StartStepLogger = (step: string, details?: Record<string, unknown>) => void;
 
 interface OpeningAudio {
@@ -329,7 +332,9 @@ class VoiceRecordingService {
   private baselineOwners = new Map<string, PendingCorrection>();
   private unfollowBaselines: (() => void) | null = null;
   private writingShiftedDraft = false;
-  // The composer showing each panel, which owns its send. One per panel.
+  // The composer showing each panel's draft, which owns its send, keyed by
+  // panel and draft scope: an isolated composer on the same terminal keeps a
+  // draft of its own and must not take the pane's send.
   private spokenSendHandlers = new Map<string, () => void>();
 
   initialize(): void {
@@ -2995,11 +3000,12 @@ class VoiceRecordingService {
    * "send it". The handler runs Enter's dictation path: stop, wait for the
    * correction, send.
    */
-  onSpokenSend(panelId: string, handler: () => void): () => void {
-    this.spokenSendHandlers.set(panelId, handler);
+  onSpokenSend(panelId: string, projectId: string | undefined, handler: () => void): () => void {
+    const key = spokenSendKey(panelId, projectId);
+    this.spokenSendHandlers.set(key, handler);
     return () => {
-      if (this.spokenSendHandlers.get(panelId) === handler) {
-        this.spokenSendHandlers.delete(panelId);
+      if (this.spokenSendHandlers.get(key) === handler) {
+        this.spokenSendHandlers.delete(key);
       }
     };
   }
@@ -3010,7 +3016,7 @@ class VoiceRecordingService {
     const voiceState = useVoiceRecordingStore.getState();
     if (voiceState.status !== "recording" || voiceState.activeTarget?.panelId !== panelId) return;
     const draft = useTerminalInputStore.getState().getDraftInput(panelId, projectId);
-    const handler = this.spokenSendHandlers.get(panelId);
+    const handler = this.spokenSendHandlers.get(spokenSendKey(panelId, projectId));
     if (handler && isSpokenSendable(draft)) {
       handler();
       return;

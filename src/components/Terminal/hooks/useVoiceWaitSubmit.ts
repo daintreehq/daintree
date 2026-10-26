@@ -182,14 +182,18 @@ export function useVoiceWaitSubmit({
 
   useEffect(
     () =>
-      voiceRecordingService.onSpokenSend(terminalId, () => {
-        if (isDisabledRef.current?.()) {
-          void voiceRecordingService.stop();
-          return;
+      voiceRecordingService.onSpokenSend(
+        terminalId,
+        projectId ?? useProjectStore.getState().currentProject?.id,
+        () => {
+          if (isDisabledRef.current?.()) {
+            void voiceRecordingService.stop();
+            return;
+          }
+          startVoiceWaitSubmit({ spoken: true });
         }
-        startVoiceWaitSubmit({ spoken: true });
-      }),
-    [terminalId, startVoiceWaitSubmit]
+      ),
+    [terminalId, projectId, startVoiceWaitSubmit]
   );
 
   // Escape cancels the send, not the correction: it still lands in the draft.

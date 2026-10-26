@@ -93,7 +93,7 @@ describe("useVoiceWaitSubmit", () => {
   function spokenSendHandler(): () => void {
     const call = onSpokenSendMock.mock.calls.at(-1);
     expect(call?.[0]).toBe(PANEL_ID);
-    return call![1];
+    return call![2];
   }
 
   describe("spoken send", () => {
@@ -112,16 +112,25 @@ describe("useVoiceWaitSubmit", () => {
     it("waits for the correction before sending, as Enter does", async () => {
       useTerminalInputStore.getState().setDraftInput(PANEL_ID, "fix the login bug");
       hasPendingMock.mockReturnValue(true);
+      let landCorrection!: (landed: boolean) => void;
+      waitMock.mockImplementation(
+        () =>
+          new Promise<boolean>((resolve) => {
+            landCorrection = resolve;
+          })
+      );
       renderWaitSubmit();
 
       await act(async () => {
         spokenSendHandler()();
       });
-
       expect(waitMock).toHaveBeenCalledWith(PANEL_ID, 2000);
-      expect(waitMock.mock.invocationCallOrder[0]).toBeLessThan(
-        sendFromEditor.mock.invocationCallOrder[0]
-      );
+      expect(sendFromEditor).not.toHaveBeenCalled();
+
+      await act(async () => {
+        landCorrection(true);
+      });
+      expect(sendFromEditor).toHaveBeenCalledTimes(1);
     });
 
     it.each(["", "fix it", "  ok , ! "])("stops but leaves %j unsent", async (draft) => {
@@ -140,17 +149,25 @@ describe("useVoiceWaitSubmit", () => {
     it("rechecks the draft after the correction lands", async () => {
       useTerminalInputStore.getState().setDraftInput(PANEL_ID, "um so yeah");
       hasPendingMock.mockReturnValue(true);
-      waitMock.mockImplementation(async () => {
-        useTerminalInputStore.getState().setDraftInput(PANEL_ID, "Yeah.");
-        return true;
-      });
+      let landCorrection!: (landed: boolean) => void;
+      waitMock.mockImplementation(
+        () =>
+          new Promise<boolean>((resolve) => {
+            landCorrection = resolve;
+          })
+      );
       renderWaitSubmit();
 
       await act(async () => {
         spokenSendHandler()();
       });
+      await act(async () => {
+        useTerminalInputStore.getState().setDraftInput(PANEL_ID, "Yeah.");
+        landCorrection(true);
+      });
 
       expect(sendFromEditor).not.toHaveBeenCalled();
+      expect(useTerminalInputStore.getState().isVoiceSubmitting(PANEL_ID)).toBe(false);
     });
 
     it("only stops dictation when the composer is disabled", async () => {

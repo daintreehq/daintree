@@ -164,7 +164,7 @@ describe("VoiceRecordingService — spoken send (#14633)", () => {
     const { voiceRecordingService, stop, liveText } = await setup();
     draftState.draft = "Fix the";
     const seen: Array<{ draft: string; liveText: string | undefined }> = [];
-    voiceRecordingService.onSpokenSend(PANEL_ID, () =>
+    voiceRecordingService.onSpokenSend(PANEL_ID, undefined, () =>
       seen.push({ draft: draftState.draft, liveText: liveText() })
     );
 
@@ -178,7 +178,7 @@ describe("VoiceRecordingService — spoken send (#14633)", () => {
   it("does nothing for a completion without the send", async () => {
     const { voiceRecordingService, stop } = await setup();
     const handler = vi.fn();
-    voiceRecordingService.onSpokenSend(PANEL_ID, handler);
+    voiceRecordingService.onSpokenSend(PANEL_ID, undefined, handler);
 
     complete("fix the login bug", "item-a");
 
@@ -190,7 +190,7 @@ describe("VoiceRecordingService — spoken send (#14633)", () => {
     const { voiceRecordingService, stop } = await setup();
     draftState.draft = draft;
     const handler = vi.fn();
-    voiceRecordingService.onSpokenSend(PANEL_ID, handler);
+    voiceRecordingService.onSpokenSend(PANEL_ID, undefined, handler);
 
     complete("", "item-a", true);
 
@@ -209,7 +209,7 @@ describe("VoiceRecordingService — spoken send (#14633)", () => {
   it("ignores a send that arrives while dictation is already stopping", async () => {
     const { voiceRecordingService, useVoiceRecordingStore, stop } = await setup();
     const handler = vi.fn();
-    voiceRecordingService.onSpokenSend(PANEL_ID, handler);
+    voiceRecordingService.onSpokenSend(PANEL_ID, undefined, handler);
     useVoiceRecordingStore.getState().setStatus("finishing");
 
     complete("fix the login bug", "item-a", true);
@@ -218,12 +218,23 @@ describe("VoiceRecordingService — spoken send (#14633)", () => {
     expect(stop).not.toHaveBeenCalled();
   });
 
+  it("leaves the send to the composer showing the dictated draft's scope", async () => {
+    const { voiceRecordingService, stop } = await setup();
+    const isolated = vi.fn();
+    voiceRecordingService.onSpokenSend(PANEL_ID, "isolated-composer", isolated);
+
+    complete("fix the login bug", "item-a", true);
+
+    expect(isolated).not.toHaveBeenCalled();
+    expect(stop).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps a newer composer's registration when an older one unregisters", async () => {
     const { voiceRecordingService } = await setup();
     const older = vi.fn();
     const newer = vi.fn();
-    const unregisterOlder = voiceRecordingService.onSpokenSend(PANEL_ID, older);
-    voiceRecordingService.onSpokenSend(PANEL_ID, newer);
+    const unregisterOlder = voiceRecordingService.onSpokenSend(PANEL_ID, undefined, older);
+    voiceRecordingService.onSpokenSend(PANEL_ID, undefined, newer);
     unregisterOlder();
 
     complete("fix the login bug", "item-a", true);

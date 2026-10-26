@@ -3053,6 +3053,23 @@ describe("OpenAITranscriptionProvider — item identity and ordering (#13109)", 
     service.stop();
   });
 
+  it("does not mark a completion while a later commit is still unacknowledged", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+
+    const { socket } = await bringSessionReady(service);
+    const worker = latestVadWorker();
+    vadCommitSegment(service, worker);
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+    // Speech goes on past A, then ends: B is sent but not yet acknowledged.
+    vadCommitSegment(service, worker);
+    socket.simulateMessage("conversation.item.done", done("item-A", "then send it"));
+
+    expect(endsOfSpeech(events)).toEqual([false]);
+    service.stop();
+  });
+
   it("marks only the last of several released completions as ending speech", async () => {
     const service = new OpenAITranscriptionProvider();
     const events: VoiceTranscriptionEvent[] = [];

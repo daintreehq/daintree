@@ -1324,13 +1324,17 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       }
       this.commitOrder.shift();
       this.heldCompletions.delete(itemId);
-      // Only a reported transcript of the last commit, with the VAD hearing
-      // silence, ends an utterance; a backstop commit lands mid-speech.
+      // Only a reported transcript of the last commit, with no later commit
+      // in flight and the VAD hearing silence it has seen speech end into,
+      // ends an utterance; a backstop or replayed commit can land mid-speech.
       const endOfSpeech =
         !settled &&
         this.commitOrder.length === 0 &&
+        this.pendingCommits === 0 &&
+        this.replaySegments.length === 0 &&
         this.vadWorker !== null &&
         !this.vadDegraded &&
+        this.vadHasEndedSpeech &&
         !this.isSpeaking;
       this.emitCompletion(transcript, itemId, endOfSpeech);
     }
