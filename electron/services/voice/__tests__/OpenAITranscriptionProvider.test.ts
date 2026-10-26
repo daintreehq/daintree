@@ -1732,7 +1732,9 @@ describe("OpenAITranscriptionProvider", () => {
           "input_audio_buffer.commit",
         ]);
         expect(statuses).not.toContain("recording");
-        expect(vadWorkers).toHaveLength(0);
+        // The VAD started with the session goes with the stop, and none replaces it.
+        expect(vadWorkers).toHaveLength(1);
+        expect(vadWorkers[0]!.posted.filter((m) => m.type === "destroy")).toHaveLength(1);
 
         socket.simulateMessage("conversation.item.done", {
           item: { id: "item-1", content: [{ type: "input_audio", transcript: "yes do that" }] },

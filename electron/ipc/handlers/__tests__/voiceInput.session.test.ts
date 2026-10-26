@@ -38,6 +38,7 @@ const shared = vi.hoisted(() => ({
   /** Every signal the correction service was bound to, in order. */
   signals: [] as Array<AbortSignal | null>,
   assembleKeyterms: null as null | (() => Promise<string[]>),
+  transcriptionProvider: "openai" as "openai" | "deepgram",
   /** Project registered per sender id, as the view registry would answer. */
   projects: new Map<number, string>(),
 }));
@@ -47,6 +48,9 @@ vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
     this.onEvent = function (cb: (e: ServiceEvent) => void) {
       shared.listeners.add(cb);
       return () => shared.listeners.delete(cb);
+    };
+    this.keytermsNeededToConnect = function (settings: { transcriptionProvider?: string }) {
+      return settings.transcriptionProvider === "deepgram";
     };
     this.start = function (_settings: unknown, sessionId: string) {
       shared.providerSessionId = sessionId;
@@ -99,7 +103,14 @@ vi.mock("../../../services/voiceContextKeyterms.js", () => ({
 vi.mock("../../../store.js", () => ({
   store: {
     get: vi.fn((key: string) =>
-      key === "voiceInput" ? { enabled: true, openaiApiKey: "sk-test" } : undefined
+      key === "voiceInput"
+        ? {
+            enabled: true,
+            openaiApiKey: "sk-test",
+            deepgramApiKey: "dg-test",
+            transcriptionProvider: shared.transcriptionProvider,
+          }
+        : undefined
     ),
     set: vi.fn(),
   },
@@ -195,7 +206,13 @@ function emit(event: ServiceEvent, sessionId = shared.providerSessionId ?? undef
 // Lets a pending start run through its preparation to wherever it waits.
 const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
+/**
+ * Holds keyterm assembly. Only Deepgram waits for it before its provider
+ * starts (the terms go on its socket URL), so this also switches to Deepgram,
+ * keeping the session in its starting phase until the terms land.
+ */
 function deferKeyterms() {
+  shared.transcriptionProvider = "deepgram";
   let resolve!: (terms: string[]) => void;
   const promise = new Promise<string[]>((r) => {
     resolve = r;
@@ -236,6 +253,7 @@ describe("voiceInput — session identity", () => {
     shared.endDrain = null;
     shared.signals = [];
     shared.assembleKeyterms = null;
+    shared.transcriptionProvider = "openai";
     shared.projects.clear();
     owners.clear();
     ownerA = makeSender();

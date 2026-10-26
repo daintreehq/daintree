@@ -155,23 +155,34 @@ describe("OpenAI VAD audio while the model loads", () => {
     );
   });
 
-  it("holds no more than the provider's connect buffer while the load is outstanding", async () => {
+  it("reports an error once when more audio arrives during the load than the connect buffer holds", async () => {
     const { AUDIO_BUFFER_MAX_CHUNKS } = await import("../TranscriptionProvider.js");
     const vad = model();
     const loading = deferred<typeof vad>();
     mocks.create.mockReturnValue(loading.promise);
     await loadWorker();
     await vi.waitFor(() => expect(mocks.create).toHaveBeenCalledTimes(1));
-    for (let i = 0; i < AUDIO_BUFFER_MAX_CHUNKS + 5; i++) {
+    for (let i = 0; i < AUDIO_BUFFER_MAX_CHUNKS; i++) {
       send({ type: "audio", pcm: new ArrayBuffer(2) });
     }
-    loading.resolve(vad);
-    await vi.waitFor(() => expect(vad.processAudio).toHaveBeenCalledTimes(AUDIO_BUFFER_MAX_CHUNKS));
-    // Once loaded, audio is analysed as it comes.
+    expect(mocks.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: "error" }));
     send({ type: "audio", pcm: new ArrayBuffer(2) });
-    await vi.waitFor(() =>
-      expect(vad.processAudio).toHaveBeenCalledTimes(AUDIO_BUFFER_MAX_CHUNKS + 1)
-    );
+    send({ type: "audio", pcm: new ArrayBuffer(2) });
+    const errors = mocks.postMessage.mock.calls.filter(([m]) => m.type === "error");
+    expect(errors).toHaveLength(1);
+  });
+
+  it("caps the audio held during the load by bytes as well as chunks", async () => {
+    const { AUDIO_BUFFER_MAX_BYTES } = await import("../TranscriptionProvider.js");
+    const vad = model();
+    const loading = deferred<typeof vad>();
+    mocks.create.mockReturnValue(loading.promise);
+    await loadWorker();
+    await vi.waitFor(() => expect(mocks.create).toHaveBeenCalledTimes(1));
+    send({ type: "audio", pcm: new ArrayBuffer(AUDIO_BUFFER_MAX_BYTES) });
+    expect(mocks.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: "error" }));
+    send({ type: "audio", pcm: new ArrayBuffer(2) });
+    expect(mocks.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: "error" }));
   });
 
   it("never analyses held audio when destroy lands before the model loads", async () => {

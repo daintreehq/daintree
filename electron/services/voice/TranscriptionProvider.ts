@@ -34,6 +34,16 @@ export type VoiceSessionEvent = VoiceTranscriptionEvent & { sessionId: string };
 
 export type VoiceStartResult = { ok: true } | { ok: false; error: string };
 
+/** What one start needs beyond its settings. Runtime only, never persisted. */
+export interface TranscriptionStartContext {
+  /**
+   * Bias terms still being assembled, in place of `settings.keyterms`. Never
+   * rejects. A provider that sends them after its socket opens connects
+   * without waiting for them.
+   */
+  keyterms?: Promise<string[]>;
+}
+
 // Ceiling for audio held before it can be sent — both in the IPC handler while
 // the provider is being brought up, and in each provider while its socket
 // connects or reconnects. Sized to the renderer's own startup queue
@@ -82,7 +92,11 @@ export interface TranscriptionProvider {
    */
   readonly hasServerVAD: boolean;
   /** `sessionId` is the renderer-minted dictation session id, for correlation. */
-  start(settings: VoiceInputSettings, sessionId: string): Promise<VoiceStartResult>;
+  start(
+    settings: VoiceInputSettings,
+    sessionId: string,
+    context?: TranscriptionStartContext
+  ): Promise<VoiceStartResult>;
   sendAudioChunk(chunk: ArrayBuffer): void;
   /**
    * Flush the current audio segment at a user-driven paragraph boundary (Enter

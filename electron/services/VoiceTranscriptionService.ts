@@ -4,6 +4,7 @@ import { DeepgramTranscriptionProvider } from "./voice/DeepgramTranscriptionProv
 import { OpenAITranscriptionProvider } from "./voice/OpenAITranscriptionProvider.js";
 import type {
   TranscriptionProvider,
+  TranscriptionStartContext,
   VoiceSessionEvent,
   VoiceStartResult,
 } from "./voice/TranscriptionProvider.js";
@@ -69,7 +70,20 @@ export class VoiceTranscriptionService {
     }
   }
 
-  async start(settings: VoiceInputSettings, sessionId: string): Promise<VoiceStartResult> {
+  /**
+   * Deepgram takes its bias terms on the socket URL, so it can't connect until
+   * they're assembled. OpenAI sends them in the `session.update` after its
+   * socket opens, so it takes them as a pending start context instead.
+   */
+  keytermsNeededToConnect(settings: VoiceInputSettings): boolean {
+    return settings.transcriptionProvider === "deepgram";
+  }
+
+  async start(
+    settings: VoiceInputSettings,
+    sessionId: string,
+    context?: TranscriptionStartContext
+  ): Promise<VoiceStartResult> {
     // Tear down any previous provider (and its subscription) before swapping in
     // a new one — covers both a provider switch and a plain restart.
     this.disposeProvider();
@@ -84,7 +98,7 @@ export class VoiceTranscriptionService {
     // during start() is forwarded to listeners. The id is captured per provider,
     // so nothing a retired provider still emits can carry the new session's id.
     this.providerUnsub = provider.onEvent((event) => this.emit({ ...event, sessionId }));
-    return provider.start(settings, sessionId);
+    return provider.start(settings, sessionId, context);
   }
 
   sendAudioChunk(chunk: ArrayBuffer): void {

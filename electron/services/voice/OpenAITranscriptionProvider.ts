@@ -10,6 +10,7 @@ import {
   STUB_CONFIDENCE,
   createAudioBufferOverflowError,
   type TranscriptionProvider,
+  type TranscriptionStartContext,
   type VoiceStartResult,
   type VoiceTranscriptionEvent,
 } from "./TranscriptionProvider.js";
@@ -274,7 +275,19 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
 
   private preConnectBuffer: ArrayBuffer[] = [];
   private preConnectBufferBytes = 0;
+  // Commits asked for while the audio was still held (a VAD speech-end, the
+  // backstop, a paragraph boundary), as chunk counts into `preConnectBuffer`.
+  // The flush sends a commit after each, so speech the VAD segmented while the
+  // socket connected keeps its boundaries.
+  private heldCommits: number[] = [];
   private isReady = false;
+
+  // Bias terms for `session.update`, frozen for the session so a reconnect
+  // sends the same fields. Null while the start's assembly is still running:
+  // the socket opens without waiting for them, and an open socket parks its
+  // update in `sendSessionUpdateOnKeyterms` until they land.
+  private keyterms: string[] | null = null;
+  private sendSessionUpdateOnKeyterms: (() => void) | null = null;
 
   // Start-path timings on the main-process clock, so a log can show whether
   // lost opening words sat behind the socket, the handshake, or the model.
@@ -325,12 +338,16 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   // with the spawning session so a message arriving after teardown (or after a
   // new session started) is ignored — the stale-callback guard from #4850/#4851.
   private vadWorker: OpenAIVadProcess | null = null;
+  // The model has loaded. Diagnostics only: audio posted before then queues
+  // in the process behind the load.
+  private vadReady = false;
   private isSpeaking = false;
-  // True once the VAD has reported at least one speech-end this connection. The
+  // True once the VAD has reported a speech-end on a ready connection. The
   // barge-in clear on speech-start is gated on it: audio buffered after a
   // speech-end is confirmed silence and safe to drop, but audio buffered before
-  // the first speech-end (e.g. captured before the worker finished loading) may
-  // be real speech, so the first speech-start must not clear it.
+  // the first one may be real speech, so the first speech-start must not clear
+  // it. A speech-end heard while the socket connected only marks a held commit,
+  // so it doesn't count: nothing yet proves that commit was sent.
   private vadHasEndedSpeech = false;
   // Set when the worker fails to initialize or crashes. In this mode the VAD
   // can't segment, so we fall back to a periodic backstop commit (no speech
@@ -460,7 +477,11 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     return Math.round(performance.now() - this.sessionStartedAt);
   }
 
-  async start(settings: VoiceInputSettings, voiceSessionId: string): Promise<VoiceStartResult> {
+  async start(
+    settings: VoiceInputSettings,
+    voiceSessionId: string,
+    context?: TranscriptionStartContext
+  ): Promise<VoiceStartResult> {
     if (!settings.openaiApiKey) {
       logWarn(`${P} No OpenAI API key configured`);
       return { ok: false, error: "OpenAI API key not configured" };
@@ -480,18 +501,37 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     this.isReady = false;
     this.preConnectBuffer = [];
     this.preConnectBufferBytes = 0;
+    this.heldCommits = [];
     this.reconnectAttempt = 0;
     this.isReconnecting = false;
     this.lastReconnectError = null;
     this.isExpectedClose = false;
     this.liveText = "";
+    this.keyterms = context?.keyterms ? null : [...(settings.keyterms ?? [])];
+    this.sendSessionUpdateOnKeyterms = null;
 
     this.emit({ type: "status", status: "connecting" });
+    // The model loads while the socket connects, so the VAD is ready by the
+    // time the session is, and hears the opening speech held meanwhile.
+    this.startVadWorker(mySessionId);
 
     return new Promise((resolve) => {
       this.pendingStart = { sessionId: mySessionId, resolve };
+      if (context?.keyterms) this.awaitKeyterms(mySessionId, context.keyterms);
       this.connect(mySessionId, settings);
     });
+  }
+
+  /** Freezes the session's bias terms once assembled, and sends a parked update. */
+  private awaitKeyterms(mySessionId: number, pending: Promise<string[]>): void {
+    const settle = (terms: string[]) => {
+      if (this.sessionId !== mySessionId) return;
+      this.keyterms = [...terms];
+      const send = this.sendSessionUpdateOnKeyterms;
+      this.sendSessionUpdateOnKeyterms = null;
+      send?.();
+    };
+    pending.then(settle, () => settle([]));
   }
 
   /**
@@ -520,6 +560,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       } else if (this.isReconnecting) {
         this.scheduleReconnect(mySessionId, settings);
       } else {
+        this.stopVadWorker("connection-closed");
         this.emitError({ severity: "fatal", code: "ws_construct_failed", message });
         this.emit({ type: "status", status: "error" });
         this.settlePendingStart(mySessionId, { ok: false, error: message });
@@ -586,94 +627,23 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
         return;
       }
       this.startHeartbeat(connection, mySessionId);
-      logInfo(`${P} WebSocket opened, sending session.update`, {
+      const openedAt = performance.now();
+      logInfo(`${P} WebSocket opened`, {
         sessionId: mySessionId,
         voiceSessionId: this.voiceSessionId,
-        connectMs: Math.round(performance.now() - this.connectStartedAt),
+        connectMs: Math.round(openedAt - this.connectStartedAt),
         sinceStartMs: this.sinceStartMs(),
       });
-      // Keyterm biasing, assembled at session start and frozen on the settings
-      // snapshot, so a reconnect deterministically rebuilds the same fields.
-      // `keywords` takes the literal terms; `prompt` carries the same terms as
-      // bounded free-form context. Both derive from ONE sanitized list so a term
-      // rejected from `keywords` can't sneak back in via `prompt`.
-      const keywords = sanitizeOpenAIKeywords(settings.keyterms ?? []);
-      // `languages` (array) supersedes the deprecated singular `language`. Never
-      // send both. Our settings hold a single code, so this is a 1-element array.
-      // Type-checked, not just nullish-checked: persisted settings are cast, not
-      // validated, and the setter takes an arbitrary patch — a non-string here
-      // would throw inside this `open` handler, outside any try/catch.
-      const language = normalizeVoiceLanguage(settings.language);
-      const autoLanguage = language === VOICE_LANGUAGE_AUTO;
-      // `languages` is a bias hint, not a constraint, so a fixed language also
-      // gets an explicit directive in the transcription prompt. Auto omits both.
-      // Unknown (malformed) codes get no directive, which also keeps its length bounded.
-      const languageDirective =
-        autoLanguage || !VOICE_LANGUAGES.some((l) => l.code === language)
-          ? ""
-          : `Transcribe in ${voiceLanguageName(language)}. Do not translate.`;
-      const keytermPrompt = formatKeytermPrompt(
-        keywords,
-        MAX_PROMPT_CHARS - (languageDirective ? languageDirective.length + 1 : 0)
-      );
-      const prompt = [languageDirective, keytermPrompt].filter(Boolean).join(" ");
-      // `turn_detection` MUST be explicitly `null`. It is not enough to omit it:
-      // when absent the server applies a default VAD, and then silently produces
-      // no transcription — it still acks `input_audio_buffer.committed` but
-      // emits no `conversation.item.added` / `conversation.item.done`. With it
-      // set to `null`, each manual commit yields a transcribed item. Whether
-      // `gpt-live-transcribe` would accept a server-VAD block is unverified and
-      // deliberately not attempted here: every documented example for this model
-      // still shows `null`, and our client-side Silero side-chain is the tested
-      // path. Revisit only as its own change, with the error response checked.
-      const transcription: OpenAITranscriptionConfig = {
-        model: OPENAI_TRANSCRIPTION_MODEL,
-        ...(autoLanguage ? {} : { languages: [language] }),
-        delay: OPENAI_TRANSCRIPTION_DELAY,
-        // Omit rather than send `[]` / `""` when nothing survived sanitization.
-        ...(keywords.length > 0 ? { keywords } : {}),
-        ...(prompt ? { prompt } : {}),
-      };
-      const sessionUpdate = {
-        type: "session.update",
-        session: {
-          type: "transcription",
-          audio: {
-            input: {
-              format: { type: "audio/pcm", rate: 24000 },
-              transcription,
-              turn_detection: null,
-            },
-          },
-        },
-      };
-      // Log the session SHAPE, never its contents — `keywords`/`prompt` carry
-      // the user's branch names, project terms, custom dictionary and terminal
-      // identifiers, and these logs are readable by agents. The fields below are
-      // the ones that actually cause "commits acked but no transcription items"
-      // regressions (especially the explicit `turn_detection: null`).
-      // `biasTermCount`, not `keywordCount`: the logger redacts any key whose
-      // name contains "key", which would blank the count and defeat the whole
-      // diagnostic.
-      logInfo(`${P} → session.update`, {
-        model: transcription.model,
-        languages: transcription.languages,
-        delay: transcription.delay,
-        biasTermCount: keywords.length,
-        hasPrompt: prompt.length > 0,
-        turnDetectionNull: sessionUpdate.session.audio.input.turn_detection === null,
-      });
-      try {
-        connection.send(JSON.stringify(sessionUpdate));
-      } catch (err) {
-        const message = formatErrorMessage(err, "Failed to send session.update");
-        logError(`${P} Failed to send session.update`, undefined, voiceErrorLogFields(err));
-        this.handleFatalError(mySessionId, {
-          severity: "fatal",
-          code: "session_update_send_failed",
-          message,
-        });
+      if (this.keyterms) {
+        this.sendSessionUpdate(connection, mySessionId, settings, this.keyterms, openedAt);
+        return;
       }
+      // Still assembling. Whatever happens to this socket meanwhile, only the
+      // one still current when they land sends its update.
+      this.sendSessionUpdateOnKeyterms = () => {
+        if (this.sessionId !== mySessionId || this.connection !== connection) return;
+        this.sendSessionUpdate(connection, mySessionId, settings, this.keyterms ?? [], openedAt);
+      };
     });
 
     connection.on("message", (data) => {
@@ -767,6 +737,102 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
         this.emit({ type: "status", status: "idle" });
       }
     });
+  }
+
+  /**
+   * Configures a freshly opened socket for transcription. The bias terms come
+   * from the session's frozen list, so every connection of a session, a
+   * reconnect included, sends the same fields.
+   */
+  private sendSessionUpdate(
+    connection: WebSocket,
+    mySessionId: number,
+    settings: VoiceInputSettings,
+    keyterms: string[],
+    openedAt: number
+  ): void {
+    // `keywords` takes the literal terms; `prompt` carries the same terms as
+    // bounded free-form context. Both derive from ONE sanitized list so a term
+    // rejected from `keywords` can't sneak back in via `prompt`.
+    const keywords = sanitizeOpenAIKeywords(keyterms);
+    // `languages` (array) supersedes the deprecated singular `language`. Never
+    // send both. Our settings hold a single code, so this is a 1-element array.
+    // Type-checked, not just nullish-checked: persisted settings are cast, not
+    // validated, and the setter takes an arbitrary patch — a non-string here
+    // would throw inside the socket's `open` handler, outside any try/catch.
+    const language = normalizeVoiceLanguage(settings.language);
+    const autoLanguage = language === VOICE_LANGUAGE_AUTO;
+    // `languages` is a bias hint, not a constraint, so a fixed language also
+    // gets an explicit directive in the transcription prompt. Auto omits both.
+    // Unknown (malformed) codes get no directive, which also keeps its length bounded.
+    const languageDirective =
+      autoLanguage || !VOICE_LANGUAGES.some((l) => l.code === language)
+        ? ""
+        : `Transcribe in ${voiceLanguageName(language)}. Do not translate.`;
+    const keytermPrompt = formatKeytermPrompt(
+      keywords,
+      MAX_PROMPT_CHARS - (languageDirective ? languageDirective.length + 1 : 0)
+    );
+    const prompt = [languageDirective, keytermPrompt].filter(Boolean).join(" ");
+    // `turn_detection` MUST be explicitly `null`. It is not enough to omit it:
+    // when absent the server applies a default VAD, and then silently produces
+    // no transcription — it still acks `input_audio_buffer.committed` but
+    // emits no `conversation.item.added` / `conversation.item.done`. With it
+    // set to `null`, each manual commit yields a transcribed item. Whether
+    // `gpt-live-transcribe` would accept a server-VAD block is unverified and
+    // deliberately not attempted here: every documented example for this model
+    // still shows `null`, and our client-side Silero side-chain is the tested
+    // path. Revisit only as its own change, with the error response checked.
+    const transcription: OpenAITranscriptionConfig = {
+      model: OPENAI_TRANSCRIPTION_MODEL,
+      ...(autoLanguage ? {} : { languages: [language] }),
+      delay: OPENAI_TRANSCRIPTION_DELAY,
+      // Omit rather than send `[]` / `""` when nothing survived sanitization.
+      ...(keywords.length > 0 ? { keywords } : {}),
+      ...(prompt ? { prompt } : {}),
+    };
+    const sessionUpdate = {
+      type: "session.update",
+      session: {
+        type: "transcription",
+        audio: {
+          input: {
+            format: { type: "audio/pcm", rate: 24000 },
+            transcription,
+            turn_detection: null,
+          },
+        },
+      },
+    };
+    // Log the session SHAPE, never its contents — `keywords`/`prompt` carry
+    // the user's branch names, project terms, custom dictionary and terminal
+    // identifiers, and these logs are readable by agents. The fields below are
+    // the ones that actually cause "commits acked but no transcription items"
+    // regressions (especially the explicit `turn_detection: null`).
+    // `biasTermCount`, not `keywordCount`: the logger redacts any key whose
+    // name contains "key", which would blank the count and defeat the whole
+    // diagnostic. `biasTermsWaitMs` is how long the open socket waited on
+    // assembly, zero when the terms were there first.
+    logInfo(`${P} → session.update`, {
+      model: transcription.model,
+      languages: transcription.languages,
+      delay: transcription.delay,
+      biasTermCount: keywords.length,
+      biasTermsWaitMs: Math.round(performance.now() - openedAt),
+      hasPrompt: prompt.length > 0,
+      turnDetectionNull: sessionUpdate.session.audio.input.turn_detection === null,
+    });
+    try {
+      connection.send(JSON.stringify(sessionUpdate));
+    } catch (err) {
+      const message = formatErrorMessage(err, "Failed to send session.update");
+      logError(`${P} Failed to send session.update`, undefined, voiceErrorLogFields(err));
+      this.handleFatalError(mySessionId, {
+        severity: "fatal",
+        code: "session_update_send_failed",
+        message,
+      });
+    }
   }
 
   /**
@@ -963,6 +1029,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
           ...summarizeEchoedSession(payload.session),
           sinceStartMs: this.sinceStartMs(),
           bufferedChunks: this.preConnectBuffer.length,
+          vad: this.vadState(),
         });
         if (this.isReady) {
           // Everything below runs once per connection: a second flush would
@@ -975,14 +1042,26 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
         const recovering = this.isReconnecting;
         if (this.connection) this.replayUnacknowledgedAudio();
         if (this.preConnectBuffer.length > 0 && this.connection) {
-          logInfo(`${P} Flushing ${this.preConnectBuffer.length} buffered audio chunks`);
+          logInfo(`${P} Flushing ${this.preConnectBuffer.length} buffered audio chunks`, {
+            heldCommits: this.heldCommits.length,
+          });
           // Detach the buffer before flushing so its state stays consistent even
           // if a send throws partway through the loop.
           const buffered = this.preConnectBuffer;
+          const commitsAfter = this.heldCommits;
           this.preConnectBuffer = [];
           this.preConnectBufferBytes = 0;
-          for (const chunk of buffered) {
-            this.sendAudioJson(chunk);
+          this.heldCommits = [];
+          let nextCommit = 0;
+          for (let i = 0; i < buffered.length; i++) {
+            this.sendAudioJson(buffered[i]);
+            // Pre-roll follows what was sent, and each commit restarts it, so a
+            // barge-in clear right after the flush replays the right audio.
+            this.pushPreRoll(buffered[i]);
+            if (commitsAfter[nextCommit] === i + 1) {
+              nextCommit++;
+              this.commitHeldSegment();
+            }
           }
         }
         // A successful (re)connection clears the reconnect state so a later drop
@@ -998,13 +1077,16 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
           if (this.stopPendingReady) this.commitAfterLateReady();
           return;
         }
-        this.startVadWorker(mySessionId);
-        // The new VAD never hears the audio flushed above (its model is still
-        // loading), so if the speech ended during the outage nothing would
-        // commit it. A single backstop does, unless live speech takes over the
-        // timer first.
-        if (recovering && this.bytesSinceCommit >= MIN_COMMIT_BYTES && !this.vadDegraded) {
-          this.startBackstopTimer("reconnect-recovery", { once: true });
+        // The first connection's VAD has been running since start(). A
+        // reconnect's predecessor went with the dropped socket, and the new one
+        // never hears the audio flushed above, so if the speech ended during the
+        // outage nothing would commit it. A single backstop does, unless live
+        // speech takes over the timer first.
+        if (recovering) {
+          this.startVadWorker(mySessionId);
+          if (this.bytesSinceCommit >= MIN_COMMIT_BYTES && !this.vadDegraded) {
+            this.startBackstopTimer("reconnect-recovery", { once: true });
+          }
         }
         this.emit({ type: "status", status: "recording" });
         this.settlePendingStart(mySessionId, { ok: true });
@@ -1432,8 +1514,11 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     if (!this.isReady || !this.connection) {
       // Buffer while connecting (initial) or reconnecting (mid-session drop) so
       // audio captured during the gap is flushed once the session is ready.
-      if (this.connection || this.pendingStart || this.isReconnecting) {
-        this.bufferPreConnectChunk(chunk);
+      // The VAD hears it as it's captured, so speech that ends before the
+      // socket is ready still gets its commit; only kept chunks reach it, so
+      // its boundaries line up with the buffer.
+      if (this.holdsConnectAudio()) {
+        if (this.bufferPreConnectChunk(chunk)) this.feedVad(chunk);
       } else if (!this.staleChunkWarned) {
         this.staleChunkWarned = true;
         logWarn(`${P} sendAudioChunk called but no active session`);
@@ -1486,9 +1571,10 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
    * Appends a chunk to the pre-connect / reconnect buffer, enforcing both a
    * chunk-count cap and a byte cap. Oldest-wins: once either ceiling is hit the
    * chunk is dropped (warned and reported once) — a voice gap past ~3s is unrecoverable
-   * anyway, so there's no value in retaining unbounded audio.
+   * anyway, so there's no value in retaining unbounded audio. Returns whether
+   * the chunk was kept.
    */
-  private bufferPreConnectChunk(chunk: ArrayBuffer): void {
+  private bufferPreConnectChunk(chunk: ArrayBuffer): boolean {
     if (
       this.preConnectBuffer.length >= AUDIO_BUFFER_MAX_CHUNKS ||
       this.preConnectBufferBytes + chunk.byteLength > AUDIO_BUFFER_MAX_BYTES
@@ -1503,10 +1589,16 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
         });
         this.emitError(createAudioBufferOverflowError());
       }
-      return;
+      return false;
     }
     this.preConnectBuffer.push(chunk);
     this.preConnectBufferBytes += chunk.byteLength;
+    return true;
+  }
+
+  /** Audio is held for a socket that's connecting or reconnecting. */
+  private holdsConnectAudio(): boolean {
+    return this.connection !== null || this.pendingStart !== null || this.isReconnecting;
   }
 
   /**
@@ -1528,6 +1620,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     this.clearHeartbeat();
     this.clearConnectTimeout();
     this.connection = null;
+    this.sendSessionUpdateOnKeyterms = null;
     this.isReady = false;
     this.heartbeatPing = null;
     this.heartbeatPingMarks = [];
@@ -1561,6 +1654,8 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     this.clearHeldCompletionTimer();
     this.preConnectBuffer = [];
     this.preConnectBufferBytes = 0;
+    this.heldCommits = [];
+    this.sendSessionUpdateOnKeyterms = null;
     this.clearConnectTimeout();
     this.clearDrainTimeout();
     this.stopVadWorker("session-end");
@@ -1614,6 +1709,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
    */
   private startVadWorker(mySessionId: number): void {
     this.stopVadWorker("respawn");
+    this.vadReady = false;
     this.isSpeaking = false;
     this.vadHasEndedSpeech = false;
     this.vadDegraded = false;
@@ -1627,6 +1723,9 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
         onMessage: (message: VadWorkerOutbound) => {
           if (!isCurrent()) return;
           switch (message.type) {
+            case "ready":
+              this.vadReady = true;
+              return;
             case "speech-start":
               this.handleVadSpeechStart();
               return;
@@ -1663,12 +1762,19 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
    */
   private stopVadWorker(reason: VadRetireReason): void {
     this.clearBackstopTimer();
+    this.vadReady = false;
     this.isSpeaking = false;
     this.preRollChunks = [];
     this.preRollBytes = 0;
     const vad = this.vadWorker;
     this.vadWorker = null;
     vad?.retire(reason);
+  }
+
+  private vadState(): "ready" | "loading" | "degraded" | "none" {
+    if (this.vadDegraded) return "degraded";
+    if (!this.vadWorker) return "none";
+    return this.vadReady ? "ready" : "loading";
   }
 
   /**
@@ -1724,7 +1830,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   private handleVadSpeechEnd(): void {
     if (!this.isSpeaking) return;
     this.isSpeaking = false;
-    this.vadHasEndedSpeech = true;
+    if (this.isReady) this.vadHasEndedSpeech = true;
     this.clearBackstopTimer();
     logDebug(`${P} VAD speech-end — committing segment`);
     this.maybeCommitSegment("vad-end-of-speech");
@@ -1753,6 +1859,12 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
    * undersized buffer with a fatal error event).
    */
   private maybeCommitSegment(reason: string): void {
+    // Before the socket is ready the audio is still held, so the boundary is
+    // kept with it and committed when it's flushed.
+    if (!this.isReady && !this.isDraining && this.holdsConnectAudio()) {
+      this.holdCommit(reason);
+      return;
+    }
     if (!this.connection || !this.isReady || this.isDraining) {
       logDebug(`${P} Commit skipped — session not in a committable state`, {
         reason,
@@ -1784,6 +1896,26 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
         reason,
         ...voiceErrorLogFields(err),
       });
+    }
+  }
+
+  private holdCommit(reason: string): void {
+    const at = this.preConnectBuffer.length;
+    if (at === 0 || this.heldCommits.at(-1) === at) return;
+    this.heldCommits.push(at);
+    logDebug(`${P} Commit held until the socket is ready`, { reason, bufferedChunks: at });
+  }
+
+  /** A held commit, sent once the flush reaches it. Too little audio waits for the next. */
+  private commitHeldSegment(): void {
+    if (this.bytesSinceCommit < MIN_COMMIT_BYTES) return;
+    try {
+      this.sendCommit();
+      logDebug(`${P} → input_audio_buffer.commit (held)`, {
+        pendingCommits: this.pendingCommits,
+      });
+    } catch (err) {
+      logWarn(`${P} Failed to send a held commit`, { ...voiceErrorLogFields(err) });
     }
   }
 
@@ -1917,6 +2049,9 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     });
     this.isDraining = true;
     this.stopPendingReady = true;
+    // The mic is released: nothing more for the VAD to hear, and the held
+    // audio and its commits stay as they are for the flush.
+    this.stopVadWorker("stop");
     this.emit({ type: "status", status: "finishing" });
 
     const sessionIdBeforeDrain = this.sessionId;

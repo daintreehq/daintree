@@ -35,6 +35,8 @@ const shared = vi.hoisted(() => ({
   correctionCalls: [] as Array<{ request: unknown; settings: unknown }>,
   /** Settings objects passed to svc.start(), in call order. */
   startCalls: [] as unknown[],
+  /** The start context passed alongside each of them. */
+  startContexts: [] as Array<{ keyterms?: Promise<string[]> } | undefined>,
   /** Optional override for assembleKeyterms — lets a test defer/control timing. */
   assembleKeyterms: null as null | (() => Promise<string[]>),
   /** The session the fake provider was last started for; its events carry it. */
@@ -48,9 +50,17 @@ vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
         cb({ ...e, sessionId: shared.providerSessionId ?? undefined });
       return () => {};
     };
-    this.start = function (settings: unknown, sessionId: string) {
+    this.keytermsNeededToConnect = function (settings: { transcriptionProvider?: string }) {
+      return settings.transcriptionProvider === "deepgram";
+    };
+    this.start = function (
+      settings: unknown,
+      sessionId: string,
+      context?: { keyterms?: Promise<string[]> }
+    ) {
       shared.providerSessionId = sessionId;
       shared.startCalls.push(settings);
+      shared.startContexts.push(context);
       return Promise.resolve({ ok: true });
     };
     this.stopGracefully = function () {
@@ -225,6 +235,7 @@ describe("voiceInput — IPC handler surface", () => {
     shared.useDeferredDrain = false;
     shared.correctionCalls = [];
     shared.startCalls = [];
+    shared.startContexts = [];
     shared.assembleKeyterms = null;
 
     win = buildMainWindow();
@@ -314,6 +325,7 @@ describe("voiceInput — IPC handler surface", () => {
     const handleStop = getHandler("voice-input:stop");
     await (handleStop as SessionHandler)(fakeEvent, currentSessionId);
     shared.startCalls = [];
+    shared.startContexts = [];
 
     // Begin a new session whose keyterm assembly hangs until we resolve it.
     let resolveAssembly!: (terms: string[]) => void;
@@ -618,6 +630,7 @@ describe("voiceInput — context keyterms wiring", () => {
     vi.clearAllMocks();
     shared.transcriptionEventCallback = null;
     shared.startCalls = [];
+    shared.startContexts = [];
     shared.assembleKeyterms = null;
 
     const win = buildMainWindow();
@@ -649,7 +662,7 @@ describe("voiceInput — context keyterms wiring", () => {
     });
   });
 
-  it("injects assembled keyterms into a non-Deepgram session (OpenAI prompt path)", async () => {
+  it("hands a non-Deepgram session its keyterms as a pending start context (OpenAI prompt path)", async () => {
     const { store } = await import("../../../store.js");
     vi.mocked(store.get).mockReturnValue(providerSettings("openai"));
     const { assembleKeyterms } = await import("../../../services/voiceContextKeyterms.js");
@@ -657,13 +670,13 @@ describe("voiceInput — context keyterms wiring", () => {
 
     await startFn(fakeEvent, nextSessionId());
 
-    // OpenAI consumes keyterms via transcription.prompt, so assembly runs for it too.
+    // OpenAI consumes keyterms via transcription.prompt, so assembly runs for it
+    // too, but its socket opens without waiting for them.
     expect(assembleKeyterms).toHaveBeenCalled();
     expect(shared.startCalls).toHaveLength(1);
-    expect(shared.startCalls[0]).toMatchObject({
-      transcriptionProvider: "openai",
-      keyterms: ["alpha", "beta"],
-    });
+    expect(shared.startCalls[0]).toMatchObject({ transcriptionProvider: "openai" });
+    expect(shared.startCalls[0]).not.toHaveProperty("keyterms");
+    await expect(shared.startContexts[0]?.keyterms).resolves.toEqual(["alpha", "beta"]);
   });
 
   it("hands keyterm assembly and correction the dictionary's written terms", async () => {
