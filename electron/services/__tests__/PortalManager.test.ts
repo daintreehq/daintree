@@ -158,7 +158,9 @@ describe("PortalManager", () => {
     }
 
     const menuActions = () =>
-      vi.mocked(mockWindow.webContents.send).mock.calls.filter(([channel]) => channel === "menu:action");
+      vi
+        .mocked(mockWindow.webContents.send)
+        .mock.calls.filter(([channel]) => channel === "menu:action");
 
     afterEach(() => {
       keyMocks.claimDictationKey.mockReturnValue(false);

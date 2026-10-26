@@ -225,8 +225,15 @@ describe("VoiceRecordingToolbarButton — dictation in another view (#14601)", (
 
   it("names a scratch by its own name, which main doesn't know", () => {
     const scratchId = "3f2b8a1c-4d5e-4f60-8a7b-9c0d1e2f3a4b";
+    const scratch: Scratch = {
+      id: scratchId,
+      path: "/scratches/spike",
+      name: "Spike",
+      createdAt: 1,
+      lastOpened: 1,
+    };
     useScratchStore.setState({
-      scratches: [{ id: scratchId, name: "Spike" } as Scratch],
+      scratches: [scratch],
     });
     useVoiceRecordingStore.setState({
       sessionElsewhere: { sessionId: "s1", projectId: scratchId, projectName: null },

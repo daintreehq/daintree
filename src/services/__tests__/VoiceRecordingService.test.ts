@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { isActiveVoiceSession } from "@shared/types";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { isActiveVoiceSession, type VoiceLiveSessionUpdate } from "@shared/types";
 
 // Capture suspend/wake callbacks registered by the service.
 const suspendCallbacks = vi.hoisted(() => [] as Array<() => void>);
@@ -173,9 +173,12 @@ function buildElectronStub() {
       onError: vi.fn(() => () => {}),
       onStatus: vi.fn(() => () => {}),
       onSessionEnded: vi.fn(() => () => {}),
-      onLiveSession: vi.fn(() => () => {}),
+      onLiveSession: vi.fn((_callback: (update: VoiceLiveSessionUpdate) => void) => () => {}),
       onStopRequested: vi.fn(() => () => {}),
-      onRevealRequested: vi.fn(() => () => {}),
+      onRevealRequested: vi.fn(
+        (_callback: (payload: { sessionId: string; workspaceId: string | null }) => void) =>
+          () => {}
+      ),
       getLiveSession: vi.fn().mockResolvedValue({ revision: 0, session: null }),
       getSettings: vi.fn().mockResolvedValue({
         enabled: true,
@@ -2440,6 +2443,14 @@ describe("VoiceRecordingService — a session another view owns (#14601)", () =>
 
   const elsewhere = { sessionId: "remote", projectId: "project-a", projectName: "Alpha" };
 
+  function hasMockState<T>(mod: object): mod is { __state: T } {
+    return "__state" in mod;
+  }
+
+  function hasSwitchMock(mod: object): mod is { __switchProject: Mock<(id: string) => void> } {
+    return "__switchProject" in mod;
+  }
+
   type VoiceState = {
     status: string;
     activeTarget: { panelId: string } | null;
@@ -2462,32 +2473,29 @@ describe("VoiceRecordingService — a session another view owns (#14601)", () =>
     });
     const { windowListeners } = setupGlobals(electron);
 
-    const panel = (await import("@/store/panelStore")) as unknown as { __state: PanelState };
+    const panel = await import("@/store/panelStore");
+    if (!hasMockState<PanelState>(panel)) throw new Error("panelStore mock lacks __state");
     panel.__state.focusedId = "panel-b";
     panel.__state.panelsById = {
       "panel-b": { id: "panel-b", title: "Focused", location: "grid", launchAgentId: "claude" },
       "panel-c": { id: "panel-c", title: "Later", location: "grid", launchAgentId: "claude" },
     };
 
-    const voiceModule = (await import("@/store/voiceRecordingStore")) as unknown as {
-      __state: VoiceState;
-      useVoiceRecordingStore: {
-        getState: () => {
-          announce: ReturnType<typeof vi.fn>;
-          applyLiveSessionUpdate: ReturnType<typeof vi.fn>;
-        };
-      };
-    };
+    const voiceModule = await import("@/store/voiceRecordingStore");
+    if (!hasMockState<VoiceState>(voiceModule)) {
+      throw new Error("voiceRecordingStore mock lacks __state");
+    }
     const voiceState = voiceModule.__state;
     voiceState.status = options.status ?? "idle";
     voiceState.activeTarget = voiceState.status === "idle" ? null : { panelId: "panel-a" };
     voiceState.lockedTarget = null;
     voiceState.sessionElsewhere =
       options.sessionElsewhere === undefined ? elsewhere : options.sessionElsewhere;
-    const announce = voiceModule.useVoiceRecordingStore.getState().announce;
+    const announce = vi.mocked(voiceModule.useVoiceRecordingStore.getState().announce);
     announce.mockClear();
-    const applyLiveSessionUpdate =
-      voiceModule.useVoiceRecordingStore.getState().applyLiveSessionUpdate;
+    const applyLiveSessionUpdate = vi.mocked(
+      voiceModule.useVoiceRecordingStore.getState().applyLiveSessionUpdate
+    );
     applyLiveSessionUpdate.mockClear();
 
     const { voiceRecordingService } = await import("../VoiceRecordingService");
@@ -2520,9 +2528,7 @@ describe("VoiceRecordingService — a session another view owns (#14601)", () =>
     });
 
     const push = { revision: 4, session: elsewhere };
-    const onLiveSession = vi.mocked(electron.voiceInput.onLiveSession).mock.calls[0]![0] as (
-      update: typeof push
-    ) => void;
+    const onLiveSession = electron.voiceInput.onLiveSession.mock.calls[0]![0];
     onLiveSession(push);
 
     expect(applyLiveSessionUpdate).toHaveBeenLastCalledWith(push);
@@ -2584,8 +2590,9 @@ describe("VoiceRecordingService — a session another view owns (#14601)", () =>
       expect(voiceRecordingService["recordingMode"]).toBe("push-to-talk");
     });
 
-    const keydown = { code: "Period", repeat: false } as KeyboardEvent;
-    for (const listener of windowListeners["keydown"] ?? []) listener(keydown);
+    for (const listener of windowListeners["keydown"] ?? []) {
+      listener({ code: "Period", repeat: false });
+    }
     await voiceRecordingService.toggleFocusedPanel();
     for (const listener of windowListeners["keyup"] ?? []) listener({ code: "Period" });
 
@@ -2613,16 +2620,14 @@ describe("VoiceRecordingService — a session another view owns (#14601)", () =>
 
   it("switches to the owner's workspace when on screen in the owner's window", async () => {
     const { electron } = await arrange({ sessionElsewhere: null });
-    const projectStore = (await import("@/store/projectStore")) as unknown as {
-      __switchProject: ReturnType<typeof vi.fn>;
-    };
-    projectStore.__switchProject.mockClear();
+    const projectStore = await import("@/store/projectStore");
+    if (!hasSwitchMock(projectStore)) throw new Error("projectStore mock lacks __switchProject");
+    const switchProject = projectStore.__switchProject;
+    switchProject.mockClear();
     const { useScratchStore } = await import("@/store/scratchStore");
     const switchScratch = vi.fn().mockResolvedValue(undefined);
     useScratchStore.setState({ switchScratch });
-    const revealRequested = vi.mocked(electron.voiceInput.onRevealRequested).mock.calls[0]![0] as (
-      payload: { sessionId: string; workspaceId: string | null }
-    ) => void;
+    const revealRequested = electron.voiceInput.onRevealRequested.mock.calls[0]![0];
 
     const projectId = "a".repeat(64);
     revealRequested({ sessionId: "remote", workspaceId: projectId });
@@ -2630,9 +2635,9 @@ describe("VoiceRecordingService — a session another view owns (#14601)", () =>
     revealRequested({ sessionId: "remote", workspaceId: scratchId });
 
     await vi.waitFor(() => {
-      expect(projectStore.__switchProject).toHaveBeenCalledWith(projectId);
+      expect(switchProject).toHaveBeenCalledWith(projectId);
       expect(switchScratch).toHaveBeenCalledWith(scratchId);
     });
-    expect(projectStore.__switchProject).toHaveBeenCalledTimes(1);
+    expect(switchProject).toHaveBeenCalledTimes(1);
   });
 });

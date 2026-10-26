@@ -959,5 +959,4 @@ describe("voiceInput — a session live in another view (#14601)", () => {
       expect(sentOn(ownerA, CHANNELS.VOICE_INPUT_STOP_REQUESTED)).toEqual([]);
     });
   });
-
 });
