@@ -813,6 +813,52 @@ describe("CanopyView", () => {
     expect(canopy.unarchive).toHaveBeenCalledWith("waiting", { spawnedAt: NOW - 3_600_000 });
   });
 
+  it("names an archive in an Undo line that takes it back, then goes away", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const canopy = installElectron();
+      vi.mocked(notify).mockClear();
+      const { container } = render(<CanopyView />);
+      await frames();
+      await act(async () => {
+        fireEvent.keyDown(cards(container)[0]!, { key: "e" });
+      });
+      const line = () => container.ownerDocument.querySelector("[data-canopy-undo-line]");
+      expect(line()?.textContent).toContain("Archived '");
+      expect(vi.mocked(notify)).not.toHaveBeenCalled();
+      const undo = [...line()!.querySelectorAll("button")].find((b) => b.textContent === "Undo")!;
+      await act(async () => {
+        fireEvent.click(undo);
+      });
+      expect(canopy.unarchive).toHaveBeenCalledWith("waiting", { spawnedAt: NOW - 3_600_000 });
+      expect(line()).toBeNull();
+      // Z after the button finds it done.
+      fireEvent.keyDown(cards(container)[0]!, { key: "z" });
+      expect(canopy.unarchive).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("drops the Undo line after ten seconds", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      installElectron();
+      const { container } = render(<CanopyView />);
+      await frames();
+      await act(async () => {
+        fireEvent.keyDown(cards(container)[0]!, { key: "e" });
+      });
+      expect(container.ownerDocument.querySelector("[data-canopy-undo-line]")).not.toBeNull();
+      await act(async () => {
+        vi.advanceTimersByTime(10_001);
+      });
+      expect(container.ownerDocument.querySelector("[data-canopy-undo-line]")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("renames the selected run from F2 on its row, in its title bar", async () => {
     const canopy = installElectron();
     const { container } = render(<CanopyView />);

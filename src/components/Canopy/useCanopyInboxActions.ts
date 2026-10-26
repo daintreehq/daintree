@@ -34,7 +34,10 @@ function failToast(
 }
 
 interface UndoReservation {
-  land: (restoreOnce: () => void, toast?: { title: string; message: string }) => void;
+  land: (
+    restoreOnce: () => void,
+    shown?: { title: string; message: string } | { line: string }
+  ) => void;
   forget: () => void;
 }
 
@@ -193,10 +196,12 @@ export function useCanopyInboxActions({
           safeFireAndForget(
             unarchive(item).then(
               () =>
-                undo.land(() =>
-                  // Main archives it again only while it has done nothing since
-                  // it came back: otherwise that would hide what it did.
-                  safeFireAndForget(archive(item, turn).catch(archiveFailed(item)))
+                undo.land(
+                  () =>
+                    // Main archives it again only while it has done nothing since
+                    // it came back: otherwise that would hide what it did.
+                    safeFireAndForget(archive(item, turn).catch(archiveFailed(item))),
+                  { line: `Moved '${itemSubject(item)}' to inbox` }
                 ),
               (error: unknown) => {
                 undo.forget();
@@ -214,18 +219,21 @@ export function useCanopyInboxActions({
           if (next) focusCardNow(next.runId);
         }
         const before = item.readMark;
-        // No toast: the user archived it and watched it leave, and Z takes it back.
+        // No toast: the user watched it leave. The panel's undo line and Z take it back.
         const undo = reserveUndo();
         safeFireAndForget(
           archive(item).then(
             (after) => {
               // Refused — the run left, or was respawned: nothing to undo.
               if (after === null) return undo.forget();
-              undo.land(() => {
-                safeFireAndForget(unarchive(item).catch(unarchiveFailed(item)));
-                // Archiving read it; taking it back puts back what was unread.
-                if (before) undoReads([before], [after]);
-              });
+              undo.land(
+                () => {
+                  safeFireAndForget(unarchive(item).catch(unarchiveFailed(item)));
+                  // Archiving read it; taking it back puts back what was unread.
+                  if (before) undoReads([before], [after]);
+                },
+                { line: `Archived '${itemSubject(item)}'` }
+              );
             },
             (error: unknown) => {
               undo.forget();
@@ -344,7 +352,9 @@ export function useCanopyInboxActions({
               readTurn: after.turn,
               markedUnreadAt: null,
             };
-            undo.land(() => undoReads([before], [after]));
+            undo.land(() => undoReads([before], [after]), {
+              line: `Marked '${itemSubject(item)}' as ${read ? "read" : "unread"}`,
+            });
           },
           (error: unknown) => {
             undo.forget();
