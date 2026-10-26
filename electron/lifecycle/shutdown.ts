@@ -24,7 +24,6 @@ import { getCrashLoopGuard } from "../services/CrashLoopGuardService.js";
 import { getPanelSuspectLedger } from "../services/PanelSuspectLedgerService.js";
 import { getDatabaseMaintenanceService } from "../services/DatabaseMaintenanceService.js";
 import { getPeriodicCleanupService } from "../services/PeriodicCleanupService.js";
-import { getHibernationService } from "../services/HibernationService.js";
 import { getIdleTerminalNotificationService } from "../services/IdleTerminalNotificationService.js";
 import { getSystemSleepService } from "../services/SystemSleepService.js";
 import { getOsDndService } from "../services/OsDndService.js";
@@ -804,12 +803,6 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
           }
           setResourceProfileService(null);
 
-          try {
-            // Drop the injected PtyClient so a restart can't reuse a stale host client (#8637).
-            getHibernationService().setPtyClient(null);
-          } catch (err) {
-            console.warn("[MAIN] HibernationService teardown failed:", err);
-          }
           try {
             getIdleTerminalNotificationService().stop();
           } catch (err) {

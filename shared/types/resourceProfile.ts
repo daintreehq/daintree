@@ -181,7 +181,6 @@ export interface ResourceProfileSnapshot {
  * - pollIntervalBackground: 10000 (WorkspaceService DEFAULT_BACKGROUND_WORKTREE_INTERVAL_MS)
  * - processTreePollInterval: 2500 (ProcessTreeCache constructor default)
  * - projectStatsPollInterval: 5000 (ProjectStatsService DEFAULT_POLL_INTERVAL_MS)
- * - memoryPressureInactiveMs: 1800000 (HibernationService MEMORY_PRESSURE_INACTIVE_MS = 30min)
  *
  * The WebGL flip thresholds (webglUpperThreshold / webglLowerThreshold) are NOT
  * stored here: they are RAM-dependent and resolved from the effective

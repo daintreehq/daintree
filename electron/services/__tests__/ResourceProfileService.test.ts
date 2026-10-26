@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 import type { PtyClient } from "../PtyClient.js";
 import type { WorkspaceClient } from "../WorkspaceClient.js";
-import type { HibernationService } from "../HibernationService.js";
 import type { ProjectViewManager } from "../../window/ProjectViewManager.js";
 import type { ProjectStatsService } from "../ProjectStatsService.js";
 
@@ -141,9 +140,6 @@ async function flushAsync(): Promise<void> {
     await Promise.resolve();
   }
 }
-interface MockHibernationService {
-  setMemoryPressureThresholdMs: Mock;
-}
 interface MockProjectViewManager {
   setCachedViewLimit: Mock;
   setMemoryPressurePolicy: Mock;
@@ -168,9 +164,6 @@ function createDeps(overrides?: Partial<ResourceProfileDeps>): ResourceProfileDe
     updateMonitorConfig: vi.fn(),
     getAllStatesAsync: vi.fn().mockResolvedValue([]),
   };
-  const mockHibernationService: MockHibernationService = {
-    setMemoryPressureThresholdMs: vi.fn(),
-  };
   const mockProjectViewManager: MockProjectViewManager = {
     setCachedViewLimit: vi.fn(),
     setMemoryPressurePolicy: vi.fn(),
@@ -189,7 +182,6 @@ function createDeps(overrides?: Partial<ResourceProfileDeps>): ResourceProfileDe
   return {
     getPtyClient: () => mockPtyClient as unknown as PtyClient,
     getWorkspaceClient: () => mockWorkspaceClient as unknown as WorkspaceClient,
-    getHibernationService: () => mockHibernationService as unknown as HibernationService,
     getAllProjectViewManagers: () => [mockProjectViewManager as unknown as ProjectViewManager],
     getProjectStatsService: () => mockProjectStatsService as unknown as ProjectStatsService,
     getUserCachedViewLimit: () => 2,
@@ -390,7 +382,7 @@ describe("ResourceProfileService", () => {
     service.stop();
   });
 
-  it("calls workspace client and hibernation service on profile change", () => {
+  it("calls workspace client on profile change", () => {
     const deps = createDeps();
     const service = new ResourceProfileService(deps);
     mockIsOnBatteryPower.mockReturnValue(true);
@@ -401,7 +393,6 @@ describe("ResourceProfileService", () => {
     vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
 
     const ws = deps.getWorkspaceClient() as unknown as MockWorkspaceClient;
-    const hib = deps.getHibernationService() as unknown as MockHibernationService;
 
     expect(ws.updateMonitorConfig).toHaveBeenCalledWith({
       pollIntervalActive: RESOURCE_PROFILE_CONFIGS.efficiency.pollIntervalActive,
@@ -411,9 +402,6 @@ describe("ResourceProfileService", () => {
       backgroundGitWatcherCap: RESOURCE_PROFILE_CONFIGS.efficiency.backgroundGitWatcherCap,
       agentRecursiveWatcherCap: RESOURCE_PROFILE_CONFIGS.efficiency.agentRecursiveWatcherCap,
     });
-    expect(hib.setMemoryPressureThresholdMs).toHaveBeenCalledWith(
-      RESOURCE_PROFILE_CONFIGS.efficiency.memoryPressureInactiveMs
-    );
 
     const stats = deps.getProjectStatsService() as unknown as MockProjectStatsService;
     expect(stats.updatePollInterval).toHaveBeenCalledWith(
@@ -427,7 +415,6 @@ describe("ResourceProfileService", () => {
     const deps = createDeps({
       getPtyClient: () => null,
       getWorkspaceClient: () => null,
-      getHibernationService: () => null,
       getAllProjectViewManagers: () => [],
       getProjectStatsService: () => null,
     });

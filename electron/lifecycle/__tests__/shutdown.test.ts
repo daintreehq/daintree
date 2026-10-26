@@ -207,11 +207,6 @@ vi.mock("../../services/HelpSessionService.js", () => ({
   helpSessionService: helpSessionMock,
 }));
 
-const hibernationMock = vi.hoisted(() => ({ setPtyClient: vi.fn() }));
-vi.mock("../../services/HibernationService.js", () => ({
-  getHibernationService: vi.fn(() => hibernationMock),
-}));
-
 const idleTerminalMock = vi.hoisted(() => ({ stop: vi.fn() }));
 vi.mock("../../services/IdleTerminalNotificationService.js", () => ({
   getIdleTerminalNotificationService: vi.fn(() => idleTerminalMock),
@@ -1036,7 +1031,7 @@ describe("registerShutdownHandler", () => {
   // reactivation could race the async teardown. They now live in `before-quit`
   // so they are disposed exactly once at app quit time.
   describe("global service disposal moved from last-window-close (issue #8604)", () => {
-    it("disposes hibernation, idle-terminal, system-sleep, and the connectivity registry", async () => {
+    it("disposes idle-terminal, system-sleep, and the connectivity registry", async () => {
       const { beforeQuitCb } = await setup({});
       await beforeQuitCb(makeEvent());
 
@@ -1044,7 +1039,6 @@ describe("registerShutdownHandler", () => {
         expect(appMock.exit).toHaveBeenCalledWith(0);
       });
 
-      expect(hibernationMock.setPtyClient).toHaveBeenCalledExactlyOnceWith(null);
       expect(idleTerminalMock.stop).toHaveBeenCalledTimes(1);
       expect(systemSleepMock.dispose).toHaveBeenCalledTimes(1);
       expect(connectivityRegistryMock.dispose).toHaveBeenCalledTimes(1);
@@ -1147,8 +1141,8 @@ describe("registerShutdownHandler", () => {
     });
 
     it("still exits cleanly when a moved disposal throws", async () => {
-      hibernationMock.setPtyClient.mockImplementationOnce(() => {
-        throw new Error("hibernation boom");
+      idleTerminalMock.stop.mockImplementationOnce(() => {
+        throw new Error("idle-terminal boom");
       });
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
@@ -1160,11 +1154,11 @@ describe("registerShutdownHandler", () => {
       });
 
       expect(warnSpy).toHaveBeenCalledWith(
-        "[MAIN] HibernationService teardown failed:",
+        "[MAIN] IdleTerminalNotificationService.stop failed:",
         expect.any(Error)
       );
       // Sibling disposals still run.
-      expect(idleTerminalMock.stop).toHaveBeenCalled();
+      expect(systemSleepMock.dispose).toHaveBeenCalled();
       expect(notificationServiceMock.dispose).toHaveBeenCalled();
 
       warnSpy.mockRestore();
