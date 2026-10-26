@@ -1044,7 +1044,9 @@ class VoiceRecordingService {
   /** Hand the press that is down right now to the recording it started. */
   private claimHeldPress(): void {
     if (this.heldPress) this.heldPress.claimed = true;
-    else this.claimedAt = performance.now();
+    // Stamped either way: the press on record may be an older one whose keyup
+    // macOS swallowed, with this start's keydown still to arrive.
+    this.claimedAt = performance.now();
   }
 
   // Local audio, not transcripts: a session still draining can deliver its

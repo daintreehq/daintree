@@ -2792,6 +2792,16 @@ describe("VoiceRecordingService — tap-or-hold mode (#14626)", () => {
     expect(t.stopSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("hands the claim to the new press when an older press's keyup was swallowed", async () => {
+    const t = await setup("push-to-talk");
+    // Cmd+K Cmd+D with Cmd still held: the D keyup never arrives.
+    t.keydown();
+    t.advance(500);
+    await t.pressDispatchingFirst();
+    t.release("MetaLeft");
+    expect(t.stopSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("never takes a claim made before the keydown happened", async () => {
     const t = await setup("push-to-talk");
     // A palette start claims with no key down; a later chord press must not inherit it.
