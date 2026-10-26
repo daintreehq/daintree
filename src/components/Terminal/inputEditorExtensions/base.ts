@@ -291,7 +291,6 @@ export function buildInputBarTheme(theme: ITheme): Extension {
         left: "calc(0.5ch - 3px)",
         width: "6px",
         height: "2px",
-        borderRadius: "1px",
         background: `color-mix(in oklab, ${c.successColor} 82%, transparent)`,
       },
       '.cm-voice-corrected-gap[data-side="before"]::after': {
