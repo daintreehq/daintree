@@ -186,7 +186,7 @@ Two consumers: `DiagnosticsCollector`'s `workerGovernance` section (support bund
 
 ### Note on PortalManager
 
-`PortalManager` runs its own LRU eviction (`evictIfNeeded`, `electron/services/PortalManager.ts`) but does **not** read the resource profile — it's a parallel, profile-independent budget.
+`PortalManager` runs its own LRU eviction (`evictIfNeeded`, `electron/services/PortalManager.ts`) but does **not** read the resource profile — it's a parallel, profile-independent budget. It also releases any tab nobody has seen for an hour (`PORTAL_IDLE_RELEASE_MS`, #14538), timed wall-clock from when it was last on screen and checked every five minutes only while a tab is hidden. A tab playing audio, with devtools open, still loading or mid-restore is kept; the close goes through `beforeunload`, so a page that refuses stays live and is asked again an hour later. Each release logs `portal.idle-release` with `hiddenMs` and the tab's footprint across its renderer and out-of-process iframes, and the renderer rebuilds the tab at its latest URL and partition when it's next shown.
 
 ## Memory-pressure mitigation (ProcessMemoryMonitor)
 
