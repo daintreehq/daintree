@@ -347,7 +347,6 @@ export const CHANNEL_LEASE_POLICY = {
   "help:revoke-session": "driver",
   "help:take-pending-hibernation": "driver",
   "help:unmark-terminal": "free",
-  "hibernation:project-hibernated": "free",
   "host-files:get-picker-roots": "free",
   "host-files:list-directory": "free",
   "idle-background:closed": "free",

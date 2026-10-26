@@ -153,7 +153,6 @@ import type {
   IssueLinkTarget,
 } from "./forge.js";
 import type { TerminalConfig } from "./config.js";
-import type { HibernationProjectHibernatedPayload } from "./hibernation.js";
 import type { KeepAwakeState } from "./keepAwake.js";
 import type { IdleTerminalNotifyPayload } from "./idleTerminals.js";
 import type { IdleBackgroundClosedPayload } from "./idleBackgroundAutoClose.js";
@@ -1395,11 +1394,6 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   // Invoke methods come from GeneratedElectronAPI; the rest are renderer-only subscriptions.
   keepAwake: GeneratedElectronAPI["keepAwake"] & {
     onStateChanged(callback: (state: KeepAwakeState) => void): () => void;
-  };
-  hibernation: {
-    onProjectHibernated(
-      callback: (payload: HibernationProjectHibernatedPayload) => void
-    ): () => void;
   };
   // Channel is `idle-terminal:*` (singular) but the renderer surface uses
   // `idleTerminals` (plural). The preload opts out of the API codegen via

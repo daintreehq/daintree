@@ -213,8 +213,6 @@ export type {
   ProjectPresenceState,
   ProjectPresenceEntry,
   ProjectPresenceSnapshot,
-  // Hibernation types
-  HibernationProjectHibernatedPayload,
   // Idle terminal notification types
   IdleTerminalNotifyConfig,
   IdleTerminalNotifyPayload,

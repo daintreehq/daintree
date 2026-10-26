@@ -114,7 +114,6 @@ import type {
   TerminalResourceBatchPayload,
   BroadcastWriteResultPayload,
 } from "../pty-host.js";
-import type { HibernationProjectHibernatedPayload } from "./hibernation.js";
 import type { KeepAwakeState } from "./keepAwake.js";
 import type { IdleTerminalNotifyPayload } from "./idleTerminals.js";
 import type { IdleBackgroundClosedPayload } from "./idleBackgroundAutoClose.js";
@@ -2065,9 +2064,6 @@ export interface IpcEventMap {
    * re-reads the config it mirrors rather than trusting a pushed snapshot.
    */
   "config-bundle:imported": undefined;
-
-  // Hibernation events
-  "hibernation:project-hibernated": HibernationProjectHibernatedPayload;
 
   // Keep-awake events
   "keep-awake:state-changed": KeepAwakeState;

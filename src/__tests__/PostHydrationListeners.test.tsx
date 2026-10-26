@@ -6,7 +6,6 @@ import { render, cleanup } from "@testing-library/react";
 import { PostHydrationListeners } from "@/components/PostHydrationListeners";
 import { PERF_MARKS } from "@shared/perf/marks";
 
-const hibernation = vi.fn();
 const idleTerminal = vi.fn();
 const parkRelease = vi.fn();
 const diskSpace = vi.fn();
@@ -23,9 +22,6 @@ const hostMemoryPause = vi.fn();
 const keepAwake = vi.fn();
 const mark = vi.fn();
 
-vi.mock("@/hooks/useHibernationNotifications", () => ({
-  useHibernationNotifications: () => hibernation(),
-}));
 vi.mock("@/hooks/useIdleTerminalNotifications", () => ({
   useIdleTerminalNotifications: () => idleTerminal(),
 }));
@@ -69,7 +65,6 @@ vi.mock("@/utils/performance", () => ({
 }));
 
 const allHooks = [
-  hibernation,
   idleTerminal,
   parkRelease,
   diskSpace,

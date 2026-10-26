@@ -2197,18 +2197,6 @@ function buildElectronApi(): ElectronAPI {
       ): (() => void) => _typedOn(CHANNELS.KEEP_AWAKE_STATE_CHANGED, callback),
     },
 
-    hibernation: {
-      onProjectHibernated: (
-        callback: (payload: {
-          projectId: string;
-          projectName: string;
-          reason: "memory-pressure" | "user-initiated";
-          terminalsKilled: number;
-          timestamp: number;
-        }) => void
-      ): (() => void) => _typedOn(CHANNELS.HIBERNATION_PROJECT_HIBERNATED, callback),
-    },
-
     // Idle Terminal Notification API
     idleTerminals: {
       ...buildIdleTerminalPreloadBindings(_unwrappingInvoke),

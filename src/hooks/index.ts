@@ -10,7 +10,6 @@ export { useContextInjection } from "./useContextInjection";
 export type { UseContextInjectionReturn, InjectionStatus } from "./useContextInjection";
 
 export { useErrors } from "./useErrors";
-export { useHibernationNotifications } from "./useHibernationNotifications";
 export { useIdleBackgroundCloseNotifications } from "./useIdleBackgroundCloseNotifications";
 export { useDiskSpaceWarnings } from "./useDiskSpaceWarnings";
 
