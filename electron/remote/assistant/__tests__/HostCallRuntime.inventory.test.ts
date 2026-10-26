@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { HostProjectSummary } from "../../../../shared/types/ipc/remoteHosts.js";
 import { MAX_LISTED_PROJECTS } from "../../host/linkMethods.js";
 import { HostCallRuntime, type ObservedHost } from "../HostCallRuntime.js";
@@ -39,7 +39,7 @@ describe("HostCallRuntime.inventory (#14547)", () => {
   let hosts: ObservedHost[];
   let control: Set<string>;
   let remote: Map<string, HostProjectSummary[] | Error | "hang">;
-  let connect: ReturnType<typeof vi.fn>;
+  let connect: Mock<(hostId: string, timeoutMs: number) => Promise<unknown>>;
   let localProjects: HostProjectSummary[] | "hang";
   let runtime: HostCallRuntime;
 
@@ -48,7 +48,7 @@ describe("HostCallRuntime.inventory (#14547)", () => {
     control = new Set();
     remote = new Map();
     localProjects = summaries(2, "local");
-    connect = vi.fn(async () => undefined);
+    connect = vi.fn(async (_hostId: string, _timeoutMs: number): Promise<unknown> => undefined);
     runtime = new HostCallRuntime({
       // No caller at all: the snapshot is taken before any session exists.
       getSessionLane: () => null,
@@ -99,7 +99,11 @@ describe("HostCallRuntime.inventory (#14547)", () => {
       frontendAttached: true,
     });
     expect(h1).toMatchObject({ connection: "connected", control: true, projectTotal: 3 });
-    expect(h1?.projects).toHaveLength(3);
+    expect(h1?.projects).toEqual([
+      { projectId: "h1-0", name: "Project 0", frontendAttached: true },
+      { projectId: "h1-1", name: "Project 1", frontendAttached: false },
+      { projectId: "h1-2", name: "Project 2", frontendAttached: false },
+    ]);
     // Disconnected: named, never dialed, and no projects claimed.
     expect(h2).toMatchObject({ connection: "disconnected", control: true, projects: null });
     // Control off: its projects aren't read.
@@ -152,5 +156,33 @@ describe("HostCallRuntime.inventory (#14547)", () => {
     });
     const [h1] = (await runtime.inventory()).hosts;
     expect(h1).toMatchObject({ connection: "disconnected", projects: null, projectTotal: null });
+  });
+
+  it("drops a host removed, and the projects of one switched off, while the lists were read", async () => {
+    hosts = [observed("h1", "connected"), observed("h2", "connected")];
+    control = new Set(["h1", "h2"]);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    runtime.dispose();
+    runtime = new HostCallRuntime({
+      getSessionLane: () => null,
+      callerRun: () => null,
+      client: () => null,
+      hosts: () => hosts,
+      controlEnabled: (hostId) => control.has(hostId),
+      listHostProjects: async (hostId) => {
+        await gate;
+        return summaries(2, hostId);
+      },
+    });
+    const pending = runtime.inventory();
+    await Promise.resolve();
+    hosts = [observed("h2", "connected")];
+    control = new Set(["h1"]);
+    release();
+    const snapshot = await pending;
+    expect(snapshot.hosts).toEqual([
+      expect.objectContaining({ hostId: "h2", control: false, projects: null }),
+    ]);
   });
 });

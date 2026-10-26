@@ -82,10 +82,42 @@ function projectLine(project: ListedProject): string | null {
   return `  - \`${id}\`${name ? ` \`${name}\`` : ""}${open}`;
 }
 
+function moreLine(left: number): string {
+  return `  - …and ${left} more not listed (\`host.list\` pages them)`;
+}
+
+/** A host's heading, and the one line under it that always shows: why none are listed, or how many weren't. */
+interface PlannedHost {
+  host: HostInventoryHost;
+  line: string;
+  /** Null for a host whose projects are known; listing them decides its closing line. */
+  reason: string | null;
+  projects: readonly ListedProject[];
+  total: number;
+  reserved: number;
+}
+
+function planHost(host: HostInventoryHost): PlannedHost | null {
+  const id = cleanDisplayValue(host.hostId, MAX_ID_BYTES);
+  if (!id) return null;
+  const name = cleanDisplayValue(host.name, MAX_NAME_BYTES);
+  const line = `- \`${id}\`${name ? ` \`${name}\`` : ""}: ${hostState(host)}`;
+  // A host this Shell can't see now claims no projects, whatever it named before.
+  const known = host.projects !== null && (host.local || host.connection === "connected");
+  const projects = known ? (host.projects ?? []) : [];
+  const total = known ? Math.max(host.projectTotal ?? projects.length, projects.length) : 0;
+  const reason = known ? (total === 0 ? "  - no projects" : null) : `  - ${noProjectsReason(host)}`;
+  // Its worst closing line: every project unlisted.
+  const closing = reason ?? moreLine(total);
+  return { host, line, reason, projects, total, reserved: bytes(line) + bytes(closing) };
+}
+
 /**
- * The block body. Every host listed gets its line before any project does, and
- * each host's projects share what room is left evenly with the hosts after it,
- * so one machine with hundreds of projects can't crowd the others out.
+ * The block body, never over {@link MAX_HOST_INVENTORY_BYTES}. Each host's
+ * heading and closing line are reserved before any project is listed; a host
+ * whose reservation doesn't fit is counted rather than named. The room left is
+ * shared evenly with the hosts still to come, so one machine with hundreds of
+ * projects can't crowd the others out.
  */
 export function buildHostInventoryBlock(snapshot: HostInventorySnapshot): string {
   const head = [
@@ -99,56 +131,48 @@ export function buildHostInventoryBlock(snapshot: HostInventorySnapshot): string
     `Daintree rewrites this list into \`${HOST_INVENTORY_FILE}\` in your working folder every time it starts you, including when it reopens this conversation. If this conversation has been reopened since, the list above is stale: read that file, or call \`host.list\`.`,
     "",
   ];
+  const fixed = [...head, ...tail].reduce((sum, line) => sum + bytes(line), 0);
+  // Room for the count of hosts not named, at its longest.
+  const hostsMore = (count: number) => `- …and ${count} more hosts not listed`;
+  let room = MAX_HOST_INVENTORY_BYTES - fixed - bytes(hostsMore(snapshot.hosts.length));
 
-  const hosts: Array<{ host: HostInventoryHost; line: string }> = [];
+  const planned: PlannedHost[] = [];
   for (const host of snapshot.hosts) {
-    if (hosts.length >= MAX_INVENTORY_HOSTS) break;
-    const id = cleanDisplayValue(host.hostId, MAX_ID_BYTES);
-    if (!id) continue;
-    const name = cleanDisplayValue(host.name, MAX_NAME_BYTES);
-    hosts.push({ host, line: `- \`${id}\`${name ? ` \`${name}\`` : ""}: ${hostState(host)}` });
+    if (planned.length >= MAX_INVENTORY_HOSTS) break;
+    const plan = planHost(host);
+    if (!plan) continue;
+    if (plan.reserved > room) break;
+    room -= plan.reserved;
+    planned.push(plan);
   }
-  const unlistedHosts = snapshot.hosts.length - hosts.length;
-  if (hosts.length === 0) head.push("- No hosts could be read; call `host.list`.");
-  if (unlistedHosts > 0) tail.unshift(`- …and ${unlistedHosts} more hosts not listed`);
-
-  let room =
-    MAX_HOST_INVENTORY_BYTES -
-    [...head, ...tail].reduce((sum, line) => sum + bytes(line), 0) -
-    hosts.reduce((sum, { line }) => sum + bytes(line), 0);
+  const unlistedHosts = snapshot.hosts.length - planned.length;
+  if (snapshot.hosts.length === 0) head.push("- No hosts could be read; call `host.list`.");
 
   const body: string[] = [];
-  hosts.forEach(({ host, line }, index) => {
-    body.push(line);
-    const projects = host.projects;
-    // A host this Shell can't see now claims no projects, whatever it named before.
-    if (projects === null || (!host.local && host.connection !== "connected")) {
-      const reason = `  - ${noProjectsReason(host)}`;
-      room -= bytes(reason);
-      body.push(reason);
+  planned.forEach((plan, index) => {
+    body.push(plan.line);
+    if (plan.reason !== null) {
+      body.push(plan.reason);
       return;
     }
-    const total = Math.max(host.projectTotal ?? projects.length, projects.length);
-    const share = Math.floor(room / (hosts.length - index));
-    // Kept back for the "more" line, which names a count of at most a few digits.
-    let spend = 40;
+    const share = Math.floor(room / (planned.length - index));
+    let spent = 0;
     let listed = 0;
-    const lines: string[] = [];
-    for (const project of projects) {
+    for (const project of plan.projects) {
       if (listed >= MAX_INVENTORY_PROJECTS_PER_HOST) break;
       const entry = projectLine(project);
       if (!entry) continue;
-      if (spend + bytes(entry) > share) break;
-      spend += bytes(entry);
-      lines.push(entry);
+      if (spent + bytes(entry) > share) break;
+      spent += bytes(entry);
+      body.push(entry);
       listed++;
     }
-    if (total === 0) lines.push("  - no projects");
-    const left = total - listed;
-    if (left > 0) lines.push(`  - …and ${left} more not listed (\`host.list\` pages them)`);
-    for (const entry of lines) room -= bytes(entry);
-    body.push(...lines);
+    room -= spent;
+    const left = plan.total - listed;
+    // Never longer than the one reserved for it, which counted every project.
+    if (left > 0) body.push(moreLine(left));
   });
+  if (unlistedHosts > 0) body.push(hostsMore(unlistedHosts));
 
   return [...head, ...body, ...tail].join("\n");
 }

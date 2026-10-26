@@ -1831,35 +1831,43 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         }))
       : null;
     const read = this.deps.listHostProjects;
-    const remote = this.deps.hosts().map(async (seen): Promise<HostInventoryHost> => {
-      const control = this.deps.controlEnabled?.(seen.hostId) === true;
-      const connected = seen.connection.status === "connected";
-      const projects =
-        connected && control && read
-          ? await withinMs(
-              read(seen.hostId).catch(() => null),
-              INVENTORY_READ_MS,
-              null
-            )
-          : null;
-      // Observed again: a host that went while its list was read claims none.
-      const now = this.deps.hosts().find((host) => host.hostId === seen.hostId) ?? seen;
-      const stillConnected = now.connection.status === "connected";
+    const lists = new Map(
+      await Promise.all(
+        this.deps.hosts().map(async (seen) => {
+          const readable =
+            seen.connection.status === "connected" &&
+            this.deps.controlEnabled?.(seen.hostId) === true &&
+            read !== undefined;
+          const projects = readable
+            ? await withinMs(
+                read(seen.hostId).catch(() => null),
+                INVENTORY_READ_MS,
+                null
+              )
+            : null;
+          return [seen.hostId, projects] as const;
+        })
+      )
+    );
+    const here = localHost ? await localHost : null;
+    // Observed again once every read is in: a host removed meanwhile is gone,
+    // and one that dropped or was switched off meanwhile claims no projects.
+    const remote = this.deps.hosts().map((host): HostInventoryHost => {
+      const control = this.deps.controlEnabled?.(host.hostId) === true;
+      const listed = host.connection.status === "connected" && control;
+      const projects = listed ? (lists.get(host.hostId) ?? null) : null;
       return {
-        hostId: seen.hostId,
-        name: now.name,
-        connection: observedConnection(now.connection),
+        hostId: host.hostId,
+        name: host.name,
+        connection: observedConnection(host.connection),
         local: false,
         control,
-        projects: projects && stillConnected ? toListed(projects) : null,
+        projects: projects ? toListed(projects) : null,
         // A host sends at most this many and says nothing of the rest.
-        projectTotal:
-          projects && stillConnected && projects.length < MAX_LISTED_PROJECTS
-            ? projects.length
-            : null,
+        projectTotal: projects && projects.length < MAX_LISTED_PROJECTS ? projects.length : null,
       };
     });
-    const hosts = await Promise.all([...(localHost ? [localHost] : []), ...remote]);
+    const hosts = here ? [here, ...remote] : remote;
     return { takenAt: this.now(), hosts };
   }
 

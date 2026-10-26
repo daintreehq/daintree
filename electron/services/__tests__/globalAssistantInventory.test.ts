@@ -46,24 +46,32 @@ describe("buildHostInventoryBlock (#14547)", () => {
     const block = build([host()]);
     expect(block).toContain("2026-10-26T09:30:00.000Z");
     expect(block).toContain("`host.list` is the live answer (with `includeAgents`");
-    expect(block).toContain("reopens this conversation");
+    expect(block).toContain(
+      "If this conversation has been reopened since, the list above is stale: read that file, or call `host.list`."
+    );
+    expect(block).toContain("`host-inventory.md`");
   });
 
   it("lists this machine and each remote host with their state and projects in order", () => {
     const block = build([
       host(),
-      remote("h1"),
+      remote("h1", { projects: projects(2, "r"), projectTotal: 2 }),
       remote("h2", { control: false, projects: null, projectTotal: null }),
     ]);
     const lines = block.split("\n");
     const local = lines.indexOf("- `local` `greg-mbp`: this machine, assistant control on");
     expect(local).toBeGreaterThan(-1);
-    expect(lines[local + 1]).toBe("  - `p-0` `Project 0` (open in a window)");
-    expect(lines[local + 2]).toBe("  - `p-1` `Project 1`");
-    expect(block).toContain("- `h1` `h1-box`: connected, assistant control on");
-    expect(block).toContain("- `h2` `h2-box`: connected, assistant control off");
-    expect(block).toContain("projects not listed while assistant control is off");
-    expect(block.indexOf("`h1`")).toBeLessThan(block.indexOf("`h2`"));
+    expect(lines.slice(local, local + 8)).toEqual([
+      "- `local` `greg-mbp`: this machine, assistant control on",
+      "  - `p-0` `Project 0` (open in a window)",
+      "  - `p-1` `Project 1`",
+      "  - `p-2` `Project 2`",
+      "- `h1` `h1-box`: connected, assistant control on",
+      "  - `r-0` `Project 0` (open in a window)",
+      "  - `r-1` `Project 1`",
+      "- `h2` `h2-box`: connected, assistant control off",
+    ]);
+    expect(lines[local + 8]).toBe("  - projects not listed while assistant control is off");
   });
 
   it("shows a disconnected host as disconnected and claims no projects for it", () => {
@@ -82,6 +90,40 @@ describe("buildHostInventoryBlock (#14547)", () => {
     const listed = block.split("\n").filter((line) => /^ {2}- `p-\d+`/.test(line)).length;
     expect(listed).toBeGreaterThan(0);
     expect(block).toContain(`…and ${200 - listed} more not listed`);
+  });
+
+  it("stays under budget when long ids and names leave the closing line no slack", () => {
+    const long = (index: number, width: number, prefix: string) =>
+      `${prefix}${index}`.padEnd(width, "x");
+    const fat = (prefix: string, idWidth: number) =>
+      Array.from({ length: 200 }, (_, index) => ({
+        projectId: long(index, idWidth, prefix),
+        name: index < 9 ? "n".repeat(80) : "m".repeat(index === 9 ? 30 : 21),
+        frontendAttached: index < 10,
+      }));
+    for (const idWidth of [64, 100, 118, 120, 128]) {
+      const block = build([
+        host({ projects: fat("l", idWidth), projectTotal: 200 }),
+        remote("h1", { projects: fat("r", idWidth - 2), projectTotal: 200 }),
+      ]);
+      expect(bytes(block)).toBeLessThanOrEqual(MAX_HOST_INVENTORY_BYTES);
+      expect(block).toMatch(/…and \d+ more not listed/);
+    }
+  });
+
+  it("counts hosts it has no room to name rather than going over", () => {
+    const hosts = Array.from({ length: MAX_INVENTORY_HOSTS }, (_, index) =>
+      remote(`${index}`.padEnd(128, "h"), {
+        name: "n".repeat(80),
+        projects: projects(5000),
+        projectTotal: 5000,
+      })
+    );
+    const block = build(hosts);
+    expect(bytes(block)).toBeLessThanOrEqual(MAX_HOST_INVENTORY_BYTES);
+    const named = block.split("\n").filter((line) => line.startsWith("- `")).length;
+    expect(named).toBeLessThan(MAX_INVENTORY_HOSTS);
+    expect(block).toContain(`…and ${MAX_INVENTORY_HOSTS - named} more hosts not listed`);
   });
 
   it("counts projects past what the host itself sent", () => {

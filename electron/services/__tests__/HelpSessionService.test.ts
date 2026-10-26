@@ -869,13 +869,49 @@ describe("HelpSessionService", () => {
         const second = await service.provisionSession(globalInput());
         if (!second) throw new Error("expected result");
         expect(second.sessionPath).toBe(first.sessionPath);
-        for (const name of ["CLAUDE.md", "host-inventory.md"]) {
+        for (const name of ["CLAUDE.md", "AGENTS.md", "host-inventory.md"]) {
           const content = await fs.readFile(path.join(second.sessionPath, name), "utf-8");
           expect(content).toContain("`id-gamma`");
           expect(content).not.toContain("`id-alpha`");
           expect(content).toContain("2026-10-27T00:00:00.000Z");
-          if (name === "CLAUDE.md") expect(content.split(START)).toHaveLength(2);
+          if (name !== "host-inventory.md") expect(content.split(START)).toHaveLength(2);
         }
+      });
+
+      it("gives a Codex run the block and the sidecar it is told to read when reopened", async () => {
+        snapshot = withProjects(["alpha"]);
+        install();
+        const result = await service.provisionSession({ ...globalInput(), agentId: "codex" });
+        if (!result) throw new Error("expected result");
+        const agents = await fs.readFile(path.join(result.sessionPath, "AGENTS.md"), "utf-8");
+        expect(agents).toContain("`id-alpha`");
+        expect(agents).toContain("the list above is stale: read that file");
+        const sidecar = await fs.readFile(
+          path.join(result.sessionPath, "host-inventory.md"),
+          "utf-8"
+        );
+        expect(sidecar).toContain("`id-alpha`");
+      });
+
+      it("adds its resume hook beside the user's own hooks, once per provision", async () => {
+        const hooks = {
+          SessionStart: [{ matcher: "startup", hooks: [{ type: "command", command: "hello.sh" }] }],
+          PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "guard.sh" }] }],
+        };
+        mockLoadAssistantUserConfig.mockResolvedValue(emptyUserConfig({ claudeHooks: hooks }));
+        snapshot = withProjects(["alpha"]);
+        install();
+        await service.provisionSession(globalInput());
+        const result = await service.provisionSession(globalInput());
+        if (!result) throw new Error("expected result");
+        const settings = JSON.parse(
+          await fs.readFile(path.join(result.sessionPath, ".claude", "settings.json"), "utf-8")
+        );
+        expect(settings.hooks.PreToolUse).toEqual(hooks.PreToolUse);
+        expect(settings.hooks.SessionStart).toEqual([
+          ...hooks.SessionStart,
+          { matcher: "resume", hooks: [{ type: "command", command: "cat host-inventory.md" }] },
+        ]);
       });
 
       it("says the hosts couldn't be read when no runtime answers, rather than that there are none", async () => {
