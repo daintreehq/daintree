@@ -76,7 +76,10 @@ const rewrite =
   vi.fn<(request: { selectedText: string; instruction: string }) => Promise<RewriteOutcome>>();
 const correct = vi.fn();
 
-function stubElectron(openaiApiKey = "sk-key") {
+const windowListeners: Record<string, Array<(...args: unknown[]) => void>> = {};
+
+function stubElectron(openaiApiKey = "sk-key", recordingMode?: string) {
+  for (const event of Object.keys(windowListeners)) delete windowListeners[event];
   const electron = {
     voiceInput: {
       onTranscriptionDelta: vi.fn((cb: (payload: DeltaPayload) => void) => {
@@ -103,6 +106,7 @@ function stubElectron(openaiApiKey = "sk-key") {
         enabled: true,
         openaiApiKey,
         correctionEnabled: true,
+        ...(recordingMode ? { recordingMode } : {}),
       }),
       stop: vi.fn().mockResolvedValue(undefined),
       correct,
@@ -115,7 +119,10 @@ function stubElectron(openaiApiKey = "sk-key") {
   };
   vi.stubGlobal("window", {
     electron,
-    addEventListener: vi.fn(),
+    addEventListener: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
+      windowListeners[event] ??= [];
+      windowListeners[event].push(cb);
+    }),
     removeEventListener: vi.fn(),
     requestAnimationFrame: vi.fn(),
     cancelAnimationFrame: vi.fn(),
@@ -157,8 +164,8 @@ function fakeSelection(text: string) {
   };
 }
 
-async function setup(openaiApiKey?: string) {
-  stubElectron(openaiApiKey);
+async function setup(openaiApiKey?: string, recordingMode?: string) {
+  stubElectron(openaiApiKey, recordingMode);
   const { useVoiceRecordingStore } = await import("@/store/voiceRecordingStore");
   const { useTerminalInputStore } = await import("@/store/terminalInputStore");
   const { voiceRecordingService } = await import("../VoiceRecordingService");
@@ -503,5 +510,74 @@ describe("VoiceRecordingService — rewrite selection by voice (#14635)", () => 
       instruction: "shorter",
     });
     expect(failed.apply).toHaveBeenCalledWith("Shorter.");
+  });
+
+  // The rewrite key's press follows the recording mode like the dictation key (#14626).
+  async function setupRewritePress(recordingMode: string) {
+    const t = await setup(undefined, recordingMode);
+    const { keybindingService } = await import("@/services/KeybindingService");
+    vi.mocked(keybindingService.getEffectiveCombos).mockImplementation((actionId: string) =>
+      actionId === "voiceInput.rewriteSelection" ? ["Cmd+Shift+Alt+."] : []
+    );
+    vi.mocked(keybindingService.matchesEvent).mockImplementation(
+      (e: KeyboardEvent, combo: string) => combo === "Cmd+Shift+Alt+." && e.code === "Period"
+    );
+    vi.spyOn(t.service, "start").mockResolvedValue();
+    const stop = vi.spyOn(t.service, "stop").mockResolvedValue();
+    const selection = fakeSelection("make me shorter");
+    composer.source = {
+      terminalId: "panel-1",
+      hasFocus: () => true,
+      captureSelection: () => selection,
+    };
+    Reflect.set(t.service, "getComposerTarget", () => ({ panelId: "panel-1" }));
+
+    let now = 1_000;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const fire = (event: string, payload: unknown) => {
+      for (const listener of windowListeners[event] ?? []) listener(payload);
+    };
+    return {
+      ...t,
+      stop,
+      advance: (ms: number) => {
+        now += ms;
+      },
+      // The keydown, then the action it dispatches, whose session then begins.
+      press: async () => {
+        fire("keydown", { code: "Period", key: ".", repeat: false, metaKey: true, timeStamp: now });
+        await t.service.rewriteSelection();
+        t.recordInstruction(selection);
+      },
+      release: () => fire("keyup", { code: "Period" }),
+    };
+  }
+
+  it("stops the rewrite on the release of its key in push-to-talk mode", async () => {
+    const t = await setupRewritePress("push-to-talk");
+    await t.press();
+    t.release();
+    expect(t.stop).toHaveBeenCalledTimes(1);
+    vi.restoreAllMocks();
+  });
+
+  it("keeps a tapped rewrite recording in tap-or-hold mode", async () => {
+    const t = await setupRewritePress("tap-or-hold");
+    await t.press();
+    t.release();
+    expect(t.stop).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
+  });
+
+  it("stops a held rewrite that heard speech on the release of its key", async () => {
+    const t = await setupRewritePress("tap-or-hold");
+    await t.press();
+    const speech = { samples: 1_600, rms: 0.1, peak: 0.3, zeroFraction: 0 };
+    t.service["noteHeldPressAudio"](speech);
+    t.service["noteHeldPressAudio"](speech);
+    t.advance(1_000);
+    t.release();
+    expect(t.stop).toHaveBeenCalledTimes(1);
+    vi.restoreAllMocks();
   });
 });
