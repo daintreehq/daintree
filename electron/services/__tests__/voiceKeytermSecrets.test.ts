@@ -45,6 +45,19 @@ const CREDENTIALS: Record<string, string> = {
   "truncated GitHub token": "ghp_AbcDefGhi",
 };
 
+// Passwords with no shape of their own, given away only by the name or flag
+// beside them.
+const LEAKY_LINES: [label: string, line: string][] = [
+  ["a libpq password variable", "PGPASSWORD=hunter_two_x"],
+  ["a concatenated password name", "DBPASSWORD=hunter_two_x"],
+  ["a concatenated secret name", "SECRETKEY=my_value_here"],
+  ["a PascalCase password", "PGPASSWORD=CorrectHorseBattery"],
+  ["an abbreviated password name", "DB_PASS=hunter_two_x"],
+  ["a password flag", "mysql -u root --password hunter_two_x"],
+  ["a token flag", "deploy --token hunter_two_x --verbose"],
+  ["a credential flag in an argv array", `spawn("mysql", ["--password", "hunter_two_x"])`],
+];
+
 describe("isSecretShaped", () => {
   it.each(Object.entries(CREDENTIALS))("rejects a %s", (_label, credential) => {
     expect(isSecretShaped(credential)).toBe(true);
@@ -128,6 +141,7 @@ describe("holdsCredential", () => {
     ["a password starting with $", "password: $MapleRiver7"],
     ["a password wrapped in a call", `password = String("MapleRiver7")`],
     ["a base64url body", `${fakeBody(9, 44)}-${fakeBody(7, 45)}_${fakeBody(11, 46)}`],
+    ...LEAKY_LINES,
   ])("finds %s", (_label, text) => {
     expect(holdsCredential(text)).toBe(true);
   });
@@ -145,6 +159,10 @@ describe("holdsCredential", () => {
     "password: ${DB_PASSWORD}",
     "if (auth === expectedAuth) useSessionRouter();",
     "const run = (token) => useSessionRouter(token);",
+    "mysql -u root --password",
+    "  -t, --token string   use useSessionRouter",
+    "mysql --password $DB_PASSWORD",
+    "vitest run --reporter verbose useSessionRouter",
     "a".repeat(1000),
   ])("finds nothing in %s", (line) => {
     expect(holdsCredential(line)).toBe(false);
@@ -219,6 +237,16 @@ describe("redactSecretShapedLines", () => {
 
   it("leaves ordinary output alone", () => {
     const line = "src/services/voiceContextKeyterms.ts: extractTerminalIdentifiers passed";
+    expect(redactSecretShapedLines([line])).toEqual([line]);
+  });
+
+  it.each(LEAKY_LINES)("lets nothing of %s through", (_label, line) => {
+    const [out] = redactSecretShapedLines([line]);
+    expect(out).toBe("");
+  });
+
+  it("keeps an identifier on a line whose flags hold no credential", () => {
+    const line = "vitest run --reporter verbose useSessionRouter";
     expect(redactSecretShapedLines([line])).toEqual([line]);
   });
 });

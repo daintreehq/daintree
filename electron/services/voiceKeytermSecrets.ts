@@ -35,8 +35,12 @@ const CREDENTIAL_WORDS = new Set([
 ]);
 
 // Too common to blank on sight (`useAuthStore`), but a value assigned to one
-// is a credential: `Authorization: Basic …`, Docker's `"auth": "…"`.
-const ASSIGNED_CREDENTIAL_WORDS = new Set(["auth", "authorization"]);
+// is a credential: `Authorization: Basic …`, Docker's `"auth": "…"`, `DB_PASS=…`.
+const ASSIGNED_CREDENTIAL_WORDS = new Set(["auth", "authorization", "pass"]);
+
+// WORD_RE can't split an all-caps or all-lowercase run (`PGPASSWORD`,
+// `secretkey`), so a name holding a value is also searched for these.
+const CREDENTIAL_SUBSTRING_RE = /password|passwd|passphrase|secret|token|apikey|credential/;
 
 // "key" alone is too common (`onKeyDown`, `primaryKey`), so it only names a
 // credential after one of these, or at the end of an env-var name
@@ -88,6 +92,10 @@ const BLANKABLE_RUN_RE = /[A-Za-z0-9_\-+=]+/g;
 // at a boundary, which keeps a long run with no delimiter linear.
 const ASSIGNMENT_RE =
   /(?<![A-Za-z0-9_-])([A-Za-z0-9_-]{1,64})["']?[ \t]*(?:=(?![=>])|:(?!:))[ \t]*(["']?)([^\s"',;(]*)(\(\)?)?/g;
+// `--password hunter2`, `-token abc`, and an argv array's `"--token", "abc"`:
+// a flag whose value is the next argument.
+const FLAG_VALUE_RE =
+  /(?<![A-Za-z0-9_-])--?([A-Za-z][A-Za-z0-9_-]{0,63})["']?,?[ \t]+(["']?)([^\s"',;]*)/g;
 // Values that are code rather than a credential: `password: string`,
 // `MAX_TOKENS=8192`, `token = getToken()`, `secret: process.env.SECRET`,
 // `password: ${DB_PASSWORD}`. A call with arguments may be wrapping a literal,
@@ -175,13 +183,17 @@ function isCodeValue(value: string, call: string | undefined): boolean {
   return TYPE_WORDS.has(value.toLowerCase()) || MEMBER_CHAIN_RE.test(value);
 }
 
+// Looser than `namesCredential`, which also blanks names on sight: a name is
+// only judged this way when a value comes with it.
+function namesHeldCredential(name: string): boolean {
+  if (namesCredential(name) || CREDENTIAL_SUBSTRING_RE.test(name.toLowerCase())) return true;
+  return wordsOf(name).some((word) => ASSIGNED_CREDENTIAL_WORDS.has(word.toLowerCase()));
+}
+
 function assignsCredential(text: string): boolean {
   for (const match of text.matchAll(ASSIGNMENT_RE)) {
     const [, name, quote, value, call] = match;
-    const words = wordsOf(name).map((word) => word.toLowerCase());
-    const named =
-      namesCredential(name) || words.some((word) => ASSIGNED_CREDENTIAL_WORDS.has(word));
-    if (!named) continue;
+    if (!namesHeldCredential(name)) continue;
     if (quote) return true;
     // `password:` closing the line holds its value on the next one.
     if (!value) {
@@ -189,6 +201,20 @@ function assignsCredential(text: string): boolean {
       continue;
     }
     if (!isCodeValue(value, call)) return true;
+  }
+  return false;
+}
+
+// A shell argument is a literal, so unlike an assignment a dotted value isn't
+// taken for code. Help text's `--token string` and `--password $DB_PASSWORD`
+// still aren't credentials.
+function passesCredentialFlag(text: string): boolean {
+  for (const [, name, quote, value] of text.matchAll(FLAG_VALUE_RE)) {
+    if (!namesHeldCredential(name)) continue;
+    if (quote) return true;
+    if (!value || value.startsWith("-")) continue;
+    if (/^\d+$/.test(value) || ENV_REFERENCE_RE.test(value)) continue;
+    if (!TYPE_WORDS.has(value.toLowerCase())) return true;
   }
   return false;
 }
@@ -204,7 +230,7 @@ export function isSecretShaped(term: string): boolean {
 /**
  * Whether `text` holds a credential: a known secret format, a key-shaped run,
  * credentials in a URL or a `.netrc` line, or a value assigned to a
- * credential name.
+ * credential name or passed to a credential flag.
  */
 export function holdsCredential(text: string): boolean {
   if (findSecretInValue(text)) return true;
@@ -212,7 +238,7 @@ export function holdsCredential(text: string): boolean {
   for (const [run] of text.matchAll(CANDIDATE_RUN_RE)) {
     if (isCredentialShaped(run)) return true;
   }
-  return assignsCredential(text);
+  return assignsCredential(text) || passesCredentialFlag(text);
 }
 
 /**
