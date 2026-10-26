@@ -31,7 +31,13 @@ function timeline(pressedAt: number | null = null): VoiceSessionTimeline {
       now: () => clock,
       log,
       warn,
-      nextFrame: (callback) => frames.push(callback),
+      nextFrame: (callback) => {
+        frames.push(callback);
+        return () => {
+          const index = frames.indexOf(callback);
+          if (index >= 0) frames.splice(index, 1);
+        };
+      },
       onDone,
     },
     pressedAt
@@ -195,6 +201,25 @@ describe("VoiceSessionTimeline", () => {
     spoken.addDroppedQueued(3);
     spoken.finish("user");
     expect(logged()).toMatchObject({ audioNoText: false, charsCommitted: 12, droppedQueued: 3 });
+  });
+
+  it("asks for one frame per mark, and cancels it when disposed", () => {
+    const t = timeline();
+    t.markNextFrame("firstText");
+    t.markNextFrame("firstText");
+    t.markNextFrame("cue");
+    expect(frames).toHaveLength(2);
+    t.dispose();
+    expect(frames).toHaveLength(0);
+  });
+
+  it("still lets go of the session when the log write throws", () => {
+    log.mockImplementationOnce(() => {
+      throw new Error("log transport gone");
+    });
+    const t = timeline();
+    expect(() => t.finish("user")).toThrow("log transport gone");
+    expect(onDone).toHaveBeenCalledWith(t);
   });
 
   it("logs nothing after it is disposed", () => {

@@ -23,7 +23,8 @@ export interface VoiceSessionTimelineDeps {
   now: () => number;
   log: (message: string, context: Record<string, unknown>) => void;
   warn: (message: string, context?: Record<string, unknown>) => void;
-  nextFrame: (callback: () => void) => void;
+  /** Runs `callback` at the next animation frame; returns a cancel. */
+  nextFrame: (callback: () => void) => () => void;
   onDone: (timeline: VoiceSessionTimeline) => void;
 }
 
@@ -39,6 +40,7 @@ export class VoiceSessionTimeline {
   private origin: number;
   private originKind: "key" | "call" = "call";
   private readonly marks = new Map<Mark, number>();
+  private readonly pendingFrames = new Map<Mark, () => void>();
   private stopReason: VoiceStopReason | null = null;
   private correctionStartedAt: number | null = null;
   private correctionMs: number | null = null;
@@ -79,10 +81,20 @@ export class VoiceSessionTimeline {
     this.marks.set(name, this.deps.now());
   }
 
-  /** Marks `name` at the frame that will paint what was just committed. */
+  /**
+   * Marks `name` at the next animation frame: the store change that shows it
+   * has rendered by then, and the frame paints right after its callbacks. An
+   * approximation of "painted", and null for a window that never draws one.
+   */
   markNextFrame(name: Mark): void {
-    if (this.done || this.marks.has(name)) return;
-    this.deps.nextFrame(() => this.mark(name));
+    if (this.done || this.marks.has(name) || this.pendingFrames.has(name)) return;
+    this.pendingFrames.set(
+      name,
+      this.deps.nextFrame(() => {
+        this.pendingFrames.delete(name);
+        this.mark(name);
+      })
+    );
   }
 
   setProvider(provider: VoiceTranscriptionProvider): void {
@@ -140,11 +152,13 @@ export class VoiceSessionTimeline {
     this.tryLog();
   }
 
-  /** Drops the session without a line (module teardown). */
+  /** Stops recording; on its own (module teardown) it drops the session without a line. */
   dispose(): void {
     this.done = true;
     if (this.reportTimer !== null) clearTimeout(this.reportTimer);
     this.reportTimer = null;
+    for (const cancel of this.pendingFrames.values()) cancel();
+    this.pendingFrames.clear();
   }
 
   private tryLog(): void {
@@ -152,17 +166,23 @@ export class VoiceSessionTimeline {
     if (this.correctionStartedAt !== null && this.correctionMs === null) return;
     if (this.backend.state === "pending") return;
     this.dispose();
-    const summary = VoiceSessionSummarySchema.safeParse(this.buildSummary(this.stopReason));
-    if (summary.success) {
-      this.deps.log(VOICE_SESSION_SUMMARY_MESSAGE, { sessionId: this.sessionId, ...summary.data });
-    } else {
-      // Paths only: a rejected value is exactly what must stay out of the log.
-      this.deps.warn("[VoiceSession] Summary rejected", {
-        sessionId: this.sessionId,
-        fields: summary.error.issues.map((issue) => issue.path.join(".")),
-      });
+    try {
+      const summary = VoiceSessionSummarySchema.safeParse(this.buildSummary(this.stopReason));
+      if (summary.success) {
+        this.deps.log(VOICE_SESSION_SUMMARY_MESSAGE, {
+          sessionId: this.sessionId,
+          ...summary.data,
+        });
+      } else {
+        // Paths only: a rejected value is exactly what must stay out of the log.
+        this.deps.warn("[VoiceSession] Summary rejected", {
+          sessionId: this.sessionId,
+          fields: summary.error.issues.map((issue) => issue.path.join(".")),
+        });
+      }
+    } finally {
+      this.deps.onDone(this);
     }
-    this.deps.onDone(this);
   }
 
   private since(mark: Mark, from = this.origin): number | null {
