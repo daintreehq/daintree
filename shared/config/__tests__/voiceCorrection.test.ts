@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildCorrectionSystemPrompt, CORE_CORRECTION_PROMPT } from "../voiceCorrection.js";
+import {
+  buildCorrectionSystemPrompt,
+  buildRewriteSystemPrompt,
+  CORE_CORRECTION_PROMPT,
+} from "../voiceCorrection.js";
 
 describe("CORE_CORRECTION_PROMPT", () => {
   it("includes an explicit idempotency instruction", () => {
@@ -373,5 +377,13 @@ describe("buildCorrectionSystemPrompt target", () => {
 
   it("adds no target section without one", () => {
     expect(buildCorrectionSystemPrompt({})).not.toContain("TARGET:");
+  });
+
+  // A spoken rewrite instruction is never a command.
+  it("stays out of the rewrite prompt, which keeps the shared context", () => {
+    const prompt = buildRewriteSystemPrompt({ target, projectName: "Daintree" });
+    expect(prompt).not.toContain("TARGET:");
+    expect(prompt).not.toContain("COMMAND RULES:");
+    expect(prompt).toContain("CURRENT PROJECT:");
   });
 });

@@ -28,6 +28,7 @@ type MockTranscriptionEvent = {
   text?: string;
   itemId?: string;
   replace?: boolean;
+  endOfSpeech?: boolean;
   status?: string;
   message?: string;
 };
@@ -270,15 +271,19 @@ type StartHandler = (e: unknown, sessionId: string, options?: unknown) => Promis
 function completions() {
   return activeSent
     .filter((m) => m.channel === "voice-input:transcription-complete")
-    .map((m) => m.payload as { text: string; commandText?: string });
+    .map((m) => m.payload as { text: string; commandText?: string; send?: boolean });
 }
 
 describe("voiceInput — the target agent's commands", () => {
   let cleanup: () => void;
 
-  async function start(terminalId: string | undefined = TERMINAL) {
+  async function start(terminalId: string | undefined = TERMINAL, intent?: "rewrite") {
     const handleStart = getHandler("voice-input:start") as StartHandler;
-    await handleStart(fakeEvent, nextSessionId(), terminalId ? { terminalId } : undefined);
+    await handleStart(
+      fakeEvent,
+      nextSessionId(),
+      terminalId ? { terminalId, ...(intent ? { intent } : {}) } : undefined
+    );
   }
 
   beforeEach(() => {
@@ -330,6 +335,29 @@ describe("voiceInput — the target agent's commands", () => {
     const sent = completions();
     expect(sent.map((p) => p.text)).toEqual(["hello", "slash compact"]);
     expect(sent.every((p) => p.commandText === undefined)).toBe(true);
+  });
+
+  // The send comes off first, so it never reads as the command's argument.
+  it("still sends a dictated '/compact send it', with the command written as typed", async () => {
+    await start();
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "Slash compact, send it.",
+      itemId: "item-A",
+      endOfSpeech: true,
+    });
+    expect(completions()).toEqual([
+      expect.objectContaining({ text: "Slash compact", commandText: "/compact", send: true }),
+    ]);
+  });
+
+  it("keeps a rewrite instruction's opening command as words", async () => {
+    await start(TERMINAL, "rewrite");
+    emitTranscriptionEvent({ type: "complete", text: "Slash compact the wording." });
+    expect(completions()).toEqual([
+      expect.objectContaining({ text: "Slash compact the wording." }),
+    ]);
+    expect(completions()[0]).not.toHaveProperty("commandText");
   });
 
   it("writes nothing as a command for a terminal running no agent", async () => {

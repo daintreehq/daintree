@@ -356,6 +356,11 @@ function knownToken(token: string, vocabulary: VoiceCommandVocabulary): VoiceCom
   return vocabulary.entries.find((entry) => entry.token === token) ?? null;
 }
 
+/** Whether `text` opens with something shaped like a command or skill: `/compact`, `$github`. */
+export function opensWithVoiceCommand(text: string): boolean {
+  return commandShape(leadingWord(text)) !== null;
+}
+
 /** Whether `corrected` opens with a command or skill that `raw` didn't open with. */
 export function introducesVoiceCommand(raw: string, corrected: string): boolean {
   const lead = leadingWord(corrected);

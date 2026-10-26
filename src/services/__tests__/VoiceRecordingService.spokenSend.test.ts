@@ -70,6 +70,7 @@ type CompletePayload = {
   willCorrect: boolean;
   itemId?: string;
   send?: boolean;
+  commandText?: string;
 };
 
 const SESSION_ID = "session-1";
@@ -176,6 +177,24 @@ describe("VoiceRecordingService — spoken send (#14633)", () => {
     complete("login bug", "item-a", true);
 
     expect(seen).toEqual([{ draft: "Fix the login bug", liveText: "" }]);
+    expect(stop).not.toHaveBeenCalled();
+  });
+
+  it("sends a spoken opening command, however short, once it is written as typed", async () => {
+    const { voiceRecordingService, stop } = await setup();
+    const seen: string[] = [];
+    voiceRecordingService.onSpokenSend(PANEL_ID, undefined, () => seen.push(draftState.draft));
+
+    callbacks.complete!({
+      sessionId: SESSION_ID,
+      text: "Slash compact",
+      willCorrect: false,
+      itemId: "item-a",
+      commandText: "/compact",
+      send: true,
+    });
+
+    expect(seen).toEqual(["/compact"]);
     expect(stop).not.toHaveBeenCalled();
   });
 

@@ -6,6 +6,7 @@ import {
   buildVoiceCommandVocabulary,
   checkVoiceCommandEdit,
   introducesVoiceCommand,
+  opensWithVoiceCommand,
   rewriteSpokenCommand,
   voiceCommandBaseline,
   voiceCommandKeyterms,
@@ -360,5 +361,19 @@ describe("introducesVoiceCommand", () => {
     ["hello", "Hello.", false],
   ])("%j → %j: %s", (raw, corrected, expected) => {
     expect(introducesVoiceCommand(raw, corrected)).toBe(expected);
+  });
+});
+
+describe("opensWithVoiceCommand", () => {
+  it.each([
+    ["/compact", true],
+    ["  $plugin-creator on the repo", true],
+    ["/prompts:deploy now", true],
+    ["/etc/hosts is wrong", false],
+    ["$PATH is empty", false],
+    ["/ alone", false],
+    ["fix it", false],
+  ])("%j: %s", (text, expected) => {
+    expect(opensWithVoiceCommand(text)).toBe(expected);
   });
 });
