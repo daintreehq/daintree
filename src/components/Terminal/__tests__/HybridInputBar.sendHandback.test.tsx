@@ -27,11 +27,14 @@ import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { initBuiltInPanelKinds } from "@/panels/registry";
 import { registerPanelFocusHandler } from "@/components/Panel/panelFocusRegistry";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
+import { UI_EXIT_DURATION } from "@/lib/animationUtils";
 import { HybridInputBar } from "../HybridInputBar";
 import { _resetPaneFocusRequestsForTesting, requestPaneFocus } from "../paneFocusRequest";
 
 const WT_ID = "/repo/wt";
 const isMac = /Mac/.test(navigator.platform);
+/** Comfortably past the Expanded Editor's exit, after which the dialog hands focus back. */
+const PAST_DIALOG_EXIT_MS = UI_EXIT_DURATION * 2;
 const originalElectron = Object.getOwnPropertyDescriptor(window, "electron");
 
 // jsdom has no layout: CodeMirror measures text through Range rects it lacks.
@@ -423,7 +426,7 @@ describe("HybridInputBar hands the keyboard back to a terminal-first user's term
       flushFrames();
 
       await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 300));
+        await new Promise((resolve) => setTimeout(resolve, PAST_DIALOG_EXIT_MS));
       });
 
       expect(handler).toHaveBeenCalledWith("xterm");
