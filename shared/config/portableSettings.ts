@@ -95,10 +95,10 @@ export const PORTABLE_SETTINGS_CATEGORIES: readonly PortableSettingsCategory[] =
   {
     id: "notifications",
     label: "Notifications",
-    description: "Alerts, sounds and quiet hours",
+    description: "Alerts, sounds and quiet hours. Windows here keep this machine's",
     sections: ["notificationSettings"],
-    selectedByDefault: true,
-    device: false,
+    selectedByDefault: false,
+    device: true,
     inFile: true,
   },
   {

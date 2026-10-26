@@ -25,6 +25,7 @@ import { getRemoteService } from "./runtime.js";
 import {
   acceptLocalPushForRemoteView,
   installHybridSplits,
+  installNotificationPolicyPush,
   ViewVisibilityReporter,
 } from "./hybrid/index.js";
 import { installClipboardSplits } from "./hybrid/clipboard.js";
@@ -278,6 +279,8 @@ function startClient(options: StartRemoteHostsOptions): void {
       },
     })
   );
+  // This machine's alert choices, sent to every host it opens a session to (#14701).
+  teardowns.push(installNotificationPolicyPush(client.manager));
   // Host summaries and notifications: dials only hosts whose notifications are on.
   teardowns.push(
     installHostMetricsClient({

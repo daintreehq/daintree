@@ -721,7 +721,7 @@ export const SETTINGS_REGISTRY = [
     id: "notifications",
     scope: "global",
     group: "General",
-    owner: "mixed",
+    owner: "device",
     label: "Notifications",
     icon: <Bell className="w-4 h-4" />,
     importKind: "lazy",

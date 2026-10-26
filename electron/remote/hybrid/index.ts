@@ -14,6 +14,10 @@ export {
   unclassifiedPushName,
 } from "./eventsPush.js";
 export { NOTIFICATION_SHOW_METHOD, showHostNotification } from "./notifications.js";
+export {
+  installNotificationPolicyHost,
+  installNotificationPolicyPush,
+} from "./notificationPolicy.js";
 export { ViewVisibilityReporter } from "./visibility.js";
 
 type Dispatcher = Pick<IpcDispatcher<IpcContext>, "registerHybridSplit" | "allowHybridOverLink">;

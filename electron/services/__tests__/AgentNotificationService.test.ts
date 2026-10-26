@@ -124,7 +124,11 @@ function mockStore(
     if (key === "appState") return appState;
     return undefined;
   });
-  projectStoreMock.getEffectiveNotificationSettings.mockReturnValue(notifSettings);
+  // Another machine's global choices stand in for this one's, as ProjectStore does.
+  projectStoreMock.getEffectiveNotificationSettings.mockImplementation((choices?: object) => ({
+    ...notifSettings,
+    ...choices,
+  }));
 }
 
 function makePayload(state: AgentState, previousState: AgentState = "working") {
@@ -2719,5 +2723,256 @@ describe("notifications owned by a view on a remote Shell", () => {
       "notification:watch-navigate",
       { silent: true, ownerWebContentsId: REMOTE_OWNER, category: "completed" }
     );
+  });
+});
+
+describe("a remote Shell's own alert choices (#14701)", () => {
+  const REMOTE_OWNER = -7;
+  const SHELL_CHOICES = {
+    enabled: true,
+    completedEnabled: true,
+    waitingEnabled: true,
+    waitingEscalationEnabled: false,
+    waitingEscalationDelayMs: 180_000,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    _resetEndpointRegistryForTesting();
+    osDndServiceMock.getState.mockReturnValue(undefined);
+    agentNotificationService.initialize();
+    getEndpointRegistry().add({
+      endpointId: "remote:s1:view-1",
+      clientId: "client-a",
+      projectId: "p1",
+      kind: "remote-view",
+      handle: REMOTE_OWNER,
+      send: vi.fn(),
+      request: vi.fn(),
+      onClose: () => ({ dispose: () => undefined }),
+      isClosed: () => false,
+    });
+  });
+
+  afterEach(() => {
+    agentNotificationService.dispose();
+    vi.runOnlyPendingTimers();
+    vi.useRealTimers();
+    _resetEndpointRegistryForTesting();
+  });
+
+  function waitingFor(owner: number) {
+    agentNotificationService.syncWatchedPanels(owner, ["term-1"]);
+    events.emit("agent:state-changed", makePayload("working", "idle"));
+    events.emit("agent:state-changed", makePayload("waiting"));
+    vi.advanceTimersByTime(250);
+    agentNotificationService.syncWatchedPanels(owner, []);
+  }
+
+  function shownTo(owner: number): string[] {
+    return notificationServiceMock.showWatchNotification.mock.calls
+      .filter((call) => (call[4] as { ownerWebContentsId?: number }).ownerWebContentsId === owner)
+      .map((call) => call[0] as string);
+  }
+
+  it("alerts a Shell that wants an event though this host turned it, and everything, off", () => {
+    mockStore({ enabled: false, completedEnabled: false, waitingEnabled: false } as never);
+    agentNotificationService.setShellPolicy("client-a", SHELL_CHOICES);
+    expect(agentNotificationService.hasShellPolicy("client-a")).toBe(true);
+    expect(agentNotificationService.hasShellPolicy("client-b")).toBe(false);
+
+    waitingFor(REMOTE_OWNER);
+    expect(shownTo(REMOTE_OWNER)).toEqual(["Agent waiting"]);
+
+    // This host's own window still goes by this host's settings.
+    waitingFor(OWNER);
+    expect(shownTo(OWNER)).toEqual([]);
+  });
+
+  it("silences waiting for a Shell that turned it off, while this host's windows still page", () => {
+    mockStore({ waitingEnabled: true });
+    agentNotificationService.setShellPolicy("client-a", {
+      ...SHELL_CHOICES,
+      waitingEnabled: false,
+    });
+
+    waitingFor(REMOTE_OWNER);
+    waitingFor(OWNER);
+    expect(shownTo(REMOTE_OWNER)).toEqual([]);
+    expect(shownTo(OWNER)).toEqual(["Agent waiting"]);
+  });
+
+  it("raises an unanswered wait again on the Shell's delay, not this host's", () => {
+    mockStore({ waitingEnabled: true, waitingEscalationDelayMs: 600_000 });
+    agentNotificationService.setShellPolicy("client-a", {
+      ...SHELL_CHOICES,
+      waitingEscalationEnabled: true,
+      waitingEscalationDelayMs: 60_000,
+    });
+    agentNotificationService.syncWatchedPanels(REMOTE_OWNER, ["term-1"]);
+    events.emit("agent:state-changed", makePayload("waiting"));
+
+    vi.advanceTimersByTime(59_000);
+    expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1_001);
+    expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledWith(
+      "Agent still waiting",
+      expect.any(String),
+      expect.objectContaining({ ownerWebContentsId: REMOTE_OWNER, category: "escalation" })
+    );
+  });
+
+  it("leaves quiet hours to the Shell's own clock, and keeps this host's for its windows", () => {
+    // This host's quiet hours cover the whole day.
+    mockStore({
+      completedEnabled: true,
+      quietHoursEnabled: true,
+      quietHoursStartMin: 0,
+      quietHoursEndMin: 1439,
+    });
+    vi.setSystemTime(new Date(2026, 9, 26, 12, 0));
+    agentNotificationService.setShellPolicy("client-a", SHELL_CHOICES);
+
+    agentNotificationService.syncWatchedPanels(REMOTE_OWNER, ["term-1"]);
+    events.emit("agent:state-changed", makePayload("completed"));
+    vi.advanceTimersByTime(2_001);
+    expect(shownTo(REMOTE_OWNER)).toEqual(["Agent finished"]);
+
+    agentNotificationService.syncWatchedPanels(REMOTE_OWNER, []);
+    agentNotificationService.syncWatchedPanels(OWNER, ["term-1"]);
+    events.emit("agent:state-changed", makePayload("working", "completed"));
+    events.emit("agent:state-changed", makePayload("completed"));
+    vi.advanceTimersByTime(2_001);
+    expect(shownTo(OWNER)).toEqual([]);
+  });
+
+  it("finishes a completion by the Shell's choice when its debounce runs out", () => {
+    mockStore({ completedEnabled: false });
+    agentNotificationService.setShellPolicy("client-a", SHELL_CHOICES);
+    agentNotificationService.syncWatchedPanels(REMOTE_OWNER, ["term-1"]);
+    events.emit("agent:state-changed", makePayload("completed"));
+    vi.advanceTimersByTime(2_001);
+    expect(shownTo(REMOTE_OWNER)).toEqual(["Agent finished"]);
+
+    // Turned off on the Shell while the next one settles: it never goes out.
+    agentNotificationService.syncWatchedPanels(REMOTE_OWNER, ["term-1"]);
+    events.emit("agent:state-changed", makePayload("working", "completed"));
+    events.emit("agent:state-changed", makePayload("completed"));
+    agentNotificationService.setShellPolicy("client-a", {
+      ...SHELL_CHOICES,
+      completedEnabled: false,
+    });
+    vi.advanceTimersByTime(2_001);
+    expect(shownTo(REMOTE_OWNER)).toEqual(["Agent finished"]);
+  });
+
+  it("raises a wait again by the Shell's choice when the reminder comes due", () => {
+    mockStore({ waitingEnabled: false, waitingEscalationEnabled: false });
+    const escalating = { ...SHELL_CHOICES, waitingEscalationEnabled: true };
+    agentNotificationService.setShellPolicy("client-a", escalating);
+    agentNotificationService.syncWatchedPanels(REMOTE_OWNER, ["term-1"]);
+    events.emit("agent:state-changed", makePayload("waiting"));
+    vi.advanceTimersByTime(180_001);
+    expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledTimes(1);
+
+    // Turned off on the Shell before the next one comes due.
+    events.emit("agent:state-changed", makePayload("working", "waiting"));
+    events.emit("agent:state-changed", makePayload("waiting"));
+    agentNotificationService.setShellPolicy("client-a", {
+      ...escalating,
+      waitingEscalationEnabled: false,
+    });
+    vi.advanceTimersByTime(180_001);
+    expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops a buffered wait whose machine turned waiting off before the burst went out", () => {
+    mockStore({ waitingEnabled: true, soundEnabled: true });
+    agentNotificationService.setShellPolicy("client-a", SHELL_CHOICES);
+    agentNotificationService.syncWatchedPanels(REMOTE_OWNER, ["term-1"]);
+    events.emit("agent:state-changed", makePayload("waiting"));
+    agentNotificationService.setShellPolicy("client-a", {
+      ...SHELL_CHOICES,
+      waitingEnabled: false,
+    });
+    vi.advanceTimersByTime(250);
+    expect(shownTo(REMOTE_OWNER)).toEqual([]);
+  });
+
+  it("pages each machine for its own waiting agents when they ask at once", () => {
+    const terminals = [
+      ...DEFAULT_APP_STATE.terminals,
+      { ...DEFAULT_APP_STATE.terminals[0], id: "term-2", agentId: "agent-2" },
+    ];
+    mockStore({ waitingEnabled: true }, { terminals });
+    agentNotificationService.setShellPolicy("client-a", SHELL_CHOICES);
+    agentNotificationService.syncWatchedPanels(REMOTE_OWNER, ["term-1"]);
+    agentNotificationService.syncWatchedPanels(OWNER, ["term-2"]);
+
+    events.emit("agent:state-changed", makePayload("waiting"));
+    events.emit("agent:state-changed", {
+      ...makePayload("waiting"),
+      terminalId: "term-2",
+      agentId: "agent-2",
+    });
+    vi.advanceTimersByTime(250);
+
+    expect(shownTo(REMOTE_OWNER)).toEqual(["Agent waiting"]);
+    expect(shownTo(OWNER)).toEqual(["Agent waiting"]);
+  });
+
+  it("pages each machine for its own agents when Canopy reads two asks at once", () => {
+    const terminals = [
+      ...DEFAULT_APP_STATE.terminals,
+      { ...DEFAULT_APP_STATE.terminals[0], id: "term-2", agentId: "agent-2" },
+    ];
+    mockStore({}, { terminals });
+    agentNotificationService.setShellPolicy("client-a", SHELL_CHOICES);
+    agentNotificationService.syncWatchedPanels(REMOTE_OWNER, ["term-1"]);
+    agentNotificationService.syncWatchedPanels(OWNER, ["term-2"]);
+    // Past the boot grace, so the asks aren't taken for a restore's first reading.
+    vi.advanceTimersByTime(9_000);
+    for (const [terminalId, agentId] of [
+      ["term-1", "agent-1"],
+      ["term-2", "agent-2"],
+    ]) {
+      agentNotificationService.notifyCanopyAsk(
+        { terminalId, worktreeId: "wt-1", agentId, kind: "approval" },
+        () => []
+      );
+    }
+    vi.advanceTimersByTime(200);
+
+    const owners = notificationServiceMock.showNativeNotification.mock.calls.map((call) => [
+      call[0],
+      (call[2] as { ownerWebContentsId?: number }).ownerWebContentsId,
+    ]);
+    expect(owners).toEqual([
+      ["Agent waiting", REMOTE_OWNER],
+      ["Agent waiting", OWNER],
+    ]);
+  });
+
+  it("groups completions only within one machine", () => {
+    const terminals = [
+      ...DEFAULT_APP_STATE.terminals,
+      { ...DEFAULT_APP_STATE.terminals[0], id: "term-2", agentId: "agent-2" },
+    ];
+    mockStore({ completedEnabled: true }, { terminals });
+    agentNotificationService.setShellPolicy("client-a", SHELL_CHOICES);
+    agentNotificationService.syncWatchedPanels(REMOTE_OWNER, ["term-1"]);
+    agentNotificationService.syncWatchedPanels(OWNER, ["term-2"]);
+
+    events.emit("agent:state-changed", makePayload("completed"));
+    events.emit("agent:state-changed", {
+      ...makePayload("completed"),
+      terminalId: "term-2",
+      agentId: "agent-2",
+    });
+    vi.advanceTimersByTime(2_001 + 500);
+
+    expect(shownTo(REMOTE_OWNER)).toEqual(["Agent finished"]);
+    expect(shownTo(OWNER)).toEqual(["Agent finished"]);
   });
 });

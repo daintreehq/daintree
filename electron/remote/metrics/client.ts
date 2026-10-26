@@ -82,6 +82,11 @@ export interface HostMetricsClientOptions {
   emit(event: HostMetricsEvent): void;
   /** Present an opted-in host's attention event in one view; false when no view took it. */
   deliverAttention(event: HostAttentionEvent): boolean;
+  /**
+   * This machine's own verdict on a host's waiting agent (#14701): dropped,
+   * inbox only, or announced. Announced when absent.
+   */
+  waitingPolicy?(): "silent" | "quiet" | "announce";
   /** This machine's fleet and worktree reads, for the "local" host. */
   local: {
     listFleetTargets(): Promise<HostFleetTargetList>;
@@ -497,6 +502,9 @@ export class HostMetricsClient {
       const descriptor = this.options.registry.get(hostId);
       // Opt-in per host, and off until the user turns it on.
       if (descriptor?.notificationsEnabled !== true) return null;
+      // This screen's choices decide, before the notice counts against the host's share.
+      const policy = this.options.waitingPolicy?.() ?? "announce";
+      if (policy === "silent") return null;
       // The host's one notice budget, and its names shown as text, never as layout.
       if (!admitHostNotice(hostId)) return null;
       this.options.deliverAttention({
@@ -508,7 +516,8 @@ export class HostMetricsClient {
         projectId: payload.projectId ?? null,
         projectName: payload.projectName === null ? null : displaySafeText(payload.projectName),
         agentName: payload.agentName === null ? null : displaySafeText(payload.agentName),
-        quiet: payload.quiet,
+        // A host from before #14701 may still have judged it quiet by its own hours.
+        quiet: policy === "quiet" || payload.quiet,
       });
       return null;
     });

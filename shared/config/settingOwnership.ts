@@ -6,9 +6,9 @@
  *   plugins, forge, run history, per-project state. A remote window reads and
  *   writes the connected host's value, and its settings page names the host.
  * - `device`: the screen, keyboard and this machine — theme, keybindings,
- *   terminal appearance, input and scrollback, window geometry, GPU, voice,
- *   privacy, updates, crash recovery and the host list itself. Always this
- *   machine's.
+ *   terminal appearance, input and scrollback, notifications, window geometry,
+ *   GPU, voice, privacy, updates, crash recovery and the host list itself.
+ *   Always this machine's.
  *
  * Main derives its ownership tables from this (`electron/storeOwnership.ts`)
  * and holds them total over the store schemas, so a store key or field that
@@ -125,31 +125,11 @@ export const SETTING_CATALOG = {
       userConfig: host,
       worktreeConfig: host,
       agentSettings: hostGlobalOrProject,
-      // The host decides when its agents notify, so the policy (what notifies,
-      // escalation, quiet hours) is the host's. How a notification reaches this
-      // person (sounds, the flash, how the bell groups them) is this screen's.
-      notificationSettings: {
-        fields: {
-          enabled: host,
-          completedEnabled: host,
-          waitingEnabled: host,
-          waitingEscalationEnabled: host,
-          waitingEscalationDelayMs: host,
-          workingPulseEnabled: host,
-          quietHoursEnabled: host,
-          quietHoursStartMin: host,
-          quietHoursEndMin: host,
-          quietHoursWeekdays: host,
-          soundEnabled: device,
-          completedSoundFile: device,
-          waitingSoundFile: device,
-          escalationSoundFile: device,
-          workingPulseSoundFile: device,
-          uiFeedbackSoundEnabled: device,
-          flashEnabled: device,
-          groupByContext: device,
-        },
-      },
+      // Which events alert, when they escalate, quiet hours, and how they reach this
+      // person are about whoever is at this screen, not the host doing the work. The
+      // host still detects the events; a Shell's own choices decide which of them
+      // alert it (#14701), and a host's windows use the host's.
+      notificationSettings: device,
       userAgentRegistry: host,
       agentUpdateSettings: host,
       keybindingOverrides: device,

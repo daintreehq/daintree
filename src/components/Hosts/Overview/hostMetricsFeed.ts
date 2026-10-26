@@ -9,11 +9,10 @@ const HOST_ATTENTION_TOAST_MS = 12_000;
 
 /**
  * Present an opted-in host's "agent waiting" through the ordinary tiers:
- * toast when this window is focused, inbox otherwise. The source host already
- * applied its own policy (off, quiet hours); this window's settings may be a
- * third host's, so only its focus and session mute apply here. Main already
- * checked the opt-in and chose this view, and one it paged for with a banner
- * goes only to the inbox.
+ * toast when this window is focused, inbox otherwise. Main already judged it
+ * by this machine's settings (off, quiet hours), checked the opt-in and chose
+ * this view, so only its focus and session mute apply here; one main paged
+ * for with a banner goes only to the inbox.
  */
 export function presentHostAttention(event: HostAttentionEvent): void {
   const who = event.agentName ?? "An agent";

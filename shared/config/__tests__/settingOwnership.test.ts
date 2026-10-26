@@ -32,13 +32,13 @@ describe("settings catalog lookup", () => {
     const leaves: SettingPath[] = [
       "remoteHostsPreferences",
       "terminalConfig.fontSize",
-      "notificationSettings.groupByContext",
+      "appState.sidebarWidth",
     ];
     for (const path of leaves) expect(() => settingDeclaration(path), path).not.toThrow();
 
     const undeclared = () => [
       // @ts-expect-error a split key has no owner of its own
-      settingOwner("notificationSettings"),
+      settingOwner("appState"),
       // @ts-expect-error not a field the catalog declares
       settingOwner("terminalConfig.nope"),
       // @ts-expect-error a whole key has no fields
@@ -51,7 +51,7 @@ describe("settings catalog lookup", () => {
 
   it("refuses a split key's bare path, an unknown path, and prototype keys", () => {
     for (const path of [
-      "notificationSettings",
+      "appState",
       "terminalConfig",
       "terminalConfig.nope",
       "nope",

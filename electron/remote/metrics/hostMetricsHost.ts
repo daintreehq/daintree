@@ -68,7 +68,10 @@ export interface MetricsHostDeps {
   worktreesChangedDelayMs?: number;
   /** Told when one of this host's agents goes from working to waiting. */
   onAgentWaiting(listener: (payload: WaitingEvent) => void): () => void;
-  /** This host's own notification settings: its policy decides, not the Shell's window. */
+  /**
+   * This host's own notification settings, which decide only for a Shell that
+   * never sent its own choices (one from before #14701).
+   */
   notificationSettings(): Pick<
     NotificationSettings,
     | "enabled"
@@ -78,6 +81,8 @@ export interface MetricsHostDeps {
     | "quietHoursEndMin"
     | "quietHoursWeekdays"
   >;
+  /** Whether the Shell decides which of this host's agents alert it, by its own settings. */
+  shellDecides(clientId: string): boolean;
   now(): number;
 }
 
@@ -93,9 +98,10 @@ export type WaitingEvent = Omit<AttentionPayload, "quiet" | "projectId"> & {
 };
 
 /**
- * This host's verdict on a waiting agent: not announced at all when its user
- * turned waiting notifications off, quiet (inbox only) during its quiet hours.
- * A Shell showing another host must not decide this from that host's settings.
+ * One machine's verdict on a waiting agent from its own settings: not
+ * announced at all with waiting notifications off, quiet (inbox only) during
+ * its quiet hours. A Shell judges each host's agents by its own (#14701); a
+ * host judges for a Shell from before that, which can't.
  */
 export function waitingPolicy(
   settings: ReturnType<MetricsHostDeps["notificationSettings"]>,
@@ -105,7 +111,23 @@ export function waitingPolicy(
   return isScheduledQuietNow(settings, now) ? "quiet" : "announce";
 }
 
-/** One reminder per agent per window: a flapping FSM must not page a Shell repeatedly. */
+/** This host's own verdict; one it can't read announces nothing. */
+function hostWaitingPolicy(
+  deps: Pick<MetricsHostDeps, "notificationSettings">,
+  now: number
+): ReturnType<typeof waitingPolicy> {
+  try {
+    return waitingPolicy(deps.notificationSettings(), new Date(now));
+  } catch (error) {
+    const suppressedCount = logLimiter.take("read-notification-settings");
+    if (suppressedCount !== null) {
+      logger.warn("Couldn't read notification settings", { error, suppressedCount });
+    }
+    return "silent";
+  }
+}
+
+/** One reminder per agent per window and Shell: a flapping FSM must not page a Shell repeatedly. */
 export const ATTENTION_COOLDOWN_MS = 60_000;
 
 function postSummary(
@@ -240,31 +262,31 @@ export function installHostMetricsHostWith(
 
   const offWaiting = deps.onAgentWaiting((event) => {
     const now = deps.now();
-    let policy: ReturnType<typeof waitingPolicy>;
-    try {
-      policy = waitingPolicy(deps.notificationSettings(), new Date(now));
-    } catch (error) {
-      const suppressedCount = logLimiter.take("read-notification-settings");
-      if (suppressedCount !== null) {
-        logger.warn("Couldn't read notification settings", { error, suppressedCount });
-      }
-      return;
-    }
-    if (policy === "silent") return;
-    const payload: AttentionPayload = { ...event, quiet: policy === "quiet" };
-    const last = lastAttention.get(payload.terminalId);
-    if (last !== undefined && now - last < ATTENTION_COOLDOWN_MS) return;
-    lastAttention.set(payload.terminalId, now);
-    if (lastAttention.size > 1000) {
-      for (const [terminalId, at] of lastAttention) {
-        if (now - at >= ATTENTION_COOLDOWN_MS) lastAttention.delete(terminalId);
-      }
-    }
+    // Read once, and only for a Shell that leaves the verdict to this host.
+    let hostPolicy: ReturnType<typeof waitingPolicy> | undefined;
     for (const ctx of server.sessions) {
       if (!ctx.session.isOpen) continue;
+      // Per Shell: one this host held an agent back from isn't then held
+      // back by the reminder another Shell was sent.
+      const key = `${ctx.client.clientId}\0${event.terminalId}`;
+      const last = lastAttention.get(key);
+      if (last !== undefined && now - last < ATTENTION_COOLDOWN_MS) continue;
+      let quiet = false;
+      if (!deps.shellDecides(ctx.client.clientId)) {
+        hostPolicy ??= hostWaitingPolicy(deps, now);
+        if (hostPolicy === "silent") continue;
+        quiet = hostPolicy === "quiet";
+      }
+      lastAttention.set(key, now);
+      const payload: AttentionPayload = { ...event, quiet };
       ctx.session.call(MetricsLinkMethod.ATTENTION, payload).catch(() => {
         // A Shell that can't take it now has nothing to retry: the agent's state is on screen.
       });
+    }
+    if (lastAttention.size > 1000) {
+      for (const [key, at] of lastAttention) {
+        if (now - at >= ATTENTION_COOLDOWN_MS) lastAttention.delete(key);
+      }
     }
   });
 
@@ -322,15 +344,23 @@ export function installProcessInventoryHost(
 
 /** Wire the real sampler, fleet and worktree reads and agent-state events into a host server. */
 export async function installHostMetricsHost(server: MetricsSessionSource): Promise<() => void> {
-  const [{ getLocalSummaryLoop }, ops, { events }, { projectStore }, { getPtyClient }, registry] =
-    await Promise.all([
-      import("./localLoop.js"),
-      import("./hostOps.js"),
-      import("../../services/events.js"),
-      import("../../services/ProjectStore.js"),
-      import("../../window/serviceRefs.js"),
-      import("../../../shared/config/agentRegistry.js"),
-    ]);
+  const [
+    { getLocalSummaryLoop },
+    ops,
+    { events },
+    { projectStore },
+    { getPtyClient },
+    registry,
+    { agentNotificationService },
+  ] = await Promise.all([
+    import("./localLoop.js"),
+    import("./hostOps.js"),
+    import("../../services/events.js"),
+    import("../../services/ProjectStore.js"),
+    import("../../window/serviceRefs.js"),
+    import("../../../shared/config/agentRegistry.js"),
+    import("../../services/AgentNotificationService.js"),
+  ]);
   return installHostMetricsHostWith(server, {
     loop: getLocalSummaryLoop(),
     listFleetTargets: ops.listLocalFleetTargets,
@@ -359,6 +389,7 @@ export async function installHostMetricsHost(server: MetricsSessionSource): Prom
       });
     },
     notificationSettings: () => projectStore.getEffectiveNotificationSettings(),
+    shellDecides: (clientId) => agentNotificationService.hasShellPolicy(clientId),
     now: Date.now,
   });
 }

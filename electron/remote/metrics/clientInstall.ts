@@ -8,10 +8,12 @@ import { CHANNELS } from "../../ipc/channels.js";
 import { createLogger } from "../../utils/logger.js";
 import { getAllAppWebContents } from "../../window/webContentsRegistry.js";
 import { getWindowRegistry } from "../../window/windowRef.js";
+import { store } from "../../store.js";
 import { setHostAgentsSource } from "../client/initClient.js";
 import { showHostAttentionBanner } from "../hybrid/notifications.js";
 import { registerRemoteService } from "../runtime.js";
 import { HostMetricsClient, type HostMetricsClientOptions } from "./client.js";
+import { waitingPolicy } from "./hostMetricsHost.js";
 import {
   listLocalFleetTargets,
   listLocalWorktrees,
@@ -68,7 +70,7 @@ function deliverToOneView(
 /**
  * Whether this screen is paged with a banner for an attention event: no
  * window here has focus, and none shows that host, whose own notifications
- * reach it. The host's quiet hours keep it to the inbox.
+ * reach it. This machine's quiet hours keep it to the inbox.
  */
 function pagesNatively(
   event: HostAttentionEvent,
@@ -133,6 +135,8 @@ export function installHostMetricsClient(options: InstallHostMetricsClientOption
       for (const wc of getAllAppWebContents()) sendTo(wc, event);
     },
     deliverAttention,
+    // Judged by this machine's settings, as its own agents' waits are (#14701).
+    waitingPolicy: () => waitingPolicy(store.get("notificationSettings"), new Date()),
     local: {
       listFleetTargets: listLocalFleetTargets,
       submitFleet: submitLocalFleet,

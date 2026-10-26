@@ -394,52 +394,23 @@ describe("settings splits", () => {
     expect(listener).toHaveBeenCalledWith(expect.anything(), undefined);
   });
 
-  it("merges notification settings: policy from the host, sound and presentation from here", async () => {
-    const { invoke } = setup(
-      () => ({
-        enabled: false,
-        waitingEnabled: false,
-        quietHoursEnabled: true,
-        soundEnabled: false,
-        completedSoundFile: "host.mp3",
-      }),
-      () => ({
-        enabled: true,
-        waitingEnabled: true,
-        quietHoursEnabled: false,
-        soundEnabled: true,
-        completedSoundFile: "local.mp3",
-        flashEnabled: true,
-      })
-    );
-    await expect(invoke(CHANNELS.NOTIFICATION_SETTINGS_GET, [])).resolves.toEqual({
-      enabled: false,
-      waitingEnabled: false,
-      quietHoursEnabled: true,
-      soundEnabled: true,
-      completedSoundFile: "local.mp3",
-      flashEnabled: true,
-    });
-  });
-
-  it("divides a notification settings update between the two machines", async () => {
-    const forward = vi.fn(() => undefined);
-    const { invoke, listener } = setup(forward, () => undefined);
+  it("keeps notification settings on this machine, alert choices included", async () => {
+    const forward = vi.fn();
+    const local = { enabled: true, waitingEnabled: false, quietHoursEnabled: true };
+    const { invoke, listener } = setup(forward, () => local);
+    await expect(invoke(CHANNELS.NOTIFICATION_SETTINGS_GET, [])).resolves.toEqual(local);
     await invoke(CHANNELS.NOTIFICATION_SETTINGS_SET, [
       { soundEnabled: false, waitingEnabled: true, quietHoursStartMin: 60 },
     ]);
-    expect(listener).toHaveBeenCalledWith(expect.anything(), { soundEnabled: false });
-    expect(forward).toHaveBeenCalledWith(CHANNELS.NOTIFICATION_SETTINGS_SET, [
-      { waitingEnabled: true, quietHoursStartMin: 60 },
-    ]);
-  });
-
-  it("keeps a sound-only notification settings update on this machine", async () => {
-    const forward = vi.fn(() => undefined);
-    const { invoke, listener } = setup(forward, () => undefined);
-    await invoke(CHANNELS.NOTIFICATION_SETTINGS_SET, [{ flashEnabled: false }]);
-    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenLastCalledWith(expect.anything(), {
+      soundEnabled: false,
+      waitingEnabled: true,
+      quietHoursStartMin: 60,
+    });
     expect(forward).not.toHaveBeenCalled();
+    // The machine at the keyboard decides which of a host's events alert it (#14701).
+    expect(STORE_KEY_OWNERSHIP.notificationSettings).toBe("device");
+    expect(HYBRID_HOST_LEGS).not.toContain(CHANNELS.NOTIFICATION_SETTINGS_SET);
   });
 
   it("keeps keep-awake on each machine", async () => {

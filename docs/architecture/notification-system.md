@@ -125,7 +125,7 @@ Persist v1→v2 (`migrate` at `src/store/slices/notificationHistorySlice.ts`) ad
 
 `supersedeKey` retires a prior inbox row when a later notify carries the same key (resolving-event pairs like "disconnected" → "reconnected"); `correlationId` threads conversational entries. They are independent axes.
 
-**Quiet hours** are backfilled by store **migration 017** (`electron/services/migrations/017-add-notification-quiet-hours.ts`, version 17) which adds `quietHoursEnabled/StartMin/EndMin/Weekdays` to `notificationSettings`. The renderer mirrors them into `useNotificationSettingsStore` and evaluates `isScheduledQuietNow` (`shared/utils/quietHours.ts`) in `notify()`.
+**Quiet hours** are backfilled by store **migration 017** (`electron/services/migrations/017-add-notification-quiet-hours.ts`, version 17) which adds `quietHoursEnabled/StartMin/EndMin/Weekdays` to `notificationSettings`. The renderer mirrors them into `useNotificationSettingsStore` and evaluates `isScheduledQuietNow` (`shared/utils/quietHours.ts`) in `notify()`. Notification settings are always the machine at the keyboard's: a window attached to a remote host reads and writes this machine's, and this machine applies its own quiet hours, on its own clock, to what a host sends it (#14701; [Remote hosts](./remote-hosts.md), Notifications).
 
 ## Main-process services
 
@@ -134,7 +134,7 @@ The renderer `notify()` covers in-app surfaces. The main process owns OS-native 
 | Service | File | Responsibility |
 | --- | --- | --- |
 | `notificationService` | `electron/services/NotificationService.ts` | Window title `(N) Daintree` + macOS dock badge; OS-native banner via `Notification`; click-to-navigate `showWatchNotification` |
-| `AgentNotificationService` | `electron/services/AgentNotificationService.ts` | Completion/waiting notifications + working-pulse / all-clear sounds from agent-state events; debounce/burst/boot grace windows; consults quiet hours + OS-DND |
+| `AgentNotificationService` | `electron/services/AgentNotificationService.ts` | Completion/waiting notifications + working-pulse / all-clear sounds from agent-state events; debounce/burst/boot grace windows; consults quiet hours + OS-DND; a remote Shell's views go by that Shell's own alert choices |
 | `IdleTerminalNotificationService` | `electron/services/IdleTerminalNotificationService.ts` | Fires when an agent sits idle past a per-project threshold (15–1440 min); coordinates with `SystemSleepService` |
 | `WindowsStoreNotifierService` | `electron/services/WindowsStoreNotifierService.ts` | Polls the update feed (~8h) for Store builds and surfaces an update-available signal |
 | `OsDndService` | `electron/services/OsDndService.ts` | Surfaces OS Do-Not-Disturb / Focus state to the renderer |
