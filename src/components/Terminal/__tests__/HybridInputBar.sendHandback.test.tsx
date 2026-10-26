@@ -331,7 +331,10 @@ describe("HybridInputBar hands the keyboard back to a terminal-first user's term
       const { view, type, pressEnter } = mounted;
       await type("dictated words");
       act(() => {
-        useVoiceRecordingStore.setState({ status: "recording", activeTarget: { panelId: "term-1" } });
+        useVoiceRecordingStore.setState({
+          status: "recording",
+          activeTarget: { panelId: "term-1" },
+        });
       });
       let finishStop!: () => void;
       vi.spyOn(voiceRecordingService, "stop").mockImplementation(async () => {
@@ -376,7 +379,10 @@ describe("HybridInputBar hands the keyboard back to a terminal-first user's term
       const finishStop = await dictateThenEnter(mounted);
       await finishStop();
       act(() => {
-        useVoiceRecordingStore.setState({ status: "recording", activeTarget: { panelId: "term-1" } });
+        useVoiceRecordingStore.setState({
+          status: "recording",
+          activeTarget: { panelId: "term-1" },
+        });
       });
 
       await mounted.settle(true);
