@@ -7,10 +7,10 @@ import {
   isSecretShaped,
   redactSecretShapedLines,
 } from "./voiceKeytermSecrets.js";
+import { MAX_DICTIONARY_KEYTERMS, MAX_KEYTERMS } from "../../shared/config/voiceKeyterms.js";
 
 const P = "[VoiceKeyterms]";
 
-const MAX_KEYTERMS = 50;
 const TERMINAL_TIER_CAP = 30;
 // Deepgram nova-3 rejects any keyterm longer than 100 chars with an HTTP 400
 // that fails the WebSocket upgrade, so cap every term at the source.
@@ -377,12 +377,16 @@ export async function assembleKeyterms(opts: KeytermAssemblyOpts): Promise<strin
     return true;
   }
 
-  // Priority 1: User custom dictionary (highest priority). These are the user's
+  // Priority 1: User custom dictionary. Newest first, because a term is usually
+  // added right after recognition failed on it. Capped below MAX_KEYTERMS so
+  // project and branch terms keep their reserved slots. These are the user's
   // own entries, so they skip the secret filter the derived tiers go through.
-  for (const term of customDictionary) {
-    const trimmed = term.trim();
-    if (trimmed.length >= 2 && !/^\d+$/.test(trimmed)) {
-      add(trimmed);
+  let dictionaryAdded = 0;
+  for (let i = customDictionary.length - 1; i >= 0; i--) {
+    if (dictionaryAdded >= MAX_DICTIONARY_KEYTERMS) break;
+    const trimmed = customDictionary[i]!.trim();
+    if (trimmed.length >= 2 && !/^\d+$/.test(trimmed) && add(trimmed)) {
+      dictionaryAdded++;
     }
   }
 

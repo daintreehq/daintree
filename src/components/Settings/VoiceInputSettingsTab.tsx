@@ -37,6 +37,7 @@ import { actionService } from "@/services/ActionService";
 import { KbdChord } from "@/components/ui/Kbd";
 import { voiceErrorLogFields } from "@shared/utils/voiceLogFields";
 import { VOICE_LANGUAGES } from "@shared/config/voiceLanguages";
+import { MAX_DICTIONARY_KEYTERMS } from "@shared/config/voiceKeyterms";
 import { CORE_CORRECTION_PROMPT, VOICE_DICTATION_AI_MODEL } from "@shared/config/voiceCorrection";
 import type {
   VoiceInputSettings,
@@ -64,8 +65,6 @@ const PROVIDER_PRIVACY: Record<VoiceTranscriptionProvider, string> = {
   openai: `Microphone audio is streamed over an encrypted connection to OpenAI for transcription using your API key. Audio is not used for model training. OpenAI may retain audio in abuse-monitoring logs for up to 30 days. ${RECOGNITION_HINTS_PRIVACY}`,
   deepgram: `Microphone audio is streamed over an encrypted connection to Deepgram for transcription using your API key. Deepgram does not retain streaming audio or transcripts by default. ${RECOGNITION_HINTS_PRIVACY}`,
 };
-
-const DICTIONARY_LIMIT = 100;
 
 const DEFAULT_SETTINGS: VoiceInputSettings = {
   enabled: false,
@@ -1244,7 +1243,9 @@ function DictionaryGroup({
         label="Terms"
         description={
           words.length > 0
-            ? `${words.length} of ${DICTIONARY_LIMIT} terms`
+            ? words.length > MAX_DICTIONARY_KEYTERMS
+              ? `${words.length} terms. The newest ${MAX_DICTIONARY_KEYTERMS} are sent with each dictation`
+              : `${words.length} ${words.length === 1 ? "term" : "terms"}, all sent with each dictation`
             : "Add product names, APIs or jargon the transcription keeps getting wrong"
         }
         layout="stacked"
