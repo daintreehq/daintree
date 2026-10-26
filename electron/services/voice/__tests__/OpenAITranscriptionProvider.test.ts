@@ -3056,13 +3056,14 @@ describe("OpenAITranscriptionProvider — reconnect replay (#14605)", () => {
   }
 
   /** The socket's outbound audio and commit traffic, as markers and "commit". */
-  function wire(socket: MockWebSocket): Array<number | "commit" | "clear"> {
-    return socket.sentJson().flatMap((p) => {
+  type WireEntry = number | "commit" | "clear";
+  function wire(socket: MockWebSocket): WireEntry[] {
+    return socket.sentJson().flatMap<WireEntry>((p) => {
       if (p.type === "input_audio_buffer.append") {
         return [Buffer.from(p.audio as string, "base64").readUInt8(0)];
       }
-      if (p.type === "input_audio_buffer.commit") return ["commit" as const];
-      if (p.type === "input_audio_buffer.clear") return ["clear" as const];
+      if (p.type === "input_audio_buffer.commit") return ["commit"];
+      if (p.type === "input_audio_buffer.clear") return ["clear"];
       return [];
     });
   }
