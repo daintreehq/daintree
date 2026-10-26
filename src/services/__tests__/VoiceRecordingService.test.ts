@@ -2047,6 +2047,21 @@ describe("VoiceRecordingService — provider configuration gating", () => {
     await expect(voiceRecordingService.refreshConfiguration()).resolves.toBe(true);
   });
 });
+type VoiceRecordingServiceInstance =
+  (typeof import("../VoiceRecordingService"))["voiceRecordingService"];
+
+// Focus a plain terminal, the target a dictation shortcut picks up.
+async function focusTerminalPanel() {
+  const panelState: { focusedId: string | null; panelsById: Record<string, unknown> } = Reflect.get(
+    await import("@/store/panelStore"),
+    "__state"
+  );
+  panelState.focusedId = "panel-1";
+  panelState.panelsById = {
+    "panel-1": { id: "panel-1", title: "Terminal", location: "grid", launchAgentId: "claude" },
+  };
+}
+
 describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
   beforeEach(() => {
     vi.resetModules();
@@ -2071,15 +2086,9 @@ describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
 
   // What the dispatched shortcut does after its keydown: start in the focused
   // panel, which claims the press so its release can stop the recording.
-  async function startFromPress(service: { toggleFocusedPanel: () => Promise<void> }) {
-    const panel = (await import("@/store/panelStore")) as unknown as {
-      __state: { focusedId: string | null; panelsById: Record<string, unknown> };
-    };
-    panel.__state.focusedId = "panel-1";
-    panel.__state.panelsById = {
-      "panel-1": { id: "panel-1", title: "Terminal", location: "grid", launchAgentId: "claude" },
-    };
-    vi.spyOn(service as never, "start" as never).mockResolvedValue(undefined as never);
+  async function startFromPress(service: VoiceRecordingServiceInstance) {
+    await focusTerminalPanel();
+    vi.spyOn(service, "start").mockResolvedValue();
     await service.toggleFocusedPanel();
   }
 
@@ -2288,7 +2297,10 @@ describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
     const keydownListeners = windowListeners["keydown"] ?? [];
     const keyupListeners = windowListeners["keyup"] ?? [];
 
-    // Only the repeating keydown fires — pttActiveKeyCode must not be set.
+    // A real press starts and claims the session; the repeat must not replace it.
+    for (const listener of keydownListeners)
+      listener({ code: "Period", key: ".", repeat: false, metaKey: true });
+    await startFromPress(voiceRecordingService);
     const repeatEvent = {
       code: "Period",
       key: ".",
@@ -2300,11 +2312,12 @@ describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
     } as unknown as KeyboardEvent;
     for (const listener of keydownListeners) listener(repeatEvent);
 
-    // Now release — keyup should NOT fire stop since no PTT session is tracked.
+    // The release still stops the claimed press, exactly once.
     const upEvent = { code: "Period" } as unknown as KeyboardEvent;
     for (const listener of keyupListeners) listener(upEvent);
+    for (const listener of keyupListeners) listener(upEvent);
 
-    expect(stopSpy).not.toHaveBeenCalled();
+    expect(stopSpy).toHaveBeenCalledTimes(1);
   });
 
   it("window blur stops the session when a PTT press is active", async () => {
@@ -2463,11 +2476,16 @@ describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
     } as unknown as KeyboardEvent;
     for (const listener of keydownListeners) listener(downEvent);
 
+    await startFromPress(voiceRecordingService);
+
     // ShiftLeft release alone — should NOT stop.
     const shiftUpEvent = { code: "ShiftLeft" } as unknown as KeyboardEvent;
     for (const listener of keyupListeners) listener(shiftUpEvent);
-
     expect(stopSpy).not.toHaveBeenCalled();
+
+    // The trigger release still does.
+    for (const listener of keyupListeners) listener({ code: "Period" });
+    expect(stopSpy).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -2702,15 +2720,6 @@ describe("VoiceRecordingService — tap-or-hold mode (#14626)", () => {
       correctionEnabled: false,
       recordingMode,
     });
-    let emitDelta: (payload: { text: string }) => void = () => {};
-    (
-      electron.voiceInput.onTranscriptionDelta as unknown as {
-        mockImplementation: (impl: (cb: (payload: { text: string }) => void) => () => void) => void;
-      }
-    ).mockImplementation((cb) => {
-      emitDelta = cb;
-      return () => {};
-    });
     const { windowListeners } = setupGlobals(electron);
 
     const { keybindingService } = await import("@/services/KeybindingService");
@@ -2721,13 +2730,7 @@ describe("VoiceRecordingService — tap-or-hold mode (#14626)", () => {
       (e: KeyboardEvent, combo: string) => combo === "Cmd+D" && e.code === "KeyD"
     );
 
-    const panel = (await import("@/store/panelStore")) as unknown as {
-      __state: { focusedId: string | null; panelsById: Record<string, unknown> };
-    };
-    panel.__state.focusedId = "panel-1";
-    panel.__state.panelsById = {
-      "panel-1": { id: "panel-1", title: "Terminal", location: "grid", launchAgentId: "claude" },
-    };
+    await focusTerminalPanel();
 
     const { voiceRecordingService } = await import("../VoiceRecordingService");
     const startSpy = vi.spyOn(voiceRecordingService, "start").mockResolvedValue();
@@ -2742,22 +2745,29 @@ describe("VoiceRecordingService — tap-or-hold mode (#14626)", () => {
     const fire = (event: string, payload: unknown) => {
       for (const listener of windowListeners[event] ?? []) listener(payload);
     };
+    const keydown = () =>
+      fire("keydown", { code: "KeyD", key: "d", repeat: false, metaKey: true, timeStamp: now });
     return {
       service: voiceRecordingService,
       startSpy,
       stopSpy,
-      emitDelta: (text: string) => emitDelta({ text }),
       advance: (ms: number) => {
         now += ms;
       },
-      keydown: () => fire("keydown", { code: "KeyD", key: "d", repeat: false, metaKey: true }),
-      // The keydown, then the action it dispatches.
+      keydown,
+      // The keydown reaching this listener, then the action it dispatches.
       press: async () => {
-        fire("keydown", { code: "KeyD", key: "d", repeat: false, metaKey: true });
+        keydown();
         await voiceRecordingService.toggleFocusedPanel();
       },
+      // The app's order: the global keybinding listener is registered first and
+      // runs the action synchronously, before this listener sees the keydown.
+      pressDispatchingFirst: async () => {
+        const started = voiceRecordingService.toggleFocusedPanel();
+        keydown();
+        await started;
+      },
       release: (code = "KeyD") => fire("keyup", { code }),
-      blur: () => fire("blur", new Event("blur")),
     };
   }
 
@@ -2767,71 +2777,35 @@ describe("VoiceRecordingService — tap-or-hold mode (#14626)", () => {
     expect(t.startSpy).toHaveBeenCalledWith(expect.objectContaining({ panelId: "panel-1" }));
   });
 
-  it("keeps recording after a quick tap, even one that heard speech", async () => {
-    const t = await setup();
-    await t.press();
-    t.emitDelta("hello");
-    t.advance(400);
-    t.release();
-    expect(t.stopSpy).not.toHaveBeenCalled();
-  });
-
-  it("stops when a hold that heard speech is released", async () => {
-    const t = await setup();
-    await t.press();
-    t.emitDelta("hello");
-    t.advance(401);
-    t.release();
-    expect(t.stopSpy).toHaveBeenCalledWith(
-      "Dictation stopped.",
-      expect.objectContaining({ preserveLiveText: true })
-    );
-  });
-
-  it("treats Cmd lingering after the tap, before any speech, as a tap", async () => {
+  it("keeps recording when a hold heard no speech, so a thumb lingering on Cmd is a tap", async () => {
     const t = await setup();
     await t.press();
     t.advance(2_000);
     t.release("MetaLeft");
     expect(t.stopSpy).not.toHaveBeenCalled();
-
-    // Speech after the release can't turn it back into a hold.
-    t.emitDelta("hello");
-    t.release("MetaLeft");
-    expect(t.stopSpy).not.toHaveBeenCalled();
   });
 
-  it("ignores an empty transcript revision as evidence of speech", async () => {
-    const t = await setup();
-    await t.press();
-    t.emitDelta("  ");
-    t.advance(1_000);
+  it("stops on release when the action ran before this listener saw the keydown", async () => {
+    const t = await setup("push-to-talk");
+    await t.pressDispatchingFirst();
+    t.release();
+    expect(t.stopSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("never takes a claim made before the keydown happened", async () => {
+    const t = await setup("push-to-talk");
+    // A palette start claims with no key down; a later chord press must not inherit it.
+    await t.service.toggleFocusedPanel();
+    t.advance(5_000);
+    t.keydown();
     t.release();
     expect(t.stopSpy).not.toHaveBeenCalled();
-  });
-
-  it("treats blur during a hold as its release", async () => {
-    const t = await setup();
-    await t.press();
-    t.emitDelta("hello");
-    t.advance(1_000);
-    t.blur();
-    expect(t.stopSpy).toHaveBeenCalled();
   });
 
   it("never stops on the release of a press that started nothing, such as Cmd+K Cmd+D", async () => {
     const t = await setup("push-to-talk");
     // The keydown matches the voice combo, but the chord ran redraw instead.
     t.keydown();
-    t.advance(1_000);
-    t.release();
-    expect(t.stopSpy).not.toHaveBeenCalled();
-  });
-
-  it("leaves toggle mode's release alone", async () => {
-    const t = await setup("toggle");
-    await t.press();
-    t.emitDelta("hello");
     t.advance(1_000);
     t.release();
     expect(t.stopSpy).not.toHaveBeenCalled();

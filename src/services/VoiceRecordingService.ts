@@ -41,6 +41,7 @@ import {
   OPENING_CHUNK_WINDOW,
   hasRealSignal,
   isMicLive,
+  isSpeechLevel,
   measurePcm16Chunk,
   summarizeOpeningChunks,
   type PcmChunkStats,
@@ -275,7 +276,7 @@ interface HeldPress {
   code: string;
   pressedAt: number;
   claimed: boolean;
-  speechHeard: boolean;
+  speechChunks: number;
 }
 
 class VoiceRecordingService {
@@ -310,6 +311,11 @@ class VoiceRecordingService {
   // `claimed` once that press started (or resumed) a recording, so only its
   // release can end it. Cleared on release, stop, window blur, or Escape.
   private heldPress: HeldPress | null = null;
+  // When a start claimed a press that hadn't reached the keydown listener yet:
+  // the global keybinding listener can be registered first, and dispatch runs
+  // the action synchronously. The keydown takes the claim if it came after the
+  // event was created.
+  private claimedAt: number | null = null;
   private unsubscribers: Array<() => void> = [];
   private isStoppingSession = false;
   private stopPromise: Promise<void> | null = null;
@@ -342,6 +348,9 @@ class VoiceRecordingService {
   private static readonly MIC_SILENCE_GRACE_MS = 3_000;
   // Longer than this between press and release is a hold, not a tap.
   private static readonly HOLD_THRESHOLD_MS = 400;
+  // ~200ms of speech-level audio during a hold before its release stops it,
+  // so a click or a cough while a thumb lingers on Cmd doesn't count.
+  private static readonly HOLD_SPEECH_CHUNKS = 2;
   private micSilenceTimeoutId: ReturnType<typeof setTimeout> | null = null;
   // Owner of the silence countdown, so resume can re-arm it for the same
   // capture after a pause cancelled it.
@@ -423,7 +432,6 @@ class VoiceRecordingService {
           // decoration renders them outside the doc model so the editor's
           // history records a single transaction per utterance (#9172).
         }
-        if (delta.trim() !== "") this.noteSpeechHeard();
         useVoiceRecordingStore.getState().appendDelta(delta, itemId, replace);
       })
     );
@@ -803,11 +811,13 @@ class VoiceRecordingService {
         ...keybindingService.getEffectiveCombos("voiceInput.rewriteSelection"),
       ].some((combo) => keybindingService.matchesEvent(e, combo));
       if (!matches) return;
+      const claimed = this.claimedAt !== null && this.claimedAt >= e.timeStamp;
+      this.claimedAt = null;
       this.heldPress = {
         code: e.code,
         pressedAt: performance.now(),
-        claimed: false,
-        speechHeard: false,
+        claimed,
+        speechChunks: 0,
       };
     };
     window.addEventListener("keydown", handlePttKeyDown, { capture: true });
@@ -1034,10 +1044,13 @@ class VoiceRecordingService {
   /** Hand the press that is down right now to the recording it started. */
   private claimHeldPress(): void {
     if (this.heldPress) this.heldPress.claimed = true;
+    else this.claimedAt = performance.now();
   }
 
-  private noteSpeechHeard(): void {
-    if (this.heldPress?.claimed) this.heldPress.speechHeard = true;
+  // Local audio, not transcripts: a session still draining can deliver its
+  // text after the next press has started.
+  private noteHeldPressAudio(stats: PcmChunkStats): void {
+    if (this.heldPress?.claimed && isSpeechLevel(stats)) this.heldPress.speechChunks++;
   }
 
   /**
@@ -1052,7 +1065,8 @@ class VoiceRecordingService {
     if (!press?.claimed) return;
     if (this.recordingMode === "tap-or-hold") {
       const heldMs = performance.now() - press.pressedAt;
-      if (heldMs <= VoiceRecordingService.HOLD_THRESHOLD_MS || !press.speechHeard) return;
+      const heardSpeech = press.speechChunks >= VoiceRecordingService.HOLD_SPEECH_CHUNKS;
+      if (heldMs <= VoiceRecordingService.HOLD_THRESHOLD_MS || !heardSpeech) return;
     } else if (this.recordingMode !== "push-to-talk") {
       return;
     }
@@ -1612,9 +1626,7 @@ class VoiceRecordingService {
           });
         }
         if (!firstLiveChunk && isMicLive(stats)) firstLiveChunk = arrivedChunks;
-        if (hasRealSignal(stats) && !this.isStartRequestStale(startRequestId)) {
-          this.noteSpeechHeard();
-        }
+        if (!this.isStartRequestStale(startRequestId)) this.noteHeldPressAudio(stats);
         if (!openingAudio.logged) {
           openingAudio.chunks.push(stats);
           if (openingAudio.chunks.length >= OPENING_CHUNK_WINDOW) {

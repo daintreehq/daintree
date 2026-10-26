@@ -28,8 +28,13 @@ describe("migration038 — tap-or-hold dictation default", () => {
     });
   });
 
-  it("leaves push-to-talk alone", () => {
-    const initial = { voiceInput: { enabled: true, recordingMode: "push-to-talk" } };
+  it.each([
+    ["push-to-talk", { enabled: true, recordingMode: "push-to-talk" }],
+    ["already tap-or-hold", { enabled: true, recordingMode: "tap-or-hold" }],
+    ["missing", { enabled: true }],
+    ["unknown", { enabled: true, recordingMode: "hold" }],
+  ])("leaves any stored mode but toggle alone (%s)", (_label, voiceInput) => {
+    const initial = { voiceInput };
     expect(run(initial)).toEqual(initial);
   });
 
