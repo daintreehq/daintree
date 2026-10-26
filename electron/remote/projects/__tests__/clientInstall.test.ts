@@ -6,6 +6,17 @@ vi.mock("../../../services/projectAcrossHosts/index.js", () => ({
       remotes: [{ name: "origin", url: "https://github.com/daintreehq/daintree.git" }],
       committedProjectId: null,
     }),
+    find: async () => [
+      {
+        projectId: "l1",
+        path: "/Users/greg/daintree",
+        name: "daintree",
+        remotes: [{ name: "origin", url: "https://github.com/daintreehq/daintree.git" }],
+        source: "registered",
+        matchedBy: "remote-url",
+        lastOpenedAt: null,
+      },
+    ],
   }),
 }));
 
@@ -150,6 +161,96 @@ describe("createHostSwitchService", () => {
         toHostIds: ["local"],
       })
     ).rejects.toMatchObject({ code: "HOST_DISCONNECTED" });
+    expect(connectAndWait).not.toHaveBeenCalled();
+  });
+
+  it("finds the window's project's copy on the host it is switching to, without dialling either", async () => {
+    const connectAndWait = vi.fn(async () => "ready" as never);
+    const remotes = [{ name: "origin", url: "https://github.com/daintreehq/daintree.git" }];
+    const studio3 = {
+      isOpen: true,
+      call: vi.fn(async (method: string) =>
+        method === "projects.identify"
+          ? { remotes, committedProjectId: "c-1" }
+          : [
+              {
+                projectId: "p3",
+                path: "/srv/daintree",
+                name: "daintree",
+                remotes,
+                source: "registered",
+                matchedBy: "remote-url",
+                lastOpenedAt: null,
+              },
+              // The same committed id, but no shared remote: another repository.
+              {
+                projectId: "p4",
+                path: "/srv/fork",
+                name: "fork",
+                remotes: [{ name: "origin", url: "https://github.com/someone/fork.git" }],
+                source: "registered",
+                matchedBy: "committed-id",
+                lastOpenedAt: null,
+              },
+              {
+                projectId: null,
+                path: "/srv/scan/daintree",
+                name: "daintree",
+                remotes,
+                source: "on-disk",
+                matchedBy: "remote-url",
+                lastOpenedAt: null,
+              },
+            ]
+      ),
+    };
+    const service = createHostSwitchService({
+      client: {
+        connectAndWait,
+        getWindowHost: vi.fn(() => ({ hostId: "local" }) as never),
+        list: vi.fn(
+          () =>
+            [
+              { descriptor: { id: "studio-03", name: "Studio 3" } },
+              { descriptor: { id: "studio-04", name: "Studio 4" } },
+            ] as never
+        ),
+      },
+      sessionFor: (hostId) => (hostId === "studio-03" ? (studio3 as never) : null),
+    });
+    await expect(
+      service.copiesOn({ hostId: "local", projectId: "p1" }, "studio-03")
+    ).resolves.toEqual([{ projectId: "p3", name: "daintree", path: "/srv/daintree" }]);
+    expect(studio3.call).toHaveBeenCalledWith(
+      "projects.find",
+      { remoteUrls: ["https://github.com/daintreehq/daintree.git"], committedProjectId: null },
+      {}
+    );
+
+    // From a window on the host: its project is identified there, its copy found here.
+    studio3.call.mockClear();
+    await expect(
+      service.copiesOn({ hostId: "studio-03", projectId: "p3" }, "local")
+    ).resolves.toEqual([{ projectId: "l1", name: "daintree", path: "/Users/greg/daintree" }]);
+    expect(studio3.call).toHaveBeenCalledWith("projects.identify", { projectId: "p3" }, {});
+
+    // Already on that host: nothing to look for, and nothing is asked.
+    studio3.call.mockClear();
+    await expect(
+      service.copiesOn({ hostId: "studio-03", projectId: "p3" }, "studio-03")
+    ).resolves.toEqual([]);
+    expect(studio3.call).not.toHaveBeenCalled();
+
+    // Neither end connected: it can't say, and it never dials to find out.
+    await expect(service.copiesOn({ hostId: "local", projectId: "p1" }, "studio-04")).resolves.toBe(
+      null
+    );
+    await expect(service.copiesOn({ hostId: "studio-04", projectId: "p1" }, "local")).resolves.toBe(
+      null
+    );
+    await expect(service.copiesOn({ hostId: "local", projectId: "p1" }, "nowhere")).resolves.toBe(
+      null
+    );
     expect(connectAndWait).not.toHaveBeenCalled();
   });
 });

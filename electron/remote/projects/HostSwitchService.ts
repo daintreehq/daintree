@@ -22,6 +22,7 @@ import type {
   HostBranchTarget,
   HostCloneOptions,
   HostProjectOpened,
+  ProjectIdentity,
   PushBranchOutcome,
   PushBranchPayload,
 } from "../../../shared/types/ipc/projectMatch.js";
@@ -361,26 +362,54 @@ export class HostSwitchService {
       .filter((id): id is HostId => typeof id === "string" && id !== from.hostId)
       .slice(0, MAX_LOCATE_HOSTS);
     const identity = await from.identify({ projectId: payload.projectId });
-    const remoteUrls = stripRemoteListCredentials(identity.remotes).map((remote) => remote.url);
     return Promise.all(
-      targets.map(async (hostId): Promise<HostProjectPresence> => {
-        if (remoteUrls.length === 0) return { hostId, projects: [] };
-        try {
-          const found = await this.gateway(hostId, this.options.openSession).find({
-            remoteUrls,
-            committedProjectId: identity.committedProjectId,
-          });
-          return {
-            hostId,
-            projects: found
-              .filter((c) => c.matchedBy === "remote-url" && c.projectId !== null)
-              .map((c) => ({ projectId: c.projectId!, name: c.name, path: c.path })),
-          };
-        } catch {
-          return { hostId, projects: null };
-        }
-      })
+      targets.map(async (hostId): Promise<HostProjectPresence> => ({
+        hostId,
+        projects: await this.registeredCopies(hostId, identity),
+      }))
     );
+  }
+
+  /**
+   * A project's copies on one other host, matched as {@link locate} matches
+   * them: for a window switching hosts with no project named, which lands on
+   * its project's copy there (#14564). Only open sessions are asked. Null when
+   * either host couldn't say.
+   */
+  async copiesOn(
+    from: { hostId: HostId; projectId: string },
+    toHostId: HostId
+  ): Promise<HostProjectPresence["projects"]> {
+    if (from.hostId === toHostId) return [];
+    let identity: ProjectIdentity;
+    try {
+      identity = await this.gateway(from.hostId, this.options.openSession).identify({
+        projectId: from.projectId,
+      });
+    } catch {
+      return null;
+    }
+    return this.registeredCopies(toHostId, identity);
+  }
+
+  /** Registered projects on the host sharing a remote with the source; null when it couldn't be asked. */
+  private async registeredCopies(
+    hostId: HostId,
+    identity: ProjectIdentity
+  ): Promise<HostProjectPresence["projects"]> {
+    const remoteUrls = stripRemoteListCredentials(identity.remotes).map((remote) => remote.url);
+    if (remoteUrls.length === 0) return [];
+    try {
+      const found = await this.gateway(hostId, this.options.openSession).find({
+        remoteUrls,
+        committedProjectId: identity.committedProjectId,
+      });
+      return found
+        .filter((c) => c.matchedBy === "remote-url" && c.projectId !== null)
+        .map((c) => ({ projectId: c.projectId!, name: c.name, path: c.path }));
+    } catch {
+      return null;
+    }
   }
 
   private readonly assistantEnsures = new Map<string, Promise<HostEnsureAnswer>>();

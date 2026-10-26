@@ -333,8 +333,9 @@ export function HostChip() {
   );
   const overviewAvailable = actionService.has(HOSTS_OVERVIEW_ACTION_ID);
 
-  // Navigation only: the host opens as it is (this window's last project
-  // there, or its picker). Nothing is fetched, pushed or created.
+  // Navigation only: the host opens as it is (its copy of this project, else
+  // this window's last project there, else its picker). Nothing is fetched,
+  // pushed or created.
   const pick = (row: HostMenuRow, newWindow: boolean) => {
     if (row.isCurrent && !newWindow) return;
     void switchToHost(row.hostId, newWindow);
