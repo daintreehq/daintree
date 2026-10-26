@@ -1,5 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { EditorView } from "@codemirror/view";
+import { Transaction } from "@codemirror/state";
+import { clearComposerHistory } from "../inputEditorExtensions/composerHistory";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useFleetResolutionPreviewStore } from "@/store/fleetResolutionPreviewStore";
@@ -56,9 +58,12 @@ export function useFleetMirror({
     const view = editorViewRef.current;
     if (view && view.state.doc.toString() !== externalDraft) {
       isApplyingExternalValueRef.current = true;
+      // The primary's keystrokes, not this pane's: its undo stays with it.
       view.dispatch({
         changes: { from: 0, to: view.state.doc.length, insert: externalDraft },
+        annotations: Transaction.addToHistory.of(false),
       });
+      clearComposerHistory(view);
     }
   }, [externalDraft, isFleetFollower, value, isolated]);
 

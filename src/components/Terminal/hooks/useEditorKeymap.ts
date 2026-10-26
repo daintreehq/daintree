@@ -5,6 +5,7 @@ import type { Compartment } from "@codemirror/state";
 import type { AutocompleteItem } from "../AutocompleteMenu";
 import type { ActiveCompletionContext } from "../hybridInputParsing";
 import { currentContextReferenceProvidersEffects } from "../inputEditorExtensions/contextReferenceChip";
+import { clearComposerHistory } from "../inputEditorExtensions/composerHistory";
 
 interface LatestRefShape {
   terminalId: string;
@@ -312,6 +313,8 @@ export function useEditorKeymap({
         changes: { from: 0, to: view.state.doc.length, insert: "" },
         selection: EditorSelection.cursor(0),
       });
+      // The stashed state keeps its own history for when it is popped.
+      clearComposerHistory(view);
       return true;
     },
     onPopStash: () => {

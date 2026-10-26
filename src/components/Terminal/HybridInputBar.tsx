@@ -12,6 +12,7 @@ import {
 import { Spinner } from "@/components/ui/Spinner";
 import { EditorView } from "@codemirror/view";
 import { EditorSelection } from "@codemirror/state";
+import { isolateHistory } from "@codemirror/commands";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
 import type { AgentState } from "@/types";
 import { logError } from "@/utils/logger";
@@ -109,10 +110,14 @@ import { useFleetMirror } from "./hooks/useFleetMirror";
 import { useEditorDomHandlers } from "./hooks/useEditorDomHandlers";
 import { useEditorFactory } from "./hooks/useEditorFactory";
 import {
+  clearComposerHistory,
+  correctionLanded,
   createComboboxAttributes,
   minimalDocChange,
   readImageChipPaths,
+  showCorrectionReview,
 } from "./inputEditorExtensions";
+import { takeLandedCorrection } from "@/services/voiceCorrectionLanding";
 import { useHostReparent } from "./hooks/useHostReparent";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { SelectedFileMenuItems } from "./SelectedFileMenuItems";
@@ -236,7 +241,7 @@ interface HybridInputE2EController {
 
 type ApplyEditorValue = (
   nextValue: string,
-  options?: { selection?: EditorSelection; focus?: boolean }
+  options?: { selection?: EditorSelection; focus?: boolean; resetHistory?: boolean }
 ) => void;
 
 const EMPTY_STALE_KEYS: ReadonlySet<string> = new Set<string>();
@@ -581,9 +586,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       handledEnterRef.current = false;
       submitAfterCompositionRef.current = false;
       const view = editorViewRef.current;
-      if (view && view.state.doc.toString() !== draft) {
+      if (!view) return;
+      if (view.state.doc.toString() !== draft) {
         view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: draft } });
       }
+      // Another panel's or project's draft, even one that reads the same.
+      clearComposerHistory(view);
     }, [terminalId, projectId, getDraftInput]);
 
     const wasFollowingDriverRef = useRef(followsDriver);
@@ -814,10 +822,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       setActiveCompletionContext,
     });
 
-    const applyEditorValue = (
-      nextValue: string,
-      options?: { selection?: EditorSelection; focus?: boolean }
-    ) => {
+    const applyEditorValue: ApplyEditorValue = (nextValue, options) => {
       if (lastEmittedValueRef.current !== nextValue) {
         lastEmittedValueRef.current = nextValue;
         setValue(nextValue);
@@ -839,6 +844,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         ...(shouldChangeSelection ? { selection: options?.selection } : {}),
         scrollIntoView: true,
       });
+      if (options?.resetHistory) clearComposerHistory(view);
       if (options?.focus) view.focus();
     };
 
@@ -884,6 +890,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       const draft = useTerminalInputStore.getState().getDraftInput(terminalId, projectId);
       const view = editorViewRef.current;
       if (!view) return;
+      const landed = takeLandedCorrection(terminalId, draft);
       // Only the span that differs is replaced, so an append leaves the
       // image and file chips already in the draft attached.
       const change = minimalDocChange(view.state.doc.toString(), draft);
@@ -895,7 +902,17 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           changes: change,
           selection: { anchor: draft.length },
           scrollIntoView: true,
+          // The correction rides its own swap, so undo and redo carry it.
+          effects: landed ? correctionLanded.of(landed) : [],
+          // One undo step per outside write: a dictated utterance, a
+          // correction or file-link swap, a handoff. Typing next to it
+          // within the grouping delay would otherwise merge into it.
+          annotations: isolateHistory.of("full"),
         });
+        // Emptied from outside (sent or cleared elsewhere): nothing to undo into.
+        if (draft === "") clearComposerHistory(view);
+      } else if (landed) {
+        showCorrectionReview(view, landed);
       }
     }, [externalDraftRevision, terminalId, projectId]);
 
@@ -939,6 +956,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const resetEditorDoc = () => {
       applyEditorValue("", {
         selection: EditorSelection.create([EditorSelection.cursor(0)]),
+        resetHistory: true,
       });
     };
 

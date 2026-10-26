@@ -191,6 +191,15 @@ export const UI_TYPING_LOCATOR_DWELL_MS = 2_000;
  *  on refusal the only sign that the click did nothing. */
 export const UI_TYPING_LOCATOR_REPORT_DWELL_MS = 3_000;
 
+/** How long the words an AI correction changed stay marked in the composer.
+ *  Long enough to look back at a passage that landed while the user's eyes
+ *  were elsewhere, and to reach the restore control beside it. */
+export const VOICE_CORRECTION_MARK_DWELL_MS = 5_000;
+
+/** The marks' fade once the dwell ends. Slow on purpose: the decay is the
+ *  signal that the marks are leaving on their own, not being dismissed. */
+export const VOICE_CORRECTION_MARK_FADE_MS = 600;
+
 export const UI_TOOLTIP_DELAY_DURATION = 500;
 export const UI_TOOLTIP_SKIP_DELAY_DURATION = DURATION_300;
 

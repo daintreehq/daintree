@@ -3,6 +3,7 @@ import type { Extension } from "@codemirror/state";
 import { StateField, StateEffect } from "@codemirror/state";
 import { createChipRemoveControl, formatChipLabel, removeChipRange } from "./base";
 import { chipAriaLabel, chipPendingDeleteField, isChipSelected } from "./chipBackspace";
+import { mapChipEntry, restoreChipsOnUndo } from "./composerHistory";
 import { chipCardPath, chipHoverTooltip, chipTooltip } from "./chipCard";
 
 interface ImageChipEntry {
@@ -70,7 +71,7 @@ class ImageChipWidget extends WidgetType {
   }
 }
 
-export const addImageChip = StateEffect.define<ImageChipEntry>();
+export const addImageChip = StateEffect.define<ImageChipEntry>({ map: mapChipEntry });
 
 export const imageChipField = StateField.define<ImageChipEntry[]>({
   create() {
@@ -99,6 +100,7 @@ export const imageChipField = StateField.define<ImageChipEntry[]>({
     return entries;
   },
   provide: (f) => [
+    restoreChipsOnUndo(f, addImageChip),
     EditorView.decorations.of((view) => {
       const entries = view.state.field(f, false);
       if (!entries || entries.length === 0) return Decoration.none;

@@ -39,6 +39,7 @@ import {
   summarizeOpeningChunks,
   type PcmChunkStats,
 } from "@/services/voiceStartDiagnostics";
+import { recordCorrectionLanded } from "@/services/voiceCorrectionLanding";
 import {
   collectCorrectionPassages,
   joinPassageTexts,
@@ -1913,8 +1914,10 @@ class VoiceRecordingService {
       return corrected;
     });
 
+    let swapped: { from: number; rawText: string; correctedText: string } | null = null;
     if (edits.length > 0) {
-      let next = inputStore.getDraftInput(panelId, projectId);
+      const before = inputStore.getDraftInput(panelId, projectId);
+      let next = before;
       for (const edit of edits.reverse()) {
         // A session restarted on this panel is dictating after the passage;
         // its offsets move with the passage's new length.
@@ -1922,6 +1925,15 @@ class VoiceRecordingService {
         next = next.slice(0, edit.from) + edit.text + next.slice(edit.to);
       }
       inputStore.setDraftInput(panelId, next, projectId);
+      // One span from the first rewritten passage to the last, so restoring it
+      // puts every passage back and leaves text typed between them as it is.
+      const from = Math.min(...edits.map((edit) => edit.from));
+      const to = Math.max(...edits.map((edit) => edit.to));
+      swapped = {
+        from,
+        rawText: before.slice(from, to),
+        correctedText: next.slice(from, to + next.length - before.length),
+      };
     }
     logDebug(`${LOG_PREFIX} Correction settled`, { panelId, applied: edits.length, skipped });
 
@@ -1939,6 +1951,15 @@ class VoiceRecordingService {
       store.setSessionCorrectedText(panelId, joinPassageTexts(settled));
     }
     this.releaseBaseline(correction);
+    if (swapped) {
+      recordCorrectionLanded(panelId, projectId, {
+        ...swapped,
+        baseline:
+          correction.seed === null
+            ? null
+            : { raw: correction.seed, corrected: joinPassageTexts(settled) },
+      });
+    }
 
     this.syncCorrectionRange(panelId);
     inputStore.bumpExternalDraftRevision();

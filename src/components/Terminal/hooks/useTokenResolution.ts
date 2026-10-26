@@ -159,7 +159,7 @@ interface UseTokenResolutionParams {
   latestRef: React.RefObject<LatestRefShape | null>;
   applyEditorValue: (
     nextValue: string,
-    options?: { selection?: EditorSelection; focus?: boolean }
+    options?: { selection?: EditorSelection; focus?: boolean; resetHistory?: boolean }
   ) => void;
   setIsExpanded: Dispatch<SetStateAction<boolean>>;
   setActiveCompletionContext: Dispatch<SetStateAction<ActiveCompletionContext | null>>;
@@ -316,7 +316,10 @@ export function useTokenResolution({
         // since opened would be the same overreach as deleting their text.
         if (options?.isDraftUnchanged?.() ?? true) {
           setIsExpanded(false);
-          applyEditorValue("", { selection: EditorSelection.create([EditorSelection.cursor(0)]) });
+          applyEditorValue("", {
+            selection: EditorSelection.create([EditorSelection.cursor(0)]),
+            resetHistory: true,
+          });
           latest.clearDraftInput(latest.terminalId, latest.projectId);
           setActiveCompletionContext(null);
         }

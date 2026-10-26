@@ -33,9 +33,15 @@ import {
   chipPendingDeleteField,
   createChipBackspaceKeymap,
   createCursorBlink,
+  createComposerHistory,
+  createCorrectionReview,
   type AutoSizeConfig,
 } from "../inputEditorExtensions";
 import type { SlashCommand } from "@shared/types";
+import {
+  announceCorrectionShown,
+  rebaseCorrectionBaseline,
+} from "@/services/voiceCorrectionLanding";
 import { recordBuiltCompartmentConfig } from "./useCompartmentDriver";
 
 interface UseEditorFactoryParams {
@@ -133,6 +139,7 @@ export function useEditorFactory({
       extensions: [
         chipPendingDeleteField,
         createChipBackspaceKeymap(),
+        createComposerHistory(),
         themeCompartmentRef.current.of(buildInputBarTheme(effectiveTheme)),
         chipEntranceTheme,
         EditorView.lineWrapping,
@@ -164,6 +171,10 @@ export function useEditorFactory({
         ),
         interimWidgetField,
         pendingAIField,
+        createCorrectionReview({
+          onShown: announceCorrectionShown,
+          onSwapped: (review, now) => rebaseCorrectionBaseline(terminalId, review, now),
+        }),
         EditorView.updateListener.of((update) => contextUpdateRef.current(update)),
         keymapCompartmentRef.current.of(
           createCustomKeymap({
