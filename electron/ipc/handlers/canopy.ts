@@ -52,8 +52,8 @@ import { CANOPY_METHOD_CHANNELS } from "./canopy.preload.js";
 import {
   beginWatchRequest,
   isCurrentWatchRequest,
+  followDriveLeaseChange,
   onSizeHoldsChange,
-  publishSizeHolds,
   remoteSizeHolds,
   stopAllTerminalWatches,
   stopWorkerTerminalWatches,
@@ -1030,12 +1030,12 @@ function assertMayType(watched: { assistant: boolean; mayType: boolean }): void 
 let offDriveLease: (() => void) | null = null;
 
 /**
- * A viewer that stops driving stops holding: the lease moving unpublishes its
- * hold at once, so the new driver's panes fit again without waiting for the
- * stream to end.
+ * A viewer that stops driving stops holding at once, so the new driver's panes
+ * fit again without waiting for the stream to end; one that drives again asks
+ * for its size again.
  */
 function followDriveLease(): void {
-  offDriveLease ??= peekDriveLeaseService()?.onChange(() => publishSizeHolds()) ?? null;
+  offDriveLease ??= peekDriveLeaseService()?.onChange(() => followDriveLeaseChange()) ?? null;
 }
 
 function assertDrivesRun(ctx: IpcContext, runId: string): void {

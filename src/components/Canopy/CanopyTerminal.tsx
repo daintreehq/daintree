@@ -433,6 +433,8 @@ export function CanopyTerminal({
         heldWatchId = null;
         publish({ watchId });
         setStatus("live");
+        // A measure that ran while the stream was held had no stream to size.
+        requestPanelSize();
       }
     };
     const offResync = api.onResync(() => reopen("reconnecting"));

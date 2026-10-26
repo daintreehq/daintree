@@ -478,6 +478,21 @@ describe("TerminalInstanceService — a terminal a Canopy panel on another machi
     expect(service.instances.get("t1")!.reassertPtyGrid).toBe(true);
   });
 
+  it("reads the holds again when the link to the host comes back, a missed release included", async () => {
+    hydrate = ["t1"];
+    await service.prewarmTerminal("t1", "terminal", {});
+    await settle();
+    expect(locked("t1")).toBe(true);
+    vi.spyOn(service, "runResizePass").mockImplementation(() => {});
+
+    hydrate = [];
+    const { notifyHostResync } = await import("@/store/hostResyncSignal");
+    notifyHostResync();
+    await settle();
+
+    expect(locked("t1")).toBe(false);
+  });
+
   it("keeps a pane held while another frontend still drives the project", async () => {
     await service.prewarmTerminal("t1", "terminal", {});
     gate.setDriveLeaseSnapshot(lease());

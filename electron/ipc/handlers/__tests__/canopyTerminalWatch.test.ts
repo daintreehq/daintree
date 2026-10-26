@@ -5,6 +5,9 @@ import type { PtyClient } from "../../../services/PtyClient.js";
 import {
   activeTerminalWatches,
   beginWatchRequest,
+  followDriveLeaseChange,
+  onSizeHoldsChange,
+  remoteSizeHolds,
   resizeWatchedTerminal,
   stopAllTerminalWatches,
   stopTerminalWatch,
@@ -488,5 +491,82 @@ describe("an assistant's watch", () => {
     expect(watchedTerminal(1, view.watchId!)).toMatchObject({ assistant: true, mayType: false });
     stopTerminalWatch(1);
     expect(b.release).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("a panel on another machine holding the size (#14497)", () => {
+  async function openRemote(fake: ReturnType<typeof fakePty>, authority: { may: boolean }) {
+    const { sender, sent } = fakeSender(-5);
+    const view = await watchTerminal(
+      fake.pty,
+      sender,
+      "run-1",
+      100,
+      beginWatchRequest(sender.id),
+      1,
+      () => authority.may,
+      null,
+      true
+    );
+    return { view, sent };
+  }
+
+  it("ends a hold whose terminal was silently replaced, unfreezing the successor's panes", async () => {
+    const fake = fakePty();
+    const heard: string[][] = [];
+    const off = onSizeHoldsChange((ids) => heard.push(ids));
+    const { view, sent } = await openRemote(fake, { may: true });
+    resizeWatchedTerminal(fake.pty, -5, view.watchId!, 100, 30);
+    expect(remoteSizeHolds()).toEqual(["run-1"]);
+    fake.generation.current = 2;
+    fake.emitter.emit("spawn-result", "run-1", { success: true });
+    expect(remoteSizeHolds()).toEqual([]);
+    expect(heard.at(-1)).toEqual([]);
+    expect(sent).toContainEqual(expect.objectContaining({ kind: "ended" }));
+    // Nothing of the predecessor's is handed to the successor.
+    expect(fake.pty.resize).toHaveBeenCalledTimes(1);
+    off();
+  });
+
+  it("lets go without handing back when the drive moves, and asks again when it returns", async () => {
+    const fake = fakePty();
+    const authority = { may: true };
+    const { view, sent } = await openRemote(fake, authority);
+    resizeWatchedTerminal(fake.pty, -5, view.watchId!, 100, 30);
+    fake.emitter.emit("resize-result", "run-1", {
+      launchGeneration: 1,
+      requestedCols: 100,
+      requestedRows: 30,
+      appliedCols: 100,
+      appliedRows: 30,
+      outcome: "applied",
+    });
+
+    authority.may = false;
+    followDriveLeaseChange();
+    expect(remoteSizeHolds()).toEqual([]);
+
+    // The new driver's pane takes the PTY.
+    fake.emitter.emit("resize-result", "run-1", {
+      launchGeneration: 1,
+      requestedCols: 160,
+      requestedRows: 45,
+      appliedCols: 160,
+      appliedRows: 45,
+      outcome: "applied",
+    });
+    sent.length = 0;
+    authority.may = true;
+    followDriveLeaseChange();
+    // Nothing is held until the panel asks, and it is told the grid to ask against.
+    expect(remoteSizeHolds()).toEqual([]);
+    expect(sent).toEqual([
+      { kind: "resize", watchId: view.watchId, runId: "run-1", cols: 160, rows: 45 },
+    ]);
+
+    vi.mocked(fake.pty.resize).mockClear();
+    stopTerminalWatch(-5);
+    // The hold was given up with the drive, so there is nothing to hand back.
+    expect(fake.pty.resize).not.toHaveBeenCalled();
   });
 });

@@ -1,3 +1,4 @@
+import { onHostResync } from "@/store/hostResyncSignal";
 import { logWarn } from "@/utils/logger";
 
 /**
@@ -9,9 +10,10 @@ import { logWarn } from "@/utils/logger";
 let held: ReadonlySet<string> = new Set();
 const listeners = new Set<() => void>();
 let offPush: (() => void) | null = null;
-// A pull from an earlier setup must not land after cleanup, and a push for
-// this setup outranks the pull.
-let setupGeneration = 0;
+let offResync: (() => void) | null = null;
+// A pull from an earlier read must not land after cleanup or a newer read,
+// and a push since the read began outranks it.
+let readGeneration = 0;
 let pushLandedGeneration = -1;
 
 export function isCanopySizeHeld(terminalId: string): boolean {
@@ -23,22 +25,13 @@ function apply(terminalIds: readonly string[]): void {
   for (const listener of [...listeners]) listener();
 }
 
-/**
- * Subscribe, then hydrate: a hold taken before this view existed is otherwise
- * not heard of until the next one changes.
- */
-function start(): void {
-  if (offPush !== null || typeof window === "undefined" || !window.electron?.events) return;
-  const generation = ++setupGeneration;
-  offPush = window.electron.events.on("terminal:canopy-size-holds-changed", (terminalIds) => {
-    pushLandedGeneration = generation;
-    apply(terminalIds);
-  });
+function hydrate(): void {
   const read = window.electron.canopy?.getSizeHolds;
   if (!read) return;
+  const generation = ++readGeneration;
   read()
     .then((terminalIds) => {
-      if (generation !== setupGeneration || pushLandedGeneration === generation) return;
+      if (generation !== readGeneration || pushLandedGeneration === generation) return;
       apply(terminalIds);
     })
     .catch((error: unknown) => {
@@ -46,10 +39,27 @@ function start(): void {
     });
 }
 
+/**
+ * Subscribe, then hydrate: a hold taken before this view existed, or changed
+ * while its link to the host was down, is otherwise not heard of until the
+ * next one changes.
+ */
+function start(): void {
+  if (offPush !== null || typeof window === "undefined" || !window.electron?.events) return;
+  offPush = window.electron.events.on("terminal:canopy-size-holds-changed", (terminalIds) => {
+    pushLandedGeneration = readGeneration;
+    apply(terminalIds);
+  });
+  offResync = onHostResync(hydrate);
+  hydrate();
+}
+
 function stop(): void {
-  setupGeneration += 1;
+  readGeneration += 1;
   offPush?.();
   offPush = null;
+  offResync?.();
+  offResync = null;
   held = new Set();
 }
 
