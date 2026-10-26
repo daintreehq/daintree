@@ -144,9 +144,9 @@ export function useCanopyInboxOrder({
       lastInteractionAt: lastInteractionRef.current,
       lastRankAt: lastRankRef.current,
     });
-    setReorderWaiting(
-      step.kind !== "set" && canopyReorderWaiting(order, { fresh, priorities, refreshedAt })
-    );
+    // A run arriving or an ask promoted leaves the held reorder held: still waiting.
+    const shown = step.kind !== "set" ? order : step.ranked ? null : step.order;
+    setReorderWaiting(canopyReorderWaiting(shown, { fresh, priorities, refreshedAt }));
     if (step.kind === "set") {
       if (step.ranked) {
         lastRankRef.current = now;
@@ -196,8 +196,14 @@ export function useCanopyInboxOrder({
       lastInteractionRef.current = Date.now();
       setRevealed(true);
     };
-    const press = () => {
-      pressingRef.current = true;
+    // Heard on the window, ahead of React's own capture: a panel shortcut that
+    // stops its keydown still moved the selection.
+    const inBody = (event: Event) => event.target instanceof Node && body.contains(event.target);
+    const noteInBody = (event: Event) => {
+      if (inBody(event)) note();
+    };
+    const press = (event: Event) => {
+      if (inBody(event)) pressingRef.current = true;
     };
     const release = () => {
       if (!pressingRef.current) return;
@@ -206,13 +212,15 @@ export function useCanopyInboxOrder({
       setRankWake((n) => n + 1);
     };
     const events = ["pointerdown", "keydown", "wheel", "input"] as const;
-    for (const type of events) body.addEventListener(type, note, { capture: true, passive: true });
-    body.addEventListener("pointerdown", press, { capture: true, passive: true });
+    for (const type of events) {
+      window.addEventListener(type, noteInBody, { capture: true, passive: true });
+    }
+    window.addEventListener("pointerdown", press, { capture: true, passive: true });
     window.addEventListener("pointerup", release, { capture: true, passive: true });
     window.addEventListener("pointercancel", release, { capture: true, passive: true });
     return () => {
-      for (const type of events) body.removeEventListener(type, note, { capture: true });
-      body.removeEventListener("pointerdown", press, { capture: true });
+      for (const type of events) window.removeEventListener(type, noteInBody, { capture: true });
+      window.removeEventListener("pointerdown", press, { capture: true });
       window.removeEventListener("pointerup", release, { capture: true });
       window.removeEventListener("pointercancel", release, { capture: true });
       pressingRef.current = false;
