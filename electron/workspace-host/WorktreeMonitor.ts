@@ -367,6 +367,9 @@ export class WorktreeMonitor {
   get lastStatBaselineAt(): number {
     return this.statPrecheck.baselineCapturedAt;
   }
+  get statBaselineRevision(): number {
+    return this.statPrecheck.baselineRevision;
+  }
   set lastFullStatusAt(value: number) {
     this.statPrecheck.fullStatusCapturedAt = value;
   }

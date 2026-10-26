@@ -399,16 +399,10 @@ export const gitPipelineScenarios: PerfScenario[] = [
       // The quiet sweep must not race those passes through the single-flight guard.
       await harness.queue.onIdle();
       const observerMisses = spawnObserverMisses();
-      // StatPrecheck stamps `baselineAt` on the skip path AND after a full
-      // pass, so this advances once per tick that actually ran. It is the only
-      // available oracle here: the whole point of the quiet path is that it
-      // spawns nothing, so the spawn counter cannot tell fifty successful
-      // skips apart from fifty ticks that never happened.
-      const baselinesBefore = harness.monitors.map((monitor) => monitor.lastStatBaselineAt);
-      // Windows can complete warmup and start a tick in the same wall-clock
-      // quantum. Wait outside the measurement so a real tick can advance its stamp.
-      const newestBaseline = Math.max(...baselinesBefore);
-      while (Date.now() <= newestBaseline) await sleep(1);
+      // A successful skip or full pass advances the revision even when the
+      // Windows wall clock repeats or moves backward. Spawn counts cannot
+      // distinguish fifty quiet skips from fifty ticks that never happened.
+      const baselinesBefore = harness.monitors.map((monitor) => monitor.statBaselineRevision);
       const mark = gitSpawnMark();
       const start = performance.now();
       const settled = await Promise.allSettled(
@@ -419,13 +413,13 @@ export const gitPipelineScenarios: PerfScenario[] = [
       const missedTicks: string[] = [];
       harness.monitors.forEach((monitor, i) => {
         const result = settled[i];
-        if (result.status === "rejected" || monitor.lastStatBaselineAt <= baselinesBefore[i]) {
+        if (result.status === "rejected" || monitor.statBaselineRevision <= baselinesBefore[i]) {
           tickMisses += 1;
           missedTicks.push(
             JSON.stringify({
               monitor: i,
               before: baselinesBefore[i],
-              after: monitor.lastStatBaselineAt,
+              after: monitor.statBaselineRevision,
               checkedAt: statusCheckedAt(monitor),
               ...(result.status === "rejected" ? { error: String(result.reason) } : {}),
             })
