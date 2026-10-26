@@ -9,6 +9,7 @@ import {
   buildCorrectionSystemPrompt,
   buildRewriteSystemPrompt,
   type CorrectionPromptContext,
+  type CorrectionTargetContext,
 } from "../../shared/config/voiceCorrection.js";
 import type { VoiceRewriteOutcome } from "../../shared/types/voice.js";
 import { voiceErrorLogFields } from "../../shared/utils/voiceLogFields.js";
@@ -26,8 +27,10 @@ import {
   EMPTY_VOICE_COMMAND_VOCABULARY,
   voiceCommandBaseline,
   type VoiceCommandEditRejection,
+  type VoiceCommandEntry,
 } from "../../shared/utils/voiceAgentCommands.js";
 import type { VoiceCommandTarget } from "./voiceCommandTarget.js";
+import { holdsCredential, isSecretShaped } from "./voiceKeytermSecrets.js";
 
 export { CORE_CORRECTION_PROMPT, buildCorrectionSystemPrompt };
 
@@ -72,6 +75,24 @@ const FILE_LINK_DETECTION_SCHEMA = {
   },
   required: ["file_references"],
 } as const;
+
+// Names and descriptions come from the user's own command and skill files, so
+// they pass the same secret screen as every other on-disk context before they
+// leave the machine.
+function promptCommands(
+  entries: readonly VoiceCommandEntry[]
+): CorrectionTargetContext["commands"] {
+  return entries.flatMap((entry) =>
+    isSecretShaped(entry.token.slice(entry.prefix.length))
+      ? []
+      : [
+          {
+            token: entry.token,
+            description: holdsCredential(entry.description) ? "" : entry.description,
+          },
+        ]
+  );
+}
 
 const CORRECTION_RESULT_SCHEMA = {
   type: "object",
@@ -679,7 +700,7 @@ export class VoiceCorrectionService {
             target: {
               agentName: target.agentName,
               isAssistant: target.isAssistant,
-              commands: target.vocabulary.entries,
+              commands: promptCommands(target.vocabulary.entries),
             },
           }
         : {}),

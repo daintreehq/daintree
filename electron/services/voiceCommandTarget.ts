@@ -73,7 +73,7 @@ export async function resolveVoiceCommandTarget(
       typeof terminal.cwd === "string" && isAbsolute(terminal.cwd) ? terminal.cwd : undefined;
     let commands: SlashCommand[];
     const discovered = await withinDeadline(slashCommandService.list(agentId, cwd), deadline).catch(
-      () => TIMED_OUT
+      (): typeof TIMED_OUT => TIMED_OUT
     );
     if (discovered === TIMED_OUT) {
       logDebug(`${P} Discovery ran out of time, using built-ins`);

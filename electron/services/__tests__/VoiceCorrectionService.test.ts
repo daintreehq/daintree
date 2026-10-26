@@ -693,7 +693,24 @@ describe("VoiceCorrectionService", () => {
   });
 
   describe("target commands", () => {
-    function targetFor(agentId: "claude" | "codex", isAssistant = false): VoiceCommandTarget {
+    function userSkill(agentId: "claude" | "codex", name: string, description: string) {
+      return {
+        id: `user:skill:${name}`,
+        label: name,
+        insertText: `$${name}`,
+        description,
+        scope: "user" as const,
+        agentId,
+        kind: "skill" as const,
+        trigger: "$" as const,
+      };
+    }
+
+    function targetFor(
+      agentId: "claude" | "codex",
+      isAssistant = false,
+      extra: ReturnType<typeof userSkill>[] = []
+    ): VoiceCommandTarget {
       const config = getAgentConfig(agentId)!;
       return {
         agentId,
@@ -726,6 +743,7 @@ describe("VoiceCorrectionService", () => {
                   },
                 ]
               : []),
+            ...extra,
           ],
           config.completionSources!
         ),
@@ -755,6 +773,30 @@ describe("VoiceCorrectionService", () => {
       expect(body.input[0].content).toContain("$plugin-creator — Scaffold a plugin");
       expect(body.input[0].content).toContain("/compact");
       expect(body.input[1].content).toContain("prompt_start=yes");
+    });
+
+    it("screens credentials out of the commands it lists", async () => {
+      const fetchMock = stubReply("Hi.");
+      await new VoiceCorrectionService().correct(
+        { rawText: "hi", startsPrompt: true },
+        {
+          ...BASE_SETTINGS,
+          commandTarget: targetFor("codex", false, [
+            userSkill(
+              "codex",
+              "deploy",
+              "Ship it with OPENAI_API_KEY=sk-proj-Ab3dEf6hIj9kLm2nOp5q"
+            ),
+            userSkill("codex", "3f9a2c71d8e4b05a", "Pinned build"),
+          ]),
+        }
+      );
+      const prompt: string = sentBody(fetchMock).input[0].content;
+      expect(prompt).toMatch(/^\$deploy$/m);
+      expect(prompt).not.toContain("sk-proj-");
+      expect(prompt).not.toContain("3f9a2c71d8e4b05a");
+      expect(prompt).not.toContain("Pinned build");
+      expect(prompt).toContain("$plugin-creator — Scaffold a plugin");
     });
 
     it("names the Assistant as the target", async () => {
