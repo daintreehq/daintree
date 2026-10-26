@@ -19,6 +19,8 @@ interface ReviewMarkLineProps {
   isClearing: boolean;
   onClear: () => void;
   onRetry: () => void;
+  /** Open the hub's "Since review" view; absent while it's already showing. */
+  onOpenSinceReview?: () => void;
   onDismissNotice: () => void;
 }
 
@@ -36,6 +38,7 @@ export function ReviewMarkLine({
   isClearing,
   onClear,
   onRetry,
+  onOpenSinceReview,
   onDismissNotice,
 }: ReviewMarkLineProps) {
   if (!reviewMark) return null;
@@ -93,6 +96,16 @@ export function ReviewMarkLine({
           >
             <RefreshCw className="size-3" aria-hidden="true" />
             <span>Retry</span>
+          </button>
+        )}
+        {onOpenSinceReview && applicability === "applicable" && (
+          <button
+            type="button"
+            className="shrink-0 text-text-secondary hover:text-text-primary underline-offset-2 hover:underline"
+            onClick={onOpenSinceReview}
+            data-testid="review-hub-review-mark-open"
+          >
+            View
           </button>
         )}
         <button

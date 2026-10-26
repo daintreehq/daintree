@@ -77,6 +77,23 @@ describe("worktree.openReviewHub", () => {
     });
   });
 
+  it("opens straight into the since-review view without auto-staging", async () => {
+    seedWorktree("wt-1");
+    const action = getAction();
+    expect(() =>
+      action.argsSchema!.parse({ worktreeId: "wt-1", mode: "since-review" })
+    ).not.toThrow();
+    expect(() => action.argsSchema!.parse({ mode: "other" })).toThrow();
+    await action.run({ worktreeId: "wt-1", mode: "since-review" }, {} as ActionContext);
+
+    expect(dialogOptions()).toMatchObject({
+      kind: "review",
+      worktreeId: "wt-1",
+      autoStageOnOpen: false,
+      initialMode: "since-review",
+    });
+  });
+
   it("falls back to focusedWorktreeId then activeWorktreeId", async () => {
     seedWorktree("wt-focus");
     seedWorktree("wt-active");

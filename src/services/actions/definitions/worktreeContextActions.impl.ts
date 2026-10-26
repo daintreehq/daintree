@@ -59,6 +59,7 @@ import {
 import type { FileBrowserArgs, FileBrowserPanelArgs } from "./worktreeContextActionArgs";
 
 type WorktreeIdArgs = { worktreeId?: string } | undefined;
+type OpenReviewHubArgs = { worktreeId?: string; mode?: "since-review" } | undefined;
 
 type CopyTreeFormat = "xml" | "json" | "markdown" | "tree" | "ndjson" | "sarif";
 
@@ -260,7 +261,7 @@ interface WorktreeContextActionRunArgsTable {
   "worktree.setLabelColor": { worktreeId: string; color: WorktreeLabelColorName | null };
   "worktree.setCustomTitle": { worktreeId: string; title: string | null };
   "worktree.openEditor": WorktreeIdArgs;
-  "worktree.openReviewHub": WorktreeIdArgs;
+  "worktree.openReviewHub": OpenReviewHubArgs;
   "worktree.markReviewed": WorktreeIdArgs;
   "worktree.clearReviewMark": WorktreeIdArgs;
   "worktree.openChanges": WorktreeIdArgs;
@@ -461,7 +462,10 @@ export const worktreeContextActionRuns: {
       // other source — a substituted commit message caused a real bad push
       // to a shared branch (#7884).
       initialCommitMessage: deriveCommitMessageSeed(worktree, Date.now()),
-      autoStageOnOpen: true,
+      // Staging changes what the hub shows, so opening straight into the
+      // since-review view leaves the index alone.
+      autoStageOnOpen: args?.mode !== "since-review",
+      ...(args?.mode === "since-review" && { initialMode: "since-review" as const }),
     });
   },
 

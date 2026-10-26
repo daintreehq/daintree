@@ -331,12 +331,18 @@ export function registerWorktreeContextActions(
     defineAction({
       id: "worktree.openReviewHub",
       title: "Open review hub",
-      description: "Open the Review Hub for a worktree to review uncommitted changes",
+      description:
+        "Open the Review Hub for a worktree to review uncommitted changes. With mode 'since-review' it opens the view of what changed since the worktree's review mark, without staging anything",
       category: "worktree",
       kind: "command",
       danger: "safe",
       scope: "renderer",
-      argsSchema: z.object({ worktreeId: z.string().optional() }).optional(),
+      argsSchema: z
+        .object({
+          worktreeId: z.string().optional(),
+          mode: z.enum(["since-review"]).optional(),
+        })
+        .optional(),
       run: (args, ctx) => runWorktreeContextAction("worktree.openReviewHub", args, ctx, callbacks),
     })
   );
