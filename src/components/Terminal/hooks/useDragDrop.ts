@@ -4,7 +4,6 @@ import { hasFileDrag } from "@/lib/fileDragPayload";
 import { resolveTransferSources } from "@/lib/transferSources";
 import { isRemoteWindow } from "@/hooks/useHostPlatform";
 import { fileAttachmentEntryFromSource, insertFileAttachments } from "../fileAttachments";
-import { usePanelStore } from "@/store/panelStore";
 import { hasAgentContextDrag, readAgentContextDrag } from "@/lib/agentContextDragPayload";
 import {
   draftAgentContext,
@@ -19,6 +18,7 @@ import {
   usePaneDropHighlight,
 } from "../uploads/paneDropRouting";
 import type { TerminalFocusTarget } from "../terminalFocus";
+import { requestPaneFocus } from "../paneFocusRequest";
 
 export interface DragDropUploadOptions {
   /** Where uploads to a remote host show their progress chips. */
@@ -200,9 +200,9 @@ export function useDragDrop(
         if (result.status !== "drafted") return;
         // Same landing as a file drop (#11809): pane selected, keyboard in the
         // bar. The draft sync parks the caret after the block.
-        usePanelStore.getState().setPreferredTerminalFocusTarget("hybridInput");
         onDropSelect?.();
         view.focus();
+        if (paneId !== undefined) requestPaneFocus(paneId, "hybridInput");
         return;
       }
 
@@ -243,19 +243,18 @@ export function useDragDrop(
       // exactly the drops with the longest gap. It would also let a slow
       // thumbnail pull the selection back long after the user moved on.
       //
-      // Order matters. The preference is what `TerminalPane`'s focus effect
-      // reads to decide which sub-surface the newly selected pane hands the
-      // keyboard to, so a stale "xterm" would yank focus straight back out.
-      //
       // `view.focus()` rather than the panel focus registry: the registry
       // routes to `focusWithCursorAtEnd`, which drags the caret to the end of
       // the draft whenever the editor doesn't already hold focus — undoing the
       // caret the insertion below parks after the chip. Focusing directly keeps
-      // it, and makes the pane effect's own later call a no-op, since it
-      // preserves an editor that already owns DOM focus.
-      usePanelStore.getState().setPreferredTerminalFocusTarget("hybridInput");
+      // it. The request after it is what tells the newly selected pane's focus
+      // pass where the keyboard went, so it doesn't send it to the terminal;
+      // finding the editor already focused, it moves nothing. Only the pane's
+      // own bar asks: Canopy's reply box borrows the terminal id, and a request
+      // for it would focus the pane's bar instead.
       onDropSelect?.();
       view.focus();
+      if (paneId !== undefined) requestPaneFocus(paneId, "hybridInput");
 
       await insertFileAttachments(editorViewRef, view, dropped, cwd, {
         uploadSurface,
