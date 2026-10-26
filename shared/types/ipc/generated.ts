@@ -3397,9 +3397,17 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("./remoteHosts.js").UpdateHostPayload];
     result: import("../remoteHosts.js").HostDescriptor;
   };
+  "review-marks:capture": {
+    args: [worktreeId: string];
+    result: import("./reviewMarks.js").ReviewMarkCaptureOutcome;
+  };
   "review-marks:clear": {
     args: [worktreeId: string, basedOn: number];
     result: import("./reviewMarks.js").ReviewMarkClearOutcome;
+  };
+  "review-marks:compare": {
+    args: [worktreeId: string];
+    result: import("./reviewMarks.js").ReviewMarkCompareOutcome;
   };
   "review-marks:hydrate": {
     args: [];
@@ -3486,6 +3494,10 @@ export interface GeneratedIpcInvokeMap {
       },
       basedOn: number,
     ];
+    result: import("./reviewMarks.js").ReviewMarkSaveOutcome;
+  };
+  "review-marks:mark-captured": {
+    args: [worktreeId: string, captureId: string, basedOn: number];
     result: import("./reviewMarks.js").ReviewMarkSaveOutcome;
   };
   "run-history:append": {

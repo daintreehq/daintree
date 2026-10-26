@@ -3,7 +3,10 @@ import type { IpcInvokeMap } from "../../types/index.js";
 export const REVIEW_MARKS_METHOD_CHANNELS = {
   hydrate: "review-marks:hydrate",
   mark: "review-marks:mark",
+  markCaptured: "review-marks:mark-captured",
   clear: "review-marks:clear",
+  capture: "review-marks:capture",
+  compare: "review-marks:compare",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof REVIEW_MARKS_METHOD_CHANNELS;

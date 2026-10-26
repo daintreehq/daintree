@@ -28,6 +28,8 @@ describe("channel lease policy", () => {
       "terminal:reconnect-bulk",
       "app:hydrate",
       "review-marks:hydrate",
+      "review-marks:capture",
+      "review-marks:compare",
     ]) {
       expect(getChannelLeasePolicy(channel), channel).toBe("free");
     }
@@ -47,6 +49,7 @@ describe("channel lease policy", () => {
       "app:set-state",
       "plugin-agent-mcp:set-plugin-access",
       "review-marks:mark",
+      "review-marks:mark-captured",
       "review-marks:clear",
     ]) {
       expect(getChannelLeasePolicy(channel), channel).toBe("driver");
