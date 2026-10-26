@@ -445,7 +445,6 @@ export const CHANNELS = {
   KEEP_AWAKE_GET_STATE: "keep-awake:get-state",
   KEEP_AWAKE_UPDATE_CONFIG: "keep-awake:update-config",
   KEEP_AWAKE_STATE_CHANGED: "keep-awake:state-changed",
-  HIBERNATION_PROJECT_HIBERNATED: "hibernation:project-hibernated",
 
   IDLE_TERMINAL_GET_CONFIG: "idle-terminal:get-config",
   IDLE_TERMINAL_UPDATE_CONFIG: "idle-terminal:update-config",

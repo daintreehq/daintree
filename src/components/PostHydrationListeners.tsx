@@ -1,7 +1,6 @@
 import { useEffect } from "react";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { markRendererPerformance } from "../utils/performance";
-import { useHibernationNotifications } from "../hooks/useHibernationNotifications";
 import { useIdleTerminalNotifications } from "../hooks/useIdleTerminalNotifications";
 import { useIdleBackgroundCloseNotifications } from "../hooks/useIdleBackgroundCloseNotifications";
 import { useParkReleaseNotifications } from "../hooks/useParkReleaseNotifications";
@@ -35,7 +34,6 @@ import {
  * stay in `AppInner`.
  */
 export function PostHydrationListeners() {
-  useHibernationNotifications();
   useIdleTerminalNotifications();
   useIdleBackgroundCloseNotifications();
   useParkReleaseNotifications();

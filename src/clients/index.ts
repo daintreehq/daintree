@@ -10,7 +10,6 @@ export { errorsClient } from "./errorsClient";
 export { eventInspectorClient } from "./eventInspectorClient";
 export { filesClient } from "./filesClient";
 export { forgeClient } from "./forgeClient";
-export { hibernationClient } from "./hibernationClient";
 export { idleTerminalClient } from "./idleTerminalClient";
 export { idleBackgroundAutoCloseClient } from "./idleBackgroundAutoCloseClient";
 export { logsClient } from "./logsClient";

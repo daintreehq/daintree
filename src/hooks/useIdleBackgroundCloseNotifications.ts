@@ -37,7 +37,7 @@ export function formatPressureSleptProjects(
 
 // One-way latch: app-lifetime, notify-only singleton listener with no teardown.
 // Never reset this — a remount re-subscribing would fire duplicate toasts
-// (mirrors useHibernationNotifications / useIdleTerminalNotifications, #10455).
+// (mirrors useIdleTerminalNotifications, #10455).
 let ipcListenerAttached = false;
 
 export function useIdleBackgroundCloseNotifications(): void {

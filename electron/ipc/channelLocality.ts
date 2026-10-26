@@ -475,7 +475,6 @@ export const CHANNEL_LOCALITY = {
   "help:revoke-session": "host",
   "help:take-pending-hibernation": "host",
   "help:unmark-terminal": "host",
-  "hibernation:project-hibernated": "host",
   "host-files:get-picker-roots": "host",
   "host-files:list-directory": "host",
   "host-metrics:event": "shell",
