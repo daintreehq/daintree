@@ -61,6 +61,7 @@ import { notify } from "@/lib/notify";
 import { CanopyView } from "../CanopyView";
 import { CANOPY_TITLE } from "../canopyTerms";
 import { useCanopyStore } from "@/store/canopyStore";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { useProjectStore } from "@/store/projectStore";
 import { __resetCanopySeenForTests } from "@/lib/canopySeen";
@@ -1874,9 +1875,6 @@ describe("CanopyView", () => {
     await frames();
     const order = () => cards(container).map((card) => card.id.replace("canopy-card-", ""));
     expect(order()).toEqual(["waiting", "asking", "working"]);
-    // Placing runs as their scores land is what the open is for: the pointer
-    // resting on the list doesn't hold it.
-    fireEvent.pointerEnter(container.ownerDocument.querySelector<HTMLElement>("[role=listbox]")!);
     act(() =>
       useCanopyStore.setState({
         snapshot: {
@@ -1892,6 +1890,189 @@ describe("CanopyView", () => {
     );
     await frames();
     expect(order()).toEqual(["waiting", "working", "asking"]);
+  });
+
+  it("ends the reveal when the pointer comes into the list, and offers the order it holds back", async () => {
+    const owed = { ...canopySnapshot, busy: true };
+    installElectron(owed);
+    useCanopyStore.setState({ snapshot: owed });
+    const said: string[] = [];
+    const unsubscribe = useAnnouncerStore.subscribe((state, before) => {
+      if (state.polite && state.polite !== before.polite) said.push(state.polite.msg);
+    });
+    const { container } = render(<CanopyView />);
+    await frames();
+    const doc = container.ownerDocument;
+    const order = () => cards(container).map((card) => card.id.replace("canopy-card-", ""));
+    const revealing = () => doc.querySelector("[data-canopy-list][data-revealing]") !== null;
+    const sortNow = () =>
+      Array.from(doc.querySelectorAll<HTMLButtonElement>("button")).find(
+        (button) => button.textContent === "Sort now"
+      );
+    expect(revealing()).toBe(true);
+    fireEvent.pointerEnter(doc.querySelector<HTMLElement>("[role=listbox]")!);
+    expect(revealing()).toBe(false);
+    expect(sortNow()).toBeUndefined();
+    const land = (refreshedAt: number, priority: number) =>
+      act(() =>
+        useCanopyStore.setState({
+          snapshot: {
+            ...owed,
+            refreshedAt,
+            // Far enough above the quiet question to pass it, were the list not held.
+            cards: [
+              { ...stuckCard("working"), priority, attentionScore: priority },
+              quietQuestion("asking"),
+            ],
+          },
+        })
+      );
+    land(NOW + 10_000, 84);
+    await frames();
+    expect(order()).toEqual(["waiting", "asking", "working"]);
+    expect(sortNow()).toBeDefined();
+    land(NOW + 20_000, 83);
+    await frames();
+    const offers = said.filter((msg) => msg.includes("Sort now"));
+    unsubscribe();
+    expect(offers).toHaveLength(1);
+
+    fireEvent.click(sortNow()!);
+    await frames();
+    expect(order()).toEqual(["waiting", "working", "asking"]);
+    expect(sortNow()).toBeUndefined();
+  });
+
+  it("ends the reveal when the user moves the selection, and holds the next score for the pause", async () => {
+    const owed = { ...canopySnapshot, busy: true };
+    installElectron(owed);
+    useCanopyStore.setState({ snapshot: owed });
+    const { container } = render(<CanopyView />);
+    await frames();
+    const doc = container.ownerDocument;
+    const order = () => cards(container).map((card) => card.id.replace("canopy-card-", ""));
+    const before = selectedRun(container);
+    expect(doc.querySelector("[data-canopy-list][data-revealing]")).not.toBeNull();
+    fireEvent.keyDown(searchInput(), { key: "ArrowDown" });
+    expect(selectedRun(container)).not.toBe(before);
+    expect(doc.querySelector("[data-canopy-list][data-revealing]")).toBeNull();
+    // The user has just moved: the score waits for the pause, as always.
+    act(() =>
+      useCanopyStore.setState({
+        snapshot: {
+          ...owed,
+          refreshedAt: NOW + 10_000,
+          cards: [
+            { ...stuckCard("working"), priority: 84, attentionScore: 84 },
+            quietQuestion("asking"),
+          ],
+        },
+      })
+    );
+    await frames();
+    expect(order()).toEqual(["waiting", "asking", "working"]);
+  });
+
+  it("ends the reveal when ⌘↓ steps to the next agent from its terminal", async () => {
+    vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+    const owed = { ...canopySnapshot, busy: true };
+    installElectron(owed);
+    useCanopyStore.setState({ snapshot: owed });
+    const { container } = render(<CanopyView />);
+    await frames();
+    const doc = container.ownerDocument;
+    const before = liveRun(container);
+    expect(doc.querySelector("[data-canopy-list][data-revealing]")).not.toBeNull();
+    terminalInput(container).focus();
+    fireEvent.keyDown(terminalInput(container), { key: "ArrowDown", metaKey: true });
+    expect(liveRun(container)).not.toBe(before);
+    expect(doc.querySelector("[data-canopy-list][data-revealing]")).toBeNull();
+  });
+
+  it.each([
+    ["typing in the search", () => fireEvent.input(searchInput(), { target: { value: "a" } })],
+    [
+      "scrolling the list",
+      () => fireEvent.wheel(document.querySelector<HTMLElement>("[data-canopy-list]")!),
+    ],
+    [
+      "pressing on the list's scrollbar",
+      () => fireEvent.pointerDown(document.querySelector<HTMLElement>("[data-canopy-list]")!),
+    ],
+  ])("ends the reveal on %s", async (_, interact) => {
+    const owed = { ...canopySnapshot, busy: true };
+    installElectron(owed);
+    useCanopyStore.setState({ snapshot: owed });
+    const { container } = render(<CanopyView />);
+    await frames();
+    const revealing = () =>
+      container.ownerDocument.querySelector("[data-canopy-list][data-revealing]") !== null;
+    expect(revealing()).toBe(true);
+    act(() => interact());
+    expect(revealing()).toBe(false);
+  });
+
+  it("keeps revealing when the list is scrolled for it, not by the user", async () => {
+    const owed = { ...canopySnapshot, busy: true };
+    installElectron(owed);
+    useCanopyStore.setState({ snapshot: owed });
+    const { container } = render(<CanopyView />);
+    await frames();
+    const list = container.ownerDocument.querySelector<HTMLElement>("[data-canopy-list]")!;
+    act(() => {
+      fireEvent.scroll(list);
+    });
+    expect(list.hasAttribute("data-revealing")).toBe(true);
+  });
+
+  it("keeps an offered order on offer when an ask turns urgent, and says it once", async () => {
+    installElectron();
+    const said: string[] = [];
+    const unsubscribe = useAnnouncerStore.subscribe((state, before) => {
+      if (state.polite && state.polite !== before.polite) said.push(state.polite.msg);
+    });
+    const { container } = render(<CanopyView />);
+    await frames();
+    const doc = container.ownerDocument;
+    const sortNow = () =>
+      Array.from(doc.querySelectorAll<HTMLButtonElement>("button")).find(
+        (button) => button.textContent === "Sort now"
+      );
+    fireEvent.pointerEnter(doc.querySelector<HTMLElement>("[role=listbox]")!);
+    act(() =>
+      useCanopyStore.setState({
+        snapshot: {
+          ...canopySnapshot,
+          refreshedAt: NOW + 10_000,
+          cards: [
+            { ...stuckCard("working"), priority: 84, attentionScore: 84 },
+            quietQuestion("asking"),
+          ],
+        },
+      })
+    );
+    await frames();
+    expect(sortNow()).toBeDefined();
+    sortNow()!.focus();
+    // An urgent ask arrives: it is placed at once, and the held reorder stays held.
+    act(() =>
+      useCanopyStore.setState({
+        snapshot: {
+          ...canopySnapshot,
+          refreshedAt: NOW + 10_000,
+          cards: [
+            { ...stuckCard("working"), priority: 84, attentionScore: 84 },
+            quietQuestion("asking"),
+            { ...stuckCard("waiting"), priority: 95, attentionScore: 95 },
+          ],
+        },
+      })
+    );
+    await frames();
+    unsubscribe();
+    expect(sortNow()).toBeDefined();
+    expect(doc.activeElement).toBe(sortNow());
+    expect(said.filter((msg) => msg.includes("Sort now"))).toHaveLength(1);
   });
 
   it("stops revealing once the cards it was owed have landed, and holds still after", async () => {
@@ -1957,6 +2138,8 @@ describe("CanopyView", () => {
     act(() => {
       vi.advanceTimersByTime(CANOPY_REVEAL_MS);
     });
+    // Over by the clock alone, before the pointer comes in.
+    expect(container.ownerDocument.querySelector("[data-canopy-list][data-revealing]")).toBeNull();
     fireEvent.pointerEnter(container.ownerDocument.querySelector<HTMLElement>("[role=listbox]")!);
     act(() =>
       useCanopyStore.setState({

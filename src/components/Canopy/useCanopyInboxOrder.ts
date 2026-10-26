@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { useCanopyStore, type CanopyScope } from "@/store/canopyStore";
 import { CANOPY_URGENT_PRIORITY, type CanopySnapshot } from "@shared/types/ipc/canopy";
 import { itemPriority, itemPutAside, splitInbox, type CanopyItem } from "./canopyModel";
-import { CANOPY_REVEAL_MS, nextCanopyOrder } from "./canopyOrder";
+import { CANOPY_REVEAL_MS, canopyReorderWaiting, nextCanopyOrder } from "./canopyOrder";
 import type { HostId } from "@shared/types/remoteHosts";
 
 /** An ask that pages the user: placed in the list at once, whatever is held. */
@@ -43,9 +43,10 @@ export function useCanopyInboxOrder({
 }) {
   // Every run shows the moment the panel opens, in the order it was left — or,
   // the first time, by what Daintree observes of each — and moves to its place
-  // as the readings the open set off land. Once they have, or after
-  // CANOPY_REVEAL_MS, the list holds still between pauses like always. Only
-  // words not yet written show as skeletons.
+  // as the readings the open set off land. Once they have, after
+  // CANOPY_REVEAL_MS, or the moment the user starts working in the list, it
+  // holds still between pauses like always. Only words not yet written show
+  // as skeletons.
   const owedOnOpen = useMemo(() => {
     // Main hasn't answered the open yet: the snapshot in hand is from before
     // it, and says nothing about what the open will read.
@@ -107,12 +108,18 @@ export function useCanopyInboxOrder({
   const [rankWake, setRankWake] = useState(0);
   const [rankRequest, setRankRequest] = useState(0);
   const rankRequestSeenRef = useRef(0);
+  // A reorder the list is holding back, which the user can apply now.
+  const [reorderWaiting, setReorderWaiting] = useState(false);
   useLayoutEffect(() => {
     if (!isOpen) {
       openedRef.current = false;
+      setReorderWaiting(false);
       return;
     }
-    if (baseItems.length === 0) return;
+    if (baseItems.length === 0) {
+      setReorderWaiting(false);
+      return;
+    }
     const now = Date.now();
     const opening = !openedRef.current || orderKeyRef.current !== orderKey;
     if (opening) {
@@ -121,9 +128,11 @@ export function useCanopyInboxOrder({
       // What the user sees on opening counts as just ranked.
       lastRankRef.current = now;
     }
+    const fresh = baseItems.map((item) => item.runId);
+    const priorities = new Map(baseItems.map((item) => [item.runId, itemPriority(item, nowMs)]));
     const step = nextCanopyOrder(order, {
-      fresh: baseItems.map((item) => item.runId),
-      priorities: new Map(baseItems.map((item) => [item.runId, itemPriority(item, nowMs)])),
+      fresh,
+      priorities,
       urgent: baseItems.filter(isUrgentItem).map((item) => item.runId),
       refreshedAt,
       now,
@@ -135,6 +144,9 @@ export function useCanopyInboxOrder({
       lastInteractionAt: lastInteractionRef.current,
       lastRankAt: lastRankRef.current,
     });
+    // A run arriving or an ask promoted leaves the held reorder held: still waiting.
+    const shown = step.kind !== "set" ? order : step.ranked ? null : step.order;
+    setReorderWaiting(canopyReorderWaiting(shown, { fresh, priorities, refreshedAt }));
     if (step.kind === "set") {
       if (step.ranked) {
         lastRankRef.current = now;
@@ -178,11 +190,20 @@ export function useCanopyInboxOrder({
   useEffect(() => {
     const body = bodyRef.current;
     if (!isOpen || !body) return;
+    // Selecting, typing, scrolling or pressing: the user is reading where
+    // things are, and the reveal is over.
     const note = () => {
       lastInteractionRef.current = Date.now();
+      setRevealed(true);
     };
-    const press = () => {
-      pressingRef.current = true;
+    // Heard on the window, ahead of React's own capture: a panel shortcut that
+    // stops its keydown still moved the selection.
+    const inBody = (event: Event) => event.target instanceof Node && body.contains(event.target);
+    const noteInBody = (event: Event) => {
+      if (inBody(event)) note();
+    };
+    const press = (event: Event) => {
+      if (inBody(event)) pressingRef.current = true;
     };
     const release = () => {
       if (!pressingRef.current) return;
@@ -191,13 +212,15 @@ export function useCanopyInboxOrder({
       setRankWake((n) => n + 1);
     };
     const events = ["pointerdown", "keydown", "wheel", "input"] as const;
-    for (const type of events) body.addEventListener(type, note, { capture: true, passive: true });
-    body.addEventListener("pointerdown", press, { capture: true, passive: true });
+    for (const type of events) {
+      window.addEventListener(type, noteInBody, { capture: true, passive: true });
+    }
+    window.addEventListener("pointerdown", press, { capture: true, passive: true });
     window.addEventListener("pointerup", release, { capture: true, passive: true });
     window.addEventListener("pointercancel", release, { capture: true, passive: true });
     return () => {
-      for (const type of events) body.removeEventListener(type, note, { capture: true });
-      body.removeEventListener("pointerdown", press, { capture: true });
+      for (const type of events) window.removeEventListener(type, noteInBody, { capture: true });
+      window.removeEventListener("pointerdown", press, { capture: true });
       window.removeEventListener("pointerup", release, { capture: true });
       window.removeEventListener("pointercancel", release, { capture: true });
       pressingRef.current = false;
@@ -206,7 +229,9 @@ export function useCanopyInboxOrder({
 
   // A mouse or pen resting over a row; a touch has no hover to hold for.
   const enterList = useCallback((pointerType: string) => {
-    if (pointerType !== "touch") setPointerInList(true);
+    if (pointerType === "touch") return;
+    setPointerInList(true);
+    setRevealed(true);
   }, []);
   const leaveList = useCallback(() => {
     // Leaving releases the hold, it doesn't move the list:
@@ -229,6 +254,7 @@ export function useCanopyInboxOrder({
     inbox,
     owedOnOpen,
     revealed,
+    reorderWaiting,
     refreshedAt,
     bodyRef,
     enterList,
