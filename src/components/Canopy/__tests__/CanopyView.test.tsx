@@ -179,7 +179,7 @@ function installElectron(
 async function openOffer() {
   await act(async () => {
     fireEvent.click(
-      within(document.body).getByRole("button", { name: "Turn on reading…", hidden: true })
+      within(document.body).getByRole("button", { name: "Turn on reading", hidden: true })
     );
   });
   await frames();

@@ -65,7 +65,7 @@ export function CanopyStatusBar({
         <>
           <span className="min-w-0 truncate">Agents as Daintree sees them</span>
           <Button variant="link" size="xs" className="ml-auto h-auto shrink-0 p-0" onClick={offer}>
-            Turn on reading…
+            Turn on reading
           </Button>
         </>
       )}

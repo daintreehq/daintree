@@ -691,7 +691,7 @@ describe("the Canopy host picker", () => {
     await settle();
     // Its agents stay listed as it observed them, with the offer one press away.
     expect(document.body.textContent).not.toContain("Canopy is off on studio-01");
-    fireEvent.click(screen.getByRole("button", { name: "Turn on reading…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Turn on reading" }));
     await settle();
     expect(document.body.textContent).toContain("Canopy is off on studio-01");
     expect(document.querySelector("[data-canopy-card]")).toBeNull();
