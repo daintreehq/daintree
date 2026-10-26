@@ -1882,6 +1882,13 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
             pattern: "^(Up|Down|Left|Right|Enter|Escape|Tab|Space|Backspace|[a-z0-9])$",
           },
         },
+        generation: {
+          description:
+            "Pressing keys in another assistant: its generation from the assistant listing.",
+          type: "integer",
+          minimum: 0,
+          maximum: 9007199254740991,
+        },
         notify: {
           description: "As on a send: hear, with its reply, when the turn these keys unblock ends.",
           type: "boolean",

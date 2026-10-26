@@ -399,6 +399,37 @@ describe("AssistantTerminalControl (#13496)", () => {
       expect(mocks.write.mock.calls.map((call) => call[1])).toEqual(["\x1b[B", "\r"]);
     });
 
+    it("refuses when someone types while the screen is read for a choice", async () => {
+      const lane = addLane(1, "t-one", { record: approval() });
+      deps.serializedState = async () => {
+        lane.record = approval({ lastTypedInputAt: 2_000 });
+        return { data: "❯ 1. Yes\n  2. No, exit\n" };
+      };
+      await expect(
+        control.sendKeys(LOCAL, control.require(LOCAL, "t-one"), {
+          keys: undefined,
+          choose: "No, exit",
+          generation: 3,
+        })
+      ).rejects.toMatchObject({ code: "ASSISTANT_BUSY" });
+      expect(mocks.write).not.toHaveBeenCalled();
+    });
+
+    it("stops the sequence when the run is replaced between keys", async () => {
+      const lane = addLane(1, "t-one", { record: approval() });
+      mocks.write.mockImplementationOnce(() => {
+        lane.generation = 4;
+      });
+      await expect(
+        control.sendKeys(LOCAL, control.require(LOCAL, "t-one"), {
+          keys: ["Down", "Enter"],
+          choose: undefined,
+          generation: 3,
+        })
+      ).rejects.toMatchObject({ code: "ASSISTANT_RESTARTED" });
+      expect(mocks.write).toHaveBeenCalledTimes(1);
+    });
+
     it("needs keys or a choice", async () => {
       addLane(1, "t-one", { record: approval() });
       await expect(

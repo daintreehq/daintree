@@ -438,21 +438,7 @@ export class AssistantTerminalControl {
         `Assistant terminal '${target.terminalId}' can't be read right now. Nothing was pressed.`
       );
     }
-    if (record.isExited === true || record.hasPty === false || record.isTrashed === true) {
-      throw new AssistantTargetError(
-        ASSISTANT_TARGET_REFUSALS.busy,
-        `Assistant terminal '${target.terminalId}' has no running process to press keys in. Nothing was pressed.`
-      );
-    }
-    if (
-      record.lastTypedInputAt !== undefined &&
-      (record.lastStateChange === undefined || record.lastTypedInputAt >= record.lastStateChange)
-    ) {
-      throw new AssistantTargetError(
-        ASSISTANT_TARGET_REFUSALS.busy,
-        `Someone has typed in assistant terminal '${target.terminalId}' since it last changed state, so keys could edit or submit their draft. Nothing was pressed.`
-      );
-    }
+    this.requireKeysAdmitted(target, record);
     const readScreen = async (lines: number) => {
       const snapshot = await readTailSnapshot(
         (options) => this.deps.serializedState(target.terminalId, options),
@@ -474,16 +460,50 @@ export class AssistantTerminalControl {
         "Pass `choose` or `keys`. Nothing was pressed."
       );
     }
-    // The reads were async: the run must still be the one the caller named.
+    // The reads were async: the run must still be the one the caller named,
+    // and nobody may have typed since, or the Enter would submit their draft.
     this.requireGeneration(caller, target, request.generation);
+    if (request.choose !== undefined) {
+      const fresh = await this.deps.getTerminal(target.terminalId);
+      if (!fresh) {
+        throw new AssistantTargetError(
+          ASSISTANT_TARGET_REFUSALS.notFound,
+          `Assistant terminal '${target.terminalId}' can't be read right now. Nothing was pressed.`
+        );
+      }
+      this.requireKeysAdmitted(target, fresh);
+      this.requireGeneration(caller, target, request.generation);
+    }
     const sleep = this.deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
     for (const [index, key] of keys.entries()) {
-      if (index > 0) await sleep(SEND_KEYS_GAP_MS);
+      if (index > 0) {
+        await sleep(SEND_KEYS_GAP_MS);
+        // A replaced run must not get the rest of the sequence.
+        this.requireGeneration(caller, target, request.generation);
+      }
       this.deps.write(target.terminalId, keySequence(key));
     }
     await sleep(SEND_KEYS_SETTLE_MS);
     const screen = await readScreen(SEND_KEYS_SCREEN_LINES).catch(() => null);
     return { terminalId: target.terminalId, keys, ...(screen ? { screen } : {}) };
+  }
+
+  private requireKeysAdmitted(target: AssistantTarget, record: AssistantTerminalRecord): void {
+    if (record.isExited === true || record.hasPty === false || record.isTrashed === true) {
+      throw new AssistantTargetError(
+        ASSISTANT_TARGET_REFUSALS.busy,
+        `Assistant terminal '${target.terminalId}' has no running process to press keys in. Nothing was pressed.`
+      );
+    }
+    if (
+      record.lastTypedInputAt !== undefined &&
+      (record.lastStateChange === undefined || record.lastTypedInputAt >= record.lastStateChange)
+    ) {
+      throw new AssistantTargetError(
+        ASSISTANT_TARGET_REFUSALS.busy,
+        `Someone has typed in assistant terminal '${target.terminalId}' since it last changed state, so keys could edit or submit their draft. Nothing was pressed.`
+      );
+    }
   }
 
   async interrupt(target: AssistantTarget): Promise<{
