@@ -48,6 +48,40 @@ export type VoiceInputStatus =
  */
 export type VoiceSessionEndReason = "stopped" | "cancelled" | "superseded" | "failed";
 
+/** Where a recognition hint came from. */
+export type VoiceKeytermSource =
+  "dictionary" | "projectDictionary" | "project" | "repository" | "names" | "branch" | "terminal";
+
+export interface VoiceSentTerm {
+  term: string;
+  source: VoiceKeytermSource;
+}
+
+/**
+ * What the most recent dictation handed its transcription provider, kept in
+ * main's memory for that one session. `sent` is null until the provider has
+ * reported its request, and empty when it went out with no terms.
+ * `keytermAttempt` is Deepgram's retry step: after an HTTP 400 it re-sends a
+ * trimmed list, then none. `endedBeforeSending` marks a session that ended
+ * before the provider reported a request (rejected, stopped while connecting,
+ * or the request failed to send), so its empty `sent` is not a provider limit.
+ */
+export interface LastDictationTerms {
+  sessionId: string;
+  provider: "openai" | "deepgram";
+  /**
+   * How many terms assembly gathered, before the provider's own limits. Zero
+   * until assembly lands, which for OpenAI can be after its provider starts.
+   */
+  assembledCount: number;
+  sent: VoiceSentTerm[] | null;
+  keytermAttempt?: "full" | "trimmed" | "none";
+  endedBeforeSending?: true;
+  /** The session dictated an instruction to rewrite selected text, not prompt text. */
+  rewrite?: true;
+  startedAt: number;
+}
+
 /**
  * A dictation session another view owns. Main tells every view about the live
  * session on `voice-input:live-session`, except the one that owns it, so the

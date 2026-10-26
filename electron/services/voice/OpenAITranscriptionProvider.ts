@@ -824,6 +824,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     });
     try {
       connection.send(JSON.stringify(sessionUpdate));
+      this.emit({ type: "terms_sent", terms: keywords });
     } catch (err) {
       const message = formatErrorMessage(err, "Failed to send session.update");
       logError(`${P} Failed to send session.update`, undefined, voiceErrorLogFields(err));

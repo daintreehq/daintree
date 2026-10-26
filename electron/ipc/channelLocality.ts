@@ -1156,6 +1156,7 @@ export const CHANNEL_LOCALITY = {
   "voice-input:file-token-resolved": "shell",
   "voice-input:flush-paragraph": "shell",
   "voice-input:get-live-session": "shell",
+  "voice-input:get-last-terms": "shell",
   "voice-input:get-settings": "shell",
   "voice-input:live-session": "shell",
   "voice-input:open-mic-settings": "shell",

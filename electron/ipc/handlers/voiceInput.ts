@@ -21,6 +21,9 @@ import type {
 import type {
   VoiceLiveSessionUpdate,
   VoiceRewriteOutcome,
+  LastDictationTerms,
+  VoiceKeytermSource,
+  VoiceSentTerm,
   VoiceSessionEndReason,
   VoiceStartOutcome,
 } from "../../../shared/types/voice.js";
@@ -34,7 +37,10 @@ import {
 } from "../../services/voiceDictationCommands.js";
 import { VOICE_DICTATION_AI_MODEL } from "../../../shared/config/voiceCorrection.js";
 import { normalizeVoiceLanguage } from "../../../shared/config/voiceLanguages.js";
-import { assembleKeyterms, screenDictationNames } from "../../services/voiceContextKeyterms.js";
+import {
+  assembleTaggedKeyterms,
+  screenDictationNames,
+} from "../../services/voiceContextKeyterms.js";
 import { readProjectVoiceDictionary } from "../../services/projectVoiceDictionary.js";
 import { flattenDictationNames, gatherDictationNames } from "../../services/voiceContextNames.js";
 import {
@@ -142,6 +148,12 @@ interface VoiceSession {
   heldSend: HeldSend | null;
 }
 
+// The most recent dictation's request, for the settings page. Memory only, and
+// replaced by the next dictation. The source lookup is lowercased because
+// providers report terms after trimming and dedup, not as assembled.
+let lastDictationTerms: LastDictationTerms | null = null;
+let lastTermSources = new Map<string, VoiceKeytermSource>();
+
 let liveSession: VoiceSession | null = null;
 // A replaced session whose provider is still draining. The service stays its
 // until the drain settles, so a newer session waits for it before starting.
@@ -242,6 +254,11 @@ function endSession(session: VoiceSession, reason: VoiceSessionEndReason): void 
   // what is left belongs to a session nobody is dictating into any more.
   if (session.heldSend) clearTimeout(session.heldSend.timer);
   session.heldSend = null;
+  // A provider that never reported (rejected, or cancelled while connecting)
+  // sent nothing, and must not read as still connecting or as trimmed by limits.
+  if (lastDictationTerms?.sessionId === session.id && lastDictationTerms.sent === null) {
+    lastDictationTerms = { ...lastDictationTerms, sent: [], endedBeforeSending: true };
+  }
   session.preStartAudio = null;
   session.markHandedOff();
   session.unsubscribe?.();
@@ -984,13 +1001,13 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     void names.then((gathered) => {
       sessionNames.names = flattenDictationNames(screenDictationNames(gathered));
     });
-    const keytermsPromise = assembleKeyterms({
+    const keytermsPromise = assembleTaggedKeyterms({
       customDictionary: dictionaryTerms(settings.dictionary),
       projectDictionary,
       ...resolveKeytermTarget(session.projectId, terminalId, deps.ptyClient),
       ptyClient: deps.ptyClient,
       names,
-    }).catch((err: unknown): string[] => {
+    }).catch((err: unknown): VoiceSentTerm[] => {
       logDebug("[VoiceInput] Keyterm assembly failed, starting without keyterms", {
         ...voiceErrorLogFields(err),
       });
@@ -1156,7 +1173,25 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       }
     };
 
+    const recordSentTerms = (voiceEvent: VoiceSessionEvent & { type: "terms_sent" }) => {
+      if (lastDictationTerms?.sessionId !== session.id) return;
+      const sent: VoiceSentTerm[] = [];
+      for (const term of voiceEvent.terms) {
+        const source = lastTermSources.get(term.trim().toLowerCase());
+        if (source) sent.push({ term, source });
+      }
+      lastDictationTerms = {
+        ...lastDictationTerms,
+        sent,
+        ...(voiceEvent.keytermAttempt ? { keytermAttempt: voiceEvent.keytermAttempt } : {}),
+      };
+    };
+
     const forwardEvent = (voiceEvent: VoiceSessionEvent) => {
+      if (voiceEvent.type === "terms_sent") {
+        recordSentTerms(voiceEvent);
+        return;
+      }
       const target = session.sender;
       if (target.isDestroyed()) return;
       const sessionId = session.id;
@@ -1238,10 +1273,10 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // still starting. OpenAI opens its socket now and takes them as they land,
     // since it only sends them once the socket is open. Assembly has its own
     // internal timeouts, so this await is bounded.
-    let keyterms: string[] | null = null;
+    let taggedKeyterms: VoiceSentTerm[] | null = null;
     const termsWaitStartedAt = performance.now();
     if (svc.keytermsNeededToConnect(settings)) {
-      keyterms = await keytermsPromise;
+      taggedKeyterms = await keytermsPromise;
       // A stop, a newer start or the owner going away ended this session while
       // assembly ran. Whatever ended it already released its subscription and
       // watcher, so there is nothing of ours left to undo.
@@ -1256,6 +1291,36 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       await draining.catch(() => {});
       if (!isLive(session)) return SUPERSEDED;
     }
+    // This session takes the slot before its provider starts, and its terms are
+    // recorded before the provider is handed them, so the provider's report of
+    // what it sent always finds them. OpenAI's land after the start, through the
+    // promise it waits on; until then nothing has been sent, so `sent` is null.
+    // A spoken rewrite instruction is a provider request too, so it takes the
+    // slot, marked as one.
+    lastTermSources = new Map();
+    lastDictationTerms = {
+      sessionId: session.id,
+      provider: settings.transcriptionProvider,
+      assembledCount: 0,
+      sent: null,
+      startedAt: Date.now(),
+      ...(session.intent === "rewrite" ? { rewrite: true as const } : {}),
+    };
+    const recordAssembledTerms = (tagged: VoiceSentTerm[]): string[] => {
+      if (lastDictationTerms?.sessionId === session.id) {
+        // First wins: assembly dedups on the untrimmed term, so two entries can
+        // share a trimmed key, and the provider keeps the earlier one.
+        const sources = new Map<string, VoiceKeytermSource>();
+        for (const entry of tagged) {
+          const key = entry.term.trim().toLowerCase();
+          if (!sources.has(key)) sources.set(key, entry.source);
+        }
+        lastTermSources = sources;
+        lastDictationTerms = { ...lastDictationTerms, assembledCount: tagged.length };
+      }
+      return tagged.map((entry) => entry.term);
+    };
+    const keyterms = taggedKeyterms ? recordAssembledTerms(taggedKeyterms) : null;
     const providerStartAt = performance.now();
     // Bound at the handoff: until now a session this one replaced may still be
     // draining, and its file-link detection runs under its own signal.
@@ -1277,7 +1342,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     session.phase = "active";
     const startPromise = keyterms
       ? svc.start({ ...settings, keyterms }, session.id)
-      : svc.start(settings, session.id, { keyterms: keytermsPromise });
+      : svc.start(settings, session.id, { keyterms: keytermsPromise.then(recordAssembledTerms) });
     flushPreStartAudio(session, svc);
     session.markHandedOff();
     const result = await startPromise;
@@ -1473,6 +1538,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     });
   };
 
+  const handleGetLastTerms = async (): Promise<LastDictationTerms | null> => lastDictationTerms;
+
   const sessionNamespace = defineIpcNamespace({
     name: "voiceInput",
     ops: {
@@ -1505,6 +1572,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         handleRewrite,
         { withContext: true }
       ),
+      getLastTerms: op(VOICE_INPUT_METHOD_CHANNELS.getLastTerms, handleGetLastTerms),
     },
   });
 
@@ -1538,5 +1606,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     servicePromise = null;
     correctionService = null;
     sessionController = null;
+    lastDictationTerms = null;
+    lastTermSources = new Map();
   };
 }

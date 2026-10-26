@@ -38,7 +38,10 @@ export type VoiceTranscriptionEvent =
   // Main-only: it holds back a spoken send and never reaches the renderer.
   | { type: "speech_started" }
   | { type: "error"; error: VoiceInputError }
-  | { type: "status"; status: VoiceInputStatus };
+  | { type: "status"; status: VoiceInputStatus }
+  // The terms a request actually carried, after the provider's own sanitizing,
+  // limits and retries. Internal: the handler records it and never forwards it.
+  | { type: "terms_sent"; terms: string[]; keytermAttempt?: "full" | "trimmed" | "none" };
 
 /** A provider event as the service forwards it, tagged with its dictation session. */
 export type VoiceSessionEvent = VoiceTranscriptionEvent & { sessionId: string };

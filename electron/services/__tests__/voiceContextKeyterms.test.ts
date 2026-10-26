@@ -10,6 +10,7 @@ import {
 } from "../../../shared/config/voiceKeyterms.js";
 import {
   assembleKeyterms,
+  assembleTaggedKeyterms,
   screenDictationNames,
   formatKeytermPrompt,
   sanitizeOpenAIKeywords,
@@ -985,5 +986,84 @@ describe("sanitizeOpenAIKeywords", () => {
     const input = Object.freeze(["Daintree", "<bad>", "xterm"]);
     expect(sanitizeOpenAIKeywords(input)).toEqual(["Daintree", "xterm"]);
     expect(input).toEqual(["Daintree", "<bad>", "xterm"]);
+  });
+});
+
+describe("assembleTaggedKeyterms", () => {
+  it("tags each term with the tier that won it and matches assembleKeyterms", async () => {
+    const opts = {
+      customDictionary: ["zodSchema", "Daintree"],
+      projectName: "Daintree Desktop",
+    };
+    const tagged = await assembleTaggedKeyterms(opts);
+    expect(tagged.map((t) => t.term)).toEqual(await assembleKeyterms(opts));
+    // Newest dictionary entry first; "Daintree" belongs to the dictionary, so
+    // the project tier's duplicate doesn't take it over.
+    expect(tagged.find((t) => t.term === "Daintree")?.source).toBe("dictionary");
+    expect(tagged.find((t) => t.term === "Desktop")?.source).toBe("project");
+  });
+
+  it("tags host, project and worktree names as names, between the project and the branch", async () => {
+    const opts = {
+      customDictionary: ["zodSchema"],
+      projectName: "Quartzline",
+      names: Promise.resolve({
+        hosts: ["Studio 1"],
+        projects: ["Plugin SDK"],
+        worktrees: ["billing"],
+      }),
+      terminalId: TARGET,
+      ptyClient: asPtyClient(makePtyClient()),
+    };
+    const tagged = await assembleTaggedKeyterms(opts);
+    expect(tagged.map((t) => t.term)).toEqual(await assembleKeyterms(opts));
+    const sources = tagged.map((t) => t.source);
+    expect(tagged.filter((t) => t.source === "names").map((t) => t.term)).toEqual([
+      "Studio 1",
+      "Plugin SDK",
+      "billing",
+    ]);
+    expect(sources.indexOf("names")).toBeGreaterThan(sources.lastIndexOf("project"));
+    expect(sources.lastIndexOf("names")).toBeLessThan(sources.indexOf("branch"));
+  });
+
+  it("screens names in the tagged list the same way", async () => {
+    const tagged = await assembleTaggedKeyterms({
+      customDictionary: [],
+      names: {
+        hosts: [" Studio 1 ", "sk-abcdefghijklmnopqrstuvwxyz0123456789", "7"],
+        projects: [],
+        worktrees: [],
+      },
+    });
+    expect(tagged).toEqual([{ term: "Studio 1", source: "names" }]);
+  });
+
+  it("tags the project's own dictionary apart from the user's", async () => {
+    const tagged = await assembleTaggedKeyterms({
+      customDictionary: ["mine"],
+      projectDictionary: ["shared"],
+    });
+    expect(tagged).toEqual(
+      expect.arrayContaining([
+        { term: "shared", source: "projectDictionary" },
+        { term: "mine", source: "dictionary" },
+      ])
+    );
+  });
+
+  it("tags branch and terminal terms from the target terminal", async () => {
+    const ptyClient = makePtyClient(["const myVariable = handleRequest();"]);
+    const tagged = await assembleTaggedKeyterms({
+      customDictionary: ["zodSchema"],
+      terminalId: TARGET,
+      ptyClient: asPtyClient(ptyClient),
+    });
+    const bySource = (source: string) =>
+      tagged.filter((t) => t.source === source).map((t) => t.term);
+    expect(bySource("dictionary")).toEqual(["zodSchema"]);
+    expect(bySource("branch")).toContain("auth");
+    expect(bySource("terminal")).toEqual(expect.arrayContaining(["myVariable", "handleRequest"]));
+    expect(bySource("branch")).not.toContain("myVariable");
   });
 });

@@ -45,7 +45,7 @@ const shared = vi.hoisted(() => ({
   startCalls: [] as unknown[],
   /** The start context passed alongside each of them. */
   startContexts: [] as Array<{ keyterms?: Promise<string[]> } | undefined>,
-  /** Optional override for assembleKeyterms — lets a test defer/control timing. */
+  /** Optional override for assembleTaggedKeyterms — lets a test defer/control timing. */
   assembleKeyterms: null as null | (() => Promise<string[]>),
   /** The session the fake provider was last started for; its events carry it. */
   providerSessionId: null as string | null,
@@ -119,8 +119,8 @@ vi.mock("../../../services/ProjectStore.js", () => ({
 // The real module's pure helpers (the names screen) stay; only assembly is faked.
 vi.mock("../../../services/voiceContextKeyterms.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../services/voiceContextKeyterms.js")>()),
-  assembleKeyterms: vi.fn(() =>
-    shared.assembleKeyterms ? shared.assembleKeyterms() : Promise.resolve([])
+  assembleTaggedKeyterms: vi.fn(async () =>
+    ((await shared.assembleKeyterms?.()) ?? []).map((term) => ({ term, source: "dictionary" }))
   ),
   formatKeytermPrompt: vi.fn(() => ""),
 }));
@@ -346,7 +346,7 @@ describe("voiceInput — IPC handler surface", () => {
     // Begin a new session whose keyterm assembly hangs until we resolve it.
     // Only Deepgram waits for assembly before starting its provider.
     const { store } = await import("../../../store.js");
-    const { assembleKeyterms } = await import("../../../services/voiceContextKeyterms.js");
+    const { assembleTaggedKeyterms } = await import("../../../services/voiceContextKeyterms.js");
     const readStore = vi.mocked(store.get).getMockImplementation()!;
     vi.mocked(store.get).mockImplementation((key: string) =>
       key === "voiceInput"
@@ -363,13 +363,15 @@ describe("voiceInput — IPC handler surface", () => {
         resolveAssembly = resolve;
       });
       shared.assembleKeyterms = () => assemblyPromise;
-      const assembliesBefore = vi.mocked(assembleKeyterms).mock.calls.length;
+      const assembliesBefore = vi.mocked(assembleTaggedKeyterms).mock.calls.length;
       const handleStart = getHandler("voice-input:start");
       const startPromise = (handleStart as SessionHandler)(fakeEvent, nextSessionId());
 
       // Stop arrives mid-assembly, then assembly finishes.
       await vi.waitFor(() =>
-        expect(vi.mocked(assembleKeyterms).mock.calls.length).toBeGreaterThan(assembliesBefore)
+        expect(vi.mocked(assembleTaggedKeyterms).mock.calls.length).toBeGreaterThan(
+          assembliesBefore
+        )
       );
       expect(shared.startCalls).toHaveLength(0);
       await (handleStop as SessionHandler)(fakeEvent, currentSessionId);
@@ -1111,14 +1113,14 @@ describe("voiceInput — context keyterms wiring", () => {
   it("hands a non-Deepgram session its keyterms as a pending start context (OpenAI prompt path)", async () => {
     const { store } = await import("../../../store.js");
     vi.mocked(store.get).mockReturnValue(providerSettings("openai"));
-    const { assembleKeyterms } = await import("../../../services/voiceContextKeyterms.js");
+    const { assembleTaggedKeyterms } = await import("../../../services/voiceContextKeyterms.js");
     shared.assembleKeyterms = () => Promise.resolve(["alpha", "beta"]);
 
     await startFn(fakeEvent, nextSessionId());
 
     // OpenAI consumes keyterms via transcription.prompt, so assembly runs for it
     // too, but its socket opens without waiting for them.
-    expect(assembleKeyterms).toHaveBeenCalled();
+    expect(assembleTaggedKeyterms).toHaveBeenCalled();
     expect(shared.startCalls).toHaveLength(1);
     expect(shared.startCalls[0]).toMatchObject({ transcriptionProvider: "openai" });
     expect(shared.startCalls[0]).not.toHaveProperty("keyterms");
@@ -1136,7 +1138,7 @@ describe("voiceInput — context keyterms wiring", () => {
       correctionEnabled: true,
       dictionary,
     });
-    const { assembleKeyterms } = await import("../../../services/voiceContextKeyterms.js");
+    const { assembleTaggedKeyterms } = await import("../../../services/voiceContextKeyterms.js");
 
     await startFn(fakeEvent, nextSessionId());
     await (getHandler("voice-input:correct") as (e: unknown, r: unknown) => Promise<unknown>)(
@@ -1144,7 +1146,7 @@ describe("voiceInput — context keyterms wiring", () => {
       { rawText: "open dane tree" }
     );
 
-    expect(vi.mocked(assembleKeyterms).mock.calls.at(-1)?.[0]).toMatchObject({
+    expect(vi.mocked(assembleTaggedKeyterms).mock.calls.at(-1)?.[0]).toMatchObject({
       customDictionary: ["Daintree", "Zustand"],
     });
     expect(shared.correctionCalls.at(-1)?.settings).toMatchObject({
@@ -1158,10 +1160,10 @@ describe("voiceInput — context keyterms wiring", () => {
     shared.assembleKeyterms = () => gate.promise;
 
     vi.mocked(store.get).mockReturnValue(providerSettings("deepgram"));
-    const { assembleKeyterms } = await import("../../../services/voiceContextKeyterms.js");
-    vi.mocked(assembleKeyterms).mockClear();
+    const { assembleTaggedKeyterms } = await import("../../../services/voiceContextKeyterms.js");
+    vi.mocked(assembleTaggedKeyterms).mockClear();
     const aPromise = startFn(fakeEvent, nextSessionId());
-    await vi.waitFor(() => expect(assembleKeyterms).toHaveBeenCalled());
+    await vi.waitFor(() => expect(assembleTaggedKeyterms).toHaveBeenCalled());
 
     // Stop supersedes the in-flight assembly.
     await stopFn(fakeEvent, currentSessionId);

@@ -38,6 +38,8 @@ const shared = vi.hoisted(() => ({
   /** Every signal the correction service was bound to, in order. */
   signals: [] as Array<AbortSignal | null>,
   assembleKeyterms: null as null | (() => Promise<string[]>),
+  /** The start context svc.start() was last handed: OpenAI's pending terms. */
+  startContext: undefined as undefined | { keyterms?: Promise<string[]> },
   transcriptionProvider: "openai" as "openai" | "deepgram",
   /** Project registered per sender id, as the view registry would answer. */
   projects: new Map<number, string>(),
@@ -57,8 +59,13 @@ vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
     this.keytermsNeededToConnect = function (settings: { transcriptionProvider?: string }) {
       return settings.transcriptionProvider === "deepgram";
     };
-    this.start = function (_settings: unknown, sessionId: string) {
+    this.start = function (
+      _settings: unknown,
+      sessionId: string,
+      context?: { keyterms?: Promise<string[]> }
+    ) {
       shared.providerSessionId = sessionId;
+      shared.startContext = context;
       shared.calls.push(`start:${sessionId}`);
       return Promise.resolve(shared.startResult);
     };
@@ -101,8 +108,8 @@ vi.mock("../../../services/ProjectStore.js", () => ({
 // The real module's pure helpers (the names screen) stay; only assembly is faked.
 vi.mock("../../../services/voiceContextKeyterms.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../services/voiceContextKeyterms.js")>()),
-  assembleKeyterms: vi.fn(() =>
-    shared.assembleKeyterms ? shared.assembleKeyterms() : Promise.resolve([])
+  assembleTaggedKeyterms: vi.fn(async () =>
+    ((await shared.assembleKeyterms?.()) ?? []).map((term) => ({ term, source: "dictionary" }))
   ),
   formatKeytermPrompt: vi.fn(() => ""),
 }));
@@ -272,6 +279,7 @@ describe("voiceInput — session identity", () => {
     shared.endDrain = null;
     shared.signals = [];
     shared.assembleKeyterms = null;
+    shared.startContext = undefined;
     shared.transcriptionProvider = "openai";
     shared.projects.clear();
     owners.clear();
@@ -292,6 +300,147 @@ describe("voiceInput — session identity", () => {
 
   afterEach(() => {
     cleanup?.();
+  });
+
+  it("keeps the terms the provider reported, unforwarded, until the next dictation", async () => {
+    const getLastTerms = () => getHandler(CHANNELS.VOICE_INPUT_GET_LAST_TERMS)({});
+    expect(await getLastTerms()).toBeNull();
+
+    shared.assembleKeyterms = async () => ["alpha", "Beta", "gamma"];
+    await start(ownerA, "a");
+    expect(await getLastTerms()).toMatchObject({ sessionId: "a", assembledCount: 3, sent: null });
+
+    emit({
+      type: "terms_sent",
+      terms: ["alpha", "beta", "unassembled"],
+      keytermAttempt: "trimmed",
+    });
+    expect(await getLastTerms()).toMatchObject({
+      sessionId: "a",
+      sent: [
+        { term: "alpha", source: "dictionary" },
+        { term: "beta", source: "dictionary" },
+      ],
+      keytermAttempt: "trimmed",
+    });
+    expect(received(ownerA)).toEqual([]);
+
+    emit({ type: "terms_sent", terms: [] });
+    expect(await getLastTerms()).toMatchObject({ sent: [] });
+
+    // A session that reported keeps what it reported when it ends.
+    await stop(ownerA, "a");
+    const reported = (await getLastTerms()) as Record<string, unknown>;
+    expect(reported).toMatchObject({ sessionId: "a", sent: [] });
+    expect(reported).not.toHaveProperty("endedBeforeSending");
+
+    shared.assembleKeyterms = async () => ["delta"];
+    await start(ownerB, "b");
+    expect(await getLastTerms()).toMatchObject({ sessionId: "b", assembledCount: 1, sent: null });
+
+    // Ending before the provider reported leaves "nothing sent", not "pending",
+    // and marks it so the page doesn't blame the provider's limits.
+    await stop(ownerB, "b");
+    expect(await getLastTerms()).toMatchObject({
+      sessionId: "b",
+      sent: [],
+      endedBeforeSending: true,
+    });
+  });
+
+  it("records OpenAI's terms when they land after its start, before it reports them", async () => {
+    const getLastTerms = () => getHandler(CHANNELS.VOICE_INPUT_GET_LAST_TERMS)({});
+    let landA!: (terms: string[]) => void;
+    shared.assembleKeyterms = () => new Promise<string[]>((r) => (landA = r));
+    await expect(start(ownerA, "a")).resolves.toEqual({ status: "started" });
+
+    // OpenAI's provider started without waiting on assembly.
+    expect(shared.calls).toContain("start:a");
+    expect(await getLastTerms()).toMatchObject({ sessionId: "a", sent: null });
+
+    // The provider sends, and reports, only once its pending terms land.
+    landA(["Daintree", "xterm"]);
+    const terms = await shared.startContext!.keyterms!;
+    expect(terms).toEqual(["Daintree", "xterm"]);
+    emit({ type: "terms_sent", terms });
+    const reported = (await getLastTerms()) as Record<string, unknown>;
+    expect(reported).toMatchObject({
+      sessionId: "a",
+      provider: "openai",
+      assembledCount: 2,
+      sent: [
+        { term: "Daintree", source: "dictionary" },
+        { term: "xterm", source: "dictionary" },
+      ],
+    });
+    expect(reported).not.toHaveProperty("endedBeforeSending");
+  });
+
+  it("keeps a session stopped before its OpenAI terms land as ended before sending", async () => {
+    const getLastTerms = () => getHandler(CHANNELS.VOICE_INPUT_GET_LAST_TERMS)({});
+    let landA!: (terms: string[]) => void;
+    shared.assembleKeyterms = () => new Promise<string[]>((r) => (landA = r));
+    await start(ownerA, "a");
+    const pendingA = shared.startContext!.keyterms!;
+    await stop(ownerA, "a");
+    expect(await getLastTerms()).toMatchObject({
+      sessionId: "a",
+      sent: [],
+      endedBeforeSending: true,
+    });
+
+    shared.assembleKeyterms = async () => ["delta"];
+    await start(ownerB, "b");
+    await expect(shared.startContext!.keyterms!).resolves.toEqual(["delta"]);
+
+    // A's terms landing late leave B's slot and sources alone.
+    landA(["alpha"]);
+    await expect(pendingA).resolves.toEqual(["alpha"]);
+    emit({ type: "terms_sent", terms: ["alpha", "delta"] });
+    expect(await getLastTerms()).toMatchObject({
+      sessionId: "b",
+      assembledCount: 1,
+      sent: [{ term: "delta", source: "dictionary" }],
+    });
+  });
+
+  it("lets a spoken rewrite instruction take the slot, marked as one", async () => {
+    const getLastTerms = () => getHandler(CHANNELS.VOICE_INPUT_GET_LAST_TERMS)({});
+    shared.assembleKeyterms = async () => ["alpha"];
+    await start(ownerA, "a");
+    expect(await getLastTerms()).not.toHaveProperty("rewrite");
+    await stop(ownerA, "a");
+
+    shared.assembleKeyterms = async () => ["beta"];
+    owners.set("b", ownerB);
+    await getHandler(CHANNELS.VOICE_INPUT_START)({ sender: ownerB }, "b", { intent: "rewrite" });
+    await shared.startContext!.keyterms!;
+    emit({ type: "terms_sent", terms: ["beta"] });
+    expect(await getLastTerms()).toMatchObject({
+      sessionId: "b",
+      rewrite: true,
+      sent: [{ term: "beta", source: "dictionary" }],
+    });
+  });
+
+  it("records Deepgram's terms before its provider starts", async () => {
+    const getLastTerms = () => getHandler(CHANNELS.VOICE_INPUT_GET_LAST_TERMS)({});
+    shared.transcriptionProvider = "deepgram";
+    shared.assembleKeyterms = async () => ["alpha", "beta"];
+    await start(ownerA, "a");
+    expect(shared.startContext).toBeUndefined();
+    expect(await getLastTerms()).toMatchObject({
+      sessionId: "a",
+      provider: "deepgram",
+      assembledCount: 2,
+      sent: null,
+    });
+
+    emit({ type: "terms_sent", terms: ["alpha"], keytermAttempt: "trimmed" });
+    expect(await getLastTerms()).toMatchObject({
+      sent: [{ term: "alpha", source: "dictionary" }],
+      keytermAttempt: "trimmed",
+    });
   });
 
   it("records the view and project that own the live session", async () => {

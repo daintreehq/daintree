@@ -14,6 +14,7 @@ import {
   MAX_NAME_KEYTERMS,
 } from "../../shared/config/voiceKeyterms.js";
 import type { DictationNames } from "./voiceContextNames.js";
+import type { VoiceKeytermSource, VoiceSentTerm } from "../../shared/types/voice.js";
 
 const P = "[VoiceKeyterms]";
 
@@ -422,9 +423,15 @@ export function screenDictationNames(names: DictationNames): DictationNames {
 }
 
 export async function assembleKeyterms(opts: KeytermAssemblyOpts): Promise<string[]> {
+  return (await assembleTaggedKeyterms(opts)).map((entry) => entry.term);
+}
+
+/** The same list as `assembleKeyterms`, each term tagged with the tier that won it. */
+export async function assembleTaggedKeyterms(opts: KeytermAssemblyOpts): Promise<VoiceSentTerm[]> {
   const { customDictionary, projectName, projectPath, terminalId, ptyClient } = opts;
   const seen = new Set<string>();
-  const result: string[] = [];
+  const result: VoiceSentTerm[] = [];
+  let source: VoiceKeytermSource = "projectDictionary";
 
   function add(term: string): boolean {
     if (result.length >= MAX_KEYTERMS) return false;
@@ -432,7 +439,7 @@ export async function assembleKeyterms(opts: KeytermAssemblyOpts): Promise<strin
     const key = capped.toLowerCase();
     if (seen.has(key)) return false;
     seen.add(key);
-    result.push(capped);
+    result.push({ term: capped, source });
     return true;
   }
 
@@ -465,7 +472,11 @@ export async function assembleKeyterms(opts: KeytermAssemblyOpts): Promise<strin
   // repository, workspace-name and branch terms keep their reserved slots. These
   // are hand-entered, so they skip the secret filter the derived tiers go through.
   let dictionaryAdded = 0;
-  for (const list of [projectDictionary, customDictionary]) {
+  for (const [list, listSource] of [
+    [projectDictionary, "projectDictionary"],
+    [customDictionary, "dictionary"],
+  ] as const) {
+    source = listSource;
     for (let i = list.length - 1; i >= 0; i--) {
       if (dictionaryAdded >= MAX_DICTIONARY_KEYTERMS) break;
       const trimmed = list[i]!.trim();
@@ -475,6 +486,7 @@ export async function assembleKeyterms(opts: KeytermAssemblyOpts): Promise<strin
     }
   }
 
+  source = "project";
   // Priority 2: Project name tokens. Bounded so a long project name can't use
   // every reserved slot and leave none for branch tokens.
   if (projectName && !holdsCredentialOrId(projectName)) {
@@ -492,6 +504,7 @@ export async function assembleKeyterms(opts: KeytermAssemblyOpts): Promise<strin
     }
   }
 
+  source = "repository";
   // Priority 3: Repository names. Ahead of the branch, whose slug is mostly
   // plain words, but bounded by its own cap.
   let repoAdded = 0;
@@ -503,6 +516,7 @@ export async function assembleKeyterms(opts: KeytermAssemblyOpts): Promise<strin
     }
   }
 
+  source = "names";
   // Priority 4: Host, project and worktree names the user points at ("run this
   // on Studio 1"), kept whole, never tokenized. Only the Assistant gets hosts
   // and projects; any other terminal, its project's worktrees. Screened and
@@ -513,6 +527,7 @@ export async function assembleKeyterms(opts: KeytermAssemblyOpts): Promise<strin
     for (const name of [...hosts, ...projects, ...worktrees]) add(name);
   }
 
+  source = "branch";
   // Priority 5: Branch name tokens
   if (branchName) {
     for (const token of tokenizeBranchName(branchName)) {
@@ -520,6 +535,7 @@ export async function assembleKeyterms(opts: KeytermAssemblyOpts): Promise<strin
     }
   }
 
+  source = "terminal";
   // Priority 6: Terminal identifiers. Lines were fetched in parallel above.
   // Terminal terms are ranked best-first; bound the tier independently so
   // dictionary/project/branch terms always keep headroom under MAX_KEYTERMS.

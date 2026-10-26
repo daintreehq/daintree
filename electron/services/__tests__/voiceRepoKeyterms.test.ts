@@ -9,7 +9,7 @@ import {
   stripPackageScope,
   workspacePatternSegments,
 } from "../voiceRepoKeyterms.js";
-import { assembleKeyterms } from "../voiceContextKeyterms.js";
+import { assembleKeyterms, assembleTaggedKeyterms } from "../voiceContextKeyterms.js";
 import { MAX_KEYTERMS } from "../../../shared/config/voiceKeyterms.js";
 
 const roots: string[] = [];
@@ -213,5 +213,19 @@ describe("assembleKeyterms repo tier", () => {
     expect(await assembleKeyterms({ customDictionary: [], projectPath: "relative/dir" })).toEqual(
       []
     );
+  });
+
+  it("tags repository names as their own source, after the project name", async () => {
+    const root = await makeRepo({
+      "package.json": { name: "@daintreehq/quartzline", dependencies: { daintree: "1" } },
+    });
+    const opts = { customDictionary: [], projectName: "Daintree", projectPath: root };
+    const tagged = await assembleTaggedKeyterms(opts);
+    expect(tagged.map((t) => t.term)).toEqual(await assembleKeyterms(opts));
+    expect(tagged).toContainEqual({ term: "quartzline", source: "repository" });
+    // The project tier claimed "Daintree" first, so the dependency's duplicate keeps that tag.
+    expect(tagged.filter((t) => t.term.toLowerCase() === "daintree")).toEqual([
+      { term: "Daintree", source: "project" },
+    ]);
   });
 });
