@@ -623,7 +623,9 @@ describe("VoiceRecordingService adversarial", () => {
     const sent = () => runtime.voiceInput.sendAudioChunk.mock.calls.map(([, chunk]) => chunk);
 
     function deliver(nodeIndex: number, data: unknown): void {
-      runtime.createdWorkletNodes[nodeIndex]?.port.onmessage?.(new MessageEvent("message", { data }));
+      runtime.createdWorkletNodes[nodeIndex]?.port.onmessage?.(
+        new MessageEvent("message", { data })
+      );
     }
 
     // Runs queued promise continuations without moving (fake) timers.
