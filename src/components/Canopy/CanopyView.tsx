@@ -703,7 +703,7 @@ function CanopyInbox({
     seeAssistantHandback,
   });
 
-  const { reserveUndo, undoReads } = useCanopyInboxUndo({ hostId, api });
+  const { reserveUndo, undoReads, undoLine } = useCanopyInboxUndo({ hostId, api });
   const {
     readNow,
     handlers,
@@ -1477,6 +1477,25 @@ function CanopyInbox({
                   </>
                 )}
               </div>
+              {undoLine && (
+                <div
+                  data-canopy-undo-line=""
+                  className="flex h-8 shrink-0 items-center gap-2 border-t border-divider px-3 text-xs text-text-secondary"
+                >
+                  <span role="status" className="min-w-0 flex-1 truncate">
+                    {undoLine.message}
+                  </span>
+                  <KbdChord shortcut="Z" />
+                  <Button
+                    variant="link"
+                    size="xs"
+                    className="h-auto shrink-0 p-0"
+                    onClick={undoLine.undo}
+                  >
+                    Undo
+                  </Button>
+                </div>
+              )}
               <CanopyStatusBar
                 host={otherHost ? hostName : null}
                 onRetryModel={() => void api.retryModel().catch(() => {})}
