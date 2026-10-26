@@ -27,6 +27,7 @@ function record(utterances: DictationUtterance[]): DictationRecord {
     panelId: "panel-1",
     range: { from, to, edited: false },
     utterances,
+    breaks: [],
   };
 }
 

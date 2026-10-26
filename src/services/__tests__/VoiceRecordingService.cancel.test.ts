@@ -51,8 +51,18 @@ vi.mock("@/services/KeybindingService", () => ({
 }));
 
 type DeltaPayload = { sessionId: string; text: string; itemId?: string };
-type CompletePayload = { sessionId: string; text: string; willCorrect: boolean; itemId?: string };
-type FileTokenPayload = { sessionId: string; description: string; replacement: string };
+type CompletePayload = {
+  sessionId: string;
+  text: string;
+  willCorrect: boolean;
+  itemId?: string;
+  transcriptId?: string;
+};
+type FileTokenPayload = {
+  sessionId: string;
+  transcriptId: string;
+  references: Array<{ description: string; path: string | null }>;
+};
 type BoundaryPayload = { sessionId: string; rawText: string | null };
 type StatusPayload = { sessionId: string; status: string };
 type EndedPayload = { sessionId: string; reason: string };
@@ -164,7 +174,9 @@ async function setup(initialDraft = "") {
   // Stands in for start(): main knows the session by this id, and every event
   // it sends carries it.
   const begin = (sessionId = SESSION_ID) => {
-    useVoiceRecordingStore.getState().beginSession({ panelId: PANEL, projectId: PROJECT });
+    useVoiceRecordingStore
+      .getState()
+      .beginSession({ panelId: PANEL, projectId: PROJECT }, sessionId);
     useVoiceRecordingStore.getState().setStatus("recording");
     Reflect.set(voiceRecordingService, "sessionId", sessionId);
   };
@@ -195,8 +207,8 @@ async function setup(initialDraft = "") {
 
 const delta = (text: string, itemId?: string, sessionId = SESSION_ID) =>
   callbacks.delta!({ sessionId, text, itemId });
-const complete = (text: string, itemId?: string, sessionId = SESSION_ID) =>
-  callbacks.complete!({ sessionId, text, willCorrect: false, itemId });
+const complete = (text: string, itemId?: string, sessionId = SESSION_ID, transcriptId?: string) =>
+  callbacks.complete!({ sessionId, text, willCorrect: false, itemId, transcriptId });
 const boundary = (sessionId = SESSION_ID) => callbacks.boundary!({ sessionId, rawText: null });
 
 describe("VoiceRecordingService — Escape cancels a dictation (#14631)", () => {
@@ -372,7 +384,7 @@ describe("VoiceRecordingService — Escape cancels a dictation (#14631)", () => 
   it("drops events the cancelled session still had in flight, even once a new session starts", async () => {
     const { service, voiceStore, begin, draft, settled } = await setup("Keep");
 
-    complete("Gone.", "item-a");
+    complete("Link to the router.", "item-a", SESSION_ID, "t1");
     service.handleEscape(PANEL);
     await settled();
     begin("session-2");
@@ -380,7 +392,11 @@ describe("VoiceRecordingService — Escape cancels a dictation (#14631)", () => 
     delta("late preview", "item-b");
     complete("Late.", "item-b");
     boundary();
-    callbacks.fileToken!({ sessionId: SESSION_ID, description: "Keep", replacement: "@x.ts" });
+    callbacks.fileToken!({
+      sessionId: SESSION_ID,
+      transcriptId: "t1",
+      references: [{ description: "router", path: "src/router.ts" }],
+    });
     callbacks.error!({
       sessionId: SESSION_ID,
       error: { severity: "transient", code: "rate_limit", message: "slow down" },
@@ -451,20 +467,21 @@ describe("VoiceRecordingService — Escape cancels a dictation (#14631)", () => 
     expect(ipc.cancel).toHaveBeenCalledOnce();
   });
 
-  it("keeps a dictation a file link already rewrote, until file links follow the ranges (#14616)", async () => {
+  it("keeps a dictation whose words a file reference already rewrote", async () => {
     const { service, draft, settled } = await setup();
 
-    complete("Open the readme file.", "item-a");
+    complete("Link to the router.", "item-a", SESSION_ID, "t1");
     callbacks.fileToken!({
       sessionId: SESSION_ID,
-      description: "the readme file",
-      replacement: "@README.md",
+      transcriptId: "t1",
+      references: [{ description: "router", path: "src/router.ts" }],
     });
+    expect(draft()).toBe("@src/router.ts.");
 
     service.handleEscape(PANEL);
     await settled();
 
-    expect(draft()).toBe("Open @README.md.");
+    expect(draft()).toBe("@src/router.ts.");
     expect(ipc.cancel).not.toHaveBeenCalled();
   });
 
