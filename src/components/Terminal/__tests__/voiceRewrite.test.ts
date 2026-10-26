@@ -75,7 +75,12 @@ describe("captureRewriteSelection", () => {
     const view = mount(DOC, FROM, TO);
     const selection = captureRewriteSelection(view)!;
 
-    view.dispatch({ changes: [{ from: 0, insert: "Hi. " }, { from: TO, insert: "!" }] });
+    view.dispatch({
+      changes: [
+        { from: 0, insert: "Hi. " },
+        { from: TO, insert: "!" },
+      ],
+    });
 
     expect(selection.range()).toEqual({ from: FROM + 4, to: TO + 4 });
     expect(selection.apply("Shorter.")).toBe(true);

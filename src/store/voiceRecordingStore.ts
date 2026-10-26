@@ -15,7 +15,8 @@ import {
   type PersistWriteMergeContext,
 } from "./persistence/persistWriteMerge";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
-import type { VoiceMicDevice } from "@/services/voiceMicDevices"; import type { RewriteSelection } from "@/services/voiceRewriteSelection";
+import type { VoiceMicDevice } from "@/services/voiceMicDevices";
+import type { RewriteSelection } from "@/services/voiceRewriteSelection";
 
 /**
  * A session recording a spoken instruction for selected composer text

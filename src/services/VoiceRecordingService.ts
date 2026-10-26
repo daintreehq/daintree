@@ -1962,8 +1962,9 @@ class VoiceRecordingService {
           const currentTarget = useVoiceRecordingStore.getState().activeTarget;
           const rewrite = currentTarget?.rewrite;
           if (rewrite) {
-            const remaining =
-              useVoiceRecordingStore.getState().panelBuffers[currentTarget.panelId]?.liveText.trim();
+            const remaining = useVoiceRecordingStore
+              .getState()
+              .panelBuffers[currentTarget.panelId]?.liveText.trim();
             if (remaining) rewrite.instruction.push(remaining);
           } else if (currentTarget) {
             const { panelId, projectId } = currentTarget;
@@ -2314,15 +2315,15 @@ class VoiceRecordingService {
         );
         return;
       case "failed":
-        useVoiceRecordingStore.getState().announce("The rewrite failed. The selection is unchanged.");
+        useVoiceRecordingStore
+          .getState()
+          .announce("The rewrite failed. The selection is unchanged.");
         notify({
           type: "error",
           title: "Rewrite failed",
           message: "The request failed or timed out. The selection is unchanged.",
           replaceKey: "voice-rewrite",
-          action: this.retryAction(() =>
-            this.requestRewrite(job.panelId, selection, instruction)
-          ),
+          action: this.retryAction(() => this.requestRewrite(job.panelId, selection, instruction)),
         });
         return;
     }
@@ -2783,7 +2784,9 @@ class VoiceRecordingService {
     }
     if (selection.text.length > VOICE_REWRITE_MAX_SELECTION_CHARS) {
       selection.release();
-      this.reportNothingToRewrite("That selection is too long to rewrite. Select a shorter passage.");
+      this.reportNothingToRewrite(
+        "That selection is too long to rewrite. Select a shorter passage."
+      );
       return;
     }
 

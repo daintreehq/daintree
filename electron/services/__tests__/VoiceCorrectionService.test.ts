@@ -1121,9 +1121,9 @@ describe("VoiceCorrectionService.rewrite", () => {
   it("reports no_change when the model declines or returns the selection unchanged", async () => {
     const svc = new VoiceCorrectionService();
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(rewriteResponse("no_change", "")));
-    expect(await svc.rewrite({ selectedText: "keep me", instruction: "hmm" }, BASE_SETTINGS)).toEqual(
-      { status: "no_change" }
-    );
+    expect(
+      await svc.rewrite({ selectedText: "keep me", instruction: "hmm" }, BASE_SETTINGS)
+    ).toEqual({ status: "no_change" });
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(rewriteResponse("replace", "keep me")));
     expect(
       await svc.rewrite({ selectedText: " keep me ", instruction: "tidy it" }, BASE_SETTINGS)

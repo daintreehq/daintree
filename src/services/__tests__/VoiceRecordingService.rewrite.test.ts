@@ -252,7 +252,10 @@ describe("VoiceRecordingService — rewrite selection by voice (#14635)", () => 
     await service.rewriteSelection();
 
     expect(start).toHaveBeenCalledWith(
-      expect.objectContaining({ panelId: "panel-1", rewrite: expect.objectContaining({ selection }) })
+      expect.objectContaining({
+        panelId: "panel-1",
+        rewrite: expect.objectContaining({ selection }),
+      })
     );
     expect(voiceStore.getState().activeTarget?.rewrite?.selection).toBe(selection);
   });

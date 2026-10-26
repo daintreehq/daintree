@@ -73,7 +73,7 @@ export function registerVoiceActions(actions: ActionRegistry): void {
     id: "voiceInput.rewriteSelection",
     title: "Rewrite selection by voice",
     description:
-      "Record a spoken instruction (\"make this shorter\", \"turn this into a list\") and apply it to the text selected in the focused prompt; stops dictation if it is recording",
+      'Record a spoken instruction ("make this shorter", "turn this into a list") and apply it to the text selected in the focused prompt; stops dictation if it is recording',
     category: "voice",
     kind: "command",
     danger: "safe",

@@ -877,5 +877,7 @@ export function validateCorrection(raw: string, corrected: string): CorrectionGu
  * "make it shorter".
  */
 export function validateRewrite(selection: string, rewritten: string): CorrectionGuardResult {
-  return keepsProtectedSpans(selection, rewritten) ? { ok: true } : { ok: false, reason: "protected_span" };
+  return keepsProtectedSpans(selection, rewritten)
+    ? { ok: true }
+    : { ok: false, reason: "protected_span" };
 }

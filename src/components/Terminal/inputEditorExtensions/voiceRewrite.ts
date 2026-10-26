@@ -58,10 +58,7 @@ class TrackedSelection implements RewriteSelection {
   apply(replacement: string): boolean {
     if (this.lost) return false;
     const { view, from, to } = this;
-    if (
-      !view.state.facet(EditorView.editable) ||
-      view.state.sliceDoc(from, to) !== this.text
-    ) {
+    if (!view.state.facet(EditorView.editable) || view.state.sliceDoc(from, to) !== this.text) {
       this.lose();
       return false;
     }

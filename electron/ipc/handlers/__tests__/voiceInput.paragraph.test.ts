@@ -1756,7 +1756,11 @@ describe("voiceInput — rewrite instructions", () => {
     ) => Promise<unknown>;
     await handleStart(fakeEvent, nextSessionId(), { terminalId: "t1", intent: "rewrite" });
 
-    emitTranscriptionEvent({ type: "complete", text: " put each step on a new line ", itemId: "i1" });
+    emitTranscriptionEvent({
+      type: "complete",
+      text: " put each step on a new line ",
+      itemId: "i1",
+    });
     emitTranscriptionEvent({ type: "paragraph_boundary" });
 
     expect(forwarded()).toEqual([
@@ -1812,9 +1816,9 @@ describe("voiceInput — rewrite instructions", () => {
 
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      await expect(handleRewrite(fakeEvent, { selectedText: "", instruction: "x" })).rejects.toBeInstanceOf(
-        ValidationError
-      );
+      await expect(
+        handleRewrite(fakeEvent, { selectedText: "", instruction: "x" })
+      ).rejects.toBeInstanceOf(ValidationError);
     } finally {
       consoleError.mockRestore();
     }
