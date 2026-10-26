@@ -35,8 +35,17 @@ export class ProjectSettingsManager {
     private store: Store<StoreSchema>
   ) {}
 
-  getEffectiveNotificationSettings(currentProjectId: string | null): NotificationSettings {
-    const global = this.store.get("notificationSettings");
+  /**
+   * The project's overrides over the global settings. `globalChoices` stand
+   * in for this machine's own global values where another machine decides
+   * them (a Shell's alert choices, #14701); the overrides still apply.
+   */
+  getEffectiveNotificationSettings(
+    currentProjectId: string | null,
+    globalChoices?: Partial<NotificationSettings>
+  ): NotificationSettings {
+    const own = this.store.get("notificationSettings");
+    const global = globalChoices ? { ...own, ...globalChoices } : own;
     if (!currentProjectId) return global;
 
     const overrides = this.notificationOverridesCache.get(currentProjectId);

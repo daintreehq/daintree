@@ -345,11 +345,12 @@ interface NotifyPayloadBase {
    */
   suppressWhenOriginVisible?: boolean;
   /**
-   * Set when another host already applied its own policy (on/off, quiet
-   * hours) to this event. This window's notification settings can belong to
-   * a third host, so they must not decide it again: only this screen's focus
-   * and session mute still apply. `quiet` routes it to the inbox, as quiet
-   * hours would for a local event.
+   * Set when main already judged this event from another host by this
+   * machine's notification settings (on/off, quiet hours, #14701), with an
+   * older host's own quiet verdict folded in. A view's settings mirror can lag
+   * a change, so it doesn't decide again: only this screen's focus and session
+   * mute still apply. `quiet` routes it to the inbox, as quiet hours would for
+   * a local event.
    */
   sourceHostPolicy?: { quiet: boolean };
   /**
@@ -891,9 +892,8 @@ export function muteUntilNextMorning(morningMin = 8 * 60): number {
 
 /**
  * Whether notifications are on and whether this one is held back as quiet. A
- * cross-host event carries its source host's verdict in place of this
- * window's schedule and on/off switch; the session mute is always this
- * screen's.
+ * cross-host event carries main's verdict in place of this window's schedule
+ * and on/off switch; the session mute is always this screen's.
  */
 function deliveryGates(payload: NotifyPayload): { enabled: boolean; quiet: boolean } {
   const hostPolicy = payload.sourceHostPolicy;

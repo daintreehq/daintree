@@ -16,7 +16,7 @@ import type { AttachedClientInfo } from "../../../shared/types/ipc/hostMode.js";
 import { attachHostFiles, installHostFileService } from "../files/hostInstall.js";
 import { attachHostUploads, installHostUploadService } from "../files/uploadHostInstall.js";
 import { getLocalHandshakeInfo } from "../handshakeInfo.js";
-import { admitHybridHostLegs } from "../hybrid/index.js";
+import { admitHybridHostLegs, installNotificationPolicyHost } from "../hybrid/index.js";
 import { Lane } from "../link/frames.js";
 import { ControlKind, type LinkClientInfo } from "../link/messages.js";
 import type { LinkSession } from "../link/session.js";
@@ -179,6 +179,8 @@ async function buildHostListener(
 
   teardowns.push(admitHybridHostLegs());
 
+  // Each attached Shell's own alert choices, for what this host sends its views (#14701).
+  teardowns.push(installNotificationPolicyHost(server));
   // Summaries to every attached Shell, and the overview's and fleet's session methods.
   teardowns.push(await installHostMetricsHost(server));
   // Canopy for Shells reading this host from a view bound elsewhere.

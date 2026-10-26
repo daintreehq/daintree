@@ -78,6 +78,19 @@ interface BurstWaitingEntry {
   ownerWebContentsId?: NotificationOwnerId;
 }
 
+/**
+ * What a Shell decides for the notifications this host sends its views
+ * (#14701): which events alert it, and when an unanswered wait is raised again.
+ */
+export type ShellNotificationPolicy = Pick<
+  NotificationSettings,
+  | "enabled"
+  | "completedEnabled"
+  | "waitingEnabled"
+  | "waitingEscalationEnabled"
+  | "waitingEscalationDelayMs"
+>;
+
 /** An agent Canopy read as asking the user something. */
 export interface CanopyAskNotice {
   terminalId: string;
@@ -145,6 +158,8 @@ class AgentNotificationService {
    * sends that Shell, never this machine's own or another Shell's.
    */
   private remoteSessionMuteUntil = new Map<string, number>();
+  /** Each Shell's own alert choices, by client, for what this host sends its views. */
+  private shellPolicies = new Map<string, ShellNotificationPolicy>();
 
   syncWatchedPanels(ownerWebContentsId: NotificationOwnerId, panelIds: string[]): void {
     const previous = this.watchedPanelsByOwner.get(ownerWebContentsId);
@@ -279,9 +294,45 @@ class AgentNotificationService {
   private isSessionMutedFor(ownerId: NotificationOwnerId | undefined): boolean {
     if (!isRemoteNotificationOwner(ownerId)) return this.isSessionMuted();
     if (this.remoteSessionMuteUntil.size === 0) return false;
-    const clientId = getEndpointRegistry().getByHandle(ownerId)?.clientId;
+    const clientId = this.shellClientOf(ownerId);
     if (clientId === undefined) return false;
     return Date.now() < (this.remoteSessionMuteUntil.get(clientId) ?? 0);
+  }
+
+  /** A Shell's alert choices, which decide what this host sends that Shell's views. */
+  setShellPolicy(clientId: string, policy: ShellNotificationPolicy): void {
+    this.shellPolicies.set(clientId, { ...policy });
+  }
+
+  /** Whether a Shell sent its own alert choices, rather than leaving them to this host's settings. */
+  hasShellPolicy(clientId: string): boolean {
+    return this.shellPolicies.has(clientId);
+  }
+
+  private shellClientOf(ownerId: NotificationOwnerId | undefined): string | undefined {
+    if (!isRemoteNotificationOwner(ownerId)) return undefined;
+    return getEndpointRegistry().getByHandle(ownerId)?.clientId;
+  }
+
+  /**
+   * The settings that decide a notification for `ownerId`. A remote view's
+   * Shell chooses which events alert it and when (#14701): its choices stand
+   * in for this host's global ones, the project's own overrides still apply
+   * over them, and its quiet hours are left to it, since they follow its own
+   * clock. This machine's windows, and a Shell that never sent its choices,
+   * go by this host's own.
+   */
+  private settingsFor(ownerId: NotificationOwnerId | undefined): NotificationSettings {
+    const clientId = this.shellClientOf(ownerId);
+    const policy = clientId === undefined ? undefined : this.shellPolicies.get(clientId);
+    if (!policy) return projectStore.getEffectiveNotificationSettings();
+    return { ...projectStore.getEffectiveNotificationSettings(policy), quietHoursEnabled: false };
+  }
+
+  /** The machine a notification is decided for: this one, or one Shell. */
+  private recipientOf(ownerId: NotificationOwnerId | undefined): string {
+    if (!isRemoteNotificationOwner(ownerId)) return "local";
+    return `shell:${this.shellClientOf(ownerId) ?? ownerId}`;
   }
 
   initialize(): void {
@@ -453,7 +504,11 @@ class AgentNotificationService {
     // Idle is never a notification, escalation, or working-pulse destination,
     // so no branch below consumes terminal metadata for it.
     const terminal = state === "idle" ? undefined : this.getTerminalSnapshot(terminalId);
-    const settings = projectStore.getEffectiveNotificationSettings();
+    // Capture the owner now: the renderer unwatches one-shot on this very
+    // transition, so the live index is empty by the time a notification
+    // fires. Whichever machine it belongs to decides what it may raise.
+    const ownerWebContentsId = this.resolveOwner(terminalId);
+    const settings = this.settingsFor(ownerWebContentsId);
     // Backend no longer emits worktreeId on agent events (#5139). Resolve it
     // from persisted renderer state so focus suppression, dedup keying, and
     // notification context still work correctly.
@@ -554,11 +609,6 @@ class AgentNotificationService {
     // watched set. Capturing here preserves the intent.
     const isWatched = terminalId !== undefined && this.isWatched(terminalId);
     if (!isWatched) return;
-
-    // Capture the owner alongside the watched snapshot — same reason the
-    // snapshot exists at all: the renderer unwatches one-shot on this very
-    // transition, so the live index is empty by the time the notification fires.
-    const ownerWebContentsId = this.resolveOwner(terminalId);
 
     if ((state === "completed" || state === "exited") && settings.completedEnabled) {
       this.scheduleCompletionNotification(key, worktreeId, terminalId, agentId, ownerWebContentsId);
@@ -675,7 +725,7 @@ class AgentNotificationService {
 
     const timer = setTimeout(() => {
       this.completionTimers.delete(key);
-      const settings = projectStore.getEffectiveNotificationSettings();
+      const settings = this.settingsFor(this.emitOwner(terminalId, ownerWebContentsId));
       if (settings.enabled === false || !settings.completedEnabled) return;
       const label = this.getLabel(agentId, worktreeId);
       this.completionBurstBuffer.push({
@@ -788,16 +838,27 @@ class AgentNotificationService {
     const items = this.completionBurstBuffer.splice(0);
     const soundFile = this.completionBurstSoundFile;
     this.completionBurstSoundFile = undefined;
-    if (items.length === 0) return;
 
-    if (items.length === 1) {
-      this.enqueue(items[0], true, soundFile);
-    } else {
-      const first = items[0];
+    // One banner per machine: grouped under another machine's view, a
+    // completion would be shown or held back by that machine's choices.
+    const byRecipient = new Map<string, PendingNotification[]>();
+    for (const item of items) {
+      const recipient = this.recipientOf(this.emitOwner(item.terminalId, item.ownerWebContentsId));
+      const group = byRecipient.get(recipient);
+      if (group) group.push(item);
+      else byRecipient.set(recipient, [item]);
+    }
+
+    for (const group of byRecipient.values()) {
+      if (group.length === 1) {
+        this.enqueue(group[0], true, soundFile);
+        continue;
+      }
+      const first = group[0];
       this.enqueue(
         {
           title: "Agents finished",
-          body: `${items.length} agents finished their tasks`,
+          body: `${group.length} agents finished their tasks`,
           worktreeId: first.worktreeId,
           terminalId: first.terminalId,
           agentId: first.agentId,
@@ -830,7 +891,8 @@ class AgentNotificationService {
 
     const timer = setTimeout(() => {
       this.waitingEscalationTimers.delete(terminalId);
-      const currentSettings = projectStore.getEffectiveNotificationSettings();
+      const ownerWebContentsId = this.resolveOwner(terminalId);
+      const currentSettings = this.settingsFor(ownerWebContentsId);
       if (currentSettings.enabled === false) return;
       if (!currentSettings.waitingEscalationEnabled || !currentSettings.waitingEnabled) return;
 
@@ -840,12 +902,16 @@ class AgentNotificationService {
       const currentTerminal = this.getTerminalSnapshotFrom(currentTerminals, terminalId);
       if (!currentTerminal || currentTerminal.location !== "dock") return;
 
-      // Count all dock terminals currently waiting (for grouped escalation)
+      // Count the dock terminals currently waiting for the same machine (for
+      // grouped escalation): another machine's keep their own reminders, on
+      // that machine's delay.
+      const recipient = this.recipientOf(ownerWebContentsId);
       const waitingDockTerminalIds = [...this.waitingTerminalIds].filter(
-        (id) => this.getTerminalSnapshotFrom(currentTerminals, id)?.location === "dock"
+        (id) =>
+          this.getTerminalSnapshotFrom(currentTerminals, id)?.location === "dock" &&
+          this.recipientOf(this.resolveOwner(id)) === recipient
       );
 
-      const ownerWebContentsId = this.resolveOwner(terminalId);
       if (!isRemoteNotificationOwner(ownerWebContentsId)) {
         this.playNotificationSound(
           currentSettings.soundEnabled,
@@ -922,8 +988,7 @@ class AgentNotificationService {
    * the user is looking at the agent's worktree.
    */
   notifyCanopyAsk(ask: CanopyAskNotice, canopyOpenIn: () => readonly NotificationOwnerId[]): void {
-    const settings = projectStore.getEffectiveNotificationSettings();
-    if (settings.enabled === false) return;
+    if (this.settingsFor(this.resolveOwner(ask.terminalId)).enabled === false) return;
     if (this.isWithinBootGrace() || this.isWithinSpawnGrace(ask.agentId, ask.terminalId)) return;
     if (this.announcedWaitingIds.has(ask.terminalId)) return;
     if (this.isCanopyInFront(canopyOpenIn)) return;
@@ -941,21 +1006,17 @@ class AgentNotificationService {
 
   private flushCanopyAsks(): void {
     this.canopyAskTimer = null;
-    const settings = projectStore.getEffectiveNotificationSettings();
-    if (settings.enabled === false) {
-      this.canopyAskBuffer = [];
-      return;
-    }
     let presence: UserPresence | undefined;
     let activeWorktreeId: string | null | undefined;
     const asks = this.canopyAskBuffer.splice(0).filter((ask) => {
+      const owner = this.resolveOwner(ask.terminalId);
+      if (this.settingsFor(owner).enabled === false) return false;
       if (this.announcedWaitingIds.has(ask.terminalId)) return false;
       // Each ask by the panels that list it, read again now the burst is out.
       if (this.isCanopyInFront(ask.canopyOpenIn)) return false;
       if (!ask.worktreeId) return true;
       // A terminal never watched has no known owner: the focused window
       // showing its worktree is the best evidence the user is looking at it.
-      const owner = this.resolveOwner(ask.terminalId);
       const inFront =
         owner === undefined
           ? notificationService.isWindowFocused()
@@ -973,6 +1034,7 @@ class AgentNotificationService {
     const ownerWebContentsId = this.resolveOwner(first.terminalId);
     // A remote view's Shell plays its own sound for the category.
     if (!isRemoteNotificationOwner(ownerWebContentsId)) {
+      const settings = projectStore.getEffectiveNotificationSettings();
       this.playNotificationSound(settings.soundEnabled, settings.waitingSoundFile);
     }
     const navigation = {
@@ -1146,18 +1208,19 @@ class AgentNotificationService {
     const item = this.notificationQueue.shift();
     if (!item) return;
 
-    const settings = projectStore.getEffectiveNotificationSettings();
-    if (settings.enabled === false) {
-      this.notificationQueue = [];
-      return;
-    }
-
     const ownerWebContentsId = this.emitOwner(item.terminalId, item.ownerWebContentsId);
+    const settings = this.settingsFor(ownerWebContentsId);
 
     // Quiet hours schedule and renderer-driven session mute both suppress
     // completion/pulse alerts but not waiting alerts — waiting agents block
-    // user work and should page through. The mute is the owning screen's.
-    if (isScheduledQuietNow(settings) || this.isSessionMutedFor(ownerWebContentsId)) {
+    // user work and should page through. Each gate is the owning machine's:
+    // notifications off there hold back only its own, and a Shell applies
+    // its quiet hours itself as they arrive.
+    if (
+      settings.enabled === false ||
+      isScheduledQuietNow(settings) ||
+      this.isSessionMutedFor(ownerWebContentsId)
+    ) {
       if (this.notificationQueue.length > 0) {
         this.staggerTimer = setTimeout(() => {
           this.staggerTimer = null;
@@ -1296,6 +1359,7 @@ class AgentNotificationService {
     this.activeTerminalIds.clear();
     this.sessionMuteUntil = 0;
     this.remoteSessionMuteUntil.clear();
+    this.shellPolicies.clear();
 
     soundService.cancel();
     soundService.cancelPulse();

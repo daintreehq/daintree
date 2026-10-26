@@ -12,13 +12,15 @@ import {
 import { soundService } from "../../services/SoundService.js";
 import { store } from "../../store.js";
 import type { HostAttentionEvent } from "../../../shared/types/ipc/hostMetrics.js";
+import type { NotificationSettings } from "../../../shared/types/ipc/api.js";
 import { displaySafeText } from "../../../shared/utils/displaySafeText.js";
+import { isScheduledQuietNow } from "../../../shared/utils/quietHours.js";
 import { admitHostNotice } from "./hostNoticeBudget.js";
 
 /**
- * Host → Shell request: a notification the host decided on. It carries what
- * the notification is about, not how to present it: sound, and whether this
- * person muted the session, are this Shell's.
+ * Host → Shell request: a notification about one of the host's agents. It
+ * carries what the notification is about, not how to present it: sound,
+ * quiet hours, and whether this person muted the session, are this Shell's.
  */
 export const NOTIFICATION_SHOW_METHOD = "notification.show";
 
@@ -62,8 +64,10 @@ export function installRemoteNotificationSink(): () => void {
 }
 
 /** This machine's sound for each category, as its own agents' notifications would pick it. */
-function deviceSoundFile(category: NotificationCategory): string | null {
-  const settings = store.get("notificationSettings");
+function deviceSoundFile(
+  category: NotificationCategory,
+  settings: NotificationSettings | undefined = store.get("notificationSettings")
+): string | null {
   if (!settings?.soundEnabled) return null;
   switch (category) {
     case "completed":
@@ -82,8 +86,10 @@ function deviceSoundFile(category: NotificationCategory): string | null {
  * addressed to so a click lands back in that view. The title says which host
  * it came from, in this device's own name for it, so a host can't pass its
  * words off as this machine's; a host past its share for the minute is
- * dropped quietly. This screen's session mute holds back a completion (a
- * waiting agent still pages through, as it does locally) and its own sound
+ * dropped quietly. This screen's choices hold back what they would of its
+ * own agents', before the notice counts against that share: everything with
+ * notifications off, and a completion during its quiet hours or session mute
+ * (a waiting agent still pages through, as it does locally). Its own sound
  * settings pick the sound. Returns false for a payload that does not validate.
  */
 export function showHostNotification(
@@ -95,11 +101,18 @@ export function showHostNotification(
   const parsed = NotificationShowSchema.safeParse(payload);
   if (!parsed.success) return false;
   const { category, navigation } = parsed.data;
-  if (category === "completed" && agentNotificationService.isSessionMuted()) return true;
+  const settings = store.get("notificationSettings");
+  if (settings?.enabled === false) return true;
+  if (
+    category === "completed" &&
+    (agentNotificationService.isSessionMuted() || isScheduledQuietNow(settings, new Date(now)))
+  ) {
+    return true;
+  }
   if (!admitHostNotice(host.id, now)) return true;
   const title = `${displaySafeText(host.name).trim() || host.id}: ${displaySafeText(parsed.data.title)}`;
   const body = displaySafeText(parsed.data.body);
-  const soundFile = deviceSoundFile(category);
+  const soundFile = deviceSoundFile(category, settings);
   if (soundFile) soundService.playFile(soundFile);
   notificationService.showNativeNotification(title, body, {
     silent: true,
@@ -111,10 +124,10 @@ export function showHostNotification(
 
 /**
  * Shell side: page for an opted-in host's waiting agent as a banner, titled
- * with the host's name as its own notifications are. The opt-in, the host's
- * quiet hours and its notice budget were applied before it got here, and a
- * waiting agent pages through this screen's session mute as a local one
- * does. A later notice about the same terminal replaces it.
+ * with the host's name as its own notifications are. The opt-in, this
+ * screen's own choices and the host's notice budget were applied before it
+ * got here, and a waiting agent pages through this screen's session mute as
+ * a local one does. A later notice about the same terminal replaces it.
  */
 export function showHostAttentionBanner(event: HostAttentionEvent, onClick: () => void): void {
   const host = displaySafeText(event.hostName).trim() || event.hostId;

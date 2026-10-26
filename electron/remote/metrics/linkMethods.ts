@@ -16,7 +16,10 @@ export const MAX_FLEET_SUBMIT_CHARS = 1024 * 1024;
  * so a Shell can reach a host it isn't showing.
  */
 export const MetricsLinkMethod = {
-  /** Host → Shell: an agent on the host needs someone. The host decided; the Shell presents. */
+  /**
+   * Host → Shell: an agent on the host needs someone. The host reports it; the
+   * Shell decides by its own settings and presents it (#14701).
+   */
   ATTENTION: "host.attention",
   /** Shell → Host: the host's agent runs, as fleet targets. */
   LIST_FLEET_TARGETS: "fleet.list-targets",
@@ -60,7 +63,11 @@ export const AttentionPayloadSchema = z.object({
   projectId: id.nullish(),
   projectName: name.nullable(),
   agentName: name.nullable(),
-  /** The host's own quiet hours hold this back: the Shell files it in the inbox without a toast. */
+  /**
+   * The host's own quiet hours hold this back, for a Shell that left the
+   * verdict to it: the Shell files it in the inbox without a toast. False
+   * when the Shell decides for itself.
+   */
   quiet: z.boolean(),
 });
 export type AttentionPayload = z.infer<typeof AttentionPayloadSchema>;

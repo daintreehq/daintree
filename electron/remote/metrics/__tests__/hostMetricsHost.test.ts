@@ -123,6 +123,7 @@ function deps(overrides: Partial<MetricsHostDeps> = {}): MetricsHostDeps & {
       return () => (waiting = null);
     },
     notificationSettings: () => NO_QUIET_HOURS,
+    shellDecides: () => false,
     now: () => (clock += 1000),
     fireWaiting: (payload) => waiting?.(payload),
     ...overrides,
@@ -482,17 +483,32 @@ describe("installHostMetricsHostWith", () => {
     dispose();
   });
 
-  it("applies its own notification policy before any Shell hears about a waiting agent", async () => {
+  it("judges a waiting agent by its own settings only for a Shell that leaves it to this host", async () => {
     const server = new FakeServer();
     let clock = new Date(2026, 8, 25, 12, 0).getTime();
     let settings = { ...NO_QUIET_HOURS, waitingEnabled: false };
-    const d = deps({ now: () => clock, notificationSettings: () => settings });
+    const d = deps({
+      now: () => clock,
+      notificationSettings: () => settings,
+      shellDecides: (clientId) => clientId === "mac",
+    });
     const dispose = installHostMetricsHostWith(server, d);
-    const p = await pair();
-    server.attach(p.host, "shell");
+    const legacy = await pair();
+    const mac = await pair();
+    server.attach(legacy.host, "legacy");
+    server.attach(mac.host, "mac");
     const heard: AttentionPayload[] = [];
-    p.client.registerCallHandler(MetricsLinkMethod.ATTENTION, AttentionPayloadSchema, (body) => {
-      heard.push(body);
+    const heardByMac: AttentionPayload[] = [];
+    legacy.client.registerCallHandler(
+      MetricsLinkMethod.ATTENTION,
+      AttentionPayloadSchema,
+      (body) => {
+        heard.push(body);
+        return null;
+      }
+    );
+    mac.client.registerCallHandler(MetricsLinkMethod.ATTENTION, AttentionPayloadSchema, (body) => {
+      heardByMac.push(body);
       return null;
     });
     const event = (terminalId: string): WaitingEvent => ({
@@ -503,12 +519,12 @@ describe("installHostMetricsHostWith", () => {
       agentName: null,
     });
 
-    // Waiting notifications off on this host: nothing leaves it.
+    // Waiting notifications off on this host: nothing reaches a Shell that left it to the host.
     d.fireWaiting(event("off"));
     settings = { ...NO_QUIET_HOURS, enabled: false };
-    d.fireWaiting(event("off"));
+    d.fireWaiting(event("disabled"));
 
-    // This host's quiet hours cover noon: the Shell is told to keep it quiet.
+    // This host's quiet hours cover noon: that Shell is told to keep it quiet.
     settings = {
       ...NO_QUIET_HOURS,
       quietHoursEnabled: true,
@@ -524,7 +540,18 @@ describe("installHostMetricsHostWith", () => {
     d.fireWaiting(event("loud"));
     await waitFor(() => heard.length === 2);
     expect(heard[1]).toMatchObject({ terminalId: "loud", quiet: false });
-    expect(heard.some((body) => body.terminalId === "off")).toBe(false);
+    expect(heard.some((body) => body.terminalId === "off" || body.terminalId === "disabled")).toBe(
+      false
+    );
+
+    // The Shell that decides for itself hears every one, unjudged.
+    await waitFor(() => heardByMac.length === 4);
+    expect(heardByMac.map((body) => [body.terminalId, body.quiet])).toEqual([
+      ["off", false],
+      ["disabled", false],
+      ["quiet", false],
+      ["loud", false],
+    ]);
     dispose();
   });
 });

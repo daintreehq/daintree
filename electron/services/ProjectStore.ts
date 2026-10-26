@@ -1752,8 +1752,13 @@ export class ProjectStore {
     return this.settingsManager.addBrowserAllowedHost(projectId, hostname);
   }
 
-  getEffectiveNotificationSettings(): NotificationSettings {
-    return this.settingsManager.getEffectiveNotificationSettings(this.getCurrentProjectId());
+  getEffectiveNotificationSettings(
+    globalChoices?: Partial<NotificationSettings>
+  ): NotificationSettings {
+    return this.settingsManager.getEffectiveNotificationSettings(
+      this.getCurrentProjectId(),
+      globalChoices
+    );
   }
 
   async isProjectNotificationsMuted(projectId: string): Promise<boolean> {

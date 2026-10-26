@@ -1389,6 +1389,7 @@ describe("remote session wiring", () => {
         quietHoursEndMin: 0,
         quietHoursWeekdays: [],
       }),
+      shellDecides: () => false,
       now: Date.now,
     });
     cleanups.push(disposeHost);
