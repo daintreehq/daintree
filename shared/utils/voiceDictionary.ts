@@ -10,6 +10,9 @@ import type { CorrectionCandidate } from "./phoneticSimilarity.js";
 /** Deepgram rejects any keyterm over 100 characters, so a term or heard-as phrase can't be longer. */
 export const MAX_DICTIONARY_TERM_LENGTH = 100;
 
+/** Line breaks and other control characters: a phrase holding one could step out of a prompt's term list. */
+export const DICTIONARY_CONTROL_CHARACTERS = /[\p{Cc}\p{Zl}\p{Zp}]/u;
+
 /** Cap on the pending-suggestions queue; accepted words live in the dictionary. */
 export const MAX_SUGGESTED_WORDS = 50;
 
@@ -61,6 +64,19 @@ function sameList(a: readonly string[], b: readonly string[]): boolean {
 /** The written terms, oldest first: the plain list keyterm assembly and the correction prompt take. */
 export function dictionaryTerms(entries: readonly VoiceDictionaryEntry[]): string[] {
   return entries.map((entry) => entry.term);
+}
+
+/**
+ * The dictionary one dictation uses: the target project's entries first, then
+ * the user's own. A term in both is the project's entry, heard-as forms and
+ * all, so a rule the project dropped can't come back from the global list.
+ */
+export function sessionDictionary(
+  global: readonly VoiceDictionaryEntry[],
+  project: readonly VoiceDictionaryEntry[]
+): VoiceDictionaryEntry[] {
+  const projectTerms = new Set(project.map((entry) => fold(entry.term)));
+  return [...project, ...global.filter((entry) => !projectTerms.has(fold(entry.term)))];
 }
 
 /**

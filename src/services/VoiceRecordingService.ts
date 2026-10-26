@@ -1985,7 +1985,9 @@ class VoiceRecordingService {
 
   private async requestCorrection(correction: PendingCorrection): Promise<void> {
     const results = await Promise.all(
-      correction.passages.map((passage) => this.requestPassageCorrection(passage))
+      correction.passages.map((passage) =>
+        this.requestPassageCorrection(passage, correction.panelId)
+      )
     );
 
     const { panelId, projectId } = correction;
@@ -2069,10 +2071,14 @@ class VoiceRecordingService {
   }
 
   /** The cleaned text for one passage, or null to keep it as dictated. */
-  private async requestPassageCorrection(passage: CorrectionPassage): Promise<string | null> {
+  private async requestPassageCorrection(
+    passage: CorrectionPassage,
+    panelId: string
+  ): Promise<string | null> {
     try {
       const result = await window.electron.voiceInput.correct({
         rawText: passage.text,
+        terminalId: panelId,
         ...(passage.context ? { recentContext: [passage.context] } : {}),
       });
       // The passage runs from its first word to its last; its separators and

@@ -13,6 +13,7 @@ import { VoiceCorrectionService } from "../../services/VoiceCorrectionService.js
 import type { HandlerDependencies, IpcContext } from "../types.js";
 import type { PtyClient } from "../../services/PtyClient.js";
 import type {
+  VoiceDictionaryEntry,
   VoiceInputSettings,
   VoiceInputSettingsPatch,
   VoiceTranscriptionProvider,
@@ -25,9 +26,11 @@ import { applyDictationCommands } from "../../services/voiceDictationCommands.js
 import { VOICE_DICTATION_AI_MODEL } from "../../../shared/config/voiceCorrection.js";
 import { normalizeVoiceLanguage } from "../../../shared/config/voiceLanguages.js";
 import { assembleKeyterms } from "../../services/voiceContextKeyterms.js";
+import { readProjectVoiceDictionary } from "../../services/projectVoiceDictionary.js";
 import {
   dictionaryTerms,
   sanitizeDictionary,
+  sessionDictionary,
   sanitizeSuggestions,
   sanitizeDismissedSuggestions,
 } from "../../../shared/utils/voiceDictionary.js";
@@ -534,6 +537,32 @@ async function resolveFileLinkCwd(
   return session.projectInfo.path ?? null;
 }
 
+// The project whose vocabulary a dictation uses: the one that owns the target
+// terminal, or the asking view's own for a panel main doesn't track as a
+// terminal. A terminal another project owns than the view asking gets none,
+// so a project's rules never reach dictation outside its own panels.
+function resolveVocabularyProject(
+  viewProjectId: string | null,
+  terminalId: string | undefined,
+  ptyClient: PtyClient | undefined
+): string | null {
+  if (!terminalId || !ptyClient?.hasTerminal(terminalId)) return viewProjectId;
+  const ownerId = ptyClient.getTerminalProjectId(terminalId);
+  if (ownerId && viewProjectId && ownerId !== viewProjectId) return null;
+  return ownerId ?? viewProjectId;
+}
+
+// An unreadable vocabulary leaves dictation with the global dictionary alone.
+async function readVocabulary(projectId: string | null): Promise<VoiceDictionaryEntry[]> {
+  if (!projectId) return [];
+  try {
+    return await readProjectVoiceDictionary(projectId);
+  } catch {
+    logDebug("[VoiceInput] Project vocabulary read failed, using the global dictionary alone");
+    return [];
+  }
+}
+
 export function registerVoiceInputHandlers(deps: HandlerDependencies): () => void {
   const handleGetSettings = async () => {
     return getVoiceSettings();
@@ -808,6 +837,9 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // and failures are non-fatal — we just start without keyterms.
     const keytermsPromise = assembleKeyterms({
       customDictionary: dictionaryTerms(settings.dictionary),
+      projectDictionary: readVocabulary(
+        resolveVocabularyProject(session.projectId, terminalId, deps.ptyClient)
+      ).then(dictionaryTerms),
       ...resolveKeytermTarget(session.projectId, terminalId, deps.ptyClient),
       ptyClient: deps.ptyClient,
     });
@@ -1099,6 +1131,9 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     }
 
     const projectInfo = getProjectInfo(ctx.projectId);
+    const vocabulary = await readVocabulary(
+      resolveVocabularyProject(ctx.projectId, request.terminalId, deps.ptyClient)
+    );
     const result = await correctionService.correct(
       {
         rawText: request.rawText,
@@ -1108,7 +1143,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       {
         model: settings.correctionModel,
         apiKey: settings.openaiApiKey,
-        customDictionary: dictionaryTerms(settings.dictionary),
+        customDictionary: dictionaryTerms(sessionDictionary(settings.dictionary, vocabulary)),
         customInstructions: settings.correctionCustomInstructions,
         language: normalizeVoiceLanguage(settings.language),
         projectName: projectInfo.name,

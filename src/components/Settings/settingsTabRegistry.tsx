@@ -2262,8 +2262,8 @@ export const PROJECT_SETTINGS_SECTIONS: Readonly<
   },
   "project:context": {
     tabLabel: "Context",
-    searchNavDescription: "Excluded paths and copy tree settings",
-    searchNavKeywords: ["project", "context", "exclude", "paths", "copy tree"],
+    searchNavDescription: "Excluded paths, copy tree settings and dictation vocabulary",
+    searchNavKeywords: ["project", "context", "exclude", "paths", "copy tree", "dictation"],
     sections: [
       {
         id: "project-excluded-paths",
@@ -2279,6 +2279,13 @@ export const PROJECT_SETTINGS_SECTIONS: Readonly<
         description:
           "Configure context size limits, file size limits, and include/exclude patterns",
         keywords: ["copy", "tree", "context", "size", "limit", "include", "exclude"],
+      },
+      {
+        id: "project-dictation-vocabulary",
+        section: "Dictation vocabulary",
+        title: "Dictation vocabulary",
+        description: "Project terms sent with dictation, shared through the repo",
+        keywords: ["voice", "dictation", "dictionary", "vocabulary", "terms", "heard as"],
       },
     ],
   },

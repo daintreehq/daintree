@@ -3931,9 +3931,24 @@ export interface GeneratedIpcInvokeMap {
     ];
     result: import("./api.js").VoiceDictionaryState;
   };
+  "voice-dictionary:add-to-project": {
+    args: [
+      __0: {
+        projectId: string;
+        term: string;
+        source?: "manual" | "imported" | undefined;
+        heardAs?: string[] | undefined;
+      },
+    ];
+    result: import("./api.js").VoiceDictionaryEntry[];
+  };
   "voice-dictionary:dismiss-suggestion": {
     args: [__0: { word: string; utterance?: string | undefined }];
     result: import("./api.js").VoiceDictionaryState;
+  };
+  "voice-dictionary:get-project": {
+    args: [__0: { projectId: string }];
+    result: import("./api.js").VoiceDictionaryEntry[];
   };
   "voice-dictionary:record-suggestions": {
     args: [__0: { candidates: { word: string; original: string }[] }];
@@ -3943,11 +3958,25 @@ export interface GeneratedIpcInvokeMap {
     args: [__0: { term: string }];
     result: import("./api.js").VoiceDictionaryState;
   };
+  "voice-dictionary:remove-from-project": {
+    args: [__0: { term: string; projectId: string }];
+    result: import("./api.js").VoiceDictionaryEntry[];
+  };
   "voice-dictionary:update": {
     args: [
       __0: { term: string; changes: { term?: string | undefined; heardAs?: string[] | undefined } },
     ];
     result: import("./api.js").VoiceDictionaryState;
+  };
+  "voice-dictionary:update-in-project": {
+    args: [
+      __0: {
+        term: string;
+        projectId: string;
+        changes: { term?: string | undefined; heardAs?: string[] | undefined };
+      },
+    ];
+    result: import("./api.js").VoiceDictionaryEntry[];
   };
   "voice-input:flush-paragraph": {
     args: [sessionId: string];

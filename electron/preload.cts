@@ -2976,7 +2976,7 @@ function buildElectronApi(): ElectronAPI {
       openMicSettings: () => _unwrappingInvoke(CHANNELS.VOICE_INPUT_OPEN_MIC_SETTINGS),
       validateApiKey: (apiKey: string) =>
         _unwrappingInvoke(CHANNELS.VOICE_INPUT_VALIDATE_API_KEY, apiKey),
-      correct: (request: { rawText: string; recentContext?: string[] }) =>
+      correct: (request: { rawText: string; recentContext?: string[]; terminalId?: string }) =>
         _unwrappingInvoke(CHANNELS.VOICE_INPUT_CORRECT, request),
       onFileTokenResolved: (
         callback: (payload: {

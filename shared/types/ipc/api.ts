@@ -2206,6 +2206,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     correct(request: {
       rawText: string;
       recentContext?: string[];
+      /** The panel the passage was dictated into, which picks the project vocabulary. */
+      terminalId?: string;
     }): Promise<{ action: "no_change" | "replace"; correctedText: string }>;
     onFileTokenResolved(
       callback: (payload: {

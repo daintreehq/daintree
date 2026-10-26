@@ -9,7 +9,7 @@ import type {
   TerminalRecipe,
   RecipeNameCollision,
 } from "../types/index.js";
-import type { NotificationSettings } from "../../shared/types/ipc/api.js";
+import type { NotificationSettings, VoiceDictionaryEntry } from "../../shared/types/ipc/api.js";
 import type { AgentPreset } from "../../shared/config/agentRegistry.js";
 import path from "path";
 import fs from "fs/promises";
@@ -373,6 +373,19 @@ export class ProjectStore {
 
   async writeInRepoSettings(projectPath: string, settings: ProjectSettings): Promise<void> {
     return this.identityFiles.writeInRepoSettings(projectPath, settings);
+  }
+
+  async readInRepoVoiceDictionary(
+    projectPath: string
+  ): Promise<{ found: boolean; entries: VoiceDictionaryEntry[] }> {
+    return this.identityFiles.readInRepoVoiceDictionary(projectPath);
+  }
+
+  async changeInRepoVoiceDictionary(
+    projectPath: string,
+    apply: (entries: VoiceDictionaryEntry[]) => VoiceDictionaryEntry[]
+  ): Promise<VoiceDictionaryEntry[]> {
+    return this.identityFiles.changeInRepoVoiceDictionary(projectPath, apply);
   }
 
   async writeInRepoRecipe(projectPath: string, recipe: TerminalRecipe): Promise<void> {
@@ -1726,6 +1739,13 @@ export class ProjectStore {
 
   async saveProjectSettings(projectId: string, settings: ProjectSettings): Promise<void> {
     return this.settingsManager.saveProjectSettings(projectId, settings);
+  }
+
+  async changeLocalVoiceDictionary(
+    projectId: string,
+    apply: (entries: VoiceDictionaryEntry[]) => VoiceDictionaryEntry[]
+  ): Promise<VoiceDictionaryEntry[]> {
+    return this.settingsManager.changeVoiceDictionary(projectId, apply);
   }
 
   async addBrowserAllowedHost(projectId: string, hostname: string): Promise<string[]> {

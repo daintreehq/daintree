@@ -914,6 +914,10 @@ export const CHANNELS = {
   VOICE_DICTIONARY_ACCEPT_SUGGESTION: "voice-dictionary:accept-suggestion",
   VOICE_DICTIONARY_DISMISS_SUGGESTION: "voice-dictionary:dismiss-suggestion",
   VOICE_DICTIONARY_RECORD_SUGGESTIONS: "voice-dictionary:record-suggestions",
+  VOICE_DICTIONARY_GET_PROJECT: "voice-dictionary:get-project",
+  VOICE_DICTIONARY_ADD_TO_PROJECT: "voice-dictionary:add-to-project",
+  VOICE_DICTIONARY_REMOVE_FROM_PROJECT: "voice-dictionary:remove-from-project",
+  VOICE_DICTIONARY_UPDATE_IN_PROJECT: "voice-dictionary:update-in-project",
 
   // Help assistant settings channels
   HELP_ASSISTANT_GET_SETTINGS: "help-assistant:get-settings",

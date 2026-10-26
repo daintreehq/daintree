@@ -1298,6 +1298,7 @@ function ProjectFormTabContent({
           onCopyTreeSettingsChange={projectForm.setCopyTreeSettings}
           worktrees={projectForm.worktrees}
           isOpen={isOpen}
+          projectId={projectId}
         />
       );
 

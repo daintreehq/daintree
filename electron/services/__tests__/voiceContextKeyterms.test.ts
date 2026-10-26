@@ -235,6 +235,37 @@ describe("assembleKeyterms", () => {
     expect(result).not.toContain(`customTerm${99 - MAX_DICTIONARY_KEYTERMS}`);
   });
 
+  it("puts the project's vocabulary ahead of the global dictionary, each newest first", async () => {
+    const result = await assembleKeyterms({
+      customDictionary: ["Whisper", "xterm"],
+      projectDictionary: ["Daintree", "PtyClient"],
+    });
+    expect(result.slice(0, 4)).toEqual(["PtyClient", "Daintree", "xterm", "Whisper"]);
+  });
+
+  it("spends the shared dictionary budget on project terms before global ones", async () => {
+    const project = Array.from({ length: MAX_DICTIONARY_KEYTERMS - 2 }, (_, i) => `projTerm${i}`);
+    const global = Array.from({ length: 10 }, (_, i) => `globalTerm${i}`);
+    const result = await assembleKeyterms({
+      customDictionary: global,
+      projectDictionary: project,
+    });
+    expect(result).toHaveLength(MAX_DICTIONARY_KEYTERMS);
+    expect(result.filter((t) => t.startsWith("projTerm"))).toHaveLength(project.length);
+    expect(result.filter((t) => t.startsWith("globalTerm"))).toEqual([
+      "globalTerm9",
+      "globalTerm8",
+    ]);
+  });
+
+  it("sends a term in both lists once, in the project's casing", async () => {
+    const result = await assembleKeyterms({
+      customDictionary: ["daintree"],
+      projectDictionary: ["Daintree"],
+    });
+    expect(result).toEqual(["Daintree"]);
+  });
+
   it("bounds project tokens so branch tokens still get reserved slots", async () => {
     const dictionary = Array.from({ length: 100 }, (_, i) => `customTerm${i}`);
     const result = await assembleKeyterms({

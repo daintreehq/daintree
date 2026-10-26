@@ -1683,18 +1683,30 @@ export interface GeneratedElectronAPI {
     add(
       ...args: IpcInvokeMap["voice-dictionary:add"]["args"]
     ): Promise<IpcInvokeMap["voice-dictionary:add"]["result"]>;
+    addToProject(
+      ...args: IpcInvokeMap["voice-dictionary:add-to-project"]["args"]
+    ): Promise<IpcInvokeMap["voice-dictionary:add-to-project"]["result"]>;
     dismissSuggestion(
       ...args: IpcInvokeMap["voice-dictionary:dismiss-suggestion"]["args"]
     ): Promise<IpcInvokeMap["voice-dictionary:dismiss-suggestion"]["result"]>;
+    getProject(
+      ...args: IpcInvokeMap["voice-dictionary:get-project"]["args"]
+    ): Promise<IpcInvokeMap["voice-dictionary:get-project"]["result"]>;
     recordSuggestions(
       ...args: IpcInvokeMap["voice-dictionary:record-suggestions"]["args"]
     ): Promise<IpcInvokeMap["voice-dictionary:record-suggestions"]["result"]>;
     remove(
       ...args: IpcInvokeMap["voice-dictionary:remove"]["args"]
     ): Promise<IpcInvokeMap["voice-dictionary:remove"]["result"]>;
+    removeFromProject(
+      ...args: IpcInvokeMap["voice-dictionary:remove-from-project"]["args"]
+    ): Promise<IpcInvokeMap["voice-dictionary:remove-from-project"]["result"]>;
     update(
       ...args: IpcInvokeMap["voice-dictionary:update"]["args"]
     ): Promise<IpcInvokeMap["voice-dictionary:update"]["result"]>;
+    updateInProject(
+      ...args: IpcInvokeMap["voice-dictionary:update-in-project"]["args"]
+    ): Promise<IpcInvokeMap["voice-dictionary:update-in-project"]["result"]>;
   };
   voiceInput: {
     flushParagraph(

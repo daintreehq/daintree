@@ -814,4 +814,58 @@ describe("ProjectSettingsManager caching", () => {
       expect((await readFromDisk()).browserAllowedHosts).toEqual(["Example.com"]);
     });
   });
+
+  describe("changeVoiceDictionary", () => {
+    const readFromDisk = () =>
+      new ProjectSettingsManager(tempDir, createMockStore()).getProjectSettings(projectId);
+    const entry = (term: string) => ({
+      term,
+      heardAs: [],
+      source: "manual" as const,
+      addedAt: 1,
+    });
+
+    it("merges the vocabulary into the settings on disk", async () => {
+      await manager.saveProjectSettings(projectId, {
+        runCommands: [],
+        devServerCommand: "npm start",
+      });
+
+      const saved = await manager.changeVoiceDictionary(projectId, (e) => [
+        ...e,
+        entry("Daintree"),
+      ]);
+
+      expect(saved.map((e) => e.term)).toEqual(["Daintree"]);
+      const settings = await readFromDisk();
+      expect(settings.voiceDictionary?.map((e) => e.term)).toEqual(["Daintree"]);
+      expect(settings.devServerCommand).toBe("npm start");
+    });
+
+    it("keeps the vocabulary through a save built from a copy read before the change", async () => {
+      await manager.changeVoiceDictionary(projectId, () => [entry("Kept")]);
+      const copyBeforeChange = await manager.getProjectSettings(projectId);
+
+      const remove = manager.changeVoiceDictionary(projectId, () => []);
+      const add = manager.changeVoiceDictionary(projectId, (e) => [...e, entry("Added")]);
+      const staleSave = manager.saveProjectSettings(projectId, {
+        ...copyBeforeChange,
+        devServerCommand: "pnpm dev",
+      });
+      await Promise.all([remove, add, staleSave]);
+
+      const settings = await readFromDisk();
+      expect(settings.devServerCommand).toBe("pnpm dev");
+      expect(settings.voiceDictionary?.map((e) => e.term)).toEqual(["Added"]);
+    });
+
+    it("ignores a vocabulary a whole save carries", async () => {
+      await manager.saveProjectSettings(projectId, {
+        runCommands: [],
+        voiceDictionary: [entry("Smuggled")],
+      });
+
+      expect((await readFromDisk()).voiceDictionary).toBeUndefined();
+    });
+  });
 });

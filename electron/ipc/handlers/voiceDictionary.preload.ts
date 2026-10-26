@@ -7,6 +7,10 @@ export const VOICE_DICTIONARY_METHOD_CHANNELS = {
   acceptSuggestion: "voice-dictionary:accept-suggestion",
   dismissSuggestion: "voice-dictionary:dismiss-suggestion",
   recordSuggestions: "voice-dictionary:record-suggestions",
+  getProject: "voice-dictionary:get-project",
+  addToProject: "voice-dictionary:add-to-project",
+  removeFromProject: "voice-dictionary:remove-from-project",
+  updateInProject: "voice-dictionary:update-in-project",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof VOICE_DICTIONARY_METHOD_CHANNELS;

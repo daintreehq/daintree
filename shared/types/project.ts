@@ -23,7 +23,7 @@ import type { CommandOverride } from "./commands.js";
 import type { GitignoreTemplateId } from "../config/gitignoreTemplates.js";
 import type { GitStatus } from "./git.js";
 import type { EditorConfig } from "./editor.js";
-import type { NotificationSettings } from "./ipc/api.js";
+import type { NotificationSettings, VoiceDictionaryEntry } from "./ipc/api.js";
 
 /**
  * Project lifecycle status:
@@ -901,6 +901,12 @@ export interface ProjectSettings {
   /** Hostnames the user approved for the browser panel beyond the implicit local/private allow-list */
   browserAllowedHosts?: string[];
   /**
+   * The project's dictation vocabulary, oldest first. Main owns every write
+   * (the `voiceDictionary` project operations); a settings save keeps what is
+   * stored rather than the copy it carries.
+   */
+  voiceDictionary?: VoiceDictionaryEntry[];
+  /**
    * Daintree MCP tool set exposed to agents launched in this project's worktrees.
    * - `off` (default): no MCP server injected
    * - `core`: orchestration — create worktrees, launch agents, prompt, read, wait on, move and close the terminals the agent's own session opened
@@ -966,6 +972,7 @@ export const PROJECT_SETTINGS_SHAREABILITY = {
   activeResourceEnvironment: "local",
   defaultWorktreeMode: "local",
   browserAllowedHosts: "local",
+  voiceDictionary: "shareable",
   daintreeMcpTier: "local",
   daintreeMcpSkipConfirmations: "local",
   exposeDaintreeMcpToAgents: "local",
@@ -1041,6 +1048,7 @@ export const PROJECT_SETTINGS_AGENT_EXPOSURE = {
   activeResourceEnvironment: "exposed",
   defaultWorktreeMode: "exposed",
   browserAllowedHosts: "internal",
+  voiceDictionary: "internal",
   daintreeMcpTier: "internal",
   daintreeMcpSkipConfirmations: "internal",
   exposeDaintreeMcpToAgents: "internal",
