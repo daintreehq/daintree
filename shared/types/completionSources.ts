@@ -18,6 +18,20 @@ import type { SlashCommandScope } from "./slashCommands.js";
 export type CompletionTrigger = "/" | "$" | "@";
 
 /**
+ * How each trigger is said aloud, so a dictated invocation ("slash review",
+ * "dollar sign plugin creator") is written the way a typed one would be. A
+ * label prefix longer than its trigger (`/prompts:`) is said as one of these
+ * followed by the prefix's own words ("slash prompts"). `@` has no spoken form:
+ * "at" is too common a word to open a completion on.
+ */
+export const COMPLETION_TRIGGER_SPOKEN_FORMS: Readonly<Record<CompletionTrigger, readonly string[]>> =
+  {
+    "/": ["slash", "forward slash"],
+    $: ["dollar", "dollar sign"],
+    "@": [],
+  };
+
+/**
  * Semantic category of a completion. `command`, `skill`, and `plugin` are
  * produced today — `plugin` covers Codex Plugins surfaced from the local plugin
  * registry (see the `registry` discovery + `codex-plugin-registry` parser).
