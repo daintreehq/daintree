@@ -245,14 +245,7 @@ export function useToolbarItemPlacement({
         agentAvailability,
         pluginConfigs.has(id)
       ),
-    [
-      forgeStatsHidden,
-      devPreviewHidden,
-      pinnedButtons,
-      agentPins,
-      agentAvailability,
-      pluginConfigs,
-    ]
+    [forgeStatsHidden, devPreviewHidden, pinnedButtons, agentPins, agentAvailability, pluginConfigs]
   );
 
   // Filtering the grouped list yields the same sequence as grouping the filtered

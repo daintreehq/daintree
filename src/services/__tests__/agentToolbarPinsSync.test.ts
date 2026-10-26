@@ -100,7 +100,10 @@ describe("initAgentToolbarPinsSync (#14702)", () => {
     dispose = initAgentToolbarPinsSync();
 
     clientMock.push({ pins: { claude: false }, revision: 5 });
-    resolveBoot({ ok: true, result: { agentToolbarPins: { pins: { claude: true }, revision: 4 } } });
+    resolveBoot({
+      ok: true,
+      result: { agentToolbarPins: { pins: { claude: true }, revision: 4 } },
+    });
     await settle();
 
     expect(pins()).toEqual({ claude: false });

@@ -150,7 +150,7 @@ export interface AgentSettingsEntry {
 export interface AgentSettings {
   agents: Record<string, AgentSettingsEntry>;
   /**
-   * Legacy schema version, read only by migration 037 (#14702): below `1` the
+   * Legacy schema version, read only by migration 038 (#14702): below `1` the
    * store's toolbar pins predate the tri-state fix (#7673) and were never
    * shown, so they don't move to this machine's toolbar pins.
    */

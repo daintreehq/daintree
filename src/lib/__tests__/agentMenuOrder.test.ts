@@ -10,13 +10,7 @@ function agent(id: string, availability?: AgentAvailabilityState): PinnableAgent
 describe("sortAgentsByToolbarPin", () => {
   it("orders pinned agents by leftButtons index, unpinned trailing in input order", () => {
     const agents = [agent("claude", "missing"), agent("gemini", "ready"), agent("codex", "ready")];
-    const { sorted, pinnedCount } = sortAgentsByToolbarPin(
-      agents,
-      ["codex", "gemini"],
-      {},
-      [],
-      {}
-    );
+    const { sorted, pinnedCount } = sortAgentsByToolbarPin(agents, ["codex", "gemini"], {}, [], {});
     expect(sorted.map((a) => a.id)).toEqual(["codex", "gemini", "claude"]);
     expect(pinnedCount).toBe(2);
   });
@@ -88,13 +82,7 @@ describe("sortAgentsByToolbarPin", () => {
 
   it("uses the first index for a duplicated id in leftButtons", () => {
     const agents = [agent("claude", "ready"), agent("gemini", "ready")];
-    const { sorted } = sortAgentsByToolbarPin(
-      agents,
-      ["gemini", "claude", "gemini"],
-      {},
-      [],
-      {}
-    );
+    const { sorted } = sortAgentsByToolbarPin(agents, ["gemini", "claude", "gemini"], {}, [], {});
     expect(sorted.map((a) => a.id)).toEqual(["gemini", "claude"]);
   });
 
@@ -116,13 +104,7 @@ describe("sortAgentsByToolbarPin", () => {
 
   it("counts a position on the right side as pinned", () => {
     const agents = [agent("claude", "ready"), agent("gemini", "ready")];
-    const { sorted, pinnedCount } = sortAgentsByToolbarPin(
-      agents,
-      [],
-      {},
-      ["gemini"],
-      {}
-    );
+    const { sorted, pinnedCount } = sortAgentsByToolbarPin(agents, [], {}, ["gemini"], {});
     expect(sorted.map((a) => a.id)).toEqual(["gemini", "claude"]);
     expect(pinnedCount).toBe(1);
   });
@@ -131,13 +113,7 @@ describe("sortAgentsByToolbarPin", () => {
     // `leftButtons` supplies the order; a right-side agent has no index there,
     // so it sorts to the end of the pinned group rather than interleaving.
     const agents = [agent("gemini", "ready"), agent("claude", "ready")];
-    const { sorted, pinnedCount } = sortAgentsByToolbarPin(
-      agents,
-      ["claude"],
-      {},
-      ["gemini"],
-      {}
-    );
+    const { sorted, pinnedCount } = sortAgentsByToolbarPin(agents, ["claude"], {}, ["gemini"], {});
     expect(sorted.map((a) => a.id)).toEqual(["claude", "gemini"]);
     expect(pinnedCount).toBe(2);
   });
@@ -178,13 +154,9 @@ describe("sortAgentsByToolbarPin", () => {
     // toolbar it is meant to mirror.
     const pluginId = launcherItemToolbarButtonId("agent", "my-plugin-agent");
     const agents = [agent("claude", "ready"), agent("my-plugin-agent", "ready")];
-    const { sorted, pinnedCount } = sortAgentsByToolbarPin(
-      agents,
-      [pluginId, "claude"],
-      {},
-      [],
-      { [pluginId]: true }
-    );
+    const { sorted, pinnedCount } = sortAgentsByToolbarPin(agents, [pluginId, "claude"], {}, [], {
+      [pluginId]: true,
+    });
     // Input order is claude-first; the toolbar order is plugin-first, and the
     // toolbar wins.
     expect(sorted.map((a) => a.id)).toEqual(["my-plugin-agent", "claude"]);
@@ -195,13 +167,7 @@ describe("sortAgentsByToolbarPin", () => {
     // A launcher item has no default slot, so array membership can only ever be
     // the residue of a pin — only the explicit `true` counts.
     const agents = [agent("my-plugin-agent", "ready")];
-    const { pinnedCount } = sortAgentsByToolbarPin(
-      agents,
-      ["my-plugin-agent"],
-      {},
-      [],
-      {}
-    );
+    const { pinnedCount } = sortAgentsByToolbarPin(agents, ["my-plugin-agent"], {}, [], {});
     expect(pinnedCount).toBe(0);
   });
 });

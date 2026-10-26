@@ -7,9 +7,7 @@ const fakeStore = vi.hoisted(() => {
       data = structuredClone(initial);
     },
     dump: () => data,
-    get: vi.fn((key: string) =>
-      data[key] === undefined ? undefined : structuredClone(data[key])
-    ),
+    get: vi.fn((key: string) => (data[key] === undefined ? undefined : structuredClone(data[key]))),
     set: vi.fn((key: string, value: unknown) => {
       data[key] = structuredClone(value);
     }),
@@ -52,7 +50,13 @@ describe("agentToolbarPins (#14702)", () => {
 
     it("drops anything that isn't a boolean pin on a storable id", () => {
       fakeStore.reset({
-        agentToolbarPins: { claude: true, gemini: "yes", "": true, constructor: false, codex: false },
+        agentToolbarPins: {
+          claude: true,
+          gemini: "yes",
+          "": true,
+          constructor: false,
+          codex: false,
+        },
       });
       expect(readAgentToolbarPins()).toEqual({ claude: true, codex: false });
     });
@@ -134,7 +138,7 @@ describe("agentToolbarPins (#14702)", () => {
     });
 
     it("never seeds over an upgraded profile, even one whose pins are all unset", () => {
-      // Migration 037 leaves the key on every existing profile.
+      // Migration 038 leaves the key on every existing profile.
       fakeStore.reset({ agentToolbarPins: {} });
 
       expect(seedAgentToolbarPinsIfUnset(availability(BUILT_IN_AGENT_IDS))).toBe(false);

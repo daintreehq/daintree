@@ -1505,10 +1505,7 @@ describe("agent.listToolbar (#10838)", () => {
   });
 
   it("treats a non-boolean pinned (corrupted config) as absent — never forwarded", async () => {
-    const rows = await listToolbar(
-      { claude: null as unknown as boolean },
-      { claude: "ready" }
-    );
+    const rows = await listToolbar({ claude: null as unknown as boolean }, { claude: "ready" });
     const claude = rowFor(rows, "claude");
     expect(claude).not.toHaveProperty("pinned");
     // Falls through to availability since the bad pin is ignored.
@@ -1525,7 +1522,10 @@ describe("agent.listToolbar (#10838)", () => {
 
   it("falls back to the cache-aware clients when the stores have not hydrated", async () => {
     setStores(null, {}, false);
-    clientsMock.agentToolbarPinsClient.get.mockResolvedValue({ pins: { codex: true }, revision: 0 });
+    clientsMock.agentToolbarPinsClient.get.mockResolvedValue({
+      pins: { codex: true },
+      revision: 0,
+    });
     clientsMock.cliAvailabilityClient.get.mockResolvedValue({ codex: "missing" });
     const actions = setupActions(makeCallbacks());
     const result = (await callAction(actions, "agent.listToolbar")) as { agents: ToolbarRow[] };
@@ -1578,10 +1578,7 @@ describe("agent.listAvailable", () => {
   }
 
   it("returns the complete effective registry with toolbar fields only for built-ins", async () => {
-    setStores(
-      { claude: true },
-      { claude: "ready", "custom-agent": "missing" }
-    );
+    setStores({ claude: true }, { claude: "ready", "custom-agent": "missing" });
     clientsMock.agentCapabilitiesClient.getRegistry.mockResolvedValue({
       "plugin-agent": { name: "Plugin" },
       "custom-agent": { name: "Custom" },
@@ -1630,12 +1627,7 @@ describe("agent.listAvailable", () => {
     // hasRealData is true (cache hydrated) but the live probe has not finished:
     // the availability map here is the synthesized cache, so "missing" must not
     // leak out as an authoritative probe result.
-    setStores(
-      { claude: true },
-      { claude: "ready", "new-builtin": "missing" },
-      true,
-      false
-    );
+    setStores({ claude: true }, { claude: "ready", "new-builtin": "missing" }, true, false);
     clientsMock.agentCapabilitiesClient.getRegistry.mockResolvedValue({
       claude: { name: "Claude" },
     });

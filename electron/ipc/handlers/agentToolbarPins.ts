@@ -9,9 +9,8 @@ import type { AgentToolbarPinsSnapshot } from "../../../shared/types/ipc/agentTo
 export const agentToolbarPinsNamespace = defineIpcNamespace({
   name: "agentToolbarPins",
   ops: {
-    get: op(
-      AGENT_TOOLBAR_PINS_METHOD_CHANNELS.get,
-      async (): Promise<AgentToolbarPinsSnapshot> => readAgentToolbarPinsSnapshot()
+    get: op(AGENT_TOOLBAR_PINS_METHOD_CHANNELS.get, async (): Promise<AgentToolbarPinsSnapshot> =>
+      readAgentToolbarPinsSnapshot()
     ),
     set: op(
       AGENT_TOOLBAR_PINS_METHOD_CHANNELS.set,

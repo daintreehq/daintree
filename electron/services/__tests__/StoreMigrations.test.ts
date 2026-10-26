@@ -1934,7 +1934,7 @@ describe("MigrationRunner", () => {
       expect(notif.waitingSoundFile).toBe("waiting.wav");
       expect(notif.soundFile).toBeUndefined();
 
-      // Migration 012 retires selected/enabled; 037 then moves the pins it
+      // Migration 012 retires selected/enabled; 038 then moves the pins it
       // wrote off the agents. This store predates `settingsVersion` 1, whose
       // pins the renderer never showed, so none carry over (#14702).
       const migratedAgents = (store.data.agentSettings as Record<string, unknown>).agents as Record<

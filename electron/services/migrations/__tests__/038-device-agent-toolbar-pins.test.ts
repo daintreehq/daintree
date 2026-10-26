@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { migration037 } from "../037-device-agent-toolbar-pins.js";
+import { migration038 } from "../038-device-agent-toolbar-pins.js";
 
 function run(initial: Record<string, unknown>, times = 1) {
   const data: Record<string, unknown> = structuredClone(initial);
@@ -8,12 +8,12 @@ function run(initial: Record<string, unknown>, times = 1) {
     set: vi.fn((key: string, value: unknown) => {
       data[key] = value;
     }),
-  } as unknown as Parameters<typeof migration037.up>[0];
-  for (let i = 0; i < times; i++) migration037.up(store);
+  } as unknown as Parameters<typeof migration038.up>[0];
+  for (let i = 0; i < times; i++) migration038.up(store);
   return { data, store };
 }
 
-describe("migration037 — toolbar agent pins move onto this machine (#14702)", () => {
+describe("migration038 — toolbar agent pins move onto this machine (#14702)", () => {
   beforeEach(() => {
     vi.spyOn(console, "log").mockImplementation(() => {});
   });

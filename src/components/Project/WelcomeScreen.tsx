@@ -19,10 +19,7 @@ import { DismissButton } from "@/components/ui/DismissButton";
 import { KbdChord } from "@/components/ui/Kbd";
 import { AppWindow, BrandMark, DaintreeIcon, FolderDown } from "@/components/icons";
 import { useProjectStore } from "@/store/projectStore";
-import {
-  selectLoadedAgentPins,
-  useAgentToolbarPinsStore,
-} from "@/store/agentToolbarPinsStore";
+import { selectLoadedAgentPins, useAgentToolbarPinsStore } from "@/store/agentToolbarPinsStore";
 import { agentToolbarPin } from "@shared/types/ipc/agentToolbarPins";
 import type { AgentToolbarPins } from "@shared/types";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
@@ -594,9 +591,7 @@ function AgentWelcomeCard() {
   }, [availability]);
 
   if (!loaded) return null;
-  if (
-    !isAgentWelcomeCardEligible({ agentPins, hasRealData, welcomeCardDismissed, availability })
-  )
+  if (!isAgentWelcomeCardEligible({ agentPins, hasRealData, welcomeCardDismissed, availability }))
     return null;
 
   const handlePinAll = async () => {

@@ -274,7 +274,10 @@ describe("agentSettingsStore adversarial", () => {
             rejectStale = reject;
           })
       )
-      .mockResolvedValueOnce({ settingsVersion: 1, agents: { claude: { dangerousEnabled: false } } });
+      .mockResolvedValueOnce({
+        settingsVersion: 1,
+        agents: { claude: { dangerousEnabled: false } },
+      });
 
     const stale = useAgentSettingsStore.getState().refresh();
     const fresh = useAgentSettingsStore.getState().refresh();
