@@ -54,6 +54,7 @@ import { Archive } from "lucide-react";
 import { Paperclip } from "@/components/icons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
+import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import {
   COMPOSER_CONTROL_FOCUS_CLASS,
@@ -62,6 +63,7 @@ import {
   COMPOSER_MARKER_TEXT_CLASS,
 } from "./composerControlStyles";
 import { useVoiceWaitSubmit } from "./hooks/useVoiceWaitSubmit";
+import { voiceRecordingService } from "@/services/VoiceRecordingService";
 import { registerInputController, unregisterInputController } from "@/store/terminalInputStore";
 import type { CommandResult } from "@shared/types/commands";
 import { AppDialog } from "@/components/ui/AppDialog";
@@ -117,7 +119,6 @@ import { SelectedFileMenuItems } from "./SelectedFileMenuItems";
 import { systemClient } from "@/clients/systemClient";
 import { resolveSelectedFilePath } from "@/services/terminal/filePathDetection";
 import { composeDraftWithInstruction } from "@/services/terminal/worktreeMoveInstruction";
-import { voiceRecordingService } from "@/services/VoiceRecordingService";
 import { isScratchpadElement } from "@/lib/terminalScratchpad";
 
 export interface HybridInputBarHandle {
@@ -418,7 +419,6 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const isVoiceMicStarting =
       (isVoiceRecording || isVoiceConnecting || isVoiceReconnecting) && voiceMicSignal !== "live";
     const isVoiceListeningChrome = isVoiceActiveForPanel && voiceMicSignal === "live";
-    const isVoiceSubmitting = useTerminalInputStore((s) => s.voiceSubmittingPanels.has(terminalId));
 
     const commandContext = { terminalId, cwd, projectId };
 
@@ -952,12 +952,21 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       });
     };
 
-    const { startVoiceWaitSubmit, cancelVoiceWaitSubmit } = useVoiceWaitSubmit({
+    const {
+      startVoiceWaitSubmit,
+      cancelVoiceWaitSubmit,
+      hasPendingVoiceCorrection,
+      submitFromEditor,
+      voiceSubmitPhase,
+    } = useVoiceWaitSubmit({
       terminalId,
       editorViewRef,
       editableCompartmentRef,
       sendFromEditor,
     });
+    // The editor locks the moment a voice send starts; the status waits out
+    // the loading gate, so a drain or correction that lands quickly shows none.
+    const showVoiceSubmitStatus = useDohertyGate(voiceSubmitPhase !== null);
 
     const handleDictationEscape = () => voiceRecordingService.handleEscape(terminalId);
 
@@ -1089,6 +1098,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           // a bar that cannot take the user's own Enter cannot take this
           // either. Say no and let the caller keep its banner up.
           if (!view || !latest || latest.disabled) return false;
+          // The snapshot is what goes out; a correction landing during the
+          // submit would rewrite the draft under it (#14611).
+          voiceRecordingService.discardPendingCorrections(terminalId);
           const snapshot = view.state.doc.toString();
           return sendText(snapshot, {
             compose: (draft) => composeDraftWithInstruction(draft, instruction),
@@ -1099,7 +1111,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           });
         },
       }),
-      [focusEditor, guardSentDraft, sendText]
+      [focusEditor, guardSentDraft, sendText, terminalId]
     );
 
     // Claim the type-anywhere routing target (#11134) whenever the user really
@@ -1151,6 +1163,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       startVoiceWaitSubmit,
       cancelVoiceWaitSubmit,
       handleDictationEscape,
+      hasPendingVoiceCorrection,
       stashEditorState,
       popStashedEditorState,
       setActiveCompletionContext,
@@ -1168,7 +1181,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       lastEnterKeydownNewlineRef,
       submitAfterCompositionRef,
       applyAutocompleteSelection,
-      sendFromEditor,
+      // The composition and beforeinput Enter routes wait for dictation the
+      // same way the keymap's Enter does.
+      sendFromEditor: submitFromEditor,
       rootRef,
       setActiveCompletionContext,
     });
@@ -1441,14 +1456,16 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               }
             />
             {isDragOverCompact && <FileDropOverlay className="rounded-md" />}
-            {isVoiceSubmitting && (
+            {voiceSubmitPhase && showVoiceSubmitStatus && (
               <div
                 role="status"
                 aria-live="polite"
                 className="absolute inset-0 z-10 flex items-center justify-center gap-2 rounded-md bg-surface-canvas/80 pointer-events-none"
               >
                 <Spinner className="text-text-secondary" />
-                <span className="text-xs text-text-secondary">Finishing dictation…</span>
+                <span className="text-xs text-text-secondary">
+                  {voiceSubmitPhase === "polishing" ? "Polishing…" : "Finishing dictation…"}
+                </span>
               </div>
             )}
             <Tooltip>

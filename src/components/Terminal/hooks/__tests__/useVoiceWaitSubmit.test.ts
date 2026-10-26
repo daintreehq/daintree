@@ -5,7 +5,13 @@ import { Compartment } from "@codemirror/state";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 
 vi.mock("@/services/VoiceRecordingService", () => ({
-  voiceRecordingService: { stop: vi.fn().mockResolvedValue(undefined) },
+  voiceRecordingService: {
+    stop: vi.fn().mockResolvedValue(undefined),
+    hasPendingCorrection: vi.fn(() => false),
+    waitForPendingCorrections: vi.fn().mockResolvedValue(true),
+    discardPendingCorrections: vi.fn(),
+  },
+  VOICE_CORRECTION_SEND_WAIT_MS: 2000,
 }));
 
 vi.mock("@/store", () => ({
@@ -27,6 +33,9 @@ import { voiceRecordingService } from "@/services/VoiceRecordingService";
 import { useVoiceWaitSubmit } from "../useVoiceWaitSubmit";
 
 const stopMock = vi.mocked(voiceRecordingService.stop);
+const hasPendingMock = vi.mocked(voiceRecordingService.hasPendingCorrection);
+const waitMock = vi.mocked(voiceRecordingService.waitForPendingCorrections);
+const discardMock = vi.mocked(voiceRecordingService.discardPendingCorrections);
 
 const PANEL_ID = "test-panel";
 
@@ -59,6 +68,11 @@ describe("useVoiceWaitSubmit", () => {
     sendFromEditor = vi.fn<() => void>();
     stopMock.mockReset();
     stopMock.mockResolvedValue(undefined);
+    hasPendingMock.mockReset();
+    hasPendingMock.mockReturnValue(false);
+    waitMock.mockReset();
+    waitMock.mockResolvedValue(true);
+    discardMock.mockReset();
   });
 
   function renderWaitSubmit() {
@@ -140,5 +154,156 @@ describe("useVoiceWaitSubmit", () => {
       resolveStop();
     });
     expect(sendFromEditor).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for a pending correction, then drops what is left and sends", async () => {
+    let finishCorrection!: (landed: boolean) => void;
+    hasPendingMock.mockReturnValue(true);
+    waitMock.mockImplementation(
+      () =>
+        new Promise<boolean>((resolve) => {
+          finishCorrection = resolve;
+        })
+    );
+
+    const { result } = renderWaitSubmit();
+    await act(async () => {
+      result.current.startVoiceWaitSubmit();
+    });
+
+    expect(waitMock).toHaveBeenCalledWith(PANEL_ID, 2000);
+    expect(result.current.voiceSubmitPhase).toBe("polishing");
+    expect(sendFromEditor).not.toHaveBeenCalled();
+
+    await act(async () => {
+      finishCorrection(false);
+    });
+
+    expect(discardMock).toHaveBeenCalledWith(PANEL_ID);
+    expect(discardMock.mock.invocationCallOrder[0]).toBeLessThan(
+      sendFromEditor.mock.invocationCallOrder[0]!
+    );
+    expect(sendFromEditor).toHaveBeenCalledTimes(1);
+    expect(result.current.voiceSubmitPhase).toBeNull();
+    expect(useTerminalInputStore.getState().isVoiceSubmitting(PANEL_ID)).toBe(false);
+  });
+
+  it("leaves the correction to land when Escape cancels the wait for it", async () => {
+    let finishCorrection!: (landed: boolean) => void;
+    hasPendingMock.mockReturnValue(true);
+    waitMock.mockImplementation(
+      () =>
+        new Promise<boolean>((resolve) => {
+          finishCorrection = resolve;
+        })
+    );
+
+    const { result } = renderWaitSubmit();
+    await act(async () => {
+      result.current.startVoiceWaitSubmit();
+    });
+    act(() => {
+      expect(result.current.cancelVoiceWaitSubmit()).toBe(true);
+    });
+    expect(result.current.voiceSubmitPhase).toBeNull();
+
+    await act(async () => {
+      finishCorrection(true);
+    });
+
+    expect(discardMock).not.toHaveBeenCalled();
+    expect(sendFromEditor).not.toHaveBeenCalled();
+  });
+
+  it("sends once, from the later attempt, after Escape and a second Enter", async () => {
+    const stops: Array<() => void> = [];
+    stopMock.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          stops.push(resolve);
+        })
+    );
+
+    const { result } = renderWaitSubmit();
+    act(() => {
+      result.current.startVoiceWaitSubmit();
+    });
+    act(() => {
+      result.current.cancelVoiceWaitSubmit();
+    });
+    act(() => {
+      result.current.startVoiceWaitSubmit();
+    });
+    expect(useTerminalInputStore.getState().isVoiceSubmitting(PANEL_ID)).toBe(true);
+
+    // The first attempt's stop finishing must not send or unlock the second.
+    await act(async () => {
+      stops[0]!();
+    });
+    expect(sendFromEditor).not.toHaveBeenCalled();
+    expect(useTerminalInputStore.getState().isVoiceSubmitting(PANEL_ID)).toBe(true);
+
+    await act(async () => {
+      stops[1]!();
+    });
+    expect(sendFromEditor).toHaveBeenCalledTimes(1);
+    expect(useTerminalInputStore.getState().isVoiceSubmitting(PANEL_ID)).toBe(false);
+  });
+});
+
+describe("useVoiceWaitSubmit submitFromEditor", () => {
+  let sendFromEditor: ReturnType<typeof vi.fn<() => void>>;
+
+  beforeEach(() => {
+    useTerminalInputStore.setState({ voiceSubmittingPanels: new Set() });
+    sendFromEditor = vi.fn<() => void>();
+    stopMock.mockReset();
+    stopMock.mockResolvedValue(undefined);
+    hasPendingMock.mockReset();
+    waitMock.mockReset();
+    waitMock.mockResolvedValue(true);
+    discardMock.mockReset();
+  });
+
+  it("routes through the correction wait when this panel has one pending", async () => {
+    // The mocked voice store reports a session on PANEL_ID; this composer is
+    // another panel, so only its own pending correction can hold the send.
+    hasPendingMock.mockImplementation((panelId) => panelId === "other-panel");
+    const { result } = renderHook(() =>
+      useVoiceWaitSubmit({
+        terminalId: "other-panel",
+        editorViewRef: { current: null },
+        editableCompartmentRef: { current: new Compartment() },
+        sendFromEditor,
+      })
+    );
+
+    await act(async () => {
+      result.current.submitFromEditor();
+    });
+
+    expect(stopMock).not.toHaveBeenCalled();
+    expect(waitMock).toHaveBeenCalledWith("other-panel", 2000);
+    expect(sendFromEditor).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends straight away when nothing is finishing or being corrected", () => {
+    hasPendingMock.mockReturnValue(false);
+    const { result } = renderHook(() =>
+      useVoiceWaitSubmit({
+        terminalId: "other-panel",
+        editorViewRef: { current: null },
+        editableCompartmentRef: { current: new Compartment() },
+        sendFromEditor,
+      })
+    );
+
+    act(() => {
+      result.current.submitFromEditor();
+    });
+
+    expect(waitMock).not.toHaveBeenCalled();
+    expect(sendFromEditor).toHaveBeenCalledTimes(1);
+    expect(useTerminalInputStore.getState().isVoiceSubmitting("other-panel")).toBe(false);
   });
 });

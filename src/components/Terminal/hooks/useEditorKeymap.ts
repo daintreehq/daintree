@@ -36,6 +36,7 @@ interface UseEditorKeymapParams {
   startVoiceWaitSubmit: () => void;
   cancelVoiceWaitSubmit: () => boolean;
   handleDictationEscape: () => boolean;
+  hasPendingVoiceCorrection: () => boolean;
   stashEditorState: (terminalId: string, state: EditorView["state"], projectId?: string) => void;
   popStashedEditorState: (
     terminalId: string,
@@ -74,6 +75,7 @@ export function useEditorKeymap({
   startVoiceWaitSubmit,
   cancelVoiceWaitSubmit,
   handleDictationEscape,
+  hasPendingVoiceCorrection,
   stashEditorState,
   popStashedEditorState,
   setActiveCompletionContext,
@@ -112,7 +114,9 @@ export function useEditorKeymap({
 
       if (latest.disabled) return true;
 
-      if (latest.isVoiceActiveForPanel) {
+      // A finished passage whose correction is still on its way waits for it
+      // too, so the send doesn't go out with the raw text (#14611).
+      if (latest.isVoiceActiveForPanel || hasPendingVoiceCorrection()) {
         handledEnterRef.current = true;
         setTimeout(() => {
           handledEnterRef.current = false;
