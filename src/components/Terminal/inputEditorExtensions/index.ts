@@ -65,3 +65,4 @@ export {
   replayLandedCorrection,
 } from "./correctionReview";
 export type { CorrectionReview } from "./correctionReview";
+export { captureRewriteSelection, voiceRewriteTracker } from "./voiceRewrite";

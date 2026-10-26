@@ -28,6 +28,7 @@ import {
   createContextReferenceChipTooltip,
   interimWidgetField,
   pendingAIField,
+  voiceRewriteTracker,
   createAutoSize,
   createCustomKeymap,
   chipPendingDeleteField,
@@ -171,6 +172,7 @@ export function useEditorFactory({
         ),
         interimWidgetField,
         pendingAIField,
+        voiceRewriteTracker,
         createCorrectionReview({
           onShown: announceCorrectionShown,
           onSwapped: (review, now) => rebaseCorrectionBaseline(terminalId, review, now),
