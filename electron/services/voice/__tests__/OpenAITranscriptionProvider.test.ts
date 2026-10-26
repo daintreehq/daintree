@@ -1944,27 +1944,33 @@ describe("OpenAITranscriptionProvider", () => {
       service.stop();
     });
 
-    it("commits a dropped connection's replayed tail at a boundary asked for while reconnecting", async () => {
-      vi.spyOn(Math, "random").mockReturnValue(0.5);
-      const service = new OpenAITranscriptionProvider();
-      const { socket } = await bringSessionReady(service);
-      service.sendAudioChunk(chunk(5_000));
-      socket.simulateClose(1006, Buffer.from("abnormal"));
-      service.commitParagraphBoundary();
-      service.sendAudioChunk(chunk(5_000));
-      vi.advanceTimersByTime(3_000);
-      const socket2 = latestInstance();
-      expect(socket2).not.toBe(socket);
+    it.each([
+      ["with audio held after it", 1],
+      ["with nothing held after it", 0],
+    ])(
+      "commits a dropped connection's replayed tail at a boundary asked for while reconnecting, %s",
+      async (_label, heldAfter) => {
+        vi.spyOn(Math, "random").mockReturnValue(0.5);
+        const service = new OpenAITranscriptionProvider();
+        const { socket } = await bringSessionReady(service);
+        service.sendAudioChunk(chunk(5_000));
+        socket.simulateClose(1006, Buffer.from("abnormal"));
+        service.commitParagraphBoundary();
+        for (let i = 0; i < heldAfter; i++) service.sendAudioChunk(chunk(5_000));
+        vi.advanceTimersByTime(3_000);
+        const socket2 = latestInstance();
+        expect(socket2).not.toBe(socket);
 
-      becomeReady(socket2);
-      expect(types(socket2)).toEqual([
-        "session.update",
-        ...appends(1),
-        "input_audio_buffer.commit",
-        ...appends(1),
-      ]);
-      service.stop();
-    });
+        becomeReady(socket2);
+        expect(types(socket2)).toEqual([
+          "session.update",
+          ...appends(1),
+          "input_audio_buffer.commit",
+          ...appends(heldAfter),
+        ]);
+        service.stop();
+      }
+    );
 
     it("leaves a held commit too short to send for the next one", async () => {
       const service = new OpenAITranscriptionProvider();
