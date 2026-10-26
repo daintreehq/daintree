@@ -1309,7 +1309,7 @@ class VoiceRecordingService {
     useVoiceRecordingStore.getState().beginSession(target);
     // beginSession resets the panel's buffer; a passage still being corrected
     // there keeps its underline.
-    this.syncCorrectionRange(target.panelId);
+    if (this.hasPendingCorrection(target.panelId)) this.syncCorrectionRange(target.panelId);
 
     // Promote the attempt to the session. From here stop() owns its teardown.
     if (this.pendingCapture === capture) this.pendingCapture = null;
