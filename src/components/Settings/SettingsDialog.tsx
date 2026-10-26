@@ -66,6 +66,7 @@ import {
   type SettingsScope,
   type LazySettingsTabEntry,
 } from "./settingsTabRegistry";
+import { Badge } from "@/components/ui/badge";
 import { SETTINGS_SEARCH_INDEX, type SettingsSearchEntry } from "./settingsSearchIndex";
 import { usePluginSettingsSearchIndex } from "./pluginSettingsSearch";
 import { landOnSettingsElement } from "./settingsLanding";
@@ -93,8 +94,12 @@ import { COUNT_BADGE_CLASS } from "@/components/ui/badge";
 import { pluralize, pluralNoun } from "@/lib/pluralize";
 import {
   deviceOwnerLabel,
+  refreshSettingOwnersShown,
   settingsOwnerHeaderLabel,
+  settingsOwnerMarker,
+  useOwnerContext,
   useRemoteHostName,
+  type OwnerContext,
 } from "@/hooks/useSettingsOwner";
 import { currentHostId } from "@/hooks/useHostPlatform";
 import { useHostList } from "@/components/Hosts/hostList";
@@ -315,6 +320,7 @@ function SettingsDialogInner({
   useEffect(() => {
     if (isOpen) {
       setPortalOpen(false);
+      refreshSettingOwnersShown();
     }
   }, [isOpen, setPortalOpen]);
 
@@ -2064,9 +2070,9 @@ export function ScopeChip({
 }
 
 /**
- * Whose settings the page edits in a window attached to another host ("Settings on
- * studio-01", "This Mac"). Nothing in a local window, which has one machine and nothing
- * to tell apart, nor on a mixed page, whose sections each name their own owner.
+ * Whose settings the page edits ("Settings on studio-01", "This Mac"). Nothing in a local
+ * window with no hosts in use and Host mode off, which has one machine and nothing to tell
+ * apart, nor on a mixed page, whose sections each name their own owner.
  * Neutral like the scope chip: it answers a question, it doesn't ask for attention.
  * Part of the title's accessible name, after a pause.
  */
@@ -2081,10 +2087,10 @@ export function SettingsOwnerHeaderChip({
    */
   picked?: string | null;
 }) {
-  const remoteHostName = useRemoteHostName();
+  const ownerContext = useOwnerContext();
   const label =
     picked === undefined
-      ? settingsOwnerHeaderLabel(ownerForTab(tab), remoteHostName)
+      ? settingsOwnerHeaderLabel(ownerForTab(tab), ownerContext)
       : picked === null
         ? deviceOwnerLabel()
         : `Settings on ${picked}`;
@@ -2230,6 +2236,13 @@ interface SearchResultsProps {
   projectLabel: string | null;
 }
 
+function ownerLabelOf(
+  settings: SettingsSearchEntry["settings"],
+  context: OwnerContext
+): string | undefined {
+  return settings ? settingsOwnerMarker(settings, context) : undefined;
+}
+
 export function SearchResults({
   results,
   query,
@@ -2242,6 +2255,7 @@ export function SearchResults({
 }: SearchResultsProps) {
   const activeRef = useRef<HTMLButtonElement>(null);
   const renderLimit = useProgressiveRenderLimit(results.length, query, activeIndex);
+  const ownerContext = useOwnerContext();
 
   useEffect(() => {
     // A result under the pointer was just claimed by it; revealing it would
@@ -2368,6 +2382,11 @@ export function SearchResults({
                         </span>
                       ))}
                     </span>
+                    {ownerLabelOf(result.settings, ownerContext) && (
+                      <Badge size="xs" data-settings-owner-tag="">
+                        {ownerLabelOf(result.settings, ownerContext)}
+                      </Badge>
+                    )}
                     {result.requiresEnabled && (
                       // Where the row lives, not a verdict on it: true whether or not the
                       // parent is on right now, and plain text so it cannot be read as a

@@ -1,5 +1,12 @@
-import type { SettingOwner } from "@shared/config/settingOwnership";
-import { isMac } from "@/lib/platform";
+import { useEffect, useSyncExternalStore } from "react";
+import {
+  SETTING_CATALOG,
+  rendererStorageOwner,
+  settingOwner,
+  type SettingOwner,
+  type SettingPath,
+} from "@shared/config/settingOwnership";
+import { isMac, isWindows } from "@/lib/platform";
 import { currentHostId, isRemoteWindow, useHostPlatform } from "@/hooks/useHostPlatform";
 
 /**
@@ -11,12 +18,14 @@ export type SettingsOwner = SettingOwner | "mixed";
 
 /** The machine at the keyboard, named the way the person knows it. */
 export function deviceOwnerLabel(): string {
-  return isMac() ? "This Mac" : "This machine";
+  if (isMac()) return "This Mac";
+  return isWindows() ? "This PC" : "This machine";
 }
 
 /** The same machine mid-sentence. */
 export function deviceOwnerPhrase(): string {
-  return isMac() ? "this Mac" : "this machine";
+  if (isMac()) return "this Mac";
+  return isWindows() ? "this PC" : "this machine";
 }
 
 /** The remote host a view belongs to, by display name; null in a local window. */
@@ -26,57 +35,177 @@ export function useRemoteHostName(): string | null {
   return hostName ?? currentHostId();
 }
 
-/** The dialog header's owner line; null locally and for mixed pages. */
-export function settingsOwnerHeaderLabel(
-  owner: SettingsOwner,
-  remoteHostName: string | null
-): string | null {
-  if (remoteHostName === null) return null;
-  if (owner === "host") return `Settings on ${remoteHostName}`;
-  if (owner === "device") return deviceOwnerLabel();
-  return null;
+/**
+ * What names an owner on screen: the host a remote window works on, or null in
+ * a local window. `shown` is false in a local window with no hosts in use and
+ * Host mode off, where nothing names an owner and Settings reads as it always has.
+ */
+export interface OwnerContext {
+  readonly remoteHostName: string | null;
+  readonly shown: boolean;
 }
 
-/** A section or row marker on a mixed page; undefined locally so nothing renders. */
-export function settingsOwnerMarker(
-  owner: SettingOwner,
-  remoteHostName: string | null
-): string | undefined {
-  if (remoteHostName === null) return undefined;
-  return owner === "host" ? `On ${remoteHostName}` : deviceOwnerLabel();
+let hostsInUse: boolean | null = null;
+let hostsInUseRequest: Promise<void> | null = null;
+const hostsInUseListeners = new Set<() => void>();
+
+function setHostsInUse(next: boolean): void {
+  if (hostsInUse === next) return;
+  hostsInUse = next;
+  for (const listener of [...hostsInUseListeners]) listener();
+}
+
+/** Asks main again whether a host is configured or Host mode is on. */
+export function refreshSettingOwnersShown(): void {
+  const inUse = window.electron?.remoteHosts?.isInUse;
+  if (typeof inUse !== "function" || hostsInUseRequest) return;
+  hostsInUseRequest = inUse()
+    .then(setHostsInUse, () => {})
+    .finally(() => {
+      hostsInUseRequest = null;
+    });
+}
+
+let watchingHostList = false;
+
+/** Adding the first host, removing the last, or switching Host mode (in any window) changes whether owners are shown. */
+function watchHostList(): void {
+  if (watchingHostList) return;
+  watchingHostList = true;
+  window.electron?.remoteHosts?.onEvent?.((event) => {
+    if (event.type === "hosts-changed") refreshSettingOwnersShown();
+  });
+  window.electron?.hostMode?.onEvent?.((event) => {
+    if (event.type === "status-changed") refreshSettingOwnersShown();
+  });
+}
+
+function subscribeHostsInUse(listener: () => void): () => void {
+  hostsInUseListeners.add(listener);
+  return () => {
+    hostsInUseListeners.delete(listener);
+  };
+}
+
+export function _resetSettingOwnersShownForTests(): void {
+  hostsInUse = null;
+  hostsInUseRequest = null;
+  hostsInUseListeners.clear();
+}
+
+export function useOwnerContext(): OwnerContext {
+  const remoteHostName = useRemoteHostName();
+  const inUse = useSyncExternalStore(
+    subscribeHostsInUse,
+    () => hostsInUse,
+    () => null
+  );
+  const unknown = remoteHostName === null && inUse === null;
+  useEffect(() => {
+    watchHostList();
+    if (unknown) refreshSettingOwnersShown();
+  }, [unknown]);
+  return { remoteHostName, shown: remoteHostName !== null || inUse === true };
+}
+
+type LocalStorageKey = keyof (typeof SETTING_CATALOG)["renderer-local-storage"]["entries"] & string;
+
+/**
+ * A setting a surface edits: a path in the main settings file, or a key this
+ * machine's renderer keeps in local storage, written `storage:<key>`.
+ */
+export type SettingRef = SettingPath | `storage:${LocalStorageKey}`;
+
+const STORAGE_PREFIX = "storage:";
+
+function isStorageRef(ref: SettingRef): ref is `storage:${LocalStorageKey}` {
+  return ref.startsWith(STORAGE_PREFIX);
+}
+
+export function ownerOfSetting(ref: SettingRef): SettingOwner {
+  return isStorageRef(ref)
+    ? rendererStorageOwner(ref.slice(STORAGE_PREFIX.length))
+    : settingOwner(ref);
+}
+
+/** The one owner a set of settings shares; null when they differ. */
+export function sharedSettingOwner(paths: readonly SettingRef[]): SettingOwner | null {
+  const owners = new Set(paths.map((path) => ownerOfSetting(path)));
+  return owners.size === 1 ? ([...owners][0] ?? null) : null;
+}
+
+/** What a page of settings shares: its one owner, or `mixed` when the owners differ. */
+export function settingsOwnerOf(paths: readonly SettingRef[]): SettingsOwner {
+  return sharedSettingOwner(paths) ?? "mixed";
+}
+
+/** What names an owner: "On studio-03", "This Mac", or on a host's own screen "Shared with Shells". */
+export function ownerLabel(owner: SettingOwner, context: OwnerContext): string | undefined {
+  if (!context.shown) return undefined;
+  if (owner === "device") return deviceOwnerLabel();
+  return context.remoteHostName === null ? "Shared with Shells" : `On ${context.remoteHostName}`;
+}
+
+/** The dialog header's owner line; null when no owner is named and for mixed pages. */
+export function settingsOwnerHeaderLabel(
+  owner: SettingsOwner,
+  context: OwnerContext
+): string | null {
+  if (owner === "mixed" || !context.shown) return null;
+  if (owner === "host" && context.remoteHostName !== null) {
+    return `Settings on ${context.remoteHostName}`;
+  }
+  return ownerLabel(owner, context) ?? null;
 }
 
 /**
- * The marker for one section or row of a mixed settings page. Nothing in a
- * local window, so a page with no hosts renders exactly as it always has.
+ * The marker for a section or row, taken from the declared owner of what it
+ * writes. Nothing when owners aren't shown, and nothing when the settings
+ * differ in owner: the rows beneath each name their own.
  */
-export function useSettingsOwnerMarker(): (owner: SettingOwner) => string | undefined {
-  const remoteHostName = useRemoteHostName();
-  return (owner) => settingsOwnerMarker(owner, remoteHostName);
+export function settingsOwnerMarker(
+  paths: readonly SettingRef[],
+  context: OwnerContext
+): string | undefined {
+  const owner = sharedSettingOwner(paths);
+  return owner === null ? undefined : ownerLabel(owner, context);
 }
 
-/** Two badges on one heading, the owner last; the first alone locally. */
-export function joinBadges(badge: string, marker: string | undefined): string {
+export function useSettingsOwnerMarker(): (...paths: SettingRef[]) => string | undefined {
+  const context = useOwnerContext();
+  return (...paths) => settingsOwnerMarker(paths, context);
+}
+
+/** Two badges on one heading, the owner last; the first alone when none is named. */
+export function joinBadges(
+  badge: string | undefined,
+  marker: string | undefined
+): string | undefined {
+  if (!badge) return marker;
   return marker ? `${badge} · ${marker}` : badge;
 }
 
 /** Where one row's value lives, for the odd row whose owner differs from its section's. */
 export function settingsRowOwnerNote(
-  owner: SettingOwner,
-  remoteHostName: string | null
+  paths: readonly SettingRef[],
+  context: OwnerContext
 ): string | undefined {
-  if (remoteHostName === null) return undefined;
-  return owner === "host" ? `Set on ${remoteHostName}` : `Set on ${deviceOwnerPhrase()}`;
+  const owner = sharedSettingOwner(paths);
+  if (owner === null || !context.shown) return undefined;
+  if (owner === "device") return `Set on ${deviceOwnerPhrase()}`;
+  return context.remoteHostName === null
+    ? "Shared with Shells"
+    : `Set on ${context.remoteHostName}`;
 }
 
 /**
- * A row description with its owner appended in a remote window, matching the
- * description's own punctuation. The description, untouched, locally.
+ * A row description with its owner appended, matching the description's own
+ * punctuation. The description, untouched, when owners aren't shown.
  */
-export function useSettingsRowOwnerNote(): (description: string, owner: SettingOwner) => string {
-  const remoteHostName = useRemoteHostName();
-  return (description, owner) => {
-    const note = settingsRowOwnerNote(owner, remoteHostName);
+export function useSettingsRowOwnerNote(): (description: string, ...paths: SettingRef[]) => string {
+  const context = useOwnerContext();
+  return (description, ...paths) => {
+    const note = settingsRowOwnerNote(paths, context);
     if (!note) return description;
     return description.endsWith(".") ? `${description} ${note}.` : `${description} · ${note}`;
   };

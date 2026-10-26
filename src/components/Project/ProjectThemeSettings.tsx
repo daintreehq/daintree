@@ -1,7 +1,9 @@
 import { useEffect, useMemo } from "react";
+import { SECTION_SETTINGS } from "@/components/Settings/settingsSectionOwners";
 import { Button } from "@/components/ui/button";
 import { SettingsRow } from "@/components/Settings/SettingsGroup";
 import { SettingsSelect, type SettingsSelectOption } from "@/components/Settings/SettingsSelect";
+import { useSettingsRowOwnerNote } from "@/hooks/useSettingsOwner";
 import { useAppThemeStore } from "@/store/appThemeStore";
 import { useProjectThemeStore } from "@/store/projectThemeStore";
 import { selectSelectableSchemes } from "@/theme/selectableSchemes";
@@ -17,6 +19,7 @@ const GLOBAL_THEME_VALUE = "__global__";
  * page: a pick lands in Daintree's own store and repaints this project.
  */
 export function ProjectThemeRows() {
+  const rowOwnerNote = useSettingsRowOwnerNote();
   const refresh = useProjectThemeStore((s) => s.refresh);
   const failedSave = useProjectThemeStore((s) => s.failedSave);
   const retryFailedSave = useProjectThemeStore((s) => s.retryFailedSave);
@@ -97,7 +100,7 @@ export function ProjectThemeRows() {
       <SettingsSelect
         id="project-theme"
         label="Theme"
-        description={themeDescription}
+        description={rowOwnerNote(themeDescription, ...SECTION_SETTINGS.projectTheme)}
         value={overrideId ?? GLOBAL_THEME_VALUE}
         onValueChange={(value) => void setTheme(value === GLOBAL_THEME_VALUE ? null : value)}
         options={options}
@@ -110,7 +113,7 @@ export function ProjectThemeRows() {
       {suggestion !== null && suggestionDescription !== null && (
         <SettingsRow
           label="Suggested theme"
-          description={suggestionDescription}
+          description={rowOwnerNote(suggestionDescription, ...SECTION_SETTINGS.projectTheme)}
           isModified={suggestion.answer !== null}
           onReset={() => void resetSuggestion()}
           resetAriaLabel="Ask about the suggested theme again"

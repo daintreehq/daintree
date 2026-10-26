@@ -1,6 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { InlineError } from "@/components/ui/field";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
+import { SECTION_SETTINGS } from "@/components/Settings/settingsSectionOwners";
 import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
 import { useProjectToolbarOverlay, useResolvedPresentation } from "@/hooks/useResolvedPresentation";
 import { useProjectStore } from "@/store/projectStore";
@@ -51,7 +52,7 @@ export function ProjectToolbarProfileNotice() {
     : `${project.name} has its own toolbar, turned off from the toolbar's menu. Its choices are kept`;
 
   return (
-    <SettingsSection title="This project">
+    <SettingsSection title="This project" settings={SECTION_SETTINGS.projectToolbar}>
       <SettingsGroup>
         <SettingsRow
           label={overlay.active ? "Using this project's toolbar" : "Project toolbar off"}

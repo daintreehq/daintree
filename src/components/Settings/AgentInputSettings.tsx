@@ -5,7 +5,7 @@ import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { SettingsPresetGroup } from "./SettingsPresetGroup";
 import type { SettingsPresetOption } from "./SettingsPresetGroup";
 import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
-import { useSettingsOwnerMarker } from "@/hooks/useSettingsOwner";
+import { SECTION_SETTINGS } from "./settingsSectionOwners";
 import { useTerminalInputStore } from "@/store";
 import { actionService } from "@/services/ActionService";
 import { logError, logWarn } from "@/utils/logger";
@@ -82,7 +82,6 @@ function RemoteClipboardImagesRow() {
  * override its settings, and these can't be overridden.
  */
 export function AgentInputSettings() {
-  const ownerMarker = useSettingsOwnerMarker();
   const hybridInputEnabled = useTerminalInputStore((state) => state.hybridInputEnabled);
   const hybridInputAutoFocus = useTerminalInputStore((state) => state.hybridInputAutoFocus);
   const [retry, setRetry] = useState<(() => void) | null>(null);
@@ -117,7 +116,7 @@ export function AgentInputSettings() {
       id="agents-input"
       title="Input"
       description="Applies to every agent"
-      badge={ownerMarker("device")}
+      settings={SECTION_SETTINGS.agentInput}
     >
       {retry && (
         <SettingsLoadErrorBanner

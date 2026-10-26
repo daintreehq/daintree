@@ -101,8 +101,10 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "./SettingsGroup";
+import { useSettingsRowOwnerNote } from "@/hooks/useSettingsOwner";
+import { SettingsOwnerTag } from "@/components/Settings/SettingsOwnerTag";
 import { SettingsSection } from "./SettingsSection";
-import { useSettingsOwnerMarker } from "@/hooks/useSettingsOwner";
+import { SECTION_SETTINGS } from "@/components/Settings/settingsSectionOwners";
 import { SettingsSelect } from "./SettingsSelect";
 import { SettingsSwitch } from "./SettingsSwitch";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
@@ -200,6 +202,14 @@ function ToolbarButtonMoveMenu({
   );
 }
 
+// Which agents are pinned is the host's agent settings; the arrangement around them is
+// this machine's, which is what the sections name.
+function AgentOwnerTag({ buttonId }: { buttonId: string }) {
+  return isBuiltInAgentId(buttonId) ? (
+    <SettingsOwnerTag settings={SECTION_SETTINGS.toolbarAgents} />
+  ) : null;
+}
+
 // Presentational row shared by the sortable list and the drag overlay. It
 // never calls `useSortable` so it is safe to render inside `DragOverlay`
 // (which mounts outside any `SortableContext`).
@@ -239,6 +249,7 @@ function ToolbarButtonCard({
           )}
           <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
           <span className="truncate">{metadata.label}</span>
+          <AgentOwnerTag buttonId={buttonId} />
         </span>
       }
       labelText={metadata.label}
@@ -341,6 +352,7 @@ function PoolButtonRow({
         <span className="flex min-w-0 items-center gap-2.5">
           <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
           <span className="truncate">{metadata.label}</span>
+          <AgentOwnerTag buttonId={buttonId} />
         </span>
       }
       labelText={metadata.label}
@@ -470,9 +482,7 @@ function restoreUntouched<T extends object>(before: T, afterReset: T, now: T): T
 }
 
 export function ToolbarSettingsTab() {
-  // Button layout is this screen's; which agents are pinned is the host's agent settings,
-  // so the section listing both stays unmarked.
-  const ownerMarker = useSettingsOwnerMarker();
+  const rowOwnerNote = useSettingsRowOwnerNote();
   const layout = useToolbarPreferencesStore((s) => s.layout);
   const canopyHidden = useCanopyStore((s) => s.mode === "hidden");
   const launcher = useToolbarPreferencesStore((s) => s.launcher);
@@ -1066,7 +1076,7 @@ export function ToolbarSettingsTab() {
       <ProjectToolbarProfileNotice />
       <SettingsSection
         title="Toolbar buttons"
-        badge={ownerMarker("device")}
+        settings={SECTION_SETTINGS.toolbarLayout}
         description="Drag a button, or use its menu, to reorder it or move it to the other side. Each side keeps its groups in order: launcher, agents, panels, then the rest."
       >
         <DndContext
@@ -1146,6 +1156,7 @@ export function ToolbarSettingsTab() {
           <SettingsSection
             id="toolbar-hidden-buttons"
             title="Not on the toolbar"
+            settings={SECTION_SETTINGS.toolbarLayout}
             description="Switch one on to give it a toolbar button. Agents and panels stay in the launcher either way, and plugin buttons in the plugin tray."
           >
             {poolAgents.length > 0 && (
@@ -1233,7 +1244,11 @@ export function ToolbarSettingsTab() {
         </div>
       )}
 
-      <SettingsSection id="toolbar-launcher" title="Launcher palette" badge={ownerMarker("device")}>
+      <SettingsSection
+        id="toolbar-launcher"
+        title="Launcher palette"
+        settings={SECTION_SETTINGS.toolbarLayout}
+      >
         <SettingsGroup>
           <SettingsSwitchCard
             title="Always show dev preview"
@@ -1264,7 +1279,10 @@ export function ToolbarSettingsTab() {
       <SettingsGroup id="toolbar-reset" className="scroll-mt-6">
         <SettingsRow
           label="Reset toolbar"
-          description="Restores the default buttons, order and launcher palette options"
+          description={rowOwnerNote(
+            "Restores the default buttons, order and launcher palette options",
+            ...SECTION_SETTINGS.toolbarLayout
+          )}
           control={({ labelId, descriptionId, disabled }) => (
             <Button
               type="button"

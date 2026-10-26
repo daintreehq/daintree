@@ -13,6 +13,7 @@ import {
   settingsViewOf,
   setupHomeOf,
 } from "@/services/plugin/pluginSettingsHome";
+import type { SettingRef } from "@/hooks/useSettingsOwner";
 import type { PluginSettingsHome } from "@/store/pluginManagerStore";
 import { declaredPluginConnections } from "@shared/utils/pluginConnections";
 import { useProjectPluginStore } from "@/store/projectPluginStore";
@@ -37,6 +38,9 @@ const HOME_SCOPE = { manager: "user", project: "project" } as const satisfies Re
   PluginSettingsHome,
   "user" | "project"
 >;
+
+/** Plugins and what they keep are the host's. */
+const PLUGIN_SETTINGS: readonly SettingRef[] = ["plugins"];
 
 /**
  * The search rows for each plugin, filed under the home that shows each one:
@@ -78,6 +82,7 @@ export function buildPluginSettingsSearchEntries(
         title,
         description: description ?? "",
         keywords: [name, ...keywords],
+        settings: PLUGIN_SETTINGS,
         plugin: { instanceId, ...target },
       });
       // A forge plugin that keeps its settings in Code forge shows only a

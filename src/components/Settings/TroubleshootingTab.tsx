@@ -13,10 +13,10 @@ import { usePaletteStore } from "@/store/paletteStore";
 import { logError, logWarn } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { SettingsSection } from "./SettingsSection";
+import { SECTION_SETTINGS } from "@/components/Settings/settingsSectionOwners";
 import {
   deviceOwnerPhrase,
   useRemoteHostName,
-  useSettingsOwnerMarker,
   useSettingsRowOwnerNote,
 } from "@/hooks/useSettingsOwner";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
@@ -77,7 +77,7 @@ function SystemHealthSection() {
         label="System health check"
         description={rowOwnerNote(
           "Checks that the command-line tools Daintree relies on are installed and on your PATH",
-          "host"
+          "agentSettings"
         )}
         error={checkError}
         control={
@@ -249,7 +249,7 @@ function HardwareAccelerationSection() {
   const rowOwnerNote = useSettingsRowOwnerNote();
   const subtitle = rowOwnerNote(
     "Uses the GPU to render the interface. Turn off if you see blank panels or repeated GPU crashes. The app restarts on change.",
-    "device"
+    "gpu"
   );
   const [disabled, setDisabled] = useState<boolean | null>(null);
   const [angleFallback, setAngleFallback] = useState<boolean>(false);
@@ -385,8 +385,6 @@ export function ClearLogsRow() {
 }
 
 export function TroubleshootingTab() {
-  // System mixes the two machines, so its rows say whose; the rest is this screen's.
-  const ownerMarker = useSettingsOwnerMarker();
   // Log levels are set on both machines at once and read back from the host.
   const remoteHostName = useRemoteHostName();
   const logLevelsDescription =
@@ -644,21 +642,24 @@ export function TroubleshootingTab() {
 
   return (
     <div className="space-y-8">
-      <SettingsSection title="System">
+      <SettingsSection
+        title="System"
+        settings={[...SECTION_SETTINGS.hardwareAcceleration, ...SECTION_SETTINGS.systemStatus]}
+      >
         <SettingsGroup>
           <HardwareAccelerationSection />
           <SystemHealthSection />
         </SettingsGroup>
       </SettingsSection>
 
-      <SettingsSection title="Diagnostics" badge={ownerMarker("device")}>
+      <SettingsSection title="Diagnostics" settings={SECTION_SETTINGS.privacy}>
         <SettingsGroup>
           <DownloadDiagnosticsSection />
           <RendererCpuProfileSection />
         </SettingsGroup>
       </SettingsSection>
 
-      <SettingsSection title="Logging" badge={ownerMarker("device")}>
+      <SettingsSection title="Logging" settings={SECTION_SETTINGS.logging}>
         <SettingsGroup>
           <ApplicationLogsSection />
           <SettingsSwitchCard
@@ -739,7 +740,7 @@ export function TroubleshootingTab() {
         </SettingsGroup>
       </SettingsSection>
 
-      <SettingsSection title="Developer tools" badge={ownerMarker("device")}>
+      <SettingsSection title="Developer tools" settings={SECTION_SETTINGS.developerTools}>
         <SettingsGroup>
           <SettingsSwitchCard
             id="troubleshooting-devmode"
