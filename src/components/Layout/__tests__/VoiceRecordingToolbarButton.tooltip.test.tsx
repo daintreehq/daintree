@@ -43,6 +43,8 @@ vi.mock("@/components/ui/context-menu", () => ({
   ContextMenu: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   ContextMenuTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   ContextMenuContent: () => null,
+  ContextMenuItem: () => null,
+  ContextMenuSeparator: () => null,
 }));
 
 vi.mock("@/components/ui/tooltip", () => ({
@@ -220,7 +222,7 @@ describe("VoiceRecordingToolbarButton polish — issue #8176", () => {
 
     it("holds the static arming ring from the hotkey press until the mic is live", () => {
       expect(source).toMatch(
-        /const\s+showArming\s*=\s*isActive\s*&&\s*\(isArming\s*\|\|\s*isMicStarting\s*\|\|\s*\(isFinishing\s*&&\s*!isMicLive\)\)/
+        /const\s+showArming\s*=\s*isActive\s*&&\s*\(isArming\s*\|\|\s*isMicStarting\s*\|\|\s*isReconnecting\s*\|\|\s*isFinishing\)/
       );
     });
   });
@@ -247,7 +249,7 @@ describe("VoiceRecordingToolbarButton polish — issue #8176", () => {
       // isPaused as another isActive sub-state that should still render the
       // (frozen) orbit chrome.
       expect(source).toMatch(
-        /const\s+showOrbit\s*=\s*isActive\s*&&\s*\(\(\(isSessionOpen\s*\|\|\s*isFinishing\)\s*&&\s*isMicLive\)\s*\|\|\s*isPaused\)/
+        /const\s+showOrbit\s*=\s*isActive\s*&&\s*\(isListening\s*\|\|\s*isPaused\)/
       );
     });
 

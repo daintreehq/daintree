@@ -149,4 +149,38 @@ describe("VoiceInputButton", () => {
       expect((await screen.findByRole("tooltip")).textContent).toContain(tip);
     }
   );
+  it("marks an error only on the panel it happened in", () => {
+    useVoiceRecordingStore.setState({
+      isConfigured: true,
+      status: "error",
+      errorPanelId: "panel-1",
+    });
+    const { getByRole, rerender } = render(<VoiceInputButton panelId="panel-1" />);
+    expect(getByRole("button").className).toContain("text-activity-waiting");
+    rerender(<VoiceInputButton panelId="panel-2" />);
+    expect(getByRole("button").className).not.toContain("text-activity-waiting");
+  });
+
+  it("swaps the stop glyph for a spinner while reconnecting", () => {
+    useVoiceRecordingStore.setState({
+      isConfigured: true,
+      status: "reconnecting",
+      micSignal: "live",
+      activeTarget: { panelId: "panel-1" } as never,
+    });
+    const { getByRole } = render(<VoiceInputButton panelId="panel-1" />);
+    expect(getByRole("button").querySelector(".status-mark")).toBeNull();
+  });
+
+  it("warns in the tooltip when the paused session is about to auto-stop", async () => {
+    useVoiceRecordingStore.setState({
+      isConfigured: true,
+      status: "paused",
+      pauseStopWarning: true,
+      activeTarget: { panelId: "panel-1" } as never,
+    });
+    const { getByRole } = render(<VoiceInputButton panelId="panel-1" />);
+    fireEvent.focus(getByRole("button"));
+    expect((await screen.findByRole("tooltip")).textContent).toContain("stops in 10s");
+  });
 });

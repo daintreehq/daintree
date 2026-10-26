@@ -69,6 +69,8 @@ export function VoiceInputButton({
   const status = useVoiceRecordingStore((state) => state.status);
   const isConfigured = useVoiceRecordingStore((state) => state.isConfigured);
   const lastError = useVoiceRecordingStore((state) => state.lastError);
+  const pauseStopWarning = useVoiceRecordingStore((state) => state.pauseStopWarning);
+  const errorPanelId = useVoiceRecordingStore((state) => state.errorPanelId);
   const micSignal = useVoiceRecordingStore((state) => state.micSignal);
   const micDeviceLabel = useVoiceRecordingStore((state) => state.micDeviceLabel);
   const activePanelId = useVoiceRecordingStore((state) => state.activeTarget?.panelId ?? null);
@@ -78,6 +80,7 @@ export function VoiceInputButton({
   const isReconnecting = activePanelId === panelId && status === "reconnecting";
   const isFinishing = activePanelId === panelId && status === "finishing";
   const isPaused = activePanelId === panelId && status === "paused";
+  const hasError = status === "error" && errorPanelId === panelId;
   // Mic state and backend state are separate: the session is open (and a press
   // stops it) as soon as capture starts, but it only counts as listening once
   // the mic delivers real audio. Until then the orbit holds still (#13105).
@@ -87,8 +90,10 @@ export function VoiceInputButton({
   // Keep orbit visible through finishing and paused for continuity
   const showOrbit = isSessionOpen || isFinishing || isPaused;
   const isActive = isSessionOpen || isFinishing || isPaused;
-  // A stop before the mic ever went live drains without claiming it listened.
-  const isOrbitStill = isPaused || isMicStarting || (isFinishing && micSignal !== "live");
+  // Only a session still feeding from the mic spins. Paused, finishing and
+  // reconnecting hold still: speech past the provider's short reconnect buffer
+  // is lost, and a draining stop is not listening.
+  const isOrbitStill = isPaused || isMicStarting || isFinishing || isReconnecting;
 
   // Animation refs
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -102,9 +107,9 @@ export function VoiceInputButton({
   useEffect(() => {
     if (!showOrbit) return;
 
-    // Paused or mic still starting: freeze the orbit at a dim static state and
-    // skip the RAF loop entirely. A spinning orbit reads as "listening", which
-    // is false in both cases.
+    // Not listening (paused, reconnecting, finishing, mic still starting):
+    // freeze the orbit at a dim static state and skip the RAF loop entirely.
+    // A spinning orbit reads as "listening", which is false in all of them.
     if (isOrbitStill) {
       const wrapper = wrapperRef.current;
       if (wrapper) {
@@ -262,12 +267,14 @@ export function VoiceInputButton({
 
   const tooltipText = !isConfigured
     ? "Configure voice input"
-    : status === "error"
+    : hasError
       ? formatVoiceErrorTooltip(lastError)
       : isFinishing
         ? "Finishing transcription…"
         : isPaused
-          ? "Paused — click to resume"
+          ? pauseStopWarning
+            ? "Paused — stops in 10s · Click to resume"
+            : "Paused — click to resume"
           : isMicStarting
             ? micSignal === "silent"
               ? `No audio from ${micDeviceLabel ?? "microphone"} · Click to stop`
@@ -363,7 +370,7 @@ export function VoiceInputButton({
               COMPOSER_CONTROL_FOCUS_CLASS,
               showOrbit
                 ? "bg-[color-mix(in_oklab,var(--ib-fg)_12%,transparent)] text-[var(--ib-fg)] hover:bg-[color-mix(in_oklab,var(--ib-fg)_18%,transparent)]"
-                : status === "error"
+                : hasError
                   ? cn("text-activity-waiting", COMPOSER_CONTROL_HOVER_BG_CLASS)
                   : cn(COMPOSER_CONTROL_TEXT_CLASS, COMPOSER_CONTROL_HOVER_BG_CLASS)
             )}
@@ -378,7 +385,7 @@ export function VoiceInputButton({
             }
             aria-pressed={isConfigured ? isSessionOpen || isPaused : undefined}
           >
-            {isFinishing && !showOrbit ? (
+            {isFinishing || isReconnecting ? (
               <Spinner size="sm" />
             ) : isPaused ? (
               <span

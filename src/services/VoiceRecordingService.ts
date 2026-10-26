@@ -230,7 +230,9 @@ class VoiceRecordingService {
   private pauseStartedAt = 0;
   private totalPausedMs = 0;
   private pauseTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  private pauseWarnTimeoutId: ReturnType<typeof setTimeout> | null = null;
   private static readonly PAUSE_AUTO_STOP_MS = 60_000;
+  private static readonly PAUSE_WARN_LEAD_MS = 10_000;
   // An open stream is not proof of capture: a Bluetooth mic switching to HFP
   // hands Web Audio zeros for a while (#13105). The UI only claims it is
   // listening once a chunk clears the mic-liveness floor (`isMicLive`, not the
@@ -808,7 +810,16 @@ class VoiceRecordingService {
    * the store is about to report an error with no target, and that session's
    * microphone must not keep recording behind it.
    */
-  private async failArming(): Promise<void> {
+  private async failArming(target: VoiceRecordingTarget): Promise<void> {
+    await this.rollBackArming();
+    // A push-to-talk start fails before any target is armed, so the error mark
+    // is pinned to the panel that asked rather than read off the store.
+    if (useVoiceRecordingStore.getState().status === "error") {
+      useVoiceRecordingStore.getState().setErrorPanelId(target.panelId);
+    }
+  }
+
+  private async rollBackArming(): Promise<void> {
     if (this.stream) {
       await this.stop(undefined, {
         nextStatus: "error",
@@ -876,7 +887,7 @@ class VoiceRecordingService {
         useVoiceRecordingStore
           .getState()
           .announce("Voice dictation is not configured. Open Voice settings to continue.");
-        await this.failArming();
+        await this.failArming(target);
         this.openVoiceSettings();
       }
       return;
@@ -904,7 +915,7 @@ class VoiceRecordingService {
           "Could not check microphone permission.",
           this.retryAction(() => void this.start(target))
         );
-        await this.failArming();
+        await this.failArming(target);
       }
       return;
     }
@@ -922,7 +933,7 @@ class VoiceRecordingService {
         .setLastError({ severity: "fatal", code: "mic_permission_denied", message });
       useVoiceRecordingStore.getState().announce(message);
       this.reportStartFailure("Microphone blocked", message, this.micSettingsAction());
-      await this.failArming();
+      await this.failArming(target);
       return;
     }
 
@@ -950,7 +961,7 @@ class VoiceRecordingService {
             "Could not request microphone permission.",
             this.retryAction(() => void this.start(target))
           );
-          await this.failArming();
+          await this.failArming(target);
         }
         return;
       }
@@ -966,7 +977,7 @@ class VoiceRecordingService {
           .setLastError({ severity: "fatal", code: "mic_permission_denied", message });
         useVoiceRecordingStore.getState().announce(message);
         this.reportStartFailure("Microphone blocked", message, this.micSettingsAction());
-        await this.failArming();
+        await this.failArming(target);
         return;
       }
     }
@@ -1086,7 +1097,7 @@ class VoiceRecordingService {
             ? this.micSettingsAction()
             : this.retryAction(() => void this.start(target))
         );
-        await this.failArming();
+        await this.failArming(target);
       }
       return;
     }
@@ -1161,7 +1172,7 @@ class VoiceRecordingService {
       useVoiceRecordingStore
         .getState()
         .announce("Dictation didn't start because the microphone was disconnected.");
-      await this.failArming();
+      await this.failArming(target);
     };
     const isCaptureLost = () =>
       capture.lost ||
@@ -1195,7 +1206,7 @@ class VoiceRecordingService {
         "Failed to load the audio processor.",
         this.retryAction(() => void this.start(target))
       );
-      await this.failArming();
+      await this.failArming(target);
     };
     if (!graphResult.ok) {
       await failCaptureSetup(graphResult.error);
@@ -2217,6 +2228,13 @@ class VoiceRecordingService {
   }
 
   private clearPauseTimeout(): void {
+    if (this.pauseWarnTimeoutId !== null) {
+      clearTimeout(this.pauseWarnTimeoutId);
+      this.pauseWarnTimeoutId = null;
+    }
+    if (useVoiceRecordingStore.getState().pauseStopWarning) {
+      useVoiceRecordingStore.getState().setPauseStopWarning(false);
+    }
     if (this.pauseTimeoutId === null) return;
     clearTimeout(this.pauseTimeoutId);
     this.pauseTimeoutId = null;
@@ -2403,6 +2421,13 @@ class VoiceRecordingService {
     state.setStatus("paused");
     state.announce("Dictation paused.");
     this.clearPauseTimeout();
+    this.pauseWarnTimeoutId = setTimeout(() => {
+      this.pauseWarnTimeoutId = null;
+      const current = useVoiceRecordingStore.getState();
+      if (current.status !== "paused") return;
+      current.setPauseStopWarning(true);
+      current.announce("Dictation stops in 10 seconds unless resumed.");
+    }, VoiceRecordingService.PAUSE_AUTO_STOP_MS - VoiceRecordingService.PAUSE_WARN_LEAD_MS);
     this.pauseTimeoutId = setTimeout(() => {
       this.pauseTimeoutId = null;
       // Re-read status inside the callback — the session may have ended,

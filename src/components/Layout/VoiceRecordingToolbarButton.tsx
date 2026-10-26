@@ -2,7 +2,13 @@ import { useEffect, useRef } from "react";
 import { Lock, Mic } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { cn } from "@/lib/utils";
 import { useEffectiveCombo, useShortcutHintHover } from "@/hooks";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
@@ -88,6 +94,7 @@ export function VoiceRecordingToolbarButton({
   const elapsedSeconds = useVoiceRecordingStore((state) => state.elapsedSeconds);
   const micSignal = useVoiceRecordingStore((state) => state.micSignal);
   const micDeviceLabel = useVoiceRecordingStore((state) => state.micDeviceLabel);
+  const pauseStopWarning = useVoiceRecordingStore((state) => state.pauseStopWarning);
   const shortcut = useEffectiveCombo("voiceInput.toggle");
   const pauseShortcut = useEffectiveCombo("voiceInput.togglePause");
   const hover = useShortcutHintHover("voiceInput.toggle");
@@ -112,11 +119,13 @@ export function VoiceRecordingToolbarButton({
   // race where status briefly stays "recording"/"finishing" while
   // activeTarget has already been cleared, which would otherwise leave the
   // RAF loop spinning on null refs.
-  const showOrbit = isActive && (((isSessionOpen || isFinishing) && isMicLive) || isPaused);
+  // Reconnecting and finishing are not listening, so they get the static ring.
+  const isListening = (isRecording || isConnecting) && isMicLive;
+  const showOrbit = isActive && (isListening || isPaused);
   // Arming paints immediately — the visual confirmation IS the point of the
   // state. The static accent ring holds from the hotkey press until the mic
   // is live, so the indicator never blanks out before the orbit takes over.
-  const showArming = isActive && (isArming || isMicStarting || (isFinishing && !isMicLive));
+  const showArming = isActive && (isArming || isMicStarting || isReconnecting || isFinishing);
 
   const wrapperRef = useRef<HTMLDivElement>(null);
   const ringRef = useRef<HTMLSpanElement>(null);
@@ -265,9 +274,11 @@ export function VoiceRecordingToolbarButton({
           : isFinishing
             ? "Finishing transcription…"
             : isPaused
-              ? targetLabel
-                ? `Paused: ${targetLabel}`
-                : "Dictation paused"
+              ? pauseStopWarning
+                ? "Paused · Stopping in 10s unless resumed"
+                : targetLabel
+                  ? `Paused: ${targetLabel}`
+                  : "Dictation paused"
               : targetLabel
                 ? `Recording: ${targetLabel}`
                 : "Recording in another panel";
@@ -399,6 +410,14 @@ export function VoiceRecordingToolbarButton({
         </span>
       </ContextMenuTrigger>
       <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
+        {(isRecording || isPaused) && (
+          <>
+            <ContextMenuItem onSelect={() => voiceRecordingService.togglePause()}>
+              {isPaused ? "Resume dictation" : "Pause dictation"}
+            </ContextMenuItem>
+            <ContextMenuSeparator />
+          </>
+        )}
         <ToolbarContextMenuItems buttonId="voice-recording" side="right" />
       </ContextMenuContent>
     </ContextMenu>

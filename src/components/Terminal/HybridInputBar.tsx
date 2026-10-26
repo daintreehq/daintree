@@ -391,6 +391,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     );
     const voiceMicSignal = useVoiceRecordingStore((s) => s.micSignal);
     const voiceMicDeviceLabel = useVoiceRecordingStore((s) => s.micDeviceLabel);
+    const voicePauseStopWarning = useVoiceRecordingStore((s) => s.pauseStopWarning);
     const externalDraftRevision = useTerminalInputStore((s) => s.externalDraftRevision);
     const panelWorktreeId = usePanelStore((s) => s.panelsById[terminalId]?.worktreeId);
     const panelOwnTitle = usePanelStore((s) => s.panelsById[terminalId]?.title);
@@ -418,7 +419,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // delivers real audio, but the listening chrome waits for it (#13105).
     const isVoiceMicStarting =
       (isVoiceRecording || isVoiceConnecting || isVoiceReconnecting) && voiceMicSignal !== "live";
-    const isVoiceListeningChrome = isVoiceActiveForPanel && voiceMicSignal === "live";
+    // Only a session the mic is feeding gets the full glow. Paused, finishing
+    // and reconnecting keep a quieter outline so they don't pass for recording.
+    const isVoiceListeningChrome =
+      (isVoiceRecording || isVoiceConnecting) && voiceMicSignal === "live";
+    const isVoiceHeldChrome = isVoicePaused || isVoiceFinishing || isVoiceReconnecting;
 
     const commandContext = { terminalId, cwd, projectId };
 
@@ -614,7 +619,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     });
 
     const placeholder = (() => {
-      if (isVoicePaused) return "Paused · Resume to continue.";
+      if (isVoicePaused) {
+        return voicePauseStopWarning
+          ? "Paused · Stopping in 10s unless resumed."
+          : "Paused · Resume to continue.";
+      }
+      if (isVoiceReconnecting) return "Reconnecting…";
+      if (isVoiceFinishing) return "Finishing transcription…";
       if (isVoiceMicStarting) {
         if (voiceMicSignal !== "silent") return "Starting microphone…";
         return `No audio from ${voiceMicDeviceLabel ?? "microphone"}`;
@@ -1331,7 +1342,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const isDragOverCompact = isDragOverFiles && !isExpanded;
     const isDragOverModal = isDragOverFiles && isExpanded;
 
-    const isSpecialState = isVoiceListeningChrome || isDragOverCompact || isFleetPrimary;
+    const isSpecialState =
+      isVoiceListeningChrome || isVoiceHeldChrome || isDragOverCompact || isFleetPrimary;
 
     // Fleet-primary uses the same amber family as FleetDraftingPill so the
     // shell itself says "Enter broadcasts" at the point of typing.
@@ -1341,20 +1353,25 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           backgroundColor: `color-mix(in oklab, ${inputBarColors.accent} 12%, ${inputBarColors.background})`,
           boxShadow: `0 0 0 1px color-mix(in oklab, ${inputBarColors.accent} 35%, transparent), 0 0 16px color-mix(in oklab, ${inputBarColors.accent} 15%, transparent)`,
         }
-      : isDragOverCompact
+      : isVoiceHeldChrome
         ? {
-            borderColor: `color-mix(in oklab, ${inputBarColors.accent} 60%, transparent)`,
+            borderColor: `color-mix(in oklab, ${inputBarColors.accent} 25%, transparent)`,
             backgroundColor: inputBarColors.shellBg,
-            boxShadow: `0 0 0 1px color-mix(in oklab, ${inputBarColors.accent} 30%, transparent)`,
           }
-        : isFleetPrimary
+        : isDragOverCompact
           ? {
-              borderColor: "color-mix(in oklab, var(--color-category-amber) 55%, transparent)",
+              borderColor: `color-mix(in oklab, ${inputBarColors.accent} 60%, transparent)`,
               backgroundColor: inputBarColors.shellBg,
-              boxShadow:
-                "0 0 0 1px color-mix(in oklab, var(--color-category-amber) 22%, transparent)",
+              boxShadow: `0 0 0 1px color-mix(in oklab, ${inputBarColors.accent} 30%, transparent)`,
             }
-          : undefined;
+          : isFleetPrimary
+            ? {
+                borderColor: "color-mix(in oklab, var(--color-category-amber) 55%, transparent)",
+                backgroundColor: inputBarColors.shellBg,
+                boxShadow:
+                  "0 0 0 1px color-mix(in oklab, var(--color-category-amber) 22%, transparent)",
+              }
+            : undefined;
 
     const barContent = (
       <div

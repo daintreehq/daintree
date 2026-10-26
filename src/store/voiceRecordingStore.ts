@@ -243,6 +243,10 @@ interface VoiceRecordingState {
   learnFromCorrections: boolean;
   status: VoiceInputStatus;
   lastError: VoiceInputError | null;
+  /** Panel the last error ended a session in; the error mark belongs to that panel only. */
+  errorPanelId: string | null;
+  /** True in the last seconds of a pause, before it auto-stops the session. */
+  pauseStopWarning: boolean;
   activeTarget: VoiceRecordingTarget | null;
   /**
    * Pinned dictation target. When set, `toggleFocusedPanel` routes here
@@ -278,6 +282,8 @@ interface VoiceRecordingState {
   beginSession: (target: VoiceRecordingTarget) => void;
   setStatus: (status: VoiceInputStatus) => void;
   setLastError: (error: VoiceInputError | null) => void;
+  setPauseStopWarning: (warning: boolean) => void;
+  setErrorPanelId: (panelId: string | null) => void;
   setElapsedSeconds: (seconds: number) => void;
   /** `replace` sets the preview to `delta` instead of appending (a revised hypothesis). */
   appendDelta: (delta: string, itemId?: string, replace?: boolean) => void;
@@ -334,6 +340,8 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
       learnFromCorrections: true,
       status: "idle",
       lastError: null,
+      errorPanelId: null,
+      pauseStopWarning: false,
       activeTarget: null,
       lockedTarget: null,
       recentTargets: [],
@@ -365,6 +373,10 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
 
       setLastError: (error) => set({ lastError: error }),
 
+      setPauseStopWarning: (pauseStopWarning) => set({ pauseStopWarning }),
+
+      setErrorPanelId: (errorPanelId) => set({ errorPanelId }),
+
       setAudioLevel: (audioLevel) => set({ audioLevel }),
 
       setMicSignal: (micSignal) => set({ micSignal }),
@@ -384,6 +396,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
           activeTarget: target,
           status: "arming",
           lastError: null,
+          errorPanelId: null,
           micSignal: "pending",
           micDeviceLabel: null,
           micNotice: null,
@@ -394,6 +407,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
           activeTarget: target,
           status: "connecting",
           lastError: null,
+          errorPanelId: null,
           elapsedSeconds: 0,
           micSignal: "pending",
           micDeviceLabel: null,
@@ -619,9 +633,11 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
           // A silent warning belongs to the session that was silent; the other
           // notices outlive it until dismissed or the next session starts.
           const micNotice = state.micNotice?.kind === "silent" ? null : state.micNotice;
+          const errorPanelId = nextStatus === "error" ? (panelId ?? null) : null;
           if (!panelId) {
             return {
               activeTarget: null,
+              errorPanelId,
               status: nextStatus,
               elapsedSeconds: 0,
               audioLevel: 0,
@@ -640,6 +656,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
 
           return {
             activeTarget: null,
+            errorPanelId,
             status: nextStatus,
             elapsedSeconds: 0,
             audioLevel: 0,
