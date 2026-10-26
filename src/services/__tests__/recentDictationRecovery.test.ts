@@ -25,25 +25,24 @@ vi.mock("@/store/helpPanelStore", () => {
   };
 });
 
-const panels = vi.hoisted(() => ({
-  byId: {} as Record<string, unknown>,
-  setPreferredTerminalFocusTarget: vi.fn(),
-}));
+const panels = vi.hoisted(() => ({ byId: {} as Record<string, unknown> }));
 
 vi.mock("@/store/panelStore", () => {
-  const getState = () => ({
-    panelsById: panels.byId,
-    setPreferredTerminalFocusTarget: panels.setPreferredTerminalFocusTarget,
-  });
+  const getState = () => ({ panelsById: panels.byId });
   return { usePanelStore: Object.assign(getState, { getState }) };
 });
+
+const requestPaneFocus = vi.hoisted(() => vi.fn<(id: string, surface: string) => void>());
+vi.mock("@/components/Terminal/paneFocusRequest", () => ({ requestPaneFocus }));
 
 const inputBlock = vi.hoisted(() => ({ current: null as null | { kind: string } }));
 vi.mock("@/services/terminal/inputGate", () => ({
   getTerminalInputBlock: () => inputBlock.current,
 }));
 
-const focusPanelInput = vi.hoisted(() => vi.fn<(id: string) => boolean>(() => true));
+const focusPanelInput = vi.hoisted(() =>
+  vi.fn<(id: string, surface?: string) => boolean>(() => true)
+);
 vi.mock("@/components/Panel/panelFocusRegistry", () => ({ focusPanelInput }));
 
 const copyWithToast = vi.hoisted(() => vi.fn<(label: string, value: string) => void>());
@@ -79,7 +78,7 @@ describe("recentDictationRecovery", () => {
     useTypingLocatorStore.getState().clearLocator();
     useFleetArmingStore.setState({ armedIds: new Set() });
     inputBlock.current = null;
-    panels.setPreferredTerminalFocusTarget.mockClear();
+    requestPaneFocus.mockClear();
     focusPanelInput.mockClear();
     copyWithToast.mockClear();
   });
@@ -188,9 +187,9 @@ describe("recentDictationRecovery", () => {
   it("hands the keyboard to the input bar, even when the terminal had it last", () => {
     focusRecoveredComposer("panel-1");
 
-    expect(panels.setPreferredTerminalFocusTarget).toHaveBeenCalledWith("hybridInput");
-    expect(focusPanelInput).toHaveBeenCalledWith("panel-1");
-    expect(panels.setPreferredTerminalFocusTarget.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(requestPaneFocus).toHaveBeenCalledWith("panel-1", "hybridInput");
+    expect(focusPanelInput).toHaveBeenCalledWith("panel-1", "hybridInput");
+    expect(requestPaneFocus.mock.invocationCallOrder[0]).toBeLessThan(
       focusPanelInput.mock.invocationCallOrder[0]!
     );
   });

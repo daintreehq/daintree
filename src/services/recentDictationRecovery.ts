@@ -7,6 +7,7 @@ import { usePanelStore } from "@/store/panelStore";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { getTerminalInputBlock } from "@/services/terminal/inputGate";
 import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
+import { requestPaneFocus } from "@/components/Terminal/paneFocusRequest";
 import { isAssistantFocused } from "@/store/macroFocusStore";
 import { selectActiveSlot, useHelpPanelStore } from "@/store/helpPanelStore";
 import { wasAssistantLastFocused } from "@/lib/composerSurface";
@@ -101,8 +102,8 @@ export function focusRecoveredComposer(panelId: string): void {
     helpState.requestFocus();
     return;
   }
-  usePanelStore.getState().setPreferredTerminalFocusTarget("hybridInput");
-  focusPanelInput(panelId);
+  requestPaneFocus(panelId, "hybridInput");
+  focusPanelInput(panelId, "hybridInput");
 }
 
 /**
