@@ -30,6 +30,7 @@ import { createThrowawayRelay, type HostThrowawayExecutor } from "./throwawayRel
 
 export {
   projectRelayResult,
+  relayCallerOf,
   type RelayMcpSession,
   type RelayMcpSessionSpec,
 } from "./mcpRelayExecutor.js";

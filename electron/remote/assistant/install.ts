@@ -23,6 +23,7 @@ import {
 } from "./HostCallRuntime.js";
 import { HostControlLinkClient } from "./HostControlLinkClient.js";
 import { createLocalMcpRelay, LOCAL_RELAY_SENDER_ID } from "./localMcpRelay.js";
+import { relayCallerOf } from "./mcpRelayExecutor.js";
 import { forgetRetiredSends, readRetiredSends } from "./retiredSends.js";
 import { AssistantSenderCredentials } from "./senderCredentials.js";
 import { AppError } from "../../utils/errorTypes.js";
@@ -140,16 +141,7 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
       return mcpServerService.openRelaySession({
         tier: spec.tier,
         workspaceId: spec.projectId,
-        caller: {
-          linkSessionId: spec.linkSessionId,
-          senderId: spec.senderId,
-          helpSessionId: spec.helpSessionId,
-          shellName: spec.shellName,
-          local: true,
-          ...(spec.global === true ? { global: true as const } : {}),
-          deliverNotices: spec.deliverNotices,
-          requestApproval: spec.requestApproval,
-        },
+        caller: relayCallerOf(spec),
       });
     },
     // Nor anything the person handed it (#14161), even before its first call.

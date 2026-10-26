@@ -144,6 +144,56 @@ describe("HostControlLinkClient.relayCall for the global Assistant (#14545)", ()
     });
   });
 
+  it("keeps sending by its own method to a host that takes it", async () => {
+    const { relay, calls } = client((method) =>
+      method === AssistantLinkMethod.GLOBAL_MCP_CALL ? DONE : null
+    );
+
+    await relay.relayCall("studio", { ...PAYLOAD, global: true }, 105_000);
+    await relay.relayCall("studio", { ...PAYLOAD, callId: "call-2", global: true }, 105_000);
+
+    expect(calls.map((call) => call.method)).toEqual([
+      AssistantLinkMethod.AUTHENTICATE,
+      AssistantLinkMethod.GLOBAL_MCP_CALL,
+      AssistantLinkMethod.GLOBAL_MCP_CALL,
+    ]);
+  });
+
+  it("asks again on a new session, which may be to a newer build of the host", async () => {
+    let modern = false;
+    const calls: string[] = [];
+    const sessionOf = () =>
+      ({
+        isOpen: true,
+        call: vi.fn(async (method: string) => {
+          calls.push(method);
+          if (method === AssistantLinkMethod.GLOBAL_MCP_CALL && !modern) {
+            throw new AppError({ code: "UNSUPPORTED", message: "Unknown method" });
+          }
+          return method === AssistantLinkMethod.AUTHENTICATE ? null : DONE;
+        }),
+      }) as unknown as LinkSession;
+    let session = sessionOf();
+    const relay = new HostControlLinkClient({
+      credential: () => CREDENTIAL,
+      session: async () => session,
+      onSessionOpened: () => () => {},
+    });
+
+    await relay.relayCall("studio", { ...PAYLOAD, global: true }, 105_000);
+    modern = true;
+    session = sessionOf();
+    await relay.relayCall("studio", { ...PAYLOAD, callId: "call-2", global: true }, 105_000);
+
+    expect(calls).toEqual([
+      AssistantLinkMethod.AUTHENTICATE,
+      AssistantLinkMethod.GLOBAL_MCP_CALL,
+      AssistantLinkMethod.MCP_CALL,
+      AssistantLinkMethod.AUTHENTICATE,
+      AssistantLinkMethod.GLOBAL_MCP_CALL,
+    ]);
+  });
+
   it("sends a project assistant's call as MCP_CALL", async () => {
     const { relay, calls } = client((method) =>
       method === AssistantLinkMethod.MCP_CALL ? DONE : null

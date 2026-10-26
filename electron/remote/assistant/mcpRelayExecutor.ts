@@ -14,6 +14,7 @@ import {
   relayCallArmsNotice,
   type RelayedNotice,
 } from "../../services/mcp-server/terminalNotify.js";
+import type { McpRelayCaller } from "../../services/mcp-server/shared.js";
 import type { ViewlessApprovalDecision } from "../../services/viewless/index.js";
 import type { RelayApprovalAsk } from "./relayApprovals.js";
 import { createLogger } from "../../utils/logger.js";
@@ -52,6 +53,23 @@ export interface RelayMcpSessionSpec {
   requestApproval(
     ask: Omit<RelayApprovalAsk, "helpSessionId" | "projectId">
   ): Promise<ViewlessApprovalDecision>;
+}
+
+/**
+ * The caller a session admitted for `spec` acts as, whichever way its call
+ * came. Copies only what the spec says, so a project assistant's is never global.
+ */
+export function relayCallerOf(spec: RelayMcpSessionSpec): McpRelayCaller {
+  return {
+    linkSessionId: spec.linkSessionId,
+    senderId: spec.senderId,
+    helpSessionId: spec.helpSessionId,
+    shellName: spec.shellName,
+    ...(spec.local === true ? { local: true as const } : {}),
+    ...(spec.global === true ? { global: true as const } : {}),
+    deliverNotices: spec.deliverNotices,
+    requestApproval: spec.requestApproval,
+  };
 }
 
 /** One MCP session this host admitted for a relay principal and project. */

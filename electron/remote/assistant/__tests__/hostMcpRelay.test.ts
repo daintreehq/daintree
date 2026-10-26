@@ -6,6 +6,7 @@ import type { MetricsSessionContext } from "../../metrics/hostMetricsHost.js";
 import {
   installHostMcpRelay,
   projectRelayResult,
+  relayCallerOf,
   THROWAWAY_SHELL_GONE_GRACE_MS,
   type HostMcpRelayDeps,
   type RelayMcpSession,
@@ -221,6 +222,37 @@ describe("installHostMcpRelay", () => {
     expect(opened.map((session) => [session.spec.helpSessionId, session.spec.global])).toEqual([
       ["help-g", true],
       ["help-p", undefined],
+    ]);
+    // The caller the host's MCP server admits each as.
+    expect(opened.map((session) => relayCallerOf(session.spec).global)).toEqual([true, undefined]);
+    relay.dispose();
+  });
+
+  it("keeps a global and an ordinary session apart under one help session, reusing each (#14545)", async () => {
+    const { links, opened, relay } = harness([["link-1", "sender-a"]]);
+    const send = (global: boolean, callId: string) =>
+      global
+        ? links[0]!.ask(AssistantLinkMethod.GLOBAL_MCP_CALL, {
+            helpSessionId: "help-1",
+            projectId: "project-1",
+            tier: "core",
+            callId,
+            resend: false,
+            tool: "terminal.list",
+            args: {},
+            runMs: 90_000,
+          })
+        : links[0]!.call({ callId });
+    await send(false, "c1");
+    await send(true, "c2");
+    await send(false, "c3");
+    await send(true, "c4");
+
+    expect(
+      opened.map((session) => [session.spec.global, session.calls.map((call) => call.callId)])
+    ).toEqual([
+      [undefined, ["c1", "c3"]],
+      [true, ["c2", "c4"]],
     ]);
     relay.dispose();
   });
