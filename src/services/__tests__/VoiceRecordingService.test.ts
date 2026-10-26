@@ -174,7 +174,7 @@ function buildElectronStub() {
       onStatus: vi.fn(() => () => {}),
       onSessionEnded: vi.fn(() => () => {}),
       onLiveSession: vi.fn((_callback: (update: VoiceLiveSessionUpdate) => void) => () => {}),
-      onStopRequested: vi.fn(() => () => {}),
+      onStopRequested: vi.fn((_callback: (payload: { sessionId: string }) => void) => () => {}),
       onRevealRequested: vi.fn(
         (_callback: (payload: { sessionId: string; workspaceId: string | null }) => void) =>
           () => {}
@@ -2731,6 +2731,13 @@ describe("VoiceRecordingService — tap-or-hold mode (#14626)", () => {
     );
 
     await focusTerminalPanel();
+    // The store mock's state outlives resetModules.
+    const voiceState: { status: string; activeTarget: { panelId: string } | null } = Reflect.get(
+      await import("@/store/voiceRecordingStore"),
+      "__state"
+    );
+    voiceState.status = "idle";
+    voiceState.activeTarget = null;
 
     const { voiceRecordingService } = await import("../VoiceRecordingService");
     const startSpy = vi.spyOn(voiceRecordingService, "start").mockResolvedValue();
@@ -2749,6 +2756,8 @@ describe("VoiceRecordingService — tap-or-hold mode (#14626)", () => {
       fire("keydown", { code: "KeyD", key: "d", repeat: false, metaKey: true, timeStamp: now });
     return {
       service: voiceRecordingService,
+      electron,
+      voiceState,
       startSpy,
       stopSpy,
       advance: (ms: number) => {
@@ -2811,6 +2820,32 @@ describe("VoiceRecordingService — tap-or-hold mode (#14626)", () => {
     t.release();
     expect(t.stopSpy).not.toHaveBeenCalled();
   });
+
+  it.each(["push-to-talk", "tap-or-hold"])(
+    "ignores the release of a %s hold whose session another view stopped (#14601)",
+    async (mode) => {
+      const t = await setup(mode);
+      await t.press();
+      expect(t.startSpy).toHaveBeenCalledTimes(1);
+      t.voiceState.status = "recording";
+      t.voiceState.activeTarget = { panelId: "panel-1" };
+      t.service["sessionId"] = "live";
+      // A hold that heard speech, so its release would stop it.
+      const speech = { samples: 1_600, rms: 0.1, peak: 0.3, zeroFraction: 0 };
+      t.service["noteHeldPressAudio"](speech);
+      t.service["noteHeldPressAudio"](speech);
+      t.advance(1_000);
+
+      const stopRequested = t.electron.voiceInput.onStopRequested.mock.calls[0]![0];
+      stopRequested({ sessionId: "live" });
+      expect(t.stopSpy).toHaveBeenCalledTimes(1);
+
+      t.release();
+      t.release("MetaLeft");
+      expect(t.stopSpy).toHaveBeenCalledTimes(1);
+      expect(t.startSpy).toHaveBeenCalledTimes(1);
+    }
+  );
 
   it("never stops on the release of a press that started nothing, such as Cmd+K Cmd+D", async () => {
     const t = await setup("push-to-talk");

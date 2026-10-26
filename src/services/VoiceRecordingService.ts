@@ -700,6 +700,9 @@ class VoiceRecordingService {
     this.unsubscribers.push(
       voiceInput.onStopRequested(({ sessionId }) => {
         if (sessionId === this.sessionId) {
+          // A press still down here belongs to the session ending now, so its
+          // release mustn't act on whatever runs by then.
+          this.dropHeldPress();
           void this.stopAnySession();
           return;
         }
@@ -1047,6 +1050,12 @@ class VoiceRecordingService {
     // Stamped either way: the press on record may be an older one whose keyup
     // macOS swallowed, with this start's keydown still to arrive.
     this.claimedAt = performance.now();
+  }
+
+  /** Forget the press that is down and any claim waiting for its keydown. */
+  private dropHeldPress(): void {
+    this.heldPress = null;
+    this.claimedAt = null;
   }
 
   // Local audio, not transcripts: a session still draining can deliver its
@@ -2728,7 +2737,7 @@ class VoiceRecordingService {
 
   private async stopSessionElsewhere(session: VoiceSessionElsewhere): Promise<void> {
     // This press was a stop, so its release must not stop anything here.
-    this.pttActiveKeyCode = null;
+    this.dropHeldPress();
     let stopped = false;
     try {
       stopped = await window.electron.voiceInput.stopLive(session.sessionId);
