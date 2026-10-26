@@ -71,7 +71,7 @@ const runtime = vi.hoisted(() => ({
   panelState: {
     panelsById: {} as Record<
       string,
-      { id: string; title: string; location: string; worktreeId?: string }
+      { id: string; title: string; location: string; worktreeId?: string; launchAgentId?: string }
     >,
     panelIds: [] as string[],
     focusedId: null as string | null,
