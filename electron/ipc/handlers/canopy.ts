@@ -1321,9 +1321,8 @@ export const canopyNamespace = defineIpcNamespace({
      * window here to freeze their panes. Not gated on Canopy: any window with
      * the terminal open needs it, and with Canopy off the list is empty.
      */
-    getSizeHolds: op(
-      CANOPY_METHOD_CHANNELS.getSizeHolds,
-      async (): Promise<string[]> => remoteSizeHolds()
+    getSizeHolds: op(CANOPY_METHOD_CHANNELS.getSizeHolds, async (): Promise<string[]> =>
+      remoteSizeHolds()
     ),
 
     getModel: op(CANOPY_METHOD_CHANNELS.getModel, async (): Promise<CanopyModelInfo> =>

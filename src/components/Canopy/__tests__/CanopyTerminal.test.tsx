@@ -492,7 +492,9 @@ describe("CanopyTerminal", () => {
       expect(pane.events).toEqual([]);
       // Drawn at the host's grid until the host says the PTY took the new one.
       expect(xterm.current!.resizes).toEqual([[200, 60]]);
-      await act(async () => remote.push({ kind: "resize", watchId: 3, runId: "run-1", cols: 99, rows: 30 }));
+      await act(async () =>
+        remote.push({ kind: "resize", watchId: 3, runId: "run-1", cols: 99, rows: 30 })
+      );
       expect(xterm.current!.resizes.at(-1)).toEqual([99, 30]);
       expect(terminalResize).not.toHaveBeenCalled();
     });
