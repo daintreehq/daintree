@@ -135,8 +135,9 @@ interface VoiceSession {
   readonly terminalId: string | undefined;
   /** "rewrite" records an instruction for selected text, forwarded as spoken. */
   readonly intent: "dictation" | "rewrite";
-  // The agent the terminal runs and its commands, fixed before the provider
-  // starts. Null when the terminal runs no agent with commands.
+  // The agent the terminal runs and its commands, fixed as the keyterms are:
+  // before the provider transcribes anything. Null when the terminal runs no
+  // agent with commands.
   commandTarget: VoiceCommandTarget | null;
   // starting: main is still preparing, and the provider isn't this session's.
   // active: its provider has been started (it may still be connecting).
@@ -1051,16 +1052,15 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       sessionNames.names = flattenDictationNames(screenDictationNames(gathered));
     });
     // Bounded by the same budget as the other reads, and resolved alongside them.
+    // The keyterms wait on it, so it is in place before either provider can
+    // transcribe a word, without holding up the provider start.
     const commandTargetPromise = resolveVoiceCommandTarget(
       deps.ptyClient,
       keytermTarget.terminalId,
       COMMAND_TARGET_START_BUDGET_MS
-    );
-    // Taken whenever it lands rather than awaited, so an OpenAI start that
-    // doesn't wait for keyterms doesn't wait for this either. Speech finished
-    // before then is written as words, and correction still knows the target.
-    void commandTargetPromise.then((target) => {
+    ).then((target) => {
       session.commandTarget = target;
+      return target;
     });
     const keytermsPromise = assembleTaggedKeyterms({
       customDictionary: dictionaryTerms(settings.dictionary),

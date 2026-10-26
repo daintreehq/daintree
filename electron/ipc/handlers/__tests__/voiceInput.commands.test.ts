@@ -41,6 +41,8 @@ const shared = vi.hoisted(() => ({
   correctionCalls: [] as Array<{ request: unknown; settings: unknown }>,
   /** Settings objects passed to svc.start(), in call order. */
   startCalls: [] as unknown[],
+  /** The start context (pending keyterms) passed alongside each start. */
+  startContexts: [] as Array<{ keyterms?: Promise<string[]> } | undefined>,
   /** Optional override for assembleKeyterms — lets a test defer/control timing. */
   assembleKeyterms: null as null | (() => Promise<string[]>),
   /** The session the fake provider was last started for; its events carry it. */
@@ -48,6 +50,8 @@ const shared = vi.hoisted(() => ({
   /** Arguments of each assembleKeyterms call. */
   keytermCalls: [] as Array<{ commandTerms?: Promise<readonly string[]> }>,
   commandTarget: null as unknown,
+  /** The transcription provider the stored settings name. */
+  provider: "openai" as "openai" | "deepgram",
   resolveCalls: [] as Array<{ terminalId: string | undefined; timeoutMs: number }>,
 }));
 
@@ -58,9 +62,17 @@ vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
         cb({ ...e, sessionId: shared.providerSessionId ?? undefined });
       return () => {};
     };
-    this.start = function (settings: unknown, sessionId: string) {
+    this.keytermsNeededToConnect = function (settings: { transcriptionProvider?: string }) {
+      return settings.transcriptionProvider === "deepgram";
+    };
+    this.start = function (
+      settings: unknown,
+      sessionId: string,
+      context?: { keyterms?: Promise<string[]> }
+    ) {
       shared.providerSessionId = sessionId;
       shared.startCalls.push(settings);
+      shared.startContexts.push(context);
       return Promise.resolve({ ok: true });
     };
     this.stopGracefully = function () {
@@ -74,9 +86,6 @@ vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
     this.sendAudioChunk = function () {};
     this.destroy = function () {};
     this.commitParagraphBoundary = function () {};
-    this.keytermsNeededToConnect = function (settings: { transcriptionProvider?: string }) {
-      return settings.transcriptionProvider === "deepgram";
-    };
   },
 }));
 
@@ -139,6 +148,9 @@ vi.mock("../../../store.js", () => ({
           transcriptionModel: "gpt-live-transcribe",
           paragraphingStrategy: "spoken-command",
           resolveFileLinks: true,
+          ...(shared.provider === "deepgram"
+            ? { transcriptionProvider: "deepgram", deepgramApiKey: "dg-test" }
+            : {}),
         };
       }
       return undefined;
@@ -175,6 +187,7 @@ import { registerVoiceInputHandlers } from "../voiceInput.js";
 import { getAgentConfig } from "../../../../shared/config/agentRegistry.js";
 import { getBuiltinSlashCommands } from "../../../../shared/types/slashCommands.js";
 import { buildVoiceCommandVocabulary } from "../../../../shared/utils/voiceAgentCommands.js";
+import { resolveVoiceCommandTarget } from "../../../services/voiceCommandTarget.js";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -274,6 +287,10 @@ describe("voiceInput — the target agent's commands", () => {
     shared.correctionCalls = [];
     shared.keytermCalls = [];
     shared.resolveCalls = [];
+    shared.startCalls = [];
+    shared.startContexts = [];
+    shared.assembleKeyterms = null;
+    shared.provider = "openai";
     shared.commandTarget = claudeTarget();
 
     const win = buildMainWindow();
@@ -320,6 +337,51 @@ describe("voiceInput — the target agent's commands", () => {
     await start();
     emitTranscriptionEvent({ type: "complete", text: "slash compact" });
     expect(completions()[0]).not.toHaveProperty("commandText");
+  });
+
+  // Assembly waits on the command terms, as the real one does.
+  function assembleFromCommandTerms() {
+    shared.assembleKeyterms = () =>
+      (shared.keytermCalls.at(-1)?.commandTerms ?? Promise.resolve([])).then((t) => [...t]);
+  }
+
+  function holdCommandLookup(): (target: unknown) => void {
+    let release!: (target: unknown) => void;
+    vi.mocked(resolveVoiceCommandTarget).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve as (target: unknown) => void;
+        })
+    );
+    return (target) => release(target);
+  }
+
+  it("connects OpenAI without waiting on the command lookup, and has the target once its keyterms land", async () => {
+    assembleFromCommandTerms();
+    const release = holdCommandLookup();
+    await start();
+    // Started with its keyterms still pending behind the lookup.
+    expect(shared.startCalls).toHaveLength(1);
+    expect(shared.startCalls[0]).not.toHaveProperty("keyterms");
+    const pending = shared.startContexts[0]?.keyterms;
+    expect(pending).toBeInstanceOf(Promise);
+
+    release(claudeTarget());
+    await expect(pending).resolves.not.toHaveLength(0);
+    // OpenAI transcribes nothing before its keyterms land.
+    emitTranscriptionEvent({ type: "complete", text: "Slash review the last commit." });
+    expect(completions()[0]).toMatchObject({ commandText: "/review the last commit." });
+  });
+
+  it("has the target in place when Deepgram starts with its keyterms", async () => {
+    shared.provider = "deepgram";
+    assembleFromCommandTerms();
+    await start();
+    expect(shared.startCalls).toHaveLength(1);
+    const { keyterms } = shared.startCalls[0] as { keyterms: string[] };
+    expect(keyterms.length).toBeGreaterThan(0);
+    emitTranscriptionEvent({ type: "complete", text: "Slash review the last commit." });
+    expect(completions()[0]).toMatchObject({ commandText: "/review the last commit." });
   });
 
   it("biases recognition toward the agent's command names", async () => {
