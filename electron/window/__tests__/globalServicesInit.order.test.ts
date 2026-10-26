@@ -386,7 +386,6 @@ import { startAppMetricsMonitor } from "../../services/ProcessMemoryMonitor.js";
 import type { Mock } from "vitest";
 import { CHANNELS } from "../../ipc/channels.js";
 import { store } from "../../store.js";
-import { helpSessionService } from "../../services/HelpSessionService.js";
 import { projectVisibilityClock } from "../../services/projectVisibilityClock.js";
 import { notifyProjectPresenceChanged } from "../projectPresenceChanges.js";
 
