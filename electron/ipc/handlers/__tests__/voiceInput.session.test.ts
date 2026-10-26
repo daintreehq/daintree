@@ -280,6 +280,8 @@ describe("voiceInput — session identity", () => {
   it("does not flush a session that hasn't reached its provider", async () => {
     const resolveKeyterms = deferKeyterms();
     const pending = start(ownerA, "a");
+    // The service is loaded and listening, but its provider isn't this session's yet.
+    await vi.waitFor(() => expect(shared.listeners.size).toBe(1));
     await flush(ownerA, "a");
     resolveKeyterms();
     await pending;

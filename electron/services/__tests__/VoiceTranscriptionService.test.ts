@@ -381,9 +381,12 @@ describe("VoiceTranscriptionService (coordinator)", () => {
     expect(firstEvents.some((e) => e.type === "status" && e.status === "connecting")).toBe(true);
     expect(firstEvents.map((e) => e.sessionId)).toEqual(firstEvents.map(() => "session-a"));
 
-    const second = await bringOpenAiReady(service, "session-b");
-    second.simulateMessage("conversation.item.input_audio_transcription.delta", { delta: "Yo" });
-    expect(events.length).toBeGreaterThan(0);
+    const second = await bringDeepgramReady(service, "session-b");
+    second.simulateMessage("Results", {
+      is_final: true,
+      channel: { alternatives: [{ transcript: "Yo" }] },
+    });
+    expect(events.some((e) => e.type === "complete" && e.text === "Yo")).toBe(true);
     expect(events.map((e) => e.sessionId)).toEqual(events.map(() => "session-b"));
     service.stop();
   });

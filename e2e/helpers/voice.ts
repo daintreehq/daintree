@@ -10,7 +10,7 @@ import path from "path";
 export interface CapturedEvents {
   statuses: string[];
   deltas: string[];
-  completes: Array<{ text: string; willCorrect: boolean }>;
+  completes: Array<{ sessionId: string; text: string; willCorrect: boolean }>;
   paragraphBoundaries: Array<{ rawText: string | null }>;
   errors: Array<string | { message?: string }>;
 }
@@ -22,7 +22,7 @@ export async function installEventCapture(window: Page): Promise<void> {
     const captured = {
       statuses: [] as string[],
       deltas: [] as string[],
-      completes: [] as Array<{ text: string; willCorrect: boolean }>,
+      completes: [] as Array<{ sessionId: string; text: string; willCorrect: boolean }>,
       paragraphBoundaries: [] as Array<{ rawText: string | null }>,
       errors: [] as Array<string | { message?: string }>,
     };
@@ -30,8 +30,9 @@ export async function installEventCapture(window: Page): Promise<void> {
     const v = w.electron.voiceInput;
     v.onStatus((payload: { status: string }) => captured.statuses.push(payload.status));
     v.onTranscriptionDelta((payload: { text: string }) => captured.deltas.push(payload.text));
-    v.onTranscriptionComplete((payload: { text: string; willCorrect: boolean }) =>
-      captured.completes.push(payload)
+    v.onTranscriptionComplete(
+      (payload: { sessionId: string; text: string; willCorrect: boolean }) =>
+        captured.completes.push(payload)
     );
     v.onParagraphBoundary((payload: { rawText: string | null }) =>
       captured.paragraphBoundaries.push(payload)
@@ -74,9 +75,14 @@ export async function ipcStart(window: Page): Promise<{ ok: boolean; error?: str
       if (outcome.status === "started") return { ok: true };
       return { ok: false, error: outcome.status === "failed" ? outcome.error : outcome.status };
     } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      return { ok: false, error: String((error as { message?: unknown })?.message ?? error) };
     }
   });
+}
+
+/** The session id the last `ipcStart` minted, or undefined before any start. */
+export async function getVoiceSessionId(window: Page): Promise<string | undefined> {
+  return await window.evaluate(() => (window as any).__voiceSessionId__ as string | undefined);
 }
 
 export async function ipcStop(window: Page): Promise<void> {
