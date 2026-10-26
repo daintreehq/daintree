@@ -30,7 +30,9 @@ describe("PortalVisibilityController", () => {
   let evictionCallbacks: Array<(data: { tabId: string }) => void> = [];
   const portal = {
     create: vi.fn<({ tabId, url }: { tabId: string; url: string }) => Promise<void>>(),
-    show: vi.fn<({ tabId, bounds }: { tabId: string; bounds: unknown }) => Promise<boolean | void>>(),
+    show: vi.fn<
+      ({ tabId, bounds }: { tabId: string; bounds: unknown }) => Promise<boolean | void>
+    >(),
     hide: vi.fn<() => Promise<void>>(),
     onTabEvicted: vi.fn((cb: (data: { tabId: string }) => void) => {
       evictionCallbacks.push(cb);
