@@ -41,6 +41,16 @@ interface TextSpan {
   to: number;
 }
 
+// How many words name the file, so a description that is a prefix of
+// another ranks below it whatever article the detector kept.
+function specificity(description: string): number {
+  return description
+    .trim()
+    .replace(/^(?:the|a|an)\s+/i, "")
+    .split(/\s+/)
+    .filter(Boolean).length;
+}
+
 // The first match inside one of `spans` that no earlier reference claimed.
 function findUnclaimed(
   pattern: RegExp,
@@ -65,8 +75,8 @@ function findUnclaimed(
  * The swaps that turn each spoken file command ("link to the input bar") into
  * its `@file` token, made only inside the words of the transcript main
  * detected it in. Every detected reference claims one command, misses
- * included, so a hit can never take a missed command's words. Longer
- * descriptions claim first ("router tests" before "router"), then each takes
+ * included, so a hit can never take a missed command's words. Descriptions
+ * naming more words claim first ("router tests" before "router"), then each takes
  * the earliest command left. Misses, words the user has since edited, and
  * commands that can't be found there are left exactly as spoken.
  */
@@ -81,11 +91,11 @@ export function planFileReferenceEdits(
     .map((u) => u.range);
   const claimed: TextSpan[] = [];
   const edits: DraftEdit[] = [];
-  const byLength = references
-    .map((reference, index) => ({ reference, length: reference.description.trim().length, index }))
-    .sort((a, b) => b.length - a.length || a.index - b.index);
+  const bySpecificity = references
+    .map((reference, index) => ({ reference, words: specificity(reference.description), index }))
+    .sort((a, b) => b.words - a.words || a.index - b.index);
 
-  for (const { reference } of byLength) {
+  for (const { reference } of bySpecificity) {
     const pattern = commandPattern(reference.description);
     if (!pattern) continue;
     const span = findUnclaimed(pattern, draft, spans, claimed);

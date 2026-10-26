@@ -128,7 +128,7 @@ describe("planFileReferenceEdits", () => {
   });
 
   it("lets a longer description claim its command before a shorter one listed first", () => {
-    const draft = "link to the router and link to the router tests";
+    const draft = "link to the router tests and link to the router";
     const rec = record([utterance(draft, draft, { transcriptId: "t1" })]);
 
     expect(
@@ -136,7 +136,19 @@ describe("planFileReferenceEdits", () => {
         { description: "router", path: "router.ts" },
         { description: "router tests", path: "router.test.ts" },
       ])
-    ).toBe("@router.ts and @router.test.ts");
+    ).toBe("@router.test.ts and @router.ts");
+  });
+
+  it("ranks descriptions by the words naming the file, not a leading article", () => {
+    const draft = "Link to the router UI, then link to the router.";
+    const rec = record([utterance(draft, draft, { transcriptId: "t1" })]);
+
+    expect(
+      swap(draft, rec, "t1", [
+        { description: "the router", path: "router.ts" },
+        { description: "router UI", path: "RouterUI.tsx" },
+      ])
+    ).toBe("@RouterUI.tsx, then @router.ts.");
   });
 
   it("places repeated references in spoken order, each after the last", () => {
