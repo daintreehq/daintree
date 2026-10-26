@@ -8,6 +8,7 @@ import {
   AddPanelFocusPolicySchema,
   AgentFacingSessionRecordSchema,
   PanelLimitSnapshotSchema,
+  HostAgentLimitSnapshotSchema,
 } from "./schemas";
 import { z } from "zod";
 import { AGENT_REGISTRY } from "@/config/agents";
@@ -198,10 +199,17 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       terminalId: z.string().nullable(),
       location: z.enum(["grid", "dock", "background"]).nullable(),
       spawnStatus: z
-        .enum(["missing-cli", "panel-limit", "already-launching", "spawn-failed", "unavailable"])
+        .enum([
+          "missing-cli",
+          "panel-limit",
+          "host-agent-limit",
+          "already-launching",
+          "spawn-failed",
+          "unavailable",
+        ])
         .nullable()
         .describe(
-          "Null on a launch, else why not: panel-limit (see panelLimit), already-launching (retry), missing-cli (setup panel opened)."
+          "Null on a launch, else why not: panel-limit (see panelLimit), host-agent-limit (see hostAgentLimit), already-launching (retry), missing-cli (setup panel opened)."
         ),
       worktreeId: z.string().nullable(),
       worktreePath: z.string().nullable(),
@@ -213,6 +221,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       cwdOutsideWorktree: z.boolean().nullable(),
       // Nested nullable is safe: only a nullable root disables the output schema.
       panelLimit: PanelLimitSnapshotSchema.nullable(),
+      hostAgentLimit: HostAgentLimitSnapshotSchema.nullable(),
       // Filled in by main when the call waits for the reply.
       reply: AwaitedReplySchema.nullable(),
     }),

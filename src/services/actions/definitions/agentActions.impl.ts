@@ -36,6 +36,7 @@ import { appendHandbackInstruction, mintHandbackCode } from "@shared/utils/handb
 import type { ActionContext } from "@shared/types/actions";
 import type { AgentPreset } from "@shared/config/agentRegistry";
 import { isPtyPanel, type TerminalSpawnSource } from "@shared/types/panel";
+import type { HostAgentLimitSnapshot } from "@shared/utils/hostAgentLimit";
 import {
   AgentListModelsArgsSchema,
   AgentListPresetsArgsSchema,
@@ -304,6 +305,42 @@ export async function launchAgentShortcut(
   return { terminalId: result.terminalId, location: result.location };
 }
 
+/** How long a launch on a host waits for the spawn's answer before reporting it as made. */
+const HOST_AGENT_ADMISSION_WAIT_MS = 10_000;
+
+/**
+ * Settle once the pane's spawn has answered: the host's refusal at its agent
+ * ceiling, or null for anything else (started, failed for another reason,
+ * gone, or still waiting when the wait runs out, which a held or throttled
+ * spawn can).
+ */
+function awaitHostAgentAdmission(terminalId: string): Promise<HostAgentLimitSnapshot | null> {
+  // `undefined` while the spawn hasn't answered.
+  const read = (): HostAgentLimitSnapshot | null | undefined => {
+    const panel = usePanelStore.getState().panelsById[terminalId];
+    if (!panel || !isPtyPanel(panel)) return null;
+    if (panel.spawnStatus === "spawning") return undefined;
+    return panel.spawnError?.code === "HOST_AGENT_LIMIT"
+      ? (panel.spawnError.hostAgentLimit ?? null)
+      : null;
+  };
+  const now = read();
+  if (now !== undefined) return Promise.resolve(now);
+  return new Promise((resolve) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const unsubscribe = usePanelStore.subscribe(() => {
+      const next = read();
+      if (next !== undefined) finish(next);
+    });
+    const finish = (value: HostAgentLimitSnapshot | null): void => {
+      clearTimeout(timer);
+      unsubscribe();
+      resolve(value);
+    };
+    timer = setTimeout(() => finish(null), HOST_AGENT_ADMISSION_WAIT_MS);
+  });
+}
+
 export const agentActionRuns = {
   "agent.launch": async (args: unknown, ctx: ActionContext, callbacks: ActionCallbacks) => {
     const {
@@ -475,6 +512,29 @@ export const agentActionRuns = {
         cwd: null,
         cwdOutsideWorktree: null,
         panelLimit: declined?.panelLimit ?? null,
+        hostAgentLimit: declined?.hostAgentLimit ?? null,
+        reply: null,
+      };
+    }
+    // A host holding its agents to a ceiling (#14704) counts again when the
+    // spawn reaches it, and a launch that lost the last slot to another Shell
+    // or client is refused there. Its pane shows why; the caller hears it here.
+    const hostRefusal = result.hostAgentLimit
+      ? await awaitHostAgentAdmission(result.terminalId)
+      : null;
+    if (hostRefusal !== null) {
+      return {
+        launched: false,
+        terminalId: result.terminalId,
+        location: result.location,
+        spawnStatus: "host-agent-limit" as const,
+        worktreeId: result.worktreeId,
+        worktreePath: result.worktreePath,
+        branch: result.branch,
+        cwd: result.cwd,
+        cwdOutsideWorktree: result.cwdOutsideWorktree,
+        panelLimit: null,
+        hostAgentLimit: hostRefusal,
         reply: null,
       };
     }
@@ -491,6 +551,7 @@ export const agentActionRuns = {
       cwd: result.cwd,
       cwdOutsideWorktree: result.cwdOutsideWorktree,
       panelLimit: null,
+      hostAgentLimit: null,
       reply: null,
     };
   },

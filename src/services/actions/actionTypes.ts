@@ -4,6 +4,7 @@ import type { TerminalSpawnSource, AddPanelFocusPolicy } from "@shared/types/pan
 import type { SettingsNavTarget } from "@/components/Settings";
 import type { AddPanelOptions } from "@/store";
 import type { PanelLimitSnapshot } from "@/store/panelLimitStore";
+import type { HostAgentLimitSnapshot } from "@shared/utils/hostAgentLimit";
 
 type AddTerminalOptions = AddPanelOptions;
 
@@ -39,9 +40,11 @@ export type NavigationDirection = "up" | "down" | "left" | "right";
  * depends on the renderer hook (#11547).
  */
 export interface LaunchDecline {
-  reason: "panel-limit" | "already-launching" | "spawn-failed" | "unavailable";
+  reason: "panel-limit" | "host-agent-limit" | "already-launching" | "spawn-failed" | "unavailable";
   /** The count and limits the refusal was judged on; set only for `panel-limit`. */
   panelLimit: PanelLimitSnapshot | null;
+  /** The host and count the refusal was judged on; set only for `host-agent-limit`. */
+  hostAgentLimit?: HostAgentLimitSnapshot | null;
 }
 
 export interface ActionCallbacks {

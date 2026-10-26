@@ -3310,3 +3310,136 @@ describe("terminal spawn handler - Windows PATH refresh", () => {
     expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("terminal spawn handler - host agent ceiling (#14704)", () => {
+  type FakeSpawnOptions = { launchAgentId?: string };
+  let live: Map<string, FakeSpawnOptions>;
+  let ptyClient: {
+    spawn: ReturnType<typeof vi.fn>;
+    hasTerminal: ReturnType<typeof vi.fn>;
+    write: ReturnType<typeof vi.fn>;
+    countLiveAgentTerminals: ReturnType<typeof vi.fn>;
+  };
+  let limit: number;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    mockGetCurrentProject.mockReturnValue(null);
+    mockGetProjectById.mockReturnValue(null);
+    mockGetProjectSettings.mockResolvedValue({});
+    mockRevokePaneConfig.mockResolvedValue(undefined);
+    live = new Map();
+    // Registers synchronously, as PtyClient does, so a count read after it sees it.
+    ptyClient = {
+      spawn: vi.fn((id: string, options: FakeSpawnOptions) => live.set(id, options)),
+      hasTerminal: vi.fn(() => false),
+      write: vi.fn(),
+      countLiveAgentTerminals: vi.fn((excludeId?: string) => {
+        let count = 0;
+        for (const [id, options] of live) if (id !== excludeId && options.launchAgentId) count++;
+        return count;
+      }),
+    };
+    const os = await import("os");
+    const { computeHostAgentLimit } = await import("../../../../../shared/utils/hostAgentLimit.js");
+    limit = computeHostAgentLimit(os.totalmem());
+    const { _resetRemoteServicesForTest, registerRemoteService } = await import(
+      "../../../../remote/runtime.js"
+    );
+    _resetRemoteServicesForTest();
+    registerRemoteService("hostServer", {} as never);
+  });
+
+  afterEach(async () => {
+    const { _resetRemoteServicesForTest } = await import("../../../../remote/runtime.js");
+    _resetRemoteServicesForTest();
+    waitForBurstRateLimitSlotMock.mockResolvedValue(undefined);
+  });
+
+  function fillWithAgents(count: number): void {
+    for (let i = 0; i < count; i++) live.set(`agent-${i}`, { launchAgentId: "claude" });
+  }
+
+  async function agentSpawn(id: string, extra: Record<string, unknown> = {}) {
+    registerTerminalLifecycleHandlers({ ptyClient } as unknown as HandlerDependencies);
+    const os = await import("os");
+    return getSpawnHandler()(
+      {} as Electron.IpcMainInvokeEvent,
+      {
+        id,
+        cwd: os.homedir(),
+        cols: 80,
+        rows: 24,
+        launchAgentId: "claude",
+        command: "claude",
+        ...extra,
+      } as unknown as Parameters<ReturnType<typeof getSpawnHandler>>[1]
+    );
+  }
+
+  it("lets only the launches that fit through when several arrive at once", async () => {
+    fillWithAgents(limit - 1);
+    // Every launch passes the early check, then waits together at the rate limiter.
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    waitForBurstRateLimitSlotMock.mockImplementation(() => gate);
+
+    const launches = ["shell-a", "shell-b", "mcp"].map((id) => agentSpawn(id));
+    await vi.waitFor(() => expect(waitForBurstRateLimitSlotMock).toHaveBeenCalledTimes(3));
+    release();
+    const results = await Promise.allSettled(launches);
+
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+    expect(ptyClient.countLiveAgentTerminals()).toBe(limit);
+    const refused = results.filter((r) => r.status === "rejected");
+    expect(refused).toHaveLength(2);
+    for (const r of refused) {
+      expect((r as PromiseRejectedResult).reason).toMatchObject({
+        code: "HOST_AGENT_LIMIT_REACHED",
+        details: { code: "HOST_AGENT_LIMIT_REACHED", count: limit, limit },
+      });
+    }
+  });
+
+  it("refuses at the ceiling before waiting for a rate-limit slot", async () => {
+    fillWithAgents(limit);
+
+    await expect(agentSpawn("late")).rejects.toMatchObject({ code: "HOST_AGENT_LIMIT_REACHED" });
+    expect(waitForBurstRateLimitSlotMock).not.toHaveBeenCalled();
+    expect(ptyClient.spawn).not.toHaveBeenCalled();
+  });
+
+  it("refuses a restore at the ceiling too", async () => {
+    fillWithAgents(limit);
+
+    await expect(agentSpawn("restored", { restore: true })).rejects.toMatchObject({
+      code: "HOST_AGENT_LIMIT_REACHED",
+    });
+    expect(ptyClient.spawn).not.toHaveBeenCalled();
+  });
+
+  it("lets a respawn of a counted agent replace itself", async () => {
+    fillWithAgents(limit);
+
+    await expect(agentSpawn("agent-0")).resolves.toBe("agent-0");
+  });
+
+  it("still opens a plain shell on a full host", async () => {
+    fillWithAgents(limit);
+
+    await expect(agentSpawn("shell", { launchAgentId: undefined, command: undefined })).resolves.toBe(
+      "shell"
+    );
+  });
+
+  it("holds nothing back while Host mode is off", async () => {
+    const { _resetRemoteServicesForTest } = await import("../../../../remote/runtime.js");
+    _resetRemoteServicesForTest();
+    fillWithAgents(limit + 5);
+
+    await expect(agentSpawn("free")).resolves.toBe("free");
+    expect(ptyClient.countLiveAgentTerminals).not.toHaveBeenCalled();
+  });
+});

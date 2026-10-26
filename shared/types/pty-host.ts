@@ -17,6 +17,7 @@ import type { AgentConfig } from "../config/agentRegistry.js";
 import type { AgentSessionRecord } from "./ipc/agentSessionHistory.js";
 import type { AgentEndObservation, AgentFallbackTriggeredPayload } from "./ipc/agent.js";
 import type { RequiredPluginToolStatus } from "./ipc/pluginAgentMcp.js";
+import type { HostAgentLimitSnapshot } from "../utils/hostAgentLimit.js";
 import type { SemanticSearchMatch, TerminalInfoPayload } from "./ipc/terminal.js";
 import type { WorkerResourceSnapshot } from "./workerGovernance.js";
 import type { MemorySource } from "./memoryAccounting.js";
@@ -1286,6 +1287,7 @@ export type SpawnErrorCode =
   | "TERMINAL_ALREADY_LIVE" // Spawn rejected: the id already has a live owner (#11341)
   | "SPAWN_TIMEOUT" // No spawn result from the pty-host within the confirmation window (#12754)
   | "REQUIRED_PLUGIN_TOOLS" // Agent launch refused: plugin tools it requires weren't ready (#14096)
+  | "HOST_AGENT_LIMIT" // Agent launch refused: the host's live agent terminals are at its ceiling (#14704)
   | "UNKNOWN"; // Unknown error
 
 /** Result of a spawn operation */
@@ -1310,6 +1312,8 @@ export interface SpawnError {
   path?: string;
   /** `REQUIRED_PLUGIN_TOOLS` only: where each required plugin's tools stood. */
   pluginTools?: RequiredPluginToolStatus[];
+  /** `HOST_AGENT_LIMIT` only: the host and the count its refusal was judged on. */
+  hostAgentLimit?: HostAgentLimitSnapshot;
 }
 
 /** Crash type classification based on exit codes */
