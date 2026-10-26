@@ -31,6 +31,9 @@ export const SOUND_FILES = {
   "worktree-delete": "worktree-delete.wav",
   "agent-spawned": "agent-spawned.wav",
   "context-injected": "context-injected.wav",
+  "dictation-start": "dictation-start.wav",
+  "dictation-stop": "dictation-stop.wav",
+  "dictation-error": "dictation-error.wav",
 } as const;
 
 export type SoundId = keyof typeof SOUND_FILES;
@@ -54,6 +57,7 @@ const CHORD_WINDOW_MS = 2000;
 
 const PRIORITY_MAP: Record<string, number> = {
   error: 1,
+  "dictation-error": 1,
   waiting: 2,
   chime: 3,
   complete: 3,

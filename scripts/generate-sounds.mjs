@@ -1411,12 +1411,88 @@ const worktreeDelete = postProcess(
   { reverbWet: 0.01, targetPeak: 0.45, chassisMix: 0.01 }
 );
 
+// dictation-start / dictation-stop — STATIC and deliberately quiet: the start
+// cue plays while the mic is open, so it is short, low-peak and has no reverb
+// tail for the recording to pick up. Rising pair = listening, falling = done.
+const dictationNote = (freq, duration) => ({
+  freq,
+  duration,
+  opts: {
+    amplitude: 0.35,
+    resonance: 0.7,
+    fmAmt: 0.1,
+    fmIndex: 0.3,
+    fmDecayRate: 25,
+    malletAmt: 0.3,
+    noiseBandHz: 900,
+  },
+});
+const dictationStart = postProcess(
+  sequence([dictationNote(JI.A4, 0.04), dictationNote(JI.E5, 0.06)], {
+    noteGap: 0.01,
+    tailPad: 0.03,
+  }),
+  { reverbWet: 0, targetPeak: 0.22, chassisMix: 0.005 }
+);
+const dictationStop = postProcess(
+  sequence([dictationNote(JI.E5, 0.04), dictationNote(JI.A4, 0.07)], {
+    noteGap: 0.01,
+    tailPad: 0.05,
+  }),
+  { reverbWet: 0.01, targetPeak: 0.4, chassisMix: 0.005 }
+);
+
+// dictation-error.wav — two dark falling notes, the error family's timbre.
+const dictationError = postProcess(
+  sequence(
+    [
+      {
+        freq: JI.Cs5,
+        duration: 0.07,
+        opts: {
+          amplitude: 0.45,
+          resonance: 0.65,
+          modeQs: [120, 60, 30, 15],
+          fmRatio: 1.7321,
+          fmAmt: 0.4,
+          fmIndex: 1.8,
+          fmDecayRate: 10,
+          malletAmt: 0.45,
+          noiseBandHz: 700,
+          thumpAmt: 0.4,
+        },
+      },
+      {
+        freq: JI.A4 / 2,
+        duration: 0.14,
+        opts: {
+          amplitude: 0.45,
+          resonance: 0.65,
+          modeQs: [120, 60, 30, 15],
+          fmRatio: 1.7321,
+          fmAmt: 0.4,
+          fmIndex: 1.8,
+          fmDecayRate: 10,
+          malletAmt: 0.45,
+          noiseBandHz: 700,
+          thumpAmt: 0.4,
+        },
+      },
+    ],
+    { noteGap: 0.03, tailPad: 0.1 }
+  ),
+  { reverbWet: 0.01, targetPeak: 0.5, chassisMix: 0.01 }
+);
+
 // Static sounds (no variants — error/destructive sounds need Pavlovian consistency)
 const staticSounds = {
   error,
   pulse,
   "git-push-error": gitPushError,
   "worktree-delete": worktreeDelete,
+  "dictation-start": dictationStart,
+  "dictation-stop": dictationStop,
+  "dictation-error": dictationError,
 };
 
 for (const [name, samples] of Object.entries(staticSounds)) {

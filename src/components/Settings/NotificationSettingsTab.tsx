@@ -503,7 +503,7 @@ export function NotificationSettingsTab() {
             </SettingsDependents>
             <SettingsSwitchCard
               title="UI feedback sounds"
-              subtitle="Short audio cues for git commit and push, worktree create and delete, agent spawn, and context injection"
+              subtitle="Short audio cues for git commit and push, worktree create and delete, agent spawn, context injection, and dictation start, stop and failure"
               isEnabled={settings.uiFeedbackSoundEnabled}
               onChange={() => update({ uiFeedbackSoundEnabled: !settings.uiFeedbackSoundEnabled })}
               {...reset("uiFeedbackSoundEnabled")}
