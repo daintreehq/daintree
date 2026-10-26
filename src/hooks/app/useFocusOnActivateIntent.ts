@@ -74,7 +74,7 @@ export function useFocusOnActivateIntent(isStateLoaded: boolean): void {
         notify({
           type: "warning",
           title: "Terminal is gone",
-          message: "The terminal you were taking to has closed. You're in its project.",
+          message: "It closed while its project was opening. You're in that project now.",
           context: { eventKind: "uiFeedback" },
           replaceKey: "focus-on-activate:terminal-gone",
         });
