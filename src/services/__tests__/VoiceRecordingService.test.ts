@@ -17,8 +17,10 @@ vi.mock("@/store/voiceRecordingStore", () => {
     micSignal: "pending" as string,
     micDeviceLabel: null as string | null,
     micNotice: null as unknown,
+    sessionElsewhere: null as unknown,
   };
   const fns = {
+    applyLiveSessionUpdate: vi.fn(),
     setLastError: vi.fn(),
     announce: vi.fn(),
     setStatus: vi.fn(),
@@ -170,6 +172,10 @@ function buildElectronStub() {
       onError: vi.fn(() => () => {}),
       onStatus: vi.fn(() => () => {}),
       onSessionEnded: vi.fn(() => () => {}),
+      onLiveSession: vi.fn(() => () => {}),
+      onStopRequested: vi.fn(() => () => {}),
+      onRevealRequested: vi.fn(() => () => {}),
+      getLiveSession: vi.fn().mockResolvedValue({ revision: 0, session: null }),
       getSettings: vi.fn().mockResolvedValue({
         enabled: true,
         openaiApiKey: "sk-key",
@@ -181,6 +187,8 @@ function buildElectronStub() {
       sendAudioChunk: vi.fn(),
       start: vi.fn().mockResolvedValue({ status: "started" }),
       stop: vi.fn().mockResolvedValue(undefined),
+      stopLive: vi.fn().mockResolvedValue(true),
+      revealLive: vi.fn().mockResolvedValue(true),
     },
     systemSleep: {
       onSuspend: vi.fn((cb: () => void) => {
@@ -2415,5 +2423,151 @@ describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
     for (const listener of keyupListeners) listener(shiftUpEvent);
 
     expect(stopSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("VoiceRecordingService — a session another view owns (#14601)", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    suspendCallbacks.length = 0;
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  const elsewhere = { sessionId: "remote", projectId: "project-a", projectName: "Alpha" };
+
+  type VoiceState = {
+    status: string;
+    activeTarget: { panelId: string } | null;
+    lockedTarget: { panelId: string } | null;
+    sessionElsewhere: unknown;
+  };
+  type PanelState = { focusedId: string | null; panelsById: Record<string, unknown> };
+
+  async function arrange(options: {
+    status?: string;
+    sessionElsewhere?: typeof elsewhere | null;
+    recordingMode?: "toggle" | "push-to-talk";
+  }) {
+    const electron = buildElectronStub();
+    electron.voiceInput.getSettings.mockResolvedValue({
+      enabled: true,
+      openaiApiKey: "sk-key",
+      correctionEnabled: false,
+      recordingMode: options.recordingMode ?? "toggle",
+    });
+    const { windowListeners } = setupGlobals(electron);
+
+    const panel = (await import("@/store/panelStore")) as unknown as { __state: PanelState };
+    panel.__state.focusedId = "panel-b";
+    panel.__state.panelsById = {
+      "panel-b": { id: "panel-b", title: "Focused", location: "grid", launchAgentId: "claude" },
+    };
+
+    const voiceModule = (await import("@/store/voiceRecordingStore")) as unknown as {
+      __state: VoiceState;
+      useVoiceRecordingStore: {
+        getState: () => { announce: ReturnType<typeof vi.fn> };
+      };
+    };
+    const voiceState = voiceModule.__state;
+    voiceState.status = options.status ?? "idle";
+    voiceState.activeTarget = voiceState.status === "idle" ? null : { panelId: "panel-a" };
+    voiceState.lockedTarget = null;
+    voiceState.sessionElsewhere =
+      options.sessionElsewhere === undefined ? elsewhere : options.sessionElsewhere;
+    const announce = voiceModule.useVoiceRecordingStore.getState().announce;
+    announce.mockClear();
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    voiceRecordingService.initialize();
+    await vi.waitFor(() => {
+      expect(electron.voiceInput.getSettings).toHaveBeenCalled();
+    });
+
+    const stopSpy = vi.spyOn(voiceRecordingService, "stop").mockResolvedValue();
+    const startSpy = vi.spyOn(voiceRecordingService, "start").mockResolvedValue();
+    const toggleSpy = vi.spyOn(voiceRecordingService, "toggle").mockResolvedValue();
+    return {
+      voiceRecordingService,
+      voiceState,
+      electron,
+      windowListeners,
+      announce,
+      stopSpy,
+      startSpy,
+      toggleSpy,
+    };
+  }
+
+  it("stops the other view's session instead of starting one on the focused panel", async () => {
+    const { voiceRecordingService, electron, announce, stopSpy, startSpy, toggleSpy } =
+      await arrange({});
+
+    await voiceRecordingService.toggleFocusedPanel();
+
+    expect(electron.voiceInput.stopLive).toHaveBeenCalledWith("remote");
+    expect(startSpy).not.toHaveBeenCalled();
+    expect(toggleSpy).not.toHaveBeenCalled();
+    expect(stopSpy).not.toHaveBeenCalled();
+    expect(announce).toHaveBeenCalledWith("Dictation stopped in Alpha.");
+  });
+
+  it("stops this view's own session first, leaving the other view alone", async () => {
+    const { voiceRecordingService, electron, stopSpy } = await arrange({ status: "recording" });
+
+    await voiceRecordingService.toggleFocusedPanel();
+
+    expect(stopSpy).toHaveBeenCalledWith("Dictation stopped.", { preserveLiveText: true });
+    expect(electron.voiceInput.stopLive).not.toHaveBeenCalled();
+  });
+
+  it("starts on the focused panel when nothing runs anywhere", async () => {
+    const { voiceRecordingService, electron, toggleSpy } = await arrange({
+      sessionElsewhere: null,
+    });
+
+    await voiceRecordingService.toggleFocusedPanel();
+
+    expect(electron.voiceInput.stopLive).not.toHaveBeenCalled();
+    expect(toggleSpy).toHaveBeenCalledWith(expect.objectContaining({ panelId: "panel-b" }));
+  });
+
+  it("says nothing when the other session was already over", async () => {
+    const { voiceRecordingService, electron, announce, toggleSpy } = await arrange({});
+    electron.voiceInput.stopLive.mockResolvedValue(false);
+
+    await voiceRecordingService.toggleFocusedPanel();
+
+    expect(announce).not.toHaveBeenCalled();
+    expect(toggleSpy).not.toHaveBeenCalled();
+  });
+
+  it("doesn't let the release of a push-to-talk press that stopped it stop anything here", async () => {
+    const { voiceRecordingService, windowListeners, stopSpy } = await arrange({
+      recordingMode: "push-to-talk",
+    });
+    const { keybindingService } = await import("@/services/KeybindingService");
+    vi.mocked(keybindingService.matchesEvent).mockReturnValue(true);
+    await vi.waitFor(() => {
+      expect(voiceRecordingService["recordingMode"]).toBe("push-to-talk");
+    });
+
+    const keydown = { code: "Period", repeat: false } as KeyboardEvent;
+    for (const listener of windowListeners["keydown"] ?? []) listener(keydown);
+    await voiceRecordingService.toggleFocusedPanel();
+    for (const listener of windowListeners["keyup"] ?? []) listener({ code: "Period" });
+
+    expect(stopSpy).not.toHaveBeenCalled();
+  });
+
+  it("takes the person to the other view's session", async () => {
+    const { voiceRecordingService, electron } = await arrange({});
+
+    await expect(voiceRecordingService.revealSessionElsewhere()).resolves.toBe(true);
+    expect(electron.voiceInput.revealLive).toHaveBeenCalledWith("remote");
   });
 });

@@ -138,6 +138,10 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611)", () => {
           onError: vi.fn(() => () => {}),
           onStatus: vi.fn(() => () => {}),
           onSessionEnded: vi.fn(() => () => {}),
+          onLiveSession: vi.fn(() => () => {}),
+          onStopRequested: vi.fn(() => () => {}),
+          onRevealRequested: vi.fn(() => () => {}),
+          getLiveSession: vi.fn().mockResolvedValue({ revision: 0, session: null }),
           getSettings: vi.fn().mockResolvedValue({
             enabled: true,
             openaiApiKey: "sk-key",

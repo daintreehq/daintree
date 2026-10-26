@@ -19,6 +19,12 @@ vi.mock("electron", () => ({
   BrowserWindow: { fromWebContents: vi.fn(() => null) },
 }));
 
+// The live-session report goes to every app view; these tests have none.
+vi.mock("../../../window/webContentsRegistry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../window/webContentsRegistry.js")>()),
+  getAllAppWebContents: vi.fn(() => []),
+}));
+
 const linuxSoundSettingsMock = vi.hoisted(() => ({
   openLinuxSoundSettings: vi.fn<
     (

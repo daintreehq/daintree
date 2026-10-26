@@ -10,11 +10,15 @@ import { readToolbarSource } from "./toolbarSource";
 const BUTTON_PATH = path.resolve(__dirname, "../VoiceRecordingToolbarButton.tsx");
 
 const focusActiveTarget = vi.fn();
+const revealSessionElsewhere = vi.fn();
 const dispatch = vi.fn();
 let mockCombo: string | undefined;
 
 vi.mock("@/services/VoiceRecordingService", () => ({
-  voiceRecordingService: { focusActiveTarget: () => focusActiveTarget() },
+  voiceRecordingService: {
+    focusActiveTarget: () => focusActiveTarget(),
+    revealSessionElsewhere: () => revealSessionElsewhere(),
+  },
 }));
 
 vi.mock("@/services/ActionService", () => ({
@@ -184,6 +188,67 @@ describe("VoiceRecordingToolbarButton — tooltip names what a click does", () =
       "Arming dictation: codex · api"
     );
     expect(container.querySelector('[style*="will-change"]')).toBeNull();
+  });
+});
+
+describe("VoiceRecordingToolbarButton — dictation in another view (#14601)", () => {
+  beforeEach(() => {
+    revealSessionElsewhere.mockClear();
+    mockCombo = "Cmd+.";
+    useVoiceRecordingStore.setState({
+      isConfigured: true,
+      status: "idle",
+      activeTarget: null,
+      lockedTarget: null,
+    });
+  });
+
+  it("says where dictation runs, and a click goes there", () => {
+    useVoiceRecordingStore.setState({
+      sessionElsewhere: { sessionId: "s1", projectId: "p-a", projectName: "Alpha" },
+    });
+    const { getByTestId } = render(<VoiceRecordingToolbarButton />);
+
+    const button = getByTestId("voice-elsewhere-button");
+    expect(button.getAttribute("aria-label")).toBe("Dictating in Alpha. Click to go there.");
+    expect(getByTestId("tooltip-content").textContent).toMatch(/click to go there/i);
+    const shortcutRow = getByTestId("tooltip-shortcut-row");
+    expect(shortcutRow.getAttribute("data-shortcut")).toBe("Cmd+.");
+    expect(shortcutRow.textContent).toBe("Stop");
+
+    fireEvent.click(button);
+    expect(revealSessionElsewhere).toHaveBeenCalledTimes(1);
+  });
+
+  it("names a window when the owner has no project", () => {
+    useVoiceRecordingStore.setState({
+      sessionElsewhere: { sessionId: "s1", projectId: null, projectName: null },
+    });
+    const { getByTestId } = render(<VoiceRecordingToolbarButton />);
+
+    expect(getByTestId("voice-elsewhere-button").getAttribute("aria-label")).toBe(
+      "Dictating in another window. Click to go there."
+    );
+  });
+
+  it("shows this view's own session instead while one runs here", () => {
+    useVoiceRecordingStore.setState({
+      status: "recording",
+      micSignal: "live",
+      activeTarget: { panelId: "p-1", panelTitle: "claude · notes" },
+      sessionElsewhere: { sessionId: "s1", projectId: "p-a", projectName: "Alpha" },
+    });
+    const { queryByTestId } = render(<VoiceRecordingToolbarButton />);
+
+    expect(queryByTestId("voice-elsewhere-button")).toBeNull();
+  });
+
+  it("stays an invisible placeholder when nothing runs anywhere", () => {
+    useVoiceRecordingStore.setState({ sessionElsewhere: null });
+    const { queryByTestId, container } = render(<VoiceRecordingToolbarButton />);
+
+    expect(queryByTestId("voice-elsewhere-button")).toBeNull();
+    expect(container.querySelector("button")).toBeNull();
   });
 });
 

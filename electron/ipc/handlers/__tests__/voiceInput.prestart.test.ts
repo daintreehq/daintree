@@ -58,6 +58,7 @@ const shared = vi.hoisted(() => ({
 vi.mock("../../../window/webContentsRegistry.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../window/webContentsRegistry.js")>()),
   getProjectForWebContents: vi.fn(() => shared.viewProjectId),
+  getAllAppWebContents: vi.fn(() => []),
 }));
 
 vi.mock("../../../services/VoiceTranscriptionService.js", () => ({

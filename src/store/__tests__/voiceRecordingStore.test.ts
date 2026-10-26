@@ -26,8 +26,36 @@ function reset() {
     micNotice: null,
     panelBuffers: {},
     announcement: null,
+    sessionElsewhere: null,
+    sessionElsewhereRevision: -1,
   });
 }
+
+describe("voiceRecordingStore — session elsewhere (#14601)", () => {
+  beforeEach(reset);
+
+  const elsewhere = { sessionId: "s1", projectId: "p-a", projectName: "Alpha" };
+
+  it("takes main's report of the live session", () => {
+    useVoiceRecordingStore.getState().applyLiveSessionUpdate({ revision: 1, session: elsewhere });
+    expect(useVoiceRecordingStore.getState().sessionElsewhere).toEqual(elsewhere);
+
+    useVoiceRecordingStore.getState().applyLiveSessionUpdate({ revision: 2, session: null });
+    expect(useVoiceRecordingStore.getState().sessionElsewhere).toBeNull();
+  });
+
+  it("keeps a newer push over an older snapshot that resolves after it", () => {
+    useVoiceRecordingStore.getState().applyLiveSessionUpdate({ revision: 3, session: null });
+    useVoiceRecordingStore.getState().applyLiveSessionUpdate({ revision: 2, session: elsewhere });
+
+    expect(useVoiceRecordingStore.getState().sessionElsewhere).toBeNull();
+  });
+
+  it("takes the first report whatever its revision", () => {
+    useVoiceRecordingStore.getState().applyLiveSessionUpdate({ revision: 0, session: elsewhere });
+    expect(useVoiceRecordingStore.getState().sessionElsewhere).toEqual(elsewhere);
+  });
+});
 
 describe("voiceRecordingStore — setArming", () => {
   beforeEach(reset);

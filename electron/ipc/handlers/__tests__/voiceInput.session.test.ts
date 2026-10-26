@@ -40,6 +40,11 @@ const shared = vi.hoisted(() => ({
   assembleKeyterms: null as null | (() => Promise<string[]>),
   /** Project registered per sender id, as the view registry would answer. */
   projects: new Map<number, string>(),
+  /** Every app view, as getAllAppWebContents would list them. */
+  appViews: [] as unknown[],
+  /** The window every view lives in, and the view it is showing. */
+  window: null as null | Record<string, unknown>,
+  shownView: null as unknown,
 }));
 
 vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
@@ -110,6 +115,9 @@ vi.mock("../../../window/webContentsRegistry.js", async (importOriginal) => {
   return {
     ...actual,
     getProjectForWebContents: vi.fn((id: number) => shared.projects.get(id) ?? null),
+    getAllAppWebContents: vi.fn(() => shared.appViews),
+    getWindowForWebContents: vi.fn(() => shared.window),
+    getAppWebContents: vi.fn(() => shared.shownView),
   };
 });
 
@@ -721,5 +729,163 @@ describe("voiceInput — session identity", () => {
     } finally {
       consoleError.mockRestore();
     }
+  });
+});
+
+describe("voiceInput — a session live in another view (#14601)", () => {
+  let cleanup: () => void;
+  let ownerA: FakeSender;
+  let viewB: FakeSender;
+  let viewC: FakeSender;
+  let win: {
+    isDestroyed: () => boolean;
+    isMinimized: ReturnType<typeof vi.fn>;
+    restore: ReturnType<typeof vi.fn>;
+    show: ReturnType<typeof vi.fn>;
+    focus: ReturnType<typeof vi.fn>;
+  };
+
+  const liveUpdates = (view: FakeSender) =>
+    view.sent.filter((m) => m.channel === CHANNELS.VOICE_INPUT_LIVE_SESSION).map((m) => m.payload);
+  const lastLive = (view: FakeSender) =>
+    liveUpdates(view).at(-1) as { revision: number; session: unknown } | undefined;
+  const sentOn = (view: FakeSender, channel: string) =>
+    view.sent.filter((m) => m.channel === channel).map((m) => m.payload);
+  const invoke = (channel: string, sender: FakeSender, ...args: unknown[]) =>
+    getHandler(channel)({ sender }, ...args);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    shared.calls = [];
+    shared.listeners.clear();
+    shared.providerSessionId = null;
+    shared.startResult = { ok: true };
+    shared.drain = null;
+    shared.assembleKeyterms = null;
+    shared.projects.clear();
+    ownerA = makeSender();
+    viewB = makeSender();
+    viewC = makeSender();
+    shared.appViews = [ownerA, viewB, viewC];
+    shared.projects.set(ownerA.id, "project-a");
+    vi.mocked(projectStore.getProjectById).mockImplementation((id: string) =>
+      id === "project-a"
+        ? ({ id, name: "Alpha", path: "/alpha" } as ReturnType<typeof projectStore.getProjectById>)
+        : null
+    );
+    win = {
+      isDestroyed: () => false,
+      isMinimized: vi.fn(() => false),
+      restore: vi.fn(),
+      show: vi.fn(),
+      focus: vi.fn(),
+    };
+    shared.window = win;
+    shared.shownView = ownerA;
+    cleanup = registerVoiceInputHandlers({
+      mainWindow: { webContents: { send: vi.fn() }, isDestroyed: () => false },
+    } as unknown as Parameters<typeof registerVoiceInputHandlers>[0]);
+  });
+
+  afterEach(() => {
+    cleanup?.();
+    shared.appViews = [];
+    shared.window = null;
+    shared.shownView = null;
+    vi.mocked(projectStore.getProjectById).mockReset();
+    vi.mocked(projectStore.getProjectById).mockReturnValue(null);
+  });
+
+  it("tells every other view where the live session runs, and its owner nothing", async () => {
+    await start(ownerA, "a");
+
+    const elsewhere = { sessionId: "a", projectId: "project-a", projectName: "Alpha" };
+    expect(lastLive(viewB)?.session).toEqual(elsewhere);
+    expect(lastLive(viewC)?.session).toEqual(elsewhere);
+    expect(lastLive(ownerA)?.session).toBeNull();
+  });
+
+  it("tells every view once the session is over, with a newer revision", async () => {
+    await start(ownerA, "a");
+    const during = lastLive(viewB)!;
+
+    await stop(ownerA, "a");
+
+    expect(lastLive(viewB)).toEqual({ revision: expect.any(Number), session: null });
+    expect(lastLive(viewB)!.revision).toBeGreaterThan(during.revision);
+    expect(lastLive(viewC)?.session).toBeNull();
+  });
+
+  it("tells every view when the owner's view goes away", async () => {
+    await start(ownerA, "a");
+    ownerA.destroy();
+
+    expect(lastLive(viewB)?.session).toBeNull();
+  });
+
+  it("gives a view that boots mid-session the same snapshot it would have been sent", async () => {
+    await start(ownerA, "a");
+
+    const pulled = await invoke(CHANNELS.VOICE_INPUT_GET_LIVE_SESSION, viewC);
+    expect(pulled).toEqual(lastLive(viewC));
+    expect(await invoke(CHANNELS.VOICE_INPUT_GET_LIVE_SESSION, ownerA)).toMatchObject({
+      session: null,
+    });
+  });
+
+  it("asks the owner to stop when another view's dictation key names its session", async () => {
+    await start(ownerA, "a");
+
+    expect(await invoke(CHANNELS.VOICE_INPUT_STOP_LIVE, viewB, "a")).toBe(true);
+
+    expect(sentOn(ownerA, CHANNELS.VOICE_INPUT_STOP_REQUESTED)).toEqual([{ sessionId: "a" }]);
+    // The owner runs the stop, so its drain keeps the text; main stops nothing itself.
+    expect(shared.calls).not.toContain("drain");
+    expect(shared.calls).not.toContain("hard-stop");
+  });
+
+  it("ignores a stop for a session that isn't the live one", async () => {
+    await start(ownerA, "a");
+
+    expect(await invoke(CHANNELS.VOICE_INPUT_STOP_LIVE, viewB, "old")).toBe(false);
+    await stop(ownerA, "a");
+    expect(await invoke(CHANNELS.VOICE_INPUT_STOP_LIVE, viewB, "a")).toBe(false);
+
+    expect(sentOn(ownerA, CHANNELS.VOICE_INPUT_STOP_REQUESTED)).toEqual([]);
+  });
+
+  it("brings the owner's window forward and asks the owner to show its panel", async () => {
+    win.isMinimized.mockReturnValue(true);
+    await start(ownerA, "a");
+
+    expect(await invoke(CHANNELS.VOICE_INPUT_REVEAL_LIVE, viewB, "a")).toBe(true);
+
+    expect(win.restore).toHaveBeenCalled();
+    expect(win.focus).toHaveBeenCalled();
+    expect(sentOn(ownerA, CHANNELS.VOICE_INPUT_REVEAL_REQUESTED)).toEqual([{ sessionId: "a" }]);
+    // Already on screen in its window: no project switch.
+    expect(ownerA.sent.some((m) => m.channel === CHANNELS.MENU_ACTION)).toBe(false);
+  });
+
+  it("switches the owner's window to its project when another one is on screen there", async () => {
+    shared.shownView = viewB;
+    await start(ownerA, "a");
+
+    await invoke(CHANNELS.VOICE_INPUT_REVEAL_LIVE, viewB, "a");
+
+    // The owner's own window switches, so its cached view comes forward rather
+    // than being released to open the project somewhere else.
+    expect(sentOn(viewB, CHANNELS.MENU_ACTION)).toEqual([
+      { actionId: "project.switch", args: { projectId: "project-a" } },
+    ]);
+    expect(sentOn(ownerA, CHANNELS.VOICE_INPUT_REVEAL_REQUESTED)).toEqual([{ sessionId: "a" }]);
+  });
+
+  it("reveals nothing for a session that isn't the live one", async () => {
+    await start(ownerA, "a");
+
+    expect(await invoke(CHANNELS.VOICE_INPUT_REVEAL_LIVE, viewB, "old")).toBe(false);
+    expect(win.focus).not.toHaveBeenCalled();
+    expect(sentOn(ownerA, CHANNELS.VOICE_INPUT_REVEAL_REQUESTED)).toEqual([]);
   });
 });
