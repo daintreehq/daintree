@@ -29,6 +29,18 @@ const switchArgsSchema = z
       .boolean()
       .optional()
       .describe("Open the host in a new window instead of switching this one."),
+    projectId: z
+      .string()
+      .min(1)
+      .max(256)
+      .optional()
+      .describe("Open this project, by the host's own id for it. Needs hostId."),
+    terminalId: z
+      .string()
+      .min(1)
+      .max(256)
+      .optional()
+      .describe("Focus this terminal once the project shows. Needs projectId."),
   })
   .optional();
 
@@ -115,17 +127,31 @@ export function registerHostActions(actions: ActionRegistry, callbacks: ActionCa
     selfNotifiesOnExecutionError: true,
     run: async (args: unknown) => {
       const parsed = switchArgsSchema.parse(args);
+      // Never dropped quietly: a caller naming a project or terminal means to land on it.
+      if (parsed?.projectId !== undefined && !parsed.hostId) {
+        throw new ClientAppError("VALIDATION", "projectId needs a hostId");
+      }
+      if (parsed?.terminalId !== undefined && parsed.projectId === undefined) {
+        throw new ClientAppError("VALIDATION", "terminalId needs a projectId");
+      }
       if (!parsed?.hostId) {
         // With only this machine there is nowhere to switch to; adding a host is the next step.
         if (anyRemoteHost()) usePaletteStore.getState().openPalette("host-switcher");
         else openHostsSettings(callbacks);
         return;
       }
-      const { hostId } = parsed;
+      const { hostId, projectId, terminalId } = parsed;
       const newWindow = parsed.newWindow ?? false;
+      const focusIntent =
+        terminalId === undefined ? undefined : { intent: "focus-panel" as const, panelId: terminalId };
       try {
         await assertKnownHost(hostId);
-        const result = await window.electron.remoteHosts.switchWindowHost({ hostId, newWindow });
+        const result = await window.electron.remoteHosts.switchWindowHost({
+          hostId,
+          newWindow,
+          ...(projectId === undefined ? {} : { projectId }),
+          ...(focusIntent === undefined ? {} : { focusIntent }),
+        });
         // With nothing to return to on that host, its project list opens for
         // the person at this screen to pick from.
         followSwitchResult(result);
@@ -133,7 +159,11 @@ export function registerHostActions(actions: ActionRegistry, callbacks: ActionCa
       } catch (error) {
         // Read the way every other way of switching reads it, then still
         // failed, so whoever dispatched the action hears that it didn't happen.
-        notifyHostSwitchFailure(hostId, error, () => void switchToHost(hostId, newWindow));
+        notifyHostSwitchFailure(
+          hostId,
+          error,
+          () => void switchToHost(hostId, newWindow, projectId, { focusIntent })
+        );
         throw error;
       }
     },

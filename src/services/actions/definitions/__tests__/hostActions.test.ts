@@ -219,6 +219,58 @@ describe("host.switch", () => {
     await expect(run(registry, "host.switch", { hostId: "nowhere" })).rejects.toThrow(/nowhere/);
     expect(switchWindowHost).not.toHaveBeenCalled();
   });
+
+  it("opens a named project on the host with its terminal focused once it shows", async () => {
+    const registry: ActionRegistry = new Map();
+    registerHostActions(registry, callbacks());
+    await run(registry, "host.switch", { hostId: "studio-01", projectId: "p1", terminalId: "t1" });
+    expect(switchWindowHost).toHaveBeenLastCalledWith({
+      hostId: "studio-01",
+      newWindow: false,
+      projectId: "p1",
+      focusIntent: { intent: "focus-panel", panelId: "t1" },
+    });
+    await run(registry, "host.switch", { hostId: "studio-01", projectId: "p1" });
+    expect(switchWindowHost).toHaveBeenLastCalledWith({
+      hostId: "studio-01",
+      newWindow: false,
+      projectId: "p1",
+    });
+  });
+
+  it("retries a failed switch into the same project and terminal", async () => {
+    remoteHosts.value = [host("studio-01")];
+    switchWindowHost.mockRejectedValueOnce(
+      new ClientAppError("HOST_DISCONNECTED", "gone", "Couldn't reach this host.")
+    );
+    notify.mockClear();
+    const registry: ActionRegistry = new Map();
+    registerHostActions(registry, callbacks());
+    const args = { hostId: "studio-01", projectId: "p1", terminalId: "t1" };
+    await expect(run(registry, "host.switch", args)).rejects.toThrow();
+
+    const toast = notify.mock.calls[0]![0] as { actions: Array<{ onClick: () => void }> };
+    toast.actions[0]!.onClick();
+    await vi.waitFor(() => expect(switchWindowHost).toHaveBeenCalledTimes(2));
+    expect(switchWindowHost).toHaveBeenLastCalledWith({
+      hostId: "studio-01",
+      newWindow: false,
+      projectId: "p1",
+      focusIntent: { intent: "focus-panel", panelId: "t1" },
+    });
+  });
+
+  it("refuses a terminal without its project, and a project without its host", async () => {
+    remoteHosts.value = [host("studio-01")];
+    const registry: ActionRegistry = new Map();
+    registerHostActions(registry, callbacks());
+    await expect(
+      run(registry, "host.switch", { hostId: "studio-01", terminalId: "t1" })
+    ).rejects.toThrow(/projectId/);
+    await expect(run(registry, "host.switch", { projectId: "p1" })).rejects.toThrow(/hostId/);
+    expect(switchWindowHost).not.toHaveBeenCalled();
+    expect(usePaletteStore.getState().activePaletteId).toBeNull();
+  });
 });
 
 describe("host.overview.open", () => {

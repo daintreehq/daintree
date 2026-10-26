@@ -3,10 +3,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostAttentionEvent, HostMetricsEvent } from "@shared/types/ipc/hostMetrics";
 import type { HostMetricsSummary } from "@shared/types/remoteHosts";
 import { _resetCoalesceMap, _resetRateLimitBuckets, _setQuietUntil } from "@/lib/notify";
-import { useNotificationStore } from "@/store/notificationStore";
+import {
+  useNotificationStore,
+  type Notification,
+  type NotificationAction,
+} from "@/store/notificationStore";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
 import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
 import { useHostMetricsStore } from "@/store/hostMetricsStore";
+import { actionService } from "@/services/ActionService";
 import {
   _resetHostMetricsFeedForTesting,
   presentHostAttention,
@@ -44,6 +49,10 @@ function summary(hostId: string, sampledAt: number): HostMetricsSummary {
     driver: null,
     agentClis: [],
   };
+}
+
+function toastActions(toast: Notification | undefined): NotificationAction[] {
+  return [...(toast?.actions ?? []), ...(toast?.action ? [toast.action] : [])];
 }
 
 let emit: ((event: HostMetricsEvent) => void) | null = null;
@@ -103,6 +112,34 @@ describe("presentHostAttention", () => {
     expect(toast?.message).toBe("Claude in helios is waiting for input");
     const entry = useNotificationHistoryStore.getState().entries[0];
     expect(entry?.context).toMatchObject({ eventKind: "waiting", hostName: "studio-01" });
+  });
+
+  it("offers to go to the agent's terminal on that host, from the toast and the inbox", () => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    const dispatch = vi.spyOn(actionService, "dispatch").mockResolvedValue({ ok: true } as never);
+    presentHostAttention(attention);
+    const goTo = { hostId: "studio-01", projectId: "p1", terminalId: "t1" };
+    const toast = useNotificationStore.getState().notifications[0];
+    const actions = toastActions(toast);
+    expect(actions.map((action) => action.label)).toEqual(["Go to terminal"]);
+    // Timed, not sticky: the inbox entry is where it waits.
+    expect(toast?.duration).toBeGreaterThan(0);
+    void actions[0]?.onClick();
+    expect(dispatch).toHaveBeenCalledWith("host.switch", goTo, { source: "user" });
+
+    const entry = useNotificationHistoryStore.getState().entries[0];
+    expect(entry?.actions).toEqual([
+      expect.objectContaining({ label: "Go to terminal", actionId: "host.switch", actionArgs: goTo }),
+    ]);
+  });
+
+  it("still notifies, with nowhere to go, when the host couldn't name the project", () => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    presentHostAttention({ ...attention, projectId: null });
+    const toast = useNotificationStore.getState().notifications[0];
+    expect(toast?.title).toBe("studio-01: agent waiting");
+    expect(toastActions(toast)).toEqual([]);
+    expect(useNotificationHistoryStore.getState().entries[0]?.actions ?? []).toEqual([]);
   });
 
   it("goes to the inbox only while the window is in the background", () => {
