@@ -1129,8 +1129,8 @@ class VoiceRecordingService {
       sessionId,
       {
         now: () => performance.now(),
-        log: (message, context) => logInfo(message, context),
-        warn: (message, context) => logWarn(message, context),
+        log: logInfo,
+        warn: logWarn,
         nextFrame: (callback) => {
           const frame = requestAnimationFrame(callback);
           return () => cancelAnimationFrame(frame);
