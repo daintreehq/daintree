@@ -91,12 +91,18 @@ export interface HostNotice {
   terminalId: string;
 }
 
+/** The window a banner's click opens its host in, and the view it is showing. */
+export interface NoticeWindow {
+  windowId: number;
+  viewId: number | null;
+}
+
 export interface InstallHostMetricsClientOptions {
   manager: HostMetricsClientOptions["manager"];
   registry: HostMetricsClientOptions["registry"];
   hostForView(webContentsId: number): HostId | null;
-  /** Open the notice's host in `windowId`, or a new window when null. */
-  openHostForNotice(windowId: number | null, notice: HostNotice): Promise<unknown>;
+  /** Open the notice's host in `window`, or a new window when null. */
+  openHostForNotice(window: NoticeWindow | null, notice: HostNotice): Promise<unknown>;
 }
 
 /** Start the Shell side: summary links to every known host, the rings, and the IPC service. */
@@ -105,11 +111,15 @@ export function installHostMetricsClient(options: InstallHostMetricsClientOption
   const open = (notice: HostNotice): void => {
     // A banner can outlive this Shell side, or the host it was about.
     if (!live || !options.registry.get(notice.hostId)) return;
-    const target =
+    const ctx =
       getWindowRegistry()
         ?.focusOrder()
-        .find((ctx) => !ctx.browserWindow.isDestroyed()) ?? null;
-    options.openHostForNotice(target?.windowId ?? null, notice).catch((error: unknown) => {
+        .find((candidate) => !candidate.browserWindow.isDestroyed()) ?? null;
+    const view = ctx?.services.projectViewManager?.getActiveView()?.webContents;
+    const target = ctx
+      ? { windowId: ctx.windowId, viewId: view && !view.isDestroyed() ? view.id : null }
+      : null;
+    options.openHostForNotice(target, notice).catch((error: unknown) => {
       // A failed switch says so on the window's own switch screen.
       logger.warn("Couldn't open a host from its notice", { error });
     });

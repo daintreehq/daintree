@@ -948,7 +948,13 @@ describe("notify() — thread re-promotion (#9008)", () => {
     seedThread([
       seedEntry({ type: "info", correlationId: "build", archivedAt: Date.now() - 5000 }),
     ]);
-    notify({ type: "info", correlationId: "build", message: "Paged", pagedNatively: true });
+    notify({
+      type: "info",
+      correlationId: "build",
+      message: "Paged",
+      context: { eventKind: "agent" },
+      pagedNatively: true,
+    });
     expect(useNotificationStore.getState().notifications).toHaveLength(0);
     const paged = useNotificationHistoryStore.getState().entries.find((e) => e.message === "Paged");
     expect(paged?.seenAsToast).toBe(false);

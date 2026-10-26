@@ -816,14 +816,18 @@ export class RemoteHostsClient {
    * with that agent's pane focused, or for a notice that named none, the
    * project this machine last had open there, else the host's project list.
    * The window comes forward first, so the switch's screen is in sight, and
-   * since a person clicked, a failure stays there with its Retry.
+   * since a person clicked, a failure stays there with its Retry. The view on
+   * screen there stands in for the one that asks on an in-app switch, so a
+   * rollback to it is reported once, on that screen.
    */
   async openHostForNotice(
-    windowId: number | null,
+    window: { windowId: number; viewId: number | null } | null,
     notice: { hostId: HostId; projectId: string | null; terminalId: string }
   ): Promise<SwitchWindowHostResult> {
     const { hostId, projectId, terminalId } = notice;
-    const target = windowId ?? (await this.options.windows.openWindow());
+    const target = window?.windowId ?? (await this.options.windows.openWindow());
+    // A click that found this window while it was opening is newer, and has it.
+    if (window === null && this.switchTickets.has(target)) return { outcome: "superseded", hostId };
     this.options.windows.revealWindow?.(target);
     const result = await this.switchWindow(
       target,
@@ -836,7 +840,10 @@ export class RemoteHostsClient {
             focusIntent: { intent: "focus-panel", panelId: terminalId },
           },
       undefined,
-      { failureOnScreen: true }
+      {
+        failureOnScreen: true,
+        ...(window?.viewId != null ? { requesterWebContentsId: window.viewId } : {}),
+      }
     );
     if (result.outcome === "choose-project") {
       this.holdProjectOffer(target, hostId);

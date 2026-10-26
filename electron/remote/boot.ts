@@ -284,7 +284,7 @@ function startClient(options: StartRemoteHostsOptions): void {
       manager: client.manager,
       registry: client.registry,
       hostForView: client.hostForView,
-      openHostForNotice: (windowId, notice) => client.client.openHostForNotice(windowId, notice),
+      openHostForNotice: (window, notice) => client.client.openHostForNotice(window, notice),
     })
   );
   // Canopy reading a host the view isn't bound to, This Mac included.

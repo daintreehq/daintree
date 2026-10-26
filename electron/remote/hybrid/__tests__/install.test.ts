@@ -286,15 +286,19 @@ describe("showHostAttentionBanner", () => {
     );
   });
 
-  it("replaces the banner for the same terminal and keeps another terminal's", () => {
+  it("replaces the banner for the same terminal and keeps another terminal's, or another host's", () => {
     showHostAttentionBanner(event, () => {});
     showHostAttentionBanner(event, () => {});
     showHostAttentionBanner({ ...event, terminalId: "t2" }, () => {});
+    showHostAttentionBanner({ ...event, hostId: "other" }, () => {});
     const keys = mocks.showNativeNotification.mock.calls.map(
       ([, , options]) => (options as { replaceKey?: string }).replaceKey
     );
+    expect(keys[0]).toBeDefined();
     expect(keys[0]).toBe(keys[1]);
     expect(keys[2]).not.toBe(keys[0]);
+    // Another host's terminal can share the id.
+    expect(keys[3]).not.toBe(keys[0]);
   });
 
   it("names an agent it couldn't identify, and a project it couldn't tell, by what it knows", () => {

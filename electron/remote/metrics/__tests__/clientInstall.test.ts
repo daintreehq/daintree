@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { HostAttentionEvent } from "../../../../shared/types/ipc/hostMetrics.js";
 
 const mocks = vi.hoisted(() => ({
@@ -35,7 +35,7 @@ vi.mock("../hostOps.js", () => ({
 }));
 
 import { CHANNELS } from "../../../ipc/channels.js";
-import { installHostMetricsClient } from "../clientInstall.js";
+import { installHostMetricsClient, type HostNotice, type NoticeWindow } from "../clientInstall.js";
 
 interface FakeWindow {
   windowId: number;
@@ -74,7 +74,7 @@ const EVENT: HostAttentionEvent = {
 
 let viewHosts: Map<number, string>;
 let hosts: Set<string>;
-let openHostForNotice: ReturnType<typeof vi.fn>;
+let openHostForNotice: Mock<(window: NoticeWindow | null, notice: HostNotice) => Promise<unknown>>;
 let dispose: () => void;
 
 function install(): void {
@@ -102,7 +102,9 @@ beforeEach(() => {
   mocks.focusOrder = [];
   viewHosts = new Map();
   hosts = new Set(["build-box"]);
-  openHostForNotice = vi.fn(async () => ({ outcome: "switched" }));
+  openHostForNotice = vi.fn(async (_window: NoticeWindow | null, _notice: HostNotice) => ({
+    outcome: "switched",
+  }));
   install();
 });
 
@@ -111,22 +113,28 @@ afterEach(() => dispose());
 describe("installHostMetricsClient attention delivery", () => {
   it("leaves a focused window's notice to its toast, with no banner", () => {
     const focused = fakeWindow(1, 11, true);
-    mocks.windows = [fakeWindow(2, 12), focused];
+    const back = fakeWindow(2, 12);
+    mocks.windows = [back, focused];
     expect(deliver()).toBe(true);
     expect(mocks.banner).not.toHaveBeenCalled();
+    expect(focused.view.send).toHaveBeenCalledTimes(1);
     expect(focused.view.send).toHaveBeenCalledWith(CHANNELS.HOST_METRICS_EVENT, EVENT);
+    expect(back.view.send).not.toHaveBeenCalled();
   });
 
   it("raises a banner with no window focused, and hands a view the notice for its inbox only", () => {
     const back = fakeWindow(1, 11);
-    mocks.windows = [back];
+    const other = fakeWindow(2, 12);
+    mocks.windows = [back, other];
     expect(deliver()).toBe(true);
     expect(mocks.banner).toHaveBeenCalledTimes(1);
     expect(mocks.banner).toHaveBeenCalledWith(EVENT, expect.any(Function));
+    expect(back.view.send).toHaveBeenCalledTimes(1);
     expect(back.view.send).toHaveBeenCalledWith(CHANNELS.HOST_METRICS_EVENT, {
       ...EVENT,
       pagedNatively: true,
     });
+    expect(other.view.send).not.toHaveBeenCalled();
   });
 
   it("still raises the banner with no window open to keep it in an inbox", () => {
@@ -160,25 +168,32 @@ describe("installHostMetricsClient attention delivery", () => {
   });
 
   it("delivers nothing once torn down", () => {
-    mocks.windows = [fakeWindow(1, 11)];
+    const back = fakeWindow(1, 11);
+    mocks.windows = [back];
     dispose();
     expect(deliver()).toBe(false);
     expect(mocks.banner).not.toHaveBeenCalled();
+    expect(back.view.send).not.toHaveBeenCalled();
   });
 });
 
 describe("installHostMetricsClient banner click", () => {
-  it("opens the notice's project on its host in the window last in use", () => {
-    const closed = fakeWindow(3, 13);
-    closed.browserWindow.isDestroyed = () => true;
-    mocks.focusOrder = [closed, fakeWindow(2, 12), fakeWindow(1, 11)];
+  it("opens the notice's project on its host in the window last in use when it's clicked", () => {
+    const first = fakeWindow(1, 11);
+    mocks.focusOrder = [first];
     deliver();
+    // Used since the banner went up, and the window it would have picked closed.
+    first.browserWindow.isDestroyed = () => true;
+    mocks.focusOrder = [first, fakeWindow(2, 12)];
     clickBanner();
-    expect(openHostForNotice).toHaveBeenCalledWith(2, {
-      hostId: "build-box",
-      projectId: "p1",
-      terminalId: "t1",
-    });
+    expect(openHostForNotice).toHaveBeenCalledWith(
+      { windowId: 2, viewId: 12 },
+      {
+        hostId: "build-box",
+        projectId: "p1",
+        terminalId: "t1",
+      }
+    );
   });
 
   it("switches to the host for a notice with no project id, in a new window when none is open", () => {
