@@ -31,7 +31,6 @@ import {
   usePerformanceModeStore,
   useScrollbackStore,
   useScreenReaderStore,
-  useTerminalInputStore,
   useTwoPaneSplitStore,
 } from "@/store";
 import type { ScreenReaderMode } from "@/store";
@@ -57,57 +56,6 @@ import {
 import { SCROLLBACK_DEFAULT } from "@shared/config/scrollback";
 import { computeDefaultCachedViews } from "@shared/config/cachedProjectViews";
 import type { HardwareInfo } from "@shared/types/ipc/system";
-import { isRemoteShellSupported } from "@/lib/remoteHosts";
-import {
-  refreshUploadPreferences,
-  setInterceptCtrlVImages,
-  shouldInterceptCtrlVImages,
-} from "@/components/Terminal/uploads/ctrlVImagePaste";
-
-/**
- * Ctrl+V in an agent terminal of a window attached to a remote host sends this
- * machine's clipboard image. Shown only once remote hosts are in use.
- */
-function RemoteClipboardImagesRow() {
-  const [inUse, setInUse] = useState(false);
-  const [enabled, setEnabled] = useState(shouldInterceptCtrlVImages);
-  useEffect(() => {
-    if (!isRemoteShellSupported()) return;
-    let cancelled = false;
-    const check = async () => {
-      if (!(await window.electron.remoteHosts.isInUse()) || cancelled) return;
-      await refreshUploadPreferences();
-      if (cancelled) return;
-      setEnabled(shouldInterceptCtrlVImages());
-      setInUse(true);
-    };
-    check().catch((error: unknown) =>
-      logWarn("[TerminalSettings] Remote hosts check failed", { error })
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-  if (!inUse) return null;
-  const update = (next: boolean) => {
-    setEnabled(next);
-    setInterceptCtrlVImages(next).catch((error: unknown) => {
-      setEnabled(!next);
-      logError("[TerminalSettings] Failed to save the Ctrl+V image setting", error);
-    });
-  };
-  return (
-    <SettingsSwitchCard
-      id="terminal-remote-clipboard-images"
-      title="Send my clipboard images to remote agents on Ctrl+V"
-      subtitle="In a window attached to another machine, an agent's Ctrl+V gets the image on this computer's clipboard instead of the host's. With no image on the clipboard, Ctrl+V goes to the agent unchanged."
-      isEnabled={enabled}
-      onChange={() => update(!enabled)}
-      isModified={!enabled}
-      onReset={() => update(true)}
-    />
-  );
-}
 
 const STRATEGIES: Array<{
   id: PanelLayoutStrategy;
@@ -165,7 +113,6 @@ const TYPICAL_TERMINAL_COUNTS: { agent: number; plain: number } = {
 
 const TERMINAL_SUBTABS: SettingsSubtabItem[] = [
   { id: "performance", label: "Performance" },
-  { id: "input", label: "Input" },
   { id: "layout", label: "Layout" },
   { id: "scrollback", label: "Scrollback" },
   { id: "accessibility", label: "Accessibility" },
@@ -173,8 +120,7 @@ const TERMINAL_SUBTABS: SettingsSubtabItem[] = [
 
 const TERMINAL_SUBTAB_IDS = TERMINAL_SUBTABS.map((s) => s.id);
 
-type SaveGroup =
-  "resources" | "project-views" | "input" | "grid-layout" | "scrollback" | "accessibility";
+type SaveGroup = "resources" | "project-views" | "grid-layout" | "scrollback" | "accessibility";
 
 interface SaveFailure {
   group: SaveGroup;
@@ -204,9 +150,6 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
   const performanceMode = usePerformanceModeStore((state) => state.performanceMode);
 
   const scrollbackLines = useScrollbackStore((state) => state.scrollbackLines);
-
-  const hybridInputEnabled = useTerminalInputStore((state) => state.hybridInputEnabled);
-  const hybridInputAutoFocus = useTerminalInputStore((state) => state.hybridInputAutoFocus);
 
   const screenReaderMode = useScreenReaderStore((state) => state.screenReaderMode);
   const resourceMonitoringEnabled = useResourceMonitoringStore((state) => state.enabled);
@@ -411,20 +354,6 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
       () => setAutoRestartThresholdMb(previous)
     );
   };
-
-  const setHybridInputEnabled = (enabled: boolean) =>
-    persist(
-      "input",
-      () => dispatchSetting("terminalConfig.setHybridInputEnabled", { enabled }),
-      "Failed to persist hybrid input setting"
-    );
-
-  const setHybridInputAutoFocus = (enabled: boolean) =>
-    persist(
-      "input",
-      () => dispatchSetting("terminalConfig.setHybridInputAutoFocus", { enabled }),
-      "Failed to persist hybrid input focus setting"
-    );
 
   const handleScreenReaderModeChange = (mode: ScreenReaderMode) =>
     persist(
@@ -674,39 +603,6 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                   void handleCachedProjectViewsChange(defaultCachedViews)
                 }
               />
-            </SettingsGroup>
-          </SettingsSection>
-        )}
-
-        {effectiveSubtab === "input" && (
-          <SettingsSection title="Agent input" badge={ownerMarker("device")}>
-            {saveError("input")}
-            <SettingsGroup>
-              <SettingsSwitchCard
-                id="terminal-hybrid-input"
-                title="Hybrid input bar"
-                subtitle="Show the multi-line input bar at the bottom of agent terminals"
-                isEnabled={hybridInputEnabled}
-                onChange={() => void setHybridInputEnabled(!hybridInputEnabled)}
-                isModified={!hybridInputEnabled}
-                onReset={() => void setHybridInputEnabled(true)}
-              />
-
-              <SettingsDependents
-                disabled={!hybridInputEnabled}
-                reason="Turn on the hybrid input bar to choose where focus starts"
-              >
-                <SettingsSwitchCard
-                  id="terminal-hybrid-autofocus"
-                  title="Focus the input bar first"
-                  subtitle="Agent panes start with the input bar focused instead of the terminal. Clicking either still wins, and Cmd-Opt-Arrow and dropped files follow whichever you're using."
-                  isEnabled={hybridInputAutoFocus}
-                  onChange={() => void setHybridInputAutoFocus(!hybridInputAutoFocus)}
-                  isModified={!hybridInputAutoFocus}
-                  onReset={() => void setHybridInputAutoFocus(true)}
-                />
-              </SettingsDependents>
-              <RemoteClipboardImagesRow />
             </SettingsGroup>
           </SettingsSection>
         )}

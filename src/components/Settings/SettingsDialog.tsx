@@ -136,8 +136,8 @@ export const MODIFIED_TRACKED_IDS = [
   "terminal-performance-mode",
   "terminal-scrollback",
   "terminal-grid-layout",
-  "terminal-hybrid-input",
-  "terminal-hybrid-autofocus",
+  "agents-hybrid-input",
+  "agents-hybrid-focus",
   "terminal-two-pane-split",
   "terminal-preview-layout",
   "terminal-default-ratio",
@@ -147,7 +147,7 @@ type TrackedSettingId = (typeof MODIFIED_TRACKED_IDS)[number];
 
 /**
  * What `@modified` can see, said wherever its results are: "tracks selected settings in
- * General, Panel grid and Appearance — not project settings". A bare "2 results" read as
+ * General, Panel grid, CLI agents and Appearance — not project settings". A bare "2 results" read as
  * an exhaustive audit when it is a sample.
  */
 export function modifiedCoverageNote(): string {
@@ -433,8 +433,8 @@ function SettingsDialogInner({
       "terminal-performance-mode": performanceMode,
       "terminal-scrollback": scrollbackLines !== SCROLLBACK_DEFAULT,
       "terminal-grid-layout": layoutConfig.strategy !== "automatic",
-      "terminal-hybrid-input": !hybridInputEnabled,
-      "terminal-hybrid-autofocus": !hybridInputAutoFocus,
+      "agents-hybrid-input": !hybridInputEnabled,
+      "agents-hybrid-focus": !hybridInputAutoFocus,
       "terminal-two-pane-split": !twoPaneSplitConfig.enabled,
       "terminal-preview-layout": twoPaneSplitConfig.preferPreview,
       "terminal-default-ratio": Math.round(twoPaneSplitConfig.defaultRatio * 100) !== 50,

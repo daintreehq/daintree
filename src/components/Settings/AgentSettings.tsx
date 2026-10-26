@@ -30,6 +30,7 @@ import { actionService } from "@/services/ActionService";
 import { AgentHelpOutput } from "./AgentHelpOutput";
 import { AgentInstallSection } from "@/components/agents/AgentCard";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { AgentInputSettings } from "./AgentInputSettings";
 import { AgentInventorySection } from "./AgentInventorySection";
 import { AgentQuotaSection } from "./AgentQuotaSection";
 import { isAgentLaunchable, isAgentReady } from "../../../shared/utils/agentAvailability";
@@ -552,6 +553,8 @@ export function AgentSettings({
           </SettingsGroup>
         </SettingsSection>
       )}
+
+      {isGeneralActive && <AgentInputSettings />}
 
       {!isGeneralActive && activeAgent && (
         <>

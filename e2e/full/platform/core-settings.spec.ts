@@ -183,7 +183,7 @@ const GLOBAL_TABS: Record<GlobalSettingsTab, TabExpectation> = {
       await expect(window.locator(SEL.settings.performanceModeToggle)).toBeVisible({
         timeout: T_SHORT,
       });
-      for (const subtab of ["Input", "Layout", "Scrollback", "Accessibility"]) {
+      for (const subtab of ["Layout", "Scrollback", "Accessibility"]) {
         await selectSubtab(window, "Terminal settings sections", subtab);
       }
     },
@@ -210,6 +210,10 @@ const GLOBAL_TABS: Record<GlobalSettingsTab, TabExpectation> = {
     content: async (window) => {
       await expect(window.locator(SEL.settings.agentDropdownTrigger)).toBeVisible({
         timeout: T_MEDIUM,
+      });
+      // Hybrid input and its focus choice live on CLI agents > General > Input.
+      await expect(window.locator("#agents-input #agents-hybrid-input")).toBeVisible({
+        timeout: T_SHORT,
       });
     },
   },
