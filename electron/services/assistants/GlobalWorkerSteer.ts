@@ -18,10 +18,7 @@ import {
   buildTerminalSendCommandReceipt,
   type TerminalSendCommandReceipt,
 } from "../../../shared/utils/terminalSendCommandResult.js";
-import {
-  ASSISTANT_SEND_GATE,
-  evaluateWakeGate,
-} from "../../../shared/utils/terminalWakeGate.js";
+import { ASSISTANT_SEND_GATE, evaluateWakeGate } from "../../../shared/utils/terminalWakeGate.js";
 import type { PtyClient } from "../PtyClient.js";
 import { AssistantTargetError } from "./AssistantTerminalControl.js";
 
@@ -171,7 +168,10 @@ export class GlobalWorkerSteer {
       let record = await this.requireWorker(target);
       let keys = request.keys ? [...request.keys] : undefined;
       if (request.choose !== undefined) {
-        const plan = planChoice((await this.readScreen(terminalId, CHOOSE_SCREEN_LINES)) ?? "", request.choose);
+        const plan = planChoice(
+          (await this.readScreen(terminalId, CHOOSE_SCREEN_LINES)) ?? "",
+          request.choose
+        );
         if (!plan.ok) refuse("VALIDATION_ERROR", `${plan.reason} Nothing was pressed.`);
         keys = plan.keys;
         record = await this.requireWorker(target);
@@ -192,12 +192,17 @@ export class GlobalWorkerSteer {
         if (index > 0) {
           await this.sleep(SEND_KEYS_GAP_MS);
           const now = await this.deps.getTerminal(terminalId).catch(() => null);
-          if (!now) stop(WORKER_STEER_REFUSALS.notFound, `Terminal '${terminalId}' can't be read right now.`);
+          if (!now)
+            stop(
+              WORKER_STEER_REFUSALS.notFound,
+              `Terminal '${terminalId}' can't be read right now.`
+            );
           record = now!;
         }
         const person = personAtTerminal(terminalId, record, ownStamp);
         if (person !== null) stop(WORKER_STEER_REFUSALS.typing, person);
-        if (!this.isSameRun(target)) stop(WORKER_STEER_REFUSALS.restarted, this.restartedWhy(target));
+        if (!this.isSameRun(target))
+          stop(WORKER_STEER_REFUSALS.restarted, this.restartedWhy(target));
         try {
           target.authorize();
         } catch (error) {
@@ -210,7 +215,11 @@ export class GlobalWorkerSteer {
         // it left is the one the next key compares against.
         if (index < keys.length - 1) {
           const after = await this.deps.getTerminal(terminalId).catch(() => null);
-          if (!after) stop(WORKER_STEER_REFUSALS.notFound, `Terminal '${terminalId}' can't be read right now.`);
+          if (!after)
+            stop(
+              WORKER_STEER_REFUSALS.notFound,
+              `Terminal '${terminalId}' can't be read right now.`
+            );
           ownStamp = after!.lastTypedInputAt;
         }
       }

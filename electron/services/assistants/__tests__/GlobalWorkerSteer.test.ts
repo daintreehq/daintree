@@ -188,7 +188,11 @@ describe("GlobalWorkerSteer (#14551)", () => {
 
   it("refuses all three while someone has typed since the agent settled", async () => {
     fake.record = atPrompt({ lastTypedInputAt: 1_500 });
-    const working = atPrompt({ agentState: "working", waitingReason: undefined, lastTypedInputAt: 1_500 });
+    const working = atPrompt({
+      agentState: "working",
+      waitingReason: undefined,
+      lastTypedInputAt: 1_500,
+    });
 
     const prompt = await refusal(
       steer.prompt(target(), { command: "go", handback: false, machineName: "m" })

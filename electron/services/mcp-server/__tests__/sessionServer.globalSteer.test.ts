@@ -7,10 +7,7 @@ vi.mock("electron", () => ({
 import { WORKER_STEER_REFUSALS } from "../../../../shared/types/assistantControl.js";
 import { createSessionServer, type SessionServerDeps } from "../sessionServer.js";
 import { RESOURCE_NOT_OWNED_CODE } from "../shared.js";
-import {
-  GlobalWorkerSteer,
-  type WorkerSteerRecord,
-} from "../../assistants/GlobalWorkerSteer.js";
+import { GlobalWorkerSteer, type WorkerSteerRecord } from "../../assistants/GlobalWorkerSteer.js";
 import { SessionStore } from "../sessionStore.js";
 import {
   callTool,
@@ -180,7 +177,9 @@ describe.each(LANES)("a global Assistant's relayed call ($lane) (#14551)", ({ sh
     // Nothing reached a view, and steering it handed over nothing.
     expect(deps.dispatchAction).not.toHaveBeenCalled();
     expect(store.resourceOwnership.creatorOf("terminal", WORKER)).toBeUndefined();
-    expect(store.terminalAdoption.get(store.resourceOwnership.ownerOf(SESSION), WORKER)).toBeUndefined();
+    expect(
+      store.terminalAdoption.get(store.resourceOwnership.ownerOf(SESSION), WORKER)
+    ).toBeUndefined();
   });
 
   it("refuses a plain shell, a restarted run and a terminal someone typed into", async () => {
