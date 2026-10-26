@@ -1309,6 +1309,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   private releaseHeldCompletions(force: boolean, settleHead = false): void {
     for (let itemId = this.commitOrder[0]; itemId !== undefined; itemId = this.commitOrder[0]) {
       let transcript = this.heldCompletions.get(itemId);
+      const settled = transcript === undefined;
       if (transcript === undefined) {
         if (!force && !settleHead) break;
         settleHead = false;
@@ -1323,7 +1324,19 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       }
       this.commitOrder.shift();
       this.heldCompletions.delete(itemId);
-      this.emitCompletion(transcript, itemId);
+      // Only a reported transcript of the last commit, with no later commit
+      // in flight and the VAD hearing silence it has seen speech end into,
+      // ends an utterance; a backstop or replayed commit can land mid-speech.
+      const endOfSpeech =
+        !settled &&
+        this.commitOrder.length === 0 &&
+        this.pendingCommits === 0 &&
+        this.replaySegments.length === 0 &&
+        this.vadWorker !== null &&
+        !this.vadDegraded &&
+        this.vadHasEndedSpeech &&
+        !this.isSpeaking;
+      this.emitCompletion(transcript, itemId, endOfSpeech);
     }
     const blockingItemId = this.heldCompletions.size > 0 ? (this.commitOrder[0] ?? null) : null;
     if (this.heldCompletionTimer && this.heldCompletionTimerItemId === blockingItemId) return;
@@ -1349,17 +1362,19 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     this.heldCompletionTimerItemId = null;
   }
 
-  private emitCompletion(transcript: string, itemId?: string): void {
+  private emitCompletion(transcript: string, itemId?: string, endOfSpeech = false): void {
     if (transcript) {
       logDebug(`${P} Emitting complete transcript to renderer`, {
         itemId,
         length: transcript.length,
+        endOfSpeech,
       });
       this.emit({
         type: "complete",
         text: transcript,
         confidence: { ...STUB_CONFIDENCE },
         ...(itemId ? { itemId } : {}),
+        ...(endOfSpeech ? { endOfSpeech: true } : {}),
       });
     } else if (itemId) {
       // An identified empty completion still reaches the renderer so it can

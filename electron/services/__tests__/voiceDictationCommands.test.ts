@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { applyDictationCommands } from "../voiceDictationCommands.js";
+import { applyDictationCommands, extractSendCommand } from "../voiceDictationCommands.js";
 
 describe("applyDictationCommands", () => {
   describe("break commands at end of utterance", () => {
@@ -83,5 +83,63 @@ describe("applyDictationCommands", () => {
   it("is idempotent", () => {
     const once = applyDictationCommands("hello new line");
     expect(applyDictationCommands(once)).toBe(once);
+  });
+});
+
+describe("extractSendCommand", () => {
+  it.each([
+    ["fix the login bug send it", "fix the login bug"],
+    ["Fix the login bug, send it.", "Fix the login bug"],
+    ["Fix the login bug. Send it!", "Fix the login bug"],
+    ["fix the login bug Send  It ", "fix the login bug"],
+    ["Send it.", ""],
+    ["send it", ""],
+    ["Tie the knot send it", "Tie the knot"],
+    ["Is it right or not? Send it.", "Is it right or not"],
+    ["Looks good, just send it.", "Looks good, just"],
+    ["Don't wait, just send it.", "Don't wait, just"],
+  ])("strips the trailing command from %j", (input, text) => {
+    expect(extractSendCommand(input)).toEqual({ text, send: true });
+  });
+
+  it.each([
+    "then send it to the API",
+    "send it to the API",
+    "resend it",
+    "we should send items later",
+    "",
+    "hello",
+    "Fix the bug but don't send it.",
+    "Fix the bug but don’t send it.",
+    "fix the bug but dont send it",
+    "Fix the bug but DON'T SEND IT",
+    "Fix the bug, but do not send it.",
+    "Not send it",
+    "We never send it.",
+    "It won't send it",
+    "It won’t send it",
+    "I can't send it",
+    "I can’t send it",
+    "I cannot send it",
+    "You shouldn't send it.",
+    "You shouldnt send it",
+    "I didn't send it.",
+    "I didn’t send it",
+    "It doesn't send it",
+    "It doesnt send it",
+    "I wouldn't send it.",
+    "We couldn't send it",
+    "This isn't send it",
+    "Remember not to send it.",
+    "Don't just send it.",
+    "Please don’t just send it",
+    "Do not yet send it",
+  ])("leaves %j literal", (input) => {
+    expect(extractSendCommand(input)).toEqual({ text: input, send: false });
+  });
+
+  it("leaves break commands before it for applyDictationCommands", () => {
+    const { text } = extractSendCommand("hello new line send it");
+    expect(applyDictationCommands(text)).toBe("hello\n");
   });
 });

@@ -6,6 +6,9 @@
  * ("period", "comma", ...) are deliberately not commands: both providers punctuate
  * on their own, and those words are ordinary in technical speech.
  *
+ * "send it" at the very end of an utterance asks for the prompt to be sent; it is
+ * stripped here and reported as a flag, since only the renderer can send.
+ *
  * Safety: commands only fire when they form a trailing chain at the end of the
  * utterance, optionally wrapped in the model's own punctuation. Mid-sentence uses
  * like "I'll add a new paragraph here" stay literal.
@@ -69,4 +72,31 @@ export function applyDictationCommands(text: string): string {
     .join("");
 
   return text.slice(0, match.index) + replaced;
+}
+
+const SEND_COMMAND_RE = /(?:^|[\s.,;:!?]+)\bsend\s+it[\s.,;:!?]*$/i;
+
+// "don't send it", "not to send it" and "don't just send it" talk about
+// sending rather than asking for it.
+const NEGATED_SEND_RE =
+  /(?:^|[^\p{L}\p{N}'’])(?:(?:do|does|did|is|wo|ca|would|could|should)n['’]?t|not|never|cannot)\s+(?:to\s+)?(?:(?:just|yet)\s+)?send\s+it[\s.,;:!?]*$/iu;
+
+export interface SendCommandResult {
+  text: string;
+  send: boolean;
+}
+
+/**
+ * Strip a trailing spoken "send it" from an utterance.
+ *
+ * Examples:
+ *   extractSendCommand("fix the login bug, send it.") → { text: "fix the login bug", send: true }
+ *   extractSendCommand("Send it")                      → { text: "", send: true }
+ *   extractSendCommand("then send it to the API")      → unchanged, send: false
+ *   extractSendCommand("but don't send it")            → unchanged, send: false
+ */
+export function extractSendCommand(text: string): SendCommandResult {
+  const match = SEND_COMMAND_RE.exec(text);
+  if (!match || NEGATED_SEND_RE.test(text)) return { text, send: false };
+  return { text: text.slice(0, match.index).trimEnd(), send: true };
 }

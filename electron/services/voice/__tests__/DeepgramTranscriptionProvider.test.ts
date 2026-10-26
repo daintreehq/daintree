@@ -260,6 +260,7 @@ describe("DeepgramTranscriptionProvider", () => {
     expect(url.searchParams.get("punctuate")).toBe("true");
     expect(url.searchParams.get("smart_format")).toBe("true");
     expect(url.searchParams.get("interim_results")).toBe("true");
+    expect(url.searchParams.get("vad_events")).toBe("true");
     provider.stop();
   });
 
@@ -589,6 +590,39 @@ describe("DeepgramTranscriptionProvider", () => {
     expect(ids[1]).toBe(ids[2]);
     expect(ids[3]).toBe(ids[4]);
     expect(ids[3]).not.toBe(ids[0]);
+    provider.stop();
+  });
+
+  it("marks only a speech_final span as ending speech", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    const completes: Array<{ text: string; endOfSpeech: boolean }> = [];
+    provider.onEvent((e) => {
+      if (e.type === "complete") completes.push({ text: e.text, endOfSpeech: !!e.endOfSpeech });
+    });
+
+    const { socket } = await bringSessionReady(provider);
+    socket.simulateMessage(resultsMessage("then send it", { is_final: true }));
+    socket.simulateMessage(resultsMessage("to the API.", { is_final: true, speech_final: true }));
+
+    expect(completes).toEqual([
+      { text: "then send it", endOfSpeech: false },
+      { text: "to the API.", endOfSpeech: true },
+    ]);
+    provider.stop();
+  });
+
+  it("reports speech starting, and nothing for other VAD signals", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    provider.onEvent((e) => {
+      if (e.type !== "status") events.push(e);
+    });
+
+    const { socket } = await bringSessionReady(provider);
+    socket.simulateMessage({ type: "SpeechStarted", channel: [0], timestamp: 1.2 });
+    socket.simulateMessage({ type: "UtteranceEnd", channel: [0, 1], last_word_end: 2.4 });
+
+    expect(events).toEqual([{ type: "speech_started" }]);
     provider.stop();
   });
 

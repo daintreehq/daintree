@@ -24,8 +24,19 @@ export type VoiceTranscriptionEvent =
   // `replace` marks a delta carrying the item's whole text so far rather than
   // an addition: Deepgram revises its interim hypothesis in place.
   | { type: "delta"; text: string; itemId?: string; replace?: boolean }
-  | { type: "complete"; text: string; confidence?: SegmentConfidence; itemId?: string }
+  // `endOfSpeech` marks a completion the speaker paused after, rather than one
+  // the provider cut mid-speech; only those may carry a spoken "send it".
+  | {
+      type: "complete";
+      text: string;
+      confidence?: SegmentConfidence;
+      itemId?: string;
+      endOfSpeech?: boolean;
+    }
   | { type: "paragraph_boundary" }
+  // The provider's own VAD heard speech begin, before any transcript of it.
+  // Main-only: it holds back a spoken send and never reaches the renderer.
+  | { type: "speech_started" }
   | { type: "error"; error: VoiceInputError }
   | { type: "status"; status: VoiceInputStatus };
 

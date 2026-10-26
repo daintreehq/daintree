@@ -12,6 +12,7 @@ import {
   voiceRecordingService,
   VOICE_CORRECTION_SEND_WAIT_MS,
 } from "@/services/VoiceRecordingService";
+import { isSpokenSendable } from "@/services/voiceSpokenSend";
 import type { ClaimSendHandBack, SendHandBack } from "./useSendHandBack";
 
 /** What a voice send is waiting on: the transcript draining, or its correction. */
@@ -32,6 +33,13 @@ interface UseVoiceWaitSubmitParams {
    * wait, not when the wait ends: a press during it calls the hand-back off.
    */
   claimSendHandBack?: ClaimSendHandBack;
+  /** A disabled composer ignores a spoken "send it" the way it ignores Enter. */
+  isDisabled?: () => boolean;
+}
+
+interface VoiceWaitSubmitOptions {
+  /** Sent by a spoken "send it": a draft too short to be a prompt stays unsent. */
+  spoken?: boolean;
 }
 
 export function isVoiceSessionActiveFor(panelId: string): boolean {
@@ -53,11 +61,14 @@ export function useVoiceWaitSubmit({
   editableCompartmentRef,
   sendFromEditor,
   claimSendHandBack,
+  isDisabled,
 }: UseVoiceWaitSubmitParams) {
   const sendFromEditorRef = useRef(sendFromEditor);
+  const isDisabledRef = useRef(isDisabled);
   useEffect(() => {
     sendFromEditorRef.current = sendFromEditor;
-  }, [sendFromEditor]);
+    isDisabledRef.current = isDisabled;
+  }, [sendFromEditor, isDisabled]);
   const claimSendHandBackRef = useRef(claimSendHandBack);
   useEffect(() => {
     claimSendHandBackRef.current = claimSendHandBack;
@@ -86,84 +97,104 @@ export function useVoiceWaitSubmit({
     };
   }, [terminalId]);
 
-  const startVoiceWaitSubmit = useCallback(() => {
-    const store = useTerminalInputStore.getState();
-    if (store.isVoiceSubmitting(terminalId)) return;
+  const startVoiceWaitSubmit = useCallback(
+    (options?: VoiceWaitSubmitOptions) => {
+      const store = useTerminalInputStore.getState();
+      if (store.isVoiceSubmitting(terminalId)) return;
 
-    const attempt = ++attemptRef.current;
-    activeAttemptRef.current = attempt;
-    const isCurrentAttempt = () =>
-      activeAttemptRef.current === attempt &&
-      useTerminalInputStore.getState().isVoiceSubmitting(terminalId);
+      const attempt = ++attemptRef.current;
+      activeAttemptRef.current = attempt;
+      const isCurrentAttempt = () =>
+        activeAttemptRef.current === attempt &&
+        useTerminalInputStore.getState().isVoiceSubmitting(terminalId);
 
-    // Before the lock below, so a press during the wait counts against it.
-    const handBack = claimSendHandBackRef.current?.();
-    store.setVoiceSubmitting(terminalId, true);
-    setVoiceSubmitPhase("finishing");
+      // Before the lock below, so a press during the wait counts against it.
+      const handBack = claimSendHandBackRef.current?.();
+      store.setVoiceSubmitting(terminalId, true);
+      setVoiceSubmitPhase("finishing");
 
-    const view = editorViewRef.current;
-    if (view) {
-      view.dispatch({
-        effects: editableCompartmentRef.current.reconfigure(EditorView.editable.of(false)),
-      });
-    }
+      const view = editorViewRef.current;
+      if (view) {
+        view.dispatch({
+          effects: editableCompartmentRef.current.reconfigure(EditorView.editable.of(false)),
+        });
+      }
 
-    void (async () => {
-      try {
-        if (isVoiceSessionActiveFor(terminalId)) {
-          await voiceRecordingService.stop("Submitting command.", {
-            preserveLiveText: true,
-            announce: false,
-          });
-        }
-
-        if (!isCurrentAttempt()) return;
-
-        // stop() has registered the passage's correction by now. The send
-        // waits briefly for it, then goes with whatever text is current; the
-        // send itself drops what is still on its way (#14611).
-        if (voiceRecordingService.hasPendingCorrection(terminalId)) {
-          setVoiceSubmitPhase("polishing");
-          await voiceRecordingService.waitForPendingCorrections(
-            terminalId,
-            VOICE_CORRECTION_SEND_WAIT_MS
-          );
-          if (!isCurrentAttempt()) return;
-        }
-
-        // `stop()` and a landed correction bump externalDraftRevision after
-        // writing the draft store, but HybridInputBar's sync useEffect doesn't
-        // fire until the next React render — which is AFTER this microtask.
-        // Sync the editor here so sendFromEditor reads the final dictated text
-        // and not the pre-stop doc (#9172).
-        const projectId = projectIdRef.current ?? useProjectStore.getState().currentProject?.id;
-        const draft = useTerminalInputStore.getState().getDraftInput(terminalId, projectId);
-        const finalView = editorViewRef.current;
-        if (finalView) {
-          // The same outside write the sync effect would make, correction
-          // included, so a send held back afterwards leaves it undoable.
-          const landed = takeLandedCorrection(terminalId, projectId, draft);
-          const change = minimalDocChange(finalView.state.doc.toString(), draft);
-          if (change !== null) finalView.dispatch(outsideDraftWrite(change, draft, landed));
-          else if (landed) replayLandedCorrection(finalView, landed);
-        }
-
-        sendFromEditorRef.current(handBack);
-      } finally {
-        if (activeAttemptRef.current === attempt) {
-          activeAttemptRef.current = null;
-          useTerminalInputStore.getState().setVoiceSubmitting(terminalId, false);
-          setVoiceSubmitPhase(null);
-          const v = editorViewRef.current;
-          if (v) {
-            v.dispatch({
-              effects: editableCompartmentRef.current.reconfigure(EditorView.editable.of(true)),
+      void (async () => {
+        try {
+          if (isVoiceSessionActiveFor(terminalId)) {
+            await voiceRecordingService.stop("Submitting command.", {
+              preserveLiveText: true,
+              announce: false,
             });
           }
+
+          if (!isCurrentAttempt()) return;
+
+          // stop() has registered the passage's correction by now. The send
+          // waits briefly for it, then goes with whatever text is current; the
+          // send itself drops what is still on its way (#14611).
+          if (voiceRecordingService.hasPendingCorrection(terminalId)) {
+            setVoiceSubmitPhase("polishing");
+            await voiceRecordingService.waitForPendingCorrections(
+              terminalId,
+              VOICE_CORRECTION_SEND_WAIT_MS
+            );
+            if (!isCurrentAttempt()) return;
+          }
+
+          // `stop()` and a landed correction bump externalDraftRevision after
+          // writing the draft store, but HybridInputBar's sync useEffect doesn't
+          // fire until the next React render — which is AFTER this microtask.
+          // Sync the editor here so sendFromEditor reads the final dictated text
+          // and not the pre-stop doc (#9172).
+          const projectId = projectIdRef.current ?? useProjectStore.getState().currentProject?.id;
+          const draft = useTerminalInputStore.getState().getDraftInput(terminalId, projectId);
+          const finalView = editorViewRef.current;
+          if (finalView) {
+            // The same outside write the sync effect would make, correction
+            // included, so a send held back afterwards leaves it undoable.
+            const landed = takeLandedCorrection(terminalId, projectId, draft);
+            const change = minimalDocChange(finalView.state.doc.toString(), draft);
+            if (change !== null) finalView.dispatch(outsideDraftWrite(change, draft, landed));
+            else if (landed) replayLandedCorrection(finalView, landed);
+          }
+
+          if (options?.spoken && !isSpokenSendable(draft)) return;
+          sendFromEditorRef.current(handBack);
+        } finally {
+          if (activeAttemptRef.current === attempt) {
+            activeAttemptRef.current = null;
+            useTerminalInputStore.getState().setVoiceSubmitting(terminalId, false);
+            setVoiceSubmitPhase(null);
+            const v = editorViewRef.current;
+            if (v) {
+              v.dispatch({
+                effects: editableCompartmentRef.current.reconfigure(EditorView.editable.of(true)),
+              });
+            }
+          }
         }
-      }
-    })();
-  }, [terminalId, editorViewRef, editableCompartmentRef]);
+      })();
+    },
+    [terminalId, editorViewRef, editableCompartmentRef]
+  );
+
+  useEffect(
+    () =>
+      voiceRecordingService.onSpokenSend(
+        terminalId,
+        projectId ?? useProjectStore.getState().currentProject?.id,
+        () => {
+          if (isDisabledRef.current?.()) {
+            void voiceRecordingService.stop();
+            return;
+          }
+          startVoiceWaitSubmit({ spoken: true });
+        }
+      ),
+    [terminalId, projectId, startVoiceWaitSubmit]
+  );
 
   // Escape cancels the send, not the correction: it still lands in the draft.
   const cancelVoiceWaitSubmit = useCallback(() => {

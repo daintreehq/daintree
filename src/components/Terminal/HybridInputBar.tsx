@@ -1053,6 +1053,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       editableCompartmentRef,
       sendFromEditor,
       claimSendHandBack,
+      isDisabled: () => disabledRef.current,
     });
     // The editor locks the moment a voice send starts; the status waits out
     // the loading gate, so a drain or correction that lands quickly shows none.

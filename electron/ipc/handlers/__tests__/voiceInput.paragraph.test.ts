@@ -28,6 +28,7 @@ type MockTranscriptionEvent = {
   text?: string;
   itemId?: string;
   replace?: boolean;
+  endOfSpeech?: boolean;
   status?: string;
   message?: string;
 };
@@ -78,6 +79,7 @@ vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
       return Promise.resolve();
     };
     this.sendAudioChunk = function () {};
+    this.stop = function () {};
     this.destroy = function () {};
     this.commitParagraphBoundary = function () {};
   },
@@ -159,6 +161,7 @@ vi.mock("../../channels.js", () => ({
     VOICE_INPUT_PARAGRAPH_BOUNDARY: "voice-input:paragraph-boundary",
     VOICE_INPUT_FILE_TOKEN_RESOLVED: "voice-input:file-token-resolved",
     VOICE_INPUT_SESSION_ENDED: "voice-input:session-ended",
+    VOICE_INPUT_STOP_REQUESTED: "voice-input:stop-requested",
   },
 }));
 
@@ -533,6 +536,120 @@ describe("voiceInput — spoken-command paragraphing", () => {
     expect(boundaries).toHaveLength(1);
   });
 
+  it("strips a trailing 'send it' that ends the utterance and flags the send", () => {
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "Fix the login bug, send it.",
+      itemId: "item-A",
+      endOfSpeech: true,
+    });
+
+    expect(dictated()).toEqual([
+      {
+        channel: "voice-input:transcription-complete",
+        payload: {
+          sessionId: currentSessionId,
+          text: "Fix the login bug",
+          willCorrect: false,
+          itemId: "item-A",
+          send: true,
+        },
+      },
+    ]);
+  });
+
+  it("flags the send on a trailing completion after a break command", () => {
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "hello new line send it",
+      itemId: "item-A",
+      endOfSpeech: true,
+    });
+
+    expect(dictated()).toEqual([
+      {
+        channel: "voice-input:transcription-complete",
+        payload: {
+          sessionId: currentSessionId,
+          text: "hello",
+          willCorrect: false,
+          itemId: "item-A",
+        },
+      },
+      {
+        channel: "voice-input:paragraph-boundary",
+        payload: { sessionId: currentSessionId, rawText: null, correctionId: null },
+      },
+      {
+        channel: "voice-input:transcription-complete",
+        payload: {
+          sessionId: currentSessionId,
+          text: "",
+          willCorrect: false,
+          itemId: "item-A",
+          send: true,
+        },
+      },
+    ]);
+  });
+
+  it("sends one empty flagged completion for a lone 'send it'", () => {
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "Send it.",
+      itemId: "item-A",
+      endOfSpeech: true,
+    });
+
+    expect(dictated()).toEqual([
+      {
+        channel: "voice-input:transcription-complete",
+        payload: {
+          sessionId: currentSessionId,
+          text: "",
+          willCorrect: false,
+          itemId: "item-A",
+          send: true,
+        },
+      },
+    ]);
+  });
+
+  it("keeps a trailing 'send it' literal on a completion cut mid-speech", () => {
+    emitTranscriptionEvent({ type: "complete", text: "then send it", itemId: "item-A" });
+
+    expect(dictated()).toEqual([
+      {
+        channel: "voice-input:transcription-complete",
+        payload: {
+          sessionId: currentSessionId,
+          text: "then send it",
+          willCorrect: false,
+          itemId: "item-A",
+        },
+      },
+    ]);
+  });
+
+  it("keeps a mid-sentence 'send it' literal", () => {
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "then send it to the API",
+      endOfSpeech: true,
+    });
+
+    expect(dictated()).toEqual([
+      {
+        channel: "voice-input:transcription-complete",
+        payload: {
+          sessionId: currentSessionId,
+          text: "then send it to the API",
+          willCorrect: false,
+        },
+      },
+    ]);
+  });
+
   it("leaves a trailing 'period' literal on the emitted text", () => {
     emitTranscriptionEvent({ type: "complete", text: "hello period" });
 
@@ -559,6 +676,291 @@ describe("voiceInput — spoken-command paragraphing", () => {
       willCorrect: false,
     });
     expect(boundaries).toHaveLength(0);
+  });
+});
+
+describe("voiceInput — spoken send on Deepgram's short endpoint", () => {
+  let win: ReturnType<typeof buildMainWindow>;
+  let cleanup: () => void;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    shared.transcriptionEventCallback = null;
+    shared.drainResolve = null;
+    shared.useDeferredDrain = false;
+
+    const { store } = await import("../../../store.js");
+    vi.mocked(store.get).mockReturnValue({
+      enabled: true,
+      openaiApiKey: "",
+      deepgramApiKey: "dg-test",
+      correctionEnabled: false,
+      correctionModel: "gpt-6-luna",
+      dictionary: [],
+      correctionCustomInstructions: "",
+      language: "en",
+      transcriptionProvider: "deepgram",
+      transcriptionModel: "gpt-live-transcribe",
+      paragraphingStrategy: "spoken-command",
+      resolveFileLinks: true,
+    });
+
+    win = buildMainWindow();
+    cleanup = registerVoiceInputHandlers({
+      mainWindow: win as unknown as Electron.BrowserWindow,
+    } as Parameters<typeof registerVoiceInputHandlers>[0]);
+
+    const handleStart = getHandler("voice-input:start");
+    await (handleStart as SessionHandler)(fakeEvent, nextSessionId());
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    cleanup?.();
+    vi.useRealTimers();
+  });
+
+  const toRenderer = () =>
+    win.__sent
+      .filter((m) => m.channel !== "voice-input:session-ended")
+      .map((m) => ({ channel: m.channel, payload: m.payload }));
+
+  const sentenceEndingInSend = () =>
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "Fix the login bug, send it.",
+      itemId: "item-A",
+      endOfSpeech: true,
+    });
+
+  const completion = (text: string, extra: Record<string, unknown> = {}) => ({
+    channel: "voice-input:transcription-complete",
+    payload: { sessionId: currentSessionId, text, willCorrect: false, itemId: "item-A", ...extra },
+  });
+
+  it("sends once the speaker has stayed quiet through the settle window", () => {
+    sentenceEndingInSend();
+    expect(toRenderer()).toEqual([]);
+
+    vi.advanceTimersByTime(699);
+    expect(toRenderer()).toEqual([]);
+
+    vi.advanceTimersByTime(1);
+    expect(toRenderer()).toEqual([completion("Fix the login bug", { send: true })]);
+  });
+
+  it("keeps 'send it' literal when the next words arrive inside the window", () => {
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "then send it",
+      itemId: "item-A",
+      endOfSpeech: true,
+    });
+    vi.advanceTimersByTime(300);
+    emitTranscriptionEvent({ type: "delta", text: "to the API", itemId: "item-B", replace: true });
+    vi.advanceTimersByTime(5000);
+
+    expect(toRenderer()).toEqual([
+      completion("then send it"),
+      {
+        channel: "voice-input:transcription-delta",
+        payload: {
+          sessionId: currentSessionId,
+          text: "to the API",
+          itemId: "item-B",
+          replace: true,
+        },
+      },
+    ]);
+  });
+
+  it("keeps 'send it' literal when another completion arrives inside the window", () => {
+    sentenceEndingInSend();
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "to the API.",
+      itemId: "item-B",
+      endOfSpeech: true,
+    });
+    vi.advanceTimersByTime(5000);
+
+    expect(toRenderer()).toEqual([
+      completion("Fix the login bug, send it."),
+      {
+        channel: "voice-input:transcription-complete",
+        payload: {
+          sessionId: currentSessionId,
+          text: "to the API.",
+          willCorrect: false,
+          itemId: "item-B",
+        },
+      },
+    ]);
+  });
+
+  it("waits for a transcript after speech starts, and sends when none comes", () => {
+    sentenceEndingInSend();
+    vi.advanceTimersByTime(400);
+    emitTranscriptionEvent({ type: "speech_started" });
+
+    vi.advanceTimersByTime(1499);
+    expect(toRenderer()).toEqual([]);
+
+    vi.advanceTimersByTime(1);
+    expect(toRenderer()).toEqual([completion("Fix the login bug", { send: true })]);
+  });
+
+  it("keeps 'send it' literal when speech starts and its words follow", () => {
+    sentenceEndingInSend();
+    vi.advanceTimersByTime(400);
+    emitTranscriptionEvent({ type: "speech_started" });
+    vi.advanceTimersByTime(1000);
+    emitTranscriptionEvent({ type: "delta", text: "to the API", itemId: "item-B", replace: true });
+    vi.advanceTimersByTime(5000);
+
+    const completes = toRenderer().filter(
+      (m) => m.channel === "voice-input:transcription-complete"
+    );
+    expect(completes).toEqual([completion("Fix the login bug, send it.")]);
+  });
+
+  it("strips the phrase and sends nothing when dictation stops inside the window", async () => {
+    sentenceEndingInSend();
+    vi.advanceTimersByTime(300);
+
+    const handleStop = getHandler("voice-input:stop");
+    await (handleStop as SessionHandler)(fakeEvent, currentSessionId);
+    vi.advanceTimersByTime(5000);
+
+    expect(toRenderer()).toEqual([completion("Fix the login bug")]);
+  });
+
+  it("strips a held send, and sends nothing, when another view's dictation key stops it", async () => {
+    sentenceEndingInSend();
+    vi.advanceTimersByTime(300);
+    const otherView = {
+      sender: {
+        id: 2,
+        once: vi.fn(),
+        removeListener: vi.fn(),
+        isDestroyed: () => false,
+        send: vi.fn(),
+      },
+    } as unknown as Electron.IpcMainInvokeEvent;
+    const stopRequested = {
+      channel: "voice-input:stop-requested",
+      payload: { sessionId: currentSessionId },
+    };
+
+    const handleStopLive = getHandler("voice-input:stop-live");
+    expect(await (handleStopLive as SessionHandler)(otherView, currentSessionId)).toBe(true);
+    // The request only asks the owner to stop; the held send is still pending.
+    expect(toRenderer()).toEqual([stopRequested]);
+
+    // The owner answers the request with its own stop.
+    const handleStop = getHandler("voice-input:stop");
+    await (handleStop as SessionHandler)(fakeEvent, currentSessionId);
+    vi.advanceTimersByTime(5000);
+
+    expect(toRenderer()).toEqual([stopRequested, completion("Fix the login bug")]);
+  });
+
+  it("retires a lone 'send it' with an empty completion when dictation stops", async () => {
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "Send it.",
+      itemId: "item-A",
+      endOfSpeech: true,
+    });
+
+    const handleStop = getHandler("voice-input:stop");
+    await (handleStop as SessionHandler)(fakeEvent, currentSessionId);
+
+    expect(toRenderer()).toEqual([completion("")]);
+  });
+
+  it("strips the phrase, ahead of the status, when the provider dies inside the window", () => {
+    sentenceEndingInSend();
+    emitTranscriptionEvent({ type: "status", status: "error" });
+    vi.advanceTimersByTime(5000);
+
+    expect(toRenderer()).toEqual([
+      completion("Fix the login bug"),
+      {
+        channel: "voice-input:status",
+        payload: { sessionId: currentSessionId, status: "error" },
+      },
+    ]);
+  });
+
+  it("keeps 'send it' literal, and sends nothing, when the socket drops inside the window", () => {
+    sentenceEndingInSend();
+    vi.advanceTimersByTime(300);
+    emitTranscriptionEvent({ type: "status", status: "reconnecting" });
+    vi.advanceTimersByTime(5000);
+
+    expect(toRenderer()).toEqual([
+      completion("Fix the login bug, send it."),
+      {
+        channel: "voice-input:status",
+        payload: { sessionId: currentSessionId, status: "reconnecting" },
+      },
+    ]);
+  });
+
+  it("drops a held send when a newer session supersedes it", async () => {
+    sentenceEndingInSend();
+    const handleStart = getHandler("voice-input:start");
+    await (handleStart as SessionHandler)(fakeEvent, nextSessionId());
+    vi.advanceTimersByTime(5000);
+
+    expect(win.__sent.filter((m) => m.channel === "voice-input:transcription-complete")).toEqual(
+      []
+    );
+  });
+
+  it("strips a held send, and sends nothing, when another view's start drains it", async () => {
+    sentenceEndingInSend();
+    const otherView = {
+      sender: {
+        id: 2,
+        once: vi.fn(),
+        removeListener: vi.fn(),
+        isDestroyed: () => false,
+        send: vi.fn(),
+      },
+    } as unknown as Electron.IpcMainInvokeEvent;
+    const heldSessionId = currentSessionId;
+    const handleStart = getHandler("voice-input:start");
+    await (handleStart as SessionHandler)(otherView, nextSessionId());
+    vi.advanceTimersByTime(5000);
+
+    expect(toRenderer()).toEqual([
+      {
+        channel: "voice-input:status",
+        payload: { sessionId: heldSessionId, status: "finishing" },
+      },
+      {
+        channel: "voice-input:transcription-complete",
+        payload: {
+          sessionId: heldSessionId,
+          text: "Fix the login bug",
+          willCorrect: false,
+          itemId: "item-A",
+        },
+      },
+    ]);
+  });
+
+  it("does not hold a send heard while dictation is already stopping", async () => {
+    shared.useDeferredDrain = true;
+    const handleStop = getHandler("voice-input:stop");
+    const stopping = (handleStop as SessionHandler)(fakeEvent, currentSessionId);
+    sentenceEndingInSend();
+
+    expect(toRenderer()).toEqual([completion("Fix the login bug", { send: true })]);
+    shared.drainResolve?.();
+    await stopping;
   });
 });
 
@@ -597,6 +999,15 @@ describe("voiceInput — manual paragraphing strategy", () => {
 
   afterEach(() => {
     cleanup?.();
+  });
+
+  it("leaves a trailing 'send it' literal and flags no send", () => {
+    emitTranscriptionEvent({ type: "complete", text: "fix it send it", endOfSpeech: true });
+
+    const completes = win.__sent.filter((m) => m.channel === "voice-input:transcription-complete");
+    expect(completes.map((m) => m.payload)).toEqual([
+      { sessionId: currentSessionId, text: "fix it send it", willCorrect: false },
+    ]);
   });
 
   it("leaves spoken commands literal and does not emit paragraph boundaries", () => {

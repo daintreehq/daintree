@@ -59,10 +59,14 @@ import {
 } from "@/services/voiceMicDevices";
 import { isScratchCommand, recordScratchLanded } from "@/services/voiceScratchCommand";
 import { applyDraftEdits, planFileReferenceEdits } from "@/services/voiceFileReferences";
+import { isSpokenSendable } from "@/services/voiceSpokenSend";
 
 const LOG_PREFIX = "[VoiceRecording]";
 const REPLACED_ELSEWHERE_ANNOUNCEMENT =
   "Dictation stopped because it started in another window or project.";
+
+const spokenSendKey = (panelId: string, projectId: string | undefined) =>
+  `${projectId ?? ""}\0${panelId}`;
 
 type StartStepLogger = (step: string, details?: Record<string, unknown>) => void;
 
@@ -328,6 +332,10 @@ class VoiceRecordingService {
   private baselineOwners = new Map<string, PendingCorrection>();
   private unfollowBaselines: (() => void) | null = null;
   private writingShiftedDraft = false;
+  // The composer showing each panel's draft, which owns its send, keyed by
+  // panel and draft scope: an isolated composer on the same terminal keeps a
+  // draft of its own and must not take the pane's send.
+  private spokenSendHandlers = new Map<string, () => void>();
 
   initialize(): void {
     if (this.initialized) return;
@@ -389,7 +397,7 @@ class VoiceRecordingService {
     );
 
     this.unsubscribers.push(
-      voiceInput.onTranscriptionComplete(({ text, itemId, transcriptId }) => {
+      voiceInput.onTranscriptionComplete(({ text, itemId, transcriptId, send }) => {
         logDebug(`${LOG_PREFIX} Received transcription complete`, { itemId, length: text.length });
         const voiceState = useVoiceRecordingStore.getState();
         const panelId = voiceState.activeTarget?.panelId;
@@ -398,6 +406,8 @@ class VoiceRecordingService {
           const buffer = voiceState.panelBuffers[panelId];
           const segmentStart = itemId ? -1 : (buffer?.draftLengthAtSegmentStart ?? -1);
           const finalText = text.trim();
+          // "Scratch that, send it" only scratches: the draft it leaves is one
+          // the user hasn't seen, and a spoken send fires with no key press.
           if (finalText && isScratchCommand(finalText)) {
             this.scratchLastUtterance(panelId, projectId, buffer?.dictationSessionId);
             useVoiceRecordingStore.getState().completeSegment("", itemId, { discard: true });
@@ -431,6 +441,9 @@ class VoiceRecordingService {
           }
         }
         useVoiceRecordingStore.getState().completeSegment(text, itemId);
+        // After completeSegment, so the command's own preview is already retired
+        // and a stop that preserves live text can't put it back.
+        if (send && panelId) this.handleSpokenSend(panelId, projectId);
       })
     );
 
@@ -2984,6 +2997,35 @@ class VoiceRecordingService {
     }
   }
 
+  /**
+   * Registers the composer that sends `panelId`'s prompt when the user says
+   * "send it". The handler runs Enter's dictation path: stop, wait for the
+   * correction, send.
+   */
+  onSpokenSend(panelId: string, projectId: string | undefined, handler: () => void): () => void {
+    const key = spokenSendKey(panelId, projectId);
+    this.spokenSendHandlers.set(key, handler);
+    return () => {
+      if (this.spokenSendHandlers.get(key) === handler) {
+        this.spokenSendHandlers.delete(key);
+      }
+    };
+  }
+
+  // A send heard while dictation is already stopping (Escape, the hotkey, a
+  // retarget, Enter) must not start a second stop or a send nobody asked for.
+  private handleSpokenSend(panelId: string, projectId: string | undefined): void {
+    const voiceState = useVoiceRecordingStore.getState();
+    if (voiceState.status !== "recording" || voiceState.activeTarget?.panelId !== panelId) return;
+    const draft = useTerminalInputStore.getState().getDraftInput(panelId, projectId);
+    const handler = this.spokenSendHandlers.get(spokenSendKey(panelId, projectId));
+    if (handler && isSpokenSendable(draft)) {
+      handler();
+      return;
+    }
+    void this.stop();
+  }
+
   destroy(): void {
     this.invalidatePendingStart();
     // Vite HMR disposes and re-evaluates this module; the old singleton's
@@ -3001,6 +3043,7 @@ class VoiceRecordingService {
     for (const panelId of correctedPanels) this.syncCorrectionRange(panelId);
     this.baselineOwners.clear();
     this.unfollowLearningBaselines();
+    this.spokenSendHandlers.clear();
     for (const unsub of this.unsubscribers) {
       unsub();
     }

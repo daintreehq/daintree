@@ -3019,6 +3019,77 @@ describe("OpenAITranscriptionProvider — item identity and ordering (#13109)", 
     ]);
   });
 
+  function endsOfSpeech(events: VoiceTranscriptionEvent[]) {
+    return events.flatMap((e) => (e.type === "complete" ? [e.endOfSpeech === true] : []));
+  }
+
+  it("marks the last commit's completion as ending speech once the VAD hears silence", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+
+    const { socket } = await bringSessionReady(service);
+    vadCommitSegment(service, latestVadWorker());
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+    socket.simulateMessage("conversation.item.done", done("item-A", "fix it, send it"));
+
+    expect(endsOfSpeech(events)).toEqual([true]);
+    service.stop();
+  });
+
+  it("does not mark a completion released while the speaker is still talking", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+
+    const { socket } = await bringSessionReady(service);
+    const worker = latestVadWorker();
+    vadCommitSegment(service, worker);
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+    worker.emitSpeechStart();
+    socket.simulateMessage("conversation.item.done", done("item-A", "then send it"));
+
+    expect(endsOfSpeech(events)).toEqual([false]);
+    service.stop();
+  });
+
+  it("does not mark a completion while a later commit is still unacknowledged", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+
+    const { socket } = await bringSessionReady(service);
+    const worker = latestVadWorker();
+    vadCommitSegment(service, worker);
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+    // Speech goes on past A, then ends: B is sent but not yet acknowledged.
+    vadCommitSegment(service, worker);
+    socket.simulateMessage("conversation.item.done", done("item-A", "then send it"));
+
+    expect(endsOfSpeech(events)).toEqual([false]);
+    service.stop();
+  });
+
+  it("marks only the last of several released completions as ending speech", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+
+    const { socket } = await bringSessionReady(service);
+    vadCommitSegment(service, latestVadWorker());
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+    socket.simulateMessage("input_audio_buffer.committed", {
+      item_id: "item-B",
+      previous_item_id: "item-A",
+    });
+    socket.simulateMessage("conversation.item.done", done("item-A", "then send it"));
+    expect(endsOfSpeech(events)).toEqual([false]);
+
+    socket.simulateMessage("conversation.item.done", done("item-B", "to the API"));
+    expect(endsOfSpeech(events)).toEqual([false, true]);
+    service.stop();
+  });
+
   it("emits a completion for an unacknowledged item without waiting", async () => {
     const service = new OpenAITranscriptionProvider();
     const events: VoiceTranscriptionEvent[] = [];
