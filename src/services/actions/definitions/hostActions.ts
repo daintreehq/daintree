@@ -146,7 +146,9 @@ export function registerHostActions(actions: ActionRegistry, callbacks: ActionCa
       const { hostId, projectId, terminalId } = parsed;
       const newWindow = parsed.newWindow ?? false;
       const focusIntent =
-        terminalId === undefined ? undefined : { intent: "focus-panel" as const, panelId: terminalId };
+        terminalId === undefined
+          ? undefined
+          : { intent: "focus-panel" as const, panelId: terminalId };
       try {
         await assertKnownHost(hostId);
         const result = await window.electron.remoteHosts.switchWindowHost({

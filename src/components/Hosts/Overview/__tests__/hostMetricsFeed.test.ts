@@ -129,7 +129,11 @@ describe("presentHostAttention", () => {
 
     const entry = useNotificationHistoryStore.getState().entries[0];
     expect(entry?.actions).toEqual([
-      expect.objectContaining({ label: "Go to terminal", actionId: "host.switch", actionArgs: goTo }),
+      expect.objectContaining({
+        label: "Go to terminal",
+        actionId: "host.switch",
+        actionArgs: goTo,
+      }),
     ]);
   });
 
