@@ -1551,6 +1551,9 @@ export interface IpcEventMap {
   "terminal:send-key": [id: string, key: string];
   "terminal:spawn-result": [id: string, result: SpawnResult];
   "terminal:resize-result": [id: string, result: TerminalResizeResult];
+  // The host's memory-leak policy picked this view to restart a terminal over
+  // its auto-restart threshold (#14703). Sent to one view of the project only.
+  "terminal:memory-leak-restart-requested": { terminalId: string; thresholdMb: number };
   "terminal:backend-crashed": {
     crashType: string;
     code: number | null;
@@ -2599,6 +2602,7 @@ export type IpcEventBusMap = Pick<
   | "terminal:spawn-result"
   // Terminal observability
   | "terminal:resize-result"
+  | "terminal:memory-leak-restart-requested"
   | "terminal:reliability-metric"
   | "terminal:status"
   | "terminal:submit-status"

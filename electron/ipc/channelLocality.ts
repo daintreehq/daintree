@@ -1303,6 +1303,7 @@ export const EVENT_LOCALITY: Readonly<Record<string, ChannelLocality>> = {
   "terminal:backend-recovering": "host",
   "terminal:exit": "host",
   "terminal:host-memory-pause": "host",
+  "terminal:memory-leak-restart-requested": "host",
   "terminal:park-released": "host",
   "terminal:reliability-metric": "host",
   "terminal:resize-result": "host",

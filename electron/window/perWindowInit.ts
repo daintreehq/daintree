@@ -393,6 +393,11 @@ export function ensureCriticalServices(windowRegistry: WindowRegistry | undefine
   // plugin's terminal-lifecycle feed (#13814) can attribute each terminal's
   // exit, trash and restore to the project it launched in.
   startTerminalLifecycleObserver(ptyClient);
+  // The host's memory-leak policy decides restarts itself, with or without a
+  // view on the project (#14703).
+  void import("../services/memoryLeakAutoRestartLive.js")
+    .then(({ startMemoryLeakAutoRestart }) => startMemoryLeakAutoRestart(ptyClient))
+    .catch((err: unknown) => console.warn("[MAIN] Memory-leak auto-restart failed to start:", err));
 
   // Keep the host's fallback-eligible project set current (#12557). The
   // registry spans every window, and `ptyClient` is a process-wide singleton,

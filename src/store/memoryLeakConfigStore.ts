@@ -1,4 +1,7 @@
 import { create } from "zustand";
+import { DEFAULT_AUTO_RESTART_THRESHOLD_MB } from "@shared/config/memoryLeakPolicy";
+
+export { DEFAULT_AUTO_RESTART_THRESHOLD_MB };
 
 interface MemoryLeakConfigStore {
   enabled: boolean;
@@ -6,8 +9,6 @@ interface MemoryLeakConfigStore {
   setEnabled: (enabled: boolean) => void;
   setAutoRestartThresholdMb: (thresholdMb: number) => void;
 }
-
-export const DEFAULT_AUTO_RESTART_THRESHOLD_MB = 8192;
 
 export const useMemoryLeakConfigStore = create<MemoryLeakConfigStore>((set) => ({
   enabled: false,

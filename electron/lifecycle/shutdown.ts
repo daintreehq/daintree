@@ -26,6 +26,7 @@ import { getDatabaseMaintenanceService } from "../services/DatabaseMaintenanceSe
 import { getPeriodicCleanupService } from "../services/PeriodicCleanupService.js";
 import { getIdleTerminalNotificationService } from "../services/IdleTerminalNotificationService.js";
 import { getSystemSleepService } from "../services/SystemSleepService.js";
+import { disposeMemoryLeakAutoRestart } from "../services/MemoryLeakAutoRestartService.js";
 import { getOsDndService } from "../services/OsDndService.js";
 import { isE2EMode } from "../setup/runtimeFlags.js";
 import { getServiceConnectivityRegistry } from "../services/connectivity/index.js";
@@ -866,6 +867,7 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
           } catch (err) {
             console.warn("[MAIN] disposeAgentAvailabilityStore failed:", err);
           }
+          disposeMemoryLeakAutoRestart();
           // The chain waits on the hosts' own exit: each one is still tree-killing
           // its terminals, trashed ones included, and is SIGKILLed only past its
           // dispose deadline (#13167).
