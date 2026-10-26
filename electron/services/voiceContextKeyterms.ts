@@ -207,6 +207,8 @@ const CAMEL_RE = /\b[a-z]+(?:[A-Z][a-z0-9]+)+\b|\b[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]
 
 export interface KeytermAssemblyOpts {
   customDictionary: string[];
+  /** The target project's vocabulary, oldest first. It takes the dictionary budget before the global list. */
+  projectDictionary?: string[];
   /** Name of the project that owns the target terminal. */
   projectName?: string;
   /**
@@ -364,7 +366,7 @@ async function withinBudget<T>(read: Promise<T>, fallback: T, readName: string):
 }
 
 export async function assembleKeyterms(opts: KeytermAssemblyOpts): Promise<string[]> {
-  const { customDictionary, projectName, terminalId, ptyClient } = opts;
+  const { customDictionary, projectDictionary = [], projectName, terminalId, ptyClient } = opts;
   const seen = new Set<string>();
   const result: string[] = [];
 
@@ -378,16 +380,19 @@ export async function assembleKeyterms(opts: KeytermAssemblyOpts): Promise<strin
     return true;
   }
 
-  // Priority 1: User custom dictionary. Newest first, because a term is usually
-  // added right after recognition failed on it. Capped below MAX_KEYTERMS so
-  // project and branch terms keep their reserved slots. These are the user's
-  // own entries, so they skip the secret filter the derived tiers go through.
+  // Priority 1: The project's vocabulary, then the user's own dictionary, each
+  // newest first, because a term is usually added right after recognition
+  // failed on it. Both share one budget, capped below MAX_KEYTERMS so project
+  // and branch terms keep their reserved slots. These are hand-entered, so
+  // they skip the secret filter the derived tiers go through.
   let dictionaryAdded = 0;
-  for (let i = customDictionary.length - 1; i >= 0; i--) {
-    if (dictionaryAdded >= MAX_DICTIONARY_KEYTERMS) break;
-    const trimmed = customDictionary[i]!.trim();
-    if (trimmed.length >= 2 && !/^\d+$/.test(trimmed) && add(trimmed)) {
-      dictionaryAdded++;
+  for (const list of [projectDictionary, customDictionary]) {
+    for (let i = list.length - 1; i >= 0; i--) {
+      if (dictionaryAdded >= MAX_DICTIONARY_KEYTERMS) break;
+      const trimmed = list[i]!.trim();
+      if (trimmed.length >= 2 && !/^\d+$/.test(trimmed) && add(trimmed)) {
+        dictionaryAdded++;
+      }
     }
   }
 
@@ -438,6 +443,7 @@ export async function assembleKeyterms(opts: KeytermAssemblyOpts): Promise<strin
 
   logDebug(`${P} Assembled ${result.length} keyterms`, {
     custom: customDictionary.length,
+    project: projectDictionary.length,
     total: result.length,
   });
 
