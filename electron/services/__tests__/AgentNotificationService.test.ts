@@ -2792,7 +2792,10 @@ describe("a remote Shell's own alert choices (#14701)", () => {
 
   it("silences waiting for a Shell that turned it off, while this host's windows still page", () => {
     mockStore({ waitingEnabled: true });
-    agentNotificationService.setShellPolicy("client-a", { ...SHELL_CHOICES, waitingEnabled: false });
+    agentNotificationService.setShellPolicy("client-a", {
+      ...SHELL_CHOICES,
+      waitingEnabled: false,
+    });
 
     waitingFor(REMOTE_OWNER);
     waitingFor(OWNER);

@@ -73,7 +73,10 @@ function fakeServer() {
       return () => listeners.delete(listener);
     },
     attach(session: LinkSession, clientId: string) {
-      const ctx = { session, client: { clientId, clientName: clientId, platform: "darwin" as const } };
+      const ctx = {
+        session,
+        client: { clientId, clientName: clientId, platform: "darwin" as const },
+      };
       sessions.push(ctx);
       for (const listener of listeners) listener(ctx);
     },

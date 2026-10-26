@@ -688,7 +688,11 @@ describe("ProjectSettingsManager caching", () => {
   });
 
   it("puts another machine's global choices under the project's own overrides (#14701)", async () => {
-    const shell = { completedEnabled: false, waitingEnabled: false, waitingEscalationDelayMs: 60_000 };
+    const shell = {
+      completedEnabled: false,
+      waitingEnabled: false,
+      waitingEscalationDelayMs: 60_000,
+    };
     expect(manager.getEffectiveNotificationSettings(null, shell)).toMatchObject(shell);
 
     await manager.saveProjectSettings(projectId, {
