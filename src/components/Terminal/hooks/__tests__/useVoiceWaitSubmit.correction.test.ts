@@ -61,6 +61,7 @@ vi.mock("@/services/KeybindingService", () => ({
 
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
+import { subscribeDictationRangeTracking } from "@/store/dictationRangeStore";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
 import { useVoiceWaitSubmit } from "../useVoiceWaitSubmit";
 
@@ -98,6 +99,9 @@ const PANEL_ID = "panel-1";
 describe("useVoiceWaitSubmit with a real correction pass (#14611)", () => {
   let view: EditorView;
   let sent: string[];
+  // The store orchestrator keeps dictation ranges on their text in the app;
+  // correction finds its passages through them.
+  let unsubscribeRanges: () => void;
 
   beforeEach(async () => {
     Object.assign(window, {
@@ -133,6 +137,7 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611)", () => {
     correct.mockReset();
     useTerminalInputStore.setState({ draftInputs: new Map(), voiceSubmittingPanels: new Set() });
     useVoiceRecordingStore.setState({ panelBuffers: {}, activeTarget: null, status: "idle" });
+    unsubscribeRanges = subscribeDictationRangeTracking();
     voiceRecordingService.initialize();
     await voiceRecordingService.refreshConfiguration();
     sent = [];
@@ -140,6 +145,7 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611)", () => {
 
   afterEach(() => {
     voiceRecordingService.destroy();
+    unsubscribeRanges();
     view?.destroy();
     vi.useRealTimers();
   });
