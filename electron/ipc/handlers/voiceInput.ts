@@ -512,12 +512,12 @@ function resolveKeytermTarget(
   viewProjectId: string | null,
   terminalId: string | undefined,
   ptyClient: PtyClient | undefined
-): { terminalId?: string; projectName?: string } {
+): { terminalId?: string; projectName?: string; projectPath?: string } {
   if (!terminalId || !ptyClient?.hasTerminal(terminalId)) return {};
   const ownerId = ptyClient.getTerminalProjectId(terminalId);
   if (ownerId && viewProjectId && ownerId !== viewProjectId) return {};
-  const projectName = ownerId ? projectStore.getProjectById(ownerId)?.name : undefined;
-  return { terminalId, projectName };
+  const project = ownerId ? projectStore.getProjectById(ownerId) : undefined;
+  return { terminalId, projectName: project?.name, projectPath: project?.path };
 }
 
 // References resolve in the worktree the dictated terminal is filed under,
