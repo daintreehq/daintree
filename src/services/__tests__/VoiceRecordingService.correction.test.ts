@@ -62,7 +62,13 @@ const callbacks: {
 } = { delta: null, complete: null, boundary: null };
 
 const correct =
-  vi.fn<(request: { rawText: string; recentContext?: string[] }) => Promise<CorrectResult>>();
+  vi.fn<
+    (request: {
+      rawText: string;
+      recentContext?: string[];
+      terminalId?: string;
+    }) => Promise<CorrectResult>
+  >();
 
 function stubElectron() {
   const electron = {

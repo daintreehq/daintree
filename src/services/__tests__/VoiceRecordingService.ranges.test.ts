@@ -75,7 +75,7 @@ const callbacks: {
   fileToken: ((payload: FileTokenPayload) => void) | null;
 } = { delta: null, complete: null, boundary: null, fileToken: null };
 
-type CorrectRequest = { rawText: string; recentContext?: string[] };
+type CorrectRequest = { rawText: string; recentContext?: string[]; terminalId?: string };
 
 const correct = {
   fn: vi.fn<(request: CorrectRequest) => Promise<unknown>>(),
