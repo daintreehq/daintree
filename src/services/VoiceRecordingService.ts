@@ -2465,9 +2465,11 @@ class VoiceRecordingService {
 
     this.syncCorrectionRange(panelId);
     inputStore.bumpExternalDraftRevision({ keepsSelection: true });
+    // A passage that couldn't land outranks one that did: the summary is
+    // there to show what went wrong.
     let outcome: VoiceCorrectionOutcome = "unchanged";
-    if (edits.length > 0) outcome = "applied";
-    else if (skipped > 0) outcome = "discarded";
+    if (skipped > 0) outcome = "discarded";
+    else if (edits.length > 0) outcome = "applied";
     else if (results.some((result) => result.failed)) outcome = "failed";
     correction.timeline?.endCorrection(outcome);
   }
