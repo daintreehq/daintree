@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../utils/logger.js", () => ({
@@ -355,6 +356,42 @@ describe("VoiceCorrectionService", () => {
         customDictionary: ["Daintree"],
       })
     ).not.toBe(base);
+  });
+
+  it("folds workspace names into prompt_cache_key, and keeps the old key without them", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(makeFetchResponse({ corrected_text: "Ok." }));
+    vi.stubGlobal("fetch", fetchMock);
+    const requestFor = async (overrides: Record<string, unknown>) => {
+      fetchMock.mockClear();
+      await new VoiceCorrectionService().correct(
+        { rawText: "run it on studio one" },
+        { ...BASE_SETTINGS, projectName: "daintree", customDictionary: ["Daintree"], ...overrides }
+      );
+      return JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string) as {
+        prompt_cache_key: string;
+        input: Array<{ content: string }>;
+      };
+    };
+
+    const without = await requestFor({});
+    const [prefix] = without.prompt_cache_key.split(":");
+    const namesFreeFingerprint = createHash("sha256")
+      .update(JSON.stringify([BASE_SETTINGS.model, "daintree", ["Daintree"]]))
+      .digest("hex")
+      .slice(0, 32);
+    expect(without.prompt_cache_key).toBe(`${prefix}:${namesFreeFingerprint}`);
+    expect((await requestFor({ knownNames: [] })).prompt_cache_key).toBe(without.prompt_cache_key);
+
+    const studio = await requestFor({ knownNames: ["Studio 1"] });
+    expect(studio.prompt_cache_key).not.toBe(without.prompt_cache_key);
+    expect(studio.prompt_cache_key.length).toBeLessThanOrEqual(64);
+    expect(studio.input[0].content).toContain('"Studio 1"');
+    expect((await requestFor({ knownNames: ["Studio 2"] })).prompt_cache_key).not.toBe(
+      studio.prompt_cache_key
+    );
+    expect((await requestFor({ knownNames: ["Studio 1"] })).prompt_cache_key).toBe(
+      studio.prompt_cache_key
+    );
   });
 
   it("formats explicit correction context in the user message", async () => {

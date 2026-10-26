@@ -29,14 +29,9 @@ import { voiceErrorLogFields } from "../../../shared/utils/voiceLogFields.js";
 import { applyDictationCommands } from "../../services/voiceDictationCommands.js";
 import { VOICE_DICTATION_AI_MODEL } from "../../../shared/config/voiceCorrection.js";
 import { normalizeVoiceLanguage } from "../../../shared/config/voiceLanguages.js";
-import { assembleKeyterms } from "../../services/voiceContextKeyterms.js";
+import { assembleKeyterms, screenDictationNames } from "../../services/voiceContextKeyterms.js";
 import { readProjectVoiceDictionary } from "../../services/projectVoiceDictionary.js";
-import {
-  flattenDictationNames,
-  gatherDictationNames,
-  NO_DICTATION_NAMES,
-  type DictationNames,
-} from "../../services/voiceContextNames.js";
+import { flattenDictationNames, gatherDictationNames } from "../../services/voiceContextNames.js";
 import {
   dictionaryTerms,
   sanitizeDictionary,
@@ -919,43 +914,38 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // setup below so leading speech isn't delayed waiting on git/terminal reads.
     // Both providers consume the result: Deepgram via repeated `keyterm=` params,
     // OpenAI via the transcription prompt. Each provider freezes the list for
-    // the session, so its reconnect path reuses it unchanged. Assembly is capped
-    // internally (~500ms) and failures are non-fatal — we just start without
-    // keyterms.
+    // the session, so its reconnect path reuses it unchanged. Assembly, the
+    // names read included, is capped internally (~500ms) and failures are
+    // non-fatal — we just start without keyterms.
     const projectDictionary = readVocabulary(
       resolveVocabularyProject(session.projectId, terminalId, deps.ptyClient)
     ).then(dictionaryTerms);
-    const namesPromise: Promise<DictationNames> = Promise.race([
-      gatherDictationNames({
-        projectId: session.projectId,
-        terminalId,
-        ptyClient: deps.ptyClient,
-        worktreeService: deps.worktreeService,
-      }),
-      new Promise<DictationNames>((resolve) => {
-        setTimeout(() => resolve(NO_DICTATION_NAMES), 400).unref();
-      }),
-    ]);
-    const keytermsPromise = namesPromise
-      .then((names) => {
-        lastSessionNames = {
-          webContentsId: session.webContentsId,
-          names: flattenDictationNames(names),
-        };
-        return assembleKeyterms({
-          customDictionary: dictionaryTerms(settings.dictionary),
-          projectDictionary,
-          ...resolveKeytermTarget(session.projectId, terminalId, deps.ptyClient),
-          ptyClient: deps.ptyClient,
-          names,
-        });
-      })
-      .catch((err: unknown): string[] => {
-        logDebug("[VoiceInput] Keyterm assembly failed, starting without keyterms", {
-          ...voiceErrorLogFields(err),
-        });
-        return [];
+    const names = gatherDictationNames({
+      projectId: session.projectId,
+      terminalId,
+      ptyClient: deps.ptyClient,
+      worktreeService: deps.worktreeService,
+    });
+    // The correction gets the same screened names as the keyterms, whenever
+    // they arrive. Its own record, so a slow read from an older session can't
+    // overwrite this one's.
+    const sessionNames = { webContentsId: session.webContentsId, names: [] as string[] };
+    lastSessionNames = sessionNames;
+    void names.then((gathered) => {
+      sessionNames.names = flattenDictationNames(screenDictationNames(gathered));
+    });
+    const keytermsPromise = assembleKeyterms({
+      customDictionary: dictionaryTerms(settings.dictionary),
+      projectDictionary,
+      ...resolveKeytermTarget(session.projectId, terminalId, deps.ptyClient),
+      ptyClient: deps.ptyClient,
+      names,
+    }).catch((err: unknown): string[] => {
+      logDebug("[VoiceInput] Keyterm assembly failed, starting without keyterms", {
+        ...voiceErrorLogFields(err),
       });
+      return [];
+    });
 
     const forwardEvent = (voiceEvent: VoiceSessionEvent) => {
       const target = session.sender;

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VoiceInputSettings } from "../../../../shared/types/ipc/api.js";
+import { MAX_KEYTERMS } from "../../../../shared/config/voiceKeyterms.js";
 
 // ── Mock the `ws` package ────────────────────────────────────────────────────
 //
@@ -331,12 +332,38 @@ describe("DeepgramTranscriptionProvider", () => {
     await Promise.resolve();
     const injected = new URL(latestInstance().url).searchParams.getAll("keyterm");
 
-    // Fewer than supplied, and a prefix of the priority-ordered input.
-    expect(injected.length).toBeLessThan(many.length);
-    expect(injected.length).toBeGreaterThan(0);
+    // Every term assembly gathers, and a prefix of the priority-ordered input.
+    expect(injected).toHaveLength(MAX_KEYTERMS);
     expect(injected).toEqual(many.slice(0, injected.length));
     provider.stop();
   });
+
+  // Assembly caps each term at 100 characters (Deepgram's per-term limit).
+  const MAX_TERM_LENGTH = 100;
+
+  it.each([
+    ["CJK", "漢"],
+    ["percent-encoded ASCII", "~"],
+  ])(
+    "keeps the worst-case URL under 8 KiB: every term at full length in %s",
+    async (_label, char) => {
+      const provider = new DeepgramTranscriptionProvider();
+      const worst = Array.from(
+        { length: MAX_KEYTERMS },
+        (_, i) => `${i}${char.repeat(MAX_TERM_LENGTH - String(i).length)}`
+      );
+      void provider.start({ ...BASE_SETTINGS, keyterms: worst }, "session-1");
+      await Promise.resolve();
+      const url = new URL(latestInstance().url);
+
+      expect(url.href.length).toBeLessThan(8192);
+      // The lowest-priority terms are the ones left off.
+      const injected = url.searchParams.getAll("keyterm");
+      expect(injected.length).toBeGreaterThan(0);
+      expect(injected).toEqual(worst.slice(0, injected.length));
+      provider.stop();
+    }
+  );
 
   it("drops empty/whitespace keyterms before injecting", async () => {
     const provider = new DeepgramTranscriptionProvider();

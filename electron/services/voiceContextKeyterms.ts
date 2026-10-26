@@ -233,8 +233,12 @@ export interface KeytermAssemblyOpts {
    */
   terminalId?: string;
   ptyClient?: PtyClient;
-  /** Host, project and worktree names, sent whole: they are spoken as Daintree spells them. */
-  names?: DictationNames;
+  /**
+   * Host, project and worktree names, sent whole: they are spoken as Daintree
+   * spells them. Read alongside the terminal's context under the same budget,
+   * so slow names fall back to none rather than delaying the start.
+   */
+  names?: DictationNames | Promise<DictationNames>;
 }
 
 function isValidTerm(term: string): boolean {
@@ -383,8 +387,42 @@ async function withinBudget<T>(read: Promise<T>, fallback: T, readName: string):
   }
 }
 
+/**
+ * The host, project and worktree names that may leave the machine: trimmed,
+ * deduplicated, screened for credentials and IDs, at most NAME_CATEGORY_CAP of
+ * each kind and MAX_NAME_KEYTERMS in all, each within the per-term length.
+ * The keyterms and the correction prompt both take this list, so neither sends
+ * a name the other wouldn't.
+ */
+export function screenDictationNames(names: DictationNames): DictationNames {
+  const seen = new Set<string>();
+  let total = 0;
+  const screen = (list: readonly unknown[] | undefined): string[] => {
+    const kept: string[] = [];
+    for (const raw of Array.isArray(list) ? list : []) {
+      if (kept.length >= NAME_CATEGORY_CAP || total >= MAX_NAME_KEYTERMS) break;
+      if (typeof raw !== "string") continue;
+      const name = raw.trim();
+      if (name.length < 2 || /^\d+$/.test(name)) continue;
+      if (holdsCredentialOrId(name) || isSecretShaped(name)) continue;
+      const capped = capTermLength(name, MAX_KEYTERM_LENGTH);
+      const key = capped.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      kept.push(capped);
+      total++;
+    }
+    return kept;
+  };
+  return {
+    hosts: screen(names.hosts),
+    projects: screen(names.projects),
+    worktrees: screen(names.worktrees),
+  };
+}
+
 export async function assembleKeyterms(opts: KeytermAssemblyOpts): Promise<string[]> {
-  const { customDictionary, projectName, projectPath, terminalId, ptyClient, names } = opts;
+  const { customDictionary, projectName, projectPath, terminalId, ptyClient } = opts;
   const seen = new Set<string>();
   const result: string[] = [];
 
@@ -401,7 +439,7 @@ export async function assembleKeyterms(opts: KeytermAssemblyOpts): Promise<strin
   // Gather dynamic context concurrently, each read guarded by its own timeout.
   // The reads fire at once so leading speech isn't delayed; results are merged
   // in priority order afterward.
-  const [projectDictionary, repoNames, branchName, lines] = await Promise.all([
+  const [projectDictionary, repoNames, gatheredNames, branchName, lines] = await Promise.all([
     withinBudget(Promise.resolve(opts.projectDictionary ?? []), [], "Project vocabulary read"),
     projectPath && isAbsolute(projectPath)
       ? withinBudget(
@@ -412,6 +450,7 @@ export async function assembleKeyterms(opts: KeytermAssemblyOpts): Promise<strin
           "Repository name derivation"
         )
       : [],
+    withinBudget(Promise.resolve(opts.names ?? null), null, "Names read"),
     ptyClient && terminalId
       ? withinBudget(getTerminalBranch(ptyClient, terminalId), null, "Branch name lookup")
       : null,
@@ -466,27 +505,12 @@ export async function assembleKeyterms(opts: KeytermAssemblyOpts): Promise<strin
 
   // Priority 4: Host, project and worktree names the user points at ("run this
   // on Studio 1"), kept whole, never tokenized. Only the Assistant gets hosts
-  // and projects; any other terminal, its project's worktrees. Ahead of the
-  // branch, whose token count is unbounded, so its slots stay reserved.
-  let namesAdded = 0;
-  const addNames = (list: readonly string[] | undefined): void => {
-    let added = 0;
-    for (const raw of list ?? []) {
-      if (added >= NAME_CATEGORY_CAP || namesAdded >= MAX_NAME_KEYTERMS) break;
-      if (typeof raw !== "string") continue;
-      const name = raw.trim();
-      if (name.length < 2 || /^\d+$/.test(name)) continue;
-      if (holdsCredentialOrId(name) || isSecretShaped(name)) continue;
-      if (add(name)) {
-        added++;
-        namesAdded++;
-      }
-    }
-  };
-  if (names) {
-    addNames(names.hosts);
-    addNames(names.projects);
-    addNames(names.worktrees);
+  // and projects; any other terminal, its project's worktrees. Screened and
+  // capped, and ahead of the branch, whose token count is unbounded, so their
+  // reserved slots can't be taken.
+  if (gatheredNames) {
+    const { hosts, projects, worktrees } = screenDictationNames(gatheredNames);
+    for (const name of [...hosts, ...projects, ...worktrees]) add(name);
   }
 
   // Priority 5: Branch name tokens

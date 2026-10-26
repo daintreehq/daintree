@@ -204,6 +204,23 @@ describe("buildCorrectionSystemPrompt", () => {
     expect(prompt).not.toContain("correct phonetic matches to these exact forms");
   });
 
+  it("lists workspace names after the preferred terms, spelled as given", () => {
+    const prompt = buildCorrectionSystemPrompt({
+      customDictionary: ["Daintree"],
+      knownNames: ["Studio 1", "Plugin SDK", "billing"],
+    });
+    const names = prompt.indexOf("NAMES IN THIS WORKSPACE");
+    expect(names).toBeGreaterThan(prompt.indexOf("PREFERRED TERMS (prefer these exact forms"));
+    expect(prompt.slice(names)).toContain('"Studio 1" | "Plugin SDK" | "billing"');
+  });
+
+  it("omits the workspace names section when there are none", () => {
+    expect(buildCorrectionSystemPrompt({ knownNames: [] })).not.toContain(
+      "NAMES IN THIS WORKSPACE"
+    );
+    expect(buildCorrectionSystemPrompt({})).toBe(buildCorrectionSystemPrompt({ knownNames: [] }));
+  });
+
   it("omits project section when no project context provided", () => {
     const prompt = buildCorrectionSystemPrompt({});
     expect(prompt).not.toContain("CURRENT PROJECT");

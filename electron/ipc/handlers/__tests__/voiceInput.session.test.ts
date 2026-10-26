@@ -98,7 +98,9 @@ vi.mock("../../../services/ProjectStore.js", () => ({
   },
 }));
 
-vi.mock("../../../services/voiceContextKeyterms.js", () => ({
+// The real module's pure helpers (the names screen) stay; only assembly is faked.
+vi.mock("../../../services/voiceContextKeyterms.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../services/voiceContextKeyterms.js")>()),
   assembleKeyterms: vi.fn(() =>
     shared.assembleKeyterms ? shared.assembleKeyterms() : Promise.resolve([])
   ),

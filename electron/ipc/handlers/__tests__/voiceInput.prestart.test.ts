@@ -56,6 +56,10 @@ const shared = vi.hoisted(() => ({
   vocabularies: {} as Record<string, string[]>,
   /** What the correction service was last asked to prefer. */
   correctionDictionary: null as string[] | null,
+  /** When set, the names a start gathers, in place of reading them. */
+  names: null as null | Promise<{ hosts: string[]; projects: string[]; worktrees: string[] }>,
+  /** The names the correction service was last handed. */
+  correctionNames: null as string[] | null | undefined,
 }));
 
 vi.mock("../../../window/webContentsRegistry.js", async (importOriginal) => ({
@@ -110,9 +114,10 @@ vi.mock("../../../services/VoiceCorrectionService.js", () => ({
     };
     this.correct = async function (
       request: { rawText: string },
-      settings: { customDictionary: string[] }
+      settings: { customDictionary: string[]; knownNames?: string[] }
     ) {
       shared.correctionDictionary = settings.customDictionary;
+      shared.correctionNames = settings.knownNames;
       return { action: "no_change", confirmedText: request.rawText };
     };
   },
@@ -134,7 +139,20 @@ vi.mock("../../../services/projectVoiceDictionary.js", () => ({
   }),
 }));
 
-vi.mock("../../../services/voiceContextKeyterms.js", () => ({
+vi.mock("../../../services/voiceContextNames.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../services/voiceContextNames.js")>();
+  return {
+    ...actual,
+    gatherDictationNames: vi.fn(
+      (opts: Parameters<typeof actual.gatherDictationNames>[0]) =>
+        shared.names ?? actual.gatherDictationNames(opts)
+    ),
+  };
+});
+
+// The real module's pure helpers (the names screen) stay; only assembly is faked.
+vi.mock("../../../services/voiceContextKeyterms.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../services/voiceContextKeyterms.js")>()),
   assembleKeyterms: vi.fn(() =>
     shared.assembleKeyterms ? shared.assembleKeyterms() : Promise.resolve([])
   ),
@@ -707,6 +725,8 @@ describe("voiceInput — keyterm target", () => {
     shared.voiceInput = {};
     shared.vocabularies = { "proj-a": ["PtyClient"], "proj-b": ["BravoTerm"] };
     shared.correctionDictionary = null;
+    shared.names = null;
+    shared.correctionNames = null;
     sender.destroyed = false;
     fakeEvent.sender = makeSender();
     const win = { webContents: { send: vi.fn() }, isDestroyed: vi.fn(() => false) };
@@ -811,6 +831,45 @@ describe("voiceInput — keyterm target", () => {
     shared.viewProjectId = "proj-b";
     await getHandler("voice-input:correct")(fakeEvent, { rawText: "fix it", terminalId: "t-1" });
     expect(shared.correctionDictionary).toEqual(["Global", "ptyclient"]);
+  });
+
+  it("hands names to assembly unread, so they share its budget instead of delaying it", async () => {
+    // Deepgram waits for the keyterms before connecting; names that never
+    // arrive still don't hold that up, or delay assembly starting.
+    shared.transcriptionProvider = "deepgram";
+    shared.names = new Promise(() => {});
+    await expect(startWith({ terminalId: "t-1" })).resolves.toEqual({ ok: true });
+    expect(assembleKeyterms).toHaveBeenCalledTimes(1);
+    expect(assemblyOpts()?.names).toBeInstanceOf(Promise);
+    expect(shared.calls).toContain("start");
+  });
+
+  it("corrects with the screened names alone: no secret, nothing past the cap", async () => {
+    const hosts = ["Studio 1", "Studio 2", "Studio 3", "Studio 4", "Studio 5"];
+    const projects = ["Alpha", "Bravo", "Charlie", "Delta", "Echo"];
+    const secret = `ghp_${"a1B2".repeat(9)}`;
+    shared.names = Promise.resolve({
+      hosts,
+      projects,
+      worktrees: [secret, "billing", "payments", "thirteenth"],
+    });
+    shared.voiceInput = { correctionEnabled: true };
+    await expect(startWith({ terminalId: "t-1" })).resolves.toEqual({ ok: true });
+    await getHandler("voice-input:correct")(fakeEvent, { rawText: "fix it", terminalId: "t-1" });
+
+    expect(shared.correctionNames).toEqual([...hosts, ...projects, "billing", "payments"]);
+    expect(shared.correctionNames).not.toContain(secret);
+    expect(shared.correctionNames).not.toContain("thirteenth");
+  });
+
+  it("corrects with no names from a view whose own session didn't send them", async () => {
+    shared.names = Promise.resolve({ hosts: ["Studio 1"], projects: ["Alpha"], worktrees: [] });
+    shared.voiceInput = { correctionEnabled: true };
+    await expect(startWith({ terminalId: "t-1" })).resolves.toEqual({ ok: true });
+
+    fakeEvent.sender = makeSender();
+    await getHandler("voice-input:correct")(fakeEvent, { rawText: "fix it", terminalId: "t-1" });
+    expect(shared.correctionNames).toEqual([]);
   });
 
   it("rejects a malformed start without superseding the one in flight", async () => {

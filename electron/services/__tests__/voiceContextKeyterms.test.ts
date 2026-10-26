@@ -1,8 +1,16 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { PtyClient } from "../PtyClient.js";
-import { MAX_DICTIONARY_KEYTERMS, MAX_KEYTERMS } from "../../../shared/config/voiceKeyterms.js";
+import {
+  MAX_DICTIONARY_KEYTERMS,
+  MAX_KEYTERMS,
+  MAX_NAME_KEYTERMS,
+} from "../../../shared/config/voiceKeyterms.js";
 import {
   assembleKeyterms,
+  screenDictationNames,
   formatKeytermPrompt,
   sanitizeOpenAIKeywords,
   tokenizeBranchName,
@@ -630,12 +638,169 @@ describe("assembleKeyterms names", () => {
     expect(result.length).toBeLessThanOrEqual(MAX_KEYTERMS);
   });
 
+  it("keeps every name and four branch words when every tier ahead is full", async () => {
+    const root = await mkdtemp(join(tmpdir(), "voice-tiers-"));
+    try {
+      const deps = ["zephyr", "quasar", "nebula", "photon", "tachyon", "neutrino", "graviton"];
+      await writeFile(
+        join(root, "package.json"),
+        JSON.stringify({
+          name: "meridian",
+          dependencies: Object.fromEntries(deps.map((d) => [d, "1"])),
+        })
+      );
+      const branch = "feature/alpha-bravo-charlie-delta-hotel-india-juliet-kilo";
+      getGitBranchMock.mockResolvedValueOnce(branch);
+      const names = {
+        hosts: Array.from({ length: 6 }, (_, i) => `Mac Studio ${i + 1}`),
+        projects: Array.from({ length: 6 }, (_, i) => `Plugin Kit ${i + 1}`),
+        worktrees: ["billing", "checkout", "ledger", "invoices", "payouts"],
+      };
+      const dictionary = Array.from({ length: 80 }, (_, i) => `customTerm${i}`);
+
+      const result = await assembleKeyterms({
+        customDictionary: dictionary,
+        projectName: "QuartzlineOrbitStudio",
+        projectPath: root,
+        names,
+        terminalId: TARGET,
+        ptyClient: asPtyClient(makePtyClient(["const handleRequest = useSessionStore();"])),
+      });
+
+      const screened = screenDictationNames(names);
+      const sentNames = [...screened.hosts, ...screened.projects, ...screened.worktrees];
+      const count = (terms: string[]) => terms.filter((t) => result.includes(t)).length;
+      expect(result).toHaveLength(MAX_KEYTERMS);
+      expect(count(dictionary)).toBe(MAX_DICTIONARY_KEYTERMS);
+      expect(count(["QuartzlineOrbitStudio", "Quartzline", "Orbit", "Studio"])).toBe(4);
+      expect(count(["meridian", ...deps])).toBe(6);
+      expect(sentNames).toHaveLength(MAX_NAME_KEYTERMS);
+      expect(count(sentNames)).toBe(MAX_NAME_KEYTERMS);
+      expect(count(tokenizeBranchName(branch))).toBeGreaterThanOrEqual(4);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("drops secret-shaped names", async () => {
     const result = await assembleKeyterms({
       customDictionary: [],
       names: { hosts: ["sk-abcdefghijklmnopqrstuvwxyz0123456789"], projects: [], worktrees: [] },
     });
     expect(result).toEqual([]);
+  });
+
+  it("reads names alongside the terminal, not before it", async () => {
+    vi.useFakeTimers();
+    try {
+      const after400ms = <T>(value: T) =>
+        new Promise<T>((resolve) => setTimeout(() => resolve(value), 400));
+      const client = makePtyClient();
+      client.getTerminalSnapshot.mockImplementation((id: string) =>
+        after400ms(snapshot(id, ["const handleRequest = useSessionStore();"]))
+      );
+      let result: string[] | undefined;
+      void assembleKeyterms({
+        customDictionary: [],
+        names: after400ms(assistantNames),
+        terminalId: TARGET,
+        ptyClient: asPtyClient(client),
+      }).then((terms) => (result = terms));
+
+      // Both 400ms reads land within one budget: waited one after the other,
+      // they would take 800ms.
+      await vi.advanceTimersByTimeAsync(450);
+      expect(result).toContain("Studio 1");
+      expect(result).toContain("useSessionStore");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("starts without names that miss the budget", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = makePtyClient(["const handleRequest = useSessionStore();"]);
+      const pending = assembleKeyterms({
+        customDictionary: [],
+        names: new Promise(() => {}),
+        terminalId: TARGET,
+        ptyClient: asPtyClient(client),
+      });
+      await vi.advanceTimersByTimeAsync(500);
+      const result = await pending;
+      expect(result).toContain("useSessionStore");
+      expect(result).not.toContain("Studio 1");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("starts without names when reading them fails", async () => {
+    const result = await assembleKeyterms({
+      customDictionary: ["CustomFirst"],
+      names: Promise.reject(new Error("registry gone")),
+    });
+    expect(result).toEqual(["CustomFirst"]);
+  });
+});
+
+describe("screenDictationNames", () => {
+  const none = { hosts: [], projects: [], worktrees: [] };
+
+  it("trims names and drops ones too short or all digits to be spoken", () => {
+    expect(
+      screenDictationNames({ ...none, hosts: ["  Studio 1  ", "x", "", "   ", "2024"] })
+    ).toEqual({ ...none, hosts: ["Studio 1"] });
+  });
+
+  it("drops credential- and secret-shaped names from every kind", () => {
+    const screened = screenDictationNames({
+      hosts: ["sk-abcdefghijklmnopqrstuvwxyz0123456789"],
+      projects: ["GITHUB_TOKEN"],
+      worktrees: [`ghp_${"a1B2".repeat(9)}`, "billing"],
+    });
+    expect(screened).toEqual({ hosts: [], projects: [], worktrees: ["billing"] });
+  });
+
+  it("keeps the first spelling of a name that recurs in any case", () => {
+    expect(
+      screenDictationNames({ hosts: ["Studio"], projects: ["studio", "Plugin SDK"], worktrees: [] })
+    ).toEqual({ hosts: ["Studio"], projects: ["Plugin SDK"], worktrees: [] });
+  });
+
+  it("takes five of each kind and twelve in all, hosts first", () => {
+    const many = (prefix: string) => Array.from({ length: 8 }, (_, i) => `${prefix} ${i + 1}`);
+    const screened = screenDictationNames({
+      hosts: many("host"),
+      projects: many("project"),
+      worktrees: many("worktree"),
+    });
+    expect(screened.hosts).toEqual(many("host").slice(0, 5));
+    expect(screened.projects).toEqual(many("project").slice(0, 5));
+    expect(screened.worktrees).toEqual(["worktree 1", "worktree 2"]);
+    expect(screened.hosts.length + screened.projects.length + screened.worktrees.length).toBe(
+      MAX_NAME_KEYTERMS
+    );
+  });
+
+  it("doesn't let a screened-out name use up a slot", () => {
+    const screened = screenDictationNames({
+      ...none,
+      worktrees: ["GITHUB_TOKEN", "1", "a", "one", "two", "three", "four", "five"],
+    });
+    expect(screened.worktrees).toEqual(["one", "two", "three", "four", "five"]);
+  });
+
+  it("caps each name at the per-term length without splitting a surrogate pair", () => {
+    const long = `${"a".repeat(99)}😀tail`;
+    const [capped] = screenDictationNames({ ...none, hosts: [long] }).hosts;
+    expect(capped).toBe("a".repeat(99));
+  });
+
+  it("skips entries that aren't strings", () => {
+    const names = { ...none, hosts: [42, null, "Studio 1"] as unknown as string[] };
+    expect(screenDictationNames(names).hosts).toEqual(["Studio 1"]);
   });
 });
 
