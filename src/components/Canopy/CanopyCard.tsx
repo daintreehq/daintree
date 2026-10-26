@@ -62,7 +62,7 @@ import {
   quickApproveOption,
   type CanopyItem,
 } from "./canopyModel";
-import { KIND_LABEL, itemDetail } from "./CanopyRow";
+import { KIND_LABEL, itemDetail, readerAttribution } from "./CanopyRow";
 import { CanopyTerminal, type CanopyStreamState } from "./CanopyTerminal";
 import { CanopyTitle } from "./CanopyTitle";
 import type { CanopyAsideActions } from "./CanopyRowMenu";
@@ -547,7 +547,8 @@ export function CanopyCard({
     agentState !== undefined &&
     agentState !== "idle" &&
     (isHandBack || (agentState !== "completed" && agentState !== "exited"));
-  const { detail, action, progress, facts, contextWarning } = itemDetail(item);
+  const { detail, action, progress, facts, contextWarning, readerWritten } = itemDetail(item);
+  const detailAttribution = readerWritten ? readerAttribution(item, Date.now()) : null;
   const summaryNotes = [
     workLabel,
     contextWarning,
@@ -766,6 +767,11 @@ export function CanopyCard({
             </span>
           )}
           {detail !== null && <p className="line-clamp-4 break-words">{detail}</p>}
+          {detail !== null && detailAttribution !== null && (
+            <p data-canopy-attribution="" className="whitespace-nowrap">
+              {detailAttribution}
+            </p>
+          )}
           {summaryNotes.length > 0 && <p className="break-words">{summaryNotes.join(" · ")}</p>}
         </div>
       )}

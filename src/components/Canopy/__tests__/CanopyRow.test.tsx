@@ -6,7 +6,7 @@ import type { FleetRunRow } from "@shared/types/ipc/fleet";
 import type { CanopyCard as CanopyCardData, CanopyCategory } from "@shared/types/ipc/canopy";
 import { buildPilotGroups } from "@/components/Pilot/pilotRows";
 import { buildCanopyInbox, type CanopyItem } from "../canopyModel";
-import { CanopyRow, itemDetail } from "../CanopyRow";
+import { CanopyRow, itemDetail, readerAttribution } from "../CanopyRow";
 
 const NOW = 1_700_000_000_000;
 
@@ -458,7 +458,7 @@ describe("CanopyRow", () => {
         titled
       )
     );
-    expect(askLine(summary.container)).toBe("All 14 tests pass.");
+    expect(askLine(summary.container)).toMatch(/^All 14 tests pass\.Read by Canopy /);
     expect(summary.container.querySelector("[data-detail]")).toBeNull();
     summary.unmount();
     // Nor the screen's own words, before any reading has worded the run.
@@ -704,5 +704,38 @@ describe("CanopyRow", () => {
     expect(column.textContent).not.toMatch(/waiting|blocked/i);
     // The state still reaches a screen reader, with its time.
     expect(description(container)).toMatch(/waiting for 1m|blocked for 1m/);
+  });
+
+  describe("attribution of the reader's words", () => {
+    const attribution = (container: HTMLElement) =>
+      container.querySelector("[data-canopy-attribution]")?.textContent ?? null;
+
+    it("says who read the words and how long ago, beside the ask", () => {
+      const { container } = renderRow(
+        itemFor("question", { observedAt: NOW - 2 * 60_000 }, { since: NOW - 3 * 60_000 })
+      );
+      expect(attribution(container)).toBe("Read by Canopy 2m ago");
+      expect(description(container)).toContain("read by canopy 2m ago");
+    });
+
+    it("marks words kept from an earlier screen, and why they are still there", () => {
+      const earlier = { wordsFromEarlierRead: true };
+      expect(readerAttribution(itemFor("question", earlier), NOW)).toBe("Earlier screen");
+      const failed = { ...itemFor("question", earlier), failed: true };
+      expect(readerAttribution(failed, NOW)).toBe("Earlier screen, read failed");
+      expect(attribution(renderRow(failed).container)).toBe("Earlier screen, read failed");
+      const again = { ...itemFor("question", earlier), pending: true };
+      expect(readerAttribution(again, NOW)).toBe("Earlier screen, reading again");
+    });
+
+    it("attributes nothing it did not read", () => {
+      const { container } = renderRow(itemFor("question", { headline: null, stage: "classified" }));
+      expect(attribution(container)).toBeNull();
+    });
+
+    it("flags the pane's summary as the reader's", () => {
+      expect(itemDetail(itemFor("question")).readerWritten).toBe(true);
+      expect(itemDetail(itemFor("question", { summary: null })).readerWritten).toBe(false);
+    });
   });
 });

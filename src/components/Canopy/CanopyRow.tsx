@@ -8,6 +8,7 @@ import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { AskingCircle, Clock } from "@/components/icons";
 import type { CanopyCategory } from "@shared/types/ipc/canopy";
 import { formatWaitAge } from "@/lib/projectRowStatus";
+import { formatTimeAgo } from "@/utils/timeAgo";
 import {
   answerOptions,
   itemContextWarning,
@@ -134,6 +135,34 @@ export function firstSentence(text: string): { head: string; rest: string | null
 }
 
 /**
+ * Who wrote the words beside it, and how old they are: `Read by Canopy 2m ago`
+ * for the reader's words on the screen as it was read, `Earlier screen` — with
+ * `read failed` or `reading again` as the case may be — for words kept after
+ * the run moved on. Null for words that are not the reader's. Never a
+ * confidence number: the age is what lets the user judge the reading.
+ */
+export function readerAttribution(item: CanopyItem, nowMs: number): string | null {
+  const card = item.card;
+  if (card === null) return null;
+  if (item.stale || card.wordsFromEarlierRead) {
+    if (item.failed) return "Earlier screen, read failed";
+    if (item.pending) return "Earlier screen, reading again";
+    return "Earlier screen";
+  }
+  return `Read by Canopy ${formatTimeAgo(card.observedAt, nowMs)}`;
+}
+
+/** Whether the ask is the reader's own headline or question, not a glance or a category label. */
+function statusIsReaderWords(item: CanopyItem, status: string): boolean {
+  const card = item.card;
+  return (
+    card !== null &&
+    card.stage === "described" &&
+    (status === card.headline || status === card.question)
+  );
+}
+
+/**
  * What the row leaves to the selected pane: the summary (or a risky approval's
  * reason, or the screen's own words), the command an approval would run, how
  * far through its task the run is, and what the agent reported.
@@ -144,6 +173,8 @@ export function itemDetail(item: CanopyItem): {
   progress: ReturnType<typeof itemProgress>;
   facts: string[];
   contextWarning: string | null;
+  /** The detail is the reader's summary or risk note, not the screen's own words. */
+  readerWritten: boolean;
 } {
   const card = item.card;
   const status = rowStatus(item);
@@ -175,6 +206,7 @@ export function itemDetail(item: CanopyItem): {
     progress: itemProgress(item),
     facts: itemFacts(item),
     contextWarning: itemContextWarning(item),
+    readerWritten: detail !== null && (summary !== null || (caution && !!card?.riskReason)),
   };
 }
 
@@ -327,12 +359,18 @@ export function CanopyRow({
     !compact && row.band !== "quiet" && stalledSince !== null && itemIsBusy(item)
       ? `No change ${formatWaitAge(stalledSince, nowMs)}`
       : null;
+  // The reader's words carry who read them and when; a failed read then says
+  // so there, not in a tail that clips.
+  const attribution =
+    !compact && !reading && statusIsReaderWords(item, status)
+      ? readerAttribution(item, nowMs)
+      : null;
   const statusTail = [
     asideWord,
     stalled,
     row.band === "quiet" ? "Quiet" : null,
     unseenLabel,
-    item.failed ? "Read failed" : null,
+    item.failed && attribution === null ? "Read failed" : null,
     asideLabel,
   ].filter((part): part is string => part !== null);
   const askId = `${domId}-ask`;
@@ -366,6 +404,7 @@ export function CanopyRow({
     where,
     asideLabel !== null ? asideLabel.toLowerCase() : handled ? "replied" : null,
     item.failed ? "read failed" : null,
+    attribution !== null ? attribution.toLowerCase() : null,
   ]
     .filter((part): part is string => part !== null && part !== undefined && part !== "")
     .join(", ");
@@ -510,6 +549,14 @@ export function CanopyRow({
             {readingInAsk ? "Reading the screen…" : status}
           </span>
           {caution && <WarningGlyph className="size-3.5 shrink-0 text-status-warning" />}
+          {attribution !== null && (
+            <span
+              data-canopy-attribution=""
+              className="shrink-0 whitespace-nowrap text-text-secondary"
+            >
+              {attribution}
+            </span>
+          )}
           {statusTail.map((part) => (
             <span key={part} className="max-w-[40%] shrink-0 truncate text-text-secondary">
               {part}
