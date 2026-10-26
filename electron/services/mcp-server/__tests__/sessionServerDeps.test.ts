@@ -189,23 +189,46 @@ describe("createSessionServerDeps", () => {
         authorize: () => {},
       };
 
-      // Unbound, the call is refused, never run some other way.
-      await expect(sessionDeps.globalSteer!.interrupt(target)).rejects.toMatchObject({
-        code: "WORKER_NOT_FOUND",
+      const refused = { code: "WORKER_NOT_FOUND" };
+      const steerOf = (tag: string) => ({
+        prompt: vi.fn(async () => `${tag}:prompt`),
+        keys: vi.fn(async () => `${tag}:keys`),
+        interrupt: vi.fn(async () => `${tag}:interrupt`),
       });
-      const interrupt = vi.fn(async () => ({
-        terminalId: "t",
-        agentId: "claude",
-        agentStateAtDispatch: "working",
-        status: "requested" as const,
-      }));
-      state.binding = {
-        control: {} as AssistantControlBinding["control"],
-        sessionProject: () => null,
-        steer: { prompt: vi.fn(), keys: vi.fn(), interrupt } as never,
+      const bind = (steer: ReturnType<typeof steerOf> | undefined) => {
+        state.binding = {
+          control: {} as AssistantControlBinding["control"],
+          sessionProject: () => null,
+          ...(steer ? { steer: steer as never } : {}),
+        };
       };
-      await sessionDeps.globalSteer!.interrupt(target);
-      expect(interrupt).toHaveBeenCalledWith(target);
+      const prompt = { command: "go", handback: false, machineName: "m" };
+      const keys = { keys: ["Enter"] };
+      const steer = sessionDeps.globalSteer!;
+      const callAll = () =>
+        Promise.all([
+          steer.prompt(target, prompt),
+          steer.keys(target, keys),
+          steer.interrupt(target),
+        ]);
+
+      // Unbound, every call is refused, never run some other way.
+      await expect(steer.prompt(target, prompt)).rejects.toMatchObject(refused);
+      await expect(steer.keys(target, keys)).rejects.toMatchObject(refused);
+      await expect(steer.interrupt(target)).rejects.toMatchObject(refused);
+
+      const first = steerOf("a");
+      bind(first);
+      await expect(callAll()).resolves.toEqual(["a:prompt", "a:keys", "a:interrupt"]);
+      expect(first.prompt).toHaveBeenCalledWith(target, prompt);
+      expect(first.keys).toHaveBeenCalledWith(target, keys);
+      expect(first.interrupt).toHaveBeenCalledWith(target);
+
+      // Replaced, then gone: each call reads the binding as it finds it.
+      bind(steerOf("b"));
+      await expect(callAll()).resolves.toEqual(["b:prompt", "b:keys", "b:interrupt"]);
+      bind(undefined);
+      await expect(steer.keys(target, keys)).rejects.toMatchObject(refused);
     }
   );
 

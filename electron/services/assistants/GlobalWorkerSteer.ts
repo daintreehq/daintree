@@ -104,6 +104,21 @@ function personAtTerminal(
     : null;
 }
 
+/** Why a record is no agent worker to steer, or null while it is one. */
+function noWorkerWhy(terminalId: string, record: WorkerSteerRecord): string | null {
+  if (record.isAssistantTerminal === true) {
+    return `Terminal '${terminalId}' runs a Daintree Assistant, not a worker.`;
+  }
+  if (record.isExited === true || record.hasPty === false || record.isTrashed === true) {
+    return `Terminal '${terminalId}' has no running process, or is in the trash.`;
+  }
+  // A launch hint is intent, not identity: a shell an agent has left is a shell.
+  if (record.detectedAgentId === undefined) {
+    return `No agent is seen running in terminal '${terminalId}': it is a plain shell, or its agent isn't recognised yet.`;
+  }
+  return null;
+}
+
 /**
  * The global Assistant steering a worker it neither launched nor was handed
  * (#14551): a prompt, keys and an interrupt, and nothing else. Each reaches
@@ -185,7 +200,7 @@ export class GlobalWorkerSteer {
           pressed.length === 0 ? code : WORKER_STEER_REFUSALS.partial,
           pressed.length === 0
             ? `${why} Nothing was pressed.`
-            : `${why} ${pressed.length} of ${keys!.length} keys went in (${pressed.join(", ")}); the rest weren't pressed.`
+            : `${why} ${pressed.length} of ${keys!.length} keys were sent (${pressed.join(", ")}); the rest weren't. Read the screen before pressing more, and never resend the whole sequence.`
         );
       let ownStamp: number | undefined;
       for (const [index, key] of keys.entries()) {
@@ -198,6 +213,9 @@ export class GlobalWorkerSteer {
               `Terminal '${terminalId}' can't be read right now.`
             );
           record = now!;
+          // An Escape can drop the agent back to its shell: the rest would land there.
+          const gone = noWorkerWhy(terminalId, record);
+          if (gone !== null) stop(WORKER_STEER_REFUSALS.notAgent, gone);
         }
         const person = personAtTerminal(terminalId, record, ownStamp);
         if (person !== null) stop(WORKER_STEER_REFUSALS.typing, person);
@@ -224,10 +242,11 @@ export class GlobalWorkerSteer {
         }
       }
       await this.sleep(SEND_KEYS_SETTLE_MS);
-      // Never quote a successor's screen as what these keys did.
-      const screen = this.isSameRun(target)
+      const read = this.isSameRun(target)
         ? await this.readScreen(terminalId, SEND_KEYS_SCREEN_LINES).catch(() => null)
         : null;
+      // Asked after the read as well: a successor's screen is never what these keys did.
+      const screen = this.isSameRun(target) ? read : null;
       return { terminalId, keys: pressed, ...(screen ? { screen } : {}) };
     });
   }
@@ -314,24 +333,9 @@ export class GlobalWorkerSteer {
     }
     // The read was async: still the run the caller named.
     this.requireSameRun(target);
-    if (record.isAssistantTerminal === true) {
-      refuse(
-        WORKER_STEER_REFUSALS.notAgent,
-        `Terminal '${terminalId}' runs a Daintree Assistant, not a worker. ${NOTHING_SENT}`
-      );
-    }
-    if (record.isExited === true || record.hasPty === false || record.isTrashed === true) {
-      refuse(
-        WORKER_STEER_REFUSALS.notAgent,
-        `Terminal '${terminalId}' has no running process, or is in the trash. ${NOTHING_SENT}`
-      );
-    }
-    // A launch hint is intent, not identity: a shell an agent has left is a shell.
-    if (record.detectedAgentId === undefined) {
-      refuse(
-        WORKER_STEER_REFUSALS.notAgent,
-        `No agent is seen running in terminal '${terminalId}': it is a plain shell, or its agent isn't recognised yet. ${NOTHING_SENT}`
-      );
+    const notWorker = noWorkerWhy(terminalId, record);
+    if (notWorker !== null) {
+      refuse(WORKER_STEER_REFUSALS.notAgent, `${notWorker} ${NOTHING_SENT}`);
     }
     return record;
   }

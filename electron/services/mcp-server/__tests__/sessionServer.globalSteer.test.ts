@@ -29,6 +29,7 @@ const PROJECT = "proj-1";
 const WORKER = "term-worker";
 const SHELL = "term-shell";
 const MINE = "term-mine";
+const HANDED = "term-handed";
 
 const TOOLS = [
   "terminal.sendCommandOwned",
@@ -74,11 +75,13 @@ function harness(options: {
     [WORKER, atPrompt()],
     [SHELL, atPrompt({ detectedAgentId: undefined, agentState: "idle" })],
     [MINE, atPrompt()],
+    [HANDED, atPrompt()],
   ]);
   const generations = new Map<string, number>([
     [WORKER, 4],
     [SHELL, 2],
     [MINE, 1],
+    [HANDED, 3],
   ]);
   const pty = {
     submit: vi.fn(),
@@ -109,7 +112,15 @@ function harness(options: {
   store.sessionTierMap.set(SESSION, options.tier ?? "core");
   store.sessionOriginMap.set(SESSION, "external");
   store.sessionWorkspaceMap.set(SESSION, PROJECT);
-  store.resourceOwnership.record(SESSION, [{ kind: "terminal", id: MINE }]);
+  // Held under the relay principal, as `openRelaySession` binds one.
+  store.resourceOwnership.bindPrincipal(SESSION, "relay-principal");
+  const owner = store.resourceOwnership.ownerOf(SESSION);
+  store.resourceOwnership.record(owner, [{ kind: "terminal", id: MINE }]);
+  store.terminalAdoption.adopt({
+    terminalId: HANDED,
+    orchestratorPaneId: "pane-1",
+    principalId: "relay-principal",
+  });
   const refuseWrite = vi.fn(() => options.refuseWrite ?? null);
   const deps = fakeDeps({
     sessionStore: store,
@@ -244,19 +255,22 @@ describe.each(LANES)("a global Assistant's relayed call ($lane) (#14551)", ({ sh
     expect(pty.doubleEscape).not.toHaveBeenCalled();
   });
 
-  it("keeps what it launched on the owned path, unchanged", async () => {
+  it.each([
+    ["launched", MINE],
+    ["was handed", HANDED],
+  ])("keeps what it %s on the owned path, unchanged", async (_how, terminalId) => {
     const { deps, pty } = harness({ shellName, global: true });
     const server = await serve(deps);
 
     const result = await callTool(server, {
       name: "terminal.sendKeysOwned",
-      arguments: { terminalId: MINE, keys: ["Enter"] },
+      arguments: { terminalId, keys: ["Enter"] },
     });
 
     expect(result.isError).toBeFalsy();
     expect(deps.dispatchAction).toHaveBeenCalledWith(
       "terminal.sendKeys",
-      expect.objectContaining({ terminalId: MINE, keys: ["Enter"] }),
+      expect.objectContaining({ terminalId, keys: ["Enter"] }),
       expect.anything()
     );
     expect(pty.write).not.toHaveBeenCalled();

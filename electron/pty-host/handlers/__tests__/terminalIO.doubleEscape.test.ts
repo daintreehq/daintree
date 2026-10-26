@@ -30,11 +30,17 @@ describe("batch-double-escape", () => {
     };
   }
 
-  it("writes the second Escape to the spawn the first went to", () => {
+  it("writes the second Escape to the spawn the first went to, after the gap", () => {
     const { ptyManager, escape } = setup();
     escape();
-    vi.advanceTimersByTime(50);
-    expect(ptyManager.write).toHaveBeenCalledTimes(2);
+    expect(ptyManager.write.mock.calls).toEqual([["t1", "\x1b"]]);
+    vi.advanceTimersByTime(49);
+    expect(ptyManager.write).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(1);
+    expect(ptyManager.write.mock.calls).toEqual([
+      ["t1", "\x1b"],
+      ["t1", "\x1b"],
+    ]);
   });
 
   // #14551: a restart under the same id in the gap is a new run that asked for no Escape.

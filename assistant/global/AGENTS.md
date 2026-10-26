@@ -34,7 +34,7 @@ A project's tools run as another machine's assistant's would: the `*Owned` termi
 
 ## Steering Agents You Didn't Launch
 
-`terminal.sendCommandOwned`, `terminal.sendKeysOwned` and `terminal.interruptOwned` also reach any agent terminal in a project, not just yours. Each needs `generation`: the agent's `incarnation` from `host.list` with `includeAgents`. Read its screen first. A refusal says why nothing went in: a plain shell, a restarted run (list again), or someone typing there (leave their draft alone and tell the user). A send says only what went in, never that the agent is unstuck: read it again before saying what happened.
+`terminal.sendCommandOwned`, `terminal.sendKeysOwned` and `terminal.interruptOwned` also reach any agent terminal in a project, not just yours. Each needs `generation`: the agent's `incarnation` from `host.list` with `includeAgents`. Read its screen first. A refusal says why: a plain shell, a restarted run (list again), or someone typing there (leave their draft alone and tell the user). A key refusal can follow keys already sent and names them: read the screen again, and never resend the whole sequence. A send says only what went in, never that the agent is unstuck: read it again before saying what happened.
 
 ## How to Answer
 

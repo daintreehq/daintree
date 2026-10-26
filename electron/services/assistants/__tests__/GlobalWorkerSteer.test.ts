@@ -3,6 +3,7 @@ import { WORKER_STEER_REFUSALS } from "../../../../shared/types/assistantControl
 import { AssistantTargetError } from "../AssistantTerminalControl.js";
 import {
   GlobalWorkerSteer,
+  liveGlobalWorkerSteer,
   type GlobalWorkerSteerDeps,
   type WorkerSteerRecord,
   type WorkerSteerTarget,
@@ -27,6 +28,8 @@ describe("GlobalWorkerSteer (#14551)", () => {
   let escapes: number;
   /** Runs before each pause between keys, standing in for whatever happens meanwhile. */
   let duringGap: () => void;
+  /** Runs while a screen read is on its way back. */
+  let duringRead: () => void;
   let steer: GlobalWorkerSteer;
 
   const atPrompt = (extra: Partial<WorkerSteerRecord> = {}): WorkerSteerRecord => ({
@@ -69,12 +72,16 @@ describe("GlobalWorkerSteer (#14551)", () => {
     submits = [];
     escapes = 0;
     duringGap = () => {};
+    duringRead = () => {};
     const deps: GlobalWorkerSteerDeps = {
       getTerminalProjectId: () => fake.projectId,
       getLiveGeneration: () => fake.generation,
       isAssistantTerminal: () => fake.assistant,
       getTerminal: async () => (fake.record ? { ...fake.record } : null),
-      serializedState: async () => ({ data: fake.screen }),
+      serializedState: async () => {
+        duringRead();
+        return { data: fake.screen };
+      },
       submit: (_id, text, token, handback) =>
         submits.push({ text, token, ...(handback ? { handback } : {}) }),
       write: (_id, data) => {
@@ -231,7 +238,7 @@ describe("GlobalWorkerSteer (#14551)", () => {
     const error = await refusal(steer.keys(target(), { keys: ["Down", "Enter"] }));
 
     expect(error.code).toBe(WORKER_STEER_REFUSALS.partial);
-    expect(error.message).toContain("1 of 2 keys went in (Down)");
+    expect(error.message).toContain("1 of 2 keys were sent (Down)");
     expect(writes).toEqual(["\x1b[B"]);
   });
 
@@ -308,5 +315,77 @@ describe("GlobalWorkerSteer (#14551)", () => {
     expect(second.code).toBe(WORKER_STEER_REFUSALS.busy);
     await first;
     expect(writes).toEqual(["\x1b[B", "\r"]);
+  });
+  it("stops the rest when the agent drops back to its shell between keys", async () => {
+    fake.record = atPrompt({ waitingReason: "approval" });
+    duringGap = () => {
+      fake.record!.detectedAgentId = undefined;
+    };
+
+    const error = await refusal(steer.keys(target(), { keys: ["Escape", "1"] }));
+
+    expect(error.code).toBe(WORKER_STEER_REFUSALS.partial);
+    expect(error.message).toContain("plain shell");
+    expect(error.message).toContain("1 of 2 keys were sent (Escape)");
+    expect(writes).toEqual(["\x1b"]);
+  });
+
+  it("quotes no screen when the run was replaced while it was being read", async () => {
+    fake.record = atPrompt({ waitingReason: "approval" });
+    fake.screen = "a successor's screen";
+    duringRead = () => {
+      fake.generation = 5;
+    };
+
+    const result = await steer.keys(target(), { keys: ["Enter"] });
+
+    expect(result.keys).toEqual(["Enter"]);
+    expect(result.screen).toBeUndefined();
+  });
+
+  it("lets the run be steered again once a refused steer has let go", async () => {
+    fake.record = atPrompt({ lastTypedInputAt: 1_500 });
+    await refusal(steer.keys(target(), { keys: ["Enter"] }));
+    fake.record = atPrompt({ waitingReason: "approval" });
+
+    await expect(steer.keys(target(), { keys: ["Enter"] })).resolves.toMatchObject({
+      keys: ["Enter"],
+    });
+  });
+});
+
+describe("liveGlobalWorkerSteer (#14551)", () => {
+  it("submits under the pty-host's strict settled-prompt guard", async () => {
+    const pty = {
+      getTerminalProjectId: () => PROJECT,
+      getLiveGeneration: () => 4,
+      isAssistantTerminal: () => false,
+      getTerminalAsync: async () => ({
+        projectId: PROJECT,
+        detectedAgentId: "claude",
+        agentState: "waiting",
+        waitingReason: "prompt",
+        lastStateChange: 1_000,
+        hasPty: true,
+      }),
+      submit: vi.fn(),
+    };
+    const steer = liveGlobalWorkerSteer({
+      pty: () => pty as never,
+      isAssistantTerminal: () => false,
+    });
+
+    await steer.prompt(
+      { projectId: PROJECT, terminalId: WORKER, generation: 4, authorize: () => {} },
+      { command: "go", handback: false, machineName: "m" }
+    );
+
+    expect(pty.submit).toHaveBeenCalledWith(
+      WORKER,
+      expect.stringContaining("go"),
+      expect.any(String),
+      undefined,
+      "settled-prompt-strict"
+    );
   });
 });
