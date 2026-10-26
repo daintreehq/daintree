@@ -1009,12 +1009,16 @@ describe("HelpPanel — HybridInputBar wiring (issue #8185)", () => {
   });
 
   it("shows a microphone notice only for the Assistant's own terminal (#14606)", async () => {
-    const original = window.matchMedia;
-    window.matchMedia = vi.fn().mockReturnValue({
-      matches: false,
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-    }) as unknown as typeof window.matchMedia;
+    const original = Object.getOwnPropertyDescriptor(window, "matchMedia");
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      writable: true,
+      value: vi.fn(() => ({
+        matches: false,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    });
     const { useVoiceRecordingStore } = await import("@/store/voiceRecordingStore");
     try {
       setupBoundTerminal();
@@ -1037,7 +1041,8 @@ describe("HelpPanel — HybridInputBar wiring (issue #8185)", () => {
       expect(container.textContent).toContain("AirPods Pro disconnected");
     } finally {
       useVoiceRecordingStore.setState({ micNotice: null });
-      window.matchMedia = original;
+      if (original) Object.defineProperty(window, "matchMedia", original);
+      else Reflect.deleteProperty(window, "matchMedia");
     }
   });
 

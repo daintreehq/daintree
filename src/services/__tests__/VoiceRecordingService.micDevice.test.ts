@@ -728,7 +728,7 @@ describe("VoiceRecordingService — silent mic (#14606)", () => {
     const { store, service, harness } = await startSilent(AIRPODS, [AIRPODS, BUILT_IN]);
     const notice = store.getState().micNotice!;
     // White-box: the key's keydown is what records this in the app.
-    (service as unknown as { pttActiveKeyCode: string | null }).pttActiveKeyCode = "KeyD";
+    Reflect.set(service, "pttActiveKeyCode", "KeyD");
 
     await service.switchToMicFromNotice(notice);
 
