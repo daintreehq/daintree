@@ -737,8 +737,11 @@ describe("DriveLeaseService", () => {
 
 describe("DriveLeaseService and a Canopy panel reading this host (#13387)", () => {
   // Never registered: a viewer is a caller, not a view of a project.
-  const viewerFrom = (clientId: string) =>
-    new FakeEndpoint("canopy-viewer:v1", clientId, null, "remote-view");
+  const viewerFrom = (clientId: string, linkSessionId?: string) =>
+    Object.assign(
+      new FakeEndpoint("canopy-viewer:v1", clientId, null, "remote-view"),
+      linkSessionId === undefined ? {} : { linkSessionId }
+    );
   const laptopClient = {
     clientId: "greg-mbp-id",
     clientName: "greg-mbp",
@@ -748,8 +751,8 @@ describe("DriveLeaseService and a Canopy panel reading this host (#13387)", () =
 
   it("types where its own machine's window holds the project, and nowhere another does", async () => {
     const hostWindow = local(1);
-    const laptopWindow = remote("s1:e1", "greg-mbp-id");
-    const studioWindow = remote("s2:e1", "studio-id");
+    const laptopWindow = remote("remote:s1:e1", "greg-mbp-id");
+    const studioWindow = remote("remote:s2:e1", "studio-id");
     for (const endpoint of [hostWindow, laptopWindow, studioWindow]) registry.add(endpoint);
     service.noteEndpointClient(laptopWindow.endpointId, laptopClient);
     service.noteEndpointClient(studioWindow.endpointId, {
@@ -758,7 +761,7 @@ describe("DriveLeaseService and a Canopy panel reading this host (#13387)", () =
       clientName: "studio",
     });
     await settle();
-    const laptopViewer = viewerFrom("greg-mbp-id");
+    const laptopViewer = viewerFrom("greg-mbp-id", "s1");
 
     service.takeOver("p", laptopWindow);
     expect(service.isDriving("p", laptopViewer)).toBe(true);
@@ -775,13 +778,13 @@ describe("DriveLeaseService and a Canopy panel reading this host (#13387)", () =
 
   it("is held to the same rule as its machine, taking nothing by typing", async () => {
     const hostWindow = local(1);
-    const laptopWindow = remote("s1:e1", "greg-mbp-id");
+    const laptopWindow = remote("remote:s1:e1", "greg-mbp-id");
     registry.add(hostWindow);
     registry.add(laptopWindow);
     service.noteEndpointClient(laptopWindow.endpointId, laptopClient);
     await settle();
     const holder = service.takeOver("p", laptopWindow);
-    const laptopViewer = viewerFrom("greg-mbp-id");
+    const laptopViewer = viewerFrom("greg-mbp-id", "s1");
 
     expect(service.isDriving("p", laptopViewer)).toBe(true);
     // Driving through its machine's lease is not holding it.
@@ -790,8 +793,8 @@ describe("DriveLeaseService and a Canopy panel reading this host (#13387)", () =
   });
 
   it("leaves another machine's ordinary windows as they were", async () => {
-    const laptopWindow = remote("s1:e1", "greg-mbp-id");
-    const laptopSecondWindow = remote("s1:e2", "greg-mbp-id");
+    const laptopWindow = remote("remote:s1:e1", "greg-mbp-id");
+    const laptopSecondWindow = remote("remote:s1:e2", "greg-mbp-id");
     registry.add(laptopWindow);
     registry.add(laptopSecondWindow);
     service.noteEndpointClient(laptopWindow.endpointId, laptopClient);
@@ -810,11 +813,41 @@ describe("DriveLeaseService and a Canopy panel reading this host (#13387)", () =
 
     expect(service.isDriving("p", viewerFrom("local"))).toBe(true);
   });
+
+  it("drives nowhere another session holds, even under the holder's client id (#14679)", async () => {
+    const hostWindow = local(1);
+    const laptopWindow = remote("remote:s1:e1", "greg-mbp-id");
+    registry.add(hostWindow);
+    registry.add(laptopWindow);
+    service.noteEndpointClient(laptopWindow.endpointId, laptopClient);
+    await settle();
+    service.takeOver("p", laptopWindow);
+
+    // Another Shell connected under the laptop's client id has a session of its own.
+    const impostor = viewerFrom("greg-mbp-id", "s9");
+    expect(service.isDriving("p", impostor)).toBe(false);
+    expect(service.drivingLeaseId("p", impostor)).toBe(false);
+    expect(service.projectsDrivenElsewhere(impostor).get("p")?.clientId).toBe("greg-mbp-id");
+    // A remote viewer that names no session stands for none.
+    expect(service.isDriving("p", viewerFrom("greg-mbp-id"))).toBe(false);
+    // Nor does one on the right session reach the host's own windows' projects.
+    service.takeOver("p", hostWindow);
+    expect(service.isDriving("p", viewerFrom("greg-mbp-id", "s1"))).toBe(false);
+    expect(service.isDriving("p", viewerFrom("local"))).toBe(true);
+  });
+
+  it("types anywhere while nobody holds the project", () => {
+    expect(service.isDriving("p", viewerFrom("greg-mbp-id", "s9"))).toBe(true);
+  });
 });
 
 describe("DriveLeaseService and a device paired with a Shell answering this host (#13941)", () => {
   // Never registered: only ever asked whether it drives.
-  const deviceThrough = (clientId: string) => ({ endpointId: "device-answer:1", clientId });
+  const deviceThrough = (clientId: string, linkSessionId: string) => ({
+    endpointId: "device-answer:1",
+    clientId,
+    linkSessionId,
+  });
   const laptopClient = {
     clientId: "greg-mbp-id",
     clientName: "greg-mbp",
@@ -824,8 +857,8 @@ describe("DriveLeaseService and a device paired with a Shell answering this host
 
   it("presses where its Shell's window holds the project, and nowhere another screen does", async () => {
     const hostWindow = local(1);
-    const laptopWindow = remote("s1:e1", "greg-mbp-id");
-    const studioWindow = remote("s2:e1", "studio-id");
+    const laptopWindow = remote("remote:s1:e1", "greg-mbp-id");
+    const studioWindow = remote("remote:s2:e1", "studio-id");
     for (const endpoint of [hostWindow, laptopWindow, studioWindow]) registry.add(endpoint);
     service.noteEndpointClient(laptopWindow.endpointId, laptopClient);
     service.noteEndpointClient(studioWindow.endpointId, {
@@ -834,7 +867,7 @@ describe("DriveLeaseService and a device paired with a Shell answering this host
       clientName: "studio",
     });
     await settle();
-    const device = deviceThrough("greg-mbp-id");
+    const device = deviceThrough("greg-mbp-id", "s1");
 
     const holder = service.takeOver("p", laptopWindow);
     expect(service.isDriving("p", device)).toBe(true);
@@ -847,6 +880,45 @@ describe("DriveLeaseService and a device paired with a Shell answering this host
     // The host's own screen holds it: the Shell couldn't type there either.
     service.takeOver("p", hostWindow);
     expect(service.isDriving("p", device)).toBe(false);
+  });
+
+  it("presses nothing where another session holds, even under the holder's client id (#14679)", async () => {
+    const laptopWindow = remote("remote:s1:e1", "greg-mbp-id");
+    registry.add(laptopWindow);
+    service.noteEndpointClient(laptopWindow.endpointId, laptopClient);
+    await settle();
+    service.takeOver("p", laptopWindow);
+
+    expect(service.isDriving("p", deviceThrough("greg-mbp-id", "s9"))).toBe(false);
+    expect(service.isDriving("p", deviceThrough("greg-mbp-id", "s1"))).toBe(true);
+  });
+
+  it("presses through a relaunched Shell once the project is handed back to its new session", async () => {
+    const install = "5b1f6c3e-8d2a-4f4e-9c1b-0a7e2d9f3c41";
+    const before = remote("remote:s1:e1", "launch-1");
+    registry.add(before);
+    service.noteEndpointClient(before.endpointId, {
+      ...laptopClient,
+      clientId: "launch-1",
+      deviceId: install,
+    });
+    await settle();
+    expect(service.getHolder("p")?.endpointId).toBe("remote:s1:e1");
+    before.close();
+    await settle();
+
+    const after = remote("remote:s2:e1", "launch-2");
+    registry.add(after);
+    service.noteEndpointClient(after.endpointId, {
+      ...laptopClient,
+      clientId: "launch-2",
+      deviceId: install,
+    });
+    await settle();
+
+    expect(service.getHolder("p")?.endpointId).toBe("remote:s2:e1");
+    expect(service.isDriving("p", deviceThrough("launch-2", "s2"))).toBe(true);
+    expect(service.isDriving("p", deviceThrough("launch-1", "s1"))).toBe(false);
   });
 });
 

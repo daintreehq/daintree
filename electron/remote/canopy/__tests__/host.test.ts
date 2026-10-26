@@ -100,6 +100,8 @@ describe("installCanopyHostWith", () => {
       }),
     ]);
     expect(s.endpoints[0].clientId).toBe("shell-1");
+    // Held to the drive lease by the host's session, not the Shell's claimed client id (#14679).
+    expect(s.endpoints[0].linkSessionId).toBe("s1");
   });
 
   it("drops a viewer whose push the link refused, and tells the Shell to read again", async () => {

@@ -12,7 +12,7 @@ import { isRunStillWaiting, listWaitingRuns, type WaitingRunView } from "./devic
  * Who a device's answer stands as in this machine's drive lease. It is only
  * ever asked whether it drives; it never takes the lease.
  */
-export type DeviceLeaseStanding = Pick<ClientEndpoint, "endpointId" | "clientId">;
+export type DeviceLeaseStanding = Pick<ClientEndpoint, "endpointId" | "clientId" | "linkSessionId">;
 
 function drivesRun(standing: DeviceLeaseStanding, runId: string): boolean {
   const lease = peekDriveLeaseService();

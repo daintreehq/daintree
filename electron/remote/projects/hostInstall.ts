@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import path from "node:path";
-import type { ClientEndpoint } from "../../ipc/endpoint.js";
+import { isSessionEndpoint, type ClientEndpoint } from "../../ipc/endpoint.js";
 import { getEndpointRegistry } from "../../ipc/endpointRegistry.js";
 import { getDriveLeaseService } from "../../services/DriveLeaseService.js";
 import type { LinkSession } from "../link/session.js";
@@ -51,15 +51,6 @@ export interface ProjectsHostAuthority {
   isDriving(projectId: string, endpoint: BoundEndpoint): boolean;
   /** The endpoint holding the project's drive lease, or null while nobody does. */
   holderEndpointId(projectId: string): string | null;
-}
-
-/**
- * Whether `endpointId` is one of this session's views. SessionHost names a
- * remote endpoint `remote:<sessionId>:<clientEndpointId>`; the session id is
- * the host's own, unlike the client id a HELLO merely claims.
- */
-export function isSessionEndpoint(sessionId: string, endpointId: string): boolean {
-  return endpointId.startsWith(`remote:${sessionId}:`);
 }
 
 export const defaultProjectsHostAuthority: ProjectsHostAuthority = {
