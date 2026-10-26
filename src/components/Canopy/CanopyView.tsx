@@ -64,6 +64,8 @@ interface HostIssue {
   act: (() => void) | null;
   /** Something wrong with the host, not a read still on its way. */
   trouble: boolean;
+  /** A choice the user made, neither wrong nor on its way: listed plainly, and no read is retrying. */
+  settled?: boolean;
 }
 
 /**
@@ -934,7 +936,8 @@ function CanopyInbox({
             text: `Canopy is off on ${name}`,
             action: "Set up",
             act: () => useCanopyStore.getState().setHostId(reading.hostId),
-            trouble: true,
+            trouble: false,
+            settled: true,
           },
         ];
       }
@@ -982,7 +985,7 @@ function CanopyInbox({
   const hostProgress = hostIssues.filter((issue) => !issue.trouble);
   const retryingSomewhere =
     everyHost &&
-    (hostProgress.length > 0 ||
+    (hostProgress.some((issue) => !issue.settled) ||
       readings.some((reading) => reading.canopy?.activated === true && reading.canopy.waiting));
   const headerWords =
     hostSummary ??
@@ -1145,7 +1148,7 @@ function CanopyInbox({
                 <HostIssueList issues={hostTroubles} />
               </Callout>
             )}
-            {/* Reads still on their way: noted, never a warning. */}
+            {/* Reads still on their way, and a reader the user left off: noted, never a warning. */}
             {hostProgress.length > 0 && (
               <Callout severity="neutral" size="compact">
                 <HostIssueList issues={hostProgress} />
