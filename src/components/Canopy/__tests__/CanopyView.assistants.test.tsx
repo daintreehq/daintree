@@ -275,6 +275,16 @@ describe("CanopyView role filter", () => {
       assistant(0, { waitingReason: "question" }),
       assistant(1, { waitingReason: "approval" }),
     ];
+    const snapshot = useFleetSnapshotStore.getState().snapshot!;
+    useFleetSnapshotStore.setState({
+      snapshot: {
+        ...snapshot,
+        runs: [
+          ...snapshot.runs,
+          run("asking", { agentState: "waiting", waitingReason: "question", since: NOW - 50_000 }),
+        ],
+      },
+    });
     render(<CanopyView />);
     await settle();
     expect(assistantRows().map((row) => row.getAttribute("data-ask"))).toEqual([
@@ -282,7 +292,7 @@ describe("CanopyView role filter", () => {
       "approval",
     ]);
     const header = document.querySelector("[data-testid=canopy-dialog]")!.textContent ?? "";
-    expect(header).toContain("1 agent needs you");
+    expect(header).toContain("2 agents need you");
   });
 
   it("never hands an assistant to the reader: not shown, searched or seen as a worker", async () => {

@@ -172,6 +172,10 @@ const names = (entries: readonly CanopyInboxEntry[]) =>
     entry.role === "worker" ? `${entry.hostId ?? "own"}:${entry.item.row.run.runId}` : entry.key
   );
 
+/** The items with these ids, in this order: a list as the user left it, not as ranked. */
+const inOrder = (items: readonly CanopyItem[], ids: readonly string[]) =>
+  ids.map((id) => items.find((item) => item.row.run.runId.endsWith(`.${id}`))!);
+
 const approval = { agentState: "waiting", waitingReason: "approval", since: NOW - 5_000 } as const;
 
 describe("projectCanopyInbox", () => {
@@ -207,6 +211,17 @@ describe("projectCanopyInbox", () => {
 
     expect(single.key).toBe(keyed.key);
     expect(single.hostId).toBe(OTHER);
+  });
+
+  it("calls the window's own host null, however the place names it", () => {
+    const items = workers([{ host: OWN, run: run("t1", approval) }]);
+    const viaKey = project(items, []).inbox[0]!;
+    const named = project(items, [], {
+      workerPlace: () => ({ hostId: OWN, runId: "t1" }),
+    }).inbox[0]!;
+
+    expect(named.hostId).toBeNull();
+    expect(named.key).toBe(viaKey.key);
   });
 
   it("holds what needs the user across hosts and roles, and leaves out a parked ask", () => {
@@ -341,11 +356,16 @@ describe("projectCanopyInbox", () => {
 
   it("hands back the same entry for a run in every list it is in", () => {
     const items = workers([{ host: OWN, run: run("ask", approval) }]);
-    const projection = project(items, []);
+    const helpers = assistants([
+      live(OWN, "a1", { agentState: "waiting", waitingReason: "question" }),
+    ]);
+    const projection = project(items, helpers);
 
-    expect(projection.navigation[0]).toBe(projection.inbox[0]);
-    expect(projection.needsYou[0]).toBe(projection.inbox[0]);
     expect(projection.inbox.filter(isWorkerEntry)).toHaveLength(1);
+    for (const index of [0, 1]) {
+      expect(projection.navigation[index]).toBe(projection.inbox[index]);
+      expect(projection.needsYou[index]).toBe(projection.inbox[index]);
+    }
   });
 });
 
@@ -380,36 +400,36 @@ describe("nextAfterEntry", () => {
   const idle = { agentState: "idle", since: NOW - 10_000 } as const;
 
   it("moves on to the next that needs the user, past runs that don't and a parked ask", () => {
-    const order = project(
-      workers([
-        { host: OWN, run: run("done", approval) },
-        { host: OWN, run: run("parked", { ...approval, park: { parkedAt: NOW } }) },
-        { host: OWN, run: run("idle", idle) },
-        { host: OTHER, run: run("next", { ...approval, since: NOW - 1_000 }) },
-      ]),
-      []
-    ).navigation;
-    const done = order.find((entry) => entry.key.includes("done"))!;
+    const items = workers([
+      { host: OWN, run: run("done", approval) },
+      { host: OWN, run: run("parked", { ...approval, park: { parkedAt: NOW } }) },
+      { host: OWN, run: run("idle", idle) },
+      { host: OTHER, run: run("next", { ...approval, since: NOW - 1_000 }) },
+    ]);
+    const order = project(items, [], {
+      listedWorkers: inOrder(items, ["done", "parked", "idle", "next"]),
+    }).navigation;
 
-    expect(nextAfterEntry(order, done.key)!.key).toBe(JSON.stringify(["worker", OTHER, "next"]));
+    expect(nextAfterEntry(order, order[0]!.key)).toBe(order[3]);
   });
 
-  it("takes an unread run, but never a parked one however unread", () => {
-    const order = project(
-      workers(
-        [
-          { host: OWN, run: run("done", approval) },
-          { host: OWN, run: run("parked", { ...idle, park: { parkedAt: NOW } }) },
-          { host: OWN, run: run("fresh", idle) },
-        ],
-        [],
-        [unread("parked"), unread("fresh")]
-      ),
-      []
-    ).navigation;
-    const done = order.find((entry) => entry.key.includes("done"))!;
+  it("takes an unread run, but never a parked or snoozed one however unread", () => {
+    const items = workers(
+      [
+        { host: OWN, run: run("done", approval) },
+        { host: OWN, run: run("parked", { ...idle, park: { parkedAt: NOW } }) },
+        { host: OWN, run: run("snoozed", { ...idle, snooze: { snoozedAt: NOW } }) },
+        { host: OWN, run: run("fresh", idle) },
+      ],
+      [],
+      [unread("parked"), unread("snoozed"), unread("fresh")]
+    );
+    const order = project(items, [], {
+      listedWorkers: inOrder(items, ["done", "parked", "snoozed", "fresh"]),
+    }).navigation;
 
-    expect(nextAfterEntry(order, done.key)!.key).toBe(JSON.stringify(["worker", OWN, "fresh"]));
+    expect(order.map(entryShelved)).toEqual([false, true, true, false]);
+    expect(nextAfterEntry(order, order[0]!.key)).toBe(order[3]);
   });
 
   it("goes back to the first wanted run above, then to a plain neighbour", () => {
@@ -428,17 +448,36 @@ describe("nextAfterEntry", () => {
     const quiet = order.filter((entry) => !entryNeedsYou(entry));
     expect(quiet.map((entry) => entry.key)).toEqual([keyOf("idle")]);
     expect(nextAfterEntry(quiet, keyOf("idle"))).toBeUndefined();
-    const pair = [order[3]!, order[2]!];
-    expect(nextAfterEntry(pair, keyOf("idle"))!.key).toBe(keyOf("last"));
+  });
+
+  it("with nothing wanted, takes the run below, or above from the bottom", () => {
+    const order = project(
+      workers([
+        { host: OWN, run: run("top", idle) },
+        { host: OWN, run: run("middle", idle) },
+        { host: OWN, run: run("bottom", idle) },
+      ]),
+      []
+    ).navigation;
+
+    expect(order.some(entryNeedsYou)).toBe(false);
+    expect(nextAfterEntry(order, order[0]!.key)).toBe(order[1]);
+    expect(nextAfterEntry(order, order[1]!.key)).toBe(order[2]);
+    expect(nextAfterEntry(order, order[2]!.key)).toBe(order[1]);
   });
 
   it("moves on to an assistant that asks, as one entry among the rest", () => {
     const helpers = assistants([
       live(OWN, "a1", { agentState: "waiting", waitingReason: "question" }),
     ]);
-    const order = project(workers([{ host: OWN, run: run("done", approval) }]), helpers).navigation;
+    const items = workers([
+      { host: OWN, run: run("done", approval) },
+      { host: OWN, run: run("idle", idle) },
+    ]);
+    const order = project(items, helpers).navigation;
 
-    expect(nextAfterEntry(order, order[0]!.key)).toBe(order[1]);
+    expect(order.map((entry) => entry.role)).toEqual(["worker", "worker", "assistant"]);
+    expect(nextAfterEntry(order, order[0]!.key)).toBe(order[2]);
   });
 
   it("from a run not listed, lands on the first wanted one, or nowhere", () => {
