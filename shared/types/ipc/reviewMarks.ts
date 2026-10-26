@@ -40,7 +40,7 @@ export type ReviewMarkSaveOutcome =
   | { status: "saved"; snapshot: ReviewMarksSnapshot }
   /**
    * The worktree's mark was set or cleared after the revision the caller
-   * named, or the held mark was captured later than this point. Nothing saved.
+   * named. Nothing saved.
    */
   | { status: "stale"; snapshot: ReviewMarksSnapshot }
   | { status: "mismatch"; reason: ReviewMarkMismatch; snapshot: ReviewMarksSnapshot }
