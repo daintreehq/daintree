@@ -430,6 +430,9 @@ export interface GeneratedElectronAPI {
     getUploadPreferences(
       ...args: IpcInvokeMap["file-transfer:get-upload-preferences"]["args"]
     ): Promise<IpcInvokeMap["file-transfer:get-upload-preferences"]["result"]>;
+    grantClickedFile(
+      ...args: IpcInvokeMap["file-transfer:grant-clicked-file"]["args"]
+    ): Promise<IpcInvokeMap["file-transfer:grant-clicked-file"]["result"]>;
     setUploadPreferences(
       ...args: IpcInvokeMap["file-transfer:set-upload-preferences"]["args"]
     ): Promise<IpcInvokeMap["file-transfer:set-upload-preferences"]["result"]>;

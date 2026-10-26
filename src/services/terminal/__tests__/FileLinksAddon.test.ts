@@ -6,6 +6,7 @@ import { actionService } from "@/services/ActionService";
 import { systemClient } from "@/clients";
 import { fileBrowserClient } from "@/clients/fileBrowserClient";
 import { getCurrentViewStoreOrNull } from "@/store/createWorktreeStore";
+import { grantClickedHostFile } from "../clickedHostFile";
 
 vi.mock("@/lib/notify", () => ({
   notify: vi.fn(),
@@ -25,6 +26,7 @@ vi.mock("@/clients", () => ({
 }));
 vi.mock("@/clients/fileBrowserClient", () => ({ fileBrowserClient: { statPaths: vi.fn() } }));
 vi.mock("@/store/createWorktreeStore", () => ({ getCurrentViewStoreOrNull: vi.fn() }));
+vi.mock("../clickedHostFile", () => ({ grantClickedHostFile: vi.fn(async () => {}) }));
 
 const fileEditorDefaultMock = vi.hoisted(() => vi.fn<(filePath: string) => unknown>(() => null));
 vi.mock("@/registry/fileEditorDefaults", () => ({
@@ -553,6 +555,26 @@ describe("FileLinksAddon", () => {
           { source: "user" }
         );
         expect(systemClient.openPath).not.toHaveBeenCalled();
+      });
+
+      it("tells a remote host about the clicked file before the viewer asks for it", async () => {
+        let grant!: () => void;
+        vi.mocked(grantClickedHostFile).mockImplementationOnce(
+          () => new Promise<void>((resolve) => (grant = resolve))
+        );
+        const links = await linksFor(`Saved image to ${CODEX_URL}`);
+        const link = links![0]!;
+        link.activate({ metaKey: false, ctrlKey: false } as MouseEvent, link.text);
+        await vi.waitFor(() => expect(grantClickedHostFile).toHaveBeenCalledWith(DECODED));
+        expect(actionService.dispatch).not.toHaveBeenCalled();
+        grant();
+        await vi.waitFor(() =>
+          expect(actionService.dispatch).toHaveBeenCalledWith(
+            "file.view",
+            expect.objectContaining({ path: DECODED }),
+            { source: "user" }
+          )
+        );
       });
 
       it("falls back to the OS opener only after the in-app viewer refuses", async () => {

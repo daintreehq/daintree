@@ -11,6 +11,7 @@ import type {
   AnswerHostPickPayload,
   DownloadPayload,
   DownloadResult,
+  GrantClickedFilePayload,
   LocalFileStat,
   UploadBytesPayload,
   UploadLocalFilePayload,
@@ -73,6 +74,12 @@ export const fileTransferNamespace = defineIpcNamespace({
       FILE_TRANSFER_METHOD_CHANNELS.download,
       async (ctx, payload: DownloadPayload): Promise<DownloadResult> =>
         requireRemoteService("hostFileClient").download(ctx.webContentsId, payload),
+      { withContext: true }
+    ),
+    grantClickedFile: op(
+      FILE_TRANSFER_METHOD_CHANNELS.grantClickedFile,
+      async (ctx, payload: GrantClickedFilePayload): Promise<void> =>
+        requireRemoteService("hostFileClient").grantClickedFile(ctx.webContentsId, payload),
       { withContext: true }
     ),
     cancel: op(

@@ -1460,6 +1460,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./fileTransfer.js").UploadPreferences;
   };
+  "file-transfer:grant-clicked-file": {
+    args: [payload: import("./fileTransfer.js").GrantClickedFilePayload];
+    result: void;
+  };
   "file-transfer:set-upload-preferences": {
     args: [patch: Partial<import("./fileTransfer.js").UploadPreferences>];
     result: import("./fileTransfer.js").UploadPreferences;

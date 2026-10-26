@@ -278,6 +278,7 @@ describe("files:read handler", () => {
         registerRemoteService("hostFileService", {
           holdsRoot: vi.fn(async () => false),
           uploadIdentity,
+          isClicked: vi.fn(() => false),
         } as never);
         registerFilesHandlers();
 
@@ -289,6 +290,100 @@ describe("files:read handler", () => {
           getReadHandler()(remote, { path: upload, rootPath: path.dirname(inboxFolder) })
         ).rejects.toMatchObject({ code: "OUTSIDE_ROOT" });
         expect(uploadIdentity).not.toHaveBeenCalled();
+        expect(fsMock.open).not.toHaveBeenCalled();
+      });
+
+      it("reads a file the person clicked, from that file's own folder, with no page preview", async () => {
+        const clickedFolder = path.resolve("/tmp/logs");
+        const clicked = path.join(clickedFolder, "report.html");
+        const isClicked = vi.fn((_endpoint: unknown, candidate: string) => candidate === clicked);
+        registerRemoteService("hostFileService", {
+          holdsRoot: vi.fn(async () => false),
+          uploadIdentity: vi.fn(async () => null),
+          isClicked,
+        } as never);
+        registerFilesHandlers();
+
+        const result = await getReadHandler()(remote, {
+          path: clicked,
+          rootPath: clickedFolder,
+          htmlPreview: true,
+        });
+        expect(result.content).toBe("hello\n");
+        expect(result.htmlPreviewUrl).toBeUndefined();
+        expect(isClicked).toHaveBeenCalledWith(remote.endpoint, clicked);
+
+        isClicked.mockClear();
+        await expect(
+          getReadHandler()(remote, { path: clicked, rootPath: path.dirname(clickedFolder) })
+        ).rejects.toMatchObject({ code: "OUTSIDE_ROOT" });
+        expect(isClicked).not.toHaveBeenCalled();
+        await expect(
+          getReadHandler()(remote, {
+            path: path.join(clickedFolder, "other.txt"),
+            rootPath: clickedFolder,
+          })
+        ).rejects.toMatchObject({ code: "OUTSIDE_ROOT" });
+      });
+
+      it("matches a clicked file only by its plain spelling, never through a `..`", async () => {
+        const isClicked = vi.fn(() => true);
+        registerRemoteService("hostFileService", {
+          holdsRoot: vi.fn(async () => false),
+          uploadIdentity: vi.fn(async () => null),
+          isClicked,
+        } as never);
+        registerFilesHandlers();
+
+        // `/scratch/jump` may be a link elsewhere, where realpath would walk the `..`.
+        for (const [filePath, rootPath] of [
+          ["/scratch/jump/../report.txt", "/scratch/jump/.."],
+          ["/scratch/report.txt", "/scratch/jump/.."],
+          ["/scratch/report.txt", "/scratch/./"],
+          ["/scratch/./report.txt", "/scratch/."],
+        ]) {
+          await expect(
+            getReadHandler()(remote, { path: filePath, rootPath })
+          ).rejects.toMatchObject({ code: "OUTSIDE_ROOT" });
+        }
+        expect(isClicked).not.toHaveBeenCalled();
+        expect(fsMock.open).not.toHaveBeenCalled();
+      });
+
+      it("returns nothing once the view loses control during the read", async () => {
+        const clickedFolder = path.resolve("/tmp/logs");
+        const clicked = path.join(clickedFolder, "output.txt");
+        const isClicked = vi.fn().mockReturnValueOnce(true).mockReturnValue(false);
+        registerRemoteService("hostFileService", {
+          holdsRoot: vi.fn(async () => false),
+          uploadIdentity: vi.fn(async () => null),
+          isClicked,
+        } as never);
+        registerFilesHandlers();
+
+        await expect(
+          getReadHandler()(remote, { path: clicked, rootPath: clickedFolder })
+        ).rejects.toMatchObject({ code: "OUTSIDE_ROOT" });
+        expect(isClicked).toHaveBeenCalledTimes(2);
+        expect(fsMock.open).toHaveBeenCalled();
+      });
+
+      it("refuses a link put in the clicked file's place, even to a file beside it", async () => {
+        const clickedFolder = path.resolve("/tmp/logs");
+        const clicked = path.join(clickedFolder, "output.txt");
+        fsMock.realpath.mockImplementation(async (p: string) =>
+          p === clicked ? path.join(clickedFolder, "secret.txt") : p
+        );
+        registerRemoteService("hostFileService", {
+          holdsRoot: vi.fn(async () => false),
+          uploadIdentity: vi.fn(async () => null),
+          isClicked: vi.fn(() => true),
+        } as never);
+        registerFilesHandlers();
+
+        await expect(
+          getReadHandler()(remote, { path: clicked, rootPath: clickedFolder })
+        ).rejects.toMatchObject({ code: "OUTSIDE_ROOT" });
         expect(fsMock.open).not.toHaveBeenCalled();
       });
     });
