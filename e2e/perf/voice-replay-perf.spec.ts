@@ -353,12 +353,12 @@ async function dictateOnce(
     const plannedStopAt = micOpenAt! + prepared.audioMs + STOP_TAIL_MS;
     let endedEarly = false;
     for (;;) {
-      const remaining = plannedStopAt - (await rendererNow(page));
-      if (remaining <= 0) break;
       if (await sessionEnded()) {
         endedEarly = true;
         break;
       }
+      const remaining = plannedStopAt - (await rendererNow(page));
+      if (remaining <= 0) break;
       await sleep(Math.min(remaining, 250));
     }
     let stopAt: number | null = null;

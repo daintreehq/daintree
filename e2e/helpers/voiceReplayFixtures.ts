@@ -214,8 +214,11 @@ export function readPcm16Wav(buffer: Buffer): Pcm16 {
   let fmt: { format: number; channels: number; sampleRate: number; bits: number } | null = null;
   while (offset + 8 <= buffer.length) {
     const id = buffer.toString("ascii", offset, offset + 4);
-    const size = buffer.readUInt32LE(offset + 4);
     const body = offset + 8;
+    // Streaming writers that never learn the length leave the data size at
+    // 0xFFFFFFFF: the samples run to the end of the file.
+    const declared = buffer.readUInt32LE(offset + 4);
+    const size = id === "data" && declared === 0xffffffff ? buffer.length - body : declared;
     // A truncated copy would otherwise play as a shorter clip against the full
     // reference, and the provider would take the blame for the missing words.
     if (body + size > buffer.length)

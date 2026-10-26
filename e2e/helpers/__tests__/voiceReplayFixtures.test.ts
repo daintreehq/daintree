@@ -125,6 +125,13 @@ describe("WAV handling", () => {
     ).toMatchObject({ sampleRate: 16_000 });
   });
 
+  it("reads a streamed WAV whose data length was never filled in", () => {
+    const wav = encodePcm16Wav(pcm([7, -7, 9]));
+    wav.writeUInt32LE(0xffffffff, 40);
+    expect(Array.from(readPcm16Wav(wav).samples)).toEqual([7, -7, 9]);
+    expect(() => readPcm16Wav(wav.subarray(0, wav.length - 1))).toThrow(/partway/);
+  });
+
   it("trims the edges but keeps a pause inside the speech", () => {
     const trimmed = trimSilence(
       pcm(segment(300, 0), segment(500, 0.5), segment(600, 0), segment(500, 0.5), segment(200, 0))
