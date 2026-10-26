@@ -896,6 +896,61 @@ describe("ReviewHub", () => {
       });
       expect(reopened.getAttribute("aria-checked")).toBe("true");
     });
+
+    const viewedState = (path: string) =>
+      screen.getByRole("checkbox", { name: `Mark ${path} as viewed` }).getAttribute("aria-checked");
+
+    const poll = async (status: StagingStatus) => {
+      getStagingStatusMock.mockResolvedValue(status);
+      await act(async () => {
+        capturedUpdateCallback!(makeWorktreeState());
+        await Promise.resolve();
+      });
+    };
+
+    it("reads unviewed once a poll delivers new content for a Viewed file", async () => {
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      await waitFor(() => screen.getByText("index.ts"));
+
+      fireEvent.click(screen.getByRole("checkbox", { name: "Mark src/index.ts as viewed" }));
+      fireEvent.click(screen.getByRole("checkbox", { name: "Mark src/app.ts as viewed" }));
+      expect(viewedState("src/index.ts")).toBe("true");
+
+      await poll(
+        makeStatus({
+          staged: [{ path: "src/index.ts", status: "modified", insertions: 9, deletions: 2 }],
+        })
+      );
+
+      await waitFor(() => expect(viewedState("src/index.ts")).toBe("false"));
+      // The file nobody touched keeps its mark.
+      expect(viewedState("src/app.ts")).toBe("true");
+    });
+
+    it("keeps a Viewed mark through a poll that changes nothing", async () => {
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      await waitFor(() => screen.getByText("index.ts"));
+
+      fireEvent.click(screen.getByRole("checkbox", { name: "Mark src/index.ts as viewed" }));
+      await poll(makeStatus());
+
+      await waitFor(() => expect(getStagingStatusMock).toHaveBeenCalledTimes(2));
+      expect(viewedState("src/index.ts")).toBe("true");
+    });
+
+    it("reads unviewed when a Viewed file leaves the list and comes back unchanged", async () => {
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      await waitFor(() => screen.getByText("app.ts"));
+
+      fireEvent.click(screen.getByRole("checkbox", { name: "Mark src/app.ts as viewed" }));
+
+      await poll(makeStatus({ unstaged: [] }));
+      await waitFor(() => expect(screen.queryByText("app.ts")).toBeNull());
+
+      await poll(makeStatus());
+      await waitFor(() => screen.getByText("app.ts"));
+      expect(viewedState("src/app.ts")).toBe("false");
+    });
   });
 
   describe("multi-select", () => {
