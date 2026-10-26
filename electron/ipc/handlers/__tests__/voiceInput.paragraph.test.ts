@@ -873,6 +873,39 @@ describe("voiceInput — spoken send on Deepgram's short endpoint", () => {
     );
   });
 
+  it("strips a held send, and sends nothing, when another view's start drains it", async () => {
+    sentenceEndingInSend();
+    const otherView = {
+      sender: {
+        id: 2,
+        once: vi.fn(),
+        removeListener: vi.fn(),
+        isDestroyed: () => false,
+        send: vi.fn(),
+      },
+    } as unknown as Electron.IpcMainInvokeEvent;
+    const heldSessionId = currentSessionId;
+    const handleStart = getHandler("voice-input:start");
+    await (handleStart as SessionHandler)(otherView, nextSessionId());
+    vi.advanceTimersByTime(5000);
+
+    expect(toRenderer()).toEqual([
+      {
+        channel: "voice-input:status",
+        payload: { sessionId: heldSessionId, status: "finishing" },
+      },
+      {
+        channel: "voice-input:transcription-complete",
+        payload: {
+          sessionId: heldSessionId,
+          text: "Fix the login bug",
+          willCorrect: false,
+          itemId: "item-A",
+        },
+      },
+    ]);
+  });
+
   it("does not hold a send heard while dictation is already stopping", async () => {
     shared.useDeferredDrain = true;
     const handleStop = getHandler("voice-input:stop");
