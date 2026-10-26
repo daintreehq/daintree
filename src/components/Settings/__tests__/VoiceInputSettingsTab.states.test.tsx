@@ -536,6 +536,32 @@ describe("VoiceInputSettingsTab dictionary", () => {
     });
   });
 
+  it("adds heard -> Term as a rule on the term and shows it on the row", async () => {
+    const api = install(
+      {},
+      {},
+      {
+        add: vi.fn().mockResolvedValue({
+          dictionary: [{ ...term("Zustand"), heardAs: ["zoo stand"] }],
+          suggestedDictionary: [],
+        }),
+      }
+    );
+    const { container } = render(<VoiceInputSettingsTab />);
+    await openPage();
+
+    const input = await termField();
+    fireEvent.change(input, { target: { value: " zoo stand -> Zustand " } });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Remove Zustand" })).toBeTruthy()
+    );
+    expect(api.dictionary.add).toHaveBeenCalledWith({ term: "Zustand", heardAs: ["zoo stand"] });
+    expect(container.textContent).toContain('Heard as "zoo stand"');
+    expect(input.value).toBe("");
+  });
+
   it("shows the queue main holds after an accept, keeping a word learned meanwhile", async () => {
     const api = install(
       { suggestedDictionary: [suggestion("Zustand", "zoo stand")] },

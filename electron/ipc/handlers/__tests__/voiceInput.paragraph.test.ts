@@ -1176,6 +1176,31 @@ describe("voiceInput — context keyterms wiring", () => {
     });
     expect(shared.correctionCalls.at(-1)?.settings).toMatchObject({
       customDictionary: ["Daintree", "Zustand"],
+      heardAs: [{ heard: "dane tree", term: "Daintree" }],
+    });
+  });
+
+  it("writes each completed utterance with the heard-as rules the session started with", async () => {
+    const { store } = await import("../../../store.js");
+    const settings = {
+      ...providerSettings("deepgram"),
+      dictionary: [{ term: "Zustand", heardAs: ["zoo stand"], source: "manual", addedAt: 1 }],
+    };
+    vi.mocked(store.get).mockReturnValue(settings);
+    const { assembleKeyterms } = await import("../../../services/voiceContextKeyterms.js");
+
+    await startFn(fakeEvent, nextSessionId());
+    emitTranscriptionEvent({ type: "complete", text: "add Zoo Stand to @zoo stand" });
+    vi.mocked(store.get).mockReturnValue({ ...settings, dictionary: [] });
+    emitTranscriptionEvent({ type: "complete", text: "then zoo stand again" });
+
+    const completes = activeSent
+      .filter((m) => m.channel === "voice-input:transcription-complete")
+      .map((m) => (m.payload as { text: string }).text);
+    expect(completes).toEqual(["add Zustand to @zoo stand", "then Zustand again"]);
+    // A rule never keeps the written term from biasing the transcriber.
+    expect(vi.mocked(assembleKeyterms).mock.calls.at(-1)?.[0]).toMatchObject({
+      customDictionary: ["Zustand"],
     });
   });
 

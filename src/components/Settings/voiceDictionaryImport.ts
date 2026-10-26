@@ -18,7 +18,8 @@ export interface ParsedDictionaryInput {
   overflowHeardAs: number;
 }
 
-const ARROW = /\s*(?:->|=>|→)\s*/;
+// The arrow needs a space (or the item's edge) either side, so a term like "ptr->next" stays a term.
+const ARROW = /\s*(?<!\S)(?:->|=>|→)(?!\S)\s*/;
 
 /**
  * Read pasted dictionary input: one item per line or comma-separated terms,

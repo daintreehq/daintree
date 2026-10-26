@@ -29,6 +29,17 @@ describe("parseDictionaryInput", () => {
     ]);
   });
 
+  it("reads an arrow with no space beside it as part of the term", () => {
+    expect(parseDictionaryInput("ptr->next\nmap=>fn\nzoo stand ->Zustand").terms).toEqual([
+      { term: "ptr->next", heardAs: [] },
+      { term: "map=>fn", heardAs: [] },
+      { term: "zoo stand ->Zustand", heardAs: [] },
+    ]);
+    expect(parseDictionaryInput("  zoo stand  ->  Zustand ").terms).toEqual([
+      { term: "Zustand", heardAs: ["zoo stand"] },
+    ]);
+  });
+
   it("skips what a keyterm can't hold and reports it", () => {
     const result = parseDictionaryInput(`${"a".repeat(101)}, ok`);
     expect(result.terms).toEqual([{ term: "ok", heardAs: [] }]);

@@ -44,6 +44,7 @@ import {
 } from "../../services/voiceContextKeyterms.js";
 import { readProjectVoiceDictionary } from "../../services/projectVoiceDictionary.js";
 import { flattenDictationNames, gatherDictationNames } from "../../services/voiceContextNames.js";
+import { collectHeardAsRules, createHeardAsRewriter } from "../../../shared/utils/voiceHeardAs.js";
 import {
   dictionaryTerms,
   sanitizeDictionary,
@@ -1002,6 +1003,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // Correction settings are read live from store per-event so mid-session changes apply.
     const settings = getVoiceSettings();
     session.stats.provider = settings.transcriptionProvider;
+    // Like the keyterms, the rules are the dictionary as it was at the start.
+    const rewriteHeardAs = createHeardAsRewriter(collectHeardAsRules(settings.dictionary));
 
     // Kick off keyterm assembly concurrently with the subscription/provider
     // setup below so leading speech isn't delayed waiting on git/terminal reads.
@@ -1246,7 +1249,9 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
           ...(voiceEvent.itemId ? { itemId: voiceEvent.itemId } : {}),
         });
       } else if (voiceEvent.type === "complete") {
-        const rawText = voiceEvent.text.trim();
+        // Heard-as rules come first, so the draft, file-link detection and
+        // correction all see the dictionary's terms rather than the mishearing.
+        const rawText = rewriteHeardAs(voiceEvent.text.trim());
         // A trailing "send it" that ends the utterance is stripped and handed
         // to the renderer, which owns the send; one the provider cut
         // mid-speech stays literal.
@@ -1538,6 +1543,9 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         customDictionary: dictionaryTerms(sessionDictionary(settings.dictionary, vocabulary)),
         knownNames:
           lastSessionNames?.webContentsId === ctx.webContentsId ? lastSessionNames.names : [],
+        // Global rules only, matching the live rewriter. Project heard-as forms
+        // belong in both places, through sessionDictionary.
+        heardAs: collectHeardAsRules(settings.dictionary),
         customInstructions: settings.correctionCustomInstructions,
         language: normalizeVoiceLanguage(settings.language),
         projectName: projectInfo.name,

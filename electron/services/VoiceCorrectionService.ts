@@ -15,12 +15,12 @@ import { voiceErrorLogFields } from "../../shared/utils/voiceLogFields.js";
 import { buildOpenAIHeaders } from "../../shared/utils/openaiHeaders.js";
 import { createTimeoutSignal, withTimeoutSignal } from "../../shared/utils/timeoutSignal.js";
 import {
-  findProtectedRanges,
   validateCorrection,
   validateRewrite,
   type CorrectionRejectReason,
 } from "./voiceCorrectionGuard.js";
 import { mayReferenceFile } from "../../shared/utils/voiceFileLinkCommands.js";
+import type { HeardAsRule } from "../../shared/utils/voiceHeardAs.js";
 
 export { CORE_CORRECTION_PROMPT, buildCorrectionSystemPrompt };
 
@@ -46,7 +46,6 @@ const REWRITE_CACHE_PREFIX = "voice-rewrite-v1";
 const MIN_REWRITE_TIMEOUT_MS = 10000;
 const FILE_LINK_CACHE_PREFIX = "voice-file-link-v2";
 const LEADING_FILLER_RE = /^(?:\s*(?:um|uh)[\s,.;:!-]+)+/i;
-const DICTIONARY_TERM_BOUNDARY_RE = /[\p{L}\p{N}_]/u;
 
 const FILE_LINK_DETECTION_SCHEMA = {
   type: "object",
@@ -66,10 +65,6 @@ const FILE_LINK_DETECTION_SCHEMA = {
   },
   required: ["file_references"],
 } as const;
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
 
 const CORRECTION_RESULT_SCHEMA = {
   type: "object",
@@ -115,6 +110,7 @@ export interface VoiceCorrectionSettings {
   apiKey: string;
   customDictionary: string[];
   knownNames?: string[];
+  heardAs?: readonly HeardAsRule[];
   customInstructions?: string;
   language?: string;
   projectName?: string;
@@ -242,15 +238,9 @@ export class VoiceCorrectionService {
 
       let confirmedText: string;
       if (result.action === "no_change" || !result.correctedText.trim()) {
-        confirmedText = this.canonicalizeCustomDictionaryTerms(
-          request.rawText,
-          settings.customDictionary
-        );
+        confirmedText = request.rawText;
       } else {
-        const candidate = this.canonicalizeCustomDictionaryTerms(
-          result.correctedText.trim(),
-          settings.customDictionary
-        );
+        const candidate = result.correctedText.trim();
         const rejection = this.findRejection(request.rawText, candidate, result.confidence);
         if (rejection) {
           logDebug(`${P} Correction rejected, keeping raw text`, {
@@ -323,9 +313,11 @@ export class VoiceCorrectionService {
   private buildPromptCacheKey(settings: VoiceCorrectionSettings): string {
     const projectKey = settings.projectName ?? settings.projectPath ?? "global";
     const parts: unknown[] = [settings.model, projectKey, settings.customDictionary];
-    // Only when there are some, so a session without names keeps the key (and
-    // the warm cache) its prompt had before names existed.
+    // Each only when there are some, so a session without names or heard-as
+    // rules keeps the key (and the warm cache) its prompt had before either
+    // existed. Names are strings and rules are objects, so they never hash alike.
     if (settings.knownNames && settings.knownNames.length > 0) parts.push(settings.knownNames);
+    if (settings.heardAs && settings.heardAs.length > 0) parts.push(settings.heardAs);
     const fingerprint = createHash("sha256")
       .update(JSON.stringify(parts))
       .digest("hex")
@@ -622,31 +614,6 @@ export class VoiceCorrectionService {
     return text.replace(LEADING_FILLER_RE, "");
   }
 
-  private canonicalizeCustomDictionaryTerms(text: string, customDictionary: string[]): string {
-    let canonicalized = text;
-    for (const term of customDictionary) {
-      const canonical = term.trim();
-      if (!canonical) continue;
-
-      // Recasing never reaches into a path, flag, reference or backticked span.
-      const protectedRanges = findProtectedRanges(canonicalized);
-      const pattern = new RegExp(escapeRegExp(canonical), "giu");
-      canonicalized = canonicalized.replace(pattern, (match, offset: number, fullText: string) => {
-        const before = offset > 0 ? fullText[offset - 1] : "";
-        const afterIndex = offset + match.length;
-        const after = afterIndex < fullText.length ? fullText[afterIndex] : "";
-        if (DICTIONARY_TERM_BOUNDARY_RE.test(before) || DICTIONARY_TERM_BOUNDARY_RE.test(after)) {
-          return match;
-        }
-        if (protectedRanges.some((range) => offset < range.end && afterIndex > range.start)) {
-          return match;
-        }
-        return canonical;
-      });
-    }
-    return canonicalized;
-  }
-
   private async callApi(
     request: VoiceCorrectionRequest,
     settings: VoiceCorrectionSettings
@@ -655,6 +622,7 @@ export class VoiceCorrectionService {
       model,
       customDictionary,
       knownNames,
+      heardAs,
       customInstructions,
       projectName,
       projectPath,
@@ -666,6 +634,7 @@ export class VoiceCorrectionService {
       projectPath,
       customDictionary,
       knownNames,
+      heardAs,
       customInstructions,
       language,
     };

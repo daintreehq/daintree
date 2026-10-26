@@ -221,6 +221,41 @@ describe("buildCorrectionSystemPrompt", () => {
     expect(buildCorrectionSystemPrompt({})).toBe(buildCorrectionSystemPrompt({ knownNames: [] }));
   });
 
+  it("puts the user's heard-as rules beside the built-in table, before the project", () => {
+    const prompt = buildCorrectionSystemPrompt({
+      projectName: "my-app",
+      customDictionary: ["Zustand"],
+      heardAs: [
+        { heard: "zoo stand", term: "Zustand" },
+        { heard: "dane tree", term: "Daintree" },
+      ],
+    });
+    expect(prompt).toContain(
+      "<user_terms>\nzoo stand: Zustand\ndane tree: Daintree\n</user_terms>"
+    );
+    expect(prompt.indexOf("</terms>")).toBeLessThan(prompt.indexOf("<user_terms>"));
+    expect(prompt.indexOf("</user_terms>")).toBeLessThan(prompt.indexOf("CURRENT PROJECT"));
+  });
+
+  it("omits the user terms section without heard-as rules", () => {
+    expect(buildCorrectionSystemPrompt({ heardAs: [] })).not.toContain("USER TERMS");
+  });
+
+  it("keeps the heard-as rules ahead of the workspace names when both are present", () => {
+    const prompt = buildCorrectionSystemPrompt({
+      customDictionary: ["Daintree"],
+      knownNames: ["Studio 1"],
+      heardAs: [{ heard: "dane tree", term: "Daintree" }],
+    });
+    const userTerms = prompt.indexOf("</user_terms>");
+    const names = prompt.indexOf("NAMES IN THIS WORKSPACE");
+    expect(userTerms).toBeGreaterThan(-1);
+    expect(names).toBeGreaterThan(userTerms);
+    expect(
+      prompt.lastIndexOf("Return a JSON object that matches the response schema.")
+    ).toBeGreaterThan(names);
+  });
+
   it("omits project section when no project context provided", () => {
     const prompt = buildCorrectionSystemPrompt({});
     expect(prompt).not.toContain("CURRENT PROJECT");

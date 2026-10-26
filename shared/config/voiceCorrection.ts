@@ -1,4 +1,5 @@
 import { VOICE_LANGUAGE_AUTO, voiceLanguageName } from "./voiceLanguages.js";
+import type { HeardAsRule } from "../utils/voiceHeardAs.js";
 
 /** Skip LLM correction entirely when every word exceeds this confidence. */
 export const CONFIDENCE_SKIP_THRESHOLD = 0.85;
@@ -192,6 +193,8 @@ export interface CorrectionPromptContext {
   customDictionary?: string[];
   /** Host, project and worktree names, spelled and cased as Daintree shows them. */
   knownNames?: string[];
+  /** The user's heard-as rules, already applied to the target before it is sent. */
+  heardAs?: readonly HeardAsRule[];
   customInstructions?: string;
   language?: string;
 }
@@ -251,16 +254,25 @@ function contextBlocks(context: CorrectionPromptContext): string[] {
  *
  * Structure (for optimal prompt caching):
  *   1. Core prompt (fixed — cached after first request)
- *   2. Project context (changes per project, not per segment)
- *   3. Custom dictionary (highest priority corrections)
- *   4. Custom instructions (lower-priority user context)
- *   5. Guardrail suffix (fixed — always last, cannot be overridden)
+ *   2. The user's heard-as rules, next to the core prompt's built-in table
+ *   3. Project context (changes per project, not per segment)
+ *   4. Custom dictionary (highest priority corrections)
+ *   5. Workspace names (hosts, projects and worktrees, when there are any)
+ *   6. Language and custom instructions (lower-priority user context)
+ *   7. Guardrail suffix (fixed — always last, cannot be overridden)
  *
  * Only the user message (history + raw text) changes per request.
  */
 export function buildCorrectionSystemPrompt(context: CorrectionPromptContext): string {
-  const parts: string[] = [CORE_CORRECTION_PROMPT, ...contextBlocks(context)];
-  parts.push(GUARDRAIL_SUFFIX.trim());
+  const parts: string[] = [CORE_CORRECTION_PROMPT];
+
+  if (context.heardAs && context.heardAs.length > 0) {
+    parts.push(
+      `USER TERMS (the user's own additions to <terms>, in the same form. Exact matches were already replaced before the target reached you, so use these for near variants of the same mishearing, such as a plural or different spacing):\n<user_terms>\n${context.heardAs.map(({ heard, term }) => `${heard}: ${term}`).join("\n")}\n</user_terms>`
+    );
+  }
+
+  parts.push(...contextBlocks(context), GUARDRAIL_SUFFIX.trim());
 
   return parts.join("\n\n");
 }

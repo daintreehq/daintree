@@ -107,46 +107,65 @@ describe("VoiceCorrectionService", () => {
     expect(result.confirmedText).toBe("leave this alone");
   });
 
-  it("canonicalizes exact custom dictionary term casing deterministically", async () => {
+  // The recasing pass this replaced rewrote every one of these.
+  it.each([
+    ["@src/react/hooks.ts", ["React", "Go"]],
+    ["vite.config.ts", ["Vite"]],
+    ["let's go", ["React", "Go"]],
+    ["we need to update the daintree dashboard", ["Daintree"]],
+    ["open daintree/src/index.ts in daintree", ["Daintree"]],
+  ])("leaves %s as transcribed when the model changes nothing", async (rawText, terms) => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(
-        makeFetchResponse({
-          action: "no_change",
-          corrected_text: "we need to update the daintree dashboard",
-        })
-      )
+      vi.fn().mockResolvedValue(makeFetchResponse({ action: "no_change", corrected_text: "" }))
     );
 
-    const svc = new VoiceCorrectionService();
-    const result = await svc.correct(
-      { rawText: "we need to update the daintree dashboard" },
-      { ...BASE_SETTINGS, customDictionary: ["Daintree"] }
+    const result = await new VoiceCorrectionService().correct(
+      { rawText },
+      { ...BASE_SETTINGS, customDictionary: terms }
     );
 
-    expect(result.action).toBe("replace");
-    expect(result.correctedText).toBe("we need to update the Daintree dashboard");
-    expect(result.confirmedText).toBe("we need to update the Daintree dashboard");
+    expect(result.action).toBe("no_change");
+    expect(result.confirmedText).toBe(rawText);
   });
 
-  it("does not force custom dictionary terms inside larger words", async () => {
+  it("applies the model's cleanup without recasing dictionary terms in it", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(
-        makeFetchResponse({
-          action: "replace",
-          corrected_text: "the daintreehouse fixture mentions daintree",
-        })
-      )
+      vi
+        .fn()
+        .mockResolvedValue(
+          makeFetchResponse({
+            action: "replace",
+            corrected_text: "Fix @src/react/hooks.ts, let's go.",
+          })
+        )
     );
 
+    const result = await new VoiceCorrectionService().correct(
+      { rawText: "fix @src/react/hooks.ts let's go" },
+      { ...BASE_SETTINGS, customDictionary: ["React", "Go"] }
+    );
+
+    expect(result.confirmedText).toBe("Fix @src/react/hooks.ts, let's go.");
+  });
+
+  it("sends the heard-as rules in the prompt and keys the cache on them", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(makeFetchResponse({ action: "no_change" }));
+    vi.stubGlobal("fetch", fetchMock);
     const svc = new VoiceCorrectionService();
-    const result = await svc.correct(
-      { rawText: "the daintreehouse fixture mentions daintree" },
-      { ...BASE_SETTINGS, customDictionary: ["Daintree"] }
-    );
+    const send = async (heardAs: { heard: string; term: string }[]) => {
+      fetchMock.mockClear();
+      await svc.correct({ rawText: "add Zustand" }, { ...BASE_SETTINGS, heardAs });
+      return JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
+    };
 
-    expect(result.confirmedText).toBe("the daintreehouse fixture mentions Daintree");
+    const withRule = await send([{ heard: "zoo stand", term: "Zustand" }]);
+    const without = await send([]);
+
+    expect(withRule.input[0].content).toContain("zoo stand: Zustand");
+    expect(without.input[0].content).not.toContain("<user_terms>");
+    expect(withRule.prompt_cache_key).not.toBe(without.prompt_cache_key);
   });
 
   it("falls back to raw text on API error", async () => {
@@ -393,6 +412,14 @@ describe("VoiceCorrectionService", () => {
     expect((await requestFor({ knownNames: ["Studio 1"] })).prompt_cache_key).toBe(
       studio.prompt_cache_key
     );
+
+    // Heard-as rules fold in the same way: no rules, no change to the key.
+    expect((await requestFor({ heardAs: [] })).prompt_cache_key).toBe(without.prompt_cache_key);
+    const rule = [{ heard: "studio one", term: "Studio 1" }];
+    const ruled = await requestFor({ heardAs: rule });
+    const both = await requestFor({ knownNames: ["Studio 1"], heardAs: rule });
+    expect(new Set([without, studio, ruled, both].map((r) => r.prompt_cache_key)).size).toBe(4);
+    expect(both.prompt_cache_key.length).toBeLessThanOrEqual(64);
   });
 
   it("formats explicit correction context in the user message", async () => {
@@ -631,16 +658,6 @@ describe("VoiceCorrectionService", () => {
       for (const span of ["@src/App.tsx", "`npm test`", "--watch", "5173"]) {
         expect(result.confirmedText).toContain(span);
       }
-    });
-
-    it("does not recase a custom dictionary term inside a protected span", async () => {
-      const rawText = "open daintree/src/index.ts in daintree";
-      const result = await correctWith(
-        rawText,
-        { action: "no_change", corrected_text: "" },
-        { customDictionary: ["Daintree"] }
-      );
-      expect(result.confirmedText).toBe("open daintree/src/index.ts in Daintree");
     });
 
     it("falls back to the exact raw text, not a recased copy, when a result is rejected", async () => {
