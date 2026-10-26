@@ -50,9 +50,7 @@ export function settingsOwnerMarker(
  * The marker for one section or row of a mixed settings page. Nothing in a
  * local window, so a page with no hosts renders exactly as it always has.
  */
-export function useSettingsOwnerMarker(): (
-  owner: SettingOwner
-) => string | undefined {
+export function useSettingsOwnerMarker(): (owner: SettingOwner) => string | undefined {
   const remoteHostName = useRemoteHostName();
   return (owner) => settingsOwnerMarker(owner, remoteHostName);
 }
@@ -75,10 +73,7 @@ export function settingsRowOwnerNote(
  * A row description with its owner appended in a remote window, matching the
  * description's own punctuation. The description, untouched, locally.
  */
-export function useSettingsRowOwnerNote(): (
-  description: string,
-  owner: SettingOwner
-) => string {
+export function useSettingsRowOwnerNote(): (description: string, owner: SettingOwner) => string {
   const remoteHostName = useRemoteHostName();
   return (description, owner) => {
     const note = settingsRowOwnerNote(owner, remoteHostName);
