@@ -8,9 +8,10 @@ export function isScratchCommand(text: string): boolean {
   return SCRATCH_COMMAND_RE.test(text);
 }
 
-// The draft each scratch left, keyed by draft like a landed correction. The
-// composer takes it with the revision the scratch bumped, and keeps its undo
-// history even when the scratch emptied the draft: that is an edit, not a send.
+// The draft each scratch left, keyed by draft like a landed correction. An
+// Escape that cancels a dictation records one too. The composer takes it with
+// the revision the write bumped, and keeps its undo history even when the
+// write emptied the draft: that is an edit, not a send.
 const scratched = new Map<string, string>();
 
 export function recordScratchLanded(

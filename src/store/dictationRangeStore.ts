@@ -390,6 +390,11 @@ export const useDictationRangeStore = create<DictationRangeState>()((set, get) =
           ? { ...record.range, to: Math.max(record.range.from, from) }
           : record.range,
       utterances: record.utterances.slice(0, -1),
+      // Breaks it took with the utterance are gone from the draft too. Kept,
+      // they would map to empty edited ranges and stop a cancel taking the rest.
+      breaks: record.breaks.filter(
+        (paragraphBreak) => paragraphBreak.to <= from || paragraphBreak.from >= to
+      ),
     };
     set((state) => ({
       drafts: { ...state.drafts, [key]: records.map((r, i) => (i === index ? trimmed : r)) },

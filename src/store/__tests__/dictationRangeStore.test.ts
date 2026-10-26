@@ -567,6 +567,45 @@ describe("dictationRangeStore", () => {
     expect(only().breaks[0]!.edited).toBe(true);
   });
 
+  describe("takeLastUtterance", () => {
+    const take = () => {
+      const span = useDictationRangeStore.getState().takeLastUtterance(target, draft())!;
+      setDraft(draft().slice(0, span.from) + draft().slice(span.to));
+    };
+
+    it("forgets the paragraph break it took with the utterance", () => {
+      setDraft("Keep");
+      dictate("First.");
+      paragraphBreak();
+      dictate("Second.");
+      paragraphBreak();
+
+      take();
+
+      expect(draft()).toBe("Keep First.\n");
+      expect(only().breaks.map(textOf)).toEqual(["\n"]);
+      expect(only().breaks.every((paragraphBreak) => !paragraphBreak.edited)).toBe(true);
+      const spans = dictatedSpans(only(), draft().length)!;
+      expect(
+        spans.reduce((text, { from, to }) => text.slice(0, from) + text.slice(to), draft())
+      ).toBe("Keep");
+    });
+
+    it("keeps a break past the text typed after the utterance", () => {
+      dictate("First.");
+      dictate("Second.");
+      paragraphBreak();
+      edit(draft().length, draft().length, "x");
+      paragraphBreak();
+      expect(draft()).toBe("First. Second.\nx\n");
+
+      take();
+
+      expect(draft()).toBe("First.\nx\n");
+      expect(only().breaks.map(textOf)).toEqual(["\n", "\n"]);
+    });
+  });
+
   describe("dictatedSpans", () => {
     const without = (spans: { from: number; to: number }[]) =>
       spans.reduce((text, { from, to }) => text.slice(0, from) + text.slice(to), draft());

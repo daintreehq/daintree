@@ -1113,10 +1113,10 @@ class VoiceRecordingService {
     const draft = useTerminalInputStore.getState().getDraftInput(target.panelId, target.projectId);
     const spans = record ? dictatedSpans(record, draft.length) : [];
     if (!spans) {
-      void this.stop("Dictation stopped. Its text was kept because you edited it.", {
-        preserveLiveText: true,
-        reason: "escape",
-      });
+      void this.stop(
+        "Dictation stopped. Its text was kept because it changed after you dictated it.",
+        { preserveLiveText: true, reason: "escape" }
+      );
       return true;
     }
     void this.cancelDictation(target, record, spans);
@@ -1157,6 +1157,9 @@ class VoiceRecordingService {
       );
       if (next !== draft) {
         inputStore.setDraftInput(panelId, next, projectId);
+        // Like a scratch, an edit rather than a send: the composer keeps its
+        // undo history even when the cancel empties the draft.
+        recordScratchLanded(panelId, projectId, next);
         inputStore.bumpExternalDraftRevision();
       }
       useDictationRangeStore.getState().releaseDictation(record.id);

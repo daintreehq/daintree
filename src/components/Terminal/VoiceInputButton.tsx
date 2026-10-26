@@ -244,7 +244,8 @@ export function VoiceInputButton({
     if (disabled && blockedWhenDisabled) return;
 
     // Paused → resume on click; the affordance reads as a pause/resume toggle
-    // rather than a stop. Escape (handled by the service) is the stop path.
+    // rather than a stop. The dictation key stops and keeps the text; Escape
+    // (handled by the service) cancels and discards it.
     if (isPaused) {
       voiceRecordingService.togglePause();
       return;

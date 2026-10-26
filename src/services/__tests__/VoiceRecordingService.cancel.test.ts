@@ -258,6 +258,35 @@ describe("VoiceRecordingService — Escape cancels a dictation (#14631)", () => 
     expect(announcement()).toMatch(/discarded/i);
   });
 
+  it("still cancels after a spoken scratch took an utterance and its paragraph break", async () => {
+    const { service, draft, settled } = await setup("Keep");
+
+    complete("First.", "item-a");
+    boundary();
+    complete("Second.", "item-b");
+    boundary();
+    complete("Scratch that.", "item-c");
+    expect(draft()).toBe("Keep First.\n");
+
+    expect(service.handleEscape(PANEL)).toBe(true);
+    await settled();
+
+    expect(draft()).toBe("Keep");
+    expect(ipc.cancel).toHaveBeenCalledWith(SESSION_ID);
+  });
+
+  it("marks the draft it left for the composer, so emptying it stays undoable", async () => {
+    const { service, draft, settled } = await setup();
+    const { takeScratchLanded } = await import("@/services/voiceScratchCommand");
+
+    complete("Hello.", "item-a");
+    service.handleEscape(PANEL);
+    await settled();
+
+    expect(draft()).toBe("");
+    expect(takeScratchLanded(PANEL, PROJECT, "")).toBe(true);
+  });
+
   it("ends the session without draining it", async () => {
     const { service, settled } = await setup();
 

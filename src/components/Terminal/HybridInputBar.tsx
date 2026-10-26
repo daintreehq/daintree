@@ -965,8 +965,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             : selectionAfterOutsideWrite(view.state, view.hasFocus, change, pendingSelection);
         view.dispatch(outsideDraftWrite(change, draft, landed, selection));
         // Emptied from outside (sent or cleared elsewhere): nothing to undo into.
-        // A spoken "scratch that" that empties it is an edit, so undo brings
-        // the words back.
+        // A spoken "scratch that" or a cancelled dictation that empties it is
+        // an edit, so undo brings the words back.
         if (draft === "" && !scratched) clearComposerHistory(view);
       } else {
         if (landed) replayLandedCorrection(view, landed);
