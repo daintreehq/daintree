@@ -1,4 +1,4 @@
-# Adaptive resource governance (profiles, pressure, eviction, hibernation)
+# Adaptive resource governance (profiles, pressure, eviction, sleep)
 
 ## Purpose
 
@@ -23,11 +23,11 @@ Bridging the two: a third fast path lives **inside** `ResourceProfileService` �
     fleet/sys-mem)     │  ─ lag monitor (5s) → fast-path → efficiency │
                        └───────────────┬─────────────────────────────┘
                                        │ applyProfile(p): fan out RESOURCE_PROFILE_CONFIGS[p]
-        ┌──────────────┬───────────────┼───────────────┬───────────────┬──────────────┐
-        ▼              ▼               ▼               ▼               ▼              ▼
-  WorkspaceClient  HibernationSvc  PtyClient ──▶   ProjectStats   ProjectViewMgr   renderer
-  (poll/fetch/     (mem-pressure   PTY host:       (poll cadence)  (freeze + LRU    (webgl mode,
-   watcher cap)    idle threshold) ResourceGovernor                cap + paint gate) fetch intervals)
+        ┌───────────────┬──────────────┼───────────────┬────────────────┐
+        ▼               ▼              ▼               ▼                ▼
+  WorkspaceClient   PtyClient ──▶   ProjectStats    ProjectViewMgr    renderer
+  (poll/fetch/      PTY host:       (poll cadence)  (freeze + LRU     (webgl mode,
+   watcher cap)     ResourceGovernor                cap + paint gate)  fetch intervals)
 ```
 
 The profile is intentionally **coarse**. There are only three states, so every consumer's per-profile values live in one table (`RESOURCE_PROFILE_CONFIGS`) and the policy is auditable at a glance. Consumers never read raw signals; they read the profile config they're handed.
@@ -43,7 +43,7 @@ The profile is intentionally **coarse**. There are only three states, so every c
 | Thermal (macOS only) | `powerMonitor` `thermal-state-change` + `getCurrentThermalState()` | `+2` critical, `+1` serious |
 | CPU speed limit (macOS & Windows) | `powerMonitor` `speed-limit-change` | `+2` below 50, `+1` below 100 |
 | Active-agent fleet size | cached count from `PtyClient.getAllTerminalsAsync()`, filtered | `+3` ≥ 24, `+2` ≥ 16, `+1` ≥ 8 |
-| System-available memory | `process.getSystemMemoryInfo()` (free + purgeable on macOS, free elsewhere) | `+3` below `min(0.1 × RAM, 1024 MB)`, `+1` below the warning edge — `0.2 × RAM` up to a 10 GB knee, then widening from 2048 MB to a 3072 MB bound reached at 42 GB (`getSystemMemoryThresholds`) |
+| System-available memory | `process.getSystemMemoryInfo()`, read as available memory by `electron/utils/systemMemory.ts`: free + `fileBacked` + `purgeable` on macOS (Activity Monitor's Cached Files), the kernel's `MemAvailable` on Linux, `free` on Windows | `+3` below `min(0.1 × RAM, 1024 MB)`, `+1` below the warning edge — `0.2 × RAM` up to a 10 GB knee, then widening from 2048 MB to a 3072 MB bound reached at 42 GB (`getSystemMemoryThresholds`) |
 | Terminal-workload memory | cached `PtyClient.getMemoryRollup()` (descendant RSS from the pty-host `ProcessTreeCache`, PID-deduplicated, via `electron/services/memoryAccounting.ts`) | `+2` above 0.4 × RAM, `+1` above 0.25 × RAM — only from a fresh (≤ 60 s), successful process-table sweep; stale/unavailable data contributes 0. Per-tier 10% exit band. Bounded at +2 so terminal workloads alone can never latch `efficiency`. |
 
 Mapping (`ResourceProfileService.ts`): `score >= 3 → efficiency`, `score === 0 → performance`, otherwise `balanced`.
@@ -108,7 +108,7 @@ Every host-independent per-profile knob lives in `RESOURCE_PROFILE_CONFIGS` (`sh
 | `agentScrollbackMaxLines` | 10000 | 10000 | 4000 | Renderer agent scrollback policy (`scrollbackConfig.ts`); the effective cap is `min(this, PTY_MIRROR_SCROLLBACK)` = 5000 / 5000 / 4000, so a warm terminal never holds more than a restore recovers |
 | `fetchIntervalActiveMs` / `fetchIntervalBackgroundMs` | 20 s / 3 min | 30 s / 5 min | 45 s / 10 min | workspace-host `FetchScheduler` |
 | `portBatchThroughputDelayMs` (ms) | 16 | 16 | 40 | pty-host PortBatcher throughput flush window |
-| `memoryPressureInactiveMs` | 60 min | 30 min | 15 min | IdleBackgroundAutoCloseService pressure idle-shell threshold (read directly, never pushed) |
+| `memoryPressureInactiveMs` | 60 min | 30 min | 15 min | Not pushed: `IdleBackgroundAutoCloseService` reads it from the table for memory-pressure sleep, capped at the user's idle-terminal threshold (see [Memory-pressure mitigation](#memory-pressure-mitigation-processmemorymonitor)) |
 | `paintGateTimeoutMs` / `paintGateHardTimeoutMs` (ms) | 1500 / 4000 | 1500 / 4000 | 2500 / 6000 | ProjectViewManager cold paint gate |
 | `warmPaintGateTimeoutMs` / `warmPaintGateHardTimeoutMs` (ms) | 500 / 1500 | 500 / 1500 | 800 / 2500 | ProjectViewManager warm paint gate |
 | `viewLoadTimeoutMs` / `viewLoadHardTimeoutMs` (ms) | 10000 / 30000 | 10000 / 30000 | 15000 / 45000 | ProjectViewManager view-load bounds |
@@ -126,12 +126,6 @@ Two entries also pin values that live in a second place and must move together: 
 `updateMonitorConfig(...)` ships the poll/fetch intervals, `backgroundGitWatcherCap` and `agentRecursiveWatcherCap` to the workspace host. The watcher cap is an **LRU budget** (`WorkspaceService.applyWatcherBudget`): the focused worktree always keeps its recursive watcher (excluded from the cap); the `cap` most-recently-focused background worktrees keep `git-only` watchers; the rest fall back to adaptive polling. Worktrees with a working agent sit outside that pool and always keep a watcher, but only the first `agentRecursiveWatcherCap` of them in activation order hold a recursive one — a newcomer never evicts an established stream, and agents past the cap watch `.git/` only, with the 60 s elevated poll as their fallback. Revocations run before grants so freed inotify/FSEvents handles are released before any new watcher arms — the live handle count stays bounded by the cap even mid-reconcile. This is the mechanism that bounds O(N) fd growth in long sessions with many worktrees.
 
 A **backgrounded project** (its host paused via `WorkspaceService.pause()`) runs no fetch or resource-status polling at all. Its worktrees without a working agent — the focused one included — also stop their status poll and drop their watcher entirely, so the host holds no FSEvents/inotify streams for them. Agent-active worktrees keep their watcher and status poll through the pause, because their freshness is the product's core loop; an agent that finishes while paused is released at once, and one that starts gets its watcher back. On resume, each released worktree re-arms and runs one catch-up status pass through the poll queue — forced where recursive coverage returns, since nothing was watching in between.
-
-### Memory-pressure sleep
-
-Nothing is pushed for `memoryPressureInactiveMs`: `IdleBackgroundAutoCloseService.pressureShellThresholdMs()` reads it from `RESOURCE_PROFILE_CONFIGS` for the active profile on every check. Tier 2's `hibernateIdleProjects` lever runs `sleepUnderMemoryPressure()`, the idle-shell sleep sweep run early with its threshold shortened to that value; every other gate still applies. `HibernationService` no longer kills terminals; it only evicts cached renderers for Sleep (#14534). Nothing hibernates on a timer: the scheduled sweep and its "Hibernate inactive projects" setting were removed (#13840), and migration 035 deletes the stored `hibernation` key so it can't opt anyone into a later automatic sleep.
-
-`ProcessMemoryMonitor` applies tier 1 once at the start of a pressure episode, then at most once per five minutes while the same episode persists. Tier 1 trims PTY-host state and hidden browser/dev-preview webviews; it never clears caches or forces GC in the visible renderer. Tier 2 requires three consecutive pressure samples, rechecks the originating system-memory signal after tier 1, and is limited to once per ten minutes. It destroys hidden webviews, evicts cached project renderers down to the active view, and runs memory-pressure sleep. A clean sample resets the episode so a later independent event can react immediately.
 
 ### PtyClient → ResourceGovernor (cross-process)
 
@@ -174,7 +168,7 @@ Two consumers: `DiagnosticsCollector`'s `workerGovernance` section (support bund
 
 **2. Cached-view LRU eviction** — cached `WebContentsView`s cost ~100–500 MB RSS each (a full Chromium renderer), so they're the largest reclaimable chunk. On the measurement in `docs/performance/2026-10-23-empty-project-view-memory.md` an empty view's renderer is ~158 MB of physical footprint and a cached one ~138 MB. A cached view in the shipped app goes hidden, so its compositor tiles drop to ~25 MB in the GPU process (#14237). Two controls:
 
-- Efficiency entry never lowers the cached-view cap — all efficiency triggers (memory, battery, thermal, CPU, lag) are handled by freezing alone, and destroying renderers is reserved for the low-memory floor below. On exit the limit is re-asserted to `getUserCachedViewLimit()` (the user's `cachedProjectViews` setting, default 1) so a stale clamp can never outlive the profile.
+- Efficiency entry never lowers the cached-view cap — all efficiency triggers (memory, battery, thermal, CPU, lag) are handled by freezing alone, and destroying renderers is reserved for the low-memory floor below. On exit the limit is re-asserted to `getUserCachedViewLimit()` (the user's `cachedProjectViews` setting, whose default `computeDefaultCachedViews` in `shared/config/cachedProjectViews.ts` picks by RAM: 2 below 16 GB, 3 from 16 GB, 4 from 32 GB, 5 from 64 GB) so a stale clamp can never outlive the profile.
 - `setMemoryPressurePolicy({ criticalMb, warningMb })` — the cached-view reclaim band, pushed **once per PVM** at `start()` / `applyCurrentProfileTo()` and deliberately **not** on transitions. Both edges come from `getSystemMemoryThresholds(totalRamMb)`, the same thresholds that promote the profile on the memory signal, so a promotion and the reclaim it implies arm at the same reading. Keeping it off the transition path is what stops the interactive `efficiency → balanced` clamp from loosening the floor at the exact moment memory is lowest (#11469). Inside `evictStaleViews` the band is a per-pass target that **never mutates** the user's `maxCachedViews`:
   - **above `warningMb`** — no override; the user's cap stands.
   - **`[criticalMb, warningMb)`** — soft band. The settled cap steps down one view per equal slice of the band, and the pass destroys **at most one view**, so reclaim starts a full band-width earlier and degrades warm switching gradually. Soft contraction runs **only** from the periodic sweep (`maybeEvictUnderPressure`, gated at the _warning_ edge), making the 30 s sampler cadence the settling interval between steps; `"lru"` and `"limit-change"` passes stay deterministic at the configured cap.
@@ -190,9 +184,26 @@ Two consumers: `DiagnosticsCollector`'s `workerGovernance` section (support bund
 
 `updatePollInterval(config.projectStatsPollInterval)` — 5 s on performance/balanced, 25 s on efficiency.
 
-### Note on PortalManager and ProcessMemoryMonitor
+### Note on PortalManager
 
-`PortalManager` runs its own LRU eviction (`evictIfNeeded`, `electron/services/PortalManager.ts`) but does **not** read the resource profile — it's a parallel, profile-independent budget. `ProcessMemoryMonitor` is the other half of the memory story: it polls per-process footprint on a 30 s cadence and runs a two-tier mitigation (clear caches / destroy hidden webviews → hibernate idle projects), independent of the profile state machine. The profile service and `ProcessMemoryMonitor` observe overlapping signals but act through different levers.
+`PortalManager` runs its own LRU eviction (`evictIfNeeded`, `electron/services/PortalManager.ts`) but does **not** read the resource profile — it's a parallel, profile-independent budget.
+
+## Memory-pressure mitigation (ProcessMemoryMonitor)
+
+`ProcessMemoryMonitor` (`electron/services/ProcessMemoryMonitor.ts`, its levers wired in `globalServicesInit.ts`) is the other half of the memory story. It polls per-process footprint on a 30 s cadence and runs a two-tier mitigation, independent of the profile state machine. The profile service and `ProcessMemoryMonitor` observe overlapping signals but act through different levers.
+
+Tier 1 runs once at the start of a pressure episode, then at most once per five minutes while the same episode persists. It destroys hidden browser/dev-preview webviews (`destroyHiddenWebviews(1)`), trims idle terminals' PTY-host scrollback, never a working agent's (`trimPtyHostState`), and asks the renderers to drop the scrollback of terminals they aren't showing (`trimRendererScrollback`).
+
+Tier 2 requires three consecutive pressure samples, rechecks the originating system-memory signal after tier 1, and is limited to once per ten minutes. Its levers run in this order, each in its own `try/catch`:
+
+1. `destroyHiddenWebviews(2)`.
+2. `hibernateIdleProjects`, wired to `IdleBackgroundAutoCloseService.sleepUnderMemoryPressure()`. It does nothing unless the user turned on both idle background auto-close and "Include projects with idle terminals". When they have, it runs the auto-close sweep early for projects with idle shells or resting agents, through the same Sleep teardown and the same gates as the scheduled sweep, with one change: the idle-terminal threshold becomes the profile's `memoryPressureInactiveMs` (60 / 30 / 15 min), never longer than the threshold the user chose. Candidates sleep largest first, and the pressure sweep stops starting new sleeps after 30 s. Terminal-free projects keep their own clock. It runs before the view and host levers because a sleep reads the project's workspace host to prove nothing is mid-lifecycle there.
+3. `evictCachedProjectViews` — every window's `reclaimCachedViewsUnderPressure()`, the forced one-pass eviction down to the active view.
+4. `reclaimDormantWorkspaceHosts` — disposes every workspace host no window holds, which the view eviction just released (#12519).
+
+A clean sample resets the episode so a later independent event can react immediately. Neither tier clears caches or forces GC. The monitor's one GC lever sits outside the tiers: on macOS, when the kernel's own pressure level reaches warn, the monitor broadcasts `window:reclaim-memory` (at most once per five minutes), and only renderers whose document is hidden run `gc()` in response.
+
+Nothing hibernates on a timer: the scheduled sweep and its "Hibernate inactive projects" setting were removed (#13840), and migration 035 deletes the stored `hibernation` key so it can't opt anyone into a later automatic sleep. `HibernationService` no longer kills terminals either (#14534); its one job is evicting a sleeping project's cached renderer for `sleepProject`.
 
 ## Reaching the renderer
 
@@ -222,7 +233,7 @@ Resource governance is deliberately **quiet**. Per the runtime-signal tiers in [
 | Idle plugin-worker dispose | `electron/services/PluginService.ts` (`disposeIdlePluginWorkers`) |
 | View freeze / LRU eviction / paint gate | `electron/window/ProjectViewManager.ts` |
 | CDP freeze, memory-purge, and CPU-rate reset helpers | `electron/utils/webContentsLifecycle.ts` |
-| Memory-pressure sleep | `electron/services/IdleBackgroundAutoCloseService.ts` |
+| Memory-pressure sleep of idle projects | `electron/services/IdleBackgroundAutoCloseService.ts` (`sleepUnderMemoryPressure`) |
 | Per-process memory mitigation tiers | `electron/services/ProcessMemoryMonitor.ts` |
 | Background git-watcher LRU budget | `electron/workspace-host/WorkspaceService.ts` |
 | Service wiring (deps, instantiation) | `electron/window/globalServicesInit.ts` |

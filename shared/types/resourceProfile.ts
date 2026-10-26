@@ -182,6 +182,10 @@ export interface ResourceProfileSnapshot {
  * - processTreePollInterval: 2500 (ProcessTreeCache constructor default)
  * - projectStatsPollInterval: 5000 (ProjectStatsService DEFAULT_POLL_INTERVAL_MS)
  *
+ * memoryPressureInactiveMs has no hardcoded twin: IdleBackgroundAutoCloseService
+ * reads it straight from this table for memory-pressure sleep, never past the
+ * user's idle-shell threshold.
+ *
  * The WebGL flip thresholds (webglUpperThreshold / webglLowerThreshold) are NOT
  * stored here: they are RAM-dependent and resolved from the effective
  * per-renderer WebGL-context ceiling on the main process
