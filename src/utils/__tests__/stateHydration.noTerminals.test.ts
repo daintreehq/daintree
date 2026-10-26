@@ -99,8 +99,9 @@ vi.mock("@/services/TerminalInstanceService", () => ({ createTerminalPaintPlane 
 vi.mock("@/lib/notify", () => ({ notify: vi.fn().mockReturnValue("notification-id") }));
 
 const { hydrateAppState } = await import("../stateHydration");
-const { __resetTerminalConfigSyncForTests, beginTerminalConfigRead } =
+const { __resetTerminalConfigSyncForTests, applyBootTerminalConfig, beginTerminalConfigRead } =
   await import("@/services/terminalConfigSync");
+const { SCROLLBACK_MAX } = await import("@shared/config/scrollback");
 const { useScrollbackStore } = await import("@/store/scrollbackStore");
 const { usePerformanceModeStore } = await import("@/store/performanceModeStore");
 // Deliberately not primed with load(): the point is that hydration alone never
@@ -154,12 +155,13 @@ describe("hydrateAppState with no terminal panels", () => {
       workspaceId: "project-1",
       agentSettings: { agents: {} },
     });
-    const run = () =>
+    const run = (prefetchedHydrateResult?: ReturnType<typeof hydrateWith>) =>
       hydrateAppState({
         addPanel: vi.fn().mockResolvedValue("panel-id"),
         setActiveWorktree: vi.fn(),
         loadRecipes: vi.fn().mockResolvedValue(undefined),
         openDiagnosticsDock: vi.fn(),
+        prefetchedHydrateResult: prefetchedHydrateResult as never,
       });
 
     beforeEach(() => {
@@ -176,9 +178,32 @@ describe("hydrateAppState with no terminal panels", () => {
 
       await run();
 
-      expect(useScrollbackStore.getState().scrollbackLines).toBeLessThan(50_000);
+      expect(useScrollbackStore.getState().scrollbackLines).toBe(SCROLLBACK_MAX);
       expect(usePerformanceModeStore.getState().performanceMode).toBe(true);
       expect(terminalConfigClientMock.setScrollback).not.toHaveBeenCalled();
+    });
+
+    // A reopened view hydrates afresh after booting long before (#14179).
+    it("ranks a fresh hydrate above the boot payload this view already took", async () => {
+      applyBootTerminalConfig({ scrollbackLines: 1000, performanceMode: false });
+      appClientMock.hydrate.mockResolvedValue(
+        hydrateWith({ scrollbackLines: 3000, performanceMode: true })
+      );
+
+      await run();
+
+      expect(useScrollbackStore.getState().scrollbackLines).toBe(3000);
+      expect(usePerformanceModeStore.getState().performanceMode).toBe(true);
+    });
+
+    it("ranks the prefetched boot payload below any read already taken", async () => {
+      beginTerminalConfigRead()({ scrollbackLines: 3000, performanceMode: true });
+
+      await run(hydrateWith({ scrollbackLines: 1000, performanceMode: false }));
+
+      expect(appClientMock.hydrate).not.toHaveBeenCalled();
+      expect(useScrollbackStore.getState().scrollbackLines).toBe(3000);
+      expect(usePerformanceModeStore.getState().performanceMode).toBe(true);
     });
 
     it("never puts back values a newer read replaced while the hydrate travelled", async () => {

@@ -313,6 +313,7 @@ describe("terminalConfig handlers", () => {
 
       await getHandler(CHANNELS.TERMINAL_CONFIG_SET_CACHED_PROJECT_VIEWS)({}, 3);
 
+      expect(failing.setCachedViewLimit).toHaveBeenCalledWith(3);
       expect(changed(CHANNELS.TERMINAL_CONFIG_DEVICE_CHANGED)).toEqual([
         expect.objectContaining({ cachedProjectViews: 3 }),
       ]);

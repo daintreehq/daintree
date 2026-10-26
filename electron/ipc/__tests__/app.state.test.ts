@@ -630,7 +630,8 @@ describe("app:boot handler", () => {
 
   it("propagates the cache-hit fast path from handleAppHydrate (no disk read)", async () => {
     const cachedResult = {
-      appState: { terminals: [], sidebarWidth: 350 },
+      // Nothing the slow path would build, so only the cache can supply it.
+      appState: { terminals: [], sidebarWidth: 777 },
       terminalConfig: {
         scrollbackLines: 3000,
         performanceMode: false,
@@ -658,13 +659,23 @@ describe("app:boot handler", () => {
       path: "/p",
     } as unknown as ReturnType<typeof projectStoreModule.projectStore.getCurrentProject>);
     legacyOwnerRef.current = "p1";
+    // Saved since the hover.
+    const storeModule = await import("../../store.js");
+    vi.mocked(storeModule.store.get).mockImplementation((key: string) =>
+      key === "terminalConfig"
+        ? { scrollbackLines: 2500, performanceMode: true, resourceMonitoringEnabled: false }
+        : defaultStoreGet(key)
+    );
 
     const result = (await invokeBoot()) as Record<string, unknown>;
     expect(result.appState).toEqual(cachedResult.appState);
-    // Saved since the hover, so the payload carries the saved values rather
-    // than the prefetch's copy (#14699).
-    expect(result.terminalConfig).toMatchObject({ resourceMonitoringEnabled: false });
-    expect(result.terminalConfig).not.toMatchObject({ scrollbackLines: 3000 });
+    expect(projectStoreModule.projectStore.getProjectStateWithRecovery).not.toHaveBeenCalled();
+    // The saved values, not the prefetch's copy (#14699).
+    expect(result.terminalConfig).toMatchObject({
+      scrollbackLines: 2500,
+      performanceMode: true,
+      resourceMonitoringEnabled: false,
+    });
     expect(result.crashPending).toBeNull();
     expect(result.crashConfig).toEqual({ autoRestoreOnCrash: false });
   });

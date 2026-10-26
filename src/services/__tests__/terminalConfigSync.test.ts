@@ -187,14 +187,32 @@ describe("terminalConfigSync (#14699)", () => {
     }
   });
 
-  it("reads the config when the boot payload has none", async () => {
-    bootMock.getSafeBootPromise.mockResolvedValue({ ok: false, error: new Error("boot") });
+  it.each([
+    ["boot failed", { ok: false, error: new Error("boot") }],
+    ["boot carried no config", { ok: true, result: { terminalConfig: undefined } }],
+  ])("reads the config when the %s", async (_case, bootResult) => {
+    bootMock.getSafeBootPromise.mockResolvedValue(bootResult);
     client.get.mockResolvedValue({ scrollbackLines: 2500, resourceMonitoringEnabled: true });
     dispose = initTerminalConfigSync();
     await settle();
 
     expect(client.get).toHaveBeenCalledTimes(1);
     expect(snapshot()).toMatchObject({ scrollbackLines: 2500, resourceMonitoring: true });
+  });
+
+  it("reads rather than reusing the boot payload when started again", async () => {
+    boot({ fontSize: 13 });
+    dispose = initTerminalConfigSync();
+    await settle();
+    dispose();
+    // Saved while nothing was listening; the boot payload still says 13.
+    client.get.mockResolvedValue({ fontSize: 20 });
+
+    dispose = initTerminalConfigSync();
+    await settle();
+
+    expect(client.get).toHaveBeenCalledTimes(1);
+    expect(useTerminalFontStore.getState().fontSize).toBe(20);
   });
 
   it("applies each owner's push to that owner's fields alone", async () => {
@@ -353,19 +371,34 @@ describe("terminalConfigSync (#14699)", () => {
     });
   });
 
-  it("catches up on a change it missed when it reads again", async () => {
+  it("puts every field back to what's saved when it reads again", async () => {
     boot({ fontSize: 13, scrollbackLines: 1000 });
     dispose = initTerminalConfigSync();
     await settle();
-    // Edited here and not saved yet; the read must not undo it.
+    // A failed save rolled this view back to a value that's no longer saved.
     useScrollbackStore.setState({ scrollbackLines: 4000 });
+    client.push(device({ fontSize: 13, scrollbackLines: 1000 }));
+    expect(useScrollbackStore.getState().scrollbackLines).toBe(4000);
     client.get.mockResolvedValue({ fontSize: 17, scrollbackLines: 1000 });
 
     lifecycle.emit("active");
     await settle();
 
     expect(useTerminalFontStore.getState().fontSize).toBe(17);
-    expect(useScrollbackStore.getState().scrollbackLines).toBe(4000);
+    expect(useScrollbackStore.getState().scrollbackLines).toBe(1000);
+  });
+
+  it("takes another view's pick without adding it to this view's recents", async () => {
+    boot({ colorSchemeId: "a", recentSchemeIds: ["a"] });
+    dispose = initTerminalConfigSync();
+    await settle();
+
+    client.push(device({ colorSchemeId: "b", recentSchemeIds: ["a"] }));
+
+    expect(useTerminalColorSchemeStore.getState()).toMatchObject({
+      selectedSchemeId: "b",
+      recentSchemeIds: ["a"],
+    });
   });
 
   it("stops listening and ignores a read still in flight once disposed", async () => {

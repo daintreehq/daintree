@@ -69,10 +69,12 @@ const OWNER_CHANNEL: Record<SettingOwner, string> = {
 
 /** Every field one owner holds, as {@link readTerminalConfig} reports it. */
 export function readTerminalConfigOwnedBy(owner: SettingOwner): Partial<TerminalConfig> {
-  const config = readTerminalConfig() as Record<string, unknown>;
   const owned: Record<string, unknown> = {};
-  for (const [field, fieldOwner] of Object.entries(TERMINAL_CONFIG_FIELD_OWNERSHIP)) {
-    if (fieldOwner === owner && Object.hasOwn(config, field)) owned[field] = config[field];
+  for (const [field, value] of Object.entries(readTerminalConfig())) {
+    if (!Object.hasOwn(TERMINAL_CONFIG_FIELD_OWNERSHIP, field)) continue;
+    if (TERMINAL_CONFIG_FIELD_OWNERSHIP[field as TerminalConfigField] === owner) {
+      owned[field] = value;
+    }
   }
   return owned as Partial<TerminalConfig>;
 }

@@ -164,19 +164,21 @@ const FIELDS_OWNED_BY: Readonly<Record<SettingOwner, readonly Field[]>> = (() =>
 })();
 
 /**
- * What this view last heard was saved, per field. A config is applied only
- * where it differs from this, so a change saved elsewhere lands while an edit
- * this view hasn't saved yet survives a push about some other field.
+ * What this view last heard was saved, per field. A push lands only where it
+ * differs from this, so an edit this view hasn't saved yet survives a push
+ * about some other field. A read puts every field back to what's saved, which
+ * is how a view that drifted (a failed save rolled back to a stale value)
+ * comes right again.
  */
 let heard = new Map<Field, unknown>();
 
-function applyOwnedBy(owner: SettingOwner, config: Config): void {
+function applyOwnedBy(owner: SettingOwner, config: Config, from: "read" | "push"): void {
   for (const name of FIELDS_OWNED_BY[owner]) {
     try {
       const sync = FIELDS[name];
       const saved = sync.resolve(config);
       if (saved === undefined) continue;
-      if (heard.has(name) && sameJson(heard.get(name), saved)) continue;
+      if (from === "push" && heard.has(name) && sameJson(heard.get(name), saved)) continue;
       heard.set(name, saved);
       // Left alone when the store has it: some setters do more than store it.
       if (!sameJson(sync.read(), saved)) sync.write(saved);
@@ -209,6 +211,12 @@ function freshState(): Record<SettingOwner, OwnerState> {
 
 let owners = freshState();
 
+/**
+ * The boot payload seeds the first sync only. One started again later (after
+ * a dispose) reads instead: changes saved in between were never heard.
+ */
+let bootSeeded = false;
+
 /** Applies a read's answer, or whichever owner's half of it is still current. */
 export type TerminalConfigRead = (config: Config | null | undefined) => void;
 
@@ -220,7 +228,7 @@ function readWith(tickets: Record<SettingOwner, { pushes: number; ticket: number
       const { pushes, ticket } = tickets[owner];
       if (state.pushes !== pushes || ticket <= state.accepted) continue;
       state.accepted = ticket;
-      applyOwnedBy(owner, config);
+      applyOwnedBy(owner, config, "read");
     }
   };
 }
@@ -247,7 +255,7 @@ export const applyBootTerminalConfig: TerminalConfigRead = (config) =>
 function receiveChange({ owner, config }: TerminalConfigChange): void {
   if (owner !== "device" && owner !== "host") return;
   owners[owner].pushes += 1;
-  applyOwnedBy(owner, config);
+  applyOwnedBy(owner, config, "push");
 }
 
 /**
@@ -287,9 +295,13 @@ export function initTerminalConfigSync(): () => void {
   void (async () => {
     const boot = await getSafeBootPromise();
     if (disposed) return;
-    const config = boot.ok ? boot.result.terminalConfig : undefined;
-    if (config) applyBootTerminalConfig(config);
-    else await refetch();
+    const config = boot.ok && !bootSeeded ? boot.result.terminalConfig : undefined;
+    if (config) {
+      bootSeeded = true;
+      applyBootTerminalConfig(config);
+    } else {
+      await refetch();
+    }
   })();
 
   return () => {
@@ -303,4 +315,5 @@ export function initTerminalConfigSync(): () => void {
 export function __resetTerminalConfigSyncForTests(): void {
   owners = freshState();
   heard = new Map();
+  bootSeeded = false;
 }
