@@ -554,6 +554,51 @@ describe("installHostMetricsHostWith", () => {
     ]);
     dispose();
   });
+
+  it("keeps each Shell's reminder cooldown apart from another's", async () => {
+    const server = new FakeServer();
+    let clock = new Date(2026, 8, 25, 12, 0).getTime();
+    let settings = { ...NO_QUIET_HOURS, waitingEnabled: false };
+    const d = deps({
+      now: () => clock,
+      notificationSettings: () => settings,
+      shellDecides: (clientId) => clientId === "mac",
+    });
+    const dispose = installHostMetricsHostWith(server, d);
+    const legacy = await pair();
+    const mac = await pair();
+    server.attach(legacy.host, "legacy");
+    server.attach(mac.host, "mac");
+    const heard = { legacy: 0, mac: 0 };
+    for (const [name, p] of [
+      ["legacy", legacy],
+      ["mac", mac],
+    ] as const) {
+      p.client.registerCallHandler(MetricsLinkMethod.ATTENTION, AttentionPayloadSchema, () => {
+        heard[name]++;
+        return null;
+      });
+    }
+    const event: WaitingEvent = {
+      kind: "waiting",
+      terminalId: "t1",
+      projectId: null,
+      projectName: null,
+      agentName: null,
+    };
+
+    // Only the Shell that decides for itself hears it while this host has waiting off.
+    d.fireWaiting(event);
+    await waitFor(() => heard.mac === 1);
+    // Turned on here, and the agent waits again inside the window: the Shell
+    // this host held it back from hears now; the other is still cooling down.
+    settings = NO_QUIET_HOURS;
+    clock += 1_000;
+    d.fireWaiting(event);
+    await waitFor(() => heard.legacy === 1);
+    expect(heard.mac).toBe(1);
+    dispose();
+  });
 });
 
 describe("installLinkActivityHost", () => {

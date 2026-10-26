@@ -127,7 +127,7 @@ function hostWaitingPolicy(
   }
 }
 
-/** One reminder per agent per window: a flapping FSM must not page a Shell repeatedly. */
+/** One reminder per agent per window and Shell: a flapping FSM must not page a Shell repeatedly. */
 export const ATTENTION_COOLDOWN_MS = 60_000;
 
 function postSummary(
@@ -262,30 +262,30 @@ export function installHostMetricsHostWith(
 
   const offWaiting = deps.onAgentWaiting((event) => {
     const now = deps.now();
-    const last = lastAttention.get(event.terminalId);
-    if (last !== undefined && now - last < ATTENTION_COOLDOWN_MS) return;
     // Read once, and only for a Shell that leaves the verdict to this host.
     let hostPolicy: ReturnType<typeof waitingPolicy> | undefined;
-    let announced = false;
     for (const ctx of server.sessions) {
       if (!ctx.session.isOpen) continue;
+      // Per Shell: one this host held an agent back from isn't then held
+      // back by the reminder another Shell was sent.
+      const key = `${ctx.client.clientId}\0${event.terminalId}`;
+      const last = lastAttention.get(key);
+      if (last !== undefined && now - last < ATTENTION_COOLDOWN_MS) continue;
       let quiet = false;
       if (!deps.shellDecides(ctx.client.clientId)) {
         hostPolicy ??= hostWaitingPolicy(deps, now);
         if (hostPolicy === "silent") continue;
         quiet = hostPolicy === "quiet";
       }
-      announced = true;
+      lastAttention.set(key, now);
       const payload: AttentionPayload = { ...event, quiet };
       ctx.session.call(MetricsLinkMethod.ATTENTION, payload).catch(() => {
         // A Shell that can't take it now has nothing to retry: the agent's state is on screen.
       });
     }
-    if (!announced) return;
-    lastAttention.set(event.terminalId, now);
     if (lastAttention.size > 1000) {
-      for (const [terminalId, at] of lastAttention) {
-        if (now - at >= ATTENTION_COOLDOWN_MS) lastAttention.delete(terminalId);
+      for (const [key, at] of lastAttention) {
+        if (now - at >= ATTENTION_COOLDOWN_MS) lastAttention.delete(key);
       }
     }
   });

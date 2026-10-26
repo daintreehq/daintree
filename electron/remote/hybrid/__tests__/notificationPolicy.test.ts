@@ -18,6 +18,7 @@ import {
   installNotificationPolicyHost,
   installNotificationPolicyPush,
   NOTIFICATION_POLICY_METHOD,
+  POLICY_RETRY_MS,
   type NotificationPolicySource,
 } from "../notificationPolicy.js";
 
@@ -196,6 +197,78 @@ describe("notification policy over a link (#14701)", () => {
     settings.write({ completedEnabled: false });
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(pair.client.isOpen).toBe(true);
+    offShell();
+  });
+
+  it("sends the current choices again shortly when a busy link refuses them", async () => {
+    vi.useFakeTimers();
+    try {
+      const manager = fakeManager();
+      const settings = fakeSource(CHOICES);
+      const offShell = installNotificationPolicyPush(manager, settings.source);
+      const call = vi
+        .fn()
+        .mockRejectedValueOnce(Object.assign(new Error("full"), { code: "RATE_LIMITED" }))
+        .mockResolvedValue(null);
+      const session = { isOpen: true, call, onClose: () => () => {} } as unknown as LinkSession;
+      manager.opened(session);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(call).toHaveBeenCalledTimes(1);
+
+      settings.write({ waitingEnabled: false });
+      await vi.advanceTimersByTimeAsync(0);
+      // The refusal didn't count as sent, so the change goes out at once.
+      expect(call).toHaveBeenCalledTimes(2);
+      expect(call).toHaveBeenLastCalledWith(NOTIFICATION_POLICY_METHOD, {
+        ...CHOICES,
+        waitingEnabled: false,
+      });
+      // The retry finds it already there and sends nothing more.
+      await vi.advanceTimersByTimeAsync(POLICY_RETRY_MS);
+      expect(call).toHaveBeenCalledTimes(2);
+      offShell();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retries on its own when nothing else changes, and stops for a host that can't take it", async () => {
+    vi.useFakeTimers();
+    try {
+      const manager = fakeManager();
+      const settings = fakeSource(CHOICES);
+      const offShell = installNotificationPolicyPush(manager, settings.source);
+      const busy = vi
+        .fn()
+        .mockRejectedValueOnce(Object.assign(new Error("late"), { code: "OUTCOME_UNKNOWN" }))
+        .mockResolvedValue(null);
+      const old = vi
+        .fn()
+        .mockRejectedValue(Object.assign(new Error("unknown"), { code: "UNSUPPORTED" }));
+      for (const call of [busy, old]) {
+        manager.opened({ isOpen: true, call, onClose: () => () => {} } as unknown as LinkSession);
+      }
+      await vi.advanceTimersByTimeAsync(POLICY_RETRY_MS);
+      expect(busy).toHaveBeenCalledTimes(2);
+      expect(old).toHaveBeenCalledTimes(1);
+      offShell();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ignores a session that closed before it was handed over", () => {
+    const manager = fakeManager();
+    const settings = fakeSource(CHOICES);
+    const offShell = installNotificationPolicyPush(manager, settings.source);
+    const call = vi.fn();
+    const onClose = vi.fn((listener: () => void) => {
+      listener();
+      return () => {};
+    });
+    manager.opened({ isOpen: false, call, onClose } as unknown as LinkSession);
+    expect(call).not.toHaveBeenCalled();
+    expect(settings.listeners.size).toBe(0);
     offShell();
   });
 });

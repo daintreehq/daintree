@@ -60,6 +60,21 @@ const storePolicySource: NotificationPolicySource = {
   },
 };
 
+/** How long a policy a busy link refused waits before it is sent again. */
+export const POLICY_RETRY_MS = 5_000;
+
+/** A full send queue, or a host that didn't answer in time: worth sending again. */
+function isTransient(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  return code === "RATE_LIMITED" || code === "OUTCOME_UNKNOWN";
+}
+
+interface Delivery {
+  /** The policy last sent on the session, as JSON; null until one is. */
+  sent: string | null;
+  retry: ReturnType<typeof setTimeout> | null;
+}
+
 /**
  * Shell side: send this machine's policy on every session it opens to a
  * host, and again to each open one whenever it changes. Settings writes are
@@ -72,16 +87,41 @@ export function installNotificationPolicyPush(
   },
   source: NotificationPolicySource = storePolicySource
 ): () => void {
-  const sessions = new Set<LinkSession>();
+  const sessions = new Map<LinkSession, Delivery>();
+  let offChanged: (() => void) | null = null;
   let disposed = false;
-  const send = (session: LinkSession, policy: ShellNotificationPolicy): void => {
-    session.call(NOTIFICATION_POLICY_METHOD, policy).catch(() => {
-      // An older host decides by its own settings; a closed link is sent the policy when it reopens.
+
+  const deliver = (session: LinkSession, delivery: Delivery): void => {
+    if (!session.isOpen) return;
+    const policy = source.read();
+    const key = JSON.stringify(policy);
+    if (delivery.sent === key) return;
+    delivery.sent = key;
+    session.call(NOTIFICATION_POLICY_METHOD, policy).catch((error: unknown) => {
+      // A host from before this decides by its own settings; a closed link is
+      // sent the policy when it reopens; a newer policy is already on its way.
+      if (!isTransient(error) || sessions.get(session) !== delivery || delivery.sent !== key) {
+        return;
+      }
+      delivery.sent = null;
+      delivery.retry ??= setTimeout(() => {
+        delivery.retry = null;
+        deliver(session, delivery);
+      }, POLICY_RETRY_MS);
     });
   };
 
+  const forget = (session: LinkSession): void => {
+    const delivery = sessions.get(session);
+    if (!delivery) return;
+    if (delivery.retry) clearTimeout(delivery.retry);
+    sessions.delete(session);
+    if (sessions.size > 0 || !offChanged) return;
+    offChanged();
+    offChanged = null;
+  };
+
   // A settings save writes field by field: settle once they're all in.
-  let sent = "";
   let pending = false;
   const onMaybeChanged = (): void => {
     if (pending) return;
@@ -89,39 +129,25 @@ export function installNotificationPolicyPush(
     queueMicrotask(() => {
       pending = false;
       if (disposed) return;
-      const policy = source.read();
-      const key = JSON.stringify(policy);
-      if (key === sent) return;
-      sent = key;
-      for (const session of sessions) {
-        if (session.isOpen) send(session, policy);
-      }
+      for (const [session, delivery] of sessions) deliver(session, delivery);
     });
   };
-  let offChanged: (() => void) | null = null;
 
   const offOpened = manager.onSessionOpened((_hostId, session) => {
-    sessions.add(session);
-    session.onClose(() => {
-      sessions.delete(session);
-      if (sessions.size > 0 || !offChanged) return;
-      offChanged();
-      offChanged = null;
-    });
-    const policy = source.read();
-    if (!offChanged) {
-      sent = JSON.stringify(policy);
-      offChanged = source.onMaybeChanged(onMaybeChanged);
-    }
-    send(session, policy);
+    if (!session.isOpen || sessions.has(session)) return;
+    const delivery: Delivery = { sent: null, retry: null };
+    sessions.set(session, delivery);
+    session.onClose(() => forget(session));
+    offChanged ??= source.onMaybeChanged(onMaybeChanged);
+    deliver(session, delivery);
   });
 
   return () => {
     disposed = true;
     offOpened();
+    for (const session of [...sessions.keys()]) forget(session);
     offChanged?.();
     offChanged = null;
-    sessions.clear();
   };
 }
 

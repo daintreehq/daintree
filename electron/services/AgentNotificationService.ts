@@ -335,6 +335,25 @@ class AgentNotificationService {
     return `shell:${this.shellClientOf(ownerId) ?? ownerId}`;
   }
 
+  /**
+   * A burst split by the machine each item goes to, in arrival order: grouped
+   * under another machine's view, an item would be shown, or held back, by
+   * that machine's choices and never reach its own.
+   */
+  private byRecipient<T>(
+    items: readonly T[],
+    ownerOf: (item: T) => NotificationOwnerId | undefined
+  ): T[][] {
+    const groups = new Map<string, T[]>();
+    for (const item of items) {
+      const recipient = this.recipientOf(ownerOf(item));
+      const group = groups.get(recipient);
+      if (group) group.push(item);
+      else groups.set(recipient, [item]);
+    }
+    return [...groups.values()];
+  }
+
   initialize(): void {
     // Idempotent — repeat calls are a no-op so a deferred-task race during
     // window close + reopen can't double-subscribe event listeners.
@@ -781,16 +800,25 @@ class AgentNotificationService {
       if (item.terminalId && !this.waitingTerminalIds.has(item.terminalId)) return false;
       // Canopy already paged for this wait.
       if (item.terminalId && this.canopyAnnouncedIds.has(item.terminalId)) return false;
-      if (!item.worktreeId) return true;
+      // The view it goes to now may be another machine's, with its own choices.
       const owner = this.emitOwner(item.terminalId, item.ownerWebContentsId);
+      const settings = this.settingsFor(owner);
+      if (settings.enabled === false || !settings.waitingEnabled) return false;
+      if (!item.worktreeId) return true;
       if (!notificationService.isOwnerViewFocused(owner)) return true;
       activeWorktreeId ??= store.get("appState").activeWorktreeId ?? null;
       if (activeWorktreeId !== item.worktreeId) return true;
       presence ??= notificationService.getUserPresence();
       return presence !== "present";
     });
-    if (dedupedItems.length === 0) return;
+    for (const group of this.byRecipient(dedupedItems, (item) =>
+      this.emitOwner(item.terminalId, item.ownerWebContentsId)
+    )) {
+      this.announceWaiting(group);
+    }
+  }
 
+  private announceWaiting(dedupedItems: BurstWaitingEntry[]): void {
     const first = dedupedItems[0];
     const closeWithPanels = dedupedItems.flatMap((item) =>
       item.terminalId ? [item.terminalId] : []
@@ -839,17 +867,9 @@ class AgentNotificationService {
     const soundFile = this.completionBurstSoundFile;
     this.completionBurstSoundFile = undefined;
 
-    // One banner per machine: grouped under another machine's view, a
-    // completion would be shown or held back by that machine's choices.
-    const byRecipient = new Map<string, PendingNotification[]>();
-    for (const item of items) {
-      const recipient = this.recipientOf(this.emitOwner(item.terminalId, item.ownerWebContentsId));
-      const group = byRecipient.get(recipient);
-      if (group) group.push(item);
-      else byRecipient.set(recipient, [item]);
-    }
-
-    for (const group of byRecipient.values()) {
+    for (const group of this.byRecipient(items, (item) =>
+      this.emitOwner(item.terminalId, item.ownerWebContentsId)
+    )) {
       if (group.length === 1) {
         this.enqueue(group[0], true, soundFile);
         continue;
@@ -1027,9 +1047,13 @@ class AgentNotificationService {
       presence ??= notificationService.getUserPresence();
       return presence !== "present";
     });
-    if (asks.length === 0) return;
     for (const ask of asks) this.canopyAnnouncedIds.add(ask.terminalId);
+    for (const group of this.byRecipient(asks, (ask) => this.resolveOwner(ask.terminalId))) {
+      this.announceCanopyAsks(group);
+    }
+  }
 
+  private announceCanopyAsks(asks: CanopyAskNotice[]): void {
     const first = asks[0];
     const ownerWebContentsId = this.resolveOwner(first.terminalId);
     // A remote view's Shell plays its own sound for the category.

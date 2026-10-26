@@ -2847,6 +2847,100 @@ describe("a remote Shell's own alert choices (#14701)", () => {
     expect(shownTo(OWNER)).toEqual([]);
   });
 
+  it("finishes a completion by the Shell's choice when its debounce runs out", () => {
+    mockStore({ completedEnabled: false });
+    agentNotificationService.setShellPolicy("client-a", SHELL_CHOICES);
+    agentNotificationService.syncWatchedPanels(REMOTE_OWNER, ["term-1"]);
+    events.emit("agent:state-changed", makePayload("completed"));
+    vi.advanceTimersByTime(2_001);
+    expect(shownTo(REMOTE_OWNER)).toEqual(["Agent finished"]);
+
+    // Turned off on the Shell while the next one settles: it never goes out.
+    agentNotificationService.syncWatchedPanels(REMOTE_OWNER, ["term-1"]);
+    events.emit("agent:state-changed", makePayload("working", "completed"));
+    events.emit("agent:state-changed", makePayload("completed"));
+    agentNotificationService.setShellPolicy("client-a", {
+      ...SHELL_CHOICES,
+      completedEnabled: false,
+    });
+    vi.advanceTimersByTime(2_001);
+    expect(shownTo(REMOTE_OWNER)).toEqual(["Agent finished"]);
+  });
+
+  it("raises a wait again by the Shell's choice when the reminder comes due", () => {
+    mockStore({ waitingEnabled: false, waitingEscalationEnabled: false });
+    const escalating = { ...SHELL_CHOICES, waitingEscalationEnabled: true };
+    agentNotificationService.setShellPolicy("client-a", escalating);
+    agentNotificationService.syncWatchedPanels(REMOTE_OWNER, ["term-1"]);
+    events.emit("agent:state-changed", makePayload("waiting"));
+    vi.advanceTimersByTime(180_001);
+    expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledTimes(1);
+
+    // Turned off on the Shell before the next one comes due.
+    events.emit("agent:state-changed", makePayload("working", "waiting"));
+    events.emit("agent:state-changed", makePayload("waiting"));
+    agentNotificationService.setShellPolicy("client-a", {
+      ...escalating,
+      waitingEscalationEnabled: false,
+    });
+    vi.advanceTimersByTime(180_001);
+    expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledTimes(1);
+  });
+
+  it("pages each machine for its own waiting agents when they ask at once", () => {
+    const terminals = [
+      ...DEFAULT_APP_STATE.terminals,
+      { ...DEFAULT_APP_STATE.terminals[0], id: "term-2", agentId: "agent-2" },
+    ];
+    mockStore({ waitingEnabled: true }, { terminals });
+    agentNotificationService.setShellPolicy("client-a", SHELL_CHOICES);
+    agentNotificationService.syncWatchedPanels(REMOTE_OWNER, ["term-1"]);
+    agentNotificationService.syncWatchedPanels(OWNER, ["term-2"]);
+
+    events.emit("agent:state-changed", makePayload("waiting"));
+    events.emit("agent:state-changed", {
+      ...makePayload("waiting"),
+      terminalId: "term-2",
+      agentId: "agent-2",
+    });
+    vi.advanceTimersByTime(250);
+
+    expect(shownTo(REMOTE_OWNER)).toEqual(["Agent waiting"]);
+    expect(shownTo(OWNER)).toEqual(["Agent waiting"]);
+  });
+
+  it("pages each machine for its own agents when Canopy reads two asks at once", () => {
+    const terminals = [
+      ...DEFAULT_APP_STATE.terminals,
+      { ...DEFAULT_APP_STATE.terminals[0], id: "term-2", agentId: "agent-2" },
+    ];
+    mockStore({}, { terminals });
+    agentNotificationService.setShellPolicy("client-a", SHELL_CHOICES);
+    agentNotificationService.syncWatchedPanels(REMOTE_OWNER, ["term-1"]);
+    agentNotificationService.syncWatchedPanels(OWNER, ["term-2"]);
+    // Past the boot grace, so the asks aren't taken for a restore's first reading.
+    vi.advanceTimersByTime(9_000);
+    for (const [terminalId, agentId] of [
+      ["term-1", "agent-1"],
+      ["term-2", "agent-2"],
+    ]) {
+      agentNotificationService.notifyCanopyAsk(
+        { terminalId, worktreeId: "wt-1", agentId, kind: "approval" },
+        () => []
+      );
+    }
+    vi.advanceTimersByTime(200);
+
+    const owners = notificationServiceMock.showNativeNotification.mock.calls.map((call) => [
+      call[0],
+      (call[2] as { ownerWebContentsId?: number }).ownerWebContentsId,
+    ]);
+    expect(owners).toEqual([
+      ["Agent waiting", REMOTE_OWNER],
+      ["Agent waiting", OWNER],
+    ]);
+  });
+
   it("groups completions only within one machine", () => {
     const terminals = [
       ...DEFAULT_APP_STATE.terminals,
