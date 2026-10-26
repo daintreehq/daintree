@@ -703,7 +703,7 @@ describe("VoiceRecordingService — correction over dictated ranges (#14613)", (
     expect(draft()).toBe("alpha\nbeta");
   });
 
-  it("corrects nothing when stopped while a retarget to another panel is still arming", async () => {
+  it("corrects only the stopping session when stopped while a retarget to another panel is still arming", async () => {
     const { service, voiceStore } = await setup();
     correct.fn.mockResolvedValue({ action: "replace", correctedText: "Rewritten." });
     voiceStore.getState().setCorrectionEnabled(true);
@@ -712,11 +712,17 @@ describe("VoiceRecordingService — correction over dictated ranges (#14613)", (
     await service.stop("Dictation stopped.", { skipRemoteStop: true });
     voiceStore.getState().beginSession({ panelId: "panel-2", projectId: PROJECT });
     say("new words", "item-b");
-    // Retargeting back to the first panel: its old dictation isn't what stops.
+    // Retargeting back to the first panel only queues it (#14604): the live
+    // session on panel-2 is what stops, and the first panel's old dictation
+    // is never corrected.
     voiceStore.getState().setArming({ panelId: PANEL, projectId: PROJECT });
     await service.stop("Dictation stopped.");
 
-    expect(correct.fn).not.toHaveBeenCalled();
+    expect(correct.fn).toHaveBeenCalledTimes(1);
+    expect(correct.fn).toHaveBeenCalledWith(expect.objectContaining({ rawText: "new words" }));
+    expect(correct.fn).not.toHaveBeenCalledWith(
+      expect.objectContaining({ rawText: expect.stringContaining("old words") })
+    );
   });
 
   it("sends nothing for a dictation the draft already released", async () => {
