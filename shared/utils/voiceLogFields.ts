@@ -5,10 +5,11 @@
  * quote them back. These helpers reduce a value to a shape that is safe to log.
  */
 
-interface ErrorLogFields {
+// A type alias, not an interface: the loggers' LogContext is an index signature.
+type ErrorLogFields = {
   errorName?: string;
   errorCode?: string | number;
-}
+};
 
 export function voiceErrorLogFields(error: unknown): ErrorLogFields {
   if (typeof error !== "object" || error === null) return {};
@@ -19,10 +20,10 @@ export function voiceErrorLogFields(error: unknown): ErrorLogFields {
   };
 }
 
-interface PayloadShape {
+type PayloadShape = {
   keys: string[];
   length: number;
-}
+};
 
 /** Top-level key names and serialized size of an unrecognised provider event. */
 export function voicePayloadShape(payload: unknown): PayloadShape {

@@ -194,7 +194,7 @@ describe("voiceInput — microphone permission handlers", () => {
       await expect(openMicSettings()).resolves.toBe(false);
       expect(logDebugMock).toHaveBeenCalledWith(
         expect.any(String),
-        expect.objectContaining({ error: "spawn pavucontrol ENOENT", command: "pavucontrol" })
+        expect.objectContaining({ errorName: "Error", command: "pavucontrol" })
       );
       expect(logWarnMock).toHaveBeenCalledTimes(1);
     });
@@ -216,8 +216,9 @@ describe("voiceInput — microphone permission handlers", () => {
       await expect(openMicSettings()).resolves.toBe(false);
       expect(logDebugMock).toHaveBeenCalledWith(
         expect.any(String),
-        expect.objectContaining({ error: "no handler registered" })
+        expect.objectContaining({ errorName: "Error" })
       );
+      expect(JSON.stringify(logDebugMock.mock.calls)).not.toContain("no handler registered");
     });
   });
 });

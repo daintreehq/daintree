@@ -238,7 +238,7 @@ class VoiceRecordingService {
 
     this.unsubscribers.push(
       voiceInput.onParagraphBoundary(({ rawText }) => {
-        logDebug(`${LOG_PREFIX} Received paragraph boundary`, { rawLength: rawText.length });
+        logDebug(`${LOG_PREFIX} Received paragraph boundary`, { rawLength: rawText?.length ?? 0 });
         const voiceState = useVoiceRecordingStore.getState();
         const currentTarget = voiceState.activeTarget;
         if (!currentTarget) return;
