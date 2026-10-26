@@ -59,7 +59,11 @@ export async function resolveVoiceCommandTarget(
   try {
     const terminal = await withinDeadline(ptyClient.getTerminalAsync(terminalId), deadline);
     if (terminal === TIMED_OUT || !terminal) return null;
-    const agentId = terminal.detectedAgentId ?? terminal.launchAgentId;
+    // An agent that has exited leaves its launch id behind on a shell, which
+    // takes no commands.
+    const agentId =
+      terminal.detectedAgentId ??
+      (terminal.agentState === "exited" ? undefined : terminal.launchAgentId);
     if (!isBuiltInAgentId(agentId)) return null;
     const config = getAgentConfig(agentId);
     const sources = config?.completionSources;

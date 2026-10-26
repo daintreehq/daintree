@@ -83,6 +83,10 @@ describe("resolveVoiceCommandTarget", () => {
 
   it.each([
     ["a plain shell", { id: "t1", cwd: "/repo" }],
+    [
+      "the shell an agent exited to",
+      { id: "t1", cwd: "/repo", launchAgentId: "codex", agentState: "exited" },
+    ],
     ["a missing terminal", null],
   ])("resolves nothing for %s", async (_label, terminal) => {
     expect(await resolveVoiceCommandTarget(ptyWith(terminal), "t1", 500)).toBeNull();

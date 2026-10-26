@@ -90,6 +90,8 @@ const INVOCATION_LEAD_WORDS = new Set([
   "my",
   "our",
 ]);
+// Hesitation sounds a cleanup may drop anywhere, including before a command.
+const HESITATIONS = new Set(["um", "umm", "uh", "uhh", "uhm", "erm", "hmm", "mm"]);
 // At least one of these must be among the lead words: "the review skill is
 // broken" mentions a command without asking for it.
 const INVOCATION_VERBS = new Set([
@@ -190,7 +192,10 @@ export function buildVoiceCommandVocabulary(
 }
 
 interface WordSpan {
+  /** Lowercased with every separator removed. */
   word: string;
+  /** Whether it opens with something other than a letter or digit: a flag, path or reference. */
+  symbolic: boolean;
   end: number;
 }
 
@@ -199,16 +204,33 @@ function wordSpans(text: string, from: number): WordSpan[] {
   const re = /\S+/gu;
   re.lastIndex = from;
   for (let match = re.exec(text); match; match = re.exec(text)) {
-    spans.push({ word: toKey(match[0]), end: match.index + match[0].length });
+    spans.push({
+      word: toKey(match[0]),
+      symbolic: !/^[\p{L}\p{N}]/u.test(match[0]),
+      end: match.index + match[0].length,
+    });
   }
   return spans;
 }
 
-/** Where each way `text` could open with the prefix ends, longest first. */
-function matchPrefix(text: string, prefix: VoiceCommandPrefix): number[] {
+/** Where `text` starts once leading hesitation sounds ("Um, slash review") are skipped. */
+function afterHesitations(text: string): number {
+  let at = 0;
+  for (const span of wordSpans(text, 0)) {
+    if (!HESITATIONS.has(span.word)) break;
+    at = span.end;
+  }
+  return at;
+}
+
+/** Where each way `text` could open with the prefix at `from` ends, longest first. */
+function matchPrefix(text: string, from: number, prefix: VoiceCommandPrefix): number[] {
   const ends: number[] = [];
-  if (text.startsWith(prefix.prefix)) ends.push(prefix.prefix.length);
-  const words = wordSpans(text, 0);
+  const at = text.slice(from).search(/\S/u);
+  if (at >= 0 && text.startsWith(prefix.prefix, from + at)) {
+    ends.push(from + at + prefix.prefix.length);
+  }
+  const words = wordSpans(text, from);
   for (const form of prefix.spoken) {
     if (form.length === 0 || words.length < form.length) continue;
     if (form.every((word, index) => words[index]!.word === word)) {
@@ -225,7 +247,11 @@ function matchName(
   prefix: VoiceCommandPrefix,
   vocabulary: VoiceCommandVocabulary
 ): { entry: VoiceCommandEntry; end: number } | null {
-  const words = wordSpans(text, nameStart);
+  const spans = wordSpans(text, nameStart);
+  // A name never runs into its arguments: "slash review --force" is `/review`
+  // with a flag, even when `/review-force` exists.
+  const argumentAt = spans.findIndex((span) => span.symbolic);
+  const words = argumentAt < 0 ? spans : spans.slice(0, argumentAt);
   // "slash prompts colon deploy": the joiner belongs to the prefix.
   const skip = words.length > 1 && SPOKEN_JOINERS.has(words[0]!.word) ? 1 : 0;
   const limit = Math.min(MAX_NAME_WORDS, words.length - skip);
@@ -246,6 +272,21 @@ function matchName(
   return null;
 }
 
+/** The command `text` opens with, said with its prefix, and where its name ends. */
+function matchExplicit(
+  text: string,
+  vocabulary: VoiceCommandVocabulary
+): { entry: VoiceCommandEntry; end: number } | null {
+  const from = afterHesitations(text);
+  for (const prefix of vocabulary.prefixes) {
+    for (const nameStart of matchPrefix(text, from, prefix)) {
+      const match = matchName(text, nameStart, prefix, vocabulary);
+      if (match) return match;
+    }
+  }
+  return null;
+}
+
 /**
  * `text` with a spoken command at its start written as the composer would:
  * "Slash review the last commit." becomes "/review the last commit.". The
@@ -258,16 +299,11 @@ export function rewriteSpokenCommand(
 ): string | null {
   if (vocabulary.entries.length === 0) return null;
   const trimmed = text.trim();
-  for (const prefix of vocabulary.prefixes) {
-    for (const nameStart of matchPrefix(trimmed, prefix)) {
-      const match = matchName(trimmed, nameStart, prefix, vocabulary);
-      if (!match) continue;
-      // The arguments are copied as said: `--force` and `./src` keep every character.
-      const rest = trimmed.slice(match.end).trimStart();
-      return rest ? `${match.entry.token} ${rest}` : match.entry.token;
-    }
-  }
-  return null;
+  const match = matchExplicit(trimmed, vocabulary);
+  if (!match) return null;
+  // The arguments are copied as said: `--force` and `./src` keep every character.
+  const rest = trimmed.slice(match.end).trimStart();
+  return rest ? `${match.entry.token} ${rest}` : match.entry.token;
 }
 
 /**
@@ -296,63 +332,84 @@ const SPOKEN_TRIGGERS = (
 )
   .filter(([, forms]) => forms.length > 0)
   .map(([trigger]) => trigger);
+// `$PATH`, `$HOME`: a shell variable, not a skill.
+const ENV_VARIABLE_RE = /^\$[A-Z_][A-Z0-9_]*$/u;
+const TRAILING_PROSE_PUNCTUATION_RE = /[.,;:!?…]+$/u;
 
 function leadingWord(text: string): string {
   return text.trim().split(/\s/u, 1)[0] ?? "";
 }
 
-/** `/review`, `$plugin-creator`, `/prompts:deploy`, but not `/etc/hosts` or `/`. */
-function isCommandShaped(word: string): boolean {
-  const trigger = SPOKEN_TRIGGERS.find((candidate) => word.startsWith(candidate));
-  return trigger !== undefined && COMMAND_SHAPED_RE.test(word.slice(trigger.length));
+/**
+ * The command a word would be read as, with any prose punctuation after it
+ * dropped: `/review`, `$plugin-creator`, `/prompts:deploy` and `/deploy!`, but
+ * not `/etc/hosts`, `$PATH` or a bare `/`.
+ */
+function commandShape(word: string): string | null {
+  const bare = word.replace(TRAILING_PROSE_PUNCTUATION_RE, "");
+  const trigger = SPOKEN_TRIGGERS.find((candidate) => bare.startsWith(candidate));
+  if (trigger === undefined || ENV_VARIABLE_RE.test(bare)) return null;
+  return COMMAND_SHAPED_RE.test(bare.slice(trigger.length)) ? bare : null;
 }
 
 function knownToken(token: string, vocabulary: VoiceCommandVocabulary): VoiceCommandEntry | null {
   return vocabulary.entries.find((entry) => entry.token === token) ?? null;
 }
 
+/** Whether `corrected` opens with a command or skill that `raw` didn't open with. */
+export function introducesVoiceCommand(raw: string, corrected: string): boolean {
+  const lead = leadingWord(corrected);
+  return lead !== leadingWord(raw) && commandShape(lead) !== null;
+}
+
 /**
- * Where the arguments start in `raw` when its opening words ask for `entry`
- * ("compact the conversation", "please run the review skill on…"), else -1.
+ * Where the arguments start in `raw` when its opening words ask for `entry`,
+ * with its prefix ("slash review…") or without it ("compact the conversation",
+ * "please run the review skill on…"), else -1.
  */
-function invocationArgumentsStart(raw: string, entry: VoiceCommandEntry): number {
-  const words = toWords(raw);
-  const limit = Math.min(MAX_LEAD_WORDS, words.length);
+function invocationArgumentsAt(
+  raw: string,
+  entry: VoiceCommandEntry,
+  vocabulary: VoiceCommandVocabulary
+): number {
+  const explicit = matchExplicit(raw, vocabulary);
+  if (explicit) return explicit.entry === entry ? explicit.end : -1;
+
+  const spans = wordSpans(raw, 0).filter((span) => !HESITATIONS.has(span.word));
+  const limit = Math.min(MAX_LEAD_WORDS, spans.length);
   for (let start = 0; start < limit; start++) {
-    const lead = words.slice(0, start);
+    const lead = spans.slice(0, start).map((span) => span.word);
     if (!lead.every((word) => INVOCATION_LEAD_WORDS.has(word))) return -1;
     if (lead.length > 0 && !lead.some((word) => INVOCATION_VERBS.has(word))) continue;
     let joined = "";
-    for (let end = start; end < words.length && joined.length < entry.key.length; end++) {
-      joined += words[end];
+    for (let end = start; end < spans.length && joined.length < entry.key.length; end++) {
+      joined += spans[end]!.word;
       if (joined !== entry.key) continue;
-      let next = end + 1;
-      if (INVOCATION_NOUNS.has(words[next] ?? "")) next++;
-      return next;
+      const noun = spans[end + 1];
+      return noun && INVOCATION_NOUNS.has(noun.word) ? noun.end : spans[end]!.end;
     }
   }
   return -1;
 }
 
-function isSubsequence(needle: readonly string[], haystack: readonly string[]): boolean {
-  let found = 0;
-  for (const value of haystack) {
-    if (found < needle.length && value === needle[found]) found++;
-  }
-  return found === needle.length;
+function withoutHesitations(words: readonly string[]): string[] {
+  return words.filter((word) => !HESITATIONS.has(toKey(word)));
 }
 
-const splitWords = (text: string) => text.split(/\s+/u).filter(Boolean);
+function sameWords(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((value, index) => value === b[index]);
+}
 
 export type VoiceCommandEditRejection =
   "command_changed" | "arguments_reformatted" | "unknown_command" | "unprompted_command";
 
 /**
  * Checks a cleanup's handling of commands. A command `raw` opens with comes
- * back exactly, and its arguments may only lose words, never be recased,
- * respelled or punctuated. A command cleanup introduces must be one the target
- * has, may open only the prompt itself, must have been asked for by the
- * dictation's opening words, and keeps the words that followed them.
+ * back exactly, and so do its arguments, word for word, but for hesitation
+ * sounds. A command cleanup introduces must be one the target has, may open
+ * only the prompt itself, must have been asked for by the dictation's opening
+ * words, and keeps every word that followed them, or none when the whole
+ * phrase named it.
  */
 export function checkVoiceCommandEdit(
   raw: string,
@@ -360,29 +417,59 @@ export function checkVoiceCommandEdit(
   vocabulary: VoiceCommandVocabulary,
   startsPrompt: boolean
 ): VoiceCommandEditRejection | null {
-  const rawLead = leadingWord(raw);
-  const correctedLead = leadingWord(corrected);
-  const argumentsOf = (text: string, token: string) => text.trim().slice(token.length);
+  const trimmedRaw = raw.trim();
+  const trimmedCorrected = corrected.trim();
+  const rawLead = leadingWord(trimmedRaw);
+  const correctedLead = leadingWord(trimmedCorrected);
+  const argumentsOf = (text: string, token: string) =>
+    withoutHesitations(text.slice(token.length).split(/\s+/u).filter(Boolean));
 
   if (knownToken(rawLead, vocabulary)) {
     if (correctedLead !== rawLead) return "command_changed";
-    const kept = isSubsequence(
-      splitWords(argumentsOf(corrected, rawLead)),
-      splitWords(argumentsOf(raw, rawLead))
+    const kept = sameWords(
+      argumentsOf(trimmedCorrected, rawLead),
+      argumentsOf(trimmedRaw, rawLead)
     );
     return kept ? null : "arguments_reformatted";
   }
 
   // "/etc/hosts" fixed up from "slash etc slash hosts" is a path, not a command.
-  if (correctedLead === rawLead || !isCommandShaped(correctedLead)) return null;
-  const entry = knownToken(correctedLead, vocabulary);
+  if (correctedLead === rawLead) return null;
+  const shape = commandShape(correctedLead);
+  if (!shape) return null;
+  // A known token with punctuation stuck to it is still not one the composer has.
+  const entry = shape === correctedLead ? knownToken(shape, vocabulary) : null;
   if (!entry) return "unknown_command";
   if (!startsPrompt) return "unprompted_command";
-  const argumentsStart = invocationArgumentsStart(raw, entry);
-  if (argumentsStart < 0) return "unprompted_command";
-  const kept = isSubsequence(
-    toWords(argumentsOf(corrected, correctedLead)),
-    toWords(raw).slice(argumentsStart)
-  );
+  const argumentsAt = invocationArgumentsAt(trimmedRaw, entry, vocabulary);
+  if (argumentsAt < 0) return "unprompted_command";
+  const words = (text: string) => withoutHesitations(toWords(text));
+  const correctedArguments = words(trimmedCorrected.slice(correctedLead.length));
+  // Either the rest of what was said comes along whole, or none of it does,
+  // when the whole phrase named the command ("compact the conversation").
+  const kept =
+    correctedArguments.length === 0 ||
+    sameWords(correctedArguments, words(trimmedRaw.slice(argumentsAt)));
   return kept ? null : "arguments_reformatted";
+}
+
+/**
+ * `raw` as it reads once the invocation `corrected` introduced is written as
+ * its command ("please run the review skill on auth" → "/review on auth"),
+ * for the prose guards to measure the rest of the cleanup against. Null when
+ * `corrected` introduces no command `checkVoiceCommandEdit` accepts.
+ */
+export function voiceCommandBaseline(
+  raw: string,
+  corrected: string,
+  vocabulary: VoiceCommandVocabulary
+): string | null {
+  const trimmedRaw = raw.trim();
+  const lead = leadingWord(corrected);
+  const entry = lead !== leadingWord(trimmedRaw) ? knownToken(lead, vocabulary) : null;
+  if (!entry) return null;
+  const argumentsAt = invocationArgumentsAt(trimmedRaw, entry, vocabulary);
+  if (argumentsAt < 0) return null;
+  const rest = trimmedRaw.slice(argumentsAt).trimStart();
+  return rest ? `${entry.token} ${rest}` : entry.token;
 }

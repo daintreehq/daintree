@@ -705,6 +705,16 @@ describe("VoiceCorrectionService", () => {
             ...(agentId === "codex"
               ? [
                   {
+                    id: "user:plugin:github",
+                    label: "GitHub",
+                    insertText: "$github",
+                    description: "GitHub plugin",
+                    scope: "user" as const,
+                    agentId,
+                    kind: "plugin" as const,
+                    trigger: "$" as const,
+                  },
+                  {
                     id: "user:skill:plugin-creator",
                     label: "Plugin Creator",
                     insertText: "$plugin-creator",
@@ -775,6 +785,24 @@ describe("VoiceCorrectionService", () => {
         { ...BASE_SETTINGS, commandTarget: targetFor("codex") }
       );
       expect(result.confirmedText).toBe("$plugin-creator for the linter");
+    });
+
+    it("accepts a polite request the command replaced", async () => {
+      stubReply("/review on auth");
+      const result = await new VoiceCorrectionService().correct(
+        { rawText: "can you please run the review skill on auth", startsPrompt: true },
+        { ...BASE_SETTINGS, commandTarget: targetFor("claude") }
+      );
+      expect(result.confirmedText).toBe("/review on auth");
+    });
+
+    it("keeps dictionary casing out of a command token", async () => {
+      stubReply("$github");
+      const result = await new VoiceCorrectionService().correct(
+        { rawText: "use the github plugin", startsPrompt: true },
+        { ...BASE_SETTINGS, customDictionary: ["GitHub"], commandTarget: targetFor("codex") }
+      );
+      expect(result.confirmedText).toBe("$github");
     });
 
     it.each([

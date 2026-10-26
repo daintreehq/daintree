@@ -5,7 +5,9 @@ import type { CompletionSourceConfig } from "../../types/completionSources.js";
 import {
   buildVoiceCommandVocabulary,
   checkVoiceCommandEdit,
+  introducesVoiceCommand,
   rewriteSpokenCommand,
+  voiceCommandBaseline,
   voiceCommandKeyterms,
 } from "../voiceAgentCommands.js";
 
@@ -135,6 +137,21 @@ describe("rewriteSpokenCommand", () => {
     expect(rewriteSpokenCommand(text, codex)).toBeNull();
   });
 
+  it("ends a name where its arguments start", () => {
+    const vocabulary = buildVoiceCommandVocabulary(
+      [custom("claude", "/review"), custom("claude", "/review-force")],
+      sourcesOf("claude")
+    );
+    expect(rewriteSpokenCommand("slash review --force", vocabulary)).toBe("/review --force");
+    expect(rewriteSpokenCommand("slash review force", vocabulary)).toBe("/review-force");
+  });
+
+  it("looks past a leading hesitation", () => {
+    expect(rewriteSpokenCommand("Um, slash review the last commit", claude)).toBe(
+      "/review the last commit"
+    );
+  });
+
   it("keeps a name two commands share as words", () => {
     const vocabulary = buildVoiceCommandVocabulary(
       [custom("claude", "/foo-bar"), custom("claude", "/foobar", { scope: "user" })],
@@ -216,6 +233,45 @@ describe("checkVoiceCommandEdit", () => {
     );
   });
 
+  it("accepts a command said with its trigger after a hesitation", () => {
+    expect(
+      checkVoiceCommandEdit(
+        "um slash review the last commit",
+        "/review the last commit",
+        claude,
+        true
+      )
+    ).toBeNull();
+  });
+
+  it("measures the rest of a polite request against the command it became", () => {
+    const raw = "can you please run the review skill on auth";
+    expect(checkVoiceCommandEdit(raw, "/review on auth", claude, true)).toBeNull();
+    expect(voiceCommandBaseline(raw, "/review on auth", claude)).toBe("/review on auth");
+    expect(voiceCommandBaseline("the review was good", "/review was good", claude)).toBeNull();
+  });
+
+  it("rejects a command with punctuation stuck to it", () => {
+    expect(checkVoiceCommandEdit("run the deploy skill", "/deploy!", claude, true)).toBe(
+      "unknown_command"
+    );
+    expect(checkVoiceCommandEdit("compact the conversation", "/compact!", claude, true)).toBe(
+      "unknown_command"
+    );
+  });
+
+  it("leaves shell variables to the other guards", () => {
+    expect(
+      checkVoiceCommandEdit("dollar sign PATH is empty", "$PATH is empty.", claude, true)
+    ).toBeNull();
+  });
+
+  it("keeps 'slash' and a name the target hasn't got as words, even for a path", () => {
+    expect(
+      checkVoiceCommandEdit("slash tmp contains logs", "/tmp contains logs.", claude, true)
+    ).toBe("unknown_command");
+  });
+
   it("rejects an introduced command that drops or rewrites what followed it", () => {
     expect(
       checkVoiceCommandEdit(
@@ -240,6 +296,9 @@ describe("checkVoiceCommandEdit", () => {
     expect(checkVoiceCommandEdit("$github open the pr", "$github open the PR", codex, true)).toBe(
       "arguments_reformatted"
     );
+    expect(
+      checkVoiceCommandEdit("/review security and billing", "/review billing", claude, true)
+    ).toBe("arguments_reformatted");
   });
 
   it("leaves paths and ordinary text to the other guards", () => {
@@ -266,5 +325,18 @@ describe("checkVoiceCommandEdit", () => {
   ])("leaves %j as prose", (raw, corrected) => {
     const vocabulary = corrected.startsWith("$") ? codex : claude;
     expect(checkVoiceCommandEdit(raw, corrected, vocabulary, true)).not.toBeNull();
+  });
+});
+
+describe("introducesVoiceCommand", () => {
+  it.each([
+    ["compact the conversation", "/compact", true],
+    ["use plugin creator", "$plugin-creator", true],
+    ["/review the commit", "/review the commit", false],
+    ["slash etc slash hosts is wrong", "/etc/hosts is wrong", false],
+    ["dollar home is unset", "$HOME is unset", false],
+    ["hello", "Hello.", false],
+  ])("%j → %j: %s", (raw, corrected, expected) => {
+    expect(introducesVoiceCommand(raw, corrected)).toBe(expected);
   });
 });

@@ -208,9 +208,11 @@ export interface CorrectionPromptContext {
   language?: string;
 }
 
-// Enough for every command anyone keeps; past it the prompt grows for names
-// nobody will say.
-const MAX_TARGET_COMMANDS = 60;
+// Every command is listed, since one left out reads as one that doesn't exist.
+// Past the first few dozen only the token goes, so a large skill library costs
+// a word per entry rather than a line.
+const MAX_DESCRIBED_COMMANDS = 60;
+const MAX_TARGET_COMMANDS = 400;
 const MAX_COMMAND_DESCRIPTION_CHARS = 80;
 
 function commandLine(command: { token: string; description: string }): string {
@@ -236,7 +238,11 @@ function buildTargetSection(target: CorrectionTargetContext): string {
     return lines.join("\n");
   }
   lines.push(
-    `COMMANDS: These are the only commands and skills it has, written exactly as they're typed:\n${commands.map(commandLine).join("\n")}`,
+    `COMMANDS: These are the only commands and skills it has, written exactly as they're typed:\n${commands
+      .map((command, index) =>
+        index < MAX_DESCRIBED_COMMANDS ? commandLine(command) : command.token
+      )
+      .join("\n")}`,
     `COMMAND RULES:
 - When <job> says prompt_start=yes and the target opens by asking to run one of these commands or skills, either with its trigger ("slash review", "dollar plugin creator") or without it ("run the review skill on the auth module", "compact the conversation"), write that command exactly as listed at the very start, then the rest of what was said as its arguments: "/review on the auth module".
 - Only do this when the opening words ask for the command to run. A sentence that just mentions the word ("the review skill is broken", "explain the compact command", "compact cars use less space") stays prose.

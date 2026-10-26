@@ -345,15 +345,16 @@ describe("buildCorrectionSystemPrompt target", () => {
     expect(prompt).toContain("$plugin-creator — Scaffold a plugin from a template\n/compact\n");
   });
 
-  it("bounds the command list and each description", () => {
+  it("lists every command, bounding the descriptions instead", () => {
     const many = Array.from({ length: 100 }, (_, i) => ({
       token: `/command-${i}`,
       description: "x".repeat(200),
     }));
     const prompt = buildCorrectionSystemPrompt({ target: { ...target, commands: many } });
     expect(prompt).toContain("/command-0 — ");
-    expect(prompt).not.toContain("/command-99");
+    expect(prompt).toContain("\n/command-99\n");
     expect(prompt).not.toContain("x".repeat(100));
+    expect(prompt.split("x".repeat(50)).length - 1).toBeLessThan(many.length);
   });
 
   it("tells a target with no commands never to write one", () => {

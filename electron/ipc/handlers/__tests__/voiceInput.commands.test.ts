@@ -211,8 +211,6 @@ const fakeEvent = {
   },
 } as unknown as Electron.IpcMainInvokeEvent;
 
-type SessionHandler = (e: unknown, sessionId: string) => Promise<unknown>;
-
 // Each start mints a fresh session id, as the renderer does; stops and the
 // payload expectations use the latest one.
 let nextSessionNumber = 1;

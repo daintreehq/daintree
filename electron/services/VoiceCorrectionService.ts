@@ -24,6 +24,7 @@ import type { HeardAsRule } from "../../shared/utils/voiceHeardAs.js";
 import {
   checkVoiceCommandEdit,
   EMPTY_VOICE_COMMAND_VOCABULARY,
+  voiceCommandBaseline,
   type VoiceCommandEditRejection,
 } from "../../shared/utils/voiceAgentCommands.js";
 import type { VoiceCommandTarget } from "./voiceCommandTarget.js";
@@ -251,9 +252,19 @@ export class VoiceCorrectionService {
         confirmedText = request.rawText;
       } else {
         const candidate = result.correctedText.trim();
+        // A command the cleanup wrote in place of its spoken request is measured
+        // as that command, so "can you please run the review skill on…" isn't
+        // over the edit budget for the words the command replaced.
+        const commandRejection = this.findCommandRejection(request, candidate, settings);
+        const baseline = commandRejection
+          ? request.rawText
+          : (voiceCommandBaseline(
+              request.rawText,
+              candidate,
+              settings.commandTarget?.vocabulary ?? EMPTY_VOICE_COMMAND_VOCABULARY
+            ) ?? request.rawText);
         const rejection =
-          this.findRejection(request.rawText, candidate, result.confidence) ??
-          this.findCommandRejection(request, candidate, settings);
+          commandRejection ?? this.findRejection(baseline, candidate, result.confidence);
         if (rejection) {
           logDebug(`${P} Correction rejected, keeping raw text`, {
             reason: rejection,

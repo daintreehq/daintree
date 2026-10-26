@@ -890,6 +890,20 @@ describe("VoiceRecordingService — the target agent's commands (#14655)", () =>
     expect(draft()).toBe("First: compact the conversation");
   });
 
+  it("lands a path correction once text is typed in front of the passage", async () => {
+    const { service, voiceStore, draft, setDraft } = await setup();
+    let resolveCorrection!: (value: unknown) => void;
+    correct.fn.mockReturnValue(new Promise((resolve) => (resolveCorrection = resolve)));
+    voiceStore.getState().setCorrectionEnabled(true);
+
+    say("slash etc slash hosts is wrong", "item-a");
+    await service.stop("Dictation stopped.");
+    setDraft("Check: " + draft());
+
+    resolveCorrection({ action: "replace", correctedText: "/etc/hosts is wrong" });
+    await vi.waitFor(() => expect(draft()).toBe("Check: /etc/hosts is wrong"));
+  });
+
   it("lands a command correction wrote while the passage still opens the prompt", async () => {
     const { service, voiceStore, draft } = await setup();
     correct.fn.mockResolvedValue({ action: "replace", correctedText: "/compact" });

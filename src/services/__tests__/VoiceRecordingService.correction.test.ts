@@ -208,7 +208,11 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
 
     dictate("panel-2", "second thought");
     await service.stop();
-    expect(correct).toHaveBeenLastCalledWith({ rawText: "second thought", terminalId: "panel-2" });
+    expect(correct).toHaveBeenLastCalledWith({
+      rawText: "second thought",
+      startsPrompt: true,
+      terminalId: "panel-2",
+    });
 
     first.resolve({ action: "replace", correctedText: "Fix the bug in the parser." });
     await flush();

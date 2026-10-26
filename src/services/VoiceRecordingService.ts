@@ -4,6 +4,7 @@ import { isScratchWorkspaceId } from "@shared/utils/workspaceIds";
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
+import { introducesVoiceCommand } from "@shared/utils/voiceAgentCommands";
 import { shouldShowHybridInputBar } from "@/components/Terminal/terminalFocus";
 import { useHelpPanelStore, selectActiveSlot } from "@/store/helpPanelStore";
 import { isAssistantFocused } from "@/store/macroFocusStore";
@@ -395,13 +396,6 @@ interface HeldPress {
   pressedAt: number;
   claimed: boolean;
   speechChunks: number;
-}
-
-// Whether `corrected` opens with a command or skill token `raw` didn't open with.
-function opensWithNewCommand(raw: string, corrected: string): boolean {
-  const lead = (text: string) => text.trimStart().split(/\s/, 1)[0] ?? "";
-  const correctedLead = lead(corrected);
-  return /^[/$]\S/.test(correctedLead) && correctedLead !== lead(raw);
 }
 
 class VoiceRecordingService {
@@ -2678,7 +2672,7 @@ class VoiceRecordingService {
       // the start once text was typed in front of the passage.
       const commandMoved =
         span !== undefined &&
-        opensWithNewCommand(passage.text, corrected) &&
+        introducesVoiceCommand(passage.text, corrected) &&
         draftNow.slice(0, span.from).trim() !== "";
       if (!span || commandMoved) {
         skipped++;
