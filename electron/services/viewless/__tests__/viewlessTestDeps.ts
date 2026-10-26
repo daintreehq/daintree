@@ -154,6 +154,7 @@ export function makeDeps(
     },
     readTerminalStatus: async () => ({ terminals: [], source: "pty", unavailableFields: [] }),
     hostPlatform: { shellDialect: "posix", tmpDir: "/tmp", totalMemoryBytes: 64 * 1024 ** 3 },
+    readHostAgentLimit: () => null,
     sleep: async () => {},
     collectWorktreeDeleteNotes: async () => [],
     ...overrides,

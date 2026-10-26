@@ -360,6 +360,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
               enum: [
                 "missing-cli",
                 "panel-limit",
+                "host-agent-limit",
                 "already-launching",
                 "spawn-failed",
                 "unavailable",
@@ -370,7 +371,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
             },
           ],
           description:
-            "Null on a launch, else why not: panel-limit (see panelLimit), already-launching (retry), missing-cli (setup panel opened).",
+            "Null on a launch, else why not: panel-limit (see panelLimit), host-agent-limit (see hostAgentLimit), already-launching (retry), missing-cli (setup panel opened).",
         },
         worktreeId: {
           type: ["string", "null"],
@@ -410,6 +411,29 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                 },
               },
               required: ["count", "softWarningLimit", "confirmationLimit", "hardLimit", "tier"],
+              additionalProperties: false,
+            },
+            {
+              type: "null",
+            },
+          ],
+        },
+        hostAgentLimit: {
+          anyOf: [
+            {
+              type: "object",
+              properties: {
+                host: {
+                  type: "string",
+                },
+                count: {
+                  type: "number",
+                },
+                limit: {
+                  type: "number",
+                },
+              },
+              required: ["host", "count", "limit"],
               additionalProperties: false,
             },
             {
@@ -477,6 +501,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         "cwd",
         "cwdOutsideWorktree",
         "panelLimit",
+        "hostAgentLimit",
         "reply",
       ],
       additionalProperties: false,

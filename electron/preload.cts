@@ -16,6 +16,7 @@ import { deserializeError } from "../shared/utils/ipcErrorSerialization.js";
 import type { AppErrorCode } from "../shared/types/appError.js";
 import type { PanelTitleMode } from "../shared/types/panel.js";
 import type { HostMemoryPauseSnapshot } from "../shared/types/pty-host.js";
+import type { HostAgentLimitSnapshot } from "../shared/utils/hostAgentLimit.js";
 import type { TerminalExitContext, TerminalKillOptions } from "../shared/types/terminal.js";
 import type { RendererInputBlockingSnapshot } from "../shared/types/ipc/system.js";
 import type {
@@ -975,6 +976,9 @@ function buildElectronApi(): ElectronAPI {
 
       getHostMemoryPause: (): Promise<HostMemoryPauseSnapshot> =>
         _unwrappingInvoke(CHANNELS.TERMINAL_GET_HOST_MEMORY_PAUSE),
+
+      getHostAgentLimit: (): Promise<HostAgentLimitSnapshot | null> =>
+        _unwrappingInvoke(CHANNELS.TERMINAL_GET_HOST_AGENT_LIMIT),
 
       requestWorkerIngestPort: (id: string): Promise<{ token: string } | null> =>
         _unwrappingInvoke(CHANNELS.TERMINAL_REQUEST_WORKER_INGEST_PORT, id),

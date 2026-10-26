@@ -12,7 +12,9 @@ import { getNormalizedWorktreeMap } from "./useWorktrees";
 import { useWorktreeStoreApi } from "./useWorktreeStore";
 import { isElectronAvailable } from "./useElectron";
 
-import { systemClient } from "@/clients";
+import { systemClient, terminalClient } from "@/clients";
+import { notify } from "@/lib/notify";
+import { describeHostAgentLimit, type HostAgentLimitSnapshot } from "@shared/utils/hostAgentLimit";
 import { useHomeDir } from "@/hooks/app/useHomeDir";
 import { logError, logWarn } from "@/utils/logger";
 import { markRendererPerformance } from "@/utils/performance";
@@ -242,12 +244,14 @@ export interface LaunchAgentOptions {
 
 /** Why `launchAgent` resolved to `null` without throwing. */
 export type LaunchDeclineReason =
-  "panel-limit" | "already-launching" | "spawn-failed" | "unavailable";
+  "panel-limit" | "host-agent-limit" | "already-launching" | "spawn-failed" | "unavailable";
 
 export interface LaunchDecline {
   reason: LaunchDeclineReason;
   /** The count and limits the refusal was judged on; set only for `panel-limit`. */
   panelLimit: PanelLimitSnapshot | null;
+  /** The host and count the refusal was judged on; set only for `host-agent-limit`. */
+  hostAgentLimit?: HostAgentLimitSnapshot | null;
 }
 
 export interface LaunchAgentResult extends LaunchAgentIdentity {
@@ -255,6 +259,12 @@ export interface LaunchAgentResult extends LaunchAgentIdentity {
   location: "grid" | "dock" | "background";
   /** Atomic launch result: no PTY was started; a setup diagnostic panel was opened. */
   spawnStatus?: "missing-cli";
+  /**
+   * The host's agent count and ceiling when it holds this launch to one
+   * (#14704). The host counts again when the spawn reaches it, so the pane's
+   * spawn answer, not this, says whether it was admitted.
+   */
+  hostAgentLimit?: HostAgentLimitSnapshot;
 }
 
 export interface UseAgentLauncherReturn {
@@ -263,6 +273,20 @@ export interface UseAgentLauncherReturn {
   isCheckingAvailability: boolean;
   agentSettings: AgentSettings | null;
   refreshSettings: () => Promise<void>;
+}
+
+/**
+ * The window's host's agent count and ceiling, or null when it holds launches
+ * to none or can't say (a host on an older build has no such call). Either
+ * way the host's own count when the spawn arrives is what holds.
+ */
+async function readHostAgentLimit(): Promise<HostAgentLimitSnapshot | null> {
+  try {
+    return (await terminalClient.getHostAgentLimit()) ?? null;
+  } catch (error) {
+    logWarn("Couldn't read the host's agent limit; launching without it", { error });
+    return null;
+  }
 }
 
 export function useAgentLauncher(): UseAgentLauncherReturn {
@@ -345,9 +369,14 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
     ): Promise<LaunchAgentResult | null> => {
       const decline = (
         reason: LaunchDeclineReason,
-        panelLimit: PanelLimitSnapshot | null = null
+        panelLimit: PanelLimitSnapshot | null = null,
+        hostAgentLimit: HostAgentLimitSnapshot | null = null
       ): null => {
-        launchOptions?.onDecline?.({ reason, panelLimit });
+        launchOptions?.onDecline?.({
+          reason,
+          panelLimit,
+          ...(hostAgentLimit !== null ? { hostAgentLimit } : {}),
+        });
         return null;
       };
 
@@ -672,6 +701,27 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
           }
         }
 
+        // A host serving Shells holds its agents to a ceiling across all of its
+        // projects (#14704). Asked before the pane exists, so a full host says
+        // so instead of opening a pane that can only fail; the host counts
+        // again when the spawn arrives, which is what holds.
+        const hostAgentLimit = isAgent ? await readHostAgentLimit() : null;
+        if (hostAgentLimit !== null && hostAgentLimit.count >= hostAgentLimit.limit) {
+          logWarn(`Declined a launch of ${agentId}: the host is at its agent limit`, {
+            count: hostAgentLimit.count,
+            limit: hostAgentLimit.limit,
+          });
+          notify({
+            type: "warning",
+            priority: "high",
+            title: "Host agent limit reached",
+            message: describeHostAgentLimit(hostAgentLimit),
+            duration: 5000,
+            context: { eventKind: "uiFeedback", worktreeId: effectiveWorktreeId ?? undefined },
+          });
+          return decline("host-agent-limit", null, hostAgentLimit);
+        }
+
         try {
           markRendererPerformance("agentlaunch.addpanel", { agentId });
           const terminalId = await addPanel(options, addPanelCommit);
@@ -685,7 +735,12 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               : rawLocation === "background" && launchOptions?.location === "background"
                 ? "background"
                 : "grid";
-          return { terminalId, location, ...launchIdentity };
+          return {
+            terminalId,
+            location,
+            ...launchIdentity,
+            ...(hostAgentLimit !== null ? { hostAgentLimit } : {}),
+          };
         } catch (error) {
           logError(`Failed to launch ${agentId} agent`, error);
           return decline("spawn-failed");

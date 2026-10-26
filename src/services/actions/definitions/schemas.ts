@@ -465,6 +465,14 @@ export const PanelLimitSnapshotSchema = z.object({
   tier: z.enum(["ok", "soft", "confirm", "hard"]),
 });
 
+// The host's live agent terminals across every project and Shell, against the
+// ceiling its memory sets (#14704). A launch is refused once count reaches limit.
+export const HostAgentLimitSnapshotSchema = z.object({
+  host: z.string(),
+  count: z.number(),
+  limit: z.number(),
+});
+
 /**
  * How restore brought a terminal back (#14017), absent on a pane it never
  * rebuilt. Strings, not enums, for the reason and state: they come off

@@ -176,6 +176,7 @@ import type {
   TerminalReliabilityMetricPayload,
   TerminalResizeResult,
 } from "../pty-host.js";
+import type { HostAgentLimitSnapshot } from "../../utils/hostAgentLimit.js";
 import type {
   FileSearchPayload,
   FileSearchResult,
@@ -402,6 +403,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     forceResume(id: string): Promise<void>;
     /** Main's current terminal-host memory pause, ORed across every host shard (#12375). */
     getHostMemoryPause(): Promise<HostMemoryPauseSnapshot>;
+    /** The host's live agent terminals against its ceiling; null while Host mode is off (#14704). */
+    getHostAgentLimit(): Promise<HostAgentLimitSnapshot | null>;
     /**
      * Mint a dedicated worker-ingest MessagePort for this terminal (issue
      * #10960). Resolves with the handshake token; the port itself arrives via

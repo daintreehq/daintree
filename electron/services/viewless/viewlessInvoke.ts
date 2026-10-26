@@ -3,6 +3,8 @@ import { LOCAL_CLIENT_ID } from "../../ipc/endpoint.js";
 import type { ClientEndpoint, ClientRef } from "../../ipc/endpoint.js";
 import { getLocalClientRef } from "../../ipc/localEndpoint.js";
 import type { SerializedError } from "../../../shared/types/ipc/errors.js";
+import type { AppErrorDetails } from "../../../shared/types/appError.js";
+import { pickAppErrorDetails } from "../../../shared/utils/ipcErrorSerialization.js";
 
 /**
  * The caller a viewless action runs as: the host itself, acting for one
@@ -31,11 +33,14 @@ function createViewlessEndpoint(projectId: string): ClientEndpoint {
 
 export class ViewlessInvokeError extends Error {
   readonly code: string | undefined;
+  /** The handler's allowlisted structured detail, when it gave any. */
+  readonly details: AppErrorDetails | undefined;
 
   constructor(error: SerializedError) {
     super(error.message);
     this.name = "ViewlessInvokeError";
     this.code = error.code;
+    this.details = pickAppErrorDetails((error as { details?: unknown }).details);
   }
 }
 

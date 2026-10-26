@@ -1804,6 +1804,25 @@ export class PtyClient extends EventEmitter {
     return ids;
   }
 
+  /**
+   * Terminals launched as agents that are still tracked here, across every
+   * project and shard (#14704). Synchronous so a spawn can count and register
+   * in one turn of the event loop, which is what keeps simultaneous launches
+   * from racing past a ceiling. A spawn already in flight counts, and a
+   * same-id respawn (`excludeId`) doesn't count the terminal it would replace.
+   * An id counts once, as an agent if either the entry tracked for it or the
+   * one a duplicate spawn displaced was launched as one: until the host
+   * answers, either may be the process that is running.
+   */
+  countLiveAgentTerminals(excludeId?: string): number {
+    let count = 0;
+    for (const [id, options] of this.pendingSpawns) {
+      if (id === excludeId) continue;
+      if (options.launchAgentId || this.displacedSpawns.get(id)?.entry.launchAgentId) count++;
+    }
+    return count;
+  }
+
   trash(id: string): void {
     void getTrashedPidTracker()
       .persistTrashed(id, this.terminalPids.get(id))

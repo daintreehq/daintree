@@ -25,6 +25,7 @@ import type {
   TerminalResizeResult,
 } from "@shared/types/pty-host";
 import type { PanelTitleMode } from "@shared/types/panel";
+import type { HostAgentLimitSnapshot } from "@shared/utils/hostAgentLimit";
 import type { TerminalSubmissionLookup } from "@shared/types/terminalSubmission";
 import type { TerminalOutputActivityLookup } from "@shared/types/terminalStatus";
 import {
@@ -1195,6 +1196,11 @@ export const terminalClient = {
   /** Main's current terminal-host memory pause snapshot (#12375). */
   getHostMemoryPause: (): Promise<HostMemoryPauseSnapshot> => {
     return window.electron.terminal.getHostMemoryPause();
+  },
+
+  /** The window's host's live agent terminals against its ceiling, or null while it isn't hosting (#14704). */
+  getHostAgentLimit: (): Promise<HostAgentLimitSnapshot | null> => {
+    return window.electron.terminal.getHostAgentLimit();
   },
 
   /**

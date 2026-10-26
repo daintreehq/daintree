@@ -126,6 +126,10 @@ function pickDetailString(value: unknown): string | undefined {
   return typeof value === "string" ? value.slice(0, MAX_DETAIL_STRING_LENGTH) : undefined;
 }
 
+function pickDetailCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
 function pickHostPlatform(value: unknown): HostPlatform | undefined {
   return typeof value === "string" && HOST_PLATFORMS.has(value)
     ? (value as HostPlatform)
@@ -210,6 +214,13 @@ export function pickAppErrorDetails(value: unknown): AppErrorDetails | undefined
   if (raw.code === "HOST_SWITCH_ON_SCREEN") {
     const switchId = pickDetailString(raw.switchId);
     return switchId === undefined ? undefined : { code: "HOST_SWITCH_ON_SCREEN", switchId };
+  }
+  if (raw.code === "HOST_AGENT_LIMIT_REACHED") {
+    const host = pickDetailString(raw.host);
+    const count = pickDetailCount(raw.count);
+    const limit = pickDetailCount(raw.limit);
+    if (host === undefined || count === undefined || limit === undefined) return undefined;
+    return { code: "HOST_AGENT_LIMIT_REACHED", host, count, limit };
   }
   const pluginId = pickDetailString(raw.pluginId);
   const hostId = pickDetailString(raw.hostId);

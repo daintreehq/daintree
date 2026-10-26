@@ -9,6 +9,7 @@ import type {
   ActionDispatchResult,
   ActionDanger,
 } from "../../../shared/types/actions.js";
+import type { HostAgentLimitSnapshot } from "../../../shared/utils/hostAgentLimit.js";
 import type { PanelSnapshot, Project, ProjectState } from "../../../shared/types/project.js";
 import type { AgentPreset } from "../../../shared/config/agentRegistry.js";
 import type { AgentSettings } from "../../../shared/types/agentSettings.js";
@@ -208,6 +209,11 @@ export interface ViewlessDeps {
   /** The pty-host `terminal.getStatus` answer main already serves with no view. */
   readTerminalStatus(args: unknown, projectId: string): Promise<TerminalStatusResult>;
   hostPlatform: ViewlessHostPlatform;
+  /**
+   * The host's live agent terminals against its ceiling, leaving out a
+   * terminal the launch would replace; null while Host mode is off (#14704).
+   */
+  readHostAgentLimit(excludeTerminalId?: string): HostAgentLimitSnapshot | null;
   /** Pacing for key presses and readiness polls; real timers outside tests. */
   sleep(ms: number): Promise<void>;
   /** The plugins' notes on a worktree about to be deleted, each bounded by its deadline (#13805). */

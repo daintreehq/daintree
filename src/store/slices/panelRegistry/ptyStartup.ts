@@ -14,6 +14,7 @@ import { markRendererPerformance } from "@/utils/performance";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { isClientAppError } from "@/utils/clientAppError";
 import { requiredPluginToolsSpawnError } from "@/utils/requiredPluginToolsSpawnError";
+import { hostAgentLimitSpawnError } from "@/utils/hostAgentLimitSpawnError";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { isUnknownOutcomeError } from "@/utils/resolveUnknownOutcome";
 import { useHostConnectionStore, waitForHostConnected } from "@/store/hostConnectionStore";
@@ -310,8 +311,12 @@ export function enqueuePtyStartup(
           path: err.path,
         } as import("@shared/types/pty-host").SpawnError;
         // A refusal for missing plugin tools keeps its per-plugin states, so
-        // the banner can say what's missing and offer to start without them.
-        const spawnError = requiredPluginToolsSpawnError(error) ?? errnoSpawnError;
+        // the banner can say what's missing and offer to start without them;
+        // one at the host's agent ceiling keeps the host it names.
+        const spawnError =
+          requiredPluginToolsSpawnError(error) ??
+          hostAgentLimitSpawnError(error) ??
+          errnoSpawnError;
 
         set((state) => {
           const _current = state.panelsById[id];

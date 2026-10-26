@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CHANNELS } from "../../../ipc/channels.js";
 import type { AgentSettings } from "../../../../shared/types/agentSettings.js";
 import { executeViewlessAction } from "../ViewlessActionExecutor.js";
@@ -335,6 +335,74 @@ describe("agent.launch with no frontend", () => {
     expect(invoke.mock.calls.some(([, channel]) => channel === CHANNELS.TERMINAL_SPAWN)).toBe(
       false
     );
+  });
+
+  it("declines on a host at its agent ceiling, naming the host, and starts nothing (#14704)", async () => {
+    const hostAgentLimit = { host: "Studio", count: 12, limit: 10 };
+    const { deps, invoke, store } = launchDeps({ readHostAgentLimit: () => hostAgentLimit });
+
+    const result = await executeViewlessAction(
+      request("agent.launch", { agentId: "claude" }),
+      deps
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      result: {
+        launched: false,
+        terminalId: null,
+        spawnStatus: "host-agent-limit",
+        hostAgentLimit,
+      },
+    });
+    expect(invoke.mock.calls.some(([, channel]) => channel === CHANNELS.TERMINAL_SPAWN)).toBe(
+      false
+    );
+    expect(store.read()).toBeNull();
+  });
+
+  it("reports the host's own refusal of a launch that lost the last slot (#14704)", async () => {
+    const refusal = { host: "Studio", count: 12, limit: 10 };
+    const { deps, invoke, store } = launchDeps({
+      readHostAgentLimit: () => ({ host: "Studio", count: 9, limit: 10 }),
+    });
+    invoke.mockImplementation(async (_projectId, channel) => {
+      if (channel === CHANNELS.TERMINAL_SPAWN) {
+        throw Object.assign(new Error("Agent launch refused"), {
+          code: "HOST_AGENT_LIMIT_REACHED",
+          details: { code: "HOST_AGENT_LIMIT_REACHED", ...refusal },
+        });
+      }
+      if (channel === CHANNELS.WORKTREE_GET_ALL_WITH_STATUS) {
+        return { worktrees: [makeWorktree(), WORKTREE], gitBacked: true };
+      }
+      return undefined;
+    });
+
+    const result = await executeViewlessAction(
+      request("agent.launch", { agentId: "claude" }),
+      deps
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      result: { launched: false, spawnStatus: "host-agent-limit", hostAgentLimit: refusal },
+    });
+    expect(store.read()).toBeNull();
+  });
+
+  it("asks nothing of the host for a plain shell, and passes a requested id on (#14704)", async () => {
+    const readHostAgentLimit = vi.fn(() => ({ host: "Studio", count: 10, limit: 10 }));
+    const { deps } = launchDeps({ readHostAgentLimit });
+
+    await executeViewlessAction(request("agent.launch", { agentId: "terminal" }), deps);
+    expect(readHostAgentLimit).not.toHaveBeenCalled();
+
+    await executeViewlessAction(
+      request("agent.launch", { agentId: "claude", requestedId: "terminal-mine" }),
+      deps
+    );
+    expect(readHostAgentLimit).toHaveBeenCalledWith("terminal-mine");
   });
 
   it("opens a plain shell for the terminal id", async () => {
