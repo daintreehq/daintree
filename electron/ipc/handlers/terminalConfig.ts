@@ -1,79 +1,23 @@
-// eager-import-allow: reads terminal config via store.get synchronously at module scope
+// eager-import-allow: writes terminal config via store.set synchronously so the change broadcast reads what landed
 import { dialog, BrowserWindow } from "electron";
 import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";
 import { parseColorSchemeFile } from "../../utils/colorSchemeImporter.js";
-import { effectiveCachedProjectViews } from "../../utils/cachedProjectViews.js";
 import type { HandlerDependencies } from "../types.js";
 import { projectViewManagersFrom } from "../../window/activeProjectIds.js";
 import { typedHandleWithContext } from "../utils.js";
 import { defineIpcNamespace, op } from "../define.js";
 import { TERMINAL_CONFIG_METHOD_CHANNELS } from "./terminalConfig.preload.js";
-import {
-  terminalCustomSchemesReadSchema,
-  terminalCustomSchemesWriteSchema,
-  migrateCustomSchemes,
-} from "../../schemas/customSchemes.js";
-import { normalizeScrollbackLines } from "../../../shared/config/scrollback.js";
-
-function getTerminalConfigObject(): Record<string, unknown> {
-  const config = store.get("terminalConfig");
-  if (config && typeof config === "object" && !Array.isArray(config)) {
-    return config as Record<string, unknown>;
-  }
-  return {};
-}
+import { terminalCustomSchemesWriteSchema } from "../../schemas/customSchemes.js";
+import { notifyTerminalConfigChanged, readTerminalConfig } from "../../services/terminalConfig.js";
 
 export function registerTerminalConfigHandlers(deps?: HandlerDependencies): () => void {
   const namespace = defineIpcNamespace({
     name: "terminalConfig",
     ops: {
-      get: op(TERMINAL_CONFIG_METHOD_CHANNELS.get, async () => {
-        const config = getTerminalConfigObject();
-        // Lazy migration: parse legacy customSchemes string into native array
-        let customSchemes = config.customSchemes;
-        if (typeof customSchemes === "string" || Array.isArray(customSchemes)) {
-          const result = migrateCustomSchemes(
-            customSchemes,
-            terminalCustomSchemesReadSchema,
-            terminalCustomSchemesWriteSchema
-          );
-          if (result.migrated) {
-            try {
-              store.set(
-                "terminalConfig.customSchemes",
-                result.schemes.length > 0 ? result.schemes : []
-              );
-            } catch {
-              // Non-fatal: config parsed but migration write failed
-            }
-          }
-          if (result.errors.length > 0) {
-            console.warn(
-              "[terminalConfig] customSchemes migration warnings:",
-              result.errors.join("; ")
-            );
-          }
-          customSchemes = result.schemes;
-        } else {
-          customSchemes = [];
-        }
-        return {
-          ...config,
-          // `TerminalConfig` types these two as required, but nothing on the
-          // read path guaranteed them: `getTerminalConfigObject` returns `{}`
-          // for a missing or non-object key, electron-store's defaults merge is
-          // shallow (a persisted partial `terminalConfig` replaces the default
-          // object wholesale), and every writer sets a single dot-path. So the
-          // cast below was a lie whenever the persisted object was partial.
-          // Backfilling here makes the declared type true for every consumer,
-          // including `terminalConfig.get`'s now-enforced `resultSchema`.
-          scrollbackLines: normalizeScrollbackLines(config.scrollbackLines),
-          performanceMode: config.performanceMode === true,
-          customSchemes,
-          cachedProjectViews: effectiveCachedProjectViews(config.cachedProjectViews),
-        } as import("../../../shared/types/ipc/config.js").TerminalConfig;
-      }),
+      // A read only: a legacy custom-schemes value is parsed in memory, never
+      // rewritten, since views call this on boot and on every resync (#14699).
+      get: op(TERMINAL_CONFIG_METHOD_CHANNELS.get, async () => readTerminalConfig()),
       setScrollback: op(
         TERMINAL_CONFIG_METHOD_CHANNELS.setScrollback,
         async (scrollbackLines: number) => {
@@ -88,6 +32,7 @@ export function registerTerminalConfigHandlers(deps?: HandlerDependencies): () =
             throw new Error(error);
           }
           store.set("terminalConfig.scrollbackLines", scrollbackLines);
+          notifyTerminalConfigChanged("scrollbackLines");
         }
       ),
       setPerformanceMode: op(
@@ -98,6 +43,7 @@ export function registerTerminalConfigHandlers(deps?: HandlerDependencies): () =
             return;
           }
           store.set("terminalConfig.performanceMode", performanceMode);
+          notifyTerminalConfigChanged("performanceMode");
         }
       ),
       setFontSize: op(TERMINAL_CONFIG_METHOD_CHANNELS.setFontSize, async (fontSize: number) => {
@@ -110,6 +56,7 @@ export function registerTerminalConfigHandlers(deps?: HandlerDependencies): () =
           return;
         }
         store.set("terminalConfig.fontSize", fontSize);
+        notifyTerminalConfigChanged("fontSize");
       }),
       setFontFamily: op(
         TERMINAL_CONFIG_METHOD_CHANNELS.setFontFamily,
@@ -119,6 +66,7 @@ export function registerTerminalConfigHandlers(deps?: HandlerDependencies): () =
             return;
           }
           store.set("terminalConfig.fontFamily", fontFamily.trim());
+          notifyTerminalConfigChanged("fontFamily");
         }
       ),
       setHybridInputEnabled: op(
@@ -129,6 +77,7 @@ export function registerTerminalConfigHandlers(deps?: HandlerDependencies): () =
             return;
           }
           store.set("terminalConfig.hybridInputEnabled", enabled);
+          notifyTerminalConfigChanged("hybridInputEnabled");
         }
       ),
       setHybridInputAutoFocus: op(
@@ -139,6 +88,7 @@ export function registerTerminalConfigHandlers(deps?: HandlerDependencies): () =
             return;
           }
           store.set("terminalConfig.hybridInputAutoFocus", enabled);
+          notifyTerminalConfigChanged("hybridInputAutoFocus");
         }
       ),
       setColorScheme: op(
@@ -149,6 +99,7 @@ export function registerTerminalConfigHandlers(deps?: HandlerDependencies): () =
             return;
           }
           store.set("terminalConfig.colorSchemeId", schemeId.trim());
+          notifyTerminalConfigChanged("colorSchemeId");
         }
       ),
       setCustomSchemes: op(
@@ -160,6 +111,7 @@ export function registerTerminalConfigHandlers(deps?: HandlerDependencies): () =
             return;
           }
           store.set("terminalConfig.customSchemes", result.data);
+          notifyTerminalConfigChanged("customSchemes");
         }
       ),
       setRecentSchemeIds: op(
@@ -174,6 +126,7 @@ export function registerTerminalConfigHandlers(deps?: HandlerDependencies): () =
             .map((id) => id.trim());
           const sanitized = Array.from(new Set(trimmed)).slice(0, 5);
           store.set("terminalConfig.recentSchemeIds", sanitized);
+          notifyTerminalConfigChanged("recentSchemeIds");
         }
       ),
       setScreenReaderMode: op(
@@ -184,6 +137,7 @@ export function registerTerminalConfigHandlers(deps?: HandlerDependencies): () =
             return;
           }
           store.set("terminalConfig.screenReaderMode", mode);
+          notifyTerminalConfigChanged("screenReaderMode");
         }
       ),
       setResourceMonitoring: op(
@@ -194,6 +148,7 @@ export function registerTerminalConfigHandlers(deps?: HandlerDependencies): () =
             return;
           }
           store.set("terminalConfig.resourceMonitoringEnabled", enabled);
+          notifyTerminalConfigChanged("resourceMonitoringEnabled");
           deps?.ptyClient?.setResourceMonitoring(enabled);
         }
       ),
@@ -205,6 +160,7 @@ export function registerTerminalConfigHandlers(deps?: HandlerDependencies): () =
             return;
           }
           store.set("terminalConfig.memoryLeakDetectionEnabled", enabled);
+          notifyTerminalConfigChanged("memoryLeakDetectionEnabled");
         }
       ),
       setMemoryLeakAutoRestartThresholdMb: op(
@@ -225,6 +181,7 @@ export function registerTerminalConfigHandlers(deps?: HandlerDependencies): () =
             return;
           }
           store.set("terminalConfig.memoryLeakAutoRestartThresholdMb", thresholdMb);
+          notifyTerminalConfigChanged("memoryLeakAutoRestartThresholdMb");
         }
       ),
       setCachedProjectViews: op(
@@ -241,6 +198,7 @@ export function registerTerminalConfigHandlers(deps?: HandlerDependencies): () =
             throw new Error(error);
           }
           store.set("terminalConfig.cachedProjectViews", cachedProjectViews);
+          notifyTerminalConfigChanged("cachedProjectViews");
           // Every window holds a copy of the app-wide cap (#14218); the first
           // one set sweeps the whole app, and the rest find it within the cap.
           const managers = new Set(projectViewManagersFrom(deps?.windowRegistry)());

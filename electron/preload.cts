@@ -177,6 +177,7 @@ import type {
   IssueNotFoundPayload,
   ServiceConnectivityPayload,
   AgentDefaultsSnapshot,
+  TerminalConfigChange,
   GitStatus,
   KeyAction,
   TerminalRecipe,
@@ -2057,6 +2058,19 @@ function buildElectronApi(): ElectronAPI {
       ...buildTerminalConfigPreloadBindings(_unwrappingInvoke),
 
       importColorScheme: () => _unwrappingInvoke(CHANNELS.TERMINAL_CONFIG_IMPORT_COLOR_SCHEME),
+
+      onChanged: (callback: (change: TerminalConfigChange) => void) => {
+        const offDevice = _typedOn(CHANNELS.TERMINAL_CONFIG_DEVICE_CHANGED, (config) =>
+          callback({ owner: "device", config })
+        );
+        const offHost = _typedOn(CHANNELS.TERMINAL_CONFIG_HOST_CHANGED, (config) =>
+          callback({ owner: "host", config })
+        );
+        return () => {
+          offDevice();
+          offHost();
+        };
+      },
     },
 
     // Configuration export/import API (#11889)

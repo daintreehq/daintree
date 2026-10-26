@@ -64,6 +64,7 @@ import { peek as peekTerminalService } from "@/services/terminal/terminalInstanc
 import { createFocusFollowBreaker } from "./focusFollowBreaker";
 import { subscribeFocusedPanelReporter } from "./focusedPanelReporter";
 import { initAgentDefaultsSync } from "@/services/agentDefaultsSync";
+import { initTerminalConfigSync } from "@/services/terminalConfigSync";
 import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
 
 // Thunk form: read the live mruList at fire time, not at schedule time. A
@@ -725,6 +726,9 @@ export function initStoreOrchestrator(): () => void {
 
   // The host's assistant agent and default terminal agent (#13345).
   disposables.add(toDisposable(initAgentDefaultsSync()));
+
+  // Terminal settings, as saved on whichever machine owns each (#14699).
+  disposables.add(toDisposable(initTerminalConfigSync()));
 
   cleanupFn = () => {
     disposables.dispose();

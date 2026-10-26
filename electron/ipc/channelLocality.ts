@@ -1047,7 +1047,12 @@ export const CHANNEL_LOCALITY = {
   "telemetry:preview-unsubscribe": "shell",
   "telemetry:set-enabled": "shell",
   "telemetry:track": "shell",
+  // Each owner's half of a saved change comes from that owner alone: this
+  // machine's views of another host take its device half from here and the
+  // host half from the host.
+  "terminal-config:device-changed": "shell",
   "terminal-config:get": "hybrid",
+  "terminal-config:host-changed": "host",
   "terminal-config:import-color-scheme": "shell",
   "terminal-config:set-cached-project-views": "shell",
   "terminal-config:set-color-scheme": "shell",

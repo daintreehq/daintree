@@ -434,7 +434,7 @@ function AppInner() {
   useGlobalEscapeDispatcher();
 
   // App lifecycle hooks
-  usePanelStoreBootstrap(bootResult?.terminalConfig ?? null);
+  usePanelStoreBootstrap();
   useCloudSyncWarning(homeDir);
   useRosettaWarning(bootResult);
   useAccessibilityAnnouncements();

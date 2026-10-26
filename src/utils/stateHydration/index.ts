@@ -44,7 +44,7 @@ import { useCanopyStore } from "@/store/canopyStore";
 import { useResourceProfileStore } from "@/store/resourceProfileStore";
 import type { AgentPreset } from "@/config/agents";
 import type { HydrationBatchToken } from "@/store/slices/panelRegistry/types";
-import { normalizeAndApplyScrollback } from "./scrollbackConfig";
+import { applyBootTerminalConfig, beginTerminalConfigRead } from "@/services/terminalConfigSync";
 import { ensureHydrationBootstrap } from "./bootstrapGuard";
 import { dispatchRecoveryNotifications } from "./recoveryNotifications";
 import { scheduleScrollbackRestore } from "./scrollbackRestoreScheduler";
@@ -233,6 +233,12 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
   try {
     await withRendererSpan(PERF_MARKS.HYDRATE_BOOTSTRAP, () => ensureHydrationBootstrap());
 
+    // A fresh read is asked for here, so a saved change heard while it travels
+    // wins over its answer. The prefetched payload is the boot one.
+    const applyTerminalConfig = prefetchedHydrateResult
+      ? applyBootTerminalConfig
+      : beginTerminalConfigRead();
+
     // Use the pre-fetched hydration payload when available, eliminating a
     // ~50-150ms IPC round-trip. Fall back to the IPC pull model otherwise.
     const hydrateResult = prefetchedHydrateResult
@@ -309,7 +315,8 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
 
     dispatchRecoveryNotifications(hydrateResult);
 
-    normalizeAndApplyScrollback(terminalConfig, logHydrationInfo);
+    // Before any terminal is restored, so each one opens with these values.
+    applyTerminalConfig(terminalConfig);
 
     if (!appState) {
       logWarn("App state returned undefined during hydration, using defaults");

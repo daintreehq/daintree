@@ -58,11 +58,16 @@ interface ProjectPresentationBridge {
   onChanged: (cb: (payload: unknown) => void) => () => void;
 }
 
+interface TerminalConfigBridge {
+  onChanged: (cb: (change: unknown) => void) => () => void;
+}
+
 const originalWindow = (globalThis as { window?: unknown }).window;
 let terminal: TerminalBridge;
 let plugin: PluginBridge;
 let projectPresentation: ProjectPresentationBridge;
 let app: AppBridge;
+let terminalConfig: TerminalConfigBridge;
 
 beforeAll(async () => {
   const fakeWindow = {
@@ -97,6 +102,7 @@ beforeAll(async () => {
         terminal?: TerminalBridge;
         plugin?: PluginBridge;
         projectPresentation?: ProjectPresentationBridge;
+        terminalConfig?: TerminalConfigBridge;
         app?: AppBridge;
       }
     | undefined;
@@ -105,6 +111,7 @@ beforeAll(async () => {
   plugin = api!.plugin!;
   projectPresentation = api!.projectPresentation!;
   app = api!.app!;
+  terminalConfig = api!.terminalConfig!;
 });
 
 afterAll(() => {
@@ -114,6 +121,25 @@ afterAll(() => {
 describe("preload event subscriptions", () => {
   beforeEach(() => {
     ipcRenderer.removeAllListeners("terminal:activity");
+  });
+
+  it("names whose half each terminal-config change is, and detaches both channels on dispose", () => {
+    const channels = ["terminal-config:device-changed", "terminal-config:host-changed"];
+    const received: unknown[] = [];
+    const dispose = terminalConfig.onChanged((change) => received.push(change));
+
+    ipcRenderer.emit(channels[0], {}, { fontSize: 16 });
+    ipcRenderer.emit(channels[1], {}, { resourceMonitoringEnabled: true });
+    expect(received).toEqual([
+      { owner: "device", config: { fontSize: 16 } },
+      { owner: "host", config: { resourceMonitoringEnabled: true } },
+    ]);
+
+    dispose();
+    dispose();
+    ipcRenderer.emit(channels[0], {}, { fontSize: 18 });
+    expect(received).toHaveLength(2);
+    for (const channel of channels) expect(ipcRenderer.listenerCount(channel)).toBe(0);
   });
 
   it("delivers each terminal:activity push exactly once after repeated subscribe/unsubscribe cycles", () => {

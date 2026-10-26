@@ -2135,6 +2135,10 @@ export interface IpcEventMap {
 
   // Host-owned agent defaults changed (#13345)
   "agent-defaults:changed": AgentDefaultsSnapshot;
+
+  // A saved terminal-config change, one owner's fields each (#14699)
+  "terminal-config:device-changed": Partial<import("./config.js").TerminalConfig>;
+  "terminal-config:host-changed": Partial<import("./config.js").TerminalConfig>;
   "help:global-assistant-changed": import("./help.js").GlobalAssistantView;
 
   // Plugin action registry events

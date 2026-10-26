@@ -40,3 +40,12 @@ export interface TerminalConfig {
   /** Number of project views to keep cached in memory (1–5, default: 1) */
   cachedProjectViews?: number;
 }
+
+/**
+ * A saved terminal-config change, as every view hears it (#14699): all of one
+ * owner's fields, so a view needs nothing else from that machine to catch up.
+ */
+export interface TerminalConfigChange {
+  owner: "device" | "host";
+  config: Partial<TerminalConfig>;
+}

@@ -197,6 +197,23 @@ describe("ColorSchemePicker persistence", () => {
 
   afterEach(cleanup);
 
+  it("saves the recents its pick made, even if the store's list changes meanwhile", async () => {
+    const saved = deferred();
+    vi.mocked(terminalConfigClient.setColorScheme).mockReturnValueOnce(saved.promise);
+    vi.mocked(terminalConfigClient.setRecentSchemeIds).mockClear();
+    render(<ColorSchemePicker error={null} onError={vi.fn()} />);
+
+    pick("Dracula");
+    // A read of the saved settings lands while the scheme saves.
+    act(() => useTerminalColorSchemeStore.setState({ recentSchemeIds: [] }));
+    await act(async () => {
+      saved.resolve();
+      await saved.promise;
+    });
+
+    expect(terminalConfigClient.setRecentSchemeIds).toHaveBeenCalledWith(["dracula"]);
+  });
+
   it("rolls back to what is on disk, never to an unsaved optimistic choice", async () => {
     const first = deferred();
     const second = deferred();
