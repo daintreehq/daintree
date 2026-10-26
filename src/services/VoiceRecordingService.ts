@@ -1821,7 +1821,10 @@ class VoiceRecordingService {
         );
         correction.draft = draft;
         touched.add(correction.panelId);
-        if (from < 0 || draft.slice(from, from + correction.rawText.length) !== correction.rawText) {
+        if (
+          from < 0 ||
+          draft.slice(from, from + correction.rawText.length) !== correction.rawText
+        ) {
           this.retireCorrection(correction);
           continue;
         }

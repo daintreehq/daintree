@@ -152,7 +152,10 @@ export function useVoiceWaitSubmit({
 
   /** A send from the editor that waits for dictation still finishing or being corrected. */
   const submitFromEditor = useCallback(() => {
-    if (isVoiceSessionActiveFor(terminalId) || voiceRecordingService.hasPendingCorrection(terminalId)) {
+    if (
+      isVoiceSessionActiveFor(terminalId) ||
+      voiceRecordingService.hasPendingCorrection(terminalId)
+    ) {
       startVoiceWaitSubmit();
       return;
     }
