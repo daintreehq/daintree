@@ -5,7 +5,6 @@ import { defineIpcNamespace, opValidated } from "../define.js";
 import { getVoiceSettings } from "./voiceInput.js";
 import { VOICE_DICTIONARY_METHOD_CHANNELS } from "./voiceDictionary.preload.js";
 import {
-<<<<<<< HEAD
   changeProjectVoiceDictionary,
   readProjectVoiceDictionary,
 } from "../../services/projectVoiceDictionary.js";
@@ -17,9 +16,7 @@ import type {
 } from "../../../shared/types/ipc/api.js";
 import {
   DICTIONARY_CONTROL_CHARACTERS,
-=======
   MAX_DICTIONARY_HEARD_AS,
->>>>>>> 3609d59f18 (fix(voice): pluralize dictionary counts and cap pasted imports)
   acceptSuggestion,
   addDictionaryEntry,
   dismissSuggestion,
