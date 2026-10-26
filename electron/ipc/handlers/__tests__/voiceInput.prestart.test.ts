@@ -174,11 +174,21 @@ function sendChunk(id: number, bytes = 4800, sessionId = currentSessionId) {
   (call[1] as (e: unknown, s: unknown, c: ArrayBuffer) => void)({}, sessionId, chunk.buffer);
 }
 
-// The IPC resolves once the provider is up and rejects with why it isn't.
+type StartOutcome = { status: "started" | "superseded" | "failed"; error?: string };
+
+// Mapped onto the old result shape so these cases read the same as before.
 function start(): Promise<StartResult> {
   currentSessionId = `session-${nextSessionNumber++}`;
-  return (getHandler("voice-input:start")(fakeEvent, currentSessionId) as Promise<void>).then(
-    () => ({ ok: true }),
+  return (
+    getHandler("voice-input:start")(fakeEvent, currentSessionId) as Promise<StartOutcome>
+  ).then(
+    (outcome) =>
+      outcome.status === "started"
+        ? { ok: true }
+        : {
+            ok: false,
+            error: outcome.status === "failed" ? outcome.error : "Voice session superseded",
+          },
     (error: Error) => ({ ok: false, error: error.message })
   );
 }

@@ -160,7 +160,14 @@ const runtime = vi.hoisted(() => ({
     requestMicPermission: vi.fn<() => Promise<boolean>>(),
     openMicSettings: vi.fn<() => Promise<void>>(),
     sendAudioChunk: vi.fn<(sessionId: string, chunk: ArrayBuffer) => void>(),
-    start: vi.fn<(sessionId: string) => Promise<void>>(),
+    start:
+      vi.fn<
+        (
+          sessionId: string
+        ) => Promise<
+          { status: "started" } | { status: "superseded" } | { status: "failed"; error: string }
+        >
+      >(),
     stop: vi.fn<(sessionId: string) => Promise<void>>(),
   },
 }));
@@ -285,10 +292,12 @@ function resetRuntime(): void {
   // The real IPC method resolves a promise; the caller hands it to
   // safeFireAndForget, which would throw on a bare undefined.
   runtime.voiceInput.openMicSettings.mockImplementation(async () => {});
-  // The IPC resolves once the provider is up and rejects with its message.
+  // The queue speaks the old { ok } shape; the IPC answers with an outcome.
   runtime.voiceInput.start.mockImplementation(async () => {
     const result = await (runtime.startQueue.shift() ?? { ok: true });
-    if (!result.ok) throw new Error(result.error ?? "Voice input failed to start.");
+    return result.ok
+      ? { status: "started" as const }
+      : { status: "failed" as const, error: result.error ?? "Voice input failed to start." };
   });
   runtime.voiceInput.stop.mockImplementation(async () => {
     const next = runtime.stopQueue.shift();
@@ -749,7 +758,9 @@ describe("VoiceRecordingService adversarial", () => {
       await retargeting;
 
       expect(runtime.voiceFns.beginSession).toHaveBeenLastCalledWith(panelTwo);
-      expect(runtime.voiceInput.sendAudioChunk.mock.calls.map(([, chunk]) => chunk)).toEqual([early]);
+      expect(runtime.voiceInput.sendAudioChunk.mock.calls.map(([, chunk]) => chunk)).toEqual([
+        early,
+      ]);
       expect(runtime.createdStreams[1]?.track.stop).not.toHaveBeenCalled();
     });
 

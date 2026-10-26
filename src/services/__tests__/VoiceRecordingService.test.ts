@@ -163,7 +163,7 @@ function buildElectronStub() {
       requestMicPermission: vi.fn().mockResolvedValue(true),
       openMicSettings: vi.fn(),
       sendAudioChunk: vi.fn(),
-      start: vi.fn().mockResolvedValue(undefined),
+      start: vi.fn().mockResolvedValue({ status: "started" }),
       stop: vi.fn().mockResolvedValue(undefined),
     },
     systemSleep: {

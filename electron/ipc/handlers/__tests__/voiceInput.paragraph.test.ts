@@ -319,7 +319,7 @@ describe("voiceInput — IPC handler surface", () => {
     await (handleStop as SessionHandler)(fakeEvent, currentSessionId);
     resolveAssembly(["Daintree"]);
 
-    await expect(startPromise).rejects.toThrow("Voice session superseded");
+    await expect(startPromise).resolves.toEqual({ status: "superseded" });
     // The superseded start must never reach svc.start().
     expect(shared.startCalls).toHaveLength(0);
   });
@@ -671,7 +671,7 @@ describe("voiceInput — context keyterms wiring", () => {
 
     // Assembly then fails — the catch path must still honor the supersede.
     gate.reject(new Error("assembly boom"));
-    await expect(aPromise).rejects.toThrow("Voice session superseded");
+    await expect(aPromise).resolves.toEqual({ status: "superseded" });
     expect(shared.startCalls).toHaveLength(0);
   });
 
@@ -708,7 +708,7 @@ describe("voiceInput — context keyterms wiring", () => {
 
     // A's assembly now resolves — but A must detect it was superseded and bail.
     gate.resolve(["alpha"]);
-    await expect(aPromise).rejects.toThrow("Voice session superseded");
+    await expect(aPromise).resolves.toEqual({ status: "superseded" });
 
     // Only B reached svc.start; A never did (no second session).
     expect(shared.startCalls).toHaveLength(1);

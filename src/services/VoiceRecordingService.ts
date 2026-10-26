@@ -1155,7 +1155,13 @@ class VoiceRecordingService {
     // resolves could land on the previous provider or be dropped.
     logDebug(`${LOG_PREFIX} Calling voiceInput.start() IPC`);
     const result = await window.electron.voiceInput.start(sessionId).then(
-      () => ({ ok: true as const }),
+      (outcome) =>
+        outcome.status === "started"
+          ? { ok: true as const }
+          : {
+              ok: false as const,
+              error: outcome.status === "failed" ? outcome.error : "Voice session superseded",
+            },
       (error: unknown) => ({
         ok: false as const,
         error: formatErrorMessage(error, "Voice input failed to start."),

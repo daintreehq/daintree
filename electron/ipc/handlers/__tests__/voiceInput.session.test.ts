@@ -210,7 +210,9 @@ describe("voiceInput — session identity", () => {
     ownerB = makeSender();
     appSent = [];
     const win = {
-      webContents: { send: vi.fn((channel: string, payload: unknown) => appSent.push({ channel, payload })) },
+      webContents: {
+        send: vi.fn((channel: string, payload: unknown) => appSent.push({ channel, payload })),
+      },
       isDestroyed: vi.fn(() => false),
     };
     cleanup = registerVoiceInputHandlers({
@@ -255,7 +257,7 @@ describe("voiceInput — session identity", () => {
     // Neither a pending start nor a running session is cancelled by it.
     await expect(stop(ownerB, "b")).resolves.toEqual({ rawText: null });
     resolveKeyterms();
-    await expect(pending).resolves.toBeUndefined();
+    await expect(pending).resolves.toEqual({ status: "started" });
     await expect(stop(ownerB, "b")).resolves.toEqual({ rawText: null });
 
     expect(shared.calls).toEqual(["start:a"]);
@@ -346,7 +348,7 @@ describe("voiceInput — session identity", () => {
     await stop(ownerA, "a");
     resolveKeyterms();
 
-    await expect(pending).rejects.toThrow("Voice session superseded");
+    await expect(pending).resolves.toEqual({ status: "superseded" });
     expect(shared.calls).toEqual([]);
     expect(ended(ownerA)).toEqual([{ sessionId: "a", reason: "cancelled" }]);
   });
@@ -364,7 +366,10 @@ describe("voiceInput — session identity", () => {
   it("ends a session as failed when its provider can't start", async () => {
     shared.startResult = { ok: false, error: "OpenAI API key not configured" };
 
-    await expect(start(ownerA, "a")).rejects.toThrow("OpenAI API key not configured");
+    await expect(start(ownerA, "a")).resolves.toEqual({
+      status: "failed",
+      error: "OpenAI API key not configured",
+    });
     expect(ended(ownerA)).toEqual([{ sessionId: "a", reason: "failed" }]);
     expect(getLiveVoiceSession()).toBeNull();
   });
@@ -394,7 +399,7 @@ describe("voiceInput — session identity", () => {
 
   it("leaves a newer session alone when a failed start's view goes away (#14602)", async () => {
     shared.startResult = { ok: false, error: "Connection timed out" };
-    await expect(start(ownerA, "a")).rejects.toThrow("Connection timed out");
+    await expect(start(ownerA, "a")).resolves.toMatchObject({ status: "failed" });
 
     shared.startResult = { ok: true };
     await start(ownerB, "b");

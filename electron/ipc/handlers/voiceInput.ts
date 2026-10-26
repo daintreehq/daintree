@@ -13,7 +13,7 @@ import type {
   VoiceInputSettings,
   VoiceTranscriptionProvider,
 } from "../../../shared/types/ipc/api.js";
-import type { VoiceSessionEndReason } from "../../../shared/types/voice.js";
+import type { VoiceSessionEndReason, VoiceStartOutcome } from "../../../shared/types/voice.js";
 import { logDebug, logInfo, logWarn } from "../../utils/logger.js";
 import { buildOpenAIHeaders } from "../../../shared/utils/openaiHeaders.js";
 import { voiceErrorLogFields } from "../../../shared/utils/voiceLogFields.js";
@@ -132,9 +132,7 @@ function endSession(session: VoiceSession, reason: VoiceSessionEndReason): void 
   }
 }
 
-function supersededError(): AppError {
-  return new AppError({ code: "CANCELLED", message: "Voice session superseded" });
-}
+const SUPERSEDED: VoiceStartOutcome = { status: "superseded" };
 
 const VALID_TRANSCRIPTION_PROVIDERS: VoiceTranscriptionProvider[] = ["openai", "deepgram"];
 
@@ -456,10 +454,13 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     }
   };
 
-  const handleStart = async (ctx: IpcContext, sessionId: string): Promise<void> => {
+  // A failed or superseded start is an outcome, not an exception: the
+  // provider's message goes back to the renderer and never through the IPC
+  // error logger, where it could quote dictated text (#14620).
+  const handleStart = async (ctx: IpcContext, sessionId: string): Promise<VoiceStartOutcome> => {
     // Events and the ended notice go back to the view that started it.
     const sender = ctx.event?.sender;
-    if (!sender || sender.isDestroyed()) throw supersededError();
+    if (!sender || sender.isDestroyed()) return SUPERSEDED;
     // Two sessions under one id would make every chunk and stop ambiguous.
     if (liveSession?.id === sessionId) {
       throw new AppError({ code: "VALIDATION", message: "Voice session already started" });
@@ -500,22 +501,30 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     });
     // Main-process clock only; correlate with renderer start steps by session id.
     const startedAt = performance.now();
+    // Whatever already ended it (a stop, a newer start, its view going away)
+    // chose the reason; a stop in progress owns the ending.
+    let outcome: VoiceStartOutcome;
     try {
-      await startSession(session, startedAt);
+      outcome = await startSession(session, startedAt);
     } catch (error) {
-      // Whatever already ended it (a stop, a newer start, its view going away)
-      // chose the reason; a stop in progress owns the ending.
       if (session.phase !== "stopping") endSession(session, "failed");
       throw error;
     }
+    if (outcome.status === "failed" && session.phase !== "stopping") {
+      endSession(session, "failed");
+    }
+    return outcome;
   };
 
-  const startSession = async (session: VoiceSession, startedAt: number): Promise<void> => {
+  const startSession = async (
+    session: VoiceSession,
+    startedAt: number
+  ): Promise<VoiceStartOutcome> => {
     const svc = await getService();
     const serviceReadyAt = performance.now();
     // The renderer went away during the import — nothing is left to record for.
     if (session.sender.isDestroyed()) endSession(session, "cancelled");
-    if (!isLive(session)) throw supersededError();
+    if (!isLive(session)) return SUPERSEDED;
     // Snapshot transcription settings at session start (model, language, API key).
     // Correction settings are read live from store per-event so mid-session changes apply.
     const settings = getVoiceSettings();
@@ -713,7 +722,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // A stop, a newer start or the owner going away ended this session while
     // assembly ran (on either path). Whatever ended it already released its
     // subscription and watcher, so there is nothing of ours left to undo.
-    if (!isLive(session)) throw supersededError();
+    if (!isLive(session)) return SUPERSEDED;
     // Field names avoid "key": the logger blanks any field containing it.
     logInfo("[VoiceInput] Start timing — provider start", {
       sessionId: session.id,
@@ -736,10 +745,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       providerStartMs: Math.round(providerSettledAt - keytermsReadyAt),
       elapsedMs: Math.round(providerSettledAt - startedAt),
     });
-    if (!result.ok) {
-      throw new AppError({ code: "VOICE_START_FAILED", message: result.error });
-    }
-    if (!isLive(session)) throw supersededError();
+    if (!result.ok) return { status: "failed", error: result.error };
+    return isLive(session) ? { status: "started" } : SUPERSEDED;
   };
 
   const handleStop = async (sessionId: string): Promise<{ rawText: string | null }> => {

@@ -556,6 +556,7 @@ export type {
   VoiceInputError,
   VoiceInputErrorSeverity,
   VoiceSessionEndReason,
+  VoiceStartOutcome,
   VoiceTranscriptPhase,
 } from "./voice.js";
 export { isActiveVoiceSession } from "./voice.js";

@@ -49,6 +49,13 @@ export type VoiceInputStatus =
 export type VoiceSessionEndReason = "stopped" | "cancelled" | "superseded" | "failed";
 
 /**
+ * How a `voice-input:start` call came out. A provider that couldn't start
+ * reports why in `error`, for the user; it is never logged.
+ */
+export type VoiceStartOutcome =
+  { status: "started" } | { status: "superseded" } | { status: "failed"; error: string };
+
+/**
  * The lifecycle phase of the transcript within a single voice panel buffer.
  * This is a renderer-level concept — it is derived from store state and is never
  * sent over IPC directly.

@@ -70,8 +70,9 @@ export async function ipcStart(window: Page): Promise<{ ok: boolean; error?: str
     const w = window as any;
     w.__voiceSessionId__ = crypto.randomUUID();
     try {
-      await w.electron.voiceInput.start(w.__voiceSessionId__);
-      return { ok: true };
+      const outcome = await w.electron.voiceInput.start(w.__voiceSessionId__);
+      if (outcome.status === "started") return { ok: true };
+      return { ok: false, error: outcome.status === "failed" ? outcome.error : outcome.status };
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : String(error) };
     }
