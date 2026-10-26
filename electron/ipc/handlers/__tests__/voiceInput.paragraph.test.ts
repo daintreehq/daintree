@@ -328,21 +328,43 @@ describe("voiceInput — IPC handler surface", () => {
     shared.startContexts = [];
 
     // Begin a new session whose keyterm assembly hangs until we resolve it.
-    let resolveAssembly!: (terms: string[]) => void;
-    const assemblyPromise = new Promise<string[]>((resolve) => {
-      resolveAssembly = resolve;
-    });
-    shared.assembleKeyterms = () => assemblyPromise;
-    const handleStart = getHandler("voice-input:start");
-    const startPromise = (handleStart as SessionHandler)(fakeEvent, nextSessionId());
+    // Only Deepgram waits for assembly before starting its provider.
+    const { store } = await import("../../../store.js");
+    const { assembleKeyterms } = await import("../../../services/voiceContextKeyterms.js");
+    const readStore = vi.mocked(store.get).getMockImplementation()!;
+    vi.mocked(store.get).mockImplementation((key: string) =>
+      key === "voiceInput"
+        ? {
+            ...(readStore(key) as object),
+            deepgramApiKey: "dg-test",
+            transcriptionProvider: "deepgram",
+          }
+        : readStore(key)
+    );
+    try {
+      let resolveAssembly!: (terms: string[]) => void;
+      const assemblyPromise = new Promise<string[]>((resolve) => {
+        resolveAssembly = resolve;
+      });
+      shared.assembleKeyterms = () => assemblyPromise;
+      const assembliesBefore = vi.mocked(assembleKeyterms).mock.calls.length;
+      const handleStart = getHandler("voice-input:start");
+      const startPromise = (handleStart as SessionHandler)(fakeEvent, nextSessionId());
 
-    // Stop arrives mid-assembly, then assembly finishes.
-    await (handleStop as SessionHandler)(fakeEvent, currentSessionId);
-    resolveAssembly(["Daintree"]);
+      // Stop arrives mid-assembly, then assembly finishes.
+      await vi.waitFor(() =>
+        expect(vi.mocked(assembleKeyterms).mock.calls.length).toBeGreaterThan(assembliesBefore)
+      );
+      expect(shared.startCalls).toHaveLength(0);
+      await (handleStop as SessionHandler)(fakeEvent, currentSessionId);
+      resolveAssembly(["Daintree"]);
 
-    await expect(startPromise).resolves.toEqual({ status: "superseded" });
-    // The superseded start must never reach svc.start().
-    expect(shared.startCalls).toHaveLength(0);
+      await expect(startPromise).resolves.toEqual({ status: "superseded" });
+      // The superseded start must never reach svc.start().
+      expect(shared.startCalls).toHaveLength(0);
+    } finally {
+      vi.mocked(store.get).mockImplementation(readStore);
+    }
   });
 });
 

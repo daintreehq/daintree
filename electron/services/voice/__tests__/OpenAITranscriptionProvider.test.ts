@@ -715,22 +715,26 @@ describe("OpenAITranscriptionProvider", () => {
     });
 
     it("keeps a replaced session's late terms out of its successor", async () => {
-      const terms = deferredTerms();
+      const stale = deferredTerms();
+      const fresh = deferredTerms();
       const service = new OpenAITranscriptionProvider();
-      void service.start(BASE_SETTINGS, "session-1", { keyterms: terms.promise });
+      void service.start(BASE_SETTINGS, "session-1", { keyterms: stale.promise });
       await Promise.resolve();
       const first = latestInstance();
       first.simulateOpen();
 
-      void service.start({ ...BASE_SETTINGS, keyterms: ["fresh"] }, "session-2");
+      void service.start(BASE_SETTINGS, "session-2", { keyterms: fresh.promise });
       await Promise.resolve();
       const second = latestInstance();
       second.simulateOpen();
-      terms.resolve(["stale-term"]);
-      await terms.promise;
-
+      stale.resolve(["stale-term"]);
+      await stale.promise;
       expect(first.sent).toHaveLength(0);
-      expect(second.sentJson().filter((p) => p.type === "session.update")).toHaveLength(1);
+      expect(second.sent).toHaveLength(0);
+
+      fresh.resolve(["fresh"]);
+      await fresh.promise;
+      expect(readTranscription(second).keywords).toEqual(["fresh"]);
       expect(second.sent.join("\n")).not.toContain("stale-term");
       service.stop();
     });
@@ -1903,19 +1907,17 @@ describe("OpenAITranscriptionProvider", () => {
       const tail = new Uint8Array(2_400).fill(9).buffer;
       service.sendAudioChunk(tail);
       becomeReady(socket);
-      // A live segment, so the next onset is allowed to clear.
-      service.sendAudioChunk(chunk(5_000));
+      // A live speech-end arms the clear. The flushed tail alone is too short
+      // to commit, so the pre-roll still holds it.
       worker.emitSpeechStart();
       worker.emitSpeechEnd();
       const sentBefore = socket.sent.length;
 
-      service.sendAudioChunk(tail);
       worker.emitSpeechStart();
-      const after = socket.sentJson().slice(sentBefore + 1);
-      expect(after[0]).toEqual({ type: "input_audio_buffer.clear" });
-      expect(after.slice(1).every((p) => p.audio === Buffer.from(tail).toString("base64"))).toBe(
-        true
-      );
+      expect(socket.sentJson().slice(sentBefore)).toEqual([
+        { type: "input_audio_buffer.clear" },
+        { type: "input_audio_buffer.append", audio: Buffer.from(tail).toString("base64") },
+      ]);
       service.stop();
     });
 
@@ -1926,12 +1928,38 @@ describe("OpenAITranscriptionProvider", () => {
       for (let i = 0; i < 3; i++) service.sendAudioChunk(chunk());
       service.commitParagraphBoundary();
       service.commitParagraphBoundary();
+      for (let i = 0; i < 3; i++) service.sendAudioChunk(chunk());
+      service.commitParagraphBoundary();
       service.sendAudioChunk(chunk());
 
       becomeReady(socket);
       expect(types(socket)).toEqual([
         "session.update",
         ...appends(3),
+        "input_audio_buffer.commit",
+        ...appends(3),
+        "input_audio_buffer.commit",
+        ...appends(1),
+      ]);
+      service.stop();
+    });
+
+    it("commits a dropped connection's replayed tail at a boundary asked for while reconnecting", async () => {
+      vi.spyOn(Math, "random").mockReturnValue(0.5);
+      const service = new OpenAITranscriptionProvider();
+      const { socket } = await bringSessionReady(service);
+      service.sendAudioChunk(chunk(5_000));
+      socket.simulateClose(1006, Buffer.from("abnormal"));
+      service.commitParagraphBoundary();
+      service.sendAudioChunk(chunk(5_000));
+      vi.advanceTimersByTime(3_000);
+      const socket2 = latestInstance();
+      expect(socket2).not.toBe(socket);
+
+      becomeReady(socket2);
+      expect(types(socket2)).toEqual([
+        "session.update",
+        ...appends(1),
         "input_audio_buffer.commit",
         ...appends(1),
       ]);

@@ -1041,7 +1041,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
         // whatever was captured while reconnecting.
         const recovering = this.isReconnecting;
         if (this.connection) this.replayUnacknowledgedAudio();
-        if (this.preConnectBuffer.length > 0 && this.connection) {
+        if ((this.preConnectBuffer.length > 0 || this.heldCommits.length > 0) && this.connection) {
           logInfo(`${P} Flushing ${this.preConnectBuffer.length} buffered audio chunks`, {
             heldCommits: this.heldCommits.length,
           });
@@ -1053,6 +1053,11 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
           this.preConnectBufferBytes = 0;
           this.heldCommits = [];
           let nextCommit = 0;
+          // Asked for before anything new was held: it closes the replayed tail.
+          if (commitsAfter[0] === 0) {
+            nextCommit++;
+            this.commitHeldSegment();
+          }
           for (let i = 0; i < buffered.length; i++) {
             this.sendAudioJson(buffered[i]);
             // Pre-roll follows what was sent, and each commit restarts it, so a
@@ -1901,7 +1906,9 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
 
   private holdCommit(reason: string): void {
     const at = this.preConnectBuffer.length;
-    if (at === 0 || this.heldCommits.at(-1) === at) return;
+    // With nothing held yet, a boundary still closes a dropped connection's
+    // unacknowledged tail, which is replayed ahead of the held audio.
+    if ((at === 0 && this.replayTailBytes === 0) || this.heldCommits.at(-1) === at) return;
     this.heldCommits.push(at);
     logDebug(`${P} Commit held until the socket is ready`, { reason, bufferedChunks: at });
   }

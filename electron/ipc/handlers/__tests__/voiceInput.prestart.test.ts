@@ -504,7 +504,8 @@ describe("voiceInput — audio sent before the provider starts", () => {
     const resolveKeyterms = deferKeyterms();
     const pending = start();
     sendChunk(1);
-    await vi.waitFor(() => expect(sender.onDestroyed).not.toBeNull());
+    await vi.waitFor(() => expect(assembleKeyterms).toHaveBeenCalled());
+    expect(sender.onDestroyed).not.toBeNull();
 
     sender.destroyed = true;
     sender.onDestroyed!();
