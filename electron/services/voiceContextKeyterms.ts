@@ -7,12 +7,16 @@ import {
   isSecretShaped,
   redactSecretShapedLines,
 } from "./voiceKeytermSecrets.js";
+import { deriveRepoNames, stripPackageScope } from "./voiceRepoKeyterms.js";
 import { MAX_DICTIONARY_KEYTERMS, MAX_KEYTERMS } from "../../shared/config/voiceKeyterms.js";
 
 const P = "[VoiceKeyterms]";
 
 const TERMINAL_TIER_CAP = 30;
 const PROJECT_TIER_CAP = 4;
+// Fixed so repo-derived names (many dependencies, many packages) can't crowd out
+// the branch and terminal tiers.
+const REPO_TIER_CAP = 6;
 // Deepgram nova-3 rejects any keyterm longer than 100 chars with an HTTP 400
 // that fails the WebSocket upgrade, so cap every term at the source.
 const MAX_KEYTERM_LENGTH = 100;
@@ -215,6 +219,8 @@ export interface KeytermAssemblyOpts {
   projectDictionary?: string[] | Promise<string[]>;
   /** Name of the project that owns the target terminal. */
   projectName?: string;
+  /** Root of the project's repository; its names are derived per session and never stored. */
+  projectPath?: string;
   /**
    * The terminal being dictated into: the only source of terminal terms, and
    * its worktree the only source of the branch.
@@ -370,7 +376,7 @@ async function withinBudget<T>(read: Promise<T>, fallback: T, readName: string):
 }
 
 export async function assembleKeyterms(opts: KeytermAssemblyOpts): Promise<string[]> {
-  const { customDictionary, projectName, terminalId, ptyClient } = opts;
+  const { customDictionary, projectName, projectPath, terminalId, ptyClient } = opts;
   const seen = new Set<string>();
   const result: string[] = [];
 
@@ -387,8 +393,17 @@ export async function assembleKeyterms(opts: KeytermAssemblyOpts): Promise<strin
   // Gather dynamic context concurrently, each read guarded by its own timeout.
   // The reads fire at once so leading speech isn't delayed; results are merged
   // in priority order afterward.
-  const [projectDictionary, branchName, lines] = await Promise.all([
+  const [projectDictionary, repoNames, branchName, lines] = await Promise.all([
     withinBudget(Promise.resolve(opts.projectDictionary ?? []), [], "Project vocabulary read"),
+    projectPath && isAbsolute(projectPath)
+      ? withinBudget(
+          deriveRepoNames(projectPath, performance.now() + ASSEMBLY_TIMEOUT_MS).then(
+            (repo) => repo.names
+          ),
+          [] as string[],
+          "Repository name derivation"
+        )
+      : [],
     ptyClient && terminalId
       ? withinBudget(getTerminalBranch(ptyClient, terminalId), null, "Branch name lookup")
       : null,
@@ -399,9 +414,9 @@ export async function assembleKeyterms(opts: KeytermAssemblyOpts): Promise<strin
 
   // Priority 1: The project's vocabulary, then the user's own dictionary, each
   // newest first, because a term is usually added right after recognition
-  // failed on it. Both share one budget, capped below MAX_KEYTERMS so project
-  // and branch terms keep their reserved slots. These are hand-entered, so
-  // they skip the secret filter the derived tiers go through.
+  // failed on it. Both share one budget, capped below MAX_KEYTERMS so project,
+  // repository and branch terms keep their reserved slots. These are
+  // hand-entered, so they skip the secret filter the derived tiers go through.
   let dictionaryAdded = 0;
   for (const list of [projectDictionary, customDictionary]) {
     for (let i = list.length - 1; i >= 0; i--) {
@@ -430,14 +445,25 @@ export async function assembleKeyterms(opts: KeytermAssemblyOpts): Promise<strin
     }
   }
 
-  // Priority 3: Branch name tokens
+  // Priority 3: Repository names. Ahead of the branch, whose slug is mostly
+  // plain words, but bounded by its own cap.
+  let repoAdded = 0;
+  for (const name of repoNames) {
+    if (repoAdded >= REPO_TIER_CAP) break;
+    for (const token of tokenizeProjectName(stripPackageScope(name))) {
+      if (repoAdded >= REPO_TIER_CAP) break;
+      if (add(token)) repoAdded++;
+    }
+  }
+
+  // Priority 4: Branch name tokens
   if (branchName) {
     for (const token of tokenizeBranchName(branchName)) {
       add(token);
     }
   }
 
-  // Priority 4: Terminal identifiers. Lines were fetched in parallel above.
+  // Priority 5: Terminal identifiers. Lines were fetched in parallel above.
   // Terminal terms are ranked best-first; bound the tier independently so
   // dictionary/project/branch terms always keep headroom under MAX_KEYTERMS.
   let terminalAdded = 0;

@@ -580,18 +580,20 @@ function getProjectInfo(projectId: string | null): { name?: string; path?: strin
 }
 
 // Automatic hints come only from the terminal being dictated into: its output,
-// its worktree's branch and its owning project's name. A terminal main doesn't
+// its worktree's branch, its owning project's name, and names read from that
+// project's repository (package, workspace, directory and dependency names).
+// All of them are sent to the transcription provider. A terminal main doesn't
 // track, or one another project owns than the view asking, contributes none.
 function resolveKeytermTarget(
   viewProjectId: string | null,
   terminalId: string | undefined,
   ptyClient: PtyClient | undefined
-): { terminalId?: string; projectName?: string } {
+): { terminalId?: string; projectName?: string; projectPath?: string } {
   if (!terminalId || !ptyClient?.hasTerminal(terminalId)) return {};
   const ownerId = ptyClient.getTerminalProjectId(terminalId);
   if (ownerId && viewProjectId && ownerId !== viewProjectId) return {};
-  const projectName = ownerId ? projectStore.getProjectById(ownerId)?.name : undefined;
-  return { terminalId, projectName };
+  const project = ownerId ? projectStore.getProjectById(ownerId) : undefined;
+  return { terminalId, projectName: project?.name, projectPath: project?.path };
 }
 
 // References resolve in the worktree the dictated terminal is filed under,
