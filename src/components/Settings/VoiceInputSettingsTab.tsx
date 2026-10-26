@@ -33,7 +33,7 @@ import { logWarn } from "@/utils/logger";
 import { useAudioDevices, SYSTEM_DEFAULT_VALUE } from "@/hooks/useAudioDevices";
 import { useTabLoad } from "@/hooks";
 import { useKeybindingDisplay } from "@/hooks/useKeybinding";
-import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { voiceErrorLogFields } from "@shared/utils/voiceLogFields";
 import { VOICE_LANGUAGES } from "@shared/config/voiceLanguages";
 import { CORE_CORRECTION_PROMPT, VOICE_DICTATION_AI_MODEL } from "@shared/config/voiceCorrection";
 import type {
@@ -261,9 +261,7 @@ export function VoiceInputSettingsTab() {
       })
       .catch((err) => {
         // Background probe — UI shows fallback "unknown" state.
-        logWarn("Failed to check microphone permission", {
-          error: formatErrorMessage(err, "Mic permission probe failed"),
-        });
+        logWarn("Failed to check microphone permission", voiceErrorLogFields(err));
       });
   }, []);
 
@@ -293,9 +291,7 @@ export function VoiceInputSettingsTab() {
           return reverted;
         });
       setSaveFailure({ group, patch });
-      logWarn("Failed to save voice input settings", {
-        error: formatErrorMessage(err, "Voice input save failed"),
-      });
+      logWarn("Failed to save voice input settings", voiceErrorLogFields(err));
       return false;
     }
   };

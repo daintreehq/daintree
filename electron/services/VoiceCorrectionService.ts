@@ -8,7 +8,7 @@ import {
   buildCorrectionSystemPrompt,
   type CorrectionPromptContext,
 } from "../../shared/config/voiceCorrection.js";
-import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import { voiceErrorLogFields } from "../../shared/utils/voiceLogFields.js";
 import { buildOpenAIHeaders } from "../../shared/utils/openaiHeaders.js";
 import {
   createTimeoutSignal,
@@ -198,8 +198,7 @@ export class VoiceCorrectionService {
           confirmedText: request.rawText,
         };
       }
-      const msg = formatErrorMessage(error, "Voice correction failed");
-      logWarn(`${P} Correction failed, using raw text`, { error: msg });
+      logWarn(`${P} Correction failed, using raw text`, voiceErrorLogFields(error));
       return {
         action: "no_change",
         correctedText: request.rawText,
@@ -356,8 +355,7 @@ export class VoiceCorrectionService {
       return parsed.file_references.filter((r) => r.description.trim().length > 0);
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return [];
-      const msg = formatErrorMessage(error, "Voice file link detection failed");
-      logWarn(`${P} File link detection failed`, { error: msg });
+      logWarn(`${P} File link detection failed`, voiceErrorLogFields(error));
       return [];
     } finally {
       deadline.dispose();

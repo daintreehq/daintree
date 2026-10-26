@@ -15,6 +15,7 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { VOICE_INPUT_SETTINGS_CHANGED_EVENT } from "@/lib/voiceInputSettingsEvents";
 import { keybindingService } from "@/services/KeybindingService";
 import { logDebug, logInfo, logWarn, logError } from "@/utils/logger";
+import { voiceErrorLogFields } from "@shared/utils/voiceLogFields";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { notify } from "@/lib/notify";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -208,7 +209,10 @@ class VoiceRecordingService {
 
     this.unsubscribers.push(
       voiceInput.onFileTokenResolved(({ description, replacement }) => {
-        logDebug(`${LOG_PREFIX} Received file token resolved`, { description, replacement });
+        logDebug(`${LOG_PREFIX} Received file token resolved`, {
+          descriptionLength: description.length,
+          replacementLength: replacement.length,
+        });
         const voiceState = useVoiceRecordingStore.getState();
         const currentTarget = voiceState.activeTarget;
         if (!currentTarget) return;
@@ -226,8 +230,7 @@ class VoiceRecordingService {
           inputStore.bumpExternalDraftRevision();
         } else {
           logDebug(`${LOG_PREFIX} File token description not found in draft, discarding`, {
-            description,
-            replacement,
+            descriptionLength: description.length,
           });
         }
       })
@@ -235,7 +238,7 @@ class VoiceRecordingService {
 
     this.unsubscribers.push(
       voiceInput.onParagraphBoundary(({ rawText }) => {
-        logDebug(`${LOG_PREFIX} Received paragraph boundary`, { rawText });
+        logDebug(`${LOG_PREFIX} Received paragraph boundary`, { rawLength: rawText.length });
         const voiceState = useVoiceRecordingStore.getState();
         const currentTarget = voiceState.activeTarget;
         if (!currentTarget) return;
@@ -260,13 +263,15 @@ class VoiceRecordingService {
         // During graceful stop, the main process suppresses drain errors.
         // If one leaks through, ignore it to avoid prematurely finalizing.
         if (this.isStoppingSession) {
-          logWarn(`${LOG_PREFIX} Ignoring error during stop`, { error });
+          logWarn(`${LOG_PREFIX} Ignoring error during stop`, {
+            severity: error.severity,
+            code: error.code,
+          });
           return;
         }
-        logError(`${LOG_PREFIX} Received error from backend`, {
+        logError(`${LOG_PREFIX} Received error from backend`, undefined, {
           severity: error.severity,
           code: error.code,
-          message: error.message,
         });
         useVoiceRecordingStore.getState().setLastError(error);
 
@@ -675,7 +680,11 @@ class VoiceRecordingService {
     // start() and leave the store armed forever.
     const micStatusResult = await micStatusPromise;
     if (!micStatusResult.ok) {
-      logError(`${LOG_PREFIX} checkMicPermission IPC rejected`, micStatusResult.error);
+      logError(
+        `${LOG_PREFIX} checkMicPermission IPC rejected`,
+        undefined,
+        voiceErrorLogFields(micStatusResult.error)
+      );
       if (!this.isStartRequestStale(startRequestId)) {
         useVoiceRecordingStore.getState().setLastError({
           severity: "fatal",
@@ -714,7 +723,11 @@ class VoiceRecordingService {
       try {
         canAttemptCapture = await window.electron.voiceInput.requestMicPermission();
       } catch (err) {
-        logError(`${LOG_PREFIX} requestMicPermission IPC rejected`, err);
+        logError(
+          `${LOG_PREFIX} requestMicPermission IPC rejected`,
+          undefined,
+          voiceErrorLogFields(err)
+        );
         if (!this.isStartRequestStale(startRequestId)) {
           useVoiceRecordingStore.getState().setLastError({
             severity: "fatal",
@@ -830,9 +843,8 @@ class VoiceRecordingService {
         error instanceof DOMException && error.name === "NotAllowedError"
           ? "Microphone permission denied. Enable it in System Settings and try again."
           : "Could not access the microphone.";
-      logError(`${LOG_PREFIX} getUserMedia failed`, {
-        name: error instanceof DOMException ? error.name : "unknown",
-        message,
+      logError(`${LOG_PREFIX} getUserMedia failed`, undefined, {
+        ...voiceErrorLogFields(error),
         elapsedMs: Math.round(performance.now() - startedAt),
       });
       if (!this.isStartRequestStale(startRequestId)) {
@@ -886,7 +898,7 @@ class VoiceRecordingService {
         }
       }
     } catch (err) {
-      logDebug(`${LOG_PREFIX} Could not read microphone track settings`, { err });
+      logDebug(`${LOG_PREFIX} Could not read microphone track settings`, voiceErrorLogFields(err));
     }
     logStep("get_user_media");
     this.observeTrackState(stream, logStep);
@@ -903,7 +915,11 @@ class VoiceRecordingService {
     }
     const failCaptureSetup = async (error: unknown) => {
       abandonCapture(stream);
-      logError(`${LOG_PREFIX} Failed to set up the audio graph`, error);
+      logError(
+        `${LOG_PREFIX} Failed to set up the audio graph`,
+        undefined,
+        voiceErrorLogFields(error)
+      );
       useVoiceRecordingStore.getState().setLastError({
         severity: "fatal",
         code: "renderer_error",
@@ -1084,10 +1100,7 @@ class VoiceRecordingService {
         ok: false,
         error: formatErrorMessage(error, "Voice input failed to start."),
       }));
-    logDebug(`${LOG_PREFIX} voiceInput.start() returned`, {
-      ok: result.ok,
-      error: !result.ok ? result.error : undefined,
-    });
+    logDebug(`${LOG_PREFIX} voiceInput.start() returned`, { ok: result.ok });
     logStep("backend_start", { ok: result.ok });
 
     if (this.generation !== generation || this.isStartRequestStale(startRequestId)) {
@@ -1106,7 +1119,7 @@ class VoiceRecordingService {
     }
 
     if (!result.ok) {
-      logError(`${LOG_PREFIX} Backend start failed`, { error: result.error });
+      logError(`${LOG_PREFIX} Backend start failed`);
       capture.queue = null;
       this.flushOpeningAudio(openingAudio);
       await this.cleanupAudioCapture();
@@ -1367,7 +1380,10 @@ class VoiceRecordingService {
         correctedText = result.correctedText;
       }
     } catch (error) {
-      logWarn(`${LOG_PREFIX} Correction request failed, keeping raw text`, { error });
+      logWarn(
+        `${LOG_PREFIX} Correction request failed, keeping raw text`,
+        voiceErrorLogFields(error)
+      );
     } finally {
       useVoiceRecordingStore.getState().setCorrectionRange(panelId, null);
     }
@@ -1879,7 +1895,7 @@ class VoiceRecordingService {
         logStep("audio_context_statechange", { state: audioContext.state });
       });
     } catch (err) {
-      logDebug(`${LOG_PREFIX} Could not observe AudioContext state`, { err });
+      logDebug(`${LOG_PREFIX} Could not observe AudioContext state`, voiceErrorLogFields(err));
     }
   }
 
@@ -1901,7 +1917,7 @@ class VoiceRecordingService {
         }
       });
     } catch (err) {
-      logDebug(`${LOG_PREFIX} Could not observe microphone track state`, { err });
+      logDebug(`${LOG_PREFIX} Could not observe microphone track state`, voiceErrorLogFields(err));
     }
   }
 

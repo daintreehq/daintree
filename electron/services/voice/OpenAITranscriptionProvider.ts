@@ -3,6 +3,7 @@ import type { VoiceInputError, VoiceInputSettings } from "../../../shared/types/
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { buildOpenAIHeaders } from "../../../shared/utils/openaiHeaders.js";
 import { logDebug, logInfo, logWarn, logError } from "../../utils/logger.js";
+import { voiceErrorLogFields, voicePayloadShape } from "../../../shared/utils/voiceLogFields.js";
 import {
   AUDIO_BUFFER_MAX_BYTES,
   AUDIO_BUFFER_MAX_CHUNKS,
@@ -361,7 +362,6 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       logWarn(`${P} emitting error event`, {
         severity: event.error.severity,
         code: event.error.code,
-        message: event.error.message,
       });
     }
     if (
@@ -456,7 +456,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       });
     } catch (err) {
       const message = formatErrorMessage(err, "Failed to open WebSocket");
-      logError(`${P} ${message}`);
+      logError(`${P} Failed to open WebSocket`, undefined, voiceErrorLogFields(err));
       if (this.isDraining) {
         this.settleDrain("connect-failed");
       } else if (this.isReconnecting) {
@@ -608,7 +608,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
         connection.send(JSON.stringify(sessionUpdate));
       } catch (err) {
         const message = formatErrorMessage(err, "Failed to send session.update");
-        logError(`${P} ${message}`);
+        logError(`${P} Failed to send session.update`, undefined, voiceErrorLogFields(err));
         this.handleFatalError(mySessionId, {
           severity: "fatal",
           code: "session_update_send_failed",
@@ -632,7 +632,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       try {
         parsed = JSON.parse(raw) as Record<string, unknown>;
       } catch {
-        logWarn(`${P} Ignoring non-JSON message`, { raw: raw.slice(0, 200) });
+        logWarn(`${P} Ignoring non-JSON message`, { length: raw.length });
         return;
       }
 
@@ -644,7 +644,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       this.clearConnectTimeout();
       if (this.sessionId !== mySessionId || this.connection !== connection) return;
       const message = formatErrorMessage(err, "WebSocket error");
-      logError(`${P} WebSocket error`, { message });
+      logError(`${P} WebSocket error`, undefined, voiceErrorLogFields(err));
       // A transport error on a ready (or reconnecting) session is recoverable —
       // `ws` always fires `close` right after `error`, and the close handler
       // owns the reconnect decision, so just log here. A pre-ready error
@@ -669,7 +669,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       const reasonText = Buffer.isBuffer(reason) ? reason.toString("utf8") : String(reason ?? "");
       logInfo(`${P} WebSocket closed`, {
         code,
-        reason: reasonText,
+        reasonLength: reason?.length ?? 0,
         wasReady,
         wasReconnecting: this.isReconnecting,
         wasExpected: this.isExpectedClose,
@@ -735,7 +735,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       try {
         connection.ping();
       } catch (err) {
-        logWarn(`${P} Heartbeat ping failed`, { message: formatErrorMessage(err, "ping failed") });
+        logWarn(`${P} Heartbeat ping failed`, { ...voiceErrorLogFields(err) });
       }
     }, HEARTBEAT_INTERVAL_MS);
   }
@@ -812,9 +812,8 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   }
 
   private handleFatalError(mySessionId: number, error: VoiceInputError): void {
-    logError(`${P} Fatal error — tearing down session`, {
+    logError(`${P} Fatal error — tearing down session`, undefined, {
       code: error.code,
-      message: error.message,
       severity: error.severity,
     });
     // Mark the close as expected so the trailing `close` event (after the
@@ -906,7 +905,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
         // VAD signals — not expected, since we send `turn_detection: null`, but
         // log them if they appear; their presence would mean the server applied
         // a VAD default we didn't ask for.
-        logInfo(`${P} ← ${type}`, { payload });
+        logInfo(`${P} ← ${type}`);
         return;
 
       case "conversation.item.input_audio_transcription.delta": {
@@ -1008,10 +1007,10 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
         const errorPayload = payload.error as
           { message?: string; type?: string; code?: string; param?: string | null } | undefined;
         const classified = classifyOpenAIError(errorPayload ?? {});
-        logError(`${P} ← server error event`, {
+        // The message can quote a rejected keyword back — keep it out of the log.
+        logError(`${P} ← server error event`, undefined, {
           severity: classified.severity,
           code: classified.code,
-          message: classified.message,
           param: classified.param,
           openaiType: errorPayload?.type,
         });
@@ -1037,13 +1036,8 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       }
 
       default:
-        // Log the full payload (truncated) so an unrecognised event shape is
-        // never invisible — this is how the conversation.item.done schema
-        // mismatch was originally caught.
-        logDebug(`${P} ← unhandled server event`, {
-          type,
-          payload: JSON.stringify(payload).slice(0, 600),
-        });
+        // Shape only: an unrecognised event can still carry transcript text.
+        logDebug(`${P} ← unhandled server event`, { type, ...voicePayloadShape(payload) });
     }
   }
 
@@ -1171,7 +1165,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       // let it escape the buffer-flush loop (which would leave the buffer in a
       // partially-cleared state) — the trailing `close` event drives reconnect.
       logWarn(`${P} Failed to send audio chunk`, {
-        message: formatErrorMessage(err, "send failed"),
+        ...voiceErrorLogFields(err),
       });
       return;
     }
@@ -1219,7 +1213,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       this.vadWorker.post({ type: "audio", pcm: chunk });
     } catch (err) {
       logWarn(`${P} Failed to post audio to VAD worker`, {
-        message: formatErrorMessage(err, "vad post failed"),
+        ...voiceErrorLogFields(err),
       });
     }
   }
@@ -1374,7 +1368,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
               this.handleVadSpeechEnd();
               return;
             case "error":
-              logError(`${P} VAD error — degraded mode`, { message: message.message });
+              logError(`${P} VAD error — degraded mode`);
               this.enterDegradedMode(mySessionId);
               return;
           }
@@ -1385,9 +1379,11 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
         },
       });
     } catch (err) {
-      logError(`${P} Failed to spawn VAD process — degraded mode`, {
-        message: formatErrorMessage(err, "VAD spawn failed"),
-      });
+      logError(
+        `${P} Failed to spawn VAD process — degraded mode`,
+        undefined,
+        voiceErrorLogFields(err)
+      );
       this.enterDegradedMode(mySessionId);
       return;
     }
@@ -1446,7 +1442,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       this.connection.send(JSON.stringify({ type: "input_audio_buffer.clear" }));
     } catch (err) {
       logWarn(`${P} Failed to clear buffer on speech-start`, {
-        message: formatErrorMessage(err, "clear failed"),
+        ...voiceErrorLogFields(err),
       });
       // The server buffer was NOT cleared — replaying the pre-roll would
       // duplicate those bytes. Bail; the socket is likely dropping anyway.
@@ -1519,7 +1515,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     } catch (err) {
       logWarn(`${P} Failed to commit audio segment`, {
         reason,
-        message: formatErrorMessage(err, "commit failed"),
+        ...voiceErrorLogFields(err),
       });
     }
   }

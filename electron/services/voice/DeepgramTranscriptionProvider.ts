@@ -6,6 +6,7 @@ import {
 } from "../../../shared/config/voiceLanguages.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { logDebug, logInfo, logWarn, logError } from "../../utils/logger.js";
+import { voiceErrorLogFields, voicePayloadShape } from "../../../shared/utils/voiceLogFields.js";
 import {
   AUDIO_BUFFER_MAX_BYTES,
   AUDIO_BUFFER_MAX_CHUNKS,
@@ -151,7 +152,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
       this.connection.send(JSON.stringify({ type: "Finalize" }));
       logDebug(`${P} → Finalize (paragraph boundary)`);
     } catch (err) {
-      logWarn(`${P} Failed to send Finalize`, { message: formatErrorMessage(err, "send failed") });
+      logWarn(`${P} Failed to send Finalize`, { ...voiceErrorLogFields(err) });
     }
   }
 
@@ -162,7 +163,6 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
       logWarn(`${P} emitting error event`, {
         severity: event.error.severity,
         code: event.error.code,
-        message: event.error.message,
       });
     }
     if (
@@ -247,7 +247,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
       });
     } catch (err) {
       const message = formatErrorMessage(err, "Failed to open WebSocket");
-      logError(`${P} ${message}`);
+      logError(`${P} Failed to open WebSocket`, undefined, voiceErrorLogFields(err));
       this.emit({
         type: "error",
         error: { severity: "fatal", code: "ws_construct_failed", message },
@@ -317,7 +317,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
       // Any other status (401 auth, 403, 429, 5xx) — or a second 400 after the
       // keyterm-free retry — is fatal.
       const message = `Deepgram rejected the connection (HTTP ${statusCode ?? "unknown"})`;
-      logError(`${P} ${message}`);
+      logError(`${P} Deepgram rejected the connection`, undefined, { statusCode });
       this.handleFatalError(mySessionId, {
         severity: "fatal",
         code: "ws_http_error",
@@ -382,7 +382,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
       try {
         parsed = JSON.parse(raw) as Record<string, unknown>;
       } catch {
-        logWarn(`${P} Ignoring non-JSON message`, { raw: raw.slice(0, 200) });
+        logWarn(`${P} Ignoring non-JSON message`, { length: raw.length });
         return;
       }
 
@@ -396,7 +396,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
       if (this.sessionId !== mySessionId || this.connection !== connection) return;
       this.clearConnectTimeout();
       const message = formatErrorMessage(err, "WebSocket error");
-      logError(`${P} WebSocket error`, { message });
+      logError(`${P} WebSocket error`, undefined, voiceErrorLogFields(err));
       // `ws` fires `close` right after `error`; a pre-ready transport error
       // (auth/DNS/refused) is fatal, otherwise let the close handler decide.
       if (!this.isReady) {
@@ -417,7 +417,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
       const wasReady = this.isReady;
       logInfo(`${P} WebSocket closed`, {
         code,
-        reason: Buffer.isBuffer(reason) ? reason.toString("utf8") : String(reason ?? ""),
+        reasonLength: reason?.length ?? 0,
         wasReady,
         wasExpected: this.isExpectedClose,
         wasDraining: this.isDraining,
@@ -457,7 +457,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
         logDebug(`${P} → KeepAlive`);
       } catch (err) {
         logWarn(`${P} KeepAlive send failed`, {
-          message: formatErrorMessage(err, "send failed"),
+          ...voiceErrorLogFields(err),
         });
       }
     }, KEEPALIVE_INTERVAL_MS);
@@ -471,10 +471,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
   }
 
   private handleFatalError(mySessionId: number, error: VoiceInputError): void {
-    logError(`${P} Fatal error — tearing down session`, {
-      code: error.code,
-      message: error.message,
-    });
+    logError(`${P} Fatal error — tearing down session`, undefined, { code: error.code });
     this.isExpectedClose = true;
     const conn = this.connection;
     this.cleanupConnection();
@@ -530,7 +527,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
           (typeof payload.description === "string" && payload.description) ||
           (typeof payload.message === "string" && payload.message) ||
           "Deepgram error";
-        logError(`${P} ← server error event`, { message });
+        logError(`${P} ← server error event`);
         this.handleFatalError(_mySessionId, {
           severity: "fatal",
           code: "deepgram_server_error",
@@ -540,10 +537,8 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
       }
 
       default:
-        logDebug(`${P} ← unhandled server event`, {
-          type,
-          payload: JSON.stringify(payload).slice(0, 600),
-        });
+        // Shape only: an unrecognised event can still carry transcript text.
+        logDebug(`${P} ← unhandled server event`, { type, ...voicePayloadShape(payload) });
     }
   }
 
@@ -554,7 +549,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
       this.connection.send(Buffer.from(chunk));
     } catch (err) {
       logWarn(`${P} Failed to send audio chunk`, {
-        message: formatErrorMessage(err, "send failed"),
+        ...voiceErrorLogFields(err),
       });
     }
   }
