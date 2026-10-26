@@ -7,6 +7,7 @@ import {
   maskApiKey,
   recordingModeDescription,
 } from "../VoiceInputSettingsTab";
+import { VOICE_DICTATION_AI_MODEL } from "@shared/config/voiceCorrection";
 
 vi.mock("@/lib/voiceInputSettingsEvents", () => ({
   dispatchVoiceInputSettingsChanged: vi.fn(),
@@ -210,10 +211,65 @@ describe("VoiceInputSettingsTab paragraph breaks", () => {
 
     await waitFor(() => {
       const row = container.querySelector("#voice-paragraph-breaks");
-      expect(row?.textContent).toContain("Enter only");
+      expect(row?.textContent).toContain("Spoken commands need English");
+      expect(row?.textContent).toContain("Shift+Enter");
     });
     // Nothing on the row offers the spoken mode the language can't use.
     expect(screen.queryByRole("radiogroup", { name: "Paragraph breaks" })).toBeNull();
+  });
+});
+
+describe("VoiceInputSettingsTab copy", () => {
+  it("never tells the user Enter commits or starts a paragraph, since it sends the prompt", async () => {
+    for (const paragraphingStrategy of ["spoken-command", "manual"]) {
+      install({ paragraphingStrategy });
+      const { container, unmount } = render(<VoiceInputSettingsTab />);
+      await waitFor(() => expect(container.querySelector("#voice-paragraph-breaks")).toBeTruthy());
+      const text = container.querySelector("#voice-paragraph-breaks")?.textContent ?? "";
+      expect(text).not.toMatch(/Enter to (commit|start)/);
+      expect(text).toContain("Enter stops dictation and sends the prompt");
+      unmount();
+    }
+  });
+
+  it("reads the correction model from the shared constant and describes the once-per-stop pass", async () => {
+    install({});
+    const { container } = render(<VoiceInputSettingsTab />);
+    await waitFor(() => expect(container.querySelector("#voice-ai-correction")).toBeTruthy());
+    const text = container.querySelector("#voice-ai-correction")?.textContent ?? "";
+    expect(text).toContain(VOICE_DICTATION_AI_MODEL);
+    expect(text).toContain("whole passage is corrected once");
+    expect(text).not.toContain("GPT-5.6");
+  });
+
+  it("lists the dictation shortcuts with a way to rebind them", async () => {
+    install({});
+    const { container } = render(<VoiceInputSettingsTab />);
+    await waitFor(() => expect(container.querySelector("#voice-shortcuts")).toBeTruthy());
+    const row = container.querySelector("#voice-shortcuts");
+    for (const phrase of [
+      "Start or stop dictation",
+      "Pause or resume",
+      "Cancel and keep the text so far",
+      "Stop dictation and send the prompt",
+    ]) {
+      expect(row?.textContent).toContain(phrase);
+    }
+    expect(screen.getByRole("button", { name: "Change in Keyboard settings" })).toBeTruthy();
+  });
+
+  it("labels the microphone row by what it is and offers no Re-check once access is granted", async () => {
+    install({}, { checkMicPermission: vi.fn().mockResolvedValue("granted") });
+    const { container } = render(<VoiceInputSettingsTab />);
+    await waitFor(() =>
+      expect(container.querySelector("#voice-mic-access")?.textContent).toContain(
+        "Microphone access granted"
+      )
+    );
+    const row = container.querySelector("#voice-mic-access");
+    if (!row) throw new Error("missing mic row");
+    expect(row.textContent).toContain("Microphone access");
+    expect(row.querySelector("button")).toBeNull();
   });
 });
 

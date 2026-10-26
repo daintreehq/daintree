@@ -32,7 +32,9 @@ import { dispatchVoiceInputSettingsChanged } from "@/lib/voiceInputSettingsEvent
 import { logWarn } from "@/utils/logger";
 import { useAudioDevices, SYSTEM_DEFAULT_VALUE } from "@/hooks/useAudioDevices";
 import { useTabLoad } from "@/hooks";
-import { useKeybindingDisplay } from "@/hooks/useKeybinding";
+import { useEffectiveCombo, useKeybindingDisplay } from "@/hooks/useKeybinding";
+import { actionService } from "@/services/ActionService";
+import { KbdChord } from "@/components/ui/Kbd";
 import { voiceErrorLogFields } from "@shared/utils/voiceLogFields";
 import { VOICE_LANGUAGES } from "@shared/config/voiceLanguages";
 import { CORE_CORRECTION_PROMPT, VOICE_DICTATION_AI_MODEL } from "@shared/config/voiceCorrection";
@@ -432,6 +434,8 @@ export function VoiceInputSettingsTab() {
     : "manual";
   const recordingMode = settings.recordingMode ?? "toggle";
   const dictationShortcut = useKeybindingDisplay("voiceInput.toggle");
+  const dictationCombo = useEffectiveCombo("voiceInput.toggle");
+  const pauseCombo = useEffectiveCombo("voiceInput.togglePause");
 
   const openAiKeyRow = (
     <ApiKeyRow
@@ -494,6 +498,7 @@ export function VoiceInputSettingsTab() {
           {settings.enabled && (
             <SettingsDependents>
               <SettingsPresetGroup
+                id="voice-provider"
                 label="Transcription provider"
                 description={PROVIDER_PRIVACY[provider]}
                 options={PROVIDER_OPTIONS}
@@ -570,6 +575,7 @@ export function VoiceInputSettingsTab() {
             />
 
             <SettingsSelect
+              id="voice-input-device"
               label="Input device"
               description={
                 <>
@@ -613,7 +619,7 @@ export function VoiceInputSettingsTab() {
               <SettingsRow
                 id="voice-paragraph-breaks"
                 label="Paragraph breaks"
-                description="Enter only. Spoken commands need English, so press Enter to start a new paragraph."
+                description="Spoken commands need English. Press Shift+Enter to add a break yourself; Enter stops dictation and sends the prompt."
               />
             ) : (
               <SettingsPresetGroup
@@ -621,8 +627,8 @@ export function VoiceInputSettingsTab() {
                 label="Paragraph breaks"
                 description={
                   effectiveParagraphing === "spoken-command"
-                    ? 'Say "new paragraph", or press Enter to commit the current one'
-                    : "Press Enter to start a new paragraph. Spoken formatting commands are off."
+                    ? 'Say "new paragraph" or "new line" to add a break. Enter stops dictation and sends the prompt.'
+                    : "Spoken break commands are off. Press Shift+Enter to add a break yourself; Enter stops dictation and sends the prompt."
                 }
                 options={[
                   { value: "spoken-command" as const, label: "Spoken commands" },
@@ -636,6 +642,7 @@ export function VoiceInputSettingsTab() {
             )}
 
             <SettingsPresetGroup
+              id="voice-recording-mode"
               label="Recording mode"
               description={recordingModeDescription(recordingMode, dictationShortcut)}
               options={[
@@ -646,6 +653,35 @@ export function VoiceInputSettingsTab() {
               onChange={(v: VoiceRecordingMode) => void update({ recordingMode: v })}
               isModified={recordingMode !== DEFAULT_SETTINGS.recordingMode}
               onReset={() => void update({ recordingMode: DEFAULT_SETTINGS.recordingMode })}
+            />
+
+            <SettingsRow
+              id="voice-shortcuts"
+              label="Shortcuts"
+              layout="stacked"
+              description="Enter and Escape are fixed while you dictate"
+              control={
+                <div className="space-y-2">
+                  <ul className="space-y-1.5 text-xs text-text-secondary">
+                    <ShortcutLine combo={dictationCombo} label="Start or stop dictation" />
+                    <ShortcutLine combo={pauseCombo} label="Pause or resume" />
+                    <ShortcutLine combo="Escape" label="Cancel and keep the text so far" />
+                    <ShortcutLine combo="Enter" label="Stop dictation and send the prompt" />
+                  </ul>
+                  <Button
+                    variant="link"
+                    onClick={() =>
+                      void actionService.dispatch(
+                        "app.settings.openTab",
+                        { tab: "keyboard" },
+                        { source: "user" }
+                      )
+                    }
+                  >
+                    Change in Keyboard settings
+                  </Button>
+                </div>
+              }
             />
           </SettingsGroup>
         </SettingsSection>
@@ -677,7 +713,7 @@ export function VoiceInputSettingsTab() {
       {settings.enabled && (
         <SettingsSection
           title="AI text correction"
-          description="Post-processes each transcription with GPT-5.6 Luna to fix technical terms, punctuation and filler words. The text is sent to OpenAI."
+          description={`When you stop dictating, the whole passage is corrected once with ${VOICE_DICTATION_AI_MODEL} to fix technical terms, punctuation and filler words. The text is sent to OpenAI.`}
           id="voice-ai-correction"
         >
           {saveError("correction")}
@@ -685,7 +721,7 @@ export function VoiceInputSettingsTab() {
             <SettingsSwitchCard
               id="voice-ai-correction-enable"
               title="Clean up transcriptions"
-              subtitle="Correct each transcription automatically after dictation"
+              subtitle="Correct the passage automatically when you stop dictating"
               isEnabled={settings.correctionEnabled}
               onChange={() => void update({ correctionEnabled: !settings.correctionEnabled })}
               isModified={settings.correctionEnabled !== DEFAULT_SETTINGS.correctionEnabled}
@@ -706,6 +742,7 @@ export function VoiceInputSettingsTab() {
                 }
               >
                 <SettingsSwitchCard
+                  id="voice-resolve-file-links"
                   title="Resolve file references"
                   subtitle={
                     'Voice commands like "link to the input component" insert @file references'
@@ -740,7 +777,7 @@ export function recordingModeDescription(mode: VoiceRecordingMode, shortcut: str
     mode === "toggle"
       ? `Press ${key} to start, and again to stop.`
       : `Hold ${key} to record. Releasing it stops without submitting.`;
-  return shortcut ? how : `${how} No shortcut is assigned yet; set one under Keyboard.`;
+  return shortcut ? how : `${how} No shortcut is assigned yet.`;
 }
 
 // ── API key row ──
@@ -995,6 +1032,21 @@ function ApiKeyRow({
   );
 }
 
+function ShortcutLine({ combo, label }: { combo: string | undefined; label: string }) {
+  return (
+    <li className="flex items-baseline gap-3">
+      <span className="w-28 shrink-0">
+        {combo ? (
+          <KbdChord shortcut={combo} density="bare" foreground="primary" />
+        ) : (
+          <span>Not set</span>
+        )}
+      </span>
+      <span>{label}</span>
+    </li>
+  );
+}
+
 // ── Microphone permission row ──
 
 interface MicPermissionRowProps {
@@ -1025,11 +1077,7 @@ function MicPermissionRow({
         return {
           dot: "bg-status-success",
           text: "Microphone access granted",
-          actions: (
-            <Button size="sm" variant="ghost" onClick={onRefresh}>
-              Re-check
-            </Button>
-          ),
+          actions: null,
         };
       case "denied":
       case "restricted": {
@@ -1087,7 +1135,8 @@ function MicPermissionRow({
   const denied = status === "denied" || status === "restricted";
   return (
     <SettingsRow
-      label="Access"
+      id="voice-mic-access"
+      label="Microphone access"
       layout={denied ? "stacked" : "inline"}
       description={
         <span role="status" className="flex items-start gap-2">
@@ -1142,6 +1191,7 @@ function DictionaryGroup({
   return (
     <SettingsGroup>
       <SettingsSwitchCard
+        id="voice-learn-words"
         title="Learn words from corrections"
         subtitle="Suggest dictionary terms when you fix a mishearing before sending"
         isEnabled={learnFromCorrections}

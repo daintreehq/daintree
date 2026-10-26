@@ -423,9 +423,17 @@ describe("Appearance tab search index subtab metadata", () => {
 });
 
 describe("voice tab coverage", () => {
-  it("returns results for 'whisper' query", () => {
+  it.each(["deepgram", "push to talk", "input device", "recording mode"])(
+    "returns a voice result for '%s'",
+    (query) => {
+      const results = filterSettings(SETTINGS_SEARCH_INDEX, query);
+      expect(results.some((r) => r.tab === "voice")).toBe(true);
+    }
+  );
+
+  it("no longer matches the retired 'whisper' model name", () => {
     const results = filterSettings(SETTINGS_SEARCH_INDEX, "whisper");
-    expect(results.some((r) => r.tab === "voice")).toBe(true);
+    expect(results.some((r) => r.tab === "voice")).toBe(false);
   });
 
   it("returns results for 'speech' query", () => {
