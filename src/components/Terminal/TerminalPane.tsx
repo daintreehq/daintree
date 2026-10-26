@@ -23,6 +23,7 @@ import type {
   PersistableFlowStatus,
 } from "@/types";
 import { cn } from "@/lib/utils";
+import { isMac } from "@/lib/platform";
 import { reportCanopySent } from "@/lib/canopySeen";
 import { BANNER_ENTER_DURATION, BANNER_EXIT_DURATION } from "@/lib/animationUtils";
 import { XtermAdapter } from "./XtermAdapter";
@@ -1037,6 +1038,8 @@ function TerminalPaneComponent({
       isFocused,
       isCursorPointer: xtermElement.classList.contains("xterm-cursor-pointer"),
       isShiftKey: e.shiftKey,
+      isAltKey: e.altKey,
+      isMac: isMac(),
     });
 
     // A physical click that reaches xterm is an explicit "I want the terminal"
