@@ -39,7 +39,10 @@ export function DictionaryLearnPrompt({ terminalId, projectId }: DictionaryLearn
 
   const resolve = (action: "acceptSuggestion" | "dismissSuggestion") => {
     clear();
-    window.electron.voiceDictionary[action]({ word: prompt.word }).catch((err: unknown) => {
+    window.electron.voiceDictionary[action]({
+      word: prompt.word,
+      utterance: prompt.utterance,
+    }).catch((err: unknown) => {
       logWarn("Failed to answer the dictionary prompt", {
         message: formatErrorMessage(err, "Failed to answer the dictionary prompt"),
       });

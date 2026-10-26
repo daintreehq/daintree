@@ -234,6 +234,21 @@ describe("suggestions", () => {
     expect(missing.dismissedSuggestions).toBe(none);
   });
 
+  it("dismissing or accepting the pair that was shown acts on that pair, not the queue's newer copy", () => {
+    const queued = [{ ...suggestion("Zustand"), utterance: "zoo stan" }];
+    const dismissed = dismissSuggestion(queued, [], "Zustand", "zoo stand");
+    expect(dismissed.suggestedDictionary).toBe(queued);
+    expect(dismissed.dismissedSuggestions).toEqual([{ word: "Zustand", utterance: "zoo stand" }]);
+
+    const accepted = acceptSuggestion(
+      { dictionary: [], suggestedDictionary: queued },
+      "Zustand",
+      T1,
+      "zoo stand"
+    );
+    expect(accepted.dictionary[0]!.heardAs).toEqual(["zoo stand"]);
+  });
+
   it("a dismissed pair is never suggested again, but the same word heard differently is", () => {
     const dismissed = [{ word: "Zustand", utterance: "zoo stand" }];
     expect(

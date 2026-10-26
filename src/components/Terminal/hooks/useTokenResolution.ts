@@ -55,7 +55,12 @@ function resolveContextReferences(
  * Synchronous store read at the send site (no React subscription — see [[#9441]]).
  * Fully swallows errors: learning must never block or alter the send.
  */
+const latestLearnSend = new Map<string, number>();
+
 function detectDictionaryCorrections(panelId: string, finalText: string): void {
+  // A later send supersedes a reply still in flight, so it can't offer a stale pair.
+  const send = (latestLearnSend.get(panelId) ?? 0) + 1;
+  latestLearnSend.set(panelId, send);
   try {
     const voiceState = useVoiceRecordingStore.getState();
     if (!voiceState.learnFromCorrections) return;
@@ -75,6 +80,7 @@ function detectDictionaryCorrections(panelId: string, finalText: string): void {
     window.electron.voiceDictionary
       .recordSuggestions({ candidates })
       .then((state) => {
+        if (latestLearnSend.get(panelId) !== send) return;
         // Only a pair main kept in the queue is offered: one already in the
         // dictionary or dismissed earlier never reaches it.
         for (const candidate of candidates) {

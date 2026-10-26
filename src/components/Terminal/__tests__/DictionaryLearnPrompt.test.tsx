@@ -38,7 +38,7 @@ describe("DictionaryLearnPrompt", () => {
     expect(screen.getByRole("status").textContent).toContain("Zustand");
     expect(screen.getByRole("status").textContent).toContain("zoo stand");
     fireEvent.click(screen.getByText("Add"));
-    expect(acceptSuggestion).toHaveBeenCalledWith({ word: "Zustand" });
+    expect(acceptSuggestion).toHaveBeenCalledWith({ word: "Zustand", utterance: "zoo stand" });
     expect(screen.queryByRole("status")).toBeNull();
   });
 
@@ -46,7 +46,7 @@ describe("DictionaryLearnPrompt", () => {
     render(<DictionaryLearnPrompt terminalId="t1" />);
     offer();
     fireEvent.click(screen.getByText("Dismiss"));
-    expect(dismissSuggestion).toHaveBeenCalledWith({ word: "Zustand" });
+    expect(dismissSuggestion).toHaveBeenCalledWith({ word: "Zustand", utterance: "zoo stand" });
     expect(acceptSuggestion).not.toHaveBeenCalled();
   });
 

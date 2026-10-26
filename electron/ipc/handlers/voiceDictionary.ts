@@ -38,7 +38,7 @@ const updateSchema = z.object({
   term: existing,
   changes: z.object({ term: text.optional(), heardAs: heardAs.optional() }),
 });
-const suggestionSchema = z.object({ word: existing });
+const suggestionSchema = z.object({ word: existing, utterance: text.optional() });
 const recordSchema = z.object({
   candidates: z.array(z.object({ word: text, original: text })).max(LIST_MAX),
 });
@@ -114,16 +114,21 @@ export const voiceDictionaryNamespace = defineIpcNamespace({
     acceptSuggestion: opValidated(
       VOICE_DICTIONARY_METHOD_CHANNELS.acceptSuggestion,
       suggestionSchema,
-      async ({ word }): Promise<VoiceDictionaryState> =>
-        change((state) => acceptSuggestion(state, word, Date.now()))
+      async ({ word, utterance }): Promise<VoiceDictionaryState> =>
+        change((state) => acceptSuggestion(state, word, Date.now(), utterance))
     ),
     dismissSuggestion: opValidated(
       VOICE_DICTIONARY_METHOD_CHANNELS.dismissSuggestion,
       suggestionSchema,
-      async ({ word }): Promise<VoiceDictionaryState> =>
+      async ({ word, utterance }): Promise<VoiceDictionaryState> =>
         change((state, settings) => ({
           ...state,
-          ...dismissSuggestion(state.suggestedDictionary, settings.dismissedSuggestions, word),
+          ...dismissSuggestion(
+            state.suggestedDictionary,
+            settings.dismissedSuggestions,
+            word,
+            utterance
+          ),
         }))
     ),
     // The learner reports what it saw and main merges it into the queue it
