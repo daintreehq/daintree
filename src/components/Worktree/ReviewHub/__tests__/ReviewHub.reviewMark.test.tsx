@@ -337,6 +337,64 @@ describe("Review Hub review marks (#14585)", () => {
     expect(bridge.markCaptured).toHaveBeenLastCalledWith(WT, "c2", 1);
   });
 
+  it("won't send the capture it just marked again before a newer one is on screen", async () => {
+    bridge.markCaptured.mockResolvedValue({
+      status: "saved",
+      snapshot: snapshot({ [WT]: summary(1) }, 1),
+    } satisfies ReviewMarkSaveOutcome);
+    bridge.compare.mockResolvedValue({
+      status: "compared",
+      markRevision: 1,
+      result: comparable(["src/app.ts"]),
+    } satisfies ReviewMarkCompareOutcome);
+    renderHub();
+    const button = await markButtonReady();
+    // The capture the mark asks for next stays out, so c1 stays on screen.
+    const next = deferred<ReviewMarkCaptureOutcome>();
+    bridge.capture.mockReturnValueOnce(next.promise);
+    fireEvent.click(button);
+    await waitFor(() => expect(bridge.capture).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(screen.getByTestId("review-hub-review-mark-notice").textContent).toContain(
+        "Not covered: src/app.ts."
+      )
+    );
+
+    const target = findReviewHubMarkTarget({ focusedPanelId: "review-1" });
+    expect(button.getAttribute("aria-disabled")).toBe("true");
+    expect(target?.markBlockedReason()).toBe("Review Hub is reading this worktree again");
+    fireEvent.click(button);
+    await act(async () => {
+      await target?.markReviewed();
+    });
+
+    expect(bridge.markCaptured).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/changed in another window/)).toBeNull();
+    expect(screen.getByTestId("review-hub-review-mark-notice").textContent).toContain(
+      "Not covered: src/app.ts."
+    );
+
+    await act(async () => next.resolve(captured("c2")));
+    fireEvent.click(await markButtonReady());
+    await waitFor(() => expect(bridge.markCaptured).toHaveBeenLastCalledWith(WT, "c2", 1));
+  });
+
+  it("can send the same capture again when the mark never reached the host", async () => {
+    bridge.markCaptured.mockRejectedValueOnce(new Error("IPC went away"));
+    bridge.markCaptured.mockResolvedValue({
+      status: "saved",
+      snapshot: snapshot({ [WT]: summary(1) }, 1),
+    } satisfies ReviewMarkSaveOutcome);
+    renderHub();
+
+    fireEvent.click(await markButtonReady());
+    await waitFor(() => expect(bridge.markCaptured).toHaveBeenCalledTimes(1));
+    fireEvent.click(await markButtonReady());
+
+    await waitFor(() => expect(bridge.markCaptured).toHaveBeenCalledTimes(2));
+    expect(bridge.markCaptured).toHaveBeenLastCalledWith(WT, "c1", 0);
+  });
+
   it("can't mark before the hub has a capture behind what it shows", async () => {
     bridge.capture.mockReturnValue(new Promise(() => {}));
     renderHub();

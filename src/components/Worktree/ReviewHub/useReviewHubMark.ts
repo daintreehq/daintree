@@ -107,6 +107,12 @@ export function useReviewHubMark({
   );
   const [isMarking, setIsMarking] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
+  // The capture the last mark attempt sent. Once the host has answered, it
+  // names a revision from before that answer and would come back `stale`, so
+  // marking waits for a newer capture. The ref guards calls made before the
+  // state renders.
+  const [spentCaptureId, setSpentCaptureId] = useState<string | null>(null);
+  const spentCaptureIdRef = useRef<string | null>(null);
 
   const sessionRef = useRef<Session>({ live: false, transientRetries: 0, retryTimer: null });
   const eventSeqRef = useRef(0);
@@ -213,6 +219,8 @@ export function useReviewHubMark({
       // A mark or clear still out belongs to this session; its reply is dropped.
       setIsMarking(false);
       setIsClearing(false);
+      spentCaptureIdRef.current = null;
+      setSpentCaptureId(null);
       setComparison(null);
       setComparisonStale(true);
       setNotice(null);
@@ -231,17 +239,20 @@ export function useReviewHubMark({
   const markReviewed = useCallback(async () => {
     const session = sessionRef.current;
     if (!session.live || !worktreeId || !statusCapture || isMarking) return;
+    const captureId = statusCapture.capture.captureId;
+    if (spentCaptureIdRef.current === captureId) return;
+    spentCaptureIdRef.current = captureId;
+    setSpentCaptureId(captureId);
     setIsMarking(true);
     setNotice(null);
     let outcome: ReviewMarkSaveOutcome;
     try {
-      outcome = await markCapturedWorktreeReviewed(
-        worktreeId,
-        statusCapture.capture.captureId,
-        statusCapture.basedOn
-      );
+      outcome = await markCapturedWorktreeReviewed(worktreeId, captureId, statusCapture.basedOn);
     } catch (error) {
       if (session.live) {
+        // The host saved nothing, so the capture is still good to send again.
+        spentCaptureIdRef.current = null;
+        setSpentCaptureId(null);
         setIsMarking(false);
         onFailure({
           title: "Couldn't mark reviewed",
@@ -329,7 +340,7 @@ export function useReviewHubMark({
     isRecording: noticeFor !== null && noticeFor === markRevision,
     isMarking,
     isClearing,
-    markBlockedReason: markBlockedReason(worktreeId, statusCapture, isMarking),
+    markBlockedReason: markBlockedReason(worktreeId, statusCapture, isMarking, spentCaptureId),
     markReviewed,
     clearReviewMark,
     retryCompare,
@@ -353,11 +364,15 @@ function failedComparison(worktreeId: string, message: string): ReviewMarkCompar
 function markBlockedReason(
   worktreeId: string | undefined,
   statusCapture: ReviewHubCapture | null,
-  isMarking: boolean
+  isMarking: boolean,
+  spentCaptureId: string | null
 ): string | null {
   if (!worktreeId) return "This worktree isn't known yet";
   if (isMarking) return "Already marking";
   if (!statusCapture) return "Review Hub is still reading this worktree";
+  if (statusCapture.capture.captureId === spentCaptureId) {
+    return "Review Hub is reading this worktree again";
+  }
   return null;
 }
 
