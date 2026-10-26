@@ -39,6 +39,7 @@ describe("VoiceInputButton", () => {
       status: "idle",
       lastError: null,
       activeTarget: null,
+      pendingTarget: null,
       elapsedSeconds: 0,
       micSignal: "pending",
       panelBuffers: {},
@@ -114,6 +115,86 @@ describe("VoiceInputButton", () => {
 
     expect(togglePauseSpy).toHaveBeenCalledTimes(1);
     expect(toggleSpy).not.toHaveBeenCalled();
+  });
+
+  // #14604: the finishing session drains on its own; a click starts the next.
+  it.each([
+    { disabled: false, starts: true },
+    { disabled: true, starts: false },
+  ])(
+    "a click while this panel's session finishes starts the next one (disabled: $disabled)",
+    ({ disabled, starts }) => {
+      useVoiceRecordingStore.setState({
+        isConfigured: true,
+        status: "finishing",
+        activeTarget: { panelId: "panel-1" } as never,
+      });
+      const toggleSpy = vi.spyOn(voiceRecordingService, "toggle").mockResolvedValue();
+
+      const { getByRole } = render(
+        <VoiceInputButton
+          panelId="panel-1"
+          projectId="project-1"
+          projectName="Daintree"
+          disabled={disabled}
+        />
+      );
+      const button = getByRole("button");
+      fireEvent.click(button);
+
+      expect((button as HTMLButtonElement).disabled).toBe(!starts);
+      expect(toggleSpy).toHaveBeenCalledTimes(starts ? 1 : 0);
+    }
+  );
+
+  it.each([
+    { status: "idle" as const, activePanel: null, pending: false, clickable: false },
+    { status: "recording" as const, activePanel: "panel-2", pending: false, clickable: false },
+    { status: "recording" as const, activePanel: "panel-1", pending: false, clickable: true },
+    { status: "finishing" as const, activePanel: "panel-2", pending: true, clickable: false },
+  ])(
+    "a disabled input only allows stopping its own session ($status on $activePanel, pending $pending)",
+    ({ status, activePanel, pending, clickable }) => {
+      useVoiceRecordingStore.setState({
+        isConfigured: true,
+        status,
+        micSignal: "live",
+        activeTarget: activePanel ? ({ panelId: activePanel } as never) : null,
+        pendingTarget: pending ? ({ panelId: "panel-1" } as never) : null,
+      });
+      const toggleSpy = vi.spyOn(voiceRecordingService, "toggle").mockResolvedValue();
+
+      const { getByRole } = render(
+        <VoiceInputButton panelId="panel-1" projectId="project-1" projectName="Daintree" disabled />
+      );
+      const button = getByRole("button");
+      fireEvent.click(button);
+
+      expect((button as HTMLButtonElement).disabled).toBe(!clickable);
+      expect(toggleSpy).toHaveBeenCalledTimes(clickable ? 1 : 0);
+    }
+  );
+
+  // #14604: a start queued here behind a finishing session ends on the next click.
+  it.each([
+    { label: "same panel", activePanel: "panel-1" },
+    { label: "another panel", activePanel: "panel-2" },
+  ])("names a queued start's click as a stop ($label)", async ({ activePanel }) => {
+    useVoiceRecordingStore.setState({
+      isConfigured: true,
+      status: "finishing",
+      micSignal: "live",
+      activeTarget: { panelId: activePanel } as never,
+      pendingTarget: { panelId: "panel-1" } as never,
+    });
+
+    render(<VoiceInputButton panelId="panel-1" projectId="project-1" projectName="Daintree" />);
+    const button = screen.getByRole("button");
+
+    expect(button.getAttribute("aria-label")).toBe("Stop voice recording");
+    expect(button.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.focus(button);
+    expect((await screen.findByRole("tooltip")).textContent).toContain("Click to stop");
   });
 
   it.each([

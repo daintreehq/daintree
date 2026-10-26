@@ -13,7 +13,11 @@ import {
   type VoiceMicNotice,
   type VoiceRecordingTarget,
 } from "@/store/voiceRecordingStore";
-import { isActiveVoiceSession, type VoiceRecordingMode } from "@shared/types";
+import {
+  isActiveVoiceSession,
+  type VoiceInputStatus,
+  type VoiceRecordingMode,
+} from "@shared/types";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { VOICE_INPUT_SETTINGS_CHANGED_EVENT } from "@/lib/voiceInputSettingsEvents";
@@ -177,6 +181,19 @@ interface CaptureAttempt {
   // The OS pulled the track ("ended"). Latched, so a lost attempt is never
   // promoted and a lost session is torn down once.
   lost: boolean;
+  // Set when the user stops before the session has begun: no further audio is
+  // taken, but the queue is still sent.
+  frozen: boolean;
+}
+
+// A start from the moment its capture is attached until its queued audio has
+// been sent. A stop the user asks for in that window may land on speech that
+// is already queued, so it is held here and run once that audio is sent.
+interface StartupAttempt {
+  requestId: number;
+  target: VoiceRecordingTarget;
+  capture: CaptureAttempt;
+  stopAfterStart: boolean;
 }
 
 class VoiceRecordingService {
@@ -194,6 +211,7 @@ class VoiceRecordingService {
   // pending indefinitely) or while a retarget waits on the previous session's
   // drain with the new microphone already recording into its queue.
   private pendingCapture: CaptureAttempt | null = null;
+  private startup: StartupAttempt | null = null;
   private workletNode: AudioWorkletNode | null = null;
   // A stop waiting for this worklet's "flushed" marker.
   private pendingWorkletFlush: { node: AudioWorkletNode; resolve: () => void } | null = null;
@@ -526,19 +544,31 @@ class VoiceRecordingService {
 
     this.unsubscribers.push(
       usePanelStore.subscribe((state) => {
+        // If a target belongs to a different project than the one currently
+        // loaded, the panel's absence is expected.
+        const currentProjectId = useProjectStore.getState().currentProject?.id;
+        const isClosed = (target: VoiceRecordingTarget) => {
+          if (target.projectId && currentProjectId !== target.projectId) return false;
+          const found = state.panelsById[target.panelId];
+          return !found || found.location === "trash";
+        };
+
+        // A start waiting behind another session has no session of its own to
+        // stop when its panel goes.
+        const { pendingTarget, activeTarget: sessionTarget } = useVoiceRecordingStore.getState();
+        if (
+          pendingTarget &&
+          pendingTarget.panelId !== sessionTarget?.panelId &&
+          isClosed(pendingTarget)
+        ) {
+          this.cancelArming();
+        }
+
         const voiceState = useVoiceRecordingStore.getState();
         const activeTarget = voiceState.activeTarget;
         if (!activeTarget) return;
 
-        // If the recording target belongs to a different project than the
-        // one currently loaded, the panel's absence is expected.
-        const currentProjectId = useProjectStore.getState().currentProject?.id;
-        if (activeTarget.projectId && currentProjectId !== activeTarget.projectId) return;
-
-        const found = state.panelsById[activeTarget.panelId];
-        const panel = found && found.location !== "trash" ? found : undefined;
-
-        if (!panel) {
+        if (isClosed(activeTarget)) {
           // No microphone has opened yet during arming — fall back to
           // cancelArming() so we don't drive stop() through a non-existent
           // session.
@@ -547,8 +577,11 @@ class VoiceRecordingService {
             return;
           }
           const panelId = activeTarget.panelId;
+          const pendingTarget = voiceState.pendingTarget;
           void this.stop("Dictation stopped because its panel was closed.", {
             preserveLiveText: true,
+            // A start waiting on this session for another, open panel goes ahead.
+            preservePendingStart: pendingTarget !== null && pendingTarget.panelId !== panelId,
           }).then(() => {
             useVoiceRecordingStore.getState().clearPanelBuffer(panelId);
           });
@@ -594,7 +627,7 @@ class VoiceRecordingService {
       const isMetaRelease = e.code === "MetaLeft" || e.code === "MetaRight";
       if (!isTriggerRelease && !isMetaRelease) return;
       this.pttActiveKeyCode = null;
-      void this.stop("Dictation stopped.", { preserveLiveText: true });
+      void this.requestUserStop();
     };
     window.addEventListener("keyup", handlePttKeyUp, { capture: true });
     this.unsubscribers.push(() =>
@@ -608,7 +641,7 @@ class VoiceRecordingService {
     const handlePttBlur = () => {
       if (this.pttActiveKeyCode === null) return;
       this.pttActiveKeyCode = null;
-      void this.stop("Dictation stopped.", { preserveLiveText: true });
+      void this.requestUserStop();
     };
     window.addEventListener("blur", handlePttBlur);
     this.unsubscribers.push(() => window.removeEventListener("blur", handlePttBlur));
@@ -650,7 +683,7 @@ class VoiceRecordingService {
     this.initialize();
     const state = useVoiceRecordingStore.getState();
     const isActiveTarget = state.activeTarget?.panelId === target.panelId;
-    const isActive = isActiveVoiceSession(state.status);
+    const isActive = this.isStoppableSession(state.status);
 
     logDebug(`${LOG_PREFIX} toggle`, {
       panelId: target.panelId,
@@ -659,17 +692,24 @@ class VoiceRecordingService {
       status: state.status,
     });
 
+    if (this.resumeReleasedStartup(target)) return;
+
     // A second press during the arming window aborts back to idle. No session
     // exists yet, so there is nothing for stop() to drain — cancelArming()
     // releases whatever the in-flight start() has opened and makes it bail at
     // its next staleness check, discarding any audio it already queued.
-    if (isActiveTarget && state.status === "arming") {
-      this.cancelArming();
+    // Once the mic is recording into the start's queue, the press keeps that
+    // speech and ends the session after it is sent.
+    if (
+      state.pendingTarget?.panelId === target.panelId ||
+      (isActiveTarget && state.status === "arming")
+    ) {
+      if (!this.deferStopToStartup()) this.cancelArming();
       return;
     }
 
     if (isActiveTarget && isActive) {
-      await this.stop("Dictation stopped.", { preserveLiveText: true });
+      await this.requestUserStop();
       return;
     }
 
@@ -692,6 +732,16 @@ class VoiceRecordingService {
    */
   handleEscape(panelId?: string): boolean {
     const state = useVoiceRecordingStore.getState();
+    // A start that hasn't begun its session: cancel it, and let any session
+    // still finishing drain.
+    if (
+      state.pendingTarget &&
+      !this.isStoppableSession(state.status) &&
+      (panelId === undefined || state.pendingTarget.panelId === panelId)
+    ) {
+      this.cancelArming();
+      return true;
+    }
     if (panelId !== undefined && state.activeTarget?.panelId !== panelId) return false;
     // Arming is the pre-audio confirmation window. No session has begun
     // yet, so route abort through cancelArming() instead of stop() —
@@ -724,7 +774,11 @@ class VoiceRecordingService {
     // stop for a session that never began.
     this.pttActiveKeyCode = null;
     this.invalidatePendingStart();
-    useVoiceRecordingStore.getState().finishSession({ nextStatus: "idle" });
+    // A start queued behind a session that is still finishing leaves that
+    // session's target and status to its own stop.
+    if (useVoiceRecordingStore.getState().status === "arming") {
+      useVoiceRecordingStore.getState().finishSession({ nextStatus: "idle" });
+    }
   }
 
   /**
@@ -735,7 +789,9 @@ class VoiceRecordingService {
    */
   private invalidatePendingStart(): void {
     this.startRequestId++;
+    this.startup = null;
     this.releasePendingCapture();
+    useVoiceRecordingStore.getState().clearPendingTarget();
   }
 
   private releasePendingCapture(): void {
@@ -744,6 +800,68 @@ class VoiceRecordingService {
     this.pendingCapture = null;
     pending.queue = null;
     void this.cleanupCaptureResources(pending).catch(() => {});
+  }
+
+  /**
+   * A stop the user asked for: a push-to-talk release, a second press, the
+   * shortcut. A start whose capture is attached may hold speech in its queue,
+   * so the stop waits for that audio to be sent rather than discarding it
+   * (#14604). Escape, a closed panel and teardown cancel through stop().
+   */
+  private requestUserStop(): Promise<void> {
+    if (this.deferStopToStartup()) return Promise.resolve();
+    const { status, pendingTarget } = useVoiceRecordingStore.getState();
+    if ((pendingTarget || status === "arming") && !this.stream) {
+      this.cancelArming();
+      return Promise.resolve();
+    }
+    return this.stop("Dictation stopped.", { preserveLiveText: true });
+  }
+
+  private liveStartup(): StartupAttempt | null {
+    const startup = this.startup;
+    return startup && !this.isStartRequestStale(startup.requestId) ? startup : null;
+  }
+
+  /**
+   * Hand a stop to the start that is attached but hasn't sent its audio yet.
+   * Nothing said after the stop is taken, and the session stops once the
+   * queue is sent. The microphone stays open until then so a press on the same
+   * target can resume it. False when there is no such start.
+   */
+  private deferStopToStartup(): boolean {
+    const startup = this.liveStartup();
+    if (!startup) return false;
+    this.pttActiveKeyCode = null;
+    if (startup.stopAfterStart) return true;
+    startup.stopAfterStart = true;
+    const { capture } = startup;
+    capture.frozen = true;
+    if (this.workletNode === capture.workletNode) this.clearMicSilenceTimer();
+    logDebug(`${LOG_PREFIX} Stop requested during startup, keeping queued audio`, {
+      chunks: capture.queue?.length ?? 0,
+    });
+    return true;
+  }
+
+  /**
+   * A press on the target of a start the user already stopped, before its
+   * queued speech was sent: keep recording into that start rather than
+   * swallowing the press or replacing it and losing that speech.
+   */
+  private resumeReleasedStartup(target: VoiceRecordingTarget): boolean {
+    const startup = this.liveStartup();
+    if (!startup?.stopAfterStart || startup.target.panelId !== target.panelId) return false;
+    startup.stopAfterStart = false;
+    startup.capture.frozen = false;
+    if (
+      this.workletNode === startup.capture.workletNode &&
+      useVoiceRecordingStore.getState().micSignal === "pending"
+    ) {
+      this.startMicSilenceTimer(this.generation, startup.requestId);
+    }
+    logDebug(`${LOG_PREFIX} Press resumed a stopped start`);
+    return true;
   }
 
   private enqueueCapturedChunk(capture: CaptureAttempt, chunk: ArrayBuffer): void {
@@ -821,6 +939,7 @@ class VoiceRecordingService {
   }
 
   private async rollBackArming(): Promise<void> {
+    useVoiceRecordingStore.getState().clearPendingTarget();
     if (this.stream) {
       await this.stop(undefined, {
         nextStatus: "error",
@@ -1009,14 +1128,17 @@ class VoiceRecordingService {
       deviceId: null,
       deviceLabel: null,
       lost: false,
+      frozen: false,
     };
     this.pendingCapture = capture;
+    let startup: StartupAttempt | null = null;
     // Owned by the attempt until promotion, so a previous session's stop can't
     // flush this attempt's window as its own.
     const openingAudio: OpeningAudio = { startRequestId, chunks: [], logged: false };
     // An attempt no longer pending was already released by a cancel or
     // supersede; the stream is stopped directly in case it arrived afterwards.
     const abandonCapture = (stream?: MediaStream) => {
+      if (startup && this.startup === startup) this.startup = null;
       if (this.pendingCapture === capture) this.releasePendingCapture();
       this.flushOpeningAudio(openingAudio);
       if (stream) this.stopStreamTracks(stream);
@@ -1273,6 +1395,7 @@ class VoiceRecordingService {
           return;
         }
         if (sessionGeneration !== null && this.generation !== sessionGeneration) return;
+        if (capture.frozen) return;
         // Measured on arrival, held or not, so the timings show when audio
         // actually reached the renderer. Read before sendAudioChunk() hands
         // the buffer to IPC.
@@ -1303,6 +1426,8 @@ class VoiceRecordingService {
       await failCaptureSetup(error);
       return;
     }
+    startup = { requestId: startRequestId, target, capture, stopAfterStart: false };
+    this.startup = startup;
     logDebug(`${LOG_PREFIX} Eager audio capture started`);
     logStep("source_attach");
     const captureAttachedAt = performance.now();
@@ -1387,9 +1512,10 @@ class VoiceRecordingService {
     this.startElapsedTimer();
     this.micCaptureAttachedAt = captureAttachedAt;
     // Real audio that arrived while a previous session drained already counts.
+    // A capture the user already stopped expects no more audio to judge by.
     if (firstLiveChunk) {
       this.markMicLive(target, firstLiveChunk);
-    } else {
+    } else if (!capture.frozen) {
       this.startMicSilenceTimer(generation, startRequestId, micSilenceGraceMs);
     }
 
@@ -1429,6 +1555,15 @@ class VoiceRecordingService {
       chunks: queued.length,
       droppedChunks: capture.droppedChunks,
     });
+    if (this.startup === startup) this.startup = null;
+
+    // Stopped while its audio was still queued: main holds that speech now, so
+    // the session drains like any stop that lands before the backend is ready.
+    if (startup.stopAfterStart) {
+      logDebug(`${LOG_PREFIX} Running the stop requested during startup`);
+      await this.stop("Dictation stopped.", { preserveLiveText: true });
+      return;
+    }
 
     const result = await started;
     logDebug(`${LOG_PREFIX} voiceInput.start() returned`, { ok: result.ok });
@@ -1456,6 +1591,7 @@ class VoiceRecordingService {
     if (!result.ok) {
       logError(`${LOG_PREFIX} Backend start failed`);
       this.flushOpeningAudio(openingAudio);
+      this.clearTimers();
       await this.cleanupAudioCapture();
       // A newer start may have taken over while the teardown awaited.
       if (this.generation !== generation || this.isStartRequestStale(startRequestId)) return;
@@ -1535,10 +1671,10 @@ class VoiceRecordingService {
       const shouldAnnounce = options.announce ?? true;
 
       // Clear any PTT key tracking — the keyup safety net should not fire stop
-      // again on a session that's already winding down.
-      this.pttActiveKeyCode = null;
-
+      // again on a session that's already winding down. A stop that makes way
+      // for the next start leaves that start's held key alone.
       if (!options.preservePendingStart) {
+        this.pttActiveKeyCode = null;
         this.invalidatePendingStart();
       }
 
@@ -1682,6 +1818,8 @@ class VoiceRecordingService {
       await this.stopPromise;
     } finally {
       this.stopPromise = null;
+      // Set ahead of the capture teardown, so a throw there must not strand it.
+      this.isStoppingSession = false;
     }
   }
 
@@ -2027,15 +2165,24 @@ class VoiceRecordingService {
    * down), a full stop() is needed to release it.
    */
   private stopAnySession(): Promise<void> | null {
-    const { status } = useVoiceRecordingStore.getState();
-    if (status === "arming" && !this.stream) {
-      this.cancelArming();
-      return Promise.resolve();
-    }
-    if (status === "arming" || isActiveVoiceSession(status)) {
-      return this.stop("Dictation stopped.", { preserveLiveText: true });
+    const { status, pendingTarget } = useVoiceRecordingStore.getState();
+    const startup = this.liveStartup();
+    // Already stopped by the user and only sending its queue: the press either
+    // resumes it or starts the next session.
+    if (startup?.stopAfterStart) return null;
+    if (startup || pendingTarget || status === "arming" || this.isStoppableSession(status)) {
+      return this.requestUserStop();
     }
     return null;
+  }
+
+  /**
+   * A session a press would stop. One already finishing (or whose stop is in
+   * flight) is excluded: the press starts the next session instead of joining
+   * the drain and being swallowed (#14604).
+   */
+  private isStoppableSession(status: VoiceInputStatus): boolean {
+    return isActiveVoiceSession(status) && status !== "finishing" && this.stopPromise === null;
   }
 
   /**
@@ -2087,12 +2234,20 @@ class VoiceRecordingService {
   // be affected by the recording-mode setting.
   private async startOrToggle(target: VoiceRecordingTarget): Promise<void> {
     if (this.recordingMode === "push-to-talk") {
+      if (this.resumeReleasedStartup(target)) return;
       const state = useVoiceRecordingStore.getState();
-      const isActiveTarget = state.activeTarget?.panelId === target.panelId;
-      if (isActiveTarget && isActiveVoiceSession(state.status)) {
-        await this.stop("Dictation stopped.", { preserveLiveText: true });
+      if (state.pendingTarget?.panelId === target.panelId) {
+        if (!this.deferStopToStartup()) this.cancelArming();
         return;
       }
+      const isActiveTarget = state.activeTarget?.panelId === target.panelId;
+      if (isActiveTarget && this.isStoppableSession(state.status)) {
+        await this.requestUserStop();
+        return;
+      }
+      // The held key gets the same pre-audio cue as a toggle press.
+      useVoiceRecordingStore.getState().recordRecentTarget(target);
+      useVoiceRecordingStore.getState().setArming(target);
       await this.start(target);
       return;
     }
@@ -2101,7 +2256,9 @@ class VoiceRecordingService {
 
   async focusActiveTarget(): Promise<boolean> {
     this.initialize();
-    const target = useVoiceRecordingStore.getState().activeTarget;
+    // A queued start is what the toolbar names, so it is where a click goes.
+    const { pendingTarget, activeTarget } = useVoiceRecordingStore.getState();
+    const target = pendingTarget ?? activeTarget;
     if (!target) return false;
 
     const currentProjectId = useProjectStore.getState().currentProject?.id;

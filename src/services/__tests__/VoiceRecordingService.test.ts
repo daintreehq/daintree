@@ -7,6 +7,7 @@ const suspendCallbacks = vi.hoisted(() => [] as Array<() => void>);
 vi.mock("@/store/voiceRecordingStore", () => {
   const state = {
     activeTarget: null as { panelId: string } | null,
+    pendingTarget: null as { panelId: string } | null,
     status: "idle" as string,
     panelBuffers: {} as Record<string, unknown>,
     correctionEnabled: false,
@@ -26,6 +27,9 @@ vi.mock("@/store/voiceRecordingStore", () => {
     setLearnFromCorrections: vi.fn(),
     setSessionCorrectedText: vi.fn(),
     setArming: vi.fn(),
+    clearPendingTarget: vi.fn(() => {
+      state.pendingTarget = null;
+    }),
     beginSession: vi.fn(),
     finishSession: vi.fn(),
     setAudioLevel: vi.fn(),
@@ -1190,6 +1194,7 @@ describe("VoiceRecordingService — shortcut stops from anywhere (#12832)", () =
   type VoiceState = {
     status: string;
     activeTarget: { panelId: string } | null;
+    pendingTarget: { panelId: string } | null;
     lockedTarget: { panelId: string } | null;
   };
   type PanelState = { focusedId: string | null; panelsById: Record<string, unknown> };
@@ -1201,6 +1206,7 @@ describe("VoiceRecordingService — shortcut stops from anywhere (#12832)", () =
   async function arrange(options: {
     status: string;
     activeTarget?: { panelId: string } | null;
+    pendingTarget?: { panelId: string } | null;
     recordingMode?: "toggle" | "push-to-talk";
   }) {
     const electron = buildElectronStub();
@@ -1228,6 +1234,7 @@ describe("VoiceRecordingService — shortcut stops from anywhere (#12832)", () =
     voiceState.status = options.status;
     voiceState.activeTarget =
       options.activeTarget === undefined ? { panelId: "panel-a" } : options.activeTarget;
+    voiceState.pendingTarget = options.pendingTarget ?? null;
     voiceState.lockedTarget = null;
     const finishSession = vi.mocked(voiceModule.useVoiceRecordingStore.getState().finishSession);
     finishSession.mockClear();
@@ -1253,7 +1260,7 @@ describe("VoiceRecordingService — shortcut stops from anywhere (#12832)", () =
     };
   }
 
-  for (const status of ["connecting", "recording", "paused", "reconnecting", "finishing"]) {
+  for (const status of ["connecting", "recording", "paused", "reconnecting"]) {
     it(`stops a ${status} session on another panel instead of retargeting to focus`, async () => {
       const { voiceRecordingService, stopSpy, startSpy, toggleSpy } = await arrange({ status });
 
@@ -1265,6 +1272,17 @@ describe("VoiceRecordingService — shortcut stops from anywhere (#12832)", () =
       expect(toggleSpy).not.toHaveBeenCalled();
     });
   }
+
+  // #14604: the finishing session is already ending, so the press is the next
+  // session's start rather than a stop that joins the drain.
+  it("starts the next session in the focused panel while another is finishing", async () => {
+    const { voiceRecordingService, stopSpy, toggleSpy } = await arrange({ status: "finishing" });
+
+    await voiceRecordingService.toggleFocusedPanel();
+
+    expect(stopSpy).not.toHaveBeenCalled();
+    expect(toggleSpy).toHaveBeenCalledWith(expect.objectContaining({ panelId: "panel-b" }));
+  });
 
   it("aborts the arming window from a different panel without opening the mic", async () => {
     const { voiceRecordingService, finishSession, stopSpy, startSpy, toggleSpy } = await arrange({
@@ -1360,8 +1378,28 @@ describe("VoiceRecordingService — shortcut stops from anywhere (#12832)", () =
     vi.mocked(keybindingService.matchesEvent).mockReset();
   });
 
-  it("cancels a pending retarget start when joining a stop already in flight", async () => {
-    const { voiceRecordingService, stopSpy } = await arrange({ status: "finishing" });
+  it("cancels a pending start before its capture attaches without touching the finishing session", async () => {
+    const { voiceRecordingService, voiceState, finishSession, stopSpy, toggleSpy } = await arrange({
+      status: "finishing",
+      pendingTarget: { panelId: "panel-c" },
+    });
+    const before: unknown = Reflect.get(voiceRecordingService, "startRequestId");
+
+    await voiceRecordingService.toggleFocusedPanel();
+
+    expect(Reflect.get(voiceRecordingService, "startRequestId")).not.toBe(before);
+    expect(voiceState.pendingTarget).toBeNull();
+    expect(voiceState.activeTarget).toEqual({ panelId: "panel-a" });
+    expect(finishSession).not.toHaveBeenCalled();
+    expect(stopSpy).not.toHaveBeenCalled();
+    expect(toggleSpy).not.toHaveBeenCalled();
+  });
+
+  it("cancels a pending start when an explicit stop joins a drain already in flight", async () => {
+    const { voiceRecordingService, voiceState, stopSpy } = await arrange({
+      status: "finishing",
+      pendingTarget: { panelId: "panel-c" },
+    });
     stopSpy.mockRestore();
     let releaseDrain: () => void = () => {};
     Reflect.set(
@@ -1372,12 +1410,19 @@ describe("VoiceRecordingService — shortcut stops from anywhere (#12832)", () =
       })
     );
     const before: unknown = Reflect.get(voiceRecordingService, "startRequestId");
+    let joined = false;
 
-    const pending = voiceRecordingService.toggleFocusedPanel();
-    releaseDrain();
-    await pending;
+    const stopping = voiceRecordingService.stop("Dictation cancelled.").then(() => {
+      joined = true;
+    });
 
     expect(Reflect.get(voiceRecordingService, "startRequestId")).not.toBe(before);
+    expect(voiceState.pendingTarget).toBeNull();
+    await Promise.resolve();
+    expect(joined).toBe(false);
+    releaseDrain();
+    await stopping;
+    expect(joined).toBe(true);
   });
 
   it("leaves explicit toggle(target) retargeting intact for panel mic buttons", async () => {
