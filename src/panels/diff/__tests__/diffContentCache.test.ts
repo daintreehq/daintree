@@ -65,7 +65,12 @@ describe("diffContentCache — base-branch subjects are never cached", () => {
 });
 
 describe("diffContentCache — index side", () => {
-  const sided = (source: "staged" | "unstaged") => ({ ...workingTree("src/a.ts"), source });
+  const sided = (source: "staged" | "unstaged"): DiffSubject => ({
+    source,
+    worktreePath: "/repo",
+    filePath: "src/a.ts",
+    status: "modified",
+  });
 
   it("names no side for a working-tree subject, keeping HEAD against the working tree", async () => {
     await requestDiff(workingTree("src/a.ts"), false);
