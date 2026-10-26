@@ -892,6 +892,7 @@ describe("voiceCorrectionPassages (#14613)", () => {
           insertion: { from: 0, to: 5, edited: false },
         },
       ],
+      breaks: [],
     };
     const [passage] = collectCorrectionPassages(record, "hello");
 
