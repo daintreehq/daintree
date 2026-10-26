@@ -153,6 +153,7 @@ function buildElectronStub() {
       onFileTokenResolved: vi.fn(() => () => {}),
       onError: vi.fn(() => () => {}),
       onStatus: vi.fn(() => () => {}),
+      onSessionEnded: vi.fn(() => () => {}),
       getSettings: vi.fn().mockResolvedValue({
         enabled: true,
         openaiApiKey: "sk-key",
@@ -162,7 +163,7 @@ function buildElectronStub() {
       requestMicPermission: vi.fn().mockResolvedValue(true),
       openMicSettings: vi.fn(),
       sendAudioChunk: vi.fn(),
-      start: vi.fn().mockResolvedValue({ ok: true }),
+      start: vi.fn().mockResolvedValue(undefined),
       stop: vi.fn().mockResolvedValue(undefined),
     },
     systemSleep: {

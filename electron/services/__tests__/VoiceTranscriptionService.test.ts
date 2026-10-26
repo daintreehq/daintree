@@ -164,6 +164,7 @@ function latestVadWorker(): MockVadWorker {
 const { VoiceTranscriptionService } = await import("../VoiceTranscriptionService.js");
 type VoiceTranscriptionServiceInstance = InstanceType<typeof VoiceTranscriptionService>;
 type VoiceTranscriptionEvent = import("../VoiceTranscriptionService.js").VoiceTranscriptionEvent;
+type VoiceSessionEvent = import("../VoiceTranscriptionService.js").VoiceSessionEvent;
 
 const OPENAI_SETTINGS: VoiceInputSettings = {
   enabled: true,
@@ -200,9 +201,10 @@ function latestInstance(): MockWebSocket {
 }
 
 async function bringOpenAiReady(
-  service: VoiceTranscriptionServiceInstance
+  service: VoiceTranscriptionServiceInstance,
+  sessionId = "session-1"
 ): Promise<MockWebSocket> {
-  const startPromise = service.start(OPENAI_SETTINGS);
+  const startPromise = service.start(OPENAI_SETTINGS, sessionId);
   await Promise.resolve();
   const socket = latestInstance();
   socket.simulateOpen();
@@ -212,9 +214,10 @@ async function bringOpenAiReady(
 }
 
 async function bringDeepgramReady(
-  service: VoiceTranscriptionServiceInstance
+  service: VoiceTranscriptionServiceInstance,
+  sessionId = "session-1"
 ): Promise<MockWebSocket> {
-  const startPromise = service.start(DEEPGRAM_SETTINGS);
+  const startPromise = service.start(DEEPGRAM_SETTINGS, sessionId);
   await Promise.resolve();
   const socket = latestInstance();
   socket.simulateOpen();
@@ -242,7 +245,7 @@ describe("VoiceTranscriptionService (coordinator)", () => {
 
   it("routes to the OpenAI provider for transcriptionProvider 'openai'", async () => {
     const service = new VoiceTranscriptionService();
-    void service.start(OPENAI_SETTINGS);
+    void service.start(OPENAI_SETTINGS, "session-1");
     await Promise.resolve();
     const socket = latestInstance();
     expect(socket.url).toBe("wss://api.openai.com/v1/realtime?intent=transcription");
@@ -252,7 +255,7 @@ describe("VoiceTranscriptionService (coordinator)", () => {
 
   it("routes to the Deepgram provider for transcriptionProvider 'deepgram'", async () => {
     const service = new VoiceTranscriptionService();
-    void service.start(DEEPGRAM_SETTINGS);
+    void service.start(DEEPGRAM_SETTINGS, "session-1");
     await Promise.resolve();
     const socket = latestInstance();
     expect(new URL(socket.url).host).toBe("api.deepgram.com");
@@ -340,13 +343,13 @@ describe("VoiceTranscriptionService (coordinator)", () => {
 
   it("tears down the previous provider and stops forwarding its events on switch", async () => {
     const service = new VoiceTranscriptionService();
-    const events: VoiceTranscriptionEvent[] = [];
+    const events: VoiceSessionEvent[] = [];
     service.onEvent((e) => events.push(e));
 
-    const openaiSocket = await bringOpenAiReady(service);
+    const openaiSocket = await bringOpenAiReady(service, "session-a");
 
     // Switch to Deepgram — the previous OpenAI socket must be closed.
-    const deepgramSocket = await bringDeepgramReady(service);
+    const deepgramSocket = await bringDeepgramReady(service, "session-b");
     expect(deepgramSocket).not.toBe(openaiSocket);
     expect(openaiSocket.closeCalls).toBeGreaterThanOrEqual(1);
 
@@ -363,6 +366,25 @@ describe("VoiceTranscriptionService (coordinator)", () => {
       channel: { alternatives: [{ transcript: "live" }] },
     });
     expect(events.some((e) => e.type === "complete" && e.text === "live")).toBe(true);
+    service.stop();
+  });
+
+  it("tags each provider's events with the session it was started for", async () => {
+    const service = new VoiceTranscriptionService();
+    const events: VoiceSessionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+
+    const first = await bringOpenAiReady(service, "session-a");
+    first.simulateMessage("conversation.item.input_audio_transcription.delta", { delta: "Hi" });
+    const firstEvents = events.splice(0);
+    // Includes the "connecting" status emitted synchronously inside start().
+    expect(firstEvents.some((e) => e.type === "status" && e.status === "connecting")).toBe(true);
+    expect(firstEvents.map((e) => e.sessionId)).toEqual(firstEvents.map(() => "session-a"));
+
+    const second = await bringOpenAiReady(service, "session-b");
+    second.simulateMessage("conversation.item.input_audio_transcription.delta", { delta: "Yo" });
+    expect(events.length).toBeGreaterThan(0);
+    expect(events.map((e) => e.sessionId)).toEqual(events.map(() => "session-b"));
     service.stop();
   });
 

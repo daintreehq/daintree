@@ -64,13 +64,15 @@ vi.mock("@/services/KeybindingService", () => ({
   },
 }));
 
-type DeltaPayload = { text: string; itemId?: string };
-type CompletePayload = { text: string; willCorrect: boolean; itemId?: string };
+type DeltaPayload = { sessionId: string; text: string; itemId?: string };
+type CompletePayload = { sessionId: string; text: string; willCorrect: boolean; itemId?: string };
+
+const SESSION_ID = "session-1";
 
 const callbacks: {
   delta: ((payload: DeltaPayload) => void) | null;
   complete: ((payload: CompletePayload) => void) | null;
-  boundary: ((payload: { rawText: string | null }) => void) | null;
+  boundary: ((payload: { sessionId: string; rawText: string | null }) => void) | null;
 } = { delta: null, complete: null, boundary: null };
 
 function stubElectron() {
@@ -84,13 +86,16 @@ function stubElectron() {
         callbacks.complete = cb;
         return () => {};
       }),
-      onParagraphBoundary: vi.fn((cb: (payload: { rawText: string | null }) => void) => {
-        callbacks.boundary = cb;
-        return () => {};
-      }),
+      onParagraphBoundary: vi.fn(
+        (cb: (payload: { sessionId: string; rawText: string | null }) => void) => {
+          callbacks.boundary = cb;
+          return () => {};
+        }
+      ),
       onFileTokenResolved: vi.fn(() => () => {}),
       onError: vi.fn(() => () => {}),
       onStatus: vi.fn(() => () => {}),
+      onSessionEnded: vi.fn(() => () => {}),
       getSettings: vi.fn().mockResolvedValue({ enabled: false }),
     },
     systemSleep: {
@@ -124,9 +129,10 @@ async function setup() {
   return { liveText };
 }
 
-const delta = (text: string, itemId?: string) => callbacks.delta!({ text, itemId });
+const delta = (text: string, itemId?: string) =>
+  callbacks.delta!({ sessionId: SESSION_ID, text, itemId });
 const complete = (text: string, itemId?: string) =>
-  callbacks.complete!({ text, willCorrect: false, itemId });
+  callbacks.complete!({ sessionId: SESSION_ID, text, willCorrect: false, itemId });
 
 describe("VoiceRecordingService — identified items (#13109)", () => {
   beforeEach(() => {
@@ -179,7 +185,7 @@ describe("VoiceRecordingService — identified items (#13109)", () => {
     delta("first", "item-a");
     delta("later", "item-b");
     complete("First.", "item-a");
-    callbacks.boundary!({ rawText: null });
+    callbacks.boundary!({ sessionId: SESSION_ID, rawText: null });
     complete("Second para.", "item-a");
 
     expect(draftState.draft).toBe("First.\nSecond para.");

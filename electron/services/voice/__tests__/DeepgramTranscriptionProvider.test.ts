@@ -183,7 +183,7 @@ async function bringSessionReady(
   provider: DeepgramTranscriptionProviderInstance,
   settings: VoiceInputSettings = BASE_SETTINGS
 ): Promise<{ socket: MockWebSocket; result: { ok: true } | { ok: false; error: string } }> {
-  const startPromise = provider.start(settings);
+  const startPromise = provider.start(settings, "session-1");
   await Promise.resolve();
   const socket = latestInstance();
   socket.simulateOpen();
@@ -217,14 +217,17 @@ describe("DeepgramTranscriptionProvider", () => {
 
   it("fails to start when no Deepgram API key is configured", async () => {
     const provider = new DeepgramTranscriptionProvider();
-    const result = await provider.start({ ...BASE_SETTINGS, deepgramApiKey: "" });
+    const result = await provider.start({ ...BASE_SETTINGS, deepgramApiKey: "" }, "session-1");
     expect(result).toEqual({ ok: false, error: "Deepgram API key not configured" });
     expect(instances).toHaveLength(0);
   });
 
   it("constructs the WebSocket with the Deepgram streaming URL and Token auth", async () => {
     const provider = new DeepgramTranscriptionProvider();
-    void provider.start({ ...BASE_SETTINGS, deepgramApiKey: "dg-abc", language: "en" });
+    void provider.start(
+      { ...BASE_SETTINGS, deepgramApiKey: "dg-abc", language: "en" },
+      "session-1"
+    );
     await Promise.resolve();
     const socket = latestInstance();
 
@@ -241,7 +244,10 @@ describe("DeepgramTranscriptionProvider", () => {
 
   it("maps auto language to language=multi, never detect_language", async () => {
     const provider = new DeepgramTranscriptionProvider();
-    void provider.start({ ...BASE_SETTINGS, deepgramApiKey: "dg-abc", language: "auto" });
+    void provider.start(
+      { ...BASE_SETTINGS, deepgramApiKey: "dg-abc", language: "auto" },
+      "session-1"
+    );
     await Promise.resolve();
     const url = new URL(latestInstance().url);
     expect(url.searchParams.get("language")).toBe("multi");
@@ -255,11 +261,14 @@ describe("DeepgramTranscriptionProvider", () => {
     ["blank", "  "],
   ])("falls back to language=en when the stored language is %s", async (_label, language) => {
     const provider = new DeepgramTranscriptionProvider();
-    void provider.start({
-      ...BASE_SETTINGS,
-      deepgramApiKey: "dg-abc",
-      language,
-    } as unknown as typeof BASE_SETTINGS);
+    void provider.start(
+      {
+        ...BASE_SETTINGS,
+        deepgramApiKey: "dg-abc",
+        language,
+      } as unknown as typeof BASE_SETTINGS,
+      "session-1"
+    );
     await Promise.resolve();
     expect(new URL(latestInstance().url).searchParams.get("language")).toBe("en");
     provider.stop();
@@ -269,7 +278,10 @@ describe("DeepgramTranscriptionProvider", () => {
 
   it("appends one repeated keyterm= param per term (not comma-joined)", async () => {
     const provider = new DeepgramTranscriptionProvider();
-    void provider.start({ ...BASE_SETTINGS, keyterms: ["alpha", "betaTerm", "gamma"] });
+    void provider.start(
+      { ...BASE_SETTINGS, keyterms: ["alpha", "betaTerm", "gamma"] },
+      "session-1"
+    );
     await Promise.resolve();
     const url = new URL(latestInstance().url);
 
@@ -281,11 +293,11 @@ describe("DeepgramTranscriptionProvider", () => {
 
   it("omits the keyterm param when no keyterms are supplied", async () => {
     const provider = new DeepgramTranscriptionProvider();
-    void provider.start({ ...BASE_SETTINGS, keyterms: [] });
+    void provider.start({ ...BASE_SETTINGS, keyterms: [] }, "session-1");
     await Promise.resolve();
     expect(new URL(latestInstance().url).searchParams.has("keyterm")).toBe(false);
 
-    void provider.start({ ...BASE_SETTINGS, keyterms: undefined });
+    void provider.start({ ...BASE_SETTINGS, keyterms: undefined }, "session-1");
     await Promise.resolve();
     expect(new URL(latestInstance().url).searchParams.has("keyterm")).toBe(false);
     provider.stop();
@@ -294,7 +306,7 @@ describe("DeepgramTranscriptionProvider", () => {
   it("caps the injected keyterms at the URL term limit", async () => {
     const provider = new DeepgramTranscriptionProvider();
     const many = Array.from({ length: 96 }, (_, i) => `term${i}`);
-    void provider.start({ ...BASE_SETTINGS, keyterms: many });
+    void provider.start({ ...BASE_SETTINGS, keyterms: many }, "session-1");
     await Promise.resolve();
     const injected = new URL(latestInstance().url).searchParams.getAll("keyterm");
 
@@ -307,7 +319,10 @@ describe("DeepgramTranscriptionProvider", () => {
 
   it("drops empty/whitespace keyterms before injecting", async () => {
     const provider = new DeepgramTranscriptionProvider();
-    void provider.start({ ...BASE_SETTINGS, keyterms: ["  ", "real", "", "  spaced  "] });
+    void provider.start(
+      { ...BASE_SETTINGS, keyterms: ["  ", "real", "", "  spaced  "] },
+      "session-1"
+    );
     await Promise.resolve();
     expect(new URL(latestInstance().url).searchParams.getAll("keyterm")).toEqual([
       "real",
@@ -320,7 +335,7 @@ describe("DeepgramTranscriptionProvider", () => {
     const provider = new DeepgramTranscriptionProvider();
     // Each term is 1000 chars; the ~3000-char aggregate guard admits only 3.
     const long = Array.from({ length: 10 }, (_, i) => `${"x".repeat(999)}${i}`);
-    void provider.start({ ...BASE_SETTINGS, keyterms: long });
+    void provider.start({ ...BASE_SETTINGS, keyterms: long }, "session-1");
     await Promise.resolve();
     const injected = new URL(latestInstance().url).searchParams.getAll("keyterm");
 
@@ -332,7 +347,7 @@ describe("DeepgramTranscriptionProvider", () => {
   it("skips an oversized keyterm but keeps smaller later terms", async () => {
     const provider = new DeepgramTranscriptionProvider();
     const huge = "z".repeat(4_000);
-    void provider.start({ ...BASE_SETTINGS, keyterms: [huge, "short1", "short2"] });
+    void provider.start({ ...BASE_SETTINGS, keyterms: [huge, "short1", "short2"] }, "session-1");
     await Promise.resolve();
     // The oversized leading term is skipped (continue, not break), so the small
     // terms after it still make it into the URL.
@@ -346,7 +361,7 @@ describe("DeepgramTranscriptionProvider", () => {
   it("logs the keyterm count, not the URL, when opening the socket", async () => {
     const provider = new DeepgramTranscriptionProvider();
     vi.mocked(logInfo).mockClear();
-    void provider.start({ ...BASE_SETTINGS, keyterms: ["alpha", "beta"] });
+    void provider.start({ ...BASE_SETTINGS, keyterms: ["alpha", "beta"] }, "session-1");
     await Promise.resolve();
 
     const openCall = vi
@@ -365,10 +380,13 @@ describe("DeepgramTranscriptionProvider", () => {
 
   it("URL-encodes multi-word and special-char keyterms correctly", async () => {
     const provider = new DeepgramTranscriptionProvider();
-    void provider.start({
-      ...BASE_SETTINGS,
-      keyterms: ["node pty", "C++ & Rust"],
-    });
+    void provider.start(
+      {
+        ...BASE_SETTINGS,
+        keyterms: ["node pty", "C++ & Rust"],
+      },
+      "session-1"
+    );
     await Promise.resolve();
     const socket = latestInstance();
 
@@ -386,7 +404,7 @@ describe("DeepgramTranscriptionProvider", () => {
       if (e.type === "status") statuses.push(e.status);
     });
 
-    const startPromise = provider.start(BASE_SETTINGS);
+    const startPromise = provider.start(BASE_SETTINGS, "session-1");
     expect(statuses).toEqual(["connecting"]);
     await Promise.resolve();
     latestInstance().simulateOpen();
@@ -403,7 +421,7 @@ describe("DeepgramTranscriptionProvider", () => {
       if (e.type === "error") errors.push(e.error.message);
     });
 
-    const startPromise = provider.start(BASE_SETTINGS);
+    const startPromise = provider.start(BASE_SETTINGS, "session-1");
     await Promise.resolve();
     const socket = latestInstance();
     // Never open.
@@ -418,7 +436,7 @@ describe("DeepgramTranscriptionProvider", () => {
     throwOnConstruct = true;
     constructError = new Error("ECONNREFUSED");
     const provider = new DeepgramTranscriptionProvider();
-    const result = await provider.start(BASE_SETTINGS);
+    const result = await provider.start(BASE_SETTINGS, "session-1");
     expect(result).toEqual({ ok: false, error: "ECONNREFUSED" });
   });
 
@@ -441,7 +459,7 @@ describe("DeepgramTranscriptionProvider", () => {
 
   it("buffers pre-connect audio and flushes it as binary after open", async () => {
     const provider = new DeepgramTranscriptionProvider();
-    const startPromise = provider.start(BASE_SETTINGS);
+    const startPromise = provider.start(BASE_SETTINGS, "session-1");
     await Promise.resolve();
     const socket = latestInstance();
 
@@ -463,7 +481,7 @@ describe("DeepgramTranscriptionProvider", () => {
     const provider = new DeepgramTranscriptionProvider();
     const events: VoiceTranscriptionEvent[] = [];
     provider.onEvent((e) => events.push(e));
-    const startPromise = provider.start(BASE_SETTINGS);
+    const startPromise = provider.start(BASE_SETTINGS, "session-1");
     await Promise.resolve();
     const socket = latestInstance();
 
@@ -690,7 +708,7 @@ describe("DeepgramTranscriptionProvider", () => {
       if (e.type === "complete") completes.push(e.text);
     });
 
-    const startPromise = provider.start(BASE_SETTINGS);
+    const startPromise = provider.start(BASE_SETTINGS, "session-1");
     await Promise.resolve();
     const socket = latestInstance();
     provider.sendAudioChunk(new Uint8Array([1, 2, 3]).buffer);
@@ -718,7 +736,7 @@ describe("DeepgramTranscriptionProvider", () => {
 
   it("a keyterm-overflow retry while waiting on a connecting stop still flushes the audio", async () => {
     const provider = new DeepgramTranscriptionProvider();
-    void provider.start(BASE_SETTINGS);
+    void provider.start(BASE_SETTINGS, "session-1");
     await Promise.resolve();
     const firstSocket = latestInstance();
     provider.sendAudioChunk(new Uint8Array([1, 2, 3]).buffer);
@@ -743,7 +761,7 @@ describe("DeepgramTranscriptionProvider", () => {
     provider.onEvent((e) => {
       if (e.type === "status") statuses.push(e.status);
     });
-    void provider.start(BASE_SETTINGS);
+    void provider.start(BASE_SETTINGS, "session-1");
     await Promise.resolve();
     const firstSocket = latestInstance();
     provider.sendAudioChunk(new Uint8Array([1, 2, 3]).buffer);
@@ -761,7 +779,7 @@ describe("DeepgramTranscriptionProvider", () => {
     provider.onEvent((e) => {
       if (e.type === "status") statuses.push(e.status);
     });
-    void provider.start(BASE_SETTINGS);
+    void provider.start(BASE_SETTINGS, "session-1");
     await Promise.resolve();
     provider.sendAudioChunk(new Uint8Array([1, 2, 3]).buffer);
     const stopPromise = provider.stopGracefully();
@@ -782,7 +800,7 @@ describe("DeepgramTranscriptionProvider", () => {
       if (e.type === "status") statuses.push(e.status);
     });
 
-    const startPromise = provider.start(BASE_SETTINGS);
+    const startPromise = provider.start(BASE_SETTINGS, "session-1");
     await Promise.resolve();
     const socket = latestInstance();
     provider.sendAudioChunk(new Uint8Array([1, 2, 3]).buffer);
@@ -804,7 +822,7 @@ describe("DeepgramTranscriptionProvider", () => {
       if (e.type === "status") statuses.push(e.status);
     });
 
-    void provider.start(BASE_SETTINGS);
+    void provider.start(BASE_SETTINGS, "session-1");
     await Promise.resolve();
     const socket = latestInstance();
 
@@ -815,7 +833,7 @@ describe("DeepgramTranscriptionProvider", () => {
 
   it("stop() while waiting on a connecting stop discards the buffered audio", async () => {
     const provider = new DeepgramTranscriptionProvider();
-    void provider.start(BASE_SETTINGS);
+    void provider.start(BASE_SETTINGS, "session-1");
     await Promise.resolve();
     const socket = latestInstance();
     provider.sendAudioChunk(new Uint8Array([1, 2, 3]).buffer);
@@ -836,7 +854,7 @@ describe("DeepgramTranscriptionProvider", () => {
     provider.onEvent((e) => {
       if (e.type === "status") statuses.push(e.status);
     });
-    void provider.start(BASE_SETTINGS);
+    void provider.start(BASE_SETTINGS, "session-1");
     await Promise.resolve();
     const socket = latestInstance();
     provider.sendAudioChunk(new Uint8Array([1, 2, 3]).buffer);
@@ -868,7 +886,7 @@ describe("DeepgramTranscriptionProvider", () => {
     const events: VoiceTranscriptionEvent[] = [];
     provider.onEvent((e) => events.push(e));
 
-    const startPromise = provider.start(BASE_SETTINGS);
+    const startPromise = provider.start(BASE_SETTINGS, "session-1");
     await Promise.resolve();
     latestInstance().simulateError(new Error("dns failure"));
 
@@ -897,7 +915,10 @@ describe("DeepgramTranscriptionProvider", () => {
 
   it("retries once without keyterms on an HTTP 400 upgrade rejection", async () => {
     const provider = new DeepgramTranscriptionProvider();
-    const startPromise = provider.start({ ...BASE_SETTINGS, keyterms: ["alpha", "beta"] });
+    const startPromise = provider.start(
+      { ...BASE_SETTINGS, keyterms: ["alpha", "beta"] },
+      "session-1"
+    );
     await Promise.resolve();
     const first = latestInstance();
     expect(new URL(first.url).searchParams.getAll("keyterm")).toEqual(["alpha", "beta"]);
@@ -924,7 +945,7 @@ describe("DeepgramTranscriptionProvider", () => {
     const events: VoiceTranscriptionEvent[] = [];
     provider.onEvent((e) => events.push(e));
 
-    const startPromise = provider.start({ ...BASE_SETTINGS, keyterms: ["alpha"] });
+    const startPromise = provider.start({ ...BASE_SETTINGS, keyterms: ["alpha"] }, "session-1");
     await Promise.resolve();
     const first = latestInstance();
     first.simulateUnexpectedResponse(401);
@@ -945,7 +966,7 @@ describe("DeepgramTranscriptionProvider", () => {
     const events: VoiceTranscriptionEvent[] = [];
     provider.onEvent((e) => events.push(e));
 
-    const startPromise = provider.start({ ...BASE_SETTINGS, keyterms: ["alpha"] });
+    const startPromise = provider.start({ ...BASE_SETTINGS, keyterms: ["alpha"] }, "session-1");
     await Promise.resolve();
     latestInstance().simulateUnexpectedResponse(400);
     expect(instances).toHaveLength(2);
@@ -962,7 +983,7 @@ describe("DeepgramTranscriptionProvider", () => {
 
   it("keeps the retry socket's connect timeout when the failed socket closes", async () => {
     const provider = new DeepgramTranscriptionProvider();
-    const startPromise = provider.start({ ...BASE_SETTINGS, keyterms: ["alpha"] });
+    const startPromise = provider.start({ ...BASE_SETTINGS, keyterms: ["alpha"] }, "session-1");
     await Promise.resolve();
     const first = latestInstance();
 
@@ -981,7 +1002,7 @@ describe("DeepgramTranscriptionProvider", () => {
 
   it("ignores an unexpected-response for a superseded session", async () => {
     const provider = new DeepgramTranscriptionProvider();
-    const startPromise = provider.start({ ...BASE_SETTINGS, keyterms: ["alpha"] });
+    const startPromise = provider.start({ ...BASE_SETTINGS, keyterms: ["alpha"] }, "session-1");
     await Promise.resolve();
     const first = latestInstance();
 
@@ -1009,7 +1030,7 @@ describe("DeepgramTranscriptionProvider", () => {
 
     const { socket: firstSocket } = await bringSessionReady(provider);
     // Replace the session; the first socket is now stale.
-    const second = provider.start(BASE_SETTINGS);
+    const second = provider.start(BASE_SETTINGS, "session-1");
     await Promise.resolve();
     latestInstance().simulateOpen();
     await second;
@@ -1064,7 +1085,7 @@ describe("DeepgramTranscriptionProvider start timing diagnostics", () => {
 
   it("times socket open from provider start and reports buffered chunks", async () => {
     const provider = new DeepgramTranscriptionProvider();
-    const startPromise = provider.start(BASE_SETTINGS);
+    const startPromise = provider.start(BASE_SETTINGS, "session-1");
     await Promise.resolve();
     provider.sendAudioChunk(new Int16Array(2400).buffer);
     const socket = latestInstance();
@@ -1080,7 +1101,7 @@ describe("DeepgramTranscriptionProvider start timing diagnostics", () => {
 
   it("times a keyterm-free retry from its own socket while keeping the session origin", async () => {
     const provider = new DeepgramTranscriptionProvider();
-    const startPromise = provider.start({ ...BASE_SETTINGS, keyterms: ["alpha"] });
+    const startPromise = provider.start({ ...BASE_SETTINGS, keyterms: ["alpha"] }, "session-1");
     await Promise.resolve();
     now = 5_300;
     latestInstance().simulateUnexpectedResponse(400);

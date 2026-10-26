@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VoiceRecordingTarget } from "@/store/voiceRecordingStore";
 import type { VoiceInputError } from "@shared/types";
 
-type VoiceStatusCallback = (status: string) => void;
-type VoiceErrorCallback = (error: VoiceInputError) => void;
+type VoiceStatusCallback = (payload: { sessionId: string; status: string }) => void;
+type VoiceErrorCallback = (payload: { sessionId: string; error: VoiceInputError }) => void;
 type VoidCleanup = () => void;
 
 interface MockTrack {
@@ -159,9 +159,9 @@ const runtime = vi.hoisted(() => ({
     checkMicPermission: vi.fn<() => Promise<string>>(),
     requestMicPermission: vi.fn<() => Promise<boolean>>(),
     openMicSettings: vi.fn<() => Promise<void>>(),
-    sendAudioChunk: vi.fn<(chunk: ArrayBuffer) => void>(),
-    start: vi.fn<() => Promise<{ ok: boolean; error?: string }>>(),
-    stop: vi.fn<() => Promise<void>>(),
+    sendAudioChunk: vi.fn<(sessionId: string, chunk: ArrayBuffer) => void>(),
+    start: vi.fn<(sessionId: string) => Promise<void>>(),
+    stop: vi.fn<(sessionId: string) => Promise<void>>(),
   },
 }));
 
@@ -285,12 +285,10 @@ function resetRuntime(): void {
   // The real IPC method resolves a promise; the caller hands it to
   // safeFireAndForget, which would throw on a bare undefined.
   runtime.voiceInput.openMicSettings.mockImplementation(async () => {});
+  // The IPC resolves once the provider is up and rejects with its message.
   runtime.voiceInput.start.mockImplementation(async () => {
-    const next = runtime.startQueue.shift();
-    if (next instanceof Promise) {
-      return next;
-    }
-    return next ?? { ok: true };
+    const result = await (runtime.startQueue.shift() ?? { ok: true });
+    if (!result.ok) throw new Error(result.error ?? "Voice input failed to start.");
   });
   runtime.voiceInput.stop.mockImplementation(async () => {
     const next = runtime.stopQueue.shift();
@@ -387,6 +385,7 @@ function setupGlobals(): void {
         onStatus: vi.fn((callback: VoiceStatusCallback) =>
           addListener(runtime.statusListeners, callback)
         ),
+        onSessionEnded: vi.fn(() => () => {}),
         getSettings: runtime.voiceInput.getSettings,
         checkMicPermission: runtime.voiceInput.checkMicPermission,
         requestMicPermission: runtime.voiceInput.requestMicPermission,
@@ -490,15 +489,20 @@ function flushRaf(): void {
   }
 }
 
+// The session the renderer last started, as main would tag its events.
+function liveSessionId(): string {
+  return runtime.voiceInput.start.mock.calls.at(-1)?.[0] ?? "no-session";
+}
+
 function emitStatus(status: string): void {
   for (const listener of runtime.statusListeners) {
-    listener(status);
+    listener({ sessionId: liveSessionId(), status });
   }
 }
 
 function emitError(error: VoiceInputError): void {
   for (const listener of runtime.errorListeners) {
-    listener(error);
+    listener({ sessionId: liveSessionId(), error });
   }
 }
 
@@ -608,10 +612,18 @@ describe("VoiceRecordingService adversarial", () => {
       await starting;
       const live = emitChunk(0, 300);
 
-      expect(runtime.voiceInput.sendAudioChunk.mock.calls.map(([chunk]) => chunk)).toEqual([
+      expect(runtime.voiceInput.sendAudioChunk.mock.calls.map(([, chunk]) => chunk)).toEqual([
         first,
         second,
         live,
+      ]);
+      // Held and live audio both carry the id the start went out with.
+      const sessionId = runtime.voiceInput.start.mock.calls[0]?.[0];
+      expect(sessionId).toEqual(expect.any(String));
+      expect(runtime.voiceInput.sendAudioChunk.mock.calls.map(([id]) => id)).toEqual([
+        sessionId,
+        sessionId,
+        sessionId,
       ]);
     });
 
@@ -692,7 +704,7 @@ describe("VoiceRecordingService adversarial", () => {
       backendStart.resolve({ ok: true });
       await starting;
 
-      const sent = runtime.voiceInput.sendAudioChunk.mock.calls.map(([chunk]) => chunk);
+      const sent = runtime.voiceInput.sendAudioChunk.mock.calls.map(([, chunk]) => chunk);
       expect(sent).toHaveLength(150);
       expect(sent[0]).toBe(chunks[10]);
       expect(sent[149]).toBe(chunks[159]);
@@ -737,7 +749,7 @@ describe("VoiceRecordingService adversarial", () => {
       await retargeting;
 
       expect(runtime.voiceFns.beginSession).toHaveBeenLastCalledWith(panelTwo);
-      expect(runtime.voiceInput.sendAudioChunk.mock.calls.map(([chunk]) => chunk)).toEqual([early]);
+      expect(runtime.voiceInput.sendAudioChunk.mock.calls.map(([, chunk]) => chunk)).toEqual([early]);
       expect(runtime.createdStreams[1]?.track.stop).not.toHaveBeenCalled();
     });
 
@@ -848,12 +860,12 @@ describe("VoiceRecordingService adversarial", () => {
   it("DOUBLE_STOP_SINGLE_REMOTE_STOP", async () => {
     const stopDeferred = deferred<void>();
     runtime.stopQueue.push(stopDeferred.promise);
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Panel One" });
     runtime.voiceState.activeTarget = { panelId: "panel-1", panelTitle: "Panel One" };
     runtime.voiceState.status = "recording";
     runtime.voiceState.panelBuffers["panel-1"] = createPanelBuffer();
-
-    const { voiceRecordingService } = await import("../VoiceRecordingService");
-    voiceRecordingService.initialize();
 
     const firstStop = voiceRecordingService.stop("Dictation stopped.");
     const secondStop = voiceRecordingService.stop("Dictation stopped.");
@@ -861,6 +873,7 @@ describe("VoiceRecordingService adversarial", () => {
     await Promise.all([firstStop, secondStop]);
 
     expect(runtime.voiceInput.stop).toHaveBeenCalledTimes(1);
+    expect(runtime.voiceInput.stop).toHaveBeenCalledWith(liveSessionId());
     expect(runtime.voiceFns.finishSession).toHaveBeenCalledTimes(1);
     expect(runtime.voiceFns.announce).toHaveBeenCalledTimes(1);
   });
@@ -1124,14 +1137,14 @@ describe("VoiceRecordingService adversarial", () => {
   it("STOP_DURING_CONNECTING_IGNORES_RACE", async () => {
     const stopDeferred = deferred<void>();
     runtime.stopQueue.push(stopDeferred.promise);
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Panel One" });
     runtime.voiceState.activeTarget = { panelId: "panel-1", panelTitle: "Panel One" };
     runtime.voiceState.status = "connecting";
     runtime.voiceState.panelBuffers["panel-1"] = createPanelBuffer({
       liveText: "partial",
     });
-
-    const { voiceRecordingService } = await import("../VoiceRecordingService");
-    voiceRecordingService.initialize();
 
     const stopPromise = voiceRecordingService.stop("Dictation stopped.");
     await vi.waitFor(() => {

@@ -513,6 +513,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
   const startSession = async (session: VoiceSession, startedAt: number): Promise<void> => {
     const svc = await getService();
     const serviceReadyAt = performance.now();
+    // The renderer went away during the import — nothing is left to record for.
+    if (session.sender.isDestroyed()) endSession(session, "cancelled");
     if (!isLive(session)) throw supersededError();
     // Snapshot transcription settings at session start (model, language, API key).
     // Correction settings are read live from store per-event so mid-session changes apply.

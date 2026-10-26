@@ -293,7 +293,7 @@ async function bringSessionReady(
   service: OpenAITranscriptionProviderInstance,
   settings: VoiceInputSettings = BASE_SETTINGS
 ): Promise<{ socket: MockWebSocket; result: { ok: true } | { ok: false; error: string } }> {
-  const startPromise = service.start(settings);
+  const startPromise = service.start(settings, "session-1");
   // start() runs synchronously through to assigning pendingStart; allow the
   // microtask queue to settle so the constructor + onopen wiring is in place.
   await Promise.resolve();
@@ -337,14 +337,14 @@ describe("OpenAITranscriptionProvider", () => {
 
   it("fails to start when no OpenAI API key is configured", async () => {
     const service = new OpenAITranscriptionProvider();
-    const result = await service.start({ ...BASE_SETTINGS, openaiApiKey: "" });
+    const result = await service.start({ ...BASE_SETTINGS, openaiApiKey: "" }, "session-1");
     expect(result).toEqual({ ok: false, error: "OpenAI API key not configured" });
     expect(instances).toHaveLength(0);
   });
 
   it("constructs the WebSocket with the realtime URL and auth headers", async () => {
     const service = new OpenAITranscriptionProvider();
-    void service.start({ ...BASE_SETTINGS, openaiApiKey: "sk-abc" });
+    void service.start({ ...BASE_SETTINGS, openaiApiKey: "sk-abc" }, "session-1");
     await Promise.resolve();
     const socket = latestInstance();
     expect(socket.url).toBe("wss://api.openai.com/v1/realtime?intent=transcription");
@@ -359,7 +359,7 @@ describe("OpenAITranscriptionProvider", () => {
       if (e.type === "status") statuses.push(e.status);
     });
 
-    const startPromise = service.start(BASE_SETTINGS);
+    const startPromise = service.start(BASE_SETTINGS, "session-1");
     expect(statuses).toEqual(["connecting"]);
     await Promise.resolve();
     const socket = latestInstance();
@@ -402,7 +402,7 @@ describe("OpenAITranscriptionProvider", () => {
 
   it("sends the configured language as a one-element languages array", async () => {
     const service = new OpenAITranscriptionProvider();
-    void service.start({ ...BASE_SETTINGS, language: "es" });
+    void service.start({ ...BASE_SETTINGS, language: "es" }, "session-1");
     await Promise.resolve();
     const socket = latestInstance();
     socket.simulateOpen();
@@ -414,7 +414,7 @@ describe("OpenAITranscriptionProvider", () => {
 
   it("omits languages and the language directive for auto-detect", async () => {
     const service = new OpenAITranscriptionProvider();
-    void service.start({ ...BASE_SETTINGS, language: "auto", keyterms: ["Daintree"] });
+    void service.start({ ...BASE_SETTINGS, language: "auto", keyterms: ["Daintree"] }, "session-1");
     await Promise.resolve();
     const socket = latestInstance();
     socket.simulateOpen();
@@ -427,7 +427,7 @@ describe("OpenAITranscriptionProvider", () => {
 
   it("adds a no-translate directive to the prompt for a fixed language, even without keyterms", async () => {
     const service = new OpenAITranscriptionProvider();
-    void service.start({ ...BASE_SETTINGS, language: "es" });
+    void service.start({ ...BASE_SETTINGS, language: "es" }, "session-1");
     await Promise.resolve();
     const socket = latestInstance();
     socket.simulateOpen();
@@ -439,7 +439,7 @@ describe("OpenAITranscriptionProvider", () => {
 
   it("sends no directive for an unknown language code, keeping the prompt bounded", async () => {
     const service = new OpenAITranscriptionProvider();
-    void service.start({ ...BASE_SETTINGS, language: "x".repeat(380) });
+    void service.start({ ...BASE_SETTINGS, language: "x".repeat(380) }, "session-1");
     await Promise.resolve();
     const socket = latestInstance();
     socket.simulateOpen();
@@ -452,7 +452,7 @@ describe("OpenAITranscriptionProvider", () => {
     ["whitespace-only", "   "],
   ])("falls back to en when the configured language is %s", async (_label, language) => {
     const service = new OpenAITranscriptionProvider();
-    void service.start({ ...BASE_SETTINGS, language });
+    void service.start({ ...BASE_SETTINGS, language }, "session-1");
     await Promise.resolve();
     const socket = latestInstance();
     socket.simulateOpen();
@@ -470,7 +470,10 @@ describe("OpenAITranscriptionProvider", () => {
     // arbitrary patch — a non-string here would otherwise throw inside the
     // WebSocket `open` handler, outside any try/catch.
     const service = new OpenAITranscriptionProvider();
-    void service.start({ ...BASE_SETTINGS, language } as unknown as VoiceInputSettings);
+    void service.start(
+      { ...BASE_SETTINGS, language } as unknown as VoiceInputSettings,
+      "session-1"
+    );
     await Promise.resolve();
     const socket = latestInstance();
     expect(() => socket.simulateOpen()).not.toThrow();
@@ -482,7 +485,7 @@ describe("OpenAITranscriptionProvider", () => {
     // `gpt-live-transcribe` supports both, which is what retired the old
     // MODEL_SUPPORTS_PROMPT gate.
     const service = new OpenAITranscriptionProvider();
-    void service.start({ ...BASE_SETTINGS, keyterms: ["Daintree", "xterm"] });
+    void service.start({ ...BASE_SETTINGS, keyterms: ["Daintree", "xterm"] }, "session-1");
     await Promise.resolve();
     const socket = latestInstance();
     socket.simulateOpen();
@@ -498,10 +501,13 @@ describe("OpenAITranscriptionProvider", () => {
     // A single forbidden character rejects the ENTIRE session.update, so an
     // unsanitized keyterm would kill the whole dictation session.
     const service = new OpenAITranscriptionProvider();
-    void service.start({
-      ...BASE_SETTINGS,
-      keyterms: ["Daintree", "<div>", `a${String.fromCharCode(10)}b`, "xterm"],
-    });
+    void service.start(
+      {
+        ...BASE_SETTINGS,
+        keyterms: ["Daintree", "<div>", `a${String.fromCharCode(10)}b`, "xterm"],
+      },
+      "session-1"
+    );
     await Promise.resolve();
     const socket = latestInstance();
     socket.simulateOpen();
@@ -516,7 +522,7 @@ describe("OpenAITranscriptionProvider", () => {
 
   it("omits both keywords and prompt for auto language with no frozen keyterms", async () => {
     const service = new OpenAITranscriptionProvider();
-    void service.start({ ...BASE_SETTINGS, language: "auto" });
+    void service.start({ ...BASE_SETTINGS, language: "auto" }, "session-1");
     await Promise.resolve();
     const socket = latestInstance();
     socket.simulateOpen();
@@ -535,7 +541,7 @@ describe("OpenAITranscriptionProvider", () => {
     const echoedPrompt = "echoed-prompt-sentinel";
 
     const service = new OpenAITranscriptionProvider();
-    void service.start({ ...BASE_SETTINGS, keyterms: [sentTerm] });
+    void service.start({ ...BASE_SETTINGS, keyterms: [sentTerm] }, "session-1");
     await Promise.resolve();
     const socket = latestInstance();
     socket.simulateOpen();
@@ -574,7 +580,10 @@ describe("OpenAITranscriptionProvider", () => {
   it("omits both keywords and prompt when every keyterm is rejected (auto language)", async () => {
     // Never send `[]` / `""` — omit the fields entirely.
     const service = new OpenAITranscriptionProvider();
-    void service.start({ ...BASE_SETTINGS, language: "auto", keyterms: ["<a>", "b>c"] });
+    void service.start(
+      { ...BASE_SETTINGS, language: "auto", keyterms: ["<a>", "b>c"] },
+      "session-1"
+    );
     await Promise.resolve();
     const socket = latestInstance();
     socket.simulateOpen();
@@ -611,7 +620,7 @@ describe("OpenAITranscriptionProvider", () => {
 
   it("settles a pending start when the session is stopped before session.updated", async () => {
     const service = new OpenAITranscriptionProvider();
-    const startPromise = service.start(BASE_SETTINGS);
+    const startPromise = service.start(BASE_SETTINGS, "session-1");
     await Promise.resolve();
     latestInstance().simulateOpen();
     // No session.updated yet — stop before ready.
@@ -629,7 +638,7 @@ describe("OpenAITranscriptionProvider", () => {
     const events: VoiceTranscriptionEvent[] = [];
     service.onEvent((e) => events.push(e));
 
-    const secondPromise = service.start(BASE_SETTINGS);
+    const secondPromise = service.start(BASE_SETTINGS, "session-1");
     const idleBeforeConnect = events.filter((e) => e.type === "status" && e.status === "idle");
     expect(idleBeforeConnect).toHaveLength(0);
 
@@ -647,7 +656,7 @@ describe("OpenAITranscriptionProvider", () => {
       if (e.type === "error") errors.push(e.error.message);
     });
 
-    const startPromise = service.start(BASE_SETTINGS);
+    const startPromise = service.start(BASE_SETTINGS, "session-1");
     await Promise.resolve();
     const socket = latestInstance();
     socket.simulateOpen();
@@ -790,7 +799,7 @@ describe("OpenAITranscriptionProvider", () => {
 
   it("buffers pre-connect audio chunks and flushes them after session.updated", async () => {
     const service = new OpenAITranscriptionProvider();
-    const startPromise = service.start(BASE_SETTINGS);
+    const startPromise = service.start(BASE_SETTINGS, "session-1");
     await Promise.resolve();
     const socket = latestInstance();
 
@@ -821,7 +830,7 @@ describe("OpenAITranscriptionProvider", () => {
     const service = new OpenAITranscriptionProvider();
     const events: VoiceTranscriptionEvent[] = [];
     service.onEvent((e) => events.push(e));
-    void service.start(BASE_SETTINGS);
+    void service.start(BASE_SETTINGS, "session-1");
     await Promise.resolve();
 
     // Push 105 chunks before session.updated — last 5 should be dropped.
@@ -1046,7 +1055,7 @@ describe("OpenAITranscriptionProvider", () => {
     const staleWorker = latestVadWorker();
 
     // Replace the session — the first worker is now stale.
-    const secondPromise = service.start(BASE_SETTINGS);
+    const secondPromise = service.start(BASE_SETTINGS, "session-1");
     await Promise.resolve();
     const secondSocket = latestInstance();
     secondSocket.simulateOpen();
@@ -1122,7 +1131,7 @@ describe("OpenAITranscriptionProvider", () => {
     await bringSessionReady(service);
     const staleWorker = latestVadWorker();
 
-    const secondPromise = service.start(BASE_SETTINGS);
+    const secondPromise = service.start(BASE_SETTINGS, "session-1");
     await Promise.resolve();
     const secondSocket = latestInstance();
     secondSocket.simulateOpen();
@@ -1664,7 +1673,7 @@ describe("OpenAITranscriptionProvider", () => {
           if (e.type === "complete") completes.push(e.text);
         });
 
-        const startPromise = service.start(BASE_SETTINGS);
+        const startPromise = service.start(BASE_SETTINGS, "session-1");
         await Promise.resolve();
         const socket = latestInstance();
         if (openFirst) socket.simulateOpen();
@@ -1710,7 +1719,7 @@ describe("OpenAITranscriptionProvider", () => {
         if (e.type === "status") statuses.push(e.status);
       });
 
-      void service.start(BASE_SETTINGS);
+      void service.start(BASE_SETTINGS, "session-1");
       await Promise.resolve();
       const socket = latestInstance();
       service.sendAudioChunk(new Uint8Array(4_798).buffer);
@@ -1728,7 +1737,7 @@ describe("OpenAITranscriptionProvider", () => {
         if (e.type === "status") statuses.push(e.status);
       });
 
-      const startPromise = service.start(BASE_SETTINGS);
+      const startPromise = service.start(BASE_SETTINGS, "session-1");
       await Promise.resolve();
       const socket = latestInstance();
       feedCommittableAudio(service);
@@ -1756,7 +1765,7 @@ describe("OpenAITranscriptionProvider", () => {
         if (e.type === "status") statuses.push(e.status);
       });
 
-      void service.start(BASE_SETTINGS);
+      void service.start(BASE_SETTINGS, "session-1");
       await Promise.resolve();
       const socket = latestInstance();
       feedCommittableAudio(service);
@@ -1782,7 +1791,7 @@ describe("OpenAITranscriptionProvider", () => {
         if (e.type === "status") statuses.push(e.status);
       });
 
-      void service.start(BASE_SETTINGS);
+      void service.start(BASE_SETTINGS, "session-1");
       await Promise.resolve();
       const socket = latestInstance();
       feedCommittableAudio(service);
@@ -1800,7 +1809,7 @@ describe("OpenAITranscriptionProvider", () => {
 
     it("repeated stops while waiting join the same stop", async () => {
       const service = new OpenAITranscriptionProvider();
-      void service.start(BASE_SETTINGS);
+      void service.start(BASE_SETTINGS, "session-1");
       await Promise.resolve();
       const socket = latestInstance();
       feedCommittableAudio(service);
@@ -1824,7 +1833,7 @@ describe("OpenAITranscriptionProvider", () => {
         if (e.type === "status") statuses.push(e.status);
       });
 
-      void service.start(BASE_SETTINGS);
+      void service.start(BASE_SETTINGS, "session-1");
       await Promise.resolve();
       const socket = latestInstance();
       feedCommittableAudio(service);
@@ -1846,7 +1855,7 @@ describe("OpenAITranscriptionProvider", () => {
         if (e.type === "status") statuses.push(e.status);
       });
 
-      void service.start(BASE_SETTINGS);
+      void service.start(BASE_SETTINGS, "session-1");
       await Promise.resolve();
       const socket = latestInstance();
       socket.simulateOpen();
@@ -1868,7 +1877,7 @@ describe("OpenAITranscriptionProvider", () => {
         if (e.type === "status") statuses.push(e.status);
       });
 
-      const startPromise = service.start(BASE_SETTINGS);
+      const startPromise = service.start(BASE_SETTINGS, "session-1");
       await Promise.resolve();
       vi.advanceTimersByTime(8_000);
       feedCommittableAudio(service);
@@ -1887,7 +1896,7 @@ describe("OpenAITranscriptionProvider", () => {
         if (e.type === "status") statuses.push(e.status);
       });
 
-      void service.start(BASE_SETTINGS);
+      void service.start(BASE_SETTINGS, "session-1");
       await Promise.resolve();
       feedCommittableAudio(service);
       const stopPromise = service.stopGracefully();
@@ -1941,7 +1950,7 @@ describe("OpenAITranscriptionProvider", () => {
     const drainPromise = service.stopGracefully();
     // Don't simulate completion — drain is still in flight when start() runs.
 
-    const secondStart = service.start(BASE_SETTINGS);
+    const secondStart = service.start(BASE_SETTINGS, "session-1");
     await Promise.resolve();
     const secondSocket = latestInstance();
     secondSocket.simulateOpen();
@@ -1970,7 +1979,7 @@ describe("OpenAITranscriptionProvider", () => {
     const events: VoiceTranscriptionEvent[] = [];
     service.onEvent((e) => events.push(e));
 
-    const startPromise = service.start(BASE_SETTINGS);
+    const startPromise = service.start(BASE_SETTINGS, "session-1");
     await Promise.resolve();
     const socket = latestInstance();
     socket.simulateOpen();
@@ -2035,7 +2044,7 @@ describe("OpenAITranscriptionProvider", () => {
     throwOnConstruct = true;
     constructError = new Error("ECONNREFUSED");
     const service = new OpenAITranscriptionProvider();
-    const result = await service.start(BASE_SETTINGS);
+    const result = await service.start(BASE_SETTINGS, "session-1");
     expect(result).toEqual({ ok: false, error: "ECONNREFUSED" });
   });
 
@@ -2050,7 +2059,7 @@ describe("OpenAITranscriptionProvider", () => {
 
     const { socket: firstSocket } = await bringSessionReady(service);
     // Start a second session; the first socket is now stale.
-    const secondPromise = service.start(BASE_SETTINGS);
+    const secondPromise = service.start(BASE_SETTINGS, "session-1");
     await Promise.resolve();
     const secondSocket = latestInstance();
     secondSocket.simulateOpen();
@@ -2140,7 +2149,7 @@ describe("OpenAITranscriptionProvider", () => {
     const { socket: firstSocket } = await bringSessionReady(service);
 
     // Replace the session — the first socket and its heartbeat are now stale.
-    const secondPromise = service.start(BASE_SETTINGS);
+    const secondPromise = service.start(BASE_SETTINGS, "session-1");
     await Promise.resolve();
     const secondSocket = latestInstance();
     secondSocket.simulateOpen();
@@ -2283,7 +2292,7 @@ describe("OpenAITranscriptionProvider", () => {
 
   it("enforces the pre-connect buffer byte cap independently of the chunk cap", async () => {
     const service = new OpenAITranscriptionProvider();
-    void service.start(BASE_SETTINGS);
+    void service.start(BASE_SETTINGS, "session-1");
     await Promise.resolve();
 
     // Five 40KB chunks = 200KB, over the 150KB ceiling but well under the
@@ -2452,7 +2461,7 @@ describe("OpenAITranscriptionProvider start timing diagnostics", () => {
 
   it("times socket open and session.updated from provider start", async () => {
     const service = new OpenAITranscriptionProvider();
-    const startPromise = service.start(BASE_SETTINGS);
+    const startPromise = service.start(BASE_SETTINGS, "session-1");
     await Promise.resolve();
     const socket = latestInstance();
     now = 1_250;
@@ -2887,7 +2896,7 @@ describe("OpenAITranscriptionProvider — item identity and ordering (#13109)", 
       const service = new OpenAITranscriptionProvider();
       const { events, order } = track(service);
 
-      void service.start(BASE_SETTINGS);
+      void service.start(BASE_SETTINGS, "session-1");
       await Promise.resolve();
       const socket = latestInstance();
       feedCommittableAudio(service);
@@ -2911,7 +2920,7 @@ describe("OpenAITranscriptionProvider — item identity and ordering (#13109)", 
       const service = new OpenAITranscriptionProvider();
       const { events, order } = track(service);
 
-      void service.start(BASE_SETTINGS);
+      void service.start(BASE_SETTINGS, "session-1");
       await Promise.resolve();
       const socket = latestInstance();
       feedCommittableAudio(service);
@@ -2974,7 +2983,7 @@ describe("OpenAITranscriptionProvider — item identity and ordering (#13109)", 
       const service = new OpenAITranscriptionProvider();
       const { events } = track(service);
 
-      void service.start(BASE_SETTINGS);
+      void service.start(BASE_SETTINGS, "session-1");
       await Promise.resolve();
       feedCommittableAudio(service);
       const stopPromise = service.stopGracefully();
