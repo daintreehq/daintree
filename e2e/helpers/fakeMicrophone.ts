@@ -1,5 +1,6 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import type { ElectronApplication } from "@playwright/test";
 import { launchApp, type AppContext, type LaunchOptions } from "./launch";
 
 const SAMPLE_RATE = 24_000;
@@ -61,6 +62,18 @@ export function fakeMicrophoneArgs(wavPath: string, loop = true): string[] {
     "--use-fake-ui-for-media-stream",
     `--use-file-for-fake-audio-capture=${wavPath}${loop ? "" : "%noloop"}`,
   ];
+}
+
+/**
+ * macOS and Windows ask the OS about the microphone before the renderer reaches
+ * getUserMedia, and the fake capture device never consults the OS. Answering
+ * "granted" keeps a machine without microphone authorization from stalling the run.
+ */
+export async function stubNativeMicrophonePermission(app: ElectronApplication): Promise<void> {
+  await app.evaluate(({ systemPreferences }) => {
+    systemPreferences.getMediaAccessStatus = () => "granted";
+    systemPreferences.askForMediaAccess = async () => true;
+  });
 }
 
 export interface FakeMicLaunchOptions extends LaunchOptions {

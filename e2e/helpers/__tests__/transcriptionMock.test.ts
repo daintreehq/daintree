@@ -83,6 +83,34 @@ describe("transcription mock — OpenAI protocol", () => {
   });
 });
 
+describe("transcription mock — silence and ordering", () => {
+  it("answers an empty scripted segment with an authoritative empty completion", async () => {
+    mock.script({ text: "" });
+    const { ws, messages } = await connect(mock.openaiUrl);
+    ws.send(
+      JSON.stringify({
+        type: "input_audio_buffer.append",
+        audio: Buffer.alloc(6_000).toString("base64"),
+      })
+    );
+    ws.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+    await until(() =>
+      messages.some((m) => m.type === "conversation.item.input_audio_transcription.completed")
+    );
+    expect(messages.some((m) => m.type === "conversation.item.done")).toBe(false);
+  });
+
+  it("holds a Deepgram close until an earlier delayed Finalize result has been sent", async () => {
+    mock.script({ text: "slow", delayMs: 150 });
+    const { ws, messages } = await connect(mock.deepgramUrl);
+    ws.send(Buffer.alloc(3_000));
+    ws.send(JSON.stringify({ type: "Finalize" }));
+    ws.send(JSON.stringify({ type: "CloseStream" }));
+    await new Promise<void>((resolve) => ws.once("close", () => resolve()));
+    expect(messages.some((m) => m.is_final === true)).toBe(true);
+  });
+});
+
 describe("transcription mock — Deepgram protocol", () => {
   it("records binary audio, finalizes on Finalize, and flushes then closes on CloseStream", async () => {
     mock.script({ text: "first" }, { text: "second", deltas: ["sec"] });

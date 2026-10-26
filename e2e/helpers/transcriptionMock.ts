@@ -119,6 +119,8 @@ export async function createTranscriptionMock(): Promise<TranscriptionMock> {
   const live = new Map<number, { ws: WebSocket; conn: MockConnection }>();
   const timers = new Set<NodeJS.Timeout>();
   const bytesSinceBoundary = new Map<number, number>();
+  // When the last scheduled playback on each connection lands, so a close never overtakes it.
+  const playbackEndsAt = new Map<number, number>();
 
   const later = (ms: number, fn: () => void): void => {
     if (ms <= 0) return fn();
@@ -132,6 +134,15 @@ export async function createTranscriptionMock(): Promise<TranscriptionMock> {
   function playOpenAI(conn: MockConnection, segment: ScriptedSegment): void {
     for (const delta of segment.deltas ?? []) {
       conn.send({ type: "conversation.item.input_audio_transcription.delta", delta });
+    }
+    // Silence: the endpoint's verdict is an authoritative `completed` with an empty transcript,
+    // the only event the provider treats as terminal for an item with nothing to say.
+    if (!segment.text) {
+      conn.send({
+        type: "conversation.item.input_audio_transcription.completed",
+        transcript: "",
+      });
+      return;
     }
     // The `?intent=transcription` endpoint: an item shell, then the done event carrying the text.
     conn.send({ type: "conversation.item.added", item: { content: [{ type: "input_audio" }] } });
@@ -170,13 +181,15 @@ export async function createTranscriptionMock(): Promise<TranscriptionMock> {
     bytesSinceBoundary.set(conn.id, 0);
     const segment = pending >= minBytes ? queue.shift() : undefined;
     if (segment) {
-      later(segment.delayMs ?? 0, () => {
+      const delay = segment.delayMs ?? 0;
+      playbackEndsAt.set(conn.id, Math.max(playbackEndsAt.get(conn.id) ?? 0, Date.now() + delay));
+      later(delay, () => {
         if (conn.provider === "openai") playOpenAI(conn, segment);
         else playDeepgram(conn, segment, kind === "finalize");
       });
     }
     hooks.onBoundary?.(conn, kind);
-    return segment?.delayMs ?? 0;
+    return Math.max(0, (playbackEndsAt.get(conn.id) ?? 0) - Date.now());
   }
 
   wss.on("connection", (ws, req) => {
@@ -325,6 +338,7 @@ export async function createTranscriptionMock(): Promise<TranscriptionMock> {
       connections = [];
       autoHandshake = true;
       bytesSinceBoundary.clear();
+      playbackEndsAt.clear();
       for (const key of Object.keys(hooks)) delete hooks[key as keyof MockHooks];
     },
     async close() {
