@@ -3,7 +3,9 @@ import { renderHook, act } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
 type FocusPayload =
-  { intent: "focus-next-waiting" } | { intent: "open-assistant"; subject: Record<string, unknown> };
+  | { intent: "focus-next-waiting" }
+  | { intent: "focus-panel"; panelId: string }
+  | { intent: "open-assistant"; subject: Record<string, unknown> };
 
 const onFocusOnActivateMock = vi.hoisted(() =>
   vi.fn<(cb: (payload: FocusPayload) => void) => () => void>()
@@ -28,6 +30,9 @@ vi.mock("@/services/ActionService", () => ({
 
 const activateLaneMock = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
 vi.mock("@/services/assistantSubject", () => ({ activateAssistantLane: activateLaneMock }));
+
+const notifyMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
 
 import { useFocusOnActivateIntent } from "../useFocusOnActivateIntent";
 
@@ -183,6 +188,29 @@ describe("useFocusOnActivateIntent", () => {
     });
 
     expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it("focuses a named terminal that is still there without saying anything", async () => {
+    dispatchMock.mockResolvedValue({ ok: true, data: undefined });
+    renderHook(() => useFocusOnActivateIntent(true));
+    await act(async () => {
+      lastCallback?.({ intent: "focus-panel", panelId: "t1" });
+    });
+    expect(dispatchMock).toHaveBeenCalledWith("panel.focus", { panelId: "t1" });
+    expect(notifyMock).not.toHaveBeenCalled();
+  });
+
+  it("says once, in plain words, that the named terminal is gone", async () => {
+    dispatchMock.mockResolvedValue({
+      ok: false,
+      error: { code: "EXECUTION_ERROR", message: "Terminal panel no longer exists" },
+    });
+    renderHook(() => useFocusOnActivateIntent(true));
+    await act(async () => {
+      lastCallback?.({ intent: "focus-panel", panelId: "t1" });
+    });
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+    expect(notifyMock).toHaveBeenCalledWith(expect.objectContaining({ title: "Terminal is gone" }));
   });
 
   it("unsubscribes on unmount", () => {

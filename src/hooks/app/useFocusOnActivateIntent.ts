@@ -3,6 +3,7 @@ import { actionService } from "@/services/ActionService";
 import type { ProjectFocusOnActivateIntent } from "@shared/types/ipc/project";
 import type { ActionId } from "@shared/types/actions";
 import { logWarn } from "@/utils/logger";
+import { notify } from "@/lib/notify";
 import { activateAssistantLane } from "@/services/assistantSubject";
 
 /**
@@ -67,7 +68,17 @@ export function useFocusOnActivateIntent(isStateLoaded: boolean): void {
       return;
     }
     if (pending.intent === "focus-panel") {
-      void actionService.dispatch("panel.focus", { panelId: pending.panelId });
+      // The terminal can exit or be trashed while the project switch is in flight.
+      void actionService.dispatch("panel.focus", { panelId: pending.panelId }).then((result) => {
+        if (result.ok) return;
+        notify({
+          type: "warning",
+          title: "Terminal is gone",
+          message: "It closed while its project was opening. You're in that project now.",
+          context: { eventKind: "uiFeedback" },
+          replaceKey: "focus-on-activate:terminal-gone",
+        });
+      });
       return;
     }
     void actionService.dispatch("agent.focusNextWaiting");
