@@ -3,6 +3,7 @@ import type { VoiceRecordingTarget } from "@/store/voiceRecordingStore";
 import type { VoiceInputError } from "@shared/types";
 
 type VoiceStatusCallback = (payload: { sessionId: string; status: string }) => void;
+type VoiceSessionEndedCallback = (payload: { sessionId: string; reason: string }) => void;
 type VoiceErrorCallback = (payload: { sessionId: string; error: VoiceInputError }) => void;
 type VoiceCompleteCallback = (payload: {
   sessionId: string;
@@ -135,6 +136,7 @@ const runtime = vi.hoisted(() => ({
     bumpExternalDraftRevision: vi.fn<() => void>(),
   },
   statusListeners: new Set<VoiceStatusCallback>(),
+  sessionEndedListeners: new Set<VoiceSessionEndedCallback>(),
   errorListeners: new Set<VoiceErrorCallback>(),
   completeListeners: new Set<VoiceCompleteCallback>(),
   rafCallbacks: new Map<number, FrameRequestCallback>(),
@@ -211,6 +213,7 @@ function resetRuntime(): void {
   Object.values(runtime.voiceFns).forEach((fn) => fn.mockReset());
   Object.values(runtime.terminalInputFns).forEach((fn) => fn.mockReset());
   runtime.statusListeners.clear();
+  runtime.sessionEndedListeners.clear();
   runtime.errorListeners.clear();
   runtime.completeListeners.clear();
   runtime.rafCallbacks.clear();
@@ -424,7 +427,9 @@ function setupGlobals(): void {
         onStatus: vi.fn((callback: VoiceStatusCallback) =>
           addListener(runtime.statusListeners, callback)
         ),
-        onSessionEnded: vi.fn(() => () => {}),
+        onSessionEnded: vi.fn((callback: VoiceSessionEndedCallback) =>
+          addListener(runtime.sessionEndedListeners, callback)
+        ),
         getSettings: runtime.voiceInput.getSettings,
         checkMicPermission: runtime.voiceInput.checkMicPermission,
         requestMicPermission: runtime.voiceInput.requestMicPermission,
@@ -543,6 +548,12 @@ function liveSessionId(): string {
 function emitStatus(status: string): void {
   for (const listener of runtime.statusListeners) {
     listener({ sessionId: liveSessionId(), status });
+  }
+}
+
+function emitSessionEnded(reason: string): void {
+  for (const listener of runtime.sessionEndedListeners) {
+    listener({ sessionId: liveSessionId(), reason });
   }
 }
 
@@ -732,6 +743,77 @@ describe("VoiceRecordingService adversarial", () => {
       expect(runtime.drafts["panel-1"]).toBe("Yes, carry on");
       expect(runtime.voiceFns.finishSession).toHaveBeenCalledTimes(1);
       expect(runtime.createdStreams[0]!.track.stop).toHaveBeenCalled();
+    });
+
+    it("releases the mic and keeps the drained text when a start elsewhere replaces it (#14600)", async () => {
+      const drain = deferred<void>();
+      runtime.stopQueue.push(drain.promise);
+
+      const { voiceRecordingService } = await import("../VoiceRecordingService");
+      await voiceRecordingService.start(panelOne);
+      emitChunk(0, 100);
+
+      // Main drains this session for a start in another view.
+      emitStatus("finishing");
+      await vi.waitFor(() => {
+        expect(runtime.voiceInput.stop).toHaveBeenCalledWith(liveSessionId());
+      });
+      expect(runtime.createdStreams[0]!.track.stop).toHaveBeenCalled();
+      expect(runtime.voiceFns.finishSession).not.toHaveBeenCalled();
+
+      // The drain's last words still reach this view's draft.
+      emitComplete("Last words");
+      drain.resolve();
+      await vi.waitFor(() => {
+        expect(runtime.voiceFns.finishSession).toHaveBeenCalledTimes(1);
+      });
+      expect(runtime.drafts["panel-1"]).toBe("Last words");
+      expect(runtime.voiceFns.finishSession).toHaveBeenCalledWith(
+        expect.objectContaining({ nextStatus: "idle" })
+      );
+      expect(runtime.voiceInput.stop).toHaveBeenCalledTimes(1);
+      // No cleanup pass for a passage the user moved away from.
+      expect(runtime.voiceFns.setSessionCorrectedText).not.toHaveBeenCalled();
+    });
+
+    it("goes idle without an error when replaced while its backend start is pending (#14600)", async () => {
+      const backendStart = deferred<{ ok: boolean; error?: string }>();
+      runtime.startQueue.push(backendStart.promise);
+
+      const { voiceRecordingService } = await import("../VoiceRecordingService");
+      const starting = voiceRecordingService.start(panelOne);
+      await vi.waitFor(() => {
+        expect(runtime.voiceInput.start).toHaveBeenCalledTimes(1);
+      });
+
+      emitSessionEnded("superseded");
+      backendStart.resolve({ ok: false, error: "Voice session superseded" });
+      await starting;
+      await vi.waitFor(() => {
+        expect(runtime.voiceFns.finishSession).toHaveBeenCalledTimes(1);
+      });
+
+      expect(runtime.createdStreams[0]!.track.stop).toHaveBeenCalled();
+      expect(runtime.voiceFns.finishSession).toHaveBeenCalledWith(
+        expect.objectContaining({ nextStatus: "idle" })
+      );
+      expect(runtime.voiceFns.setLastError).not.toHaveBeenCalled();
+      expect(runtime.voiceInput.stop).not.toHaveBeenCalled();
+    });
+
+    it("ignores statuses from a session this view already finished", async () => {
+      const { voiceRecordingService } = await import("../VoiceRecordingService");
+      await voiceRecordingService.start(panelOne);
+      await voiceRecordingService.stop("Dictation stopped.", { skipRemoteStop: true });
+      runtime.voiceFns.setStatus.mockClear();
+
+      // Main is still draining it for a start elsewhere.
+      emitStatus("finishing");
+      emitStatus("reconnecting");
+      await settle();
+
+      expect(runtime.voiceFns.setStatus).not.toHaveBeenCalled();
+      expect(runtime.voiceInput.stop).not.toHaveBeenCalled();
     });
 
     it("keeps the worklet's final partial chunk and audio still in flight at the stop (#14603)", async () => {
@@ -1550,11 +1632,10 @@ describe("VoiceRecordingService adversarial", () => {
   });
 
   it("PAUSE_IGNORES_BACKEND_RECORDING_STATUS", async () => {
-    runtime.voiceState.activeTarget = { panelId: "panel-1", panelTitle: "Panel One" };
-    runtime.voiceState.status = "recording";
-
+    // A started session: the service only takes its own session's statuses.
     const { voiceRecordingService } = await import("../VoiceRecordingService");
-    voiceRecordingService.initialize();
+    await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Panel One" });
+    runtime.voiceState.status = "recording";
     runtime.voiceFns.setStatus.mockClear();
 
     voiceRecordingService.pause();
