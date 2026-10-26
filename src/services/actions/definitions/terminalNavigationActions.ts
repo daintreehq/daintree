@@ -2,6 +2,7 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
 import type { ActionId } from "@shared/types/actions";
 import { usePanelStore } from "@/store/panelStore";
+import { paneSurfaceHoldingFocus, requestPaneFocus } from "@/components/Terminal/paneFocusRequest";
 import { exitProjectHome } from "@/store/storeAccessors";
 import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 export function registerTerminalNavigationActions(
@@ -48,6 +49,27 @@ export function registerTerminalNavigationActions(
     keywords: ["last", "previous", "swap", "toggle", "tmux", "back"],
     run: async () => {
       usePanelStore.getState().focusAlternate();
+    },
+  }));
+
+  actions.set("terminal.toggleInputSurface", () => ({
+    id: "terminal.toggleInputSurface",
+    title: "Switch between hybrid input and terminal",
+    description:
+      "Move the keyboard between the focused agent pane's hybrid input and its terminal. Affects only this pane; a pane that can't take the hybrid input stays on its terminal",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    nonRepeatable: true,
+    keywords: ["hybrid", "input", "composer", "editor", "xterm", "switch", "toggle"],
+    run: async () => {
+      const { focusedId } = usePanelStore.getState();
+      if (!focusedId) return;
+      // A keyboard on neither surface (a toolbar button, say) is asked for the
+      // hybrid input, which the pane resolves to its terminal when it can't take it.
+      const target = paneSurfaceHoldingFocus(focusedId) === "hybridInput" ? "xterm" : "hybridInput";
+      requestPaneFocus(focusedId, target);
     },
   }));
 

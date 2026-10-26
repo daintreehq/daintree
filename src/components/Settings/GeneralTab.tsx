@@ -79,6 +79,7 @@ const CURATED_SHORTCUTS = [
       "terminal.focusNext",
       "terminal.focusPrevious",
       "terminal.focusAlternate",
+      "terminal.toggleInputSurface",
     ],
   },
   {

@@ -50,6 +50,7 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 | Focus next terminal | `⌃+Tab` | `Ctrl+Tab` |
 | Focus previous terminal | `⌃+⇧+Tab` | `Ctrl+Shift+Tab` |
 | Toggle focus between current and previously focused panel | `` ⌘+⌥+` `` | `` Ctrl+Alt+` `` |
+| Switch between hybrid input and terminal | `⌘+⌥+E` | `Ctrl+Alt+E` |
 | Switch to next tab in focused panel | `⌘+⇧+]` | `Ctrl+Shift+]` |
 | Switch to previous tab in focused panel | `⌘+⇧+[` | `Ctrl+Shift+[` |
 | Toggle maximize terminal | `⌃+⇧+F` | `Ctrl+Shift+F` |
