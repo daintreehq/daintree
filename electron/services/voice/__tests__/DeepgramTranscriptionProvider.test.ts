@@ -148,7 +148,8 @@ vi.mock("../../../utils/logger.js", () => ({
 }));
 
 // Import AFTER vi.mock so the mocked `ws` is used.
-const { DeepgramTranscriptionProvider } = await import("../DeepgramTranscriptionProvider.js");
+const { DeepgramTranscriptionProvider, estimateKeytermTokens } =
+  await import("../DeepgramTranscriptionProvider.js");
 const { AUDIO_BUFFER_MAX_CHUNKS } = await import("../TranscriptionProvider.js");
 const { logInfo } = await import("../../../utils/logger.js");
 type DeepgramTranscriptionProviderInstance = InstanceType<typeof DeepgramTranscriptionProvider>;
@@ -385,6 +386,57 @@ describe("DeepgramTranscriptionProvider", () => {
     provider.stop();
   });
 
+  it("estimates at least the tokens Deepgram counts for its published example", () => {
+    // Deepgram's own tokenizer counts this as 6.
+    expect(estimateKeytermTokens("Communications Praha LKPR")).toBeGreaterThanOrEqual(6);
+    // Every separator and digit costs a token, so a branch-named worktree costs its length.
+    expect(estimateKeytermTokens("feature/issue-14656-teach-dictation")).toBeGreaterThanOrEqual(12);
+    expect(estimateKeytermTokens("漢字")).toBe(2);
+  });
+
+  it("keeps every tier full of long names under Deepgram's 500-token cap, lowest priority dropped", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    // Dictionary, project, repository, names, commands and branch at their caps,
+    // with worktrees named after their branches, as Daintree names them.
+    const head = [
+      ...Array.from({ length: 36 }, (_, i) => `dictionary term ${i}`),
+      "Quartzline Orbit",
+      "Quartzline",
+      "Orbit",
+      "Studio",
+      ...["brindlewood", "corvaxjs", "drumlinkit", "elmwort", "fennickdb", "gorselyui"],
+    ];
+    const tail = [
+      ...Array.from({ length: 5 }, (_, i) => `Mac Studio ${i + 1}`),
+      ...Array.from({ length: 2 }, (_, i) => `Plugin Kit ${i + 1}`),
+      ...Array.from(
+        { length: 5 },
+        (_, i) => `feature/issue-1465${i}-teach-dictation-the-names-of-my-hosts`
+      ),
+      ...Array.from({ length: 12 }, (_, i) => `plugin creator ${i}`),
+      ...["feature", "teach", "dictation", "hosts"],
+    ];
+    const keyterms = [...head, ...tail];
+    expect(keyterms).toHaveLength(MAX_KEYTERMS);
+    const estimated = (terms: string[]) =>
+      terms.reduce((n, term) => n + estimateKeytermTokens(term), 0);
+    expect(estimated(keyterms)).toBeGreaterThan(500);
+
+    void provider.start({ ...BASE_SETTINGS, keyterms }, "session-1");
+    await Promise.resolve();
+    const url = new URL(latestInstance().url);
+    const injected = url.searchParams.getAll("keyterm");
+
+    expect(estimated(injected)).toBeLessThan(500);
+    expect(url.href.length).toBeLessThan(8192);
+    // The highest-priority tiers all go, and what follows keeps its order.
+    expect(injected.slice(0, head.length)).toEqual(head);
+    const rest = injected.slice(head.length);
+    expect(rest).toEqual(tail.filter((term) => rest.includes(term)));
+    expect(rest.length).toBeLessThan(tail.length);
+    provider.stop();
+  });
+
   it("drops empty/whitespace keyterms before injecting", async () => {
     const provider = new DeepgramTranscriptionProvider();
     void provider.start(
@@ -399,15 +451,16 @@ describe("DeepgramTranscriptionProvider", () => {
     provider.stop();
   });
 
-  it("enforces the aggregate-char budget on long keyterms", async () => {
+  it("enforces the aggregate budgets on long keyterms", async () => {
     const provider = new DeepgramTranscriptionProvider();
-    // Each term is 1000 chars; the ~3000-char aggregate guard admits only 3.
+    // Each term is 1000 chars, over 300 estimated tokens: the token guard admits
+    // only the first, inside the ~3000-char aggregate guard.
     const long = Array.from({ length: 10 }, (_, i) => `${"x".repeat(999)}${i}`);
     void provider.start({ ...BASE_SETTINGS, keyterms: long }, "session-1");
     await Promise.resolve();
     const injected = new URL(latestInstance().url).searchParams.getAll("keyterm");
 
-    expect(injected.length).toBe(3);
+    expect(injected).toEqual([long[0]]);
     expect(injected.reduce((n, t) => n + t.length, 0)).toBeLessThanOrEqual(3_000);
     provider.stop();
   });

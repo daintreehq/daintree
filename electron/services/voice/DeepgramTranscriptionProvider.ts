@@ -77,8 +77,9 @@ function isRetryableHttpStatus(statusCode: number | undefined): boolean {
 // tokenizer is syllable-based (~5 tokens per single-word term), so the term
 // count alone doesn't bound tokens. The URL takes every term assembly gathers
 // (MAX_KEYTERMS, inside the 100-term count, and derived so raising it can't
-// silently clip the last tiers), and a ~3000-char aggregate guard backstops
-// pathologically long terms before they blow the token budget.
+// silently clip the last tiers), a ~3000-char aggregate guard backstops
+// pathologically long terms, and an estimated-token guard keeps the total under
+// the token cap.
 const MAX_DEEPGRAM_URL_KEYTERMS = MAX_KEYTERMS;
 const MAX_DEEPGRAM_URL_KEYTERM_CHARS = 3_000;
 // The keyterms' share of the query string, measured as encoded, since a CJK
@@ -87,6 +88,12 @@ const MAX_DEEPGRAM_URL_KEYTERM_CHARS = 3_000;
 // servers. Deepgram publishes no URL cap, and a 414 on the first connect is
 // fatal: only a 400 triggers the keyterm retry.
 const MAX_DEEPGRAM_KEYTERM_QUERY_LENGTH = 6_000;
+// Deepgram 400s the upgrade when its tokenizer counts more than 500 tokens
+// across all keyterms, and that retry keeps only the head of the list: the
+// dictionary, with every context tier gone. Long worktree names and multi-word
+// commands can cross 500 in under 100 terms, so the estimate below trims the
+// lowest-priority terms first, with headroom for what it misjudges.
+const MAX_DEEPGRAM_KEYTERM_TOKENS = 450;
 // Keyterms arrive dictionary-first, newest first, so a first rejection retries
 // with just the head of the list before the last resort of sending none.
 const TRIMMED_RETRY_KEYTERMS = 20;
@@ -107,26 +114,44 @@ function encodedKeytermLength(term: string): number {
 }
 
 /**
+ * An over-estimate of the tokens Deepgram counts for one keyterm. Its tokenizer
+ * isn't published and counts roughly by syllable, so a run of ASCII letters
+ * costs one token per three letters (English syllables run longer), and every
+ * digit, symbol and other character costs one of its own.
+ */
+export function estimateKeytermTokens(term: string): number {
+  let tokens = 0;
+  for (const [piece] of term.matchAll(/[A-Za-z]+|\S/gu)) {
+    tokens += /^[A-Za-z]/.test(piece) ? Math.ceil(piece.length / 3) : 1;
+  }
+  return tokens;
+}
+
+/**
  * Conservatively trim assembled keyterms before they go on the streaming URL.
  * Drops empty/whitespace-only terms, then accepts terms in priority order until
- * the term-count, aggregate-char or encoded-length budget is reached, so the
- * lowest-priority terms are the ones left off.
+ * the term-count, aggregate-char, encoded-length or estimated-token budget is
+ * reached, so the lowest-priority terms are the ones left off.
  */
 function truncateKeytermsForUrl(keyterms: string[]): string[] {
   const result: string[] = [];
   let chars = 0;
   let encoded = 0;
+  let tokens = 0;
   for (const raw of keyterms) {
     const term = raw.trim();
     if (!term) continue;
     if (result.length >= MAX_DEEPGRAM_URL_KEYTERMS) break;
     const termEncoded = encodedKeytermLength(term);
+    const termTokens = estimateKeytermTokens(term);
     // Skip (don't stop on) an oversized term so smaller later terms still fit.
     if (chars + term.length > MAX_DEEPGRAM_URL_KEYTERM_CHARS) continue;
     if (encoded + termEncoded > MAX_DEEPGRAM_KEYTERM_QUERY_LENGTH) continue;
+    if (tokens + termTokens > MAX_DEEPGRAM_KEYTERM_TOKENS) continue;
     result.push(term);
     chars += term.length;
     encoded += termEncoded;
+    tokens += termTokens;
   }
   return result;
 }
