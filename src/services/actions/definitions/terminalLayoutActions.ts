@@ -463,7 +463,7 @@ export function registerTerminalLayoutActions(
     const next = { ...previous, strategy };
     state.setLayoutConfig(next);
     try {
-      await appClient.setState({ panelGridConfig: next as any });
+      await appClient.setState({ panelGridConfig: { strategy } as any });
     } catch (error) {
       state.setLayoutConfig(previous);
       throw error;
@@ -479,7 +479,7 @@ export function registerTerminalLayoutActions(
     const next = { ...previous, value };
     state.setLayoutConfig(next);
     try {
-      await appClient.setState({ panelGridConfig: next as any });
+      await appClient.setState({ panelGridConfig: { value } as any });
     } catch (error) {
       state.setLayoutConfig(previous);
       throw error;

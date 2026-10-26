@@ -1874,6 +1874,32 @@ describe("app:set-state handler", () => {
     expect(written).toMatchObject({ sidebarWidth: 350, hasSeenWelcome: true, focusMode: true });
   });
 
+  it("changes the grid strategy without touching the stored count", async () => {
+    vi.mocked(storeModule.store.get).mockImplementation(((key: string) =>
+      key === "appState"
+        ? { terminals: [], panelGridConfig: { strategy: "automatic", value: 6 } }
+        : undefined) as never);
+    await invokeSetState({ panelGridConfig: { strategy: "fixed-rows" } });
+    const calls = vi.mocked(storeModule.store.set).mock.calls as unknown as unknown[][];
+    expect((calls[0]![1] as Record<string, unknown>).panelGridConfig).toEqual({
+      strategy: "fixed-rows",
+      value: 6,
+    });
+  });
+
+  it("changes the grid count without touching the stored strategy", async () => {
+    vi.mocked(storeModule.store.get).mockImplementation(((key: string) =>
+      key === "appState"
+        ? { terminals: [], panelGridConfig: { strategy: "fixed-columns", value: 3 } }
+        : undefined) as never);
+    await invokeSetState({ panelGridConfig: { value: 5 } });
+    const calls = vi.mocked(storeModule.store.set).mock.calls as unknown as unknown[][];
+    expect((calls[0]![1] as Record<string, unknown>).panelGridConfig).toEqual({
+      strategy: "fixed-columns",
+      value: 5,
+    });
+  });
+
   it("drops cleared fields from the merged object instead of writing undefined", async () => {
     vi.mocked(storeModule.store.get).mockImplementation(((key: string) => {
       if (key === "appState") {
@@ -2202,8 +2228,11 @@ describe("app:set-state while another screen drives the view's project", () => {
       "proj-1",
       expect.objectContaining({ clientId: "local" })
     );
-    expect(written()).toMatchObject({ sidebarWidth: 420, diagnosticsHeight: 300 });
-    expect(written()).not.toHaveProperty("panelGridConfig");
+    expect(written()).toMatchObject({
+      sidebarWidth: 420,
+      diagnosticsHeight: 300,
+      panelGridConfig: mixed.panelGridConfig,
+    });
     expect(written()).not.toHaveProperty("activeWorktreeId");
     expect(written()).not.toHaveProperty("focusMode");
   });

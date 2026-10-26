@@ -206,7 +206,7 @@ These were open questions with defaults chosen; each matches the code today.
 
 - One host per window; Cmd/Ctrl-click opens a new window.
 - One driver per project with explicit takeover — and exactly one driving **endpoint**, not every window of the driving client. Watching views see terminal output live, follow the driver's panels from the host's saved state and its navigation from its reports, and stay read-only.
-- Panel layout and the terminal list are host-owned; zoom, sidebar widths, panel sizes and palette habits stay per client.
+- The terminal list is host-owned; the grid layout (strategy and count), zoom, sidebar widths, panel sizes and palette habits stay per client.
 - Credentials are per host; nothing is synced. File export/import is refused in remote windows; settings move to a host only through Copy settings, an explicit one-shot push from this machine (below). No host-to-this-machine or host-to-host copy, no "copy project setup", and project ids are never auto-committed.
 - A headless Linux host accepts that plugin secrets are unavailable, and the UI says why.
 - Linux installs default to the AppImage, which needs no root; a host already on the deb keeps the deb.

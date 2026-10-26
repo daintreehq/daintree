@@ -11,6 +11,7 @@ import {
   peekDriveLeaseService,
 } from "../../../services/DriveLeaseService.js";
 import { APP_STATE_FIELD_OWNERSHIP } from "../../../storeOwnership.js";
+import type { PanelGridConfig } from "../../../../shared/types/config.js";
 import { AppStateTerminalEntrySchema, filterValidTerminalEntries } from "../../../schemas/ipc.js";
 import { filterRestorableTerminalSnapshots } from "../../../services/projectStateRestore.js";
 import { getCrashRecoveryService } from "../../../services/CrashRecoveryService.js";
@@ -983,10 +984,13 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       }
 
       if ("panelGridConfig" in partialState) {
-        const gridConfig = partialState.panelGridConfig;
+        // A patch may carry just one of the two fields; the other is read from the
+        // store here so a view with an old copy can't write its stale value back.
+        const gridConfig = partialState.panelGridConfig as Partial<PanelGridConfig> | undefined;
         if (gridConfig && typeof gridConfig === "object") {
-          const strategy = gridConfig.strategy;
-          const value = Number(gridConfig.value);
+          const current = store.get("appState")?.panelGridConfig;
+          const strategy = gridConfig.strategy ?? current?.strategy ?? "automatic";
+          const value = Number(gridConfig.value ?? current?.value ?? 3);
           if (
             (strategy === "automatic" ||
               strategy === "fixed-columns" ||

@@ -789,7 +789,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
 
             <SettingsSection
               title="Grid layout"
-              badge={ownerMarker("host")}
+              badge={ownerMarker("device")}
               id="terminal-grid-layout"
               description="How panels arrange in the grid as you add more"
             >

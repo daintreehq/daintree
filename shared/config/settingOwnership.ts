@@ -88,7 +88,7 @@ export const SETTING_CATALOG = {
       snoozedRuns: host,
       idleBackgroundAutoClose: host,
       pluginBackgroundUpdateCheck: host,
-      // Panel layout and the terminal list move with the host; zoom, sidebar and
+      // The terminal list moves with the host; the grid layout, zoom, sidebar and
       // panel sizes, and palette habits stay with the client. This is the
       // app-wide copy: a project's own layout is kept in its workspace state.
       appState: {
@@ -96,7 +96,7 @@ export const SETTING_CATALOG = {
           activeWorktreeId: host,
           terminals: host,
           recipes: host,
-          panelGridConfig: host,
+          panelGridConfig: device,
           mruList: host,
           focusMode: host,
           fleetScopeMode: host,
