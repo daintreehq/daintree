@@ -7,14 +7,17 @@ import {
   VOICE_DICTATION_AI_MODEL,
   VOICE_DICTATION_REASONING_EFFORT,
   buildCorrectionSystemPrompt,
+  buildRewriteSystemPrompt,
   type CorrectionPromptContext,
 } from "../../shared/config/voiceCorrection.js";
+import type { VoiceRewriteOutcome } from "../../shared/types/voice.js";
 import { voiceErrorLogFields } from "../../shared/utils/voiceLogFields.js";
 import { buildOpenAIHeaders } from "../../shared/utils/openaiHeaders.js";
 import { createTimeoutSignal, withTimeoutSignal } from "../../shared/utils/timeoutSignal.js";
 import {
   findProtectedRanges,
   validateCorrection,
+  validateRewrite,
   type CorrectionRejectReason,
 } from "./voiceCorrectionGuard.js";
 import { mayReferenceFile } from "../../shared/utils/voiceFileLinkCommands.js";
@@ -39,6 +42,8 @@ const PROMPT_CACHE_PREFIX = "voice-correction-v9";
 // OpenAI rejects a prompt_cache_key longer than 64 characters.
 const PROMPT_CACHE_KEY_MAX_LENGTH = 64;
 const FILE_LINK_DETECTION_TIMEOUT_MS = 4000;
+const REWRITE_CACHE_PREFIX = "voice-rewrite-v1";
+const MIN_REWRITE_TIMEOUT_MS = 10000;
 const FILE_LINK_CACHE_PREFIX = "voice-file-link-v2";
 const LEADING_FILLER_RE = /^(?:\s*(?:um|uh)[\s,.;:!-]+)+/i;
 const DICTIONARY_TERM_BOUNDARY_RE = /[\p{L}\p{N}_]/u;
@@ -84,6 +89,26 @@ const CORRECTION_RESULT_SCHEMA = {
   },
   required: ["action", "corrected_text", "confidence"],
 } as const;
+
+const REWRITE_RESULT_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    action: {
+      type: "string",
+      enum: ["no_change", "replace"],
+    },
+    rewritten_text: {
+      type: "string",
+    },
+  },
+  required: ["action", "rewritten_text"],
+} as const;
+
+export interface VoiceRewriteRequest {
+  selectedText: string;
+  instruction: string;
+}
 
 export interface VoiceCorrectionSettings {
   model: string;
@@ -364,6 +389,116 @@ export class VoiceCorrectionService {
   }
 
   /**
+   * Applies a spoken instruction to selected composer text. It carries its own
+   * deadline rather than the session's signal: the recording that captured the
+   * instruction has ended by the time this runs, and a new one starting must
+   * not cancel it.
+   */
+  async rewrite(
+    request: VoiceRewriteRequest,
+    settings: VoiceCorrectionSettings
+  ): Promise<VoiceRewriteOutcome> {
+    const selectedText = request.selectedText;
+    const instruction = request.instruction.trim();
+    if (!settings.apiKey) return { status: "unavailable" };
+    if (!selectedText.trim() || !instruction) return { status: "no_change" };
+
+    const maxOutputTokens = this.getMaxOutputTokens({ rawText: selectedText });
+    const timeoutMs = Math.max(
+      MIN_REWRITE_TIMEOUT_MS,
+      this.getCorrectionTimeoutMs({ rawText: selectedText, segmentCount: 2 })
+    );
+    const deadline = createTimeoutSignal(timeoutMs);
+    const startedAt = performance.now();
+    try {
+      const response = await fetch("https://api.openai.com/v1/responses", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...buildOpenAIHeaders(settings.apiKey, settings.organizationId, settings.projectId),
+        },
+        signal: deadline.signal,
+        body: JSON.stringify({
+          model: settings.model,
+          input: [
+            {
+              role: "developer",
+              content: buildRewriteSystemPrompt({ language: settings.language }),
+            },
+            {
+              role: "user",
+              content: `<selection>\n${selectedText}\n</selection>\n\n<instruction>\n${instruction}\n</instruction>`,
+            },
+          ],
+          prompt_cache_key: REWRITE_CACHE_PREFIX,
+          service_tier: "auto",
+          reasoning: { effort: VOICE_DICTATION_REASONING_EFFORT },
+          text: {
+            format: {
+              type: "json_schema",
+              name: "voice_rewrite_result",
+              strict: true,
+              schema: REWRITE_RESULT_SCHEMA,
+            },
+          },
+          max_output_tokens: maxOutputTokens,
+        }),
+      });
+      if (!response.ok) throw await OpenAIRequestError.fromResponse(response);
+
+      const data = (await response.json()) as {
+        output_text?: string;
+        output?: Array<{ content?: Array<{ text?: string }> }>;
+        status?: string;
+      };
+      if (data.status === "incomplete") throw new CorrectionDiscardedError("incomplete");
+      const parsed = JSON.parse(this.extractResponseText(data)) as {
+        action?: unknown;
+        rewritten_text?: unknown;
+      };
+      if (
+        (parsed.action !== "no_change" && parsed.action !== "replace") ||
+        typeof parsed.rewritten_text !== "string"
+      ) {
+        throw new CorrectionDiscardedError("malformed");
+      }
+
+      const rewritten = parsed.rewritten_text.trim();
+      let outcome: VoiceRewriteOutcome;
+      if (parsed.action === "no_change" || !rewritten || rewritten === selectedText.trim()) {
+        outcome = { status: "no_change" };
+      } else if (!validateRewrite(selectedText, rewritten).ok) {
+        outcome = { status: "rejected" };
+      } else {
+        // The selection's own edge whitespace stays, so a rewrite never
+        // glues itself to the words either side.
+        const lead = /^\s*/u.exec(selectedText)?.[0] ?? "";
+        const trail = /\s*$/u.exec(selectedText.slice(lead.length))?.[0] ?? "";
+        outcome = { status: "replace", text: lead + rewritten + trail };
+      }
+      logDebug(`${P} Rewrite settled`, {
+        status: outcome.status,
+        selectionLen: selectedText.length,
+        instructionLen: instruction.length,
+        rewrittenLen: rewritten.length,
+        elapsedMs: Math.round(performance.now() - startedAt),
+      });
+      return outcome;
+    } catch (error) {
+      const rejection = error instanceof OpenAIRequestError ? error : undefined;
+      logWarn(`${P} Rewrite failed, keeping the selection`, {
+        ...voiceErrorLogFields(error),
+        status: rejection?.status,
+        code: rejection?.code,
+        elapsedMs: Math.round(performance.now() - startedAt),
+      });
+      return { status: "failed" };
+    } finally {
+      deadline.dispose();
+    }
+  }
+
+  /**
    * Takes its own abort signal rather than the session's: the final
    * utterance's detection is still running when a graceful stop ends the
    * session, and its result is still wanted.
@@ -453,7 +588,9 @@ export class VoiceCorrectionService {
     }
   }
 
-  private getCorrectionTimeoutMs(request: VoiceCorrectionRequest): number {
+  private getCorrectionTimeoutMs(
+    request: Pick<VoiceCorrectionRequest, "rawText" | "segmentCount">
+  ): number {
     const length = request.rawText.length;
     if (length < LONG_CORRECTION_MIN_CHARS && (request.segmentCount ?? 0) <= 1) {
       return SHORT_CORRECTION_TIMEOUT_MS;
@@ -465,7 +602,7 @@ export class VoiceCorrectionService {
     );
   }
 
-  private getMaxOutputTokens(request: VoiceCorrectionRequest): number {
+  private getMaxOutputTokens(request: Pick<VoiceCorrectionRequest, "rawText">): number {
     return Math.max(
       MIN_OUTPUT_TOKENS,
       Math.ceil(request.rawText.length * OUTPUT_TOKENS_PER_CHAR) + OUTPUT_TOKENS_OVERHEAD

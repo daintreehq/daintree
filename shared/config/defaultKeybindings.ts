@@ -1040,6 +1040,14 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     category: "Voice",
   },
   {
+    actionId: "voiceInput.rewriteSelection",
+    combo: "Cmd+Shift+Alt+.",
+    scope: "global",
+    priority: 0,
+    description: "Rewrite the selected prompt text by voice",
+    category: "Voice",
+  },
+  {
     actionId: "voiceInput.toggleAssistant",
     combo: "Cmd+Shift+Alt+V",
     scope: "global",
@@ -1305,6 +1313,14 @@ const LINUX_REPLACEMENT_KEYBINDINGS: KeybindingConfig[] = [
     scope: "global",
     priority: 0,
     description: "Toggle voice dictation",
+    category: "Voice",
+  },
+  {
+    actionId: "voiceInput.rewriteSelection",
+    combo: "Ctrl+Shift+Alt+,",
+    scope: "global",
+    priority: 0,
+    description: "Rewrite the selected prompt text by voice",
     category: "Voice",
   },
   {

@@ -869,3 +869,13 @@ export function validateCorrection(raw: string, corrected: string): CorrectionGu
   freeEnumerators(rawTokens, alignment.kept, enumerators, correctedLayout.items, free);
   return compareRetainedWords(rawTokens, correctedWords, alignment.kept, free);
 }
+
+/**
+ * Checks a spoken rewrite of selected text. A rewrite is meant to change the
+ * words, so only the protected spans are held to cleanup's rule; the number,
+ * negation and edit-size checks would refuse "make it a numbered list" or
+ * "make it shorter".
+ */
+export function validateRewrite(selection: string, rewritten: string): CorrectionGuardResult {
+  return keepsProtectedSpans(selection, rewritten) ? { ok: true } : { ok: false, reason: "protected_span" };
+}

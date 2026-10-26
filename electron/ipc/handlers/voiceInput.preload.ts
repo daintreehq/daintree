@@ -1,6 +1,6 @@
 import type { IpcInvokeMap } from "../../types/index.js";
 
-// The session-scoped invokes. The rest of `voiceInput` (settings, permissions,
+// The session-scoped invokes, and the selection rewrite. The rest of `voiceInput` (settings, permissions,
 // correction, the audio send and the event subscriptions) is still wired by
 // hand in `preload.cts`.
 export const VOICE_INPUT_METHOD_CHANNELS = {
@@ -10,6 +10,7 @@ export const VOICE_INPUT_METHOD_CHANNELS = {
   getLiveSession: "voice-input:get-live-session",
   stopLive: "voice-input:stop-live",
   revealLive: "voice-input:reveal-live",
+  rewrite: "voice-input:rewrite",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof VOICE_INPUT_METHOD_CHANNELS;

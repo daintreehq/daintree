@@ -77,6 +77,23 @@ export type VoiceStartOutcome =
   { status: "started" } | { status: "superseded" } | { status: "failed"; error: string };
 
 /**
+ * How a `voice-input:rewrite` call came out. Only `replace` carries text.
+ *
+ * - replace: the model's rewrite, which kept every protected span.
+ * - no_change: the model left the selection as it was.
+ * - rejected: the rewrite dropped or changed a reference, backticked span,
+ *   URL, flag or path, so it was discarded.
+ * - unavailable: no OpenAI API key to send it with.
+ * - failed: the request failed, timed out or came back unusable.
+ */
+export type VoiceRewriteOutcome =
+  | { status: "replace"; text: string }
+  | { status: "no_change" }
+  | { status: "rejected" }
+  | { status: "unavailable" }
+  | { status: "failed" };
+
+/**
  * The lifecycle phase of the transcript within a single voice panel buffer.
  * This is a renderer-level concept — it is derived from store state and is never
  * sent over IPC directly.
