@@ -94,7 +94,10 @@ function mapRecord(record: DictationRecord, change: TextChange): DictationRecord
       range: mapTextRange(utterance.range, change),
       insertion: mapTextRange(utterance.insertion, change),
     };
-    if (sameRange(mapped.range, utterance.range) && sameRange(mapped.insertion, utterance.insertion)) {
+    if (
+      sameRange(mapped.range, utterance.range) &&
+      sameRange(mapped.insertion, utterance.insertion)
+    ) {
       return utterance;
     }
     utterancesChanged = true;
