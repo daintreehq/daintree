@@ -453,7 +453,7 @@ describe("reviewMarks IPC namespace", () => {
 
     it("says the mark can't be read when its point file is gone, never that there is none", async () => {
       const saved = await mark(ctx(PROJECT_A), WT_1, point(WT_1), 0);
-      const dir = path.join(getProjectStateDir(root, PROJECT_A), "review-marks");
+      const dir = path.join(getProjectStateDir(root, PROJECT_A) ?? root, "review-marks");
       for (const file of await fs.readdir(dir)) await fs.rm(path.join(dir, file));
 
       expect(await compare(ctx(PROJECT_A), WT_1)).toEqual({

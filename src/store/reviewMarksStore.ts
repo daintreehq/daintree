@@ -231,6 +231,11 @@ export async function markCapturedWorktreeReviewed(
   return outcome;
 }
 
+/** Whether this view can ask the host for captures at all. */
+export function reviewMarkCapturesAvailable(): boolean {
+  return typeof reviewMarksBridge()?.capture === "function";
+}
+
 /** Capture what the worktree holds now, held on the host. Null where the bridge isn't. */
 export function captureForReviewMark(worktreeId: string): Promise<ReviewMarkCaptureOutcome> | null {
   const api = reviewMarksBridge();

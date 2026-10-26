@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/paneToolbarStyles";
 
 import { RefreshCw, CircleCheck, ArrowUpFromLine, ChevronRight, AlertTriangle } from "lucide-react";
+import { BookmarkCheck } from "@/components/icons";
 import { isProtectedBranch } from "@shared/utils/gitConstants";
 import { useUIStore } from "@/store/uiStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
@@ -51,6 +52,9 @@ import { CommitPanel } from "./CommitPanel";
 import { ConflictPanel } from "./ConflictPanel";
 import { ReadinessRail } from "./ReadinessRail";
 import { useReviewHubStatus } from "./useReviewHubStatus";
+import { useReviewHubMark } from "./useReviewHubMark";
+import { ReviewMarkLine } from "./ReviewMarkLine";
+import { registerReviewHubMarkTarget } from "./reviewHubMarkTargets";
 import { useReviewHubBaseBranch } from "./useReviewHubBaseBranch";
 import { useReviewHubCommitAndPush } from "./useReviewHubCommitAndPush";
 import { useReviewHubRowSelection } from "./useReviewHubRowSelection";
@@ -193,18 +197,60 @@ export function ReviewHubContent({
   autoStageOnOpen,
 }: ReviewHubContentProps) {
   const isDialog = location === "dialog";
+  const worktreeId = useWorktreeIdForPath(worktreePath);
   const {
     status,
+    statusCapture,
     statusIsFresh,
     loading,
     isBackgroundRefreshing,
     loadError,
     refresh,
+    readWithCapture,
     debouncedBgRefreshRef,
     beginOpen: beginStatusOpen,
     reset: resetStatus,
-  } = useReviewHubStatus({ isOpen, worktreePath });
+  } = useReviewHubStatus({ isOpen, worktreePath, worktreeId });
   const [actionError, setActionError] = useState<ReviewHubActionFailure | null>(null);
+  const reportMarkFailure = useCallback(
+    (failure: { title: string; detail: string }) => setActionError(failure),
+    []
+  );
+  const reviewMark = useReviewHubMark({
+    isOpen,
+    worktreeId,
+    worktreePath,
+    statusCapture,
+    readWithCapture,
+    onFailure: reportMarkFailure,
+  });
+  const {
+    markReviewed,
+    clearReviewMark,
+    markBlockedReason,
+    isMarking,
+    reviewMark: currentReviewMark,
+  } = reviewMark;
+  const hasReviewMark = currentReviewMark !== null;
+
+  // `worktree.markReviewed` and `worktree.clearReviewMark` act through the
+  // hub they target, dialog or grid; marking needs the state it displayed.
+  const readMarkBlockedReason = useEffectEvent(() => markBlockedReason);
+  const readHasReviewMark = useEffectEvent(() => hasReviewMark);
+  const runMarkReviewed = useEffectEvent(() => markReviewed());
+  const runClearReviewMark = useEffectEvent(() => clearReviewMark());
+  useEffect(() => {
+    if (!isOpen || !panelId || !worktreeId) return;
+    return registerReviewHubMarkTarget({
+      panelId,
+      worktreeId,
+      isDialog,
+      markBlockedReason: () => readMarkBlockedReason(),
+      hasMark: () => readHasReviewMark(),
+      markReviewed: () => runMarkReviewed(),
+      clearReviewMark: () => runClearReviewMark(),
+    });
+  }, [isOpen, panelId, worktreeId, isDialog]);
   const {
     pushError,
     showPushBanner,
@@ -271,7 +317,6 @@ export function ReviewHubContent({
   // open — so these effects only handle open, close, and keeping the change set
   // in step with the live poll.
   const [diffPanelId, setDiffPanelId] = useState<string | null>(null);
-  const worktreeId = useWorktreeIdForPath(worktreePath);
   const hasWorkingTreeSelection = selectedFile !== null;
   const hasBaseBranchSelection = selectedBaseBranchFile !== null;
   const dialogStack = usePanelDialogStore((state) => state.dialogStack);
@@ -1298,6 +1343,30 @@ export function ReviewHubContent({
               ]}
             />
 
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!markBlockedReason) void markReviewed();
+                  }}
+                  // Not `disabled`, as for Refresh: focus stays on the control.
+                  aria-disabled={markBlockedReason !== null || undefined}
+                  aria-busy={isMarking || undefined}
+                  className={PANE_TOOLBAR_ICON_BUTTON_CLASS}
+                  aria-label="Mark reviewed"
+                  data-testid="review-hub-mark-reviewed"
+                >
+                  <BookmarkCheck className={PANE_TOOLBAR_ICON_CLASS} aria-hidden="true" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                {markBlockedReason && !isMarking
+                  ? `Mark reviewed (${markBlockedReason})`
+                  : "Mark reviewed"}
+              </TooltipContent>
+            </Tooltip>
+
             {/* In both modes: hiding it in base-branch mode slid the mode
                 switch sideways on every toggle, and that comparison goes stale
                 as much as the working tree does. */}
@@ -1309,6 +1378,8 @@ export function ReviewHubContent({
                       if (!baseBranchLoading) void fetchBaseBranch();
                     } else if (!loading) {
                       void refresh();
+                      // A fresh capture too, so a mark covers what this read shows.
+                      readWithCapture(true);
                     }
                   }}
                   // Not `disabled`: pressing it would drop keyboard focus to the page.
@@ -1342,6 +1413,17 @@ export function ReviewHubContent({
             )}
           </div>
         </SurfaceHeader>
+
+        <ReviewMarkLine
+          reviewMark={currentReviewMark}
+          comparison={reviewMark.comparison}
+          notice={reviewMark.notice}
+          isRecording={reviewMark.isRecording}
+          isClearing={reviewMark.isClearing}
+          onClear={() => void clearReviewMark()}
+          onRetry={reviewMark.retryCompare}
+          onDismissNotice={reviewMark.dismissNotice}
+        />
 
         <ReviewHubContext worktreePath={worktreePath} worktreeId={worktreeId} />
 
