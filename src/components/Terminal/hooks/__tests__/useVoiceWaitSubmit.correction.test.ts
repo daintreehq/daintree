@@ -213,7 +213,11 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611)", () => {
     await act(async () => {
       result.current.startVoiceWaitSubmit();
     });
-    expect(correct).toHaveBeenCalledWith({ rawText: "hello wrld", terminalId: "panel-1" });
+    expect(correct).toHaveBeenCalledWith({
+      rawText: "hello wrld",
+      startsPrompt: true,
+      terminalId: "panel-1",
+    });
     expect(result.current.voiceSubmitPhase).toBe("polishing");
     expect(isEditable()).toBe(false);
     expect(sent).toEqual([]);
