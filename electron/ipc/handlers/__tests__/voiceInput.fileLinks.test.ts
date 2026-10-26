@@ -127,7 +127,7 @@ type Sent = { channel: string; payload: unknown };
 type FileReferencesPayload = {
   sessionId: string;
   transcriptId: string;
-  references: Array<{ description: string; path: string }>;
+  references: Array<{ description: string; path: string | null }>;
 };
 
 let nextSenderId = 500;
@@ -273,6 +273,23 @@ describe("voiceInput — spoken file references", () => {
 
     expect(shared.resolve).toHaveBeenCalledOnce();
     expect(fileReferences()).toEqual([]);
+  });
+
+  it("sends misses beside a hit, so the hit can't take a missed command's words", async () => {
+    await start(owner, "a");
+    shared.detect.mockResolvedValueOnce([
+      { description: "router tests" },
+      { description: "router" },
+    ]);
+    shared.resolve.mockResolvedValueOnce(null).mockResolvedValueOnce("src/router.ts");
+
+    emitComplete("Link to the router tests, then link to the router.");
+    await stop(owner, "a");
+
+    expect(fileReferences()[0]!.references).toEqual([
+      { description: "router tests", path: null },
+      { description: "router", path: "src/router.ts" },
+    ]);
   });
 
   it.each([

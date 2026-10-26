@@ -390,6 +390,13 @@ class VoiceRecordingService {
           });
           return;
         }
+        // An utterance still being dictated on the panel sliced its start from
+        // the draft before the swap; its offsets move with the new lengths.
+        const voiceStore = useVoiceRecordingStore.getState();
+        for (let i = edits.length - 1; i >= 0; i--) {
+          const edit = edits[i]!;
+          voiceStore.shiftDraftOffsets(panelId, edit.to, edit.text.length - (edit.to - edit.from));
+        }
         inputStore.setDraftInput(panelId, applyDraftEdits(draft, edits), projectId);
         inputStore.bumpExternalDraftRevision();
       })

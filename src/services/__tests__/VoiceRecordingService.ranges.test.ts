@@ -62,7 +62,7 @@ type CompletePayload = {
 type FileTokenPayload = {
   sessionId: string;
   transcriptId: string;
-  references: Array<{ description: string; path: string }>;
+  references: Array<{ description: string; path: string | null }>;
 };
 type BoundaryPayload = { sessionId: string; rawText: string | null };
 
@@ -891,6 +891,18 @@ describe("VoiceRecordingService — spoken file references (#14616)", () => {
     fileReferences("t1", [{ description: "router", path: "src/router.ts" }]);
 
     expect(draft()).toBe("Link to the main router.");
+  });
+
+  it("moves the next utterance's start past a swap that changed the draft's length", async () => {
+    const { draft } = await setup();
+
+    delta("Link to app.");
+    complete("Link to app.", undefined, "t1");
+    delta("Next");
+    fileReferences("t1", [{ description: "app", path: "src/very/long/path/App.tsx" }]);
+    complete("Next.");
+
+    expect(draft()).toBe("@src/very/long/path/App.tsx. Next.");
   });
 
   it("drops references whose draft was sent", async () => {

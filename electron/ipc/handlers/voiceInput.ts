@@ -595,18 +595,17 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     );
     // A local match returns without consulting the signal.
     if (signal.aborted) return;
-    // A miss leaves the spoken words alone, so only hits are sent.
-    const references = descriptions.flatMap((description, i) => {
-      const path = paths[i];
-      return path ? [{ description, path }] : [];
-    });
-    logDebug("[VoiceInput] File links resolved", {
-      detected: descriptions.length,
-      resolved: references.length,
-    });
+    // Misses go too, so a hit can't claim a missed command's words; their
+    // own words stay as spoken.
+    const references = descriptions.map((description, i) => ({
+      description,
+      path: paths[i] ?? null,
+    }));
+    const resolved = references.filter((reference) => reference.path).length;
+    logDebug("[VoiceInput] File links resolved", { detected: references.length, resolved });
     // The view that started the session, wherever it is now; never the app's
     // current view (#14599).
-    if (references.length === 0 || session.sender.isDestroyed()) return;
+    if (resolved === 0 || session.sender.isDestroyed()) return;
     session.sender.send(CHANNELS.VOICE_INPUT_FILE_TOKEN_RESOLVED, {
       sessionId: session.id,
       transcriptId,

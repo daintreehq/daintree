@@ -11,11 +11,7 @@ import {
 } from "../../shared/config/voiceCorrection.js";
 import { voiceErrorLogFields } from "../../shared/utils/voiceLogFields.js";
 import { buildOpenAIHeaders } from "../../shared/utils/openaiHeaders.js";
-import {
-  createTimeoutSignal,
-  withTimeoutSignal,
-  type DisposableTimeoutSignal,
-} from "../../shared/utils/timeoutSignal.js";
+import { createTimeoutSignal, withTimeoutSignal } from "../../shared/utils/timeoutSignal.js";
 import {
   findProtectedRanges,
   validateCorrection,
@@ -455,17 +451,6 @@ export class VoiceCorrectionService {
     } finally {
       deadline.dispose();
     }
-  }
-
-  /**
-   * Deadline guard for one API round-trip. Returns a disposable handle rather
-   * than a bare signal so the timer dies with the request: a 15s paragraph
-   * budget used to stay armed for the full 15s after a 300ms response came
-   * back, holding the signal and its fetch listeners alive for nothing.
-   * Callers must `dispose()` once the response body has been consumed.
-   */
-  private buildFetchSignal(timeoutMs: number): DisposableTimeoutSignal {
-    return createTimeoutSignal(timeoutMs, this.sessionSignal);
   }
 
   private getCorrectionTimeoutMs(request: VoiceCorrectionRequest): number {

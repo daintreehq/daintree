@@ -2,10 +2,13 @@ import type { DictationRecord } from "@/store/dictationRangeStore";
 import { formatAtFileToken } from "@/components/Terminal/hybridInputParsing";
 import { FILE_LINK_COMMAND_PATTERN } from "@shared/utils/voiceFileLinkCommands";
 
-/** A spoken file description main resolved to a path relative to the terminal's worktree. */
+/**
+ * A file description main detected in a transcript, with the path it resolved
+ * to relative to the terminal's worktree, or null for a miss.
+ */
 export interface SpokenFileReference {
   description: string;
-  path: string;
+  path: string | null;
 }
 
 export interface DraftEdit {
@@ -33,12 +36,39 @@ function commandPattern(description: string): RegExp | null {
   );
 }
 
+interface TextSpan {
+  from: number;
+  to: number;
+}
+
+// The first match inside one of `spans` that no earlier reference claimed.
+function findUnclaimed(
+  pattern: RegExp,
+  draft: string,
+  spans: TextSpan[],
+  claimed: TextSpan[]
+): TextSpan | null {
+  for (const span of spans) {
+    pattern.lastIndex = span.from;
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(draft)) && match.index + match[0].length <= span.to) {
+      const from = match.index;
+      const to = from + match[0].length;
+      if (!claimed.some((c) => from < c.to && c.from < to)) return { from, to };
+      pattern.lastIndex = from + 1;
+    }
+  }
+  return null;
+}
+
 /**
  * The swaps that turn each spoken file command ("link to the input bar") into
  * its `@file` token, made only inside the words of the transcript main
- * detected it in. References are matched in the order they were spoken, each
- * after the last one placed. Words the user has since edited, and commands
- * that can't be found there, are left exactly as spoken.
+ * detected it in. Every detected reference claims one command, misses
+ * included, so a hit can never take a missed command's words. Longer
+ * descriptions claim first ("router tests" before "router"), then each takes
+ * the earliest command left. Misses, words the user has since edited, and
+ * commands that can't be found there are left exactly as spoken.
  */
 export function planFileReferenceEdits(
   record: DictationRecord,
@@ -49,28 +79,21 @@ export function planFileReferenceEdits(
   const spans = record.utterances
     .filter((u) => u.transcriptId === transcriptId && !u.range.edited && u.range.from < u.range.to)
     .map((u) => u.range);
+  const claimed: TextSpan[] = [];
   const edits: DraftEdit[] = [];
-  let spanIndex = 0;
-  let cursor = spans[0]?.from ?? 0;
+  const byLength = references
+    .map((reference, index) => ({ reference, length: reference.description.trim().length, index }))
+    .sort((a, b) => b.length - a.length || a.index - b.index);
 
-  for (const reference of references) {
+  for (const { reference } of byLength) {
     const pattern = commandPattern(reference.description);
-    if (!pattern || !reference.path) continue;
-    for (let i = spanIndex; i < spans.length; i++) {
-      const span = spans[i]!;
-      const start = i === spanIndex ? Math.max(cursor, span.from) : span.from;
-      pattern.lastIndex = start;
-      const match = pattern.exec(draft);
-      if (!match || match.index + match[0].length > span.to) continue;
-      const from = match.index;
-      const to = from + match[0].length;
-      edits.push({ from, to, text: formatAtFileToken(reference.path) });
-      spanIndex = i;
-      cursor = to;
-      break;
-    }
+    if (!pattern) continue;
+    const span = findUnclaimed(pattern, draft, spans, claimed);
+    if (!span) continue;
+    claimed.push(span);
+    if (reference.path) edits.push({ ...span, text: formatAtFileToken(reference.path) });
   }
-  return edits;
+  return edits.sort((a, b) => a.from - b.from);
 }
 
 /** Applies non-overlapping edits given in draft order. */

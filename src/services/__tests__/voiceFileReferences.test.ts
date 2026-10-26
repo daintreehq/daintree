@@ -34,7 +34,7 @@ function swap(
   draft: string,
   rec: DictationRecord,
   utteranceId: string,
-  references: Array<{ description: string; path: string }>
+  references: Array<{ description: string; path: string | null }>
 ): string {
   return applyDraftEdits(draft, planFileReferenceEdits(rec, utteranceId, references, draft));
 }
@@ -85,13 +85,58 @@ describe("planFileReferenceEdits", () => {
     ).toBe("Check @src/InputBar.tsx, then @router.ts and @store.ts");
   });
 
-  it("never matches inside a longer word", () => {
-    const draft = "link to the toolbar";
+  it("never matches a description that is only the start of a longer word", () => {
+    const draft = "link to the barista";
     const rec = record([utterance(draft, draft, { transcriptId: "t1" })]);
 
     expect(
       planFileReferenceEdits(rec, "t1", [{ description: "bar", path: "bar.ts" }], draft)
     ).toEqual([]);
+  });
+
+  it("never matches a command that ends a longer word", () => {
+    const draft = "unlink to the router";
+    const rec = record([utterance(draft, draft, { transcriptId: "t1" })]);
+
+    expect(
+      planFileReferenceEdits(rec, "t1", [{ description: "router", path: "router.ts" }], draft)
+    ).toEqual([]);
+  });
+
+  it("keeps a missed reference's words from a shorter hit that prefixes it", () => {
+    const draft = "Link to the router tests, then link to the router.";
+    const rec = record([utterance(draft, draft, { transcriptId: "t1" })]);
+
+    expect(
+      swap(draft, rec, "t1", [
+        { description: "router tests", path: null },
+        { description: "router", path: "src/router.ts" },
+      ])
+    ).toBe("Link to the router tests, then @src/router.ts.");
+  });
+
+  it("places references the detector listed out of spoken order", () => {
+    const draft = "link to router and link to store";
+    const rec = record([utterance(draft, draft, { transcriptId: "t1" })]);
+
+    expect(
+      swap(draft, rec, "t1", [
+        { description: "store", path: "store.ts" },
+        { description: "router", path: "router.ts" },
+      ])
+    ).toBe("@router.ts and @store.ts");
+  });
+
+  it("lets a longer description claim its command before a shorter one listed first", () => {
+    const draft = "link to the router and link to the router tests";
+    const rec = record([utterance(draft, draft, { transcriptId: "t1" })]);
+
+    expect(
+      swap(draft, rec, "t1", [
+        { description: "router", path: "router.ts" },
+        { description: "router tests", path: "router.test.ts" },
+      ])
+    ).toBe("@router.ts and @router.test.ts");
   });
 
   it("places repeated references in spoken order, each after the last", () => {
@@ -155,8 +200,8 @@ describe("planFileReferenceEdits", () => {
     const draft = "link to config (dev) and link to config dev";
     const rec = record([utterance(draft, draft, { transcriptId: "t1" })]);
 
-    expect(swap(draft, rec, "t1", [{ description: "config dev", path: "config.dev.ts" }])).toBe(
-      "link to config (dev) and @config.dev.ts"
+    expect(swap(draft, rec, "t1", [{ description: "config (dev)", path: "config.dev.ts" }])).toBe(
+      "@config.dev.ts and link to config dev"
     );
   });
 
