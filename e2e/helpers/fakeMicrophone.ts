@@ -12,6 +12,8 @@ export interface WavOptions {
   frequency?: number;
   /** Peak amplitude, 0..1. */
   amplitude?: number;
+  /** Sample value, -1..1, at `t` seconds; replaces the tone. */
+  waveform?: (t: number) => number;
 }
 
 /** A mono 16-bit PCM WAV, the format Chromium's fake audio capture reads. */
@@ -20,12 +22,16 @@ export function buildWav({
   sampleRate = SAMPLE_RATE,
   frequency = 440,
   amplitude = 0.4,
+  waveform,
 }: WavOptions): Buffer {
   const samples = Math.round(seconds * sampleRate);
   const data = Buffer.alloc(samples * 2);
   for (let i = 0; i < samples; i++) {
-    const v =
-      frequency === 0 ? 0 : Math.sin((2 * Math.PI * frequency * i) / sampleRate) * amplitude;
+    const v = waveform
+      ? waveform(i / sampleRate)
+      : frequency === 0
+        ? 0
+        : Math.sin((2 * Math.PI * frequency * i) / sampleRate) * amplitude;
     data.writeInt16LE(Math.round(v * 0x7fff), i * 2);
   }
   const header = Buffer.alloc(44);
@@ -55,9 +61,15 @@ export function writeWav(dir: string, name: string, options: WavOptions): string
  * Chromium switches that make a WAV the microphone. `%noloop` is Chromium's own suffix on the
  * file path: without it the capture device replays the file forever; with it the device goes
  * silent after the last sample.
+ *
+ * The audio service reads the file, and on macOS and Windows its sandbox refuses the read
+ * ("Failed to read … as input to the fake device"), so the device stays silent. The app flag
+ * has main lift that sandbox: `--no-sandbox` loses to `app.enableSandbox()`, and a launch
+ * `--disable-features` to the app's own.
  */
 export function fakeMicrophoneArgs(wavPath: string, loop = true): string[] {
   return [
+    "--daintree-e2e-fake-microphone",
     "--use-fake-device-for-media-stream",
     "--use-fake-ui-for-media-stream",
     `--use-file-for-fake-audio-capture=${wavPath}${loop ? "" : "%noloop"}`,

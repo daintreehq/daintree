@@ -1,7 +1,49 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- window.electron is untyped in Playwright evaluate() */
-import type { Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 import { writeFileSync, readFileSync, existsSync } from "fs";
 import path from "path";
+import { dispatchAction } from "./actions";
+import { FAKE_AGENT_READY, ptyWrite, readFakeAgentLaunchLog } from "./fakeAgent";
+import { expectInputBarFocused } from "./focus";
+import { SEL } from "./selectors";
+import { getTerminalTextById } from "./terminal";
+import { T_LONG } from "./timeouts";
+
+/**
+ * Dictation types into a composer, and only agent panes have one. Launches the fake Claude
+ * CLI (the app must run with `fakeAgentEnv(binDir)`), accepts its trust prompt and returns
+ * the pane, whose composer then holds focus for the dictation key.
+ */
+export async function openDictationTarget(page: Page, binDir: string): Promise<Locator> {
+  const launches = readFakeAgentLaunchLog(binDir).length;
+  const launched = await dispatchAction(
+    page,
+    "agent.launch",
+    { agentId: "claude", location: "grid" },
+    { source: "test" }
+  );
+  expect(launched.ok, JSON.stringify(launched)).toBe(true);
+  await expect
+    .poll(() => readFakeAgentLaunchLog(binDir).length, { timeout: T_LONG * 2 })
+    .toBe(launches + 1);
+  const paneId = readFakeAgentLaunchLog(binDir)[launches].paneId;
+  expect(paneId, "the fake agent was started without a pane id").toBeTruthy();
+  await expect
+    .poll(() => getTerminalTextById(page, paneId!), { timeout: T_LONG })
+    .toContain("Enter to confirm");
+  expect(await ptyWrite(page, paneId!, "\r")).toBe(true);
+  await expect
+    .poll(() => getTerminalTextById(page, paneId!), { timeout: T_LONG })
+    .toContain(FAKE_AGENT_READY);
+  const pane = page.locator(`[data-panel-id="${paneId}"]`);
+  await focusDictationTarget(pane);
+  return pane;
+}
+
+export async function focusDictationTarget(pane: Locator): Promise<void> {
+  await pane.locator(SEL.terminal.cmEditor).first().click();
+  await expectInputBarFocused(pane);
+}
 
 // ---------------------------------------------------------------------------
 // Renderer event capture — installs IPC listeners that buffer events on window
