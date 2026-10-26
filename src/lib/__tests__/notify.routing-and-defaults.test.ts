@@ -950,9 +950,7 @@ describe("notify() — thread re-promotion (#9008)", () => {
     ]);
     notify({ type: "info", correlationId: "build", message: "Paged", pagedNatively: true });
     expect(useNotificationStore.getState().notifications).toHaveLength(0);
-    const paged = useNotificationHistoryStore
-      .getState()
-      .entries.find((e) => e.message === "Paged");
+    const paged = useNotificationHistoryStore.getState().entries.find((e) => e.message === "Paged");
     expect(paged?.seenAsToast).toBe(false);
   });
 

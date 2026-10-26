@@ -1084,7 +1084,8 @@ export function notify(payload: NotifyPayload): string {
   }
 
   const isFocused =
-    payload.pagedNatively !== true && (typeof document !== "undefined" ? document.hasFocus() : true);
+    payload.pagedNatively !== true &&
+    (typeof document !== "undefined" ? document.hasFocus() : true);
 
   const originVisible =
     payload.suppressWhenOriginVisible === true &&

@@ -160,7 +160,9 @@ describe("presentHostAttention", () => {
 
     presentHostAttention({ ...attention, pagedNatively: true });
     expect(useNotificationStore.getState().notifications).toHaveLength(0);
-    const live = useNotificationHistoryStore.getState().entries.filter((e) => e.archivedAt === null);
+    const live = useNotificationHistoryStore
+      .getState()
+      .entries.filter((e) => e.archivedAt === null);
     expect(live).toHaveLength(1);
     expect(live[0]?.seenAsToast).toBe(false);
   });

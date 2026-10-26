@@ -1116,10 +1116,16 @@ describe("RemoteHostsClient", () => {
         projectId: "proj-1",
       });
       // No renderer asked for it, so none is named as the one reporting.
-      expect(windows.openRemoteProject).toHaveBeenCalledWith(1, "studio-01", "proj-1", "/srv/proj-1", {
-        intent: "focus-panel",
-        panelId: "term-1",
-      });
+      expect(windows.openRemoteProject).toHaveBeenCalledWith(
+        1,
+        "studio-01",
+        "proj-1",
+        "/srv/proj-1",
+        {
+          intent: "focus-panel",
+          panelId: "term-1",
+        }
+      );
       expect(windows.revealWindow).toHaveBeenCalledWith(1);
       expect(windows.revealWindow.mock.invocationCallOrder[0]).toBeLessThan(
         windows.openRemoteProject.mock.invocationCallOrder[0]
@@ -1164,7 +1170,12 @@ describe("RemoteHostsClient", () => {
         hostId: "studio-01",
         projectId: "proj-2",
       });
-      expect(windows.openRemoteProject).toHaveBeenCalledWith(1, "studio-01", "proj-2", "/srv/proj-2");
+      expect(windows.openRemoteProject).toHaveBeenCalledWith(
+        1,
+        "studio-01",
+        "proj-2",
+        "/srv/proj-2"
+      );
     });
 
     it("offers the host's project list in the window when there is nothing to return to", async () => {
