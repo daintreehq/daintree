@@ -205,8 +205,7 @@ export interface AllHostsRoute {
 /**
  * The calls the inbox makes, sent to the host each run is on and to no other:
  * a key says whose run it is, and a write goes with the incarnation the panel
- * showed. The scope turns nothing on — `setMode` is refused — and sizes only
- * this machine's terminals.
+ * showed. The scope turns nothing on — `setMode` is refused.
  */
 export function createAllHostsRoute(ownHostId: HostId, hostIds: readonly HostId[]): AllHostsRoute {
   const apiFor = (hostId: HostId): CanopyApi =>
@@ -461,9 +460,8 @@ export function createAllHostsRoute(ownHostId: HostId, hostIds: readonly HostId[
     },
     terminalResize: (mine, cols, rows) => {
       const watch = watchOf(mine);
-      // Another host's terminal keeps the size its own window gave it.
-      return watch && watch.hostId === ownHostId
-        ? ownCanopyTerminalApi.terminalResize(watch.raw, cols, rows)
+      return watch
+        ? terminalFor(watch.hostId).terminalResize(watch.raw, cols, rows)
         : Promise.resolve();
     },
     terminalSubmit: (mine, text, imagePaths) => {

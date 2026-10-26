@@ -472,6 +472,33 @@ describe("CanopyTerminal", () => {
       };
     }
 
+    it("sizes a terminal its host says it takes the size of, at the user's font, freezing no pane here (#14497)", async () => {
+      cell.current = { width: 8, height: 16 };
+      const remote = remoteApi();
+      const view = mountRemote(remote);
+      view.frame.getBoundingClientRect = paneRect;
+      await act(async () =>
+        remote.opens[0]!({
+          watchId: 3,
+          snapshot: { data: "S", cols: 200, rows: 60 },
+          holdsSize: true,
+        })
+      );
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, PAST_SIZE_SETTLE_MS));
+      });
+      expect(remote.api.terminalResize).toHaveBeenCalledWith(3, 99, 30);
+      // Its pane is frozen on its own host, never in this view.
+      expect(pane.events).toEqual([]);
+      // Drawn at the host's grid until the host says the PTY took the new one.
+      expect(xterm.current!.resizes).toEqual([[200, 60]]);
+      await act(async () =>
+        remote.push({ kind: "resize", watchId: 3, runId: "run-1", cols: 99, rows: 30 })
+      );
+      expect(xterm.current!.resizes.at(-1)).toEqual([99, 30]);
+      expect(terminalResize).not.toHaveBeenCalled();
+    });
+
     it("follows the size the host's own window gave the terminal, freezing and sizing nothing", async () => {
       cell.current = { width: 8, height: 16 };
       const remote = remoteApi();
@@ -479,6 +506,7 @@ describe("CanopyTerminal", () => {
       // A pane that fits a grid other than the PTY's: the window's own host would ask for it.
       view.frame.getBoundingClientRect = paneRect;
       await act(async () =>
+        // A host that predates sizing says nothing of it, and is never asked.
         remote.opens[0]!({ watchId: 3, snapshot: { data: "S", cols: 90, rows: 30 } })
       );
       await act(async () => {

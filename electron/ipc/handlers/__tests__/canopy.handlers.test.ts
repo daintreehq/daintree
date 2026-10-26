@@ -41,11 +41,22 @@ const ptyClient = vi.hoisted(() => ({
 }));
 
 /** Who drives every project: this screen, another one, or nobody (no lease service at all). */
-const lease = vi.hoisted(() => ({ holder: null as "self" | "other" | null }));
+const lease = vi.hoisted(() => ({
+  holder: null as "self" | "other" | null,
+  listeners: new Set<() => void>(),
+}));
 vi.mock("../../../services/DriveLeaseService.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../services/DriveLeaseService.js")>()),
   peekDriveLeaseService: () =>
-    lease.holder === null ? null : { isDriving: () => lease.holder === "self" },
+    lease.holder === null
+      ? null
+      : {
+          isDriving: () => lease.holder === "self",
+          onChange: (listener: () => void) => {
+            lease.listeners.add(listener);
+            return () => lease.listeners.delete(listener);
+          },
+        },
 }));
 
 vi.mock("electron", () => ({
@@ -179,11 +190,13 @@ vi.mock("../../../services/canopy/canopyModels.js", async (importOriginal) => ({
   }),
 }));
 const broadcasts = vi.hoisted(() => vi.fn());
+const pushes = vi.hoisted(() => vi.fn());
 const handBacks = vi.hoisted(() => ({ markRead: vi.fn(), markUnread: vi.fn() }));
 vi.mock("../../utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../utils.js")>()),
   getProjectPushTargets: vi.fn(() => state.views),
   typedBroadcast: broadcasts,
+  broadcastToRenderer: pushes,
 }));
 
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
@@ -1765,14 +1778,70 @@ describe("canopy IPC", () => {
         return { view, watchId: opened.data.watchId };
       }
 
-      it("never sizes the terminal, even while its machine drives it", async () => {
+      const sizeHolds = () =>
+        pushes.mock.calls
+          .filter(
+            ([channel, envelope]) =>
+              channel === CHANNELS.EVENTS_PUSH &&
+              (envelope as { name: string }).name === "terminal:canopy-size-holds-changed"
+          )
+          .map(([, envelope]) => (envelope as { payload: string[] }).payload);
+
+      it("sizes the terminal while its machine drives it, and hands the size back (#14497)", async () => {
         lease.holder = "self";
         const { view, watchId } = await openViewerStream(-11);
         await view.call(CANOPY_METHOD_CHANNELS.terminalResize, watchId, 100, 30);
+        expect(ptyClient.resize).toHaveBeenCalledWith("run-1", 100, 30);
+        // This machine's own panes are told to hold still for it.
+        expect(sizeHolds().at(-1)).toEqual(["run-1"]);
+        const held = (await view.call(CANOPY_METHOD_CHANNELS.getSizeHolds)) as { data: string[] };
+        expect(held.data).toEqual(["run-1"]);
+        ptyClient.resize.mockClear();
+        await view.call(CANOPY_METHOD_CHANNELS.unwatchTerminal);
+        expect(ptyClient.resize).toHaveBeenCalledWith("run-1", 80, 24);
+        expect(sizeHolds().at(-1)).toEqual([]);
+      });
+
+      it("says to the viewer that this host takes its size", async () => {
+        lease.holder = "self";
+        const view = viewer(-14);
+        const opened = (await view.call(CANOPY_METHOD_CHANNELS.watchTerminal, "run-1", {
+          spawnedAt: 100,
+        })) as { data: { holdsSize?: boolean } };
+        expect(opened.data.holdsSize).toBe(true);
+      });
+
+      it("never sizes a terminal another screen drives", async () => {
+        lease.holder = "other";
+        const { view, watchId } = await openViewerStream(-15);
+        await view.call(CANOPY_METHOD_CHANNELS.terminalResize, watchId, 100, 30);
         expect(ptyClient.resize).not.toHaveBeenCalled();
-        // Nothing held, so nothing is handed back when it lets go.
         await view.call(CANOPY_METHOD_CHANNELS.unwatchTerminal);
         expect(ptyClient.resize).not.toHaveBeenCalled();
+      });
+
+      it("lets this machine's panes fit again once the lease moves away from the viewer", async () => {
+        lease.holder = "self";
+        const { view, watchId } = await openViewerStream(-16);
+        await view.call(CANOPY_METHOD_CHANNELS.terminalResize, watchId, 100, 30);
+        expect(sizeHolds().at(-1)).toEqual(["run-1"]);
+        lease.holder = "other";
+        for (const listener of lease.listeners) listener();
+        expect(sizeHolds().at(-1)).toEqual([]);
+        ptyClient.resize.mockClear();
+        // Lost the drive: nothing is handed back over the new driver's size.
+        await view.call(CANOPY_METHOD_CHANNELS.unwatchTerminal);
+        expect(ptyClient.resize).not.toHaveBeenCalled();
+      });
+
+      it("hands the size back when the link to the viewer drops", async () => {
+        lease.holder = "self";
+        const { view, watchId } = await openViewerStream(-17);
+        await view.call(CANOPY_METHOD_CHANNELS.terminalResize, watchId, 100, 30);
+        ptyClient.resize.mockClear();
+        view.close();
+        expect(ptyClient.resize).toHaveBeenCalledWith("run-1", 80, 24);
+        expect(sizeHolds().at(-1)).toEqual([]);
       });
 
       it("types what its machine's window could, but sends no image path from that machine", async () => {

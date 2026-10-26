@@ -205,7 +205,8 @@ export function CanopyTerminal({
 
     // The local terminal's own id: a routed run is keyed by host, the terminal service is not.
     const localId = api.holdsSize ? runId : (api.ownSizedId?.(runId) ?? null);
-    const holdsSize = localId !== null;
+    // Another host's terminal is sized only once its watch answer says the host takes it.
+    let holdsSize = localId !== null;
 
     let inset = FRAME_PADDING_PX;
     const bufferChange = terminal.buffer.onBufferChange((buffer) => {
@@ -228,7 +229,7 @@ export function CanopyTerminal({
         sizeTimer = null;
         const watchId = stream.watchId;
         const cell = getXtermCellDimensions(terminal);
-        // Another host's terminal keeps the size its own window gave it.
+        // A host that doesn't take the size keeps the one its own window gave it.
         if (disposed || watchId === null || cell === null || !holdsSize) return;
         // Fractional bounds, truncated, as the grid pane measures them: a
         // rounded-up clientWidth can promise a column the pane hasn't got.
@@ -241,7 +242,9 @@ export function CanopyTerminal({
         // terminal's own pane has since overridden is asked for again.
         if (ptySize !== null && cols === ptySize.cols && rows === ptySize.rows) return;
         // Ahead of the PTY's echo, so output drawn for the new size lands on it.
-        terminal.resize(cols, rows);
+        // Another host's echo is awaited instead: it may let the hold go
+        // unanswered (the view lost the drive), and the pane stays on the PTY's grid.
+        if (localId !== null) terminal.resize(cols, rows);
         api.terminalResize(watchId, cols, rows).catch((error: unknown) => {
           logWarn("[Canopy] couldn't size the terminal", { error });
           // Refused, so no echo is coming: back to the grid the PTY really has.
@@ -430,6 +433,8 @@ export function CanopyTerminal({
         heldWatchId = null;
         publish({ watchId });
         setStatus("live");
+        // A measure that ran while the stream was held had no stream to size.
+        requestPanelSize();
       }
     };
     const offResync = api.onResync(() => reopen("reconnecting"));
@@ -448,7 +453,9 @@ export function CanopyTerminal({
         return;
       }
       view = opened;
-      // The pane in this view is frozen only for a terminal this view sizes.
+      holdsSize = localId !== null || opened.holdsSize === true;
+      // The pane in this view is frozen only for a terminal this view sizes;
+      // another host freezes its own.
       if (localId !== null && releasePane === null) {
         releasePane = subscribeTerminalServiceWhenReady((service) => service.holdGeometry(localId));
       }
