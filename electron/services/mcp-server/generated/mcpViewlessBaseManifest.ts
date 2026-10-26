@@ -187,6 +187,147 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
   },
   {
     band: "reversible",
+    category: "agent",
+    danger: "safe",
+    description:
+      "List closed agent sessions that can be relaunched, from the on-disk journal: which sessions exist, no transcript text. Needs a worktree or project scope and fails when none resolves. Old sessions are pruned, so absence proves nothing.",
+    enabled: true,
+    examples: [
+      {
+        args: {
+          worktreeId: "wt-1",
+        },
+        description: "List the most recent resumable sessions for one worktree",
+      },
+      {
+        args: {
+          projectId: "proj-1",
+          limit: 50,
+        },
+        description: "List up to 50 resumable sessions across one project",
+      },
+    ],
+    id: "agentSessionHistory.list",
+    inputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        worktreeId: {
+          description: "Only this worktree.",
+          type: "string",
+          minLength: 1,
+        },
+        projectId: {
+          description: "Only this project; combines with `worktreeId`.",
+          type: "string",
+          minLength: 1,
+        },
+        limit: {
+          default: 20,
+          description: "Max records, newest first (default 20, max 100).",
+          type: "integer",
+          minimum: 1,
+          maximum: 100,
+        },
+        offset: {
+          default: 0,
+          description: "Records to skip, for paging (default 0).",
+          type: "integer",
+          minimum: 0,
+          maximum: 9007199254740991,
+        },
+      },
+    },
+    kind: "query",
+    name: "agentSessionHistory.list",
+    outputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        sessions: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              sessionId: {
+                type: "string",
+              },
+              agentId: {
+                type: "string",
+              },
+              worktreeId: {
+                type: ["string", "null"],
+              },
+              title: {
+                type: ["string", "null"],
+              },
+              projectId: {
+                type: ["string", "null"],
+              },
+              savedAt: {
+                type: "number",
+              },
+              agentLaunchFlags: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+              },
+              agentModelId: {
+                type: "string",
+              },
+              cwd: {
+                type: "string",
+              },
+              branch: {
+                type: "string",
+              },
+              bookmark: {
+                type: "object",
+                properties: {
+                  bookmarkedAt: {
+                    type: "number",
+                  },
+                  label: {
+                    type: "string",
+                  },
+                  sourceLocation: {
+                    type: "string",
+                    enum: ["grid", "dock"],
+                  },
+                  agentPresetId: {
+                    type: "string",
+                  },
+                  originalPresetId: {
+                    type: "string",
+                  },
+                  isInputLocked: {
+                    type: "boolean",
+                  },
+                },
+                required: ["bookmarkedAt", "label"],
+                additionalProperties: false,
+              },
+            },
+            required: ["sessionId", "agentId", "worktreeId", "title", "projectId", "savedAt"],
+            additionalProperties: false,
+          },
+        },
+        total: {
+          type: "number",
+        },
+        hasMore: {
+          type: "boolean",
+        },
+      },
+      required: ["sessions", "total", "hasMore"],
+      additionalProperties: false,
+    },
+    requiresArgs: false,
+    title: "List resumable sessions",
+  },
+  {
+    band: "reversible",
     category: "help",
     danger: "safe",
     description:
@@ -879,6 +1020,225 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     name: "forge.listPRs",
     requiresArgs: false,
     title: "List pull requests",
+  },
+  {
+    band: "reversible",
+    category: "git",
+    danger: "safe",
+    description:
+      "Summarise a worktree's git history: commit heatmap, counts over a window, current streak. For trends, not current changes. A wider window or the delta against main walks more history, so ask only when needed.",
+    enabled: true,
+    id: "git.getProjectPulse",
+    inputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        worktreeId: {
+          description:
+            "Worktree id from the worktree listing. Omit it and the path for the active worktree; fails when none is active.",
+          type: "string",
+          minLength: 1,
+        },
+        worktreePath: {
+          description:
+            "Absolute worktree root, instead of the id. The id wins if both; the path is never swapped for the active one.",
+          type: "string",
+          minLength: 1,
+        },
+        rangeDays: {
+          default: 60,
+          description: "Days of commit activity to aggregate. Wider windows walk more history.",
+          anyOf: [
+            {
+              type: "number",
+              const: 60,
+            },
+            {
+              type: "number",
+              const: 120,
+            },
+            {
+              type: "number",
+              const: 180,
+            },
+          ],
+        },
+        includeDelta: {
+          type: "boolean",
+        },
+        includeRecentCommits: {
+          type: "boolean",
+        },
+        forceRefresh: {
+          type: "boolean",
+        },
+      },
+    },
+    kind: "query",
+    name: "git.getProjectPulse",
+    outputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        worktreeId: {
+          type: "string",
+        },
+        worktreePath: {
+          type: "string",
+        },
+        branch: {
+          type: "string",
+        },
+        mainBranch: {
+          type: "string",
+        },
+        rangeDays: {
+          default: 60,
+          description: "Days of commit activity to aggregate. Wider windows walk more history.",
+          anyOf: [
+            {
+              type: "number",
+              const: 60,
+            },
+            {
+              type: "number",
+              const: 120,
+            },
+            {
+              type: "number",
+              const: 180,
+            },
+          ],
+        },
+        generatedAt: {
+          type: "number",
+        },
+        heatmap: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              date: {
+                type: "string",
+              },
+              count: {
+                type: "number",
+              },
+              level: {
+                type: "number",
+              },
+              isToday: {
+                type: "boolean",
+              },
+              isMostRecentActive: {
+                type: "boolean",
+              },
+              isBeforeProject: {
+                type: "boolean",
+              },
+            },
+            required: ["date", "count", "level"],
+            additionalProperties: false,
+          },
+        },
+        commitsInRange: {
+          type: "number",
+        },
+        activeDays: {
+          type: "number",
+        },
+        projectAgeDays: {
+          type: "number",
+        },
+        currentStreakDays: {
+          type: "number",
+        },
+        recentCommits: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              sha: {
+                type: "string",
+              },
+              subject: {
+                type: "string",
+              },
+              authorName: {
+                type: "string",
+              },
+              timestamp: {
+                type: "number",
+              },
+            },
+            required: ["sha", "subject", "timestamp"],
+            additionalProperties: false,
+          },
+        },
+        uncommitted: {
+          type: "object",
+          properties: {
+            changedFiles: {
+              type: "number",
+            },
+            insertions: {
+              type: "number",
+            },
+            deletions: {
+              type: "number",
+            },
+            lastUpdated: {
+              type: "number",
+            },
+          },
+          required: ["changedFiles"],
+          additionalProperties: false,
+        },
+        deltaToMain: {
+          type: "object",
+          properties: {
+            baseBranch: {
+              type: "string",
+            },
+            headBranch: {
+              type: "string",
+            },
+            ahead: {
+              type: "number",
+            },
+            behind: {
+              type: "number",
+            },
+            filesChanged: {
+              type: "number",
+            },
+            insertions: {
+              type: "number",
+            },
+            deletions: {
+              type: "number",
+            },
+          },
+          required: ["baseBranch", "ahead", "behind"],
+          additionalProperties: false,
+        },
+      },
+      required: [
+        "worktreeId",
+        "worktreePath",
+        "mainBranch",
+        "rangeDays",
+        "generatedAt",
+        "heatmap",
+        "commitsInRange",
+        "activeDays",
+        "projectAgeDays",
+        "recentCommits",
+      ],
+      additionalProperties: false,
+    },
+    requiresArgs: false,
+    title: "Get project pulse",
   },
   {
     band: "reversible",
