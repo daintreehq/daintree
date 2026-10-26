@@ -14,6 +14,7 @@ import {
   relayCallArmsNotice,
   type RelayedNotice,
 } from "../../services/mcp-server/terminalNotify.js";
+import type { McpRelayCaller } from "../../services/mcp-server/shared.js";
 import type { ViewlessApprovalDecision } from "../../services/viewless/index.js";
 import type { RelayApprovalAsk } from "./relayApprovals.js";
 import { createLogger } from "../../utils/logger.js";
@@ -38,6 +39,11 @@ export interface RelayMcpSessionSpec {
    * project is this machine's own views', never a link's.
    */
   local?: true;
+  /**
+   * The Shell's global Assistant (#14545), as the Shell's runtime said of its
+   * own lane; absent for any other assistant and from an older Shell.
+   */
+  global?: true;
   /** Carries the notices the session's calls arm back to the Shell (#13500). */
   deliverNotices(notices: readonly RelayedNotice[]): void;
   /**
@@ -47,6 +53,23 @@ export interface RelayMcpSessionSpec {
   requestApproval(
     ask: Omit<RelayApprovalAsk, "helpSessionId" | "projectId">
   ): Promise<ViewlessApprovalDecision>;
+}
+
+/**
+ * The caller a session admitted for `spec` acts as, whichever way its call
+ * came. Copies only what the spec says, so a project assistant's is never global.
+ */
+export function relayCallerOf(spec: RelayMcpSessionSpec): McpRelayCaller {
+  return {
+    linkSessionId: spec.linkSessionId,
+    senderId: spec.senderId,
+    helpSessionId: spec.helpSessionId,
+    shellName: spec.shellName,
+    ...(spec.local === true ? { local: true as const } : {}),
+    ...(spec.global === true ? { global: true as const } : {}),
+    deliverNotices: spec.deliverNotices,
+    requestApproval: spec.requestApproval,
+  };
 }
 
 /** One MCP session this host admitted for a relay principal and project. */
@@ -326,6 +349,7 @@ export function createMcpRelayExecutor(deps: McpRelayExecutorDeps): McpRelayExec
       spec.helpSessionId,
       spec.projectId,
       spec.tier,
+      spec.global === true ? "global" : "",
     ].join("\0");
     let cached = sessions.get(key);
     if (cached?.session && !cached.session.isOpen()) {

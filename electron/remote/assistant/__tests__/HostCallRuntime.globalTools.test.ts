@@ -5,7 +5,10 @@ import {
   OWNED_TWIN_TOOLS,
 } from "../../../../shared/config/helpAssistantTierAllowlists.js";
 import { isWithheldFromRelaySession } from "../../../services/mcp-server/tierAuth.js";
-import { GLOBAL_ALLOWED_TOOLS, GLOBAL_WITHHELD_TOOLS } from "../HostCallRuntime.js";
+import {
+  GLOBAL_ALLOWED_TOOLS,
+  GLOBAL_WITHHELD_TOOLS,
+} from "../../../../shared/config/globalAssistant.js";
 
 describe("the global assistant's host.call tools (#14161)", () => {
   // Every tool a relayed session can be offered at any tier, in any form.

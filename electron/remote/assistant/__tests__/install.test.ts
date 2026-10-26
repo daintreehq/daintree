@@ -259,6 +259,7 @@ describe("installHostControl (#13493)", () => {
         }),
       },
     ]);
+    expect(mcp.opened[0]!.caller.global).toBeUndefined();
     // Its throwaway runs here and on hosts go with it too (#14447).
     const endOwner = vi.fn();
     const offRuns = registerRemoteService("hostThrowawayRuns", { run: vi.fn(), endOwner });
@@ -321,7 +322,12 @@ describe("installHostControl (#13493)", () => {
       {
         tier: "core",
         workspaceId: "proj-1",
-        caller: expect.objectContaining({ senderId: "local", helpSessionId: "global" }),
+        caller: expect.objectContaining({
+          senderId: "local",
+          helpSessionId: "global",
+          local: true,
+          global: true,
+        }),
       },
     ]);
 

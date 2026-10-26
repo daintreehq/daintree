@@ -1,5 +1,6 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GLOBAL_ASSISTANT_ID } from "../../../../shared/config/globalAssistant.js";
 import type { HostMetricsSummary } from "../../../../shared/types/remoteHosts.js";
 import { SummaryLoop } from "../../metrics/summaryLoop.js";
 import type { SummaryReceipt } from "../../metrics/summaryReceipt.js";
@@ -114,7 +115,10 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
       newId: () => `notice-${++ids}`,
     });
     runtime = new HostCallRuntime({
-      getSessionLane: (id) => (runs.has(id) ? { projectId: "proj-1", slot: 0 } : null),
+      getSessionLane: (id) => {
+        const run = runs.get(id);
+        return run ? { projectId: run.projectId, slot: 0 } : null;
+      },
       callerRun: (id) => runs.get(id) ?? null,
       client: () => ({ relayCall }) as never,
       hosts: () => [STUDIO],
@@ -460,6 +464,54 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
           callId: "00000000-0000-4000-8000-000000000001",
         },
       ]);
+    });
+
+    describe("whose the call is (#14545)", () => {
+      beforeEach(() => {
+        runs.set("g", {
+          ...RUN_A,
+          projectId: GLOBAL_ASSISTANT_ID,
+          sessionId: "g",
+          terminalId: "t-g",
+        });
+        relayCall.mockResolvedValue({
+          status: "done",
+          result: { isError: false, structured: null, text: "ok" },
+        });
+      });
+
+      it("marks the global Assistant's session global on this machine, and a project assistant's not", async () => {
+        await runtime.call("g", LIST, { tier: "core" });
+        await runtime.call("a", LIST, { tier: "core" });
+
+        expect(opened.map((session) => [session.spec.helpSessionId, session.spec.global])).toEqual([
+          ["g", true],
+          ["a", undefined],
+        ]);
+      });
+
+      it("tells a remote host the global Assistant's call is its, and a project assistant's not", async () => {
+        const remote = { ...LIST, hostId: "studio", projectId: "host-p" };
+        await runtime.call("g", remote, { tier: "core" });
+        await runtime.call("a", remote, { tier: "core" });
+
+        expect(relayCall.mock.calls.map(([, payload]) => payload.global)).toEqual([
+          true,
+          undefined,
+        ]);
+      });
+
+      it("takes it from the caller's own lane, never from anything the model passes", async () => {
+        const spoof = { ...LIST, global: true, args: { owned: true, global: true } };
+        await runtime.call("a", spoof as typeof LIST, { tier: "core" });
+        await runtime.call("g", { ...LIST, global: false } as typeof LIST, { tier: "core" });
+
+        expect(opened.map((session) => [session.spec.helpSessionId, session.spec.global])).toEqual([
+          ["a", undefined],
+          ["g", true],
+        ]);
+        expect(opened[0]!.calls[0]!.args).toEqual({ owned: true, global: true });
+      });
     });
 
     it("refuses the caller's own project before anything runs", async () => {

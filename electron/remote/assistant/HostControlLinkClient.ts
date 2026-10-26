@@ -14,7 +14,7 @@ import {
   type AgentsAnswer,
   type AgentsPayload,
   type McpCallAnswer,
-  type McpCallPayload,
+  type RelayCallRequest,
   type RelayApproveAnswer,
   type RelayApprovePayload,
   type RelayNoticeStatusAnswer,
@@ -112,6 +112,8 @@ function invalidAnswer(hostId: HostId, method: string): AppError {
  */
 export class HostControlLinkClient {
   private readonly authenticated = new WeakSet<LinkSession>();
+  /** Sessions to a host from before GLOBAL_MCP_CALL; one session is always one host build. */
+  private readonly noGlobalCalls = new WeakSet<LinkSession>();
   private readonly follows = new Map<LinkSession, NoticeFollow>();
   private readonly disposers: Array<() => void> = [];
   private disposed = false;
@@ -244,9 +246,10 @@ export class HostControlLinkClient {
    */
   async relayCall(
     hostId: HostId,
-    payload: McpCallPayload,
+    request: RelayCallRequest,
     timeoutMs: number
   ): Promise<McpCallAnswer> {
+    const { global, ...payload } = request;
     const session = await this.open(hostId);
     try {
       await this.authenticate(hostId, session);
@@ -255,9 +258,29 @@ export class HostControlLinkClient {
       if (isUnknownOutcome(error)) throw unreachable(hostId);
       throw error;
     }
-    const parsed = McpCallAnswerSchema.safeParse(
-      await this.call(hostId, session, AssistantLinkMethod.MCP_CALL, payload, timeoutMs)
-    );
+    let answer: unknown;
+    let answered = false;
+    if (global === true && !this.noGlobalCalls.has(session)) {
+      try {
+        answer = await this.call(
+          hostId,
+          session,
+          AssistantLinkMethod.GLOBAL_MCP_CALL,
+          payload,
+          timeoutMs
+        );
+        answered = true;
+      } catch (error) {
+        // An unknown method is refused before anything runs, so the same call,
+        // resend flag and all, goes again as one any assistant could make.
+        if (codeOf(error) !== "UNSUPPORTED") throw error;
+        this.noGlobalCalls.add(session);
+      }
+    }
+    if (!answered) {
+      answer = await this.call(hostId, session, AssistantLinkMethod.MCP_CALL, payload, timeoutMs);
+    }
+    const parsed = McpCallAnswerSchema.safeParse(answer);
     if (!parsed.success) throw invalidAnswer(hostId, AssistantLinkMethod.MCP_CALL);
     // A call can arm nothing, or have its notice answered by its own reply
     // wait, without a notice ever coming: ask, so its link need not wait on it.

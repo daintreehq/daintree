@@ -155,6 +155,30 @@ describe("HttpLifecycle.openRelaySession (#13493)", () => {
     ).resolves.toBeNull();
   });
 
+  it("records a global Assistant's caller as global, and an ordinary one as not (#14545)", async () => {
+    const { lc, store } = await startedLifecycle();
+    const global = await lc.openRelaySession({
+      tier: "core",
+      workspaceId: "project-1",
+      caller: { ...CALLER, global: true },
+    });
+    const ordinary = await lc.openRelaySession({
+      tier: "core",
+      workspaceId: "project-1",
+      caller: CALLER,
+    });
+
+    expect(store.getRelayCaller(global!.sessionId)?.global).toBe(true);
+    expect(store.getRelayCaller(ordinary!.sessionId)?.global).toBeUndefined();
+    // Classified, and admitted exactly as any other machine's assistant.
+    expect(store.getOrigin(global!.sessionId)).toBe("external");
+    expect(store.resourceOwnership.ownerOf(global!.sessionId)).toContain(
+      relayOwnershipPrincipal(CALLER.senderId, CALLER.helpSessionId)
+    );
+    global!.close();
+    ordinary!.close();
+  });
+
   it("admits an external-origin session bound to the project, under the relay principal", async () => {
     const { lc, store } = await startedLifecycle();
     const session = await lc.openRelaySession({

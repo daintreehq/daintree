@@ -47,7 +47,7 @@ import { composeLinkActivity } from "./linkActivity.js";
 import { installCanopyHost } from "../canopy/hostInstall.js";
 import { installDeviceAnswerHost } from "../deviceAnswer/hostInstall.js";
 import { installAssistantSenderHost } from "../assistant/hostSenders.js";
-import { installHostMcpRelay } from "../assistant/hostMcpRelay.js";
+import { installHostMcpRelay, relayCallerOf } from "../assistant/hostMcpRelay.js";
 import { getHelpAssistantSettings } from "../../ipc/handlers/helpAssistant.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import { observeAgents } from "../metrics/hostSources.js";
@@ -200,16 +200,7 @@ async function buildHostListener(
         await import("../../services/assistants/localAgentDirectory.js");
       return getLocalAgentDirectory().read(options);
     },
-    openSession: async ({
-      tier,
-      projectId,
-      linkSessionId,
-      senderId,
-      helpSessionId,
-      shellName,
-      deliverNotices,
-      requestApproval,
-    }) => {
+    openSession: async (spec) => {
       const [{ mcpServerService }, { helpSessionService }] = await Promise.all([
         import("../../services/McpServerService.js"),
         import("../../services/HelpSessionService.js"),
@@ -218,16 +209,9 @@ async function buildHostListener(
       // its assistants for another machine's (#13496).
       await helpSessionService.ensureAssistantControl();
       return mcpServerService.openRelaySession({
-        tier,
-        workspaceId: projectId,
-        caller: {
-          linkSessionId,
-          senderId,
-          helpSessionId,
-          shellName,
-          deliverNotices,
-          requestApproval,
-        },
+        tier: spec.tier,
+        workspaceId: spec.projectId,
+        caller: relayCallerOf(spec),
       });
     },
     retirePrincipal: (senderId, helpSessionId) => {
