@@ -4,7 +4,6 @@ import {
   type SettingEntry,
   type SettingOwner,
 } from "../shared/config/settingOwnership.js";
-import type { NotificationSettings } from "../shared/types/ipc/api.js";
 import type { AuditLogsStoreSchema, StoreSchema, WindowStatesStoreSchema } from "./store.js";
 
 export type { SettingOwner };
@@ -51,10 +50,6 @@ export const TERMINAL_CONFIG_FIELD_OWNERSHIP = exactlyOver<keyof StoreSchema["te
 export const APP_STATE_FIELD_OWNERSHIP = exactlyOver<keyof StoreSchema["appState"]>()(
   declaredOwners(config.appState.fields)
 );
-
-export const NOTIFICATION_SETTINGS_FIELD_OWNERSHIP = exactlyOver<
-  keyof StoreSchema["notificationSettings"]
->()(exactlyOver<keyof NotificationSettings>()(declaredOwners(config.notificationSettings.fields)));
 
 export const WINDOW_STATES_STORE_OWNERSHIP = exactlyOver<keyof WindowStatesStoreSchema>()(
   declaredOwners(SETTING_CATALOG["window-states"].entries)

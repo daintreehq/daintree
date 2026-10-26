@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   APP_STATE_FIELD_OWNERSHIP,
   AUDIT_LOGS_STORE_OWNERSHIP,
-  NOTIFICATION_SETTINGS_FIELD_OWNERSHIP,
   STORE_KEY_OWNERSHIP,
   TERMINAL_CONFIG_FIELD_OWNERSHIP,
   WINDOW_STATES_STORE_OWNERSHIP,
@@ -22,7 +21,6 @@ const config: Readonly<
 const FIELD_TABLES: Record<string, Readonly<Record<string, string>>> = {
   terminalConfig: TERMINAL_CONFIG_FIELD_OWNERSHIP,
   appState: APP_STATE_FIELD_OWNERSHIP,
-  notificationSettings: NOTIFICATION_SETTINGS_FIELD_OWNERSHIP,
 };
 
 describe("store ownership derived from the settings catalog", () => {

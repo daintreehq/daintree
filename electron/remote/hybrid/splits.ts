@@ -42,7 +42,6 @@ import { getWindowRegistry } from "../../window/windowRef.js";
 import { isValidSshTarget } from "../client/sshTransport.js";
 import { getRemoteService } from "../runtime.js";
 import { mergeByOwnership, splitByOwnership } from "./fieldOwnership.js";
-import { notificationSettingsGet, notificationSettingsSet } from "./notificationSettings.js";
 import { sshTargetOf } from "../client/connection.js";
 import { expectAccountSignIn } from "../plugins/accountSignIn.js";
 import { wslUncPath } from "../../../shared/utils/wslPath.js";
@@ -516,8 +515,6 @@ export const HYBRID_SPLITS: Readonly<Record<string, HybridSplit>> = {
   [CHANNELS.TERMINAL_CONFIG_GET]: terminalConfigGet,
   [CHANNELS.EDITOR_GET_CONFIG]: editorGetConfig,
   [CHANNELS.EDITOR_SET_CONFIG]: remoteOnly,
-  [CHANNELS.NOTIFICATION_SETTINGS_GET]: notificationSettingsGet,
-  [CHANNELS.NOTIFICATION_SETTINGS_SET]: notificationSettingsSet,
   [CHANNELS.PROJECT_SWITCH]: projectSwitch,
   [CHANNELS.PROJECT_REOPEN]: projectSwitch,
   [CHANNELS.PROJECT_GET_CURRENT]: remoteOnly,
@@ -605,8 +602,6 @@ export const HYBRID_HOST_LEGS: readonly string[] = [
   CHANNELS.SCRATCH_SWITCH,
   // The picker split's host leg (see pickers.ts), with the folder chosen in the host picker.
   CHANNELS.SCRATCH_SAVE_AS_PROJECT,
-  CHANNELS.NOTIFICATION_SETTINGS_GET,
-  CHANNELS.NOTIFICATION_SETTINGS_SET,
   CHANNELS.NOTIFICATION_SYNC_WATCHED,
   CHANNELS.NOTIFICATION_SESSION_MUTE_SET,
   // The sign-in runs on the host; its browser half is asked back of the calling Shell.

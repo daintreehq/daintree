@@ -403,8 +403,6 @@ export const CHANNEL_LEASE_POLICY = {
   "mcp-server:tool-call-started": "free",
   "mcp-server:turn-outcome-alert": "free",
   "notification:session-mute-set": "free",
-  "notification:settings-get": "free",
-  "notification:settings-set": "free",
   "notification:show-watch": "free",
   "notification:sync-watched": "free",
   "notification:update": "free",
