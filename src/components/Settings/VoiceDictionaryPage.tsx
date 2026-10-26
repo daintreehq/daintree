@@ -451,11 +451,11 @@ function EntryEditor({
             onKeyDown={onKeyDown}
           />
           <SettingsRowActions>
-            <Button size="sm" variant="contrast" onClick={submit} disabled={!!error || !dirty}>
-              Save
-            </Button>
             <Button size="sm" variant="outline" onClick={onCancel}>
               Cancel
+            </Button>
+            <Button size="sm" variant="contrast" onClick={submit} disabled={!!error || !dirty}>
+              Save
             </Button>
           </SettingsRowActions>
         </div>
