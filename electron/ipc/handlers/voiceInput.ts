@@ -650,8 +650,10 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         activeEventUnsubscribe = null;
       }
       unsubscribe();
-      sender?.removeListener("destroyed", onDestroyed);
-      activeDestroyListener = null;
+      unwatchDestroyed?.();
+      if (activeDestroyListener?.fn === onDestroyed) {
+        activeDestroyListener = null;
+      }
       // Tear down the session controller so an orphaned signal isn't left
       // attached to correctionService for the next session.
       sessionController?.abort();
