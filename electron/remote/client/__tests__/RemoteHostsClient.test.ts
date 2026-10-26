@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { AppError } from "../../../utils/errorTypes.js";
 import {
   toHostScopedKey,
@@ -18,15 +18,12 @@ import type { IpcContext } from "../../../ipc/types.js";
 import type { RemoteRouter } from "../../../ipc/endpoint.js";
 import { HostRegistry, type RemoteHostsStore } from "../HostRegistry.js";
 import type { RemoteHostManager } from "../RemoteHostManager.js";
-import {
-  RemoteHostsClient,
-  type RemoteHostsClientOptions,
-  type WindowControl,
-} from "../RemoteHostsClient.js";
+import { RemoteHostsClient, type WindowControl } from "../RemoteHostsClient.js";
 import { RemoteRouterImpl } from "../RemoteRouter.js";
 import { WindowHostBinding } from "../WindowHostBinding.js";
 import { _resetRemoteServicesForTest, registerRemoteService } from "../../runtime.js";
 import type { HostMetricsClient } from "../../metrics/client.js";
+import type { HostSwitchService } from "../../projects/HostSwitchService.js";
 
 function memoryStore(): RemoteHostsStore {
   let value: { hosts: HostDescriptor[] } | undefined;
@@ -146,7 +143,6 @@ describe("RemoteHostsClient", () => {
   let client: RemoteHostsClient;
   let router: RemoteRouter;
   let onFirstUse: Mock<() => void>;
-  let copiesOnHost: Mock<NonNullable<RemoteHostsClientOptions["copiesOnHost"]>>;
 
   beforeEach(() => {
     registry = new HostRegistry(memoryStore());
@@ -168,10 +164,8 @@ describe("RemoteHostsClient", () => {
     installRouter = vi.fn<(router: RemoteRouter | null) => void>();
     events = [];
     onFirstUse = vi.fn<() => void>();
-    copiesOnHost = vi.fn<NonNullable<RemoteHostsClientOptions["copiesOnHost"]>>(async () => []);
     client = new RemoteHostsClient({
       onFirstUse,
-      copiesOnHost,
       registry,
       manager: manager as unknown as RemoteHostManager,
       bindings,
@@ -1381,12 +1375,19 @@ describe("RemoteHostsClient", () => {
 
     describe("from a window showing a project (#14564)", () => {
       const copy = (projectId: string) => ({ projectId, name: "App", path: `/srv/${projectId}` });
+      let copiesOnHost: Mock<HostSwitchService["copiesOn"]>;
 
       beforeEach(() => {
+        copiesOnHost = vi.fn<HostSwitchService["copiesOn"]>(async () => []);
+        registerRemoteService("hostSwitchService", {
+          copiesOn: copiesOnHost,
+        } as unknown as HostSwitchService);
         keys.set(5, "proj-local");
         manager.last = { projectId: "proj-2", path: "/srv/proj-2", name: "proj-2" };
         windows.recentProjectsOnHost = vi.fn(() => ["proj-9"]);
       });
+
+      afterEach(() => _resetRemoteServicesForTest());
 
       it("lands on that project's copy on the host, ahead of anything to return to", async () => {
         copiesOnHost.mockResolvedValueOnce([copy("proj-copy")]);
@@ -1518,6 +1519,43 @@ describe("RemoteHostsClient", () => {
           "proj-9",
         ]);
         expect(copiesOnHost).not.toHaveBeenCalled();
+      });
+
+      it("looks for no copy when the asking view is parked in the window's cache", async () => {
+        windows.showsView = vi.fn(() => false);
+        copiesOnHost.mockResolvedValue([copy("proj-copy")]);
+        await expect(
+          client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false })
+        ).resolves.toEqual({ outcome: "switched", hostId: "studio-01", projectId: "proj-9" });
+        expect(windows.showsView).toHaveBeenCalledWith(1, 5);
+        expect(copiesOnHost).not.toHaveBeenCalled();
+      });
+
+      it("returns where it would have when the host doesn't say in time", async () => {
+        const slowClient = new RemoteHostsClient({
+          registry,
+          manager: manager as unknown as RemoteHostManager,
+          bindings,
+          router,
+          senders: {
+            projectKeyFor: () => "proj-local",
+            windowIdFor: (id) => (id === 5 ? 1 : null),
+          },
+          windows,
+          installRouter,
+          emit: () => {},
+          copyLookupTimeoutMs: 10,
+        });
+        let answer: (copies: ReturnType<typeof copy>[]) => void = () => {};
+        copiesOnHost.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+        await expect(
+          slowClient.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false })
+        ).resolves.toEqual({ outcome: "switched", hostId: "studio-01", projectId: "proj-9" });
+        // Its answer, late, moves nothing.
+        answer([copy("proj-copy")]);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(windows.openRemoteProject).toHaveBeenCalledTimes(1);
+        slowClient.dispose();
       });
 
       it("lands a host's project on this machine's copy of it", async () => {

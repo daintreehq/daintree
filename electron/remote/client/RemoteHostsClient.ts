@@ -25,10 +25,13 @@ import type {
   WindowHostInfo,
 } from "../../../shared/types/ipc/remoteHosts.js";
 import type { ProjectFocusOnActivateIntent } from "../../../shared/types/ipc/project.js";
+import type { HostProjectPresence } from "../../../shared/types/ipc/hostSwitch.js";
+import { isScratchWorkspaceId } from "../../../shared/utils/workspaceIds.js";
 import { AgentDirectorySubjectSchema } from "../../../shared/types/agentDirectory.js";
 import type { IpcContext } from "../../ipc/types.js";
 import type { RemoteRouter } from "../../ipc/endpoint.js";
 import { AppError } from "../../utils/errorTypes.js";
+import { withTimeout } from "../../utils/withTimeout.js";
 import { sshAccessDenied } from "./sshAccessError.js";
 import { hostModeOff, hostRestarting } from "./hostModeOffError.js";
 import { HostModeOffRedial } from "./hostModeOffRedial.js";
@@ -200,6 +203,8 @@ export interface RemoteHostsClientOptions {
   onFirstUse?: () => void;
   /** How long opening a host's project waits for its link before giving up. */
   readyTimeoutMs?: number;
+  /** How long a switch naming no project waits to hear whether the host has a copy of the window's. */
+  copyLookupTimeoutMs?: number;
   /**
    * Whether this machine is checking on or starting Daintree on the host
    * right now (a reboot or power cut left it stopped). A wait for the link
@@ -246,6 +251,12 @@ export type HostBackgroundRestoreOutcome =
 
 const DEFAULT_READY_TIMEOUT_MS = 20_000;
 /**
+ * Asking for a copy is a git read of every project registered on the host: on
+ * a first connect that can be slow, but the switch is on its way all the same.
+ * A host that hasn't said by then has the window return where it otherwise would.
+ */
+const DEFAULT_COPY_LOOKUP_TIMEOUT_MS = 3_000;
+/**
  * The longest a wait for the link goes on while the host's Daintree is being
  * started: its launch is given 30 s and its listener a minute.
  */
@@ -265,6 +276,14 @@ const NOT_SETTLED = Symbol("not-settled");
 
 /** What a wait resolves to once its switch was abandoned for a newer navigation or Cancel. */
 const ABANDONED = Symbol("abandoned");
+
+/** A project as a view shows it: on its host, by its id there. */
+interface ShownProject {
+  hostId: HostId;
+  projectId: string;
+}
+
+type ProjectCopy = NonNullable<HostProjectPresence["projects"]>[number];
 
 interface SwitchTicket {
   /** Names this request to the window's views, and to the Cancel that answers it. */
@@ -801,10 +820,11 @@ export class RemoteHostsClient {
 
   /**
    * Put a window (or a new one) on a host. With a project named, that project
-   * opens there. Without one the window returns to the project it last showed
-   * on that host, as the host remembers it for this machine (or, for this
-   * machine, as its own history does); when there is none, nothing moves and
-   * the caller is told to offer that host's project list instead. A window
+   * opens there. Without one, a window showing a project lands on that
+   * project's copy there (#14564); otherwise it returns to the project it last
+   * showed on that host, as the host remembers it for this machine (or, for
+   * this machine, as its own history does); when there is none, nothing moves
+   * and the caller is told to offer that host's project list instead. A window
    * is only ever rebound together with the view it shows, so its binding and
    * its view never name different hosts.
    */
@@ -829,6 +849,7 @@ export class RemoteHostsClient {
     return this.switchWindow(this.windowOf(ctx), payload, undefined, {
       requesterWebContentsId: requesterReports ? ctx.webContentsId : undefined,
       failureOnScreen,
+      shown: this.shownProjectOf(ctx),
     });
   }
 
@@ -845,7 +866,14 @@ export class RemoteHostsClient {
       exempt = false,
       requesterWebContentsId,
       failureOnScreen = false,
-    }: { exempt?: boolean; requesterWebContentsId?: number; failureOnScreen?: boolean } = {}
+      shown = null,
+    }: {
+      exempt?: boolean;
+      requesterWebContentsId?: number;
+      failureOnScreen?: boolean;
+      /** The project the asking view shows, as it was when the switch was asked for. */
+      shown?: ShownProject | null;
+    } = {}
   ): Promise<SwitchWindowHostResult> {
     const hostId = hostIdOf(payload);
     const newWindow = payload.newWindow === true;
@@ -860,6 +888,12 @@ export class RemoteHostsClient {
     }
     // Something to focus only in a project the switch names.
     const focusIntent = projectId === undefined ? undefined : focusIntentOf(payload);
+    // A window moving off its project, naming none, looks first for that
+    // project's copy on the host (#14564). A new window leaves this one as it is.
+    const copyOf =
+      projectId === undefined && !newWindow && shown !== null && shown.hostId !== hostId
+        ? shown
+        : null;
 
     const remote = !isLocalHostId(hostId);
     const epoch = this.epochs.get(hostId) ?? 0;
@@ -994,6 +1028,7 @@ export class RemoteHostsClient {
         hostId,
         newWindow,
         projectId,
+        copyOf,
         ticket,
         superseded,
         announce,
@@ -1027,6 +1062,7 @@ export class RemoteHostsClient {
     hostId: HostId,
     newWindow: boolean,
     requestedProjectId: string | undefined,
+    copyOf: ShownProject | null,
     ticket: SwitchTicket | null,
     superseded: () => SwitchWindowHostResult | null,
     announce: (phase: PendingHostSwitch["phase"]) => void,
@@ -1069,14 +1105,20 @@ export class RemoteHostsClient {
         const error = this.notReady(hostId, hostConnection, readiness);
         if (projectId !== undefined || !newWindow || !isWaitable(readiness)) throw error;
       } else if (projectId === undefined) {
-        // Where this window last was on the host first, newest first and past
+        // The project this window is showing, where the host has a copy of it;
+        // else where this window last was on the host, newest first and past
         // any the host no longer has; the host's memory of this machine is the
         // fallback, then its project picker. Never a project another window is
         // showing: the host's memory is shared by every window (#13291).
         announce("opening");
         const recent = this.options.windows.recentProjectsOnHost?.(sourceWindowId, hostId) ?? [];
-        let remembered: { projectId: string; path: string; name: string } | null = null;
-        for (const candidate of recent) {
+        const copy = await this.copyToLand(copyOf, hostId, sourceWindowId, recent, untilAbandoned);
+        if (copy === ABANDONED) return { outcome: "superseded", hostId };
+        const staleCopy = superseded();
+        if (staleCopy) return staleCopy;
+        let remembered: { projectId: string; path: string; name: string } | null = copy;
+        // With its copy found there, nothing of this window's past there is asked about.
+        for (const candidate of copy ? [] : recent) {
           // Asked per candidate, after every wait: another window may have
           // started showing one while the host was answering about another.
           if (this.shownElsewhere(hostId, candidate, sourceWindowId)) continue;
@@ -1149,7 +1191,11 @@ export class RemoteHostsClient {
         announce("opening");
       }
     } else if (projectId === undefined) {
-      projectId = this.options.windows.lastLocalProjectId(sourceWindowId) ?? undefined;
+      const recent = this.options.windows.recentProjectsOnHost?.(sourceWindowId, hostId) ?? [];
+      const copy = await this.copyToLand(copyOf, hostId, sourceWindowId, recent, untilAbandoned);
+      if (copy === ABANDONED) return { outcome: "superseded", hostId };
+      projectId =
+        copy?.projectId ?? this.options.windows.lastLocalProjectId(sourceWindowId) ?? undefined;
     }
 
     const stale = superseded();
@@ -1377,6 +1423,66 @@ export class RemoteHostsClient {
       );
     }
     return result;
+  }
+
+  /**
+   * The project the asking view shows, read as the switch is asked for. A view
+   * parked in its window's cache (a pinned MCP call) isn't what the window
+   * shows, and a scratch has no copy anywhere else.
+   */
+  private shownProjectOf(ctx: IpcContext): ShownProject | null {
+    const key = this.options.senders.projectKeyFor(ctx.webContentsId);
+    if (key === null) return null;
+    const windowId = this.windowOf(ctx);
+    if (
+      windowId !== null &&
+      this.options.windows.showsView?.(windowId, ctx.webContentsId) === false
+    ) {
+      return null;
+    }
+    const shown = parseHostScopedKey(key);
+    return isScratchWorkspaceId(shown.projectId) ? null : shown;
+  }
+
+  /**
+   * The shown project's copy on the host for a switch naming no project to
+   * land on (#14564): one this window last had open there first, then by
+   * path, as the sidebar's host row opens. Never one another window is
+   * showing, asked once the host has answered. Null when there is none, or
+   * the host couldn't say in time.
+   */
+  private async copyToLand(
+    from: ShownProject | null,
+    hostId: HostId,
+    windowId: number | null,
+    recent: readonly string[],
+    untilAbandoned: <T>(work: Promise<T>) => Promise<T | typeof ABANDONED>
+  ): Promise<ProjectCopy | null | typeof ABANDONED> {
+    const lookup = from && getRemoteService("hostSwitchService")?.copiesOn(from, hostId);
+    if (!lookup) return null;
+    // Abandonment inside the deadline, so a Cancel clears its timer at once.
+    const copies = await withTimeout(
+      untilAbandoned(lookup),
+      this.options.copyLookupTimeoutMs ?? DEFAULT_COPY_LOOKUP_TIMEOUT_MS,
+      `Host ${hostId} didn't say in time whether it has the project`
+    ).catch(() => null);
+    if (copies === ABANDONED || !copies) return copies;
+    const rank = (copy: ProjectCopy): number => {
+      const at = recent.indexOf(copy.projectId);
+      return at === -1 ? recent.length : at;
+    };
+    return (
+      [...copies]
+        .sort(
+          (a, b) =>
+            rank(a) - rank(b) ||
+            a.path.localeCompare(b.path) ||
+            a.projectId.localeCompare(b.projectId)
+        )
+        .find(
+          (copy) => copy.path !== "" && !this.shownElsewhere(hostId, copy.projectId, windowId)
+        ) ?? null
+    );
   }
 
   /** Whether a window other than `windowId` is showing the project, or on its way to it. */
