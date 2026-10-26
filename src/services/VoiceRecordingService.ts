@@ -57,6 +57,7 @@ import {
   stripPseudoDevicePrefix,
   type VoiceMicDevice,
 } from "@/services/voiceMicDevices";
+import { isScratchCommand, recordScratchLanded } from "@/services/voiceScratchCommand";
 import { applyDraftEdits, planFileReferenceEdits } from "@/services/voiceFileReferences";
 
 const LOG_PREFIX = "[VoiceRecording]";
@@ -397,6 +398,11 @@ class VoiceRecordingService {
           const buffer = voiceState.panelBuffers[panelId];
           const segmentStart = itemId ? -1 : (buffer?.draftLengthAtSegmentStart ?? -1);
           const finalText = text.trim();
+          if (finalText && isScratchCommand(finalText)) {
+            this.scratchLastUtterance(panelId, projectId, buffer?.dictationSessionId);
+            useVoiceRecordingStore.getState().completeSegment("", itemId, { discard: true });
+            return;
+          }
           if (finalText) {
             const inputStore = useTerminalInputStore.getState();
             const draft = inputStore.getDraftInput(panelId, projectId);
@@ -2199,6 +2205,26 @@ class VoiceRecordingService {
       this.unwatchCorrectionDrafts?.();
       this.unwatchCorrectionDrafts = null;
     }
+  }
+
+  /** Removes the session's latest dictated utterance from the draft; a no-op when there is none to remove. */
+  private scratchLastUtterance(
+    panelId: string,
+    projectId: string | undefined,
+    sessionId: string | null | undefined
+  ): void {
+    if (!sessionId) return;
+    const inputStore = useTerminalInputStore.getState();
+    const draft = inputStore.getDraftInput(panelId, projectId);
+    const span = useDictationRangeStore
+      .getState()
+      .takeLastUtterance({ sessionId, panelId, projectId }, draft);
+    if (!span) return;
+    const next = draft.slice(0, span.from) + draft.slice(span.to);
+    useVoiceRecordingStore.getState().shiftDraftOffsets(panelId, span.to, -(span.to - span.from));
+    inputStore.setDraftInput(panelId, next, projectId);
+    recordScratchLanded(panelId, projectId, next);
+    inputStore.bumpExternalDraftRevision();
   }
 
   /**

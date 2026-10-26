@@ -125,6 +125,7 @@ import {
   replayLandedCorrection,
 } from "./inputEditorExtensions";
 import { takeLandedCorrection } from "@/services/voiceCorrectionLanding";
+import { takeScratchLanded } from "@/services/voiceScratchCommand";
 import { useHostReparent } from "./hooks/useHostReparent";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { SelectedFileMenuItems } from "./SelectedFileMenuItems";
@@ -898,6 +899,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       const view = editorViewRef.current;
       if (!view) return;
       const landed = takeLandedCorrection(terminalId, projectId, draft);
+      const scratched = takeScratchLanded(terminalId, projectId, draft);
       // Only the span that differs is replaced, so an append leaves the
       // image and file chips already in the draft attached.
       const change = minimalDocChange(view.state.doc.toString(), draft);
@@ -907,7 +909,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         isApplyingExternalValueRef.current = true;
         view.dispatch(outsideDraftWrite(change, draft, landed));
         // Emptied from outside (sent or cleared elsewhere): nothing to undo into.
-        if (draft === "") clearComposerHistory(view);
+        // A spoken "scratch that" that empties it is an edit, so undo brings
+        // the words back.
+        if (draft === "" && !scratched) clearComposerHistory(view);
       } else if (landed) {
         replayLandedCorrection(view, landed);
       }

@@ -25,6 +25,7 @@ import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { initBuiltInPanelKinds } from "@/panels/registry";
 import { recordCorrectionLanded, takeLandedCorrection } from "@/services/voiceCorrectionLanding";
+import { recordScratchLanded, takeScratchLanded } from "@/services/voiceScratchCommand";
 import { HybridInputBar } from "../HybridInputBar";
 
 const WT_ID = "/repo/wt";
@@ -69,6 +70,7 @@ beforeEach(() => {
   useTerminalInputStore.setState({ draftInputs: new Map() });
   useVoiceRecordingStore.setState({ panelBuffers: {} });
   takeLandedCorrection("term-1", undefined, "");
+  takeScratchLanded("term-1", undefined, "");
 });
 
 afterEach(() => {
@@ -219,5 +221,26 @@ describe("HybridInputBar after an AI correction lands", () => {
     await undo(view);
     expect(view.state.doc.toString()).toBe(RAW);
     expect(draft()).toBe(RAW);
+  });
+});
+
+describe("HybridInputBar after a spoken scratch", () => {
+  it("undoes one that emptied the draft with one Cmd+Z", async () => {
+    const { view } = await mount();
+    await writeDraft("One.");
+
+    // As `scratchLastUtterance` writes it (#14636).
+    await act(async () => {
+      const inputs = useTerminalInputStore.getState();
+      inputs.setDraftInput("term-1", "");
+      recordScratchLanded("term-1", undefined, "");
+      inputs.bumpExternalDraftRevision();
+    });
+    expect(view.state.doc.toString()).toBe("");
+
+    await undo(view);
+
+    expect(view.state.doc.toString()).toBe("One.");
+    expect(draft()).toBe("One.");
   });
 });
