@@ -642,7 +642,7 @@ describe("DeepgramTranscriptionProvider", () => {
     const provider = new DeepgramTranscriptionProvider();
     const events: VoiceTranscriptionEvent[] = [];
     provider.onEvent((e) => {
-      if (e.type !== "status") events.push(e);
+      if (e.type !== "status" && e.type !== "terms_sent") events.push(e);
     });
 
     const { socket } = await bringSessionReady(provider);
