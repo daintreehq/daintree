@@ -468,38 +468,32 @@ describe("HelpSessionTabs", () => {
     expect(onSelect).toHaveBeenCalledWith(2);
   });
 
-  describe("the global assistant's tab (#14454)", () => {
-    const globalTabOf = (container: HTMLElement) =>
-      container.querySelector<HTMLElement>('[data-testid="help-global-tab"]')!;
-
-    it("takes the one selection mark and tab stop from the lanes while selected", () => {
-      const { container } = renderStrip({ globalTab: { selected: true, onSelect: vi.fn() } });
-      const global = globalTabOf(container);
-      expect(marked(container)).toEqual([global]);
-      expect(tabs(container).filter((t) => t.tabIndex === 0)).toEqual([global]);
-      expect(global.id).toBe(helpSessionTabId("strip", "global"));
+  it("draws a close only on the selected lane once the strip is full", () => {
+    // A background lane's close is invisible until hover but still holds its width, and
+    // at the ceiling that room clipped every label. Delete still closes any lane.
+    const onClose = vi.fn();
+    const { container } = renderStrip({
+      tabs: [
+        { slot: 0, label: "Session 1", agentState: undefined },
+        { slot: 1, label: "Session 2", agentState: "working" },
+        { slot: 2, label: "Session 3", agentState: undefined },
+      ],
+      activeSlot: 1,
+      onClose,
     });
+    expect(
+      closers(container).map((c) => c.closest('[role="tab"]')!.getAttribute("data-slot"))
+    ).toEqual(["1"]);
 
-    it("leaves the active lane marked while not selected", () => {
-      const { container } = renderStrip({ globalTab: { selected: false, onSelect: vi.fn() } });
-      expect(marked(container)[0]!.getAttribute("aria-label")).toBe("Session 2");
-    });
+    const list = container.querySelector('[role="tablist"]')!;
+    tabs(container)[2]!.focus();
+    fireEvent.keyDown(list, { key: "Delete" });
+    expect(onClose).toHaveBeenCalledWith(2);
+  });
 
-    it("is reached with the arrow keys and selected only on Enter, and never closes", () => {
-      const onSelect = vi.fn();
-      const onClose = vi.fn();
-      const { container } = renderStrip({ onClose, globalTab: { selected: false, onSelect } });
-      const list = container.querySelector('[role="tablist"]')!;
-      const [global, first] = tabs(container);
-      first!.focus();
-      fireEvent.keyDown(list, { key: "ArrowLeft" });
-      expect(document.activeElement).toBe(global!);
-      expect(onSelect).not.toHaveBeenCalled();
-      fireEvent.keyDown(list, { key: "Delete" });
-      expect(onClose).not.toHaveBeenCalled();
-      fireEvent.keyDown(global!, { key: "Enter" });
-      expect(onSelect).toHaveBeenCalledTimes(1);
-    });
+  it("keeps a hover close on every lane below the ceiling", () => {
+    const { container } = renderStrip();
+    expect(closers(container)).toHaveLength(TABS.length);
   });
 
   it("renders nothing at all when there are no lanes", () => {

@@ -29,8 +29,8 @@ import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
 import { HelpIntroBanner } from "./HelpIntroBanner";
 import { usePaletteStore } from "@/store/paletteStore";
-import { HelpPanelHeader } from "./HelpPanelHeader";
-import { GLOBAL_TAB_KEY, HelpSessionTabs, helpSessionTabId } from "./HelpSessionTabs";
+import { HelpPanelHeader, summarizeLaneActivity, type AssistantScope } from "./HelpPanelHeader";
+import { HelpSessionTabs, helpSessionTabId } from "./HelpSessionTabs";
 import { HelpSessionLaneRuntime } from "./HelpSessionLaneRuntime";
 import {
   markHelpPanelRuntimeMounted,
@@ -785,9 +785,21 @@ export function HelpPanel({
   } = useHelpSessionLanes({ panelRef, activeSlot, activeWorkspaceId, terminalId });
 
   // Shows the global run, whichever it is; never starts one.
-  const handleSelectGlobal = useCallback(() => {
-    useHelpPanelStore.getState().selectGlobal(null);
+  // The focus request outstanding when Global was picked on the switch: the
+  // keyboard stays on the switch, so the pane must not claim it on mount.
+  const [scopeSwitchFocusRequest, setScopeSwitchFocusRequest] = useState(-1);
+  const handleScopeChange = useCallback((scope: AssistantScope) => {
+    const panel = useHelpPanelStore.getState();
+    if (scope === "global") {
+      setScopeSwitchFocusRequest(panel.focusRequest);
+      panel.selectGlobal(null);
+    } else {
+      panel.setActiveSlot(panel.activeSlot);
+    }
   }, []);
+  const projectActivity = useMemo(() => summarizeLaneActivity(sessionTabs), [sessionTabs]);
+  // The header slot the global pane draws its agent and menu into.
+  const [globalControlsHost, setGlobalControlsHost] = useState<HTMLDivElement | null>(null);
 
   // Stop reuses the same "something to lose" gate as +New session — confirm
   // only when a working agent or an engaged conversation would be discarded.
@@ -1070,7 +1082,11 @@ export function HelpPanel({
       />
 
       <HelpPanelHeader
-        agentState={terminalPty?.agentState}
+        agentState={globalSelected ? null : terminalPty?.agentState}
+        scope={globalSelected ? "global" : "project"}
+        onScopeChange={handleScopeChange}
+        globalControlsRef={setGlobalControlsHost}
+        projectActivity={projectActivity}
         canRestartConversation={!globalSelected && Boolean(terminalId && agentId)}
         canEndSession={!globalSelected && Boolean(terminalId && agentId)}
         onRestartConversation={handleRestartActiveSlot}
@@ -1090,24 +1106,25 @@ export function HelpPanel({
         </Suspense>
       )}
 
-      <HelpSessionTabs
-        tabs={sessionTabs}
-        activeSlot={activeSlot}
-        onSelect={handleSelectSlot}
-        onClose={handleCloseSlot}
-        onRestart={handleRestartSlot}
-        // The strip is the only home for this action now. It used to live in the
-        // header's overflow menu as well, which put the one findable route to a
-        // second session two clicks behind an ellipsis.
-        canOpenSession={canOpenParallelSession}
-        onOpenSession={handleOpenParallelSession}
-        newSessionAgentIds={supportedInstalledAgentIds}
-        canOpenSessionWithAgent={canStartSessionWithAgent}
-        onOpenSessionWithAgent={handleOpenSessionWithAgent}
-        idBase={tabIdBase}
-        panelId={sessionBodyId}
-        globalTab={{ selected: globalSelected, onSelect: handleSelectGlobal }}
-      />
+      {!globalSelected && (
+        <HelpSessionTabs
+          tabs={sessionTabs}
+          activeSlot={activeSlot}
+          onSelect={handleSelectSlot}
+          onClose={handleCloseSlot}
+          onRestart={handleRestartSlot}
+          // The strip is the only home for this action now. It used to live in the
+          // header's overflow menu as well, which put the one findable route to a
+          // second session two clicks behind an ellipsis.
+          canOpenSession={canOpenParallelSession}
+          onOpenSession={handleOpenParallelSession}
+          newSessionAgentIds={supportedInstalledAgentIds}
+          canOpenSessionWithAgent={canStartSessionWithAgent}
+          onOpenSessionWithAgent={handleOpenSessionWithAgent}
+          idBase={tabIdBase}
+          panelId={sessionBodyId}
+        />
+      )}
 
       {/* One runtime per open lane. Background lanes need theirs so a session
           the user has tabbed away from still surfaces approvals and still
@@ -1139,8 +1156,10 @@ export function HelpPanel({
           keyboard user an extra stop on the way past the terminal, forever. */}
       <div
         id={sessionBodyId}
-        role="tabpanel"
-        aria-labelledby={helpSessionTabId(tabIdBase, globalSelected ? GLOBAL_TAB_KEY : activeSlot)}
+        // The strip's panel only while the strip is there; the global run has no tab.
+        role={globalSelected ? "region" : "tabpanel"}
+        aria-label={globalSelected ? "Global assistant" : undefined}
+        aria-labelledby={globalSelected ? undefined : helpSessionTabId(tabIdBase, activeSlot)}
         className="flex-1 flex flex-col min-h-0 relative"
       >
         {/* Banners render above every content state — the launch-error banner
@@ -1174,7 +1193,12 @@ export function HelpPanel({
         )}
         {globalSelected ? (
           <Suspense fallback={null}>
-            <LazyGlobalAssistantPane isVisible={isVisible} />
+            <LazyGlobalAssistantPane
+              isVisible={isVisible}
+              controlsHost={globalControlsHost}
+              focusHandledThrough={scopeSwitchFocusRequest}
+              onOpenDocs={handleOpenAssistantDocs}
+            />
           </Suspense>
         ) : showTerminal ? (
           isMissingCli && agentId ? (

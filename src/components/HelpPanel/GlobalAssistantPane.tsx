@@ -1,5 +1,6 @@
 import { Suspense, lazy, useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { CircleStop, Ellipsis, Globe, RotateCw } from "lucide-react";
+import { createPortal } from "react-dom";
+import { CircleHelp, CircleStop, Ellipsis, Globe, RotateCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -18,11 +19,14 @@ import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCa
 import { assistantTerminalApi } from "@/services/assistantSubject";
 import { useCanopyStore } from "@/store/canopyStore";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
+import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
 import type { AgentDirectorySubject } from "@shared/types/agentDirectory";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
 import type { GlobalAssistantInputStamp } from "@shared/types/ipc/help";
 import { useGlobalAssistant } from "./useGlobalAssistant";
+import { HEADER_ACTION_CLASS } from "./HelpPanelHeader";
+import { TabAgentMark } from "./HelpSessionTabs";
 
 const LazyHybridInputBar = lazy(() =>
   import("@/components/Terminal/HybridInputBar").then((m) => ({ default: m.HybridInputBar }))
@@ -52,7 +56,23 @@ function subscribeViewCache(onChange: () => void): () => void {
  * queued under the old ownership is refused by main. Each window's composer
  * keeps its own draft through all of that.
  */
-export function GlobalAssistantPane({ isVisible }: { isVisible: boolean }) {
+export function GlobalAssistantPane({
+  isVisible,
+  controlsHost,
+  onOpenDocs,
+  focusHandledThrough = -1,
+}: {
+  isVisible: boolean;
+  /**
+   * A focus request already served elsewhere. Picking Global on the scope switch
+   * leaves the keyboard on the switch, where arrow keys keep working; only a
+   * request made after that (or before, from a command) brings it here.
+   */
+  focusHandledThrough?: number;
+  /** The panel header's slot for this run's agent and menu; nothing is drawn there without one. */
+  controlsHost: HTMLElement | null;
+  onOpenDocs: () => void;
+}) {
   const isOpen = useHelpPanelStore((s) => s.isOpen);
   const target = useHelpPanelStore((s) => s.globalTarget);
   const focusRequest = useHelpPanelStore((s) => s.focusRequest);
@@ -68,6 +88,9 @@ export function GlobalAssistantPane({ isVisible }: { isVisible: boolean }) {
     generation: number;
   } | null>(null);
   const [starting, setStarting] = useState(false);
+  // As the header's own menu: Escape closes the open menu, not the panel.
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  useEscapeStack(isMenuOpen, () => setIsMenuOpen(false));
   const rootRef = useRef<HTMLDivElement>(null);
 
   const subject = view?.phase === "running" ? (view.subject ?? null) : null;
@@ -92,7 +115,7 @@ export function GlobalAssistantPane({ isVisible }: { isVisible: boolean }) {
   // to its terminal: to the composer, else the terminal, else the pane's one
   // action. The request may predate this lazily loaded pane, so none counts as
   // handled before it has mounted.
-  const handledFocusRef = useRef(-1);
+  const handledFocusRef = useRef(focusHandledThrough);
   useEffect(() => {
     if (!isVisible || !isOpen || handledFocusRef.current === focusRequest) return;
     let frame = 0;
@@ -144,59 +167,70 @@ export function GlobalAssistantPane({ isVisible }: { isVisible: boolean }) {
       className="flex min-h-0 flex-1 flex-col"
       data-testid="help-global-assistant-pane"
     >
-      <div className="flex h-9 min-w-0 shrink-0 items-center gap-2 px-3 text-xs select-none">
-        <Globe className="h-3.5 w-3.5 shrink-0 text-text-secondary" aria-hidden="true" />
-        <span className="min-w-0 shrink-0 font-medium text-text-primary">Global assistant</span>
-        <span className="min-w-0 flex-1 truncate text-text-secondary">{agentName ?? ""}</span>
-        {controllable && !holdsInput && (
-          <Button
-            variant="outline"
-            size="xs"
-            onClick={() => void claimInput()}
-            disabled={attachmentId === null}
-            data-testid="help-global-take-input"
-          >
-            Take input
-          </Button>
+      {controlsHost &&
+        createPortal(
+          <>
+            {/* The run's agent, set apart from the switch by its mark so it can't read
+                as a third option. */}
+            <span
+              className="flex min-w-0 flex-1 items-center gap-1.5 pl-1 text-xs text-text-secondary"
+              data-testid="help-global-agent"
+            >
+              {agentId && <TabAgentMark agentId={agentId} />}
+              <span className="truncate">{agentName ?? ""}</span>
+            </span>
+            <DropdownMenu open={isMenuOpen} onOpenChange={setIsMenuOpen}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      className={HEADER_ACTION_CLASS}
+                      aria-label="More actions"
+                      aria-haspopup="menu"
+                      data-testid="help-global-more"
+                    >
+                      <Ellipsis aria-hidden="true" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">More actions</TooltipContent>
+              </Tooltip>
+              <DropdownMenuContent align="end" className="min-w-[180px]">
+                {controllable && (
+                  <>
+                    <DropdownMenuItem
+                      destructive
+                      onSelect={() => setPendingConfirm({ kind: "restart", generation })}
+                    >
+                      <RotateCw className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                      Restart conversation
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                  </>
+                )}
+                <DropdownMenuItem onSelect={onOpenDocs}>
+                  <CircleHelp className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                  Open docs
+                </DropdownMenuItem>
+                {controllable && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      destructive
+                      onSelect={() => setPendingConfirm({ kind: "discard", generation })}
+                    >
+                      <CircleStop className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                      Stop global assistant
+                    </DropdownMenuItem>
+                  </>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </>,
+          controlsHost
         )}
-        {controllable && (
-          <DropdownMenu>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon-xs"
-                    aria-label="Global assistant actions"
-                    aria-haspopup="menu"
-                    data-testid="help-global-more"
-                  >
-                    <Ellipsis aria-hidden="true" />
-                  </Button>
-                </DropdownMenuTrigger>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">More actions</TooltipContent>
-            </Tooltip>
-            <DropdownMenuContent align="end" className="min-w-[180px]">
-              <DropdownMenuItem
-                destructive
-                onSelect={() => setPendingConfirm({ kind: "restart", generation })}
-              >
-                <RotateCw className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-                Restart conversation
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                destructive
-                onSelect={() => setPendingConfirm({ kind: "discard", generation })}
-              >
-                <CircleStop className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-                Stop global assistant
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        )}
-      </div>
 
       {error !== null && (
         <div className="shrink-0 px-3 pb-2">
@@ -271,6 +305,14 @@ export function GlobalAssistantPane({ isVisible }: { isVisible: boolean }) {
           stamp={stamp}
           agentId={composerAgentId}
           inputOwner={view.inputOwner}
+          canClaimInput={controllable && attachmentId !== null}
+          onClaimInput={() => {
+            // Taking input remounts the terminal under the new ownership, which
+            // drops the focused button; the keyboard follows to the composer.
+            void claimInput().then((claimed) => {
+              if (claimed) useHelpPanelStore.getState().requestFocus();
+            });
+          }}
         />
       )}
 
@@ -316,11 +358,15 @@ function GlobalAssistantTerminal({
   stamp,
   agentId,
   inputOwner,
+  canClaimInput,
+  onClaimInput,
 }: {
   subject: AgentDirectorySubject;
   stamp: GlobalAssistantInputStamp | null;
   agentId: BuiltInAgentId | undefined;
   inputOwner: string | null;
+  canClaimInput: boolean;
+  onClaimInput: () => void;
 }) {
   const [api] = useState(() => assistantTerminalApi(subject, stamp ?? undefined));
   useEffect(() => () => api.dispose(), [api]);
@@ -368,15 +414,27 @@ function GlobalAssistantTerminal({
           />
         </Suspense>
       </div>
+      {/* Where typing would happen, so the way to type sits beside the reason you can't. */}
       {!stamp && (
-        <p
-          className="shrink-0 px-3.5 pb-2 text-xs text-text-secondary"
+        <div
+          className="flex shrink-0 items-center gap-2 px-3.5 pb-2"
           data-testid="help-global-input-elsewhere"
         >
-          {inputOwner === null
-            ? "No window has this assistant's input. Take input to type here."
-            : "Another window has this assistant's input. Take input to type here."}
-        </p>
+          <p className="min-w-0 flex-1 text-xs text-text-secondary">
+            {inputOwner === null
+              ? "No window has this assistant's input"
+              : "Another window has this assistant's input"}
+          </p>
+          <Button
+            variant="outline"
+            size="xs"
+            onClick={onClaimInput}
+            disabled={!canClaimInput}
+            data-testid="help-global-take-input"
+          >
+            Take input
+          </Button>
+        </div>
       )}
     </div>
   );

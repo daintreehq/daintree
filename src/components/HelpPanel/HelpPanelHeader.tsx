@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type Ref } from "react";
 import { ChevronRight, CircleHelp, CircleStop, Ellipsis, History, RotateCw } from "lucide-react";
 import { DaintreeIcon } from "@/components/icons/DaintreeIcon";
 import {
@@ -12,12 +12,20 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { SurfaceHeader, SURFACE_HEADER_FOCUS_LIFT_CLASS } from "@/components/ui/SurfaceHeader";
+import {
+  SegmentedRadioGroup,
+  type SegmentedRadioOption,
+} from "@/components/ui/SegmentedRadioGroup";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { NewSessionWithAgentLabel } from "./NewSessionWithAgentLabel";
+import { TabStateIndicator } from "./HelpSessionTabs";
 import type { AgentState } from "@/types";
 
 /** The panel-chrome action button: `icon-xs` (24px target) with a 14px glyph. */
-const HEADER_ACTION_CLASS = "[&_svg]:size-3.5";
+export const HEADER_ACTION_CLASS = "[&_svg]:size-3.5";
+
+/** Which assistant the panel shows: this project's lanes, or the installation's one global run. */
+export type AssistantScope = "project" | "global";
 
 /** What the active lane's state is called when it is spoken rather than drawn. */
 const SPOKEN_STATE: Partial<Record<NonNullable<AgentState>, string>> = {
@@ -55,9 +63,69 @@ function AssistantStateAnnouncer({ agentState }: { agentState: AgentState | null
   );
 }
 
+/** The project lane most worth a glance while it is off screen, and every lane's state in words. */
+export interface ProjectScopeActivity {
+  agentState: AgentState;
+  /** "Session 2 waiting, Session 3 working" — what was seen, lane by lane. */
+  summary: string;
+}
+
+/** Most worth a glance first. Idle and exited lanes draw nothing, as in the strip. */
+const LANE_STATE_RANK: Partial<Record<NonNullable<AgentState>, number>> = {
+  waiting: 0,
+  directing: 1,
+  working: 2,
+};
+
+export function summarizeLaneActivity(
+  tabs: readonly { label: string; agentState: AgentState | null | undefined }[]
+): ProjectScopeActivity | null {
+  const marked = tabs.flatMap((tab) => {
+    const rank = tab.agentState ? LANE_STATE_RANK[tab.agentState] : undefined;
+    return tab.agentState && rank !== undefined
+      ? [{ label: tab.label, state: tab.agentState, rank }]
+      : [];
+  });
+  if (marked.length === 0) return null;
+  const top = marked.reduce((a, b) => (b.rank < a.rank ? b : a));
+  return {
+    agentState: top.state,
+    summary: marked.map((lane) => `${lane.label} ${lane.state}`).join(", "),
+  };
+}
+
+function scopeOptions(
+  scope: AssistantScope,
+  projectActivity: ProjectScopeActivity | null
+): SegmentedRadioOption<AssistantScope>[] {
+  // Only the scope NOT on screen carries a mark: the one on screen draws each
+  // lane's state in its own strip.
+  const background = scope === "global" ? projectActivity : null;
+  return [
+    {
+      value: "project",
+      label: "Project",
+      tooltip: background ? background.summary : "This project's sessions",
+      ariaLabel: background ? `Project, ${background.summary}` : undefined,
+      trailing: background ? <TabStateIndicator agentState={background.agentState} /> : undefined,
+    },
+    { value: "global", label: "Global", tooltip: "One assistant for every project and window" },
+  ];
+}
+
 interface HelpPanelHeaderProps {
   /** The state of the lane on screen. Announced only — the strip draws it. */
   agentState: AgentState | null | undefined;
+  scope: AssistantScope;
+  onScopeChange: (scope: AssistantScope) => void;
+  /**
+   * Where the global pane puts its own controls while it is shown. The header
+   * keeps panel-level actions; the global run's agent and menu are the pane's,
+   * drawn here so the global scope costs one row instead of three.
+   */
+  globalControlsRef?: Ref<HTMLDivElement>;
+  /** Background lane activity, marked on the Project option while Global is shown. */
+  projectActivity?: ProjectScopeActivity | null;
   canRestartConversation: boolean;
   canEndSession: boolean;
   onRestartConversation: () => void;
@@ -75,6 +143,10 @@ interface HelpPanelHeaderProps {
 
 export function HelpPanelHeader({
   agentState,
+  scope,
+  onScopeChange,
+  globalControlsRef,
+  projectActivity = null,
   canRestartConversation,
   canEndSession,
   onRestartConversation,
@@ -110,11 +182,20 @@ export function HelpPanelHeader({
         isFocused && [SURFACE_HEADER_FOCUS_LIFT_CLASS, "border-overlay"]
       )}
     >
-      <div className="flex items-center min-w-0 flex-1">
+      {/* The scope switch is the panel's title. A static "Daintree Assistant" label
+          spent the row's widest stretch saying what the toolbar button already
+          said, while the global run sat in the session strip as a peer of the
+          lanes it is not one of: it has no close, no "+", and no siblings. */}
+      <div className={cn("flex items-center gap-2 min-w-0", scope === "project" && "flex-1")}>
         <DaintreeIcon className="w-4 h-4 text-text-secondary shrink-0" />
-        <span className="ml-1.5 text-xs font-medium text-text-secondary truncate">
-          Daintree Assistant
-        </span>
+        <SegmentedRadioGroup
+          density="compact"
+          aria-label="Assistant scope"
+          options={scopeOptions(scope, projectActivity)}
+          value={scope}
+          onChange={onScopeChange}
+          testId="assistant-scope"
+        />
         <AssistantStateAnnouncer agentState={agentState} />
       </div>
       {/* The header carries panel-level actions only. Anything scoped to ONE
@@ -125,71 +206,76 @@ export function HelpPanelHeader({
           another session — two plus-shaped affordances a few pixels apart doing
           different things, and only the destructive one was visible. Restarting
           is now a named overflow item, and the strip owns the only `+`. */}
-      <DropdownMenu open={isMenuOpen} onOpenChange={setIsMenuOpen}>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon-xs"
-                className={HEADER_ACTION_CLASS}
-                aria-label="More actions"
-                aria-haspopup="menu"
-                data-testid="assistant-header-more"
-              >
-                <Ellipsis aria-hidden="true" />
-              </Button>
-            </DropdownMenuTrigger>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">More actions</TooltipContent>
-        </Tooltip>
-        <DropdownMenuContent align="end" className="min-w-[180px]">
-          {/* Named for what it does to the conversation, not for what it does to
+      {scope === "global" && (
+        <div ref={globalControlsRef} className="contents" data-testid="assistant-global-controls" />
+      )}
+      {scope === "project" && (
+        <DropdownMenu open={isMenuOpen} onOpenChange={setIsMenuOpen}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  className={HEADER_ACTION_CLASS}
+                  aria-label="More actions"
+                  aria-haspopup="menu"
+                  data-testid="assistant-header-more"
+                >
+                  <Ellipsis aria-hidden="true" />
+                </Button>
+              </DropdownMenuTrigger>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">More actions</TooltipContent>
+          </Tooltip>
+          <DropdownMenuContent align="end" className="min-w-[180px]">
+            {/* Named for what it does to the conversation, not for what it does to
               the session. "Start new session" read as "give me another session",
               which is the strip's `+` — and this is the one that throws the
               current conversation away. Opening a parallel session is NOT
               mirrored here: the strip's `+` is its single home. Opening one on
               a particular agent is, because the `+` starts the default and has
               no room to ask (#13442). */}
-          {canRestartConversation && (
-            <>
-              <DropdownMenuItem destructive onSelect={onRestartConversation}>
-                <RotateCw className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-                Restart conversation
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-            </>
-          )}
-          {onNewSessionWithAgent &&
-            newSessionAgentIds.length > 1 &&
-            newSessionAgentIds.map((agentId) => (
-              <DropdownMenuItem
-                key={agentId}
-                disabled={!canStartNewSession}
-                onSelect={() => onNewSessionWithAgent(agentId)}
-              >
-                <NewSessionWithAgentLabel agentId={agentId} />
-              </DropdownMenuItem>
-            ))}
-          <DropdownMenuItem onSelect={onResumePastSession}>
-            <History className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-            Resume a past session…
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={onOpenDocs}>
-            <CircleHelp className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-            Open docs
-          </DropdownMenuItem>
-          {canEndSession && (
-            <>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem destructive onSelect={onEndSession}>
-                <CircleStop className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-                Stop assistant
-              </DropdownMenuItem>
-            </>
-          )}
-        </DropdownMenuContent>
-      </DropdownMenu>
+            {canRestartConversation && (
+              <>
+                <DropdownMenuItem destructive onSelect={onRestartConversation}>
+                  <RotateCw className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                  Restart conversation
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+              </>
+            )}
+            {onNewSessionWithAgent &&
+              newSessionAgentIds.length > 1 &&
+              newSessionAgentIds.map((agentId) => (
+                <DropdownMenuItem
+                  key={agentId}
+                  disabled={!canStartNewSession}
+                  onSelect={() => onNewSessionWithAgent(agentId)}
+                >
+                  <NewSessionWithAgentLabel agentId={agentId} />
+                </DropdownMenuItem>
+              ))}
+            <DropdownMenuItem onSelect={onResumePastSession}>
+              <History className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+              Resume a past session…
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={onOpenDocs}>
+              <CircleHelp className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+              Open docs
+            </DropdownMenuItem>
+            {canEndSession && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem destructive onSelect={onEndSession}>
+                  <CircleStop className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                  Stop assistant
+                </DropdownMenuItem>
+              </>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
       <Tooltip>
         <TooltipTrigger asChild>
           <Button
