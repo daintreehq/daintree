@@ -1117,9 +1117,9 @@ export function createSessionServerDeps(
     ...(relay?.global === true
       ? {
           globalSteer: {
-            prompt: (...args) => boundSteer(host).prompt(...args),
-            keys: (...args) => boundSteer(host).keys(...args),
-            interrupt: (...args) => boundSteer(host).interrupt(...args),
+            prompt: async (...args) => boundSteer(host).prompt(...args),
+            keys: async (...args) => boundSteer(host).keys(...args),
+            interrupt: async (...args) => boundSteer(host).interrupt(...args),
           },
         }
       : {}),

@@ -162,6 +162,69 @@ describe("createSessionServerDeps", () => {
     expect(sessionDeps.relay?.global).toBe(expected);
   });
 
+  // #14551: only a relay caller its Shell's runtime named global is handed the
+  // steer, from this machine's global Assistant or another's.
+  const RELAY = {
+    linkSessionId: "link-1",
+    senderId: "shell-1",
+    helpSessionId: "help-1",
+    shellName: "Shell",
+  };
+  it.each([
+    ["another machine's", RELAY],
+    ["this machine's", { ...RELAY, local: true as const }],
+  ])(
+    "hands %s global Assistant the steer, read from the binding at each call",
+    async (_l, relay) => {
+      const { state, host } = mutableHost();
+      const sessionDeps = createSessionServerDeps(fakeSource(), host, {
+        sessionId: "s",
+        relay: { ...relay, global: true },
+      });
+      expect(sessionDeps.relay?.global).toBe(true);
+      const target = {
+        projectId: "p",
+        terminalId: "t",
+        generation: 1,
+        authorize: () => {},
+      };
+
+      // Unbound, the call is refused, never run some other way.
+      await expect(sessionDeps.globalSteer!.interrupt(target)).rejects.toMatchObject({
+        code: "WORKER_NOT_FOUND",
+      });
+      const interrupt = vi.fn(async () => ({
+        terminalId: "t",
+        agentId: "claude",
+        agentStateAtDispatch: "working",
+        status: "requested" as const,
+      }));
+      state.binding = {
+        control: {} as AssistantControlBinding["control"],
+        sessionProject: () => null,
+        steer: { prompt: vi.fn(), keys: vi.fn(), interrupt } as never,
+      };
+      await sessionDeps.globalSteer!.interrupt(target);
+      expect(interrupt).toHaveBeenCalledWith(target);
+    }
+  );
+
+  it.each([
+    ["a project assistant's relay session", { relay: RELAY }],
+    [
+      "this machine's project assistant reaching another project",
+      { relay: { ...RELAY, local: true as const } },
+    ],
+    ["a direct session", {}],
+  ])("hands %s no steer", (_label, capture) => {
+    const sessionDeps = createSessionServerDeps(fakeSource(), mutableHost().host, {
+      sessionId: "s",
+      ...capture,
+    });
+    expect(sessionDeps.globalSteer).toBeUndefined();
+    expect(sessionDeps.relay?.global).toBeUndefined();
+  });
+
   it("names the external client the host reports at dispatch time, not at build", async () => {
     const deps = fakeSource();
     const { state, host } = mutableHost();
