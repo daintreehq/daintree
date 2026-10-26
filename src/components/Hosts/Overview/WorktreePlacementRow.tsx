@@ -19,6 +19,8 @@ import { logWarn } from "@/utils/logger";
 import { hasRemoteHosts, useHostList } from "../hostList";
 import { buildHostMenuRows, clientPlatform, type HostMenuRow } from "../hostModel";
 import { isNewWindowClick } from "../hostSwitching";
+import { useProjectHosts } from "../projectHosts";
+import { describePlacementProjectFacts } from "./placementProjectFacts";
 import { startHostMetricsFeed } from "./hostMetricsFeed";
 import { compareHostCapacity, isLive, type PlacementComparison } from "./overviewModel";
 
@@ -104,6 +106,7 @@ export function WorktreePlacementRow({
   const [handoff, setHandoff] = useState<
     { status: "idle" } | { status: "pending" } | { status: "failed"; hostName: string }
   >({ status: "idle" });
+  const projectHosts = useProjectHosts(projectId);
   const visible = isRemoteShellSupported() && hasRemoteHosts(hostList);
 
   useEffect(() => (visible ? startHostMetricsFeed() : undefined), [visible]);
@@ -123,6 +126,15 @@ export function WorktreePlacementRow({
   const best = rows.find((row) => row.hostId === comparison.suggestedHostId) ?? null;
   const factsOf = (hostId: HostId) =>
     comparison.options.find((option) => option.hostId === hostId)?.facts;
+  const projectFactsOf = (hostId: HostId): string[] => {
+    const host = projectHosts.find((entry) => entry.hostId === hostId);
+    if (!host) return [];
+    return describePlacementProjectFacts(
+      host,
+      host.row,
+      history.get(hostId)?.[0] ?? host.row.summary
+    );
+  };
   const chosenRow = rows.find((row) => row.hostId === chosen) ?? rows[0]!;
 
   // The dialog stays open until the worktree exists on the host: closing
@@ -178,10 +190,21 @@ export function WorktreePlacementRow({
             {`Couldn't open this project on ${handoff.hostName}. Check that it's connected and retry.`}
           </span>
         ) : (
-          <span className="text-xs text-text-secondary" data-testid="worktree-placement-suggestion">
-            {best ? `${best.name} reports more free cores and memory than the others. ` : ""}
-            {`${chosenRow.name}: ${factsOf(chosenRow.hostId) ?? "No measurements reported"}`}
-          </span>
+          <>
+            <span
+              className="text-xs text-text-secondary"
+              data-testid="worktree-placement-suggestion"
+            >
+              {best ? `${best.name} reports more free cores and memory than the others. ` : ""}
+              {`${chosenRow.name}: ${factsOf(chosenRow.hostId) ?? "No measurements reported"}`}
+            </span>
+            <span
+              className="block text-xs text-text-secondary"
+              data-testid="worktree-placement-project-facts"
+            >
+              {projectFactsOf(chosenRow.hostId).join(" · ")}
+            </span>
+          </>
         )
       }
     >
@@ -207,7 +230,16 @@ export function WorktreePlacementRow({
                 key={row.hostId}
                 value={row.hostId}
                 disabled={!isLive(row)}
-                description={factsOf(row.hostId)}
+                description={
+                  <>
+                    <span className="block">{factsOf(row.hostId)}</span>
+                    {projectFactsOf(row.hostId).map((line) => (
+                      <span key={line} className="block">
+                        {line}
+                      </span>
+                    ))}
+                  </>
+                }
               >
                 {row.name}
                 {row.hostId === windowHostId ? " (this window)" : ""}
