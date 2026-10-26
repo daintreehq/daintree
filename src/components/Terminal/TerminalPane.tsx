@@ -442,8 +442,11 @@ function TerminalPaneComponent({
   // `dismissedRestartPrompt` either way, so acknowledging a lost session still
   // never suppresses a later exit-error banner (issue #10823).
   const [isSearchOpen, setIsSearchOpen] = useState(false);
-  // The surface that held the keyboard when search opened, for its close.
-  const searchReturnSurfaceRef = useRef<TerminalFocusTarget | null>(null);
+  // The surface that held the keyboard when search opened, for its close. Kept
+  // with its pane id: a tab switch reuses this component for another terminal.
+  const searchReturnRef = useRef<{ paneId: string; surface: TerminalFocusTarget | null } | null>(
+    null
+  );
   const [isUpdateCwdOpen, setIsUpdateCwdOpen] = useState(false);
   const [isAutoRestarting, setIsAutoRestarting] = useState(false);
   const [completionBannerDismissed, setCompletionBannerDismissed] = useState(false);
@@ -892,7 +895,9 @@ function TerminalPaneComponent({
       if (!isFocused || isHeldPane) return;
       // Remembered only on the way in, so a second Cmd+F from the search
       // field doesn't make the field the place to return to.
-      if (!isSearchOpen) searchReturnSurfaceRef.current = paneSurfaceHoldingFocus(id);
+      if (!isSearchOpen || searchReturnRef.current?.paneId !== id) {
+        searchReturnRef.current = { paneId: id, surface: paneSurfaceHoldingFocus(id) };
+      }
       setIsSearchOpen(true);
       requestAnimationFrame(() => {
         document.querySelector<HTMLInputElement>("[data-terminal-search-input]")?.focus();
@@ -1791,17 +1796,16 @@ function TerminalPaneComponent({
                         // Restoring isn't arriving: the keyboard goes back to
                         // the surface that had it when search opened, home when
                         // neither did, resolved against what the pane can take
-                        // by then. A press before the frame leaves it where the
-                        // user went.
+                        // by then. Asked now rather than a frame later, so it
+                        // can't land after the user has moved to another pane;
+                        // a hybrid input's own deferred grab is called off by
+                        // this pane losing the selection.
+                        const opened = searchReturnRef.current;
+                        searchReturnRef.current = null;
                         const surface =
-                          searchReturnSurfaceRef.current ??
+                          (opened?.paneId === id ? opened.surface : null) ??
                           selectHomeFocusTarget(useTerminalInputStore.getState());
-                        searchReturnSurfaceRef.current = null;
-                        const epoch = captureFocusEpoch();
-                        requestAnimationFrame(() => {
-                          if (!isFocusEpochCurrent(epoch)) return;
-                          requestPaneFocus(id, surface);
-                        });
+                        requestPaneFocus(id, surface);
                       }}
                     />
                   )}
