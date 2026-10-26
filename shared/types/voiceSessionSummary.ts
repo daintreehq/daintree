@@ -22,7 +22,7 @@ export const VOICE_STOP_REASONS = [
   "key_release",
   "window_blur",
   "escape",
-  // A send took the draft.
+  // A send took the draft, or a spoken "send it" ended the dictation.
   "send",
   "panel_closed",
   "mic_lost",

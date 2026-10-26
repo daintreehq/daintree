@@ -3655,7 +3655,7 @@ class VoiceRecordingService {
       handler();
       return;
     }
-    void this.stop();
+    void this.stop("Dictation stopped.", { reason: "send" });
   }
 
   destroy(): void {

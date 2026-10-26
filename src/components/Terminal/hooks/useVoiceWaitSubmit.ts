@@ -210,7 +210,7 @@ export function useVoiceWaitSubmit({
         projectId ?? useProjectStore.getState().currentProject?.id,
         () => {
           if (isDisabledRef.current?.()) {
-            void voiceRecordingService.stop();
+            void voiceRecordingService.stop("Dictation stopped.", { reason: "send" });
             return;
           }
           startVoiceWaitSubmit({ spoken: true });
