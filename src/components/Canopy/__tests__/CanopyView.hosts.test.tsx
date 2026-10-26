@@ -339,9 +339,9 @@ describe("the Canopy host picker", () => {
     const [allHosts, ...rows] = [...menu.querySelectorAll<HTMLElement>("[data-host-id]")];
     // All hosts leads the list; it is a scope, not a host.
     expect(allHosts!.getAttribute("data-host-id")).toBe("*");
-    expect(allHosts!.getAttribute("aria-current")).toBeNull();
+    expect(allHosts!.getAttribute("aria-checked")).toBe("false");
     expect(rows.map((row) => row.getAttribute("data-host-id"))).toEqual(["local", "studio"]);
-    expect(rows[0]!.getAttribute("aria-current")).toBe("true");
+    expect(rows[0]!.getAttribute("aria-checked")).toBe("true");
     // Waiting first, then working, as the host switcher draws them.
     expect(rows[1]!.querySelector("[data-host-agents]")?.textContent).toContain(
       "Agents: 2 waiting, 1 working"
