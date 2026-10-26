@@ -13,7 +13,6 @@ import {
   Archive,
   ArchiveRestore,
   Bell,
-  CheckCheck,
   Clock,
   KeyRound,
   MessageSquare,
@@ -548,7 +547,16 @@ export function CanopyCard({
     agentState !== "idle" &&
     (isHandBack || (agentState !== "completed" && agentState !== "exited"));
   const { detail, action, progress, facts, contextWarning, readerWritten } = itemDetail(item);
-  const detailAttribution = readerWritten ? readerAttribution(item, Date.now()) : null;
+  // An open question is the pane's anchor, whole and in the screen's words: the
+  // row could only fit a headline, and a summary of it would only say it again.
+  const question =
+    item.kind === "question" && !item.stale && item.card?.question ? item.card.question : null;
+  const shownDetail = question !== null && readerWritten ? null : detail;
+  // The readers' verdict that it is finished is theirs too, so it sits with
+  // their other words, under the same attribution, rather than in the title bar
+  // where it would read as Daintree's own state.
+  const readerSaid = readerWritten || question !== null || looksDone;
+  const detailAttribution = readerSaid ? readerAttribution(item, Date.now()) : null;
   const summaryNotes = [
     workLabel,
     contextWarning,
@@ -558,7 +566,12 @@ export function CanopyCard({
     }),
   ].filter((note): note is string => note !== null && note !== "");
   const hasSummary =
-    detail !== null || action !== null || progress !== null || summaryNotes.length > 0;
+    looksDone ||
+    question !== null ||
+    shownDetail !== null ||
+    action !== null ||
+    progress !== null ||
+    summaryNotes.length > 0;
   const brandSurface: BrandMarkSurface = focused
     ? { surface: "surface-panel", extension: "panel-header-focus-bg", lift: "overlay-medium" }
     : { surface: "surface-panel", extension: "panel-header-bg" };
@@ -637,16 +650,6 @@ export function CanopyCard({
               <span className="truncate">
                 Press {armedAnswer.digit} again: {armedAnswer.label}
               </span>
-            </span>
-          )}
-          {looksDone && (
-            <span
-              role="status"
-              data-canopy-looks-done=""
-              className="flex shrink-0 items-center gap-1 text-text-secondary"
-            >
-              <CheckCheck className="size-3.5 shrink-0" aria-hidden="true" />
-              Looks done
             </span>
           )}
         </div>
@@ -753,7 +756,9 @@ export function CanopyCard({
       {hasSummary && (
         <div
           data-canopy-summary=""
-          className="flex shrink-0 flex-col gap-1 border-b border-overlay px-3 py-2 text-xs leading-4 text-text-secondary"
+          // Held to a share of the pane, scrolling past it, so a long question is
+          // there in full without pushing the terminal off screen.
+          className="flex max-h-[40%] shrink-0 flex-col gap-1 overflow-y-auto border-b border-overlay px-3 py-2 text-xs leading-4 text-text-secondary"
         >
           {progress !== null && (
             <span className="flex items-center gap-2 tabular-nums">
@@ -766,13 +771,22 @@ export function CanopyCard({
               {/^[\w./-]+$/.test(action) && /[./]/.test(action) ? action : `$ ${action}`}
             </span>
           )}
-          {detail !== null && <p className="line-clamp-4 break-words">{detail}</p>}
-          {detail !== null && detailAttribution !== null && (
+          {looksDone && (
+            <p role="status" data-canopy-looks-done="" className="text-text-primary">
+              Looks done
+            </p>
+          )}
+          {question !== null && (
+            <p className="text-sm leading-5 break-words text-text-primary">{question}</p>
+          )}
+          {shownDetail !== null && <p className="line-clamp-4 break-words">{shownDetail}</p>}
+          {summaryNotes.length > 0 && <p className="break-words">{summaryNotes.join(" · ")}</p>}
+          {/* Last, so it is read as covering everything above it. */}
+          {detailAttribution !== null && (
             <p data-canopy-attribution="" className="whitespace-nowrap">
               {detailAttribution}
             </p>
           )}
-          {summaryNotes.length > 0 && <p className="break-words">{summaryNotes.join(" · ")}</p>}
         </div>
       )}
 
@@ -810,7 +824,7 @@ export function CanopyCard({
           onSubmitted={() => onSent(item, "terminal")}
           onGoTo={(event) => onOpen(item, isNewWindowClick(event))}
         />
-        {answerChoices.length > 0 && (
+        {(answerChoices.length > 0 || (question !== null && canReply)) && (
           <div
             role="group"
             aria-label="Answer"

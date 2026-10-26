@@ -17,8 +17,9 @@
 
 .canopy-inbox {
   background: var(--theme-surface-sidebar);
-  /* Rows brought into view stop below the pinned heading, never under it. */
-  scroll-padding-top: 2.25rem;
+  /* Rows brought into view stop below the pinned headings — the Inbox bar and
+     the band heading under it — never under them. */
+  scroll-padding-top: 4rem;
 }
 
 /* Each section's heading stays at the top while its rows scroll beneath, and
@@ -26,6 +27,15 @@
 .canopy-inbox-heading {
   position: sticky;
   top: 0;
+  z-index: 1;
+  background-color: var(--theme-surface-sidebar);
+}
+
+/* The band headings inside the inbox pin beneath its own bar (h-9), each held
+   to its group, so the next band's heading pushes the last one away. */
+.canopy-inbox-band-heading {
+  position: sticky;
+  top: 2.25rem;
   z-index: 1;
   background-color: var(--theme-surface-sidebar);
 }

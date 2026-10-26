@@ -152,6 +152,26 @@ export function readerAttribution(item: CanopyItem, nowMs: number): string | nul
   return `Read by Canopy ${formatTimeAgo(card.observedAt, nowMs)}`;
 }
 
+/**
+ * The same attribution as a row can afford it: whose words they are, in one
+ * word, with the age left to the selected pane — the age is what lets the user
+ * judge a reading, and it is the same "just now" down a list read in one pass.
+ * Words kept from an earlier screen still say so in full: that is news.
+ */
+export function readerTag(item: CanopyItem, nowMs: number): string | null {
+  const full = readerAttribution(item, nowMs);
+  return full !== null && full.startsWith("Read by Canopy") ? "Canopy" : full;
+}
+
+/** When a snooze lifts, as the clock on the wall says it. */
+function snoozedLabel(until: number | undefined): string {
+  if (until === undefined) return "Snoozed";
+  const time = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(
+    until
+  );
+  return `Snoozed until ${time}`;
+}
+
 /** Whether the ask is the reader's own headline or question, not a glance or a category label. */
 function statusIsReaderWords(item: CanopyItem, status: string): boolean {
   const card = item.card;
@@ -247,10 +267,11 @@ interface CanopyRowProps {
  * One agent in the inbox. A leading column holds what Daintree observed — its
  * state, whose agent, and the clock for that state; beside it, the task it is
  * carrying out, what it needs from you, and, always on its bottom
- * line, the project (its emoji and name) and worktree it runs in. An unread run carries a dot in the gutter and
- * a heavier name. The list's order is its priority; the row shows why it ranks
- * there in words, never as a score — on screen or read aloud. A click opens its
- * terminal beside the list.
+ * line, the project (its emoji and name) and worktree it runs in. An unread run
+ * carries a heavier name, as a mail list's does: a mark in the gutter would sit
+ * outside the lead column and make the list's left edge ragged. The list's
+ * order is its priority; the row shows why it ranks there in words, never as a
+ * score — on screen or read aloud. A click opens its terminal beside the list.
  */
 function parkedLabel(note: string | undefined): string {
   const trimmed = note?.trim();
@@ -348,8 +369,13 @@ export function CanopyRow({
     row.run.park !== undefined
       ? parkedLabel(row.run.park.note)
       : row.run.snooze !== undefined
-        ? "Snoozed"
+        ? snoozedLabel(row.run.snooze.snoozedUntil)
         : null;
+  // A run put aside says why on its ask line, in the user's own words: the held
+  // ask waits in the selected pane, so it is never read here as live.
+  // A quiet run with no words of its own is named for its band, not "Working".
+  const quietLead = row.band === "quiet" && glanceStatus(item) === null;
+  const leadWord = asideWord ?? (quietLead ? "Quiet" : null);
   // What follows the ask on its line, each part whole. Quiet and working share
   // the spinner and differ only in hue once motion is reduced; the word says
   // which, since the clock beside the glyph is only a time. Everything else the
@@ -362,17 +388,22 @@ export function CanopyRow({
   // The reader's words carry who read them and when; a failed read then says
   // so there, not in a tail that clips.
   const attribution =
-    !compact && !reading && statusIsReaderWords(item, status)
+    !compact && !reading && leadWord === null && statusIsReaderWords(item, status)
       ? readerAttribution(item, nowMs)
       : null;
+  const tag = attribution !== null ? readerTag(item, nowMs) : null;
+  // One health note beside the attribution at most, the most pressing first,
+  // so the trailing words can never outgrow the ask they follow; the rest are
+  // in the row's description and the selected pane.
   const statusTail = [
-    asideWord,
     stalled,
-    row.band === "quiet" ? "Quiet" : null,
-    unseenLabel,
+    row.band === "quiet" && !quietLead ? "Quiet" : null,
     item.failed && attribution === null ? "Read failed" : null,
     asideLabel,
-  ].filter((part): part is string => part !== null);
+    unseenLabel,
+  ]
+    .filter((part): part is string => part !== null)
+    .slice(0, 1);
   const askId = `${domId}-ask`;
   const metaId = `${domId}-meta`;
   // The name is only which agent this is, so arrowing down the list hears
@@ -434,16 +465,6 @@ export function CanopyRow({
         "canopy-inbox-row group/row relative flex w-full shrink-0 cursor-pointer items-stretch gap-3 px-3 py-2.5 text-left"
       )}
     >
-      {/* Unread: a dot in the gutter, in a slot every row keeps, so a row
-          read or unread never moves its text. Neutral ink — the focus ring
-          owns this list's one accent. */}
-      {unread && (
-        <span
-          aria-hidden="true"
-          data-canopy-unread-dot=""
-          className="absolute top-[17px] left-1 size-1.5 rounded-full bg-text-primary"
-        />
-      )}
       {onArchive && (
         // Named as the context menu names it, with the key that does it from
         // the keyboard. Hover only: the button never takes focus, so its
@@ -534,34 +555,40 @@ export function CanopyRow({
             </span>
           )}
         </span>
-        <span id={askId} className="flex h-4 min-w-0 items-center gap-2 text-xs leading-4">
+        <span id={askId} className="flex h-4 min-w-0 items-center gap-1.5 text-xs leading-4">
           <span
             className={cn(
-              "min-w-0 flex-1 truncate",
+              "min-w-0 truncate",
               readingInAsk && "canopy-reading",
               // What it wants stays in full ink after it has been looked at:
               // reading a request doesn't make it any less outstanding. A run
               // that needs nothing from the user steps down a tone, so the ones
               // that do stand out down the list without a colour of their own.
-              !compact && !readingInAsk && needsYou ? "text-text-primary" : "text-text-secondary"
+              !compact && !readingInAsk && needsYou && leadWord === null
+                ? "text-text-primary"
+                : "text-text-secondary"
             )}
           >
-            {readingInAsk ? "Reading the screen…" : status}
+            {readingInAsk ? "Reading the screen…" : (leadWord ?? status)}
           </span>
-          {caution && <WarningGlyph className="size-3.5 shrink-0 text-status-warning" />}
-          {attribution !== null && (
-            <span
-              data-canopy-attribution=""
-              className="shrink-0 whitespace-nowrap text-text-secondary"
-            >
-              {attribution}
+          {/* Beside the words it qualifies, not out at the line's far end. */}
+          {caution && leadWord === null && (
+            <WarningGlyph className="size-3.5 shrink-0 text-status-warning" />
+          )}
+          {(tag !== null || statusTail.length > 0) && (
+            <span className="ml-auto flex max-w-[55%] min-w-0 shrink-0 items-center gap-2 pl-1.5 text-text-secondary">
+              {tag !== null && (
+                <span data-canopy-attribution="" className="min-w-0 truncate">
+                  {tag}
+                </span>
+              )}
+              {statusTail.map((part) => (
+                <span key={part} className="min-w-0 truncate">
+                  {part}
+                </span>
+              ))}
             </span>
           )}
-          {statusTail.map((part) => (
-            <span key={part} className="max-w-[40%] shrink-0 truncate text-text-secondary">
-              {part}
-            </span>
-          ))}
         </span>
         {/* The location line says location only: project, worktree, host. The
             host has a slot of its own that holds its width while the worktree
