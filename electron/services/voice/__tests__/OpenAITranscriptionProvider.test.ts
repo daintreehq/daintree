@@ -643,6 +643,122 @@ describe("OpenAITranscriptionProvider", () => {
     service.stop();
   });
 
+  describe("keyterms still assembling at start (#14619)", () => {
+    function deferredTerms() {
+      let resolve!: (terms: string[]) => void;
+      const promise = new Promise<string[]>((r) => {
+        resolve = r;
+      });
+      return { promise, resolve };
+    }
+
+    it("opens the socket without waiting, then sends the same session.update once they land", async () => {
+      const terms = deferredTerms();
+      const service = new OpenAITranscriptionProvider();
+      void service.start(BASE_SETTINGS, "session-1", { keyterms: terms.promise });
+      await Promise.resolve();
+      expect(instances).toHaveLength(1);
+      const socket = latestInstance();
+      socket.simulateOpen();
+      expect(socket.sent).toHaveLength(0);
+
+      terms.resolve(["Daintree", "<div>", "xterm"]);
+      await terms.promise;
+      expect(socket.sentJson().map((p) => p.type)).toEqual(["session.update"]);
+
+      const eager = new OpenAITranscriptionProvider();
+      void eager.start({ ...BASE_SETTINGS, keyterms: ["Daintree", "<div>", "xterm"] }, "session-2");
+      await Promise.resolve();
+      const eagerSocket = latestInstance();
+      eagerSocket.simulateOpen();
+      expect(socket.sent[0]).toBe(eagerSocket.sent[0]);
+      service.stop();
+      eager.stop();
+    });
+
+    it("sends session.update as the socket opens when the terms landed first", async () => {
+      const service = new OpenAITranscriptionProvider();
+      const terms = Promise.resolve(["Daintree"]);
+      void service.start(BASE_SETTINGS, "session-1", { keyterms: terms });
+      await terms;
+      const socket = latestInstance();
+      socket.simulateOpen();
+      expect(readTranscription(socket).keywords).toEqual(["Daintree"]);
+      service.stop();
+    });
+
+    it("starts without bias terms when assembly rejects", async () => {
+      const service = new OpenAITranscriptionProvider();
+      const terms = Promise.reject(new Error("git failed"));
+      void service.start(BASE_SETTINGS, "session-1", { keyterms: terms });
+      await terms.catch(() => {});
+      await Promise.resolve();
+      const socket = latestInstance();
+      socket.simulateOpen();
+      expect(readTranscription(socket)).not.toHaveProperty("keywords");
+      service.stop();
+    });
+
+    it("sends nothing on a socket that closed before the terms landed", async () => {
+      const terms = deferredTerms();
+      const service = new OpenAITranscriptionProvider();
+      const startPromise = service.start(BASE_SETTINGS, "session-1", { keyterms: terms.promise });
+      await Promise.resolve();
+      const socket = latestInstance();
+      socket.simulateOpen();
+      socket.simulateClose(1006);
+      await expect(startPromise).resolves.toMatchObject({ ok: false });
+
+      terms.resolve(["Daintree"]);
+      await terms.promise;
+      expect(socket.sent).toHaveLength(0);
+    });
+
+    it("keeps a replaced session's late terms out of its successor", async () => {
+      const terms = deferredTerms();
+      const service = new OpenAITranscriptionProvider();
+      void service.start(BASE_SETTINGS, "session-1", { keyterms: terms.promise });
+      await Promise.resolve();
+      const first = latestInstance();
+      first.simulateOpen();
+
+      void service.start({ ...BASE_SETTINGS, keyterms: ["fresh"] }, "session-2");
+      await Promise.resolve();
+      const second = latestInstance();
+      second.simulateOpen();
+      terms.resolve(["stale-term"]);
+      await terms.promise;
+
+      expect(first.sent).toHaveLength(0);
+      expect(second.sentJson().filter((p) => p.type === "session.update")).toHaveLength(1);
+      expect(second.sent.join("\n")).not.toContain("stale-term");
+      service.stop();
+    });
+
+    it("resends the terms that landed after the first open on reconnect", async () => {
+      vi.spyOn(Math, "random").mockReturnValue(0.5);
+      const terms = deferredTerms();
+      const service = new OpenAITranscriptionProvider();
+      const startPromise = service.start(BASE_SETTINGS, "session-1", { keyterms: terms.promise });
+      await Promise.resolve();
+      const socket = latestInstance();
+      socket.simulateOpen();
+      terms.resolve(["Daintree", "xterm"]);
+      await terms.promise;
+      socket.simulateMessage("session.updated");
+      await startPromise;
+
+      socket.simulateClose(1006, Buffer.from("abnormal"));
+      vi.advanceTimersByTime(3_000);
+      const socket2 = latestInstance();
+      expect(socket2).not.toBe(socket);
+      socket2.simulateOpen();
+      expect(readTranscription(socket2)).toEqual(readTranscription(socket));
+      expect(readTranscription(socket2).keywords).toEqual(["Daintree", "xterm"]);
+      service.stop();
+    });
+  });
+
   it("settles a pending start when the session is stopped before session.updated", async () => {
     const service = new OpenAITranscriptionProvider();
     const startPromise = service.start(BASE_SETTINGS, "session-1");
@@ -1679,6 +1795,242 @@ describe("OpenAITranscriptionProvider", () => {
   });
 
   // ── Graceful stop while connecting (#13108) ──────────────────────────────
+
+  describe("VAD started with the session (#14619)", () => {
+    const chunk = (bytes = 2_400) => new Uint8Array(bytes).buffer;
+    const types = (socket: MockWebSocket) => socket.sentJson().map((p) => p.type);
+    const audioPosts = (worker: MockVadWorker) =>
+      worker.posted.filter((m) => m.type === "audio").length;
+    const appends = (n: number) => Array<string>(n).fill("input_audio_buffer.append");
+
+    async function startConnecting(service: OpenAITranscriptionProviderInstance) {
+      const startPromise = service.start(BASE_SETTINGS, "session-1");
+      await Promise.resolve();
+      return { startPromise, socket: latestInstance(), worker: latestVadWorker() };
+    }
+
+    function becomeReady(socket: MockWebSocket): void {
+      socket.simulateOpen();
+      socket.simulateMessage("session.updated");
+    }
+
+    it("forks the VAD before the socket opens and keeps it once the session is ready", async () => {
+      const service = new OpenAITranscriptionProvider();
+      void service.start(BASE_SETTINGS, "session-1");
+      expect(vadWorkers).toHaveLength(1);
+      await Promise.resolve();
+      const socket = latestInstance();
+      vadWorkers[0]!.emitReady();
+      becomeReady(socket);
+
+      expect(vadWorkers).toHaveLength(1);
+      expect(vadWorkers[0]!.posted.some((m) => m.type === "destroy")).toBe(false);
+      const ready = logCalls.find(([message]) =>
+        String(message).includes("session.updated — session ready")
+      );
+      expect(ready?.[1]).toMatchObject({ vad: "ready" });
+      service.stop();
+    });
+
+    it("feeds the VAD the audio held while connecting, once", async () => {
+      const service = new OpenAITranscriptionProvider();
+      const { socket, worker } = await startConnecting(service);
+      service.sendAudioChunk(chunk());
+      service.sendAudioChunk(chunk());
+      expect(audioPosts(worker)).toBe(2);
+
+      becomeReady(socket);
+      expect(audioPosts(worker)).toBe(2);
+      service.sendAudioChunk(chunk());
+      expect(audioPosts(worker)).toBe(3);
+      service.stop();
+    });
+
+    it("keeps audio the connect buffer dropped away from the VAD", async () => {
+      const service = new OpenAITranscriptionProvider();
+      const { worker } = await startConnecting(service);
+      for (let i = 0; i < AUDIO_BUFFER_MAX_CHUNKS + 3; i++) service.sendAudioChunk(chunk(16));
+      expect(audioPosts(worker)).toBe(AUDIO_BUFFER_MAX_CHUNKS);
+      service.stop();
+    });
+
+    it("commits speech the VAD ended while connecting when the held audio is flushed", async () => {
+      const service = new OpenAITranscriptionProvider();
+      const { socket, worker } = await startConnecting(service);
+      for (let i = 0; i < 3; i++) service.sendAudioChunk(chunk());
+      worker.emitSpeechStart();
+      worker.emitSpeechEnd();
+      service.sendAudioChunk(chunk());
+      expect(socket.sent).toHaveLength(0);
+
+      becomeReady(socket);
+      expect(types(socket)).toEqual([
+        "session.update",
+        ...appends(3),
+        "input_audio_buffer.commit",
+        ...appends(1),
+      ]);
+      service.stop();
+    });
+
+    it("never lets a speech-end heard while connecting clear the next utterance", async () => {
+      const service = new OpenAITranscriptionProvider();
+      const { socket, worker } = await startConnecting(service);
+      for (let i = 0; i < 3; i++) service.sendAudioChunk(chunk());
+      worker.emitSpeechStart();
+      worker.emitSpeechEnd();
+      service.sendAudioChunk(chunk());
+      becomeReady(socket);
+
+      worker.emitSpeechStart();
+      expect(types(socket)).not.toContain("input_audio_buffer.clear");
+
+      // A speech-end on the ready socket commits, and from then on onsets clear.
+      service.sendAudioChunk(chunk(5_000));
+      worker.emitSpeechEnd();
+      service.sendAudioChunk(chunk());
+      worker.emitSpeechStart();
+      expect(types(socket)).toContain("input_audio_buffer.clear");
+      service.stop();
+    });
+
+    it("replays the flushed audio after the last held commit when a live onset clears", async () => {
+      const service = new OpenAITranscriptionProvider();
+      const { socket, worker } = await startConnecting(service);
+      for (let i = 0; i < 3; i++) service.sendAudioChunk(chunk());
+      worker.emitSpeechStart();
+      worker.emitSpeechEnd();
+      const tail = new Uint8Array(2_400).fill(9).buffer;
+      service.sendAudioChunk(tail);
+      becomeReady(socket);
+      // A live segment, so the next onset is allowed to clear.
+      service.sendAudioChunk(chunk(5_000));
+      worker.emitSpeechStart();
+      worker.emitSpeechEnd();
+      const sentBefore = socket.sent.length;
+
+      service.sendAudioChunk(tail);
+      worker.emitSpeechStart();
+      const after = socket.sentJson().slice(sentBefore + 1);
+      expect(after[0]).toEqual({ type: "input_audio_buffer.clear" });
+      expect(after.slice(1).every((p) => p.audio === Buffer.from(tail).toString("base64"))).toBe(
+        true
+      );
+      service.stop();
+    });
+
+    it("holds one commit for repeated boundaries at the same point", async () => {
+      const service = new OpenAITranscriptionProvider();
+      const { socket } = await startConnecting(service);
+      service.commitParagraphBoundary();
+      for (let i = 0; i < 3; i++) service.sendAudioChunk(chunk());
+      service.commitParagraphBoundary();
+      service.commitParagraphBoundary();
+      service.sendAudioChunk(chunk());
+
+      becomeReady(socket);
+      expect(types(socket)).toEqual([
+        "session.update",
+        ...appends(3),
+        "input_audio_buffer.commit",
+        ...appends(1),
+      ]);
+      service.stop();
+    });
+
+    it("leaves a held commit too short to send for the next one", async () => {
+      const service = new OpenAITranscriptionProvider();
+      const { socket, worker } = await startConnecting(service);
+      service.sendAudioChunk(chunk());
+      service.commitParagraphBoundary();
+      service.sendAudioChunk(chunk());
+      service.sendAudioChunk(chunk());
+      worker.emitSpeechStart();
+      worker.emitSpeechEnd();
+
+      becomeReady(socket);
+      expect(types(socket)).toEqual([
+        "session.update",
+        ...appends(3),
+        "input_audio_buffer.commit",
+      ]);
+      service.stop();
+    });
+
+    it("holds a backstop commit while connecting", async () => {
+      const service = new OpenAITranscriptionProvider();
+      const { socket, worker } = await startConnecting(service);
+      worker.emitSpeechStart();
+      for (let i = 0; i < 3; i++) service.sendAudioChunk(chunk());
+      vi.advanceTimersByTime(8_000);
+      service.sendAudioChunk(chunk());
+
+      becomeReady(socket);
+      expect(types(socket)).toEqual([
+        "session.update",
+        ...appends(3),
+        "input_audio_buffer.commit",
+        ...appends(1),
+      ]);
+      service.stop();
+    });
+
+    it("drains every held commit when stopped before the socket is ready", async () => {
+      const service = new OpenAITranscriptionProvider();
+      const completes: string[] = [];
+      service.onEvent((e) => {
+        if (e.type === "complete") completes.push(e.text);
+      });
+      const { socket, worker } = await startConnecting(service);
+      for (let i = 0; i < 3; i++) service.sendAudioChunk(chunk());
+      worker.emitSpeechStart();
+      worker.emitSpeechEnd();
+      for (let i = 0; i < 3; i++) service.sendAudioChunk(chunk());
+
+      const stopPromise = service.stopGracefully();
+      expect(worker.posted.filter((m) => m.type === "destroy")).toHaveLength(1);
+      becomeReady(socket);
+      expect(types(socket)).toEqual([
+        "session.update",
+        ...appends(3),
+        "input_audio_buffer.commit",
+        ...appends(3),
+        "input_audio_buffer.commit",
+      ]);
+
+      let settled = false;
+      void stopPromise.then(() => {
+        settled = true;
+      });
+      socket.simulateMessage("conversation.item.done", {
+        item: { id: "item-A", content: [{ type: "input_audio", transcript: "alpha" }] },
+      });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      socket.simulateMessage("conversation.item.done", {
+        item: { id: "item-B", content: [{ type: "input_audio", transcript: "beta" }] },
+      });
+      await stopPromise;
+      expect(completes).toEqual(["alpha", "beta"]);
+    });
+
+    it("retires the VAD when the first socket can't be constructed", async () => {
+      throwOnConstruct = true;
+      const service = new OpenAITranscriptionProvider();
+      const result = await service.start(BASE_SETTINGS, "session-1");
+      expect(result.ok).toBe(false);
+      expect(vadWorkers).toHaveLength(1);
+      expect(vadWorkers[0]!.posted.filter((m) => m.type === "destroy")).toHaveLength(1);
+    });
+
+    it("retires the VAD when the first connection fails before it's ready", async () => {
+      const service = new OpenAITranscriptionProvider();
+      const { startPromise, socket, worker } = await startConnecting(service);
+      socket.simulateError(new Error("ECONNREFUSED"));
+      await expect(startPromise).resolves.toMatchObject({ ok: false });
+      expect(worker.posted.filter((m) => m.type === "destroy")).toHaveLength(1);
+    });
+  });
 
   describe("stopGracefully before the session is ready", () => {
     function appendedBytes(socket: MockWebSocket): number {
