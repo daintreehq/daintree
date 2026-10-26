@@ -460,8 +460,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         const liveSettings = getVoiceSettings();
 
         // OpenAI Realtime emits spoken dictation commands ("new paragraph",
-        // "period", etc.) as literal text. applyDictationCommands rewrites
-        // them post-hoc to \n\n / "." / \n etc., gated on the session-
+        // "new line", etc.) as literal text. applyDictationCommands rewrites
+        // them post-hoc to \n\n / \n, gated on the session-
         // snapshotted paragraphing strategy.
         const processedText =
           settings.paragraphingStrategy === "spoken-command" &&
@@ -469,14 +469,12 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
             ? applyDictationCommands(rawText)
             : rawText;
 
-        // Split on \n\n and emit one complete event per non-empty part with a
-        // paragraph_boundary between them. .filter(Boolean) ensures command-
-        // only utterances (e.g. "new paragraph" alone → "\n\n" → ["", ""])
-        // emit nothing.
-        const parts = processedText
-          .split(/\n\n+/)
-          .map((p) => p.trim())
-          .filter(Boolean);
+        // Split on line breaks and emit one complete event per non-empty part
+        // with a paragraph_boundary between each pair of pieces. Empty pieces
+        // still get their boundary, so a break at the start or end of an
+        // utterance ("fix the bug new line") survives for the next utterance.
+        const pieces = processedText.split(/\s*\n\s*/).map((p) => p.trim());
+        const parts = pieces.filter(Boolean);
         // Lengths only — dictated text is user content, kept out of logs.
         logDebug("[VoiceInput] complete event → renderer", {
           rawLength: rawText.length,
@@ -496,13 +494,15 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
             ...itemIdField,
           });
         }
-        for (let i = 0; i < parts.length; i++) {
-          getAppWebContents(win).send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, {
-            text: parts[i],
-            willCorrect: false,
-            ...itemIdField,
-          });
-          if (i < parts.length - 1) {
+        for (let i = 0; i < pieces.length; i++) {
+          if (pieces[i]) {
+            getAppWebContents(win).send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, {
+              text: pieces[i],
+              willCorrect: false,
+              ...itemIdField,
+            });
+          }
+          if (i < pieces.length - 1) {
             getAppWebContents(win).send(CHANNELS.VOICE_INPUT_PARAGRAPH_BOUNDARY, {
               rawText: null,
               correctionId: null,

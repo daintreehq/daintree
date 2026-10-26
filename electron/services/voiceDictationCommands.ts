@@ -1,30 +1,22 @@
 /**
  * Dictation-command post-processor for the OpenAI realtime transcription path.
  *
- * The legacy Deepgram Dictation mode intercepted spoken commands ("new paragraph"
- * → \n\n, "period" → ".", etc.) at the transcription layer. OpenAI Realtime has
- * no equivalent — those phrases arrive as literal text. This module reproduces
- * the behavior in post-processing so users get the same UX.
+ * Spoken break commands ("new paragraph" → \n\n, "new line" → \n) arrive as
+ * literal text; this module rewrites them in post-processing. Punctuation words
+ * ("period", "comma", ...) are deliberately not commands: both providers punctuate
+ * on their own, and those words are ordinary in technical speech.
  *
  * Safety: commands only fire when they form a trailing chain at the end of the
- * utterance. Mid-sentence uses like "I'll add a new paragraph here" stay literal.
+ * utterance, optionally wrapped in the model's own punctuation. Mid-sentence uses
+ * like "I'll add a new paragraph here" stay literal.
  */
 
 type CommandPhrase = string;
 type CommandReplacement = string;
 
-// Multi-word commands precede single-word commands so the regex alternation
-// prefers the longer phrase ("exclamation point" before any hypothetical "point",
-// "new paragraph" before any hypothetical "new").
 const COMMAND_MAP: ReadonlyArray<readonly [CommandPhrase, CommandReplacement]> = [
   ["new paragraph", "\n\n"],
   ["new line", "\n"],
-  ["exclamation point", "!"],
-  ["exclamation mark", "!"],
-  ["question mark", "?"],
-  ["full stop", "."],
-  ["period", "."],
-  ["comma", ","],
 ];
 
 const COMMAND_REPLACEMENTS = new Map<string, string>(
@@ -33,12 +25,13 @@ const COMMAND_REPLACEMENTS = new Map<string, string>(
 
 const COMMAND_ALTERNATION = COMMAND_MAP.map(([phrase]) => phrase.replace(/\s+/g, "\\s+")).join("|");
 
-// Matches a trailing chain of one or more commands separated by whitespace.
-// \b anchors at a word boundary so "period" doesn't match inside "periodic".
-// $ anchors at end of string so commands embedded mid-sentence stay literal.
-// Group 1 captures the chain (commands + their separating whitespace).
+// Matches a trailing chain of one or more commands separated by whitespace or
+// the model's punctuation. \b anchors at a word boundary; $ anchors at end of
+// string so commands embedded mid-sentence stay literal. Trailing punctuation the
+// model added after the command ("new paragraph.") is consumed with it.
+const TRAILING_PUNCT = "[\\s.,;:!?]";
 const TRAILING_CHAIN_RE = new RegExp(
-  `\\s*\\b((?:${COMMAND_ALTERNATION})(?:\\s+(?:${COMMAND_ALTERNATION}))*)\\s*$`,
+  `\\s*\\b((?:${COMMAND_ALTERNATION})(?:${TRAILING_PUNCT}+(?:${COMMAND_ALTERNATION}))*)${TRAILING_PUNCT}*$`,
   "i"
 );
 
@@ -53,8 +46,8 @@ const SINGLE_COMMAND_RE = new RegExp(`(?:${COMMAND_ALTERNATION})`, "gi");
  * recognized commands separated by whitespace.
  *
  * Examples:
- *   applyDictationCommands("hello period")              → "hello."
- *   applyDictationCommands("hello comma new paragraph") → "hello,\n\n"
+ *   applyDictationCommands("hello new line")            → "hello\n"
+ *   applyDictationCommands("Hello, new paragraph.")     → "Hello,\n\n"
  *   applyDictationCommands("new paragraph")             → "\n\n"
  *   applyDictationCommands("I'll add a new paragraph here") → unchanged
  *
