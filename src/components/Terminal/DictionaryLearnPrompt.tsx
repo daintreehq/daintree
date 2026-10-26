@@ -2,6 +2,7 @@ import { useCallback, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { useDictionaryLearnPromptStore } from "@/store/dictionaryLearnPromptStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logWarn } from "@/utils/logger";
 
 const PROMPT_VISIBLE_MS = 8_000;
@@ -40,7 +41,7 @@ export function DictionaryLearnPrompt({ terminalId, projectId }: DictionaryLearn
     clear();
     window.electron.voiceDictionary[action]({ word: prompt.word }).catch((err: unknown) => {
       logWarn("Failed to answer the dictionary prompt", {
-        message: err instanceof Error ? err.message : String(err),
+        message: formatErrorMessage(err, "Failed to answer the dictionary prompt"),
       });
     });
   };
