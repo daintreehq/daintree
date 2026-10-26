@@ -333,10 +333,10 @@ class VoiceRecordingService {
 
         // Fatal error — tear down the session and surface a toast so the user
         // knows action is needed (check API key, network, etc.).
-        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
         notify({
           type: "error",
           title: "Dictation stopped",
+          action: this.settingsAction(),
           // eslint-disable-next-line no-restricted-syntax -- raw error.message: VoiceInputError is constructed internally with well-formed user copy
           message: error.message,
           context: { eventKind: "connectivity" },
@@ -647,7 +647,7 @@ class VoiceRecordingService {
       label: "Open voice settings",
       actionId: "app.settings.openTab",
       actionArgs: { tab: "voice" },
-      onClick: () => {},
+      onClick: () => this.openVoiceSettings(),
     };
   }
 
