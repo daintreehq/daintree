@@ -123,13 +123,14 @@ test.describe.serial("E2E: Voice Input — Settings migration on cold start", ()
     expect(migrated.openaiApiKey).toBe("sk-legacy-correction-key");
     expect(migrated.correctionApiKey).toBeUndefined();
     expect(migrated.transcriptionModel).toBe("gpt-live-transcribe");
-    // The retired gpt-5-mini correction model migrates to gpt-5.6-luna (#11365).
-    expect(migrated.correctionModel).toBe("gpt-5.6-luna");
+    // Migration 025 lands the retired gpt-5-mini on gpt-5.6-luna (#11365); the
+    // read-time normalizer then carries it on to gpt-6-luna and persists it.
+    expect(migrated.correctionModel).toBe("gpt-6-luna");
 
     expect(onDisk.voiceInput.openaiApiKey).toBe("sk-legacy-correction-key");
     expect(onDisk.voiceInput.correctionApiKey).toBeUndefined();
     expect(onDisk.voiceInput.transcriptionModel).toBe("gpt-live-transcribe");
-    expect(onDisk.voiceInput.correctionModel).toBe("gpt-5.6-luna");
+    expect(onDisk.voiceInput.correctionModel).toBe("gpt-6-luna");
     // Advancement, not a hard-coded latest — the exact number moves with every
     // future migration.
     expect(onDisk._schemaVersion).toBeGreaterThan(26);
@@ -170,7 +171,7 @@ test.describe.serial("E2E: Voice Input — Realtime IPC and settings UI", () => 
       customDictionary: [],
       transcriptionModel: "gpt-live-transcribe",
       correctionEnabled: false,
-      correctionModel: "gpt-5.6-luna",
+      correctionModel: "gpt-6-luna",
       correctionCustomInstructions: "",
       paragraphingStrategy: "spoken-command",
       resolveFileLinks: true,

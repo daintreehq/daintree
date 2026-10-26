@@ -2921,7 +2921,7 @@ function buildElectronApi(): ElectronAPI {
           transcriptionProvider: "openai" | "deepgram";
           transcriptionModel: "gpt-live-transcribe";
           correctionEnabled: boolean;
-          correctionModel: "gpt-5.6-luna";
+          correctionModel: "gpt-6-luna";
           correctionCustomInstructions: string;
           paragraphingStrategy: "spoken-command" | "manual";
           resolveFileLinks: boolean;

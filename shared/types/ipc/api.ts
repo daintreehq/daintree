@@ -2849,14 +2849,14 @@ export type VoiceTranscriptionModel = "gpt-live-transcribe";
 export type VoiceTranscriptionProvider = "openai" | "deepgram";
 
 /**
- * The correction model is single-valued: gpt-5.6-luna replaced both the retired
+ * The correction model is single-valued: gpt-6-luna replaced both the retired
  * gpt-5-mini (quality) and gpt-5-nano (speed) tiers, so there is no longer a
  * user-facing model choice. Kept as a named type (rather than inlining the
  * literal) so the persisted setting, the runtime constant in
  * `shared/config/voiceCorrection.ts` (`VOICE_DICTATION_AI_MODEL`), and this
  * union stay recognizably one concept.
  */
-export type VoiceCorrectionModel = "gpt-5.6-luna";
+export type VoiceCorrectionModel = "gpt-6-luna";
 
 /**
  * Paragraphing strategy for voice dictation.
