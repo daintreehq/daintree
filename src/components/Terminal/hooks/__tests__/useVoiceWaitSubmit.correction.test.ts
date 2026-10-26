@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import { Compartment, EditorState, type Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
@@ -98,6 +98,21 @@ function dictate(panelId: string, text: string) {
 const draft = (panelId: string) => useTerminalInputStore.getState().getDraftInput(panelId);
 
 const PANEL_ID = "panel-1";
+
+// jsdom has no layout: CodeMirror's measure frame reads text through Range
+// rects it lacks, and a marked passage gives it something to measure.
+const originalRangeRects = Object.getOwnPropertyDescriptor(Range.prototype, "getClientRects");
+const originalRangeBounds = Range.prototype.getBoundingClientRect;
+beforeAll(() => {
+  Object.defineProperty(Range.prototype, "getClientRects", { configurable: true, value: () => [] });
+  Range.prototype.getBoundingClientRect = () => new DOMRect();
+});
+afterAll(() => {
+  if (originalRangeRects)
+    Object.defineProperty(Range.prototype, "getClientRects", originalRangeRects);
+  else delete (Range.prototype as Partial<Range>).getClientRects;
+  Range.prototype.getBoundingClientRect = originalRangeBounds;
+});
 
 describe("useVoiceWaitSubmit with a real correction pass (#14611)", () => {
   let view: EditorView;

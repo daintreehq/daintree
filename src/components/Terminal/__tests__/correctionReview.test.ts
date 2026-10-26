@@ -1,7 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/trustedTypesPolicy", () => ({
   createTrustedHTML: (s: string) => s,
@@ -83,6 +83,21 @@ describe("diffCorrection", () => {
     expect(changed).toHaveLength(1);
     expect(corrected.slice(changed[0]!.from, changed[0]!.to)).toBe(middle("b").join(" "));
   });
+});
+
+// jsdom has no layout: CodeMirror's measure frame reads text through Range
+// rects it lacks.
+const originalRangeRects = Object.getOwnPropertyDescriptor(Range.prototype, "getClientRects");
+const originalRangeBounds = Range.prototype.getBoundingClientRect;
+beforeAll(() => {
+  Object.defineProperty(Range.prototype, "getClientRects", { configurable: true, value: () => [] });
+  Range.prototype.getBoundingClientRect = () => new DOMRect();
+});
+afterAll(() => {
+  if (originalRangeRects)
+    Object.defineProperty(Range.prototype, "getClientRects", originalRangeRects);
+  else delete (Range.prototype as Partial<Range>).getClientRects;
+  Range.prototype.getBoundingClientRect = originalRangeBounds;
 });
 
 const isMac = /Mac/.test(navigator.platform);
