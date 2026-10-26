@@ -679,4 +679,32 @@ describe("CanopyCard", () => {
       expect(chip(container)).toBeNull();
     });
   });
+
+  describe("summary strip", () => {
+    it("carries what the row leaves out: the summary, progress, reports and the assistant", () => {
+      const view = render(
+        <CanopyCard
+          item={itemFor("finished", {
+            summary: "Shipped the rounding fix.",
+            progress: 75,
+            steps: { done: 4, total: 6, current: "Run tests" },
+            tests: "passing",
+          })}
+          {...PROPS}
+          {...handlers()}
+          workLabel="Started by Claude"
+        />
+      );
+      const strip = view.container.querySelector("[data-canopy-summary]")!;
+      expect(strip.textContent).toContain("Shipped the rounding fix.");
+      expect(strip.textContent).toContain("Reported: tests pass");
+      expect(strip.textContent).toContain("Started by Claude");
+      expect(strip.querySelector("[role=progressbar]")?.getAttribute("aria-valuenow")).toBe("75");
+    });
+
+    it("is absent when there is nothing to say", () => {
+      const { container } = renderCard(itemFor("idle", { summary: null, headline: null }));
+      expect(container.querySelector("[data-canopy-summary]")).toBeNull();
+    });
+  });
 });

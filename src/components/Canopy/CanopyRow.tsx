@@ -1,6 +1,4 @@
 import { cn } from "@/lib/utils";
-import { ProgressBar } from "@/components/ui/ProgressBar";
-import { Kbd } from "@/components/ui/Kbd";
 import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { BAND_GLYPH_TONE, PilotRunState } from "@/components/Pilot/PilotRunState";
@@ -29,12 +27,6 @@ import {
 
 /** Waiting on the user at least this long, the row's clock stands out. */
 const OVERDUE_WAIT_MS = 5 * 60_000;
-
-/** One line of a summary still being written; `SkeletonBone`'s look, as a span for the row's inline slot. */
-const DETAIL_BONE = "block h-2 rounded-[var(--radius-xs)] bg-tint/[0.1] animate-pulse-delayed";
-
-/** A dialog choice this short keeps its whole label on the row. */
-const SHORT_CHOICE_CHARS = 16;
 
 /** What a run is doing when the readers have nothing better to say. */
 export const KIND_LABEL: Record<CanopyCategory, string> = {
@@ -141,8 +133,49 @@ export function firstSentence(text: string): { head: string; rest: string | null
   return { head: match[1]!, rest: match[2]! };
 }
 
-function lowerFirst(text: string): string {
-  return text.charAt(0).toLowerCase() + text.slice(1);
+/**
+ * What the row leaves to the selected pane: the summary (or a risky approval's
+ * reason, or the screen's own words), the command an approval would run, how
+ * far through its task the run is, and what the agent reported.
+ */
+export function itemDetail(item: CanopyItem): {
+  detail: string | null;
+  action: string | null;
+  progress: ReturnType<typeof itemProgress>;
+  facts: string[];
+  contextWarning: string | null;
+} {
+  const card = item.card;
+  const status = rowStatus(item);
+  const wordsShown =
+    card !== null &&
+    (status === card.headline ||
+      status === card.question ||
+      (card.headline !== null && repeatsSubject(item, card.headline)));
+  const caution = card?.risk === "caution" && wordsShown && !item.stale;
+  const summary =
+    card?.summary && card.summary !== status && !repeatsSubject(item, card.summary)
+      ? card.summary
+      : null;
+  const glanceDetailText =
+    summary === null && card?.stage !== "described" ? glanceDetail(item, status) : null;
+  const glanceText =
+    glanceDetailText !== null && !repeatsSubject(item, glanceDetailText) ? glanceDetailText : null;
+  const action =
+    !item.stale && item.kind === "approval" && (wordsShown || card?.stage !== "described")
+      ? (card?.action ?? item.glance?.action ?? null)
+      : null;
+  const detail =
+    caution && card?.riskReason
+      ? `${card.riskReason}.${summary ? ` ${summary}` : ""}`
+      : (summary ?? glanceText);
+  return {
+    detail,
+    action,
+    progress: itemProgress(item),
+    facts: itemFacts(item),
+    contextWarning: itemContextWarning(item),
+  };
 }
 
 /** The meta line's separator: the same space either side, wherever it falls. */
@@ -156,14 +189,12 @@ interface CanopyRowProps {
   isSelected: boolean;
   /** The run did something the user hasn't seen since they last looked, or they marked it unread. */
   unread: boolean;
-  /** Archived rows: no summary lines, but still where they run. */
+  /** Archived rows: a one-line status, still where they run. */
   compact?: boolean;
   /** The panel's clock, for how long a busy run has gone unseen. */
   nowMs: number;
   /** The row its group's Tab stop lands on: the selected row, else the group's first. */
   tabbable: boolean;
-  /** Hold the summary's two lines even before any words exist. */
-  reserveDetail: boolean;
   /** What the user did to put it aside and when ("Replied 2m ago"), or null. */
   asideLabel?: string | null;
   /** Which assistant started it or holds it, from main's own records; null when none is known. */
@@ -183,7 +214,7 @@ interface CanopyRowProps {
 /**
  * One agent in the inbox. A leading column holds what Daintree observed — its
  * state, whose agent, and the clock for that state; beside it, the task it is
- * carrying out, what it needs from you, the summary, and, always on its bottom
+ * carrying out, what it needs from you, and, always on its bottom
  * line, the project (its emoji and name) and worktree it runs in. An unread run carries a dot in the gutter and
  * a heavier name. The list's order is its priority; the row shows why it ranks
  * there in words, never as a score — on screen or read aloud. A click opens its
@@ -202,7 +233,6 @@ export function CanopyRow({
   compact = false,
   nowMs,
   tabbable,
-  reserveDetail,
   asideLabel = null,
   workLabel = null,
   onSelect,
@@ -230,19 +260,6 @@ export function CanopyRow({
     (status === card.headline ||
       status === card.question ||
       (card.headline !== null && repeatsSubject(item, card.headline)));
-  // The summary stays when the run goes back to work and its ask gives way to
-  // the newest line: a row always says what the run has been doing, until the
-  // next reading replaces it.
-  const summary =
-    !compact && card?.summary && card.summary !== status && !repeatsSubject(item, card.summary)
-      ? card.summary
-      : null;
-  // Before the readers have written a summary, what the screen itself says
-  // beyond the ask: the rest of a recap or report, the agent's last words.
-  const glanceDetailText =
-    !compact && summary === null && card?.stage !== "described" ? glanceDetail(item, status) : null;
-  const glanceText =
-    glanceDetailText !== null && !repeatsSubject(item, glanceDetailText) ? glanceDetailText : null;
   // Where it runs, on every row: the bottom line always says which project,
   // even on a row titled after it or a list that is all one project.
   const project = item.workspace.name || null;
@@ -257,24 +274,13 @@ export function CanopyRow({
   const reading = item.pending && !item.stale && card?.headline == null;
   const caution = card?.risk === "caution" && wordsShown && !item.stale;
   const WarningGlyph = SEVERITY_GLYPH.warning;
-  // What an approval would let the agent do, verbatim — the command or the
-  // file — in the summary's place: the headline already says what is asked.
-  // Before any reading, the command the dialog shows stands under the state.
-  const action =
-    !compact &&
-    !item.stale &&
-    item.kind === "approval" &&
-    (wordsShown || card?.stage !== "described")
-      ? (card?.action ?? item.glance?.action ?? null)
-      : null;
-  // The placeholder only where the row has no words of its own at all: an
-  // approval whose command is on show already says enough.
-  const readingInAsk = reading && glanceStatus(item) === null && action === null;
-  const detail = compact
-    ? null
-    : caution && card?.riskReason
-      ? `${card.riskReason}.${summary ? ` ${summary}` : ""}`
-      : (summary ?? glanceText);
+  // An approval whose command is on show already says enough: no placeholder.
+  const detail = compact ? null : itemDetail(item);
+  const action = detail?.action ?? null;
+  const progress = detail?.progress ?? null;
+  const facts = detail?.facts ?? [];
+  const hasAction = action !== null;
+  const readingInAsk = reading && glanceStatus(item) === null && !hasAction;
 
   // Waiting on the user, and the screen shows it asking something: the
   // waiting ring takes a question mark. Only on a reading of the screen as it
@@ -304,18 +310,7 @@ export function CanopyRow({
     row.run.agentState === "waiting" &&
     row.run.since !== undefined &&
     nowMs - row.run.since >= OVERDUE_WAIT_MS;
-  // What follows where it runs, each part whole. The line gives way from its
-  // end, so what the agent reported goes last: it leaves before anything
-  // Daintree saw for itself.
-  const metaTail: string[] = [];
-  const progress = compact ? null : itemProgress(item);
-  const facts = compact ? [] : itemFacts(item);
   const choices = compact ? [] : answerOptions(item);
-  if (asideLabel !== null) metaTail.push(asideLabel);
-  if (workLabel !== null) metaTail.push(workLabel);
-  // Quiet and working share the spinner and differ only in hue once motion is
-  // reduced; the word says which, since the clock beside the glyph is only a time.
-  if (row.band === "quiet") metaTail.push("Quiet");
   // The user's own decision, said first so a held ask is never read as live.
   const asideWord =
     row.run.park !== undefined
@@ -323,37 +318,28 @@ export function CanopyRow({
       : row.run.snooze !== undefined
         ? "Snoozed"
         : null;
-  if (asideWord !== null) metaTail.unshift(asideWord);
-  // A reading, not an observation, so it is said as one: it looks done.
-  if (!compact && looksDone) metaTail.push("Looks done");
-  // Still behind a ticking spinner: Daintree's own quiet tracking cannot see it.
+  // What follows the ask on its line, each part whole. Quiet and working share
+  // the spinner and differ only in hue once motion is reduced; the word says
+  // which, since the clock beside the glyph is only a time. Everything else the
+  // run reported or is carrying out waits in the selected pane.
   const stalledSince = card?.stalledSince ?? null;
-  if (!compact && row.band !== "quiet" && stalledSince !== null && itemIsBusy(item)) {
-    // What was seen, not what it means: the screen hasn't moved.
-    metaTail.push(`No change ${formatWaitAge(stalledSince, nowMs)}`);
-  }
-  const contextWarning = compact ? null : itemContextWarning(item);
-  if (contextWarning !== null) metaTail.push(contextWarning);
-  if (unseenLabel !== null) metaTail.push(unseenLabel);
-  if (item.failed) metaTail.push("Read failed");
-  // What the agent reported, read off its screen, not checked against the
-  // repository: said as a report. The word goes with the first fact, and the
-  // facts leave from the last, so it never stands alone or goes missing.
-  facts.forEach((fact, index) =>
-    metaTail.push(index === 0 ? `Reported: ${lowerFirst(fact)}` : lowerFirst(fact))
-  );
-  // Every inbox row keeps the same height, idle ones too: a run that goes idle
-  // or wakes up must not move every row beneath it.
-  // A summary on its way and nothing to stand in for it: its two lines show as
-  // bones, so the row reads as written-so-far rather than empty.
-  const detailDue = !compact && reading && detail === null && action === null;
-  const holdsDetail = detail !== null || detailDue || (reserveDetail && !compact);
+  const stalled =
+    !compact && row.band !== "quiet" && stalledSince !== null && itemIsBusy(item)
+      ? `No change ${formatWaitAge(stalledSince, nowMs)}`
+      : null;
+  const statusTail = [
+    asideWord,
+    stalled,
+    row.band === "quiet" ? "Quiet" : null,
+    unseenLabel,
+    item.failed ? "Read failed" : null,
+    asideLabel,
+  ].filter((part): part is string => part !== null);
   const askId = `${domId}-ask`;
-  const detailId = `${domId}-detail`;
   const metaId = `${domId}-meta`;
   // The name is only which agent this is, so arrowing down the list hears
-  // each one at once; the ask, the summary, then the state and where it runs
-  // follow as its description.
+  // each one at once; the ask, then the state and where it runs follow as its
+  // description.
   const accessibleName = [subject, row.chrome.label !== subject ? row.chrome.label : null]
     .filter(Boolean)
     .join(", ");
@@ -370,6 +356,7 @@ export function CanopyRow({
     progress?.spoken ?? null,
     facts.length > 0 ? `reported ${facts.map((fact) => fact.toLowerCase()).join(", ")}` : null,
     compact ? null : itemContextWarning(item),
+    caution && card?.riskReason ? `caution: ${card.riskReason}` : null,
     action !== null ? `for ${action}` : null,
     choices.length > 0
       ? `answer with ${choices.map((choice, index) => `${index + 1} ${choice}`).join(", ")}`
@@ -389,10 +376,7 @@ export function CanopyRow({
       role="option"
       aria-selected={isSelected}
       aria-label={accessibleName}
-      aria-describedby={[askId, detail !== null ? detailId : null, metaId]
-        .filter(Boolean)
-        .join(" ")}
-      data-detail={detail !== null ? "true" : undefined}
+      aria-describedby={[askId, metaId].join(" ")}
       tabIndex={tabbable ? 0 : -1}
       data-canopy-card=""
       data-kind={item.kind}
@@ -440,7 +424,7 @@ export function CanopyRow({
                 onArchive();
               }}
               onDoubleClick={(event) => event.stopPropagation()}
-              // In the progress meter's place on the name line, which gives way to
+              // In the age's place on the name line, which gives way to
               // it under the pointer, as a mail list's actions take the date's.
               // 24px square for WCAG 2.5.8: it sits inside the row's own target.
               className="absolute top-2 right-1.5 flex size-6 items-center justify-center rounded-[var(--radius-sm)] text-text-secondary opacity-0 transition-opacity duration-150 group-hover/row:opacity-100 hover:bg-overlay-highlight hover:text-text-primary [&_svg]:size-3.5"
@@ -454,12 +438,11 @@ export function CanopyRow({
         </Tooltip>
       )}
       {/* The leading column: Daintree's own observation of the run and whose
-          agent it is, and how long it has been in that state. The text beside
-          it gets the full width. */}
+          agent it is. The text beside it gets the full width. */}
       <span id={metaId} className="sr-only">
         {meta}
       </span>
-      <span aria-hidden="true" data-canopy-lead="" className="flex w-16 shrink-0 flex-col gap-1">
+      <span aria-hidden="true" data-canopy-lead="" className="flex w-10 shrink-0 flex-col">
         <span className="flex h-5 items-center gap-2">
           <span
             className="flex size-4 items-center justify-center"
@@ -479,26 +462,6 @@ export function CanopyRow({
             />
           </span>
         </span>
-        {/* How long it has been in that state. The glyph above already says
-            which state, so the clock carries only the time, on one line, a
-            step quieter than the name. */}
-        {row.age !== null && (
-          <span
-            data-overdue={overdue || undefined}
-            data-canopy-age=""
-            className={cn(
-              "flex items-center gap-1.5 text-xs leading-4 whitespace-nowrap tabular-nums",
-              // Left waiting this long, the wait itself is the news: the clock
-              // steps up to full ink, never to colour — that stays the glyph's.
-              overdue ? "font-medium text-text-primary" : "text-text-secondary"
-            )}
-          >
-            <span className="flex size-4 shrink-0 items-center justify-center">
-              <Clock aria-hidden="true" className="size-3.5" />
-            </span>
-            {row.age === "just now" ? "now" : row.age}
-          </span>
-        )}
       </span>
       <span aria-hidden="true" className="flex min-w-0 flex-1 flex-col gap-1">
         <span className="flex min-w-0 items-center gap-3">
@@ -510,20 +473,25 @@ export function CanopyRow({
           >
             {subject}
           </span>
-          {/* How far through its task, where a mail list puts the date: a
-              glance down the column reads the whole fleet's progress. */}
-          {progress !== null && (
+          {/* How long it has been in that state, where a mail list puts the
+              date; the glyph at the left already says which state. */}
+          {row.age !== null && (
             <span
+              data-overdue={overdue || undefined}
+              data-canopy-age=""
               className={cn(
-                "flex shrink-0 items-center gap-1.5 text-xs leading-4 text-text-secondary tabular-nums",
+                "flex shrink-0 items-center gap-1.5 text-xs leading-4 whitespace-nowrap tabular-nums",
+                // Left waiting this long, the wait itself is the news: the clock
+                // steps up to full ink, never to colour — that stays the glyph's.
+                overdue ? "font-medium text-text-primary" : "text-text-secondary",
                 // Faded, it still sits over the archive button that takes its
                 // place: it lets the pointer through, or the click lands on it.
                 onArchive &&
                   "transition-opacity duration-150 group-hover/row:pointer-events-none group-hover/row:opacity-0"
               )}
             >
-              <ProgressBar value={progress.value} label={progress.spoken} className="w-10" />
-              <span className="min-w-7 text-right">{progress.label}</span>
+              <Clock aria-hidden="true" className="size-3.5" />
+              {row.age === "just now" ? "now" : row.age}
             </span>
           )}
         </span>
@@ -542,62 +510,12 @@ export function CanopyRow({
             {readingInAsk ? "Reading the screen…" : status}
           </span>
           {caution && <WarningGlyph className="size-3.5 shrink-0 text-status-warning" />}
+          {statusTail.map((part) => (
+            <span key={part} className="max-w-[40%] shrink-0 truncate text-text-secondary">
+              {part}
+            </span>
+          ))}
         </span>
-        {/* Two lines held whether the words are in or on their way, so a
-            summary landing never pushes the rows below it down; a dialog's
-            choices take the second, at the same line height. An idle agent
-            holds them too, so going idle or waking moves nothing below it. */}
-        {(holdsDetail || choices.length > 0) && (
-          <span className="flex min-w-0 flex-col">
-            {holdsDetail && (
-              <span
-                id={detailId}
-                className={cn(
-                  "text-xs leading-4 text-text-secondary",
-                  // One line above a dialog's choices ends mid-word rather than
-                  // at the last word that fits, which can leave a third of it empty.
-                  choices.length > 0 ? "min-h-4 truncate" : "line-clamp-2 min-h-8"
-                )}
-              >
-                {detailDue ? (
-                  <span data-canopy-detail-due="" className="flex h-8 flex-col justify-around">
-                    <span className={cn(DETAIL_BONE, "w-full")} />
-                    <span className={cn(DETAIL_BONE, "w-2/3")} />
-                  </span>
-                ) : action !== null && !caution ? (
-                  <span className="font-mono text-text-primary">
-                    {/^[\w./-]+$/.test(action) && /[./]/.test(action) ? action : `$ ${action}`}
-                  </span>
-                ) : (
-                  detail
-                )}
-              </span>
-            )}
-            {/* What the dialog offers, numbered as the keys that pick it from
-                here: the strip carries its own remedy, one key away. Its key
-                caps overhang the line by a pixel rather than grow it, so a
-                menu too long for the row is cut across only: past its edge it
-                would scroll the whole list sideways. */}
-            {choices.length > 0 && (
-              <span className="flex h-4 min-w-0 items-center gap-3 overflow-x-clip text-xs leading-4 text-text-secondary">
-                {choices.map((choice, index) => (
-                  <span
-                    key={choice}
-                    className={cn(
-                      "flex items-center gap-1",
-                      // A short choice ("Yes, proceed") is read whole; a long one
-                      // ("Yes, and don't ask again for …") gives way first.
-                      choice.length <= SHORT_CHOICE_CHARS ? "shrink-0" : "min-w-0"
-                    )}
-                  >
-                    <Kbd className="shrink-0">{index + 1}</Kbd>
-                    <span className="min-w-0 truncate">{choice}</span>
-                  </span>
-                ))}
-              </span>
-            )}
-          </span>
-        )}
         {/* The location line says location only: project, worktree, host. The
             host has a slot of its own that holds its width while the worktree
             gives way, and the project keeps its name longer than either. */}
@@ -626,25 +544,6 @@ export function CanopyRow({
               <span className="min-w-0 truncate">{host}</span>
             </span>
           )}
-        </span>
-        {/* Held at its line's height even with nothing to say: facts landing,
-            a reply noted or a run going quiet must not move the rows below.
-            Never wider than the row either, or the whole list scrolls
-            sideways: a part that doesn't fit wraps onto a second line the box
-            clips, whole and with its dot, and takes every part after it. The
-            empty first item holds the first line open at full height, so even
-            the first part can leave whole. */}
-        <span
-          data-canopy-meta=""
-          className="flex h-4 min-w-0 flex-wrap items-center overflow-hidden text-xs leading-4 whitespace-nowrap text-text-secondary"
-        >
-          <span className="h-4 w-0" />
-          {metaTail.map((part, index) => (
-            <span key={part} className="flex shrink-0">
-              {index > 0 && <MetaDot />}
-              {part}
-            </span>
-          ))}
         </span>
       </span>
     </div>

@@ -26,6 +26,7 @@ import { CLOSE_OWNER_ATTR, CLOSE_REQUEST_EVENT } from "@/lib/closeRequest";
 import { useCanopyStore } from "@/store/canopyStore";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/Kbd";
+import { ProgressBar } from "@/components/ui/ProgressBar";
 import { SURFACE_HEADER_FOCUS_LIFT_CLASS, SurfaceHeader } from "@/components/ui/SurfaceHeader";
 import {
   DropdownMenu,
@@ -61,7 +62,7 @@ import {
   quickApproveOption,
   type CanopyItem,
 } from "./canopyModel";
-import { KIND_LABEL } from "./CanopyRow";
+import { KIND_LABEL, itemDetail } from "./CanopyRow";
 import { CanopyTerminal, type CanopyStreamState } from "./CanopyTerminal";
 import { CanopyTitle } from "./CanopyTitle";
 import type { CanopyAsideActions } from "./CanopyRowMenu";
@@ -143,6 +144,8 @@ interface CanopyCardProps extends CanopyCardHandlers {
   terminalApi?: CanopyTerminalApi;
   /** The link to the run's host is down: nothing is typed or answered until it is back. */
   reconnecting?: boolean;
+  /** Which assistant started it or holds it, from main's own records; null when none is known. */
+  workLabel?: string | null;
 }
 
 /**
@@ -239,6 +242,7 @@ export function CanopyCard({
   aside,
   terminalApi = ownCanopyTerminalApi,
   reconnecting = false,
+  workLabel = null,
 }: CanopyCardProps) {
   const otherHost = otherHostId !== undefined;
   const [stream, setStream] = useState<CanopyStreamState>({
@@ -543,6 +547,17 @@ export function CanopyCard({
     agentState !== undefined &&
     agentState !== "idle" &&
     (isHandBack || (agentState !== "completed" && agentState !== "exited"));
+  const { detail, action, progress, facts, contextWarning } = itemDetail(item);
+  const summaryNotes = [
+    workLabel,
+    contextWarning,
+    ...facts.map((fact, index) => {
+      const said = fact.charAt(0).toLowerCase() + fact.slice(1);
+      return index === 0 ? `Reported: ${said}` : said;
+    }),
+  ].filter((note): note is string => note !== null && note !== "");
+  const hasSummary =
+    detail !== null || action !== null || progress !== null || summaryNotes.length > 0;
   const brandSurface: BrandMarkSurface = focused
     ? { surface: "surface-panel", extension: "panel-header-focus-bg", lift: "overlay-medium" }
     : { surface: "surface-panel", extension: "panel-header-bg" };
@@ -731,6 +746,29 @@ export function CanopyCard({
           </span>
         )}
       </SurfaceHeader>
+
+      {/* What the row leaves out to stay three lines tall: the summary, how
+          far through its task the run is, and what the agent reported. */}
+      {hasSummary && (
+        <div
+          data-canopy-summary=""
+          className="flex shrink-0 flex-col gap-1 border-b border-overlay px-3 py-2 text-xs leading-4 text-text-secondary"
+        >
+          {progress !== null && (
+            <span className="flex items-center gap-2 tabular-nums">
+              <ProgressBar value={progress.value} label={progress.spoken} className="w-24" />
+              <span>{progress.label}</span>
+            </span>
+          )}
+          {action !== null && (
+            <span className="font-mono break-words text-text-primary">
+              {/^[\w./-]+$/.test(action) && /[./]/.test(action) ? action : `$ ${action}`}
+            </span>
+          )}
+          {detail !== null && <p className="line-clamp-4 break-words">{detail}</p>}
+          {summaryNotes.length > 0 && <p className="break-words">{summaryNotes.join(" · ")}</p>}
+        </div>
+      )}
 
       <div
         className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-surface-canvas"

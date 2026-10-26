@@ -229,7 +229,6 @@ function DemoInbox({ paused }: { paused: boolean }) {
             unread={itemNeedsAttention(item)}
             nowMs={nowMs}
             tabbable={false}
-            reserveDetail
             onSelect={noop}
             onClick={noop}
             onOpen={noop}
