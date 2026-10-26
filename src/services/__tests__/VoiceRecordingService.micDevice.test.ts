@@ -151,7 +151,7 @@ function setupGlobals(options: {
   const workletNodes: WorkletNode[] = [];
   const deviceChangeListeners = new Set<Listener>();
   const pendingTracks = [...options.tracks];
-  let statusCallback: ((status: string) => void) | null = null;
+  let statusCallback: ((payload: { status: string }) => void) | null = null;
   let deltaCallback: ((payload: { text: string }) => void) | null = null;
   const settings = {
     enabled: true,
@@ -169,7 +169,8 @@ function setupGlobals(options: {
     onParagraphBoundary: vi.fn(() => () => {}),
     onFileTokenResolved: vi.fn(() => () => {}),
     onError: vi.fn(() => () => {}),
-    onStatus: vi.fn((cb: (status: string) => void) => {
+    onSessionEnded: vi.fn(() => () => {}),
+    onStatus: vi.fn((cb: (payload: { status: string }) => void) => {
       statusCallback = cb;
       return () => {};
     }),
@@ -181,7 +182,7 @@ function setupGlobals(options: {
     requestMicPermission: vi.fn().mockResolvedValue(true),
     openMicSettings: vi.fn().mockResolvedValue(undefined),
     sendAudioChunk: vi.fn(),
-    start: vi.fn().mockResolvedValue({ ok: true }),
+    start: vi.fn().mockResolvedValue({ status: "started" }),
     stop: vi.fn().mockResolvedValue(undefined),
   };
 
@@ -266,7 +267,7 @@ function setupGlobals(options: {
     enumerateDevices,
     deviceChangeListeners,
     voiceInput,
-    status: { emit: (status) => statusCallback?.(status) },
+    status: { emit: (status) => statusCallback?.({ status }) },
     delta: { emit: (text) => deltaCallback?.({ text }) },
     settings,
   };
