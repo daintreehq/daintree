@@ -45,10 +45,12 @@ import {
   seedVoiceConfig,
 } from "../../helpers/voice";
 import {
+  captureFlushed,
   glidingVoice,
   installCaptureTap,
   measureCoverage,
   readCaptureTap,
+  readTapEvents,
   resetCaptureTap,
   signalChunksTapped,
   type CaptureTapSnapshot,
@@ -151,124 +153,181 @@ test.describe.serial("E2E: Voice Input — no words lost at start and stop", () 
       .toBeGreaterThanOrEqual(SPEECH_CHUNKS);
   }
 
-  async function waitForTranscript(): Promise<void> {
+  type KeyEvent = CaptureTapSnapshot["keys"][number];
+
+  function triggerKeys(keys: readonly KeyEvent[], type: KeyEvent["type"]): KeyEvent[] {
+    return keys.filter((k) => k.type === type && k.key === TRIGGER_KEY && !k.repeat);
+  }
+
+  /**
+   * Queues the transcript for more than one boundary: on a synthetic voice the provider's VAD
+   * may commit mid-session and take one early, and the final text is the one after the stop.
+   */
+  function scriptTranscript(): void {
+    mock.script(...Array.from({ length: 3 }, () => ({ text: TRANSCRIPT })));
+  }
+
+  /** The session's text after the stop, then the provider closing its socket. */
+  async function finishSession(stop: KeyEvent): Promise<void> {
     await expect
-      .poll(async () => (await getCapturedEvents(ctx.window)).completes.map((c) => c.text), {
+      .poll(async () => (await readTapEvents(ctx.window)).completes.some((c) => c.t >= stop.t), {
         timeout: T_MEDIUM,
       })
-      .toContain(TRANSCRIPT);
+      .toBe(true);
+    await expect
+      .poll(() => mock.connections.every((c) => c.closedAt !== undefined), { timeout: T_MEDIUM })
+      .toBe(true);
   }
 
   /**
    * Every chunk the session's worklet delivered, from the first non-silent one through the
-   * one its stop flushed, has to reach the provider: nothing lost at either end or between.
+   * one its stop flushed, has to reach the provider in order: nothing lost at either end or
+   * between.
    */
   async function expectEveryWordKept(
     label: string,
     provider: TranscriptionProviderId,
-    keys: { start: CaptureTapSnapshot["keys"][number]; stop: CaptureTapSnapshot["keys"][number] }
+    start: KeyEvent,
+    stop: KeyEvent
   ): Promise<void> {
     const tap = await readCaptureTap(ctx.window);
     expect(tap.nodes, "one capture graph per dictation").toHaveLength(1);
     const [node] = tap.nodes;
-    expect(node.flushedAt, "the stop flushed the worklet").not.toBeNull();
-
     const received = mock.audio.filter((a) => a.provider === provider);
     const coverage = measureCoverage(
       node.chunks.map((c) => c.bytes),
       received.map((a) => a.bytes)
     );
-    const finalText = tap.completes.find((c) => c.text === TRANSCRIPT && c.t >= keys.stop.t);
-    const timings = {
-      keyToFirstAudioMs: received.length ? received[0].t - keys.start.t : null,
-      stopToFinalTextMs: finalText ? finalText.t - keys.stop.t : null,
+    const finalText = tap.completes.find((c) => c.t >= stop.t);
+    const report = {
+      keyToFirstAudioMs: received.length ? received[0].t - start.t : null,
+      stopToFinalTextMs: finalText ? finalText.t - stop.t : null,
+      ...coverage,
     };
-    const report = { ...timings, ...coverage };
     console.log(`[voice-words] ${label}: ${JSON.stringify(report)}`);
     test.info().annotations.push({ type: "voice-words", description: JSON.stringify(report) });
 
+    expect(node.flushedAfter, "the stop flushed the worklet, and no audio followed").toBe(
+      node.chunks.length
+    );
+    expect(mock.connections, "one connection, so no reconnect replayed audio").toHaveLength(1);
+    expect(finalText?.text).toBe(TRANSCRIPT);
+    expect(report.keyToFirstAudioMs).toBeGreaterThanOrEqual(0);
     expect(coverage.capturedChunks).toBeGreaterThanOrEqual(SPEECH_CHUNKS);
+    expect(coverage.repeatedChunks, "voiced chunks are distinct, so arrival is unambiguous").toBe(
+      0
+    );
     expect(coverage, "captured chunks that never reached the provider").toMatchObject({
       missingAtStart: 0,
       missingInside: 0,
       missingAtEnd: 0,
     });
-    expect(finalText, "a final transcript after the stop").toBeDefined();
-  }
-
-  function triggerKeys(tap: CaptureTapSnapshot, type: "keydown" | "keyup") {
-    return tap.keys.filter((k) => k.type === type && k.key === TRIGGER_KEY && !k.repeat);
   }
 
   for (const provider of ["openai", "deepgram"] as const) {
     test(`${provider}: a toggled dictation keeps every word at the start and the stop`, async () => {
-      mock.script({ text: TRANSCRIPT });
+      scriptTranscript();
       await setVoiceSettings({ transcriptionProvider: provider });
 
       await ctx.window.keyboard.press(VOICE_TOGGLE_CHORD);
       await waitForSpeech();
       await ctx.window.keyboard.press(VOICE_TOGGLE_CHORD);
-      await waitForTranscript();
 
-      const presses = triggerKeys(await readCaptureTap(ctx.window), "keydown");
+      const presses = triggerKeys((await readTapEvents(ctx.window)).keys, "keydown");
       expect(presses).toHaveLength(2);
-      await expectEveryWordKept(`${provider} toggle`, provider, {
-        start: presses[0],
-        stop: presses[1],
-      });
+      const [start, stop] = presses;
+      await finishSession(stop);
+      await expectEveryWordKept(`${provider} toggle`, provider, start, stop);
     });
   }
 
   test("openai: releasing push-to-talk keeps every word at the start and the stop", async () => {
-    mock.script({ text: TRANSCRIPT });
+    scriptTranscript();
     await setVoiceSettings({ transcriptionProvider: "openai", recordingMode: "push-to-talk" });
+    const held: string[] = [];
     try {
-      for (const key of MODIFIER_KEYS) await ctx.window.keyboard.down(key);
-      await ctx.window.keyboard.down(TRIGGER_KEY);
+      for (const key of [...MODIFIER_KEYS, TRIGGER_KEY]) {
+        await ctx.window.keyboard.down(key);
+        held.push(key);
+      }
       await waitForSpeech();
       await ctx.window.keyboard.up(TRIGGER_KEY);
-      for (const key of [...MODIFIER_KEYS].reverse()) await ctx.window.keyboard.up(key);
-      await waitForTranscript();
+      held.pop();
+      // The trigger's release has to end the session by itself, before the modifier's
+      // release (which also stops push-to-talk on macOS) could cover for it.
+      await expect.poll(() => captureFlushed(ctx.window), { timeout: T_MEDIUM }).toBe(true);
     } finally {
+      for (const key of held.reverse()) await ctx.window.keyboard.up(key);
       await setVoiceSettings({ recordingMode: "toggle" });
     }
 
-    const tap = await readCaptureTap(ctx.window);
-    const [press] = triggerKeys(tap, "keydown");
-    const [release] = triggerKeys(tap, "keyup");
-    expect(press).toBeDefined();
-    expect(release).toBeDefined();
-    await expectEveryWordKept("openai push-to-talk", "openai", { start: press, stop: release });
+    const { keys } = await readTapEvents(ctx.window);
+    const [start] = triggerKeys(keys, "keydown");
+    const [stop] = triggerKeys(keys, "keyup");
+    expect(start).toBeDefined();
+    expect(stop).toBeDefined();
+    await finishSession(stop);
+    await expectEveryWordKept("openai push-to-talk", "openai", start, stop);
   });
 
-  test("openai: a stop before the provider is ready keeps every word", async () => {
-    mock.script({ text: TRANSCRIPT });
-    await setVoiceSettings({ transcriptionProvider: "openai" });
-    // The socket opens but the session never confirms, so the provider stays not ready
-    // until the spec answers for it, after the stop.
+  /**
+   * Leaves the OpenAI session unconfirmed, as a slow connect does: the socket is open but the
+   * provider isn't ready, and holds what it captures, until the spec sends `session.updated`.
+   */
+  function holdSessionReady(): () => MockConnection | undefined {
     mock.setAutoHandshake(false);
     let pending: MockConnection | undefined;
     mock.hooks.onSessionUpdate = (conn) => {
       pending = conn;
     };
+    return () => pending;
+  }
+
+  async function confirmSession(held: () => MockConnection | undefined): Promise<void> {
+    await expect.poll(() => held() !== undefined, { timeout: T_MEDIUM }).toBe(true);
+    expect(mock.audio, "nothing reaches the provider before it is ready").toHaveLength(0);
+    held()!.send({ type: "session.updated" });
+  }
+
+  test("openai: speech captured while the provider connects keeps every word", async () => {
+    scriptTranscript();
+    await setVoiceSettings({ transcriptionProvider: "openai" });
+    const held = holdSessionReady();
+
+    // The real service takes 1.5-2s to connect, and the speaker doesn't wait for it.
+    await ctx.window.keyboard.press(VOICE_TOGGLE_CHORD);
+    await expect
+      .poll(() => signalChunksTapped(ctx.window), { timeout: T_LONG })
+      .toBeGreaterThanOrEqual(SPEECH_CHUNKS / 2);
+    await confirmSession(held);
+    await waitForSpeech();
+    await ctx.window.keyboard.press(VOICE_TOGGLE_CHORD);
+
+    const presses = triggerKeys((await readTapEvents(ctx.window)).keys, "keydown");
+    expect(presses).toHaveLength(2);
+    const [start, stop] = presses;
+    await finishSession(stop);
+    await expectEveryWordKept("openai slow connect", "openai", start, stop);
+  });
+
+  test("openai: a stop before the provider is ready keeps every word", async () => {
+    scriptTranscript();
+    await setVoiceSettings({ transcriptionProvider: "openai" });
+    const held = holdSessionReady();
 
     await ctx.window.keyboard.press(VOICE_TOGGLE_CHORD);
     await waitForSpeech();
-    await expect.poll(() => pending !== undefined, { timeout: T_MEDIUM }).toBe(true);
-    expect(mock.audio, "nothing reaches the provider before it is ready").toHaveLength(0);
     await ctx.window.keyboard.press(VOICE_TOGGLE_CHORD);
     // The provider takes the stop while still waiting on its session.
     await expect
       .poll(async () => (await getCapturedEvents(ctx.window)).statuses, { timeout: T_MEDIUM })
       .toContain("finishing");
-    pending!.send({ type: "session.updated" });
-    await waitForTranscript();
+    await confirmSession(held);
 
-    const presses = triggerKeys(await readCaptureTap(ctx.window), "keydown");
+    const presses = triggerKeys((await readTapEvents(ctx.window)).keys, "keydown");
     expect(presses).toHaveLength(2);
-    await expectEveryWordKept("openai stop before ready", "openai", {
-      start: presses[0],
-      stop: presses[1],
-    });
+    const [start, stop] = presses;
+    await finishSession(stop);
+    await expectEveryWordKept("openai stop before ready", "openai", start, stop);
   });
 });

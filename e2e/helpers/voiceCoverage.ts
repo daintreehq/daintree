@@ -15,7 +15,8 @@ const NON_SILENT_PEAK = SIGNAL_PEAK_THRESHOLD * 32_768;
  */
 export function glidingVoice(t: number): number {
   if (t < 0.25) return 0;
-  const phase = 2 * Math.PI * (300 * t - (80 / (2 * Math.PI * 0.7)) * Math.cos(2 * Math.PI * 0.7 * t));
+  const phase =
+    2 * Math.PI * (300 * t - (80 / (2 * Math.PI * 0.7)) * Math.cos(2 * Math.PI * 0.7 * t));
   return Math.sin(phase) * (0.35 + 0.15 * Math.sin(2 * Math.PI * 2.3 * t));
 }
 
@@ -26,14 +27,17 @@ export interface TappedChunk {
 }
 
 export interface CaptureTapSnapshot {
-  /** One entry per pcm-processor node, so per dictation start. */
-  nodes: Array<{ chunks: TappedChunk[]; flushedAt: number | null }>;
+  /**
+   * One entry per pcm-processor node, so per dictation start. `flushedAfter` is how many chunks
+   * had arrived when the worklet's "flushed" marker did, or null before a stop flushed it.
+   */
+  nodes: Array<{ chunks: TappedChunk[]; flushedAfter: number | null }>;
   keys: Array<{ type: "keydown" | "keyup"; key: string; code: string; repeat: boolean; t: number }>;
   completes: Array<{ text: string; t: number }>;
 }
 
 interface RawTap {
-  nodes: Array<{ chunks: Array<{ t: number; data: ArrayBuffer }>; flushedAt: number | null }>;
+  nodes: Array<{ chunks: Array<{ t: number; data: ArrayBuffer }>; flushedAfter: number | null }>;
   keys: CaptureTapSnapshot["keys"];
   completes: CaptureTapSnapshot["completes"];
 }
@@ -61,13 +65,13 @@ export async function installCaptureTap(page: Page): Promise<void> {
       constructor(context: BaseAudioContext, name: string, options?: AudioWorkletNodeOptions) {
         super(context, name, options);
         if (name !== "pcm-processor") return;
-        const node: RawTap["nodes"][number] = { chunks: [], flushedAt: null };
+        const node: RawTap["nodes"][number] = { chunks: [], flushedAfter: null };
         tap.nodes.push(node);
         this.port.addEventListener("message", (event: MessageEvent) => {
           const data: unknown = event.data;
           if (data instanceof ArrayBuffer) node.chunks.push({ t: Date.now(), data: data.slice(0) });
           else if ((data as { type?: unknown } | null)?.type === "flushed") {
-            node.flushedAt = Date.now();
+            node.flushedAfter ??= node.chunks.length;
           }
         });
       }
@@ -114,6 +118,24 @@ export async function signalChunksTapped(page: Page): Promise<number> {
   }, NON_SILENT_PEAK);
 }
 
+/** Whether the latest pcm-processor node has handed over its final chunk to a stop. */
+export async function captureFlushed(page: Page): Promise<boolean> {
+  return await page.evaluate(
+    () => (window.__voiceCaptureTap__?.nodes.at(-1)?.flushedAfter ?? null) !== null
+  );
+}
+
+/** Key events and final transcripts, without the audio. */
+export async function readTapEvents(
+  page: Page
+): Promise<Pick<CaptureTapSnapshot, "keys" | "completes">> {
+  return await page.evaluate(() => {
+    const tap = window.__voiceCaptureTap__;
+    if (!tap) throw new Error("installCaptureTap() has not run in this view");
+    return { keys: [...tap.keys], completes: [...tap.completes] };
+  });
+}
+
 export async function readCaptureTap(page: Page): Promise<CaptureTapSnapshot> {
   const raw = await page.evaluate(() => {
     const tap = window.__voiceCaptureTap__;
@@ -128,7 +150,7 @@ export async function readCaptureTap(page: Page): Promise<CaptureTapSnapshot> {
     };
     return {
       nodes: tap.nodes.map((node) => ({
-        flushedAt: node.flushedAt,
+        flushedAfter: node.flushedAfter,
         chunks: node.chunks.map(({ t, data }) => ({ t, data: toBase64(data) })),
       })),
       keys: [...tap.keys],
@@ -139,7 +161,7 @@ export async function readCaptureTap(page: Page): Promise<CaptureTapSnapshot> {
     keys: raw.keys,
     completes: raw.completes,
     nodes: raw.nodes.map((node) => ({
-      flushedAt: node.flushedAt,
+      flushedAfter: node.flushedAfter,
       chunks: node.chunks.map(({ t, data }) => ({ t, bytes: Buffer.from(data, "base64") })),
     })),
   };
@@ -148,11 +170,13 @@ export async function readCaptureTap(page: Page): Promise<CaptureTapSnapshot> {
 export interface Coverage {
   /** Captured chunks from the first non-silent one to the end of capture. */
   capturedChunks: number;
+  /** Captured chunks whose bytes match an earlier one, so arrival can't tell them apart. */
+  repeatedChunks: number;
   /** Chunks that never reached the provider, before the first one that did. */
   missingAtStart: number;
   /** Chunks that never reached the provider, after the last one that did. */
   missingAtEnd: number;
-  /** Chunks that never reached the provider, between two that did. */
+  /** Chunks that never reached the provider, or arrived out of order, between two that did. */
   missingInside: number;
   missingMsAtStart: number;
   missingMsAtEnd: number;
@@ -161,24 +185,25 @@ export interface Coverage {
 const digest = (bytes: Buffer) => createHash("sha1").update(bytes).digest("hex");
 
 /**
- * Which captured chunks, from the first non-silent one on, the provider received. Audio
- * crosses renderer, main and provider byte for byte, one message per chunk, so a chunk's
- * bytes identify it. Received audio is counted as a multiset: a replay may send a chunk twice,
- * and a duplicate must not stand in for a different chunk that happens to match.
+ * Which captured chunks, from the first non-silent one on, the provider received, in order.
+ * Audio crosses renderer, main and provider byte for byte, one message per chunk, so a chunk's
+ * bytes identify it. Each chunk is looked for after the one before it: a replay may resend
+ * audio the provider already sent, but a chunk that only arrives ahead of its predecessor
+ * counts as lost.
  */
-export function measureCoverage(captured: readonly Buffer[], received: readonly Buffer[]): Coverage {
+export function measureCoverage(
+  captured: readonly Buffer[],
+  received: readonly Buffer[]
+): Coverage {
   const first = captured.findIndex((chunk) => pcmPeak(chunk) >= NON_SILENT_PEAK);
   const span = first < 0 ? [] : captured.slice(first);
-  const available = new Map<string, number>();
-  for (const chunk of received) {
-    const key = digest(chunk);
-    available.set(key, (available.get(key) ?? 0) + 1);
-  }
-  const arrived = span.map((chunk) => {
-    const key = digest(chunk);
-    const count = available.get(key) ?? 0;
-    if (count === 0) return false;
-    available.set(key, count - 1);
+  const spanKeys = span.map(digest);
+  const receivedKeys = received.map(digest);
+  let from = 0;
+  const arrived = spanKeys.map((key) => {
+    const at = receivedKeys.indexOf(key, from);
+    if (at < 0) return false;
+    from = at + 1;
     return true;
   });
 
@@ -186,9 +211,13 @@ export function measureCoverage(captured: readonly Buffer[], received: readonly 
   const tail = arrived.lastIndexOf(true);
   const ms = (chunks: readonly Buffer[]) =>
     Math.round(chunks.reduce((n, chunk) => n + chunk.length / 2, 0) / SAMPLES_PER_MS);
+  const counts = {
+    capturedChunks: span.length,
+    repeatedChunks: span.length - new Set(spanKeys).size,
+  };
   if (head < 0) {
     return {
-      capturedChunks: span.length,
+      ...counts,
       missingAtStart: span.length,
       missingAtEnd: 0,
       missingInside: 0,
@@ -197,7 +226,7 @@ export function measureCoverage(captured: readonly Buffer[], received: readonly 
     };
   }
   return {
-    capturedChunks: span.length,
+    ...counts,
     missingAtStart: head,
     missingAtEnd: span.length - 1 - tail,
     missingInside: arrived.slice(head, tail + 1).filter((ok) => !ok).length,

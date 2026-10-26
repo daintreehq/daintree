@@ -24,6 +24,7 @@ describe("measureCoverage", () => {
   it("counts from the first non-silent chunk, so dropped leading silence is no loss", () => {
     expect(measureCoverage(chunks, chunks.slice(SILENT_LEAD))).toEqual({
       capturedChunks: spoken,
+      repeatedChunks: 0,
       missingAtStart: 0,
       missingAtEnd: 0,
       missingInside: 0,
@@ -42,6 +43,7 @@ describe("measureCoverage", () => {
 
     expect(measureCoverage(captured, received)).toEqual({
       capturedChunks: spoken,
+      repeatedChunks: 0,
       missingAtStart: 2,
       missingAtEnd: 2,
       missingInside: 1,
@@ -50,17 +52,24 @@ describe("measureCoverage", () => {
     });
   });
 
-  it("doesn't let a replayed chunk stand in for a different one that never arrived", () => {
+  it("accepts audio a replay sent again, but not a chunk that only arrived ahead of its place", () => {
+    const [a, b, c, d] = chunks.slice(SILENT_LEAD, SILENT_LEAD + 4);
+    expect(measureCoverage([a, b, c, d], [a, b, c, b, c, d])).toMatchObject({
+      missingAtStart: 0,
+      missingInside: 0,
+      missingAtEnd: 0,
+    });
+    expect(measureCoverage([a, b, c, d], [a, c, b, d])).toMatchObject({ missingInside: 1 });
+  });
+
+  it("counts repeated captured chunks, and a single arrival covers only one of them", () => {
+    const [voiced, next] = chunks.slice(SILENT_LEAD, SILENT_LEAD + 2);
     const silence = Buffer.alloc(CHUNK_SAMPLES * 2);
-    const voiced = chunks[SILENT_LEAD + 3];
-    // Captured twice (a gap filled with the same bytes) but received once, then replayed.
-    const captured = [voiced, silence, voiced, chunks[SILENT_LEAD + 4]];
-    expect(measureCoverage(captured, [voiced, silence, chunks[SILENT_LEAD + 4]])).toMatchObject({
+    const captured = [voiced, silence, voiced, next];
+    expect(measureCoverage(captured, [voiced, silence, next])).toMatchObject({
+      repeatedChunks: 1,
       missingInside: 1,
     });
-    expect(
-      measureCoverage(captured, [voiced, silence, voiced, voiced, chunks[SILENT_LEAD + 4]])
-    ).toMatchObject({ missingAtStart: 0, missingInside: 0, missingAtEnd: 0 });
   });
 
   it("treats a session whose audio never arrived as missing from the start", () => {
