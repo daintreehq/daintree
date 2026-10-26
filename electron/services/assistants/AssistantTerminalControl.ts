@@ -11,11 +11,19 @@ import {
 import type { AgentState, WaitingReason } from "../../../shared/types/agent.js";
 import type { BuiltInAgentId } from "../../../shared/config/agentIds.js";
 import type { TerminalHandback } from "../../../shared/types/handback.js";
-import { readTailSnapshot } from "../../../shared/utils/artifactParser.js";
+import { readTailSnapshot, tailCapturedOutput } from "../../../shared/utils/artifactParser.js";
 import { stampAssistantPrompt } from "../../../shared/utils/assistantProvenance.js";
 import { appendHandbackInstruction, mintHandbackCode } from "../../../shared/utils/handback.js";
 import { assessInterruptCandidate } from "../../../shared/utils/terminalInterrupt.js";
 import { buildTerminalSendCommandReceipt } from "../../../shared/utils/terminalSendCommandResult.js";
+import { planChoice } from "../../../shared/utils/terminalChoice.js";
+import {
+  CHOOSE_SCREEN_LINES,
+  keySequence,
+  SEND_KEYS_GAP_MS,
+  SEND_KEYS_SCREEN_LINES,
+  SEND_KEYS_SETTLE_MS,
+} from "../../../shared/utils/terminalKeys.js";
 import {
   evaluateWakeGate,
   ASSISTANT_SEND_GATE,
@@ -85,6 +93,8 @@ export interface AssistantTerminalControlDeps {
   /** Under the strict settled-prompt guard, so the lane admits it only while the gate still holds. */
   submit(terminalId: string, text: string, submissionToken: string, handbackCode?: string): void;
   doubleEscape(terminalId: string): void;
+  /** Raw bytes, as a person's keystrokes arrive. */
+  write(terminalId: string, data: string): void;
   launch(request: AssistantLaunchRequest): Promise<AssistantLaunchResult>;
   /** Ends the session, which kills its PTY. */
   revoke(sessionId: string): Promise<void>;
@@ -404,6 +414,78 @@ export class AssistantTerminalControl {
     return buildTerminalSendCommandReceipt(target.terminalId, request.command, submissionToken);
   }
 
+  /**
+   * Press keys in an assistant (#14548): to the run `generation` names, to
+   * answer what its screen asks (an approval, a numbered choice). Unlike a
+   * prompt this is admitted while it waits on such a question, but refused,
+   * with nothing pressed, once anything was typed there since its state last
+   * changed: a person's draft is never edited or submitted by these keys.
+   */
+  async sendKeys(
+    caller: AssistantCaller,
+    target: AssistantTarget,
+    request: {
+      keys: string[] | undefined;
+      choose: string | undefined;
+      generation: number | undefined;
+    }
+  ): Promise<{ terminalId: string; keys: string[]; screen?: string }> {
+    this.requireGeneration(caller, target, request.generation);
+    const record = await this.deps.getTerminal(target.terminalId);
+    if (!record) {
+      throw new AssistantTargetError(
+        ASSISTANT_TARGET_REFUSALS.notFound,
+        `Assistant terminal '${target.terminalId}' can't be read right now. Nothing was pressed.`
+      );
+    }
+    if (record.isExited === true || record.hasPty === false || record.isTrashed === true) {
+      throw new AssistantTargetError(
+        ASSISTANT_TARGET_REFUSALS.busy,
+        `Assistant terminal '${target.terminalId}' has no running process to press keys in. Nothing was pressed.`
+      );
+    }
+    if (
+      record.lastTypedInputAt !== undefined &&
+      (record.lastStateChange === undefined || record.lastTypedInputAt >= record.lastStateChange)
+    ) {
+      throw new AssistantTargetError(
+        ASSISTANT_TARGET_REFUSALS.busy,
+        `Someone has typed in assistant terminal '${target.terminalId}' since it last changed state, so keys could edit or submit their draft. Nothing was pressed.`
+      );
+    }
+    const readScreen = async (lines: number) => {
+      const snapshot = await readTailSnapshot(
+        (options) => this.deps.serializedState(target.terminalId, options),
+        lines
+      );
+      return snapshot === null ? null : tailCapturedOutput(snapshot.data, lines, true).content;
+    };
+    let keys = request.keys;
+    if (request.choose !== undefined) {
+      const plan = planChoice((await readScreen(CHOOSE_SCREEN_LINES)) ?? "", request.choose);
+      if (!plan.ok) {
+        throw new AssistantTargetError("VALIDATION_ERROR", `${plan.reason} Nothing was pressed.`);
+      }
+      keys = plan.keys;
+    }
+    if (keys === undefined) {
+      throw new AssistantTargetError(
+        "VALIDATION_ERROR",
+        "Pass `choose` or `keys`. Nothing was pressed."
+      );
+    }
+    // The reads were async: the run must still be the one the caller named.
+    this.requireGeneration(caller, target, request.generation);
+    const sleep = this.deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+    for (const [index, key] of keys.entries()) {
+      if (index > 0) await sleep(SEND_KEYS_GAP_MS);
+      this.deps.write(target.terminalId, keySequence(key));
+    }
+    await sleep(SEND_KEYS_SETTLE_MS);
+    const screen = await readScreen(SEND_KEYS_SCREEN_LINES).catch(() => null);
+    return { terminalId: target.terminalId, keys, ...(screen ? { screen } : {}) };
+  }
+
   async interrupt(target: AssistantTarget): Promise<{
     terminalId: string;
     agentId: string;
@@ -561,6 +643,7 @@ export function liveAssistantTerminalControl(deps: {
     submit: (terminalId, text, submissionToken, handbackCode) =>
       deps.pty()?.submit(terminalId, text, submissionToken, handbackCode, "settled-prompt-strict"),
     doubleEscape: (terminalId) => deps.pty()?.batchDoubleEscape([terminalId]),
+    write: (terminalId, data) => deps.pty()?.write(terminalId, data),
     launch: async (request) => {
       const { liveAssistantLaunchDeps, startAssistantWithoutView } =
         await import("./assistantLaunch.js");

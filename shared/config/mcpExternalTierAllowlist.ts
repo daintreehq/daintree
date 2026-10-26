@@ -286,5 +286,6 @@ export const MCP_EXTERNAL_TIER_TOOLS = [
  */
 export const MCP_EXTERNAL_OMITTED_ARGS: Readonly<Record<string, readonly string[] | undefined>> = {
   "terminal.sendCommandOwned": ["notify", "replyLines", "generation"],
+  "terminal.sendKeysOwned": ["generation"],
   "agent.launch": ["notify", "replyLines"],
 } satisfies Partial<Record<BuiltInActionId, readonly string[]>>;

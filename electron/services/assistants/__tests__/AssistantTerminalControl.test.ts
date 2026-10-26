@@ -48,6 +48,7 @@ describe("AssistantTerminalControl (#13496)", () => {
   let mocks: {
     submit: Mock<Deps["submit"]>;
     doubleEscape: Mock<Deps["doubleEscape"]>;
+    write: Mock<Deps["write"]>;
     revoke: Mock<Deps["revoke"]>;
     launch: Mock<Deps["launch"]>;
     extractReply: Mock<Deps["extractReply"]>;
@@ -91,6 +92,7 @@ describe("AssistantTerminalControl (#13496)", () => {
     mocks = {
       submit: vi.fn<Deps["submit"]>(),
       doubleEscape: vi.fn<Deps["doubleEscape"]>(),
+      write: vi.fn<Deps["write"]>(),
       launch: vi.fn<Deps["launch"]>(),
       revoke: vi.fn<Deps["revoke"]>(async () => {}),
       extractReply: vi.fn<Deps["extractReply"]>(() => ({ reply: null, reachedHandback: false })),
@@ -103,6 +105,7 @@ describe("AssistantTerminalControl (#13496)", () => {
       getTerminal: async (terminalId) => byTerminal(terminalId)?.record ?? null,
       getLiveGeneration: (terminalId) => byTerminal(terminalId)?.generation ?? null,
       serializedState: async () => ({ data: "screen" }),
+      sleep: async () => {},
       ...mocks,
     };
     control = new AssistantTerminalControl(deps);
@@ -308,6 +311,103 @@ describe("AssistantTerminalControl (#13496)", () => {
         ).rejects.toMatchObject({ code: "ASSISTANT_NOT_STARTED_BY_YOU" });
       }
       expect(mocks.revoke).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe("sendKeys", () => {
+    beforeEach(() => {
+      addLane(0, "t-hub", { sessionId: "hub-session" });
+    });
+    const approval = (extra: Partial<AssistantTerminalRecord> = {}) =>
+      atPrompt({ waitingReason: "approval", ...extra });
+
+    it("presses keys at an approval a prompt would be refused at", async () => {
+      addLane(1, "t-one", { record: approval() });
+      const target = control.require(LOCAL, "t-one");
+      await expect(
+        control.sendKeys(LOCAL, target, {
+          keys: ["Down", "Enter"],
+          choose: undefined,
+          generation: 3,
+        })
+      ).resolves.toMatchObject({ terminalId: "t-one", keys: ["Down", "Enter"] });
+      expect(mocks.write.mock.calls).toEqual([
+        ["t-one", "\x1b[B"],
+        ["t-one", "\r"],
+      ]);
+    });
+
+    it("refuses a missing or stale generation, pressing nothing", async () => {
+      addLane(1, "t-one", { record: approval() });
+      const target = control.require(LOCAL, "t-one");
+      await expect(
+        control.sendKeys(LOCAL, target, {
+          keys: ["Enter"],
+          choose: undefined,
+          generation: undefined,
+        })
+      ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+      await expect(
+        control.sendKeys(LOCAL, target, { keys: ["Enter"], choose: undefined, generation: 2 })
+      ).rejects.toMatchObject({ code: "ASSISTANT_RESTARTED" });
+      expect(mocks.write).not.toHaveBeenCalled();
+    });
+
+    it("refuses once something was typed there since the state last changed", async () => {
+      addLane(1, "t-one", { record: approval({ lastTypedInputAt: 1_500 }) });
+      await expect(
+        control.sendKeys(LOCAL, control.require(LOCAL, "t-one"), {
+          keys: ["Enter"],
+          choose: undefined,
+          generation: 3,
+        })
+      ).rejects.toMatchObject({ code: "ASSISTANT_BUSY" });
+      expect(mocks.write).not.toHaveBeenCalled();
+    });
+
+    it("presses keys when the typing came before the state last changed", async () => {
+      addLane(1, "t-one", { record: approval({ lastTypedInputAt: 500 }) });
+      await control.sendKeys(LOCAL, control.require(LOCAL, "t-one"), {
+        keys: ["1"],
+        choose: undefined,
+        generation: 3,
+      });
+      expect(mocks.write).toHaveBeenCalledWith("t-one", "1");
+    });
+
+    it("refuses a run with no process", async () => {
+      addLane(1, "t-one", { record: approval({ isExited: true }) });
+      await expect(
+        control.sendKeys(LOCAL, control.require(LOCAL, "t-one"), {
+          keys: ["Enter"],
+          choose: undefined,
+          generation: 3,
+        })
+      ).rejects.toBeInstanceOf(AssistantTargetError);
+      expect(mocks.write).not.toHaveBeenCalled();
+    });
+
+    it("moves to a named option off the screen and confirms it", async () => {
+      addLane(1, "t-one", { record: approval() });
+      deps.serializedState = async () => ({ data: "❯ 1. Yes\n  2. No, exit\n" });
+      const result = await control.sendKeys(LOCAL, control.require(LOCAL, "t-one"), {
+        keys: undefined,
+        choose: "No, exit",
+        generation: 3,
+      });
+      expect(result.keys).toEqual(["Down", "Enter"]);
+      expect(mocks.write.mock.calls.map((call) => call[1])).toEqual(["\x1b[B", "\r"]);
+    });
+
+    it("needs keys or a choice", async () => {
+      addLane(1, "t-one", { record: approval() });
+      await expect(
+        control.sendKeys(LOCAL, control.require(LOCAL, "t-one"), {
+          keys: undefined,
+          choose: undefined,
+          generation: 3,
+        })
+      ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
     });
   });
 
