@@ -158,6 +158,8 @@ const sender = vi.hoisted(() => ({
 
 // A fresh renderer per test, as in production: a destroyed WebContents is never
 // reused, and the shared destroyed-watcher remembers the ones it saw go.
+// Events go to the view that started the session; it records into the active log.
+const sink = { current: [] as Array<{ channel: string; payload: unknown }> };
 let nextSenderId = 1;
 function makeSender() {
   return {
@@ -167,7 +169,9 @@ function makeSender() {
     }),
     removeListener: vi.fn(),
     isDestroyed: () => sender.destroyed,
-    send: vi.fn(),
+    send: vi.fn((channel: string, payload: unknown) => {
+      sink.current.push({ channel, payload });
+    }),
   };
 }
 
@@ -244,6 +248,7 @@ describe("voiceInput — audio sent before the provider starts", () => {
     sender.onDestroyed = null;
     fakeEvent.sender = makeSender();
     sent = [];
+    sink.current = sent;
     const win = {
       webContents: {
         send: vi.fn((channel: string, payload: unknown) => sent.push({ channel, payload })),

@@ -88,6 +88,7 @@ vi.mock("../../../services/VoiceCorrectionService.js", () => ({
 vi.mock("../../../services/ProjectStore.js", () => ({
   projectStore: {
     getCurrentProject: vi.fn(() => null),
+    getProjectById: vi.fn(() => null),
     getCurrentProjectId: vi.fn(() => null),
   },
 }));
@@ -153,12 +154,17 @@ import { ValidationError } from "../../validationError.js";
 
 type SentMessage = { channel: string; payload: unknown };
 
+// Events go to the view that started the session, so the fake view records into
+// whichever window's log the test is currently reading.
+let activeSent: SentMessage[] = [];
+
 function buildMainWindow(): {
   webContents: { send: ReturnType<typeof vi.fn> };
   isDestroyed: ReturnType<typeof vi.fn>;
   __sent: SentMessage[];
 } {
   const sentMessages: SentMessage[] = [];
+  activeSent = sentMessages;
   return {
     webContents: {
       send: vi.fn((channel: string, payload: unknown) => {
@@ -182,7 +188,9 @@ const fakeEvent = {
     once: vi.fn(),
     removeListener: vi.fn(),
     isDestroyed: () => false,
-    send: vi.fn(),
+    send: vi.fn((channel: string, payload: unknown) => {
+      activeSent.push({ channel, payload });
+    }),
   },
 } as unknown as Electron.IpcMainInvokeEvent;
 

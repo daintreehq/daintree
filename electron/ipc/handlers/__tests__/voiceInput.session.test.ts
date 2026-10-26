@@ -75,6 +75,7 @@ vi.mock("../../../services/VoiceCorrectionService.js", () => ({
 vi.mock("../../../services/ProjectStore.js", () => ({
   projectStore: {
     getCurrentProject: vi.fn(() => null),
+    getProjectById: vi.fn(() => null),
     getCurrentProjectId: vi.fn(() => null),
   },
 }));
@@ -105,9 +106,12 @@ vi.mock("../../../window/webContentsRegistry.js", async (importOriginal) => {
 
 import { registerVoiceInputHandlers, getLiveVoiceSession } from "../voiceInput.js";
 import { CHANNELS } from "../../channels.js";
+import { projectStore } from "../../../services/ProjectStore.js";
 import { AUDIO_BUFFER_MAX_CHUNKS } from "../../../services/voice/TranscriptionProvider.js";
 
 type Sent = { channel: string; payload: unknown };
+
+const mainWindowDestroyed = { value: false };
 
 // A fresh WebContents per view, as in production: the shared destroyed-watcher
 // remembers every one it has seen go.
@@ -188,6 +192,10 @@ function deferDrain() {
   return () => resolve();
 }
 
+// What the view received, minus its session-ended notice.
+const received = (sender: FakeSender) =>
+  sender.sent.filter((m) => m.channel !== CHANNELS.VOICE_INPUT_SESSION_ENDED);
+
 const ended = (sender: FakeSender) =>
   sender.sent.filter((m) => m.channel === CHANNELS.VOICE_INPUT_SESSION_ENDED).map((m) => m.payload);
 
@@ -209,11 +217,12 @@ describe("voiceInput — session identity", () => {
     ownerA = makeSender();
     ownerB = makeSender();
     appSent = [];
+    mainWindowDestroyed.value = false;
     const win = {
       webContents: {
         send: vi.fn((channel: string, payload: unknown) => appSent.push({ channel, payload })),
       },
-      isDestroyed: vi.fn(() => false),
+      isDestroyed: vi.fn(() => mainWindowDestroyed.value),
     };
     cleanup = registerVoiceInputHandlers({
       mainWindow: win as unknown as Electron.BrowserWindow,
@@ -235,6 +244,38 @@ describe("voiceInput — session identity", () => {
     });
   });
 
+  it("sends events to the view that started the session, never the first window's", async () => {
+    await start(ownerB, "b");
+    emit({ type: "status", status: "recording" });
+    emit({ type: "delta", text: "hello" });
+
+    expect(received(ownerB).map((m) => m.payload)).toEqual([
+      { sessionId: "b", status: "recording" },
+      { sessionId: "b", text: "hello" },
+    ]);
+    expect(received(ownerA)).toEqual([]);
+    expect(appSent).toEqual([]);
+  });
+
+  it("keeps delivering to the starting view after the main window is destroyed", async () => {
+    await start(ownerB, "b");
+    mainWindowDestroyed.value = true;
+    emit({ type: "delta", text: "still arriving" });
+
+    expect(received(ownerB).map((m) => m.payload)).toContainEqual({
+      sessionId: "b",
+      text: "still arriving",
+    });
+  });
+
+  it("starts file links and context from the starting view's project, not the current one", async () => {
+    shared.projects.set(ownerB.id, "project-b");
+    await start(ownerB, "b");
+
+    expect(projectStore.getProjectById).toHaveBeenCalledWith("project-b");
+    expect(projectStore.getCurrentProject).not.toHaveBeenCalled();
+  });
+
   it("ignores audio carrying an id that isn't the live session's", async () => {
     const resolveKeyterms = deferKeyterms();
     const pending = start(ownerA, "a");
@@ -248,7 +289,7 @@ describe("voiceInput — session identity", () => {
     sendChunk("a", 3);
 
     expect(shared.calls).toEqual(["start:a", "chunk:1", "chunk:3"]);
-    expect(appSent.some((m) => m.channel === CHANNELS.VOICE_INPUT_ERROR)).toBe(false);
+    expect(received(ownerA).some((m) => m.channel === CHANNELS.VOICE_INPUT_ERROR)).toBe(false);
   });
 
   it("ignores a stop carrying an id that isn't the live session's", async () => {
@@ -264,7 +305,10 @@ describe("voiceInput — session identity", () => {
     expect(getLiveVoiceSession()?.sessionId).toBe("a");
     expect(ended(ownerA)).toEqual([]);
     emit({ type: "delta", text: "still here" });
-    expect(appSent.map((m) => m.payload)).toContainEqual({ sessionId: "a", text: "still here" });
+    expect(received(ownerA).map((m) => m.payload)).toContainEqual({
+      sessionId: "a",
+      text: "still here",
+    });
   });
 
   it("ignores a flush carrying an id that isn't the live session's", async () => {
@@ -294,7 +338,7 @@ describe("voiceInput — session identity", () => {
     emit({ type: "status", status: "recording" });
     emit({ type: "error", error: { severity: "transient", code: "rate_limit", message: "slow" } });
 
-    expect(appSent).toEqual([
+    expect(received(ownerA)).toEqual([
       { channel: CHANNELS.VOICE_INPUT_STATUS, payload: { sessionId: "a", status: "recording" } },
       {
         channel: CHANNELS.VOICE_INPUT_ERROR,
@@ -310,7 +354,7 @@ describe("voiceInput — session identity", () => {
     await start(ownerA, "a");
     emit({ type: "delta", text: "ghost" }, "older-session");
 
-    expect(appSent).toEqual([]);
+    expect(received(ownerA)).toEqual([]);
   });
 
   it("ends a running session as stopped once its drain finishes, forwarding the drain's text", async () => {
@@ -323,7 +367,7 @@ describe("voiceInput — session identity", () => {
     finishDrain();
     await expect(stopping).resolves.toEqual({ rawText: null });
 
-    expect(appSent.map((m) => m.payload)).toContainEqual({
+    expect(received(ownerA).map((m) => m.payload)).toContainEqual({
       sessionId: "a",
       text: "last words",
       willCorrect: false,
@@ -383,7 +427,7 @@ describe("voiceInput — session identity", () => {
 
     expect(ended(ownerA)).toEqual([{ sessionId: "a", reason: "failed" }]);
     // The terminal status itself still reaches the renderer; nothing after it does.
-    expect(appSent.map((m) => m.payload)).toEqual([{ sessionId: "a", status: "error" }]);
+    expect(received(ownerA).map((m) => m.payload)).toEqual([{ sessionId: "a", status: "error" }]);
     // A stop for it is now for a session that isn't live.
     await stop(ownerA, "a");
     expect(shared.calls).not.toContain("drain");
@@ -422,7 +466,10 @@ describe("voiceInput — session identity", () => {
 
     expect(ended(ownerA)).toEqual([{ sessionId: "a", reason: "superseded" }]);
     emit({ type: "delta", text: "for b" });
-    expect(appSent.map((m) => m.payload)).toContainEqual({ sessionId: "b", text: "for b" });
+    expect(received(ownerB).map((m) => m.payload)).toContainEqual({
+      sessionId: "b",
+      text: "for b",
+    });
     expect(getLiveVoiceSession()?.sessionId).toBe("b");
   });
 

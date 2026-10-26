@@ -28,9 +28,8 @@ import {
   AUDIO_BUFFER_OVERFLOW_CODE,
   createAudioBufferOverflowError,
 } from "../../services/voice/TranscriptionProvider.js";
-import { getAppWebContents } from "../../window/webContentsRegistry.js";
 import { voiceFileLinkResolver } from "../../services/VoiceFileLinkResolver.js";
-import { typedHandle, typedHandleValidated } from "../utils.js";
+import { typedHandle, typedHandleWithContextValidated } from "../utils.js";
 import { defineIpcNamespace, op, opValidated } from "../define.js";
 import { ValidationError } from "../validationError.js";
 import { AppError } from "../../utils/errorTypes.js";
@@ -418,8 +417,8 @@ export async function validateOpenAIKey(
   }
 }
 
-function getProjectInfo(): { name?: string; path?: string } {
-  const currentProject = projectStore.getCurrentProject();
+function getProjectInfo(projectId: string | null): { name?: string; path?: string } {
+  const currentProject = projectId ? projectStore.getProjectById(projectId) : null;
   if (!currentProject) return {};
   return { name: currentProject.name, path: currentProject.path };
 }
@@ -458,9 +457,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
   const reportAudioOverflow = (session: VoiceSession) => {
     if (session.overflowReported) return;
     session.overflowReported = true;
-    const win = deps.mainWindow;
-    if (!win || win.isDestroyed()) return;
-    getAppWebContents(win).send(CHANNELS.VOICE_INPUT_ERROR, {
+    if (session.sender.isDestroyed()) return;
+    session.sender.send(CHANNELS.VOICE_INPUT_ERROR, {
       sessionId: session.id,
       error: createAudioBufferOverflowError(),
     });
@@ -516,7 +514,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       sender,
       webContentsId: ctx.webContentsId,
       projectId: ctx.projectId,
-      projectInfo: getProjectInfo(),
+      projectInfo: getProjectInfo(ctx.projectId),
       phase: "starting",
       ended: false,
       stopPromise: null,
@@ -599,13 +597,13 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     });
 
     const forwardEvent = (voiceEvent: VoiceSessionEvent) => {
-      const win = deps.mainWindow;
-      if (!win || win.isDestroyed()) return;
+      const target = session.sender;
+      if (target.isDestroyed()) return;
       const sessionId = session.id;
 
       if (voiceEvent.type === "delta") {
         logDebug("[VoiceInput] → renderer delta", { length: voiceEvent.text.length });
-        getAppWebContents(win).send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_DELTA, {
+        target.send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_DELTA, {
           sessionId,
           text: voiceEvent.text,
           ...(voiceEvent.itemId ? { itemId: voiceEvent.itemId } : {}),
@@ -644,7 +642,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         // text and be flushed into the draft on stop.
         const itemIdField = voiceEvent.itemId ? { itemId: voiceEvent.itemId } : {};
         if (parts.length === 0 && voiceEvent.itemId) {
-          getAppWebContents(win).send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, {
+          target.send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, {
             sessionId,
             text: "",
             willCorrect: false,
@@ -653,7 +651,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         }
         for (let i = 0; i < pieces.length; i++) {
           if (pieces[i]) {
-            getAppWebContents(win).send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, {
+            target.send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, {
               sessionId,
               text: pieces[i],
               willCorrect: false,
@@ -661,7 +659,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
             });
           }
           if (i < pieces.length - 1) {
-            getAppWebContents(win).send(CHANNELS.VOICE_INPUT_PARAGRAPH_BOUNDARY, {
+            target.send(CHANNELS.VOICE_INPUT_PARAGRAPH_BOUNDARY, {
               sessionId,
               rawText: null,
               correctionId: null,
@@ -704,8 +702,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
                 // events into a new session's panel.
                 if (signal.aborted) return;
                 const replacement = resolved ? `@${resolved}` : `@?${description}`;
-                if (!win.isDestroyed()) {
-                  getAppWebContents(win).send(CHANNELS.VOICE_INPUT_FILE_TOKEN_RESOLVED, {
+                if (!target.isDestroyed()) {
+                  target.send(CHANNELS.VOICE_INPUT_FILE_TOKEN_RESOLVED, {
                     sessionId,
                     description,
                     replacement,
@@ -717,7 +715,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
           }
         }
       } else if (voiceEvent.type === "paragraph_boundary") {
-        getAppWebContents(win).send(CHANNELS.VOICE_INPUT_PARAGRAPH_BOUNDARY, {
+        target.send(CHANNELS.VOICE_INPUT_PARAGRAPH_BOUNDARY, {
           sessionId,
           rawText: null,
         });
@@ -726,12 +724,12 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
           if (session.overflowReported) return;
           session.overflowReported = true;
         }
-        getAppWebContents(win).send(CHANNELS.VOICE_INPUT_ERROR, {
+        target.send(CHANNELS.VOICE_INPUT_ERROR, {
           sessionId,
           error: voiceEvent.error,
         });
       } else if (voiceEvent.type === "status") {
-        getAppWebContents(win).send(CHANNELS.VOICE_INPUT_STATUS, {
+        target.send(CHANNELS.VOICE_INPUT_STATUS, {
           sessionId,
           status: voiceEvent.status,
         });
@@ -898,6 +896,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
   // stops, with the full dictated text; correction runs as a single gpt-6-luna
   // request rather than the old per-segment streaming pipeline.
   const handleCorrect = async (
+    ctx: IpcContext,
     request: VoiceInputCorrectPayload
   ): Promise<{ action: "no_change" | "replace"; correctedText: string }> => {
     const settings = getVoiceSettings();
@@ -909,7 +908,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       correctionService = new VoiceCorrectionService();
     }
 
-    const projectInfo = getProjectInfo();
+    const projectInfo = getProjectInfo(ctx.projectId);
     const result = await correctionService.correct(
       {
         rawText: request.rawText,
@@ -953,7 +952,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     typedHandle(CHANNELS.VOICE_INPUT_REQUEST_MIC_PERMISSION, handleRequestMicPermission),
     typedHandle(CHANNELS.VOICE_INPUT_OPEN_MIC_SETTINGS, handleOpenMicSettings),
     typedHandle(CHANNELS.VOICE_INPUT_VALIDATE_API_KEY, handleValidateApiKey),
-    typedHandleValidated(
+    typedHandleWithContextValidated(
       CHANNELS.VOICE_INPUT_CORRECT,
       VoiceInputCorrectPayloadSchema,
       handleCorrect
