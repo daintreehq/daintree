@@ -57,7 +57,7 @@ function harness(
 
   const sample = async (memoryKb: number, id = "t1", times = 1) => {
     for (let i = 0; i < times; i++) {
-      metricsListener?.({ [id]: { cpuPercent: 0, memoryKb } });
+      metricsListener?.({ [id]: { cpuPercent: 0, memoryKb, breakdown: [] } });
       await Promise.resolve();
       await Promise.resolve();
     }
