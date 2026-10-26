@@ -180,6 +180,7 @@ describe("voiceDictionary operations", () => {
     });
     const after = await op("dismissSuggestion", { word: "zustand" });
     expect(after.suggestedDictionary.map((s) => s.word)).toEqual(["Tailwind"]);
+    expect(stored().suggestedDictionary).toEqual(after.suggestedDictionary);
   });
 
   it("learns nothing while learning from corrections is off, or for a word already added", async () => {

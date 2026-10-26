@@ -490,6 +490,7 @@ describe("VoiceInputSettingsTab dictionary", () => {
     );
     expect(api.dictionary.acceptSuggestion).toHaveBeenCalledWith({ word: "Zustand" });
     expect(screen.getByRole("button", { name: "Add Tailwind to dictionary" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Add Zustand to dictionary" })).toBeNull();
     expect(api.setSettings).not.toHaveBeenCalled();
   });
 
@@ -575,5 +576,31 @@ describe("VoiceInputSettingsTab dictionary", () => {
       expect(screen.getByRole("button", { name: "Remove Daintree" })).toBeTruthy()
     );
     expect(input.value).toBe("Zust");
+  });
+
+  it("retries a failed settings save against what the page shows now", async () => {
+    let finishSecond: () => void = () => {};
+    const setSettings = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("EROFS"))
+      .mockImplementationOnce(() => new Promise<void>((resolve) => (finishSecond = resolve)))
+      .mockRejectedValueOnce(new Error("EROFS"));
+    install({}, { setSettings });
+    render(<VoiceInputSettingsTab />);
+
+    const learn = await screen.findByRole("switch", { name: "Learn words from corrections" });
+    fireEvent.click(learn);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy());
+    expect(learn.getAttribute("aria-checked")).toBe("true");
+
+    // A second save is still in flight when the first failure is retried, and the retry fails.
+    fireEvent.click(learn);
+    await waitFor(() => expect(learn.getAttribute("aria-checked")).toBe("false"));
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(setSettings).toHaveBeenCalledTimes(3));
+    finishSecond();
+
+    // The in-flight save landed, so rolling back must not undo it.
+    await waitFor(() => expect(learn.getAttribute("aria-checked")).toBe("false"));
   });
 });

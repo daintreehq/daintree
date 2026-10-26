@@ -101,6 +101,17 @@ describe("migration036 — structured voice dictionary entries", () => {
     }
   });
 
+  it("stamps every migrated entry with one migration time", () => {
+    let clock = NOW;
+    vi.spyOn(Date, "now").mockImplementation(() => clock++);
+    const { data } = run({ voiceInput: { customDictionary: ["Daintree", "Zustand", "Vite"] } });
+
+    const times = (data.voiceInput as { dictionary: { addedAt: number }[] }).dictionary.map(
+      (e) => e.addedAt
+    );
+    expect(times).toEqual([NOW, NOW, NOW]);
+  });
+
   it("is idempotent", () => {
     const initial = { voiceInput: { customDictionary: ["Daintree", "Zustand"] } };
     expect(run(initial, 2).data).toEqual(run(initial, 1).data);

@@ -163,12 +163,12 @@ const SETTING_LABEL: Partial<Record<PatchKey, string>> = {
   resolveFileLinks: "Resolve file references",
 };
 
-interface SaveFailure {
-  group: SaveGroup;
-  /** What is showing its previous value, e.g. "The dictionary". */
-  label: string;
-  retry: () => void;
-}
+// A settings save is retried through the current `update`, so the retry rolls back
+// to what the page shows now. A dictionary change reads no page state, so it can
+// carry its own retry.
+type SaveFailure =
+  | { group: SaveGroup; patch: VoiceInputSettingsPatch }
+  | { group: "dictionary"; label: string; retry: () => void };
 
 type ConclusiveMicStatus = "granted" | "denied" | "restricted";
 
@@ -294,27 +294,29 @@ export function VoiceInputSettingsTab() {
           }
           return reverted;
         });
-      setSaveFailure({
-        group,
-        label:
-          patchedKeys(patch)
-            .map((key) => SETTING_LABEL[key])
-            .find(Boolean) ?? "The setting",
-        retry: () => void update(patch),
-      });
+      setSaveFailure({ group, patch });
       logWarn("Failed to save voice input settings", voiceErrorLogFields(err));
       return false;
     }
   };
 
-  const saveError = (group: SaveGroup) =>
-    saveFailure?.group === group ? (
+  const saveError = (group: SaveGroup) => {
+    if (saveFailure?.group !== group) return null;
+    const failure = saveFailure;
+    const label =
+      "patch" in failure
+        ? (patchedKeys(failure.patch)
+            .map((key) => SETTING_LABEL[key])
+            .find(Boolean) ?? "The setting")
+        : failure.label;
+    return (
       <SettingsLoadErrorBanner
         title="Couldn't save that change"
-        message={`${saveFailure.label} is back to its previous value.`}
-        onRetry={saveFailure.retry}
+        message={`${label} is back to its previous value.`}
+        onRetry={"patch" in failure ? () => void update(failure.patch) : failure.retry}
       />
-    ) : null;
+    );
+  };
 
   // Best-effort: a transient IPC failure is inconclusive, not an answer.
   const readMicPermission = async (): Promise<MicPermissionStatus | undefined> => {

@@ -554,9 +554,10 @@ describe("useTokenResolution dictionary learning", () => {
   });
 
   it("still sends when main can't be reached", async () => {
+    const recordSuggestions = vi.fn().mockRejectedValue(new Error("gone"));
     installElectron({
       git: { getWorkingDiff: vi.fn() },
-      voiceDictionary: { recordSuggestions: vi.fn().mockRejectedValue(new Error("gone")) },
+      voiceDictionary: { recordSuggestions },
     });
     voiceState.value = {
       ...defaults,
@@ -571,6 +572,9 @@ describe("useTokenResolution dictionary learning", () => {
       await expect(sendText("use Zustand for state")).resolves.toBe(true);
     });
     expect(onSend).toHaveBeenCalledTimes(1);
+    expect(recordSuggestions).toHaveBeenCalledWith({
+      candidates: [{ word: "Zustand", original: "zoo stand" }],
+    });
   });
 
   it("reports nothing while learning from corrections is off", async () => {

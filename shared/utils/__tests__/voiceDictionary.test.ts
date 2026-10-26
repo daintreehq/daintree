@@ -88,19 +88,25 @@ describe("removeDictionaryEntry", () => {
 });
 
 describe("updateDictionaryEntry", () => {
-  const entries = [entry("Daintree"), entry("zustand", { heardAs: ["zoo stand"] })];
+  const entries = [
+    entry("Daintree"),
+    entry("zustand", { heardAs: ["zoo stand"], source: "learned", addedAt: 5 }),
+  ];
 
   it("renames a term, including a change of case alone, keeping source and time", () => {
     const next = updateDictionaryEntry(entries, "ZUSTAND", { term: "Zustand" });
-    expect(next[1]).toEqual(entry("Zustand", { heardAs: ["zoo stand"] }));
+    expect(next[1]).toEqual({
+      term: "Zustand",
+      heardAs: ["zoo stand"],
+      source: "learned",
+      addedAt: 5,
+    });
     expect(next[0]).toBe(entries[0]);
   });
 
-  it("replaces the heard-as forms", () => {
-    const next = updateDictionaryEntry(entries, "zustand", {
-      heardAs: ["zoo stand", "Zoo Stand", "zu stand"],
-    });
-    expect(next[1]!.heardAs).toEqual(["zoo stand", "zu stand"]);
+  it("replaces the heard-as forms rather than adding to them", () => {
+    const next = updateDictionaryEntry(entries, "zustand", { heardAs: ["zu stand", "Zu Stand"] });
+    expect(next[1]!.heardAs).toEqual(["zu stand"]);
   });
 
   it("refuses a rename onto another entry's term", () => {
