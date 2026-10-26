@@ -98,6 +98,7 @@ const runtime = vi.hoisted(() => ({
   },
   voiceFns: {
     setLastError: vi.fn<(error: VoiceInputError | null) => void>(),
+    setPauseStopWarning: vi.fn<(warning: boolean) => void>(),
     announce: vi.fn<(text: string) => void>(),
     setStatus: vi.fn<(status: string) => void>(),
     setConfigured: vi.fn<(configured: boolean) => void>(),
@@ -217,6 +218,7 @@ function resetRuntime(): void {
   Object.values(runtime.voiceInput).forEach((fn) => fn.mockReset());
 
   runtime.voiceFns.setLastError.mockImplementation(() => undefined);
+  runtime.voiceFns.setPauseStopWarning.mockImplementation(() => undefined);
   runtime.voiceFns.announce.mockImplementation(() => undefined);
   runtime.voiceFns.setStatus.mockImplementation((status) => {
     runtime.voiceState.status = status;
@@ -1252,8 +1254,14 @@ describe("VoiceRecordingService adversarial", () => {
       voiceRecordingService.pause();
       expect(runtime.voiceFns.setStatus).toHaveBeenCalledWith("paused");
 
-      // Just before 60s: nothing happens.
-      vi.advanceTimersByTime(59_999);
+      // The warning lands 10s ahead of the auto-stop.
+      vi.advanceTimersByTime(49_999);
+      expect(runtime.voiceFns.setPauseStopWarning).not.toHaveBeenCalledWith(true);
+      vi.advanceTimersByTime(1);
+      expect(runtime.voiceFns.setPauseStopWarning).toHaveBeenCalledWith(true);
+
+      // Just before 60s: nothing is stopped.
+      vi.advanceTimersByTime(9_999);
       expect(stopSpy).not.toHaveBeenCalled();
 
       // At 60s the auto-stop fires and full teardown is requested.

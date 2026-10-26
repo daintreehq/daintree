@@ -221,7 +221,9 @@ class VoiceRecordingService {
   private pauseStartedAt = 0;
   private totalPausedMs = 0;
   private pauseTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  private pauseWarnTimeoutId: ReturnType<typeof setTimeout> | null = null;
   private static readonly PAUSE_AUTO_STOP_MS = 60_000;
+  private static readonly PAUSE_WARN_LEAD_MS = 10_000;
   // An open stream is not proof of capture: a Bluetooth mic switching to HFP
   // hands Web Audio zeros for a while (#13105). The UI only claims it is
   // listening once a chunk clears the mic-liveness floor (`isMicLive`, not the
@@ -2183,6 +2185,13 @@ class VoiceRecordingService {
   }
 
   private clearPauseTimeout(): void {
+    if (this.pauseWarnTimeoutId !== null) {
+      clearTimeout(this.pauseWarnTimeoutId);
+      this.pauseWarnTimeoutId = null;
+    }
+    if (useVoiceRecordingStore.getState().pauseStopWarning) {
+      useVoiceRecordingStore.getState().setPauseStopWarning(false);
+    }
     if (this.pauseTimeoutId === null) return;
     clearTimeout(this.pauseTimeoutId);
     this.pauseTimeoutId = null;
@@ -2369,6 +2378,13 @@ class VoiceRecordingService {
     state.setStatus("paused");
     state.announce("Dictation paused.");
     this.clearPauseTimeout();
+    this.pauseWarnTimeoutId = setTimeout(() => {
+      this.pauseWarnTimeoutId = null;
+      const current = useVoiceRecordingStore.getState();
+      if (current.status !== "paused") return;
+      current.setPauseStopWarning(true);
+      current.announce("Dictation stops in 10 seconds unless resumed.");
+    }, VoiceRecordingService.PAUSE_AUTO_STOP_MS - VoiceRecordingService.PAUSE_WARN_LEAD_MS);
     this.pauseTimeoutId = setTimeout(() => {
       this.pauseTimeoutId = null;
       // Re-read status inside the callback — the session may have ended,

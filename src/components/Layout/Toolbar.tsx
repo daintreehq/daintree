@@ -354,6 +354,7 @@ export function Toolbar({
         (state.status === "arming" ||
           state.status === "connecting" ||
           state.status === "recording" ||
+          state.status === "reconnecting" ||
           state.status === "paused" ||
           state.status === "finishing"))
   );
