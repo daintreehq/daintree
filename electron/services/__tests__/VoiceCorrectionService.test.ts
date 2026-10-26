@@ -777,13 +777,30 @@ describe("VoiceCorrectionService", () => {
     });
 
     it.each([
+      ["open a PR"],
+      ["that is open source"],
+      ["keep the file open"],
+      ["at least one test file"],
+      ["at the top of the file"],
+      ["open the settings dialog"],
+      ["please reference the old API"],
+    ])("skips API call for ordinary speech: %s", async (utterance) => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+
+      const svc = new VoiceCorrectionService();
+      const result = await svc.detectFileLinkTokens(utterance, { apiKey: "sk-test" });
+
+      expect(result).toEqual([]);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it.each([
       ["link to the hybrid input bar"],
       ["at file index ts"],
-      ["please reference the auth flow"],
+      ["reference file auth flow"],
       ["add file router"],
       ["insert file config"],
-      ["open the hybrid input"],
-      ["at the bar component"],
     ])("calls API when trigger phrase present: %s", async (utterance) => {
       const fetchMock = vi.fn().mockResolvedValue({
         ok: true,
@@ -814,7 +831,7 @@ describe("VoiceCorrectionService", () => {
       const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
       const body = JSON.parse(init.body as string);
       expect(body.max_output_tokens).toBe(256);
-      expect(body.prompt_cache_key).toBe("voice-file-link-v1");
+      expect(body.prompt_cache_key).toBe("voice-file-link-v2");
       // File-link detection shares the single voice model and the explicit
       // low-latency reasoning effort (issue #11365).
       expect(body.model).toBe("gpt-6-luna");
@@ -938,7 +955,44 @@ describe("VoiceCorrectionService", () => {
       expect(result).toEqual([]);
     });
 
-    it("returns empty array silently on session abort", async () => {
+    it("outlives the session signal, so a stop doesn't cancel the final utterance", async () => {
+      const session = new AbortController();
+      let respond: (() => void) | null = null;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockImplementation(
+          (_url: string, init: RequestInit) =>
+            new Promise((resolve, reject) => {
+              init.signal!.addEventListener("abort", () => reject(init.signal!.reason), {
+                once: true,
+              });
+              respond = () =>
+                resolve({
+                  ok: true,
+                  json: async () => ({
+                    output_text: JSON.stringify({
+                      file_references: [{ description: "input bar" }],
+                    }),
+                  }),
+                });
+            })
+        )
+      );
+
+      const svc = new VoiceCorrectionService();
+      svc.setSessionSignal(session.signal);
+      const resultPromise = svc.detectFileLinkTokens(
+        "link to input bar",
+        { apiKey: "sk-test" },
+        new AbortController().signal
+      );
+      session.abort();
+      respond!();
+
+      expect(await resultPromise).toEqual([{ description: "input bar" }]);
+    });
+
+    it("returns empty array silently when its signal aborts", async () => {
       const controller = new AbortController();
       vi.stubGlobal(
         "fetch",
@@ -953,9 +1007,11 @@ describe("VoiceCorrectionService", () => {
       );
 
       const svc = new VoiceCorrectionService();
-      svc.setSessionSignal(controller.signal);
-
-      const resultPromise = svc.detectFileLinkTokens("link to something", { apiKey: "sk-test" });
+      const resultPromise = svc.detectFileLinkTokens(
+        "link to something",
+        { apiKey: "sk-test" },
+        controller.signal
+      );
       controller.abort();
 
       const result = await resultPromise;

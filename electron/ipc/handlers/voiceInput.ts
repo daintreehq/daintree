@@ -1,4 +1,6 @@
 // eager-import-allow: reads voice-input settings via store.get synchronously in the IPC handler
+import { randomUUID } from "node:crypto";
+import { isAbsolute } from "node:path";
 import { ipcMain, systemPreferences } from "electron";
 import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";
@@ -35,6 +37,8 @@ import {
   createAudioBufferOverflowError,
 } from "../../services/voice/TranscriptionProvider.js";
 import { voiceFileLinkResolver } from "../../services/VoiceFileLinkResolver.js";
+import { mayReferenceFile } from "../../../shared/utils/voiceFileLinkCommands.js";
+import { createTimeoutSignal } from "../../../shared/utils/timeoutSignal.js";
 import { typedHandle, typedHandleWithContextValidated } from "../utils.js";
 import { defineIpcNamespace, op, opValidated } from "../define.js";
 import { ValidationError } from "../validationError.js";
@@ -68,10 +72,11 @@ interface VoiceSession {
   readonly sender: Electron.WebContents;
   readonly webContentsId: number;
   readonly projectId: string | null;
-  // The global current project at start. File links read this until they
-  // move to the owning view's project (#14599); keyterms come from the
-  // dictation target's own terminal instead.
+  // The starting view's project at start (#14599). File links fall back to it
+  // when no terminal vouches for a worktree.
   readonly projectInfo: { name?: string; path?: string };
+  /** The terminal being dictated into, as the renderer named it at start. */
+  readonly terminalId: string | undefined;
   // starting: main is still preparing, and the provider isn't this session's.
   // active: its provider has been started (it may still be connecting).
   // stopping: a stop owns its graceful drain.
@@ -95,6 +100,11 @@ interface VoiceSession {
   // Overflow can be hit both here and in the provider's own connect buffer —
   // one report per session is enough.
   overflowReported: boolean;
+  // Spoken file references still resolving, one job per transcript. A stop
+  // waits for them before ending the session, so a reference in the final
+  // utterance lands before the renderer's post-stop correction reads the
+  // draft. Ending the session for any reason aborts what is left.
+  readonly fileLinkJobs: Set<Promise<void>>;
 }
 
 let liveSession: VoiceSession | null = null;
@@ -150,6 +160,22 @@ function endSession(session: VoiceSession, reason: VoiceSessionEndReason): void 
 }
 
 const SUPERSEDED: VoiceStartOutcome = { status: "superseded" };
+
+// Bounds a whole file-link job (detection, worktree lookup, search, rerank),
+// and so how long a stop can wait on one. Local search ignores abort signals,
+// so the job is raced against its deadline rather than trusted to stop.
+const FILE_LINK_JOB_TIMEOUT_MS = 6000;
+
+function whenAborted(signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.resolve();
+  return new Promise((resolve) =>
+    signal.addEventListener("abort", () => resolve(), { once: true })
+  );
+}
+
+function normalizeSpoken(text: string): string {
+  return text.toLowerCase().replace(/\s+/g, " ").trim();
+}
 
 const VALID_TRANSCRIPTION_PROVIDERS: VoiceTranscriptionProvider[] = ["openai", "deepgram"];
 
@@ -484,6 +510,23 @@ function resolveKeytermTarget(
   return { terminalId, projectName };
 }
 
+// References resolve in the worktree the dictated terminal is filed under,
+// else its cwd, as keyterms do. Without a terminal main can vouch for, the
+// starting view's project; a view that owns no project resolves nothing, never
+// the app's current one (#14599).
+async function resolveFileLinkCwd(
+  session: VoiceSession,
+  ptyClient: PtyClient | undefined
+): Promise<string | null> {
+  const { terminalId } = resolveKeytermTarget(session.projectId, session.terminalId, ptyClient);
+  if (terminalId && ptyClient) {
+    const terminal = await ptyClient.getTerminalAsync(terminalId).catch(() => null);
+    const path = terminal?.worktreeId ?? terminal?.cwd;
+    if (typeof path === "string" && isAbsolute(path)) return path;
+  }
+  return session.projectInfo.path ?? null;
+}
+
 export function registerVoiceInputHandlers(deps: HandlerDependencies): () => void {
   const handleGetSettings = async () => {
     return getVoiceSettings();
@@ -523,6 +566,68 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     }
   };
 
+  const findFileLinks = async (
+    session: VoiceSession,
+    correctionSvc: VoiceCorrectionService,
+    transcriptId: string,
+    rawText: string,
+    settings: VoiceInputSettings,
+    signal: AbortSignal
+  ): Promise<void> => {
+    const credentials = {
+      apiKey: settings.openaiApiKey,
+      organizationId: settings.organizationId,
+      projectId: settings.projectId,
+    };
+    const detected = await correctionSvc.detectFileLinkTokens(rawText, credentials, signal);
+    // A description the transcript doesn't contain has nowhere to land.
+    const spoken = normalizeSpoken(rawText);
+    const descriptions = detected
+      .map(({ description }) => description.trim())
+      .filter((description) => spoken.includes(normalizeSpoken(description)));
+    if (descriptions.length === 0 || signal.aborted) return;
+    const cwd = await resolveFileLinkCwd(session, deps.ptyClient);
+    if (!cwd || signal.aborted) return;
+    const paths = await Promise.all(
+      descriptions.map((description) =>
+        voiceFileLinkResolver.resolve({ cwd, description, ...credentials, signal })
+      )
+    );
+    // A local match returns without consulting the signal.
+    if (signal.aborted) return;
+    // Misses go too, so a hit can't claim a missed command's words; their
+    // own words stay as spoken.
+    const references = descriptions.map((description, i) => ({
+      description,
+      path: paths[i] ?? null,
+    }));
+    const resolved = references.filter((reference) => reference.path).length;
+    logDebug("[VoiceInput] File links resolved", { detected: references.length, resolved });
+    // The view that started the session, wherever it is now; never the app's
+    // current view (#14599).
+    if (resolved === 0 || session.sender.isDestroyed()) return;
+    session.sender.send(CHANNELS.VOICE_INPUT_FILE_TOKEN_RESOLVED, {
+      sessionId: session.id,
+      transcriptId,
+      references,
+    });
+  };
+
+  const trackFileLinkJob = (
+    session: VoiceSession,
+    run: (signal: AbortSignal) => Promise<void>
+  ): void => {
+    const deadline = createTimeoutSignal(FILE_LINK_JOB_TIMEOUT_MS, session.controller.signal);
+    const work = run(deadline.signal).catch((error: unknown) => {
+      logWarn("[VoiceInput] File link resolution failed", voiceErrorLogFields(error));
+    });
+    const job: Promise<void> = Promise.race([work, whenAborted(deadline.signal)]).finally(() => {
+      deadline.dispose();
+      session.fileLinkJobs.delete(job);
+    });
+    session.fileLinkJobs.add(job);
+  };
+
   // A failed or superseded start is an outcome, not an exception: the
   // provider's message goes back to the renderer and never through the IPC
   // error logger, where it could quote dictated text (#14620).
@@ -559,6 +664,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       webContentsId: ctx.webContentsId,
       projectId: ctx.projectId,
       projectInfo: getProjectInfo(ctx.projectId),
+      terminalId: options?.terminalId,
       phase: "starting",
       ended: false,
       stopPromise: null,
@@ -569,6 +675,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       overflowReported: false,
       handedOff,
       markHandedOff,
+      fileLinkJobs: new Set(),
     };
     const previous = liveSession;
     liveSession = session;
@@ -685,6 +792,19 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         // empty completion — otherwise its interim deltas would linger as ghost
         // text and be flushed into the draft on stop.
         const itemIdField = voiceEvent.itemId ? { itemId: voiceEvent.itemId } : {};
+        // Spoken file references resolve after the words land. Every part of
+        // this transcript carries the id their result will name, so the
+        // renderer swaps them inside these words and nowhere else.
+        const correctionSvc = correctionService;
+        const transcriptId =
+          correctionSvc &&
+          parts.length > 0 &&
+          liveSettings.correctionEnabled &&
+          liveSettings.resolveFileLinks &&
+          liveSettings.openaiApiKey &&
+          mayReferenceFile(rawText)
+            ? randomUUID()
+            : undefined;
         if (parts.length === 0 && voiceEvent.itemId) {
           target.send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, {
             sessionId,
@@ -700,6 +820,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
               text: pieces[i],
               willCorrect: false,
               ...itemIdField,
+              ...(transcriptId ? { transcriptId } : {}),
             });
           }
           if (i < pieces.length - 1) {
@@ -711,52 +832,10 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
           }
         }
 
-        // File link detection: scan the complete utterance for file-reference voice commands.
-        if (
-          liveSettings.correctionEnabled &&
-          liveSettings.resolveFileLinks &&
-          correctionService &&
-          rawText.length > 0
-        ) {
-          const projectPath = session.projectInfo.path;
-          const apiKey = liveSettings.openaiApiKey;
-          if (projectPath && apiKey) {
-            // Capture the service synchronously so a replacement instance can't
-            // be used here. The signal aborts when this session ends.
-            const signal = session.controller.signal;
-            const correctionSvc = correctionService;
-            void (async () => {
-              const tokens = await correctionSvc.detectFileLinkTokens(rawText, {
-                apiKey,
-                organizationId: liveSettings.organizationId,
-                projectId: liveSettings.projectId,
-              });
-              for (const { description } of tokens) {
-                const resolved = await voiceFileLinkResolver.resolve({
-                  cwd: projectPath,
-                  description,
-                  apiKey,
-                  organizationId: liveSettings.organizationId,
-                  projectId: liveSettings.projectId,
-                  signal,
-                });
-                // Guard the IPC send: voiceFileLinkResolver may return on a
-                // local-only match without ever consulting `signal`, so a session
-                // stopped mid-resolution could otherwise leak FILE_TOKEN_RESOLVED
-                // events into a new session's panel.
-                if (signal.aborted) return;
-                const replacement = resolved ? `@${resolved}` : `@?${description}`;
-                if (!target.isDestroyed()) {
-                  target.send(CHANNELS.VOICE_INPUT_FILE_TOKEN_RESOLVED, {
-                    sessionId,
-                    description,
-                    replacement,
-                    resolved: !!resolved,
-                  });
-                }
-              }
-            })();
-          }
+        if (correctionSvc && transcriptId) {
+          trackFileLinkJob(session, (signal) =>
+            findFileLinks(session, correctionSvc, transcriptId, rawText, liveSettings, signal)
+          );
         }
       } else if (voiceEvent.type === "paragraph_boundary") {
         target.send(CHANNELS.VOICE_INPUT_PARAGRAPH_BOUNDARY, {
@@ -871,6 +950,10 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         endSession(session, "failed");
         throw error;
       }
+      // The drain can finish the final utterance, whose references only start
+      // resolving then. Each job is bounded, and ending the session another
+      // way aborts them.
+      await Promise.allSettled(session.fileLinkJobs);
       endSession(session, "stopped");
       return { rawText: null };
     })();

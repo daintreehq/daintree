@@ -2954,6 +2954,7 @@ function buildElectronApi(): ElectronAPI {
           text: string;
           willCorrect: boolean;
           itemId?: string;
+          transcriptId?: string;
         }) => void
       ) => _typedOn(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, callback),
       onParagraphBoundary: (
@@ -2976,9 +2977,8 @@ function buildElectronApi(): ElectronAPI {
       onFileTokenResolved: (
         callback: (payload: {
           sessionId: string;
-          description: string;
-          replacement: string;
-          resolved: boolean;
+          transcriptId: string;
+          references: Array<{ description: string; path: string | null }>;
         }) => void
       ) => _typedOn(CHANNELS.VOICE_INPUT_FILE_TOKEN_RESOLVED, callback),
     },

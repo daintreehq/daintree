@@ -19,6 +19,12 @@ export interface DictationUtterance {
   range: TrackedTextRange;
   /** Everything the utterance put in the draft: its leading separator and its words. */
   insertion: TrackedTextRange;
+  /**
+   * Main's id for the transcript the words came from, set when spoken file
+   * references in it may still arrive. One transcript can span several
+   * utterances when a spoken new line splits it.
+   */
+  transcriptId?: string;
 }
 
 /**
@@ -59,7 +65,7 @@ interface DictationRangeState {
   /** Records an utterance the session just wrote into the draft. */
   recordUtterance: (
     target: DictationDraftTarget,
-    span: { insertion: DictationTextSpan; words: DictationTextSpan }
+    span: { insertion: DictationTextSpan; words: DictationTextSpan; transcriptId?: string }
   ) => void;
   /** Records a paragraph break the session just wrote into the draft. */
   recordParagraphBreak: (target: DictationDraftTarget, insertion: DictationTextSpan) => void;
@@ -71,6 +77,8 @@ interface DictationRangeState {
   mapDrafts: (previous: Map<string, string>, next: Map<string, string>) => void;
   getDictation: (id: string) => DictationRecord | null;
   listDictations: (panelId: string, projectId?: string) => DictationRecord[];
+  /** Every live record the voice session wrote, in any draft. */
+  listSessionDictations: (sessionId: string) => DictationRecord[];
   releaseDictation: (id: string) => void;
   clear: () => void;
 }
@@ -153,12 +161,13 @@ function withInsertion(
 export const useDictationRangeStore = create<DictationRangeState>()((set, get) => ({
   drafts: {},
 
-  recordUtterance: (target, { insertion, words }) =>
+  recordUtterance: (target, { insertion, words, transcriptId }) =>
     set((state) => ({
       drafts: withInsertion(state.drafts, target, insertion, {
         id: crypto.randomUUID(),
         range: unedited(words),
         insertion: unedited(insertion),
+        ...(transcriptId ? { transcriptId } : {}),
       }),
     })),
 
@@ -192,6 +201,11 @@ export const useDictationRangeStore = create<DictationRangeState>()((set, get) =
   },
 
   listDictations: (panelId, projectId) => get().drafts[makeDraftKey(panelId, projectId)] ?? [],
+
+  listSessionDictations: (sessionId) =>
+    Object.values(get().drafts).flatMap((records) =>
+      records.filter((record) => record.sessionId === sessionId)
+    ),
 
   releaseDictation: (id) =>
     set((state) => {

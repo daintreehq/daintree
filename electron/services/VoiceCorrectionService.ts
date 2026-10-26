@@ -11,16 +11,13 @@ import {
 } from "../../shared/config/voiceCorrection.js";
 import { voiceErrorLogFields } from "../../shared/utils/voiceLogFields.js";
 import { buildOpenAIHeaders } from "../../shared/utils/openaiHeaders.js";
-import {
-  createTimeoutSignal,
-  withTimeoutSignal,
-  type DisposableTimeoutSignal,
-} from "../../shared/utils/timeoutSignal.js";
+import { createTimeoutSignal, withTimeoutSignal } from "../../shared/utils/timeoutSignal.js";
 import {
   findProtectedRanges,
   validateCorrection,
   type CorrectionRejectReason,
 } from "./voiceCorrectionGuard.js";
+import { mayReferenceFile } from "../../shared/utils/voiceFileLinkCommands.js";
 
 export { CORE_CORRECTION_PROMPT, buildCorrectionSystemPrompt };
 
@@ -42,17 +39,9 @@ const PROMPT_CACHE_PREFIX = "voice-correction-v8";
 // OpenAI rejects a prompt_cache_key longer than 64 characters.
 const PROMPT_CACHE_KEY_MAX_LENGTH = 64;
 const FILE_LINK_DETECTION_TIMEOUT_MS = 4000;
-const FILE_LINK_CACHE_PREFIX = "voice-file-link-v1";
+const FILE_LINK_CACHE_PREFIX = "voice-file-link-v2";
 const LEADING_FILLER_RE = /^(?:\s*(?:um|uh)[\s,.;:!-]+)+/i;
 const DICTIONARY_TERM_BOUNDARY_RE = /[\p{L}\p{N}_]/u;
-
-// Permissive pre-filter — biased toward false positives so legitimate file references
-// always reach the LLM. False positives cost a skipped LLM call; false negatives silently
-// drop the user's intent. The "at X file/component" branch allows up to 5 words between
-// "at" and the trigger noun (with hyphens) to cover natural phrasings like
-// "at the input bar component" and "at sign-in component".
-const FILE_LINK_TRIGGER_RE =
-  /\b(?:link\s+to|at\s+file|reference|add\s+file|insert\s+file|open|at\s+(?:[\w-]+\s+){1,5}(?:file|component))\b/i;
 
 const FILE_LINK_DETECTION_SCHEMA = {
   type: "object",
@@ -374,15 +363,21 @@ export class VoiceCorrectionService {
     });
   }
 
+  /**
+   * Takes its own abort signal rather than the session's: the final
+   * utterance's detection is still running when a graceful stop ends the
+   * session, and its result is still wanted.
+   */
   async detectFileLinkTokens(
     utterance: string,
-    settings: Pick<VoiceCorrectionSettings, "apiKey" | "organizationId" | "projectId">
+    settings: Pick<VoiceCorrectionSettings, "apiKey" | "organizationId" | "projectId">,
+    signal?: AbortSignal
   ): Promise<Array<{ description: string }>> {
     const trimmed = utterance.trim();
     if (!trimmed) return [];
-    if (!FILE_LINK_TRIGGER_RE.test(trimmed)) return [];
+    if (!mayReferenceFile(trimmed)) return [];
 
-    const deadline = this.buildFetchSignal(FILE_LINK_DETECTION_TIMEOUT_MS);
+    const deadline = createTimeoutSignal(FILE_LINK_DETECTION_TIMEOUT_MS, signal);
     try {
       const response = await fetch("https://api.openai.com/v1/responses", {
         method: "POST",
@@ -456,17 +451,6 @@ export class VoiceCorrectionService {
     } finally {
       deadline.dispose();
     }
-  }
-
-  /**
-   * Deadline guard for one API round-trip. Returns a disposable handle rather
-   * than a bare signal so the timer dies with the request: a 15s paragraph
-   * budget used to stay armed for the full 15s after a 300ms response came
-   * back, holding the signal and its fetch listeners alive for nothing.
-   * Callers must `dispose()` once the response body has been consumed.
-   */
-  private buildFetchSignal(timeoutMs: number): DisposableTimeoutSignal {
-    return createTimeoutSignal(timeoutMs, this.sessionSignal);
   }
 
   private getCorrectionTimeoutMs(request: VoiceCorrectionRequest): number {
