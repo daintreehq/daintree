@@ -120,6 +120,8 @@ vi.mock("../../../window/webContentsRegistry.js", async (importOriginal) => {
   return {
     ...actual,
     getProjectForWebContents: vi.fn((id: number) => shared.projects.get(id) ?? null),
+    // The live-session report goes to every app view; these tests have none.
+    getAllAppWebContents: vi.fn(() => []),
     // Another view is current; a send routed through it would land here.
     getAppWebContents: vi.fn(() => ({
       isDestroyed: () => false,
