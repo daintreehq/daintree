@@ -390,6 +390,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const voiceMicSignal = useVoiceRecordingStore((s) => s.micSignal);
     const externalDraftRevision = useTerminalInputStore((s) => s.externalDraftRevision);
     const panelWorktreeId = usePanelStore((s) => s.panelsById[terminalId]?.worktreeId);
+    const panelOwnTitle = usePanelStore((s) => s.panelsById[terminalId]?.title);
     // Selects the drawn label, not the snapshot: the agent's own git-status
     // passes replace the snapshot while the user is typing here.
     const panelWorktreeLabel = useWorktreeStore((s) => {
@@ -1630,7 +1631,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               {!isolated && (
                 <VoiceInputButton
                   panelId={terminalId}
-                  panelTitle={agentId ? getAgentConfig(agentId)?.name : undefined}
+                  panelTitle={
+                    panelOwnTitle?.trim() || (agentId ? getAgentConfig(agentId)?.name : undefined)
+                  }
                   projectId={currentProject?.id}
                   projectName={currentProject?.name}
                   worktreeId={panelWorktreeId}

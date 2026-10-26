@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { Mic } from "lucide-react";
+import { Lock, Mic } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
@@ -10,6 +10,7 @@ import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
+import { actionService } from "@/services/ActionService";
 
 // Flywheel — matches VoiceInputButton so the toolbar and panel-header
 // indicators behave identically.
@@ -24,6 +25,42 @@ function formatDuration(seconds: number): string {
   const minutes = Math.floor(seconds / 60);
   const remainder = seconds % 60;
   return `${minutes}:${remainder.toString().padStart(2, "0")}`;
+}
+
+function VoiceLockedButton({
+  label,
+  "data-toolbar-item": dataToolbarItem,
+}: {
+  label: string;
+  "data-toolbar-item"?: string;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon"
+          data-toolbar-item={dataToolbarItem}
+          onClick={() => {
+            void actionService.dispatch("voiceInput.unlockTarget", undefined, {
+              source: "user",
+            });
+          }}
+          className="toolbar-icon-button relative mr-0.5 text-text-secondary"
+          aria-label={`Dictation locked to ${label}. Click to unlock.`}
+          data-testid="voice-locked-button"
+        >
+          <Lock className="h-4 w-4" />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom">
+        <div className="flex flex-col gap-0.5">
+          <span className="font-medium">{`Dictation locked to ${label}`}</span>
+          <span className="text-text-secondary">Click to unlock</span>
+        </div>
+      </TooltipContent>
+    </Tooltip>
+  );
 }
 
 function VoiceRecordingPlaceholder() {
@@ -46,6 +83,7 @@ export function VoiceRecordingToolbarButton({
   "data-toolbar-item"?: string;
 }) {
   const activeTarget = useVoiceRecordingStore((state) => state.activeTarget);
+  const lockedTarget = useVoiceRecordingStore((state) => state.lockedTarget);
   const status = useVoiceRecordingStore((state) => state.status);
   const elapsedSeconds = useVoiceRecordingStore((state) => state.elapsedSeconds);
   const micSignal = useVoiceRecordingStore((state) => state.micSignal);
@@ -194,13 +232,21 @@ export function VoiceRecordingToolbarButton({
   }, [showOrbit, isFinishing, isPaused]);
 
   if (!isActive || (!showOrbit && !showArming)) {
+    if (!isActive && lockedTarget) {
+      const lockedLabel =
+        lockedTarget.panelTitle?.trim() ||
+        [lockedTarget.projectName, lockedTarget.worktreeLabel].filter(Boolean).join(" / ") ||
+        "a panel";
+      return <VoiceLockedButton label={lockedLabel} data-toolbar-item={dataToolbarItem} />;
+    }
     return <VoiceRecordingPlaceholder />;
   }
 
   const contextLabel = [activeTarget?.projectName, activeTarget?.worktreeLabel]
     .filter(Boolean)
     .join(" / ");
-  const targetLabel = activeTarget?.panelTitle ?? contextLabel;
+  const panelLabel = activeTarget?.panelTitle?.trim();
+  const targetLabel = panelLabel || contextLabel;
   const tooltipTitle = isArming
     ? targetLabel
       ? `Arming dictation: ${targetLabel}`
@@ -210,19 +256,19 @@ export function VoiceRecordingToolbarButton({
         ? "No audio from microphone"
         : "Starting microphone…"
       : isConnecting
-        ? contextLabel
-          ? `Recording: ${contextLabel} · Connecting…`
+        ? targetLabel
+          ? `Recording: ${targetLabel} · Connecting…`
           : "Recording · Connecting…"
         : isReconnecting
           ? "Reconnecting…"
           : isFinishing
             ? "Finishing transcription…"
             : isPaused
-              ? contextLabel
-                ? `Paused: ${contextLabel}`
+              ? targetLabel
+                ? `Paused: ${targetLabel}`
                 : "Dictation paused"
-              : contextLabel
-                ? `Recording: ${contextLabel}`
+              : targetLabel
+                ? `Recording: ${targetLabel}`
                 : "Recording in another panel";
   const elapsedLabel = isRecording || isPaused ? formatDuration(elapsedSeconds) : null;
   // The toggle shortcut would start a new session when focused elsewhere; the
@@ -336,6 +382,9 @@ export function VoiceRecordingToolbarButton({
             <TooltipContent side="bottom">
               <div className="flex flex-col gap-0.5">
                 <span className="font-medium">{tooltipTitle}</span>
+                {panelLabel && contextLabel && (
+                  <span className="text-text-secondary">{contextLabel}</span>
+                )}
                 {elapsedLabel && <span className="text-text-secondary">{elapsedLabel}</span>}
                 <span className="text-text-secondary">Click to jump to panel</span>
                 {actionCombo && (

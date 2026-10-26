@@ -10,10 +10,15 @@ import { readToolbarSource } from "./toolbarSource";
 const BUTTON_PATH = path.resolve(__dirname, "../VoiceRecordingToolbarButton.tsx");
 
 const focusActiveTarget = vi.fn();
+const dispatch = vi.fn();
 let mockCombo: string | undefined;
 
 vi.mock("@/services/VoiceRecordingService", () => ({
   voiceRecordingService: { focusActiveTarget: () => focusActiveTarget() },
+}));
+
+vi.mock("@/services/ActionService", () => ({
+  actionService: { dispatch: (...args: unknown[]) => dispatch(...args) },
 }));
 
 vi.mock("@/hooks", () => ({
@@ -117,7 +122,7 @@ describe("VoiceRecordingToolbarButton — tooltip names what a click does", () =
     {
       status: "connecting" as const,
       micSignal: "live" as const,
-      title: "Recording: Daintree / main · Connecting…",
+      title: "Recording: claude · notes · Connecting…",
     },
     {
       status: "finishing" as const,
@@ -281,5 +286,35 @@ describe("VoiceRecordingToolbarButton polish — issue #8176", () => {
       // invisible whenever the user hides the button.
       expect(toolbar).toMatch(/state\.status\s*===\s*"arming"/);
     });
+  });
+});
+
+describe("VoiceRecordingToolbarButton — locked target (#14629)", () => {
+  beforeEach(() => {
+    dispatch.mockClear();
+    useVoiceRecordingStore.setState({
+      isConfigured: true,
+      status: "idle",
+      activeTarget: null,
+      lockedTarget: null,
+    });
+  });
+
+  it("names the locked panel by its own title and unlocks on click", () => {
+    useVoiceRecordingStore.setState({
+      lockedTarget: { panelId: "p-1", panelTitle: "notes", projectName: "Daintree" },
+    });
+    const { getByTestId } = render(<VoiceRecordingToolbarButton />);
+    const button = getByTestId("voice-locked-button");
+    expect(button.getAttribute("aria-label")).toBe("Dictation locked to notes. Click to unlock.");
+    fireEvent.click(button);
+    expect(dispatch).toHaveBeenCalledWith("voiceInput.unlockTarget", undefined, {
+      source: "user",
+    });
+  });
+
+  it("renders no locked button when nothing is locked", () => {
+    const { queryByTestId } = render(<VoiceRecordingToolbarButton />);
+    expect(queryByTestId("voice-locked-button")).toBeNull();
   });
 });
