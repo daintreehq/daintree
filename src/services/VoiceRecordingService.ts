@@ -118,6 +118,7 @@ interface CaptureAttempt {
   // is. `null` once chunks forward live, or after the attempt is discarded.
   queue: ArrayBuffer[] | null;
   droppedChunks: number;
+  deviceId: string | null;
   // UI-only: device names never go into logs.
   deviceLabel: string | null;
   // The OS pulled the track ("ended"). Latched, so a lost attempt is never
@@ -918,6 +919,7 @@ class VoiceRecordingService {
       workletNode: null,
       queue: [],
       droppedChunks: 0,
+      deviceId: null,
       deviceLabel: null,
       lost: false,
     };
@@ -1051,6 +1053,7 @@ class VoiceRecordingService {
       const track = stream.getAudioTracks()[0];
       capture.deviceLabel = track?.label ? stripPseudoDevicePrefix(track.label) || null : null;
       const actualId = track?.getSettings?.().deviceId;
+      capture.deviceId = actualId || null;
       if (isSpecificDeviceId(requestedDeviceId) && actualId && actualId !== requestedDeviceId) {
         usingFallbackMic = true;
         logWarn(`${LOG_PREFIX} Microphone device mismatch`, {
@@ -2018,25 +2021,24 @@ class VoiceRecordingService {
   }
 
   /**
-   * Shows the silent-mic warning in the pane. A Bluetooth mic gets the
-   * built-in one offered instead, since the call-profile switch is the usual
-   * cause; the device list is read only then, and the answer is dropped if the
-   * session moved on while it was read.
+   * Shows the silent-mic warning in the pane, offering the built-in mic when
+   * there is one other than the silent mic. The device list is dropped if the
+   * session moved on, or the mic came alive, while it was read.
    */
   private async raiseSilentMicNotice(generation: number): Promise<void> {
     const capture = this.sessionCapture;
     const target = useVoiceRecordingStore.getState().activeTarget;
     if (!capture || !target) return;
-    const deviceLabel = capture.deviceLabel;
-    const bluetooth = isBluetoothMicLabel(deviceLabel);
+    const { deviceId, deviceLabel } = capture;
     let builtIn: VoiceMicDevice | null = null;
-    if (bluetooth) {
-      try {
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        builtIn = findBuiltInMic(devices.filter((device) => device.kind === "audioinput"));
-      } catch (err) {
-        logDebug(`${LOG_PREFIX} Could not list microphones`, voiceErrorLogFields(err));
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const candidate = findBuiltInMic(devices.filter((device) => device.kind === "audioinput"));
+      if (candidate && candidate.deviceId !== deviceId && candidate.label !== deviceLabel) {
+        builtIn = candidate;
       }
+    } catch (err) {
+      logDebug(`${LOG_PREFIX} Could not list microphones`, voiceErrorLogFields(err));
     }
     const state = useVoiceRecordingStore.getState();
     if (
@@ -2047,44 +2049,59 @@ class VoiceRecordingService {
     ) {
       return;
     }
-    state.setMicNotice({ kind: "silent", target, deviceLabel, bluetooth, builtIn });
+    state.setMicNotice({
+      kind: "silent",
+      target,
+      deviceLabel,
+      bluetooth: isBluetoothMicLabel(deviceLabel),
+      builtIn,
+    });
   }
 
   /**
    * The silent-mic notice's way forward: make the built-in mic the dictation
    * mic, then restart the session it was raised for on it. The restart is a
    * retarget onto the same pane, so the new mic records while the silent
-   * session drains.
+   * session drains. A paused session, or one held open by a push-to-talk key,
+   * only has the choice saved: restarting would resume it, or outlive the
+   * key's release.
    */
   async switchToMicFromNotice(notice: VoiceMicNotice): Promise<void> {
     if (notice.kind !== "silent" || !notice.builtIn || this.isSwitchingMic) return;
     if (useVoiceRecordingStore.getState().micNotice !== notice) return;
-    const { deviceId } = notice.builtIn;
+    const builtIn = notice.builtIn;
     const generation = this.generation;
     this.isSwitchingMic = true;
     try {
-      await window.electron.voiceInput.setSettings({ deviceId });
-    } catch (err) {
-      logWarn(`${LOG_PREFIX} Could not save the microphone choice`, voiceErrorLogFields(err));
-      useVoiceRecordingStore.getState().announce("Couldn't switch the microphone.");
-      return;
+      try {
+        await window.electron.voiceInput.setSettings({ deviceId: builtIn.deviceId });
+      } catch (err) {
+        logWarn(`${LOG_PREFIX} Could not save the microphone choice`, voiceErrorLogFields(err));
+        useVoiceRecordingStore.getState().announce("Couldn't switch the microphone.");
+        return;
+      }
+      this.selectedDeviceId = builtIn.deviceId;
+      const state = useVoiceRecordingStore.getState();
+      // The choice is saved either way; only the session the notice belongs
+      // to is restarted, and only while it is still running.
+      if (
+        this.generation !== generation ||
+        this.stopPromise ||
+        state.activeTarget?.panelId !== notice.target.panelId ||
+        !isActiveVoiceSession(state.status)
+      ) {
+        return;
+      }
+      if (state.status === "paused" || this.pttActiveKeyCode !== null) {
+        state.dismissMicNotice(notice);
+        state.announce(`${builtIn.label} will be used from the next dictation.`);
+        return;
+      }
+      logInfo(`${LOG_PREFIX} Restarting dictation on the built-in microphone`);
+      await this.start(state.activeTarget);
     } finally {
       this.isSwitchingMic = false;
     }
-    this.selectedDeviceId = deviceId;
-    const state = useVoiceRecordingStore.getState();
-    // The choice is saved either way; only the session the notice belongs to
-    // is restarted, and only while it is still running.
-    if (
-      this.generation !== generation ||
-      this.stopPromise ||
-      state.activeTarget?.panelId !== notice.target.panelId ||
-      !isActiveVoiceSession(state.status)
-    ) {
-      return;
-    }
-    logInfo(`${LOG_PREFIX} Restarting dictation on the built-in microphone`);
-    await this.start(state.activeTarget);
   }
 
   private clearMicSilenceTimer(): void {

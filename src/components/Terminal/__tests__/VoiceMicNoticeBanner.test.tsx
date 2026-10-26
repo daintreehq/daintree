@@ -129,10 +129,22 @@ describe("VoiceMicNoticeBanner", () => {
     expect(mocks.switchToMicFromNotice).not.toHaveBeenCalled();
   });
 
+  it.each<VoiceMicNotice>([
+    { kind: "lost", target: TARGET, deviceLabel: null },
+    { kind: "fallback", target: TARGET, deviceLabel: null },
+    { kind: "silent", target: TARGET, deviceLabel: null, bluetooth: false, builtIn: null },
+  ])("leaves the $kind announcement to the service's live region", (notice) => {
+    const { container } = renderNotice(notice);
+    const root = container.querySelector('[role="status"]');
+
+    expect(root).not.toBeNull();
+    expect(root?.getAttribute("aria-live")).toBe("off");
+  });
+
   it("dismisses its own notice and leaves a newer one alone", () => {
     const stale: VoiceMicNotice = { kind: "lost", target: TARGET, deviceLabel: null };
     renderNotice(stale);
-    const newer: VoiceMicNotice = { kind: "fallback", target: TARGET, deviceLabel: "USB Mic" };
+    const newer: VoiceMicNotice = { kind: "lost", target: TARGET, deviceLabel: "USB Mic" };
     useVoiceRecordingStore.setState({ micNotice: newer });
 
     fireEvent.click(screen.getByRole("button", { name: "Dismiss microphone notice" }));

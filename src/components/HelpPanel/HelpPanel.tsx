@@ -62,7 +62,7 @@ import { useMacroFocusStore } from "@/store/macroFocusStore";
 // hand-listed hook set) across the HelpPanel/controller suites, so pulling a new
 // hook through it would crash every one of them on an undefined destructure.
 import { useScratchStore } from "@/store/scratchStore";
-import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
+import { selectMicNoticeForPanel, useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { useFocusStore } from "@/store/focusStore";
 import { getAgentConfig } from "@/config/agents";
 import { buildResumeCommand } from "@shared/types/agentSettings";
@@ -241,9 +241,7 @@ export function HelpPanel({
 
   const terminal = usePanelStore((s) => (terminalId ? s.panelsById[terminalId] : undefined));
   const terminalPty = terminal && isPtyPanel(terminal) ? terminal : undefined;
-  const voiceMicNotice = useVoiceRecordingStore((s) =>
-    terminalId && s.micNotice?.target.panelId === terminalId ? s.micNotice : null
-  );
+  const voiceMicNotice = useVoiceRecordingStore((s) => selectMicNoticeForPanel(s, terminalId));
   // Narrow structural triggers for the reveal-focus effect (useHelpPanelRevealFocus). A live
   // assistant replaces its whole panel object constantly — `updateAgentState`,
   // `updateLastObservedTitle` on every distinct OSC title, and the RAF-coalesced

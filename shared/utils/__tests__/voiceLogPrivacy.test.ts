@@ -51,6 +51,7 @@ const SENSITIVE = new Set([
   "filePath",
   "label",
   "deviceLabel",
+  "micDeviceLabel",
 ]);
 
 const SAFE_MEMBERS = new Set(["length", "code", "severity", "name", "type", "size", "byteLength"]);
@@ -219,6 +220,7 @@ describe("the log-call scan", () => {
   it("flags microphone names", () => {
     expect(scan("warn('a', { mic: track.label });")).not.toEqual([]);
     expect(scan("warn('a', { deviceLabel });")).not.toEqual([]);
+    expect(scan("warn('a', { mic: state.micDeviceLabel });")).not.toEqual([]);
     expect(scan("warn('a', { hasLabel: Boolean(track.label) });")).toEqual([]);
   });
 

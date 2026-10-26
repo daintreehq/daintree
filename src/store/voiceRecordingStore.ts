@@ -211,8 +211,8 @@ export type VoiceMicSignal = "pending" | "live" | "silent";
  *
  * - lost: the input device went away; the session was ended and its text kept.
  * - fallback: the chosen device wasn't there at start, so another mic is in use.
- * - silent: the mic is still delivering silence after the grace window. For a
- *   Bluetooth mic, `builtIn` is the mic to switch to when one can be found.
+ * - silent: the mic is still delivering silence after the grace window.
+ *   `builtIn` is the mic to switch to, when one other than this one is found.
  */
 export type VoiceMicNotice =
   | { kind: "lost"; target: VoiceRecordingTarget; deviceLabel: string | null }
@@ -735,6 +735,14 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
     }
   )
 );
+
+/** The mic notice for one pane: a notice is only ever shown where it happened. */
+export function selectMicNoticeForPanel(
+  state: { micNotice: VoiceMicNotice | null },
+  panelId: string | null | undefined
+): VoiceMicNotice | null {
+  return panelId && state.micNotice?.target.panelId === panelId ? state.micNotice : null;
+}
 
 /**
  * True while a session is open but the mic hasn't delivered real audio yet —

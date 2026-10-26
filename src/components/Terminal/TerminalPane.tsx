@@ -82,7 +82,7 @@ import {
   useTerminalInputStore,
 } from "@/store";
 import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
-import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
+import { selectMicNoticeForPanel, useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { useTerminalLogic } from "@/hooks/useTerminalLogic";
 import { useIsHibernated } from "@/hooks/useIsHibernated";
 import { errorsClient } from "@/clients";
@@ -634,9 +634,7 @@ function TerminalPaneComponent({
   const isVoiceArming = useVoiceRecordingStore(
     (s) => s.status === "arming" && s.activeTarget?.panelId === id
   );
-  const voiceMicNotice = useVoiceRecordingStore((s) =>
-    s.micNotice?.target.panelId === id ? s.micNotice : null
-  );
+  const voiceMicNotice = useVoiceRecordingStore((s) => selectMicNoticeForPanel(s, id));
 
   const hybridInputEnabled = useTerminalInputStore((state) => state.hybridInputEnabled);
   const preferredTerminalFocusTarget = usePanelStore((state) => state.preferredTerminalFocusTarget);

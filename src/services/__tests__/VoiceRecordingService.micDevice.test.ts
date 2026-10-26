@@ -76,6 +76,9 @@ interface FakeTrack {
   removeEventListener: (type: string, cb: Listener) => void;
   /** Simulates the device or OS pulling the track. */
   end: () => void;
+  listenerCount: () => number;
+  /** Listeners still attached when stop() was called; null until then. */
+  listenersAtStop: number | null;
 }
 
 function createTrack(label: string, deviceId: string): FakeTrack {
@@ -87,6 +90,7 @@ function createTrack(label: string, deviceId: string): FakeTrack {
     enabled: true,
     // A local stop() fires no "ended" in Chromium.
     stop: vi.fn(() => {
+      track.listenersAtStop = track.listenerCount();
       track.readyState = "ended";
     }),
     getSettings: () => ({ deviceId }),
@@ -101,6 +105,8 @@ function createTrack(label: string, deviceId: string): FakeTrack {
       track.readyState = "ended";
       for (const cb of [...(listeners.get("ended") ?? [])]) cb();
     },
+    listenerCount: () => [...listeners.values()].reduce((sum, set) => sum + set.size, 0),
+    listenersAtStop: null,
   };
   return track;
 }
@@ -298,6 +304,12 @@ describe("VoiceRecordingService — microphone devices (#14606)", () => {
 
   it("ends the session when the microphone is lost mid-dictation, keeping what was transcribed", async () => {
     const harness = setupGlobals({ tracks: [{ label: "AirPods Pro", deviceId: "airpods" }] });
+    let releaseDrain: () => void = () => {};
+    harness.voiceInput.stop.mockReturnValue(
+      new Promise<void>((resolve) => {
+        releaseDrain = resolve;
+      })
+    );
     const { store, service } = await load();
 
     await service.start(TARGET);
@@ -308,10 +320,17 @@ describe("VoiceRecordingService — microphone devices (#14606)", () => {
 
     harness.tracks[0]!.end();
 
+    // A graceful drain: capture is released at once, the backend still
+    // transcribes what it was sent, and that text lands in the same pane.
+    await vi.waitFor(() => expect(harness.voiceInput.stop).toHaveBeenCalledTimes(1));
+    expect(harness.tracks[0]!.stop).toHaveBeenCalled();
+    expect(harness.tracks[0]!.listenersAtStop).toBe(0);
+    expect(store.getState().status).toBe("finishing");
+    harness.delta.emit(" and more");
+    releaseDrain();
+
     await vi.waitFor(() => expect(store.getState().status).toBe("idle"));
-    // A graceful drain, so audio already sent still comes back as text.
-    expect(harness.voiceInput.stop).toHaveBeenCalledTimes(1);
-    expect(draftState.draft).toBe("hello world");
+    expect(draftState.draft).toBe("hello world and more");
     expect(store.getState().activeTarget).toBeNull();
     expect(store.getState().elapsedSeconds).toBe(0);
     expect(store.getState().micNotice).toEqual({
@@ -349,7 +368,7 @@ describe("VoiceRecordingService — microphone devices (#14606)", () => {
     await service.start(TARGET);
     sendChunk(harness.workletNodes[0]!, 3000);
     await service.stop();
-    // The track listeners went with the session.
+    expect(harness.tracks[0]!.listenersAtStop).toBe(0);
     harness.tracks[0]!.end();
 
     expect(harness.voiceInput.stop).toHaveBeenCalledTimes(1);
@@ -393,6 +412,40 @@ describe("VoiceRecordingService — microphone devices (#14606)", () => {
     expect(store.getState().status).toBe("error");
     expect(store.getState().lastError?.code).toBe("mic_lost");
     expect(store.getState().micNotice).toMatchObject({ kind: "lost", deviceLabel: "AirPods Pro" });
+  });
+
+  it("never promotes a new mic that was lost while the previous session drained", async () => {
+    const harness = setupGlobals({
+      tracks: [
+        { label: "USB Mic", deviceId: "usb" },
+        { label: "AirPods Pro", deviceId: "airpods" },
+      ],
+    });
+    const { store, service } = await load();
+    await service.start(TARGET);
+    let releaseDrain: () => void = () => {};
+    harness.voiceInput.stop.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        releaseDrain = resolve;
+      })
+    );
+
+    const retarget = service.start({ panelId: "panel-2", panelTitle: "Codex" });
+    await vi.waitFor(() => expect(harness.voiceInput.stop).toHaveBeenCalledTimes(1));
+    // The new mic is open and observed while the old session drains.
+    expect(harness.tracks[1]!.listenerCount()).toBeGreaterThan(0);
+    harness.tracks[1]!.end();
+    releaseDrain();
+    await retarget;
+
+    expect(harness.voiceInput.start).toHaveBeenCalledTimes(1);
+    expect(harness.tracks[1]!.stop).toHaveBeenCalled();
+    expect(store.getState().status).toBe("error");
+    expect(store.getState().lastError?.code).toBe("mic_lost");
+    expect(store.getState().micNotice).toMatchObject({
+      kind: "lost",
+      target: expect.objectContaining({ panelId: "panel-2" }),
+    });
   });
 });
 
@@ -440,12 +493,21 @@ describe("VoiceRecordingService — chosen mic not available (#14606)", () => {
     ["the chosen mic opens", "usb-mic", "usb-mic"],
     ["no mic is chosen", "", "builtin"],
     ["the system default is chosen", "default", "builtin"],
+    ["the communications device is chosen", "communications", "builtin"],
   ])("raises no notice when %s", async (_case, chosen, actual) => {
-    setupGlobals({ deviceId: chosen, tracks: [{ label: "Some Mic", deviceId: actual }] });
+    const harness = setupGlobals({
+      deviceId: chosen,
+      tracks: [{ label: "Some Mic", deviceId: actual }],
+    });
     const { store, service } = await load();
 
     await service.start(TARGET);
 
+    expect(harness.getUserMedia).toHaveBeenCalledWith(
+      chosen
+        ? { audio: { deviceId: { ideal: chosen } }, video: false }
+        : { audio: true, video: false }
+    );
     expect(store.getState().micNotice).toBeNull();
     expect(store.getState().micDeviceLabel).toBe("Some Mic");
   });
@@ -497,16 +559,48 @@ describe("VoiceRecordingService — silent mic (#14606)", () => {
     });
   });
 
-  it("names a silent wired mic without listing devices", async () => {
-    const { store, harness } = await startSilent({ label: "Blue Yeti", deviceId: "yeti" });
+  it("offers the built-in mic for a silent wired one too", async () => {
+    const yeti = { label: "Blue Yeti", deviceId: "yeti" };
+    const { store } = await startSilent(yeti, [yeti, BUILT_IN]);
 
-    expect(harness.enumerateDevices).not.toHaveBeenCalled();
     expect(store.getState().micNotice).toMatchObject({
       kind: "silent",
       deviceLabel: "Blue Yeti",
       bluetooth: false,
-      builtIn: null,
+      builtIn: BUILT_IN,
     });
+  });
+
+  it("doesn't offer the mic that is already silent", async () => {
+    const { store } = await startSilent(BUILT_IN, [
+      { deviceId: "default", label: "Default - MacBook Pro Microphone" },
+      BUILT_IN,
+    ]);
+
+    expect(store.getState().micNotice).toMatchObject({ kind: "silent", builtIn: null });
+  });
+
+  it("drops a device list that comes back after the mic came alive", async () => {
+    const harness = setupGlobals({ tracks: [AIRPODS] });
+    let releaseDevices: () => void = () => {};
+    harness.enumerateDevices.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseDevices = () => resolve([{ ...BUILT_IN, kind: "audioinput", groupId: "" }]);
+        })
+    );
+    const { store, service } = await load();
+    await service.start(TARGET);
+    harness.status.emit("recording");
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(store.getState().micSignal).toBe("silent");
+
+    sendChunk(harness.workletNodes[0]!, 3000);
+    releaseDevices();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(store.getState().micSignal).toBe("live");
+    expect(store.getState().micNotice).toBeNull();
   });
 
   it("clears the warning once real audio arrives", async () => {
@@ -578,6 +672,69 @@ describe("VoiceRecordingService — silent mic (#14606)", () => {
     expect(harness.voiceInput.setSettings).toHaveBeenCalledWith({ deviceId: "builtin" });
     expect(harness.getUserMedia).toHaveBeenCalledTimes(1);
     expect(store.getState().activeTarget).toBeNull();
+  });
+
+  it("leaves a newer session on the same pane alone", async () => {
+    const { store, service, harness } = await startSilent(AIRPODS, [AIRPODS, BUILT_IN]);
+    const notice = store.getState().micNotice!;
+    let releaseSave: () => void = () => {};
+    harness.voiceInput.setSettings.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseSave = resolve;
+        })
+    );
+
+    const switching = service.switchToMicFromNotice(notice);
+    await service.stop();
+    await service.start(TARGET);
+    releaseSave();
+    await switching;
+
+    expect(harness.getUserMedia).toHaveBeenCalledTimes(2);
+    expect(harness.voiceInput.start).toHaveBeenCalledTimes(2);
+  });
+
+  it("restarts once however often the action is pressed", async () => {
+    const { store, service, harness } = await startSilent(AIRPODS, [AIRPODS, BUILT_IN]);
+    const notice = store.getState().micNotice!;
+
+    await Promise.all([
+      service.switchToMicFromNotice(notice),
+      service.switchToMicFromNotice(notice),
+    ]);
+
+    expect(harness.voiceInput.setSettings).toHaveBeenCalledTimes(1);
+    expect(harness.voiceInput.start).toHaveBeenCalledTimes(2);
+  });
+
+  it("only saves the choice for a paused session, leaving it paused", async () => {
+    const { store, service, harness } = await startSilent(AIRPODS, [AIRPODS, BUILT_IN]);
+    const notice = store.getState().micNotice!;
+    service.pause();
+
+    await service.switchToMicFromNotice(notice);
+
+    expect(harness.voiceInput.setSettings).toHaveBeenCalledWith({ deviceId: "builtin" });
+    expect(harness.getUserMedia).toHaveBeenCalledTimes(1);
+    expect(store.getState().status).toBe("paused");
+    expect(store.getState().micNotice).toBeNull();
+    expect(store.getState().announcement?.text).toBe(
+      "MacBook Pro Microphone will be used from the next dictation."
+    );
+  });
+
+  it("only saves the choice while a push-to-talk key holds the session", async () => {
+    const { store, service, harness } = await startSilent(AIRPODS, [AIRPODS, BUILT_IN]);
+    const notice = store.getState().micNotice!;
+    // White-box: the key's keydown is what records this in the app.
+    (service as unknown as { pttActiveKeyCode: string | null }).pttActiveKeyCode = "KeyD";
+
+    await service.switchToMicFromNotice(notice);
+
+    expect(harness.voiceInput.setSettings).toHaveBeenCalledWith({ deviceId: "builtin" });
+    expect(harness.getUserMedia).toHaveBeenCalledTimes(1);
+    expect(store.getState().activeTarget?.panelId).toBe(PANEL_ID);
   });
 
   it("ignores a notice that is no longer showing", async () => {

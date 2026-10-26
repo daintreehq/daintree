@@ -59,18 +59,37 @@ describe("findBuiltInMic", () => {
     expect(
       findBuiltInMic([
         { deviceId: "airpods", label: "AirPods Pro (Bluetooth)" },
-        { deviceId: "builtin", label: "External Microphone (Built-in)" },
+        { deviceId: "builtin", label: "Mac Studio Microphone (Built-in)" },
       ])
-    ).toEqual({ deviceId: "builtin", label: "External Microphone (Built-in)" });
+    ).toEqual({ deviceId: "builtin", label: "Mac Studio Microphone (Built-in)" });
   });
 
-  it("falls back to a Windows array mic only when nothing names itself built-in", () => {
+  it("prefers the Mac's own mic over its headphone-jack input", () => {
+    const jack = { deviceId: "jack", label: "External Microphone (Built-in)" };
+    const mac = { deviceId: "mac", label: "MacBook Air Microphone (Built-in)" };
+    expect(findBuiltInMic([jack, mac])).toEqual(mac);
+    expect(findBuiltInMic([jack])).toBeNull();
+  });
+
+  it("never offers a Bluetooth device, whatever else its name says", () => {
+    const btArray = { deviceId: "bt", label: "Microphone Array (Bluetooth)" };
+    const builtIn = { deviceId: "builtin", label: "Internal Microphone" };
+    expect(findBuiltInMic([btArray])).toBeNull();
+    expect(findBuiltInMic([btArray, builtIn])).toEqual(builtIn);
+  });
+
+  it("takes a Windows array mic only when it is the one array and isn't external", () => {
     const array = { deviceId: "array", label: "Microphone Array (Realtek(R) Audio)" };
+    const usbArray = { deviceId: "usb", label: "Microphone Array (USB Audio Device)" };
     const internal = { deviceId: "internal", label: "Internal Microphone" };
     expect(
       findBuiltInMic([array, { deviceId: "bt", label: "Headset (Hands-Free AG Audio)" }])
     ).toEqual(array);
     expect(findBuiltInMic([array, internal])).toEqual(internal);
+    expect(findBuiltInMic([usbArray])).toBeNull();
+    expect(
+      findBuiltInMic([array, { deviceId: "array2", label: "Microphone Array (Intel SST)" }])
+    ).toBeNull();
   });
 
   it("returns null when no device can be told apart as built in", () => {

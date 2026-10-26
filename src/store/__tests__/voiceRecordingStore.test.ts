@@ -1,6 +1,7 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import {
   isVoiceMicPending,
+  selectMicNoticeForPanel,
   useVoiceRecordingStore,
   type RecentDictationTarget,
 } from "../voiceRecordingStore";
@@ -146,12 +147,20 @@ describe("voiceRecordingStore — micNotice (#14606)", () => {
     }
   });
 
-  it("dismisses only the notice it was given", () => {
-    useVoiceRecordingStore.getState().setMicNotice(fallback);
+  it("dismisses only the notice it was given, even against a newer one of the same kind", () => {
+    const newer = { ...lost, deviceLabel: "USB Mic" };
+    useVoiceRecordingStore.getState().setMicNotice(newer);
     useVoiceRecordingStore.getState().dismissMicNotice(lost);
-    expect(useVoiceRecordingStore.getState().micNotice).toBe(fallback);
-    useVoiceRecordingStore.getState().dismissMicNotice(fallback);
+    expect(useVoiceRecordingStore.getState().micNotice).toBe(newer);
+    useVoiceRecordingStore.getState().dismissMicNotice(newer);
     expect(useVoiceRecordingStore.getState().micNotice).toBeNull();
+  });
+
+  it("hands a notice only to the pane it happened on", () => {
+    expect(selectMicNoticeForPanel({ micNotice: lost }, PANEL_ID)).toBe(lost);
+    expect(selectMicNoticeForPanel({ micNotice: lost }, "panel-2")).toBeNull();
+    expect(selectMicNoticeForPanel({ micNotice: lost }, null)).toBeNull();
+    expect(selectMicNoticeForPanel({ micNotice: null }, PANEL_ID)).toBeNull();
   });
 });
 
