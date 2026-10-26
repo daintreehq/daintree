@@ -61,6 +61,8 @@ vi.mock("@/services/projectSwitchRendererCache", () => ({
 import {
   claimDroppedViewRestore,
   isDroppedViewLayoutPending,
+  isDroppedViewRestorePending,
+  onDroppedViewRestored,
   runDroppedViewRestore,
   useProjectStore,
 } from "../projectStore";
@@ -195,6 +197,26 @@ describe("projectStore.sleepProject", () => {
       await runDroppedViewRestore("proj-1", async () => {});
       expect(isDroppedViewLayoutPending("proj-1")).toBe(false);
       expect(claimDroppedViewRestore("proj-1")).toBe(false);
+    });
+
+    it("tells whoever waits on the layout once it is back, and not for a failed restore", async () => {
+      await useProjectStore.getState().sleepProject("proj-1");
+      const heard = vi.fn();
+      const off = onDroppedViewRestored(heard);
+      expect(isDroppedViewRestorePending()).toBe(true);
+
+      expect(claimDroppedViewRestore("proj-1")).toBe(true);
+      await expect(
+        runDroppedViewRestore("proj-1", () => Promise.reject(new Error("hydrate failed")))
+      ).rejects.toThrow("hydrate failed");
+      expect(heard).not.toHaveBeenCalled();
+      expect(isDroppedViewRestorePending()).toBe(true);
+
+      expect(claimDroppedViewRestore("proj-1")).toBe(true);
+      await runDroppedViewRestore("proj-1", async () => {});
+      expect(heard).toHaveBeenCalledTimes(1);
+      expect(isDroppedViewRestorePending()).toBe(false);
+      off();
     });
 
     it("hands a failed restore back for the next reopen", async () => {

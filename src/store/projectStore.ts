@@ -449,6 +449,7 @@ export function isSelfInitiatedSleep(projectId: string): boolean {
 let droppedView: { projectId: string; claimed: boolean; generation: number } | null = null;
 let dropGeneration = 0;
 let viewRestoreInFlight: Promise<void> | null = null;
+const droppedViewRestoredListeners = new Set<() => void>();
 
 /** Take the pending restore for `projectId`; true at most once per drop. */
 export function claimDroppedViewRestore(projectId: string): boolean {
@@ -476,7 +477,9 @@ export function runDroppedViewRestore(
   const ownsDrop = () => generation !== null && droppedView?.generation === generation;
   const run = restore().then(
     () => {
-      if (ownsDrop()) droppedView = null;
+      if (!ownsDrop()) return;
+      droppedView = null;
+      for (const listener of [...droppedViewRestoredListeners]) listener();
     },
     (error: unknown) => {
       if (ownsDrop()) releaseDroppedViewRestore(projectId);
@@ -497,6 +500,23 @@ export function runDroppedViewRestore(
  */
 export function isDroppedViewLayoutPending(projectId: string): boolean {
   return droppedView?.projectId === projectId;
+}
+
+/**
+ * Whether this view dropped to the picker and its layout, worktree selection
+ * included, is still to be put back. Anything that selects on arrival waits
+ * for it, or the restore lands on top.
+ */
+export function isDroppedViewRestorePending(): boolean {
+  return droppedView !== null;
+}
+
+/** Hear each time a dropped view's layout has been put back. */
+export function onDroppedViewRestored(listener: () => void): () => void {
+  droppedViewRestoredListeners.add(listener);
+  return () => {
+    droppedViewRestoredListeners.delete(listener);
+  };
 }
 
 let projectTransitionRequestId = 0;
