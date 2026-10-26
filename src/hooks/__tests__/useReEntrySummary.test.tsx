@@ -3,9 +3,15 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import { useReEntrySummary } from "../useReEntrySummary";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
+import { useProjectStore } from "@/store/projectStore";
+import { APP_SOURCE_LABEL } from "@/lib/notificationSourceLabel";
 
 vi.mock("@/store/createWorktreeStore", () => ({
   getCurrentViewStoreOrNull: vi.fn(),
+}));
+
+vi.mock("@/store/viewWorkspaceId", () => ({
+  getViewWorkspaceId: vi.fn(() => "proj-here"),
 }));
 
 function addEntry(
@@ -14,7 +20,7 @@ function addEntry(
     message: string;
     title: string;
     seenAsToast: boolean;
-    context: { worktreeId?: string };
+    context: { worktreeId?: string; projectId?: string; hostName?: string };
   }> = {}
 ) {
   useNotificationHistoryStore.getState().addEntry({
@@ -24,6 +30,15 @@ function addEntry(
     seenAsToast: overrides.seenAsToast,
     ...(overrides.context ? { context: overrides.context } : {}),
   });
+}
+
+function focusAfter(ms: number) {
+  const realNow = Date.now;
+  Date.now = () => realNow() + ms;
+  act(() => {
+    window.dispatchEvent(new Event("focus"));
+  });
+  Date.now = realNow;
 }
 
 function simulateBlurFocusCycle(blurDurationMs: number) {
@@ -49,6 +64,7 @@ describe("useReEntrySummary", () => {
 
   beforeEach(async () => {
     useNotificationHistoryStore.setState({ entries: [], unreadCount: 0 });
+    useProjectStore.setState({ projects: [], currentProject: null });
     hasFocusSpy = vi.spyOn(document, "hasFocus").mockReturnValue(true);
     const { getCurrentViewStoreOrNull } = await import("@/store/createWorktreeStore");
     vi.mocked(getCurrentViewStoreOrNull).mockReturnValue(null);
@@ -470,45 +486,107 @@ describe("useReEntrySummary", () => {
     expect(result.current.rows[2]!.worktreeId).toBe("wt-zeta");
   });
 
-  it("marks entries as summarized even when card is suppressed (no worktreeId)", () => {
-    renderHook(() => useReEntrySummary());
-
-    act(() => {
-      window.dispatchEvent(new Event("blur"));
-    });
-    addEntry({ type: "success", message: "No worktree" });
-
-    const realNow = Date.now;
-    Date.now = () => realNow() + 5000;
-
-    act(() => {
-      window.dispatchEvent(new Event("focus"));
-    });
-
-    Date.now = realNow;
-
-    const storeEntries = useNotificationHistoryStore.getState().entries;
-    expect(storeEntries[0]!.summarized).toBe(true);
-  });
-
-  it("suppresses card when all entries lack worktreeId", () => {
+  it("gives entries with no worktree a row for their project", () => {
+    useProjectStore.setState({
+      projects: [{ id: "proj-here", name: "atlas-api" }],
+      currentProject: { id: "proj-here", name: "atlas-api" },
+    } as never);
     const { result } = renderHook(() => useReEntrySummary());
 
     act(() => {
       window.dispatchEvent(new Event("blur"));
     });
-    addEntry({ type: "success", message: "No worktree" });
+    addEntry({ type: "warning", message: "Recipes failed to load", context: { projectId: "proj-here" } });
+    addEntry({ type: "success", message: "Done", context: { worktreeId: "wt-1", projectId: "proj-here" } });
 
+    focusAfter(5000);
+
+    expect(result.current.visible).toBe(true);
+    expect(result.current.rows.map((r) => r.worktreeName)).toEqual(["atlas-api", "wt-1"]);
+    expect(result.current.rows[0]!.worktreeId).toBeNull();
+    expect(useNotificationHistoryStore.getState().entries.every((e) => e.summarized)).toBe(true);
+  });
+
+  it("gives entries from the app itself a row named after the app", () => {
+    const { result } = renderHook(() => useReEntrySummary());
+
+    act(() => {
+      window.dispatchEvent(new Event("blur"));
+    });
+    addEntry({ type: "warning", message: "Disk space low" });
+
+    focusAfter(5000);
+
+    expect(result.current.visible).toBe(true);
+    expect(result.current.rows).toHaveLength(1);
+    expect(result.current.rows[0]!.worktreeName).toBe(APP_SOURCE_LABEL);
+    expect(result.current.rows[0]!.highlightTitle).toBe("Disk space low");
+    expect(useNotificationHistoryStore.getState().entries[0]!.summarized).toBe(true);
+  });
+
+  it("leaves out another project's entries and leaves them unsummarized", () => {
+    const { result } = renderHook(() => useReEntrySummary());
+
+    act(() => {
+      window.dispatchEvent(new Event("blur"));
+    });
+    addEntry({
+      type: "error",
+      message: "Elsewhere",
+      context: { worktreeId: "/work/other-repo/feature-x", projectId: "proj-other" },
+    });
+    addEntry({ type: "info", message: "Closed idle project", context: { projectId: "proj-other" } });
+    addEntry({ type: "success", message: "Here", context: { worktreeId: "wt-1", projectId: "proj-here" } });
+
+    focusAfter(5000);
+
+    expect(result.current.visible).toBe(true);
+    expect(result.current.rows.map((r) => r.worktreeId)).toEqual(["wt-1"]);
+    expect(result.current.entries.map((e) => e.message)).toEqual(["Here"]);
+    const byMessage = new Map(
+      useNotificationHistoryStore.getState().entries.map((e) => [e.message, e.summarized])
+    );
+    expect(byMessage.get("Elsewhere")).toBe(false);
+    expect(byMessage.get("Closed idle project")).toBe(false);
+    expect(byMessage.get("Here")).toBe(true);
+  });
+
+  it("leaves out another host's entries", () => {
+    const { result } = renderHook(() => useReEntrySummary());
+
+    act(() => {
+      window.dispatchEvent(new Event("blur"));
+    });
+    addEntry({ type: "info", message: "Agent waiting", context: { hostName: "build-box" } });
+
+    focusAfter(5000);
+
+    expect(result.current.visible).toBe(false);
+    expect(useNotificationHistoryStore.getState().entries[0]!.summarized).toBe(false);
+  });
+
+  it("times a row by its highlighted entry, not its latest one", () => {
     const realNow = Date.now;
-    Date.now = () => realNow() + 5000;
+    let now = 1_000_000;
+    Date.now = () => now;
+    const { result } = renderHook(() => useReEntrySummary());
 
+    act(() => {
+      window.dispatchEvent(new Event("blur"));
+    });
+    now += 1000;
+    addEntry({ type: "error", message: "Build failed", context: { worktreeId: "wt-1" } });
+    const errorAt = now;
+    now += 60_000;
+    addEntry({ type: "info", message: "Agent idle", context: { worktreeId: "wt-1" } });
+    now += 5000;
     act(() => {
       window.dispatchEvent(new Event("focus"));
     });
-
     Date.now = realNow;
 
-    expect(result.current.visible).toBe(false);
+    expect(result.current.rows[0]!.highlightTitle).toBe("Build failed");
+    expect(result.current.rows[0]!.highlightTimestamp).toBe(errorAt);
   });
 
   it("only includes entries created during the blur period", () => {
