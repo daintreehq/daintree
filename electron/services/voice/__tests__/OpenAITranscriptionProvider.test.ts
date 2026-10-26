@@ -1949,11 +1949,7 @@ describe("OpenAITranscriptionProvider", () => {
       worker.emitSpeechEnd();
 
       becomeReady(socket);
-      expect(types(socket)).toEqual([
-        "session.update",
-        ...appends(3),
-        "input_audio_buffer.commit",
-      ]);
+      expect(types(socket)).toEqual(["session.update", ...appends(3), "input_audio_buffer.commit"]);
       service.stop();
     });
 
