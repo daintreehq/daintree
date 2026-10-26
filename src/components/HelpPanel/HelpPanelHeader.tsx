@@ -71,14 +71,20 @@ export interface ProjectScopeActivity {
 }
 
 /** Most worth a glance first. Idle and exited lanes draw nothing, as in the strip. */
-const LANE_STATE_ORDER = ["waiting", "directing", "working"] as const;
+const LANE_STATE_RANK: Partial<Record<NonNullable<AgentState>, number>> = {
+  waiting: 0,
+  directing: 1,
+  working: 2,
+};
 
 export function summarizeLaneActivity(
   tabs: readonly { label: string; agentState: AgentState | null | undefined }[]
 ): ProjectScopeActivity | null {
   const marked = tabs.flatMap((tab) => {
-    const rank = LANE_STATE_ORDER.indexOf(tab.agentState as (typeof LANE_STATE_ORDER)[number]);
-    return rank === -1 ? [] : [{ label: tab.label, state: LANE_STATE_ORDER[rank]!, rank }];
+    const rank = tab.agentState ? LANE_STATE_RANK[tab.agentState] : undefined;
+    return tab.agentState && rank !== undefined
+      ? [{ label: tab.label, state: tab.agentState, rank }]
+      : [];
   });
   if (marked.length === 0) return null;
   const top = marked.reduce((a, b) => (b.rank < a.rank ? b : a));

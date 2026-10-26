@@ -136,9 +136,12 @@ function push(state: GlobalAssistantView) {
 }
 
 function renderPane(isVisible = true) {
+  // The panel header's slot, where the pane draws its agent and menu.
+  const controls = document.createElement("div");
+  document.body.appendChild(controls);
   const wrap = (visible: boolean) => (
     <TooltipProvider delayDuration={0}>
-      <GlobalAssistantPane isVisible={visible} />
+      <GlobalAssistantPane isVisible={visible} controlsHost={controls} onOpenDocs={vi.fn()} />
     </TooltipProvider>
   );
   const result = render(wrap(isVisible));
@@ -259,7 +262,11 @@ describe("GlobalAssistantPane (#14454)", () => {
     installHelp(running({ inputOwner: "b1", inputEpoch: 4 }));
     renderPane();
     await flush();
-    expect(screen.queryByTestId("help-global-more")).toBeNull();
+    // The menu stays for docs; it offers nothing that would act on the hidden successor.
+    fireEvent.pointerDown(screen.getByTestId("help-global-more"), { button: 0, ctrlKey: false });
+    await screen.findByText("Open docs");
+    expect(screen.queryByText("Restart conversation")).toBeNull();
+    expect(screen.queryByText("Stop global assistant")).toBeNull();
     expect(screen.queryByTestId("help-global-take-input")).toBeNull();
   });
 
