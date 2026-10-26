@@ -900,7 +900,10 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // 152_910 → 152_980 for #14550, measured at 152_971 (+61): each
   // `terminal.sendCommandMany` item takes the `generation` an assistant send
   // needs, with a clause on `sends` saying so.
-  const MAX_COHORT_PAYLOAD_BYTES = 152_980;
+  // 152_980 → 153_235 for #14548, measured at 153_225 B (+254 over #14550's
+  // 152_971): `generation` joins `terminal.sendKeys` and its owned twin, so an
+  // assistant can press keys in another assistant's run.
+  const MAX_COHORT_PAYLOAD_BYTES = 153_235;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 
