@@ -82,6 +82,16 @@ const lifecycleMocks = vi.hoisted(() => ({
 
 vi.mock("../../utils/webContentsLifecycle.js", () => lifecycleMocks);
 
+const keyMocks = vi.hoisted(() => ({
+  findPortalPageAction: vi.fn((): string | undefined => undefined),
+  claimDictationKey: vi.fn(() => false),
+}));
+
+vi.mock("../menuAccelerators.js", () => ({ findPortalPageAction: keyMocks.findPortalPageAction }));
+vi.mock("../voice/pageDictationKey.js", () => ({
+  claimPageDictationKey: keyMocks.claimDictationKey,
+}));
+
 describe("PortalManager", () => {
   let PortalManagerClass: typeof import("../PortalManager.js").PortalManager;
   let mockWindow: InstanceType<typeof import("electron").BrowserWindow>;
@@ -132,6 +142,63 @@ describe("PortalManager", () => {
       manager.createTab("tab-6", "not-a-valid-url");
 
       expect(manager.hasTab("tab-6")).toBe(false);
+    });
+  });
+
+  describe("the dictation key on a portal page (#14601)", () => {
+    type InputHandler = (event: { preventDefault: () => void }, input: unknown) => void;
+
+    function pageKeyHandler(): InputHandler {
+      const manager = new PortalManagerClass(mockWindow);
+      manager.createTab("tab-dictate", "http://localhost:3000");
+      const call = createdWebContents[0]!.on.mock.calls.find(
+        ([event]) => event === "before-input-event"
+      );
+      return call![1] as InputHandler;
+    }
+
+    const menuActions = () =>
+      vi
+        .mocked(mockWindow.webContents.send)
+        .mock.calls.filter(([channel]) => channel === "menu:action");
+
+    afterEach(() => {
+      keyMocks.claimDictationKey.mockReturnValue(false);
+      keyMocks.findPortalPageAction.mockReturnValue(undefined);
+    });
+
+    it("takes the key from the page when it stops dictation running elsewhere", () => {
+      keyMocks.claimDictationKey.mockReturnValue(true);
+      const handler = pageKeyHandler();
+      const event = { preventDefault: vi.fn() };
+      const input = { type: "keyDown", key: ".", meta: true, isAutoRepeat: false };
+
+      handler(event, input);
+
+      expect(keyMocks.claimDictationKey).toHaveBeenCalledWith(input);
+      expect(event.preventDefault).toHaveBeenCalledTimes(1);
+      expect(keyMocks.findPortalPageAction).not.toHaveBeenCalled();
+      expect(menuActions()).toEqual([]);
+    });
+
+    it("leaves the portal's own keys working when nothing is running", () => {
+      keyMocks.findPortalPageAction.mockReturnValue("portal.closeTab");
+      const handler = pageKeyHandler();
+      const event = { preventDefault: vi.fn() };
+
+      handler(event, { type: "keyDown", key: "w", meta: true, isAutoRepeat: false });
+
+      expect(event.preventDefault).toHaveBeenCalledTimes(1);
+      expect(menuActions()).toEqual([["menu:action", { actionId: "portal.closeTab" }]]);
+    });
+
+    it("leaves other keys to the page", () => {
+      const handler = pageKeyHandler();
+      const event = { preventDefault: vi.fn() };
+
+      handler(event, { type: "keyDown", key: "k", meta: true, isAutoRepeat: false });
+
+      expect(event.preventDefault).not.toHaveBeenCalled();
     });
   });
 

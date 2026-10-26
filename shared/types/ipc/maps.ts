@@ -1,6 +1,11 @@
 import type { GitRemoteCommitPreview, StagingStatus } from "../git.js";
 import type { AgentId } from "../agent.js";
-import type { VoiceInputError, VoiceInputStatus, VoiceSessionEndReason } from "../voice.js";
+import type {
+  VoiceInputError,
+  VoiceInputStatus,
+  VoiceLiveSessionUpdate,
+  VoiceSessionEndReason,
+} from "../voice.js";
 import type {
   Project,
   ProjectAddOptions,
@@ -2052,6 +2057,14 @@ export interface IpcEventMap {
   "voice-input:error": { sessionId: string; error: VoiceInputError };
   "voice-input:status": { sessionId: string; status: VoiceInputStatus };
   "voice-input:session-ended": { sessionId: string; reason: VoiceSessionEndReason };
+  // To every view whenever the live session changes. Not keyed to a session:
+  // it names the one live elsewhere, or none.
+  "voice-input:live-session": VoiceLiveSessionUpdate;
+  // To the owner: another view's dictation key asked it to stop.
+  "voice-input:stop-requested": { sessionId: string };
+  // Another view's indicator, to the owner and to the view on screen in the
+  // owner's window, which switches to the owner's workspace.
+  "voice-input:reveal-requested": { sessionId: string; workspaceId: string | null };
 
   // Demo mode events (main → renderer command forwarding)
   "demo:exec-move-to": DemoMoveToPayload;

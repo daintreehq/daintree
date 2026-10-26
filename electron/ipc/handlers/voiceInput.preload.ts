@@ -7,6 +7,9 @@ export const VOICE_INPUT_METHOD_CHANNELS = {
   start: "voice-input:start",
   stop: "voice-input:stop",
   flushParagraph: "voice-input:flush-paragraph",
+  getLiveSession: "voice-input:get-live-session",
+  stopLive: "voice-input:stop-live",
+  revealLive: "voice-input:reveal-live",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof VOICE_INPUT_METHOD_CHANNELS;

@@ -918,6 +918,12 @@ export const CHANNELS = {
   VOICE_DICTIONARY_ADD_TO_PROJECT: "voice-dictionary:add-to-project",
   VOICE_DICTIONARY_REMOVE_FROM_PROJECT: "voice-dictionary:remove-from-project",
   VOICE_DICTIONARY_UPDATE_IN_PROJECT: "voice-dictionary:update-in-project",
+  VOICE_INPUT_GET_LIVE_SESSION: "voice-input:get-live-session",
+  VOICE_INPUT_LIVE_SESSION: "voice-input:live-session",
+  VOICE_INPUT_STOP_LIVE: "voice-input:stop-live",
+  VOICE_INPUT_STOP_REQUESTED: "voice-input:stop-requested",
+  VOICE_INPUT_REVEAL_LIVE: "voice-input:reveal-live",
+  VOICE_INPUT_REVEAL_REQUESTED: "voice-input:reveal-requested",
 
   // Help assistant settings channels
   HELP_ASSISTANT_GET_SETTINGS: "help-assistant:get-settings",

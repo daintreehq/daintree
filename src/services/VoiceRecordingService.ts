@@ -1,4 +1,6 @@
 import { useProjectStore } from "@/store/projectStore";
+import { scratchName, useScratchStore } from "@/store/scratchStore";
+import { isScratchWorkspaceId } from "@shared/utils/workspaceIds";
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
@@ -19,6 +21,7 @@ import {
   isActiveVoiceSession,
   type VoiceInputStatus,
   type VoiceRecordingMode,
+  type VoiceSessionElsewhere,
 } from "@shared/types";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
@@ -610,6 +613,45 @@ class VoiceRecordingService {
           skipRemoteStop: true,
           preserveLiveText: true,
         });
+      })
+    );
+
+    // Where the live session is, when another view owns it. Pulled as well as
+    // pushed: a view that boots mid-session missed the push.
+    this.unsubscribers.push(
+      voiceInput.onLiveSession((update) =>
+        useVoiceRecordingStore.getState().applyLiveSessionUpdate(update)
+      )
+    );
+    voiceInput
+      .getLiveSession()
+      .then((update) => useVoiceRecordingStore.getState().applyLiveSessionUpdate(update))
+      .catch((error: unknown) => {
+        logDebug(`${LOG_PREFIX} Couldn't read the live session`, voiceErrorLogFields(error));
+      });
+
+    // Another view's dictation key or indicator, for a session this view owns.
+    this.unsubscribers.push(
+      voiceInput.onStopRequested(({ sessionId }) => {
+        if (sessionId === this.sessionId) {
+          void this.stopAnySession();
+          return;
+        }
+        // Started here before a reload: nothing in this view holds its
+        // microphone or its text, so only main has anything left to end.
+        voiceInput.stop(sessionId).catch((error: unknown) => {
+          logDebug(`${LOG_PREFIX} Couldn't end an orphaned session`, voiceErrorLogFields(error));
+        });
+      })
+    );
+    this.unsubscribers.push(
+      voiceInput.onRevealRequested(({ sessionId, workspaceId }) => {
+        if (sessionId === this.sessionId) {
+          void this.focusActiveTarget();
+          return;
+        }
+        // On screen in the owner's window: bring the owner's workspace forward.
+        if (workspaceId) void this.showWorkspace(workspaceId);
       })
     );
 
@@ -2279,6 +2321,14 @@ class VoiceRecordingService {
       return;
     }
 
+    // Likewise a session another view owns, in another project or window: it
+    // stops there, so its text stays in that view's draft (#14601).
+    const elsewhere = useVoiceRecordingStore.getState().sessionElsewhere;
+    if (elsewhere) {
+      await this.stopSessionElsewhere(elsewhere);
+      return;
+    }
+
     // Locked target overrides focus routing entirely — synchronous read before
     // any await so the value reflects the user's pin at the moment the hotkey
     // fired (mirrors the assistant-focus pattern below for #6959). When the
@@ -2358,6 +2408,50 @@ class VoiceRecordingService {
       return this.requestUserStop();
     }
     return null;
+  }
+
+  private async stopSessionElsewhere(session: VoiceSessionElsewhere): Promise<void> {
+    // This press was a stop, so its release must not stop anything here.
+    this.pttActiveKeyCode = null;
+    let stopped = false;
+    try {
+      stopped = await window.electron.voiceInput.stopLive(session.sessionId);
+    } catch (error) {
+      logWarn(`${LOG_PREFIX} Couldn't stop dictation in another view`, voiceErrorLogFields(error));
+    }
+    // Already over: main's update that says so is on its way.
+    if (!stopped) return;
+    const where =
+      session.projectName ?? scratchName(useScratchStore.getState().scratches, session.projectId);
+    useVoiceRecordingStore
+      .getState()
+      .announce(where ? `Stopping dictation in ${where}.` : "Stopping dictation.");
+  }
+
+  // Projects and scratches switch through separate stores, told apart by the
+  // shape of the id.
+  private async showWorkspace(workspaceId: string): Promise<void> {
+    try {
+      if (isScratchWorkspaceId(workspaceId)) {
+        await useScratchStore.getState().switchScratch(workspaceId);
+      } else {
+        await useProjectStore.getState().switchProject(workspaceId);
+      }
+    } catch (error) {
+      logWarn(`${LOG_PREFIX} Couldn't show the dictating workspace`, voiceErrorLogFields(error));
+    }
+  }
+
+  /** Takes the person to the session another view owns: its window, project and panel. */
+  async revealSessionElsewhere(): Promise<boolean> {
+    const session = useVoiceRecordingStore.getState().sessionElsewhere;
+    if (!session) return false;
+    try {
+      return await window.electron.voiceInput.revealLive(session.sessionId);
+    } catch (error) {
+      logWarn(`${LOG_PREFIX} Couldn't go to dictation in another view`, voiceErrorLogFields(error));
+      return false;
+    }
   }
 
   /**

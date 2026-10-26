@@ -21,6 +21,7 @@ import {
 import { getWebviewDialogService } from "../../services/WebviewDialogService.js";
 import { looksLikeOAuthUrl } from "../../services/OAuthLoopbackService.js";
 import { CHANNELS } from "../../ipc/channels.js";
+import { claimPageDictationKey } from "../../services/voice/pageDictationKey.js";
 import { getDistPath } from "./app.js";
 
 /** True for any `daintree-html://…` request URL (the sandboxed preview scheme). */
@@ -450,6 +451,12 @@ export function setupWebviewCSP(): void {
       // so they must be caught and forwarded here.
       contents.on("before-input-event", (event, input) => {
         if (input.type !== "keyDown") return;
+
+        if (claimPageDictationKey(input)) {
+          event.preventDefault();
+          return;
+        }
+
         const isMac = process.platform === "darwin";
         const mod = isMac ? input.meta : input.control;
 

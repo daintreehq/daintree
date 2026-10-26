@@ -40,6 +40,11 @@ const shared = vi.hoisted(() => ({
   assembleKeyterms: null as null | (() => Promise<string[]>),
   /** Project registered per sender id, as the view registry would answer. */
   projects: new Map<number, string>(),
+  /** Every app view, as getAllAppWebContents would list them. */
+  appViews: [] as unknown[],
+  /** The window each view lives in, by sender id, and the view each window shows. */
+  windowOf: new Map<number, Record<string, unknown>>(),
+  shownIn: new Map<Record<string, unknown>, unknown>(),
 }));
 
 vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
@@ -110,11 +115,23 @@ vi.mock("../../../window/webContentsRegistry.js", async (importOriginal) => {
   return {
     ...actual,
     getProjectForWebContents: vi.fn((id: number) => shared.projects.get(id) ?? null),
+    getAllAppWebContents: vi.fn(() => shared.appViews),
+    getWindowForWebContents: vi.fn((wc: { id: number }) => shared.windowOf.get(wc.id) ?? null),
+    getAppWebContents: vi.fn((win: Record<string, unknown>) => shared.shownIn.get(win)),
   };
 });
 
-import { registerVoiceInputHandlers, getLiveVoiceSession } from "../voiceInput.js";
+vi.mock("../../../services/menuAccelerators.js", () => ({
+  isDictationKey: vi.fn((input: { key: string }) => input.key === "."),
+}));
+
+import {
+  registerVoiceInputHandlers,
+  getLiveVoiceSession,
+  claimDictationKey,
+} from "../voiceInput.js";
 import { CHANNELS } from "../../channels.js";
+import { claimPageDictationKey } from "../../../services/voice/pageDictationKey.js";
 import { projectStore } from "../../../services/ProjectStore.js";
 import { AUDIO_BUFFER_MAX_CHUNKS } from "../../../services/voice/TranscriptionProvider.js";
 
@@ -721,5 +738,237 @@ describe("voiceInput — session identity", () => {
     } finally {
       consoleError.mockRestore();
     }
+  });
+});
+
+describe("voiceInput — a session live in another view (#14601)", () => {
+  let cleanup: () => void;
+  let ownerA: FakeSender;
+  let viewB: FakeSender;
+  let viewC: FakeSender;
+  type FakeWindow = {
+    isDestroyed: () => boolean;
+    isMinimized: ReturnType<typeof vi.fn>;
+    restore: ReturnType<typeof vi.fn>;
+    show: ReturnType<typeof vi.fn>;
+    focus: ReturnType<typeof vi.fn>;
+  };
+  // A's window, and B's own window.
+  let winA: FakeWindow;
+  let winB: FakeWindow;
+  const makeWindow = (): FakeWindow => ({
+    isDestroyed: () => false,
+    isMinimized: vi.fn(() => false),
+    restore: vi.fn(),
+    show: vi.fn(),
+    focus: vi.fn(),
+  });
+
+  const liveUpdates = (view: FakeSender) =>
+    view.sent.filter((m) => m.channel === CHANNELS.VOICE_INPUT_LIVE_SESSION).map((m) => m.payload);
+  const lastLive = (view: FakeSender) =>
+    liveUpdates(view).at(-1) as { revision: number; session: unknown } | undefined;
+  const sentOn = (view: FakeSender, channel: string) =>
+    view.sent.filter((m) => m.channel === channel).map((m) => m.payload);
+  const invoke = (channel: string, sender: FakeSender, ...args: unknown[]) =>
+    getHandler(channel)({ sender }, ...args);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    shared.calls = [];
+    shared.listeners.clear();
+    shared.providerSessionId = null;
+    shared.startResult = { ok: true };
+    shared.drain = null;
+    shared.assembleKeyterms = null;
+    shared.projects.clear();
+    ownerA = makeSender();
+    viewB = makeSender();
+    viewC = makeSender();
+    shared.appViews = [ownerA, viewB, viewC];
+    shared.projects.set(ownerA.id, "project-a");
+    vi.mocked(projectStore.getProjectById).mockImplementation((id: string) =>
+      id === "project-a"
+        ? ({ id, name: "Alpha", path: "/alpha" } as ReturnType<typeof projectStore.getProjectById>)
+        : null
+    );
+    winA = makeWindow();
+    winB = makeWindow();
+    shared.windowOf = new Map([
+      [ownerA.id, winA],
+      [viewC.id, winA],
+      [viewB.id, winB],
+    ]);
+    shared.shownIn = new Map<Record<string, unknown>, unknown>([
+      [winA, ownerA],
+      [winB, viewB],
+    ]);
+    cleanup = registerVoiceInputHandlers({
+      mainWindow: { webContents: { send: vi.fn() }, isDestroyed: () => false },
+    } as unknown as Parameters<typeof registerVoiceInputHandlers>[0]);
+  });
+
+  afterEach(() => {
+    cleanup?.();
+    shared.appViews = [];
+    shared.windowOf = new Map();
+    shared.shownIn = new Map();
+    vi.mocked(projectStore.getProjectById).mockReset();
+    vi.mocked(projectStore.getProjectById).mockReturnValue(null);
+  });
+
+  it("tells every other view where the live session runs, and its owner nothing", async () => {
+    const idle = (await invoke(CHANNELS.VOICE_INPUT_GET_LIVE_SESSION, viewB)) as {
+      revision: number;
+    };
+    await start(ownerA, "a");
+
+    expect(lastLive(viewB)!.revision).toBeGreaterThan(idle.revision);
+    const elsewhere = { sessionId: "a", projectId: "project-a", projectName: "Alpha" };
+    expect(lastLive(viewB)?.session).toEqual(elsewhere);
+    expect(lastLive(viewC)?.session).toEqual(elsewhere);
+    expect(lastLive(ownerA)?.session).toBeNull();
+  });
+
+  it("tells every view once the session is over, with a newer revision", async () => {
+    await start(ownerA, "a");
+    const during = lastLive(viewB)!;
+
+    await stop(ownerA, "a");
+
+    expect(lastLive(viewB)).toEqual({ revision: expect.any(Number), session: null });
+    expect(lastLive(viewB)!.revision).toBeGreaterThan(during.revision);
+    expect(lastLive(viewC)?.session).toBeNull();
+  });
+
+  it("tells every view when the owner's view goes away", async () => {
+    await start(ownerA, "a");
+    ownerA.destroy();
+
+    expect(lastLive(viewB)?.session).toBeNull();
+  });
+
+  it("gives a view that boots mid-session the snapshot it missed", async () => {
+    await start(ownerA, "a");
+    const latecomer = makeSender();
+
+    const pulled = await invoke(CHANNELS.VOICE_INPUT_GET_LIVE_SESSION, latecomer);
+
+    expect(liveUpdates(latecomer)).toEqual([]);
+    expect(pulled).toEqual({
+      revision: lastLive(viewB)!.revision,
+      session: { sessionId: "a", projectId: "project-a", projectName: "Alpha" },
+    });
+    expect(await invoke(CHANNELS.VOICE_INPUT_GET_LIVE_SESSION, ownerA)).toMatchObject({
+      session: null,
+    });
+  });
+
+  it("asks the owner to stop when another view's dictation key names its session", async () => {
+    await start(ownerA, "a");
+
+    expect(await invoke(CHANNELS.VOICE_INPUT_STOP_LIVE, viewB, "a")).toBe(true);
+
+    expect(sentOn(ownerA, CHANNELS.VOICE_INPUT_STOP_REQUESTED)).toEqual([{ sessionId: "a" }]);
+    // The owner runs the stop, so its drain keeps the text; main stops nothing itself.
+    expect(shared.calls).not.toContain("drain");
+    expect(shared.calls).not.toContain("hard-stop");
+  });
+
+  it("ignores a stop for a session that isn't the live one", async () => {
+    await start(ownerA, "a");
+
+    expect(await invoke(CHANNELS.VOICE_INPUT_STOP_LIVE, viewB, "old")).toBe(false);
+    await stop(ownerA, "a");
+    expect(await invoke(CHANNELS.VOICE_INPUT_STOP_LIVE, viewB, "a")).toBe(false);
+
+    expect(sentOn(ownerA, CHANNELS.VOICE_INPUT_STOP_REQUESTED)).toEqual([]);
+  });
+
+  const reveal = { sessionId: "a", workspaceId: "project-a" };
+
+  it("brings the owner's window forward and asks the owner to show its panel", async () => {
+    winA.isMinimized.mockReturnValue(true);
+    await start(ownerA, "a");
+
+    expect(await invoke(CHANNELS.VOICE_INPUT_REVEAL_LIVE, viewB, "a")).toBe(true);
+
+    expect(winA.restore).toHaveBeenCalled();
+    expect(winA.show).toHaveBeenCalled();
+    expect(winA.focus).toHaveBeenCalled();
+    expect(winB.focus).not.toHaveBeenCalled();
+    expect(sentOn(ownerA, CHANNELS.VOICE_INPUT_REVEAL_REQUESTED)).toEqual([reveal]);
+    // On screen in its window already, so nothing there switches.
+    expect(sentOn(viewB, CHANNELS.VOICE_INPUT_REVEAL_REQUESTED)).toEqual([]);
+    expect(sentOn(viewC, CHANNELS.VOICE_INPUT_REVEAL_REQUESTED)).toEqual([]);
+  });
+
+  it("has the owner's window, not the asking one, switch when another view shows there", async () => {
+    shared.shownIn.set(winA, viewC);
+    await start(ownerA, "a");
+
+    await invoke(CHANNELS.VOICE_INPUT_REVEAL_LIVE, viewB, "a");
+
+    // The owner's own window switches, so its cached view comes forward rather
+    // than being released to open the workspace somewhere else.
+    expect(sentOn(viewC, CHANNELS.VOICE_INPUT_REVEAL_REQUESTED)).toEqual([reveal]);
+    expect(sentOn(viewB, CHANNELS.VOICE_INPUT_REVEAL_REQUESTED)).toEqual([]);
+    expect(sentOn(ownerA, CHANNELS.VOICE_INPUT_REVEAL_REQUESTED)).toEqual([reveal]);
+    expect(winA.restore).not.toHaveBeenCalled();
+  });
+
+  it("reveals nothing for a session that isn't the live one", async () => {
+    await start(ownerA, "a");
+
+    expect(await invoke(CHANNELS.VOICE_INPUT_REVEAL_LIVE, viewB, "old")).toBe(false);
+    expect(winA.focus).not.toHaveBeenCalled();
+    expect(sentOn(ownerA, CHANNELS.VOICE_INPUT_REVEAL_REQUESTED)).toEqual([]);
+  });
+
+  describe("the dictation key on a page that isn't an app view", () => {
+    const press = (overrides: Partial<Electron.Input> = {}) =>
+      ({ type: "keyDown", key: ".", isAutoRepeat: false, ...overrides }) as Electron.Input;
+
+    it("asks the owner to stop and takes the key from the page", async () => {
+      await start(ownerA, "a");
+
+      expect(claimDictationKey(press())).toBe(true);
+      expect(sentOn(ownerA, CHANNELS.VOICE_INPUT_STOP_REQUESTED)).toEqual([{ sessionId: "a" }]);
+    });
+
+    it("takes a held key's repeats without asking again", async () => {
+      await start(ownerA, "a");
+
+      expect(claimDictationKey(press({ isAutoRepeat: true }))).toBe(true);
+      expect(sentOn(ownerA, CHANNELS.VOICE_INPUT_STOP_REQUESTED)).toEqual([]);
+    });
+
+    it("leaves the key to the page when nothing is running", async () => {
+      expect(claimDictationKey(press())).toBe(false);
+      expect(claimDictationKey(press({ isAutoRepeat: true }))).toBe(false);
+
+      await start(ownerA, "a");
+      await stop(ownerA, "a");
+      expect(claimDictationKey(press())).toBe(false);
+      expect(sentOn(ownerA, CHANNELS.VOICE_INPUT_STOP_REQUESTED)).toEqual([]);
+    });
+
+    it("leaves every other key to the page", async () => {
+      await start(ownerA, "a");
+
+      expect(claimDictationKey(press({ key: "k" }))).toBe(false);
+      expect(sentOn(ownerA, CHANNELS.VOICE_INPUT_STOP_REQUESTED)).toEqual([]);
+    });
+
+    it("is what the page key hooks ask while the handlers are registered", async () => {
+      await start(ownerA, "a");
+
+      expect(claimPageDictationKey(press())).toBe(true);
+      expect(sentOn(ownerA, CHANNELS.VOICE_INPUT_STOP_REQUESTED)).toEqual([{ sessionId: "a" }]);
+
+      cleanup();
+      cleanup = () => {};
+      expect(claimPageDictationKey(press())).toBe(false);
+    });
   });
 });

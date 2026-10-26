@@ -560,6 +560,8 @@ export {
 export type {
   VoiceInputError,
   VoiceInputErrorSeverity,
+  VoiceLiveSessionUpdate,
+  VoiceSessionElsewhere,
   VoiceSessionEndReason,
   VoiceStartOutcome,
   VoiceTranscriptPhase,

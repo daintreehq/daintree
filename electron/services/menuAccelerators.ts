@@ -309,6 +309,8 @@ function keyMatches(
 ): boolean {
   const accKey = acc.key.length === 1 ? acc.key.toUpperCase() : acc.key;
   if (inputKey === accKey) return true;
+  // Input names the space bar by its character; accelerators spell it out.
+  if (accKey === "Space" && input.key === " ") return true;
   // Physical digit-row parity with the renderer matcher: on layouts that
   // shift their number row, input.key for Digit1 is "&" — match by code.
   if (/^[0-9]$/.test(accKey) && input.code === `Digit${accKey}`) return true;
@@ -346,6 +348,11 @@ export function findTerminalCycleAction(
   return findActionForInput(input, [portalActionId], "portal") === portalActionId
     ? { actionId, portalActionId }
     : { actionId };
+}
+
+/** Whether this keystroke is the dictation key as the person has it bound. */
+export function isDictationKey(input: Electron.Input): boolean {
+  return findActionForInput(input, ["voiceInput.toggle"], "global") !== undefined;
 }
 
 /**

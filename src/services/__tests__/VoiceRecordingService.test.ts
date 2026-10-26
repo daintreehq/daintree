@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { isActiveVoiceSession } from "@shared/types";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { isActiveVoiceSession, type VoiceLiveSessionUpdate } from "@shared/types";
 
 // Capture suspend/wake callbacks registered by the service.
 const suspendCallbacks = vi.hoisted(() => [] as Array<() => void>);
@@ -17,8 +17,10 @@ vi.mock("@/store/voiceRecordingStore", () => {
     micSignal: "pending" as string,
     micDeviceLabel: null as string | null,
     micNotice: null as unknown,
+    sessionElsewhere: null as unknown,
   };
   const fns = {
+    applyLiveSessionUpdate: vi.fn(),
     setLastError: vi.fn(),
     announce: vi.fn(),
     setStatus: vi.fn(),
@@ -91,8 +93,9 @@ vi.mock("@/store/terminalInputStore", () => {
 
 vi.mock("@/store/projectStore", () => {
   const state = { currentProject: null, isSwitching: false };
-  const getState = () => ({ ...state, switchProject: vi.fn() });
-  return { useProjectStore: Object.assign(getState, { getState }) };
+  const switchProject = vi.fn();
+  const getState = () => ({ ...state, switchProject });
+  return { useProjectStore: Object.assign(getState, { getState }), __switchProject: switchProject };
 });
 
 vi.mock("@/store/createWorktreeStore", () => ({
@@ -170,6 +173,13 @@ function buildElectronStub() {
       onError: vi.fn(() => () => {}),
       onStatus: vi.fn(() => () => {}),
       onSessionEnded: vi.fn(() => () => {}),
+      onLiveSession: vi.fn((_callback: (update: VoiceLiveSessionUpdate) => void) => () => {}),
+      onStopRequested: vi.fn(() => () => {}),
+      onRevealRequested: vi.fn(
+        (_callback: (payload: { sessionId: string; workspaceId: string | null }) => void) =>
+          () => {}
+      ),
+      getLiveSession: vi.fn().mockResolvedValue({ revision: 0, session: null }),
       getSettings: vi.fn().mockResolvedValue({
         enabled: true,
         openaiApiKey: "sk-key",
@@ -181,6 +191,8 @@ function buildElectronStub() {
       sendAudioChunk: vi.fn(),
       start: vi.fn().mockResolvedValue({ status: "started" }),
       stop: vi.fn().mockResolvedValue(undefined),
+      stopLive: vi.fn().mockResolvedValue(true),
+      revealLive: vi.fn().mockResolvedValue(true),
     },
     systemSleep: {
       onSuspend: vi.fn((cb: () => void) => {
@@ -2415,5 +2427,217 @@ describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
     for (const listener of keyupListeners) listener(shiftUpEvent);
 
     expect(stopSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("VoiceRecordingService — a session another view owns (#14601)", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    suspendCallbacks.length = 0;
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  const elsewhere = { sessionId: "remote", projectId: "project-a", projectName: "Alpha" };
+
+  function hasMockState<T>(mod: object): mod is { __state: T } {
+    return "__state" in mod;
+  }
+
+  function hasSwitchMock(mod: object): mod is { __switchProject: Mock<(id: string) => void> } {
+    return "__switchProject" in mod;
+  }
+
+  type VoiceState = {
+    status: string;
+    activeTarget: { panelId: string } | null;
+    lockedTarget: { panelId: string } | null;
+    sessionElsewhere: unknown;
+  };
+  type PanelState = { focusedId: string | null; panelsById: Record<string, unknown> };
+
+  async function arrange(options: {
+    status?: string;
+    sessionElsewhere?: typeof elsewhere | null;
+    recordingMode?: "toggle" | "push-to-talk";
+  }) {
+    const electron = buildElectronStub();
+    electron.voiceInput.getSettings.mockResolvedValue({
+      enabled: true,
+      openaiApiKey: "sk-key",
+      correctionEnabled: false,
+      recordingMode: options.recordingMode ?? "toggle",
+    });
+    const { windowListeners } = setupGlobals(electron);
+
+    const panel = await import("@/store/panelStore");
+    if (!hasMockState<PanelState>(panel)) throw new Error("panelStore mock lacks __state");
+    panel.__state.focusedId = "panel-b";
+    panel.__state.panelsById = {
+      "panel-b": { id: "panel-b", title: "Focused", location: "grid", launchAgentId: "claude" },
+      "panel-c": { id: "panel-c", title: "Later", location: "grid", launchAgentId: "claude" },
+    };
+
+    const voiceModule = await import("@/store/voiceRecordingStore");
+    if (!hasMockState<VoiceState>(voiceModule)) {
+      throw new Error("voiceRecordingStore mock lacks __state");
+    }
+    const voiceState = voiceModule.__state;
+    voiceState.status = options.status ?? "idle";
+    voiceState.activeTarget = voiceState.status === "idle" ? null : { panelId: "panel-a" };
+    voiceState.lockedTarget = null;
+    voiceState.sessionElsewhere =
+      options.sessionElsewhere === undefined ? elsewhere : options.sessionElsewhere;
+    const announce = vi.mocked(voiceModule.useVoiceRecordingStore.getState().announce);
+    announce.mockClear();
+    const applyLiveSessionUpdate = vi.mocked(
+      voiceModule.useVoiceRecordingStore.getState().applyLiveSessionUpdate
+    );
+    applyLiveSessionUpdate.mockClear();
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    voiceRecordingService.initialize();
+    await vi.waitFor(() => {
+      expect(electron.voiceInput.getSettings).toHaveBeenCalled();
+    });
+
+    const stopSpy = vi.spyOn(voiceRecordingService, "stop").mockResolvedValue();
+    const startSpy = vi.spyOn(voiceRecordingService, "start").mockResolvedValue();
+    const toggleSpy = vi.spyOn(voiceRecordingService, "toggle").mockResolvedValue();
+    return {
+      voiceRecordingService,
+      voiceState,
+      panelState: panel.__state,
+      electron,
+      windowListeners,
+      announce,
+      applyLiveSessionUpdate,
+      stopSpy,
+      startSpy,
+      toggleSpy,
+    };
+  }
+
+  it("applies main's reports of where the live session is, pulled and pushed", async () => {
+    const { electron, applyLiveSessionUpdate } = await arrange({ sessionElsewhere: null });
+    await vi.waitFor(() => {
+      expect(applyLiveSessionUpdate).toHaveBeenCalledWith({ revision: 0, session: null });
+    });
+
+    const push = { revision: 4, session: elsewhere };
+    const onLiveSession = electron.voiceInput.onLiveSession.mock.calls[0]![0];
+    onLiveSession(push);
+
+    expect(applyLiveSessionUpdate).toHaveBeenLastCalledWith(push);
+  });
+
+  it("stops the other view's session instead of starting one on the focused panel", async () => {
+    const { voiceRecordingService, electron, announce, stopSpy, startSpy, toggleSpy } =
+      await arrange({});
+
+    await voiceRecordingService.toggleFocusedPanel();
+
+    expect(electron.voiceInput.stopLive).toHaveBeenCalledWith("remote");
+    expect(startSpy).not.toHaveBeenCalled();
+    expect(toggleSpy).not.toHaveBeenCalled();
+    expect(stopSpy).not.toHaveBeenCalled();
+    expect(announce).toHaveBeenCalledWith("Stopping dictation in Alpha.");
+  });
+
+  it("stops this view's own session first, leaving the other view alone", async () => {
+    const { voiceRecordingService, electron, stopSpy } = await arrange({ status: "recording" });
+
+    await voiceRecordingService.toggleFocusedPanel();
+
+    expect(stopSpy).toHaveBeenCalledWith("Dictation stopped.", { preserveLiveText: true });
+    expect(electron.voiceInput.stopLive).not.toHaveBeenCalled();
+  });
+
+  it("starts on the panel focused at the press when nothing runs anywhere (#6959)", async () => {
+    const { voiceRecordingService, electron, panelState, toggleSpy } = await arrange({
+      sessionElsewhere: null,
+    });
+
+    const pressed = voiceRecordingService.toggleFocusedPanel();
+    panelState.focusedId = "panel-c";
+    await pressed;
+
+    expect(electron.voiceInput.stopLive).not.toHaveBeenCalled();
+    expect(toggleSpy).toHaveBeenCalledTimes(1);
+    expect(toggleSpy).toHaveBeenCalledWith(expect.objectContaining({ panelId: "panel-b" }));
+  });
+
+  it("says nothing when the other session was already over", async () => {
+    const { voiceRecordingService, electron, announce, toggleSpy } = await arrange({});
+    electron.voiceInput.stopLive.mockResolvedValue(false);
+
+    await voiceRecordingService.toggleFocusedPanel();
+
+    expect(announce).not.toHaveBeenCalled();
+    expect(toggleSpy).not.toHaveBeenCalled();
+  });
+
+  it("doesn't let the release of a push-to-talk press that stopped it stop anything here", async () => {
+    const { voiceRecordingService, windowListeners, stopSpy } = await arrange({
+      recordingMode: "push-to-talk",
+    });
+    const { keybindingService } = await import("@/services/KeybindingService");
+    vi.mocked(keybindingService.matchesEvent).mockReturnValue(true);
+    await vi.waitFor(() => {
+      expect(voiceRecordingService["recordingMode"]).toBe("push-to-talk");
+    });
+
+    for (const listener of windowListeners["keydown"] ?? []) {
+      listener({ code: "Period", repeat: false });
+    }
+    await voiceRecordingService.toggleFocusedPanel();
+    for (const listener of windowListeners["keyup"] ?? []) listener({ code: "Period" });
+
+    expect(stopSpy).not.toHaveBeenCalled();
+  });
+
+  it("takes the person to the other view's session, and says when it couldn't", async () => {
+    const { voiceRecordingService, electron } = await arrange({});
+
+    await expect(voiceRecordingService.revealSessionElsewhere()).resolves.toBe(true);
+    expect(electron.voiceInput.revealLive).toHaveBeenCalledWith("remote");
+
+    electron.voiceInput.revealLive.mockResolvedValueOnce(false);
+    await expect(voiceRecordingService.revealSessionElsewhere()).resolves.toBe(false);
+    electron.voiceInput.revealLive.mockRejectedValueOnce(new Error("gone"));
+    await expect(voiceRecordingService.revealSessionElsewhere()).resolves.toBe(false);
+  });
+
+  it("asks main for nothing to reveal when no session runs elsewhere", async () => {
+    const { voiceRecordingService, electron } = await arrange({ sessionElsewhere: null });
+
+    await expect(voiceRecordingService.revealSessionElsewhere()).resolves.toBe(false);
+    expect(electron.voiceInput.revealLive).not.toHaveBeenCalled();
+  });
+
+  it("switches to the owner's workspace when on screen in the owner's window", async () => {
+    const { electron } = await arrange({ sessionElsewhere: null });
+    const projectStore = await import("@/store/projectStore");
+    if (!hasSwitchMock(projectStore)) throw new Error("projectStore mock lacks __switchProject");
+    const switchProject = projectStore.__switchProject;
+    switchProject.mockClear();
+    const { useScratchStore } = await import("@/store/scratchStore");
+    const switchScratch = vi.fn().mockResolvedValue(undefined);
+    useScratchStore.setState({ switchScratch });
+    const revealRequested = electron.voiceInput.onRevealRequested.mock.calls[0]![0];
+
+    const projectId = "a".repeat(64);
+    revealRequested({ sessionId: "remote", workspaceId: projectId });
+    const scratchId = "3f2b8a1c-4d5e-4f60-8a7b-9c0d1e2f3a4b";
+    revealRequested({ sessionId: "remote", workspaceId: scratchId });
+
+    await vi.waitFor(() => {
+      expect(switchProject).toHaveBeenCalledWith(projectId);
+      expect(switchScratch).toHaveBeenCalledWith(scratchId);
+    });
+    expect(switchProject).toHaveBeenCalledTimes(1);
   });
 });

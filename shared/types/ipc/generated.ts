@@ -3982,6 +3982,14 @@ export interface GeneratedIpcInvokeMap {
     args: [sessionId: string];
     result: { rawText: string | null };
   };
+  "voice-input:get-live-session": {
+    args: [];
+    result: import("../voice.js").VoiceLiveSessionUpdate;
+  };
+  "voice-input:reveal-live": {
+    args: [sessionId: string];
+    result: boolean;
+  };
   "voice-input:start": {
     args: [sessionId: string, options?: { terminalId?: string | undefined } | undefined];
     result: import("../voice.js").VoiceStartOutcome;
@@ -3989,6 +3997,10 @@ export interface GeneratedIpcInvokeMap {
   "voice-input:stop": {
     args: [sessionId: string];
     result: { rawText: string | null };
+  };
+  "voice-input:stop-live": {
+    args: [sessionId: string];
+    result: boolean;
   };
   "watchdog:restart": {
     args: [];

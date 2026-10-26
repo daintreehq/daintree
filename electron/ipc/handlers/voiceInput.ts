@@ -18,7 +18,11 @@ import type {
   VoiceInputSettingsPatch,
   VoiceTranscriptionProvider,
 } from "../../../shared/types/ipc/api.js";
-import type { VoiceSessionEndReason, VoiceStartOutcome } from "../../../shared/types/voice.js";
+import type {
+  VoiceLiveSessionUpdate,
+  VoiceSessionEndReason,
+  VoiceStartOutcome,
+} from "../../../shared/types/voice.js";
 import { logDebug, logInfo, logWarn } from "../../utils/logger.js";
 import { buildOpenAIHeaders } from "../../../shared/utils/openaiHeaders.js";
 import { voiceErrorLogFields } from "../../../shared/utils/voiceLogFields.js";
@@ -58,6 +62,13 @@ import {
   type VoiceInputStartOptions,
 } from "../../schemas/ipc.js";
 import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
+import { isDictationKey } from "../../services/menuAccelerators.js";
+import { registerPageDictationKey } from "../../services/voice/pageDictationKey.js";
+import {
+  getAllAppWebContents,
+  getAppWebContents,
+  getWindowForWebContents,
+} from "../../window/webContentsRegistry.js";
 
 let service: VoiceTranscriptionService | null = null;
 let servicePromise: Promise<VoiceTranscriptionService> | null = null;
@@ -115,9 +126,42 @@ let liveSession: VoiceSession | null = null;
 // A replaced session whose provider is still draining. The service stays its
 // until the drain settles, so a newer session waits for it before starting.
 let drainingSession: VoiceSession | null = null;
+// Grows with every change of the live session, so a view can order the
+// snapshot it pulled against the updates pushed to it.
+let liveSessionRevision = 0;
 
 function isLive(session: VoiceSession): boolean {
   return liveSession === session && !session.ended;
+}
+
+/** The live session as one view sees it: none when that view owns it. */
+function liveSessionUpdateFor(webContentsId: number): VoiceLiveSessionUpdate {
+  const session = liveSession;
+  if (!session || session.ended || session.webContentsId === webContentsId) {
+    return { revision: liveSessionRevision, session: null };
+  }
+  return {
+    revision: liveSessionRevision,
+    session: {
+      sessionId: session.id,
+      projectId: session.projectId,
+      projectName: session.projectInfo.name ?? null,
+    },
+  };
+}
+
+// Every view hears about it, cached ones included: the dictation key has to
+// stop the live session from any of them, and each says where it runs.
+function publishLiveSession(): void {
+  liveSessionRevision++;
+  for (const wc of getAllAppWebContents()) {
+    if (wc.isDestroyed()) continue;
+    try {
+      wc.send(CHANNELS.VOICE_INPUT_LIVE_SESSION, liveSessionUpdateFor(wc.id));
+    } catch {
+      // A view being torn down misses it; a new one pulls the current state.
+    }
+  }
 }
 
 /** The live session's id and the view and project that own it, or null. */
@@ -135,6 +179,33 @@ export function getLiveVoiceSession(): {
 }
 
 /**
+ * Ask the live session's owner to stop it, as the owner's own dictation key
+ * would: the owner drains it, so the text lands in its draft and its microphone
+ * is released. False when nothing is live, or when `sessionId` names another.
+ */
+export function requestLiveSessionStop(sessionId?: string): boolean {
+  const session = liveSession;
+  if (!session || session.ended || session.sender.isDestroyed()) return false;
+  if (sessionId !== undefined && session.id !== sessionId) return false;
+  session.sender.send(CHANNELS.VOICE_INPUT_STOP_REQUESTED, { sessionId: session.id });
+  return true;
+}
+
+/**
+ * Whether a focused page that isn't an app view (a browser or dev-preview
+ * guest, a portal tab) takes this keystroke from the page. The dictation key
+ * stops dictation running in any view, as it would from an app view; a held
+ * key's repeats go with it. With nothing running it stays the page's (#14601).
+ */
+export function claimDictationKey(input: Electron.Input): boolean {
+  // Checked first: idle on nearly every keystroke, so most skip the binding lookup.
+  if (!liveSession || liveSession.ended) return false;
+  if (!isDictationKey(input)) return false;
+  if (input.isAutoRepeat) return true;
+  return requestLiveSessionStop();
+}
+
+/**
  * End a session exactly once: drop it as the live one, release what it set up,
  * and tell its owning view why. Retiring its provider is left to the caller:
  * after a drain there is nothing to stop, and by then the provider may belong
@@ -143,7 +214,10 @@ export function getLiveVoiceSession(): {
 function endSession(session: VoiceSession, reason: VoiceSessionEndReason): void {
   if (session.ended) return;
   session.ended = true;
-  if (liveSession === session) liveSession = null;
+  if (liveSession === session) {
+    liveSession = null;
+    publishLiveSession();
+  }
   session.preStartAudio = null;
   session.markHandedOff();
   session.unsubscribe?.();
@@ -787,6 +861,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     const previous = liveSession;
     liveSession = session;
     if (previous) retireSession(previous, session);
+    publishLiveSession();
     // A view that goes away takes its session with it, and stops the provider
     // if the session has one: live, or replaced and still draining.
     session.unwatchDestroyed = onWebContentsDestroyed(sender, () => {
@@ -1055,6 +1130,36 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     return drainSession(session, "stopped");
   };
 
+  const handleGetLiveSession = (ctx: IpcContext): VoiceLiveSessionUpdate =>
+    liveSessionUpdateFor(ctx.webContentsId);
+
+  // Another view's dictation key.
+  const handleStopLive = (sessionId: string): boolean => requestLiveSessionStop(sessionId);
+
+  // Another view's indicator. The owner's own window brings it forward: a
+  // switch asked from any other window would release the owner's cached view
+  // to open its workspace there, ending the session it was meant to show.
+  const handleRevealLive = (sessionId: string): boolean => {
+    const session = liveSession;
+    if (!session || session.id !== sessionId || session.ended) return false;
+    if (session.sender.isDestroyed()) return false;
+    const reveal = { sessionId, workspaceId: session.projectId };
+    const win = getWindowForWebContents(session.sender);
+    if (win && !win.isDestroyed()) {
+      // The view on screen there switches to the owner's workspace.
+      const shown = getAppWebContents(win);
+      if (shown.id !== session.webContentsId && !shown.isDestroyed()) {
+        shown.send(CHANNELS.VOICE_INPUT_REVEAL_REQUESTED, reveal);
+      }
+      if (win.isMinimized()) win.restore();
+      win.show();
+      win.focus();
+    }
+    // The owner focuses the panel it is dictating into.
+    session.sender.send(CHANNELS.VOICE_INPUT_REVEAL_REQUESTED, reveal);
+    return true;
+  };
+
   const handleFlushParagraph = (ctx: IpcContext, sessionId: string): { rawText: string | null } => {
     const session = liveSession;
     // Until the session is active, the service's provider belongs to no one.
@@ -1169,11 +1274,25 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         handleFlushParagraph,
         { withContext: true }
       ),
+      getLiveSession: op(VOICE_INPUT_METHOD_CHANNELS.getLiveSession, handleGetLiveSession, {
+        withContext: true,
+      }),
+      stopLive: opValidated(
+        VOICE_INPUT_METHOD_CHANNELS.stopLive,
+        VoiceSessionIdSchema,
+        handleStopLive
+      ),
+      revealLive: opValidated(
+        VOICE_INPUT_METHOD_CHANNELS.revealLive,
+        VoiceSessionIdSchema,
+        handleRevealLive
+      ),
     },
   });
 
   const cleanups: Array<() => void> = [
     sessionNamespace.register(),
+    registerPageDictationKey(claimDictationKey),
     typedHandle(CHANNELS.VOICE_INPUT_GET_SETTINGS, handleGetSettings),
     typedHandle(CHANNELS.VOICE_INPUT_SET_SETTINGS, handleSetSettings),
     typedHandle(CHANNELS.VOICE_INPUT_CHECK_MIC_PERMISSION, handleCheckMicPermission),

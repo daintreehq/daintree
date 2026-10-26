@@ -19,7 +19,12 @@ import type { ChecklistState, HelpAssistantTier, IpcEventBusMap, IpcInvokeMap } 
 import type { GeneratedElectronAPI } from "./generated-api.js";
 import type { AgentSettings, AgentSettingsEntry, ResumeOnRestart } from "../agentSettings.js";
 import type { AgentPreset } from "../../config/agentRegistry.js";
-import type { VoiceInputError, VoiceInputStatus, VoiceSessionEndReason } from "../voice.js";
+import type {
+  VoiceInputError,
+  VoiceInputStatus,
+  VoiceLiveSessionUpdate,
+  VoiceSessionEndReason,
+} from "../voice.js";
 export type { VoiceInputError, VoiceInputStatus };
 import type {
   AuthValidation,
@@ -2154,7 +2159,9 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   // main ignores audio, stop and flush carrying an id that isn't the live
   // session's, and every event carries the id of the session it belongs to.
   // start's optional `terminalId` names the terminal being dictated into;
-  // keyterms come from it alone.
+  // keyterms come from it alone. getLiveSession, stopLive and revealLive come
+  // from there too: they let a view that doesn't own the live session see it,
+  // stop it, and go to it.
   voiceInput: GeneratedElectronAPI["voiceInput"] & {
     getSettings(): Promise<VoiceInputSettings>;
     setSettings(settings: VoiceInputSettingsPatch): Promise<void>;
@@ -2186,6 +2193,22 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     /** Fires once per session when main ends it, with why. */
     onSessionEnded(
       callback: (payload: { sessionId: string; reason: VoiceSessionEndReason }) => void
+    ): () => void;
+    /**
+     * The session live in another view, or none, whenever it changes. A view
+     * that owns the live session is told none. `getLiveSession()` pulls the
+     * same snapshot; the larger `revision` wins.
+     */
+    onLiveSession(callback: (update: VoiceLiveSessionUpdate) => void): () => void;
+    /** To the owner, when another view's dictation key asked it to stop. */
+    onStopRequested(callback: (payload: { sessionId: string }) => void): () => void;
+    /**
+     * When another view's indicator asked to be taken to the live session: the
+     * owner focuses its target, and the view on screen in the owner's window
+     * switches to `workspaceId`.
+     */
+    onRevealRequested(
+      callback: (payload: { sessionId: string; workspaceId: string | null }) => void
     ): () => void;
     checkMicPermission(): Promise<MicPermissionStatus>;
     /**

@@ -432,6 +432,10 @@ function setupGlobals(): void {
         onSessionEnded: vi.fn((callback: VoiceSessionEndedCallback) =>
           addListener(runtime.sessionEndedListeners, callback)
         ),
+        onLiveSession: vi.fn(() => () => {}),
+        onStopRequested: vi.fn(() => () => {}),
+        onRevealRequested: vi.fn(() => () => {}),
+        getLiveSession: vi.fn().mockResolvedValue({ revision: 0, session: null }),
         getSettings: runtime.voiceInput.getSettings,
         checkMicPermission: runtime.voiceInput.checkMicPermission,
         requestMicPermission: runtime.voiceInput.requestMicPermission,
@@ -1581,6 +1585,62 @@ describe("VoiceRecordingService adversarial", () => {
     // The error is dropped while stopping, so the structured error never reaches
     // the store — lastError stays whatever it was before the graceful stop.
     expect(runtime.voiceFns.setLastError).not.toHaveBeenCalled();
+  });
+
+  describe("asked by another view (#14601)", () => {
+    const panelOne: VoiceRecordingTarget = { panelId: "panel-1", panelTitle: "Panel One" };
+
+    function requestHandlers() {
+      const voiceInput = window.electron.voiceInput;
+      return {
+        stopRequested: vi.mocked(voiceInput.onStopRequested).mock.calls[0]![0],
+        revealRequested: vi.mocked(voiceInput.onRevealRequested).mock.calls[0]![0],
+      };
+    }
+
+    it("stops its own session and keeps the text, as its own key would", async () => {
+      const { voiceRecordingService } = await import("../VoiceRecordingService");
+      await voiceRecordingService.start(panelOne);
+      runtime.voiceState.activeTarget = panelOne;
+      runtime.voiceState.status = "recording";
+      const stopSpy = vi.spyOn(voiceRecordingService, "stop");
+
+      requestHandlers().stopRequested({ sessionId: liveSessionId() });
+
+      expect(stopSpy).toHaveBeenCalledWith("Dictation stopped.", { preserveLiveText: true });
+      await vi.waitFor(() => {
+        expect(runtime.voiceInput.stop).toHaveBeenCalledWith(liveSessionId());
+      });
+    });
+
+    it("ends at main a session it no longer holds, leaving its own live one alone", async () => {
+      const { voiceRecordingService } = await import("../VoiceRecordingService");
+      await voiceRecordingService.start(panelOne);
+      runtime.voiceState.activeTarget = panelOne;
+      runtime.voiceState.status = "recording";
+      const current = liveSessionId();
+      const stopSpy = vi.spyOn(voiceRecordingService, "stop");
+
+      requestHandlers().stopRequested({ sessionId: "before-reload" });
+
+      expect(stopSpy).not.toHaveBeenCalled();
+      expect(runtime.voiceInput.stop.mock.calls).toEqual([["before-reload"]]);
+      expect(runtime.voiceInput.stop).not.toHaveBeenCalledWith(current);
+      expect(runtime.voiceFns.finishSession).not.toHaveBeenCalled();
+      expect(runtime.createdStreams[0]?.track.stop).not.toHaveBeenCalled();
+    });
+
+    it("shows its target only for its own session", async () => {
+      const { voiceRecordingService } = await import("../VoiceRecordingService");
+      await voiceRecordingService.start(panelOne);
+      const focusSpy = vi.spyOn(voiceRecordingService, "focusActiveTarget").mockResolvedValue(true);
+
+      requestHandlers().revealRequested({ sessionId: "someone-else", workspaceId: null });
+      expect(focusSpy).not.toHaveBeenCalled();
+
+      requestHandlers().revealRequested({ sessionId: liveSessionId(), workspaceId: "p" });
+      expect(focusSpy).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("TRANSIENT_ERROR_STORES_STRUCTURED_PAYLOAD_AND_KEEPS_SESSION", async () => {

@@ -5,6 +5,8 @@ import {
   isActiveVoiceSession,
   type VoiceInputError,
   type VoiceInputStatus,
+  type VoiceLiveSessionUpdate,
+  type VoiceSessionElsewhere,
   type VoiceTranscriptPhase,
 } from "@shared/types";
 import { createDebouncedSafeJSONStorage } from "./persistence/safeStorage";
@@ -287,6 +289,13 @@ interface VoiceRecordingState {
    * stale id can't silently route dictation to a non-existent panel.
    */
   recentTargets: RecentDictationTarget[];
+  /**
+   * A session live in another view, as main last reported it. The dictation
+   * key stops it instead of starting one here, and the toolbar says where it
+   * runs. Runtime-only.
+   */
+  sessionElsewhere: VoiceSessionElsewhere | null;
+  sessionElsewhereRevision: number;
   elapsedSeconds: number;
   audioLevel: number;
   micSignal: VoiceMicSignal;
@@ -338,6 +347,8 @@ interface VoiceRecordingState {
   clearLockedTarget: (panelId: string) => void;
   /** Records or refreshes a recent-targets entry (MRU-ordered, capped at 3). */
   recordRecentTarget: (target: VoiceRecordingTarget) => void;
+  /** Applies main's report of the live session unless a newer one already landed. */
+  applyLiveSessionUpdate: (update: VoiceLiveSessionUpdate) => void;
 }
 
 function getBuffer(
@@ -374,6 +385,8 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
       pendingTarget: null,
       lockedTarget: null,
       recentTargets: [],
+      sessionElsewhere: null,
+      sessionElsewhereRevision: -1,
       elapsedSeconds: 0,
       audioLevel: 0,
       micSignal: "pending",
@@ -796,6 +809,12 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
           return {
             recentTargets: [entry, ...filtered].slice(0, MAX_RECENT_TARGETS),
           };
+        }),
+
+      applyLiveSessionUpdate: ({ revision, session }) =>
+        set((state) => {
+          if (revision < state.sessionElsewhereRevision) return state;
+          return { sessionElsewhere: session, sessionElsewhereRevision: revision };
         }),
     }),
     {

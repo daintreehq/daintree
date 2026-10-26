@@ -10,6 +10,7 @@ import { logInfo, logWarn } from "../utils/logger.js";
 import { getProcessMemoryKb } from "../utils/processMemory.js";
 import { getFocusedPanelTracker } from "./FocusedPanelTracker.js";
 import { findPortalPageAction } from "./menuAccelerators.js";
+import { claimPageDictationKey } from "./voice/pageDictationKey.js";
 
 // Tab keys a focused portal page hands to the portal rather than to the page
 // or the native menu: with the page focused the app renderer never sees the
@@ -543,6 +544,10 @@ export class PortalManager {
       });
 
       view.webContents.on("before-input-event", (event, input) => {
+        if (claimPageDictationKey(input)) {
+          event.preventDefault();
+          return;
+        }
         const actionId = findPortalPageAction(input, PORTAL_PAGE_KEY_ACTIONS);
         if (!actionId) return;
         // Also keeps the key from the native menu's accelerator for it.

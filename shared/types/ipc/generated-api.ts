@@ -1712,12 +1712,21 @@ export interface GeneratedElectronAPI {
     flushParagraph(
       ...args: IpcInvokeMap["voice-input:flush-paragraph"]["args"]
     ): Promise<IpcInvokeMap["voice-input:flush-paragraph"]["result"]>;
+    getLiveSession(
+      ...args: IpcInvokeMap["voice-input:get-live-session"]["args"]
+    ): Promise<IpcInvokeMap["voice-input:get-live-session"]["result"]>;
+    revealLive(
+      ...args: IpcInvokeMap["voice-input:reveal-live"]["args"]
+    ): Promise<IpcInvokeMap["voice-input:reveal-live"]["result"]>;
     start(
       ...args: IpcInvokeMap["voice-input:start"]["args"]
     ): Promise<IpcInvokeMap["voice-input:start"]["result"]>;
     stop(
       ...args: IpcInvokeMap["voice-input:stop"]["args"]
     ): Promise<IpcInvokeMap["voice-input:stop"]["result"]>;
+    stopLive(
+      ...args: IpcInvokeMap["voice-input:stop-live"]["args"]
+    ): Promise<IpcInvokeMap["voice-input:stop-live"]["result"]>;
   };
   webview: {
     captureElement(
