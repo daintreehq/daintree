@@ -15,7 +15,14 @@ export const SettingsControlLinkMethod = {
   READ: "settings.control.read",
   /** Write the named settings, unless any changed since the revisions given. */
   UPDATE: "settings.control.update",
+  /**
+   * Which keys this host can be asked about (#14706). A host from before it
+   * answers `UNSUPPORTED`, and knows only `LEGACY_HOST_SETTING_KEYS`.
+   */
+  DESCRIBE: "settings.control.describe",
 } as const;
+
+export const SettingsControlDescribeSchema = z.object({}).strict();
 
 export const SettingsControlReadSchema = z.object({
   keys: z.array(z.enum(HOST_SETTING_KEYS)).min(1).max(HOST_SETTING_KEYS.length),

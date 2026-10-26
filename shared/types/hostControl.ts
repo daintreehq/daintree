@@ -1,6 +1,9 @@
 import { z } from "zod";
 import { AgentDirectorySchema } from "./agentDirectory.js";
-import { HOST_SETTING_KEYS, HostSettingsPatchFieldsSchema } from "./hostSettings.js";
+import {
+  ASSISTANT_HOST_SETTING_KEYS,
+  AssistantHostSettingsPatchFieldsSchema,
+} from "./hostSettings.js";
 import { HostThrowawayCallSchema } from "./hostThrowaway.js";
 
 /**
@@ -458,11 +461,11 @@ export const HostSettingsArgsSchema = z.object({
     .optional()
     .describe("For read and preview: the exact hosts, up to 8."),
   keys: z
-    .array(z.enum(HOST_SETTING_KEYS))
-    .max(HOST_SETTING_KEYS.length)
+    .array(z.enum(ASSISTANT_HOST_SETTING_KEYS))
+    .max(ASSISTANT_HOST_SETTING_KEYS.length)
     .optional()
-    .describe(`For read: which settings, up to ${HOST_SETTING_KEYS.length}. Default: all.`),
-  patch: HostSettingsPatchFieldsSchema.optional().describe(
+    .describe(`For read: which settings, up to ${ASSISTANT_HOST_SETTING_KEYS.length}. Default: all.`),
+  patch: AssistantHostSettingsPatchFieldsSchema.optional().describe(
     "For preview: values to set on every host named."
   ),
   ticket: z
@@ -487,7 +490,7 @@ export const HostSettingsResultSchema = z.object({
       detail: z.string().nullable(),
       settings: z.array(
         z.object({
-          key: z.enum(HOST_SETTING_KEYS),
+          key: z.enum(ASSISTANT_HOST_SETTING_KEYS),
           value: settingValueSchema,
           proposed: settingValueSchema.optional(),
         })

@@ -6,7 +6,7 @@ import {
   type HostSettingsResult,
 } from "../../../shared/types/hostControl.js";
 import {
-  HOST_SETTING_KEYS,
+  ASSISTANT_HOST_SETTING_KEYS,
   HOST_SETTING_LABELS,
   hostSettingRefusal,
   type HostSettingKey,
@@ -117,7 +117,7 @@ function codeOf(error: unknown): string | null {
 }
 
 function patchKeys(patch: HostSettingsPatch): HostSettingKey[] {
-  return HOST_SETTING_KEYS.filter((key) => Object.hasOwn(patch, key));
+  return ASSISTANT_HOST_SETTING_KEYS.filter((key) => Object.hasOwn(patch, key));
 }
 
 function shown(key: HostSettingKey, value: HostSettingValue): string {
@@ -176,7 +176,7 @@ export class HostSettingsRequests {
   ): Promise<HostSettingsResult> {
     switch (args.operation) {
       case "read":
-        return this.read(args.hostIds ?? [], args.keys ?? [...HOST_SETTING_KEYS]);
+        return this.read(args.hostIds ?? [], args.keys ?? [...ASSISTANT_HOST_SETTING_KEYS]);
       case "preview":
         return this.preview(helpSessionId, args.hostIds ?? [], args.patch ?? {});
       case "apply":
@@ -225,7 +225,7 @@ export class HostSettingsRequests {
   }
 
   private async read(hostIds: HostId[], keys: HostSettingKey[]): Promise<HostSettingsResult> {
-    const wanted = HOST_SETTING_KEYS.filter((key) => keys.includes(key));
+    const wanted = ASSISTANT_HOST_SETTING_KEYS.filter((key) => keys.includes(key));
     const rows = await Promise.all(
       [...new Set(hostIds)].map(async (hostId) => (await this.readHost(hostId, wanted)).row)
     );
