@@ -34,7 +34,7 @@ import {
   draftAgentContextReference,
   getDraftRefusal,
 } from "@/services/agentHandoff/agentDraft";
-import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
+import { requestPaneFocus } from "./paneFocusRequest";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import {
   IMAGE_EXTENSIONS,
@@ -408,19 +408,14 @@ export function useTerminalFileTransfer(
     // paths that just landed (#11809). Once per accepted batch, and never for
     // a drop the guards discarded.
     //
-    // Order matters. The preference is what `TerminalPane`'s focus effect
-    // reads to decide which sub-surface the newly selected pane hands the
-    // keyboard to, so leaving it on "hybridInput" would route the keyboard to
-    // the input bar even though the paths went to the PTY.
-    //
-    // xterm is focused directly rather than through the panel focus registry:
-    // the drop proves this wrapper is mounted, the target is unambiguously
-    // xterm, and the Assistant and Dev Preview consoles have no registry
-    // entry under their PTY id to route through in the first place.
+    // The request is what keeps the newly selected pane's focus pass on the
+    // terminal rather than the input bar, since the paths went to the PTY. The
+    // Assistant and Dev Preview consoles have no pane under their PTY id to
+    // take it, so a request nothing took falls back to focusing xterm here:
+    // the drop proves this wrapper is mounted.
     const handOffFocus = () => {
-      usePanelStore.getState().setPreferredTerminalFocusTarget("xterm");
       onDropSelectRef.current?.();
-      peekTerminalService()?.focus(terminalId);
+      if (!requestPaneFocus(terminalId, "xterm")) peekTerminalService()?.focus(terminalId);
     };
 
     // The OS hands drop and clipboard-save an absolute path, so the agent
@@ -775,9 +770,8 @@ export function useTerminalFileTransfer(
         if (result.status !== "drafted") return;
         // Lands like a drop on the bar itself: pane selected, keyboard in the
         // bar rather than xterm, since that is where the text went.
-        usePanelStore.getState().setPreferredTerminalFocusTarget("hybridInput");
         onDropSelectRef.current?.();
-        focusPanelInput(terminalId);
+        requestPaneFocus(terminalId, "hybridInput");
         return;
       }
 

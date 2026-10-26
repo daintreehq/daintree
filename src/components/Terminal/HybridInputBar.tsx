@@ -88,6 +88,13 @@ import { tryComposerFleetBroadcast } from "./composerFleetBroadcast";
 import { PendingUploadChips } from "./uploads/PendingUploadChips";
 import { LazyUploadConfirmHost } from "./uploads/LazyUploadConfirmHost";
 import { registerPaneDropTarget } from "./uploads/paneDropRouting";
+import {
+  captureFocusEpoch,
+  isFocusEpochCurrent,
+  pendingPaneSurface,
+  requestPaneFocus,
+  requestedPaneSurface,
+} from "./paneFocusRequest";
 import { isRemoteWindow, useHostPlatform } from "@/hooks/useHostPlatform";
 import { isMac } from "@/lib/platform";
 import {
@@ -546,8 +553,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           if (!view || !canTakeDrop()) return false;
           const entries = sources.map(fileAttachmentEntryFromSource);
           if (entries.length === 0) return false;
-          usePanelStore.getState().setPreferredTerminalFocusTarget("hybridInput");
           view.focus();
+          requestPaneFocus(terminalId, "hybridInput");
           void insertFileAttachments(editorViewRef, view, entries, cwd, {
             uploadSurface,
             cwdProvider: readCwd,
@@ -1005,6 +1012,15 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
     const collapseEditor = () => setIsExpanded(false);
 
+    // Whether a deferred grab still has the keyboard to take. A current request
+    // naming this pane's surface decides; without one, the remembered surface
+    // still vetoes the grab as it always has.
+    const isHybridInputStillWanted = () => {
+      const requested = requestedPaneSurface(terminalId);
+      if (requested !== null) return requested === "hybridInput";
+      return usePanelStore.getState().preferredTerminalFocusTarget === "hybridInput";
+    };
+
     const focusEditor = () => {
       const view = editorViewRef.current;
       if (!view) return;
@@ -1014,10 +1030,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       // refocus there would undo the user leaving it in the meantime.
       if (isolated) return;
       const gen = focusGenerationRef.current;
+      const epoch = captureFocusEpoch();
       requestAnimationFrame(() => {
         if (focusGenerationRef.current !== gen) return;
+        if (!isFocusEpochCurrent(epoch)) return;
         if (editorViewRef.current !== view) return;
-        if (usePanelStore.getState().preferredTerminalFocusTarget !== "hybridInput") return;
+        if (!isHybridInputStillWanted()) return;
         if (isScratchpadElement(document.activeElement, terminalId)) return;
         view.focus();
       });
@@ -1032,14 +1050,20 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     useEffect(() => {
       claimMountFocusRef.current = () => {
         if (!isFocusedTerminal) return;
-        if (usePanelStore.getState().preferredTerminalFocusTarget !== "hybridInput") return;
+        // Only what the pane or a caller asked of this surface, and only while
+        // that is still current: a press, another pane, or focus taken by
+        // something else since the ask all end it.
+        if (pendingPaneSurface(terminalId) !== "hybridInput") return;
         // A bar that mounts late must not take the caret from the Scratchpad (#12835).
         if (isScratchpadElement(document.activeElement, terminalId)) return;
         focusEditor();
       };
     });
     useEffect(() => {
-      claimMountFocusRef.current();
+      // After the commit's remaining effects: a bar mounting in the same commit
+      // as its pane's arrival runs before the pane's focus pass has said where
+      // the keyboard goes.
+      queueMicrotask(() => claimMountFocusRef.current());
     }, []);
 
     const handleHistoryNavigation = (direction: "up" | "down"): boolean => {
@@ -1107,10 +1131,14 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           // caret — a background state change would otherwise move it.
           if (editorOwnsDomFocus(view)) return true;
           const gen = focusGenerationRef.current;
+          const epoch = captureFocusEpoch();
           requestAnimationFrame(() => {
             if (focusGenerationRef.current !== gen) return;
+            // A press or a newer request since the call (#8487).
+            if (!isFocusEpochCurrent(epoch)) return;
             if (editorViewRef.current !== view) return;
-            if (usePanelStore.getState().preferredTerminalFocusTarget !== "hybridInput") return;
+            if (!isHybridInputStillWanted()) return;
+            if (isScratchpadElement(document.activeElement, terminalId)) return;
             // The user can click into the draft between the call and this frame.
             if (editorOwnsDomFocus(view)) return;
             view.dispatch({

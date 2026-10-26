@@ -4,6 +4,7 @@ import {
   getTerminalFocusTarget,
   isLikelyAtSynthesizedPointer,
   resolvePaneFocusAction,
+  resolveTerminalPaneFocus,
   shouldRecordXtermFocusPreference,
   shouldShowHybridInputBar,
   shouldSuppressUnfocusedClick,
@@ -15,7 +16,69 @@ import {
  * pane the user had just left whenever the destination happened to be holding an
  * old selection — highlight on one pane, keystrokes into another (#11133).
  */
+describe("resolveTerminalPaneFocus", () => {
+  const pane = {
+    hasHybridInputSurface: true,
+    isInputDisabled: false,
+    hybridInputEnabled: true,
+    hasSelection: false,
+    xtermOwnsDomFocus: false,
+  };
+
+  it.each([
+    ["hybridInput", "xterm", "hybridInput"],
+    ["xterm", "hybridInput", "xterm"],
+    [null, "hybridInput", "hybridInput"],
+    [null, "xterm", "xterm"],
+  ] as const)(
+    "asked for %s with %s remembered, goes to %s",
+    (requested, preferredTarget, action) => {
+      expect(resolveTerminalPaneFocus({ ...pane, requested, preferredTarget })).toBe(action);
+    }
+  );
+
+  it("sends a requested hybrid input the pane can't take to the terminal", () => {
+    expect(
+      resolveTerminalPaneFocus({
+        ...pane,
+        requested: "hybridInput",
+        preferredTarget: "hybridInput",
+        isInputDisabled: true,
+      })
+    ).toBe("xterm");
+  });
+
+  // An xterm holding the keyboard and a selection keeps both for the pane's own
+  // pick, but not against a caller that named the hybrid input.
+  it.each([
+    ["hybridInput", "hybridInput"],
+    [null, "preserve"],
+  ] as const)("asked for %s past an owned xterm selection, does %s", (requested, action) => {
+    expect(
+      resolveTerminalPaneFocus({
+        ...pane,
+        requested,
+        preferredTarget: "hybridInput",
+        hasSelection: true,
+        xtermOwnsDomFocus: true,
+      })
+    ).toBe(action);
+  });
+});
+
 describe("resolvePaneFocusAction", () => {
+  // Preserving would report a handoff to the named surface that never happened.
+  it("takes the hybrid input past an xterm selection when a caller asked for it", () => {
+    expect(
+      resolvePaneFocusAction({
+        focusTarget: "hybridInput",
+        hasSelection: true,
+        xtermOwnsDomFocus: true,
+        requested: true,
+      })
+    ).toBe("hybridInput");
+  });
+
   it("keeps focus in xterm when it holds both the selection and the keyboard", () => {
     expect(
       resolvePaneFocusAction({

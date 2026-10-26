@@ -33,6 +33,7 @@ vi.mock("../fileAttachments", async (importOriginal) => {
 });
 
 import { HybridInputBar } from "../HybridInputBar";
+import { _resetPaneFocusRequestsForTesting } from "../paneFocusRequest";
 import {
   _resetPaneDropRoutingForTests,
   registerPaneDropTarget,
@@ -81,6 +82,8 @@ describe("HybridInputBar isolated", () => {
 
   afterEach(() => {
     cleanup();
+    // An accepted drop asks the pane for its bar, and the ask outlives the bar.
+    _resetPaneFocusRequestsForTesting();
     delete (window as { __DAINTREE_HOST_ID__?: unknown }).__DAINTREE_HOST_ID__;
   });
 

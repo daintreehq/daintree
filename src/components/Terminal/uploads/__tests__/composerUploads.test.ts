@@ -17,9 +17,7 @@ vi.mock("../../fileAttachments", async (importOriginal) => ({
 const pickHostPaths = vi.hoisted(() => vi.fn<() => Promise<string[] | null>>());
 vi.mock("@/components/HostFilePicker/hostFilePickerQueue", () => ({ pickHostPaths }));
 
-vi.mock("@/store/panelStore", () => ({
-  usePanelStore: { getState: () => ({ setPreferredTerminalFocusTarget: vi.fn() }) },
-}));
+vi.mock("../../paneFocusRequest", () => ({ requestPaneFocus: vi.fn(() => true) }));
 
 import { useDragDrop } from "../../hooks/useDragDrop";
 import { useAttachFiles, useAttachFromHost } from "../../hooks/useAttachFiles";

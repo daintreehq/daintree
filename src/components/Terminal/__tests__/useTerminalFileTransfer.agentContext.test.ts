@@ -19,17 +19,16 @@ vi.mock("@/services/TerminalInstanceService", () => {
     createTerminalPaintPlane: () => terminalInstanceService,
   };
 });
-const setPreferredTerminalFocusTarget = vi.hoisted(() => vi.fn<(target: string) => void>());
 vi.mock("@/store/panelStore", () => ({
-  usePanelStore: { getState: () => ({ setPreferredTerminalFocusTarget }) },
+  usePanelStore: { getState: () => ({}) },
 }));
-const { draftAgentContext, getDraftRefusal, focusPanelInput } = vi.hoisted(() => ({
+const { draftAgentContext, getDraftRefusal, requestPaneFocus } = vi.hoisted(() => ({
   draftAgentContext: vi.fn(),
   getDraftRefusal: vi.fn<(terminalId: string) => PluginSendToAgentRefusalReason | null>(),
-  focusPanelInput: vi.fn<(id: string) => boolean>(() => true),
+  requestPaneFocus: vi.fn<(paneId: string, surface: string) => boolean>(() => true),
 }));
 vi.mock("@/services/agentHandoff/agentDraft", () => ({ draftAgentContext, getDraftRefusal }));
-vi.mock("@/components/Panel/panelFocusRegistry", () => ({ focusPanelInput }));
+vi.mock("../paneFocusRequest", () => ({ requestPaneFocus }));
 
 import { useTerminalFileTransfer } from "../useTerminalFileTransfer";
 import { terminalClient } from "@/clients";
@@ -119,9 +118,11 @@ describe("useTerminalFileTransfer — agent context on the xterm surface", () =>
       sourceLabel: undefined,
     });
     expect(terminalClient.write).not.toHaveBeenCalled();
-    expect(setPreferredTerminalFocusTarget).toHaveBeenCalledWith("hybridInput");
     expect(onDropSelect).toHaveBeenCalledTimes(1);
-    expect(focusPanelInput).toHaveBeenCalledWith(TERMINAL_ID);
+    expect(requestPaneFocus).toHaveBeenCalledExactlyOnceWith(TERMINAL_ID, "hybridInput");
+    expect(onDropSelect.mock.invocationCallOrder[0]!).toBeLessThan(
+      requestPaneFocus.mock.invocationCallOrder[0]!
+    );
   });
 
   it("refuses the drag over a pane with no input bar, and writes nothing to it", () => {
@@ -141,7 +142,7 @@ describe("useTerminalFileTransfer — agent context on the xterm surface", () =>
     expect(drop.event.defaultPrevented).toBe(true);
     expect(terminalClient.write).not.toHaveBeenCalled();
     expect(onDropSelect).not.toHaveBeenCalled();
-    expect(focusPanelInput).not.toHaveBeenCalled();
+    expect(requestPaneFocus).not.toHaveBeenCalled();
   });
 
   it("refuses a drag that also carries files over a shell, rather than showing a file target", () => {

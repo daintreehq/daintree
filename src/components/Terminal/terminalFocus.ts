@@ -60,16 +60,48 @@ export type PaneFocusAction = "preserve" | "hybridInput" | "xterm";
  * buffer events, never to DOM blur.
  *
  * `preserve` therefore means "focus is already where it belongs" — callers
- * treat it as a completed handoff, not a failure.
+ * treat it as a completed handoff, not a failure. A caller that asked for the
+ * hybrid input by name gets it regardless: preserving would report a handoff
+ * to the surface it named that never happened.
  */
 export function resolvePaneFocusAction(options: {
   focusTarget: TerminalFocusTarget;
   hasSelection: boolean;
   xtermOwnsDomFocus: boolean;
+  /** The target is the surface a caller asked for, not the pane's own pick. */
+  requested?: boolean;
 }): PaneFocusAction {
   if (options.focusTarget !== "hybridInput") return "xterm";
-  if (options.hasSelection && options.xtermOwnsDomFocus) return "preserve";
+  if (!options.requested && options.hasSelection && options.xtermOwnsDomFocus) return "preserve";
   return "hybridInput";
+}
+
+/**
+ * What an agent pane does with focus: the surface a caller asked for, else the
+ * remembered one, gated on what the pane can take right now, then on whether
+ * its xterm holds a selection and the keyboard. A surface a caller asked for by
+ * name skips that last check.
+ */
+export function resolveTerminalPaneFocus(options: {
+  requested: TerminalFocusTarget | null;
+  preferredTarget: TerminalFocusTarget;
+  hasHybridInputSurface: boolean;
+  isInputDisabled: boolean;
+  hybridInputEnabled: boolean;
+  hasSelection: boolean;
+  xtermOwnsDomFocus: boolean;
+}): PaneFocusAction {
+  const { requested, preferredTarget, hasSelection, xtermOwnsDomFocus, ...availability } = options;
+  const focusTarget = getTerminalFocusTarget({
+    preferredTarget: requested ?? preferredTarget,
+    ...availability,
+  });
+  return resolvePaneFocusAction({
+    focusTarget,
+    requested: requested === focusTarget,
+    hasSelection,
+    xtermOwnsDomFocus,
+  });
 }
 
 /**

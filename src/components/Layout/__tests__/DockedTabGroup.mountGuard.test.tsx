@@ -169,7 +169,14 @@ vi.mock("@/components/Terminal/TerminalIcon", () => ({
 }));
 
 vi.mock("@/components/Terminal/terminalFocus", () => ({
-  getTerminalFocusTarget: () => "terminal",
+  getTerminalFocusTarget: ({ preferredTarget }: { preferredTarget?: string }) =>
+    preferredTarget ?? "terminal",
+}));
+
+// The real module reaches the panel store graph this suite stubs out.
+let mockRequest: { id: string; surface: string } | null = null;
+vi.mock("@/components/Terminal/paneFocusRequest", () => ({
+  requestedPaneSurface: (id: string) => (mockRequest?.id === id ? mockRequest.surface : null),
 }));
 
 // Active Popover mock: captures the Radix callbacks. Focus-driven dismissal is
@@ -345,11 +352,32 @@ describe("DockedTabGroup mount-time close guard (#6602)", () => {
     capturedOnOpenChange = null;
     capturedOnOpenAutoFocus = null;
     capturedOnFocusOutside = null;
+    mockRequest = null;
     vi.mocked(terminalInstanceService.focus).mockClear();
   });
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  // A drop or type-anywhere that asked the showing tab for its hybrid input
+  // keeps it; an ask of a tab that isn't showing changes nothing.
+  it.each([
+    ["the active tab", "t-2", false],
+    ["a tab that isn't showing", "t-1", true],
+  ])("leaves a hybrid input asked of %s to its pane", (_, askedId, focusesTerminal) => {
+    mockActiveDockTerminalId = "t-2";
+    mockTabGroups.set("g-1", makeGroup(["t-1", "t-2"], "t-2"));
+    mockRequest = { id: askedId, surface: "hybridInput" };
+    const panels = [makePanel({ id: "t-1" }), makePanel({ id: "t-2" })];
+
+    render(<DockedTabGroup group={makeGroup(["t-1", "t-2"], "t-2")} panels={panels} />);
+
+    if (focusesTerminal) {
+      expect(terminalInstanceService.focus).toHaveBeenCalledWith("t-2");
+    } else {
+      expect(terminalInstanceService.focus).not.toHaveBeenCalled();
+    }
   });
 
   it("wires onFocusOutside to the focus-dismissal guard and never closes on mount", () => {
