@@ -453,7 +453,9 @@ describe("VoiceInputSettingsTab dictionary", () => {
     fireEvent.change(input, { target: { value: "  Daintree " } });
     fireEvent.keyDown(input, { key: "Enter" });
 
-    await waitFor(() => expect(screen.getByRole("button", { name: "Remove Daintree" })).toBeTruthy());
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Remove Daintree" })).toBeTruthy()
+    );
     expect(api.dictionary.add).toHaveBeenCalledWith({ term: "Daintree" });
     // A term main already held, added from elsewhere, shows up too.
     expect(screen.getByRole("button", { name: "Remove Zustand" })).toBeTruthy();
@@ -465,7 +467,9 @@ describe("VoiceInputSettingsTab dictionary", () => {
   it("shows the queue main holds after an accept, keeping a word learned meanwhile", async () => {
     const api = install(
       {
-        suggestedDictionary: [{ word: "Zustand", utterance: "zoo stand", suggestedAt: 1, frequency: 1 }],
+        suggestedDictionary: [
+          { word: "Zustand", utterance: "zoo stand", suggestedAt: 1, frequency: 1 },
+        ],
       },
       {},
       {
@@ -481,7 +485,9 @@ describe("VoiceInputSettingsTab dictionary", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Add Zustand to dictionary" }));
 
-    await waitFor(() => expect(screen.getByRole("button", { name: "Remove Zustand" })).toBeTruthy());
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Remove Zustand" })).toBeTruthy()
+    );
     expect(api.dictionary.acceptSuggestion).toHaveBeenCalledWith({ word: "Zustand" });
     expect(screen.getByRole("button", { name: "Add Tailwind to dictionary" })).toBeTruthy();
     expect(api.setSettings).not.toHaveBeenCalled();
@@ -507,7 +513,9 @@ describe("VoiceInputSettingsTab dictionary", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
 
-    await waitFor(() => expect(screen.getByRole("button", { name: "Remove Daintree" })).toBeTruthy());
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Remove Daintree" })).toBeTruthy()
+    );
     expect(add).toHaveBeenCalledTimes(2);
     expect(input.value).toBe("");
     expect(container.textContent).not.toContain("back to its previous value");

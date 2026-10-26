@@ -1,8 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type {
-  VoiceDictionaryState,
-  VoiceInputSettings,
-} from "../../../../shared/types/ipc/api.js";
+import type { VoiceDictionaryState, VoiceInputSettings } from "../../../../shared/types/ipc/api.js";
 
 const ipcMainMock = vi.hoisted(() => ({
   handle: vi.fn(),
@@ -68,7 +65,9 @@ import { registerVoiceDictionaryHandlers } from "../voiceDictionary.js";
 import { VOICE_DICTIONARY_METHOD_CHANNELS } from "../voiceDictionary.preload.js";
 import { registerVoiceInputHandlers } from "../voiceInput.js";
 
-const sender = { sender: { id: 1, once: vi.fn(), removeListener: vi.fn(), isDestroyed: () => false } };
+const sender = {
+  sender: { id: 1, once: vi.fn(), removeListener: vi.fn(), isDestroyed: () => false },
+};
 
 function handler(channel: string) {
   const call = ipcMainMock.handle.mock.calls.find(([c]) => c === channel);
@@ -155,7 +154,9 @@ describe("voiceDictionary operations", () => {
   it("accepting a suggestion keeps a word learned after the page loaded", async () => {
     disk.state.data.voiceInput = {
       ...stored(),
-      suggestedDictionary: [{ word: "Zustand", utterance: "zoo stand", suggestedAt: 1, frequency: 1 }],
+      suggestedDictionary: [
+        { word: "Zustand", utterance: "zoo stand", suggestedAt: 1, frequency: 1 },
+      ],
     };
     // The settings page reads the queue, then a send learns another word.
     await call<VoiceInputSettings>("voice-input:get-settings");

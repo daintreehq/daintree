@@ -33,9 +33,7 @@ describe("migration036 — structured voice dictionary entries", () => {
         enabled: true,
         language: "en",
         customDictionary: ["Daintree", "Zustand", "node-pty", "xterm"],
-        suggestedDictionary: [
-          { word: "Vite", utterance: "veet", suggestedAt: 1, frequency: 2 },
-        ],
+        suggestedDictionary: [{ word: "Vite", utterance: "veet", suggestedAt: 1, frequency: 2 }],
       },
     });
 
@@ -66,7 +64,9 @@ describe("migration036 — structured voice dictionary entries", () => {
 
   it("keeps the first spelling of a repeat that differs only in case, and drops blanks and non-strings", () => {
     const { data } = run({
-      voiceInput: { customDictionary: ["Daintree", "", "   ", 42, null, "daintree", "DAINTREE", "Go"] },
+      voiceInput: {
+        customDictionary: ["Daintree", "", "   ", 42, null, "daintree", "DAINTREE", "Go"],
+      },
     });
 
     const terms = (data.voiceInput as { dictionary: { term: string }[] }).dictionary.map(

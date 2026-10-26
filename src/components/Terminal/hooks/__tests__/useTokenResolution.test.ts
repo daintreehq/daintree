@@ -35,7 +35,10 @@ vi.mock("@/store/commandHistoryStore", () => ({
 const voiceState = vi.hoisted(() => ({
   value: {
     learnFromCorrections: false,
-    panelBuffers: {} as Record<string, { sessionCorrectedText?: string; sessionDraftStart?: number }>,
+    panelBuffers: {} as Record<
+      string,
+      { sessionCorrectedText?: string; sessionDraftStart?: number }
+    >,
     setSessionCorrectedText: (_panelId: string, _text: string | null) => {},
   },
 }));
@@ -509,24 +512,30 @@ describe("useTokenResolution.sendText — targeted submit", () => {
 
 describe("useTokenResolution dictionary learning", () => {
   const defaults = { ...voiceState.value };
+  const installElectron = (value: Record<string, unknown>) =>
+    Object.defineProperty(window, "electron", { value, configurable: true, writable: true });
 
   beforeEach(() => {
     voiceState.value = { ...defaults };
   });
 
   it("reports a corrected mishearing to main instead of rewriting settings itself", async () => {
-    const recordSuggestions = vi.fn().mockResolvedValue({ dictionary: [], suggestedDictionary: [] });
+    const recordSuggestions = vi
+      .fn()
+      .mockResolvedValue({ dictionary: [], suggestedDictionary: [] });
     const getSettings = vi.fn();
     const setSettings = vi.fn();
-    (window as unknown as { electron: unknown }).electron = {
+    installElectron({
       git: { getWorkingDiff: vi.fn() },
       voiceInput: { getSettings, setSettings },
       voiceDictionary: { recordSuggestions },
-    };
+    });
     const setSessionCorrectedText = vi.fn();
     voiceState.value = {
       learnFromCorrections: true,
-      panelBuffers: { t1: { sessionCorrectedText: "use zoo stand for state", sessionDraftStart: 0 } },
+      panelBuffers: {
+        t1: { sessionCorrectedText: "use zoo stand for state", sessionDraftStart: 0 },
+      },
       setSessionCorrectedText,
     };
 
@@ -545,14 +554,16 @@ describe("useTokenResolution dictionary learning", () => {
   });
 
   it("still sends when main can't be reached", async () => {
-    (window as unknown as { electron: unknown }).electron = {
+    installElectron({
       git: { getWorkingDiff: vi.fn() },
       voiceDictionary: { recordSuggestions: vi.fn().mockRejectedValue(new Error("gone")) },
-    };
+    });
     voiceState.value = {
       ...defaults,
       learnFromCorrections: true,
-      panelBuffers: { t1: { sessionCorrectedText: "use zoo stand for state", sessionDraftStart: 0 } },
+      panelBuffers: {
+        t1: { sessionCorrectedText: "use zoo stand for state", sessionDraftStart: 0 },
+      },
     };
 
     const { sendText, onSend } = setup();

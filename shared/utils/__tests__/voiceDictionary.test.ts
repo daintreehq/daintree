@@ -67,9 +67,9 @@ describe("addDictionaryEntry", () => {
     expect(() => addDictionaryEntry([], { term: "ok", heardAs: [tooLong] }, T1)).toThrow(
       /longer than/
     );
-    expect(addDictionaryEntry([], { term: "a".repeat(MAX_DICTIONARY_TERM_LENGTH) }, T1)).toHaveLength(
-      1
-    );
+    expect(
+      addDictionaryEntry([], { term: "a".repeat(MAX_DICTIONARY_TERM_LENGTH) }, T1)
+    ).toHaveLength(1);
   });
 });
 
@@ -91,7 +91,9 @@ describe("updateDictionaryEntry", () => {
   });
 
   it("replaces the heard-as forms", () => {
-    const next = updateDictionaryEntry(entries, "zustand", { heardAs: ["zoo stand", "Zoo Stand", "zu stand"] });
+    const next = updateDictionaryEntry(entries, "zustand", {
+      heardAs: ["zoo stand", "Zoo Stand", "zu stand"],
+    });
     expect(next[1]!.heardAs).toEqual(["zoo stand", "zu stand"]);
   });
 
@@ -120,7 +122,11 @@ describe("sanitizeDictionary", () => {
   it("folds a repeat that differs only in case into the first, merging its heard-as forms", () => {
     expect(
       sanitizeDictionary(
-        [entry("Zustand", { heardAs: ["zoo stand"] }), entry("zustand", { heardAs: ["zu stand"] }), "ZUSTAND"],
+        [
+          entry("Zustand", { heardAs: ["zoo stand"] }),
+          entry("zustand", { heardAs: ["zu stand"] }),
+          "ZUSTAND",
+        ],
         T1
       )
     ).toEqual([entry("Zustand", { heardAs: ["zoo stand", "zu stand"] })]);
@@ -212,7 +218,14 @@ describe("suggestions", () => {
       { word: "Vite", utterance: "vight", suggestedAt: T1, frequency: 2 },
     ]);
 
-    expect(mergeSuggestions([{ word: "Daintree", original: "dane tree" }], [entry("Daintree")], queued, T1)).toBeNull();
+    expect(
+      mergeSuggestions(
+        [{ word: "Daintree", original: "dane tree" }],
+        [entry("Daintree")],
+        queued,
+        T1
+      )
+    ).toBeNull();
 
     const full = Array.from({ length: MAX_SUGGESTED_WORDS }, (_, i) => suggestion(`word${i}`));
     const capped = mergeSuggestions([{ word: "Newest", original: "new est" }], [], full, T1)!;

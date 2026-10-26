@@ -4,10 +4,7 @@ import { store } from "../../store.js";
 import { defineIpcNamespace, opValidated } from "../define.js";
 import { getVoiceSettings } from "./voiceInput.js";
 import { VOICE_DICTIONARY_METHOD_CHANNELS } from "./voiceDictionary.preload.js";
-import type {
-  VoiceDictionaryState,
-  VoiceInputSettings,
-} from "../../../shared/types/ipc/api.js";
+import type { VoiceDictionaryState, VoiceInputSettings } from "../../../shared/types/ipc/api.js";
 import {
   acceptSuggestion,
   addDictionaryEntry,

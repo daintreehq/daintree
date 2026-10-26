@@ -72,10 +72,12 @@ export function sanitizeDictionary(raw: unknown, now: number): VoiceDictionaryEn
     const record =
       typeof item === "string" ? { term: item } : item && typeof item === "object" ? item : null;
     if (!record) continue;
-    const { term: rawTerm, heardAs: rawHeardAs, source, addedAt } = record as Record<
-      string,
-      unknown
-    >;
+    const {
+      term: rawTerm,
+      heardAs: rawHeardAs,
+      source,
+      addedAt,
+    } = record as Record<string, unknown>;
     const term = normalizePhrase(rawTerm);
     if (!term) continue;
     const heardAs = Array.isArray(rawHeardAs)
@@ -86,17 +88,22 @@ export function sanitizeDictionary(raw: unknown, now: number): VoiceDictionaryEn
       : [];
     const existing = indexByTerm.get(fold(term));
     if (existing !== undefined) {
-      out[existing] = { ...out[existing]!, heardAs: appendHeardAs(out[existing]!.heardAs, heardAs) };
+      out[existing] = {
+        ...out[existing]!,
+        heardAs: appendHeardAs(out[existing]!.heardAs, heardAs),
+      };
       continue;
     }
     indexByTerm.set(fold(term), out.length);
     out.push({
       term,
       heardAs,
-      source: typeof source === "string" && SOURCES.has(source)
-        ? (source as VoiceDictionarySource)
-        : "manual",
-      addedAt: typeof addedAt === "number" && Number.isFinite(addedAt) && addedAt >= 0 ? addedAt : now,
+      source:
+        typeof source === "string" && SOURCES.has(source)
+          ? (source as VoiceDictionarySource)
+          : "manual",
+      addedAt:
+        typeof addedAt === "number" && Number.isFinite(addedAt) && addedAt >= 0 ? addedAt : now,
     });
   }
   return out;

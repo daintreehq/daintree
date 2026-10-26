@@ -430,9 +430,7 @@ export function VoiceInputSettingsTab() {
   // The removed chip took focus with it; hand it to the field a keyboard user adds from.
   const removeDictionaryWord = (term: string) => {
     dictionaryInputRef.current?.focus();
-    void changeDictionary("The dictionary", () =>
-      window.electron.voiceDictionary.remove({ term })
-    );
+    void changeDictionary("The dictionary", () => window.electron.voiceDictionary.remove({ term }));
   };
 
   const acceptSuggestion = (word: string) => {
@@ -444,7 +442,7 @@ export function VoiceInputSettingsTab() {
 
   const dismissSuggestion = (word: string) => {
     dictionaryInputRef.current?.focus();
-    void changeDictionary("The suggestions", () =>
+    void changeDictionary("The suggestion list", () =>
       window.electron.voiceDictionary.dismissSuggestion({ word })
     );
   };
