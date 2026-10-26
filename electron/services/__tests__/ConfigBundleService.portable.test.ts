@@ -176,6 +176,27 @@ describe("agent settings travel by field", () => {
     });
   });
 
+  it("never exports a toolbar pin as agent configuration (#14702)", async () => {
+    agents().claude.pinned = true;
+    const { agentSettings } = await makeService().collect(["agentSettings"]);
+    expect((agentSettings as Record<string, Record<string, unknown>>).claude).not.toHaveProperty(
+      "pinned"
+    );
+  });
+
+  it("drops a pin an older Shell or file carries, and one left on the target (#14702)", async () => {
+    agents().claude.pinned = false;
+    const report = await makeService().apply({
+      agentSettings: { claude: { customFlags: "--x", pinned: true } },
+    });
+
+    expect(report.outcome).toBe("applied");
+    expect(agents().claude.customFlags).toBe("--x");
+    expect(agents().claude).not.toHaveProperty("pinned");
+    // A pin is this machine's, so a copy never writes one here either.
+    expect(storeState.current).not.toHaveProperty("agentToolbarPins");
+  });
+
   it("ignores bypass fields an old file carries inside agent settings", async () => {
     await makeService().apply({
       agentSettings: {

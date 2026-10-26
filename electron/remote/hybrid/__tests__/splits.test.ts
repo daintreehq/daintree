@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
     gpuWebGLHardware: true,
     systemTmpDir: "/client/tmp",
     keybindingOverrides: { "panel.close": ["Cmd+W"] },
+    agentToolbarPins: { pins: { claude: true }, revision: 2 },
     settingsRecovery: null,
   })),
   composeBootResult: vi.fn((hydrate: Record<string, unknown>) => ({
@@ -261,6 +262,7 @@ describe("app:hydrate and app:boot", () => {
     hostTmpDir: "/tmp",
     projects: [{ id: "p1" }],
     agentDefaults: { assistantAgentId: "codex", defaultAgent: null },
+    agentToolbarPins: { pins: { claude: false, gemini: true }, revision: 9 },
   };
 
   it("takes host fields from the host and Shell fields from here", async () => {
@@ -293,6 +295,8 @@ describe("app:hydrate and app:boot", () => {
     });
     // The assistant agent and default agent are the host's (#13345).
     expect(result.agentDefaults).toEqual({ assistantAgentId: "codex", defaultAgent: null });
+    // The toolbar is this screen's, so its agent pins are this machine's (#14702).
+    expect(result.agentToolbarPins).toEqual({ pins: { claude: true }, revision: 2 });
   });
 
   it("boots from the host hydrate with this machine's crash gate", async () => {

@@ -55,16 +55,21 @@ const setAgentPinnedMock = vi.fn().mockResolvedValue(undefined);
 
 vi.mock("@/store/agentSettingsStore", () => ({
   useAgentSettingsStore: Object.assign(
-    (selector: (s: Record<string, unknown>) => unknown) =>
-      selector({ settings: mockSettings, setAgentPinned: setAgentPinnedMock }),
+    (selector: (s: Record<string, unknown>) => unknown) => selector({ settings: mockSettings }),
     {
       getState: () => ({
-        setAgentPinned: setAgentPinnedMock,
         updateWorktreePreset: updateWorktreePresetMock,
         updateAgent: updateAgentMock,
       }),
     }
   ),
+}));
+
+// The pin is this machine's (#14702), so the unpin must land in the pins
+// store, never in the host's agent settings.
+vi.mock("@/store/agentToolbarPinsStore", () => ({
+  useAgentToolbarPinsStore: (selector: (s: Record<string, unknown>) => unknown) =>
+    selector({ pins: { claude: true }, revision: 0, setAgentPinned: setAgentPinnedMock }),
 }));
 
 vi.mock("@/store/ccrPresetsStore", () => ({
@@ -2007,7 +2012,7 @@ describe("AgentButton right-click unpin — issue #9825", () => {
     updateWorktreePresetMock.mockClear();
     updateAgentMock.mockClear();
     setAgentPinnedMock.mockClear();
-    mockSettings = settingsWith({ claude: { pinned: true } });
+    mockSettings = settingsWith({ claude: {} });
     mockActiveWorktreeId = null;
     mockCcrPresetsByAgent = {};
     mockMergedPresetsFn = () => [];

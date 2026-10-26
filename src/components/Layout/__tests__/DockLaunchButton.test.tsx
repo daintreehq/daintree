@@ -117,8 +117,9 @@ vi.mock("@/services/ActionService", () => ({
 // Pin state. `dispatchToolbarVisibility` is deliberately NOT mocked — it is the
 // seam Settings → Toolbar shares, and mocking it would let the launcher write
 // the pin any way it liked while the suite still passed.
-let mockAgentSettings: { agents?: Record<string, { pinned?: boolean; presetId?: string }> } | null =
-  { agents: {} };
+let mockAgentSettings: { agents?: Record<string, { presetId?: string }> } | null = { agents: {} };
+// This machine's toolbar pins (#14702).
+let mockAgentPins: Record<string, boolean> = {};
 let mockAgentAvailability: Record<string, string> = {};
 let mockToolbarLayout: {
   pinnedButtons: Record<string, boolean>;
@@ -146,12 +147,26 @@ const refreshAvailabilityMock = vi.fn(() => Promise.resolve());
 vi.mock("@/store/agentSettingsStore", () => {
   const getState = () => ({
     settings: mockAgentSettings,
-    setAgentPinned: setAgentPinnedMock,
     updateWorktreePreset: updateWorktreePresetMock,
     updateAgent: updateAgentMock,
   });
   return {
     useAgentSettingsStore: Object.assign(
+      (selector: (s: ReturnType<typeof getState>) => unknown) => selector(getState()),
+      { getState }
+    ),
+  };
+});
+
+vi.mock("@/store/agentToolbarPinsStore", async (importOriginal) => {
+  const getState = () => ({
+    pins: mockAgentPins,
+    revision: 0,
+    setAgentPinned: setAgentPinnedMock,
+  });
+  return {
+    ...(await importOriginal<typeof import("@/store/agentToolbarPinsStore")>()),
+    useAgentToolbarPinsStore: Object.assign(
       (selector: (s: ReturnType<typeof getState>) => unknown) => selector(getState()),
       { getState }
     ),
@@ -505,6 +520,7 @@ beforeEach(() => {
   popoverSide = undefined;
   popoverModal = undefined;
   mockAgentSettings = { agents: {} };
+  mockAgentPins = {};
   mockAgentAvailability = {};
   mockSeenAgentIds = [];
   refreshAvailabilityMock.mockClear();
@@ -1961,7 +1977,7 @@ describe("DockLaunchButton", () => {
     });
 
     it("lets an explicit pin outrank a missing position, and an explicit hide outrank one", () => {
-      mockAgentSettings = { agents: { claude: { pinned: true }, gemini: { pinned: false } } };
+      mockAgentPins = { claude: true, gemini: false };
       mockToolbarLayout = { pinnedButtons: {}, leftButtons: ["gemini"], rightButtons: [] };
       const { container } = renderButton();
 

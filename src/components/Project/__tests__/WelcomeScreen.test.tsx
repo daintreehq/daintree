@@ -73,7 +73,7 @@ const {
   dismissSetupBannerMock,
   setAgentPinnedMock,
   agentDiscoveryState,
-  agentSettingsState,
+  agentPinsState,
   cliAvailabilityState,
 } = vi.hoisted(() => ({
   markAgentsSeenMock: vi.fn(() => Promise.resolve()),
@@ -86,8 +86,9 @@ const {
     welcomeCardDismissed: false,
     setupBannerDismissed: false,
   },
-  agentSettingsState: {
-    settings: null as { agents: Record<string, { pinned?: boolean }> } | null,
+  // This machine's toolbar pins (#14702); null until they've loaded.
+  agentPinsState: {
+    pins: null as Record<string, boolean> | null,
   },
   cliAvailabilityState: {
     availability: {} as Record<string, "ready" | "installed" | "missing">,
@@ -107,12 +108,20 @@ vi.mock("@/hooks/app/useAgentDiscoveryOnboarding", () => ({
   }),
 }));
 
-vi.mock("@/store/agentSettingsStore", () => ({
-  useAgentSettingsStore: (
-    selector: (
-      s: typeof agentSettingsState & { setAgentPinned: typeof setAgentPinnedMock }
-    ) => unknown
-  ) => selector({ ...agentSettingsState, setAgentPinned: setAgentPinnedMock }),
+vi.mock("@/store/agentToolbarPinsStore", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/store/agentToolbarPinsStore")>()),
+  useAgentToolbarPinsStore: (
+    selector: (s: {
+      pins: Record<string, boolean>;
+      revision: number;
+      setAgentPinned: typeof setAgentPinnedMock;
+    }) => unknown
+  ) =>
+    selector({
+      pins: agentPinsState.pins ?? {},
+      revision: agentPinsState.pins ? 0 : -1,
+      setAgentPinned: setAgentPinnedMock,
+    }),
 }));
 
 vi.mock("@/store/cliAvailabilityStore", () => ({
@@ -315,7 +324,7 @@ describe("WelcomeScreen", () => {
     // Default to dismissed in existing card/layout suites so they continue
     // to exercise only the behavior they were written for.
     agentDiscoveryState.setupBannerDismissed = true;
-    agentSettingsState.settings = null;
+    agentPinsState.pins = null;
     cliAvailabilityState.availability = {};
     cliAvailabilityState.hasRealData = false;
   });
@@ -599,15 +608,15 @@ describe("WelcomeScreen", () => {
     expect(current?.textContent).toContain("Run two agents in parallel");
   });
 
-  // --- Cold-start flash (agentSettings hydration) ---
+  // --- Cold-start flash (agent pins hydration) ---
 
-  it("does not render welcome card when agentSettings is null", () => {
+  it("does not render welcome card before the agent pins load", () => {
     agentDiscoveryState.loaded = true;
     agentDiscoveryState.setupBannerDismissed = true;
     agentDiscoveryState.welcomeCardDismissed = false;
     cliAvailabilityState.hasRealData = true;
     cliAvailabilityState.availability = { claude: "ready" };
-    agentSettingsState.settings = null;
+    agentPinsState.pins = null;
 
     render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
 
@@ -892,7 +901,7 @@ describe("WelcomeScreen", () => {
     it("does not render when the card has been dismissed", () => {
       cliAvailabilityState.hasRealData = true;
       cliAvailabilityState.availability = { claude: "ready" };
-      agentSettingsState.settings = { agents: {} };
+      agentPinsState.pins = {};
       agentDiscoveryState.welcomeCardDismissed = true;
       render(<WelcomeScreen gettingStarted={makeGettingStarted(null)} />);
       expect(screen.queryByText(/Installed agents found/)).toBeNull();
@@ -905,7 +914,7 @@ describe("WelcomeScreen", () => {
         codex: "ready",
         gemini: "missing",
       };
-      agentSettingsState.settings = { agents: {} };
+      agentPinsState.pins = {};
       render(<WelcomeScreen gettingStarted={makeGettingStarted(null)} />);
       expect(screen.getByText(/Installed agents found/)).toBeTruthy();
       expect(screen.getByText("Claude")).toBeTruthy();
@@ -916,7 +925,7 @@ describe("WelcomeScreen", () => {
     it("pins all ready agents then dismisses when Pin all is clicked", async () => {
       cliAvailabilityState.hasRealData = true;
       cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
-      agentSettingsState.settings = { agents: {} };
+      agentPinsState.pins = {};
       render(<WelcomeScreen gettingStarted={makeGettingStarted(null)} />);
 
       const btn = screen.getByTestId("welcome-card-pin-all");
@@ -933,7 +942,7 @@ describe("WelcomeScreen", () => {
     it("does not pin agents when the Not now link is clicked but still dismisses", async () => {
       cliAvailabilityState.hasRealData = true;
       cliAvailabilityState.availability = { claude: "ready" };
-      agentSettingsState.settings = { agents: {} };
+      agentPinsState.pins = {};
       render(<WelcomeScreen gettingStarted={makeGettingStarted(null)} />);
 
       await act(async () => {
@@ -947,7 +956,7 @@ describe("WelcomeScreen", () => {
     it("keeps the card visible and surfaces an error if any pin fails", async () => {
       cliAvailabilityState.hasRealData = true;
       cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
-      agentSettingsState.settings = { agents: {} };
+      agentPinsState.pins = {};
       setAgentPinnedMock.mockImplementationOnce(() => Promise.reject(new Error("IPC down")));
 
       render(<WelcomeScreen gettingStarted={makeGettingStarted(null)} />);
@@ -1029,7 +1038,7 @@ describe("WelcomeScreen", () => {
       agentDiscoveryState.welcomeCardDismissed = false;
       cliAvailabilityState.hasRealData = true;
       cliAvailabilityState.availability = { claude: "ready" };
-      agentSettingsState.settings = { agents: {} };
+      agentPinsState.pins = {};
 
       render(<WelcomeScreen gettingStarted={makeGettingStarted(allIncomplete)} />);
 
@@ -1044,7 +1053,7 @@ describe("WelcomeScreen", () => {
       agentDiscoveryState.welcomeCardDismissed = false;
       cliAvailabilityState.hasRealData = true;
       cliAvailabilityState.availability = { claude: "ready" };
-      agentSettingsState.settings = { agents: {} };
+      agentPinsState.pins = {};
 
       render(<WelcomeScreen gettingStarted={makeGettingStarted(allIncomplete)} />);
 
@@ -1058,7 +1067,7 @@ describe("WelcomeScreen", () => {
       agentDiscoveryState.welcomeCardDismissed = false;
       cliAvailabilityState.hasRealData = true;
       cliAvailabilityState.availability = { claude: "ready" };
-      agentSettingsState.settings = { agents: {} };
+      agentPinsState.pins = {};
 
       render(<WelcomeScreen gettingStarted={makeGettingStarted(dismissed)} />);
 
@@ -1095,7 +1104,7 @@ describe("WelcomeScreen", () => {
       agentDiscoveryState.welcomeCardDismissed = false;
       cliAvailabilityState.hasRealData = true;
       cliAvailabilityState.availability = { claude: "ready" };
-      agentSettingsState.settings = { agents: { claude: { pinned: true } } };
+      agentPinsState.pins = { claude: true };
 
       render(<WelcomeScreen gettingStarted={makeGettingStarted(allIncomplete)} />);
 
@@ -1109,7 +1118,7 @@ describe("WelcomeScreen", () => {
       agentDiscoveryState.welcomeCardDismissed = false;
       cliAvailabilityState.hasRealData = true;
       cliAvailabilityState.availability = { claude: "ready" };
-      agentSettingsState.settings = { agents: {} };
+      agentPinsState.pins = {};
 
       render(<WelcomeScreen gettingStarted={makeGettingStarted(allIncomplete)} />);
 
@@ -1120,10 +1129,10 @@ describe("WelcomeScreen", () => {
   });
 
   describe("isAgentWelcomeCardEligible", () => {
-    it("returns false when agentSettings is null", () => {
+    it("returns false before the agent pins load", () => {
       expect(
         isAgentWelcomeCardEligible({
-          agentSettings: null,
+          agentPins: null,
           hasRealData: true,
           welcomeCardDismissed: false,
           availability: { claude: "ready" },
@@ -1134,7 +1143,7 @@ describe("WelcomeScreen", () => {
     it("returns false when hasRealData is false", () => {
       expect(
         isAgentWelcomeCardEligible({
-          agentSettings: { agents: {} },
+          agentPins: {},
           hasRealData: false,
           welcomeCardDismissed: false,
           availability: { claude: "ready" },
@@ -1145,7 +1154,7 @@ describe("WelcomeScreen", () => {
     it("returns false when welcomeCardDismissed is true", () => {
       expect(
         isAgentWelcomeCardEligible({
-          agentSettings: { agents: {} },
+          agentPins: {},
           hasRealData: true,
           welcomeCardDismissed: true,
           availability: { claude: "ready" },
@@ -1156,7 +1165,7 @@ describe("WelcomeScreen", () => {
     it("returns false when no built-in agent is launchable", () => {
       expect(
         isAgentWelcomeCardEligible({
-          agentSettings: { agents: {} },
+          agentPins: {},
           hasRealData: true,
           welcomeCardDismissed: false,
           availability: { claude: "missing", codex: "missing" },
@@ -1167,7 +1176,7 @@ describe("WelcomeScreen", () => {
     it("returns false when a built-in agent is already pinned", () => {
       expect(
         isAgentWelcomeCardEligible({
-          agentSettings: { agents: { claude: { pinned: true } } },
+          agentPins: { claude: true },
           hasRealData: true,
           welcomeCardDismissed: false,
           availability: { claude: "ready" },
@@ -1178,7 +1187,7 @@ describe("WelcomeScreen", () => {
     it("returns true when ready agents exist and none are pinned", () => {
       expect(
         isAgentWelcomeCardEligible({
-          agentSettings: { agents: {} },
+          agentPins: {},
           hasRealData: true,
           welcomeCardDismissed: false,
           availability: { claude: "ready", codex: "ready" },
@@ -1189,7 +1198,7 @@ describe("WelcomeScreen", () => {
     it("returns true for unauthenticated agent (launchable)", () => {
       expect(
         isAgentWelcomeCardEligible({
-          agentSettings: { agents: {} },
+          agentPins: {},
           hasRealData: true,
           welcomeCardDismissed: false,
           availability: { claude: "unauthenticated" },
@@ -1200,7 +1209,7 @@ describe("WelcomeScreen", () => {
     it("returns false for blocked agent (not launchable)", () => {
       expect(
         isAgentWelcomeCardEligible({
-          agentSettings: { agents: {} },
+          agentPins: {},
           hasRealData: true,
           welcomeCardDismissed: false,
           availability: { claude: "blocked" },
@@ -1211,7 +1220,7 @@ describe("WelcomeScreen", () => {
     it("ignores custom agent pins when checking built-in eligibility", () => {
       expect(
         isAgentWelcomeCardEligible({
-          agentSettings: { agents: { "my-custom-agent": { pinned: true } } },
+          agentPins: { "my-custom-agent": true },
           hasRealData: true,
           welcomeCardDismissed: false,
           availability: { claude: "ready" },

@@ -38,9 +38,13 @@ vi.mock("framer-motion", () => {
 });
 
 const agentSettingsStoreState = {
-  setAgentPinned: vi.fn(() => Promise.resolve()),
   setGlobalSkipPermissions: setGlobalSkipPermissionsMock,
   initialize: vi.fn(() => Promise.resolve()),
+};
+const agentToolbarPinsStoreState = {
+  pins: {},
+  revision: 0,
+  setAgentPinned: vi.fn(() => Promise.resolve()),
 };
 vi.mock("@/store", () => ({
   useAgentSettingsStore: Object.assign(
@@ -48,6 +52,8 @@ vi.mock("@/store", () => ({
       selector ? selector(agentSettingsStoreState) : agentSettingsStoreState,
     { getState: () => agentSettingsStoreState }
   ),
+  useAgentToolbarPinsStore: (selector: (s: unknown) => unknown) =>
+    selector(agentToolbarPinsStoreState),
 }));
 
 vi.mock("@/store/cliAvailabilityStore", () => ({
