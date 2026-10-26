@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { PtyClient } from "../PtyClient.js";
+import { MAX_DICTIONARY_KEYTERMS, MAX_KEYTERMS } from "../../../shared/config/voiceKeyterms.js";
 import {
   assembleKeyterms,
   formatKeytermPrompt,
@@ -218,13 +219,46 @@ describe("extractTerminalIdentifiers", () => {
 });
 
 describe("assembleKeyterms", () => {
-  it("preserves custom dictionary with highest priority", async () => {
+  it("preserves custom dictionary with highest priority, newest first", async () => {
     const result = await assembleKeyterms({
       customDictionary: ["Daintree", "Whisper", "xterm"],
     });
-    expect(result[0]).toBe("Daintree");
-    expect(result[1]).toBe("Whisper");
-    expect(result[2]).toBe("xterm");
+    expect(result.slice(0, 3)).toEqual(["xterm", "Whisper", "Daintree"]);
+  });
+
+  it("drops the oldest dictionary terms first when the dictionary overflows", async () => {
+    const dictionary = Array.from({ length: 100 }, (_, i) => `customTerm${i}`);
+    const result = await assembleKeyterms({ customDictionary: dictionary });
+    expect(result).toHaveLength(MAX_DICTIONARY_KEYTERMS);
+    expect(result[0]).toBe("customTerm99");
+    expect(result).toContain(`customTerm${100 - MAX_DICTIONARY_KEYTERMS}`);
+    expect(result).not.toContain(`customTerm${99 - MAX_DICTIONARY_KEYTERMS}`);
+  });
+
+  it("bounds project tokens so branch tokens still get reserved slots", async () => {
+    const dictionary = Array.from({ length: 100 }, (_, i) => `customTerm${i}`);
+    const result = await assembleKeyterms({
+      customDictionary: dictionary,
+      projectName: "Alpha Bravo Charlie Delta Echo Foxtrot Gamma Hotel",
+      terminalId: TARGET,
+      ptyClient: asPtyClient(
+        makePtyClient([], { cwd: "/repo", worktreeId: "/repo/worktrees/feature" })
+      ),
+    });
+    expect(result).toContain("service");
+    expect(result.length).toBeLessThanOrEqual(MAX_KEYTERMS);
+  });
+
+  it("keeps slots for project and branch tokens however large the dictionary", async () => {
+    const dictionary = Array.from({ length: 100 }, (_, i) => `customTerm${i}`);
+    const result = await assembleKeyterms({
+      customDictionary: dictionary,
+      projectName: "Daintree Forest",
+    });
+    expect(result).toContain("Daintree Forest");
+    expect(result).toContain("Daintree");
+    expect(result).toContain("Forest");
+    expect(result.length).toBeLessThanOrEqual(MAX_KEYTERMS);
   });
 
   it("adds project name tokens", async () => {

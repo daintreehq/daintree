@@ -1099,6 +1099,26 @@ describe("DeepgramTranscriptionProvider", () => {
     provider.stop();
   });
 
+  it("retries a long keyterm list trimmed to the head before dropping everything", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    const keyterms = Array.from({ length: 40 }, (_, i) => `term${i}`);
+    const startPromise = provider.start({ ...BASE_SETTINGS, keyterms }, "session-1");
+    await Promise.resolve();
+    latestInstance().simulateUnexpectedResponse(400);
+    expect(instances).toHaveLength(2);
+    expect(new URL(latestInstance().url).searchParams.getAll("keyterm")).toEqual(
+      keyterms.slice(0, 20)
+    );
+
+    latestInstance().simulateUnexpectedResponse(400);
+    expect(instances).toHaveLength(3);
+    expect(new URL(latestInstance().url).searchParams.has("keyterm")).toBe(false);
+
+    latestInstance().simulateOpen();
+    await expect(startPromise).resolves.toEqual({ ok: true });
+    provider.stop();
+  });
+
   it("does not retry on a non-400 upgrade rejection (401)", async () => {
     const provider = new DeepgramTranscriptionProvider();
     const events: VoiceTranscriptionEvent[] = [];

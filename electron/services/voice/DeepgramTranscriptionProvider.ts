@@ -40,11 +40,16 @@ const KEEPALIVE_INTERVAL_MS = 5_000;
 // count alone doesn't bound tokens. We cap the URL injection well below both
 // ceilings — 50 terms is a 2x margin on the count, and a ~3000-char aggregate
 // guard backstops pathologically long terms before they blow the token budget.
-// This is deliberately tighter than the assembly-side MAX_KEYTERMS (96): that
+// This is deliberately tighter than the assembly-side MAX_KEYTERMS (50): that
 // constant governs how many terms to gather, this one governs how many survive
 // into the wire request.
 const MAX_DEEPGRAM_URL_KEYTERMS = 50;
 const MAX_DEEPGRAM_URL_KEYTERM_CHARS = 3_000;
+// Keyterms arrive dictionary-first, newest first, so a first rejection retries
+// with just the head of the list before the last resort of sending none.
+const TRIMMED_RETRY_KEYTERMS = 20;
+
+type KeytermAttempt = "full" | "trimmed" | "none";
 
 // Process-wide: the orchestrator builds a fresh provider per session, so a
 // per-instance counter would hand the renderer the same id twice.
@@ -253,14 +258,17 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
   private connect(
     mySessionId: number,
     settings: VoiceInputSettings,
-    retryWithoutKeyterms = false
+    attempt: KeytermAttempt = "full"
   ): void {
     this.connectStartedAt = performance.now();
-    // On a keyterm-overflow retry, strip keyterms from the URL but keep every
+    // On a keyterm-overflow retry, shrink the keyterms on the URL but keep every
     // other setting identical.
-    const effectiveSettings = retryWithoutKeyterms
-      ? { ...settings, keyterms: undefined }
-      : settings;
+    const effectiveSettings =
+      attempt === "none"
+        ? { ...settings, keyterms: undefined }
+        : attempt === "trimmed"
+          ? { ...settings, keyterms: settings.keyterms?.slice(0, TRIMMED_RETRY_KEYTERMS) }
+          : settings;
     const url = buildUrl(effectiveSettings);
     let connection: WebSocket;
     try {
@@ -288,7 +296,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     logInfo(`${P} Opening Deepgram WebSocket`, {
       keytermCount: effectiveSettings.keyterms?.length ?? 0,
       language: settings.language || "en",
-      retryWithoutKeyterms,
+      keytermAttempt: attempt,
     });
 
     this.connectTimeout = setTimeout(() => {
@@ -328,17 +336,20 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
       if (this.sessionId !== mySessionId || this.connection !== connection) return;
       this.clearConnectTimeout();
       const statusCode = res.statusCode;
-      // Retry once with keyterms stripped: a 400 here most plausibly means the
+      // Retry with fewer keyterms, then none: a 400 here most plausibly means the
       // assembled keyterms overflowed Deepgram's token budget. The new socket
       // becomes `this.connection`, so this old socket's trailing close is
       // ignored by the `this.connection !== connection` guards.
-      if (statusCode === 400 && !retryWithoutKeyterms) {
-        logWarn(`${P} Deepgram rejected upgrade with HTTP 400 — retrying without keyterms`);
+      if (statusCode === 400 && attempt !== "none") {
+        const keytermCount = settings.keyterms?.length ?? 0;
+        const next: KeytermAttempt =
+          attempt === "full" && keytermCount > TRIMMED_RETRY_KEYTERMS ? "trimmed" : "none";
+        logWarn(`${P} Deepgram rejected upgrade with HTTP 400 — retrying (${next} keyterms)`);
         this.cleanupConnection();
-        this.connect(mySessionId, settings, true);
+        this.connect(mySessionId, settings, next);
         return;
       }
-      // Any other status (401 auth, 403, 429, 5xx) — or a second 400 after the
+      // Any other status (401 auth, 403, 429, 5xx) — or a 400 after the
       // keyterm-free retry — is fatal.
       const message = `Deepgram rejected the connection (HTTP ${statusCode ?? "unknown"})`;
       logError(`${P} Deepgram rejected the connection`, undefined, { statusCode });
