@@ -115,8 +115,9 @@ function detectDictionaryCorrections(panelId: string, snapshot: CorrectionSnapsh
     // The matcher and its word list load here, off the send path. Main merges
     // the candidates into the queue it owns, so an accept or dismiss made
     // meanwhile in Settings isn't overwritten by this view's copy.
-    void import("@shared/utils/phoneticSimilarity")
-      .then(async ({ findCorrectionCandidates }) => {
+    const report = async () => {
+      try {
+        const { findCorrectionCandidates } = await import("@shared/utils/phoneticSimilarity");
         const candidates = findCorrectionCandidates(
           snapshot.baseline,
           snapshot.edited,
@@ -141,10 +142,11 @@ function detectDictionaryCorrections(panelId: string, snapshot: CorrectionSnapsh
             return;
           }
         }
-      })
-      .catch(() => {
+      } catch {
         // Best-effort; never surface a learning failure to the user.
-      });
+      }
+    };
+    void report();
   } catch {
     // Never let learning interfere with sending.
   }
