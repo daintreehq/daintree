@@ -36,7 +36,7 @@ import {
  * - `terminalLocationMisses` (002) — 10,000 terminals each carrying `location`
  * - `recipeMigrationMisses` (003) — the global array emptied AND 500 recipes
  *   present in `projects/<id>/recipes.json`, each stamped with the project id
- * - `agentPinMisses` (012) / `phantomPinMisses` (013) / `agentPresetMisses`
+ * - `agentPinMisses` (012/038) / `phantomPinMisses` (013) / `agentPresetMisses`
  *   (016) — three passes over the same 200 agent entries, graded separately so
  *   dropping one pass cannot hide behind the other two
  * - `notificationMisses`, `windowStateMisses`, `notesArchiveMisses`,

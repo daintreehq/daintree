@@ -674,7 +674,12 @@ export interface MigrationGrade {
   notificationMisses: number;
   /** 009/020 — the legacy window geometry reaches the window-states store. */
   windowStateMisses: number;
-  /** 012 — every surviving agent entry is pinned-shaped. */
+  /**
+   * 012/038 — every surviving agent entry lost `selected`/`enabled` (012) and
+   * then the pin 012 gave it (038). This corpus is below agent-settings
+   * `settingsVersion` 1, whose pins were never shown, so none reach this
+   * machine's `agentToolbarPins`, which 038 still has to create.
+   */
   agentPinMisses: number;
   /** 013 — the 100 phantom pins are gone and exactly 100 entries remain. */
   phantomPinMisses: number;
@@ -936,7 +941,7 @@ async function buildHarness(): Promise<MigrationHarness> {
           agentPresetMisses += 1;
           continue;
         }
-        if (entry.pinned !== (i % 3 !== 0)) agentPinMisses += 1;
+        if ("pinned" in entry) agentPinMisses += 1;
         if ("selected" in entry) agentPinMisses += 1;
         if ("enabled" in entry) agentPinMisses += 1;
         if (entry.presetId !== `preset-${i}`) agentPresetMisses += 1;
@@ -945,6 +950,9 @@ async function buildHarness(): Promise<MigrationHarness> {
         const presets = entry.customPresets;
         if (!Array.isArray(presets) || presets[0] !== `custom-${i}`) agentPresetMisses += 1;
       }
+
+      const toolbarPins = asRecord(config.agentToolbarPins);
+      agentPinMisses += toolbarPins === null ? 1 : Object.keys(toolbarPins).length;
 
       // --- 018
       let notesArchiveMisses = 0;
