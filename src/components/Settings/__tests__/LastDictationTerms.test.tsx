@@ -53,7 +53,7 @@ describe("LastDictationTermsSection", () => {
     expect(screen.getByText("4 of 4 terms sent")).toBeTruthy();
     // Each count sits right after its label in the row.
     expect(document.body.textContent).toContain(
-      "Your dictionary2Project dictionary0Project name1Branch name1Terminal output0"
+      "Your dictionary2Project dictionary0Project name1Repository names0Branch name1Terminal output0"
     );
     expect(screen.queryByText(/mySecretTerm/)).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Show terms" }));
