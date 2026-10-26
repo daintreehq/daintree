@@ -2954,7 +2954,7 @@ function buildElectronApi(): ElectronAPI {
           paragraphingStrategy: "spoken-command" | "manual";
           resolveFileLinks: boolean;
           deviceId: string;
-          recordingMode: "toggle" | "push-to-talk";
+          recordingMode: "toggle" | "push-to-talk" | "tap-or-hold";
         }>
       ) => _unwrappingInvoke(CHANNELS.VOICE_INPUT_SET_SETTINGS, patch),
       sendAudioChunk: (sessionId: string, chunk: ArrayBuffer) =>

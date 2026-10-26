@@ -1452,7 +1452,18 @@ describe("getVoiceSettings migration", () => {
     expect(settings.recordingMode).toBe("push-to-talk");
   });
 
-  it("normalizes malformed recordingMode values to 'toggle' without writing to disk", async () => {
+  it("preserves recordingMode='toggle' when stored", async () => {
+    const { store } = await import("../../../store.js");
+    vi.mocked(store.get).mockReturnValueOnce({
+      enabled: true,
+      openaiApiKey: "sk-present",
+      recordingMode: "toggle",
+    });
+
+    expect(getVoiceSettings().recordingMode).toBe("toggle");
+  });
+
+  it("normalizes malformed recordingMode values to 'tap-or-hold' without writing to disk", async () => {
     const { store } = await import("../../../store.js");
     vi.mocked(store.get).mockReturnValueOnce({
       enabled: true,
@@ -1462,7 +1473,7 @@ describe("getVoiceSettings migration", () => {
 
     const settings = getVoiceSettings();
 
-    expect(settings.recordingMode).toBe("toggle");
+    expect(settings.recordingMode).toBe("tap-or-hold");
     // Normalization must not persist back to the store.
     expect(vi.mocked(store.set)).not.toHaveBeenCalled();
   });

@@ -319,7 +319,7 @@ describe("VoiceInputSettingsTab copy", () => {
 
 describe("recordingModeDescription", () => {
   it("names the real binding, and says so when there is none", () => {
-    for (const mode of ["toggle", "push-to-talk"] as const) {
+    for (const mode of ["tap-or-hold", "toggle", "push-to-talk"] as const) {
       expect(recordingModeDescription(mode, "⌘⇧D")).toContain("⌘⇧D");
       expect(recordingModeDescription(mode, "")).toMatch(/No shortcut is assigned/);
       expect(recordingModeDescription(mode, "")).not.toMatch(/\.\./);
