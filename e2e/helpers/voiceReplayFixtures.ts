@@ -149,7 +149,7 @@ export const REPLAY_CLIPS: readonly ReplayClip[] = [
     id: "pull-request",
     speech: "Looks good. [[slnc 900]] Open a pull request against develop.",
     reference: "Looks good. Open a pull request against develop.",
-    terms: ["develop"],
+    terms: [],
     tags: ["short", "pause"],
   },
   {
@@ -175,7 +175,7 @@ export const REPLAY_CLIPS: readonly ReplayClip[] = [
       "Node P T Y fails to load after the electron upgrade, run N P M run rebuild and try again.",
     reference:
       "node-pty fails to load after the Electron upgrade, run npm run rebuild and try again.",
-    terms: ["node-pty", "Electron", "npm run rebuild"],
+    terms: ["node-pty", "Electron"],
     tags: ["vocab"],
   },
 ];
