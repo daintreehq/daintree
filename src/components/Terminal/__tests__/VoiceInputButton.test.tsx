@@ -59,12 +59,12 @@ describe("VoiceInputButton", () => {
     expect(container.innerHTML).toContain("lucide-mic");
   });
 
-  it("renders nothing when voice input is not configured", () => {
-    const { container } = render(
+  it("renders a setup affordance when voice input is not configured", () => {
+    const { getByLabelText } = render(
       <VoiceInputButton panelId="panel-1" projectId="project-1" projectName="Daintree" />
     );
 
-    expect(container.innerHTML).toBe("");
+    expect(getByLabelText("Set up voice input")).toBeTruthy();
   });
 
   it("still renders when not configured but actively recording on this panel", () => {

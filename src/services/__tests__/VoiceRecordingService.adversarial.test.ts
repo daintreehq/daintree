@@ -168,8 +168,8 @@ const runtime = vi.hoisted(() => ({
 function resetRuntime(): void {
   runtime.drafts = {};
   runtime.panelState.panelsById = {
-    "panel-1": { id: "panel-1", title: "Panel One", location: "grid" },
-    "panel-2": { id: "panel-2", title: "Panel Two", location: "grid" },
+    "panel-1": { id: "panel-1", title: "Panel One", location: "grid", launchAgentId: "claude" },
+    "panel-2": { id: "panel-2", title: "Panel Two", location: "grid", launchAgentId: "claude" },
   };
   runtime.panelState.panelIds = ["panel-1", "panel-2"];
   runtime.panelState.focusedId = "panel-1";
@@ -319,8 +319,10 @@ vi.mock("@/store/voiceRecordingStore", () => {
   };
 });
 
+vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
+
 vi.mock("@/store/terminalInputStore", () => {
-  const getState = () => runtime.terminalInputFns;
+  const getState = () => ({ ...runtime.terminalInputFns, hybridInputEnabled: true });
   return {
     useTerminalInputStore: Object.assign(getState, { getState }),
   };
@@ -954,6 +956,13 @@ describe("VoiceRecordingService adversarial", () => {
 
       expect(runtime.voiceInput.requestMicPermission).not.toHaveBeenCalled();
       expect(runtime.createdStreams).toHaveLength(0);
+      const { notify } = await import("@/lib/notify");
+      const payload = vi.mocked(notify).mock.calls.at(-1)![0] as {
+        action: { label: string; onClick: () => void };
+      };
+      expect(payload.action.label).toBe("Open microphone settings");
+      expect(runtime.voiceInput.openMicSettings).not.toHaveBeenCalled();
+      payload.action.onClick();
       expect(runtime.voiceInput.openMicSettings).toHaveBeenCalledTimes(1);
     }
   });

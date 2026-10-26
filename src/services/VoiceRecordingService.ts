@@ -1,6 +1,8 @@
 import { useProjectStore } from "@/store/projectStore";
 import { usePanelStore } from "@/store/panelStore";
-import { isPtyPanel } from "@shared/types/panel";
+import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
+import { isBuiltInAgentId } from "@shared/config/agentIds";
+import { shouldShowHybridInputBar } from "@/components/Terminal/terminalFocus";
 import { useHelpPanelStore, selectActiveSlot } from "@/store/helpPanelStore";
 import { isAssistantFocused } from "@/store/macroFocusStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
@@ -19,6 +21,9 @@ import { logDebug, logInfo, logWarn, logError } from "@/utils/logger";
 import { voiceErrorLogFields } from "@shared/utils/voiceLogFields";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { notify } from "@/lib/notify";
+import type { NotificationAction } from "@/store/notificationStore";
+import { useFleetArmingStore } from "@/store/fleetArmingStore";
+import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import {
   OPENING_CHUNK_WINDOW,
@@ -637,6 +642,50 @@ class VoiceRecordingService {
     }
   }
 
+  private settingsAction(): NotificationAction {
+    return {
+      label: "Open voice settings",
+      actionId: "app.settings.openTab",
+      actionArgs: { tab: "voice" },
+      onClick: () => {},
+    };
+  }
+
+  private micSettingsAction(): NotificationAction {
+    return {
+      label: "Open microphone settings",
+      onClick: () => {
+        safeFireAndForget(window.electron.voiceInput.openMicSettings(), {
+          context: "Opening OS microphone settings",
+        });
+      },
+    };
+  }
+
+  private retryAction(retry: () => void): NotificationAction {
+    return { label: "Retry", onClick: retry };
+  }
+
+  /** Every start failure surfaces here: one toast, one recovery action that fits the cause. */
+  private reportStartFailure(title: string, message: string, action?: NotificationAction): void {
+    const payload = { type: "error" as const, title, message };
+    if (action) {
+      notify({ ...payload, action });
+      return;
+    }
+    // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+    notify(payload);
+  }
+
+  private openVoiceSettings(): void {
+    safeFireAndForget(
+      import("@/services/ActionService").then(({ actionService }) =>
+        actionService.dispatch("app.settings.openTab", { tab: "voice" }, { source: "user" })
+      ),
+      { context: "Opening voice settings" }
+    );
+  }
+
   /**
    * Roll the store off the "arming" status when a `start()` call has set
    * an error and is about to return. Without this, the store would stay
@@ -713,6 +762,7 @@ class VoiceRecordingService {
           .getState()
           .announce("Voice dictation is not configured. Open Voice settings to continue.");
         await this.failArming();
+        this.openVoiceSettings();
       }
       return;
     }
@@ -734,6 +784,11 @@ class VoiceRecordingService {
           code: "mic_permission_check_failed",
           message: "Could not check microphone permission. Try again.",
         });
+        this.reportStartFailure(
+          "Dictation didn't start",
+          "Could not check microphone permission.",
+          this.retryAction(() => void this.start(target))
+        );
         await this.failArming();
       }
       return;
@@ -751,10 +806,8 @@ class VoiceRecordingService {
         .getState()
         .setLastError({ severity: "fatal", code: "mic_permission_denied", message });
       useVoiceRecordingStore.getState().announce(message);
+      this.reportStartFailure("Microphone blocked", message, this.micSettingsAction());
       await this.failArming();
-      safeFireAndForget(window.electron.voiceInput.openMicSettings(), {
-        context: "Opening OS microphone settings",
-      });
       return;
     }
 
@@ -777,6 +830,11 @@ class VoiceRecordingService {
             code: "mic_permission_request_failed",
             message: "Could not request microphone permission. Try again.",
           });
+          this.reportStartFailure(
+            "Dictation didn't start",
+            "Could not request microphone permission.",
+            this.retryAction(() => void this.start(target))
+          );
           await this.failArming();
         }
         return;
@@ -792,6 +850,7 @@ class VoiceRecordingService {
           .getState()
           .setLastError({ severity: "fatal", code: "mic_permission_denied", message });
         useVoiceRecordingStore.getState().announce(message);
+        this.reportStartFailure("Microphone blocked", message, this.micSettingsAction());
         await this.failArming();
         return;
       }
@@ -899,6 +958,15 @@ class VoiceRecordingService {
           .getState()
           .setLastError({ severity: "fatal", code: micCode, message });
         useVoiceRecordingStore.getState().announce(message);
+        this.reportStartFailure(
+          micCode === "mic_permission_denied" ? "Microphone blocked" : "Microphone unavailable",
+          micCode === "mic_permission_denied"
+            ? message
+            : "Could not access the microphone. It may be in use by another app.",
+          micCode === "mic_permission_denied"
+            ? this.micSettingsAction()
+            : this.retryAction(() => void this.start(target))
+        );
         await this.failArming();
       }
       return;
@@ -969,6 +1037,11 @@ class VoiceRecordingService {
         message: "Failed to load the audio processor.",
       });
       useVoiceRecordingStore.getState().announce("Voice dictation failed to initialize.");
+      this.reportStartFailure(
+        "Dictation didn't start",
+        "Failed to load the audio processor.",
+        this.retryAction(() => void this.start(target))
+      );
       await this.failArming();
     };
     if (!graphResult.ok) {
@@ -1173,6 +1246,7 @@ class VoiceRecordingService {
         .setLastError({ severity: "fatal", code: "backend_start_failed", message: result.error });
       useVoiceRecordingStore.getState().finishSession({ nextStatus: "error" });
       useVoiceRecordingStore.getState().announce("Voice dictation failed to start.");
+      this.reportStartFailure("Dictation didn't start", result.error, this.settingsAction());
       return;
     }
 
@@ -1524,6 +1598,11 @@ class VoiceRecordingService {
         useVoiceRecordingStore
           .getState()
           .announce("Daintree Assistant is starting. Try dictation again in a moment.");
+        this.reportStartFailure(
+          "Dictation didn't start",
+          "Daintree Assistant is still starting.",
+          this.retryAction(() => void this.toggleFocusedPanel())
+        );
         return;
       }
       await this.startOrToggle(assistantTarget);
@@ -1539,7 +1618,11 @@ class VoiceRecordingService {
       });
       useVoiceRecordingStore
         .getState()
-        .announce("Focus a terminal input before starting dictation.");
+        .announce("Focus an agent terminal before starting dictation.");
+      this.reportStartFailure(
+        "Dictation unavailable",
+        "Focus an agent terminal to dictate into its input."
+      );
       return;
     }
 
@@ -1592,6 +1675,11 @@ class VoiceRecordingService {
         message: "Start the Daintree Assistant before dictating.",
       });
       useVoiceRecordingStore.getState().announce("Start the Daintree Assistant before dictating.");
+      this.reportStartFailure(
+        "Dictation didn't start",
+        "Start the Daintree Assistant before dictating.",
+        this.retryAction(() => void this.toggleAssistant())
+      );
       return;
     }
 
@@ -1651,6 +1739,26 @@ class VoiceRecordingService {
     return true;
   }
 
+  // Mirrors shouldShowHybridInputBar: dictation lands in the composer, so a
+  // panel that renders none would take the text into a draft nobody can see.
+  private hasComposer(panel: PanelInstance): boolean {
+    if (!isPtyPanel(panel)) return false;
+    const chrome = deriveTerminalChrome({
+      kind: "terminal",
+      launchAgentId: panel.launchAgentId,
+      runtimeIdentity: panel.runtimeIdentity,
+      detectedAgentId: panel.detectedAgentId,
+      detectedProcessId: panel.detectedProcessId,
+    });
+    const armed = useFleetArmingStore.getState().armedIds;
+    return shouldShowHybridInputBar({
+      hasAgentIdentity: isBuiltInAgentId(chrome.agentId),
+      hybridInputEnabled: useTerminalInputStore.getState().hybridInputEnabled,
+      isFleetArmed: armed.has(panel.id),
+      fleetSize: armed.size,
+    });
+  }
+
   private getFocusedPanelTarget(): VoiceRecordingTarget | null {
     const terminalState = usePanelStore.getState();
     const panelId = terminalState.focusedId;
@@ -1660,6 +1768,7 @@ class VoiceRecordingService {
     if (!foundPanel || foundPanel.location === "trash") return null;
     // A pane held for recovery (#12434) has no input surface to dictate into.
     if (isPtyPanel(foundPanel) && foundPanel.restoreRecovery) return null;
+    if (!this.hasComposer(foundPanel)) return null;
     const panel = foundPanel;
 
     const currentProject = useProjectStore.getState().currentProject;

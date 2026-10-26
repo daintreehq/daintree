@@ -63,13 +63,15 @@ vi.mock("@/store/panelStore", () => {
   return { usePanelStore: Object.assign(getState, { getState, subscribe }), __state: state };
 });
 
+vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
+
 vi.mock("@/store/terminalInputStore", () => {
   const fns = {
     getDraftInput: vi.fn(() => ""),
     setDraftInput: vi.fn(),
     bumpExternalDraftRevision: vi.fn(),
   };
-  const getState = () => fns;
+  const getState = () => ({ ...fns, hybridInputEnabled: true });
   return { useTerminalInputStore: Object.assign(getState, { getState }) };
 });
 
@@ -876,6 +878,31 @@ describe("VoiceRecordingService — assistant dictation routing (#8887)", () => 
     );
   });
 
+  it.each([
+    ["a plain shell", { id: "p1", kind: "terminal", title: "zsh", location: "grid" }],
+    ["a browser panel", { id: "p1", kind: "browser", title: "Web", location: "grid" }],
+  ])("refuses to start dictation in %s and says to focus an agent terminal", async (_n, entry) => {
+    setupGlobals();
+    const { macro, panel } = await importMocks();
+    macro.isAssistantFocused.mockReturnValue(false);
+    panel.__state.focusedId = "p1";
+    panel.__state.panelsById = { p1: entry };
+
+    const { notify } = await import("@/lib/notify");
+    vi.mocked(notify).mockClear();
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const toggleSpy = vi.spyOn(voiceRecordingService, "toggle").mockResolvedValue();
+
+    await voiceRecordingService.toggleFocusedPanel();
+
+    expect(toggleSpy).not.toHaveBeenCalled();
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(notify).mock.calls[0]![0]).toMatchObject({
+      type: "error",
+      message: expect.stringContaining("agent terminal"),
+    });
+  });
+
   it("never aims dictation at a focused pane held for recovery (#12434)", async () => {
     setupGlobals();
     const { macro, panel } = await importMocks();
@@ -928,7 +955,12 @@ describe("VoiceRecordingService — assistant dictation routing (#8887)", () => 
     panel.__state.focusedId = "grid-panel-9";
     panel.__state.panelsById = {
       "assistant-term-1": { id: "assistant-term-1", location: "background" },
-      "grid-panel-9": { id: "grid-panel-9", title: "Terminal", location: "grid" },
+      "grid-panel-9": {
+        id: "grid-panel-9",
+        title: "Terminal",
+        location: "grid",
+        launchAgentId: "claude",
+      },
     };
 
     const { voiceRecordingService } = await import("../VoiceRecordingService");
@@ -1050,8 +1082,8 @@ describe("VoiceRecordingService — shortcut stops from anywhere (#12832)", () =
     if (!hasMockState<PanelState>(panel)) throw new Error("panelStore mock lacks __state");
     panel.__state.focusedId = "panel-b";
     panel.__state.panelsById = {
-      "panel-a": { id: "panel-a", title: "Recording", location: "grid" },
-      "panel-b": { id: "panel-b", title: "Focused", location: "grid" },
+      "panel-a": { id: "panel-a", title: "Recording", location: "grid", launchAgentId: "claude" },
+      "panel-b": { id: "panel-b", title: "Focused", location: "grid", launchAgentId: "claude" },
     };
 
     const voiceModule = await import("@/store/voiceRecordingStore");
@@ -1637,7 +1669,7 @@ describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
     };
     panel.__state.focusedId = "panel-1";
     panel.__state.panelsById = {
-      "panel-1": { id: "panel-1", title: "Terminal", location: "grid" },
+      "panel-1": { id: "panel-1", title: "Terminal", location: "grid", launchAgentId: "claude" },
     };
 
     const { voiceRecordingService } = await import("../VoiceRecordingService");
@@ -1672,7 +1704,7 @@ describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
     };
     panel.__state.focusedId = "panel-1";
     panel.__state.panelsById = {
-      "panel-1": { id: "panel-1", title: "Terminal", location: "grid" },
+      "panel-1": { id: "panel-1", title: "Terminal", location: "grid", launchAgentId: "claude" },
     };
 
     const { voiceRecordingService } = await import("../VoiceRecordingService");
