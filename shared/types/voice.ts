@@ -69,7 +69,10 @@ export interface VoiceSentTerm {
 export interface LastDictationTerms {
   sessionId: string;
   provider: "openai" | "deepgram";
-  /** How many terms assembly gathered, before the provider's own limits. */
+  /**
+   * How many terms assembly gathered, before the provider's own limits. Zero
+   * until assembly lands, which for OpenAI can be after its provider starts.
+   */
   assembledCount: number;
   sent: VoiceSentTerm[] | null;
   keytermAttempt?: "full" | "trimmed" | "none";

@@ -695,6 +695,26 @@ describe("OpenAITranscriptionProvider", () => {
       eager.stop();
     });
 
+    it("reports the terms only once the parked session.update goes out", async () => {
+      const terms = deferredTerms();
+      const service = new OpenAITranscriptionProvider();
+      const reports: string[][] = [];
+      service.onEvent((e) => {
+        if (e.type === "terms_sent") reports.push(e.terms);
+      });
+      void service.start(BASE_SETTINGS, "session-1", { keyterms: terms.promise });
+      await Promise.resolve();
+      const socket = latestInstance();
+      socket.simulateOpen();
+      expect(reports).toEqual([]);
+
+      terms.resolve(["Daintree", "<div>", "xterm"]);
+      await terms.promise;
+      expect(reports).toEqual([["Daintree", "xterm"]]);
+      expect(reports[0]).toEqual(readTranscription(socket).keywords);
+      service.stop();
+    });
+
     it("sends session.update as the socket opens when the terms landed first", async () => {
       const service = new OpenAITranscriptionProvider();
       const terms = Promise.resolve(["Daintree"]);
