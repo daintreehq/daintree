@@ -16,6 +16,18 @@ import {
  * old selection — highlight on one pane, keystrokes into another (#11133).
  */
 describe("resolvePaneFocusAction", () => {
+  // Preserving would report a handoff to the named surface that never happened.
+  it("takes the hybrid input past an xterm selection when a caller asked for it", () => {
+    expect(
+      resolvePaneFocusAction({
+        focusTarget: "hybridInput",
+        hasSelection: true,
+        xtermOwnsDomFocus: true,
+        requested: true,
+      })
+    ).toBe("hybridInput");
+  });
+
   it("keeps focus in xterm when it holds both the selection and the keyboard", () => {
     expect(
       resolvePaneFocusAction({

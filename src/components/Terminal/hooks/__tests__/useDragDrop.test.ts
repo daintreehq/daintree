@@ -14,13 +14,13 @@ vi.mock("../../useTerminalFileTransfer", () => ({
   IMAGE_EXTENSIONS: /\.(png|jpe?g|bmp|tiff?|avif|heic)$/i,
 }));
 
-// Same reason: the real store constructs `terminalInstanceService` and several
-// controllers at module scope. Only the focus-preference setter is exercised
-// here, so the mock stays that narrow — a wider fake would drift.
-const setPreferredTerminalFocusTarget = vi.hoisted(() => vi.fn<(target: string) => void>());
-vi.mock("@/store/panelStore", () => ({
-  usePanelStore: { getState: () => ({ setPreferredTerminalFocusTarget }) },
-}));
+// The request module has its own suite and reaches the real panel store, which
+// constructs `terminalInstanceService` and several controllers at module scope.
+// Here only what the drop asks of the pane matters.
+const requestPaneFocus = vi.hoisted(() =>
+  vi.fn<(paneId: string, surface: string) => boolean>(() => true)
+);
+vi.mock("../../paneFocusRequest", () => ({ requestPaneFocus }));
 
 // The draft path is its own suite (agentDraft.test.ts); here it is the seam the
 // drop routes through, so the question is only what reaches it and when.
@@ -137,8 +137,10 @@ function chipSpellings(dispatch: ReturnType<typeof vi.fn>, head: number): string
 let pathForFile: Mock<(file: File) => string>;
 let thumbnailFromPath: ReturnType<typeof vi.fn>;
 
+const PANE_ID = "pane-1";
+
 beforeEach(() => {
-  setPreferredTerminalFocusTarget.mockClear();
+  requestPaneFocus.mockClear();
   pathForFile = vi.fn<(file: File) => string>((file) => `${CWD}/${file.name}`);
   thumbnailFromPath = vi.fn(async () => ({ thumbnailDataUrl: "data:image/png;base64,x" }));
   (window as unknown as { electron: unknown }).electron = {
@@ -618,25 +620,43 @@ describe("useDragDrop", () => {
 
   // --- The drop leaves the pane selected and ready to type into (#11809) ---
   describe("selection", () => {
-    it("records the surface, selects the pane, then focuses the editor", async () => {
+    it("selects the pane, focuses the editor, then asks the pane for it", async () => {
       const onDropSelect = vi.fn();
       const { ref, focus } = fakeView();
-      const { result } = renderHook(() => useDragDrop(ref, CWD, onDropSelect));
+      const { result } = renderHook(() =>
+        useDragDrop(ref, CWD, onDropSelect, PANE_ID, { sharesPaneDrops: true })
+      );
 
       await act(async () => {
         await result.current.handleDrop(internalDrop([`${CWD}/src/App.tsx`]));
       });
 
-      // The order is load-bearing, not incidental: the pane's focus effect
-      // reads the preference to route the keyboard when selection lands, so
-      // recording it after `onDropSelect` would send focus to the xterm first.
-      expect(setPreferredTerminalFocusTarget).toHaveBeenCalledWith("hybridInput");
-      expect(setPreferredTerminalFocusTarget.mock.invocationCallOrder[0]!).toBeLessThan(
-        onDropSelect.mock.invocationCallOrder[0]!
-      );
+      // The request is what keeps the newly selected pane's focus pass on the
+      // bar. It comes after the direct focus, so it finds the editor holding
+      // the keyboard and leaves the caret the insertion parks after the chip;
+      // asked first, the pane would drag the caret to the end of the draft.
+      expect(requestPaneFocus).toHaveBeenCalledExactlyOnceWith(PANE_ID, "hybridInput");
       expect(onDropSelect.mock.invocationCallOrder[0]!).toBeLessThan(
         focus.mock.invocationCallOrder[0]!
       );
+      expect(focus.mock.invocationCallOrder[0]!).toBeLessThan(
+        requestPaneFocus.mock.invocationCallOrder[0]!
+      );
+    });
+
+    // Canopy's reply box borrows the terminal id without being the pane's bar:
+    // a request would focus the pane's own bar out from under it.
+    it("asks no pane for focus from a composer that only borrows its terminal id", async () => {
+      const onDropSelect = vi.fn();
+      const { ref, focus } = fakeView();
+      const { result } = renderHook(() => useDragDrop(ref, CWD, onDropSelect, PANE_ID));
+
+      await act(async () => {
+        await result.current.handleDrop(internalDrop([`${CWD}/src/App.tsx`]));
+      });
+
+      expect(focus).toHaveBeenCalledTimes(1);
+      expect(requestPaneFocus).not.toHaveBeenCalled();
     });
 
     // An image waits on a thumbnail over IPC before it can be inserted, and
@@ -653,7 +673,9 @@ describe("useDragDrop", () => {
             releaseThumbnail = () => resolve({ thumbnailDataUrl: "data:image/png;base64,x" });
           })
       );
-      const { result } = renderHook(() => useDragDrop(ref, CWD, onDropSelect));
+      const { result } = renderHook(() =>
+        useDragDrop(ref, CWD, onDropSelect, PANE_ID, { sharesPaneDrops: true })
+      );
 
       let pending!: Promise<void>;
       act(() => {
@@ -662,7 +684,7 @@ describe("useDragDrop", () => {
 
       // Nothing is inserted yet, but the keyboard already belongs here.
       expect(dispatch).not.toHaveBeenCalled();
-      expect(setPreferredTerminalFocusTarget).toHaveBeenCalledWith("hybridInput");
+      expect(requestPaneFocus).toHaveBeenCalledExactlyOnceWith(PANE_ID, "hybridInput");
       expect(onDropSelect).toHaveBeenCalledTimes(1);
       expect(focus).toHaveBeenCalledTimes(1);
 
@@ -686,14 +708,16 @@ describe("useDragDrop", () => {
     it("selects nothing for a drop carrying nothing referenceable", async () => {
       const onDropSelect = vi.fn();
       const { ref, focus, dispatch } = fakeView();
-      const { result } = renderHook(() => useDragDrop(ref, CWD, onDropSelect));
+      const { result } = renderHook(() =>
+        useDragDrop(ref, CWD, onDropSelect, PANE_ID, { sharesPaneDrops: true })
+      );
 
       await act(async () => {
         await result.current.handleDrop(internalDrop([]));
       });
 
       expect(dispatch).not.toHaveBeenCalled();
-      expect(setPreferredTerminalFocusTarget).not.toHaveBeenCalled();
+      expect(requestPaneFocus).not.toHaveBeenCalled();
       expect(onDropSelect).not.toHaveBeenCalled();
       expect(focus).not.toHaveBeenCalled();
 
@@ -703,19 +727,22 @@ describe("useDragDrop", () => {
 
       expect(onDropSelect).toHaveBeenCalledTimes(1);
       expect(focus).toHaveBeenCalledTimes(1);
+      expect(requestPaneFocus).toHaveBeenCalledTimes(1);
     });
 
     it("selects nothing when the editor is gone before the drop lands", async () => {
       const onDropSelect = vi.fn();
       const view = fakeView();
       const ref = { current: null } as React.RefObject<EditorView | null>;
-      const { result } = renderHook(() => useDragDrop(ref, CWD, onDropSelect));
+      const { result } = renderHook(() =>
+        useDragDrop(ref, CWD, onDropSelect, PANE_ID, { sharesPaneDrops: true })
+      );
 
       await act(async () => {
         await result.current.handleDrop(internalDrop([`${CWD}/src/App.tsx`]));
       });
 
-      expect(setPreferredTerminalFocusTarget).not.toHaveBeenCalled();
+      expect(requestPaneFocus).not.toHaveBeenCalled();
       expect(onDropSelect).not.toHaveBeenCalled();
 
       // The same drop once an editor is mounted, proving the absence above was
@@ -919,10 +946,12 @@ describe("useDragDrop — agent context", () => {
     );
   }
 
-  function renderAgentDrop(terminalId: string | undefined) {
+  function renderAgentDrop(terminalId: string | undefined, sharesPaneDrops = false) {
     const view = fakeView();
     const onDropSelect = vi.fn();
-    const { result } = renderHook(() => useDragDrop(view.ref, "/repo", onDropSelect, terminalId));
+    const { result } = renderHook(() =>
+      useDragDrop(view.ref, "/repo", onDropSelect, terminalId, { sharesPaneDrops })
+    );
     return { result, view, onDropSelect };
   }
 
@@ -982,7 +1011,7 @@ describe("useDragDrop — agent context", () => {
   });
 
   it("drafts the decoded payload, then selects the pane and focuses the bar", async () => {
-    const { result, view, onDropSelect } = renderAgentDrop(TERMINAL_ID);
+    const { result, view, onDropSelect } = renderAgentDrop(TERMINAL_ID, true);
     await act(() => result.current.handleDrop(contextDrag()));
 
     expect(draftAgentContext).toHaveBeenCalledWith(TERMINAL_ID, {
@@ -990,9 +1019,12 @@ describe("useDragDrop — agent context", () => {
       title: "Fix login",
       sourceLabel: "Kanban",
     });
-    expect(setPreferredTerminalFocusTarget).toHaveBeenCalledWith("hybridInput");
     expect(onDropSelect).toHaveBeenCalledTimes(1);
     expect(view.focus).toHaveBeenCalledTimes(1);
+    expect(requestPaneFocus).toHaveBeenCalledExactlyOnceWith(TERMINAL_ID, "hybridInput");
+    expect(view.focus.mock.invocationCallOrder[0]!).toBeLessThan(
+      requestPaneFocus.mock.invocationCallOrder[0]!
+    );
     // Nothing goes into the editor directly — the draft store owns the write,
     // and no Enter is ever sent.
     expect(view.dispatch).not.toHaveBeenCalled();
@@ -1072,7 +1104,7 @@ describe("useDragDrop — drops shared with the pane's terminal", () => {
     expect(focus).not.toHaveBeenCalled();
     // The terminal selects the pane and keeps the keyboard once it lands.
     expect(onDropSelect).not.toHaveBeenCalled();
-    expect(setPreferredTerminalFocusTarget).not.toHaveBeenCalled();
+    expect(requestPaneFocus).not.toHaveBeenCalled();
   });
 
   it("keeps the drop when the terminal declines it", async () => {

@@ -25,6 +25,18 @@ describe("panelFocusRegistry", () => {
     cleanup();
   });
 
+  it("tells the handler which surface the caller named, and nothing when it named none", () => {
+    const handler = vi.fn((_surface?: string) => true);
+    const cleanup = registerPanelFocusHandler("p-1", handler);
+
+    focusPanelInput("p-1", "xterm");
+    focusPanelInput("p-1");
+
+    expect(handler.mock.calls).toEqual([["xterm"], [undefined]]);
+
+    cleanup();
+  });
+
   it("propagates a handler that declines the handoff", () => {
     // A mounted panel whose focus target is not live yet (lazy chunk still
     // loading, terminal with no xterm) declines rather than lying.

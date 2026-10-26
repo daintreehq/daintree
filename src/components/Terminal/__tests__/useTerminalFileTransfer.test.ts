@@ -48,10 +48,8 @@ vi.mock("@/services/TerminalInstanceService", () => {
 });
 
 // The real store constructs the terminal-instance singleton and several
-// controllers at module scope. Only the focus-preference setter and the
-// panel's lifecycle fields are read here, so the mock stays that narrow — a
-// wider fake would drift.
-const setPreferredTerminalFocusTarget = vi.hoisted(() => vi.fn<(target: string) => void>());
+// controllers at module scope. Only the panel's lifecycle fields are read
+// here, so the mock stays that narrow — a wider fake would drift.
 interface PanelFixture {
   worktreeId?: string;
   restartKey?: number;
@@ -62,9 +60,16 @@ interface PanelFixture {
 const panelState = vi.hoisted(() => ({ panelsById: {} as Record<string, PanelFixture> }));
 vi.mock("@/store/panelStore", () => ({
   usePanelStore: {
-    getState: () => ({ setPreferredTerminalFocusTarget, panelsById: panelState.panelsById }),
+    getState: () => ({ panelsById: panelState.panelsById }),
   },
 }));
+
+// The request module has its own suite. Nothing takes the request by default,
+// as for the Assistant and Dev Preview consoles, which own no pane.
+const requestPaneFocus = vi.hoisted(() =>
+  vi.fn<(paneId: string, surface: string) => boolean>(() => false)
+);
+vi.mock("../paneFocusRequest", () => ({ requestPaneFocus }));
 
 vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
 vi.mock("@/lib/copyWithToast", () => ({ copyWithToast: vi.fn() }));
@@ -1688,7 +1693,7 @@ describe("useTerminalFileTransfer hook", () => {
         // The paths still land where they were dropped; only the keyboard stays.
         expect(lastWrittenPayload()).toBe(`${quoteLaunchArgOptional("/Users/test/a.ts")} `);
         expect(onDropSelect).not.toHaveBeenCalled();
-        expect(setPreferredTerminalFocusTarget).not.toHaveBeenCalled();
+        expect(requestPaneFocus).not.toHaveBeenCalled();
         expect(terminalInstanceService.focus).not.toHaveBeenCalled();
       } finally {
         elsewhere.remove();
@@ -2348,26 +2353,35 @@ describe("useTerminalFileTransfer hook", () => {
 
   // --- The drop leaves the pane selected and ready to type into (#11809) ---
   describe("selection", () => {
-    it("records the surface, selects the pane, then focuses the xterm", async () => {
+    it("selects the pane, then asks it for its terminal", async () => {
       const onDropSelect = vi.fn();
       renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD, onDropSelect });
       await dropFiles([fileAt("App.tsx", `${CWD}/src/App.tsx`)]);
 
-      // The order is load-bearing, not incidental: the pane's focus effect reads
-      // the preference to route the keyboard when selection lands, so leaving it
-      // on "hybridInput" would send focus to the input bar the paths bypassed.
-      // And nothing about the pane moves until the paths are actually delivered.
-      expect(setPreferredTerminalFocusTarget).toHaveBeenCalledWith("xterm");
+      // The request is what keeps the selected pane's focus pass off the input
+      // bar the paths bypassed. Nothing about the pane moves until the paths
+      // are actually delivered.
+      expect(requestPaneFocus).toHaveBeenCalledExactlyOnceWith("term-1", "xterm");
       expect(vi.mocked(terminalClient.write).mock.invocationCallOrder[0]!).toBeLessThan(
-        setPreferredTerminalFocusTarget.mock.invocationCallOrder[0]!
-      );
-      expect(setPreferredTerminalFocusTarget.mock.invocationCallOrder[0]!).toBeLessThan(
         onDropSelect.mock.invocationCallOrder[0]!
       );
       expect(onDropSelect.mock.invocationCallOrder[0]!).toBeLessThan(
-        vi.mocked(terminalInstanceService.focus).mock.invocationCallOrder[0]!
+        requestPaneFocus.mock.invocationCallOrder[0]!
       );
       expect(terminalInstanceService.focus).toHaveBeenCalledWith("term-1");
+    });
+
+    // A pane takes the request itself, and a held one hands the keyboard to
+    // its recovery controls instead of the terminal behind them.
+    it("leaves the keyboard to a pane that took the request", async () => {
+      requestPaneFocus.mockReturnValueOnce(true);
+      const onDropSelect = vi.fn();
+      renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD, onDropSelect });
+      await dropFiles([fileAt("App.tsx", `${CWD}/src/App.tsx`)]);
+
+      expect(onDropSelect).toHaveBeenCalledTimes(1);
+      expect(requestPaneFocus).toHaveBeenCalledExactlyOnceWith("term-1", "xterm");
+      expect(terminalInstanceService.focus).not.toHaveBeenCalled();
     });
 
     // The gesture is one drop however many files rode on it, so the pane is
@@ -2387,7 +2401,7 @@ describe("useTerminalFileTransfer hook", () => {
       renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD, onDropSelect });
       await dropInternalPaths([`${CWD}/src/App.tsx`]);
 
-      expect(setPreferredTerminalFocusTarget).toHaveBeenCalledWith("xterm");
+      expect(requestPaneFocus).toHaveBeenCalledExactlyOnceWith("term-1", "xterm");
       expect(onDropSelect).toHaveBeenCalledTimes(1);
       expect(terminalInstanceService.focus).toHaveBeenCalledWith("term-1");
     });
@@ -2411,13 +2425,13 @@ describe("useTerminalFileTransfer hook", () => {
       await rejectedDrop();
 
       expect(terminalClient.write).not.toHaveBeenCalled();
-      expect(setPreferredTerminalFocusTarget).not.toHaveBeenCalled();
+      expect(requestPaneFocus).not.toHaveBeenCalled();
       expect(onDropSelect).not.toHaveBeenCalled();
       expect(terminalInstanceService.focus).not.toHaveBeenCalled();
 
       await accept(hook, onDropSelect);
 
-      expect(setPreferredTerminalFocusTarget).toHaveBeenCalledWith("xterm");
+      expect(requestPaneFocus).toHaveBeenCalledWith("term-1", "xterm");
       expect(onDropSelect).toHaveBeenCalledTimes(1);
       expect(terminalInstanceService.focus).toHaveBeenCalledWith("term-1");
     }
@@ -2465,7 +2479,7 @@ describe("useTerminalFileTransfer hook", () => {
 
       expect(terminalClient.write).toHaveBeenCalledTimes(1);
       expect(onDropSelect).not.toHaveBeenCalled();
-      expect(setPreferredTerminalFocusTarget).not.toHaveBeenCalled();
+      expect(requestPaneFocus).not.toHaveBeenCalled();
       expect(terminalInstanceService.focus).not.toHaveBeenCalled();
 
       // The same hook, now given a gesture that did point somewhere.

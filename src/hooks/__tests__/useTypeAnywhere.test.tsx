@@ -6,8 +6,16 @@ import type { PanelInstance, PtyPanelData } from "@shared/types/panel";
 const pingTerminal = vi.fn();
 const setFocused = vi.fn();
 const exitMaximize = vi.fn();
-const setPreferredTerminalFocusTarget = vi.fn();
-const focusPanelInput = vi.fn<(id: string) => boolean>(() => true);
+const focusPanelInput = vi.fn<(id: string, surface?: string) => boolean>(() => true);
+// The request module has its own suite; this stands in for whether the one
+// request type-anywhere makes is still current.
+const focusRequest = vi.hoisted(() => ({ current: null as { id: string; surface: string } | null }));
+const requestPaneFocus = vi.hoisted(() =>
+  vi.fn((id: string, surface: string) => {
+    focusRequest.current = { id, surface };
+    return false;
+  })
+);
 
 let panelState: {
   panelsById: Record<string, PanelInstance>;
@@ -27,7 +35,6 @@ vi.mock("@/store", () => ({
       pingTerminal,
       setFocused,
       exitMaximize,
-      setPreferredTerminalFocusTarget,
     }),
   },
 }));
@@ -55,7 +62,13 @@ vi.mock("@/store/viewWorkspaceId", () => ({
 }));
 
 vi.mock("@/components/Panel/panelFocusRegistry", () => ({
-  focusPanelInput: (id: string) => focusPanelInput(id),
+  focusPanelInput: (id: string, surface?: string) => focusPanelInput(id, surface),
+}));
+
+vi.mock("@/components/Terminal/paneFocusRequest", () => ({
+  requestPaneFocus,
+  requestedPaneSurface: (id: string) =>
+    focusRequest.current?.id === id ? focusRequest.current.surface : null,
 }));
 
 import { useTypeAnywhere, LOCATE_EPISODE_MS } from "../useTypeAnywhere";
@@ -106,6 +119,8 @@ function draftOf(id: string): string {
 describe("useTypeAnywhere", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    focusPanelInput.mockImplementation(() => true);
+    focusRequest.current = null;
     document.body.innerHTML = "";
     // jsdom ships no scrollIntoView; without this the reveal step throws and
     // aborts the handler mid-way. Tests asserting the scroll shadow this with
@@ -139,7 +154,12 @@ describe("useTypeAnywhere", () => {
       expect(draftOf("a1")).toBe("h");
       expect(e.defaultPrevented).toBe(true);
       expect(setFocused).toHaveBeenCalledWith("a1");
-      expect(setPreferredTerminalFocusTarget).toHaveBeenCalledWith("hybridInput");
+      // Asked of the pane once it is selected, rather than steering every
+      // later arrival through the shared preference.
+      expect(requestPaneFocus).toHaveBeenCalledExactlyOnceWith("a1", "hybridInput");
+      expect(setFocused.mock.invocationCallOrder[0]!).toBeLessThan(
+        requestPaneFocus.mock.invocationCallOrder[0]!
+      );
     });
 
     it("appends to an existing draft rather than replacing it", () => {
@@ -325,14 +345,50 @@ describe("useTypeAnywhere", () => {
       const rafSpy = vi
         .spyOn(window, "requestAnimationFrame")
         .mockImplementation((cb: FrameRequestCallback) => window.setTimeout(() => cb(0), 0));
+      // The lazy editor mounts on the second attempt and takes the keyboard.
+      const editor = document.createElement("div");
+      editor.setAttribute("data-hybrid-input-root", "a1");
+      editor.tabIndex = 0;
+      focusPanelInput.mockImplementation(() => {
+        if (focusPanelInput.mock.calls.length < 2) return false;
+        document.body.appendChild(editor);
+        editor.focus();
+        return true;
+      });
       renderHook(() => useTypeAnywhere());
 
       press("h");
-      // The lazy editor is not mounted yet, so the first attempts cannot land.
       await act(async () => {
         await vi.advanceTimersByTimeAsync(50);
       });
-      expect(focusPanelInput).toHaveBeenCalledWith("a1");
+
+      expect(focusPanelInput).toHaveBeenCalledTimes(2);
+      expect(focusPanelInput).toHaveBeenLastCalledWith("a1", "hybridInput");
+      expect(document.activeElement).toBe(editor);
+
+      editor.remove();
+      rafSpy.mockRestore();
+    });
+
+    // A press elsewhere or a newer request ends the request, and a retry after
+    // that would drag the keyboard back to where the user has left.
+    it("stops retrying once its request is no longer current", async () => {
+      vi.useFakeTimers();
+      const rafSpy = vi
+        .spyOn(window, "requestAnimationFrame")
+        .mockImplementation((cb: FrameRequestCallback) => window.setTimeout(() => cb(0), 0));
+      focusPanelInput.mockImplementation(() => {
+        focusRequest.current = null;
+        return false;
+      });
+      renderHook(() => useTypeAnywhere());
+
+      press("h");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(50);
+      });
+
+      expect(focusPanelInput).toHaveBeenCalledTimes(1);
 
       rafSpy.mockRestore();
     });

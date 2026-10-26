@@ -100,6 +100,7 @@ export function requestPaneFocus(paneId: string, surface: TerminalFocusTarget): 
  */
 export function holdPaneFocus(paneId: string, surface: TerminalFocusTarget): void {
   if (current?.explicit && current.paneId === paneId) return;
+  watchPresses();
   current = { paneId, surface, explicit: false };
   watchIntent();
 }
