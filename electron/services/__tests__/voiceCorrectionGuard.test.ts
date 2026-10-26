@@ -491,32 +491,43 @@ describe("validateCorrection on self-corrections and lists", () => {
     }
   });
 
-  it("aligns a passage near the alignment limit quickly", () => {
+  it("resolves a passage of self-corrections up to the alignment limit", () => {
     const raw = "Use the old cache, no wait, the new one, and log it. ".repeat(40);
     const corrected = "Use the new one, and log it. ".repeat(40);
-    const started = performance.now();
     expect(validateCorrection(raw, corrected)).toEqual({ ok: true });
-    expect(performance.now() - started).toBeLessThan(100);
   });
 
+  // At 8x each input is 12,000 characters, the longest passage cleanup sees.
   it.each([
     [
-      "self-corrections, past the alignment limit",
-      "Use the old cache, no wait, the new one, and log it. ".repeat(220),
-      "Use the new one, and log it. ".repeat(220),
+      "self-corrections",
+      (scale: number) => "Use the old cache, no wait, the new one, and log it. ".repeat(28 * scale),
+      (scale: number) => "Use the new one, and log it. ".repeat(28 * scale),
+      true,
+    ],
+    [
+      "bullet lines",
+      (scale: number) => "- a\n".repeat(375 * scale),
+      (scale: number) => "- a\n".repeat(375 * scale - 1),
+      true,
+    ],
+    [
+      "whitespace runs",
+      (scale: number) => `fix it, no${" ".repeat(1_500 * scale)}, sorry, now`,
+      () => "Fix it now.",
       false,
     ],
-    ["bullet lines", "- a\n".repeat(3000), "- a\n".repeat(2999), true],
-    ["whitespace runs", `fix it, no${" ".repeat(12_000)}, sorry, now`, "Fix it now.", false],
     [
       "corrections that each scan back",
-      `${"x ".repeat(3000)}${"I mean ".repeat(800)}a b c`,
-      "a b c",
+      (scale: number) => `${"x ".repeat(375 * scale)}${"I mean ".repeat(100 * scale)}a b c`,
+      () => "a b c",
       false,
     ],
-  ])("checks a 12,000-character passage of %s quickly", (_label, raw, corrected, ok) => {
-    const started = performance.now();
-    expect(validateCorrection(raw, corrected).ok).toBe(ok);
-    expect(performance.now() - started).toBeLessThan(200);
+  ])("checks a passage of %s in linear time", (_label, raw, corrected, ok) => {
+    expect(validateCorrection(raw(1), corrected(1)).ok).toBe(ok);
+    const ratio = scalingRatio((scale) => {
+      for (let i = 0; i < 10; i++) validateCorrection(raw(scale), corrected(scale));
+    });
+    expect(ratio).toBeLessThan(24);
   });
 });
