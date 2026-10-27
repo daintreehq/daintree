@@ -760,7 +760,12 @@ describe("AgentSetupWizard permissions step", () => {
 async function gotoInputStep() {
   await act(async () => {
     render(
-      <AgentSetupWizard isOpen onClose={vi.fn()} isFirstRun initialAvailability={{ claude: "ready" }} />
+      <AgentSetupWizard
+        isOpen
+        onClose={vi.fn()}
+        isFirstRun
+        initialAvailability={{ claude: "ready" }}
+      />
     );
   });
   await gotoPermissionsStep();

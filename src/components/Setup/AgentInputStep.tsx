@@ -63,9 +63,7 @@ export function AgentInputStep({ onBusyChange }: { onBusyChange: (busy: boolean)
           title="Hybrid input"
           subtitle="Show the multi-line input at the bottom of agent terminals. With it off, you type straight into the agent's own prompt, and dictation and file references stop working there."
           isEnabled={hybridInputEnabled}
-          onChange={() =>
-            void persist("terminalConfig.setHybridInputEnabled", !hybridInputEnabled)
-          }
+          onChange={() => void persist("terminalConfig.setHybridInputEnabled", !hybridInputEnabled)}
         />
         <SettingsDependents
           disabled={!hybridInputEnabled}
