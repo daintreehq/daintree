@@ -523,6 +523,20 @@ describe("voiceRecordingStore — identified items (#13109)", () => {
     expect(buffer().completedSegments).toEqual(["first second"]);
   });
 
+  it("finishSession keeps the preview as the caller committed it", () => {
+    const store = useVoiceRecordingStore.getState();
+    store.appendDelta("Um, so the", "item-a");
+    store.finishSession({ preserveLiveText: true, committedLiveText: "So the" });
+    expect(buffer().completedSegments).toEqual(["So the"]);
+  });
+
+  it("finishSession keeps nothing of a preview the caller committed as empty", () => {
+    const store = useVoiceRecordingStore.getState();
+    store.appendDelta("Um", "item-a");
+    store.finishSession({ preserveLiveText: true, committedLiveText: "" });
+    expect(buffer().completedSegments).toEqual([]);
+  });
+
   it("a replacing delta revises its item's preview instead of appending (#14640)", () => {
     const store = useVoiceRecordingStore.getState();
     store.appendDelta("hello", "item-a", true);

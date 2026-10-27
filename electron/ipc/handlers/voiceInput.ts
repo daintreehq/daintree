@@ -72,6 +72,7 @@ import {
   type HostPane,
 } from "../../services/voice/hostPaneContext.js";
 import { collectHeardAsRules, createHeardAsRewriter } from "../../../shared/utils/voiceHeardAs.js";
+import { stripHesitations } from "../../../shared/utils/voiceHesitations.js";
 import {
   carrySpansThroughEdits,
   shiftSpans,
@@ -1381,6 +1382,9 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // OpenAI's VAD already waits out a long silence, and checks it again,
     // before it ends an utterance; only Deepgram's short endpoint needs more.
     const sendSettleMs = settings.transcriptionProvider === "deepgram" ? SPOKEN_SEND_SETTLE_MS : 0;
+    // "um" is a word in Portuguese and German, so another language's hesitations
+    // are left for cleanup to judge.
+    const dropHesitations = normalizeVoiceLanguage(settings.language) === "en";
 
     // Break commands and "send it" were read over the whole utterance, so
     // each completion arrives with its text as it lands (#14801), and
@@ -1668,9 +1672,22 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
           ...(voiceEvent.itemId ? { itemId: voiceEvent.itemId } : {}),
         });
       } else if (voiceEvent.type === "complete") {
-        const rawText = voiceEvent.text.trim();
+        const providerText = voiceEvent.text.trim();
         const lead = voiceEvent.text.length - voiceEvent.text.trimStart().length;
-        const uncertain = sliceSpans(voiceEvent.uncertain ?? [], lead, lead + rawText.length);
+        const providerUncertain = sliceSpans(
+          voiceEvent.uncertain ?? [],
+          lead,
+          lead + providerText.length
+        );
+        // The live preview shows hesitations as they are said; what lands
+        // in the draft never has them, with or without cleanup after it.
+        // They go before the commands are read, so "um, send it" still sends
+        // and a held segment let go as words is already clean.
+        const hesitationEdits: VoiceTextEdit[] = [];
+        const rawText = dropHesitations
+          ? stripHesitations(providerText, hesitationEdits)
+          : providerText;
+        const uncertain = carrySpansThroughEdits(providerUncertain, hesitationEdits);
         if (voiceEvent.incomplete) {
           // Words around it may be missing, so its own land as said and are
           // never read as a command; what was held went ahead of it as words.

@@ -931,3 +931,202 @@ describe("voiceInput — cleanup context read while the dictation runs (#14771)"
     expect(shared.resolveCalls).toHaveLength(1);
   });
 });
+
+describe("voiceInput — hesitations", () => {
+  let cleanup: () => void;
+
+  async function start(intent?: "rewrite") {
+    const handleStart = getHandler("voice-input:start") as StartHandler;
+    await handleStart(
+      fakeEvent,
+      nextSessionId(),
+      intent ? { terminalId: TERMINAL, intent } : undefined
+    );
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    shared.transcriptionEventCallback = null;
+    shared.correctionCalls = [];
+    shared.startCalls = [];
+    shared.startContexts = [];
+    shared.assembleKeyterms = null;
+    shared.provider = "openai";
+    shared.commandTarget = claudeTarget();
+    shared.dictionary = [];
+    shared.settingsOverride = {};
+    shared.roundTrip = undefined;
+
+    const win = buildMainWindow();
+    cleanup = registerVoiceInputHandlers({
+      mainWindow: win as unknown as Electron.BrowserWindow,
+      ptyClient: {
+        hasTerminal: (id: string) => id === TERMINAL,
+        getTerminalProjectId: () => null,
+      },
+    } as unknown as Parameters<typeof registerVoiceInputHandlers>[0]);
+  });
+
+  afterEach(() => {
+    cleanup?.();
+  });
+
+  it.each([
+    [
+      "openai",
+      "Um, so the build failed. Uh, we should revert.",
+      "So the build failed. We should revert.",
+    ],
+    [
+      "deepgram",
+      "um so the build failed uhm we should revert",
+      "so the build failed we should revert",
+    ],
+  ] as const)(
+    "lands %s's transcript without them when cleanup is off",
+    async (provider, text, expected) => {
+      shared.provider = provider;
+      shared.settingsOverride = { correctionEnabled: false };
+      await start();
+      emitTranscriptionEvent({ type: "complete", text, itemId: "item-A" });
+      expect(completions()).toEqual([expect.objectContaining({ text: expected })]);
+    }
+  );
+
+  it("retires an item that was only a hesitation with an empty completion", async () => {
+    await start();
+    emitTranscriptionEvent({ type: "complete", text: "Um.", itemId: "item-A" });
+    expect(completions()).toEqual([expect.objectContaining({ text: "", itemId: "item-A" })]);
+  });
+
+  it("leaves the live preview as it was said", async () => {
+    await start();
+    emitTranscriptionEvent({ type: "delta", text: "Um, so the", itemId: "item-A" });
+    const deltas = activeSent.filter((m) => m.channel === "voice-input:transcription-delta");
+    expect(deltas.map((m) => m.payload)).toEqual([expect.objectContaining({ text: "Um, so the" })]);
+  });
+
+  it("reads a send after a hesitation as the send it is, and keeps the heard text clean", async () => {
+    shared.dictionary = [{ term: "Zustand", heardAs: ["zoo stand"], source: "manual", addedAt: 1 }];
+    await start();
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "Um, use zoo stand uh for the store, send it.",
+      itemId: "item-A",
+      endOfSpeech: true,
+    });
+    expect(completions()).toEqual([
+      expect.objectContaining({
+        text: "Use Zustand for the store",
+        heard: "Use zoo stand for the store",
+        send: true,
+      }),
+    ]);
+  });
+
+  it("sends on a hesitation right before 'send it'", async () => {
+    await start();
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "Fix the build, um, send it.",
+      itemId: "item-A",
+      endOfSpeech: true,
+    });
+    expect(completions()).toEqual([expect.objectContaining({ text: "Fix the build", send: true })]);
+  });
+
+  it("reads a break command a hesitation fell inside of", async () => {
+    await start();
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "Fix the build new um line",
+      itemId: "item-A",
+      endOfSpeech: true,
+    });
+    expect(completions().map((p) => p.text)).toEqual(["Fix the build"]);
+    expect(activeSent.filter((m) => m.channel === "voice-input:paragraph-boundary")).toHaveLength(
+      1
+    );
+  });
+
+  it("reads a command split across segments with a hesitation between", async () => {
+    await start();
+    emitTranscriptionEvent({ type: "complete", text: "Fix it, new", itemId: "A" });
+    expect(completions()).toEqual([]);
+    emitTranscriptionEvent({ type: "complete", text: "um, line.", itemId: "B", endOfSpeech: true });
+    expect(
+      (completions() as Array<{ text: string; itemId?: string }>).map((p) => ({
+        itemId: p.itemId,
+        text: p.text,
+      }))
+    ).toEqual([
+      { itemId: "B", text: "" },
+      { itemId: "A", text: "Fix it," },
+    ]);
+    expect(activeSent.filter((m) => m.channel === "voice-input:paragraph-boundary")).toHaveLength(
+      1
+    );
+  });
+
+  it("lands a segment held for a command as clean words when none follows", async () => {
+    await start();
+    emitTranscriptionEvent({ type: "complete", text: "Um, add the new", itemId: "A" });
+    expect(completions()).toEqual([]);
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "uh, settings page.",
+      itemId: "B",
+      endOfSpeech: true,
+    });
+    expect(
+      (completions() as Array<{ text: string; itemId?: string }>).map((p) => ({
+        itemId: p.itemId,
+        text: p.text,
+      }))
+    ).toEqual([
+      { itemId: "A", text: "Add the new" },
+      { itemId: "B", text: "settings page." },
+    ]);
+    expect(completions().some((p) => p.send)).toBe(false);
+  });
+
+  it("keeps the unsure words with the words they were flagged on", async () => {
+    await start();
+    const text = "Um, check the build now";
+    const from = text.indexOf("build");
+    emitTranscriptionEvent({
+      type: "complete",
+      text,
+      itemId: "item-A",
+      uncertain: [{ from, to: from + 5 }],
+    });
+    const [sent] = completions();
+    expect(sent?.text).toBe("Check the build now");
+    expect(flagged(sent?.text, sent?.uncertain)).toEqual(["10:build"]);
+  });
+
+  it("leaves words and identifiers that only contain one alone", async () => {
+    await start();
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "Open umbrella.ts and the um_helper summary",
+      itemId: "item-A",
+    });
+    expect(completions()).toEqual([
+      expect.objectContaining({ text: "Open umbrella.ts and the um_helper summary" }),
+    ]);
+  });
+
+  it("leaves another language's words to cleanup", async () => {
+    shared.settingsOverride = { language: "pt" };
+    await start();
+    emitTranscriptionEvent({ type: "complete", text: "Um carro, uh", itemId: "item-A" });
+    expect(completions()).toEqual([expect.objectContaining({ text: "Um carro, uh" })]);
+  });
+
+  it("keeps a rewrite instruction as it was said", async () => {
+    await start("rewrite");
+    emitTranscriptionEvent({ type: "complete", text: "Um, make it shorter", itemId: "item-A" });
+    expect(completions()).toEqual([expect.objectContaining({ text: "Um, make it shorter" })]);
+  });
+});
