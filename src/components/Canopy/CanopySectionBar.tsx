@@ -22,7 +22,8 @@ export function SectionBar({
 }: {
   id: string;
   label: string;
-  count: number;
+  /** Left off for a section with nothing in it: its own words say so, not a 0. */
+  count?: number;
   /** What the count counts, for the screen reader. */
   countNoun?: string;
   trailing?: React.ReactNode;
@@ -37,7 +38,9 @@ export function SectionBar({
   const heading = (
     <span id={id} className={cn(PALETTE_SECTION_LABEL_CLASS, "flex items-center gap-1.5")}>
       {label}
-      <CountBadge label={pluralize(count, countNoun)}>{count}</CountBadge>
+      {count !== undefined && (
+        <CountBadge label={pluralize(count, countNoun)}>{count}</CountBadge>
+      )}
     </span>
   );
   if (!fold) {

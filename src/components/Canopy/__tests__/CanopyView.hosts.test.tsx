@@ -849,6 +849,17 @@ describe("All hosts", () => {
     ]);
   });
 
+  it("says once, in the empty Assistants line, that only this machine's assistants are listed", async () => {
+    installElectron();
+    render(<CanopyView />);
+    await settle();
+    const line = [...document.querySelectorAll("[data-canopy-empty-line]")].find((candidate) =>
+      candidate.textContent?.startsWith("Start an assistant from the Assistant panel")
+    );
+    expect(line?.textContent).toMatch(/Only .+'s assistants are listed$/);
+    expect(document.body.textContent!.split("assistants are listed")).toHaveLength(2);
+  });
+
   it("turns Canopy on nowhere, and says which host is off", async () => {
     const own = installElectron();
     remoteCanopy = canopySnapshot({ activated: false, mode: "unset", cards: [] });

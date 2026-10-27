@@ -532,8 +532,29 @@ describe("CanopyView role filter", () => {
     useCanopyStore.setState({ roleFilter: "assistants" });
     render(<CanopyView />);
     await settle();
-    expect(document.body.textContent).toContain("Daintree couldn't list every assistant just now.");
+    expect(document.body.textContent).toContain("Daintree couldn't list every assistant just now");
     expect(document.body.textContent).not.toContain("No assistant is running");
+    expect(document.body.textContent).not.toContain("Start an assistant");
+  });
+
+  it("draws no 0 over an empty Assistants section, and names how to start one", async () => {
+    const countOf = (id: string) =>
+      document.getElementById(id)!.querySelector("[data-slot=count-badge]");
+    const first = render(<CanopyView />);
+    await settle();
+    expect(countOf("canopy-assistants-label")).not.toBeNull();
+    first.unmount();
+    useCanopyStore.setState({ isOpen: true });
+
+    directory = { coverage: "ok", observedAt: NOW, complete: true, omitted: 0, entries: [] };
+    render(<CanopyView />);
+    await settle();
+    expect(countOf("canopy-assistants-label")).toBeNull();
+    expect(
+      [...document.querySelectorAll("[data-canopy-empty-line]")].map((line) => line.textContent)
+    ).toContain("Start an assistant from the Assistant panel");
+    // The inbox above it still counts its rows.
+    expect(countOf("canopy-inbox-label")).not.toBeNull();
   });
 });
 
@@ -611,7 +632,7 @@ describe("CanopyView show its work", () => {
       "Some hosts couldn't be read, so this may be incomplete"
     );
     // Never a claim that there is no work, on a reading that can't say so.
-    expect(document.body.textContent).toContain("None found on the hosts that could be read.");
+    expect(document.body.textContent).toContain("None found on the hosts that could be read");
     expect(document.body.textContent).not.toContain("No worker in the inbox");
   });
 

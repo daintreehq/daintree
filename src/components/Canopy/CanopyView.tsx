@@ -41,6 +41,7 @@ import { CanopyCard, canopyCardDomId } from "./CanopyCard";
 import { CanopyRow } from "./CanopyRow";
 import { CanopyRowMenu } from "./CanopyRowMenu";
 import { SectionBar } from "./CanopySectionBar";
+import { CanopyEmptyLine } from "./CanopyEmptyLine";
 import { CanopyStatusBar, formatModelBytes } from "./CanopyStatusBar";
 import { CanopyPlace } from "./CanopyPlace";
 import { CanopyPitch } from "./CanopyPitch";
@@ -718,6 +719,8 @@ function CanopyInbox({
     onScreen,
     listHidden,
   });
+  // The band has rows of its own: only then do the band headings show.
+  const bandShown = bandSize > 0 || bandAssistants.length > 0;
   // A row asked for from the recording indicator is looked for once its
   // host's runs are in, or its host has failed: in All hosts, that host's own.
   const revealRunId = useCanopyStore((s) => s.replyReveal?.runId ?? null);
@@ -960,27 +963,28 @@ function CanopyInbox({
           : hostOfferShown
             ? `Canopy is off on ${hostName}`
             : null;
-  // What the line and the empty band both say while no agent needs the user.
-  const nothingWaiting = readerOff
-    ? "No agent is waiting on you"
+  // What the line and the empty band both say while no agent needs the user, and
+  // whether it is the all-clear itself: only the last branch draws it.
+  const nothingWaiting: { words: string; allClear: boolean } = readerOff
+    ? { words: "No agent is waiting on you", allClear: false }
     : // "Nothing" is a conclusion: qualified while some screens
       // can't be read at all, withheld while Daintree can't see its
       // agents, and held back while any run in the inbox has yet to
       // be read at all — readings owed, a retry waiting, however
       // long they take, and after a scope switch too.
       (canopy?.lastError ?? null) !== null
-      ? "Nothing needs you that Canopy could read"
+      ? { words: "Nothing needs you that Canopy could read", allClear: false }
       : fleet?.degraded
-        ? "Can't tell who needs you right now"
+        ? { words: "Can't tell who needs you right now", allClear: false }
         : owedOnOpen ||
             canopy?.waiting !== undefined ||
             (canopy?.busy === true && inbox.inbox.some((item) => item.card === null))
-          ? "Checking who needs you…"
+          ? { words: "Checking who needs you…", allClear: false }
           : // A screen that can't be read yet (starting, hibernating)
             // has no reading at all: nothing is concluded about it.
             inbox.inbox.some((item) => item.card === null)
-            ? "Not every agent could be read yet"
-            : "Nothing needs you";
+            ? { words: "Not every agent could be read yet", allClear: false }
+            : { words: "Nothing needs you", allClear: true };
   const ownHostLabel = (hostRows ?? []).find((row) => row.hostId === ownHostId)?.name ?? "This Mac";
   const needsYouLead = `${[
     needsYouWorkers > 0 ? pluralize(needsYouWorkers, "agent") : null,
@@ -1000,7 +1004,7 @@ function CanopyInbox({
           : // What needs you leads; what is new follows. The list's own heading
             // counts the agents.
             [
-              needsYou > 0 ? needsYouLead : nothingWaiting,
+              needsYou > 0 ? needsYouLead : nothingWaiting.words,
               unreadCount > 0 ? `${unreadCount.toLocaleString()} unread` : null,
             ]
               .filter(Boolean)
@@ -1166,7 +1170,9 @@ function CanopyInbox({
     searchRef.current?.focus({ preventScroll: true });
   };
   // What the empty band says: the header's own caution about hosts and readings,
-  // or that a filter is hiding what the header counts.
+  // or that a filter is hiding what the header counts. Only the all-clear has
+  // words of its own, so the band settles the header's conclusion rather than
+  // repeating it; a qualified line is the header's own, word for word.
   const bandEmptyWords =
     needsYou > 0
       ? `${needsYouLead}, but a filter hides ${needsYou === 1 ? "it" : "them"}`
@@ -1175,7 +1181,9 @@ function CanopyInbox({
           ? "Not every host could be read"
           : fleet !== null && retryingSomewhere
             ? "Checking who needs you…"
-            : nothingWaiting));
+            : nothingWaiting.allClear
+              ? "No action needed"
+              : nothingWaiting.words));
   const headerText =
     hostSummary ??
     (needsYou === 0 && fleet !== null && hostTroubles.length > 0
@@ -1206,21 +1214,50 @@ function CanopyInbox({
   // The relationship filter keeps the list, and its banner, up even with nothing in it.
   const listsAssistants =
     (assistantsShown && (assistantItems.length > 0 || !workersShown)) || workOf !== null;
+  // One clause each, as the empty line wants; with none running anywhere, it
+  // names the way to start one.
   const assistantsEmpty: string | null = !assistantsReadable
-    ? `Assistants on ${hostName} can't be listed from this window yet.`
+    ? `Assistants on ${hostName} can't be listed from this window yet`
     : workOf !== null
       ? directory !== null && isFullAgentDirectory(directory)
-        ? "This assistant isn't running any more."
+        ? "This assistant isn't running any more"
         : null
       : directory === null
         ? null
         : searching
-          ? `No assistant matches “${appliedQuery.trim()}”.`
+          ? `No assistant matches “${appliedQuery.trim()}”`
           : !isFullAgentDirectory(directory)
-            ? "Daintree couldn't list every assistant just now."
+            ? "Daintree couldn't list every assistant just now"
             : scope === "project"
-              ? "No assistant is running in this project."
-              : "No assistant is running. Start one from the Assistant panel.";
+              ? "No assistant is running in this project"
+              : "Start an assistant from the Assistant panel";
+  // Shown in place of rows only when none is in the band either.
+  const assistantsEmptyShown =
+    listedAssistants.length === 0 && bandAssistants.length === 0 && assistantsEmpty !== null;
+  // All hosts lists this machine's assistants alone: said once, with the list or its empty line.
+  const ownAssistantsOnly = `Only ${ownHostLabel}'s assistants are listed`;
+  const inboxEmpty: { words: string; note?: string } = searching
+    ? {
+        words:
+          shownInbox.inbox.length > 0
+            ? `Nothing unread matches “${appliedQuery.trim()}”`
+            : `Nothing matches “${appliedQuery.trim()}”`,
+      }
+    : workOf !== null
+      ? {
+          words: workPartial
+            ? "None found on the hosts that could be read"
+            : "No worker in the inbox was started by or handed to this assistant",
+        }
+      : unreadOnly && inbox.inbox.length > 0
+        ? {
+            words: "Nothing unread",
+            note: "Each agent shows here again when it does something new",
+          }
+        : {
+            words: "Every agent is archived",
+            note: "Each comes back when it has something new to say",
+          };
 
   const headerControls = (
     <>
@@ -1473,6 +1510,8 @@ function CanopyInbox({
                 data-row-menu=""
                 // Still placing runs as the open's readings land.
                 data-revealing={revealed ? undefined : "true"}
+                // A band heading pins under the Inbox bar: rows scrolled to clear both.
+                data-band-headings={workersShown && bandShown ? "" : undefined}
               >
                 {workOf !== null && (
                   <div
@@ -1563,17 +1602,19 @@ function CanopyInbox({
                       }
                     />
                     {/* An empty band says so above the listbox, not inside it: an option
-                        group holds options, and this one would hold only words. */}
-                    {bandSize === 0 && bandAssistants.length === 0 && listed.length > 0 && (
+                        group holds options, and this one would hold only words. Its name
+                        is for the screen reader; on screen the words stand alone, rather
+                        than a heading stacked over a line about nothing. */}
+                    {!bandShown && listed.length > 0 && (
                       <div role="group" aria-labelledby="canopy-needs-you-label">
-                        <div
+                        <span
                           id="canopy-needs-you-label"
-                          className="flex h-7 items-center px-3 text-xs font-medium text-text-secondary"
+                          className="sr-only"
                           data-testid="canopy-needs-you"
                         >
                           Needs you
-                        </div>
-                        <p className="px-3 pb-2 text-xs text-text-secondary">{bandEmptyWords}</p>
+                        </span>
+                        <CanopyEmptyLine>{bandEmptyWords}</CanopyEmptyLine>
                       </div>
                     )}
                     {listed.length > 0 || bandAssistants.length > 0 ? (
@@ -1617,10 +1658,16 @@ function CanopyInbox({
                             >
                               {/* Pinned under the Inbox bar while its own rows scroll, so a
                                 scrolled list still says which band it is in; the next
-                                group's heading takes its place. */}
+                                group's heading takes its place. With the band empty,
+                                everything else is the whole list: its name is only
+                                the screen reader's. */}
                               <div
                                 id={`${group.id}-label`}
-                                className="canopy-inbox-band-heading flex h-7 items-center px-3 text-xs font-medium text-text-secondary"
+                                className={
+                                  bandShown
+                                    ? "canopy-inbox-band-heading flex h-7 items-center px-3 text-xs font-medium text-text-secondary"
+                                    : "sr-only"
+                                }
                                 data-testid={group.id}
                               >
                                 {group.label}
@@ -1676,19 +1723,7 @@ function CanopyInbox({
                       shownInbox.inbox.length === 0 &&
                       shownInbox.archived.length > 0 ? null : (
                       // A search whose only matches are archived lets their bar below say so.
-                      <p className="px-3 pb-3 text-xs text-text-secondary">
-                        {searching
-                          ? shownInbox.inbox.length > 0
-                            ? `Nothing unread matches “${appliedQuery.trim()}”.`
-                            : `Nothing matches “${appliedQuery.trim()}”.`
-                          : workOf !== null
-                            ? workPartial
-                              ? "None found on the hosts that could be read."
-                              : "No worker in the inbox was started by or handed to this assistant."
-                            : unreadOnly && inbox.inbox.length > 0
-                              ? "Nothing unread. Each agent shows here again when it does something new."
-                              : "Every agent is archived. Each comes back when it has something new to say."}
-                      </p>
+                      <CanopyEmptyLine note={inboxEmpty.note}>{inboxEmpty.words}</CanopyEmptyLine>
                     )}
                   </>
                 )}
@@ -1698,13 +1733,11 @@ function CanopyInbox({
                       <SectionBar
                         id="canopy-assistants-label"
                         label="Assistants"
-                        count={listedAssistants.length}
+                        count={listedAssistants.length > 0 ? listedAssistants.length : undefined}
                         countNoun="assistant"
                       />
-                      {everyHost && (
-                        <p className="px-3 pb-2 text-xs text-text-secondary">
-                          Only {ownHostLabel}'s assistants are listed.
-                        </p>
+                      {everyHost && !assistantsEmptyShown && (
+                        <p className="px-3 pb-2 text-xs text-text-secondary">{ownAssistantsOnly}</p>
                       )}
                       {listedAssistants.length > 0 ? (
                         <div
@@ -1729,9 +1762,10 @@ function CanopyInbox({
                           ))}
                         </div>
                       ) : (
-                        bandAssistants.length === 0 &&
-                        assistantsEmpty !== null && (
-                          <p className="px-3 pb-3 text-xs text-text-secondary">{assistantsEmpty}</p>
+                        assistantsEmptyShown && (
+                          <CanopyEmptyLine note={everyHost ? ownAssistantsOnly : undefined}>
+                            {assistantsEmpty}
+                          </CanopyEmptyLine>
                         )
                       )}
                     </>

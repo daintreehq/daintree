@@ -212,6 +212,15 @@ function screenButton(root: HTMLElement, name: string): HTMLElement {
   return found;
 }
 
+/** What the empty Needs you band says, above the listbox; null while it has rows. */
+function bandWords() {
+  return (
+    document.querySelector(
+      "[role=group][aria-labelledby=canopy-needs-you-label] [data-canopy-empty-line]"
+    )?.textContent ?? null
+  );
+}
+
 /** Drain the landing effect's two animation frames. */
 async function frames() {
   await act(async () => {
@@ -1712,7 +1721,7 @@ describe("CanopyView", () => {
     fireEvent.click(screenButton(body, "Unread1"));
     const band = body.querySelector("[aria-labelledby=canopy-needs-you-label]")!;
     expect(band.querySelectorAll("[data-canopy-card]")).toHaveLength(0);
-    expect(band.textContent).toContain("2 agents need you, but a filter hides them");
+    expect(bandWords()).toBe("2 agents need you, but a filter hides them");
   });
 
   it("takes the header count to the band and lifts the Unread filter that hides a member", async () => {
@@ -1795,6 +1804,8 @@ describe("CanopyView", () => {
     const first = render(<CanopyView />);
     await frames();
     expect(first.container.ownerDocument.body.textContent).toContain("Checking who needs you…");
+    // A conclusion held back is the header's own words in the band, never its all-clear.
+    expect(bandWords()).toBe("Checking who needs you…");
     first.unmount();
 
     useCanopyStore.setState({ isOpen: true });
@@ -1805,6 +1816,7 @@ describe("CanopyView", () => {
     render(<CanopyView />);
     await frames();
     expect(document.body.textContent).toContain("Nothing needs you that Canopy could read");
+    expect(bandWords()).toBe("Nothing needs you that Canopy could read");
   });
 
   it("counts as seen only the urgent asks it shows, not those the Unread filter hides", async () => {
@@ -1906,11 +1918,14 @@ describe("CanopyView", () => {
     const first = render(<CanopyView />);
     await frames();
     expect(document.body.textContent).toContain("Checking who needs you…");
-    // Once the retry is through, the conclusion stands.
+    expect(bandWords()).toBe("Checking who needs you…");
+    // Once the retry is through, the conclusion stands: the header draws it and
+    // the band settles it in words of its own.
     act(() => useCanopyStore.getState().applySnapshot({ ...canopySnapshot, cards: [calm] }));
     await frames();
     expect(document.body.textContent).toContain("Nothing needs you");
     expect(document.body.textContent).not.toContain("Checking who needs you…");
+    expect(bandWords()).toBe("No action needed");
     first.unmount();
 
     useCanopyStore.setState({ isOpen: true, snapshot: canopySnapshot });
@@ -1919,6 +1934,79 @@ describe("CanopyView", () => {
     render(<CanopyView />);
     await frames();
     expect(document.body.textContent).toContain("Can't tell who needs you right now");
+    expect(bandWords()).toBe("Can't tell who needs you right now");
+  });
+
+  it("draws no heading over an empty band or over the rest, until the band has rows", async () => {
+    const working = run("working", { agentState: "working", since: NOW - 30_000 });
+    useFleetSnapshotStore.setState({
+      snapshot: { runs: [working], changedAt: NOW, degraded: false, lastSuccessfulAt: NOW },
+    });
+    const calm = {
+      ...stuckCard("working"),
+      priority: 5,
+      attentionScore: 5,
+      headline: "Running the suite",
+    };
+    const settled = { ...canopySnapshot, cards: [calm] };
+    useCanopyStore.setState({ snapshot: settled });
+    installElectron(settled);
+    const { container } = render(<CanopyView />);
+    await frames();
+    const body = container.ownerDocument.body;
+    const band = body.querySelector("[role=group][aria-labelledby=canopy-needs-you-label]")!;
+    expect(bandWords()).toBe("No action needed");
+    // Words, not options: outside the listbox, which still holds the run.
+    expect(band.closest("[role=listbox]")).toBeNull();
+    expect(band.querySelector("[role=option]")).toBeNull();
+    expect(cards(container).map((card) => card.id)).toEqual(["canopy-card-working"]);
+    // Both groups keep their names for the screen reader; neither is drawn.
+    const labelHidden = (id: string) => body.querySelector(`#${id}`)?.classList.contains("sr-only");
+    expect(labelHidden("canopy-needs-you-label")).toBe(true);
+    expect(labelHidden("canopy-everything-else-label")).toBe(true);
+    expect(body.querySelector("[data-canopy-list]")!.hasAttribute("data-band-headings")).toBe(false);
+
+    // An agent stops for the user: the band has a row, and both headings show.
+    act(() =>
+      useFleetSnapshotStore.setState({
+        snapshot: {
+          runs: [
+            working,
+            run("waiting", {
+              agentState: "waiting",
+              waitingReason: "approval",
+              since: NOW - 10_000,
+            }),
+          ],
+          changedAt: NOW + 1,
+          degraded: false,
+          lastSuccessfulAt: NOW,
+        },
+      })
+    );
+    await frames();
+    expect(bandWords()).toBeNull();
+    expect(labelHidden("canopy-needs-you-label")).toBe(false);
+    expect(labelHidden("canopy-everything-else-label")).toBe(false);
+    expect(body.querySelector("[data-canopy-list]")!.hasAttribute("data-band-headings")).toBe(true);
+  });
+
+  it("words the empty band as the header does with the reader off, never as the all-clear", async () => {
+    useFleetSnapshotStore.setState({
+      snapshot: {
+        runs: [run("working", { agentState: "working", since: NOW - 30_000 })],
+        changedAt: NOW,
+        degraded: false,
+        lastSuccessfulAt: NOW,
+      },
+    });
+    const off = { ...canopySnapshot, activated: false, cards: [], glances: [] };
+    installElectron(off);
+    useCanopyStore.setState({ snapshot: off });
+    render(<CanopyView />);
+    await frames();
+    expect(document.body.textContent).toContain("No agent is waiting on you");
+    expect(bandWords()).toBe("No agent is waiting on you");
   });
 
   it("lists a working run with the rest and lands on the top of the list", async () => {
