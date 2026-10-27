@@ -87,6 +87,11 @@ import {
 } from "@/services/voiceStartDiagnostics";
 import { recordCorrectionLanded, type LandedCorrection } from "@/services/voiceCorrectionLanding";
 import {
+  isHeldBackSession,
+  planVoiceDraftSend,
+  type VoiceDraftSend,
+} from "@/services/voiceDraftSend";
+import {
   collectCorrectionPassages,
   joinPassageTexts,
   locatePassage,
@@ -153,6 +158,9 @@ function formatTargetLabel(target: VoiceRecordingTarget): string {
  * Where the session's next words go in this draft: its anchor, or else the
  * caret (or the selection) the composer last showed in this exact draft, or
  * else the end. Without a session nothing is tracked and the words append.
+ * While a send from the draft waits on its cleanup, the caret sits in text
+ * that is about to go, so a session that send doesn't take writes after it
+ * (#14804).
  */
 function resolveVoiceAnchor(
   panelId: string,
@@ -165,13 +173,10 @@ function resolveVoiceAnchor(
   const store = useDictationRangeStore.getState();
   const existing = store.getAnchor(target);
   if (existing) return existing;
-  store.setAnchor(
-    target,
-    readComposerSelection(makeDraftKey(panelId, projectId), draft) ?? {
-      from: draft.length,
-      to: draft.length,
-    }
-  );
+  const caret = isHeldBackSession(panelId, sessionId)
+    ? null
+    : readComposerSelection(makeDraftKey(panelId, projectId), draft);
+  store.setAnchor(target, caret ?? { from: draft.length, to: draft.length });
   return useDictationRangeStore.getState().getAnchor(target);
 }
 
@@ -3250,9 +3255,47 @@ class VoiceRecordingService {
     job.settle();
   }
 
-  hasPendingCorrection(panelId: string): boolean {
+  /**
+   * The dictation sessions a send from this draft takes, read as it starts:
+   * every one with words in the draft or cleanup on its way, and the one
+   * dictating into it. A session that starts after this is the next prompt's
+   * (#14804).
+   */
+  sendSessions(panelId: string, projectId: string | undefined): ReadonlySet<string> {
+    const sessions = new Set<string>();
+    for (const record of useDictationRangeStore.getState().listDictations(panelId, projectId)) {
+      sessions.add(record.sessionId);
+    }
     for (const correction of this.pendingCorrections) {
-      if (correction.panelId === panelId) return true;
+      if (correction.panelId === panelId && correction.sessionId) {
+        sessions.add(correction.sessionId);
+      }
+    }
+    const { activeTarget, panelBuffers } = useVoiceRecordingStore.getState();
+    const active =
+      activeTarget?.panelId === panelId ? panelBuffers[panelId]?.dictationSessionId : null;
+    if (active) sessions.add(active);
+    return sessions;
+  }
+
+  /**
+   * Whether the correction is one for the panel that a send taking `sessions`
+   * owns; without `sessions`, every one on the panel. A spoken rewrite can't
+   * start while a send waits (the composer has no selection), so every
+   * rewrite on the panel belongs to it.
+   */
+  private correctionFor(
+    correction: PendingCorrection,
+    panelId: string,
+    sessions: ReadonlySet<string> | undefined
+  ): boolean {
+    if (correction.panelId !== panelId) return false;
+    return !sessions || correction.sessionId === null || sessions.has(correction.sessionId);
+  }
+
+  hasPendingCorrection(panelId: string, sessions?: ReadonlySet<string>): boolean {
+    for (const correction of this.pendingCorrections) {
+      if (this.correctionFor(correction, panelId, sessions)) return true;
     }
     for (const rewrite of this.pendingRewrites) {
       if (rewrite.panelId === panelId) return true;
@@ -3263,12 +3306,13 @@ class VoiceRecordingService {
   /**
    * When every correction pending for the panel should have landed, on the
    * `performance.now()` clock, going by how long past ones took; null with none
-   * pending, or when one has no estimate (a spoken rewrite).
+   * pending, or when one has no estimate (a spoken rewrite). Given `sessions`,
+   * only theirs count.
    */
-  expectedCorrectionLanding(panelId: string): number | null {
+  expectedCorrectionLanding(panelId: string, sessions?: ReadonlySet<string>): number | null {
     let landsAt: number | null = null;
     for (const correction of this.pendingCorrections) {
-      if (correction.panelId !== panelId) continue;
+      if (!this.correctionFor(correction, panelId, sessions)) continue;
       landsAt = Math.max(landsAt ?? 0, correction.startedAt + correction.expectedMs);
     }
     for (const rewrite of this.pendingRewrites) {
@@ -3281,10 +3325,14 @@ class VoiceRecordingService {
    * Resolves true once every correction pending for the panel has landed or
    * been dropped, or false as soon as `signal` aborts. There is no deadline of
    * its own: each request carries its timeout in main and settles, failed, at
-   * the end of it (#14780).
+   * the end of it (#14780). Given `sessions`, only theirs count.
    */
-  async waitForPendingCorrections(panelId: string, signal?: AbortSignal): Promise<boolean> {
-    if (!this.hasPendingCorrection(panelId)) return true;
+  async waitForPendingCorrections(
+    panelId: string,
+    signal?: AbortSignal,
+    sessions?: ReadonlySet<string>
+  ): Promise<boolean> {
+    if (!this.hasPendingCorrection(panelId, sessions)) return true;
     if (signal?.aborted) return false;
 
     let onAbort: (() => void) | undefined;
@@ -3294,11 +3342,12 @@ class VoiceRecordingService {
     });
     try {
       // A dictation restarted and stopped on the panel can register another
-      // correction while this waits; it is waited for too.
-      while (this.hasPendingCorrection(panelId)) {
+      // correction while this waits; it is waited for too, unless it belongs
+      // to a session `sessions` leaves out.
+      while (this.hasPendingCorrection(panelId, sessions)) {
         const settled: Promise<void>[] = [];
         for (const correction of this.pendingCorrections) {
-          if (correction.panelId === panelId) settled.push(correction.settled);
+          if (this.correctionFor(correction, panelId, sessions)) settled.push(correction.settled);
         }
         for (const rewrite of this.pendingRewrites) {
           if (rewrite.panelId === panelId) settled.push(rewrite.settled);
@@ -3315,11 +3364,13 @@ class VoiceRecordingService {
   /**
    * Drops every correction still pending for the panel, for a send that is
    * taking the draft as it stands. A result that arrives later never lands.
+   * Given `sessions`, a newer session's cleanup is left to land on the words
+   * the send holds back.
    */
-  discardPendingCorrections(panelId: string): void {
+  discardPendingCorrections(panelId: string, sessions?: ReadonlySet<string>): void {
     let dropped = false;
     for (const correction of [...this.pendingCorrections]) {
-      if (correction.panelId !== panelId) continue;
+      if (!this.correctionFor(correction, panelId, sessions)) continue;
       this.retireCorrection(correction);
       dropped = true;
     }
@@ -3330,6 +3381,50 @@ class VoiceRecordingService {
       dropped = true;
     }
     if (dropped) this.syncCorrectionRange(panelId);
+  }
+
+  /**
+   * The send's split of the draft as it reads now: a session it held back can
+   * keep writing, or have its cleanup land, while the send is out. Null once
+   * the text outside those sessions is no longer what the send took.
+   */
+  private replanHeldBack(send: VoiceDraftSend): VoiceDraftSend | null {
+    const { panelId, projectId } = send;
+    const draft = useTerminalInputStore.getState().getDraftInput(panelId, projectId);
+    if (draft === send.draft) return send;
+    const records = useDictationRangeStore.getState().listDictations(panelId, projectId);
+    const now = planVoiceDraftSend({ panelId, projectId }, draft, records, send.sessions);
+    return now.text === send.text ? now : null;
+  }
+
+  /** Whether the draft still holds what the send took, ahead of whatever was held back. */
+  holdsBackFrom(send: VoiceDraftSend): boolean {
+    return this.replanHeldBack(send) !== null;
+  }
+
+  /**
+   * Leaves the draft with what a dictated send held back, once the rest has
+   * gone: the words of the sessions started after it, still theirs, so one
+   * still dictating carries on after them and a cleanup on its way still
+   * lands. Returns the draft it leaves, or null, writing nothing, once the
+   * text the send took has changed.
+   */
+  keepHeldBackDictation(send: VoiceDraftSend): string | null {
+    const now = this.replanHeldBack(send);
+    if (!now) return null;
+    const { panelId, projectId } = now;
+    const ranges = useDictationRangeStore.getState();
+    if (now.leadingSpace) {
+      ranges.yieldLeadingSpace(now.leadingSpace.dictationId, now.leadingSpace.span);
+    }
+    // A session still dictating counts its offsets from the start of the draft.
+    const voiceStore = useVoiceRecordingStore.getState();
+    for (const change of [...now.changes].reverse()) {
+      voiceStore.shiftDraftOffsets(panelId, change.to, change.from - change.to);
+    }
+    ranges.expectDraftChange(panelId, projectId, now.draft, now.kept, now.changes);
+    this.writeShiftedDraft(panelId, now.kept, projectId);
+    return now.kept;
   }
 
   private releaseBaseline(correction: PendingCorrection): void {

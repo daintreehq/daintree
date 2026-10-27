@@ -66,8 +66,12 @@ vi.mock("@/services/KeybindingService", () => ({
 
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
-import { subscribeDictationRangeTracking } from "@/store/dictationRangeStore";
+import {
+  subscribeDictationRangeTracking,
+  useDictationRangeStore,
+} from "@/store/dictationRangeStore";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
+import { planVoiceDraftSend, type VoiceDraftSend } from "@/services/voiceDraftSend";
 import { useVoiceWaitSubmit } from "../useVoiceWaitSubmit";
 
 type DeltaPayload = { text: string; itemId?: string };
@@ -197,12 +201,21 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611, #14780)", () =
       parent: document.body,
     });
     // Like the composer's own send: it drops what is still being corrected,
-    // then reads the editor. The submit is still in flight, so the draft stays.
-    // A held send is one the composer refuses (an upload still on its way).
-    const sendFromEditor = vi.fn(() => {
-      if (options.holdSend) return;
-      voiceRecordingService.discardPendingCorrections(PANEL_ID);
-      sent.push(view.state.doc.toString());
+    // then reads the editor. The submit is still in flight, so the draft stays,
+    // unless the send holds back a newer dictation's words: those are all it
+    // leaves. A held send is one the composer refuses (an upload still on its
+    // way).
+    const sendFromEditor = vi.fn((_handBack?: unknown, voiceSend?: VoiceDraftSend) => {
+      if (options.holdSend) return false;
+      voiceRecordingService.discardPendingCorrections(PANEL_ID, voiceSend?.sessions);
+      const doc = view.state.doc.toString();
+      const split = voiceSend?.kept && voiceSend.draft === doc ? voiceSend : null;
+      sent.push(split?.text ?? doc);
+      const kept = split ? voiceRecordingService.keepHeldBackDictation(split) : null;
+      if (kept !== null) {
+        view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: kept } });
+      }
+      return true;
     });
     const { result } = renderHook(() =>
       useVoiceWaitSubmit({
@@ -414,6 +427,201 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611, #14780)", () =
     });
 
     expect(sent).toEqual(["Hello world."]);
+  });
+
+  it("keeps a dictation started on the same panel during the wait out of the send (#14804)", async () => {
+    const pending = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(pending.promise);
+    dictate(PANEL_ID, "hello wrld");
+    const result = renderComposer();
+
+    await act(async () => {
+      result.current.startVoiceWaitSubmit();
+    });
+    // The dictation key again straight away, for the next prompt: its first
+    // words land while the send still waits on the cleanup.
+    act(() => {
+      dictate(PANEL_ID, "these are the next prompt");
+    });
+    expect(sent).toEqual([]);
+
+    await act(async () => {
+      pending.resolve({ action: "replace", correctedText: "Hello world." });
+    });
+
+    expect(sent).toEqual(["Hello world."]);
+    expect(draft(PANEL_ID)).toBe("these are the next prompt");
+
+    // Still recording, its later words join the ones it kept.
+    act(() => {
+      callbacks.complete!({ text: "and the rest", willCorrect: false, itemId: "item-late" });
+    });
+    expect(draft(PANEL_ID)).toBe("these are the next prompt and the rest");
+  });
+
+  it("doesn't wait for a dictation started and stopped during the wait, and its cleanup lands on what it kept", async () => {
+    const pending = deferred<CorrectResult>();
+    const later = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(pending.promise).mockReturnValueOnce(later.promise);
+    dictate(PANEL_ID, "hello wrld");
+    const result = renderComposer();
+
+    await act(async () => {
+      result.current.startVoiceWaitSubmit();
+    });
+    await act(async () => {
+      dictate(PANEL_ID, "the nxt prompt");
+      await voiceRecordingService.stop();
+    });
+    expect(correct).toHaveBeenLastCalledWith(
+      expect.objectContaining({ rawText: "the nxt prompt" })
+    );
+
+    await act(async () => {
+      pending.resolve({ action: "replace", correctedText: "Hello world." });
+    });
+    expect(sent).toEqual(["Hello world."]);
+    expect(draft(PANEL_ID)).toBe("the nxt prompt");
+
+    await act(async () => {
+      later.resolve({ action: "replace", correctedText: "The next prompt." });
+    });
+    expect(draft(PANEL_ID)).toBe("The next prompt.");
+    expect(sent).toEqual(["Hello world."]);
+  });
+
+  it("keeps a newer dictation's words out of the send when its cleanup lands first", async () => {
+    const pending = deferred<CorrectResult>();
+    const later = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(pending.promise).mockReturnValueOnce(later.promise);
+    dictate(PANEL_ID, "hello wrld");
+    const result = renderComposer();
+
+    await act(async () => {
+      result.current.startVoiceWaitSubmit();
+    });
+    await act(async () => {
+      dictate(PANEL_ID, "the nxt prompt");
+      await voiceRecordingService.stop();
+    });
+    await act(async () => {
+      later.resolve({ action: "replace", correctedText: "The next prompt." });
+    });
+    expect(draft(PANEL_ID)).toBe("hello wrld The next prompt.");
+    expect(sent).toEqual([]);
+
+    await act(async () => {
+      pending.resolve({ action: "replace", correctedText: "Hello world." });
+    });
+    expect(sent).toEqual(["Hello world."]);
+    expect(draft(PANEL_ID)).toBe("The next prompt.");
+  });
+
+  it("sends only what the stopped dictation left at a second Enter, keeping the newer one's words", async () => {
+    const pending = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(pending.promise);
+    dictate(PANEL_ID, "hello wrld");
+    const result = renderComposer();
+
+    await act(async () => {
+      result.current.startVoiceWaitSubmit();
+    });
+    act(() => {
+      dictate(PANEL_ID, "these are the next prompt");
+    });
+    await act(async () => {
+      pressKey("Enter");
+    });
+
+    expect(sent).toEqual(["hello wrld"]);
+    expect(draft(PANEL_ID)).toBe("these are the next prompt");
+    await act(async () => {
+      pending.resolve({ action: "replace", correctedText: "Hello world." });
+    });
+    expect(draft(PANEL_ID)).toBe("these are the next prompt");
+  });
+
+  it("lets Escape take back a newer dictation it held back, as if nothing came before it", async () => {
+    const pending = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(pending.promise);
+    dictate(PANEL_ID, "hello wrld");
+    const result = renderComposer();
+
+    await act(async () => {
+      result.current.startVoiceWaitSubmit();
+    });
+    act(() => {
+      dictate(PANEL_ID, "these are the next prompt");
+    });
+    await act(async () => {
+      pending.resolve({ action: "replace", correctedText: "Hello world." });
+    });
+    expect(draft(PANEL_ID)).toBe("these are the next prompt");
+
+    expect(sent).toEqual(["Hello world."]);
+
+    // The space it was written with went with the sent prompt, and none of
+    // its words count as edited for it.
+    await act(async () => {
+      expect(voiceRecordingService.handleEscape(PANEL_ID)).toBe(true);
+    });
+    expect(draft(PANEL_ID)).toBe("");
+  });
+
+  it("holds back a spoken send whose own prompt is too short, whatever the newer dictation adds", async () => {
+    const pending = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(pending.promise);
+    dictate(PANEL_ID, "fix it");
+    const result = renderComposer();
+
+    await act(async () => {
+      result.current.startVoiceWaitSubmit({ spoken: true });
+    });
+    act(() => {
+      dictate(PANEL_ID, "these are the next prompt");
+    });
+    await act(async () => {
+      pending.resolve({ action: "replace", correctedText: "Fix it." });
+    });
+
+    expect(sent).toEqual([]);
+    expect(draft(PANEL_ID)).toBe("Fix it. these are the next prompt");
+  });
+
+  describe("keeping what it held back once the send has gone", () => {
+    /** The old prompt stopped and cleaned, and a newer dictation after it. */
+    function splitDraft(): VoiceDraftSend {
+      dictate(PANEL_ID, "hello wrld");
+      const sessions = voiceRecordingService.sendSessions(PANEL_ID, undefined);
+      dictate(PANEL_ID, "these are the next prompt");
+      return planVoiceDraftSend(
+        { panelId: PANEL_ID, projectId: undefined },
+        draft(PANEL_ID),
+        useDictationRangeStore.getState().listDictations(PANEL_ID),
+        sessions
+      );
+    }
+
+    it("takes in what the newer dictation wrote while the send was out", () => {
+      const send = splitDraft();
+      expect(send.text).toBe("hello wrld");
+
+      callbacks.complete!({ text: "and the rest", willCorrect: false, itemId: "item-late" });
+
+      expect(voiceRecordingService.keepHeldBackDictation(send)).toBe(
+        "these are the next prompt and the rest"
+      );
+      expect(draft(PANEL_ID)).toBe("these are the next prompt and the rest");
+    });
+
+    it("leaves the draft alone once the sent text itself changed", () => {
+      const send = splitDraft();
+      const changed = draft(PANEL_ID).replace("hello", "goodbye");
+      useTerminalInputStore.getState().setDraftInput(PANEL_ID, changed);
+
+      expect(voiceRecordingService.keepHeldBackDictation(send)).toBeNull();
+      expect(draft(PANEL_ID)).toBe(changed);
+    });
   });
 
   it("lets the correction land in the draft when Escape cancels the send", async () => {

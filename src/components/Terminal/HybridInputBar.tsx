@@ -137,6 +137,7 @@ import {
 import { outsideWriteChange, takeLandedCorrection } from "@/services/voiceCorrectionLanding";
 import { takeScratchLanded } from "@/services/voiceScratchCommand";
 import { registerComposerSelectionSource } from "@/services/voiceRewriteSelection";
+import type { VoiceDraftSend } from "@/services/voiceDraftSend";
 import { readComposerSelection, takePendingComposerSelection } from "@/lib/composerCaret";
 import { isolatedComposerScope, makeDraftKey } from "@/lib/draftKey";
 import { DICTATION_OWNER_ATTR } from "@/services/canopyReplyDictation";
@@ -1099,17 +1100,58 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
     // Whether the composer took the draft, settled once any awaited expansion
     // or submission has: a voice send completes its progress only then.
-    const sendFromEditor = (handBack?: SendHandBack): boolean | Promise<boolean> => {
+    const sendFromEditor = (
+      handBack?: SendHandBack,
+      voiceSend?: VoiceDraftSend
+    ): boolean | Promise<boolean> => {
       // An upload still on its way would leave its reference out of what is sent.
       if (hasPendingUploads(uploadSurface)) return false;
       // The send takes the draft as it stands. A dictation correction still on
       // its way must not rewrite it mid-send, or land on the next draft (#14611).
-      voiceRecordingService.discardPendingCorrections(voiceId);
+      // One for words a dictated send holds back still lands on them (#14804).
+      voiceRecordingService.discardPendingCorrections(voiceId, voiceSend?.sessions);
       const view = editorViewRef.current;
       const latest = latestRef.current;
-      const text = view?.state.doc.toString() ?? latest?.value ?? "";
+      const doc = view?.state.doc.toString() ?? latest?.value ?? "";
+      // Only a split of the text the editor shows can say which part of it goes.
+      const split = voiceSend?.kept && voiceSend.draft === doc ? voiceSend : null;
+      const text = split?.text ?? doc;
+      // Typing the store hasn't caught up with: the editor reads differently
+      // with no outside write on its way in. Text kept over it would eat it.
+      const editorAheadOfStore = () => {
+        const shown = editorViewRef.current?.state.doc.toString();
+        const inputs = useTerminalInputStore.getState();
+        return (
+          shown !== undefined &&
+          shown !== inputs.getDraftInput(terminalId, latest?.projectId) &&
+          inputs.externalDraftRevision === appliedExternalDraftRevisionRef.current
+        );
+      };
+      const keepDraft = split
+        ? () => {
+            if (editorAheadOfStore()) return;
+            const kept = voiceRecordingService.keepHeldBackDictation(split);
+            if (kept === null) return;
+            applyEditorValue(kept, {
+              selection: EditorSelection.create([EditorSelection.cursor(kept.length)]),
+              resetHistory: true,
+            });
+          }
+        : undefined;
+      // A `@diff` fetch is awaited, and a handoff or the user's own typing can
+      // land in the draft meanwhile; only the text that went out is cleared.
+      // The session a split held back may write meanwhile too: that much
+      // change still leaves the sent text to take out.
+      const unchanged = guardSentDraft(latest?.projectId);
+      const isDraftUnchanged = split
+        ? () => unchanged() || (!editorAheadOfStore() && voiceRecordingService.holdsBackFrom(split))
+        : unchanged;
 
       const intercepted = tryComposerFleetBroadcast(isFocusedTerminal, terminalId, text, () => {
+        if (keepDraft) {
+          keepDraft();
+          return;
+        }
         clearDraftInput(terminalId, projectId);
         resetEditorDoc();
       });
@@ -1117,10 +1159,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
       return sendText(text, {
         imagePaths: readImageChipPaths(view),
-        // A `@diff` fetch is awaited, and a handoff or the user's own typing can
-        // land in the draft meanwhile; only the text that went out is cleared.
-        isDraftUnchanged: guardSentDraft(latest?.projectId),
+        isDraftUnchanged,
         onHandedOff: handBack,
+        keepDraft,
+        dictationSessions: voiceSend?.sessions,
       });
     };
 

@@ -8,6 +8,7 @@ import { useTerminalInputStore } from "@/store/terminalInputStore";
 vi.mock("@/services/VoiceRecordingService", () => ({
   voiceRecordingService: {
     stop: vi.fn().mockResolvedValue(undefined),
+    sendSessions: vi.fn(() => new Set<string>()),
     hasPendingCorrection: vi.fn(() => false),
     expectedCorrectionLanding: vi.fn(() => null),
     waitForPendingCorrections: vi.fn().mockResolvedValue(true),
@@ -43,6 +44,10 @@ const stopMock = vi.mocked(voiceRecordingService.stop);
 const hasPendingMock = vi.mocked(voiceRecordingService.hasPendingCorrection);
 const waitMock = vi.mocked(voiceRecordingService.waitForPendingCorrections);
 const onSpokenSendMock = vi.mocked(voiceRecordingService.onSpokenSend);
+const sendSessionsMock = vi.mocked(voiceRecordingService.sendSessions);
+const landingMock = vi.mocked(voiceRecordingService.expectedCorrectionLanding);
+// The sessions a send reads as it starts, which its wait and send take.
+const OWNED = new Set(["owned-session"]);
 
 const PANEL_ID = "test-panel";
 
@@ -81,6 +86,9 @@ describe("useVoiceWaitSubmit", () => {
     waitMock.mockResolvedValue(true);
     onSpokenSendMock.mockReset();
     onSpokenSendMock.mockReturnValue(() => {});
+    sendSessionsMock.mockReset();
+    sendSessionsMock.mockReturnValue(OWNED);
+    landingMock.mockClear();
     useTerminalInputStore.getState().clearDraftInput(PANEL_ID);
     panelState.focusedId = null;
     (document.activeElement as HTMLElement | null)?.blur();
@@ -133,7 +141,7 @@ describe("useVoiceWaitSubmit", () => {
       await act(async () => {
         spokenSendHandler()();
       });
-      expect(waitMock).toHaveBeenCalledWith(PANEL_ID, expect.any(AbortSignal));
+      expect(waitMock).toHaveBeenCalledWith(PANEL_ID, expect.any(AbortSignal), OWNED);
       expect(sendFromEditor).not.toHaveBeenCalled();
 
       await act(async () => {
@@ -190,7 +198,10 @@ describe("useVoiceWaitSubmit", () => {
       });
 
       expect(claimSendHandBack).toHaveBeenCalledTimes(1);
-      expect(sendFromEditor).toHaveBeenCalledWith(handBack);
+      expect(sendFromEditor).toHaveBeenCalledWith(
+        handBack,
+        expect.objectContaining({ text: "fix the login bug", kept: "", sessions: OWNED })
+      );
     });
 
     it("only stops dictation when the composer is disabled", async () => {
@@ -281,7 +292,7 @@ describe("useVoiceWaitSubmit", () => {
       resolveStop();
     });
 
-    expect(sendFromEditor).toHaveBeenCalledWith(handBack);
+    expect(sendFromEditor).toHaveBeenCalledWith(handBack, expect.objectContaining({ kept: "" }));
     expect(claimSendHandBack).toHaveBeenCalledTimes(1);
     view.destroy();
   });
@@ -359,7 +370,10 @@ describe("useVoiceWaitSubmit", () => {
       result.current.startVoiceWaitSubmit();
     });
 
-    expect(waitMock).toHaveBeenCalledWith(PANEL_ID, expect.any(AbortSignal));
+    expect(sendSessionsMock).toHaveBeenCalledWith(PANEL_ID, undefined);
+    expect(hasPendingMock).toHaveBeenCalledWith(PANEL_ID, OWNED);
+    expect(landingMock).toHaveBeenCalledWith(PANEL_ID, OWNED);
+    expect(waitMock).toHaveBeenCalledWith(PANEL_ID, expect.any(AbortSignal), OWNED);
     expect(result.current.voiceSubmitPhase).toBe("polishing");
     expect(sendFromEditor).not.toHaveBeenCalled();
 
@@ -811,7 +825,8 @@ describe("useVoiceWaitSubmit submitFromEditor", () => {
     });
 
     expect(stopMock).not.toHaveBeenCalled();
-    expect(waitMock).toHaveBeenCalledWith("other-panel", expect.any(AbortSignal));
+    expect(sendSessionsMock).toHaveBeenCalledWith("other-panel", undefined);
+    expect(waitMock).toHaveBeenCalledWith("other-panel", expect.any(AbortSignal), OWNED);
     expect(sendFromEditor).not.toHaveBeenCalled();
 
     await act(async () => {
