@@ -24,6 +24,9 @@ const PROJECT_TIER_CAP = 4;
 // the branch and terminal tiers.
 const REPO_TIER_CAP = 6;
 const NAME_CATEGORY_CAP = 5;
+// Slots of MAX_NAME_KEYTERMS the pane's own worktrees keep, so hosts and every
+// other project can't crowd out the names the pane is working among.
+const NAME_WORKTREE_RESERVE = 4;
 const COMMAND_TIER_CAP = 12;
 // Slots commands leave for the branch, so a long command list can't crowd out
 // the worktree's own words. The branch's share of RESERVED_CONTEXT_KEYTERMS.
@@ -470,35 +473,41 @@ export async function readPaneKeytermReads(
 /**
  * The host, project and worktree names that may leave the machine: trimmed,
  * deduplicated, screened for credentials and IDs, at most NAME_CATEGORY_CAP of
- * each kind and MAX_NAME_KEYTERMS in all, each within the per-term length.
+ * each kind and MAX_NAME_KEYTERMS in all, each within the per-term length. The
+ * worktrees keep NAME_WORKTREE_RESERVE of those slots against hosts and projects.
  * The keyterms and the correction prompt both take this list, so neither sends
  * a name the other wouldn't.
  */
 export function screenDictationNames(names: DictationNames): DictationNames {
   const seen = new Set<string>();
-  let total = 0;
-  const screen = (list: readonly unknown[] | undefined): string[] => {
+  const screen = (list: readonly unknown[] | undefined, room: number, taken: Set<string>) => {
     const kept: string[] = [];
     for (const raw of Array.isArray(list) ? list : []) {
-      if (kept.length >= NAME_CATEGORY_CAP || total >= MAX_NAME_KEYTERMS) break;
+      if (kept.length >= Math.min(NAME_CATEGORY_CAP, room)) break;
       if (typeof raw !== "string") continue;
       const name = raw.trim();
       if (name.length < 2 || /^\d+$/.test(name)) continue;
       if (holdsCredentialOrId(name) || isSecretShaped(name)) continue;
       const capped = capTermLength(name, MAX_KEYTERM_LENGTH);
       const key = capped.toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
+      if (taken.has(key)) continue;
+      taken.add(key);
       kept.push(capped);
-      total++;
     }
     return kept;
   };
-  return {
-    hosts: screen(names.hosts),
-    projects: screen(names.projects),
-    worktrees: screen(names.worktrees),
-  };
+  const reserve = Math.min(
+    NAME_WORKTREE_RESERVE,
+    screen(names.worktrees, NAME_WORKTREE_RESERVE, new Set()).length
+  );
+  const hosts = screen(names.hosts, MAX_NAME_KEYTERMS - reserve, seen);
+  const projects = screen(names.projects, MAX_NAME_KEYTERMS - reserve - hosts.length, seen);
+  const worktrees = screen(
+    names.worktrees,
+    MAX_NAME_KEYTERMS - hosts.length - projects.length,
+    seen
+  );
+  return { hosts, projects, worktrees };
 }
 
 export async function assembleKeyterms(opts: KeytermAssemblyOpts): Promise<string[]> {
@@ -593,8 +602,8 @@ export async function assembleTaggedKeyterms(opts: KeytermAssemblyOpts): Promise
 
   source = "names";
   // Priority 4: Host, project and worktree names the user points at ("run this
-  // on Studio 1"), kept whole, never tokenized. Only the Assistant gets hosts
-  // and projects; any other terminal, its project's worktrees. Screened and
+  // on Studio 1"), kept whole, never tokenized. Every terminal gets the hosts,
+  // the other projects and its project's worktrees. Screened and
   // capped, and ahead of the branch, whose token count is unbounded, so their
   // reserved slots can't be taken.
   if (gatheredNames) {

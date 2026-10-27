@@ -852,7 +852,7 @@ describe("voiceInput — keyterm target", () => {
     shared.names = Promise.resolve({
       hosts,
       projects,
-      worktrees: [secret, "billing", "payments", "thirteenth"],
+      worktrees: [secret, "billing", "payments", "ledger", "invoices", "thirteenth"],
     });
     shared.voiceInput = { correctionEnabled: true };
     await expect(startWith({ terminalId: "t-1" })).resolves.toEqual({ ok: true });
@@ -862,7 +862,14 @@ describe("voiceInput — keyterm target", () => {
       sessionId: currentSessionId,
     });
 
-    expect(shared.correctionNames).toEqual([...hosts, ...projects, "billing", "payments"]);
+    expect(shared.correctionNames).toEqual([
+      ...hosts,
+      ...projects.slice(0, 3),
+      "billing",
+      "payments",
+      "ledger",
+      "invoices",
+    ]);
     expect(shared.correctionNames).not.toContain(secret);
     expect(shared.correctionNames).not.toContain("thirteenth");
   });

@@ -49,18 +49,27 @@ import { screenDictationNames } from "../voiceContextKeyterms.js";
 const ASSISTANT = "assistant-1";
 const GRID = "grid-1";
 const ELSEWHERE = "grid-other";
+const SHELL = "shell-1";
+const EXITED_AGENT = "exited-agent-1";
 
 function makePtyClient() {
   const owners: Record<string, string> = {
     [ASSISTANT]: "proj-a",
     [GRID]: "proj-a",
     [ELSEWHERE]: "proj-b",
+    [SHELL]: "proj-a",
+    [EXITED_AGENT]: "proj-a",
+  };
+  const records: Record<string, object> = {
+    [GRID]: { detectedAgentId: "claude" },
+    [ELSEWHERE]: { detectedAgentId: "claude" },
+    [EXITED_AGENT]: { launchAgentId: "claude", agentState: "exited" },
   };
   return {
     hasTerminal: vi.fn((id: string) => id in owners),
     getTerminalProjectId: vi.fn((id: string) => owners[id] ?? null),
     getTerminalAsync: vi.fn(async (id: string) =>
-      id in owners ? { id, isAssistantTerminal: id === ASSISTANT } : null
+      id in owners ? { id, isAssistantTerminal: id === ASSISTANT, ...records[id] } : null
     ),
   };
 }
@@ -104,17 +113,60 @@ describe("gatherDictationNames", () => {
     });
   });
 
-  it("gives any other terminal only its own project's worktrees", async () => {
+  it("gives an agent pane the hosts, its other projects and its worktrees", async () => {
     const worktreeService = makeWorktreeService();
     await expect(gather(GRID, { worktreeService })).resolves.toEqual({
-      hosts: [],
-      projects: [],
+      hosts: ["Studio 1", "Studio 2"],
+      projects: ["Plugin SDK"],
       worktrees: ["billing", "payments"],
     });
     expect(worktreeService.getAllStatesForProjectAsync).toHaveBeenCalledWith(
       "/repo/daintree",
       "proj-a"
     );
+  });
+
+  it("gives a plain shell or an exited agent only its worktrees", async () => {
+    for (const id of [SHELL, EXITED_AGENT]) {
+      await expect(gather(id)).resolves.toEqual({
+        hosts: [],
+        projects: [],
+        worktrees: ["billing", "payments"],
+      });
+    }
+  });
+
+  it("keeps the projects in the order the store ranks them, not alphabetically", async () => {
+    const store = (await import("../ProjectStore.js")).projectStore;
+    vi.mocked(store.getProjectSummaries).mockReturnValueOnce([
+      { id: "proj-c", name: "Zephyr", path: "/repo/z", emoji: "" },
+      { id: "proj-a", name: "Daintree", path: "/repo/daintree", emoji: "" },
+      { id: "proj-b", name: "Plugin SDK", path: "/repo/sdk", emoji: "" },
+      { id: "proj-d", name: "CandidCue", path: "/repo/cue", emoji: "" },
+    ]);
+    const names = await gather(GRID);
+    expect(names.projects).toEqual(["Zephyr", "Plugin SDK", "CandidCue"]);
+  });
+
+  it("leaves an agent pane its worktrees when the hosts can't be read", async () => {
+    shared.hostsError = new Error("registry gone");
+    await expect(gather(GRID)).resolves.toEqual({
+      hosts: [],
+      projects: [],
+      worktrees: ["billing", "payments"],
+    });
+  });
+
+  it("leaves an agent pane its worktrees when the projects can't be read", async () => {
+    const store = (await import("../ProjectStore.js")).projectStore;
+    vi.mocked(store.getProjectSummaries).mockImplementationOnce(() => {
+      throw new Error("db gone");
+    });
+    await expect(gather(GRID)).resolves.toEqual({
+      hosts: [],
+      projects: [],
+      worktrees: ["billing", "payments"],
+    });
   });
 
   it("leaves out the main worktree, which is the project itself", async () => {
@@ -140,7 +192,11 @@ describe("gatherDictationNames", () => {
     const worktreeService = makeWorktreeService();
     await expect(
       gather(GRID, { ptyClient, worktreeService, projectId: "proj-gone" })
-    ).resolves.toEqual({ hosts: [], projects: [], worktrees: [] });
+    ).resolves.toEqual({
+      hosts: ["Studio 1", "Studio 2"],
+      projects: ["Daintree", "Plugin SDK"],
+      worktrees: [],
+    });
     expect(worktreeService.getAllStatesForProjectAsync).not.toHaveBeenCalled();
 
     await expect(
@@ -149,7 +205,11 @@ describe("gatherDictationNames", () => {
         terminalId: GRID,
         ptyClient: makePtyClient() as unknown as PtyClient,
       })
-    ).resolves.toEqual({ hosts: [], projects: [], worktrees: [] });
+    ).resolves.toEqual({
+      hosts: ["Studio 1", "Studio 2"],
+      projects: ["Plugin SDK"],
+      worktrees: [],
+    });
   });
 
   it("keeps the other names when the worktree read fails", async () => {
