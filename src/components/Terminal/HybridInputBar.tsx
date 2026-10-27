@@ -1777,6 +1777,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         ? inputBarColors.placeholderSelected
         : inputBarColors.placeholder,
       "--ib-placeholder-more": inputBarColors.placeholderMore,
+      "--ib-interim": inputBarColors.interim,
       "--ib-accent": inputBarColors.accent,
       "--ib-voice": inputBarColors.voiceSignal,
       "--ib-voice-held": inputBarColors.voiceHeld,

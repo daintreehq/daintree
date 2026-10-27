@@ -8,6 +8,7 @@ import {
   REPLAY_SAMPLE_RATE,
   type ReplayClip,
 } from "../../../e2e/helpers/voiceReplayFixtures";
+import { VOICE_CORRECTION_VERDICTS } from "../../../shared/types/voiceSessionSummary";
 import {
   parseVoice,
   readRecording,
@@ -327,17 +328,17 @@ describe("scorePipelineSession", () => {
 
   // #14901: a turned-down reply streamed in only as a tentative rewrite, then went.
   it("times the first clean only for a cleanup that landed", () => {
-    const firstClean = (verdict: string, text: string) =>
+    const firstClean = (verdict: string, firstTextAt: number | null = 4_000) =>
       scorePipelineSession(
         session({
           raw: "fix the bug",
           stopMs: 3_000,
           cleanup: {
             sentAt: 3_400,
-            firstTextAt: 4_000,
+            firstTextAt,
             doneAt: 4_600,
             verdict,
-            text,
+            text: "Fix the bug.",
             failed: false,
             speculation: "none",
             requests: 1,
@@ -348,9 +349,13 @@ describe("scorePipelineSession", () => {
         [],
         "gpt-6.1-terra"
       ).stopToFirstCleanMs;
-    expect(firstClean("replaced", "Fix the bug.")).toBe(1_000);
-    expect(firstClean("rejected_low_confidence", "fix the bug")).toBeNull();
-    expect(firstClean("rejected_command", "fix the bug")).toBeNull();
+    expect(firstClean("replaced")).toBe(1_000);
+    // A prefetch's words can stream before the stop; they show no earlier than it.
+    expect(firstClean("replaced", 2_500)).toBe(0);
+    expect(firstClean("replaced", null)).toBeNull();
+    for (const verdict of VOICE_CORRECTION_VERDICTS.filter((v) => v !== "replaced")) {
+      expect(firstClean(verdict), verdict).toBeNull();
+    }
   });
 });
 

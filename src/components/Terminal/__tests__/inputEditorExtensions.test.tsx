@@ -1281,6 +1281,9 @@ describe("pendingAIField", () => {
   // rewrite never reads as text that landed.
   it("draws a streamed rewrite as words not yet written, until it lands", () => {
     const parent = document.createElement("div");
+    // As the shell sets them: the draft's ink, and the ink for words not yet in it.
+    parent.style.color = "rgb(205, 214, 244)";
+    parent.style.setProperty("--ib-interim", "rgb(150, 155, 170)");
     document.body.appendChild(parent);
     const view = new EditorView({
       parent,
@@ -1303,8 +1306,12 @@ describe("pendingAIField", () => {
         setPendingAIRanges.of([{ from: 0, to: 18, rewrite: { to: 18, text: "So fix the bug." } }]),
       ],
     });
-    expect(look(".cm-voice-rewrite")).toEqual(look(".cm-voice-interim"));
-    expect(look(".cm-voice-rewrite")).not.toEqual(look(".cm-line"));
+    const rewrite = look(".cm-voice-rewrite");
+    const draftText = look(".cm-line");
+    expect(rewrite).toEqual(look(".cm-voice-interim"));
+    // Neither its ink nor its slant is the draft's.
+    expect(rewrite.color).not.toBe(draftText.color);
+    expect(rewrite.fontStyle).not.toBe(draftText.fontStyle);
 
     // Landing writes the cleanup into the draft and takes the rewrite away.
     view.dispatch({
