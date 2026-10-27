@@ -258,6 +258,20 @@ const FINAL = revise(AGENT, {
   ],
 });
 
+// Round 3: on gpt-6-luna, AGENT reworded where Terra didn't ("it only adds a
+// body" became "it should only add one", "I want you to" went) and dropped an
+// "Okay" that answered the agent. FINAL without the grammar repair, and with
+// the rule that kept words are the speaker's back, scoped to what cleanup
+// legitimately changes.
+const STRICT = revise(FINAL, {
+  core: [
+    [
+      " You may repair grammar with the fewest words it takes (an article, a verb ending, a pronoun) where the spoken sentence doesn't hold together once the filler is gone, but never reword what the speaker asked for.",
+      " Every word you keep is one the speaker said, apart from a misheard word you fix or a spoken symbol you write out.",
+    ],
+  ],
+});
+
 export const PROMPT_VARIANTS: Readonly<Record<string, PromptVariant>> = {
   v11: { description: "the rules production sent before #14786", instructions: V11 },
   firm: {
@@ -276,6 +290,10 @@ export const PROMPT_VARIANTS: Readonly<Record<string, PromptVariant>> = {
   final: {
     description: "agent, keeping a hedge that says something only partly works",
     instructions: FINAL,
+  },
+  strict: {
+    description: "final, without grammar repair and with every kept word the speaker's",
+    instructions: STRICT,
   },
   production: {
     description: "the rules production sends now",

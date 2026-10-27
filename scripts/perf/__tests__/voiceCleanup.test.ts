@@ -858,6 +858,8 @@ describe("rescore", () => {
     fixes: { project_id: "form", "db:generate": "form", "electron/ipc/handlers": "form" },
     drops: [],
   });
+  // A passage a harmful cleanup is written for.
+  const scroll = CLEANUP_CORPUS.find((entry) => entry.id === "tics-scroll-runon:deepgram")!;
   const LUNA = "gpt-6-luna:none/production";
   const TERRA = "gpt-6.1-terra:none/production";
 
@@ -904,11 +906,19 @@ describe("rescore", () => {
       stream: true,
       variants: [variant(LUNA), variant(TERRA)],
       prompts: {},
-      guards: { v11: GUARD_VARIANTS.v11, symbols: GUARD_VARIANTS.symbols },
+      guards: {
+        v11: GUARD_VARIANTS.v11,
+        symbols: GUARD_VARIANTS.symbols,
+        // Saved looser than today's remove20, as an older run's would be.
+        remove20: {
+          ...GUARD_VARIANTS.remove20,
+          limits: { ...GUARD_VARIANTS.remove20!.limits, minRemoved: 1_000 },
+        },
+      },
       profile: { customDictionary: [], projectName: "daintree", projectPath: "/p", language: "en" },
       corpusHash: "corpus",
       corpus: [
-        ...[codex, zustand, symbols].map((entry) => ({
+        ...[codex, zustand, symbols, scroll].map((entry) => ({
           id: entry.id,
           style: entry.style,
           source: entry.source,
@@ -946,7 +956,7 @@ describe("rescore", () => {
   });
 
   it("lands a saved run's replies again under each of its guards and scores them by kind", () => {
-    const { run, corpus } = rescore(savedRun(), null, [codex, zustand, symbols]);
+    const { run, corpus } = rescore(savedRun(), null, [codex, zustand, symbols, scroll]);
     expect(run.scoringVersion).toBe(VOICE_CLEANUP_SCORING_VERSION);
     expect(run.rescoreExclusions).toEqual([{ id: "gone", reason: "removed", trials: 1 }]);
     const summary = (variant: string, guard: string) =>
@@ -993,7 +1003,7 @@ describe("rescore", () => {
     expect(bySource).toContain("| replay | 1 | 0/1 · 0/1 · 2/2 | 0/1 · 0/1 · 0/2 |");
     expect(bySource).toContain("| ramble | 1 | 0/1 · – · 0/3 | 0/1 · – · 0/3 |");
     expect(section("Ready, misreads and forms landed, by style")).toContain(
-      "| deepgram | 2 | 1/2 · 1/2 · 2/2 | 1/2 · 1/2 · 0/2 |"
+      "| deepgram | 3 | 1/2 · 1/2 · 2/2 | 1/2 · 1/2 · 0/2 |"
     );
     expect(report).toContain(
       "rejected (low_confidence); missed misreads Zustand; missed forms worktree, useShallow"
@@ -1001,5 +1011,13 @@ describe("rescore", () => {
     expect(report).toMatch(
       /production · v11: ".*" \(rejected \(edit_size\); missed forms project_id/
     );
+
+    // Harmful cleanups land under the limits the run saved, not today's.
+    const closing = (guard: string) =>
+      run.adversarial.find(
+        (entry) => entry.guard === guard && entry.harm === "drops the closing constraint"
+      )?.refusedBy;
+    expect(closing("v11")).toBe("edit_size");
+    expect(closing("remove20")).toBeNull();
   });
 });

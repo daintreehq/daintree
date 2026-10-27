@@ -311,13 +311,12 @@ describe("validateCorrection", () => {
         reason: "protected_span",
       });
       // The typed flag is the required one; the spelled one stays as words.
-      expect(
-        validateCorrection(
-          "say dash dash watch then run --watch",
-          "Say dash dash watch, then run --watch.",
-          symbols
-        )
-      ).toEqual({ ok: true });
+      for (const [said, cleaned] of [
+        ["say dash dash watch then run --watch", "Say dash dash watch, then run --watch."],
+        ["run dash dash watch then run --watch", "Run dash dash watch, then run --watch."],
+      ]) {
+        expect(validateCorrection(said, cleaned, symbols), said).toEqual({ ok: true });
+      }
     });
 
     it("keeps a spelled flag beside a word it was spoken next to", () => {
@@ -328,6 +327,22 @@ describe("validateCorrection", () => {
           symbols
         )
       ).toEqual({ ok: false, reason: "protected_span" });
+      // Its neighbouring word comes again later: still not where it was said.
+      expect(
+        validateCorrection(
+          "run npm test dash dash force then publish the package then stop",
+          "Run npm test, then publish the package --force, then stop.",
+          symbols
+        )
+      ).toEqual({ ok: false, reason: "protected_span" });
+      // Spelled letters joined either side of it.
+      expect(
+        validateCorrection(
+          "run N P M dash dash workspace A P I test",
+          "Run npm --workspace api test.",
+          symbols
+        )
+      ).toEqual({ ok: true });
       expect(
         validateCorrection(
           "run npm test dash dash watch dash dash verbose",
@@ -341,20 +356,23 @@ describe("validateCorrection", () => {
       expect(
         validateCorrection(
           "print `dash f` then publish the package",
-          "Print `dash f`, then publish the package -f.",
+          "Print `dash f` -f, then publish the package.",
           symbols
         )
       ).toEqual({ ok: false, reason: "protected_span" });
     });
 
     it("never frees a spoken symbol for one typed somewhere else", () => {
-      expect(
-        validateCorrection(
-          "Don't dash. Deploy the follow up.",
-          "Don't deploy the follow-up.",
-          symbols
-        )
-      ).toEqual({ ok: false, reason: "negation" });
+      for (const [said, cleaned] of [
+        ["Don't dash. Deploy the follow up.", "Don't deploy the follow-up."],
+        // The word after the hyphen comes earlier too.
+        ["Don't dash. Commit the pre commit hook.", "Don't commit the pre-commit hook."],
+      ]) {
+        expect(validateCorrection(said, cleaned, symbols), said).toEqual({
+          ok: false,
+          reason: "negation",
+        });
+      }
       expect(
         validateCorrection(
           "open the readme dot md and the follow up notes",
@@ -672,6 +690,12 @@ describe("validateCorrection on self-corrections and lists", () => {
       (scale: number) => `fix it, no${" ".repeat(1_500 * scale)}, sorry, now`,
       () => "Fix it now.",
       false,
+    ],
+    [
+      "spoken dashes beside a typed one",
+      (scale: number) => `${"dash ".repeat(300 * scale)}x`,
+      (scale: number) => `${"dash ".repeat(300 * scale)}x y-z`,
+      true,
     ],
     [
       "corrections that each scan back",

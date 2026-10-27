@@ -164,14 +164,11 @@ const SPOKEN_SYMBOLS: ReadonlyMap<string, string> = new Map([
   ["dash", "-"],
   ["hyphen", "-"],
 ]);
-const TYPED_SYMBOL_RES: ReadonlyMap<string, RegExp> = new Map([
-  ["/", /\//g],
-  ["\\", /\\/g],
-  [".", /(?<=[\p{L}\p{N}_])\.(?=[\p{L}\p{N}_])/gu],
-  [":", /(?<=[\p{L}\p{N}_]):(?=[\p{L}\p{N}_])/gu],
-  ["_", /_/g],
-  ["-", /-/g],
-]);
+// A run of typed symbols, alone, at the start, or at the end of some text.
+const SYMBOL_RUN_RE = /^[/\\._:-]+$/u;
+const LEADING_SYMBOLS_RE = /^[/\\._:-]+/u;
+const TRAILING_SYMBOLS_RE = /[/\\._:-]+$/u;
+const WORD_CHAR_RE = /[\p{L}\p{N}_]/u;
 // "dash dash watch" is --watch, "dash dash no dash verify" is --no-verify,
 // and "dash v" is -v: a single dash takes a single letter. A doubled dash
 // starts the next flag ("dash dash watch dash dash verbose").
@@ -268,44 +265,36 @@ function spelledFlags(raw: string, protectedRanges: readonly Range[]): SpelledFl
   }).filter((spelled) => spelled !== null);
 }
 
-/** The words either side of `range`, so a typed flag can be held to where it was spoken. */
-function neighbours(tokens: readonly WordToken[], range: Range): [string?, string?] {
-  const after = firstTokenFrom(tokens, range.end);
-  let before = firstTokenFrom(tokens, range.start) - 1;
-  while (before >= 0 && tokens[before].end > range.start) before--;
-  return [tokens[before]?.word, tokens[after]?.word];
-}
-
 interface ExpectedSpan {
   text: string;
-  /** A spelled-out flag, which may be typed or left as words; where it was spoken. */
-  spoken?: { before?: string; after?: string };
+  /** Where a spelled-out flag was spoken; it may be typed or left as words. */
+  spelled?: Range;
 }
 
 /**
  * Whether `typed` holds every required span of `expected` in order, with each
- * spelled-out flag present or not where it falls among them. A typed one must
- * keep a word it was spoken beside, so it can't move to another command.
+ * spelled-out flag present or not where it falls among them. A typed flag
+ * stands for a spelled one only if `holds` says it was typed in its place.
  */
 function sameWithOptional(
   expected: readonly ExpectedSpan[],
-  typed: ReadonlyArray<{ text: string; before?: string; after?: string }>
+  typed: readonly ProtectedSpan[],
+  holds: (spelled: Range, typed: Range) => boolean
 ): boolean {
-  const matches = (entry: ExpectedSpan, span: (typeof typed)[number]) =>
-    entry.spoken
-      ? entry.text === span.text.toLowerCase() &&
-        (entry.spoken.before === span.before || entry.spoken.after === span.after)
+  const matches = (entry: ExpectedSpan, span: ProtectedSpan) =>
+    entry.spelled
+      ? entry.text === span.text.toLowerCase() && holds(entry.spelled, span)
       : entry.text === span.text;
   const memo = new Map<number, boolean>();
   const from = (i: number, j: number): boolean => {
-    if (j === typed.length) return expected.slice(i).every((entry) => entry.spoken);
+    if (j === typed.length) return expected.slice(i).every((entry) => entry.spelled);
     if (i === expected.length) return false;
     const key = i * (typed.length + 1) + j;
     const known = memo.get(key);
     if (known !== undefined) return known;
     const result =
       (matches(expected[i], typed[j]) && from(i + 1, j + 1)) ||
-      (expected[i].spoken !== undefined && from(i + 1, j));
+      (expected[i].spelled !== undefined && from(i + 1, j));
     memo.set(key, result);
     return result;
   };
@@ -314,74 +303,120 @@ function sameWithOptional(
 
 /**
  * Code, references, URLs and flags come back exactly, in order, and none are
- * invented, except a flag the speaker spelled out when `spokenSymbols` allows
- * it. Paths and filenames come back exactly, in order, but new ones may
- * appear, because fixing "next jess" to "Next.js" is the point of cleanup.
+ * invented, except a flag the speaker spelled out, typed where they said it,
+ * when `spoken` places the words. Paths and filenames come back exactly, in
+ * order, but new ones may appear, because fixing "next jess" to "Next.js" is
+ * the point of cleanup.
  */
-function keepsProtectedSpans(raw: string, corrected: string, spokenSymbols: boolean): boolean {
+function keepsProtectedSpans(
+  raw: string,
+  corrected: string,
+  spoken: SpokenSymbols | null
+): boolean {
   const rawSpans = scanProtectedSpans(raw);
   const correctedSpans = scanProtectedSpans(corrected);
   const texts = (spans: ProtectedSpan[], strict: boolean) =>
     spans.filter((span) => (span.kind !== "path") === strict).map((span) => span.text);
   if (!isSubsequence(texts(rawSpans, false), texts(correctedSpans, false))) return false;
-  if (!spokenSymbols) return sameSequence(texts(rawSpans, true), texts(correctedSpans, true));
-  const spelled = spelledFlags(raw, findProtectedRanges(raw));
+  const spelled = spoken ? spelledFlags(raw, findProtectedRanges(raw)) : [];
   if (spelled.length === 0) return sameSequence(texts(rawSpans, true), texts(correctedSpans, true));
-  const rawTokens = contentTokens(raw, true);
-  const correctedTokens = contentTokens(corrected, true);
   const expected = [
     ...rawSpans
       .filter((span) => span.kind !== "path")
       .map((span) => ({ at: span.start, text: span.text })),
-    ...spelled.map((flag) => {
-      const [before, after] = neighbours(rawTokens, flag);
-      return { at: flag.start, text: flag.flag, spoken: { before, after } };
-    }),
+    ...spelled.map((flag) => ({ at: flag.start, text: flag.flag, spelled: flag })),
   ].sort((a, b) => a.at - b.at);
   return sameWithOptional(
     expected,
-    correctedSpans
-      .filter((span) => span.kind !== "path")
-      .map((span) => {
-        const [before, after] = neighbours(correctedTokens, span);
-        return { text: span.text, before, after };
-      })
+    correctedSpans.filter((span) => span.kind !== "path"),
+    spoken!.holdsFlag
   );
 }
 
+interface SpokenSymbols {
+  /** The raw words without those naming a symbol typed where they were spoken. */
+  tokens: WordToken[];
+  /** Whether a typed flag holds the words a flag was spelled out with, in their place. */
+  holdsFlag: (spelled: Range, typed: Range) => boolean;
+}
+
 /**
- * The raw words without those naming a symbol the cleanup typed in their
- * place: one word for each copy of the symbol it added, and only where it
- * typed that symbol against a word the name was spoken beside, so a hyphen
- * added elsewhere can't take away a word that was meant.
+ * Places what was spoken as symbols by the word alignment: a name like
+ * "slash" or "dash" is freed only where the cleanup typed its symbol against
+ * the very words it was spoken between, so a hyphen typed elsewhere can't
+ * take away a word that was meant. Past the alignment limit nothing is freed
+ * and no spelled flag may be typed.
  */
-function withoutSpokenSymbols(
-  tokens: readonly WordToken[],
-  raw: string,
-  corrected: string
-): WordToken[] {
-  const added = new Map<string, number>();
-  for (const [symbol, pattern] of TYPED_SYMBOL_RES) {
-    const count = (text: string) => text.match(pattern)?.length ?? 0;
-    added.set(symbol, Math.max(0, count(corrected) - count(raw)));
+function placeSpokenSymbols(
+  raw: readonly WordToken[],
+  correctedText: string,
+  corrected: readonly WordToken[]
+): SpokenSymbols {
+  const isSymbol = (index: number) => SPOKEN_SYMBOLS.has(raw[index].word);
+  const alignment = raw.some((_, index) => isSymbol(index))
+    ? alignWords(
+        raw.map((token) => token.word),
+        corrected.map((token) => token.word)
+      )
+    : null;
+  if (!alignment) return { tokens: [...raw], holdsFlag: () => false };
+  const landedAt = (index: number) =>
+    index >= 0 && index < raw.length && alignment.kept[index]
+      ? corrected[alignment.landed[index]]
+      : undefined;
+  // A dot or colon counts only inside a word, never as a sentence's own.
+  const typedRun = (start: number, end: number): string[] => {
+    const inside =
+      WORD_CHAR_RE.test(correctedText[start - 1] ?? "") &&
+      WORD_CHAR_RE.test(correctedText[end] ?? "");
+    return [...correctedText.slice(start, end)].filter(
+      (symbol) => inside || (symbol !== "." && symbol !== ":")
+    );
+  };
+  const free = new Uint8Array(raw.length);
+  for (let first = 0; first < raw.length; first++) {
+    if (!isSymbol(first)) continue;
+    let last = first;
+    while (last + 1 < raw.length && isSymbol(last + 1)) last++;
+    const before = landedAt(first - 1);
+    const after = landedAt(last + 1);
+    const runs: string[][] = [];
+    if (before && after && alignment.landed[last + 1] === alignment.landed[first - 1] + 1) {
+      const gap = correctedText.slice(before.end, after.start);
+      if (SYMBOL_RUN_RE.test(gap)) runs.push(typedRun(before.end, after.start));
+    }
+    if (before) {
+      const run = LEADING_SYMBOLS_RE.exec(correctedText.slice(before.end))?.[0] ?? "";
+      runs.push(typedRun(before.end, before.end + run.length));
+    }
+    if (after) {
+      const run = TRAILING_SYMBOLS_RE.exec(correctedText.slice(0, after.start))?.[0] ?? "";
+      runs.push(typedRun(after.start - run.length, after.start));
+    }
+    const typed = runs.find((run) => run.length > 0) ?? [];
+    for (let index = first; index <= last; index++) {
+      if (alignment.kept[index]) continue;
+      const at = typed.indexOf(SPOKEN_SYMBOLS.get(raw[index].word)!);
+      if (at < 0) continue;
+      typed.splice(at, 1);
+      free[index] = 1;
+    }
+    first = last;
   }
-  const typed = corrected.toLowerCase();
-  const isSymbol = (index: number) => SPOKEN_SYMBOLS.has(tokens[index]?.word ?? "");
-  return tokens.filter((token, index) => {
-    const symbol = SPOKEN_SYMBOLS.get(token.word);
-    const left = symbol === undefined ? 0 : (added.get(symbol) ?? 0);
-    if (left === 0) return true;
-    let before = index - 1;
-    while (before >= 0 && isSymbol(before)) before--;
-    let after = index + 1;
-    while (after < tokens.length && isSymbol(after)) after++;
-    const placed =
-      (before >= 0 && typed.includes(`${tokens[before].word}${symbol}`)) ||
-      (after < tokens.length && typed.includes(`${symbol}${tokens[after].word}`));
-    if (!placed) return true;
-    added.set(symbol!, left - 1);
-    return false;
-  });
+  return {
+    tokens: raw.filter((_, index) => !free[index]),
+    holdsFlag: (spelled, typed) => {
+      let named = false;
+      for (let index = 0; index < raw.length; index++) {
+        const token = raw[index];
+        if (token.end <= spelled.start || token.start >= spelled.end || isSymbol(index)) continue;
+        const landed = landedAt(index);
+        if (!landed || landed.start < typed.start || landed.end > typed.end) return false;
+        named = true;
+      }
+      return named;
+    },
+  };
 }
 
 function numberWords(tokens: readonly WordToken[]): string[] {
@@ -906,10 +941,6 @@ export function validateCorrection(
   corrected: string,
   limits: CorrectionGuardLimits = CORRECTION_GUARD_LIMITS
 ): CorrectionGuardResult {
-  if (!keepsProtectedSpans(raw, corrected, limits.spokenSymbols)) {
-    return { ok: false, reason: "protected_span" };
-  }
-
   // Raw list markers are set aside only when the cleanup kept the same ones,
   // so a dictated "1." can't vanish as layout.
   const correctedLayout = readListLayout(corrected);
@@ -917,15 +948,24 @@ export function validateCorrection(
   const rawText = sameSequence(rawLayout.values.map(String), correctedLayout.values.map(String))
     ? rawLayout.text
     : raw;
+  // Number words come from the same pass as the word checks: no filler or
+  // spoken command contains one.
+  const correctedTokens = contentTokens(correctedLayout.text, limits.spokenSymbols);
+  const spokenTokens = contentTokens(rawText, limits.spokenSymbols);
+  const correctedWords = correctedTokens.map((token) => token.word);
+  const joinedTokens = mergeJoinedWords(spokenTokens, correctedWords);
+  const spoken = limits.spokenSymbols
+    ? placeSpokenSymbols(joinedTokens, correctedLayout.text, correctedTokens)
+    : null;
+  if (!keepsProtectedSpans(raw, corrected, spoken)) {
+    return { ok: false, reason: "protected_span" };
+  }
+
   // Only the allowances need these, so a plain cleanup costs what it did before.
   let protectedRanges: ProtectedRange[] | undefined;
   const rawProtectedRanges = () => (protectedRanges ??= findProtectedRanges(raw));
   const enumerators =
     correctedLayout.items >= 2 ? findEnumerators(rawText, rawProtectedRanges()) : [];
-  // Number words come from the same pass as the word checks: no filler or
-  // spoken command contains one.
-  const correctedTokens = contentTokens(correctedLayout.text, limits.spokenSymbols);
-  const spokenTokens = contentTokens(rawText, limits.spokenSymbols);
   if (
     !keepsNumbers(
       rawText,
@@ -939,13 +979,7 @@ export function validateCorrection(
     return { ok: false, reason: "number" };
   }
 
-  const correctedWords = correctedTokens.map((token) => token.word);
-  const rawTokens = mergeJoinedWords(
-    limits.spokenSymbols
-      ? withoutSpokenSymbols(spokenTokens, rawText, correctedLayout.text)
-      : spokenTokens,
-    correctedWords
-  );
+  const rawTokens = spoken ? spoken.tokens : joinedTokens;
   const verdict = compareWords(
     rawTokens.map((token) => token.word),
     correctedWords,
@@ -980,7 +1014,7 @@ export function validateCorrection(
  * "make it shorter".
  */
 export function validateRewrite(selection: string, rewritten: string): CorrectionGuardResult {
-  return keepsProtectedSpans(selection, rewritten, false)
+  return keepsProtectedSpans(selection, rewritten, null)
     ? { ok: true }
     : { ok: false, reason: "protected_span" };
 }
