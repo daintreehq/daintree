@@ -221,6 +221,25 @@ describe("HybridInputBar — Canopy's reply beside the pane's own composer", () 
     expect(discard).not.toHaveBeenCalledWith("term-1");
   });
 
+  it("leaves the pane's dictation running when Escape is pressed in the reply", async () => {
+    const stop = vi.spyOn(voiceRecordingService, "stop").mockResolvedValue();
+    const { surface } = await mountBoth();
+    dictating(PANE);
+
+    const content = surface("reply").root.querySelector<HTMLElement>(".cm-content")!;
+    content.focus();
+    act(() => {
+      content.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })
+      );
+    });
+
+    expect(stop).not.toHaveBeenCalled();
+    expect(useVoiceRecordingStore.getState().activeTarget?.panelId).toBe("term-1");
+    expect(useVoiceRecordingStore.getState().status).toBe("recording");
+    expect(surface("pane").listening).toBe(true);
+  });
+
   it("finishes the reply's own dictation before its send goes", async () => {
     let finish!: () => void;
     const stop = vi.spyOn(voiceRecordingService, "stop").mockImplementation(
