@@ -20,6 +20,7 @@ const state = vi.hoisted(() => ({
     detectedAgentId?: string;
     launchAgentId?: string;
     title?: string;
+    worktreeId?: string;
   } | null,
   screen: "",
   writes: [] as string[],
@@ -42,6 +43,7 @@ const ptyClient = vi.hoisted(() => ({
   trash: vi.fn(),
   restore: vi.fn(),
   kill: vi.fn(),
+  gracefulKill: vi.fn(async (_id: string): Promise<string | null> => null),
   updateTitle: vi.fn(),
   on: vi.fn(),
   off: vi.fn(),
@@ -212,7 +214,7 @@ vi.mock("../../utils.js", async (importOriginal) => ({
 
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { wrapError, wrapSuccess } from "../../../../shared/utils/ipcErrorSerialization.js";
-import { _resetRateLimitQueuesForTest } from "../../utils.js";
+import { _resetRateLimitQueuesForTest, getProjectPushTargets } from "../../utils.js";
 import { events } from "../../../services/events.js";
 import { getDefaultPanelTitle } from "../../../../shared/config/panelKindRegistry.js";
 import { canopyPanelsListing, registerCanopyHandlers } from "../canopy.js";
@@ -1065,7 +1067,12 @@ describe("canopy IPC", () => {
       };
       state.runs = [];
       events.emit("terminal:trashed", { id: "run-1", expiresAt });
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await heard();
+    }
+
+    /** The ledger reads the host's record of a trash it hears: those reads answered. */
+    async function heard(): Promise<void> {
+      for (let turn = 0; turn < 10; turn += 1) await Promise.resolve();
     }
 
     async function trash(): Promise<Array<{ run: { runId: string; workspaceId: string } }>> {
@@ -1097,6 +1104,8 @@ describe("canopy IPC", () => {
       );
       expect(restored.ok).toBe(true);
       expect(ptyClient.restore).toHaveBeenCalledWith("run-1");
+      // The views of the project the run was trashed in, not the panel's.
+      expect(getProjectPushTargets).toHaveBeenCalledWith("project-2", "canopy:restore-requested");
       expect(view.send).toHaveBeenCalledWith("canopy:restore-requested", { runId: "run-1" });
     });
 
@@ -1148,7 +1157,22 @@ describe("canopy IPC", () => {
       );
       expect(emptied.ok).toBe(false);
       expect(ptyClient.restore).not.toHaveBeenCalled();
-      expect(ptyClient.kill).not.toHaveBeenCalled();
+      expect(ptyClient.gracefulKill).not.toHaveBeenCalled();
+    });
+
+    it("removes nothing when control moves elsewhere while the host is asked", async () => {
+      await trashedOnHost();
+      const held = state.record;
+      ptyClient.getTerminalAsync.mockImplementationOnce(async () => {
+        lease.holder = "other";
+        return held;
+      });
+      lease.holder = "self";
+      const refused = await outcome(
+        invoke(CANOPY_METHOD_CHANNELS.removeTrashed, fakeSender(1), "run-1", target)
+      );
+      expect(refused.ok).toBe(false);
+      expect(ptyClient.gracefulKill).not.toHaveBeenCalled();
     });
 
     it("removes a run through the view holding its pane, and on the host when no view does", async () => {
@@ -1160,27 +1184,79 @@ describe("canopy IPC", () => {
       );
       expect(removed.ok).toBe(true);
       // The view's own Remove ends it, keeping its session as any close does.
+      expect(getProjectPushTargets).toHaveBeenCalledWith("project-2", "canopy:remove-requested");
       expect(view.send).toHaveBeenCalledWith("canopy:remove-requested", { runId: "run-1" });
-      expect(ptyClient.kill).not.toHaveBeenCalled();
+      expect(ptyClient.gracefulKill).not.toHaveBeenCalled();
 
       state.views = [];
       const alone = await outcome(
         invoke(CANOPY_METHOD_CHANNELS.removeTrashed, fakeSender(1), "run-1", target)
       );
       expect(alone.ok).toBe(true);
-      expect(ptyClient.kill).toHaveBeenCalledWith("run-1", "canopy-trash-removed");
+      await vi.waitFor(() => expect(ptyClient.gracefulKill).toHaveBeenCalledWith("run-1"));
+    });
+
+    it("ends on the host a removal no view took, keeping its session for resuming", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        // A view of the project is open, but it no longer holds the pane.
+        state.views = [{ send: vi.fn() }];
+        await trashedOnHost();
+        ptyClient.gracefulKill.mockResolvedValueOnce("sess-9");
+        const captured: unknown[] = [];
+        const off = events.on("agent-session:captured", (payload) => captured.push(payload));
+        const removed = await outcome(
+          invoke(CANOPY_METHOD_CHANNELS.removeTrashed, fakeSender(1), "run-1", target)
+        );
+        expect(removed.ok).toBe(true);
+        expect(ptyClient.gracefulKill).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(ptyClient.gracefulKill).toHaveBeenCalledWith("run-1");
+        await vi.waitFor(() => expect(captured).toHaveLength(1));
+        expect(captured[0]).toMatchObject({
+          terminalId: "run-1",
+          boundary: "trash-expiry",
+          record: { sessionId: "sess-9", agentId: "claude", projectId: "project-2" },
+        });
+        off();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("leaves a removal the view took to the view", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        state.views = [{ send: vi.fn() }];
+        await trashedOnHost();
+        await outcome(invoke(CANOPY_METHOD_CHANNELS.removeTrashed, fakeSender(1), "run-1", target));
+        // The view's close takes it out of the trash.
+        events.emit("terminal:trash-cleared", { id: "run-1", expiresAt: EXPIRES });
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(ptyClient.gracefulKill).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("empties exactly the runs confirmed, skipping one that left the trash since", async () => {
       await trashedOnHost();
+      // Held too, but not in the list the user confirmed.
+      events.emit("terminal:trashed", { id: "run-3", expiresAt: EXPIRES });
+      // In the list, but restored before the empty lands.
+      events.emit("terminal:trashed", { id: "run-2", expiresAt: EXPIRES });
+      await heard();
+      events.emit("terminal:restored", { id: "run-2" });
       const emptied = (await invoke(CANOPY_METHOD_CHANNELS.emptyTrash, fakeSender(1), [
         { runId: "run-1", ...target },
-        // Never in the trash here, or gone from it by the time this lands.
-        { runId: "run-2", spawnedAt: 100, expiresAt: EXPIRES },
+        { runId: "run-2", ...target },
       ])) as number | { data?: number };
       expect(typeof emptied === "number" ? emptied : emptied.data).toBe(1);
-      expect(ptyClient.kill).toHaveBeenCalledTimes(1);
-      expect(ptyClient.kill).toHaveBeenCalledWith("run-1", "canopy-trash-removed");
+      await vi.waitFor(() => expect(ptyClient.gracefulKill).toHaveBeenCalledTimes(1));
+      expect(ptyClient.gracefulKill).toHaveBeenCalledWith("run-1");
+      expect((await trash()).map((entry) => entry.run.runId)).toEqual(
+        expect.arrayContaining(["run-3"])
+      );
 
       const refused = await outcome(
         invoke(CANOPY_METHOD_CHANNELS.emptyTrash, fakeSender(1), [{ runId: "run-1" }])

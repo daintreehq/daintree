@@ -542,15 +542,16 @@ describe("TerminalRegistry trash leaving", () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
   });
 
+  const offs: Array<() => void> = [];
   afterEach(() => {
     vi.useRealTimers();
-    events.removeAllListeners("terminal:trash-cleared");
+    for (const off of offs.splice(0)) off();
     vi.restoreAllMocks();
   });
 
   function cleared(): Array<{ id: string; expiresAt: number }> {
     const heard: Array<{ id: string; expiresAt: number }> = [];
-    events.on("terminal:trash-cleared", (payload) => heard.push(payload));
+    offs.push(events.on("terminal:trash-cleared", (payload) => heard.push(payload)));
     return heard;
   }
 
@@ -561,6 +562,16 @@ describe("TerminalRegistry trash leaving", () => {
     registry.trash("t1", () => {});
     const expiresAt = registry.getTrashExpiresAt("t1")!;
     registry.clearTrashTimeout("t1");
+    registry.delete("t1");
+    expect(heard).toEqual([{ id: "t1", expiresAt }]);
+  });
+
+  it("says so for a terminal deleted straight from the trash", () => {
+    const heard = cleared();
+    const registry = new TerminalRegistry(20_000);
+    registry.add("t1", {} as unknown as TerminalProcess);
+    registry.trash("t1", () => {});
+    const expiresAt = registry.getTrashExpiresAt("t1")!;
     registry.delete("t1");
     expect(heard).toEqual([{ id: "t1", expiresAt }]);
   });

@@ -31,6 +31,7 @@ import { getFleetSnapshotService, getRunHandBackService } from "./projectCrud/in
 import { readPluginTerminalScreen } from "../../services/plugin/pluginTerminalScreenRead.js";
 import { CANOPY_HISTORY_ROWS, CanopyService } from "../../services/canopy/CanopyService.js";
 import { CanopyTrashLedger } from "../../services/canopy/canopyTrashLedger.js";
+import { getLifecycleLedger } from "../../services/pty/lifecycleLedger.js";
 import { getAgentAvailabilityStore } from "../../services/AgentAvailabilityStore.js";
 import { searchScreens } from "../../services/canopy/canopyScreenSearch.js";
 import { isCanopyMode, readCanopyMode } from "../../services/canopy/canopyMode.js";
@@ -927,14 +928,61 @@ async function restoreTrashedRun(
 }
 
 /**
+ * Ends a trashed run on the host, for a pane no view holds: closed as the
+ * trash's own expiry closes it, its session captured for resuming and handed
+ * to the same journal. Not waited on: an agent may take seconds to quit.
+ */
+function endOnHost(runId: string): void {
+  const ptyClient = requirePtyClient();
+  // The generation before the kill: a respawn under the same id must not take the record.
+  const launchGeneration = getLifecycleLedger().currentGeneration(runId);
+  void (async () => {
+    const info = await ptyClient.getTerminalAsync(runId).catch(() => null);
+    const sessionId = await ptyClient.gracefulKill(runId);
+    // An agent that had exited is not killed by a graceful close: its record goes too.
+    if (info?.isExited === true) ptyClient.kill(runId, "canopy-trash-removed");
+    if (!sessionId || !info?.launchAgentId || info.isAssistantTerminal === true) return;
+    events.emit("agent-session:captured", {
+      terminalId: runId,
+      launchGeneration,
+      boundary: "trash-expiry",
+      record: {
+        sessionId,
+        agentId: info.launchAgentId,
+        worktreeId: info.worktreeId ?? null,
+        title:
+          (info.titleMode === "user" ? info.title : (info.lastObservedTitle ?? info.title)) ?? null,
+        projectId: info.projectId ?? null,
+        agentLaunchFlags: info.agentLaunchFlags,
+        agentModelId: info.agentModelId,
+        cwd: info.cwd,
+      },
+    });
+  })().catch((error: unknown) => {
+    console.warn("[Canopy] Ending a trashed terminal failed:", error);
+  });
+}
+
+/** How long a view is given to take a removal before the host ends the run itself. */
+const REMOVE_FALLBACK_MS = 3_000;
+const removeFallbacks = new Set<ReturnType<typeof setTimeout>>();
+
+/**
  * Removes a run in Canopy's Trash for good, ending its process. The view
  * holding the pane removes it as its own Remove would, so its session is
  * kept for resuming as any close keeps it. A pane no view holds — trashed
- * from Canopy with its project closed — is ended on the host directly.
+ * from Canopy with its project closed, or a view reloaded since — is ended
+ * on the host.
  */
-async function removeTrashedRun(runId: string, target: CanopyTrashTarget): Promise<void> {
+async function removeTrashedRun(
+  runId: string,
+  target: CanopyTrashTarget,
+  mayRemove: (workspaceId: string) => boolean
+): Promise<void> {
   const held = heldTrash(runId, target);
   await assertHostHolds(runId, target);
+  // Control can move while the host is asked.
+  if (!mayRemove(held.run.workspaceId)) throw drivenElsewhere(held.run.workspaceId);
   const receipt = receiptFor(held);
   // Trashed into the saved layout, so no open view holds the pane, even one
   // of the project opened since.
@@ -943,7 +991,7 @@ async function removeTrashedRun(runId: string, target: CanopyTrashTarget): Promi
   forgetReceiptsFor(runId, target.spawnedAt);
   const views = getProjectPushTargets(held.run.workspaceId, CHANNELS.CANOPY_REMOVE_REQUESTED);
   if (views.length === 0 || savedOnly) {
-    requirePtyClient().kill(runId, "canopy-trash-removed");
+    endOnHost(runId);
     return;
   }
   for (const view of views) {
@@ -953,6 +1001,16 @@ async function removeTrashedRun(runId: string, target: CanopyTrashTarget): Promi
       // A view torn down mid-send has no pane left to remove.
     }
   }
+  // The view's close takes it out of the trash at once; still there, no view held it.
+  const fallback = setTimeout(() => {
+    removeFallbacks.delete(fallback);
+    const still = trashLedger?.get(runId);
+    if (still?.run.spawnedAt === target.spawnedAt && still.expiresAt === target.expiresAt) {
+      endOnHost(runId);
+    }
+  }, REMOVE_FALLBACK_MS);
+  fallback.unref?.();
+  removeFallbacks.add(fallback);
 }
 
 const MAX_EMPTY_TRASH = 200;
@@ -1702,7 +1760,7 @@ export const canopyNamespace = defineIpcNamespace({
         assertTrashTarget(target);
         const workspaceId = heldTrash(runId, target).run.workspaceId;
         if (!drivesProject(ctx, workspaceId)) throw drivenElsewhere(workspaceId);
-        await removeTrashedRun(runId, target);
+        await removeTrashedRun(runId, target, (project) => drivesProject(ctx, project));
       },
       { withContext: true }
     ),
@@ -1739,7 +1797,7 @@ export const canopyNamespace = defineIpcNamespace({
         let removed = 0;
         for (const target of held) {
           try {
-            await removeTrashedRun(target.runId, target);
+            await removeTrashedRun(target.runId, target, (project) => drivesProject(ctx, project));
             removed += 1;
           } catch (error) {
             // Left the trash while the others were removed: nothing to do for it.
@@ -2062,6 +2120,8 @@ export function registerCanopyHandlers(): () => void {
     offRestored();
     ledger.dispose();
     if (trashLedger === ledger) trashLedger = null;
+    for (const fallback of removeFallbacks) clearTimeout(fallback);
+    removeFallbacks.clear();
     offHandBack();
     offDriveLease?.();
     offDriveLease = null;

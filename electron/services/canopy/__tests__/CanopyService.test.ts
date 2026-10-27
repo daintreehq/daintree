@@ -181,6 +181,8 @@ describe("CanopyService trash", () => {
     let trash: NonNullable<CanopySnapshot["trash"]> = [];
     const { service, snapshots } = await makeHarness({ getTrash: () => trash });
     expect(service.getSnapshot().trash).toEqual([]);
+    // The opening's own broadcast goes out first, so the next one is the trash's.
+    await new Promise((resolve) => setTimeout(resolve, 100));
     const before = snapshots.length;
     trash = [
       {
@@ -189,6 +191,9 @@ describe("CanopyService trash", () => {
         expiresAt: 20_010,
       },
     ];
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    // Nothing tells a view of the change but the call that says it.
+    expect(snapshots.length).toBe(before);
     service.trashChanged();
     await vi.waitFor(() => expect(snapshots.length).toBeGreaterThan(before));
     expect(snapshots.at(-1)?.trash?.map((entry) => entry.run.runId)).toEqual(["t1"]);

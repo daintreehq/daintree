@@ -48,6 +48,8 @@ export class CanopyTrashLedger {
   private readonly entries = new Map<string, CanopyTrashEntry>();
   /** Bumped by every trash, restore or clear of a run: a read answered after one adds nothing. */
   private readonly turns = new Map<string, number>();
+  /** The trash of each run a read is in flight for, by its deadline. */
+  private readonly pending = new Map<string, number>();
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
   private disposed = false;
 
@@ -75,10 +77,12 @@ export class CanopyTrashLedger {
     if (this.disposed) return;
     const turn = this.bump(id);
     if (this.drop(id)) this.deps.onChange();
+    this.pending.set(id, expiresAt);
     const trashedAt = this.now();
     this.deps.readTerminal(id).then(
       (record) => {
         if (this.disposed || this.turns.get(id) !== turn) return;
+        this.pending.delete(id);
         if (!record || record.isTrashed !== true || record.trashExpiresAt !== expiresAt) return;
         if (!record.projectId) return;
         if (classifyRun({ ...record, id, isTrashed: false }, this.deps.isHelpTerminal) !== null) {
@@ -101,13 +105,20 @@ export class CanopyTrashLedger {
   onRestored(id: string): void {
     if (this.disposed) return;
     this.bump(id);
+    this.pending.delete(id);
     if (this.drop(id)) this.deps.onChange();
   }
 
-  /** The trash let the terminal go: removed, or expired. Names which trash it was. */
+  /**
+   * The trash let the terminal go: removed, or expired. Names which trash it
+   * was, so a late word about an earlier one leaves a newer trash be.
+   */
   onCleared(id: string, expiresAt: number): void {
     if (this.disposed) return;
-    this.bump(id);
+    if (this.pending.get(id) === expiresAt) {
+      this.bump(id);
+      this.pending.delete(id);
+    }
     if (this.entries.get(id)?.expiresAt !== expiresAt) return;
     this.drop(id);
     this.deps.onChange();
@@ -119,6 +130,7 @@ export class CanopyTrashLedger {
     this.timers.clear();
     this.entries.clear();
     this.turns.clear();
+    this.pending.clear();
   }
 
   private bump(id: string): number {

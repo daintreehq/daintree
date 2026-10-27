@@ -18,7 +18,8 @@ const ownCalls = vi.hoisted(() => ({
   refresh: vi.fn(() => Promise.resolve()),
   setRead: vi.fn((): Promise<unknown> => Promise.resolve(null)),
   onTerminalData: vi.fn((_callback: (chunk: unknown) => void) => () => {}),
-  restoreTrashed: vi.fn(() => Promise.resolve()),
+  restoreTrashed: vi.fn((_runId: string, _target: unknown) => Promise.resolve()),
+  removeTrashed: vi.fn((_runId: string, _target: unknown) => Promise.resolve()),
   emptyTrash: vi.fn((targets: unknown[]) => Promise.resolve(targets.length)),
 }));
 
@@ -302,12 +303,18 @@ describe("createAllHostsRoute", () => {
   });
 
   it("restores and empties a trash on the host holding each run, with bare ids", async () => {
-    invoke.mockResolvedValue(1);
+    invoke.mockResolvedValue(3);
     const { api } = createAllHostsRoute("own", ["own", "remote"]);
     const target = { spawnedAt: 7, expiresAt: 99 };
     await api.restoreTrashed(allHostsKey("remote", "t1"), target);
     expect(invoke).toHaveBeenCalledWith("remote", "canopy:restore-trashed", "t1", target);
     expect(ownCalls.restoreTrashed).not.toHaveBeenCalled();
+    await api.restoreTrashed(allHostsKey("own", "t1"), target);
+    expect(ownCalls.restoreTrashed).toHaveBeenCalledWith("t1", target);
+    await api.removeTrashed(allHostsKey("remote", "t4"), target);
+    expect(invoke).toHaveBeenCalledWith("remote", "canopy:remove-trashed", "t4", target);
+    await api.removeTrashed(allHostsKey("own", "t5"), target);
+    expect(ownCalls.removeTrashed).toHaveBeenCalledWith("t5", target);
 
     const removed = await api.emptyTrash([
       { runId: allHostsKey("own", "t1"), ...target },
@@ -317,7 +324,8 @@ describe("createAllHostsRoute", () => {
     expect(invoke).toHaveBeenCalledWith("remote", "canopy:empty-trash", [
       { runId: "t2", ...target },
     ]);
-    expect(removed).toBe(2);
+    // What each host says it removed, summed: one here, three there.
+    expect(removed).toBe(4);
 
     // A host that refuses fails the whole: nothing is reported done that wasn't.
     invoke.mockRejectedValueOnce(new Error("offline"));

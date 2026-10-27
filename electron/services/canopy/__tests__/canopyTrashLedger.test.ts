@@ -72,6 +72,8 @@ describe("CanopyTrashLedger", () => {
         projectId: "project-b",
         trashExpiresAt: NOW + 25_000,
         titleMode: "user",
+        agentState: "waiting",
+        lastStateChange: NOW - 1_000,
       }),
     });
     ledger.onTrashed("older", NOW + 20_000);
@@ -88,6 +90,8 @@ describe("CanopyTrashLedger", () => {
     expect(list[0]!.trashedAt - list[1]!.trashedAt).toBe(5_000);
     // A run in the trash has no state to show: none rides its entry.
     expect(list[0]!.run.agentState).toBeUndefined();
+    expect(list[0]!.run.since).toBeUndefined();
+    expect(list[0]!.run.agentId).toBe("claude");
     expect(onChange).toHaveBeenCalledTimes(2);
   });
 
@@ -149,6 +153,14 @@ describe("CanopyTrashLedger", () => {
     expect(ledger.get("a")?.expiresAt).toBe(NOW + 40_000);
   });
 
+  it("keeps a newer trash whose read is in flight through a late clear of an earlier one", async () => {
+    const { ledger, answer } = setup({ a: record("a", { trashExpiresAt: NOW + 40_000 }) });
+    ledger.onTrashed("a", NOW + 40_000);
+    ledger.onCleared("a", NOW + 20_000);
+    await answer("a");
+    expect(ledger.get("a")?.expiresAt).toBe(NOW + 40_000);
+  });
+
   it("adds nothing for a run restored or cleared while the host was asked about it", async () => {
     const { ledger, answer, onChange } = setup({ a: record("a"), b: record("b") });
     ledger.onTrashed("a", NOW + 20_000);
@@ -161,7 +173,7 @@ describe("CanopyTrashLedger", () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
-  it("takes only the trash the host still holds: not a respawn, nor a later trash", async () => {
+  it("takes only the trash the host still holds: not one gone or let go, nor a later trash", async () => {
     const { ledger, answer } = setup({
       gone: null,
       respawned: record("respawned", { isTrashed: false, trashExpiresAt: undefined }),

@@ -53,6 +53,10 @@ import { __resetCanopySeenForTests } from "@/lib/canopySeen";
 import { __resetCanopyPlaceForTests } from "../CanopyPlace";
 
 const NOW = Date.now();
+/** Past the panel's wait on the typing before a search applies. */
+const SEARCH_SETTLE_MS = 250;
+/** Past the wait for a run that left at its deadline to turn up in the fleet. */
+const EXPIRY_CONFIRMED_MS = 1_600;
 
 function run(runId: string, overrides: Partial<FleetSnapshot["runs"][number]> = {}) {
   return {
@@ -191,7 +195,7 @@ beforeEach(() => {
   useProjectStore.setState({
     projects: [
       { id: "p1", path: "/repo", name: "app", emoji: "🌳", lastOpened: NOW },
-      { id: "p2", path: "/api", name: "api", lastOpened: NOW - 1 },
+      { id: "p2", path: "/api", name: "api", emoji: "🧪", lastOpened: NOW - 1 },
     ],
   });
 });
@@ -231,10 +235,18 @@ describe("CanopyView Trash", () => {
     expect(rows[0]!.textContent).toMatch(/Closed \d+s ago/);
   });
 
-  it("shows no Trash at all while the trash is empty, even with the inbox empty too", async () => {
-    await open([], []);
+  it("shows no Trash at all while the trash is empty", async () => {
+    await open([]);
+    expect(document.getElementById("canopy-card-live")).not.toBeNull();
     expect(trashBar()).toBeNull();
     expect(document.getElementById("canopy-trash-label")).toBeNull();
+  });
+
+  it("keeps the Trash up with no agent left running, its way back in reach", async () => {
+    await open(TRASH, []);
+    expect(trashBar()).not.toBeNull();
+    expect(document.body.textContent).toContain("No agents are running");
+    expect(document.body.textContent).not.toContain("Launch an agent from the toolbar");
   });
 
   it("shows a search's matching trash rows open, without unfolding the Trash for good", async () => {
@@ -246,7 +258,7 @@ describe("CanopyView Trash", () => {
       fireEvent.change(input, { target: { value: "api" } });
     });
     await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 250));
+      await new Promise((resolve) => setTimeout(resolve, SEARCH_SETTLE_MS));
     });
     expect(trashRows().map((row) => row.getAttribute("aria-label"))).toEqual(["Fix newer"]);
     expect(useCanopyStore.getState().trashExpanded).toBe(false);
@@ -255,24 +267,52 @@ describe("CanopyView Trash", () => {
   it("restores from the row's button, and selects the run once it is back in the inbox", async () => {
     const canopy = await open(TRASH);
     fireEvent.click(trashBar()!);
-    const restore = trashRows()[1]!.querySelector<HTMLElement>("[data-canopy-trash-restore]")!;
+    const restore = trashRows()[0]!.querySelector<HTMLElement>("[data-canopy-trash-restore]")!;
     await act(async () => {
       fireEvent.click(restore);
     });
-    expect(canopy.restoreTrashed).toHaveBeenCalledWith("older", {
+    expect(canopy.restoreTrashed).toHaveBeenCalledTimes(1);
+    expect(canopy.restoreTrashed).toHaveBeenCalledWith("newer", {
       spawnedAt: NOW - 3_600_000,
-      expiresAt: TRASH[1]!.expiresAt,
+      expiresAt: TRASH[0]!.expiresAt,
     });
     // Back in the fleet, and gone from the trash.
     await act(async () => {
-      useFleetSnapshotStore.setState({ snapshot: fleet(["live", "older"]) });
-      useCanopyStore.setState({ snapshot: { ...baseSnapshot, trash: [TRASH[0]!] } });
+      useFleetSnapshotStore.setState({ snapshot: fleet(["live", "newer"]) });
+      useCanopyStore.setState({ snapshot: { ...baseSnapshot, trash: [TRASH[1]!] } });
     });
     await frames();
-    expect(document.getElementById("canopy-card-older")?.getAttribute("aria-selected")).toBe(
+    expect(document.getElementById("canopy-card-newer")?.getAttribute("aria-selected")).toBe(
       "true"
     );
+    expect(trashRows().map((row) => row.getAttribute("aria-label"))).toEqual(["Fix older"]);
     expect(vi.mocked(notify)).not.toHaveBeenCalled();
+  });
+
+  it("leaves the user's own newer selection be when a restored run comes back", async () => {
+    await open(TRASH, ["live", "other"]);
+    fireEvent.click(trashBar()!);
+    await act(async () => {
+      fireEvent.click(trashRows()[0]!.querySelector<HTMLElement>("[data-canopy-trash-restore]")!);
+    });
+    const picked =
+      document.getElementById("canopy-card-other")?.getAttribute("aria-selected") === "true"
+        ? "live"
+        : "other";
+    await act(async () => {
+      fireEvent.click(document.getElementById(`canopy-card-${picked}`)!);
+    });
+    await act(async () => {
+      useFleetSnapshotStore.setState({ snapshot: fleet(["live", "other", "newer"]) });
+      useCanopyStore.setState({ snapshot: { ...baseSnapshot, trash: [TRASH[1]!] } });
+    });
+    await frames();
+    expect(document.getElementById(`canopy-card-${picked}`)?.getAttribute("aria-selected")).toBe(
+      "true"
+    );
+    expect(document.getElementById("canopy-card-newer")?.getAttribute("aria-selected")).toBe(
+      "false"
+    );
   });
 
   it("is reached from the inbox's last row by arrow, unfolded there, and Enter restores", async () => {
@@ -290,12 +330,33 @@ describe("CanopyView Trash", () => {
     await act(async () => {
       fireEvent.keyDown(trashRows()[1]!, { key: "Enter" });
     });
-    expect(canopy.restoreTrashed).toHaveBeenCalledWith("older", expect.anything());
+    expect(canopy.restoreTrashed).toHaveBeenCalledWith("older", {
+      spawnedAt: NOW - 3_600_000,
+      expiresAt: TRASH[1]!.expiresAt,
+    });
     // Up off the bar is back into the inbox.
     fireEvent.keyDown(trashRows()[0]!, { key: "ArrowUp" });
     expect(document.activeElement).toBe(trashBar());
     fireEvent.keyDown(trashBar()!, { key: "ArrowUp" });
     expect(document.activeElement).toBe(last);
+  });
+
+  it("goes down from a search that matches only the trash onto its first match, and back up", async () => {
+    await open(TRASH);
+    const input = document.querySelector<HTMLInputElement>(
+      "[data-testid=canopy-dialog] input[role=combobox]"
+    )!;
+    act(() => input.focus());
+    await act(async () => {
+      fireEvent.change(input, { target: { value: "api" } });
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, SEARCH_SETTLE_MS));
+    });
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(trashRows()[0]);
+    fireEvent.keyDown(trashRows()[0]!, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(input);
   });
 
   it("removes a run for good only once confirmed: cancelling leaves it", async () => {
@@ -367,23 +428,28 @@ describe("CanopyView Trash", () => {
     ]);
   });
 
-  it("says once, politely, that a run left the trash at its time", async () => {
+  it("says once, politely, that a run left the trash at its time, but not one restored", async () => {
     const announce = vi
       .spyOn(useAnnouncerStore.getState(), "announce")
       .mockImplementation(() => {});
-    const due: CanopyTrashEntry = {
-      ...trashed("due", "p2", 19_800),
-      expiresAt: Date.now() + 200,
-    };
-    const restored = trashed("restored", "p2", 2_000);
-    await open([due, restored]);
-    await act(async () => {
-      useCanopyStore.setState({ snapshot: { ...baseSnapshot, trash: [restored] } });
+    const due = (runId: string): CanopyTrashEntry => ({
+      ...trashed(runId, "p2", 20_000),
+      expiresAt: Date.now(),
     });
-    // Restored or removed long before its time: not an expiry.
+    await open([due("expired"), due("restored"), trashed("early", "p2", 2_000)]);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    // All three leave: one let go at its time, one restored at its time (back
+    // in the fleet), one restored or removed long before its time.
     await act(async () => {
+      useFleetSnapshotStore.setState({ snapshot: fleet(["live", "restored"]) });
       useCanopyStore.setState({ snapshot: { ...baseSnapshot, trash: [] } });
     });
-    expect(announce.mock.calls).toEqual([["'Fix due' expired and was removed permanently"]]);
+    const expiries = () =>
+      announce.mock.calls.map(([message]) => message).filter((message) => /expired/.test(message));
+    expect(expiries()).toEqual([]);
+    await act(async () => {
+      vi.advanceTimersByTime(EXPIRY_CONFIRMED_MS);
+    });
+    expect(expiries()).toEqual(["'Fix expired' expired and was removed permanently"]);
   });
 });

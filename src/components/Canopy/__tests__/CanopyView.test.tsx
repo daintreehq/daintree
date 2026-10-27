@@ -1988,14 +1988,14 @@ describe("CanopyView", () => {
     expect(line?.textContent).toContain("Trashed '");
     const undo = [...line!.querySelectorAll("button")].find((b) => b.textContent === "Undo")!;
     await act(async () => {
-      fireEvent.keyDown(document.activeElement ?? document.body, { key: "z" });
+      fireEvent.click(undo);
     });
     // By the receipt the trash gave, so only that trash of that terminal comes back.
     expect(canopy.untrash).toHaveBeenCalledWith(7);
     expect(container.ownerDocument.querySelector("[data-canopy-undo-line]")).toBeNull();
-    // The line's Undo, pressed after Z, finds it done: once only.
+    // Z, pressed after the line's Undo, finds it done: once only.
     await act(async () => {
-      fireEvent.click(undo);
+      fireEvent.keyDown(document.activeElement ?? document.body, { key: "z" });
     });
     expect(canopy.untrash).toHaveBeenCalledTimes(1);
   });

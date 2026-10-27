@@ -956,29 +956,50 @@ function CanopyInbox({
   // Canopy's Trash: every agent run the host's trash holds, any project's.
   const trashRef = useRef<CanopyTrashSectionHandle>(null);
   // A run put back from the Trash comes into the inbox selected, once it is
-  // back in the fleet; the user selecting anything first, or another host, wins.
-  const [restoredRunId, setRestoredRunId] = useState<string | null>(null);
-  useEffect(() => setRestoredRunId(null), [hostId]);
+  // back in the fleet. Anything the user selects first, another host or the
+  // panel closing, wins.
+  const shownRunId = selectedAssistant?.id ?? focusedItem?.runId ?? null;
+  const shownRunIdRef = useRef(shownRunId);
+  useLayoutEffect(() => {
+    shownRunIdRef.current = shownRunId;
+  });
+  const [restored, setRestored] = useState<{ runId: string; from: string | null } | null>(null);
+  const onRestored = useCallback(
+    (runId: string) => setRestored({ runId, from: shownRunIdRef.current }),
+    []
+  );
+  useEffect(() => setRestored(null), [hostId, isOpen]);
   useEffect(() => {
-    if (restoredRunId === null) return;
-    const handle = setTimeout(() => setRestoredRunId(null), RESTORED_SELECT_MS);
+    if (restored === null) return;
+    const handle = setTimeout(() => setRestored(null), RESTORED_SELECT_MS);
     return () => clearTimeout(handle);
-  }, [restoredRunId]);
+  }, [restored]);
   useEffect(() => {
-    if (restoredRunId === null || !visible.some((item) => item.runId === restoredRunId)) return;
-    setRestoredRunId(null);
-    // The keyboard follows it from the Trash, or from nowhere once its row left.
+    if (restored === null) return;
+    if (shownRunId !== restored.from) {
+      setRestored(null);
+      return;
+    }
+    if (!visible.some((item) => item.runId === restored.runId)) return;
+    setRestored(null);
+    // The keyboard follows it from the Trash, or from nowhere; the search keeps it.
     const active = document.activeElement;
     if (
       active === null ||
       active === document.body ||
-      active.closest("#canopy-trash, [data-canopy-card]") !== null
+      active.closest("#canopy-trash, [aria-controls=canopy-trash], [data-canopy-card]") !== null
     ) {
-      focusCardNow(restoredRunId);
+      focusCardNow(restored.runId);
     } else {
-      selectNow(restoredRunId);
+      selectNow(restored.runId);
     }
-  }, [restoredRunId, visible, focusCardNow, selectNow]);
+  }, [restored, shownRunId, visible, focusCardNow, selectNow]);
+  // Back in the fleet: a run that left the trash near its deadline was restored, not let go.
+  const fleetRunIdsRef = useRef<ReadonlySet<string>>(new Set());
+  useEffect(() => {
+    fleetRunIdsRef.current = new Set(baseItems.map((item) => item.runId));
+  }, [baseItems]);
+  const isBackInFleet = useCallback((runId: string) => fleetRunIdsRef.current.has(runId), []);
   const trashEntries = canopy?.trash ?? NO_TRASH;
   // This view's own project's trash is in its dock too, which says its expiries itself.
   const dockAnnounces = useCallback(
@@ -1300,6 +1321,10 @@ function CanopyInbox({
   // The relationship filter keeps the list, and its banner, up even with nothing in it.
   const listsAssistants =
     (assistantsShown && (assistantItems.length > 0 || !workersShown)) || workOf !== null;
+  // A trash, or the undo line of one just made, keeps the list up with no
+  // agent left running: the way back stays where the user left it.
+  const trashListed = trashEntries.length > 0;
+  const listsTrash = trashListed || undoLine !== null;
   // One clause each, as the empty line wants; with none running anywhere, it
   // names the way to start one.
   const assistantsEmpty: string | null = !assistantsReadable
@@ -1335,15 +1360,20 @@ function CanopyInbox({
             ? "None found on the hosts that could be read"
             : "No worker in the inbox was started by or handed to this assistant",
         }
-      : unreadOnly && inbox.inbox.length > 0
+      : items.length === 0
         ? {
-            words: "Nothing unread",
-            note: "Each agent shows here again when it does something new",
+            words: "No agents are running",
+            ...(trashListed ? { note: "Restore one from the Trash below" } : {}),
           }
-        : {
-            words: "Every agent is archived",
-            note: "Each comes back when it has something new to say",
-          };
+        : unreadOnly && inbox.inbox.length > 0
+          ? {
+              words: "Nothing unread",
+              note: "Each agent shows here again when it does something new",
+            }
+          : {
+              words: "Every agent is archived",
+              note: "Each comes back when it has something new to say",
+            };
 
   const headerControls = (
     <>
@@ -1571,7 +1601,7 @@ function CanopyInbox({
             )}
           </div>
         )}
-        {!hostHeld && (items.length > 0 || listsAssistants) && (
+        {!hostHeld && (items.length > 0 || listsAssistants || listsTrash) && (
           // An inbox: what needs you down a sidebar, most urgent first, the rest
           // folded away beneath it, and the selected agent's own terminal beside
           // it, drawn as its pane.
@@ -1944,7 +1974,8 @@ function CanopyInbox({
                     searchRef.current?.focus();
                     searchRef.current?.select();
                   }}
-                  onRestored={setRestoredRunId}
+                  onRestored={onRestored}
+                  isBackInFleet={isBackInFleet}
                 />
               </div>
               {undoLine && (
@@ -2080,7 +2111,8 @@ function CanopyInbox({
           fleet !== null &&
           !fleet.degraded &&
           items.length === 0 &&
-          !listsAssistants && (
+          !listsAssistants &&
+          !listsTrash && (
             <div className="flex flex-1 flex-col items-center justify-center gap-3">
               {scope === "project" && fleet.runs.length > 0 ? (
                 <>
@@ -2109,7 +2141,7 @@ function CanopyInbox({
               )}
             </div>
           )}
-        {offerReading && !hostHeld && items.length === 0 && !listsAssistants && (
+        {offerReading && !hostHeld && items.length === 0 && !listsAssistants && !listsTrash && (
           <CanopyStatusBar
             host={otherHost ? hostName : null}
             model={undefined}
