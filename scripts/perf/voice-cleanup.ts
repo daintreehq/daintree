@@ -33,6 +33,7 @@ import {
   CLEANUP_CORPUS,
   cleanupSessions,
   FIX_KINDS,
+  recentPromptTwins,
   type CleanupCase,
   type CleanupSession,
   type FixKind,
@@ -300,9 +301,11 @@ function settingsFor(
 
 function requestFor(entry: CleanupCase): VoiceCorrectionRequest {
   const recentContext = entry.recentContext ?? [];
+  const recentPrompts = entry.recentPrompts ?? [];
   return {
     rawText: entry.raw,
     ...(recentContext.length > 0 ? { recentContext } : {}),
+    ...(recentPrompts.length > 0 ? { recentPrompts } : {}),
     ...(entry.terminalOutput ? { terminalOutput: entry.terminalOutput } : {}),
     reason: "stop",
     startsPrompt: entry.startsPrompt ?? recentContext.length === 0,
@@ -732,6 +735,37 @@ export function renderReport(run: RunRecord, corpus: readonly CleanupCase[]): st
     ),
     ""
   );
+
+  const twins = recentPromptTwins(corpus);
+  if (twins.length > 0) {
+    lines.push(
+      "## With and without recent prompts",
+      "",
+      `Each passage sent with the prompts last sent to its terminal (#14855), beside the same passage sent without them, under the \`${firstGuard}\` guard. Cached: the share of input read from the prompt cache. Cache writes bill at 1.25 times the input rate.`,
+      "",
+      "| Variant | Recent prompts | Trials | Misreads landed | Mean input | Cached | Cache writes | Per cleanup |",
+      "| --- | --- | --- | --- | --- | --- | --- | --- |"
+    );
+    const sides: Array<[string, CleanupCase[]]> = [
+      ["with", twins.map((twin) => twin.withPrompts)],
+      ["without", twins.map((twin) => twin.bare)],
+    ];
+    for (const variant of run.variants) {
+      for (const [side, entries] of sides) {
+        const ids = new Set(entries.map((entry) => entry.id));
+        const summary = summariseVariant(
+          variant.id,
+          firstGuard,
+          run.trials.filter((trial) => ids.has(trial.caseId)),
+          entries
+        );
+        lines.push(
+          `| ${variant.id} | ${side} | ${summary.trials} | ${pct(summary.landed.misreadRate)} | ${Math.round(summary.tokens.meanInput)} | ${pct(summary.tokens.cachedShare)} | ${summary.tokens.cacheWrites} | ${usd(summary.meanCostUsd)} |`
+        );
+      }
+    }
+    lines.push("");
+  }
 
   const groups: Array<[string, (entry: CleanupCase) => string]> = [
     ["source", (entry) => entry.source],
