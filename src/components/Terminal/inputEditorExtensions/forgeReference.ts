@@ -120,7 +120,9 @@ function build(state: EditorState, references: ForgeReferenceMap): ForgeReferenc
     marks.push(
       Decoration.mark({
         class: "cm-forge-ref",
-        attributes: { "aria-description": `${describeForgeReference(reference)}: ${reference.title}` },
+        attributes: {
+          "aria-description": `${describeForgeReference(reference)}: ${reference.title}`,
+        },
       }).range(token.start, token.end)
     );
   }

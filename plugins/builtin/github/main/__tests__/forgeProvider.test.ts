@@ -2012,7 +2012,13 @@ describe("batchLookups.findReferencesByNumbers", () => {
           state: "OPEN",
           isDraft: true,
         },
-        r14: { __typename: "PullRequest", number: 14, title: "Old", state: "MERGED", isDraft: false },
+        r14: {
+          __typename: "PullRequest",
+          number: 14,
+          title: "Old",
+          state: "MERGED",
+          isDraft: false,
+        },
       },
       rateLimit: { cost: 1, remaining: 4999, resetAt: "" },
     });
@@ -2022,7 +2028,12 @@ describe("batchLookups.findReferencesByNumbers", () => {
     expect(mockGraphQLClient).toHaveBeenCalledTimes(1);
     const query = mockGraphQLClient.mock.calls[0]![0] as string;
     expect(query).toContain("r12: issueOrPullRequest(number: 12)");
-    expect(result.get(12)).toEqual({ kind: "issue", number: 12, title: "Crash on start", state: "closed" });
+    expect(result.get(12)).toEqual({
+      kind: "issue",
+      number: 12,
+      title: "Crash on start",
+      state: "closed",
+    });
     expect(result.get(13)).toEqual({
       kind: "pr",
       number: 13,
@@ -2088,7 +2099,11 @@ describe("batchLookups.findReferencesByNumbers", () => {
     mockGraphQLClient.mockResolvedValueOnce({ repository: firstRepo });
     mockShouldBlockRequest
       .mockReturnValueOnce({ blocked: false, reason: null })
-      .mockReturnValue({ blocked: true, reason: "primary", resumeAt: Date.now() + 1000 } as ShouldBlockResult);
+      .mockReturnValue({
+        blocked: true,
+        reason: "primary",
+        resumeAt: Date.now() + 1000,
+      } as ShouldBlockResult);
 
     const result = await findReferences(numbers);
 
@@ -2112,7 +2127,10 @@ describe("batchLookups.findReferencesByNumbers", () => {
       firstRepo[`r${i}`] = { __typename: "Issue", number: i, title: `Issue ${i}`, state: "OPEN" };
     }
     mockGraphQLClient
-      .mockResolvedValueOnce({ repository: firstRepo, rateLimit: { cost: 1, remaining: 1, resetAt: "" } })
+      .mockResolvedValueOnce({
+        repository: firstRepo,
+        rateLimit: { cost: 1, remaining: 1, resetAt: "" },
+      })
       .mockRejectedValueOnce(new Error("timeout"));
 
     const result = await findReferences(numbers);

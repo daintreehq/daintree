@@ -458,12 +458,19 @@ describe("toForgeNumberReference", () => {
       })
     ).toEqual({ kind: "pr", number: 8, title: "Fix", state: "open", isDraft: true });
     expect(
-      toForgeNumberReference({ __typename: "PullRequest", number: 9, title: "Old", state: "MERGED" })
+      toForgeNumberReference({
+        __typename: "PullRequest",
+        number: 9,
+        title: "Old",
+        state: "MERGED",
+      })
     ).toMatchObject({ state: "merged", isDraft: false });
   });
 
   it("can't read a node missing what a reference shows, or of another type", () => {
-    expect(toForgeNumberReference({ __typename: "Issue", number: 7, state: "OPEN" })).toBeUndefined();
+    expect(
+      toForgeNumberReference({ __typename: "Issue", number: 7, state: "OPEN" })
+    ).toBeUndefined();
     expect(
       toForgeNumberReference({ __typename: "Discussion", number: 7, title: "Q", state: "OPEN" })
     ).toBeUndefined();
