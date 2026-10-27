@@ -3,6 +3,7 @@ import type {
   VoiceInputSettings,
   VoiceInputStatus,
 } from "../../../shared/types/ipc/api.js";
+import { TRANSCRIPTION_ITEM_FAILED_CODE } from "../../../shared/types/voice.js";
 import type { VoiceSessionReport } from "../../../shared/types/voiceSessionSummary.js";
 import type { VoiceTextSpan } from "../../../shared/utils/voiceUncertainWords.js";
 
@@ -78,6 +79,15 @@ export function createAudioBufferOverflowError(): VoiceInputError {
     severity: "transient",
     code: AUDIO_BUFFER_OVERFLOW_CODE,
     message: "Connecting took too long, so some audio from the start of dictation was lost.",
+  };
+}
+
+/** Transient: the session keeps running, only one passage went untranscribed. */
+export function createTranscriptionItemFailedError(): VoiceInputError {
+  return {
+    severity: "transient",
+    code: TRANSCRIPTION_ITEM_FAILED_CODE,
+    message: "Part of what you said didn't transcribe.",
   };
 }
 

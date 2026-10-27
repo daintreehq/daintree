@@ -201,6 +201,9 @@ export interface VoiceInputError {
   param?: string | null;
 }
 
+/** Raised when the provider reports one segment failed; the session keeps running. */
+export const TRANSCRIPTION_ITEM_FAILED_CODE = "transcription_item_failed";
+
 /** How many finished dictations the app session keeps for recovery. */
 export const MAX_RECENT_DICTATIONS = 20;
 

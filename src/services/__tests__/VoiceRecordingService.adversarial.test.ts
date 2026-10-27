@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VoiceRecordingTarget } from "@/store/voiceRecordingStore";
 import type { VoiceInputError } from "@shared/types";
+import { TRANSCRIPTION_ITEM_FAILED_CODE } from "@shared/types/voice";
 
 type VoiceStatusCallback = (payload: { sessionId: string; status: string }) => void;
 type VoiceSessionEndedCallback = (payload: { sessionId: string; reason: string }) => void;
@@ -1691,6 +1692,34 @@ describe("VoiceRecordingService adversarial", () => {
     expect(runtime.voiceFns.finishSession).not.toHaveBeenCalled();
     expect(runtime.voiceInput.stop).not.toHaveBeenCalled();
     expect(runtime.voiceState.activeTarget?.panelId).toBe("panel-1");
+  });
+
+  it("FAILED_PASSAGE_WARNS_WITHOUT_STOPPING_DICTATION", async () => {
+    runtime.voiceState.activeTarget = { panelId: "panel-1", panelTitle: "Panel One" };
+    runtime.voiceState.status = "recording";
+    runtime.voiceState.panelBuffers["panel-1"] = createPanelBuffer();
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    voiceRecordingService.initialize();
+    const { notify } = await import("@/lib/notify");
+    vi.mocked(notify).mockClear();
+
+    emitError({
+      severity: "transient",
+      code: TRANSCRIPTION_ITEM_FAILED_CODE,
+      message: "Part of what you said didn't transcribe.",
+    });
+
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(notify).mock.calls[0]![0]).toMatchObject({
+      type: "warning",
+      title: "Passage not transcribed",
+      replaceKey: "voice-passage-failed",
+    });
+    expect(runtime.voiceFns.announce).toHaveBeenCalledTimes(1);
+    expect(runtime.voiceFns.setLastError).not.toHaveBeenCalled();
+    expect(runtime.voiceFns.finishSession).not.toHaveBeenCalled();
+    expect(runtime.voiceInput.stop).not.toHaveBeenCalled();
   });
 
   it("PAUSE_AUTO_STOPS_AFTER_60S_WHEN_NOT_RESUMED", async () => {

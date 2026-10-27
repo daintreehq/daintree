@@ -9,6 +9,7 @@ import {
   AUDIO_BUFFER_MAX_BYTES,
   AUDIO_BUFFER_MAX_CHUNKS,
   createAudioBufferOverflowError,
+  createTranscriptionItemFailedError,
   type ProviderSessionStats,
   type TranscriptionProvider,
   type TranscriptionStartContext,
@@ -397,6 +398,9 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   // Interim text per in-flight item, used to settle an item that never reports
   // back in its commit-order slot rather than after the text that follows it.
   private itemDeltaText = new Map<string, string>();
+  // Items the server reported failed: settled with interim text, which is no
+  // proof the speaker finished, so they never count as end of speech.
+  private failedItemIds = new Set<string>();
   private heldCompletionTimer: ReturnType<typeof setTimeout> | null = null;
   // The item the hold timer is waiting on. The deadline belongs to that item,
   // so later completions queuing behind it don't keep pushing it back.
@@ -1163,11 +1167,12 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       }
 
       case "conversation.item.input_audio_transcription.failed": {
-        // Terminal for the item: no transcript is coming, so settle it as empty
-        // — releasing its commit-order slot and counting the commit — rather
-        // than making the stop wait out DRAIN_TIMEOUT_MS. Without an item id we
-        // can't tell which commit failed, so leave the hold and drain backstops
-        // in charge. The error payload may echo user content — log its code only.
+        // Terminal for the item: no transcript is coming, so settle it with
+        // its interim text, as a hold timeout would — releasing its
+        // commit-order slot and counting the commit — rather than making the
+        // stop wait out DRAIN_TIMEOUT_MS. Without an item id we can't tell
+        // which commit failed, so leave the hold and drain backstops in
+        // charge. The error payload may echo user content — log its code only.
         const itemId = typeof payload.item_id === "string" ? payload.item_id : undefined;
         const failure = payload.error as { code?: string; type?: string } | undefined;
         logWarn(`${P} ← transcription.failed`, {
@@ -1175,8 +1180,12 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
           code: failure?.code,
           errorType: failure?.type,
         });
-        if (!itemId) return;
-        this.handleTranscriptComplete("", itemId);
+        if (!itemId || this.completedItemIds.has(itemId)) return;
+        const interim = (this.itemDeltaText.get(itemId) ?? "").trim();
+        this.failedItemIds.add(itemId);
+        this.emitError(createTranscriptionItemFailedError());
+        this.handleTranscriptComplete(interim, itemId);
+        if (!this.commitOrder.includes(itemId)) this.failedItemIds.delete(itemId);
         return;
       }
 
@@ -1318,7 +1327,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   private releaseHeldCompletions(force: boolean, settleHead = false): void {
     for (let itemId = this.commitOrder[0]; itemId !== undefined; itemId = this.commitOrder[0]) {
       let transcript = this.heldCompletions.get(itemId);
-      const settled = transcript === undefined;
+      const settled = transcript === undefined || this.failedItemIds.has(itemId);
       if (transcript === undefined) {
         if (!force && !settleHead) break;
         settleHead = false;
@@ -1333,6 +1342,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       }
       this.commitOrder.shift();
       this.heldCompletions.delete(itemId);
+      this.failedItemIds.delete(itemId);
       // Only a reported transcript of the last commit, with no later commit
       // in flight and the VAD hearing silence it has seen speech end into,
       // ends an utterance; a backstop or replayed commit can land mid-speech.
@@ -1682,6 +1692,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     this.commitOrder = [];
     this.heldCompletions.clear();
     this.itemDeltaText.clear();
+    this.failedItemIds.clear();
     this.clearHeldCompletionTimer();
     this.preConnectBuffer = [];
     this.preConnectBufferBytes = 0;

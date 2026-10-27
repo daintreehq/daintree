@@ -52,6 +52,7 @@ import {
   type VoiceSessionElsewhere,
   type VoiceTranscriptionProvider,
 } from "@shared/types";
+import { TRANSCRIPTION_ITEM_FAILED_CODE } from "@shared/types/voice";
 import type { VoiceStopReason } from "@shared/types/voiceSessionSummary";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
@@ -831,6 +832,12 @@ class VoiceRecordingService {
     this.unsubscribers.push(
       voiceInput.onError(({ sessionId, error }) => {
         if (this.discardedSessionIds.has(sessionId)) return;
+        // One passage went untranscribed. It can land while the stop drains,
+        // and it never ends the session, so it is handled before either gate.
+        if (error.code === TRANSCRIPTION_ITEM_FAILED_CODE) {
+          this.reportPassageFailed();
+          return;
+        }
         // During graceful stop, the main process suppresses drain errors.
         // If one leaks through, ignore it to avoid prematurely finalizing.
         if (this.isStoppingSession) {
@@ -3071,6 +3078,19 @@ class VoiceRecordingService {
         });
         return;
     }
+  }
+
+  private reportPassageFailed(): void {
+    const message = "Part of what you said didn't transcribe. Dictation is still running.";
+    useVoiceRecordingStore.getState().announce(message);
+    notify({
+      type: "warning",
+      title: "Passage not transcribed",
+      message,
+      priority: "high",
+      replaceKey: "voice-passage-failed",
+      context: { eventKind: "uiFeedback" },
+    });
   }
 
   private reportRewriteSkipped(message: string): void {
