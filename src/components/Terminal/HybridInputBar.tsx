@@ -1116,8 +1116,20 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       // Only a split of the text the editor shows can say which part of it goes.
       const split = voiceSend?.kept && voiceSend.draft === doc ? voiceSend : null;
       const text = split?.text ?? doc;
+      // Typing the store hasn't caught up with: the editor reads differently
+      // with no outside write on its way in. Text kept over it would eat it.
+      const editorAheadOfStore = () => {
+        const shown = editorViewRef.current?.state.doc.toString();
+        const inputs = useTerminalInputStore.getState();
+        return (
+          shown !== undefined &&
+          shown !== inputs.getDraftInput(terminalId, latest?.projectId) &&
+          inputs.externalDraftRevision === appliedExternalDraftRevisionRef.current
+        );
+      };
       const keepDraft = split
         ? () => {
+            if (editorAheadOfStore()) return;
             const kept = voiceRecordingService.keepHeldBackDictation(split);
             if (kept === null) return;
             applyEditorValue(kept, {
@@ -1132,7 +1144,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       // change still leaves the sent text to take out.
       const unchanged = guardSentDraft(latest?.projectId);
       const isDraftUnchanged = split
-        ? () => unchanged() || voiceRecordingService.holdsBackFrom(split)
+        ? () => unchanged() || (!editorAheadOfStore() && voiceRecordingService.holdsBackFrom(split))
         : unchanged;
 
       const intercepted = tryComposerFleetBroadcast(isFocusedTerminal, terminalId, text, () => {

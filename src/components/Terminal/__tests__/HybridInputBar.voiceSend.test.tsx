@@ -230,6 +230,76 @@ describe("HybridInputBar dictated send with the next dictation already started (
     expect(view.state.doc.toString()).toBe("The next prompt.");
   });
 
+  it("keeps what the next dictation adds while an expansion in the sent prompt is fetched", async () => {
+    const pending = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(pending.promise);
+    const diff = deferred<string>();
+    Object.assign(window.electron, { git: { getWorkingDiff: vi.fn(() => diff.promise) } });
+    const onSend = vi.fn();
+    useTerminalInputStore.getState().setDraftInput(PANEL_ID, "@diff");
+    act(() => {
+      dictate("hello wrld");
+    });
+    const view = await mount(onSend);
+
+    await act(async () => {
+      runScopeHandlers(view, new KeyboardEvent("keydown", { key: "Enter" }), "editor");
+    });
+    await act(async () => {
+      dictate("these are the next prompt");
+    });
+    await act(async () => {
+      pending.resolve({ action: "replace", correctedText: "Hello world." });
+    });
+    expect(onSend).not.toHaveBeenCalled();
+    await act(async () => {
+      callbacks.complete!({ text: "and the rest", willCorrect: false, itemId: "item-late" });
+    });
+    await act(async () => {
+      diff.resolve("BODY");
+    });
+
+    expect(onSend).toHaveBeenCalledTimes(1);
+    expect(onSend.mock.calls[0]![0].text).toBe("```diff\nBODY\n``` Hello world.");
+    expect(draft()).toBe("these are the next prompt and the rest");
+    expect(view.state.doc.toString()).toBe("these are the next prompt and the rest");
+  });
+
+  it("leaves the draft whole rather than drop typing the store hasn't heard yet", async () => {
+    const pending = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(pending.promise);
+    const diff = deferred<string>();
+    Object.assign(window.electron, { git: { getWorkingDiff: vi.fn(() => diff.promise) } });
+    const onSend = vi.fn();
+    useTerminalInputStore.getState().setDraftInput(PANEL_ID, "@diff");
+    act(() => {
+      dictate("hello wrld");
+    });
+    const view = await mount(onSend);
+
+    await act(async () => {
+      runScopeHandlers(view, new KeyboardEvent("keydown", { key: "Enter" }), "editor");
+    });
+    await act(async () => {
+      dictate("these are the next prompt");
+    });
+    await act(async () => {
+      pending.resolve({ action: "replace", correctedText: "Hello world." });
+    });
+    // A keystroke the editor has but its write-back to the store hasn't
+    // committed yet when the expansion comes back.
+    view.dispatch({
+      changes: { from: view.state.doc.length, insert: " now" },
+      userEvent: "input.type",
+    });
+    await act(async () => {
+      diff.resolve("BODY");
+    });
+
+    expect(onSend).toHaveBeenCalledTimes(1);
+    expect(view.state.doc.toString()).toBe("@diff Hello world. these are the next prompt now");
+  });
+
   it("starts the next dictation after the prompt, not over text selected in it", async () => {
     const pending = deferred<CorrectResult>();
     correct.mockReturnValueOnce(pending.promise);
