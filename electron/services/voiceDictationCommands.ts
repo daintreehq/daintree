@@ -76,10 +76,43 @@ export function applyDictationCommands(text: string): string {
 
 const SEND_COMMAND_RE = /(?:^|[\s.,;:!?]+)\bsend\s+it[\s.,;:!?]*$/i;
 
-// "don't send it", "not to send it" and "don't just send it" talk about
-// sending rather than asking for it.
-const NEGATED_SEND_RE =
-  /(?:^|[^\p{L}\p{N}'’])(?:(?:do|does|did|is|wo|ca|would|could|should)n['’]?t|not|never|cannot)\s+(?:to\s+)?(?:(?:just|yet)\s+)?send\s+it[\s.,;:!?]*$/iu;
+const CLAUSE_BREAK_RE = /[.,;:!?\u2014\u2013]/;
+
+// Negation anywhere in the clause ("don't actually send it", "do not ever send
+// it") makes "send it" part of the sentence, not an order.
+const NEGATION_RE =
+  /(?:^|[^\p{L}\p{N}'\u2019])(?:(?:do|does|did|is|are|was|were|wo|ca|would|could|should|must|need|has|have|had|might)n['\u2019]?t|not|never|cannot|no)(?![\p{L}\p{N}])/iu;
+
+// "you send it", "before we send it", "I'll send it", "should send it", "to send
+// it": the word before names who sends or what sending is meant to do.
+const SENDER_BEFORE_RE =
+  /(?:^|[^\p{L}\p{N}'\u2019])(?:(?:i|you|we|they|he|she|who)(?:['\u2019](?:ll|d|ve|re))?|will|would|shall|should|could|can|may|might|must|to)\s+(?:(?:actually|eventually|also|always|really|probably|ever|still|just|then)\s+)*$/iu;
+
+// "where should the handler send it": a clause opening on a question word.
+// "when" counts only before an auxiliary, since "when ready send it" is an order.
+const QUESTION_OPENER_RE =
+  /^\s*(?:(?:where|what|whom|whose|which|who|how|why)|when\s+(?:should|will|would|do|does|did|can|could|is|are))(?![\p{L}\p{N}])/iu;
+
+/**
+ * Whether the "send it" that starts at `index` belongs to its sentence rather
+ * than standing as an order: a question, a negated or subject-led clause, or a
+ * statement about sending.
+ */
+function isSentenceSendIt(text: string, index: number, tail: string): boolean {
+  if (tail.includes("?")) return true;
+  const before = text.slice(0, index);
+  let clauseStart = 0;
+  for (let i = before.length - 1; i >= 0; i--) {
+    if (CLAUSE_BREAK_RE.test(before[i])) {
+      clauseStart = i + 1;
+      break;
+    }
+  }
+  const clause = before.slice(clauseStart);
+  return (
+    NEGATION_RE.test(clause) || QUESTION_OPENER_RE.test(clause) || SENDER_BEFORE_RE.test(clause)
+  );
+}
 
 export interface SendCommandResult {
   text: string;
@@ -94,9 +127,12 @@ export interface SendCommandResult {
  *   extractSendCommand("Send it")                      → { text: "", send: true }
  *   extractSendCommand("then send it to the API")      → unchanged, send: false
  *   extractSendCommand("but don't send it")            → unchanged, send: false
+ *   extractSendCommand("let me review it before you send it") → unchanged, send: false
  */
 export function extractSendCommand(text: string): SendCommandResult {
   const match = SEND_COMMAND_RE.exec(text);
-  if (!match || NEGATED_SEND_RE.test(text)) return { text, send: false };
+  if (!match) return { text, send: false };
+  const phraseStart = match.index + match[0].search(/send/i);
+  if (isSentenceSendIt(text, phraseStart, text.slice(phraseStart))) return { text, send: false };
   return { text: text.slice(0, match.index).trimEnd(), send: true };
 }

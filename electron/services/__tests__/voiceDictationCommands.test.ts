@@ -89,7 +89,6 @@ describe("applyDictationCommands", () => {
 describe("extractSendCommand", () => {
   it.each([
     ["fix the login bug send it", "fix the login bug"],
-    ["Fix the login bug, send it.", "Fix the login bug"],
     ["Fix the login bug. Send it!", "Fix the login bug"],
     ["fix the login bug Send  It ", "fix the login bug"],
     ["Send it.", ""],
@@ -98,6 +97,13 @@ describe("extractSendCommand", () => {
     ["Is it right or not? Send it.", "Is it right or not"],
     ["Looks good, just send it.", "Looks good, just"],
     ["Don't wait, just send it.", "Don't wait, just"],
+    ["Fix the login bug, send it.", "Fix the login bug"],
+    ["Fix the login bug. Send it.", "Fix the login bug"],
+    ["Fix it send it", "Fix it"],
+    ["Where should I put the handler? Send it.", "Where should I put the handler"],
+    ["Don't forget the tests. Send it.", "Don't forget the tests"],
+    ["Fix the bug and send it", "Fix the bug and"],
+    ["When ready send it", "When ready"],
   ])("strips the trailing command from %j", (input, text) => {
     expect(extractSendCommand(input)).toEqual({ text, send: true });
   });
@@ -134,6 +140,27 @@ describe("extractSendCommand", () => {
     "Don't just send it.",
     "Please don’t just send it",
     "Do not yet send it",
+    "Draft the reply to the client but don't actually send it.",
+    "Write the migration email but do not ever send it.",
+    "Draft the Slack update and let me review it before you send it.",
+    "Log the payload right before we send it.",
+    "Where should the webhook handler send it?",
+    "Where should the webhook handler send it",
+    "How do we send it",
+    "Fix the bug, send it?",
+    "Maybe I'll send it",
+    "I’ll send it.",
+    "They send it",
+    "You should send it",
+    "I want to send it",
+    "The bot will send it.",
+    "Never actually send it",
+    "I have no plans to send it",
+    "When should the webhook handler send it",
+    "How should the webhook handler send it",
+    "No service should ever send it",
+    "I’ll eventually send it",
+    "We actually send it",
   ])("leaves %j literal", (input) => {
     expect(extractSendCommand(input)).toEqual({ text: input, send: false });
   });
