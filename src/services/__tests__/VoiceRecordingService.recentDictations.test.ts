@@ -59,7 +59,13 @@ vi.mock("@/services/KeybindingService", () => ({
 }));
 
 type DeltaPayload = { text: string; itemId?: string };
-type CompletePayload = { text: string; willCorrect: boolean; itemId?: string };
+type CompletePayload = {
+  text: string;
+  willCorrect: boolean;
+  itemId?: string;
+  heard?: string;
+  commandText?: string;
+};
 type CorrectResult = { action: "no_change" | "replace"; correctedText: string };
 
 const callbacks: {
@@ -72,6 +78,7 @@ const correct =
   vi.fn<(request: { rawText: string; recentContext?: string[] }) => Promise<CorrectResult>>();
 const record = vi.fn<(dictation: RecentDictation) => Promise<void>>();
 const setCorrectedText = vi.fn<(update: { id: string; correctedText: string }) => Promise<void>>();
+let dictionary: Array<{ term: string; heardAs: string[]; source: "manual"; addedAt: number }> = [];
 
 function stubElectron() {
   const electron = {
@@ -96,12 +103,14 @@ function stubElectron() {
       onStopRequested: vi.fn(() => () => {}),
       onRevealRequested: vi.fn(() => () => {}),
       getLiveSession: vi.fn().mockResolvedValue({ revision: 0, session: null }),
-      getSettings: vi.fn().mockResolvedValue({
+      getSettings: vi.fn(async () => ({
         enabled: true,
         openaiApiKey: "sk-key",
         correctionEnabled: true,
-      }),
+        dictionary,
+      })),
       stop: vi.fn().mockResolvedValue(undefined),
+      cancel: vi.fn().mockResolvedValue(undefined),
       correct,
     },
     recentDictations: { record, setCorrectedText },
@@ -177,6 +186,7 @@ describe("VoiceRecordingService — recent dictations (#14637)", () => {
     callbacks.boundary = null;
     panelListeners.length = 0;
     correct.mockReset();
+    dictionary = [];
     record.mockReset().mockResolvedValue(undefined);
     setCorrectedText.mockReset().mockResolvedValue(undefined);
   });
@@ -389,6 +399,120 @@ describe("VoiceRecordingService — recent dictations (#14637)", () => {
     expect(voiceStore.getState().status).toBe("idle");
     expect(voiceStore.getState().panelBuffers["panel-1"]).toBeUndefined();
     expect(kept()).toEqual([]);
+  });
+
+  it("keeps the text the stop-time heard-as rules wrote, and the cleanup of it", async () => {
+    dictionary = [{ term: "Zustand", heardAs: ["zoo stand"], source: "manual", addedAt: 0 }];
+    const { service, begin, say, kept, cleanups, flush, inputStore } = await setup();
+    const cleanup = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(cleanup.promise);
+
+    begin("panel-1");
+    say("first paragraph");
+    callbacks.boundary!({ rawText: null });
+    say("add zoo");
+    say("stand to the store");
+    await service.stop();
+
+    expect(inputStore.getState().getDraftInput("panel-1")).toBe(
+      "first paragraph\nadd Zustand to the store"
+    );
+    expect(kept().map((d) => d.rawText)).toEqual(["first paragraph\nadd Zustand to the store"]);
+
+    cleanup.resolve({
+      action: "replace",
+      correctedText: "First paragraph.\nAdd Zustand to the store.",
+    });
+    await flush();
+    expect(cleanups()).toEqual([
+      { id: kept()[0]!.id, correctedText: "First paragraph.\nAdd Zustand to the store." },
+    ]);
+  });
+
+  it("rewrites only the words still in the draft, not the same words already sent", async () => {
+    dictionary = [{ term: "Zustand", heardAs: ["zoo stand"], source: "manual", addedAt: 0 }];
+    const { service, begin, say, kept, voiceStore, inputStore } = await setup();
+    voiceStore.getState().setCorrectionEnabled(false);
+
+    begin("panel-1");
+    say("zoo");
+    say("stand");
+    inputStore.getState().clearDraftInput("panel-1");
+    say("zoo");
+    say("stand");
+    await service.stop();
+
+    expect(inputStore.getState().getDraftInput("panel-1")).toBe("Zustand");
+    expect(kept().map((d) => d.rawText)).toEqual(["zoo stand Zustand"]);
+  });
+
+  it("keeps no entry for a dictation Escape cancelled, and lets its words go", async () => {
+    const { service, begin, say, kept, voiceStore, inputStore, flush } = await setup();
+
+    begin("panel-1");
+    say("words I meant to throw away");
+    expect(service.handleEscape("panel-1")).toBe(true);
+    await vi.waitFor(() => expect(voiceStore.getState().status).toBe("idle"));
+    await flush();
+
+    expect(inputStore.getState().getDraftInput("panel-1")).toBe("");
+    expect(kept()).toEqual([]);
+    expect(voiceStore.getState().panelBuffers["panel-1"]?.completedSegments).toEqual([]);
+  });
+
+  it("keeps the entry when Escape stops and keeps an edited dictation", async () => {
+    const { service, begin, say, kept, voiceStore, inputStore, flush } = await setup();
+    voiceStore.getState().setCorrectionEnabled(false);
+
+    begin("panel-1");
+    say("hello world");
+    inputStore.getState().setDraftInput("panel-1", "hello there");
+    expect(service.handleEscape("panel-1")).toBe(true);
+    await vi.waitFor(() => expect(voiceStore.getState().status).toBe("idle"));
+    await flush();
+
+    expect(inputStore.getState().getDraftInput("panel-1")).toBe("hello there");
+    expect(kept().map((d) => d.rawText)).toEqual(["hello world"]);
+  });
+
+  it("keeps a spoken command as the command it wrote, and scratches in step with the draft", async () => {
+    const { service, begin, say, kept, voiceStore, inputStore } = await setup();
+    voiceStore.getState().setCorrectionEnabled(false);
+
+    begin("panel-1");
+    callbacks.delta!({ text: "slash review", itemId: "item-cmd" });
+    callbacks.complete!({
+      text: "slash review",
+      commandText: "/review",
+      willCorrect: false,
+      itemId: "item-cmd",
+    });
+    say("the parser");
+    say("scratch that");
+    expect(inputStore.getState().getDraftInput("panel-1")).toBe("/review");
+    await service.stop();
+
+    expect(kept().map((d) => d.rawText)).toEqual(["/review"]);
+  });
+
+  it("keeps a command's arguments as the stop-time heard-as rules rewrote them", async () => {
+    dictionary = [{ term: "Zustand", heardAs: ["zoo stand"], source: "manual", addedAt: 0 }];
+    const { service, begin, kept, voiceStore, inputStore } = await setup();
+    voiceStore.getState().setCorrectionEnabled(false);
+
+    begin("panel-1");
+    callbacks.delta!({ text: "slash review zoo stand", itemId: "item-cmd" });
+    callbacks.complete!({
+      text: "slash review Zustand",
+      heard: "slash review zoo stand",
+      commandText: "/review zoo stand",
+      willCorrect: false,
+      itemId: "item-cmd",
+    });
+    await service.stop();
+
+    expect(inputStore.getState().getDraftInput("panel-1")).toBe("/review Zustand");
+    expect(kept().map((d) => d.rawText)).toEqual(["/review Zustand"]);
   });
 
   it("keeps no entry for a spoken rewrite instruction", async () => {

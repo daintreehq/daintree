@@ -388,6 +388,51 @@ function sameDictatedWords(a: string, b: string): boolean {
   return collapse(a) === collapse(b);
 }
 
+/** A passage the stop-time heard-as rules rewrote: what the draft held, then what they wrote. */
+interface PassageRewrite {
+  landed: string;
+  rewritten: string;
+}
+
+/** The last place `words` read in `text` before `end`, whatever whitespace separates them. */
+function lastIndexOfWords(
+  text: string,
+  words: string,
+  end: number
+): { from: number; to: number } | null {
+  const target = words.replace(/\s+/g, "");
+  if (!target) return null;
+  let compact = "";
+  const offsets: number[] = [];
+  for (let i = 0; i < end; i++) {
+    const char = text[i]!;
+    if (/\s/.test(char)) continue;
+    compact += char;
+    offsets.push(i);
+  }
+  const at = compact.lastIndexOf(target);
+  return at < 0 ? null : { from: offsets[at]!, to: offsets[at + target.length - 1]! + 1 };
+}
+
+/**
+ * A session's transcript with the stop-time heard-as rewrites made to it, so
+ * it holds what landed (#14637). The rewritten passages are what the draft
+ * still holds, the end of the session, so each is matched from the end back;
+ * one no longer found as it was heard stays as it was.
+ */
+function applyPassageRewrites(text: string, rewrites: readonly PassageRewrite[]): string {
+  let next = text;
+  let end = text.length;
+  for (let i = rewrites.length - 1; i >= 0; i--) {
+    const { landed, rewritten } = rewrites[i]!;
+    const at = lastIndexOfWords(next, landed, end);
+    if (!at) continue;
+    next = next.slice(0, at.from) + rewritten + next.slice(at.to);
+    end = at.from;
+  }
+  return next;
+}
+
 interface CaptureAttempt {
   target: VoiceRecordingTarget;
   audio: WarmAudio;
@@ -662,6 +707,8 @@ class VoiceRecordingService {
               timeline?.markNextFrame("firstText");
             }
           }
+          // What landed, so recent dictations hold a command written as one,
+          // and a scratch drops the segment its utterance wrote (#14637).
           useVoiceRecordingStore.getState().completeSegment(completedText, itemId);
           // After completeSegment, so the command's own preview is already retired
           // and a stop that preserves live text can't put it back.
@@ -1268,6 +1315,9 @@ class VoiceRecordingService {
     const { rewrite } = target;
     if (rewrite) rewrite.selection.release();
     useVoiceRecordingStore.getState().finishSession({ preserveLiveText: false });
+    // Words taken back out of the draft never landed, so recent dictations
+    // keep no entry for them (#14637), and the buffer lets them go too.
+    useVoiceRecordingStore.getState().consumeCompletedSegments(target.panelId);
     useVoiceRecordingStore
       .getState()
       .announce(rewrite ? "Rewrite cancelled." : "Dictation cancelled. Its text was discarded.");
@@ -2492,12 +2542,10 @@ class VoiceRecordingService {
         // closed panel or a sleep are exactly when they need recovering. Read
         // by the session this stop began with, which a start racing the
         // teardown can't take the place of. A rewrite's spoken instruction
-        // was never meant for a draft, so it isn't one to recover.
+        // was never meant for a draft, so it isn't one to recover. Kept once
+        // the heard-as rules below have had their say.
         if (stoppedTarget && !stoppedTarget.rewrite) {
           finished = takeFinishedTranscript(stoppedTarget, stoppedSessionId);
-        }
-        if (finished) {
-          keepRecentDictation({ ...finished, correctedText: null, endedAt: Date.now() });
         }
         if (shouldAnnounce) {
           useVoiceRecordingStore.getState().announce(announcement);
@@ -2516,7 +2564,15 @@ class VoiceRecordingService {
       // stop that keeps the text gets this, whether or not correction runs.
       // A rewrite's instruction goes to the model as spoken.
       if (stoppedTarget && !stoppedTarget.rewrite && this.heardAsRules) {
-        this.applyHeardAsRules(stoppedTarget, stoppedSessionId, this.heardAsRules);
+        const rewrites = this.applyHeardAsRules(stoppedTarget, stoppedSessionId, this.heardAsRules);
+        // The history holds what landed, and a cleanup only counts for it when
+        // it covered the same words.
+        if (finished && rewrites.length > 0) {
+          finished = { ...finished, rawText: applyPassageRewrites(finished.rawText, rewrites) };
+        }
+      }
+      if (finished) {
+        keepRecentDictation({ ...finished, correctedText: null, endedAt: Date.now() });
       }
 
       // Whole-passage AI cleanup runs after a deliberate, graceful stop only —
@@ -2573,20 +2629,21 @@ class VoiceRecordingService {
    * shorter phrase took first, comes out as one term, and a term already
    * written is never rewritten again. Rules changed since the session began
    * apply to all of it alike. Synchronous, so it lands before stop() resolves
-   * and before any send or correction can read the draft.
+   * and before any send or correction can read the draft. Returns each
+   * passage it rewrote, in draft order.
    */
   private applyHeardAsRules(
     target: VoiceRecordingTarget,
     sessionId: string | null,
     rewrite: HeardAsRewriter
-  ): void {
+  ): PassageRewrite[] {
     const record = findDictation(target, sessionId);
-    if (!record) return;
+    if (!record) return [];
     const { panelId, projectId } = target;
     const inputStore = useTerminalInputStore.getState();
     const draft = inputStore.getDraftInput(panelId, projectId);
     const draftKey = makeDraftKey(panelId, projectId);
-    let rewrote = false;
+    const rewrites: PassageRewrite[] = [];
     for (const passage of collectCorrectionPassages(record, draft)) {
       const heard = transcribedPassageText(record, passage, draft);
       // The draft either side is context, so a phrase that runs on into text
@@ -2621,10 +2678,11 @@ class VoiceRecordingService {
       }
       // A session restarted on this panel dictates after the passage.
       useVoiceRecordingStore.getState().shiftDraftOffsets(panelId, span.to, delta);
-      rewrote = true;
+      rewrites.push({ landed: passage.text, rewritten: text });
     }
     // Like the words it rewrites, it leaves the caret to the user.
-    if (rewrote) inputStore.bumpExternalDraftRevision({ keepsSelection: true });
+    if (rewrites.length > 0) inputStore.bumpExternalDraftRevision({ keepsSelection: true });
+    return rewrites;
   }
 
   /**
