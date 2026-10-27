@@ -739,6 +739,7 @@ export default tseslint.config(
   {
     files: [
       "src/components/Onboarding/**/*.{ts,tsx}",
+      "src/components/Setup/AgentInputStep.tsx",
       "src/components/Setup/AgentSetupWizard.tsx",
       "src/components/Setup/SystemRequirementsSection.tsx",
       "src/components/Worktree/WorktreeCard/WorktreeDetailsSection.tsx",

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React from "react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, act } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { render, act, screen } from "@testing-library/react";
 
 const { notifyMock } = vi.hoisted(() => ({
   notifyMock: vi.fn(),
@@ -14,12 +14,18 @@ const { setGlobalSkipPermissionsMock } = vi.hoisted(() => ({
   setGlobalSkipPermissionsMock: vi.fn(() => Promise.resolve()),
 }));
 const { dispatchMock } = vi.hoisted(() => ({
-  dispatchMock: vi.fn(() => Promise.resolve()),
+  dispatchMock: vi.fn(
+    (..._args: unknown[]): Promise<{ ok: boolean; error?: { message: string } }> =>
+      Promise.resolve({ ok: true })
+  ),
 }));
 
 vi.mock("@/lib/notify", () => ({
   notify: notifyMock,
 }));
+
+// Whether the rendered step is still the current one, or animating out.
+const presence = vi.hoisted(() => ({ isPresent: true }));
 
 vi.mock("framer-motion", () => {
   const Passthrough = React.forwardRef<HTMLDivElement, React.PropsWithChildren<unknown>>(
@@ -32,6 +38,7 @@ vi.mock("framer-motion", () => {
     domMax: {},
     LayoutGroup: ({ children }: React.PropsWithChildren<unknown>) => <>{children}</>,
     useReducedMotion: () => true,
+    useIsPresent: () => presence.isPresent,
     m: { div: Passthrough },
     motion: { div: Passthrough },
   };
@@ -46,7 +53,12 @@ const agentToolbarPinsStoreState = {
   revision: 0,
   setAgentPinned: vi.fn(() => Promise.resolve()),
 };
-vi.mock("@/store", () => ({
+// The real terminal-input store, so the input step re-renders on the same
+// writes the Settings page sees.
+vi.mock("@/store", async () => ({
+  useTerminalInputStore: (
+    await vi.importActual<typeof import("@/store/terminalInputStore")>("@/store/terminalInputStore")
+  ).useTerminalInputStore,
   useAgentSettingsStore: Object.assign(
     (selector?: (s: unknown) => unknown) =>
       selector ? selector(agentSettingsStoreState) : agentSettingsStoreState,
@@ -138,17 +150,20 @@ vi.mock("@/components/agents/AgentCard", () => ({
 
 vi.mock("@/components/ui/AppDialog", () => {
   // Expose a test-only "dismiss" button that mirrors AppDialog's real close
-  // path: it invokes onBeforeClose first, then onClose only if the gate
-  // returns truthy (matching AppDialog.tsx's handleClose behavior).
+  // path: nothing while it isn't dismissible, otherwise onBeforeClose first,
+  // then onClose only if the gate returns truthy (matching AppDialog.tsx's
+  // handleClose behavior).
   const Dialog = ({
     isOpen,
     onClose,
     onBeforeClose,
+    dismissible = true,
     children,
   }: {
     isOpen: boolean;
     onClose?: () => void;
     onBeforeClose?: () => boolean | Promise<boolean>;
+    dismissible?: boolean;
     children: React.ReactNode;
   }) =>
     isOpen ? (
@@ -156,6 +171,7 @@ vi.mock("@/components/ui/AppDialog", () => {
         <button
           data-testid="dialog-dismiss"
           onClick={async () => {
+            if (!dismissible) return;
             const proceed = onBeforeClose ? await onBeforeClose() : true;
             if (proceed && onClose) onClose();
           }}
@@ -229,6 +245,7 @@ vi.stubGlobal("window", {
 });
 
 import { AgentSetupWizard } from "../AgentSetupWizard";
+import { useTerminalInputStore } from "@/store/terminalInputStore";
 
 // Clicks the visible footer button whose label matches exactly. Only the
 // current step renders, so the match is unambiguous across the wizard flow.
@@ -664,8 +681,8 @@ describe("AgentSetupWizard permissions step", () => {
     expect(setGlobalSkipPermissionsMock).toHaveBeenCalledTimes(1);
     expect(setGlobalSkipPermissionsMock).toHaveBeenCalledWith(false);
     expect(notifyMock).not.toHaveBeenCalled();
-    // Advanced to the summary, not closed.
-    expect(document.body.textContent).toContain("Setup complete");
+    // Advanced to the input step, not closed.
+    expect(document.querySelector("h3")?.textContent).toBe("Agent input");
   });
 
   it("commits true before advancing when the toggle is enabled", async () => {
@@ -688,7 +705,7 @@ describe("AgentSetupWizard permissions step", () => {
 
     expect(setGlobalSkipPermissionsMock).toHaveBeenCalledWith(true);
     expect(notifyMock).not.toHaveBeenCalled();
-    expect(document.body.textContent).toContain("Setup complete");
+    expect(document.querySelector("h3")?.textContent).toBe("Agent input");
   });
 
   it("stays on the permissions step and surfaces an error when the save fails", async () => {
@@ -745,6 +762,369 @@ describe("AgentSetupWizard permissions step", () => {
     // Close is not consent — the global skip setting must never be written here.
     expect(setGlobalSkipPermissionsMock).not.toHaveBeenCalled();
     expect(onClose).toHaveBeenCalled();
+  });
+});
+
+async function gotoInputStep(onClose = vi.fn()) {
+  await act(async () => {
+    render(
+      <AgentSetupWizard
+        isOpen
+        onClose={onClose}
+        isFirstRun
+        initialAvailability={{ claude: "ready" }}
+      />
+    );
+  });
+  await gotoPermissionsStep();
+  await clickButton("Continue"); // permissions -> input
+  expect(document.querySelector("h3")?.textContent).toBe("Agent input");
+}
+
+function inputSettingDispatches(): unknown[][] {
+  return dispatchMock.mock.calls.filter(([id]) => String(id).startsWith("terminalConfig."));
+}
+
+function hybridInputSwitch(): HTMLButtonElement {
+  return screen.getByRole("switch", { name: "Hybrid input" }) as HTMLButtonElement;
+}
+
+function focusOption(name: "Hybrid input" | "Terminal"): HTMLButtonElement {
+  return screen.getByRole("radio", { name }) as HTMLButtonElement;
+}
+
+function describedText(element: Element): string {
+  return (element.getAttribute("aria-describedby") ?? "")
+    .split(" ")
+    .map((id) => document.getElementById(id)?.textContent ?? "")
+    .join(" ");
+}
+
+type InputField = "hybridInputEnabled" | "hybridInputAutoFocus";
+type Outcome = "ok" | "fail";
+
+// What the stand-in actions have saved, as opposed to what the store shows.
+const saved = new Map<InputField, boolean>();
+
+function writeInputSetting(field: InputField, enabled: boolean): void {
+  if (field === "hybridInputEnabled") {
+    useTerminalInputStore.setState({ hybridInputEnabled: enabled });
+  } else {
+    useTerminalInputStore.setState({ hybridInputAutoFocus: enabled });
+  }
+}
+
+/**
+ * Stands in for the two terminalConfig actions: the optimistic store write,
+ * then a save, or a rollback to the value it found and a failed result.
+ * Anything else dispatched resolves untouched.
+ */
+function inputAction(outcome: Outcome | (() => Promise<Outcome>)) {
+  return async (...args: unknown[]) => {
+    const [actionId, payload] = args;
+    const field: InputField | null =
+      actionId === "terminalConfig.setHybridInputEnabled"
+        ? "hybridInputEnabled"
+        : actionId === "terminalConfig.setHybridInputAutoFocus"
+          ? "hybridInputAutoFocus"
+          : null;
+    if (field === null) return { ok: true };
+    const enabled = Boolean(
+      payload && typeof payload === "object" && "enabled" in payload && payload.enabled
+    );
+    const previous = useTerminalInputStore.getState()[field];
+    writeInputSetting(field, enabled);
+    if ((typeof outcome === "function" ? await outcome() : outcome) === "ok") {
+      saved.set(field, enabled);
+      return { ok: true };
+    }
+    writeInputSetting(field, previous);
+    return { ok: false, error: { message: "IPC down" } };
+  };
+}
+
+/** Settles one deferred write, then lets whatever it queued start. */
+async function settleWrite(settles: ((outcome: Outcome) => void)[], outcome: Outcome) {
+  await act(async () => {
+    settles.shift()!(outcome);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
+describe("AgentSetupWizard input step", () => {
+  beforeEach(() => {
+    dispatchMock.mockClear();
+    dispatchMock.mockImplementation(inputAction("ok"));
+    presence.isPresent = true;
+    saved.clear();
+    useTerminalInputStore.setState({ hybridInputEnabled: true, hybridInputAutoFocus: true });
+  });
+
+  afterEach(() => {
+    dispatchMock.mockImplementation(() => Promise.resolve({ ok: true }));
+  });
+
+  it("starts on today's defaults and writes nothing when clicked straight through", async () => {
+    await gotoInputStep();
+
+    expect(hybridInputSwitch().getAttribute("aria-checked")).toBe("true");
+    expect(focusOption("Hybrid input").getAttribute("aria-checked")).toBe("true");
+
+    await clickButton("Continue"); // input -> complete
+    expect(document.querySelector("h3")?.textContent).toBe("Setup complete");
+    expect(inputSettingDispatches()).toEqual([]);
+  });
+
+  it("shows the values already saved, since these are the Settings page's own settings", async () => {
+    useTerminalInputStore.setState({ hybridInputAutoFocus: false });
+    await gotoInputStep();
+
+    expect(focusOption("Terminal").getAttribute("aria-checked")).toBe("true");
+  });
+
+  it.each([true, false])(
+    "writes the hybrid input switch through the Settings action (from %s)",
+    async (from) => {
+      useTerminalInputStore.setState({ hybridInputEnabled: from });
+      await gotoInputStep();
+      await act(async () => {
+        hybridInputSwitch().click();
+      });
+
+      expect(inputSettingDispatches()).toEqual([
+        ["terminalConfig.setHybridInputEnabled", { enabled: !from }, { source: "user" }],
+      ]);
+      expect(hybridInputSwitch().getAttribute("aria-checked")).toBe(String(!from));
+    }
+  );
+
+  it.each([
+    [true, "Terminal"],
+    [false, "Hybrid input"],
+  ] as const)(
+    "writes the focus choice through the Settings action (from %s)",
+    async (from, pick) => {
+      useTerminalInputStore.setState({ hybridInputAutoFocus: from });
+      await gotoInputStep();
+      await act(async () => {
+        focusOption(pick).click();
+      });
+
+      expect(inputSettingDispatches()).toEqual([
+        ["terminalConfig.setHybridInputAutoFocus", { enabled: !from }, { source: "user" }],
+      ]);
+      expect(focusOption(pick).getAttribute("aria-checked")).toBe("true");
+    }
+  );
+
+  it("names what turning the hybrid input off gives up, on the switch itself", async () => {
+    await gotoInputStep();
+
+    const description = describedText(hybridInputSwitch());
+    expect(description).toMatch(/dictation/i);
+    // The command, not every file reference: a drop onto the terminal still inserts one.
+    expect(description).toContain("Insert file reference");
+  });
+
+  it("takes the focus choice away, and says why, while the hybrid input is off", async () => {
+    await gotoInputStep();
+    await act(async () => {
+      hybridInputSwitch().click();
+    });
+
+    const terminal = focusOption("Terminal");
+    expect(terminal.disabled || terminal.getAttribute("aria-disabled") === "true").toBe(true);
+    // Only the disabled reason, not the row's own description, names the hybrid input.
+    expect(describedText(screen.getByRole("radiogroup", { name: "Focus first" }))).toMatch(
+      /hybrid input/i
+    );
+    await act(async () => {
+      terminal.click();
+    });
+    expect(inputSettingDispatches().map(([id]) => id)).toEqual([
+      "terminalConfig.setHybridInputEnabled",
+    ]);
+  });
+
+  it("holds Continue, Back and closing until every write has settled", async () => {
+    const settles: ((outcome: Outcome) => void)[] = [];
+    dispatchMock.mockImplementation(
+      inputAction(() => new Promise<Outcome>((resolve) => settles.push(resolve)))
+    );
+    const onClose = vi.fn();
+    await gotoInputStep(onClose);
+    // A pick made while another saves waits its turn rather than being dropped.
+    await act(async () => {
+      hybridInputSwitch().click();
+    });
+    await act(async () => {
+      hybridInputSwitch().click();
+    });
+    expect(inputSettingDispatches()).toHaveLength(1);
+
+    const attemptToLeave = async () => {
+      await clickButton("Continue");
+      await clickButton("Back");
+      await act(async () => {
+        document.querySelector<HTMLButtonElement>('[data-testid="dialog-dismiss"]')!.click();
+      });
+    };
+    await attemptToLeave();
+    await settleWrite(settles, "ok");
+    expect(inputSettingDispatches().map(([, args]) => args)).toEqual([
+      { enabled: false },
+      { enabled: true },
+    ]);
+    await attemptToLeave();
+    expect(document.querySelector("h3")?.textContent).toBe("Agent input");
+    expect(onClose).not.toHaveBeenCalled();
+
+    await settleWrite(settles, "ok");
+    await clickButton("Continue");
+    expect(document.querySelector("h3")?.textContent).toBe("Setup complete");
+  });
+
+  it("keeps the switch on what was saved when an early write of several fails", async () => {
+    const settles: ((outcome: Outcome) => void)[] = [];
+    dispatchMock.mockImplementation(
+      inputAction(() => new Promise<Outcome>((resolve) => settles.push(resolve)))
+    );
+    await gotoInputStep();
+    for (let pick = 0; pick < 3; pick++) {
+      await act(async () => {
+        hybridInputSwitch().click();
+      });
+    }
+    // Each rollback restores the value its action found, which is only the
+    // saved one if no other write of the setting was in flight.
+    await settleWrite(settles, "fail");
+    // Newer picks are already queued, so retrying the one that failed would undo them.
+    expect(screen.queryByRole("alert")).toBeNull();
+    while (settles.length > 0) await settleWrite(settles, "ok");
+
+    expect(saved.has("hybridInputEnabled")).toBe(true);
+    expect(useTerminalInputStore.getState().hybridInputEnabled).toBe(
+      saved.get("hybridInputEnabled")
+    );
+    expect(hybridInputSwitch().getAttribute("aria-checked")).toBe(
+      String(saved.get("hybridInputEnabled"))
+    );
+  });
+
+  it("shows each pick at once and saves the last one, even while earlier ones wait", async () => {
+    const settles: ((outcome: Outcome) => void)[] = [];
+    dispatchMock.mockImplementation(
+      inputAction(() => new Promise<Outcome>((resolve) => settles.push(resolve)))
+    );
+    await gotoInputStep();
+    for (const pick of ["Terminal", "Hybrid input", "Terminal"] as const) {
+      await act(async () => {
+        focusOption(pick).click();
+      });
+      expect(focusOption(pick).getAttribute("aria-checked")).toBe("true");
+    }
+    while (settles.length > 0) await settleWrite(settles, "ok");
+
+    expect(saved.get("hybridInputAutoFocus")).toBe(false);
+    expect(focusOption("Terminal").getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("refuses a write from a step that is animating out", async () => {
+    await gotoInputStep();
+    presence.isPresent = false;
+    await act(async () => {
+      useTerminalInputStore.setState({ hybridInputAutoFocus: false });
+    });
+    await act(async () => {
+      hybridInputSwitch().click();
+    });
+
+    expect(inputSettingDispatches()).toEqual([]);
+  });
+
+  it("offers to retry a failed save once the value is back, and lets the user move on", async () => {
+    dispatchMock.mockImplementationOnce(inputAction("fail"));
+    await gotoInputStep();
+    await act(async () => {
+      hybridInputSwitch().click();
+    });
+
+    expect(screen.getByRole("alert")).toBeTruthy();
+    expect(hybridInputSwitch().getAttribute("aria-checked")).toBe("true");
+
+    await clickButton("Retry");
+    expect(inputSettingDispatches().map(([, args]) => args)).toEqual([
+      { enabled: false },
+      { enabled: false },
+    ]);
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(hybridInputSwitch().getAttribute("aria-checked")).toBe("false");
+
+    dispatchMock.mockImplementationOnce(inputAction("fail"));
+    await act(async () => {
+      hybridInputSwitch().click();
+    });
+    expect(screen.getByRole("alert")).toBeTruthy();
+    await clickButton("Continue");
+    expect(document.querySelector("h3")?.textContent).toBe("Setup complete");
+  });
+
+  it("withdraws a retry once a newer pick of that setting is made", async () => {
+    const settles: ((outcome: Outcome) => void)[] = [];
+    dispatchMock.mockImplementation(
+      inputAction(() => new Promise<Outcome>((resolve) => settles.push(resolve)))
+    );
+    dispatchMock.mockImplementationOnce(inputAction("fail"));
+    await gotoInputStep();
+    await act(async () => {
+      hybridInputSwitch().click(); // off, refused and rolled back on
+    });
+    expect(screen.getByRole("alert")).toBeTruthy();
+
+    await clickButton("Retry"); // off again, left pending
+    await act(async () => {
+      hybridInputSwitch().click(); // and back on before it lands
+    });
+    expect(screen.queryByRole("alert")).toBeNull();
+
+    while (settles.length > 0) await settleWrite(settles, "ok");
+    expect(saved.get("hybridInputEnabled")).toBe(true);
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("drops a retry that no longer applies", async () => {
+    dispatchMock.mockImplementationOnce(inputAction("fail"));
+    await gotoInputStep();
+    await act(async () => {
+      focusOption("Terminal").click();
+    });
+    expect(screen.getByRole("alert")).toBeTruthy();
+
+    // Another window turns the hybrid input off: the focus choice is out of reach.
+    await act(async () => {
+      useTerminalInputStore.setState({ hybridInputEnabled: false });
+    });
+    expect(screen.queryByRole("alert")).toBeNull();
+
+    // Back on, and another window has since saved the pick that failed here.
+    await act(async () => {
+      useTerminalInputStore.setState({ hybridInputEnabled: true, hybridInputAutoFocus: false });
+    });
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("drops a retry of the switch once another window has saved that pick", async () => {
+    dispatchMock.mockImplementationOnce(inputAction("fail"));
+    await gotoInputStep();
+    await act(async () => {
+      hybridInputSwitch().click();
+    });
+    expect(screen.getByRole("alert")).toBeTruthy();
+
+    await act(async () => {
+      useTerminalInputStore.setState({ hybridInputEnabled: false });
+    });
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });
 

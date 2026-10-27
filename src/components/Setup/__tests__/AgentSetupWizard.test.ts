@@ -86,6 +86,16 @@ describe("flowSteps", () => {
   it("omits the permissions step for returning users", () => {
     expect(flowSteps(false)).not.toContain("permissions");
   });
+
+  it("includes the input step on first run, after permissions and before complete", () => {
+    const steps = flowSteps(true);
+    expect(steps.indexOf("input")).toBe(steps.indexOf("permissions") + 1);
+    expect(steps.indexOf("input")).toBe(steps.indexOf("complete") - 1);
+  });
+
+  it("omits the input step for returning users, who have the Settings page", () => {
+    expect(flowSteps(false)).not.toContain("input");
+  });
 });
 
 describe("AgentSetupWizard reducer", () => {
@@ -157,7 +167,7 @@ describe("AgentSetupWizard reducer", () => {
     expect(state.step).toEqual({ type: "permissions" });
   });
 
-  it("permissions still fires on first run when all agents pre-installed, then advances to complete", () => {
+  it("permissions still fires on first run when all agents pre-installed, then advances to input", () => {
     const allInstalled = { claude: "ready", gemini: "ready" } as CliAvailability;
     let state = buildInitialState(allInstalled, true);
     state = wizardReducer(state, { type: "APPEARANCE_CONTINUE" });
@@ -170,11 +180,27 @@ describe("AgentSetupWizard reducer", () => {
     expect(state.step).toEqual({ type: "permissions" });
 
     state = wizardReducer(state, { type: "PERMISSIONS_CONTINUE" });
-    expect(state.step).toEqual({ type: "complete" });
+    expect(state.step).toEqual({ type: "input" });
 
-    // BACK from complete returns to permissions, not cli (cli was skipped).
+    // BACK from input returns to permissions, not cli (cli was skipped).
     state = wizardReducer(state, { type: "BACK" });
     expect(state.step).toEqual({ type: "permissions" });
+  });
+
+  it("advances from input to complete, and BACK from complete returns to input", () => {
+    let state = buildInitialState({ claude: "ready" } as CliAvailability, true);
+    state = wizardReducer(state, { type: "APPEARANCE_CONTINUE" });
+    state = wizardReducer(state, { type: "INIT_SELECTIONS", payload: { claude: true } });
+    for (const type of ["AGENTS_CONTINUE", "PRIVACY_CONTINUE", "PERMISSIONS_CONTINUE"] as const) {
+      state = wizardReducer(state, { type });
+    }
+    expect(state.step).toEqual({ type: "input" });
+
+    state = wizardReducer(state, { type: "INPUT_CONTINUE" });
+    expect(state.step).toEqual({ type: "complete" });
+
+    state = wizardReducer(state, { type: "BACK" });
+    expect(state.step).toEqual({ type: "input" });
   });
 
   it("BACK from complete returns to the prior step, preserving history", () => {
@@ -261,7 +287,7 @@ describe("AgentSetupWizard reducer", () => {
     expect(state.step).toEqual({ type: "cli" });
   });
 
-  it("follows full first-run flow: appearance -> agents -> privacy -> cli -> permissions -> complete", () => {
+  it("follows full first-run flow: appearance -> agents -> privacy -> cli -> permissions -> input -> complete", () => {
     let state = buildInitialState(emptyAvail, true);
 
     state = wizardReducer(state, { type: "APPEARANCE_CONTINUE" });
@@ -281,6 +307,9 @@ describe("AgentSetupWizard reducer", () => {
     expect(state.step).toEqual({ type: "permissions" });
 
     state = wizardReducer(state, { type: "PERMISSIONS_CONTINUE" });
+    expect(state.step).toEqual({ type: "input" });
+
+    state = wizardReducer(state, { type: "INPUT_CONTINUE" });
     expect(state.step).toEqual({ type: "complete" });
 
     expect(state.history).toEqual([
@@ -289,6 +318,7 @@ describe("AgentSetupWizard reducer", () => {
       { type: "privacy" },
       { type: "cli" },
       { type: "permissions" },
+      { type: "input" },
     ]);
   });
 
@@ -421,6 +451,7 @@ describe("visibleFlowSteps — the progress a user is actually shown", () => {
         { type: "AGENTS_CONTINUE" },
         { type: "PRIVACY_CONTINUE" },
         { type: "PERMISSIONS_CONTINUE" },
+        { type: "INPUT_CONTINUE" },
       ]
     );
     const installing = walk(
@@ -434,12 +465,14 @@ describe("visibleFlowSteps — the progress a user is actually shown", () => {
         { type: "PRIVACY_CONTINUE" },
         { type: "CLI_CONTINUE" },
         { type: "PERMISSIONS_CONTINUE" },
+        { type: "INPUT_CONTINUE" },
       ]
     );
 
     for (const run of [skipping, installing]) {
       const positions = run.map((entry) => Number(entry.split("/")[0]));
       expect(positions).toEqual(positions.map((_, i) => i + 1));
+      expect(run.at(-1)).toBe(`${run.length}/${run.length}`);
     }
   });
 
