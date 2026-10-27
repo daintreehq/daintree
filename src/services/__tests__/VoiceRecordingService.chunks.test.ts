@@ -510,6 +510,22 @@ describe("VoiceRecordingService — cleaning up a long dictation in chunks (#147
     expect(setHistoryCorrection).not.toHaveBeenCalled();
   });
 
+  it("lets a chunked dictation's cleanup go when its draft was cleared before the stop", async () => {
+    const { service, inputStore, say, pause, flush } = await setup();
+    correct.mockResolvedValueOnce({ action: "replace", correctedText: CLEANED_OPENING });
+    for (const sentence of OPENING) say(sentence);
+    pause();
+    say(NEXT);
+    await flush();
+    expect(service).toHaveProperty("cleanups.size", 1);
+
+    inputStore.getState().setDraftInput(PANEL, "");
+    await service.stop();
+    await flush();
+    expect(correct).toHaveBeenCalledTimes(1);
+    expect(service).toHaveProperty("cleanups.size", 0);
+  });
+
   it("folds passes into the baseline whichever lands first after the stop", async () => {
     const { service, say, pause, flush, baseline } = await setup();
     const chunk = deferred<CorrectResult>();

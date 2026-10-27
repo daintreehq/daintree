@@ -3085,7 +3085,13 @@ class VoiceRecordingService {
   ): void {
     const { panelId, projectId } = target;
     const record = findDictation(target, sessionId);
-    if (!record) return;
+    if (!record) {
+      // The draft was sent or cleared mid-dictation: chunks that already have
+      // their replies leave nothing else to let the cleanup go.
+      const orphan = sessionId ? this.cleanups.get(sessionId) : undefined;
+      if (orphan) this.keepCleanedHistory(orphan);
+      return;
+    }
     const cleanup =
       this.cleanups.get(record.sessionId) ?? this.openCleanup(target, record.sessionId);
     cleanup.stopped = true;
