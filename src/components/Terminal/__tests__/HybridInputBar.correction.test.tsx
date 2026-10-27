@@ -72,7 +72,7 @@ beforeEach(() => {
     focusedId: panel.id,
   });
   useTerminalInputStore.setState({ draftInputs: new Map() });
-  useVoiceRecordingStore.setState({ panelBuffers: {} });
+  useVoiceRecordingStore.setState({ panelBuffers: {}, activeTarget: null, status: "idle" });
   takeLandedCorrection("term-1", undefined, "");
   takeScratchLanded("term-1", undefined, "");
 });
