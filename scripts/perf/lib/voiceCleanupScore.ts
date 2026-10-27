@@ -1,6 +1,6 @@
 import { alignWords, normaliseWords } from "../../../e2e/helpers/voiceReplayScore";
 import { scanProtectedSpans } from "../../../shared/utils/voiceProtectedSpans";
-import type { CleanupCase } from "./voiceCleanupCorpus";
+import { FIX_KINDS, type CleanupCase, type FixKind } from "./voiceCleanupCorpus";
 
 /**
  * Scoring for the dictation cleanup benchmark (`npm run perf voice-cleanup`).
@@ -11,12 +11,16 @@ import type { CleanupCase } from "./voiceCleanupCorpus";
  * order. Whether they were written right (`--watch`, `useShallow`, a numbered
  * list) is what `fixes` checks, character for character, and whether the code,
  * references, flags, paths and numbers the speaker gave came through untouched
- * is what the keep checks see, since the word scores can't.
+ * is what the keep checks see, since the word scores can't. Fixes are scored
+ * by kind: a misread one is a word an agent would have taken for something
+ * else, a form one only how the speaker's own words are written.
  */
 
+// The saved run's shape: bump only when a rescore can no longer read one, since
+// a rescore scores every saved reply again from its text.
 export const VOICE_CLEANUP_SCHEMA_VERSION = 2;
 // Bump when a definition below changes, so runs scored differently aren't compared.
-export const VOICE_CLEANUP_SCORING_VERSION = 2;
+export const VOICE_CLEANUP_SCORING_VERSION = 3;
 
 /** Today's send yardstick (#14793): the wait a send used to give cleanup. */
 export const SEND_WAIT_TARGET_MS = 2000;
@@ -37,7 +41,10 @@ export interface TextScore {
   novelWords: number;
   /** Words inserted that the raw transcript didn't already have extra: a repeated or invented phrase. */
   addedWords: number;
-  fixesLanded: number;
+  /** Misread fixes landed: words an agent would have read wrong. */
+  misreadsLanded: number;
+  /** Form fixes landed: the speaker's own words, written as they'd have typed them. */
+  formsLanded: number;
   missedFixes: string[];
   dropsLanded: number;
   missedDrops: string[];
@@ -184,6 +191,11 @@ function edits(alignment: ReturnType<typeof alignWords>): number {
   return alignment.substitutions + alignment.deletions + alignment.insertions;
 }
 
+/** A passage's fixes of one kind, in the order the corpus gives them. */
+export function fixesOf(entry: CleanupCase, kind: FixKind): string[] {
+  return Object.keys(entry.fixes).filter((fix) => entry.fixes[fix] === kind);
+}
+
 export function acceptedReferences(entry: CleanupCase): string[] {
   return [entry.reference, ...(entry.alsoAccept ?? [])];
 }
@@ -238,9 +250,11 @@ export function scoreText(entry: CleanupCase, text: string): TextScore {
     else addedWords++;
   }
 
-  const missedFixes = entry.fixes.filter(
+  const missedFixes = Object.keys(entry.fixes).filter(
     (fix) => countOccurrences(text, fix) < Math.max(1, countOccurrences(entry.reference, fix))
   );
+  const landedOf = (kind: FixKind) =>
+    fixesOf(entry, kind).filter((fix) => !missedFixes.includes(fix)).length;
   const drops = entry.drops ?? [];
   const missedDrops = drops.filter(
     (drop) => countPhrase(text, drop) > countPhrase(entry.reference, drop)
@@ -259,7 +273,8 @@ export function scoreText(entry: CleanupCase, text: string): TextScore {
     broken,
     novelWords,
     addedWords,
-    fixesLanded: entry.fixes.length - missedFixes.length,
+    misreadsLanded: landedOf("misread"),
+    formsLanded: landedOf("form"),
     missedFixes,
     dropsLanded: drops.length - missedDrops.length,
     missedDrops,
@@ -297,7 +312,10 @@ export function corpusProblems(corpus: readonly CleanupCase[]): string[] {
   for (const entry of corpus) {
     if (seen.has(entry.id)) problems.push(`${entry.id}: duplicate id`);
     seen.add(entry.id);
-    for (const fix of entry.fixes) {
+    for (const [fix, kind] of Object.entries(entry.fixes)) {
+      if (!FIX_KINDS.includes(kind)) {
+        problems.push(`${entry.id}: fix "${fix}" is not classed as a misread or a form`);
+      }
       if (!entry.reference.includes(fix))
         problems.push(`${entry.id}: fix "${fix}" is not in the reference`);
       if (countOccurrences(entry.raw, fix) >= Math.max(1, countOccurrences(entry.reference, fix))) {
@@ -428,13 +446,16 @@ export interface QualitySummary {
   /** Reference words repaired over those the raw transcripts had wrong. */
   repairRate: number;
   /** The denominators, so a cohort with none of a check reads as such. */
-  totals: { repairable: number; fixes: number; drops: number; keeps: number };
+  totals: { repairable: number; misreads: number; forms: number; drops: number; keeps: number };
   broken: number;
   novelWords: number;
   addedWords: number;
   /** Trials that lost a word the raw transcript had right, or added one it never said. */
   trialsWithMeaningRisk: number;
-  fixRate: number;
+  /** Misread fixes landed: the score a model or prompt choice rests on. */
+  misreadRate: number;
+  /** Form fixes landed: how it's written, which an agent reads right either way. */
+  formRate: number;
   dropRate: number;
   keepRate: number;
   referenceMatchRate: number;
@@ -493,8 +514,10 @@ function summariseQuality(
   let novelWords = 0;
   let addedWords = 0;
   let risky = 0;
-  let fixes = 0;
-  let fixesTotal = 0;
+  let misreads = 0;
+  let misreadsTotal = 0;
+  let forms = 0;
+  let formsTotal = 0;
   let drops = 0;
   let dropsTotal = 0;
   let keeps = 0;
@@ -511,8 +534,10 @@ function summariseQuality(
     novelWords += score.novelWords;
     addedWords += score.addedWords;
     if (score.broken > 0 || score.novelWords > 0 || score.addedWords > 0) risky++;
-    fixes += score.fixesLanded;
-    fixesTotal += entry.fixes.length;
+    misreads += score.misreadsLanded;
+    forms += score.formsLanded;
+    misreadsTotal += fixesOf(entry, "misread").length;
+    formsTotal += fixesOf(entry, "form").length;
     drops += score.dropsLanded;
     dropsTotal += entry.drops?.length ?? 0;
     keeps += score.keepsKept;
@@ -528,12 +553,19 @@ function summariseQuality(
   }
   return {
     repairRate: ratio(repaired, repairable),
-    totals: { repairable, fixes: fixesTotal, drops: dropsTotal, keeps: keepsTotal },
+    totals: {
+      repairable,
+      misreads: misreadsTotal,
+      forms: formsTotal,
+      drops: dropsTotal,
+      keeps: keepsTotal,
+    },
     broken,
     novelWords,
     addedWords,
     trialsWithMeaningRisk: risky,
-    fixRate: ratio(fixes, fixesTotal),
+    misreadRate: ratio(misreads, misreadsTotal),
+    formRate: ratio(forms, formsTotal),
     dropRate: ratio(drops, dropsTotal),
     keepRate: ratio(keeps, keepsTotal),
     referenceMatchRate: ratio(matches, rows.length),
