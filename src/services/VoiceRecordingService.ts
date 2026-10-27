@@ -602,6 +602,9 @@ class VoiceRecordingService {
   private unsubscribers: Array<() => void> = [];
   private isStoppingSession = false;
   private stopPromise: Promise<void> | null = null;
+  // The stop in flight is the user's own (the key, a second press), and
+  // nothing has joined it since: a "send it" its drain lands still sends.
+  private stopTakesSpokenSend = false;
   private levelRaf: number | null = null;
   private pendingLevel = 0;
   // Session-wide audio-level stats, logged on stop so a captured log can show
@@ -2549,6 +2552,9 @@ class VoiceRecordingService {
   ): Promise<void> {
     const reason = options.reason ?? "user";
     if (this.stopPromise) {
+      // Whatever joined wants something of this stop besides an end of speech:
+      // a send, a teardown, a retarget. A "send it" still to land doesn't send.
+      this.stopTakesSpokenSend = false;
       // Joining a stop already in flight — typically a retarget's teardown,
       // which runs with preservePendingStart so its own start can follow. An
       // explicit stop has to cancel that pending start too, or the recording
@@ -2561,6 +2567,7 @@ class VoiceRecordingService {
       return;
     }
 
+    this.stopTakesSpokenSend = reason === "key_release" || reason === "user";
     this.stopPromise = (async () => {
       this.initialize();
       const { skipRemoteStop = false, preserveLiveText = true, nextStatus = "idle" } = options;
@@ -2771,6 +2778,7 @@ class VoiceRecordingService {
       await this.stopPromise;
     } finally {
       this.stopPromise = null;
+      this.stopTakesSpokenSend = false;
       // Set ahead of the capture teardown, so a throw there must not strand it.
       this.isStoppingSession = false;
     }
@@ -4350,18 +4358,27 @@ class VoiceRecordingService {
     };
   }
 
-  // A send heard while dictation is already stopping (Escape, the hotkey, a
-  // retarget, Enter) must not start a second stop or a send nobody asked for.
+  // A stop is the surest end of speech there is, so a send its drain lands goes
+  // through Enter's wait like one heard mid-dictation (#14803), when the stop
+  // is the user's own and no press has come since: Escape, a retarget, Enter or
+  // a timeout must not get a send nobody asked for, and joining the stop would
+  // cancel a newer start. A stopping session is never stopped a second time.
   private handleSpokenSend(panelId: string, projectId: string | undefined): void {
     const voiceState = useVoiceRecordingStore.getState();
-    if (voiceState.status !== "recording" || voiceState.activeTarget?.panelId !== panelId) return;
+    if (voiceState.activeTarget?.panelId !== panelId) return;
+    const stopping = voiceState.status === "finishing";
+    if (stopping) {
+      if (!this.stopTakesSpokenSend || voiceState.pendingTarget) return;
+    } else if (voiceState.status !== "recording") {
+      return;
+    }
     const draft = useTerminalInputStore.getState().getDraftInput(panelId, projectId);
     const handler = this.spokenSendHandlers.get(spokenSendKey(panelId, projectId));
     if (handler && isSpokenSendable(draft)) {
       handler();
       return;
     }
-    void this.stop("Dictation stopped.", { reason: "send" });
+    if (!stopping) void this.stop("Dictation stopped.", { reason: "send" });
   }
 
   destroy(): void {

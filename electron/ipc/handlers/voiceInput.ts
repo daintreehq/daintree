@@ -136,8 +136,9 @@ let servicePromise: Promise<VoiceTranscriptionService> | null = null;
 let correctionService: VoiceCorrectionService | null = null;
 
 // A completion ending in a spoken "send it", waiting to see whether the
-// speaker stays quiet. It goes out as a send, as literal words when the
-// speaker went on, or stripped with no send when dictation stopped first.
+// speaker stays quiet. It goes out as a send, at once if dictation stops
+// first, as literal words when the speaker went on, or stripped with no send
+// when the provider failed first.
 type HeldSendOutcome = "send" | "literal" | "strip";
 interface HeldSend {
   timer: ReturnType<typeof setTimeout>;
@@ -1018,9 +1019,9 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       // ended it chose the reason and owns the provider.
       if (session.ended) return { rawText: null };
       session.phase = "stopping";
-      // Dictation stopped before a held send was confirmed: keep its words,
-      // drop the command, and send nothing.
-      releaseHeldSend(session, "strip");
+      // A stop is the end of speech a held send was waiting for (#14803). The
+      // renderer decides whether its stop takes the send.
+      releaseHeldSend(session, "send");
       try {
         // Drain the transcription service first (waits for pending
         // transcriptions, fires remaining complete events) — the subscription
@@ -1544,7 +1545,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
 
     session.flushUtterance = (mode) => {
       const release = session.utterance.flush(mode, commandOptions());
-      if (release) emitRelease(release.emissions, false);
+      if (release) emitRelease(release.emissions, release.send);
     };
 
     // Until it goes out, the renderer keeps whatever preview the items'
@@ -1586,7 +1587,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
           if (voiceEvent.error.severity === "fatal") releaseHeldSend(session, "strip");
           return;
         case "status":
-          // A provider that dies ends the dictation, like a stop.
+          // A provider that dies ends the dictation, but no stop asked for it.
           if (voiceEvent.status === "error" || voiceEvent.status === "idle") {
             releaseHeldSend(session, "strip");
           } else if (voiceEvent.status === "reconnecting") {

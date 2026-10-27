@@ -971,7 +971,7 @@ describe("voiceInput — spoken send on Deepgram's short endpoint", () => {
     expect(completes).toEqual([completion("Fix the login bug, send it.")]);
   });
 
-  it("strips the phrase and sends nothing when dictation stops inside the window", async () => {
+  it("sends at once when dictation stops inside the window", async () => {
     sentenceEndingInSend();
     vi.advanceTimersByTime(300);
 
@@ -979,10 +979,10 @@ describe("voiceInput — spoken send on Deepgram's short endpoint", () => {
     await (handleStop as SessionHandler)(fakeEvent, currentSessionId);
     vi.advanceTimersByTime(5000);
 
-    expect(toRenderer()).toEqual([completion("Fix the login bug")]);
+    expect(toRenderer()).toEqual([completion("Fix the login bug", { send: true })]);
   });
 
-  it("strips a held send, and sends nothing, when another view's dictation key stops it", async () => {
+  it("sends a held send when another view's dictation key stops it", async () => {
     sentenceEndingInSend();
     vi.advanceTimersByTime(300);
     const otherView = {
@@ -1009,7 +1009,10 @@ describe("voiceInput — spoken send on Deepgram's short endpoint", () => {
     await (handleStop as SessionHandler)(fakeEvent, currentSessionId);
     vi.advanceTimersByTime(5000);
 
-    expect(toRenderer()).toEqual([stopRequested, completion("Fix the login bug")]);
+    expect(toRenderer()).toEqual([
+      stopRequested,
+      completion("Fix the login bug", { send: true }),
+    ]);
   });
 
   it("drops a held send, and sends nothing, when Escape cancels inside the window", async () => {
@@ -1030,7 +1033,7 @@ describe("voiceInput — spoken send on Deepgram's short endpoint", () => {
     ]);
   });
 
-  it("retires a lone 'send it' with an empty completion when dictation stops", async () => {
+  it("sends a lone 'send it' as one empty completion when dictation stops", async () => {
     emitTranscriptionEvent({
       type: "complete",
       text: "Send it.",
@@ -1041,7 +1044,7 @@ describe("voiceInput — spoken send on Deepgram's short endpoint", () => {
     const handleStop = getHandler("voice-input:stop");
     await (handleStop as SessionHandler)(fakeEvent, currentSessionId);
 
-    expect(toRenderer()).toEqual([completion("")]);
+    expect(toRenderer()).toEqual([completion("", { send: true })]);
   });
 
   it("strips the phrase, ahead of the status, when the provider dies inside the window", () => {
@@ -1364,6 +1367,34 @@ describe.each(["openai", "deepgram"] as const)(
 
       expect(landed()).toBe("Fix the bug, send it");
       expect(boundaries()).toBe(1);
+      expect(sends()).toBe(0);
+    });
+
+    it("sends a 'send it' a stop leaves waiting, split across segments", async () => {
+      emitTranscriptionEvent({ type: "complete", text: "Fix the login bug, send", itemId: "A" });
+      emitTranscriptionEvent({ type: "complete", text: "it.", itemId: "B" });
+      expect(completes()).toEqual([]);
+
+      const handleStop = getHandler("voice-input:stop");
+      await (handleStop as SessionHandler)(fakeEvent, currentSessionId);
+
+      expect(landed()).toBe("Fix the login bug");
+      expect(sends()).toBe(1);
+      expect(completes().at(-1)?.send).toBe(true);
+    });
+
+    it("keeps a 'send it' that belongs to the sentence as words when a stop ends it", async () => {
+      emitTranscriptionEvent({
+        type: "complete",
+        text: "Where should the handler send it",
+        itemId: "A",
+      });
+      expect(completes()).toEqual([]);
+
+      const handleStop = getHandler("voice-input:stop");
+      await (handleStop as SessionHandler)(fakeEvent, currentSessionId);
+
+      expect(landed()).toBe("Where should the handler send it");
       expect(sends()).toBe(0);
     });
 
