@@ -1,6 +1,9 @@
 import WebSocket from "ws";
 import type { VoiceInputError, VoiceInputSettings } from "../../../shared/types/ipc/api.js";
-import { VOICE_STOP_AUDIO_LOST_CODE } from "../../../shared/types/voice.js";
+import {
+  VOICE_REPLAY_AUDIO_LOST_CODE,
+  VOICE_STOP_AUDIO_LOST_CODE,
+} from "../../../shared/types/voice.js";
 import {
   normalizeVoiceLanguage,
   VOICE_LANGUAGE_AUTO,
@@ -72,6 +75,27 @@ const RECONNECT_BUFFER_MAX_CHUNKS = 400;
 // full reconnect flush (~10s before the drop plus the window) so a second drop
 // during the flush still resends all of it.
 const REPLAY_MAX_BYTES = RECONNECT_BUFFER_MAX_BYTES + 10 * AUDIO_BYTES_PER_SECOND;
+// Half-open detection. KeepAlive gets no reply and silent audio gets no
+// results, so only a ping's pong shows the socket still reaches Deepgram; a
+// dead one otherwise looks healthy until TCP gives up, minutes later. On a
+// missed answer we `terminate()` (no closing handshake on a dead socket), and
+// the close handler reconnects and replays what wasn't confirmed.
+//
+// The OpenAI provider's scheme: a check every HEARTBEAT_TICK_MS. Idle, it
+// pings every HEARTBEAT_IDLE_MS and allows as long for the answer. Once audio
+// has gone out since Deepgram was last heard from, a dead socket is swallowing
+// speech, so it pings at once and allows HEARTBEAT_ACTIVE_MS. Any frame from
+// the server counts as an answer. A pong can't come back before everything
+// queued ahead of its ping has arrived, so each ping also gets the bytes not
+// yet proven delivered at the audio's own wire rate: an uplink slower than
+// that can't carry dictation anyway.
+const HEARTBEAT_TICK_MS = 2_000;
+const HEARTBEAT_IDLE_MS = 20_000;
+const HEARTBEAT_ACTIVE_MS = 3_000;
+const HEARTBEAT_FLOOR_BYTES_PER_MS = AUDIO_BYTES_PER_SECOND / 1_000;
+// A pong echoes its ping's payload, so the stop's answer can't be mistaken for
+// one to a heartbeat ping still in flight from before the stop.
+const STOP_PING_PAYLOAD = "stop";
 
 // Close codes that mean Deepgram refused what we sent (undecodable audio,
 // policy, oversized frame). A new connection would fail the same way.
@@ -226,6 +250,9 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
   // The dictation session this provider was started for, minted by the
   // renderer. Diagnostics only: `sessionId` above guards reconnects.
   private voiceSessionId = "";
+  // For the fresh socket a stop makes when its own never answered; reconnects
+  // carry theirs in closures.
+  private settings: VoiceInputSettings | null = null;
   private connectTimeout: ReturnType<typeof setTimeout> | null = null;
   private listeners: Set<(event: VoiceTranscriptionEvent) => void> = new Set();
   private pendingStart: { sessionId: number; resolve: (result: VoiceStartResult) => void } | null =
@@ -242,6 +269,21 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
   private firstTranscriptLogged = false;
 
   private keepAliveTimer: ReturnType<typeof setInterval> | null = null;
+
+  // Heartbeat for the current connection. Times are tick multiples
+  // (`heartbeatTick * HEARTBEAT_TICK_MS`), exact for a ping since pings only go
+  // out on a tick. `heartbeatPing` is the ping being judged, null once
+  // answered; `heartbeatPingMarks` holds `heartbeatBytesSent` at each
+  // unanswered ping, oldest first, and a pong moves `heartbeatDeliveredBytes`
+  // up to the oldest. `audioSentSinceHeard` makes an unanswered ping urgent.
+  private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
+  private heartbeatTick = 0;
+  private heartbeatLastHeardMs = 0;
+  private heartbeatPing: { sentMs: number; backlogBytes: number } | null = null;
+  private heartbeatPingMarks: number[] = [];
+  private heartbeatBytesSent = 0;
+  private heartbeatDeliveredBytes = 0;
+  private audioSentSinceHeard = false;
 
   // Session-level, so reconnects reuse the URL the session settled on: once a
   // 400 forced a smaller keyterm list, every reconnect keeps that step.
@@ -271,7 +313,11 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
   private unconfirmedAudio: ArrayBuffer[] = [];
   private unconfirmedBytes = 0;
   private unconfirmedOffset = 0;
+  // How far into the ledger an earlier socket proved it received the audio,
+  // carried through the replay so a reconnect doesn't forget it.
+  private replayProvenThrough = 0;
   private replayEvictionWarned = false;
+  private replayLossReported = false;
 
   // Set on graceful/fatal teardown so the trailing `close` event isn't treated
   // as an unexpected drop.
@@ -287,6 +333,12 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
   // What that stop was holding, taken when it landed: a fatal error discards
   // the audio before the drain settles and reports the loss.
   private stopHeldBytes = 0;
+  // Nothing has shown the stop reached Deepgram: no pong to its ping, no
+  // end-of-stream Metadata. A result proves nothing, since it may have been in
+  // flight before the stop. A drain that ends this way on a ready socket means
+  // it died first; `stopCanRedial` is its one fresh socket, not yet spent.
+  private stopUnanswered = false;
+  private stopCanRedial = false;
 
   private audioChunkCount = 0;
   // Session-summary counts. They outlive the drain's cleanup and reset only
@@ -383,6 +435,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     this.cleanupPreviousSession();
     this.sessionId = mySessionId;
     this.voiceSessionId = voiceSessionId;
+    this.settings = settings;
     this.sessionStartedAt = performance.now();
     this.firstTranscriptLogged = false;
     this.isReady = false;
@@ -554,6 +607,11 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
       });
     });
 
+    connection.on("pong", (data) => {
+      if (this.sessionId !== mySessionId || this.connection !== connection) return;
+      this.handlePong(data);
+    });
+
     connection.on("open", () => {
       if (this.sessionId !== mySessionId || this.connection !== connection) {
         logWarn(`${P} Session expired during connect, closing`);
@@ -578,7 +636,12 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
         resentChunks: this.unconfirmedAudio.length,
       });
       this.emit({ type: "terms_sent", terms: urlKeyterms, keytermAttempt: attempt });
+      // Read before the heartbeat resets its counts. The heartbeat starts ahead
+      // of the flush so the replay counts as audio awaiting an answer.
+      const provenHeldBytes = this.provenLedgerBytes();
+      this.startHeartbeat(connection, mySessionId);
       this.flushHeldAudio();
+      this.replayProvenThrough = provenHeldBytes;
       this.isReady = true;
       // A successful open gives a later drop a fresh recovery window.
       this.reconnectAttempt = 0;
@@ -588,6 +651,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
       if (this.isDraining) {
         // Stopped while connecting: the mic is already released, so skip
         // KeepAlive and "recording" — close the stream and drain.
+        this.clearHeartbeat();
         this.settlePendingStart(mySessionId, { ok: true });
         if (this.stopPendingReady) this.closeStreamAfterLateReady();
         return;
@@ -599,6 +663,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
 
     connection.on("message", (data) => {
       if (this.sessionId !== mySessionId || this.connection !== connection) return;
+      this.markHeard();
       const raw =
         typeof data === "string"
           ? data
@@ -648,6 +713,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
       if (this.sessionId !== mySessionId || this.connection !== connection) return;
       this.clearConnectTimeout();
       this.clearKeepAlive();
+      this.clearHeartbeat();
       const wasReady = this.isReady;
       logInfo(`${P} WebSocket closed`, {
         code,
@@ -660,7 +726,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
       });
       this.cleanupConnection();
       if (this.isDraining) {
-        this.settleDrain("connection-closed");
+        if (!this.redialUnansweredStop("connection-closed")) this.settleDrain("connection-closed");
         return;
       }
       // An unexpected drop of a ready session, or a failed reconnect attempt,
@@ -793,6 +859,107 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     }
   }
 
+  /**
+   * Starts the heartbeat for one connection. Each tick either judges the
+   * outstanding ping against its deadline (send time, plus the allowance, plus
+   * the time the bytes ahead of it need at the floor rate) or sends a new one
+   * when audio has gone out unanswered or the idle interval is up. Deadlines
+   * are checked only on later ticks, so they can run late but never early. The
+   * session-id / socket-identity guard stops a stale interval from terminating
+   * a newer connection.
+   */
+  private startHeartbeat(connection: WebSocket, mySessionId: number): void {
+    this.clearHeartbeat();
+    this.heartbeatTick = 0;
+    this.heartbeatLastHeardMs = 0;
+    this.heartbeatPing = null;
+    this.heartbeatPingMarks = [];
+    this.heartbeatBytesSent = 0;
+    this.heartbeatDeliveredBytes = 0;
+    this.audioSentSinceHeard = false;
+    this.heartbeatInterval = setInterval(() => {
+      if (this.sessionId !== mySessionId || this.connection !== connection) {
+        this.clearHeartbeat();
+        return;
+      }
+      const nowMs = ++this.heartbeatTick * HEARTBEAT_TICK_MS;
+      const ping = this.heartbeatPing;
+      if (ping) {
+        const allowanceMs = this.audioSentSinceHeard ? HEARTBEAT_ACTIVE_MS : HEARTBEAT_IDLE_MS;
+        const deadlineMs =
+          ping.sentMs + allowanceMs + ping.backlogBytes / HEARTBEAT_FLOOR_BYTES_PER_MS;
+        if (nowMs < deadlineMs) return;
+        logWarn(`${P} Heartbeat: no answer, terminating half-open connection`, {
+          waitedMs: nowMs - ping.sentMs,
+          backlogBytes: ping.backlogBytes,
+          audioUnanswered: this.audioSentSinceHeard,
+        });
+        try {
+          connection.terminate();
+        } catch {
+          // Ignore terminate errors — the close handler drives reconnect.
+        }
+        return;
+      }
+      if (!this.audioSentSinceHeard && nowMs - this.heartbeatLastHeardMs < HEARTBEAT_IDLE_MS) {
+        return;
+      }
+      this.heartbeatPing = {
+        sentMs: nowMs,
+        backlogBytes: this.heartbeatBytesSent - this.heartbeatDeliveredBytes,
+      };
+      this.heartbeatPingMarks.push(this.heartbeatBytesSent);
+      try {
+        connection.ping();
+      } catch (err) {
+        logWarn(`${P} Heartbeat ping failed`, { ...voiceErrorLogFields(err) });
+      }
+    }, HEARTBEAT_TICK_MS);
+  }
+
+  /** A pong: everything sent before the oldest unanswered ping has arrived. */
+  private handlePong(data: Buffer): void {
+    const mark = this.heartbeatPingMarks.shift();
+    if (mark !== undefined) {
+      this.heartbeatDeliveredBytes = Math.max(this.heartbeatDeliveredBytes, mark);
+    }
+    if (data.toString("utf8") === STOP_PING_PAYLOAD) this.stopUnanswered = false;
+    this.markHeard();
+  }
+
+  /**
+   * How much of the ledger's head a socket has proved it received: this
+   * connection's pongs, or an earlier one's carried through its replay.
+   */
+  private provenLedgerBytes(): number {
+    const proven =
+      Math.max(this.heartbeatDeliveredBytes, this.replayProvenThrough) - this.unconfirmedOffset;
+    return Math.min(this.unconfirmedBytes, Math.max(0, proven));
+  }
+
+  private sendStopPing(): void {
+    this.stopUnanswered = true;
+    try {
+      this.connection?.ping(STOP_PING_PAYLOAD);
+    } catch (err) {
+      logWarn(`${P} Stop ping failed`, { ...voiceErrorLogFields(err) });
+    }
+  }
+
+  /** Records that the current connection answered: a pong or any server frame. */
+  private markHeard(): void {
+    this.heartbeatLastHeardMs = this.heartbeatTick * HEARTBEAT_TICK_MS;
+    this.heartbeatPing = null;
+    this.audioSentSinceHeard = false;
+  }
+
+  private clearHeartbeat(): void {
+    if (this.heartbeatInterval !== null) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
+    }
+  }
+
   private handleFatalError(mySessionId: number, error: VoiceInputError): void {
     logError(`${P} Fatal error — tearing down session`, undefined, { code: error.code });
     this.isExpectedClose = true;
@@ -800,6 +967,8 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     this.reconnectDeadlineAt = null;
     this.lastReconnectError = null;
     this.clearReconnectTimer();
+    // Counted before the discard empties what a draining stop still held.
+    const stopLostBytes = this.stopLostBytes();
     this.discardHeldAudio();
     const conn = this.connection;
     this.cleanupConnection();
@@ -813,7 +982,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     this.emit({ type: "error", error });
     this.emit({ type: "status", status: "error" });
     this.settlePendingStart(mySessionId, { ok: false, error: error.message });
-    this.settleDrain("fatal-error");
+    this.settleDrain("fatal-error", stopLostBytes);
   }
 
   private handleServerEvent(
@@ -880,10 +1049,15 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
         return;
 
       case "UtteranceEnd":
-      case "Metadata":
-        // VAD / metadata signals. Segmentation is already handled via is_final
-        // Results, so these are informational only.
+        // A VAD signal. Segmentation is already handled via is_final Results.
         logDebug(`${P} ← ${type}`);
+        return;
+
+      case "Metadata":
+        // Deepgram's summary once it has had the whole stream, so a stop's
+        // CloseStream, and everything sent ahead of it, got there.
+        logDebug(`${P} ← ${type}`);
+        this.stopUnanswered = false;
         return;
 
       case "Error": {
@@ -911,6 +1085,8 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     // Tracked before the send: a send that throws means the socket is going
     // down, and the chunk goes out again on the next connection.
     this.trackUnconfirmedAudio(chunk);
+    this.audioSentSinceHeard = true;
+    this.heartbeatBytesSent += chunk.byteLength;
     try {
       // Deepgram expects raw PCM16 as binary WebSocket frames — NOT base64 JSON.
       this.connection.send(Buffer.from(chunk));
@@ -964,8 +1140,11 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
           maxBytes,
           isReconnecting: this.isReconnecting,
         });
-        this.emit({ type: "error", error: createAudioBufferOverflowError() });
+        if (!this.isReconnecting) {
+          this.emit({ type: "error", error: createAudioBufferOverflowError() });
+        }
       }
+      if (this.isReconnecting) this.reportReplayAudioLost("reconnect-buffer-full");
       return;
     }
     this.preConnectBuffer.push(chunk);
@@ -985,6 +1164,13 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
         logWarn(`${P} No final result for the held audio — oldest dropped from replay`, {
           maxBytes: REPLAY_MAX_BYTES,
         });
+      }
+      // Audio a pong proved delivered got its chance at a result, and silence
+      // never gets one; only audio Deepgram may never have had is lost here.
+      if (
+        this.unconfirmedOffset > Math.max(this.heartbeatDeliveredBytes, this.replayProvenThrough)
+      ) {
+        this.reportReplayAudioLost("replay-evicted");
       }
     }
   }
@@ -1048,6 +1234,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     this.unconfirmedAudio = [];
     this.unconfirmedBytes = 0;
     this.unconfirmedOffset = 0;
+    this.replayProvenThrough = 0;
   }
 
   /**
@@ -1057,8 +1244,12 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
   private cleanupConnection(): void {
     this.clearConnectTimeout();
     this.clearKeepAlive();
+    this.clearHeartbeat();
     this.connection = null;
     this.isReady = false;
+    this.heartbeatPing = null;
+    this.heartbeatPingMarks = [];
+    this.audioSentSinceHeard = false;
   }
 
   private cleanupPreviousSession(): void {
@@ -1074,11 +1265,13 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     this.preConnectBufferOverflowWarned = false;
     this.spanItemId = null;
     this.replayEvictionWarned = false;
+    this.replayLossReported = false;
     this.isReady = false;
     this.discardHeldAudio();
     this.clearConnectTimeout();
     this.clearDrainTimeout();
     this.clearKeepAlive();
+    this.clearHeartbeat();
     this.clearReconnectTimer();
     this.reconnectAttempt = 0;
     this.isReconnecting = false;
@@ -1089,6 +1282,9 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     this.isDraining = false;
     this.stopPendingReady = false;
     this.stopHeldBytes = 0;
+    this.stopUnanswered = false;
+    this.stopCanRedial = false;
+    this.settings = null;
     if (this.drainResolve) {
       this.drainResolve();
       this.drainResolve = null;
@@ -1114,14 +1310,25 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     }
   }
 
-  private settleDrain(reason: string): void {
+  /**
+   * What a drain settling now leaves untranscribed. Still waiting on a socket,
+   * what the stop was holding never went out. A socket that never showed the
+   * stop arrived may not have had what it didn't confirm; a ready one only
+   * settles that way once its fresh socket is spent.
+   */
+  private stopLostBytes(): number {
+    if (this.stopPendingReady) return this.stopHeldBytes;
+    return this.stopUnanswered ? this.unconfirmedBytes : 0;
+  }
+
+  private settleDrain(reason: string, lostBytes = this.stopLostBytes()): void {
     const resolve = this.drainResolve;
-    // Still waiting on a socket: what the stop was holding never went out.
-    const lostBytes = resolve && this.stopPendingReady ? this.stopHeldBytes : 0;
     this.clearDrainTimeout();
     this.isDraining = false;
     this.stopPendingReady = false;
     this.stopHeldBytes = 0;
+    this.stopUnanswered = false;
+    this.stopCanRedial = false;
     this.drainPromise = null;
     this.drainResolve = null;
     if (!resolve) {
@@ -1149,6 +1356,30 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
         severity: "transient",
         code: VOICE_STOP_AUDIO_LOST_CODE,
         message: `Deepgram wasn't connected when dictation stopped, so up to ${lost} at the end may be missing.`,
+      },
+    });
+  }
+
+  /**
+   * Tells the user, once a session, that audio a reconnect would have resent
+   * had to go: pushed out of the replay before Deepgram proved it arrived, or
+   * captured while reconnecting past the room the replay had left.
+   */
+  private reportReplayAudioLost(reason: string): void {
+    if (this.replayLossReported) return;
+    this.replayLossReported = true;
+    logWarn(`${P} Audio dropped from replay`, {
+      reason,
+      droppedReplay: this.droppedReplayChunks,
+      droppedConnect: this.droppedConnectChunks,
+    });
+    this.emit({
+      type: "error",
+      error: {
+        severity: "transient",
+        code: VOICE_REPLAY_AUDIO_LOST_CODE,
+        message:
+          "The connection to Deepgram was down too long, so some of what you said may be missing.",
       },
     });
   }
@@ -1196,7 +1427,13 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
 
     this.isDraining = true;
     this.clearKeepAlive();
+    // The drain judges liveness from here. Its ping goes out behind the audio
+    // and ahead of CloseStream; if nothing at all answers before the drain
+    // ends, the socket died before the stop.
+    this.clearHeartbeat();
     this.emit({ type: "status", status: "finishing" });
+    this.stopCanRedial = true;
+    this.sendStopPing();
 
     // CloseStream tells Deepgram we're done sending audio. The server flushes
     // any remaining transcripts (delivered as final Results, emitted above) and
@@ -1216,6 +1453,8 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     this.drainPromise = new Promise<void>((resolve) => {
       this.drainResolve = resolve;
       this.drainTimeout = setTimeout(() => {
+        this.drainTimeout = null;
+        if (this.redialUnansweredStop("timeout")) return;
         logWarn(`${P} Drain timed out after ${DRAIN_TIMEOUT_MS}ms, force closing`);
         this.settleDrain("timeout");
       }, DRAIN_TIMEOUT_MS);
@@ -1275,14 +1514,57 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
   }
 
   /**
+   * A ready-path stop whose socket never answered: it died before the stop,
+   * taking the audio it never confirmed with it. That audio gets one fresh
+   * socket, which the late-open path flushes and closes like a stop that
+   * landed mid-reconnect, under the same drain. Returns whether it was tried.
+   */
+  private redialUnansweredStop(reason: string): boolean {
+    const settings = this.settings;
+    if (!this.stopUnanswered || !this.stopCanRedial || !settings || this.unconfirmedBytes === 0) {
+      return false;
+    }
+    this.stopCanRedial = false;
+    this.stopUnanswered = false;
+    logWarn(`${P} Nothing answered the stop — resending held audio on a fresh socket`, {
+      reason,
+      unconfirmedBytes: this.unconfirmedBytes,
+    });
+    const dead = this.connection;
+    this.cleanupConnection();
+    if (dead) {
+      try {
+        dead.terminate();
+      } catch {
+        // Ignore terminate errors
+      }
+    }
+    this.clearDrainTimeout();
+    this.stopPendingReady = true;
+    this.stopHeldBytes = this.unconfirmedBytes;
+    this.isReconnecting = true;
+    this.reconnectCount++;
+    this.drainTimeout = setTimeout(() => {
+      logWarn(`${P} Fresh socket not open ${STOP_CONNECT_TIMEOUT_MS}ms after stop — discarding`, {
+        unconfirmedBytes: this.unconfirmedBytes,
+      });
+      this.settleDrain("connect-timeout");
+    }, STOP_CONNECT_TIMEOUT_MS);
+    this.connect(this.sessionId, settings);
+    return true;
+  }
+
+  /**
    * Second half of `stopAfterConnect()`, run from `open` once the buffered
    * audio has been flushed: send CloseStream and re-arm the drain backstop for
-   * the server's final Results and close.
+   * the server's final Results and close. If nothing shows the stop arrived
+   * before the drain ends, what it didn't confirm is reported lost.
    */
   private closeStreamAfterLateReady(): void {
     this.stopPendingReady = false;
     this.stopHeldBytes = 0;
     this.clearDrainTimeout();
+    this.sendStopPing();
     try {
       this.connection?.send(JSON.stringify({ type: "CloseStream" }));
       logInfo(`${P} → CloseStream (after late open)`);

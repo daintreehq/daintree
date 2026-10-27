@@ -48,6 +48,7 @@ import { keepRecentDictation, keepRecentDictationCorrection } from "@/services/r
 import { joinCompletedSegments } from "@/lib/voiceTranscriptSegments";
 import {
   isActiveVoiceSession,
+  VOICE_REPLAY_AUDIO_LOST_CODE,
   VOICE_STOP_AUDIO_LOST_CODE,
   type VoiceInputStatus,
   type VoiceRecordingMode,
@@ -929,6 +930,12 @@ class VoiceRecordingService {
         }
         // Speech the stop couldn't get transcribed. Nothing else would tell the
         // user, and it ends nothing: the drain carries on to idle.
+        // Speech a reconnect can no longer resend. Dictation carries on, and it
+        // can land while a stop drains.
+        if (error.code === VOICE_REPLAY_AUDIO_LOST_CODE) {
+          this.reportReplayAudioLost(error.message);
+          return;
+        }
         if (error.code === VOICE_STOP_AUDIO_LOST_CODE) {
           logWarn(`${LOG_PREFIX} Stop lost held audio`, { code: error.code });
           notify({
@@ -3231,6 +3238,19 @@ class VoiceRecordingService {
       priority: "high",
       replaceKey: "voice-passage-failed",
       context: { eventKind: "uiFeedback" },
+    });
+  }
+
+  private reportReplayAudioLost(message: string): void {
+    logWarn(`${LOG_PREFIX} Replay lost held audio`, { code: VOICE_REPLAY_AUDIO_LOST_CODE });
+    useVoiceRecordingStore.getState().announce(message);
+    notify({
+      type: "warning",
+      title: "Dictation incomplete",
+      message,
+      priority: "high",
+      replaceKey: "voice-replay-audio-lost",
+      context: { eventKind: "connectivity" },
     });
   }
 

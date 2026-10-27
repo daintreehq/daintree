@@ -577,6 +577,7 @@ export type {
 export {
   isActiveVoiceSession,
   MAX_RECENT_DICTATIONS,
+  VOICE_REPLAY_AUDIO_LOST_CODE,
   VOICE_STOP_AUDIO_LOST_CODE,
 } from "./voice.js";
 
