@@ -42,6 +42,7 @@ export type CaseSource =
   | "tics"
   | "lookalike"
   | "codenames"
+  | "commands"
   | "clean"
   | "regression";
 
@@ -53,6 +54,15 @@ export interface CleanupSession {
   /** As `screenCorrectionRepositoryNames` sends them. */
   repositoryNames?: string[];
   worktree?: CorrectionWorktreeContext;
+  /** The agent typed into, when not the profile's Claude Code with only its built-ins (#14912). */
+  commandTarget?: CleanupCommandTarget;
+}
+
+/** An agent and the commands and skills installed beside its built-ins. */
+export interface CleanupCommandTarget {
+  agentId: "claude" | "codex";
+  /** Each written as its composer inserts it: `/design-review`, `$plugin-creator`. */
+  installed: Array<{ token: string; description: string }>;
 }
 
 /**
@@ -1729,6 +1739,145 @@ function replayCases(): CleanupCase[] {
   });
 }
 
+const CLAUDE_SKILLS_SESSION: CleanupSession = {
+  commandTarget: {
+    agentId: "claude",
+    installed: [
+      {
+        token: "/design-review",
+        description: "Iterate a UI surface against an adversarial design reviewer",
+      },
+      { token: "/commit", description: "Commit your own work and push it" },
+      { token: "/github-create-issue", description: "File well-scoped GitHub issues" },
+    ],
+  },
+};
+
+const CODEX_SKILLS_SESSION: CleanupSession = {
+  commandTarget: {
+    agentId: "codex",
+    installed: [
+      {
+        token: "$design-review",
+        description: "Iterate a UI surface against an adversarial design reviewer",
+      },
+      { token: "$plugin-creator", description: "Scaffold a Codex plugin" },
+    ],
+  },
+};
+
+// A skill the target has, named partway into a prompt, is written as its
+// token in place (#14912); words that only share a skill's name stay words.
+// The kept spans take in the word before, so a token written over the shared
+// word fails them.
+const COMMANDS: readonly AuthoredCase[] = [
+  {
+    id: "commands-design-review:openai",
+    style: "openai",
+    source: "commands",
+    raw: "Once you're done, we can consider what you've done the initial version. From there, I think we should do a full design review workflow, using the design review skill.",
+    reference:
+      "Once you're done, we can consider what you've done the initial version. From there, I think we should do a full design review workflow, using the /design-review skill.",
+    fixes: { "/design-review": "form" },
+    keep: ["a full design review workflow"],
+    session: CLAUDE_SKILLS_SESSION,
+  },
+  {
+    id: "commands-commit:deepgram",
+    style: "deepgram",
+    source: "commands",
+    raw: "Fix the spacing in the header, then ship it with the commit command.",
+    reference: "Fix the spacing in the header, then ship it with the /commit command.",
+    fixes: { "/commit": "form" },
+    keep: ["Fix the spacing in the header"],
+    session: CLAUDE_SKILLS_SESSION,
+  },
+  {
+    id: "commands-codex-design-review:openai",
+    style: "openai",
+    source: "commands",
+    raw: "When the header's finished, use the design review skill on the settings page too.",
+    reference: "When the header's finished, use the $design-review skill on the settings page too.",
+    fixes: { "$design-review": "form" },
+    keep: ["on the settings page"],
+    session: CODEX_SKILLS_SESSION,
+  },
+  {
+    id: "commands-codex-plugin-creator:deepgram",
+    style: "deepgram",
+    source: "commands",
+    raw: "After that, use plugin creator to scaffold a linter plugin.",
+    reference: "After that, use $plugin-creator to scaffold a linter plugin.",
+    fixes: { "$plugin-creator": "form" },
+    keep: ["to scaffold a linter plugin"],
+    session: CODEX_SKILLS_SESSION,
+  },
+  {
+    id: "commands-codex-with-plugin-creator:openai",
+    style: "openai",
+    source: "commands",
+    raw: "Once the rules are settled, scaffold the linter with plugin creator.",
+    reference: "Once the rules are settled, scaffold the linter with $plugin-creator.",
+    fixes: { "$plugin-creator": "form" },
+    keep: ["scaffold the linter with"],
+    session: CODEX_SKILLS_SESSION,
+  },
+  {
+    id: "commands-lookalike-review-design:openai",
+    style: "openai",
+    source: "commands",
+    raw: "Once the tests pass, go back and review the design of the header.",
+    reference: "Once the tests pass, go back and review the design of the header.",
+    keep: ["and review the design of the header"],
+    session: CLAUDE_SKILLS_SESSION,
+  },
+  {
+    id: "commands-lookalike-commit-fix:deepgram",
+    style: "deepgram",
+    source: "commands",
+    raw: "When the tests are green, go ahead and commit the fix and push it.",
+    reference: "When the tests are green, go ahead and commit the fix and push it.",
+    keep: ["and commit the fix"],
+    session: CLAUDE_SKILLS_SESSION,
+  },
+  {
+    id: "commands-lookalike-design-review:openai",
+    style: "openai",
+    source: "commands",
+    raw: "Before we merge, do a proper design review of the settings page yourself.",
+    reference: "Before we merge, do a proper design review of the settings page yourself.",
+    keep: ["a proper design review of the settings page"],
+    session: CLAUDE_SKILLS_SESSION,
+  },
+  {
+    id: "commands-lookalike-commit-message:deepgram",
+    style: "deepgram",
+    source: "commands",
+    raw: "Reuse the commit message from the last PR as a template.",
+    reference: "Reuse the commit message from the last PR as a template.",
+    keep: ["the commit message"],
+    session: CLAUDE_SKILLS_SESSION,
+  },
+  {
+    id: "commands-lookalike-create-issue:openai",
+    style: "openai",
+    source: "commands",
+    raw: "If it still flickers, create an issue on GitHub for it and move on.",
+    reference: "If it still flickers, create an issue on GitHub for it and move on.",
+    keep: ["create an issue on GitHub"],
+    session: CLAUDE_SKILLS_SESSION,
+  },
+  {
+    id: "commands-lookalike-codex-design-review:openai",
+    style: "openai",
+    source: "commands",
+    raw: "After lunch, I want a design review of the onboarding flow, so list what's off.",
+    reference: "After lunch, I want a design review of the onboarding flow, so list what's off.",
+    keep: ["a design review of the onboarding flow"],
+    session: CODEX_SKILLS_SESSION,
+  },
+];
+
 export const CLEANUP_CORPUS: readonly CleanupCase[] = [
   ...replayCases(),
   ...[
@@ -1743,6 +1892,7 @@ export const CLEANUP_CORPUS: readonly CleanupCase[] = [
     ...TICS,
     ...LOOKALIKE,
     ...CODE_NAMES,
+    ...COMMANDS,
     ...CLEAN,
   ].map((entry) => ({
     ...entry,

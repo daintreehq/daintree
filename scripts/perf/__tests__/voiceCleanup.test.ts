@@ -4,6 +4,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { REPLAY_CLIPS } from "../../../e2e/helpers/voiceReplayFixtures";
+import { getAgentConfig } from "../../../shared/config/agentRegistry";
+import {
+  buildVoiceCommandVocabulary,
+  checkVoiceCommandEdit,
+} from "../../../shared/utils/voiceAgentCommands";
 import {
   buildCorrectionSystemPrompt,
   type CorrectionInstructions,
@@ -160,10 +165,17 @@ describe("cleanup corpus", () => {
     expect(settled.length).toBeGreaterThan(0);
     expect(leftAlone.length).toBeGreaterThanOrEqual(3);
     // One prompt for every passage with a session, so its cached share holds.
-    expect(cleanupSessions(CLEANUP_CORPUS)).toEqual([undefined, inSession[0]!.session]);
-    expect(CLEANUP_CORPUS.filter((entry) => entry.source !== "workspace" && entry.session)).toEqual(
-      []
-    );
+    expect(new Set(inSession.map((entry) => JSON.stringify(entry.session))).size).toBe(1);
+    expect(cleanupSessions(CLEANUP_CORPUS)).toContainEqual(inSession[0]!.session);
+    // Only the command passages are typed into another agent.
+    expect(
+      CLEANUP_CORPUS.filter(
+        (entry) =>
+          entry.source !== "workspace" &&
+          entry.session &&
+          (entry.source !== "commands" || Object.keys(entry.session).join() !== "commandTarget")
+      )
+    ).toEqual([]);
     // The same passage with no session, so a run shows what the session added.
     for (const { id: _id, session: _session, ...passage } of settled) {
       const twins = workspace.filter(
@@ -171,6 +183,59 @@ describe("cleanup corpus", () => {
           !session && JSON.stringify(twin) === JSON.stringify(passage)
       );
       expect(twins).toHaveLength(1);
+    }
+  });
+
+  // #14912: a skill named partway into a prompt is written as its token, in
+  // Claude Code's syntax and in Codex's, and words that only share a skill's
+  // name stay words.
+  it("names installed skills partway into a prompt for Claude Code and Codex, beside lookalikes", () => {
+    const commands = CLEANUP_CORPUS.filter((entry) => entry.source === "commands");
+    const written = (agentId: string, trigger: string) =>
+      commands.filter(
+        (entry) =>
+          entry.session?.commandTarget?.agentId === agentId &&
+          Object.keys(entry.fixes).some((fix) => fix.startsWith(trigger))
+      );
+    expect(written("claude", "/").length).toBeGreaterThanOrEqual(1);
+    expect(written("codex", "$").length).toBeGreaterThanOrEqual(1);
+    const leftAlone = commands.filter((entry) => entry.raw === entry.reference);
+    expect(leftAlone.length).toBeGreaterThanOrEqual(5);
+    for (const entry of commands) {
+      const installed = entry.session!.commandTarget!.installed.map(({ token }) => token);
+      // Each written token is one the target has, never at the start of the prompt.
+      for (const fix of Object.keys(entry.fixes)) {
+        expect(installed, entry.id).toContain(fix);
+        expect(entry.reference.startsWith(fix), entry.id).toBe(false);
+      }
+      // Its reference lands through production's command checks as written.
+      const vocabulary = buildVoiceCommandVocabulary(
+        entry.session!.commandTarget!.installed.map(({ token, description }) => ({
+          id: token,
+          label: token,
+          insertText: token,
+          description,
+          scope: "user" as const,
+          agentId: entry.session!.commandTarget!.agentId,
+          trigger: token.startsWith("$") ? ("$" as const) : ("/" as const),
+        })),
+        getAgentConfig(entry.session!.commandTarget!.agentId)!.completionSources!
+      );
+      expect(checkVoiceCommandEdit(entry.raw, entry.reference, vocabulary, true), entry.id).toBe(
+        null
+      );
+      // A lookalike written with the skill it shares a word with fails its kept span.
+      if (entry.raw !== entry.reference) continue;
+      const shared = installed.flatMap((token) => {
+        const name = token.slice(1).split("-")[0]!;
+        const at = entry.raw.toLowerCase().indexOf(` ${name} `);
+        return at < 0 ? [] : [{ token, name, at: at + 1 }];
+      });
+      expect(shared, entry.id).not.toEqual([]);
+      for (const { token, name, at } of shared) {
+        const spoiled = `${entry.raw.slice(0, at)}${token}${entry.raw.slice(at + name.length)}`;
+        expect(scoreText(entry, spoiled).lostKeeps, `${entry.id} ${token}`).not.toEqual([]);
+      }
     }
   });
 
@@ -377,6 +442,16 @@ describe("inputHash", () => {
       inputHash({
         ...passage,
         session: { ...session, worktree: { ...session.worktree, name: "x-y" } },
+      }),
+      inputHash({
+        ...passage,
+        session: {
+          ...session,
+          commandTarget: {
+            agentId: "codex",
+            installed: [{ token: "$plugin-creator", description: "" }],
+          },
+        },
       }),
     ];
     expect(new Set(hashes).size).toBe(hashes.length);

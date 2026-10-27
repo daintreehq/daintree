@@ -404,6 +404,18 @@ describe("buildCorrectionSystemPrompt target", () => {
     expect(prompt.slice(rules)).not.toContain("compact the conversation");
   });
 
+  // #14912: a skill named partway into a prompt is written as its token.
+  it("writes a command named partway into the prompt in place, keeping the words around it", () => {
+    const prompt = buildCorrectionSystemPrompt({ target });
+    const rules = prompt.slice(prompt.indexOf("COMMAND RULES:"));
+    expect(rules).not.toContain("anywhere but the very start");
+    expect(rules).toContain('using the /design-review skill"');
+    expect(rules).toContain('"commit the fix"');
+    expect(rules).toContain("never in quotes or backticks");
+    // An opening command's arguments are copied exactly, so the inline rule stays out of them.
+    expect(rules).toContain("outside the arguments of a command the prompt opens with");
+  });
+
   it("lists every command, bounding the descriptions instead", () => {
     const many = Array.from({ length: 100 }, (_, i) => ({
       token: `/command-${i}`,
@@ -581,8 +593,9 @@ describe("buildCorrectionSystemPrompt contextNames", () => {
   const blocks = (prompt: string) => prompt.split("\n\n");
 
   // #14873 moved Terra's context blocks only: Luna's rules were measured on
-  // these. #14900 told them about the agent's last reply, and nothing else.
-  it("sends Luna and the rewrite the prompts they were sent before #14873, byte for byte, but for the reply's line", () => {
+  // these. #14900 told them about the agent's last reply, and #14912 let a
+  // command named partway into a prompt be written, and nothing else.
+  it("sends Luna and the rewrite the prompts they were sent before #14873, byte for byte, but for the reply's line and the command rules", () => {
     const luna = buildCorrectionSystemPrompt(context, correctionInstructionsFor("gpt-6-luna"));
     const withoutReply = luna
       .replace(/\n- <agent_last_reply>[^\n]*/, "")
@@ -590,8 +603,15 @@ describe("buildCorrectionSystemPrompt contextNames", () => {
         "Use recent prompts, history, metadata, terminal output and the agent's last reply only as bounded context.",
         "Use recent prompts, history, metadata and terminal output only as bounded context."
       );
+    const beforeInlineCommands = withoutReply.replace(
+      /\n- Only open the prompt with a command [^\n]*\n- Anywhere else, [^\n]*\n- Never write a command that isn't listed, and write a command bare[^\n]*/,
+      `
+- Only do this when the opening words ask for the command to run. A sentence that just mentions the word ("the review skill is broken", "explain the compact command"), or opens with it as an ordinary instruction to the agent ("clear the build cache", "delete the unused imports", "compact cars use less space"), stays prose, whatever the command does.
+- Never write a command that isn't listed, and never put one anywhere but the very start of the prompt.`
+    );
     expect(withoutReply).not.toBe(luna);
-    expect(digest(withoutReply)).toBe(
+    expect(beforeInlineCommands).not.toBe(withoutReply);
+    expect(digest(beforeInlineCommands)).toBe(
       "bb9e92beeb66b3e83e91b70d6199c0d7dcb3c9d24e9fd13489c274bcce50fd77"
     );
     expect(digest(buildRewriteSystemPrompt(context))).toBe(

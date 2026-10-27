@@ -1574,7 +1574,7 @@ describe("VoiceCorrectionService", () => {
     it.each([
       ["a command the target doesn't have", "run the deploy skill", "/deploy", true],
       ["another agent's syntax", "use the plugin creator skill", "$plugin-creator", true],
-      ["a command away from the start", "run the compact command", "/compact", false],
+      ["a command away from the start it never named", "then tidy things up", "/compact", false],
       ["a bare imperative that opens like a command", "compact the conversation", "/compact", true],
       ["a mention turned into a command", "the review skill is broken", "/review is broken", true],
     ])("keeps the raw text for %s", async (_label, rawText, reply, startsPrompt) => {
@@ -1585,6 +1585,17 @@ describe("VoiceCorrectionService", () => {
       );
       expect(result.confirmedText).toBe(rawText);
       expect(result.action).toBe("no_change");
+    });
+
+    it("writes a command named partway into the prompt where the dictation named it", async () => {
+      const rawText = "Then do a full pass, using the review skill.";
+      stubReply("Then do a full pass, using the /review skill.");
+      const result = await new VoiceCorrectionService().correct(
+        { rawText, startsPrompt: true },
+        { ...BASE_SETTINGS, commandTarget: targetFor("claude") }
+      );
+      expect(result.confirmedText).toBe("Then do a full pass, using the /review skill.");
+      expect(result.action).toBe("replace");
     });
 
     it("says a command check turned the cleanup down, and what it would have written", async () => {

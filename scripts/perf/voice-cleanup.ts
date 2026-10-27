@@ -11,7 +11,7 @@ import {
 import { formatErrorMessage } from "../../shared/utils/errorMessage";
 import { buildOpenAIHeaders } from "../../shared/utils/openaiHeaders";
 import { getAgentConfig } from "../../shared/config/agentRegistry";
-import { getBuiltinSlashCommands } from "../../shared/types/slashCommands";
+import { getBuiltinSlashCommands, type SlashCommand } from "../../shared/types/slashCommands";
 import {
   buildVoiceCommandVocabulary,
   EMPTY_VOICE_COMMAND_VOCABULARY,
@@ -35,6 +35,7 @@ import {
   FIX_KINDS,
   recentPromptTwins,
   type CleanupCase,
+  type CleanupCommandTarget,
   type CleanupSession,
   type CorpusAgentReply,
   type FixKind,
@@ -244,18 +245,42 @@ function vocabularyOf(profile: Profile): VoiceCommandVocabulary {
   return profile.commandTarget?.vocabulary ?? EMPTY_VOICE_COMMAND_VOCABULARY;
 }
 
-/** Claude Code with its built-in commands, as production describes a terminal running it. */
-function claudeCodeTarget(): VoiceCommandTarget {
-  const config = getAgentConfig("claude")!;
+/**
+ * The agent with its built-in commands and the ones installed beside them, as
+ * production describes a terminal running it; with none installed, Claude
+ * Code is every passage's target but those whose session names another.
+ */
+function agentCommandTarget({ agentId, installed }: CleanupCommandTarget): VoiceCommandTarget {
+  const config = getAgentConfig(agentId)!;
+  const commands: SlashCommand[] = installed.map(({ token, description }) => ({
+    id: `user:${token}`,
+    label: token,
+    insertText: token,
+    description,
+    scope: "user",
+    agentId,
+    kind: "skill",
+    trigger: token.startsWith("$") ? "$" : "/",
+  }));
   return {
-    agentId: "claude",
+    agentId,
     agentName: config.name,
     isAssistant: false,
     vocabulary: buildVoiceCommandVocabulary(
-      getBuiltinSlashCommands("claude"),
+      [...commands, ...getBuiltinSlashCommands(agentId)],
       config.completionSources ?? []
     ),
   };
+}
+
+function claudeCodeTarget(): VoiceCommandTarget {
+  return agentCommandTarget({ agentId: "claude", installed: [] });
+}
+
+/** What a passage's commands land against: its session's target, or the profile's. */
+function vocabularyFor(profile: Profile, entry: CleanupCase): VoiceCommandVocabulary {
+  const target = entry.session?.commandTarget;
+  return target ? agentCommandTarget(target).vocabulary : vocabularyOf(profile);
 }
 
 function profileFor(options: Options): Profile {
@@ -283,9 +308,11 @@ function settingsFor(
   apiKey: string,
   session: CleanupSession | undefined
 ): VoiceCorrectionSettings {
+  const { commandTarget, ...names } = session ?? {};
   return {
     ...profile,
-    ...session,
+    ...names,
+    ...(commandTarget ? { commandTarget: agentCommandTarget(commandTarget) } : {}),
     model: variant.model,
     reasoningEffort: variant.effort,
     instructions: instructionsOf(variant),
@@ -891,7 +918,6 @@ export function rescore(
     throw new Error(`the corpus has problems:\n  ${problems.join("\n  ")}`);
   }
   const kept = new Set(corpus.map((entry) => entry.id));
-  const vocabulary = vocabularyOf(saved.profile);
   const trials = saved.trials
     .filter((trial) => kept.has(trial.caseId))
     .map(({ landings, ...trial }): Trial => {
@@ -908,7 +934,7 @@ export function rescore(
           entry,
           trial.reply as VoiceCorrectionProposal | undefined,
           recorded?.disposition ?? "failed",
-          vocabulary
+          vocabularyFor(saved.profile, entry)
         ),
       };
     });
@@ -1103,7 +1129,7 @@ async function main(): Promise<number> {
           variant,
           repeat,
           result,
-          vocabularyOf(profile),
+          vocabularyFor(profile, entry),
           totalMs,
           firstTextAt
         );
