@@ -21,6 +21,7 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { clientErrorCode } from "@/utils/clientAppError";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
+import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { useOverlayClaim } from "@/hooks/useOverlayState";
 import { useEffectiveCombo } from "@/hooks";
 import { usePreferencesStore } from "@/store/preferencesStore";
@@ -29,6 +30,7 @@ import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
 import { KbdChord } from "@/components/ui/Kbd";
 import { SearchField } from "@/components/ui/SearchField";
+import { Spinner } from "@/components/ui/Spinner";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -93,6 +95,8 @@ interface HostIssue {
   trouble: boolean;
   /** A choice the user made, neither wrong nor on its way: listed plainly, and no read is retrying. */
   settled?: boolean;
+  /** A link coming up or a first read on its way: still owed, so the all-clear waits, but never drawn. */
+  connecting?: boolean;
 }
 
 /**
@@ -1054,6 +1058,7 @@ function CanopyInbox({
             action: null,
             act: null,
             trouble: false,
+            connecting: true,
           },
         ];
       }
@@ -1066,6 +1071,7 @@ function CanopyInbox({
             action: null,
             act: null,
             trouble: false,
+            connecting: true,
           },
         ];
       }
@@ -1134,6 +1140,12 @@ function CanopyInbox({
   }, [everyHost, readings, hostRows, ownHostId, remotes]);
   const hostTroubles = hostIssues.filter((issue) => issue.trouble);
   const hostProgress = hostIssues.filter((issue) => !issue.trouble);
+  // Connecting is the same on every open, so it is silent: the header and the band
+  // still hold back the all-clear, and a spinner by the picker says so past the gate.
+  const hostProgressShown = hostProgress.filter((issue) => !issue.connecting);
+  // A closed panel holds no readings, so it would be connecting for as long as it stays shut.
+  const connectingSomewhere = isOpen && hostIssues.some((issue) => issue.connecting);
+  const showConnecting = useDohertyGate(connectingSomewhere) && connectingSomewhere;
   const retryingSomewhere =
     everyHost &&
     (hostProgress.some((issue) => !issue.settled) ||
@@ -1347,7 +1359,21 @@ function CanopyInbox({
                 {headerWords}
               </span>
             </span>
-            {hostPicker}
+            <span className="relative flex min-w-0 items-center">
+              {hostPicker}
+              {showConnecting && (
+                // Out of the picker's flow, so it stays where it was, and inside the 12px the
+                // header's right part leaves beside it.
+                <span
+                  role="status"
+                  aria-label="Connecting to hosts"
+                  data-testid="canopy-hosts-connecting"
+                  className="absolute top-1/2 left-full -translate-y-1/2 text-text-secondary"
+                >
+                  <Spinner size="xs" />
+                </span>
+              )}
+            </span>
             <span className="ml-3 flex min-w-0 flex-1 basis-0 items-center justify-end">
               {headerControls}
             </span>
@@ -1395,17 +1421,20 @@ function CanopyInbox({
             </Callout>
           </div>
         )}
-        {everyHost && hostIssues.length > 0 && (
-          <div className="flex shrink-0 flex-col gap-2 border-b border-border-default p-3">
+        {everyHost && (hostTroubles.length > 0 || hostProgressShown.length > 0) && (
+          <div
+            data-testid="canopy-host-issues"
+            className="flex shrink-0 flex-col gap-2 border-b border-border-default p-3"
+          >
             {hostTroubles.length > 0 && (
               <Callout severity="warning" size="compact" title="Not every host is being read">
                 <HostIssueList issues={hostTroubles} />
               </Callout>
             )}
             {/* Reads still on their way, and a reader the user left off: noted, never a warning. */}
-            {hostProgress.length > 0 && (
+            {hostProgressShown.length > 0 && (
               <Callout severity="neutral" size="compact">
-                <HostIssueList issues={hostProgress} />
+                <HostIssueList issues={hostProgressShown} />
               </Callout>
             )}
           </div>
