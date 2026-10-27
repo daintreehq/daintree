@@ -1,5 +1,6 @@
 import { DICTATED_PROMPTS } from "../../../electron/services/__tests__/fixtures/dictatedPrompts";
 import { REPLAY_CLIPS } from "../../../e2e/helpers/voiceReplayFixtures";
+import type { CorrectionWorktreeContext } from "../../../shared/config/voiceCorrection";
 
 /**
  * The dictated agent prompts the cleanup benchmark (`npm run perf voice-cleanup`)
@@ -22,7 +23,18 @@ import { REPLAY_CLIPS } from "../../../e2e/helpers/voiceReplayFixtures";
 
 export type TranscriptStyle = "openai" | "deepgram" | "generic";
 
-export type CaseSource = "replay" | "afternoon" | "context" | "ramble" | "clean" | "regression";
+export type CaseSource =
+  "replay" | "afternoon" | "context" | "workspace" | "ramble" | "clean" | "regression";
+
+/**
+ * What a dictation's session tells cleanup about where it is typed (#14854):
+ * the same for every passage of the session, so it rides in the cached prompt.
+ */
+export interface CleanupSession {
+  /** As `screenCorrectionRepositoryNames` sends them. */
+  repositoryNames?: string[];
+  worktree?: CorrectionWorktreeContext;
+}
 
 /**
  * What a fix does for the agent reading the passage. A `misread` replaces a
@@ -59,6 +71,8 @@ export interface CleanupCase {
   terminalOutput?: string;
   /** Nothing comes before the passage in the draft; true unless `recentContext` says otherwise. */
   startsPrompt?: boolean;
+  /** Absent for a passage dictated with no worktree or repository names, as before #14854. */
+  session?: CleanupSession;
 }
 
 interface Transcript {
@@ -515,6 +529,166 @@ const CONTEXT: readonly AuthoredCase[] = [
   },
 ];
 
+// This repository's names as a dictation in it sends them (`deriveRepoNames`
+// then `screenCorrectionRepositoryNames`, on the commit that added them), and
+// the worktree the cleanup model was measured in (#14793).
+const TERRA_WORKTREE_SESSION: CleanupSession = {
+  worktree: {
+    name: "feature/issue-14793-measure-whether-gpt-6-1-terra-is-worth",
+    titles: ["Measure whether gpt-6.1-terra is worth it for dictation cleanup"],
+  },
+  repositoryNames: [
+    "daintree",
+    "create-daintree-plugin",
+    "daintree-plugin",
+    "plugin-sdk",
+    "plugin-vite",
+    "svelte-source-model",
+    "tour",
+    "assistant",
+    "e2e",
+    "electron",
+    "packages",
+    "plugins",
+    "schemas",
+    "shared",
+    "tokenizers",
+    "watcher",
+    "react-select",
+    "addon-webgl",
+    "ajv",
+    "ajv-formats",
+    "archiver",
+    "avr-vad",
+    "better-sqlite3",
+    "copytree",
+    "dompurify",
+    "httpxy",
+    "ipaddr.js",
+    "js-yaml",
+    "mac-phys-footprint",
+    "mermaid",
+    "node-addon-api",
+    "node-pty",
+    "onnxruntime-node",
+    "posix-pty-reaper",
+    "proper-lockfile",
+    "react-colorful",
+    "remark-parse",
+    "safe-stable-stringify",
+    "smol-toml",
+    "unified",
+    "win-job-object",
+    "yauzl",
+    "playwright",
+    "parser",
+    "commands",
+    "lang-cpp",
+    "lang-css",
+    "lang-go",
+    "lang-html",
+    "lang-java",
+    "lang-javascript",
+    "lang-jinja",
+    "lang-json",
+    "lang-less",
+    "lang-liquid",
+    "lang-markdown",
+    "lang-php",
+    "lang-python",
+    "lang-rust",
+    "lang-sass",
+  ],
+};
+
+// Names only the worktree's title or the repository spells, and passages that
+// sound like them and must be left alone, all dictated in one session so they
+// share one cached prompt.
+const IN_SESSION: readonly AuthoredCase[] = [
+  {
+    id: "workspace-terra:openai",
+    style: "openai",
+    source: "workspace",
+    raw: "Run the benchmark again with GPT 6.1 there at low effort and compare the latency.",
+    reference: "Run the benchmark again with GPT 6.1 Terra at low effort and compare the latency.",
+    fixes: { "GPT 6.1 Terra": "misread" },
+    keep: ["low effort"],
+    session: TERRA_WORKTREE_SESSION,
+  },
+  {
+    id: "workspace-terra:deepgram",
+    style: "deepgram",
+    source: "workspace",
+    raw: "Run the benchmark again with GPT 6.1 there at low effort and compare the latency.",
+    reference: "Run the benchmark again with GPT 6.1 Terra at low effort and compare the latency.",
+    fixes: { "GPT 6.1 Terra": "misread" },
+    keep: ["low effort"],
+    uncertain: ["there"],
+    session: TERRA_WORKTREE_SESSION,
+  },
+  {
+    id: "workspace-onnx:openai",
+    style: "openai",
+    source: "workspace",
+    raw: "Load the VAD model with Onyx Runtime Node, not the web build.",
+    reference: "Load the VAD model with onnxruntime-node, not the web build.",
+    fixes: { "onnxruntime-node": "misread" },
+    keep: ["not the web build"],
+    session: TERRA_WORKTREE_SESSION,
+  },
+  {
+    id: "workspace-onnx:deepgram",
+    style: "deepgram",
+    source: "workspace",
+    raw: "Load the VAD model with onyx runtime node, not the web build.",
+    reference: "Load the VAD model with onnxruntime-node, not the web build.",
+    fixes: { "onnxruntime-node": "misread" },
+    keep: ["not the web build"],
+    uncertain: ["onyx runtime node"],
+    session: TERRA_WORKTREE_SESSION,
+  },
+  // Words a cleanup told about Terra must leave alone.
+  {
+    id: "workspace-there:openai",
+    style: "openai",
+    source: "workspace",
+    raw: "Is there anything else left on the list before we merge?",
+    reference: "Is there anything else left on the list before we merge?",
+    keep: ["Is there anything else"],
+    session: TERRA_WORKTREE_SESSION,
+  },
+  {
+    id: "workspace-person-tara:openai",
+    style: "openai",
+    source: "workspace",
+    raw: "Tara reviewed the PR yesterday, so ask her before you merge it.",
+    reference: "Tara reviewed the PR yesterday, so ask her before you merge it.",
+    keep: ["Tara"],
+    session: TERRA_WORKTREE_SESSION,
+  },
+  {
+    id: "workspace-unrelated:deepgram",
+    style: "deepgram",
+    source: "workspace",
+    raw: "Make the empty state name the next action instead of saying there's nothing here.",
+    reference: "Make the empty state name the next action instead of saying there's nothing here.",
+    keep: ["there's nothing here"],
+    session: TERRA_WORKTREE_SESSION,
+  },
+];
+
+// Each passage the session should settle, dictated with none: what the session
+// adds is the difference between the two.
+const WORKSPACE: readonly AuthoredCase[] = [
+  ...IN_SESSION,
+  ...IN_SESSION.filter((entry) => Object.keys(entry.fixes ?? {}).length > 0).map(
+    ({ session: _session, ...entry }) => ({
+      ...entry,
+      id: entry.id.replace(":", "-bare:"),
+    })
+  ),
+];
+
 // Prompt-length passages, dictated the way people talk: filler, false starts,
 // a self-correction, a counted-out list.
 const RAMBLE: readonly AuthoredCase[] = [
@@ -654,9 +828,22 @@ function replayCases(): CleanupCase[] {
 
 export const CLEANUP_CORPUS: readonly CleanupCase[] = [
   ...replayCases(),
-  ...[...AFTERNOON, ...CONTEXT, ...RAMBLE, ...CLEAN].map((entry) => ({
+  ...[...AFTERNOON, ...CONTEXT, ...WORKSPACE, ...RAMBLE, ...CLEAN].map((entry) => ({
     ...entry,
     fixes: entry.fixes ?? {},
   })),
   ...regressionCases(),
 ];
+
+/**
+ * Each distinct session the corpus dictates in, `undefined` for none, in the
+ * order first met: what a run warms, once per variant.
+ */
+export function cleanupSessions(corpus: readonly CleanupCase[]): Array<CleanupSession | undefined> {
+  const seen = new Map<string, CleanupSession | undefined>();
+  for (const entry of corpus) {
+    const key = entry.session ? JSON.stringify(entry.session) : "";
+    if (!seen.has(key)) seen.set(key, entry.session);
+  }
+  return [...seen.values()];
+}

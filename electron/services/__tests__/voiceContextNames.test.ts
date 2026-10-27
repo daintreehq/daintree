@@ -43,7 +43,12 @@ vi.mock("../../remote/runtime.js", () => ({
   },
 }));
 
-import { gatherDictationNames, NO_DICTATION_NAMES } from "../voiceContextNames.js";
+import {
+  gatherDictationContext,
+  gatherDictationNames,
+  NO_DICTATION_CONTEXT,
+  NO_DICTATION_NAMES,
+} from "../voiceContextNames.js";
 import { screenDictationNames } from "../voiceContextKeyterms.js";
 
 const ASSISTANT = "assistant-1";
@@ -258,5 +263,134 @@ describe("gatherDictationNames", () => {
       projects: ["Daintree", "Plugin SDK"],
       worktrees: ["feature-1", "feature-2", "feature-3", "feature-4", "feature-5"],
     });
+  });
+});
+
+describe("gatherDictationContext", () => {
+  const TERMINAL = "grid-terra";
+  const TERRA = {
+    id: "/repo/daintree-worktrees/feature-terra",
+    path: "/repo/daintree-worktrees/feature-terra",
+    name: "feature/issue-14793-terra",
+    issueTitle: "Measure whether gpt-6.1-terra is worth it",
+    prTitle: "perf(voice): measure terra",
+    branchDerivedTitle: "Terra",
+  };
+  const MAIN = {
+    id: "/repo/daintree",
+    path: "/repo/daintree",
+    name: "develop",
+    isMainWorktree: true,
+  };
+  const NESTED = {
+    id: "/repo/daintree/nested",
+    path: "/repo/daintree/nested",
+    name: "nested",
+    branchDerivedTitle: "Nested work",
+  };
+
+  beforeEach(() => {
+    shared.hosts = ["Studio 1", "Studio 2"];
+    shared.hostsError = null;
+    shared.remoteHostsRegistered = true;
+  });
+
+  function placed(record: Record<string, unknown>, owner = "proj-a") {
+    return {
+      hasTerminal: vi.fn((id: string) => id === TERMINAL),
+      getTerminalProjectId: vi.fn(() => owner),
+      getTerminalAsync: vi.fn(async (id: string) => ({ id, ...record })),
+    };
+  }
+
+  function gatherPlaced(
+    record: Record<string, unknown>,
+    owner?: string,
+    states: Array<Record<string, unknown>> = [MAIN, TERRA, NESTED]
+  ) {
+    const ptyClient = placed(record, owner);
+    const worktreeService = {
+      getAllStatesForProjectAsync: vi.fn(async () => states),
+    };
+    const result = gatherDictationContext({
+      projectId: "proj-a",
+      terminalId: TERMINAL,
+      ptyClient: ptyClient as unknown as PtyClient,
+      worktreeService: worktreeService as unknown as WorkspaceClient,
+    });
+    return { result, ptyClient, worktreeService };
+  }
+
+  it("finds the worktree a terminal is filed under, with every title its record has", async () => {
+    const { result, ptyClient, worktreeService } = gatherPlaced({
+      worktreeId: TERRA.id,
+      cwd: MAIN.path,
+      detectedAgentId: "claude",
+    });
+    const { names, worktree } = await result;
+    expect(worktree).toEqual({
+      name: TERRA.name,
+      issueTitle: TERRA.issueTitle,
+      prTitle: TERRA.prTitle,
+      branchDerivedTitle: TERRA.branchDerivedTitle,
+    });
+    expect(names.worktrees).toEqual([TERRA.name, "nested"]);
+    // The names' own two reads, made once.
+    expect(ptyClient.getTerminalAsync).toHaveBeenCalledTimes(1);
+    expect(worktreeService.getAllStatesForProjectAsync).toHaveBeenCalledTimes(1);
+  });
+
+  it("gives a terminal filed under a worktree that's gone none, not its spawn folder's", async () => {
+    const { result } = gatherPlaced({ worktreeId: "/repo/gone", cwd: TERRA.path });
+    expect((await result).worktree).toBeNull();
+  });
+
+  it("places a terminal filed under none by its folder, the deepest worktree winning", async () => {
+    const { result } = gatherPlaced({ cwd: `${NESTED.path}/src` });
+    expect((await result).worktree).toEqual({
+      name: "nested",
+      branchDerivedTitle: "Nested work",
+    });
+    const top = gatherPlaced({ cwd: `${MAIN.path}/electron` });
+    expect((await top.result).worktree).toEqual({ name: "develop" });
+    const outside = gatherPlaced({ cwd: "/somewhere/else" });
+    expect((await outside.result).worktree).toBeNull();
+  });
+
+  it("matches a folder spelled in another case only where the platform's folders ignore case", async () => {
+    const { result } = gatherPlaced({ cwd: `${NESTED.path.toUpperCase()}/SRC` });
+    const ignoresCase = process.platform === "win32" || process.platform === "darwin";
+    expect((await result).worktree?.name ?? null).toBe(ignoresCase ? "nested" : null);
+  });
+
+  it("places no terminal whose folder climbs with `..`, which a symlink could put anywhere", async () => {
+    const { result } = gatherPlaced({ cwd: `${NESTED.path}/link/../src` });
+    expect((await result).worktree).toBeNull();
+  });
+
+  it("tells apart folders spelled in two Unicode forms only where the platform does", async () => {
+    const composed = { id: "/repo/caf\u00e9", path: "/repo/caf\u00e9", name: "composed" };
+    const decomposed = { id: "/repo/cafe\u0301", path: "/repo/cafe\u0301", name: "decomposed" };
+    const { result } = gatherPlaced({ cwd: "/repo/cafe\u0301/src" }, undefined, [
+      composed,
+      decomposed,
+    ]);
+    const folds = process.platform === "win32" || process.platform === "darwin";
+    // Folding, both are one folder and the first listed answers; otherwise its own does.
+    expect((await result).worktree?.name).toBe(folds ? "composed" : "decomposed");
+  });
+
+  it("gives the Assistant, which works in no one tree, no worktree", async () => {
+    const { result } = gatherPlaced({ worktreeId: TERRA.id, isAssistantTerminal: true });
+    const { names, worktree } = await result;
+    // Its names were read, so the worktree was left out, not lost to a failure.
+    expect(names.hosts).toEqual(["Studio 1", "Studio 2"]);
+    expect(worktree).toBeNull();
+  });
+
+  it("gives a terminal another project owns than the view nothing at all", async () => {
+    const { result, worktreeService } = gatherPlaced({ worktreeId: TERRA.id }, "proj-b");
+    await expect(result).resolves.toBe(NO_DICTATION_CONTEXT);
+    expect(worktreeService.getAllStatesForProjectAsync).not.toHaveBeenCalled();
   });
 });

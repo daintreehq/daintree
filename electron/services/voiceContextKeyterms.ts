@@ -3,6 +3,7 @@ import type { PtyClient } from "./PtyClient.js";
 import { getGitBranch } from "../utils/gitUtils.js";
 import { logDebug } from "../utils/logger.js";
 import {
+  holdsCredential,
   holdsCredentialOrId,
   isSecretShaped,
   redactSecretShapedLines,
@@ -13,8 +14,9 @@ import {
   MAX_KEYTERMS,
   MAX_NAME_KEYTERMS,
 } from "../../shared/config/voiceKeyterms.js";
-import type { DictationNames } from "./voiceContextNames.js";
+import type { DictationNames, DictationWorktree } from "./voiceContextNames.js";
 import type { VoiceKeytermSource, VoiceSentTerm } from "../../shared/types/voice.js";
+import type { CorrectionWorktreeContext } from "../../shared/config/voiceCorrection.js";
 
 const P = "[VoiceKeyterms]";
 
@@ -41,6 +43,17 @@ const MAX_KEYTERM_LINES = 200;
 // generated name, not something anyone says aloud.
 const MAX_IDENTIFIER_PARTS = 4;
 export const MAX_PROMPT_CHARS = 400;
+// Cleanup takes the repository's names whole, ranked as derived, so the
+// dependencies at the tail are the ones a long list loses.
+const MAX_CORRECTION_REPOSITORY_NAMES = 60;
+const MAX_CORRECTION_NAME_LENGTH = 60;
+const MAX_WORKTREE_TITLE_LENGTH = 200;
+// Quotes and separators would break the quoted list a name is sent in, and
+// one holding them is no package or folder anyone says aloud.
+// eslint-disable-next-line no-control-regex
+const UNSENDABLE_NAME_RE = /[\u0000-\u001f\u007f-\u009f"\\<>|]/;
+// eslint-disable-next-line no-control-regex
+const TITLE_CONTROL_RE = /[\u0000-\u001f\u007f-\u009f\s]+/g;
 const KEYTERM_PROMPT_PREFIX = "Keywords: ";
 const KEYTERM_PROMPT_SEPARATOR = ", ";
 
@@ -253,9 +266,10 @@ export interface KeytermAssemblyOpts {
    */
   commandTerms?: Promise<readonly string[]>;
   /**
-   * The repository, branch and terminal reads, already made where the pane
-   * lives (a host's). Given, nothing is read here: `projectPath`,
-   * `terminalId` and `ptyClient` are ignored.
+   * The repository, branch and terminal reads, already made: where the pane
+   * lives for a host's, or by the caller so cleanup is given the same ones.
+   * Given, nothing is read here: `projectPath`, `terminalId` and `ptyClient`
+   * are ignored.
    */
   paneReads?: PaneKeytermReads | Promise<PaneKeytermReads>;
 }
@@ -409,7 +423,7 @@ async function getTerminalLines(ptyClient: PtyClient, terminalId: string): Promi
 
 // Bounds one dynamic read so leading speech isn't held up; a slow or failed
 // read yields `fallback`. The read itself isn't cancelled.
-async function withinBudget<T>(
+export async function withinBudget<T>(
   read: Promise<T>,
   fallback: T,
   readName: string,
@@ -508,6 +522,67 @@ export function screenDictationNames(names: DictationNames): DictationNames {
     seen
   );
   return { hosts, projects, worktrees };
+}
+
+/**
+ * The repository's names as cleanup is given them: whole rather than split into
+ * keyterm tokens, since cleanup needs their spelling, with the publishing scope
+ * dropped (`@scope/pkg` is said as "pkg"), screened like the keyterms, in the
+ * order they were derived, at most MAX_CORRECTION_REPOSITORY_NAMES.
+ */
+export function screenCorrectionRepositoryNames(names: readonly unknown[]): string[] {
+  const seen = new Set<string>();
+  const kept: string[] = [];
+  for (const raw of names) {
+    if (kept.length >= MAX_CORRECTION_REPOSITORY_NAMES) break;
+    if (typeof raw !== "string" || holdsCredentialOrId(raw)) continue;
+    const name = stripPackageScope(raw.trim());
+    if (name.length < 2 || name.length > MAX_CORRECTION_NAME_LENGTH || /^\d+$/.test(name)) continue;
+    if (UNSENDABLE_NAME_RE.test(name) || isSecretShaped(name)) continue;
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    kept.push(name);
+  }
+  return kept;
+}
+
+// One line of a person's writing, sent as written: never one holding a
+// credential, and never anything that could pass for the prompt's own tags.
+function screenWorktreeTitle(raw: string | undefined): string | null {
+  if (typeof raw !== "string") return null;
+  const title = raw.replace(TITLE_CONTROL_RE, " ").trim().replace(/</g, "‹").replace(/>/g, "›");
+  if (!title || holdsCredential(title, true)) return null;
+  return title.length > MAX_WORKTREE_TITLE_LENGTH
+    ? `${title.slice(0, MAX_WORKTREE_TITLE_LENGTH - 1).trimEnd()}…`
+    : title;
+}
+
+/**
+ * The worktree as cleanup is given it: its name, screened as the workspace
+ * names are, and its issue and pull request titles, issue first. The title
+ * read off the branch name stands in only when neither has been fetched; a
+ * fetched one the screen drops leaves no title rather than a guessed one.
+ */
+export function screenDictationWorktree(
+  worktree: DictationWorktree | null
+): CorrectionWorktreeContext | null {
+  if (!worktree) return null;
+  const [name] = screenDictationNames({
+    hosts: [],
+    projects: [],
+    worktrees: [worktree.name],
+  }).worktrees;
+  if (!name) return null;
+  const fetched = [worktree.issueTitle, worktree.prTitle].filter(Boolean);
+  const titles: string[] = [];
+  for (const raw of fetched.length > 0 ? fetched : [worktree.branchDerivedTitle]) {
+    const title = screenWorktreeTitle(raw);
+    if (title && !titles.some((kept) => kept.toLowerCase() === title.toLowerCase())) {
+      titles.push(title);
+    }
+  }
+  return { name, titles };
 }
 
 export async function assembleKeyterms(opts: KeytermAssemblyOpts): Promise<string[]> {
