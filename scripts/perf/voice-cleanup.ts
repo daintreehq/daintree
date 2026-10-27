@@ -31,8 +31,10 @@ import {
 } from "../../electron/services/voiceCorrectionOutcome";
 import {
   CLEANUP_CORPUS,
+  cleanupSessions,
   FIX_KINDS,
   type CleanupCase,
+  type CleanupSession,
   type FixKind,
   type TranscriptStyle,
 } from "./lib/voiceCleanupCorpus";
@@ -230,8 +232,9 @@ function parseArgs(argv: readonly string[]): Options | null {
 }
 
 // Kept identical across variants: the project hints production sends and the
-// agent the passage is typed into, with no workspace names, so every passage
-// has the same context.
+// agent the passage is typed into, with no workspace names. A passage's session
+// adds its worktree and repository names on top, as production's does for a
+// pane on this machine.
 interface Profile {
   customDictionary: string[];
   projectName: string;
@@ -278,9 +281,15 @@ function instructionsOf(variant: Variant) {
   return PROMPT_VARIANTS[variant.prompt]!.instructionsFor(variant.model);
 }
 
-function settingsFor(variant: Variant, profile: Profile, apiKey: string): VoiceCorrectionSettings {
+function settingsFor(
+  variant: Variant,
+  profile: Profile,
+  apiKey: string,
+  session: CleanupSession | undefined
+): VoiceCorrectionSettings {
   return {
     ...profile,
+    ...session,
     model: variant.model,
     reasoningEffort: variant.effort,
     instructions: instructionsOf(variant),
@@ -550,6 +559,8 @@ export interface RunRecord {
     chars: number;
     inputHash: string;
     sent: VoiceCorrectionRequest;
+    /** The worktree and repository names its prompt carried; absent for none. */
+    session?: CleanupSession;
   }>;
   /** Passages a rescore left out because the corpus no longer has them, or no longer sends them the same. */
   rescoreExclusions?: Array<{ id: string; reason: "removed" | "input changed"; trials: number }>;
@@ -842,8 +853,11 @@ export function renderReport(run: RunRecord, corpus: readonly CleanupCase[]): st
   return lines.join("\n");
 }
 
+// A passage with no session hashes as it did before sessions existed, so a
+// run from then still rescores.
 export function inputHash(entry: CleanupCase): string {
-  return contentHash(JSON.stringify(requestFor(entry)));
+  const sent = requestFor(entry);
+  return contentHash(JSON.stringify(entry.session ? { sent, session: entry.session } : sent));
 }
 
 // A saved run scored again with today's references and checks. A passage the
@@ -1016,6 +1030,7 @@ async function main(): Promise<number> {
       chars: entry.raw.length,
       inputHash: inputHash(entry),
       sent: requestFor(entry),
+      ...(entry.session ? { session: entry.session } : {}),
     })),
     parityMisses: 0,
     adversarial: [],
@@ -1059,9 +1074,12 @@ async function main(): Promise<number> {
   const services = new Map<string, VoiceCorrectionServiceType>(
     options.variants.map((variant) => [variant.id, new VoiceCorrectionService()])
   );
-  // Production warms the prompt while the user dictates; so does this, once.
+  // Production warms the prompt while the user dictates; so does this, once
+  // for each session the passages are dictated in.
   for (const variant of options.variants) {
-    await services.get(variant.id)!.warm(settingsFor(variant, profile, apiKey));
+    for (const session of cleanupSessions(corpus)) {
+      await services.get(variant.id)!.warm(settingsFor(variant, profile, apiKey, session));
+    }
   }
 
   const total = corpus.length * options.variants.length * options.repeats;
@@ -1087,7 +1105,7 @@ async function main(): Promise<number> {
           : undefined;
         const result = await service.correct(
           requestFor(entry),
-          settingsFor(variant, profile, apiKey),
+          settingsFor(variant, profile, apiKey, entry.session),
           undefined,
           onText
         );

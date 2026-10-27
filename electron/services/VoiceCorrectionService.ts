@@ -11,6 +11,7 @@ import {
   type CorrectionInstructions,
   type CorrectionPromptContext,
   type CorrectionTargetContext,
+  type CorrectionWorktreeContext,
   type VoiceReasoningEffort,
 } from "../../shared/config/voiceCorrection.js";
 import type { VoiceRewriteOutcome } from "../../shared/types/voice.js";
@@ -51,7 +52,7 @@ const MIN_OUTPUT_TOKENS = 1024;
 const OUTPUT_TOKENS_PER_CHAR = 1.5;
 const OUTPUT_TOKENS_OVERHEAD = 256;
 const FILE_LINK_MAX_OUTPUT_TOKENS = 256;
-const PROMPT_CACHE_PREFIX = "voice-correction-v12";
+const PROMPT_CACHE_PREFIX = "voice-correction-v13";
 // OpenAI rejects a prompt_cache_key longer than 64 characters.
 const PROMPT_CACHE_KEY_MAX_LENGTH = 64;
 const FILE_LINK_DETECTION_TIMEOUT_MS = 4000;
@@ -176,6 +177,10 @@ export interface VoiceCorrectionSettings {
   apiKey: string;
   customDictionary: string[];
   knownNames?: string[];
+  /** The session's repository names, read with its keyterms; cleanup only. */
+  repositoryNames?: string[];
+  /** The worktree the session dictates in; cleanup only. */
+  worktree?: CorrectionWorktreeContext;
   heardAs?: readonly HeardAsRule[];
   customInstructions?: string;
   language?: string;
@@ -505,7 +510,12 @@ export class VoiceCorrectionService {
     // rules are objects, so they never hash alike.
     if (settings.knownNames && settings.knownNames.length > 0) parts.push(settings.knownNames);
     if (settings.heardAs && settings.heardAs.length > 0) parts.push(settings.heardAs);
-    if (settings.instructions) parts.push(settings.instructions);
+    // Keyed by kind, so neither can hash alike with the lists above.
+    if (settings.repositoryNames && settings.repositoryNames.length > 0) {
+      parts.push({ repositoryNames: settings.repositoryNames });
+    }
+    if (settings.worktree) parts.push({ worktree: settings.worktree });
+    if (settings.instructions) parts.push({ instructions: settings.instructions });
     const fingerprint = createHash("sha256")
       .update(JSON.stringify(parts))
       .digest("hex")
@@ -854,6 +864,8 @@ export class VoiceCorrectionService {
     const {
       customDictionary,
       knownNames,
+      repositoryNames,
+      worktree,
       heardAs,
       customInstructions,
       projectName,
@@ -876,6 +888,8 @@ export class VoiceCorrectionService {
       projectPath,
       customDictionary,
       knownNames,
+      repositoryNames,
+      worktree,
       heardAs,
       customInstructions,
       language,

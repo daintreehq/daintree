@@ -434,6 +434,54 @@ describe("VoiceCorrectionService", () => {
     expect(both.prompt_cache_key.length).toBeLessThanOrEqual(64);
   });
 
+  it("folds the worktree and repository names into prompt_cache_key, and the prompt", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(makeFetchResponse({ corrected_text: "Ok." }));
+    vi.stubGlobal("fetch", fetchMock);
+    const requestFor = async (overrides: Record<string, unknown>) => {
+      fetchMock.mockClear();
+      await new VoiceCorrectionService().correct(
+        { rawText: "compare GPT 6.1 there against Luna" },
+        { ...BASE_SETTINGS, projectName: "daintree", customDictionary: [], ...overrides }
+      );
+      return JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string) as {
+        prompt_cache_key: string;
+        input: Array<{ content: string }>;
+      };
+    };
+    const terra = { name: "feature-terra", titles: ["Measure whether gpt-6.1-terra is worth it"] };
+
+    const without = await requestFor({});
+    expect((await requestFor({ repositoryNames: [] })).prompt_cache_key).toBe(
+      without.prompt_cache_key
+    );
+    const repo = await requestFor({ repositoryNames: ["simple-git"] });
+    const placed = await requestFor({ worktree: terra });
+    const both = await requestFor({ repositoryNames: ["simple-git"], worktree: terra });
+    const retitled = await requestFor({
+      repositoryNames: ["simple-git"],
+      worktree: { ...terra, titles: ["Something else"] },
+    });
+    const otherRepo = await requestFor({ repositoryNames: ["node-pty"] });
+    const renamed = await requestFor({ worktree: { ...terra, name: "feature-luna" } });
+    // A list of names hashes apart from the same strings as workspace names.
+    const asNames = await requestFor({ knownNames: ["simple-git"] });
+    const keys = [without, repo, otherRepo, placed, renamed, both, retitled, asNames].map(
+      (r) => r.prompt_cache_key
+    );
+    expect(new Set(keys).size).toBe(keys.length);
+    for (const key of keys) expect(key.length).toBeLessThanOrEqual(64);
+    expect(
+      (await requestFor({ repositoryNames: ["simple-git"], worktree: terra })).prompt_cache_key
+    ).toBe(both.prompt_cache_key);
+
+    const developer = both.input[0].content;
+    expect(developer).toContain('the worktree "feature-terra"');
+    expect(developer).toContain('"Measure whether gpt-6.1-terra is worth it"');
+    expect(developer).toContain("REPOSITORY NAMES");
+    expect(developer).toContain('"simple-git"');
+    expect(without.input[0].content).not.toContain("WORKTREE:");
+  });
+
   it("sends each cleanup model its own rules", async () => {
     const fetchMock = vi.fn().mockResolvedValue(makeFetchResponse({ corrected_text: "Ok." }));
     vi.stubGlobal("fetch", fetchMock);
