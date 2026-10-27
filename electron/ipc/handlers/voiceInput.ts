@@ -29,6 +29,7 @@ import type {
 } from "../../../shared/types/voice.js";
 import type {
   VoiceCorrectionTiming,
+  VoiceCorrectionVerdict,
   VoiceSessionReport,
 } from "../../../shared/types/voiceSessionSummary.js";
 import { logDebug, logInfo, logWarn } from "../../utils/logger.js";
@@ -414,6 +415,7 @@ interface CorrectReply {
   action: "no_change" | "replace";
   correctedText: string;
   failed?: true;
+  verdict?: VoiceCorrectionVerdict;
   timing?: VoiceCorrectionTiming;
 }
 
@@ -2161,7 +2163,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     const startedAt = performance.now();
     const settings = getVoiceSettings();
     if (!mayCorrect(settings) || !request.rawText.trim()) {
-      return { action: "no_change", correctedText: request.rawText };
+      return { action: "no_change", correctedText: request.rawText, verdict: "skipped" };
     }
     const answered = holdForCleanup(ctx.webContentsId);
     try {
@@ -2212,7 +2214,12 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         ));
       }
       if (lifetime.signal.aborted) {
-        return { action: "no_change", correctedText: request.rawText, failed: true };
+        return {
+          action: "no_change",
+          correctedText: request.rawText,
+          failed: true,
+          verdict: "failed",
+        };
       }
       // The text so far goes back only to the view that asked, under the id
       // it asked with; it is dictated text, so it is never logged.
@@ -2251,6 +2258,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         action: result.action,
         correctedText: result.confirmedText,
         ...(result.failed ? { failed: true as const } : {}),
+        verdict: result.verdict,
         timing: {
           prepMs: Math.max(0, sentAt - startedAt),
           requestMs: result.roundTrip ? result.roundTrip.ms : null,

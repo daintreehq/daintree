@@ -61,7 +61,7 @@ import {
   VOICE_WORKSPACE_NAME_MAX_LENGTH,
 } from "@shared/types/voice";
 import type { HostId } from "@shared/types/remoteHosts";
-import type { VoiceStopReason } from "@shared/types/voiceSessionSummary";
+import type { VoiceCorrectionVerdict, VoiceStopReason } from "@shared/types/voiceSessionSummary";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { VOICE_INPUT_SETTINGS_CHANGED_EVENT } from "@/lib/voiceInputSettingsEvents";
@@ -100,11 +100,13 @@ import {
 } from "@/services/voiceDraftSend";
 import {
   collectCorrectionPassages,
+  countPassageFates,
   joinPassageTexts,
   locatePassage,
   settlePassageReplies,
   transcribedPassage,
   type CorrectionPassage,
+  type PassageFate,
 } from "@/services/voiceCorrectionPassages";
 import {
   collectHeardAsRules,
@@ -3046,7 +3048,10 @@ class VoiceRecordingService {
     if (correction.done) {
       logDebug(`${LOG_PREFIX} Correction result stale (draft sent or edited), discarding`);
       this.releaseBaseline(correction);
-      correction.timeline?.endCorrection("discarded");
+      correction.timeline?.endCorrection(
+        "discarded",
+        countPassageFates(correction.passages.map(() => "dropped"))
+      );
       return;
     }
     // Every passage is checked against the same draft and written in one
@@ -3060,9 +3065,15 @@ class VoiceRecordingService {
     const draftNow = inputStore.getDraftInput(panelId, projectId);
     const edits: Array<{ from: number; to: number; text: string }> = [];
     let skipped = 0;
+    const fates: PassageFate[] = [];
     const settled = correction.passages.map((passage, index) => {
       const corrected = results[index]?.text;
-      if (!corrected || corrected === passage.text) return passage.text;
+      if (!corrected || corrected === passage.text) {
+        const reply = results[index];
+        const verdict = reply?.verdict ?? (reply?.failed ? "failed" : "unchanged");
+        fates.push(verdict === "replaced" ? "unchanged" : verdict);
+        return passage.text;
+      }
       const span = spans.get(passage);
       // A command correction wrote for the start of the prompt is no longer at
       // the start once text was typed in front of the passage.
@@ -3072,8 +3083,10 @@ class VoiceRecordingService {
         draftNow.slice(0, span.from).trim() !== "";
       if (!span || commandMoved) {
         skipped++;
+        fates.push("unlanded");
         return passage.text;
       }
+      fates.push("applied");
       edits.push({ ...span, text: corrected });
       return corrected;
     });
@@ -3141,7 +3154,7 @@ class VoiceRecordingService {
     if (skipped > 0) outcome = "discarded";
     else if (edits.length > 0) outcome = "applied";
     else if (results.some((result) => result.failed)) outcome = "failed";
-    correction.timeline?.endCorrection(outcome);
+    correction.timeline?.endCorrection(outcome, countPassageFates(fates));
   }
 
   /**
@@ -3151,7 +3164,12 @@ class VoiceRecordingService {
   private async requestPassageCorrection(
     passage: CorrectionPassage,
     correction: PendingCorrection
-  ): Promise<{ text: string | null; failed: boolean; timing: unknown }> {
+  ): Promise<{
+    text: string | null;
+    failed: boolean;
+    verdict: VoiceCorrectionVerdict | undefined;
+    timing: unknown;
+  }> {
     // Unique past an HMR swap, which leaves the old singleton's requests out.
     const streamId = crypto.randomUUID();
     this.correctionStreams.set(streamId, {
@@ -3173,13 +3191,18 @@ class VoiceRecordingService {
       // The passage runs from its first word to its last; its separators and
       // paragraph breaks either side stay the session's, not the model's.
       text = result.action === "replace" ? result.correctedText.trim() || null : null;
-      return { text, failed: result.failed === true, timing: result.timing ?? null };
+      return {
+        text,
+        failed: result.failed === true,
+        verdict: result.verdict,
+        timing: result.timing ?? null,
+      };
     } catch (error) {
       logWarn(
         `${LOG_PREFIX} Correction request failed, keeping raw text`,
         voiceErrorLogFields(error)
       );
-      return { text: null, failed: true, timing: null };
+      return { text: null, failed: true, verdict: "failed", timing: null };
     } finally {
       this.correctionStreams.delete(streamId);
       // A passage whose cleanup came back shows all of it until every passage

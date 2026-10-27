@@ -92,6 +92,23 @@ const KEYTERM = "zebrafish-migration";
 const TARGET = { panelId: "panel-1", panelTitle: PANEL_TITLE, projectName: "Acme secret project" };
 const OTHER_TARGET = { panelId: "panel-2", panelTitle: "Codex" };
 
+const NO_PASSAGES = {
+  sent: 0,
+  applied: 0,
+  unchanged: 0,
+  skipped: 0,
+  rejectedEditSize: 0,
+  rejectedNegation: 0,
+  rejectedNumber: 0,
+  rejectedProtectedSpan: 0,
+  rejectedCommand: 0,
+  rejectedLowConfidence: 0,
+  failed: 0,
+  timedOut: 0,
+  dropped: 0,
+  unlanded: 0,
+};
+
 const REPORT = {
   provider: "openai",
   delayTier: "low",
@@ -816,6 +833,109 @@ describe("VoiceRecordingService — session summary (#14617)", () => {
     });
     expect(typeof summaries()[0]!.correctionMs).toBe("number");
     expect(JSON.stringify(summaries()[0])).not.toContain("canopy");
+    expect(summaries()[0]!.correctionPassages).toEqual({ ...NO_PASSAGES, sent: 1, applied: 1 });
+  });
+
+  // Main's verdict for the one passage sent, and the field that counts it.
+  it.each([
+    ["unchanged", "unchanged", "unchanged"],
+    ["skipped", "unchanged", "skipped"],
+    ["rejected_edit_size", "unchanged", "rejectedEditSize"],
+    ["rejected_negation", "unchanged", "rejectedNegation"],
+    ["rejected_number", "unchanged", "rejectedNumber"],
+    ["rejected_protected_span", "unchanged", "rejectedProtectedSpan"],
+    ["rejected_command", "unchanged", "rejectedCommand"],
+    ["rejected_low_confidence", "unchanged", "rejectedLowConfidence"],
+    ["failed", "failed", "failed"],
+    ["timed_out", "failed", "timedOut"],
+  ] as const)("counts a passage main answered %s under %s", async (verdict, correction, field) => {
+    const harness = setupGlobals({ correctionEnabled: true });
+    const { service, summaries } = await load();
+    const sessionId = await startLive(harness, service);
+    const failed = verdict === "failed" || verdict === "timed_out";
+    harness.voiceInput.correct.mockResolvedValue({
+      action: "no_change",
+      correctedText: DICTATED,
+      verdict,
+      ...(failed ? { failed: true } : {}),
+    });
+    harness.emit("complete", { sessionId, text: DICTATED, itemId: "item-1" });
+    harness.paintFrames();
+    await service.stop("Dictation stopped.", { reason: "user" });
+    await flushPromises();
+
+    expect(summaries()).toMatchObject([{ correction }]);
+    expect(summaries()[0]!.correctionPassages).toEqual({ ...NO_PASSAGES, sent: 1, [field]: 1 });
+    expect(JSON.stringify(summaries()[0])).not.toContain("canopy");
+  });
+
+  it("counts a failed request with no verdict of its own as failed", async () => {
+    const harness = setupGlobals({ correctionEnabled: true });
+    const { service, summaries } = await load();
+    const sessionId = await startLive(harness, service);
+    harness.voiceInput.correct.mockRejectedValue(new Error(`boom ${DICTATED}`));
+    harness.emit("complete", { sessionId, text: DICTATED, itemId: "item-1" });
+    harness.paintFrames();
+    await service.stop("Dictation stopped.", { reason: "user" });
+    await flushPromises();
+
+    expect(summaries()[0]!.correctionPassages).toEqual({ ...NO_PASSAGES, sent: 1, failed: 1 });
+  });
+
+  it("counts a cleaned passage whose place in the draft was lost as unable to land", async () => {
+    const harness = setupGlobals({ correctionEnabled: true });
+    const correction = deferred<{ action: string; correctedText: string; verdict: string }>();
+    harness.voiceInput.correct.mockReturnValue(correction.promise);
+    const { service, summaries } = await load();
+    const sessionId = await startLive(harness, service);
+    harness.emit("complete", { sessionId, text: DICTATED, itemId: "item-1" });
+    harness.paintFrames();
+    await service.stop("Dictation stopped.", { reason: "user" });
+
+    draftState.draft = "something else entirely";
+    correction.resolve({
+      action: "replace",
+      correctedText: "Deploy the canopy branch to staging.",
+      verdict: "replaced",
+    });
+    await flushPromises();
+    harness.paintFrames();
+
+    expect(summaries()).toMatchObject([{ correction: "discarded" }]);
+    expect(summaries()[0]!.correctionPassages).toEqual({ ...NO_PASSAGES, sent: 1, unlanded: 1 });
+  });
+
+  it("counts passages a send dropped before their reply came back", async () => {
+    const harness = setupGlobals({ correctionEnabled: true });
+    const correction = deferred<{ action: string; correctedText: string; verdict: string }>();
+    harness.voiceInput.correct.mockReturnValue(correction.promise);
+    const { service, summaries } = await load();
+    const sessionId = await startLive(harness, service);
+    harness.emit("complete", { sessionId, text: DICTATED, itemId: "item-1" });
+    harness.paintFrames();
+    await service.stop("Dictation stopped.", { reason: "user" });
+
+    service.discardPendingCorrections(TARGET.panelId);
+    correction.resolve({
+      action: "replace",
+      correctedText: "Deploy the canopy branch to staging.",
+      verdict: "replaced",
+    });
+    await flushPromises();
+    harness.paintFrames();
+
+    expect(summaries()).toMatchObject([{ correction: "discarded" }]);
+    expect(summaries()[0]!.correctionPassages).toEqual({ ...NO_PASSAGES, sent: 1, dropped: 1 });
+  });
+
+  it("reports no passages for a session that ran no cleanup", async () => {
+    const harness = setupGlobals();
+    const { service, summaries } = await load();
+    await startLive(harness, service);
+    await service.stop("Dictation stopped.", { reason: "user" });
+    await flushPromises();
+
+    expect(summaries()[0]!.correctionPassages).toEqual(NO_PASSAGES);
   });
 
   it("records a correction request that failed as failed", async () => {

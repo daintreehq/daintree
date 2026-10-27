@@ -953,6 +953,7 @@ describe("voiceInput — session identity", () => {
         action: "no_change",
         correctedText: "fix the bug",
         failed: true,
+        verdict: "failed",
       });
       expect(shared.cleanups).toEqual([]);
     });

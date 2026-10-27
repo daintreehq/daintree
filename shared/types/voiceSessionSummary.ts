@@ -75,6 +75,57 @@ export type VoiceSessionReport = z.infer<typeof VoiceSessionReportSchema>;
  * Main's share of one passage's cleanup, sent back with its result: building
  * the request, and the OpenAI round trip, which is null when none went out.
  */
+/**
+ * What main made of one passage's cleanup: a code, never text. A rejection
+ * names the guard that kept the raw words; `skipped` is a passage it never sent.
+ */
+export const VOICE_CORRECTION_VERDICTS = [
+  "replaced",
+  // The model left the passage as it was.
+  "unchanged",
+  // Cleanup off, nothing to clean, or a passage over the length cap.
+  "skipped",
+  "rejected_edit_size",
+  "rejected_negation",
+  "rejected_number",
+  "rejected_protected_span",
+  // Any of the agent-command checks.
+  "rejected_command",
+  "rejected_low_confidence",
+  // The request failed, was cancelled, or came back unusable.
+  "failed",
+  "timed_out",
+] as const;
+
+export type VoiceCorrectionVerdict = (typeof VOICE_CORRECTION_VERDICTS)[number];
+
+/**
+ * Where each passage of a session's cleanup ended up. A passage is counted in
+ * exactly one field, so every field but `sent` adds up to it.
+ */
+export const VoiceCorrectionPassagesSchema = z
+  .object({
+    sent: count,
+    applied: count,
+    unchanged: count,
+    skipped: count,
+    rejectedEditSize: count,
+    rejectedNegation: count,
+    rejectedNumber: count,
+    rejectedProtectedSpan: count,
+    rejectedCommand: count,
+    rejectedLowConfidence: count,
+    failed: count,
+    timedOut: count,
+    // The draft was sent or edited before the reply could land.
+    dropped: count,
+    // The reply came back but its place in the draft was gone.
+    unlanded: count,
+  })
+  .strict();
+
+export type VoiceCorrectionPassages = z.infer<typeof VoiceCorrectionPassagesSchema>;
+
 export const VoiceCorrectionTimingSchema = z
   .object({
     prepMs: z.number().nonnegative(),
@@ -107,6 +158,8 @@ export const VoiceSessionSummarySchema = z
     correctionRequestMs: ms,
     correctionApplyMs: ms,
     correction: z.enum(["none", "applied", "unchanged", "failed", "discarded"]),
+    // The reasons behind it, passage by passage; all zero when no cleanup ran.
+    correctionPassages: VoiceCorrectionPassagesSchema,
     // Audio the renderer held before the start request, past its cap.
     droppedQueued: count,
     charsCommitted: count,

@@ -3,11 +3,13 @@ import {
   VoiceCorrectionTimingSchema,
   VoiceSessionReportSchema,
   VoiceSessionSummarySchema,
+  type VoiceCorrectionPassages,
   type VoiceCorrectionTiming,
   type VoiceSessionReport,
   type VoiceSessionSummary,
   type VoiceStopReason,
 } from "@shared/types/voiceSessionSummary";
+import { countPassageFates } from "@/services/voiceCorrectionPassages";
 import type { VoiceSessionEndReason } from "@shared/types/voice";
 import type { VoiceTranscriptionProvider } from "@shared/types";
 
@@ -60,6 +62,7 @@ export class VoiceSessionTimeline {
   private correctionTiming: VoiceCorrectionTiming | null = null;
   private correctionApplyMs: number | null = null;
   private correction: "none" | VoiceCorrectionOutcome = "none";
+  private correctionPassages: VoiceCorrectionPassages = countPassageFates([]);
   private droppedQueued = 0;
   private charsCommitted = 0;
   private heardSignal = false;
@@ -173,7 +176,7 @@ export class VoiceSessionTimeline {
     this.correctionTiming = parsed.success ? parsed.data : null;
   }
 
-  endCorrection(outcome: VoiceCorrectionOutcome): void {
+  endCorrection(outcome: VoiceCorrectionOutcome, passages: VoiceCorrectionPassages): void {
     if (this.done || this.correctionStartedAt === null || this.correctionMs !== null) return;
     const now = this.deps.now();
     this.correctionMs = now - this.correctionStartedAt;
@@ -181,6 +184,7 @@ export class VoiceSessionTimeline {
       this.correctionApplyMs = now - this.correctionRepliedAt;
     }
     this.correction = outcome;
+    this.correctionPassages = passages;
     this.tryLog();
   }
 
@@ -276,6 +280,7 @@ export class VoiceSessionTimeline {
       correctionRequestMs: roundMs(this.correctionTiming?.requestMs),
       correctionApplyMs: roundMs(this.correctionApplyMs),
       correction: this.correction,
+      correctionPassages: this.correctionPassages,
       droppedQueued: this.droppedQueued,
       charsCommitted: this.charsCommitted,
       audioNoText: this.heardSignal && this.charsCommitted === 0,

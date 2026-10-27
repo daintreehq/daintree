@@ -26,7 +26,11 @@ import type {
   VoiceRevealRequest,
   VoiceSessionEndReason,
 } from "../voice.js";
-import type { VoiceCorrectionTiming, VoiceSessionReport } from "../voiceSessionSummary.js";
+import type {
+  VoiceCorrectionTiming,
+  VoiceCorrectionVerdict,
+  VoiceSessionReport,
+} from "../voiceSessionSummary.js";
 export type { VoiceInputError, VoiceInputStatus };
 import type {
   AuthValidation,
@@ -2271,6 +2275,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       action: "no_change" | "replace";
       correctedText: string;
       failed?: true;
+      /** Why the passage came back as it did: a code, never text. */
+      verdict?: VoiceCorrectionVerdict;
       timing?: VoiceCorrectionTiming;
     }>;
     /** A streaming correction's text so far, cut at a word boundary; only ever grows. */
