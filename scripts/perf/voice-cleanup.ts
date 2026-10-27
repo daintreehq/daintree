@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { contentHash } from "../../e2e/helpers/voiceReplayScore";
 import {
   buildCorrectionSystemPrompt,
@@ -27,11 +28,18 @@ import {
   correctionOutcome,
   type VoiceCorrectionProposal,
 } from "../../electron/services/voiceCorrectionOutcome";
-import { CLEANUP_CORPUS, type CleanupCase, type TranscriptStyle } from "./lib/voiceCleanupCorpus";
+import {
+  CLEANUP_CORPUS,
+  FIX_KINDS,
+  type CleanupCase,
+  type FixKind,
+  type TranscriptStyle,
+} from "./lib/voiceCleanupCorpus";
 import { ADVERSARIAL_PROPOSALS, GUARD_VARIANTS, type GuardVariant } from "./lib/voiceCleanupGuards";
 import { PROMPT_VARIANTS, type PromptVariant } from "./lib/voiceCleanupPrompts";
 import {
   corpusProblems,
+  fixesOf,
   locateUncertain,
   MODEL_PRICES,
   PROMPT_LENGTH_MIN_CHARS,
@@ -472,12 +480,12 @@ const usd = (value: number | null, digits = 5) =>
 function qualityRow(arm: string, quality: QualitySummary): string {
   const { totals } = quality;
   const rate = (value: number, of: number) => (of === 0 ? "–" : pct(value));
-  return `| ${arm} | ${pct(quality.agentReadyRate)} | ${rate(quality.repairRate, totals.repairable)} | ${rate(quality.fixRate, totals.fixes)} | ${rate(quality.dropRate, totals.drops)} | ${rate(quality.splitRate, totals.splits)} | ${rate(quality.keepRate, totals.keeps)} | ${pct(quality.referenceMatchRate)} | ${pct(quality.rawWer)} → ${pct(quality.wer)} | ${quality.broken} | ${quality.novelWords} | ${quality.addedWords} | ${quality.trialsWithMeaningRisk} |`;
+  return `| ${arm} | ${pct(quality.agentReadyRate)} | ${rate(quality.repairRate, totals.repairable)} | ${rate(quality.misreadRate, totals.misreads)} | ${rate(quality.formRate, totals.forms)} | ${rate(quality.dropRate, totals.drops)} | ${rate(quality.splitRate, totals.splits)} | ${rate(quality.keepRate, totals.keeps)} | ${pct(quality.referenceMatchRate)} | ${pct(quality.rawWer)} → ${pct(quality.wer)} | ${quality.broken} | ${quality.novelWords} | ${quality.addedWords} | ${quality.trialsWithMeaningRisk} |`;
 }
 
 const QUALITY_HEADER = [
-  "| Arm | Ready | Repaired | Fixes | Drops | Splits | Keeps | Matches ref | WER raw → clean | Broken | Novel | Added | Risky trials |",
-  "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+  "| Arm | Ready | Repaired | Misreads | Forms | Drops | Splits | Keeps | Matches ref | WER raw → clean | Broken | Novel | Added | Risky trials |",
+  "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
 ];
 
 function latencyCells(latency: LatencySummary): string {
@@ -493,7 +501,7 @@ interface AdversarialResult {
   refusedBy: string | null;
 }
 
-interface RunRecord {
+export interface RunRecord {
   schemaVersion: number;
   scoringVersion: number;
   complete: boolean;
@@ -566,7 +574,7 @@ function landAdversarial(
 
 const armName = (summary: VariantSummary) => `${summary.variant} · ${summary.guard}`;
 
-function renderReport(run: RunRecord, corpus: readonly CleanupCase[]): string {
+export function renderReport(run: RunRecord, corpus: readonly CleanupCase[]): string {
   const lines: string[] = [];
   const longCases = corpus.filter((entry) => entry.raw.length >= PROMPT_LENGTH_MIN_CHARS).length;
   const guards = Object.keys(run.guards);
@@ -592,18 +600,19 @@ function renderReport(run: RunRecord, corpus: readonly CleanupCase[]): string {
       ""
     );
   }
-  if (run.rescoreExclusions?.length) {
+  if (run.rescoreExclusions) {
+    const excluded = run.rescoreExclusions
+      .map((exclusion) => `${exclusion.id} (${exclusion.reason}, ${exclusion.trials} trials)`)
+      .join(", ");
     lines.push(
-      `Rescored with scoring v${run.scoringVersion}, leaving out ${run.rescoreExclusions
-        .map((excluded) => `${excluded.id} (${excluded.reason}, ${excluded.trials} trials)`)
-        .join(", ")}.`,
+      `Rescored with scoring v${run.scoringVersion}${excluded ? `, leaving out ${excluded}` : ""}.`,
       ""
     );
   }
   lines.push(
     "## What landed",
     "",
-    "Each reply landed under each guard, model:effort/prompt · guard. Ready: the message the speaker would have typed (an accepted reference's words and lines, every fix and drop landed, nothing kept lost, any run-on broken up). Repaired: reference words the raw transcript had wrong that came back right. Fixes: written forms landed exactly. Drops: filler and retracted words taken out. Splits: run-ons broken into sentences under the passage's cap. Keeps: the case's own, plus every code span, reference, flag, path and number in the raw transcript. Broken: words the raw had right that were lost or changed. Novel: words in neither the raw nor the reference. Added: words inserted beyond any the raw already had extra. Risky trials: any broken, novel or added word, or a keep lost.",
+    "Each reply landed under each guard, model:effort/prompt · guard. Ready: the message the speaker would have typed (an accepted reference's words and lines, every misread and form fix and every drop landed, nothing kept lost, any run-on broken up). Repaired: reference words the raw transcript had wrong that came back right. Misreads: fixes for a word the raw transcript got wrong, one an agent would take for something else, landed exactly; a model or prompt choice rests on these. Forms: fixes that only write the speaker's own words the way they would have typed them, landed exactly; an agent reads those right either way. Drops: filler and retracted words taken out. Splits: run-ons broken into sentences under the passage's cap. Keeps: the case's own, plus every code span, reference, flag, path and number in the raw transcript. Broken: words the raw had right that were lost or changed. Novel: words in neither the raw nor the reference. Added: words inserted beyond any the raw already had extra. Risky trials: any broken, novel or added word, or a keep lost.",
     "",
     ...QUALITY_HEADER,
     ...run.summaries.map((summary) => qualityRow(armName(summary), summary.landed)),
@@ -698,9 +707,9 @@ function renderReport(run: RunRecord, corpus: readonly CleanupCase[]): string {
   for (const [name, key] of groups) {
     const values = [...new Set(corpus.map(key))];
     lines.push(
-      `## Ready, and fixes landed, by ${name}`,
+      `## Ready, misreads and forms landed, by ${name}`,
       "",
-      `Under the \`${firstGuard}\` guard: ready trials / trials · fixes landed / fixes.`,
+      `Under the \`${firstGuard}\` guard, each cell: ready trials / trials · misread fixes landed · form fixes landed.`,
       "",
       `| ${name} | passages | ${run.variants.map((variant) => variant.id).join(" | ")} |`,
       `| --- | --- | ${run.variants.map(() => "---").join(" | ")} |`
@@ -710,15 +719,19 @@ function renderReport(run: RunRecord, corpus: readonly CleanupCase[]): string {
         const rows = run.trials.filter(
           (trial) => trial.variant === variant.id && key(byId.get(trial.caseId)!) === value
         );
-        const fixes = rows.reduce((n, trial) => n + byId.get(trial.caseId)!.fixes.length, 0);
-        const landed = rows.reduce(
-          (n, trial) => n + (trial.landings[firstGuard]?.landedScore.fixesLanded ?? 0),
-          0
-        );
-        const ready = rows.filter(
-          (trial) => trial.landings[firstGuard]?.landedScore.agentReady
-        ).length;
-        return `${ready}/${rows.length} · ${fixes ? `${landed}/${fixes}` : "–"}`;
+        const scoreOf = (trial: Trial) => trial.landings[firstGuard]?.landedScore;
+        const landed = (kind: FixKind) => {
+          let count = 0;
+          let total = 0;
+          for (const trial of rows) {
+            total += fixesOf(byId.get(trial.caseId)!, kind).length;
+            const score = scoreOf(trial);
+            count += (kind === "misread" ? score?.misreadsLanded : score?.formsLanded) ?? 0;
+          }
+          return total ? `${count}/${total}` : "–";
+        };
+        const ready = rows.filter((trial) => scoreOf(trial)?.agentReady).length;
+        return `${ready}/${rows.length} · ${landed("misread")} · ${landed("form")}`;
       });
       const count = corpus.filter((entry) => key(entry) === value).length;
       lines.push(`| ${value} | ${count} | ${cells.join(" | ")} |`);
@@ -744,10 +757,13 @@ function renderReport(run: RunRecord, corpus: readonly CleanupCase[]): string {
   // with each distinct text an arm landed across the repeats: the passages to
   // read by hand, since no word score sees a reversed meaning.
   const arms = run.variants.flatMap((variant) => guards.map((guard) => ({ variant, guard })));
-  const notes = (score: Trial["proposalScore"]) =>
+  const notes = (entry: CleanupCase, score: Trial["proposalScore"]) =>
     [
       score.agentReady ? "ready" : "",
-      score.missedFixes.length ? `missed ${score.missedFixes.join(", ")}` : "",
+      ...FIX_KINDS.map((kind) => {
+        const missed = score.missedFixes.filter((fix) => entry.fixes[fix] === kind);
+        return missed.length ? `missed ${kind}s ${missed.join(", ")}` : "";
+      }),
       score.missedDrops.length ? `left ${score.missedDrops.join(", ")}` : "",
       score.split === false ? `run-on (${score.longestSentence} words)` : "",
       score.lostKeeps.length ? `lost ${score.lostKeeps.join(", ")}` : "",
@@ -791,10 +807,10 @@ function renderReport(run: RunRecord, corpus: readonly CleanupCase[]): string {
           landing.disposition + (landing.rejectReason ? ` (${landing.rejectReason})` : "");
         const proposed =
           landing.disposition === "rejected"
-            ? ` — proposed ${JSON.stringify(proposal)} (${notes(scoreText(entry, proposal)).join("; ")})`
+            ? ` — proposed ${JSON.stringify(proposal)} (${notes(entry, scoreText(entry, proposal)).join("; ")})`
             : "";
         lines.push(
-          `- ${variant.id} · ${guard}${count > 1 ? ` ×${count}` : ""}: ${JSON.stringify(landing.landed)} (${[disposition, ...notes(landing.landedScore)].join("; ")})${proposed}`
+          `- ${variant.id} · ${guard}${count > 1 ? ` ×${count}` : ""}: ${JSON.stringify(landing.landed)} (${[disposition, ...notes(entry, landing.landedScore)].join("; ")})${proposed}`
         );
       }
     }
@@ -803,16 +819,17 @@ function renderReport(run: RunRecord, corpus: readonly CleanupCase[]): string {
   return lines.join("\n");
 }
 
-function inputHash(entry: CleanupCase): string {
+export function inputHash(entry: CleanupCase): string {
   return contentHash(JSON.stringify(requestFor(entry)));
 }
 
 // A saved run scored again with today's references and checks. A passage the
 // corpus no longer has, or no longer sends exactly as it did, can't be: its
 // replies answered a different input. Those are left out and named.
-function rescore(
+export function rescore(
   file: string,
-  guardNames: string[] | null
+  guardNames: string[] | null = null,
+  today: readonly CleanupCase[] = CLEANUP_CORPUS
 ): { run: RunRecord; corpus: CleanupCase[] } {
   const run = JSON.parse(readFileSync(file, "utf8")) as RunRecord;
   if (run.schemaVersion !== VOICE_CLEANUP_SCHEMA_VERSION) {
@@ -820,7 +837,7 @@ function rescore(
       `${file}: schema ${run.schemaVersion}, this script reads ${VOICE_CLEANUP_SCHEMA_VERSION}`
     );
   }
-  const current = new Map(CLEANUP_CORPUS.map((entry) => [entry.id, entry]));
+  const current = new Map(today.map((entry) => [entry.id, entry]));
   const corpus: CleanupCase[] = [];
   run.rescoreExclusions = [];
   for (const saved of run.corpus) {
@@ -1095,10 +1112,12 @@ async function main(): Promise<number> {
   return 0;
 }
 
-main().then(
-  (code) => process.exit(code),
-  (error) => {
-    console.error("[voice-cleanup] fatal:", error);
-    process.exit(1);
-  }
-);
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().then(
+    (code) => process.exit(code),
+    (error) => {
+      console.error("[voice-cleanup] fatal:", error);
+      process.exit(1);
+    }
+  );
+}
