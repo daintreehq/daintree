@@ -42,6 +42,7 @@ import { computeSpawnContext, acquirePtyProcess } from "./pty/terminalSpawn.js";
 import { disposeTerminalSerializerService } from "./pty/TerminalSerializerService.js";
 import { deleteSessionFile } from "./pty/terminalSessionPersistence.js";
 import { ledgerFactsFromSpawnOptions } from "./pty/lifecycleLedger.js";
+import { attributeClose } from "./pty/closeAttribution.js";
 import { AgentTerminalLifecycleLedger } from "../../shared/utils/agentLifecycleLedger.js";
 import { events } from "./events.js";
 import { keepWindowsTreeKillHelperWarm } from "../utils/windowsTreeKill.js";
@@ -973,6 +974,20 @@ export class PtyManager extends EventEmitter {
       // Capture terminal info before async kill (info may be unavailable after kill)
       const terminal = this.registry.get(termId);
       const info = terminal?.getInfo();
+      // Read before the kill, which clears the trash first: the record names
+      // the trash it left, so Canopy's Trash keeps the run past this window.
+      const close = attributeClose(
+        info
+          ? {
+              id: termId,
+              spawnedAt: info.spawnedAt,
+              isTrashed: true,
+              trashExpiresAt: this.registry.getTrashExpiresAt(termId),
+            }
+          : null,
+        "kill",
+        this.registry.getTrashTtlMs()
+      );
 
       // Registered with the quit barrier as a whole: the id isn't known until
       // the graceful kill returns, and a quit must still wait for it (#12433).
@@ -1013,6 +1028,7 @@ export class PtyManager extends EventEmitter {
                 agentModelId: info.agentModelId,
                 cwd: info.cwd ?? undefined,
                 branch: branch ?? undefined,
+                ...close,
               },
             });
           }

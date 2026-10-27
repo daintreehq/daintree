@@ -4,6 +4,7 @@ import type { PtyClient } from "../services/PtyClient.js";
 import type { WorkspaceClient } from "../services/WorkspaceClient.js";
 import { projectStore } from "../services/ProjectStore.js";
 import { journalAgentSession } from "../services/pty/agentSessionJournal.js";
+import { attributeClose } from "../services/pty/closeAttribution.js";
 import { sealAndDrainCapturedSessionPersistence } from "../services/pty/agentSessionCapturePersistence.js";
 import { isAssistantTerminalRecord } from "../services/assistantTerminal.js";
 import type { AssistantLaneSnapshot } from "../services/HelpSessionService.js";
@@ -631,6 +632,9 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
                 agentModelId: info.agentModelId,
                 cwd: info.cwd ?? undefined,
                 branch: info.worktreeId ? branchByWorktree.get(info.worktreeId) : undefined,
+                // Quitting ends no pane the user had not closed; one sitting in
+                // the trash was closed by the user before the quit.
+                ...attributeClose(info, "shutdown"),
               },
               { terminalId: result.id, generation: generationById.get(result.id) }
             );

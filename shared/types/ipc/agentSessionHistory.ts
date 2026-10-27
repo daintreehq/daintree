@@ -67,4 +67,42 @@ export interface AgentSessionRecord {
    * {@link AgentSessionBookmarkMetadata}.
    */
   bookmark?: AgentSessionBookmarkMetadata;
+  /**
+   * What ended the session this record came from. Absent on records journaled
+   * before it was kept.
+   */
+  closedBy?: AgentSessionCloseCause;
+  /** Present on a `user` close: the trash it left, which Canopy's Trash lists. */
+  trash?: AgentSessionTrashClose;
+}
+
+/**
+ * What ended a journaled session. `user` is the user's own close: the terminal
+ * was in the trash when its process ended, whether the trash let it go, the
+ * user removed it from the trash, or the app quit or the project closed while
+ * it sat there. `exit` is the agent ending on its own, to its shell or with its
+ * terminal. Every other cause ended a pane the user had not closed.
+ */
+export type AgentSessionCloseCause =
+  | "user"
+  | "kill"
+  | "restart"
+  | "shutdown"
+  | "sleep"
+  | "exit"
+  | "bookmark";
+
+/**
+ * The trash a user close left: which incarnation of which terminal, and which
+ * trash of it, so Canopy's Trash keeps the run's row from its live window on.
+ */
+export interface AgentSessionTrashClose {
+  terminalId: string;
+  spawnedAt: number;
+  /** When the trash was due to let it go: it names which trash of the run this was. */
+  expiresAt: number;
+  /** When the user closed it. */
+  closedAt: number;
+  /** When the user took it out of Canopy's Trash. The record stays for resuming. */
+  removedAt?: number;
 }

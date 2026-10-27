@@ -706,6 +706,48 @@ export async function deleteBookmark(
 }
 
 /**
+ * Take user closes out of Canopy's Trash, each named by the terminal
+ * incarnation it closed. The records stay, for the Resume Sessions palette;
+ * only their trash says it was removed. Returns how many it took out. Shares
+ * the write queue.
+ */
+export async function removeFromCanopyTrash(
+  closes: ReadonlyArray<{ terminalId: string; spawnedAt: number }>,
+  userData?: string
+): Promise<number> {
+  const filePath = getSessionHistoryPath(userData);
+  if (!filePath || closes.length === 0) return 0;
+
+  return enqueueWrite(async () => {
+    const existing = await readSessionHistoryResult(userData);
+    if (existing.status === "unreadable") {
+      throw unreadableJournalError(existing.error);
+    }
+    const now = Date.now();
+    let removed = 0;
+    const next = existing.records.map((r) => {
+      const trash = r.trash;
+      if (!trash || trash.removedAt !== undefined) return r;
+      if (
+        !closes.some(
+          (close) => close.terminalId === trash.terminalId && close.spawnedAt === trash.spawnedAt
+        )
+      ) {
+        return r;
+      }
+      removed += 1;
+      return { ...r, trash: { ...trash, removedAt: now } };
+    });
+    if (removed === 0) return 0;
+    await resilientAtomicWriteFile(filePath, JSON.stringify(next, null, 2), "utf-8", {
+      mode: OWNER_RW_FILE_MODE,
+    });
+    refreshCacheAfterWrite(filePath, next);
+    return removed;
+  });
+}
+
+/**
  * List the user's bookmarks, newest-first by `bookmarkedAt` (#11288). Read-only
  * and project-scoped when `projectId` is supplied. Runs eviction so the result
  * is deduped and any carried-forward bookmark is reflected; bookmarks are exempt

@@ -215,6 +215,7 @@ function emitCapture(
       ? { agentLaunchFlags: terminal.agentLaunchFlags, agentModelId: terminal.agentModelId }
       : {}),
     cwd: cwd || undefined,
+    closedBy: "exit" as const,
   };
 
   // Main's ledger journals at most once per (terminalId, generation), whatever

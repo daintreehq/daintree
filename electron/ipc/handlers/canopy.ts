@@ -32,6 +32,7 @@ import { readPluginTerminalScreen } from "../../services/plugin/pluginTerminalSc
 import { CANOPY_HISTORY_ROWS, CanopyService } from "../../services/canopy/CanopyService.js";
 import { CanopyTrashLedger } from "../../services/canopy/canopyTrashLedger.js";
 import { getLifecycleLedger } from "../../services/pty/lifecycleLedger.js";
+import { attributeClose } from "../../services/pty/closeAttribution.js";
 import { getAgentAvailabilityStore } from "../../services/AgentAvailabilityStore.js";
 import { searchScreens } from "../../services/canopy/canopyScreenSearch.js";
 import { isCanopyMode, readCanopyMode } from "../../services/canopy/canopyMode.js";
@@ -965,6 +966,7 @@ function endOnHost(runId: string, info: HostTerminalRecord): void {
         agentLaunchFlags: info.agentLaunchFlags,
         agentModelId: info.agentModelId,
         cwd: info.cwd,
+        ...attributeClose(info, "kill"),
       },
     });
   })().catch((error: unknown) => {

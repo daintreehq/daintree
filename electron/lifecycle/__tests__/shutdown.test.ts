@@ -1503,6 +1503,9 @@ describe("registerShutdownHandler", () => {
       expect(record.agentId).toBe("claude");
       expect(record.cwd).toBe("/repo");
       expect(record.branch).toBe("feature/x");
+      // Quitting closed nothing the user had: never a Trash entry.
+      expect(record.closedBy).toBe("shutdown");
+      expect(record.trash).toBeUndefined();
     });
 
     it("stops the memory-leak auto-restart before any terminal is snapshotted or killed (#14703)", async () => {

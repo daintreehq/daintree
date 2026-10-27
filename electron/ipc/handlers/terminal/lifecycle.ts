@@ -220,6 +220,7 @@ import {
   journalAgentSessionRecord,
 } from "../../../services/pty/agentSessionJournal.js";
 import { getLifecycleLedger } from "../../../services/pty/lifecycleLedger.js";
+import { attributeClose } from "../../../services/pty/closeAttribution.js";
 import type { WorkspaceClient } from "../../../services/WorkspaceClient.js";
 import { getDefaultShell, waitForWindowsShell } from "../../../services/pty/terminalShell.js";
 import {
@@ -1374,7 +1375,8 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
   const persistCloseRecord = async (
     info: Awaited<ReturnType<typeof ptyClient.getTerminalAsync>>,
     sessionId: string | null,
-    generation?: number
+    generation: number | undefined,
+    cause: "kill" | "restart"
   ): Promise<void> => {
     if (!sessionId || !info?.launchAgentId) return;
     // The Daintree Assistant's overlay terminal must never surface in the
@@ -1405,6 +1407,8 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
           agentModelId: info.agentModelId,
           cwd: info.cwd ?? undefined,
           branch,
+          // A pane in the trash was the user's close, whatever ended it here.
+          ...attributeClose(info, cause),
         },
         { terminalId: info.id, generation }
       );
@@ -1433,7 +1437,12 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         // to the incarnation that produced it, not the successor.
         const generation = getLifecycleLedger().currentGeneration(id);
         const sessionId = await ptyClient.gracefulKill(id);
-        await persistCloseRecord(info, sessionId, generation);
+        await persistCloseRecord(
+          info,
+          sessionId,
+          generation,
+          options?.forRestart === true ? "restart" : "kill"
+        );
       } else {
         ptyClient.kill(id);
       }
@@ -1454,7 +1463,12 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     const info = await ptyClient.getTerminalAsync(id).catch(() => null);
     const generation = getLifecycleLedger().currentGeneration(id);
     const sessionId = await ptyClient.gracefulKill(id);
-    await persistCloseRecord(info, sessionId, generation);
+    await persistCloseRecord(
+      info,
+      sessionId,
+      generation,
+      options?.forRestart === true ? "restart" : "kill"
+    );
     return sessionId;
   };
 
@@ -1643,6 +1657,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
           cwd: info.cwd ?? undefined,
           branch,
           bookmark,
+          closedBy: "bookmark",
         },
         { terminalId, generation }
       );
