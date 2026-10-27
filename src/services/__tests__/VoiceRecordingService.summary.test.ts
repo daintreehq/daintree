@@ -769,9 +769,13 @@ describe("VoiceRecordingService — session summary (#14617)", () => {
     ]);
   });
 
-  it("waits for the correction and records how it went", async () => {
+  it("waits for the correction and records how it went, part by part", async () => {
     const harness = setupGlobals({ correctionEnabled: true });
-    const correction = deferred<{ action: string; correctedText: string }>();
+    const correction = deferred<{
+      action: string;
+      correctedText: string;
+      timing: { prepMs: number; requestMs: number };
+    }>();
     harness.voiceInput.correct.mockReturnValue(correction.promise);
     const { service, summaries } = await load();
     const sessionId = await startLive(harness, service);
@@ -779,20 +783,28 @@ describe("VoiceRecordingService — session summary (#14617)", () => {
     harness.paintFrames();
     await service.stop("Dictation stopped.", { reason: "user" });
 
-    // Only the correction is left to wait on.
+    // Only the correction is left to wait on. Its passage names the session,
+    // whose context main read while it ran.
     expect(harness.voiceInput.correct).toHaveBeenCalledTimes(1);
+    expect(harness.voiceInput.correct).toHaveBeenCalledWith(expect.objectContaining({ sessionId }));
     expect(summaries()).toHaveLength(0);
     correction.resolve({
       action: "replace",
       correctedText: "Deploy the canopy branch to staging.",
+      timing: { prepMs: 14.2, requestMs: 1380.7 },
     });
     await flushPromises();
     harness.paintFrames();
 
     expect(draftState.draft).toBe("Deploy the canopy branch to staging.");
     expect(summaries()).toHaveLength(1);
-    expect(summaries()[0]).toMatchObject({ correction: "applied" });
+    expect(summaries()[0]).toMatchObject({
+      correction: "applied",
+      correctionPrepMs: 14,
+      correctionRequestMs: 1381,
+    });
     expect(typeof summaries()[0]!.correctionMs).toBe("number");
+    expect(typeof summaries()[0]!.correctionApplyMs).toBe("number");
     expect(JSON.stringify(summaries()[0])).not.toContain("canopy");
   });
 
@@ -810,6 +822,9 @@ describe("VoiceRecordingService — session summary (#14617)", () => {
     await service.stop("Dictation stopped.", { reason: "user" });
     await flushPromises();
 
-    expect(summaries()).toMatchObject([{ correction: "failed" }]);
+    // A reply that didn't say leaves main's parts unknown, not zero.
+    expect(summaries()).toMatchObject([
+      { correction: "failed", correctionPrepMs: null, correctionRequestMs: null },
+    ]);
   });
 });

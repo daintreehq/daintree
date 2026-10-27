@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { z } from "zod";
 import {
+  VoiceCorrectionTimingSchema,
   VoiceSessionReportSchema,
   VoiceSessionSummarySchema,
   type VoiceSessionReport,
@@ -40,8 +41,11 @@ const summary: VoiceSessionSummary = {
   firstTextMs: 2_100,
   stopRequestedMs: 6_000,
   stopSettledMs: 700,
-  correctionMs: null,
-  correction: "none",
+  correctionMs: 2_000,
+  correctionPrepMs: 30,
+  correctionRequestMs: 1_400,
+  correctionApplyMs: 6,
+  correction: "applied",
   droppedQueued: 0,
   charsCommitted: 42,
   audioNoText: false,
@@ -51,6 +55,7 @@ describe("voice session summary schema", () => {
   it.each([
     ["summary", VoiceSessionSummarySchema],
     ["report", VoiceSessionReportSchema],
+    ["correction timing", VoiceCorrectionTimingSchema],
   ])("%s holds only numbers, enums and flags", (_name, schema) => {
     for (const [field, type] of Object.entries(schema.shape)) {
       expect([field, leafType(type)]).toEqual([
@@ -79,6 +84,19 @@ describe("voice session summary schema", () => {
     expect(VoiceSessionReportSchema.safeParse({ ...report, provider: "Claude" }).success).toBe(
       false
     );
+  });
+
+  it("takes main's correction timing as durations alone", () => {
+    expect(VoiceCorrectionTimingSchema.safeParse({ prepMs: 12.5, requestMs: null }).success).toBe(
+      true
+    );
+    for (const bad of [
+      { prepMs: "fix the bug", requestMs: null },
+      { prepMs: -1, requestMs: 900 },
+      { prepMs: 3, requestMs: 900, prompt: "fix the bug" },
+    ]) {
+      expect(VoiceCorrectionTimingSchema.safeParse(bad).success).toBe(false);
+    }
   });
 
   it("accepts a real summary and a report", () => {

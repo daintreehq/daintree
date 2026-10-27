@@ -88,6 +88,8 @@ vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
 
 vi.mock("../../../services/VoiceCorrectionService.js", () => ({
   VoiceCorrectionService: function VoiceCorrectionService(this: Record<string, unknown>) {
+    this.warm = () => Promise.resolve();
+    this.preconnect = () => {};
     this.correct = function (request: unknown, settings: unknown) {
       shared.correctionCalls.push({ request, settings });
       if (shared.correctionFailed) {
@@ -306,7 +308,12 @@ describe("voiceInput — IPC handler surface", () => {
       { rawText: "helo world", recentContext: ["previous sentence"] }
     );
 
-    expect(result).toEqual({ action: "replace", correctedText: "hello world" });
+    // The mocked service sent nothing, so main's share is all preparation.
+    expect(result).toEqual({
+      action: "replace",
+      correctedText: "hello world",
+      timing: { prepMs: expect.any(Number), requestMs: null },
+    });
     expect(shared.correctionCalls).toHaveLength(1);
     expect(shared.correctionCalls[0]?.request).toMatchObject({
       rawText: "helo world",
@@ -328,7 +335,12 @@ describe("voiceInput — IPC handler surface", () => {
       { rawText: "helo world" }
     );
 
-    expect(result).toEqual({ action: "no_change", correctedText: "helo world", failed: true });
+    expect(result).toEqual({
+      action: "no_change",
+      correctedText: "helo world",
+      failed: true,
+      timing: { prepMs: expect.any(Number), requestMs: null },
+    });
   });
 
   it("correct rejects malformed payloads before invoking correction", async () => {

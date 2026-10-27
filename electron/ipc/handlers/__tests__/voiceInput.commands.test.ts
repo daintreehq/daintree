@@ -56,6 +56,11 @@ const shared = vi.hoisted(() => ({
   resolveCalls: [] as Array<{ terminalId: string | undefined; timeoutMs: number }>,
   /** The stored dictionary, heard-as rules included. */
   dictionary: [] as unknown[],
+  /** Settings each prompt warm-up was asked to send. */
+  warmCalls: [] as unknown[],
+  preconnects: 0,
+  /** Stored settings laid over the defaults below. */
+  settingsOverride: {} as Record<string, unknown>,
 }));
 
 vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
@@ -108,6 +113,13 @@ vi.mock("../../../services/VoiceCorrectionService.js", () => ({
       return Promise.resolve([]);
     };
     this.setSessionSignal = function () {};
+    this.warm = function (settings: unknown) {
+      shared.warmCalls.push(settings);
+      return Promise.resolve();
+    };
+    this.preconnect = function () {
+      shared.preconnects++;
+    };
   },
 }));
 
@@ -158,6 +170,7 @@ vi.mock("../../../store.js", () => ({
           ...(shared.provider === "deepgram"
             ? { transcriptionProvider: "deepgram", deepgramApiKey: "dg-test" }
             : {}),
+          ...shared.settingsOverride,
         };
       }
       return undefined;
@@ -304,6 +317,9 @@ describe("voiceInput — the target agent's commands", () => {
     shared.provider = "openai";
     shared.commandTarget = claudeTarget();
     shared.dictionary = [];
+    shared.warmCalls = [];
+    shared.preconnects = 0;
+    shared.settingsOverride = {};
 
     const win = buildMainWindow();
     cleanup = registerVoiceInputHandlers({
@@ -467,5 +483,175 @@ describe("voiceInput — the target agent's commands", () => {
     await handleCorrect(fakeEvent, { rawText: "compact the conversation" });
     expect(shared.correctionCalls[0]?.request).toMatchObject({ startsPrompt: false });
     expect(shared.correctionCalls[0]?.settings).not.toHaveProperty("commandTarget");
+  });
+});
+
+describe("voiceInput — cleanup context read while the dictation runs (#14771)", () => {
+  let cleanup: () => void;
+
+  type CorrectHandler = (e: unknown, request: unknown) => Promise<unknown>;
+
+  async function start(intent?: "rewrite") {
+    const handleStart = getHandler("voice-input:start") as StartHandler;
+    await handleStart(fakeEvent, nextSessionId(), {
+      terminalId: TERMINAL,
+      ...(intent ? { intent } : {}),
+    });
+  }
+
+  function stop() {
+    return (getHandler("voice-input:stop") as (e: unknown, id: string) => Promise<unknown>)(
+      fakeEvent,
+      currentSessionId
+    );
+  }
+
+  const flushPromises = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    shared.transcriptionEventCallback = null;
+    shared.correctionCalls = [];
+    shared.keytermCalls = [];
+    shared.resolveCalls = [];
+    shared.startCalls = [];
+    shared.startContexts = [];
+    shared.assembleKeyterms = null;
+    shared.provider = "openai";
+    shared.commandTarget = claudeTarget();
+    shared.dictionary = [];
+    shared.warmCalls = [];
+    shared.preconnects = 0;
+    shared.settingsOverride = {};
+
+    const win = buildMainWindow();
+    cleanup = registerVoiceInputHandlers({
+      mainWindow: win as unknown as Electron.BrowserWindow,
+      ptyClient: {
+        hasTerminal: (id: string) => id === TERMINAL,
+        getTerminalProjectId: () => null,
+      },
+    } as unknown as Parameters<typeof registerVoiceInputHandlers>[0]);
+  });
+
+  afterEach(() => {
+    cleanup?.();
+    vi.useRealTimers();
+  });
+
+  it("finds the commands for cleanup at the start, so a stopped passage goes straight out", async () => {
+    await start();
+    const atStart = shared.resolveCalls.length;
+    // One lookup for the keyterms, one with the correction's budget.
+    expect(new Set(shared.resolveCalls.map((call) => call.timeoutMs)).size).toBe(2);
+    await stop();
+
+    const handleCorrect = getHandler("voice-input:correct") as CorrectHandler;
+    await handleCorrect(fakeEvent, {
+      rawText: "compact the conversation",
+      terminalId: TERMINAL,
+      sessionId: currentSessionId,
+    });
+    expect(shared.resolveCalls).toHaveLength(atStart);
+    expect(shared.correctionCalls[0]?.settings).toMatchObject({
+      commandTarget: { agentId: "claude" },
+    });
+  });
+
+  it("reads the context at the passage for one that names no session, or another's", async () => {
+    await start();
+    await stop();
+    const handleCorrect = getHandler("voice-input:correct") as CorrectHandler;
+
+    const before = shared.resolveCalls.length;
+    await handleCorrect(fakeEvent, { rawText: "compact it", terminalId: TERMINAL });
+    expect(shared.resolveCalls).toHaveLength(before + 1);
+
+    await handleCorrect(fakeEvent, {
+      rawText: "compact it",
+      terminalId: TERMINAL,
+      sessionId: "someone-elses",
+    });
+    expect(shared.resolveCalls).toHaveLength(before + 2);
+
+    // Another view naming this session gets none of it.
+    await handleCorrect(
+      { ...fakeEvent, sender: { ...fakeEvent.sender, id: 2 } },
+      { rawText: "compact it", terminalId: TERMINAL, sessionId: currentSessionId }
+    );
+    expect(shared.resolveCalls).toHaveLength(before + 3);
+  });
+
+  it("warms the very prompt the passage then sends", async () => {
+    await start();
+    await flushPromises();
+    expect(shared.warmCalls).toHaveLength(1);
+    await stop();
+
+    const handleCorrect = getHandler("voice-input:correct") as CorrectHandler;
+    await handleCorrect(fakeEvent, {
+      rawText: "compact the conversation",
+      terminalId: TERMINAL,
+      sessionId: currentSessionId,
+    });
+    expect(shared.warmCalls[0]).toEqual(shared.correctionCalls[0]?.settings);
+  });
+
+  it("keeps the prompt warm while the dictation runs, and stops with it", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    await start();
+    await flushPromises();
+    expect(shared.warmCalls).toHaveLength(1);
+
+    vi.advanceTimersByTime(5 * 60_000);
+    await flushPromises();
+    const whileRunning = shared.warmCalls.length;
+    expect(whileRunning).toBeGreaterThan(1);
+
+    await stop();
+    vi.advanceTimersByTime(30 * 60_000);
+    await flushPromises();
+    expect(shared.warmCalls).toHaveLength(whileRunning);
+  });
+
+  it("stops warming once cleanup is turned off mid-dictation", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    await start();
+    await flushPromises();
+    expect(shared.warmCalls).toHaveLength(1);
+
+    shared.settingsOverride = { correctionEnabled: false };
+    vi.advanceTimersByTime(30 * 60_000);
+    await flushPromises();
+    expect(shared.warmCalls).toHaveLength(1);
+  });
+
+  it("opens a socket at the stop for the passage to come", async () => {
+    await start();
+    expect(shared.preconnects).toBe(0);
+    await stop();
+    expect(shared.preconnects).toBe(1);
+  });
+
+  it.each([
+    ["cleanup off", { correctionEnabled: false }],
+    ["no OpenAI key", { openaiApiKey: "" }],
+  ])("does nothing extra with %s", async (_case, override) => {
+    shared.settingsOverride = override;
+    await start();
+    await flushPromises();
+    await stop();
+    expect(shared.warmCalls).toHaveLength(0);
+    expect(shared.preconnects).toBe(0);
+    expect(shared.resolveCalls).toHaveLength(1);
+  });
+
+  it("does nothing extra for a rewrite, which is never cleaned up", async () => {
+    await start("rewrite");
+    await flushPromises();
+    await stop();
+    expect(shared.warmCalls).toHaveLength(0);
+    expect(shared.preconnects).toBe(0);
+    expect(shared.resolveCalls).toHaveLength(1);
   });
 });

@@ -1543,3 +1543,238 @@ describe("VoiceCorrectionService.rewrite", () => {
     expect((fetchMock.mock.calls[0]![1].signal as AbortSignal).aborted).toBe(false);
   });
 });
+
+describe("VoiceCorrectionService timing and warm-up", () => {
+  let now = 0;
+
+  function drainedResponse(ok = true, status = 200) {
+    return {
+      ok,
+      status,
+      arrayBuffer: vi.fn(async () => new ArrayBuffer(0)),
+      json: async () => ({}),
+    } as unknown as Response & { arrayBuffer: ReturnType<typeof vi.fn> };
+  }
+
+  function bodyOf(call: unknown[] | undefined): Record<string, unknown> {
+    return JSON.parse((call![1] as RequestInit).body as string) as Record<string, unknown>;
+  }
+
+  const SETTINGS = {
+    ...BASE_SETTINGS,
+    customDictionary: ["Daintree"],
+    knownNames: ["feature-auth"],
+    projectName: "daintree",
+  };
+
+  beforeEach(() => {
+    now = 1_000;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("reports when the request went out and how long its reply took to read", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        now += 900;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => {
+            now += 100;
+            return {
+              output_text: JSON.stringify({
+                action: "replace",
+                corrected_text: "Fix the parser.",
+                confidence: "high",
+              }),
+            };
+          },
+        } as unknown as Response;
+      })
+    );
+
+    const result = await new VoiceCorrectionService().correct(
+      { rawText: "fix the parsr" },
+      BASE_SETTINGS
+    );
+    expect(result.roundTrip).toEqual({ sentAt: 1_000, ms: 1_000 });
+  });
+
+  it("times a request that failed as well", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        now += 300;
+        throw new TypeError("fetch failed");
+      })
+    );
+
+    const result = await new VoiceCorrectionService().correct(
+      { rawText: "fix the parsr" },
+      BASE_SETTINGS
+    );
+    expect(result.failed).toBe(true);
+    expect(result.roundTrip).toEqual({ sentAt: 1_000, ms: 300 });
+  });
+
+  it("reports no round trip for a passage it never sent", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const svc = new VoiceCorrectionService();
+
+    expect((await svc.correct({ rawText: "   " }, BASE_SETTINGS)).roundTrip).toBeUndefined();
+    expect(
+      (await svc.correct({ rawText: "word ".repeat(5_000) }, BASE_SETTINGS)).roundTrip
+    ).toBeUndefined();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("warms with the passage's own developer message and nothing dictated or drafted", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(drainedResponse())
+      .mockResolvedValueOnce(
+        makeFetchResponse({ action: "replace", corrected_text: "Fix the parser." })
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const svc = new VoiceCorrectionService();
+
+    await svc.warm(SETTINGS);
+    await svc.correct({ rawText: "fix the parsr", recentContext: ["draft sentinel"] }, SETTINGS);
+
+    const warm = bodyOf(fetchMock.mock.calls[0]);
+    const passage = bodyOf(fetchMock.mock.calls[1]);
+    const [warmDeveloper, warmUser] = warm.input as Array<{ role: string; content: string }>;
+    const [passageDeveloper] = passage.input as Array<{ role: string; content: string }>;
+    expect(warmDeveloper).toEqual(passageDeveloper);
+    expect(warm).toMatchObject({
+      model: passage.model,
+      prompt_cache_key: passage.prompt_cache_key,
+      reasoning: passage.reasoning,
+      text: passage.text,
+      store: false,
+    });
+    expect(warm.max_output_tokens).toBeLessThan(passage.max_output_tokens as number);
+    expect(warmUser!.content).not.toMatch(/parsr|parser|draft sentinel/);
+    // Read to the end, so its socket can carry the passage.
+    expect((await fetchMock.mock.results[0]!.value).arrayBuffer).toHaveBeenCalled();
+  });
+
+  it("leaves a prompt alone that went out in the last few minutes", async () => {
+    const fetchMock = vi.fn(async () => drainedResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    const svc = new VoiceCorrectionService();
+
+    await Promise.all([svc.warm(SETTINGS), svc.warm(SETTINGS)]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    now += 60_000;
+    await svc.warm(SETTINGS);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // Long enough that OpenAI may have dropped it.
+    now += 10 * 60_000;
+    await svc.warm(SETTINGS);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("counts a passage that went out as the prompt's use", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(makeFetchResponse({ action: "no_change", corrected_text: "" }))
+      .mockResolvedValue(drainedResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    const svc = new VoiceCorrectionService();
+
+    await svc.correct({ rawText: "fix the parser" }, SETTINGS);
+    await svc.warm(SETTINGS);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("warms each account and prompt on its own", async () => {
+    const fetchMock = vi.fn(async () => drainedResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    const svc = new VoiceCorrectionService();
+
+    await svc.warm(SETTINGS);
+    await svc.warm({ ...SETTINGS, apiKey: "sk-other" });
+    // Instructions are in the prompt but not its cache key.
+    await svc.warm({ ...SETTINGS, customInstructions: "British spelling" });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("doesn't count a warm-up that failed, and never throws", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(drainedResponse(false, 429))
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValue(drainedResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    const svc = new VoiceCorrectionService();
+
+    await expect(svc.warm(SETTINGS)).resolves.toBeUndefined();
+    await expect(svc.warm(SETTINGS)).resolves.toBeUndefined();
+    await svc.warm(SETTINGS);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("opens a socket ahead of the passage with no credentials and no text", async () => {
+    const fetchMock = vi.fn(async () => drainedResponse(false, 421));
+    vi.stubGlobal("fetch", fetchMock);
+    const svc = new VoiceCorrectionService();
+
+    svc.preconnect();
+    svc.preconnect();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(new URL(url).pathname).toBe("/");
+    expect(init.headers).toBeUndefined();
+    expect(init.body).toBeUndefined();
+    expect(init.redirect).toBe("manual");
+  });
+
+  it("sends the passage once a probe still opening its socket is done", async () => {
+    let finishProbe!: () => void;
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishProbe = () => resolve(drainedResponse(false, 421));
+          })
+      )
+      .mockResolvedValue(makeFetchResponse({ action: "replace", corrected_text: "Fix it." }));
+    vi.stubGlobal("fetch", fetchMock);
+    const svc = new VoiceCorrectionService();
+
+    svc.preconnect();
+    const result = svc.correct({ rawText: "fix it" }, BASE_SETTINGS);
+    await Promise.resolve();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    finishProbe();
+    expect((await result).confirmedText).toBe("Fix it.");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("doesn't hold the passage for a probe that hangs", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(() => new Promise(() => {}))
+      .mockResolvedValue(makeFetchResponse({ action: "replace", corrected_text: "Fix it." }));
+    vi.stubGlobal("fetch", fetchMock);
+    const svc = new VoiceCorrectionService();
+
+    svc.preconnect();
+    const result = svc.correct({ rawText: "fix it" }, BASE_SETTINGS);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect((await result).confirmedText).toBe("Fix it.");
+  });
+});

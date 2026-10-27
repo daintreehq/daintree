@@ -181,6 +181,54 @@ describe("VoiceSessionTimeline", () => {
     expect(logged()).toMatchObject({ correctionMs: 850, correction: "applied" });
   });
 
+  it("splits the correction into main's preparation, the round trip and applying it", () => {
+    const t = timeline();
+    t.mark("stopRequested");
+    t.beginCorrection();
+    t.finish("user");
+    clock = 2_450;
+    t.noteCorrectionReplies({ prepMs: 12.4, requestMs: 1_380.6 });
+    clock = 2_470;
+    t.endCorrection("applied");
+    expect(logged()).toMatchObject({
+      correctionMs: 1_470,
+      correctionPrepMs: 12,
+      correctionRequestMs: 1_381,
+      correctionApplyMs: 20,
+    });
+  });
+
+  it("keeps main's parts out when its timing carries anything but durations", () => {
+    const t = timeline();
+    t.beginCorrection();
+    t.finish("user");
+    clock = 1_900;
+    t.noteCorrectionReplies({ prepMs: 3, requestMs: 800, prompt: "fix the login bug" });
+    clock = 1_910;
+    t.endCorrection("applied");
+    const line = logged();
+    expect(line).toMatchObject({
+      correctionPrepMs: null,
+      correctionRequestMs: null,
+      correctionApplyMs: 10,
+    });
+    expect(JSON.stringify(line)).not.toMatch(/login/);
+  });
+
+  it("leaves the parts unknown for a correction that never heard back", () => {
+    const t = timeline();
+    t.beginCorrection();
+    t.finish("user");
+    clock = 1_300;
+    t.endCorrection("discarded");
+    expect(logged()).toMatchObject({
+      correctionMs: 300,
+      correctionPrepMs: null,
+      correctionRequestMs: null,
+      correctionApplyMs: null,
+    });
+  });
+
   it.each([
     ["text in an enum field", { ...report, provider: "fix the login bug" }],
     ["a field it doesn't declare", { ...report, keyterms: ["daintree"] }],
