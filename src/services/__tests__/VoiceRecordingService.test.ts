@@ -109,7 +109,7 @@ vi.mock("@/store/panelStore", () => {
 vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
 
 vi.mock("@/store/canopyStore", () => {
-  const state = { isOpen: false };
+  const state = { isOpen: false, revealReply: vi.fn(() => true) };
   const getState = () => state;
   return { useCanopyStore: Object.assign(getState, { getState }), __state: state };
 });
@@ -1698,6 +1698,7 @@ describe("VoiceRecordingService — Canopy's reply box (#14777)", () => {
     panelTitle: "Reply to Claude",
     surface: "canopy-reply" as const,
     terminalId: "run-1",
+    canopyRow: { runId: "run-1", hostScope: null },
   };
 
   type VoiceState = {
@@ -1713,7 +1714,7 @@ describe("VoiceRecordingService — Canopy's reply box (#14777)", () => {
 
   async function canopyState() {
     const canopy = await import("@/store/canopyStore");
-    if (!hasMockExport<"__state", { isOpen: boolean }>(canopy, "__state")) {
+    if (!hasMockExport<"__state", { isOpen: boolean; revealReply: Mock }>(canopy, "__state")) {
       throw new Error("canopyStore mock lacks __state");
     }
     return canopy.__state;
@@ -1817,8 +1818,10 @@ describe("VoiceRecordingService — Canopy's reply box (#14777)", () => {
     expect(focus).not.toHaveBeenCalled();
   });
 
-  it("brings a reply's session forward only while its row is still selected", async () => {
+  it("takes a reply's session back to its own row, wherever Canopy's selection went (#14778)", async () => {
     const { voiceRecordingService, registry, voice } = await arrange();
+    const canopy = await canopyState();
+    canopy.revealReply.mockClear();
     const projects = await import("@/store/projectStore");
     if (!hasMockExport<"__switchProject", Mock>(projects, "__switchProject")) {
       throw new Error("projectStore mock lacks __switchProject");
@@ -1833,18 +1836,56 @@ describe("VoiceRecordingService — Canopy's reply box (#14777)", () => {
       focus,
     }));
 
+    // Still selected: the keyboard goes straight into its reply.
     await expect(voiceRecordingService.focusActiveTarget()).resolves.toBe(true);
     expect(focus).toHaveBeenCalledTimes(1);
+    expect(canopy.revealReply).not.toHaveBeenCalled();
 
+    // Another row selected since: Canopy is asked for the dictated row.
     unregister();
-    registry.registerCanopyReplyDictation(() => ({
+    const unregisterOther = registry.registerCanopyReplyDictation(() => ({
       ok: true,
       target: { ...REPLY, panelId: "isolated-composer:run-2" },
       focus,
     }));
-    await expect(voiceRecordingService.focusActiveTarget()).resolves.toBe(false);
+    await expect(voiceRecordingService.focusActiveTarget()).resolves.toBe(true);
+    expect(canopy.revealReply).toHaveBeenLastCalledWith(REPLY.canopyRow);
+
+    // Canopy closed: the same, and the selected row it last had isn't asked.
+    unregisterOther();
+    canopy.isOpen = false;
+    await expect(voiceRecordingService.focusActiveTarget()).resolves.toBe(true);
+    expect(canopy.revealReply).toHaveBeenCalledTimes(2);
+    expect(canopy.revealReply).toHaveBeenLastCalledWith(REPLY.canopyRow);
+
     expect(focus).toHaveBeenCalledTimes(1);
     expect(projects.__switchProject).not.toHaveBeenCalled();
+  });
+
+  it("goes nowhere for a reply when Canopy can't open", async () => {
+    const { voiceRecordingService, voice } = await arrange();
+    const canopy = await canopyState();
+    canopy.isOpen = false;
+    canopy.revealReply.mockClear();
+    canopy.revealReply.mockReturnValueOnce(false);
+    voice.__state.status = "recording";
+    voice.__state.activeTarget = REPLY;
+
+    await expect(voiceRecordingService.focusActiveTarget()).resolves.toBe(false);
+    expect(canopy.revealReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("names the queued reply's row, not the session still draining, when the indicator is clicked", async () => {
+    const { voiceRecordingService, voice } = await arrange();
+    const canopy = await canopyState();
+    canopy.isOpen = false;
+    canopy.revealReply.mockClear();
+    voice.__state.status = "finishing";
+    voice.__state.activeTarget = { panelId: "grid-1" };
+    voice.__state.pendingTarget = REPLY;
+
+    await expect(voiceRecordingService.focusActiveTarget()).resolves.toBe(true);
+    expect(canopy.revealReply).toHaveBeenCalledWith(REPLY.canopyRow);
   });
 
   it("keeps a reply's session going when the grid's panels change", async () => {

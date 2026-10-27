@@ -15,6 +15,7 @@ import {
   CanopyCard,
   type CanopyCardHandle,
   type CanopyCardHandlers,
+  type CanopyPaneFocus,
 } from "../CanopyCard";
 
 interface ComposerProps {
@@ -37,13 +38,16 @@ interface TerminalProps {
   }) => void;
 }
 
-const { submit, sendKey, composerProps, terminalProps, composerFocus } = vi.hoisted(() => ({
-  submit: vi.fn(async (..._args: unknown[]) => {}),
-  sendKey: vi.fn(async (..._args: unknown[]) => {}),
-  composerFocus: vi.fn(),
-  composerProps: { current: null as ComposerProps | null },
-  terminalProps: { current: null as TerminalProps | null },
-}));
+const { submit, sendKey, composerProps, terminalProps, composerFocus, dictationFocus } = vi.hoisted(
+  () => ({
+    submit: vi.fn(async (..._args: unknown[]) => {}),
+    sendKey: vi.fn(async (..._args: unknown[]) => {}),
+    composerFocus: vi.fn(),
+    dictationFocus: vi.fn(),
+    composerProps: { current: null as ComposerProps | null },
+    terminalProps: { current: null as TerminalProps | null },
+  })
+);
 
 // The live terminal needs a canvas and a PTY host; here only what it is handed matters.
 vi.mock("../CanopyTerminal", () => ({
@@ -64,7 +68,10 @@ vi.mock("@/components/Terminal/HybridInputBar", async () => {
       composerProps.current = props;
       useImperativeHandle(props.ref, () => ({
         focus: composerFocus,
-        focusForDictation: composerFocus,
+        focusForDictation: () => {
+          composerFocus();
+          dictationFocus();
+        },
       }));
       return <div data-testid="composer" />;
     },
@@ -80,6 +87,7 @@ beforeEach(() => {
   submit.mockClear();
   sendKey.mockClear();
   composerFocus.mockClear();
+  dictationFocus.mockClear();
   composerProps.current = null;
   terminalProps.current = null;
 });
@@ -358,7 +366,13 @@ describe("CanopyCard", () => {
 
     function renderWithHandle(
       item: CanopyItem,
-      props: { otherHostId?: string; reconnecting?: boolean } = {}
+      props: {
+        otherHostId?: string;
+        hostScope?: string | null;
+        reconnecting?: boolean;
+        initialFocus?: CanopyPaneFocus;
+        onInitialFocusSettled?: () => void;
+      } = {}
     ) {
       const ref = createRef<CanopyCardHandle>();
       const view = render(
@@ -374,7 +388,49 @@ describe("CanopyCard", () => {
         panelTitle: "Reply to Fix flaky panel tests",
         surface: "canopy-reply",
         terminalId: "run-1",
+        canopyRow: { runId: "run-1", hostScope: null },
       });
+    });
+
+    it("names its row as the list has it, under the host the panel lists it on (#14778)", async () => {
+      renderWithHandle(itemFor("question", {}, "6.studio.run-1"), {
+        otherHostId: "studio",
+        hostScope: "*",
+      });
+      expect((await composer()).voiceTarget!.canopyRow).toEqual({
+        runId: "6.studio.run-1",
+        hostScope: "*",
+      });
+    });
+
+    it("hands the keyboard to the reply when sent back to it, whatever has focus as it opens (#14778)", async () => {
+      // The indicator that asked keeps focus as the pane mounts.
+      const indicator = document.createElement("button");
+      document.body.append(indicator);
+      indicator.focus();
+      const settled = vi.fn();
+      renderWithHandle(itemFor("question"), {
+        initialFocus: "dictation",
+        onInitialFocusSettled: settled,
+      });
+      const frame = () =>
+        act(async () => {
+          await new Promise((resolve) => requestAnimationFrame(resolve));
+        });
+      await composer();
+      await frame();
+      await frame();
+      expect(dictationFocus).toHaveBeenCalled();
+      expect(settled).not.toHaveBeenCalled();
+
+      // The user pressing anything is theirs: the handoff stands down and settles.
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "j" }));
+      expect(settled).toHaveBeenCalledTimes(1);
+      const stopped = dictationFocus.mock.calls.length;
+      await frame();
+      await frame();
+      expect(dictationFocus.mock.calls.length).toBe(stopped);
+      indicator.remove();
     });
 
     it("names no terminal for main to read when another project's view has the run", async () => {
