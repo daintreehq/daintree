@@ -15,6 +15,7 @@ export type PaletteId =
   | "resume-sessions"
   | "assistant-sessions"
   | "log-level"
+  | "recent-dictations"
   | "host-switcher";
 
 interface PaletteState {

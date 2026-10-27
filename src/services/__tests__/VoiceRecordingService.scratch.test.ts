@@ -204,10 +204,8 @@ describe("VoiceRecordingService — scratch that (#14636)", () => {
 
       expect(draft()).toBe("Existing. One.");
       expect(records()[0]!.utterances).toHaveLength(1);
-      expect(voiceStore.getState().panelBuffers[PANEL]?.completedSegments).toEqual([
-        "One.",
-        "Two.",
-      ]);
+      // The transcript recent dictations keep follows the draft (#14637).
+      expect(voiceStore.getState().panelBuffers[PANEL]?.completedSegments).toEqual(["One."]);
     }
   );
 
@@ -321,7 +319,8 @@ describe("VoiceRecordingService — scratch that (#14636)", () => {
 
     expect(draft()).toBe("Existing.");
     const buffer = voiceStore.getState().panelBuffers[PANEL];
-    expect(buffer?.completedSegments).toEqual(["One."]);
+    // Neither the command nor the words it scratched stay in the transcript.
+    expect(buffer?.completedSegments).toEqual([]);
     expect(buffer?.liveText).toBe("");
   });
 

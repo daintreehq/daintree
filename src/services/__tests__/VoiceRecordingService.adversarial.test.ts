@@ -128,6 +128,7 @@ const runtime = vi.hoisted(() => ({
     setSessionDraftStart: vi.fn<(panelId: string, length: number) => void>(),
     setActiveParagraphStart: vi.fn<(panelId: string, length: number) => void>(),
     resetParagraphState: vi.fn<(panelId: string) => void>(),
+    consumeCompletedSegments: vi.fn<(panelId: string) => string[]>(),
     clearPanelBuffer: vi.fn<(panelId: string) => void>(),
   },
   terminalInputFns: {
@@ -297,6 +298,12 @@ function resetRuntime(): void {
   });
   runtime.voiceFns.clearPanelBuffer.mockImplementation((panelId) => {
     delete runtime.voiceState.panelBuffers[panelId];
+  });
+  runtime.voiceFns.consumeCompletedSegments.mockImplementation((panelId) => {
+    const buffer = runtime.voiceState.panelBuffers[panelId];
+    const segments = buffer?.completedSegments ?? [];
+    if (buffer) buffer.completedSegments = [];
+    return segments;
   });
 
   runtime.terminalInputFns.getDraftInput.mockImplementation(

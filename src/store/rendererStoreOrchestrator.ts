@@ -16,6 +16,8 @@ import { useConsoleCaptureStore } from "./consoleCaptureStore";
 import { useResourceMonitoringStore } from "./resourceMonitoringStore";
 import { useVoiceRecordingStore } from "./voiceRecordingStore";
 import { subscribeDictationRangeTracking } from "./dictationRangeStore";
+import { subscribeRecentDictationsSync } from "@/services/recentDictations";
+import { trackComposerSurface } from "@/lib/composerSurface";
 import { usePluginPanelBadgeStore } from "./pluginPanelBadgeStore";
 import { usePluginPanelActivityStore } from "./pluginPanelActivityStore";
 import { usePluginPanelAttentionStore } from "./pluginPanelAttentionStore";
@@ -466,7 +468,12 @@ export function initStoreOrchestrator(): () => void {
             usePluginPanelToolbarStore.getState().clearPanel(removedId);
             usePluginPanelMenuStore.getState().removePanel(removedId);
             usePluginPanelOpenRequestStore.getState().clearPanel(removedId);
-            useVoiceRecordingStore.getState().clearPanelBuffer(removedId);
+            // A session still dictating into it is stopped by the voice
+            // service, which keeps its words for recovery (#14637) and clears
+            // the buffer once it has.
+            if (useVoiceRecordingStore.getState().activeTarget?.panelId !== removedId) {
+              useVoiceRecordingStore.getState().clearPanelBuffer(removedId);
+            }
             // Drop the dictation lock if it was pinned to this panel — panelIds
             // are ephemeral and a stale lock would silently break routing.
             useVoiceRecordingStore.getState().clearLockedTarget(removedId);
@@ -651,6 +658,11 @@ export function initStoreOrchestrator(): () => void {
   //     draft edit, and release them once the draft is sent or cleared
   //     (#14597). Disposing drops the records, since unmapped ranges go stale.
   disposables.add(toDisposable(subscribeDictationRangeTracking()));
+
+  // 5g. Recent dictations (#14637): main holds the app session's list; this
+  //     view keeps a copy current for the voice menu and palette.
+  disposables.add(toDisposable(subscribeRecentDictationsSync()));
+  disposables.add(toDisposable(trackComposerSurface()));
 
   // 5. Availability → agent-settings re-normalization: real availability data
   //    is the input to `normalizeAgentSelection`, so re-run normalization any

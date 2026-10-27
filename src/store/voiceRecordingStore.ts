@@ -16,6 +16,7 @@ import {
 } from "./persistence/persistWriteMerge";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 import type { VoiceMicDevice } from "@/services/voiceMicDevices";
+import { VOICE_PARAGRAPH_BREAK } from "@/lib/voiceTranscriptSegments";
 import type { RewriteSelection } from "@/services/voiceRewriteSelection";
 
 /**
@@ -197,6 +198,11 @@ interface VoiceTranscriptBuffer {
    * retires only its own preview. Unidentified deltas bypass it.
    */
   liveItems: VoiceLiveItem[];
+  /**
+   * The session's committed text so far, in order, with a
+   * {@link VOICE_PARAGRAPH_BREAK} entry where each paragraph ended. Reset when
+   * a session begins and read once by `consumeCompletedSegments` when it stops.
+   */
   completedSegments: string[];
   projectId?: string;
   /** Where the session's first dictated words start in the draft (-1 = none yet). */
@@ -343,6 +349,11 @@ interface VoiceRecordingState {
    * command that acts on the draft rather than adding to it.
    */
   completeSegment: (text: string, itemId?: string, options?: { discard?: boolean }) => void;
+  /**
+   * Drops the latest committed utterance, and the paragraph breaks after it,
+   * once "scratch that" has taken those words back out of the draft.
+   */
+  dropLastCompletedSegment: (panelId: string) => void;
   setCorrectionRanges: (panelId: string, ranges: VoiceCorrectionRange[]) => void;
   /**
    * Moves the panel's draft offsets at or after `at` by `delta`, for an edit
@@ -615,6 +626,22 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
           };
         }),
 
+      dropLastCompletedSegment: (panelId) =>
+        set((state) => {
+          const buffer = state.panelBuffers[panelId];
+          if (!buffer) return state;
+          const segments = buffer.completedSegments;
+          let end = segments.length;
+          while (end > 0 && segments[end - 1] === VOICE_PARAGRAPH_BREAK) end--;
+          if (end === 0) return state;
+          return {
+            panelBuffers: {
+              ...state.panelBuffers,
+              [panelId]: { ...buffer, completedSegments: segments.slice(0, end - 1) },
+            },
+          };
+        }),
+
       setCorrectionRanges: (panelId, ranges) =>
         set((state) => {
           const buffer = getBuffer(state.panelBuffers, panelId);
@@ -670,7 +697,12 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
                 // Identified items still streaming belong to later segments —
                 // a paragraph break inside an earlier item must not erase them.
                 liveText: joinLiveItems(buffer.liveItems),
-                completedSegments: [],
+                // The session keeps its earlier paragraphs for the history
+                // (#14637); "new paragraph" arrives as two breaks in a row.
+                completedSegments:
+                  buffer.completedSegments.length > 0
+                    ? [...buffer.completedSegments, VOICE_PARAGRAPH_BREAK]
+                    : buffer.completedSegments,
                 activeParagraphStart: -1,
                 transcriptPhase: (buffer.liveItems.some((item) => item.text)
                   ? "interim"

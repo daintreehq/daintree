@@ -562,6 +562,7 @@ export {
 
 // Voice types - canonical phase model for voice session and transcript lifecycle
 export type {
+  RecentDictation,
   VoiceInputError,
   VoiceInputErrorSeverity,
   VoiceLiveSessionUpdate,
@@ -573,7 +574,7 @@ export type {
   VoiceStartOutcome,
   VoiceTranscriptPhase,
 } from "./voice.js";
-export { isActiveVoiceSession } from "./voice.js";
+export { isActiveVoiceSession, MAX_RECENT_DICTATIONS } from "./voice.js";
 
 // Workspace Host types - IPC protocol for workspace management
 export type {

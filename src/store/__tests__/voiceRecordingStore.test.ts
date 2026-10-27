@@ -5,6 +5,7 @@ import {
   useVoiceRecordingStore,
   type RecentDictationTarget,
 } from "../voiceRecordingStore";
+import { joinCompletedSegments } from "@/lib/voiceTranscriptSegments";
 
 const PANEL_ID = "panel-1";
 const TARGET = { panelId: PANEL_ID };
@@ -465,6 +466,41 @@ describe("voiceRecordingStore — identified items (#13109)", () => {
     expect(buffer().liveItems).toEqual([]);
     store.appendDelta("fresh", "item-b");
     expect(buffer().liveText).toBe("fresh");
+  });
+
+  it("a paragraph reset keeps the session's earlier text behind its break (#14637)", () => {
+    const store = useVoiceRecordingStore.getState();
+    store.completeSegment("First line.", "item-a");
+    store.resetParagraphState(PANEL_ID);
+    store.completeSegment("Second.", "item-b");
+    // "New paragraph" reaches the store as two breaks in a row.
+    store.resetParagraphState(PANEL_ID);
+    store.resetParagraphState(PANEL_ID);
+    store.completeSegment("Third.", "item-c");
+    store.resetParagraphState(PANEL_ID);
+    expect(joinCompletedSegments(store.consumeCompletedSegments(PANEL_ID))).toBe(
+      "First line.\nSecond.\n\nThird."
+    );
+    expect(buffer().completedSegments).toEqual([]);
+  });
+
+  it("dropping the last segment takes the breaks after it, and only that segment", () => {
+    const store = useVoiceRecordingStore.getState();
+    store.completeSegment("Keep.", "item-a");
+    store.resetParagraphState(PANEL_ID);
+    store.completeSegment("Scratched.", "item-b");
+    store.resetParagraphState(PANEL_ID);
+    store.dropLastCompletedSegment(PANEL_ID);
+    expect(buffer().completedSegments).toEqual(["Keep.", "\n"]);
+    store.dropLastCompletedSegment(PANEL_ID);
+    store.dropLastCompletedSegment(PANEL_ID);
+    expect(buffer().completedSegments).toEqual([]);
+  });
+
+  it("a paragraph reset before any text records no break", () => {
+    const store = useVoiceRecordingStore.getState();
+    store.resetParagraphState(PANEL_ID);
+    expect(buffer().completedSegments).toEqual([]);
   });
 
   it("paragraph reset preserves other items' interim text", () => {

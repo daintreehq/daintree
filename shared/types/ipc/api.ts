@@ -1263,6 +1263,10 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   };
   // getEnabled comes from GeneratedElectronAPI; onSupportChanged is a
   // renderer-only subscription.
+  recentDictations: GeneratedElectronAPI["recentDictations"] & {
+    /** Fires when any view records or settles a dictation; carries no text, so re-read the list. */
+    onChanged(callback: () => void): () => void;
+  };
   accessibility: GeneratedElectronAPI["accessibility"] & {
     onSupportChanged(callback: (data: { enabled: boolean }) => void): () => void;
   };

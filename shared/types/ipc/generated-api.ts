@@ -1485,6 +1485,17 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["project-theme:set-theme"]["args"]
     ): Promise<IpcInvokeMap["project-theme:set-theme"]["result"]>;
   };
+  recentDictations: {
+    list(
+      ...args: IpcInvokeMap["recent-dictations:list"]["args"]
+    ): Promise<IpcInvokeMap["recent-dictations:list"]["result"]>;
+    record(
+      ...args: IpcInvokeMap["recent-dictations:record"]["args"]
+    ): Promise<IpcInvokeMap["recent-dictations:record"]["result"]>;
+    setCorrectedText(
+      ...args: IpcInvokeMap["recent-dictations:set-corrected-text"]["args"]
+    ): Promise<IpcInvokeMap["recent-dictations:set-corrected-text"]["result"]>;
+  };
   remoteHosts: {
     add(
       ...args: IpcInvokeMap["remote-hosts:add"]["args"]

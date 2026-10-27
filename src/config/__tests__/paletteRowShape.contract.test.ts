@@ -185,6 +185,7 @@ const PALETTE_FILES = [
   "src/components/PanelPalette/PanelPalette.tsx",
   "src/components/Terminal/PromptHistoryPalette.tsx",
   "src/components/Terminal/ResumeSessionsPalette.tsx",
+  "src/components/Terminal/RecentDictationsPalette.tsx",
   "src/components/Terminal/SendToAgentPalette.tsx",
   "src/components/Worktree/IssuePickerDialog.tsx",
   "src/components/Plugin/PluginQuickPickDialog.tsx",
@@ -194,6 +195,7 @@ const PALETTE_FILES = [
 const ALWAYS_TWO_LINE_FILES = [
   "src/components/Worktree/WorktreePalette.tsx",
   "src/components/TerminalPalette/NewTerminalPalette.tsx",
+  "src/components/Terminal/RecentDictationsPalette.tsx",
 ];
 
 /** Palettes whose rows show a second line only when the row has one to show. */

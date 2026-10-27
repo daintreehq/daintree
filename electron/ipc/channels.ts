@@ -931,6 +931,10 @@ export const CHANNELS = {
   VOICE_INPUT_STOP_REQUESTED: "voice-input:stop-requested",
   VOICE_INPUT_REVEAL_LIVE: "voice-input:reveal-live",
   VOICE_INPUT_REVEAL_REQUESTED: "voice-input:reveal-requested",
+  RECENT_DICTATIONS_RECORD: "recent-dictations:record",
+  RECENT_DICTATIONS_SET_CORRECTED_TEXT: "recent-dictations:set-corrected-text",
+  RECENT_DICTATIONS_LIST: "recent-dictations:list",
+  RECENT_DICTATIONS_CHANGED: "recent-dictations:changed",
 
   // Help assistant settings channels
   HELP_ASSISTANT_GET_SETTINGS: "help-assistant:get-settings",

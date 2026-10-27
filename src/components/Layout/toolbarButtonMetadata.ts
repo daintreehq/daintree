@@ -89,7 +89,7 @@ export const TOOLBAR_BUTTON_METADATA: Partial<Record<AnyToolbarButtonId, Toolbar
   "voice-recording": {
     label: "Voice recording",
     icon: Mic,
-    description: "Persistent dictation indicator shown while recording is active",
+    description: "Shows dictation while it records, then this session's dictations to recover",
   },
   "forge-stats": {
     label: "Repository activity",

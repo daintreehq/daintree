@@ -48,6 +48,7 @@ import {
   LazyProjectSwitcherPalette,
   LazyThemePalette,
   LazyResumeSessionsPalette,
+  LazyRecentDictationsPalette,
   LazyLogLevelPalette,
   LazyActionPalette,
   LazyWorktreeOverviewModal,
@@ -111,6 +112,8 @@ interface ModalHostLayerProps {
   closeThemePalette: () => void;
   isResumeSessionsPaletteOpen: boolean;
   shouldMountResumeSessionsPalette: boolean;
+  isRecentDictationsPaletteOpen: boolean;
+  shouldMountRecentDictationsPalette: boolean;
   isLogLevelPaletteOpen: boolean;
   shouldMountLogLevelPalette: boolean;
   closeLogLevelPalette: () => void;
@@ -210,6 +213,8 @@ export function ModalHostLayer({
   closeThemePalette,
   isResumeSessionsPaletteOpen,
   shouldMountResumeSessionsPalette,
+  isRecentDictationsPaletteOpen,
+  shouldMountRecentDictationsPalette,
   isLogLevelPaletteOpen,
   shouldMountLogLevelPalette,
   closeLogLevelPalette,
@@ -606,6 +611,18 @@ export function ModalHostLayer({
         {shouldMountResumeSessionsPalette && (
           <Suspense fallback={null}>
             <LazyResumeSessionsPalette />
+          </Suspense>
+        )}
+      </ErrorBoundary>
+
+      <ErrorBoundary
+        variant="component"
+        componentName="RecentDictationsPalette"
+        resetKeys={[Number(isRecentDictationsPaletteOpen)]}
+      >
+        {shouldMountRecentDictationsPalette && (
+          <Suspense fallback={null}>
+            <LazyRecentDictationsPalette />
           </Suspense>
         )}
       </ErrorBoundary>
