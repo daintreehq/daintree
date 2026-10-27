@@ -327,7 +327,17 @@ describe("validateCorrection", () => {
           symbols
         )
       ).toEqual({ ok: false, reason: "protected_span" });
-      // Its own words came along, but it sits by another command.
+      // Its own words came along, but it sits by another command, with the
+      // word before it or without the words after it.
+      for (const [said, cleaned] of [
+        ["commit with dash dash no dash verify then push", "Commit, then push with --no-verify."],
+        ["commit then push dash dash no dash verify", "Commit --no-verify."],
+      ]) {
+        expect(validateCorrection(said, cleaned, symbols), said).toEqual({
+          ok: false,
+          reason: "protected_span",
+        });
+      }
       expect(
         validateCorrection(
           "commit dash dash no dash verify then push",
