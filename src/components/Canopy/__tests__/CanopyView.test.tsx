@@ -212,6 +212,11 @@ function screenButton(root: HTMLElement, name: string): HTMLElement {
   return found;
 }
 
+/** The header's line beside the title. */
+function summaryWords() {
+  return document.querySelector("[data-testid=canopy-summary]")?.textContent ?? "";
+}
+
 /** What the empty Needs you band says, above the listbox; null while it has rows. */
 function bandWords() {
   return (
@@ -1803,8 +1808,8 @@ describe("CanopyView", () => {
     installElectron(owed);
     const first = render(<CanopyView />);
     await frames();
-    expect(first.container.ownerDocument.body.textContent).toContain("Checking who needs you…");
     // A conclusion held back is the header's own words in the band, never its all-clear.
+    expect(summaryWords()).toContain("Checking who needs you…");
     expect(bandWords()).toBe("Checking who needs you…");
     first.unmount();
 
@@ -1815,7 +1820,7 @@ describe("CanopyView", () => {
     installElectron(failing);
     render(<CanopyView />);
     await frames();
-    expect(document.body.textContent).toContain("Nothing needs you that Canopy could read");
+    expect(summaryWords()).toContain("Nothing needs you that Canopy could read");
     expect(bandWords()).toBe("Nothing needs you that Canopy could read");
   });
 
@@ -1917,13 +1922,13 @@ describe("CanopyView", () => {
     installElectron(retrying);
     const first = render(<CanopyView />);
     await frames();
-    expect(document.body.textContent).toContain("Checking who needs you…");
+    expect(summaryWords()).toContain("Checking who needs you…");
     expect(bandWords()).toBe("Checking who needs you…");
     // Once the retry is through, the conclusion stands: the header draws it and
     // the band settles it in words of its own.
     act(() => useCanopyStore.getState().applySnapshot({ ...canopySnapshot, cards: [calm] }));
     await frames();
-    expect(document.body.textContent).toContain("Nothing needs you");
+    expect(summaryWords()).toBe("Nothing needs you");
     expect(document.body.textContent).not.toContain("Checking who needs you…");
     expect(bandWords()).toBe("No action needed");
     first.unmount();
@@ -1933,7 +1938,7 @@ describe("CanopyView", () => {
     installElectron();
     render(<CanopyView />);
     await frames();
-    expect(document.body.textContent).toContain("Can't tell who needs you right now");
+    expect(summaryWords()).toContain("Can't tell who needs you right now");
     expect(bandWords()).toBe("Can't tell who needs you right now");
   });
 
@@ -2007,8 +2012,23 @@ describe("CanopyView", () => {
     useCanopyStore.setState({ snapshot: off });
     render(<CanopyView />);
     await frames();
-    expect(document.body.textContent).toContain("No agent is waiting on you");
+    expect(summaryWords()).toContain("No agent is waiting on you");
     expect(bandWords()).toBe("No agent is waiting on you");
+  });
+
+  it("says nothing is unread in a line of its own, with when each comes back", async () => {
+    installElectron();
+    const { container } = render(<CanopyView />);
+    await frames();
+    fireEvent.click(screenButton(container.ownerDocument.body, "Unread"));
+    await frames();
+    expect(cards(container)).toHaveLength(0);
+    const line = [...document.querySelectorAll("[data-canopy-empty-line]")].find(
+      (candidate) => candidate.querySelector("p")?.textContent === "Nothing unread"
+    );
+    expect(line?.textContent).toBe(
+      "Nothing unreadEach agent shows here again when it does something new"
+    );
   });
 
   it("lists a working run with the rest and lands on the top of the list", async () => {

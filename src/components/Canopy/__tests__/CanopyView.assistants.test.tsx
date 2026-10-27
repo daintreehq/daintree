@@ -182,6 +182,13 @@ function assistantRows() {
   return [...document.querySelectorAll<HTMLElement>("[data-canopy-assistant]")];
 }
 
+/** What each empty section says, by its main line. */
+function emptyLines() {
+  return [...document.querySelectorAll("[data-canopy-empty-line] > p:first-child")].map(
+    (line) => line.textContent
+  );
+}
+
 function roleSegment(role: "all" | "workers" | "assistants") {
   return document.querySelector<HTMLElement>(`[data-testid="canopy-role-filter-${role}"]`)!;
 }
@@ -314,6 +321,26 @@ describe("CanopyView role filter", () => {
     ).toEqual(["question", "approval"]);
     const section = document.getElementById("canopy-assistants")!;
     expect(section.querySelectorAll("[data-canopy-assistant]")).toHaveLength(1);
+  });
+
+  it("draws the band's headings for an asking assistant alone, and none under the Assistants filter", async () => {
+    directory.entries = [assistant(0, { waitingReason: "question" })];
+    useFleetSnapshotStore.setState({
+      snapshot: {
+        ...useFleetSnapshotStore.getState().snapshot!,
+        runs: [run("working", { agentState: "working", since: NOW - 30_000 })],
+      },
+    });
+    render(<CanopyView />);
+    await settle();
+    const scroller = () => document.querySelector("[data-canopy-list]")!;
+    const bandLabel = document.getElementById("canopy-needs-you-label")!;
+    expect(bandLabel.classList.contains("sr-only")).toBe(false);
+    expect(bandLabel.parentElement!.querySelectorAll("[data-canopy-assistant]")).toHaveLength(1);
+    expect(scroller().hasAttribute("data-band-headings")).toBe(true);
+    expect(emptyLines()).toEqual([]);
+    await act(async () => fireEvent.click(roleSegment("assistants")));
+    expect(scroller().hasAttribute("data-band-headings")).toBe(false);
   });
 
   it("keeps an asking assistant in its own list under the Assistants filter", async () => {
@@ -532,7 +559,7 @@ describe("CanopyView role filter", () => {
     useCanopyStore.setState({ roleFilter: "assistants" });
     render(<CanopyView />);
     await settle();
-    expect(document.body.textContent).toContain("Daintree couldn't list every assistant just now");
+    expect(emptyLines()).toEqual(["Daintree couldn't list every assistant just now"]);
     expect(document.body.textContent).not.toContain("No assistant is running");
     expect(document.body.textContent).not.toContain("Start an assistant");
   });
@@ -550,9 +577,7 @@ describe("CanopyView role filter", () => {
     render(<CanopyView />);
     await settle();
     expect(countOf("canopy-assistants-label")).toBeNull();
-    expect(
-      [...document.querySelectorAll("[data-canopy-empty-line]")].map((line) => line.textContent)
-    ).toContain("Start an assistant from the Assistant panel");
+    expect(emptyLines()).toContain("Start an assistant from the Assistant panel");
     // The inbox above it still counts its rows.
     expect(countOf("canopy-inbox-label")).not.toBeNull();
   });
@@ -632,7 +657,13 @@ describe("CanopyView show its work", () => {
       "Some hosts couldn't be read, so this may be incomplete"
     );
     // Never a claim that there is no work, on a reading that can't say so.
-    expect(document.body.textContent).toContain("None found on the hosts that could be read");
+    expect(emptyLines()).toContain("None found on the hosts that could be read");
+    // An empty inbox still counts its rows: none.
+    expect(
+      document
+        .getElementById("canopy-inbox-label")!
+        .querySelector("[data-slot=count-badge] [aria-hidden]")?.textContent
+    ).toBe("0");
     expect(document.body.textContent).not.toContain("No worker in the inbox");
   });
 

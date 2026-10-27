@@ -974,7 +974,9 @@ function CanopyInbox({
       // long they take, and after a scope switch too.
       (canopy?.lastError ?? null) !== null
       ? { words: "Nothing needs you that Canopy could read", allClear: false }
-      : fleet?.degraded
+      : // Rows kept from a host that can't be reached are as last seen, as a
+        // degraded fleet's are: nothing current is concluded from them.
+        fleet?.degraded || hostTrouble
         ? { words: "Can't tell who needs you right now", allClear: false }
         : owedOnOpen ||
             canopy?.waiting !== undefined ||
@@ -1338,7 +1340,10 @@ function CanopyInbox({
           <>
             <span className="flex min-w-0 flex-1 basis-0 items-center">
               <AppDialog.Title icon={<Telescope />}>{CANOPY_TITLE}</AppDialog.Title>
-              <span className="mx-3 min-w-0 flex-1 truncate text-sm text-text-secondary">
+              <span
+                className="mx-3 min-w-0 flex-1 truncate text-sm text-text-secondary"
+                data-testid="canopy-summary"
+              >
                 {headerWords}
               </span>
             </span>
@@ -1350,7 +1355,10 @@ function CanopyInbox({
         ) : (
           <>
             <AppDialog.Title icon={<Telescope />}>{CANOPY_TITLE}</AppDialog.Title>
-            <span className="mr-3 ml-3 min-w-0 flex-1 truncate text-sm text-text-secondary">
+            <span
+              className="mr-3 ml-3 min-w-0 flex-1 truncate text-sm text-text-secondary"
+              data-testid="canopy-summary"
+            >
               {headerWords}
             </span>
             {headerControls}

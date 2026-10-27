@@ -201,6 +201,45 @@ function approvalCard(runId: string): CanopySnapshot["cards"][number] {
   };
 }
 
+/** A settled reading of an agent at work: nothing in it asks for the user. */
+function calmCard(runId: string): CanopySnapshot["cards"][number] {
+  return {
+    ...approvalCard(runId),
+    category: "working",
+    wordsCategory: "working",
+    attentionProbability: 0.05,
+    attentionScore: 5,
+    priority: 5,
+    headline: "Running the suite",
+    question: null,
+    options: [],
+  };
+}
+
+/** Runs at work, none of them waiting. */
+function workingFleet(runIds: string[]): FleetSnapshot {
+  const base = fleet(runIds);
+  return {
+    ...base,
+    runs: base.runs.map(({ waitingReason: _reason, ...run }) => ({
+      ...run,
+      agentState: "working" as const,
+    })),
+  };
+}
+
+function summaryWords() {
+  return document.querySelector("[data-testid=canopy-summary]")?.textContent ?? "";
+}
+
+function bandWords() {
+  return (
+    document.querySelector(
+      "[role=group][aria-labelledby=canopy-needs-you-label] [data-canopy-empty-line]"
+    )?.textContent ?? null
+  );
+}
+
 let remoteCanopy: CanopySnapshot = canopySnapshot();
 let remoteFleet: FleetSnapshot | null = fleet(["remote-run"]);
 
@@ -754,6 +793,24 @@ describe("the Canopy host picker", () => {
     expect(document.getElementById("canopy-card-remote-run")).not.toBeNull();
   });
 
+  it("draws no all-clear from a host's rows once its link drops", async () => {
+    remoteFleet = workingFleet(["remote-run"]);
+    remoteCanopy = canopySnapshot({ cards: [calmCard("remote-run")] });
+    installElectron();
+    useCanopyStore.setState({ hostId: "studio" });
+    const { rerender } = render(<CanopyView />);
+    await settle();
+    expect(summaryWords()).toBe("Nothing needs you");
+    expect(bandWords()).toBe("No action needed");
+    state.hosts = [host("studio", "studio-01", { status: "disconnected" })];
+    rerender(<CanopyView />);
+    await settle();
+    expect(document.body.textContent).toContain("These are the agents it last showed.");
+    expect(document.getElementById("canopy-card-remote-run")).not.toBeNull();
+    expect(summaryWords()).toBe("Can't tell who needs you right now");
+    expect(bandWords()).toBe("Can't tell who needs you right now");
+  });
+
   it("drops the warning on held rows once the link is back, while their reread is owed", async () => {
     installElectron();
     useCanopyStore.setState({ hostId: "studio" });
@@ -856,8 +913,34 @@ describe("All hosts", () => {
     const line = [...document.querySelectorAll("[data-canopy-empty-line]")].find((candidate) =>
       candidate.textContent?.startsWith("Start an assistant from the Assistant panel")
     );
-    expect(line?.textContent).toMatch(/Only .+'s assistants are listed$/);
+    expect(line?.textContent).toBe(
+      "Start an assistant from the Assistant panelOnly This machine's assistants are listed"
+    );
     expect(document.body.textContent!.split("assistants are listed")).toHaveLength(2);
+  });
+
+  it("lets a host that can't be read outrank the all-clear in the band, as in the header", async () => {
+    remoteFleet = workingFleet(["shared-run"]);
+    remoteCanopy = canopySnapshot({ cards: [calmCard("shared-run")] });
+    useFleetSnapshotStore.setState({ snapshot: workingFleet(["shared-run"]) });
+    const settled = canopySnapshot({ cards: [calmCard("shared-run")] });
+    useCanopyStore.setState({ snapshot: settled });
+    installElectron().setActive.mockResolvedValue(settled);
+    const first = render(<CanopyView />);
+    await settle();
+    // Every host read and calm: the conclusion stands.
+    expect(summaryWords()).toBe("Nothing needs you");
+    expect(bandWords()).toBe("No action needed");
+    first.unmount();
+
+    useCanopyStore.setState({ isOpen: true, snapshot: settled, hostId: ALL_HOSTS_ID });
+    installElectron().setActive.mockResolvedValue(settled);
+    state.invoke.mockRejectedValue(new Error("offline"));
+    render(<CanopyView />);
+    await settle();
+    expect(cardOf("local", "shared-run")).not.toBeNull();
+    expect(summaryWords()).toBe("Not every host could be read");
+    expect(bandWords()).toBe("Not every host could be read");
   });
 
   it("turns Canopy on nowhere, and says which host is off", async () => {
