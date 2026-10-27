@@ -39,6 +39,7 @@ const TAU_RELEASE = 0.22; // sec
 // floor the bars hold flat instead of twitching in silence.
 const NOISE_FLOOR = 0.04;
 const BAR_REST = 0.2; // scaleY in silence: a flat line, not empty
+const WAVE_GAIN = 1.3; // so ordinary speech reaches the tallest bar's top
 
 // Each bar's share of the level and its wobble, so the bars move apart
 // rather than as one block. The middle bars carry the most.
@@ -249,10 +250,10 @@ function VoiceWave({ mode }: { mode: VoiceWaveMode }) {
       WAVE_BARS.forEach((bar, i) => {
         const el = barRefs.current[i];
         if (!el) return;
-        const wobble = 0.65 + 0.35 * Math.sin(t * bar.rate + bar.phase);
+        const wobble = 0.75 + 0.25 * Math.sin(t * bar.rate + bar.phase);
         const scale = still
           ? STILL_SHAPE[i]!
-          : BAR_REST + (1 - BAR_REST) * Math.min(1, level * bar.weight * wobble);
+          : BAR_REST + (1 - BAR_REST) * Math.min(1, WAVE_GAIN * level * bar.weight * wobble);
         el.style.transform = `scaleY(${scale.toFixed(3)})`;
         el.style.opacity = (0.55 + level * 0.45).toFixed(3);
       });
