@@ -115,7 +115,9 @@ describe("useCanopyResumeRequests", () => {
 
   it("launches nothing when main's go-ahead arrives too late to land the pane in time", async () => {
     let now = 1_000;
-    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+    // The wall clock steps back meanwhile: the budget is not timed by it.
+    const wall = vi.spyOn(Date, "now").mockReturnValue(0);
     resumeStarted.mockImplementationOnce(async () => {
       // The reply takes the whole launch budget to come back.
       now += 30_000;
@@ -133,6 +135,7 @@ describe("useCanopyResumeRequests", () => {
       expect(resumeSettled).not.toHaveBeenCalled();
     } finally {
       clock.mockRestore();
+      wall.mockRestore();
     }
   });
 

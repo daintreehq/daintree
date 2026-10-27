@@ -174,25 +174,28 @@ describe("CanopyTrashLedger", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("asks for the incarnation's earlier session when no close landed, and leaves either way", async () => {
-    const onSettle = vi.fn(async () => true);
-    const { ledger, answer, onChange } = setup({ a: record("a") }, { onSettle });
-    ledger.onTrashed("a", NOW + 20_000);
-    await answer("a");
-    ledger.onCleared("a", NOW + 20_000);
-    onChange.mockClear();
+  it.each([true, false])(
+    "asks for the incarnation's earlier session when no close landed, and leaves either way (kept: %s)",
+    async (kept) => {
+      const onSettle = vi.fn(async () => kept);
+      const { ledger, answer, onChange } = setup({ a: record("a") }, { onSettle });
+      ledger.onTrashed("a", NOW + 20_000);
+      await answer("a");
+      ledger.onCleared("a", NOW + 20_000);
+      onChange.mockClear();
 
-    vi.advanceTimersByTime(CANOPY_TRASH_SETTLE_MS);
-    await vi.waitFor(() => expect(ledger.get("a")).toBeUndefined());
-    expect(onSettle).toHaveBeenCalledTimes(1);
-    expect(onSettle).toHaveBeenCalledWith(
-      expect.objectContaining({
-        expiresAt: NOW + 20_000,
-        run: expect.objectContaining({ runId: "a" }),
-      })
-    );
-    expect(onChange).toHaveBeenCalledTimes(1);
-  });
+      vi.advanceTimersByTime(CANOPY_TRASH_SETTLE_MS);
+      await vi.waitFor(() => expect(ledger.get("a")).toBeUndefined());
+      expect(onSettle).toHaveBeenCalledTimes(1);
+      expect(onSettle).toHaveBeenCalledWith(
+        expect.objectContaining({
+          expiresAt: NOW + 20_000,
+          run: expect.objectContaining({ runId: "a" }),
+        })
+      );
+      expect(onChange).toHaveBeenCalledTimes(1);
+    }
+  );
 
   it("waits for a live run's own close before taking an earlier session for it", async () => {
     const onSettle = vi.fn(async () => false);

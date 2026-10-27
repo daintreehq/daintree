@@ -60,11 +60,14 @@ export function useCanopyResumeRequests(isStateLoaded: boolean): void {
           worktrees = listOf();
         }
         // Main stopped waiting, or its reply came too late to land the pane in
-        // time (timed from before asking): a launch now would be one nobody is told of.
+        // time (timed from before asking, on a clock the wall clock can't move):
+        // a launch now would be one nobody is told of.
         if (!alive.current) return null;
-        const asked = Date.now();
+        const asked = performance.now();
         const budgetMs = await window.electron.canopy.resumeStarted(requestId);
-        if (budgetMs === null || Date.now() - asked >= budgetMs || !alive.current) return null;
+        if (budgetMs === null || performance.now() - asked >= budgetMs || !alive.current) {
+          return null;
+        }
         try {
           const resumed = await resumeSessionForPerson(session, worktrees);
           return { runId: resumed.terminalId };
