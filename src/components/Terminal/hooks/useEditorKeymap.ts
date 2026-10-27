@@ -16,6 +16,8 @@ interface LatestRefShape {
   isAgentTerminal: boolean;
   isInHistoryMode: boolean;
   isAutocompleteOpen: boolean;
+  /** A token being completed, whether or not its menu shows yet. */
+  activeCompletionContext?: ActiveCompletionContext | null;
   autocompleteItems: AutocompleteItem[];
   staleItemKeys: ReadonlySet<string>;
   selectedIndex: number;
@@ -32,7 +34,7 @@ interface UseEditorKeymapParams {
   handledEnterRef: React.MutableRefObject<boolean>;
   editableCompartmentRef: React.RefObject<Compartment>;
   historyPaletteOpenRef: React.RefObject<(() => void) | null>;
-  applyAutocompleteSelection: (mode: "enter" | "complete") => boolean;
+  applyAutocompleteSelection: (mode: "enter" | "complete", index?: number) => boolean;
   handleHistoryNavigation: (direction: "up" | "down") => boolean;
   sendFromEditor: () => void;
   startVoiceWaitSubmit: () => void;
@@ -158,6 +160,9 @@ export function useEditorKeymap({
         setActiveCompletionContext(null);
         return true;
       }
+      // A `#` menu still waiting on its rows is dismissed before it can show,
+      // and Escape carries on to wherever it would have gone.
+      if (latest.activeCompletionContext) setActiveCompletionContext(null);
 
       if (latest.isExpanded) {
         setIsExpanded(false);
@@ -184,6 +189,8 @@ export function useEditorKeymap({
       if (latest.isAutocompleteOpen && resultsCount > 0) {
         setSelectedIndex((prev) => {
           if (resultsCount === 0) return 0;
+          // From no selection, up wraps to the last row as it does from the first.
+          if (prev < 0) return resultsCount - 1;
           return (prev - 1 + resultsCount) % resultsCount;
         });
         return true;
@@ -278,14 +285,15 @@ export function useEditorKeymap({
       if (!latest) return false;
       if (isComposingRef.current) return false;
 
-      const tabItem = latest.isAutocompleteOpen
-        ? latest.autocompleteItems[latest.selectedIndex]
-        : undefined;
+      // With nothing selected (the `#` menu until a row is chosen), Tab takes
+      // the first row: Enter there sends what was typed instead.
+      const tabIndex = latest.selectedIndex < 0 ? 0 : latest.selectedIndex;
+      const tabItem = latest.isAutocompleteOpen ? latest.autocompleteItems[tabIndex] : undefined;
       if (tabItem) {
         // Swallow Tab while the selected item is stale — inserting an outdated
         // match is worse than a no-op, and letting Tab through would move focus.
         if (latest.staleItemKeys.has(tabItem.key)) return true;
-        applyAutocompleteSelection("complete");
+        applyAutocompleteSelection("complete", tabIndex);
         return true;
       }
 

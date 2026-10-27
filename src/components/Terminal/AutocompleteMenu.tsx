@@ -131,6 +131,9 @@ function getKeyHints(item: AutocompleteItem | undefined, isStale: boolean): KeyH
   return [{ key: "↵", keyName: "Enter", label: "insert" }];
 }
 
+/** With no row selected, Tab still takes the first one; Enter does not. */
+const TAB_FIRST_HINT: KeyHint = { key: "⇥", keyName: "Tab", label: "insert first" };
+
 export interface AutocompleteMenuProps {
   isOpen: boolean;
   items: AutocompleteItem[];
@@ -206,14 +209,23 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
     const isSelectedStale = selectedItem
       ? (staleKeys?.has(selectedItem.key) ?? false) || selectedItem.disabled === true
       : false;
-    const keyHints = getKeyHints(selectedItem, isSelectedStale);
+    const firstItem = items[0];
+    const tabTakesFirst =
+      selectedItem === undefined &&
+      firstItem !== undefined &&
+      !(staleKeys?.has(firstItem.key) ?? false) &&
+      firstItem.disabled !== true;
+    const keyHints = tabTakesFirst ? [TAB_FIRST_HINT] : getKeyHints(selectedItem, isSelectedStale);
     const hasRows = items.length > 0;
     // Spoken for every state, shown only when there are no rows to show instead:
-    // with rows on screen the header carries "Updating…" visibly.
+    // with rows on screen the header carries "Updating…" visibly. No row is
+    // selected to carry the Tab instruction, so this says it.
     const statusText = hasRows
       ? isLoading || hasStaleRows
         ? "Updating results…"
-        : ""
+        : tabTakesFirst
+          ? "Tab to insert the first match"
+          : ""
       : isLoading
         ? "Searching…"
         : emptyMessage;

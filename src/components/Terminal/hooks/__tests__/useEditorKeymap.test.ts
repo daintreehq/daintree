@@ -42,7 +42,9 @@ function makeLatest(overrides: Partial<LatestShape> = {}): LatestShape {
 }
 
 describe("useEditorKeymap", () => {
-  let applyAutocompleteSelection: ReturnType<typeof vi.fn<(mode: "enter" | "complete") => boolean>>;
+  let applyAutocompleteSelection: ReturnType<
+    typeof vi.fn<(mode: "enter" | "complete", index?: number) => boolean>
+  >;
   let sendFromEditor: ReturnType<typeof vi.fn<() => void>>;
   let cancelVoiceWaitSubmit: ReturnType<typeof vi.fn<() => boolean>>;
   let handleDictationEscape: ReturnType<typeof vi.fn<() => boolean>>;
@@ -55,7 +57,9 @@ describe("useEditorKeymap", () => {
   let setSelectedIndex: ReturnType<typeof vi.fn<Dispatch<SetStateAction<number>>>>;
 
   beforeEach(() => {
-    applyAutocompleteSelection = vi.fn<(mode: "enter" | "complete") => boolean>(() => true);
+    applyAutocompleteSelection = vi.fn<(mode: "enter" | "complete", index?: number) => boolean>(
+      () => true
+    );
     sendFromEditor = vi.fn<() => void>();
     cancelVoiceWaitSubmit = vi.fn<() => boolean>(() => false);
     handleDictationEscape = vi.fn<() => boolean>(() => false);
@@ -135,6 +139,13 @@ describe("useEditorKeymap", () => {
       expect(applyAutocompleteSelection).toHaveBeenCalledWith("enter");
     });
 
+    it("sends what was typed when the menu shows rows but none is selected", () => {
+      const { handlers } = renderKeymap(makeLatest({ selectedIndex: -1, value: "color: #333" }));
+      expect(handlers.onEnter()).toBe(true);
+      expect(applyAutocompleteSelection).not.toHaveBeenCalled();
+      expect(sendFromEditor).toHaveBeenCalledTimes(1);
+    });
+
     it("falls through to the normal send when the selected item is stale", () => {
       const { handlers } = renderKeymap(makeLatest({ staleItemKeys: new Set(["src/a.ts"]) }));
       expect(handlers.onEnter()).toBe(true);
@@ -155,9 +166,26 @@ describe("useEditorKeymap", () => {
 
   describe("Tab", () => {
     it("completes the selected item when fresh", () => {
-      const { handlers } = renderKeymap(makeLatest());
+      const second: AutocompleteItem = { ...fileItem, key: "src/b.ts", insertText: "src/b.ts" };
+      const { handlers } = renderKeymap(
+        makeLatest({ autocompleteItems: [fileItem, second], selectedIndex: 1 })
+      );
       expect(handlers.onTab()).toBe(true);
-      expect(applyAutocompleteSelection).toHaveBeenCalledWith("complete");
+      expect(applyAutocompleteSelection).toHaveBeenCalledWith("complete", 1);
+    });
+
+    it("completes the first row when nothing is selected", () => {
+      const { handlers } = renderKeymap(makeLatest({ selectedIndex: -1 }));
+      expect(handlers.onTab()).toBe(true);
+      expect(applyAutocompleteSelection).toHaveBeenCalledWith("complete", 0);
+    });
+
+    it("swallows Tab when nothing is selected and the first row is stale", () => {
+      const { handlers } = renderKeymap(
+        makeLatest({ selectedIndex: -1, staleItemKeys: new Set(["src/a.ts"]) })
+      );
+      expect(handlers.onTab()).toBe(true);
+      expect(applyAutocompleteSelection).not.toHaveBeenCalled();
     });
 
     it("swallows Tab without completing when the selected item is stale", () => {
@@ -172,6 +200,22 @@ describe("useEditorKeymap", () => {
       const { handlers } = renderKeymap(makeLatest());
       expect(handlers.onEscape()).toBe(true);
       expect(setActiveCompletionContext).toHaveBeenCalledWith(null);
+    });
+
+    it("dismisses a menu still waiting on its rows and carries on to the agent", () => {
+      const onSendKey = vi.fn<(key: string) => void>();
+      const { handlers } = renderKeymap(
+        makeLatest({
+          isAutocompleteOpen: false,
+          autocompleteItems: [],
+          activeCompletionContext: { triggerChar: "#", start: 0, tokenEnd: 1, query: "" },
+          value: "#",
+          onSendKey,
+        })
+      );
+      expect(handlers.onEscape()).toBe(true);
+      expect(setActiveCompletionContext).toHaveBeenCalledWith(null);
+      expect(onSendKey).toHaveBeenCalledWith("escape");
     });
 
     it("cancels a pending voice wait-submit before touching autocomplete", () => {
@@ -337,6 +381,20 @@ describe("useEditorKeymap", () => {
       expect(setSelectedIndex).toHaveBeenCalled();
       expect(onSendKey).not.toHaveBeenCalled();
       expect(handleHistoryNavigation).not.toHaveBeenCalled();
+    });
+
+    it("moves from no selection to the first row going down and the last going up", () => {
+      const rows = ["a", "b", "c"].map((key) => ({ ...fileItem, key }));
+      const { handlers } = renderKeymap(
+        makeLatest({ autocompleteItems: rows, selectedIndex: -1, value: "#" })
+      );
+      handlers.onArrowDown();
+      handlers.onArrowUp();
+      const [down, up] = setSelectedIndex.mock.calls.map(([update]) =>
+        typeof update === "function" ? update(-1) : update
+      );
+      expect(down).toBe(0);
+      expect(up).toBe(2);
     });
 
     it("agent terminal: non-empty input outside history mode is left to CodeMirror", () => {

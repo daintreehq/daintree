@@ -122,12 +122,19 @@ export function resolveTokenExpansions(
 }
 
 /**
+ * A char that opens a composer menu: an agent's declared completion triggers,
+ * plus `#`, Daintree's own issue and pull request references, which no agent
+ * declares.
+ */
+export type ComposerTrigger = CompletionTrigger | "#";
+
+/**
  * One completion menu is open at a time, keyed by the trigger char that opened
  * it. `query` is the triggerless token text between the trigger and the caret;
  * `start`/`tokenEnd` bound the whole token in the document.
  */
 export interface ActiveCompletionContext {
-  triggerChar: CompletionTrigger;
+  triggerChar: ComposerTrigger;
   start: number;
   tokenEnd: number;
   query: string;
@@ -136,8 +143,8 @@ export interface ActiveCompletionContext {
 /** Narrow an arbitrary char to a declared trigger without an unsafe assertion. */
 function activeTrigger(
   ch: string,
-  activeTriggers: ReadonlySet<CompletionTrigger>
-): CompletionTrigger | null {
+  activeTriggers: ReadonlySet<ComposerTrigger>
+): ComposerTrigger | null {
   for (const trigger of activeTriggers) {
     if (trigger === ch) return trigger;
   }
@@ -150,12 +157,13 @@ function activeTrigger(
  * FIRST char is an active trigger — a start-or-whitespace boundary that rejects
  * `email@x`, `a/b`, `http://…` while still allowing OTHER triggers inside the
  * token (the `/` in `@src/App.tsx`). A repeated instance of the SAME trigger in
- * the query rejects it (`//help`, `$$foo`, `@@x`, and slash-path `/usr/bin`).
+ * the query rejects it (`//help`, `$$foo`, `@@x`, `## Heading`, and slash-path
+ * `/usr/bin`).
  */
 export function getActiveCompletionContext(
   text: string,
   caret: number,
-  activeTriggers: ReadonlySet<CompletionTrigger>
+  activeTriggers: ReadonlySet<ComposerTrigger>
 ): ActiveCompletionContext | null {
   if (caret < 0 || caret > text.length) return null;
 

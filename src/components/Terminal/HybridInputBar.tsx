@@ -27,19 +27,20 @@ import {
   getDaintreeAtClaim,
   fileSearchQuery,
   type ActiveCompletionContext,
+  type ComposerTrigger,
 } from "./hybridInputParsing";
 import { splitContextProviderQuery } from "@shared/utils/pluginContextReference";
 import type { ContextProviderItem } from "@shared/types/pluginContextProvider";
 import { usePluginContextProvidersStore } from "@/store/pluginContextProvidersStore";
 import { useContextProviderSearch } from "./hooks/useContextProviderSearch";
 import { useForgeReferenceMarks } from "./hooks/useForgeReferenceMarks";
+import { useForgeReferences } from "./hooks/useForgeReferences";
 import { contextItemKey, type ContextProviderClaim } from "./hooks/useAutocompleteItems";
 import {
   applyContextReferenceProviders,
   contextReferenceChipProviders,
   type ContextReferenceChipProvider,
 } from "./inputEditorExtensions/contextReferenceChip";
-import type { CompletionTrigger } from "@shared/types";
 import { CommandPickerHost } from "@/components/Commands";
 import { PromptHistoryPalette } from "./PromptHistoryPalette";
 import { useCanopyStore } from "@/store/canopyStore";
@@ -706,15 +707,18 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // Trigger chars that open a menu, data-driven from the agent's declared
     // completionSources — `/` and Daintree's `@` are always available; `$`
     // (Codex capabilities) is added only when the agent declares a `$` source.
+    // `#` offers the project's issues and pull requests, so an isolated
+    // composer, whose terminal may belong to another project, goes without.
     const activeTriggers = useMemo(() => {
       // Every menu offers what this machine has: its files, its commands.
-      if (thisMachineOff) return new Set<CompletionTrigger>();
-      const triggers = new Set<CompletionTrigger>(["/", "@"]);
+      if (thisMachineOff) return new Set<ComposerTrigger>();
+      const triggers = new Set<ComposerTrigger>(["/", "@"]);
+      if (!isolated) triggers.add("#");
       for (const source of agentId ? (getAgentConfig(agentId)?.completionSources ?? []) : []) {
         triggers.add(source.trigger);
       }
       return triggers;
-    }, [agentId, thisMachineOff]);
+    }, [agentId, thisMachineOff, isolated]);
 
     const triggerChar = activeCompletionContext?.triggerChar ?? null;
     // A plugin's `@{prefix}:` (#13795) claims the query when a provider holds
@@ -740,8 +744,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const atClaim =
       triggerChar === "@" && contextClaim === null ? getDaintreeAtClaim(completionQuery) : null;
     const isFileMode = triggerChar === "@" && atClaim === null && contextClaim === null;
-    const isAutocompleteOpen = activeCompletionContext !== null && !disabled;
-    const isAtMenuOpen = isAutocompleteOpen && triggerChar === "@";
+    // A token is being completed. Whether its menu shows is decided once its
+    // rows are known: the `#` menu opens only on rows (`isAutocompleteOpen`).
+    const isCompleting = activeCompletionContext !== null && !disabled;
+    const isAtMenuOpen = isCompleting && triggerChar === "@";
 
     useEffect(() => {
       usePluginContextProvidersStore.getState().init();
@@ -782,7 +788,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       prefix: contextClaim?.prefix ?? null,
       pluginId: contextClaim?.pluginId ?? null,
       query: contextClaim?.query ?? "",
-      enabled: isAutocompleteOpen && contextClaim !== null,
+      enabled: isCompleting && contextClaim !== null,
     });
     // Rows another provider answered — another prefix, or another plugin that
     // held this one a moment ago — are never shown: their ids mean nothing here.
@@ -801,20 +807,26 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     } = useFileAutocomplete({
       cwd,
       query: fileQuery,
-      enabled: isAutocompleteOpen && isFileMode,
+      enabled: isCompleting && isFileMode,
       limit: 50,
     });
 
     const { items: autocompleteCommands, isLoading: isCommandsLoading } =
       useSlashCommandAutocomplete({
         query: activeCompletionContext?.query ?? "",
-        enabled: isAutocompleteOpen && (triggerChar === "/" || triggerChar === "$"),
+        enabled: isCompleting && (triggerChar === "/" || triggerChar === "$"),
         trigger: triggerChar === "$" ? "$" : "/",
         agentId,
         projectPath: cwd,
       });
 
     const { commandMap } = useSlashCommandList({ agentId, projectPath: cwd });
+
+    const forgeReferences = useForgeReferences({
+      projectId: currentProjectId,
+      cwd,
+      enabled: isCompleting && triggerChar === "#",
+    });
 
     const { autocompleteItems, isLoading } = useAutocompleteItems({
       activeCompletionContext,
@@ -825,7 +837,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       contextClaim,
       contextItems,
       isContextLoading,
+      forgeReferences,
     });
+    // `#` is ordinary text far more often than a reference, so with nothing to
+    // offer — no forge, no credential, nothing matching — it stays just a
+    // character: no menu, and Enter sends.
+    const isAutocompleteOpen =
+      isCompleting && (triggerChar !== "#" || autocompleteItems.length > 0);
 
     // Per-provider staleness: the debounced async searches — `@file` and a
     // plugin's `@{prefix}:` — can go stale. Each dims only its own rows, never
@@ -1848,26 +1866,30 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                   ? "Commands"
                   : triggerChar === "$"
                     ? "Capabilities"
-                    : atClaim === "terminal"
-                      ? "Terminal output"
-                      : atClaim === "selection"
-                        ? "Terminal selection"
-                        : atClaim === "diff"
-                          ? "Diffs"
-                          : "Files"
+                    : triggerChar === "#"
+                      ? "Issues and pull requests"
+                      : atClaim === "terminal"
+                        ? "Terminal output"
+                        : atClaim === "selection"
+                          ? "Terminal selection"
+                          : atClaim === "diff"
+                            ? "Diffs"
+                            : "Files"
               }
               ariaLabel={
                 triggerChar === "/"
                   ? "Command autocomplete"
                   : triggerChar === "$"
                     ? "Capability autocomplete"
-                    : atClaim === "terminal"
-                      ? "Terminal autocomplete"
-                      : atClaim === "selection"
-                        ? "Selection autocomplete"
-                        : atClaim === "diff"
-                          ? "Diff autocomplete"
-                          : "File autocomplete"
+                    : triggerChar === "#"
+                      ? "Issue and pull request autocomplete"
+                      : atClaim === "terminal"
+                        ? "Terminal autocomplete"
+                        : atClaim === "selection"
+                          ? "Selection autocomplete"
+                          : atClaim === "diff"
+                            ? "Diff autocomplete"
+                            : "File autocomplete"
               }
               emptyMessage={
                 triggerChar === "/"

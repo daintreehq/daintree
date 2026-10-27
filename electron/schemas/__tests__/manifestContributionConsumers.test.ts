@@ -1771,6 +1771,16 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       consumers: [{ file: CODE_FORGE_TAB, symbol: "CodeForgeSettingsTab (slot resolution)" }],
       note: "Resolved to renderer view ids for the provider's UI slots.",
     },
+    referencePrefixes: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: "src/components/Terminal/hooks/useForgeReferences.ts",
+          symbol: "useForgeReferences",
+        },
+      ],
+      note: "Written before an issue or PR number in the references the composer's `#` menu inserts; a kind with no prefix isn't offered.",
+    },
   },
   contextProviders: {
     id: {

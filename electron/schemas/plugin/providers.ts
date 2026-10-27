@@ -83,6 +83,12 @@ export const CredentialFieldSchema = z
   })
   .strict();
 
+// Written straight before a number, so it can hold neither a digit, which
+// would run into it, nor whitespace, which would split the reference.
+const REFERENCE_PREFIX = z
+  .string()
+  .regex(/^[^\s\d]{1,4}$/, "must be 1-4 characters, with no digits or whitespace");
+
 /**
  * `forgeProviders` manifest entry — wired: the registry populates Preferences
  * and remote-routing before any plugin code runs. See
@@ -118,6 +124,13 @@ export const ForgeProviderContributionSchema = z
         statsDropdown: z.string().min(1).optional(),
         bulkCreateWorktreeDialog: z.string().min(1).optional(),
         issueSelector: z.string().min(1).optional(),
+      })
+      .strict()
+      .optional(),
+    referencePrefixes: z
+      .object({
+        issue: REFERENCE_PREFIX.optional(),
+        pr: REFERENCE_PREFIX.optional(),
       })
       .strict()
       .optional(),

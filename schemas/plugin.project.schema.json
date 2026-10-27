@@ -1660,6 +1660,20 @@
                   }
                 },
                 "additionalProperties": false
+              },
+              "referencePrefixes": {
+                "type": "object",
+                "properties": {
+                  "issue": {
+                    "type": "string",
+                    "pattern": "^[^\\s\\d]{1,4}$"
+                  },
+                  "pr": {
+                    "type": "string",
+                    "pattern": "^[^\\s\\d]{1,4}$"
+                  }
+                },
+                "additionalProperties": false
               }
             },
             "required": [

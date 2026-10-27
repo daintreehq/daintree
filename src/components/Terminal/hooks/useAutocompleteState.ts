@@ -36,25 +36,31 @@ export function useAutocompleteState({
   const queryKey = activeCompletionContext
     ? `${activeCompletionContext.triggerChar}:${activeCompletionContext.start}:${activeCompletionContext.query}`
     : "";
+  // `#` is ordinary text far more often than a reference (`# Heading`,
+  // `color: #333`), so its menu starts with nothing selected and Enter sends
+  // what was typed until a row is chosen.
+  const initialIndex = activeCompletionContext?.triggerChar === "#" ? -1 : 0;
 
   useEffect(() => {
     const prev = prevRef.current;
 
     if (queryKey !== prev.queryKey) {
       lastQueryRef.current = queryKey;
-      if (selectedIndex !== 0) setSelectedIndex(0);
+      if (selectedIndex !== initialIndex) setSelectedIndex(initialIndex);
       prevRef.current = {
         queryKey,
         items: autocompleteItems,
-        selectedKey: autocompleteItems[0]?.key ?? null,
+        selectedKey: autocompleteItems[initialIndex]?.key ?? null,
       };
       return;
     }
 
     if (autocompleteItems !== prev.items) {
       // Items merged/refreshed for the same query: keep the selected key if it
-      // survived, else clamp into range.
-      const clamped = Math.min(selectedIndex, Math.max(0, autocompleteItems.length - 1));
+      // survived, else clamp into range — or, where nothing starts selected,
+      // select nothing rather than a row that was never chosen.
+      const clamped =
+        initialIndex < 0 ? -1 : Math.min(selectedIndex, Math.max(0, autocompleteItems.length - 1));
       const survivingIndex = prev.selectedKey
         ? autocompleteItems.findIndex((item) => item.key === prev.selectedKey)
         : -1;
@@ -74,7 +80,7 @@ export function useAutocompleteState({
       items: autocompleteItems,
       selectedKey: autocompleteItems[selectedIndex]?.key ?? prev.selectedKey,
     };
-  }, [queryKey, autocompleteItems, selectedIndex, setSelectedIndex, lastQueryRef]);
+  }, [queryKey, initialIndex, autocompleteItems, selectedIndex, setSelectedIndex, lastQueryRef]);
 
   useEffect(() => {
     if (!isAutocompleteOpen) return;
