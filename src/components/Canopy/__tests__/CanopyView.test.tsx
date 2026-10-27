@@ -1982,20 +1982,20 @@ describe("CanopyView", () => {
       fireEvent.keyDown(cards(container)[0]!, { key: "Backspace", metaKey: true, ctrlKey: true });
     });
     expect(canopy.trash).toHaveBeenCalledWith("done", { spawnedAt: NOW - 3_600_000 });
-    // The trash keeps it only briefly and its countdown is behind the panel:
-    // the way back is the toast's Undo, and Z.
-    const toast = vi.mocked(notify).mock.calls.at(-1)![0];
-    expect(toast.title).toBe("Terminal trashed");
-    const undo = toast.actions?.find((action) => action.label === "Undo");
-    expect(undo).toBeTruthy();
+    // No toast: the panel's undo line names it, and it and Z take it back.
+    expect(vi.mocked(notify)).not.toHaveBeenCalled();
+    const line = container.ownerDocument.querySelector("[data-canopy-undo-line]");
+    expect(line?.textContent).toContain("Trashed '");
+    const undo = [...line!.querySelectorAll("button")].find((b) => b.textContent === "Undo")!;
     await act(async () => {
-      fireEvent.keyDown(document.activeElement ?? document.body, { key: "z" });
+      fireEvent.click(undo);
     });
     // By the receipt the trash gave, so only that trash of that terminal comes back.
     expect(canopy.untrash).toHaveBeenCalledWith(7);
-    // The toast's Undo, pressed after Z, finds it done: once only.
+    expect(container.ownerDocument.querySelector("[data-canopy-undo-line]")).toBeNull();
+    // Z, pressed after the line's Undo, finds it done: once only.
     await act(async () => {
-      undo!.onClick();
+      fireEvent.keyDown(document.activeElement ?? document.body, { key: "z" });
     });
     expect(canopy.untrash).toHaveBeenCalledTimes(1);
   });

@@ -88,6 +88,7 @@ async function makeHarness(options: {
   /** Awaited before every screen read, to hold a scan part way. */
   screenGate?: () => Promise<void>;
   onRefinementsChanged?: () => void;
+  getTrash?: CanopyServiceDeps["getTrash"];
 }): Promise<Harness> {
   const screens = new Map<string, string>();
   const runs: FleetRunRow[] = [];
@@ -151,6 +152,7 @@ async function makeHarness(options: {
     ...(options.readerName ? { readerName: options.readerName } : {}),
     ...(options.readerReady ? { readerReady: options.readerReady } : {}),
     ...(options.onRefinementsChanged ? { onRefinementsChanged: options.onRefinementsChanged } : {}),
+    ...(options.getTrash ? { getTrash: options.getTrash } : {}),
     ...(options.stateChangeScanMs !== undefined
       ? { stateChangeScanMs: options.stateChangeScanMs }
       : {}),
@@ -172,6 +174,35 @@ async function makeHarness(options: {
 afterEach(() => {
   harness?.service.dispose();
   harness = null;
+});
+
+describe("CanopyService trash", () => {
+  it("carries the host's trash on its snapshot, and tells every view when it changes", async () => {
+    let trash: NonNullable<CanopySnapshot["trash"]> = [];
+    const { service, snapshots } = await makeHarness({ getTrash: () => trash });
+    expect(service.getSnapshot().trash).toEqual([]);
+    // The opening's own broadcast goes out first, so the next one is the trash's.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const before = snapshots.length;
+    trash = [
+      {
+        run: { runId: "t1", workspaceId: "p2", spawnedAt: 1, cwd: "/repo" },
+        trashedAt: 10,
+        expiresAt: 20_010,
+      },
+    ];
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    // Nothing tells a view of the change but the call that says it.
+    expect(snapshots.length).toBe(before);
+    service.trashChanged();
+    await vi.waitFor(() => expect(snapshots.length).toBeGreaterThan(before));
+    expect(snapshots.at(-1)?.trash?.map((entry) => entry.run.runId)).toEqual(["t1"]);
+    // Nothing new in it: no view is woken for the same list.
+    const after = snapshots.length;
+    service.trashChanged();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(snapshots.length).toBe(after);
+  });
 });
 
 const APPROVAL_SCREEN = [

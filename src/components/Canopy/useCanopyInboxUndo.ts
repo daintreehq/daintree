@@ -25,7 +25,7 @@ export function useCanopyInboxUndo({
   // The last triage the user did here, to take back with Z or the toast's
   // Undo. One deep, as in mail: only the newest action can be undone.
   const undoRef = useRef<(() => void) | null>(null);
-  // The line naming the newest archive or read change, with its Undo. It is
+  // The line naming the newest archive, trash or read change, with its Undo. It is
   // the same one action as Z, so the next action replaces it.
   const [line, setLine] = useState<{ id: number; message: string; undo: () => void } | null>(null);
   const lineTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);

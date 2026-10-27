@@ -12,6 +12,7 @@ import { Keyboard, RefreshCw } from "lucide-react";
 import { formatWaitAge } from "@/lib/projectRowStatus";
 import { Telescope } from "@/components/icons";
 import { useCanopyStore } from "@/store/canopyStore";
+import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { actionService } from "@/services/ActionService";
 import { notify } from "@/lib/notify";
 import { latestUndoOnly, UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
@@ -43,6 +44,11 @@ import { CanopyCard, canopyCardDomId } from "./CanopyCard";
 import { CanopyRow } from "./CanopyRow";
 import { CanopyRowMenu } from "./CanopyRowMenu";
 import { SectionBar } from "./CanopySectionBar";
+import {
+  CanopyTrashSection,
+  useTrashExpiryAnnouncer,
+  type CanopyTrashSectionHandle,
+} from "./CanopyTrashSection";
 import { CanopyEmptyLine } from "./CanopyEmptyLine";
 import { CanopyStatusBar, formatModelBytes } from "./CanopyStatusBar";
 import { CanopyPlace } from "./CanopyPlace";
@@ -79,7 +85,7 @@ import { ALL_HOSTS_ID, canopyOwnHostId } from "@/store/canopyStore";
 import { describeHostMenuState, type HostMenuRow } from "@/components/Hosts/hostModel";
 import { isNewWindowClick } from "@/components/Hosts/hostSwitching";
 import type { HostId } from "@shared/types/remoteHosts";
-import { readsWithHostedService } from "@shared/types/ipc/canopy";
+import { readsWithHostedService, type CanopyTrashEntry } from "@shared/types/ipc/canopy";
 
 // Loaded on first use: the dialog pulls in Pilot's row and band modules.
 const LazyParkRunDialog = lazy(() =>
@@ -139,6 +145,10 @@ function HostIssueList({ issues }: { issues: readonly HostIssue[] }) {
 }
 
 /** "3m ago", or "just now" — never "just now ago". */
+const NO_TRASH: readonly CanopyTrashEntry[] = [];
+/** How long a run put back from the Trash is waited for, to select it once it is back. */
+const RESTORED_SELECT_MS = 5000;
+
 function agoPhrase(sinceMs: number, nowMs: number): string {
   const age = formatWaitAge(sinceMs, nowMs);
   return age === "just now" ? age : `${age} ago`;
@@ -639,6 +649,7 @@ function CanopyInbox({
     recoveries,
     nowMs,
     baseItems,
+    workspaces,
   } = useCanopyInboxData({ isOpen, hostId, hostRow, hostRows });
 
   const {
@@ -946,6 +957,97 @@ function CanopyInbox({
       ? (onOfferReading ?? (hostOffer ? () => setHostOfferOpen(true) : null))
       : null;
 
+  // Canopy's Trash: every agent run the host's trash holds, any project's.
+  const trashRef = useRef<CanopyTrashSectionHandle>(null);
+  // A run put back from the Trash comes into the inbox selected, once it is
+  // back in the fleet. Anything the user selects from the press on, another
+  // host or the panel closing, wins.
+  const shownRunId = selectedAssistant?.id ?? focusedItem?.runId ?? null;
+  const shownRunIdRef = useRef(shownRunId);
+  useLayoutEffect(() => {
+    shownRunIdRef.current = shownRunId;
+  });
+  const [restored, setRestored] = useState<{
+    runId: string;
+    from: string | null;
+    request: number;
+  } | null>(null);
+  const restoreRequests = useRef(0);
+  const onRestoring = useCallback((runId: string) => {
+    const request = ++restoreRequests.current;
+    setRestored({ runId, from: shownRunIdRef.current, request });
+    return (ok: boolean) => {
+      if (!ok) setRestored((current) => (current?.request === request ? null : current));
+    };
+  }, []);
+  useEffect(() => setRestored(null), [hostId, isOpen]);
+  useEffect(() => {
+    if (restored === null) return;
+    const handle = setTimeout(() => {
+      setRestored(null);
+      // It never came back: a keyboard left waiting for it goes to the search.
+      const active = document.activeElement;
+      if (active === null || active === document.body) searchRef.current?.focus();
+    }, RESTORED_SELECT_MS);
+    return () => clearTimeout(handle);
+  }, [restored, searchRef]);
+  useEffect(() => {
+    if (restored === null) return;
+    // Another run picked meanwhile is the user's choice; the inbox landing on
+    // the restored run itself, with nothing else to show, is this one arriving.
+    if (shownRunId !== restored.from && shownRunId !== restored.runId) {
+      setRestored(null);
+      return;
+    }
+    if (!visible.some((item) => item.runId === restored.runId)) return;
+    setRestored(null);
+    // The keyboard follows it from the Trash, or from nowhere; the search keeps it.
+    const active = document.activeElement;
+    if (
+      active === null ||
+      active === document.body ||
+      active.closest("#canopy-trash, [aria-controls=canopy-trash], [data-canopy-card]") !== null
+    ) {
+      focusCardNow(restored.runId);
+    } else {
+      selectNow(restored.runId);
+    }
+  }, [restored, shownRunId, visible, focusCardNow, selectNow]);
+  // Back in the fleet, whatever the panel's filters show: a run that left the
+  // trash near its deadline was restored, not let go.
+  const fleetRunIdsRef = useRef<ReadonlySet<string>>(new Set());
+  useEffect(() => {
+    fleetRunIdsRef.current = new Set((fleet?.runs ?? []).map((run) => run.runId));
+  }, [fleet]);
+  const isBackInFleet = useCallback((runId: string) => fleetRunIdsRef.current.has(runId), []);
+  const trashEntries = canopy?.trash ?? NO_TRASH;
+  // This view's own project's trash is in its dock too, which says its expiries itself.
+  const dockAnnounces = useCallback(
+    (workspaceId: string) => {
+      if (otherHost && !everyHost) return false;
+      const here = getViewWorkspaceId();
+      if (!everyHost) return workspaceId === here;
+      const place = parseAllHostsKey(workspaceId);
+      return place !== null && place.hostId === ownHostId && place.id === here;
+    },
+    [otherHost, everyHost, ownHostId]
+  );
+  const trashActed = useTrashExpiryAnnouncer({
+    active: isOpen,
+    entries: trashEntries,
+    workspaces,
+    scopeKey: hostId ?? "",
+    dockAnnounces,
+    isBackInFleet,
+  });
+  // Up off the Trash bar: the inbox's last row, else the search.
+  const leaveTrashUp = () => {
+    const last = projection.navigation[projection.navigation.length - 1];
+    if (!last) searchRef.current?.focus();
+    else if (last.role === "worker") focusCardNow(last.item.runId);
+    else focusAssistantNow(last.item.id);
+  };
+
   const { onAssistantKeyDown, onAgentStepKeyDownCapture, onNavigationKeyDown, onSearchKeyDown } =
     useCanopyInboxKeyboard({
       visible,
@@ -968,6 +1070,7 @@ function CanopyInbox({
       askRename,
       toggleRead,
       markAllRead,
+      onPastEnd: () => trashRef.current?.focusHeader() ?? false,
     });
 
   // What the panel can say about another host before it has its agents.
@@ -1246,6 +1349,10 @@ function CanopyInbox({
   // The relationship filter keeps the list, and its banner, up even with nothing in it.
   const listsAssistants =
     (assistantsShown && (assistantItems.length > 0 || !workersShown)) || workOf !== null;
+  // A trash, or the undo line of one just made, keeps the list up with no
+  // agent left running: the way back stays where the user left it.
+  const trashListed = trashEntries.length > 0;
+  const listsTrash = trashListed || undoLine !== null;
   // One clause each, as the empty line wants; with none running anywhere, it
   // names the way to start one.
   const assistantsEmpty: string | null = !assistantsReadable
@@ -1281,15 +1388,20 @@ function CanopyInbox({
             ? "None found on the hosts that could be read"
             : "No worker in the inbox was started by or handed to this assistant",
         }
-      : unreadOnly && inbox.inbox.length > 0
+      : items.length === 0
         ? {
-            words: "Nothing unread",
-            note: "Each agent shows here again when it does something new",
+            words: "No agents are running",
+            ...(trashListed ? { note: "Restore one from the Trash below" } : {}),
           }
-        : {
-            words: "Every agent is archived",
-            note: "Each comes back when it has something new to say",
-          };
+        : unreadOnly && inbox.inbox.length > 0
+          ? {
+              words: "Nothing unread",
+              note: "Each agent shows here again when it does something new",
+            }
+          : {
+              words: "Every agent is archived",
+              note: "Each comes back when it has something new to say",
+            };
 
   const headerControls = (
     <>
@@ -1517,7 +1629,7 @@ function CanopyInbox({
             )}
           </div>
         )}
-        {!hostHeld && (items.length > 0 || listsAssistants) && (
+        {!hostHeld && (items.length > 0 || listsAssistants || listsTrash) && (
           // An inbox: what needs you down a sidebar, most urgent first, the rest
           // folded away beneath it, and the selected agent's own terminal beside
           // it, drawn as its pane.
@@ -1877,6 +1989,22 @@ function CanopyInbox({
                     )}
                   </>
                 )}
+                <CanopyTrashSection
+                  ref={trashRef}
+                  entries={trashEntries}
+                  workspaces={workspaces}
+                  terms={terms}
+                  api={api}
+                  scopeKey={hostId ?? ""}
+                  onLeaveUp={leaveTrashUp}
+                  onSearch={() => {
+                    searchRef.current?.focus();
+                    searchRef.current?.select();
+                  }}
+                  onRestoring={onRestoring}
+                  restoringRunId={restored?.runId ?? null}
+                  acted={trashActed}
+                />
               </div>
               {undoLine && (
                 <div
@@ -2011,7 +2139,8 @@ function CanopyInbox({
           fleet !== null &&
           !fleet.degraded &&
           items.length === 0 &&
-          !listsAssistants && (
+          !listsAssistants &&
+          !listsTrash && (
             <div className="flex flex-1 flex-col items-center justify-center gap-3">
               {scope === "project" && fleet.runs.length > 0 ? (
                 <>
@@ -2040,7 +2169,7 @@ function CanopyInbox({
               )}
             </div>
           )}
-        {offerReading && !hostHeld && items.length === 0 && !listsAssistants && (
+        {offerReading && !hostHeld && items.length === 0 && !listsAssistants && !listsTrash && (
           <CanopyStatusBar
             host={otherHost ? hostName : null}
             model={undefined}

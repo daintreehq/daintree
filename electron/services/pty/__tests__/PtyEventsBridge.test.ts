@@ -360,6 +360,18 @@ describe("bridgePtyEvent", () => {
     ]);
   });
 
+  it("forwards the trash letting a terminal go, with which trash it was", () => {
+    const heard: Array<{ id: string; expiresAt: number }> = [];
+    events.on("terminal:trash-cleared", (payload) => heard.push(payload));
+    const handled = bridgePtyEvent({
+      type: "terminal-trash-cleared",
+      id: "term-3",
+      expiresAt: 1_800_000_020_000,
+    });
+    expect(handled).toBe(true);
+    expect(heard).toEqual([{ id: "term-3", expiresAt: 1_800_000_020_000 }]);
+  });
+
   it("returns false for unhandled event types", () => {
     const handled = bridgePtyEvent({ type: "unknown-event" } as never);
     expect(handled).toBe(false);

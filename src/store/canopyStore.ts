@@ -74,6 +74,9 @@ interface CanopyState {
   /** The inbox's "Archived" group is unfolded; kept across opens. */
   archivedExpanded: boolean;
   setArchivedExpanded: (expanded: boolean) => void;
+  /** The inbox's "Trash" group is unfolded; kept across opens. */
+  trashExpanded: boolean;
+  setTrashExpanded: (expanded: boolean) => void;
   /** The inbox shows only unread runs; kept across opens for the session. */
   unreadOnly: boolean;
   setUnreadOnly: (unreadOnly: boolean) => void;
@@ -468,6 +471,8 @@ export const useCanopyStore = create<CanopyState>((set, get) => ({
     }),
   archivedExpanded: false,
   setArchivedExpanded: (expanded) => set({ archivedExpanded: expanded }),
+  trashExpanded: false,
+  setTrashExpanded: (expanded) => set({ trashExpanded: expanded }),
   unreadOnly: false,
   setUnreadOnly: (unreadOnly) => set({ unreadOnly }),
   scope: loadScope(),

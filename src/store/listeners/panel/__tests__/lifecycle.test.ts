@@ -860,6 +860,51 @@ describe("onRestoreRequested — Canopy trash undone", () => {
   });
 });
 
+describe("onRemoveRequested — removed from Canopy's Trash", () => {
+  afterEach(() => {
+    delete (window as { electron?: unknown }).electron;
+  });
+
+  function getHandlers() {
+    const removeHandlers: Array<(request: { runId: string }) => void> = [];
+    const kill = vi.fn(async () => {});
+    Object.defineProperty(window, "electron", {
+      value: {
+        canopy: {
+          onRemoveRequested: (handler: (request: { runId: string }) => void) => {
+            removeHandlers.push(handler);
+            return () => {};
+          },
+        },
+        terminal: { trash: vi.fn(async () => {}), restore: vi.fn(async () => {}), kill },
+      },
+      configurable: true,
+      writable: true,
+    });
+    setupLifecycleListeners();
+    return { removeRequest: removeHandlers.at(-1)!, kill };
+  }
+
+  it("removes the trashed pane for good, ending it as the dock's own Remove does", () => {
+    setupPanel();
+    const { removeRequest, kill } = getHandlers();
+    usePanelStore.getState().trashPanel("term-1");
+    removeRequest({ runId: "term-1" });
+    expect(usePanelStore.getState().panelsById["term-1"]).toBeUndefined();
+    expect(usePanelStore.getState().trashedTerminals.has("term-1")).toBe(false);
+    expect(kill).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves a pane that is out of the trash, and one it does not hold", () => {
+    setupPanel();
+    const { removeRequest, kill } = getHandlers();
+    removeRequest({ runId: "term-1" });
+    removeRequest({ runId: "elsewhere" });
+    expect(usePanelStore.getState().panelsById["term-1"]).toBeDefined();
+    expect(kill).not.toHaveBeenCalled();
+  });
+});
+
 // Canopy renames a terminal from main, which writes the host and the saved
 // state; the view holding the pane renames it as the user's own rename would.
 describe("onRenameRequested — Canopy rename", () => {

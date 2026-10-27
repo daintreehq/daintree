@@ -302,6 +302,12 @@ export const EVENT_META: Record<keyof DaintreeEventMap, EventMetadata> = {
     requiresTimestamp: false,
     description: "Terminal restored from trash",
   },
+  "terminal:trash-cleared": {
+    category: "agent",
+    requiresContext: false,
+    requiresTimestamp: false,
+    description: "Terminal left the trash for good: removed, or expired",
+  },
   "terminal:lifecycle": {
     category: "agent",
     requiresContext: false,
@@ -904,6 +910,15 @@ export type DaintreeEventMap = {
   };
 
   /**
+   * The trash let a terminal go without a restore: removed for good, or its
+   * time ran out. `expiresAt` names which trash of it that was.
+   */
+  "terminal:trash-cleared": {
+    id: string;
+    expiresAt: number;
+  };
+
+  /**
    * One change in a terminal's life, with the routing metadata recorded at its
    * launch (#13814). Main-only: published by `TerminalLifecycleObserver` from
    * the PTY client's spawn/exit stream and the trash, restore, worktree and
@@ -1170,6 +1185,7 @@ export const ALL_EVENT_TYPES: Array<keyof DaintreeEventMap> = [
   "action:dispatched",
   "terminal:trashed",
   "terminal:restored",
+  "terminal:trash-cleared",
   // `terminal:lifecycle` is deliberately absent: it restates the trash,
   // restore and PTY events above with every terminal's project attached, for
   // the plugin host's scoped feed. Buffered here it would reach the event

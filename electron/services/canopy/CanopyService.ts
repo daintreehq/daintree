@@ -13,6 +13,7 @@ import {
   type CanopyRunGlance,
   type CanopySeen,
   type CanopySnapshot,
+  type CanopyTrashEntry,
 } from "../../../shared/types/ipc/canopy.js";
 import {
   isSecretPrompt,
@@ -176,6 +177,8 @@ export interface CanopyServiceDeps {
   plan?: CanopyPlan;
   /** The fleet's current runs, or null while the fleet is unknown. */
   getRuns: () => readonly FleetRunRow[] | null;
+  /** Agent runs in the host's trash, newest first: Canopy's Trash rides its snapshot. */
+  getTrash?: () => CanopyTrashEntry[];
   /**
    * The run's current screen as plain text, with the pane's width when known
    * (to put rows the agent wrapped back together), or null when it can't be read.
@@ -587,6 +590,11 @@ export class CanopyService {
     if (!this.disposed) this.scheduleBroadcast();
   }
 
+  /** The host's trash changed: every view's Trash is told, whether or not Canopy reads. */
+  trashChanged(): void {
+    if (!this.disposed) this.scheduleBroadcast();
+  }
+
   /**
    * The user turned Canopy on or off. Turned off, nothing in
    * flight lands and every card goes: they were read off screens the user has
@@ -695,6 +703,7 @@ export class CanopyService {
         .map(([runId]) => runId),
       ...this.waitingState(),
       ...this.linkState(),
+      trash: this.deps.getTrash?.() ?? [],
     };
   }
 

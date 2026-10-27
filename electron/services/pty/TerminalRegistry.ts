@@ -97,8 +97,8 @@ export class TerminalRegistry {
     const timeout = setTimeout(() => {
       console.log(`[TerminalRegistry] Auto-killing trashed terminal after TTL: ${id}`);
       onExpire(id);
-      this.trashTimeouts.delete(id);
-      this.trashExpiryTimes.delete(id);
+      // The expiry's kill clears it on its way; this covers one that didn't.
+      this.clearTrashTimeout(id);
     }, this.trashTtlMs);
     // Unref so the pending TTL never holds the Electron event loop alive after
     // app.quit. The default TRASH_TTL_MS is 20s, but trashTtlMs is constructor-
@@ -137,14 +137,18 @@ export class TerminalRegistry {
   }
 
   /**
-   * Clear a trash timeout (called during kill).
+   * Clear a trash timeout (called during kill). The trash has let the terminal
+   * go for good, removed or expired, which every surface listing the trash
+   * must hear: an exited terminal's kill sends no exit to say it.
    */
   clearTrashTimeout(id: string): void {
     const timeout = this.trashTimeouts.get(id);
     if (timeout) {
       clearTimeout(timeout);
+      const expiresAt = this.trashExpiryTimes.get(id);
       this.trashTimeouts.delete(id);
       this.trashExpiryTimes.delete(id);
+      if (expiresAt !== undefined) events.emit("terminal:trash-cleared", { id, expiresAt });
     }
   }
 

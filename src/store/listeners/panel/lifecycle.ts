@@ -363,6 +363,22 @@ export function setupLifecycleListeners(): DisposableStore {
     );
   }
 
+  // Canopy removed a trashed terminal this view holds for good: the pane goes
+  // as the dock trash's own Remove takes it, the process ended by that kill so
+  // its session is kept for resuming as any close keeps it.
+  const onCanopyRemove = window.electron?.canopy?.onRemoveRequested;
+  if (onCanopyRemove) {
+    d.add(
+      toDisposable(
+        onCanopyRemove(({ runId }) => {
+          const panel = usePanelStore.getState().panelsById[runId];
+          if (!panel || panel.location !== "trash") return;
+          usePanelStore.getState().removePanel(runId);
+        })
+      )
+    );
+  }
+
   // Canopy renamed a terminal this view holds: the pane takes it as the user's
   // own rename here would, user-locked — or, for an empty title, back to the
   // default this view works out for it.

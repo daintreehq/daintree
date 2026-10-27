@@ -61,6 +61,7 @@ export function useCanopyInboxKeyboard({
   askRename,
   toggleRead,
   markAllRead,
+  onPastEnd,
 }: {
   /** What the keyboard walks: the list, then the archived runs once shown. */
   visible: CanopyItem[];
@@ -84,6 +85,8 @@ export function useCanopyInboxKeyboard({
   askRename: (item: CanopyItem) => void;
   toggleRead: (item: CanopyItem) => void;
   markAllRead: () => void;
+  /** Down off the inbox's last row, into the Trash below it: false when there is none. */
+  onPastEnd?: () => boolean;
 }) {
   const focusEntryNow = (entry: CanopyInboxEntry) =>
     entry.role === "worker" ? focusCardNow(entry.item.runId) : focusAssistantNow(entry.item.id);
@@ -94,6 +97,14 @@ export function useCanopyInboxKeyboard({
         null);
   // The pane's own run, assistant or worker: where a step from the search starts.
   const shownKey = selectedAssistant?.id ?? keyOfWorker(focusedItem?.runId);
+  // Down off the bottom of the inbox, from the row with that key: on to the Trash.
+  const pastEnd = (key: string | null, event: KeyboardEvent<HTMLElement>): boolean => {
+    if (key === null || navigation[navigation.length - 1]?.key !== key) return false;
+    if (!onPastEnd?.()) return false;
+    event.preventDefault();
+    event.stopPropagation();
+    return true;
+  };
 
   // The assistant rows' own keys. They walk the same order as the worker rows,
   // so an assistant in the Needs you band steps into the workers around it.
@@ -104,6 +115,7 @@ export function useCanopyInboxKeyboard({
     if (event.metaKey || event.ctrlKey || event.altKey) return;
     let next: CanopyInboxEntry | undefined;
     if (event.key === "ArrowDown" || event.key === "j") {
+      if (pastEnd(assistant.id, event)) return;
       next = stepEntry(navigation, assistant.id, 1);
     } else if (event.key === "ArrowUp" || event.key === "k") {
       if (navigation[0]?.key === assistant.id) {
@@ -220,6 +232,7 @@ export function useCanopyInboxKeyboard({
     }
     let next: CanopyInboxEntry | undefined;
     if (event.key === "ArrowDown" || event.key === "j") {
+      if (pastEnd(activeKey, event)) return;
       next = stepEntry(navigation, activeKey, 1);
     } else if (event.key === "ArrowUp" || event.key === "k") {
       next = stepEntry(navigation, activeKey, -1);
@@ -284,6 +297,11 @@ export function useCanopyInboxKeyboard({
       }
     }
     const selected = focusedIndex !== -1 ? visible[focusedIndex]! : (visible[0] ?? null);
+    // Nothing in the inbox: down from the search is down into the Trash.
+    if (plain && event.key === "ArrowDown" && navigation.length === 0 && onPastEnd?.()) {
+      event.preventDefault();
+      return;
+    }
     if (plain && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
       event.preventDefault();
       const target = stepEntry(navigation, shownKey, event.key === "ArrowDown" ? 1 : -1);

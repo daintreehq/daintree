@@ -162,13 +162,16 @@ export interface GeneratedIpcInvokeMap {
       channel:
         | "canopy:answer"
         | "canopy:archive"
+        | "canopy:empty-trash"
         | "canopy:get-snapshot"
         | "canopy:mark-all-read"
         | "canopy:mark-seen"
         | "canopy:refresh"
+        | "canopy:remove-trashed"
         | "canopy:rename"
         | "canopy:reread"
         | "canopy:restore-reads"
+        | "canopy:restore-trashed"
         | "canopy:retry-model"
         | "canopy:run-branch"
         | "canopy:search-screens"
@@ -258,6 +261,10 @@ export interface GeneratedIpcInvokeMap {
   "canopy:capture-backdrop": {
     args: [];
     result: Uint8Array<ArrayBufferLike> | null;
+  };
+  "canopy:empty-trash": {
+    args: [targets: (import("./canopy.js").CanopyTrashTarget & { runId: string })[]];
+    result: number;
   };
   "canopy:get-model": {
     args: [];
@@ -352,6 +359,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./canopy.js").CanopySnapshot;
   };
+  "canopy:remove-trashed": {
+    args: [runId: string, target: import("./canopy.js").CanopyTrashTarget];
+    result: void;
+  };
   "canopy:rename": {
     args: [runId: string, target: import("./canopy.js").CanopyTarget, title: string];
     result: void;
@@ -374,6 +385,10 @@ export interface GeneratedIpcInvokeMap {
   };
   "canopy:restore-reads": {
     args: [restores: import("./canopy.js").CanopyReadRestore[]];
+    result: void;
+  };
+  "canopy:restore-trashed": {
+    args: [runId: string, target: import("./canopy.js").CanopyTrashTarget];
     result: void;
   };
   "canopy:retry-model": {

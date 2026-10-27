@@ -624,7 +624,7 @@ describe("the Canopy host picker", () => {
     expect(own.rename).not.toHaveBeenCalled();
   });
 
-  it("trashes another host's run there, and takes it back there after the picker moved", async () => {
+  it("trashes another host's run there, and takes it back there", async () => {
     const own = installElectron();
     useCanopyStore.setState({ hostId: "studio" });
     render(<CanopyView />);
@@ -641,14 +641,13 @@ describe("the Canopy host picker", () => {
       spawnedAt: NOW - 3_600_000,
     });
     expect(own.trash).not.toHaveBeenCalled();
-    const toast = vi.mocked(notify).mock.calls.at(-1)![0];
-    expect(toast.title).toBe("Terminal trashed");
+    expect(vi.mocked(notify)).not.toHaveBeenCalled();
+    const line = document.querySelector("[data-canopy-undo-line]");
+    expect(line?.textContent).toContain("Trashed '");
 
-    // The receipt is the trashing host's: Undo goes back there, wherever the panel is now.
-    act(() => useCanopyStore.getState().setHostId(null));
-    await settle();
+    // The receipt is the trashing host's: Z goes back there, and nowhere else.
     await act(async () => {
-      void toast.actions?.find((action) => action.label === "Undo")?.onClick();
+      fireEvent.keyDown(document.querySelector('[data-testid="canopy-dialog"]')!, { key: "z" });
     });
     expect(state.invoke).toHaveBeenCalledWith("studio", "canopy:untrash", 7);
     expect(own.untrash).not.toHaveBeenCalled();

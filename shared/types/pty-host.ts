@@ -826,6 +826,8 @@ export type PtyHostEvent =
   | { type: "agent-killed"; payload: AgentKilledPayload }
   | { type: "terminal-trashed"; id: string; expiresAt: number }
   | { type: "terminal-restored"; id: string }
+  /** The trash let a terminal go without a restore: removed for good, or expired. */
+  | { type: "terminal-trash-cleared"; id: string; expiresAt: number }
   | {
       /**
        * The pty-host captured a resumable session — trash expiry, a natural

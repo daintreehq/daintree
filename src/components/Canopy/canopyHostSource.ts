@@ -36,6 +36,9 @@ export type CanopyApi = Pick<
   | "rename"
   | "trash"
   | "untrash"
+  | "restoreTrashed"
+  | "removeTrashed"
+  | "emptyTrash"
 >;
 
 /** The window's own host, looked up at each call as the panel always has. */
@@ -56,6 +59,9 @@ export const ownCanopyApi: CanopyApi = {
   rename: (...args) => window.electron.canopy.rename(...args),
   trash: (...args) => window.electron.canopy.trash(...args),
   untrash: (...args) => window.electron.canopy.untrash(...args),
+  restoreTrashed: (...args) => window.electron.canopy.restoreTrashed(...args),
+  removeTrashed: (...args) => window.electron.canopy.removeTrashed(...args),
+  emptyTrash: (...args) => window.electron.canopy.emptyTrash(...args),
 };
 
 /** The same calls, made on another host's Canopy and on nothing else. */
@@ -81,6 +87,9 @@ export function remoteCanopyApi(hostId: HostId): CanopyApi {
     rename: on("canopy:rename"),
     trash: on("canopy:trash"),
     untrash: on("canopy:untrash"),
+    restoreTrashed: on("canopy:restore-trashed"),
+    removeTrashed: on("canopy:remove-trashed"),
+    emptyTrash: on("canopy:empty-trash"),
   };
 }
 

@@ -67,6 +67,9 @@ export interface GeneratedElectronAPI {
     captureBackdrop(
       ...args: IpcInvokeMap["canopy:capture-backdrop"]["args"]
     ): Promise<IpcInvokeMap["canopy:capture-backdrop"]["result"]>;
+    emptyTrash(
+      ...args: IpcInvokeMap["canopy:empty-trash"]["args"]
+    ): Promise<IpcInvokeMap["canopy:empty-trash"]["result"]>;
     getModel(
       ...args: IpcInvokeMap["canopy:get-model"]["args"]
     ): Promise<IpcInvokeMap["canopy:get-model"]["result"]>;
@@ -97,6 +100,9 @@ export interface GeneratedElectronAPI {
     removeModels(
       ...args: IpcInvokeMap["canopy:remove-models"]["args"]
     ): Promise<IpcInvokeMap["canopy:remove-models"]["result"]>;
+    removeTrashed(
+      ...args: IpcInvokeMap["canopy:remove-trashed"]["args"]
+    ): Promise<IpcInvokeMap["canopy:remove-trashed"]["result"]>;
     rename(
       ...args: IpcInvokeMap["canopy:rename"]["args"]
     ): Promise<IpcInvokeMap["canopy:rename"]["result"]>;
@@ -109,6 +115,9 @@ export interface GeneratedElectronAPI {
     restoreReads(
       ...args: IpcInvokeMap["canopy:restore-reads"]["args"]
     ): Promise<IpcInvokeMap["canopy:restore-reads"]["result"]>;
+    restoreTrashed(
+      ...args: IpcInvokeMap["canopy:restore-trashed"]["args"]
+    ): Promise<IpcInvokeMap["canopy:restore-trashed"]["result"]>;
     retryModel(
       ...args: IpcInvokeMap["canopy:retry-model"]["args"]
     ): Promise<IpcInvokeMap["canopy:retry-model"]["result"]>;

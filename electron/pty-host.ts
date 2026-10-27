@@ -1232,6 +1232,14 @@ events.on("terminal:restored", (payload) => {
   });
 });
 
+events.on("terminal:trash-cleared", (payload) => {
+  sendEvent({
+    type: "terminal-trash-cleared",
+    id: payload.id,
+    expiresAt: payload.expiresAt,
+  });
+});
+
 events.on("agent-session:captured", (payload) => {
   sendEvent({
     type: "agent-session-captured",

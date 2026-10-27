@@ -9,6 +9,8 @@
  * it.
  */
 
+import type { FleetRunRow } from "./fleet.js";
+
 /** The screen's current state, as the classifier read it. */
 export type CanopyCategory =
   "approval" | "question" | "finished" | "error" | "working" | "running" | "idle";
@@ -278,6 +280,14 @@ export interface CanopyRestoreRequest {
 }
 
 /**
+ * The user removed a trashed run for good from Canopy's Trash. The view holding
+ * its pane in the trash drops it as its own Remove would, ending the process.
+ */
+export interface CanopyRemoveRequest {
+  runId: string;
+}
+
+/**
  * The user renamed a run from Canopy. The view that holds its pane renames the
  * pane as the user's own rename there would; an empty title puts back the one
  * Daintree gives it.
@@ -446,6 +456,18 @@ export interface CanopyReaderLink {
   readMs: number | null;
 }
 
+/**
+ * One agent run in the host's trash, whichever project it is in: Canopy's
+ * Trash. A trashed run has left the fleet, so it carries the run as the host
+ * had it when it was trashed: its name, agent and place, never its state.
+ */
+export interface CanopyTrashEntry {
+  run: FleetRunRow;
+  trashedAt: number;
+  /** When the trash lets it go; it also names which trash of the run this is. */
+  expiresAt: number;
+}
+
 export interface CanopySnapshot {
   /**
    * Rises with every snapshot main hands out, pulled or pushed, so a view
@@ -493,6 +515,8 @@ export interface CanopySnapshot {
   waiting?: "retrying";
   /** The local reader; absent while Canopy is off. */
   reader?: CanopyReaderLink;
+  /** Agent runs in this host's trash, any project's, newest first. Absent from older hosts. */
+  trash?: CanopyTrashEntry[];
 }
 
 /**
@@ -502,6 +526,11 @@ export interface CanopySnapshot {
  */
 export interface CanopyTarget {
   spawnedAt: number;
+}
+
+/** A trashed run an action is meant for: the incarnation, and which trash of it. */
+export interface CanopyTrashTarget extends CanopyTarget {
+  expiresAt: number;
 }
 
 /**

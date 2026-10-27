@@ -293,11 +293,10 @@ export function useCanopyInboxActions({
         return rename();
       },
       onTrash: (item) => {
-        // The trash keeps a terminal only briefly, and its own countdown sits
-        // behind this panel, in whichever project the run is in: so the way
-        // back is offered here, on the toast and on Z. The receipt means
-        // something only to the host that trashed it, so Undo goes back there
-        // whichever host the panel shows by then.
+        // No toast: the run leaves for the panel's own Trash, and the undo
+        // line and Z take it back. The receipt means something only to the
+        // host that trashed it, so Undo goes back there whichever host the
+        // panel shows by then.
         const trashedOn = api;
         const undo = reserveUndo();
         safeFireAndForget(
@@ -318,7 +317,7 @@ export function useCanopyInboxActions({
                       })
                     )
                   ),
-                { title: "Terminal trashed", message: itemSubject(item) }
+                { line: `Trashed '${itemSubject(item)}'` }
               );
             },
             (error: unknown) => {
