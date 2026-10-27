@@ -412,6 +412,8 @@ describe("buildCorrectionSystemPrompt target", () => {
     expect(rules).toContain('using the /design-review skill"');
     expect(rules).toContain('"commit the fix"');
     expect(rules).toContain("never in quotes or backticks");
+    // An opening command's arguments are copied exactly, so the inline rule stays out of them.
+    expect(rules).toContain("outside the arguments of a command the prompt opens with");
   });
 
   it("lists every command, bounding the descriptions instead", () => {

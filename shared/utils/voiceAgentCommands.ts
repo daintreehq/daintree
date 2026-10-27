@@ -113,8 +113,6 @@ const INVOCATION_NOUNS = new Set(["skill", "command", "plugin", "prompt"]);
 // "the model prompt" is ordinary speech.
 const REFERENCE_NOUNS = new Set(["skill", "skills", "command", "commands"]);
 const HANDOFF_VERBS = new Set([
-  "with",
-  "via",
   "use",
   "uses",
   "using",
@@ -132,6 +130,8 @@ const HANDOFF_VERBS = new Set([
   "triggers",
   "triggering",
 ]);
+// "with plugin creator" hands it the work; "happy with the design review" doesn't.
+const HANDOFF_PREPOSITIONS = new Set(["with", "via"]);
 const HANDOFF_FILLERS = new Set(["the", "a", "an", "my", "our", "your", "that", "this"]);
 // After a bare handoff verb, the name has to end its phrase: "use plugin
 // creator for a linter" hands work to it, "use the model output" doesn't.
@@ -157,6 +157,7 @@ const CLAUSE_WORDS = new Set([
   "first",
 ]);
 const CLAUSE_END_RE = /[.,;:!?…)]$/u;
+const SENTENCE_END_RE = /[.;:!?…]$/u;
 // What may wrap a token in prose: quotes, brackets, and the punctuation after it.
 const TOKEN_WRAPPER_RE = /^[("'`[\u2018\u201C]+|[)"'`\]\u2019\u201D.,;:!?…]+$/gu;
 
@@ -545,22 +546,27 @@ export type VoiceCommandEditRejection =
 /** Where a listed command or skill is named in `raw` in so many words, as one it means. */
 interface SpokenReference {
   entry: VoiceCommandEntry;
-  /** The words either side of the name, as `toKey` reads them; undefined at an edge. */
-  before: string | undefined;
-  after: string | undefined;
+  /**
+   * Up to two words either side of the name, nearest first, as `toKey` reads
+   * them: two, so a cleanup that drops the filler beside it still lines up.
+   */
+  before: string[];
+  after: string[];
 }
 
 function closesClause(text: string, span: WordSpan): boolean {
   return CLAUSE_END_RE.test(text.slice(span.start, span.end));
 }
 
-// The verb has to be in the name's own clause: "Use it. The model…" hands
-// nothing to the model.
+// The verb has to be in the name's own sentence: "Decide which tool to use.
+// Design review on Friday." hands nothing to the skill. A comma doesn't end
+// it: "use, um, plugin creator" still does.
 function hasHandoffVerb(text: string, spans: readonly WordSpan[], nameStart: number): boolean {
   for (let at = nameStart - 1, fillers = 0; at >= 0; at--) {
     const span = spans[at]!;
-    if (closesClause(text, span)) return false;
+    if (SENTENCE_END_RE.test(text.slice(span.start, span.end))) return false;
     if (HANDOFF_VERBS.has(span.word)) return true;
+    if (HANDOFF_PREPOSITIONS.has(span.word)) return fillers === 0;
     if (!HANDOFF_FILLERS.has(span.word) || ++fillers > 2) return false;
   }
   return false;
@@ -586,8 +592,11 @@ function spokenReferences(text: string, vocabulary: VoiceCommandVocabulary): Spo
     if (found.entry) {
       references.push({
         entry: found.entry,
-        before: spans[start - 1]?.word,
-        after: spans[found.last + 1]?.word,
+        before: spans
+          .slice(Math.max(0, start - 2), start)
+          .map((span) => span.word)
+          .reverse(),
+        after: spans.slice(found.last + 1, found.last + 3).map((span) => span.word),
       });
     }
     start = found.last + 1;
@@ -642,12 +651,30 @@ function bareToken(word: string): string {
 }
 
 /**
+ * Whether a token written between `before` and `after` stands where
+ * `reference` was: the word after it is one that followed the name, or the
+ * word before it one that preceded it, unless that's only an article, which
+ * any other mention of the name shares ("the review skill… the review
+ * results").
+ */
+function standsAt(
+  reference: SpokenReference,
+  before: string | undefined,
+  after: string | undefined
+): boolean {
+  const near = (said: readonly string[], written: string | undefined) =>
+    written === undefined ? said.length === 0 : said.includes(written);
+  if (near(reference.after, after)) return true;
+  return near(reference.before, before) && !(before && HANDOFF_FILLERS.has(before));
+}
+
+/**
  * Whether `corrected` writes a listed command where `raw` neither typed it
  * nor named it as a command, so cleanup turned plain words into one. Each
- * token written must stand where a reference was, with the word before or
- * after it unchanged, so naming a skill once can't turn "commit the docs"
- * later in the sentence into `/commit`. Command-shaped words the target
- * doesn't list ("/tmp") are paths and the like, and stay the prompt's business.
+ * token written must stand where a reference was, so naming a skill once
+ * can't turn "commit the docs" later in the sentence into `/commit`.
+ * Command-shaped words the target doesn't list ("/tmp") are paths and the
+ * like, and stay the prompt's business.
  */
 function writesUnnamedCommand(
   raw: string,
@@ -671,9 +698,7 @@ function writesUnnamedCommand(
     const before = neighbour(index - 1);
     const after = neighbour(index + 1);
     const at = references.findIndex(
-      (reference) =>
-        reference.entry.token === token &&
-        (reference.before === before || reference.after === after)
+      (reference) => reference.entry.token === token && standsAt(reference, before, after)
     );
     if (at >= 0) {
       references.splice(at, 1);

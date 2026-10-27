@@ -615,7 +615,11 @@ describe("checkVoiceCommandEdit for a command named partway into the prompt", ()
       "Inspect the model. Command handling is broken.",
       "Inspect the /model. Command handling is broken.",
     ],
-    ["Use it. Design review comes later.", "Use it. /design-review comes later."],
+    [
+      "Decide which tool to use. Design review on Friday.",
+      "Decide which tool to use. /design-review on Friday.",
+    ],
+    ["I'm happy with the design review.", "I'm happy with the /design-review."],
   ])("leaves words that only share a name as words: %j", (raw, corrected) => {
     expect(checkVoiceCommandEdit(raw, corrected, skills, true)).toBe("unprompted_command");
   });
@@ -628,6 +632,34 @@ describe("checkVoiceCommandEdit for a command named partway into the prompt", ()
     expect(
       checkVoiceCommandEdit(raw, "Check the review skill, then /review the header.", skills, false)
     ).toBe("unprompted_command");
+    // An article beside both mentions doesn't say which one was meant.
+    expect(
+      checkVoiceCommandEdit(
+        "Check the review skill, then inspect the review results.",
+        "Check the review skill, then inspect the /review results.",
+        skills,
+        false
+      )
+    ).toBe("unprompted_command");
+  });
+
+  it("lines a command up with its reference when cleanup drops the filler around it", () => {
+    expect(
+      checkVoiceCommandEdit(
+        "Then, basically, slash review, you know, on auth.",
+        "Then /review on auth.",
+        skills,
+        false
+      )
+    ).toBeNull();
+    expect(
+      checkVoiceCommandEdit(
+        "Then use, um, plugin creator for a linter.",
+        "Then use $plugin-creator for a linter.",
+        codexSkills,
+        true
+      )
+    ).toBeNull();
   });
 
   it("counts a command already typed, and writes one for each time it was named", () => {
