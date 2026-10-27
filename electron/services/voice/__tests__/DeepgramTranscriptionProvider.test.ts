@@ -163,9 +163,8 @@ vi.mock("../../../utils/logger.js", () => ({
 const { DeepgramTranscriptionProvider, estimateKeytermTokens } =
   await import("../DeepgramTranscriptionProvider.js");
 const { AUDIO_BUFFER_MAX_CHUNKS } = await import("../TranscriptionProvider.js");
-const { VOICE_REPLAY_AUDIO_LOST_CODE, VOICE_STOP_AUDIO_LOST_CODE } = await import(
-  "../../../../shared/types/voice.js"
-);
+const { VOICE_REPLAY_AUDIO_LOST_CODE, VOICE_STOP_AUDIO_LOST_CODE } =
+  await import("../../../../shared/types/voice.js");
 const { logInfo } = await import("../../../utils/logger.js");
 type DeepgramTranscriptionProviderInstance = InstanceType<typeof DeepgramTranscriptionProvider>;
 type VoiceTranscriptionEvent = import("../TranscriptionProvider.js").VoiceTranscriptionEvent;
@@ -2642,7 +2641,11 @@ describe("DeepgramTranscriptionProvider", () => {
       await Promise.all([first, second]);
 
       expect(instances).toHaveLength(2);
-      expect(latestInstance().textFrames().filter((f) => f.type === "CloseStream")).toHaveLength(1);
+      expect(
+        latestInstance()
+          .textFrames()
+          .filter((f) => f.type === "CloseStream")
+      ).toHaveLength(1);
     });
 
     it("stays quiet when a hard stop cuts the retry short", async () => {
@@ -2688,7 +2691,9 @@ describe("DeepgramTranscriptionProvider", () => {
       const provider = new DeepgramTranscriptionProvider();
       const { socket } = await bringSessionReady(provider);
       for (let i = 0; i < 8; i++) provider.sendAudioChunk(chunk(i));
-      socket.simulateMessage(resultsMessage("all of it", { is_final: true, start: 0, duration: 0.8 }));
+      socket.simulateMessage(
+        resultsMessage("all of it", { is_final: true, start: 0, duration: 0.8 })
+      );
       socket.respondsToPing = false;
 
       const stopPromise = provider.stopGracefully();
