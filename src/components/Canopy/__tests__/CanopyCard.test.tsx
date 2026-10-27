@@ -8,6 +8,8 @@ import type { FleetRunRow } from "@shared/types/ipc/fleet";
 import type { CanopyCard as CanopyCardData, CanopyCategory } from "@shared/types/ipc/canopy";
 import { buildPilotGroups } from "@/components/Pilot/pilotRows";
 import { buildCanopyInbox, type CanopyItem } from "../canopyModel";
+import type { VoiceRecordingTarget } from "@/store/voiceRecordingStore";
+import { DICTATION_OWNER_ATTR, canopyReplyVoiceId } from "@/services/canopyReplyDictation";
 import {
   TRASH_CONFIRM_MS,
   CanopyCard,
@@ -22,6 +24,7 @@ interface ComposerProps {
   onSend: (payload: { text: string; imagePaths?: string[] }) => void;
   onSendKey: (key: string) => void;
   submitText?: (text: string, imagePaths: string[]) => Promise<boolean>;
+  voiceTarget?: VoiceRecordingTarget;
 }
 
 interface TerminalProps {
@@ -328,6 +331,97 @@ describe("CanopyCard", () => {
     expect(h.onLeavePane).not.toHaveBeenCalled();
     fireEvent.keyDown(editor, { key: "Escape" });
     expect(h.onLeavePane).toHaveBeenCalledTimes(1);
+  });
+
+  describe("dictating a reply (#14777)", () => {
+    function renderWithHandle(
+      item: CanopyItem,
+      props: { otherHostId?: string; reconnecting?: boolean } = {}
+    ) {
+      const ref = createRef<CanopyCardHandle>();
+      const view = render(
+        <CanopyCard ref={ref} item={item} {...PROPS} {...handlers()} {...props} />
+      );
+      return { ...view, ref };
+    }
+
+    it("gives the reply a dictation of its own, apart from the pane's, typed to this run", async () => {
+      renderWithHandle(itemFor("question"));
+      expect((await composer()).voiceTarget).toEqual({
+        panelId: canopyReplyVoiceId("run-1"),
+        panelTitle: "Reply to Fix flaky panel tests",
+        surface: "canopy-reply",
+        terminalId: "run-1",
+      });
+    });
+
+    it("names no terminal of this machine's for another host's run", async () => {
+      renderWithHandle(itemFor("question"), { otherHostId: "host-2" });
+      const target = (await composer()).voiceTarget!;
+      expect(target.panelId).toBe(canopyReplyVoiceId("run-1", "host-2"));
+      expect(target.otherHostId).toBe("host-2");
+      expect(target.terminalId).toBeUndefined();
+    });
+
+    it("takes the dictation key from its live terminal and its reply alike", async () => {
+      const { container } = renderWithHandle(itemFor("question"));
+      await composer();
+      const owner = `[${DICTATION_OWNER_ATTR}]`;
+      expect(container.querySelector("[data-canopy-terminal]")!.closest(owner)).not.toBeNull();
+      expect(container.querySelector("[data-testid=composer]")!.closest(owner)).not.toBeNull();
+    });
+
+    it("dictates into the reply once its stream is open", async () => {
+      const { ref } = renderWithHandle(itemFor("question"));
+      await composer();
+      expect(ref.current!.dictation()).toMatchObject({
+        ok: false,
+        message: expect.stringContaining("still connecting"),
+      });
+
+      await streamOpens({ watchId: 7 });
+      const dictation = ref.current!.dictation();
+      expect(dictation.ok).toBe(true);
+      if (dictation.ok) expect(dictation.target.panelId).toBe(canopyReplyVoiceId("run-1"));
+    });
+
+    it("says it can't while the run asks for a secret, the readers' or the live screen's", async () => {
+      const secretCard = renderWithHandle(itemFor("question", { secretPrompt: true }));
+      expect(secretCard.ref.current!.dictation()).toMatchObject({
+        ok: false,
+        message: expect.stringContaining("secret"),
+      });
+      secretCard.unmount();
+
+      const { ref } = renderWithHandle(itemFor("question"));
+      await composer();
+      await streamOpens({ watchId: 7, secretPrompt: true });
+      expect(ref.current!.dictation()).toMatchObject({
+        ok: false,
+        message: expect.stringContaining("secret"),
+      });
+    });
+
+    it("says it can't once the terminal has ended, or while its host reconnects", async () => {
+      const ended = renderWithHandle(itemFor("question"));
+      await composer();
+      await act(async () =>
+        terminalProps.current!.onStreamChange({ watchId: null, ended: true, secretPrompt: false })
+      );
+      expect(ended.ref.current!.dictation()).toMatchObject({
+        ok: false,
+        message: expect.stringContaining("ended"),
+      });
+      ended.unmount();
+
+      const { ref } = renderWithHandle(itemFor("question"), { reconnecting: true });
+      await composer();
+      await streamOpens({ watchId: 7 });
+      expect(ref.current!.dictation()).toMatchObject({
+        ok: false,
+        message: expect.stringContaining("reconnecting"),
+      });
+    });
   });
 
   it("takes the first choice on Y only when the readers judged the action safe", () => {
