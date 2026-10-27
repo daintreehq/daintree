@@ -118,11 +118,21 @@ describe("dictationBlockers", () => {
       "granted"
     );
     const deepgram = dictationBlockers(
-      { transcriptionProvider: "deepgram", openaiApiKey: "sk-1", deepgramApiKey: "", xaiApiKey: "" },
+      {
+        transcriptionProvider: "deepgram",
+        openaiApiKey: "sk-1",
+        deepgramApiKey: "",
+        xaiApiKey: "",
+      },
       "granted"
     );
     const grok = dictationBlockers(
-      { transcriptionProvider: "grok", openaiApiKey: "sk-1", deepgramApiKey: "dg_1", xaiApiKey: "" },
+      {
+        transcriptionProvider: "grok",
+        openaiApiKey: "sk-1",
+        deepgramApiKey: "dg_1",
+        xaiApiKey: "",
+      },
       "granted"
     );
     expect(openai.join(" ")).toContain("OpenAI");
@@ -134,14 +144,24 @@ describe("dictationBlockers", () => {
     for (const mic of ["granted", "not-determined", "unknown"] as const) {
       expect(
         dictationBlockers(
-          { transcriptionProvider: "openai", openaiApiKey: "sk-1", deepgramApiKey: "", xaiApiKey: "" },
+          {
+            transcriptionProvider: "openai",
+            openaiApiKey: "sk-1",
+            deepgramApiKey: "",
+            xaiApiKey: "",
+          },
           mic
         )
       ).toEqual([]);
     }
     expect(
       dictationBlockers(
-        { transcriptionProvider: "openai", openaiApiKey: "sk-1", deepgramApiKey: "", xaiApiKey: "" },
+        {
+          transcriptionProvider: "openai",
+          openaiApiKey: "sk-1",
+          deepgramApiKey: "",
+          xaiApiKey: "",
+        },
         "denied"
       )
     ).toHaveLength(1);

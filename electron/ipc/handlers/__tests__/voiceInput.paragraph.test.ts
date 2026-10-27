@@ -2316,7 +2316,11 @@ describe("getVoiceSettings migration", () => {
         transcriptionProvider: "grok",
         transcriptionModel: "gpt-live-transcribe",
       })
-      .mockReturnValueOnce({ enabled: true, xaiApiKey: "xai-stored", transcriptionProvider: "grok" });
+      .mockReturnValueOnce({
+        enabled: true,
+        xaiApiKey: "xai-stored",
+        transcriptionProvider: "grok",
+      });
 
     const stored = getVoiceSettings();
     expect(stored.transcriptionProvider).toBe("grok");

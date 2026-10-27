@@ -29,7 +29,19 @@ const GROK_MODEL = "grok-voice-transcribe-2.0";
 const ENDPOINTING_MS = 300;
 // `format` (inverse text normalisation) needs an explicit language, and xAI
 // lists only these for it.
-const FORMAT_LANGUAGES = new Set(["ar", "de", "en", "es", "fr", "ja", "pt", "ru", "sv", "vi", "zh"]);
+const FORMAT_LANGUAGES = new Set([
+  "ar",
+  "de",
+  "en",
+  "es",
+  "fr",
+  "ja",
+  "pt",
+  "ru",
+  "sv",
+  "vi",
+  "zh",
+]);
 // Covers both the upgrade and the wait for `transcript.created`, since audio
 // can't go out until the server says it's ready.
 const CONNECT_TIMEOUT_MS = 10_000;
@@ -715,9 +727,7 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
 
   private connectionProvedHealthy(): boolean {
     if (this.readyAt === 0) return false;
-    return (
-      this.transcribedSinceReady || performance.now() - this.readyAt >= HEALTHY_CONNECTION_MS
-    );
+    return this.transcribedSinceReady || performance.now() - this.readyAt >= HEALTHY_CONNECTION_MS;
   }
 
   /**
@@ -749,7 +759,9 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
       this.handleFatalError(mySessionId, {
         severity: "fatal",
         code: "reconnect_exhausted",
-        message: last ? `Couldn't reconnect to Grok: ${last.message}` : "Couldn't reconnect to Grok",
+        message: last
+          ? `Couldn't reconnect to Grok: ${last.message}`
+          : "Couldn't reconnect to Grok",
       });
       return;
     }

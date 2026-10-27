@@ -300,7 +300,12 @@ describe("GrokTranscriptionProvider", () => {
       expect(statusesOf(events).at(-1)).toBe("recording");
 
       provider.sendAudioChunk(new Uint8Array([3, 3]).buffer);
-      expect(socket.binaryFrames().map((b) => [...b]).at(-1)).toEqual([3, 3]);
+      expect(
+        socket
+          .binaryFrames()
+          .map((b) => [...b])
+          .at(-1)
+      ).toEqual([3, 3]);
       provider.stop();
     });
 
@@ -516,7 +521,9 @@ describe("GrokTranscriptionProvider", () => {
       socket.simulateMessage(chunkFinal("The quick brown fox", 0, 3));
       socket.simulateMessage(partial("jumps over", { start: 3, duration: 1 }));
       socket.simulateMessage(chunkFinal("jumps over the lazy dog.", 3, 2.8));
-      socket.simulateMessage(utteranceFinal("The quick brown fox jumps over the lazy dog.", 0, 5.8));
+      socket.simulateMessage(
+        utteranceFinal("The quick brown fox jumps over the lazy dog.", 0, 5.8)
+      );
 
       const deltas = deltasOf(events);
       expect(deltas.map((d) => d.text)).toEqual([
@@ -647,7 +654,10 @@ describe("GrokTranscriptionProvider", () => {
       expect(deltasOf(events).map((d) => d.text)).toEqual(["kept"]);
       expect(completesOf(events)).toHaveLength(0);
       socket.simulateMessage(utteranceFinal("Kept.", 0, 0.6));
-      expect(completesOf(events)[0]).toMatchObject({ text: "Kept.", itemId: deltasOf(events)[0].itemId });
+      expect(completesOf(events)[0]).toMatchObject({
+        text: "Kept.",
+        itemId: deltasOf(events)[0].itemId,
+      });
       provider.stop();
     });
 
@@ -933,7 +943,11 @@ describe("GrokTranscriptionProvider", () => {
       expect(statusesOf(events).at(-1)).toBe("reconnecting");
       vi.advanceTimersToNextTimer();
       latestInstance().simulateReady();
-      expect(latestInstance().binaryFrames().map((b) => [...b])).toEqual([[4, 4]]);
+      expect(
+        latestInstance()
+          .binaryFrames()
+          .map((b) => [...b])
+      ).toEqual([[4, 4]]);
       expect(fatalErrorsOf(events)).toHaveLength(0);
       provider.stop();
     });
