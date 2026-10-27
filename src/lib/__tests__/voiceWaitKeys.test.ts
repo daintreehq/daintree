@@ -89,6 +89,32 @@ describe("voiceWaitKeys", () => {
     expect(theirs.sendNow).not.toHaveBeenCalled();
   });
 
+  it("calls the send off at Enter on the composer's Cancel send, and sends from the rest of its bar", () => {
+    const bar = document.createElement("div");
+    const other = document.createElement("button");
+    const cancel = document.createElement("button");
+    cancel.setAttribute("data-voice-wait-cancel", "");
+    const icon = document.createElement("span");
+    cancel.appendChild(icon);
+    bar.append(other, cancel);
+    document.body.appendChild(bar);
+    const owner = claim({ holds: (element) => bar.contains(element) });
+    const later = vi.fn();
+    onWindowCapture(later);
+
+    const onCancel = press("Enter", icon);
+
+    expect(onCancel.defaultPrevented).toBe(true);
+    expect(later).not.toHaveBeenCalled();
+    expect(owner.cancel).toHaveBeenCalledTimes(1);
+    expect(owner.sendNow).not.toHaveBeenCalled();
+
+    press("Enter", other);
+
+    expect(owner.sendNow).toHaveBeenCalledTimes(1);
+    expect(owner.cancel).toHaveBeenCalledTimes(1);
+  });
+
   it("leaves a key typed somewhere no waiting composer holds", () => {
     const field = document.createElement("input");
     document.body.appendChild(field);

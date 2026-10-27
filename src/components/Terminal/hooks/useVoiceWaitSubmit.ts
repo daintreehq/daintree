@@ -246,9 +246,10 @@ export function useVoiceWaitSubmit({
           // already nowhere; it goes back to the text the user is now free to
           // edit. On the key's release, not its press: a held Escape's repeats
           // would reach the editor's own Escape, which collapses the Expanded
-          // Editor or hands Escape to the agent.
+          // Editor or hands Escape to the agent. Enter on Cancel send calls
+          // the send off too, so its release counts.
           const refocus = (event: KeyboardEvent) => {
-            if (event.key !== "Escape") return;
+            if (event.key !== "Escape" && event.key !== "Enter") return;
             window.removeEventListener("keyup", refocus, true);
             const view = editorViewRef.current;
             const active = document.activeElement;

@@ -2005,6 +2005,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                         )}
                         aria-label="Cancel send"
                         aria-keyshortcuts="Escape"
+                        data-voice-wait-cancel=""
                       >
                         <X className="h-3.5 w-3.5" />
                       </button>
