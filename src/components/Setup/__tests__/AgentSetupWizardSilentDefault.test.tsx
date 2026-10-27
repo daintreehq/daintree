@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, act } from "@testing-library/react";
+import { render, act, screen } from "@testing-library/react";
 
 const { notifyMock } = vi.hoisted(() => ({
   notifyMock: vi.fn(),
@@ -14,7 +14,10 @@ const { setGlobalSkipPermissionsMock } = vi.hoisted(() => ({
   setGlobalSkipPermissionsMock: vi.fn(() => Promise.resolve()),
 }));
 const { dispatchMock } = vi.hoisted(() => ({
-  dispatchMock: vi.fn(() => Promise.resolve()),
+  dispatchMock: vi.fn(
+    (..._args: unknown[]): Promise<{ ok: boolean; error?: { message: string } }> =>
+      Promise.resolve({ ok: true })
+  ),
 }));
 
 vi.mock("@/lib/notify", () => ({
@@ -46,7 +49,12 @@ const agentToolbarPinsStoreState = {
   revision: 0,
   setAgentPinned: vi.fn(() => Promise.resolve()),
 };
-vi.mock("@/store", () => ({
+// The real terminal-input store, so the input step re-renders on the same
+// writes the Settings page sees.
+vi.mock("@/store", async () => ({
+  useTerminalInputStore: (
+    await vi.importActual<typeof import("@/store/terminalInputStore")>("@/store/terminalInputStore")
+  ).useTerminalInputStore,
   useAgentSettingsStore: Object.assign(
     (selector?: (s: unknown) => unknown) =>
       selector ? selector(agentSettingsStoreState) : agentSettingsStoreState,
@@ -229,6 +237,7 @@ vi.stubGlobal("window", {
 });
 
 import { AgentSetupWizard } from "../AgentSetupWizard";
+import { useTerminalInputStore } from "@/store/terminalInputStore";
 
 // Clicks the visible footer button whose label matches exactly. Only the
 // current step renders, so the match is unambiguous across the wizard flow.
@@ -664,8 +673,8 @@ describe("AgentSetupWizard permissions step", () => {
     expect(setGlobalSkipPermissionsMock).toHaveBeenCalledTimes(1);
     expect(setGlobalSkipPermissionsMock).toHaveBeenCalledWith(false);
     expect(notifyMock).not.toHaveBeenCalled();
-    // Advanced to the summary, not closed.
-    expect(document.body.textContent).toContain("Setup complete");
+    // Advanced to the input step, not closed.
+    expect(document.querySelector("h3")?.textContent).toBe("Agent input");
   });
 
   it("commits true before advancing when the toggle is enabled", async () => {
@@ -688,7 +697,7 @@ describe("AgentSetupWizard permissions step", () => {
 
     expect(setGlobalSkipPermissionsMock).toHaveBeenCalledWith(true);
     expect(notifyMock).not.toHaveBeenCalled();
-    expect(document.body.textContent).toContain("Setup complete");
+    expect(document.querySelector("h3")?.textContent).toBe("Agent input");
   });
 
   it("stays on the permissions step and surfaces an error when the save fails", async () => {
@@ -745,6 +754,153 @@ describe("AgentSetupWizard permissions step", () => {
     // Close is not consent — the global skip setting must never be written here.
     expect(setGlobalSkipPermissionsMock).not.toHaveBeenCalled();
     expect(onClose).toHaveBeenCalled();
+  });
+});
+
+async function gotoInputStep() {
+  await act(async () => {
+    render(
+      <AgentSetupWizard isOpen onClose={vi.fn()} isFirstRun initialAvailability={{ claude: "ready" }} />
+    );
+  });
+  await gotoPermissionsStep();
+  await clickButton("Continue"); // permissions -> input
+  expect(document.querySelector("h3")?.textContent).toBe("Agent input");
+}
+
+function inputSettingDispatches(): unknown[][] {
+  return dispatchMock.mock.calls.filter(([id]) => String(id).startsWith("terminalConfig."));
+}
+
+function hybridInputSwitch(): HTMLButtonElement {
+  return screen.getByRole("switch", { name: "Hybrid input" }) as HTMLButtonElement;
+}
+
+describe("AgentSetupWizard input step", () => {
+  beforeEach(() => {
+    dispatchMock.mockClear();
+    dispatchMock.mockImplementation(() => Promise.resolve({ ok: true }));
+    useTerminalInputStore.setState({ hybridInputEnabled: true, hybridInputAutoFocus: true });
+  });
+
+  it("starts on today's defaults and writes nothing when clicked straight through", async () => {
+    await gotoInputStep();
+
+    expect(hybridInputSwitch().getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByRole("radio", { name: "Hybrid input" }).getAttribute("aria-checked")).toBe(
+      "true"
+    );
+
+    await clickButton("Continue"); // input -> complete
+    expect(document.querySelector("h3")?.textContent).toBe("Setup complete");
+    expect(inputSettingDispatches()).toEqual([]);
+  });
+
+  it("shows the values already saved, since these are the Settings page's own settings", async () => {
+    useTerminalInputStore.setState({ hybridInputAutoFocus: false });
+    await gotoInputStep();
+
+    expect(screen.getByRole("radio", { name: "Terminal" }).getAttribute("aria-checked")).toBe(
+      "true"
+    );
+  });
+
+  it("writes the hybrid input switch through the Settings action", async () => {
+    await gotoInputStep();
+    await act(async () => {
+      hybridInputSwitch().click();
+    });
+
+    expect(inputSettingDispatches()).toEqual([
+      ["terminalConfig.setHybridInputEnabled", { enabled: false }, { source: "user" }],
+    ]);
+  });
+
+  it("writes the focus choice through the Settings action", async () => {
+    await gotoInputStep();
+    await act(async () => {
+      (screen.getByRole("radio", { name: "Terminal" }) as HTMLButtonElement).click();
+    });
+
+    expect(inputSettingDispatches()).toEqual([
+      ["terminalConfig.setHybridInputAutoFocus", { enabled: false }, { source: "user" }],
+    ]);
+  });
+
+  it("names what turning the hybrid input off gives up, on the switch itself", async () => {
+    await gotoInputStep();
+
+    const description = document.getElementById(
+      hybridInputSwitch().getAttribute("aria-describedby") ?? ""
+    )?.textContent;
+    expect(description).toMatch(/dictation/i);
+    expect(description).toMatch(/file references/i);
+  });
+
+  it("takes the focus choice away while the hybrid input is off", async () => {
+    await gotoInputStep();
+    await act(async () => {
+      useTerminalInputStore.setState({ hybridInputEnabled: false });
+    });
+
+    const terminal = screen.getByRole("radio", { name: "Terminal" }) as HTMLButtonElement;
+    expect(terminal.disabled || terminal.getAttribute("aria-disabled") === "true").toBe(true);
+    expect(document.body.textContent).toContain(
+      "Turn on the hybrid input to choose where agent panes put the keyboard"
+    );
+    await act(async () => {
+      terminal.click();
+    });
+    expect(inputSettingDispatches()).toEqual([]);
+  });
+
+  it("holds the step while a choice is saving, and turns away a second pick", async () => {
+    let settle: (value: { ok: boolean }) => void = () => {};
+    dispatchMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          settle = resolve;
+        })
+    );
+    await gotoInputStep();
+    await act(async () => {
+      hybridInputSwitch().click();
+    });
+    await act(async () => {
+      (screen.getByRole("radio", { name: "Terminal" }) as HTMLButtonElement).click();
+    });
+    await clickButton("Continue");
+    await clickButton("Back");
+
+    expect(document.querySelector("h3")?.textContent).toBe("Agent input");
+    expect(inputSettingDispatches()).toHaveLength(1);
+
+    await act(async () => {
+      settle({ ok: true });
+    });
+    await clickButton("Continue");
+    expect(document.querySelector("h3")?.textContent).toBe("Setup complete");
+  });
+
+  it("says a failed save was put back, and retries the same write", async () => {
+    dispatchMock.mockImplementationOnce(() =>
+      Promise.resolve({ ok: false, error: { message: "IPC down" } })
+    );
+    await gotoInputStep();
+    await act(async () => {
+      hybridInputSwitch().click();
+    });
+
+    expect(screen.getByRole("alert").textContent).toContain(
+      "The setting is back to its previous value."
+    );
+
+    await clickButton("Retry");
+    expect(inputSettingDispatches()).toEqual([
+      ["terminalConfig.setHybridInputEnabled", { enabled: false }, { source: "user" }],
+      ["terminalConfig.setHybridInputEnabled", { enabled: false }, { source: "user" }],
+    ]);
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });
 

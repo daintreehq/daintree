@@ -229,11 +229,12 @@ test("agent setup wizard review — every step of both flows", async () => {
       await closeWizard(page);
     });
 
-    // 2. First run — the full six-step flow, the shot the redesign is judged on.
+    // 2. First run — the full flow, the shot the redesign is judged on.
     await step("first-run", async () => {
       await openWizard(page, true);
       const seen = await walkFlow(page, "first", 10);
       expect(seen[0]).toBe("appearance");
+      expect(seen).toContain("input");
       expect(seen.at(-1)).toBe("complete");
       await closeWizard(page);
     });
@@ -244,6 +245,7 @@ test("agent setup wizard review — every step of both flows", async () => {
       await openWizard(page, false);
       const seen = await walkFlow(page, "rerun", 30);
       expect(seen[0]).toBe("agents");
+      expect(seen).not.toContain("input");
       expect(seen.at(-1)).toBe("complete");
       await closeWizard(page);
     });
