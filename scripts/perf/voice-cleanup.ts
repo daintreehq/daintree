@@ -572,6 +572,12 @@ function rescore(file: string): { run: RunRecord; corpus: CleanupCase[] } {
       corpus.push(entry!);
     }
   }
+  // Reference and check edits keep a passage's input, so they reach a rescore:
+  // they must be as sound as they would have to be for a new run.
+  const problems = corpusProblems(corpus);
+  if (problems.length > 0) {
+    throw new Error(`the corpus has problems:\n  ${problems.join("\n  ")}`);
+  }
   const kept = new Set(corpus.map((entry) => entry.id));
   run.trials = run.trials
     .filter((trial) => kept.has(trial.caseId))
@@ -687,10 +693,20 @@ async function main(): Promise<number> {
     renameSync(`${jsonPath}.tmp`, jsonPath);
   };
   save();
-  process.once("SIGINT", () => {
+  // The first Ctrl+C lets the request in flight land, since it is already
+  // paid for; a second one leaves at once.
+  let interrupted = false;
+  const stopEarly = () => {
     save();
     console.error(`\n[voice-cleanup] interrupted; kept ${run.trials.length} trials in ${jsonPath}`);
     process.exit(130);
+  };
+  process.on("SIGINT", () => {
+    if (interrupted) stopEarly();
+    interrupted = true;
+    console.error(
+      "\n[voice-cleanup] stopping after the request in flight (Ctrl+C again to quit now)"
+    );
   });
 
   if (options.probePrediction) {
@@ -729,6 +745,7 @@ async function main(): Promise<number> {
         run.trials.push(toTrial(entry, variant, repeat, result, performance.now() - started));
         done++;
         save();
+        if (interrupted) stopEarly();
       }
       if (done % 30 < options.variants.length || done === total) {
         console.error(`[voice-cleanup] ${done}/${total}`);

@@ -87,7 +87,7 @@ function countKept(haystack: string, keep: string): number {
  * "can you, can you" was.
  */
 function countPhrase(haystack: string, phrase: string): number {
-  const words = phrase
+  const words = straightenApostrophes(phrase)
     .split(/[^\p{L}\p{N}']+/u)
     .filter(Boolean)
     .map(escapeRegExp);
@@ -95,7 +95,11 @@ function countPhrase(haystack: string, phrase: string): number {
     `(?<![\\p{L}\\p{N}])${words.join("[\\s\\p{P}]+")}(?![\\p{L}\\p{N}])`,
     "giu"
   );
-  return haystack.match(pattern)?.length ?? 0;
+  return straightenApostrophes(haystack).match(pattern)?.length ?? 0;
+}
+
+function straightenApostrophes(text: string): string {
+  return text.replace(/[\u2018\u2019]/gu, "'");
 }
 
 const DIGIT_RUN_RE = /(?<!\p{N})\p{N}+(?:[.,:]\p{N}+)*(?!\p{N})/gu;
@@ -109,29 +113,54 @@ interface KeepCheck {
   count: (text: string) => number;
 }
 
+/** Whole protected spans as the guard scans them, so `---watch` is no copy of `--watch`. */
+function countProtectedSpan(haystack: string, span: string): number {
+  return scanProtectedSpans(haystack).filter((found) => found.text === span).length;
+}
+
 /**
- * Everything a cleanup must hand back as it was: the case's own keeps, and the
- * code, references, URLs, flags, paths and numbers in the raw transcript, by
- * the rule the meaning guard enforces. Each must come back as often as the raw
- * transcript has it.
+ * Everything a cleanup must hand back as it was: the code, references, URLs,
+ * flags, paths and numbers in the raw transcript, by the rule the meaning
+ * guard enforces, then the case's own keeps. Each must come back as often as
+ * the raw transcript has it. A keep that is also a protected span or a number
+ * is held to that stricter check.
  */
 function keepChecks(entry: CleanupCase): KeepCheck[] {
-  const checks: KeepCheck[] = (entry.keep ?? []).map((keep) => ({
-    label: keep,
-    count: (text) => countKept(text, keep),
-  }));
-  const seen = new Set(entry.keep ?? []);
+  const checks: KeepCheck[] = [];
+  const seen = new Set<string>();
   for (const { text: span } of scanProtectedSpans(entry.raw)) {
     if (seen.has(span)) continue;
     seen.add(span);
-    checks.push({ label: span, count: (text) => countOccurrences(text, span) });
+    checks.push({ label: span, count: (text) => countProtectedSpan(text, span) });
   }
   for (const run of entry.raw.match(DIGIT_RUN_RE) ?? []) {
     if (seen.has(run)) continue;
     seen.add(run);
     checks.push({ label: run, count: (text) => countDigitRun(text, run) });
   }
+  for (const keep of entry.keep ?? []) {
+    if (seen.has(keep)) continue;
+    seen.add(keep);
+    checks.push({ label: keep, count: (text) => countKept(text, keep) });
+  }
   return checks;
+}
+
+// A list the cleanup lays out numbers its items: "1. " at the start of a line.
+const LIST_ITEM_NUMBER_RE = /^[ \t]*\d{1,2}(?=[.)][ \t])/gmu;
+// A number standing as a word, not a digit inside an identifier such as `e2e`.
+const STANDALONE_NUMBER_RE = /(?<![\p{L}\p{N}])\p{N}+(?:[.,:]\p{N}+)*(?![\p{L}\p{N}])/gu;
+
+/** Numbers a reference has that the raw transcript doesn't, its list item numbers aside. */
+function invented(raw: string, reference: string): string[] {
+  const available = countWords(raw.match(STANDALONE_NUMBER_RE) ?? []);
+  const extra: string[] = [];
+  for (const run of reference.replace(LIST_ITEM_NUMBER_RE, "").match(STANDALONE_NUMBER_RE) ?? []) {
+    const left = available.get(run) ?? 0;
+    if (left > 0) available.set(run, left - 1);
+    else extra.push(run);
+  }
+  return extra;
 }
 
 function lineWords(text: string): string[] {
@@ -287,6 +316,13 @@ export function corpusProblems(corpus: readonly CleanupCase[]): string[] {
         if (keep.count(reference) < required) {
           problems.push(`${entry.id}: keep "${keep.label}" does not survive into "${reference}"`);
         }
+      }
+    }
+    // The prompt keeps numbers as they were transcribed, so a reference can't
+    // ask for a digit the speaker's words never were.
+    for (const reference of acceptedReferences(entry)) {
+      for (const run of invented(entry.raw, reference)) {
+        problems.push(`${entry.id}: "${reference}" has the number ${run}, which the raw doesn't`);
       }
     }
     if (entry.uncertain?.length && entry.style !== "deepgram") {

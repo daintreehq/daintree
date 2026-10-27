@@ -102,6 +102,11 @@ describe("alignWords and scoreClip", () => {
     expect([a.substitutions, a.deletions, a.insertions]).toEqual([1, 0, 1]);
     expect(a.referenceOps).toEqual(["match", "sub", "match", "match"]);
     expect(a.inserted).toEqual(["e1"]);
+    expect(alignWords(["a1", "b1"], ["x1", "a1", "y1", "b1", "z1"]).inserted).toEqual([
+      "x1",
+      "y1",
+      "z1",
+    ]);
     const b = alignWords(["a1", "b1", "c1"], ["a1", "c1"]);
     expect(b.referenceOps).toEqual(["match", "del", "match"]);
   });

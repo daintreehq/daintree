@@ -83,6 +83,38 @@ describe("corpusProblems", () => {
       'f: keep "--watch" does not survive into "Invalidate the cache when the branch changes."',
     ]);
   });
+
+  it("flags a reference with a number the speaker never gave, but not a list's item numbers", () => {
+    expect(
+      corpusProblems([
+        makeCase({
+          id: "g",
+          raw: "deepgram nova three is slow",
+          reference: "Deepgram Nova-3 is slow.",
+          fixes: [],
+          drops: [],
+        }),
+        makeCase({
+          id: "h",
+          raw: "first read it second fix it in e two e",
+          reference: "1. Read it.\n2. Fix it in e2e.",
+          fixes: [],
+          drops: [],
+        }),
+        makeCase({
+          id: "i",
+          raw: "retry 3 times then 3 more",
+          reference: "Retry 3 times, then 3 more.",
+          alsoAccept: ["Retry 3 times, then more."],
+          fixes: [],
+          drops: [],
+        }),
+      ])
+    ).toEqual([
+      'g: "Deepgram Nova-3 is slow." has the number 3, which the raw doesn\'t',
+      'i: keep "3" does not survive into "Retry 3 times, then more."',
+    ]);
+  });
 });
 
 describe("scoreText", () => {
@@ -152,6 +184,23 @@ describe("scoreText", () => {
     expect(scoreText(entry, "Um, bring the umbrella.").missedDrops).toEqual(["um"]);
   });
 
+  it("reads a typographic apostrophe as a straight one, either way round", () => {
+    const entry = makeCase({
+      raw: "I don't, I don't want it",
+      reference: "I don't want it.",
+      fixes: [],
+      drops: ["I don't, I don't"],
+    });
+    expect(scoreText(entry, "I don\u2019t, I don\u2019t want it.").missedDrops).toEqual([
+      "I don't, I don't",
+    ]);
+    expect(
+      scoreText({ ...entry, drops: ["I don\u2019t, I don\u2019t"] }, "I don't, I don't want it.")
+        .missedDrops
+    ).toEqual(["I don\u2019t, I don\u2019t"]);
+    expect(scoreText(entry, "I don\u2019t want it.").missedDrops).toEqual([]);
+  });
+
   it("still finds a stutter whose punctuation was taken out", () => {
     const entry = makeCase({
       raw: "can you, can you check the logs",
@@ -191,6 +240,32 @@ describe("scoreText", () => {
       "shared/config",
       "3",
     ]);
+  });
+
+  it("needs every copy of a protected span and number, each whole and exact", () => {
+    const entry = makeCase({
+      raw: "run --watch then --watch on 3 files and 3 dirs in package.json",
+      reference: "Run --watch, then --watch on 3 files and 3 dirs in package.json.",
+      fixes: [],
+      drops: [],
+      // A keep that is also a protected span gets the span's exact check.
+      keep: ["package.json"],
+    });
+    expect(scoreText(entry, entry.reference).lostKeeps).toEqual([]);
+    expect(
+      scoreText(entry, "Run --watch on 3 files and 3 dirs in package.json.").lostKeeps
+    ).toEqual(["--watch"]);
+    expect(
+      scoreText(entry, "Run ---watch, then --watch on 3 files and 3 dirs in package.json.")
+        .lostKeeps
+    ).toEqual(["--watch"]);
+    expect(
+      scoreText(entry, "Run --watch, then --watch on 3 files and 33 dirs in package.json.")
+        .lostKeeps
+    ).toEqual(["3"]);
+    expect(
+      scoreText(entry, "Run --watch, then --watch on 3 files and 3 dirs in Package.json.").lostKeeps
+    ).toEqual(["package.json"]);
   });
 
   it("needs every copy of a kept span, letter for letter but for the first one's case", () => {
