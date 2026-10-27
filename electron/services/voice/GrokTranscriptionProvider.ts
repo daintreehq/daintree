@@ -109,9 +109,27 @@ const TRIMMED_RETRY_KEYTERMS = 20;
 // Two results belong to the same stretch of audio when one starts this close
 // to where the other ends.
 const RESULT_TIMING_TOLERANCE_SECONDS = 0.1;
-// A transcript.done word starting this close to where the last utterance
-// final ended is past it: the two are the same instant in float seconds.
+// Two times this close are the same instant in float seconds: a
+// transcript.done word starting there is past the last utterance final, and
+// a chunk final ending there covers the same audio as the earlier one.
 const WORD_BOUNDARY_EPSILON_SECONDS = 0.001;
+// An interim cut mid-phrase ends in a mark of it ("it's kind of...", "take
+// a-"), which the next interim drops again.
+const INTERIM_CUT_OFF_RE = /\s*(?:\.{2,}|…|[-–—])+$/u;
+// A result's own timing can't say which locked chunks it restates: Grok times
+// chunks and finals alike from the utterance's start. Its words' timing can.
+// Grok times a word the same in a chunk final and in the final restating it;
+// this absorbs a small revision, far short of the gap between two chunks.
+const RESTATED_WORD_TOLERANCE_SECONDS = 0.25;
+// Without word timing, a result restates locked chunks when this share of
+// their words opens it, in order. A restatement may reword a few words; a new
+// phrase that merely opens like a chunk rarely shares this many.
+const RESTATED_WORD_SHARE = 0.75;
+// Under this share of a chunk's words, a result hasn't restated it whatever
+// else says so: one its timing says restates chunks lost words rather than
+// reformatted them, since Grok formats chunk finals and finals in the same
+// pass, and a run whose first chunk opens with fewer only scored on the rest.
+const RESTATED_MIN_WORD_SHARE = 0.5;
 
 // Grok sends nothing when speech starts, which a held spoken "send it" waits
 // on (Deepgram's `SpeechStarted`). A plain level check over the outgoing audio
@@ -233,6 +251,12 @@ function scoreText(text: string, words: unknown): ScoredText {
   return { text, uncertain: flagUncertainWords(text, timedWords(words), UNCERTAIN_BELOW) };
 }
 
+/** Where a result's first word starts on its connection, or null when no word is timed. */
+function firstWordAt(words: unknown): number | null {
+  if (!Array.isArray(words)) return null;
+  return timedWords(words).find((word) => word.text && word.start !== null)?.start ?? null;
+}
+
 /** Joins the parts with a space, moving each part's spans to where it lands. */
 function joinTranscript(parts: readonly ScoredText[]): ScoredText {
   let text = "";
@@ -249,6 +273,74 @@ function joinTranscript(parts: readonly ScoredText[]): ScoredText {
 /** A chunk final the current utterance has locked, timed on its connection. */
 interface LockedChunk extends ScoredText {
   end: number;
+  /** Where its first word starts, or null when its words weren't timed. */
+  at: number | null;
+}
+
+/** The words of `transcript.done` past the last utterance final, as a result. */
+interface DoneTail extends ScoredText {
+  at: number | null;
+}
+
+function spokenWords(text: string): string[] {
+  return text
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter(Boolean);
+}
+
+/** How many words `a` and `b` share in order (their longest common subsequence). */
+function sharedWordCount(a: readonly string[], b: readonly string[]): number {
+  let previous = new Array<number>(b.length + 1).fill(0);
+  for (const word of a) {
+    const current = [0];
+    for (let j = 0; j < b.length; j++) {
+      current.push(word === b[j] ? previous[j]! + 1 : Math.max(previous[j + 1]!, current[j]!));
+    }
+    previous = current;
+  }
+  return previous[b.length]!;
+}
+
+/** Whether `words` open with `share` of `said`, in order, a few words added among them. */
+function opensWith(words: readonly string[], said: readonly string[], share: number): boolean {
+  const opening = words.slice(0, said.length + Math.ceil(said.length / 4) + 2);
+  return sharedWordCount(said, opening) >= share * said.length;
+}
+
+/**
+ * The locked chunks a result doesn't restate, which land ahead of it: all of
+ * them when it restates none, so a result carrying less than the chunks
+ * never takes their words with it. With every word timed, it restates the
+ * chunks starting where its first word does or later, however either was
+ * formatted, provided it holds enough of their words. Otherwise the words
+ * decide: a run of chunks is restated when it opens the result, its first
+ * chunk included, so a chunk the result never mentions isn't swallowed by
+ * the run's score.
+ */
+function chunksNotRestated(
+  chunks: readonly LockedChunk[],
+  result: ScoredText,
+  at: number | null
+): LockedChunk[] {
+  const words = spokenWords(result.text);
+  if (at !== null && chunks.every((chunk) => chunk.at !== null)) {
+    const from = chunks.findIndex((chunk) => chunk.at! + RESTATED_WORD_TOLERANCE_SECONDS >= at);
+    if (from < 0) return [...chunks];
+    const restated = chunks.slice(from).flatMap((chunk) => spokenWords(chunk.text));
+    const held = sharedWordCount(restated, words) >= RESTATED_MIN_WORD_SHARE * restated.length;
+    return held ? chunks.slice(0, from) : [...chunks];
+  }
+  for (let from = 0; from < chunks.length; from++) {
+    const restated = chunks.slice(from).map((chunk) => spokenWords(chunk.text));
+    if (
+      opensWith(words, restated[0]!, RESTATED_MIN_WORD_SHARE) &&
+      opensWith(words, restated.flat(), RESTATED_WORD_SHARE)
+    ) {
+      return chunks.slice(0, from);
+    }
+  }
+  return [...chunks];
 }
 
 export class GrokTranscriptionProvider implements TranscriptionProvider {
@@ -319,9 +411,10 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
 
   // One utterance is one item: its interims and chunk finals replace one
   // preview, and its utterance final, which restates the whole utterance,
-  // completes it. Chunk finals locked on an earlier connection are carried as
-  // text, since their audio was confirmed and isn't resent. Every piece keeps
-  // its own unsure words, placed in the completion wherever the piece lands.
+  // completes it, after any locked chunk it left out. Chunk finals locked on
+  // an earlier connection are carried as text, since their audio was
+  // confirmed and isn't resent. Every piece keeps its own unsure words,
+  // placed in the completion wherever the piece lands.
   private utteranceItemId: string | null = null;
   private carriedText: ScoredText[] = [];
   private lockedChunks: LockedChunk[] = [];
@@ -946,11 +1039,14 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
         const trimmed = text.trim();
         logDebug(`${P} ← transcript.partial`, { length: trimmed.length, isFinal, speechFinal });
         if (trimmed) this.transcribedSinceReady = true;
-        const scored = scoreText(trimmed, payload.words);
+        const scored = scoreText(
+          isFinal ? trimmed : trimmed.replace(INTERIM_CUT_OFF_RE, ""),
+          payload.words
+        );
         if (speechFinal) {
-          this.completeUtterance(scored, start, duration);
+          this.completeUtterance(scored, start, duration, firstWordAt(payload.words));
         } else if (isFinal) {
-          this.lockChunk(scored, start, duration);
+          this.lockChunk(scored, start, duration, firstWordAt(payload.words));
         } else {
           this.showInterim(scored, start);
         }
@@ -971,16 +1067,34 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
   }
 
   /**
-   * The chunk finals a result follows: those ending where it starts. A
-   * result that restates the utterance so far starts before any of them ends,
-   * so none are kept. One without timing is taken as following them all, or,
-   * for an utterance final, as restating them, as xAI documents.
+   * The chunk finals an interim follows: those ending where it starts. One
+   * that restates the utterance so far starts before any of them ends, so
+   * none are kept. One without timing is taken as following them all.
    */
-  private chunksBefore(start: number | null, restates: boolean): LockedChunk[] {
-    if (start === null) return restates ? [] : this.lockedChunks;
+  private chunksBefore(start: number | null): LockedChunk[] {
+    if (start === null) return this.lockedChunks;
     return this.lockedChunks.filter(
       (chunk) => chunk.end <= start + RESULT_TIMING_TOLERANCE_SECONDS
     );
+  }
+
+  /**
+   * The locked chunks a result ending the utterance leaves out, to land ahead
+   * of it. Grok's utterance final, and `transcript.done`'s tail, restate the
+   * whole utterance, so normally there are none. Counted, never quoted: the
+   * words are dictated text.
+   */
+  private chunksLeftOut(result: ScoredText, at: number | null, ending: string): LockedChunk[] {
+    const kept = chunksNotRestated(this.lockedChunks, result, at);
+    if (kept.length > 0) {
+      logWarn(`${P} ${ending} left out words its chunk finals had; kept them`, {
+        keptChunks: kept.length,
+        lockedChunks: this.lockedChunks.length,
+        resultLength: result.text.length,
+        resultTimed: at !== null,
+      });
+    }
+    return kept;
   }
 
   private showPreview(parts: readonly ScoredText[]): void {
@@ -993,30 +1107,43 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
   }
 
   private showInterim(interim: ScoredText, start: number | null): void {
-    const before = this.chunksBefore(start, false);
+    const before = this.chunksBefore(start);
     this.showPreview([...this.carriedText, ...before, interim]);
   }
 
   /**
    * A chunk final never changes, so its audio is confirmed and its text kept
    * for the preview. It doesn't complete anything: the utterance final
-   * restates it.
+   * restates it. Grok times it from the utterance's start, though its text is
+   * only its own words, so it follows the chunks that end before it does.
    */
-  private lockChunk(chunk: ScoredText, start: number | null, duration: number | null): void {
+  private lockChunk(
+    chunk: ScoredText,
+    start: number | null,
+    duration: number | null,
+    at: number | null
+  ): void {
     this.confirmAudio(start, duration);
-    const before = this.chunksBefore(start, false);
-    const end = start === null ? Number.NEGATIVE_INFINITY : start + (duration ?? 0);
-    this.lockedChunks = chunk.text ? [...before, { ...chunk, end }] : before;
+    // One with no words adds none, and takes none from the chunks before it.
+    if (chunk.text) {
+      const end = start === null || duration === null ? null : start + duration;
+      const before =
+        end === null
+          ? this.lockedChunks
+          : this.lockedChunks.filter((locked) => locked.end + WORD_BOUNDARY_EPSILON_SECONDS < end);
+      this.lockedChunks = [...before, { ...chunk, end: end ?? Number.NEGATIVE_INFINITY, at }];
+    }
     this.showPreview([...this.carriedText, ...this.lockedChunks]);
   }
 
   private completeUtterance(
     final: ScoredText,
     start: number | null,
-    duration: number | null
+    duration: number | null,
+    at: number | null
   ): void {
     this.confirmAudio(start, duration);
-    const before = this.chunksBefore(start, true);
+    const before = this.chunksLeftOut(final, at, "An utterance final");
     const { text: full, uncertain } = joinTranscript([...this.carriedText, ...before, final]);
     const itemId = this.utteranceItemId;
     if (start !== null && duration !== null) {
@@ -1050,7 +1177,7 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
    * The words of `transcript.done` that no utterance final on this connection
    * covered, or null when it names none: then only the preview is left.
    */
-  private uncompletedWords(words: unknown): ScoredText | null {
+  private uncompletedWords(words: unknown): DoneTail | null {
     if (!Array.isArray(words)) return null;
     const tail = timedWords(words).filter(
       (word) =>
@@ -1060,7 +1187,11 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
     );
     if (tail.length === 0) return null;
     const text = tail.map((word) => word.text).join(" ");
-    return { text, uncertain: flagUncertainWords(text, tail, UNCERTAIN_BELOW) };
+    return {
+      text,
+      uncertain: flagUncertainWords(text, tail, UNCERTAIN_BELOW),
+      at: tail[0]!.start,
+    };
   }
 
   /**
@@ -1070,10 +1201,14 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
    * stream ended or failed before the utterance did, so its last words may
    * be missing and none of them can be read as a command.
    */
-  private settleOpenUtterance(reason: string, serverTail: ScoredText | null = null): void {
+  private settleOpenUtterance(reason: string, serverTail: DoneTail | null = null): void {
     const itemId = this.utteranceItemId;
     const { text, uncertain } = serverTail
-      ? joinTranscript([...this.carriedText, serverTail])
+      ? joinTranscript([
+          ...this.carriedText,
+          ...this.chunksLeftOut(serverTail, serverTail.at, "transcript.done's tail"),
+          serverTail,
+        ])
       : this.preview;
     this.resetUtterance();
     if (!itemId && !text) return;
