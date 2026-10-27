@@ -345,6 +345,23 @@ describe("CanopyView Trash", () => {
     expect(document.activeElement?.id).toBe("canopy-card-newer");
   });
 
+  it("takes the keyboard to a run restored into an empty inbox", async () => {
+    await open([TRASH[0]!], []);
+    fireEvent.click(trashBar()!);
+    fireEvent.keyDown(trashBar()!, { key: "ArrowDown" });
+    await act(async () => {
+      fireEvent.keyDown(trashRows()[0]!, { key: "Enter" });
+    });
+    await act(async () => {
+      useCanopyStore.setState({ snapshot: { ...baseSnapshot, trash: [] } });
+    });
+    await act(async () => {
+      useFleetSnapshotStore.setState({ snapshot: fleet(["newer"]) });
+    });
+    await frames();
+    expect(document.activeElement?.id).toBe("canopy-card-newer");
+  });
+
   it("is reached from the inbox's last row by arrow, unfolded there, and Enter restores", async () => {
     const canopy = await open(TRASH);
     const last = document.getElementById("canopy-card-live")!;

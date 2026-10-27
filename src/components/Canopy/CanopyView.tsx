@@ -993,7 +993,9 @@ function CanopyInbox({
   }, [restored, searchRef]);
   useEffect(() => {
     if (restored === null) return;
-    if (shownRunId !== restored.from) {
+    // Another run picked meanwhile is the user's choice; the inbox landing on
+    // the restored run itself, with nothing else to show, is this one arriving.
+    if (shownRunId !== restored.from && shownRunId !== restored.runId) {
       setRestored(null);
       return;
     }
