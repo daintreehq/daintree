@@ -17,8 +17,12 @@
 
 .canopy-inbox {
   background: var(--theme-surface-sidebar);
-  /* Rows brought into view stop below the pinned headings — the Inbox bar and
-     the band heading under it — never under them. */
+  /* Rows brought into view stop below the pinned headings — the section bar,
+     and the band heading under it while the band has rows — never under them. */
+  scroll-padding-top: 2.25rem;
+}
+
+.canopy-inbox[data-band-headings] {
   scroll-padding-top: 4rem;
 }
 
