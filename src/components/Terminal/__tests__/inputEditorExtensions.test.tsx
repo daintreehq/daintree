@@ -1195,7 +1195,9 @@ describe("pendingAIField", () => {
   it("draws a rewrite of the whole passage with no underline left after it", () => {
     const view = makeView("fix the bug");
     view.dispatch({
-      effects: setPendingAIRanges.of([{ from: 0, to: 11, rewrite: { to: 11, text: "Fix the bug." } }]),
+      effects: setPendingAIRanges.of([
+        { from: 0, to: 11, rewrite: { to: 11, text: "Fix the bug." } },
+      ]),
     });
 
     expect(spans(view)).toEqual([{ from: 0, to: 11, widget: true }]);

@@ -153,7 +153,9 @@ describe("CorrectionStreamAligner", () => {
     const seen = stream(dictated, "/review fix the login bug");
     expect(seen.map((r) => r.text)).toEqual(["/review fix the"]);
     expect(seen.at(-1)!.rawTo).toBe(rawTo(dictated, "fix the"));
-    expect(shown(dictated, seen.at(-1))).toBe("/review fix the login bug and then run the review skill");
+    expect(shown(dictated, seen.at(-1))).toBe(
+      "/review fix the login bug and then run the review skill"
+    );
   });
 
   it("lays out a spoken list as the stream reaches each item", () => {

@@ -2275,7 +2275,9 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       timing?: VoiceCorrectionTiming;
     }>;
     /** A streaming correction's text so far, cut at a word boundary; only ever grows. */
-    onCorrectionProgress(callback: (payload: { streamId: string; text: string }) => void): () => void;
+    onCorrectionProgress(
+      callback: (payload: { streamId: string; text: string }) => void
+    ): () => void;
     onFileTokenResolved(
       callback: (payload: {
         sessionId: string;

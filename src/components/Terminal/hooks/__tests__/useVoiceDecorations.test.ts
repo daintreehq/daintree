@@ -32,9 +32,11 @@ function mount(doc: string) {
 
 function streamRewrite() {
   act(() => {
-    useVoiceRecordingStore.getState().setCorrectionRanges(PANEL, [
-      { from: 0, to: DICTATED.length, rewrite: { to: 9, text: "So fix" } },
-    ]);
+    useVoiceRecordingStore
+      .getState()
+      .setCorrectionRanges(PANEL, [
+        { from: 0, to: DICTATED.length, rewrite: { to: 9, text: "So fix" } },
+      ]);
   });
 }
 

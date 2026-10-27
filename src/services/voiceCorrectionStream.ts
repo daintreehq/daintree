@@ -34,9 +34,7 @@ interface Token {
 
 /** One step of an alignment: a streamed unit against a dictated one, or either alone. */
 type Step =
-  | { kind: "pair"; s: number; d: number; score: number }
-  | { kind: "added" }
-  | { kind: "dropped" };
+  { kind: "pair"; s: number; d: number; score: number } | { kind: "added" } | { kind: "dropped" };
 
 const MATCH = 2;
 const FUZZY = 1;
@@ -261,9 +259,11 @@ function alignStretch(streamed: Unit[], dictated: Unit[]): Step[] {
       i--;
     } else {
       const left = k - 1;
-      state = [pair[left]! + GAP_OPEN, added[left]! + GAP_OPEN, dropped[left]! + GAP_EXTEND].indexOf(
-        value
-      );
+      state = [
+        pair[left]! + GAP_OPEN,
+        added[left]! + GAP_OPEN,
+        dropped[left]! + GAP_EXTEND,
+      ].indexOf(value);
       steps.push({ kind: "dropped" });
       j--;
     }

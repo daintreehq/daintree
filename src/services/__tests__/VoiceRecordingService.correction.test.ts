@@ -109,12 +109,10 @@ function stubElectron() {
         callbacks.boundary = cb;
         return () => {};
       }),
-      onCorrectionProgress: vi.fn(
-        (cb: (payload: { streamId: string; text: string }) => void) => {
-          callbacks.progress = cb;
-          return () => {};
-        }
-      ),
+      onCorrectionProgress: vi.fn((cb: (payload: { streamId: string; text: string }) => void) => {
+        callbacks.progress = cb;
+        return () => {};
+      }),
       onFileTokenResolved: vi.fn((cb: (payload: FileTokenPayload) => void) => {
         callbacks.fileToken = cb;
         return () => {};
