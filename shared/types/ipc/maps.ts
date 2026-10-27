@@ -6,7 +6,7 @@ import type {
   VoiceLiveSessionUpdate,
   VoiceSessionEndReason,
 } from "../voice.js";
-import type { VoiceSessionReport } from "../voiceSessionSummary.js";
+import type { VoiceCorrectionTiming, VoiceSessionReport } from "../voiceSessionSummary.js";
 import type {
   Project,
   ProjectAddOptions,
@@ -1303,10 +1303,18 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
         terminalId?: string;
         /** Nothing but whitespace comes before the passage in the draft. */
         startsPrompt?: boolean;
+        /** The dictation the passage came from: its context was read while it ran. */
+        sessionId?: string;
       },
     ];
     // `failed`: the request failed or was cancelled, leaving the raw text.
-    result: { action: "no_change" | "replace"; correctedText: string; failed?: true };
+    // `timing`: main's share of the wait, timings only.
+    result: {
+      action: "no_change" | "replace";
+      correctedText: string;
+      failed?: true;
+      timing?: VoiceCorrectionTiming;
+    };
   };
 
   // Crash Recovery channels

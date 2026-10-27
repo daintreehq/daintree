@@ -71,6 +71,19 @@ export const VoiceSessionReportSchema = z
 
 export type VoiceSessionReport = z.infer<typeof VoiceSessionReportSchema>;
 
+/**
+ * Main's share of one passage's cleanup, sent back with its result: building
+ * the request, and the OpenAI round trip, which is null when none went out.
+ */
+export const VoiceCorrectionTimingSchema = z
+  .object({
+    prepMs: z.number().nonnegative(),
+    requestMs: ms,
+  })
+  .strict();
+
+export type VoiceCorrectionTiming = z.infer<typeof VoiceCorrectionTimingSchema>;
+
 export const VoiceSessionSummarySchema = z
   .object({
     origin: z.enum(["key", "call"]),
@@ -87,6 +100,12 @@ export const VoiceSessionSummarySchema = z
     // From the stop request to the last committed text.
     stopSettledMs: ms,
     correctionMs: ms,
+    // Its parts: main building the request, the OpenAI round trip, and the
+    // draft taking the result. Main's two are the last passage back's, and
+    // null where its reply never said.
+    correctionPrepMs: ms,
+    correctionRequestMs: ms,
+    correctionApplyMs: ms,
     correction: z.enum(["none", "applied", "unchanged", "failed", "discarded"]),
     // Audio the renderer held before the start request, past its cap.
     droppedQueued: count,

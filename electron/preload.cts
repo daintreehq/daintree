@@ -3031,6 +3031,7 @@ function buildElectronApi(): ElectronAPI {
         recentContext?: string[];
         terminalId?: string;
         startsPrompt?: boolean;
+        sessionId?: string;
       }) => _unwrappingInvoke(CHANNELS.VOICE_INPUT_CORRECT, request),
       onFileTokenResolved: (
         callback: (payload: {

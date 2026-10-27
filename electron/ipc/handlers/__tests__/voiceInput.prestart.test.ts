@@ -111,6 +111,8 @@ vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
 
 vi.mock("../../../services/VoiceCorrectionService.js", () => ({
   VoiceCorrectionService: function VoiceCorrectionService(this: Record<string, unknown>) {
+    this.warm = () => Promise.resolve();
+    this.preconnect = () => {};
     this.setSessionSignal = function (signal: AbortSignal | null) {
       shared.sessionSignal = signal;
     };
@@ -732,6 +734,7 @@ describe("voiceInput — keyterm target", () => {
     shared.names = null;
     shared.correctionNames = null;
     shared.correctionTerminalOutput = undefined;
+    shared.drainPromise = null;
     sender.destroyed = false;
     fakeEvent.sender = makeSender();
     const win = { webContents: { send: vi.fn() }, isDestroyed: vi.fn(() => false) };
@@ -928,8 +931,47 @@ describe("voiceInput — keyterm target", () => {
       await expect(correct()).resolves.toEqual({
         action: "no_change",
         correctedText: "go with the shin",
+        timing: { prepMs: expect.any(Number), requestMs: null },
       });
       expect(shared.correctionTerminalOutput).toBeUndefined();
+    });
+
+    it("reads a dictation's output while its stop drains, never before", async () => {
+      await startWith({ terminalId: "t-1" });
+      expect(ptyClient.getTerminalSnapshot).not.toHaveBeenCalled();
+      let finishDrain!: () => void;
+      shared.drainPromise = new Promise((resolve) => {
+        finishDrain = resolve;
+      });
+      const stopping = stop();
+      await vi.waitFor(() => expect(shared.calls).toContain("stopGracefully"));
+      expect(ptyClient.getTerminalSnapshot).toHaveBeenCalledTimes(1);
+      finishDrain();
+      await stopping;
+
+      for (const rawText of ["go with the shin", "and the second passage"]) {
+        await getHandler("voice-input:correct")(fakeEvent, {
+          rawText,
+          terminalId: "t-1",
+          sessionId: currentSessionId,
+        });
+        expect(shared.correctionTerminalOutput).toBe("Migration or the shim?\n>");
+      }
+      expect(ptyClient.getTerminalSnapshot).toHaveBeenCalledTimes(1);
+    });
+
+    it("reads none at the stop with cleanup off", async () => {
+      shared.voiceInput = { correctionEnabled: false };
+      await startWith({ terminalId: "t-1" });
+      await stop();
+      expect(ptyClient.getTerminalSnapshot).not.toHaveBeenCalled();
+    });
+
+    it("reads none at the stop once cleanup was turned off mid-dictation", async () => {
+      await startWith({ terminalId: "t-1" });
+      shared.voiceInput = { correctionEnabled: false };
+      await stop();
+      expect(ptyClient.getTerminalSnapshot).not.toHaveBeenCalled();
     });
   });
 

@@ -20,7 +20,8 @@ vi.mock("../../utils/logger.js", () => ({
   logError: vi.fn(),
 }));
 
-const { resolveVoiceCommandTarget } = await import("../voiceCommandTarget.js");
+const { readVoiceCommandAgent, resolveVoiceCommandTarget } =
+  await import("../voiceCommandTarget.js");
 
 function ptyWith(terminal: Record<string, unknown> | null): PtyClient {
   return { getTerminalAsync: vi.fn(async () => terminal) } as unknown as PtyClient;
@@ -105,5 +106,36 @@ describe("resolveVoiceCommandTarget", () => {
       500
     );
     expect(listMock).toHaveBeenCalledWith("claude", undefined);
+  });
+});
+
+describe("readVoiceCommandAgent", () => {
+  afterEach(() => {
+    listMock.mockReset();
+  });
+
+  // Correction compares the two, so where they disagree it looks again for nothing.
+  it.each([
+    ["an agent with commands", { id: "t1", cwd: "/repo", detectedAgentId: "claude" }],
+    ["an agent that takes none", { id: "t1", cwd: "/repo", launchAgentId: "aider" }],
+    ["an agent that has exited", { id: "t1", launchAgentId: "claude", agentState: "exited" }],
+    ["a plain shell", { id: "t1", cwd: "/repo" }],
+  ])("agrees with the lookup about %s, without a discovery scan", async (_case, terminal) => {
+    listMock.mockResolvedValue([]);
+    const target = await resolveVoiceCommandTarget(ptyWith(terminal), "t1", 500);
+    listMock.mockClear();
+
+    const agentId = await readVoiceCommandAgent(ptyWith(terminal), "t1", 500);
+    expect(agentId).toBe(target?.agentId ?? null);
+    expect(listMock).not.toHaveBeenCalled();
+  });
+
+  it("can't tell when the terminal can't be read", async () => {
+    const pty = {
+      getTerminalAsync: vi.fn(async () => {
+        throw new Error("host gone");
+      }),
+    } as unknown as PtyClient;
+    expect(await readVoiceCommandAgent(pty, "t1", 500)).toBeUndefined();
   });
 });

@@ -73,6 +73,7 @@ const correct =
       rawText: string;
       recentContext?: string[];
       terminalId?: string;
+      sessionId?: string;
     }) => Promise<CorrectResult>
   >();
 
@@ -207,6 +208,7 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     dictate("panel-1", "fix the bug in the parsr");
     await service.stop();
     expect(correct).toHaveBeenLastCalledWith({
+      sessionId: expect.any(String),
       rawText: "fix the bug in the parsr",
       startsPrompt: true,
       terminalId: "panel-1",
@@ -215,10 +217,14 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     dictate("panel-2", "second thought");
     await service.stop();
     expect(correct).toHaveBeenLastCalledWith({
+      sessionId: expect.any(String),
       rawText: "second thought",
       startsPrompt: true,
       terminalId: "panel-2",
     });
+
+    // Each passage names the dictation it came from, for the context main read during it.
+    expect(correct.mock.calls[0]![0].sessionId).not.toBe(correct.mock.calls[1]![0].sessionId);
 
     first.resolve({ action: "replace", correctedText: "Fix the bug in the parser." });
     await flush();
@@ -249,6 +255,7 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     expect(draft("panel-1")).toBe("So the parser is broken. and the lexer");
     await service.stop();
     expect(correct).toHaveBeenLastCalledWith({
+      sessionId: expect.any(String),
       rawText: "and the lexer",
       recentContext: ["So the parser is broken."],
       startsPrompt: false,
@@ -270,6 +277,7 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     dictate("panel-1", "and the lexr too");
     await service.stop();
     expect(correct).toHaveBeenLastCalledWith({
+      sessionId: expect.any(String),
       rawText: "and the lexr too",
       recentContext: ["um so the parser is brken"],
       startsPrompt: false,
@@ -344,6 +352,7 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     correct.mockResolvedValueOnce({ action: "no_change", correctedText: "and the lexer" });
     await service.stop();
     expect(correct).toHaveBeenLastCalledWith({
+      sessionId: expect.any(String),
       rawText: "and the lexer",
       recentContext: ["The parser."],
       startsPrompt: false,
@@ -360,6 +369,7 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     callbacks.boundary!({ rawText: null });
     await service.stop();
     expect(correct).toHaveBeenLastCalledWith({
+      sessionId: expect.any(String),
       rawText: "the parsr",
       startsPrompt: true,
       terminalId: "panel-1",
@@ -375,6 +385,7 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     correct.mockResolvedValueOnce({ action: "no_change", correctedText: "and the lexer" });
     await service.stop();
     expect(correct).toHaveBeenLastCalledWith({
+      sessionId: expect.any(String),
       rawText: "and the lexer",
       recentContext: ["The parser.\n"],
       startsPrompt: false,
@@ -586,6 +597,7 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
 
       expect(draft("panel-1")).toBe("add Zustand to the store");
       expect(correct).toHaveBeenLastCalledWith({
+        sessionId: expect.any(String),
         rawText: "add Zustand to the store",
         terminalId: "panel-1",
         startsPrompt: true,

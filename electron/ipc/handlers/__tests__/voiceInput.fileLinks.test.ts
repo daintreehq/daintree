@@ -77,6 +77,8 @@ vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
 
 vi.mock("../../../services/VoiceCorrectionService.js", () => ({
   VoiceCorrectionService: function VoiceCorrectionService(this: Record<string, unknown>) {
+    this.warm = () => Promise.resolve();
+    this.preconnect = () => {};
     this.setSessionSignal = function () {};
     this.detectFileLinkTokens = shared.detect;
   },

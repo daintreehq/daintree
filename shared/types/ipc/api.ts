@@ -25,7 +25,7 @@ import type {
   VoiceLiveSessionUpdate,
   VoiceSessionEndReason,
 } from "../voice.js";
-import type { VoiceSessionReport } from "../voiceSessionSummary.js";
+import type { VoiceCorrectionTiming, VoiceSessionReport } from "../voiceSessionSummary.js";
 export type { VoiceInputError, VoiceInputStatus };
 import type {
   AuthValidation,
@@ -2259,7 +2259,14 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       terminalId?: string;
       /** Nothing but whitespace comes before the passage in the draft. */
       startsPrompt?: boolean;
-    }): Promise<{ action: "no_change" | "replace"; correctedText: string; failed?: true }>;
+      /** The dictation the passage came from: its context was read while it ran. */
+      sessionId?: string;
+    }): Promise<{
+      action: "no_change" | "replace";
+      correctedText: string;
+      failed?: true;
+      timing?: VoiceCorrectionTiming;
+    }>;
     onFileTokenResolved(
       callback: (payload: {
         sessionId: string;

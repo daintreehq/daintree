@@ -1,7 +1,9 @@
 import { VOICE_SESSION_SUMMARY_MESSAGE } from "@shared/utils/voiceLogFields";
 import {
+  VoiceCorrectionTimingSchema,
   VoiceSessionReportSchema,
   VoiceSessionSummarySchema,
+  type VoiceCorrectionTiming,
   type VoiceSessionReport,
   type VoiceSessionSummary,
   type VoiceStopReason,
@@ -20,6 +22,10 @@ export const VOICE_REPORT_WAIT_MS = 10_000;
  * hidden window draws none, and its mark stays null.
  */
 export const VOICE_FRAME_WAIT_MS = 1_000;
+
+function roundMs(value: number | null | undefined): number | null {
+  return value === null || value === undefined ? null : Math.max(0, Math.round(value));
+}
 
 type Mark = "cue" | "micLive" | "socketReady" | "firstText" | "stopRequested" | "settled";
 
@@ -50,6 +56,9 @@ export class VoiceSessionTimeline {
   private stopReason: VoiceStopReason | null = null;
   private correctionStartedAt: number | null = null;
   private correctionMs: number | null = null;
+  private correctionRepliedAt: number | null = null;
+  private correctionTiming: VoiceCorrectionTiming | null = null;
+  private correctionApplyMs: number | null = null;
   private correction: "none" | VoiceCorrectionOutcome = "none";
   private droppedQueued = 0;
   private charsCommitted = 0;
@@ -146,9 +155,31 @@ export class VoiceSessionTimeline {
     this.correctionStartedAt = this.deps.now();
   }
 
+  /**
+   * Every passage's reply is back: what follows is the draft taking them.
+   * `timing` is main's account of the last one back, checked like its report.
+   */
+  noteCorrectionReplies(timing: unknown): void {
+    if (
+      this.done ||
+      this.correctionStartedAt === null ||
+      this.correctionRepliedAt !== null ||
+      this.correctionMs !== null
+    ) {
+      return;
+    }
+    this.correctionRepliedAt = this.deps.now();
+    const parsed = VoiceCorrectionTimingSchema.safeParse(timing);
+    this.correctionTiming = parsed.success ? parsed.data : null;
+  }
+
   endCorrection(outcome: VoiceCorrectionOutcome): void {
     if (this.done || this.correctionStartedAt === null || this.correctionMs !== null) return;
-    this.correctionMs = this.deps.now() - this.correctionStartedAt;
+    const now = this.deps.now();
+    this.correctionMs = now - this.correctionStartedAt;
+    if (this.correctionRepliedAt !== null) {
+      this.correctionApplyMs = now - this.correctionRepliedAt;
+    }
     this.correction = outcome;
     this.tryLog();
   }
@@ -241,6 +272,9 @@ export class VoiceSessionTimeline {
       stopRequestedMs: this.since("stopRequested"),
       stopSettledMs: stopAt === undefined ? null : this.since("settled", stopAt),
       correctionMs: this.correctionMs === null ? null : Math.round(this.correctionMs),
+      correctionPrepMs: roundMs(this.correctionTiming?.prepMs),
+      correctionRequestMs: roundMs(this.correctionTiming?.requestMs),
+      correctionApplyMs: roundMs(this.correctionApplyMs),
       correction: this.correction,
       droppedQueued: this.droppedQueued,
       charsCommitted: this.charsCommitted,

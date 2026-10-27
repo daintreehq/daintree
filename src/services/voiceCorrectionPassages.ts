@@ -137,3 +137,22 @@ export function joinPassageTexts(texts: string[]): string | null {
   const joined = texts.join(" ");
   return joined.trim() ? joined : null;
 }
+
+/**
+ * Every passage's reply, in passage order, and main's timing from the one
+ * that came back last: it is the one the draft waited on.
+ */
+export async function settlePassageReplies<T extends { timing: unknown }>(
+  replies: ReadonlyArray<Promise<T>>
+): Promise<{ results: T[]; lastTiming: unknown }> {
+  let lastTiming: unknown = null;
+  const results = await Promise.all(
+    replies.map((reply) =>
+      reply.then((result) => {
+        lastTiming = result.timing;
+        return result;
+      })
+    )
+  );
+  return { results, lastTiming };
+}

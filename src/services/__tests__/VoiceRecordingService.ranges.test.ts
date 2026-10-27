@@ -360,6 +360,7 @@ describe("VoiceRecordingService — dictation ranges (#14597)", () => {
       recentContext: ["Intro."],
       startsPrompt: false,
       terminalId: "panel-1",
+      sessionId: SESSION_ID,
     });
     expect(getDictation(id)).not.toBeNull();
 
@@ -491,6 +492,7 @@ describe("VoiceRecordingService — correction over dictated ranges (#14613)", (
       rawText: "hello there",
       startsPrompt: true,
       terminalId: "panel-1",
+      sessionId: SESSION_ID,
     });
     await vi.waitFor(() => expect(draft()).toBe("Hello, there."));
     const buffer = voiceStore.getState().panelBuffers[PANEL]!;
@@ -542,6 +544,7 @@ describe("VoiceRecordingService — correction over dictated ranges (#14613)", (
       recentContext: ["Note: the build fails when"],
       startsPrompt: false,
       terminalId: "panel-1",
+      sessionId: SESSION_ID,
     });
     await vi.waitFor(() =>
       expect(draft()).toBe("Note: the build fails when it runs on Windows. Thanks.")
@@ -757,6 +760,7 @@ describe("VoiceRecordingService — correction over dictated ranges (#14613)", (
       recentContext: ["Intro.\n"],
       startsPrompt: false,
       terminalId: "panel-1",
+      sessionId: SESSION_ID,
     });
     expect(draft()).toBe(`Intro.\n${expected} Thanks.`);
     expect(voiceStore.getState().panelBuffers[PANEL]!.sessionCorrectedText).toBe(expected);
@@ -776,6 +780,7 @@ describe("VoiceRecordingService — correction over dictated ranges (#14613)", (
       recentContext: [word],
       startsPrompt: false,
       terminalId: "panel-1",
+      sessionId: SESSION_ID,
     });
   });
 
@@ -1315,6 +1320,7 @@ describe("VoiceRecordingService — correction and file links at the caret (#146
       rawText: "step two",
       recentContext: ["Step one."],
       terminalId: "panel-1",
+      sessionId: SESSION_ID,
       startsPrompt: false,
     });
     await vi.waitFor(() => expect(draft()).toBe("Step one. Step two. Step three."));

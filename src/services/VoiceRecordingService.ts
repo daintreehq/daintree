@@ -73,6 +73,7 @@ import {
   collectCorrectionPassages,
   joinPassageTexts,
   locatePassage,
+  settlePassageReplies,
   transcribedPassageText,
   type CorrectionPassage,
 } from "@/services/voiceCorrectionPassages";
@@ -302,6 +303,8 @@ interface PendingCorrection {
   historyId: string | null;
   /** The dictation (`dictationRangeStore`) its passages belong to. */
   dictationId: string;
+  /** The session that heard them, whose cleanup context main read while it ran. */
+  sessionId: string | null;
   /** Each passage as it was sent. */
   passages: CorrectionPassage[];
   /** Passages no edit has reached; one that's touched is dropped for good. */
@@ -2746,6 +2749,7 @@ class VoiceRecordingService {
           ? transcript.id
           : null,
       dictationId: record.id,
+      sessionId,
       passages,
       live: new Set(passages),
       seed,
@@ -2769,11 +2773,10 @@ class VoiceRecordingService {
   }
 
   private async requestCorrection(correction: PendingCorrection): Promise<void> {
-    const results = await Promise.all(
-      correction.passages.map((passage) =>
-        this.requestPassageCorrection(passage, correction.panelId)
-      )
+    const { results, lastTiming } = await settlePassageReplies(
+      correction.passages.map((passage) => this.requestPassageCorrection(passage, correction))
     );
+    correction.timeline?.noteCorrectionReplies(lastTiming);
 
     // The history keeps the cleaned text even when the draft it was meant for
     // was sent or edited first: that is when it's worth recovering.
@@ -2885,25 +2888,26 @@ class VoiceRecordingService {
    */
   private async requestPassageCorrection(
     passage: CorrectionPassage,
-    panelId: string
-  ): Promise<{ text: string | null; failed: boolean }> {
+    correction: PendingCorrection
+  ): Promise<{ text: string | null; failed: boolean; timing: unknown }> {
     try {
       const result = await window.electron.voiceInput.correct({
         rawText: passage.text,
-        terminalId: panelId,
+        terminalId: correction.panelId,
         ...(passage.context ? { recentContext: [passage.context] } : {}),
         startsPrompt: passage.startsPrompt,
+        ...(correction.sessionId ? { sessionId: correction.sessionId } : {}),
       });
       // The passage runs from its first word to its last; its separators and
       // paragraph breaks either side stay the session's, not the model's.
       const text = result.action === "replace" ? result.correctedText.trim() || null : null;
-      return { text, failed: result.failed === true };
+      return { text, failed: result.failed === true, timing: result.timing ?? null };
     } catch (error) {
       logWarn(
         `${LOG_PREFIX} Correction request failed, keeping raw text`,
         voiceErrorLogFields(error)
       );
-      return { text: null, failed: true };
+      return { text: null, failed: true, timing: null };
     }
   }
 

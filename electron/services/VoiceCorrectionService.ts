@@ -56,6 +56,21 @@ const REWRITE_CACHE_PREFIX = "voice-rewrite-v1";
 const MIN_REWRITE_TIMEOUT_MS = 10000;
 const FILE_LINK_CACHE_PREFIX = "voice-file-link-v2";
 const PROMPT_TAG_OPEN_RE = /<(?=\/?(?:terminal_output|target|job|confirmed_history|uncertain)\b)/gi;
+const OPENAI_ORIGIN = "https://api.openai.com/";
+const RESPONSES_URL = "https://api.openai.com/v1/responses";
+// OpenAI keeps an unused prefix cached for five to ten minutes. Checked once a
+// minute, a prompt goes out again within four of its last use.
+const PROMPT_WARM_FOR_MS = 3 * 60_000;
+const PROMPT_USE_MEMORY = 16;
+const WARM_TIMEOUT_MS = 10_000;
+// The API's floor. The reply is thrown away, cut off or not.
+const WARM_MAX_OUTPUT_TOKENS = 16;
+const WARM_USER_MESSAGE = "<job>\nreason=warmup\n</job>\n\n<target>\n</target>";
+const PRECONNECT_TIMEOUT_MS = 3000;
+const PRECONNECT_WAIT_MS = 250;
+// Fetch keeps an idle socket for four seconds; one this fresh will still be
+// there for a passage sent now.
+const PRECONNECT_FRESH_MS = 2000;
 const LEADING_FILLER_RE = /^(?:\s*(?:um|uh)[\s,.;:!-]+)+/i;
 
 const FILE_LINK_DETECTION_SCHEMA = {
@@ -171,6 +186,14 @@ export interface VoiceCorrectionResult {
   confirmedText: string;
   /** The request failed or was cancelled, so the raw text stands untried. */
   failed?: true;
+  /** When the OpenAI request went out (performance.now()) and how long it took; absent when none did. */
+  roundTrip?: { sentAt: number; ms: number };
+}
+
+/** Filled in as a correction's one request goes out and settles. */
+interface RequestTrace {
+  sentAt?: number;
+  settledAt?: number;
 }
 
 interface CorrectionApiResult {
@@ -211,6 +234,11 @@ class CorrectionDiscardedError extends Error {
 
 export class VoiceCorrectionService {
   private sessionSignal: AbortSignal | null = null;
+  // When each correction prompt last reached OpenAI, by account and content.
+  private readonly promptUsedAt = new Map<string, number>();
+  private readonly warming = new Set<string>();
+  private preconnecting: Promise<void> | null = null;
+  private preconnectedAt: number | null = null;
 
   setSessionSignal(signal: AbortSignal | null): void {
     this.sessionSignal = signal;
@@ -219,6 +247,18 @@ export class VoiceCorrectionService {
   async correct(
     request: VoiceCorrectionRequest,
     settings: VoiceCorrectionSettings
+  ): Promise<VoiceCorrectionResult> {
+    const trace: RequestTrace = {};
+    const result = await this.correctPassage(request, settings, trace);
+    if (trace.sentAt === undefined) return result;
+    const ms = (trace.settledAt ?? performance.now()) - trace.sentAt;
+    return { ...result, roundTrip: { sentAt: trace.sentAt, ms } };
+  }
+
+  private async correctPassage(
+    request: VoiceCorrectionRequest,
+    settings: VoiceCorrectionSettings,
+    trace: RequestTrace
   ): Promise<VoiceCorrectionResult> {
     const trimmedRaw = request.rawText.trim();
     if (!trimmedRaw) {
@@ -267,7 +307,8 @@ export class VoiceCorrectionService {
           ...request,
           rawText: trimmedRaw,
         },
-        settings
+        settings,
+        trace
       );
 
       let confirmedText: string;
@@ -685,10 +726,29 @@ export class VoiceCorrectionService {
 
   private async callApi(
     request: VoiceCorrectionRequest,
-    settings: VoiceCorrectionSettings
+    settings: VoiceCorrectionSettings,
+    trace: RequestTrace
   ): Promise<Omit<VoiceCorrectionResult, "confirmedText">> {
+    const systemPrompt = this.buildSystemPrompt(settings);
+    const userMessage = this.buildUserMessage(request);
+    logDebug(`${P} Calling Responses API`, {
+      model: settings.model,
+      contextLen: request.recentContext?.length ?? 0,
+      terminalOutputLen: request.terminalOutput?.length ?? 0,
+      reason: request.reason ?? "unspecified",
+      segmentCount: request.segmentCount ?? 0,
+    });
+
+    return await withTimeoutSignal(
+      this.getCorrectionTimeoutMs(request),
+      (signal) =>
+        this.requestCorrection(request, settings, systemPrompt, userMessage, signal, trace),
+      this.sessionSignal
+    );
+  }
+
+  private buildSystemPrompt(settings: VoiceCorrectionSettings): string {
     const {
-      model,
       customDictionary,
       knownNames,
       heardAs,
@@ -717,64 +777,199 @@ export class VoiceCorrectionService {
       customInstructions,
       language,
     };
-    const systemPrompt = buildCorrectionSystemPrompt(context);
-    const userMessage = this.buildUserMessage(request);
-    logDebug(`${P} Calling Responses API`, {
-      model,
-      contextLen: request.recentContext?.length ?? 0,
-      terminalOutputLen: request.terminalOutput?.length ?? 0,
-      reason: request.reason ?? "unspecified",
-      segmentCount: request.segmentCount ?? 0,
-    });
+    return buildCorrectionSystemPrompt(context);
+  }
 
-    return await withTimeoutSignal(
-      this.getCorrectionTimeoutMs(request),
-      (signal) =>
-        this.requestCorrection(request, settings, model, systemPrompt, userMessage, signal),
-      this.sessionSignal
-    );
+  // The warm-up shares everything but the user turn and the output cap, so
+  // the prefix it leaves in the cache is the one the passage arrives with.
+  private correctionBody(
+    settings: VoiceCorrectionSettings,
+    systemPrompt: string,
+    userMessage: string,
+    maxOutputTokens: number
+  ) {
+    return {
+      model: settings.model,
+      // Pass the system prompt as the first developer message in the `input`
+      // array (not the top-level `instructions` field) so its stable prefix is
+      // eligible for OpenAI prompt caching. See issue #9746.
+      input: [
+        { role: "developer", content: systemPrompt },
+        { role: "user", content: userMessage },
+      ],
+      prompt_cache_key: this.buildPromptCacheKey(settings),
+      service_tier: "auto",
+      // Explicit low-latency effort: gpt-6-luna defaults to "medium" when
+      // omitted, so we pin the lowest tier rather than inherit that default.
+      reasoning: { effort: VOICE_DICTATION_REASONING_EFFORT },
+      text: {
+        format: {
+          type: "json_schema",
+          name: "voice_correction_result",
+          strict: true,
+          schema: CORRECTION_RESULT_SCHEMA,
+        },
+      },
+      max_output_tokens: maxOutputTokens,
+    };
+  }
+
+  // Caches are per account, and the cache key leaves out parts of the prompt.
+  private promptIdentity(settings: VoiceCorrectionSettings, systemPrompt: string): string {
+    return createHash("sha256")
+      .update(
+        JSON.stringify([
+          settings.apiKey,
+          settings.organizationId ?? null,
+          settings.projectId ?? null,
+          settings.model,
+          this.buildPromptCacheKey(settings),
+          systemPrompt,
+        ])
+      )
+      .digest("hex");
+  }
+
+  // Stamped when the request went out: OpenAI caches the prefix as it reads it.
+  private notePromptUsed(identity: string, sentAt: number): void {
+    this.promptUsedAt.delete(identity);
+    this.promptUsedAt.set(identity, sentAt);
+    for (const oldest of this.promptUsedAt.keys()) {
+      if (this.promptUsedAt.size <= PROMPT_USE_MEMORY) break;
+      this.promptUsedAt.delete(oldest);
+    }
+  }
+
+  /**
+   * Sends the correction's developer message ahead of any passage, so the
+   * prompt cache holds it when one arrives. The user turn is a fixed
+   * placeholder: nothing dictated, drafted or read from a terminal goes with
+   * it. A prompt that went out in the last few minutes is left alone.
+   */
+  async warm(settings: VoiceCorrectionSettings): Promise<void> {
+    const systemPrompt = this.buildSystemPrompt(settings);
+    const identity = this.promptIdentity(settings, systemPrompt);
+    const usedAt = this.promptUsedAt.get(identity);
+    if (usedAt !== undefined && performance.now() - usedAt < PROMPT_WARM_FOR_MS) return;
+    if (this.warming.has(identity)) return;
+    this.warming.add(identity);
+    // Its own deadline: a session ending mustn't abort it, which would throw
+    // away the socket it opened.
+    const deadline = createTimeoutSignal(WARM_TIMEOUT_MS);
+    const sentAt = performance.now();
+    try {
+      const response = await fetch(RESPONSES_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...buildOpenAIHeaders(settings.apiKey, settings.organizationId, settings.projectId),
+        },
+        signal: deadline.signal,
+        body: JSON.stringify({
+          ...this.correctionBody(settings, systemPrompt, WARM_USER_MESSAGE, WARM_MAX_OUTPUT_TOKENS),
+          store: false,
+        }),
+      });
+      // Read to the end, so the socket goes back to the pool.
+      await response.arrayBuffer();
+      if (response.ok) this.notePromptUsed(identity, sentAt);
+      logDebug(`${P} Prompt warm-up`, { status: response.status });
+    } catch (error) {
+      logDebug(`${P} Prompt warm-up failed`, voiceErrorLogFields(error));
+    } finally {
+      deadline.dispose();
+      this.warming.delete(identity);
+    }
+  }
+
+  /**
+   * Opens a socket to OpenAI while a stop drains, for the correction that
+   * follows. Fetch closes an idle socket after a few seconds, so after any
+   * real dictation the correction would otherwise start with a handshake.
+   * The request carries no credentials and no text; the edge answers it.
+   */
+  preconnect(): void {
+    if (this.preconnecting) return;
+    const openedAt = this.preconnectedAt;
+    if (openedAt !== null && performance.now() - openedAt < PRECONNECT_FRESH_MS) return;
+    const deadline = createTimeoutSignal(PRECONNECT_TIMEOUT_MS);
+    const probe: Promise<void> = fetch(OPENAI_ORIGIN, {
+      redirect: "manual",
+      signal: deadline.signal,
+    })
+      .then((response) => response.arrayBuffer())
+      .then(
+        () => {
+          this.preconnectedAt = performance.now();
+        },
+        () => undefined
+      )
+      .finally(() => {
+        deadline.dispose();
+        if (this.preconnecting === probe) this.preconnecting = null;
+      });
+    this.preconnecting = probe;
+  }
+
+  // A probe still opening its socket is nearer done than a new handshake, and
+  // with one request per socket, going ahead without it would start another.
+  private async awaitPreconnect(probe: Promise<void>): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        probe,
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, PRECONNECT_WAIT_MS);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   private async requestCorrection(
     request: VoiceCorrectionRequest,
     settings: VoiceCorrectionSettings,
-    model: string,
     systemPrompt: string,
     userMessage: string,
-    signal: AbortSignal
+    signal: AbortSignal,
+    trace: RequestTrace
   ): Promise<Omit<VoiceCorrectionResult, "confirmedText">> {
     const maxOutputTokens = this.getMaxOutputTokens(request);
-    const response = await fetch("https://api.openai.com/v1/responses", {
+    const body = JSON.stringify(
+      this.correctionBody(settings, systemPrompt, userMessage, maxOutputTokens)
+    );
+    if (this.preconnecting) {
+      await this.awaitPreconnect(this.preconnecting);
+      // Nothing went out, so there is no round trip to report.
+      signal.throwIfAborted();
+    }
+    const sentAt = performance.now();
+    trace.sentAt = sentAt;
+    try {
+      const result = await this.sendCorrection(request, settings, body, signal, maxOutputTokens);
+      this.notePromptUsed(this.promptIdentity(settings, systemPrompt), sentAt);
+      return result;
+    } finally {
+      trace.settledAt = performance.now();
+    }
+  }
+
+  private async sendCorrection(
+    request: VoiceCorrectionRequest,
+    settings: VoiceCorrectionSettings,
+    body: string,
+    signal: AbortSignal,
+    maxOutputTokens: number
+  ): Promise<Omit<VoiceCorrectionResult, "confirmedText">> {
+    const response = await fetch(RESPONSES_URL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         ...buildOpenAIHeaders(settings.apiKey, settings.organizationId, settings.projectId),
       },
       signal,
-      body: JSON.stringify({
-        model,
-        // Pass the system prompt as the first developer message in the `input`
-        // array (not the top-level `instructions` field) so its stable prefix is
-        // eligible for OpenAI prompt caching. See issue #9746.
-        input: [
-          { role: "developer", content: systemPrompt },
-          { role: "user", content: userMessage },
-        ],
-        prompt_cache_key: this.buildPromptCacheKey(settings),
-        service_tier: "auto",
-        // Explicit low-latency effort: gpt-6-luna defaults to "medium" when
-        // omitted, so we pin the lowest tier rather than inherit that default.
-        reasoning: { effort: VOICE_DICTATION_REASONING_EFFORT },
-        text: {
-          format: {
-            type: "json_schema",
-            name: "voice_correction_result",
-            strict: true,
-            schema: CORRECTION_RESULT_SCHEMA,
-          },
-        },
-        max_output_tokens: maxOutputTokens,
-      }),
+      body,
     });
 
     if (!response.ok) {
