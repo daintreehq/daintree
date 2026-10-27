@@ -1024,6 +1024,72 @@ describe("voiceInput — hesitations", () => {
     ]);
   });
 
+  it("sends on a hesitation right before 'send it'", async () => {
+    await start();
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "Fix the build, um, send it.",
+      itemId: "item-A",
+      endOfSpeech: true,
+    });
+    expect(completions()).toEqual([expect.objectContaining({ text: "Fix the build", send: true })]);
+  });
+
+  it("reads a break command a hesitation fell inside of", async () => {
+    await start();
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "Fix the build new um line",
+      itemId: "item-A",
+      endOfSpeech: true,
+    });
+    expect(completions().map((p) => p.text)).toEqual(["Fix the build"]);
+    expect(activeSent.filter((m) => m.channel === "voice-input:paragraph-boundary")).toHaveLength(
+      1
+    );
+  });
+
+  it("reads a command split across segments with a hesitation between", async () => {
+    await start();
+    emitTranscriptionEvent({ type: "complete", text: "Fix it, new", itemId: "A" });
+    expect(completions()).toEqual([]);
+    emitTranscriptionEvent({ type: "complete", text: "um, line.", itemId: "B", endOfSpeech: true });
+    expect(
+      (completions() as Array<{ text: string; itemId?: string }>).map((p) => ({
+        itemId: p.itemId,
+        text: p.text,
+      }))
+    ).toEqual([
+      { itemId: "B", text: "" },
+      { itemId: "A", text: "Fix it," },
+    ]);
+    expect(activeSent.filter((m) => m.channel === "voice-input:paragraph-boundary")).toHaveLength(
+      1
+    );
+  });
+
+  it("lands a segment held for a command as clean words when none follows", async () => {
+    await start();
+    emitTranscriptionEvent({ type: "complete", text: "Um, add the new", itemId: "A" });
+    expect(completions()).toEqual([]);
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "uh, settings page.",
+      itemId: "B",
+      endOfSpeech: true,
+    });
+    expect(
+      (completions() as Array<{ text: string; itemId?: string }>).map((p) => ({
+        itemId: p.itemId,
+        text: p.text,
+      }))
+    ).toEqual([
+      { itemId: "A", text: "Add the new" },
+      { itemId: "B", text: "settings page." },
+    ]);
+    expect(completions().some((p) => p.send)).toBe(false);
+  });
+
   it("keeps the unsure words with the words they were flagged on", async () => {
     await start();
     const text = "Um, check the build now";
