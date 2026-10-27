@@ -1315,6 +1315,8 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
         sessionId?: string;
         /** Spans of `rawText` the recogniser was unsure of. */
         uncertain?: Array<{ from: number; to: number }>;
+        /** Positions in `rawText` where the speaker paused, each straight after a word. */
+        pauses?: number[];
         /** Dictated into a terminal outside the asking view: cleaned up without its project's vocabulary. */
         outsideView?: true;
         /** Streams the reply: its text so far comes back as `voice-input:correction-progress` under this id. */
@@ -2099,6 +2101,15 @@ export interface IpcEventMap {
     heardUncertain?: Array<{ from: number; to: number }>;
     /** Spans of `commandText` the recogniser was unsure of. */
     commandUncertain?: Array<{ from: number; to: number }>;
+    /**
+     * Where the speaker paused in `text`, each straight after a word. With no
+     * words, `[0]` marks a pause after the words that landed before it.
+     */
+    pauses?: number[];
+    /** Where the speaker paused in `heard`. */
+    heardPauses?: number[];
+    /** Where the speaker paused in `commandText`. */
+    commandPauses?: number[];
   };
   "voice-input:paragraph-boundary": { sessionId: string; rawText: string | null };
   /** A streaming correction's text so far, cut at a word boundary; only ever grows. */

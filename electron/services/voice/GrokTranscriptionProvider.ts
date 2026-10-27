@@ -1175,11 +1175,11 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
         text: full,
         ...(uncertain.length > 0 ? { uncertain } : {}),
         itemId: itemId ?? nextUtteranceItemId(),
-        ...(forced ? {} : { endOfSpeech: true }),
+        ...(forced ? {} : { endOfSpeech: true, paused: true }),
       });
     } else if (!forced) {
       // Nothing was said in it; it only marks that the utterance ended.
-      this.emit({ type: "complete", text: "", endOfSpeech: true });
+      this.emit({ type: "complete", text: "", endOfSpeech: true, paused: true });
     }
     // The final lands a moment after the pause that ended it, so the speaker
     // may already have gone on; say so, as Deepgram's VAD would have.
@@ -1235,6 +1235,8 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
       text,
       ...(uncertain.length > 0 ? { uncertain } : {}),
       itemId: itemId ?? nextUtteranceItemId(),
+      // The stream ended, not the speaker's breath: the tail ends speech for
+      // a send, but it's no pause.
       ...(serverTail ? { endOfSpeech: true } : { incomplete: true }),
     });
   }

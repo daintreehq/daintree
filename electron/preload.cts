@@ -3009,6 +3009,15 @@ function buildElectronApi(): ElectronAPI {
           heardUncertain?: Array<{ from: number; to: number }>;
           /** Spans of `commandText` the recogniser was unsure of. */
           commandUncertain?: Array<{ from: number; to: number }>;
+          /**
+           * Where the speaker paused in `text`, each straight after a word. With no
+           * words, `[0]` marks a pause after the words that landed before it.
+           */
+          pauses?: number[];
+          /** Where the speaker paused in `heard`. */
+          heardPauses?: number[];
+          /** Where the speaker paused in `commandText`. */
+          commandPauses?: number[];
         }) => void
       ) => _typedOn(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, callback),
       onParagraphBoundary: (

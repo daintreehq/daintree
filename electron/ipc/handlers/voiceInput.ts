@@ -95,6 +95,11 @@ import {
   type VoiceTextSpan,
 } from "../../../shared/utils/voiceUncertainWords.js";
 import {
+  carryPausePositionsThroughEdits,
+  normalizePausePositions,
+  splitPausePositionsByLine,
+} from "../../../shared/utils/voicePausePositions.js";
+import {
   readVoiceCommandAgent,
   resolveVoiceCommandTarget,
   type VoiceCommandTarget,
@@ -1648,11 +1653,13 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // each completion arrives with its text as it lands (#14801), and
     // `uncertain` spans the words in it the provider was unsure of. They
     // follow the text through every rewrite below by position, and one a
-    // rewrite reached is dropped.
+    // rewrite reached is dropped. `pauses` marks where the speaker paused in
+    // it (#14897); those follow the text too, a rewrite keeping one at its end.
     const emitCompletion = (
       itemId: string | undefined,
       processedText: string,
       processedUncertain: readonly VoiceTextSpan[],
+      processedPauses: readonly number[],
       { send, opensUtterance }: { send: boolean; opensUtterance: boolean }
     ) => {
       const target = session.sender;
@@ -1676,12 +1683,21 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
           : null;
       const commandText = command?.text ?? null;
       const heardUncertain = splitSpansByLine(processedText, processedUncertain);
+      const heardPauses = splitPausePositionsByLine(processedText, processedPauses);
       // Only the arguments are copied into the command; the words its name
-      // replaced take their flags with them.
+      // replaced take their flags with them. A pause in the name ends the token.
       const commandUncertain = command
         ? shiftSpans(
             sliceSpans(heardUncertain[0] ?? [], command.argsFrom, pieces[0]!.length),
             command.argsAt
+          )
+        : [];
+      const commandPauses = command
+        ? normalizePausePositions(
+            command.text,
+            carryPausePositionsThroughEdits(heardPauses[0] ?? [], [
+              { from: 0, to: command.argsFrom, insert: command.text.slice(0, command.argsAt) },
+            ])
           )
         : [];
       const parts = pieces.filter(Boolean);
@@ -1697,11 +1713,21 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         writtenText,
         carrySpansThroughEdits(processedUncertain, heardAsEdits)
       );
+      const writtenPauses = splitPausePositionsByLine(
+        writtenText,
+        normalizePausePositions(
+          writtenText,
+          carryPausePositionsThroughEdits(processedPauses, heardAsEdits)
+        )
+      );
+      // A pause after words that already landed, with none of these before it.
+      const leadingPause = processedPauses.includes(0);
       // Lengths only — dictated text is user content, kept out of logs.
       logDebug("[VoiceInput] complete event → renderer", {
         processedLength: processedText.length,
         paragraphingStrategy: settings.paragraphingStrategy,
         partCount: parts.length,
+        pauseCount: processedPauses.length,
       });
       // Every part of one item carries its id so the renderer retires that
       // item's preview. An identified item that yields no text still sends one
@@ -1722,12 +1748,25 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         mayReferenceFile(writtenText)
           ? randomUUID()
           : undefined;
+      // It rides a completion with no words when there is one, which the
+      // renderer reads before anything after it; otherwise it goes first.
+      const pauseRides = parts.length === 0 && (itemId !== undefined || send);
+      if (leadingPause && !pauseRides) {
+        target.send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, {
+          sessionId,
+          text: "",
+          willCorrect: false,
+          pauses: [0],
+        });
+      }
+      const ridingPause = leadingPause && pauseRides ? { pauses: [0] } : {};
       if (parts.length === 0 && itemId && !send) {
         target.send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, {
           sessionId,
           text: "",
           willCorrect: false,
           ...itemIdField,
+          ...ridingPause,
         });
       }
       // The send rides the utterance's final completion, after every piece
@@ -1741,6 +1780,9 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
           const textUncertain =
             (written[i] !== undefined ? writtenUncertain[i] : heardUncertain[i]) ?? [];
           const pieceUncertain = heardUncertain[i] ?? [];
+          const textPauses =
+            (written[i] !== undefined ? writtenPauses[i] : heardPauses[i]) ?? [];
+          const piecePauses = heardPauses[i] ?? [];
           target.send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, {
             sessionId,
             text,
@@ -1749,15 +1791,18 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
               ? {
                   heard: pieces[i],
                   ...(pieceUncertain.length > 0 ? { heardUncertain: pieceUncertain } : {}),
+                  ...(piecePauses.length > 0 ? { heardPauses: piecePauses } : {}),
                 }
               : {}),
             ...(textUncertain.length > 0 ? { uncertain: textUncertain } : {}),
+            ...(textPauses.length > 0 ? { pauses: textPauses } : {}),
             ...itemIdField,
             ...(transcriptId ? { transcriptId } : {}),
             ...(i === 0 && commandText && commandText !== pieces[i]
               ? {
                   commandText,
                   ...(commandUncertain.length > 0 ? { commandUncertain } : {}),
+                  ...(commandPauses.length > 0 ? { commandPauses } : {}),
                 }
               : {}),
             ...(send && i === lastIndex ? { send: true } : {}),
@@ -1778,6 +1823,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
           willCorrect: false,
           ...itemIdField,
           send: true,
+          ...(parts.length === 0 ? ridingPause : {}),
         });
       }
 
@@ -1792,7 +1838,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
 
     const emitRelease = (emissions: readonly UtteranceEmission[], send: boolean) => {
       emissions.forEach((emission, i) =>
-        emitCompletion(emission.itemId, emission.text, emission.uncertain, {
+        emitCompletion(emission.itemId, emission.text, emission.uncertain, emission.pauses ?? [], {
           send: send && i === emissions.length - 1,
           opensUtterance: emission.opensUtterance === true,
         })
@@ -1963,7 +2009,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         if (voiceEvent.incomplete) {
           // Words around it may be missing, so its own land as said and are
           // never read as a command; what was held went ahead of it as words.
-          emitCompletion(voiceEvent.itemId, rawText, uncertain, {
+          emitCompletion(voiceEvent.itemId, rawText, uncertain, [], {
             send: false,
             opensUtterance: false,
           });
@@ -1981,6 +2027,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
             // OpenAI retires its VAD at a stop, so what it drains can't end
             // speech; a pause can still close a send.
             stopping: session.phase === "stopping",
+            paused: voiceEvent.paused === true,
           },
           commandOptions()
         );
@@ -2573,6 +2620,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         reason: "stop",
         startsPrompt: request.startsPrompt === true,
         ...(request.uncertain ? { uncertain: request.uncertain } : {}),
+        ...(request.pauses ? { pauses: request.pauses } : {}),
       },
       settings: correctionSettingsFor(settings, projectInfo, vocabulary, commandTarget, context),
     };

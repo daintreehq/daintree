@@ -28,6 +28,7 @@ import {
 } from "./voiceCorrectionOutcome.js";
 import { mayReferenceFile } from "../../shared/utils/voiceFileLinkCommands.js";
 import { sliceSpans, type VoiceTextSpan } from "../../shared/utils/voiceUncertainWords.js";
+import { slicePausePositions } from "../../shared/utils/voicePausePositions.js";
 import type { HeardAsRule } from "../../shared/utils/voiceHeardAs.js";
 import {
   EMPTY_VOICE_COMMAND_VOCABULARY,
@@ -207,6 +208,11 @@ export interface VoiceCorrectionRequest {
   segmentCount?: number;
   /** The words in `rawText` the recogniser was unsure of; transcript content, so never logged. */
   uncertain?: readonly VoiceTextSpan[];
+  /**
+   * Positions in `rawText` where the speaker paused, each straight after a
+   * word. Carried for the prompt to use; it doesn't yet (#14897).
+   */
+  pauses?: readonly number[];
   /** Nothing comes before the passage in the draft, so it may open with a command. */
   startsPrompt?: boolean;
 }
@@ -453,6 +459,7 @@ export class VoiceCorrectionService {
           ...request,
           rawText: trimmedRaw,
           uncertain: sliceSpans(request.uncertain ?? [], lead, lead + trimmedRaw.length),
+          pauses: slicePausePositions(request.pauses ?? [], lead, lead + trimmedRaw.length),
         },
         settings,
         trace,
@@ -907,6 +914,7 @@ export class VoiceCorrectionService {
       terminalOutputLen: request.terminalOutput?.length ?? 0,
       codeNameCount: request.codeNames?.length ?? 0,
       uncertainCount: request.uncertain?.length ?? 0,
+      pauseCount: request.pauses?.length ?? 0,
       reason: request.reason ?? "unspecified",
       segmentCount: request.segmentCount ?? 0,
     });
