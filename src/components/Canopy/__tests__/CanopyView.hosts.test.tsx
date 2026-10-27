@@ -1131,6 +1131,22 @@ describe("All hosts", () => {
     expect(document.body.textContent).not.toContain("Nothing needs you");
   });
 
+  it("holds the band's all-clear back for a host still connecting, with no word about it", async () => {
+    const settled = canopySnapshot({ cards: [calmCard("shared-run")] });
+    useFleetSnapshotStore.setState({ snapshot: workingFleet(["shared-run"]) });
+    useCanopyStore.setState({ snapshot: settled });
+    installElectron().setActive.mockResolvedValue(settled);
+    state.hosts = [host("studio", "studio-01", { status: "connecting", attempt: 1 })];
+    state.invoke.mockImplementation(() => new Promise(() => {}));
+    render(<CanopyView />);
+    await settle();
+    expect(cardOf("local", "shared-run")).not.toBeNull();
+    expect(summaryWords()).toBe("Checking who needs you…");
+    expect(bandWords()).toBe("Checking who needs you…");
+    expect(document.querySelector("[data-callout]")).toBeNull();
+    expect(document.body.textContent).not.toContain("studio-01…");
+  });
+
   describe("while a host connects", () => {
     const spinner = () => document.querySelector("[data-testid=canopy-hosts-connecting]");
     const gate = (ms: number) => act(async () => void vi.advanceTimersByTime(ms));
@@ -1221,6 +1237,34 @@ describe("All hosts", () => {
       await settle();
       expect(spinner()).toBeNull();
       expect(cardOf("studio", "shared-run")).not.toBeNull();
+    });
+
+    it("starts the gate afresh on each open, however long the panel stood shut", async () => {
+      state.hosts = [host("studio", "studio-01", { status: "connecting", attempt: 1 })];
+      state.invoke.mockImplementation(() => new Promise(() => {}));
+      render(<CanopyView />);
+      await settle();
+      await gate(400);
+      expect(spinner()).not.toBeNull();
+
+      act(() => useCanopyStore.getState().close());
+      await settle();
+      await gate(1_000);
+      act(() => useCanopyStore.getState().open());
+      await settle();
+      expect(spinner()).toBeNull();
+      await gate(399);
+      expect(spinner()).toBeNull();
+      await gate(1);
+      expect(spinner()).not.toBeNull();
+
+      // Shut again before the gate: nothing carries over to the next open.
+      act(() => useCanopyStore.getState().close());
+      await settle();
+      act(() => useCanopyStore.getState().open());
+      await settle();
+      await gate(399);
+      expect(spinner()).toBeNull();
     });
 
     it("keeps a failing host's warning while another host is still connecting", async () => {

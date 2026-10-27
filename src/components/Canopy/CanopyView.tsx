@@ -1143,7 +1143,8 @@ function CanopyInbox({
   // Connecting is the same on every open, so it is silent: the header and the band
   // still hold back the all-clear, and a spinner by the picker says so past the gate.
   const hostProgressShown = hostProgress.filter((issue) => !issue.connecting);
-  const connectingSomewhere = hostIssues.some((issue) => issue.connecting);
+  // A closed panel holds no readings, so it would be connecting for as long as it stays shut.
+  const connectingSomewhere = isOpen && hostIssues.some((issue) => issue.connecting);
   const showConnecting = useDohertyGate(connectingSomewhere);
   const retryingSomewhere =
     everyHost &&
