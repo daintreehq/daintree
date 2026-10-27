@@ -1700,6 +1700,18 @@ interface ForgeProviderContribution {
      * ref was never registered at all, to flag plugin-author typos.
      */
     slots?: ForgeProviderSlots;
+    /**
+     * How the forge writes a reference to one of its issues or pull requests in
+     * text: the characters before the number (`#` on GitHub, `!` for a GitLab
+     * merge request). The composer's `#` menu inserts these, and leaves out a
+     * kind the provider gives no prefix for — the host never assumes `#`.
+     */
+    referencePrefixes?: ForgeReferencePrefixes;
+}
+/** See {@link ForgeProviderContribution.referencePrefixes}. */
+interface ForgeReferencePrefixes {
+    issue?: string;
+    pr?: string;
 }
 /** Named view-slot refs a forge provider can fill. See {@link ForgeProviderContribution.slots}. */
 interface ForgeProviderSlots {

@@ -51,6 +51,7 @@
           }
         ],
         "settingsScopeRef": "instanceUrl",
+        "referencePrefixes": { "issue": "#", "pr": "!" },
         "slots": {
           "settingsTab": "gitlab.forgeSettingsTab",
           "icon": "gitlab.providerIcon"

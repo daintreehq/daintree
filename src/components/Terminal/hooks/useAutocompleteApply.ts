@@ -93,10 +93,10 @@ export function useAutocompleteApply({
   setSelectedIndex,
 }: UseAutocompleteApplyParams) {
   const applyAutocompleteSelection = useCallback(
-    (mode: ApplyMode) => {
+    (mode: ApplyMode, index?: number) => {
       const latest = latestRef.current;
       if (!latest) return false;
-      const item = latest.autocompleteItems[latest.selectedIndex];
+      const item = latest.autocompleteItems[index ?? latest.selectedIndex];
       if (!item) return false;
       applyAutocompleteItem(
         item,

@@ -1,63 +1,59 @@
-import type { Issue, PR } from "@shared/types/forge";
+import type { ForgeReferencePrefixes, Issue, PR } from "@shared/types/forge";
 
 export type ForgeReferenceKind = "issue" | "pr";
 
-export type ForgeReferenceState = "open" | "draft" | "closed" | "merged";
-
-/** One issue or pull request the `#` menu can offer, as `#number`. */
+/** One open issue or pull request the `#` menu can offer. */
 export interface ForgeReference {
   kind: ForgeReferenceKind;
   number: number;
+  /** What a row inserts, written the way the forge writes it (`#12`, `!12`). */
+  reference: string;
   title: string;
-  state: ForgeReferenceState;
+  isDraft: boolean;
   updatedAt: number;
 }
 
-function issueState(issue: Issue): ForgeReferenceState {
-  return issue.state === "open" ? "open" : "closed";
-}
-
-function prState(pr: PR): ForgeReferenceState {
-  if (pr.state === "merged" || pr.merged) return "merged";
-  if (pr.state === "open") return pr.isDraft ? "draft" : "open";
-  return "closed";
-}
-
 /**
- * Issues and pull requests as one list, most recently updated first. An issue
- * served by a tracker other than the code forge is left out: its number names
- * nothing in this repository, so `#N` would point at the wrong thing.
+ * Open issues and pull requests as one list, most recently updated first. A
+ * kind the forge declares no prefix for is left out, and so is an issue served
+ * by a tracker other than the code forge, whose number names nothing in this
+ * repository. List filters are advisory, so anything closed is dropped here.
  */
 export function toForgeReferences(
   issues: readonly Issue[],
-  prs: readonly PR[]
+  prs: readonly PR[],
+  prefixes: ForgeReferencePrefixes
 ): ForgeReference[] {
   const refs: ForgeReference[] = [];
-  for (const issue of issues) {
-    if (issue.providerId !== undefined) continue;
-    refs.push({
-      kind: "issue",
-      number: issue.number,
-      title: issue.title,
-      state: issueState(issue),
-      updatedAt: issue.updatedAt,
-    });
+  if (prefixes.issue) {
+    for (const issue of issues) {
+      if (issue.state !== "open" || issue.providerId !== undefined || issue.key !== undefined) {
+        continue;
+      }
+      refs.push({
+        kind: "issue",
+        number: issue.number,
+        reference: `${prefixes.issue}${issue.number}`,
+        title: issue.title,
+        isDraft: false,
+        updatedAt: issue.updatedAt,
+      });
+    }
   }
-  for (const pr of prs) {
-    refs.push({
-      kind: "pr",
-      number: pr.number,
-      title: pr.title,
-      state: prState(pr),
-      updatedAt: pr.updatedAt,
-    });
+  if (prefixes.pr) {
+    for (const pr of prs) {
+      if (pr.state !== "open" || pr.merged) continue;
+      refs.push({
+        kind: "pr",
+        number: pr.number,
+        reference: `${prefixes.pr}${pr.number}`,
+        title: pr.title,
+        isDraft: pr.isDraft,
+        updatedAt: pr.updatedAt,
+      });
+    }
   }
-  return refs.sort((a, b) => b.updatedAt - a.updatedAt);
-}
-
-/** What a row inserts: the reference, and nothing it says. */
-export function formatForgeReference(ref: Pick<ForgeReference, "number">): string {
-  return `#${ref.number}`;
+  return refs.sort((a, b) => b.updatedAt - a.updatedAt || b.number - a.number);
 }
 
 const DIGITS = /^\d+$/;

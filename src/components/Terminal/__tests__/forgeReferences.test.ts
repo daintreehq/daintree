@@ -1,11 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { Issue, PR } from "@shared/types/forge";
-import {
-  filterForgeReferences,
-  formatForgeReference,
-  toForgeReferences,
-  type ForgeReference,
-} from "../forgeReferences";
+import { filterForgeReferences, toForgeReferences, type ForgeReference } from "../forgeReferences";
+
+const GITHUB = { issue: "#", pr: "#" };
 
 function issue(number: number, title: string, updatedAt: number, extra: Partial<Issue> = {}) {
   return {
@@ -40,49 +37,82 @@ function pr(number: number, title: string, updatedAt: number, extra: Partial<PR>
     updatedAt,
     rawData: null,
     ...extra,
-  } as PR;
+  };
 }
 
-function ref(number: number, title = `Item ${number}`, kind: "issue" | "pr" = "issue") {
-  return { kind, number, title, state: "open", updatedAt: 0 } satisfies ForgeReference;
+function ref(number: number, title = `Item ${number}`): ForgeReference {
+  return {
+    kind: "issue",
+    number,
+    reference: `#${number}`,
+    title,
+    isDraft: false,
+    updatedAt: 0,
+  };
 }
 
 describe("toForgeReferences", () => {
   it("merges issues and pull requests, most recently updated first", () => {
     const refs = toForgeReferences(
       [issue(14842, "Old issue", 100), issue(14848, "New issue", 300)],
-      [pr(14843, "Middle PR", 200)]
+      [pr(14843, "Middle PR", 200)],
+      GITHUB
     );
-    expect(refs.map((r) => [r.kind, r.number])).toEqual([
-      ["issue", 14848],
-      ["pr", 14843],
-      ["issue", 14842],
+    expect(refs.map((r) => [r.kind, r.reference])).toEqual([
+      ["issue", "#14848"],
+      ["pr", "#14843"],
+      ["issue", "#14842"],
     ]);
   });
 
-  it("reports a draft pull request as a draft, and closed and merged ones as such", () => {
+  it("writes each kind with the prefix its forge declares", () => {
+    const refs = toForgeReferences([issue(5, "An issue", 2)], [pr(5, "A merge request", 1)], {
+      issue: "#",
+      pr: "!",
+    });
+    expect(refs.map((r) => [r.kind, r.reference])).toEqual([
+      ["issue", "#5"],
+      ["pr", "!5"],
+    ]);
+  });
+
+  it("leaves out a kind the forge declares no prefix for", () => {
+    const refs = toForgeReferences([issue(1, "An issue", 2)], [pr(2, "A PR", 1)], { pr: "#" });
+    expect(refs.map((r) => r.reference)).toEqual(["#2"]);
+    expect(toForgeReferences([issue(1, "An issue", 2)], [pr(2, "A PR", 1)], {})).toEqual([]);
+  });
+
+  it("keeps drafts and drops anything no longer open", () => {
     const refs = toForgeReferences(
-      [issue(1, "Closed", 4, { state: "closed" })],
+      [issue(1, "Closed", 5, { state: "closed" }), issue(2, "Open", 4)],
       [
-        pr(2, "Draft", 3, { isDraft: true }),
-        pr(3, "Merged", 2, { state: "merged", merged: true }),
-        pr(4, "Declined", 1, { state: "declined" }),
-      ]
+        pr(3, "Draft", 3, { isDraft: true }),
+        pr(4, "Merged", 2, { state: "merged", merged: true }),
+        pr(5, "Declined", 1, { state: "declined" }),
+      ],
+      GITHUB
     );
-    expect(refs.map((r) => [r.number, r.state])).toEqual([
-      [1, "closed"],
-      [2, "draft"],
-      [3, "merged"],
-      [4, "closed"],
+    expect(refs.map((r) => [r.number, r.isDraft])).toEqual([
+      [2, false],
+      [3, true],
     ]);
   });
 
   it("leaves out issues another tracker serves, whose numbers name nothing here", () => {
     const refs = toForgeReferences(
-      [issue(12, "Linear issue", 5, { providerId: "daintree.linear.linear", key: "ENG-12" })],
-      [pr(13, "A PR", 4)]
+      [
+        issue(12, "Linear issue", 5, { providerId: "daintree.linear.linear" }),
+        issue(13, "Keyed issue", 4, { key: "ENG-13" }),
+      ],
+      [pr(14, "A PR", 3)],
+      GITHUB
     );
-    expect(refs.map((r) => r.number)).toEqual([13]);
+    expect(refs.map((r) => r.number)).toEqual([14]);
+  });
+
+  it("orders ties by number, newest first", () => {
+    const refs = toForgeReferences([issue(7, "A", 1)], [pr(9, "B", 1)], GITHUB);
+    expect(refs.map((r) => r.number)).toEqual([9, 7]);
   });
 });
 
@@ -129,12 +159,5 @@ describe("filterForgeReferences", () => {
   it("stops at the limit", () => {
     const many = Array.from({ length: 10 }, (_, i) => ref(100 + i, `Fix ${i}`));
     expect(filterForgeReferences(many, "fix", 4)).toHaveLength(4);
-  });
-});
-
-describe("formatForgeReference", () => {
-  it("is the number behind a hash, whatever the kind", () => {
-    expect(formatForgeReference(ref(14843, "x", "pr"))).toBe("#14843");
-    expect(formatForgeReference(ref(7))).toBe("#7");
   });
 });
