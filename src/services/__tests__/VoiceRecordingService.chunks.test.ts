@@ -439,7 +439,9 @@ describe("VoiceRecordingService — cleaning up a long dictation in chunks (#147
 
     chunk.resolve({ action: "replace", correctedText: CLEANED_OPENING });
     await flush();
-    expect(service.expectedCorrectionWindow(PANEL)?.startedAt).toBe(tailStartedAt);
+    const tailLanding = service.expectedCorrectionWindow(PANEL)!;
+    expect(tailLanding.startedAt).toBe(tailStartedAt);
+    expect(both.landsAt).toBe(Math.max(chunkLanding.landsAt, tailLanding.landsAt));
     tail.resolve({ action: "no_change", correctedText: NEXT });
     await flush();
     expect(service.expectedCorrectionWindow(PANEL)).toBeNull();
