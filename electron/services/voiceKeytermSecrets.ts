@@ -87,6 +87,14 @@ const CANDIDATE_RUN_RE = /[A-Za-z0-9_\-+/=]+/g;
 // in a path doesn't take the rest of the path with it.
 const BLANKABLE_RUN_RE = /[A-Za-z0-9_\-+=]+/g;
 
+/**
+ * Stands in for the gap a cursor move left in a terminal line. A Unicode
+ * noncharacter, reserved for internal use, so output never holds one.
+ */
+export const CURSOR_GAP = "\uFDD0";
+// A blankable run as the line reads with its gaps closed up.
+const GAPPED_BLANKABLE_RUN_RE = /[A-Za-z0-9_\-+=\uFDD0]+/g;
+
 // `NAME=value`, `NAME: value`, `"name":   "value"`, and `name:` at the end of a
 // line with the value on the next; not `==`, `=>` or `::`. The name must start
 // at a boundary, which keeps a long run with no delimiter linear.
@@ -272,23 +280,21 @@ const BARE_RUN_RE = /^[\s│┃║|⎿]*[A-Za-z0-9_\-+/=]+[\s│┃║|]*$/;
  * remain, opaque IDs and bare credential names are blanked. `strict` is for
  * lines sent on as text rather than mined for words (see {@link holdsCredential}).
  *
- * `joined` is the same lines from a terminal with its cursor moves closed up
- * rather than kept as spaces, the way the raw stream's bytes run. A repaint
- * can split a key across moves, so the joined form holding a credential, or a
- * bare run of a wrapped one, counts too, and an ID only the join makes empties
- * the line rather than leave its pieces. A credential name only the join makes
+ * A terminal line can mark the gaps its cursor moves left with
+ * {@link CURSOR_GAP}. Each comes back as a space, but the line is also judged
+ * with its gaps closed up, the way the raw stream's bytes run: a repaint can
+ * split a key across moves, so the joined form holding a credential, or a bare
+ * run of a wrapped one, counts too, and an ID a run makes across a gap empties
+ * the line rather than leave its pieces. A credential name made that way
  * doesn't: closing up prose makes those (`API key` → `APIkey`).
  */
-export function redactSecretShapedLines(
-  lines: readonly string[],
-  strict = false,
-  joined: readonly string[] = lines
-): string[] {
+export function redactSecretShapedLines(lines: readonly string[], strict = false): string[] {
   let wrapping = false;
   let firstAfter = false;
-  return lines.map((line, i) => {
-    const closed = joined[i] ?? line;
-    const split = closed !== line;
+  return lines.map((marked) => {
+    const split = marked.includes(CURSOR_GAP);
+    const line = split ? marked.replaceAll(CURSOR_GAP, " ") : marked;
+    const closed = split ? marked.replaceAll(CURSOR_GAP, "") : marked;
     if (holdsCredential(line, strict) || (split && holdsCredential(closed, strict))) {
       wrapping = true;
       firstAfter = true;
@@ -303,23 +309,19 @@ export function redactSecretShapedLines(
       if (continues) return "";
       wrapping = false;
     }
-    if (split && joinsOpaqueId(closed, line)) return "";
+    if (split && joinsOpaqueId(marked)) return "";
     return line.replace(BLANKABLE_RUN_RE, (run) =>
       isOpaqueId(run) || namesCredential(run) ? " " : run
     );
   });
 }
 
-// An ID in a run the spaced line doesn't have came from pieces it keeps
-// apart, each too short to read as one: a hex key split by a repaint. Runs are
-// counted, so an intact copy elsewhere on the line doesn't cover a split one.
-function joinsOpaqueId(joined: string, spaced: string): boolean {
-  const runs = new Map<string, number>();
-  for (const [run] of spaced.matchAll(BLANKABLE_RUN_RE)) runs.set(run, (runs.get(run) ?? 0) + 1);
-  for (const [run] of joined.matchAll(BLANKABLE_RUN_RE)) {
-    const left = runs.get(run) ?? 0;
-    if (left > 0) runs.set(run, left - 1);
-    else if (isOpaqueId(run)) return true;
+// An ID joined across a gap came from pieces the spaced line keeps apart, each
+// too short to read as one: a hex key split by a repaint.
+function joinsOpaqueId(marked: string): boolean {
+  for (const [run] of marked.matchAll(GAPPED_BLANKABLE_RUN_RE)) {
+    const pieces = run.split(CURSOR_GAP).filter(Boolean);
+    if (pieces.length > 1 && isOpaqueId(pieces.join(""))) return true;
   }
   return false;
 }

@@ -22,7 +22,10 @@ import {
   extractTerminalIdentifiers,
   readTerminalLines,
 } from "../voiceContextKeyterms.js";
-import { SEMANTIC_BUFFER_TRUNCATION_MARKER } from "../pty/types.js";
+import {
+  SEMANTIC_BUFFER_MAX_LINE_LENGTH,
+  SEMANTIC_BUFFER_TRUNCATION_MARKER,
+} from "../pty/types.js";
 
 const getGitBranchMock = vi.fn().mockResolvedValue("feature/auth-login-service");
 
@@ -251,6 +254,7 @@ describe("extractTerminalIdentifiers", () => {
     ["cursor restore (mode 1048)", "\u001b[?1048l"],
     ["alternate screen", "\u001b[?1049h"],
     ["origin mode", "\u001b[?6h"],
+    ["origin mode, zero-padded", "\u001b[?06h"],
     ["scroll region", "\u001b[1;20r"],
     ["full reset", "\u001bc"],
     ["reverse index", "\u001bM"],
@@ -270,6 +274,7 @@ describe("extractTerminalIdentifiers", () => {
     ["keyboard protocol query", "\u001b[?u"],
     ["cursor hide", "\u001b[?25l"],
     ["synchronized output end", "\u001b[?2026l"],
+    ["cursor save (mode 1048)", "\u001b[?1048h"],
     ["cursor style", "\u001b[2 q"],
     ["erase to end of line", "\u001b[K"],
     ["character set", "\u001b(B"],
@@ -286,9 +291,15 @@ describe("extractTerminalIdentifiers", () => {
   });
 
   it("drops a sequence the semantic buffer cut, with its marker", () => {
-    expect(readTerminalLines([`ModelPicker\u001b[3${SEMANTIC_BUFFER_TRUNCATION_MARKER}`])).toEqual([
-      "ModelPicker",
-    ]);
+    const kept = "ModelPicker\u001b[3";
+    const cut = `${"x".repeat(SEMANTIC_BUFFER_MAX_LINE_LENGTH - kept.length)}${kept}`;
+    const [out] = readTerminalLines([`${cut}${SEMANTIC_BUFFER_TRUNCATION_MARKER}`]);
+    expect(out).toMatch(/xModelPicker$/);
+  });
+
+  it("keeps text that only reads like the truncation marker", () => {
+    const line = `Output was${SEMANTIC_BUFFER_TRUNCATION_MARKER}`;
+    expect(readTerminalLines([line])).toEqual([line]);
   });
 
   it("removes a cursor save without eating the capital after it", () => {
@@ -309,6 +320,8 @@ describe("extractTerminalIdentifiers", () => {
   it("drops a repaint-split ID that has an intact copy on the same line", () => {
     const row = "AbcDef\u001b[1C12AB\u001b[1CcDef\u001b[1C34 AbcDef12ABcDef34";
     expect(extractTerminalIdentifiers([row])).toEqual([]);
+    const joinedCopy = "caFe12\u001b[Cbeef34\u001b[Cdead caFe12beef34dead\u001b[CRouter";
+    expect(extractTerminalIdentifiers([joinedCopy])).toEqual([]);
   });
 
   it("drops long branch slugs but keeps short compound identifiers", () => {

@@ -84,6 +84,8 @@ describe("boundTerminalOutput", () => {
   it("drops a split hex key that has an intact copy on the same line", () => {
     const row = "DG=7c26\x1b[1C52f8\x1b[1C3d4d\x1b[1C0fff DG=7c2652f83d4d0fff";
     expect(boundTerminalOutput([row, "", "kept"])).toBe("kept");
+    const joinedCopy = "caFe12\x1b[Cbeef34\x1b[Cdead caFe12beef34dead\x1b[CRouter";
+    expect(boundTerminalOutput([joinedCopy, "", "kept"])).toBe("kept");
   });
 
   it("is null when nothing readable remains", () => {

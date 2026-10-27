@@ -3,13 +3,14 @@ import type { PtyClient } from "./PtyClient.js";
 import { getGitBranch } from "../utils/gitUtils.js";
 import { logDebug } from "../utils/logger.js";
 import {
+  CURSOR_GAP,
   holdsCredential,
   holdsCredentialOrId,
   isSecretShaped,
   redactSecretShapedLines,
 } from "./voiceKeytermSecrets.js";
 import { deriveRepoNames, stripPackageScope } from "./voiceRepoKeyterms.js";
-import { SEMANTIC_BUFFER_TRUNCATION_MARKER } from "./pty/types.js";
+import { SEMANTIC_BUFFER_MAX_LINE_LENGTH, SEMANTIC_BUFFER_TRUNCATION_MARKER } from "./pty/types.js";
 import {
   MAX_DICTIONARY_KEYTERMS,
   MAX_KEYTERMS,
@@ -241,10 +242,11 @@ const CSI_CURSOR_MOVES = new Set("ABCDEFGHIZ`adefru");
 const CSI_PRIVATE_RE = /^[<=>?]/;
 
 // Private modes whose set or reset moves the cursor: origin mode homes it, and
-// the alternate screen modes switch screens or save and restore it. The modes
-// that bracket every frame (synchronized output, cursor visibility) move
-// nothing, and text streamed across frames runs on.
-const CURSOR_MODES = new Set(["6", "47", "1047", "1048", "1049"]);
+// the alternate screen modes switch screens or restore it (setting 1048 only
+// saves it). The modes that bracket every frame (synchronized output, cursor
+// visibility) move nothing, and text streamed across frames runs on.
+const CURSOR_MODES = new Set([6, 47, 1047, 1048, 1049]);
+const SAVE_CURSOR_MODE = 1048;
 
 // The other cursor moves: restoring a saved position, index, next line and
 // reverse index (7-bit and C1), a full reset, and backspace.
@@ -323,30 +325,37 @@ function isValidTerm(term: string): boolean {
   return true;
 }
 
+function isCutLine(text: string): boolean {
+  return (
+    text.length === SEMANTIC_BUFFER_MAX_LINE_LENGTH + SEMANTIC_BUFFER_TRUNCATION_MARKER.length &&
+    text.endsWith(SEMANTIC_BUFFER_TRUNCATION_MARKER)
+  );
+}
+
 function csiMovesCursor(params: string, intermediates: string, final: string): boolean {
   if (intermediates !== "") return false;
   if (params.startsWith("?") && (final === "h" || final === "l")) {
+    // Numeric, as the terminal parses them: `?06h` is origin mode.
     return params
       .slice(1)
       .split(";")
-      .some((mode) => CURSOR_MODES.has(mode));
+      .map(Number)
+      .some((mode) => CURSOR_MODES.has(mode) && (mode !== SAVE_CURSOR_MODE || final === "l"));
   }
   return !CSI_PRIVATE_RE.test(params) && CSI_CURSOR_MOVES.has(final);
 }
 
-// The text with its escapes removed and each cursor move replaced by `gap`.
-function terminalText(text: string, gap: string): string {
+// The text with its escapes removed and each cursor move marked as a gap.
+function terminalText(text: string): string {
   // The marker the semantic buffer puts on a line it cut opens with bytes a
   // sequence the cut left unfinished would take for its own.
-  const body = text.endsWith(SEMANTIC_BUFFER_TRUNCATION_MARKER)
-    ? text.slice(0, -SEMANTIC_BUFFER_TRUNCATION_MARKER.length)
-    : text;
+  const body = isCutLine(text) ? text.slice(0, SEMANTIC_BUFFER_MAX_LINE_LENGTH) : text;
   return body
     .replace(OSC_RE, "")
     .replace(CSI_RE, (_sequence, params: string, intermediates: string, final: string) =>
-      csiMovesCursor(params, intermediates, final) ? gap : ""
+      csiMovesCursor(params, intermediates, final) ? CURSOR_GAP : ""
     )
-    .replace(OTHER_CURSOR_MOVE_RE, gap)
+    .replace(OTHER_CURSOR_MOVE_RE, CURSOR_GAP)
     .replace(ESC_RE, "");
 }
 
@@ -362,11 +371,9 @@ function terminalText(text: string, gap: string): string {
 export function readTerminalLines(lines: readonly string[], strict = false): string[] {
   // Guard against malformed IPC payloads delivering non-string lines, which
   // would otherwise throw here and drop the whole read.
-  const raw = lines.map((line) => (typeof line === "string" ? line : ""));
   return redactSecretShapedLines(
-    raw.map((line) => terminalText(line, " ")),
-    strict,
-    raw.map((line) => terminalText(line, ""))
+    lines.map((line) => (typeof line === "string" ? terminalText(line) : "")),
+    strict
   );
 }
 
