@@ -1692,10 +1692,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                     the `❯` is a prompt marker and sits beside the line being
                     typed, and the column it takes is paid on every line of a
                     wrapped draft on purpose, the same way it is elsewhere in
-                    the app. The trailing controls take no column (see below)
-                    unless a wrapped pill makes one shorter, when
-                    `useComposerMeasure` widens this track's right padding; so
-                    the text runs to the shell's right inset. `pr-1` plus the
+                    the app. The trailing controls take no column (see below),
+                    so the text runs to the shell's right inset. `pr-1` plus the
                     editor's own 4px puts its last glyph about 9px from the
                     border, level with the controls' ink and with the `❯`'s on
                     the left. */}
