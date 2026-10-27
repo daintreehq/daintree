@@ -129,6 +129,24 @@ class MockWebSocket {
     this.fire("error", err);
   }
 
+  unexpectedReq?: { socket: { destroy: ReturnType<typeof vi.fn> } };
+  unexpectedRes?: { statusCode: number; resume: ReturnType<typeof vi.fn> };
+
+  simulateUnexpectedResponse(statusCode: number): void {
+    const req = { socket: { destroy: vi.fn() } };
+    const res = { statusCode, resume: vi.fn() };
+    this.unexpectedReq = req;
+    this.unexpectedRes = res;
+    if (this.listeners.get("unexpected-response")?.size) {
+      this.fire("unexpected-response", req, res);
+      return;
+    }
+    // Unhandled, `ws` aborts the handshake itself: an error, then a close.
+    this.readyState = MockWebSocket.CLOSED;
+    this.fire("error", new Error(`Unexpected server response: ${statusCode}`));
+    this.fire("close", 1006, undefined);
+  }
+
   simulateClose(code?: number, reason?: Buffer | string): void {
     this.readyState = MockWebSocket.CLOSED;
     this.fire("close", code, reason);
@@ -2677,7 +2695,7 @@ describe("OpenAITranscriptionProvider", () => {
     service.stop();
   });
 
-  it("gives up and emits error after exhausting reconnect attempts", async () => {
+  it("gives up and emits error once the reconnect window has passed", async () => {
     vi.spyOn(Math, "random").mockReturnValue(0.5);
     const service = new OpenAITranscriptionProvider();
     const { socket } = await bringSessionReady(service);
@@ -2690,16 +2708,19 @@ describe("OpenAITranscriptionProvider", () => {
     });
 
     // Initial drop schedules attempt 1.
+    const droppedAt = performance.now();
     socket.simulateClose(1006);
 
     // Each cycle: fire the backoff timer (opens a socket), then drop it again
-    // before it can reach session.updated. After RECONNECT_MAX_ATTEMPTS the
+    // before it can reach session.updated. Past RECONNECT_WINDOW_MS the
     // service gives up.
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 15; i++) {
       vi.advanceTimersByTime(3_000);
+      if (performance.now() - droppedAt < 30_000) expect(statuses).not.toContain("error");
       latestInstance().simulateClose(1006);
     }
 
+    expect(instances.length).toBeGreaterThan(6);
     expect(statuses).toContain("reconnecting");
     expect(statuses).toContain("error");
     expect(errors.some((m) => /reconnect failed/i.test(m))).toBe(true);
@@ -2783,15 +2804,24 @@ describe("OpenAITranscriptionProvider", () => {
     constructError = new Error("ECONNREFUSED");
     const instancesBefore = instances.length;
 
+    const errors: string[] = [];
+    service.onEvent((e) => {
+      if (e.type === "error") errors.push(e.error.message);
+    });
+
+    const droppedAt = performance.now();
     socket.simulateClose(1006);
     // Drive all backoff cycles — each fires the timer, connect() throws, and
-    // reschedules until attempts are exhausted.
-    for (let i = 0; i < 6; i++) {
+    // reschedules until the window has passed.
+    for (let i = 0; i < 15; i++) {
       vi.advanceTimersByTime(3_000);
+      if (performance.now() - droppedAt < 30_000) expect(statuses).not.toContain("error");
     }
 
     expect(instances.length).toBe(instancesBefore);
+    expect(service.getSessionStats().reconnects).toBeGreaterThan(5);
     expect(statuses).toContain("error");
+    expect(errors).toEqual([expect.stringMatching(/ws_construct_failed.*ECONNREFUSED/)]);
   });
 });
 
@@ -3651,7 +3681,7 @@ describe("OpenAITranscriptionProvider — reconnect replay (#14605)", () => {
     });
   }
 
-  // The first backoff is 75ms with Math.random pinned at 0.5. Staying well
+  // The first backoff is 187.5ms with Math.random pinned at 0.5. Staying well
   // inside STOP_CONNECT_TIMEOUT_MS lets a stop during backoff wait it out.
   async function reconnect(): Promise<MockWebSocket> {
     vi.advanceTimersByTime(1_000);
@@ -4103,15 +4133,15 @@ describe("OpenAITranscriptionProvider — reconnect replay (#14605)", () => {
     service.sendAudioChunk(chunk(4));
     vad.emitSpeechEnd();
     vad.emitSpeechStart();
-    // REPLAY_MAX_BYTES holds 300 chunks: 299 more evicts all of the first
+    // REPLAY_MAX_BYTES holds 530 chunks: 529 more evicts all of the first
     // segment and the first chunk of the second.
-    for (let i = 0; i < 299; i++) service.sendAudioChunk(chunk(9));
+    for (let i = 0; i < 529; i++) service.sendAudioChunk(chunk(9));
     socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
 
     socket.simulateClose(1006);
     const socket2 = await reconnect();
 
-    expect(wire(socket2)).toEqual([4, "commit", ...Array<number>(299).fill(9)]);
+    expect(wire(socket2)).toEqual([4, "commit", ...Array<number>(529).fill(9)]);
     service.stop();
   });
 
@@ -4200,8 +4230,8 @@ describe("OpenAITranscriptionProvider — reconnect replay (#14605)", () => {
     it("counts each replay chunk the cap evicts", async () => {
       const service = new OpenAITranscriptionProvider();
       await bringSessionReady(service);
-      // REPLAY_MAX_BYTES holds 300 chunks.
-      for (let i = 0; i < 303; i++) service.sendAudioChunk(chunk(9));
+      // REPLAY_MAX_BYTES holds 530 chunks.
+      for (let i = 0; i < 533; i++) service.sendAudioChunk(chunk(9));
 
       expect(service.getSessionStats().droppedReplay).toBe(3);
       service.stop();
@@ -4223,5 +4253,404 @@ describe("OpenAITranscriptionProvider — reconnect replay (#14605)", () => {
       expect(service.getSessionStats().reconnects).toBe(0);
       service.stop();
     });
+  });
+});
+
+describe("OpenAITranscriptionProvider — recovery window (#14796)", () => {
+  beforeEach(() => {
+    instances.length = 0;
+    throwOnConstruct = false;
+    constructError = null;
+    vadWorkers.length = 0;
+    throwOnVadConstruct = false;
+    logCalls.length = 0;
+    vi.spyOn(process, "kill").mockImplementation(() => true);
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    for (const worker of vadWorkers) worker.emitExit(0);
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  function chunk(marker: number): ArrayBuffer {
+    return new Uint8Array(4_800).fill(marker).buffer;
+  }
+
+  function wire(socket: MockWebSocket): Array<number | "commit"> {
+    return socket.sentJson().flatMap<number | "commit">((p) => {
+      if (p.type === "input_audio_buffer.append") {
+        return [Buffer.from(p.audio as string, "base64").readUInt8(0)];
+      }
+      if (p.type === "input_audio_buffer.commit") return ["commit"];
+      return [];
+    });
+  }
+
+  function statusesOf(events: VoiceTranscriptionEvent[]): string[] {
+    return events.flatMap((e) => (e.type === "status" ? [e.status] : []));
+  }
+
+  /**
+   * Advances 100ms at a time, speaking a chunk each step, while every attempt
+   * fails the way it does with the network down: at once, with a DNS error.
+   * Returns the markers spoken.
+   */
+  function speakThroughOutage(
+    service: OpenAITranscriptionProviderInstance,
+    events: VoiceTranscriptionEvent[],
+    outageMs: number,
+    firstMarker: number
+  ): number[] {
+    const spoken: number[] = [];
+    const failed = new Set<MockWebSocket>(instances);
+    for (let elapsed = 0; elapsed < outageMs; elapsed += 100) {
+      if (events.some((e) => e.type === "error" && e.error.severity === "fatal")) break;
+      const marker = firstMarker + spoken.length;
+      service.sendAudioChunk(chunk(marker));
+      spoken.push(marker);
+      vi.advanceTimersByTime(100);
+      const attempt = instances.at(-1);
+      if (attempt && !failed.has(attempt)) {
+        failed.add(attempt);
+        attempt.simulateError(new Error("getaddrinfo ENOTFOUND api.openai.com"));
+        attempt.simulateClose(1006);
+      }
+    }
+    return spoken;
+  }
+
+  /** Lets the next attempt through once the network is back. */
+  function nextAttemptSucceeds(): MockWebSocket {
+    const before = instances.length;
+    for (let i = 0; i < 100 && instances.length === before; i++) vi.advanceTimersByTime(100);
+    const socket = latestInstance();
+    expect(instances.length).toBeGreaterThan(before);
+    socket.simulateOpen();
+    socket.simulateMessage("session.updated");
+    return socket;
+  }
+
+  it("rides out a network that's down for 10 s and transcribes what was said during it", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+    const { socket } = await bringSessionReady(service);
+    latestVadWorker().emitSpeechStart();
+    service.sendAudioChunk(chunk(1));
+    service.sendAudioChunk(chunk(2));
+
+    socket.simulateClose(1006);
+    const spoken = speakThroughOutage(service, events, 10_000, 10);
+    const recovered = nextAttemptSucceeds();
+
+    expect(events.filter((e) => e.type === "error")).toEqual([]);
+    expect(statusesOf(events).at(-1)).toBe("recording");
+    expect(spoken).toHaveLength(100);
+    expect(wire(recovered)).toEqual([1, 2, ...spoken]);
+
+    // The new connection's VAD closes the recovered speech as one segment.
+    latestVadWorker().emitSpeechStart();
+    latestVadWorker().emitSpeechEnd();
+    expect(wire(recovered).at(-1)).toBe("commit");
+    recovered.simulateMessage("input_audio_buffer.committed", { item_id: "item-R" });
+    recovered.simulateMessage("conversation.item.input_audio_transcription.completed", {
+      item_id: "item-R",
+      transcript: "said during the outage",
+    });
+    expect(events.flatMap((e) => (e.type === "complete" ? [e.text] : []))).toEqual([
+      "said during the outage",
+    ]);
+    service.stop();
+  });
+
+  it("gives up only after the recovery window, with the last failure", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+    const { socket } = await bringSessionReady(service);
+    const droppedAt = performance.now();
+
+    socket.simulateClose(1006);
+    // The first failures are a server fault; the network goes after that.
+    vi.advanceTimersByTime(1_000);
+    latestInstance().simulateUnexpectedResponse(503);
+    speakThroughOutage(service, events, 120_000, 0);
+    const gaveUpAt = performance.now();
+
+    expect(gaveUpAt - droppedAt).toBeGreaterThanOrEqual(30_000);
+    expect(gaveUpAt - droppedAt).toBeLessThan(31_000);
+    const errors = events.filter((e) => e.type === "error");
+    expect(errors).toEqual([
+      expect.objectContaining({
+        error: expect.objectContaining({
+          severity: "fatal",
+          code: "reconnect_exhausted",
+          message: expect.stringContaining("ENOTFOUND"),
+        }),
+      }),
+    ]);
+    expect(statusesOf(events).at(-1)).toBe("error");
+
+    const attempts = instances.length;
+    vi.advanceTimersByTime(60_000);
+    expect(instances).toHaveLength(attempts);
+  });
+
+  it("carries on in a new session when the session expires, replaying unacknowledged audio", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+    const { socket } = await bringSessionReady(service);
+    const vad = latestVadWorker();
+    vad.emitSpeechStart();
+    service.sendAudioChunk(chunk(1));
+    vad.emitSpeechEnd();
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+    vad.emitSpeechStart();
+    service.sendAudioChunk(chunk(2));
+    vad.emitSpeechEnd();
+    vad.emitSpeechStart();
+    service.sendAudioChunk(chunk(3));
+
+    const message = "Your session hit the maximum duration of 60 minutes.";
+    socket.simulateMessage("error", {
+      error: { type: "invalid_request_error", code: "session_expired", message, param: null },
+    });
+    socket.simulateClose(1001, Buffer.from(message));
+    const renewed = nextAttemptSucceeds();
+
+    expect(instances).toEqual([socket, renewed]);
+    // The acknowledged segment is the old session's; the rest is resent.
+    expect(wire(renewed)).toEqual([2, "commit", 3]);
+    expect(events.filter((e) => e.type === "error")).toEqual([]);
+    expect(statusesOf(events)).not.toContain("error");
+    expect(statusesOf(events).at(-1)).toBe("recording");
+
+    renewed.simulateMessage("input_audio_buffer.committed", { item_id: "item-B" });
+    renewed.simulateMessage("conversation.item.input_audio_transcription.completed", {
+      item_id: "item-B",
+      transcript: "replayed",
+    });
+    expect(events.some((e) => e.type === "complete" && e.text === "replayed")).toBe(true);
+    service.stop();
+  });
+
+  it("holds well over 15 s of speech from an outage", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+    const { socket } = await bringSessionReady(service);
+
+    socket.simulateClose(1006);
+    const spoken = speakThroughOutage(service, events, 25_000, 0);
+    const recovered = nextAttemptSucceeds();
+
+    expect(spoken).toHaveLength(250);
+    expect(wire(recovered)).toEqual(spoken);
+    expect(events.filter((e) => e.type === "error")).toEqual([]);
+    expect(service.getSessionStats().droppedConnect).toBe(0);
+    service.stop();
+  });
+
+  it("doesn't let an attempt that hangs push recovery far past its window", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+    const { socket } = await bringSessionReady(service);
+    const droppedAt = performance.now();
+
+    socket.simulateClose(1006);
+    speakThroughOutage(service, events, 25_000, 0);
+    // Then the network black-holes: attempts open but are never answered.
+    for (let i = 0; i < 400 && !events.some((e) => e.type === "error"); i++) {
+      const before = instances.length;
+      vi.advanceTimersByTime(100);
+      if (instances.length > before) latestInstance().simulateOpen();
+    }
+
+    expect(events.filter((e) => e.type === "error")).toEqual([
+      expect.objectContaining({
+        error: expect.objectContaining({
+          code: "reconnect_exhausted",
+          message: expect.stringContaining("timed out"),
+        }),
+      }),
+    ]);
+    // A full connect timeout would have run on well past 35s.
+    expect(performance.now() - droppedAt).toBeLessThanOrEqual(33_500);
+  });
+
+  it("gives a later drop its own recovery window after a successful reconnect", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+    const { socket } = await bringSessionReady(service);
+    const firstDrop = performance.now();
+
+    socket.simulateClose(1006);
+    speakThroughOutage(service, events, 20_000, 0);
+    const recovered = nextAttemptSucceeds();
+    recovered.simulateClose(1006);
+    speakThroughOutage(service, events, 20_000, 0);
+
+    // 40s+ since the first drop, but only 20s into this one.
+    expect(performance.now() - firstDrop).toBeGreaterThan(30_000);
+    expect(events.filter((e) => e.type === "error")).toEqual([]);
+    nextAttemptSucceeds();
+    expect(statusesOf(events).at(-1)).toBe("recording");
+    service.stop();
+  });
+
+  it("ends the session at once when a reconnect attempt is refused for auth", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+    const { socket } = await bringSessionReady(service);
+
+    socket.simulateClose(1006);
+    vi.advanceTimersByTime(1_000);
+    const refused = latestInstance();
+    refused.simulateUnexpectedResponse(401);
+
+    expect(refused.unexpectedRes?.resume).toHaveBeenCalled();
+    expect(refused.unexpectedReq?.socket.destroy).toHaveBeenCalled();
+    expect(events.filter((e) => e.type === "error")).toEqual([
+      expect.objectContaining({
+        error: expect.objectContaining({
+          severity: "fatal",
+          code: "ws_http_error",
+          message: expect.stringContaining("HTTP 401"),
+        }),
+      }),
+    ]);
+    expect(statusesOf(events).at(-1)).toBe("error");
+    vi.advanceTimersByTime(60_000);
+    expect(instances).toHaveLength(2);
+  });
+
+  it("retries a reconnect attempt refused for a rate limit or server fault", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+    const { socket } = await bringSessionReady(service);
+    service.sendAudioChunk(chunk(1));
+
+    socket.simulateClose(1006);
+    for (const statusCode of [408, 429, 503]) {
+      vi.advanceTimersByTime(1_000);
+      latestInstance().simulateUnexpectedResponse(statusCode);
+      expect(latestInstance().unexpectedRes?.resume).toHaveBeenCalled();
+      expect(latestInstance().unexpectedReq?.socket.destroy).toHaveBeenCalled();
+    }
+    const recovered = nextAttemptSucceeds();
+
+    expect(instances).toHaveLength(5);
+    expect(wire(recovered)).toEqual([1]);
+    expect(events.filter((e) => e.type === "error")).toEqual([]);
+    expect(statusesOf(events).at(-1)).toBe("recording");
+    service.stop();
+  });
+
+  it("leaves a refused first connect to ws, as a failed start", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+    const startPromise = service.start(BASE_SETTINGS, "session-1");
+    await Promise.resolve();
+
+    latestInstance().simulateUnexpectedResponse(503);
+
+    expect(await startPromise).toMatchObject({ ok: false });
+    expect(events.filter((e) => e.type === "error")).toEqual([
+      expect.objectContaining({
+        error: expect.objectContaining({ severity: "fatal", code: "ws_transport_error" }),
+      }),
+    ]);
+    vi.advanceTimersByTime(60_000);
+    expect(instances).toHaveLength(1);
+  });
+
+  it("keeps outage audio within what the replay ledger can still resend", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+    const { socket } = await bringSessionReady(service);
+    latestVadWorker().emitSpeechStart();
+    // 500 unacknowledged chunks leave room in REPLAY_MAX_BYTES (530) for 30.
+    for (let i = 0; i < 500; i++) service.sendAudioChunk(chunk(1));
+
+    socket.simulateClose(1006);
+    for (let i = 0; i < 50; i++) service.sendAudioChunk(chunk(2));
+    const recovered = nextAttemptSucceeds();
+
+    const resent = [...Array<number>(500).fill(1), ...Array<number>(30).fill(2)];
+    expect(wire(recovered)).toEqual(resent);
+    expect(service.getSessionStats()).toMatchObject({ droppedConnect: 20, droppedReplay: 0 });
+
+    // A second drop before anything is acknowledged still resends all of it.
+    recovered.simulateClose(1006);
+    expect(wire(nextAttemptSucceeds())).toEqual(resent);
+    expect(service.getSessionStats().droppedReplay).toBe(0);
+    service.stop();
+  });
+
+  it("gives the window's last attempt time to become ready past the deadline", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+    const { socket } = await bringSessionReady(service);
+    const droppedAt = performance.now();
+
+    socket.simulateClose(1006);
+    const failed = new Set<MockWebSocket>(instances);
+    let late: MockWebSocket | undefined;
+    for (let i = 0; i < 400 && !late; i++) {
+      vi.advanceTimersByTime(100);
+      const attempt = latestInstance();
+      if (failed.has(attempt)) continue;
+      if (performance.now() - droppedAt > 28_000) {
+        late = attempt;
+        break;
+      }
+      failed.add(attempt);
+      attempt.simulateError(new Error("getaddrinfo ENOTFOUND api.openai.com"));
+      attempt.simulateClose(1006);
+    }
+    expect(late).toBeDefined();
+
+    // Under two seconds of the window were left when it started.
+    late!.simulateOpen();
+    vi.advanceTimersByTime(2_800);
+    expect(performance.now() - droppedAt).toBeGreaterThan(30_000);
+    expect(late!.terminateCalls).toBe(0);
+    late!.simulateMessage("session.updated");
+
+    expect(events.filter((e) => e.type === "error")).toEqual([]);
+    expect(statusesOf(events).at(-1)).toBe("recording");
+    service.stop();
+  });
+
+  it("settles a stop waiting on a reconnect attempt that's refused", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+    const { socket } = await bringSessionReady(service);
+    latestVadWorker().emitSpeechStart();
+    service.sendAudioChunk(chunk(1));
+    service.sendAudioChunk(chunk(2));
+
+    socket.simulateClose(1006);
+    const stopPromise = service.stopGracefully();
+    vi.advanceTimersByTime(1_000);
+    latestInstance().simulateUnexpectedResponse(503);
+    await stopPromise;
+
+    expect(statusesOf(events).at(-1)).toBe("idle");
+    const attempts = instances.length;
+    vi.advanceTimersByTime(60_000);
+    expect(instances).toHaveLength(attempts);
   });
 });

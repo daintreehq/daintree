@@ -10,6 +10,7 @@ import {
   AUDIO_BUFFER_MAX_CHUNKS,
   createAudioBufferOverflowError,
   createTranscriptionItemFailedError,
+  isRetryableHttpStatus,
   type ProviderSessionStats,
   type TranscriptionProvider,
   type TranscriptionStartContext,
@@ -101,14 +102,25 @@ const HEARTBEAT_TICK_MS = 2_000;
 const HEARTBEAT_IDLE_MS = 20_000;
 const HEARTBEAT_ACTIVE_MS = 3_000;
 const HEARTBEAT_FLOOR_BYTES_PER_MS = 64;
-// Automatic reconnect on an unexpected mid-session drop. Exponential backoff
-// with full jitter: delay = random() * min(CAP, INITIAL * MULTIPLIER^attempt).
-// Gentle multiplier so the first few retries are near-instant; after
-// RECONNECT_MAX_ATTEMPTS we give up and surface a fatal error.
-const RECONNECT_MAX_ATTEMPTS = 5;
-const RECONNECT_INITIAL_MS = 150;
-const RECONNECT_MULTIPLIER = 1.5;
+// Reconnect after an unexpected mid-session drop: retry with backoff until
+// RECONNECT_WINDOW_MS has passed since the drop, then give up. A time window
+// rather than an attempt count, because an attempt made while the network is
+// still down fails in milliseconds and would burn a count before a wifi blip
+// or a VPN flip is over. Equal jitter:
+// delay = ceiling/2 + random() * ceiling/2, ceiling = min(CAP, INITIAL * 2^attempt).
+const RECONNECT_WINDOW_MS = 30_000;
+const RECONNECT_INITIAL_MS = 250;
 const RECONNECT_CAP_MS = 3_000;
+// The last attempt in the window still gets this long to become ready, which
+// takes a `session.updated` round trip on top of the socket opening.
+const RECONNECT_MIN_CONNECT_MS = 3_000;
+// 24kHz mono PCM16.
+const AUDIO_BYTES_PER_SECOND = 48_000;
+// Audio captured while reconnecting is held for the whole window, so a long
+// blip is transcribed late rather than lost. Start-up keeps the shared cap.
+const RECONNECT_BUFFER_MAX_BYTES =
+  ((RECONNECT_WINDOW_MS + RECONNECT_MIN_CONNECT_MS) / 1_000) * AUDIO_BYTES_PER_SECOND;
+const RECONNECT_BUFFER_MAX_CHUNKS = 400;
 // We send `turn_detection: null`, so the server never auto-commits the input
 // buffer. We drive segmentation ourselves with a client-side VAD side-chain
 // (Silero v5, on a worker thread): commit at actual end-of-speech after a short
@@ -132,18 +144,27 @@ const MIN_COMMIT_BYTES = 4_800;
 // Audio sent since the server last acknowledged a commit is replayed onto the
 // next connection after a drop. Speech keeps it short (the 8s backstop, plus a
 // few seconds to notice a dead socket), so the cap only bites on a long silent
-// tail, where the oldest audio goes first.
-const REPLAY_MAX_BYTES = 1_440_000;
+// tail, where the oldest audio goes first. It has to hold a whole reconnect
+// flush on top of that, so a second drop during the flush still resends it all.
+const REPLAY_MAX_BYTES = RECONNECT_BUFFER_MAX_BYTES + 20 * AUDIO_BYTES_PER_SECOND;
 // A tail the VAD already called silence is cut to its last 2s before replay,
 // so a reconnect doesn't send (and pay to transcribe) minutes of room noise.
 // 2s is far past the VAD's lag behind live audio, so an onset it hasn't
 // reported yet still survives.
 const REPLAY_SILENCE_KEEP_BYTES = 96_000;
 
+// OpenAI sends this, then closes with 1001, once a session reaches its maximum
+// duration (60 minutes). A new session carries on where it left off.
+const SESSION_EXPIRED_CODE = "session_expired";
+
 // OpenAI Realtime `error.code` values that are recoverable by reconnecting.
 // All other codes (auth, content policy, schema violations) are fatal — a retry
 // will fail the same way, so the user must intervene.
-const TRANSIENT_OPENAI_CODES = new Set<string>(["rate_limit_exceeded", "server_error"]);
+const TRANSIENT_OPENAI_CODES = new Set<string>([
+  "rate_limit_exceeded",
+  "server_error",
+  SESSION_EXPIRED_CODE,
+]);
 
 // WebSocket close codes that indicate a recoverable transport drop. The
 // existing close handler already gates reconnect on `!isExpectedClose &&
@@ -310,15 +331,20 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   private heartbeatDeliveredBytes = 0;
   private audioSentSinceHeard = false;
 
-  // Reconnect state. `reconnectAttempt` and `isReconnecting` survive across
-  // individual connection teardowns (cleanupConnection) and are only reset by
-  // cleanupPreviousSession (a full session reset) or a successful reconnect.
+  // Reconnect state. `reconnectAttempt`, `isReconnecting` and the deadline
+  // survive across individual connection teardowns (cleanupConnection) and are
+  // only reset by cleanupPreviousSession (a full session reset), a fatal error
+  // or a successful reconnect.
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempt = 0;
   private isReconnecting = false;
-  // Last classified transport/server error that drove the current reconnect
-  // cycle. Used when reconnect attempts exhaust so the fatal error surfaced to
-  // the renderer carries the original failure context (e.g. `ws_close_1006`)
+  // When recovery from the current drop gives up, on the performance clock.
+  private reconnectDeadlineAt: number | null = null;
+  // Why the current connection failed (its transport error, connect timeout,
+  // or a transient server error), preferred over the bare close code after it.
+  private connectionError: VoiceInputError | null = null;
+  // The most recent failure this reconnect cycle, carried into the fatal error
+  // when the window runs out so the renderer sees why (e.g. a DNS failure)
   // instead of a generic "reconnect failed" string.
   private lastReconnectError: VoiceInputError | null = null;
   // Set on graceful/fatal teardown so the trailing `close` event isn't mistaken
@@ -512,6 +538,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     this.heldCommits = [];
     this.reconnectAttempt = 0;
     this.isReconnecting = false;
+    this.reconnectDeadlineAt = null;
     this.lastReconnectError = null;
     this.isExpectedClose = false;
     this.liveText = "";
@@ -569,6 +596,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       if (this.isDraining) {
         this.settleDrain("connect-failed");
       } else if (this.isReconnecting) {
+        this.lastReconnectError = { severity: "transient", code: "ws_construct_failed", message };
         this.scheduleReconnect(mySessionId, settings);
       } else {
         this.stopVadWorker("connection-closed");
@@ -580,6 +608,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     }
 
     this.connection = connection;
+    this.connectionError = null;
     logInfo(`${P} Opening OpenAI realtime WebSocket`, {
       url: OPENAI_REALTIME_URL,
       model: OPENAI_TRANSCRIPTION_MODEL,
@@ -588,13 +617,26 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       reconnectAttempt: this.isReconnecting ? this.reconnectAttempt : 0,
     });
 
+    // A reconnect attempt can't hang past the recovery window.
+    const connectTimeoutMs =
+      this.isReconnecting && this.reconnectDeadlineAt !== null
+        ? Math.max(
+            RECONNECT_MIN_CONNECT_MS,
+            Math.min(CONNECT_TIMEOUT_MS, this.reconnectDeadlineAt - performance.now())
+          )
+        : CONNECT_TIMEOUT_MS;
     this.connectTimeout = setTimeout(() => {
       this.connectTimeout = null;
       if (this.sessionId !== mySessionId) return;
-      logError(`${P} Connection timed out (${CONNECT_TIMEOUT_MS}ms)`);
+      logError(`${P} Connection timed out (${Math.round(connectTimeoutMs)}ms)`);
       if (this.isReconnecting) {
         // Force the dead socket closed; the `close` handler schedules the next
-        // reconnect attempt (or gives up once attempts are exhausted).
+        // reconnect attempt (or gives up once the window has passed).
+        this.connectionError = {
+          severity: "transient",
+          code: "connection_timeout",
+          message: "Connection timed out",
+        };
         try {
           connection.terminate();
         } catch {
@@ -619,16 +661,49 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       this.emit({ type: "status", status: "error" });
       this.settlePendingStart(mySessionId, { ok: false, error: "Connection timed out" });
       this.settleDrain("connection-timeout");
-    }, CONNECT_TIMEOUT_MS);
+    }, connectTimeoutMs);
 
     connection.on("pong", () => {
       if (this.sessionId !== mySessionId || this.connection !== connection) return;
       this.handlePong();
     });
 
+    // A reconnect attempt the server refuses outright (a revoked key, a lost
+    // permission) would be refused for the whole window, so only a rate limit
+    // or server fault is retried. Registering this listener disables ws's own
+    // abort, so the response is drained and the socket destroyed here. The
+    // first connect keeps ws's default: an `error`, then a failed start.
+    if (this.isReconnecting) {
+      connection.on("unexpected-response", (req, res) => {
+        try {
+          res.resume();
+          req.socket?.destroy();
+        } catch {
+          // Ignore teardown errors
+        }
+        if (this.sessionId !== mySessionId || this.connection !== connection) return;
+        const statusCode = res.statusCode;
+        const message = `OpenAI rejected the connection (HTTP ${statusCode ?? "unknown"})`;
+        if (!isRetryableHttpStatus(statusCode)) {
+          logError(`${P} Reconnect attempt rejected`, undefined, { statusCode });
+          this.handleFatalError(mySessionId, { severity: "fatal", code: "ws_http_error", message });
+          return;
+        }
+        logWarn(`${P} Reconnect attempt rejected — retrying`, { statusCode });
+        this.lastReconnectError = { severity: "transient", code: "ws_http_error", message };
+        // Detached first: nothing else will close this socket on our behalf.
+        this.cleanupConnection();
+        if (this.isDraining) {
+          this.settleDrain("reconnect-failed");
+          return;
+        }
+        this.scheduleReconnect(mySessionId, settings);
+      });
+    }
+
     // Open handler — same logic for initial connect and reconnect.
     connection.on("open", () => {
-      if (this.sessionId !== mySessionId) {
+      if (this.sessionId !== mySessionId || this.connection !== connection) {
         logWarn(`${P} Session expired during connect, closing`);
         try {
           connection.close();
@@ -688,9 +763,12 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       logError(`${P} WebSocket error`, undefined, voiceErrorLogFields(err));
       // A transport error on a ready (or reconnecting) session is recoverable —
       // `ws` always fires `close` right after `error`, and the close handler
-      // owns the reconnect decision, so just log here. A pre-ready error
-      // (auth/DNS/refused on the very first connect) is fatal: tear down now.
-      if (!this.isReady && !this.isReconnecting) {
+      // owns the reconnect decision, so just keep the error as its reason. A
+      // pre-ready error (auth/DNS/refused on the very first connect) is fatal:
+      // tear down now.
+      if (this.isReady || this.isReconnecting) {
+        this.connectionError ??= { severity: "transient", code: "ws_transport_error", message };
+      } else {
         this.handleFatalError(mySessionId, {
           severity: "fatal",
           code: "ws_transport_error",
@@ -727,16 +805,12 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       // An unexpected drop of a ready session (or a failed reconnect attempt
       // while still mid-reconnect) is recoverable — schedule a retry instead of
       // ending the session. Graceful stops and fatal errors set isExpectedClose.
-      // Don't overwrite a pre-existing `lastReconnectError` (set by the
-      // transient OpenAI server-error path before it terminated the socket) —
-      // that's richer context than the synthetic 1006 from terminate().
+      // The connection's own failure is richer context than the synthetic 1006
+      // from terminate().
       if (!this.isExpectedClose && (wasReady || this.isReconnecting)) {
-        if (!this.lastReconnectError) {
-          this.lastReconnectError = classifyCloseCode(
-            typeof code === "number" ? code : 1006,
-            reasonText
-          );
-        }
+        this.lastReconnectError =
+          this.connectionError ??
+          classifyCloseCode(typeof code === "number" ? code : 1006, reasonText);
         this.scheduleReconnect(mySessionId, settings);
         return;
       }
@@ -937,17 +1011,22 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   }
 
   /**
-   * Schedules the next reconnect attempt with exponential backoff + full jitter.
-   * Gives up (fatal error) once RECONNECT_MAX_ATTEMPTS is reached. The timer
-   * callback re-checks the session id so a `stop()`/new `start()` between
-   * scheduling and firing cancels it (lessons #4850/#4851).
+   * Schedules the next reconnect attempt, or gives up with a fatal error once
+   * the recovery window has passed. The timer callback re-checks the session
+   * id so a `stop()`/new `start()` between scheduling and firing cancels it
+   * (lessons #4850/#4851).
    */
   private scheduleReconnect(mySessionId: number, settings: VoiceInputSettings): void {
     if (this.sessionId !== mySessionId) return;
-    if (this.reconnectAttempt >= RECONNECT_MAX_ATTEMPTS) {
-      logError(`${P} Reconnect failed after ${RECONNECT_MAX_ATTEMPTS} attempts — giving up`);
-      this.isReconnecting = false;
+    const now = performance.now();
+    this.reconnectDeadlineAt ??= now + RECONNECT_WINDOW_MS;
+    const remainingMs = this.reconnectDeadlineAt - now;
+    if (remainingMs <= 0) {
       const last = this.lastReconnectError;
+      logError(`${P} Reconnect failed for ${RECONNECT_WINDOW_MS}ms — giving up`, undefined, {
+        attempts: this.reconnectAttempt,
+        lastCode: last?.code,
+      });
       this.handleFatalError(mySessionId, {
         severity: "fatal",
         code: "reconnect_exhausted",
@@ -959,16 +1038,14 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     }
 
     this.isReconnecting = true;
-    const ceiling = Math.min(
-      RECONNECT_CAP_MS,
-      RECONNECT_INITIAL_MS * RECONNECT_MULTIPLIER ** this.reconnectAttempt
-    );
-    const delay = Math.random() * ceiling;
+    const ceiling = Math.min(RECONNECT_CAP_MS, RECONNECT_INITIAL_MS * 2 ** this.reconnectAttempt);
+    const delay = Math.min(remainingMs, ceiling / 2 + Math.random() * (ceiling / 2));
     this.reconnectAttempt++;
     logInfo(`${P} Scheduling reconnect`, {
       attempt: this.reconnectAttempt,
-      maxAttempts: RECONNECT_MAX_ATTEMPTS,
       delayMs: Math.round(delay),
+      remainingMs: Math.round(remainingMs),
+      lastCode: this.lastReconnectError?.code,
     });
     this.emit({ type: "status", status: "reconnecting" });
 
@@ -1003,6 +1080,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     // socket tears down) isn't treated as a recoverable drop.
     this.isExpectedClose = true;
     this.isReconnecting = false;
+    this.reconnectDeadlineAt = null;
     this.lastReconnectError = null;
     this.clearReconnectTimer();
     // Close the physical socket — a server-sent fatal `error` event leaves the
@@ -1083,9 +1161,10 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
           }
         }
         // A successful (re)connection clears the reconnect state so a later drop
-        // gets a fresh full backoff budget.
+        // gets a full recovery window of its own.
         this.reconnectAttempt = 0;
         this.isReconnecting = false;
+        this.reconnectDeadlineAt = null;
         this.lastReconnectError = null;
         this.isReady = true;
         if (this.isDraining) {
@@ -1248,16 +1327,18 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
           param: classified.param,
           openaiType: errorPayload?.type,
         });
-        // Transient server-side errors (rate_limit_exceeded, server_error) are
-        // recoverable. Emit the classified error first so the renderer can show
-        // "rate-limited, retrying" in the tooltip, then terminate the socket —
-        // its trailing `close` fires the existing close handler, which schedules
-        // a reconnect with the same backoff/jitter machinery used for transport
-        // drops. Calling scheduleReconnect directly here would race the in-flight
-        // close event and risk double-scheduling.
+        // Transient server-side errors (rate_limit_exceeded, server_error,
+        // session_expired) are recoverable. Emit the classified error first so
+        // the renderer can show "rate-limited, retrying" in the tooltip, then
+        // terminate the socket — its trailing `close` fires the existing close
+        // handler, which schedules a reconnect with the same backoff/jitter
+        // machinery used for transport drops. Calling scheduleReconnect directly
+        // here would race the in-flight close event and risk double-scheduling.
+        // An expiry is routine past OpenAI's maximum session length, so it rolls
+        // over into a new session without telling the renderer anything failed.
         if (classified.severity === "transient" && this.connection) {
-          this.lastReconnectError = classified;
-          this.emitError(classified);
+          this.connectionError = classified;
+          if (classified.code !== SESSION_EXPIRED_CODE) this.emitError(classified);
           try {
             this.connection.terminate();
           } catch {
@@ -1609,14 +1690,20 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   /**
    * Appends a chunk to the pre-connect / reconnect buffer, enforcing both a
    * chunk-count cap and a byte cap. Oldest-wins: once either ceiling is hit the
-   * chunk is dropped (warned and reported once) — a voice gap past ~3s is unrecoverable
-   * anyway, so there's no value in retaining unbounded audio. Returns whether
-   * the chunk was kept.
+   * chunk is dropped (warned and reported once). Returns whether the chunk was
+   * kept.
    */
   private bufferPreConnectChunk(chunk: ArrayBuffer): boolean {
+    const maxChunks = this.isReconnecting ? RECONNECT_BUFFER_MAX_CHUNKS : AUDIO_BUFFER_MAX_CHUNKS;
+    // Gap audio joins the unacknowledged audio in the replay ledger when it's
+    // flushed, so together they stay under its cap. Otherwise the flush would
+    // evict audio a second drop needs to resend.
+    const maxBytes = this.isReconnecting
+      ? Math.min(RECONNECT_BUFFER_MAX_BYTES, REPLAY_MAX_BYTES - this.replayBytes)
+      : AUDIO_BUFFER_MAX_BYTES;
     if (
-      this.preConnectBuffer.length >= AUDIO_BUFFER_MAX_CHUNKS ||
-      this.preConnectBufferBytes + chunk.byteLength > AUDIO_BUFFER_MAX_BYTES
+      this.preConnectBuffer.length >= maxChunks ||
+      this.preConnectBufferBytes + chunk.byteLength > maxBytes
     ) {
       // Counted first: the overflow error below can end the session.
       this.droppedConnectChunks++;
@@ -1625,8 +1712,9 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
         logWarn(`${P} Pre-connect buffer full, dropping audio`, {
           chunks: this.preConnectBuffer.length,
           bytes: this.preConnectBufferBytes,
-          maxChunks: AUDIO_BUFFER_MAX_CHUNKS,
-          maxBytes: AUDIO_BUFFER_MAX_BYTES,
+          maxChunks,
+          maxBytes,
+          isReconnecting: this.isReconnecting,
         });
         this.emitError(createAudioBufferOverflowError());
       }
@@ -1706,6 +1794,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     this.clearReconnectTimer();
     this.reconnectAttempt = 0;
     this.isReconnecting = false;
+    this.reconnectDeadlineAt = null;
     this.lastReconnectError = null;
     this.isExpectedClose = false;
     this.heartbeatPing = null;
