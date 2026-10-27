@@ -99,6 +99,26 @@ describe("VoiceCorrectionService streaming", () => {
     });
   });
 
+  it("reports at most once per interval however fast the reply arrives", async () => {
+    let now = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => (now += 10));
+    const corrected = "Fix the bug in the parser, then run the tests and ship the release.";
+    stubFetch(streamed(replyFrames(reply(corrected)), 8));
+    const reportedAt: number[] = [];
+
+    await new VoiceCorrectionService().correct(
+      { rawText: "fix the bug in the parser then run the tests and ship the release" },
+      SETTINGS,
+      undefined,
+      () => reportedAt.push(now)
+    );
+
+    expect(reportedAt.length).toBeGreaterThan(1);
+    for (let i = 1; i < reportedAt.length; i++) {
+      expect(reportedAt[i]! - reportedAt[i - 1]!).toBeGreaterThanOrEqual(33);
+    }
+  });
+
   it("leaves the request unstreamed without a listener", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

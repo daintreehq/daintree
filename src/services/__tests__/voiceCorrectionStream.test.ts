@@ -172,6 +172,41 @@ describe("CorrectionStreamAligner", () => {
     });
   });
 
+  it("doesn't pass dictated words on a match the newest word contradicts", () => {
+    const dictated = "we need to ad the Add button to the toolbar";
+    const seen = stream(dictated, "We need to add the Add button to the toolbar.");
+    for (const rewrite of seen) {
+      // "the Add" stays visible until the stream has written it.
+      const display = shown(dictated, rewrite);
+      expect(display.includes("the Add") || rewrite.text.includes("the Add")).toBe(true);
+    }
+    expect(seen.at(-1)).toEqual({
+      text: "We need to add the Add button to",
+      rawTo: rawTo(dictated, "button to"),
+    });
+  });
+
+  it("treats a word that names a built-in property as an ordinary word", () => {
+    expect(wordKeys("constructor")).toEqual(["constructor"]);
+    const dictated = "fix the constructer before shipping it";
+    const seen = stream(dictated, "Fix the constructor before shipping it.");
+    expect(seen).toContainEqual({
+      text: "Fix the constructor",
+      rawTo: rawTo(dictated, "constructer"),
+    });
+  });
+
+  it("never ends a rewrite inside a quoted file reference", () => {
+    const dictated = 'open @"my file.ts" now and check it';
+    const chipFrom = dictated.indexOf("@");
+    const chipTo = dictated.indexOf('" ') + 1;
+    const seen = stream(dictated, 'Open @"my file.ts" now and check it.');
+    for (const rewrite of seen) {
+      expect(rewrite.rawTo > chipFrom && rewrite.rawTo < chipTo).toBe(false);
+    }
+    expect(seen).toContainEqual({ text: 'Open @"my file.ts"', rawTo: chipTo });
+  });
+
   it("doesn't jump ahead on one common word matching by chance", () => {
     const aligner = new CorrectionStreamAligner("alpha beta gamma the delta epsilon");
     expect(aligner.advance("Zeta eta the theta iota kappa ")).toBeNull();

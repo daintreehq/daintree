@@ -1433,18 +1433,55 @@ describe("VoiceRecordingService — streamed cleanup (#14779)", () => {
     expect(ranges("panel-1")).toEqual([]);
   });
 
-  it("puts a rejected cleanup's passage back exactly as dictated", async () => {
-    const { service, dictate, draft, flush, pending, progress, ranges } = await streamingSetup();
+  it("puts a rejected cleanup's passage back exactly as dictated, at once", async () => {
+    const { service, dictate, say, draft, flush, inputStore, pending, progress, ranges } =
+      await streamingSetup();
     dictate("panel-1", DICTATED);
+    inputStore.getState().setDraftInput("panel-1", draft("panel-1") + "\n");
+    say("and the lexr too");
     await service.stop();
     progress(DICTATED, "So fix the bug in the");
     expect(ranges("panel-1")[0]!.rewrite).toBeDefined();
 
-    // A low-confidence or over-budget reply comes back as no change.
+    // A low-confidence or over-budget reply comes back as no change; the other
+    // passage is still out, so only this one's own reply can clear it.
     pending.get(DICTATED)!.resolve({ action: "no_change", correctedText: DICTATED });
     await flush();
-    expect(draft("panel-1")).toBe(DICTATED);
+    expect(service.hasPendingCorrection("panel-1")).toBe(true);
+    expect(ranges("panel-1")[0]).toEqual({ from: 0, to: DICTATED.length });
+
+    // Its stream has replied, so anything still in flight for it is ignored.
+    progress(DICTATED, "So fix the bug in the parser");
+    expect(ranges("panel-1")[0]).toEqual({ from: 0, to: DICTATED.length });
+
+    pending.get("and the lexr too")!.resolve({ action: "no_change", correctedText: "" });
+    await flush();
+    expect(draft("panel-1")).toBe(`${DICTATED}\nand the lexr too`);
     expect(ranges("panel-1")).toEqual([]);
+  });
+
+  it("shows no command once text typed ahead of the passage means it won't land", async () => {
+    const { service, dictate, say, draft, flush, inputStore, pending, ranges } =
+      await streamingSetup();
+    dictate("panel-1", "run the review skill on auth");
+    inputStore.getState().setDraftInput("panel-1", draft("panel-1") + "\n");
+    say("and the lexr too");
+    await service.stop();
+
+    inputStore.getState().setDraftInput("panel-1", `Note: ${draft("panel-1")}`);
+    pending.get("run the review skill on auth")!.resolve({
+      action: "replace",
+      correctedText: "/review on auth",
+    });
+    await flush();
+    expect(ranges("panel-1")[0]).toEqual({
+      from: 6,
+      to: 6 + "run the review skill on auth".length,
+    });
+
+    pending.get("and the lexr too")!.resolve({ action: "no_change", correctedText: "" });
+    await flush();
+    expect(draft("panel-1")).toBe("Note: run the review skill on auth\nand the lexr too");
   });
 
   it("stops the rewrite at an edit mid-stream and leaves the passage as dictated", async () => {
@@ -1509,17 +1546,6 @@ describe("VoiceRecordingService — streamed cleanup (#14779)", () => {
     });
     await flush();
     expect(draft("panel-1")).toBe("The parser is broken.\nAnd the lexer too.");
-    expect(ranges("panel-1")).toEqual([]);
-  });
-
-  it("ignores progress for a stream that has already replied", async () => {
-    const { service, dictate, flush, pending, progress, ranges } = await streamingSetup();
-    dictate("panel-1", DICTATED);
-    await service.stop();
-    pending.get(DICTATED)!.resolve({ action: "no_change", correctedText: DICTATED });
-    await flush();
-
-    progress(DICTATED, "So fix the bug in the");
     expect(ranges("panel-1")).toEqual([]);
   });
 });

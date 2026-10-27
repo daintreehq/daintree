@@ -968,24 +968,41 @@ describe("voiceInput — session identity", () => {
     it("streams a cleanup's text so far back to the view that asked, under its id", async () => {
       await start(ownerA, "a");
       await stop(ownerA, "a");
-      const cleanupA = getHandler(CHANNELS.VOICE_INPUT_CORRECT)(
-        { sender: ownerA },
-        { rawText: "fix the bug", sessionId: "a", streamId: "s1" }
-      );
-      const requestA = await requestFor("fix the bug");
-      const progress = () =>
-        ownerA.sent.filter((s) => s.channel === CHANNELS.VOICE_INPUT_CORRECTION_PROGRESS);
+      await start(ownerB, "b");
+      await stop(ownerB, "b");
+      const askWithStream = (owner: FakeSender, sessionId: string, rawText: string, id: string) =>
+        getHandler(CHANNELS.VOICE_INPUT_CORRECT)(
+          { sender: owner },
+          { rawText, sessionId, streamId: id }
+        );
+      const cleanupA = askWithStream(ownerA, "a", "fix the bug", "s1");
+      const cleanupB = askWithStream(ownerB, "b", "ship it now", "s2");
+      const [requestA, requestB] = [
+        await requestFor("fix the bug"),
+        await requestFor("ship it now"),
+      ];
+      const progress = (owner: FakeSender) =>
+        owner.sent.filter((s) => s.channel === CHANNELS.VOICE_INPUT_CORRECTION_PROGRESS);
 
       requestA.onText!("Fix the");
-      expect(progress()).toEqual([
+      requestB.onText!("Ship it");
+      expect(progress(ownerA)).toEqual([
         {
           channel: CHANNELS.VOICE_INPUT_CORRECTION_PROGRESS,
           payload: { streamId: "s1", text: "Fix the" },
         },
       ]);
+      expect(progress(ownerB)).toEqual([
+        {
+          channel: CHANNELS.VOICE_INPUT_CORRECTION_PROGRESS,
+          payload: { streamId: "s2", text: "Ship it" },
+        },
+      ]);
 
       requestA.finish("Fix the bug.");
+      requestB.finish("Ship it now.");
       await expect(cleanupA).resolves.toMatchObject({ correctedText: "Fix the bug." });
+      await expect(cleanupB).resolves.toMatchObject({ correctedText: "Ship it now." });
     });
 
     it("streams nothing for a cleanup that didn't ask, or to a view that went away", async () => {

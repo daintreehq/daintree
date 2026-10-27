@@ -1,5 +1,6 @@
 import { EditorView, Decoration, WidgetType, keymap, placeholder } from "@codemirror/view";
-import type { ChangeDesc, Extension, Range } from "@codemirror/state";
+import type { DecorationSet } from "@codemirror/view";
+import type { ChangeDesc, EditorSelection, Extension, Range } from "@codemirror/state";
 import { StateField, StateEffect, Prec } from "@codemirror/state";
 import { insertNewline } from "@codemirror/commands";
 import type { ITheme } from "@xterm/xterm";
@@ -474,6 +475,34 @@ function editsInside(changes: ChangeDesc, from: number, to: number): boolean {
   return inside;
 }
 
+// A caret or selection end among the words a rewrite hides would sit where
+// nothing shows, so those words show as dictated while it's there.
+function selectionInside(selection: EditorSelection, from: number, to: number): boolean {
+  return selection.ranges.some(
+    (range) => (range.head > from && range.head < to) || (range.anchor > from && range.anchor < to)
+  );
+}
+
+function revealUnderSelection(value: DecorationSet, selection: EditorSelection): DecorationSet {
+  const revealed: Range<Decoration>[] = [];
+  value.between(0, Number.MAX_SAFE_INTEGER, (from, to, decoration) => {
+    if (
+      decoration.spec.widget instanceof CorrectionRewriteWidget &&
+      selectionInside(selection, from, to)
+    ) {
+      revealed.push(pendingAIMark.range(from, to));
+    }
+  });
+  if (revealed.length === 0) return value;
+  return value.update({
+    filter: (from, to, decoration) =>
+      !(decoration.spec.widget instanceof CorrectionRewriteWidget) ||
+      !selectionInside(selection, from, to),
+    add: revealed,
+    sort: true,
+  });
+}
+
 export interface PendingAIRange {
   from: number;
   to: number;
@@ -507,7 +536,8 @@ export const pendingAIField = StateField.define({
           const from = Math.max(0, r.from);
           const to = Math.min(docLen, r.to);
           if (from >= to) continue;
-          const rewriteTo = r.rewrite ? Math.min(to, r.rewrite.to) : from;
+          let rewriteTo = r.rewrite ? Math.min(to, r.rewrite.to) : from;
+          if (selectionInside(tr.state.selection, from, rewriteTo)) rewriteTo = from;
           if (r.rewrite && rewriteTo > from) {
             decorations.push(
               Decoration.replace({ widget: new CorrectionRewriteWidget(r.rewrite.text) }).range(
@@ -521,7 +551,7 @@ export const pendingAIField = StateField.define({
         return decorations.length > 0 ? Decoration.set(decorations, true) : Decoration.none;
       }
     }
-    return value;
+    return tr.selection || tr.docChanged ? revealUnderSelection(value, tr.state.selection) : value;
   },
   provide: (f) => EditorView.decorations.from(f),
 });

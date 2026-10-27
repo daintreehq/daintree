@@ -676,7 +676,6 @@ class VoiceRecordingService {
     string,
     { correction: PendingCorrection; passage: CorrectionPassage; aligner: CorrectionStreamAligner }
   >();
-  private correctionStreamSeq = 0;
   // The correction whose seed each panel's learning baseline holds. Text alone
   // can't tell two passages dictated with the same words apart.
   private baselineOwners = new Map<string, PendingCorrection>();
@@ -3107,7 +3106,8 @@ class VoiceRecordingService {
     passage: CorrectionPassage,
     correction: PendingCorrection
   ): Promise<{ text: string | null; failed: boolean; timing: unknown }> {
-    const streamId = `correction-${++this.correctionStreamSeq}`;
+    // Unique past an HMR swap, which leaves the old singleton's requests out.
+    const streamId = crypto.randomUUID();
     this.correctionStreams.set(streamId, {
       correction,
       passage,
@@ -3663,10 +3663,19 @@ class VoiceRecordingService {
     const ranges: VoiceCorrectionRange[] = [];
     for (const correction of this.pendingCorrections) {
       if (correction.panelId !== panelId) continue;
+      const draft = useTerminalInputStore
+        .getState()
+        .getDraftInput(correction.panelId, correction.projectId);
       for (const [passage, span] of this.locateLivePassages(correction)) {
         const rewrite = correction.rewrites.get(passage);
+        // A command that no longer opens the prompt won't land (see
+        // requestCorrection), so it isn't shown either.
+        const commandMoved =
+          rewrite !== undefined &&
+          introducesVoiceCommand(passage.text, rewrite.text) &&
+          draft.slice(0, span.from).trim() !== "";
         ranges.push(
-          rewrite
+          rewrite && !commandMoved
             ? { ...span, rewrite: { to: span.from + rewrite.rawTo, text: rewrite.text } }
             : span
         );

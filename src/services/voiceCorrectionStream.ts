@@ -48,68 +48,73 @@ const PROVISIONAL_WORDS = 1;
 // removed filler, that still leave the second match confirmed.
 const MAX_FILLER_DROPPED = 2;
 // Bounds each update's alignment, however long the passage or the stretch.
-const MAX_STRETCH_UNITS = 48;
+const MAX_STRETCH_WORDS = 48;
 const WINDOW_SLACK = 12;
 
-const CARDINALS: Record<string, string> = {
-  zero: "0",
-  one: "1",
-  two: "2",
-  three: "3",
-  four: "4",
-  five: "5",
-  six: "6",
-  seven: "7",
-  eight: "8",
-  nine: "9",
-  ten: "10",
-  eleven: "11",
-  twelve: "12",
-  thirteen: "13",
-  fourteen: "14",
-  fifteen: "15",
-  sixteen: "16",
-  seventeen: "17",
-  eighteen: "18",
-  nineteen: "19",
-  twenty: "20",
-  thirty: "30",
-  forty: "40",
-  fifty: "50",
-  sixty: "60",
-  seventy: "70",
-  eighty: "80",
-  ninety: "90",
-  first: "1",
-  second: "2",
-  third: "3",
-  fourth: "4",
-  fifth: "5",
-  sixth: "6",
-  seventh: "7",
-  eighth: "8",
-  ninth: "9",
-  tenth: "10",
-};
+// Maps, so a word like "constructor" never finds an inherited key.
+const CARDINALS = new Map<string, string>([
+  ["zero", "0"],
+  ["one", "1"],
+  ["two", "2"],
+  ["three", "3"],
+  ["four", "4"],
+  ["five", "5"],
+  ["six", "6"],
+  ["seven", "7"],
+  ["eight", "8"],
+  ["nine", "9"],
+  ["ten", "10"],
+  ["eleven", "11"],
+  ["twelve", "12"],
+  ["thirteen", "13"],
+  ["fourteen", "14"],
+  ["fifteen", "15"],
+  ["sixteen", "16"],
+  ["seventeen", "17"],
+  ["eighteen", "18"],
+  ["nineteen", "19"],
+  ["twenty", "20"],
+  ["thirty", "30"],
+  ["forty", "40"],
+  ["fifty", "50"],
+  ["sixty", "60"],
+  ["seventy", "70"],
+  ["eighty", "80"],
+  ["ninety", "90"],
+  ["first", "1"],
+  ["second", "2"],
+  ["third", "3"],
+  ["fourth", "4"],
+  ["fifth", "5"],
+  ["sixth", "6"],
+  ["seventh", "7"],
+  ["eighth", "8"],
+  ["ninth", "9"],
+  ["tenth", "10"],
+]);
 
-const NEGATED_STEMS: Record<string, string> = { ca: "can", wo: "will", sha: "shall" };
+const NEGATED_STEMS = new Map<string, string>([
+  ["ca", "can"],
+  ["wo", "will"],
+  ["sha", "shall"],
+]);
 
-const CONTRACTIONS: Record<string, string> = {
-  re: "are",
-  ll: "will",
-  ve: "have",
-  m: "am",
-  d: "would",
-  s: "is",
-};
+const CONTRACTIONS = new Map<string, string>([
+  ["re", "are"],
+  ["ll", "will"],
+  ["ve", "have"],
+  ["m", "am"],
+  ["d", "would"],
+  ["s", "is"],
+]);
 
 function expandContraction(piece: string): string[] {
   if (piece === "cannot") return ["can", "not"];
   if (piece === "let's") return ["let", "us"];
   const negated = /^(.+)n't$/.exec(piece);
-  if (negated) return [NEGATED_STEMS[negated[1]!] ?? negated[1]!, "not"];
+  if (negated) return [NEGATED_STEMS.get(negated[1]!) ?? negated[1]!, "not"];
   const suffixed = /^(.+)'([a-z]+)$/.exec(piece);
-  const expansion = suffixed ? CONTRACTIONS[suffixed[2]!] : undefined;
+  const expansion = suffixed ? CONTRACTIONS.get(suffixed[2]!) : undefined;
   if (suffixed && expansion) return [suffixed[1]!, expansion];
   return [piece];
 }
@@ -121,22 +126,24 @@ function expandContraction(piece: string): string[] {
  * Punctuation alone has no keys.
  */
 export function wordKeys(word: string): string[] {
-  const lower = word.toLowerCase().replace(/[‘’ʼ]/g, "'");
+  const lower = word.toLowerCase().replace(/[\u2018\u2019\u02bc]/g, "'");
   const keys: string[] = [];
   for (const piece of lower.split(/[^\p{L}\p{N}']+/u)) {
     for (const part of expandContraction(piece.replace(/^'+|'+$/g, ""))) {
       const bare = part.replace(/'/g, "");
       if (!bare) continue;
       const ordinal = /^(\d+)(?:st|nd|rd|th)$/.exec(bare);
-      keys.push(ordinal ? ordinal[1]! : (CARDINALS[bare] ?? bare));
+      keys.push(ordinal ? ordinal[1]! : (CARDINALS.get(bare) ?? bare));
     }
   }
   return keys;
 }
 
+// A quoted file reference is one word, spaces and all, so a rewrite never ends
+// inside the chip it draws as.
 function tokenize(text: string, from = 0, limit = Infinity): Token[] {
   const tokens: Token[] = [];
-  const pattern = /\S+/g;
+  const pattern = /@(["'])(?:(?!\1)[^\n])*\1\S*|\S+/g;
   pattern.lastIndex = from;
   let match: RegExpExecArray | null;
   while (tokens.length < limit && (match = pattern.exec(text))) {
@@ -274,9 +281,10 @@ function alignStretch(streamed: Unit[], dictated: Unit[]): Step[] {
 /**
  * Whether the step at `index` is a match the alignment has confirmed: the
  * match before it (or the last commit, when there's none) sits right behind
- * it, with at most a little filler dropped between them and nothing added. A
- * common word matching on its own across a longer gap is chance until the
- * next word matches too, and a near spelling only counts beside an exact match.
+ * it, or only a little filler was dropped between them and the alignment
+ * carries on without adding or swapping a word straight after. A common word
+ * matching on its own across a gap is chance, and a near spelling only counts
+ * beside an exact match.
  */
 function confirmsMatch(steps: Step[], index: number, originExact: boolean): boolean {
   const step = steps[index]!;
@@ -288,6 +296,10 @@ function confirmsMatch(steps: Step[], index: number, originExact: boolean): bool
     dropped++;
   }
   if (dropped > MAX_FILLER_DROPPED) return false;
+  const next = steps[index + 1];
+  if (dropped > 0 && (next?.kind === "added" || (next?.kind === "pair" && next.score <= 0))) {
+    return false;
+  }
   const prev = steps[k];
   if (prev?.kind === "pair" && prev.score <= 0) return false;
   const prevExact = prev?.kind === "pair" ? prev.score === MATCH : originExact;
@@ -309,13 +321,9 @@ export class CorrectionStreamAligner {
   private committedExact = false;
   private rewrite: StreamedRewrite | null = null;
 
-  constructor(private readonly dictated: string) {
+  constructor(dictated: string) {
     this.tokens = tokenize(dictated);
     this.units = unitsOf(dictated, this.tokens);
-  }
-
-  get current(): StreamedRewrite | null {
-    return this.rewrite;
   }
 
   advance(streamedText: string): StreamedRewrite | null {
@@ -323,10 +331,12 @@ export class CorrectionStreamAligner {
     // A stream that no longer starts with what was shown is not this one.
     if (this.rewrite && !streamed.startsWith(this.rewrite.text)) return this.rewrite;
 
-    const tokens = tokenize(streamed, this.streamedDone, MAX_STRETCH_UNITS + PROVISIONAL_WORDS);
-    const stable = tokens.slice(0, Math.max(0, tokens.length - PROVISIONAL_WORDS));
-    const streamedUnits = unitsOf(streamed, stable).slice(0, MAX_STRETCH_UNITS);
-    if (streamedUnits.length === 0) return this.rewrite;
+    const tokens = tokenize(streamed, this.streamedDone, MAX_STRETCH_WORDS + PROVISIONAL_WORDS);
+    const stable = Math.max(0, tokens.length - PROVISIONAL_WORDS);
+    if (stable === 0) return this.rewrite;
+    // The newest word is aligned too, so it can show where the words before
+    // it belong, but nothing commits on it.
+    const streamedUnits = unitsOf(streamed, tokens);
     const window = this.units.slice(
       this.unitsDone,
       this.unitsDone + 2 * streamedUnits.length + WINDOW_SLACK
@@ -338,13 +348,14 @@ export class CorrectionStreamAligner {
     for (let i = 0; i < steps.length; i++) {
       const step = steps[i]!;
       if (step.kind !== "pair" || !confirmsMatch(steps, i, this.committedExact)) continue;
-      if (streamedUnits[step.s]!.last && window[step.d]!.last) commit = step;
+      const unit = streamedUnits[step.s]!;
+      if (unit.token < stable && unit.last && window[step.d]!.last) commit = step;
     }
     if (!commit) return this.rewrite;
 
     const { s, d } = commit;
     this.committedExact = commit.score === MATCH;
-    const streamedTo = stable[streamedUnits[s]!.token]!.to;
+    const streamedTo = tokens[streamedUnits[s]!.token]!.to;
     this.streamedDone = streamedTo;
     this.unitsDone += d + 1;
     this.rewrite = {

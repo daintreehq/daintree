@@ -15,7 +15,7 @@ vi.mock("@/lib/trustedTypesPolicy", () => ({
 
 import { EditorState } from "@codemirror/state";
 import type { Extension } from "@codemirror/state";
-import { EditorView, runScopeHandlers } from "@codemirror/view";
+import { EditorView, WidgetType, runScopeHandlers } from "@codemirror/view";
 import type { ITheme } from "@xterm/xterm";
 import {
   buildInputBarTheme,
@@ -1235,13 +1235,36 @@ describe("pendingAIField", () => {
     const view = makeView("first fix the parser second ship it");
     view.dispatch({
       effects: setPendingAIRanges.of([
-        { from: 0, to: 35, rewrite: { to: 26, text: "1. Fix the parser\n2." } },
+        { from: 0, to: 35, rewrite: { to: 27, text: "1. Fix the parser\n2." } },
       ]),
     });
 
-    expect(view.contentDOM.querySelector(".cm-voice-rewrite")?.textContent).toBe(
-      "1. Fix the parser\n2."
-    );
+    expect(view.contentDOM.textContent).toBe("1. Fix the parser\n2. ship it");
+    const widget: unknown = view.state.field(pendingAIField).iter().value?.spec.widget;
+    expect(widget instanceof WidgetType ? widget.lineBreaks : null).toBe(1);
+    view.destroy();
+  });
+
+  it("shows the dictated words while the caret sits among the words a rewrite hides", () => {
+    const doc = "um so fix the bug";
+    const rewrite = { from: 0, to: 17, rewrite: { to: 9, text: "So fix" } };
+    const view = makeView(doc);
+    view.dispatch({ effects: setPendingAIRanges.of([rewrite]) });
+
+    view.dispatch({ selection: { anchor: 7 } });
+    expect(view.contentDOM.textContent).toBe(doc);
+    expect(spans(view)).toEqual([
+      { from: 0, to: 9, widget: false },
+      { from: 9, to: 17, widget: false },
+    ]);
+
+    // A rewrite that streams on meanwhile doesn't cover the caret again.
+    view.dispatch({ effects: setPendingAIRanges.of([rewrite]) });
+    expect(view.contentDOM.textContent).toBe(doc);
+
+    view.dispatch({ selection: { anchor: 17 } });
+    view.dispatch({ effects: setPendingAIRanges.of([rewrite]) });
+    expect(view.contentDOM.textContent).toBe("So fix the bug");
     view.destroy();
   });
 
