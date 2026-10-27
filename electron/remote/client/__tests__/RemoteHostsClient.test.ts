@@ -567,6 +567,48 @@ describe("RemoteHostsClient", () => {
     expect(windows.openRemoteProject).not.toHaveBeenCalled();
   });
 
+  it("carries a restore from Canopy's Trash, and refuses one that names no trash", async () => {
+    const focusIntent = {
+      intent: "restore-trashed",
+      runId: "term-1",
+      spawnedAt: 100,
+      expiresAt: 120,
+    } as const;
+    await client.switchWindowHost(ctxFor(5, 1), {
+      hostId: "studio-01",
+      newWindow: false,
+      projectId: "proj-1",
+      focusIntent: { ...focusIntent, panelId: "term-9" } as never,
+    });
+    expect(windows.openRemoteProject).toHaveBeenCalledWith(
+      1,
+      "studio-01",
+      "proj-1",
+      "/srv/proj-1",
+      focusIntent,
+      { requesterWebContentsId: 5 }
+    );
+
+    vi.mocked(windows.openRemoteProject).mockClear();
+    for (const bad of [
+      { runId: "" },
+      { runId: 42 },
+      { spawnedAt: "100" },
+      { expiresAt: 1.5 },
+      { expiresAt: undefined },
+    ]) {
+      await expect(
+        client.switchWindowHost(ctxFor(5, 1), {
+          hostId: "studio-01",
+          newWindow: false,
+          projectId: "proj-1",
+          focusIntent: { ...focusIntent, ...bad } as never,
+        })
+      ).rejects.toMatchObject({ code: "VALIDATION" });
+    }
+    expect(windows.openRemoteProject).not.toHaveBeenCalled();
+  });
+
   it("focuses nothing in a window that came forward without being asked to", async () => {
     windows.projectOwner = vi.fn(() => ({ windowId: 2, showing: true }));
     windows.revealWindow = vi.fn();

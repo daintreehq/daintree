@@ -243,6 +243,10 @@ describe("passive agent session capture", () => {
         agentModelId: "gpt-5",
         cwd: "/tmp/passive-capture",
         branch: "feature/passive-capture",
+        // The agent ended itself; the incarnation is named so a later close of
+        // its pane can take this record as the close.
+        closedBy: "exit",
+        terminal: { id: "t-passive", spawnedAt: terminal.getInfo().spawnedAt },
       });
     });
 

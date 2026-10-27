@@ -132,6 +132,9 @@ class MockTerminalProcess {
   }
 }
 
+/** The deadline of each trash the fake registry holds. */
+const trashExpiries = new Map<string, number>();
+
 class MockTerminalRegistry {
   add(id: string, terminal: MockTerminalProcess): void {
     shared.terminals.set(id, terminal);
@@ -161,8 +164,11 @@ class MockTerminalRegistry {
   isInTrash(_id: string): boolean {
     return false;
   }
-  getTrashExpiresAt(_id: string): number | undefined {
-    return undefined;
+  getTrashExpiresAt(id: string): number | undefined {
+    return trashExpiries.get(id);
+  }
+  getTrashTtlMs(): number {
+    return 20_000;
   }
   dispose(): void {
     shared.terminals.clear();
@@ -562,5 +568,30 @@ describe("PtyManager lifecycle ledger", () => {
         })
       );
     });
+  });
+
+  it("names the trash a trash-expiry capture left, as the user's close", async () => {
+    const manager = new PtyManager();
+    manager.spawn("t2", spawnOptions({ launchAgentId: "claude", launchGeneration: 4 }));
+    shared.created[0]!.sessionId = "sess-2";
+    trashExpiries.set("t2", 70_000);
+
+    manager.trash("t2");
+    shared.trashCallbacks.get("t2")!("t2");
+    await vi.waitFor(() => {
+      expect(shared.eventsEmit).toHaveBeenCalledWith(
+        "agent-session:captured",
+        expect.objectContaining({
+          terminalId: "t2",
+          record: expect.objectContaining({
+            sessionId: "sess-2",
+            closedBy: "user",
+            terminal: { id: "t2", spawnedAt: shared.created[0]!.info.spawnedAt },
+            trash: expect.objectContaining({ expiresAt: 70_000, closedAt: 50_000 }),
+          }),
+        })
+      );
+    });
+    trashExpiries.clear();
   });
 });

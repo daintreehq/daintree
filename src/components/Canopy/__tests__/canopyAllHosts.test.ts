@@ -18,7 +18,7 @@ const ownCalls = vi.hoisted(() => ({
   refresh: vi.fn(() => Promise.resolve()),
   setRead: vi.fn((): Promise<unknown> => Promise.resolve(null)),
   onTerminalData: vi.fn((_callback: (chunk: unknown) => void) => () => {}),
-  restoreTrashed: vi.fn((_runId: string, _target: unknown) => Promise.resolve()),
+  restoreTrashed: vi.fn((runId: string, _target: unknown) => Promise.resolve({ runId })),
   removeTrashed: vi.fn((_runId: string, _target: unknown) => Promise.resolve()),
   emptyTrash: vi.fn((targets: unknown[]) => Promise.resolve(targets.length)),
 }));
@@ -303,13 +303,21 @@ describe("createAllHostsRoute", () => {
   });
 
   it("restores and empties a trash on the host holding each run, with bare ids", async () => {
-    invoke.mockResolvedValue(3);
+    invoke.mockImplementation(async (_hostId: string, channel: string, runId?: unknown) =>
+      channel === "canopy:restore-trashed" ? { runId: `resumed-${String(runId)}` } : 3
+    );
     const { api } = createAllHostsRoute("own", ["own", "remote"]);
     const target = { spawnedAt: 7, expiresAt: 99 };
-    await api.restoreTrashed(allHostsKey("remote", "t1"), target);
+    // The run that comes back is named as the inbox holds it: by its host.
+    expect(await api.restoreTrashed(allHostsKey("remote", "t1"), target)).toEqual({
+      runId: allHostsKey("remote", "resumed-t1"),
+    });
     expect(invoke).toHaveBeenCalledWith("remote", "canopy:restore-trashed", "t1", target);
     expect(ownCalls.restoreTrashed).not.toHaveBeenCalled();
-    await api.restoreTrashed(allHostsKey("own", "t1"), target);
+    ownCalls.restoreTrashed.mockResolvedValueOnce({ open: { workspaceId: "p9" } } as never);
+    expect(await api.restoreTrashed(allHostsKey("own", "t1"), target)).toEqual({
+      open: { workspaceId: allHostsKey("own", "p9") },
+    });
     expect(ownCalls.restoreTrashed).toHaveBeenCalledWith("t1", target);
     await api.removeTrashed(allHostsKey("remote", "t4"), target);
     expect(invoke).toHaveBeenCalledWith("remote", "canopy:remove-trashed", "t4", target);
