@@ -351,9 +351,9 @@ describe("buildCorrectionSystemPrompt target", () => {
 
   it("never teaches the model to turn a bare command word into a command", () => {
     const prompt = buildCorrectionSystemPrompt({ target });
-    expect(prompt.slice(prompt.indexOf("COMMAND RULES:"))).not.toContain(
-      "compact the conversation"
-    );
+    const rules = prompt.indexOf("COMMAND RULES:");
+    expect(rules).toBeGreaterThan(-1);
+    expect(prompt.slice(rules)).not.toContain("compact the conversation");
   });
 
   it("lists every command, bounding the descriptions instead", () => {

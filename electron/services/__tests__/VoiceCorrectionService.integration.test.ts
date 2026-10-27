@@ -258,6 +258,7 @@ describe("VoiceCorrectionService integration — target commands", () => {
         { rawText, startsPrompt: true },
         settings
       );
+      expect(result.failed).not.toBe(true);
       expect(result.confirmedText).not.toMatch(/^[/$]/);
     },
     15_000
