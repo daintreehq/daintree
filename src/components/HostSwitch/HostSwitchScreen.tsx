@@ -131,14 +131,16 @@ export function HostSwitchScreen({ pending }: { pending: PendingHostSwitch }) {
         "fixed inset-0 z-[calc(var(--z-toolbar)+1)] flex flex-col bg-surface-canvas",
         !shown && "opacity-0",
         // Nothing is loading any more, so the placeholders hold still.
-        failed && "[&_[data-skeleton-bone]]:animate-none"
+        failed && "[&_[data-skeleton-bone]]:animate-none!"
       )}
       ref={screenRef}
       tabIndex={-1}
       onKeyDown={(event) => {
         // Tab stays on the screen: the controls behind it are not there.
         if (event.key !== "Tab") return;
-        const buttons = [...(screenRef.current?.querySelectorAll("button") ?? [])];
+        const buttons = [
+          ...(screenRef.current?.querySelectorAll<HTMLElement>("button, [data-tab-stop]") ?? []),
+        ];
         event.preventDefault();
         if (buttons.length === 0) return;
         const at = buttons.findIndex((button) => button === document.activeElement);
@@ -189,8 +191,13 @@ export function HostSwitchScreen({ pending }: { pending: PendingHostSwitch }) {
             >
               {pendingHostSwitchHeading(pending)}
             </h2>
-            {failed ? (
-              <p className="min-h-0 w-full overflow-y-auto break-words text-sm text-text-secondary">
+            {pending.phase === "failed" ? (
+              <p
+                // Scrollable, so reachable from the keyboard: Tab cycles through it.
+                tabIndex={0}
+                data-tab-stop=""
+                className="min-h-0 w-full overflow-y-auto break-words text-sm text-text-secondary"
+              >
                 {failureMessage}
               </p>
             ) : (

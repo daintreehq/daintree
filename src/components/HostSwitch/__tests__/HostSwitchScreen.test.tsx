@@ -128,8 +128,13 @@ describe("HostSwitchScreen", () => {
     expect(document.activeElement).toBe(button("Retry"));
     fireEvent.keyDown(screen(), { key: "Tab" });
     expect(document.activeElement).toBe(button("Cancel"));
+    // The failure's reason can outgrow its zone, so it is a stop of its own.
+    fireEvent.keyDown(screen(), { key: "Tab" });
+    expect(document.activeElement?.textContent).toBe("down");
     fireEvent.keyDown(screen(), { key: "Tab" });
     expect(document.activeElement).toBe(button("Retry"));
+    fireEvent.keyDown(screen(), { key: "Tab", shiftKey: true });
+    expect(document.activeElement?.textContent).toBe("down");
     fireEvent.keyDown(screen(), { key: "Tab", shiftKey: true });
     expect(document.activeElement).toBe(button("Cancel"));
   });
