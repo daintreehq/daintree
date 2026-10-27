@@ -1746,7 +1746,9 @@ describe("VoiceRecordingService adversarial", () => {
       expect(runtime.voiceFns.setStatus).toHaveBeenCalledWith("finishing");
     });
     vi.mocked(notify).mockClear();
+    runtime.voiceFns.announce.mockClear();
     emitError(REPLAY_AUDIO_LOST);
+    expect(runtime.voiceFns.announce).toHaveBeenCalledWith(REPLAY_AUDIO_LOST.message);
     emitStatus("idle");
     stopDeferred.resolve();
     await stopPromise;
@@ -1769,11 +1771,13 @@ describe("VoiceRecordingService adversarial", () => {
     const discarded = Reflect.get(voiceRecordingService, "discardedSessionIds") as Set<string>;
     discarded.add(liveSessionId());
     vi.mocked(notify).mockClear();
+    runtime.voiceFns.announce.mockClear();
 
     emitError(STOP_AUDIO_LOST);
     emitError(REPLAY_AUDIO_LOST);
 
     expect(vi.mocked(notify)).not.toHaveBeenCalled();
+    expect(runtime.voiceFns.announce).not.toHaveBeenCalled();
   });
 
   describe("asked by another view (#14601)", () => {

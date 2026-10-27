@@ -3224,7 +3224,6 @@ class VoiceRecordingService {
     notify({
       type: "warning",
       title: "Dictation incomplete",
-      // eslint-disable-next-line no-restricted-syntax -- raw error.message: VoiceInputError is constructed internally with well-formed user copy
       message,
       priority: "high",
       replaceKey: "voice-replay-audio-lost",

@@ -93,6 +93,9 @@ const HEARTBEAT_TICK_MS = 2_000;
 const HEARTBEAT_IDLE_MS = 20_000;
 const HEARTBEAT_ACTIVE_MS = 3_000;
 const HEARTBEAT_FLOOR_BYTES_PER_MS = AUDIO_BYTES_PER_SECOND / 1_000;
+// A pong echoes its ping's payload, so the stop's answer can't be mistaken for
+// one to a heartbeat ping still in flight from before the stop.
+const STOP_PING_PAYLOAD = "stop";
 
 // Close codes that mean Deepgram refused what we sent (undecodable audio,
 // policy, oversized frame). A new connection would fail the same way.
@@ -310,6 +313,9 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
   private unconfirmedAudio: ArrayBuffer[] = [];
   private unconfirmedBytes = 0;
   private unconfirmedOffset = 0;
+  // How far into the ledger an earlier socket proved it received the audio,
+  // carried through the replay so a reconnect doesn't forget it.
+  private replayProvenThrough = 0;
   private replayEvictionWarned = false;
   private replayLossReported = false;
 
@@ -327,10 +333,12 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
   // What that stop was holding, taken when it landed: a fatal error discards
   // the audio before the drain settles and reports the loss.
   private stopHeldBytes = 0;
-  // A stop on a ready socket hasn't heard back: no pong to its ping, no result,
-  // nothing. If the drain ends that way the socket died before the stop, and
-  // its one fresh socket is still to be tried.
+  // Nothing has shown the stop reached Deepgram: no pong to its ping, no
+  // end-of-stream Metadata. A result proves nothing, since it may have been in
+  // flight before the stop. A drain that ends this way on a ready socket means
+  // it died first; `stopCanRedial` is its one fresh socket, not yet spent.
   private stopUnanswered = false;
+  private stopCanRedial = false;
 
   private audioChunkCount = 0;
   // Session-summary counts. They outlive the drain's cleanup and reset only
@@ -599,9 +607,9 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
       });
     });
 
-    connection.on("pong", () => {
+    connection.on("pong", (data) => {
       if (this.sessionId !== mySessionId || this.connection !== connection) return;
-      this.handlePong();
+      this.handlePong(data);
     });
 
     connection.on("open", () => {
@@ -628,9 +636,12 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
         resentChunks: this.unconfirmedAudio.length,
       });
       this.emit({ type: "terms_sent", terms: urlKeyterms, keytermAttempt: attempt });
-      // Before the flush, so the replay counts as audio awaiting an answer.
+      // Read before the heartbeat resets its counts. The heartbeat starts ahead
+      // of the flush so the replay counts as audio awaiting an answer.
+      const provenHeldBytes = this.provenLedgerBytes();
       this.startHeartbeat(connection, mySessionId);
       this.flushHeldAudio();
+      this.replayProvenThrough = provenHeldBytes;
       this.isReady = true;
       // A successful open gives a later drop a fresh recovery window.
       this.reconnectAttempt = 0;
@@ -907,12 +918,32 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
   }
 
   /** A pong: everything sent before the oldest unanswered ping has arrived. */
-  private handlePong(): void {
+  private handlePong(data: Buffer): void {
     const mark = this.heartbeatPingMarks.shift();
     if (mark !== undefined) {
       this.heartbeatDeliveredBytes = Math.max(this.heartbeatDeliveredBytes, mark);
     }
+    if (data.toString("utf8") === STOP_PING_PAYLOAD) this.stopUnanswered = false;
     this.markHeard();
+  }
+
+  /**
+   * How much of the ledger's head a socket has proved it received: this
+   * connection's pongs, or an earlier one's carried through its replay.
+   */
+  private provenLedgerBytes(): number {
+    const proven =
+      Math.max(this.heartbeatDeliveredBytes, this.replayProvenThrough) - this.unconfirmedOffset;
+    return Math.min(this.unconfirmedBytes, Math.max(0, proven));
+  }
+
+  private sendStopPing(): void {
+    this.stopUnanswered = true;
+    try {
+      this.connection?.ping(STOP_PING_PAYLOAD);
+    } catch (err) {
+      logWarn(`${P} Stop ping failed`, { ...voiceErrorLogFields(err) });
+    }
   }
 
   /** Records that the current connection answered: a pong or any server frame. */
@@ -920,7 +951,6 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     this.heartbeatLastHeardMs = this.heartbeatTick * HEARTBEAT_TICK_MS;
     this.heartbeatPing = null;
     this.audioSentSinceHeard = false;
-    this.stopUnanswered = false;
   }
 
   private clearHeartbeat(): void {
@@ -1017,10 +1047,15 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
         return;
 
       case "UtteranceEnd":
-      case "Metadata":
-        // VAD / metadata signals. Segmentation is already handled via is_final
-        // Results, so these are informational only.
+        // A VAD signal. Segmentation is already handled via is_final Results.
         logDebug(`${P} ← ${type}`);
+        return;
+
+      case "Metadata":
+        // Deepgram's summary once it has had the whole stream, so a stop's
+        // CloseStream, and everything sent ahead of it, got there.
+        logDebug(`${P} ← ${type}`);
+        this.stopUnanswered = false;
         return;
 
       case "Error": {
@@ -1130,7 +1165,9 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
       }
       // Audio a pong proved delivered got its chance at a result, and silence
       // never gets one; only audio Deepgram may never have had is lost here.
-      if (this.unconfirmedOffset > this.heartbeatDeliveredBytes) {
+      if (
+        this.unconfirmedOffset > Math.max(this.heartbeatDeliveredBytes, this.replayProvenThrough)
+      ) {
         this.reportReplayAudioLost("replay-evicted");
       }
     }
@@ -1195,6 +1232,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     this.unconfirmedAudio = [];
     this.unconfirmedBytes = 0;
     this.unconfirmedOffset = 0;
+    this.replayProvenThrough = 0;
   }
 
   /**
@@ -1243,6 +1281,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     this.stopPendingReady = false;
     this.stopHeldBytes = 0;
     this.stopUnanswered = false;
+    this.stopCanRedial = false;
     this.settings = null;
     if (this.drainResolve) {
       this.drainResolve();
@@ -1271,13 +1310,22 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
 
   private settleDrain(reason: string): void {
     const resolve = this.drainResolve;
-    // Still waiting on a socket: what the stop was holding never went out.
-    const lostBytes = resolve && this.stopPendingReady ? this.stopHeldBytes : 0;
+    // Still waiting on a socket, what the stop was holding never went out. A
+    // socket that never showed the stop arrived may not have had what it
+    // didn't confirm; a ready one only gets here once its fresh socket is spent.
+    const lostBytes = !resolve
+      ? 0
+      : this.stopPendingReady
+        ? this.stopHeldBytes
+        : this.stopUnanswered
+          ? this.unconfirmedBytes
+          : 0;
     this.clearDrainTimeout();
     this.isDraining = false;
     this.stopPendingReady = false;
     this.stopHeldBytes = 0;
     this.stopUnanswered = false;
+    this.stopCanRedial = false;
     this.drainPromise = null;
     this.drainResolve = null;
     if (!resolve) {
@@ -1381,12 +1429,8 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     // ends, the socket died before the stop.
     this.clearHeartbeat();
     this.emit({ type: "status", status: "finishing" });
-    this.stopUnanswered = true;
-    try {
-      this.connection.ping();
-    } catch (err) {
-      logWarn(`${P} Stop ping failed`, { ...voiceErrorLogFields(err) });
-    }
+    this.stopCanRedial = true;
+    this.sendStopPing();
 
     // CloseStream tells Deepgram we're done sending audio. The server flushes
     // any remaining transcripts (delivered as final Results, emitted above) and
@@ -1474,7 +1518,10 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
    */
   private redialUnansweredStop(reason: string): boolean {
     const settings = this.settings;
-    if (!this.stopUnanswered || !settings || this.unconfirmedBytes === 0) return false;
+    if (!this.stopUnanswered || !this.stopCanRedial || !settings || this.unconfirmedBytes === 0) {
+      return false;
+    }
+    this.stopCanRedial = false;
     this.stopUnanswered = false;
     logWarn(`${P} Nothing answered the stop — resending held audio on a fresh socket`, {
       reason,
@@ -1507,12 +1554,14 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
   /**
    * Second half of `stopAfterConnect()`, run from `open` once the buffered
    * audio has been flushed: send CloseStream and re-arm the drain backstop for
-   * the server's final Results and close.
+   * the server's final Results and close. If nothing shows the stop arrived
+   * before the drain ends, what it didn't confirm is reported lost.
    */
   private closeStreamAfterLateReady(): void {
     this.stopPendingReady = false;
     this.stopHeldBytes = 0;
     this.clearDrainTimeout();
+    this.sendStopPing();
     try {
       this.connection?.send(JSON.stringify({ type: "CloseStream" }));
       logInfo(`${P} → CloseStream (after late open)`);
