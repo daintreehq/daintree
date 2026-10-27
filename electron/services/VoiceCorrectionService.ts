@@ -48,7 +48,7 @@ const MIN_OUTPUT_TOKENS = 1024;
 const OUTPUT_TOKENS_PER_CHAR = 1.5;
 const OUTPUT_TOKENS_OVERHEAD = 256;
 const FILE_LINK_MAX_OUTPUT_TOKENS = 256;
-const PROMPT_CACHE_PREFIX = "voice-correction-v10";
+const PROMPT_CACHE_PREFIX = "voice-correction-v11";
 // OpenAI rejects a prompt_cache_key longer than 64 characters.
 const PROMPT_CACHE_KEY_MAX_LENGTH = 64;
 const FILE_LINK_DETECTION_TIMEOUT_MS = 4000;
@@ -152,7 +152,8 @@ export interface VoiceCorrectionSettings {
 export interface VoiceCorrectionRequest {
   rawText: string;
   recentContext?: string[];
-  rightContext?: string;
+  /** What the dictated terminal recently printed, redacted and bounded; evidence for what was heard, never text to correct. */
+  terminalOutput?: string;
   reason?: string;
   segmentCount?: number;
   uncertainWords?: string[];
@@ -432,8 +433,8 @@ export class VoiceCorrectionService {
         : request.rawText;
     parts.push(`<target>\n${targetText}\n</target>`);
 
-    if (request.rightContext?.trim()) {
-      parts.push(`<right_context>\n${request.rightContext.trim()}\n</right_context>`);
+    if (request.terminalOutput?.trim()) {
+      parts.push(`<terminal_output>\n${request.terminalOutput.trim()}\n</terminal_output>`);
     }
 
     return parts.join("\n\n");
@@ -717,6 +718,7 @@ export class VoiceCorrectionService {
     logDebug(`${P} Calling Responses API`, {
       model,
       contextLen: request.recentContext?.length ?? 0,
+      terminalOutputLen: request.terminalOutput?.length ?? 0,
       reason: request.reason ?? "unspecified",
       segmentCount: request.segmentCount ?? 0,
     });

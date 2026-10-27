@@ -741,7 +741,7 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
       {settings.enabled && (
         <SettingsSection
           title="AI text correction"
-          description={`When you stop dictating, the whole passage is corrected once with ${VOICE_DICTATION_AI_MODEL} to fix technical terms, punctuation and filler words, resolve self-corrections, and lay out spoken lists. The text is sent to OpenAI.`}
+          description={`When you stop dictating, the whole passage is corrected once with ${VOICE_DICTATION_AI_MODEL} to fix technical terms, punctuation and filler words, resolve self-corrections, and lay out spoken lists. The text and the terminal's recent output, with credential-like lines removed, are sent to OpenAI.`}
           id="voice-ai-correction"
         >
           {saveError("correction")}

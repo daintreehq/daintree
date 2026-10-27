@@ -42,6 +42,7 @@ import {
   assembleTaggedKeyterms,
   screenDictationNames,
 } from "../../services/voiceContextKeyterms.js";
+import { readTerminalOutputForCorrection } from "../../services/voiceTerminalContext.js";
 import { readProjectVoiceDictionary } from "../../services/projectVoiceDictionary.js";
 import { flattenDictationNames, gatherDictationNames } from "../../services/voiceContextNames.js";
 import { collectHeardAsRules, createHeardAsRewriter } from "../../../shared/utils/voiceHeardAs.js";
@@ -1590,15 +1591,19 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
 
     const projectInfo = getProjectInfo(ctx.projectId);
     const { terminalId } = resolveKeytermTarget(ctx.projectId, request.terminalId, deps.ptyClient);
-    // Both reads run at once, so finding the commands adds no wait to the vocabulary's.
-    const [vocabulary, commandTarget] = await Promise.all([
+    // The reads run at once, so none adds a wait to another's. The terminal's
+    // output follows the keyterms' ownership rule: terminalId is empty for a
+    // terminal another project owns.
+    const [vocabulary, commandTarget, terminalOutput] = await Promise.all([
       readVocabulary(resolveVocabularyProject(ctx.projectId, request.terminalId, deps.ptyClient)),
       resolveVoiceCommandTarget(deps.ptyClient, terminalId, COMMAND_TARGET_CORRECTION_BUDGET_MS),
+      readTerminalOutputForCorrection(deps.ptyClient, terminalId),
     ]);
     const result = await correctionService.correct(
       {
         rawText: request.rawText,
         recentContext: request.recentContext,
+        ...(terminalOutput ? { terminalOutput } : {}),
         reason: "stop",
         startsPrompt: request.startsPrompt === true,
       },
