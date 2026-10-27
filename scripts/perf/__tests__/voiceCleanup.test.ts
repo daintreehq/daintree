@@ -340,6 +340,20 @@ describe("inputHash", () => {
       newerRecordsFollow: true,
       observedState: { state: "waiting", waitingReason: "question", lastStateChangeAt: null },
     });
+    expect(
+      agentReplyAt(
+        {
+          text: "Shim or migration?",
+          recordedMinutesAgo: null,
+          newerRecordsFollow: false,
+          observedState: { state: "idle", changedMinutesAgo: 3 },
+        },
+        now
+      )
+    ).toMatchObject({
+      recordedAt: null,
+      observedState: { state: "idle", lastStateChangeAt: now - 3 * 60_000 },
+    });
   });
 
   it("sends the short answer again with the screen alone, as its twin", () => {
