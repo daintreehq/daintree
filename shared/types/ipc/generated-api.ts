@@ -1752,6 +1752,9 @@ export interface GeneratedElectronAPI {
     getLiveSession(
       ...args: IpcInvokeMap["voice-input:get-live-session"]["args"]
     ): Promise<IpcInvokeMap["voice-input:get-live-session"]["result"]>;
+    prefetchCorrections(
+      ...args: IpcInvokeMap["voice-input:prefetch-corrections"]["args"]
+    ): Promise<IpcInvokeMap["voice-input:prefetch-corrections"]["result"]>;
     revealLive(
       ...args: IpcInvokeMap["voice-input:reveal-live"]["args"]
     ): Promise<IpcInvokeMap["voice-input:reveal-live"]["result"]>;

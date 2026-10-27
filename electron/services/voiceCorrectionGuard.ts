@@ -169,9 +169,11 @@ const TYPED_SYMBOLS = new Set(SPOKEN_SYMBOLS.values());
 const WORD_CHAR_RE = /[\p{L}\p{N}_]/u;
 // "dash dash watch" is --watch, "dash dash no dash verify" is --no-verify,
 // and "dash v" is -v: a single dash takes a single letter. A doubled dash
-// starts the next flag ("dash dash watch dash dash verbose").
+// starts the next flag ("dash dash watch dash dash verbose"). A recogniser
+// can type a spoken dash as a hyphen ("dash-watch", "dash-no-verify"): one
+// right after the first dash is the second, unless a single letter follows.
 const SPOKEN_FLAG_RE =
-  /(?<![\p{L}\p{N}])(?:dash|hyphen)\s+(?:(?<long>dash|hyphen)\s+)?(?<name>(?!(?:dash|hyphen)\b)\p{L}[\p{L}\p{N}]*(?:\s+(?:dash|hyphen)\s+(?!(?:dash|hyphen)\b)[\p{L}\p{N}]+)*)/giu;
+  /(?<![\p{L}\p{N}])(?:dash|hyphen)(?<sep>\s+|-)(?:(?<long>dash|hyphen)(?:\s+|-))?(?<name>(?!(?:dash|hyphen)\b)\p{L}[\p{L}\p{N}]*(?:(?:\s+(?:dash|hyphen)\s+|-)(?!(?:dash|hyphen)\b)[\p{L}\p{N}]+)*)/giu;
 // What joins the parts of a typed identifier, path or filename into one word.
 const IDENTIFIER_JOIN_RE = /[._:]+/u;
 
@@ -207,6 +209,88 @@ const ORDINAL_WORDS = [
   "ninth",
   "tenth",
 ];
+// A recogniser's formatting writes a spoken "first," as "1st,", so a digit
+// ordinal may come back as its word, and a word as its digits. Only through
+// tenth, the ordinals a speaker counts with; past that the digits stay digits,
+// as every other number's do.
+const ORDINAL_MENTION_RE = new RegExp(
+  String.raw`(?<![\p{L}\p{N}_./\\-])(?:(?<digits>10|[1-9])(?<suffix>st|nd|rd|th)|(?<word>${ORDINAL_WORDS.join("|")}))(?![\p{L}\p{N}_])|^[ \t]*(?<marker>\d{1,2})[.)](?=[ \t])`,
+  "gimu"
+);
+
+interface OrdinalMention extends Range {
+  value: number;
+  /** Written in digits, "2nd", rather than as a word or a list marker. */
+  digits: boolean;
+}
+
+function ordinalSuffix(value: number): string {
+  return value === 1 ? "st" : value === 2 ? "nd" : value === 3 ? "rd" : "th";
+}
+
+/**
+ * The ordinals in `text`, outside its code, references, URLs, flags and
+ * paths: those come back byte for byte, so an ordinal in one stays as written.
+ */
+function ordinalMentions(text: string): OrdinalMention[] {
+  const mentions: OrdinalMention[] = [];
+  let protectedRanges: ProtectedRange[] | null = null;
+  for (const match of text.matchAll(ORDINAL_MENTION_RE)) {
+    const { digits, suffix, word, marker } = match.groups ?? {};
+    const start = match.index;
+    const end = start + match[0].length;
+    protectedRanges ??= findProtectedRanges(text);
+    if (overlaps(protectedRanges, { start, end })) continue;
+    if (digits !== undefined) {
+      const value = Number(digits);
+      // "2st" is no ordinal; its digit stays a number like any other.
+      if (suffix!.toLowerCase() === ordinalSuffix(value)) {
+        mentions.push({ start, end, value, digits: true });
+      }
+    } else if (word !== undefined) {
+      mentions.push({
+        start,
+        end,
+        value: ORDINAL_WORDS.indexOf(word.toLowerCase()) + 1,
+        digits: false,
+      });
+    } else if (marker !== undefined) {
+      mentions.push({ start, end, value: Number(marker), digits: false });
+    }
+  }
+  return mentions;
+}
+
+/**
+ * Each digit ordinal keeps its value and its place among the ordinals,
+ * however it's written back: "2nd" as "second" or a list's "2.", never
+ * "third", and never trading places with another ordinal. Once either side
+ * writes one in digits, the two must say the same ordinals in the same order,
+ * so an unchanged "first" elsewhere can't stand in for a changed "1st". A
+ * passage of spoken ordinals alone keeps the word checks' looser rules.
+ */
+function keepsDigitOrdinals(raw: string, corrected: string): boolean {
+  const rawMentions = ordinalMentions(raw);
+  const correctedMentions = ordinalMentions(corrected);
+  if (![...rawMentions, ...correctedMentions].some((m) => m.digits)) return true;
+  return sameSequence(
+    rawMentions.map((m) => String(m.value)),
+    correctedMentions.map((m) => String(m.value))
+  );
+}
+
+/** The digit ordinals in `text` written as their words, for the checks that compare words. */
+function spellDigitOrdinals(text: string): string {
+  let out = "";
+  let copied = 0;
+  for (const mention of ordinalMentions(text)) {
+    if (!mention.digits) continue;
+    out += text.slice(copied, mention.start) + ORDINAL_WORDS[mention.value - 1];
+    copied = mention.end;
+  }
+  return out + text.slice(copied);
+}
+
 const CARDINAL_WORDS = [
   "one",
   "two",
@@ -254,8 +338,10 @@ interface SpelledFlag extends Range {
 /** Where `raw` spells a flag out word by word, outside any code, reference, URL or path. */
 function spelledFlags(raw: string, protectedRanges: readonly Range[]): SpelledFlag[] {
   return Array.from(raw.matchAll(SPOKEN_FLAG_RE), (match): SpelledFlag | null => {
-    const { long, name } = match.groups!;
-    const parts = name.split(/\s+(?:dash|hyphen)\s+/iu);
+    const { sep, long: spokenLong, name } = match.groups!;
+    const parts = name.split(/\s+(?:dash|hyphen)\s+|-/iu);
+    const long =
+      spokenLong !== undefined || (sep === "-" && (parts.length > 1 || parts[0].length > 1));
     if (!long && (parts.length > 1 || parts[0].length > 1)) return null;
     const range = { start: match.index, end: match.index + match[0].length };
     if (overlaps(protectedRanges, range)) return null;
@@ -968,10 +1054,13 @@ function compareRetainedWords(
  * cleanup benchmark's way to try other edit budgets on the same replies.
  */
 export function validateCorrection(
-  raw: string,
-  corrected: string,
+  dictated: string,
+  cleaned: string,
   limits: CorrectionGuardLimits = CORRECTION_GUARD_LIMITS
 ): CorrectionGuardResult {
+  if (!keepsDigitOrdinals(dictated, cleaned)) return { ok: false, reason: "number" };
+  const raw = spellDigitOrdinals(dictated);
+  const corrected = spellDigitOrdinals(cleaned);
   // Raw list markers are set aside only when the cleanup kept the same ones,
   // so a dictated "1." can't vanish as layout.
   const correctedLayout = readListLayout(corrected);

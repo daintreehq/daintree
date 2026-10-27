@@ -9,6 +9,7 @@ import type {
 } from "../../services/VoiceTranscriptionService.js";
 import {
   VoiceCorrectionService,
+  type VoiceCorrectionRequest,
   type VoiceCorrectionSettings,
 } from "../../services/VoiceCorrectionService.js";
 import type { HandlerDependencies, IpcContext } from "../types.js";
@@ -127,14 +128,21 @@ import { openExternalUrl } from "../../utils/openExternal.js";
 import { openLinuxSoundSettings } from "../../services/voice/linuxSoundSettings.js";
 import {
   VoiceInputCorrectPayloadSchema,
+  VoiceInputPrefetchCorrectionsSchema,
   VoiceInputRewritePayloadSchema,
   VoiceInputStartOptionsSchema,
   VoiceSessionIdSchema,
   VoiceStopLiveRequestSchema,
   type VoiceInputCorrectPayload,
+  type VoiceInputPrefetchCorrectionsPayload,
   type VoiceInputRewritePayload,
   type VoiceInputStartOptions,
 } from "../../schemas/ipc.js";
+import {
+  CorrectionPrefetcher,
+  prefetchKey,
+  type TakenPrefetch,
+} from "../../services/voiceCorrectionPrefetch.js";
 import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
 import { isDictationKey } from "../../services/menuAccelerators.js";
 import { registerPageDictationKey } from "../../services/voice/pageDictationKey.js";
@@ -249,6 +257,8 @@ interface VoiceSession {
   flushUtterance: ((mode: "stop" | "literal") => void) | null;
   // Rechecks that the cleanup prompt is cached while the session runs.
   warmTimer: ReturnType<typeof setInterval> | null;
+  // Cleanup runs its pauses started ahead of the stop, against a budget.
+  prefetchesStarted: number;
   // Its cleanup context, when cleanup was on at its start.
   correctionPrep: CorrectionPrep | null;
   // Main's share of the session summary, sent with its ended notice. Kept
@@ -462,6 +472,24 @@ interface CorrectReply {
   verdict?: VoiceCorrectionVerdict;
   timing?: VoiceCorrectionTiming;
 }
+
+/** What a cleanup sends OpenAI, once its context is read. */
+interface PreparedCleanup {
+  request: VoiceCorrectionRequest;
+  settings: VoiceCorrectionSettings;
+}
+
+/** A cleanup a pause started: what it sent, once read, and its reply. */
+interface PrefetchRun {
+  /** The key of what it sent OpenAI; null when its context couldn't be read. */
+  inputs: Promise<string | null>;
+  reply: Promise<CorrectReply>;
+}
+
+// A pause's prefetch covers the passage so far, so a session's dictation pays
+// for its opening again at each one. Past these a stop just sends its own.
+const PREFETCHES_PER_SESSION = 8;
+const PREFETCH_MAX_CHARS = 2_000;
 
 // Handoff holds still running, ended early when the handlers go away.
 const cleanupHandoffs = new Set<() => void>();
@@ -1299,6 +1327,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       utterance: new UtteranceCommands(),
       flushUtterance: null,
       warmTimer: null,
+      prefetchesStarted: 0,
       correctionPrep: null,
       stats: {
         provider: null,
@@ -2099,6 +2128,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     const ownsProvider = session.phase !== "starting";
     endSession(session, "cancelled");
     if (ownsProvider) service?.stop();
+    prefetcher.clear(prefetchOwner(ctx.webContentsId, sessionId));
   };
 
   const handleFlushParagraph = (ctx: IpcContext, sessionId: string): { rawText: string | null } => {
@@ -2254,6 +2284,20 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
 
   // Cleanup requests still out, cancelled when the handlers go.
   const openCorrections = new Set<AbortController>();
+  // Cleanup started at a pause while a dictation runs, for its stop to take.
+  const prefetcher = new CorrectionPrefetcher<PrefetchRun>();
+  const prefetchOwner = (webContentsId: number, sessionId: string) =>
+    `${webContentsId}:${sessionId}`;
+  // Everything that shapes a cleanup's reply: the request, and the settings it
+  // is answered with. A settings change between a pause and the stop misses.
+  const correctionKey = (request: object, settings: VoiceInputSettings) =>
+    prefetchKey(request, {
+      model: settings.correctionModel,
+      instructions: settings.correctionCustomInstructions,
+      dictionary: settings.dictionary,
+      language: settings.language,
+      account: [settings.openaiApiKey, settings.organizationId, settings.projectId],
+    });
 
   // Whole-passage cleanup pass. The renderer calls this once after recording
   // stops, with the full dictated text; correction runs as a single gpt-6.1-terra
@@ -2269,17 +2313,190 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     }
     const answered = holdForCleanup(ctx.webContentsId);
     try {
-      return await correctPassage(ctx, request, settings, startedAt);
+      const prefetched = request.sessionId
+        ? prefetcher.take(
+            prefetchOwner(ctx.webContentsId, request.sessionId),
+            correctionKey(request, settings)
+          )
+        : null;
+      if (!prefetched) return await correctPassage(ctx, request, settings, startedAt);
+      // The stop reads its own context, as it always would, and takes the run
+      // only if the pause sent OpenAI exactly what it would: a terminal that
+      // printed more or an agent that changed since makes it start its own.
+      const prepared = prepareCleanup(ctx, request, settings);
+      const [mine, theirs] = await Promise.all([
+        prepared.then(cleanupInputsKey, () => null),
+        prefetched.value.inputs,
+      ]);
+      // The handlers went while it read: nothing may start now.
+      if (disposed) {
+        prefetched.cancel();
+        return {
+          action: "no_change",
+          correctedText: request.rawText,
+          failed: true,
+          verdict: "failed",
+        };
+      }
+      if (mine !== null && mine === theirs) {
+        const reply = await adoptPrefetch(ctx, request, prefetched);
+        // One that failed gets the stop's own try, as if it had never started.
+        if (!reply.failed) return reply;
+      } else {
+        prefetched.cancel();
+      }
+      return await correctPassage(ctx, request, settings, startedAt, { prepared });
     } finally {
       answered();
     }
+  };
+
+  // The stop's passage is the one a pause already sent: its text so far goes
+  // to the stop's stream at once, the rest as it comes, and its reply is the
+  // stop's, timings included, which are its own preparation and round trip.
+  const adoptPrefetch = async (
+    ctx: IpcContext,
+    request: VoiceInputCorrectPayload,
+    prefetched: TakenPrefetch<PrefetchRun>
+  ): Promise<CorrectReply> => {
+    const sender = ctx.event?.sender;
+    const { streamId } = request;
+    const forward = (text: string) => {
+      if (!streamId || !sender || sender.isDestroyed()) return;
+      sender.send(CHANNELS.VOICE_INPUT_CORRECTION_PROGRESS, { streamId, text });
+    };
+    prefetched.follow(forward);
+    return prefetched.value.reply;
+  };
+
+  // Cleanup for the passages a stop would send if it came now, started at a
+  // pause while the dictation runs. Nothing goes back to the renderer: a stop
+  // sending the same request takes the reply (`handleCorrect`), and one that
+  // doesn't leaves it to lapse.
+  const handlePrefetchCorrections = (
+    ctx: IpcContext,
+    payload: VoiceInputPrefetchCorrectionsPayload
+  ): void => {
+    const owner = prefetchOwner(ctx.webContentsId, payload.sessionId);
+    const session = liveSession;
+    const settings = getVoiceSettings();
+    if (
+      !session ||
+      !ownedBy(session, payload.sessionId, ctx.webContentsId) ||
+      session.intent !== "dictation" ||
+      session.phase === "stopping" ||
+      !mayCorrect(settings)
+    ) {
+      prefetcher.clear(owner);
+      return;
+    }
+    // Each pause cleans the whole passage so far, so a long dictation with
+    // many pauses would pay for its opening over and over: past a length a
+    // chunk takes it anyway, and a session gets only so many.
+    const started = prefetcher.replace(
+      owner,
+      payload.requests
+        .filter(
+          (request) =>
+            request.sessionId === payload.sessionId &&
+            request.rawText.trim() &&
+            request.rawText.length <= PREFETCH_MAX_CHARS
+        )
+        .map((request) => ({
+          key: correctionKey(request, settings),
+          start: (onText: (text: string) => void, signal: AbortSignal): PrefetchRun => {
+            const prepared = prepareCleanup(ctx, request, settings);
+            const inputs = prepared.then(cleanupInputsKey, () => null);
+            const reply = correctPassage(ctx, request, settings, performance.now(), {
+              prepared,
+              onText,
+              signal,
+            });
+            // Nobody may take it; its failure is then the stop's to retry.
+            reply.catch(() => undefined);
+            return { inputs, reply };
+          },
+        })),
+      Math.max(0, PREFETCHES_PER_SESSION - session.prefetchesStarted)
+    );
+    session.prefetchesStarted += started;
+  };
+
+  // Everything a cleanup's reply depends on: what goes to OpenAI.
+  const cleanupInputsKey = (prepared: PreparedCleanup) =>
+    prefetchKey(prepared.request, prepared.settings);
+
+  // The context reads a cleanup request is built from, and the request and
+  // settings they make.
+  const prepareCleanup = async (
+    ctx: IpcContext,
+    request: VoiceInputCorrectPayload,
+    settings: VoiceInputSettings
+  ): Promise<PreparedCleanup> => {
+    const outsideView = request.outsideView === true;
+    // Read while the dictation ran, for a passage that names its session. One
+    // that doesn't, or a session cleanup was off for at its start, reads now.
+    const prep = findCorrectionPrep(ctx, request);
+    // Found before any wait, so a session that starts meanwhile can't push
+    // this one's context out. Outside the view it gets none of it.
+    const sessionContext = outsideView ? undefined : findSessionContext(ctx, request)?.context;
+    let projectInfo: { name?: string; path?: string };
+    let vocabulary: VoiceDictionaryEntry[];
+    let commandTarget: VoiceCommandTarget | null;
+    let terminalOutput: string | null;
+    if (prep) {
+      // A chunk of a dictation still running (#14772) reads a host's pane as
+      // it is now; only the read taken as the stop lands is kept, for the
+      // stop-time pass.
+      const hostPane = hostPaneFor(prep.projectId, prep.outsideView);
+      const hostNow =
+        hostPane && !prep.terminalOutput && !prep.hostStop
+          ? readHostPaneCorrection(hostPane, prep.terminalId, {
+              timeoutMs: COMMAND_TARGET_CORRECTION_BUDGET_MS,
+            })
+          : undefined;
+      [projectInfo, vocabulary, commandTarget, terminalOutput] = await Promise.all([
+        prep.projectInfo,
+        prep.vocabulary,
+        currentCommandTarget(prep, hostNow),
+        prep.terminalOutput ??
+          (hostNow ? hostNow.then((read) => read?.terminalOutput ?? null) : readStopOutput(prep)),
+      ]);
+    } else {
+      ({ projectInfo, vocabulary, commandTarget, terminalOutput } = await readCorrectionContext(
+        ctx.projectId,
+        request.terminalId,
+        outsideView
+      ));
+    }
+    const context = sessionContext ? await sessionContext : NO_SESSION_CONTEXT;
+    const recentPrompts = ownRecentPrompts(ctx.projectId, request);
+    return {
+      request: {
+        rawText: request.rawText,
+        recentContext: request.recentContext,
+        ...(recentPrompts ? { recentPrompts } : {}),
+        ...(terminalOutput ? { terminalOutput } : {}),
+        reason: "stop",
+        startsPrompt: request.startsPrompt === true,
+        ...(request.uncertain ? { uncertain: request.uncertain } : {}),
+      },
+      settings: correctionSettingsFor(settings, projectInfo, vocabulary, commandTarget, context),
+    };
   };
 
   const correctPassage = async (
     ctx: IpcContext,
     request: VoiceInputCorrectPayload,
     settings: VoiceInputSettings,
-    startedAt: number
+    startedAt: number,
+    options: {
+      /** Context already being read for it, by the stop or a prefetch. */
+      prepared?: Promise<PreparedCleanup>;
+      /** A prefetch's own stream and cancellation, in place of the view's. */
+      onText?: (text: string) => void;
+      signal?: AbortSignal;
+    } = {}
   ): Promise<CorrectReply> => {
     const svc = (correctionService ??= new VoiceCorrectionService());
     // The request is its passage's alone. Only the view that sent it going
@@ -2289,44 +2506,13 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     openCorrections.add(lifetime);
     const sender = ctx.event?.sender;
     const unwatchSender = sender ? onWebContentsDestroyed(sender, () => lifetime.abort()) : null;
+    // A prefetch the dictation moved past is cancelled with it.
+    const { signal } = options;
+    const cancel = () => lifetime.abort();
+    if (signal?.aborted) lifetime.abort();
+    signal?.addEventListener("abort", cancel, { once: true });
     try {
-      const outsideView = request.outsideView === true;
-      // Read while the dictation ran, for a passage that names its session. One
-      // that doesn't, or a session cleanup was off for at its start, reads now.
-      const prep = findCorrectionPrep(ctx, request);
-      // Found before any wait, so a session that starts meanwhile can't push
-      // this one's context out. Outside the view it gets none of it.
-      const sessionContext = outsideView ? undefined : findSessionContext(ctx, request)?.context;
-      let projectInfo: { name?: string; path?: string };
-      let vocabulary: VoiceDictionaryEntry[];
-      let commandTarget: VoiceCommandTarget | null;
-      let terminalOutput: string | null;
-      if (prep) {
-        // A chunk of a dictation still running (#14772) reads a host's pane as
-        // it is now; only the read taken as the stop lands is kept, for the
-        // stop-time pass.
-        const hostPane = hostPaneFor(prep.projectId, prep.outsideView);
-        const hostNow =
-          hostPane && !prep.terminalOutput && !prep.hostStop
-            ? readHostPaneCorrection(hostPane, prep.terminalId, {
-                timeoutMs: COMMAND_TARGET_CORRECTION_BUDGET_MS,
-              })
-            : undefined;
-        [projectInfo, vocabulary, commandTarget, terminalOutput] = await Promise.all([
-          prep.projectInfo,
-          prep.vocabulary,
-          currentCommandTarget(prep, hostNow),
-          prep.terminalOutput ??
-            (hostNow ? hostNow.then((read) => read?.terminalOutput ?? null) : readStopOutput(prep)),
-        ]);
-      } else {
-        ({ projectInfo, vocabulary, commandTarget, terminalOutput } = await readCorrectionContext(
-          ctx.projectId,
-          request.terminalId,
-          outsideView
-        ));
-      }
-      const context = sessionContext ? await sessionContext : NO_SESSION_CONTEXT;
+      const prepared = await (options.prepared ?? prepareCleanup(ctx, request, settings));
       if (lifetime.signal.aborted) {
         return {
           action: "no_change",
@@ -2339,24 +2525,16 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       // it asked with; it is dictated text, so it is never logged.
       const { streamId } = request;
       const onText =
-        streamId && sender
+        options.onText ??
+        (streamId && sender
           ? (text: string) => {
               if (sender.isDestroyed()) return;
               sender.send(CHANNELS.VOICE_INPUT_CORRECTION_PROGRESS, { streamId, text });
             }
-          : undefined;
-      const recentPrompts = ownRecentPrompts(ctx.projectId, request);
+          : undefined);
       const result = await svc.correct(
-        {
-          rawText: request.rawText,
-          recentContext: request.recentContext,
-          ...(recentPrompts ? { recentPrompts } : {}),
-          ...(terminalOutput ? { terminalOutput } : {}),
-          reason: "stop",
-          startsPrompt: request.startsPrompt === true,
-          ...(request.uncertain ? { uncertain: request.uncertain } : {}),
-        },
-        correctionSettingsFor(settings, projectInfo, vocabulary, commandTarget, context),
+        prepared.request,
+        prepared.settings,
         lifetime.signal,
         onText
       );
@@ -2376,6 +2554,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       };
     } finally {
       unwatchSender?.();
+      signal?.removeEventListener("abort", cancel);
       openCorrections.delete(lifetime);
     }
   };
@@ -2460,6 +2639,12 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         { withContext: true }
       ),
       getLastTerms: op(VOICE_INPUT_METHOD_CHANNELS.getLastTerms, handleGetLastTerms),
+      prefetchCorrections: opValidated(
+        VOICE_INPUT_METHOD_CHANNELS.prefetchCorrections,
+        VoiceInputPrefetchCorrectionsSchema,
+        handlePrefetchCorrections,
+        { withContext: true }
+      ),
     },
   });
 
@@ -2496,6 +2681,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     service = null;
     servicePromise = null;
     correctionService = null;
+    prefetcher.dispose();
     for (const lifetime of openCorrections) lifetime.abort();
     openCorrections.clear();
     lastDictationTerms = null;

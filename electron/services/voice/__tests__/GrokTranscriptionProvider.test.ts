@@ -289,6 +289,29 @@ describe("GrokTranscriptionProvider", () => {
       provider.stop();
     });
 
+    it("ends utterances at the endpoint its tuning gives, and refuses one xAI won't take", () => {
+      const provider = new GrokTranscriptionProvider({ endpointingMs: 150 });
+      void provider.start(BASE_SETTINGS, "session-1");
+      expect(new URL(latestInstance().url).searchParams.get("endpointing")).toBe("150");
+      provider.stop();
+      expect(() => new GrokTranscriptionProvider({ endpointingMs: 5_001 })).toThrow(
+        /endpointingMs/
+      );
+      expect(() => new GrokTranscriptionProvider({ endpointingMs: 1.5 })).toThrow(/endpointingMs/);
+      expect(() => new GrokTranscriptionProvider({ endpointingMs: -1 })).toThrow(/endpointingMs/);
+      expect(() => new GrokTranscriptionProvider({ endpointingMs: 0 })).not.toThrow();
+      expect(() => new GrokTranscriptionProvider({ endpointingMs: 5_000 })).not.toThrow();
+    });
+
+    it("leaves the words as spoken when its tuning turns xAI's formatting off", () => {
+      const provider = new GrokTranscriptionProvider({ format: false });
+      void provider.start(BASE_SETTINGS, "session-1");
+      const params = new URL(latestInstance().url).searchParams;
+      expect(params.get("format")).toBeNull();
+      expect(params.get("language")).toBe("en");
+      provider.stop();
+    });
+
     it("formats text only for a language xAI formats, and detects the language on auto", async () => {
       const cases: Array<[string, string | null, string | null]> = [
         ["en", "en", "true"],

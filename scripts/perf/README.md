@@ -428,6 +428,48 @@ Results land in `.tmp/perf-results/voice-tuning/<label>-<timestamp>.json`, rewri
 
 What the numbers can't claim: synthesised speech pauses less, and more evenly, than a person does, so a gap rule has fewer places to cut and the cut lands closer to the next word (a commit takes everything sent up to the chunk the VAD heard the pause in); the renderer, Chromium's capture and microphone processing are left out (`voice-replay` covers those); and passes are repeats of the same audio.
 
+## Grok transcription into Terra cleanup (`voice-pipeline`)
+
+`GROK_API_KEY=… OPENAI_API_KEY=… npm run perf voice-pipeline` dictates every replay clip, and the two `LONG_SPEECH_CLIPS`, into the real `GrokTranscriptionProvider` against the live xAI socket, then cleans up what landed with the real `VoiceCorrectionService` against the live Responses API, as a dictation into a Claude Code pane does: the cleanup prompt warmed as the session starts, its socket preconnected at the stop, one request over the passage once the drain ends, streamed, carrying Grok's unsure words. It scores what reached the draft and what the speaker saw and waited for. It costs cents, never runs in CI, and refuses a mock `DAINTREE_GROK_WS_URL`. `XAI_API_KEY` stands in for `GROK_API_KEY`.
+
+Each clip is spoken in several voices (`--voices`): macOS `say`, as the replay benchmark synthesises it and from the same cache; Gemini TTS (`gemini:<voice>`, `gemini-3.8-flash-tts`, needs `GOOGLE_API_KEY`); and MiniMax through Replicate (`minimax:<voice_id>`, `minimax/speech-2.8-hd`, needs `REPLICATE_API_TOKEN`). A clip's `[[slnc N]]` markers become exact silences in every voice: `say` renders them itself, and for Gemini and MiniMax each phrase is synthesised alone, trimmed and joined to the next by that many milliseconds. Gemini is sent the words alone, since it reads a style note aloud with them. `say` clips share the replay benchmark's cache, `.tmp/voice-replay/clips/`; the others are cached under `.tmp/voice-pipeline/clips/` by model, voice and speech, and a Replicate prediction is followed until it finishes. Audio goes in as 100 ms chunks on the capture clock from the moment `start()` is called, and `--stop-tails` adds silence between the speech ending and the stop, a speaker reaching for the key.
+
+An arm runs production's code with one thing changed, tokens joined with `+`: `prod`, without the prefetch; `ep<ms>`, Grok's `endpointing`; `nofmt`, Grok's formatting off (`GrokTranscriptionTuning`, through the provider's constructor); `spec`, production's prefetch, the passage so far cleaned once words have landed and 150 ms passed with nothing more, never after the stop, within its per-session budget and length cap, and kept at the stop when nothing landed since (a failed one gets the stop's own try); `raw`, no cleanup. Arms play back to back per dictation in a shuffled order, and every score is over the dictations each arm completed.
+
+| Score | Meaning |
+| --- | --- |
+| Prompts as written | Final text with the same words as the reference as written: symbols and joins kept (`--watch`, not "dash-watch"; `useShallow`, not "use shallow"), an identifier's case kept, a plain word's case and the punctuation at word edges free |
+| Form WER | Edits over those words |
+| Terms verbatim | Clip terms present character for character, as an agent would read them |
+| WER | The replay benchmark's normalised words, which forgive formatting by design, so it says what was heard, not what was written |
+| Broken words | Reference words the raw transcript had right that the final text lost: what a cleanup or a stop cost |
+| Cleanup applied, rejected by guard | The share of cleanups by verdict; a rejection is a reply the meaning guard threw away, landing the raw text |
+| First preview | Start to the first preview text |
+| Shown at stop | Share of the final transcript's words on screen, completed or previewed, when stop was pressed, p50 and the laggiest twentieth |
+| Stop → raw final, first clean, settled | Stop to the drain ending, to the first cleaned words production would show (the renderer's own stream aligner, or the reply landing), and to the draft holding its final text |
+| $/session | Cleanup's billed tokens; `≥` when a cancelled request reported none. Warm-ups, Grok and synthesis aren't in it |
+
+A session is scored against whichever accepted reference its text is closest to: the clip's own, or one of `ACCEPTED_REFERENCES`, kept to spellings the audio can't tell apart and the numbered list cleanup's prompt asks a counted list to become. `--repo` dictates as into a pane on this repository: its names read as production reads a pane's (`deriveRepoNames`, `assembleKeyterms`), sent to Grok as keyterms and to cleanup as repository names. `--terms` adds each clip's terms as keyterms.
+
+| Option | Default | Effect |
+| --- | --- | --- |
+| `--arms` | `prod` | Pipeline arms, the first the reference |
+| `--voices` | `say,gemini:Puck,gemini:Kore,minimax:English_Deep-VoicedGentleman` | Voices each clip is spoken in |
+| `--stop-tails` | `0,700` | Milliseconds of silence before the stop |
+| `--repeats` | `1` | Passes |
+| `--clips` | all | Only these clip ids |
+| `--terms` | off | Each clip's terms as Grok keyterms |
+| `--repo` | off | This repository's names, as production reads them |
+| `--seed` | `14900` | Order |
+| `--label` | `run` | Prefix of the result file |
+| `--rescore <run.json>` |  | Scores a saved run again with today's scoring, sending nothing |
+
+Results land in `.tmp/perf-results/voice-pipeline/<label>-<timestamp>.json`, rewritten after every session, with the Markdown report beside it listing every session whose final text isn't as written. Both quote transcripts, so they stay in `.tmp/`. Each cleanup record keeps the model's whole reply before the guard (`proposal`: action, text and confidence), for judging a guard change against a saved run by hand; `--rescore` scores what landed and doesn't land replies again. A session records how late its latest chunk went out (`maxChunkLateMs`), so one a stall distorted can be told apart.
+
+What it found, on this Mac in October 2026: Grok's formatting writes a spoken "First," as "1st," and "dash dash watch" as "dash-watch", and the meaning guard threw away every cleanup that wrote them back, which the guard now allows. Over 160 dictations (every clip, four voices, stops at 0 and 700 ms) that took the cleanups the guard rejected from 11.3% to 2.5% and the prompts landing exactly as written from 47.5% to 52.5%, with form WER after cleanup 8.2% to 6.9% and no word lost either way. Most of what it still rejects is a spoken number written as digits ("Nova three" as "Nova 3"), which it refuses by design. Grok's formatting earns its place: off, cleanup wrote numbers and symbols itself for a form WER of 11.4% against 7.0%. Sending `finalize` ahead of `audio.done` at the stop brought the last final back about 90 ms sooner but lost the closing word, so the stop sends `audio.done` alone. Grok's utterance final lands about a second after speech ends whatever the `endpointing`: 50, 150 and 300 ms all brought it after a stop 700 ms after the speech, so a lower endpoint buys a prefetch nothing. OpenAI's `priority` service tier didn't move Terra's time to first token (about 1.2 s with the prompt cached), and the xAI session takes about 750 ms to accept the socket, almost none of it TCP or TLS.
+
+What the numbers can't claim: the voices are synthesised, cleaner and steadier than a person in a room; Chromium's capture, the renderer and the main process's own preparation are left out (`voice-replay` covers those); cleanup runs without a dictionary, recent prompts or terminal output, so it is the floor production's context lifts; the references are one writer's, two kinds of alternative aside; and timings are one machine's network to xAI and OpenAI at one time of day.
+
 ## Recovery and session scenarios (PERF-260..264, 280..285)
 
 The last two families cover what the rest of the harness explicitly left out. PERF-046 and PERF-224 both measure how fast a killed host comes back and say plainly that the supervisor is not in the loop; PERF-203 measures the MCP tool-surface projection and says plainly that no server is. These close both halves.

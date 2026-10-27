@@ -135,6 +135,12 @@ describe("validateCorrection", () => {
     ["a span at the end of a sentence", "check @src/App.tsx", "Check @src/App.tsx."],
     ["an introduced term with a dot", "upgrade next jess", "Upgrade Next.js."],
     ["a cleanup in unspaced Chinese", "嗯我们需要更新这个组件", "我们需要更新这个组件。"],
+    [
+      "spoken ordinals a recogniser wrote as digits, written back as words",
+      "1st, read the failing test. 2nd, find the race. 3rd, fix it.",
+      "First, read the failing test. Second, find the race. Third, fix it.",
+    ],
+    ["a word ordinal written as digits", "retry the second build", "Retry the 2nd build."],
   ])("accepts %s", (_label, raw, corrected) => {
     expect(validateCorrection(raw, corrected)).toEqual({ ok: true });
   });
@@ -176,6 +182,30 @@ describe("validateCorrection", () => {
     ["a dropped sign", "offset of -5", "Offset of 5.", "number"],
     ["swapped numbers", "move 10 then 20", "Move 20 then 10.", "number"],
     ["a spoken number turned into digits", "retry three times", "Retry 3 times.", "number"],
+    ["a changed digit ordinal", "check the 2nd test", "Check the third test.", "number"],
+    ["a digit ordinal turned into a larger one", "the 1st run", "The 21st run.", "number"],
+    ["an ordinal past tenth spelled out", "the 11th run", "The eleventh run.", "number"],
+    ["a digit with the wrong ordinal suffix", "the 2st run", "The second run.", "number"],
+    ["an invented digit ordinal", "check the test", "Check the 2nd test.", "number"],
+    [
+      "a changed digit ordinal beside an unchanged word one",
+      "use the 1st option for the first retry",
+      "Use the second option for the first retry.",
+      "number",
+    ],
+    [
+      "digit and word ordinals trading places",
+      "use the 1st option for the second retry",
+      "Use the second option for the first retry.",
+      "number",
+    ],
+    ["an ordinal respelled inside code", "open `1st` now", "Open `first` now.", "protected_span"],
+    [
+      "an ordinal respelled in a filename",
+      "open 1st.txt now",
+      "Open first.txt now.",
+      "protected_span",
+    ],
     ["a dropped negation", "don't push yet", "Push yet.", "negation"],
     ["an added negation", "merge it now", "Don't merge it now.", "negation"],
     [
@@ -301,6 +331,34 @@ describe("validateCorrection", () => {
         ok: false,
         reason: "protected_span",
       });
+    });
+
+    it("reads a flag a recogniser half-typed, its second dash a hyphen, as spelled out", () => {
+      for (const [said, cleaned] of [
+        [
+          "Run npm test dash-watch on the voice recording service test file.",
+          "Run npm test --watch on the VoiceRecordingService test file.",
+        ],
+        ["commit with dash-no-verify", "Commit with --no-verify."],
+        ["commit with dash-dash-no-verify", "Commit with --no-verify."],
+        ["rerun it with dash-v", "Rerun it with -v."],
+      ]) {
+        expect(validateCorrection(said, cleaned, symbols), said).toEqual({ ok: true });
+      }
+      for (const [said, cleaned] of [
+        // Another flag, a single dash for a word, or the flag moved off its place.
+        ["run npm test dash-watch", "Run npm test --force."],
+        ["rerun it with dash-verbose", "Rerun it with -verbose."],
+        [
+          "run npm test dash-watch then publish the package",
+          "Run npm test, then publish the package --watch.",
+        ],
+      ]) {
+        expect(validateCorrection(said, cleaned, symbols), said).toEqual({
+          ok: false,
+          reason: "protected_span",
+        });
+      }
     });
 
     it("still holds a flag the raw text typed to its place", () => {
@@ -482,6 +540,11 @@ describe("validateCorrection on self-corrections and lists", () => {
       "First, retry 3 times. Second, wait 500 ms between tries.",
       "1. Retry 3 times.\n2. Wait 500 ms between tries.",
     ],
+    [
+      "a list counted in ordinals a recogniser wrote as digits",
+      "1st, read the failing test. 2nd, find the race. 3rd, fix it.",
+      "1. Read the failing test.\n2. Find the race.\n3. Fix it.",
+    ],
   ])("accepts %s", (_label, raw, corrected) => {
     expect(validateCorrection(raw, corrected)).toEqual({ ok: true });
   });
@@ -626,6 +689,12 @@ describe("validateCorrection on self-corrections and lists", () => {
       "number",
     ],
     [
+      "a digit-ordinal list renumbered",
+      "1st, add a test. 2nd, fix the bug.",
+      "1. Add a test.\n3. Fix the bug.",
+      "number",
+    ],
+    [
       "a decimal read as an item number",
       "Use timeout: 1.5 seconds. 2, retry twice.",
       "1. Use timeout: 5 seconds.\n2. Retry twice.",
@@ -731,6 +800,12 @@ describe("validateCorrection on self-corrections and lists", () => {
       "spoken dashes beside a typed one",
       (scale: number) => `${"dash ".repeat(300 * scale)}x`,
       (scale: number) => `${"dash ".repeat(300 * scale)}x y-z`,
+      true,
+    ],
+    [
+      "spoken dashes joined by typed ones",
+      (scale: number) => `${"dash-".repeat(300 * scale)}x`,
+      (scale: number) => `${"dash-".repeat(300 * scale)}x y-z`,
       true,
     ],
     [

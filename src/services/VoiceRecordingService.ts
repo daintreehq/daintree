@@ -32,7 +32,7 @@ import {
   setPendingComposerSelection,
 } from "@/lib/composerCaret";
 import { makeDraftKey } from "@/lib/draftKey";
-import { recentPromptsFor } from "@/services/voiceRecentPrompts";
+import { correctionRequest } from "@/services/voiceCorrectionRequest";
 import {
   planVoiceBreak,
   planVoiceWords,
@@ -767,9 +767,14 @@ class VoiceRecordingService {
   private static readonly CHUNK_MIN_CHARS = 600;
   // Quiet between one utterance's words landing and the next one's first text.
   private static readonly CHUNK_PAUSE_MS = 1_500;
+  // How long words that just landed wait, with nothing more heard, before the
+  // stop's cleanup is prefetched: long enough for the rest of one completion's
+  // pieces to arrive.
+  private static readonly PREFETCH_SETTLE_MS = 150;
   // Past main's 6s file-link job timeout.
   private static readonly FILE_LINK_SETTLE_MS = 6_500;
   private micSilenceTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  private prefetchTimer: ReturnType<typeof setTimeout> | null = null;
   // Owner of the silence countdown, so resume can re-arm it for the same
   // capture after a pause cancelled it.
   private micSilenceSession: { generation: number; startRequestId: number } | null = null;
@@ -981,7 +986,10 @@ class VoiceRecordingService {
                 );
               }
               this.lastWordsAt = performance.now();
-              if (!send) this.followChunkBreak(sessionId, finalText);
+              if (!send) {
+                this.followChunkBreak(sessionId, finalText);
+                this.schedulePrefetch(sessionId);
+              }
             }
           }
           // What landed, so recent dictations hold a command written as one,
@@ -1048,8 +1056,10 @@ class VoiceRecordingService {
           );
           inputStore.bumpExternalDraftRevision({ keepsSelection: true });
         } finally {
-          // A chunk held back for these links can go now.
+          // A chunk held back for these links can go now, and so can the
+          // prefetch a pause held back for them.
           this.settleChunkBreak(false);
+          this.schedulePrefetch(sessionId);
         }
       })
     );
@@ -3265,6 +3275,64 @@ class VoiceRecordingService {
     void this.requestCorrection(correction);
   }
 
+  /** Prefetches the stop's cleanup once the words that just landed have settled. */
+  private schedulePrefetch(sessionId: string): void {
+    this.cancelScheduledPrefetch();
+    this.prefetchTimer = setTimeout(() => {
+      this.prefetchTimer = null;
+      this.prefetchCleanup(sessionId);
+    }, VoiceRecordingService.PREFETCH_SETTLE_MS);
+  }
+
+  private cancelScheduledPrefetch(): void {
+    if (this.prefetchTimer === null) return;
+    clearTimeout(this.prefetchTimer);
+    this.prefetchTimer = null;
+  }
+
+  /**
+   * Sends main the cleanup requests a stop right now would send, built as the
+   * stop builds them, so a stop that follows this pause with nothing more said
+   * takes replies already on their way instead of waiting out a new round
+   * trip. Anything that changes a request in between, more words, an edit, a
+   * prompt sent, leaves the stop to send its own.
+   */
+  private prefetchCleanup(sessionId: string): void {
+    const target = this.chunkingTarget(sessionId);
+    const record = target ? findDictation(target, sessionId) : null;
+    if (!target || !record) return;
+    const draft = useTerminalInputStore.getState().getDraftInput(target.panelId, target.projectId);
+    const cleanup = this.cleanups.get(record.sessionId);
+    const passages = collectCorrectionPassages(record, draft, (u) => !cleanup?.claimed.has(u.id));
+    const now = performance.now();
+    // A spoken file reference still resolving will rewrite its words: try
+    // again when its links land, or once they can no longer.
+    const linksDueAt = Math.max(
+      0,
+      ...record.utterances.map((u) =>
+        u.transcriptId === undefined ? 0 : (this.fileLinksDue.get(u.transcriptId) ?? 0)
+      )
+    );
+    if (linksDueAt > now) {
+      this.cancelScheduledPrefetch();
+      this.prefetchTimer = setTimeout(() => {
+        this.prefetchTimer = null;
+        this.prefetchCleanup(sessionId);
+      }, linksDueAt - now);
+      return;
+    }
+    if (passages.length === 0) return;
+    const context = voiceContext(target);
+    void window.electron.voiceInput
+      .prefetchCorrections({
+        sessionId: record.sessionId,
+        requests: passages.map((passage) => correctionRequest(passage, context, record.sessionId)),
+      })
+      .catch((error: unknown) => {
+        logDebug(`${LOG_PREFIX} Cleanup prefetch failed`, voiceErrorLogFields(error));
+      });
+  }
+
   /**
    * The live session's next words begin: after a long enough quiet since its
    * last ones landed, the end of those is a pause a chunk may be cut at.
@@ -3661,19 +3729,8 @@ class VoiceRecordingService {
     });
     let text: string | null = null;
     try {
-      // Read as the request goes, so a prompt sent while this dictation ran
-      // counts. A terminal outside the view names none.
-      const recentPrompts = correction.context.terminalId
-        ? recentPromptsFor(correction.context.terminalId)
-        : [];
       const result = await window.electron.voiceInput.correct({
-        rawText: passage.text,
-        ...correction.context,
-        ...(passage.context ? { recentContext: [passage.context] } : {}),
-        ...(recentPrompts.length > 0 ? { recentPrompts } : {}),
-        startsPrompt: passage.startsPrompt,
-        ...(correction.sessionId ? { sessionId: correction.sessionId } : {}),
-        ...(passage.uncertain ? { uncertain: passage.uncertain } : {}),
+        ...correctionRequest(passage, correction.context, correction.sessionId),
         streamId,
       });
       // The passage runs from its first word to its last; its separators and
@@ -5293,6 +5350,7 @@ class VoiceRecordingService {
     this.clearPauseTimeout();
     this.clearElapsedTimer();
     this.clearMicSilenceTimer();
+    this.cancelScheduledPrefetch();
     // Release anyone waiting on a correction; none of them may land now, so
     // none of their underlines may stay either.
     const correctedPanels = new Set<string>();

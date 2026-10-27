@@ -831,6 +831,16 @@ export const VoiceInputCorrectPayloadSchema = z.object({
   streamId: z.string().min(1).max(64).optional(),
 });
 
+/**
+ * The passages a stop would clean up if it came now, sent at a pause while the
+ * dictation runs, so the stop can take replies already on their way. Each is
+ * the request the stop would send, less its stream id.
+ */
+export const VoiceInputPrefetchCorrectionsSchema = z.object({
+  sessionId: VoiceSessionIdSchema,
+  requests: z.array(VoiceInputCorrectPayloadSchema.omit({ streamId: true })).max(6),
+});
+
 export const VoiceInputRewritePayloadSchema = z.object({
   selectedText: z.string().min(1).max(VOICE_REWRITE_MAX_SELECTION_CHARS),
   instruction: z.string().min(1).max(VOICE_REWRITE_MAX_INSTRUCTION_CHARS),
@@ -1093,6 +1103,9 @@ export type CopyTreeGetFileTreePayload = z.infer<typeof CopyTreeGetFileTreePaylo
 export type FileReadPayload = z.infer<typeof FileReadPayloadSchema>;
 export type VoiceInputStartOptions = z.infer<typeof VoiceInputStartOptionsSchema>;
 export type VoiceInputCorrectPayload = z.infer<typeof VoiceInputCorrectPayloadSchema>;
+export type VoiceInputPrefetchCorrectionsPayload = z.infer<
+  typeof VoiceInputPrefetchCorrectionsSchema
+>;
 export type VoiceInputRewritePayload = z.infer<typeof VoiceInputRewritePayloadSchema>;
 export type SystemOpenExternalPayload = z.infer<typeof SystemOpenExternalPayloadSchema>;
 export type SystemOpenPathPayload = z.infer<typeof SystemOpenPathPayloadSchema>;

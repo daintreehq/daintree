@@ -258,17 +258,29 @@ export async function dictate(
   }
 }
 
+let runtimeInstalled = false;
+
 /**
- * Puts the Electron stub in place and loads the provider and its VAD process
- * module behind it. Call once, after every check that could end the run.
+ * Puts the Electron stub in place and quiets the logger, for the main-process
+ * voice modules the live harnesses load under Node. Idempotent.
  */
-export async function loadLiveProviderHost(): Promise<LiveProviderHost> {
+export async function installLiveRuntime(): Promise<void> {
+  if (runtimeInstalled) return;
+  runtimeInstalled = true;
   installElectronStub();
   // The logger decides at load whether to write files into the working
   // directory. Provider logs carry ids and lengths, never text; warnings stay.
   process.env.DAINTREE_DISABLE_FILE_LOGGING = "1";
   const { setLogLevelOverrides } = await import("../../../electron/utils/logger");
   setLogLevelOverrides({ "*": "warn" });
+}
+
+/**
+ * Puts the Electron stub in place and loads the provider and its VAD process
+ * module behind it. Call once, after every check that could end the run.
+ */
+export async function loadLiveProviderHost(): Promise<LiveProviderHost> {
+  await installLiveRuntime();
   // A computed specifier keeps the provider's import graph out of the perf
   // TypeScript program, which can't see the remote-service keys it reads;
   // `TranscriptionProvider` types every call made on it.

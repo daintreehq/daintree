@@ -43,6 +43,8 @@ const shared = vi.hoisted(() => ({
     signal: AbortSignal | undefined;
     onText: ((text: string) => void) | undefined;
     finish: (text: string) => void;
+    /** Settles it as a request that failed, without its signal aborting. */
+    fail: () => void;
   }>,
   /** When set, the project vocabulary read waits on this. */
   vocabulary: null as null | Promise<never[]>,
@@ -125,6 +127,7 @@ vi.mock("../../../services/VoiceCorrectionService.js", () => ({
           onText,
           finish: (text) =>
             resolve({ action: "replace", confirmedText: text, verdict: "replaced" }),
+          fail,
         });
       });
     };
@@ -1236,6 +1239,146 @@ describe("voiceInput — session identity", () => {
     } finally {
       consoleError.mockRestore();
     }
+  });
+
+  describe("cleanup prefetched at a pause", () => {
+    beforeEach(() => {
+      shared.correctionEnabled = true;
+    });
+
+    const prefetch = (owner: FakeSender, sessionId: string, ...rawTexts: string[]) =>
+      getHandler(CHANNELS.VOICE_INPUT_PREFETCH_CORRECTIONS)(
+        { sender: owner },
+        { sessionId, requests: rawTexts.map((rawText) => ({ rawText, sessionId })) }
+      );
+    const ask = (owner: FakeSender, sessionId: string, rawText: string, streamId = "s1") =>
+      getHandler(CHANNELS.VOICE_INPUT_CORRECT)({ sender: owner }, { rawText, sessionId, streamId });
+    const requestFor = async (rawText: string) => {
+      await vi.waitFor(() => expect(shared.cleanups.map((c) => c.rawText)).toContain(rawText));
+      return shared.cleanups.find((c) => c.rawText === rawText)!;
+    };
+    const progress = (owner: FakeSender) =>
+      owner.sent
+        .filter((s) => s.channel === CHANNELS.VOICE_INPUT_CORRECTION_PROGRESS)
+        .map((s) => s.payload);
+
+    it("hands the stop the reply a pause already started for the same passage", async () => {
+      await start(ownerA, "a");
+      await prefetch(ownerA, "a", "run the tests");
+      const prefetched = await requestFor("run the tests");
+      prefetched.onText!("Run the");
+
+      await stop(ownerA, "a");
+      const reply = ask(ownerA, "a", "run the tests");
+      await settle();
+      expect(shared.cleanups).toHaveLength(1);
+      expect(progress(ownerA)).toEqual([{ streamId: "s1", text: "Run the" }]);
+
+      prefetched.onText!("Run the tests");
+      prefetched.finish("Run the tests.");
+      await expect(reply).resolves.toMatchObject({
+        action: "replace",
+        correctedText: "Run the tests.",
+      });
+      expect(progress(ownerA)).toEqual([
+        { streamId: "s1", text: "Run the" },
+        { streamId: "s1", text: "Run the tests" },
+      ]);
+    });
+
+    it("sends the stop's own cleanup when the words changed after the pause", async () => {
+      await start(ownerA, "a");
+      await prefetch(ownerA, "a", "run the");
+      await requestFor("run the");
+
+      await stop(ownerA, "a");
+      const reply = ask(ownerA, "a", "run the tests");
+      const own = await requestFor("run the tests");
+      expect(shared.cleanups).toHaveLength(2);
+      own.finish("Run the tests.");
+      await expect(reply).resolves.toMatchObject({ correctedText: "Run the tests." });
+    });
+
+    it("gives a stop whose prefetch failed a try of its own", async () => {
+      await start(ownerA, "a");
+      await prefetch(ownerA, "a", "run the tests");
+      const prefetched = await requestFor("run the tests");
+
+      await stop(ownerA, "a");
+      const reply = ask(ownerA, "a", "run the tests");
+      prefetched.fail();
+      await vi.waitFor(() => expect(shared.cleanups).toHaveLength(2));
+      shared.cleanups[1]!.finish("Run the tests.");
+      await expect(reply).resolves.toMatchObject({ correctedText: "Run the tests." });
+    });
+
+    it("lets a passage be taken once, so a second stop asking for it sends its own", async () => {
+      await start(ownerA, "a");
+      await prefetch(ownerA, "a", "run the tests");
+      const prefetched = await requestFor("run the tests");
+      await stop(ownerA, "a");
+
+      const first = ask(ownerA, "a", "run the tests");
+      const second = ask(ownerA, "a", "run the tests", "s2");
+      await vi.waitFor(() => expect(shared.cleanups).toHaveLength(2));
+      prefetched.finish("Run the tests.");
+      shared.cleanups[1]!.finish("Run the tests!");
+      await expect(first).resolves.toMatchObject({ correctedText: "Run the tests." });
+      await expect(second).resolves.toMatchObject({ correctedText: "Run the tests!" });
+    });
+
+    it("cancels a prefetch the dictation talked on past", async () => {
+      await start(ownerA, "a");
+      await prefetch(ownerA, "a", "run the");
+      const stale = await requestFor("run the");
+      await prefetch(ownerA, "a", "run the tests");
+
+      expect(stale.signal?.aborted).toBe(true);
+      expect((await requestFor("run the tests")).signal?.aborted).toBe(false);
+    });
+
+    it("starts at most eight runs a session, and none for a passage past 2,000 characters", async () => {
+      await start(ownerA, "a");
+      // Each pause's run reaches OpenAI before the next pause replaces it.
+      for (let i = 0; i < 10; i++) {
+        await prefetch(ownerA, "a", `pause ${i}`);
+        await settle();
+      }
+      expect(shared.cleanups.map((c) => c.rawText)).toEqual(
+        Array.from({ length: 8 }, (_, i) => `pause ${i}`)
+      );
+
+      await start(ownerB, "b");
+      await prefetch(ownerB, "b", "x".repeat(2_001));
+      await prefetch(ownerB, "b", "x".repeat(2_000));
+      await vi.waitFor(() => expect(shared.cleanups).toHaveLength(9));
+      expect(shared.cleanups[8]!.rawText).toHaveLength(2_000);
+    });
+
+    it("cancels a cancelled dictation's prefetch", async () => {
+      await start(ownerA, "a");
+      await prefetch(ownerA, "a", "run the tests");
+      const prefetched = await requestFor("run the tests");
+
+      await cancel(ownerA, "a");
+      expect(prefetched.signal?.aborted).toBe(true);
+    });
+
+    it("prefetches nothing for another view's session, a stopping one, or with cleanup off", async () => {
+      await start(ownerA, "a");
+      await prefetch(ownerB, "a", "from the wrong view");
+      const endDrain = deferDrain();
+      const stopping = stop(ownerA, "a");
+      await prefetch(ownerA, "a", "while it drains");
+      endDrain();
+      await stopping;
+      shared.correctionEnabled = false;
+      await start(ownerB, "b");
+      await prefetch(ownerB, "b", "with cleanup off");
+      await settle();
+
+      expect(shared.cleanups).toEqual([]);
+    });
   });
 
   describe("the report sent with the ended notice", () => {
