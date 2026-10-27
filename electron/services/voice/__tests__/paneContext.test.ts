@@ -165,11 +165,7 @@ describe("a host answering for a pane in its own project", () => {
   });
 
   it("reads the cleanup context: the view's project, its vocabulary, commands and output", async () => {
-    const read = await answerPaneCorrection(
-      deps(),
-      { projectId: "proj-a", terminalId: OWN },
-      1400
-    );
+    const read = await answerPaneCorrection(deps(), { projectId: "proj-a", terminalId: OWN }, 1400);
     expect(read.project).toEqual({ name: "Daintree", path: "/repo/daintree" });
     expect(read.vocabulary.map((entry) => entry.term)).toEqual(["proj-a-term"]);
     expect(read.commandTarget?.agentName).toBe("Claude");

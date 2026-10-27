@@ -22,7 +22,10 @@ const shared = vi.hoisted(() => ({
   startCalls: [] as Array<{ keyterms?: string[] }>,
   providerSessionId: null as string | null,
   listeners: [] as Array<(event: Record<string, unknown>) => void>,
-  correctCalls: [] as Array<{ request: Record<string, unknown>; settings: Record<string, unknown> }>,
+  correctCalls: [] as Array<{
+    request: Record<string, unknown>;
+    settings: Record<string, unknown>;
+  }>,
   rewriteCalls: [] as Array<Record<string, unknown>>,
   detected: [] as Array<{ description: string }>,
   projects: new Map<number, string>(),

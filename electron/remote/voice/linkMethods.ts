@@ -53,9 +53,9 @@ export const VoicePaneReadPayloadSchema = PaneScopeSchema.extend({ budgetMs }).s
 export type VoicePaneReadPayload = z.infer<typeof VoicePaneReadPayloadSchema>;
 
 export const VoicePaneFilesPayloadSchema = VoicePaneReadPayloadSchema.extend({
-  descriptions: z.array(z.string().trim().min(1).max(MAX_TEXT_LENGTH)).max(
-    MAX_PANE_FILE_DESCRIPTIONS
-  ),
+  descriptions: z
+    .array(z.string().trim().min(1).max(MAX_TEXT_LENGTH))
+    .max(MAX_PANE_FILE_DESCRIPTIONS),
 }).strict();
 export type VoicePaneFilesPayload = z.infer<typeof VoicePaneFilesPayloadSchema>;
 
@@ -131,9 +131,7 @@ export const VoicePaneCorrectionResultSchema = z.object({
 });
 
 export const VoicePaneFilesResultSchema = z.object({
-  candidates: z
-    .array(z.array(text).max(FILE_LINK_CANDIDATE_LIMIT))
-    .max(MAX_PANE_FILE_DESCRIPTIONS),
+  candidates: z.array(z.array(text).max(FILE_LINK_CANDIDATE_LIMIT)).max(MAX_PANE_FILE_DESCRIPTIONS),
 });
 
 export const VoicePaneProjectResultSchema = z.object({ project: ProjectInfoSchema });
