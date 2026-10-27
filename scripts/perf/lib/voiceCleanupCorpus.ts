@@ -1,6 +1,7 @@
 import { DICTATED_PROMPTS } from "../../../electron/services/__tests__/fixtures/dictatedPrompts";
 import { REPLAY_CLIPS } from "../../../e2e/helpers/voiceReplayFixtures";
 import type { CorrectionWorktreeContext } from "../../../shared/config/voiceCorrection";
+import type { AgentState, WaitingReason } from "../../../shared/types/agent";
 
 /**
  * The dictated agent prompts the cleanup benchmark (`npm run perf voice-cleanup`)
@@ -76,6 +77,23 @@ export interface CleanupCodebase {
  */
 export type FixKind = "misread" | "form";
 
+/**
+ * The agent's last reply a passage is sent with, as production reads it from
+ * the transcript (#14900). Its times are minutes before the passage goes out,
+ * so every run sends them as recent as they were written.
+ */
+export interface CorpusAgentReply {
+  text: string;
+  recordedMinutesAgo: number | null;
+  newerRecordsFollow: boolean;
+  truncated?: boolean;
+  observedState?: {
+    state: AgentState;
+    waitingReason?: WaitingReason;
+    changedMinutesAgo: number | null;
+  };
+}
+
 export const FIX_KINDS: readonly FixKind[] = ["misread", "form"];
 
 export interface CleanupCase {
@@ -102,6 +120,7 @@ export interface CleanupCase {
   /** The prompts last sent to the terminal, oldest first, as production sends them (#14855). */
   recentPrompts?: string[];
   terminalOutput?: string;
+  agentReply?: CorpusAgentReply;
   /** Nothing comes before the passage in the draft; true unless `recentContext` says otherwise. */
   startsPrompt?: boolean;
   /** Absent for a passage dictated with no worktree or repository names, as before #14854. */
@@ -518,8 +537,21 @@ const AFTERNOON: readonly AuthoredCase[] = [
   },
 ];
 
+// Claude Code waiting at its prompt, with the reply that asked something
+// scrolled past the tail a tool's output filled.
+const CLAUDE_CODE_IDLE = [
+  "⏺ Bash(npm test -- electron/services/__tests__/PtyClient.test.ts)",
+  "  ⎿  Test Files  1 passed (1)",
+  "     Tests  48 passed (48)",
+  "",
+  "╭──────────────────────────────────────────────────────────╮",
+  "│ >                                                        │",
+  "╰──────────────────────────────────────────────────────────╯",
+  "  ⏵⏵ accept edits on (shift+tab to cycle)",
+].join("\n");
+
 // Words that sound right on their own and only read wrong in the sentence, the
-// draft before it, or what the terminal just printed.
+// draft before it, what the terminal just printed, or what the agent last said.
 const CONTEXT: readonly AuthoredCase[] = [
   {
     id: "context-setting:openai",
@@ -651,7 +683,55 @@ const CONTEXT: readonly AuthoredCase[] = [
     keep: ["No, just ship it"],
     terminalOutput: "Should I add a feature flag for this, or reuse an existing setting?",
   },
+  // A short answer whose question has left the screen: only the agent's reply
+  // says what "Okay" answers and what "p t y host" names (#14900).
+  {
+    id: "context-reply-answer:deepgram",
+    style: "deepgram",
+    source: "context",
+    raw: "Okay, throttle it in p t y host.",
+    reference: "Okay, throttle it in pty-host.",
+    fixes: { "pty-host": "form" },
+    keep: ["Okay", "throttle it in"],
+    uncertain: ["p t y"],
+    terminalOutput: CLAUDE_CODE_IDLE,
+    agentReply: {
+      text: "The resize storm comes from the pane sending a SIGWINCH on every animation frame. I can debounce it in the pane, or throttle it in pty-host so every client gets the fix. Which would you prefer?",
+      recordedMinutesAgo: 1,
+      newerRecordsFollow: false,
+      observedState: { state: "waiting", waitingReason: "question", changedMinutesAgo: 1 },
+    },
+  },
+  // The reply is older than the screen: the agent answered its own cache
+  // question and moved on to one about payment, asked in a picker the
+  // transcript doesn't hold as a reply. The cash stays cash (#14900).
+  {
+    id: "context-reply-disagrees:deepgram",
+    style: "deepgram",
+    source: "context",
+    raw: "Yeah, keep the cash.",
+    reference: "Yeah, keep the cash.",
+    keep: ["Yeah", "the cash"],
+    uncertain: ["cash"],
+    terminalOutput:
+      "⏺ Removed the unused cache in front of the price lookup.\n\n☐ Fixture\n\nThe checkout fixture needs a default payment method. Keep cash, or switch it to card?\n\n❯ 1. Keep cash\n  2. Switch to card\n  3. Type something.",
+    agentReply: {
+      text: "The checkout service still has a cache in front of the price lookup. Should I keep the cache or remove it?",
+      recordedMinutesAgo: 6,
+      newerRecordsFollow: true,
+      observedState: { state: "waiting", waitingReason: "question", changedMinutesAgo: 0 },
+    },
+  },
 ];
+
+// The short answer again with only the screen, which has lost the question:
+// the difference is what the reply added.
+const REPLY_BARE: readonly AuthoredCase[] = CONTEXT.filter(
+  (entry) => entry.id === "context-reply-answer:deepgram"
+).map(({ agentReply: _reply, ...entry }) => ({
+  ...entry,
+  id: entry.id.replace(":", "-bare:"),
+}));
 
 // This repository's names as a dictation in it sends them (`deriveRepoNames`
 // then `screenCorrectionRepositoryNames`, on the commit that added them), and
@@ -1654,6 +1734,7 @@ export const CLEANUP_CORPUS: readonly CleanupCase[] = [
   ...[
     ...AFTERNOON,
     ...CONTEXT,
+    ...REPLY_BARE,
     ...WORKSPACE,
     ...RECENT_PROMPTS,
     ...NAMES,

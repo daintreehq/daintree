@@ -34,6 +34,7 @@ import {
   EMPTY_VOICE_COMMAND_VOCABULARY,
   type VoiceCommandEntry,
 } from "../../shared/utils/voiceAgentCommands.js";
+import type { VoiceAgentReply } from "./voiceAgentReply.js";
 import type { VoiceCommandTarget } from "./voiceCommandTarget.js";
 import { holdsCredential, isSecretShaped } from "./voiceKeytermSecrets.js";
 
@@ -54,7 +55,7 @@ const MIN_OUTPUT_TOKENS = 1024;
 const OUTPUT_TOKENS_PER_CHAR = 1.5;
 const OUTPUT_TOKENS_OVERHEAD = 256;
 const FILE_LINK_MAX_OUTPUT_TOKENS = 256;
-const PROMPT_CACHE_PREFIX = "voice-correction-v15";
+const PROMPT_CACHE_PREFIX = "voice-correction-v16";
 // OpenAI rejects a prompt_cache_key longer than 64 characters.
 const PROMPT_CACHE_KEY_MAX_LENGTH = 64;
 const FILE_LINK_DETECTION_TIMEOUT_MS = 4000;
@@ -62,7 +63,7 @@ const REWRITE_CACHE_PREFIX = "voice-rewrite-v1";
 const MIN_REWRITE_TIMEOUT_MS = 10000;
 const FILE_LINK_CACHE_PREFIX = "voice-file-link-v2";
 const PROMPT_TAG_OPEN_RE =
-  /<(?=\/?(?:recent_prompts|terminal_output|code_names|target|job|confirmed_history|uncertain)\b)/gi;
+  /<(?=\/?(?:recent_prompts|terminal_output|agent_last_reply|code_names|target|job|confirmed_history|uncertain)\b)/gi;
 const OPENAI_ORIGIN = "https://api.openai.com/";
 const RESPONSES_URL = "https://api.openai.com/v1/responses";
 // OpenAI keeps an unused prefix cached for five to ten minutes. Checked once a
@@ -202,6 +203,8 @@ export interface VoiceCorrectionRequest {
   recentPrompts?: string[];
   /** What the dictated terminal recently printed, redacted and bounded; evidence for what was heard, never text to correct. */
   terminalOutput?: string;
+  /** The dictated agent's last reply as its transcript recorded it, with the state Daintree observed; terminal content, so never logged. */
+  agentReply?: VoiceAgentReply;
   /** Code names from the project the passage spells out word by word (`matchCodeNames`); evidence, never text to add. */
   codeNames?: string[];
   reason?: string;
@@ -391,6 +394,40 @@ const EXPLICIT_CACHE_BREAKPOINT = { mode: "explicit" } as const;
 
 function totalLength(texts: readonly string[] | undefined): number {
   return texts?.reduce((sum, text) => sum + text.length, 0) ?? 0;
+}
+
+// Coarse on purpose: a host's clock can differ a little from this one, and
+// roughly how long ago is all the model needs.
+function describeAgo(at: number | null, now: number): string {
+  if (at === null) return "unknown";
+  const elapsed = Math.max(0, now - at);
+  if (elapsed < 60_000) return "under a minute before this request";
+  const minutes = Math.round(elapsed / 60_000);
+  if (minutes < 60) return `about ${minutes} minute${minutes === 1 ? "" : "s"} before this request`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `about ${hours} hour${hours === 1 ? "" : "s"} before this request`;
+  return `about ${Math.round(hours / 24)} days before this request`;
+}
+
+// Every line an observation, labelled as one: what the transcript recorded and
+// when, and what Daintree's output heuristics last reported. Nothing here says
+// the reply is current or what the agent wants.
+function agentReplyBlock(reply: VoiceAgentReply, now: number): string {
+  const lines = [
+    `recorded=${describeAgo(reply.recordedAt, now)}`,
+    `newer_transcript_records=${reply.newerRecordsFollow ? "yes" : "no"}`,
+  ];
+  if (reply.truncated) lines.push("start_cut=yes");
+  const observed = reply.observedState;
+  if (observed) {
+    lines.push(`observed_state=${observed.state}`);
+    if (observed.waitingReason) lines.push(`observed_waiting_reason=${observed.waitingReason}`);
+    lines.push(`observed_state_changed=${describeAgo(observed.lastStateChangeAt, now)}`);
+  }
+  // One quoted line, so the reply can't pass for a label, close its block or
+  // open a <target> of its own.
+  lines.push(`text=${JSON.stringify(reply.text).replace(PROMPT_TAG_OPEN_RE, "‹")}`);
+  return `<agent_last_reply>\n${lines.join("\n")}\n</agent_last_reply>`;
 }
 
 export class VoiceCorrectionService {
@@ -630,6 +667,10 @@ export class VoiceCorrectionService {
         .map((name) => JSON.stringify(name).replace(PROMPT_TAG_OPEN_RE, "‹"))
         .join("\n");
       parts.push(`<code_names>\n${names}\n</code_names>`);
+    }
+
+    if (request.agentReply) {
+      parts.push(agentReplyBlock(request.agentReply, Date.now()));
     }
 
     if (request.terminalOutput?.trim()) {
@@ -897,21 +938,28 @@ export class VoiceCorrectionService {
     onText: ((text: string) => void) | undefined
   ): Promise<VoiceCorrectionProposal> {
     const systemPrompt = this.buildSystemPrompt(settings);
-    // Code names go only to rules that say what they are: Luna's, and the
-    // cleanup benchmark's frozen ones, never learned of them. Read from the
-    // rules alone, so custom instructions can't switch them on.
+    // Code names and the agent's reply go only to rules that say what they
+    // are: Luna's never learned of code names, and the cleanup benchmark's
+    // frozen rules of either. Read from the rules alone, so custom
+    // instructions can't switch them on.
     const rules = settings.instructions ?? correctionInstructionsFor(settings.model);
     const userMessage = this.buildUserMessage(
-      rules.core.includes("<code_names>") ? request : { ...request, codeNames: undefined },
+      {
+        ...request,
+        ...(rules.core.includes("<code_names>") ? {} : { codeNames: undefined }),
+        ...(rules.core.includes("<agent_last_reply>") ? {} : { agentReply: undefined }),
+      },
       settings.model
     );
     const recentPromptsLen = totalLength(request.recentPrompts);
+    const agentReplyLen = request.agentReply?.text.length ?? 0;
     logDebug(`${P} Calling Responses API`, {
       model: settings.model,
       contextLen: request.recentContext?.length ?? 0,
       recentPromptCount: request.recentPrompts?.length ?? 0,
       recentPromptsLen,
       terminalOutputLen: request.terminalOutput?.length ?? 0,
+      agentReplyLen,
       codeNameCount: request.codeNames?.length ?? 0,
       uncertainCount: request.uncertain?.length ?? 0,
       pauseCount: request.pauses?.length ?? 0,

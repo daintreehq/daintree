@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { REPLAY_CLIPS } from "../../../e2e/helpers/voiceReplayFixtures";
 import {
   buildCorrectionSystemPrompt,
@@ -14,6 +14,7 @@ import {
   recentPromptTwins,
   REPLAY_TRANSCRIPTS,
   type CleanupCase,
+  type CorpusAgentReply,
   type FixKind,
 } from "../lib/voiceCleanupCorpus";
 import { PROMPT_VARIANTS, revise } from "../lib/voiceCleanupPrompts";
@@ -277,6 +278,34 @@ describe("inputHash", () => {
         codebase: { files: ["src/store/worktreeStore.ts"], identifiers: ["useShallow"] },
       })
     ).toBe(inputHash(withName));
+  });
+
+  it("changes with the agent's reply it carries, and not with when the run sent it", () => {
+    const reply: CorpusAgentReply = {
+      text: "Should I write a migration, or add a shim?",
+      recordedMinutesAgo: 2,
+      newerRecordsFollow: false,
+      observedState: { state: "waiting", changedMinutesAgo: 0 },
+    };
+    vi.useFakeTimers({ now: 1_000, toFake: ["Date"] });
+    try {
+      const early = inputHash({ ...passage, agentReply: reply });
+      vi.setSystemTime(1_800_000_000_000);
+      expect(inputHash({ ...passage, agentReply: reply })).toBe(early);
+      const hashes = [
+        inputHash(passage),
+        early,
+        inputHash({ ...passage, agentReply: { ...reply, newerRecordsFollow: true } }),
+        inputHash({ ...passage, agentReply: { ...reply, recordedMinutesAgo: 6 } }),
+        inputHash({
+          ...passage,
+          agentReply: { ...reply, observedState: { state: "working", changedMinutesAgo: 0 } },
+        }),
+      ];
+      expect(new Set(hashes).size).toBe(hashes.length);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("changes with anything its session tells cleanup, and only that", () => {
@@ -830,7 +859,7 @@ describe("prompt variants", () => {
     });
   });
 
-  it("sends Luna the frozen v11 rules told about recent prompts, and Terra the code names ones", () => {
+  it("sends Luna the frozen v11 rules told about recent prompts and the agent's reply, and Terra the agent reply ones", () => {
     // #14855 named <recent_prompts> in both models' rules, after the rounds that chose them.
     const withRecentPrompts = (instructions: CorrectionInstructions) =>
       revise(instructions, {
@@ -846,15 +875,19 @@ describe("prompt variants", () => {
         ],
       });
     const production = PROMPT_VARIANTS.production!;
-    expect(production.instructionsFor("gpt-6-luna")).toEqual(
+    // What Luna cleaned up with from #14855 until #14900.
+    expect(PROMPT_VARIANTS.luna!.instructionsFor("gpt-6-luna")).toEqual(
       withRecentPrompts(PROMPT_VARIANTS.v11!.instructionsFor("gpt-6-luna"))
+    );
+    expect(production.instructionsFor("gpt-6-luna")).toEqual(
+      PROMPT_VARIANTS["luna-reply"]!.instructionsFor("gpt-6-luna")
     );
     // What Terra cleaned up with from #14855 until #14873 chose names6 over it.
     expect(PROMPT_VARIANTS.v13!.instructionsFor("gpt-6.1-terra")).toEqual(
       withRecentPrompts(PROMPT_VARIANTS.final!.instructionsFor("gpt-6.1-terra"))
     );
     expect(production.instructionsFor("gpt-6.1-terra")).toEqual(
-      PROMPT_VARIANTS.codenames!.instructionsFor("gpt-6.1-terra")
+      PROMPT_VARIANTS.agentreply!.instructionsFor("gpt-6.1-terra")
     );
   });
 

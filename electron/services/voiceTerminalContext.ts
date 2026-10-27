@@ -1,5 +1,6 @@
 import type { PtyClient } from "./PtyClient.js";
 import { logDebug } from "../utils/logger.js";
+import { readAgentReplyForCorrection, type VoiceAgentReply } from "./voiceAgentReply.js";
 import { readTerminalLines } from "./voiceContextKeyterms.js";
 
 const P = "[VoiceTerminalContext]";
@@ -69,4 +70,31 @@ export async function readTerminalOutputForCorrection(
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+/** What cleanup is sent of the dictated terminal: its screen, and its agent's last reply when the transcript has one. */
+export interface TerminalCorrectionContext {
+  terminalOutput: string | null;
+  agentReply: VoiceAgentReply | null;
+}
+
+export const NO_TERMINAL_CORRECTION_CONTEXT: TerminalCorrectionContext = {
+  terminalOutput: null,
+  agentReply: null,
+};
+
+/**
+ * The dictated terminal's screen and its agent's last reply, read side by side
+ * within one budget. Either coming back empty leaves the other.
+ */
+export async function readTerminalContextForCorrection(
+  ptyClient: PtyClient | undefined,
+  terminalId: string | undefined,
+  budgetMs: number = TERMINAL_READ_BUDGET_MS
+): Promise<TerminalCorrectionContext> {
+  const [terminalOutput, agentReply] = await Promise.all([
+    readTerminalOutputForCorrection(ptyClient, terminalId, budgetMs),
+    readAgentReplyForCorrection(ptyClient, terminalId, budgetMs),
+  ]);
+  return { terminalOutput, agentReply };
 }
