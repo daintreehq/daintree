@@ -979,8 +979,8 @@ export class PtyManager extends EventEmitter {
       const close = attributeClose(
         info
           ? {
+              ...info,
               id: termId,
-              spawnedAt: info.spawnedAt,
               isTrashed: true,
               trashExpiresAt: this.registry.getTrashExpiresAt(termId),
             }

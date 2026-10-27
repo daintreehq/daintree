@@ -216,6 +216,9 @@ function emitCapture(
       : {}),
     cwd: cwd || undefined,
     closedBy: "exit" as const,
+    // Named so a later close of the pane, once the user trashes it, can find
+    // this record: the agent ended first, and nothing is captured after it.
+    terminal: { id: terminalId, spawnedAt: terminal.spawnedAt },
   };
 
   // Main's ledger journals at most once per (terminalId, generation), whatever

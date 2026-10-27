@@ -101,6 +101,12 @@ export type ProjectFocusOnActivateIntent =
    * still runs the same session, and nothing else — never a launch or resume.
    */
   | { intent: "open-assistant"; subject: import("../agentDirectory.js").AgentDirectorySubject }
+  /**
+   * Restore from Canopy's Trash a run of this project, which had no view open
+   * to resume it in: ask this project's host again from here, and land on the
+   * pane it comes back in.
+   */
+  | { intent: "restore-trashed"; runId: string; spawnedAt: number; expiresAt: number }
   | {
       /**
        * A plugin's OS banner was clicked (#13505): run its first action, which

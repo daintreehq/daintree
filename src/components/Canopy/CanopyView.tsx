@@ -73,6 +73,8 @@ import {
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { isActiveVoiceSession } from "@shared/types";
 import { placeOf } from "./canopyInboxPlace";
+import { restoreInItsProject } from "./canopyRestoreElsewhere";
+import type { CanopyTrashItem } from "./canopyTrash";
 import { parseAllHostsKey } from "./canopyAllHosts";
 import { CanopyAssistantPane, CanopyAssistantRow } from "./CanopyAssistantList";
 import { canopyAssistantDomId } from "./openAssistantItem";
@@ -960,8 +962,8 @@ function CanopyInbox({
   // Canopy's Trash: every agent run the host's trash holds, any project's.
   const trashRef = useRef<CanopyTrashSectionHandle>(null);
   // A run put back from the Trash comes into the inbox selected, once it is
-  // back in the fleet. Anything the user selects from the press on, another
-  // host or the panel closing, wins.
+  // back in the fleet: the same run, or the pane resuming its session. Anything
+  // the user selects from the press on, another host or the panel closing, wins.
   const shownRunId = selectedAssistant?.id ?? focusedItem?.runId ?? null;
   const shownRunIdRef = useRef(shownRunId);
   useLayoutEffect(() => {
@@ -973,14 +975,34 @@ function CanopyInbox({
     request: number;
   } | null>(null);
   const restoreRequests = useRef(0);
-  const onRestoring = useCallback((runId: string) => {
+  const onRestoring = useCallback(() => {
     const request = ++restoreRequests.current;
-    setRestored({ runId, from: shownRunIdRef.current, request });
-    return (ok: boolean) => {
-      if (!ok) setRestored((current) => (current?.request === request ? null : current));
+    const from = shownRunIdRef.current;
+    // Waited for from when main says which run it is: a resume takes longer
+    // than a restore, and its run has a new id.
+    return (runId: string | null) => {
+      if (runId === null || request !== restoreRequests.current) return;
+      if (shownRunIdRef.current !== from) return;
+      setRestored({ runId, from, request });
     };
   }, []);
-  useEffect(() => setRestored(null), [hostId, isOpen]);
+  useEffect(() => {
+    restoreRequests.current += 1;
+    setRestored(null);
+  }, [hostId, isOpen]);
+  const onRestoreElsewhere = useCallback(
+    (item: CanopyTrashItem) =>
+      restoreInItsProject(
+        item,
+        { hostId, ownHostId },
+        {
+          closeForTerminal,
+          // A panel since closed, or showing another host, is the user's newer choice.
+          stillShows: () => showsHost(hostId) && useCanopyStore.getState().isOpen,
+        }
+      ),
+    [hostId, ownHostId, closeForTerminal, showsHost]
+  );
   useEffect(() => {
     if (restored === null) return;
     const handle = setTimeout(() => {
@@ -2002,7 +2024,7 @@ function CanopyInbox({
                     searchRef.current?.select();
                   }}
                   onRestoring={onRestoring}
-                  restoringRunId={restored?.runId ?? null}
+                  onRestoreElsewhere={onRestoreElsewhere}
                   acted={trashActed}
                 />
               </div>

@@ -7,6 +7,7 @@ import { notify } from "@/lib/notify";
 import { activateAssistantLane } from "@/services/assistantSubject";
 import { landOnWorktree } from "@/services/worktreeLanding";
 import { useWorktreeStoreApi } from "@/hooks/useWorktreeStore";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 /**
  * Cross-project focus intent receiver.
@@ -40,7 +41,8 @@ export function useFocusOnActivateIntent(isStateLoaded: boolean): void {
         payload?.intent !== "focus-panel" &&
         payload?.intent !== "focus-worktree" &&
         payload?.intent !== "run-plugin-action" &&
-        payload?.intent !== "open-assistant"
+        payload?.intent !== "open-assistant" &&
+        payload?.intent !== "restore-trashed"
       ) {
         return;
       }
@@ -77,6 +79,28 @@ export function useFocusOnActivateIntent(isStateLoaded: boolean): void {
       void activateAssistantLane(pending.subject).catch((error: unknown) => {
         logWarn("Couldn't open the assistant lane", { error });
       });
+      return;
+    }
+    if (pending.intent === "restore-trashed") {
+      // This project was opened to resume a run from Canopy's Trash: its
+      // host resumes it in this view now, and the pane it lands in is shown.
+      const { runId, spawnedAt, expiresAt } = pending;
+      void window.electron.canopy
+        .restoreTrashed(runId, { spawnedAt, expiresAt })
+        .then(async (outcome) => {
+          if (!("runId" in outcome)) throw new Error("This project's view isn't ready.");
+          await actionService.dispatch("panel.focus", { panelId: outcome.runId });
+        })
+        .catch((error: unknown) => {
+          // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+          notify({
+            type: "error",
+            title: "Couldn't restore terminal",
+            message: formatErrorMessage(error, "It has left the trash."),
+            context: { eventKind: "agent" },
+            replaceKey: "focus-on-activate:restore-trashed",
+          });
+        });
       return;
     }
     if (pending.intent === "focus-worktree") {

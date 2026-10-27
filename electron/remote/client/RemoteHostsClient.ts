@@ -310,7 +310,18 @@ function focusIntentOf(payload: SwitchWindowHostPayload): ProjectFocusOnActivate
       panelId,
       worktreeId,
       subject: rawSubject,
-    } = intent as { intent?: unknown; panelId?: unknown; worktreeId?: unknown; subject?: unknown };
+      runId,
+      spawnedAt,
+      expiresAt,
+    } = intent as {
+      intent?: unknown;
+      panelId?: unknown;
+      worktreeId?: unknown;
+      subject?: unknown;
+      runId?: unknown;
+      spawnedAt?: unknown;
+      expiresAt?: unknown;
+    };
     if (kind === "focus-next-waiting") return { intent: kind };
     if (kind === "open-assistant") {
       // A remote person's "Open in Assistant" (#14163): only a project lane, and
@@ -344,6 +355,21 @@ function focusIntentOf(payload: SwitchWindowHostPayload): ProjectFocusOnActivate
       worktreeId.length <= MAX_WORKTREE_ID_LENGTH
     ) {
       return { intent: kind, worktreeId };
+    }
+    if (
+      kind === "restore-trashed" &&
+      typeof runId === "string" &&
+      runId.length > 0 &&
+      runId.length <= MAX_PROJECT_ID_LENGTH &&
+      Number.isSafeInteger(spawnedAt) &&
+      Number.isSafeInteger(expiresAt)
+    ) {
+      return {
+        intent: kind,
+        runId,
+        spawnedAt: spawnedAt as number,
+        expiresAt: expiresAt as number,
+      };
     }
   }
   throw invalid("focusIntent is not a focus intent");

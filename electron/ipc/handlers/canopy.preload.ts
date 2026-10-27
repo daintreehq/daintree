@@ -10,6 +10,7 @@ export const CANOPY_METHOD_CHANNELS = {
   restoreTrashed: "canopy:restore-trashed",
   removeTrashed: "canopy:remove-trashed",
   emptyTrash: "canopy:empty-trash",
+  resumeSettled: "canopy:resume-settled",
   rename: "canopy:rename",
   archive: "canopy:archive",
   unarchive: "canopy:unarchive",

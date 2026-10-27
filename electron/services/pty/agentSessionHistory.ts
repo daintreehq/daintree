@@ -14,6 +14,7 @@ import type {
   AgentSessionBookmarkMetadata,
   AgentSessionRecord,
   AgentSessionRetentionDays,
+  AgentSessionTrashClose,
 } from "../../../shared/types/ipc/agentSessionHistory.js";
 import { rebaseAbsolutePath } from "../../../shared/utils/projectPathRelocation.js";
 
@@ -256,6 +257,18 @@ function writeCache(
   historyCache.set(filePath, { records, size, mtimeMs });
 }
 
+const writeListeners = new Set<() => void>();
+
+/**
+ * Hear every write to the journal, whichever writer made it: a capture, a
+ * clear, a prune, a path rewrite, a bookmark or a Trash change. Main is the
+ * journal's only writer, so this misses nothing but a hand edit on disk.
+ */
+export function onSessionHistoryWritten(listener: () => void): () => void {
+  writeListeners.add(listener);
+  return () => writeListeners.delete(listener);
+}
+
 // Refresh the cache after a write with the exact array just persisted, keyed to
 // the freshly-written file's stat so the next read is a cache hit. If the stat
 // fails, drop the entry so the next read falls back to a disk re-read.
@@ -265,6 +278,13 @@ function refreshCacheAfterWrite(filePath: string, records: AgentSessionRecord[])
     writeCache(filePath, records, s.size, s.mtimeMs);
   } catch {
     historyCache.delete(filePath);
+  }
+  for (const listener of [...writeListeners]) {
+    try {
+      listener();
+    } catch {
+      // A listener's failure is its own; the write has landed.
+    }
   }
 }
 
@@ -705,6 +725,13 @@ export async function deleteBookmark(
   });
 }
 
+function closesTerminal(
+  record: AgentSessionRecord,
+  terminal: { id: string; spawnedAt: number }
+): boolean {
+  return record.terminal?.id === terminal.id && record.terminal.spawnedAt === terminal.spawnedAt;
+}
+
 /**
  * Take user closes out of Canopy's Trash, each named by the terminal
  * incarnation it closed. The records stay, for the Resume Sessions palette;
@@ -712,11 +739,11 @@ export async function deleteBookmark(
  * the write queue.
  */
 export async function removeFromCanopyTrash(
-  closes: ReadonlyArray<{ terminalId: string; spawnedAt: number }>,
+  terminals: ReadonlyArray<{ id: string; spawnedAt: number }>,
   userData?: string
 ): Promise<number> {
   const filePath = getSessionHistoryPath(userData);
-  if (!filePath || closes.length === 0) return 0;
+  if (!filePath || terminals.length === 0) return 0;
 
   return enqueueWrite(async () => {
     const existing = await readSessionHistoryResult(userData);
@@ -728,13 +755,7 @@ export async function removeFromCanopyTrash(
     const next = existing.records.map((r) => {
       const trash = r.trash;
       if (!trash || trash.removedAt !== undefined) return r;
-      if (
-        !closes.some(
-          (close) => close.terminalId === trash.terminalId && close.spawnedAt === trash.spawnedAt
-        )
-      ) {
-        return r;
-      }
+      if (!terminals.some((terminal) => closesTerminal(r, terminal))) return r;
       removed += 1;
       return { ...r, trash: { ...trash, removedAt: now } };
     });
@@ -744,6 +765,39 @@ export async function removeFromCanopyTrash(
     });
     refreshCacheAfterWrite(filePath, next);
     return removed;
+  });
+}
+
+/**
+ * The user closed a pane whose session was journaled before its close: the
+ * agent had already quit, or its own exit capture beat the close's. That
+ * record becomes the close, so Canopy's Trash keeps the run. Only the
+ * incarnation's newest record, and only one no close has claimed. Returns
+ * whether one was. Shares the write queue.
+ */
+export async function adoptCanopyTrashClose(
+  terminal: { id: string; spawnedAt: number },
+  trash: AgentSessionTrashClose,
+  userData?: string
+): Promise<boolean> {
+  const filePath = getSessionHistoryPath(userData);
+  if (!filePath) return false;
+
+  return enqueueWrite(async () => {
+    const existing = await readSessionHistoryResult(userData);
+    if (existing.status === "unreadable") {
+      throw unreadableJournalError(existing.error);
+    }
+    const index = existing.records.findIndex((r) => closesTerminal(r, terminal));
+    const record = index === -1 ? undefined : existing.records[index];
+    if (!record || record.trash) return false;
+    const next = [...existing.records];
+    next[index] = { ...record, closedBy: "user", trash };
+    await resilientAtomicWriteFile(filePath, JSON.stringify(next, null, 2), "utf-8", {
+      mode: OWNER_RW_FILE_MODE,
+    });
+    refreshCacheAfterWrite(filePath, next);
+    return true;
   });
 }
 

@@ -1657,7 +1657,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
           cwd: info.cwd ?? undefined,
           branch,
           bookmark,
-          closedBy: "bookmark",
+          ...attributeClose(info, "bookmark"),
         },
         { terminalId, generation }
       );

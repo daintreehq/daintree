@@ -2,6 +2,7 @@ import type {
   AgentSessionCloseCause,
   AgentSessionRecord,
 } from "../../../shared/types/ipc/agentSessionHistory.js";
+import type { PanelTitleMode } from "../../../shared/types/panel.js";
 import { TRASH_TTL_MS } from "../../../shared/config/trash.js";
 import { parseE2ETimerOverrideMs } from "../../../shared/config/e2eTimerOverrides.js";
 
@@ -24,33 +25,37 @@ export interface ClosingTerminal {
   spawnedAt?: number;
   isTrashed?: boolean;
   trashExpiresAt?: number;
+  titleMode?: PanelTitleMode;
+  agentPresetColor?: string;
 }
 
 /**
  * What ended a pane, from its terminal as read before the kill. One in the
  * trash was closed by the user, whatever then ended its process: the trash's
  * own expiry, a removal from the trash, or a quit or project close inside its
- * window. Any other pane ended for the closing path's own reason.
+ * window. Any other pane ended for the closing path's own reason. Names the
+ * incarnation either way, so a later close of the pane can find this record.
  */
 export function attributeClose(
   terminal: ClosingTerminal | null | undefined,
   cause: Exclude<AgentSessionCloseCause, "user">,
   trashTtlMs: number = resolveTrashTtlMs()
-): Pick<AgentSessionRecord, "closedBy" | "trash"> {
-  if (
-    terminal?.isTrashed === true &&
-    typeof terminal.trashExpiresAt === "number" &&
-    typeof terminal.spawnedAt === "number"
-  ) {
-    return {
-      closedBy: "user",
-      trash: {
-        terminalId: terminal.id,
-        spawnedAt: terminal.spawnedAt,
-        expiresAt: terminal.trashExpiresAt,
-        closedAt: terminal.trashExpiresAt - trashTtlMs,
-      },
-    };
+): Pick<AgentSessionRecord, "closedBy" | "terminal" | "trash"> {
+  if (!terminal || typeof terminal.spawnedAt !== "number") return { closedBy: cause };
+  const incarnation = { id: terminal.id, spawnedAt: terminal.spawnedAt };
+  if (terminal.isTrashed !== true || typeof terminal.trashExpiresAt !== "number") {
+    return { closedBy: cause, terminal: incarnation };
   }
-  return { closedBy: cause };
+  return {
+    closedBy: "user",
+    terminal: incarnation,
+    trash: {
+      expiresAt: terminal.trashExpiresAt,
+      closedAt: terminal.trashExpiresAt - trashTtlMs,
+      ...(terminal.titleMode !== undefined ? { titleMode: terminal.titleMode } : {}),
+      ...(terminal.agentPresetColor !== undefined
+        ? { agentPresetColor: terminal.agentPresetColor }
+        : {}),
+    },
+  };
 }

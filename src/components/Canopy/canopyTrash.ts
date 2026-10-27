@@ -16,6 +16,10 @@ export interface CanopyTrashItem {
   trashedAt: number;
   /** When the trash lets it go; it also names which trash of the run this is. */
   expiresAt: number;
+  /** The trash let its process go: Restore resumes its session. */
+  ended: boolean;
+  /** Ended, and the worktree it ran in is gone: there is nowhere to resume it. */
+  worktreeRemoved: boolean;
   subject: string;
   row: PilotAgentRow;
   workspace: { name: string; emoji: string | null; host: string | null };
@@ -49,6 +53,8 @@ export function buildCanopyTrash(
         spawnedAt: entry.run.spawnedAt,
         trashedAt: entry.trashedAt,
         expiresAt: entry.expiresAt,
+        ended: entry.ended !== undefined,
+        worktreeRemoved: entry.ended?.worktreeRemoved === true,
         subject: rowSubject(built.row, built.workspace.name),
         row: built.row,
         workspace: built.workspace,
@@ -82,6 +88,19 @@ export function closedPhrase(trashedAt: number, nowMs: number): string {
   if (seconds < 1) return "Closed just now";
   if (seconds < 60) return `Closed ${seconds}s ago`;
   return `Closed ${formatWaitAge(trashedAt, nowMs)} ago`;
+}
+
+/**
+ * A row's aside: when it was closed, and once its process is gone, that it
+ * ended, or that its worktree is gone with it.
+ */
+export function trashAside(
+  item: Pick<CanopyTrashItem, "trashedAt" | "ended" | "worktreeRemoved">,
+  nowMs: number
+): string {
+  const closed = closedPhrase(item.trashedAt, nowMs);
+  if (item.worktreeRemoved) return `${closed} · Worktree removed`;
+  return item.ended ? `${closed} · ended` : closed;
 }
 
 /** Said once, politely, when the trash let runs go at their time. */

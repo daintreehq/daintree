@@ -389,6 +389,10 @@ export interface GeneratedIpcInvokeMap {
   };
   "canopy:restore-trashed": {
     args: [runId: string, target: import("./canopy.js").CanopyTrashTarget];
+    result: import("./canopy.js").CanopyRestoreOutcome;
+  };
+  "canopy:resume-settled": {
+    args: [requestId: string, answer: import("./canopy.js").CanopyResumeAnswer];
     result: void;
   };
   "canopy:retry-model": {
