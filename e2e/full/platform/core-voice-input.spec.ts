@@ -292,8 +292,7 @@ test.describe.serial("E2E: Voice Input — Realtime IPC and settings UI", () => 
       await ipcSendAudio(ctx.window);
       await ipcStop(ctx.window);
 
-      // The IPC handler applies applyDictationCommands → "hello\n\n", then
-      // split + filter(Boolean) drops the trailing empty paragraph.
+      // The trailing command closes the utterance and emits a boundary after its text.
       await expect
         .poll(async () => (await getCapturedEvents(ctx.window)).completes.map((c) => c.text), {
           timeout: T_MEDIUM,
@@ -301,7 +300,9 @@ test.describe.serial("E2E: Voice Input — Realtime IPC and settings UI", () => 
         .toEqual(["hello"]);
 
       const captured = await getCapturedEvents(ctx.window);
-      expect(captured.paragraphBoundaries).toEqual([]);
+      expect(captured.paragraphBoundaries).toEqual([
+        { sessionId: captured.completes[0].sessionId, rawText: null, correctionId: null },
+      ]);
     });
 
     test("paragraphing 'manual' strategy passes spoken commands through as literal text", async () => {

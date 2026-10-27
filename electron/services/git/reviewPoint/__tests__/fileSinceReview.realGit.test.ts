@@ -299,7 +299,7 @@ describe("readFileSinceReview", () => {
     expect((await sinceReview(repo, point, "a.txt", "worktree")).kind).toBe("binary");
   });
 
-  it("reports mode-only changes without a patch", async () => {
+  posixOnly("reports worktree mode-only changes without a patch", async () => {
     const repo = topicRepo();
     write(repo, "a.txt", "same\n");
     git(repo, "add", "a.txt");
@@ -307,6 +307,18 @@ describe("readFileSinceReview", () => {
     fs.chmodSync(path.join(repo, "a.txt"), 0o755);
 
     const view = await sinceReview(repo, point, "a.txt", "worktree");
+
+    expect(view).toEqual({ kind: "mode-only", from: "100644", to: "100755" });
+  });
+
+  it("reports index mode-only changes without a patch", async () => {
+    const repo = topicRepo();
+    write(repo, "a.txt", "same\n");
+    git(repo, "add", "a.txt");
+    const point = await review(repo);
+    git(repo, "update-index", "--chmod=+x", "a.txt");
+
+    const view = await sinceReview(repo, point, "a.txt", "index");
 
     expect(view).toEqual({ kind: "mode-only", from: "100644", to: "100755" });
   });

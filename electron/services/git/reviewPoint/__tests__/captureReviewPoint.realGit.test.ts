@@ -195,9 +195,13 @@ describe("captureReviewPoint", () => {
       tip: mainTip,
       mergeBases: [mainTip],
     });
-    expect(point.worktreePath).toBe(repo);
-    expect(point.gitDir).toBe(path.join(repo, ".git"));
-    expect(point.commonDir).toBe(path.join(repo, ".git"));
+    expect(fs.realpathSync.native(point.worktreePath)).toBe(fs.realpathSync.native(repo));
+    expect(fs.realpathSync.native(point.gitDir)).toBe(
+      fs.realpathSync.native(path.join(repo, ".git"))
+    );
+    expect(fs.realpathSync.native(point.commonDir)).toBe(
+      fs.realpathSync.native(path.join(repo, ".git"))
+    );
     expect(point.objectFormat).toBe("sha1");
     expect(point.incomplete).toBeNull();
     expect(paths(point)).toEqual(["a.txt", "b.txt", "c/new.txt"]);
@@ -881,9 +885,13 @@ describe("captureReviewPoint", () => {
       git(repo, "worktree", "add", "-q", "-b", "feature", linked, "main");
       write(linked, "b.txt", "linked\n");
       const point = await capturePoint(linked);
-      expect(point.worktreePath).toBe(linked);
-      expect(point.commonDir).toBe(path.join(repo, ".git"));
-      expect(point.gitDir).toBe(path.join(repo, ".git", "worktrees", path.basename(linked)));
+      expect(fs.realpathSync.native(point.worktreePath)).toBe(fs.realpathSync.native(linked));
+      expect(fs.realpathSync.native(point.commonDir)).toBe(
+        fs.realpathSync.native(path.join(repo, ".git"))
+      );
+      expect(fs.realpathSync.native(point.gitDir)).toBe(
+        fs.realpathSync.native(path.join(repo, ".git", "worktrees", path.basename(linked)))
+      );
       expect(point.head).toMatchObject({ kind: "branch", branch: "feature" });
       expect(paths(point)).toEqual(["b.txt"]);
     });

@@ -916,7 +916,7 @@ describe("prompt variants", () => {
     });
   });
 
-  it("sends Luna the frozen v11 rules told about recent prompts and the agent's reply, and Terra the agent reply ones", () => {
+  it("keeps measured prompt variants frozen when production rules advance", () => {
     // #14855 named <recent_prompts> in both models' rules, after the rounds that chose them.
     const withRecentPrompts = (instructions: CorrectionInstructions) =>
       revise(instructions, {
@@ -943,7 +943,8 @@ describe("prompt variants", () => {
     expect(PROMPT_VARIANTS.v13!.instructionsFor("gpt-6.1-terra")).toEqual(
       withRecentPrompts(PROMPT_VARIANTS.final!.instructionsFor("gpt-6.1-terra"))
     );
-    expect(production.instructionsFor("gpt-6.1-terra")).toEqual(
+    // Production now clarifies self-corrections; replaying agentreply must keep its measured rules.
+    expect(production.instructionsFor("gpt-6.1-terra")).not.toEqual(
       PROMPT_VARIANTS.agentreply!.instructionsFor("gpt-6.1-terra")
     );
   });

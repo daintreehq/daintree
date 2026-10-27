@@ -143,9 +143,11 @@ describe("KeybindingService", () => {
       expect(service.matchesEvent(event, "Cmd+Alt+.")).toBe(false);
     });
 
-    it("routes Cmd+D, not the period shortcut, to voice dictation on macOS", () => {
+    it("routes Cmd+D, not the period shortcut, to voice dictation on macOS", async () => {
       setPlatform("MacIntel");
-      const mac = new KeybindingService();
+      vi.resetModules();
+      const { KeybindingService: MacKeybindingService } = await import("../KeybindingService");
+      const mac = new MacKeybindingService();
       const cmdD = createKeyboardEvent({ key: "d", code: "KeyD", metaKey: true });
       expect(mac.findMatchingAction(cmdD)?.actionId).toBe("voiceInput.toggle");
       const cmdPeriod = createKeyboardEvent({ key: ".", code: "Period", metaKey: true });
@@ -341,10 +343,12 @@ describe("KeybindingService", () => {
     expect(match?.actionId).toBe("terminal.closeAll");
   });
 
-  it("keeps Cmd+K Cmd+D on redraw while a bare Cmd+D starts dictation", () => {
+  it("keeps Cmd+K Cmd+D on redraw while a bare Cmd+D starts dictation", async () => {
     setPlatform("MacIntel");
+    vi.resetModules();
+    const { KeybindingService: MacKeybindingService } = await import("../KeybindingService");
 
-    const service = new KeybindingService();
+    const service = new MacKeybindingService();
     const cmdD = createKeyboardEvent({ key: "d", code: "KeyD", metaKey: true });
     expect(service.findMatchingAction(cmdD)?.actionId).toBe("voiceInput.toggle");
 

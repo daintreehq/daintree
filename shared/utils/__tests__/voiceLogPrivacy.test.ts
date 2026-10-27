@@ -204,7 +204,7 @@ function findViolations(file: string, text = readFileSync(file, "utf8")): string
 
 describe("voice log privacy", () => {
   it("scans the voice sources", () => {
-    const files = voiceSourceFiles().map((f) => path.relative(ROOT, f));
+    const files = voiceSourceFiles().map((f) => path.relative(ROOT, f).split(path.sep).join("/"));
     expect(files).toContain("src/services/VoiceRecordingService.ts");
     expect(files).toContain("electron/services/voice/OpenAITranscriptionProvider.ts");
     expect(files).toContain("electron/services/VoiceFileLinkResolver.ts");

@@ -1871,7 +1871,7 @@ describe("WorkspaceClient multi-process manager", () => {
       expect(listener).toHaveBeenCalledWith({
         worktreeId: "wt-1",
         projectPath: path.resolve("/project-a"),
-        projectId: "id-for-/project-a",
+        projectId: `id-for-${path.resolve("/project-a")}`,
       });
     });
 
