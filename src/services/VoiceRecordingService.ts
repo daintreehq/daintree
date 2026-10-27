@@ -567,7 +567,10 @@ class VoiceRecordingService {
   private heardAsRules: HeardAsRewriter | null = null;
   // Main drops hesitations from every completion; this covers the preview a
   // stop commits without one. English only: "um" is a word in other languages.
+  // Main reads the language once per session, so the session keeps the value
+  // it started with.
   private dropHesitations = true;
+  private sessionDropsHesitations = true;
   // Sessions Escape cancelled. Main ends them without a drain, but whatever
   // they had already sent is still on its way and has nowhere left to land.
   // Each is let go once main reports it ended, the last thing it sends for it.
@@ -2357,6 +2360,7 @@ class VoiceRecordingService {
     this.stream = stream;
     this.workletNode = workletNode;
     this.sessionId = sessionId;
+    this.sessionDropsHesitations = this.dropHesitations;
     sessionGeneration = generation;
     logInfo(`${LOG_PREFIX} AudioContext attached`, {
       sink: audio.sink,
@@ -2675,7 +2679,8 @@ class VoiceRecordingService {
             const { panelId, projectId } = currentTarget;
             const buffer = useVoiceRecordingStore.getState().panelBuffers[panelId];
             const preview = buffer?.liveText?.trim();
-            const remaining = preview && this.dropHesitations ? stripHesitations(preview) : preview;
+            const remaining =
+              preview && this.sessionDropsHesitations ? stripHesitations(preview) : preview;
             committedLiveText = remaining;
             if (remaining) {
               const { words } = writeVoiceWords(

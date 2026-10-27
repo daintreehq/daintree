@@ -99,8 +99,19 @@ describe("stripHesitations", () => {
     expect(stripHesitations(text)).toBe(text);
   });
 
-  it("leaves a capitalised acronym alone", () => {
+  it("leaves a capitalised acronym alone, even beside a hesitation", () => {
     expect(stripHesitations("The UM team and UH campus")).toBe("The UM team and UH campus");
+    expect(stripHesitations("Uh, UM, check")).toBe("UM, check");
+    expect(stripHesitations("UM, uh, check")).toBe("UM, check");
+  });
+
+  it("drops a hesitation that stands beside a protected word", () => {
+    expect(stripHesitations("Ping @um, uh, please")).toBe("Ping @um, please");
+  });
+
+  it("keeps a sentence end between two hesitations", () => {
+    expect(stripHesitations("It failed, um. Uh, try again.")).toBe("It failed. Try again.");
+    expect(stripHesitations("Done. Uh. Um. next")).toBe("Done. Next");
   });
 
   it("drops the hesitation next to protected text without touching it", () => {
@@ -135,6 +146,7 @@ describe("stripHesitations", () => {
     const result = stripHesitations(text, edits);
     const from = text.indexOf("build");
     const [moved] = carrySpansThroughEdits([{ from, to: from + 5 }], edits);
-    expect(result.slice(moved!.from, moved!.to)).toBe("build");
+    expect(result).toBe("So check the build");
+    expect(moved).toEqual({ from: result.indexOf("build"), to: result.indexOf("build") + 5 });
   });
 });

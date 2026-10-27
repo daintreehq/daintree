@@ -8,11 +8,15 @@ const BEFORE = `(?<!${WORD})(?<!${WORD}${JOINER})`;
 const AFTER = `(?!${WORD})(?!${JOINER}${WORD})`;
 // um, umm, uh, uhh, uhm and erm, with any stretch of the vowel or the hum.
 // "hmm" and "mm" can answer a question, so they are left for cleanup.
-const SOUND = "(?:u+[hm]+|e+rm+)";
-const HESITATION = `${BEFORE}${SOUND}${AFTER}`;
-// What a run of hesitations may be strung together with: "Uh, um, so".
-const BETWEEN = "(?:[^\\S\\r\\n]|[,;:.!?…—–])+";
-const CLUSTER_RE = new RegExp(`${HESITATION}(?:${BETWEEN}${HESITATION})*`, "giu");
+const SOUND = "(?:[Uu]+[HhMm]+|[Ee]+[Rr][Mm]+)";
+// "UM" and "UH" are as likely to be an acronym as a sound.
+const NOT_ACRONYM = `(?!U[MH](?!${WORD}))`;
+const HESITATION = `${BEFORE}${NOT_ACRONYM}${SOUND}${AFTER}`;
+// What a run of hesitations may be strung together with: "Uh, um, so". A full
+// stop is not among them, so the sentence it ends keeps its end.
+const BETWEEN = "(?:[^\\S\\r\\n]|[,;:…—–])+";
+const CLUSTER_RE = new RegExp(`${HESITATION}(?:${BETWEEN}${HESITATION})*`, "gu");
+const HESITATION_AT_RE = new RegExp(HESITATION, "uy");
 
 const PAUSE_RE = /[,;:—–]/u;
 const TERMINATOR_RE = /[.!?…]/u;
@@ -22,8 +26,6 @@ const HORIZONTAL_SPACE_RE = /[^\S\r\n]/u;
 const LINE_BREAK_RE = /[\r\n]/u;
 // "iPhone", "eBay": capitalising the first letter would misspell the word.
 const INTERNAL_CAPITAL_RE = /^\p{Ll}\S*\p{Lu}/u;
-// "UM" and "UH" are as likely to be an acronym as a sound.
-const ACRONYMS = new Set(["UM", "UH"]);
 
 /**
  * Drops hesitation sounds from dictated text and tidies what they leave
@@ -38,13 +40,19 @@ export function stripHesitations(text: string, edits?: VoiceTextEdit[]): string 
   let ranges: ReturnType<typeof findProtectedRanges> | null = null;
   let out = "";
   let copied = 0;
+  // Where a capital owed to the next word was passed on to another hesitation.
+  let capitalOwedAt = -1;
   CLUSTER_RE.lastIndex = 0;
   for (let match = CLUSTER_RE.exec(text); match; match = CLUSTER_RE.exec(text)) {
     const start = match.index;
     const end = start + match[0].length;
-    if (ACRONYMS.has(/^\p{L}+/u.exec(match[0])![0])) continue;
     ranges ??= findProtectedRanges(text);
-    if (ranges.some((range) => range.start < end && range.end > start)) continue;
+    const protectedHit = ranges.find((range) => range.start < end && range.end > start);
+    if (protectedHit) {
+      // A hesitation clustered with a protected word may stand clear of it.
+      CLUSTER_RE.lastIndex = Math.max(protectedHit.end, start + 1);
+      continue;
+    }
 
     let runEnd = end;
     while (runEnd < text.length && RUN_CHAR_RE.test(text[runEnd]!)) runEnd++;
@@ -68,7 +76,7 @@ export function stripHesitations(text: string, edits?: VoiceTextEdit[]): string 
     if (atStart || opens || TERMINATOR_RE.test(prev)) {
       // Opens a sentence, so what follows takes its place.
       if (atEnd && !atStart) from = spaceStart;
-      capitalise = !atEnd && /^\p{Lu}/u.test(match[0]);
+      capitalise = !atEnd && (/^\p{Lu}/u.test(match[0]) || capitalOwedAt === start);
     } else if (atEnd) {
       from = afterPause ? spaceStart - 1 : spaceStart;
       insert = terminators;
@@ -83,10 +91,16 @@ export function stripHesitations(text: string, edits?: VoiceTextEdit[]): string 
     from = Math.max(from, copied);
 
     if (capitalise) {
-      const upper = upperFirst(text, next, ranges);
-      if (upper) {
-        to = next + upper.length;
-        insert = upper.text;
+      HESITATION_AT_RE.lastIndex = next;
+      if (HESITATION_AT_RE.test(text)) {
+        // Dropped too, so the capital goes to whatever follows it.
+        capitalOwedAt = next;
+      } else {
+        const upper = upperFirst(text, next, ranges);
+        if (upper) {
+          to = next + upper.length;
+          insert = upper.text;
+        }
       }
     }
     out += text.slice(copied, from) + insert;

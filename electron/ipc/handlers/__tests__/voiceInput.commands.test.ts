@@ -983,7 +983,7 @@ describe("voiceInput — hesitations", () => {
       "so the build failed we should revert",
     ],
   ] as const)(
-    "lands %s's transcript without them, whether or not cleanup runs",
+    "lands %s's transcript without them when cleanup is off",
     async (provider, text, expected) => {
       shared.provider = provider;
       shared.settingsOverride = { correctionEnabled: false };
