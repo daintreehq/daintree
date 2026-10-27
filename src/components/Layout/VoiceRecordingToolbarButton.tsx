@@ -45,6 +45,8 @@ const BAR_REST = 0.3; // scaleY in silence: short pills, still read as bars
 // apart, so speech travels across them instead of moving them as one block;
 // the weights give the meter its shape.
 const HISTORY_STEP = 0.07; // sec
+// Longer than this between frames, the window was hidden and the history is stale.
+const MAX_FRAME_GAP = 0.25; // sec
 const WAVE_WEIGHTS = [0.6, 1, 0.8, 0.65] as const;
 // Listening under reduced motion: one still shape at full ink.
 const STILL_SHAPE = [0.45, 0.8, 0.65, 0.4] as const;
@@ -216,6 +218,10 @@ function VoiceToolbarMenu({
 
 type VoiceWaveMode = "level" | "waiting" | "held";
 
+// The meter box's own size, inline because the button's `[&_svg]:size-4`
+// outranks a size class on the glyph.
+const METER_GLYPH_SIZE = { width: 14, height: 14 } as const;
+
 /**
  * What sits beside the mic. "level" is four bars that follow the input level
  * from a RAF loop writing their transforms directly: audioLevel updates ~60Hz
@@ -237,7 +243,7 @@ function VoiceWave({ mode }: { mode: VoiceWaveMode }) {
     let rafId = 0;
 
     const tick = (now: number) => {
-      const dt = Math.min((now - lastTime) / 1000, 0.1);
+      const gap = (now - lastTime) / 1000;
       lastTime = now;
 
       const rawLevel = useVoiceRecordingStore.getState().audioLevel;
@@ -245,8 +251,15 @@ function VoiceWave({ mode }: { mode: VoiceWaveMode }) {
       // Lift the quiet end before smoothing, so the envelope's timing is the
       // timing the eye sees.
       const target = Math.sqrt(gated);
-      const tau = target > envelope ? TAU_ATTACK : TAU_RELEASE;
-      envelope += (target - envelope) * (1 - Math.exp(-dt / tau));
+      if (gap > MAX_FRAME_GAP) {
+        // Frames stopped (a hidden window): what was heard before the gap is
+        // stale, so start again from what is heard now.
+        history.length = 0;
+        envelope = target;
+      } else {
+        const tau = target > envelope ? TAU_ATTACK : TAU_RELEASE;
+        envelope += (target - envelope) * (1 - Math.exp(-gap / tau));
+      }
 
       const t = now / 1000;
       history.push({ t, v: envelope });
@@ -290,8 +303,8 @@ function VoiceWave({ mode }: { mode: VoiceWaveMode }) {
       )}
       data-voice-wave={mode}
     >
-      {mode === "waiting" && <Clock className="h-3.5 w-3.5" />}
-      {mode === "held" && <Pause className="h-3.5 w-3.5" />}
+      {mode === "waiting" && <Clock style={METER_GLYPH_SIZE} />}
+      {mode === "held" && <Pause style={METER_GLYPH_SIZE} />}
       {mode === "level" &&
         WAVE_WEIGHTS.map((_, i) => (
           <span

@@ -754,14 +754,34 @@ describe("VoiceRecordingToolbarButton — waveform (#14911)", () => {
     expect(Math.max(...barScales(container))).toBeLessThanOrEqual(0.31);
   });
 
-  it("travels: a burst reaches the newest bar first and the oldest after", () => {
+  it("travels: a burst reaches the newest bar first and the oldest last", () => {
     const { container } = renderStatus("recording");
     runFrames(10);
     useVoiceRecordingStore.setState({ audioLevel: 0.8 });
-    runFrames(3);
-    const [oldest, , , newest] = barScales(container);
-    expect(newest!).toBeGreaterThan(0.5);
-    expect(oldest!).toBeLessThanOrEqual(0.31);
+    // Each bar rises once the burst is as old as its lag (70ms apart).
+    const risenAt = [-1, -1, -1, -1];
+    for (let frame = 1; frame <= 20; frame++) {
+      runFrames(1);
+      barScales(container).forEach((scale, i) => {
+        if (risenAt[i] === -1 && scale > 0.4) risenAt[i] = frame;
+      });
+    }
+    expect(risenAt.every((frame) => frame > 0)).toBe(true);
+    const [oldest = -1, second = -1, third = -1, newest = -1] = risenAt;
+    expect(newest).toBeLessThan(third);
+    expect(third).toBeLessThan(second);
+    expect(second).toBeLessThan(oldest);
+  });
+
+  it("drops what it heard before the frames stopped", () => {
+    const { container } = renderStatus("recording");
+    useVoiceRecordingStore.setState({ audioLevel: 0.9 });
+    runFrames(30);
+    // The window is hidden for five seconds and the room goes quiet.
+    now += 5000;
+    useVoiceRecordingStore.setState({ audioLevel: 0 });
+    runFrames(1);
+    expect(Math.max(...barScales(container))).toBeLessThanOrEqual(0.31);
   });
 
   it("holds one still shape under reduced motion, whatever the level", () => {
@@ -830,5 +850,15 @@ describe("VoiceRecordingToolbarButton — waveform (#14911)", () => {
     expect(waveMode(container)).toBe(mode);
     // The loop's bars go with it.
     expect(bars(container)).toHaveLength(0);
+
+    // And come back with one live loop when listening resumes.
+    act(() => {
+      useVoiceRecordingStore.setState({ status: "recording" });
+    });
+    expect(frames.size).toBe(1);
+    useVoiceRecordingStore.setState({ audioLevel: 0.8 });
+    runFrames(30);
+    expect(frames.size).toBe(1);
+    expect(Math.max(...barScales(container))).toBeGreaterThan(0.8);
   });
 });
