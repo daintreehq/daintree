@@ -61,6 +61,7 @@ const shared = vi.hoisted(() => ({
   /** The names the correction service was last handed. */
   correctionNames: null as string[] | null | undefined,
   correctionTerminalOutput: undefined as string | undefined,
+  correctionProjectName: undefined as string | undefined,
 }));
 
 vi.mock("../../../window/webContentsRegistry.js", async (importOriginal) => ({
@@ -118,11 +119,12 @@ vi.mock("../../../services/VoiceCorrectionService.js", () => ({
     };
     this.correct = async function (
       request: { rawText: string; terminalOutput?: string },
-      settings: { customDictionary: string[]; knownNames?: string[] }
+      settings: { customDictionary: string[]; knownNames?: string[]; projectName?: string }
     ) {
       shared.correctionTerminalOutput = request.terminalOutput;
       shared.correctionDictionary = settings.customDictionary;
       shared.correctionNames = settings.knownNames;
+      shared.correctionProjectName = settings.projectName;
       return { action: "no_change", confirmedText: request.rawText };
     };
   },
@@ -734,6 +736,7 @@ describe("voiceInput — keyterm target", () => {
     shared.names = null;
     shared.correctionNames = null;
     shared.correctionTerminalOutput = undefined;
+    shared.correctionProjectName = undefined;
     shared.drainPromise = null;
     sender.destroyed = false;
     fakeEvent.sender = makeSender();
@@ -878,6 +881,31 @@ describe("voiceInput — keyterm target", () => {
     fakeEvent.sender = makeSender();
     await getHandler("voice-input:correct")(fakeEvent, { rawText: "fix it", terminalId: "t-1" });
     expect(shared.correctionNames).toEqual([]);
+  });
+
+  it("cleans up a dictation outside the view with none of the view's project, read ahead or not", async () => {
+    shared.names = Promise.resolve({ hosts: ["Studio 1"], projects: ["Alpha"], worktrees: [] });
+    shared.voiceInput = {
+      correctionEnabled: true,
+      dictionary: [{ term: "Global", heardAs: [], source: "manual", addedAt: 0 }],
+    };
+    await expect(startWith({ outsideView: true })).resolves.toEqual({ ok: true });
+    await stop();
+
+    for (const sessionId of [currentSessionId, undefined]) {
+      await getHandler("voice-input:correct")(fakeEvent, {
+        rawText: "fix it",
+        outsideView: true,
+        ...(sessionId ? { sessionId } : {}),
+      });
+      expect(shared.correctionDictionary).toEqual(["Global"]);
+      expect(shared.correctionNames).toEqual([]);
+      expect(shared.correctionProjectName).toBeUndefined();
+    }
+
+    await getHandler("voice-input:correct")(fakeEvent, { rawText: "fix it" });
+    expect(shared.correctionDictionary).toEqual(["PtyClient", "Global"]);
+    expect(shared.correctionProjectName).toBe("Alpha");
   });
 
   describe("cleanup terminal output", () => {
