@@ -15,6 +15,7 @@ import { buildKeybindingWhenContext } from "@/services/keybindingWhenContext";
 import { usePluginContextKeyStore } from "@/store/pluginContextKeyStore";
 import { usePaletteStore, usePanelStore } from "../store";
 import { isStagedConfirmation } from "@/services/actions/confirmationStaged";
+import { routeVoiceWaitKey } from "@/lib/voiceWaitKeys";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 
 /**
@@ -67,6 +68,9 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
       // keyCode 229 is Chromium's "Process" key signal during active composition
       // where isComposing may not yet be set on the first keydown.
       if (e.isComposing || e.keyCode === 229) return;
+
+      // Enter and Escape for a dictated send still waiting are its own.
+      if (routeVoiceWaitKey(e)) return;
 
       // Skip if user is typing in an input/textarea or editable content
       // Exception: allow shortcuts with modifiers (Cmd, Ctrl)

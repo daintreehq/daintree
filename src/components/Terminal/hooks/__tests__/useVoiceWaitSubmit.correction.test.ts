@@ -8,8 +8,9 @@ import { createComposerHistory } from "../../inputEditorExtensions/composerHisto
 import { createCorrectionReview } from "../../inputEditorExtensions/correctionReview";
 
 // Enter while dictating, end to end through the real voice service, both real
-// stores and a real editor: the send waits for the passage's correction, up to
-// the cap, and a late result never reaches the next draft (#14611).
+// stores and a real editor: the send waits for the passage's correction to land
+// or fail, a second Enter sends what stands, and a late result never reaches
+// the next draft (#14611, #14780).
 
 vi.mock("@/store", async () => {
   const { useVoiceRecordingStore } = await import("@/store/voiceRecordingStore");
@@ -70,7 +71,7 @@ import { useVoiceWaitSubmit } from "../useVoiceWaitSubmit";
 
 type DeltaPayload = { text: string; itemId?: string };
 type CompletePayload = { text: string; willCorrect: boolean; itemId?: string };
-type CorrectResult = { action: "no_change" | "replace"; correctedText: string };
+type CorrectResult = { action: "no_change" | "replace"; correctedText: string; failed?: true };
 
 const callbacks: {
   delta: ((payload: DeltaPayload) => void) | null;
@@ -81,10 +82,19 @@ const correct = vi.fn<(request: { rawText: string }) => Promise<CorrectResult>>(
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((res) => {
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
     resolve = res;
+    reject = rej;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
+}
+
+// The lock blurs the editor, so a key during the wait reaches the page, not it.
+function pressKey(key: string, init: KeyboardEventInit = {}) {
+  document.body.dispatchEvent(
+    new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init })
+  );
 }
 
 let itemSeq = 0;
@@ -114,7 +124,7 @@ afterAll(() => {
   Range.prototype.getBoundingClientRect = originalRangeBounds;
 });
 
-describe("useVoiceWaitSubmit with a real correction pass (#14611)", () => {
+describe("useVoiceWaitSubmit with a real correction pass (#14611, #14780)", () => {
   let view: EditorView;
   let sent: string[];
   // The store orchestrator keeps dictation ranges on their text in the app;
@@ -255,7 +265,7 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611)", () => {
     expect(view.state.doc.toString()).toBe("hello wrld");
   });
 
-  it("sends the current text at the cap, and the late correction never touches the draft", async () => {
+  it("waits for a cleanup slower than two seconds and sends it cleaned", async () => {
     vi.useFakeTimers();
     const pending = deferred<CorrectResult>();
     correct.mockReturnValueOnce(pending.promise);
@@ -266,22 +276,89 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611)", () => {
       result.current.startVoiceWaitSubmit();
     });
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(1999);
+      await vi.advanceTimersByTimeAsync(5_000);
     });
     expect(sent).toEqual([]);
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(1);
-    });
-    expect(sent).toEqual(["hello wrld"]);
+    expect(result.current.voiceSubmitPhase).toBe("polishing");
+    expect(isEditable()).toBe(false);
 
-    // The draft still holds the passage while the submit is in flight; the
-    // late result must not rewrite it under the send.
     await act(async () => {
       pending.resolve({ action: "replace", correctedText: "Hello world." });
       await vi.advanceTimersByTimeAsync(0);
     });
 
+    expect(sent).toEqual(["Hello world."]);
+    expect(isEditable()).toBe(true);
+  });
+
+  it("sends the text as it stands at a second Enter, and the late cleanup never touches the draft", async () => {
+    const pending = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(pending.promise);
+    dictate(PANEL_ID, "hello wrld");
+    const result = renderComposer();
+
+    await act(async () => {
+      result.current.startVoiceWaitSubmit();
+    });
+    expect(result.current.voiceSubmitPhase).toBe("polishing");
+
+    await act(async () => {
+      pressKey("Enter");
+    });
+    expect(sent).toEqual(["hello wrld"]);
+    expect(result.current.voiceSubmitPhase).toBeNull();
+    expect(isEditable()).toBe(true);
+
+    // The draft still holds the passage while the submit is in flight; the
+    // late result must not rewrite it under the send.
+    await act(async () => {
+      pending.resolve({ action: "replace", correctedText: "Hello world." });
+    });
+
     expect(draft(PANEL_ID)).toBe("hello wrld");
+    expect(sent).toEqual(["hello wrld"]);
+  });
+
+  it("sends the raw text once a slow cleanup fails", async () => {
+    vi.useFakeTimers();
+    const pending = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(pending.promise);
+    dictate(PANEL_ID, "hello wrld");
+    const result = renderComposer();
+
+    await act(async () => {
+      result.current.startVoiceWaitSubmit();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6_900);
+    });
+    expect(sent).toEqual([]);
+
+    // What main hands back when the request times out.
+    await act(async () => {
+      pending.resolve({ action: "no_change", correctedText: "hello wrld", failed: true });
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(sent).toEqual(["hello wrld"]);
+    expect(result.current.voiceSubmitPhase).toBeNull();
+  });
+
+  it("sends the raw text when the cleanup request throws", async () => {
+    const pending = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(pending.promise);
+    dictate(PANEL_ID, "hello wrld");
+    const result = renderComposer();
+
+    await act(async () => {
+      result.current.startVoiceWaitSubmit();
+    });
+    expect(sent).toEqual([]);
+
+    await act(async () => {
+      pending.reject(new Error("IPC channel closed"));
+    });
+
     expect(sent).toEqual(["hello wrld"]);
   });
 
@@ -318,9 +395,18 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611)", () => {
       result.current.startVoiceWaitSubmit();
     });
     act(() => {
-      result.current.cancelVoiceWaitSubmit();
+      pressKey("Escape");
+      // Held down, its repeats must not reach the editor's own Escape.
+      pressKey("Escape", { repeat: true });
     });
     expect(isEditable()).toBe(true);
+    expect(result.current.voiceSubmitPhase).toBeNull();
+    expect(view.hasFocus).toBe(false);
+    // The keyboard was nowhere: on release it goes back to the unlocked editor.
+    act(() => {
+      document.body.dispatchEvent(new KeyboardEvent("keyup", { key: "Escape", bubbles: true }));
+    });
+    expect(view.hasFocus).toBe(true);
     await act(async () => {
       pending.resolve({ action: "replace", correctedText: "Hello world." });
     });

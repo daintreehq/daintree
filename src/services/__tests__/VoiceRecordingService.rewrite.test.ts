@@ -461,7 +461,14 @@ describe("VoiceRecordingService — rewrite selection by voice (#14635)", () => 
     recordInstruction(selection);
     say("shorter");
     await service.stop();
-    const waiting = service.waitForPendingCorrections("panel-1", 5_000);
+    expect(service.hasPendingCorrection("panel-1")).toBe(true);
+    let settled = false;
+    const waiting = service.waitForPendingCorrections("panel-1");
+    void waiting.then(() => {
+      settled = true;
+    });
+    await flush();
+    expect(settled).toBe(false);
 
     selection.edit();
     await expect(waiting).resolves.toBe(true);

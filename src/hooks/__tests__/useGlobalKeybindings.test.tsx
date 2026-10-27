@@ -3,6 +3,7 @@ import { render, act } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { _resetForTests, registerEscape } from "@/lib/escapeStack";
 import { ESCAPE_BACKSTOP_DIALOG_ATTR } from "@/lib/dialogEscapeBackstop";
+import { claimVoiceWaitKeys } from "@/lib/voiceWaitKeys";
 import type { PaletteId } from "@/store/paletteStore";
 
 function parseComboLite(combo: string) {
@@ -887,6 +888,41 @@ describe("useGlobalKeybindings — palette Escape capture", () => {
       expect(event.defaultPrevented).toBe(false);
     } finally {
       xterm.remove();
+    }
+  });
+});
+
+describe("useGlobalKeybindings — a dictated send waiting on its cleanup (#14780)", () => {
+  it("leaves Escape at the page to the waiting send, not the escape stack", () => {
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: undefined,
+      chordPrefix: false,
+      shouldConsume: false,
+    });
+    const escapeHandler = vi.fn();
+    registerEscape(escapeHandler);
+    // Mounted before the claim, as at app start, so its listener hears the key first.
+    render(<Host />);
+    const cancel = vi.fn();
+    const release = claimVoiceWaitKeys({
+      holds: () => false,
+      editor: () => null,
+      isSelected: () => false,
+      sendNow: vi.fn(),
+      cancel,
+    });
+
+    try {
+      act(() => {
+        document.body.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })
+        );
+      });
+
+      expect(cancel).toHaveBeenCalledTimes(1);
+      expect(escapeHandler).not.toHaveBeenCalled();
+    } finally {
+      release();
     }
   });
 });

@@ -1116,6 +1116,21 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // The editor locks the moment a voice send starts; the status waits out
     // the loading gate, so a drain or correction that lands quickly shows none.
     const showVoiceSubmitStatus = useDohertyGate(voiceSubmitPhase !== null);
+    // Shown over whichever host holds the editor: a send from the Expanded
+    // Editor waits there, and a live region outside its modal goes unheard.
+    const voiceSubmitStatus =
+      voiceSubmitPhase && showVoiceSubmitStatus ? (
+        <div
+          role="status"
+          aria-live="polite"
+          className="absolute inset-0 z-10 flex items-center justify-center gap-2 rounded-md bg-surface-canvas/80 pointer-events-none"
+        >
+          <Spinner className="text-text-secondary" />
+          <span className="text-xs text-text-secondary">
+            {voiceSubmitPhase === "polishing" ? "Polishing…" : "Finishing dictation…"}
+          </span>
+        </div>
+      ) : null;
 
     const handleDictationEscape = () => voiceRecordingService.handleEscape(terminalId);
 
@@ -1666,18 +1681,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               }
             />
             {isDragOverCompact && <FileDropOverlay className="rounded-md" />}
-            {voiceSubmitPhase && showVoiceSubmitStatus && (
-              <div
-                role="status"
-                aria-live="polite"
-                className="absolute inset-0 z-10 flex items-center justify-center gap-2 rounded-md bg-surface-canvas/80 pointer-events-none"
-              >
-                <Spinner className="text-text-secondary" />
-                <span className="text-xs text-text-secondary">
-                  {voiceSubmitPhase === "polishing" ? "Polishing…" : "Finishing dictation…"}
-                </span>
-              </div>
-            )}
+            {!isExpanded && voiceSubmitStatus}
             <Tooltip>
               <TooltipTrigger asChild>
                 <button
@@ -1966,6 +1970,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               </ContextMenuContent>
             </ContextMenu>
             {isDragOverModal && <FileDropOverlay />}
+            {isExpanded && voiceSubmitStatus}
           </div>
         </AppDialog>
         {/* One palette per id: while Canopy is open its own composer's is the

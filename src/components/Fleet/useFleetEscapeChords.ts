@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { actionService } from "@/services/ActionService";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
+import { routeVoiceWaitKey } from "@/lib/voiceWaitKeys";
 import type { FleetPendingActionSnapshot } from "@/store/fleetPendingActionStore";
 
 const DOUBLE_ESC_WINDOW_MS = 350;
@@ -47,6 +48,8 @@ export function useFleetEscapeChords(
 
     const handler = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
+      // Escape that calls off a waiting dictated send is no tap toward an interrupt.
+      if (routeVoiceWaitKey(e)) return;
       // Escape inside a modal belongs to the modal and what it holds — the
       // canopy panel's live terminal among them — never to the fleet behind it.
       if (
