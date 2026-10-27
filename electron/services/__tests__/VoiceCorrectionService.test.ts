@@ -1059,7 +1059,28 @@ describe("VoiceCorrectionService", () => {
     expect(result.correctedText).toBe("Leave the tests. Failing builds can wait,\nuntil the cut.");
   });
 
-  it("keeps a mark in the reply when none was sent, and marks none in words that already hold one", async () => {
+  it("takes out marks side by side as one, closing up on a bracket and keeping a CRLF", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        makeFetchResponse({
+          action: "replace",
+          corrected_text:
+            "Fix<pause/><pause/>it, then <pause/>[wrap<pause/>] it <pause/>\r\nThen wait<pause/> <pause/>, ok.",
+          confidence: "high",
+        })
+      )
+    );
+
+    const result = await new VoiceCorrectionService().correct(
+      { rawText: "fix it then wrap it then wait ok", pauses: [6] },
+      BASE_SETTINGS
+    );
+
+    expect(result.correctedText).toBe("Fix it, then [wrap] it\r\nThen wait, ok.");
+  });
+
+  it("keeps a mark in the reply when none was sent, and marks none in words that hold or say one", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       makeFetchResponse({
         action: "replace",
@@ -1070,8 +1091,9 @@ describe("VoiceCorrectionService", () => {
     vi.stubGlobal("fetch", fetchMock);
     const svc = new VoiceCorrectionService();
 
-    const unpaused = await svc.correct(
-      { rawText: "swap less than pause slash greater than for a comma then ship it" },
+    // A cleanup could write the tag from the words, so a mark in its reply could be the speaker's.
+    const spoken = await svc.correct(
+      { rawText: "swap less than pause slash greater than for a comma then ship it", pauses: [4] },
       BASE_SETTINGS
     );
     const literal = await svc.correct(
@@ -1079,10 +1101,15 @@ describe("VoiceCorrectionService", () => {
       BASE_SETTINGS
     );
 
-    expect(unpaused.correctedText).toBe("Swap <pause/> for a comma, then ship it.");
+    expect(spoken.correctedText).toBe("Swap <pause/> for a comma, then ship it.");
     expect(literal.correctedText).toBe("Swap <pause/> for a comma, then ship it.");
-    const body = JSON.parse((fetchMock.mock.calls[1] as [string, RequestInit])[1].body as string);
-    expect(body.input[1].content).toContain(
+    const [spokenBody, literalBody] = fetchMock.mock.calls.map((call) =>
+      JSON.parse((call as unknown as [string, RequestInit])[1].body as string)
+    );
+    expect(spokenBody.input[1].content).toContain(
+      "<target>\nswap less than pause slash greater than for a comma then ship it\n</target>"
+    );
+    expect(literalBody.input[1].content).toContain(
       "<target>\nswap <pause/> for a comma then ship it\n</target>"
     );
   });

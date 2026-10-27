@@ -26,6 +26,8 @@ import { PROMPT_VARIANTS, revise } from "../lib/voiceCleanupPrompts";
 import {
   codeNamesOf,
   corpusProblems,
+  endsSentenceAfter,
+  keepsInOneSentence,
   locatePauses,
   locateUncertain,
   longestSentence,
@@ -969,6 +971,24 @@ describe("run-ons and agent-ready text", () => {
       splitSpans: ["failing builds can wait"],
       agentReady: false,
     });
+    // The reference's words and its break, with a span split that should stay whole.
+    expect(scoreText(entry, "Leave the tests. Failing builds. Can wait.")).toMatchObject({
+      matchesReference: true,
+      missedBreaks: [],
+      splitSpans: ["failing builds can wait"],
+      agentReady: false,
+    });
+  });
+
+  it("ends a sentence through a closing quote or bracket, never at an ellipsis, and finds no empty phrase", () => {
+    expect(endsSentenceAfter('"Ship it." Then wait.', "ship it")).toBe(true);
+    expect(endsSentenceAfter("Ship it (today.) Then wait.", "ship it today")).toBe(true);
+    expect(keepsInOneSentence('"Ship it." Then wait.', "ship it then wait")).toBe(false);
+    for (const text of ["Move the... fetch wrapper.", "Move the\u2026 fetch wrapper."]) {
+      expect(keepsInOneSentence(text, "the fetch wrapper"), text).toBe(true);
+    }
+    expect(endsSentenceAfter("Ship it.", "")).toBe(false);
+    expect(keepsInOneSentence("Ship it.", "")).toBe(false);
   });
 
   it("reads a laid-out list's lines as breaks, without its item numbers", () => {
@@ -985,6 +1005,8 @@ describe("run-ons and agent-ready text", () => {
       scoreText(entry, "Two things before you merge: bump the timeout and log every retry.")
         .missedBreaks
     ).toEqual(["two things before you merge", "bump the timeout"]);
+    expect(endsSentenceAfter("Two things:\n1. Ship it.", "1")).toBe(false);
+    expect(keepsInOneSentence("Two things:\n10) Ship it.", "10 ship it")).toBe(false);
   });
 
   it("flags a break the raw already makes or a reference misses, an unbroken span a reference splits, and a pause it can't place or that marks nothing", () => {
@@ -1001,6 +1023,15 @@ describe("run-ons and agent-ready text", () => {
         pauses: ["the tests", "no such words"],
       }),
       makeCase({ id: "last", pauses: ["changes"] }),
+      makeCase({
+        id: "twice",
+        raw: "ship it then wait ship it only after the build passes",
+        reference: "Ship it. Then wait. Ship it only after the build passes.",
+        fixes: {},
+        drops: [],
+        breaks: ["ship it"],
+        pauses: [""],
+      }),
     ]);
     expect(problems).toEqual([
       'breaks: the raw already ends a sentence after "leave the tests"',
@@ -1008,6 +1039,8 @@ describe("run-ons and agent-ready text", () => {
       'breaks: "Leave the tests failing. Builds can wait." splits "failing builds"',
       'breaks: pause after "no such words" is not in the raw transcript',
       "last: a pause after the last word marks nothing",
+      'twice: "ship it" comes more than once in "Ship it. Then wait. Ship it only after the build passes."',
+      "twice: a pause comes after no words",
     ]);
   });
 
@@ -1127,8 +1160,10 @@ describe("locatePauses", () => {
     ]);
   });
 
-  it("refuses a phrase the transcript doesn't have", () => {
+  it("finds only whole words, and refuses a phrase the transcript doesn't have", () => {
+    expect(locatePauses("with it then ship", ["it"])).toEqual([7]);
     expect(() => locatePauses("ship it", ["merge"])).toThrow(/pause after "merge"/);
+    expect(() => locatePauses("shipping", ["ship"])).toThrow(/pause after "ship"/);
   });
 
   it("sends a passage's pauses as production carries them, and none for a passage without", () => {

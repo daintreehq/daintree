@@ -200,8 +200,9 @@ describe("VoiceCorrectionService streaming", () => {
   });
 
   it("never shows a pause mark the reply copies, whole or still arriving", async () => {
+    // Two spaces before a mark that a comma follows: the space shown first must not be taken back.
     const json = reply(
-      "Leave the tests. <pause /> Failing builds can wait, <pause/> until the branch is cut."
+      "Leave the tests. <pause /> Failing builds can wait  <pause/>, until the branch is cut."
     );
     const frames: Frame[] = [...json].map((delta) => ({
       type: "response.output_text.delta",

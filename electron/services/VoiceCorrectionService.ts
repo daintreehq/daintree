@@ -99,13 +99,14 @@ const UNCERTAIN_JOIN_RE = /^[^\S\r\n]+$/;
 // Where the speaker paused, after the word before it (#14898). Only rules that
 // name it are shown one.
 const PAUSE_MARK = "<pause/>";
-// A mark however a reply writes it back, with the spaces on its line around it.
-const PAUSE_MARK_RE = /[^\S\n]*<\/?pause\s*\/?>[^\S\n]*/gi;
-const PAUSE_MARK_TEXT_RE = /<\/?pause\s*\/?>/i;
+// A run of marks however a reply writes them back, with the spaces on their line around them.
+const PAUSE_MARK_RE = /(?:[^\S\r\n]*<\/?pause\s*\/?>)+[^\S\r\n]*/gi;
+// A mark, or the word a cleanup could write one from.
+const PAUSE_MARK_TEXT_RE = /<\/?pause\s*\/?>|\bpause\b/i;
 // The start of one still streaming in, at the end of the text so far.
-const PARTIAL_PAUSE_MARK_RE = /[^\S\n]*<\/?(?:p(?:a(?:u(?:s(?:e\s*\/?)?)?)?)?)?$/i;
+const PARTIAL_PAUSE_MARK_RE = /[^\S\r\n]*<\/?(?:p(?:a(?:u(?:s(?:e\s*\/?)?)?)?)?)?$/i;
 const SPACE_RE = /\s/;
-const CLOSES_UP_RE = /[\s,.;:!?)]/;
+const CLOSES_UP_RE = /[\s,.;:!?)\]}]/;
 
 const FILE_LINK_DETECTION_SCHEMA = {
   type: "object",
@@ -314,7 +315,8 @@ interface CorrectionStreamEvent {
 
 /**
  * Whether pauses can be marked in `rawText`: not when the speaker's own words
- * already read as a mark, which a reply's marks could then not be told from.
+ * already hold a mark, or say "pause", which a cleanup could write as one.
+ * A mark in the reply could then be theirs, not one it copied.
  */
 function canMarkPauses(rawText: string): boolean {
   return !PAUSE_MARK_TEXT_RE.test(rawText);
@@ -341,7 +343,7 @@ function markablePauses(text: string, pauses: readonly number[]): number[] {
 /**
  * `text` with every pause mark a reply wrote taken out, and the spaces beside
  * it, leaving one space between the words either side, or none where it met
- * a line, punctuation or the edge of the text.
+ * a line, punctuation or the edge of the text. Marks side by side go as one.
  */
 function stripPauseMarks(text: string): string {
   return text.replace(PAUSE_MARK_RE, (mark: string, at: number, whole: string) => {
@@ -383,7 +385,8 @@ function streamedCorrectionText(reply: string, stripMarks: boolean): string | nu
   }
   const unmarked = stripMarks ? stripPauseMarks(text).replace(PARTIAL_PAUSE_MARK_RE, "") : text;
   const cleaned = unmarked.replace(LEADING_FILLER_RE, "").trimStart();
-  const cut = cleaned.search(/\s\S*$/);
+  // Before the whole run of spaces, which a mark arriving next may take out.
+  const cut = cleaned.search(/\s+\S*$/);
   return cut > 0 ? cleaned.slice(0, cut) : "";
 }
 

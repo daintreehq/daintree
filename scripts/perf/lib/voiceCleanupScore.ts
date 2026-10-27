@@ -204,8 +204,10 @@ export function longestSentence(text: string): number {
   );
 }
 
-// A semicolon breaks two clauses apart as a full stop does, wherever it's put.
-const CLAUSE_END_RE = /(?<=[.!?;])\s+|\n+/u;
+// A semicolon breaks two clauses apart as a full stop does, wherever it's put,
+// and a closing quote or bracket after either still ends it. An ellipsis
+// trails off rather than ending one, written as dots or as one character.
+const CLAUSE_END_RE = /(?<=(?<!\.)[.!?;]["'’”)\]]*)\s+|\n+/u;
 
 /** Each sentence, clause a semicolon ends, or line of `text` as its words, a laid-out list's item numbers aside. */
 function sentencesOf(text: string): string[][] {
@@ -232,6 +234,13 @@ export function keepsInOneSentence(text: string, phrase: string): boolean {
   return sentencesOf(text).some((words) =>
     words.some((_word, at) => at + run.length <= words.length && hasRun(words, run, at))
   );
+}
+
+/** How often the words of `phrase` come one after another in `text`, sentences or not. */
+function countRuns(text: string, phrase: string): number {
+  const words = cleanupWords(text);
+  const run = cleanupWords(phrase);
+  return words.filter((_word, at) => hasRun(words, run, at)).length;
 }
 
 // Three or more capitals joined by hyphens, as cleanup types a spelling
@@ -383,28 +392,20 @@ export function scoreText(entry: CleanupCase, text: string): TextScore {
   };
 }
 
-function locatePhrases(
-  raw: string,
-  phrases: readonly string[],
-  what: string
-): Array<{ from: number; to: number }> {
-  const spans: Array<{ from: number; to: number }> = [];
-  let cursor = 0;
-  for (const phrase of phrases) {
-    const from = raw.indexOf(phrase, cursor);
-    if (from === -1) throw new Error(`${what} "${phrase}" is not in the raw transcript`);
-    spans.push({ from, to: from + phrase.length });
-    cursor = from + phrase.length;
-  }
-  return spans;
-}
-
 /** The words a passage's unsure spans cover, placed in order so a repeated word is found once each. */
 export function locateUncertain(
   raw: string,
   phrases: readonly string[]
 ): Array<{ from: number; to: number }> {
-  return locatePhrases(raw, phrases, "unsure phrase");
+  const spans: Array<{ from: number; to: number }> = [];
+  let cursor = 0;
+  for (const phrase of phrases) {
+    const from = raw.indexOf(phrase, cursor);
+    if (from === -1) throw new Error(`unsure phrase "${phrase}" is not in the raw transcript`);
+    spans.push({ from, to: from + phrase.length });
+    cursor = from + phrase.length;
+  }
+  return spans;
 }
 
 // What a provider counts as part of the word a pause comes after.
@@ -412,12 +413,23 @@ const TRAILING_PUNCTUATION_RE = /^\p{P}*/u;
 
 /**
  * Where a passage's pauses fall, as production carries them (#14897): each
- * straight after the words it follows and their punctuation, placed in order.
+ * straight after the whole words it follows and their punctuation, placed in
+ * order so a repeated phrase is found once each.
  */
 export function locatePauses(raw: string, phrases: readonly string[]): number[] {
-  return locatePhrases(raw, phrases, "pause after").map(
-    ({ to }) => to + TRAILING_PUNCTUATION_RE.exec(raw.slice(to))![0].length
-  );
+  const positions: number[] = [];
+  let cursor = 0;
+  for (const phrase of phrases) {
+    if (!phrase.trim()) throw new Error("a pause comes after no words");
+    const whole = new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp(phrase)}(?![\\p{L}\\p{N}])`, "gu");
+    whole.lastIndex = cursor;
+    const found = whole.exec(raw);
+    if (!found) throw new Error(`pause after "${phrase}" is not in the raw transcript`);
+    const to = found.index + phrase.length;
+    positions.push(to + TRAILING_PUNCTUATION_RE.exec(raw.slice(to))![0].length);
+    cursor = to;
+  }
+  return positions;
 }
 
 // Each identifier as an added line of a diff of its own, so only those main's
@@ -510,6 +522,14 @@ export function corpusProblems(corpus: readonly CleanupCase[]): string[] {
       for (const reference of acceptedReferences(entry)) {
         if (!keepsInOneSentence(reference, phrase)) {
           problems.push(`${entry.id}: "${reference}" splits "${phrase}"`);
+        }
+      }
+    }
+    // A phrase said twice can be met at the copy it isn't about.
+    for (const phrase of [...(entry.breaks ?? []), ...(entry.unbroken ?? [])]) {
+      for (const reference of acceptedReferences(entry)) {
+        if (countRuns(reference, phrase) > 1) {
+          problems.push(`${entry.id}: "${phrase}" comes more than once in "${reference}"`);
         }
       }
     }
