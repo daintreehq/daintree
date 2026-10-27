@@ -46,6 +46,17 @@
     outline-width: 3px;
   }
 
+  /* A voice send's wait paints the shell itself, outside the states above: its
+     caption takes the stepped-up placeholder ink, and its progress trace the
+     full foreground, since the wash beside it is deliberately faint. */
+  [data-voice-submit-caption] {
+    --ib-wait-caption: var(--ib-placeholder-more);
+  }
+
+  [data-voice-submit-track] {
+    --ib-wait-edge: var(--ib-fg);
+  }
+
   /* Segmented toggles have the same shape of problem as those filter chips, and
      take the same remedy. The selected thumb is a fill roughly 1.3:1 against the
      surface behind it — deliberate quiet chrome at normal contrast, but in a

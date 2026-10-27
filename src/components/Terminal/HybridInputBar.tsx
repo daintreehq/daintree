@@ -52,11 +52,12 @@ import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { VoiceInputButton } from "./VoiceInputButton";
 import { DictionaryLearnPrompt } from "./DictionaryLearnPrompt";
-import { Archive } from "lucide-react";
+import { Archive, X } from "lucide-react";
 import { Paperclip } from "@/components/icons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
-import { useDohertyGate } from "@/hooks/useDeferredLoading";
+import { useDeferredLoading } from "@/hooks/useDeferredLoading";
+import { UI_INLINE_LOADING_GATE_MS } from "@/lib/animationUtils";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import {
   COMPOSER_CONTROL_FOCUS_CLASS,
@@ -64,7 +65,8 @@ import {
   COMPOSER_CONTROL_TEXT_CLASS,
   COMPOSER_MARKER_TEXT_CLASS,
 } from "./composerControlStyles";
-import { useVoiceWaitSubmit } from "./hooks/useVoiceWaitSubmit";
+import { useVoiceWaitSubmit, type VoiceSubmitOutcome } from "./hooks/useVoiceWaitSubmit";
+import { VoiceSubmitProgress } from "./VoiceSubmitProgress";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
 import {
   registerInputController,
@@ -297,6 +299,13 @@ function editorOwnsDomFocus(view: EditorView): boolean {
  * Drag feedback for both editor hosts — the compact bar and the Expanded
  * Editor. Shared so the two drop targets cannot drift apart again (#12570).
  */
+const VOICE_SUBMIT_OUTCOME_STATUS: Record<VoiceSubmitOutcome["kind"], string> = {
+  sending: "Sending…",
+  sent: "Sent",
+  cancelled: "Send cancelled",
+  held: "Not sent. The draft is still here.",
+};
+
 function FileDropOverlay({ className }: { className?: string }) {
   return (
     <div
@@ -1088,9 +1097,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       });
     };
 
-    const sendFromEditor = (handBack?: SendHandBack) => {
+    // Whether the composer took the draft, settled once any awaited expansion
+    // or submission has: a voice send completes its progress only then.
+    const sendFromEditor = (handBack?: SendHandBack): boolean | Promise<boolean> => {
       // An upload still on its way would leave its reference out of what is sent.
-      if (hasPendingUploads(uploadSurface)) return;
+      if (hasPendingUploads(uploadSurface)) return false;
       // The send takes the draft as it stands. A dictation correction still on
       // its way must not rewrite it mid-send, or land on the next draft (#14611).
       voiceRecordingService.discardPendingCorrections(voiceId);
@@ -1102,9 +1113,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         clearDraftInput(terminalId, projectId);
         resetEditorDoc();
       });
-      if (intercepted) return;
+      if (intercepted) return true;
 
-      sendText(text, {
+      return sendText(text, {
         imagePaths: readImageChipPaths(view),
         // A `@diff` fetch is awaited, and a handoff or the user's own typing can
         // land in the draft meanwhile; only the text that went out is cleared.
@@ -1119,6 +1130,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       hasPendingVoiceCorrection,
       submitFromEditor,
       voiceSubmitPhase,
+      voiceSubmitWait,
+      voiceSubmitOutcome,
     } = useVoiceWaitSubmit({
       terminalId,
       projectId,
@@ -1129,21 +1142,67 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       claimSendHandBack,
       isDisabled: () => disabledRef.current,
     });
-    // The editor locks the moment a voice send starts; the status waits out
-    // the loading gate, so a drain or correction that lands quickly shows none.
-    const showVoiceSubmitStatus = useDohertyGate(voiceSubmitPhase !== null);
-    // Shown over whichever host holds the editor: a send from the Expanded
+    // The editor locks and the shell changes the moment a voice send starts;
+    // what it is waiting on is only told once the wait outlasts the inline
+    // gate, so a send that goes at once says nothing more.
+    const isVoiceSubmitting = voiceSubmitPhase !== null;
+    const isVoiceSendHandingOver = voiceSubmitOutcome?.kind === "sending";
+    const voiceSubmitAttempt = voiceSubmitWait?.attempt ?? voiceSubmitOutcome?.attempt ?? 0;
+    const showVoiceSubmitStatus = useDeferredLoading(
+      isVoiceSubmitting || isVoiceSendHandingOver,
+      UI_INLINE_LOADING_GATE_MS
+    );
+    // A wait the status announced gets its outcome announced too; one that
+    // went inside the gate, unannounced, says nothing after.
+    const [announcedVoiceAttempt, setAnnouncedVoiceAttempt] = useState<number | null>(null);
+    if (
+      (isVoiceSubmitting || isVoiceSendHandingOver) &&
+      showVoiceSubmitStatus &&
+      announcedVoiceAttempt !== voiceSubmitAttempt
+    ) {
+      setAnnouncedVoiceAttempt(voiceSubmitAttempt);
+    }
+    // The wait's progress and its receipt own the shell's top border while on
+    // screen, so the focus ring, which would run through the caption, waits.
+    const [isVoiceSubmitPresenting, setIsVoiceSubmitPresenting] = useState(false);
+
+    const voiceSlotRef = useRef<HTMLSpanElement>(null);
+    const voiceSlotFocusedRef = useRef(false);
+    useLayoutEffect(() => {
+      const slot = voiceSlotRef.current;
+      if (!slot || !voiceSlotFocusedRef.current) return;
+      const active = document.activeElement;
+      if (active && active !== document.body) {
+        voiceSlotFocusedRef.current = slot.contains(active);
+        return;
+      }
+      slot.querySelector("button")?.focus({ preventScroll: true });
+    }, [isVoiceSubmitting]);
+    const voiceSubmitStatus = voiceSubmitWait
+      ? showVoiceSubmitStatus
+        ? `${voiceSubmitWait.phase === "polishing" ? "Polishing dictation" : "Finishing dictation"}. Press Escape to cancel the send.`
+        : ""
+      : voiceSubmitOutcome?.attempt === announcedVoiceAttempt
+        ? VOICE_SUBMIT_OUTCOME_STATUS[voiceSubmitOutcome.kind]
+        : "";
+    // Heard from whichever host holds the editor: a send from the Expanded
     // Editor waits there, and a live region outside its modal goes unheard.
-    const voiceSubmitStatus =
-      voiceSubmitPhase && showVoiceSubmitStatus ? (
+    const voiceSubmitAnnouncer = (
+      <div role="status" aria-live="polite" className="sr-only">
+        {voiceSubmitStatus}
+      </div>
+    );
+    // The Expanded Editor has no composer shell to draw the wait's progress
+    // in, so it labels the wait over the editor instead.
+    const expandedVoiceSubmitLabel =
+      voiceSubmitWait && showVoiceSubmitStatus ? (
         <div
-          role="status"
-          aria-live="polite"
+          aria-hidden="true"
           className="absolute inset-0 z-10 flex items-center justify-center gap-2 rounded-md bg-surface-canvas/80 pointer-events-none"
         >
           <Spinner className="text-text-secondary" />
           <span className="text-xs text-text-secondary">
-            {voiceSubmitPhase === "polishing" ? "Polishing…" : "Finishing dictation…"}
+            {voiceSubmitWait.phase === "polishing" ? "Polishing…" : "Finishing dictation…"}
           </span>
         </div>
       ) : null;
@@ -1562,6 +1621,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       "--ib-placeholder-more": inputBarColors.placeholderMore,
       "--ib-accent": inputBarColors.accent,
       "--ib-fg": inputBarColors.foreground,
+      "--ib-pane": inputBarColors.background,
+      "--ib-wait-fill": inputBarColors.waitFill,
+      "--ib-wait-edge": inputBarColors.waitEdge,
+      "--ib-wait-caption": inputBarColors.waitCaption,
     } as React.CSSProperties;
 
     // One hook instance serves both hosts, so its hover state says a drag is
@@ -1571,35 +1634,46 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const isDragOverModal = isDragOverFiles && isExpanded;
 
     const isSpecialState =
-      isVoiceListeningChrome || isVoiceHeldChrome || isDragOverCompact || isFleetPrimary;
+      isVoiceSubmitting ||
+      isVoiceListeningChrome ||
+      isVoiceHeldChrome ||
+      isDragOverCompact ||
+      isFleetPrimary;
 
     // Fleet-primary uses the same amber family as FleetDraftingPill so the
     // shell itself says "Enter broadcasts" at the point of typing.
-    const specialStyle: React.CSSProperties | undefined = isVoiceListeningChrome
+    // A voice send waiting keeps the held outline, never the listening glow:
+    // the mic has stopped, and the wait's own progress is drawn inside.
+    const specialStyle: React.CSSProperties | undefined = isVoiceSubmitting
       ? {
-          borderColor: `color-mix(in oklab, ${inputBarColors.accent} 60%, transparent)`,
-          backgroundColor: `color-mix(in oklab, ${inputBarColors.accent} 12%, ${inputBarColors.background})`,
-          boxShadow: `0 0 0 1px color-mix(in oklab, ${inputBarColors.accent} 35%, transparent), 0 0 16px color-mix(in oklab, ${inputBarColors.accent} 15%, transparent)`,
+          borderColor: `color-mix(in oklab, ${inputBarColors.accent} 25%, transparent)`,
+          backgroundColor: inputBarColors.shellBg,
         }
-      : isVoiceHeldChrome
+      : isVoiceListeningChrome
         ? {
-            borderColor: `color-mix(in oklab, ${inputBarColors.accent} 25%, transparent)`,
-            backgroundColor: inputBarColors.shellBg,
+            borderColor: `color-mix(in oklab, ${inputBarColors.accent} 60%, transparent)`,
+            backgroundColor: `color-mix(in oklab, ${inputBarColors.accent} 12%, ${inputBarColors.background})`,
+            boxShadow: `0 0 0 1px color-mix(in oklab, ${inputBarColors.accent} 35%, transparent), 0 0 16px color-mix(in oklab, ${inputBarColors.accent} 15%, transparent)`,
           }
-        : isDragOverCompact
+        : isVoiceHeldChrome
           ? {
-              borderColor: `color-mix(in oklab, ${inputBarColors.accent} 60%, transparent)`,
+              borderColor: `color-mix(in oklab, ${inputBarColors.accent} 25%, transparent)`,
               backgroundColor: inputBarColors.shellBg,
-              boxShadow: `0 0 0 1px color-mix(in oklab, ${inputBarColors.accent} 30%, transparent)`,
             }
-          : isFleetPrimary
+          : isDragOverCompact
             ? {
-                borderColor: "color-mix(in oklab, var(--color-category-amber) 55%, transparent)",
+                borderColor: `color-mix(in oklab, ${inputBarColors.accent} 60%, transparent)`,
                 backgroundColor: inputBarColors.shellBg,
-                boxShadow:
-                  "0 0 0 1px color-mix(in oklab, var(--color-category-amber) 22%, transparent)",
+                boxShadow: `0 0 0 1px color-mix(in oklab, ${inputBarColors.accent} 30%, transparent)`,
               }
-            : undefined;
+            : isFleetPrimary
+              ? {
+                  borderColor: "color-mix(in oklab, var(--color-category-amber) 55%, transparent)",
+                  backgroundColor: inputBarColors.shellBg,
+                  boxShadow:
+                    "0 0 0 1px color-mix(in oklab, var(--color-category-amber) 22%, transparent)",
+                }
+              : undefined;
 
     const barContent = (
       <div
@@ -1611,6 +1685,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         style={{ backgroundColor: inputBarColors.background, ...shellVars }}
       >
         {isRemote && <PendingUploadChips surface={uploadSurface} className="mb-1.5" />}
+        {/* Outside the shell, which is busy for the whole wait: a live region
+            inside it would hold its announcements until the send. */}
+        {!isExpanded && voiceSubmitAnnouncer}
         <div className="flex items-end gap-2">
           <div
             ref={inputShellRef}
@@ -1629,7 +1706,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                 // edge, the border left as it was. Keyed to the editor, not
                 // `focus-within` — a Tab onto attach or the mic is that
                 // control's own ring, not the composer taking the keyboard.
-                "has-[.cm-content:focus-visible]:outline-2 has-[.cm-content:focus-visible]:outline-offset-2 has-[.cm-content:focus-visible]:outline-[var(--ib-focus-ring)]",
+                !isVoiceSubmitPresenting &&
+                  "has-[.cm-content:focus-visible]:outline-2 has-[.cm-content:focus-visible]:outline-offset-2 has-[.cm-content:focus-visible]:outline-[var(--ib-focus-ring)]",
               ],
               // The one dim for an unavailable composer. Its controls take
               // `disabled` and add no opacity of their own: a second dim inside
@@ -1644,6 +1722,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             data-composer-state={
               isSpecialState ? undefined : showSelectedChrome ? "selected" : "rest"
             }
+            data-voice-receipt={isVoiceSubmitPresenting ? "" : undefined}
             style={specialStyle}
             onDragEnter={handleDragEnter}
             onDragOver={handleDragOver}
@@ -1653,9 +1732,18 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             aria-busy={
               isInitializing ||
               isVoiceConnecting ||
+              isVoiceSubmitting ||
+              isVoiceSendHandingOver ||
               (isVoiceMicStarting && voiceMicSignal === "pending")
             }
           >
+            {/* First, so everything after it in the shell paints above. */}
+            <VoiceSubmitProgress
+              key={voiceSubmitAttempt}
+              wait={voiceSubmitWait}
+              outcome={voiceSubmitOutcome}
+              onPresentChange={setIsVoiceSubmitPresenting}
+            />
             <AutocompleteMenu
               ref={menuRef}
               isOpen={isAutocompleteOpen}
@@ -1704,7 +1792,6 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               }
             />
             {isDragOverCompact && <FileDropOverlay className="rounded-md" />}
-            {!isExpanded && voiceSubmitStatus}
             <Tooltip>
               <TooltipTrigger asChild>
                 <button
@@ -1718,7 +1805,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                   // Colour comes from the shell's own palette, like every
                   // control in it — see `composerControlStyles.ts`.
                   className={cn(
-                    "flex h-6 w-6 shrink-0 items-center justify-center select-none rounded-full font-mono text-xs font-semibold leading-5 transition-colors cursor-pointer",
+                    "relative flex h-6 w-6 shrink-0 items-center justify-center select-none rounded-full font-mono text-xs font-semibold leading-5 transition-colors cursor-pointer",
                     COMPOSER_CONTROL_TEXT_CLASS,
                     COMPOSER_MARKER_TEXT_CLASS,
                     COMPOSER_CONTROL_HOVER_BG_CLASS,
@@ -1887,34 +1974,75 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                   project. An isolated composer's draft is its own, so it
                   offers dictation only when it has its own to take, rather
                   than filling the pane's behind it. */}
-              {voiceTarget ? (
-                <VoiceInputButton
-                  panelId={voiceTarget.panelId}
-                  panelTitle={voiceTarget.panelTitle}
-                  projectId={voiceTarget.projectId}
-                  projectName={voiceTarget.projectName}
-                  worktreeId={voiceTarget.worktreeId}
-                  worktreeLabel={voiceTarget.worktreeLabel}
-                  surface={voiceTarget.surface}
-                  terminalId={voiceTarget.terminalId}
-                  otherHostId={voiceTarget.otherHostId}
-                  disabled={disabled}
-                />
-              ) : (
-                !isolated && (
+              {/* The mic and the wait's Cancel send take turns in one slot.
+                  Swapping one for the other removes the focused button, so
+                  the keyboard is handed to whichever takes its place. */}
+              <span
+                ref={voiceSlotRef}
+                className="contents"
+                onFocusCapture={() => {
+                  voiceSlotFocusedRef.current = true;
+                }}
+                onBlurCapture={(event) => {
+                  if (event.relatedTarget) voiceSlotFocusedRef.current = false;
+                }}
+              >
+                {isVoiceSubmitting && (voiceTarget || !isolated) ? (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          cancelVoiceWaitSubmit();
+                          focusEditor();
+                        }}
+                        className={cn(
+                          "flex items-center justify-center h-6 w-6 rounded-full transition-colors cursor-pointer",
+                          COMPOSER_CONTROL_TEXT_CLASS,
+                          COMPOSER_CONTROL_HOVER_BG_CLASS,
+                          COMPOSER_CONTROL_FOCUS_CLASS
+                        )}
+                        aria-label="Cancel send"
+                        aria-keyshortcuts="Escape"
+                        data-voice-wait-cancel=""
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="top">
+                      {createTooltipContent("Cancel send", "Escape")}
+                    </TooltipContent>
+                  </Tooltip>
+                ) : voiceTarget ? (
                   <VoiceInputButton
-                    panelId={terminalId}
-                    panelTitle={
-                      panelOwnTitle?.trim() || (agentId ? getAgentConfig(agentId)?.name : undefined)
-                    }
-                    projectId={currentProject?.id}
-                    projectName={currentProject?.name}
-                    worktreeId={panelWorktreeId}
-                    worktreeLabel={panelWorktreeLabel}
+                    panelId={voiceTarget.panelId}
+                    panelTitle={voiceTarget.panelTitle}
+                    projectId={voiceTarget.projectId}
+                    projectName={voiceTarget.projectName}
+                    worktreeId={voiceTarget.worktreeId}
+                    worktreeLabel={voiceTarget.worktreeLabel}
+                    surface={voiceTarget.surface}
+                    terminalId={voiceTarget.terminalId}
+                    otherHostId={voiceTarget.otherHostId}
                     disabled={disabled}
                   />
-                )
-              )}
+                ) : (
+                  !isolated && (
+                    <VoiceInputButton
+                      panelId={terminalId}
+                      panelTitle={
+                        panelOwnTitle?.trim() ||
+                        (agentId ? getAgentConfig(agentId)?.name : undefined)
+                      }
+                      projectId={currentProject?.id}
+                      projectName={currentProject?.name}
+                      worktreeId={panelWorktreeId}
+                      worktreeLabel={panelWorktreeLabel}
+                      disabled={disabled}
+                    />
+                  )
+                )}
+              </span>
             </div>
           </div>
         </div>
@@ -2011,7 +2139,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               </ContextMenuContent>
             </ContextMenu>
             {isDragOverModal && <FileDropOverlay />}
-            {isExpanded && voiceSubmitStatus}
+            {isExpanded && voiceSubmitAnnouncer}
+            {isExpanded && expandedVoiceSubmitLabel}
           </div>
         </AppDialog>
         {/* One palette per id: while Canopy is open its own composer's is the

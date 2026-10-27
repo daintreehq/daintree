@@ -445,4 +445,40 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611, #14780)", () =
     expect(sent).toEqual([]);
     expect(draft(PANEL_ID)).toBe("Hello world.");
   });
+
+  it("calls the send off at Enter on Cancel send, and hands the keyboard back on its release", async () => {
+    const pending = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(pending.promise);
+    dictate(PANEL_ID, "hello wrld");
+    const result = renderComposer();
+    const bar = document.createElement("div");
+    bar.setAttribute("data-hybrid-input-root", PANEL_ID);
+    const cancel = document.createElement("button");
+    cancel.setAttribute("data-voice-wait-cancel", "");
+    bar.appendChild(cancel);
+    document.body.appendChild(bar);
+
+    await act(async () => {
+      result.current.startVoiceWaitSubmit();
+    });
+    act(() => {
+      cancel.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })
+      );
+    });
+    expect(isEditable()).toBe(true);
+    expect(result.current.voiceSubmitPhase).toBeNull();
+    // The button goes with the wait, leaving the keyboard nowhere.
+    bar.remove();
+    act(() => {
+      document.body.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", bubbles: true }));
+    });
+    expect(view.hasFocus).toBe(true);
+    await act(async () => {
+      pending.resolve({ action: "replace", correctedText: "Hello world." });
+    });
+
+    expect(sent).toEqual([]);
+    expect(draft(PANEL_ID)).toBe("Hello world.");
+  });
 });

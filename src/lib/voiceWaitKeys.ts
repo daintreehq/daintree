@@ -2,7 +2,8 @@
  * Enter and Escape for a voice send that is waiting on its transcript or its
  * cleanup (#14780). The wait locks the editor, and Chromium blurs a
  * contenteditable that stops being editable, so these keys reach the page, not
- * the composer's keymap. Enter sends what stands; Escape calls the send off.
+ * the composer's keymap. Enter sends what stands; Escape calls the send off,
+ * and so does Enter on the wait's own Cancel send (`data-voice-wait-cancel`).
  *
  * Other window capture listeners give the same keys meaning at the page (the
  * fleet's Enter-to-confirm, its double-Escape, the Escape stack), so each asks
@@ -32,6 +33,13 @@ function isWaitKey(event: KeyboardEvent): boolean {
   if (event.key !== "Enter" && event.key !== "Escape") return false;
   if (event.isComposing || event.keyCode === 229) return false;
   return !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey;
+}
+
+// Enter on the wait's Cancel send is that button's, not a second press of the
+// send. It is still consumed, so the fleet's Enter-to-confirm stands down.
+function isOnCancelControl(event: KeyboardEvent): boolean {
+  const target = event.target;
+  return target instanceof Element && target.closest("[data-voice-wait-cancel]") !== null;
 }
 
 function claimFor(event: KeyboardEvent): VoiceWaitKeyClaim | null {
@@ -75,7 +83,7 @@ export function routeVoiceWaitKey(event: KeyboardEvent): boolean {
   // lock blurs the editor: it is still the composer's, and still not a second
   // press, so it neither sends nor confirms a fleet action behind it.
   if (event.repeat) return true;
-  if (event.key === "Enter") claim.sendNow();
+  if (event.key === "Enter" && !isOnCancelControl(event)) claim.sendNow();
   else claim.cancel();
   return true;
 }

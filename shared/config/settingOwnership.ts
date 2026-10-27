@@ -253,6 +253,7 @@ export const SETTING_CATALOG = {
       "daintree-application-navigation": devicePerProject,
       "daintree-notification-history": device,
       "daintree-voice-recording": device,
+      "daintree-voice-correction-pace": device,
       "daintree-forge-token-callout": device,
       "daintree-plugin-terminal-links": device,
       "help-panel-storage": device,

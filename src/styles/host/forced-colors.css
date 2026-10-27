@@ -205,7 +205,9 @@
     outline-offset: 0;
   }
 
-  [data-composer-state]:has(.cm-content:focus-visible) {
+  /* Held back while a voice send's progress or receipt owns the top border,
+     as the normal ring is (`data-voice-receipt`). */
+  [data-composer-state]:not([data-voice-receipt]):has(.cm-content:focus-visible) {
     outline: 2px solid Highlight;
     outline-offset: 2px;
   }
@@ -219,6 +221,19 @@
      native field's placeholder takes here. */
   [data-composer-state] .cm-placeholder {
     color: GrayText;
+  }
+
+  /* A voice send's wait: the wash goes with every fill, so the 2px trace
+     alone is the progress. The caption's border mask is a gradient, which the
+     UA drops, so it takes a solid Canvas backing or the edge strikes through
+     it. */
+  [data-voice-submit-progress] {
+    border-bottom-color: CanvasText;
+  }
+
+  [data-voice-submit-caption] {
+    background: Canvas;
+    color: CanvasText;
   }
 
   /* Highlight follows the keyboard. A selected pane wears it because its
