@@ -6,6 +6,7 @@ import {
   mapMergeStateStatus,
   restToForgePR,
   toForgeIssue,
+  toForgeNumberReference,
   toForgePR,
 } from "../mappers.js";
 import {
@@ -439,5 +440,52 @@ describe("pending forge-side merges (#13747)", () => {
     expect(query).toContain("autoMergeRequest");
     expect(query).toContain("isInMergeQueue");
     expect(query).toContain("headRefOid");
+  });
+});
+
+describe("toForgeNumberReference", () => {
+  it("reads an issue and a pull request in each of their states", () => {
+    expect(
+      toForgeNumberReference({ __typename: "Issue", number: 6, title: "New", state: "OPEN" })
+    ).toEqual({ kind: "issue", number: 6, title: "New", state: "open" });
+    expect(
+      toForgeNumberReference({
+        __typename: "PullRequest",
+        number: 10,
+        title: "Dropped",
+        state: "CLOSED",
+        isDraft: false,
+      })
+    ).toMatchObject({ kind: "pr", state: "closed" });
+    expect(
+      toForgeNumberReference({ __typename: "Issue", number: 7, title: "Crash", state: "CLOSED" })
+    ).toEqual({ kind: "issue", number: 7, title: "Crash", state: "closed" });
+    expect(
+      toForgeNumberReference({
+        __typename: "PullRequest",
+        number: 8,
+        title: "Fix",
+        state: "OPEN",
+        isDraft: true,
+      })
+    ).toEqual({ kind: "pr", number: 8, title: "Fix", state: "open", isDraft: true });
+    expect(
+      toForgeNumberReference({
+        __typename: "PullRequest",
+        number: 9,
+        title: "Old",
+        state: "MERGED",
+      })
+    ).toMatchObject({ state: "merged", isDraft: false });
+  });
+
+  it("can't read a node missing what a reference shows, or of another type", () => {
+    expect(
+      toForgeNumberReference({ __typename: "Issue", number: 7, state: "OPEN" })
+    ).toBeUndefined();
+    expect(
+      toForgeNumberReference({ __typename: "Discussion", number: 7, title: "Q", state: "OPEN" })
+    ).toBeUndefined();
+    expect(toForgeNumberReference(null)).toBeUndefined();
   });
 });

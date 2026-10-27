@@ -26,6 +26,8 @@ import {
   createSelectionChipTooltip,
   contextReferenceChipField,
   createContextReferenceChipTooltip,
+  forgeReferenceField,
+  createForgeReferenceTooltip,
   interimWidgetField,
   createCaretTracker,
   pendingAIField,
@@ -72,6 +74,7 @@ interface UseEditorFactoryParams {
     terminalChipTooltipCompartmentRef: React.RefObject<Compartment>;
     selectionChipTooltipCompartmentRef: React.RefObject<Compartment>;
     contextChipTooltipCompartmentRef: React.RefObject<Compartment>;
+    forgeReferenceTooltipCompartmentRef: React.RefObject<Compartment>;
     autoSizeCompartmentRef: React.RefObject<Compartment>;
     keymapCompartmentRef: React.RefObject<Compartment>;
     comboboxCompartmentRef: React.RefObject<Compartment>;
@@ -142,6 +145,7 @@ export function useEditorFactory({
       terminalChipTooltipCompartmentRef,
       selectionChipTooltipCompartmentRef,
       contextChipTooltipCompartmentRef,
+      forgeReferenceTooltipCompartmentRef,
       autoSizeCompartmentRef,
       keymapCompartmentRef,
       comboboxCompartmentRef,
@@ -181,6 +185,10 @@ export function useEditorFactory({
         contextReferenceChipField,
         contextChipTooltipCompartmentRef.current.of(
           !disabled ? createContextReferenceChipTooltip() : []
+        ),
+        forgeReferenceField,
+        forgeReferenceTooltipCompartmentRef.current.of(
+          !disabled ? createForgeReferenceTooltip() : []
         ),
         interimWidgetField,
         createCaretTracker(() => draftKeyRef.current),

@@ -1050,6 +1050,39 @@ export function buildBatchPRsQuery(owner: string, repo: string, numbers: number[
 }`;
 }
 
+/**
+ * Build a batched GraphQL query that asks what each number names, issue or
+ * pull request, with `r{num}: issueOrPullRequest(number: {num})` aliases. A
+ * number that names nothing comes back `null` with a `NOT_FOUND` error for its
+ * alias, beside the others' data. Scalars only, so a chunk costs one point.
+ *
+ * Returns an empty string when `numbers` contains no valid positive integers
+ * so the caller can skip the request entirely.
+ */
+export function buildBatchReferencesQuery(owner: string, repo: string, numbers: number[]): string {
+  const escapedOwner = escapeGraphQLString(owner);
+  const escapedRepo = escapeGraphQLString(repo);
+  const validNumbers = numbers.filter((n) => typeof n === "number" && Number.isInteger(n) && n > 0);
+  if (validNumbers.length === 0) return "";
+
+  const parts = validNumbers.map(
+    (num) => `
+      r${num}: issueOrPullRequest(number: ${num}) {
+        __typename
+        ... on Issue { number title state }
+        ... on PullRequest { number title state isDraft }
+      }
+    `
+  );
+
+  return `query {
+  repository(owner: "${escapedOwner}", name: "${escapedRepo}") {
+    ${parts.join("\n    ")}
+  }
+  rateLimit { cost remaining resetAt limit }
+}`;
+}
+
 export function buildBatchRequiredChecksQuery(
   owner: string,
   repo: string,

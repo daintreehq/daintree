@@ -14,6 +14,7 @@ export function useEditorCompartments() {
   const terminalChipTooltipCompartmentRef = useRef(new Compartment());
   const selectionChipTooltipCompartmentRef = useRef(new Compartment());
   const contextChipTooltipCompartmentRef = useRef(new Compartment());
+  const forgeReferenceTooltipCompartmentRef = useRef(new Compartment());
   const autoSizeCompartmentRef = useRef(new Compartment());
   const themeCompartmentRef = useRef(new Compartment());
   const comboboxCompartmentRef = useRef(new Compartment());
@@ -31,6 +32,7 @@ export function useEditorCompartments() {
     terminalChipTooltipCompartmentRef,
     selectionChipTooltipCompartmentRef,
     contextChipTooltipCompartmentRef,
+    forgeReferenceTooltipCompartmentRef,
     autoSizeCompartmentRef,
     themeCompartmentRef,
     comboboxCompartmentRef,

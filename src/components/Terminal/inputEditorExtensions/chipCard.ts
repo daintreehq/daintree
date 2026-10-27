@@ -6,6 +6,7 @@ import {
   type HoverTooltipSource,
   type Rect,
   type Tooltip,
+  type ViewUpdate,
 } from "@codemirror/view";
 import type { Extension } from "@codemirror/state";
 import { TOOLTIP_CARD_PADDING } from "@/components/ui/tooltip";
@@ -133,12 +134,14 @@ function chipRect(view: EditorView, from: number, selector: string): Rect | null
  * A chip's hover card: the shared card, opened above the chip whose range is
  * `from`–`to` and whose widget matches `selector`. The card's text doubles as
  * the chip's `aria-description`, so what the card discloses on hover is also
- * what assistive tech reads with the chip.
+ * what assistive tech reads with the chip. `refresh` hands back new content
+ * for an update that changed what the card describes, or `null` to keep it.
  */
 export function chipTooltip(
   range: { from: number; to: number },
   selector: string,
-  content: () => Node[]
+  content: () => Node[],
+  refresh?: (update: ViewUpdate) => Node[] | null
 ): Tooltip {
   return {
     pos: range.from,
@@ -149,6 +152,15 @@ export function chipTooltip(
       return {
         dom,
         mount: () => fitToLines(dom),
+        update: refresh
+          ? (update) => {
+              const next = refresh(update);
+              if (!next) return;
+              dom.style.width = "";
+              dom.replaceChildren(...next);
+              fitToLines(dom);
+            }
+          : undefined,
         // The same gap every Radix tooltip and menu hangs from its trigger.
         offset: { x: 0, y: OVERLAY_SIDE_OFFSET },
         // `pos`, not the range captured at open: CodeMirror maps an open
@@ -176,10 +188,15 @@ const dismissOnEscape = EditorView.domEventHandlers({
  * opens while a chip is staged for deletion: the staged chip is the one thing
  * that moment is about, and a card over it would compete with it.
  */
-export function chipHoverTooltip(source: HoverTooltipSource): Extension {
+export function chipHoverTooltip(
+  source: HoverTooltipSource,
+  options?: Parameters<typeof hoverTooltip>[1]
+): Extension {
   return [
-    hoverTooltip((view, pos, side) =>
-      view.state.field(chipPendingDeleteField, false) ? null : source(view, pos, side)
+    hoverTooltip(
+      (view, pos, side) =>
+        view.state.field(chipPendingDeleteField, false) ? null : source(view, pos, side),
+      options
     ),
     dismissOnEscape,
   ];

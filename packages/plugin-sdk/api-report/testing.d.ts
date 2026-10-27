@@ -739,6 +739,22 @@ interface ReviewerRequest {
     users?: string[];
     teams?: string[];
 }
+/**
+ * What a bare `#N` names in a repository: the issue or the pull request that
+ * holds that number. Only what a reference shows: its kind, title and state.
+ */
+type ForgeNumberReference = {
+    kind: "issue";
+    number: number;
+    title: string;
+    state: NormalizedIssueState;
+} | {
+    kind: "pr";
+    number: number;
+    title: string;
+    state: NormalizedPRState;
+    isDraft: boolean;
+};
 interface ReviewCapability {
     getReviewThreads(repo: RepoRef, prNumber: number): Promise<ReviewThread[]>;
     /**
@@ -854,6 +870,12 @@ interface BatchLookupCapability {
     getCIStatuses?(repo: RepoRef, prNumbers: number[]): Promise<Map<number, CIStatus | null>>;
     findPRsByNumbers?(repo: RepoRef, prNumbers: number[], options?: FetchOptions): Promise<Map<number, PR | null>>;
     findIssuesByNumbers?(repo: RepoRef, issueNumbers: number[]): Promise<Map<number, Issue | null>>;
+    /**
+     * What each bare `#N` names, for a forge whose issues and pull requests share
+     * one number sequence. A number may name either, so neither of the lookups
+     * above can answer for a mixed set; this one asks once per chunk for both.
+     */
+    findReferencesByNumbers?(repo: RepoRef, numbers: number[]): Promise<Map<number, ForgeNumberReference | null>>;
     /**
      * Optional cheap conditional probe of the repo's open-PR list. Given the
      * caller's current {@link PRSnapshot}s of the PRs it tracks, return only

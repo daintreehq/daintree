@@ -14,6 +14,7 @@ import type {
   PR,
   PRDraftStateResult,
   PRLookupResult,
+  ForgeReferenceLookupResult,
   PullRequestReview,
   RequestReviewersResult,
   Page,
@@ -226,6 +227,14 @@ export const forgeClient = {
   getPRsByNumbers: async (cwd: string, numbers: number[]): Promise<PR[]> => {
     const results = await window.electron.forge.getPRsByNumbers({ cwd, numbers });
     return results.flatMap((entry) => (entry.status === "found" && entry.pr ? [entry.pr] : []));
+  },
+
+  /** What each bare `#N` names; `null` when nothing can be looked up for `cwd`. */
+  getReferencesByNumbers: (
+    cwd: string,
+    numbers: number[]
+  ): Promise<ForgeReferenceLookupResult[] | null> => {
+    return window.electron.forge.getReferencesByNumbers({ cwd, numbers });
   },
 
   getPRReviewThreads: (cwd: string, prNumber: number): Promise<ReviewThread[]> => {

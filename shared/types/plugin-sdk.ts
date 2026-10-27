@@ -479,6 +479,7 @@ export type {
   CreateIssueInput,
   ForgeUser,
   ForgeLabel,
+  ForgeNumberReference,
   NormalizedIssueState,
   RateLimitInfo,
   FileDecoration,

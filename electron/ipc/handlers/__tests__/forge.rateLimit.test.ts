@@ -797,6 +797,11 @@ describe("forge handlers — rate limiting", () => {
         maxCalls: 20,
         invoke: (h) => h({}, { cwd, numbers: [1] }),
       },
+      {
+        channel: CHANNELS.FORGE_GET_REFERENCES_BY_NUMBERS,
+        maxCalls: 20,
+        invoke: (h) => h({}, { cwd, numbers: [1] }),
+      },
       // long-window probes: 30/60s (matches github:resolve-author-avatar / rate-limit-details)
       {
         channel: CHANNELS.FORGE_RESOLVE_AUTHOR_AVATAR,
@@ -813,12 +818,12 @@ describe("forge handlers — rate limiting", () => {
       },
     ];
 
-    it("registers all forge channels (51 rate-limited + 2 unrated probes)", () => {
-      expect(specs).toHaveLength(51);
+    it("registers all forge channels (52 rate-limited + 2 unrated probes)", () => {
+      expect(specs).toHaveLength(52);
       // FORGE_GET_CURRENT_USER and FORGE_GET_TOKEN_HEALTH are intentionally
       // unrated replay/identity probes with no checkRateLimit, so they register
       // handlers but stay out of `specs`.
-      expect(ipcMainMock.handle).toHaveBeenCalledTimes(53);
+      expect(ipcMainMock.handle).toHaveBeenCalledTimes(54);
     });
 
     it.each(specs)(

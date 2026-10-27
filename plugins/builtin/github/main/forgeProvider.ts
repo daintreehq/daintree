@@ -58,6 +58,7 @@ import {
   getChecksImpl,
   findPRsByNumbersImpl,
   findIssuesByNumbersImpl,
+  findReferencesByNumbersImpl,
   getCIStatusesImpl,
   probeOpenPRListImpl,
   getRepoMetadataImpl,
@@ -349,6 +350,7 @@ export const githubForgeProvider: ForgeProviderImpl = {
   batchLookups: {
     findPRsByNumbers: findPRsByNumbersImpl,
     findIssuesByNumbers: findIssuesByNumbersImpl,
+    findReferencesByNumbers: findReferencesByNumbersImpl,
     getCIStatuses: getCIStatusesImpl,
     probeOpenPRList: probeOpenPRListImpl,
   },

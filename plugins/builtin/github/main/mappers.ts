@@ -1,6 +1,7 @@
 import type {
   CIStatusState,
   ForgeLabel,
+  ForgeNumberReference,
   ForgeUser,
   Issue,
   IssueComment,
@@ -85,6 +86,32 @@ function normalizePRState(rawState: string, merged: boolean): NormalizedPRState 
   if (upper === "CLOSED") return "closed";
   if (upper === "MERGED") return "merged";
   return "open";
+}
+
+/**
+ * One `issueOrPullRequest` node as the reference it is. `undefined` for a node
+ * that names something but can't be read, so the caller leaves that number
+ * unanswered rather than calling it missing.
+ */
+export function toForgeNumberReference(node: unknown): ForgeNumberReference | undefined {
+  if (!isRecord(node)) return undefined;
+  const { number, title, state } = node;
+  if (typeof number !== "number" || typeof title !== "string" || typeof state !== "string") {
+    return undefined;
+  }
+  if (node.__typename === "Issue") {
+    return { kind: "issue", number, title, state: normalizeIssueState(state) };
+  }
+  if (node.__typename === "PullRequest") {
+    return {
+      kind: "pr",
+      number,
+      title,
+      state: normalizePRState(state, false),
+      isDraft: node.isDraft === true,
+    };
+  }
+  return undefined;
 }
 
 /**
