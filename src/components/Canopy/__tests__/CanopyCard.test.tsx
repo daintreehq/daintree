@@ -309,7 +309,7 @@ describe("CanopyCard", () => {
       return { ...item, row: { ...item.row, title } };
     };
 
-    it("moves on to the run the reply named at the press, whatever it names by the time the send lands", async () => {
+    it("moves on to the run the reply named at the press, through the stream open when the send lands", async () => {
       const h = handlers();
       const item = itemFor("question");
       const view = render(
@@ -317,19 +317,21 @@ describe("CanopyCard", () => {
       );
       await streamOpens({ watchId: 7 });
       const route = (await composer()).modEnterSend!();
+      // A dictated send lands after its wait: the list has moved, the stream reopened.
       view.rerender(
         <CanopyCard item={item} {...PROPS} {...h} moveOnTo={named("run-3", "Bump the deps")} />
       );
+      await streamOpens({ watchId: 8 });
 
       await act(async () => {
         await route.submitText("Keep it read-only", []);
       });
-      expect(submit).toHaveBeenCalledWith(7, "Keep it read-only", undefined);
+      expect(submit).toHaveBeenCalledWith(8, "Keep it read-only", undefined);
       expect(h.onSent).toHaveBeenLastCalledWith(item, "run-2");
 
       // An empty reply's Enter answers the agent's menu, and moves on the same way.
       await act(async () => route.sendEnter());
-      expect(sendKey).toHaveBeenCalledWith(7, "enter");
+      expect(sendKey).toHaveBeenCalledWith(8, "enter");
       expect(h.onSent).toHaveBeenLastCalledWith(item, "run-2");
       expect(h.onSent).toHaveBeenCalledTimes(2);
 

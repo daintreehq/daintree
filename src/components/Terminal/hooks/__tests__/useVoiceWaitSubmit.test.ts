@@ -661,6 +661,34 @@ describe("useVoiceWaitSubmit keys during the wait (#14780)", () => {
     expect(sendFromEditor).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps the route the wait was started with through a second Enter, and drops it at Escape", async () => {
+    const route = { submitText: vi.fn(async () => true), sendEnter: vi.fn() };
+    const { result } = renderWaitSubmit();
+    await act(async () => {
+      result.current.startVoiceWaitSubmit({ route });
+    });
+    await act(async () => {
+      pressKey("Enter");
+    });
+    expect(sendFromEditor).toHaveBeenCalledTimes(1);
+    expect(sendFromEditor).toHaveBeenLastCalledWith(undefined, expect.anything(), route);
+
+    await act(async () => {
+      result.current.startVoiceWaitSubmit({ route });
+    });
+    act(() => {
+      pressKey("Escape");
+    });
+    await act(async () => {
+      result.current.startVoiceWaitSubmit();
+    });
+    await act(async () => {
+      pressKey("Enter");
+    });
+    expect(sendFromEditor).toHaveBeenCalledTimes(2);
+    expect(sendFromEditor).toHaveBeenLastCalledWith(undefined, expect.anything(), undefined);
+  });
+
   it("calls the send off at Escape and lets go of the keys at once", async () => {
     const { result } = renderWaitSubmit();
     await act(async () => {

@@ -344,14 +344,23 @@ describe("HybridInputBar — Canopy's reply beside the pane's own composer", () 
       });
     };
 
+    routed.mockResolvedValueOnce(false);
+    await modEnter(viewOf("reply"), "refused");
+    expect(routed).toHaveBeenCalledWith("refused", []);
+    // Refused, the reply keeps what was typed, as a refused Enter does.
+    expect(viewOf("reply").state.doc.toString()).toBe("refused");
+    await act(async () => {
+      viewOf("reply").dispatch({ changes: { from: 0, to: viewOf("reply").state.doc.length } });
+    });
+
     await modEnter(viewOf("reply"), "go on");
-    expect(routed).toHaveBeenCalledWith("go on", []);
+    expect(routed).toHaveBeenLastCalledWith("go on", []);
     expect(submitText).not.toHaveBeenCalled();
     expect(viewOf("reply").state.doc.toString()).toBe("");
 
     dictating(REPLY);
     await modEnter(viewOf("reply"), "then the next");
-    expect(routed).toHaveBeenCalledTimes(1);
+    expect(routed).toHaveBeenCalledTimes(2);
     await act(async () => finish());
     expect(routed).toHaveBeenLastCalledWith("then the next", []);
     expect(submitText).not.toHaveBeenCalled();

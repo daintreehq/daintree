@@ -47,7 +47,10 @@ const pane = vi.hoisted(() => ({
   reply: null as {
     submitText: (text: string, imagePaths: readonly string[]) => Promise<boolean>;
     modEnterSend?: () => ReplyRoute;
+    ref?: React.Ref<{ focus: () => void }>;
   } | null,
+  /** The reply draws an editor that takes the keyboard; off, it draws nothing. */
+  editable: false,
 }));
 // The pane's live terminal needs a canvas and a PTY host; the list is what is tested here.
 vi.mock("../CanopyTerminal", () => ({
@@ -66,12 +69,22 @@ vi.mock("../CanopyTerminal", () => ({
     );
   },
 }));
-vi.mock("@/components/Terminal/HybridInputBar", () => ({
-  HybridInputBar: (props: NonNullable<typeof pane.reply>) => {
-    pane.reply = props;
-    return null;
-  },
-}));
+vi.mock("@/components/Terminal/HybridInputBar", async () => {
+  const { useImperativeHandle, useRef } = await import("react");
+  return {
+    HybridInputBar: (props: NonNullable<typeof pane.reply>) => {
+      pane.reply = props;
+      const editor = useRef<HTMLDivElement>(null);
+      useImperativeHandle(props.ref, () => ({ focus: () => editor.current?.focus() }));
+      if (!pane.editable) return null;
+      return (
+        <div className="cm-editor">
+          <div ref={editor} tabIndex={-1} data-reply-editor="" />
+        </div>
+      );
+    },
+  };
+});
 vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
 const lifecycle = vi.hoisted(() => new Set<(phase: string) => void>());
 const viewCached = vi.hoisted(() => ({ current: false }));
@@ -950,6 +963,7 @@ describe("CanopyView", () => {
     beforeEach(() => {
       pane.stream = null;
       pane.reply = null;
+      pane.editable = true;
       useFleetSnapshotStore.setState({
         snapshot: {
           runs: [
@@ -989,35 +1003,49 @@ describe("CanopyView", () => {
       await vi.waitFor(() => expect(pane.reply).not.toBeNull());
       const moveOnLine = () =>
         document.querySelector<HTMLElement>("[data-canopy-move-on]")?.textContent ?? null;
-      return { ...view, canopy, first, terminalSubmit, moveOnLine };
+      const replyEditor = () => document.querySelector<HTMLElement>("[data-reply-editor]")!;
+      return { ...view, canopy, first, terminalSubmit, moveOnLine, replyEditor };
     }
 
-    it("stays on the agent a reply was sent to, the keyboard where it was", async () => {
-      const { container, first, terminalSubmit } = await replyingTo();
+    afterEach(() => {
+      pane.editable = false;
+    });
+
+    it("stays on the agent a reply was sent to, the keyboard in its reply", async () => {
+      const { container, terminalSubmit, replyEditor } = await replyingTo();
       expect(liveRun(container)).toBe("waiting");
+      const editor = replyEditor();
+      act(() => editor.focus());
 
       await act(async () => {
         await pane.reply!.submitText("Yes, go ahead", []);
       });
+      await frames();
 
       expect(terminalSubmit).toHaveBeenCalledWith(7, "Yes, go ahead", undefined);
       expect(liveRun(container)).toBe("waiting");
       expect(selectedRun(container)).toBe("waiting");
-      expect(document.activeElement).toBe(first);
+      expect(document.activeElement).toBe(editor);
     });
 
     it("moves on with ⌘↩ to the agent the reply names, into its reply, and names none past the last", async () => {
-      const { container, moveOnLine } = await replyingTo();
+      const { container, moveOnLine, replyEditor } = await replyingTo();
       expect(moveOnLine()).toContain("Send and go to");
       expect(moveOnLine()).toContain("Pick a port");
+      act(() => replyEditor().focus());
 
       const route = pane.reply!.modEnterSend!();
       await act(async () => {
         await route.submitText("Yes, go ahead", []);
       });
+      await frames();
 
       expect(liveRun(container)).toBe("asking");
       expect(selectedRun(container)).toBe("asking");
+      expect(document.activeElement?.hasAttribute("data-reply-editor")).toBe(true);
+      expect(document.activeElement?.closest("[data-canopy-detail]")?.id).toBe(
+        "canopy-detail-asking"
+      );
       // Nothing below needs the user: ⌘↩ from here would send and stay.
       expect(moveOnLine()).toBe("");
     });
@@ -1063,6 +1091,30 @@ describe("CanopyView", () => {
       expect(answer).toHaveBeenCalledWith("waiting", { spawnedAt: NOW - 3_600_000 }, "Yes");
       expect(liveRun(container)).toBe("waiting");
       expect(document.activeElement?.id).toBe("canopy-card-waiting");
+    });
+
+    it("leaves the keyboard on Reply when the user went there while the answer was on its way", async () => {
+      const snapshot = { ...canopySnapshot, cards: [approvalCard("waiting")] };
+      const { canopy } = await replyingTo(snapshot);
+      let settle!: () => void;
+      const answer = vi.fn(
+        (_runId: string, _target: { spawnedAt: number }, _label: string) =>
+          new Promise<void>((resolve) => (settle = resolve))
+      );
+      Object.assign(canopy, { answer });
+      const choices = [...document.querySelectorAll<HTMLElement>("[data-canopy-choices] button")];
+      const yes = choices.find((button) => button.textContent?.includes("Yes"))!;
+      const reply = choices.find((button) => button.textContent?.includes("Reply"))!;
+      act(() => yes.focus());
+      await act(async () => {
+        fireEvent.click(yes);
+      });
+      act(() => reply.focus());
+
+      await act(async () => settle());
+
+      expect(answer).toHaveBeenCalledTimes(1);
+      expect(document.activeElement).toBe(reply);
     });
   });
 

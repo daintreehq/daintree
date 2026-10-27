@@ -210,6 +210,28 @@ describe("useEditorKeymap", () => {
       expect(onSendKey).toHaveBeenCalledWith("enter");
     });
 
+    it("sends nothing by the route mid-composition or while disabled", () => {
+      const routed = route();
+      const latest = makeLatest({
+        isAutocompleteOpen: false,
+        autocompleteItems: [],
+        value: "hello",
+        modEnterSend: () => routed,
+      });
+      const isComposingRef = { current: true };
+      const { handlers } = renderKeymap(latest, { isComposingRef });
+      // The input method's own key: left for it.
+      expect(handlers.onModEnter()).toBe(false);
+
+      isComposingRef.current = false;
+      latest.disabled = true;
+      expect(handlers.onModEnter()).toBe(true);
+      expect(sendFromEditor).not.toHaveBeenCalled();
+      expect(startVoiceWaitSubmit).not.toHaveBeenCalled();
+      expect(routed.submitText).not.toHaveBeenCalled();
+      expect(routed.sendEnter).not.toHaveBeenCalled();
+    });
+
     it("lets a completion row take it as its own, with nothing sent by the route", () => {
       const routed = route();
       const { handlers } = renderKeymap(makeLatest({ modEnterSend: () => routed }));

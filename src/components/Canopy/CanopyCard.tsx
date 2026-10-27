@@ -1023,6 +1023,7 @@ export function CanopyCard({
                   variant={armed ? "ghost-danger" : "subtle"}
                   size="xs"
                   disabled={reconnecting}
+                  data-canopy-choice=""
                   data-armed={armed || undefined}
                   aria-keyshortcuts={String(index + 1)}
                   className={cn("max-w-full", armed && "bg-status-error/10")}

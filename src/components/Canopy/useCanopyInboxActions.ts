@@ -260,13 +260,13 @@ export function useCanopyInboxActions({
               if (!showsHost(hostId) || !isSelected(item.runId)) return;
               // A choice in the pane goes away with the screen it answered, and
               // the keyboard with it, to the page: it goes to the run's row
-              // instead, where the next answer is one key away. Anywhere else
-              // it stays.
+              // instead, where the next answer is one key away. Anywhere else,
+              // Reply and Go to terminal beside the choices included, it stays.
               const active = document.activeElement;
               const lost =
                 active === null ||
                 active === document.body ||
-                active.closest("[data-canopy-detail] [data-canopy-choices]") !== null;
+                active.closest("[data-canopy-detail] [data-canopy-choice]") !== null;
               if (!lost) return;
               if (document.getElementById(canopyCardDomId(item.runId))) {
                 focusCardNow(item.runId);
