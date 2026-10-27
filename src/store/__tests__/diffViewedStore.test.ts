@@ -404,6 +404,16 @@ describe("diffViewedStore", () => {
       expect(viewed("unstaged:a.ts")).toBe(false);
     });
 
+    it("keeps since-review marks apart from working-tree and base-branch ones", () => {
+      observe([change("a.ts")]);
+      mark("since-review:a.ts");
+
+      expect(viewed("since-review:a.ts")).toBe(true);
+      expect(viewed("unstaged:a.ts")).toBe(false);
+      expect(viewed("staged:a.ts")).toBe(false);
+      expect(viewed("base:a.ts")).toBe(false);
+    });
+
     it.each([
       ["the compared branch", { wt: "head-2" }],
       ["the base branch", { main: "base-2" }],

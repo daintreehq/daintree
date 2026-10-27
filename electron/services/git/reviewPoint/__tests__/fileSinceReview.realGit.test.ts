@@ -4,10 +4,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type {
-  ReviewComparisonFile,
-  ReviewComparisonResult,
-} from "../../../../../shared/types/reviewComparison.js";
+import type { ReviewComparisonResult } from "../../../../../shared/types/reviewComparison.js";
 import type { ReviewPoint } from "../../../../../shared/types/reviewPoint.js";
 import { captureReviewPoint, type CaptureReviewPointOptions } from "../captureReviewPoint.js";
 import { compareReviewPoint } from "../compareReviewPoint.js";
@@ -16,8 +13,6 @@ import type { ReviewFileSinceSide } from "../../../../../shared/types/ipc/review
 
 // Real repositories throughout, like the capture's own tests: the comparison is
 // only as good as what git actually reports after each kind of history change.
-
-const posixOnly = process.platform === "win32" ? it.skip : it;
 
 let root: string;
 
@@ -83,15 +78,6 @@ function collectGarbage(repo: string): void {
   git(repo, "gc", "-q", "--prune=now");
 }
 
-function exists(repo: string, oid: string): boolean {
-  try {
-    git(repo, "cat-file", "-e", `${oid}^{commit}`);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 async function review(
   repo: string,
   options: Partial<CaptureReviewPointOptions> = {}
@@ -120,25 +106,6 @@ async function compareNow(repo: string, point: ReviewPoint): Promise<Compared> {
     throw new Error(`Expected a comparison: ${JSON.stringify(result)}`);
   }
   return result;
-}
-
-function summary(result: Compared): Record<string, Partial<ReviewComparisonFile>> {
-  return Object.fromEntries(
-    result.files.map((file) => [
-      file.path,
-      {
-        status: file.status,
-        index: file.index,
-        worktree: file.worktree,
-        baseUpdate: file.baseUpdate,
-      },
-    ])
-  );
-}
-
-function commitsOf(result: Compared): Array<{ subject: string; kind: string }> {
-  if (result.commits.kind !== "listed") throw new Error("Expected listed commits");
-  return result.commits.commits.map(({ subject, kind }) => ({ subject, kind }));
 }
 
 function snapshot(dir: string): Map<string, string> {

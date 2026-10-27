@@ -112,7 +112,9 @@ export function getRenderedMarkdownAvailability({
       reason:
         diffSource === "staged"
           ? "Rendered Markdown isn't available for staged changes — staged content lives in the index, not on disk"
-          : "Rendered Markdown isn't available for base-branch diffs — the file at that ref isn't what's on disk",
+          : diffSource === "since-review"
+            ? "Rendered Markdown isn't available for the diff since review — the reviewed version isn't what's on disk"
+            : "Rendered Markdown isn't available for base-branch diffs — the file at that ref isn't what's on disk",
     };
   }
 

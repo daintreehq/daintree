@@ -152,6 +152,8 @@ export type SinceReviewFileGroup = "branch" | "base-update";
 
 export interface SinceReviewFile {
   path: string;
+  /** Present when the path isn't valid UTF-8; `path` is then a display form only. */
+  pathBytes?: string;
   status: ReviewComparisonFile["status"];
   group: SinceReviewFileGroup;
   /** The base update changed this path and the branch touches it too. */
@@ -249,6 +251,7 @@ export function describeSinceReview(
 function sinceReviewFile(file: ReviewComparisonFile): SinceReviewFile {
   return {
     path: file.path,
+    ...(file.pathBytes !== undefined && { pathBytes: file.pathBytes }),
     status: file.status,
     group: file.baseUpdate === "only" ? "base-update" : "branch",
     alsoBaseUpdate: file.baseUpdate === "also",

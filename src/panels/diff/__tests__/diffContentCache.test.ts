@@ -163,3 +163,44 @@ describe("diffContentCache — eviction order", () => {
     expect(peekCachedDiff(workingTree("f1.ts"), false)).toBeUndefined();
   });
 });
+
+describe("diffContentCache — since-review subjects", () => {
+  const sinceReview = (side?: "worktree" | "index"): DiffSubject => ({
+    source: "since-review",
+    worktreePath: "/repo",
+    worktreeId: "/repo",
+    filePath: "src/a.ts",
+    side,
+  });
+
+  it("asks the host, keeps its answer with the entry and never caches it", async () => {
+    const fileSince = vi.fn().mockResolvedValue({
+      status: "read",
+      markRevision: 3,
+      side: "worktree",
+      changes: { worktree: "changed", index: "unchanged" },
+      view: { kind: "exact", patch: "@@ -1 +1 @@" },
+    });
+    Object.assign(window, { electron: { reviewMarks: { fileSince } } });
+
+    const first = await requestDiff(sinceReview("index"), false);
+    await requestDiff(sinceReview("index"), false);
+
+    expect(fileSince).toHaveBeenCalledTimes(2);
+    expect(fileSince).toHaveBeenCalledWith("/repo", { path: "src/a.ts", side: "index" });
+    expect(first?.content).toBe("@@ -1 +1 @@");
+    expect(first?.sinceReview?.status).toBe("read");
+    expect(peekCachedDiff(sinceReview("index"), false)).toBeUndefined();
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it("leaves the side out of the request until one is chosen", async () => {
+    const fileSince = vi.fn().mockResolvedValue({ status: "none" });
+    Object.assign(window, { electron: { reviewMarks: { fileSince } } });
+
+    const entry = await requestDiff(sinceReview(), false);
+
+    expect(fileSince).toHaveBeenCalledWith("/repo", { path: "src/a.ts" });
+    expect(entry?.content).toBe("NO_CHANGES");
+  });
+});

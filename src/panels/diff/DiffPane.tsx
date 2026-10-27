@@ -67,6 +67,8 @@ import { DiffViewer, FULL_FILE_MAX_LINES } from "@/components/Worktree/DiffViewe
 import type { FullFileUnavailableReason } from "@/components/Worktree/DiffViewer";
 import { FILE_READ_ERROR_MESSAGES } from "@/components/FileViewer/fileReadErrors";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
+import type { ReviewFileSinceSide } from "@shared/types/ipc/reviewMarks";
+import { SinceReviewNotice, describeSinceReviewNotice } from "./SinceReviewNotice";
 import type { DiffViewerAnnotations } from "@/components/Worktree/DiffViewer";
 import { useDiffNotesStore } from "@/store/diffNotesStore";
 import type { DiffNoteDeliveryResult } from "@/hooks/useDiffNoteDelivery";
@@ -201,9 +203,15 @@ function buildSubject(
   worktreePath: string,
   filePath: string | undefined,
   status: GitStatus | undefined,
-  currentBranch: string
+  currentBranch: string,
+  worktreeId?: string,
+  sinceReviewSide?: ReviewFileSinceSide
 ): DiffSubject | null {
   if (!worktreePath || !filePath) return null;
+  if (diffSource === "since-review") {
+    if (!worktreeId) return null;
+    return { source: "since-review", worktreePath, worktreeId, filePath, side: sinceReviewSide };
+  }
   if (diffSource === "base-branch") {
     // Without both refs there is no comparison to make; render the empty state
     // rather than asking git to diff against undefined.
@@ -342,6 +350,16 @@ export function DiffPane({
 
   // Memoized on primitives so the subject identity only moves when what we're
   // diffing does — `useDiffContent` refetches on subject identity.
+  // The side a since-review diff was asked for; absent lets the host pick the
+  // one that changed. Tagged with its file so a step to another file starts over.
+  const [sinceReviewSideChoice, setSinceReviewSideChoice] = useState<{
+    file: string | undefined;
+    side: ReviewFileSinceSide;
+  } | null>(null);
+  const sinceReviewSide =
+    sinceReviewSideChoice && sinceReviewSideChoice.file === filePath
+      ? sinceReviewSideChoice.side
+      : undefined;
   const subject = useMemo(
     () =>
       buildSubject(
@@ -350,9 +368,20 @@ export function DiffPane({
         worktreePath,
         filePath,
         fileStatus,
-        currentBranch
+        currentBranch,
+        worktreeId,
+        sinceReviewSide
       ),
-    [effectiveSource, panelBaseBranch, worktreePath, filePath, fileStatus, currentBranch]
+    [
+      effectiveSource,
+      panelBaseBranch,
+      worktreePath,
+      filePath,
+      fileStatus,
+      currentBranch,
+      worktreeId,
+      sinceReviewSide,
+    ]
   );
 
   // Survives the open file dropping out of the set, so stepping resumes from
@@ -397,9 +426,19 @@ export function DiffPane({
     diffSource === undefined || diffSource === "working-tree"
       ? (nextSide ?? diffSource)
       : diffSource;
+  // No prefetch for since-review: each read is a whole comparison of the worktree.
   const nextSubject = useMemo(
     () =>
-      buildSubject(nextSource, panelBaseBranch, worktreePath, nextPath, nextStatus, currentBranch),
+      nextSource === "since-review"
+        ? null
+        : buildSubject(
+            nextSource,
+            panelBaseBranch,
+            worktreePath,
+            nextPath,
+            nextStatus,
+            currentBranch
+          ),
     [nextSource, panelBaseBranch, worktreePath, nextPath, nextStatus, currentBranch]
   );
 
@@ -413,7 +452,16 @@ export function DiffPane({
     [renderedRequested]
   );
 
-  const { content, stale, retry } = useDiffContent(subject, nextSubject, renderedContentOptions);
+  const { content, sinceReview, stale, retry } = useDiffContent(
+    subject,
+    nextSubject,
+    renderedContentOptions
+  );
+  const isSinceReview = effectiveSource === "since-review";
+  const sinceReviewNotice = useMemo(
+    () => (isSinceReview && sinceReview ? describeSinceReviewNotice(sinceReview) : null),
+    [isSinceReview, sinceReview]
+  );
 
   const viewedSet = useDiffViewedStore(
     useCallback((state) => selectViewedSet(state, worktreePath), [worktreePath])
@@ -615,18 +663,23 @@ export function DiffPane({
     fileStatus &&
     !isGitlink &&
     isImageDiffCandidate(filePath) &&
-    panel?.diffSource !== "base-branch"
+    panel?.diffSource !== "base-branch" &&
+    !isSinceReview
   );
   // Media shows only the current working-tree version (no side-by-side diff —
   // the media pipeline has no cheap "old vs new" comparison), so unlike
   // isImageMode this applies to every diff source, base-branch included.
-  const isVideoMode = Boolean(filePath && !isGitlink && isVideoFilePath(filePath));
-  const isAudioMode = Boolean(filePath && !isGitlink && isAudioFilePath(filePath));
+  const isVideoMode = Boolean(
+    filePath && !isGitlink && !isSinceReview && isVideoFilePath(filePath)
+  );
+  const isAudioMode = Boolean(
+    filePath && !isGitlink && !isSinceReview && isAudioFilePath(filePath)
+  );
   const isMediaMode = isVideoMode || isAudioMode;
   // PDFs likewise show only the current working-tree version: the built-in
   // viewer renders a whole document, not a comparison, so like media this
   // applies to every diff source.
-  const isPdfMode = Boolean(filePath && !isGitlink && isPdfFilePath(filePath));
+  const isPdfMode = Boolean(filePath && !isGitlink && !isSinceReview && isPdfFilePath(filePath));
 
   // Whether this file *can* show its whole contents, independent of whether the
   // user currently wants to — the toggle stays visible either way so the option
@@ -1167,6 +1220,13 @@ export function DiffPane({
         />
       ) : (
         <>
+          {sinceReview && sinceReviewNotice && (
+            <SinceReviewNotice
+              outcome={sinceReview}
+              view={sinceReviewNotice}
+              onSideChange={(side) => setSinceReviewSideChoice({ file: filePath, side })}
+            />
+          )}
           {stale && hasDiff && (
             <InlineStatusBanner
               severity="info"
@@ -1244,7 +1304,7 @@ export function DiffPane({
             // Already resolved here; the sidebar would otherwise repeat the
             // path→worktree lookup the pane has done above.
             worktreeId={worktreeId ?? null}
-            statusIsLocal={diffSource !== "base-branch"}
+            statusIsLocal={diffSource !== "base-branch" && diffSource !== "since-review"}
             onSelect={(index) => {
               if (index === currentIndex) return;
               selectFileAt(index);
@@ -1282,7 +1342,9 @@ export function DiffPane({
                   description={
                     diffSource === "base-branch"
                       ? "The base or current branch couldn't be resolved, so there's no comparison to make."
-                      : "This panel's worktree couldn't be resolved — it may have been moved or removed."
+                      : diffSource === "since-review"
+                        ? "The worktree couldn't be resolved, so there's no review mark to compare with."
+                        : "This panel's worktree couldn't be resolved — it may have been moved or removed."
                   }
                 />
               </div>
@@ -1392,6 +1454,7 @@ export function DiffPane({
               !isMediaMode &&
               !isPdfMode &&
               content &&
+              !sinceReviewNotice?.replacesBody &&
               (showRendered ? (
                 <Suspense fallback={renderedSkeleton}>
                   {renderedSourcePending ? (

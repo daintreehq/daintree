@@ -58,6 +58,7 @@ vi.mock("@/components/ui/tooltip", () => ({
 }));
 
 import { actionService } from "@/services/ActionService";
+import { usePanelDialogStore } from "@/store/panelDialogStore";
 import { ReviewHubContent } from "../ReviewHubContent";
 import { resetStagingStatusCacheForTests } from "../stagingStatusCache";
 import { _resetReviewMarksStoreForTesting, useReviewMarksStore } from "@/store/reviewMarksStore";
@@ -707,12 +708,37 @@ describe("Review Hub review marks (#14585)", () => {
       expect(screen.getByTestId("since-review-files-base-update").textContent).toContain("base.ts");
       expect(screen.getByTestId("since-review-files-branch").textContent).toContain("own.ts");
       expect(screen.getAllByTestId("since-review-commit")).toHaveLength(1);
-      // Rows only list: clicking one opens no diff.
-      const dispatch = vi.mocked(actionService.dispatch);
-      dispatch.mockClear();
+    });
+
+    it("opens a file's diff since review, with viewed marks of its own", async () => {
+      useReviewMarksStore.setState({ marks: { [WT]: summary(2) }, revision: 2, loaded: true });
+      const result = comparable(["src/own.ts", "src/base.ts"], 0);
+      if (result.state !== "comparable") throw new Error("expected comparable");
+      result.files[1]!.baseUpdate = "only";
+      bridge.compare.mockResolvedValue({ status: "compared", markRevision: 2, result });
+      const dialogs = usePanelDialogStore.getState();
+      const open = vi.spyOn(dialogs, "openPanelDialog").mockResolvedValue("diff-panel");
+      const push = vi.spyOn(dialogs, "pushPanelDialog").mockResolvedValue("diff-panel");
+      renderHub();
+      fireEvent.click(await screen.findByTestId("review-hub-review-mark-open"));
+      await screen.findByTestId("since-review-files-branch");
+
       fireEvent.click(screen.getAllByTestId("since-review-file-row")[0]!);
-      expect(dispatch).not.toHaveBeenCalled();
-      expect(screen.getAllByTestId("since-review-file-row")[0]!.closest("button")).toBeNull();
+
+      await waitFor(() => expect(open.mock.calls.length + push.mock.calls.length).toBe(1));
+      const options = (open.mock.calls[0] ?? push.mock.calls[0])![0];
+      expect(options).toMatchObject({
+        kind: "diff",
+        filePath: "src/own.ts",
+        diffSource: "since-review",
+        viewedKey: "since-review:src/own.ts",
+      });
+      // Branch files first, then the base update, as the list shows them.
+      expect(
+        (options as { changeSet: Array<{ viewedKey: string }> }).changeSet.map((e) => e.viewedKey)
+      ).toEqual(["since-review:src/own.ts", "since-review:src/base.ts"]);
+      open.mockRestore();
+      push.mockRestore();
     });
 
     it("says nothing changed only for a complete comparison", async () => {
