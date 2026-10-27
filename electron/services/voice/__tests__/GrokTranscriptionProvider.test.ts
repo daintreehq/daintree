@@ -777,10 +777,14 @@ describe("GrokTranscriptionProvider", () => {
       const { provider, events } = setup();
       const socket = await bringSessionReady(provider);
       const words = scoredWords(0, ["Test", 0.97], ["foo", 0.93], ["test", 0.31], ["bar.", 0.2]);
-      socket.simulateMessage(partial("Test foo test", { start: 0, duration: 0.9, words }));
+      socket.simulateMessage(
+        partial("Test foo test", { start: 0, duration: 0.9, words: words.slice(0, 3) })
+      );
       socket.simulateMessage(utteranceFinal(" Test foo test bar. ", 0, 1.2, words));
 
-      expect(deltasOf(events).every((d) => !("uncertain" in d))).toBe(true);
+      const deltas = deltasOf(events);
+      expect(deltas).toHaveLength(1);
+      expect(deltas[0]).not.toHaveProperty("uncertain");
       const [complete] = completesOf(events);
       expect(complete.text).toBe("Test foo test bar.");
       expect(unsureWords(complete)).toEqual(["test", "bar"]);
@@ -794,14 +798,15 @@ describe("GrokTranscriptionProvider", () => {
       ["the words aren't a list", { text: "Ship", confidence: 0.1 }],
       ["no word carries a confidence", [{ text: "Ship" }, { text: "it." }]],
       ["the words don't spell out the transcript", scoredWords(0, ["Shipping", 0.1])],
-      ["a confidence isn't a number", [{ text: "Ship", confidence: "0.1" }, { text: "it." }]],
       [
-        "the confidences are out of range",
+        "a confidence isn't a number",
         [
-          { text: "Ship", confidence: -0.2 },
-          { text: "it.", confidence: 1.4 },
+          { text: "Ship", confidence: "0.1" },
+          { text: "it.", confidence: 0.9 },
         ],
       ],
+      ["the only confidence is below 0", [{ text: "Ship", confidence: -0.2 }, { text: "it." }]],
+      ["the only confidence is above 1", [{ text: "Ship", confidence: 1.4 }, { text: "it." }]],
     ])("sends a final with no unsure words when %s", async (_name, words) => {
       const { provider, events } = setup();
       const socket = await bringSessionReady(provider);
@@ -813,12 +818,17 @@ describe("GrokTranscriptionProvider", () => {
       provider.stop();
     });
 
-    it("flags a word whose confidence xAI left out, as it leaves out a score of 0", async () => {
+    it("flags a word scored 0, whether xAI sent the score or left it out", async () => {
       const { provider, events } = setup();
       const socket = await bringSessionReady(provider);
-      const words = scoredWords(0, ["Deploy", 0.95], ["kubectl", 0], ["now.", 0.9]);
-      socket.simulateMessage(utteranceFinal("Deploy kubectl now.", 0, 0.9, words));
-      expect(unsureWords(completesOf(events)[0])).toEqual(["kubectl"]);
+      const words = [
+        { text: "Deploy", start: 0, end: 0.3, confidence: 0.95 },
+        { text: "kubectl", start: 0.3, end: 0.6 },
+        { text: "to", start: 0.6, end: 0.7, confidence: 0 },
+        { text: "prod.", start: 0.7, end: 1, confidence: 0.9 },
+      ];
+      socket.simulateMessage(utteranceFinal("Deploy kubectl to prod.", 0, 1, words));
+      expect(unsureWords(completesOf(events)[0])).toEqual(["kubectl", "to"]);
       provider.stop();
     });
 
@@ -867,8 +877,31 @@ describe("GrokTranscriptionProvider", () => {
           scoredWords(0, ["One,", 0.96], ["two,", 0.9], ["three.", 0.4])
         )
       );
-      expect(unsureWords(completesOf(events)[0])).toEqual(["three"]);
+      const [complete] = completesOf(events);
+      expect(complete.text).toBe("One, two, three.");
+      expect(unsureWords(complete)).toEqual(["three"]);
       provider.stop();
+    });
+
+    it("scores a chunk final that restates an earlier one by its own words", async () => {
+      const { provider, events } = setup();
+      const socket = await bringSessionReady(provider);
+      socket.simulateMessage(
+        chunkFinal("one two", 0, 2, scoredWords(0, ["one", 0.95], ["two", 0.3]))
+      );
+      socket.simulateMessage(
+        chunkFinal(
+          "one two three",
+          0,
+          3,
+          scoredWords(0, ["one", 0.95], ["two", 0.9], ["three", 0.4])
+        )
+      );
+      socket.simulateClose(1008);
+
+      const [complete] = completesOf(events);
+      expect(complete).toMatchObject({ text: "one two three", incomplete: true });
+      expect(complete.uncertain).toEqual([{ from: 8, to: 13 }]);
     });
 
     it("keeps a carried chunk's flags across a drop", async () => {
@@ -918,7 +951,7 @@ describe("GrokTranscriptionProvider", () => {
         type: "transcript.done",
         text: "Said once. Said twice.",
         words: [
-          ...scoredWords(0, ["Said", 0.25], ["once.", 0.2]),
+          ...scoredWords(0, ["Said", 0.95], ["once.", 0.2]),
           ...scoredWords(1, ["Said", 0.25], ["twice.", 0.9]),
         ],
       });
@@ -927,6 +960,25 @@ describe("GrokTranscriptionProvider", () => {
       const [first, tail] = completesOf(events);
       expect(unsureWords(first)).toEqual(["once"]);
       expect(tail).toMatchObject({ text: "Said twice.", endOfSpeech: true });
+      expect(tail.uncertain).toEqual([{ from: 0, to: 4 }]);
+    });
+
+    it("reads a tail word's missing score as 0 when only words the finals landed carry one", async () => {
+      const { provider, events } = setup();
+      const socket = await bringSessionReady(provider);
+      socket.simulateMessage(utteranceFinal("Okay.", 0, 0.3, scoredWords(0, ["Okay.", 0.9])));
+      const stopPromise = provider.stopGracefully();
+      socket.simulateMessage({
+        type: "transcript.done",
+        words: [
+          { text: "Okay.", start: 0, end: 0.3, confidence: 0.9 },
+          { text: "then", start: 0.3, end: 0.6 },
+        ],
+      });
+      await stopPromise;
+
+      const [, tail] = completesOf(events);
+      expect(tail).toMatchObject({ text: "then", endOfSpeech: true });
       expect(tail.uncertain).toEqual([{ from: 0, to: 4 }]);
     });
 
@@ -1001,12 +1053,44 @@ describe("GrokTranscriptionProvider", () => {
 
       const [complete] = completesOf(events);
       expect(complete).toMatchObject({ text: "deploy kubectl to staging now", incomplete: true });
-      expect(unsureWords(complete)).toEqual(["kubectl", "now"]);
+      expect(complete.uncertain).toEqual([
+        { from: 7, to: 14 },
+        { from: 26, to: 29 },
+      ]);
       expect(fatalErrorsOf(events)).toHaveLength(1);
     });
 
+    it("keeps carried and interim flags on a preview a failure after a drop settles", async () => {
+      const { provider, events } = setup();
+      const first = await bringSessionReady(provider);
+      for (let i = 0; i < 40; i++) provider.sendAudioChunk(new ArrayBuffer(CHUNK_BYTES));
+      first.simulateMessage(
+        chunkFinal("carried over", 0, 3, scoredWords(0, ["carried", 0.3], ["over", 0.9]))
+      );
+      first.simulateClose(1006);
+
+      vi.advanceTimersToNextTimer();
+      const second = latestInstance();
+      second.simulateReady();
+      second.simulateMessage(
+        partial("then this", {
+          start: 0,
+          duration: 0.6,
+          words: scoredWords(0, ["then", 0.9], ["this", 0.2]),
+        })
+      );
+      second.simulateClose(1008);
+
+      const [complete] = completesOf(events);
+      expect(complete).toMatchObject({ text: "carried over then this", incomplete: true });
+      expect(complete.uncertain).toEqual([
+        { from: 0, to: 7 },
+        { from: 18, to: 22 },
+      ]);
+    });
+
     it("never logs a flagged word", async () => {
-      const { provider } = setup();
+      const { provider, events } = setup();
       const loggers = [logger.logDebug, logger.logInfo, logger.logWarn, logger.logError];
       for (const log of loggers) vi.mocked(log).mockClear();
       const socket = await bringSessionReady(provider);
@@ -1023,6 +1107,11 @@ describe("GrokTranscriptionProvider", () => {
       });
       await stopPromise;
 
+      expect(completesOf(events).flatMap(unsureWords)).toEqual([
+        "Zanzibar",
+        "Quixotic",
+        "Xylophone",
+      ]);
       const logged = JSON.stringify(loggers.flatMap((log) => vi.mocked(log).mock.calls));
       for (const word of ["Zanzibar", "Quixotic", "Xylophone"]) {
         expect(logged).not.toContain(word);
