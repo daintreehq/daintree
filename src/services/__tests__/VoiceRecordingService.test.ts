@@ -454,7 +454,7 @@ describe("VoiceRecordingService — background recording", () => {
     });
   });
 
-  it("gives main nothing of this machine's for a reply to another host's terminal", async () => {
+  it("gives main nothing of this view's for a reply to a terminal outside it", async () => {
     setupGlobals();
 
     const { voiceRecordingService } = await import("../VoiceRecordingService");
@@ -465,7 +465,7 @@ describe("VoiceRecordingService — background recording", () => {
     });
 
     expect(window.electron.voiceInput.start).toHaveBeenCalledWith(expect.any(String), {
-      otherHost: true,
+      outsideView: true,
     });
   });
 
@@ -1674,48 +1674,61 @@ describe("VoiceRecordingService — Canopy's reply box (#14777)", () => {
     terminalId: "run-1",
   };
 
+  type VoiceState = {
+    status: string;
+    activeTarget: object | null;
+    pendingTarget: object | null;
+    lockedTarget: object | null;
+  };
+
+  function hasMockExport<K extends string, T>(mod: object, key: K): mod is Record<K, T> {
+    return key in mod;
+  }
+
+  async function canopyState() {
+    const canopy = await import("@/store/canopyStore");
+    if (!hasMockExport<"__state", { isOpen: boolean }>(canopy, "__state")) {
+      throw new Error("canopyStore mock lacks __state");
+    }
+    return canopy.__state;
+  }
+
   async function arrange() {
     setupGlobals();
-    const panel = (await import("@/store/panelStore")) as unknown as {
-      __state: { focusedId: string | null; panelsById: Record<string, unknown> };
-      usePanelStore: { subscribe: ReturnType<typeof vi.fn> };
-    };
+    const panel = await import("@/store/panelStore");
+    if (
+      !hasMockExport<"__state", { focusedId: string | null; panelsById: Record<string, unknown> }>(
+        panel,
+        "__state"
+      )
+    ) {
+      throw new Error("panelStore mock lacks __state");
+    }
     panel.__state.focusedId = "grid-1";
     panel.__state.panelsById = {
       "grid-1": { id: "grid-1", title: "Behind", location: "grid", launchAgentId: "claude" },
     };
-    const canopy = (await import("@/store/canopyStore")) as unknown as {
-      __state: { isOpen: boolean };
-    };
-    canopy.__state.isOpen = true;
-    const voice = (await import("@/store/voiceRecordingStore")) as unknown as {
-      __state: {
-        status: string;
-        activeTarget: object | null;
-        pendingTarget: object | null;
-        lockedTarget: object | null;
-      };
-      useVoiceRecordingStore: { getState: () => { announce: ReturnType<typeof vi.fn> } };
-    };
+    (await canopyState()).isOpen = true;
+    const voice = await import("@/store/voiceRecordingStore");
+    if (!hasMockExport<"__state", VoiceState>(voice, "__state")) {
+      throw new Error("voiceRecordingStore mock lacks __state");
+    }
     voice.__state.status = "idle";
     voice.__state.activeTarget = null;
     voice.__state.pendingTarget = null;
     voice.__state.lockedTarget = null;
-    voice.useVoiceRecordingStore.getState().announce.mockClear();
+    vi.mocked(voice.useVoiceRecordingStore.getState().announce).mockClear();
     const { notify } = await import("@/lib/notify");
     vi.mocked(notify).mockClear();
     const registry = await import("@/services/canopyReplyDictation");
     const { voiceRecordingService } = await import("../VoiceRecordingService");
     const toggleSpy = vi.spyOn(voiceRecordingService, "toggle").mockResolvedValue();
     const stopSpy = vi.spyOn(voiceRecordingService, "stop").mockResolvedValue();
-    return { voiceRecordingService, toggleSpy, stopSpy, registry, panel, canopy, voice, notify };
+    return { voiceRecordingService, toggleSpy, stopSpy, registry, panel, voice, notify };
   }
 
   afterEach(async () => {
-    const canopy = (await import("@/store/canopyStore")) as unknown as {
-      __state: { isOpen: boolean };
-    };
-    canopy.__state.isOpen = false;
+    (await canopyState()).isOpen = false;
   });
 
   it("starts the selected row's reply and moves the keyboard into it, not the grid pane behind", async () => {
@@ -1780,9 +1793,10 @@ describe("VoiceRecordingService — Canopy's reply box (#14777)", () => {
 
   it("brings a reply's session forward only while its row is still selected", async () => {
     const { voiceRecordingService, registry, voice } = await arrange();
-    const projects = (await import("@/store/projectStore")) as unknown as {
-      __switchProject: ReturnType<typeof vi.fn>;
-    };
+    const projects = await import("@/store/projectStore");
+    if (!hasMockExport<"__switchProject", Mock>(projects, "__switchProject")) {
+      throw new Error("projectStore mock lacks __switchProject");
+    }
     projects.__switchProject.mockClear();
     voice.__state.status = "recording";
     voice.__state.activeTarget = REPLY;
@@ -1812,12 +1826,11 @@ describe("VoiceRecordingService — Canopy's reply box (#14777)", () => {
     voiceRecordingService.initialize();
     voice.__state.status = "recording";
     voice.__state.activeTarget = REPLY;
-    const listeners = panel.usePanelStore.subscribe.mock.calls.map(
-      (call) => call[0] as (state: unknown) => void
-    );
+    const listeners = vi.mocked(panel.usePanelStore.subscribe).mock.calls.map((call) => call[0]);
     expect(listeners.length).toBeGreaterThan(0);
 
-    for (const listener of listeners) listener({ panelsById: {}, panelIds: [], focusedId: null });
+    const emptied = { ...panel.usePanelStore.getState(), panelsById: {}, panelIds: [] };
+    for (const listener of listeners) listener(emptied);
 
     expect(stopSpy).not.toHaveBeenCalled();
   });

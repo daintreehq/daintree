@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render as rtlRender } from "@testing-library/react";
 import { createRef, type KeyboardEvent, type ReactElement } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -8,7 +8,7 @@ import type { FleetRunRow } from "@shared/types/ipc/fleet";
 import type { CanopyCard as CanopyCardData, CanopyCategory } from "@shared/types/ipc/canopy";
 import { buildPilotGroups } from "@/components/Pilot/pilotRows";
 import { buildCanopyInbox, type CanopyItem } from "../canopyModel";
-import type { VoiceRecordingTarget } from "@/store/voiceRecordingStore";
+import { useVoiceRecordingStore, type VoiceRecordingTarget } from "@/store/voiceRecordingStore";
 import { DICTATION_OWNER_ATTR, canopyReplyVoiceId } from "@/services/canopyReplyDictation";
 import {
   TRASH_CONFIRM_MS,
@@ -37,9 +37,10 @@ interface TerminalProps {
   }) => void;
 }
 
-const { submit, sendKey, composerProps, terminalProps } = vi.hoisted(() => ({
+const { submit, sendKey, composerProps, terminalProps, composerFocus } = vi.hoisted(() => ({
   submit: vi.fn(async (..._args: unknown[]) => {}),
   sendKey: vi.fn(async (..._args: unknown[]) => {}),
+  composerFocus: vi.fn(),
   composerProps: { current: null as ComposerProps | null },
   terminalProps: { current: null as TerminalProps | null },
 }));
@@ -52,12 +53,16 @@ vi.mock("../CanopyTerminal", () => ({
   },
 }));
 
-vi.mock("@/components/Terminal/HybridInputBar", () => ({
-  HybridInputBar: (props: ComposerProps) => {
-    composerProps.current = props;
-    return <div data-testid="composer" />;
-  },
-}));
+vi.mock("@/components/Terminal/HybridInputBar", async () => {
+  const { useImperativeHandle } = await import("react");
+  return {
+    HybridInputBar: (props: ComposerProps & { ref?: React.Ref<{ focus: () => void }> }) => {
+      composerProps.current = props;
+      useImperativeHandle(props.ref, () => ({ focus: composerFocus }));
+      return <div data-testid="composer" />;
+    },
+  };
+});
 
 beforeEach(() => {
   Object.defineProperty(window, "electron", {
@@ -67,6 +72,7 @@ beforeEach(() => {
   });
   submit.mockClear();
   sendKey.mockClear();
+  composerFocus.mockClear();
   composerProps.current = null;
   terminalProps.current = null;
 });
@@ -334,6 +340,15 @@ describe("CanopyCard", () => {
   });
 
   describe("dictating a reply (#14777)", () => {
+    beforeEach(() => {
+      // This view is p1's, the project the fixtures' runs are in.
+      window.__DAINTREE_INITIAL_PROJECT__ = { id: "p1" };
+    });
+    afterEach(() => {
+      delete window.__DAINTREE_INITIAL_PROJECT__;
+      useVoiceRecordingStore.setState({ micNotice: null });
+    });
+
     function renderWithHandle(
       item: CanopyItem,
       props: { otherHostId?: string; reconnecting?: boolean } = {}
@@ -353,6 +368,15 @@ describe("CanopyCard", () => {
         surface: "canopy-reply",
         terminalId: "run-1",
       });
+    });
+
+    it("names no terminal for main to read when another project's view has the run", async () => {
+      window.__DAINTREE_INITIAL_PROJECT__ = { id: "p2" };
+      renderWithHandle(itemFor("question"));
+      const target = (await composer()).voiceTarget!;
+      expect(target.panelId).toBe(canopyReplyVoiceId("run-1"));
+      expect(target.terminalId).toBeUndefined();
+      expect(target.otherHostId).toBeUndefined();
     });
 
     it("names no terminal of this machine's for another host's run", async () => {
@@ -402,6 +426,49 @@ describe("CanopyCard", () => {
       });
     });
 
+    it("shows a microphone notice for the reply's own dictation, not the pane's", async () => {
+      const { container } = renderWithHandle(itemFor("question"));
+      await composer();
+      const lost = (panelId: string) =>
+        act(() => {
+          useVoiceRecordingStore.setState({
+            micNotice: { kind: "lost", target: { panelId }, deviceLabel: "AirPods" },
+          });
+        });
+
+      lost("run-1");
+      expect(container.textContent).not.toContain("Microphone lost");
+      lost(canopyReplyVoiceId("run-1"));
+      expect(container.textContent).toContain("Microphone lost");
+    });
+
+    it("keeps handing the keyboard to a loading reply while the dictation key is held", async () => {
+      const { ref } = renderWithHandle(itemFor("question"));
+      await composer();
+      await streamOpens({ watchId: 7 });
+      const dictation = ref.current!.dictation();
+      if (!dictation.ok) throw new Error("expected a reply to dictate into");
+      const frame = () =>
+        act(async () => {
+          await new Promise((resolve) => requestAnimationFrame(resolve));
+        });
+
+      dictation.focus();
+      await frame();
+      await frame();
+      const before = composerFocus.mock.calls.length;
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "d", metaKey: true, repeat: true }));
+      await frame();
+      expect(composerFocus.mock.calls.length).toBeGreaterThan(before);
+
+      // A fresh press is the user going elsewhere: the handoff stands down.
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "j" }));
+      const stopped = composerFocus.mock.calls.length;
+      await frame();
+      await frame();
+      expect(composerFocus.mock.calls.length).toBe(stopped);
+    });
+
     it("says it can't once the terminal has ended, or while its host reconnects", async () => {
       const ended = renderWithHandle(itemFor("question"));
       await composer();
@@ -422,6 +489,21 @@ describe("CanopyCard", () => {
         message: expect.stringContaining("reconnecting"),
       });
     });
+  });
+
+  it("keeps the row on an Escape the reply already used, to cancel its dictation", async () => {
+    const h = handlers();
+    const { container } = render(<CanopyCard item={itemFor("question")} {...PROPS} {...h} />);
+    await composer();
+    await streamOpens({ watchId: 7 });
+    const editor = document.createElement("div");
+    editor.className = "cm-editor";
+    container.querySelector("[data-testid=composer]")!.appendChild(editor);
+    // As CodeMirror's keymap does when dictation takes the key.
+    editor.addEventListener("keydown", (event) => event.preventDefault());
+
+    fireEvent.keyDown(editor, { key: "Escape" });
+    expect(h.onLeavePane).not.toHaveBeenCalled();
   });
 
   it("takes the first choice on Y only when the readers judged the action safe", () => {

@@ -44,15 +44,14 @@ describe("voiceContext", () => {
     ).toEqual({ terminalId: "run-1" });
   });
 
-  it("names no terminal for another host's reply, and says it is another host's", () => {
+  it("names no terminal for a reply main can't read context from, and says it is outside the view", () => {
     expect(
       voiceContext({
         panelId: canopyReplyVoiceId("run-1", "host-2"),
         surface: "canopy-reply",
-        terminalId: "run-1",
         otherHostId: "host-2",
       })
-    ).toEqual({ otherHost: true });
+    ).toEqual({ outsideView: true });
   });
 });
 

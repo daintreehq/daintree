@@ -23,14 +23,15 @@ export function isCanopyReplyTarget(target: VoiceRecordingTarget | null | undefi
 /** Where main reads a dictation's terminal, vocabulary and file links from. */
 export interface VoiceContext {
   terminalId?: string;
-  /** Typed to another host: nothing of this machine's belongs in the text. */
-  otherHost?: true;
+  /** Typed to a terminal outside this view: nothing of its project belongs in the text. */
+  outsideView?: true;
 }
 
 export function voiceContext(target: VoiceRecordingTarget): VoiceContext {
   if (!isCanopyReplyTarget(target)) return { terminalId: target.panelId };
-  if (target.otherHostId !== undefined) return { otherHost: true };
-  return target.terminalId !== undefined ? { terminalId: target.terminalId } : {};
+  return target.terminalId !== undefined
+    ? { terminalId: target.terminalId }
+    : { outsideView: true };
 }
 
 export type CanopyReplyDictation =

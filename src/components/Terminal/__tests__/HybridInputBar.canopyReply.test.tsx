@@ -205,7 +205,7 @@ describe("HybridInputBar — Canopy's reply beside the pane's own composer", () 
     expect(surface("reply").listening).toBe(true);
   });
 
-  it("finishes only its own dictation when the reply sends, never the pane's", async () => {
+  it("leaves the pane's dictation running when the reply sends", async () => {
     const stop = vi.spyOn(voiceRecordingService, "stop").mockResolvedValue();
     const discard = vi.spyOn(voiceRecordingService, "discardPendingCorrections");
     const onReplySend = vi.fn();
@@ -218,6 +218,46 @@ describe("HybridInputBar — Canopy's reply beside the pane's own composer", () 
     expect(stop).not.toHaveBeenCalled();
     expect(discard).toHaveBeenCalledWith(REPLY.panelId);
     expect(discard).not.toHaveBeenCalledWith("term-1");
+  });
+
+  it("finishes the reply's own dictation before its send goes", async () => {
+    let finish!: () => void;
+    const stop = vi.spyOn(voiceRecordingService, "stop").mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        })
+    );
+    const onReplySend = vi.fn();
+    const { surface } = await mountBoth(vi.fn(), onReplySend);
+    dictating(REPLY);
+
+    await sendFrom(surface("reply").view, "reply text");
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(onReplySend).not.toHaveBeenCalled();
+
+    await act(async () => finish());
+    expect(onReplySend).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the dictation key with the reply once it is expanded out of Canopy's pane", async () => {
+    const { surface } = await mountBoth();
+    const { view } = surface("reply");
+    const isMac = /Mac/.test(navigator.platform);
+    await act(async () => {
+      runScopeHandlers(
+        view,
+        new KeyboardEvent("keydown", { key: "e", shiftKey: true, metaKey: isMac, ctrlKey: !isMac }),
+        "editor"
+      );
+    });
+
+    await vi.waitFor(() => {
+      const host = view.dom.parentElement;
+      expect(host?.closest('[data-testid="reply"]')).toBeNull();
+      expect(host?.closest("[data-keybindings-isolated]")).not.toBeNull();
+      expect(host?.closest("[data-dictation-owner]")).not.toBeNull();
+    });
   });
 
   it("offers Escape in the reply to the reply's dictation, not the pane's", async () => {

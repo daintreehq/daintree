@@ -45,7 +45,10 @@ export interface VoiceRecordingTarget {
    * dictation id (`canopyReplyVoiceId`), with no project, and names no panel.
    */
   surface?: "canopy-reply";
-  /** The reply's terminal on this machine, for main to read context from; absent for another host's. */
+  /**
+   * The reply's terminal, for main to read context from: only one this view's
+   * own project owns, never another project's or another host's.
+   */
   terminalId?: string;
   /** The reply types to a terminal on this host, not the window's. */
   otherHostId?: string;

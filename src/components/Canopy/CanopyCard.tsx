@@ -71,7 +71,13 @@ import {
   canopyReplyVoiceId,
   type CanopyReplyDictation,
 } from "@/services/canopyReplyDictation";
-import type { VoiceRecordingTarget } from "@/store/voiceRecordingStore";
+import {
+  selectMicNoticeForPanel,
+  useVoiceRecordingStore,
+  type VoiceRecordingTarget,
+} from "@/store/voiceRecordingStore";
+import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
+import { VoiceMicNoticeBanner } from "@/components/Terminal/VoiceMicNoticeBanner";
 
 const LazyHybridInputBar = lazy(() =>
   import("@/components/Terminal/HybridInputBar").then((m) => ({ default: m.HybridInputBar }))
@@ -517,13 +523,17 @@ export function CanopyCard({
       cancelAnimationFrame(frame);
       cancelAnimationFrame(listenFrame);
       window.removeEventListener("pointerdown", stop, true);
-      window.removeEventListener("keydown", stop, true);
+      window.removeEventListener("keydown", onKey, true);
     };
     stopHandoffRef.current = stop;
-    // Listened for after this frame, so the press that chose Reply isn't one.
+    // Listened for after this frame, so the press that chose Reply isn't one,
+    // nor the auto-repeat of a key still held from it (the dictation key, held to talk).
+    const onKey = (event: globalThis.KeyboardEvent) => {
+      if (!event.repeat) stop();
+    };
     listenFrame = requestAnimationFrame(() => {
       window.addEventListener("pointerdown", stop, true);
-      window.addEventListener("keydown", stop, true);
+      window.addEventListener("keydown", onKey, true);
     });
     const attempt = (tries: number) => {
       if (!canReplyRef.current) return stop();
@@ -538,13 +548,19 @@ export function CanopyCard({
     return true;
   };
   // Its own dictation, apart from the grid pane's composer on the same terminal.
-  // Another host's terminal gives main nothing of this machine's to read.
+  // Main reads keyterms, vocabulary and file links from the terminal only when
+  // this view's project owns it: another project's or host's gives it none.
+  const ownsContext = otherHostId === undefined && run.workspaceId === getViewWorkspaceId();
   const voiceTarget: VoiceRecordingTarget = {
     panelId: canopyReplyVoiceId(item.runId, otherHostId),
     panelTitle: `Reply to ${row.title}`,
     surface: "canopy-reply",
-    ...(otherHostId !== undefined ? { otherHostId } : { terminalId: item.runId }),
+    ...(otherHostId !== undefined ? { otherHostId } : {}),
+    ...(ownsContext ? { terminalId: item.runId } : {}),
   };
+  const voiceMicNotice = useVoiceRecordingStore((s) =>
+    selectMicNoticeForPanel(s, voiceTarget.panelId)
+  );
   const dictation = (): CanopyReplyDictation => {
     if (!canReply) {
       return {
@@ -566,7 +582,16 @@ export function CanopyCard({
           : "Its terminal is still connecting. Try dictation again in a moment.",
       };
     }
-    return { ok: true, target: voiceTarget, focus: () => void focusComposer() };
+    return {
+      ok: true,
+      target: voiceTarget,
+      focus: () => {
+        // Already in the reply, expanded or not: there is nothing to hand over.
+        const active = document.activeElement;
+        if (active?.closest(".cm-editor") && active.closest(`[${DICTATION_OWNER_ATTR}]`)) return;
+        focusComposer();
+      },
+    };
   };
   useImperativeHandle(ref, () => ({ handleKey, focusComposer, dictation }));
 
@@ -952,6 +977,7 @@ export function CanopyCard({
             </span>
           </div>
         )}
+        {canReply && voiceMicNotice && <VoiceMicNoticeBanner notice={voiceMicNotice} />}
         {canReply ? (
           <div ref={replyHostRef} data-keybindings-isolated="" className="contents">
             <Suspense fallback={null}>

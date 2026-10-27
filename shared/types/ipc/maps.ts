@@ -1307,8 +1307,8 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
         sessionId?: string;
         /** Spans of `rawText` the recogniser was unsure of. */
         uncertain?: Array<{ from: number; to: number }>;
-        /** Dictated into a terminal on another host: cleaned up without this machine's vocabulary. */
-        otherHost?: true;
+        /** Dictated into a terminal outside the asking view: cleaned up without its project's vocabulary. */
+        outsideView?: true;
       },
     ];
     // `failed`: the request failed or was cancelled, leaving the raw text.

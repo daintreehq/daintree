@@ -138,6 +138,7 @@ import { takeScratchLanded } from "@/services/voiceScratchCommand";
 import { registerComposerSelectionSource } from "@/services/voiceRewriteSelection";
 import { readComposerSelection, takePendingComposerSelection } from "@/lib/composerCaret";
 import { isolatedComposerScope, makeDraftKey } from "@/lib/draftKey";
+import { DICTATION_OWNER_ATTR } from "@/services/canopyReplyDictation";
 import { useHostReparent } from "./hooks/useHostReparent";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { SelectedFileMenuItems } from "./SelectedFileMenuItems";
@@ -1339,7 +1340,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           });
         },
       }),
-      [focusEditor, guardSentDraft, sendText, voiceId]
+      [focusEditor, guardSentDraft, sendText, terminalId, voiceId]
     );
 
     // Claim the type-anywhere routing target (#11134) whenever the user really
@@ -1987,8 +1988,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                   }}
                   // The expanded editor portals out of the isolated composer's
                   // wrapper: it keeps that isolation, or the grid's shortcuts
-                  // would act on the pane behind Canopy.
+                  // would act on the pane behind Canopy, and the dictation key
+                  // its own dictation takes.
                   {...(isolated ? { "data-keybindings-isolated": "" } : {})}
+                  {...(isolated && voiceTarget ? { [DICTATION_OWNER_ATTR]: "" } : {})}
                   className="flex-1 min-h-[200px] overflow-auto text-text-primary p-4"
                 />
               </ContextMenuTrigger>

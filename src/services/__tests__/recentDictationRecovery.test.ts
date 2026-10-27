@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RecentDictation } from "@shared/types";
 
 const focus = vi.hoisted(() => ({
@@ -48,12 +48,21 @@ vi.mock("@/components/Panel/panelFocusRegistry", () => ({ focusPanelInput }));
 const copyWithToast = vi.hoisted(() => vi.fn<(label: string, value: string) => void>());
 vi.mock("@/lib/copyWithToast", () => ({ copyWithToast }));
 
+const canopy = vi.hoisted(() => ({ isOpen: false }));
+vi.mock("@/store/canopyStore", () => {
+  const getState = () => canopy;
+  return { useCanopyStore: Object.assign(getState, { getState }) };
+});
+
 const { insertRecentDictation, copyRecentDictation, focusRecoveredComposer } =
   await import("../recentDictationRecovery");
 const { useTerminalInputStore } = await import("@/store/terminalInputStore");
 const { useVoiceRecordingStore } = await import("@/store/voiceRecordingStore");
 const { useTypingLocatorStore } = await import("@/store/typingLocatorStore");
 const { useFleetArmingStore } = await import("@/store/fleetArmingStore");
+const { canopyReplyVoiceId, registerCanopyReplyDictation } =
+  await import("@/services/canopyReplyDictation");
+const { isolatedComposerScope } = await import("@/lib/draftKey");
 
 const DICTATION: RecentDictation = {
   id: "session-1",
@@ -202,5 +211,57 @@ describe("recentDictationRecovery", () => {
       ["Dictation", DICTATION.correctedText],
       ["Dictation", DICTATION.rawText],
     ]);
+  });
+});
+
+describe("recentDictationRecovery with Canopy open (#14777)", () => {
+  const REPLY = {
+    panelId: canopyReplyVoiceId("run-1"),
+    panelTitle: "Reply to Claude",
+    surface: "canopy-reply" as const,
+    terminalId: "run-1",
+  };
+  let unregister: () => void = () => {};
+
+  beforeEach(() => {
+    canopy.isOpen = true;
+    focus.target = { panelId: "panel-1", panelTitle: "Claude" };
+    panels.byId = { "panel-1": { id: "panel-1", kind: "terminal", location: "grid" } };
+    useTerminalInputStore.getState().clearAllDraftInputs();
+    useTypingLocatorStore.getState().clearLocator();
+    requestPaneFocus.mockClear();
+    focusPanelInput.mockClear();
+  });
+
+  afterEach(() => {
+    unregister();
+    canopy.isOpen = false;
+  });
+
+  it("adds it to the selected row's reply, not the grid pane behind, and hands the reply the keyboard", () => {
+    const replyFocus = vi.fn();
+    unregister = registerCanopyReplyDictation(() => ({
+      ok: true,
+      target: REPLY,
+      focus: replyFocus,
+    }));
+
+    expect(insertRecentDictation(DICTATION)).toBe(REPLY.panelId);
+    expect(useTerminalInputStore.getState().getDraftInput("run-1", isolatedComposerScope())).toBe(
+      "Fix the parser.\nThen the lexer."
+    );
+    expect(draft("panel-1")).toBe("");
+
+    focusRecoveredComposer(REPLY.panelId);
+    expect(replyFocus).toHaveBeenCalledTimes(1);
+    expect(requestPaneFocus).not.toHaveBeenCalled();
+  });
+
+  it("refuses when Canopy has no reply to take it, and leaves the grid's draft alone", () => {
+    unregister = registerCanopyReplyDictation(() => ({ ok: false, message: "No reply here." }));
+
+    expect(insertRecentDictation(DICTATION)).toBeNull();
+    expect(pill()?.kind).toBe("draft-refused");
+    expect(draft("panel-1")).toBe("");
   });
 });

@@ -154,8 +154,9 @@ interface VoiceSession {
   // The starting view's project at start (#14599). File links fall back to it
   // when no terminal vouches for a worktree.
   readonly projectInfo: { name?: string; path?: string };
-  // Dictated into a terminal on another host: nothing of this machine's.
-  readonly otherHost: boolean;
+  // Dictated into a terminal outside this view (another host's or project's):
+  // nothing of the view's own project belongs in the text.
+  readonly outsideView: boolean;
   /** The terminal being dictated into, as the renderer named it at start. */
   readonly terminalId: string | undefined;
   /** "rewrite" records an instruction for selected text, forwarded as spoken. */
@@ -736,7 +737,7 @@ async function resolveFileLinkCwd(
   session: VoiceSession,
   ptyClient: PtyClient | undefined
 ): Promise<string | null> {
-  if (session.otherHost) return null;
+  if (session.outsideView) return null;
   const { terminalId } = resolveKeytermTarget(session.projectId, session.terminalId, ptyClient);
   if (terminalId && ptyClient) {
     const terminal = await ptyClient.getTerminalAsync(terminalId).catch(() => null);
@@ -785,8 +786,8 @@ interface CorrectionPrep {
   readonly webContentsId: number;
   readonly projectId: string | null;
   readonly terminalId: string | undefined;
-  // Read for a terminal on another host: none of this machine's project or names.
-  readonly otherHost: boolean;
+  // Read for a terminal outside the view: none of the view's project or names.
+  readonly outsideView: boolean;
   readonly vocabulary: Promise<VoiceDictionaryEntry[]>;
   readonly commandTarget: Promise<VoiceCommandTarget | null>;
   readonly names: { names: string[] };
@@ -808,7 +809,7 @@ function findCorrectionPrep(
       prep.webContentsId === ctx.webContentsId &&
       prep.projectId === ctx.projectId &&
       prep.terminalId === request.terminalId &&
-      prep.otherHost === (request.otherHost === true)
+      prep.outsideView === (request.outsideView === true)
   );
 }
 
@@ -1071,7 +1072,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       webContentsId: ctx.webContentsId,
       projectId: ctx.projectId,
       projectInfo: getProjectInfo(ctx.projectId),
-      otherHost: options?.otherHost === true,
+      outsideView: options?.outsideView === true,
       terminalId: options?.terminalId,
       intent: options?.intent ?? "dictation",
       commandTarget: null,
@@ -1145,7 +1146,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       webContentsId: session.webContentsId,
       projectId: session.projectId,
       terminalId,
-      otherHost: session.otherHost,
+      outsideView: session.outsideView,
       vocabulary,
       commandTarget: resolveVoiceCommandTarget(
         deps.ptyClient,
@@ -1171,10 +1172,10 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       await correctionService.warm(
         correctionSettingsFor(
           settings,
-          prep.otherHost ? null : session.projectId,
+          prep.outsideView ? null : session.projectId,
           entries,
           commandTarget,
-          prep.otherHost ? [] : knownNames
+          prep.outsideView ? [] : knownNames
         )
       );
     };
@@ -1214,7 +1215,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // non-fatal — we just start without keyterms.
     const keytermTarget = resolveKeytermTarget(session.projectId, terminalId, deps.ptyClient);
     const vocabulary = readVocabulary(
-      session.otherHost
+      session.outsideView
         ? null
         : resolveVocabularyProject(session.projectId, terminalId, deps.ptyClient)
     );
@@ -1361,7 +1362,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         parts.length > 0 &&
         liveSettings.correctionEnabled &&
         liveSettings.resolveFileLinks &&
-        !session.otherHost &&
+        !session.outsideView &&
         liveSettings.openaiApiKey &&
         mayReferenceFile(writtenText)
           ? randomUUID()
@@ -1846,7 +1847,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       correctionService = new VoiceCorrectionService();
     }
 
-    const otherHost = request.otherHost === true;
+    const outsideView = request.outsideView === true;
     // The terminal's output follows the keyterms' ownership rule: terminalId
     // is empty for a terminal another project owns.
     const { terminalId } = resolveKeytermTarget(ctx.projectId, request.terminalId, deps.ptyClient);
@@ -1864,11 +1865,11 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         currentCommandTarget(prep, terminalId),
         prep.terminalOutput ?? readTerminalOutputForCorrection(deps.ptyClient, terminalId),
       ]);
-      knownNames = otherHost ? [] : prep.names.names;
+      knownNames = outsideView ? [] : prep.names.names;
     } else {
       [vocabulary, commandTarget, terminalOutput] = await Promise.all([
         readVocabulary(
-          otherHost
+          outsideView
             ? null
             : resolveVocabularyProject(ctx.projectId, request.terminalId, deps.ptyClient)
         ),
@@ -1876,7 +1877,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         readTerminalOutputForCorrection(deps.ptyClient, terminalId),
       ]);
       knownNames =
-        !otherHost && lastSessionNames?.webContentsId === ctx.webContentsId
+        !outsideView && lastSessionNames?.webContentsId === ctx.webContentsId
           ? lastSessionNames.names
           : [];
     }
@@ -1891,7 +1892,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       },
       correctionSettingsFor(
         settings,
-        otherHost ? null : ctx.projectId,
+        outsideView ? null : ctx.projectId,
         vocabulary,
         commandTarget,
         knownNames
