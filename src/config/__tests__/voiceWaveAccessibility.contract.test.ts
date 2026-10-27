@@ -56,7 +56,7 @@ describe("toolbar dictation waveform accessibility contract (#14911)", () => {
     const keyframes = blocksAfter(css, "@keyframes voice-wave-wait");
     expect(keyframes).toMatch(/opacity:\s*var\(--voice-wave-wait-floor,\s*[\d.]+\)/);
     const rule = blocksAfter(css, "@media (prefers-contrast: more)").match(BAR_RULE);
-    const floor = Number(rule?.[1].match(/--voice-wave-wait-floor:\s*([\d.]+)/)?.[1]);
+    const floor = Number(rule?.[1]?.match(/--voice-wave-wait-floor:\s*([\d.]+)/)?.[1]);
     const fallback = Number(
       keyframes.match(/var\(--voice-wave-wait-floor,\s*([\d.]+)\)/)?.[1] ?? Number.NaN
     );
