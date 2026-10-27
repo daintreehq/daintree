@@ -47,8 +47,10 @@ const PROVISIONAL_WORDS = 1;
 // Dictated words dropped between two matches with nothing added, the shape of
 // removed filler, that still leave the second match confirmed.
 const MAX_FILLER_DROPPED = 2;
-// Bounds each update's alignment, however long the passage or the stretch.
+// Bounds each update's alignment, however long the passage, the stretch or a
+// single word (a path splits into many units).
 const MAX_STRETCH_WORDS = 48;
+const MAX_STRETCH_UNITS = 64;
 const WINDOW_SLACK = 12;
 
 // Maps, so a word like "constructor" never finds an inherited key.
@@ -140,10 +142,11 @@ export function wordKeys(word: string): string[] {
 }
 
 // A quoted file reference is one word, spaces and all, so a rewrite never ends
-// inside the chip it draws as.
+// inside the chip it draws as. It opens and closes as the chip parser reads it
+// (getAllAtFileTokens): after a bracket at most, with escaped quotes inside.
 function tokenize(text: string, from = 0, limit = Infinity): Token[] {
   const tokens: Token[] = [];
-  const pattern = /@(["'])(?:(?!\1)[^\n])*\1\S*|\S+/g;
+  const pattern = /[([{]*@(["'])(?:\\\1|(?!\1)[^\n\r])+\1\S*|\S+/g;
   pattern.lastIndex = from;
   let match: RegExpExecArray | null;
   while (tokens.length < limit && (match = pattern.exec(text))) {
@@ -281,10 +284,10 @@ function alignStretch(streamed: Unit[], dictated: Unit[]): Step[] {
 /**
  * Whether the step at `index` is a match the alignment has confirmed: the
  * match before it (or the last commit, when there's none) sits right behind
- * it, or only a little filler was dropped between them and the alignment
- * carries on without adding or swapping a word straight after. A common word
- * matching on its own across a gap is chance, and a near spelling only counts
- * beside an exact match.
+ * it, or only a little filler was dropped between them and the next two words
+ * match as well, with nothing added or swapped on the way. A word repeated
+ * just ahead could otherwise take the match from the one the stream is on. A
+ * near spelling only counts beside an exact match.
  */
 function confirmsMatch(steps: Step[], index: number, originExact: boolean): boolean {
   const step = steps[index]!;
@@ -296,9 +299,14 @@ function confirmsMatch(steps: Step[], index: number, originExact: boolean): bool
     dropped++;
   }
   if (dropped > MAX_FILLER_DROPPED) return false;
-  const next = steps[index + 1];
-  if (dropped > 0 && (next?.kind === "added" || (next?.kind === "pair" && next.score <= 0))) {
-    return false;
+  if (dropped > 0) {
+    let following = 0;
+    for (let n = index + 1; n < steps.length && following < 2; n++) {
+      const next = steps[n]!;
+      if (next.kind === "added" || (next.kind === "pair" && next.score <= 0)) return false;
+      if (next.kind === "pair") following++;
+    }
+    if (following < 2) return false;
   }
   const prev = steps[k];
   if (prev?.kind === "pair" && prev.score <= 0) return false;
@@ -336,7 +344,7 @@ export class CorrectionStreamAligner {
     if (stable === 0) return this.rewrite;
     // The newest word is aligned too, so it can show where the words before
     // it belong, but nothing commits on it.
-    const streamedUnits = unitsOf(streamed, tokens);
+    const streamedUnits = unitsOf(streamed, tokens).slice(0, MAX_STRETCH_UNITS);
     const window = this.units.slice(
       this.unitsDone,
       this.unitsDone + 2 * streamedUnits.length + WINDOW_SLACK

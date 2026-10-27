@@ -100,13 +100,10 @@ describe("CorrectionStreamAligner", () => {
   it("follows the stream past removed filler", () => {
     const dictated = "um so I think we should uh refactor the parser";
     const seen = stream(dictated, "So I think we should refactor the parser now.");
-    // Dropped filler takes the word after it along, never more.
-    expect(seen[0]).toEqual({ text: "So", rawTo: rawTo(dictated, "um so") });
+    // Dropped filler goes once two words past it match, taking only those.
+    expect(seen[0]).toEqual({ text: "So I", rawTo: rawTo(dictated, "um so I") });
     expect(seen).toContainEqual({ text: "So I think we should", rawTo: rawTo(dictated, "should") });
-    expect(seen).toContainEqual({
-      text: "So I think we should refactor",
-      rawTo: rawTo(dictated, "uh refactor"),
-    });
+    expect(seen.some((r) => r.text === "So I think we should refactor")).toBe(false);
     expect(seen.at(-1)).toEqual({
       text: "So I think we should refactor the",
       rawTo: rawTo(dictated, "uh refactor the"),
@@ -186,6 +183,30 @@ describe("CorrectionStreamAligner", () => {
     });
   });
 
+  it("doesn't take a repeated phrase just ahead for the one the stream is on", () => {
+    const dictated = "we need to ad the Add the item button to the toolbar";
+    const seen = stream(dictated, "We need to add the Add the item button to the toolbar.");
+    for (const rewrite of seen) {
+      const display = shown(dictated, rewrite);
+      expect(
+        display.includes("the Add the item") || rewrite.text.includes("the Add the item")
+      ).toBe(true);
+    }
+    expect(seen.at(-1)).toEqual({
+      text: "We need to add the Add the item button to",
+      rawTo: rawTo(dictated, "button to"),
+    });
+  });
+
+  it("keeps each update's alignment bounded when one word is a long path", () => {
+    const path = "a/".repeat(5000);
+    const aligner = new CorrectionStreamAligner(`fix ${path} tail end`);
+    const started = performance.now();
+    const rewrite = aligner.advance(`Fix ${path} tail and`);
+    expect(performance.now() - started).toBeLessThan(1000);
+    expect(rewrite).toEqual({ text: "Fix", rawTo: 3 });
+  });
+
   it("treats a word that names a built-in property as an ordinary word", () => {
     expect(wordKeys("constructor")).toEqual(["constructor"]);
     const dictated = "fix the constructer before shipping it";
@@ -196,15 +217,21 @@ describe("CorrectionStreamAligner", () => {
     });
   });
 
-  it("never ends a rewrite inside a quoted file reference", () => {
-    const dictated = 'open @"my file.ts" now and check it';
+  it.each([
+    ['open @"my file.ts" now and check it', 'Open @"my file.ts" now and check it.'],
+    ['open (@"my file.ts") now and check it', 'Open (@"my file.ts") now and check it.'],
+    [
+      'open @"my \\"special file.ts" now and check it',
+      'Open @"my \\"special file.ts" now and check it.',
+    ],
+  ])("never ends a rewrite inside a quoted file reference: %s", (dictated, corrected) => {
     const chipFrom = dictated.indexOf("@");
-    const chipTo = dictated.indexOf('" ') + 1;
-    const seen = stream(dictated, 'Open @"my file.ts" now and check it.');
+    const chipTo = dictated.lastIndexOf('"') + 1;
+    const seen = stream(dictated, corrected);
     for (const rewrite of seen) {
       expect(rewrite.rawTo > chipFrom && rewrite.rawTo < chipTo).toBe(false);
     }
-    expect(seen).toContainEqual({ text: 'Open @"my file.ts"', rawTo: chipTo });
+    expect(seen.some((rewrite) => rewrite.rawTo >= chipTo)).toBe(true);
   });
 
   it("doesn't jump ahead on one common word matching by chance", () => {
@@ -239,7 +266,8 @@ describe("CorrectionStreamAligner", () => {
     let rewrite: StreamedRewrite | null = null;
     for (const prefix of prefixes(corrected)) rewrite = aligner.advance(prefix);
     expect(performance.now() - started).toBeLessThan(5000);
-    // Every "fillerN" between kept words is dropped as the stream passes it.
-    expect(rewrite!.rawTo).toBeGreaterThan(dictated.length - 40);
+    // Every "fillerN" between kept words is dropped as the stream passes it;
+    // the rewrite trails the stream by the words that confirm the last drop.
+    expect(rewrite!.rawTo).toBeGreaterThan(dictated.length - 60);
   });
 });
