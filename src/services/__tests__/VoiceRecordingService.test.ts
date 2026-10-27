@@ -3636,6 +3636,8 @@ describe("VoiceRecordingService — a session another view owns (#14601)", () =>
         insertion: { from: 4, to: 17 },
         words: { from: 4, to: 17 },
       });
+      // A later session on the pane is not the one the key stopped.
+      Reflect.set(voiceState, "panelBuffers", { "panel-a": { dictationSessionId: "dictation-0" } });
       expect(caret()).toBe(17);
       useDictationRangeStore.getState().setAnchor(draftTarget, { from: 20, to: 20 });
       expect(caret()).toBe(20);

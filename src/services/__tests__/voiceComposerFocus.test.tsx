@@ -496,6 +496,8 @@ describe("beginDictationReturn (#14791)", () => {
     beginDictationReturn("term-1", HERE)!.focus(() => 17);
     flushFrames();
     expect(document.activeElement).toBe(editor);
+    // Until then it keeps the composer's own rules: the end of what it shows.
+    expect(selection(view)).toEqual({ anchor: 11, head: 11 });
     await act(async () => {
       useTerminalInputStore.getState().bumpExternalDraftRevision({ keepsSelection: true });
     });

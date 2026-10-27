@@ -1281,16 +1281,16 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // dictated words (#14791), once: a composer remounted since has forgotten
     // its caret, and one left mid-draft shows it somewhere else. The offset is
     // into the draft, so an editor still catching up with it gets the caret
-    // when it does.
+    // when it does, and keeps its own rules until then.
     const placeReturnCaret = (view: EditorView): boolean => {
       const at = takeRequestedDictationCaret(terminalId);
       const draft = currentDraft();
       if (at === null || at > draft.length) return false;
-      if (view.state.doc.toString() === draft) {
-        view.dispatch({ selection: EditorSelection.cursor(at), scrollIntoView: true });
-      } else {
+      if (view.state.doc.toString() !== draft) {
         setPendingComposerSelection(draftKeyRef.current, draft, { from: at, to: at });
+        return false;
       }
+      view.dispatch({ selection: EditorSelection.cursor(at), scrollIntoView: true });
       return true;
     };
 

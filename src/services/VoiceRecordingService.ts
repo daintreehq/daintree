@@ -4229,7 +4229,7 @@ class VoiceRecordingService {
     const reveal = () => {
       const target = resolve();
       if (!target || !isCurrent()) return;
-      void this.focusActiveTarget(target).then((found) => {
+      void this.focusActiveTarget(target, isCurrent).then((found) => {
         // A Canopy reply put the keyboard in itself.
         if (found && !isCanopyReplyTarget(target)) focusComposer(target);
       });
@@ -4261,9 +4261,13 @@ class VoiceRecordingService {
 
   /**
    * Brings a dictation's pane forward, switching project and worktree as
-   * needed: `target`, or else the one the toolbar names.
+   * needed: `target`, or else the one the toolbar names. `isCurrent` calls it
+   * off after any wait, once the person has moved on.
    */
-  async focusActiveTarget(target?: VoiceRecordingTarget): Promise<boolean> {
+  async focusActiveTarget(
+    target?: VoiceRecordingTarget,
+    isCurrent: () => boolean = () => true
+  ): Promise<boolean> {
     this.initialize();
     // A queued start is what the toolbar names, so it is where a click goes.
     const { pendingTarget, activeTarget } = useVoiceRecordingStore.getState();
@@ -4286,6 +4290,7 @@ class VoiceRecordingService {
     const currentProjectId = useProjectStore.getState().currentProject?.id;
     if (target.projectId && currentProjectId !== target.projectId) {
       await useProjectStore.getState().switchProject(target.projectId);
+      if (!isCurrent()) return false;
     }
 
     if (target.worktreeId) {
@@ -4298,7 +4303,7 @@ class VoiceRecordingService {
     await this.waitForPanel(target.panelId);
 
     const foundPanel = usePanelStore.getState().panelsById[target.panelId];
-    if (!foundPanel || foundPanel.location === "trash") {
+    if (!foundPanel || foundPanel.location === "trash" || !isCurrent()) {
       return false;
     }
     const panel = foundPanel;
