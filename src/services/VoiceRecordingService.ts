@@ -106,7 +106,7 @@ import {
   type VoiceMicDevice,
 } from "@/services/voiceMicDevices";
 import { isScratchCommand, recordScratchLanded } from "@/services/voiceScratchCommand";
-import { applyDraftEdits, planFileReferenceEdits } from "@/services/voiceFileReferences";
+import { planFileReferenceEdits, planHeardSwaps } from "@/services/voiceFileReferences";
 import { isSpokenSendable } from "@/services/voiceSpokenSend";
 import { findRewriteComposer, type RewriteSelection } from "@/services/voiceRewriteSelection";
 import { focusDictationComposer } from "@/services/voiceComposerFocus";
@@ -862,12 +862,19 @@ class VoiceRecordingService {
           const edit = edits[i]!;
           voiceStore.shiftDraftOffsets(panelId, edit.to, edit.text.length - (edit.to - edit.from));
         }
-        const next = applyDraftEdits(draft, edits);
-        // Spelled out, so words between two swaps aren't taken as rewritten.
-        useDictationRangeStore
-          .getState()
-          .expectDraftChange(panelId, projectId, draft, next, draftChanges(draft, edits));
-        this.writeShiftedDraft(panelId, next, projectId);
+        // The words were dictated, and still are: the link is theirs, not an edit.
+        useDictationRangeStore.getState().rewriteWords(
+          record.id,
+          edits,
+          (next) => {
+            // Spelled out, so words between two swaps aren't taken as rewritten.
+            useDictationRangeStore
+              .getState()
+              .expectDraftChange(panelId, projectId, draft, next, draftChanges(draft, edits));
+            this.writeShiftedDraft(panelId, next, projectId);
+          },
+          planHeardSwaps(record, edits, draft, this.heardAsRules)
+        );
         inputStore.bumpExternalDraftRevision({ keepsSelection: true });
       })
     );

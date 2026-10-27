@@ -297,6 +297,41 @@ describe("VoiceRecordingService — scratch that (#14636)", () => {
     expect(draft()).toBe("One. Tw0.");
   });
 
+  describe("an utterance with a resolved file reference (#14806)", () => {
+    const resolve = () =>
+      callbacks.fileToken!({
+        sessionId: SESSION_ID,
+        transcriptId: "t1",
+        references: [{ description: "router", path: "src/router.ts" }],
+      });
+
+    it("is removed whole, with the reference", async () => {
+      const { draft, records } = await setup("Existing.");
+
+      complete("One.", "a");
+      complete("Link to the router.", "b", "t1");
+      resolve();
+      expect(draft()).toBe("Existing. One. @src/router.ts.");
+      complete("Scratch that.", "c");
+
+      expect(draft()).toBe("Existing. One.");
+      expect(records()[0]!.utterances).toHaveLength(1);
+    });
+
+    it("is not removed once the reference was edited", async () => {
+      const { draft, setDraft, records } = await setup();
+
+      complete("One.", "a");
+      complete("Link to the router.", "b", "t1");
+      resolve();
+      expect(records()[0]!.utterances.map((u) => u.range.edited)).toEqual([false, false]);
+      setDraft(draft().replace("router.ts", "routers.ts"));
+      complete("Scratch that.", "c");
+
+      expect(draft()).toBe("One. @src/routers.ts.");
+    });
+  });
+
   it("never takes a newline the user typed between utterances", async () => {
     const { draft, setDraft } = await setup();
 

@@ -1,6 +1,8 @@
 import type { DictationRecord } from "@/store/dictationRangeStore";
 import { formatAtFileToken } from "@/components/Terminal/hybridInputParsing";
 import { FILE_LINK_COMMAND_PATTERN } from "@shared/utils/voiceFileLinkCommands";
+import type { HeardAsRewriter } from "@shared/utils/voiceHeardAs";
+import type { VoiceTextEdit } from "@shared/utils/voiceUncertainWords";
 
 /**
  * A file description main detected in a transcript, with the path it resolved
@@ -106,12 +108,52 @@ export function planFileReferenceEdits(
   return edits.sort((a, b) => a.from - b.from);
 }
 
-/** Applies non-overlapping edits given in draft order. */
-export function applyDraftEdits(draft: string, edits: DraftEdit[]): string {
-  let next = draft;
-  for (let i = edits.length - 1; i >= 0; i--) {
-    const edit = edits[i]!;
-    next = next.slice(0, edit.from) + edit.text + next.slice(edit.to);
+// Where a position in the words as written sits in the words as heard: the
+// heard-as rewrites are known exactly, so it is its own offset moved by every
+// rewrite before it. Null inside a term a rule wrote, which has no counterpart
+// in the words as heard.
+function heardOffset(rewrites: readonly VoiceTextEdit[], written: number): number | null {
+  let shift = 0;
+  for (const { from, to, insert } of rewrites) {
+    const start = from + shift;
+    if (written <= start) break;
+    if (written < start + insert.length) return null;
+    shift += insert.length - (to - from);
   }
-  return next;
+  return written - shift;
+}
+
+/**
+ * The same swaps in the words as heard, by utterance id, for each swapped
+ * utterance the heard-as rules rewrote: the rules rerun over those words at
+ * stop, and would put the spoken command back over its token. Each swap is
+ * placed through the rewrites the rules made, so it lands on the command it
+ * replaced and not on another that reads alike. An utterance whose words the
+ * rules can't be replayed to (they changed since, or a rewrite cuts through
+ * the command) has no entry.
+ */
+export function planHeardSwaps(
+  record: DictationRecord,
+  edits: readonly DraftEdit[],
+  draft: string,
+  rewrite: HeardAsRewriter | null
+): Map<string, DraftEdit[]> {
+  const swaps = new Map<string, DraftEdit[]>();
+  if (!rewrite) return swaps;
+  for (const { id, range, heard } of record.utterances) {
+    if (heard === undefined) continue;
+    const mine = edits.filter((edit) => range.from <= edit.from && edit.to <= range.to);
+    if (mine.length === 0) continue;
+    const rewrites: VoiceTextEdit[] = [];
+    if (rewrite(heard, undefined, rewrites) !== draft.slice(range.from, range.to)) continue;
+    const spoken = mine.map((edit) => ({
+      from: heardOffset(rewrites, edit.from - range.from),
+      to: heardOffset(rewrites, edit.to - range.from),
+      text: edit.text,
+    }));
+    if (spoken.every((swap): swap is DraftEdit => swap.from !== null && swap.to !== null)) {
+      swaps.set(id, spoken);
+    }
+  }
+  return swaps;
 }

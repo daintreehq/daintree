@@ -14,13 +14,14 @@ export interface ProtectedSpan {
 }
 
 // Order matters: earlier alternatives claim their text first, so a path inside
-// backticks or an @-reference is one span, not two. Each alternative may only
+// backticks or an @-reference is one span, not two. An @-reference in quotes
+// (a path with spaces) runs to its closing quote. Each alternative may only
 // start at the beginning of a run (the lookbehinds), which keeps the scan
 // linear on long unspaced text such as CJK or a pasted blob.
 const PROTECTED_SPAN_RE = new RegExp(
   [
     "(?<code>```[\\s\\S]*?```|`[^`\\n]+`)",
-    "(?<ref>(?<![\\w@])@[^\\s`]+)",
+    '(?<ref>(?<![\\w@])@(?:"(?:\\\\.|[^"\\\\\\n])+"|[^\\s`]+))',
     "(?<url>(?<![\\w+.-])[a-z][a-z0-9+.-]*:\\/\\/[^\\s`]+)",
     "(?<flag>(?<![\\w-])--?[A-Za-z][^\\s`=,;]*(?:=[^\\s`,;]+)?)",
     "(?<path>(?<![\\p{L}\\p{N}_.~:%+-])[\\p{L}\\p{N}_.~:%+-]*[/\\\\][^\\s`,;，。、；：！？]*)",

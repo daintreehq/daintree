@@ -438,16 +438,6 @@ describe("VoiceRecordingService — dictation ranges (#14597)", () => {
     expect(textOf(record!.range)).toBe("Kept part.");
   });
 
-  it("flags a dictation a file-link swap rewrote, leaving the swap itself unchanged", async () => {
-    const { draft, records } = await setup();
-
-    complete("Link to the readme file.", "item-a", "t1");
-    fileReferences("t1", [{ description: "readme file", path: "README.md" }]);
-
-    expect(draft()).toBe("@README.md.");
-    expect(records()[0]!.utterances[0]!.range.edited).toBe(true);
-  });
-
   it("moves a newer session's learning baseline once when an older one's file link lands before it", async () => {
     const { service, voiceStore, begin, draft } = await setup();
 
@@ -1122,6 +1112,158 @@ describe("VoiceRecordingService — spoken file references (#14616)", () => {
     fileReferences("t1", [{ description: "router", path: "src/router.ts" }]);
 
     expect(draft()).toBe("");
+  });
+});
+
+describe("VoiceRecordingService — a resolved file reference stays dictated text (#14806)", () => {
+  const router = [{ description: "router", path: "src/router.ts" }];
+  const sentTexts = () => correct.fn.mock.calls.map(([request]) => request.rawText);
+
+  it("keeps the dictation and its utterances unedited, with their ranges on the token", async () => {
+    const { draft, records, textOf } = await setup("Existing.");
+
+    complete("Fix the padding.", "item-a");
+    complete("Link to the router.", "item-b", "t1");
+    complete("Thanks.", "item-c");
+    fileReferences("t1", router);
+
+    expect(draft()).toBe("Existing. Fix the padding. @src/router.ts. Thanks.");
+    const [record] = records();
+    expect(record!.range.edited).toBe(false);
+    expect(textOf(record!.range)).toBe(" Fix the padding. @src/router.ts. Thanks.");
+    expect(record!.utterances.map((u) => [textOf(u.range), u.range.edited])).toEqual([
+      ["Fix the padding.", false],
+      ["@src/router.ts.", false],
+      ["Thanks.", false],
+    ]);
+    expect(record!.utterances.map((u) => [textOf(u.insertion), u.insertion.edited])).toEqual([
+      [" Fix the padding.", false],
+      [" @src/router.ts.", false],
+      [" Thanks.", false],
+    ]);
+  });
+
+  it("keeps a link at either end of its words unedited, and later text out of them", async () => {
+    const { draft, setDraft, records, textOf } = await setup();
+
+    complete("Link to the router", "item-a", "t1");
+    complete("Then link to the readme", "item-b", "t2");
+    fileReferences("t1", router);
+    fileReferences("t2", [{ description: "readme", path: "README.md" }]);
+    // Two writes: one diff over both ends would read as replacing the lot.
+    setDraft(`Note: ${draft()}`);
+    setDraft(`${draft()} Done.`);
+
+    expect(draft()).toBe("Note: @src/router.ts Then @README.md Done.");
+    const [record] = records();
+    expect(record!.utterances.map((u) => [textOf(u.range), u.range.edited])).toEqual([
+      ["@src/router.ts", false],
+      ["Then @README.md", false],
+    ]);
+    expect(textOf(record!.range)).toBe("@src/router.ts Then @README.md");
+    expect(record!.range.edited).toBe(false);
+  });
+
+  it("swaps several links in one transcript without editing any of its words", async () => {
+    const { draft, records, textOf } = await setup();
+
+    complete("Link to the router and link to the readme.", "item-a", "t1");
+    fileReferences("t1", [...router, { description: "readme", path: "README.md" }]);
+
+    expect(draft()).toBe("@src/router.ts and @README.md.");
+    const [record] = records();
+    expect(textOf(record!.utterances[0]!.range)).toBe("@src/router.ts and @README.md.");
+    expect(record!.utterances[0]!.range.edited).toBe(false);
+    expect(record!.range.edited).toBe(false);
+  });
+
+  it.each([
+    ["inside the reference", "router.ts", "routers.ts"],
+    ["in the words before it", "Open it", "Close it"],
+    ["in the words after it", "please", "now"],
+  ])("counts an edit %s as the user's", async (_where, from, to) => {
+    const { draft, setDraft, records } = await setup();
+
+    complete("Open it, link to the router, please.", "item-a", "t1");
+    fileReferences("t1", router);
+    expect(draft()).toBe("Open it, @src/router.ts, please.");
+    expect(records()[0]!.utterances[0]!.range.edited).toBe(false);
+    setDraft(draft().replace(from, to));
+
+    expect(records()[0]!.utterances[0]!.range.edited).toBe(true);
+    expect(records()[0]!.range.edited).toBe(true);
+  });
+
+  it("flags only the utterance whose link was edited", async () => {
+    const { draft, setDraft, records } = await setup();
+
+    complete("One.", "item-a");
+    complete("Link to the router.", "item-b", "t1");
+    complete("Three.", "item-c");
+    fileReferences("t1", router);
+    expect(records()[0]!.utterances.map((u) => u.range.edited)).toEqual([false, false, false]);
+    setDraft(draft().replace("router.ts", "routers.ts"));
+
+    expect(records()[0]!.utterances.map((u) => u.range.edited)).toEqual([false, true, false]);
+  });
+
+  it("cleans up the passage around a link as one", async () => {
+    const { service, voiceStore, draft } = await setup();
+    correct.fn.mockImplementation(async ({ rawText }: CorrectRequest) => ({
+      action: "replace",
+      correctedText: rawText.replace("padding", "Padding"),
+    }));
+    voiceStore.getState().setCorrectionEnabled(true);
+
+    complete("Fix the padding.", "item-a");
+    complete("Link to the router.", "item-b", "t1");
+    complete("Thanks.", "item-c");
+    fileReferences("t1", router);
+    await service.stop("Dictation stopped.");
+
+    expect(sentTexts()).toEqual(["Fix the padding. @src/router.ts. Thanks."]);
+    await vi.waitFor(() => expect(draft()).toBe("Fix the Padding. @src/router.ts. Thanks."));
+  });
+
+  it("cleans up a one-utterance prompt whose link resolves while the stop drains", async () => {
+    const { service, voiceStore, draft } = await setup();
+    correct.fn.mockImplementation(async ({ rawText }: CorrectRequest) => ({
+      action: "replace",
+      correctedText: rawText.replace("check", "Check"),
+    }));
+    voiceStore.getState().setCorrectionEnabled(true);
+    voiceStore.getState().setStatus("recording");
+    Reflect.set(service, "sessionId", SESSION_ID);
+    let finishDrain!: () => void;
+    vi.mocked(window.electron.voiceInput.stop).mockReturnValue(
+      new Promise((resolve) => {
+        finishDrain = () => resolve({ rawText: null });
+      })
+    );
+
+    const stopping = service.stop("Dictation stopped.");
+    await vi.waitFor(() => expect(window.electron.voiceInput.stop).toHaveBeenCalled());
+    complete("check link to the router please", "item-a", "t1");
+    fileReferences("t1", router);
+    expect(draft()).toBe("check @src/router.ts please");
+    expect(sentTexts()).toEqual([]);
+    finishDrain();
+    await stopping;
+
+    expect(sentTexts()).toEqual(["check @src/router.ts please"]);
+    await vi.waitFor(() => expect(draft()).toBe("Check @src/router.ts please"));
+  });
+
+  it("cleans up a one-utterance prompt once its link resolved", async () => {
+    const { service, voiceStore } = await setup();
+    correct.fn.mockResolvedValue({ action: "no_change", correctedText: "" });
+    voiceStore.getState().setCorrectionEnabled(true);
+
+    complete("check link to the router please", "item-a", "t1");
+    fileReferences("t1", router);
+    await service.stop("Dictation stopped.");
+
+    expect(sentTexts()).toEqual(["check @src/router.ts please"]);
   });
 });
 

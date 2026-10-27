@@ -424,6 +424,47 @@ describe("VoiceRecordingService — Escape cancels a dictation (#14631)", () => 
     expect(announcement()).toMatch(/kept/i);
   });
 
+  describe("with a resolved file reference (#14806)", () => {
+    const resolve = () =>
+      callbacks.fileToken!({
+        sessionId: SESSION_ID,
+        transcriptId: "t1",
+        references: [{ description: "router", path: "src/router.ts" }],
+      });
+
+    it("removes the reference with the rest of the dictation", async () => {
+      const { service, draft, records, settled } = await setup("Keep");
+
+      complete("Fix the padding.", "item-a");
+      complete("Link to the router.", "item-b", SESSION_ID, "t1");
+      resolve();
+      expect(draft()).toBe("Keep Fix the padding. @src/router.ts.");
+
+      expect(service.handleEscape(PANEL)).toBe(true);
+      await settled();
+
+      expect(draft()).toBe("Keep");
+      expect(records()).toEqual([]);
+      expect(ipc.cancel).toHaveBeenCalledWith(SESSION_ID);
+    });
+
+    it("keeps the dictation once the reference itself was edited", async () => {
+      const { service, draft, setDraft, records, announcement, settled } = await setup();
+
+      complete("Link to the router.", "item-a", SESSION_ID, "t1");
+      resolve();
+      expect(records()[0]!.utterances[0]!.range.edited).toBe(false);
+      setDraft(draft().replace("router.ts", "routers.ts"));
+
+      service.handleEscape(PANEL);
+      await settled();
+
+      expect(draft()).toBe("@src/routers.ts.");
+      expect(ipc.cancel).not.toHaveBeenCalled();
+      expect(announcement()).toMatch(/kept/i);
+    });
+  });
+
   it("runs no correction for a cancelled dictation", async () => {
     const { service, voiceStore, draft, setDraft, settled } = await setup("Intro.");
     voiceStore.getState().setCorrectionEnabled(true);
@@ -614,24 +655,6 @@ describe("VoiceRecordingService — Escape cancels a dictation (#14631)", () => 
       expect(voiceStore.getState().status).toBe("idle");
     }
   );
-
-  it("keeps a dictation whose words a file reference already rewrote", async () => {
-    const { service, draft, settled } = await setup();
-
-    complete("Link to the router.", "item-a", SESSION_ID, "t1");
-    callbacks.fileToken!({
-      sessionId: SESSION_ID,
-      transcriptId: "t1",
-      references: [{ description: "router", path: "src/router.ts" }],
-    });
-    expect(draft()).toBe("@src/router.ts.");
-
-    service.handleEscape(PANEL);
-    await settled();
-
-    expect(draft()).toBe("@src/router.ts.");
-    expect(ipc.cancel).not.toHaveBeenCalled();
-  });
 
   it("lets an earlier passage's correction land after a later dictation is cancelled", async () => {
     const { service, voiceStore, begin, draft, settled } = await setup();

@@ -56,6 +56,7 @@ type CompletePayload = {
   text: string;
   willCorrect: boolean;
   itemId?: string;
+  transcriptId?: string;
   heard?: string;
   commandText?: string;
   uncertain?: Span[];
@@ -65,11 +66,18 @@ type CompletePayload = {
 type Span = { from: number; to: number };
 type CorrectResult = { action: "no_change" | "replace"; correctedText: string };
 
+type FileTokenPayload = {
+  sessionId: string;
+  transcriptId: string;
+  references: Array<{ description: string; path: string | null }>;
+};
+
 const callbacks: {
   delta: ((payload: DeltaPayload) => void) | null;
   complete: ((payload: CompletePayload) => void) | null;
   boundary: ((payload: { rawText: string | null }) => void) | null;
-} = { delta: null, complete: null, boundary: null };
+  fileToken: ((payload: FileTokenPayload) => void) | null;
+} = { delta: null, complete: null, boundary: null, fileToken: null };
 
 const correct =
   vi.fn<
@@ -99,7 +107,10 @@ function stubElectron() {
         callbacks.boundary = cb;
         return () => {};
       }),
-      onFileTokenResolved: vi.fn(() => () => {}),
+      onFileTokenResolved: vi.fn((cb: (payload: FileTokenPayload) => void) => {
+        callbacks.fileToken = cb;
+        return () => {};
+      }),
       onError: vi.fn(() => () => {}),
       onStatus: vi.fn(() => () => {}),
       onSessionEnded: vi.fn(() => () => {}),
@@ -159,15 +170,32 @@ async function setup() {
   let itemSeq = 0;
   // One utterance through the real transcription handlers, the way a provider
   // delivers it: a delta, then its completion.
-  const say = (text: string, heard?: string) => {
+  const say = (text: string, heard?: string, transcriptId?: string) => {
     const itemId = `item-${++itemSeq}`;
     callbacks.delta!({ text: heard ?? text, itemId });
-    callbacks.complete!({ text, willCorrect: false, itemId, ...(heard ? { heard } : {}) });
+    callbacks.complete!({
+      text,
+      willCorrect: false,
+      itemId,
+      ...(heard ? { heard } : {}),
+      ...(transcriptId ? { transcriptId } : {}),
+    });
   };
-  const dictate = (panelId: string, text: string, heard?: string) => {
+  const dictate = (panelId: string, text: string, heard?: string, transcriptId?: string) => {
     useVoiceRecordingStore.getState().beginSession({ panelId });
-    say(text, heard);
+    say(text, heard, transcriptId);
   };
+  // Main's file links for a transcript, which name the session that spoke it.
+  const resolveFiles = (
+    panelId: string,
+    transcriptId: string,
+    ...references: Array<{ description: string; path: string | null }>
+  ) =>
+    callbacks.fileToken!({
+      sessionId: useVoiceRecordingStore.getState().panelBuffers[panelId]!.dictationSessionId!,
+      transcriptId,
+      references,
+    });
   const draft = (panelId: string) => useTerminalInputStore.getState().getDraftInput(panelId);
   const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
   const baseline = (panelId: string) =>
@@ -180,6 +208,7 @@ async function setup() {
     inputStore: useTerminalInputStore,
     say,
     dictate,
+    resolveFiles,
     draft,
     flush,
   };
@@ -975,6 +1004,139 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
       await service.stop();
 
       expect(draft("panel-1")).toBe("bee and sea");
+    });
+
+    describe("with a resolved file link", () => {
+      const router = { description: "router", path: "src/router.ts" };
+      const cleanups = () => correct.mock.calls.map(([request]) => request.rawText);
+
+      it("keeps the link and still catches a phrase split around it", async () => {
+        dictionary = [rule("Zustand", "zoo stand")];
+        const { service, dictate, say, resolveFiles, draft } = await setup();
+        correct.mockResolvedValue({ action: "no_change", correctedText: "" });
+
+        dictate("panel-1", "Zustand: link to the router", "zoo stand: link to the router", "t1");
+        say("and zoo");
+        say("stand now");
+        resolveFiles("panel-1", "t1", router);
+        expect(draft("panel-1")).toBe("Zustand: @src/router.ts and zoo stand now");
+        await service.stop();
+
+        expect(draft("panel-1")).toBe("Zustand: @src/router.ts and Zustand now");
+        expect(cleanups()).toEqual(["Zustand: @src/router.ts and Zustand now"]);
+      });
+
+      it("never rewrites a term the rules already wrote in the same utterance", async () => {
+        dictionary = [rule("bee", "ay"), rule("sea", "bee")];
+        const { service, dictate, resolveFiles, draft } = await setup();
+        correct.mockResolvedValue({ action: "no_change", correctedText: "" });
+
+        dictate("panel-1", "bee link to the router", "ay link to the router", "t1");
+        resolveFiles("panel-1", "t1", router);
+        await service.stop();
+
+        expect(draft("panel-1")).toBe("bee @src/router.ts");
+        expect(cleanups()).toEqual(["bee @src/router.ts"]);
+      });
+
+      it("keeps the link when a rule rewrote words inside the command", async () => {
+        dictionary = [rule("router", "rooter")];
+        const { service, dictate, resolveFiles, draft } = await setup();
+        correct.mockResolvedValue({ action: "no_change", correctedText: "" });
+
+        dictate("panel-1", "link to the router", "link to the rooter", "t1");
+        resolveFiles("panel-1", "t1", router);
+        await service.stop();
+
+        expect(draft("panel-1")).toBe("@src/router.ts");
+        expect(cleanups()).toEqual(["@src/router.ts"]);
+      });
+
+      it("never writes a term twice when a rule wrote the words of the command", async () => {
+        dictionary = [rule("React Native", "react")];
+        const { service, dictate, resolveFiles, draft } = await setup();
+        correct.mockResolvedValue({ action: "no_change", correctedText: "" });
+
+        dictate(
+          "panel-1",
+          "fix React Native and link to React Native",
+          "fix react and link to react",
+          "t1"
+        );
+        resolveFiles("panel-1", "t1", { description: "React Native", path: "src/native.ts" });
+        await service.stop();
+
+        expect(draft("panel-1")).toBe("fix React Native and @src/native.ts");
+        expect(cleanups()).toEqual(["fix React Native and @src/native.ts"]);
+      });
+
+      it("swaps the command it resolved, not another that was heard alike", async () => {
+        dictionary = [rule("route handler", "router"), rule("router", "rooter")];
+        const { service, dictate, resolveFiles, draft } = await setup();
+        correct.mockResolvedValue({ action: "no_change", correctedText: "" });
+
+        dictate(
+          "panel-1",
+          "link to route handler and link to router",
+          "link to router and link to rooter",
+          "t1"
+        );
+        resolveFiles(
+          "panel-1",
+          "t1",
+          { description: "route handler", path: null },
+          { description: "router", path: "src/router.ts" }
+        );
+        await service.stop();
+
+        expect(draft("panel-1")).toBe("link to route handler and @src/router.ts");
+        expect(cleanups()).toEqual(["link to route handler and @src/router.ts"]);
+      });
+
+      it("keeps a link in each of two utterances heard differently", async () => {
+        dictionary = [rule("router", "rooter"), rule("readme file", "read me file")];
+        const { service, dictate, say, resolveFiles, draft } = await setup();
+        correct.mockResolvedValue({ action: "no_change", correctedText: "" });
+
+        dictate("panel-1", "link to the router", "link to the rooter", "t1");
+        say("then link to the readme file", "then link to the read me file", "t1");
+        resolveFiles("panel-1", "t1", router, { description: "readme file", path: "README.md" });
+        expect(draft("panel-1")).toBe("@src/router.ts then @README.md");
+        await service.stop();
+
+        expect(draft("panel-1")).toBe("@src/router.ts then @README.md");
+        expect(cleanups()).toEqual(["@src/router.ts then @README.md"]);
+      });
+
+      it("keeps a quoted path whose spaces hold a word a rule would rewrite", async () => {
+        dictionary = [rule("Zustand", "zoo stand")];
+        const { service, dictate, resolveFiles, draft } = await setup();
+        correct.mockResolvedValue({ action: "no_change", correctedText: "" });
+
+        dictate("panel-1", "Zustand link to the notes", "zoo stand link to the notes", "t1");
+        resolveFiles("panel-1", "t1", {
+          description: "notes",
+          path: "docs/my zoo stand notes.md",
+        });
+        await service.stop();
+
+        expect(draft("panel-1")).toBe('Zustand @"docs/my zoo stand notes.md"');
+        expect(cleanups()).toEqual(['Zustand @"docs/my zoo stand notes.md"']);
+      });
+
+      it("leaves the swap an edit when no swap fits the words as heard", async () => {
+        // The command ends inside "router tests", which the rule wrote for "rooter".
+        dictionary = [rule("router tests", "rooter")];
+        const { service, dictate, resolveFiles, draft } = await setup();
+        correct.mockResolvedValue({ action: "no_change", correctedText: "" });
+
+        dictate("panel-1", "link to the router tests", "link to the rooter", "t1");
+        resolveFiles("panel-1", "t1", router);
+        await service.stop();
+
+        expect(draft("panel-1")).toBe("@src/router.ts tests");
+        expect(correct).not.toHaveBeenCalled();
+      });
     });
 
     it("finds a longer phrase a shorter one took when it was split", async () => {

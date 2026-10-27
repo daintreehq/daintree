@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { DictationRecord, DictationUtterance } from "@/store/dictationRangeStore";
-import { applyDraftEdits, planFileReferenceEdits } from "../voiceFileReferences";
+import { collectHeardAsRules, createHeardAsRewriter } from "@shared/utils/voiceHeardAs";
+import { planFileReferenceEdits, planHeardSwaps } from "../voiceFileReferences";
 
 function utterance(
   draft: string,
   words: string,
-  options: { transcriptId?: string; edited?: boolean; after?: number } = {}
+  options: { transcriptId?: string; edited?: boolean; after?: number; heard?: string } = {}
 ): DictationUtterance {
   const from = draft.indexOf(words, options.after ?? 0);
   if (from < 0) throw new Error(`"${words}" not in draft`);
@@ -15,6 +16,7 @@ function utterance(
     range: { from, to, edited: options.edited ?? false },
     insertion: { from, to, edited: false },
     ...(options.transcriptId ? { transcriptId: options.transcriptId } : {}),
+    ...(options.heard !== undefined ? { heard: options.heard } : {}),
   };
 }
 
@@ -37,7 +39,10 @@ function swap(
   utteranceId: string,
   references: Array<{ description: string; path: string | null }>
 ): string {
-  return applyDraftEdits(draft, planFileReferenceEdits(rec, utteranceId, references, draft));
+  return planFileReferenceEdits(rec, utteranceId, references, draft).reduceRight(
+    (next, edit) => next.slice(0, edit.from) + edit.text + next.slice(edit.to),
+    draft
+  );
 }
 
 describe("planFileReferenceEdits", () => {
@@ -225,5 +230,97 @@ describe("planFileReferenceEdits", () => {
     expect(swap(draft, rec, "t1", [{ description: "notes", path: "docs/my notes.md" }])).toBe(
       '@"docs/my notes.md"'
     );
+  });
+});
+
+describe("planHeardSwaps", () => {
+  const rules = (...pairs: Array<[term: string, heard: string]>) =>
+    createHeardAsRewriter(
+      collectHeardAsRules(
+        pairs.map(([term, heard]) => ({
+          term,
+          heardAs: [heard],
+          source: "manual" as const,
+          addedAt: 0,
+        }))
+      )
+    );
+  // An utterance the way it lands: the rules' text in the draft, the words as
+  // heard kept beside it.
+  const heardAs = (rewrite: ReturnType<typeof rules>, heard: string, prefix = "") => {
+    const draft = prefix + rewrite(heard);
+    return {
+      draft,
+      rec: record([utterance(draft, rewrite(heard), { transcriptId: "t1", heard })]),
+    };
+  };
+  const plan = (
+    rec: DictationRecord,
+    draft: string,
+    references: Array<{ description: string; path: string | null }>,
+    rewrite: ReturnType<typeof rules> | null
+  ) => planHeardSwaps(rec, planFileReferenceEdits(rec, "t1", references, draft), draft, rewrite);
+  const router = [{ description: "router", path: "src/router.ts" }];
+
+  it("makes the swap in the words as heard, past the words a rule rewrote", () => {
+    const rewrite = rules(["Zustand", "zoo stand"]);
+    const { draft, rec } = heardAs(rewrite, "zoo stand needs link to the router now");
+
+    expect(plan(rec, draft, router, rewrite)).toEqual(
+      new Map([[rec.utterances[0]!.id, [{ from: 16, to: 34, text: "@src/router.ts" }]]])
+    );
+  });
+
+  it("places the swap on the command it replaced, not on one that reads alike", () => {
+    // "router" is written "route handler", and "rooter" is written "router".
+    const rewrite = rules(["route handler", "router"], ["router", "rooter"]);
+    const { draft, rec } = heardAs(rewrite, "link to router and link to rooter");
+    const references = [
+      { description: "route handler", path: null },
+      { description: "router", path: "src/router.ts" },
+    ];
+
+    expect(draft).toBe("link to route handler and link to router");
+    expect(plan(rec, draft, references, rewrite)).toEqual(
+      new Map([[rec.utterances[0]!.id, [{ from: 19, to: 33, text: "@src/router.ts" }]]])
+    );
+  });
+
+  it("covers every word a rule wrote into the command as heard", () => {
+    const rewrite = rules(["React Native", "react"]);
+    const { draft, rec } = heardAs(rewrite, "fix react and link to react");
+    const references = [{ description: "React Native", path: "src/native.ts" }];
+
+    expect(plan(rec, draft, references, rewrite)).toEqual(
+      new Map([[rec.utterances[0]!.id, [{ from: 14, to: 27, text: "@src/native.ts" }]]])
+    );
+  });
+
+  it("makes no swap once the rules no longer give the words that landed", () => {
+    const rewrite = rules(["Zustand", "zoo stand"]);
+    const { draft, rec } = heardAs(rewrite, "zoo stand needs link to the router now");
+
+    expect(plan(rec, draft, router, rules(["Zustand", "zoo"]))).toEqual(new Map());
+    expect(plan(rec, draft, router, null)).toEqual(new Map());
+  });
+
+  it("makes no swap where a rewrite cuts through the command", () => {
+    // The command ends inside "router tests", which a rule wrote for "rooter".
+    const rewrite = rules(["router tests", "rooter"]);
+    const { draft, rec } = heardAs(rewrite, "link to the rooter");
+
+    expect(planFileReferenceEdits(rec, "t1", router, draft)).toHaveLength(1);
+    expect(plan(rec, draft, router, rewrite)).toEqual(new Map());
+  });
+
+  it("skips utterances with no heard words or no swap", () => {
+    const rewrite = rules(["Zustand", "zoo stand"]);
+    const draft = "link to the router. Zustand time";
+    const rec = record([
+      utterance(draft, "link to the router.", { transcriptId: "t1" }),
+      utterance(draft, "Zustand time", { transcriptId: "t1", heard: "zoo stand time" }),
+    ]);
+
+    expect(plan(rec, draft, router, rewrite)).toEqual(new Map());
   });
 });
