@@ -794,7 +794,11 @@ describe("voiceInput — the target agent's commands", () => {
       e: unknown,
       request: unknown
     ) => Promise<unknown>;
-    await handleCorrect(fakeEvent, { rawText: "fix it then ship", terminalId: TERMINAL, pauses: [6] });
+    await handleCorrect(fakeEvent, {
+      rawText: "fix it then ship",
+      terminalId: TERMINAL,
+      pauses: [6],
+    });
     await handleCorrect(fakeEvent, {
       rawText: "fix it then ship",
       terminalId: TERMINAL,

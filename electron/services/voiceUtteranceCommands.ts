@@ -383,6 +383,12 @@ function openUtterance(
         // Words joined into the command take their pauses with them.
         ...(!emission.text && emission.pauses ? { pauses: emission.pauses } : {}),
       })),
-    { ...first, text: joined, uncertain, ...(pauses.length > 0 ? { pauses } : {}), opensUtterance: true },
+    {
+      ...first,
+      text: joined,
+      uncertain,
+      ...(pauses.length > 0 ? { pauses } : {}),
+      opensUtterance: true,
+    },
   ];
 }

@@ -968,7 +968,8 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
   // Where the speaker paused (#14897), as main sends it on each completion.
   describe("the speaker's pauses", () => {
     const complete = (payload: Omit<CompletePayload, "willCorrect">) => {
-      if (payload.text) callbacks.delta!({ text: payload.heard ?? payload.text, itemId: payload.itemId });
+      if (payload.text)
+        callbacks.delta!({ text: payload.heard ?? payload.text, itemId: payload.itemId });
       callbacks.complete!({ willCorrect: false, ...payload });
     };
 

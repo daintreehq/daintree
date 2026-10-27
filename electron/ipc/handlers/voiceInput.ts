@@ -1780,8 +1780,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
           const textUncertain =
             (written[i] !== undefined ? writtenUncertain[i] : heardUncertain[i]) ?? [];
           const pieceUncertain = heardUncertain[i] ?? [];
-          const textPauses =
-            (written[i] !== undefined ? writtenPauses[i] : heardPauses[i]) ?? [];
+          const textPauses = (written[i] !== undefined ? writtenPauses[i] : heardPauses[i]) ?? [];
           const piecePauses = heardPauses[i] ?? [];
           target.send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, {
             sessionId,

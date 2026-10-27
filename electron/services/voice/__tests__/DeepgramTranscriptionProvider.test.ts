@@ -817,7 +817,9 @@ describe("DeepgramTranscriptionProvider", () => {
 
     const { socket } = await bringSessionReady(provider);
     socket.simulateMessage(resultsMessage("Fix the bug", { is_final: true }));
-    socket.simulateMessage(resultsMessage("in the parser.", { is_final: true, speech_final: true }));
+    socket.simulateMessage(
+      resultsMessage("in the parser.", { is_final: true, speech_final: true })
+    );
     // What CloseStream or Finalize flushes comes back final, never speech_final.
     socket.simulateMessage({
       ...resultsMessage("and the lexer", { is_final: true }),
