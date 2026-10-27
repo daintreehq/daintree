@@ -284,13 +284,23 @@ describe("the Needs you band", () => {
     expect(bandOf(nextCanopyOrder(held, input(now, crossed)))).toEqual(["a", "b"]);
   });
 
-  it("leaves who is in it alone when a run arrives or leaves while the list holds", () => {
-    const held = order(["a", "gone", "b"], { rankedFor: 2, band: ["a", "gone"] });
+  it("leaves who is in it alone when a run arrives while the list holds", () => {
+    const held = order(["a", "b"], { rankedFor: 2, band: ["a"] });
     const step = nextCanopyOrder(
       held,
       input({ a: 90, b: 60, c: 70 }, { needsYou: ["a", "b", "c"], pointerInList: true })
     );
     expect(idsOf(step)).toEqual(["a", "b", "c"]);
+    expect(bandOf(step)).toEqual(["a"]);
+  });
+
+  it("drops a run that left from it, and keeps the rest as held", () => {
+    const held = order(["a", "gone", "b"], { rankedFor: 2, band: ["a", "gone"] });
+    const step = nextCanopyOrder(
+      held,
+      input({ a: 90, b: 60 }, { needsYou: ["a", "b"], pointerInList: true })
+    );
+    expect(idsOf(step)).toEqual(["a", "b"]);
     expect(bandOf(step)).toEqual(["a"]);
   });
 
@@ -344,7 +354,7 @@ describe("the Needs you band", () => {
     });
   });
 
-  it("lets an archived run go at once, selected or not, as it leaves the list", () => {
+  it("lets an archived run go at once, even while selected, as it leaves the list", () => {
     const held = order(["a", "b"], { rankedFor: 2, band: ["a", "b"] });
     const step = nextCanopyOrder(
       held,
@@ -401,9 +411,13 @@ describe("the Needs you band", () => {
       "a",
       "b",
     ]);
-    expect(
-      bandOf(nextCanopyOrder(held, input(now, { needsYou: ["a", "b"], revealing: true })))
-    ).toEqual(["a", "b"]);
+    // Just interacted with and just ranked: only the reveal lets it move.
+    const busy = { needsYou: ["a", "b"], lastInteractionAt: NOW, lastRankAt: NOW };
+    expect(nextCanopyOrder(held, input(now, busy)).kind).toBe("wait");
+    expect(bandOf(nextCanopyOrder(held, input(now, { ...busy, revealing: true })))).toEqual([
+      "a",
+      "b",
+    ]);
     // With nothing changed, an open holds still.
     expect(
       nextCanopyOrder(

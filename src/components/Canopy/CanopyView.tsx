@@ -651,7 +651,8 @@ function CanopyInbox({
     listHidden,
     menuOpenChanged,
     requestRank,
-    selectionChanged,
+    placeOrder,
+    orderWake,
   } = useCanopyInboxOrder({
     isOpen,
     hostId,
@@ -794,10 +795,9 @@ function CanopyInbox({
   useLayoutEffect(() => {
     if (openedRunId !== null) acknowledgeOpened(openedRunId);
   }, [openedRunId, acknowledgeOpened]);
-  // The band never loses the selected run under the user: the order is told it.
-  useLayoutEffect(() => {
-    selectionChanged(isOpen ? openedRunId : null);
-  }, [isOpen, openedRunId, selectionChanged]);
+  // The list is placed once the run this render selects is known: the band
+  // never loses it under the user, even when a rank lands with the selection.
+  useLayoutEffect(() => placeOrder(openedRunId), [placeOrder, openedRunId, orderWake]);
   const { reserveUndo, undoReads, undoLine } = useCanopyInboxUndo({ hostId, api });
 
   // A held reorder is said once, not row by row as its scores land.
@@ -989,7 +989,7 @@ function CanopyInbox({
       // be read at all — readings owed, a retry waiting, however
       // long they take, and after a scope switch too.
       (canopy?.lastError ?? null) !== null
-      ? { words: "Nothing needs you that Canopy could read", allClear: false }
+      ? (unsorted ?? { words: "Nothing needs you that Canopy could read", allClear: false })
       : // Rows kept from a host that can't be reached are as last seen, as a
         // degraded fleet's are: nothing current is concluded from them.
         fleet?.degraded || hostTrouble
