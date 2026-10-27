@@ -44,19 +44,25 @@ import {
 import {
   isVoiceCleanupModel,
   VOICE_CLEANUP_AI_MODEL,
+  type CorrectionWorktreeContext,
 } from "../../../shared/config/voiceCorrection.js";
 import { normalizeVoiceLanguage } from "../../../shared/config/voiceLanguages.js";
 import {
   assembleTaggedKeyterms,
   NO_PANE_KEYTERM_READS,
+  readPaneKeytermReads,
+  screenCorrectionRepositoryNames,
   screenDictationNames,
+  screenDictationWorktree,
+  withinBudget,
 } from "../../services/voiceContextKeyterms.js";
 import { readTerminalOutputForCorrection } from "../../services/voiceTerminalContext.js";
 import {
   flattenDictationNames,
-  gatherDictationNames,
+  gatherDictationContext,
+  NO_DICTATION_CONTEXT,
   NO_DICTATION_NAMES,
-  type DictationNames,
+  type DictationContext,
 } from "../../services/voiceContextNames.js";
 import {
   getProjectInfo,
@@ -850,23 +856,39 @@ function hostPaneFor(viewProjectKey: string | null, outsideView: boolean): HostP
   return outsideView ? null : hostPaneOf(viewProjectKey);
 }
 
-// The names each recent dictation sent, so its cleanup spells them the same
-// way, whatever has started since. Kept whether or not cleanup was on at its
-// start, as many as the cleanup context keeps.
-interface SessionNames {
-  readonly sessionId: string;
-  readonly webContentsId: number;
+// What a dictation's cleanup is told about where it was typed: the names its
+// keyterms sent and, for a pane on this machine, its repository's names and its
+// worktree (#14854). Read once at its start, so every passage of it sends the
+// same prompt, whatever has started since.
+interface CorrectionSessionContext {
   names: string[];
+  repositoryNames: string[];
+  worktree: CorrectionWorktreeContext | null;
 }
 
-let recentSessionNames: SessionNames[] = [];
+const NO_SESSION_CONTEXT: CorrectionSessionContext = {
+  names: [],
+  repositoryNames: [],
+  worktree: null,
+};
 
-function findSessionNames(
+// Each recent dictation's context, kept whether or not cleanup was on at its
+// start, as many as the cleanup context keeps. It settles within the start's
+// read budget.
+interface SessionContextRecord {
+  readonly sessionId: string;
+  readonly webContentsId: number;
+  readonly context: Promise<CorrectionSessionContext>;
+}
+
+let recentSessionContexts: SessionContextRecord[] = [];
+
+function findSessionContext(
   ctx: IpcContext,
   request: VoiceInputCorrectPayload
-): SessionNames | undefined {
+): SessionContextRecord | undefined {
   if (!request.sessionId) return undefined;
-  return recentSessionNames.find(
+  return recentSessionContexts.find(
     (record) => record.sessionId === request.sessionId && record.webContentsId === ctx.webContentsId
   );
 }
@@ -925,13 +947,15 @@ function correctionSettingsFor(
   projectInfo: { name?: string; path?: string },
   vocabulary: VoiceDictionaryEntry[],
   commandTarget: VoiceCommandTarget | null,
-  knownNames: string[]
+  { names, repositoryNames, worktree }: CorrectionSessionContext
 ): VoiceCorrectionSettings {
   return {
     model: settings.correctionModel,
     apiKey: settings.openaiApiKey,
     customDictionary: dictionaryTerms(sessionDictionary(settings.dictionary, vocabulary)),
-    knownNames,
+    knownNames: names,
+    ...(repositoryNames.length > 0 ? { repositoryNames } : {}),
+    ...(worktree ? { worktree } : {}),
     // Global rules only, matching the live rewriter. Project heard-as forms
     // belong in both places, through sessionDictionary.
     heardAs: collectHeardAsRules(settings.dictionary),
@@ -1325,7 +1349,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     terminalId: string | undefined,
     vocabulary: Promise<VoiceDictionaryEntry[]>,
     hostStart: Promise<PaneStartContext | null> | null,
-    screenedNames: Promise<string[]>
+    sessionContext: Promise<CorrectionSessionContext>
   ) => {
     const hostPane = hostPaneFor(session.projectId, session.outsideView);
     const prep: CorrectionPrep = {
@@ -1355,11 +1379,11 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     session.correctionPrep = prep;
     correctionPreps = [prep, ...correctionPreps].slice(0, CORRECTION_PREP_MEMORY);
     const warm = async () => {
-      const [projectInfo, entries, commandTarget, knownNames] = await Promise.all([
+      const [projectInfo, entries, commandTarget, context] = await Promise.all([
         prep.projectInfo,
         prep.vocabulary,
         prep.commandTarget,
-        screenedNames,
+        sessionContext,
       ]);
       // Read at every attempt, as each passage reads them: cleanup turned off
       // or the key removed since the start sends nothing.
@@ -1372,7 +1396,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
           projectInfo,
           entries,
           commandTarget,
-          prep.outsideView ? [] : knownNames
+          prep.outsideView ? NO_SESSION_CONTEXT : context
         )
       );
     };
@@ -1432,33 +1456,48 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
             : resolveVocabularyProject(session.projectId, terminalId, deps.ptyClient)
         );
     const projectDictionary = vocabulary.then(dictionaryTerms);
-    const names: Promise<DictationNames> = hostContext
-      ? hostContext.then((read) => read?.names ?? NO_DICTATION_NAMES)
-      : gatherDictationNames({
-          projectId: session.projectId,
-          terminalId,
-          ptyClient: deps.ptyClient,
-          worktreeService: deps.worktreeService,
-        });
-    // The correction gets the same screened names as the keyterms, whenever
-    // they arrive. Its own record, so a slow read from an older session can't
-    // overwrite this one's.
-    const sessionNames: SessionNames = {
-      sessionId: session.id,
-      webContentsId: session.webContentsId,
-      names: [],
-    };
-    if (session.intent === "dictation") {
-      recentSessionNames = [sessionNames, ...recentSessionNames].slice(0, CORRECTION_PREP_MEMORY);
-    }
-    const screenedNames = names.then((gathered) =>
-      flattenDictationNames(screenDictationNames(gathered))
+    // The names and the worktree come from one read, bounded here by the
+    // keyterms' own budget so the keyterms and cleanup get the same answer. A
+    // host's pane has only its names (#14782).
+    const dictationContext: Promise<DictationContext> = hostContext
+      ? hostContext.then((read) => ({ names: read?.names ?? NO_DICTATION_NAMES, worktree: null }))
+      : withinBudget(
+          gatherDictationContext({
+            projectId: session.projectId,
+            terminalId,
+            ptyClient: deps.ptyClient,
+            worktreeService: deps.worktreeService,
+          }),
+          NO_DICTATION_CONTEXT,
+          "Names read"
+        );
+    const names = dictationContext.then((read) => read.names);
+    // The repository, branch and terminal reads, made once for the keyterms
+    // and cleanup both. Each bounds itself.
+    const paneReads = hostContext
+      ? null
+      : readPaneKeytermReads({ ...keytermTarget, ptyClient: deps.ptyClient });
+    // The correction gets the same screened names as the keyterms. Its own
+    // record, so a slow read from an older session can't stand in for this one's.
+    const sessionContext: Promise<CorrectionSessionContext> = Promise.all([
+      dictationContext,
+      paneReads ?? NO_PANE_KEYTERM_READS,
+    ]).then(
+      ([read, reads]) => ({
+        names: flattenDictationNames(screenDictationNames(read.names)),
+        repositoryNames: screenCorrectionRepositoryNames(reads.repoNames),
+        worktree: screenDictationWorktree(read.worktree),
+      }),
+      () => NO_SESSION_CONTEXT
     );
-    void screenedNames.then((screened) => {
-      sessionNames.names = screened;
-    });
+    if (session.intent === "dictation") {
+      recentSessionContexts = [
+        { sessionId: session.id, webContentsId: session.webContentsId, context: sessionContext },
+        ...recentSessionContexts,
+      ].slice(0, CORRECTION_PREP_MEMORY);
+    }
     if (session.intent === "dictation" && mayCorrect(settings)) {
-      prepareCorrection(session, terminalId, vocabulary, hostContext, screenedNames);
+      prepareCorrection(session, terminalId, vocabulary, hostContext, sessionContext);
     }
     // Bounded by the same budget as the other reads, and resolved alongside them.
     // The keyterms wait on it, so it is in place before either provider can
@@ -1494,10 +1533,10 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         : assembleTaggedKeyterms({
             customDictionary,
             projectDictionary,
-            ...keytermTarget,
-            ptyClient: deps.ptyClient,
+            projectName: keytermTarget.projectName,
             names,
             commandTerms,
+            paneReads: paneReads ?? NO_PANE_KEYTERM_READS,
           })
     ).catch((err: unknown): VoiceSentTerm[] => {
       logDebug("[VoiceInput] Keyterm assembly failed, starting without keyterms", {
@@ -2240,8 +2279,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       // that doesn't, or a session cleanup was off for at its start, reads now.
       const prep = findCorrectionPrep(ctx, request);
       // Found before any wait, so a session that starts meanwhile can't push
-      // this one's names out.
-      const names = findSessionNames(ctx, request);
+      // this one's context out. Outside the view it gets none of it.
+      const sessionContext = outsideView ? undefined : findSessionContext(ctx, request)?.context;
       let projectInfo: { name?: string; path?: string };
       let vocabulary: VoiceDictionaryEntry[];
       let commandTarget: VoiceCommandTarget | null;
@@ -2271,6 +2310,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
           outsideView
         ));
       }
+      const context = sessionContext ? await sessionContext : NO_SESSION_CONTEXT;
       if (lifetime.signal.aborted) {
         return {
           action: "no_change",
@@ -2298,13 +2338,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
           startsPrompt: request.startsPrompt === true,
           ...(request.uncertain ? { uncertain: request.uncertain } : {}),
         },
-        correctionSettingsFor(
-          settings,
-          projectInfo,
-          vocabulary,
-          commandTarget,
-          outsideView ? [] : (names?.names ?? [])
-        ),
+        correctionSettingsFor(settings, projectInfo, vocabulary, commandTarget, context),
         lifetime.signal,
         onText
       );
@@ -2449,6 +2483,6 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     lastDictationTerms = null;
     lastTermSources = new Map();
     correctionPreps = [];
-    recentSessionNames = [];
+    recentSessionContexts = [];
   };
 }

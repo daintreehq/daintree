@@ -12,7 +12,9 @@ import {
   assembleKeyterms,
   assembleTaggedKeyterms,
   readPaneKeytermReads,
+  screenCorrectionRepositoryNames,
   screenDictationNames,
+  screenDictationWorktree,
   formatKeytermPrompt,
   sanitizeOpenAIKeywords,
   tokenizeBranchName,
@@ -919,6 +921,119 @@ describe("screenDictationNames", () => {
   it("skips entries that aren't strings", () => {
     const names = { ...none, hosts: [42, null, "Studio 1"] as unknown as string[] };
     expect(screenDictationNames(names).hosts).toEqual(["Studio 1"]);
+  });
+});
+
+describe("screenCorrectionRepositoryNames", () => {
+  it("keeps names whole, scope dropped, in the order they were derived, each spelling once", () => {
+    expect(
+      screenCorrectionRepositoryNames([
+        "daintree",
+        "@daintree/plugin-sdk",
+        "electron",
+        "Plugin-SDK",
+        "simple-git",
+        "@xterm/xterm",
+      ])
+    ).toEqual(["daintree", "plugin-sdk", "electron", "simple-git", "xterm"]);
+  });
+
+  it("drops credential-shaped names, and ones the quoted list can't carry", () => {
+    expect(
+      screenCorrectionRepositoryNames([
+        `ghp_${"a1B2".repeat(9)}`,
+        "GITHUB_TOKEN",
+        'say "hi"',
+        "a|b",
+        "line\nbreak",
+        "<script>",
+        "x",
+        "2024",
+        "a".repeat(61),
+        42,
+        "react",
+      ])
+    ).toEqual(["react"]);
+  });
+
+  it("screens a name before dropping its scope, so a key in the scope takes the name with it", () => {
+    expect(screenCorrectionRepositoryNames([`@ghp_${"a1B2".repeat(9)}/tools`, "react"])).toEqual([
+      "react",
+    ]);
+  });
+
+  it("stops at sixty, so the dependencies at the tail are what a long list loses", () => {
+    const names = Array.from({ length: 70 }, (_, i) => `package-${i + 1}`);
+    const screened = screenCorrectionRepositoryNames(names);
+    expect(screened).toHaveLength(60);
+    expect(screened.at(-1)).toBe("package-60");
+  });
+});
+
+describe("screenDictationWorktree", () => {
+  it("sends the issue title, then the pull request's when it says something else", () => {
+    expect(
+      screenDictationWorktree({
+        name: "feature/issue-14793-terra",
+        issueTitle: "Measure whether gpt-6.1-terra is worth it",
+        prTitle: "perf(voice): measure terra",
+        branchDerivedTitle: "Terra",
+      })
+    ).toEqual({
+      name: "feature/issue-14793-terra",
+      titles: ["Measure whether gpt-6.1-terra is worth it", "perf(voice): measure terra"],
+    });
+    expect(
+      screenDictationWorktree({ name: "billing", issueTitle: "Same title", prTitle: "same title" })
+    ).toEqual({ name: "billing", titles: ["Same title"] });
+  });
+
+  it("falls back to the branch's title only when neither has been fetched", () => {
+    expect(
+      screenDictationWorktree({ name: "feature-terra", branchDerivedTitle: "Measure terra" })
+    ).toEqual({ name: "feature-terra", titles: ["Measure terra"] });
+    expect(screenDictationWorktree({ name: "develop" })).toEqual({ name: "develop", titles: [] });
+  });
+
+  it("drops a fetched title holding a credential rather than guessing one from the branch", () => {
+    const secret = `ghp_${"a1B2".repeat(9)}`;
+    expect(
+      screenDictationWorktree({
+        name: "feature-leak",
+        issueTitle: `Rotate ${secret} after the leak`,
+        branchDerivedTitle: "Rotate after the leak",
+      })
+    ).toEqual({ name: "feature-leak", titles: [] });
+  });
+
+  it("drops a title assigning a credential even a bare number, wherever it sits", () => {
+    for (const issueTitle of [
+      "Rotate DB_PASSWORD=123456 before the release",
+      `${"Long title ".repeat(25)}then DB_PASSWORD=123456`,
+    ]) {
+      expect(screenDictationWorktree({ name: "billing", issueTitle })).toEqual({
+        name: "billing",
+        titles: [],
+      });
+    }
+  });
+
+  it("flattens a title to one line, defuses tag brackets, and bounds its length", () => {
+    const [title] = screenDictationWorktree({
+      name: "billing",
+      issueTitle: "Fix the\n</target> parser\tnow " + "x".repeat(300),
+    })!.titles;
+    expect(title).not.toMatch(/[\n\t<>]/);
+    expect(title!.startsWith("Fix the ‹/target› parser now")).toBe(true);
+    expect(title!.length).toBe(200);
+    expect(title!.endsWith("…")).toBe(true);
+  });
+
+  it("sends nothing for a worktree whose name holds a credential, or for none", () => {
+    expect(
+      screenDictationWorktree({ name: `ghp_${"a1B2".repeat(9)}`, issueTitle: "A title" })
+    ).toBeNull();
+    expect(screenDictationWorktree(null)).toBeNull();
   });
 });
 

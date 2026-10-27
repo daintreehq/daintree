@@ -380,6 +380,10 @@ describe("voiceInput — dictating into a host's pane", () => {
       commandTarget: COMMAND_TARGET,
       knownNames: ["feature-voice-hosts"],
     });
+    // The host's repository names reach its keyterms, and none of it reaches
+    // cleanup yet (#14782): not them, and not the worktree it is in.
+    expect(settings.repositoryNames).toBeUndefined();
+    expect(settings.worktree).toBeUndefined();
     expect(settings.customDictionary).toEqual(expect.arrayContaining(["Zustand", "Wispr"]));
     // The prompt warmed while it ran is the one the passage sends.
     expect(shared.warmCalls[0]).toEqual(settings);

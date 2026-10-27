@@ -5,6 +5,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { REPLAY_CLIPS } from "../../../e2e/helpers/voiceReplayFixtures";
 import {
   CLEANUP_CORPUS,
+  cleanupSessions,
   REPLAY_TRANSCRIPTS,
   type CleanupCase,
   type FixKind,
@@ -68,6 +69,95 @@ describe("cleanup corpus", () => {
       })
     );
     expect(imperfect).toEqual([]);
+  });
+
+  // #14854: the context a session gives cleanup must both settle names and
+  // leave alone passages that only sound like them, measurably.
+  it("dictates its workspace passages in one session, each it should settle beside a bare twin", () => {
+    const workspace = CLEANUP_CORPUS.filter((entry) => entry.source === "workspace");
+    const inSession = workspace.filter((entry) => entry.session);
+    const settled = inSession.filter((entry) => Object.keys(entry.fixes).length > 0);
+    const leftAlone = inSession.filter(
+      (entry) => Object.keys(entry.fixes).length === 0 && entry.raw === entry.reference
+    );
+    expect(settled.length).toBeGreaterThan(0);
+    expect(leftAlone.length).toBeGreaterThanOrEqual(3);
+    // One prompt for every passage with a session, so its cached share holds.
+    expect(cleanupSessions(CLEANUP_CORPUS)).toEqual([undefined, inSession[0]!.session]);
+    expect(CLEANUP_CORPUS.filter((entry) => entry.source !== "workspace" && entry.session)).toEqual(
+      []
+    );
+    // The same passage with no session, so a run shows what the session added.
+    for (const { id: _id, session: _session, ...passage } of settled) {
+      const twins = workspace.filter(
+        ({ id: _twinId, session, ...twin }) =>
+          !session && JSON.stringify(twin) === JSON.stringify(passage)
+      );
+      expect(twins).toHaveLength(1);
+    }
+  });
+});
+
+describe("inputHash", () => {
+  const passage = makeCase({
+    id: "terra",
+    raw: "compare GPT 6.1 there",
+    reference: "x",
+    fixes: {},
+  });
+  const session = {
+    repositoryNames: ["simple-git"],
+    worktree: { name: "feature-terra", titles: ["Measure terra"] },
+  };
+
+  it("hashes a passage with no session as runs from before sessions did", () => {
+    // What a run recorded for this passage before #14854, so its trials still rescore.
+    const legacy = makeCase({
+      id: "legacy",
+      style: "deepgram",
+      raw: "Add the shin for now, we'll do the migration in a follow up.",
+      reference: "Add the shim for now, we'll do the migration in a follow-up.",
+      fixes: { "the shim": "misread" },
+      drops: [],
+      uncertain: ["shin"],
+      recentContext: ["The settings moved last week."],
+      terminalOutput: "Should I write a migration now, or add a shim?",
+    });
+    expect(inputHash(legacy)).toBe("1c51b64b79aa");
+  });
+
+  it("changes with anything its session tells cleanup, and only that", () => {
+    const hashes = [
+      inputHash(passage),
+      inputHash({ ...passage, session }),
+      inputHash({ ...passage, session: { ...session, repositoryNames: ["node-pty"] } }),
+      inputHash({
+        ...passage,
+        session: { ...session, worktree: { ...session.worktree, titles: ["Another title"] } },
+      }),
+      inputHash({
+        ...passage,
+        session: { ...session, worktree: { ...session.worktree, name: "x-y" } },
+      }),
+    ];
+    expect(new Set(hashes).size).toBe(hashes.length);
+    expect(inputHash({ ...passage, session: structuredClone(session) })).toBe(hashes[1]);
+  });
+});
+
+describe("cleanupSessions", () => {
+  it("lists each distinct session once, in the order first met", () => {
+    const a = { repositoryNames: ["simple-git"] };
+    const sameAsA = { repositoryNames: ["simple-git"] };
+    const b = { worktree: { name: "billing", titles: [] } };
+    expect(
+      cleanupSessions([
+        makeCase({ id: "1", session: a }),
+        makeCase({ id: "2" }),
+        makeCase({ id: "3", session: sameAsA }),
+        makeCase({ id: "4", session: b }),
+      ])
+    ).toEqual([a, undefined, b]);
   });
 });
 

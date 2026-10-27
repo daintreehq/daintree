@@ -56,8 +56,31 @@ const shared = vi.hoisted(() => ({
   correctionDictionary: null as string[] | null,
   /** When set, the names a start gathers, in place of reading them. */
   names: null as null | Promise<{ hosts: string[]; projects: string[]; worktrees: string[] }>,
+  /** The worktree a start finds the terminal in, gathered with `names`. */
+  worktree: null as null | {
+    name: string;
+    issueTitle?: string;
+    prTitle?: string;
+    branchDerivedTitle?: string;
+  },
+  /** The repository names a start's pane reads find. */
+  repoNames: [] as string[],
+  /** When set, a start's pane reads answer only once it settles. */
+  paneReadsGate: null as null | Promise<void>,
+  /** The worktree states the workspace service holds for the project. */
+  worktreeStates: [] as Array<Record<string, unknown>>,
+  /** What each cleanup request was told about where it was dictated, in order. */
+  corrections: [] as Array<{
+    knownNames?: string[];
+    repositoryNames?: string[];
+    worktree?: { name: string; titles: string[] };
+  }>,
   /** The names the correction service was last handed. */
   correctionNames: null as string[] | null | undefined,
+  correctionRepositoryNames: undefined as string[] | undefined,
+  /** Every prompt the correction service was asked to keep warm. */
+  warmSettings: [] as Array<Record<string, unknown>>,
+  correctionWorktree: undefined as { name: string; titles: string[] } | undefined,
   correctionTerminalOutput: undefined as string | undefined,
   correctionProjectName: undefined as string | undefined,
 }));
@@ -110,15 +133,31 @@ vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
 
 vi.mock("../../../services/VoiceCorrectionService.js", () => ({
   VoiceCorrectionService: function VoiceCorrectionService(this: Record<string, unknown>) {
-    this.warm = () => Promise.resolve();
+    this.warm = (settings: Record<string, unknown>) => {
+      shared.warmSettings.push(settings);
+      return Promise.resolve();
+    };
     this.preconnect = () => {};
     this.correct = async function (
       request: { rawText: string; terminalOutput?: string },
-      settings: { customDictionary: string[]; knownNames?: string[]; projectName?: string }
+      settings: {
+        customDictionary: string[];
+        knownNames?: string[];
+        repositoryNames?: string[];
+        worktree?: { name: string; titles: string[] };
+        projectName?: string;
+      }
     ) {
       shared.correctionTerminalOutput = request.terminalOutput;
       shared.correctionDictionary = settings.customDictionary;
       shared.correctionNames = settings.knownNames;
+      shared.correctionRepositoryNames = settings.repositoryNames;
+      shared.correctionWorktree = settings.worktree;
+      shared.corrections.push({
+        knownNames: settings.knownNames,
+        repositoryNames: settings.repositoryNames,
+        worktree: settings.worktree,
+      });
       shared.correctionProjectName = settings.projectName;
       return { action: "no_change", confirmedText: request.rawText };
     };
@@ -129,7 +168,9 @@ vi.mock("../../../services/ProjectStore.js", () => ({
   projectStore: {
     getCurrentProject: vi.fn(() => null),
     getCurrentProjectId: vi.fn(() => null),
-    getProjectById: vi.fn((id: string) => (id === "proj-a" ? { id, name: "Alpha" } : null)),
+    getProjectById: vi.fn((id: string) =>
+      id === "proj-a" ? { id, name: "Alpha", path: "/repo/alpha" } : null
+    ),
   },
 }));
 
@@ -145,19 +186,30 @@ vi.mock("../../../services/voiceContextNames.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../services/voiceContextNames.js")>();
   return {
     ...actual,
-    gatherDictationNames: vi.fn(
-      (opts: Parameters<typeof actual.gatherDictationNames>[0]) =>
-        shared.names ?? actual.gatherDictationNames(opts)
-    ),
+    // The fixtures as they stand when the read is made, as a real read takes them.
+    gatherDictationContext: vi.fn((opts: Parameters<typeof actual.gatherDictationContext>[0]) => {
+      const { names, worktree } = shared;
+      return names
+        ? names.then((gathered) => ({ names: gathered, worktree }))
+        : actual.gatherDictationContext(opts);
+    }),
   };
 });
 
-// The real module's pure helpers (the names screen) stay; only assembly is faked.
+// The real module's pure helpers (the names screen) stay; only assembly and
+// the pane reads it is handed are faked.
 vi.mock("../../../services/voiceContextKeyterms.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../services/voiceContextKeyterms.js")>()),
   assembleTaggedKeyterms: vi.fn(async () =>
     ((await shared.assembleKeyterms?.()) ?? []).map((term) => ({ term, source: "dictionary" }))
   ),
+  // A repository is read only for a project the reads are pointed at.
+  readPaneKeytermReads: vi.fn(async (opts: { projectPath?: string }) => {
+    const repoNames = opts.projectPath ? shared.repoNames : [];
+    const gate = shared.paneReadsGate;
+    if (gate) await gate;
+    return { repoNames, branchName: "feature/terra", terminalTerms: ["readPaneKeytermReads"] };
+  }),
   formatKeytermPrompt: vi.fn(() => ""),
 }));
 
@@ -202,7 +254,11 @@ vi.mock("../../channels.js", () => ({
 }));
 
 import { registerVoiceInputHandlers, getLiveVoiceSession } from "../voiceInput.js";
-import { assembleTaggedKeyterms } from "../../../services/voiceContextKeyterms.js";
+import {
+  assembleTaggedKeyterms,
+  readPaneKeytermReads,
+} from "../../../services/voiceContextKeyterms.js";
+import { gatherDictationContext } from "../../../services/voiceContextNames.js";
 import { projectStore } from "../../../services/ProjectStore.js";
 import {
   AUDIO_BUFFER_MAX_BYTES,
@@ -707,10 +763,18 @@ describe("voiceInput — audio sent before the provider starts", () => {
 
 describe("voiceInput — keyterm target", () => {
   let cleanup: () => void;
-  const ptyClient = {
+  const ptyClient: {
+    hasTerminal: (id: string) => boolean;
+    getTerminalProjectId: (id: string) => string | null;
+    getTerminalSnapshot: ReturnType<typeof vi.fn<() => Promise<{ lines: string[] } | null>>>;
+    getTerminalAsync?: (id: string) => Promise<Record<string, unknown> | null>;
+  } = {
     hasTerminal: vi.fn((id: string) => id === "t-1"),
     getTerminalProjectId: vi.fn((id: string) => (id === "t-1" ? "proj-a" : null)),
     getTerminalSnapshot: vi.fn(async (): Promise<{ lines: string[] } | null> => null),
+  };
+  const worktreeService = {
+    getAllStatesForProjectAsync: vi.fn(async () => shared.worktreeStates),
   };
 
   beforeEach(() => {
@@ -724,7 +788,16 @@ describe("voiceInput — keyterm target", () => {
     shared.vocabularies = { "proj-a": ["PtyClient"], "proj-b": ["BravoTerm"] };
     shared.correctionDictionary = null;
     shared.names = null;
+    shared.worktree = null;
+    shared.repoNames = [];
+    shared.paneReadsGate = null;
+    shared.worktreeStates = [];
+    shared.corrections = [];
+    delete ptyClient.getTerminalAsync;
     shared.correctionNames = null;
+    shared.correctionRepositoryNames = undefined;
+    shared.correctionWorktree = undefined;
+    shared.warmSettings = [];
     shared.correctionTerminalOutput = undefined;
     shared.correctionProjectName = undefined;
     shared.drainPromise = null;
@@ -734,6 +807,7 @@ describe("voiceInput — keyterm target", () => {
     cleanup = registerVoiceInputHandlers({
       mainWindow: win as unknown as Electron.BrowserWindow,
       ptyClient,
+      worktreeService,
     } as unknown as Parameters<typeof registerVoiceInputHandlers>[0]);
   });
 
@@ -757,16 +831,31 @@ describe("voiceInput — keyterm target", () => {
     );
   };
   const assemblyOpts = () => vi.mocked(assembleTaggedKeyterms).mock.calls[0]?.[0];
+  const paneReadOpts = (call = 0) => vi.mocked(readPaneKeytermReads).mock.calls[call]?.[0];
 
   it("reads keyterms from the terminal being dictated into, under its project's name", async () => {
+    shared.repoNames = ["alpha-core"];
     await expect(startWith({ terminalId: "t-1" })).resolves.toEqual({ ok: true });
-    expect(assemblyOpts()).toMatchObject({ terminalId: "t-1", projectName: "Alpha" });
+    expect(paneReadOpts()).toMatchObject({
+      terminalId: "t-1",
+      projectPath: "/repo/alpha",
+      ptyClient,
+    });
+    expect(assemblyOpts()).toMatchObject({ projectName: "Alpha" });
+    // Assembly is handed the very reads made here, so it makes none of its own.
+    expect(readPaneKeytermReads).toHaveBeenCalledTimes(1);
+    expect(assemblyOpts()?.paneReads).toBe(vi.mocked(readPaneKeytermReads).mock.results[0]!.value);
+    expect(await assemblyOpts()?.paneReads).toEqual({
+      repoNames: ["alpha-core"],
+      branchName: "feature/terra",
+      terminalTerms: ["readPaneKeytermReads"],
+    });
   });
 
   it("sends no automatic hints for a terminal main doesn't track", async () => {
     await expect(startWith({ terminalId: "t-gone" })).resolves.toEqual({ ok: true });
     expect(assembleTaggedKeyterms).toHaveBeenCalledTimes(1);
-    expect(assemblyOpts()?.terminalId).toBeUndefined();
+    expect(paneReadOpts()?.terminalId).toBeUndefined();
     expect(assemblyOpts()?.projectName).toBeUndefined();
   });
 
@@ -774,7 +863,7 @@ describe("voiceInput — keyterm target", () => {
     shared.viewProjectId = "proj-b";
     await expect(startWith({ terminalId: "t-1" })).resolves.toEqual({ ok: true });
     expect(assembleTaggedKeyterms).toHaveBeenCalledTimes(1);
-    expect(assemblyOpts()?.terminalId).toBeUndefined();
+    expect(paneReadOpts()?.terminalId).toBeUndefined();
     expect(assemblyOpts()?.projectName).toBeUndefined();
   });
 
@@ -785,7 +874,7 @@ describe("voiceInput — keyterm target", () => {
       path: "/global",
     } as ReturnType<typeof projectStore.getCurrentProject>);
     await expect(startWith(undefined)).resolves.toEqual({ ok: true });
-    expect(assemblyOpts()?.terminalId).toBeUndefined();
+    expect(paneReadOpts()?.terminalId).toBeUndefined();
     expect(assemblyOpts()?.projectName).toBeUndefined();
   });
 
@@ -906,6 +995,160 @@ describe("voiceInput — keyterm target", () => {
       sessionId: sessionA,
     });
     expect(shared.correctionNames).toEqual(["Studio 1", "Alpha"]);
+  });
+
+  describe("the worktree and repository cleanup is told about (#14854)", () => {
+    const TITLE = "Measure whether gpt-6.1-terra is worth it for dictation cleanup";
+    const TERRA = { name: "feature-terra", titles: [TITLE] };
+    const TERRA_REPO = ["daintree", "plugin-sdk", "simple-git"];
+    const correctIn = (sessionId?: string, extra: Record<string, unknown> = {}) =>
+      getHandler("voice-input:correct")(fakeEvent, {
+        rawText: "compare GPT 6.1 there against Luna",
+        terminalId: "t-1",
+        ...(sessionId ? { sessionId } : {}),
+        ...extra,
+      });
+    const lastCorrection = () => shared.corrections.at(-1);
+
+    beforeEach(() => {
+      shared.voiceInput = { correctionEnabled: true };
+      shared.repoNames = ["daintree", "@daintree/plugin-sdk", "Plugin-SDK", "simple-git"];
+      shared.names = Promise.resolve({ hosts: [], projects: [], worktrees: ["feature-terra"] });
+      shared.worktree = {
+        name: "feature-terra",
+        issueTitle: TITLE,
+        branchDerivedTitle: "Measure whether gpt 6 1 terra is worth",
+      };
+    });
+
+    it("cleans every passage of a dictation with its own worktree and repository names", async () => {
+      // A's repository read is still out when B starts with other fixtures.
+      let openA!: () => void;
+      shared.paneReadsGate = new Promise((resolve) => {
+        openA = resolve;
+      });
+      await expect(startWith({ terminalId: "t-1" })).resolves.toEqual({ ok: true });
+      const sessionA = currentSessionId;
+      await stop();
+
+      shared.paneReadsGate = null;
+      shared.repoNames = ["other-repo"];
+      shared.worktree = { name: "billing", issueTitle: "Retry failed invoices" };
+      shared.names = Promise.resolve({ hosts: [], projects: [], worktrees: ["billing"] });
+      await expect(startWith({ terminalId: "t-1" })).resolves.toEqual({ ok: true });
+      const sessionB = currentSessionId;
+      await stop();
+      openA();
+
+      await correctIn(sessionA);
+      await correctIn(sessionA);
+      await correctIn(sessionB);
+      expect(shared.corrections).toEqual([
+        { knownNames: ["feature-terra"], repositoryNames: TERRA_REPO, worktree: TERRA },
+        { knownNames: ["feature-terra"], repositoryNames: TERRA_REPO, worktree: TERRA },
+        {
+          knownNames: ["billing"],
+          repositoryNames: ["other-repo"],
+          worktree: { name: "billing", titles: ["Retry failed invoices"] },
+        },
+      ]);
+      // A stopped before its reads landed, so only B warmed: the prompt B's passage sends.
+      expect(
+        shared.warmSettings.map(({ knownNames, repositoryNames, worktree }) => ({
+          knownNames,
+          repositoryNames,
+          worktree,
+        }))
+      ).toEqual(shared.corrections.slice(2));
+    });
+
+    it("gives cleanup the read the keyterms got, made once, even with cleanup off at the start", async () => {
+      shared.voiceInput = { correctionEnabled: false };
+      await expect(startWith({ terminalId: "t-1" })).resolves.toEqual({ ok: true });
+      await stop();
+      // Nothing is read again for the passage: what changed since doesn't reach it.
+      shared.repoNames = ["other-repo"];
+      shared.worktree = { name: "billing" };
+      shared.names = Promise.resolve({ hosts: [], projects: [], worktrees: ["billing"] });
+      shared.voiceInput = { correctionEnabled: true };
+      await correctIn(currentSessionId);
+
+      expect(await assemblyOpts()?.names).toEqual({
+        hosts: [],
+        projects: [],
+        worktrees: ["feature-terra"],
+      });
+      expect(shared.corrections).toEqual([
+        { knownNames: ["feature-terra"], repositoryNames: TERRA_REPO, worktree: TERRA },
+      ]);
+      expect(gatherDictationContext).toHaveBeenCalledTimes(1);
+      expect(readPaneKeytermReads).toHaveBeenCalledTimes(1);
+    });
+
+    it("tells cleanup nothing for a passage naming no session, or a dictation outside the view", async () => {
+      await expect(startWith({ terminalId: "t-1" })).resolves.toEqual({ ok: true });
+      await stop();
+      await correctIn();
+
+      await expect(startWith({ terminalId: "t-1", outsideView: true })).resolves.toEqual({
+        ok: true,
+      });
+      await stop();
+      await correctIn(currentSessionId, { outsideView: true });
+
+      expect(shared.corrections).toEqual([
+        { knownNames: [], repositoryNames: undefined, worktree: undefined },
+        { knownNames: [], repositoryNames: undefined, worktree: undefined },
+      ]);
+      expect(shared.warmSettings.at(-1)).toMatchObject({ knownNames: [] });
+      expect(shared.warmSettings.at(-1)).not.toHaveProperty("worktree");
+      expect(shared.warmSettings.at(-1)).not.toHaveProperty("repositoryNames");
+    });
+
+    it("reads no repository or worktree for a terminal another project owns than the view", async () => {
+      const id = "/repo/alpha-worktrees/feature-terra";
+      shared.names = null;
+      shared.worktreeStates = [{ id, path: id, name: "feature-terra", issueTitle: TITLE }];
+      ptyClient.getTerminalAsync = vi.fn(async (terminalId: string) => ({
+        id: terminalId,
+        worktreeId: id,
+      }));
+
+      // From its own project's view, both are there to find.
+      await expect(startWith({ terminalId: "t-1" })).resolves.toEqual({ ok: true });
+      await stop();
+      await correctIn(currentSessionId);
+      expect(lastCorrection()).toMatchObject({ repositoryNames: TERRA_REPO, worktree: TERRA });
+
+      shared.viewProjectId = "proj-b";
+      await expect(startWith({ terminalId: "t-1" })).resolves.toEqual({ ok: true });
+      await stop();
+      await correctIn(currentSessionId);
+      expect(shared.corrections).toHaveLength(2);
+      expect(paneReadOpts(1)?.projectPath).toBeUndefined();
+      expect(lastCorrection()).toEqual({
+        knownNames: [],
+        repositoryNames: undefined,
+        worktree: undefined,
+      });
+    });
+
+    it("keeps a dictation whose names read missed the budget without them for good", async () => {
+      let answer!: (names: { hosts: string[]; projects: string[]; worktrees: string[] }) => void;
+      shared.names = new Promise((resolve) => {
+        answer = resolve;
+      });
+      await expect(startWith({ terminalId: "t-1" })).resolves.toEqual({ ok: true });
+      await stop();
+      await expect(correctIn(currentSessionId)).resolves.toMatchObject({ action: "no_change" });
+      // Answering late changes nothing for the passages after.
+      answer({ hosts: [], projects: [], worktrees: ["feature-terra"] });
+      await correctIn(currentSessionId);
+
+      // The repository was read apart from the names, so it still arrives.
+      const fellBack = { knownNames: [], repositoryNames: TERRA_REPO, worktree: undefined };
+      expect(shared.corrections).toEqual([fellBack, fellBack]);
+    });
   });
 
   it("corrects a passage naming no session with no names", async () => {
