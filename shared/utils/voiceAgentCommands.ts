@@ -469,11 +469,11 @@ export function checkVoiceCommandEdit(
 
   // "/etc/hosts" fixed up from "slash etc slash hosts" is a path, not a command.
   if (correctedLead === rawLead) return null;
-  const shape = commandShape(correctedLead);
-  if (!shape) return null;
-  // A known token with punctuation stuck to it is still not one the composer has.
-  const entry = shape === correctedLead ? knownToken(shape, vocabulary) : null;
-  if (!entry) return "unknown_command";
+  // A skill the target has is checked even when it's named in capitals like a
+  // shell variable ("$README"); a token with punctuation stuck to it is still
+  // not one the composer has.
+  const entry = knownToken(correctedLead, vocabulary);
+  if (!entry) return commandShape(correctedLead) ? "unknown_command" : null;
   if (!startsPrompt) return "unprompted_command";
   const argumentsAt = invocationArgumentsAt(trimmedRaw, entry, vocabulary);
   if (argumentsAt < 0) return "unprompted_command";

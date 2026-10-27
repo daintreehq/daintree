@@ -227,7 +227,7 @@ describe("VoiceCorrectionService integration — target commands", () => {
   };
 
   it.skipIf(!OPENAI_API_KEY).each([
-    ["compact the conversation", /^\/compact\b/],
+    ["run the compact command", /^\/compact\b/],
     ["run the review skill on the last commit", /^\/review\b.*last commit/i],
   ])(
     "writes %j as the agent's command",
@@ -246,6 +246,8 @@ describe("VoiceCorrectionService integration — target commands", () => {
     .each([
       "the review skill is broken",
       "compact cars use less space",
+      "compact the conversation",
+      "clear the build cache and rebuild",
       "explain the compact command",
       "we should review the last commit later",
       "don't compact the conversation yet",
