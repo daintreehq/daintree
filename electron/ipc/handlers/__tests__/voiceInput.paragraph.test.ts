@@ -1325,7 +1325,7 @@ describe.each(["openai", "deepgram"] as const)(
         openaiApiKey: provider === "openai" ? "sk-test" : "",
         deepgramApiKey: provider === "deepgram" ? "dg-test" : "",
         correctionEnabled: false,
-        correctionModel: "gpt-6-luna",
+        correctionModel: "gpt-6.1-terra",
         dictionary: [],
         correctionCustomInstructions: "",
         language: "en",

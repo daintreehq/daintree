@@ -349,7 +349,7 @@ Every score is reported twice: for what landed, and for what the model proposed 
 | `--seed` | `14793` | Request order |
 | `--label` | `run` | Prefix of the result file |
 | `--probe-prediction` | off | Asks each model for Predicted Outputs on both endpoints and records the answer |
-| `--rescore <run.json>` | | Scores a saved run again with today's corpus and scoring, sending nothing |
+| `--rescore <run.json>` |  | Scores a saved run again with today's corpus and scoring, sending nothing |
 
 `OPENAI_ORG_ID` and `OPENAI_PROJECT_ID` are sent when set. Results land in `.tmp/perf-results/voice-cleanup/<label>-<timestamp>.json` and `.md`, rewritten after every passage with `complete: false` until the run finishes. The Markdown ends with every passage the variants landed differently on the first pass, raw, reference and each result side by side.
 
