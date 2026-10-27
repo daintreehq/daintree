@@ -379,6 +379,30 @@ const NAMES_2 = revise(NAMES_REPAIR, {
 // NAMES_2 with the project, dictionary and workspace blocks as V13 had them.
 const NAMES_2_CORE: CorrectionInstructions = { ...NAMES_2, contextNames: "tiebreak" };
 
+// Round 3: NAMES_2 still read the hanging "to" that ends #14873's first
+// passage as a misheard "too".
+const NAMES_3 = revise(NAMES_2, {
+  core: [
+    [
+      'goes, rather than becoming another word that would end the sentence ("what you find inside");',
+      'goes: the speaker stopped rather than saying a different word, so it never becomes one that would end the sentence ("too" for a hanging "to", "inside" for a hanging "in");',
+    ],
+  ],
+});
+
+// Round 4: under NAMES_2 and NAMES_3 the model sometimes wrote that passage's
+// "issue/command" as "issue command", which the guard refuses as a changed
+// path, so the whole passage went out raw. NAMES_2 copying words a slash
+// already joins is what Terra cleans up with since #14873.
+const NAMES_4 = revise(NAMES_2, {
+  core: [
+    [
+      "- Copy @-references, text inside backticks, file paths, URLs,",
+      '- Copy @-references, text inside backticks, file paths, words a slash already joins ("read/write"), URLs,',
+    ],
+  ],
+});
+
 export const PROMPT_VARIANTS: Readonly<Record<string, PromptVariant>> = {
   v11: { description: "the rules production sent before #14786", instructionsFor: fixed(V11) },
   firm: {
@@ -427,6 +451,14 @@ export const PROMPT_VARIANTS: Readonly<Record<string, PromptVariant>> = {
   "names2-core": {
     description: "names2, with the project, dictionary and workspace blocks as v13 had them",
     instructionsFor: fixed(NAMES_2_CORE),
+  },
+  names3: {
+    description: "round 3: names2, with a hanging last word never read as a misheard \"too\"",
+    instructionsFor: fixed(NAMES_3),
+  },
+  names4: {
+    description: "round 4: names2, with words a slash already joins copied as they are",
+    instructionsFor: fixed(NAMES_4),
   },
   production: {
     description: "the rules production sends each model now",

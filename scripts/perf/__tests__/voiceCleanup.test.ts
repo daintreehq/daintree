@@ -674,7 +674,7 @@ describe("prompt and guard variants", () => {
     });
   });
 
-  it("sends Luna the frozen v11 rules and Terra the final ones as production, each told about recent prompts", () => {
+  it("sends Luna the frozen v11 rules told about recent prompts, and Terra the names4 ones", () => {
     // #14855 named <recent_prompts> in both models' rules, after the rounds that chose them.
     const withRecentPrompts = (instructions: CorrectionInstructions) =>
       revise(instructions, {
@@ -693,8 +693,12 @@ describe("prompt and guard variants", () => {
     expect(production.instructionsFor("gpt-6-luna")).toEqual(
       withRecentPrompts(PROMPT_VARIANTS.v11!.instructionsFor("gpt-6-luna"))
     );
-    expect(production.instructionsFor("gpt-6.1-terra")).toEqual(
+    // What Terra cleaned up with from #14855 until #14873 chose names4 over it.
+    expect(PROMPT_VARIANTS.v13!.instructionsFor("gpt-6.1-terra")).toEqual(
       withRecentPrompts(PROMPT_VARIANTS.final!.instructionsFor("gpt-6.1-terra"))
+    );
+    expect(production.instructionsFor("gpt-6.1-terra")).toEqual(
+      PROMPT_VARIANTS.names4!.instructionsFor("gpt-6.1-terra")
     );
   });
 
