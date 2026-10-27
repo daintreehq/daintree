@@ -87,6 +87,14 @@ const CANDIDATE_RUN_RE = /[A-Za-z0-9_\-+/=]+/g;
 // in a path doesn't take the rest of the path with it.
 const BLANKABLE_RUN_RE = /[A-Za-z0-9_\-+=]+/g;
 
+/**
+ * Stands in for the gap a cursor move left in a terminal line. A Unicode
+ * noncharacter, reserved for internal use, so output never holds one.
+ */
+export const CURSOR_GAP = "\uFDD0";
+// A blankable run as the line reads with its gaps closed up.
+const GAPPED_BLANKABLE_RUN_RE = /[A-Za-z0-9_\-+=\uFDD0]+/g;
+
 // `NAME=value`, `NAME: value`, `"name":   "value"`, and `name:` at the end of a
 // line with the value on the next; not `==`, `=>` or `::`. The name must start
 // at a boundary, which keeps a long run with no delimiter linear.
@@ -115,7 +123,9 @@ const TYPE_WORDS = new Set([
 const MEMBER_CHAIN_RE = /^[a-z_][\w$]*(?:\.[A-Za-z_$][\w$]*)+$/;
 const ENV_REFERENCE_RE = /^\$(?:\{[A-Za-z_][A-Za-z0-9_]*\}|[A-Z_][A-Z0-9_]*)$/;
 const URL_CREDENTIALS_RE = /\b[a-z][a-z0-9+.-]{1,30}:\/\/[^\s/@:]+:[^\s/@]+@/i;
-const NETRC_RE = /^\s*(?:machine\s+\S+|default)\b.*\bpassword\s+\S/;
+// The host is a whole token, so a long one can't backtrack through its own
+// word boundaries.
+const NETRC_RE = /^\s*(?:machine\s+\S+(?=\s|$)|default\b).*\bpassword\s+\S/;
 
 function segmentsOf(run: string): string[] {
   return run.split(SEGMENT_SEPARATOR_RE).filter(Boolean);
@@ -269,25 +279,49 @@ const BARE_RUN_RE = /^[\s│┃║|⎿]*[A-Za-z0-9_\-+/=]+[\s│┃║|]*$/;
  * beside a recognised token, free to match as an identifier. In the lines that
  * remain, opaque IDs and bare credential names are blanked. `strict` is for
  * lines sent on as text rather than mined for words (see {@link holdsCredential}).
+ *
+ * A terminal line can mark the gaps its cursor moves left with
+ * {@link CURSOR_GAP}. Each comes back as a space, but the line is also judged
+ * with its gaps closed up, the way the raw stream's bytes run: a repaint can
+ * split a key across moves, so the joined form holding a credential, or a bare
+ * run of a wrapped one, counts too, and an ID a run makes across a gap empties
+ * the line rather than leave its pieces. A credential name made that way
+ * doesn't: closing up prose makes those (`API key` → `APIkey`).
  */
 export function redactSecretShapedLines(lines: readonly string[], strict = false): string[] {
   let wrapping = false;
   let firstAfter = false;
-  return lines.map((line) => {
-    if (holdsCredential(line, strict)) {
+  return lines.map((marked) => {
+    const split = marked.includes(CURSOR_GAP);
+    const line = split ? marked.replaceAll(CURSOR_GAP, " ") : marked;
+    const closed = split ? marked.replaceAll(CURSOR_GAP, "") : marked;
+    if (holdsCredential(line, strict) || (split && holdsCredential(closed, strict))) {
       wrapping = true;
       firstAfter = true;
       return "";
     }
     if (wrapping) {
       // A blank line ends a wrapped key.
-      const continues = line.trim() !== "" && (firstAfter || BARE_RUN_RE.test(line));
+      const continues =
+        line.trim() !== "" &&
+        (firstAfter || BARE_RUN_RE.test(line) || (split && BARE_RUN_RE.test(closed)));
       firstAfter = false;
       if (continues) return "";
       wrapping = false;
     }
+    if (split && joinsOpaqueId(marked)) return "";
     return line.replace(BLANKABLE_RUN_RE, (run) =>
       isOpaqueId(run) || namesCredential(run) ? " " : run
     );
   });
+}
+
+// An ID joined across a gap came from pieces the spaced line keeps apart, each
+// too short to read as one: a hex key split by a repaint.
+function joinsOpaqueId(marked: string): boolean {
+  for (const [run] of marked.matchAll(GAPPED_BLANKABLE_RUN_RE)) {
+    const pieces = run.split(CURSOR_GAP).filter(Boolean);
+    if (pieces.length > 1 && isOpaqueId(pieces.join(""))) return true;
+  }
+  return false;
 }

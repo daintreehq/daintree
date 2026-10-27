@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  CURSOR_GAP,
   holdsCredential,
   isSecretShaped,
   redactSecretShapedLines,
@@ -248,5 +249,67 @@ describe("redactSecretShapedLines", () => {
   it("keeps an identifier on a line whose flags hold no credential", () => {
     const line = "vitest run --reporter verbose useSessionRouter";
     expect(redactSecretShapedLines([line])).toEqual([line]);
+  });
+
+  describe("with cursor gaps", () => {
+    const G = CURSOR_GAP;
+    // Pieces too short to read as a key alone, as a repaint can leave them.
+    const head = fakeBody(10, 30);
+    const tail = fakeBody(10, 31);
+
+    it("reads each gap as a space", () => {
+      expect(redactSecretShapedLines([`Sonnet${G}5${G}Efficient`])).toEqual(["Sonnet 5 Efficient"]);
+    });
+
+    it("empties a line that holds a credential only with its gaps closed", () => {
+      expect(redactSecretShapedLines([`key ${head} ${tail} done`])).toEqual([
+        `key ${head} ${tail} done`,
+      ]);
+      expect(
+        redactSecretShapedLines([`key ${head}${G}${tail} done`, "", "useTerminalStore"])
+      ).toEqual(["", "", "useTerminalStore"]);
+    });
+
+    it("continues a wrapped key onto a line that is one run only with its gaps closed", () => {
+      const out = redactSecretShapedLines([
+        `--password${G}hunter_two_x`,
+        "AbcDefGhi",
+        `JklMno${G}PqrStu`,
+        "",
+        "useTerminalStore",
+      ]);
+      expect(out).toEqual(["", "", "", "", "useTerminalStore"]);
+    });
+
+    it("empties a line whose pieces join across gaps into an ID", () => {
+      const pieces = fakeBody(16, 18, HEX).match(/.{4}/g)!;
+      expect(redactSecretShapedLines([`DG=${pieces.join(" ")} useSessionRouter`], true)).toEqual([
+        `DG=${pieces.join(" ")} useSessionRouter`,
+      ]);
+      expect(redactSecretShapedLines([`DG=${pieces.join(G)} useSessionRouter`], true)).toEqual([
+        "",
+      ]);
+    });
+
+    it("empties a line whose split ID has an intact copy beside it", () => {
+      const key = fakeBody(16, 18, HEX);
+      const split = `DG=${key.match(/.{4}/g)!.join(G)}`;
+      expect(redactSecretShapedLines([`${split} DG=${key}`], true)).toEqual([""]);
+      // The intact copy joins the next word across a gap, so only its own run
+      // can tell the two apart.
+      expect(redactSecretShapedLines([`${split} ${key}${G}Router`], true)).toEqual([""]);
+    });
+
+    it("blanks an ID the line shows whole and keeps the rest", () => {
+      const [out] = redactSecretShapedLines([`Commit abcdef1234 with${G}useSessionRouter`]);
+      expect(out).not.toContain("abcdef1234");
+      expect(out).toContain("with useSessionRouter");
+    });
+
+    it("keeps a line whose words only join across a gap into a credential name", () => {
+      expect(redactSecretShapedLines([`Set the API${G}Key in useSessionRouter`])).toEqual([
+        "Set the API Key in useSessionRouter",
+      ]);
+    });
   });
 });
