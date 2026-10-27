@@ -5,7 +5,10 @@ import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { REPLAY_CLIPS } from "../../../e2e/helpers/voiceReplayFixtures";
 import { validateCorrection } from "../../../electron/services/voiceCorrectionGuard";
-import type { CorrectionInstructions } from "../../../shared/config/voiceCorrection";
+import {
+  buildCorrectionSystemPrompt,
+  type CorrectionInstructions,
+} from "../../../shared/config/voiceCorrection";
 import {
   CLEANUP_CORPUS,
   cleanupSessions,
@@ -574,6 +577,28 @@ describe("scoreText", () => {
       matchesReference: false,
       missedFixes: ["T-E-R-R-A"],
     });
+    // A one-letter word beside the spelling stays a word of its own.
+    const label = makeCase({
+      raw: "give it a Tera label",
+      reference: "Give it a T-E-R-R-A label.",
+      fixes: {},
+      drops: [],
+    });
+    expect(scoreText(label, "Give it a Terra label.")).toMatchObject({
+      matchesReference: true,
+      edits: 0,
+    });
+  });
+
+  it("keeps hyphened letters apart where they're an expression or an identifier", () => {
+    for (const [reference, merged] of [
+      ["Use x-y as the offset.", "Use xy as the offset."],
+      ["Rename a-b-c to a-c.", "Rename abc to ac."],
+      ["Ship the pre-A-B-C build.", "Ship the pre-ABC build."],
+    ]) {
+      const entry = makeCase({ raw: reference, reference, fixes: {}, drops: [] });
+      expect(scoreText(entry, merged).matchesReference, reference).toBe(false);
+    }
   });
 });
 
@@ -658,10 +683,19 @@ describe("prompt and guard variants", () => {
   });
 
   it("gives every prompt variant its own rules", () => {
-    const rules = Object.entries(PROMPT_VARIANTS)
+    // Rendered with the blocks `contextNames` rewrites, so two variants that
+    // differ only there count as different, and only if they read differently.
+    const context = {
+      projectName: "daintree",
+      customDictionary: ["Terra"],
+      repositoryNames: ["smol-toml"],
+    };
+    const prompts = Object.entries(PROMPT_VARIANTS)
       .filter(([name]) => name !== "production")
-      .map(([, variant]) => JSON.stringify(variant.instructionsFor("gpt-6.1-terra")));
-    expect(new Set(rules).size).toBe(rules.length);
+      .map(([, variant]) =>
+        buildCorrectionSystemPrompt(context, variant.instructionsFor("gpt-6.1-terra"))
+      );
+    expect(new Set(prompts).size).toBe(prompts.length);
   });
 
   it("keeps how the context blocks read through every revision", () => {
@@ -674,7 +708,7 @@ describe("prompt and guard variants", () => {
     });
   });
 
-  it("sends Luna the frozen v11 rules told about recent prompts, and Terra the names4 ones", () => {
+  it("sends Luna the frozen v11 rules told about recent prompts, and Terra the names6 ones", () => {
     // #14855 named <recent_prompts> in both models' rules, after the rounds that chose them.
     const withRecentPrompts = (instructions: CorrectionInstructions) =>
       revise(instructions, {
@@ -693,12 +727,12 @@ describe("prompt and guard variants", () => {
     expect(production.instructionsFor("gpt-6-luna")).toEqual(
       withRecentPrompts(PROMPT_VARIANTS.v11!.instructionsFor("gpt-6-luna"))
     );
-    // What Terra cleaned up with from #14855 until #14873 chose names4 over it.
+    // What Terra cleaned up with from #14855 until #14873 chose names6 over it.
     expect(PROMPT_VARIANTS.v13!.instructionsFor("gpt-6.1-terra")).toEqual(
       withRecentPrompts(PROMPT_VARIANTS.final!.instructionsFor("gpt-6.1-terra"))
     );
     expect(production.instructionsFor("gpt-6.1-terra")).toEqual(
-      PROMPT_VARIANTS.names4!.instructionsFor("gpt-6.1-terra")
+      PROMPT_VARIANTS.names6!.instructionsFor("gpt-6.1-terra")
     );
   });
 

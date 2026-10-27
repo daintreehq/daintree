@@ -1430,6 +1430,15 @@ const LOOKALIKE: readonly AuthoredCase[] = [
     keep: ["Okay, push it", "don't open the PR"],
     terminalOutput: "All checks pass locally. Ready to push the branch and open the PR?",
   },
+  // An aside that qualifies the words it broke into stays with them.
+  {
+    id: "lookalike-condition-aside:openai",
+    style: "openai",
+    source: "lookalike",
+    raw: "Check the, if there are any, the crash logs and then rerun the tests.",
+    reference: "Check the crash logs, if there are any, and then rerun the tests.",
+    keep: ["if there are any"],
+  },
   {
     id: "lookalike-bound-to:openai",
     style: "openai",

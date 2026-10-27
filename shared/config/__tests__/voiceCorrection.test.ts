@@ -255,7 +255,9 @@ describe("buildCorrectionSystemPrompt", () => {
       knownNames: ["Studio 1", "Plugin SDK", "billing"],
     });
     const names = prompt.indexOf("NAMES IN THIS WORKSPACE");
-    expect(names).toBeGreaterThan(prompt.indexOf("PREFERRED TERMS (prefer these exact forms"));
+    const terms = prompt.indexOf("PREFERRED TERMS (");
+    expect(terms).toBeGreaterThan(0);
+    expect(names).toBeGreaterThan(terms);
     expect(prompt.slice(names)).toContain('"Studio 1" | "Plugin SDK" | "billing"');
   });
 
@@ -307,11 +309,16 @@ describe("buildCorrectionSystemPrompt", () => {
   });
 
   it("omits dynamic preferred terms section when custom dictionary is empty", () => {
-    const prompt = buildCorrectionSystemPrompt({ customDictionary: [] });
-    // The dynamic section header starts with "PREFERRED TERMS (prefer these exact forms..." —
+    // The dynamic section header starts with "PREFERRED TERMS (" —
     // distinct from the "REQUIRED TERMS / CUSTOM DICTIONARY" label in the priority list, which
     // is always present in the core prompt.
-    expect(prompt).not.toContain("PREFERRED TERMS (prefer these exact forms");
+    for (const instructions of [undefined, LITERAL_CORRECTION_INSTRUCTIONS]) {
+      const prompt = buildCorrectionSystemPrompt({ customDictionary: [] }, instructions);
+      expect(prompt).not.toContain("PREFERRED TERMS (");
+      expect(buildCorrectionSystemPrompt({ customDictionary: ["x"] }, instructions)).toContain(
+        "PREFERRED TERMS ("
+      );
+    }
   });
 
   it("excludes project directory from prompt when it matches project name", () => {
@@ -610,6 +617,22 @@ describe("buildCorrectionSystemPrompt contextNames", () => {
       block.startsWith("The worktree and repository names")
     );
     expect(evidence).toMatch(/never a source of words, names or facts to add/);
+  });
+
+  it("rewrites each of those blocks on its own, and reads as before when not asked to", () => {
+    const alone: CorrectionPromptContext[] = [
+      { projectName: "Daintree" },
+      { projectPath: "/Users/dev/Projects/daintree" },
+      { customDictionary: ["Terra"] },
+      { worktree: { name: "develop", titles: [] } },
+      { repositoryNames: ["smol-toml"] },
+    ];
+    for (const one of alone) {
+      const as = (contextNames?: "tiebreak" | "spelling") =>
+        buildCorrectionSystemPrompt(one, { ...LITERAL_CORRECTION_INSTRUCTIONS, contextNames });
+      expect(as("tiebreak"), JSON.stringify(one)).toBe(as(undefined));
+      expect(as("spelling"), JSON.stringify(one)).not.toBe(as("tiebreak"));
+    }
   });
 
   it("reads the same either way for a prompt with none of those blocks", () => {

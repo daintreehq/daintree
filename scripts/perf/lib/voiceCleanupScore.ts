@@ -192,16 +192,20 @@ export function longestSentence(text: string): number {
   );
 }
 
-// Single letters joined by hyphens, as a spelling is typed ("T-E-R-R-A").
-const HYPHENED_LETTERS_RE = /(?<![\p{L}\p{N}])\p{L}(?:-\p{L})+(?![\p{L}\p{N}])/gu;
+// Three or more capitals joined by hyphens, as cleanup types a spelling
+// ("T-E-R-R-A"), and not part of a longer hyphened word. Two letters or
+// lowercase ones are more often an expression or an identifier ("x-y", "a-b-c").
+const SPELLING_RE = /(?<![\p{L}\p{N}-])\p{Lu}(?:-\p{Lu}){2,}(?![\p{L}\p{N}-])/gu;
 
 /**
- * `normaliseWords`, with a spelling typed as hyphened letters read as the
- * letters spoken, which it already merges: "T-E-R-R-A", "T E R R A" and
- * "Terra" are one word, and only the fixes see how the letters were written.
+ * `normaliseWords`, with a spelling typed as hyphened capitals read as the
+ * word its letters make, which is what it makes of them spoken: "T-E-R-R-A",
+ * "T E R R A" and "Terra" are one word, and only the fixes see how the
+ * letters were written. Joined first, so a one-letter word beside it ("a")
+ * stays its own word.
  */
 function cleanupWords(text: string): string[] {
-  return normaliseWords(text.replace(HYPHENED_LETTERS_RE, (run) => run.replaceAll("-", " ")));
+  return normaliseWords(text.replace(SPELLING_RE, (run) => run.replaceAll("-", "")));
 }
 
 function lineWords(text: string): string[] {

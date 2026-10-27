@@ -392,13 +392,74 @@ const NAMES_3 = revise(NAMES_2, {
 
 // Round 4: under NAMES_2 and NAMES_3 the model sometimes wrote that passage's
 // "issue/command" as "issue command", which the guard refuses as a changed
-// path, so the whole passage went out raw. NAMES_2 copying words a slash
-// already joins is what Terra cleans up with since #14873.
+// path, so the whole passage went out raw.
 const NAMES_4 = revise(NAMES_2, {
   core: [
     [
       "- Copy @-references, text inside backticks, file paths, URLs,",
       '- Copy @-references, text inside backticks, file paths, words a slash already joins ("read/write"), URLs,',
+    ],
+  ],
+});
+
+// Review of NAMES_4: its examples were the corpus's own ("GPT 6.1 Tera" with
+// gpt-6.1-terra on screen, "Z O D" as Zod), so those passages measured the
+// example rather than the rule, and the aside rule would move a condition
+// ("check the, if there are any, the logs") off the words it qualifies, when
+// V13 already gave #14873's aside a sentence of its own without it. NAMES_5
+// teaches with names the corpus doesn't have, and leaves asides to the rest
+// of the rules.
+const NAMES_5 = revise(NAMES_4, {
+  core: [
+    [
+      'A transcribed word can look like a real word or name and still be the misheard one: "GPT 6.1 Tera" with gpt-6.1-terra on screen is "GPT 6.1 Terra". Fix only the misheard word, and write it as the name is written in a sentence: "GPT 6.1 Terra", not "gpt-6.1-terra" or "GPT 6.1 terra".',
+      'A transcribed word can look like a real word or name and still be the misheard one: "the Mira 2 model" with myra-2-large on screen is "the Myra 2 model". Fix only the misheard word, and write it as the name is written in a sentence: "the Myra 2 model", not "the myra-2-large model" or "the myra 2 model".',
+    ],
+    [
+      '("that should be T E R R A", "it\'s spelled Z O D")',
+      '("that should be M Y R A", "it\'s spelled P I N O")',
+    ],
+    ['("Z O D" is Zod, not ZOD)', '("P I N O" is Pino, not PINO)'],
+    [
+      'under NAMES AND SPELLINGS ("the tara benchmark" after a prompt about gpt-6.1-terra is the Terra benchmark).',
+      'under NAMES AND SPELLINGS ("the tara benchmark" after a prompt about gpt-6.1-terra).',
+    ],
+    [
+      'under NAMES AND SPELLINGS ("go with the shin" after the agent offered a shim is the shim).',
+      'under NAMES AND SPELLINGS ("go with the shin" after the agent offered a shim).',
+    ],
+    ['("T-E-R-R-A")', '("M-Y-R-A")'],
+    [
+      '- Target: "so it picked GPT 6.1 Tera again for the long ones" (with gpt-6.1-terra in <terminal_output>)\n  Corrected: "It picked GPT 6.1 Terra again for the long ones."',
+      '- Target: "so it picked the Mira model again for the long ones" (with myra-2-large in <terminal_output>)\n  Corrected: "It picked the Myra model again for the long ones."',
+    ],
+    [
+      '- Target: "there\'s no rush on the docs" (with gpt-6.1-terra in <terminal_output>)',
+      '- Target: "there\'s no rush on the docs" (with myra-2-large in <terminal_output>)',
+    ],
+    [
+      ' An aside that breaks into a sentence before the sentence picks back up ("it was the, I can\'t remember which, the second build") comes out of it: finish the sentence, then give the aside a sentence of its own after it, in the speaker\'s words ("It was the second build. I can\'t remember which").',
+      "",
+    ],
+  ],
+});
+
+// Full corpus: NAMES_5 landed every new passage NAMES_4 did, so the rule
+// carries to names it was never shown, but without the Terra example Terra
+// wrote its own name as gpt-6.1-terra, "terra" or "GPT-6.1 Terra" in the
+// older passages, the casing #14873 asks for. NAMES_6 is NAMES_4 with the
+// Terra example kept, the Zod one taught with Pino, and no aside rule: what
+// Terra cleans up with since #14873.
+const NAMES_6 = revise(NAMES_4, {
+  core: [
+    [
+      '("that should be T E R R A", "it\'s spelled Z O D")',
+      '("that should be T E R R A", "it\'s spelled P I N O")',
+    ],
+    ['("Z O D" is Zod, not ZOD)', '("P I N O" is Pino, not PINO)'],
+    [
+      ' An aside that breaks into a sentence before the sentence picks back up ("it was the, I can\'t remember which, the second build") comes out of it: finish the sentence, then give the aside a sentence of its own after it, in the speaker\'s words ("It was the second build. I can\'t remember which").',
+      "",
     ],
   ],
 });
@@ -459,6 +520,16 @@ export const PROMPT_VARIANTS: Readonly<Record<string, PromptVariant>> = {
   names4: {
     description: "round 4: names2, with words a slash already joins copied as they are",
     instructionsFor: fixed(NAMES_4),
+  },
+  names5: {
+    description:
+      "names4, taught with names the corpus doesn't have, and without moving an aside out of its sentence",
+    instructionsFor: fixed(NAMES_5),
+  },
+  names6: {
+    description:
+      "names4, with Zod's example taught with Pino and without moving an aside out of its sentence",
+    instructionsFor: fixed(NAMES_6),
   },
   production: {
     description: "the rules production sends each model now",
