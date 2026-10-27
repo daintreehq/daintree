@@ -3235,6 +3235,33 @@ describe("OpenAITranscriptionProvider — item identity and ordering (#13109)", 
     service.stop();
   });
 
+  it("keeps each pause on its own commit when a transcript beats its ack", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+
+    const { socket } = await bringSessionReady(service);
+    const worker = latestVadWorker();
+    vadCommitSegment(service, worker);
+    feedCommittableAudio(service);
+    worker.emitSpeechStart();
+    vi.advanceTimersByTime(8_000);
+    feedCommittableAudio(service);
+    vi.advanceTimersByTime(8_000);
+    expect(socket.sentJson().filter((p) => p.type === "input_audio_buffer.commit")).toHaveLength(3);
+
+    socket.simulateMessage("conversation.item.done", done("item-A", "fix the bug"));
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-B" });
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-C" });
+    socket.simulateMessage("conversation.item.done", done("item-B", "and the"));
+    socket.simulateMessage("conversation.item.done", done("item-C", "tests"));
+
+    // A landed ahead of its ack, unflagged; the backstop commits after it stay unflagged.
+    expect(pauses(events)).toEqual([false, false, false]);
+    service.stop();
+  });
+
   it("marks a failed segment incomplete, with no boundary of its own", async () => {
     const service = new OpenAITranscriptionProvider();
     const events: VoiceTranscriptionEvent[] = [];
@@ -5075,7 +5102,7 @@ describe("OpenAITranscriptionProvider — recovery window (#14796)", () => {
     expect(instances).toHaveLength(attempts);
   });
 
-  it("carries on in a new session when the session expires, replaying unacknowledged audio", async () => {
+  it("carries on in a new session when the session expires, replaying untranscribed audio", async () => {
     const service = new OpenAITranscriptionProvider();
     const events: VoiceTranscriptionEvent[] = [];
     service.onEvent((e) => events.push(e));
@@ -5085,6 +5112,10 @@ describe("OpenAITranscriptionProvider — recovery window (#14796)", () => {
     service.sendAudioChunk(chunk(1));
     vad.emitSpeechEnd();
     socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+    socket.simulateMessage("conversation.item.input_audio_transcription.completed", {
+      item_id: "item-A",
+      transcript: "landed",
+    });
     vad.emitSpeechStart();
     service.sendAudioChunk(chunk(2));
     vad.emitSpeechEnd();
@@ -5099,7 +5130,7 @@ describe("OpenAITranscriptionProvider — recovery window (#14796)", () => {
     const renewed = nextAttemptSucceeds();
 
     expect(instances).toEqual([socket, renewed]);
-    // The acknowledged segment is the old session's; the rest is resent.
+    // The transcribed segment is the old session's; the rest is resent.
     expect(wire(renewed)).toEqual([2, "commit", 3]);
     expect(events.filter((e) => e.type === "error")).toEqual([]);
     expect(statusesOf(events)).not.toContain("error");
@@ -5111,6 +5142,42 @@ describe("OpenAITranscriptionProvider — recovery window (#14796)", () => {
       transcript: "replayed",
     });
     expect(events.some((e) => e.type === "complete" && e.text === "replayed")).toBe(true);
+    service.stop();
+  });
+
+  it("replays an acknowledged segment the expired session never transcribed, once and at its pause", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+    const { socket } = await bringSessionReady(service);
+    const vad = latestVadWorker();
+    vad.emitSpeechStart();
+    service.sendAudioChunk(chunk(1));
+    socket.simulateMessage("conversation.item.input_audio_transcription.delta", {
+      item_id: "item-A",
+      delta: "new par",
+    });
+    vad.emitSpeechEnd();
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+
+    const message = "Your session hit the maximum duration of 60 minutes.";
+    socket.simulateMessage("error", {
+      error: { type: "invalid_request_error", code: "session_expired", message, param: null },
+    });
+    socket.simulateClose(1001, Buffer.from(message));
+    const renewed = nextAttemptSucceeds();
+
+    expect(wire(renewed)).toEqual([1, "commit"]);
+    renewed.simulateMessage("input_audio_buffer.committed", { item_id: "item-B" });
+    renewed.simulateMessage("conversation.item.input_audio_transcription.completed", {
+      item_id: "item-B",
+      transcript: "new paragraph",
+    });
+    // The old preview gives way to the replay's transcript, which keeps the pause.
+    expect(events.filter((e) => e.type === "complete")).toEqual([
+      { type: "complete", text: "", itemId: "item-A" },
+      { type: "complete", text: "new paragraph", itemId: "item-B", endsAtPause: true },
+    ]);
     service.stop();
   });
 

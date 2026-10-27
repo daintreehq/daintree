@@ -143,11 +143,11 @@ const VAD_PRE_ROLL_BYTES = 14_400;
 // (24kHz mono PCM16 → 4800 bytes) with a fatal error event. Skip a commit
 // below this threshold.
 const MIN_COMMIT_BYTES = 4_800;
-// Audio sent since the server last acknowledged a commit is replayed onto the
-// next connection after a drop. Speech keeps it short (the 8s backstop, plus a
-// few seconds to notice a dead socket), so the cap only bites on a long silent
-// tail, where the oldest audio goes first. It has to hold a whole reconnect
-// flush on top of that, so a second drop during the flush still resends it all.
+// Audio whose transcript hasn't landed is replayed onto the next connection
+// after a drop. Speech keeps it short (the 8s backstop, plus a few seconds to
+// notice a dead socket), so the cap only bites on a long silent tail, where the
+// oldest audio goes first. It has to hold a whole reconnect flush on top of
+// that, so a second drop during the flush still resends it all.
 const REPLAY_MAX_BYTES = RECONNECT_BUFFER_MAX_BYTES + 20 * AUDIO_BYTES_PER_SECOND;
 // A tail the VAD already called silence is cut to its last 2s before replay,
 // so a reconnect doesn't send (and pay to transcribe) minutes of room noise.
@@ -1978,7 +1978,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
    */
   private bufferPreConnectChunk(chunk: ArrayBuffer): boolean {
     const maxChunks = this.isReconnecting ? RECONNECT_BUFFER_MAX_CHUNKS : AUDIO_BUFFER_MAX_CHUNKS;
-    // Gap audio joins the unacknowledged audio in the replay ledger when it's
+    // Gap audio joins the untranscribed audio in the replay ledger when it's
     // flushed, so together they stay under its cap. Otherwise the flush would
     // evict audio a second drop needs to resend.
     const maxBytes = this.isReconnecting
