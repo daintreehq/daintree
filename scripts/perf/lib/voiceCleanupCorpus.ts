@@ -1813,6 +1813,16 @@ const COMMANDS: readonly AuthoredCase[] = [
     session: CODEX_SKILLS_SESSION,
   },
   {
+    id: "commands-codex-with-plugin-creator:openai",
+    style: "openai",
+    source: "commands",
+    raw: "Once the rules are settled, scaffold the linter with plugin creator.",
+    reference: "Once the rules are settled, scaffold the linter with $plugin-creator.",
+    fixes: { "$plugin-creator": "form" },
+    keep: ["scaffold the linter with"],
+    session: CODEX_SKILLS_SESSION,
+  },
+  {
     id: "commands-lookalike-review-design:openai",
     style: "openai",
     source: "commands",

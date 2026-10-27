@@ -609,9 +609,58 @@ describe("checkVoiceCommandEdit for a command named partway into the prompt", ()
     ["Okay, do a design review of the header.", "Okay, do a /design-review of the header."],
     ["Then use the config file from the repo.", "Then use the /config file from the repo."],
     ["Then use the memory pressure numbers.", "Then use the /memory pressure numbers."],
-    ["I'm happy with the design review.", "I'm happy with the /design-review."],
+    ["I'm happy with the model.", "I'm happy with the /model."],
+    ["Then use the model to predict prices.", "Then use the /model to predict prices."],
+    [
+      "Inspect the model. Command handling is broken.",
+      "Inspect the /model. Command handling is broken.",
+    ],
+    ["Use it. Design review comes later.", "Use it. /design-review comes later."],
   ])("leaves words that only share a name as words: %j", (raw, corrected) => {
     expect(checkVoiceCommandEdit(raw, corrected, skills, true)).toBe("unprompted_command");
+  });
+
+  it("writes a command only where the dictation named it", () => {
+    const raw = "Check the review skill, then review the header.";
+    expect(
+      checkVoiceCommandEdit(raw, "Check the /review skill, then review the header.", skills, false)
+    ).toBeNull();
+    expect(
+      checkVoiceCommandEdit(raw, "Check the review skill, then /review the header.", skills, false)
+    ).toBe("unprompted_command");
+  });
+
+  it("counts a command already typed, and writes one for each time it was named", () => {
+    expect(
+      checkVoiceCommandEdit("then run /commit now", "Then run /commit now.", skills, false)
+    ).toBeNull();
+    expect(
+      checkVoiceCommandEdit(
+        "use the commit skill here and the commit skill there",
+        "use the /commit skill here and the /commit skill there",
+        skills,
+        false
+      )
+    ).toBeNull();
+  });
+
+  it('takes a handoff with "with" for an installed skill', () => {
+    expect(
+      checkVoiceCommandEdit(
+        "After that, scaffold a linter with plugin creator.",
+        "After that, scaffold a linter with $plugin-creator.",
+        codexSkills,
+        true
+      )
+    ).toBeNull();
+    expect(
+      checkVoiceCommandEdit(
+        "Then use plugin creator with the linter template.",
+        "Then use $plugin-creator with the linter template.",
+        codexSkills,
+        true
+      )
+    ).toBeNull();
   });
 
   it("writes a command once for each time the dictation named it", () => {
@@ -638,6 +687,9 @@ describe("checkVoiceCommandEdit for a command named partway into the prompt", ()
       )
     ).toBeNull();
     expect(
+      checkVoiceCommandEdit(raw, 'Then try the "/design-review" approach.', skills, true)
+    ).toBe("unprompted_command");
+    expect(
       checkVoiceCommandEdit(raw, "Then try the /design-review-v2 approach.", skills, true)
     ).toBeNull();
   });
@@ -647,17 +699,35 @@ describe("checkVoiceCommandEdit for a command named partway into the prompt", ()
     expect(checkVoiceCommandEdit(raw, "Next, use the design /review skill.", skills, true)).toBe(
       "unprompted_command"
     );
+    const nested = buildVoiceCommandVocabulary(
+      [custom("claude", "/review"), custom("claude", "/review-skill")],
+      sourcesOf("claude")
+    );
+    const said = "Next, use the review skill.";
+    expect(checkVoiceCommandEdit(said, "Next, use the /review-skill.", nested, true)).toBeNull();
+    expect(checkVoiceCommandEdit(said, "Next, use the /review skill.", nested, true)).toBe(
+      "unprompted_command"
+    );
   });
 
-  it("names neither of two commands that sound the same", () => {
+  it.each([
+    [custom("codex", "/design-review"), custom("codex", "$design-review", { kind: "skill" })],
+    [custom("codex", "$design-review", { kind: "skill" }), custom("codex", "/design-review")],
+  ])("names neither of two commands that sound the same", (first, second) => {
     const twins = buildVoiceCommandVocabulary(
-      [custom("codex", "/design-review"), custom("codex", "$design-review", { kind: "skill" })],
+      [...getBuiltinSlashCommands("codex"), first, second],
       codexSources
     );
     const raw = "Then use the design review skill.";
-    expect(checkVoiceCommandEdit(raw, "Then use the $design-review skill.", twins, true)).toBe(
-      "unprompted_command"
-    );
+    for (const corrected of [
+      "Then use the $design-review skill.",
+      "Then use the /design-review skill.",
+      "Then use the design /review skill.",
+    ]) {
+      expect(checkVoiceCommandEdit(raw, corrected, twins, true), corrected).toBe(
+        "unprompted_command"
+      );
+    }
   });
 
   it("leaves unlisted command-shaped words to the prompt", () => {

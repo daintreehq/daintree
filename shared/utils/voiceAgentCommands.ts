@@ -113,6 +113,8 @@ const INVOCATION_NOUNS = new Set(["skill", "command", "plugin", "prompt"]);
 // "the model prompt" is ordinary speech.
 const REFERENCE_NOUNS = new Set(["skill", "skills", "command", "commands"]);
 const HANDOFF_VERBS = new Set([
+  "with",
+  "via",
   "use",
   "uses",
   "using",
@@ -135,6 +137,7 @@ const HANDOFF_FILLERS = new Set(["the", "a", "an", "my", "our", "your", "that", 
 // creator for a linter" hands work to it, "use the model output" doesn't.
 const CLAUSE_WORDS = new Set([
   "on",
+  "with",
   "for",
   "to",
   "in",
@@ -542,14 +545,23 @@ export type VoiceCommandEditRejection =
 /** Where a listed command or skill is named in `raw` in so many words, as one it means. */
 interface SpokenReference {
   entry: VoiceCommandEntry;
-  end: number;
+  /** The words either side of the name, as `toKey` reads them; undefined at an edge. */
+  before: string | undefined;
+  after: string | undefined;
 }
 
-function hasHandoffVerb(spans: readonly WordSpan[], nameStart: number): boolean {
+function closesClause(text: string, span: WordSpan): boolean {
+  return CLAUSE_END_RE.test(text.slice(span.start, span.end));
+}
+
+// The verb has to be in the name's own clause: "Use it. The model…" hands
+// nothing to the model.
+function hasHandoffVerb(text: string, spans: readonly WordSpan[], nameStart: number): boolean {
   for (let at = nameStart - 1, fillers = 0; at >= 0; at--) {
-    const word = spans[at]!.word;
-    if (HANDOFF_VERBS.has(word)) return true;
-    if (!HANDOFF_FILLERS.has(word) || ++fillers > 2) return false;
+    const span = spans[at]!;
+    if (closesClause(text, span)) return false;
+    if (HANDOFF_VERBS.has(span.word)) return true;
+    if (!HANDOFF_FILLERS.has(span.word) || ++fillers > 2) return false;
   }
   return false;
 }
@@ -558,19 +570,27 @@ function hasHandoffVerb(spans: readonly WordSpan[], nameStart: number): boolean 
  * The listed commands `text` names as commands: with a trigger ("slash
  * review"), with a noun ("the design review skill"), or handed work by a verb
  * ("use plugin creator for a linter"). Read left to right, longest name first,
- * each word claimed once. A name two commands answer to names neither.
+ * each word claimed once. A name two commands answer to names neither, and
+ * its words are claimed all the same, so a shorter name inside it can't stand
+ * in for it.
  */
 function spokenReferences(text: string, vocabulary: VoiceCommandVocabulary): SpokenReference[] {
   const spans = wordSpans(text, 0).filter((span) => !HESITATIONS.has(span.word));
   const references: SpokenReference[] = [];
   for (let start = 0; start < spans.length;) {
     const found = referenceAt(text, spans, start, vocabulary);
-    if (found) {
-      references.push({ entry: found.entry, end: spans[found.last]!.end });
-      start = found.last + 1;
-    } else {
+    if (!found) {
       start++;
+      continue;
     }
+    if (found.entry) {
+      references.push({
+        entry: found.entry,
+        before: spans[start - 1]?.word,
+        after: spans[found.last + 1]?.word,
+      });
+    }
+    start = found.last + 1;
   }
   return references;
 }
@@ -580,7 +600,7 @@ function referenceAt(
   spans: readonly WordSpan[],
   start: number,
   vocabulary: VoiceCommandVocabulary
-): { entry: VoiceCommandEntry; last: number } | null {
+): { entry: VoiceCommandEntry | null; last: number } | null {
   const first = spans[start]!;
   if (first.symbolic) return null;
   for (const prefix of vocabulary.prefixes) {
@@ -602,51 +622,66 @@ function referenceAt(
     joined += span.word;
     const entries = vocabulary.entries.filter((entry) => entry.key === joined);
     if (entries.length > 0) named.push({ entry: entries.length === 1 ? entries[0]! : null, last });
-    if (CLAUSE_END_RE.test(text.slice(span.start, span.end))) break;
+    if (closesClause(text, span)) break;
   }
   for (const { entry, last } of named.reverse()) {
-    if (!entry) return null;
+    if (!entry) return { entry: null, last };
+    const closes = closesClause(text, spans[last]!);
     const next = spans[last + 1];
-    if (next && REFERENCE_NOUNS.has(next.word)) return { entry, last };
-    if (!hasHandoffVerb(spans, start)) continue;
-    const endsPhrase =
-      !next ||
-      CLAUSE_END_RE.test(text.slice(spans[last]!.start, spans[last]!.end)) ||
-      CLAUSE_WORDS.has(next.word);
-    if (endsPhrase) return { entry, last };
+    if (next && !closes && REFERENCE_NOUNS.has(next.word)) return { entry, last };
+    // A built-in's name is an ordinary word ("use the model to…"), so only
+    // its trigger or a noun says it's the command.
+    if (entry.scope === "built-in" || !hasHandoffVerb(text, spans, start)) continue;
+    if (!next || closes || CLAUSE_WORDS.has(next.word)) return { entry, last };
   }
   return null;
 }
 
-function tokenCounts(words: readonly string[]): Map<string, number> {
-  const counts = new Map<string, number>();
-  for (const word of words) {
-    const bare = word.replace(TOKEN_WRAPPER_RE, "");
-    counts.set(bare, (counts.get(bare) ?? 0) + 1);
-  }
-  return counts;
+function bareToken(word: string): string {
+  return word.replace(TOKEN_WRAPPER_RE, "");
 }
 
 /**
- * Whether `corrected` writes a listed command more often than `raw` either
- * typed it or named it as a command, so cleanup turned plain words into one.
- * Command-shaped words the target doesn't list ("/tmp") are paths and the like,
- * and stay the prompt's business.
+ * Whether `corrected` writes a listed command where `raw` neither typed it
+ * nor named it as a command, so cleanup turned plain words into one. Each
+ * token written must stand where a reference was, with the word before or
+ * after it unchanged, so naming a skill once can't turn "commit the docs"
+ * later in the sentence into `/commit`. Command-shaped words the target
+ * doesn't list ("/tmp") are paths and the like, and stay the prompt's business.
  */
 function writesUnnamedCommand(
   raw: string,
   corrected: string,
   vocabulary: VoiceCommandVocabulary
 ): boolean {
-  const written = tokenCounts(corrected.split(/\s+/u).filter(Boolean));
-  const typed = tokenCounts(raw.split(/\s+/u).filter(Boolean));
-  const named = new Map<string, number>();
-  for (const { entry } of spokenReferences(raw, vocabulary)) {
-    named.set(entry.token, (named.get(entry.token) ?? 0) + 1);
+  const typed = new Map<string, number>();
+  for (const word of raw.split(/\s+/u)) {
+    const token = bareToken(word);
+    typed.set(token, (typed.get(token) ?? 0) + 1);
   }
-  for (const [token, count] of written) {
+  const references = spokenReferences(raw, vocabulary);
+  const words = corrected.split(/\s+/u).filter(Boolean);
+  for (const [index, word] of words.entries()) {
+    const token = bareToken(word);
     if (!knownToken(token, vocabulary)) continue;
-    if (count > (typed.get(token) ?? 0) + (named.get(token) ?? 0)) return true;
+    const neighbour = (at: number) => {
+      const near = words[at];
+      return near === undefined ? undefined : toKey(near);
+    };
+    const before = neighbour(index - 1);
+    const after = neighbour(index + 1);
+    const at = references.findIndex(
+      (reference) =>
+        reference.entry.token === token &&
+        (reference.before === before || reference.after === after)
+    );
+    if (at >= 0) {
+      references.splice(at, 1);
+      continue;
+    }
+    const left = typed.get(token) ?? 0;
+    if (left === 0) return true;
+    typed.set(token, left - 1);
   }
   return false;
 }
