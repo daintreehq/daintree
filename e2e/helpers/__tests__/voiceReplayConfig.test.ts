@@ -6,11 +6,12 @@ const noFile = () => {
 };
 
 describe("resolveReplayConfigs", () => {
-  it("runs both providers without a custom dictionary by default", () => {
+  it("runs every provider without a custom dictionary by default", () => {
     const configs = resolveReplayConfigs({}, noFile);
     expect(configs.map((c) => [c.id, c.provider, c.dictionary.length])).toEqual([
       ["openai", "openai", 0],
       ["deepgram", "deepgram", 0],
+      ["grok", "grok", 0],
     ]);
   });
 
@@ -68,6 +69,7 @@ describe("providerKeyEnv", () => {
     expect(providerKeyEnv("deepgram", { DEEPGRAM_API_KEY: "dg" })).toEqual({
       DEEPGRAM_API_KEY: "dg",
     });
+    expect(providerKeyEnv("grok", { XAI_API_KEY: " xai-a " })).toEqual({ XAI_API_KEY: "xai-a" });
   });
 
   it("prefers OPENAI_API_KEY over an inherited WHISPER_API_KEY", () => {
@@ -79,5 +81,6 @@ describe("providerKeyEnv", () => {
   it("returns null when the provider has no key, so the config is skipped", () => {
     expect(providerKeyEnv("openai", { DEEPGRAM_API_KEY: "dg" })).toBeNull();
     expect(providerKeyEnv("deepgram", { DEEPGRAM_API_KEY: "  " })).toBeNull();
+    expect(providerKeyEnv("grok", { DEEPGRAM_API_KEY: "dg" })).toBeNull();
   });
 });

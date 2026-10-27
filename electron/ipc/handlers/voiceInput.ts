@@ -440,14 +440,14 @@ const SUPERSEDED: VoiceStartOutcome = { status: "superseded" };
 // so the job is raced against its deadline rather than trusted to stop.
 const FILE_LINK_JOB_TIMEOUT_MS = 6000;
 
-// Deepgram ends an utterance after 300ms of silence (`endpointing=300`), a
-// pause that falls inside sentences, so a completion ending in "send it" is
+// Deepgram and Grok end an utterance after 300ms of silence (`endpointing=300`),
+// a pause that falls inside sentences, so a completion ending in "send it" is
 // held this much longer: about a second of silence in all, close to what
 // OpenAI's VAD waits before it ends an utterance.
 const SPOKEN_SEND_SETTLE_MS = 700;
-// Deepgram's VAD hears speech start long before an interim result for it, and
-// noise can set it off too: a held send then waits this long for a transcript
-// to show the speaker went on.
+// Speech starting is heard long before an interim result for it, and noise
+// can set it off too: a held send then waits this long for a transcript to
+// show the speaker went on.
 const SPOKEN_SEND_SPEECH_CONFIRM_MS = 1500;
 
 function releaseHeldSend(session: VoiceSession, outcome: HeldSendOutcome): void {
@@ -469,7 +469,7 @@ function normalizeSpoken(text: string): string {
   return text.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
-const VALID_TRANSCRIPTION_PROVIDERS: VoiceTranscriptionProvider[] = ["openai", "deepgram"];
+const VALID_TRANSCRIPTION_PROVIDERS: VoiceTranscriptionProvider[] = ["openai", "deepgram", "grok"];
 
 // The only fields setSettings writes. Everything else is refused: `keyterms` is
 // assembled per session, the dictionary and its suggestion queue change only
@@ -481,6 +481,7 @@ const WRITABLE_VOICE_FIELDS: Record<keyof VoiceInputSettingsPatch, true> = {
   enabled: true,
   openaiApiKey: true,
   deepgramApiKey: true,
+  xaiApiKey: true,
   language: true,
   transcriptionProvider: true,
   transcriptionModel: true,
@@ -500,6 +501,7 @@ const VOICE_INPUT_DEFAULTS: VoiceInputSettings = {
   enabled: false,
   openaiApiKey: "",
   deepgramApiKey: "",
+  xaiApiKey: "",
   language: "en",
   dictionary: [],
   transcriptionProvider: "openai",
@@ -626,6 +628,10 @@ export function getVoiceSettings(): VoiceInputSettings {
   const envDeepgramKey = process.env.DEEPGRAM_API_KEY?.trim();
   if (envDeepgramKey) {
     merged.deepgramApiKey = envDeepgramKey;
+  }
+  const envXaiKey = process.env.XAI_API_KEY?.trim();
+  if (envXaiKey) {
+    merged.xaiApiKey = envXaiKey;
   }
 
   return merged;
@@ -1354,7 +1360,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
 
     // Kick off keyterm assembly concurrently with the subscription/provider
     // setup below so leading speech isn't delayed waiting on git/terminal reads.
-    // Both providers consume the result: Deepgram via repeated `keyterm=` params,
+    // Every provider consumes the result: Deepgram and Grok via repeated `keyterm=` params,
     // OpenAI via the transcription prompt. Each provider freezes the list for
     // the session, so its reconnect path reuses it unchanged. Assembly, the
     // names read included, is capped internally (~500ms) and failures are
@@ -1466,8 +1472,11 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       settings.paragraphingStrategy === "spoken-command" &&
       normalizeVoiceLanguage(settings.language) === "en";
     // OpenAI's VAD already waits out a long silence, and checks it again,
-    // before it ends an utterance; only Deepgram's short endpoint needs more.
-    const sendSettleMs = settings.transcriptionProvider === "deepgram" ? SPOKEN_SEND_SETTLE_MS : 0;
+    // before it ends an utterance; only the short endpoints need more.
+    const sendSettleMs =
+      settings.transcriptionProvider === "deepgram" || settings.transcriptionProvider === "grok"
+        ? SPOKEN_SEND_SETTLE_MS
+        : 0;
     // "um" is a word in Portuguese and German, so another language's hesitations
     // are left for cleanup to judge.
     const dropHesitations = normalizeVoiceLanguage(settings.language) === "en";
@@ -1866,7 +1875,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       }
     });
 
-    // Deepgram needs the terms to open its socket, so it waits for them here,
+    // Deepgram and Grok need the terms to open their socket, so they wait for them here,
     // still starting. OpenAI opens its socket now and takes them as they land,
     // since it only sends them once the socket is open. Assembly has its own
     // internal timeouts, so this await is bounded.

@@ -12,6 +12,7 @@ import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { SettingsSelect } from "./SettingsSelect";
 import { CodexIcon } from "@/components/icons/brands/CodexIcon";
 import { DeepgramIcon } from "@/components/icons/brands/DeepgramIcon";
+import { GrokIcon } from "@/components/icons/brands/GrokIcon";
 import { MicTestRow } from "./MicTestRow";
 import { SettingsPresetGroup } from "./SettingsPresetGroup";
 import { SettingsTextarea } from "./SettingsTextarea";
@@ -40,7 +41,7 @@ import {
   hasCleanupKey,
   hasTranscriptionKey,
   transcriptionKeyField,
-  transcriptionProviderName,
+  transcriptionKeyIssuer,
   type VoiceApiKeyField,
 } from "@shared/config/voiceProviders";
 import type {
@@ -57,6 +58,7 @@ import type {
 const PROVIDER_OPTIONS = [
   { value: "openai" as const, label: "OpenAI", icon: CodexIcon },
   { value: "deepgram" as const, label: "Deepgram", icon: DeepgramIcon },
+  { value: "grok" as const, label: "Grok", icon: GrokIcon },
 ];
 
 const RECOGNITION_HINTS_PRIVACY =
@@ -65,12 +67,14 @@ const RECOGNITION_HINTS_PRIVACY =
 const PROVIDER_PRIVACY: Record<VoiceTranscriptionProvider, string> = {
   openai: `OpenAI receives your audio over an encrypted connection, keeps it for up to 30 days for abuse monitoring, and doesn't train on it. ${RECOGNITION_HINTS_PRIVACY}`,
   deepgram: `Deepgram receives your audio over an encrypted connection and, by default, may keep audio and transcripts to improve its models. ${RECOGNITION_HINTS_PRIVACY}`,
+  grok: `xAI receives your audio over an encrypted connection, keeps it for up to 30 days for abuse auditing unless your team turns on Zero Data Retention, and doesn't train on it without permission. ${RECOGNITION_HINTS_PRIVACY}`,
 };
 
 const DEFAULT_SETTINGS: VoiceInputSettings = {
   enabled: false,
   openaiApiKey: "",
   deepgramApiKey: "",
+  xaiApiKey: "",
   language: "en",
   dictionary: [],
   transcriptionProvider: "openai",
@@ -97,6 +101,7 @@ type PatchKey = keyof VoiceInputSettingsPatch;
 const SAVE_GROUP_BY_KEY: Partial<Record<PatchKey, SaveGroup>> = {
   openaiApiKey: "credentials",
   deepgramApiKey: "credentials",
+  xaiApiKey: "credentials",
   deviceId: "microphone",
   language: "behavior",
   paragraphingStrategy: "behavior",
@@ -111,6 +116,7 @@ const SETTING_KEYS: readonly PatchKey[] = [
   "enabled",
   "openaiApiKey",
   "deepgramApiKey",
+  "xaiApiKey",
   "language",
   "transcriptionProvider",
   "transcriptionModel",
@@ -197,7 +203,7 @@ export function dictationBlockers(
 ): string[] {
   const blockers: string[] = [];
   if (!hasTranscriptionKey(settings)) {
-    blockers.push(`add your ${transcriptionProviderName(settings.transcriptionProvider)} API key`);
+    blockers.push(`add your ${transcriptionKeyIssuer(settings.transcriptionProvider)} API key`);
   }
   if (micPermission === "denied" || micPermission === "restricted") {
     blockers.push("allow microphone access");
@@ -467,6 +473,21 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
           settings.deepgramApiKey
             ? "Stored locally in plain text. Set usage limits on your Deepgram account to cap exposure."
             : "Create one in the Deepgram console. Keys are stored locally in plain text."
+        }
+      />
+    ),
+    xaiApiKey: () => (
+      <ApiKeyRow
+        key="xaiApiKey"
+        label="xAI API key"
+        value={settings.xaiApiKey}
+        placeholder="Paste an xAI API key"
+        onSave={(key) => update({ xaiApiKey: key })}
+        helpUrl="https://console.x.ai/"
+        description={
+          settings.xaiApiKey
+            ? "Stored locally in plain text. Set a spending limit on your xAI team to cap exposure."
+            : "Create one in the xAI console. Keys are stored locally in plain text."
         }
       />
     ),

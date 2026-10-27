@@ -70,14 +70,15 @@ export interface VoiceSentTerm {
  * What the most recent dictation handed its transcription provider, kept in
  * main's memory for that one session. `sent` is null until the provider has
  * reported its request, and empty when it went out with no terms.
- * `keytermAttempt` is Deepgram's retry step: after an HTTP 400 it re-sends a
- * trimmed list, then none. `endedBeforeSending` marks a session that ended
+ * `keytermAttempt` is the retry step of a provider that takes its terms on the
+ * socket URL (Deepgram, Grok): after a rejection it re-sends a trimmed list,
+ * then none. `endedBeforeSending` marks a session that ended
  * before the provider reported a request (rejected, stopped while connecting,
  * or the request failed to send), so its empty `sent` is not a provider limit.
  */
 export interface LastDictationTerms {
   sessionId: string;
-  provider: "openai" | "deepgram";
+  provider: "openai" | "deepgram" | "grok";
   /**
    * How many terms assembly gathered, before the provider's own limits. Zero
    * until assembly lands, which for OpenAI can be after its provider starts.

@@ -5,6 +5,7 @@ import { pluralize } from "@/lib/pluralize";
 import { Button } from "@/components/ui/button";
 import { logWarn } from "@/utils/logger";
 import { voiceErrorLogFields } from "@shared/utils/voiceLogFields";
+import { transcriptionProviderName } from "@shared/config/voiceProviders";
 import type { LastDictationTerms, VoiceKeytermSource } from "@shared/types";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "./SettingsGroup";
@@ -20,11 +21,9 @@ const SOURCES: ReadonlyArray<{ source: VoiceKeytermSource; label: string }> = [
   { source: "terminal", label: "Terminal output" },
 ];
 
-const PROVIDER_NAME = { openai: "OpenAI", deepgram: "Deepgram" } as const;
-
 const ATTEMPT_NOTE = {
-  trimmed: "Deepgram rejected the full list, so it was retried with fewer terms",
-  none: "Deepgram rejected the terms, so it was retried with none",
+  trimmed: "rejected the full list, so it was retried with fewer terms",
+  none: "rejected the terms, so it was retried with none",
 } as const;
 
 function summarize(last: LastDictationTerms): string {
@@ -33,9 +32,11 @@ function summarize(last: LastDictationTerms): string {
   const dropped = last.assembledCount - last.sent.length;
   const parts = [`${last.sent.length} of ${pluralize(last.assembledCount, "term")} sent`];
   if (dropped > 0 && last.keytermAttempt && last.keytermAttempt !== "full") {
-    parts.push(ATTEMPT_NOTE[last.keytermAttempt]);
+    parts.push(`${transcriptionProviderName(last.provider)} ${ATTEMPT_NOTE[last.keytermAttempt]}`);
   } else if (dropped > 0) {
-    parts.push(`${pluralize(dropped, "term")} dropped by ${PROVIDER_NAME[last.provider]}'s limits`);
+    parts.push(
+      `${pluralize(dropped, "term")} dropped by ${transcriptionProviderName(last.provider)}'s limits`
+    );
   }
   // One sentence goes without a period; several each take one.
   const summary = parts.join(". ");
@@ -102,7 +103,7 @@ export function LastDictationTermsSection() {
         ) : (
           <>
             <SettingsRow
-              label={`${last.rewrite ? "Rewrite instruction sent" : "Sent"} to ${PROVIDER_NAME[last.provider]}`}
+              label={`${last.rewrite ? "Rewrite instruction sent" : "Sent"} to ${transcriptionProviderName(last.provider)}`}
               description={summarize(last)}
             />
             {SOURCES.map(({ source, label }) => (

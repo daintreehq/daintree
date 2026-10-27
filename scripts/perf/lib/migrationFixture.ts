@@ -363,6 +363,7 @@ export function createHeavyMigrationFixture(): LegacyStoreV0 {
       enabled: true,
       openaiApiKey: "",
       deepgramApiKey: "",
+      xaiApiKey: "",
       language: "en",
       customDictionary: [],
       transcriptionProvider: "deepgram",

@@ -10,7 +10,7 @@
  *
  * Costs money and needs keys, so it never runs in CI:
  *
- *   OPENAI_API_KEY=… DEEPGRAM_API_KEY=… npm run perf voice-replay
+ *   OPENAI_API_KEY=… DEEPGRAM_API_KEY=… XAI_API_KEY=… npm run perf voice-replay
  *
  * Every session gets a fresh app: the WAV is a launch switch, and a fresh
  * process keeps one arm's connection state out of the next. Results go to
@@ -40,6 +40,7 @@ import {
 import { ipcSetSettings } from "../helpers/voice";
 import { prepareClip, REPLAY_CLIPS, type PreparedClip } from "../helpers/voiceReplayFixtures";
 import {
+  PROVIDER_KEY_VARIABLE,
   providerKeyEnv,
   REPLAY_BASE_SETTINGS,
   resolveReplayConfigs,
@@ -72,8 +73,12 @@ const MIC_OPEN_TIMEOUT_MS = 20_000;
 // Past each provider's own drain backstop, so a hung drain shows up as a
 // missing `session-ended` rather than as a timeout here.
 const SESSION_END_TIMEOUT_MS = 30_000;
-// Point either provider at a mock and the "real provider" numbers are the mock's.
-const PROVIDER_URL_OVERRIDES = ["DAINTREE_REALTIME_WS_URL", "DAINTREE_DEEPGRAM_WS_URL"];
+// Point any provider at a mock and the "real provider" numbers are the mock's.
+const PROVIDER_URL_OVERRIDES = [
+  "DAINTREE_REALTIME_WS_URL",
+  "DAINTREE_DEEPGRAM_WS_URL",
+  "DAINTREE_GROK_WS_URL",
+];
 
 function gitSha(): string | null {
   try {
@@ -148,7 +153,7 @@ perfDescribe("Perf: dictation replay against real providers", () => {
       const keyEnv = providerKeyEnv(config.provider, process.env);
       if (keyEnv) runnable.push({ config, keyEnv });
       else {
-        const variable = config.provider === "openai" ? "OPENAI_API_KEY" : "DEEPGRAM_API_KEY";
+        const variable = PROVIDER_KEY_VARIABLE[config.provider];
         skippedConfigs.push({ id: config.id, reason: `${variable} is not set` });
       }
     }

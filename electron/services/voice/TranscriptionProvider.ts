@@ -33,7 +33,8 @@ export type VoiceTranscriptionEvent =
       incomplete?: boolean;
     }
   | { type: "paragraph_boundary" }
-  // The provider's own VAD heard speech begin, before any transcript of it.
+  // Speech began, before any transcript of it: Deepgram's own VAD, or for Grok,
+  // which reports nothing of the kind, a level check over the outgoing audio.
   // Main-only: it holds back a spoken send and never reaches the renderer.
   | { type: "speech_started" }
   | { type: "error"; error: VoiceInputError }

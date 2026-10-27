@@ -53,7 +53,7 @@ const ms = z.number().nonnegative().nullable();
  */
 export const VoiceSessionReportSchema = z
   .object({
-    provider: z.enum(["openai", "deepgram"]).nullable(),
+    provider: z.enum(["openai", "deepgram", "grok"]).nullable(),
     delayTier: z.enum([...VOICE_DELAY_TIERS, "none"]).nullable(),
     // Not "keytermCount": the logger blanks any field whose name holds "key".
     biasTermCount: count.nullable(),

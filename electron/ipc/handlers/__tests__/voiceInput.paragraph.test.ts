@@ -65,7 +65,9 @@ vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
       return () => {};
     };
     this.keytermsNeededToConnect = function (settings: { transcriptionProvider?: string }) {
-      return settings.transcriptionProvider === "deepgram";
+      return (
+        settings.transcriptionProvider === "deepgram" || settings.transcriptionProvider === "grok"
+      );
     };
     this.start = function (
       settings: unknown,
@@ -862,7 +864,7 @@ describe("voiceInput — spoken-command paragraphing", () => {
   });
 });
 
-describe("voiceInput — spoken send on Deepgram's short endpoint", () => {
+describe.each(["deepgram", "grok"] as const)("voiceInput — spoken send on %s", (provider) => {
   let win: ReturnType<typeof buildMainWindow>;
   let cleanup: () => void;
 
@@ -877,13 +879,14 @@ describe("voiceInput — spoken send on Deepgram's short endpoint", () => {
     vi.mocked(store.get).mockReturnValue({
       enabled: true,
       openaiApiKey: "",
-      deepgramApiKey: "dg-test",
+      deepgramApiKey: provider === "deepgram" ? "dg-test" : "",
+      xaiApiKey: provider === "grok" ? "xai-test" : "",
       correctionEnabled: false,
       correctionModel: "gpt-6-luna",
       dictionary: [],
       correctionCustomInstructions: "",
       language: "en",
-      transcriptionProvider: "deepgram",
+      transcriptionProvider: provider,
       transcriptionModel: "gpt-live-transcribe",
       paragraphingStrategy: "spoken-command",
       resolveFileLinks: true,
@@ -1803,11 +1806,12 @@ describe("voiceInput — context keyterms wiring", () => {
     return { promise, resolve, reject };
   }
 
-  function providerSettings(provider: "openai" | "deepgram") {
+  function providerSettings(provider: "openai" | "deepgram" | "grok") {
     return {
       enabled: true,
       openaiApiKey: provider === "openai" ? "sk-test" : "",
       deepgramApiKey: provider === "deepgram" ? "dg-test" : "",
+      xaiApiKey: provider === "grok" ? "xai-test" : "",
       language: "en",
       dictionary: [],
       transcriptionProvider: provider,
@@ -1851,19 +1855,23 @@ describe("voiceInput — context keyterms wiring", () => {
     shared.assembleKeyterms = null;
   });
 
-  it("injects assembled keyterms into the Deepgram session settings", async () => {
-    const { store } = await import("../../../store.js");
-    vi.mocked(store.get).mockReturnValue(providerSettings("deepgram"));
-    shared.assembleKeyterms = () => Promise.resolve(["alpha", "beta"]);
+  it.each(["deepgram", "grok"] as const)(
+    "injects assembled keyterms into the %s session settings",
+    async (provider) => {
+      const { store } = await import("../../../store.js");
+      vi.mocked(store.get).mockReturnValue(providerSettings(provider));
+      shared.assembleKeyterms = () => Promise.resolve(["alpha", "beta"]);
 
-    await startFn(fakeEvent, nextSessionId());
+      await startFn(fakeEvent, nextSessionId());
 
-    expect(shared.startCalls).toHaveLength(1);
-    expect(shared.startCalls[0]).toMatchObject({
-      transcriptionProvider: "deepgram",
-      keyterms: ["alpha", "beta"],
-    });
-  });
+      expect(shared.startCalls).toHaveLength(1);
+      expect(shared.startCalls[0]).toMatchObject({
+        transcriptionProvider: provider,
+        keyterms: ["alpha", "beta"],
+      });
+      expect(shared.startContexts[0]).toBeUndefined();
+    }
+  );
 
   it("hands a non-Deepgram session its keyterms as a pending start context (OpenAI prompt path)", async () => {
     const { store } = await import("../../../store.js");
@@ -2304,6 +2312,56 @@ describe("getVoiceSettings migration", () => {
       vi.mocked(store.set).mock.calls[0] as unknown as [string, Record<string, unknown>]
     )[1];
     expect(persisted).toHaveProperty("transcriptionProvider", "deepgram");
+  });
+
+  it("keeps a stored Grok choice and its key, and reads an XAI_API_KEY override without saving it", async () => {
+    const { store } = await import("../../../store.js");
+    vi.mocked(store.get)
+      .mockReturnValueOnce({
+        enabled: true,
+        xaiApiKey: "xai-stored",
+        transcriptionProvider: "grok",
+        transcriptionModel: "gpt-live-transcribe",
+      })
+      .mockReturnValueOnce({
+        enabled: true,
+        xaiApiKey: "xai-stored",
+        transcriptionProvider: "grok",
+      });
+
+    const stored = getVoiceSettings();
+    expect(stored.transcriptionProvider).toBe("grok");
+    expect(stored.xaiApiKey).toBe("xai-stored");
+
+    process.env.XAI_API_KEY = " xai-env ";
+    try {
+      expect(getVoiceSettings().xaiApiKey).toBe("xai-env");
+    } finally {
+      delete process.env.XAI_API_KEY;
+    }
+  });
+
+  it("writes back the stored xAI key, never the override, when a read repairs the store", async () => {
+    const { store } = await import("../../../store.js");
+    const persisted: Array<Record<string, unknown>> = [];
+    vi.mocked(store.set).mockImplementation(((_key: string, value: Record<string, unknown>) => {
+      persisted.push(structuredClone(value));
+    }) as unknown as typeof store.set);
+    vi.mocked(store.get).mockReturnValueOnce({
+      enabled: true,
+      xaiApiKey: "xai-stored",
+      transcriptionProvider: "grok",
+      transcriptionModel: "nova-3",
+    });
+
+    process.env.XAI_API_KEY = "xai-env";
+    try {
+      expect(getVoiceSettings().xaiApiKey).toBe("xai-env");
+    } finally {
+      delete process.env.XAI_API_KEY;
+    }
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0]).toMatchObject({ xaiApiKey: "xai-stored", transcriptionProvider: "grok" });
   });
 
   it("does not rewrite the store when the model is already current", async () => {

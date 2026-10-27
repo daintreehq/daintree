@@ -34,6 +34,7 @@ const BASE = {
   enabled: true,
   openaiApiKey: "",
   deepgramApiKey: "",
+  xaiApiKey: "",
   language: "en",
   dictionary: [] as VoiceDictionaryEntry[],
   transcriptionProvider: "openai",
@@ -113,29 +114,54 @@ describe("maskApiKey", () => {
 describe("dictationBlockers", () => {
   it("names the missing key for whichever provider transcribes", () => {
     const openai = dictationBlockers(
-      { transcriptionProvider: "openai", openaiApiKey: "", deepgramApiKey: "dg_1" },
+      { transcriptionProvider: "openai", openaiApiKey: "", deepgramApiKey: "dg_1", xaiApiKey: "" },
       "granted"
     );
     const deepgram = dictationBlockers(
-      { transcriptionProvider: "deepgram", openaiApiKey: "sk-1", deepgramApiKey: "" },
+      {
+        transcriptionProvider: "deepgram",
+        openaiApiKey: "sk-1",
+        deepgramApiKey: "",
+        xaiApiKey: "",
+      },
+      "granted"
+    );
+    const grok = dictationBlockers(
+      {
+        transcriptionProvider: "grok",
+        openaiApiKey: "sk-1",
+        deepgramApiKey: "dg_1",
+        xaiApiKey: "",
+      },
       "granted"
     );
     expect(openai.join(" ")).toContain("OpenAI");
     expect(deepgram.join(" ")).toContain("Deepgram");
+    expect(grok.join(" ")).toContain("xAI API key");
   });
 
   it("reports nothing it cannot observe: a present key and an undecided mic are not blockers", () => {
     for (const mic of ["granted", "not-determined", "unknown"] as const) {
       expect(
         dictationBlockers(
-          { transcriptionProvider: "openai", openaiApiKey: "sk-1", deepgramApiKey: "" },
+          {
+            transcriptionProvider: "openai",
+            openaiApiKey: "sk-1",
+            deepgramApiKey: "",
+            xaiApiKey: "",
+          },
           mic
         )
       ).toEqual([]);
     }
     expect(
       dictationBlockers(
-        { transcriptionProvider: "openai", openaiApiKey: "sk-1", deepgramApiKey: "" },
+        {
+          transcriptionProvider: "openai",
+          openaiApiKey: "sk-1",
+          deepgramApiKey: "",
+          xaiApiKey: "",
+        },
         "denied"
       )
     ).toHaveLength(1);
@@ -230,6 +256,31 @@ describe("VoiceInputSettingsTab correction prerequisites", () => {
     expect(stt.textContent).toContain("Deepgram API key");
     expect(stt.textContent).not.toContain("OpenAI API key");
     expect(cleanup.textContent).not.toMatch(/Deepgram/);
+  });
+
+  it("asks Grok users for an xAI key, saves it to its own field, and says what xAI keeps", async () => {
+    const setSettings = vi.fn().mockResolvedValue(undefined);
+    install(
+      { transcriptionProvider: "grok", xaiApiKey: "", correctionEnabled: true },
+      { setSettings }
+    );
+    const { container } = render(<VoiceInputSettingsTab />);
+
+    await screen.findByRole("switch", { name: "Resolve file references" });
+    const stt = container.querySelector<HTMLElement>("#voice-speech-to-text");
+    expect(stt?.textContent).toContain("xAI API key");
+    expect(stt?.textContent).not.toContain("Deepgram API key");
+    expect(stt?.textContent).not.toContain("OpenAI API key");
+    expect(container.textContent).toContain("Can't start yet: add your xAI API key");
+    const disclosure = screen.getByText(/xAI receives your audio/).textContent ?? "";
+    expect(disclosure).toMatch(/30 days/);
+    expect(disclosure).toMatch(/Zero Data Retention/);
+    expect(disclosure).toMatch(/go with the audio/);
+
+    const input = screen.getByPlaceholderText("Paste an xAI API key");
+    fireEvent.change(input, { target: { value: "xai-abc123" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(setSettings).toHaveBeenCalledWith({ xaiApiKey: "xai-abc123" }));
   });
 
   it("saves the cleanup key and turns cleanup's options on while another provider transcribes", async () => {
