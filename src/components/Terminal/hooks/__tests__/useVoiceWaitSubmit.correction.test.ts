@@ -416,6 +416,36 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611, #14780)", () =
     expect(sent).toEqual(["Hello world."]);
   });
 
+  it("keeps a dictation started on the same panel during the wait out of the send (#14804)", async () => {
+    const pending = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(pending.promise);
+    dictate(PANEL_ID, "hello wrld");
+    const result = renderComposer();
+
+    await act(async () => {
+      result.current.startVoiceWaitSubmit();
+    });
+    // The dictation key again straight away, for the next prompt: its first
+    // words land while the send still waits on the cleanup.
+    act(() => {
+      dictate(PANEL_ID, "these are the next prompt");
+    });
+    expect(sent).toEqual([]);
+
+    await act(async () => {
+      pending.resolve({ action: "replace", correctedText: "Hello world." });
+    });
+
+    expect(sent).toEqual(["Hello world."]);
+    expect(draft(PANEL_ID)).toBe("these are the next prompt");
+
+    // Still recording, its later words join the ones it kept.
+    act(() => {
+      callbacks.complete!({ text: "and the rest", willCorrect: false, itemId: "item-late" });
+    });
+    expect(draft(PANEL_ID)).toBe("these are the next prompt and the rest");
+  });
+
   it("lets the correction land in the draft when Escape cancels the send", async () => {
     const pending = deferred<CorrectResult>();
     correct.mockReturnValueOnce(pending.promise);
