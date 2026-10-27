@@ -931,6 +931,20 @@ describe("RemoteHostsClient", () => {
       client.refreshPendingSwitches("studio-01");
       expect(client.getPendingSwitch(ctxFor(5, 1))?.phase).toBe("starting");
 
+      // Each start attempt that ends and begins again leaves the phase as it
+      // is: the screen never reads connecting, starting, connecting…
+      const heard = pendingEvents().length;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        starting = false;
+        client.refreshPendingSwitches("studio-01");
+        starting = true;
+        client.refreshPendingSwitches("studio-01");
+      }
+      starting = false;
+      client.refreshPendingSwitches("studio-01");
+      expect(client.getPendingSwitch(ctxFor(5, 1))?.phase).toBe("starting");
+      expect(pendingEvents()).toHaveLength(heard);
+
       release("ready");
       await switching;
       expect(client.getPendingSwitch(ctxFor(5, 1))).toBeNull();

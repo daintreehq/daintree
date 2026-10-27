@@ -813,3 +813,29 @@
 .overlay-motion-drop[data-state="closed"] {
   animation: overlay-fade-out var(--duration-120) var(--ease-exit) forwards;
 }
+
+/* The Daintree mark drawn in (HostSwitch/DaintreeMarkDraw): each shape's alpha
+ * mask holds a 100-long centreline whose dash is wiped from --mark-from to
+ * --mark-to. The resting style is the final frame, so a mark that doesn't play
+ * (reduced motion) is simply drawn. Hidden until its delay is up, since a
+ * zero-length dash still leaves a round cap. */
+@keyframes daintree-mark-draw {
+  0% {
+    stroke-dashoffset: var(--mark-from);
+    stroke-opacity: 0;
+  }
+  1% {
+    stroke-dashoffset: var(--mark-from);
+    stroke-opacity: 1;
+  }
+  100% {
+    stroke-dashoffset: var(--mark-to);
+    stroke-opacity: 1;
+  }
+}
+
+.daintree-mark-stroke {
+  stroke-dasharray: 100;
+  stroke-dashoffset: var(--mark-to);
+  animation: daintree-mark-draw 0s var(--ease-out-expo) 1 backwards;
+}

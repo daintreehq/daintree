@@ -6,7 +6,11 @@ const m = vi.hoisted(() => ({ notify: vi.fn((_payload: unknown) => "toast-1") })
 vi.mock("@/lib/notify", () => ({ notify: m.notify }));
 
 import { usePendingHostSwitchStore } from "@/store/pendingHostSwitchStore";
-import { pendingHostSwitchTitle, watchPendingHostSwitch } from "../pendingHostSwitchFeedback";
+import {
+  pendingHostSwitchHeading,
+  pendingHostSwitchStatus,
+  watchPendingHostSwitch,
+} from "../pendingHostSwitchFeedback";
 import {
   _resetTerminalInputGateForTesting,
   isHostSwitchPending,
@@ -51,19 +55,26 @@ afterEach(() => {
   _resetTerminalInputGateForTesting();
 });
 
-describe("pendingHostSwitchTitle", () => {
-  it("says what the switch is waiting on, or that it gave up", () => {
-    expect(pendingHostSwitchTitle(pending())).toBe("Connecting to studio-02…");
-    expect(pendingHostSwitchTitle(pending({ phase: "starting" }))).toBe(
-      "Starting Daintree on studio-02…"
+describe("pendingHostSwitchHeading", () => {
+  it("holds across the waiting phases and changes only for a switch that gave up", () => {
+    const waiting = ["connecting", "starting", "opening"] as const;
+    for (const phase of waiting) {
+      expect(pendingHostSwitchHeading(pending({ phase }))).toBe("Switching to studio-02");
+    }
+    expect(pendingHostSwitchHeading(pending({ phase: "opening", projectName: "api" }))).toBe(
+      "Switching to studio-02"
     );
-    expect(pendingHostSwitchTitle(pending({ phase: "opening", projectName: "api" }))).toBe(
-      "Opening api on studio-02…"
-    );
-    expect(pendingHostSwitchTitle(pending({ phase: "opening" }))).toBe("Opening studio-02…");
-    expect(pendingHostSwitchTitle(pending({ phase: "failed" }))).toBe(
+    expect(pendingHostSwitchHeading(pending({ phase: "failed" }))).toBe(
       "Couldn't switch to studio-02"
     );
+  });
+});
+
+describe("pendingHostSwitchStatus", () => {
+  it("names the phase, never the project, so learning its name rewords nothing", () => {
+    expect(pendingHostSwitchStatus("connecting")).toBe("Connecting…");
+    expect(pendingHostSwitchStatus("starting")).toBe("Starting Daintree on the host…");
+    expect(pendingHostSwitchStatus("opening")).toBe("Opening the project…");
   });
 });
 
