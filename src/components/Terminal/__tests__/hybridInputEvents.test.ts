@@ -125,6 +125,24 @@ describe("agentAltChordKey", () => {
     expect(agentAltChordKey(press({ ...base, key: "p" }), CLAUDE_CHORDS)).toBeNull();
   });
 
+  it("sends a held chord on every repeat, as the terminal does", () => {
+    expect(
+      agentAltChordKey(
+        press({ key: "π", code: "KeyP", keyCode: 80, altKey: true, repeat: true }),
+        CLAUDE_CHORDS
+      )
+    ).toBe("alt+p");
+  });
+
+  it("finds no letter in a press that carries neither a letter code nor a dead letter key", () => {
+    expect(
+      agentAltChordKey(press({ key: "Process", code: "KeyP", keyCode: 229, altKey: true }), CLAUDE_CHORDS)
+    ).toBeNull();
+    expect(
+      agentAltChordKey(press({ key: "Dead", code: "Digit6", keyCode: 0, altKey: true }), CLAUDE_CHORDS)
+    ).toBeNull();
+  });
+
   it("leaves a press inside an IME composition to the composition", () => {
     expect(
       agentAltChordKey(

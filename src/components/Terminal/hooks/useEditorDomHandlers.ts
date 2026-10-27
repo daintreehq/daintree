@@ -154,8 +154,9 @@ export function useEditorDomHandlers({
           // Matched by key code here rather than in the keymap: CodeMirror
           // leaves every macOS Option chord to type its glyph.
           const latest = latestRef.current;
-          const chord = latest ? agentAltChordKey(event, latest.altChords) : null;
-          if (chord === null || !latest?.onSendKey || latest.disabled) return false;
+          if (!latest || isComposingRef.current) return false;
+          const chord = agentAltChordKey(event, latest.altChords);
+          if (chord === null || !latest.onSendKey || latest.disabled) return false;
           latest.onSendKey(chord);
           return true;
         },

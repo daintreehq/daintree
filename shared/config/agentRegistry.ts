@@ -781,12 +781,14 @@ export interface AgentConfig {
     /** Input sequences the activity monitor should ignore (default: ["\x1b\r"]) */
     ignoredInputSequences?: string[];
     /**
-     * Option/Alt+letter chords the CLI documents as its own commands, as
+     * Option/Alt+letter chords the CLI documents as commands of its own, as
      * lowercase letters (Claude Code's Option+P model switcher is `"p"`). The
      * composer sends each to the agent as the terminal would, ESC and the
      * letter, instead of typing the character Option makes of it. List only
-     * documented chords: Option types real characters on many layouts, and any
-     * chord left out keeps typing them.
+     * documented commands: Option types real characters on many layouts, and
+     * any chord left out keeps typing them. Chords that edit the CLI's own
+     * prompt (word jumps, word deletes) stay out, since the composer is the
+     * prompt.
      */
     altChords?: string[];
     /**
