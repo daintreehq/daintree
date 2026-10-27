@@ -30,6 +30,7 @@ import { useSettingsTabValidation } from "./SettingsValidationRegistry";
 import { dispatchVoiceInputSettingsChanged } from "@/lib/voiceInputSettingsEvents";
 import { logWarn } from "@/utils/logger";
 import { useAudioDevices, SYSTEM_DEFAULT_VALUE } from "@/hooks/useAudioDevices";
+import { isSpecificMicId } from "@/services/voiceMicDevices";
 import { useTabLoad } from "@/hooks";
 import { useEffectiveCombo, useKeybindingDisplay } from "@/hooks/useKeybinding";
 import { actionService } from "@/services/ActionService";
@@ -110,6 +111,7 @@ const DEFAULT_SETTINGS: VoiceInputSettings = {
   paragraphingStrategy: "spoken-command",
   resolveFileLinks: true,
   deviceId: "",
+  deviceLabel: "",
   organizationId: "",
   projectId: "",
   recordingMode: "tap-or-hold",
@@ -128,6 +130,7 @@ const SAVE_GROUP_BY_KEY: Partial<Record<PatchKey, SaveGroup>> = {
   deepgramApiKey: "credentials",
   xaiApiKey: "credentials",
   deviceId: "microphone",
+  deviceLabel: "microphone",
   language: "behavior",
   paragraphingStrategy: "behavior",
   recordingMode: "behavior",
@@ -152,6 +155,7 @@ const SETTING_KEYS: readonly PatchKey[] = [
   "paragraphingStrategy",
   "resolveFileLinks",
   "deviceId",
+  "deviceLabel",
   "organizationId",
   "projectId",
   "recordingMode",
@@ -278,8 +282,34 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
     devices,
     loading: devicesLoading,
     error: devicesError,
+    complete: devicesComplete,
     refresh: refreshDevices,
   } = useAudioDevices();
+
+  // A saved alias ("default", "communications") follows the system input,
+  // so it reads as System default.
+  const chosenMicId = isSpecificMicId(settings.deviceId) ? settings.deviceId : "";
+  const chosenMicListed = devices.some((device) => device.value === chosenMicId);
+  // Only a complete list says the mic is gone; until then it keeps its name.
+  const chosenMicAway =
+    chosenMicId !== "" && !chosenMicListed && devicesComplete && !devicesLoading && !devicesError;
+  const chosenMicName = settings.deviceLabel || "Selected microphone";
+  const micOptions =
+    chosenMicId !== "" && !chosenMicListed
+      ? [
+          ...devices,
+          {
+            value: chosenMicId,
+            label: chosenMicAway ? `${chosenMicName} (not connected)` : chosenMicName,
+          },
+        ]
+      : devices;
+  let micDescription = "The microphone dictation records from";
+  if (devicesLoading && !devicesError) micDescription = "Detecting devices…";
+  else if (chosenMicAway)
+    micDescription = "Not connected, so dictation uses the system default until it's back";
+  else if (chosenMicId === "")
+    micDescription = "Follows the system input, so a headset that connects takes over";
 
   const loadSettings = useCallback(async () => {
     const s = await window.electron?.voiceInput?.getSettings();
@@ -327,7 +357,10 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
         setSettings((current) => {
           const reverted: VoiceInputSettings = { ...current };
           for (const key of patchedKeys(patch)) {
-            if (current[key] === patch[key]) copySetting(reverted, previous, key);
+            // A mic's name goes back only with its id, so a failed save can't
+            // pair one mic's id with another's name.
+            const owner = key === "deviceLabel" && "deviceId" in patch ? "deviceId" : key;
+            if (current[owner] === patch[owner]) copySetting(reverted, previous, key);
           }
           return reverted;
         });
@@ -666,9 +699,7 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
               label="Input device"
               description={
                 <>
-                  {devicesLoading && !devicesError
-                    ? "Detecting devices…"
-                    : "The microphone dictation records from"}
+                  {micDescription}
                   {" · "}
                   <Button variant="link" onClick={refreshDevices}>
                     Refresh list
@@ -676,12 +707,26 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
                 </>
               }
               error={devicesError ?? undefined}
-              value={settings.deviceId || SYSTEM_DEFAULT_VALUE}
-              onValueChange={(v) => void update({ deviceId: v === SYSTEM_DEFAULT_VALUE ? "" : v })}
-              options={devices}
+              value={chosenMicId || SYSTEM_DEFAULT_VALUE}
+              onValueChange={(v) =>
+                void update(
+                  v === SYSTEM_DEFAULT_VALUE
+                    ? { deviceId: "", deviceLabel: "" }
+                    : {
+                        deviceId: v,
+                        deviceLabel: devices.find((device) => device.value === v)?.label ?? "",
+                      }
+                )
+              }
+              options={micOptions}
               disabled={devicesLoading && devices.length <= 1}
-              isModified={settings.deviceId !== DEFAULT_SETTINGS.deviceId}
-              onReset={() => void update({ deviceId: DEFAULT_SETTINGS.deviceId })}
+              isModified={chosenMicId !== DEFAULT_SETTINGS.deviceId}
+              onReset={() =>
+                void update({
+                  deviceId: DEFAULT_SETTINGS.deviceId,
+                  deviceLabel: DEFAULT_SETTINGS.deviceLabel,
+                })
+              }
             />
 
             <MicTestRow

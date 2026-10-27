@@ -3009,6 +3009,11 @@ export interface VoiceInputSettings {
   resolveFileLinks: boolean;
   /** Microphone device ID to use for recording. Empty string means system default. */
   deviceId: string;
+  /**
+   * The chosen microphone's name when it was picked, so settings can still name
+   * it while it is unplugged. Display only: never used to find or open a mic.
+   */
+  deviceLabel: string;
   /** OpenAI Organization ID for legacy sk- keys. Sent as OpenAI-Organization header. */
   organizationId: string;
   /** OpenAI Project ID for legacy sk- keys. Sent as OpenAI-Project header. */

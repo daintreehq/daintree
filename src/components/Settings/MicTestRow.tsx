@@ -77,6 +77,7 @@ export function MicTestRow({ deviceId, active = true, disabled }: MicTestRowProp
     try {
       const handle = await startMicTest({
         deviceId,
+        isCurrent: () => run === runRef.current,
         onSample: (sample) => {
           if (run !== runRef.current) return;
           setState((prev) => (prev.phase === "running" ? { ...prev, sample } : prev));
