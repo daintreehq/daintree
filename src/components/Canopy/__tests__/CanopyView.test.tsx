@@ -2179,6 +2179,14 @@ describe("CanopyView", () => {
     // Moving on doesn't take it out from under the user; the next re-rank does.
     press(cards(container)[0]!);
     expect(band()).toEqual(["waiting", "asking"]);
+    // Back on it in the same render a Sort now lands in: the rank pins it.
+    expect(sortNow()).toBeDefined();
+    act(() => {
+      fireEvent.click(cards(container)[1]!);
+      fireEvent.click(sortNow()!);
+    });
+    expect(band()).toEqual(["waiting", "asking"]);
+    press(cards(container)[0]!);
     act(() => {
       vi.advanceTimersByTime(10_000);
     });
@@ -2308,6 +2316,9 @@ describe("CanopyView", () => {
     act(() => useCanopyStore.setState({ snapshot: read(84) }));
     expect(summaryWords()).toBe("Not every agent is sorted yet");
     expect(bandWords()).toBe("Not every agent is sorted yet");
+    // Nor "nothing … that Canopy could read" while some screens can't be read.
+    act(() => useCanopyStore.setState({ snapshot: { ...read(84), lastError: "Read failed" } }));
+    expect(summaryWords()).toBe("Not every agent is sorted yet");
     fireEvent.pointerLeave(list);
     act(() => {
       vi.advanceTimersByTime(10_000);
