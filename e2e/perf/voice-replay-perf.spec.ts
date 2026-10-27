@@ -49,6 +49,7 @@ import {
 import {
   deriveSession,
   installReplayCapture,
+  micProcessingAfter,
   micProcessingMismatch,
   micOpenedAfter,
   readReplayCapture,
@@ -62,6 +63,7 @@ import {
   VOICE_REPLAY_SCHEMA_VERSION,
   VOICE_REPLAY_SCORING_VERSION,
   type ConfigSummary,
+  type MicTrackProcessing,
   type VoiceReplayRun,
 } from "../helpers/voiceReplayScore";
 
@@ -254,6 +256,7 @@ perfDescribe("Perf: dictation replay against real providers", () => {
                 statuses: session.statuses,
                 endReason: session.endReason,
                 errors: session.errors,
+                mic: session.mic,
               });
               console.log(
                 `[voice-replay] ${tag}: WER ${(score.wer * 100).toFixed(1)}%, ` +
@@ -297,6 +300,7 @@ interface DictatedSession {
   statuses: string[];
   endReason: string | null;
   errors: string[];
+  mic: MicTrackProcessing | null;
 }
 
 async function dictateOnce(
@@ -402,6 +406,7 @@ async function dictateOnce(
       statuses: derived.statuses,
       endReason: derived.endReason,
       errors: mismatch ? [...derived.errors, mismatch] : derived.errors,
+      mic: micProcessingAfter(capture, startAt),
     };
   } finally {
     if (ctx?.app) {

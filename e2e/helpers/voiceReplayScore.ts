@@ -287,6 +287,13 @@ export const TIMING_KEYS = [
 
 export type TimingKey = (typeof TIMING_KEYS)[number];
 
+/** The processing the session's microphone track reported running. */
+export interface MicTrackProcessing {
+  echoCancellation?: boolean;
+  noiseSuppression?: boolean;
+  autoGainControl?: boolean;
+}
+
 export interface SessionResult {
   clip: string;
   config: string;
@@ -302,6 +309,8 @@ export interface SessionResult {
   /** `session-ended` reason. `stopped` means it drained, not that every word arrived. */
   endReason: string | null;
   errors: string[];
+  /** Null when no microphone opened; absent from runs that predate it. */
+  mic?: MicTrackProcessing | null;
 }
 
 export interface TimingStat {

@@ -144,11 +144,20 @@ const VAD_PRE_ROLL_BYTES = 14_400;
 // below this threshold.
 const MIN_COMMIT_BYTES = 4_800;
 // Audio whose transcript hasn't landed is replayed onto the next connection
-// after a drop. Speech keeps it short (the segment cap, plus a few seconds to
-// notice a dead socket), so the cap only bites on a long silent tail, where the
-// oldest audio goes first. It has to hold a whole reconnect flush on top of
-// that, so a second drop during the flush still resends it all.
-const REPLAY_MAX_BYTES = RECONNECT_BUFFER_MAX_BYTES + 20 * AUDIO_BYTES_PER_SECOND;
+// after a drop. Speech keeps it short (a segment at the cap, plus up to
+// REPLAY_DETECTION_MS to notice a dead socket), so the ledger's cap only bites
+// on a long silent tail, where the oldest audio goes first. It has to hold a
+// whole reconnect flush on top of that, so a second drop during the flush
+// still resends it all.
+const REPLAY_DETECTION_MS = 12_000;
+
+/** How much untranscribed audio the replay ledger holds, for a segment cap. */
+export function replayMaxBytesFor(maxSegmentMs: number): number {
+  return (
+    RECONNECT_BUFFER_MAX_BYTES +
+    Math.ceil(((maxSegmentMs + REPLAY_DETECTION_MS) / 1_000) * AUDIO_BYTES_PER_SECOND)
+  );
+}
 // A tail the VAD already called silence is cut to its last 2s before replay,
 // so a reconnect doesn't send (and pay to transcribe) minutes of room noise.
 // 2s is far past the VAD's lag behind live audio, so an onset it hasn't
@@ -329,9 +338,11 @@ function joinFallbacks(
 export class OpenAITranscriptionProvider implements TranscriptionProvider {
   readonly hasServerVAD = false;
   private readonly tuning: Readonly<OpenAITranscriptionTuning>;
+  private readonly replayMaxBytes: number;
 
   constructor(tuning: Partial<OpenAITranscriptionTuning> = {}) {
     this.tuning = resolveOpenAITranscriptionTuning(tuning);
+    this.replayMaxBytes = replayMaxBytesFor(this.tuning.maxSegmentMs);
   }
 
   private connection: WebSocket | null = null;
@@ -1649,7 +1660,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     this.replayTail.push(chunk);
     this.replayTailBytes += chunk.byteLength;
     this.replayBytes += chunk.byteLength;
-    while (this.replayBytes > REPLAY_MAX_BYTES) {
+    while (this.replayBytes > this.replayMaxBytes) {
       // A segment goes whole: replayed without its start, it would replace a
       // preview that has the words, so its item settles with that preview on a
       // drop instead. Only the open tail is cut chunk by chunk.
@@ -1668,7 +1679,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       if (!this.replayOverflowWarned) {
         this.replayOverflowWarned = true;
         logWarn(`${P} Replay buffer full, dropping the oldest untranscribed audio`, {
-          maxBytes: REPLAY_MAX_BYTES,
+          maxBytes: this.replayMaxBytes,
           untranscribedSegments: this.replaySegments.length,
         });
       }
@@ -1990,7 +2001,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     // flushed, so together they stay under its cap. Otherwise the flush would
     // evict audio a second drop needs to resend.
     const maxBytes = this.isReconnecting
-      ? Math.min(RECONNECT_BUFFER_MAX_BYTES, REPLAY_MAX_BYTES - this.replayBytes)
+      ? Math.min(RECONNECT_BUFFER_MAX_BYTES, this.replayMaxBytes - this.replayBytes)
       : AUDIO_BUFFER_MAX_BYTES;
     if (
       this.preConnectBuffer.length >= maxChunks ||

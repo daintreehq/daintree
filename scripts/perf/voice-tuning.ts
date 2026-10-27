@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import {
   allFixtureTerms,
+  LONG_SPEECH_CLIPS,
   prepareClip,
   readPcm16Wav,
   REPLAY_CLIPS,
@@ -33,6 +34,8 @@ import { REPO_ROOT } from "./registry";
 const RESULTS_DIR = path.join(REPO_ROOT, ".tmp", "perf-results", "voice-tuning");
 const CLIP_CACHE_DIR = path.join(REPO_ROOT, ".tmp", "voice-replay", "clips");
 const DEFAULT_ARMS = ["low", "medium", "high"];
+// The replay clips, and the long utterances only segmentation needs.
+const CLIPS = [...REPLAY_CLIPS, ...LONG_SPEECH_CLIPS];
 
 const USAGE = `usage: npm run perf voice-tuning -- [options]
 
@@ -45,7 +48,7 @@ OPENAI_API_KEY; costs cents), and scores the finals against the clip's reference
                         <delay>:cap<s>      cut continuous speech only at <s> seconds
                         <delay>:gap<a>-<b>  cut it at the first short pause after <a> s, or at <b> s
   --repeats <n>         passes over the clips (default 3)
-  --clips <list>        only these clip ids
+  --clips <list>        only these clip ids (default the replay clips and the long-speech ones)
   --terms               send every fixture term as a bias term (default none)
   --seed <n>            clip and arm order seed (default 14625)
   --label <name>        result file prefix (default run)
@@ -120,7 +123,7 @@ function parseArgs(argv: readonly string[]): Options | null {
   if (options.arms.length === 0) throw new Error("--arms needs at least one arm");
   const ids = options.arms.map((arm) => arm.id);
   if (new Set(ids).size !== ids.length) throw new Error("--arms names an arm twice");
-  const unknown = options.clips.filter((id) => !REPLAY_CLIPS.some((clip) => clip.id === id));
+  const unknown = options.clips.filter((id) => !CLIPS.some((clip) => clip.id === id));
   if (unknown.length > 0) throw new Error(`unknown clip(s): ${unknown.join(", ")}`);
   return options;
 }
@@ -181,10 +184,17 @@ function load(file: string): RunRecord {
  */
 function writeReport(run: RunRecord, file: string): TuningSummary {
   // Today's references and terms, so a corrected reference reaches a rescore.
-  const clips = new Map(REPLAY_CLIPS.map((clip) => [clip.id, clip]));
-  const results = run.sessions.flatMap((session) => {
+  const clips = new Map(CLIPS.map((clip) => [clip.id, clip]));
+  const results = run.sessions.map((session) => {
     const clip = clips.get(session.clip);
-    return clip ? [scoreTuningSession(session, clip.reference, clip.terms)] : [];
+    return clip
+      ? scoreTuningSession(session, clip.reference, clip.terms)
+      : {
+          arm: session.arm,
+          clip: session.clip,
+          pass: session.pass,
+          reasons: ["clip no longer in the fixtures"],
+        };
   });
   const summary = summariseTuning(
     run.arms.map((arm) => arm.id),
@@ -270,7 +280,7 @@ async function main(): Promise<number> {
   }
 
   // Synthesis happens before anything is sent, so a missing `say` costs nothing.
-  const clips = REPLAY_CLIPS.filter(
+  const clips = CLIPS.filter(
     (clip) => options.clips.length === 0 || options.clips.includes(clip.id)
   ).map((clip) =>
     prepareClip(clip, {

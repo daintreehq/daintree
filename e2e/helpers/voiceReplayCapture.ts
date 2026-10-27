@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- window.electron is untyped in Playwright evaluate() */
 import type { Page } from "@playwright/test";
 import type { MicProcessing } from "./voiceReplayConfig";
-import type { SessionTiming } from "./voiceReplayScore";
+import type { MicTrackProcessing, SessionTiming } from "./voiceReplayScore";
 
 /** One voice event as the renderer saw it, stamped with `performance.now()`. */
 export type ReplayEvent =
@@ -11,17 +11,11 @@ export type ReplayEvent =
   | { t: number; kind: "ended"; sessionId: string; reason: string }
   | { t: number; kind: "error"; sessionId: string; message: string };
 
-/** The processing the opened track reports, beside each entry of `micOpens`. */
-export interface MicTrackProcessing {
-  echoCancellation?: boolean;
-  noiseSuppression?: boolean;
-  autoGainControl?: boolean;
-}
-
 export interface ReplayCapture {
   events: ReplayEvent[];
   /** When each getUserMedia call resolved. */
   micOpens: number[];
+  /** What each opened track reported running, beside `micOpens`. */
   micProcessing: MicTrackProcessing[];
 }
 
@@ -113,10 +107,22 @@ export function micOpenedAfter(capture: ReplayCapture, since: number): number | 
   return capture.micOpens.find((t) => t >= since) ?? null;
 }
 
+const PROCESSING_KEYS = ["echoCancellation", "noiseSuppression", "autoGainControl"] as const;
+
+/** What the first microphone opened at or after `since` reported running. */
+export function micProcessingAfter(
+  capture: ReplayCapture,
+  since: number
+): MicTrackProcessing | null {
+  const index = capture.micOpens.findIndex((t) => t >= since);
+  return index < 0 ? null : (capture.micProcessing[index] ?? null);
+}
+
 /**
- * Why the microphone opened at or after `since` kept processing the config
- * turned off, or null. The default arm is whatever Chromium does, so it has
- * nothing to miss. A setting the track doesn't report counts as off.
+ * Why the session's microphone didn't run with the processing the config
+ * turned off, or null. Only a track that reports each one off counts: one it
+ * doesn't report may have been ignored. The default arm is whatever Chromium
+ * does, so it has nothing to miss.
  */
 export function micProcessingMismatch(
   capture: ReplayCapture,
@@ -124,13 +130,14 @@ export function micProcessingMismatch(
   asked: MicProcessing
 ): string | null {
   if (asked !== "off") return null;
-  const index = capture.micOpens.findIndex((t) => t >= since);
-  const reported = index < 0 ? undefined : capture.micProcessing[index];
+  const reported = micProcessingAfter(capture, since);
   if (!reported) return null;
-  const on = (["echoCancellation", "noiseSuppression", "autoGainControl"] as const).filter(
-    (key) => reported[key] === true
-  );
-  return on.length > 0 ? `microphone processing stayed on: ${on.join(", ")}` : null;
+  const on = PROCESSING_KEYS.filter((key) => reported[key] === true);
+  if (on.length > 0) return `microphone processing stayed on: ${on.join(", ")}`;
+  const unreported = PROCESSING_KEYS.filter((key) => reported[key] !== false);
+  return unreported.length > 0
+    ? `microphone processing unconfirmed: ${unreported.join(", ")} not reported`
+    : null;
 }
 
 /** The session started at `startAt`: the first session id seen after the press. */

@@ -1,5 +1,13 @@
-import { describe, expect, it } from "vitest";
-import { deriveSession, micProcessingMismatch, type ReplayCapture } from "../voiceReplayCapture";
+import type { Page } from "@playwright/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  deriveSession,
+  installReplayCapture,
+  micProcessingAfter,
+  micProcessingMismatch,
+  readReplayCapture,
+  type ReplayCapture,
+} from "../voiceReplayCapture";
 
 const capture: ReplayCapture = {
   micOpens: [50, 1_120],
@@ -88,20 +96,98 @@ describe("micProcessingMismatch", () => {
     micProcessing,
     events: [],
   });
+  const off = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
 
-  it("flags an off arm whose track still processes, judging this session's open", () => {
-    const capture = opened([{}, { echoCancellation: false, autoGainControl: true }]);
-    expect(micProcessingMismatch(capture, 1_000, "off")).toBe(
-      "microphone processing stayed on: autoGainControl"
-    );
+  it("accepts an off arm only when this session's track reports all three off", () => {
     expect(
-      micProcessingMismatch(opened([{ noiseSuppression: true }, {}]), 1_000, "off")
+      micProcessingMismatch(opened([{ noiseSuppression: true }, off]), 1_000, "off")
     ).toBeNull();
+    expect(
+      micProcessingMismatch(opened([off, { ...off, autoGainControl: true }]), 1_000, "off")
+    ).toBe("microphone processing stayed on: autoGainControl");
+  });
+
+  it("calls a setting the track didn't report unconfirmed, not off", () => {
+    const { autoGainControl: _, ...partial } = off;
+    expect(micProcessingMismatch(opened([off, partial]), 1_000, "off")).toBe(
+      "microphone processing unconfirmed: autoGainControl not reported"
+    );
   });
 
   it("leaves the default arm and an unopened mic alone", () => {
     const processing = opened([{}, { echoCancellation: true }]);
     expect(micProcessingMismatch(processing, 1_000, "default")).toBeNull();
     expect(micProcessingMismatch(processing, 2_000, "off")).toBeNull();
+  });
+});
+
+describe("installReplayCapture's microphone wrapper", () => {
+  const page = {
+    evaluate: async (fn: (arg?: unknown) => unknown, arg?: unknown) => fn(arg),
+  } as unknown as Page;
+  let getUserMedia: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    const reported = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
+    getUserMedia = vi.fn(async () => ({
+      getAudioTracks: () => [{ getSettings: () => reported }],
+    }));
+    const noop = () => () => {};
+    vi.stubGlobal("window", {
+      electron: {
+        voiceInput: {
+          onStatus: noop,
+          onTranscriptionDelta: noop,
+          onTranscriptionComplete: noop,
+          onSessionEnded: noop,
+          onError: noop,
+        },
+      },
+    });
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("turns all three off in a plain request and records what the track ran", async () => {
+    await installReplayCapture(page, { micProcessing: "off" });
+    await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    expect(getUserMedia).toHaveBeenCalledWith({
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+      video: false,
+    });
+    const capture = await readReplayCapture(page);
+    expect(capture.micOpens).toHaveLength(1);
+    expect(micProcessingAfter(capture, 0)).toEqual({
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false,
+    });
+  });
+
+  it("keeps the chosen device in a request it turns processing off in", async () => {
+    await installReplayCapture(page, { micProcessing: "off" });
+    await navigator.mediaDevices.getUserMedia({
+      audio: { deviceId: { ideal: "mic-2" } },
+      video: false,
+    });
+    expect(getUserMedia).toHaveBeenCalledWith({
+      audio: {
+        deviceId: { ideal: "mic-2" },
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+      },
+      video: false,
+    });
+  });
+
+  it("passes the app's own request through on the default arm", async () => {
+    await installReplayCapture(page);
+    const constraints = { audio: true, video: false };
+    await navigator.mediaDevices.getUserMedia(constraints);
+    expect(getUserMedia).toHaveBeenCalledWith(constraints);
   });
 });
