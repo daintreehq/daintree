@@ -842,7 +842,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // `#` is ordinary text far more often than a reference, so with nothing to
     // offer — no forge, no credential, nothing matching — it stays just a
     // character: no menu, and Enter sends.
-    const isAutocompleteOpen = isCompleting && (triggerChar !== "#" || autocompleteItems.length > 0);
+    const isAutocompleteOpen =
+      isCompleting && (triggerChar !== "#" || autocompleteItems.length > 0);
 
     // Per-provider staleness: the debounced async searches — `@file` and a
     // plugin's `@{prefix}:` — can go stale. Each dims only its own rows, never
@@ -1868,12 +1869,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                     : triggerChar === "#"
                       ? "Issues and pull requests"
                       : atClaim === "terminal"
-                      ? "Terminal output"
-                      : atClaim === "selection"
-                        ? "Terminal selection"
-                        : atClaim === "diff"
-                          ? "Diffs"
-                          : "Files"
+                        ? "Terminal output"
+                        : atClaim === "selection"
+                          ? "Terminal selection"
+                          : atClaim === "diff"
+                            ? "Diffs"
+                            : "Files"
               }
               ariaLabel={
                 triggerChar === "/"
@@ -1883,12 +1884,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                     : triggerChar === "#"
                       ? "Issue and pull request autocomplete"
                       : atClaim === "terminal"
-                      ? "Terminal autocomplete"
-                      : atClaim === "selection"
-                        ? "Selection autocomplete"
-                        : atClaim === "diff"
-                          ? "Diff autocomplete"
-                          : "File autocomplete"
+                        ? "Terminal autocomplete"
+                        : atClaim === "selection"
+                          ? "Selection autocomplete"
+                          : atClaim === "diff"
+                            ? "Diff autocomplete"
+                            : "File autocomplete"
               }
               emptyMessage={
                 triggerChar === "/"

@@ -103,9 +103,11 @@ describe("useForgeReferences", () => {
     _resetForgeReferencesForTests();
     listIssues.mockReset().mockResolvedValue(page([issue(14842, 1)]));
     listPRs.mockReset().mockResolvedValue(page([pr(14843, 2)]));
-    resolved.mockReset().mockImplementation((projectId) =>
-      projectId ? provider({ issue: "#", pr: "#" }) : NO_PROVIDER
-    );
+    resolved
+      .mockReset()
+      .mockImplementation((projectId) =>
+        projectId ? provider({ issue: "#", pr: "#" }) : NO_PROVIDER
+      );
     now = 1_000_000;
     vi.spyOn(Date, "now").mockImplementation(() => now);
   });

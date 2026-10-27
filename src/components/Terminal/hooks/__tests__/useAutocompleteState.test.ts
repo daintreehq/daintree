@@ -134,11 +134,19 @@ describe("useAutocompleteState", () => {
     it("goes back to no selection when the chosen row leaves, never to its neighbour", () => {
       const rows = [item("ref:issue:1"), item("ref:pr:2"), item("ref:issue:3")];
       const { rerender } = render(
-        base({ activeCompletionContext: hashContext(""), autocompleteItems: rows, selectedIndex: -1 })
+        base({
+          activeCompletionContext: hashContext(""),
+          autocompleteItems: rows,
+          selectedIndex: -1,
+        })
       );
       // The user arrows to the second row.
       rerender(
-        base({ activeCompletionContext: hashContext(""), autocompleteItems: rows, selectedIndex: 1 })
+        base({
+          activeCompletionContext: hashContext(""),
+          autocompleteItems: rows,
+          selectedIndex: 1,
+        })
       );
       setSelectedIndex.mockClear();
       rerender(
@@ -154,10 +162,18 @@ describe("useAutocompleteState", () => {
     it("keeps the chosen row when it survives a refresh", () => {
       const rows = [item("ref:issue:1"), item("ref:pr:2")];
       const { rerender } = render(
-        base({ activeCompletionContext: hashContext(""), autocompleteItems: rows, selectedIndex: -1 })
+        base({
+          activeCompletionContext: hashContext(""),
+          autocompleteItems: rows,
+          selectedIndex: -1,
+        })
       );
       rerender(
-        base({ activeCompletionContext: hashContext(""), autocompleteItems: rows, selectedIndex: 1 })
+        base({
+          activeCompletionContext: hashContext(""),
+          autocompleteItems: rows,
+          selectedIndex: 1,
+        })
       );
       setSelectedIndex.mockClear();
       rerender(

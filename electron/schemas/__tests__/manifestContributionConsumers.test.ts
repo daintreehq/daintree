@@ -1774,7 +1774,10 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
     referencePrefixes: {
       mode: "verbatim",
       consumers: [
-        { file: "src/components/Terminal/hooks/useForgeReferences.ts", symbol: "useForgeReferences" },
+        {
+          file: "src/components/Terminal/hooks/useForgeReferences.ts",
+          symbol: "useForgeReferences",
+        },
       ],
       note: "Written before an issue or PR number in the references the composer's `#` menu inserts; a kind with no prefix isn't offered.",
     },

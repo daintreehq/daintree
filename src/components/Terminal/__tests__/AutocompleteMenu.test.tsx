@@ -582,7 +582,9 @@ describe("AutocompleteMenu", () => {
       ).toBeNull();
       expect(getComboboxState({ ...base, isOpen: true, items: [] }).activeOptionId).toBeNull();
       expect(getComboboxState({ ...base, isOpen: false }).activeOptionId).toBeNull();
-      expect(getComboboxState({ ...base, isOpen: true, selectedIndex: -1 }).activeOptionId).toBeNull();
+      expect(
+        getComboboxState({ ...base, isOpen: true, selectedIndex: -1 }).activeOptionId
+      ).toBeNull();
     });
   });
 });

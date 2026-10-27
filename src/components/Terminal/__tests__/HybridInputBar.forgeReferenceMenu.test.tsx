@@ -152,9 +152,7 @@ beforeEach(() => {
         issue(3331, "Sidebar loses its width", 10),
       ])
     );
-  forge.listPRs
-    .mockReset()
-    .mockResolvedValue(page([pr(14843, "Clean up long dictations", 20)]));
+  forge.listPRs.mockReset().mockResolvedValue(page([pr(14843, "Clean up long dictations", 20)]));
 });
 
 afterEach(() => {
