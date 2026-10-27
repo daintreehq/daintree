@@ -859,28 +859,6 @@ describe("a spawn whose answer was lost with the link (#13915)", () => {
     );
   });
 
-  it("shows a launch refused at the host's agent ceiling as the banner naming the host (#14704)", async () => {
-    const hostAgentLimit = { host: "Studio", count: 12, limit: 10 };
-    terminalClient.spawn.mockRejectedValueOnce(
-      new ClientAppError("HOST_AGENT_LIMIT_REACHED", "refused", "Studio is full.", {
-        code: "HOST_AGENT_LIMIT_REACHED",
-        ...hostAgentLimit,
-      })
-    );
-
-    await launchAgent("refused-1");
-    await drainMicrotasks(300);
-
-    const panel = getPtyPanel("refused-1");
-    expect(panel?.spawnStatus).toBe("failed");
-    expect(panel?.agentState).toBe("exited");
-    expect(panel?.spawnError).toEqual({
-      code: "HOST_AGENT_LIMIT",
-      message: "Studio is full.",
-      hostAgentLimit,
-    });
-  });
-
   it("fails a spawn that never left the queue at once, without asking the host", async () => {
     terminalClient.spawn.mockRejectedValueOnce(
       new ClientAppError("HOST_DISCONNECTED", "Link is not open", "The host isn't connected.")

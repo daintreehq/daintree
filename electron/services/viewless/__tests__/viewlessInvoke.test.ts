@@ -3,8 +3,6 @@ import { _resetIpcDispatcherForTesting, getIpcDispatcher } from "../../../ipc/di
 import type { IpcContext } from "../../../ipc/types.js";
 import type { IpcEnvelope } from "../../../../shared/types/ipc/errors.js";
 import { invokeHostChannel, ViewlessInvokeError } from "../viewlessInvoke.js";
-import { wrapError } from "../../../../shared/utils/ipcErrorSerialization.js";
-import { AppError } from "../../../utils/errorTypes.js";
 
 const CHANNEL = "terminal:spawn";
 
@@ -58,31 +56,5 @@ describe("invokeHostChannel", () => {
     expect(err).toBeInstanceOf(ViewlessInvokeError);
     expect((err as ViewlessInvokeError).message).toBe("nope");
     expect((err as ViewlessInvokeError).code).toBe("RATE_LIMITED");
-  });
-
-  it("keeps the handler's allowlisted details, so a host refusal can say which host", async () => {
-    getIpcDispatcher().setInvokeEnveloper(async (_channel, _args, run) => {
-      try {
-        return { __daintreeIpcEnvelope: true, ok: true, data: await run() } as IpcEnvelope;
-      } catch (err) {
-        return wrapError(err);
-      }
-    });
-    getIpcDispatcher().registerInvoke(CHANNEL, () => {
-      throw new AppError({
-        code: "HOST_AGENT_LIMIT_REACHED",
-        message: "full",
-        details: { code: "HOST_AGENT_LIMIT_REACHED", host: "Studio", count: 12, limit: 10 },
-      });
-    });
-
-    const err = await invokeHostChannel("proj-1", CHANNEL, []).catch((e: unknown) => e);
-
-    expect((err as ViewlessInvokeError).details).toEqual({
-      code: "HOST_AGENT_LIMIT_REACHED",
-      host: "Studio",
-      count: 12,
-      limit: 10,
-    });
   });
 });

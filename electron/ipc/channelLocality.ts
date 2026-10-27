@@ -1098,7 +1098,6 @@ export const CHANNEL_LOCALITY = {
   "terminal:get-available": "host",
   "terminal:get-by-state": "host",
   "terminal:get-for-project": "host",
-  "terminal:get-host-agent-limit": "host",
   "terminal:get-host-memory-pause": "host",
   "terminal:get-info": "host",
   "terminal:get-output-activity": "host",

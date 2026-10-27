@@ -714,7 +714,6 @@ export const CHANNEL_LEASE_POLICY = {
   "terminal:get-available": "free",
   "terminal:get-by-state": "free",
   "terminal:get-for-project": "free",
-  "terminal:get-host-agent-limit": "free",
   "terminal:get-host-memory-pause": "free",
   "terminal:get-info": "free",
   "terminal:get-output-activity": "free",

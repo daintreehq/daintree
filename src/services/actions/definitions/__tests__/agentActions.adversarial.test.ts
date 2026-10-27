@@ -8,7 +8,6 @@ import { UnactionableTargetError } from "../../unactionableTarget";
 
 const panelStoreMock = vi.hoisted(() => ({
   getState: vi.fn(),
-  subscribe: vi.fn<(listener: () => void) => () => void>(() => () => {}),
 }));
 
 const currentViewStoreMock = vi.hoisted(() => ({
@@ -155,7 +154,6 @@ function launchedResult(overrides: Record<string, unknown> = {}) {
     spawnStatus: null,
     ...LAUNCH_IDENTITY,
     panelLimit: null,
-    hostAgentLimit: null,
     reply: null,
     ...overrides,
   };
@@ -550,10 +548,26 @@ describe("agentActions adversarial", () => {
       cwd: "/repo/wt-42/packages/app",
       cwdOutsideWorktree: false,
       panelLimit: null,
-      hostAgentLimit: null,
       reply: null,
     });
     expect(parseAgainstSchema(actions, "agent.launch", result).success).toBe(true);
+  });
+
+  it("agent.launch has no host agent limit status or field (#14810)", async () => {
+    const actions = setupActions(makeCallbacks());
+    const result = launchedResult();
+
+    expect(parseAgainstSchema(actions, "agent.launch", result).success).toBe(true);
+    expect(
+      parseAgainstSchema(actions, "agent.launch", { ...result, spawnStatus: "host-agent-limit" })
+        .success
+    ).toBe(false);
+    const parsed = parseAgainstSchema(actions, "agent.launch", {
+      ...result,
+      hostAgentLimit: { host: "Studio", count: 12, limit: 10 },
+    });
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data).toEqual(result);
   });
 
   it("agent.launch reports a cwd outside the worktree it filed under (#13130)", async () => {
@@ -635,7 +649,6 @@ describe("agentActions adversarial", () => {
       spawnStatus: "missing-cli",
       ...LAUNCH_IDENTITY,
       panelLimit: null,
-      hostAgentLimit: null,
       reply: null,
     });
     expect(parseAgainstSchema(actions, "agent.launch", result).success).toBe(true);
@@ -662,7 +675,6 @@ describe("agentActions adversarial", () => {
       cwd: null,
       cwdOutsideWorktree: null,
       panelLimit: null,
-      hostAgentLimit: null,
       reply: null,
     });
     expect(parseAgainstSchema(actions, "agent.launch", result).success).toBe(true);
@@ -697,135 +709,6 @@ describe("agentActions adversarial", () => {
     // snapshot has to survive it, not just validate.
     const parsed = parseAgainstSchema(actions, "agent.launch", result);
     expect(parsed.success && parsed.data).toEqual(result);
-  });
-
-  it("agent.launch names a refusal at the host's agent ceiling and the host (#14704)", async () => {
-    const callbacks = makeCallbacks();
-    const hostAgentLimit = { host: "Studio", count: 12, limit: 10 };
-    callbacks.onLaunchAgent.mockImplementationOnce(
-      async (_agentId: string, options?: { onDecline?: (d: unknown) => void }) => {
-        options?.onDecline?.({ reason: "host-agent-limit", panelLimit: null, hostAgentLimit });
-        return null;
-      }
-    );
-    const actions = setupActions(callbacks);
-
-    const result = await callAction(actions, "agent.launch", { agentId: "claude" });
-
-    expect(result).toMatchObject({
-      launched: false,
-      terminalId: null,
-      spawnStatus: "host-agent-limit",
-      panelLimit: null,
-      hostAgentLimit,
-    });
-    const parsed = parseAgainstSchema(actions, "agent.launch", result);
-    expect(parsed.success && parsed.data).toEqual(result);
-  });
-
-  describe("a launch on a host that counts agents (#14704)", () => {
-    const hostAgentLimit = { host: "Studio", count: 9, limit: 10 };
-
-    function setPanel(panel: Record<string, unknown> | undefined) {
-      panelStoreMock.getState.mockReturnValue({
-        ...setPanelState(),
-        panelsById: panel ? { "term-1": { id: "term-1", kind: "terminal", ...panel } } : {},
-      });
-    }
-
-    function launchOnHost() {
-      const callbacks = makeCallbacks();
-      callbacks.onLaunchAgent.mockResolvedValueOnce({
-        terminalId: "term-1",
-        location: "grid",
-        ...LAUNCH_IDENTITY,
-        hostAgentLimit,
-      });
-      const actions = setupActions(callbacks);
-      return { actions, pending: callAction(actions, "agent.launch", { agentId: "claude" }) };
-    }
-
-    it("reports the refusal of a launch that lost the last slot once its spawn answers", async () => {
-      let listener: (() => void) | undefined;
-      const unsubscribe = vi.fn();
-      panelStoreMock.subscribe.mockImplementationOnce((next) => {
-        listener = next;
-        return unsubscribe;
-      });
-      setPanel({ spawnStatus: "spawning" });
-
-      const { actions, pending } = launchOnHost();
-      await vi.waitFor(() => expect(listener).toBeDefined());
-      const refusal = { host: "Studio", count: 12, limit: 10 };
-      setPanel({
-        spawnStatus: "failed",
-        spawnError: { code: "HOST_AGENT_LIMIT", message: "full", hostAgentLimit: refusal },
-      });
-      listener!();
-      const result = await pending;
-
-      expect(result).toMatchObject({
-        launched: false,
-        terminalId: "term-1",
-        spawnStatus: "host-agent-limit",
-        hostAgentLimit: refusal,
-      });
-      expect(unsubscribe).toHaveBeenCalled();
-      expect(parseAgainstSchema(actions, "agent.launch", result).success).toBe(true);
-    });
-
-    it("reports the launch as made when its spawn hasn't answered in time, and stops listening", async () => {
-      vi.useFakeTimers();
-      try {
-        const unsubscribe = vi.fn();
-        panelStoreMock.subscribe.mockImplementationOnce(() => unsubscribe);
-        setPanel({ spawnStatus: "spawning" });
-
-        const { pending } = launchOnHost();
-        await vi.advanceTimersByTimeAsync(60_000);
-
-        expect(await pending).toEqual(launchedResult());
-        expect(unsubscribe).toHaveBeenCalledOnce();
-        expect(vi.getTimerCount()).toBe(0);
-      } finally {
-        vi.useRealTimers();
-      }
-    });
-
-    it("settles when the pane goes away while its spawn is pending", async () => {
-      let listener: (() => void) | undefined;
-      const unsubscribe = vi.fn();
-      panelStoreMock.subscribe.mockImplementationOnce((next) => {
-        listener = next;
-        return unsubscribe;
-      });
-      setPanel({ spawnStatus: "spawning" });
-
-      const { pending } = launchOnHost();
-      await vi.waitFor(() => expect(listener).toBeDefined());
-      setPanel(undefined);
-      listener!();
-
-      expect(await pending).toEqual(launchedResult());
-      expect(unsubscribe).toHaveBeenCalledOnce();
-    });
-
-    it("reports a launch whose spawn the host already admitted", async () => {
-      setPanel({ spawnStatus: "ready" });
-
-      const result = await launchOnHost().pending;
-
-      expect(result).toEqual(launchedResult());
-      expect(panelStoreMock.subscribe).not.toHaveBeenCalled();
-    });
-
-    it("reports a launch that failed for another reason as launched, as before", async () => {
-      setPanel({ spawnStatus: "failed", spawnError: { code: "ENOENT", message: "missing" } });
-
-      const result = await launchOnHost().pending;
-
-      expect(result).toEqual(launchedResult());
-    });
   });
 
   it("agent.launch tells a re-entrant launch of the same agent apart from a failure (#13382)", async () => {
