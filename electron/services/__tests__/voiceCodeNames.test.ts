@@ -128,6 +128,23 @@ describe("diffCodeNames", () => {
     ]);
   });
 
+  it("skips lockfiles, generated output and minified lines, so they can't fill the cap", () => {
+    const noisy = [
+      "+++ b/package-lock.json",
+      ...Array.from({ length: 3_000 }, (_, i) => `+  "integrityFragment${i}abc": 1,`),
+      "+++ b/src/app.min.js",
+      "+var minifiedName1=minifiedName2;",
+      "+++ b/dist/bundle.js",
+      "+const bundledOutputName = 1;",
+      "+++ b/src/build/graph.ts",
+      "+export function scheduleBuildJobs() {}",
+      "+++ b/src/real.ts",
+      `+const ${"veryLongGeneratedIdentifier".repeat(20)} = 1;`,
+      "+export function annotateUncertainSpans() {}",
+    ].join("\n");
+    expect(diffCodeNames(noisy)).toEqual(["scheduleBuildJobs", "annotateUncertainSpans"]);
+  });
+
   it("feeds code names that a passage then matches", () => {
     const index = buildCodeNameIndex([], diffCodeNames(diff));
     expect(matchCodeNames("make annotate uncertain spans skip the project ID", index)).toEqual([

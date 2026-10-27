@@ -37,8 +37,14 @@ export const MAX_CODE_NAMES_PER_PASSAGE = 12;
 const IDENTIFIER_RE = /[A-Za-z_$][\w$]*/g;
 // project_id, db_generate: parts joined by underscores.
 const SNAKE_CASE_RE = /^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$/;
-// The names a diff can give, newest work first.
+// The names a diff can give.
 const MAX_DIFF_NAMES = 2_000;
+// Lockfiles, top-level build output, snapshots and source maps write no names
+// anyone says; a nested build/ or dist/ folder can hold hand-written code.
+const GENERATED_FILE_RE =
+  /^(?:dist|build)\/|(?:^|\/)(?:[^/]*-lock\.(?:json|ya?ml)|[^/]*\.lock|[^/]*\.min\.[cm]?js|[^/]*\.map|[^/]*\.snap)$/u;
+// A line this long is minified or generated, not something written by hand.
+const MAX_DIFF_LINE_LENGTH = 400;
 
 export type CodeNameIndex = ReadonlyMap<string, string>;
 
@@ -139,25 +145,28 @@ export function matchCodeNames(text: string, index: CodeNameIndex): string[] {
 /**
  * The names a worktree's diff is working on: identifier-shaped names of the
  * files it touches and the identifiers its added lines write, in the order
- * they appear, at most `MAX_DIFF_NAMES`. They name what the speaker is most
- * likely to say right now ("annotate uncertain spans"), which the files'
- * names alone don't cover.
+ * they appear, at most `MAX_DIFF_NAMES` that could go in the index. They name
+ * what the speaker is most likely to say right now ("annotate uncertain
+ * spans"), which the files' names alone don't cover. Lockfiles, generated
+ * output and minified lines are skipped, so they can't fill the cap.
  */
 export function diffCodeNames(diff: string): string[] {
   const names: string[] = [];
   const seen = new Set<string>();
   const add = (name: string) => {
-    if (seen.has(name) || names.length >= MAX_DIFF_NAMES) return;
+    if (seen.has(name) || names.length >= MAX_DIFF_NAMES || keyFor(name) === null) return;
     seen.add(name);
     names.push(name);
   };
+  let skipping = false;
   for (const line of diff.split("\n")) {
     if (names.length >= MAX_DIFF_NAMES) break;
     if (line.startsWith("+++ ")) {
-      for (const name of pathNames(line.slice(4).replace(/^b\//, ""))) {
-        if (CODE_SHAPED_RE.test(name)) add(name);
-      }
-    } else if (line.startsWith("+")) {
+      const file = line.slice(4).replace(/^b\//, "");
+      skipping = GENERATED_FILE_RE.test(file);
+      if (skipping) continue;
+      for (const name of pathNames(file)) if (CODE_SHAPED_RE.test(name)) add(name);
+    } else if (!skipping && line.startsWith("+") && line.length <= MAX_DIFF_LINE_LENGTH) {
       for (const match of line.slice(1).matchAll(IDENTIFIER_RE)) {
         if (CODE_SHAPED_RE.test(match[0]) || SNAKE_CASE_RE.test(match[0])) add(match[0]);
       }

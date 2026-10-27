@@ -912,8 +912,8 @@ interface CorrectionSessionContext {
    * names cleanup may be told; null wherever the repository names are withheld.
    */
   codeNameRoot: string | null;
-  /** The names the dictated worktree's diff is working on, for the code names too. */
-  diffNames: string[];
+  /** The names the dictated worktree's branch is working on, for the code names too. */
+  diffNames: Promise<string[]>;
 }
 
 const NO_SESSION_CONTEXT: CorrectionSessionContext = {
@@ -921,7 +921,7 @@ const NO_SESSION_CONTEXT: CorrectionSessionContext = {
   repositoryNames: [],
   worktree: null,
   codeNameRoot: null,
-  diffNames: [],
+  diffNames: Promise.resolve([]),
 };
 
 // Each recent dictation's context, kept whether or not cleanup was on at its
@@ -1533,23 +1533,39 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // The correction gets the same screened names as the keyterms. Its own
     // record, so a slow read from an older session can't stand in for this one's.
     // The work in progress where it's dictated: the terminal's worktree, read
-    // only where the repository names are.
-    const diffNames: Promise<string[]> = keytermTarget.projectPath
-      ? resolveFileLinkCwd(session.projectId, terminalId, keytermTarget.projectPath, deps.ptyClient)
-          .then((cwd) => (cwd ? readWorktreeDiffNames(cwd, DIFF_NAMES_READ_BUDGET_MS) : []))
-          .catch((): string[] => [])
-      : Promise.resolve([]);
+    // only where the repository names are and only for a dictation whose
+    // cleanup can use it. It rides beside the context rather than in it, so
+    // the warm-up never waits on git, and the whole read, finding the worktree
+    // included, is held to its budget.
+    const diffNames: Promise<string[]> =
+      keytermTarget.projectPath &&
+      session.intent === "dictation" &&
+      mayCorrect(settings) &&
+      correctionInstructionsFor(settings.correctionModel).core.includes("<code_names>")
+        ? withinBudget(
+            resolveFileLinkCwd(
+              session.projectId,
+              terminalId,
+              keytermTarget.projectPath,
+              deps.ptyClient
+            )
+              .then((cwd) => (cwd ? readWorktreeDiffNames(cwd, DIFF_NAMES_READ_BUDGET_MS) : []))
+              .catch((): string[] => []),
+            [],
+            "Worktree diff read",
+            DIFF_NAMES_READ_BUDGET_MS
+          )
+        : Promise.resolve([]);
     const sessionContext: Promise<CorrectionSessionContext> = Promise.all([
       dictationContext,
       paneReads ?? NO_PANE_KEYTERM_READS,
-      diffNames,
     ]).then(
-      ([read, reads, diff]) => ({
+      ([read, reads]) => ({
         names: flattenDictationNames(screenDictationNames(read.names)),
         repositoryNames: screenCorrectionRepositoryNames(reads.repoNames),
         worktree: screenDictationWorktree(read.worktree),
         codeNameRoot: keytermTarget.projectPath ?? null,
-        diffNames: diff,
+        diffNames,
       }),
       () => NO_SESSION_CONTEXT
     );
@@ -2543,7 +2559,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       correctionInstructionsFor(settings.correctionModel).core.includes("<code_names>")
         ? await readCodeNames(
             context.codeNameRoot,
-            [...context.repositoryNames, ...context.diffNames],
+            [...context.repositoryNames, ...(await context.diffNames)],
             request.rawText
           )
         : [];
