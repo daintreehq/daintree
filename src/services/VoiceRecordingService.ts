@@ -3807,7 +3807,9 @@ class VoiceRecordingService {
    * dictation's pane (#14791), where the palette's or an agent's leaves focus
    * alone.
    */
-  async toggleFocusedPanel({ returnToTarget = false }: { returnToTarget?: boolean } = {}): Promise<void> {
+  async toggleFocusedPanel({
+    returnToTarget = false,
+  }: { returnToTarget?: boolean } = {}): Promise<void> {
     this.initialize();
 
     // The shortcut is a global stop: a running session ends wherever it is,
